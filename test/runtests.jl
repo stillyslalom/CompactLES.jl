@@ -57,6 +57,41 @@ CL.deriv_along!(df, f, s, 3, 1); CL._scale_grad!(df, s, 3)
 @test ferr(s, df, (x, y, z) -> 0.0) < 1e-10
 end
 
+@testset "pentadiagonal C10 derivative: accuracy vs C6" begin
+    # Exercises the q=2 band path end to end: BandPlan assembly, the banded
+    # LU + solve_col!, and the periodic self-coupling reduced-interface solve
+    # (BandLineSolver) in all three dimensions — plus the closed-domain
+    # closure rows. The only other C10 coverage is a finiteness smoke test.
+    s = mkslv(nglob=(32, 32, 32), deriv=lele_d1_10())
+    f = CL.field(s.dec); df = CL.field(s.dec)
+    fillf!(s, f, (x, y, z) -> sin(3x) * cos(2y))
+    CL.exchange_halos!(f, s.dec)
+    CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
+    e10 = ferr(s, df, (x, y, z) -> 3cos(3x) * cos(2y))
+    @test e10 < 1e-7     # C10 at k=3 on 32³ (measured ≈ 2.8e-8)
+    CL.deriv_along!(df, f, s, 2, 1); CL._scale_grad!(df, s, 2)
+    @test ferr(s, df, (x, y, z) -> -2sin(3x) * sin(2y)) < 1e-8   # transposed path
+    CL.deriv_along!(df, f, s, 3, 1); CL._scale_grad!(df, s, 3)
+    @test ferr(s, df, (x, y, z) -> 0.0) < 1e-12
+    # C10 must decisively beat the tridiagonal C6 on the same field (≈ 2000× here).
+    s6 = mkslv(nglob=(32, 32, 32), deriv=lele_d1_6())
+    f6 = CL.field(s6.dec); df6 = CL.field(s6.dec)
+    fillf!(s6, f6, (x, y, z) -> sin(3x) * cos(2y))
+    CL.exchange_halos!(f6, s6.dec)
+    CL.deriv_along!(df6, f6, s6, 1, 1); CL._scale_grad!(df6, s6, 1)
+    @test e10 < ferr(s6, df6, (x, y, z) -> 3cos(3x) * cos(2y)) / 100
+    # Closed domain: deg-3 polynomial is exact through the C10 closure rows
+    # (a distinct band path: closure substitution, V = W = 0, no reduced stage).
+    sc = Solver(nglob=(32, 12, 12), Ldom=(1.0, 1.0, 1.0),
+                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                deriv=lele_d1_10(), art=ArtParams(enabled=false))
+    fc = CL.field(sc.dec); dfc = CL.field(sc.dec)
+    fillf!(sc, fc, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
+    CL.exchange_halos!(fc, sc.dec)
+    CL.deriv_along!(dfc, fc, sc, 1, 1); CL._scale_grad!(dfc, sc, 1)
+    @test ferr(sc, dfc, (x, y, z) -> 2 + 6x - 3x^2) < 1e-10
+end
+
 @testset "transposed y/z path ≡ x path on permuted data" begin
 s = mkslv(nglob=(24, 24, 24))
 f = CL.field(s.dec); g = CL.field(s.dec)

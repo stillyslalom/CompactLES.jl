@@ -98,6 +98,36 @@ function init_geometry!(s)
             s.cotr[i, j, k] = cos(x2) / max(x1 * sin(x2), tiny)   # cotθ / r
         end
     end
+    s.metric isa SphericalMetric && s.dec.active[2] && gcl_cotr!(s)
+    return s
+end
+
+# Discrete Geometric Conservation Law correction for the spherical θ-momentum
+# source. The θ-momentum balance for a uniform state pits the flux divergence
+# −Jinv·D_ξ2(A₂·p) against the source +(cotθ/r)·Π_φφ (metric.jl below), where
+# A₂ = r sinθ is the θ area factor and D_ξ2 is the compact θ-derivative used in
+# the divergence loop (rhs.jl). Analytically Jinv·∂_ξ2(A₂) = cotθ/r and the two
+# cancel; discretely D_ξ2(sinθ) ≠ cosθ, so the analytically sampled cotθ/r
+# leaves an O(h⁴) freestream residual (a GCL truncation error, not a bug).
+#
+# We restore exact discrete freestream preservation by REDEFINING cotθ/r as
+# Jinv·D_ξ2(A₂): the identical operator (same compact scheme, same pole/antipodal
+# fold, same antipodal sign σ as the m2 pressure flux) applied to the identical
+# area factor. By linearity the source then cancels the divergence node-by-node
+# for any uniform state, by construction. The correction is O(h⁴) from the
+# analytic value, so it does not degrade the scheme's formal order elsewhere.
+function gcl_cotr!(s)
+    dec = s.dec
+    # Same antipodal sign the flux-divergence loop uses for the θ-momentum
+    # (m2) pressure flux across the θ pole fold (ignored when there is no fold).
+    σ = s.folds[2] === nothing ? 1 : s.folds[2].sigflux[s.mom[2]]
+    deriv_along!(s.tmpA, s.Adim[2], s, 2, σ)   # D_ξ2(A₂) with the m2 fold sign
+    o1, o2, o3 = dec.Hd
+    nx, ny, nz = dec.nloc
+    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        s.cotr[I] = s.Jinv[I] * s.tmpA[I]
+    end
     return s
 end
 
