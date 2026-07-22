@@ -120,7 +120,13 @@ end
         v += Hp
         i1 = pd == 1 ? v : i1; i2 = pd == 2 ? v : i2; i3 = pd == 3 ? v : i3
     end
-    if ps.revdim != 0 && ps.rev_local
+    if ps.revdim != 0
+        # The reversal g → nglob+1−g always flips the intra-block slot
+        # i ↔ nloc+1−i. When revdim is split (rev_local == false) the partner
+        # rank is the reflected one (chosen at setup) and the slot flip is
+        # STILL required to index its block; when it is on one rank the flip is
+        # the whole reversal. (The half-period shift differs: split blocks map
+        # slot-for-slot, so that stays gated on shift_local above.)
         rd = ps.revdim
         Hr = dec.Hd[rd]
         v = dec.nloc[rd] + 1 - ((rd == 1 ? i1 : rd == 2 ? i2 : i3) - Hr) + Hr
@@ -269,8 +275,10 @@ function fold_apply!(out, f, s, fs::FoldSpec, σ::Int; isfilter::Bool=false)
             end
         end
     else
-        # e combo mirrors with σ, o combo with −σ (see local branch above).
-        σc = (ps.keep_e ? 1 : -1) * σ
+        # e combo mirrors with σ, o combo is ALWAYS odd (−1) — matching the
+        # local branch above, where the o half uses fold_fill(−1)/plan(−1)
+        # regardless of σ. (Writing −σ here silently works only for σ = +1.)
+        σc = ps.keep_e ? σ : -1
         fold_fill!(w, dec, d, fs.lo, fs.hi, σc)
         apply_along!(out, plan(σc), w, dec)
     end
