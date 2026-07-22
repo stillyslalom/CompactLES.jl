@@ -27,6 +27,65 @@ fillf!(s, f, fn) = (for k in 1:s.dec.nloc[3], j in 1:s.dec.nloc[2], i in 1:s.dec
 f[gidx(s, i, j, k)] = fn(xcoord(s, 1, i), xcoord(s, 2, j), xcoord(s, 3, k))
 end; f)
 
+# --- Exact Riemann solver for the ideal-gas Euler equations (Toro, Ch. 4) ---
+# Used by the Sod shock-tube integration test to build the analytic reference.
+
+"Star-region (p*, u*) by Newton iteration on the pressure function."
+function exact_riemann_star(ρL, uL, pL, ρR, uR, pR, γ)
+cL = sqrt(γ * pL / ρL); cR = sqrt(γ * pR / ρR)
+G1 = (γ - 1) / (2γ)
+f(p, ρk, pk, ck) = p > pk ?
+(p - pk) * sqrt((2 / ((γ + 1) * ρk)) / (p + (γ - 1) / (γ + 1) * pk)) :
+(2ck / (γ - 1)) * ((p / pk)^G1 - 1)
+fder(p, ρk, pk, ck) = p > pk ?
+sqrt((2 / ((γ + 1) * ρk)) / (p + (γ - 1) / (γ + 1) * pk)) *
+(1 - (p - pk) / (2 * (p + (γ - 1) / (γ + 1) * pk))) :
+(1 / (ρk * ck)) * (p / pk)^(-(γ + 1) / (2γ))
+p = max(0.5 * (pL + pR), 1e-8)
+for _ in 1:100
+F  = f(p, ρL, pL, cL) + f(p, ρR, pR, cR) + (uR - uL)
+Fd = fder(p, ρL, pL, cL) + fder(p, ρR, pR, cR)
+pnew = p - F / Fd
+abs(pnew - p) / (0.5 * (p + pnew)) < 1e-12 && (p = pnew; break)
+p = max(pnew, 1e-9)
+end
+ustar = 0.5 * (uL + uR) +
+0.5 * (f(p, ρR, pR, cR) - f(p, ρL, pL, cL))
+(p, ustar, cL, cR)
+end
+
+"Sample (ρ,u,p) of the exact solution at self-similar speed S = (x−x0)/t."
+function exact_riemann_sample(S, ρL, uL, pL, ρR, uR, pR, γ, pstar, ustar, cL, cR)
+G1 = (γ - 1) / (2γ); G6 = (γ - 1) / (γ + 1); G7 = (γ - 1) / 2
+if S <= ustar                                   # left of contact
+if pstar > pL                               # left shock
+SL = uL - cL * sqrt((γ + 1) / (2γ) * pstar / pL + G1)
+S <= SL && return (ρL, uL, pL)
+return (ρL * ((pstar / pL + G6) / (G6 * pstar / pL + 1)), ustar, pstar)
+else                                        # left rarefaction
+SHL = uL - cL; STL = ustar - cL * (pstar / pL)^G1
+S <= SHL && return (ρL, uL, pL)
+S >= STL && return (ρL * (pstar / pL)^(1 / γ), ustar, pstar)
+u = (2 / (γ + 1)) * (cL + G7 * uL + S)
+c = (2 / (γ + 1)) * (cL + G7 * (uL - S))
+return (ρL * (c / cL)^(2 / (γ - 1)), u, pL * (c / cL)^(2γ / (γ - 1)))
+end
+else                                            # right of contact
+if pstar > pR                               # right shock
+SR = uR + cR * sqrt((γ + 1) / (2γ) * pstar / pR + G1)
+S >= SR && return (ρR, uR, pR)
+return (ρR * ((pstar / pR + G6) / (G6 * pstar / pR + 1)), ustar, pstar)
+else                                        # right rarefaction
+SHR = uR + cR; STR = ustar + cR * (pstar / pR)^G1
+S >= SHR && return (ρR, uR, pR)
+S <= STR && return (ρR * (pstar / pR)^(1 / γ), ustar, pstar)
+u = (2 / (γ + 1)) * (-cR + G7 * uR + S)
+c = (2 / (γ + 1)) * (cR - G7 * (uR - S))
+return (ρR * (c / cR)^(2 / (γ - 1)), u, pR * (c / cR)^(2γ / (γ - 1)))
+end
+end
+end
+
 @testset "banded LU vs dense" begin
 for q in (1, 2), n in (9, 17)
 A = zeros(n, n)
@@ -325,6 +384,55 @@ for c in 1:s.ncons, i in 1:s.dec.nloc[1],
 j in 1:s.dec.nloc[2], k in 1:s.dec.nloc[3])
 @test !bad
 end
+end
+
+@testset "Sod shock tube: profile matches exact Riemann solution" begin
+# Classic single-gas Sod (γ = 1.4) on [0,1], diaphragm at x = 0.5:
+#   left (ρ,u,p) = (1, 0, 1), right (ρ,u,p) = (0.125, 0, 0.1).
+# Integrate to t = 0.2 in 1-D (collapsed transverse dims) with artificial
+# fluid properties capturing the shock, and compare the ρ/u/p line profile
+# against the analytic Riemann solution sampled at each node. Errors are
+# L1 over the profile — shock/contact smearing over a few cells is expected,
+# so the tolerance is looser than the smooth-operator tests but still tight
+# enough that a wrong wave speed, plateau, or star state fails it.
+γ = 1.4
+ρL, uL, pL = 1.0, 0.0, 1.0
+ρR, uR, pR = 0.125, 0.0, 0.1
+x0 = 0.5; tfin = 0.2
+Nx = 400; Lx = 1.0; hx = Lx / (Nx - 1); δ = 2hx
+prob = Problem(name="Sod", eos=single_species(gamma=γ, R=1.0),
+transport=Transport(mu0=0.0),
+domain=((0.0, Lx), (0.0, hx), (0.0, hx)),
+bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+ic=(x, y, z) -> begin
+θ = tanh_blend(x, x0, δ)
+Prim(rho=(1 - θ) * ρL + θ * ρR,
+u=((1 - θ) * uL + θ * uR, 0.0, 0.0),
+p=(1 - θ) * pL + θ * pR)
+end)
+s, Q = setup(prob, Numerics(nglob=(Nx, 1, 1), art=ArtParams(enabled=true),
+cfl=0.4, filter_interval=1))
+run!(s, Q; tfinal=tfin, nmax=100_000)
+CL.exchange_state!(Q, s.dec)
+CL.primitives!(s, Q)
+
+pstar, ustar, cL, cR = exact_riemann_star(ρL, uL, pL, ρR, uR, pR, γ)
+# Star state is the canonical Sod result (Toro): p* ≈ 0.30313, u* ≈ 0.92745.
+@test pstar ≈ 0.30313 atol = 1e-4
+@test ustar ≈ 0.92745 atol = 1e-4
+
+nx = s.dec.nloc[1]
+eρ = eu = ep = 0.0
+for i in 1:nx
+I = gidx(s, i, 1, 1); x = xcoord(s, 1, i)
+r, u, p = exact_riemann_sample((x - x0) / tfin, ρL, uL, pL, ρR, uR, pR,
+γ, pstar, ustar, cL, cR)
+eρ += abs(s.rho[I] - r); eu += abs(s.u[I] - u); ep += abs(s.p[I] - p)
+end
+eρ /= nx; eu /= nx; ep /= nx
+@test eρ < 2e-2      # measured ≈ 2.9e-3
+@test eu < 2e-2      # measured ≈ 4.6e-3
+@test ep < 1e-2      # measured ≈ 2.5e-3
 end
 
 println("serial tests complete")
