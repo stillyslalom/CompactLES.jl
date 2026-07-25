@@ -4,6 +4,12 @@ CompactLES is a compressible large-eddy/direct-simulation solver built around
 high-order compact finite differences, compact filtering, low-storage RK time
 integration, and a distributed MPI line solve.
 
+![Taylor–Green vorticity, a multicomponent shock-interface interaction, and a
+cylindrical converging shock](assets/readme_hero.png)
+
+The `64³` Taylor–Green run peaks at `ε = 0.01265`, `t = 9.13`, closely matching
+the pseudo-spectral reference peak `ε = 0.01289`, `t = 8.86`.
+
 This manual deliberately documents the parts of the package that are already
 well established:
 

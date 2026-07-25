@@ -3,6 +3,17 @@
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://stillyslalom.github.io/CompactLES.jl/dev/)
 [![Build Status](https://github.com/stillyslalom/CompactLES.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/stillyslalom/CompactLES.jl/actions/workflows/CI.yml?query=branch%3Amain)
 
+![Taylor–Green vorticity, a multicomponent shock-interface interaction, and a cylindrical converging shock](docs/src/assets/readme_hero.png)
+
+*Actual CompactLES output: Taylor–Green vorticity magnitude, a He/CO₂
+shock–interface interaction (white: `Y_CO₂ = 0.5`), and an axisymmetric
+cylindrical converging shock. At `64³`, the measured Taylor–Green dissipation
+peak is `ε = 0.01265` at `t = 9.13`, compared with the pseudo-spectral result
+`ε = 0.01289` at `t = 8.86` from
+[van Rees et al. (2011)](https://doi.org/10.1016/j.jcp.2010.11.031).
+Reproduce the figure with
+[`docs/figures/readme_hero.jl`](docs/figures/readme_hero.jl).*
+
 A compressible large-eddy-simulation / direct-simulation solver for the
 multicomponent Navier–Stokes equations, written in pure Julia. It combines
 high-order compact (Padé) finite differences with Cook-style artificial fluid
