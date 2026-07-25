@@ -81,6 +81,13 @@ function compute_dt(s::Solver, Q)
             acc += (abs(uv[d]) + c) * idx
             dsum += idx * idx
         end
+        # Curvature-source stiffness. When an angular dimension is RESOLVED,
+        # its source rate (|u_ang|/r) is smaller than its advective rate
+        # (|u_ang|/(r Δang)) and is already covered above. When it is
+        # COLLAPSED — axisymmetric-with-swirl being the important case — the
+        # loop skips it entirely, yet ρu_θ²/r still drives u_r as a stiff
+        # source at small r. That term is added here.
+        acc += curvature_rate(s, s.metric, I, uv)
         Dmax = tr.mu0 / (tr.Sc * ρ)
         for sp in 1:s.ns
             Dmax = max(Dmax, tr.mu0 / (tr.Sc * ρ) + s.Dart[sp][I])
@@ -92,6 +99,80 @@ function compute_dt(s::Solver, Q)
     end
     rate = MPI.Allreduce(rate, max, dec.comm)
     return s.cfl / rate
+end
+
+"""
+    curvature_rate(s, metric, I, uv)
+
+Rate contribution from geometric momentum sources on angular dimensions that
+are collapsed (and therefore contribute no advective CFL term). Zero in
+Cartesian coordinates and whenever the corresponding dimension is resolved.
+"""
+curvature_rate(s, ::CartesianMetric, I, uv) = 0.0
+
+function curvature_rate(s, ::CylindricalMetric, I, uv)
+    s.dec.active[2] && return 0.0          # covered by the θ advective term
+    return abs(uv[2]) * s.rinv[I]          # ρu_θ²/r driving u_r
+end
+
+function curvature_rate(s, ::SphericalMetric, I, uv)
+    a = 0.0
+    s.dec.active[2] || (a += abs(uv[2]) * s.rinv[I])
+    s.dec.active[3] || (a += abs(uv[3]) * (s.rinv[I] + abs(s.cotr[I])))
+    return a
+end
+
+"""
+    dt_report(s, Q)
+
+Diagnostic companion to `compute_dt`: returns a NamedTuple naming the global
+timestep limiter — `(dt, rank, index, coords, dim, kind)` where `kind` is
+`:acoustic`, `:diffusive`, or `:curvature`. Cheap enough to call every few
+hundred steps; the intended use is confirming whether a run is limited by
+the physics you care about or by the azimuthal spacing at a coordinate
+singularity (see the CFL notes in the README).
+"""
+function dt_report(s::Solver, Q)
+    dec = s.dec
+    exchange_state!(Q, dec)
+    primitives!(s, Q)
+    o1, o2, o3 = dec.Hd
+    tr = s.transport
+    best = (rate=-Inf, i=0, j=0, k=0, dim=0, kind=:none)
+    @inbounds for k in 1:dec.nloc[3], j in 1:dec.nloc[2], i in 1:dec.nloc[1]
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        ρ = s.rho[I]; ri = 1 / ρ; c = s.c[I]
+        uv = (s.u[I], s.v[I], s.w[I])
+        acc = 0.0; dsum = 0.0; wdim = 0; wrate = -Inf
+        for d in 1:3
+            dec.active[d] || continue
+            idx = s.invh[d][I] / s.h[d]
+            rd = (abs(uv[d]) + c) * idx
+            acc += rd; dsum += idx * idx
+            rd > wrate && (wrate = rd; wdim = d)
+        end
+        crate = curvature_rate(s, s.metric, I, uv)
+        Dmax = tr.mu0 / (tr.Sc * ρ)
+        for sp in 1:s.ns
+            Dmax = max(Dmax, tr.mu0 / (tr.Sc * ρ) + s.Dart[sp][I])
+        end
+        ν = (tr.mu0 + s.mua[I] + s.betaa[I]) * ri +
+            (tr.mu0 * s.cpm[I] / tr.Pr + s.kappaa[I]) * ri / s.cpm[I] + Dmax
+        drate = 2 * ν * dsum
+        total = acc + crate + drate
+        if total > best.rate
+            kind = drate > max(wrate, crate) ? :diffusive :
+                   crate > wrate ? :curvature : :acoustic
+            best = (rate=total, i=i, j=j, k=k, dim=wdim, kind=kind)
+        end
+    end
+    grate = MPI.Allreduce(best.rate, max, dec.comm)
+    mine = best.rate >= grate ? MPI.Comm_rank(dec.comm) : typemax(Int)
+    owner = MPI.Allreduce(mine, min, dec.comm)
+    return (dt=s.cfl / grate, rank=owner, index=(best.i, best.j, best.k),
+            coords=(xcoord(s, 1, best.i), xcoord(s, 2, best.j),
+                    xcoord(s, 3, best.k)),
+            dim=best.dim, kind=best.kind)
 end
 
 """

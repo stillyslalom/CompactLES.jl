@@ -48,6 +48,6 @@ export EOS, IdealSpecies, IdealMixture, single_species, nspecies, Transport
 export Metric, CartesianMetric, CylindricalMetric, SphericalMetric
 export Stretch, sine_cluster
 export ArtParams, Solver
-export compute_rhs!, apply_bcs!, compute_dt, step!, run!, xcoord, gidx, filter_state!
+export compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!, xcoord, gidx, filter_state!
 
 end # module
