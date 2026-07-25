@@ -42,8 +42,12 @@ end
 enforce!(::NSCBCOutflowBC, Q, s, d, side) = nothing
 
 function correct_rhs!(bc::NSCBCOutflowBC, s, Q, dQ, d::Int, side::Int)
-    pl = wallplane(s.dec, d, side)
-    pl === nothing && return nothing
+    # COLLECTIVES FIRST. deriv_along! runs the distributed compact solve, which
+    # is collective over the sub-communicator of its dimension: EVERY rank must
+    # reach it, including the ones that own no part of this boundary plane.
+    # Testing `wallplane === nothing` before these calls deadlocks as soon as
+    # the boundary-normal dimension is decomposed — i.e. the normal way to run
+    # an NSCBC problem, splitting along the flow direction.
 
     # One-sided coordinate derivative of p along d (full-field call; the
     # closure rows make the boundary values one-sided), scaled to physical.
@@ -51,11 +55,16 @@ function correct_rhs!(bc::NSCBCOutflowBC, s, Q, dQ, d::Int, side::Int)
 
     # Transverse pressure gradients for the Yoo & Im correction, only along
     # active transverse dimensions (they vanish in 1-D and collapsed dims).
+    # `active` is a global property, so every rank agrees on these branches.
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
     act1 = s.dec.active[t1]
     act2 = s.dec.active[t2]
     act1 && deriv_along!(s.sens, s.p, s, t1, 1)
     act2 && deriv_along!(s.sacc, s.p, s, t2, 1)
+
+    # Only now may ranks that own no piece of this face drop out.
+    pl = wallplane(s.dec, d, side)
+    pl === nothing && return nothing
 
     Lref = bc.Lref > 0 ? bc.Lref : Float64(s.Ldom[d])
     vel = (s.u, s.v, s.w)
@@ -164,13 +173,17 @@ dphi_dY(eos::IdealMixture, k::Int, Rm, cvm) =
     (eos.cvk[k] * Rm - eos.Rk[k] * cvm) / (Rm * Rm)
 
 function correct_rhs!(bc::NSCBCInflowBC, s, Q, dQ, d::Int, side::Int)
-    pl = wallplane(s.dec, d, side)
-    pl === nothing && return nothing
     length(bc.Y) == s.ns || error("NSCBCInflowBC: composition length mismatch")
 
+    # COLLECTIVES FIRST — see the note in the outflow method above: these are
+    # distributed solves along d, so every rank must call them before any rank
+    # is allowed to return early.
     # One-sided coordinate derivatives of p and ρ along d.
     deriv_along!(s.tmpA, s.p, s, d, 1)
     deriv_along!(s.tmpB, s.rho, s, d, 1)
+
+    pl = wallplane(s.dec, d, side)
+    pl === nothing && return nothing
 
     Lref = bc.Lref > 0 ? bc.Lref : Float64(s.Ldom[d])
     vel = (s.u, s.v, s.w)
