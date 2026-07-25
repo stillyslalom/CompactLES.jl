@@ -48,7 +48,38 @@ end
     @threaded work for ... end
 
 Thread the loop only when `work` (total grid points touched) justifies the
-task-spawn cost; otherwise run it inline. See the note at the top of this file.
+parallel-dispatch cost; otherwise run it inline. See the note at the top of
+this file.
+
+## Why Threads.@threads and not Polyester.@batch
+
+`@batch` was tried here and is a large net loss for this solver, despite doing
+exactly what it advertises on allocation (compute_rhs! at 48^3 / 24 threads:
+3,638,096 B -> 37,024 B, ~98x less). Measured on tgv 64^3 at -t 8:
+
+    phase                Threads.@threads   Polyester.@batch
+    primitives!                 1.11 ms          0.43 ms
+    assemble_fluxes!            1.79 ms          1.84 ms
+    velocity grads              3.95 ms         31.78 ms
+    scalar grads                2.72 ms         24.12 ms
+    flux divergence             7.00 ms         60.30 ms
+    compute_rhs! (total)       22.26 ms        133.29 ms
+
+`@batch` wins on the two phases that are a single large leaf loop over grid
+points, and loses by ~8-9x on every phase that drives the compact operators.
+Those phases are not nested — `apply_along!` runs its gather, solve and scatter
+regions sequentially — they simply run MANY small regions back to back (about
+36 per gradient phase), and `@batch`'s pool synchronisation per region costs
+more there than a task spawn does.
+
+Mixing the two backends by call depth is worse still: routing the operator path
+to tasks while leaf loops stayed on `@batch` measured 1279.95 ms, 58x the
+all-tasks figure, because Polyester's spin-waiting workers occupy the very
+Julia threads `Threads.@threads` then tries to schedule onto.
+
+So: one backend, and it is tasks. The threshold above is what keeps the task
+cost off the small cases. Revisit `@batch` only if the operator path is ever
+restructured into few large regions instead of many small ones.
 """
 macro threaded(work, loop)
     (loop isa Expr && loop.head === :for) ||
