@@ -5,13 +5,13 @@
 # the computational indices, so the formal grid-spacing powers reduce to
 # per-dimension weights: h² for μ*, β* (from |∇⁴S| Δ⁶), h for κ* (|∇⁴e| Δ⁵)
 # and for D* (|∇⁴Y| Δ⁵). The Gaussian test filter is approximated by one
-# compact-filter pass. Species sensors are summed and a single common
-# diffusivity is used, which with ΣY_k = 1 keeps Σ_k J_k = 0 identically
-# (per-species D*_k with a correction velocity is a TODO). Indices are clamped
-# at closed physical edges; halos cover rank boundaries. On curvilinear grids
-# the sensors are computed in computational space — a grid-based rather than
-# strictly physical-space regularization, standard practice and consistent
-# with resolving power following the mesh.
+# compact-filter pass. Each species carries its own sensor and its own D*_k;
+# Σ_k J_k = 0 is then restored by the correction velocity in the flux assembly
+# (rhs.jl) rather than by giving every species the same diffusivity. Indices
+# are clamped at closed physical edges; halos cover rank boundaries. On
+# curvilinear grids the sensors are computed in computational space — a
+# grid-based rather than strictly physical-space regularization, standard
+# practice and consistent with resolving power following the mesh.
 
 Base.@kwdef struct ArtParams{T}
     enabled::Bool = true
