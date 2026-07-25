@@ -153,9 +153,11 @@ function pair_forward!(w, f, s, fs::FoldSpec, σ::Int)
         sd = ps.pdim != 0 ? ps.pdim : ps.revdim
         half = dec.nloc[sd] ÷ 2
         Hp = dec.Hd[sd]
-        Threads.@threads for I in collect(interior(dec))
-            @inbounds begin
-                v = (sd == 1 ? I[1] : sd == 2 ? I[2] : I[3]) - Hp
+        r1, r2, r3 = interior(dec).indices
+        @threaded prod(dec.nloc) for i3 in r3
+            @inbounds for i2 in r2, i1 in r1
+                I = CartesianIndex(i1, i2, i3)
+                v = (sd == 1 ? i1 : sd == 2 ? i2 : i3) - Hp
                 if v <= half
                     Mx = _pair_index(I, dec, ps)
                     a = f[I]
@@ -171,8 +173,10 @@ function pair_forward!(w, f, s, fs::FoldSpec, σ::Int)
         # o-keeper (slots y = Mx): o(My) = ½[buf(My) − σ f(y)].
         MPI.Sendrecv!(f, ps.buf, dec.comm; dest=ps.partner, source=ps.partner,
                       sendtag=41, recvtag=41)
-        Threads.@threads for I in collect(interior(dec))
-            @inbounds begin
+        r1, r2, r3 = interior(dec).indices
+        @threaded prod(dec.nloc) for i3 in r3
+            @inbounds for i2 in r2, i1 in r1
+                I = CartesianIndex(i1, i2, i3)
                 Mx = _pair_index(I, dec, ps)
                 if ps.keep_e
                     w[I] = 0.5 * (f[I] + sf * ps.buf[Mx])
@@ -200,11 +204,13 @@ function pair_backward!(out, s, fs::FoldSpec, σ::Int)
         sd = ps.pdim != 0 ? ps.pdim : ps.revdim
         half = dec.nloc[sd] ÷ 2
         Hp = dec.Hd[sd]
-        Threads.@threads for I in collect(interior(dec))
-            @inbounds begin
-                v = (sd == 1 ? I[1] : sd == 2 ? I[2] : I[3]) - Hp
+        r1, r2, r3 = interior(dec).indices
+        @threaded prod(dec.nloc) for i3 in r3
+            @inbounds for i2 in r2, i1 in r1
+                I = CartesianIndex(i1, i2, i3)
+                v = (sd == 1 ? i1 : sd == 2 ? i2 : i3) - Hp
                 if v <= half
-                        Mx = _pair_index(I, dec, ps)
+                    Mx = _pair_index(I, dec, ps)
                     Re = out[I]
                     Ro = out[Mx]
                     out[I] = Re + Ro
@@ -215,8 +221,10 @@ function pair_backward!(out, s, fs::FoldSpec, σ::Int)
     else
         MPI.Sendrecv!(out, ps.buf, dec.comm; dest=ps.partner, source=ps.partner,
                       sendtag=42, recvtag=42)
-        Threads.@threads for I in collect(interior(dec))
-            @inbounds begin
+        r1, r2, r3 = interior(dec).indices
+        @threaded prod(dec.nloc) for i3 in r3
+            @inbounds for i2 in r2, i1 in r1
+                I = CartesianIndex(i1, i2, i3)
                 Mx = _pair_index(I, dec, ps)
                 if ps.keep_e
                     out[I] = out[I] + ps.buf[Mx]          # Re + Ro
@@ -268,10 +276,14 @@ function fold_apply!(out, f, s, fs::FoldSpec, σ::Int; isfilter::Bool=false)
         sd = ps.pdim != 0 ? ps.pdim : ps.revdim
         half = dec.nloc[sd] ÷ 2
         Hp = dec.Hd[sd]
-        Threads.@threads for I in collect(interior(dec))
-            @inbounds begin
-                v = (sd == 1 ? I[1] : sd == 2 ? I[2] : I[3]) - Hp
-                v > half && (out[I] = s.pairout[I])
+        r1, r2, r3 = interior(dec).indices
+        @threaded prod(dec.nloc) for i3 in r3
+            @inbounds for i2 in r2, i1 in r1
+                v = (sd == 1 ? i1 : sd == 2 ? i2 : i3) - Hp
+                if v > half
+                    I = CartesianIndex(i1, i2, i3)
+                    out[I] = s.pairout[I]
+                end
             end
         end
     else

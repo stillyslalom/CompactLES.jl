@@ -135,7 +135,7 @@ Solve the (possibly distributed) tridiagonal system for every column of
 """
 function solve_lines!(B::AbstractMatrix{T}, ls::LineSolver{T}) where {T}
     n, L = size(B)
-    Threads.@threads for l in 1:L
+    @threaded n*L for l in 1:L
         solve_col!(view(B, :, l), ls.F)
     end
     ls.hasred || return B
@@ -158,7 +158,7 @@ function solve_lines!(B::AbstractMatrix{T}, ls::LineSolver{T}) where {T}
     cprev = 2 * mod(ls.p - 1, ls.P) + 2
     cnext = 2 * mod(ls.p + 1, ls.P) + 1
     v, w, z = ls.v, ls.w, ls.z
-    Threads.@threads for l in 1:L
+    @threaded n*L for l in 1:L
         xl = z[cprev, l]
         xr = z[cnext, l]
         @inbounds for i in 1:n

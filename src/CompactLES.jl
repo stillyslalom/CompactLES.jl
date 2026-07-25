@@ -17,6 +17,7 @@ using MPI
 using LinearAlgebra
 using Printf
 
+include("threading.jl")
 include("decomposition.jl")
 include("halo.jl")
 include("tridiag.jl")
@@ -49,5 +50,8 @@ export Metric, CartesianMetric, CylindricalMetric, SphericalMetric
 export Stretch, sine_cluster
 export ArtParams, Solver
 export compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!, xcoord, gidx, filter_state!
+export THREAD_MIN_WORK
+
+__init__() = __init_threading__()
 
 end # module

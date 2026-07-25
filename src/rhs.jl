@@ -295,7 +295,7 @@ end
 # Scale a raw coordinate-derivative field by 1/h_d pointwise (full array).
 function _scale_grad!(g, s, d)
     ih = s.invh[d]
-    Threads.@threads for idx in eachindex(g)
+    @threaded length(g) for idx in eachindex(g)
         @inbounds g[idx] *= ih[idx]
     end
     return g
@@ -323,7 +323,7 @@ function _assemble_fluxes!(s::Solver{T}, eos, Q) where {T}
     gT = s.gradT
     gY = s.gradY
     FF = s.FF
-    Threads.@threads for k in 1:nz
+    @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ρ = s.rho[I]
@@ -411,7 +411,7 @@ function compute_rhs!(s::Solver, Q, dQ)
     o1, o2, o3 = dec.Hd
     nx, ny, nz = dec.nloc
     for c in 1:s.ncons
-        Threads.@threads for k in 1:nz
+        @threaded nx*ny*nz for k in 1:nz
             @inbounds for j in 1:ny, i in 1:nx
                 dQ[i+o1, j+o2, k+o3, c] = 0
             end
@@ -422,12 +422,12 @@ function compute_rhs!(s::Solver, Q, dQ)
             # cylindrical axis (A₁ = r), flipping the flux parity.
             Ad = s.Adim[d]
             Fdc = s.FF[d, c]
-            Threads.@threads for idx in eachindex(s.tmpB)
+            @threaded length(s.tmpB) for idx in eachindex(s.tmpB)
                 @inbounds s.tmpB[idx] = Ad[idx] * Fdc[idx]
             end
             σ = s.folds[d] === nothing ? 1 : s.folds[d].sigflux[c]
             deriv_along!(s.tmpA, s.tmpB, s, d, σ)
-            Threads.@threads for k in 1:nz
+            @threaded nx*ny*nz for k in 1:nz
                 @inbounds for j in 1:ny, i in 1:nx
                     I = CartesianIndex(i + o1, j + o2, k + o3)
                     dQ[I, c] -= s.Jinv[I] * s.tmpA[I]

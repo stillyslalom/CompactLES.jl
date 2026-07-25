@@ -41,7 +41,7 @@ function delta4_sum!(out, f, s, wpow::Int; accumulate::Bool=false)
         lomin = at_lo_edge(dec, d) ? 1 : -1
         himax = at_hi_edge(dec, d) ? n_d : n_d + 2
         e = CartesianIndex(ntuple(k -> k == d ? 1 : 0, 3))
-        Threads.@threads for k in 1:nz
+        @threaded nx*ny*nz for k in 1:nz
             @inbounds for j in 1:ny, i in 1:nx
                 I = CartesianIndex(i + o1, j + o2, k + o3)
                 il = (d == 1 ? i : d == 2 ? j : k)
@@ -87,7 +87,7 @@ function compute_artificial!(s, Q)
 
     # Strain-rate magnitude |S| = sqrt(S_ij S_ij) in the interior (physical
     # components — the metric corrections are already in G).
-    Threads.@threads for k in 1:nz
+    @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ss = 0.0
@@ -103,7 +103,7 @@ function compute_artificial!(s, Q)
     exchange_halos!(s.Smag, dec)
     delta4_sum!(s.sens, s.Smag, s, 2)
     smooth!(s.sens, s)
-    Threads.@threads for k in 1:nz
+    @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ρsens = s.rho[I] * max(s.sens[I], 0.0)
@@ -116,7 +116,7 @@ function compute_artificial!(s, Q)
     # Internal energy directly from Q — EOS-agnostic.
     ie = s.ie
     m1, m2, m3 = s.mom
-    Threads.@threads for k in 1:size(s.tmpA, 3)
+    @threaded length(s.tmpA) for k in 1:size(s.tmpA, 3)
         @inbounds for j in 1:size(s.tmpA, 2), i in 1:size(s.tmpA, 1)
             ρ = max(s.rho[i, j, k], 1e-300)
             ke = 0.5 * (Q[i,j,k,m1]^2 + Q[i,j,k,m2]^2 + Q[i,j,k,m3]^2) / ρ
@@ -126,7 +126,7 @@ function compute_artificial!(s, Q)
     exchange_halos!(s.tmpA, dec)
     delta4_sum!(s.sens, s.tmpA, s, 1)
     smooth!(s.sens, s)
-    Threads.@threads for k in 1:nz
+    @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             s.kappaa[I] = art.Ckappa * s.rho[I] * s.c[I] /
@@ -142,7 +142,7 @@ function compute_artificial!(s, Q)
         for sp in 1:s.ns
             delta4_sum!(s.sacc, s.Ys[sp], s, 1)
             smooth!(s.sacc, s)
-            Threads.@threads for k in 1:nz
+            @threaded nx*ny*nz for k in 1:nz
                 @inbounds for j in 1:ny, i in 1:nx
                     I = CartesianIndex(i + o1, j + o2, k + o3)
                     s.Dart[sp][I] = art.CD * s.c[I] * max(s.sacc[I], 0.0)

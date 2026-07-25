@@ -177,7 +177,7 @@ end
 function solve_lines!(B::AbstractMatrix{T}, ls::BandLineSolver{T}) where {T}
     n, L = size(B)
     q = ls.q
-    Threads.@threads for l in 1:L
+    @threaded n*L for l in 1:L
         solve_col!(view(B, :, l), ls.F)
     end
     ls.hasred || return B
@@ -200,7 +200,7 @@ function solve_lines!(B::AbstractMatrix{T}, ls::BandLineSolver{T}) where {T}
     cprev = m2 * mod(ls.p - 1, ls.P) + q
     cnext = m2 * mod(ls.p + 1, ls.P)
     V, W, z = ls.V, ls.W, ls.z
-    Threads.@threads for l in 1:L
+    @threaded n*L for l in 1:L
         @inbounds for i in 1:n
             acc = zero(T)
             for t in 1:q

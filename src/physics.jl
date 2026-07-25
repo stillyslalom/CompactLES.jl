@@ -67,7 +67,7 @@ function _primitives!(s, eos::IdealMixture, Q)
     ρa, ua, va, wa = s.rho, s.u, s.v, s.w
     pa, Ta, ca, cpa = s.p, s.Tt, s.c, s.cpm
     nxf, nyf, nzf = size(ρa)
-    Threads.@threads for k in 1:nzf
+    @threaded nxf*nyf*nzf for k in 1:nzf
         @inbounds for j in 1:nyf, i in 1:nxf
             ρ = 0.0
             for sp in 1:ns

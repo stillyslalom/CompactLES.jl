@@ -111,7 +111,7 @@ function _fill_lines!(B::Matrix{T}, pl, f, dec::Decomp,
     a0 = pl.a0
     sym = pl.scheme.symmetric
     nc = length(pl.clo)
-    Threads.@threads for l in 1:pl.lines
+    @threaded pl.lines*n for l in 1:pl.lines
         kk, jj = divrem(l - 1, n1)
         j = jj + 1
         k = kk + 1
@@ -169,7 +169,7 @@ function _scatter_lines!(out, B::Matrix{T}, pl, dec::Decomp,
     n = pl.n
     o1, _ = _odims(Val(D))
     n1 = dec.nloc[o1]
-    Threads.@threads for l in 1:pl.lines
+    @threaded pl.lines*n for l in 1:pl.lines
         kk, jj = divrem(l - 1, n1)
         j = jj + 1
         k = kk + 1
@@ -242,7 +242,7 @@ function _fill_t!(B::Matrix{T}, pl, f, dec::Decomp, ::Val{D}) where {T,D}
     a0 = pl.a0
     sym = pl.scheme.symmetric
     o1, o2, o3 = Hd
-    Threads.@threads for kk in 1:nout
+    @threaded nout*n*nx for kk in 1:nout
         @inbounds for jr in 1:n
             kind = _row_kind(pl, jr)
             base = (kk - 1) * nx
@@ -299,7 +299,7 @@ function _scatter_t!(out, B::Matrix{T}, pl, dec::Decomp, ::Val{D}) where {T,D}
     nx = dec.nloc[1]
     nout = D == 2 ? dec.nloc[3] : dec.nloc[2]
     o1, o2, o3 = Hd
-    Threads.@threads for kk in 1:nout
+    @threaded nout*n*nx for kk in 1:nout
         @inbounds for jr in 1:n
             base = (kk - 1) * nx
             if D == 2

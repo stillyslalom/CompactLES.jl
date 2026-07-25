@@ -37,7 +37,7 @@ function step!(s::Solver, Q, dQ, du, dt)
         A = RKA[stage]
         B = RKB[stage]
         for c in 1:s.ncons
-            Threads.@threads for k in 1:nz
+            @threaded nx*ny*nz for k in 1:nz
                 @inbounds for j in 1:ny, i in 1:nx
                     v = A * du[i+o1, j+o2, k+o3, c] + dt * dQ[i+o1, j+o2, k+o3, c]
                     du[i+o1, j+o2, k+o3, c] = v

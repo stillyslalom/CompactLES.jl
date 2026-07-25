@@ -62,7 +62,7 @@ end
 "Copy the interior of `src` into `dst` (both full-sized fields)."
 function copy_interior!(dst, src, dec::Decomp)
     o1, o2, o3 = dec.Hd
-    @inbounds Threads.@threads for k in o3+1:o3+dec.nloc[3]
+    @inbounds @threaded prod(dec.nloc) for k in o3+1:o3+dec.nloc[3]
         for j in o2+1:o2+dec.nloc[2], i in o1+1:o1+dec.nloc[1]
             dst[i, j, k] = src[i, j, k]
         end

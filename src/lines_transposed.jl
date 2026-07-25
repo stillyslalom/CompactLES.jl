@@ -22,7 +22,7 @@ end
 function solve_lines_t!(B::AbstractMatrix{T}, ls::LineSolver{T}) where {T}
     L, n = size(B)
     F = ls.F
-    Threads.@threads for rng in collect(_line_chunks(L))
+    @threaded n*L for rng in collect(_line_chunks(L))
         isempty(rng) && continue
         @inbounds begin
             for i in 2:n
@@ -68,7 +68,7 @@ function solve_lines_t!(B::AbstractMatrix{T}, ls::LineSolver{T}) where {T}
         zn[l] = ls.z[cnext, l]
     end
     v, w = ls.v, ls.w
-    Threads.@threads for rng in collect(_line_chunks(L))
+    @threaded n*L for rng in collect(_line_chunks(L))
         isempty(rng) && continue
         @inbounds for i in 1:size(B, 2)
             vi = v[i]
@@ -86,7 +86,7 @@ function solve_lines_t!(B::AbstractMatrix{T}, ls::BandLineSolver{T}) where {T}
     L, n = size(B)
     q = ls.q
     F = ls.F
-    Threads.@threads for rng in collect(_line_chunks(L))
+    @threaded n*L for rng in collect(_line_chunks(L))
         isempty(rng) && continue
         @inbounds begin
             for k in 1:(n-1)
@@ -135,7 +135,7 @@ function solve_lines_t!(B::AbstractMatrix{T}, ls::BandLineSolver{T}) where {T}
         ls.zbn[l, t] = ls.z[cnext+t, l]
     end
     V, W = ls.V, ls.W
-    Threads.@threads for rng in collect(_line_chunks(L))
+    @threaded n*L for rng in collect(_line_chunks(L))
         isempty(rng) && continue
         @inbounds for i in 1:n, t in 1:q
             vi = V[i, t]

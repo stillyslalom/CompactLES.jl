@@ -146,7 +146,7 @@ function metric_correct_gradients!(s, ::CylindricalMetric)
     dec = s.dec; o1, o2, o3 = dec.Hd
     nx, ny, nz = dec.nloc
     G = s.G
-    Threads.@threads for k in 1:nz
+    @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ir = s.rinv[I]
@@ -161,7 +161,7 @@ function metric_correct_gradients!(s, ::SphericalMetric)
     dec = s.dec; o1, o2, o3 = dec.Hd
     nx, ny, nz = dec.nloc
     G = s.G
-    Threads.@threads for k in 1:nz
+    @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ir  = s.rinv[I]          # 1/r
@@ -198,7 +198,7 @@ function add_metric_sources!(s, dQ, Q, ::CylindricalMetric)
     dec = s.dec; o1, o2, o3 = dec.Hd
     nx, ny, nz = dec.nloc
     m = s.mom
-    Threads.@threads for k in 1:nz
+    @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ir = s.rinv[I]
@@ -213,7 +213,7 @@ function add_metric_sources!(s, dQ, Q, ::SphericalMetric)
     dec = s.dec; o1, o2, o3 = dec.Hd
     nx, ny, nz = dec.nloc
     m = s.mom
-    Threads.@threads for k in 1:nz
+    @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ir  = s.rinv[I]

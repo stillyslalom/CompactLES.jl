@@ -78,7 +78,7 @@ function _initialize!(s::Solver, eos, Q, ic)
     dec = s.dec
     o1, o2, o3 = dec.Hd
     nx, ny, nz = dec.nloc
-    Threads.@threads for k in 1:nz
+    @threaded nx*ny*nz for k in 1:nz
         x3 = xcoord(s, 3, k)
         for j in 1:ny
             x2 = xcoord(s, 2, j)
