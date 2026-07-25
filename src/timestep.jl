@@ -27,16 +27,16 @@ Advance the conserved state by one RK45 step of size `dt`. `dQ` and `du` are
 caller-provided work arrays of the same shape as `Q`.
 """
 function step!(s::Solver, Q, dQ, du, dt)
-    dec = s.dec
-    o1, o2, o3 = dec.Hd
-    nx, ny, nz = dec.nloc
+    decomp = s.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
     for stage in 1:5
         s.tstage = s.t + RKC[stage] * dt
         apply_bcs!(s, Q)
         compute_rhs!(s, Q, dQ)
         A = RKA[stage]
         B = RKB[stage]
-        for c in 1:s.ncons
+        for c in 1:s.n_cons
             @threaded nx*ny*nz for k in 1:nz
                 @inbounds for j in 1:ny, i in 1:nx
                     v = A * du[i+o1, j+o2, k+o3, c] + dt * dQ[i+o1, j+o2, k+o3, c]
@@ -60,11 +60,11 @@ transport coefficients, reduced over all ranks. Calls `primitives!` so the
 estimate is EOS-aware; artificial coefficients lag by one step.
 """
 function compute_dt(s::Solver, Q)
-    dec = s.dec
-    exchange_state!(Q, dec)   # keep halos consistent for primitives!
+    decomp = s.decomp
+    exchange_state!(Q, decomp)   # keep halos consistent for primitives!
     primitives!(s, Q)
-    o1, o2, o3 = dec.Hd
-    nx, ny, nz = dec.nloc
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
     tr = s.transport
     rate = 0.0
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
@@ -76,8 +76,8 @@ function compute_dt(s::Solver, Q)
         acc = 0.0
         dsum = 0.0
         for d in 1:3
-            dec.active[d] || continue        # no resolved variation
-            idx = s.invh[d][I] / s.h[d]      # inverse physical spacing
+            decomp.active[d] || continue      # no resolved variation
+            idx = s.inv_h[d][I] / s.h[d]      # inverse physical spacing
             acc += (abs(uv[d]) + c) * idx
             dsum += idx * idx
         end
@@ -89,15 +89,15 @@ function compute_dt(s::Solver, Q)
         # source at small r. That term is added here.
         acc += curvature_rate(s, s.metric, I, uv)
         Dmax = tr.mu0 / (tr.Sc * ρ)
-        for sp in 1:s.ns
-            Dmax = max(Dmax, tr.mu0 / (tr.Sc * ρ) + s.Dart[sp][I])
+        for sp in 1:s.n_species
+            Dmax = max(Dmax, tr.mu0 / (tr.Sc * ρ) + s.D_art[sp][I])
         end
-        ν = (tr.mu0 + s.mua[I] + s.betaa[I]) * ri +
-            (tr.mu0 * s.cpm[I] / tr.Pr + s.kappaa[I]) * ri / s.cpm[I] + Dmax
+        ν = (tr.mu0 + s.mu_art[I] + s.beta_art[I]) * ri +
+            (tr.mu0 * s.cp_mix[I] / tr.Pr + s.kappa_art[I]) * ri / s.cp_mix[I] + Dmax
         acc += 2 * ν * dsum
         rate = max(rate, acc)
     end
-    rate = MPI.Allreduce(rate, max, dec.comm)
+    rate = MPI.Allreduce(rate, max, decomp.comm)
     return s.cfl / rate
 end
 
@@ -111,14 +111,14 @@ Cartesian coordinates and whenever the corresponding dimension is resolved.
 curvature_rate(s, ::CartesianMetric, I, uv) = 0.0
 
 function curvature_rate(s, ::CylindricalMetric, I, uv)
-    s.dec.active[2] && return 0.0          # covered by the θ advective term
-    return abs(uv[2]) * s.rinv[I]          # ρu_θ²/r driving u_r
+    s.decomp.active[2] && return 0.0          # covered by the θ advective term
+    return abs(uv[2]) * s.inv_r[I]          # ρu_θ²/r driving u_r
 end
 
 function curvature_rate(s, ::SphericalMetric, I, uv)
     a = 0.0
-    s.dec.active[2] || (a += abs(uv[2]) * s.rinv[I])
-    s.dec.active[3] || (a += abs(uv[3]) * (s.rinv[I] + abs(s.cotr[I])))
+    s.decomp.active[2] || (a += abs(uv[2]) * s.inv_r[I])
+    s.decomp.active[3] || (a += abs(uv[3]) * (s.inv_r[I] + abs(s.cot_over_r[I])))
     return a
 end
 
@@ -133,31 +133,31 @@ the physics you care about or by the azimuthal spacing at a coordinate
 singularity (see the CFL notes in the README).
 """
 function dt_report(s::Solver, Q)
-    dec = s.dec
-    exchange_state!(Q, dec)
+    decomp = s.decomp
+    exchange_state!(Q, decomp)
     primitives!(s, Q)
-    o1, o2, o3 = dec.Hd
+    o1, o2, o3 = decomp.n_halo_d
     tr = s.transport
     best = (rate=-Inf, i=0, j=0, k=0, dim=0, kind=:none)
-    @inbounds for k in 1:dec.nloc[3], j in 1:dec.nloc[2], i in 1:dec.nloc[1]
+    @inbounds for k in 1:decomp.n_local[3], j in 1:decomp.n_local[2], i in 1:decomp.n_local[1]
         I = CartesianIndex(i + o1, j + o2, k + o3)
         ρ = s.rho[I]; ri = 1 / ρ; c = s.c[I]
         uv = (s.u[I], s.v[I], s.w[I])
         acc = 0.0; dsum = 0.0; wdim = 0; wrate = -Inf
         for d in 1:3
-            dec.active[d] || continue
-            idx = s.invh[d][I] / s.h[d]
+            decomp.active[d] || continue
+            idx = s.inv_h[d][I] / s.h[d]
             rd = (abs(uv[d]) + c) * idx
             acc += rd; dsum += idx * idx
             rd > wrate && (wrate = rd; wdim = d)
         end
         crate = curvature_rate(s, s.metric, I, uv)
         Dmax = tr.mu0 / (tr.Sc * ρ)
-        for sp in 1:s.ns
-            Dmax = max(Dmax, tr.mu0 / (tr.Sc * ρ) + s.Dart[sp][I])
+        for sp in 1:s.n_species
+            Dmax = max(Dmax, tr.mu0 / (tr.Sc * ρ) + s.D_art[sp][I])
         end
-        ν = (tr.mu0 + s.mua[I] + s.betaa[I]) * ri +
-            (tr.mu0 * s.cpm[I] / tr.Pr + s.kappaa[I]) * ri / s.cpm[I] + Dmax
+        ν = (tr.mu0 + s.mu_art[I] + s.beta_art[I]) * ri +
+            (tr.mu0 * s.cp_mix[I] / tr.Pr + s.kappa_art[I]) * ri / s.cp_mix[I] + Dmax
         drate = 2 * ν * dsum
         total = acc + crate + drate
         if total > best.rate
@@ -166,9 +166,9 @@ function dt_report(s::Solver, Q)
             best = (rate=total, i=i, j=j, k=k, dim=wdim, kind=kind)
         end
     end
-    grate = MPI.Allreduce(best.rate, max, dec.comm)
-    mine = best.rate >= grate ? MPI.Comm_rank(dec.comm) : typemax(Int)
-    owner = MPI.Allreduce(mine, min, dec.comm)
+    grate = MPI.Allreduce(best.rate, max, decomp.comm)
+    mine = best.rate >= grate ? MPI.Comm_rank(decomp.comm) : typemax(Int)
+    owner = MPI.Allreduce(mine, min, decomp.comm)
     return (dt=s.cfl / grate, rank=owner, index=(best.i, best.j, best.k),
             coords=(xcoord(s, 1, best.i), xcoord(s, 2, best.j),
                     xcoord(s, 3, best.k)),
@@ -205,14 +205,14 @@ dimension, with batched per-dimension halo exchange and axis parity routing
 (ρu_r and ρu_θ are odd across the axis; everything else is even).
 """
 function filter_state!(s::Solver, Q)
-    dec = s.dec
-    comps = [view(Q, :, :, :, c) for c in 1:s.ncons]
+    decomp = s.decomp
+    comps = [view(Q, :, :, :, c) for c in 1:s.n_cons]
     for d in 1:3
-        dec.active[d] || continue
-        exchange_dim_batch!(comps, dec, d)
-        for c in 1:s.ncons
-            filt_along!(s.tmpA, comps[c], s, d, cons_parity(s, d, c))
-            copy_interior!(comps[c], s.tmpA, dec)
+        decomp.active[d] || continue
+        exchange_dim_batch!(comps, decomp, d)
+        for c in 1:s.n_cons
+            filt_along!(s.tmp_a, comps[c], s, d, cons_parity(s, d, c))
+            copy_interior!(comps[c], s.tmp_a, decomp)
         end
     end
     return Q

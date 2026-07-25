@@ -36,7 +36,7 @@ a = 17/12, b = 101/150, c = 1/100 (consistency: a + b + c = 1 + 2α + 2β).
 Three closure rows are needed at closed edges (the interior RHS reaches ±3):
 the C6 third/fourth-order one-sided rows on rows 1–2 and the C6 tridiagonal
 interior row on row 3 — the usual boundary cascade, with local order reduction
-near walls. Requires halo width H ≥ 3 (default H = 4 is fine).
+near walls. Requires halo width n_halo ≥ 3 (default n_halo = 4 is fine).
 """
 function lele_d1_10(::Type{T}=Float64) where {T}
     BandedCompactScheme{T}("Lele C10 first derivative", 2,

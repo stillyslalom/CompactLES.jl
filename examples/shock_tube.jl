@@ -68,10 +68,10 @@ prob = Problem(
         θ  = tanh_blend(x, xi, δ)          # 0 in helium, 1 in CO2
         # Diaphragm pressure step: high in the driver (x < x_diaphragm), low beyond.
         p  = p_driven + (p_driver - p_driven) * (1 - tanh_blend(x, x_diaphragm, δ))
-        Prim(Y = (1 - θ, θ), p = p, T = T0)   # EOS sets ρ from (p, T, Y)
+        Prim(Y = (1 - θ, θ), p = p, T_ion = T0)   # EOS sets ρ from (p, T_ion, Y)
     end)
 
-num = Numerics(nglob=(Nx, Ny, Nz), art=ArtParams(enabled=true),
+num = Numerics(n_global=(Nx, Ny, Nz), art=ArtParams(enabled=true),
                cfl=0.5, filter_interval=1, dims=(np, 1, 1))
 
 s, Q = setup(prob, num)
@@ -79,8 +79,8 @@ rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
 function diag(s, Q)
     s.step % 50 == 0 || return
-    nx, ny, nz = s.dec.nloc
-    m1 = s.mom[1]
+    nx, ny, nz = s.decomp.n_local
+    m1 = s.i_mom[1]
     ρmin, ρmax, umax = Inf, -Inf, 0.0
     for k in 1:nz, j in 1:ny, i in 1:nx
         I = gidx(s, i, j, k)
@@ -88,9 +88,9 @@ function diag(s, Q)
         ρmin = min(ρmin, ρ); ρmax = max(ρmax, ρ)
         umax = max(umax, abs(Q[I, m1] / ρ))
     end
-    ρmin = MPI.Allreduce(ρmin, min, s.dec.comm)
-    ρmax = MPI.Allreduce(ρmax, max, s.dec.comm)
-    umax = MPI.Allreduce(umax, max, s.dec.comm)
+    ρmin = MPI.Allreduce(ρmin, min, s.decomp.comm)
+    ρmax = MPI.Allreduce(ρmax, max, s.decomp.comm)
+    umax = MPI.Allreduce(umax, max, s.decomp.comm)
     rank == 0 && @printf("step %5d  t = %6.3f ms  ρ ∈ [%.4f, %.4f] kg/m³  |u|max = %6.1f m/s\n",
                          s.step, 1e3 * s.t, ρmin, ρmax, umax)
 end
@@ -99,5 +99,5 @@ end
 # end wall, and returning to re-shock it.
 run!(s, Q; tfinal=2.5e-3, nmax=1_000_000, callback=diag)
 
-# save_vtk(s, Q, "shock_tube_final")   # ρ, u, p, T, Y_He, Y_CO2 for ParaView
+# save_vtk(s, Q, "shock_tube_final")   # ρ, u, p, T_ion, Y_He, Y_CO2 for ParaView
 # save_checkpoint(s, Q, "shock_tube_final")

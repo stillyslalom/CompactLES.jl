@@ -13,58 +13,58 @@ per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 best(f; reps=20) = (f(); f(); minimum(@elapsed(f()) for _ in 1:reps))
 
 function budget(name, s, Q)
-    dec = s.dec
+    decomp = s.decomp
     dQ = zero(Q)
     vel = (s.u, s.v, s.w)
-    nx, ny, nz = dec.nloc
-    o1, o2, o3 = dec.Hd
-    nact = count(dec.active)
+    nx, ny, nz = decomp.n_local
+    o1, o2, o3 = decomp.n_halo_d
+    nact = count(decomp.active)
 
-    CL.exchange_state!(Q, dec); CL.primitives!(s, Q)
+    CL.exchange_state!(Q, decomp); CL.primitives!(s, Q)
 
     t = Dict{String,Float64}()
-    t["exchange_state!"] = best(() -> CL.exchange_state!(Q, dec))
+    t["exchange_state!"] = best(() -> CL.exchange_state!(Q, decomp))
     t["primitives!"]     = best(() -> CL.primitives!(s, Q))
     t["velocity grads"]  = best(() -> for jj in 1:3, d in 1:3
-        if dec.active[d]
-            CL.deriv_along!(s.G[d, jj], vel[jj], s, d, CL.vel_parity(s, d, jj))
-            CL._scale_grad!(s.G[d, jj], s, d)
+        if decomp.active[d]
+            CL.deriv_along!(s.grad_u[d, jj], vel[jj], s, d, CL.vel_parity(s, d, jj))
+            CL._scale_grad!(s.grad_u[d, jj], s, d)
         end
     end)
     t["metric grad corr"] = best(() -> CL.metric_correct_gradients!(s, s.metric))
     t["artificial"]       = best(() -> CL.compute_artificial!(s, Q))
     t["scalar grads"]     = best(() -> for d in 1:3
-        dec.active[d] || continue
-        CL.deriv_along!(s.gradT[d], s.Tt, s, d, 1); CL._scale_grad!(s.gradT[d], s, d)
-        for sp in 1:s.ns
-            CL.deriv_along!(s.gradY[d, sp], s.Ys[sp], s, d, 1)
-            CL._scale_grad!(s.gradY[d, sp], s, d)
+        decomp.active[d] || continue
+        CL.deriv_along!(s.grad_T_ion[d], s.T_ion, s, d, 1); CL._scale_grad!(s.grad_T_ion[d], s, d)
+        for sp in 1:s.n_species
+            CL.deriv_along!(s.grad_Y[d, sp], s.Y[sp], s, d, 1)
+            CL._scale_grad!(s.grad_Y[d, sp], s, d)
         end
     end)
     t["assemble_fluxes!"] = best(() -> CL.assemble_fluxes!(s, Q))
     t["flux halo exch"]   = best(() -> for d in 1:3
-        CL.exchange_dim_batch!(view(s.FF, d, :), dec, d)
+        CL.exchange_dim_batch!(view(s.flux, d, :), decomp, d)
     end)
     # mirrors the branch compute_rhs! actually takes for this solver
     unitgeom = s.metric isa CartesianMetric && all(isnothing, s.stretch)
-    t["flux divergence"]  = best(() -> for c in 1:s.ncons, d in 1:3
-        dec.active[d] || continue
-        Fdc = s.FF[d, c]
+    t["flux divergence"]  = best(() -> for c in 1:s.n_cons, d in 1:3
+        decomp.active[d] || continue
+        Fdc = s.flux[d, c]
         σ = s.folds[d] === nothing ? 1 : s.folds[d].sigflux[c]
         if unitgeom
-            CL.deriv_along!(s.tmpA, Fdc, s, d, σ)
+            CL.deriv_along!(s.tmp_a, Fdc, s, d, σ)
             @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-                dQ[i+o1, j+o2, k+o3, c] -= s.tmpA[i+o1, j+o2, k+o3]
+                dQ[i+o1, j+o2, k+o3, c] -= s.tmp_a[i+o1, j+o2, k+o3]
             end
         else
-            Ad = s.Adim[d]
-            @inbounds for idx in eachindex(s.tmpB)
-                s.tmpB[idx] = Ad[idx] * Fdc[idx]
+            Ad = s.area_d[d]
+            @inbounds for idx in eachindex(s.tmp_b)
+                s.tmp_b[idx] = Ad[idx] * Fdc[idx]
             end
-            CL.deriv_along!(s.tmpA, s.tmpB, s, d, σ)
+            CL.deriv_along!(s.tmp_a, s.tmp_b, s, d, σ)
             @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
                 I = CartesianIndex(i + o1, j + o2, k + o3)
-                dQ[I, c] -= s.Jinv[I] * s.tmpA[I]
+                dQ[I, c] -= s.inv_J[I] * s.tmp_a[I]
             end
         end
     end)
@@ -72,11 +72,11 @@ function budget(name, s, Q)
     t["apply_bcs!"]       = best(() -> apply_bcs!(s, Q))
 
     whole = best(() -> compute_rhs!(s, Q, dQ))
-    npt = prod(dec.nloc)
-    nsolves = 3 * nact + nact * (1 + s.ns) + s.ncons * nact   # vel + scalars + flux
+    npt = prod(decomp.n_local)
+    nsolves = 3 * nact + nact * (1 + s.n_species) + s.n_cons * nact   # vel + scalars + flux
     @printf("\n===== %s =====\n", name)
     @printf("  %d points, %d species, %d active dims; compute_rhs! = %.3f ms (%.1f ns/pt)\n",
-            npt, s.ns, nact, 1e3whole, 1e9whole / npt)
+            npt, s.n_species, nact, 1e3whole, 1e9whole / npt)
     @printf("  %d compact line-solves per RHS\n", nsolves)
     tot = sum(values(t))
     println("  phase                    ms      % of sum")
@@ -87,7 +87,7 @@ function budget(name, s, Q)
 end
 
 # tgv-like: 3-D periodic, single species, art off
-s1 = Solver(nglob=(64, 64, 64), Ldom=(2π, 2π, 2π), bcs=per3,
+s1 = Solver(n_global=(64, 64, 64), L_domain=(2π, 2π, 2π), bcs=per3,
             transport=Transport(mu0=1e-3), art=ArtParams(enabled=false))
 Q1 = allocate_state(s1)
 initialize!(s1, Q1, (x, y, z) -> Prim(u=(sin(x) * cos(y), -cos(x) * sin(y), 0.0),
@@ -97,7 +97,7 @@ budget("tgv 64^3, 1 species, art off", s1, Q1)
 # tube-like: 2-D, two species, art on
 eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                     IdealSpecies{Float64}("heavy", 0.2, 1.09)])
-s2 = Solver(nglob=(512, 32, 1), Ldom=(1.0, 0.06, 1.0), eos=eos,
+s2 = Solver(n_global=(512, 32, 1), L_domain=(1.0, 0.06, 1.0), eos=eos,
             bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
             art=ArtParams(enabled=true))
 Q2 = allocate_state(s2)

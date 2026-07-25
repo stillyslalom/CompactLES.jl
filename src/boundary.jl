@@ -58,25 +58,25 @@ const WallPlane = CartesianIndices{3,Tuple{UnitRange{Int},UnitRange{Int},UnitRan
 
 "CartesianIndices of the wall plane for (dim, side), or nothing if this rank
 does not own that global edge."
-function wallplane(dec::Decomp, d::Int, side::Int)::Union{Nothing,WallPlane}
+function wallplane(decomp::Decomp, d::Int, side::Int)::Union{Nothing,WallPlane}
     if side == 1
-        dec.subrank[d] == 0 || return nothing
+        decomp.sub_rank[d] == 0 || return nothing
         i = 1
     else
-        dec.subrank[d] == dec.subsize[d] - 1 || return nothing
-        i = dec.nloc[d]
+        decomp.sub_rank[d] == decomp.sub_size[d] - 1 || return nothing
+        i = decomp.n_local[d]
     end
     # Built out of three explicit locals rather than ntuple(closure, 3):
     # inference widens the closure form to CartesianIndices{3,<:Tuple{
     # OrdinalRange,...}} even though every runtime value is a UnitRange, which
-    # makes the loop variable in `for I in pl` infer as Any. Every array access
+    # makes the loop variable in `for I in plane` infer as Any. Every array access
     # in the wall and NSCBC loops then goes through runtime dispatch — O(N^2)
     # of them per face per RK stage.
-    Hd = dec.Hd
-    n = dec.nloc
-    r1 = d == 1 ? (Hd[1]+i:Hd[1]+i) : (Hd[1]+1:Hd[1]+n[1])
-    r2 = d == 2 ? (Hd[2]+i:Hd[2]+i) : (Hd[2]+1:Hd[2]+n[2])
-    r3 = d == 3 ? (Hd[3]+i:Hd[3]+i) : (Hd[3]+1:Hd[3]+n[3])
+    n_halo_d = decomp.n_halo_d
+    n = decomp.n_local
+    r1 = d == 1 ? (n_halo_d[1]+i:n_halo_d[1]+i) : (n_halo_d[1]+1:n_halo_d[1]+n[1])
+    r2 = d == 2 ? (n_halo_d[2]+i:n_halo_d[2]+i) : (n_halo_d[2]+1:n_halo_d[2]+n[2])
+    r3 = d == 3 ? (n_halo_d[3]+i:n_halo_d[3]+i) : (n_halo_d[3]+1:n_halo_d[3]+n[3])
     return CartesianIndices((r1, r2, r3))
 end
 
@@ -90,49 +90,49 @@ Default: no correction. Characteristic conditions (nscbc.jl) override this."
 correct_rhs!(bc::BoundaryCondition, s, Q, dQ, d, side) = nothing
 
 "ρe at a wall held at temperature Twall (EOS barrier; ideal mixtures)."
-wall_internal_energy(eos::IdealMixture, Q, I, ns::Int, Twall) = begin
+wall_internal_energy(eos::IdealMixture, Q, I, n_species::Int, Twall) = begin
     ρe = 0.0
-    @inbounds for k in 1:ns
+    @inbounds for k in 1:n_species
         ρe += Q[I, k] * eos.cvk[k]
     end
     ρe * Twall
 end
 
-function _wall_density(Q, I, ns)
+function _wall_density(Q, I, n_species)
     ρ = 0.0
-    @inbounds for k in 1:ns
+    @inbounds for k in 1:n_species
         ρ += Q[I, k]
     end
     return ρ
 end
 
 function enforce!(::SlipWallBC, Q, s, d, side)
-    pl = wallplane(s.dec, d, side)
-    pl === nothing && return nothing
-    mc = s.mom[d]
-    @inbounds for I in pl
-        ρ = _wall_density(Q, I, s.ns)
+    plane = wallplane(s.decomp, d, side)
+    plane === nothing && return nothing
+    mc = s.i_mom[d]
+    @inbounds for I in plane
+        ρ = _wall_density(Q, I, s.n_species)
         mn = Q[I, mc]
-        Q[I, s.ie] -= 0.5 * mn * mn / ρ   # remove normal kinetic energy
+        Q[I, s.i_energy] -= 0.5 * mn * mn / ρ   # remove normal kinetic energy
         Q[I, mc] = 0
     end
     nothing
 end
 
 function enforce!(bc::NoSlipWallBC, Q, s, d, side)
-    pl = wallplane(s.dec, d, side)
-    pl === nothing && return nothing
-    m1, m2, m3 = s.mom
+    plane = wallplane(s.decomp, d, side)
+    plane === nothing && return nothing
+    m1, m2, m3 = s.i_mom
     iso = !isnan(bc.Twall)
-    @inbounds for I in pl
-        ρ = _wall_density(Q, I, s.ns)
+    @inbounds for I in plane
+        ρ = _wall_density(Q, I, s.n_species)
         ke = 0.5 * (Q[I,m1]^2 + Q[I,m2]^2 + Q[I,m3]^2) / ρ
-        Q[I, s.ie] -= ke
+        Q[I, s.i_energy] -= ke
         Q[I, m1] = 0
         Q[I, m2] = 0
         Q[I, m3] = 0
         if iso
-            Q[I, s.ie] = wall_internal_energy(s.eos, Q, I, s.ns, bc.Twall)
+            Q[I, s.i_energy] = wall_internal_energy(s.eos, Q, I, s.n_species, bc.Twall)
         end
     end
     nothing
@@ -141,11 +141,11 @@ end
 function enforce!(::ExtrapolationBC, Q, s, d, side)
     # Zeroth-order extrapolation: copy the adjacent interior plane onto the
     # edge plane. Crude outflow; characteristic (NSCBC) treatment is a TODO.
-    pl = wallplane(s.dec, d, side)
-    pl === nothing && return nothing
+    plane = wallplane(s.decomp, d, side)
+    plane === nothing && return nothing
     e = CartesianIndex(ntuple(k -> k == d ? 1 : 0, 3))
     shift = side == 1 ? e : -e
-    @inbounds for I in pl, c in 1:s.ncons
+    @inbounds for I in plane, c in 1:s.n_cons
         Q[I, c] = Q[I + shift, c]
     end
     nothing
@@ -154,7 +154,7 @@ end
 "Enforce all boundary conditions on the conserved state (active dims only)."
 function apply_bcs!(s, Q)
     for d in 1:3, side in 1:2
-        s.dec.active[d] || continue
+        s.decomp.active[d] || continue
         enforce!(s.bcs[d][side], Q, s, d, side)
     end
     return Q

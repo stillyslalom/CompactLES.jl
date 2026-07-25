@@ -2,3 +2,8 @@ Manifest.toml
 # coverage artifacts
 src/*.cov
 *.cov
+# run artifacts
+*.dat
+*.vtr
+*.pvtr
+*.ckpt

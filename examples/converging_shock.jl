@@ -1,5 +1,5 @@
 # Cylindrically converging shock: an effectively 1-D radial problem
-# (nglob = (Nr, 1, 1)) in cylindrical coordinates with the regularized axis.
+# (n_global = (Nr, 1, 1)) in cylindrical coordinates with the regularized axis.
 # A high-pressure outer annulus drives a shock toward r = 0, which reflects
 # off the axis and returns — a Guderley-flavored stress test of the axis
 # treatment and the collapsed-dimension path. Costs ~Nr points, not Nr×9×9.
@@ -31,7 +31,7 @@ prob = Problem(
              p   = 1.0 + 19.0 * drive)
     end)
 
-num = Numerics(nglob=(Nr, 1, 1), art=ArtParams(enabled=true),
+num = Numerics(n_global=(Nr, 1, 1), art=ArtParams(enabled=true),
                cfl=0.4, filter_interval=1, dims=(np, 1, 1))
 
 s, Q = setup(prob, num)
@@ -39,7 +39,7 @@ rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
 function diag(s, Q)
     s.step % 100 == 0 || return
-    nx = s.dec.nloc[1]
+    nx = s.decomp.n_local[1]
     pmax = -Inf
     for i in 1:nx
         I = gidx(s, i, 1, 1)
@@ -48,7 +48,7 @@ function diag(s, Q)
         p = 0.4 * (Q[I, 5] - 0.5 * ρ * u^2)
         pmax = max(pmax, p)
     end
-    pmax = MPI.Allreduce(pmax, max, s.dec.comm)
+    pmax = MPI.Allreduce(pmax, max, s.decomp.comm)
     rank == 0 && @printf("step %6d  t = %8.5f  p_max = %10.4f\n",
                          s.step, s.t, pmax)
 end
@@ -56,7 +56,7 @@ end
 run!(s, Q; tfinal=0.35, nmax=1_000_000, callback=diag)
 
 open(@sprintf("conv_rank%03d.dat", rank), "w") do io
-    for i in 1:s.dec.nloc[1]
+    for i in 1:s.decomp.n_local[1]
         I = gidx(s, i, 1, 1)
         @printf(io, "%.8e  %.8e\n", xcoord(s, 1, i), Q[I, 1])
     end

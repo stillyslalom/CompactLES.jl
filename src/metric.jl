@@ -62,8 +62,8 @@ scalefactors(::SphericalMetric,   r,  θ,  φ ) = (1.0, r, r * sin(θ))
 # map's domain for halo layers beyond closed physical edges — those geometry
 # values are never read).
 @inline function _phys_and_jac(s, d::Int, if_::Int)
-    ξ = s.origin[d] + s.cshift[d] +
-        (s.dec.off[d] + (if_ - s.dec.Hd[d]) - 1) * s.h[d]
+    ξ = s.origin[d] + s.coord_shift[d] +
+        (s.decomp.offset[d] + (if_ - s.decomp.n_halo_d[d]) - 1) * s.h[d]
     st = s.stretch[d]
     st === nothing && return ξ, 1.0
     sc = clamp(ξ, 0.0, 1.0)
@@ -72,10 +72,10 @@ end
 
 "Fill the geometric arrays of the solver over the full padded extent."
 function init_geometry!(s)
-    dec = s.dec
-    H = dec.H
+    decomp = s.decomp
+    n_halo = decomp.n_halo
     tiny = 1e-300
-    nxf, nyf, nzf = size(s.Jinv)
+    nxf, nyf, nzf = size(s.inv_J)
     for k in 1:nzf, j in 1:nyf, i in 1:nxf
         x1, m1 = _phys_and_jac(s, 1, i)
         x2, m2 = _phys_and_jac(s, 2, j)
@@ -84,49 +84,49 @@ function init_geometry!(s)
         h1 *= m1; h2 *= m2; h3 *= m3
         h1 = max(h1, tiny); h2 = max(h2, tiny); h3 = max(h3, tiny)
         J = h1 * h2 * h3
-        s.Jinv[i, j, k] = 1 / J
-        s.Adim[1][i, j, k] = J / h1
-        s.Adim[2][i, j, k] = J / h2
-        s.Adim[3][i, j, k] = J / h3
-        s.invh[1][i, j, k] = 1 / h1
-        s.invh[2][i, j, k] = 1 / h2
-        s.invh[3][i, j, k] = 1 / h3
+        s.inv_J[i, j, k] = 1 / J
+        s.area_d[1][i, j, k] = J / h1
+        s.area_d[2][i, j, k] = J / h2
+        s.area_d[3][i, j, k] = J / h3
+        s.inv_h[1][i, j, k] = 1 / h1
+        s.inv_h[2][i, j, k] = 1 / h2
+        s.inv_h[3][i, j, k] = 1 / h3
         if s.metric isa CylindricalMetric
-            s.rinv[i, j, k] = 1 / max(x1, tiny)
+            s.inv_r[i, j, k] = 1 / max(x1, tiny)
         elseif s.metric isa SphericalMetric
-            s.rinv[i, j, k] = 1 / max(x1, tiny)
-            s.cotr[i, j, k] = cos(x2) / max(x1 * sin(x2), tiny)   # cotθ / r
+            s.inv_r[i, j, k] = 1 / max(x1, tiny)
+            s.cot_over_r[i, j, k] = cos(x2) / max(x1 * sin(x2), tiny)   # cotθ / r
         end
     end
-    s.metric isa SphericalMetric && s.dec.active[2] && gcl_cotr!(s)
+    s.metric isa SphericalMetric && s.decomp.active[2] && gcl_cotr!(s)
     return s
 end
 
 # Discrete Geometric Conservation Law correction for the spherical θ-momentum
 # source. The θ-momentum balance for a uniform state pits the flux divergence
-# −Jinv·D_ξ2(A₂·p) against the source +(cotθ/r)·Π_φφ (metric.jl below), where
+# −inv_J·D_ξ2(A₂·p) against the source +(cotθ/r)·Π_φφ (metric.jl below), where
 # A₂ = r sinθ is the θ area factor and D_ξ2 is the compact θ-derivative used in
-# the divergence loop (rhs.jl). Analytically Jinv·∂_ξ2(A₂) = cotθ/r and the two
+# the divergence loop (rhs.jl). Analytically inv_J·∂_ξ2(A₂) = cotθ/r and the two
 # cancel; discretely D_ξ2(sinθ) ≠ cosθ, so the analytically sampled cotθ/r
 # leaves an O(h⁴) freestream residual (a GCL truncation error, not a bug).
 #
 # We restore exact discrete freestream preservation by REDEFINING cotθ/r as
-# Jinv·D_ξ2(A₂): the identical operator (same compact scheme, same pole/antipodal
+# inv_J·D_ξ2(A₂): the identical operator (same compact scheme, same pole/antipodal
 # fold, same antipodal sign σ as the m2 pressure flux) applied to the identical
 # area factor. By linearity the source then cancels the divergence node-by-node
 # for any uniform state, by construction. The correction is O(h⁴) from the
 # analytic value, so it does not degrade the scheme's formal order elsewhere.
 function gcl_cotr!(s)
-    dec = s.dec
+    decomp = s.decomp
     # Same antipodal sign the flux-divergence loop uses for the θ-momentum
     # (m2) pressure flux across the θ pole fold (ignored when there is no fold).
-    σ = s.folds[2] === nothing ? 1 : s.folds[2].sigflux[s.mom[2]]
-    deriv_along!(s.tmpA, s.Adim[2], s, 2, σ)   # D_ξ2(A₂) with the m2 fold sign
-    o1, o2, o3 = dec.Hd
-    nx, ny, nz = dec.nloc
+    σ = s.folds[2] === nothing ? 1 : s.folds[2].sigflux[s.i_mom[2]]
+    deriv_along!(s.tmp_a, s.area_d[2], s, 2, σ)   # D_ξ2(A₂) with the m2 fold sign
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        s.cotr[I] = s.Jinv[I] * s.tmpA[I]
+        s.cot_over_r[I] = s.inv_J[I] * s.tmp_a[I]
     end
     return s
 end
@@ -136,42 +136,42 @@ end
 # coordinate derivatives by 1/h_d (which now also carries any stretching
 # Jacobian); these functions then ADD the curvature corrections only, so the
 # same corrections serve stretched and unstretched grids. Convention matches rhs.jl:
-# G[d, j] is the d-direction derivative of the j-th velocity component.
+# grad_u[d, j] is the d-direction derivative of the j-th velocity component.
 
 function metric_correct_gradients!(s, ::CartesianMetric)
     return s   # scale factors are unity; nothing to do
 end
 
 function metric_correct_gradients!(s, ::CylindricalMetric)
-    dec = s.dec; o1, o2, o3 = dec.Hd
-    nx, ny, nz = dec.nloc
-    G = s.G
+    decomp = s.decomp; o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    grad_u = s.grad_u
     @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
-            ir = s.rinv[I]
-            G[2, 1][I] -= s.v[I] * ir
-            G[2, 2][I] += s.u[I] * ir
+            ir = s.inv_r[I]
+            grad_u[2, 1][I] -= s.v[I] * ir
+            grad_u[2, 2][I] += s.u[I] * ir
         end
     end
     return s
 end
 
 function metric_correct_gradients!(s, ::SphericalMetric)
-    dec = s.dec; o1, o2, o3 = dec.Hd
-    nx, ny, nz = dec.nloc
-    G = s.G
+    decomp = s.decomp; o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    grad_u = s.grad_u
     @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
-            ir  = s.rinv[I]          # 1/r
-            ctr = s.cotr[I]          # cotθ / r
+            ir  = s.inv_r[I]               # 1/r
+            ctr = s.cot_over_r[I]          # cotθ / r
             ur, uθ, uφ = s.u[I], s.v[I], s.w[I]
-            G[2, 1][I] -= uθ * ir
-            G[2, 2][I] += ur * ir
-            G[3, 1][I] -= uφ * ir
-            G[3, 2][I] -= uφ * ctr
-            G[3, 3][I] += ur * ir + uθ * ctr
+            grad_u[2, 1][I] -= uθ * ir
+            grad_u[2, 2][I] += ur * ir
+            grad_u[3, 1][I] -= uφ * ir
+            grad_u[3, 2][I] -= uφ * ctr
+            grad_u[3, 3][I] += ur * ir + uθ * ctr
         end
     end
     return s
@@ -185,23 +185,23 @@ end
 add_metric_sources!(s, dQ, Q, ::CartesianMetric) = s
 
 @inline function _Pi(s, Q, I, a, b)
-    G = s.G
-    μ = s.transport.mu0 + s.mua[I]
-    β = s.betaa[I]
-    divu = G[1, 1][I] + G[2, 2][I] + G[3, 3][I]
-    τ = μ * (G[a, b][I] + G[b, a][I]) + (a == b ? (β - 2μ/3) * divu : 0.0)
+    grad_u = s.grad_u
+    μ = s.transport.mu0 + s.mu_art[I]
+    β = s.beta_art[I]
+    divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
+    τ = μ * (grad_u[a, b][I] + grad_u[b, a][I]) + (a == b ? (β - 2μ/3) * divu : 0.0)
     uv = (s.u[I], s.v[I], s.w[I])
     s.rho[I] * uv[a] * uv[b] + (a == b ? s.p[I] : 0.0) - τ
 end
 
 function add_metric_sources!(s, dQ, Q, ::CylindricalMetric)
-    dec = s.dec; o1, o2, o3 = dec.Hd
-    nx, ny, nz = dec.nloc
-    m = s.mom
+    decomp = s.decomp; o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    m = s.i_mom
     @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
-            ir = s.rinv[I]
+            ir = s.inv_r[I]
             dQ[I, m[1]] += ir * _Pi(s, Q, I, 2, 2)      # +Π_θθ / r
             dQ[I, m[2]] -= ir * _Pi(s, Q, I, 2, 1)      # −Π_θr / r
         end
@@ -210,14 +210,14 @@ function add_metric_sources!(s, dQ, Q, ::CylindricalMetric)
 end
 
 function add_metric_sources!(s, dQ, Q, ::SphericalMetric)
-    dec = s.dec; o1, o2, o3 = dec.Hd
-    nx, ny, nz = dec.nloc
-    m = s.mom
+    decomp = s.decomp; o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    m = s.i_mom
     @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
-            ir  = s.rinv[I]
-            ctr = s.cotr[I]
+            ir  = s.inv_r[I]
+            ctr = s.cot_over_r[I]
             Pθθ = _Pi(s, Q, I, 2, 2)
             Pφφ = _Pi(s, Q, I, 3, 3)
             dQ[I, m[1]] += ir * (Pθθ + Pφφ)

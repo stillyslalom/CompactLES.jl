@@ -24,7 +24,7 @@ end
 println("threads = ", Threads.nthreads())
 @printf("%-8s %10s %12s %12s\n", "N", "points", "rhs [ms]", "ns/point")
 for N in (24, 32, 48, 64, 96)
-    s = Solver(nglob=(N, N, N), Ldom=(2π, 2π, 2π), bcs=per3,
+    s = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3,
                transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
@@ -35,7 +35,7 @@ for N in (24, 32, 48, 64, 96)
 end
 
 # 1-D radial (converging_shock.jl shape): threading overhead should dominate
-sf = Solver(nglob=(512, 1, 1), Ldom=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
+sf = Solver(n_global=(512, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
             bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
             art=ArtParams(enabled=true))
 Qf = allocate_state(sf)

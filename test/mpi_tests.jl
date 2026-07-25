@@ -63,14 +63,15 @@ const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 "Max interior error of a scalar field against an analytic function (this rank)."
 function ferr(s, f, fn)
     e = 0.0
-    for k in 1:s.dec.nloc[3], j in 1:s.dec.nloc[2], i in 1:s.dec.nloc[1]
+    for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
         e = max(e, abs(f[gidx(s, i, j, k)] -
                        fn(xcoord(s, 1, i), xcoord(s, 2, j), xcoord(s, 3, k))))
     end
     e
 end
 
-fillf!(s, f, fn) = (for k in 1:s.dec.nloc[3], j in 1:s.dec.nloc[2], i in 1:s.dec.nloc[1]
+fillf!(s, f, fn) = (for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2],
+                        i in 1:s.decomp.n_local[1]
     f[gidx(s, i, j, k)] = fn(xcoord(s, 1, i), xcoord(s, 2, j), xcoord(s, 3, k))
 end; f)
 
@@ -114,11 +115,11 @@ function test_periodic_c6()
     # Split each dimension in turn.
     for ax in 1:3
         ng = ntuple(d -> d == ax ? SPLITN : 16, 3)
-        s = Solver(nglob=ng, Ldom=(2π, 2π, 2π), bcs=per3,
+        s = Solver(n_global=ng, L_domain=(2π, 2π, 2π), bcs=per3,
                    art=ArtParams(enabled=false), dims=splitdims(ax))
-        f = CL.field(s.dec); df = CL.field(s.dec)
+        f = CL.field(s.decomp); df = CL.field(s.decomp)
         fillf!(s, f, fx)
-        CL.exchange_halos!(f, s.dec)
+        CL.exchange_halos!(f, s.decomp)
         CL.deriv_along!(df, f, s, ax, 1); CL._scale_grad!(df, s, ax)
         ref = ax == 1 ? dfx : ax == 2 ? dfy : ((x, y, z) -> 0.0)
         # x/y derivatives of sin(3x)cos(2y) are nontrivial; the z derivative is 0.
@@ -141,12 +142,12 @@ function test_pentadiagonal_c10()
     dfy = (x, y, z) -> -2sin(3x) * sin(2y)
     for ax in 1:2   # x (direct) and y (transposed banded path)
         ng = ntuple(d -> d == ax ? SPLITN : 16, 3)
-        s = Solver(nglob=ng, Ldom=(2π, 2π, 2π), bcs=per3,
+        s = Solver(n_global=ng, L_domain=(2π, 2π, 2π), bcs=per3,
                    deriv=lele_d1_10(), art=ArtParams(enabled=false),
                    dims=splitdims(ax))
-        f = CL.field(s.dec); df = CL.field(s.dec)
+        f = CL.field(s.decomp); df = CL.field(s.decomp)
         fillf!(s, f, fx)
-        CL.exchange_halos!(f, s.dec)
+        CL.exchange_halos!(f, s.decomp)
         CL.deriv_along!(df, f, s, ax, 1); CL._scale_grad!(df, s, ax)
         ref = ax == 1 ? dfx : dfy
         check("C10 ∂/∂x$(ax) split $(np)-way", gmax(ferr(s, df, ref)), 1e-8)
@@ -154,13 +155,13 @@ function test_pentadiagonal_c10()
     # Closed domain (SlipWallBC) with the derivative dimension split: closure
     # rows live on the two edge ranks, interior ranks carry V/W spikes. A deg-3
     # polynomial is exact through the C10 closure cascade.
-    sc = Solver(nglob=(SPLITN, 12, 12), Ldom=(1.0, 1.0, 1.0),
+    sc = Solver(n_global=(SPLITN, 12, 12), L_domain=(1.0, 1.0, 1.0),
                 bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                 deriv=lele_d1_10(), art=ArtParams(enabled=false),
                 dims=splitdims(1))
-    fc = CL.field(sc.dec); dfc = CL.field(sc.dec)
+    fc = CL.field(sc.decomp); dfc = CL.field(sc.decomp)
     fillf!(sc, fc, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
-    CL.exchange_halos!(fc, sc.dec)
+    CL.exchange_halos!(fc, sc.decomp)
     CL.deriv_along!(dfc, fc, sc, 1, 1); CL._scale_grad!(dfc, sc, 1)
     check("C10 closed-domain deg-3 exact, x split", gmax(ferr(sc, dfc,
           (x, y, z) -> 2 + 6x - 3x^2)), 1e-9)
@@ -172,12 +173,12 @@ end
 # ---------------------------------------------------------------------------
 function test_closed_c6()
     section("closed-domain C6 closures: polynomial exactness, derivative dim split")
-    s = Solver(nglob=(SPLITN, 12, 12), Ldom=(1.0, 1.0, 1.0),
+    s = Solver(n_global=(SPLITN, 12, 12), L_domain=(1.0, 1.0, 1.0),
                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                art=ArtParams(enabled=false), dims=splitdims(1))
-    f = CL.field(s.dec); df = CL.field(s.dec)
+    f = CL.field(s.decomp); df = CL.field(s.decomp)
     fillf!(s, f, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
-    CL.exchange_halos!(f, s.dec)
+    CL.exchange_halos!(f, s.decomp)
     CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
     check("C6 closed-domain deg-3 exact, x split", gmax(ferr(s, df,
           (x, y, z) -> 2 + 6x - 3x^2)), 1e-9)
@@ -197,13 +198,13 @@ function test_offrank_folds()
     # is smooth through the axis and ODD under (r,θ)→(−r,θ) with the pairing.
     # θ count 48 is even and divisible by np∈{2,4,8}, and keeps ≥ 5 θ-points
     # per rank for the θ filter/derivative plans (≥ 9 at np = 8).
-    s = Solver(nglob=(40, SPLITN, 1), Ldom=(1.0, 2π, 1.0),
+    s = Solver(n_global=(40, SPLITN, 1), L_domain=(1.0, 2π, 1.0),
                metric=CylindricalMetric(),
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
                art=ArtParams(enabled=false), dims=splitdims(2))
-    f = CL.field(s.dec); df = CL.field(s.dec)
+    f = CL.field(s.decomp); df = CL.field(s.decomp)
     fillf!(s, f, (r, θ, z) -> r * cos(θ) * exp(-4r^2))
-    CL.exchange_halos!(f, s.dec)
+    CL.exchange_halos!(f, s.decomp)
     CL.deriv_along!(df, f, s, 1, -1); CL._scale_grad!(df, s, 1)
     check("cyl axis ∂/∂r, θ split (off-rank shift)", gmax(ferr(s, df,
           (r, θ, z) -> cos(θ) * (1 - 8r^2) * exp(-4r^2))), 1e-4)
@@ -211,13 +212,13 @@ function test_offrank_folds()
     # (b) Spherical origin + poles, θ SPLIT. The origin fold reverses θ in its
     # partner map (revdim = 2), so splitting θ triggers the off-rank REVERSED
     # butterfly. f = e^{−4r²} is smooth at the origin and both poles.
-    ssθ = Solver(nglob=(40, SPLITN, 12), Ldom=(1.0, π, 2π),
+    ssθ = Solver(n_global=(40, SPLITN, 12), L_domain=(1.0, π, 2π),
                  metric=SphericalMetric(),
                  bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
                  art=ArtParams(enabled=false), dims=splitdims(2))
-    f = CL.field(ssθ.dec); df = CL.field(ssθ.dec)
+    f = CL.field(ssθ.decomp); df = CL.field(ssθ.decomp)
     fillf!(ssθ, f, (r, θ, φ) -> exp(-4r^2))
-    CL.exchange_halos!(f, ssθ.dec)
+    CL.exchange_halos!(f, ssθ.decomp)
     CL.deriv_along!(df, f, ssθ, 1, 1); CL._scale_grad!(df, ssθ, 1)
     check("sph origin ∂/∂r, θ split (off-rank reverse)", gmax(ferr(ssθ, df,
           (r, θ, φ) -> -8r * exp(-4r^2))), 1e-4)
@@ -244,14 +245,14 @@ function test_halo_consistency()
     # Comparison covers the full padded arrays, halos included.
     for ax in 1:3
         ng = ntuple(d -> d == ax ? SPLITN : 16, 3)
-        s = Solver(nglob=ng, Ldom=(2π, 2π, 2π), bcs=per3,
+        s = Solver(n_global=ng, L_domain=(2π, 2π, 2π), bcs=per3,
                    art=ArtParams(enabled=false), dims=splitdims(ax))
-        a = CL.field(s.dec); b = CL.field(s.dec); c = CL.field(s.dec)
+        a = CL.field(s.decomp); b = CL.field(s.decomp); c = CL.field(s.decomp)
         fillf!(s, a, fn); fillf!(s, b, fn); fillf!(s, c, fn)
         for d in 1:3
-            CL.exchange_dim_batch!([b, c], s.dec, d)   # grows the shared buffer
+            CL.exchange_dim_batch!([b, c], s.decomp, d)   # grows the shared buffer
         end
-        CL.exchange_halos!(a, s.dec)                   # must still send one slab
+        CL.exchange_halos!(a, s.decomp)                   # must still send one slab
         e = maximum(abs, a .- b)
         check("batched ≡ per-array, dim $ax split $(np)-way", gmax(e), 1e-14)
     end
@@ -262,14 +263,14 @@ function test_halo_consistency()
     # layers. Uses the DEFAULT process grid (dims=nothing) so the automatic
     # Dims_create path is covered too; at np ≥ 4 that is a genuine 2-D/3-D
     # grid with real diagonal neighbours.
-    s = Solver(nglob=(24, 24, 24), Ldom=(2π, 2π, 2π), bcs=per3,
+    s = Solver(n_global=(24, 24, 24), L_domain=(2π, 2π, 2π), bcs=per3,
                art=ArtParams(enabled=false))
-    f = CL.field(s.dec)
+    f = CL.field(s.decomp)
     fillf!(s, f, fn)
-    CL.exchange_halos!(f, s.dec)
+    CL.exchange_halos!(f, s.decomp)
     e = 0.0
-    for kk in (0, s.dec.nloc[3] + 1), jj in (0, s.dec.nloc[2] + 1),
-        ii in (0, s.dec.nloc[1] + 1)
+    for kk in (0, s.decomp.n_local[3] + 1), jj in (0, s.decomp.n_local[2] + 1),
+        ii in (0, s.decomp.n_local[1] + 1)
         e = max(e, abs(f[gidx(s, ii, jj, kk)] -
                        fn(xcoord(s, 1, ii), xcoord(s, 2, jj), xcoord(s, 3, kk))))
     end
@@ -286,31 +287,31 @@ function test_freestream()
     section("freestream preservation: uniform state ⇒ dQ ≈ 0, decomposed")
     cases = [
         (; name="cartesian, x split",
-           nglob=(SPLITN, 12, 12), Ldom=(1.0, 1.0, 1.0), metric=CartesianMetric(),
+           n_global=(SPLITN, 12, 12), L_domain=(1.0, 1.0, 1.0), metric=CartesianMetric(),
            bcs=per3, dims=splitdims(1), kw=(;)),
         (; name="cartesian stretched, x split",
-           nglob=(SPLITN, 12, 12), Ldom=(1.0, 1.0, 1.0), metric=CartesianMetric(),
+           n_global=(SPLITN, 12, 12), L_domain=(1.0, 1.0, 1.0), metric=CartesianMetric(),
            bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), dims=splitdims(1),
            kw=(; stretch=(sine_cluster(0.0, 1.0, 0.5, 0.4), nothing, nothing))),
         (; name="cylindrical off-axis, θ split",
-           nglob=(12, SPLITN, 12), Ldom=(1.0, 2π, 0.5), metric=CylindricalMetric(),
+           n_global=(12, SPLITN, 12), L_domain=(1.0, 2π, 0.5), metric=CylindricalMetric(),
            bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), dims=splitdims(2),
            kw=(; origin=(0.2, 0.0, 0.0))),
         (; name="cylindrical resolved-θ axis, θ split",
-           nglob=(40, SPLITN, 1), Ldom=(1.0, 2π, 1.0), metric=CylindricalMetric(),
+           n_global=(40, SPLITN, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
            bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), dims=splitdims(2),
            kw=(;)),
         (; name="spherical origin+poles, θ split (revdim off-rank)",
-           nglob=(40, SPLITN, 12), Ldom=(1.0, π, 2π), metric=SphericalMetric(),
+           n_global=(40, SPLITN, 12), L_domain=(1.0, π, 2π), metric=SphericalMetric(),
            bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
            dims=splitdims(2), kw=(;)),
         (; name="spherical origin+poles, φ split (pdim off-rank)",
-           nglob=(40, 16, SPLITN), Ldom=(1.0, π, 2π), metric=SphericalMetric(),
+           n_global=(40, 16, SPLITN), L_domain=(1.0, π, 2π), metric=SphericalMetric(),
            bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
            dims=splitdims(3), kw=(;)),
     ]
     for cs in cases
-        kw = merge((; nglob=cs.nglob, Ldom=cs.Ldom, metric=cs.metric,
+        kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain, metric=cs.metric,
                     bcs=cs.bcs, dims=cs.dims, art=ArtParams(enabled=false)), cs.kw)
         s = Solver(; kw...)
         Q = allocate_state(s)
@@ -319,7 +320,8 @@ function test_freestream()
         dQ = zero(Q)
         compute_rhs!(s, Q, dQ)
         m = 0.0
-        for c in 1:s.ncons, k in 1:s.dec.nloc[3], j in 1:s.dec.nloc[2], i in 1:s.dec.nloc[1]
+        for c in 1:s.n_cons, k in 1:s.decomp.n_local[3],
+            j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
             m = max(m, abs(dQ[gidx(s, i, j, k), c]))
         end
         check(cs.name, gmax(m), 1e-8)
@@ -333,7 +335,7 @@ end
 function test_conservation()
     section("conservation: periodic RHS integrates to zero (global sum)")
     N = SPLITN                   # ≥ 9 per rank up to np = 8 (filter closure)
-    s = Solver(nglob=(N, 16, 16), Ldom=(2π, 2π, 2π), bcs=per3,
+    s = Solver(n_global=(N, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
                transport=Transport(mu0=1e-3), art=ArtParams(enabled=false),
                dims=splitdims(1))
     Q = allocate_state(s)
@@ -344,9 +346,9 @@ function test_conservation()
     compute_rhs!(s, Q, dQ)
     worst = 0.0
     npts = N * 16 * 16
-    for c in 1:s.ncons
+    for c in 1:s.n_cons
         loc = 0.0
-        for k in 1:s.dec.nloc[3], j in 1:s.dec.nloc[2], i in 1:s.dec.nloc[1]
+        for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
             loc += dQ[gidx(s, i, j, k), c]
         end
         worst = max(worst, abs(gsum(loc)))
@@ -363,7 +365,7 @@ end
 # ---------------------------------------------------------------------------
 function test_sync()
     section("global synchronization: dt and time identical on every rank")
-    s = Solver(nglob=(SPLITN, 16, 16), Ldom=(2π, 2π, 2π), bcs=per3,
+    s = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
                art=ArtParams(enabled=false), dims=splitdims(1))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) ->
@@ -380,11 +382,11 @@ function test_sync()
                            ic=(x, y, z) -> Prim(u=(0, 0, 0),
                                                 p=1 + 4exp(-200(x - 0.3)^2),
                                                 rho=1 + exp(-200(x - 0.3)^2))),
-                   Numerics(nglob=(SPLITN, 16, 16), dims=splitdims(1)))
+                   Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
     run!(s2, Q2; tfinal=1e9, nmax=10)
     nbad = 0.0
-    for c in 1:s2.ncons, k in 1:s2.dec.nloc[3], j in 1:s2.dec.nloc[2],
-        i in 1:s2.dec.nloc[1]
+    for c in 1:s2.n_cons, k in 1:s2.decomp.n_local[3], j in 1:s2.decomp.n_local[2],
+        i in 1:s2.decomp.n_local[1]
         isfinite(Q2[gidx(s2, i, j, k), c]) || (nbad += 1)
     end
     check("10 RK steps stay finite (count of non-finite)", gsum(nbad), 0.5)
@@ -398,7 +400,7 @@ end
 # ---------------------------------------------------------------------------
 function test_checkpoint()
     section("checkpoint round trip, decomposed")
-    s = Solver(nglob=(SPLITN, 16, 16), Ldom=(2π, 2π, 2π), bcs=per3,
+    s = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
                art=ArtParams(enabled=false), dims=splitdims(1))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(u=(sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
@@ -409,7 +411,8 @@ function test_checkpoint()
     load_checkpoint!(s, Q2, "mpi_ckpt")
     check("restored t and step", abs(s.t - 1.25) + abs(s.step - 17), 1e-15)
     d = 0.0
-    for c in 1:s.ncons, k in 1:s.dec.nloc[3], j in 1:s.dec.nloc[2], i in 1:s.dec.nloc[1]
+    for c in 1:s.n_cons, k in 1:s.decomp.n_local[3],
+        j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
         d = max(d, abs(Q2[gidx(s, i, j, k), c] - Q[gidx(s, i, j, k), c]))
     end
     check("state bit-identical after round trip", gmax(d), 1e-300)

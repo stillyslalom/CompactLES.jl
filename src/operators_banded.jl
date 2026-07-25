@@ -9,7 +9,7 @@ struct BandPlan{T} <: AbstractDirPlan
     lines::Int
     tr::Bool
     scheme::BandedCompactScheme{T}
-    ls::BandLineSolver{T}
+    line_solver::BandLineSolver{T}
     lo_closed::Bool
     hi_closed::Bool
     a0::T
@@ -19,10 +19,10 @@ struct BandPlan{T} <: AbstractDirPlan
     B::Matrix{T}
 end
 
-function plan_direction(dec::Decomp, scheme::BandedCompactScheme{T}, dim::Int,
+function plan_direction(decomp::Decomp, scheme::BandedCompactScheme{T}, dim::Int,
                         h::Real; lo_fold::Union{Nothing,Int}=nothing,
                         hi_fold::Union{Nothing,Int}=nothing) where {T}
-    n = dec.nloc[dim]
+    n = decomp.n_local[dim]
     q = scheme.q
     nc = nclosure(scheme)
     M = halfwidth(scheme)
@@ -30,13 +30,13 @@ function plan_direction(dec::Decomp, scheme::BandedCompactScheme{T}, dim::Int,
     n >= nmin || error(
         "local extent $n along dim $dim too small for scheme '$(scheme.name)' " *
         "(need ≥ $nmin); use fewer ranks in this dimension")
-    M <= dec.H || error("stencil half-width $M exceeds halo width $(dec.H); " *
-                        "construct the Solver with H ≥ $M")
+    M <= decomp.n_halo || error("stencil half-width $M exceeds halo width $(decomp.n_halo); " *
+                        "construct the Solver with n_halo ≥ $M")
 
-    lo_closed = at_lo_edge(dec, dim) && lo_fold === nothing
-    hi_closed = at_hi_edge(dec, dim) && hi_fold === nothing
-    fold_lo = lo_fold !== nothing && at_lo_edge(dec, dim)
-    fold_hi = hi_fold !== nothing && at_hi_edge(dec, dim)
+    lo_closed = at_lo_edge(decomp, dim) && lo_fold === nothing
+    hi_closed = at_hi_edge(decomp, dim) && hi_fold === nothing
+    fold_lo = lo_fold !== nothing && at_lo_edge(decomp, dim)
+    fold_hi = hi_fold !== nothing && at_hi_edge(decomp, dim)
 
     # Band matrix Ab[q+1+s, i] = A[i, i+s].
     Ab = zeros(T, 2q + 1, n)
@@ -108,11 +108,11 @@ function plan_direction(dec::Decomp, scheme::BandedCompactScheme{T}, dim::Int,
     clo = [row.rhs .* scale for row in scheme.closures]
     chi = [row.rhs .* (scale * sgn) for row in scheme.closures]
 
-    lines = prod(dec.nloc[k] for k in 1:3 if k != dim)
-    ls = BandLineSolver(Ab, AL, CR, dec.sub[dim], dec.subsize[dim],
-                        dec.subrank[dim], lines; periodic=dec.periodic[dim])
+    lines = prod(decomp.n_local[k] for k in 1:3 if k != dim)
+    line_solver = BandLineSolver(Ab, AL, CR, decomp.sub[dim], decomp.sub_size[dim],
+                        decomp.sub_rank[dim], lines; periodic=decomp.periodic[dim])
     tr = dim > 1
-    BandPlan{T}(dim, n, lines, tr, scheme, ls, lo_closed, hi_closed,
+    BandPlan{T}(dim, n, lines, tr, scheme, line_solver, lo_closed, hi_closed,
                 scheme.a0, ci, clo, chi,
                 tr ? zeros(T, lines, n) : zeros(T, n, lines))
 end

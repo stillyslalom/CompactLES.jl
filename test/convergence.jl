@@ -38,13 +38,14 @@ using Printf, Test
 const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
-fillf!(s, f, fn) = (for k in 1:s.dec.nloc[3], j in 1:s.dec.nloc[2], i in 1:s.dec.nloc[1]
+fillf!(s, f, fn) = (for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2],
+                        i in 1:s.decomp.n_local[1]
     f[gidx(s, i, j, k)] = fn(xcoord(s, 1, i), xcoord(s, 2, j), xcoord(s, 3, k))
 end; f)
 
 function ferr(s, f, fn)
     e = 0.0
-    for k in 1:s.dec.nloc[3], j in 1:s.dec.nloc[2], i in 1:s.dec.nloc[1]
+    for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
         e = max(e, abs(f[gidx(s, i, j, k)] -
                        fn(xcoord(s, 1, i), xcoord(s, 2, j), xcoord(s, 3, k))))
     end
@@ -63,9 +64,9 @@ function study(name, Ns, build, fld, ref; expect=nothing, tol=1.0)
     errs = Float64[]
     for N in Ns
         s = build(N)
-        f = CL.field(s.dec); df = CL.field(s.dec)
+        f = CL.field(s.decomp); df = CL.field(s.decomp)
         fillf!(s, f, fld)
-        CL.exchange_halos!(f, s.dec)
+        CL.exchange_halos!(f, s.decomp)
         CL.deriv_along!(df, f, s, 1, ref.parity)
         CL._scale_grad!(df, s, 1)
         push!(errs, ferr(s, df, ref.fn))
@@ -82,20 +83,20 @@ end
 
 println("\n=== interior order (periodic) ===")
 study("C6 periodic derivative", (16, 32, 64),
-      N -> Solver(nglob=(N, 12, 12), Ldom=(2π, 2π, 2π), bcs=per3,
+      N -> Solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
                   art=ArtParams(enabled=false)),
       (x, y, z) -> sin(x),
       (fn=(x, y, z) -> cos(x), parity=1); expect=6.0, tol=1.2)
 
 study("C10 periodic derivative", (16, 24, 32),
-      N -> Solver(nglob=(N, 12, 12), Ldom=(2π, 2π, 2π), bcs=per3,
+      N -> Solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
                   deriv=lele_d1_10(), art=ArtParams(enabled=false)),
       (x, y, z) -> sin(x),
       (fn=(x, y, z) -> cos(x), parity=1); expect=10.0, tol=2.5)
 
 println("\n=== closed-domain order (boundary closures active) ===")
 study("C6 with wall closures", (24, 48, 96),
-      N -> Solver(nglob=(N, 12, 12), Ldom=(1.0, 1.0, 1.0),
+      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                   art=ArtParams(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
@@ -103,7 +104,7 @@ study("C6 with wall closures", (24, 48, 96),
 
 println("\n=== coordinate-singularity folds ===")
 study("cylindrical axis, odd field (u_r-like)", (32, 64, 128),
-      N -> Solver(nglob=(N, 1, 12), Ldom=(1.0, 1.0, 0.5),
+      N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
                   metric=CylindricalMetric(),
                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
                   art=ArtParams(enabled=false)),
@@ -111,7 +112,7 @@ study("cylindrical axis, odd field (u_r-like)", (32, 64, 128),
       (fn=(r, θ, z) -> (1 - 8r^2) * exp(-4r^2), parity=-1); expect=3.7, tol=0.8)
 
 study("cylindrical axis, even field (scalar)", (32, 64, 128),
-      N -> Solver(nglob=(N, 1, 12), Ldom=(1.0, 1.0, 0.5),
+      N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
                   metric=CylindricalMetric(),
                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
                   art=ArtParams(enabled=false)),
@@ -119,7 +120,7 @@ study("cylindrical axis, even field (scalar)", (32, 64, 128),
       (fn=(r, θ, z) -> -8r * exp(-4r^2), parity=1); expect=3.0, tol=0.8)
 
 study("resolved-θ axis, x-like field", (32, 64, 128),
-      N -> Solver(nglob=(N, 16, 1), Ldom=(1.0, 2π, 1.0),
+      N -> Solver(n_global=(N, 16, 1), L_domain=(1.0, 2π, 1.0),
                   metric=CylindricalMetric(),
                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
                   art=ArtParams(enabled=false)),
@@ -128,7 +129,7 @@ study("resolved-θ axis, x-like field", (32, 64, 128),
       expect=3.7, tol=0.8)
 
 study("spherical origin, radial Gaussian", (24, 48, 96),
-      N -> Solver(nglob=(N, 12, 12), Ldom=(1.0, π, 2π),
+      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, π, 2π),
                   metric=SphericalMetric(),
                   bcs=((OriginBC(), SlipWallBC()),
                        (PoleBC(), PoleBC()), per3[3]),
@@ -152,18 +153,18 @@ function taylor_green_ke(N; tfinal=10.0, Re=1600.0)
                        u=(sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), 0.0),
                        p=p0 + (1 / 16) * (cos(2x) + cos(2y)) * (cos(2z) + 2),
                        rho=1.0))
-    s, Q = setup(prob, Numerics(nglob=(N, N, N), art=ArtParams(enabled=false),
+    s, Q = setup(prob, Numerics(n_global=(N, N, N), art=ArtParams(enabled=false),
                                 cfl=0.6))
     cellvol = prod(s.h)
     ts = Float64[]; kes = Float64[]
     cb = (s, Q) -> begin
         ke = 0.0
-        for k in 1:s.dec.nloc[3], j in 1:s.dec.nloc[2], i in 1:s.dec.nloc[1]
+        for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
             I = gidx(s, i, j, k)
             ρ = Q[I, 1]
-            ke += 0.5 * (Q[I, s.mom[1]]^2 + Q[I, s.mom[2]]^2 + Q[I, s.mom[3]]^2) / ρ
+            ke += 0.5 * (Q[I, s.i_mom[1]]^2 + Q[I, s.i_mom[2]]^2 + Q[I, s.i_mom[3]]^2) / ρ
         end
-        ke = MPI.Allreduce(ke * cellvol, +, s.dec.comm) / (2π)^3
+        ke = MPI.Allreduce(ke * cellvol, +, s.decomp.comm) / (2π)^3
         push!(ts, s.t); push!(kes, ke)
     end
     run!(s, Q; tfinal=tfinal, callback=cb)

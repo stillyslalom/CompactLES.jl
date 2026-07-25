@@ -150,7 +150,7 @@ function BandLineSolver(Ab::Matrix{T}, AL::Matrix{T}, CR::Matrix{T},
         R = zeros(T, m2 * P, m2 * P)
         for rk in 0:(P-1)
             base = 4q * q * rk
-            getb(off, r, t) = allb[base + off * q * q + (t - 1) * q + r]
+            getb(offset, r, t) = allb[base + offset * q * q + (t - 1) * q + r]
             rh = m2 * rk           # head rows offset of rank rk
             rt = m2 * rk + q       # tail rows offset
             for r in 1:q
@@ -174,32 +174,33 @@ function BandLineSolver(Ab::Matrix{T}, AL::Matrix{T}, CR::Matrix{T},
                       zeros(T, lines, q), zeros(T, lines, q))
 end
 
-function solve_lines!(B::AbstractMatrix{T}, ls::BandLineSolver{T}) where {T}
+function solve_lines!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T}) where {T}
     n, L = size(B)
-    q = ls.q
+    q = line_solver.q
     @threaded n*L for l in 1:L
-        solve_col!(view(B, :, l), ls.F)
+        solve_col!(view(B, :, l), line_solver.F)
     end
-    ls.hasred || return B
+    line_solver.hasred || return B
 
     @inbounds for l in 1:L, r in 1:q
-        ls.ends[r, l] = B[r, l]
-        ls.ends[q+r, l] = B[n-q+r, l]
+        line_solver.ends[r, l] = B[r, l]
+        line_solver.ends[q+r, l] = B[n-q+r, l]
     end
-    if ls.P > 1
-        MPI.Allgather!(ls.ends, MPI.UBuffer(vec(ls.gath), 2q * L), ls.comm)
+    if line_solver.P > 1
+        MPI.Allgather!(line_solver.ends,
+                       MPI.UBuffer(vec(line_solver.gath), 2q * L), line_solver.comm)
     else
-        copyto!(view(ls.gath, :, :, 1), ls.ends)
+        copyto!(view(line_solver.gath, :, :, 1), line_solver.ends)
     end
     m2 = 2q
-    @inbounds for rk in 0:(ls.P-1), l in 1:L, r in 1:m2
-        ls.z[m2*rk+r, l] = ls.gath[r, l, rk+1]
+    @inbounds for rk in 0:(line_solver.P-1), l in 1:L, r in 1:m2
+        line_solver.z[m2*rk+r, l] = line_solver.gath[r, l, rk+1]
     end
-    ldiv!(ls.red, ls.z)
+    ldiv!(line_solver.red, line_solver.z)
 
-    cprev = m2 * mod(ls.p - 1, ls.P) + q
-    cnext = m2 * mod(ls.p + 1, ls.P)
-    V, W, z = ls.V, ls.W, ls.z
+    cprev = m2 * mod(line_solver.p - 1, line_solver.P) + q
+    cnext = m2 * mod(line_solver.p + 1, line_solver.P)
+    V, W, z = line_solver.V, line_solver.W, line_solver.z
     @threaded n*L for l in 1:L
         @inbounds for i in 1:n
             acc = zero(T)

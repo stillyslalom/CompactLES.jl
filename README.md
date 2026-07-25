@@ -22,7 +22,7 @@ prob = Problem(
     ic     = (x, y, z) -> Prim(u=(sin(x)*cos(y), -cos(x)*sin(y), 0.0),
                                p=71.43, rho=1.0))
 
-s, Q = setup(prob, Numerics(nglob=(64, 64, 64)))
+s, Q = setup(prob, Numerics(n_global=(64, 64, 64)))
 run!(s, Q; tfinal=1.0)
 ```
 
@@ -100,7 +100,7 @@ A **`Prim`** is a pointwise state — velocity, pressure, composition, and exact
 one of temperature or density (the EOS supplies the other):
 
 ```julia
-Prim(; u=(0,0,0), p, T=NaN, rho=NaN, Y=(1.0,))
+Prim(; u=(0,0,0), p, T_ion=NaN, rho=NaN, Y=(1.0,))
 ```
 
 A **`Problem`** bundles the physics and geometry:
@@ -121,7 +121,7 @@ A **`Numerics`** bundles the discretization and runtime choices:
 
 ```julia
 num = Numerics(
-    nglob           = (256, 64, 64),      # global grid
+    n_global        = (256, 64, 64),      # global grid
     deriv           = lele_d1_6(),        # or lele_d1_10(), or your own
     filt            = compact_filter(0.45),
     art             = ArtParams(enabled=true),   # Cook artificial properties
@@ -152,7 +152,7 @@ over `Numerics` with the same `Problem`.
 | Time integration| Five-stage fourth-order low-storage Carpenter–Kennedy RK45 |
 | Geometry        | `CartesianMetric`, `CylindricalMetric`, `SphericalMetric`; collapsed 1-D/2-D; `Stretch` / `sine_cluster` meshes |
 | Walls           | `SlipWallBC`, `NoSlipWallBC(Twall=...)` (adiabatic or isothermal) |
-| Open boundaries | `NSCBCOutflowBC(pinf=...)`, `NSCBCInflowBC(u=..., T=..., Y=...)`, `ExtrapolationBC` |
+| Open boundaries | `NSCBCOutflowBC(pinf=...)`, `NSCBCInflowBC(u=..., T_ion=..., Y=...)`, `ExtrapolationBC` |
 | Forcing         | `DirichletBC((x,y,z,t) -> Prim)` |
 | Singular axes   | `AxisBC` (cylindrical axis), `OriginBC` (spherical origin), `PoleBC` (spherical poles) |
 | Thermodynamics  | `IdealMixture` of `IdealSpecies`; EOS interface for custom models |
@@ -162,7 +162,7 @@ over `Numerics` with the same `Problem`.
 ## Timestep and CFL near coordinate singularities
 
 Worth understanding before running resolved-angle polar grids. `compute_dt`
-uses true physical spacings (`invh` carries the metric scale factor and any
+uses true physical spacings (`inv_h` carries the metric scale factor and any
 stretching Jacobian), so the estimate is *correct* at a singularity — it will
 not silently under-restrict. But correct is not the same as cheap, and the
 three regimes behave very differently:

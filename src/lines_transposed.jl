@@ -19,9 +19,9 @@ function _line_chunks(L::Int)
 end
 
 "Row-sweep Thomas over B (lines × n), vectorized across lines."
-function solve_lines_t!(B::AbstractMatrix{T}, ls::LineSolver{T}) where {T}
+function solve_lines_t!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where {T}
     L, n = size(B)
-    F = ls.F
+    F = line_solver.F
     @threaded n*L for rng in collect(_line_chunks(L))
         isempty(rng) && continue
         @inbounds begin
@@ -44,30 +44,31 @@ function solve_lines_t!(B::AbstractMatrix{T}, ls::LineSolver{T}) where {T}
             end
         end
     end
-    ls.hasred || return B
+    line_solver.hasred || return B
 
     @inbounds for l in 1:L
-        ls.ends[1, l] = B[l, 1]
-        ls.ends[2, l] = B[l, n]
+        line_solver.ends[1, l] = B[l, 1]
+        line_solver.ends[2, l] = B[l, n]
     end
-    if ls.P > 1
-        MPI.Allgather!(ls.ends, MPI.UBuffer(vec(ls.gath), 2L), ls.comm)
+    if line_solver.P > 1
+        MPI.Allgather!(line_solver.ends,
+                       MPI.UBuffer(vec(line_solver.gath), 2L), line_solver.comm)
     else
-        copyto!(view(ls.gath, :, :, 1), ls.ends)
+        copyto!(view(line_solver.gath, :, :, 1), line_solver.ends)
     end
-    @inbounds for q in 0:(ls.P-1), l in 1:L
-        ls.z[2q+1, l] = ls.gath[1, l, q+1]
-        ls.z[2q+2, l] = ls.gath[2, l, q+1]
+    @inbounds for q in 0:(line_solver.P-1), l in 1:L
+        line_solver.z[2q+1, l] = line_solver.gath[1, l, q+1]
+        line_solver.z[2q+2, l] = line_solver.gath[2, l, q+1]
     end
-    ldiv!(ls.red, ls.z)
-    cprev = 2 * mod(ls.p - 1, ls.P) + 2
-    cnext = 2 * mod(ls.p + 1, ls.P) + 1
-    zp, zn = ls.zbp, ls.zbn
+    ldiv!(line_solver.red, line_solver.z)
+    cprev = 2 * mod(line_solver.p - 1, line_solver.P) + 2
+    cnext = 2 * mod(line_solver.p + 1, line_solver.P) + 1
+    zp, zn = line_solver.zbp, line_solver.zbn
     @inbounds for l in 1:L
-        zp[l] = ls.z[cprev, l]
-        zn[l] = ls.z[cnext, l]
+        zp[l] = line_solver.z[cprev, l]
+        zn[l] = line_solver.z[cnext, l]
     end
-    v, w = ls.v, ls.w
+    v, w = line_solver.v, line_solver.w
     @threaded n*L for rng in collect(_line_chunks(L))
         isempty(rng) && continue
         @inbounds for i in 1:size(B, 2)
@@ -82,10 +83,10 @@ function solve_lines_t!(B::AbstractMatrix{T}, ls::LineSolver{T}) where {T}
 end
 
 "Row-sweep banded elimination over B (lines × n), vectorized across lines."
-function solve_lines_t!(B::AbstractMatrix{T}, ls::BandLineSolver{T}) where {T}
+function solve_lines_t!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T}) where {T}
     L, n = size(B)
-    q = ls.q
-    F = ls.F
+    q = line_solver.q
+    F = line_solver.F
     @threaded n*L for rng in collect(_line_chunks(L))
         isempty(rng) && continue
         @inbounds begin
@@ -112,36 +113,37 @@ function solve_lines_t!(B::AbstractMatrix{T}, ls::BandLineSolver{T}) where {T}
             end
         end
     end
-    ls.hasred || return B
+    line_solver.hasred || return B
 
     @inbounds for l in 1:L, r in 1:q
-        ls.ends[r, l] = B[l, r]
-        ls.ends[q+r, l] = B[l, n-q+r]
+        line_solver.ends[r, l] = B[l, r]
+        line_solver.ends[q+r, l] = B[l, n-q+r]
     end
-    if ls.P > 1
-        MPI.Allgather!(ls.ends, MPI.UBuffer(vec(ls.gath), 2q * L), ls.comm)
+    if line_solver.P > 1
+        MPI.Allgather!(line_solver.ends,
+                       MPI.UBuffer(vec(line_solver.gath), 2q * L), line_solver.comm)
     else
-        copyto!(view(ls.gath, :, :, 1), ls.ends)
+        copyto!(view(line_solver.gath, :, :, 1), line_solver.ends)
     end
     m2 = 2q
-    @inbounds for rk in 0:(ls.P-1), l in 1:L, r in 1:m2
-        ls.z[m2*rk+r, l] = ls.gath[r, l, rk+1]
+    @inbounds for rk in 0:(line_solver.P-1), l in 1:L, r in 1:m2
+        line_solver.z[m2*rk+r, l] = line_solver.gath[r, l, rk+1]
     end
-    ldiv!(ls.red, ls.z)
-    cprev = m2 * mod(ls.p - 1, ls.P) + q
-    cnext = m2 * mod(ls.p + 1, ls.P)
+    ldiv!(line_solver.red, line_solver.z)
+    cprev = m2 * mod(line_solver.p - 1, line_solver.P) + q
+    cnext = m2 * mod(line_solver.p + 1, line_solver.P)
     @inbounds for l in 1:L, t in 1:q
-        ls.zbp[l, t] = ls.z[cprev+t, l]
-        ls.zbn[l, t] = ls.z[cnext+t, l]
+        line_solver.zbp[l, t] = line_solver.z[cprev+t, l]
+        line_solver.zbn[l, t] = line_solver.z[cnext+t, l]
     end
-    V, W = ls.V, ls.W
+    V, W = line_solver.V, line_solver.W
     @threaded n*L for rng in collect(_line_chunks(L))
         isempty(rng) && continue
         @inbounds for i in 1:n, t in 1:q
             vi = V[i, t]
             wi = W[i, t]
             @simd for l in rng
-                B[l, i] -= vi * ls.zbp[l, t] + wi * ls.zbn[l, t]
+                B[l, i] -= vi * line_solver.zbp[l, t] + wi * line_solver.zbn[l, t]
             end
         end
     end

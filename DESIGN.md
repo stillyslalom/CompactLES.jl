@@ -84,12 +84,12 @@ The user-facing vocabulary lives in `problem.jl` and is deliberately ignorant of
 the backend:
 
 - **`Prim`** — a pointwise primitive state (velocity, pressure, composition,
-  and one of T or ρ). Construction validates that mass fractions sum to one and
+  and one of T_ion or ρ). Construction validates that mass fractions sum to one and
   that exactly one of temperature or density is given.
 - **`Problem`** — physics and geometry only: EOS, transport model, metric,
   coordinate `domain` as three `(lo, hi)` pairs, boundary conditions, and the
   initial-condition function. No grid, scheme, or rank information.
-- **`Numerics`** — the discretization: resolution `nglob`, derivative and filter
+- **`Numerics`** — the discretization: resolution `n_global`, derivative and filter
   schemes, artificial-property constants, CFL, filter interval, process grid,
   halo width, and stretch mappings.
 
@@ -108,32 +108,32 @@ identical `Problem`.
 ## State representation and decomposition
 
 `Decomp` (in `decomposition.jl`) owns the parallel layout. The global grid of
-`nglob` points per dimension is split across a process grid `dims` (chosen
+`n_global` points per dimension is split across a process grid `dims` (chosen
 automatically via `MPI.Dims_create` or supplied explicitly). Each rank stores
-its interior block padded by `H` halo layers on every active side; the halo
+its interior block padded by `n_halo` halo layers on every active side; the halo
 width defaults to 4, matching the widest stencil reach of the default schemes.
 
 Key derived quantities on `Decomp`:
 
-- `active[d]` — whether dimension `d` is resolved (`nglob[d] > 1`). **Collapsed**
-  dimensions (`nglob[d] == 1`) carry no halos, derivatives, filters, or
-  exchanges; `Hd[d]` (per-dimension halo pad) is zero for them. This is what
+- `active[d]` — whether dimension `d` is resolved (`n_global[d] > 1`). **Collapsed**
+  dimensions (`n_global[d] == 1`) carry no halos, derivatives, filters, or
+  exchanges; `n_halo_d[d]` (per-dimension halo pad) is zero for them. This is what
   makes a 1-D or 2-D or axisymmetric run cost 1-D/2-D memory and work rather
   than a thin 3-D slab.
-- `nbr[d]` — the `(lo, hi)` neighbor ranks along `d`, with `MPI.PROC_NULL` at
+- `neighbors[d]` — the `(lo, hi)` neighbor ranks along `d`, with `MPI.PROC_NULL` at
   open (non-periodic) global edges.
 - `sub[d]` — a sub-communicator containing exactly the ranks along dimension
   `d`, used by the distributed line solves and line-wise reductions.
 
-Fields are allocated by `field(dec)` (a scalar with halos) and `allocate_state`
-(the 4-D conserved array `Q[x, y, z, 1:ncons]`). Two index helpers recur
+Fields are allocated by `field(decomp)` (a scalar with halos) and `allocate_state`
+(the 4-D conserved array `Q[x, y, z, 1:n_cons]`). Two index helpers recur
 throughout: `gidx(s, i, j, k)` maps a local interior index to the halo-offset
 `CartesianIndex`, and `xcoord(s, d, i)` maps a local index to a physical
 coordinate (including any stretch mapping and half-cell offset).
 
 The `Solver` struct (in `rhs.jl`) is the backend container: it holds the
 `Decomp`, the EOS and transport, the artificial-property parameters, the metric
-and any fold specs, the per-dimension operator plans (`dplans`, `fplans`),
+and any fold specs, the per-dimension operator plans (`deriv_plans`, `filter_plans`),
 pre-allocated primitive/gradient/flux/geometry scratch arrays, and the current
 time and step. All hot-loop scratch is allocated once at setup; the RHS
 allocates nothing.
@@ -165,7 +165,7 @@ Presets:
 via `BandedCompactScheme` (q = 1 is tridiagonal, q = 2 is pentadiagonal, which
 admits schemes to tenth order). `lele_d1_10()` is the classical tenth-order
 pentadiagonal derivative (β = 1/20, α = 1/2) with a C6-cascade closure on the
-first three rows; its RHS reaches ±3, so the default H = 4 halo suffices.
+first three rows; its RHS reaches ±3, so the default `n_halo = 4` suffices.
 
 Users supply their own operators by constructing these types directly and
 passing them as `deriv=` or `filt=`.
@@ -293,21 +293,21 @@ step for diagnostics or output.
 assuming boundary conditions are already enforced on `Q`. Step by step:
 
 1. **Exchange state halos** (`exchange_state!`) and **recover primitives**
-   (`primitives!`) — ρ, u, v, w, p, T, sound speed, mixture cₚ, and the mass
+   (`primitives!`) — ρ, u, v, w, p, T_ion, sound speed, mixture cₚ, and the mass
    fractions — over the full padded arrays.
 2. **Velocity gradients.** For each direction `d` and velocity component `j`,
    apply the compact derivative and scale by 1/h_d (which carries the stretch
-   Jacobian). `G[d, j]` holds the d-derivative of the j-th component. Collapsed
+   Jacobian). `grad_u[d, j]` holds the d-derivative of the j-th component. Collapsed
    dimensions contribute zero.
 3. **Curvature corrections** (`metric_correct_gradients!`) add the algebraic
-   terms from the rotating unit vectors so that `G` holds *physical* tensor
-   components (e.g. in cylindrical, `G[2,2] += u_r/r`).
+   terms from the rotating unit vectors so that `grad_u` holds *physical* tensor
+   components (e.g. in cylindrical, `grad_u[2,2] += u_r/r`).
 4. **Artificial properties** (`compute_artificial!`) fill μ\*, β\*, κ\*, and the
    per-species D\* from the current gradients and primitives.
 5. **Scalar gradients.** Temperature and each mass fraction, same derivative +
    scaling, for the heat and species-diffusion fluxes.
 6. **Flux assembly** (`assemble_fluxes!`) builds the conservative fluxes
-   `FF[d, c]` pointwise: species convection plus diffusion with a correction
+   `flux[d, c]` pointwise: species convection plus diffusion with a correction
    velocity, momentum convection plus pressure and the full viscous stress
    (including the artificial bulk term), and the energy flux (enthalpy
    convection, viscous work, Fourier heat flux, and enthalpy diffusion
@@ -315,7 +315,7 @@ assuming boundary conditions are already enforced on `Q`. Step by step:
 7. **Flux halo exchange**, per dimension, batched over conserved components.
 8. **Metric divergence.** For each component `c` and direction `d`, form the
    area-weighted flux `A_d F_d`, take its compact derivative, and accumulate
-   `dQ[c] −= Jinv · ∂(A_d F_d)`. `J = h₁h₂h₃` and `A_d = J/h_d`, so the compact
+   `dQ[c] −= inv_J · ∂(A_d F_d)`. `J = h₁h₂h₃` and `A_d = J/h_d`, so the compact
    derivatives act on area-weighted fluxes and the divergence is exact for the
    metric.
 9. **Momentum sources** (`add_metric_sources!`) add the algebraic ∇·Π terms that
@@ -337,11 +337,11 @@ original model is approximated by one compact-filter pass (`smooth!`).
 
 Concretely, `compute_artificial!`:
 
-- Builds the strain-rate magnitude |S| from the metric-corrected `G`, computes
+- Builds the strain-rate magnitude |S| from the metric-corrected `grad_u`, computes
   its δ⁴ sensor summed over directions, smooths it, and sets
   μ\* = C_μ·ρ·sensor and β\* = C_β·ρ·sensor.
 - Computes the internal energy directly from `Q` (EOS-agnostic), takes its δ⁴
-  sensor, smooths, and sets κ\* = C_κ·(ρc/T)·sensor.
+  sensor, smooths, and sets κ\* = C_κ·(ρc/T_ion)·sensor.
 - For each species, takes the δ⁴ sensor of Y_k, smooths, and sets
   D\*_k = C_D·c·sensor_k.
 
@@ -376,10 +376,10 @@ scaling. `sine_cluster` provides a closed-form interior-clustering map. Stretche
 dimensions must be non-periodic.
 
 **Discrete GCL.** A subtlety: for the spherical θ-momentum source, the flux
-divergence `−Jinv·D_ξ2(A₂·p)` and the analytic source `+(cotθ/r)·Π_φφ` cancel
+divergence `−inv_J·D_ξ2(A₂·p)` and the analytic source `+(cotθ/r)·Π_φφ` cancel
 *analytically* for a uniform state, but `D_ξ2(sinθ) ≠ cosθ` *discretely*, leaving
 an O(h⁴) freestream residual. `gcl_cotr!` restores exact discrete freestream
-preservation by redefining `cotθ/r` as `Jinv·D_ξ2(A₂)` — the identical operator
+preservation by redefining `cotθ/r` as `inv_J·D_ξ2(A₂)` — the identical operator
 (same scheme, same fold, same antipodal sign) applied to the identical area
 factor — so the source cancels the divergence node-by-node by construction. The
 freestream-preservation test verifies this to machine zero in every metric.
@@ -437,8 +437,8 @@ split). The full-ball origin+poles combination has had the least scrutiny.
 `physics.jl` defines the EOS contract the solver talks to:
 
 - `nspecies(eos)` → number of species Ns
-- a `(ρ, e, Y) → (p, T, c, cₚ_mix)` state evaluation (via `primitives!`)
-- `species_enthalpy(eos, k, T)` → partial specific enthalpy h_k(T)
+- a `(ρ, e, Y) → (p, T_ion, c, cₚ_mix)` state evaluation (via `primitives!`)
+- `species_enthalpy(eos, k, T_ion)` → partial specific enthalpy h_k(T_ion)
 
 `IdealMixture` (per-species γ_k and R_k, linear mixture rules) is the provided
 implementation. Because hot loops reach the EOS through a function barrier
@@ -471,7 +471,7 @@ components.
   φ = cv_m/R_m). It optionally carries a β_t-weighted share of the transverse
   terms (Yoo & Im 2007), with the default using the local Mach number. Supersonic
   points get no correction (all waves leave).
-- **Inflow** (`NSCBCInflowBC(u=..., T=..., Y=...)`) replaces every incoming wave
+- **Inflow** (`NSCBCInflowBC(u=..., T_ion=..., Y=...)`) replaces every incoming wave
   (acoustic, entropy, transverse, species) with a relaxation toward the targets
   while keeping the single outgoing acoustic wave as computed. Targets may be
   constant or a pointwise `(x, y, z, t) -> Prim` function evaluated at the stage
@@ -503,7 +503,7 @@ concretely as `Float64`, so the code is currently Float64-only.
 half-stencil, the symmetric flag (filters) or not (derivatives, auto-scaled by
 1/h), and closure rows for non-periodic edges. Pass it as `deriv=` or `filt=`.
 High-side closures are mirrored automatically. Watch the halo width: a scheme
-whose RHS reaches ±m needs `H ≥ m`.
+whose RHS reaches ±m needs `n_halo ≥ m`.
 
 **New boundary conditions.** Subtype `BoundaryCondition` and implement
 `enforce!(bc, Q, s, dim, side)` for hard state enforcement on the wall plane

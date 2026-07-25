@@ -17,7 +17,7 @@ end
 
 for N in (32, 64)
     # NSCBC outflow + Dirichlet inflow: the heaviest boundary path
-    s = Solver(nglob=(N, N, N), Ldom=(1.0, 0.4, 0.4),
+    s = Solver(n_global=(N, N, N), L_domain=(1.0, 0.4, 0.4),
                bcs=((DirichletBC((x, y, z, t) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0)),
                      NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
                transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
@@ -29,7 +29,7 @@ for N in (32, 64)
             N, 1e3trhs, 1e3tbc)
 
     # slip walls only: same plane loops, much cheaper body
-    s2 = Solver(nglob=(N, N, N), Ldom=(1.0, 0.4, 0.4),
+    s2 = Solver(n_global=(N, N, N), L_domain=(1.0, 0.4, 0.4),
                 bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                 transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
     Q2 = allocate_state(s2); dQ2 = zero(Q2)

@@ -29,7 +29,7 @@ prob = Problem(
            (PeriodicBC(), PeriodicBC())),
     ic = (x, y, z) -> Prim(u=(0.0, 0.0, 0.0), p=p0, rho=ρ0))
 
-num = Numerics(nglob=(256, 12, 12), art=ArtParams(enabled=true),
+num = Numerics(n_global=(256, 12, 12), art=ArtParams(enabled=true),
                cfl=0.5, dims=(np, 1, 1))
 
 s, Q = setup(prob, num)

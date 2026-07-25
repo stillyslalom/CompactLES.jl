@@ -24,7 +24,7 @@
 #
 # Intended for faces whose normal has unit scale factor (Cartesian faces,
 # cylindrical r/z faces, spherical r faces); on angular faces the stored
-# G[d,d] carries curvature contributions and the wave analysis would need the
+# grad_u[d,d] carries curvature contributions and the wave analysis would need the
 # metric terms.
 
 Base.@kwdef struct NSCBCOutflowBC <: BoundaryCondition
@@ -51,36 +51,36 @@ function correct_rhs!(bc::NSCBCOutflowBC, s, Q, dQ, d::Int, side::Int)
 
     # One-sided coordinate derivative of p along d (full-field call; the
     # closure rows make the boundary values one-sided), scaled to physical.
-    deriv_along!(s.tmpA, s.p, s, d, 1)
+    deriv_along!(s.tmp_a, s.p, s, d, 1)
 
     # Transverse pressure gradients for the Yoo & Im correction, only along
     # active transverse dimensions (they vanish in 1-D and collapsed dims).
     # `active` is a global property, so every rank agrees on these branches.
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
-    act1 = s.dec.active[t1]
-    act2 = s.dec.active[t2]
-    act1 && deriv_along!(s.sens, s.p, s, t1, 1)
-    act2 && deriv_along!(s.sacc, s.p, s, t2, 1)
+    act1 = s.decomp.active[t1]
+    act2 = s.decomp.active[t2]
+    act1 && deriv_along!(s.sensor, s.p, s, t1, 1)
+    act2 && deriv_along!(s.sensor_sp, s.p, s, t2, 1)
 
     # Only now may ranks that own no piece of this face drop out.
-    pl = wallplane(s.dec, d, side)
-    pl === nothing && return nothing
+    plane = wallplane(s.decomp, d, side)
+    plane === nothing && return nothing
 
-    Lref = bc.Lref > 0 ? bc.Lref : Float64(s.Ldom[d])
+    Lref = bc.Lref > 0 ? bc.Lref : Float64(s.L_domain[d])
     vel = (s.u, s.v, s.w)
-    m = s.mom
-    ie = s.ie
-    ns = s.ns
-    Gdd = s.G[d, d]
+    m = s.i_mom
+    i_energy = s.i_energy
+    n_species = s.n_species
+    Gdd = s.grad_u[d, d]
     sgn = side == 2 ? -1.0 : 1.0      # sign of Δd3 (see header)
-    @inbounds for I in pl
+    @inbounds for I in plane
         ρ = s.rho[I]
         c = s.c[I]
         p = s.p[I]
         un = vel[d][I]
         Ma = abs(un) / c
         Ma < 1 || continue            # supersonic: all waves outgoing
-        dpn = s.invh[d][I] * s.tmpA[I]
+        dpn = s.inv_h[d][I] * s.tmp_a[I]
         dun = Gdd[I]
         Lcomp = side == 2 ? (un - c) * (dpn - ρ * c * dun) :
                             (un + c) * (dpn + ρ * c * dun)
@@ -93,36 +93,36 @@ function correct_rhs!(bc::NSCBCOutflowBC, s, Q, dQ, d::Int, side::Int)
         # i.e. a coefficient of sgn·ρc in the code's sign convention.
         # β_t blends between plain LODI (0) and full accounting (1); the
         # local Mach number is the recommended damping.
-        Tt = 0.0
+        T_ion = 0.0
         if act1
             ut = vel[t1][I]
-            Tt += ut * s.invh[t1][I] * s.sens[I] +
-                  ρ * c * c * s.G[t1, t1][I] + sgn * ρ * c * ut * s.G[t1, d][I]
+            T_ion += ut * s.inv_h[t1][I] * s.sensor[I] +
+                  ρ * c * c * s.grad_u[t1, t1][I] + sgn * ρ * c * ut * s.grad_u[t1, d][I]
         end
         if act2
             ut = vel[t2][I]
-            Tt += ut * s.invh[t2][I] * s.sacc[I] +
-                  ρ * c * c * s.G[t2, t2][I] + sgn * ρ * c * ut * s.G[t2, d][I]
+            T_ion += ut * s.inv_h[t2][I] * s.sensor_sp[I] +
+                  ρ * c * c * s.grad_u[t2, t2][I] + sgn * ρ * c * ut * s.grad_u[t2, d][I]
         end
         βt = bc.beta_t < 0 ? Ma : bc.beta_t
         K = bc.sigma * (1 - Ma * Ma) * c / Lref
-        ΔL = K * (p - bc.pinf) - βt * Tt - Lcomp
+        ΔL = K * (p - bc.pinf) - βt * T_ion - Lcomp
         Δd1 = ΔL / (2 * c * c)
         Δd2 = ΔL / 2
         Δd3 = sgn * ΔL / (2 * ρ * c)
-        # φ = cv_m / R_m from EOS outputs: R_m = p/(ρT), cv_m = cp_m − R_m.
-        Rm = p / (ρ * s.Tt[I])
-        φ = s.cpm[I] / Rm - 1
+        # φ = cv_m / R_m from EOS outputs: R_m = p/(ρ T_ion), cv_m = cp_m − R_m.
+        Rm = p / (ρ * s.T_ion[I])
+        φ = s.cp_mix[I] / Rm - 1
         u1, u2, u3 = s.u[I], s.v[I], s.w[I]
         ke = 0.5 * (u1*u1 + u2*u2 + u3*u3)
-        for k in 1:ns
-            dQ[I, k] -= s.Ys[k][I] * Δd1
+        for k in 1:n_species
+            dQ[I, k] -= s.Y[k][I] * Δd1
         end
         uv = (u1, u2, u3)
         for a in 1:3
             dQ[I, m[a]] -= uv[a] * Δd1 + (a == d ? ρ * Δd3 : 0.0)
         end
-        dQ[I, ie] -= ke * Δd1 + φ * Δd2 + ρ * un * Δd3
+        dQ[I, i_energy] -= ke * Δd1 + φ * Δd2 + ρ * un * Δd3
     end
     return nothing
 end
@@ -140,8 +140,8 @@ end
 #   normal velocity:  ∂u_n/∂t gains −ΔL₅/2ρc (low face) or +ΔL₁/2ρc (high),
 #     so L₅* =  η_u ρc²(1−M²)/L (u_n − u∞)   drives u_n → u∞ at a low face,
 #        L₁* = −η_u ρc²(1−M²)/L (u_n − u∞)   at a high face;
-#   temperature: ∂T/∂t|_{L₂} = +T L₂ / ρc² (entropy wave changes ρ, not p),
-#     so L₂* = η_T ρc³ (T∞ − T) / (L T);
+#   temperature: ∂T_ion/∂t|_{L₂} = +T_ion L₂ / ρc² (entropy changes ρ, not p),
+#     so L₂* = η_T ρc³ (T_ion,∞ − T_ion) / (L T_ion);
 #   transverse:  ∂u_t/∂t = −L₃,₄, so L₃,₄* = η_t (c/L)(u_t − u_t∞);
 #   species:     ∂Y_k/∂t = −L_{s,k}, so L_{s,k}* = η_Y (c/L)(Y_k − Y∞_k).
 #
@@ -160,7 +160,7 @@ end
 # compile time.
 Base.@kwdef struct NSCBCInflowBC{F} <: BoundaryCondition
     u::NTuple{3,Float64}            # target velocity (coordinate-aligned)
-    T::Float64                      # target temperature
+    T_ion::Float64                  # target temperature
     Y::Vector{Float64} = [1.0]      # target composition
     eta_u::Float64 = 0.28
     eta_T::Float64 = 0.28
@@ -169,7 +169,7 @@ Base.@kwdef struct NSCBCInflowBC{F} <: BoundaryCondition
     Lref::Float64  = 0.0            # ≤ 0 → domain length in d
     target::F = nothing
     # Optional (x₁, x₂, x₃, t) -> Prim overriding the constant targets per
-    # point at the RK stage time (the Prim must carry T and the full Y).
+    # point at the RK stage time (the Prim must carry T_ion and the full Y).
 end
 
 enforce!(::NSCBCInflowBC, Q, s, d, side) = nothing
@@ -179,47 +179,47 @@ dphi_dY(eos::IdealMixture, k::Int, Rm, cvm) =
     (eos.cvk[k] * Rm - eos.Rk[k] * cvm) / (Rm * Rm)
 
 function correct_rhs!(bc::NSCBCInflowBC, s, Q, dQ, d::Int, side::Int)
-    length(bc.Y) == s.ns || error("NSCBCInflowBC: composition length mismatch")
+    length(bc.Y) == s.n_species || error("NSCBCInflowBC: composition length mismatch")
 
     # COLLECTIVES FIRST — see the note in the outflow method above: these are
     # distributed solves along d, so every rank must call them before any rank
     # is allowed to return early.
     # One-sided coordinate derivatives of p and ρ along d.
-    deriv_along!(s.tmpA, s.p, s, d, 1)
-    deriv_along!(s.tmpB, s.rho, s, d, 1)
+    deriv_along!(s.tmp_a, s.p, s, d, 1)
+    deriv_along!(s.tmp_b, s.rho, s, d, 1)
 
-    pl = wallplane(s.dec, d, side)
-    pl === nothing && return nothing
+    plane = wallplane(s.decomp, d, side)
+    plane === nothing && return nothing
 
-    Lref = bc.Lref > 0 ? bc.Lref : Float64(s.Ldom[d])
+    Lref = bc.Lref > 0 ? bc.Lref : Float64(s.L_domain[d])
     vel = (s.u, s.v, s.w)
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)   # transverse dims
-    m = s.mom
-    ie = s.ie
-    ns = s.ns
-    Gdd = s.G[d, d]
+    m = s.i_mom
+    i_energy = s.i_energy
+    n_species = s.n_species
+    Gdd = s.grad_u[d, d]
     lowface = side == 1
-    Hd = s.dec.Hd
+    n_halo_d = s.decomp.n_halo_d
     tnow = s.tstage
-    @inbounds for I in pl
-        uT = bc.u; TT = bc.T; YT = bc.Y
+    @inbounds for I in plane
+        uT = bc.u; TT = bc.T_ion; YT = bc.Y
         if bc.target !== nothing
-            pr = bc.target(xcoord(s, 1, I[1] - Hd[1]),
-                           xcoord(s, 2, I[2] - Hd[2]),
-                           xcoord(s, 3, I[3] - Hd[3]), tnow)
-            isnan(pr.T) && error("NSCBCInflowBC target must specify T")
-            uT = pr.u; TT = pr.T; YT = pr.Y
+            pr = bc.target(xcoord(s, 1, I[1] - n_halo_d[1]),
+                           xcoord(s, 2, I[2] - n_halo_d[2]),
+                           xcoord(s, 3, I[3] - n_halo_d[3]), tnow)
+            isnan(pr.T_ion) && error("NSCBCInflowBC target must specify T_ion")
+            uT = pr.u; TT = pr.T_ion; YT = pr.Y
         end
         ρ = s.rho[I]
         c = s.c[I]
         p = s.p[I]
-        Tp = s.Tt[I]
+        Tp = s.T_ion[I]
         un = vel[d][I]
         Ma = abs(un) / c
         Ma < 1 || continue
-        ih = s.invh[d][I]
-        dpn = ih * s.tmpA[I]
-        drn = ih * s.tmpB[I]
+        ih = s.inv_h[d][I]
+        dpn = ih * s.tmp_a[I]
+        drn = ih * s.tmp_b[I]
         dun = Gdd[I]
         K = c / Lref
         # Physically computed amplitudes.
@@ -234,27 +234,27 @@ function correct_rhs!(bc::NSCBCInflowBC, s, Q, dQ, d::Int, side::Int)
         Δd1 = ΔL2 / (c * c) + (ΔL5 + ΔL1) / (2 * c * c)
         Δd2 = (ΔL5 + ΔL1) / 2
         Δd3 = (ΔL5 - ΔL1) / (2 * ρ * c)
-        Δd4 = bc.eta_t * K * (vel[t1][I] - uT[t1]) - un * s.G[d, t1][I]
-        Δd5 = bc.eta_t * K * (vel[t2][I] - uT[t2]) - un * s.G[d, t2][I]
+        Δd4 = bc.eta_t * K * (vel[t1][I] - uT[t1]) - un * s.grad_u[d, t1][I]
+        Δd5 = bc.eta_t * K * (vel[t2][I] - uT[t2]) - un * s.grad_u[d, t2][I]
         # Mixture quantities for the energy mapping.
         Rm = p / (ρ * Tp)
-        cvm = s.cpm[I] - Rm
+        cvm = s.cp_mix[I] - Rm
         φ = cvm / Rm
         u1, u2, u3 = s.u[I], s.v[I], s.w[I]
         ke = 0.5 * (u1*u1 + u2*u2 + u3*u3)
         uv = (u1, u2, u3)
         ΣφY = 0.0
-        for k in 1:ns
-            ΔLs = bc.eta_Y * K * (s.Ys[k][I] - YT[k]) -
-                  un * s.gradY[d, k][I]
-            dQ[I, k] -= s.Ys[k][I] * Δd1 + ρ * ΔLs
+        for k in 1:n_species
+            ΔLs = bc.eta_Y * K * (s.Y[k][I] - YT[k]) -
+                  un * s.grad_Y[d, k][I]
+            dQ[I, k] -= s.Y[k][I] * Δd1 + ρ * ΔLs
             ΣφY += dphi_dY(s.eos, k, Rm, cvm) * ΔLs
         end
         for a in 1:3
             extra = a == d ? ρ * Δd3 : a == t1 ? ρ * Δd4 : ρ * Δd5
             dQ[I, m[a]] -= uv[a] * Δd1 + extra
         end
-        dQ[I, ie] -= ke * Δd1 + φ * Δd2 + p * ΣφY +
+        dQ[I, i_energy] -= ke * Δd1 + φ * Δd2 + p * ΣφY +
                      ρ * (un * Δd3 + uv[t1] * Δd4 + uv[t2] * Δd5)
     end
     return nothing

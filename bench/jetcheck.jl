@@ -13,13 +13,13 @@ using JET, Printf
 const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
-s = Solver(nglob=(32, 32, 32), Ldom=(2π, 2π, 2π), bcs=per3,
+s = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
            transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
 Q = allocate_state(s); dQ = zero(Q); du = zero(Q)
 initialize!(s, Q, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
 
 # axis-fold solver: exercises the fold path, which the Cartesian one skips
-sf = Solver(nglob=(64, 1, 1), Ldom=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
+sf = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
             bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
             art=ArtParams(enabled=true))
 Qf = allocate_state(sf); dQf = zero(Qf)
@@ -43,7 +43,7 @@ function summarize(name, res)
 end
 
 summarize("primitives!",   @report_opt target_modules=(CL,) CL.primitives!(s, Q))
-summarize("deriv_along!",  @report_opt target_modules=(CL,) CL.deriv_along!(s.tmpA, s.rho, s, 1, 1))
+summarize("deriv_along!",  @report_opt target_modules=(CL,) CL.deriv_along!(s.tmp_a, s.rho, s, 1, 1))
 summarize("apply_bcs!",    @report_opt target_modules=(CL,) apply_bcs!(s, Q))
 summarize("compute_rhs!",  @report_opt target_modules=(CL,) compute_rhs!(s, Q, dQ))
 summarize("compute_dt",    @report_opt target_modules=(CL,) compute_dt(s, Q))

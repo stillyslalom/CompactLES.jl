@@ -24,7 +24,7 @@ function tgv(N=64)
                              u=(sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), 0.0),
                              p=p0 + (1 / 16) * (cos(2x) + cos(2y)) * (cos(2z) + 2),
                              rho=1.0)),
-                 Numerics(nglob=(N, N, N), art=ArtParams(enabled=false), cfl=0.6))
+                 Numerics(n_global=(N, N, N), art=ArtParams(enabled=false), cfl=0.6))
     s, Q
 end
 
@@ -40,7 +40,7 @@ function tube(N=512)
                              Prim(Y=(1 - θ, θ), rho=(1 - θ) + 0.625θ,
                                   p=(1 - θ) + 0.1θ)
                          end),
-                 Numerics(nglob=(N, 32, 1), art=ArtParams(enabled=true), cfl=0.5))
+                 Numerics(n_global=(N, 32, 1), art=ArtParams(enabled=true), cfl=0.5))
     s, Q
 end
 
@@ -50,7 +50,7 @@ function radial(N=1024)
                          bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
                          ic=(r, θ, z) -> Prim(u=(0, 0, 0),
                                               p=1 + 4exp(-200(r - 0.7)^2), rho=1.0)),
-                 Numerics(nglob=(N, 1, 1), art=ArtParams(enabled=true), cfl=0.5))
+                 Numerics(n_global=(N, 1, 1), art=ArtParams(enabled=true), cfl=0.5))
     s, Q
 end
 
@@ -67,7 +67,7 @@ for name in which
     t = @elapsed for _ in 1:nsteps
         step!(s, Q, dQ, du, dt)
     end
-    npt = prod(s.dec.nloc)
+    npt = prod(s.decomp.n_local)
     @printf("\n===== %s: %d points, %d steps, %.1f ms/step (%.1f ns/pt/step) =====\n",
             name, npt, nsteps, 1e3t / nsteps, 1e9t / nsteps / npt)
 

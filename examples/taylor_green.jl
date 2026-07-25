@@ -28,7 +28,7 @@ prob = Problem(
         p = p0 + (1 / 16) * (cos(2x) + cos(2y)) * (cos(2z) + 2),
         rho = 1.0))
 
-num = Numerics(nglob=(64, 64, 64), art=ArtParams(enabled=false),
+num = Numerics(n_global=(64, 64, 64), art=ArtParams(enabled=false),
                cfl=0.6, filter_interval=1)
 
 s, Q = setup(prob, num)
@@ -39,14 +39,14 @@ rank0 = MPI.Comm_rank(MPI.COMM_WORLD) == 0
 function diag(s, Q)
     s.step % 10 == 0 || return
     ke = 0.0
-    nx, ny, nz = s.dec.nloc
-    m1, m2, m3 = s.mom
+    nx, ny, nz = s.decomp.n_local
+    m1, m2, m3 = s.i_mom
     for k in 1:nz, j in 1:ny, i in 1:nx
         ρ = Q[gidx(s, i, j, k), 1]
         ke += 0.5 * (Q[gidx(s, i, j, k), m1]^2 + Q[gidx(s, i, j, k), m2]^2 +
                      Q[gidx(s, i, j, k), m3]^2) / ρ
     end
-    ke = MPI.Allreduce(ke * cellvol, +, s.dec.comm)
+    ke = MPI.Allreduce(ke * cellvol, +, s.decomp.comm)
     rank0 && @printf("step %5d  t = %8.4f  KE = %.8e\n", s.step, s.t, ke)
 end
 

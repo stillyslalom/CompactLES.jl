@@ -128,36 +128,37 @@ function LineSolver(a::Vector{T}, b::Vector{T}, c::Vector{T},
 end
 
 """
-    solve_lines!(B, ls)
+    solve_lines!(B, line_solver)
 
 Solve the (possibly distributed) tridiagonal system for every column of
 `B` (n × lines) in place. MPI collectives run from the serial section only.
 """
-function solve_lines!(B::AbstractMatrix{T}, ls::LineSolver{T}) where {T}
+function solve_lines!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where {T}
     n, L = size(B)
     @threaded n*L for l in 1:L
-        solve_col!(view(B, :, l), ls.F)
+        solve_col!(view(B, :, l), line_solver.F)
     end
-    ls.hasred || return B
+    line_solver.hasred || return B
 
     @inbounds for l in 1:L
-        ls.ends[1, l] = B[1, l]
-        ls.ends[2, l] = B[n, l]
+        line_solver.ends[1, l] = B[1, l]
+        line_solver.ends[2, l] = B[n, l]
     end
-    if ls.P > 1
-        MPI.Allgather!(ls.ends, MPI.UBuffer(vec(ls.gath), 2L), ls.comm)
+    if line_solver.P > 1
+        MPI.Allgather!(line_solver.ends,
+                       MPI.UBuffer(vec(line_solver.gath), 2L), line_solver.comm)
     else
-        copyto!(view(ls.gath, :, :, 1), ls.ends)
+        copyto!(view(line_solver.gath, :, :, 1), line_solver.ends)
     end
-    @inbounds for q in 0:(ls.P-1), l in 1:L
-        ls.z[2q+1, l] = ls.gath[1, l, q+1]
-        ls.z[2q+2, l] = ls.gath[2, l, q+1]
+    @inbounds for q in 0:(line_solver.P-1), l in 1:L
+        line_solver.z[2q+1, l] = line_solver.gath[1, l, q+1]
+        line_solver.z[2q+2, l] = line_solver.gath[2, l, q+1]
     end
-    ldiv!(ls.red, ls.z)
+    ldiv!(line_solver.red, line_solver.z)
 
-    cprev = 2 * mod(ls.p - 1, ls.P) + 2
-    cnext = 2 * mod(ls.p + 1, ls.P) + 1
-    v, w, z = ls.v, ls.w, ls.z
+    cprev = 2 * mod(line_solver.p - 1, line_solver.P) + 2
+    cnext = 2 * mod(line_solver.p + 1, line_solver.P) + 1
+    v, w, z = line_solver.v, line_solver.w, line_solver.z
     @threaded n*L for l in 1:L
         xl = z[cprev, l]
         xr = z[cnext, l]
