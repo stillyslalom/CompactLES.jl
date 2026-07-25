@@ -40,9 +40,13 @@ function Decomp(nglob::NTuple{3,Int}, periodic::NTuple{3,Bool};
     active = ntuple(d -> nglob[d] > 1, 3)
     nact = count(active)
     if dims === nothing
-        # MPI.Dims_create(1, k) is spec-legal (all ones) but MS-MPI rejects it,
-        # so short-circuit the serial case where there is nothing to partition.
-        adims = (nact == 0 || np == 1) ? fill(1, nact) : Int.(MPI.Dims_create(np, nact))
+        # MPI.jl's second argument is the dims ARRAY (zeros = "choose for me"),
+        # not the number of dimensions. Passing the count instead silently asks
+        # for a 0-dimensional grid: it returns a 0-d array for nact ≤ 2 (which
+        # popfirst! below cannot index) and throws MPIError(779) "cannot
+        # partition nodes as requested" for nact == 3 — i.e. the default
+        # dims=nothing path failed for every 3-D grid, at every rank count.
+        adims = nact == 0 ? Int[] : Int.(MPI.Dims_create(np, zeros(Cint, nact)))
         pdims = ntuple(3) do dd
             active[dd] || return 1
             popfirst!(adims)
