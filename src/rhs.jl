@@ -410,6 +410,13 @@ function compute_rhs!(s::Solver, Q, dQ)
     end
     o1, o2, o3 = dec.Hd
     nx, ny, nz = dec.nloc
+    # On an unstretched Cartesian grid every scale factor is exactly 1, so
+    # A_d ≡ 1 and Jinv ≡ 1: the A_d·F_d product below is a full-array copy
+    # whose result equals its input, and the Jinv multiply is a no-op. Skipping
+    # both removes three array streams per (component, dimension) — 45 of them
+    # for a 5-component 3-D RHS, in what the phase budget shows is the single
+    # largest phase. Curved or stretched grids take the general path unchanged.
+    unitgeom = s.metric isa CartesianMetric && all(isnothing, s.stretch)
     for c in 1:s.ncons
         @threaded nx*ny*nz for k in 1:nz
             @inbounds for j in 1:ny, i in 1:nx
@@ -418,19 +425,28 @@ function compute_rhs!(s::Solver, Q, dQ)
         end
         for d in 1:3
             dec.active[d] || continue
-            # tmpB = A_d F_d over the full array; A_d is odd in r for the
-            # cylindrical axis (A₁ = r), flipping the flux parity.
-            Ad = s.Adim[d]
             Fdc = s.FF[d, c]
-            @threaded length(s.tmpB) for idx in eachindex(s.tmpB)
-                @inbounds s.tmpB[idx] = Ad[idx] * Fdc[idx]
-            end
             σ = s.folds[d] === nothing ? 1 : s.folds[d].sigflux[c]
-            deriv_along!(s.tmpA, s.tmpB, s, d, σ)
-            @threaded nx*ny*nz for k in 1:nz
-                @inbounds for j in 1:ny, i in 1:nx
-                    I = CartesianIndex(i + o1, j + o2, k + o3)
-                    dQ[I, c] -= s.Jinv[I] * s.tmpA[I]
+            if unitgeom
+                deriv_along!(s.tmpA, Fdc, s, d, σ)
+                @threaded nx*ny*nz for k in 1:nz
+                    @inbounds for j in 1:ny, i in 1:nx
+                        dQ[i+o1, j+o2, k+o3, c] -= s.tmpA[i+o1, j+o2, k+o3]
+                    end
+                end
+            else
+                # tmpB = A_d F_d over the full array; A_d is odd in r for the
+                # cylindrical axis (A₁ = r), flipping the flux parity.
+                Ad = s.Adim[d]
+                @threaded length(s.tmpB) for idx in eachindex(s.tmpB)
+                    @inbounds s.tmpB[idx] = Ad[idx] * Fdc[idx]
+                end
+                deriv_along!(s.tmpA, s.tmpB, s, d, σ)
+                @threaded nx*ny*nz for k in 1:nz
+                    @inbounds for j in 1:ny, i in 1:nx
+                        I = CartesianIndex(i + o1, j + o2, k + o3)
+                        dQ[I, c] -= s.Jinv[I] * s.tmpA[I]
+                    end
                 end
             end
         end

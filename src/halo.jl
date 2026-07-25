@@ -15,6 +15,27 @@ const PNULL = Int(MPI.PROC_NULL)
 end
 
 """
+    selfwrap(dec, d)
+
+True when dimension `d` is periodic and undivided, so both neighbours are this
+rank. The exchange is then a plain periodic copy of one slab onto another
+within the same array, and routing it through pack / MPI.Sendrecv! / unpack
+costs three extra passes over the slab plus a self-message. This is not just
+the serial case: with `dims = (P, 1, 1)` every y and z exchange on every rank
+takes this path.
+"""
+selfwrap(dec::Decomp, d::Int) = dec.subsize[d] == 1 && dec.periodic[d]
+
+"Periodic wrap of one field along `d`, in place, no buffers and no MPI."
+function wrap_dim!(f, dec::Decomp, d::Int)
+    H = dec.H
+    n = dec.nloc[d]
+    copyto!(_slab(f, d, 1:H),               _slab(f, d, (n+1):(n+H)))
+    copyto!(_slab(f, d, (n+H+1):(n+2H)),    _slab(f, d, (H+1):(2H)))
+    return f
+end
+
+"""
     exchange_halos!(f, dec)
 
 Fill the rank-boundary halos of scalar field `f` (sized nloc .+ 2H) from
@@ -24,6 +45,10 @@ function exchange_halos!(f::AbstractArray{<:Real,3}, dec::Decomp)
     H = dec.H
     for d in 1:3
         dec.active[d] || continue
+        if selfwrap(dec, d)
+            wrap_dim!(f, dec, d)
+            continue
+        end
         n = dec.nloc[d]
         lo, hi = dec.nbr[d]
         # The send/recv buffers are shared with exchange_dim_batch!, which grows
@@ -102,6 +127,12 @@ Buffers are grown on demand; MPI calls run from serial sections only.
 function exchange_dim_batch!(fields::AbstractVector, dec::Decomp, d::Int)
     isempty(fields) && return fields
     dec.active[d] || return fields
+    if selfwrap(dec, d)
+        for f in fields
+            wrap_dim!(f, dec, d)
+        end
+        return fields
+    end
     H = dec.H
     n = dec.nloc[d]
     lo, hi = dec.nbr[d]
