@@ -23,6 +23,10 @@
 #   4. The discrete-GCL freestream identity with the θ-derivative of the area
 #      factor crossing a rank boundary.
 #   5. Telescoping flux conservation across rank boundaries.
+#   6. Global synchronization — that every rank agrees on dt and on the
+#      simulation time after a real transient. A missing Allreduce leaves the
+#      ranks integrating different equations and cannot be seen serially.
+#   7. Per-rank checkpoint round trips under a real decomposition.
 #
 # Correctness strategy (see the module note in banded.jl / tridiag.jl): the
 # reduced-interface method is designed to reproduce the *exact* single-domain
@@ -223,6 +227,56 @@ function test_offrank_folds()
 end
 
 # ---------------------------------------------------------------------------
+# 4b. Halo-exchange consistency across rank boundaries. exchange_dim_batch! and
+#     exchange_halos! share the per-dimension buffers (the batched path grows
+#     them), so the two must agree slab-for-slab; and because dimensions are
+#     exchanged sequentially with previously-filled halos included in each
+#     slab, the diagonal CORNER halos must come out right with no dedicated
+#     diagonal messages. Both are no-ops at np == 1.
+# ---------------------------------------------------------------------------
+function test_halo_consistency()
+    section("halo exchange: batched ≡ per-array, and corner halos")
+    fn = (x, y, z) -> sin(x) + 2cos(y) - z^0 * 0.3
+
+    # (a) Batched vs per-array over all three dimensions, with the batch run
+    # FIRST so its (larger, multi-component) buffer is the one the scalar path
+    # then reuses — exchange_halos! must still transfer exactly one slab.
+    # Comparison covers the full padded arrays, halos included.
+    for ax in 1:3
+        ng = ntuple(d -> d == ax ? SPLITN : 16, 3)
+        s = Solver(nglob=ng, Ldom=(2π, 2π, 2π), bcs=per3,
+                   art=ArtParams(enabled=false), dims=splitdims(ax))
+        a = CL.field(s.dec); b = CL.field(s.dec); c = CL.field(s.dec)
+        fillf!(s, a, fn); fillf!(s, b, fn); fillf!(s, c, fn)
+        for d in 1:3
+            CL.exchange_dim_batch!([b, c], s.dec, d)   # grows the shared buffer
+        end
+        CL.exchange_halos!(a, s.dec)                   # must still send one slab
+        e = maximum(abs, a .- b)
+        check("batched ≡ per-array, dim $ax split $(np)-way", gmax(e), 1e-14)
+    end
+
+    # (b) Corner halo: after the three sequential exchanges, the diagonal halo
+    # points must hold the analytic value at their own physical coordinates —
+    # only true if the y and z exchanges carried the already-filled x halo
+    # layers. Uses the DEFAULT process grid (dims=nothing) so the automatic
+    # Dims_create path is covered too; at np ≥ 4 that is a genuine 2-D/3-D
+    # grid with real diagonal neighbours.
+    s = Solver(nglob=(24, 24, 24), Ldom=(2π, 2π, 2π), bcs=per3,
+               art=ArtParams(enabled=false))
+    f = CL.field(s.dec)
+    fillf!(s, f, fn)
+    CL.exchange_halos!(f, s.dec)
+    e = 0.0
+    for kk in (0, s.dec.nloc[3] + 1), jj in (0, s.dec.nloc[2] + 1),
+        ii in (0, s.dec.nloc[1] + 1)
+        e = max(e, abs(f[gidx(s, ii, jj, kk)] -
+                       fn(xcoord(s, 1, ii), xcoord(s, 2, jj), xcoord(s, 3, kk))))
+    end
+    check("corner halos filled (all 8 corners)", gmax(e), 1e-12)
+end
+
+# ---------------------------------------------------------------------------
 # 5. Freestream preservation (uniform state ⇒ dQ ≈ 0), decomposed. Divergence,
 #    metric sources, and the (fold-aware, discrete-GCL) geometry must stay
 #    consistent to machine zero even when the singular-axis θ-derivative of the
@@ -301,6 +355,73 @@ function test_conservation()
 end
 
 # ---------------------------------------------------------------------------
+# 7. Global synchronization. Everything above checks a spatial answer; these
+#    check that the ranks stay in lockstep. compute_dt and the RK loop both
+#    Allreduce, so a missing or mis-ordered reduction shows up as ranks
+#    disagreeing about dt or drifting apart in time — which no single-rank
+#    test can see, and which corrupts a long run silently.
+# ---------------------------------------------------------------------------
+function test_sync()
+    section("global synchronization: dt and time identical on every rank")
+    s = Solver(nglob=(SPLITN, 16, 16), Ldom=(2π, 2π, 2π), bcs=per3,
+               art=ArtParams(enabled=false), dims=splitdims(1))
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) ->
+        Prim(u=(0.2sin(x), 0, 0), p=1 + 0.1cos(y), rho=1 + 0.2sin(z)))
+    dt = compute_dt(s, Q)
+    spread = MPI.Allreduce(dt, max, comm) - MPI.Allreduce(dt, min, comm)
+    check("compute_dt spread across ranks", spread, 1e-15 * dt)
+
+    # Ten RK steps of a real transient: every rank must finish at the same t
+    # and nothing may go non-finite.
+    s2, Q2 = setup(Problem(domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
+                           bcs=((SlipWallBC(), NSCBCOutflowBC(pinf=1.0)),
+                                per3[2], per3[3]),
+                           ic=(x, y, z) -> Prim(u=(0, 0, 0),
+                                                p=1 + 4exp(-200(x - 0.3)^2),
+                                                rho=1 + exp(-200(x - 0.3)^2))),
+                   Numerics(nglob=(SPLITN, 16, 16), dims=splitdims(1)))
+    run!(s2, Q2; tfinal=1e9, nmax=10)
+    nbad = 0.0
+    for c in 1:s2.ncons, k in 1:s2.dec.nloc[3], j in 1:s2.dec.nloc[2],
+        i in 1:s2.dec.nloc[1]
+        isfinite(Q2[gidx(s2, i, j, k), c]) || (nbad += 1)
+    end
+    check("10 RK steps stay finite (count of non-finite)", gsum(nbad), 0.5)
+    tspread = MPI.Allreduce(s2.t, max, comm) - MPI.Allreduce(s2.t, min, comm)
+    check("simulation time spread after 10 steps", tspread, 1e-14 * max(s2.t, 1e-30))
+end
+
+# ---------------------------------------------------------------------------
+# 8. Checkpoint round trip with a real decomposition — one file per rank, so
+#    the per-rank offsets and extents must line up on write and read back.
+# ---------------------------------------------------------------------------
+function test_checkpoint()
+    section("checkpoint round trip, decomposed")
+    s = Solver(nglob=(SPLITN, 16, 16), Ldom=(2π, 2π, 2π), bcs=per3,
+               art=ArtParams(enabled=false), dims=splitdims(1))
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(u=(sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
+    s.t = 1.25; s.step = 17
+    save_checkpoint(s, Q, "mpi_ckpt")
+    MPI.Barrier(comm)
+    Q2 = allocate_state(s); s.t = 0.0; s.step = 0
+    load_checkpoint!(s, Q2, "mpi_ckpt")
+    check("restored t and step", abs(s.t - 1.25) + abs(s.step - 17), 1e-15)
+    d = 0.0
+    for c in 1:s.ncons, k in 1:s.dec.nloc[3], j in 1:s.dec.nloc[2], i in 1:s.dec.nloc[1]
+        d = max(d, abs(Q2[gidx(s, i, j, k), c] - Q[gidx(s, i, j, k), c]))
+    end
+    check("state bit-identical after round trip", gmax(d), 1e-300)
+    # One rank does the cleanup: every rank wrote its own file, but all of them
+    # racing to rm the whole glob just makes them delete each other's entries
+    # and throw ENOENT.
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith("mpi_ckpt"), readdir()))
+    MPI.Barrier(comm)
+end
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 rank == 0 && println("=== CompactLES multi-rank test suite (np = $np) ===")
@@ -309,9 +430,12 @@ try
     test_periodic_c6()
     test_pentadiagonal_c10()
     test_closed_c6()
+    test_halo_consistency()
     test_offrank_folds()
     test_freestream()
     test_conservation()
+    test_sync()
+    test_checkpoint()
 catch e
     # A throw on any rank (e.g. a setup error) must not deadlock the others.
     println("rank $rank: uncaught exception: ", e)
