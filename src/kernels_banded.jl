@@ -10,11 +10,24 @@
 # an explicit RHS stencil counted from the edge; high-side rows are mirrored
 # automatically (LHS reversed; RHS reversed and negated for derivatives).
 
+"""
+    BandedClosureRow(lhs, rhs)
+
+One edge closure row for a [`BandedCompactScheme`](@ref). `lhs` contains the
+full centered band and `rhs` contains weights counted inward from the edge.
+"""
 struct BandedClosureRow{T}
     lhs::Vector{T}    # length 2q+1, centered on the diagonal
     rhs::Vector{T}    # coefficients on f[1], f[2], ..., from the edge
 end
 
+"""
+    BandedCompactScheme(name, q, lhs, a0, coeffs, symmetric, closures)
+
+Compact operator with left-hand-side half-bandwidth `q`. This is the
+pentadiagonal-capable counterpart of [`CompactScheme`](@ref); the built-in
+[`lele_d1_10`](@ref) is the usual entry point.
+"""
 struct BandedCompactScheme{T} <: AbstractCompactScheme
     name::String
     q::Int

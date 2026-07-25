@@ -1,15 +1,14 @@
 """
     CompactLES
 
-Draft compressible LES solver on structured Cartesian grids using Lele-style
-compact (Padé) finite differences, Cook-style artificial fluid properties for
-shock and subgrid regularization, a Gaitonde-Visbal compact filter, low-storage
-RK45 time integration, shared-memory threading over grid lines, and MPI domain
-decomposition with halo exchange plus a distributed (spike / reduced-interface)
-tridiagonal solve for the globally coupled compact schemes.
+Compressible large-eddy/direct-simulation solver using high-order compact
+finite differences, compact filtering, low-storage RK45 time integration,
+shared-memory threading, and MPI domain decomposition. The compact line solves
+remain globally coupled across decomposed dimensions.
 
-Untested draft: written for MPI.jl v0.20; expect to shake out small issues on
-first run (see README.md).
+The public frontend separates a pointwise [`Problem`](@ref) from its
+[`Numerics`](@ref); [`setup`](@ref) constructs the distributed solver and
+initialized conserved state.
 """
 module CompactLES
 

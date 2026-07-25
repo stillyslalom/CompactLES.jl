@@ -3,6 +3,13 @@
 # operators.jl is duck-typed over both), swapping the tridiagonal LineSolver
 # for the block-banded BandLineSolver.
 
+"""
+    BandPlan
+
+Directional execution plan for a [`BandedCompactScheme`](@ref), using the
+distributed banded line solver. It is the pentadiagonal-capable counterpart of
+[`DirPlan`](@ref) and is constructed by [`setup`](@ref).
+"""
 struct BandPlan{T} <: AbstractDirPlan
     dim::Int
     n::Int

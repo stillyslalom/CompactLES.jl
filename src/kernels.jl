@@ -17,11 +17,29 @@
 
 abstract type AbstractCompactScheme end
 
+"""
+    ClosureRow(lhs, rhs)
+
+One low-edge closure row for a tridiagonal [`CompactScheme`](@ref). `lhs` is
+the `(subdiagonal, diagonal, superdiagonal)` tuple and `rhs` contains weights
+on points counted inward from the edge. High-edge rows are mirrored
+automatically.
+"""
 struct ClosureRow{T}
     lhs::NTuple{3,T}   # (sub, diag, super); sub is ignored on row 1
     rhs::Vector{T}     # coefficients on f[1], f[2], ..., counted from the edge
 end
 
+"""
+    CompactScheme(name, alpha, a0, coeffs, symmetric, closures)
+
+Tridiagonal compact operator definition. Antisymmetric schemes represent first
+derivatives and are scaled by the grid spacing when planned; symmetric schemes
+represent filters and include the center coefficient `a0`.
+
+Use [`lele_d1_6`](@ref), [`pade_d1_4`](@ref), or [`compact_filter`](@ref) unless
+defining a custom compact scheme.
+"""
 struct CompactScheme{T} <: AbstractCompactScheme
     name::String
     alpha::T           # interior LHS off-diagonal

@@ -10,6 +10,16 @@
 
 abstract type AbstractDirPlan end
 
+"""
+    DirPlan
+
+Directional execution plan for a tridiagonal [`CompactScheme`](@ref). It binds
+the scheme to one dimension and decomposition, with prescaled coefficients,
+edge closures, distributed line solver, and reusable packed-line storage.
+
+Plans are constructed by [`setup`](@ref); users normally pass them to
+[`apply_along!`](@ref) rather than constructing them directly.
+"""
 struct DirPlan{T} <: AbstractDirPlan
     dim::Int
     n::Int                     # local extent along dim

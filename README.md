@@ -1,5 +1,8 @@
 # CompactLES
 
+[![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://stillyslalom.github.io/CompactLES.jl/dev/)
+[![Build Status](https://github.com/stillyslalom/CompactLES.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/stillyslalom/CompactLES.jl/actions/workflows/CI.yml?query=branch%3Amain)
+
 A compressible large-eddy-simulation / direct-simulation solver for the
 multicomponent Navier–Stokes equations, written in pure Julia. It combines
 high-order compact (Padé) finite differences with Cook-style artificial fluid
@@ -293,8 +296,8 @@ particular warrants scrutiny before production use. Other current limitations:
 
 ## Learn more
 
-See [DESIGN.md](DESIGN.md) for the package architecture and a walkthrough of the
-solver mechanics — the frontend/backend split, the distributed compact solve,
-the RHS assembly, the artificial-property model, the curvilinear metrics and
-discrete GCL, and the coordinate-singularity folds — plus guidance on extending
-the code with new schemes, boundary conditions, physics, and equations of state.
+The [development documentation](https://stillyslalom.github.io/CompactLES.jl/dev/)
+covers the established frontend, compact operators, parallel decomposition,
+runtime diagnostics, and validation workflow. See [DESIGN.md](DESIGN.md) for a
+deeper walkthrough of the solver mechanics and the parts of the physics
+architecture that are still evolving.

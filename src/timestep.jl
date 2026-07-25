@@ -20,8 +20,13 @@ const RKC = (0.0,
              2006345519317.0 / 3224310063776.0,
              2802321613138.0 / 2924317926251.0)
 
-# Reusable RK stage storage. Callers that split operators, subcycle, or add an
-# IMEX integrator can retain these arrays instead of hiding them in run!.
+"""
+    Workspace(Q)
+    Workspace(solver)
+
+Reusable low-storage RK stage arrays. Pass a retained workspace to [`run!`](@ref)
+or [`step!`](@ref) to avoid reallocating stage storage across calls.
+"""
 struct Workspace{A<:AbstractArray}
     dQ::A
     du::A

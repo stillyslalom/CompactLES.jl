@@ -5,6 +5,17 @@
 # on every side. Sub-communicators along each dimension support the distributed
 # tridiagonal solves and line-wise collectives.
 
+"""
+    Decomp(n_global, periodic; dims=nothing, n_halo=4)
+
+Three-dimensional Cartesian MPI decomposition of a structured global grid.
+`dims` is the process grid; when omitted MPI chooses it over active dimensions.
+Each rank owns `n_local` interior points and halo-padded storage. Dimensions
+with one global point are collapsed and are never decomposed.
+
+Most users receive a `Decomp` through [`setup`](@ref). Construct one directly
+only when using the low-level field and compact-operator APIs.
+"""
 struct Decomp
     comm::MPI.Comm                      # Cartesian communicator
     dims::NTuple{3,Int}                 # process grid
