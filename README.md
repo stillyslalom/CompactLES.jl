@@ -244,6 +244,16 @@ pentadiagonal), cross-rank halo exchange, off-rank folds, the discrete GCL
 across rank boundaries, and telescoping flux conservation. The multi-rank suite
 exits nonzero on any failure, so it is CI-gateable.
 
+Coverage is measured with `julia --code-coverage=user` over all three suites
+(and the MPI one at more than one rank count), then summarised by
+`bench/coverage.jl`. **Read the denominator, not the percentage.** Julia marks
+lines belonging to never-compiled methods as non-executable, so an entirely
+untested function drops out of the denominator instead of counting as a miss —
+`io.jl` and `nscbc.jl` both reported 100% while `save_vtk` and the whole
+`NSCBCInflowBC` path had never been compiled. A run that adds tests should be
+expected to *increase* the executable-line count, and that increase is the real
+measure of what got covered.
+
 `test/convergence.jl` is the slower second line of defence: it prints *observed*
 orders and guards them against regression. Measured on the current code, in the
 max norm: ≈6 for `lele_d1_6` and ≈10 for `lele_d1_10` in the periodic interior,

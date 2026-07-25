@@ -151,6 +151,62 @@ end
     @test ferr(sc, dfc, (x, y, z) -> 2 + 6x - 3x^2) < 1e-10
 end
 
+@testset "pade_d1_4: fourth-order interior convergence" begin
+    # The only coverage of the 4th-order tridiagonal scheme; a wrong
+    # coefficient shows as a wrong slope, not a wrong level.
+    errs = Float64[]
+    for N in (16, 32, 64)
+        s = mkslv(nglob=(N, 12, 12), deriv=pade_d1_4())
+        f = CL.field(s.dec); df = CL.field(s.dec)
+        fillf!(s, f, (x, y, z) -> sin(x))
+        CL.exchange_halos!(f, s.dec)
+        CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
+        push!(errs, ferr(s, df, (x, y, z) -> cos(x)))
+    end
+    p = log(errs[1] / errs[3]) / log(4)          # observed order over 16 -> 64
+    @test 3.5 < p < 4.5
+    @test errs[3] < errs[2] < errs[1]
+end
+
+@testset "closures on the transposed path: y and z walls" begin
+    # operators.jl applies boundary closure rows through a DIFFERENT code path
+    # for y/z (the transposed line gather) than for x. Every other closed-domain
+    # test in this suite walls off x only, so those rows were never executed.
+    # Deg-3 polynomial exactness is the same assertion the x test makes.
+    for d in (2, 3)
+        ng = ntuple(k -> k == d ? 32 : 12, 3)
+        bcs = ntuple(k -> k == d ? (SlipWallBC(), SlipWallBC()) : per3[k], 3)
+        s = Solver(nglob=ng, Ldom=(1.0, 1.0, 1.0), bcs=bcs,
+                   art=ArtParams(enabled=false))
+        f = CL.field(s.dec); df = CL.field(s.dec)
+        poly = t -> 1 + 2t + 3t^2 - t^3
+        dpoly = t -> 2 + 6t - 3t^2
+        fillf!(s, f, (x, y, z) -> poly(d == 2 ? y : z))
+        CL.exchange_halos!(f, s.dec)
+        CL.deriv_along!(df, f, s, d, 1); CL._scale_grad!(df, s, d)
+        @test ferr(s, df, (x, y, z) -> dpoly(d == 2 ? y : z)) < 1e-10
+    end
+end
+
+@testset "C10 through a coordinate-singularity fold" begin
+    # operators_banded.jl folds the ghost-unknown coupling onto the diagonal
+    # for the pentadiagonal scheme (lo_fold/hi_fold). The C6 axis tests never
+    # reach it and the C10 tests are all periodic or plain-walled.
+    s = Solver(nglob=(64, 1, 12), Ldom=(1.0, 1.0, 0.5),
+               metric=CylindricalMetric(), deriv=lele_d1_10(),
+               bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+               art=ArtParams(enabled=false))
+    f = CL.field(s.dec); df = CL.field(s.dec)
+    fillf!(s, f, (r, θ, z) -> r * exp(-4r^2))            # odd across the axis
+    CL.exchange_halos!(f, s.dec)
+    CL.deriv_along!(df, f, s, 1, -1); CL._scale_grad!(df, s, 1)
+    @test ferr(s, df, (r, θ, z) -> (1 - 8r^2) * exp(-4r^2)) < 5e-6
+    fillf!(s, f, (r, θ, z) -> exp(-4r^2))                # even across the axis
+    CL.exchange_halos!(f, s.dec)
+    CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
+    @test ferr(s, df, (r, θ, z) -> -8r * exp(-4r^2)) < 2e-5
+end
+
 @testset "transposed y/z path ≡ x path on permuted data" begin
     s = mkslv(nglob=(24, 24, 24))
     f = CL.field(s.dec); g = CL.field(s.dec)
@@ -347,6 +403,169 @@ end
     m = maximum(abs(dQ[gidx(s, nx, j, k), c])
                 for c in 1:s.ncons, j in 1:12, k in 1:12)
     @test m < 1e-8
+end
+
+@testset "NoSlipWallBC: adiabatic zeroes velocity, isothermal sets T" begin
+    for Twall in (NaN, 2.5)
+        s = Solver(nglob=(24, 12, 12), Ldom=(1.0, 0.4, 0.4),
+                   bcs=((NoSlipWallBC(Twall=Twall), NoSlipWallBC(Twall=Twall)),
+                        per3[2], per3[3]),
+                   art=ArtParams(enabled=false))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(u=(0.3, -0.2, 0.1), p=1.0, T=1.0))
+        apply_bcs!(s, Q)
+        CL.exchange_state!(Q, s.dec)
+        CL.primitives!(s, Q)
+        nx = s.dec.nloc[1]
+        uw = maximum(abs(s.u[gidx(s, i, j, k)]) + abs(s.v[gidx(s, i, j, k)]) +
+                     abs(s.w[gidx(s, i, j, k)])
+                     for i in (1, nx), j in 1:12, k in 1:12)   # both walls
+        @test uw < 1e-12
+        if !isnan(Twall)                       # isothermal wall holds Twall
+            e = maximum(abs(s.Tt[gidx(s, i, j, k)] - Twall)
+                        for i in (1, nx), j in 1:12, k in 1:12)
+            @test e < 1e-12
+        end
+    end
+end
+
+@testset "ExtrapolationBC: copies the adjacent interior plane" begin
+    s = Solver(nglob=(24, 12, 12), Ldom=(1.0, 0.4, 0.4),
+               bcs=((ExtrapolationBC(), ExtrapolationBC()), per3[2], per3[3]),
+               art=ArtParams(enabled=false))
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(u=(0.2 + x, 0, 0), p=1 + 0.1x, rho=1 + 0.3x))
+    apply_bcs!(s, Q)
+    nx = s.dec.nloc[1]
+    d = 0.0
+    for c in 1:s.ncons, j in 1:12, k in 1:12
+        d = max(d, abs(Q[gidx(s, 1, j, k), c]  - Q[gidx(s, 2, j, k), c]))
+        d = max(d, abs(Q[gidx(s, nx, j, k), c] - Q[gidx(s, nx-1, j, k), c]))
+    end
+    @test d == 0.0
+    # a uniform state must be untouched by the extrapolation
+    Q2 = allocate_state(s)
+    initialize!(s, Q2, (x, y, z) -> Prim(u=(0.2, 0, 0), p=1.0, rho=1.0))
+    ref = copy(Q2)
+    apply_bcs!(s, Q2)
+    @test Q2 == ref
+end
+
+@testset "NSCBC inflow: matched uniform stream ⇒ no correction" begin
+    # Mirrors the outflow test. This whole method was previously never
+    # compiled, so nothing in it — including the transverse terms — had ever
+    # been executed, let alone checked.
+    uin = (0.3, 0.0, 0.0)
+    s = Solver(nglob=(32, 12, 12), Ldom=(1.0, 0.4, 0.4),
+               bcs=((NSCBCInflowBC(u=uin, T=1.0), NSCBCOutflowBC(pinf=1.0)),
+                    per3[2], per3[3]),
+               eos=single_species(gamma=1.4, R=1.0),
+               art=ArtParams(enabled=false))
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(u=uin, p=1.0, T=1.0))
+    apply_bcs!(s, Q)
+    dQ = zero(Q)
+    compute_rhs!(s, Q, dQ)
+    m = maximum(abs(dQ[gidx(s, 1, j, k), c]) for c in 1:s.ncons, j in 1:12, k in 1:12)
+    @test m < 1e-8
+    # and a mismatched stream must produce a non-trivial correction
+    Q2 = allocate_state(s)
+    initialize!(s, Q2, (x, y, z) -> Prim(u=(0.15, 0, 0), p=1.0, T=1.0))
+    apply_bcs!(s, Q2)
+    dQ2 = zero(Q2)
+    compute_rhs!(s, Q2, dQ2)
+    m2 = maximum(abs(dQ2[gidx(s, 1, j, k), c]) for c in 1:s.ncons, j in 1:12, k in 1:12)
+    @test m2 > 1e-3
+end
+
+@testset "multi-species artificial diffusivity responds to Y gradients" begin
+    # artificial.jl computes per-species D* only when ns > 1; that branch was
+    # never executed, since the only multi-species test disables art.
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 0.2, 1.09)])
+    s = Solver(nglob=(64, 12, 12), Ldom=(1.0, 0.2, 0.2), bcs=per3, eos=eos,
+               art=ArtParams(enabled=true))
+    Q = allocate_state(s)
+    dQ = zero(Q)
+    # smooth composition: D* must stay tiny
+    initialize!(s, Q, (x, y, z) -> Prim(Y=(0.5 + 0.1sin(2π * x), 0.5 - 0.1sin(2π * x)),
+                                        p=1.0, rho=1.0))
+    compute_rhs!(s, Q, dQ)
+    smooth_max = max(maximum(s.Dart[1]), maximum(s.Dart[2]))
+    # sharp interface: D* must switch on
+    initialize!(s, Q, (x, y, z) -> begin
+        θ = tanh_blend(x, 0.5, 0.01)
+        Prim(Y=(1 - θ, θ), p=1.0, rho=1.0)
+    end)
+    compute_rhs!(s, Q, dQ)
+    sharp_max = max(maximum(s.Dart[1]), maximum(s.Dart[2]))
+    @test sharp_max > 100 * max(smooth_max, 1e-14)
+    @test all(isfinite, s.Dart[1]) && all(isfinite, s.Dart[2])
+end
+
+@testset "dt_report agrees with compute_dt and names the limiter" begin
+    s = mkslv(nglob=(16, 16, 16), transport=Transport(mu0=1e-3))
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(u=(0.2sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
+    r = dt_report(s, Q)
+    @test r.dt ≈ compute_dt(s, Q) rtol = 1e-12
+    @test r.kind in (:acoustic, :diffusive, :curvature)
+    @test r.dim in 1:3
+    @test all(1 .<= r.index .<= 16)
+end
+
+@testset "curvature_rate: collapsed angular dims restrict dt" begin
+    # The spherical branch of curvature_rate had no coverage at all, and the
+    # whole point of the term is that a COLLAPSED angular dimension carries a
+    # stiff geometric source the advective CFL loop never sees. Swirl must
+    # therefore shorten dt even though nothing varies in θ or φ.
+    mk(metric, uang) = begin
+        s = Solver(nglob=(64, 1, 1), Ldom=(1.0, 1.0, 1.0), metric=metric,
+                   origin=(0.5, π / 2, 0.0),
+                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                   art=ArtParams(enabled=false))
+        Q = allocate_state(s)
+        initialize!(s, Q, (r, θ, φ) -> Prim(u=(0.0, uang, uang), p=1.0, rho=1.0))
+        s, Q
+    end
+    for metric in (CylindricalMetric(), SphericalMetric())
+        s0, Q0 = mk(metric, 0.0)
+        s1, Q1 = mk(metric, 2.0)
+        @test compute_dt(s1, Q1) < compute_dt(s0, Q0)
+        @test CL.curvature_rate(s1, metric, gidx(s1, 5, 1, 1), (0.0, 2.0, 2.0)) > 0
+        @test CL.curvature_rate(s0, metric, gidx(s0, 5, 1, 1), (0.0, 0.0, 0.0)) == 0
+    end
+    # Cartesian has no curvature term at all
+    sc = mkslv(nglob=(16, 16, 16))
+    @test CL.curvature_rate(sc, CartesianMetric(), gidx(sc, 2, 2, 2), (1.0, 1.0, 1.0)) == 0
+end
+
+@testset "save_vtk writes a readable .pvtr/.vtr pair" begin
+    s = mkslv(nglob=(12, 12, 12))
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(u=(sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
+    save_vtk(s, Q, "test_vtk")
+    files = filter(startswith("test_vtk"), readdir())
+    @test any(endswith(".pvtr"), files)
+    @test any(endswith(".vtr"), files)
+    @test all(f -> filesize(f) > 0, files)
+    txt = read(first(filter(endswith(".pvtr"), files)), String)
+    @test occursin("PRectilinearGrid", txt)
+    foreach(rm, files)
+end
+
+@testset "conserved_from_prim / nspecies round trip" begin
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 0.2, 1.09)])
+    @test nspecies(eos) == 2
+    @test nspecies(single_species()) == 1
+    pr = Prim(u=(0.3, -0.1, 0.2), p=0.8, T=1.7, Y=(0.35, 0.65))
+    q = conserved_from_prim(eos, pr)
+    ρ = q[1] + q[2]
+    @test q[1] / ρ ≈ 0.35 atol = 1e-12
+    @test q[3] / ρ ≈ 0.3 atol = 1e-12          # ρu / ρ
+    Rm = 0.35 * eos.Rk[1] + 0.65 * eos.Rk[2]
+    @test ρ * Rm * 1.7 ≈ 0.8 atol = 1e-12      # p = ρ R_m T
 end
 
 @testset "checkpoint round trip" begin
