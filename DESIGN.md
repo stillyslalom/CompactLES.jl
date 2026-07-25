@@ -65,11 +65,13 @@ can be run at any resolution, scheme order, or process count without change.
 | `src/operators.jl`         | `DirPlan`: bind a scheme to a dimension; line fill, distributed solve, scatter |
 | `src/operators_banded.jl`  | `BandPlan`: the banded counterpart |
 | `src/physics.jl`           | EOS abstraction, `IdealMixture`, `Transport`, `primitives!` |
+| `src/equations.jl`         | `EquationSet`, conserved layout, names, and fold parity rules |
 | `src/boundary.jl`          | `BoundaryCondition` types, wall enforcement, `apply_bcs!` |
 | `src/nscbc.jl`             | Characteristic NSCBC subsonic outflow and inflow |
 | `src/metric.jl`            | Cartesian/cylindrical/spherical metrics, stretch mappings, curvature corrections, momentum sources, discrete GCL |
 | `src/folds.jl`             | Coordinate-singularity (axis/origin/pole) parity and antipodal folds |
 | `src/artificial.jl`        | Cook artificial μ\*, β\*, κ\*, D\* from δ⁴ sensors |
+| `src/sources.jl`           | Inferable tuple source interface and `ConstantBodyForce` |
 | `src/rhs.jl`               | `Solver` container, flux assembly, the conservative NS RHS |
 | `src/timestep.jl`          | RK45, CFL timestep, the `run!` loop, per-step filtering |
 | `src/io.jl`                | Per-rank checkpoint/restart, parallel VTK output |
@@ -87,6 +89,7 @@ the backend:
   and one of T_ion or ρ). Construction validates that mass fractions sum to one and
   that exactly one of temperature or density is given.
 - **`Problem`** — physics and geometry only: EOS, transport model, metric,
+  explicit source tuple,
   coordinate `domain` as three `(lo, hi)` pairs, boundary conditions, and the
   initial-condition function. No grid, scheme, or rank information.
 - **`Numerics`** — the discretization: resolution `n_global`, derivative and filter
@@ -97,8 +100,8 @@ the backend:
 initialized conserved state `Q`. Initial conditions and Dirichlet forcing are
 plain functions of physical coordinates `(x₁, x₂, x₃)` (and time `t` for
 forcing) evaluated through `xcoord`, so they never see halos, offsets, or the
-conserved layout. The `conserved_from_prim` step is EOS business, so a new
-equation of state slots in without touching the IC path.
+conserved layout. `conserved_from_prim` dispatches on the equation set and EOS,
+so a new layout or equation of state does not expose indices to the IC path.
 
 The payoff: the same `Problem` re-runs at a different resolution or scheme order
 by changing only the `Numerics`, and a convergence study is a loop over
@@ -132,7 +135,8 @@ throughout: `gidx(solver, i, j, k)` maps a local interior index to the halo-offs
 coordinate (including any stretch mapping and half-cell offset).
 
 The `Solver` struct (in `rhs.jl`) is the backend container: it holds the
-`Decomp`, the EOS and transport, the artificial-property parameters, the metric
+`Decomp`, concrete equation set, EOS, transport and source tuple, the
+artificial-property parameters, the metric
 and any fold specs, the per-dimension operator plans (`deriv_plans`, `filter_plans`),
 pre-allocated primitive/gradient/flux/geometry scratch arrays, and the current
 time and step. All hot-loop scratch is allocated once at setup; the RHS
@@ -281,6 +285,10 @@ node and which term set the limit, and returns `(dt, rank, index, coords, dim,
 kind)` with `kind ∈ (:acoustic, :diffusive, :curvature)`. See the CFL section of
 the README for what the answers mean on polar grids.
 
+`Workspace` owns the two low-storage arrays (`dQ`, `du`). Passing a retained
+workspace to `step!` or `run!` lets splitting, subcycling, and future IMEX
+schemes own stage storage.
+
 `run!` is the outer loop: step, advance time, and every `filter_interval` steps
 call `filter_state!`, which applies the compact filter to every conserved
 component along every active dimension (with batched halo exchange and the
@@ -322,6 +330,8 @@ assuming boundary conditions are already enforced on `Q`. Step by step:
    appear in curvilinear coordinates (e.g. +Π_θθ/r in cylindrical).
 10. **Boundary corrections.** For every face, `correct_rhs!` applies any
     characteristic (NSCBC) correction to the RHS.
+11. **Explicit sources.** `add_sources!` walks the concrete source tuple at the
+    RK stage time; tuple recursion compiles away.
 
 Every loop over the interior is threaded over the outermost index; every MPI
 call sits in a serial section between threaded regions.
@@ -510,11 +520,12 @@ whose RHS reaches ±m needs `n_halo ≥ m`.
 (index sets come from `wallplane`), and/or `correct_rhs!(bc, solver, Q, dQ, dim,
 side)` for a characteristic RHS correction. Declare periodicity via `isperiodic`.
 
-**New physics.** `assemble_fluxes!` is the single place fluxes are built and
-`compute_artificial!` the single place regularization is built — extend the model
-there.
+**New physics.** Extend flux assembly or regularization, or define
+`add_source!(source, solver, dQ, Q, t)` and place concrete sources in the
+`Problem.sources` tuple.
 
-**New equations of state.** Implement the three-function EOS contract
+**New equation sets and equations of state.** An `EquationSet` owns component
+indices, names, conserved conversion, and fold parity. Implement the EOS contract
 (`nspecies`, the state evaluation in `primitives!`, and `species_enthalpy`) plus
 `conserved_from_prim`. The function-barrier design keeps this cheap.
 

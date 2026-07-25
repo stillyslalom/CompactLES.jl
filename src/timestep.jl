@@ -20,6 +20,15 @@ const RKC = (0.0,
              2006345519317.0 / 3224310063776.0,
              2802321613138.0 / 2924317926251.0)
 
+# Reusable RK stage storage. Callers that split operators, subcycle, or add an
+# IMEX integrator can retain these arrays instead of hiding them in run!.
+struct Workspace{A<:AbstractArray}
+    dQ::A
+    du::A
+end
+
+Workspace(Q::AbstractArray) = Workspace(zero(Q), zero(Q))
+Workspace(solver::Solver) = Workspace(allocate_state(solver), allocate_state(solver))
 """
     step!(solver, Q, dQ, du, dt)
 
@@ -36,7 +45,7 @@ function step!(solver::Solver, Q, dQ, du, dt)
         compute_rhs!(solver, Q, dQ)
         A = RKA[stage]
         B = RKB[stage]
-        for c in 1:solver.n_cons
+        for c in 1:solver.equations.n_cons
             @threaded nx*ny*nz for k in 1:nz
                 @inbounds for j in 1:ny, i in 1:nx
                     v = A * du[i+o1, j+o2, k+o3, c] + dt * dQ[i+o1, j+o2, k+o3, c]
@@ -50,6 +59,9 @@ function step!(solver::Solver, Q, dQ, du, dt)
     apply_bcs!(solver, Q)
     return Q
 end
+
+step!(solver::Solver, Q, workspace::Workspace, dt) =
+    step!(solver, Q, workspace.dQ, workspace.du, dt)
 
 """
     compute_dt(solver, Q)
@@ -90,7 +102,7 @@ function compute_dt(solver::Solver, Q)
         # source at small r. That term is added here.
         acc += curvature_rate(solver, solver.metric, I, uv)
         Dmax = tr.mu0 / (tr.Sc * ρ)
-        for sp in 1:solver.n_species
+        for sp in 1:solver.equations.n_species
             Dmax = max(Dmax, tr.mu0 / (tr.Sc * ρ) + solver.D_art[sp][I])
         end
         ν = (tr.mu0 + solver.mu_art[I] + solver.beta_art[I]) * ri +
@@ -155,7 +167,7 @@ function dt_report(solver::Solver, Q)
         end
         crate = curvature_rate(solver, solver.metric, I, uv)
         Dmax = tr.mu0 / (tr.Sc * ρ)
-        for sp in 1:solver.n_species
+        for sp in 1:solver.equations.n_species
             Dmax = max(Dmax, tr.mu0 / (tr.Sc * ρ) + solver.D_art[sp][I])
         end
         ν = (tr.mu0 + solver.mu_art[I] + solver.beta_art[I]) * ri +
@@ -183,12 +195,11 @@ end
 Advance to `tfinal` (or `nmax` steps), filtering the conserved variables every
 `s.filter_interval` steps and invoking `callback(solver, Q)` after each step.
 """
-function run!(solver::Solver, Q; tfinal, nmax::Int=typemax(Int), callback=nothing)
-    dQ = zero(Q)
-    du = zero(Q)
+function run!(solver::Solver, Q, workspace::Workspace;
+              tfinal, nmax::Int=typemax(Int), callback=nothing)
     while solver.t < tfinal && solver.step < nmax
         dt = min(compute_dt(solver, Q), tfinal - solver.t)
-        step!(solver, Q, dQ, du, dt)
+        step!(solver, Q, workspace, dt)
         solver.t += dt
         solver.step += 1
         if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
@@ -197,6 +208,11 @@ function run!(solver::Solver, Q; tfinal, nmax::Int=typemax(Int), callback=nothin
         callback !== nothing && callback(solver, Q)
     end
     return Q
+end
+
+function run!(solver::Solver, Q; workspace=nothing, kwargs...)
+    work = workspace === nothing ? Workspace(Q) : workspace
+    return run!(solver, Q, work; kwargs...)
 end
 
 """
@@ -208,11 +224,11 @@ dimension, with batched per-dimension halo exchange and axis parity routing
 """
 function filter_state!(solver::Solver, Q)
     decomp = solver.decomp
-    comps = [view(Q, :, :, :, c) for c in 1:solver.n_cons]
+    comps = [view(Q, :, :, :, c) for c in 1:solver.equations.n_cons]
     for d in 1:3
         decomp.active[d] || continue
         exchange_dim_batch!(comps, decomp, d)
-        for c in 1:solver.n_cons
+        for c in 1:solver.equations.n_cons
             filt_along!(solver.tmp_a, comps[c], solver, d, cons_parity(solver, d, c))
             copy_interior!(comps[c], solver.tmp_a, decomp)
         end

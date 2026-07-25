@@ -68,9 +68,9 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
 
     Lref = bc.Lref > 0 ? bc.Lref : Float64(solver.L_domain[d])
     vel = (solver.u, solver.v, solver.w)
-    m = solver.i_mom
-    i_energy = solver.i_energy
-    n_species = solver.n_species
+    m = solver.equations.i_mom
+    i_energy = solver.equations.i_energy
+    n_species = solver.equations.n_species
     grad_u = solver.grad_u
     Gdd = grad_u[d, d]
     sgn = side == 2 ? -1.0 : 1.0      # sign of Δd3 (see header)
@@ -180,7 +180,8 @@ dphi_dY(eos::IdealMixture, k::Int, Rm, cvm) =
     (eos.cvk[k] * Rm - eos.Rk[k] * cvm) / (Rm * Rm)
 
 function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
-    length(bc.Y) == solver.n_species || error("NSCBCInflowBC: composition length mismatch")
+    length(bc.Y) == solver.equations.n_species ||
+        error("NSCBCInflowBC: composition length mismatch")
 
     # COLLECTIVES FIRST — see the note in the outflow method above: these are
     # distributed solves along d, so every rank must call them before any rank
@@ -195,9 +196,9 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
     Lref = bc.Lref > 0 ? bc.Lref : Float64(solver.L_domain[d])
     vel = (solver.u, solver.v, solver.w)
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)   # transverse dims
-    m = solver.i_mom
-    i_energy = solver.i_energy
-    n_species = solver.n_species
+    m = solver.equations.i_mom
+    i_energy = solver.equations.i_energy
+    n_species = solver.equations.n_species
     grad_u = solver.grad_u
     Gdd = grad_u[d, d]
     lowface = side == 1

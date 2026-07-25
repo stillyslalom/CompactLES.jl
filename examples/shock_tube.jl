@@ -80,7 +80,7 @@ rank = MPI.Comm_rank(MPI.COMM_WORLD)
 function diag(solver, Q)
     solver.step % 50 == 0 || return
     nx, ny, nz = solver.decomp.n_local
-    m1 = solver.i_mom[1]
+    m1 = solver.equations.i_mom[1]
     ρmin, ρmax, umax = Inf, -Inf, 0.0
     for k in 1:nz, j in 1:ny, i in 1:nx
         I = gidx(solver, i, j, k)

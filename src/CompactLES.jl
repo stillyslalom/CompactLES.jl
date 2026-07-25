@@ -26,12 +26,14 @@ include("lines_transposed.jl")
 include("kernels.jl")
 include("kernels_banded.jl")
 include("physics.jl")
+include("equations.jl")
 include("boundary.jl")
 include("operators.jl")
 include("operators_banded.jl")
 include("metric.jl")
 include("folds.jl")
 include("artificial.jl")
+include("sources.jl")
 include("rhs.jl")
 include("nscbc.jl")
 include("io.jl")
@@ -46,10 +48,13 @@ export NSCBCOutflowBC, NSCBCInflowBC, DirichletBC, save_checkpoint, load_checkpo
 export Prim, Problem, Numerics, setup, initialize!, conserved_from_prim, tanh_blend
 export DirPlan, BandPlan, apply_along!, filter_field!
 export EOS, IdealSpecies, IdealMixture, single_species, nspecies, Transport
+export EquationSet, NavierStokes1T
 export Metric, CartesianMetric, CylindricalMetric, SphericalMetric
 export Stretch, sine_cluster
 export ArtParams, Solver
-export compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!, xcoord, gidx, filter_state!
+export ConstantBodyForce, add_source!, add_sources!
+export Workspace, compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!
+export xcoord, gidx, filter_state!
 export THREAD_MIN_WORK
 
 __init__() = __init_threading__()

@@ -32,9 +32,9 @@ Jacobian multiplies that dimension's scale factor), so clustered radial grids
 in cylindrical coordinates work the same way as clustered Cartesian ones.
 Stretched dimensions must be non-periodic.
 """
-struct Stretch
-    x::Function
-    dxdξ::Function
+struct Stretch{F,G}
+    x::F
+    dxdξ::G
 end
 
 """
@@ -120,7 +120,7 @@ function gcl_cotr!(solver)
     decomp = solver.decomp
     # Same antipodal sign the flux-divergence loop uses for the θ-momentum
     # (m2) pressure flux across the θ pole fold (ignored when there is no fold).
-    σ = solver.folds[2] === nothing ? 1 : solver.folds[2].sigflux[solver.i_mom[2]]
+    σ = solver.folds[2] === nothing ? 1 : solver.folds[2].sigflux[solver.equations.i_mom[2]]
     # D_ξ2(A₂) with the m2 fold sign
     deriv_along!(solver.tmp_a, solver.area_d[2], solver, 2, σ)
     o1, o2, o3 = decomp.n_halo_d
@@ -198,7 +198,7 @@ end
 function add_metric_sources!(solver, dQ, Q, ::CylindricalMetric)
     decomp = solver.decomp; o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    m = solver.i_mom
+    m = solver.equations.i_mom
     @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -213,7 +213,7 @@ end
 function add_metric_sources!(solver, dQ, Q, ::SphericalMetric)
     decomp = solver.decomp; o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    m = solver.i_mom
+    m = solver.equations.i_mom
     @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)

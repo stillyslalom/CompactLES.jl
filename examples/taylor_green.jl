@@ -40,7 +40,7 @@ function diag(solver, Q)
     solver.step % 10 == 0 || return
     ke = 0.0
     nx, ny, nz = solver.decomp.n_local
-    m1, m2, m3 = solver.i_mom
+    m1, m2, m3 = solver.equations.i_mom
     for k in 1:nz, j in 1:ny, i in 1:nx
         ρ = Q[gidx(solver, i, j, k), 1]
         ke += 0.5 * (Q[gidx(solver, i, j, k), m1]^2 + Q[gidx(solver, i, j, k), m2]^2 +

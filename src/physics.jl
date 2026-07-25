@@ -63,9 +63,9 @@ physical-edge halos get benign placeholders; they are never read.
 primitives!(solver, Q) = _primitives!(solver, solver.eos, Q)
 
 function _primitives!(solver, eos::IdealMixture, Q)
-    n_species = solver.n_species
-    m1, m2, m3 = solver.i_mom
-    i_energy = solver.i_energy
+    n_species = solver.equations.n_species
+    m1, m2, m3 = solver.equations.i_mom
+    i_energy = solver.equations.i_energy
     Rk, cvk = eos.Rk, eos.cvk
     ρa, ua, va, wa = solver.rho, solver.u, solver.v, solver.w
     pa, T_iona, ca, cpa = solver.p, solver.T_ion, solver.c, solver.cp_mix

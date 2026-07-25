@@ -162,7 +162,8 @@ function taylor_green_ke(N; tfinal=10.0, Re=1600.0)
         for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
             I = gidx(solver, i, j, k)
             ρ = Q[I, 1]
-            ke += 0.5 * (Q[I, solver.i_mom[1]]^2 + Q[I, solver.i_mom[2]]^2 + Q[I, solver.i_mom[3]]^2) / ρ
+            m1, m2, m3 = solver.equations.i_mom
+            ke += 0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / ρ
         end
         ke = MPI.Allreduce(ke * cellvol, +, solver.decomp.comm) / (2π)^3
         push!(ts, solver.t); push!(kes, ke)

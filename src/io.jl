@@ -22,7 +22,7 @@ function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
     nx, ny, nz = decomp.n_local
     open(_ckpt_name(prefix, rank), "w") do io
         write(io, UInt64(CKPT_MAGIC))
-        write(io, Int64(solver.n_cons))
+        write(io, Int64(solver.equations.n_cons))
         for d in 1:3
             write(io, Int64(decomp.n_global[d]))
         end
@@ -52,7 +52,7 @@ function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
     nx, ny, nz = decomp.n_local
     open(_ckpt_name(prefix, rank), "r") do io
         read(io, UInt64) == CKPT_MAGIC || error("not a CompactLES checkpoint")
-        Int(read(io, Int64)) == solver.n_cons || error("conserved layout mismatch")
+        Int(read(io, Int64)) == solver.equations.n_cons || error("conserved layout mismatch")
         for d in 1:3
             Int(read(io, Int64)) == decomp.n_global[d] || error("global grid mismatch")
         end
@@ -64,7 +64,7 @@ function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
         end
         solver.t = read(io, Float64)
         solver.step = Int(read(io, Int64))
-        buf = Array{Float64}(undef, nx, ny, nz, solver.n_cons)
+        buf = Array{Float64}(undef, nx, ny, nz, solver.equations.n_cons)
         read!(io, buf)
         Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :] .= buf
     end
@@ -106,7 +106,7 @@ function save_vtk(solver::Solver, Q, prefix::AbstractString)
     scal(name, a) = push!(fields, (name, 1,
         Float32[a[i+o1, j+o2, k+o3] for i in 1:nx, j in 1:ny, k in 1:nz][:]))
     scal("rho", solver.rho); scal("p", solver.p); scal("T_ion", solver.T_ion)
-    for sp in 1:solver.n_species
+    for sp in 1:solver.equations.n_species
         scal("Y$(sp)", solver.Y[sp])
     end
     vel = Vector{Float32}(undef, 3 * nx * ny * nz)

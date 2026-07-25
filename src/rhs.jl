@@ -14,25 +14,23 @@
 # diagonal (per solution parity σg: derivatives flip field parity, filters
 # preserve it). No node sits at r = 0 and no scale factor vanishes.
 
-mutable struct Solver{T}
+mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,Src}
     decomp::Decomp
-    eos::EOS
+    equations::Eq
+    eos::E
     transport::Transport{T}
     art::ArtParams{T}
-    metric::Metric
-    stretch::NTuple{3,Union{Nothing,Stretch}}
-    folds::NTuple{3,Union{Nothing,FoldSpec}}   # coordinate-singularity folds
-    n_species::Int
-    n_cons::Int
-    i_mom::NTuple{3,Int}
-    i_energy::Int
+    metric::M
+    stretch::St
+    folds::Fo                                  # coordinate-singularity folds
+    sources::Src
     L_domain::NTuple{3,T}
     origin::NTuple{3,T}
     coord_shift::NTuple{3,T}                # half-cell offset (axis grids)
     h::NTuple{3,T}
-    bcs::NTuple{3,Tuple{BoundaryCondition,BoundaryCondition}}
-    deriv_plans::NTuple{3,Union{Nothing,AbstractDirPlan}}
-    filter_plans::NTuple{3,Union{Nothing,AbstractDirPlan}}
+    bcs::BC
+    deriv_plans::DP
+    filter_plans::FP
     pairbuf::Array{T,3}                     # paired-fold combo scratch
     pairout::Array{T,3}                     # paired-fold second-parity result
     cfl::T
@@ -75,10 +73,12 @@ See earlier keywords, plus:
 """
 function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 eos::EOS=single_species(),
+                equations=nothing,
                 transport::Transport{T}=Transport(),
                 art::ArtParams=ArtParams(),
                 metric::Metric=CartesianMetric(),
                 stretch::NTuple{3,Union{Nothing,Stretch}}=(nothing, nothing, nothing),
+                sources=(),
                 origin=(0.0, 0.0, 0.0),
                 deriv::AbstractCompactScheme=lele_d1_6(),
                 filt::AbstractCompactScheme=compact_filter(0.45),
@@ -148,9 +148,13 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     end
     coord_shift = ntuple(d -> fold_lo_dim[d] ? h[d] / 2 : zero(T), 3)
     mkd(sch, d; kw...) = plan_direction(decomp, sch, d, h[d]; kw...)
-    n_species = nspecies(eos)
-    n_cons = n_species + 4
-    i_mom = (n_species + 1, n_species + 2, n_species + 3)
+    equations = equations === nothing ? NavierStokes1T(eos) : equations
+    equations isa EquationSet || error("equations must be an EquationSet")
+    equations.n_species == nspecies(eos) ||
+        error("equation set carries $(equations.n_species) species; " *
+              "EOS has $(nspecies(eos))")
+    n_species = equations.n_species
+    n_cons = equations.n_cons
     f() = field(decomp)
 
     # Fold specs. sigvel/sigflux derivations live in folds.jl and the README.
@@ -200,24 +204,22 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
               mkd(filt, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing)))
         FoldSpec(d, lo, hi, pairspec(pdim, revdim), sigvel, sigflux, dp, fp)
     end
-    sigflux_of(sv, Aσ) = Int[(c <= n_species ? sv[1] :
-                              c == n_species + 4 ? sv[1] :
-                              sv[1] * sv[c - n_species]) * Aσ for c in 1:(n_species+4)]
     folds = (nothing, nothing, nothing)
     if axis
         sv = (-1, -1, 1)
-        folds = (foldspec(1, true, false, 2, 0, sv, sigflux_of(sv, -1)),
+        folds = (foldspec(1, true, false, 2, 0, sv,
+                          flux_parities(equations, sv, 1, -1)),
                  folds[2], folds[3])           # A₁ = r is odd
     elseif orig1
         sv = (-1, 1, -1)
-        folds = (foldspec(1, true, false, 3, 2, sv, sigflux_of(sv, 1)),
+        folds = (foldspec(1, true, false, 3, 2, sv,
+                          flux_parities(equations, sv, 1, 1)),
                  folds[2], folds[3])           # A₁ = r² sinθ is even
     end
     if poles
         sv = (1, -1, -1)
         # Fold along θ: flux parities use σ(u_θ); A₂ = r sinθ is odd in θ.
-        sf2 = Int[(c <= n_species ? sv[2] : c == n_species + 4 ? sv[2] :
-                   sv[2] * sv[c - n_species]) * -1 for c in 1:(n_species+4)]
+        sf2 = flux_parities(equations, sv, 2, -1)
         folds = (folds[1], foldspec(2, true, true, 3, 0, sv, sf2), folds[3])
     end
     haspair = any(fold -> fold !== nothing && fold.pair !== nothing, folds)
@@ -226,10 +228,13 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     filter_plans = ntuple(d -> decomp.active[d] && folds[d] === nothing ?
                          mkd(filt, d) : nothing, 3)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
-    solver = Solver{T}(decomp, eos, transport, art, metric, stretch, folds,
-                  n_species, n_cons, i_mom, n_species + 4,
+    bcs_t = ntuple(d -> (bcs[d][1], bcs[d][2]), 3)
+    solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
+                    typeof(stretch),typeof(folds),typeof(bcs_t),
+                    typeof(deriv_plans),typeof(filter_plans),typeof(sources)}(
+                  decomp, equations, eos, transport, art, metric, stretch, folds, sources,
                   Lt, orig, coord_shift, h,
-                  ntuple(d -> (bcs[d][1], bcs[d][2]), 3),
+                  bcs_t,
                   deriv_plans, filter_plans,
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
@@ -263,7 +268,7 @@ function gidx(solver::Solver, i::Int, j::Int, k::Int)
     return CartesianIndex(i + pad[1], j + pad[2], k + pad[3])
 end
 
-allocate_state(solver::Solver) = allocate_state(solver.decomp, solver.n_cons)
+allocate_state(solver::Solver) = allocate_state(solver.decomp, solver.equations.n_cons)
 
 # --- Operator routing through folds ----------------------------------------
 
@@ -309,8 +314,8 @@ end
 vel_parity(solver::Solver, d::Int, j::Int) =
     solver.folds[d] === nothing ? 1 : solver.folds[d].sigvel[j]
 cons_parity(solver::Solver, d::Int, c::Int) =
-    (solver.folds[d] === nothing || c <= solver.n_species || c == solver.i_energy) ? 1 :
-    solver.folds[d].sigvel[c - solver.n_species]
+    solver.folds[d] === nothing ? 1 :
+    conserved_parity(solver.equations, solver.folds[d].sigvel, c)
 
 assemble_fluxes!(solver::Solver, Q) = _assemble_fluxes!(solver, solver.eos, Q)
 
@@ -320,8 +325,9 @@ function _assemble_fluxes!(solver::Solver{T}, eos, Q) where {T}
     nx, ny, nz = decomp.n_local
     tr = solver.transport
     mu0 = tr.mu0
-    n_species = solver.n_species
-    i_energy = solver.i_energy
+    n_species = solver.equations.n_species
+    i_energy = solver.equations.i_energy
+    m1, m2, m3 = solver.equations.i_mom
     grad_u = solver.grad_u
     gT = solver.grad_T_ion
     gY = solver.grad_Y
@@ -363,9 +369,9 @@ function _assemble_fluxes!(solver::Solver{T}, eos, Q) where {T}
                     flux[d, sp][I] = ρ * solver.Y[sp][I] * ud + Jkd
                     hdiff += species_enthalpy(eos, sp, Tp) * Jkd
                 end
-                flux[d, solver.i_mom[1]][I] = ρ * ud * uv[1] + (d == 1 ? p : zero(T)) - τd[1]
-                flux[d, solver.i_mom[2]][I] = ρ * ud * uv[2] + (d == 2 ? p : zero(T)) - τd[2]
-                flux[d, solver.i_mom[3]][I] = ρ * ud * uv[3] + (d == 3 ? p : zero(T)) - τd[3]
+                flux[d, m1][I] = ρ * ud * uv[1] + (d == 1 ? p : zero(T)) - τd[1]
+                flux[d, m2][I] = ρ * ud * uv[2] + (d == 2 ? p : zero(T)) - τd[2]
+                flux[d, m3][I] = ρ * ud * uv[3] + (d == 3 ? p : zero(T)) - τd[3]
                 flux[d, i_energy][I] = (E + p) * ud -
                                (uv[1]*τd[1] + uv[2]*τd[2] + uv[3]*τd[3]) -
                                κ * gT[d][I] + hdiff
@@ -402,7 +408,7 @@ function compute_rhs!(solver::Solver, Q, dQ)
         decomp.active[d] || continue
         deriv_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1)
         _scale_grad!(solver.grad_T_ion[d], solver, d)
-        for sp in 1:solver.n_species
+        for sp in 1:solver.equations.n_species
             deriv_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
             _scale_grad!(solver.grad_Y[d, sp], solver, d)
         end
@@ -420,7 +426,7 @@ function compute_rhs!(solver::Solver, Q, dQ)
     # for a 5-component 3-D RHS, in what the phase budget shows is the single
     # largest phase. Curved or stretched grids take the general path unchanged.
     unitgeom = solver.metric isa CartesianMetric && all(isnothing, solver.stretch)
-    for c in 1:solver.n_cons
+    for c in 1:solver.equations.n_cons
         @threaded nx*ny*nz for k in 1:nz
             @inbounds for j in 1:ny, i in 1:nx
                 dQ[i+o1, j+o2, k+o3, c] = 0
@@ -459,6 +465,7 @@ function compute_rhs!(solver::Solver, Q, dQ)
         decomp.active[d] || continue
         correct_rhs!(solver.bcs[d][side], solver, Q, dQ, d, side)
     end
+    add_sources!(solver, dQ, Q, solver.tstage)
     return dQ
 end
 

@@ -36,7 +36,7 @@ function budget(name, solver, Q)
     t["scalar grads"]     = best(() -> for d in 1:3
         decomp.active[d] || continue
         CL.deriv_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1); CL._scale_grad!(solver.grad_T_ion[d], solver, d)
-        for sp in 1:solver.n_species
+        for sp in 1:solver.equations.n_species
             CL.deriv_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
             CL._scale_grad!(solver.grad_Y[d, sp], solver, d)
         end
@@ -47,7 +47,7 @@ function budget(name, solver, Q)
     end)
     # mirrors the branch compute_rhs! actually takes for this solver
     unitgeom = solver.metric isa CartesianMetric && all(isnothing, solver.stretch)
-    t["flux divergence"]  = best(() -> for c in 1:solver.n_cons, d in 1:3
+    t["flux divergence"]  = best(() -> for c in 1:solver.equations.n_cons, d in 1:3
         decomp.active[d] || continue
         Fdc = solver.flux[d, c]
         σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
@@ -73,10 +73,12 @@ function budget(name, solver, Q)
 
     whole = best(() -> compute_rhs!(solver, Q, dQ))
     npt = prod(decomp.n_local)
-    nsolves = 3 * nact + nact * (1 + solver.n_species) + solver.n_cons * nact   # vel + scalars + flux
+    # velocity + scalar + flux solves
+    nsolves = 3 * nact + nact * (1 + solver.equations.n_species) +
+              solver.equations.n_cons * nact
     @printf("\n===== %s =====\n", name)
     @printf("  %d points, %d species, %d active dims; compute_rhs! = %.3f ms (%.1f ns/pt)\n",
-            npt, solver.n_species, nact, 1e3whole, 1e9whole / npt)
+            npt, solver.equations.n_species, nact, 1e3whole, 1e9whole / npt)
     @printf("  %d compact line-solves per RHS\n", nsolves)
     tot = sum(values(t))
     println("  phase                    ms      % of sum")

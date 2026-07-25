@@ -110,6 +110,7 @@ prob = Problem(
     eos       = single_species(gamma=1.4),          # or IdealMixture([...])
     transport = Transport(mu0=1/1600, Pr=0.7, Sc=0.7),
     metric    = CartesianMetric(),                  # or Cylindrical/Spherical
+    sources   = (ConstantBodyForce((0.0, -9.81, 0.0)),),
     domain    = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),  # (lo, hi) per dimension
     bcs       = ((SlipWallBC(), NSCBCOutflowBC(pinf=0.1)),
                  (PeriodicBC(), PeriodicBC()),
@@ -136,7 +137,9 @@ conserved state, and `run!` advances it:
 
 ```julia
 solver, Q = setup(prob, num)
-run!(solver, Q; tfinal=0.25, nmax=100_000, callback=(solver, Q) -> ...)
+workspace = Workspace(Q)  # retain stage arrays for reuse/splitting/IMEX
+run!(solver, Q; workspace, tfinal=0.25, nmax=100_000,
+     callback=(solver, Q) -> ...)
 ```
 
 Initial-condition and Dirichlet-forcing functions are plain, pure functions of
@@ -153,7 +156,7 @@ over `Numerics` with the same `Problem`.
 | Geometry        | `CartesianMetric`, `CylindricalMetric`, `SphericalMetric`; collapsed 1-D/2-D; `Stretch` / `sine_cluster` meshes |
 | Walls           | `SlipWallBC`, `NoSlipWallBC(Twall=...)` (adiabatic or isothermal) |
 | Open boundaries | `NSCBCOutflowBC(pinf=...)`, `NSCBCInflowBC(u=..., T_ion=..., Y=...)`, `ExtrapolationBC` |
-| Forcing         | `DirichletBC((x,y,z,t) -> Prim)` |
+| Forcing         | Typed source tuples (`ConstantBodyForce`) and time-dependent `DirichletBC` |
 | Singular axes   | `AxisBC` (cylindrical axis), `OriginBC` (spherical origin), `PoleBC` (spherical poles) |
 | Thermodynamics  | `IdealMixture` of `IdealSpecies`; EOS interface for custom models |
 | Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`) |
@@ -285,7 +288,8 @@ particular warrants scrutiny before production use. Other current limitations:
   has it).
 - Output is checkpoint and VTK only — no HDF5/XDMF, no GPU path.
 - Wall boundary conditions assume coordinate-surface walls.
-- Soret/Dufour effects and reacting-source hooks are not implemented.
+- Soret/Dufour effects and reacting-chemistry models are not implemented;
+  reactions can use the typed source interface.
 
 ## Learn more
 

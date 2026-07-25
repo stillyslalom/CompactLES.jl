@@ -109,11 +109,11 @@ end
 function enforce!(::SlipWallBC, Q, solver, d, side)
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
-    mc = solver.i_mom[d]
+    mc = solver.equations.i_mom[d]
     @inbounds for I in plane
-        ρ = _wall_density(Q, I, solver.n_species)
+        ρ = _wall_density(Q, I, solver.equations.n_species)
         mn = Q[I, mc]
-        Q[I, solver.i_energy] -= 0.5 * mn * mn / ρ   # remove normal kinetic energy
+        Q[I, solver.equations.i_energy] -= 0.5 * mn * mn / ρ   # remove normal kinetic energy
         Q[I, mc] = 0
     end
     nothing
@@ -122,18 +122,18 @@ end
 function enforce!(bc::NoSlipWallBC, Q, solver, d, side)
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
-    m1, m2, m3 = solver.i_mom
+    m1, m2, m3 = solver.equations.i_mom
     iso = !isnan(bc.Twall)
     @inbounds for I in plane
-        ρ = _wall_density(Q, I, solver.n_species)
+        ρ = _wall_density(Q, I, solver.equations.n_species)
         ke = 0.5 * (Q[I,m1]^2 + Q[I,m2]^2 + Q[I,m3]^2) / ρ
-        Q[I, solver.i_energy] -= ke
+        Q[I, solver.equations.i_energy] -= ke
         Q[I, m1] = 0
         Q[I, m2] = 0
         Q[I, m3] = 0
         if iso
-            Q[I, solver.i_energy] =
-                wall_internal_energy(solver.eos, Q, I, solver.n_species, bc.Twall)
+            Q[I, solver.equations.i_energy] =
+                wall_internal_energy(solver.eos, Q, I, solver.equations.n_species, bc.Twall)
         end
     end
     nothing
@@ -146,7 +146,7 @@ function enforce!(::ExtrapolationBC, Q, solver, d, side)
     plane === nothing && return nothing
     e = CartesianIndex(ntuple(k -> k == d ? 1 : 0, 3))
     shift = side == 1 ? e : -e
-    @inbounds for I in plane, c in 1:solver.n_cons
+    @inbounds for I in plane, c in 1:solver.equations.n_cons
         Q[I, c] = Q[I + shift, c]
     end
     nothing

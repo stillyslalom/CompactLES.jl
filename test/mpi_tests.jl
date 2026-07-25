@@ -320,7 +320,7 @@ function test_freestream()
         dQ = zero(Q)
         compute_rhs!(solver, Q, dQ)
         m = 0.0
-        for c in 1:solver.n_cons, k in 1:solver.decomp.n_local[3],
+        for c in 1:solver.equations.n_cons, k in 1:solver.decomp.n_local[3],
             j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
             m = max(m, abs(dQ[gidx(solver, i, j, k), c]))
         end
@@ -346,7 +346,7 @@ function test_conservation()
     compute_rhs!(solver, Q, dQ)
     worst = 0.0
     npts = N * 16 * 16
-    for c in 1:solver.n_cons
+    for c in 1:solver.equations.n_cons
         loc = 0.0
         for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
             loc += dQ[gidx(solver, i, j, k), c]
@@ -385,7 +385,7 @@ function test_sync()
                    Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
     run!(s2, Q2; tfinal=1e9, nmax=10)
     nbad = 0.0
-    for c in 1:s2.n_cons, k in 1:s2.decomp.n_local[3], j in 1:s2.decomp.n_local[2],
+    for c in 1:s2.equations.n_cons, k in 1:s2.decomp.n_local[3], j in 1:s2.decomp.n_local[2],
         i in 1:s2.decomp.n_local[1]
         isfinite(Q2[gidx(s2, i, j, k), c]) || (nbad += 1)
     end
@@ -411,7 +411,7 @@ function test_checkpoint()
     load_checkpoint!(solver, Q2, "mpi_ckpt")
     check("restored t and step", abs(solver.t - 1.25) + abs(solver.step - 17), 1e-15)
     d = 0.0
-    for c in 1:solver.n_cons, k in 1:solver.decomp.n_local[3],
+    for c in 1:solver.equations.n_cons, k in 1:solver.decomp.n_local[3],
         j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
         d = max(d, abs(Q2[gidx(solver, i, j, k), c] - Q[gidx(solver, i, j, k), c]))
     end

@@ -120,8 +120,8 @@ function compute_artificial!(solver, Q)
 
     # κ* sensor: Σ_d h_d |δ⁴_d e|, smoothed; κ* = C_κ (ρ c / T_ion) · sensor.
     # Internal energy directly from Q — EOS-agnostic.
-    i_energy = solver.i_energy
-    m1, m2, m3 = solver.i_mom
+    i_energy = solver.equations.i_energy
+    m1, m2, m3 = solver.equations.i_mom
     @threaded length(solver.tmp_a) for k in 1:size(solver.tmp_a, 3)
         @inbounds for j in 1:size(solver.tmp_a, 2), i in 1:size(solver.tmp_a, 1)
             ρ = max(solver.rho[i, j, k], 1e-300)
@@ -144,8 +144,8 @@ function compute_artificial!(solver, Q)
     # D*_k = C_D c · sensor_k. Costs n_species filter sweeps per RHS; the flux
     # assembly's correction velocity keeps Σ_k J_k = 0 despite unequal D_k.
     # Only meaningful with more than one species.
-    if solver.n_species > 1
-        for sp in 1:solver.n_species
+    if solver.equations.n_species > 1
+        for sp in 1:solver.equations.n_species
             delta4_sum!(solver.sensor_sp, solver.Y[sp], solver, 1)
             smooth!(solver.sensor_sp, solver)
             @threaded nx*ny*nz for k in 1:nz

@@ -354,7 +354,7 @@ end
         dQ = zero(Q)
         compute_rhs!(solver, Q, dQ)
         m = maximum(abs(dQ[gidx(solver, i, j, k), c])
-                    for c in 1:solver.n_cons, i in 1:solver.decomp.n_local[1],
+                    for c in 1:solver.equations.n_cons, i in 1:solver.decomp.n_local[1],
                         j in 1:solver.decomp.n_local[2], k in 1:solver.decomp.n_local[3])
         @test m < 1e-8
     end
@@ -376,6 +376,57 @@ end
     @test solver.Y[2][I] ≈ 0.65 atol = 1e-12
 end
 
+@testset "EquationSet owns the conserved layout" begin
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 0.2, 1.09)])
+    solver = mkslv(n_global=(12, 12, 12), eos=eos)
+    @test solver.equations isa NavierStokes1T
+    @test solver.equations.n_species == 2
+    @test solver.equations.n_cons == 6
+    @test solver.equations.i_mom == (3, 4, 5)
+    @test solver.equations.i_energy == 6
+    @test solver.equations.component_names ==
+          ["rho_a", "rho_b", "rho_u1", "rho_u2", "rho_u3", "rho_E"]
+    @test fieldtype(typeof(solver), :eos) === typeof(solver.eos)
+    @test fieldtype(typeof(solver), :metric) === typeof(solver.metric)
+    @test fieldtype(typeof(solver), :folds) === typeof(solver.folds)
+end
+
+@testset "tuple source terms add momentum and energy work" begin
+    force = ConstantBodyForce((1.0, 2.0, -3.0))
+    solver = mkslv(n_global=(12, 12, 12), sources=(force,))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) ->
+        Prim(u=(0.5, 0.25, -0.1), p=1.0, rho=2.0))
+    dQ = zero(Q)
+    compute_rhs!(solver, Q, dQ)
+    I = gidx(solver, 3, 4, 5)
+    @test dQ[I, solver.equations.i_mom[1]] ≈ 2.0 atol = 1e-10
+    @test dQ[I, solver.equations.i_mom[2]] ≈ 4.0 atol = 1e-10
+    @test dQ[I, solver.equations.i_mom[3]] ≈ -6.0 atol = 1e-10
+    @test dQ[I, solver.equations.i_energy] ≈ 2.6 atol = 1e-10
+    @test typeof(solver.sources) === Tuple{typeof(force)}
+end
+
+@testset "Workspace reproduces explicit stage arrays" begin
+    solver1 = mkslv(n_global=(12, 12, 12))
+    solver2 = mkslv(n_global=(12, 12, 12))
+    Q1 = allocate_state(solver1)
+    Q2 = allocate_state(solver2)
+    ic = (x, y, z) -> Prim(u=(0.1sin(x), -0.1cos(y), 0.05sin(z)),
+                            p=1 + 0.02cos(x), rho=1 + 0.03sin(y))
+    initialize!(solver1, Q1, ic)
+    initialize!(solver2, Q2, ic)
+    dQ = zero(Q1)
+    du = zero(Q1)
+    workspace = Workspace(Q2)
+    step!(solver1, Q1, dQ, du, 1e-4)
+    step!(solver2, Q2, workspace, 1e-4)
+    @test Q1 == Q2
+    @test dQ == workspace.dQ
+    @test du == workspace.du
+end
+
 @testset "conservation: periodic RHS integrates to zero" begin
     solver = mkslv(n_global=(16, 16, 16), transport=Transport(mu0=1e-3))
     Q = allocate_state(solver)
@@ -384,7 +435,7 @@ end
              p=1 + 0.05cos(x)cos(z), rho=1 + 0.1sin(y)))
     dQ = zero(Q)
     compute_rhs!(solver, Q, dQ)
-    for c in 1:solver.n_cons
+    for c in 1:solver.equations.n_cons
         tot = sum(dQ[gidx(solver, i, j, k), c] for i in 1:16, j in 1:16, k in 1:16)
         @test abs(tot) < 1e-8 * 16^3
     end
@@ -402,7 +453,7 @@ end
     compute_rhs!(solver, Q, dQ)
     nx = solver.decomp.n_local[1]
     m = maximum(abs(dQ[gidx(solver, nx, j, k), c])
-                for c in 1:solver.n_cons, j in 1:12, k in 1:12)
+                for c in 1:solver.equations.n_cons, j in 1:12, k in 1:12)
     @test m < 1e-8
 end
 
@@ -439,7 +490,7 @@ end
     apply_bcs!(solver, Q)
     nx = solver.decomp.n_local[1]
     d = 0.0
-    for c in 1:solver.n_cons, j in 1:12, k in 1:12
+    for c in 1:solver.equations.n_cons, j in 1:12, k in 1:12
         d = max(d, abs(Q[gidx(solver, 1, j, k), c]  - Q[gidx(solver, 2, j, k), c]))
         d = max(d, abs(Q[gidx(solver, nx, j, k), c] - Q[gidx(solver, nx-1, j, k), c]))
     end
@@ -467,7 +518,8 @@ end
     apply_bcs!(solver, Q)
     dQ = zero(Q)
     compute_rhs!(solver, Q, dQ)
-    m = maximum(abs(dQ[gidx(solver, 1, j, k), c]) for c in 1:solver.n_cons, j in 1:12, k in 1:12)
+    m = maximum(abs(dQ[gidx(solver, 1, j, k), c])
+                for c in 1:solver.equations.n_cons, j in 1:12, k in 1:12)
     @test m < 1e-8
     # and a mismatched stream must produce a non-trivial correction
     Q2 = allocate_state(solver)
@@ -475,7 +527,8 @@ end
     apply_bcs!(solver, Q2)
     dQ2 = zero(Q2)
     compute_rhs!(solver, Q2, dQ2)
-    m2 = maximum(abs(dQ2[gidx(solver, 1, j, k), c]) for c in 1:solver.n_cons, j in 1:12, k in 1:12)
+    m2 = maximum(abs(dQ2[gidx(solver, 1, j, k), c])
+                 for c in 1:solver.equations.n_cons, j in 1:12, k in 1:12)
     @test m2 > 1e-3
 end
 
@@ -600,7 +653,7 @@ end
         solver, Q = build()
         run!(solver, Q; tfinal=1e9, nmax=3)
         bad = any(!isfinite(Q[gidx(solver, i, j, k), c])
-                  for c in 1:solver.n_cons, i in 1:solver.decomp.n_local[1],
+                  for c in 1:solver.equations.n_cons, i in 1:solver.decomp.n_local[1],
                       j in 1:solver.decomp.n_local[2], k in 1:solver.decomp.n_local[3])
         @test !bad
     end

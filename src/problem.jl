@@ -41,7 +41,7 @@ end
 EOS contract: primitive → conserved (ρY₁..ρY_Ns, ρu, ρv, ρw, E). Implemented
 here for ideal mixtures; future EOS models supply their own method.
 """
-function conserved_from_prim(eos::IdealMixture, pr::Prim{N}) where {N}
+function conserved_from_prim(::NavierStokes1T, eos::IdealMixture, pr::Prim{N}) where {N}
     N == nspecies(eos) ||
         error("Prim carries $N mass fractions; EOS has $(nspecies(eos)) species")
     Rm = 0.0; cvm = 0.0
@@ -57,9 +57,12 @@ function conserved_from_prim(eos::IdealMixture, pr::Prim{N}) where {N}
      ρ * (cvm * T_ion + ke))
 end
 
+conserved_from_prim(eos::EOS, pr::Prim) =
+    conserved_from_prim(NavierStokes1T(eos), eos, pr)
+
 @inline function write_conserved!(Q, I, solver, pr::Prim)
-    q = conserved_from_prim(solver.eos, pr)
-    @inbounds for c in 1:solver.n_cons
+    q = conserved_from_prim(solver.equations, solver.eos, pr)
+    @inbounds for c in 1:solver.equations.n_cons
         Q[I, c] = q[c]
     end
     return Q
@@ -146,6 +149,7 @@ Base.@kwdef struct Problem
     eos::EOS = single_species()
     transport::Transport{Float64} = Transport()
     metric::Metric = CartesianMetric()
+    sources::Tuple = ()
     domain::NTuple{3,Tuple{Float64,Float64}}
     bcs::NTuple{3,Tuple{BoundaryCondition,BoundaryCondition}}
     ic::Function
@@ -190,7 +194,8 @@ function setup(prob::Problem, num::Numerics)
     end
     solver = Solver(n_global=num.n_global, L_domain=L_domain, bcs=prob.bcs,
                eos=prob.eos, transport=prob.transport, art=num.art,
-               metric=prob.metric, stretch=num.stretch, origin=origin,
+               metric=prob.metric, stretch=num.stretch, sources=prob.sources,
+               origin=origin,
                deriv=num.deriv, filt=num.filt,
                cfl=num.cfl, filter_interval=num.filter_interval,
                dims=num.dims, n_halo=num.n_halo)
