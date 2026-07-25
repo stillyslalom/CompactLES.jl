@@ -107,9 +107,14 @@ supersonic/forced inflow, pistons, and oscillating drivers. For subsonic
 inflow a characteristic (NSCBC) treatment is physically preferable and
 remains a TODO; a full-state Dirichlet over-constrains subsonic boundaries
 and will reflect.
+
+Parametric on the callback type: a `fun::Function` field is abstract, so the
+per-point call in `enforce!` would be a runtime dispatch AND its `Prim` result
+would infer as `Any`, poisoning the rest of the loop body. Specializing on
+`typeof(fun)` makes both concrete.
 """
-struct DirichletBC <: BoundaryCondition
-    fun::Function
+struct DirichletBC{F} <: BoundaryCondition
+    fun::F
 end
 
 function enforce!(bc::DirichletBC, Q, s, d, side)

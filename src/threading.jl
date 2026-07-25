@@ -39,7 +39,9 @@ function __init_threading__()
     return nothing
 end
 
-@inline _use_threads(work::Integer) =
+# Takes Int, not Integer: an abstract parameter type leaves the `>=` below as a
+# runtime dispatch, once per threaded region (~150 per RHS call).
+@inline _use_threads(work::Int) =
     Threads.nthreads() > 1 && work >= THREAD_MIN_WORK[]
 
 """
@@ -52,7 +54,7 @@ macro threaded(work, loop)
     (loop isa Expr && loop.head === :for) ||
         error("@threaded expects `@threaded <work> for ... end`")
     return esc(quote
-        if $CompactLES._use_threads($work)
+        if $CompactLES._use_threads(Int($work))
             Threads.@threads $loop
         else
             $loop

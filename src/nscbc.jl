@@ -152,7 +152,13 @@ end
 # there). Constant targets for now; (x, t)-dependent targets are a natural
 # extension via the same Prim-function pattern as DirichletBC.
 
-Base.@kwdef struct NSCBCInflowBC <: BoundaryCondition
+# Parametric on the target-callback type: a `Union{Nothing,Function}` field is
+# abstract, so `bc.target(...)` was a runtime dispatch whose `Prim` result
+# inferred as `Any` — and since uT/TT/YT are read from it, every downstream
+# expression in the point loop went dynamic too. `F` is `Nothing` when no
+# target is supplied, which the `bc.target !== nothing` test then resolves at
+# compile time.
+Base.@kwdef struct NSCBCInflowBC{F} <: BoundaryCondition
     u::NTuple{3,Float64}            # target velocity (coordinate-aligned)
     T::Float64                      # target temperature
     Y::Vector{Float64} = [1.0]      # target composition
@@ -161,7 +167,7 @@ Base.@kwdef struct NSCBCInflowBC <: BoundaryCondition
     eta_t::Float64 = 0.28
     eta_Y::Float64 = 0.28
     Lref::Float64  = 0.0            # ≤ 0 → domain length in d
-    target::Union{Nothing,Function} = nothing
+    target::F = nothing
     # Optional (x₁, x₂, x₃, t) -> Prim overriding the constant targets per
     # point at the RK stage time (the Prim must carry T and the full Y).
 end

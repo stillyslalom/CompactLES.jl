@@ -52,9 +52,13 @@ struct PoleBC <: BoundaryCondition end
 isperiodic(::BoundaryCondition) = false
 isperiodic(::PeriodicBC) = true
 
+"Concrete plane type, so `for I in wallplane(...)` yields `CartesianIndex{3}`
+rather than `Any`. See the note on the constructor below."
+const WallPlane = CartesianIndices{3,Tuple{UnitRange{Int},UnitRange{Int},UnitRange{Int}}}
+
 "CartesianIndices of the wall plane for (dim, side), or nothing if this rank
 does not own that global edge."
-function wallplane(dec::Decomp, d::Int, side::Int)
+function wallplane(dec::Decomp, d::Int, side::Int)::Union{Nothing,WallPlane}
     if side == 1
         dec.subrank[d] == 0 || return nothing
         i = 1
@@ -62,9 +66,18 @@ function wallplane(dec::Decomp, d::Int, side::Int)
         dec.subrank[d] == dec.subsize[d] - 1 || return nothing
         i = dec.nloc[d]
     end
+    # Built out of three explicit locals rather than ntuple(closure, 3):
+    # inference widens the closure form to CartesianIndices{3,<:Tuple{
+    # OrdinalRange,...}} even though every runtime value is a UnitRange, which
+    # makes the loop variable in `for I in pl` infer as Any. Every array access
+    # in the wall and NSCBC loops then goes through runtime dispatch — O(N^2)
+    # of them per face per RK stage.
     Hd = dec.Hd
-    CartesianIndices(ntuple(k -> k == d ? (Hd[k]+i:Hd[k]+i) :
-                                          (Hd[k]+1:Hd[k]+dec.nloc[k]), 3))
+    n = dec.nloc
+    r1 = d == 1 ? (Hd[1]+i:Hd[1]+i) : (Hd[1]+1:Hd[1]+n[1])
+    r2 = d == 2 ? (Hd[2]+i:Hd[2]+i) : (Hd[2]+1:Hd[2]+n[2])
+    r3 = d == 3 ? (Hd[3]+i:Hd[3]+i) : (Hd[3]+1:Hd[3]+n[3])
+    return CartesianIndices((r1, r2, r3))
 end
 
 enforce!(::PeriodicBC, Q, s, d, side) = nothing
