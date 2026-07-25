@@ -36,19 +36,18 @@ function wrap_dim!(f, dec::Decomp, d::Int)
 end
 
 """
-    exchange_halos!(f, dec)
+    exchange_dim!(f, dec, d)
 
-Fill the rank-boundary halos of scalar field `f` (sized nloc .+ 2H) from
-neighboring ranks. Must be called from a serial (non-threaded) section.
+Fill the rank-boundary halos of scalar field `f` along ONE dimension. This is
+all a 1-D stencil along `d` needs: corner halos only matter to operators that
+read off-axis, so anything applying a directional operator (the compact filter
+in `smooth!`, for one) should call this rather than paying for all three
+dimensions per direction.
 """
-function exchange_halos!(f::AbstractArray{<:Real,3}, dec::Decomp)
-    H = dec.H
-    for d in 1:3
-        dec.active[d] || continue
-        if selfwrap(dec, d)
-            wrap_dim!(f, dec, d)
-            continue
-        end
+function exchange_dim!(f::AbstractArray{<:Real,3}, dec::Decomp, d::Int)
+    dec.active[d] || return f
+    selfwrap(dec, d) && return wrap_dim!(f, dec, d)
+    let H = dec.H
         n = dec.nloc[d]
         lo, hi = dec.nbr[d]
         # The send/recv buffers are shared with exchange_dim_batch!, which grows
@@ -70,6 +69,21 @@ function exchange_halos!(f::AbstractArray{<:Real,3}, dec::Decomp)
         MPI.Sendrecv!(sv, rv, dec.comm; dest=lo, source=hi,
                       sendtag=10d + 1, recvtag=10d + 1)
         hi != PNULL && copyto!(_slab(f, d, (n+H+1):(n+2H)), rv)
+    end
+    return f
+end
+
+"""
+    exchange_halos!(f, dec)
+
+Fill the rank-boundary halos of scalar field `f` (sized nloc .+ 2H) from
+neighboring ranks, all three dimensions. Sequential per dimension, so edge and
+corner halos come out filled without dedicated diagonal messages. Must be
+called from a serial (non-threaded) section.
+"""
+function exchange_halos!(f::AbstractArray{<:Real,3}, dec::Decomp)
+    for d in 1:3
+        exchange_dim!(f, dec, d)
     end
     return f
 end

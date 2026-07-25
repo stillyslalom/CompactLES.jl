@@ -62,7 +62,12 @@ Gaussian-filter proxy (even-parity axis fill along r when applicable)."
 function smooth!(f, s)
     for d in 1:3
         s.dec.active[d] || continue
-        exchange_halos!(f, s.dec)
+        # Only dimension d: the filter about to run is a 1-D stencil along d,
+        # so the other two dimensions' halos are dead. This used to call
+        # exchange_halos!, refreshing all three every time round the loop --
+        # three times the traffic it needs in a 3-D run, on a routine that
+        # runs once per sensor per species per RHS.
+        exchange_dim!(f, s.dec, d)
         filt_along!(s.tmpA, f, s, d, 1)
         copy_interior!(f, s.tmpA, s.dec)
     end
