@@ -24,19 +24,19 @@ end
 const D4 = (1.0, -4.0, 6.0, -4.0, 1.0)   # offsets −2:2
 
 """
-    delta4_sum!(out, f, s, wpow; accumulate=false)
+    delta4_sum!(out, f, solver, wpow; accumulate=false)
 
 Interior accumulation of Σ_d h_d^wpow |δ⁴_d f| into `out` (added to existing
 contents when `accumulate`). Requires current rank-boundary halos of `f`.
 """
-function delta4_sum!(out, f, s, wpow::Int; accumulate::Bool=false)
-    decomp = s.decomp
+function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false)
+    decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     accumulate || fill!(out, 0)
     for d in 1:3
         decomp.active[d] || continue
-        wd = s.h[d]^wpow
+        wd = solver.h[d]^wpow
         n_d = decomp.n_local[d]
         lomin = at_lo_edge(decomp, d) ? 1 : -1
         himax = at_hi_edge(decomp, d) ? n_d : n_d + 2
@@ -59,36 +59,37 @@ end
 
 "One directional compact-filter pass per active dimension as a
 Gaussian-filter proxy (even-parity axis fill along r when applicable)."
-function smooth!(f, s)
+function smooth!(f, solver)
     for d in 1:3
-        s.decomp.active[d] || continue
+        solver.decomp.active[d] || continue
         # Only dimension d: the filter about to run is a 1-D stencil along d,
         # so the other two dimensions' halos are dead. This used to call
         # exchange_halos!, refreshing all three every time round the loop --
         # three times the traffic it needs in a 3-D run, on a routine that
         # runs once per sensor per species per RHS.
-        exchange_dim!(f, s.decomp, d)
-        filt_along!(s.tmp_a, f, s, d, 1)
-        copy_interior!(f, s.tmp_a, s.decomp)
+        exchange_dim!(f, solver.decomp, d)
+        filt_along!(solver.tmp_a, f, solver, d, 1)
+        copy_interior!(f, solver.tmp_a, solver.decomp)
     end
     return f
 end
 
 """
-    compute_artificial!(s, Q)
+    compute_artificial!(solver, Q)
 
-Fill s.mu_art, s.beta_art, s.kappa_art, s.D_art from the current primitives and
-(metric-corrected) velocity gradients. No-op if disabled.
+Fill solver.mu_art, solver.beta_art, solver.kappa_art and solver.D_art from
+the current primitives and (metric-corrected) velocity gradients. No-op if
+disabled.
 """
-function compute_artificial!(s, Q)
-    art = s.art
+function compute_artificial!(solver, Q)
+    art = solver.art
     if !art.enabled
-        return s   # arrays stay zero from allocation
+        return solver   # arrays stay zero from allocation
     end
-    decomp = s.decomp
+    decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    grad_u = s.grad_u
+    grad_u = solver.grad_u
 
     # Strain-rate magnitude |S| = sqrt(S_ij S_ij) in the interior (physical
     # components — the metric corrections are already in grad_u).
@@ -100,42 +101,42 @@ function compute_artificial!(s, Q)
                 Sab = 0.5 * (grad_u[a, b][I] + grad_u[b, a][I])
                 ss += Sab * Sab
             end
-            s.strain_mag[I] = sqrt(ss)
+            solver.strain_mag[I] = sqrt(ss)
         end
     end
 
     # μ*, β* sensor: Σ_d h_d² |δ⁴_d S|, smoothed.
-    exchange_halos!(s.strain_mag, decomp)
-    delta4_sum!(s.sensor, s.strain_mag, s, 2)
-    smooth!(s.sensor, s)
+    exchange_halos!(solver.strain_mag, decomp)
+    delta4_sum!(solver.sensor, solver.strain_mag, solver, 2)
+    smooth!(solver.sensor, solver)
     @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
-            ρsensor = s.rho[I] * max(s.sensor[I], 0.0)
-            s.mu_art[I]   = art.C_mu   * ρsensor
-            s.beta_art[I] = art.C_beta * ρsensor
+            ρsensor = solver.rho[I] * max(solver.sensor[I], 0.0)
+            solver.mu_art[I]   = art.C_mu   * ρsensor
+            solver.beta_art[I] = art.C_beta * ρsensor
         end
     end
 
     # κ* sensor: Σ_d h_d |δ⁴_d e|, smoothed; κ* = C_κ (ρ c / T_ion) · sensor.
     # Internal energy directly from Q — EOS-agnostic.
-    i_energy = s.i_energy
-    m1, m2, m3 = s.i_mom
-    @threaded length(s.tmp_a) for k in 1:size(s.tmp_a, 3)
-        @inbounds for j in 1:size(s.tmp_a, 2), i in 1:size(s.tmp_a, 1)
-            ρ = max(s.rho[i, j, k], 1e-300)
+    i_energy = solver.i_energy
+    m1, m2, m3 = solver.i_mom
+    @threaded length(solver.tmp_a) for k in 1:size(solver.tmp_a, 3)
+        @inbounds for j in 1:size(solver.tmp_a, 2), i in 1:size(solver.tmp_a, 1)
+            ρ = max(solver.rho[i, j, k], 1e-300)
             ke = 0.5 * (Q[i,j,k,m1]^2 + Q[i,j,k,m2]^2 + Q[i,j,k,m3]^2) / ρ
-            s.tmp_a[i, j, k] = (Q[i, j, k, i_energy] - ke) / ρ
+            solver.tmp_a[i, j, k] = (Q[i, j, k, i_energy] - ke) / ρ
         end
     end
-    exchange_halos!(s.tmp_a, decomp)
-    delta4_sum!(s.sensor, s.tmp_a, s, 1)
-    smooth!(s.sensor, s)
+    exchange_halos!(solver.tmp_a, decomp)
+    delta4_sum!(solver.sensor, solver.tmp_a, solver, 1)
+    smooth!(solver.sensor, solver)
     @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
-            s.kappa_art[I] = art.C_kappa * s.rho[I] * s.c[I] /
-                          max(s.T_ion[I], eps()) * max(s.sensor[I], 0.0)
+            solver.kappa_art[I] = art.C_kappa * solver.rho[I] * solver.c[I] /
+                max(solver.T_ion[I], eps()) * max(solver.sensor[I], 0.0)
         end
     end
 
@@ -143,17 +144,17 @@ function compute_artificial!(s, Q)
     # D*_k = C_D c · sensor_k. Costs n_species filter sweeps per RHS; the flux
     # assembly's correction velocity keeps Σ_k J_k = 0 despite unequal D_k.
     # Only meaningful with more than one species.
-    if s.n_species > 1
-        for sp in 1:s.n_species
-            delta4_sum!(s.sensor_sp, s.Y[sp], s, 1)
-            smooth!(s.sensor_sp, s)
+    if solver.n_species > 1
+        for sp in 1:solver.n_species
+            delta4_sum!(solver.sensor_sp, solver.Y[sp], solver, 1)
+            smooth!(solver.sensor_sp, solver)
             @threaded nx*ny*nz for k in 1:nz
                 @inbounds for j in 1:ny, i in 1:nx
                     I = CartesianIndex(i + o1, j + o2, k + o3)
-                    s.D_art[sp][I] = art.C_D * s.c[I] * max(s.sensor_sp[I], 0.0)
+                    solver.D_art[sp][I] = art.C_D * solver.c[I] * max(solver.sensor_sp[I], 0.0)
                 end
             end
         end
     end
-    return s
+    return solver
 end

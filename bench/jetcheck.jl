@@ -13,10 +13,10 @@ using JET, Printf
 const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
-s = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
+solver = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
            transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
-Q = allocate_state(s); dQ = zero(Q); du = zero(Q)
-initialize!(s, Q, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
+Q = allocate_state(solver); dQ = zero(Q); du = zero(Q)
+initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
 
 # axis-fold solver: exercises the fold path, which the Cartesian one skips
 sf = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
@@ -42,13 +42,13 @@ function summarize(name, res)
     end
 end
 
-summarize("primitives!",   @report_opt target_modules=(CL,) CL.primitives!(s, Q))
-summarize("deriv_along!",  @report_opt target_modules=(CL,) CL.deriv_along!(s.tmp_a, s.rho, s, 1, 1))
-summarize("apply_bcs!",    @report_opt target_modules=(CL,) apply_bcs!(s, Q))
-summarize("compute_rhs!",  @report_opt target_modules=(CL,) compute_rhs!(s, Q, dQ))
-summarize("compute_dt",    @report_opt target_modules=(CL,) compute_dt(s, Q))
-summarize("filter_state!", @report_opt target_modules=(CL,) filter_state!(s, Q))
-summarize("step!",         @report_opt target_modules=(CL,) step!(s, Q, dQ, du, 1e-4))
+summarize("primitives!",   @report_opt target_modules=(CL,) CL.primitives!(solver, Q))
+summarize("deriv_along!",  @report_opt target_modules=(CL,) CL.deriv_along!(solver.tmp_a, solver.rho, solver, 1, 1))
+summarize("apply_bcs!",    @report_opt target_modules=(CL,) apply_bcs!(solver, Q))
+summarize("compute_rhs!",  @report_opt target_modules=(CL,) compute_rhs!(solver, Q, dQ))
+summarize("compute_dt",    @report_opt target_modules=(CL,) compute_dt(solver, Q))
+summarize("filter_state!", @report_opt target_modules=(CL,) filter_state!(solver, Q))
+summarize("step!",         @report_opt target_modules=(CL,) step!(solver, Q, dQ, du, 1e-4))
 summarize("compute_rhs! (axis fold)", @report_opt target_modules=(CL,) compute_rhs!(sf, Qf, dQf))
 
 println("\njet check complete")

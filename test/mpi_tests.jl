@@ -61,18 +61,18 @@ end
 const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 "Max interior error of a scalar field against an analytic function (this rank)."
-function ferr(s, f, fn)
+function ferr(solver, f, fn)
     e = 0.0
-    for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
-        e = max(e, abs(f[gidx(s, i, j, k)] -
-                       fn(xcoord(s, 1, i), xcoord(s, 2, j), xcoord(s, 3, k))))
+    for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
+        e = max(e, abs(f[gidx(solver, i, j, k)] -
+                       fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))))
     end
     e
 end
 
-fillf!(s, f, fn) = (for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2],
-                        i in 1:s.decomp.n_local[1]
-    f[gidx(s, i, j, k)] = fn(xcoord(s, 1, i), xcoord(s, 2, j), xcoord(s, 3, k))
+fillf!(solver, f, fn) = (for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
+                        i in 1:solver.decomp.n_local[1]
+    f[gidx(solver, i, j, k)] = fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))
 end; f)
 
 gmax(x) = MPI.Allreduce(Float64(x), MPI.MAX, comm)
@@ -115,17 +115,17 @@ function test_periodic_c6()
     # Split each dimension in turn.
     for ax in 1:3
         ng = ntuple(d -> d == ax ? SPLITN : 16, 3)
-        s = Solver(n_global=ng, L_domain=(2π, 2π, 2π), bcs=per3,
+        solver = Solver(n_global=ng, L_domain=(2π, 2π, 2π), bcs=per3,
                    art=ArtParams(enabled=false), dims=splitdims(ax))
-        f = CL.field(s.decomp); df = CL.field(s.decomp)
-        fillf!(s, f, fx)
-        CL.exchange_halos!(f, s.decomp)
-        CL.deriv_along!(df, f, s, ax, 1); CL._scale_grad!(df, s, ax)
+        f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+        fillf!(solver, f, fx)
+        CL.exchange_halos!(f, solver.decomp)
+        CL.deriv_along!(df, f, solver, ax, 1); CL._scale_grad!(df, solver, ax)
         ref = ax == 1 ? dfx : ax == 2 ? dfy : ((x, y, z) -> 0.0)
         # x/y derivatives of sin(3x)cos(2y) are nontrivial; the z derivative is 0.
         tol = ax == 3 ? 1e-10 : 1e-4
         check("∂/∂x$(ax) split $(np)-way (dims=$(splitdims(ax)))",
-              gmax(ferr(s, df, ref)), tol)
+              gmax(ferr(solver, df, ref)), tol)
     end
 end
 
@@ -142,15 +142,15 @@ function test_pentadiagonal_c10()
     dfy = (x, y, z) -> -2sin(3x) * sin(2y)
     for ax in 1:2   # x (direct) and y (transposed banded path)
         ng = ntuple(d -> d == ax ? SPLITN : 16, 3)
-        s = Solver(n_global=ng, L_domain=(2π, 2π, 2π), bcs=per3,
+        solver = Solver(n_global=ng, L_domain=(2π, 2π, 2π), bcs=per3,
                    deriv=lele_d1_10(), art=ArtParams(enabled=false),
                    dims=splitdims(ax))
-        f = CL.field(s.decomp); df = CL.field(s.decomp)
-        fillf!(s, f, fx)
-        CL.exchange_halos!(f, s.decomp)
-        CL.deriv_along!(df, f, s, ax, 1); CL._scale_grad!(df, s, ax)
+        f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+        fillf!(solver, f, fx)
+        CL.exchange_halos!(f, solver.decomp)
+        CL.deriv_along!(df, f, solver, ax, 1); CL._scale_grad!(df, solver, ax)
         ref = ax == 1 ? dfx : dfy
-        check("C10 ∂/∂x$(ax) split $(np)-way", gmax(ferr(s, df, ref)), 1e-8)
+        check("C10 ∂/∂x$(ax) split $(np)-way", gmax(ferr(solver, df, ref)), 1e-8)
     end
     # Closed domain (SlipWallBC) with the derivative dimension split: closure
     # rows live on the two edge ranks, interior ranks carry V/W spikes. A deg-3
@@ -173,14 +173,14 @@ end
 # ---------------------------------------------------------------------------
 function test_closed_c6()
     section("closed-domain C6 closures: polynomial exactness, derivative dim split")
-    s = Solver(n_global=(SPLITN, 12, 12), L_domain=(1.0, 1.0, 1.0),
+    solver = Solver(n_global=(SPLITN, 12, 12), L_domain=(1.0, 1.0, 1.0),
                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                art=ArtParams(enabled=false), dims=splitdims(1))
-    f = CL.field(s.decomp); df = CL.field(s.decomp)
-    fillf!(s, f, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
-    CL.exchange_halos!(f, s.decomp)
-    CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
-    check("C6 closed-domain deg-3 exact, x split", gmax(ferr(s, df,
+    f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+    fillf!(solver, f, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
+    CL.exchange_halos!(f, solver.decomp)
+    CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
+    check("C6 closed-domain deg-3 exact, x split", gmax(ferr(solver, df,
           (x, y, z) -> 2 + 6x - 3x^2)), 1e-9)
 end
 
@@ -198,15 +198,15 @@ function test_offrank_folds()
     # is smooth through the axis and ODD under (r,θ)→(−r,θ) with the pairing.
     # θ count 48 is even and divisible by np∈{2,4,8}, and keeps ≥ 5 θ-points
     # per rank for the θ filter/derivative plans (≥ 9 at np = 8).
-    s = Solver(n_global=(40, SPLITN, 1), L_domain=(1.0, 2π, 1.0),
+    solver = Solver(n_global=(40, SPLITN, 1), L_domain=(1.0, 2π, 1.0),
                metric=CylindricalMetric(),
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
                art=ArtParams(enabled=false), dims=splitdims(2))
-    f = CL.field(s.decomp); df = CL.field(s.decomp)
-    fillf!(s, f, (r, θ, z) -> r * cos(θ) * exp(-4r^2))
-    CL.exchange_halos!(f, s.decomp)
-    CL.deriv_along!(df, f, s, 1, -1); CL._scale_grad!(df, s, 1)
-    check("cyl axis ∂/∂r, θ split (off-rank shift)", gmax(ferr(s, df,
+    f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+    fillf!(solver, f, (r, θ, z) -> r * cos(θ) * exp(-4r^2))
+    CL.exchange_halos!(f, solver.decomp)
+    CL.deriv_along!(df, f, solver, 1, -1); CL._scale_grad!(df, solver, 1)
+    check("cyl axis ∂/∂r, θ split (off-rank shift)", gmax(ferr(solver, df,
           (r, θ, z) -> cos(θ) * (1 - 8r^2) * exp(-4r^2))), 1e-4)
 
     # (b) Spherical origin + poles, θ SPLIT. The origin fold reverses θ in its
@@ -245,14 +245,14 @@ function test_halo_consistency()
     # Comparison covers the full padded arrays, halos included.
     for ax in 1:3
         ng = ntuple(d -> d == ax ? SPLITN : 16, 3)
-        s = Solver(n_global=ng, L_domain=(2π, 2π, 2π), bcs=per3,
+        solver = Solver(n_global=ng, L_domain=(2π, 2π, 2π), bcs=per3,
                    art=ArtParams(enabled=false), dims=splitdims(ax))
-        a = CL.field(s.decomp); b = CL.field(s.decomp); c = CL.field(s.decomp)
-        fillf!(s, a, fn); fillf!(s, b, fn); fillf!(s, c, fn)
+        a = CL.field(solver.decomp); b = CL.field(solver.decomp); c = CL.field(solver.decomp)
+        fillf!(solver, a, fn); fillf!(solver, b, fn); fillf!(solver, c, fn)
         for d in 1:3
-            CL.exchange_dim_batch!([b, c], s.decomp, d)   # grows the shared buffer
+            CL.exchange_dim_batch!([b, c], solver.decomp, d)   # grows the shared buffer
         end
-        CL.exchange_halos!(a, s.decomp)                   # must still send one slab
+        CL.exchange_halos!(a, solver.decomp)                   # must still send one slab
         e = maximum(abs, a .- b)
         check("batched ≡ per-array, dim $ax split $(np)-way", gmax(e), 1e-14)
     end
@@ -263,16 +263,16 @@ function test_halo_consistency()
     # layers. Uses the DEFAULT process grid (dims=nothing) so the automatic
     # Dims_create path is covered too; at np ≥ 4 that is a genuine 2-D/3-D
     # grid with real diagonal neighbours.
-    s = Solver(n_global=(24, 24, 24), L_domain=(2π, 2π, 2π), bcs=per3,
+    solver = Solver(n_global=(24, 24, 24), L_domain=(2π, 2π, 2π), bcs=per3,
                art=ArtParams(enabled=false))
-    f = CL.field(s.decomp)
-    fillf!(s, f, fn)
-    CL.exchange_halos!(f, s.decomp)
+    f = CL.field(solver.decomp)
+    fillf!(solver, f, fn)
+    CL.exchange_halos!(f, solver.decomp)
     e = 0.0
-    for kk in (0, s.decomp.n_local[3] + 1), jj in (0, s.decomp.n_local[2] + 1),
-        ii in (0, s.decomp.n_local[1] + 1)
-        e = max(e, abs(f[gidx(s, ii, jj, kk)] -
-                       fn(xcoord(s, 1, ii), xcoord(s, 2, jj), xcoord(s, 3, kk))))
+    for kk in (0, solver.decomp.n_local[3] + 1), jj in (0, solver.decomp.n_local[2] + 1),
+        ii in (0, solver.decomp.n_local[1] + 1)
+        e = max(e, abs(f[gidx(solver, ii, jj, kk)] -
+                       fn(xcoord(solver, 1, ii), xcoord(solver, 2, jj), xcoord(solver, 3, kk))))
     end
     check("corner halos filled (all 8 corners)", gmax(e), 1e-12)
 end
@@ -313,16 +313,16 @@ function test_freestream()
     for cs in cases
         kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain, metric=cs.metric,
                     bcs=cs.bcs, dims=cs.dims, art=ArtParams(enabled=false)), cs.kw)
-        s = Solver(; kw...)
-        Q = allocate_state(s)
-        initialize!(s, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
-        apply_bcs!(s, Q)
+        solver = Solver(; kw...)
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
+        apply_bcs!(solver, Q)
         dQ = zero(Q)
-        compute_rhs!(s, Q, dQ)
+        compute_rhs!(solver, Q, dQ)
         m = 0.0
-        for c in 1:s.n_cons, k in 1:s.decomp.n_local[3],
-            j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
-            m = max(m, abs(dQ[gidx(s, i, j, k), c]))
+        for c in 1:solver.n_cons, k in 1:solver.decomp.n_local[3],
+            j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
+            m = max(m, abs(dQ[gidx(solver, i, j, k), c]))
         end
         check(cs.name, gmax(m), 1e-8)
     end
@@ -335,21 +335,21 @@ end
 function test_conservation()
     section("conservation: periodic RHS integrates to zero (global sum)")
     N = SPLITN                   # ≥ 9 per rank up to np = 8 (filter closure)
-    s = Solver(n_global=(N, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
+    solver = Solver(n_global=(N, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
                transport=Transport(mu0=1e-3), art=ArtParams(enabled=false),
                dims=splitdims(1))
-    Q = allocate_state(s)
-    initialize!(s, Q, (x, y, z) ->
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) ->
         Prim(u=(0.1sin(x)cos(y), -0.1cos(x)sin(y), 0.05sin(z)),
              p=1 + 0.05cos(x)cos(z), rho=1 + 0.1sin(y)))
     dQ = zero(Q)
-    compute_rhs!(s, Q, dQ)
+    compute_rhs!(solver, Q, dQ)
     worst = 0.0
     npts = N * 16 * 16
-    for c in 1:s.n_cons
+    for c in 1:solver.n_cons
         loc = 0.0
-        for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
-            loc += dQ[gidx(s, i, j, k), c]
+        for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
+            loc += dQ[gidx(solver, i, j, k), c]
         end
         worst = max(worst, abs(gsum(loc)))
     end
@@ -365,12 +365,12 @@ end
 # ---------------------------------------------------------------------------
 function test_sync()
     section("global synchronization: dt and time identical on every rank")
-    s = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
+    solver = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
                art=ArtParams(enabled=false), dims=splitdims(1))
-    Q = allocate_state(s)
-    initialize!(s, Q, (x, y, z) ->
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) ->
         Prim(u=(0.2sin(x), 0, 0), p=1 + 0.1cos(y), rho=1 + 0.2sin(z)))
-    dt = compute_dt(s, Q)
+    dt = compute_dt(solver, Q)
     spread = MPI.Allreduce(dt, max, comm) - MPI.Allreduce(dt, min, comm)
     check("compute_dt spread across ranks", spread, 1e-15 * dt)
 
@@ -400,20 +400,20 @@ end
 # ---------------------------------------------------------------------------
 function test_checkpoint()
     section("checkpoint round trip, decomposed")
-    s = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
+    solver = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
                art=ArtParams(enabled=false), dims=splitdims(1))
-    Q = allocate_state(s)
-    initialize!(s, Q, (x, y, z) -> Prim(u=(sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
-    s.t = 1.25; s.step = 17
-    save_checkpoint(s, Q, "mpi_ckpt")
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
+    solver.t = 1.25; solver.step = 17
+    save_checkpoint(solver, Q, "mpi_ckpt")
     MPI.Barrier(comm)
-    Q2 = allocate_state(s); s.t = 0.0; s.step = 0
-    load_checkpoint!(s, Q2, "mpi_ckpt")
-    check("restored t and step", abs(s.t - 1.25) + abs(s.step - 17), 1e-15)
+    Q2 = allocate_state(solver); solver.t = 0.0; solver.step = 0
+    load_checkpoint!(solver, Q2, "mpi_ckpt")
+    check("restored t and step", abs(solver.t - 1.25) + abs(solver.step - 17), 1e-15)
     d = 0.0
-    for c in 1:s.n_cons, k in 1:s.decomp.n_local[3],
-        j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
-        d = max(d, abs(Q2[gidx(s, i, j, k), c] - Q[gidx(s, i, j, k), c]))
+    for c in 1:solver.n_cons, k in 1:solver.decomp.n_local[3],
+        j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
+        d = max(d, abs(Q2[gidx(solver, i, j, k), c] - Q[gidx(solver, i, j, k), c]))
     end
     check("state bit-identical after round trip", gmax(d), 1e-300)
     # One rank does the cleanup: every rank wrote its own file, but all of them

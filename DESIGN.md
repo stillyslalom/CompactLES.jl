@@ -127,8 +127,8 @@ Key derived quantities on `Decomp`:
 
 Fields are allocated by `field(decomp)` (a scalar with halos) and `allocate_state`
 (the 4-D conserved array `Q[x, y, z, 1:n_cons]`). Two index helpers recur
-throughout: `gidx(s, i, j, k)` maps a local interior index to the halo-offset
-`CartesianIndex`, and `xcoord(s, d, i)` maps a local index to a physical
+throughout: `gidx(solver, i, j, k)` maps a local interior index to the halo-offset
+`CartesianIndex`, and `xcoord(solver, d, i)` maps a local index to a physical
 coordinate (including any stretch mapping and half-cell offset).
 
 The `Solver` struct (in `rhs.jl`) is the backend container: it holds the
@@ -284,7 +284,7 @@ the README for what the answers mean on polar grids.
 `run!` is the outer loop: step, advance time, and every `filter_interval` steps
 call `filter_state!`, which applies the compact filter to every conserved
 component along every active dimension (with batched halo exchange and the
-correct axis parity per component). An optional `callback(s, Q)` runs after each
+correct axis parity per component). An optional `callback(solver, Q)` runs after each
 step for diagnostics or output.
 
 ## The RHS: a walkthrough
@@ -367,8 +367,8 @@ The geometric arrays (J⁻¹, A_d, 1/h_d, 1/r, cotθ/r) are evaluated analytical
 over the full padded arrays, so they need no halo exchange; scale factors are
 clamped away from zero so that stale physical-edge halo values stay finite.
 
-**Stretched meshes** are a `Stretch(x, dxds)` mapping per dimension from a
-uniform computational coordinate s ∈ [0, 1]. The mapping Jacobian simply
+**Stretched meshes** are a `Stretch(x, dxdξ)` mapping per dimension from a
+uniform computational coordinate ξ ∈ [0, 1]. The mapping Jacobian simply
 multiplies that dimension's scale factor, so stretching composes with
 cylindrical/spherical geometry with no new operator or parallel machinery — the
 curvature corrections were refactored to be *additive* on top of a generic 1/h
@@ -442,7 +442,7 @@ split). The full-ball origin+poles combination has had the least scrutiny.
 
 `IdealMixture` (per-species γ_k and R_k, linear mixture rules) is the provided
 implementation. Because hot loops reach the EOS through a function barrier
-(`primitives!` dispatches on `typeof(s.eos)`), an abstractly typed `eos` field
+(`primitives!` dispatches on `typeof(solver.eos)`), an abstractly typed `eos` field
 costs one dynamic dispatch per array pass, not per point — so cubic
 (Peng–Robinson), polynomial-cₚ, or tabular models can be dropped in behind the
 same interface without touching the flow solver or paying a per-point penalty.
@@ -506,8 +506,8 @@ High-side closures are mirrored automatically. Watch the halo width: a scheme
 whose RHS reaches ±m needs `n_halo ≥ m`.
 
 **New boundary conditions.** Subtype `BoundaryCondition` and implement
-`enforce!(bc, Q, s, dim, side)` for hard state enforcement on the wall plane
-(index sets come from `wallplane`), and/or `correct_rhs!(bc, s, Q, dQ, dim,
+`enforce!(bc, Q, solver, dim, side)` for hard state enforcement on the wall plane
+(index sets come from `wallplane`), and/or `correct_rhs!(bc, solver, Q, dQ, dim,
 side)` for a characteristic RHS correction. Declare periodicity via `isperiodic`.
 
 **New physics.** `assemble_fluxes!` is the single place fluxes are built and

@@ -22,8 +22,8 @@ prob = Problem(
     ic     = (x, y, z) -> Prim(u=(sin(x)*cos(y), -cos(x)*sin(y), 0.0),
                                p=71.43, rho=1.0))
 
-s, Q = setup(prob, Numerics(n_global=(64, 64, 64)))
-run!(s, Q; tfinal=1.0)
+solver, Q = setup(prob, Numerics(n_global=(64, 64, 64)))
+run!(solver, Q; tfinal=1.0)
 ```
 
 ## Features
@@ -135,8 +135,8 @@ Then `setup` marries the two and returns the solver plus the initialized
 conserved state, and `run!` advances it:
 
 ```julia
-s, Q = setup(prob, num)
-run!(s, Q; tfinal=0.25, nmax=100_000, callback=(s, Q) -> ...)
+solver, Q = setup(prob, num)
+run!(solver, Q; tfinal=0.25, nmax=100_000, callback=(solver, Q) -> ...)
 ```
 
 Initial-condition and Dirichlet-forcing functions are plain, pure functions of
@@ -197,7 +197,7 @@ enough to eat the CFL safety margin without ever appearing in the estimate.
 `curvature_rate` adds it (cylindrical and spherical, only for collapsed angular
 dimensions, since resolved ones already cover it through the advective term).
 
-`dt_report(s, Q)` names the global limiter — value, owning rank, index,
+`dt_report(solver, Q)` names the global limiter — value, owning rank, index,
 physical coordinates, direction, and whether it is acoustic, diffusive, or
 curvature-driven. Call it every few hundred steps to confirm a run is limited by
 the physics you care about rather than by the azimuthal spacing at a
@@ -214,10 +214,10 @@ singularity.
 
 ## Output and restart
 
-- **Checkpoints:** `save_checkpoint(s, Q, "prefix")` writes one dependency-free
-  binary file per rank; `load_checkpoint!(s, Q, "prefix")` restores it. Restarts
+- **Checkpoints:** `save_checkpoint(solver, Q, "prefix")` writes one dependency-free
+  binary file per rank; `load_checkpoint!(solver, Q, "prefix")` restores it. Restarts
   require the same global grid and decomposition.
-- **Visualization:** `save_vtk(s, Q, "prefix")` writes per-rank `.vtr` plus a
+- **Visualization:** `save_vtk(solver, Q, "prefix")` writes per-rank `.vtr` plus a
   `.pvtr` container with density, velocity, pressure, temperature, and mass
   fractions on the physical grid (stretch mappings included). Open the `.pvtr`
   in ParaView or VisIt.

@@ -74,30 +74,30 @@ prob = Problem(
 num = Numerics(n_global=(Nx, Ny, Nz), art=ArtParams(enabled=true),
                cfl=0.5, filter_interval=1, dims=(np, 1, 1))
 
-s, Q = setup(prob, num)
+solver, Q = setup(prob, num)
 rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
-function diag(s, Q)
-    s.step % 50 == 0 || return
-    nx, ny, nz = s.decomp.n_local
-    m1 = s.i_mom[1]
+function diag(solver, Q)
+    solver.step % 50 == 0 || return
+    nx, ny, nz = solver.decomp.n_local
+    m1 = solver.i_mom[1]
     ρmin, ρmax, umax = Inf, -Inf, 0.0
     for k in 1:nz, j in 1:ny, i in 1:nx
-        I = gidx(s, i, j, k)
+        I = gidx(solver, i, j, k)
         ρ = Q[I, 1] + Q[I, 2]
         ρmin = min(ρmin, ρ); ρmax = max(ρmax, ρ)
         umax = max(umax, abs(Q[I, m1] / ρ))
     end
-    ρmin = MPI.Allreduce(ρmin, min, s.decomp.comm)
-    ρmax = MPI.Allreduce(ρmax, max, s.decomp.comm)
-    umax = MPI.Allreduce(umax, max, s.decomp.comm)
+    ρmin = MPI.Allreduce(ρmin, min, solver.decomp.comm)
+    ρmax = MPI.Allreduce(ρmax, max, solver.decomp.comm)
+    umax = MPI.Allreduce(umax, max, solver.decomp.comm)
     rank == 0 && @printf("step %5d  t = %6.3f ms  ρ ∈ [%.4f, %.4f] kg/m³  |u|max = %6.1f m/s\n",
-                         s.step, 1e3 * s.t, ρmin, ρmax, umax)
+                         solver.step, 1e3 * solver.t, ρmin, ρmax, umax)
 end
 ##
 # ~2.5 ms captures the incident shock crossing the interface, reflecting off the
 # end wall, and returning to re-shock it.
-run!(s, Q; tfinal=2.5e-3, nmax=1_000_000, callback=diag)
+run!(solver, Q; tfinal=2.5e-3, nmax=1_000_000, callback=diag)
 
-# save_vtk(s, Q, "shock_tube_final")   # ρ, u, p, T_ion, Y_He, Y_CO2 for ParaView
-# save_checkpoint(s, Q, "shock_tube_final")
+# save_vtk(solver, Q, "shock_tube_final")   # ρ, u, p, T_ion, Y_He, Y_CO2 for ParaView
+# save_checkpoint(solver, Q, "shock_tube_final")

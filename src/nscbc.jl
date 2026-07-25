@@ -39,9 +39,9 @@ Base.@kwdef struct NSCBCOutflowBC <: BoundaryCondition
 end
 
 # No hard state enforcement; the physics enters through the RHS correction.
-enforce!(::NSCBCOutflowBC, Q, s, d, side) = nothing
+enforce!(::NSCBCOutflowBC, Q, solver, d, side) = nothing
 
-function correct_rhs!(bc::NSCBCOutflowBC, s, Q, dQ, d::Int, side::Int)
+function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
     # COLLECTIVES FIRST. deriv_along! runs the distributed compact solve, which
     # is collective over the sub-communicator of its dimension: EVERY rank must
     # reach it, including the ones that own no part of this boundary plane.
@@ -51,36 +51,37 @@ function correct_rhs!(bc::NSCBCOutflowBC, s, Q, dQ, d::Int, side::Int)
 
     # One-sided coordinate derivative of p along d (full-field call; the
     # closure rows make the boundary values one-sided), scaled to physical.
-    deriv_along!(s.tmp_a, s.p, s, d, 1)
+    deriv_along!(solver.tmp_a, solver.p, solver, d, 1)
 
     # Transverse pressure gradients for the Yoo & Im correction, only along
     # active transverse dimensions (they vanish in 1-D and collapsed dims).
     # `active` is a global property, so every rank agrees on these branches.
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
-    act1 = s.decomp.active[t1]
-    act2 = s.decomp.active[t2]
-    act1 && deriv_along!(s.sensor, s.p, s, t1, 1)
-    act2 && deriv_along!(s.sensor_sp, s.p, s, t2, 1)
+    act1 = solver.decomp.active[t1]
+    act2 = solver.decomp.active[t2]
+    act1 && deriv_along!(solver.sensor, solver.p, solver, t1, 1)
+    act2 && deriv_along!(solver.sensor_sp, solver.p, solver, t2, 1)
 
     # Only now may ranks that own no piece of this face drop out.
-    plane = wallplane(s.decomp, d, side)
+    plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
 
-    Lref = bc.Lref > 0 ? bc.Lref : Float64(s.L_domain[d])
-    vel = (s.u, s.v, s.w)
-    m = s.i_mom
-    i_energy = s.i_energy
-    n_species = s.n_species
-    Gdd = s.grad_u[d, d]
+    Lref = bc.Lref > 0 ? bc.Lref : Float64(solver.L_domain[d])
+    vel = (solver.u, solver.v, solver.w)
+    m = solver.i_mom
+    i_energy = solver.i_energy
+    n_species = solver.n_species
+    grad_u = solver.grad_u
+    Gdd = grad_u[d, d]
     sgn = side == 2 ? -1.0 : 1.0      # sign of Δd3 (see header)
     @inbounds for I in plane
-        ρ = s.rho[I]
-        c = s.c[I]
-        p = s.p[I]
+        ρ = solver.rho[I]
+        c = solver.c[I]
+        p = solver.p[I]
         un = vel[d][I]
         Ma = abs(un) / c
         Ma < 1 || continue            # supersonic: all waves outgoing
-        dpn = s.inv_h[d][I] * s.tmp_a[I]
+        dpn = solver.inv_h[d][I] * solver.tmp_a[I]
         dun = Gdd[I]
         Lcomp = side == 2 ? (un - c) * (dpn - ρ * c * dun) :
                             (un + c) * (dpn + ρ * c * dun)
@@ -96,13 +97,13 @@ function correct_rhs!(bc::NSCBCOutflowBC, s, Q, dQ, d::Int, side::Int)
         T_ion = 0.0
         if act1
             ut = vel[t1][I]
-            T_ion += ut * s.inv_h[t1][I] * s.sensor[I] +
-                  ρ * c * c * s.grad_u[t1, t1][I] + sgn * ρ * c * ut * s.grad_u[t1, d][I]
+            T_ion += ut * solver.inv_h[t1][I] * solver.sensor[I] +
+                  ρ * c * c * grad_u[t1, t1][I] + sgn * ρ * c * ut * grad_u[t1, d][I]
         end
         if act2
             ut = vel[t2][I]
-            T_ion += ut * s.inv_h[t2][I] * s.sensor_sp[I] +
-                  ρ * c * c * s.grad_u[t2, t2][I] + sgn * ρ * c * ut * s.grad_u[t2, d][I]
+            T_ion += ut * solver.inv_h[t2][I] * solver.sensor_sp[I] +
+                  ρ * c * c * grad_u[t2, t2][I] + sgn * ρ * c * ut * grad_u[t2, d][I]
         end
         βt = bc.beta_t < 0 ? Ma : bc.beta_t
         K = bc.sigma * (1 - Ma * Ma) * c / Lref
@@ -111,12 +112,12 @@ function correct_rhs!(bc::NSCBCOutflowBC, s, Q, dQ, d::Int, side::Int)
         Δd2 = ΔL / 2
         Δd3 = sgn * ΔL / (2 * ρ * c)
         # φ = cv_m / R_m from EOS outputs: R_m = p/(ρ T_ion), cv_m = cp_m − R_m.
-        Rm = p / (ρ * s.T_ion[I])
-        φ = s.cp_mix[I] / Rm - 1
-        u1, u2, u3 = s.u[I], s.v[I], s.w[I]
+        Rm = p / (ρ * solver.T_ion[I])
+        φ = solver.cp_mix[I] / Rm - 1
+        u1, u2, u3 = solver.u[I], solver.v[I], solver.w[I]
         ke = 0.5 * (u1*u1 + u2*u2 + u3*u3)
         for k in 1:n_species
-            dQ[I, k] -= s.Y[k][I] * Δd1
+            dQ[I, k] -= solver.Y[k][I] * Δd1
         end
         uv = (u1, u2, u3)
         for a in 1:3
@@ -172,54 +173,55 @@ Base.@kwdef struct NSCBCInflowBC{F} <: BoundaryCondition
     # point at the RK stage time (the Prim must carry T_ion and the full Y).
 end
 
-enforce!(::NSCBCInflowBC, Q, s, d, side) = nothing
+enforce!(::NSCBCInflowBC, Q, solver, d, side) = nothing
 
 "∂(cv_m/R_m)/∂Y_k for ideal mixtures (EOS barrier for future models)."
 dphi_dY(eos::IdealMixture, k::Int, Rm, cvm) =
     (eos.cvk[k] * Rm - eos.Rk[k] * cvm) / (Rm * Rm)
 
-function correct_rhs!(bc::NSCBCInflowBC, s, Q, dQ, d::Int, side::Int)
-    length(bc.Y) == s.n_species || error("NSCBCInflowBC: composition length mismatch")
+function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
+    length(bc.Y) == solver.n_species || error("NSCBCInflowBC: composition length mismatch")
 
     # COLLECTIVES FIRST — see the note in the outflow method above: these are
     # distributed solves along d, so every rank must call them before any rank
     # is allowed to return early.
     # One-sided coordinate derivatives of p and ρ along d.
-    deriv_along!(s.tmp_a, s.p, s, d, 1)
-    deriv_along!(s.tmp_b, s.rho, s, d, 1)
+    deriv_along!(solver.tmp_a, solver.p, solver, d, 1)
+    deriv_along!(solver.tmp_b, solver.rho, solver, d, 1)
 
-    plane = wallplane(s.decomp, d, side)
+    plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
 
-    Lref = bc.Lref > 0 ? bc.Lref : Float64(s.L_domain[d])
-    vel = (s.u, s.v, s.w)
+    Lref = bc.Lref > 0 ? bc.Lref : Float64(solver.L_domain[d])
+    vel = (solver.u, solver.v, solver.w)
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)   # transverse dims
-    m = s.i_mom
-    i_energy = s.i_energy
-    n_species = s.n_species
-    Gdd = s.grad_u[d, d]
+    m = solver.i_mom
+    i_energy = solver.i_energy
+    n_species = solver.n_species
+    grad_u = solver.grad_u
+    Gdd = grad_u[d, d]
     lowface = side == 1
-    n_halo_d = s.decomp.n_halo_d
-    tnow = s.tstage
+    n_halo_d = solver.decomp.n_halo_d
+    tnow = solver.tstage
     @inbounds for I in plane
         uT = bc.u; TT = bc.T_ion; YT = bc.Y
         if bc.target !== nothing
-            pr = bc.target(xcoord(s, 1, I[1] - n_halo_d[1]),
-                           xcoord(s, 2, I[2] - n_halo_d[2]),
-                           xcoord(s, 3, I[3] - n_halo_d[3]), tnow)
+            pr = bc.target(xcoord(solver, 1, I[1] - n_halo_d[1]),
+                           xcoord(solver, 2, I[2] - n_halo_d[2]),
+                           xcoord(solver, 3, I[3] - n_halo_d[3]), tnow)
             isnan(pr.T_ion) && error("NSCBCInflowBC target must specify T_ion")
             uT = pr.u; TT = pr.T_ion; YT = pr.Y
         end
-        ρ = s.rho[I]
-        c = s.c[I]
-        p = s.p[I]
-        Tp = s.T_ion[I]
+        ρ = solver.rho[I]
+        c = solver.c[I]
+        p = solver.p[I]
+        Tp = solver.T_ion[I]
         un = vel[d][I]
         Ma = abs(un) / c
         Ma < 1 || continue
-        ih = s.inv_h[d][I]
-        dpn = ih * s.tmp_a[I]
-        drn = ih * s.tmp_b[I]
+        ih = solver.inv_h[d][I]
+        dpn = ih * solver.tmp_a[I]
+        drn = ih * solver.tmp_b[I]
         dun = Gdd[I]
         K = c / Lref
         # Physically computed amplitudes.
@@ -234,21 +236,21 @@ function correct_rhs!(bc::NSCBCInflowBC, s, Q, dQ, d::Int, side::Int)
         Δd1 = ΔL2 / (c * c) + (ΔL5 + ΔL1) / (2 * c * c)
         Δd2 = (ΔL5 + ΔL1) / 2
         Δd3 = (ΔL5 - ΔL1) / (2 * ρ * c)
-        Δd4 = bc.eta_t * K * (vel[t1][I] - uT[t1]) - un * s.grad_u[d, t1][I]
-        Δd5 = bc.eta_t * K * (vel[t2][I] - uT[t2]) - un * s.grad_u[d, t2][I]
+        Δd4 = bc.eta_t * K * (vel[t1][I] - uT[t1]) - un * solver.grad_u[d, t1][I]
+        Δd5 = bc.eta_t * K * (vel[t2][I] - uT[t2]) - un * solver.grad_u[d, t2][I]
         # Mixture quantities for the energy mapping.
         Rm = p / (ρ * Tp)
-        cvm = s.cp_mix[I] - Rm
+        cvm = solver.cp_mix[I] - Rm
         φ = cvm / Rm
-        u1, u2, u3 = s.u[I], s.v[I], s.w[I]
+        u1, u2, u3 = solver.u[I], solver.v[I], solver.w[I]
         ke = 0.5 * (u1*u1 + u2*u2 + u3*u3)
         uv = (u1, u2, u3)
         ΣφY = 0.0
         for k in 1:n_species
-            ΔLs = bc.eta_Y * K * (s.Y[k][I] - YT[k]) -
-                  un * s.grad_Y[d, k][I]
-            dQ[I, k] -= s.Y[k][I] * Δd1 + ρ * ΔLs
-            ΣφY += dphi_dY(s.eos, k, Rm, cvm) * ΔLs
+            ΔLs = bc.eta_Y * K * (solver.Y[k][I] - YT[k]) -
+                  un * solver.grad_Y[d, k][I]
+            dQ[I, k] -= solver.Y[k][I] * Δd1 + ρ * ΔLs
+            ΣφY += dphi_dY(solver.eos, k, Rm, cvm) * ΔLs
         end
         for a in 1:3
             extra = a == d ? ρ * Δd3 : a == t1 ? ρ * Δd4 : ρ * Δd5

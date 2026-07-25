@@ -14,18 +14,18 @@ per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 mkslv(; kw...) = Solver(; bcs=per3, L_domain=(2π, 2π, 2π), art=ArtParams(enabled=false), kw...)
 
 "Max interior error of a scalar field against an analytic function."
-function ferr(s, f, fn)
+function ferr(solver, f, fn)
     e = 0.0
-    for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
-        e = max(e, abs(f[gidx(s, i, j, k)] -
-                       fn(xcoord(s, 1, i), xcoord(s, 2, j), xcoord(s, 3, k))))
+    for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
+        e = max(e, abs(f[gidx(solver, i, j, k)] -
+                       fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))))
     end
     e
 end
 
-fillf!(s, f, fn) = (for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2],
-                        i in 1:s.decomp.n_local[1]
-    f[gidx(s, i, j, k)] = fn(xcoord(s, 1, i), xcoord(s, 2, j), xcoord(s, 3, k))
+fillf!(solver, f, fn) = (for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
+                        i in 1:solver.decomp.n_local[1]
+    f[gidx(solver, i, j, k)] = fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))
 end; f)
 
 # --- Exact Riemann solver for the ideal-gas Euler equations (Toro, Ch. 4) ---
@@ -105,16 +105,16 @@ end
 end
 
 @testset "periodic C6 derivative: spectral accuracy" begin
-    s = mkslv(n_global=(32, 32, 32))
-    f = CL.field(s.decomp); df = CL.field(s.decomp)
-    fillf!(s, f, (x, y, z) -> sin(3x) * cos(2y))
-    CL.exchange_halos!(f, s.decomp)
-    CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
-    @test ferr(s, df, (x, y, z) -> 3cos(3x) * cos(2y)) < 1e-4  # C6 at k=3 on 32³
-    CL.deriv_along!(df, f, s, 2, 1); CL._scale_grad!(df, s, 2)
-    @test ferr(s, df, (x, y, z) -> -2sin(3x) * sin(2y)) < 2e-5
-    CL.deriv_along!(df, f, s, 3, 1); CL._scale_grad!(df, s, 3)
-    @test ferr(s, df, (x, y, z) -> 0.0) < 1e-10
+    solver = mkslv(n_global=(32, 32, 32))
+    f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+    fillf!(solver, f, (x, y, z) -> sin(3x) * cos(2y))
+    CL.exchange_halos!(f, solver.decomp)
+    CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
+    @test ferr(solver, df, (x, y, z) -> 3cos(3x) * cos(2y)) < 1e-4  # C6 at k=3 on 32³
+    CL.deriv_along!(df, f, solver, 2, 1); CL._scale_grad!(df, solver, 2)
+    @test ferr(solver, df, (x, y, z) -> -2sin(3x) * sin(2y)) < 2e-5
+    CL.deriv_along!(df, f, solver, 3, 1); CL._scale_grad!(df, solver, 3)
+    @test ferr(solver, df, (x, y, z) -> 0.0) < 1e-10
 end
 
 @testset "pentadiagonal C10 derivative: accuracy vs C6" begin
@@ -122,17 +122,17 @@ end
     # LU + solve_col!, and the periodic self-coupling reduced-interface solve
     # (BandLineSolver) in all three dimensions — plus the closed-domain
     # closure rows. The only other C10 coverage is a finiteness smoke test.
-    s = mkslv(n_global=(32, 32, 32), deriv=lele_d1_10())
-    f = CL.field(s.decomp); df = CL.field(s.decomp)
-    fillf!(s, f, (x, y, z) -> sin(3x) * cos(2y))
-    CL.exchange_halos!(f, s.decomp)
-    CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
-    e10 = ferr(s, df, (x, y, z) -> 3cos(3x) * cos(2y))
+    solver = mkslv(n_global=(32, 32, 32), deriv=lele_d1_10())
+    f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+    fillf!(solver, f, (x, y, z) -> sin(3x) * cos(2y))
+    CL.exchange_halos!(f, solver.decomp)
+    CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
+    e10 = ferr(solver, df, (x, y, z) -> 3cos(3x) * cos(2y))
     @test e10 < 1e-7     # C10 at k=3 on 32³ (measured ≈ 2.8e-8)
-    CL.deriv_along!(df, f, s, 2, 1); CL._scale_grad!(df, s, 2)
-    @test ferr(s, df, (x, y, z) -> -2sin(3x) * sin(2y)) < 1e-8   # transposed path
-    CL.deriv_along!(df, f, s, 3, 1); CL._scale_grad!(df, s, 3)
-    @test ferr(s, df, (x, y, z) -> 0.0) < 1e-12
+    CL.deriv_along!(df, f, solver, 2, 1); CL._scale_grad!(df, solver, 2)
+    @test ferr(solver, df, (x, y, z) -> -2sin(3x) * sin(2y)) < 1e-8   # transposed path
+    CL.deriv_along!(df, f, solver, 3, 1); CL._scale_grad!(df, solver, 3)
+    @test ferr(solver, df, (x, y, z) -> 0.0) < 1e-12
     # C10 must decisively beat the tridiagonal C6 on the same field (≈ 2000× here).
     s6 = mkslv(n_global=(32, 32, 32), deriv=lele_d1_6())
     f6 = CL.field(s6.decomp); df6 = CL.field(s6.decomp)
@@ -157,12 +157,12 @@ end
     # coefficient shows as a wrong slope, not a wrong level.
     errs = Float64[]
     for N in (16, 32, 64)
-        s = mkslv(n_global=(N, 12, 12), deriv=pade_d1_4())
-        f = CL.field(s.decomp); df = CL.field(s.decomp)
-        fillf!(s, f, (x, y, z) -> sin(x))
-        CL.exchange_halos!(f, s.decomp)
-        CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
-        push!(errs, ferr(s, df, (x, y, z) -> cos(x)))
+        solver = mkslv(n_global=(N, 12, 12), deriv=pade_d1_4())
+        f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+        fillf!(solver, f, (x, y, z) -> sin(x))
+        CL.exchange_halos!(f, solver.decomp)
+        CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
+        push!(errs, ferr(solver, df, (x, y, z) -> cos(x)))
     end
     p = log(errs[1] / errs[3]) / log(4)          # observed order over 16 -> 64
     @test 3.5 < p < 4.5
@@ -177,15 +177,15 @@ end
     for d in (2, 3)
         ng = ntuple(k -> k == d ? 32 : 12, 3)
         bcs = ntuple(k -> k == d ? (SlipWallBC(), SlipWallBC()) : per3[k], 3)
-        s = Solver(n_global=ng, L_domain=(1.0, 1.0, 1.0), bcs=bcs,
+        solver = Solver(n_global=ng, L_domain=(1.0, 1.0, 1.0), bcs=bcs,
                    art=ArtParams(enabled=false))
-        f = CL.field(s.decomp); df = CL.field(s.decomp)
+        f = CL.field(solver.decomp); df = CL.field(solver.decomp)
         poly = t -> 1 + 2t + 3t^2 - t^3
         dpoly = t -> 2 + 6t - 3t^2
-        fillf!(s, f, (x, y, z) -> poly(d == 2 ? y : z))
-        CL.exchange_halos!(f, s.decomp)
-        CL.deriv_along!(df, f, s, d, 1); CL._scale_grad!(df, s, d)
-        @test ferr(s, df, (x, y, z) -> dpoly(d == 2 ? y : z)) < 1e-10
+        fillf!(solver, f, (x, y, z) -> poly(d == 2 ? y : z))
+        CL.exchange_halos!(f, solver.decomp)
+        CL.deriv_along!(df, f, solver, d, 1); CL._scale_grad!(df, solver, d)
+        @test ferr(solver, df, (x, y, z) -> dpoly(d == 2 ? y : z)) < 1e-10
     end
 end
 
@@ -193,59 +193,59 @@ end
     # operators_banded.jl folds the ghost-unknown coupling onto the diagonal
     # for the pentadiagonal scheme (lo_fold/hi_fold). The C6 axis tests never
     # reach it and the C10 tests are all periodic or plain-walled.
-    s = Solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 0.5),
+    solver = Solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 0.5),
                metric=CylindricalMetric(), deriv=lele_d1_10(),
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
                art=ArtParams(enabled=false))
-    f = CL.field(s.decomp); df = CL.field(s.decomp)
-    fillf!(s, f, (r, θ, z) -> r * exp(-4r^2))            # odd across the axis
-    CL.exchange_halos!(f, s.decomp)
-    CL.deriv_along!(df, f, s, 1, -1); CL._scale_grad!(df, s, 1)
-    @test ferr(s, df, (r, θ, z) -> (1 - 8r^2) * exp(-4r^2)) < 5e-6
-    fillf!(s, f, (r, θ, z) -> exp(-4r^2))                # even across the axis
-    CL.exchange_halos!(f, s.decomp)
-    CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
-    @test ferr(s, df, (r, θ, z) -> -8r * exp(-4r^2)) < 2e-5
+    f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+    fillf!(solver, f, (r, θ, z) -> r * exp(-4r^2))            # odd across the axis
+    CL.exchange_halos!(f, solver.decomp)
+    CL.deriv_along!(df, f, solver, 1, -1); CL._scale_grad!(df, solver, 1)
+    @test ferr(solver, df, (r, θ, z) -> (1 - 8r^2) * exp(-4r^2)) < 5e-6
+    fillf!(solver, f, (r, θ, z) -> exp(-4r^2))                # even across the axis
+    CL.exchange_halos!(f, solver.decomp)
+    CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
+    @test ferr(solver, df, (r, θ, z) -> -8r * exp(-4r^2)) < 2e-5
 end
 
 @testset "transposed y/z path ≡ x path on permuted data" begin
-    s = mkslv(n_global=(24, 24, 24))
-    f = CL.field(s.decomp); g = CL.field(s.decomp)
-    d1 = CL.field(s.decomp); d2 = CL.field(s.decomp)
+    solver = mkslv(n_global=(24, 24, 24))
+    f = CL.field(solver.decomp); g = CL.field(solver.decomp)
+    d1 = CL.field(solver.decomp); d2 = CL.field(solver.decomp)
     fn = (x, y, z) -> sin(2x + 0.3) * cos(y) + 0.1z^0   # z-independent
-    fillf!(s, f, fn)                                     # varies in x
-    fillf!(s, g, (x, y, z) -> fn(y, x, z))               # same profile along y
-    CL.exchange_halos!(f, s.decomp); CL.exchange_halos!(g, s.decomp)
-    CL.deriv_along!(d1, f, s, 1, 1)
-    CL.deriv_along!(d2, g, s, 2, 1)
-    e = maximum(abs(d1[gidx(s, i, j, k)] - d2[gidx(s, j, i, k)])
+    fillf!(solver, f, fn)                                     # varies in x
+    fillf!(solver, g, (x, y, z) -> fn(y, x, z))               # same profile along y
+    CL.exchange_halos!(f, solver.decomp); CL.exchange_halos!(g, solver.decomp)
+    CL.deriv_along!(d1, f, solver, 1, 1)
+    CL.deriv_along!(d2, g, solver, 2, 1)
+    e = maximum(abs(d1[gidx(solver, i, j, k)] - d2[gidx(solver, j, i, k)])
                 for i in 1:24, j in 1:24, k in 1:24)
     @test e < 1e-11
 end
 
 @testset "closed-domain closures: polynomial exactness (deg ≤ 3)" begin
-    s = Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
+    solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                art=ArtParams(enabled=false))
-    f = CL.field(s.decomp); df = CL.field(s.decomp)
-    fillf!(s, f, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
-    CL.exchange_halos!(f, s.decomp)
-    CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
-    @test ferr(s, df, (x, y, z) -> 2 + 6x - 3x^2) < 1e-10
+    f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+    fillf!(solver, f, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
+    CL.exchange_halos!(f, solver.decomp)
+    CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
+    @test ferr(solver, df, (x, y, z) -> 2 + 6x - 3x^2) < 1e-10
 end
 
 @testset "filter: constants exact, Nyquist damped, parity of closures" begin
-    s = mkslv(n_global=(32, 12, 12))
-    f = CL.field(s.decomp)
-    fillf!(s, f, (x, y, z) -> 1.0)
-    filter_field!(f, s)
-    @test ferr(s, f, (x, y, z) -> 1.0) < 1e-12
-    nx = s.decomp.n_local[1]
-    for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:nx
-        f[gidx(s, i, j, k)] = 1.0 + 0.5 * (-1)^i        # constant + Nyquist
+    solver = mkslv(n_global=(32, 12, 12))
+    f = CL.field(solver.decomp)
+    fillf!(solver, f, (x, y, z) -> 1.0)
+    filter_field!(f, solver)
+    @test ferr(solver, f, (x, y, z) -> 1.0) < 1e-12
+    nx = solver.decomp.n_local[1]
+    for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:nx
+        f[gidx(solver, i, j, k)] = 1.0 + 0.5 * (-1)^i        # constant + Nyquist
     end
-    filter_field!(f, s)
-    dev = maximum(abs(f[gidx(s, i, 1, 1)] - 1.0) for i in 1:nx)
+    filter_field!(f, solver)
+    dev = maximum(abs(f[gidx(solver, i, 1, 1)] - 1.0) for i in 1:nx)
     @test dev < 0.35                                      # sawtooth strongly damped
 end
 
@@ -253,71 +253,71 @@ end
     # u_r = r·g(r) is an odd smooth function; d/dr through the fold must
     # match analytics at the first half-offset nodes — the sharpest probe of
     # the folded row and mirror fill.
-    s = Solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 0.5),
+    solver = Solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 0.5),
                metric=CylindricalMetric(),
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
                art=ArtParams(enabled=false))
-    f = CL.field(s.decomp); df = CL.field(s.decomp)
-    fillf!(s, f, (r, θ, z) -> r * exp(-4r^2))            # odd across the axis
-    CL.exchange_halos!(f, s.decomp)
-    CL.deriv_along!(df, f, s, 1, -1); CL._scale_grad!(df, s, 1)
-    @test ferr(s, df, (r, θ, z) -> (1 - 8r^2) * exp(-4r^2)) < 5e-6
-    fillf!(s, f, (r, θ, z) -> exp(-4r^2))                # even across the axis
-    CL.exchange_halos!(f, s.decomp)
-    CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
-    @test ferr(s, df, (r, θ, z) -> -8r * exp(-4r^2)) < 2e-5  # even fold: 3rd-order, larger const
+    f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+    fillf!(solver, f, (r, θ, z) -> r * exp(-4r^2))            # odd across the axis
+    CL.exchange_halos!(f, solver.decomp)
+    CL.deriv_along!(df, f, solver, 1, -1); CL._scale_grad!(df, solver, 1)
+    @test ferr(solver, df, (r, θ, z) -> (1 - 8r^2) * exp(-4r^2)) < 5e-6
+    fillf!(solver, f, (r, θ, z) -> exp(-4r^2))                # even across the axis
+    CL.exchange_halos!(f, solver.decomp)
+    CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
+    @test ferr(solver, df, (r, θ, z) -> -8r * exp(-4r^2)) < 2e-5  # even fold: 3rd-order, larger const
 end
 
 @testset "resolved-θ axis: antipodal pairing (local)" begin
     # f = r cosθ · e^{−4r²} = x·g is globally smooth through the axis and is
     # ODD under (r,θ)→(−r,θ) with the pairing (θ+π picks up the cos sign).
-    s = Solver(n_global=(48, 16, 1), L_domain=(1.0, 2π, 1.0),
+    solver = Solver(n_global=(48, 16, 1), L_domain=(1.0, 2π, 1.0),
                metric=CylindricalMetric(),
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
                art=ArtParams(enabled=false))
-    f = CL.field(s.decomp); df = CL.field(s.decomp)
-    fillf!(s, f, (r, θ, z) -> r * cos(θ) * exp(-4r^2))
-    CL.exchange_halos!(f, s.decomp)
-    CL.deriv_along!(df, f, s, 1, -1); CL._scale_grad!(df, s, 1)
-    @test ferr(s, df, (r, θ, z) -> cos(θ) * (1 - 8r^2) * exp(-4r^2)) < 1e-5
+    f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+    fillf!(solver, f, (r, θ, z) -> r * cos(θ) * exp(-4r^2))
+    CL.exchange_halos!(f, solver.decomp)
+    CL.deriv_along!(df, f, solver, 1, -1); CL._scale_grad!(df, solver, 1)
+    @test ferr(solver, df, (r, θ, z) -> cos(θ) * (1 - 8r^2) * exp(-4r^2)) < 1e-5
     # A scalar even case: f = e^{−4r²}·(1 + ½cos 2θ) maps to itself at θ+π.
-    fillf!(s, f, (r, θ, z) -> exp(-4r^2) * (1 + 0.5cos(2θ)))
-    CL.exchange_halos!(f, s.decomp)
-    CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
-    @test ferr(s, df, (r, θ, z) -> -8r * exp(-4r^2) * (1 + 0.5cos(2θ))) < 1e-4  # 3rd-order, larger const
+    fillf!(solver, f, (r, θ, z) -> exp(-4r^2) * (1 + 0.5cos(2θ)))
+    CL.exchange_halos!(f, solver.decomp)
+    CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
+    @test ferr(solver, df, (r, θ, z) -> -8r * exp(-4r^2) * (1 + 0.5cos(2θ))) < 1e-4  # 3rd-order, larger const
 end
 
 @testset "spherical poles + origin: derivative of a smooth 3-D Gaussian" begin
     # f = e^{−4r²} is smooth at origin and poles; ∂f/∂r and (1/r)∂f/∂θ = 0.
-    s = Solver(n_global=(40, 16, 12), L_domain=(1.0, π, 2π),
+    solver = Solver(n_global=(40, 16, 12), L_domain=(1.0, π, 2π),
                metric=SphericalMetric(),
                bcs=((OriginBC(), SlipWallBC()),
                     (PoleBC(), PoleBC()), per3[3]),
                art=ArtParams(enabled=false))
-    f = CL.field(s.decomp); df = CL.field(s.decomp)
-    fillf!(s, f, (r, θ, φ) -> exp(-4r^2))
-    CL.exchange_halos!(f, s.decomp)
-    CL.deriv_along!(df, f, s, 1, 1); CL._scale_grad!(df, s, 1)
-    @test ferr(s, df, (r, θ, φ) -> -8r * exp(-4r^2)) < 1e-4  # 3rd-order, larger const
-    CL.deriv_along!(df, f, s, 2, 1); CL._scale_grad!(df, s, 2)
-    @test ferr(s, df, (r, θ, φ) -> 0.0) < 1e-8
+    f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+    fillf!(solver, f, (r, θ, φ) -> exp(-4r^2))
+    CL.exchange_halos!(f, solver.decomp)
+    CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
+    @test ferr(solver, df, (r, θ, φ) -> -8r * exp(-4r^2)) < 1e-4  # 3rd-order, larger const
+    CL.deriv_along!(df, f, solver, 2, 1); CL._scale_grad!(df, solver, 2)
+    @test ferr(solver, df, (r, θ, φ) -> 0.0) < 1e-8
 end
 
 @testset "rigid rotation in cylindrical: zero strain" begin
     # u_θ = Ω r ⇒ S_ij = 0 identically; probes the curvature corrections.
-    s = Solver(n_global=(32, 16, 12), L_domain=(1.0, 2π, 0.5),
+    solver = Solver(n_global=(32, 16, 12), L_domain=(1.0, 2π, 0.5),
                metric=CylindricalMetric(), origin=(0.2, 0.0, 0.0),
                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                art=ArtParams(enabled=false))
-    Q = allocate_state(s)
-    initialize!(s, Q, (r, θ, z) -> Prim(u=(0.0, 0.3r, 0.0), p=1.0, rho=1.0))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (r, θ, z) -> Prim(u=(0.0, 0.3r, 0.0), p=1.0, rho=1.0))
     dQ = zero(Q)
-    compute_rhs!(s, Q, dQ)
+    compute_rhs!(solver, Q, dQ)
     smax = 0.0
-    for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
-        I = gidx(s, i, j, k)
+    for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
+        I = gidx(solver, i, j, k)
         for b in 1:3, a in 1:3
-            smax = max(smax, abs(0.5 * (s.grad_u[a, b][I] + s.grad_u[b, a][I])))
+            smax = max(smax, abs(0.5 * (solver.grad_u[a, b][I] + solver.grad_u[b, a][I])))
         end
     end
     @test smax < 1e-8
@@ -347,15 +347,15 @@ end
     for cs in cases
         kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain, metric=cs.metric,
                      bcs=cs.bcs, art=ArtParams(enabled=false)), cs.kw)
-        s = Solver(; kw...)
-        Q = allocate_state(s)
-        initialize!(s, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
-        apply_bcs!(s, Q)
+        solver = Solver(; kw...)
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
+        apply_bcs!(solver, Q)
         dQ = zero(Q)
-        compute_rhs!(s, Q, dQ)
-        m = maximum(abs(dQ[gidx(s, i, j, k), c])
-                    for c in 1:s.n_cons, i in 1:s.decomp.n_local[1],
-                        j in 1:s.decomp.n_local[2], k in 1:s.decomp.n_local[3])
+        compute_rhs!(solver, Q, dQ)
+        m = maximum(abs(dQ[gidx(solver, i, j, k), c])
+                    for c in 1:solver.n_cons, i in 1:solver.decomp.n_local[1],
+                        j in 1:solver.decomp.n_local[2], k in 1:solver.decomp.n_local[3])
         @test m < 1e-8
     end
 end
@@ -363,67 +363,67 @@ end
 @testset "EOS: conserved ↔ primitive round trip (two species)" begin
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.2, 1.09)])
-    s = mkslv(n_global=(12, 12, 12), eos=eos)
-    Q = allocate_state(s)
+    solver = mkslv(n_global=(12, 12, 12), eos=eos)
+    Q = allocate_state(solver)
     pr = Prim(u=(0.3, -0.1, 0.2), p=0.8, T_ion=1.7, Y=(0.35, 0.65))
-    initialize!(s, Q, (x, y, z) -> pr)
-    CL.exchange_state!(Q, s.decomp)
-    CL.primitives!(s, Q)
-    I = gidx(s, 3, 4, 5)
-    @test s.p[I] ≈ 0.8 atol = 1e-12
-    @test s.T_ion[I] ≈ 1.7 atol = 1e-12
-    @test s.u[I] ≈ 0.3 atol = 1e-12
-    @test s.Y[2][I] ≈ 0.65 atol = 1e-12
+    initialize!(solver, Q, (x, y, z) -> pr)
+    CL.exchange_state!(Q, solver.decomp)
+    CL.primitives!(solver, Q)
+    I = gidx(solver, 3, 4, 5)
+    @test solver.p[I] ≈ 0.8 atol = 1e-12
+    @test solver.T_ion[I] ≈ 1.7 atol = 1e-12
+    @test solver.u[I] ≈ 0.3 atol = 1e-12
+    @test solver.Y[2][I] ≈ 0.65 atol = 1e-12
 end
 
 @testset "conservation: periodic RHS integrates to zero" begin
-    s = mkslv(n_global=(16, 16, 16), transport=Transport(mu0=1e-3))
-    Q = allocate_state(s)
-    initialize!(s, Q, (x, y, z) ->
+    solver = mkslv(n_global=(16, 16, 16), transport=Transport(mu0=1e-3))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) ->
         Prim(u=(0.1sin(x)cos(y), -0.1cos(x)sin(y), 0.05sin(z)),
              p=1 + 0.05cos(x)cos(z), rho=1 + 0.1sin(y)))
     dQ = zero(Q)
-    compute_rhs!(s, Q, dQ)
-    for c in 1:s.n_cons
-        tot = sum(dQ[gidx(s, i, j, k), c] for i in 1:16, j in 1:16, k in 1:16)
+    compute_rhs!(solver, Q, dQ)
+    for c in 1:solver.n_cons
+        tot = sum(dQ[gidx(solver, i, j, k), c] for i in 1:16, j in 1:16, k in 1:16)
         @test abs(tot) < 1e-8 * 16^3
     end
 end
 
 @testset "NSCBC outflow: matched uniform stream ⇒ no correction" begin
-    s = Solver(n_global=(32, 12, 12), L_domain=(1.0, 0.4, 0.4),
+    solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 0.4, 0.4),
                bcs=((DirichletBC((x, y, z, t) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0)),
                      NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
                art=ArtParams(enabled=false))
-    Q = allocate_state(s)
-    initialize!(s, Q, (x, y, z) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0))
-    apply_bcs!(s, Q)
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0))
+    apply_bcs!(solver, Q)
     dQ = zero(Q)
-    compute_rhs!(s, Q, dQ)
-    nx = s.decomp.n_local[1]
-    m = maximum(abs(dQ[gidx(s, nx, j, k), c])
-                for c in 1:s.n_cons, j in 1:12, k in 1:12)
+    compute_rhs!(solver, Q, dQ)
+    nx = solver.decomp.n_local[1]
+    m = maximum(abs(dQ[gidx(solver, nx, j, k), c])
+                for c in 1:solver.n_cons, j in 1:12, k in 1:12)
     @test m < 1e-8
 end
 
 @testset "NoSlipWallBC: adiabatic zeroes velocity, isothermal sets T_ion" begin
     for Twall in (NaN, 2.5)
-        s = Solver(n_global=(24, 12, 12), L_domain=(1.0, 0.4, 0.4),
+        solver = Solver(n_global=(24, 12, 12), L_domain=(1.0, 0.4, 0.4),
                    bcs=((NoSlipWallBC(Twall=Twall), NoSlipWallBC(Twall=Twall)),
                         per3[2], per3[3]),
                    art=ArtParams(enabled=false))
-        Q = allocate_state(s)
-        initialize!(s, Q, (x, y, z) -> Prim(u=(0.3, -0.2, 0.1), p=1.0, T_ion=1.0))
-        apply_bcs!(s, Q)
-        CL.exchange_state!(Q, s.decomp)
-        CL.primitives!(s, Q)
-        nx = s.decomp.n_local[1]
-        uw = maximum(abs(s.u[gidx(s, i, j, k)]) + abs(s.v[gidx(s, i, j, k)]) +
-                     abs(s.w[gidx(s, i, j, k)])
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> Prim(u=(0.3, -0.2, 0.1), p=1.0, T_ion=1.0))
+        apply_bcs!(solver, Q)
+        CL.exchange_state!(Q, solver.decomp)
+        CL.primitives!(solver, Q)
+        nx = solver.decomp.n_local[1]
+        uw = maximum(abs(solver.u[gidx(solver, i, j, k)]) + abs(solver.v[gidx(solver, i, j, k)]) +
+                     abs(solver.w[gidx(solver, i, j, k)])
                      for i in (1, nx), j in 1:12, k in 1:12)   # both walls
         @test uw < 1e-12
         if !isnan(Twall)                       # isothermal wall holds Twall
-            e = maximum(abs(s.T_ion[gidx(s, i, j, k)] - Twall)
+            e = maximum(abs(solver.T_ion[gidx(solver, i, j, k)] - Twall)
                         for i in (1, nx), j in 1:12, k in 1:12)
             @test e < 1e-12
         end
@@ -431,24 +431,24 @@ end
 end
 
 @testset "ExtrapolationBC: copies the adjacent interior plane" begin
-    s = Solver(n_global=(24, 12, 12), L_domain=(1.0, 0.4, 0.4),
+    solver = Solver(n_global=(24, 12, 12), L_domain=(1.0, 0.4, 0.4),
                bcs=((ExtrapolationBC(), ExtrapolationBC()), per3[2], per3[3]),
                art=ArtParams(enabled=false))
-    Q = allocate_state(s)
-    initialize!(s, Q, (x, y, z) -> Prim(u=(0.2 + x, 0, 0), p=1 + 0.1x, rho=1 + 0.3x))
-    apply_bcs!(s, Q)
-    nx = s.decomp.n_local[1]
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2 + x, 0, 0), p=1 + 0.1x, rho=1 + 0.3x))
+    apply_bcs!(solver, Q)
+    nx = solver.decomp.n_local[1]
     d = 0.0
-    for c in 1:s.n_cons, j in 1:12, k in 1:12
-        d = max(d, abs(Q[gidx(s, 1, j, k), c]  - Q[gidx(s, 2, j, k), c]))
-        d = max(d, abs(Q[gidx(s, nx, j, k), c] - Q[gidx(s, nx-1, j, k), c]))
+    for c in 1:solver.n_cons, j in 1:12, k in 1:12
+        d = max(d, abs(Q[gidx(solver, 1, j, k), c]  - Q[gidx(solver, 2, j, k), c]))
+        d = max(d, abs(Q[gidx(solver, nx, j, k), c] - Q[gidx(solver, nx-1, j, k), c]))
     end
     @test d == 0.0
     # a uniform state must be untouched by the extrapolation
-    Q2 = allocate_state(s)
-    initialize!(s, Q2, (x, y, z) -> Prim(u=(0.2, 0, 0), p=1.0, rho=1.0))
+    Q2 = allocate_state(solver)
+    initialize!(solver, Q2, (x, y, z) -> Prim(u=(0.2, 0, 0), p=1.0, rho=1.0))
     ref = copy(Q2)
-    apply_bcs!(s, Q2)
+    apply_bcs!(solver, Q2)
     @test Q2 == ref
 end
 
@@ -457,25 +457,25 @@ end
     # compiled, so nothing in it — including the transverse terms — had ever
     # been executed, let alone checked.
     uin = (0.3, 0.0, 0.0)
-    s = Solver(n_global=(32, 12, 12), L_domain=(1.0, 0.4, 0.4),
+    solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 0.4, 0.4),
                bcs=((NSCBCInflowBC(u=uin, T_ion=1.0), NSCBCOutflowBC(pinf=1.0)),
                     per3[2], per3[3]),
                eos=single_species(gamma=1.4, R=1.0),
                art=ArtParams(enabled=false))
-    Q = allocate_state(s)
-    initialize!(s, Q, (x, y, z) -> Prim(u=uin, p=1.0, T_ion=1.0))
-    apply_bcs!(s, Q)
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=uin, p=1.0, T_ion=1.0))
+    apply_bcs!(solver, Q)
     dQ = zero(Q)
-    compute_rhs!(s, Q, dQ)
-    m = maximum(abs(dQ[gidx(s, 1, j, k), c]) for c in 1:s.n_cons, j in 1:12, k in 1:12)
+    compute_rhs!(solver, Q, dQ)
+    m = maximum(abs(dQ[gidx(solver, 1, j, k), c]) for c in 1:solver.n_cons, j in 1:12, k in 1:12)
     @test m < 1e-8
     # and a mismatched stream must produce a non-trivial correction
-    Q2 = allocate_state(s)
-    initialize!(s, Q2, (x, y, z) -> Prim(u=(0.15, 0, 0), p=1.0, T_ion=1.0))
-    apply_bcs!(s, Q2)
+    Q2 = allocate_state(solver)
+    initialize!(solver, Q2, (x, y, z) -> Prim(u=(0.15, 0, 0), p=1.0, T_ion=1.0))
+    apply_bcs!(solver, Q2)
     dQ2 = zero(Q2)
-    compute_rhs!(s, Q2, dQ2)
-    m2 = maximum(abs(dQ2[gidx(s, 1, j, k), c]) for c in 1:s.n_cons, j in 1:12, k in 1:12)
+    compute_rhs!(solver, Q2, dQ2)
+    m2 = maximum(abs(dQ2[gidx(solver, 1, j, k), c]) for c in 1:solver.n_cons, j in 1:12, k in 1:12)
     @test m2 > 1e-3
 end
 
@@ -484,32 +484,32 @@ end
     # never executed, since the only multi-species test disables art.
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.2, 1.09)])
-    s = Solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3, eos=eos,
+    solver = Solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3, eos=eos,
                art=ArtParams(enabled=true))
-    Q = allocate_state(s)
+    Q = allocate_state(solver)
     dQ = zero(Q)
     # smooth composition: D* must stay tiny
-    initialize!(s, Q, (x, y, z) -> Prim(Y=(0.5 + 0.1sin(2π * x), 0.5 - 0.1sin(2π * x)),
+    initialize!(solver, Q, (x, y, z) -> Prim(Y=(0.5 + 0.1sin(2π * x), 0.5 - 0.1sin(2π * x)),
                                         p=1.0, rho=1.0))
-    compute_rhs!(s, Q, dQ)
-    smooth_max = max(maximum(s.D_art[1]), maximum(s.D_art[2]))
+    compute_rhs!(solver, Q, dQ)
+    smooth_max = max(maximum(solver.D_art[1]), maximum(solver.D_art[2]))
     # sharp interface: D* must switch on
-    initialize!(s, Q, (x, y, z) -> begin
+    initialize!(solver, Q, (x, y, z) -> begin
         θ = tanh_blend(x, 0.5, 0.01)
         Prim(Y=(1 - θ, θ), p=1.0, rho=1.0)
     end)
-    compute_rhs!(s, Q, dQ)
-    sharp_max = max(maximum(s.D_art[1]), maximum(s.D_art[2]))
+    compute_rhs!(solver, Q, dQ)
+    sharp_max = max(maximum(solver.D_art[1]), maximum(solver.D_art[2]))
     @test sharp_max > 100 * max(smooth_max, 1e-14)
-    @test all(isfinite, s.D_art[1]) && all(isfinite, s.D_art[2])
+    @test all(isfinite, solver.D_art[1]) && all(isfinite, solver.D_art[2])
 end
 
 @testset "dt_report agrees with compute_dt and names the limiter" begin
-    s = mkslv(n_global=(16, 16, 16), transport=Transport(mu0=1e-3))
-    Q = allocate_state(s)
-    initialize!(s, Q, (x, y, z) -> Prim(u=(0.2sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
-    r = dt_report(s, Q)
-    @test r.dt ≈ compute_dt(s, Q) rtol = 1e-12
+    solver = mkslv(n_global=(16, 16, 16), transport=Transport(mu0=1e-3))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
+    r = dt_report(solver, Q)
+    @test r.dt ≈ compute_dt(solver, Q) rtol = 1e-12
     @test r.kind in (:acoustic, :diffusive, :curvature)
     @test r.dim in 1:3
     @test all(1 .<= r.index .<= 16)
@@ -521,13 +521,13 @@ end
     # stiff geometric source the advective CFL loop never sees. Swirl must
     # therefore shorten dt even though nothing varies in θ or φ.
     mk(metric, uang) = begin
-        s = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=metric,
+        solver = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=metric,
                    origin=(0.5, π / 2, 0.0),
                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                    art=ArtParams(enabled=false))
-        Q = allocate_state(s)
-        initialize!(s, Q, (r, θ, φ) -> Prim(u=(0.0, uang, uang), p=1.0, rho=1.0))
-        s, Q
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (r, θ, φ) -> Prim(u=(0.0, uang, uang), p=1.0, rho=1.0))
+        solver, Q
     end
     for metric in (CylindricalMetric(), SphericalMetric())
         s0, Q0 = mk(metric, 0.0)
@@ -542,10 +542,10 @@ end
 end
 
 @testset "save_vtk writes a readable .pvtr/.vtr pair" begin
-    s = mkslv(n_global=(12, 12, 12))
-    Q = allocate_state(s)
-    initialize!(s, Q, (x, y, z) -> Prim(u=(sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
-    save_vtk(s, Q, "test_vtk")
+    solver = mkslv(n_global=(12, 12, 12))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
+    save_vtk(solver, Q, "test_vtk")
     files = filter(startswith("test_vtk"), readdir())
     @test any(endswith(".pvtr"), files)
     @test any(endswith(".vtr"), files)
@@ -570,15 +570,15 @@ end
 end
 
 @testset "checkpoint round trip" begin
-    s = mkslv(n_global=(12, 12, 12))
-    Q = allocate_state(s)
-    initialize!(s, Q, (x, y, z) -> Prim(u=(sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
-    s.t = 0.37; s.step = 42
-    save_checkpoint(s, Q, "test_ckpt")
-    Q2 = allocate_state(s); s.t = 0.0; s.step = 0
-    load_checkpoint!(s, Q2, "test_ckpt")
-    @test s.t == 0.37 && s.step == 42
-    @test all(Q2[gidx(s, i, j, k), c] == Q[gidx(s, i, j, k), c]
+    solver = mkslv(n_global=(12, 12, 12))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
+    solver.t = 0.37; solver.step = 42
+    save_checkpoint(solver, Q, "test_ckpt")
+    Q2 = allocate_state(solver); solver.t = 0.0; solver.step = 0
+    load_checkpoint!(solver, Q2, "test_ckpt")
+    @test solver.t == 0.37 && solver.step == 42
+    @test all(Q2[gidx(solver, i, j, k), c] == Q[gidx(solver, i, j, k), c]
               for c in 1:5, i in 1:12, j in 1:12, k in 1:12)
     foreach(rm, filter(startswith("test_ckpt"), readdir()))
 end
@@ -597,11 +597,11 @@ end
                             ic=(r, θ, z) -> Prim(u=(0, 0, 0), p=1 + exp(-40(r - 0.4)^2), rho=1.0)),
                     Numerics(n_global=(48, 1, 1))),
     )
-        s, Q = build()
-        run!(s, Q; tfinal=1e9, nmax=3)
-        bad = any(!isfinite(Q[gidx(s, i, j, k), c])
-                  for c in 1:s.n_cons, i in 1:s.decomp.n_local[1],
-                      j in 1:s.decomp.n_local[2], k in 1:s.decomp.n_local[3])
+        solver, Q = build()
+        run!(solver, Q; tfinal=1e9, nmax=3)
+        bad = any(!isfinite(Q[gidx(solver, i, j, k), c])
+                  for c in 1:solver.n_cons, i in 1:solver.decomp.n_local[1],
+                      j in 1:solver.decomp.n_local[2], k in 1:solver.decomp.n_local[3])
         @test !bad
     end
 end
@@ -630,24 +630,24 @@ end
                             u=((1 - θ) * uL + θ * uR, 0.0, 0.0),
                             p=(1 - θ) * pL + θ * pR)
                    end)
-    s, Q = setup(prob, Numerics(n_global=(Nx, 1, 1), art=ArtParams(enabled=true),
+    solver, Q = setup(prob, Numerics(n_global=(Nx, 1, 1), art=ArtParams(enabled=true),
                                 cfl=0.4, filter_interval=1))
-    run!(s, Q; tfinal=tfin, nmax=100_000)
-    CL.exchange_state!(Q, s.decomp)
-    CL.primitives!(s, Q)
+    run!(solver, Q; tfinal=tfin, nmax=100_000)
+    CL.exchange_state!(Q, solver.decomp)
+    CL.primitives!(solver, Q)
 
     pstar, ustar, cL, cR = exact_riemann_star(ρL, uL, pL, ρR, uR, pR, γ)
     # Star state is the canonical Sod result (Toro): p* ≈ 0.30313, u* ≈ 0.92745.
     @test pstar ≈ 0.30313 atol = 1e-4
     @test ustar ≈ 0.92745 atol = 1e-4
 
-    nx = s.decomp.n_local[1]
+    nx = solver.decomp.n_local[1]
     eρ = eu = ep = 0.0
     for i in 1:nx
-        I = gidx(s, i, 1, 1); x = xcoord(s, 1, i)
+        I = gidx(solver, i, 1, 1); x = xcoord(solver, 1, i)
         r, u, p = exact_riemann_sample((x - x0) / tfin, ρL, uL, pL, ρR, uR, pR,
                                        γ, pstar, ustar, cL, cR)
-        eρ += abs(s.rho[I] - r); eu += abs(s.u[I] - u); ep += abs(s.p[I] - p)
+        eρ += abs(solver.rho[I] - r); eu += abs(solver.u[I] - u); ep += abs(solver.p[I] - p)
     end
     eρ /= nx; eu /= nx; ep /= nx
     @test eρ < 2e-2      # measured ≈ 2.9e-3

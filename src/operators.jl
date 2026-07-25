@@ -120,42 +120,42 @@ function _fill_lines!(B::Matrix{T}, plan, f, decomp::Decomp,
             if plan.lo_closed
                 for jr in 1:nc
                     rhs = plan.clo[jr]
-                    s = zero(T)
+                    acc = zero(T)
                     for κ in eachindex(rhs)
-                        s += rhs[κ] * f[_gidx(Val(D), κ, j, k, n_halo_d)]
+                        acc += rhs[κ] * f[_gidx(Val(D), κ, j, k, n_halo_d)]
                     end
-                    B[jr, l] = s
+                    B[jr, l] = acc
                 end
                 i1 = nc + 1
             end
             if plan.hi_closed
                 for jr in 1:nc
                     rhs = plan.chi[jr]
-                    s = zero(T)
+                    acc = zero(T)
                     for κ in eachindex(rhs)
-                        s += rhs[κ] * f[_gidx(Val(D), n + 1 - κ, j, k, n_halo_d)]
+                        acc += rhs[κ] * f[_gidx(Val(D), n + 1 - κ, j, k, n_halo_d)]
                     end
-                    B[n + 1 - jr, l] = s
+                    B[n + 1 - jr, l] = acc
                 end
                 i2 = n - nc
             end
             if sym
                 for i in i1:i2
-                    s = a0 * f[_gidx(Val(D), i, j, k, n_halo_d)]
+                    acc = a0 * f[_gidx(Val(D), i, j, k, n_halo_d)]
                     for m in 1:M
-                        s += ci[m] * (f[_gidx(Val(D), i + m, j, k, n_halo_d)] +
-                                      f[_gidx(Val(D), i - m, j, k, n_halo_d)])
+                        acc += ci[m] * (f[_gidx(Val(D), i + m, j, k, n_halo_d)] +
+                                        f[_gidx(Val(D), i - m, j, k, n_halo_d)])
                     end
-                    B[i, l] = s
+                    B[i, l] = acc
                 end
             else
                 for i in i1:i2
-                    s = zero(T)
+                    acc = zero(T)
                     for m in 1:M
-                        s += ci[m] * (f[_gidx(Val(D), i + m, j, k, n_halo_d)] -
-                                      f[_gidx(Val(D), i - m, j, k, n_halo_d)])
+                        acc += ci[m] * (f[_gidx(Val(D), i + m, j, k, n_halo_d)] -
+                                        f[_gidx(Val(D), i - m, j, k, n_halo_d)])
                     end
-                    B[i, l] = s
+                    B[i, l] = acc
                 end
             end
         end
@@ -205,17 +205,17 @@ function apply_along!(out, plan::AbstractDirPlan, f, decomp::Decomp)
 end
 
 """
-    filter_field!(f, s; σf=1)
+    filter_field!(f, solver; σf=1)
 
 Apply the compact filter along all active dimensions of `f` in place, with a
 halo exchange before each directional pass; `σf` is the field's axis parity.
 """
-function filter_field!(f, s; σf::Int=1)
+function filter_field!(f, solver; σf::Int=1)
     for d in 1:3
-        s.decomp.active[d] || continue
-        exchange_halos!(f, s.decomp)
-        filt_along!(s.tmp_a, f, s, d, σf)
-        copy_interior!(f, s.tmp_a, s.decomp)
+        solver.decomp.active[d] || continue
+        exchange_halos!(f, solver.decomp)
+        filt_along!(solver.tmp_a, f, solver, d, σf)
+        copy_interior!(f, solver.tmp_a, solver.decomp)
     end
     return f
 end

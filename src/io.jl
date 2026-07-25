@@ -9,20 +9,20 @@ _ckpt_name(prefix::AbstractString, rank::Int) =
     string(prefix, ".r", lpad(rank, 4, '0'), ".ckpt")
 
 """
-    save_checkpoint(s, Q, prefix)
+    save_checkpoint(solver, Q, prefix)
 
 Write the interior of `Q` plus (t, step) to `prefix.rNNNN.ckpt`, one file per
 rank. Collective only in the trivial sense that every rank writes; no
 communication is involved.
 """
-function save_checkpoint(s::Solver, Q, prefix::AbstractString)
-    decomp = s.decomp
+function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
+    decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     open(_ckpt_name(prefix, rank), "w") do io
         write(io, UInt64(CKPT_MAGIC))
-        write(io, Int64(s.n_cons))
+        write(io, Int64(solver.n_cons))
         for d in 1:3
             write(io, Int64(decomp.n_global[d]))
         end
@@ -32,27 +32,27 @@ function save_checkpoint(s::Solver, Q, prefix::AbstractString)
         for d in 1:3
             write(io, Int64(decomp.coords[d]))
         end
-        write(io, Float64(s.t))
-        write(io, Int64(s.step))
+        write(io, Float64(solver.t))
+        write(io, Int64(solver.step))
         write(io, Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :])
     end
     return prefix
 end
 
 """
-    load_checkpoint!(s, Q, prefix)
+    load_checkpoint!(solver, Q, prefix)
 
 Restore the interior of `Q` and (t, step) from `prefix.rNNNN.ckpt`, verifying
 grid, decomposition, and conserved-layout compatibility.
 """
-function load_checkpoint!(s::Solver, Q, prefix::AbstractString)
-    decomp = s.decomp
+function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
+    decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     open(_ckpt_name(prefix, rank), "r") do io
         read(io, UInt64) == CKPT_MAGIC || error("not a CompactLES checkpoint")
-        Int(read(io, Int64)) == s.n_cons || error("conserved layout mismatch")
+        Int(read(io, Int64)) == solver.n_cons || error("conserved layout mismatch")
         for d in 1:3
             Int(read(io, Int64)) == decomp.n_global[d] || error("global grid mismatch")
         end
@@ -62,9 +62,9 @@ function load_checkpoint!(s::Solver, Q, prefix::AbstractString)
         for d in 1:3
             Int(read(io, Int64)) == decomp.coords[d] || error("rank layout mismatch")
         end
-        s.t = read(io, Float64)
-        s.step = Int(read(io, Int64))
-        buf = Array{Float64}(undef, nx, ny, nz, s.n_cons)
+        solver.t = read(io, Float64)
+        solver.step = Int(read(io, Int64))
+        buf = Array{Float64}(undef, nx, ny, nz, solver.n_cons)
         read!(io, buf)
         Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :] .= buf
     end
@@ -86,40 +86,40 @@ end
 _extent_str(lo, hi) = join(("$(lo[d]) $(hi[d])" for d in 1:3), " ")
 
 """
-    save_vtk(s, Q, prefix)
+    save_vtk(solver, Q, prefix)
 
 Write `prefix.rNNNN.vtr` per rank plus `prefix.pvtr` (rank 0) containing ρ,
 velocity, p, T_ion, and the mass fractions as Float32 point data on the physical
 rectilinear grid. Open the .pvtr in ParaView/VisIt.
 """
-function save_vtk(s::Solver, Q, prefix::AbstractString)
-    decomp = s.decomp
+function save_vtk(solver::Solver, Q, prefix::AbstractString)
+    decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
     P = MPI.Comm_size(decomp.comm)
     nx, ny, nz = decomp.n_local
     o1, o2, o3 = decomp.n_halo_d
     lo, hi = _vtk_extent(decomp)
 
-    primitives!(s, Q)   # halos may be stale but the interior is what we write
+    primitives!(solver, Q)   # halos may be stale but the interior is what we write
 
     fields = Vector{Tuple{String,Int,Vector{Float32}}}()   # (name, ncomp, data)
     scal(name, a) = push!(fields, (name, 1,
         Float32[a[i+o1, j+o2, k+o3] for i in 1:nx, j in 1:ny, k in 1:nz][:]))
-    scal("rho", s.rho); scal("p", s.p); scal("T_ion", s.T_ion)
-    for sp in 1:s.n_species
-        scal("Y$(sp)", s.Y[sp])
+    scal("rho", solver.rho); scal("p", solver.p); scal("T_ion", solver.T_ion)
+    for sp in 1:solver.n_species
+        scal("Y$(sp)", solver.Y[sp])
     end
     vel = Vector{Float32}(undef, 3 * nx * ny * nz)
     idx = 1
     for k in 1:nz, j in 1:ny, i in 1:nx
-        vel[idx]   = s.u[i+o1, j+o2, k+o3]
-        vel[idx+1] = s.v[i+o1, j+o2, k+o3]
-        vel[idx+2] = s.w[i+o1, j+o2, k+o3]
+        vel[idx]   = solver.u[i+o1, j+o2, k+o3]
+        vel[idx+1] = solver.v[i+o1, j+o2, k+o3]
+        vel[idx+2] = solver.w[i+o1, j+o2, k+o3]
         idx += 3
     end
     push!(fields, ("velocity", 3, vel))
 
-    coords = ntuple(d -> Float64[xcoord(s, d, i) for i in 1:decomp.n_local[d]], 3)
+    coords = ntuple(d -> Float64[xcoord(solver, d, i) for i in 1:decomp.n_local[d]], 3)
 
     fname = string(prefix, ".r", lpad(rank, 4, '0'), ".vtr")
     open(fname, "w") do io

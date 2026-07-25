@@ -8,7 +8,7 @@
 # kernels.jl); the BC objects here (a) declare periodicity to the decomposition
 # and (b) enforce state values on wall planes via `enforce!`. New conditions
 # are added by subtyping BoundaryCondition and defining
-# `enforce!(bc, Q, s, dim, side)`.
+# `enforce!(bc, Q, solver, dim, side)`.
 
 abstract type BoundaryCondition end
 
@@ -80,14 +80,14 @@ function wallplane(decomp::Decomp, d::Int, side::Int)::Union{Nothing,WallPlane}
     return CartesianIndices((r1, r2, r3))
 end
 
-enforce!(::PeriodicBC, Q, s, d, side) = nothing
-enforce!(::AxisBC, Q, s, d, side) = nothing
-enforce!(::OriginBC, Q, s, d, side) = nothing
-enforce!(::PoleBC, Q, s, d, side) = nothing
+enforce!(::PeriodicBC, Q, solver, d, side) = nothing
+enforce!(::AxisBC, Q, solver, d, side) = nothing
+enforce!(::OriginBC, Q, solver, d, side) = nothing
+enforce!(::PoleBC, Q, solver, d, side) = nothing
 
 "RHS-level boundary hook, called at the end of compute_rhs! for every face.
 Default: no correction. Characteristic conditions (nscbc.jl) override this."
-correct_rhs!(bc::BoundaryCondition, s, Q, dQ, d, side) = nothing
+correct_rhs!(bc::BoundaryCondition, solver, Q, dQ, d, side) = nothing
 
 "ρe at a wall held at temperature Twall (EOS barrier; ideal mixtures)."
 wall_internal_energy(eos::IdealMixture, Q, I, n_species::Int, Twall) = begin
@@ -106,56 +106,57 @@ function _wall_density(Q, I, n_species)
     return ρ
 end
 
-function enforce!(::SlipWallBC, Q, s, d, side)
-    plane = wallplane(s.decomp, d, side)
+function enforce!(::SlipWallBC, Q, solver, d, side)
+    plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
-    mc = s.i_mom[d]
+    mc = solver.i_mom[d]
     @inbounds for I in plane
-        ρ = _wall_density(Q, I, s.n_species)
+        ρ = _wall_density(Q, I, solver.n_species)
         mn = Q[I, mc]
-        Q[I, s.i_energy] -= 0.5 * mn * mn / ρ   # remove normal kinetic energy
+        Q[I, solver.i_energy] -= 0.5 * mn * mn / ρ   # remove normal kinetic energy
         Q[I, mc] = 0
     end
     nothing
 end
 
-function enforce!(bc::NoSlipWallBC, Q, s, d, side)
-    plane = wallplane(s.decomp, d, side)
+function enforce!(bc::NoSlipWallBC, Q, solver, d, side)
+    plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
-    m1, m2, m3 = s.i_mom
+    m1, m2, m3 = solver.i_mom
     iso = !isnan(bc.Twall)
     @inbounds for I in plane
-        ρ = _wall_density(Q, I, s.n_species)
+        ρ = _wall_density(Q, I, solver.n_species)
         ke = 0.5 * (Q[I,m1]^2 + Q[I,m2]^2 + Q[I,m3]^2) / ρ
-        Q[I, s.i_energy] -= ke
+        Q[I, solver.i_energy] -= ke
         Q[I, m1] = 0
         Q[I, m2] = 0
         Q[I, m3] = 0
         if iso
-            Q[I, s.i_energy] = wall_internal_energy(s.eos, Q, I, s.n_species, bc.Twall)
+            Q[I, solver.i_energy] =
+                wall_internal_energy(solver.eos, Q, I, solver.n_species, bc.Twall)
         end
     end
     nothing
 end
 
-function enforce!(::ExtrapolationBC, Q, s, d, side)
+function enforce!(::ExtrapolationBC, Q, solver, d, side)
     # Zeroth-order extrapolation: copy the adjacent interior plane onto the
     # edge plane. Crude outflow; characteristic (NSCBC) treatment is a TODO.
-    plane = wallplane(s.decomp, d, side)
+    plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
     e = CartesianIndex(ntuple(k -> k == d ? 1 : 0, 3))
     shift = side == 1 ? e : -e
-    @inbounds for I in plane, c in 1:s.n_cons
+    @inbounds for I in plane, c in 1:solver.n_cons
         Q[I, c] = Q[I + shift, c]
     end
     nothing
 end
 
 "Enforce all boundary conditions on the conserved state (active dims only)."
-function apply_bcs!(s, Q)
+function apply_bcs!(solver, Q)
     for d in 1:3, side in 1:2
-        s.decomp.active[d] || continue
-        enforce!(s.bcs[d][side], Q, s, d, side)
+        solver.decomp.active[d] || continue
+        enforce!(solver.bcs[d][side], Q, solver, d, side)
     end
     return Q
 end

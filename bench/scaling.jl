@@ -24,12 +24,12 @@ end
 println("threads = ", Threads.nthreads())
 @printf("%-8s %10s %12s %12s\n", "N", "points", "rhs [ms]", "ns/point")
 for N in (24, 32, 48, 64, 96)
-    s = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3,
+    solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3,
                transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
-    Q = allocate_state(s)
-    initialize!(s, Q, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
     dQ = zero(Q)
-    t = timeit(() -> compute_rhs!(s, Q, dQ))
+    t = timeit(() -> compute_rhs!(solver, Q, dQ))
     npt = N^3
     @printf("%-8d %10d %12.3f %12.2f\n", N, npt, 1e3t, 1e9t / npt)
 end

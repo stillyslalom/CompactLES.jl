@@ -31,24 +31,24 @@ prob = Problem(
 num = Numerics(n_global=(64, 64, 64), art=ArtParams(enabled=false),
                cfl=0.6, filter_interval=1)
 
-s, Q = setup(prob, num)
+solver, Q = setup(prob, num)
 
-const cellvol = prod(s.h)
+const cellvol = prod(solver.h)
 rank0 = MPI.Comm_rank(MPI.COMM_WORLD) == 0
 
-function diag(s, Q)
-    s.step % 10 == 0 || return
+function diag(solver, Q)
+    solver.step % 10 == 0 || return
     ke = 0.0
-    nx, ny, nz = s.decomp.n_local
-    m1, m2, m3 = s.i_mom
+    nx, ny, nz = solver.decomp.n_local
+    m1, m2, m3 = solver.i_mom
     for k in 1:nz, j in 1:ny, i in 1:nx
-        ρ = Q[gidx(s, i, j, k), 1]
-        ke += 0.5 * (Q[gidx(s, i, j, k), m1]^2 + Q[gidx(s, i, j, k), m2]^2 +
-                     Q[gidx(s, i, j, k), m3]^2) / ρ
+        ρ = Q[gidx(solver, i, j, k), 1]
+        ke += 0.5 * (Q[gidx(solver, i, j, k), m1]^2 + Q[gidx(solver, i, j, k), m2]^2 +
+                     Q[gidx(solver, i, j, k), m3]^2) / ρ
     end
-    ke = MPI.Allreduce(ke * cellvol, +, s.decomp.comm)
-    rank0 && @printf("step %5d  t = %8.4f  KE = %.8e\n", s.step, s.t, ke)
+    ke = MPI.Allreduce(ke * cellvol, +, solver.decomp.comm)
+    rank0 && @printf("step %5d  t = %8.4f  KE = %.8e\n", solver.step, solver.t, ke)
 end
 
-run!(s, Q; tfinal=1.0, nmax=200, callback=diag)
+run!(solver, Q; tfinal=1.0, nmax=200, callback=diag)
 rank0 && println("done.")

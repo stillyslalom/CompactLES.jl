@@ -70,11 +70,11 @@ function solve_col!(x::AbstractVector{T}, F::BandFactor{T}) where {T}
         end
     end
     @inbounds for i in n:-1:1
-        s = x[i]
+        acc = x[i]
         for t in 1:min(q, n - i)
-            s -= U[1+t, i] * x[i+t]
+            acc -= U[1+t, i] * x[i+t]
         end
-        x[i] = s / U[1, i]
+        x[i] = acc / U[1, i]
     end
     return x
 end

@@ -76,26 +76,26 @@ fold_fplan(fold::FoldSpec, σg::Int) = fold.filter_plans[σg > 0 ? 1 : 2]
 """
     fold_fill!(f, decomp, d, lo, hi, σ)
 
-Mirror-fill the halos of `f` beyond the folded end(s) of dimension `d` with
+Mirror-fill the halos of `f` beyond the folded end(solver) of dimension `d` with
 sign `σ` (half-offset mirror: ghost layer j ↔ interior layer j). Only acts on
 ranks owning the corresponding global edge.
 """
 function fold_fill!(f, decomp::Decomp, d::Int, lo::Bool, hi::Bool, σ::Int)
     pad = decomp.n_halo_d[d]
     n = decomp.n_local[d]
-    s = Float64(σ)
+    sgn = Float64(σ)
     if lo && decomp.sub_rank[d] == 0
         @inbounds for j in 1:pad
             dst = _slab(f, d, (pad - j + 1):(pad - j + 1))
             src = _slab(f, d, (pad + j):(pad + j))
-            @. dst = s * src
+            @. dst = sgn * src
         end
     end
     if hi && decomp.sub_rank[d] == decomp.sub_size[d] - 1
         @inbounds for j in 1:pad
             dst = _slab(f, d, (pad + n + j):(pad + n + j))
             src = _slab(f, d, (pad + n - j + 1):(pad + n - j + 1))
-            @. dst = s * src
+            @. dst = sgn * src
         end
     end
     return f
@@ -136,15 +136,15 @@ end
 end
 
 """
-    pair_forward!(w, f, s, fold, σ)
+    pair_forward!(w, f, solver, fold, σ)
 
 Load the even/odd combination of `f` (interior only) into `w` for the fold of
 `fold`, using field sign `σ`. On-rank pairing: lower pdim half of `w` holds e,
 upper half holds o (canonically indexed on the lower half). Off-rank: `w`
 holds this rank's designated combo after a pairwise block exchange.
 """
-function pair_forward!(w, f, s, fold::FoldSpec, σ::Int)
-    decomp = s.decomp
+function pair_forward!(w, f, solver, fold::FoldSpec, σ::Int)
+    decomp = solver.decomp
     pair = fold.pair
     sf = Float64(σ)
     if pair.local_pair
@@ -190,14 +190,14 @@ function pair_forward!(w, f, s, fold::FoldSpec, σ::Int)
 end
 
 """
-    pair_backward!(out, s, fold, σ)
+    pair_backward!(out, solver, fold, σ)
 
 Inverse butterfly applied in place to the operator result `out`:
 final(x) = Re + Ro, final(Mx) = σ (Re − Ro). Off-rank: one pairwise exchange
 of result blocks.
 """
-function pair_backward!(out, s, fold::FoldSpec, σ::Int)
-    decomp = s.decomp
+function pair_backward!(out, solver, fold::FoldSpec, σ::Int)
+    decomp = solver.decomp
     pair = fold.pair
     sf = Float64(σ)
     if pair.local_pair
@@ -240,7 +240,7 @@ end
 # --- Folded operator application -------------------------------------------
 
 """
-    fold_apply!(out, f, s, fold, σ; isfilter)
+    fold_apply!(out, f, solver, fold, σ; isfilter)
 
 Apply the compact derivative or filter along the folded dimension of `fold` to
 field `f` (current halos required) with antipodal sign `σ`. Self-paired
@@ -248,8 +248,8 @@ field `f` (current halos required) with antipodal sign `σ`. Self-paired
 run the even/odd butterfly; the input `f` is left untouched (the combo lives
 in scratch `s.pairbuf`).
 """
-function fold_apply!(out, f, s, fold::FoldSpec, σ::Int; isfilter::Bool=false)
-    decomp = s.decomp
+function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int; isfilter::Bool=false)
+    decomp = solver.decomp
     d = fold.dim
     # Solution parity: derivatives flip field parity, filters preserve it.
     σg(σc) = isfilter ? σc : -σc
@@ -260,8 +260,8 @@ function fold_apply!(out, f, s, fold::FoldSpec, σ::Int; isfilter::Bool=false)
         return out
     end
     pair = fold.pair
-    w = s.pairbuf
-    pair_forward!(w, f, s, fold, σ)
+    w = solver.pairbuf
+    pair_forward!(w, f, solver, fold, σ)
     exchange_dim_batch!([w], decomp, d)   # rank-boundary halos along the fold dim
     if pair.local_pair
         # Mixed parities per pdim half: run both plans and select. The even
@@ -272,7 +272,7 @@ function fold_apply!(out, f, s, fold::FoldSpec, σ::Int; isfilter::Bool=false)
         fold_fill!(w, decomp, d, fold.lo, fold.hi, σ)
         apply_along!(out, plan(σ), w, decomp)          # valid on the e half
         fold_fill!(w, decomp, d, fold.lo, fold.hi, -1)
-        apply_along!(s.pairout, plan(-1), w, decomp)   # valid on the o half
+        apply_along!(solver.pairout, plan(-1), w, decomp)   # valid on the o half
         sd = pair.pdim != 0 ? pair.pdim : pair.revdim
         half = decomp.n_local[sd] ÷ 2
         Hp = decomp.n_halo_d[sd]
@@ -282,7 +282,7 @@ function fold_apply!(out, f, s, fold::FoldSpec, σ::Int; isfilter::Bool=false)
                 v = (sd == 1 ? i1 : sd == 2 ? i2 : i3) - Hp
                 if v > half
                     I = CartesianIndex(i1, i2, i3)
-                    out[I] = s.pairout[I]
+                    out[I] = solver.pairout[I]
                 end
             end
         end
@@ -294,6 +294,6 @@ function fold_apply!(out, f, s, fold::FoldSpec, σ::Int; isfilter::Bool=false)
         fold_fill!(w, decomp, d, fold.lo, fold.hi, σc)
         apply_along!(out, plan(σc), w, decomp)
     end
-    pair_backward!(out, s, fold, σ)
+    pair_backward!(out, solver, fold, σ)
     return out
 end

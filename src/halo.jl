@@ -120,11 +120,11 @@ edge of dimension 1.
 function axis_fill!(f, decomp::Decomp, σf::Int)
     (decomp.active[1] && !decomp.periodic[1] && decomp.sub_rank[1] == 0) || return f
     pad = decomp.n_halo_d[1]
-    s = Float64(σf)
+    sgn = Float64(σf)
     @inbounds for j in 1:pad
         g = pad - j + 1         # ghost full index
         m = pad + j             # mirrored interior full index
-        @views f[g, :, :] .= s .* f[m, :, :]
+        @views f[g, :, :] .= sgn .* f[m, :, :]
     end
     return f
 end

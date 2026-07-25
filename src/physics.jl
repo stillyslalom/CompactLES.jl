@@ -14,7 +14,7 @@
 #
 # The conserved layout is (ρY₁..ρY_Ns, ρu, ρv, ρw, E); mixture density is the
 # sum of partial densities. Hot loops reach the EOS through a function barrier
-# (`primitives!(s, Q)` dispatches on `typeof(s.eos)`), so an abstractly typed
+# (`primitives!(solver, Q)` dispatches on `typeof(solver.eos)`), so an abstractly typed
 # `eos` field costs one dynamic dispatch per array pass, not per point.
 
 abstract type EOS end
@@ -54,21 +54,21 @@ Base.@kwdef struct Transport{T}
 end
 
 """
-    primitives!(s, Q)
+    primitives!(solver, Q)
 
 Recover ρ, u, v, w, p, T_ion, c, cp_mix, and the species mass fractions Y_k over
 the full padded arrays (rank-boundary halos of Q must be current). Stale
 physical-edge halos get benign placeholders; they are never read.
 """
-primitives!(s, Q) = _primitives!(s, s.eos, Q)
+primitives!(solver, Q) = _primitives!(solver, solver.eos, Q)
 
-function _primitives!(s, eos::IdealMixture, Q)
-    n_species = s.n_species
-    m1, m2, m3 = s.i_mom
-    i_energy = s.i_energy
+function _primitives!(solver, eos::IdealMixture, Q)
+    n_species = solver.n_species
+    m1, m2, m3 = solver.i_mom
+    i_energy = solver.i_energy
     Rk, cvk = eos.Rk, eos.cvk
-    ρa, ua, va, wa = s.rho, s.u, s.v, s.w
-    pa, T_iona, ca, cpa = s.p, s.T_ion, s.c, s.cp_mix
+    ρa, ua, va, wa = solver.rho, solver.u, solver.v, solver.w
+    pa, T_iona, ca, cpa = solver.p, solver.T_ion, solver.c, solver.cp_mix
     nxf, nyf, nzf = size(ρa)
     @threaded nxf*nyf*nzf for k in 1:nzf
         @inbounds for j in 1:nyf, i in 1:nxf
@@ -82,7 +82,7 @@ function _primitives!(s, eos::IdealMixture, Q)
                 for sp in 1:n_species
                     Rm  += Q[i, j, k, sp] * Rk[sp]
                     cvm += Q[i, j, k, sp] * cvk[sp]
-                    s.Y[sp][i, j, k] = Q[i, j, k, sp] * ri
+                    solver.Y[sp][i, j, k] = Q[i, j, k, sp] * ri
                 end
                 Rm *= ri; cvm *= ri
                 u = Q[i, j, k, m1] * ri
@@ -104,10 +104,10 @@ function _primitives!(s, eos::IdealMixture, Q)
                 pa[i, j, k] = 1; T_iona[i, j, k] = 1; ca[i, j, k] = 1
                 cpa[i, j, k] = 1
                 for sp in 1:n_species
-                    s.Y[sp][i, j, k] = sp == 1 ? 1.0 : 0.0
+                    solver.Y[sp][i, j, k] = sp == 1 ? 1.0 : 0.0
                 end
             end
         end
     end
-    return s
+    return solver
 end

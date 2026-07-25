@@ -25,8 +25,8 @@ struct BandedCompactScheme{T} <: AbstractCompactScheme
     closures::Vector{BandedClosureRow{T}}
 end
 
-nclosure(s::BandedCompactScheme) = length(s.closures)
-halfwidth(s::BandedCompactScheme) = length(s.coeffs)
+nclosure(scheme::BandedCompactScheme) = length(scheme.closures)
+halfwidth(scheme::BandedCompactScheme) = length(scheme.coeffs)
 
 """
     lele_d1_10()

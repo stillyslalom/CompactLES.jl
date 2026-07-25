@@ -132,7 +132,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     end
     decomp = Decomp(n_global, periodic; dims=dims, n_halo=n_halo)
     Lt = ntuple(d -> T(L_domain[d]), 3)
-    # Grid spacing: computational s ∈ [0,1] for stretched dims; half-offset
+    # Grid spacing: computational ξ ∈ [0,1] for stretched dims; half-offset
     # r ∈ (0, R] for axis grids (h = R/(N − ½), r₁ = h/2); standard otherwise.
     # Half-offset grids on folded dimensions: fold at the low end only
     # (r: axis/origin) gives h = L/(N − ½); folds at both ends (θ poles)
@@ -226,7 +226,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     filter_plans = ntuple(d -> decomp.active[d] && folds[d] === nothing ?
                          mkd(filt, d) : nothing, 3)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
-    s = Solver{T}(decomp, eos, transport, art, metric, stretch, folds,
+    solver = Solver{T}(decomp, eos, transport, art, metric, stretch, folds,
                   n_species, n_cons, i_mom, n_species + 4,
                   Lt, orig, coord_shift, h,
                   ntuple(d -> (bcs[d][1], bcs[d][2]), 3),
@@ -245,56 +245,59 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(),
                   [f() for _ in 1:3, _ in 1:n_cons],
                   zero(T), zero(T), 0)
-    init_geometry!(s)
-    return s
+    init_geometry!(solver)
+    return solver
 end
 
 "Physical coordinate of local interior index i along dimension d."
-function xcoord(s::Solver, d::Int, i::Int)
-    ξ = s.origin[d] + s.coord_shift[d] + (s.decomp.offset[d] + i - 1) * s.h[d]
-    st = s.stretch[d]
+function xcoord(solver::Solver, d::Int, i::Int)
+    ξ = solver.origin[d] + solver.coord_shift[d] +
+        (solver.decomp.offset[d] + i - 1) * solver.h[d]
+    st = solver.stretch[d]
     return st === nothing ? ξ : st.x(ξ)
 end
 
 "Halo-offset CartesianIndex of local interior point (i, j, k)."
-gidx(s::Solver, i::Int, j::Int, k::Int) = CartesianIndex(
-    i + s.decomp.n_halo_d[1], j + s.decomp.n_halo_d[2], k + s.decomp.n_halo_d[3])
+function gidx(solver::Solver, i::Int, j::Int, k::Int)
+    pad = solver.decomp.n_halo_d
+    return CartesianIndex(i + pad[1], j + pad[2], k + pad[3])
+end
 
-allocate_state(s::Solver) = allocate_state(s.decomp, s.n_cons)
+allocate_state(solver::Solver) = allocate_state(solver.decomp, solver.n_cons)
 
 # --- Operator routing through folds ----------------------------------------
 
 """
-    deriv_along!(out, f, s, d, σf)
+    deriv_along!(out, f, solver, d, σf)
 
 Compact derivative of `f` along active dimension `d`; `σf` is the field's
 antipodal sign for the fold on `d` (ignored when there is none). Caller
 ensures current halos.
 """
-function deriv_along!(out, f, s::Solver, d::Int, σf::Int)
-    fold = s.folds[d]
+function deriv_along!(out, f, solver::Solver, d::Int, σf::Int)
+    fold = solver.folds[d]
     if fold === nothing
-        apply_along!(out, s.deriv_plans[d], f, s.decomp)
+        apply_along!(out, solver.deriv_plans[d], f, solver.decomp)
     else
-        fold_apply!(out, f, s, fold, σf; isfilter=false)
+        fold_apply!(out, f, solver, fold, σf; isfilter=false)
     end
     return out
 end
 
 "Compact filter of `f` along dimension `d` with antipodal sign `σf`."
-function filt_along!(out, f, s::Solver, d::Int, σf::Int)
-    fold = s.folds[d]
+function filt_along!(out, f, solver::Solver, d::Int, σf::Int)
+    fold = solver.folds[d]
     if fold === nothing
-        apply_along!(out, s.filter_plans[d], f, s.decomp)
+        apply_along!(out, solver.filter_plans[d], f, solver.decomp)
     else
-        fold_apply!(out, f, s, fold, σf; isfilter=true)
+        fold_apply!(out, f, solver, fold, σf; isfilter=true)
     end
     return out
 end
 
 # Scale a raw coordinate-derivative field by 1/h_d pointwise (full array).
-function _scale_grad!(g, s, d)
-    ih = s.inv_h[d]
+function _scale_grad!(g, solver, d)
+    ih = solver.inv_h[d]
     @threaded length(g) for idx in eachindex(g)
         @inbounds g[idx] *= ih[idx]
     end
@@ -303,37 +306,37 @@ end
 
 # Antipodal signs of velocity and conserved components for the fold (if any)
 # on dimension d; scalars, partial densities, and energy are always +1.
-vel_parity(s::Solver, d::Int, j::Int) =
-    s.folds[d] === nothing ? 1 : s.folds[d].sigvel[j]
-cons_parity(s::Solver, d::Int, c::Int) =
-    (s.folds[d] === nothing || c <= s.n_species || c == s.i_energy) ? 1 :
-    s.folds[d].sigvel[c - s.n_species]
+vel_parity(solver::Solver, d::Int, j::Int) =
+    solver.folds[d] === nothing ? 1 : solver.folds[d].sigvel[j]
+cons_parity(solver::Solver, d::Int, c::Int) =
+    (solver.folds[d] === nothing || c <= solver.n_species || c == solver.i_energy) ? 1 :
+    solver.folds[d].sigvel[c - solver.n_species]
 
-assemble_fluxes!(s::Solver, Q) = _assemble_fluxes!(s, s.eos, Q)
+assemble_fluxes!(solver::Solver, Q) = _assemble_fluxes!(solver, solver.eos, Q)
 
-function _assemble_fluxes!(s::Solver{T}, eos, Q) where {T}
-    decomp = s.decomp
+function _assemble_fluxes!(solver::Solver{T}, eos, Q) where {T}
+    decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    tr = s.transport
+    tr = solver.transport
     mu0 = tr.mu0
-    n_species = s.n_species
-    i_energy = s.i_energy
-    grad_u = s.grad_u
-    gT = s.grad_T_ion
-    gY = s.grad_Y
-    flux = s.flux
+    n_species = solver.n_species
+    i_energy = solver.i_energy
+    grad_u = solver.grad_u
+    gT = solver.grad_T_ion
+    gY = solver.grad_Y
+    flux = solver.flux
     @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
-            ρ = s.rho[I]
-            uv = (s.u[I], s.v[I], s.w[I])
-            p = s.p[I]
-            Tp = s.T_ion[I]
+            ρ = solver.rho[I]
+            uv = (solver.u[I], solver.v[I], solver.w[I])
+            p = solver.p[I]
+            Tp = solver.T_ion[I]
             E = Q[I, i_energy]
-            μ = mu0 + s.mu_art[I]
-            β = s.beta_art[I]
-            κ = mu0 * s.cp_mix[I] / tr.Pr + s.kappa_art[I]
+            μ = mu0 + solver.mu_art[I]
+            β = solver.beta_art[I]
+            κ = mu0 * solver.cp_mix[I] / tr.Pr + solver.kappa_art[I]
             D0 = mu0 / (tr.Sc * ρ)               # molecular part of each D_k
             divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
             τ11 = μ * (2*grad_u[1,1][I] - (2/3) * divu) + β * divu
@@ -351,62 +354,62 @@ function _assemble_fluxes!(s::Solver{T}, eos, Q) where {T}
                 # which enforces Σ_k J_k = 0 exactly since ΣY_k = 1.
                 Vc = zero(T)
                 for sp in 1:n_species
-                    Vc += (D0 + s.D_art[sp][I]) * gY[d, sp][I]
+                    Vc += (D0 + solver.D_art[sp][I]) * gY[d, sp][I]
                 end
                 hdiff = zero(T)              # Σ_k h_k J_{k,d}
                 for sp in 1:n_species
-                    Dk = D0 + s.D_art[sp][I]
-                    Jkd = ρ * (-Dk * gY[d, sp][I] + s.Y[sp][I] * Vc)
-                    flux[d, sp][I] = ρ * s.Y[sp][I] * ud + Jkd
+                    Dk = D0 + solver.D_art[sp][I]
+                    Jkd = ρ * (-Dk * gY[d, sp][I] + solver.Y[sp][I] * Vc)
+                    flux[d, sp][I] = ρ * solver.Y[sp][I] * ud + Jkd
                     hdiff += species_enthalpy(eos, sp, Tp) * Jkd
                 end
-                flux[d, s.i_mom[1]][I] = ρ * ud * uv[1] + (d == 1 ? p : zero(T)) - τd[1]
-                flux[d, s.i_mom[2]][I] = ρ * ud * uv[2] + (d == 2 ? p : zero(T)) - τd[2]
-                flux[d, s.i_mom[3]][I] = ρ * ud * uv[3] + (d == 3 ? p : zero(T)) - τd[3]
+                flux[d, solver.i_mom[1]][I] = ρ * ud * uv[1] + (d == 1 ? p : zero(T)) - τd[1]
+                flux[d, solver.i_mom[2]][I] = ρ * ud * uv[2] + (d == 2 ? p : zero(T)) - τd[2]
+                flux[d, solver.i_mom[3]][I] = ρ * ud * uv[3] + (d == 3 ? p : zero(T)) - τd[3]
                 flux[d, i_energy][I] = (E + p) * ud -
                                (uv[1]*τd[1] + uv[2]*τd[2] + uv[3]*τd[3]) -
                                κ * gT[d][I] + hdiff
             end
         end
     end
-    return s
+    return solver
 end
 
 """
-    compute_rhs!(s, Q, dQ)
+    compute_rhs!(solver, Q, dQ)
 
 Evaluate dQ/dt into the interior of `dQ` from the conserved state `Q`
 (boundary conditions should already be enforced on `Q`). Collapsed dimensions
 contribute no derivatives; the axis dimension routes through parity-folded
 plans with mirror-filled halos.
 """
-function compute_rhs!(s::Solver, Q, dQ)
-    decomp = s.decomp
+function compute_rhs!(solver::Solver, Q, dQ)
+    decomp = solver.decomp
     exchange_state!(Q, decomp)
-    primitives!(s, Q)
-    vel = (s.u, s.v, s.w)
+    primitives!(solver, Q)
+    vel = (solver.u, solver.v, solver.w)
     for jj in 1:3, d in 1:3
         if decomp.active[d]
-            deriv_along!(s.grad_u[d, jj], vel[jj], s, d, vel_parity(s, d, jj))
-            _scale_grad!(s.grad_u[d, jj], s, d)   # 1/h_d incl. stretching Jacobian
+            deriv_along!(solver.grad_u[d, jj], vel[jj], solver, d, vel_parity(solver, d, jj))
+            _scale_grad!(solver.grad_u[d, jj], solver, d)   # 1/h_d incl. stretching Jacobian
         else
-            fill!(s.grad_u[d, jj], 0)
+            fill!(solver.grad_u[d, jj], 0)
         end
     end
-    metric_correct_gradients!(s, s.metric)   # additive curvature terms
-    compute_artificial!(s, Q)
+    metric_correct_gradients!(solver, solver.metric)   # additive curvature terms
+    compute_artificial!(solver, Q)
     for d in 1:3
         decomp.active[d] || continue
-        deriv_along!(s.grad_T_ion[d], s.T_ion, s, d, 1)
-        _scale_grad!(s.grad_T_ion[d], s, d)
-        for sp in 1:s.n_species
-            deriv_along!(s.grad_Y[d, sp], s.Y[sp], s, d, 1)
-            _scale_grad!(s.grad_Y[d, sp], s, d)
+        deriv_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1)
+        _scale_grad!(solver.grad_T_ion[d], solver, d)
+        for sp in 1:solver.n_species
+            deriv_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
+            _scale_grad!(solver.grad_Y[d, sp], solver, d)
         end
     end
-    assemble_fluxes!(s, Q)
+    assemble_fluxes!(solver, Q)
     for d in 1:3
-        exchange_dim_batch!(view(s.flux, d, :), decomp, d)
+        exchange_dim_batch!(view(solver.flux, d, :), decomp, d)
     end
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -416,8 +419,8 @@ function compute_rhs!(s::Solver, Q, dQ)
     # both removes three array streams per (component, dimension) — 45 of them
     # for a 5-component 3-D RHS, in what the phase budget shows is the single
     # largest phase. Curved or stretched grids take the general path unchanged.
-    unitgeom = s.metric isa CartesianMetric && all(isnothing, s.stretch)
-    for c in 1:s.n_cons
+    unitgeom = solver.metric isa CartesianMetric && all(isnothing, solver.stretch)
+    for c in 1:solver.n_cons
         @threaded nx*ny*nz for k in 1:nz
             @inbounds for j in 1:ny, i in 1:nx
                 dQ[i+o1, j+o2, k+o3, c] = 0
@@ -425,36 +428,36 @@ function compute_rhs!(s::Solver, Q, dQ)
         end
         for d in 1:3
             decomp.active[d] || continue
-            Fdc = s.flux[d, c]
-            σ = s.folds[d] === nothing ? 1 : s.folds[d].sigflux[c]
+            Fdc = solver.flux[d, c]
+            σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
             if unitgeom
-                deriv_along!(s.tmp_a, Fdc, s, d, σ)
+                deriv_along!(solver.tmp_a, Fdc, solver, d, σ)
                 @threaded nx*ny*nz for k in 1:nz
                     @inbounds for j in 1:ny, i in 1:nx
-                        dQ[i+o1, j+o2, k+o3, c] -= s.tmp_a[i+o1, j+o2, k+o3]
+                        dQ[i+o1, j+o2, k+o3, c] -= solver.tmp_a[i+o1, j+o2, k+o3]
                     end
                 end
             else
                 # tmp_b = A_d F_d over the full array; A_d is odd in r for the
                 # cylindrical axis (A₁ = r), flipping the flux parity.
-                Ad = s.area_d[d]
-                @threaded length(s.tmp_b) for idx in eachindex(s.tmp_b)
-                    @inbounds s.tmp_b[idx] = Ad[idx] * Fdc[idx]
+                Ad = solver.area_d[d]
+                @threaded length(solver.tmp_b) for idx in eachindex(solver.tmp_b)
+                    @inbounds solver.tmp_b[idx] = Ad[idx] * Fdc[idx]
                 end
-                deriv_along!(s.tmp_a, s.tmp_b, s, d, σ)
+                deriv_along!(solver.tmp_a, solver.tmp_b, solver, d, σ)
                 @threaded nx*ny*nz for k in 1:nz
                     @inbounds for j in 1:ny, i in 1:nx
                         I = CartesianIndex(i + o1, j + o2, k + o3)
-                        dQ[I, c] -= s.inv_J[I] * s.tmp_a[I]
+                        dQ[I, c] -= solver.inv_J[I] * solver.tmp_a[I]
                     end
                 end
             end
         end
     end
-    add_metric_sources!(s, dQ, Q, s.metric)
+    add_metric_sources!(solver, dQ, Q, solver.metric)
     for d in 1:3, side in 1:2
         decomp.active[d] || continue
-        correct_rhs!(s.bcs[d][side], s, Q, dQ, d, side)
+        correct_rhs!(solver.bcs[d][side], solver, Q, dQ, d, side)
     end
     return dQ
 end

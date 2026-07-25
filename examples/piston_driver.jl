@@ -32,10 +32,10 @@ prob = Problem(
 num = Numerics(n_global=(256, 12, 12), art=ArtParams(enabled=true),
                cfl=0.5, dims=(np, 1, 1))
 
-s, Q = setup(prob, num)
+solver, Q = setup(prob, num)
 rank = MPI.Comm_rank(MPI.COMM_WORLD)
 
-run!(s, Q; tfinal=2.0, nmax=100_000,
-     callback=(s, Q) -> (s.step % 50 == 0 && rank == 0 &&
-                         @printf("step %5d  t = %6.3f\n", s.step, s.t)))
+run!(solver, Q; tfinal=2.0, nmax=100_000,
+     callback=(solver, Q) -> (solver.step % 50 == 0 && rank == 0 &&
+                         @printf("step %5d  t = %6.3f\n", solver.step, solver.t)))
 rank == 0 && println("done.")

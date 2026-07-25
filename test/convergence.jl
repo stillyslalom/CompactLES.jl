@@ -38,16 +38,16 @@ using Printf, Test
 const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
-fillf!(s, f, fn) = (for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2],
-                        i in 1:s.decomp.n_local[1]
-    f[gidx(s, i, j, k)] = fn(xcoord(s, 1, i), xcoord(s, 2, j), xcoord(s, 3, k))
+fillf!(solver, f, fn) = (for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
+                        i in 1:solver.decomp.n_local[1]
+    f[gidx(solver, i, j, k)] = fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))
 end; f)
 
-function ferr(s, f, fn)
+function ferr(solver, f, fn)
     e = 0.0
-    for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
-        e = max(e, abs(f[gidx(s, i, j, k)] -
-                       fn(xcoord(s, 1, i), xcoord(s, 2, j), xcoord(s, 3, k))))
+    for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
+        e = max(e, abs(f[gidx(solver, i, j, k)] -
+                       fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))))
     end
     e
 end
@@ -63,13 +63,13 @@ end
 function study(name, Ns, build, fld, ref; expect=nothing, tol=1.0)
     errs = Float64[]
     for N in Ns
-        s = build(N)
-        f = CL.field(s.decomp); df = CL.field(s.decomp)
-        fillf!(s, f, fld)
-        CL.exchange_halos!(f, s.decomp)
-        CL.deriv_along!(df, f, s, 1, ref.parity)
-        CL._scale_grad!(df, s, 1)
-        push!(errs, ferr(s, df, ref.fn))
+        solver = build(N)
+        f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+        fillf!(solver, f, fld)
+        CL.exchange_halos!(f, solver.decomp)
+        CL.deriv_along!(df, f, solver, 1, ref.parity)
+        CL._scale_grad!(df, solver, 1)
+        push!(errs, ferr(solver, df, ref.fn))
     end
     p = order(Ns, errs)
     @printf("%-38s  ", name)
@@ -153,21 +153,21 @@ function taylor_green_ke(N; tfinal=10.0, Re=1600.0)
                        u=(sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), 0.0),
                        p=p0 + (1 / 16) * (cos(2x) + cos(2y)) * (cos(2z) + 2),
                        rho=1.0))
-    s, Q = setup(prob, Numerics(n_global=(N, N, N), art=ArtParams(enabled=false),
+    solver, Q = setup(prob, Numerics(n_global=(N, N, N), art=ArtParams(enabled=false),
                                 cfl=0.6))
-    cellvol = prod(s.h)
+    cellvol = prod(solver.h)
     ts = Float64[]; kes = Float64[]
-    cb = (s, Q) -> begin
+    cb = (solver, Q) -> begin
         ke = 0.0
-        for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
-            I = gidx(s, i, j, k)
+        for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
+            I = gidx(solver, i, j, k)
             ρ = Q[I, 1]
-            ke += 0.5 * (Q[I, s.i_mom[1]]^2 + Q[I, s.i_mom[2]]^2 + Q[I, s.i_mom[3]]^2) / ρ
+            ke += 0.5 * (Q[I, solver.i_mom[1]]^2 + Q[I, solver.i_mom[2]]^2 + Q[I, solver.i_mom[3]]^2) / ρ
         end
-        ke = MPI.Allreduce(ke * cellvol, +, s.decomp.comm) / (2π)^3
-        push!(ts, s.t); push!(kes, ke)
+        ke = MPI.Allreduce(ke * cellvol, +, solver.decomp.comm) / (2π)^3
+        push!(ts, solver.t); push!(kes, ke)
     end
-    run!(s, Q; tfinal=tfinal, callback=cb)
+    run!(solver, Q; tfinal=tfinal, callback=cb)
     ts, kes
 end
 

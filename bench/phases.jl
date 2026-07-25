@@ -12,71 +12,71 @@ per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 best(f; reps=20) = (f(); f(); minimum(@elapsed(f()) for _ in 1:reps))
 
-function budget(name, s, Q)
-    decomp = s.decomp
+function budget(name, solver, Q)
+    decomp = solver.decomp
     dQ = zero(Q)
-    vel = (s.u, s.v, s.w)
+    vel = (solver.u, solver.v, solver.w)
     nx, ny, nz = decomp.n_local
     o1, o2, o3 = decomp.n_halo_d
     nact = count(decomp.active)
 
-    CL.exchange_state!(Q, decomp); CL.primitives!(s, Q)
+    CL.exchange_state!(Q, decomp); CL.primitives!(solver, Q)
 
     t = Dict{String,Float64}()
     t["exchange_state!"] = best(() -> CL.exchange_state!(Q, decomp))
-    t["primitives!"]     = best(() -> CL.primitives!(s, Q))
+    t["primitives!"]     = best(() -> CL.primitives!(solver, Q))
     t["velocity grads"]  = best(() -> for jj in 1:3, d in 1:3
         if decomp.active[d]
-            CL.deriv_along!(s.grad_u[d, jj], vel[jj], s, d, CL.vel_parity(s, d, jj))
-            CL._scale_grad!(s.grad_u[d, jj], s, d)
+            CL.deriv_along!(solver.grad_u[d, jj], vel[jj], solver, d, CL.vel_parity(solver, d, jj))
+            CL._scale_grad!(solver.grad_u[d, jj], solver, d)
         end
     end)
-    t["metric grad corr"] = best(() -> CL.metric_correct_gradients!(s, s.metric))
-    t["artificial"]       = best(() -> CL.compute_artificial!(s, Q))
+    t["metric grad corr"] = best(() -> CL.metric_correct_gradients!(solver, solver.metric))
+    t["artificial"]       = best(() -> CL.compute_artificial!(solver, Q))
     t["scalar grads"]     = best(() -> for d in 1:3
         decomp.active[d] || continue
-        CL.deriv_along!(s.grad_T_ion[d], s.T_ion, s, d, 1); CL._scale_grad!(s.grad_T_ion[d], s, d)
-        for sp in 1:s.n_species
-            CL.deriv_along!(s.grad_Y[d, sp], s.Y[sp], s, d, 1)
-            CL._scale_grad!(s.grad_Y[d, sp], s, d)
+        CL.deriv_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1); CL._scale_grad!(solver.grad_T_ion[d], solver, d)
+        for sp in 1:solver.n_species
+            CL.deriv_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
+            CL._scale_grad!(solver.grad_Y[d, sp], solver, d)
         end
     end)
-    t["assemble_fluxes!"] = best(() -> CL.assemble_fluxes!(s, Q))
+    t["assemble_fluxes!"] = best(() -> CL.assemble_fluxes!(solver, Q))
     t["flux halo exch"]   = best(() -> for d in 1:3
-        CL.exchange_dim_batch!(view(s.flux, d, :), decomp, d)
+        CL.exchange_dim_batch!(view(solver.flux, d, :), decomp, d)
     end)
     # mirrors the branch compute_rhs! actually takes for this solver
-    unitgeom = s.metric isa CartesianMetric && all(isnothing, s.stretch)
-    t["flux divergence"]  = best(() -> for c in 1:s.n_cons, d in 1:3
+    unitgeom = solver.metric isa CartesianMetric && all(isnothing, solver.stretch)
+    t["flux divergence"]  = best(() -> for c in 1:solver.n_cons, d in 1:3
         decomp.active[d] || continue
-        Fdc = s.flux[d, c]
-        σ = s.folds[d] === nothing ? 1 : s.folds[d].sigflux[c]
+        Fdc = solver.flux[d, c]
+        σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
         if unitgeom
-            CL.deriv_along!(s.tmp_a, Fdc, s, d, σ)
+            CL.deriv_along!(solver.tmp_a, Fdc, solver, d, σ)
             @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-                dQ[i+o1, j+o2, k+o3, c] -= s.tmp_a[i+o1, j+o2, k+o3]
+                dQ[i+o1, j+o2, k+o3, c] -= solver.tmp_a[i+o1, j+o2, k+o3]
             end
         else
-            Ad = s.area_d[d]
-            @inbounds for idx in eachindex(s.tmp_b)
-                s.tmp_b[idx] = Ad[idx] * Fdc[idx]
+            Ad = solver.area_d[d]
+            @inbounds for idx in eachindex(solver.tmp_b)
+                solver.tmp_b[idx] = Ad[idx] * Fdc[idx]
             end
-            CL.deriv_along!(s.tmp_a, s.tmp_b, s, d, σ)
+            CL.deriv_along!(solver.tmp_a, solver.tmp_b, solver, d, σ)
             @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
                 I = CartesianIndex(i + o1, j + o2, k + o3)
-                dQ[I, c] -= s.inv_J[I] * s.tmp_a[I]
+                dQ[I, c] -= solver.inv_J[I] * solver.tmp_a[I]
             end
         end
     end)
-    t["metric sources"]   = best(() -> CL.add_metric_sources!(s, dQ, Q, s.metric))
-    t["apply_bcs!"]       = best(() -> apply_bcs!(s, Q))
+    t["metric sources"]   = best(() -> CL.add_metric_sources!(solver, dQ, Q, solver.metric))
+    t["apply_bcs!"]       = best(() -> apply_bcs!(solver, Q))
 
-    whole = best(() -> compute_rhs!(s, Q, dQ))
+    whole = best(() -> compute_rhs!(solver, Q, dQ))
     npt = prod(decomp.n_local)
-    nsolves = 3 * nact + nact * (1 + s.n_species) + s.n_cons * nact   # vel + scalars + flux
+    nsolves = 3 * nact + nact * (1 + solver.n_species) + solver.n_cons * nact   # vel + scalars + flux
     @printf("\n===== %s =====\n", name)
     @printf("  %d points, %d species, %d active dims; compute_rhs! = %.3f ms (%.1f ns/pt)\n",
-            npt, s.n_species, nact, 1e3whole, 1e9whole / npt)
+            npt, solver.n_species, nact, 1e3whole, 1e9whole / npt)
     @printf("  %d compact line-solves per RHS\n", nsolves)
     tot = sum(values(t))
     println("  phase                    ms      % of sum")

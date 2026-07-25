@@ -17,14 +17,14 @@ end
 
 for N in (32, 64)
     # NSCBC outflow + Dirichlet inflow: the heaviest boundary path
-    s = Solver(n_global=(N, N, N), L_domain=(1.0, 0.4, 0.4),
+    solver = Solver(n_global=(N, N, N), L_domain=(1.0, 0.4, 0.4),
                bcs=((DirichletBC((x, y, z, t) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0)),
                      NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
                transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
-    Q = allocate_state(s); dQ = zero(Q)
-    initialize!(s, Q, (x, y, z) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0))
-    trhs = timeit(() -> compute_rhs!(s, Q, dQ))
-    tbc  = timeit(() -> apply_bcs!(s, Q))
+    Q = allocate_state(solver); dQ = zero(Q)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0))
+    trhs = timeit(() -> compute_rhs!(solver, Q, dQ))
+    tbc  = timeit(() -> apply_bcs!(solver, Q))
     @printf("N=%-4d NSCBC+Dirichlet   compute_rhs! %8.3f ms   apply_bcs! %8.4f ms\n",
             N, 1e3trhs, 1e3tbc)
 

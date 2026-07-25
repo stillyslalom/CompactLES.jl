@@ -7,10 +7,10 @@ using JET, Printf
 const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
-s = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
+solver = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
            transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
-Q = allocate_state(s); dQ = zero(Q)
-initialize!(s, Q, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
+Q = allocate_state(solver); dQ = zero(Q)
+initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
 
 sc = Solver(n_global=(32, 16, 12), L_domain=(1.0, 2π, 0.5), metric=CylindricalMetric(),
             origin=(0.2, 0.0, 0.0),
@@ -45,7 +45,7 @@ function where_(name, res)
     end
 end
 
-where_("compute_rhs! cartesian",   @report_opt target_modules=(CL,) compute_rhs!(s, Q, dQ))
+where_("compute_rhs! cartesian",   @report_opt target_modules=(CL,) compute_rhs!(solver, Q, dQ))
 where_("compute_rhs! cylindrical", @report_opt target_modules=(CL,) compute_rhs!(sc, Qc, dQc))
 where_("compute_rhs! NSCBC",       @report_opt target_modules=(CL,) compute_rhs!(sn, Qn, dQn))
 println("\ndone")

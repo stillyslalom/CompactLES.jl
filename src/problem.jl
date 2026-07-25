@@ -57,34 +57,34 @@ function conserved_from_prim(eos::IdealMixture, pr::Prim{N}) where {N}
      ρ * (cvm * T_ion + ke))
 end
 
-@inline function write_conserved!(Q, I, s, pr::Prim)
-    q = conserved_from_prim(s.eos, pr)
-    @inbounds for c in 1:s.n_cons
+@inline function write_conserved!(Q, I, solver, pr::Prim)
+    q = conserved_from_prim(solver.eos, pr)
+    @inbounds for c in 1:solver.n_cons
         Q[I, c] = q[c]
     end
     return Q
 end
 
 """
-    initialize!(s, Q, ic)
+    initialize!(solver, Q, ic)
 
 Fill the interior of `Q` from `ic(x₁, x₂, x₃) -> Prim`, evaluated at physical
 coordinates. The IC function never sees ranks, halos, offsets, or component
 layouts. IC functions should be pure (they are called from multiple threads).
 """
-initialize!(s::Solver, Q, ic) = _initialize!(s, s.eos, Q, ic)
+initialize!(solver::Solver, Q, ic) = _initialize!(solver, solver.eos, Q, ic)
 
-function _initialize!(s::Solver, eos, Q, ic)
-    decomp = s.decomp
+function _initialize!(solver::Solver, eos, Q, ic)
+    decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     @threaded nx*ny*nz for k in 1:nz
-        x3 = xcoord(s, 3, k)
+        x3 = xcoord(solver, 3, k)
         for j in 1:ny
-            x2 = xcoord(s, 2, j)
+            x2 = xcoord(solver, 2, j)
             for i in 1:nx
-                x1 = xcoord(s, 1, i)
-                write_conserved!(Q, CartesianIndex(i + o1, j + o2, k + o3), s,
+                x1 = xcoord(solver, 1, i)
+                write_conserved!(Q, CartesianIndex(i + o1, j + o2, k + o3), solver,
                                  ic(x1, x2, x3))
             end
         end
@@ -117,16 +117,16 @@ struct DirichletBC{F} <: BoundaryCondition
     fun::F
 end
 
-function enforce!(bc::DirichletBC, Q, s, d, side)
-    plane = wallplane(s.decomp, d, side)
+function enforce!(bc::DirichletBC, Q, solver, d, side)
+    plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
-    n_halo_d = s.decomp.n_halo_d
-    t = s.tstage
+    n_halo_d = solver.decomp.n_halo_d
+    t = solver.tstage
     @inbounds for I in plane
-        x1 = xcoord(s, 1, I[1] - n_halo_d[1])
-        x2 = xcoord(s, 2, I[2] - n_halo_d[2])
-        x3 = xcoord(s, 3, I[3] - n_halo_d[3])
-        write_conserved!(Q, I, s, bc.fun(x1, x2, x3, t))
+        x1 = xcoord(solver, 1, I[1] - n_halo_d[1])
+        x2 = xcoord(solver, 2, I[2] - n_halo_d[2])
+        x3 = xcoord(solver, 3, I[3] - n_halo_d[3])
+        write_conserved!(Q, I, solver, bc.fun(x1, x2, x3, t))
     end
     nothing
 end
@@ -188,13 +188,13 @@ function setup(prob::Problem, num::Numerics)
                   "x(0) = $(st.x(0.0)), x(1) = $(st.x(1.0)), " *
                   "domain = $(prob.domain[d])")
     end
-    s = Solver(n_global=num.n_global, L_domain=L_domain, bcs=prob.bcs,
+    solver = Solver(n_global=num.n_global, L_domain=L_domain, bcs=prob.bcs,
                eos=prob.eos, transport=prob.transport, art=num.art,
                metric=prob.metric, stretch=num.stretch, origin=origin,
                deriv=num.deriv, filt=num.filt,
                cfl=num.cfl, filter_interval=num.filter_interval,
                dims=num.dims, n_halo=num.n_halo)
-    Q = allocate_state(s)
-    initialize!(s, Q, prob.ic)
-    return s, Q
+    Q = allocate_state(solver)
+    initialize!(solver, Q, prob.ic)
+    return solver, Q
 end

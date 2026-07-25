@@ -31,8 +31,8 @@ struct CompactScheme{T} <: AbstractCompactScheme
     closures::Vector{ClosureRow{T}}
 end
 
-nclosure(s::CompactScheme) = length(s.closures)
-halfwidth(s::CompactScheme) = length(s.coeffs)
+nclosure(scheme::CompactScheme) = length(scheme.closures)
+halfwidth(scheme::CompactScheme) = length(scheme.coeffs)
 
 """
     lele_d1_6()

@@ -21,18 +21,18 @@ function build(; N=48, n_species=1, art=true, deriv=lele_d1_6())
     eos = n_species == 1 ? single_species() :
           IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.2, 1.09)])
-    s = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3, eos=eos,
+    solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3, eos=eos,
                transport=Transport(mu0=1e-3), deriv=deriv,
                art=ArtParams(enabled=art))
-    Q = allocate_state(s)
+    Q = allocate_state(solver)
     if n_species == 1
-        initialize!(s, Q, (x, y, z) -> Prim(u=(0.1sin(x) * cos(y), -0.1cos(x) * sin(y), 0.05sin(z)),
+        initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1sin(x) * cos(y), -0.1cos(x) * sin(y), 0.05sin(z)),
                                             p=1 + 0.05cos(x) * cos(z), rho=1 + 0.1sin(y)))
     else
-        initialize!(s, Q, (x, y, z) -> Prim(Y=(0.6, 0.4), u=(0.1sin(x), 0, 0),
+        initialize!(solver, Q, (x, y, z) -> Prim(Y=(0.6, 0.4), u=(0.1sin(x), 0, 0),
                                             p=1 + 0.05cos(z), rho=1 + 0.1sin(y)))
     end
-    s, Q
+    solver, Q
 end
 
 # --- allocation probes ------------------------------------------------------
@@ -48,20 +48,20 @@ function alloc(name, f; scale=1)
 end
 
 println("\n=== allocation per call (48^3, single species, art on) ===")
-s, Q = build()
+solver, Q = build()
 dQ = zero(Q); du = zero(Q)
-npt = prod(s.decomp.n_local)
+npt = prod(solver.decomp.n_local)
 @printf("  grid points: %d\n", npt)
-alloc("primitives!(s, Q)", () -> CL.primitives!(s, Q); scale=npt)
-alloc("exchange_state!(Q, decomp)", () -> CL.exchange_state!(Q, s.decomp); scale=npt)
-alloc("deriv_along!(tmp_a, rho, s, 1, 1)", () -> CL.deriv_along!(s.tmp_a, s.rho, s, 1, 1); scale=npt)
-alloc("deriv_along!(tmp_a, rho, s, 2, 1)", () -> CL.deriv_along!(s.tmp_a, s.rho, s, 2, 1); scale=npt)
-alloc("compute_artificial!(s, Q)", () -> CL.compute_artificial!(s, Q); scale=npt)
-alloc("compute_rhs!(s, Q, dQ)", () -> compute_rhs!(s, Q, dQ); scale=npt)
-alloc("apply_bcs!(s, Q)", () -> apply_bcs!(s, Q); scale=npt)
-alloc("compute_dt(s, Q)", () -> compute_dt(s, Q); scale=npt)
-alloc("filter_state!(s, Q)", () -> filter_state!(s, Q); scale=npt)
-alloc("step!(s, Q, dQ, du, dt)", () -> step!(s, Q, dQ, du, 1e-4); scale=npt)
+alloc("primitives!(solver, Q)", () -> CL.primitives!(solver, Q); scale=npt)
+alloc("exchange_state!(Q, decomp)", () -> CL.exchange_state!(Q, solver.decomp); scale=npt)
+alloc("deriv_along!(tmp_a, rho, solver, 1, 1)", () -> CL.deriv_along!(solver.tmp_a, solver.rho, solver, 1, 1); scale=npt)
+alloc("deriv_along!(tmp_a, rho, solver, 2, 1)", () -> CL.deriv_along!(solver.tmp_a, solver.rho, solver, 2, 1); scale=npt)
+alloc("compute_artificial!(solver, Q)", () -> CL.compute_artificial!(solver, Q); scale=npt)
+alloc("compute_rhs!(solver, Q, dQ)", () -> compute_rhs!(solver, Q, dQ); scale=npt)
+alloc("apply_bcs!(solver, Q)", () -> apply_bcs!(solver, Q); scale=npt)
+alloc("compute_dt(solver, Q)", () -> compute_dt(solver, Q); scale=npt)
+alloc("filter_state!(solver, Q)", () -> filter_state!(solver, Q); scale=npt)
+alloc("step!(solver, Q, dQ, du, dt)", () -> step!(solver, Q, dQ, du, 1e-4); scale=npt)
 
 println("\n=== allocation per call (48^3, two species, C10, art on) ===")
 s2, Q2 = build(n_species=2, deriv=lele_d1_10())
@@ -99,14 +99,14 @@ end
 
 println("\n=== inference: non-concrete SSA values (lower is better) ===")
 probes = [
-    ("primitives!",        CL.primitives!,  Tuple{typeof(s), typeof(Q)}),
-    ("_primitives!",       CL._primitives!, Tuple{typeof(s), typeof(s.eos), typeof(Q)}),
-    ("compute_rhs!",       compute_rhs!,    Tuple{typeof(s), typeof(Q), typeof(dQ)}),
-    ("compute_dt",         compute_dt,      Tuple{typeof(s), typeof(Q)}),
-    ("step!",              step!,           Tuple{typeof(s), typeof(Q), typeof(dQ), typeof(du), Float64}),
-    ("deriv_along!",       CL.deriv_along!, Tuple{typeof(s.tmp_a), typeof(s.rho), typeof(s), Int, Int}),
-    ("filter_state!",      filter_state!,   Tuple{typeof(s), typeof(Q)}),
-    ("apply_bcs!",         apply_bcs!,      Tuple{typeof(s), typeof(Q)}),
+    ("primitives!",        CL.primitives!,  Tuple{typeof(solver), typeof(Q)}),
+    ("_primitives!",       CL._primitives!, Tuple{typeof(solver), typeof(solver.eos), typeof(Q)}),
+    ("compute_rhs!",       compute_rhs!,    Tuple{typeof(solver), typeof(Q), typeof(dQ)}),
+    ("compute_dt",         compute_dt,      Tuple{typeof(solver), typeof(Q)}),
+    ("step!",              step!,           Tuple{typeof(solver), typeof(Q), typeof(dQ), typeof(du), Float64}),
+    ("deriv_along!",       CL.deriv_along!, Tuple{typeof(solver.tmp_a), typeof(solver.rho), typeof(solver), Int, Int}),
+    ("filter_state!",      filter_state!,   Tuple{typeof(solver), typeof(Q)}),
+    ("apply_bcs!",         apply_bcs!,      Tuple{typeof(solver), typeof(Q)}),
 ]
 for (name, f, T) in probes
     n, bad = badtypes(f, T)
