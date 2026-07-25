@@ -269,6 +269,18 @@ transport coefficients, reduced across all ranks with `MPI.Allreduce`. The
 artificial coefficients lag by one step (they were computed in the previous
 RHS), which is standard and harmless at the usual CFL.
 
+`curvature_rate` supplies the one term the per-dimension loop cannot see. A
+*resolved* angular dimension already bounds its own geometric source, because
+the advective rate |u_ang|/(r·Δang) dominates the source rate |u_ang|/r. A
+*collapsed* one is skipped by the loop entirely, yet ρu_θ²/r keeps driving u_r
+as a stiff source at small r — axisymmetric-with-swirl being the case that
+matters. `curvature_rate` is dispatched on the metric and returns zero for
+Cartesian and for every resolved angular dimension. `dt_report` is the
+diagnostic companion: it repeats the `compute_dt` sweep while tracking *which*
+node and which term set the limit, and returns `(dt, rank, index, coords, dim,
+kind)` with `kind ∈ (:acoustic, :diffusive, :curvature)`. See the CFL section of
+the README for what the answers mean on polar grids.
+
 `run!` is the outer loop: step, advance time, and every `filter_interval` steps
 call `filter_state!`, which applies the compact filter to every conserved
 component along every active dimension (with batched halo exchange and the

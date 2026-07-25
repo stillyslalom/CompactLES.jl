@@ -159,12 +159,56 @@ over `Numerics` with the same `Problem`.
 | Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`) |
 | I/O             | `save_checkpoint` / `load_checkpoint!`, `save_vtk` |
 
+## Timestep and CFL near coordinate singularities
+
+Worth understanding before running resolved-angle polar grids. `compute_dt`
+uses true physical spacings (`invh` carries the metric scale factor and any
+stretching Jacobian), so the estimate is *correct* at a singularity — it will
+not silently under-restrict. But correct is not the same as cheap, and the
+three regimes behave very differently:
+
+- **Collapsed angular dimension** (1-D radial, axisymmetric, axisymmetric with
+  swirl): no pathology at all. The skipped dimension contributes no advective
+  term, so `dt` is set by the radial spacing exactly as in a Cartesian run.
+  This is why `examples/converging_shock.jl` runs at a sane timestep right onto
+  the axis.
+- **Resolved θ in cylindrical**: the azimuthal spacing is r·Δθ, so at the first
+  half-offset node (r ≈ R/2N_r) the acoustic limit is tighter than the radial
+  one by roughly N_θ/π. With N_θ = 64 that is a ~20× penalty, and it is a
+  property of the polar grid, not of this implementation — every explicit polar
+  solver pays it.
+- **Spherical**: worse, because the origin and the poles compound. The φ
+  spacing is r·sinθ·Δφ, which collapses both as r → 0 and as sinθ → 0; at the
+  first node off a pole, sinθ ≈ Δθ/2.
+
+The diffusive limit degrades faster still (it scales with the *square* of the
+inverse spacing), and artificial bulk viscosity peaks exactly where a
+converging shock reaches the axis — the worst-case combination. If you run
+resolved-angle problems seriously, plan on one of the standard remedies:
+azimuthal mode truncation or radius-dependent filter strength near the axis, an
+implicit/IMEX treatment of the azimuthal direction, or local time stepping.
+None is implemented here.
+
+Collapsed angular dimensions have one subtlety the loop above would otherwise
+miss: the direction is skipped entirely, but the geometric source ρu_θ²/r still
+drives u_r stiffly at small r. For axisymmetric-with-swirl the neglected rate is
+|u_θ|/r, which at the first node is the same order as the radial acoustic rate —
+enough to eat the CFL safety margin without ever appearing in the estimate.
+`curvature_rate` adds it (cylindrical and spherical, only for collapsed angular
+dimensions, since resolved ones already cover it through the advective term).
+
+`dt_report(s, Q)` names the global limiter — value, owning rank, index,
+physical coordinates, direction, and whether it is acoustic, diffusive, or
+curvature-driven. Call it every few hundred steps to confirm a run is limited by
+the physics you care about rather than by the azimuthal spacing at a
+singularity.
+
 ## Examples
 
 | File | Demonstrates |
 |------|--------------|
 | `examples/taylor_green.jl`     | Taylor–Green vortex at Re = 1600; periodic box, kinetic-energy diagnostic |
-| `examples/shock_tube.jl`       | Two-gas shock tube; multicomponent, artificial properties, slip walls, optional NSCBC outflow and grid clustering |
+| `examples/shock_tube.jl`       | He-driven Richtmyer–Meshkov shock tube in SI units; multicomponent EOS, artificial properties, closed reflecting tube, optional NSCBC outflow |
 | `examples/piston_driver.jl`    | Oscillating full-state Dirichlet driver with non-reflecting NSCBC outflow |
 | `examples/converging_shock.jl` | Cylindrically converging shock; 1-D radial run on the regularized axis |
 
@@ -180,11 +224,12 @@ over `Numerics` with the same `Problem`.
 
 ## Testing
 
-A serial suite and a multi-rank MPI suite are included:
+Three suites, ordered so a failure points at one layer:
 
 ```
-julia --project=. test/runtests.jl                 # serial
+julia --project=. test/runtests.jl                      # serial unit tests
 mpiexec -n 4 julia --project=. -t 1 test/mpi_tests.jl   # distributed
+julia --project=. -t auto test/convergence.jl           # order studies
 ```
 
 The serial suite covers operator accuracy (spectral convergence of the compact
@@ -198,6 +243,19 @@ is split across ranks: the distributed spike solve (tridiagonal and
 pentadiagonal), cross-rank halo exchange, off-rank folds, the discrete GCL
 across rank boundaries, and telescoping flux conservation. The multi-rank suite
 exits nonzero on any failure, so it is CI-gateable.
+
+`test/convergence.jl` is the slower second line of defence: it prints *observed*
+orders and guards them against regression. Measured on the current code, in the
+max norm: ≈6 for `lele_d1_6` and ≈10 for `lele_d1_10` in the periodic interior,
+but only ≈3 wherever a boundary closure or a coordinate-singularity fold is
+active — closed domains, the cylindrical axis, the spherical origin. The error
+there is dominated by the first node or two off the wall or axis, which is also
+why the fold tolerances in the serial suite are looser than the interior ones.
+That is a property of the closure cascade rather than a defect, and a
+*collapsed* slope (≈0 rather than ≈3) is the signature to look for: a fold sign
+error produces O(1) error at the first node, which makes this the fastest way to
+localize the antipodal sign tables. Set `CL_RUN_TG=1` to add the Taylor–Green
+Re = 1600 dissipation history.
 
 ## Status and limitations
 
