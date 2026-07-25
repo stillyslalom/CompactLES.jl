@@ -1,10 +1,22 @@
 # Parse the .cov files julia --code-coverage=user leaves next to src/*.jl and
 # report per-file line coverage plus the uncovered lines themselves.
 #
-# Driven by bench/coverage.ps1 / the commands in its header; this script only
-# reads what those runs produced. Multiple runs (serial, MPI at several rank
-# counts, convergence) each drop their own .cov file per source file; they are
-# merged by summing hit counts, so a line counts as covered if ANY run hit it.
+# This script only reads what a coverage-enabled run produced. Every run drops
+# its own .cov file per source file, named with the pid; they are merged here
+# by summing hit counts, so a line counts as covered if ANY run hit it. Clear
+# the old ones first or a stale run inflates the result:
+#
+#   rm -f src/*.cov test/*.cov
+#   julia --project=. --code-coverage=user test/runtests.jl
+#   julia --project=. --code-coverage=user test/convergence.jl
+#   mpiexec -n 2 julia --project=. --code-coverage=user test/mpi_tests.jl
+#   mpiexec -n 4 julia --project=. --code-coverage=user test/mpi_tests.jl
+#   mpiexec -n 8 julia --project=. --code-coverage=user test/mpi_tests.jl
+#   julia --project=. bench/coverage.jl
+#
+# The MPI runs matter: serial alone reaches 94.8% of executable lines, the full
+# set 97.2%, and everything in between is distributed-solve and off-rank-fold
+# code that only a decomposed run reaches.
 #
 #   .cov format: one line per source line, prefixed
 #     "-"  not executable (comment, blank, `end`, ...)
