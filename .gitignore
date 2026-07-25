@@ -1,6 +1,6 @@
 Manifest.toml
 docs/build/
-docs/figures/.readme_hero_cache.jls
+docs/figures/.readme_header_cache.jls
 # coverage artifacts
 src/*.cov
 *.cov

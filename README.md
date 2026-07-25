@@ -3,27 +3,28 @@
 [![Dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://stillyslalom.github.io/CompactLES.jl/dev/)
 [![Build Status](https://github.com/stillyslalom/CompactLES.jl/actions/workflows/CI.yml/badge.svg?branch=main)](https://github.com/stillyslalom/CompactLES.jl/actions/workflows/CI.yml?query=branch%3Amain)
 
-![Taylor–Green vorticity, a multicomponent shock-interface interaction, and a cylindrical converging shock](docs/src/assets/readme_hero.png)
+![Taylor–Green vorticity, a multicomponent shock-interface interaction, and a cylindrical converging shock](docs/src/assets/readme_header.png)
 
-*Actual CompactLES output: Taylor–Green vorticity magnitude, a He/CO₂
+*CompactLES output: Taylor–Green vorticity magnitude, a He/CO₂
 shock–interface interaction (white: `Y_CO₂ = 0.5`), and an axisymmetric
 cylindrical converging shock. At `64³`, the measured Taylor–Green dissipation
 peak is `ε = 0.01265` at `t = 9.13`, compared with the pseudo-spectral result
 `ε = 0.01289` at `t = 8.86` from
 [van Rees et al. (2011)](https://doi.org/10.1016/j.jcp.2010.11.031).
 Reproduce the figure with
-[`docs/figures/readme_hero.jl`](docs/figures/readme_hero.jl).*
+[`docs/figures/readme_header.jl`](docs/figures/readme_header.jl).*
 
 A compressible large-eddy-simulation / direct-simulation solver for the
-multicomponent Navier–Stokes equations, written in pure Julia. It combines
+multicomponent Navier–Stokes equations, inspired by 
+[Pyranda](https://github.com/LLNL/pyranda), written in pure Julia. It combines
 high-order compact (Padé) finite differences with Cook-style artificial fluid
 properties for shock and subgrid regularization, and runs on shared-memory
 threads and distributed MPI ranks with no dependencies beyond `MPI.jl`,
 `LinearAlgebra`, and `Printf`.
 
-The solver is designed around a clean split between *what you simulate* (a
-`Problem`: gas model, geometry, boundary conditions, initial state) and *how it
-is discretized* (a `Numerics`: resolution, scheme order, CFL, process grid). The
+The solver is designed around a clean split between what you simulate (a
+`Problem`: gas model, geometry, boundary conditions, initial state) and how it
+is discretized (a `Numerics`: resolution, scheme order, CFL, process grid). The
 same problem re-runs at any resolution or scheme order without change.
 
 ```julia
@@ -309,6 +310,6 @@ particular warrants scrutiny before production use. Other current limitations:
 
 The [development documentation](https://stillyslalom.github.io/CompactLES.jl/dev/)
 covers the established frontend, compact operators, parallel decomposition,
-runtime diagnostics, and validation workflow. See [DESIGN.md](DESIGN.md) for a
+runtime diagnostics, and validation workflow. See [DESIGN.md](reference/DESIGN.md) for a
 deeper walkthrough of the solver mechanics and the parts of the physics
 architecture that are still evolving.

@@ -2,7 +2,7 @@
 
 This document explains how CompactLES is put together and how the solver works,
 for readers who want to modify it, extend it, or understand its numerics. For
-usage, see [README.md](README.md).
+usage, see [README.md](reference/README.md).
 
 ## Contents
 

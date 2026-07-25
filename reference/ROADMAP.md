@@ -22,12 +22,11 @@ covers usage, `DESIGN.md` the numerics, `CLAUDE.md` how to work on it.
 It is worth being blunt about what CompactLES already is, because it determines
 which comparisons are informative and which are category errors.
 
-**CompactLES is a Miranda-class code.** Tenth/sixth-order compact Padé
+CompactLES offers tenth/sixth-order compact Padé
 derivatives, a Gaitonde–Visbal compact filter, Cook artificial fluid properties
 in place of Riemann solvers, five-stage low-storage RK45, structured curvilinear
 grids, MPI. That is, item for item, the Miranda/Pyranda recipe — minus
-patch-based adaptivity and a GPU backend, which is where Miranda has since gone
-and which is therefore the shape of the long-term target. This is not a
+patch-based adaptivity and a GPU backend. This is not a
 criticism — it is the correct recipe for variable-density turbulent mixing and
 shock–interface interaction, which is exactly the shock-tube and RM/RT physics
 in the primary use case. It does mean that the interesting comparison with

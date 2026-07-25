@@ -3,7 +3,7 @@
 # The plotting dependency deliberately lives in the user's base environment,
 # not CompactLES's Project.toml:
 #
-#   julia --project=. -t auto docs/figures/readme_hero.jl
+#   julia --project=. -t auto docs/figures/readme_header.jl
 #
 # Set CL_HERO_REFRESH=1 to rerun all simulations, or CL_HERO_REFRESH_TG=1 to
 # rerun only Taylor–Green, instead of using the local ignored cache.
@@ -18,8 +18,8 @@ using Statistics
 
 const FIGURE_DIR = @__DIR__
 const ASSET_DIR = normpath(joinpath(FIGURE_DIR, "..", "src", "assets"))
-const CACHE_PATH = joinpath(FIGURE_DIR, ".readme_hero_cache.jls")
-const OUTPUT_PATH = joinpath(ASSET_DIR, "readme_hero.png")
+const CACHE_PATH = joinpath(FIGURE_DIR, ".readme_header_cache.jls")
+const OUTPUT_PATH = joinpath(ASSET_DIR, "readme_header.png")
 
 function taylor_green_data(; n=64, tfinal=12.0)
     println("Running Taylor–Green showcase: $(n)^3 to t=$tfinal")
@@ -300,20 +300,24 @@ function render_hero(data)
     grid = RGBAf(0.75, 0.80, 0.88, 0.12)
     accent = RGBf(1.0, 0.60, 0.20)
     reference = RGBf(0.35, 0.85, 1.0)
+    domain_edge = RGBAf(0.72, 0.78, 0.88, 0.55)
 
-    fig = Figure(size=(1900, 900), backgroundcolor=background, figure_padding=24)
+    # Lay the composition out at its actual README display size. The final
+    # export uses 2× pixel density for smooth rasterization without shrinking
+    # the logical font sizes when GitHub fits it to the content column.
+    fig = Figure(size=(840, 480), backgroundcolor=background, figure_padding=12)
     Label(
         fig[0, 1:3],
         "High-order compact numerics · shocks · curvilinear geometry",
         color=foreground,
-        fontsize=34,
+        fontsize=18,
         font=:bold,
-        padding=(0, 0, 0, 8),
+        padding=(0, 0, 0, 4),
     )
 
     # Left: rotate the axial direction vertically and reverse it so the shock
     # travels down the page. DataAspect preserves the tube's physical scale,
-    # so its 0.2 m cross-section remains narrow beside the 2.25 m axial crop.
+    # so its 0.2 m cross-section remains narrow beside the 1.5 m axial crop.
     st = data.shock_tube
     shock_x, shock_y, shock_rho = upsample_shock(st.x, st.y, st.rho)
     _, _, shock_Yco2 = upsample_shock(st.x, st.y, st.Yco2)
@@ -327,18 +331,20 @@ function render_hero(data)
         titlecolor=foreground,
         subtitlecolor=muted,
         titlefont=:bold,
-        titlesize=24,
-        subtitlesize=19,
-        xlabel="transverse position  y  [m]",
+        titlesize=15,
+        subtitlesize=11,
+        xlabel="transverse y: 0–0.2 m",
         ylabel="axial position  x  [m]",
         xlabelcolor=muted,
         ylabelcolor=muted,
         xticklabelcolor=muted,
         yticklabelcolor=muted,
-        xticklabelsize=17,
-        yticklabelsize=17,
-        xlabelsize=18,
-        ylabelsize=18,
+        xticklabelsvisible=false,
+        xticksvisible=false,
+        xticklabelsize=10,
+        yticklabelsize=10,
+        xlabelsize=11,
+        ylabelsize=11,
         xgridcolor=grid,
         ygridcolor=grid,
         yreversed=true,
@@ -359,16 +365,16 @@ function render_hero(data)
         linewidth=2.6,
     )
     xlims!(axshock, 0.0, 0.2)
-    ylims!(axshock, 1.75, 4.0)
+    ylims!(axshock, 2.5, 4.0)
     axshock.yreversed[] = true
     Colorbar(
         shock_layout[1, 2], density_plot;
         label="ρ  [kg m⁻³]",
         labelcolor=muted,
         ticklabelcolor=muted,
-        labelsize=18,
-        ticklabelsize=17,
-        width=12,
+        labelsize=11,
+        ticklabelsize=10,
+        width=8,
     )
 
     # Center: late-time TGV vorticity plus a compact quantitative benchmark.
@@ -382,13 +388,29 @@ function render_hero(data)
         title="Taylor–Green vortex  ·  |ω|  ·  t = $(round(tg.time; digits=1))",
         titlecolor=foreground,
         titlefont=:bold,
-        titlesize=26,
+        titlesize=16,
         aspect=(1, 1, 1),
         azimuth=1.22π,
         elevation=0.18π,
         perspectiveness=0.62,
+        xspinecolor_1=domain_edge,
+        xspinecolor_2=domain_edge,
+        xspinecolor_3=domain_edge,
+        xspinecolor_4=domain_edge,
+        yspinecolor_1=domain_edge,
+        yspinecolor_2=domain_edge,
+        yspinecolor_3=domain_edge,
+        yspinecolor_4=domain_edge,
+        zspinecolor_1=domain_edge,
+        zspinecolor_2=domain_edge,
+        zspinecolor_3=domain_edge,
+        zspinecolor_4=domain_edge,
+        xspinewidth=1.25,
+        yspinewidth=1.25,
+        zspinewidth=1.25,
         backgroundcolor=panel,
     )
+    ax3.zoom_mult[] = 0.84
     hidedecorations!(ax3)
     omega_hi = quantile(vec(omega), 0.995)
     middle = cld(length(omega_coords), 2)
@@ -421,7 +443,7 @@ function render_hero(data)
         tg_layout[2, 1],
         title="ε = −dEₖ/dt",
         titlecolor=foreground,
-        titlesize=19,
+        titlesize=12,
         xlabel="t",
         ylabel="ε",
         xlabelcolor=muted,
@@ -430,10 +452,11 @@ function render_hero(data)
         yticklabelcolor=muted,
         xgridcolor=grid,
         ygridcolor=grid,
-        xticklabelsize=16,
-        yticklabelsize=16,
-        xlabelsize=17,
-        ylabelsize=17,
+        xticklabelsize=9,
+        yticklabelsize=9,
+        xlabelsize=10,
+        ylabelsize=10,
+        aspect=3.8,
         backgroundcolor=panel,
     )
     lines!(
@@ -461,8 +484,8 @@ function render_hero(data)
         axeps, tg.peak_time, tg.peak_dissipation;
         text="  $(round(tg.peak_dissipation; digits=4)) @ $(round(tg.peak_time; digits=2))",
         color=foreground,
-        fontsize=14,
-        align=(:left, :bottom),
+        fontsize=9,
+        align=(:left, :top),
     )
     axislegend(
         axeps;
@@ -471,8 +494,8 @@ function render_hero(data)
         labelcolor=foreground,
         backgroundcolor=RGBAf(0.02, 0.03, 0.05, 0.72),
         framecolor=RGBAf(1, 1, 1, 0.18),
-        labelsize=14,
-        patchsize=(18, 10),
+        labelsize=9,
+        patchsize=(12, 7),
         padding=(4, 4, 3, 3),
     )
     xlims!(axeps, 0, 12)
@@ -487,12 +510,12 @@ function render_hero(data)
     axdisk = Axis(
         disk_layout[1, 1],
         title="Cylindrically converging shock",
-        subtitle="axisymmetric radial solution  ·  log₁₀(p)  ·  t = $(round(cs.time; digits=2))",
+        subtitle="axisymmetric radial solution  ·  t = $(round(cs.time; digits=2))",
         titlecolor=foreground,
         subtitlecolor=muted,
         titlefont=:bold,
-        titlesize=24,
-        subtitlesize=19,
+        titlesize=15,
+        subtitlesize=11,
         aspect=DataAspect(),
         backgroundcolor=panel,
     )
@@ -512,24 +535,24 @@ function render_hero(data)
         label="log₁₀ p",
         labelcolor=muted,
         ticklabelcolor=muted,
-        labelsize=18,
-        ticklabelsize=17,
+        labelsize=11,
+        ticklabelsize=10,
         vertical=false,
         height=11,
     )
 
-    rowsize!(tg_layout, 1, Relative(0.82))
-    rowsize!(tg_layout, 2, Relative(0.18))
-    colsize!(shock_layout, 1, Aspect(1, 0.2 / 2.25))
-    colgap!(shock_layout, 8)
-    rowgap!(tg_layout, 12)
-    rowgap!(disk_layout, 12)
+    rowsize!(tg_layout, 1, Relative(0.72))
+    rowsize!(tg_layout, 2, Relative(0.28))
+    colsize!(shock_layout, 1, Aspect(1, 0.2 / 1.5))
+    colgap!(shock_layout, 4)
+    rowgap!(tg_layout, 6)
+    rowgap!(disk_layout, 6)
     colsize!(fig.layout, 1, Relative(0.17))
     colsize!(fig.layout, 2, Relative(0.51))
     colsize!(fig.layout, 3, Relative(0.32))
-    colgap!(fig.layout, 22)
+    colgap!(fig.layout, 10)
 
-    save(OUTPUT_PATH, fig; px_per_unit=1)
+    save(OUTPUT_PATH, fig; px_per_unit=2)
     println("Wrote $OUTPUT_PATH")
     return OUTPUT_PATH
 end

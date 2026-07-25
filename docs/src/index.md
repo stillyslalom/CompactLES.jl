@@ -1,11 +1,12 @@
 # CompactLES.jl
 
-CompactLES is a compressible large-eddy/direct-simulation solver built around
+CompactLES is a [Pyranda](https://github.com/LLNL/pyranda)-inspired 
+compressible large-eddy/direct-simulation solver built around
 high-order compact finite differences, compact filtering, low-storage RK time
 integration, and a distributed MPI line solve.
 
 ![Taylor–Green vorticity, a multicomponent shock-interface interaction, and a
-cylindrical converging shock](assets/readme_hero.png)
+cylindrical converging shock](assets/readme_header.png)
 
 The `64³` Taylor–Green run peaks at `ε = 0.01265`, `t = 9.13`, closely matching
 the pseudo-spectral reference peak `ε = 0.01289`, `t = 8.86`.
@@ -22,7 +23,7 @@ well established:
 The detailed physics model, boundary-condition catalogue, and
 coordinate-singularity machinery remain under active development. Their
 current design and implementation notes live in
-[`DESIGN.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/DESIGN.md),
+[`DESIGN.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/DESIGN.md),
 and the source remains authoritative while those interfaces evolve.
 
 ## Where to begin
