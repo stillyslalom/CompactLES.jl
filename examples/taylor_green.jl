@@ -1,13 +1,24 @@
-# Taylor–Green vortex at Re = 1600 on a 64³ periodic domain, written against
-# the Problem/Numerics frontend.
+# Taylor–Green vortex at Re = 1600 on a periodic domain, written against the
+# Problem/Numerics frontend.
+#
+# Grid, end time and step cap come from the environment so a batch script or a
+# scaling sweep can drive this without editing it — the same reason
+# bench/tgv_energy.jl does. A sweep should cap CL_NMAX: the settled step time is
+# visible by step 30, and a full run to t = 1 is thousands of steps.
 #
 # Run:  julia --project=. -t auto examples/taylor_green.jl
 #       mpiexec -n 8 julia --project=. -t 2 examples/taylor_green.jl
+#       CL_N=256 CL_NMAX=30 srun -n 448 --cpu-bind=threads julia -t 1 ...
 
 using MPI
 MPI.Init(threadlevel=:funneled)
 
 using CompactLES
+
+const N      = parse(Int,     get(ENV, "CL_N",      "64"))
+const TFINAL = parse(Float64, get(ENV, "CL_TFINAL", "1.0"))
+const NMAX   = parse(Int,     get(ENV, "CL_NMAX",   "200"))
+const EVERY  = parse(Int,     get(ENV, "CL_EVERY",  "10"))
 
 const Re = 1600.0
 const c0 = 10.0                    # sound speed → Mach ≈ 0.1
@@ -27,7 +38,7 @@ prob = Problem(
         p = p0 + (1 / 16) * (cos(2x) + cos(2y)) * (cos(2z) + 2),
         rho = 1.0))
 
-num = Numerics(n_global=(64, 64, 64), art=ArtParams(enabled=false),
+num = Numerics(n_global=(N, N, N), art=ArtParams(enabled=false),
                cfl=0.6, filter_interval=1)
 
 solver, Q = setup(prob, num)
@@ -48,9 +59,8 @@ function kinetic_energy(solver, Q)
     return volume_integral(solver, ke_field)
 end
 
-const TFINAL = 1.0
-run!(solver, Q; tfinal=TFINAL, nmax=200,
-     callback=ProgressLog(every=10, tfinal=TFINAL, label="KE",
+run!(solver, Q; tfinal=TFINAL, nmax=NMAX,
+     callback=ProgressLog(every=EVERY, tfinal=TFINAL, label="KE",
                           quantity=kinetic_energy))
 
 MPI.Comm_rank(MPI.COMM_WORLD) == 0 && println("done.")
