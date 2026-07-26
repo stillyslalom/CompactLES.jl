@@ -110,10 +110,12 @@ Resist promoting any of this to a login file. An invisible default that redirect
 every later invocation is the `JULIA_NUM_THREADS` trap wearing a different hat.
 
 `Manifest.toml` is gitignored, so a fresh checkout needs `Pkg.instantiate()`
-before anything runs. `bench/tgv_energy.jl` takes its grid, end time, and
-configuration list from `ARGS`/`ENV` precisely so a batch script can drive it
-without edits; it is the intended first real workload, since it is the one bench
-script whose reductions are all collective and which reproduces serial numbers
+before anything runs. `bench/tgv_energy.jl` takes everything from `ARGS` —
+positional grid and end time, then `key=value` for the configuration list and the
+sampling knobs — precisely so a batch script can drive it without edits, and so
+the whole invocation lands in the job log rather than in an `export` three lines
+up. It is the intended first real workload, since it is the one bench script
+whose reductions are all collective and which reproduces serial numbers
 bit-for-bit under decomposition.
 
 ## Cluster launches
@@ -127,11 +129,13 @@ the resulting `n_local`, whether `@threaded` engages at all, and the share of
 Cartesian neighbour links that stay intra-NUMA / cross-socket / off-node.
 
 ```bash
-srun -n 56 --cpu-bind=threads julia --project=. clusterprobe.jl
+srun -n 56 --cpu-bind=threads julia --project=. clusterprobe.jl 128
 ```
 
 Run it once per new machine, and again whenever a launch flag changes. Every
-rule below came out of it, and each one was a *failed* hypothesis first.
+rule below came out of it, and each one was a *failed* hypothesis first. Pass the
+grid you actually intend to run — it decides the decomposition, so at the default
+64³ the `n_local` and scheme-floor lines describe a different job than yours.
 
 **`clusterlaunch.jl` sizes the run before you queue it.** It launches nothing and
 needs no allocation — given a grid and a core budget it enumerates the legal rank
@@ -143,7 +147,7 @@ answer different questions: the widest count whose halo cost is still in hand,
 and the widest legal one for when wall time is the constraint.
 
 ```bash
-CL_NODES=36 CL_CORES_PER_NODE=112 julia --project=. clusterlaunch.jl 256
+julia --project=. clusterlaunch.jl 256 nodes=36 cores_per_node=112
 ```
 
 The gap between those two is the real sizing signal. At 64³ on one 112-core node
@@ -294,7 +298,7 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 40 testsets, 0 failures
+julia --project=. test/runtests.jl        # 41 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
@@ -443,6 +447,14 @@ decision worth revisiting.
   `amr_transfer.jl`, `tgv_energy.jl` (Taylor–Green kinetic-energy budget split
   by dissipation channel; the one bench script that runs usefully under
   `mpiexec`, and the intended first workload on a cluster).
+- Scripts take their settings from `ARGS`, not the environment: positional
+  values first, then `key=value`, parsed by `script_args` (`src/scriptargs.jl`)
+  against a defaults `NamedTuple` that doubles as the schema. Give a new script
+  the same shape. An unknown key is an error there on purpose — the environment
+  form it replaced answered a typo by running the default for the length of the
+  job and saying nothing. The two remaining `CL_*` variables
+  (`CL_THREAD_MIN_WORK`, `CL_ERROR_BACKTRACE`) are read from inside the package,
+  where there is no `ARGS` to consult.
 - A sweep over configurations expected to include bad ones must pass a low
   `nmax`. A configuration that loses positivity does not crash — the diffusive
   rate in `compute_dt` climbs until `dt` collapses and the run grinds — so one

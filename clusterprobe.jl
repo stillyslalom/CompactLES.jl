@@ -9,9 +9,13 @@
 # can be settled without a single solver step.
 #
 #   srun -n 56 julia --project=. clusterprobe.jl
-#   srun -n 56 --cpus-per-task=1 --cpu-bind=threads julia --project=. clusterprobe.jl
+#   srun -n 56 --cpu-bind=threads julia --project=. clusterprobe.jl 128
+#   srun -n 56 --cpu-bind=threads julia --project=. clusterprobe.jl 256,256,512
 #
-# Set CL_PROBE_N to match the grid you care about (default 64, i.e. 64^3).
+# The one argument is the grid you actually intend to run, as N or NX,NY,NZ
+# (default 64, i.e. 64^3). It decides the decomposition, so the scheme-floor and
+# points-per-rank checks below describe a different run if it is left at the
+# default. Parsed by `script_args` (src/scriptargs.jl).
 
 const t_start = time()
 
@@ -120,8 +124,9 @@ function cgroup_mem_limit()
     return -1
 end
 
-const n = parse(Int, get(ENV, "CL_PROBE_N", "64"))
-decomp = Decomp((n, n, n), (true, true, true))
+const grid = script_grid(script_args(ARGS, (grid = "64",);
+                                     positional = (:grid,)).grid)
+decomp = Decomp(grid, (true, true, true))
 
 # Gather over the Cartesian communicator, not COMM_WORLD: Cart_create is free to
 # reorder, and decomp.neighbors names ranks in the reordered space. Indexing the
@@ -210,7 +215,7 @@ if rank == 0
     println("  pkg load  (s) : ", round.(ext(:t_load); digits = 2))
     println()
 
-    println("decomposition of ", (n, n, n), " over ", decomp.dims)
+    println("decomposition of ", grid, " over ", decomp.dims)
     println("  n_local       : ", ext(:n_local))
     println("  points/rank   : ", ext(:pts))
     # Decomp itself does not enforce the scheme floors -- plan_direction does,
@@ -230,7 +235,7 @@ if rank == 0
     else
         println("  ILLEGAL on dim(s) ", tight, " -- plan_direction will error in")
         println("  Solver. Use fewer ranks in those dimensions or a larger grid;")
-        println("  set CL_PROBE_N to the grid you actually intend to run.")
+        println("  pass the grid you actually intend to run as the argument.")
     end
     println("  THREAD_MIN_WORK = ", CompactLES.THREAD_MIN_WORK[])
     engages = maximum(getfield.(all_info, :pts)) >= CompactLES.THREAD_MIN_WORK[]

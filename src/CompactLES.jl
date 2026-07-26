@@ -42,6 +42,7 @@ include("callbacks.jl")
 include("timestep.jl")
 include("diagnostics.jl")
 include("problem.jl")
+include("scriptargs.jl")
 
 export Decomp, exchange_halos!, interior, field, allocate_state
 export CompactScheme, ClosureRow, lele_d1_6, pade_d1_4, compact_filter
@@ -68,6 +69,7 @@ export mix_width, molecular_mixing, species_pdf
 export tke_profile, turbulent_kinetic_energy, dissipation_rate
 export xcoord, gidx, filter_state!
 export THREAD_MIN_WORK
+export script_args, script_grid
 
 __init__() = __init_threading__()
 

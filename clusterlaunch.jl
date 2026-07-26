@@ -11,14 +11,17 @@
 #
 #   julia --project=. clusterlaunch.jl 128
 #   julia --project=. clusterlaunch.jl 256,256,512
-#   CL_NODES=36 CL_CORES_PER_NODE=112 julia --project=. clusterlaunch.jl 256
+#   julia --project=. clusterlaunch.jl 256 nodes=36 cores_per_node=112
 #
-# Environment:
-#   CL_NODES            nodes available          (default 1)
-#   CL_CORES_PER_NODE   physical cores per node  (default: this machine's count)
-#   CL_RANKS            explicit rank counts to consider, comma-separated
-#   CL_SCHEME           c6 (default) or c10
-#   CL_FILTER           1 (default) to include the filter's floor, 0 to drop it
+# Positional grid, written as N or NX,NY,NZ, then `key=value` options — parsed by
+# `script_args` (src/scriptargs.jl), which explains why these are arguments and
+# not environment variables:
+#
+#   nodes            nodes available          (default 1)
+#   cores_per_node   physical cores per node  (default: this machine's count)
+#   ranks            explicit rank counts to consider, comma-separated
+#   scheme           c6 (default) or c10
+#   filter           true (default) to include the filter's floor, false to drop it
 
 using MPI
 using Printf
@@ -27,22 +30,22 @@ const CL = CompactLES
 
 MPI.Initialized() || MPI.Init()
 
-function parse_grid(args)
-    spec = isempty(args) ? get(ENV, "CL_GRID", "64") : args[1]
-    parts = parse.(Int, split(spec, ','))
-    length(parts) == 1 ? ntuple(_ -> parts[1], 3) :
-        length(parts) == 3 ? Tuple(parts) :
-        error("grid must be N or NX,NY,NZ, got $spec")
-end
+const opt = script_args(ARGS, (grid = "64", nodes = 1,
+                               cores_per_node = Sys.CPU_THREADS ÷ 2,
+                               ranks = "", scheme = "c6", filter = true);
+                        positional = (:grid,))
 
-env_int(key, default) = parse(Int, get(ENV, key, string(default)))
-
-const grid = parse_grid(ARGS)
-const nodes = env_int("CL_NODES", 1)
-const cores_per_node = env_int("CL_CORES_PER_NODE", Sys.CPU_THREADS ÷ 2)
+const grid = script_grid(opt.grid)
+const nodes = opt.nodes
+const cores_per_node = opt.cores_per_node
 const total_cores = nodes * cores_per_node
-const use_filter = env_int("CL_FILTER", 1) != 0
-const deriv = get(ENV, "CL_SCHEME", "c6") == "c10" ? lele_d1_10() : lele_d1_6()
+const use_filter = opt.filter
+# Rejected rather than silently treated as c6: the old ENV form fell through to
+# the default on any typo, and a mis-sized C10 run is the kind of thing you find
+# out about from `plan_direction` an allocation later.
+const deriv = opt.scheme == "c10" ? lele_d1_10() :
+              opt.scheme == "c6" ? lele_d1_6() :
+              error("scheme must be c6 or c10, got '$(opt.scheme)'")
 const n_halo = 4
 
 # Minimum local extent per dimension, from the schemes themselves rather than a
@@ -81,8 +84,8 @@ function evaluate(np)
             threads = interior >= CL.THREAD_MIN_WORK[])
 end
 
-candidates = if haskey(ENV, "CL_RANKS")
-    parse.(Int, split(ENV["CL_RANKS"], ','))
+candidates = if !isempty(opt.ranks)
+    parse.(Int, split(opt.ranks, ','))
 else
     # Every divisor of the core budget, so a suggestion is always something the
     # allocation can actually be filled with.
@@ -159,8 +162,11 @@ println()
 println("srun -n ", best.np, " --cpu-bind=threads julia -t 1 --project=. <script>")
 println()
 println("Verify the launch before trusting a timing from it:")
+# Carrying the grid through matters: the probe's own default is 64³, and its
+# scheme-floor check is only about the run you are planning if it is given the
+# same grid this just sized.
 println("  srun -n ", best.np,
-        " --cpu-bind=threads julia --project=. clusterprobe.jl")
+        " --cpu-bind=threads julia --project=. clusterprobe.jl ", opt.grid)
 println("Check `SMT sibling in a rank's own mask: false` -- see the cluster")
 println("section of CLAUDE.md for why that one matters more than it looks.")
 

@@ -1140,4 +1140,43 @@ end
     @test ep < 1e-2      # measured ≈ 2.5e-3
 end
 
+# Not solver code, but `bench/` and the cluster scripts are not imported by this
+# suite, so if these are not tested here they are not tested anywhere — and the
+# whole reason they exist is to turn a silent wrong-default run into an error.
+@testset "script argument parsing" begin
+    defaults = (N=32, tfinal=10.0, configs="off:1", progress=0, quiet=false)
+    pos = (:N, :tfinal)
+
+    @test script_args(String[], defaults; positional=pos) == defaults
+    opt = script_args(["128", "2.5", "progress=200", "configs=on:1:0.008"],
+                      defaults; positional=pos)
+    @test (opt.N, opt.tfinal, opt.progress) == (128, 2.5, 200)
+    @test opt.configs == "on:1:0.008"      # String defaults pass through verbatim
+    # Order is free, and a positional may be supplied by name instead.
+    @test script_args(["progress=5", "64"], defaults; positional=pos).N == 64
+    @test script_args(["N=64"], defaults; positional=pos).N == 64
+    @test script_args(["nmax=1"], (nmax=typemax(Int),)).nmax == 1
+
+    for text in ("true", "yes", "on", "1")
+        @test script_args(["quiet=$text"], defaults; positional=pos).quiet
+    end
+    for text in ("false", "no", "off", "0")
+        @test !script_args(["quiet=$text"], defaults; positional=pos).quiet
+    end
+
+    # The point of the exercise: every one of these was a silent default under
+    # the environment-variable form this replaced.
+    @test_throws ArgumentError script_args(["progerss=1"], defaults; positional=pos)
+    @test_throws ArgumentError script_args(["progress=lots"], defaults; positional=pos)
+    @test_throws ArgumentError script_args(["quiet=maybe"], defaults; positional=pos)
+    @test_throws ArgumentError script_args(["1", "2", "3"], defaults; positional=pos)
+    @test_throws ArgumentError script_args(["64"], defaults)
+    @test_throws ArgumentError script_args(String[], defaults; positional=(:nope,))
+
+    @test script_grid("128") == (128, 128, 128)
+    @test script_grid("256,256,512") == (256, 256, 512)
+    @test_throws ArgumentError script_grid("128,256")
+    @test_throws ArgumentError script_grid("128x128")
+end
+
 println("serial tests complete")

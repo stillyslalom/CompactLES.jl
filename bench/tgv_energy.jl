@@ -39,14 +39,42 @@
 # configuration. 64³ is 8× the points and 2× the steps, so ~13 min per
 # configuration — the reason this lives in bench/ and wants a cluster.
 #
-# Usage:
-#   julia --project=. bench/tgv_energy.jl [N] [tfinal]
-#   CL_TGV_CONFIGS="on:1,on:4,off:1" julia --project=. bench/tgv_energy.jl 64
+# Usage — positional grid and end time, then `key=value` options:
 #
-# CL_TGV_CONFIGS is a comma-separated list of <art>:<filter_interval>, where
-# <art> is on|off and filter_interval 0 disables filtering. Default is the pair
-# that answers the first-order question: art off and art on, both filtered every
-# step. Runs under mpiexec unchanged; every reduction here is collective.
+#   julia --project=. bench/tgv_energy.jl [N] [tfinal] [key=value ...]
+#   julia --project=. bench/tgv_energy.jl 64 configs=on:1,on:4,off:1
+#   srun -n 224 --cpu-bind=threads julia --project=. -t 1 \
+#       -e 'using CompactLES; include(joinpath(pkgdir(CompactLES), "bench",
+#           "tgv_energy.jl"))' 128 10.0 configs=on:1:0.002,on:1:0.008 progress=200
+#
+# Options, all optional:
+#   configs   comma-separated <art>:<filter_interval>[:<C_mu>], where <art> is
+#             on|off, filter_interval 0 disables filtering, and C_mu defaults to
+#             0.002. Both knobs in one entry because they are the pair that has
+#             to be calibrated together — see the filter-dominance note above.
+#             Default "off:1,on:1", the pair that answers the first-order
+#             question: art off and art on, both filtered every step.
+#   progress  ProgressLog interval in steps, 0 (default) to disable. Set it for
+#             anything long enough to look hung — at 256³ a configuration is
+#             ~21,500 steps and the sample table below is the only other output
+#             for hours.
+#   sample    steps between diss_split samples (default 100). Scale it with the
+#             step count or a long run prints hundreds of rows.
+#   nmax      step cap per configuration (default none). A sweep that may visit
+#             bad configurations wants one: a run that loses positivity does not
+#             crash, it grinds — CLAUDE.md, Conventions.
+#
+# Parsed by `script_args` (src/scriptargs.jl), shared with the cluster scripts;
+# the reasoning for ARGS over environment variables is there. An unknown key is
+# an error, so a typo costs a message rather than an hour at the default.
+#
+# Runs under mpiexec unchanged; every reduction here is collective.
+#
+# A configuration that raises SolverFailure is reported and the sweep continues
+# to the next one. That is safe only because the failure is raised off a reduced
+# quantity (`max_rate` reduces, `check_step` reads the result), so every rank
+# throws at the same step and every rank moves on together. Anything else
+# escapes to `mpi_main`, which aborts the job — do not widen that catch.
 
 using MPI
 MPI.Init(threadlevel=:funneled)
@@ -104,7 +132,8 @@ function kinetic_energy(solver, Q, cellvol)
 end
 
 function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
-                      filter_interval=1, sample=100)
+                      filter_interval=1, sample=100, progress=0,
+                      nmax=typemax(Int))
     γ = 1.4
     c0 = 10.0                      # Ma ≈ 0.1 at |u|max = 1
     p0 = c0^2 / γ
@@ -132,47 +161,85 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
         push!(samples, (s.t, mol, shear, bulk, length(ts)))
         nothing
     end)
-    run!(solver, Q; tfinal=tfinal, callback=(record, split))
+    callbacks = (record, split)
+    if progress > 0
+        # `record` runs first in this tuple, so `kes[end]` is already this step's
+        # energy and the progress line costs no second Allreduce. The value came
+        # out of one, so it is identical on every rank and reading it here breaks
+        # no collective-ordering rule.
+        callbacks = (callbacks...,
+                     ProgressLog(every=progress, tfinal=tfinal, label="KE",
+                                 quantity=(s, Q) -> isempty(kes) ? NaN : kes[end]))
+    end
+    run!(solver, Q; tfinal=tfinal, nmax=nmax, callback=callbacks)
     return solver, ts, kes, samples
 end
 
-function parse_configs()
-    spec = get(ENV, "CL_TGV_CONFIGS", "off:1,on:1")
-    configs = Tuple{Bool,Int}[]
+const DEFAULTS = (N = 32, tfinal = 10.0, configs = "off:1,on:1",
+                  progress = 0, sample = 100, nmax = typemax(Int))
+
+function parse_configs(spec)
+    configs = NamedTuple{(:art, :filt, :C_mu),Tuple{Bool,Int,Float64}}[]
     for item in split(spec, ',')
         parts = split(strip(item), ':')
-        length(parts) == 2 || error("bad CL_TGV_CONFIGS entry '$item', want art:interval")
+        2 <= length(parts) <= 3 ||
+            error("bad configs entry '$item', want art:interval[:C_mu]")
         art = parts[1] == "on" ? true :
               parts[1] == "off" ? false : error("art must be on|off, got '$(parts[1])'")
-        push!(configs, (art, parse(Int, parts[2])))
+        C_mu = length(parts) == 3 ? parse(Float64, parts[3]) : 0.002
+        art || C_mu == 0.002 ||
+            error("C_mu given with art off in '$item'; it would have no effect")
+        push!(configs, (art=art, filt=parse(Int, parts[2]), C_mu=C_mu))
     end
     return configs
 end
 
 function main()
     rank = MPI.Comm_rank(MPI.COMM_WORLD)
-    N = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 32
-    tfinal = length(ARGS) >= 2 ? parse(Float64, ARGS[2]) : 10.0
+    opt = script_args(ARGS, DEFAULTS; positional = (:N, :tfinal))
+    N, tfinal, sample, progress, nmax =
+        opt.N, opt.tfinal, opt.sample, opt.progress, opt.nmax
+    configs = parse_configs(opt.configs)
     if rank == 0
         @printf("=== Taylor-Green %d^3, Re=1600, tfinal=%.1f, %d rank(s), %d thread(s)\n",
                 N, tfinal, MPI.Comm_size(MPI.COMM_WORLD), Threads.nthreads())
         println("    reference peak -dKE/dt = 1.2e-2 at t = 9 (van Rees et al. 2011)")
     end
-    for (art, filt) in parse_configs()
+    for cfg in configs
+        result, failure = nothing, nothing
         elapsed = @elapsed begin
-            solver, ts, kes, samples = taylor_green(N, art; tfinal=tfinal,
-                                                    filter_interval=filt)
+            try
+                result = taylor_green(N, cfg.art; tfinal=tfinal, C_mu=cfg.C_mu,
+                                      filter_interval=cfg.filt, sample=sample,
+                                      progress=progress, nmax=nmax)
+            catch err
+                # Collective by construction, so every rank lands here together
+                # and the sweep stays in step. See the header note.
+                err isa SolverFailure || rethrow()
+                failure = err
+            end
         end
         rank == 0 || continue
+        label = @sprintf("art %s, filter_interval %d, C_mu %.4g",
+                         cfg.art ? "ON " : "OFF", cfg.filt, cfg.C_mu)
+        if failure !== nothing
+            @printf("\n--- %s   (FAILED after %.1f s)\n", label, elapsed)
+            @printf("    SolverFailure(:%s) at step %d, t = %.4f, dt = %.3e\n",
+                    failure.reason, failure.step, failure.t, failure.dt)
+            continue
+        end
+        solver, ts, kes, samples = result
         eps = -diff(kes) ./ diff(ts)
         imax = argmax(eps)
-        @printf("\n--- art %s, filter_interval %d   (%d steps, %.1f s)\n",
-                art ? "ON " : "OFF", filt, solver.step, elapsed)
+        @printf("\n--- %s   (%d steps, %.1f s)\n", label, solver.step, elapsed)
         @printf("peak -dKE/dt = %.4e at t = %5.2f\n", eps[imax], ts[imax+1])
-        ts[imax+1] >= tfinal - 1e-9 &&
+        # Peak at the last recorded step, whatever ended the run. Testing `t`
+        # against `tfinal` missed the case `nmax=` creates, where the run
+        # stops early and every t is below tfinal.
+        imax + 1 >= length(ts) &&
             println("    NOTE: still rising at the last step, so this is not a " *
-                    "resolved peak — either the run was cut short of t = 9 or " *
-                    "the configuration is diverging.")
+                    "resolved peak — either the run was cut short of t = 9 " *
+                    "(check nmax=) or the configuration is diverging.")
         println("     t     eps_mol     eps_mu*    eps_beta*    -dKE/dt   " *
                 "mu*/visc  filter")
         for (t, mol, shear, bulk, idx) in samples
@@ -184,7 +251,21 @@ function main()
                     100 * shear / max(visc, 1e-300),
                     100 * (total - visc) / max(abs(total), 1e-300))
         end
+        # The calibration readout, one line per configuration. Comparing filter
+        # share across a sweep by eye over several hundred table rows is not
+        # something anyone does reliably, and filter share is the whole question.
+        usable = filter(s -> 2 <= s[5] < length(ts), samples)
+        isempty(usable) && continue
+        t, mol, shear, bulk, idx =
+            usable[argmin(abs.(getindex.(usable, 5) .- (imax + 1)))]
+        total = -(kes[idx+1] - kes[idx-1]) / (ts[idx+1] - ts[idx-1])
+        share(x) = 100 * x / max(abs(total), 1e-300)
+        # Nearest sample to the peak, not the peak step itself — diss_split only
+        # runs every `sample=` steps.
+        @printf("at peak t=%5.2f:  mol %5.1f%%  mu* %5.1f%%  beta* %5.1f%%  FILTER %5.1f%%\n",
+                t, share(mol), share(shear), share(bulk),
+                share(total - (mol + shear + bulk)))
     end
 end
 
-main()
+mpi_main(main)
