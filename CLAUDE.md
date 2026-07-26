@@ -29,6 +29,22 @@ validated on the target.
 Windows checkouts may have CRLF line endings. Helper scripts that match
 multi-line text against `\n` will silently find nothing; match a line at a time.
 
+**On a cluster, MPI configuration is the first hurdle and it is not a code
+change.** MPI.jl defaults to its bundled JLL, which will not talk to the
+scheduler's launcher or the interconnect. Point it at the system MPI once per
+checkout, then restart Julia and re-check `MPI.mpiexec` and `MPI.versioninfo()`:
+
+```bash
+julia --project=. -e 'using MPIPreferences; MPIPreferences.use_system_binary()'
+```
+
+`Manifest.toml` is gitignored, so a fresh checkout needs `Pkg.instantiate()`
+before anything runs. `bench/tgv_energy.jl` takes its grid, end time, and
+configuration list from `ARGS`/`ENV` precisely so a batch script can drive it
+without edits; it is the intended first real workload, since it is the one bench
+script whose reductions are all collective and which reproduces serial numbers
+bit-for-bit under decomposition.
+
 ## The gate
 
 Run all of it before calling a change safe.
@@ -182,7 +198,9 @@ decision worth revisiting.
   `jetcheck.jl` / `jetwhere.jl` (dispatch sites, and where they come from),
   `phases.jl` (RHS phase budget), `profile.jl`, `scaling.jl`, `threadscale.jl`,
   `bcbench.jl`, `coverage.jl`, `artcal.jl` (artificial-property sweeps),
-  `amr_transfer.jl`.
+  `amr_transfer.jl`, `tgv_energy.jl` (Taylor–Green kinetic-energy budget split
+  by dissipation channel; the one bench script that runs usefully under
+  `mpiexec`, and the intended first workload on a cluster).
 - A sweep over configurations expected to include bad ones must pass a low
   `nmax`. A configuration that loses positivity does not crash — the diffusive
   rate in `compute_dt` climbs until `dt` collapses and the run grinds — so one
@@ -214,10 +232,16 @@ decision worth revisiting.
   — it needs initial data resolved over ≳3 cells and will not take Noh's
   singular t = 0 start, both of which the cylindrical axis handles. Nobody has
   worked out why.
-- `C_mu` is uncalibrated for its actual purpose. Every case in
-  `test/validation.jl` is 1-D, where the shear artificial viscosity is inert; it
-  needs a 3-D run with resolved shear (the Taylor–Green harness behind
-  `CL_RUN_TG=1` is the obvious vehicle).
+- `C_mu` is uncalibrated for its actual purpose, and `bench/tgv_energy.jl` found
+  out why it is harder than "run a 3-D case". TGV does make μ\* active (28% of
+  the viscous budget at 32³, against inert in every 1-D case), but the **compact
+  filter supplies ~83% of the total energy sink**, and it cannot be turned off to
+  isolate μ\*: `filter_interval = 4` diverges and `0` fails with
+  `SolverFailure(:negative_density)`. The filter is the primary stabilizer at
+  coarse resolution, so it and `C_mu` have to be calibrated as a pair. Measured
+  at 32³ only — the filter share did *not* fall from 16³ to 32³, and 64³ is ~13
+  min per configuration, so confirming it at a quotable resolution wants a
+  cluster. Numbers and caveats in `reference/CALIBRATION.md`.
 - The NASA CEA thermo and limited transport databases ship verbatim in `data/`,
   with their Apache license and notice. `read_nasa9` handles multi-interval
   thermo records; the transport table is not yet connected to `Transport`.

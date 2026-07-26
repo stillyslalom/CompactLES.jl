@@ -163,13 +163,52 @@ spherical origin**, through the same lagged-diffusive-timestep mechanism as
 
 The value of `C_mu` for its actual purpose — damping under-resolved shear in a
 turbulent mixing layer — is not constrained by any case in this battery, and
-should not be claimed to be. Calibrating it properly needs a 3-D case with a
-resolved inertial range: a Taylor–Green run against the reference dissipation
-history (`test/convergence.jl` has the harness, behind `CL_RUN_TG=1`) or a
-Kelvin–Helmholtz layer. That is worth doing and has not been done.
+should not be claimed to be. That needs a 3-D case with resolved shear.
+
+### Why the Taylor–Green route is harder than it looks
+
+`bench/tgv_energy.jl` runs TGV at Re = 1600 and splits −dKE/dt by which mechanism
+removes the energy: molecular stress, artificial shear μ\*, artificial bulk β\*,
+and the residual, which is the compact filter plus numerical loss. At 32³ with
+`filter_interval = 1` and the default `C_mu`, at the dissipation peak (t ≈ 6.3):
+
+```
+channel              share of -dKE/dt
+molecular                    12%
+artificial shear  μ*          5%
+artificial bulk   β*        ~ 0%
+compact filter (residual)    83%
+```
+
+Peak −dKE/dt is 1.46e-2 at t = 6.5 against the reference 1.2e-2 at t = 9 —
+over-dissipating and too early, and the excess is mostly filter. Two things
+follow, and the first is the one that matters:
+
+- **μ\* is no longer inert here** — it reaches 28% of the *viscous* budget, so
+  TGV does fix the 1-D problem this section opens with. But `C_mu` cannot be
+  *fitted* against the dissipation curve while the filter owns 83% of the total
+  sink; that would be fitting a coefficient to a residual. And the filter cannot
+  be removed to isolate it: at 32³, `filter_interval = 4` diverges and
+  `filter_interval = 0` fails outright with `SolverFailure(:negative_density)` at
+  t = 5.32. **The compact filter is the primary stabilizer at this resolution,
+  not an auxiliary smoother.** `C_mu` and the filter set the subgrid dissipation
+  jointly and have to be calibrated as a pair.
+- β\* is four orders below μ\* despite `C_beta = 1.0`, because at Ma 0.1 there is
+  almost no dilatation for it to act on. Consistent with the `C_beta` section:
+  that constant is a shock constant and TGV has no shocks.
+
+**Resolution caveat, which is the reason none of this is a recommendation yet.**
+32³ is coarse for Re = 1600 — DNS wants ~256³ and 64³ is the usual coarse-LES
+point. Across 16³ → 32³ the artificial share of the viscous budget falls
+(50% → 28%) but the filter share does *not* (≈87% → 83%). Two coarse points is
+not a trend. Filter dominance is established at 32³ and **unestablished at a
+resolution worth quoting**; 64³ costs ~13 min per configuration on a desktop,
+which is why the next step for this is a cluster rather than another sweep here.
 
 **Recommendation: keep 0.002. Treat it as unvalidated for its intended purpose,
 and do not raise it past 0.008 without re-checking the singular geometries.**
+Unchanged by the above — TGV has not yet said `C_mu` is wrong, only that the
+experiment which would say so needs the filter treated as a second variable.
 
 ## C_D — the species diffusivity
 
@@ -331,7 +370,7 @@ singularity. The cylindrical axis handles the cold start at 16× compression.
 
 | Constant | Default | Keep? | Notes |
 |---|---|---|---|
-| `C_mu` | 0.002 | yes | Unconstrained by this battery; needs a 3-D shear case. Ceiling ~0.008. |
+| `C_mu` | 0.002 | yes | Unconstrained by this battery. TGV makes it active but the filter owns 83% of the sink — calibrate the pair. Ceiling ~0.008. |
 | `C_beta` | 1.0 | yes | Accuracy optimum near 0.4; use 0.5 for interface-dominated work. Never 0. |
 | `C_kappa` | 0.01 | yes | 0.02–0.04 measurably reduces wall heating. Never 0. |
 | `C_D` | 0.01 | yes | Weak knob; the compact filter dominates interface thickness. |

@@ -450,7 +450,11 @@ account above is read directly from the kernels Pyranda carries, which is
 primary evidence for the *operator design* but says nothing about the patch
 management, sub-cycling, or refinement criteria that live in Miranda proper.
 Treat the numerics here as well-founded and the surrounding infrastructure as
-still unknown.
+unspecified — which is not the same as unknowable. Patch bookkeeping is a design
+problem with published precedent (SAMRAI, AMReX, and the SBP–SAT block literature
+above), and this code's own constraints — the fold restrictions, the
+sub-communicator machinery, the bit-exact-within-a-level guarantee — pin most of
+the choices anyway. Nothing in Phase 3 waits on access to Miranda.
 
 ## Phase 0 — the extensibility seams (complete, July 2026)
 
@@ -703,9 +707,14 @@ both are cheap and neither is structural:
   is a small piece of work that de-risks the whole adaptivity plan. What to look
   for is the deconvolution's response to grid-scale content near a transfer
   boundary — the failure mode the Fortran comments hint at.
-- **Ask about Miranda's patch infrastructure.** The operator design is settled
-  from the kernels; the patch management, time sub-cycling, and refinement
-  criteria are not, and they are what Phase 3's cost now turns on.
+- **Design the patch infrastructure independently.** The operator design is
+  settled from the kernels, and that was the part with numerics risk. Patch
+  management, time sub-cycling, and refinement criteria are what Phase 3's cost
+  now turns on, and they are absent from the public Pyranda tree — but they are
+  infrastructure, to be built against this code's own constraints (the fold
+  restrictions, the sub-communicator machinery, the bit-exact-within-a-level
+  guarantee) rather than reconstructed from someone else's. Treat their absence
+  from the source as a design brief, not a missing dependency.
 
 Deliberately *not* on this list: any change to the grid arrangement. An earlier
 version of this document argued that moving to a uniformly cell-centered grid
