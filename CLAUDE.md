@@ -97,19 +97,17 @@ Configure every environment you launch from, and run `clusterprobe.jl` with the
 same `--project` as the solver, or its `MPI binary` line describes a different
 environment than the one you are timing.
 
-With a driver environment separate from the checkout, point `JULIA_PROJECT` at
-the driver once per shell and reach the scripts by path, so the configured
-environment cannot be missed and nothing has to be copied after a pull:
+With a driver environment separate from the checkout, run from the driver and
+locate the scripts through `pkgdir`. `--project=.` then always picks up the
+configured environment, and a pull into the checkout needs no copying:
 
 ```bash
-export JULIA_PROJECT=$HOME/dev/cles
-export CLSRC=$(julia -e 'using CompactLES; print(dirname(dirname(pathof(CompactLES))))')
-srun -n 448 --cpu-bind=threads julia -t 1 $CLSRC/examples/taylor_green.jl
+srun -n 448 --cpu-bind=threads julia --project=. -t 1 \
+    -e 'using CompactLES; include(joinpath(pkgdir(CompactLES), "examples", "taylor_green.jl"))'
 ```
 
-Keep that in the shell session and **not** in a login file — an invisible default
-that redirects every future invocation is the `JULIA_NUM_THREADS` trap wearing a
-different hat.
+Resist promoting any of this to a login file. An invisible default that redirects
+every later invocation is the `JULIA_NUM_THREADS` trap wearing a different hat.
 
 `Manifest.toml` is gitignored, so a fresh checkout needs `Pkg.instantiate()`
 before anything runs. `bench/tgv_energy.jl` takes its grid, end time, and
