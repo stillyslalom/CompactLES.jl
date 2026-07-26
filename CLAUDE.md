@@ -86,6 +86,17 @@ this inside an allocation if the login and compute nodes carry different stacks.
 The preference lands in `LocalPreferences.toml`, which is gitignored: it names
 one machine's library by path and must not travel between checkouts.
 
+**That file is per-project, so `--project` silently decides which MPI you get.**
+A second environment that `dev`s this package — say a driver project alongside
+`~/.julia/dev/CompactLES` — does not inherit the preference, and running the same
+script against the wrong one falls back to the JLL with no symptom other than
+speed. Measured both ways at 256³: 224 ranks over 2 nodes, 15.19 s/step on the
+JLL against 0.571; 448 ranks over 4 nodes, 19.6 against 0.2966 — **27x and 66x**,
+the penalty growing with off-node share (25% then 50% of dimension 1's links).
+Configure every environment you launch from, and run `clusterprobe.jl` with the
+same `--project` as the solver, or its `MPI binary` line describes a different
+environment than the one you are timing.
+
 `Manifest.toml` is gitignored, so a fresh checkout needs `Pkg.instantiate()`
 before anything runs. `bench/tgv_energy.jl` takes its grid, end time, and
 configuration list from `ARGS`/`ENV` precisely so a batch script can drive it
