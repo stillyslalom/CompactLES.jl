@@ -177,12 +177,30 @@ threads, and remember `-t` is per rank: `-n R -t T` asks for R×T compute thread
 plus R×(T/2) GC threads, which is how a launch ends up with ~19,000 threads on a
 112-core node and never reaches step 1.
 
-The threshold is per-rank, so this is a statement about the grid and not about
-threading in general. 256³ stays above it out to 448 ranks (36864 points/rank),
-where threads *would* engage — that regime is untested, and the 64³ result above
-does not transfer to it, because there `@threaded` never engaged at all and the
-1.7x was pure overhead. Anything measured there needs a probe first to confirm
-the mask actually gives a rank more than one core to put a thread on.
+And threads do not help even where `@threaded` genuinely engages. Measured at
+256³ on two nodes, every configuration using all 112 cores per node:
+
+| ranks × threads | s/step | cores/rank from the probe |
+|-----------------|--------|---------------------------|
+| 224 × 1         | 0.568  | 1–1                       |
+| 112 × 2         | 0.865  | 2–2                       |
+| 56 × 4          | 2.17   | 3–5 (ragged, see below)   |
+| 28 × 8          | 6.93   | 7–14 (ragged)             |
+
+The 112 × 2 row is the clean comparison: against 112 × 1 at 0.649, a second
+thread per rank made it **1.33x slower while using twice the cores** — same rank
+count, same `(7,4,4)` decomposition, same halo, nothing changed but the thread.
+This solver is memory-bandwidth-bound (see the ranks-per-node note below), so a
+rank is already saturated with one thread and the second buys no throughput while
+still paying task spawn and a barrier across ~150 regions per RHS call, five
+stages a step. **Use `-t 1` under MPI and spend the cores on ranks.**
+
+`--cpu-bind=threads` also distributes CPUs *non-uniformly* below 56 ranks/node —
+3 to 5 cores per rank at 28/node, 7 to 14 at 14/node. With collectives every
+step the slowest rank paces all of them, so a ragged mask is worse than a
+uniformly smaller one, and the bottom two rows above are contaminated by it
+rather than being clean threading measurements. Probe the mask before believing
+any `-t > 1` timing.
 
 **Rank count has a hard ceiling per grid.** `plan_direction` needs 9 points per
 rank per dimension for the C8 filter, so `n_global[d] >= 9 * dims[d]`. At 64³
