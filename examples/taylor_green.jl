@@ -59,8 +59,10 @@ function kinetic_energy(solver, Q)
     return volume_integral(solver, ke_field)
 end
 
-run!(solver, Q; tfinal=TFINAL, nmax=NMAX,
-     callback=ProgressLog(every=EVERY, tfinal=TFINAL, label="KE",
-                          quantity=kinetic_energy))
+mpi_main() do
+    run!(solver, Q; tfinal=TFINAL, nmax=NMAX,
+         callback=ProgressLog(every=EVERY, tfinal=TFINAL, label="KE",
+                              quantity=kinetic_energy))
+end
 
 MPI.Comm_rank(MPI.COMM_WORLD) == 0 && println("done.")

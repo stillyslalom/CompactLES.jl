@@ -221,6 +221,21 @@ Node scaling packed is 1.107 → 0.571 → 0.2966: 1.94x and 1.93x per doubling,
 93% efficiency at four nodes. Off-node cost is close to free at this size once
 the system MPI is in place, so scale by nodes and do not agonize over placement.
 
+**Keep failure output survivable at scale.** An uncaught exception is reported
+by every rank, so a `SolverFailure` at 448 ranks is 448 stacktraces. Wrap the
+driver in `mpi_main`: full backtrace from rank 0, one line from anywhere else
+that failed, then `MPI.Abort` so ranks still blocked in a collective are killed
+rather than each printing a dump of its own. Non-zero ranks yield briefly before
+aborting, because whoever calls `MPI_Abort` first silences everyone — including
+rank 0 mid-backtrace, which is the output worth keeping. Use
+`CL_ERROR_BACKTRACE=all` when the failure is rank-local, since rank 0 is then
+blocked in a collective and nothing prints a location.
+
+Ctrl-C is a separate problem with no code fix: it arrives while a rank sits
+inside an MPI call, and Julia'''s signal handler prints a backtrace per rank
+before anything can intercept it. Pass `--handle-signals=no` to `julia` for
+sweeps, accepting that SIGSEGV backtraces go with it.
+
 **Report progress with `ProgressLog`, not a hand-rolled callback.** `run!` fills
 `solver.wall_step` and `solver.wall_total` on every step (rank-local by design —
 a reduction there would be a collective every step for every run, read or not),

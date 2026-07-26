@@ -368,3 +368,72 @@ function filter_state!(solver::Solver, Q)
     end
     return Q
 end
+
+# --- Top-level error reporting under many ranks.
+#
+# An uncaught exception is reported by *every* rank, so a SolverFailure at 448
+# ranks produces 448 stacktraces — several thousand lines burying the one fact
+# you need. And because the failures that matter here are raised off collective
+# quantities (`max_rate` reduces, `check_step` reads the reduced result), they
+# are usually identical on every rank, so 447 of those copies carry nothing.
+#
+# One backtrace, from rank 0, plus a one-line identification from anywhere else
+# that failed — which is what catches the genuinely rank-local errors, like
+# `plan_direction` rejecting one rank's block. Then MPI_Abort, so the ranks still
+# blocked in a collective are killed outright rather than each unwinding through
+# Julia's signal handler and printing a dump of its own.
+
+"""
+    mpi_main(body; comm = MPI.COMM_WORLD, exitcode = 1)
+
+Run `body()` under a top-level error guard scaled for large rank counts: a full
+backtrace from rank 0, a single line from any other rank that fails, then
+`MPI.Abort`. Returns whatever `body` returns.
+
+Wrap the driver of an MPI run in this rather than letting an exception escape.
+For interrupts rather than exceptions, pass `--handle-signals=no` to `julia`;
+Ctrl-C arriving while a rank sits inside an MPI call is printed by Julia's
+signal handler, which this cannot intercept.
+
+Set `CL_ERROR_BACKTRACE=all` when a failure is rank-local and the one-line form
+does not say enough — rank 0 stays blocked in a collective in that case, so
+nothing would otherwise print a backtrace.
+
+```julia
+mpi_main() do
+    run!(solver, Q; tfinal = 1.0, callback = ProgressLog())
+end
+```
+"""
+function mpi_main(body; comm::MPI.Comm=MPI.COMM_WORLD, exitcode::Int=1,
+                 grace::Float64=0.5)
+    try
+        return body()
+    catch err
+        rank = MPI.Comm_rank(comm)
+        # One write, not several. Concurrent ranks writing a line in pieces
+        # interleave character-by-character, and the result is unreadable well
+        # before you get to 448 of them.
+        # A failure on one rank alone leaves rank 0 blocked in a collective, so
+        # nobody prints a backtrace and the one-liner carries no location. Set
+        # CL_ERROR_BACKTRACE=all to get one from every failing rank — the right
+        # setting for chasing a rank-local error, and the wrong one at 448 ranks
+        # when they all fail together.
+        all_bt = get(ENV, "CL_ERROR_BACKTRACE", "") == "all"
+        if rank == 0 || all_bt
+            print(stderr, "\nrank " * string(rank) * ": " *
+                          sprint(showerror, err, catch_backtrace()) * "\n")
+        else
+            print(stderr, "rank " * string(rank) * ": " *
+                          sprint(showerror, err) * "\n")
+        end
+        flush(stderr)
+        # MPI_Abort kills the whole job, so whoever calls it first silences
+        # everyone else — including rank 0 mid-backtrace, which is exactly the
+        # output worth keeping. Non-zero ranks therefore yield briefly. If rank 0
+        # did not fail it is blocked in a collective and gets killed regardless,
+        # so the only cost is `grace` seconds on the way down.
+        rank == 0 || sleep(grace)
+        MPI.Abort(comm, exitcode)
+    end
+end
