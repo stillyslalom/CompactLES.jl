@@ -147,6 +147,14 @@ end
 best = widest
 println("threads         : -t 1", best.threads ? "" :
         "   (@threaded is inert below THREAD_MIN_WORK -- extra threads idle)")
+if best.np > cores_per_node
+    println("spans           : ", cld(best.np, cores_per_node),
+            " nodes -- confirm off-node cost BEFORE trusting this count.")
+    println("                  Run clusterprobe.jl at this width and check that")
+    println("                  `MPI binary` is the system MPI, not a _jll. A")
+    println("                  bundled JLL can work perfectly on one node and")
+    println("                  fall off a cliff on two.")
+end
 println()
 println("srun -n ", best.np, " --cpu-bind=threads julia -t 1 --project=. <script>")
 println()

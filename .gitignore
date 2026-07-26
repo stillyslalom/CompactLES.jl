@@ -1,4 +1,7 @@
 Manifest.toml
+# Written by MPIPreferences.use_system_binary(); names one machine's MPI
+# library by path, so it must never be shared between checkouts.
+LocalPreferences.toml
 docs/build/
 docs/figures/.readme_header_cache.jls
 # coverage artifacts

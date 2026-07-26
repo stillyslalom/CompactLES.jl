@@ -30,13 +30,61 @@ Windows checkouts may have CRLF line endings. Helper scripts that match
 multi-line text against `\n` will silently find nothing; match a line at a time.
 
 **On a cluster, MPI configuration is the first hurdle and it is not a code
-change.** MPI.jl defaults to its bundled JLL, which will not talk to the
-scheduler's launcher or the interconnect. Point it at the system MPI once per
-checkout, then restart Julia and re-check `MPI.mpiexec` and `MPI.versioninfo()`:
+change.** MPI.jl defaults to its bundled JLL. That JLL can satisfy the
+scheduler's launcher perfectly well *on a single node*, over shared memory —
+which is what makes this so easy to miss. It forms a correct communicator,
+reproduces the physics bit-for-bit, and only falls apart once a run spans two
+nodes, because it never reaches the interconnect. Measured on rzhound, 256³ TGV
+at 224 ranks over two nodes: **15.19 s/step on the JLL, 0.571 s/step on the
+system MVAPICH2 — 27x, same launch line, same decomposition.** On-node the two
+are indistinguishable (1.434 vs 1.372 s/step at 56 ranks, inside run-to-run
+spread), so nothing you measure on one node will warn you.
+
+Point it at the system MPI once per checkout. The module has to be loaded first
+so `libmpi` is on `LD_LIBRARY_PATH`, and naming the launcher matters — without
+`mpiexec=`, `MPI.mpiexec` keeps handing back the JLL's binary and the helper at
+the top of this file quietly lies to you:
 
 ```bash
-julia --project=. -e 'using MPIPreferences; MPIPreferences.use_system_binary()'
+module load <site mpi>          # module avail mvapich2 / mpich / openmpi
+mpicc -show                     # <-- the authoritative -L path for THIS module
+julia --project=. -e 'using Pkg; Pkg.add("MPIPreferences")'
+julia --project=. -e 'using MPIPreferences; MPIPreferences.use_system_binary( \
+    library_names=["<that path>/libmpi.so"], mpiexec="srun")'
 ```
+
+The bare call fails and an absolute path is what works. A site module sets `PATH`
+but often *not* `LD_LIBRARY_PATH`, because compiled binaries find their libraries
+by RPATH; `dlopen("libmpi")` has no RPATH to lean on and reports "MPI library
+could not be found" for every candidate name even though the module loaded
+cleanly. **Do not reach for `$MPI_ROOT`** — it is unset on LC machines. `mpicc
+-show` names the exact `-L` directory of the build the module resolved to, which
+is the one whose Slurm integration the site tests; a bare
+`find /usr/tce/packages -name 'libmpi.so*'` turns up a dozen per-compiler builds
+with no indication which is live. `libmpi` is a C library, so the compiler in
+that path does not affect the ABI Julia needs — but if `dlopen` then complains
+about a missing Intel runtime (`libimf`, `libsvml`), switch to a gcc build of the
+same version. Prefer an MPICH-ABI implementation (MVAPICH2, MPICH) over OpenMPI
+where both are offered.
+
+On a csh login shell: `module` exists only in csh, so the module load and the
+Julia call have to run there, while `2>/dev/null` does not parse in csh ("Ambiguous
+output redirect") — use `>&` or run diagnostics in a bash subshell, remembering
+that bash inherits `PATH` but not the `module` function.
+
+Then, if `MPI.Init` hangs or every rank reports itself as rank 0 of a 1-rank
+world, the launcher needs a bootstrap it isn't defaulting to: `srun --mpi=list`,
+then `--mpi=pmi2` for MVAPICH2 or `--mpi=pmix` for OpenMPI. The rank-0-of-one
+symptom is the dangerous one — it produces plausible output at 1/N the speed
+instead of an error.
+
+Then **restart Julia** — the preference is read at precompile — and verify with
+`MPI.versioninfo()`, or run `clusterprobe.jl`, whose `MPI binary` line reports
+`system` versus a `_jll` outright and flags the JLL on any multi-node run. Do
+this inside an allocation if the login and compute nodes carry different stacks.
+
+The preference lands in `LocalPreferences.toml`, which is gitignored: it names
+one machine's library by path and must not travel between checkouts.
 
 `Manifest.toml` is gitignored, so a fresh checkout needs `Pkg.instantiate()`
 before anything runs. `bench/tgv_energy.jl` takes its grid, end time, and
@@ -106,6 +154,13 @@ threads, and remember `-t` is per rank: `-n R -t T` asks for R×T compute thread
 plus R×(T/2) GC threads, which is how a launch ends up with ~19,000 threads on a
 112-core node and never reaches step 1.
 
+The threshold is per-rank, so this is a statement about the grid and not about
+threading in general. 256³ stays above it out to 448 ranks (36864 points/rank),
+where threads *would* engage — that regime is untested, and the 64³ result above
+does not transfer to it, because there `@threaded` never engaged at all and the
+1.7x was pure overhead. Anything measured there needs a probe first to confirm
+the mask actually gives a rank more than one core to put a thread on.
+
 **Rank count has a hard ceiling per grid.** `plan_direction` needs 9 points per
 rank per dimension for the C8 filter, so `n_global[d] >= 9 * dims[d]`. At 64³
 that caps you near 112 ranks; past it the run errors rather than degrading. Going
@@ -138,6 +193,33 @@ the instrument.** Order-of-magnitude differences read straight through node-to-
 node variance; the few-percent kind does not, and neither does a scaling curve.
 Hold placement fixed and repeat across whatever nodes the queue gives you, or
 accept that the comparison is measuring the queue.
+
+**Pack the nodes, then scale by adding nodes.** Measured, 256³ TGV under system
+MVAPICH2 with `--cpu-bind=threads -t 1`, seconds per step:
+
+| nodes | 56 ranks/node | 112 ranks/node |
+|-------|---------------|----------------|
+| 1     | 1.434         | 1.107          |
+| 2     | 0.649         | 0.571          |
+| 4     | 0.338         | 0.2966         |
+
+Two effects, and they pull opposite ways without contradicting each other. At a
+fixed *rank* count, halving ranks-per-node is worth **1.7x** (1.107 → 0.649 at
+112 ranks; 0.571 → 0.338 at 224 — the same ratio twice, at different widths).
+That is memory bandwidth per rank, not compute: the rank count and decomposition
+are identical within each pair, and the compact line solves are bandwidth-bound.
+It is the same mechanism behind the superlinear speedups you will see comparing
+against a single-core baseline.
+
+At a fixed *node* count, packing all 112 cores still wins, by 1.30x on one node
+and **1.14x** on two and four. So the second 56 cores per node deliver only ~14%
+more throughput for twice the core-hours. Pack if you are charged node-hours;
+half-pack if core-hours. Do not extrapolate the 1.30 → 1.14 trend to an
+inversion — it plateaus, which was checked rather than assumed.
+
+Node scaling packed is 1.107 → 0.571 → 0.2966: 1.94x and 1.93x per doubling,
+93% efficiency at four nodes. Off-node cost is close to free at this size once
+the system MPI is in place, so scale by nodes and do not agonize over placement.
 
 **Report progress with `ProgressLog`, not a hand-rolled callback.** `run!` fills
 `solver.wall_step` and `solver.wall_total` on every step (rank-local by design —

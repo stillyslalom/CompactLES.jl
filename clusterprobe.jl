@@ -133,6 +133,16 @@ const np   = MPI.Comm_size(comm)
 const mask = cpus_allowed()
 const cpu  = isempty(mask) ? -1 : minimum(mask)
 
+# Printed and flushed before the gather below, so a hang is localizable rather
+# than silent. Reaching this line means MPI.Init and Cart_create/Comm_split have
+# all completed on every rank; hanging before it points at the launcher's PMI
+# bootstrap, and hanging after it points at the first real data exchange.
+if rank == 0
+    println("MPI.Init + Cart_create OK: ", np, " ranks, ",
+            round(t_mpi - t_start; digits = 2), " s to init")
+    flush(stdout)
+end
+
 info = (host = gethostname(),
         mask = mask,
         cpus = length(mask),
@@ -163,6 +173,14 @@ if rank == 0
     println("nodes           : ", length(hosts), "  ",
             [(h, count(x -> x.host == h, all_info)) for h in hosts])
     println("MPI library     : ", MPI.MPI_LIBRARY, " ", MPI.MPI_LIBRARY_VERSION)
+    # Provenance, not just identity. A JLL can satisfy the scheduler's launcher
+    # on one node over shared memory and still never reach the interconnect off
+    # it, so the name and version alone cannot tell you whether a multi-node run
+    # will be fast. `binary` says "system" or names the _jll outright.
+    binary = try string(MPI.MPIPreferences.binary) catch; "unknown" end
+    println("MPI binary      : ", binary,
+            endswith(binary, "_jll") && length(hosts) > 1 ?
+            "   <-- BUNDLED JLL ON A MULTI-NODE RUN; see CLAUDE.md" : "")
     println("threadlevel     : ", MPI.Query_thread())
     println("node topology   : ", nsockets(), " sockets, ", nnuma(), " NUMA domains, ",
             ncores(), " cores, ", nsmt(), " threads/core")
@@ -195,6 +213,25 @@ if rank == 0
     println("decomposition of ", (n, n, n), " over ", decomp.dims)
     println("  n_local       : ", ext(:n_local))
     println("  points/rank   : ", ext(:pts))
+    # Decomp itself does not enforce the scheme floors -- plan_direction does,
+    # later, inside Solver. So the probe can happily report a decomposition that
+    # no solver will accept, which is exactly what happened at 224 ranks against
+    # the default 64^3 (n_local[1] = 8 against a filter minimum of 9). Check it
+    # here, with the floor taken from the schemes rather than a remembered 9.
+    scheme_min(s) = max(2 * CompactLES.nclosure(s) + 1,
+                        2 * CompactLES.halfwidth(s) + 1,
+                        2 * (hasproperty(s, :q) ? s.q : 0) + 1)
+    nmin = max(scheme_min(lele_d1_6()), scheme_min(compact_filter()))
+    tight = [d for d in 1:3 if decomp.active[d] && minimum(x -> x.n_local[d],
+                                                           all_info) < nmin]
+    println("  min local extent needed: ", nmin, " (C6 + C8 filter)")
+    if isempty(tight)
+        println("  all active dimensions clear the scheme floor.")
+    else
+        println("  ILLEGAL on dim(s) ", tight, " -- plan_direction will error in")
+        println("  Solver. Use fewer ranks in those dimensions or a larger grid;")
+        println("  set CL_PROBE_N to the grid you actually intend to run.")
+    end
     println("  THREAD_MIN_WORK = ", CompactLES.THREAD_MIN_WORK[])
     engages = maximum(getfield.(all_info, :pts)) >= CompactLES.THREAD_MIN_WORK[]
     println("  @threaded engages on the largest per-rank loop: ", engages)
