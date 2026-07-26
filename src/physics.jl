@@ -195,33 +195,112 @@ end
 # with the h expression the exact integral of the cp one, which is the property
 # the consistency test checks numerically rather than trusting the transcription.
 #
-# NO COEFFICIENT DATABASE IS SHIPPED. Real NASA-9 coefficients are tabulated per
-# species over two or three temperature intervals and belong in a data file
-# under the user's control, not transcribed into a solver from memory — a wrong
-# digit in a₃ is a wrong γ that no test here would catch. `Nasa9Species` takes
-# the coefficients directly; `nasa9_constant_cp` builds the degenerate
-# constant-cp case, which is what the tests use to pin the machinery against
-# `IdealMixture` exactly.
+# The NASA CEA coefficient database is shipped verbatim in `data/thermo.inp`;
+# its Apache license and notice live beside it. `read_nasa9` reads the piecewise
+# fixed-column records and derives each specific R from the tabulated molar mass,
+# keeping coefficients and gas constants coupled. `nasa9_constant_cp` builds the
+# degenerate constant-cp case used to pin the machinery against `IdealMixture`.
 #
 # The cost of a caloric EOS is that T is no longer explicit in e: `_primitives!`
 # runs a Newton iteration per point, converging on de/dT = cv. That is inherent
 # to the model, not to this implementation.
 
 """
-    Nasa9Species(name, R, a, b1; Tmin, Tmax)
+    Nasa9Interval(Tmin, Tmax, a, b1)
 
-One species of a [`Nasa9Mixture`](@ref). `a` is the seven-term NASA-9 heat
-capacity vector and `b1` the enthalpy integration constant, both in the
-convention documented above; `R` is the specific gas constant.
+One temperature interval of a NASA-9 polynomial. `a` holds the seven heat
+capacity coefficients and `b1` is the enthalpy integration constant.
 """
-Base.@kwdef struct Nasa9Species{T}
+struct Nasa9Interval{T}
+    Tmin::T
+    Tmax::T
+    a::NTuple{7,T}
+    b1::T
+end
+
+@inline function _nasa9_cp_over_R(interval::Nasa9Interval, T_ion)
+    a = interval.a
+    return a[1] / T_ion^2 + a[2] / T_ion + a[3] + a[4] * T_ion +
+           a[5] * T_ion^2 + a[6] * T_ion^3 + a[7] * T_ion^4
+end
+
+@inline function _nasa9_h_over_R(interval::Nasa9Interval, T_ion)
+    a = interval.a
+    return -a[1] / T_ion + a[2] * log(T_ion) + a[3] * T_ion +
+           a[4] * T_ion^2 / 2 + a[5] * T_ion^3 / 3 +
+           a[6] * T_ion^4 / 4 + a[7] * T_ion^5 / 5 + interval.b1
+end
+
+# The join check exists to catch a mistranscribed coefficient, which puts an
+# O(1) kink in cp — not to audit the quality of the upstream fit. Sized from the
+# shipped CEA table: of 1276 gaseous multi-interval records, the relative cp/R
+# jump at a join is ≲1e-8 for all but two (SnCL2 at 1.0e-5, ALOCL at 5.1e-4).
+# Rejecting those would be the check overreaching — 0.05% in cp is far below any
+# discretization error here — so the threshold sits above them and well below
+# anything a wrong digit could produce.
+const NASA9_CONTINUITY_RTOL = 2e-3
+
+function _validate_nasa9_intervals(name, R, intervals)
+    isempty(intervals) && throw(ArgumentError("NASA-9 species $name has no intervals"))
+    R > 0 || throw(ArgumentError("NASA-9 species $name has non-positive R"))
+    for interval in intervals
+        interval.Tmin > 0 && interval.Tmin < interval.Tmax ||
+            throw(ArgumentError("invalid NASA-9 interval for $name"))
+    end
+    for i in 1:length(intervals)-1
+        lo, hi = intervals[i], intervals[i + 1]
+        scale_T = max(abs(lo.Tmax), abs(hi.Tmin), one(lo.Tmax))
+        abs(lo.Tmax - hi.Tmin) <= 1e-10 * scale_T ||
+            throw(ArgumentError("non-contiguous NASA-9 intervals for $name"))
+        T_join = (lo.Tmax + hi.Tmin) / 2
+        cp_lo = _nasa9_cp_over_R(lo, T_join)
+        cp_hi = _nasa9_cp_over_R(hi, T_join)
+        cp_scale = max(abs(cp_lo), abs(cp_hi), one(cp_lo))
+        abs(cp_lo - cp_hi) <= NASA9_CONTINUITY_RTOL * cp_scale ||
+            throw(ArgumentError("discontinuous NASA-9 cp for $name at $T_join K"))
+        h_lo = _nasa9_h_over_R(lo, T_join)
+        h_hi = _nasa9_h_over_R(hi, T_join)
+        h_scale = max(abs(h_lo), abs(h_hi), T_join)
+        abs(h_lo - h_hi) <= NASA9_CONTINUITY_RTOL * h_scale ||
+            throw(ArgumentError("discontinuous NASA-9 h for $name at $T_join K"))
+    end
+    return intervals
+end
+
+"""
+    Nasa9Species(name, R, intervals)
+
+One species of a [`Nasa9Mixture`](@ref). `R` is the specific gas constant and
+`intervals` contains its piecewise NASA-9 fits. Use [`read_nasa9`](@ref) for CEA
+data so `R` is derived from the table's molar mass rather than entered by hand.
+
+The keyword constructor with `a`, `b1`, `Tmin`, and `Tmax` creates one interval
+and is retained for small analytic coefficient sets and tests.
+"""
+struct Nasa9Species{T}
     name::String
     R::T
-    a::NTuple{7,T}
-    b1::T = zero(T)
-    Tmin::T = 200.0
-    Tmax::T = 6000.0
+    intervals::Vector{Nasa9Interval{T}}
+
+    function Nasa9Species{T}(name::String, R::T,
+                             intervals::Vector{Nasa9Interval{T}}) where {T}
+        _validate_nasa9_intervals(name, R, intervals)
+        new{T}(name, R, intervals)
+    end
 end
+
+Nasa9Species(name::AbstractString, R::T,
+             intervals::Vector{Nasa9Interval{T}}) where {T} =
+    Nasa9Species{T}(String(name), R, intervals)
+
+function Nasa9Species{T}(; name, R, a, b1=zero(T), Tmin=T(200),
+                           Tmax=T(6000)) where {T}
+    coeffs = ntuple(i -> T(a[i]), 7)
+    interval = Nasa9Interval{T}(T(Tmin), T(Tmax), coeffs, T(b1))
+    return Nasa9Species{T}(String(name), T(R), [interval])
+end
+
+Nasa9Species(; kwargs...) = Nasa9Species{Float64}(; kwargs...)
 
 """
     nasa9_constant_cp(name, R, cp)
@@ -237,15 +316,14 @@ nasa9_constant_cp(name::String, R::Real, cp::Real) =
 """
     Nasa9Mixture(species)
 
-Multicomponent mixture with NASA-9 polynomial heat capacities. Ideal in the
-thermal sense (p = ρR_mT_ion) but not calorically: cp, cv and γ all vary with
-temperature, which is what a real diatomic or triatomic gas does above a few
-hundred kelvin and what a constant-γ mixture gets wrong at shock temperatures.
+Multicomponent mixture with piecewise NASA-9 heat capacities. It is ideal in the
+thermal sense (`p = ρR_mT_ion`) but not calorically: cp, cv, and γ vary with
+temperature.
 """
 struct Nasa9Mixture{T} <: EOS
     sp::Vector{Nasa9Species{T}}
     Rk::Vector{T}
-    T_guess::T                 # Newton start when no better estimate exists
+    T_guess::T
 end
 
 Nasa9Mixture(sp::Vector{Nasa9Species{T}}; T_guess=300.0) where {T} =
@@ -254,19 +332,24 @@ Nasa9Mixture(sp::Vector{Nasa9Species{T}}; T_guess=300.0) where {T} =
 nspecies(eos::Nasa9Mixture) = length(eos.sp)
 species_names(eos::Nasa9Mixture) = [x.name for x in eos.sp]
 
-"cp_k(T_ion) from the NASA-9 polynomial."
-@inline function species_cp(eos::Nasa9Mixture, k::Int, T_ion)
-    s = eos.sp[k]; a = s.a; t = T_ion
-    return s.R * (a[1] / (t * t) + a[2] / t + a[3] +
-                  a[4] * t + a[5] * t^2 + a[6] * t^3 + a[7] * t^4)
+@inline function _nasa9_interval(species::Nasa9Species, T_ion)
+    intervals = species.intervals
+    @inbounds for i in 1:length(intervals)-1
+        T_ion <= intervals[i].Tmax && return intervals[i]
+    end
+    return intervals[end]
 end
 
-"h_k(T_ion), the exact integral of `species_cp`."
+"cp_k(T_ion) from the applicable NASA-9 interval."
+@inline function species_cp(eos::Nasa9Mixture, k::Int, T_ion)
+    species = eos.sp[k]
+    return species.R * _nasa9_cp_over_R(_nasa9_interval(species, T_ion), T_ion)
+end
+
+"h_k(T_ion), the exact interval-wise integral of `species_cp`."
 @inline function species_enthalpy(eos::Nasa9Mixture, k::Int, T_ion)
-    s = eos.sp[k]; a = s.a; t = T_ion
-    return s.R * t * (-a[1] / (t * t) + a[2] * log(t) / t + a[3] +
-                      a[4] * t / 2 + a[5] * t^2 / 3 + a[6] * t^3 / 4 +
-                      a[7] * t^4 / 5 + s.b1 / t)
+    species = eos.sp[k]
+    return species.R * _nasa9_h_over_R(_nasa9_interval(species, T_ion), T_ion)
 end
 
 "e_k(T_ion) = h_k − R_k T_ion."
@@ -293,12 +376,17 @@ MPI suite is built on. That is not worth one Newton step.
 """
 @inline function mixture_temperature(eos::Nasa9Mixture, e, Yat::F) where {F}
     n = length(eos.sp)
-    # Seed from the constant-cv estimate at the reference temperature.
+    # First-order inversion about a fixed reference state. This handles any
+    # enthalpy gauge; when e_k = cv_k*T it reduces algebraically to e/cv.
+    e0 = 0.0
     cv0 = 0.0
     for k in 1:n
-        cv0 += Yat(k) * (species_cp(eos, k, eos.T_guess) - eos.Rk[k])
+        Yk = Yat(k)
+        e0 += Yk * species_energy(eos, k, eos.T_guess)
+        cv0 += Yk * (species_cp(eos, k, eos.T_guess) - eos.Rk[k])
     end
-    T_ion = cv0 > 0 ? clamp(e / cv0, 1e-3, 1e9) : eos.T_guess
+    T_ion = cv0 > 0 ? clamp(eos.T_guess + (e - e0) / cv0, 1e-3, 1e9) :
+            eos.T_guess
     for _ in 1:30
         f = -e; cvm = 0.0
         for k in 1:n

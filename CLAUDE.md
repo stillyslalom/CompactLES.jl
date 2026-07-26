@@ -99,6 +99,8 @@ Names are spelled out rather than abbreviated. Current vocabulary:
   `physics.jl`)
 - `control` (a `StepControl`), `max_rate`, `predicted_dt`, `check_step`,
   `dt_prev`, `rate_prev`, `savepoint`
+- `trigger` (an `AtTime` / `EveryStep` / `WhenState`), `effect!`, `fired!`,
+  `next_time`, `switch!`/`switched` (a `SwitchableBC`)
 
 **Temperature is `T_ion`.** There is one temperature today; the name keeps
 `T_ele` / `T_rad` free for a 2T or 3T model without a second API break. Bare
@@ -119,6 +121,17 @@ deadlocks. Both `correct_rhs!` methods in `nscbc.jl` hoist their collectives
 above the `plane === nothing` return for this reason — follow that shape when
 adding a boundary condition. The symptom is zero CPU on every rank, not a
 crash, so it looks like a hang rather than a bug.
+
+**A boundary condition that changes mid-run must change on every rank at the
+same step.** This is the same collective trap from the other side: `SwitchableBC`
+forwards to `after` only once switched, and if `after` runs collectives that
+`before` does not — `NSCBCOutflowBC` does — then ranks disagreeing about the
+switch is a deadlock, not a wrong answer. `WhenState` reduces its condition
+across the communicator for exactly this reason, so drive a switch from a
+`Callback` and never from a rank-local test. `AtTime` and `EveryStep` are safe
+without a reduction because `t` and `step` advance identically everywhere. The
+MPI suite pins this with a condition that is deliberately true on one rank only;
+removing the reduction hangs that test rather than failing it.
 
 **Minimum local extent per dimension.** `plan_direction` errors when a rank's
 block is too small for the scheme: C6 needs 5 points, C10 needs 7, and the C8
@@ -205,9 +218,9 @@ decision worth revisiting.
   `test/validation.jl` is 1-D, where the shear artificial viscosity is inert; it
   needs a 3-D run with resolved shear (the Taylor–Green harness behind
   `CL_RUN_TG=1` is the obvious vehicle).
-- `Nasa9Mixture` has no coefficient database, deliberately — see the note in
-  `physics.jl`. Shipping one is a data question and would let
-  `examples/shock_tube.jl` use a real CO₂ cp(T).
+- The NASA CEA thermo and limited transport databases ship verbatim in `data/`,
+  with their Apache license and notice. `read_nasa9` handles multi-interval
+  thermo records; the transport table is not yet connected to `Transport`.
 - `compute_artificial!` is ~31% of the multicomponent RHS, spent in the filter
   line-solves that smooth the sensors, one sweep per species. Cutting it is a
   numerics decision (shared vs per-species sensor), not a code tweak. Note that

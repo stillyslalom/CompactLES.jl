@@ -524,21 +524,23 @@ integrals, so a wrong edge weight biases θ silently — and it is exact for a
 constant on a Cartesian grid and second order at a node-centered curvilinear
 edge.
 
-**Non-ideal EOS — contract done, coefficient data outstanding.** The blockers
-named above are closed: φ = ∂(ρe)/∂p, ∂φ/∂Y_k, and the artificial-conductivity
-scale are now EOS dispatch points rather than ideal-gas algebra inlined at their
-call sites in `nscbc.jl` and `artificial.jl`. The full contract is written down
-at the top of `physics.jl`.
+**Non-ideal EOS — contract and NASA-9 data path done.** The blockers named
+above are closed: φ = ∂(ρe)/∂p, ∂φ/∂Y_k, and the artificial-conductivity scale
+are now EOS dispatch points rather than ideal-gas algebra inlined at their call
+sites in `nscbc.jl` and `artificial.jl`. The full contract is written down at
+the top of `physics.jl`.
 
 Two models joined `IdealMixture` to prove the contract carries weight rather
 than just existing: `StiffenedGas` (`p = (γ−1)ρe − γp∞`, exact perfect-gas limit
 at p∞ = 0, the natural precursor to Mie–Grüneisen) and `Nasa9Mixture` with
-temperature-dependent specific heats and a Newton inversion of e(T). The NASA-9
-path ships no coefficient database on purpose — real coefficient sets are
-tabulated per species over several temperature intervals and belong in a data
-file, not transcribed into a solver — which is why `examples/shock_tube.jl` still
-uses a constant-γ CO₂. Adding that data is the remaining Phase 1 item and it is
-a data-sourcing task rather than a code one.
+temperature-dependent specific heats and a Newton inversion of e(T). The NASA
+CEA thermodynamic and limited transport databases ship verbatim in `data/`,
+beside the upstream Apache license and notice. `read_nasa9` parses the thermo
+table's fixed-column, multi-interval records, derives R from molar mass, and
+makes the energy reference explicit (`:sensible` by default, `:formation` for
+the tabulated heat-of-formation gauge). `examples/shock_tube.jl` now uses real
+He and CO₂ cp(T). The transport coefficients remain raw data until the constant
+`Transport` model grows temperature-dependent properties and mixture rules.
 
 What is *not* done: the κ\* singularity as T_ion → 0 is now visible and
 dispatchable but not cured for gases, and that is a numerics decision (see

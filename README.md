@@ -53,8 +53,8 @@ run!(solver, Q; tfinal=1.0)
 - **Multicomponent thermodynamics.** Any number of species, each with its own
   transport equation, behind a pluggable equation-of-state interface. Three
   models ship: a calorically perfect `IdealMixture`, a `Nasa9Mixture` with
-  temperature-dependent specific heats, and a `StiffenedGas` for condensed
-  materials.
+  piecewise temperature-dependent specific heats read from the bundled NASA CEA
+  database, and a `StiffenedGas` for condensed materials.
 - **Mixing diagnostics as output.** Volume integrals, plane-averaged profiles,
   mix width, molecular mixing fraction, composition PDFs, Favre turbulent
   kinetic energy, and resolved dissipation — metric-aware and MPI-reduced.
@@ -179,10 +179,11 @@ over `Numerics` with the same `Problem`.
 | Open boundaries | `NSCBCOutflowBC(pinf=...)`, `NSCBCInflowBC(u=..., T_ion=..., Y=...)`, `ExtrapolationBC` |
 | Forcing         | Typed source tuples (`ConstantBodyForce`) and time-dependent `DirichletBC` |
 | Singular axes   | `AxisBC` (cylindrical axis), `OriginBC` (spherical origin), `PoleBC` (spherical poles) |
-| Thermodynamics  | `IdealMixture` of `IdealSpecies`, `Nasa9Mixture` (temperature-dependent cp), `StiffenedGas` (condensed matter); EOS interface for custom models |
+| Thermodynamics  | `IdealMixture`, `Nasa9Mixture` / `read_nasa9` (NASA CEA piecewise cp), `StiffenedGas`; EOS interface for custom models |
 | Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`) — see [CALIBRATION.md](reference/CALIBRATION.md) |
 | Diagnostics     | `volume_integral`, `plane_profile`, `mix_width`, `molecular_mixing`, `species_pdf`, `tke_profile`, `dissipation_rate` |
 | Failure handling| `StepControl` timestep floors (incl. a `PLANCK_TIME` failsafe), positivity checking, and rollback-with-CFL-backoff; `SolverFailure` |
+| Run control     | `Callback` with `AtTime` (lands `dt` exactly on a time), `EveryStep`, or `WhenState` triggers; `SwitchableBC` for boundaries that change mid-run |
 | I/O             | `save_checkpoint` / `load_checkpoint!`, `save_vtk` |
 
 ## Timestep and CFL near coordinate singularities
@@ -328,9 +329,9 @@ particular warrants scrutiny before production use. Other current limitations:
 - The spherical origin will not take an initial discontinuity resolved over
   fewer than about three cells, nor a flow that converges to a singular state
   at t = 0. The cylindrical axis takes both.
-- `Nasa9Mixture` ships the polynomial machinery but no coefficient database;
-  species data belongs in a file under your control, not transcribed into a
-  solver.
+- The NASA CEA transport table is bundled for provenance, but `Transport` still
+  uses constant properties; its coefficient reader and mixture rules are not
+  implemented.
 - NSCBC inflow transverse-term accounting is not yet implemented (outflow
   has it).
 - Output is checkpoint and VTK only — no HDF5/XDMF, no GPU path.

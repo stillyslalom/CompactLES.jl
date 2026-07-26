@@ -715,6 +715,71 @@ end
     @test all(isfinite, Q)
 end
 
+@testset "NASA CEA reader: intervals, molar mass, and energy reference" begin
+    he, co2 = read_nasa9(["He", "CO2"])
+    @test (he.name, co2.name) == ("He", "CO2")
+    @test co2.R ≈ 8.31446261815324 / 44.0095e-3 rtol = 1e-14
+    @test length(co2.intervals) == 3
+    @test [(item.Tmin, item.Tmax) for item in co2.intervals] ==
+          [(200.0, 1000.0), (1000.0, 6000.0), (6000.0, 20000.0)]
+
+    sensible = Nasa9Mixture([co2])
+    @test CL.species_enthalpy(sensible, 1, 298.15) ≈ 0.0 atol = 1e-6
+    @test CL.species_cp(sensible, 1, 300.0) ≈ 845.7241586606974 rtol = 1e-13
+    for i in 1:2
+        T_join = co2.intervals[i].Tmax
+        left, right = co2.intervals[i], co2.intervals[i + 1]
+        @test CL._nasa9_cp_over_R(left, T_join) ≈
+              CL._nasa9_cp_over_R(right, T_join) rtol = 5e-7
+        @test CL._nasa9_h_over_R(left, T_join) ≈
+              CL._nasa9_h_over_R(right, T_join) rtol = 5e-7
+    end
+
+    co2_formation = read_nasa9("CO2"; reference=:formation)
+    formation = Nasa9Mixture([co2_formation])
+    h298_molar = CL.species_enthalpy(formation, 1, 298.15) * 44.0095e-3
+    @test h298_molar ≈ -393510.0 atol = 5.0
+    @test CL.species_cp(formation, 1, 300.0) == CL.species_cp(sensible, 1, 300.0)
+    for eos in (sensible, formation), T in (220.0, 300.0, 999.0, 1001.0,
+                                                    1500.0, 5999.0, 6001.0, 10000.0)
+        e = CL.species_energy(eos, 1, T)
+        @test CL.mixture_temperature(eos, e, _ -> 1.0) ≈ T rtol = 2e-13
+    end
+
+    Y = (0.3, 0.7)
+    for reference in (:sensible, :formation)
+        mixture = Nasa9Mixture(read_nasa9(["He", "CO2"]; reference))
+        for T in (300.0, 1400.0, 7000.0)
+            e = sum(Y[k] * CL.species_energy(mixture, k, T) for k in 1:2)
+            @test CL.mixture_temperature(mixture, e, k -> Y[k]) ≈ T rtol = 2e-13
+        end
+    end
+    # The late Air record exercises the CEA file's product/reactant separators.
+    @test read_nasa9("Air").name == "Air"
+    @test CL.species_names(Nasa9Mixture(read_nasa9(["CO2", "He"]))) == ["CO2", "He"]
+    @test_throws ArgumentError read_nasa9("CO2"; reference=:unknown)
+
+    # Zero-interval records list a heat of formation and no fit, and are three
+    # lines rather than two. Miscounting them desynchronizes the scan against
+    # the file instead of failing locally, so pin both the record that has to be
+    # rejected and a real species that only parses if the skip is right.
+    @test_throws "no temperature intervals" read_nasa9("n-Butanol")
+    @test length(read_nasa9("Jet-A(g)").intervals) == 2
+    # The message matters: a desynchronized scan also throws ArgumentError, from
+    # misreading a coefficient line as a species header.
+    @test_throws "NASA CEA species not found" read_nasa9("not-a-CEA-species")
+
+    # The two CEA records whose interval joins are loosest; the tolerance is
+    # sized to admit them and still reject a mistranscribed coefficient.
+    @test all(nspecies(Nasa9Mixture(read_nasa9([name]))) == 1
+              for name in ("ALOCL", "SnCL2"))
+    good = Nasa9Interval{Float64}(200.0, 1000.0,
+                                  (0.0, 0.0, 3.5, 0.0, 0.0, 0.0, 0.0), 0.0)
+    bad = Nasa9Interval{Float64}(1000.0, 6000.0,
+                                 (0.0, 0.0, 4.5, 0.0, 0.0, 0.0, 0.0), 0.0)
+    @test_throws ArgumentError Nasa9Species{Float64}("broken", 287.0, [good, bad])
+end
+
 @testset "StiffenedGas: perfect-gas limit, and a real liquid" begin
     # p_inf = 0 must reproduce a perfect gas exactly, which pins the algebra;
     # then a water-like parameter set exercises the branch that matters.
@@ -880,6 +945,113 @@ end
     @test q[3] / ρ ≈ 0.3 atol = 1e-12          # ρu / ρ
     Rm = 0.35 * eos.Rk[1] + 0.65 * eos.Rk[2]
     @test ρ * Rm * 1.7 ≈ 0.8 atol = 1e-12      # p = ρ R_m T_ion
+end
+
+@testset "callbacks: triggers, dt landing, composition, termination" begin
+    wall3 = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
+             (PeriodicBC(), PeriodicBC()))
+    mkrun() = begin
+        solver = Solver(bcs=wall3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                        art=ArtParams(enabled=false), cfl=0.4)
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
+                                                 p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
+        solver, Q
+    end
+
+    # AtTime must be landed on exactly, not overshot: dt is clipped inside run!,
+    # which is the whole reason the trigger cannot be written by a caller.
+    solver, Q = mkrun()
+    hits = Float64[]
+    targets = [0.02, 0.05, 0.11]
+    run!(solver, Q; tfinal=0.2,
+         callback=Callback(AtTime(targets), (s, _) -> (push!(hits, s.t); nothing)))
+    @test length(hits) == 3
+    @test hits ≈ targets rtol = 1e-14
+    @test solver.t ≈ 0.2 rtol = 1e-14
+
+    # Unsorted input is ordered, and a scalar is accepted.
+    @test AtTime([0.3, 0.1, 0.2]).times == [0.1, 0.2, 0.3]
+    @test AtTime(0.5).times == [0.5]
+
+    # A time already behind the solver must not drive dt to zero and stall.
+    solver, Q = mkrun()
+    late = Float64[]
+    run!(solver, Q; tfinal=0.01, nmax=20,
+         callback=Callback(AtTime(-1.0), (s, _) -> (push!(late, s.t); nothing)))
+    @test length(late) == 1 && solver.step > 0
+
+    # EveryStep, and a bare function still runs every step with its return
+    # value ignored — returning true must NOT stop the run.
+    solver, Q = mkrun()
+    steps = Int[]
+    every = 0
+    run!(solver, Q; tfinal=1e9, nmax=10,
+         callback=(Callback(EveryStep(3), (s, _) -> (push!(steps, s.step); nothing)),
+                   (s, _) -> (every += 1; true)))
+    @test steps == [3, 6, 9]
+    @test every == 10 && solver.step == 10
+
+    # WhenState fires once by default and repeatedly with once=false.
+    for (once, want) in ((true, 1), (false, 3))
+        solver, Q = mkrun()
+        fires = 0
+        run!(solver, Q; tfinal=1e9, nmax=5,
+             callback=Callback(WhenState((s, _) -> s.step >= 3; once=once),
+                               (_, _) -> (fires += 1; nothing)))
+        @test fires == want
+    end
+
+    # An effect returning true ends the run after that step.
+    solver, Q = mkrun()
+    run!(solver, Q; tfinal=1e9, nmax=1000,
+         callback=Callback(WhenState((s, _) -> s.step >= 4), (_, _) -> true))
+    @test solver.step == 4
+end
+
+@testset "SwitchableBC: transparent before the switch, forwards after" begin
+    wall3 = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
+             (PeriodicBC(), PeriodicBC()))
+    @test_throws ArgumentError SwitchableBC(SlipWallBC(), PeriodicBC())
+    @test_throws ArgumentError SwitchableBC(AxisBC(), SlipWallBC())
+    @test_throws ArgumentError SwitchableBC(SlipWallBC(), OriginBC())
+    @test CL.isperiodic(SwitchableBC(PeriodicBC(), PeriodicBC()))
+    @test !CL.isperiodic(SwitchableBC(SlipWallBC(), ExtrapolationBC()))
+
+    mkrun(xbc) = begin
+        solver = Solver(bcs=(xbc, (PeriodicBC(), PeriodicBC()),
+                             (PeriodicBC(), PeriodicBC())),
+                        n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                        art=ArtParams(enabled=false), cfl=0.4)
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
+                                                 p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
+        solver, Q
+    end
+
+    # Unswitched, the wrapper must be bit-identical to the condition it wraps —
+    # that is what makes it safe to leave in a problem specification.
+    s_ref, Q_ref = mkrun((SlipWallBC(), SlipWallBC()))
+    run!(s_ref, Q_ref; tfinal=1e9, nmax=12)
+    sw = (SwitchableBC(SlipWallBC(), ExtrapolationBC()),
+          SwitchableBC(SlipWallBC(), ExtrapolationBC()))
+    s_wrap, Q_wrap = mkrun(sw)
+    run!(s_wrap, Q_wrap; tfinal=1e9, nmax=12)
+    @test Q_wrap == Q_ref
+    @test !switched(sw[1])
+
+    # Switched by a callback, it must actually take the other branch: the state
+    # diverges from the unswitched reference and stays finite.
+    sw2 = (SwitchableBC(SlipWallBC(), ExtrapolationBC()),
+           SwitchableBC(SlipWallBC(), ExtrapolationBC()))
+    s_sw, Q_sw = mkrun(sw2)
+    run!(s_sw, Q_sw; tfinal=1e9, nmax=12,
+         callback=Callback(WhenState((s, _) -> s.step >= 4),
+                           (_, _) -> (switch!.(sw2); nothing)))
+    @test all(switched, sw2)
+    @test all(isfinite, Q_sw)
+    @test Q_sw != Q_ref
+    @test switch!(sw2[1]) === sw2[1]      # idempotent
 end
 
 @testset "checkpoint round trip" begin

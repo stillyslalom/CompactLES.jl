@@ -450,12 +450,18 @@ split). The full-ball origin+poles combination has had the least scrutiny.
 - a `(ρ, e, Y) → (p, T_ion, c, cₚ_mix)` state evaluation (via `primitives!`)
 - `species_enthalpy(eos, k, T_ion)` → partial specific enthalpy h_k(T_ion)
 
-`IdealMixture` (per-species γ_k and R_k, linear mixture rules) is the provided
-implementation. Because hot loops reach the EOS through a function barrier
-(`primitives!` dispatches on `typeof(solver.eos)`), an abstractly typed `eos` field
-costs one dynamic dispatch per array pass, not per point — so cubic
-(Peng–Robinson), polynomial-cₚ, or tabular models can be dropped in behind the
-same interface without touching the flow solver or paying a per-point penalty.
+Three implementations exercise the contract: `IdealMixture` (per-species γ_k
+and R_k), `Nasa9Mixture` (piecewise temperature-dependent cp), and
+`StiffenedGas`. `read_nasa9` reads species from the bundled NASA CEA table and
+derives R from each record's molar mass. Its default `reference=:sensible`
+shifts every interval by one enthalpy constant so h(298.15 K) = 0; use
+`:formation` to retain the absolute heat-of-formation gauge.
+
+Because hot loops reach the EOS through a function barrier (`primitives!`
+dispatches on `typeof(solver.eos)`), an abstractly typed `eos` field costs one
+dynamic dispatch per array pass, not per point. Cubic (Peng–Robinson) or tabular
+models can therefore be added without touching the flow solver or paying a
+per-point dispatch penalty.
 
 Species diffusion uses a common molecular diffusivity (μ₀/Sc) plus the
 per-species Cook artificial D\*_k, with a **correction velocity** in the flux

@@ -52,6 +52,67 @@ struct PoleBC <: BoundaryCondition end
 isperiodic(::BoundaryCondition) = false
 isperiodic(::PeriodicBC) = true
 
+"""
+    SwitchableBC(before, after)
+
+One face that behaves as `before` until [`switch!`](@ref) is called on it, then
+as `after`. Built for the two-phase shock-tube pattern: run the interaction
+against a wall, then absorb the outgoing waves instead of reflecting them back
+onto the interface.
+
+It is a wrapper rather than a reassignment of `solver.bcs` because that field is
+concretely typed — swapping in a different BC type would fail to convert. The
+concrete type here never changes, so nothing about the solver's parameterization
+moves.
+
+**Every rank must switch on the same step.** `after` may run collectives that
+`before` does not (`NSCBCOutflowBC` does), and a face that only some ranks think
+is active hangs the run instead of failing it — see the collective note in
+`nscbc.jl`. Drive it from a [`Callback`](@ref), whose triggers are globally
+consistent by construction, not from a rank-local test.
+
+Both conditions must agree on periodicity, since that is read once at `setup`
+to build the decomposition and the line plans. Fold conditions (`AxisBC`,
+`OriginBC`, `PoleBC`) cannot be wrapped: `setup` detects them with `isa` on the
+BC itself, so a wrapped fold would silently not be built.
+"""
+mutable struct SwitchableBC{B1<:BoundaryCondition,B2<:BoundaryCondition} <: BoundaryCondition
+    before::B1
+    after::B2
+    switched::Bool
+end
+
+_is_fold_bc(bc) = bc isa AxisBC || bc isa OriginBC || bc isa PoleBC
+
+function SwitchableBC(before::BoundaryCondition, after::BoundaryCondition)
+    isperiodic(before) == isperiodic(after) ||
+        throw(ArgumentError("SwitchableBC: both conditions must agree on periodicity"))
+    (_is_fold_bc(before) || _is_fold_bc(after)) &&
+        throw(ArgumentError("SwitchableBC cannot wrap a fold condition " *
+                            "(AxisBC, OriginBC, PoleBC); setup detects those by type"))
+    return SwitchableBC(before, after, false)
+end
+
+"""
+    switch!(bc)
+
+Move a [`SwitchableBC`](@ref) onto its `after` condition. Idempotent, so a
+non-`once` trigger calling it repeatedly is harmless.
+"""
+switch!(bc::SwitchableBC) = (bc.switched = true; bc)
+
+"Whether a [`SwitchableBC`](@ref) has switched yet."
+switched(bc::SwitchableBC) = bc.switched
+
+isperiodic(bc::SwitchableBC) = isperiodic(bc.before)
+
+# Branch at the call site rather than returning the active condition from a
+# helper: each arm is then a concrete call, where a shared `active(bc)` would
+# return a small Union and widen both.
+enforce!(bc::SwitchableBC, Q, solver, d, side) =
+    bc.switched ? enforce!(bc.after, Q, solver, d, side) :
+                  enforce!(bc.before, Q, solver, d, side)
+
 "Concrete plane type, so `for I in wallplane(...)` yields `CartesianIndex{3}`
 rather than `Any`. See the note on the constructor below."
 const WallPlane = CartesianIndices{3,Tuple{UnitRange{Int},UnitRange{Int},UnitRange{Int}}}
@@ -88,6 +149,10 @@ enforce!(::PoleBC, Q, solver, d, side) = nothing
 "RHS-level boundary hook, called at the end of compute_rhs! for every face.
 Default: no correction. Characteristic conditions (nscbc.jl) override this."
 correct_rhs!(bc::BoundaryCondition, solver, Q, dQ, d, side) = nothing
+
+correct_rhs!(bc::SwitchableBC, solver, Q, dQ, d, side) =
+    bc.switched ? correct_rhs!(bc.after, solver, Q, dQ, d, side) :
+                  correct_rhs!(bc.before, solver, Q, dQ, d, side)
 
 "ρe at a wall held at temperature Twall — one method per EOS."
 wall_internal_energy(eos::IdealMixture, Q, I, n_species::Int, Twall) = begin

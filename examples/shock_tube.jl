@@ -16,7 +16,7 @@
 # inverts. Both x-ends are slip walls (a genuinely closed tube); the transverse
 # directions are periodic and the interface holds one full sine wavelength.
 #
-# Everything is initialized at a uniform 300 K; the EOS supplies each region's
+# Everything is initialized at a uniform 300 K; NASA-9 supplies each region's
 # density from its pressure and composition, so the initial state is
 # thermodynamically consistent by construction. Uncomment the NSCBC line to let
 # the downstream end radiate outward (a driven tube) instead of reflecting.
@@ -28,12 +28,6 @@ MPI.Init(threadlevel=:funneled)
 
 using CompactLES
 using Printf
-
-# --- Gas properties (SI): R = R_universal / M, γ from the molecular structure.
-const Ru   = 8.314462618                 # universal gas constant [J/(mol·K)]
-const R_He = Ru / 4.002602e-3            # helium      ≈ 2077 J/(kg·K)
-const R_CO2 = Ru / 44.0095e-3            # carbon diox ≈ 189  J/(kg·K)
-const γ_He, γ_CO2 = 5 / 3, 1.289
 
 # --- Geometry (metres) and initial thermodynamic state.
 const Lx = 4.0                            # tube length
@@ -50,11 +44,20 @@ const δ  = 3hx                            # diaphragm / interface diffuse width
 const A_pert = 0.10Lyz                    # sinusoid amplitude (10% of the span)
 np = MPI.Comm_size(MPI.COMM_WORLD)
 
-eos = IdealMixture([IdealSpecies{Float64}("He",  R_He,  γ_He),
-                    IdealSpecies{Float64}("CO2", R_CO2, γ_CO2)])
+# NASA CEA supplies molar masses and piecewise cp(T)
+eos = Nasa9Mixture(read_nasa9(["He", "CO2"]))
 
 xbc = (SlipWallBC(), SlipWallBC())                    # closed reflecting tube
 # xbc = (SlipWallBC(), NSCBCOutflowBC(pinf=p_driven)) # non-reflecting downstream
+
+# Two-phase alternative: reflect while the shock crosses the interface, then
+# absorb so the wall reflection never re-shocks it. Uncomment all three lines.
+# The switch must be driven by a Callback and not by a rank-local test — see the
+# collective note on SwitchableBC.
+# downstream = SwitchableBC(SlipWallBC(), NSCBCOutflowBC(pinf=p_driven))
+# xbc = (SlipWallBC(), downstream)
+# absorb = Callback(AtTime(1.6e-3), (s, Q) -> (switch!(downstream);
+#                                              save_checkpoint(s, Q, "preswitch")))
 
 prob = Problem(
     name = "He-driven RM shock tube",
@@ -71,8 +74,12 @@ prob = Problem(
         Prim(Y = (1 - θ, θ), p = p, T_ion = T0)   # EOS sets ρ from (p, T_ion, Y)
     end)
 
+# `retries` is what makes cfl=0.5 safe here: the diaphragm burst is a startup
+# transient, so a rolled-back step with a temporary CFL backoff costs a few steps
+# rather than the 3x that lowering the CFL for the whole run would.
 num = Numerics(n_global=(Nx, Ny, Nz), art=ArtParams(enabled=true),
-               cfl=0.5, filter_interval=1, dims=(np, 1, 1))
+               cfl=0.5, control=StepControl(retries=4),
+               filter_interval=1, dims=(np, 1, 1))
 
 solver, Q = setup(prob, num)
 rank = MPI.Comm_rank(MPI.COMM_WORLD)
@@ -98,6 +105,7 @@ end
 # ~2.5 ms captures the incident shock crossing the interface, reflecting off the
 # end wall, and returning to re-shock it.
 run!(solver, Q; tfinal=2.5e-3, nmax=1_000_000, callback=diag)
+# ...and with the two-phase boundary above: callback=(diag, absorb)
 
 # save_vtk(solver, Q, "shock_tube_final")   # ρ, u, p, T_ion, Y_He, Y_CO2 for ParaView
 # save_checkpoint(solver, Q, "shock_tube_final")

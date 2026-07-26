@@ -242,7 +242,13 @@ end
     run!(solver, Q; tfinal, nmax=typemax(Int), callback=nothing, control=solver.control)
 
 Advance to `tfinal` (or `nmax` steps), filtering the conserved variables every
-`s.filter_interval` steps and invoking `callback(solver, Q)` after each step.
+`s.filter_interval` steps and invoking `callback` after each step.
+
+`callback` may be a bare `callback(solver, Q)` invoked every step (the original
+contract, return value ignored), a [`Callback`](@ref) pairing a trigger with an
+effect, or a tuple of those. A scheduled [`AtTime`](@ref) trigger also clips `dt`
+so a step lands exactly on its time instead of overshooting it, and an effect
+returning `true` ends the run after that step.
 
 `control` is a [`StepControl`](@ref) governing timestep prediction, the floors
 below which the run is declared failed, and whether a failure is recoverable by
@@ -305,7 +311,15 @@ function run!(solver::Solver, Q, workspace::Workspace;
             save.step = solver.step
         end
         dt_seen = max(dt_seen, dt)
-        dt = min(dt, tfinal - solver.t)      # clip to the endpoint AFTER the checks
+        # Clip to the endpoint AFTER the checks, and to the next scheduled
+        # callback time as well: an AtTime trigger has to be landed on exactly,
+        # not overshot, and nothing outside run! can reach dt to arrange that.
+        # The gap is only applied when it is positive — a requested time already
+        # behind solver.t would otherwise drive dt to zero or negative, which
+        # stalls the run rather than firing anything.
+        dt = min(dt, tfinal - solver.t)
+        gap = callback_next_time(callback, solver) - solver.t
+        gap > 0 && (dt = min(dt, gap))
         step!(solver, Q, workspace, dt)
         solver.t += dt
         solver.step += 1
@@ -314,7 +328,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
             filter_state!(solver, Q)
         end
-        callback !== nothing && callback(solver, Q)
+        run_callbacks!(callback, solver, Q) && break
     end
     return Q
 end

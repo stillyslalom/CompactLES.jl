@@ -25,6 +25,7 @@ include("lines_transposed.jl")
 include("kernels.jl")
 include("kernels_banded.jl")
 include("physics.jl")
+include("nasa9_data.jl")
 include("equations.jl")
 include("boundary.jl")
 include("operators.jl")
@@ -37,6 +38,7 @@ include("sources.jl")
 include("rhs.jl")
 include("nscbc.jl")
 include("io.jl")
+include("callbacks.jl")
 include("timestep.jl")
 include("diagnostics.jl")
 include("problem.jl")
@@ -46,10 +48,12 @@ export CompactScheme, ClosureRow, lele_d1_6, pade_d1_4, compact_filter
 export BandedCompactScheme, BandedClosureRow, lele_d1_10
 export BoundaryCondition, PeriodicBC, SlipWallBC, NoSlipWallBC, ExtrapolationBC, AxisBC, OriginBC, PoleBC
 export NSCBCOutflowBC, NSCBCInflowBC, DirichletBC, save_checkpoint, load_checkpoint!, save_vtk
+export SwitchableBC, switch!, switched
 export Prim, Problem, Numerics, setup, initialize!, conserved_from_prim, tanh_blend
 export DirPlan, BandPlan, apply_along!, filter_field!
 export EOS, IdealSpecies, IdealMixture, single_species, nspecies, Transport
-export StiffenedGas, Nasa9Species, Nasa9Mixture, nasa9_constant_cp
+export StiffenedGas, Nasa9Interval, Nasa9Species, Nasa9Mixture
+export nasa9_constant_cp, read_nasa9
 export EquationSet, NavierStokes1T
 export Metric, CartesianMetric, CylindricalMetric, SphericalMetric
 export Stretch, sine_cluster
@@ -57,6 +61,7 @@ export ArtParams, Solver
 export ConstantBodyForce, add_source!, add_sources!
 export Workspace, compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!
 export StepControl, SolverFailure, PLANCK_TIME, max_rate
+export Trigger, AtTime, EveryStep, WhenState, Callback
 export volume_integral, volume_average, domain_volume, plane_profile
 export profile_coordinate, profile_spacing
 export mix_width, molecular_mixing, species_pdf

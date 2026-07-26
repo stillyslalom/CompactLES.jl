@@ -395,6 +395,78 @@ function test_sync()
 end
 
 # ---------------------------------------------------------------------------
+# 7b. Callback triggers must be globally consistent, and a SwitchableBC must
+#     switch on the same step everywhere. This is the deadlock case, not an
+#     accuracy case: NSCBCOutflowBC runs collectives that SlipWallBC does not,
+#     so if the ranks disagree about whether the switch has happened, some enter
+#     a collective the others never reach and the run hangs at zero CPU rather
+#     than failing. WhenState reduces its condition for exactly this reason.
+#
+#     The condition below is deliberately the worst case: true on ONE rank only
+#     — the one owning the high-x boundary plane, which is where NSCBC would
+#     run. Without the reduction inside WhenState this test hangs. With it, the
+#     rank-local condition must produce bit-identical state to a condition every
+#     rank can evaluate for itself, since both fire on the same step.
+# ---------------------------------------------------------------------------
+function test_callback_consistency()
+    section("callback triggers and SwitchableBC agree across ranks")
+    build() = begin
+        xbc = (SlipWallBC(), SwitchableBC(SlipWallBC(), NSCBCOutflowBC(pinf=1.0)))
+        s, Q = setup(Problem(domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
+                             bcs=(xbc, per3[2], per3[3]),
+                             ic=(x, y, z) -> Prim(u=(0, 0, 0),
+                                                  p=1 + 4exp(-200(x - 0.3)^2),
+                                                  rho=1 + exp(-200(x - 0.3)^2))),
+                     Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+        s, Q, xbc[2]
+    end
+
+    # (a) rank-local condition: only the last rank along x can see it.
+    s_local, Q_local, bc_local = build()
+    run!(s_local, Q_local; tfinal=1e9, nmax=12,
+         callback=Callback(WhenState((s, _) -> rank == np - 1 && s.step >= 5),
+                           (_, _) -> (switch!(bc_local); nothing)))
+
+    # (b) the same switch from a condition every rank evaluates identically.
+    s_glob, Q_glob, bc_glob = build()
+    run!(s_glob, Q_glob; tfinal=1e9, nmax=12,
+         callback=Callback(WhenState((s, _) -> s.step >= 5),
+                           (_, _) -> (switch!(bc_glob); nothing)))
+
+    check("switched flag agrees on every rank",
+          MPI.Allreduce(Int(switched(bc_local)), max, comm) -
+          MPI.Allreduce(Int(switched(bc_local)), min, comm), 0.5)
+    err = 0.0
+    for c in 1:s_local.equations.n_cons, k in 1:s_local.decomp.n_local[3],
+        j in 1:s_local.decomp.n_local[2], i in 1:s_local.decomp.n_local[1]
+        I = gidx(s_local, i, j, k)
+        err = max(err, abs(Q_local[I, c] - Q_glob[I, c]))
+    end
+    check("rank-local vs global trigger: state difference",
+          MPI.Allreduce(err, max, comm), 1e-15)
+    tspread = MPI.Allreduce(s_local.t, max, comm) -
+              MPI.Allreduce(s_local.t, min, comm)
+    check("time spread after a switched run", tspread,
+          1e-14 * max(s_local.t, 1e-30))
+
+    # An AtTime trigger clips dt, which must stay a global decision: every rank
+    # has to land on the same instant or they integrate different equations.
+    s_t, Q_t, _ = build()
+    landed = Float64[]
+    run!(s_t, Q_t; tfinal=0.05,
+         callback=Callback(AtTime([0.01, 0.02]),
+                           (s, _) -> (push!(landed, s.t); nothing)))
+    hit_spread = 0.0
+    for (m, want) in enumerate((0.01, 0.02))
+        m <= length(landed) || (hit_spread = Inf; break)
+        hit_spread = max(hit_spread, abs(landed[m] - want),
+                         MPI.Allreduce(landed[m], max, comm) -
+                         MPI.Allreduce(landed[m], min, comm))
+    end
+    check("AtTime landed exactly, identically on all ranks", hit_spread, 1e-14)
+end
+
+# ---------------------------------------------------------------------------
 # 8. Checkpoint round trip with a real decomposition — one file per rank, so
 #    the per-rank offsets and extents must line up on write and read back.
 # ---------------------------------------------------------------------------
@@ -438,6 +510,7 @@ try
     test_freestream()
     test_conservation()
     test_sync()
+    test_callback_consistency()
     test_checkpoint()
 catch e
     # A throw on any rank (e.g. a setup error) must not deadlock the others.
