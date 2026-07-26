@@ -62,6 +62,13 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,Src}
     step::Int
     dt_prev::T                              # last accepted step, for growth capping
     rate_prev::T                            # last CFL rate, for the predictor
+    # Wall-clock accounting, filled in by `run!`. Rank-local and deliberately so:
+    # a reduction here would be a collective on every step, paid by every run
+    # whether or not anything reads it. Callers wanting load imbalance reduce
+    # these themselves at their own (much lower) reporting frequency — see
+    # `ProgressLog`. Seconds, and Float64 regardless of T.
+    wall_step::Float64                      # last completed step, excl. callbacks
+    wall_total::Float64                     # cumulative over the run
 end
 
 """
@@ -253,7 +260,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   f(), f(), f(), f(), f(),
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(),
                   [f() for _ in 1:3, _ in 1:n_cons],
-                  zero(T), zero(T), 0, zero(T), zero(T))
+                  zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0)
     init_geometry!(solver)
     return solver
 end

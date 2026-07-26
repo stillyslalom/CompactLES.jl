@@ -23,8 +23,8 @@ Before reading any scaling or timing number, check what you are running on.
 `Threads.nthreads()`, the physical core count, and whether the cores are
 uniform all change the interpretation — a hybrid performance/efficiency-core
 desktop will spread threads across both and understate scaling. `ThreadPinning`
-is a dependency for the cluster case; it is not wired up yet and can only be
-validated on the target.
+supplies the topology queries `clusterprobe.jl` uses; see **Cluster launches**
+below. Nothing pins threads yet — the querying half is what has been validated.
 
 Windows checkouts may have CRLF line endings. Helper scripts that match
 multi-line text against `\n` will silently find nothing; match a line at a time.
@@ -45,6 +45,110 @@ without edits; it is the intended first real workload, since it is the one bench
 script whose reductions are all collective and which reproduces serial numbers
 bit-for-bit under decomposition.
 
+## Cluster launches
+
+**Measure the launch before you believe a timing from it.** `clusterprobe.jl`
+takes seconds, runs no solver steps, and reports what the ranks actually got:
+node distribution, the MPI library in use, each rank's CPU affinity mask as
+logical *and* physical CPUs, whether any CPU is double-booked, the cgroup memory
+limit against what `Sys.total_memory()` claims, `MPI.Init` and package-load time,
+the resulting `n_local`, whether `@threaded` engages at all, and the share of
+Cartesian neighbour links that stay intra-NUMA / cross-socket / off-node.
+
+```bash
+srun -n 56 --cpu-bind=threads julia --project=. clusterprobe.jl
+```
+
+Run it once per new machine, and again whenever a launch flag changes. Every
+rule below came out of it, and each one was a *failed* hypothesis first.
+
+**`clusterlaunch.jl` sizes the run before you queue it.** It launches nothing and
+needs no allocation — given a grid and a core budget it enumerates the legal rank
+counts, taking the minimum-extent floor from the scheme objects themselves rather
+than a remembered 9, and reports points/rank, whether `@threaded` engages, and
+the padded-to-interior ratio (the redundant halo arithmetic, which is what
+actually limits how far this solver decomposes). It names two picks, because they
+answer different questions: the widest count whose halo cost is still in hand,
+and the widest legal one for when wall time is the constraint.
+
+```bash
+CL_NODES=36 CL_CORES_PER_NODE=112 julia --project=. clusterlaunch.jl 256
+```
+
+The gap between those two is the real sizing signal. At 64³ on one 112-core node
+it is 8 ranks against 112 (1.95x vs 4.25x halo) — that grid is simply too small
+for the node, which is the arithmetic reason `reference/CALIBRATION.md` wants a
+larger one, not just a physics preference. At 256³ on 36 nodes it is 448 against
+4032, and the whole allocation becomes defensible.
+
+**Scheduler flags do not mean what they say.** Do not assume `--cpus-per-task=N`
+yields N CPUs. Where the scheduler allocates at core granularity with SMT on,
+`-c 1` yields both threads of one core (2 logical CPUs) and `-c 2` yields one
+thread (1 logical CPU) — measured, inverted, reproducible across nodes. The mask
+is the ground truth; the flag is a request.
+
+**Never hand a rank both SMT threads of one physical core.** On rzhound (2
+sockets, 8 NUMA domains, 112 cores, SMT2) that configuration ran the 64³ TGV at
+154 s/step against 0.036 s/step for the same 56 physical cores bound one thread
+per rank — a factor of ~4300, reproduced four times. Memory, NUMA placement,
+package-load time, `MPI.Init` time, thread count and rank count were all measured
+identical across the fast and slow cases; the mask is the only difference and no
+mechanism has been established. `--cpu-bind=threads` avoids it. Treat
+`SMT sibling in a rank's own mask: false` in the probe as a pre-flight check.
+
+**Threads are usually inert under decomposition — spend the cores on ranks.**
+`@threaded` runs serially unless a region's work reaches `THREAD_MIN_WORK`
+(32768 points), so once `prod(n_local)` falls below that, every thread past the
+first is idle no matter what `-t` says. 64³ over 56 ranks is 4608 points/rank,
+seven times under; asking for `-t 56` there measured 1.7x *slower* than `-t 1`
+from runtime and GC-thread overhead alone. Compute points/rank before requesting
+threads, and remember `-t` is per rank: `-n R -t T` asks for R×T compute threads
+plus R×(T/2) GC threads, which is how a launch ends up with ~19,000 threads on a
+112-core node and never reaches step 1.
+
+**Rank count has a hard ceiling per grid.** `plan_direction` needs 9 points per
+rank per dimension for the C8 filter, so `n_global[d] >= 9 * dims[d]`. At 64³
+that caps you near 112 ranks; past it the run errors rather than degrading. Going
+wider is a reason to raise the grid, not to fight the decomposition.
+
+**Judge placement by cross-socket bytes, not percentage.** `Cart_create` is
+row-major, so the *last* dimension is the fastest-varying rank index and its
+neighbours are consecutive ranks. A dimension whose extent equals the socket
+count must cross sockets under every possible mapping, and confining the crossing
+to one axis is the good outcome — on rzhound `socket == coords[3]` exactly, which
+reads as "100% cross-socket on dim 3" while leaving dims 1 and 2 fully
+intra-socket. Weigh links × `n_halo` × the transverse plane before reaching for
+an explicit `dims=`; reshuffling to a different axis there was ~17%, not a win.
+
+**Check the shell rc before blaming the code.** `JULIA_NUM_THREADS` set in a
+login file silently overrides the default in every launch that does not pass `-t`
+explicitly (a command-line `-t` wins, so it corrupts probes rather than runs).
+The probe prints `nthreads` for exactly this reason.
+
+**Multi-node adds two failure modes single-node never shows.** MPI.jl's bundled
+JLL can satisfy the scheduler's launcher on one node over shared memory and still
+fail to reach the interconnect off it, so `MPIPreferences.use_system_binary()`
+before the first multi-node run rather than after it fails — the symptom is a
+hang at startup, not an error. And the probe's `off-node` column only becomes
+non-zero there, which makes it the first place to look when per-step time jumps
+on crossing a node boundary.
+
+**You will not get the same node twice on a busy machine, so size the effect to
+the instrument.** Order-of-magnitude differences read straight through node-to-
+node variance; the few-percent kind does not, and neither does a scaling curve.
+Hold placement fixed and repeat across whatever nodes the queue gives you, or
+accept that the comparison is measuring the queue.
+
+**Report progress with `ProgressLog`, not a hand-rolled callback.** `run!` fills
+`solver.wall_step` and `solver.wall_total` on every step (rank-local by design —
+a reduction there would be a collective every step for every run, read or not),
+and `ProgressLog` turns those into a flushed progress line. Three details went
+wrong in every hand-rolled copy this replaced: printing from all ranks rather
+than one, not flushing (a batch launcher block-buffers stdout, so a healthy run
+looks hung for minutes), and timing the diagnostic's own reduction as solver
+cost. The `quantity` hook runs on every rank and may reduce; only the printing is
+rank-guarded, which is the collective ordering from `nscbc.jl` again.
+
 ## The gate
 
 Run all of it before calling a change safe.
@@ -52,11 +156,11 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 31 testsets, 0 failures
+julia --project=. test/runtests.jl        # 40 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 26/26 each
+  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 30/30 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
@@ -252,7 +356,17 @@ decision worth revisiting.
   sharp binary interface `D*_1` and `D*_2` agree to 4.8e-16 relative and the
   correction velocity is 2.5e-18 against a species gradient of 84. It only
   earns its cost at three or more species.
-- `ThreadPinning` is a dependency but unused; only validatable on a cluster.
+- `ThreadPinning`'s querying API drives `clusterprobe.jl`; its *pinning* API is
+  still unused. Whether pinning helps is open — on the one machine measured, the
+  scheduler's own binding was already near-optimal (see **Cluster launches**),
+  and the launch-line rules there matter more than anything pinning would add.
+- **A rank holding both SMT threads of one core is catastrophic and unexplained.**
+  ~4300x on rzhound, with memory, NUMA placement, load times, thread count and
+  rank count all measured identical between the fast and slow cases. Four
+  hypotheses were tested and rejected (cgroup memory starvation, collectives
+  paying an OS timeslice, a sick node, NUMA placement). `--cpu-bind=threads`
+  avoids it entirely, so this is a curiosity rather than a blocker — but the
+  signature is sharp enough to be worth reporting to site support.
 - A `bench/` runner taking medians over repeated *processes*, to get under the
   timing noise above.
 - `FoldSpec` parameterization would close several remaining JET dispatch sites.

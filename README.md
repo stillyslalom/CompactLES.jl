@@ -163,6 +163,22 @@ run!(solver, Q; workspace, tfinal=0.25, nmax=100_000,
      callback=(solver, Q) -> ...)
 ```
 
+For progress reporting, `ProgressLog` is a ready-made callback that prints step,
+time, `dt`, wall time per step, percent complete and a projected finish, plus one
+scalar diagnostic of your choosing:
+
+```julia
+run!(solver, Q; tfinal=0.25,
+     callback=ProgressLog(every=10, tfinal=0.25, label="TKE",
+                          quantity=turbulent_kinetic_energy))
+```
+
+`quantity` runs on every rank and may reduce; only the printing is rank-guarded.
+Output is flushed every line, which is what makes it usable under a batch
+launcher. `imbalance=true` adds the min/max spread of step time across ranks.
+`run!` records `solver.wall_step` and `solver.wall_total` whether or not anything
+reports them.
+
 Initial-condition and Dirichlet-forcing functions are plain, pure functions of
 physical coordinates (and time, for forcing). A convergence study is just a loop
 over `Numerics` with the same `Problem`.
@@ -183,7 +199,7 @@ over `Numerics` with the same `Problem`.
 | Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`) — see [CALIBRATION.md](reference/CALIBRATION.md) |
 | Diagnostics     | `volume_integral`, `plane_profile`, `mix_width`, `molecular_mixing`, `species_pdf`, `tke_profile`, `dissipation_rate` |
 | Failure handling| `StepControl` timestep floors (incl. a `PLANCK_TIME` failsafe), positivity checking, and rollback-with-CFL-backoff; `SolverFailure` |
-| Run control     | `Callback` with `AtTime` (lands `dt` exactly on a time), `EveryStep`, or `WhenState` triggers; `SwitchableBC` for boundaries that change mid-run |
+| Run control     | `Callback` with `AtTime` (lands `dt` exactly on a time), `EveryStep`, or `WhenState` triggers; `ProgressLog` for progress/timing output; `SwitchableBC` for boundaries that change mid-run |
 | I/O             | `save_checkpoint` / `load_checkpoint!`, `save_vtk` |
 
 ## Timestep and CFL near coordinate singularities

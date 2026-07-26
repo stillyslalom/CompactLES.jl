@@ -8,7 +8,6 @@ using MPI
 MPI.Init(threadlevel=:funneled)
 
 using CompactLES
-using Printf
 
 const Re = 1600.0
 const c0 = 10.0                    # sound speed → Mach ≈ 0.1
@@ -33,22 +32,25 @@ num = Numerics(n_global=(64, 64, 64), art=ArtParams(enabled=false),
 
 solver, Q = setup(prob, num)
 
-const cellvol = prod(solver.h)
-rank0 = MPI.Comm_rank(MPI.COMM_WORLD) == 0
+# Preallocated so the diagnostic does not allocate a field per report. Filled
+# from Q rather than from solver.rho/u/v/w: the primitives hold the last RK
+# stage, not the completed step.
+const ke_field = field(solver.decomp)
 
-function diag(solver, Q)
-    solver.step % 10 == 0 || return
-    ke = 0.0
+function kinetic_energy(solver, Q)
     nx, ny, nz = solver.decomp.n_local
     m1, m2, m3 = solver.equations.i_mom
     for k in 1:nz, j in 1:ny, i in 1:nx
-        ρ = Q[gidx(solver, i, j, k), 1]
-        ke += 0.5 * (Q[gidx(solver, i, j, k), m1]^2 + Q[gidx(solver, i, j, k), m2]^2 +
-                     Q[gidx(solver, i, j, k), m3]^2) / ρ
+        I = gidx(solver, i, j, k)
+        ke_field[I] = 0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / Q[I, 1]
     end
-    ke = MPI.Allreduce(ke * cellvol, +, solver.decomp.comm)
-    rank0 && @printf("step %5d  t = %8.4f  KE = %.8e\n", solver.step, solver.t, ke)
+    # volume_integral carries the reduction and the quadrature weights.
+    return volume_integral(solver, ke_field)
 end
 
-run!(solver, Q; tfinal=1.0, nmax=200, callback=diag)
-rank0 && println("done.")
+const TFINAL = 1.0
+run!(solver, Q; tfinal=TFINAL, nmax=200,
+     callback=ProgressLog(every=10, tfinal=TFINAL, label="KE",
+                          quantity=kinetic_energy))
+
+MPI.Comm_rank(MPI.COMM_WORLD) == 0 && println("done.")

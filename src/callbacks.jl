@@ -169,3 +169,95 @@ end
 # ignored. Honouring `=== true` here would silently turn any existing callback
 # whose last expression happens to be a comparison into an early stop.
 run_callbacks!(cb, solver, Q) = (cb(solver, Q); false)
+
+# --- Progress reporting.
+#
+# Every example grew its own copy of this loop, and every copy got at least one
+# of the three cluster details wrong: printing from all ranks instead of one,
+# forgetting to flush (srun buffers stdout, so a run appears hung for minutes),
+# and timing the diagnostic's own reduction as if it were solver cost. The
+# collective-ordering rule from the top of this file applies too — `quantity`
+# runs on every rank, and only the printing is guarded.
+
+struct ProgressEffect{Q,I}
+    quantity::Q
+    label::String
+    io::I
+    tfinal::Float64
+    imbalance::Bool
+end
+
+"""
+    ProgressLog(; every = 10, quantity = nothing, label = "", tfinal = Inf,
+                  imbalance = false, io = stdout)
+
+A ready-made progress line, returned as a [`Callback`](@ref) to hand straight to
+`run!`. Reports step, `t`, `dt`, and wall time per step from `solver.wall_step`.
+
+`quantity(solver, Q) -> Real` adds one scalar column, `label` names it. It is
+called on **every** rank and may reduce (`volume_integral` and friends do), so
+write it as a normal collective diagnostic and let this handle the rank guard.
+
+`tfinal` adds percent-complete and a projected remaining time, from the mean
+step so far rather than the last one. `imbalance = true` adds the min/max spread
+of step time across ranks, at the cost of two extra reductions per report — the
+cheap way to see a decomposition load-imbalance without a profiler.
+
+Output is flushed on every line. On a cluster stdout is block-buffered through
+the launcher, and an unflushed run is indistinguishable from a hung one.
+
+```julia
+run!(solver, Q; tfinal = 1.0,
+     callback = ProgressLog(every = 10, tfinal = 1.0, label = "TKE",
+                            quantity = turbulent_kinetic_energy))
+```
+"""
+function ProgressLog(; every::Int=10, quantity=nothing, label::AbstractString="",
+                     tfinal::Real=Inf, imbalance::Bool=false, io=stdout)
+    return Callback(EveryStep(every),
+                    ProgressEffect(quantity, String(label), io,
+                                   Float64(tfinal), imbalance))
+end
+
+function (effect::ProgressEffect)(solver, Q)
+    comm = solver.decomp.comm
+    # Both collectives are unconditional: every rank reaches them, before the
+    # rank-0 guard below. Reversing that order is the deadlock in `nscbc.jl`.
+    value = effect.quantity === nothing ? nothing : effect.quantity(solver, Q)
+    lo, hi = if effect.imbalance
+        (MPI.Allreduce(solver.wall_step, min, comm),
+         MPI.Allreduce(solver.wall_step, max, comm))
+    else
+        (0.0, 0.0)
+    end
+    MPI.Comm_rank(comm) == 0 || return false
+
+    Printf.@printf(effect.io, "step %7d  t = %11.5e  dt = %10.4e  %8.4g s/step",
+                   solver.step, solver.t, solver.dt_prev, solver.wall_step)
+    if isfinite(effect.tfinal) && effect.tfinal > 0
+        frac = clamp(solver.t / effect.tfinal, 0.0, 1.0)
+        # Mean step so far, not the last one: dt varies with the CFL rate and a
+        # single sample projects wildly at a startup transient or after a retry.
+        mean_step = solver.step > 0 ? solver.wall_total / solver.step : 0.0
+        remaining = frac > 0 ? mean_step * solver.step * (1 - frac) / frac : NaN
+        Printf.@printf(effect.io, "  %5.1f%%  eta %s", 100 * frac,
+                       _duration(remaining))
+    end
+    effect.imbalance &&
+        Printf.@printf(effect.io, "  spread %.3g-%.3g s", lo, hi)
+    if value !== nothing
+        isempty(effect.label) ? Printf.@printf(effect.io, "  %.8e", value) :
+            Printf.@printf(effect.io, "  %s = %.8e", effect.label, value)
+    end
+    println(effect.io)
+    # Without this a run under srun can sit silent for minutes and look hung.
+    flush(effect.io)
+    return false
+end
+
+function _duration(seconds::Float64)
+    isfinite(seconds) || return "  --  "
+    seconds < 90 && return Printf.@sprintf("%4.0fs", seconds)
+    seconds < 5400 && return Printf.@sprintf("%4.1fm", seconds / 60)
+    return Printf.@sprintf("%4.1fh", seconds / 3600)
+end

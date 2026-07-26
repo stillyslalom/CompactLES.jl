@@ -275,6 +275,12 @@ function run!(solver::Solver, Q, workspace::Workspace;
     # step 180, four times.
     guard_step = -1
     while solver.t < tfinal && solver.step < nmax
+        # Timed from here rather than around step! alone: max_rate carries the
+        # per-step Allreduce and the filter is a full set of line solves, so both
+        # are step cost a user is trying to see. Callbacks are outside it — a
+        # progress callback that reduces a diagnostic would otherwise be timing
+        # itself, and reporting that as solver cost.
+        wall_0 = time_ns()
         rate, rho_min = max_rate(solver, Q)
         dt = predicted_dt(solver, control, rate)
         failure = check_step(control, dt, rho_min, dt_seen, solver.step,
@@ -328,6 +334,10 @@ function run!(solver::Solver, Q, workspace::Workspace;
         if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
             filter_state!(solver, Q)
         end
+        # A rollback `continue`s above this, so an abandoned iteration never
+        # records a step time — wall_total counts work that stood.
+        solver.wall_step = (time_ns() - wall_0) / 1e9
+        solver.wall_total += solver.wall_step
         run_callbacks!(callback, solver, Q) && break
     end
     return Q

@@ -61,7 +61,7 @@ export ArtParams, Solver
 export ConstantBodyForce, add_source!, add_sources!
 export Workspace, compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!
 export StepControl, SolverFailure, PLANCK_TIME, max_rate
-export Trigger, AtTime, EveryStep, WhenState, Callback
+export Trigger, AtTime, EveryStep, WhenState, Callback, ProgressLog
 export volume_integral, volume_average, domain_volume, plane_profile
 export profile_coordinate, profile_spacing
 export mix_width, molecular_mixing, species_pdf
