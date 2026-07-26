@@ -35,6 +35,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,Src}
     pairout::Array{T,3}                     # paired-fold second-parity result
     cfl::T
     filter_interval::Int
+    control::StepControl                    # timestep floors, prediction, retry
     # primitives (full padded arrays)
     rho::Array{T,3}; u::Array{T,3}; v::Array{T,3}; w::Array{T,3}
     p::Array{T,3};  T_ion::Array{T,3}; c::Array{T,3}; cp_mix::Array{T,3}
@@ -59,6 +60,8 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,Src}
     t::T
     tstage::T
     step::Int
+    dt_prev::T                              # last accepted step, for growth capping
+    rate_prev::T                            # last CFL rate, for the predictor
 end
 
 """
@@ -83,6 +86,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 deriv::AbstractCompactScheme=lele_d1_6(),
                 filt::AbstractCompactScheme=compact_filter(0.45),
                 cfl::Real=0.5, filter_interval::Int=1,
+                control::StepControl=StepControl(),
                 dims=nothing, n_halo::Int=4) where {T}
     for d in 1:3
         isperiodic(bcs[d][1]) == isperiodic(bcs[d][2]) ||
@@ -238,7 +242,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   deriv_plans, filter_plans,
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
-                  T(cfl), filter_interval,
+                  T(cfl), filter_interval, control,
                   f(), f(), f(), f(), f(), f(), f(), f(),
                   [f() for _ in 1:n_species],
                   [f() for _ in 1:3, _ in 1:3],
@@ -249,7 +253,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   f(), f(), f(), f(), f(),
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(),
                   [f() for _ in 1:3, _ in 1:n_cons],
-                  zero(T), zero(T), 0)
+                  zero(T), zero(T), 0, zero(T), zero(T))
     init_geometry!(solver)
     return solver
 end
@@ -382,14 +386,15 @@ function _assemble_fluxes!(solver::Solver{T}, eos, Q) where {T}
 end
 
 """
-    compute_rhs!(solver, Q, dQ)
+    compute_primitives_and_gradients!(solver, Q)
 
-Evaluate dQ/dt into the interior of `dQ` from the conserved state `Q`
-(boundary conditions should already be enforced on `Q`). Collapsed dimensions
-contribute no derivatives; the axis dimension routes through parity-folded
-plans with mirror-filled halos.
+Refresh halos, primitives, and the physical-component velocity gradients from
+`Q`. Factored out of `compute_rhs!` because `diagnostics.jl` needs exactly this
+state — a strain-rate or dissipation diagnostic is meaningless against gradients
+belonging to some earlier RK stage — and duplicating the sequence there would
+put two copies of the parity and curvature-correction routing in the codebase.
 """
-function compute_rhs!(solver::Solver, Q, dQ)
+function compute_primitives_and_gradients!(solver::Solver, Q)
     decomp = solver.decomp
     exchange_state!(Q, decomp)
     primitives!(solver, Q)
@@ -403,6 +408,20 @@ function compute_rhs!(solver::Solver, Q, dQ)
         end
     end
     metric_correct_gradients!(solver, solver.metric)   # additive curvature terms
+    return solver
+end
+
+"""
+    compute_rhs!(solver, Q, dQ)
+
+Evaluate dQ/dt into the interior of `dQ` from the conserved state `Q`
+(boundary conditions should already be enforced on `Q`). Collapsed dimensions
+contribute no derivatives; the axis dimension routes through parity-folded
+plans with mirror-filled halos.
+"""
+function compute_rhs!(solver::Solver, Q, dQ)
+    decomp = solver.decomp
+    compute_primitives_and_gradients!(solver, Q)
     compute_artificial!(solver, Q)
     for d in 1:3
         decomp.active[d] || continue

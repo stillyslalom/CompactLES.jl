@@ -111,9 +111,9 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
         Δd1 = ΔL / (2 * c * c)
         Δd2 = ΔL / 2
         Δd3 = sgn * ΔL / (2 * ρ * c)
-        # φ = cv_m / R_m from EOS outputs: R_m = p/(ρ T_ion), cv_m = cp_m − R_m.
-        Rm = p / (ρ * solver.T_ion[I])
-        φ = solver.cp_mix[I] / Rm - 1
+        # φ = ∂(ρe)/∂p |_{ρ,Y}, from the EOS rather than from ideal-gas algebra
+        # (physics.jl). For an ideal mixture this is cv_m/R_m as before.
+        φ = eos_phi(solver.eos, ρ, p, solver.T_ion[I], solver.cp_mix[I])
         u1, u2, u3 = solver.u[I], solver.v[I], solver.w[I]
         ke = 0.5 * (u1*u1 + u2*u2 + u3*u3)
         for k in 1:n_species
@@ -175,10 +175,6 @@ end
 
 enforce!(::NSCBCInflowBC, Q, solver, d, side) = nothing
 
-"∂(cv_m/R_m)/∂Y_k for ideal mixtures (EOS barrier for future models)."
-dphi_dY(eos::IdealMixture, k::Int, Rm, cvm) =
-    (eos.cvk[k] * Rm - eos.Rk[k] * cvm) / (Rm * Rm)
-
 function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
     length(bc.Y) == solver.equations.n_species ||
         error("NSCBCInflowBC: composition length mismatch")
@@ -239,10 +235,9 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
         Δd3 = (ΔL5 - ΔL1) / (2 * ρ * c)
         Δd4 = bc.eta_t * K * (vel[t1][I] - uT[t1]) - un * solver.grad_u[d, t1][I]
         Δd5 = bc.eta_t * K * (vel[t2][I] - uT[t2]) - un * solver.grad_u[d, t2][I]
-        # Mixture quantities for the energy mapping.
-        Rm = p / (ρ * Tp)
-        cvm = solver.cp_mix[I] - Rm
-        φ = cvm / Rm
+        # Mixture quantities for the energy mapping, through the EOS contract.
+        cpm = solver.cp_mix[I]
+        φ = eos_phi(solver.eos, ρ, p, Tp, cpm)
         u1, u2, u3 = solver.u[I], solver.v[I], solver.w[I]
         ke = 0.5 * (u1*u1 + u2*u2 + u3*u3)
         uv = (u1, u2, u3)
@@ -251,7 +246,7 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
             ΔLs = bc.eta_Y * K * (solver.Y[k][I] - YT[k]) -
                   un * solver.grad_Y[d, k][I]
             dQ[I, k] -= solver.Y[k][I] * Δd1 + ρ * ΔLs
-            ΣφY += dphi_dY(solver.eos, k, Rm, cvm) * ΔLs
+            ΣφY += eos_dphi_dY(solver.eos, k, ρ, p, Tp, cpm) * ΔLs
         end
         for a in 1:3
             extra = a == d ? ρ * Δd3 : a == t1 ? ρ * Δd4 : ρ * Δd5

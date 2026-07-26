@@ -10,8 +10,8 @@ covers usage, `DESIGN.md` the numerics, `CLAUDE.md` how to work on it.
 2. [Comparison](#comparison)
 3. [What actually blocks the target use cases](#what-actually-blocks-the-target-use-cases)
 4. [Adaptivity — the compact-scheme constraint](#adaptivity--the-compact-scheme-constraint)
-5. [Phase 0 — the extensibility seams](#phase-0--the-extensibility-seams)
-6. [Phase 1 — make shock tubes unimpeachable](#phase-1--make-shock-tubes-unimpeachable)
+5. [Phase 0 — the extensibility seams](#phase-0--the-extensibility-seams-complete-july-2026)
+6. [Phase 1 — make shock tubes unimpeachable](#phase-1--make-shock-tubes-unimpeachable-largely-complete-july-2026)
 7. [Phase 2 — HED physics](#phase-2--hed-physics)
 8. [Phase 3 — scale, portability, and adaptivity](#phase-3--scale-portability-and-adaptivity)
 9. [Non-goals](#non-goals)
@@ -187,13 +187,16 @@ The path from "no implicit solver" to "implicit diffusion" is much shorter here
 than it looks from outside, and it should be built on this machinery rather than
 by bolting on a black-box linear algebra dependency.
 
-**The EOS contract is real but the code around it is not EOS-agnostic.** The
-function-barrier design in `physics.jl` genuinely does allow a tabular or cubic
-EOS at one dispatch per array pass. What will break is everything that quietly
-assumes ideal gas outside that barrier: NSCBC's LODI algebra uses
-`φ = cv_m/R_m` and the ideal-gas sound speed (`src/nscbc.jl:126`, `:259`), and
-`compute_artificial!` sets κ\* = C_κ·(ρc/T_ion)·sensor, which is dimensionally an
-ideal-gas construction. Both need generalizing before a SESAME table is useful.
+**The EOS contract is now agnostic; one physical assumption survives it.** The
+sites that quietly assumed ideal gas outside the function barrier — NSCBC's LODI
+algebra and the artificial-conductivity scale — are EOS dispatch points as of
+July 2026, and `StiffenedGas` and `Nasa9Mixture` exercise them. A SESAME reader
+needs data plumbing and a table interpolator, not solver surgery.
+
+The assumption that survives is physical rather than structural: the artificial
+conductivity is still built as (ρc/T_ion)·sensor for every gas model here, which
+is singular at a cold ambient. A tabular EOS is free to supply something else,
+and a condensed-matter one will have to.
 
 ## Adaptivity — the compact-scheme constraint
 
@@ -479,42 +482,67 @@ still 50 fields.
 `du` internally. Operator splitting, sub-cycling, and IMEX all need to own the
 stage storage. Hoist it into a `Workspace` the caller can hold.
 
-## Phase 1 — make shock tubes unimpeachable
+## Phase 1 — make shock tubes unimpeachable (largely complete, July 2026)
 
 The primary use case, and the foundation of credibility for everything after it.
-The current validation is honest but thin: Sod against the exact Riemann
-solution, Taylor–Green, freestream, and manufactured fold solutions.
+The validation before this phase was honest but thin: Sod against the exact
+Riemann solution, Taylor–Green, freestream, and manufactured fold solutions.
 
-**A real validation battery.** Add, roughly in order of what they stress: Lax
-and Shu–Osher (shock–turbulence interaction, which is what the compact scheme is
-*for*), Woodward–Colella blast-wave interaction (strong shock collision),
-Sedov–Taylor (spherical, exercising the origin fold under a real blast), and
-Noh — which is the honest test of an artificial-viscosity code and where wall
-heating will show up if the β\* calibration is wrong. Each with a stored
-reference and a regression guard, in the style `test/convergence.jl` already
-uses.
+**A real validation battery — done.** `test/validation.jl` runs Lax, Shu–Osher,
+Woodward–Colella, Sedov–Taylor and Noh, the last in all three geometries, in
+about 25 seconds. It is deliberately split by what each case can be measured
+against: Lax, Sedov and Noh have closed-form solutions and can therefore say the
+code is *wrong*; Shu–Osher and Woodward–Colella are guarded against stored
+4×-resolution profiles from this code and can only say it *changed*. Cases live
+in `test/cases.jl`, shared with the calibration sweep so the two cannot drift.
 
-**Calibrate the artificial-property constants.** `ArtParams` defaults (C_μ =
-0.002, C_β = 1.0, C_κ = 0.01, C_D = 0.01) are inherited from the literature and
-the docstring already says they "should be revisited per configuration." Run the
-battery above across a sweep and document the failure modes at each end — too
-little β\* and shocks ring, too much and the contact smears. This is a
-half-page of results that makes the code usable by someone who is not its
-author.
+Two operating limits fell out of building it, both real and both now documented
+in `reference/CALIBRATION.md`: strong shocks need `cfl ≤ 0.15` because
+`compute_dt` lags the artificial coefficients by a step, and the spherical origin
+fold will not take initial data resolved over fewer than ~3 cells or the singular
+t = 0 start of spherical Noh — while the cylindrical axis takes both. The second
+of those is an unexplained asymmetry between two folds that are supposed to be
+the same machinery, and it is the most interesting loose thread in this phase.
 
-**Mixing diagnostics as first-class output.** For RM/RT work the answer is not
-the flow field, it is the mix width, the molecular mixing fraction θ, the
-species PDF, and the TKE budget. These are currently the user's problem via
-`callback`. A `diagnostics.jl` with volume-integrated and plane-averaged
-reductions — already easy given the sub-communicators in `Decomp` — turns the
-code from a solver into an instrument.
+**Calibrate the artificial-property constants — done.** `bench/artcal.jl` sweeps
+each constant over the battery; `reference/CALIBRATION.md` is the write-up. The
+defaults survive, with one substantive correction (the CFL guidance above) and
+three findings worth carrying forward: `C_beta` fails at *both* ends and its
+upper bound is a timestep-stability bound rather than an accuracy one; `C_kappa`
+= 0 will not run a converging strong shock at all, so the artificial conduction
+is load-bearing and not just an accuracy term; and `C_D` is a weak knob, because
+on a passive interface the compact filter does more smearing than D\* does.
+`C_mu` remains uncalibrated for its actual purpose — every case in the battery
+is 1-D, where the shear viscosity is inert. That needs a 3-D case.
 
-**Non-ideal EOS, in two steps.** First a temperature-dependent cₚ (NASA-9
-polynomials), which is a drop-in behind the existing contract and immediately
-improves the CO₂ side of `examples/shock_tube.jl`. Then stiffened-gas or
-Mie–Grüneisen for condensed materials, which is the prerequisite for anything
-involving a real target. Take the NSCBC and artificial-κ generalization noted
-above as part of this work, not after it.
+**Mixing diagnostics — done.** `src/diagnostics.jl` provides metric-aware,
+MPI-reduced volume integrals and plane-averaged profiles, and on top of them mix
+width, Youngs' molecular mixing fraction θ, composition PDFs, Favre turbulent
+kinetic energy, and resolved dissipation including the artificial contribution.
+The quadrature is the load-bearing part — every mixing number is a ratio of two
+integrals, so a wrong edge weight biases θ silently — and it is exact for a
+constant on a Cartesian grid and second order at a node-centered curvilinear
+edge.
+
+**Non-ideal EOS — contract done, coefficient data outstanding.** The blockers
+named above are closed: φ = ∂(ρe)/∂p, ∂φ/∂Y_k, and the artificial-conductivity
+scale are now EOS dispatch points rather than ideal-gas algebra inlined at their
+call sites in `nscbc.jl` and `artificial.jl`. The full contract is written down
+at the top of `physics.jl`.
+
+Two models joined `IdealMixture` to prove the contract carries weight rather
+than just existing: `StiffenedGas` (`p = (γ−1)ρe − γp∞`, exact perfect-gas limit
+at p∞ = 0, the natural precursor to Mie–Grüneisen) and `Nasa9Mixture` with
+temperature-dependent specific heats and a Newton inversion of e(T). The NASA-9
+path ships no coefficient database on purpose — real coefficient sets are
+tabulated per species over several temperature intervals and belong in a data
+file, not transcribed into a solver — which is why `examples/shock_tube.jl` still
+uses a constant-γ CO₂. Adding that data is the remaining Phase 1 item and it is
+a data-sourcing task rather than a code one.
+
+What is *not* done: the κ\* singularity as T_ion → 0 is now visible and
+dispatchable but not cured for gases, and that is a numerics decision (see
+the open items in `CLAUDE.md`). Mie–Grüneisen proper is still ahead.
 
 ## Phase 2 — HED physics
 
@@ -651,11 +679,12 @@ and the answer is "deliberately not."
 
 If only three things happen, they should be:
 
-1. **Phase 0 in full.** Two to three weeks, behavior-preserving, and it is the
+1. **Phase 0 in full.** Done, July 2026. Behavior-preserving, and it is the
    difference between the rest of this document being tractable and being a
-   rewrite. The bit-identical convergence guards make it verifiable.
-2. **Phase 1's validation battery and EOS generalization.** This is what makes
-   the primary use case defensible and simultaneously unblocks Phase 2.5.
+   rewrite. The bit-identical convergence guards made it verifiable.
+2. **Phase 1's validation battery and EOS generalization.** Done, July 2026.
+   This is what makes the primary use case defensible and simultaneously
+   unblocks Phase 2.5.
 3. **Phase 2.1, the implicit diffusion solver.** The one true architectural gap,
    with more of its foundation already built than is obvious, and it pays off
    twice by also addressing the polar CFL restriction.

@@ -57,6 +57,36 @@ function conserved_from_prim(::NavierStokes1T, eos::IdealMixture, pr::Prim{N}) w
      ρ * (cvm * T_ion + ke))
 end
 
+function conserved_from_prim(::NavierStokes1T, eos::StiffenedGas, pr::Prim{N}) where {N}
+    N == 1 || error("StiffenedGas is single-component; Prim carries $N mass fractions")
+    R = gas_constant(eos)
+    # p + p∞ = ρ R T_ion is the whole of the thermal EOS.
+    ρ = isnan(pr.rho) ? (pr.p + eos.p_inf) / (R * pr.T_ion) : pr.rho
+    T_ion = isnan(pr.T_ion) ? (pr.p + eos.p_inf) / (ρ * R) : pr.T_ion
+    ke = 0.5 * (pr.u[1]^2 + pr.u[2]^2 + pr.u[3]^2)
+    # ρe = ρ c_v T_ion + p∞, and E = ρe + ρ·ke.
+    (ρ, ρ * pr.u[1], ρ * pr.u[2], ρ * pr.u[3],
+     ρ * eos.cv * T_ion + eos.p_inf + ρ * ke)
+end
+
+function conserved_from_prim(::NavierStokes1T, eos::Nasa9Mixture, pr::Prim{N}) where {N}
+    N == nspecies(eos) ||
+        error("Prim carries $N mass fractions; EOS has $(nspecies(eos)) species")
+    Rm = 0.0
+    for k in 1:N
+        Rm += pr.Y[k] * eos.Rk[k]
+    end
+    ρ = isnan(pr.rho) ? pr.p / (Rm * pr.T_ion) : pr.rho
+    T_ion = isnan(pr.T_ion) ? pr.p / (ρ * Rm) : pr.T_ion
+    e = 0.0
+    for k in 1:N
+        e += pr.Y[k] * species_energy(eos, k, T_ion)
+    end
+    ke = 0.5 * (pr.u[1]^2 + pr.u[2]^2 + pr.u[3]^2)
+    (ntuple(k -> ρ * pr.Y[k], N)...,
+     ρ * pr.u[1], ρ * pr.u[2], ρ * pr.u[3], ρ * (e + ke))
+end
+
 conserved_from_prim(eos::EOS, pr::Prim) =
     conserved_from_prim(NavierStokes1T(eos), eos, pr)
 
@@ -159,7 +189,8 @@ end
     Numerics(; n_global, kwargs...)
 
 Discretization and runtime choices: resolution, derivative/filter schemes,
-artificial-property constants, CFL, filter interval, process grid, halo width.
+artificial-property constants, CFL, timestep control ([`StepControl`](@ref)),
+filter interval, process grid, halo width.
 """
 Base.@kwdef struct Numerics
     n_global::NTuple{3,Int}
@@ -167,6 +198,7 @@ Base.@kwdef struct Numerics
     filt::AbstractCompactScheme = compact_filter(0.45)
     art::ArtParams{Float64} = ArtParams()
     cfl::Float64 = 0.5
+    control::StepControl = StepControl()
     filter_interval::Int = 1
     dims::Union{Nothing,NTuple{3,Int}} = nothing
     n_halo::Int = 4
@@ -197,7 +229,8 @@ function setup(prob::Problem, num::Numerics)
                metric=prob.metric, stretch=num.stretch, sources=prob.sources,
                origin=origin,
                deriv=num.deriv, filt=num.filt,
-               cfl=num.cfl, filter_interval=num.filter_interval,
+               cfl=num.cfl, control=num.control,
+               filter_interval=num.filter_interval,
                dims=num.dims, n_halo=num.n_halo)
     Q = allocate_state(solver)
     initialize!(solver, Q, prob.ic)

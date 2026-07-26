@@ -28,64 +28,9 @@ fillf!(solver, f, fn) = (for k in 1:solver.decomp.n_local[3], j in 1:solver.deco
     f[gidx(solver, i, j, k)] = fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))
 end; f)
 
-# --- Exact Riemann solver for the ideal-gas Euler equations (Toro, Ch. 4) ---
-# Used by the Sod shock-tube integration test to build the analytic reference.
-
-"Star-region (p*, u*) by Newton iteration on the pressure function."
-function exact_riemann_star(ρL, uL, pL, ρR, uR, pR, γ)
-    cL = sqrt(γ * pL / ρL); cR = sqrt(γ * pR / ρR)
-    G1 = (γ - 1) / (2γ)
-    f(p, ρk, pk, ck) = p > pk ?
-        (p - pk) * sqrt((2 / ((γ + 1) * ρk)) / (p + (γ - 1) / (γ + 1) * pk)) :
-        (2ck / (γ - 1)) * ((p / pk)^G1 - 1)
-    fder(p, ρk, pk, ck) = p > pk ?
-        sqrt((2 / ((γ + 1) * ρk)) / (p + (γ - 1) / (γ + 1) * pk)) *
-            (1 - (p - pk) / (2 * (p + (γ - 1) / (γ + 1) * pk))) :
-        (1 / (ρk * ck)) * (p / pk)^(-(γ + 1) / (2γ))
-    p = max(0.5 * (pL + pR), 1e-8)
-    for _ in 1:100
-        F  = f(p, ρL, pL, cL) + f(p, ρR, pR, cR) + (uR - uL)
-        Fd = fder(p, ρL, pL, cL) + fder(p, ρR, pR, cR)
-        pnew = p - F / Fd
-        abs(pnew - p) / (0.5 * (p + pnew)) < 1e-12 && (p = pnew; break)
-        p = max(pnew, 1e-9)
-    end
-    ustar = 0.5 * (uL + uR) +
-            0.5 * (f(p, ρR, pR, cR) - f(p, ρL, pL, cL))
-    (p, ustar, cL, cR)
-end
-
-"Sample (ρ,u,p) of the exact solution at self-similar speed S = (x−x0)/t."
-function exact_riemann_sample(S, ρL, uL, pL, ρR, uR, pR, γ, pstar, ustar, cL, cR)
-    G1 = (γ - 1) / (2γ); G6 = (γ - 1) / (γ + 1); G7 = (γ - 1) / 2
-    if S <= ustar                                   # left of contact
-        if pstar > pL                               # left shock
-            SL = uL - cL * sqrt((γ + 1) / (2γ) * pstar / pL + G1)
-            S <= SL && return (ρL, uL, pL)
-            return (ρL * ((pstar / pL + G6) / (G6 * pstar / pL + 1)), ustar, pstar)
-        else                                        # left rarefaction
-            SHL = uL - cL; STL = ustar - cL * (pstar / pL)^G1
-            S <= SHL && return (ρL, uL, pL)
-            S >= STL && return (ρL * (pstar / pL)^(1 / γ), ustar, pstar)
-            u = (2 / (γ + 1)) * (cL + G7 * uL + S)
-            c = (2 / (γ + 1)) * (cL + G7 * (uL - S))
-            return (ρL * (c / cL)^(2 / (γ - 1)), u, pL * (c / cL)^(2γ / (γ - 1)))
-        end
-    else                                            # right of contact
-        if pstar > pR                               # right shock
-            SR = uR + cR * sqrt((γ + 1) / (2γ) * pstar / pR + G1)
-            S >= SR && return (ρR, uR, pR)
-            return (ρR * ((pstar / pR + G6) / (G6 * pstar / pR + 1)), ustar, pstar)
-        else                                        # right rarefaction
-            SHR = uR + cR; STR = ustar + cR * (pstar / pR)^G1
-            S >= SHR && return (ρR, uR, pR)
-            S <= STR && return (ρR * (pstar / pR)^(1 / γ), ustar, pstar)
-            u = (2 / (γ + 1)) * (-cR + G7 * uR + S)
-            c = (2 / (γ + 1)) * (cR - G7 * (uR - S))
-            return (ρR * (c / cR)^(2 / (γ - 1)), u, pR * (c / cR)^(2γ / (γ - 1)))
-        end
-    end
-end
+# Analytic references (exact Riemann solver, Noh, Sedov) live in one place so
+# the serial suite and test/validation.jl measure against the same solution.
+include("references.jl")
 
 @testset "banded LU vs dense" begin
     for q in (1, 2), n in (9, 17)
@@ -592,6 +537,321 @@ end
     # Cartesian has no curvature term at all
     sc = mkslv(n_global=(16, 16, 16))
     @test CL.curvature_rate(sc, CartesianMetric(), gidx(sc, 2, 2, 2), (1.0, 1.0, 1.0)) == 0
+end
+
+@testset "StepControl: floors, positivity, and the default no-op" begin
+    # The floor logic is pure, so it is checked directly rather than by
+    # constructing a run that fails in each of five ways.
+    c = StepControl()
+    ok(dt, ρ; seen=1.0, ctl=c) = CL.check_step(ctl, dt, ρ, seen, 1, 0.0, 0.5)
+    @test ok(1e-3, 1.0) === nothing
+    @test ok(NaN, 1.0).reason === :nonfinite
+    @test ok(Inf, 1.0).reason === :nonfinite
+    @test ok(1e-3, -1e-9).reason === :negative_density
+    @test ok(1e-3, 0.0).reason === :negative_density
+    @test ok(1e-50, 1.0).reason === :planck            # below the Planck failsafe
+    @test ok(1e-40, 1.0).reason === :dt_collapse       # above it, but collapsed
+    # The Planck floor is unconditional: it fires even with every user floor off.
+    bare = StepControl(dt_min=0.0, dt_min_ratio=0.0)
+    @test ok(1e-50, 1.0; ctl=bare).reason === :planck
+    @test ok(1e-40, 1.0; ctl=bare) === nothing         # relative floor disabled
+    # An explicit absolute floor.
+    @test ok(1e-9, 1.0; ctl=StepControl(dt_min=1e-6)).reason === :dt_min
+    # Ordering: a non-finite dt is reported as such, not as a floor breach.
+    @test ok(NaN, -1.0).reason === :nonfinite
+    # Message carries the state that localizes the failure.
+    e = ok(1e-50, 1.0)
+    msg = sprint(showerror, e)
+    @test occursin("SolverFailure(:planck)", msg)
+    @test occursin("StepControl(retries", msg)
+
+    # With prediction off (the default) the chosen step is exactly compute_dt,
+    # so adding all of this changed nothing for a healthy run.
+    solver = mkslv(n_global=(16, 16, 16))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2sin(x), 0, 0), p=1.0, rho=1.0))
+    rate, ρmin = max_rate(solver, Q)
+    @test ρmin ≈ 1.0 atol = 1e-12
+    @test CL.predicted_dt(solver, StepControl(), rate) == compute_dt(solver, Q)
+    # Prediction only ever shortens the step, and only when the rate is rising.
+    solver.rate_prev = 0.5 * rate
+    @test CL.predicted_dt(solver, StepControl(predict=1.0), rate) < compute_dt(solver, Q)
+    solver.rate_prev = 2.0 * rate              # falling rate: no extrapolation
+    @test CL.predicted_dt(solver, StepControl(predict=1.0), rate) == compute_dt(solver, Q)
+    # Growth capping is relative to the previous accepted step.
+    solver.rate_prev = 0.0
+    solver.dt_prev = 1e-9
+    @test CL.predicted_dt(solver, StepControl(max_growth=1.5), rate) ≈ 1.5e-9 rtol = 1e-14
+end
+
+@testset "run!: failure is raised, and recoverable with retries" begin
+    # Noh at nu=1. Two distinct behaviours, and the distinction is the whole
+    # point of the rollback:
+    #
+    #   cfl = 0.3 degrades GRADUALLY — the density undershoot grows for ~150
+    #   steps before positivity goes — so the run must fail loudly rather than
+    #   grind, and rollback cannot save it because the savepoint is already
+    #   damaged by the time anything notices.
+    #
+    #   cfl = 0.9 fails ABRUPTLY in the startup transient, which is what a user
+    #   who guessed a CFL actually hits, and rolling back past it with a halved
+    #   CFL recovers the correct answer.
+    γ = 5 / 3; p0 = 1e-4; tfin = 0.6; N = 400
+    build(cfl, control) = begin
+        inflow = DirichletBC((x, y, z, t) -> begin
+            ρ, u, _ = noh_exact(x, isfinite(t) ? t : 0.0, 1, γ)
+            Prim(rho=ρ, u=(u, 0.0, 0.0), p=p0)
+        end)
+        prob = Problem(eos=single_species(gamma=γ, R=1.0), transport=Transport(mu0=0.0),
+                       domain=((0.0, 1.0), (0.0, 1 / N), (0.0, 1 / N)),
+                       bcs=((SlipWallBC(), inflow), per3[2], per3[3]),
+                       ic=(x, y, z) -> Prim(rho=1.0, u=(-1.0, 0.0, 0.0), p=p0))
+        setup(prob, Numerics(n_global=(N, 1, 1), art=ArtParams(enabled=true),
+                             cfl=cfl, control=control, filter_interval=1))
+    end
+    s1, Q1 = build(0.3, StepControl())
+    err = nothing
+    try
+        run!(s1, Q1; tfinal=tfin, nmax=20_000)
+    catch e
+        err = e
+    end
+    @test err isa SolverFailure
+    @test err.reason in (:negative_density, :dt_collapse)
+    @test s1.step < 20_000                     # it stopped early, it did not grind
+
+    s2, Q2 = build(0.9, StepControl(retries=5, savepoint_interval=20))
+    run!(s2, Q2; tfinal=tfin, nmax=20_000)
+    @test s2.t ≈ tfin rtol = 1e-9
+    @test s2.cfl < 0.9                         # it backed off, and says by how much
+    CL.exchange_state!(Q2, s2.decomp); CL.primitives!(s2, Q2)
+    # Post-shock plateau, sampled between the wall-heating layer and the shock
+    # at x = (γ−1)t/2 = 0.2 — a window that straddles the shock would average
+    # the answer with the undisturbed inflow and pass for the wrong reason.
+    core = [i for i in 1:N if 0.06 <= xcoord(s2, 1, i) <= 0.14]
+    plateau = sum(s2.rho[gidx(s2, i, 1, 1)] for i in core) / length(core)
+    @test plateau ≈ 4.0 rtol = 0.05            # exact Noh plateau for nu = 1
+    # The backoff compounds: successive retries must keep halving, not keep
+    # re-applying one factor to the same starting CFL.
+    @test s2.cfl <= 0.9 * 0.5 + 1e-12
+end
+
+@testset "NASA-9 mixture reduces exactly to the ideal mixture" begin
+    # The strongest available check on the polynomial machinery: with only the
+    # constant term a3 populated, cp is temperature-independent and every
+    # quantity — including the Newton inversion of e(T) — must reproduce the
+    # closed-form ideal-gas answer to round-off. A transcription error in the
+    # enthalpy integral, the cv, or the sound speed shows up here.
+    γ, R = 1.4, 1.0
+    cp = γ * R / (γ - 1)
+    ideal = single_species(gamma=γ, R=R)
+    poly = Nasa9Mixture([nasa9_constant_cp("gas", R, cp)])
+    @test nspecies(poly) == 1
+    for T in (0.3, 1.0, 7.5, 300.0)
+        @test CL.species_cp(poly, 1, T) ≈ cp rtol = 1e-14
+        @test CL.species_enthalpy(poly, 1, T) ≈ cp * T rtol = 1e-14
+        @test CL.species_energy(poly, 1, T) ≈ (cp - R) * T rtol = 1e-14
+    end
+    pr = Prim(u=(0.3, -0.1, 0.2), p=0.8, T_ion=1.7)
+    qi = conserved_from_prim(ideal, pr)
+    qp = conserved_from_prim(poly, pr)
+    @test all(qi .≈ qp)
+    # ... and through the full primitives path, which is where the Newton
+    # inversion actually runs.
+    for eos in (ideal, poly)
+        solver = mkslv(n_global=(12, 12, 12), eos=eos)
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> Prim(u=(0.3, 0, 0), p=0.8, T_ion=1.7))
+        CL.exchange_state!(Q, solver.decomp)
+        CL.primitives!(solver, Q)
+        I = gidx(solver, 3, 4, 5)
+        @test solver.p[I] ≈ 0.8 rtol = 1e-12
+        @test solver.T_ion[I] ≈ 1.7 rtol = 1e-12
+        @test solver.c[I] ≈ sqrt(γ * R * 1.7) rtol = 1e-12
+        @test solver.cp_mix[I] ≈ cp rtol = 1e-12
+    end
+end
+
+@testset "NASA-9: thermodynamic consistency of a varying cp" begin
+    # A genuinely temperature-dependent coefficient set, checked against the
+    # two identities that must hold whatever the coefficients are:
+    # dh/dT = cp, and the Newton inversion is the inverse of e(T).
+    R = 287.0
+    sp = Nasa9Species{Float64}(name="fake", R=R,
+                               a=(1.2e4, -50.0, 3.6, 6.0e-4, -1.0e-7, 1.0e-11,
+                                  -4.0e-16), b1=-1.0e3)
+    eos = Nasa9Mixture([sp, nasa9_constant_cp("inert", 200.0, 900.0)];
+                       T_guess=500.0)
+    for T in (250.0, 800.0, 2500.0)
+        δ = 1e-4 * T
+        dh = (CL.species_enthalpy(eos, 1, T + δ) -
+              CL.species_enthalpy(eos, 1, T - δ)) / 2δ
+        @test dh ≈ CL.species_cp(eos, 1, T) rtol = 1e-7
+    end
+    # cp really does vary — otherwise the identity above is vacuous — and cv
+    # stays positive across the range, which the Newton solve relies on.
+    @test CL.species_cp(eos, 1, 2500.0) / CL.species_cp(eos, 1, 300.0) > 1.2
+    @test all(CL.species_cp(eos, 1, T) > R for T in 250.0:50.0:2500.0)
+    # e(T) round trip through the Newton solve, at three compositions.
+    for Y in ((1.0, 0.0), (0.5, 0.5), (0.2, 0.8))
+        for T in (250.0, 800.0, 2500.0)
+            e = sum(Y[k] * CL.species_energy(eos, k, T) for k in 1:2)
+            @test CL.mixture_temperature(eos, e, k -> Y[k]) ≈ T rtol = 1e-12
+        end
+    end
+    # And end to end: a state initialized from (p, T_ion) recovers both.
+    solver = mkslv(n_global=(12, 12, 12), eos=eos)
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(Y=(0.35, 0.65), u=(120.0, 0, 0),
+                                             p=2.5e5, T_ion=1400.0))
+    CL.exchange_state!(Q, solver.decomp)
+    CL.primitives!(solver, Q)
+    I = gidx(solver, 3, 4, 5)
+    @test solver.p[I] ≈ 2.5e5 rtol = 1e-10
+    @test solver.T_ion[I] ≈ 1400.0 rtol = 1e-10
+    @test solver.Y[2][I] ≈ 0.65 rtol = 1e-12
+    # A step must stay finite: the Newton solve runs inside every RK stage.
+    run!(solver, Q; tfinal=1e9, nmax=3)
+    @test all(isfinite, Q)
+end
+
+@testset "StiffenedGas: perfect-gas limit, and a real liquid" begin
+    # p_inf = 0 must reproduce a perfect gas exactly, which pins the algebra;
+    # then a water-like parameter set exercises the branch that matters.
+    γ = 1.4; R = 1.0; cv = R / (γ - 1)
+    sg = StiffenedGas(gamma=γ, p_inf=0.0, cv=cv, name="gas")
+    @test nspecies(sg) == 1
+    pr = Prim(u=(0.3, -0.1, 0.2), p=0.8, T_ion=1.7)
+    @test all(conserved_from_prim(single_species(gamma=γ, R=R), pr) .≈
+              conserved_from_prim(sg, pr))
+    solver = mkslv(n_global=(12, 12, 12), eos=sg)
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> pr)
+    CL.exchange_state!(Q, solver.decomp); CL.primitives!(solver, Q)
+    I = gidx(solver, 3, 4, 5)
+    @test solver.p[I] ≈ 0.8 rtol = 1e-12
+    @test solver.T_ion[I] ≈ 1.7 rtol = 1e-12
+    @test solver.c[I] ≈ sqrt(γ * R * 1.7) rtol = 1e-12
+    @test CL.eos_phi(sg, 1.0, 0.8, 1.7, γ * cv) ≈ cv / R rtol = 1e-13
+
+    # Water: γ = 4.4, p∞ = 6e8 Pa. The point of the model is that the sound
+    # speed is set by p∞, not by p, so it stays near 1500 m/s at 1 atm where a
+    # perfect gas would give a few hundred.
+    water = StiffenedGas(gamma=4.4, p_inf=6.0e8, cv=1816.0, name="water")
+    s2 = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+                eos=water, art=ArtParams(enabled=false))
+    Q2 = allocate_state(s2)
+    initialize!(s2, Q2, (x, y, z) -> Prim(u=(0, 0, 0), p=101325.0, rho=1000.0))
+    CL.exchange_state!(Q2, s2.decomp); CL.primitives!(s2, Q2)
+    J = gidx(s2, 3, 4, 5)
+    @test s2.p[J] ≈ 101325.0 rtol = 1e-9
+    @test 1400 < s2.c[J] < 1700                      # c = sqrt(γ(p+p∞)/ρ)
+    @test s2.c[J] ≈ sqrt(4.4 * (101325.0 + 6.0e8) / 1000.0) rtol = 1e-12
+    # Uniform state ⇒ zero RHS, the same freestream statement made for every
+    # other configuration in this suite.
+    apply_bcs!(s2, Q2)
+    dQ2 = zero(Q2)
+    compute_rhs!(s2, Q2, dQ2)
+    @test maximum(abs, dQ2) < 1e-8 * 101325.0
+    # An acoustic pulse stays finite and does not leave the stiffened branch.
+    initialize!(s2, Q2, (x, y, z) ->
+        Prim(u=(0, 0, 0), p=101325.0 * (1 + 0.01sin(2π * x)), rho=1000.0))
+    run!(s2, Q2; tfinal=1e9, nmax=5)
+    CL.primitives!(s2, Q2)
+    @test all(isfinite, Q2)
+    @test minimum(s2.rho[gidx(s2, i, j, k)] for i in 1:12, j in 1:12, k in 1:12) > 0
+end
+
+@testset "diagnostics: quadrature, plane averages, mixing measures" begin
+    # The quadrature is the load-bearing part: every mixing number is a ratio of
+    # two of these integrals, so a wrong edge weight biases θ and W silently
+    # rather than failing. Cartesian must be exact; curvilinear is O(h²) at a
+    # node-centered edge by construction (see the note in diagnostics.jl).
+    solver = Solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5),
+                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                    art=ArtParams(enabled=false))
+    @test domain_volume(solver) ≈ 1.0 atol = 1e-12          # 2.0 × 1.0 × 0.5
+    ones_f = CL.field(solver.decomp); fill!(ones_f, 1.0)
+    @test volume_integral(solver, ones_f) ≈ 1.0 atol = 1e-12
+    @test volume_average(solver, ones_f) ≈ 1.0 atol = 1e-12
+    # ∫x dV over x ∈ [0,2] with unit transverse area = 1.0 (trapezoid is exact
+    # for a linear integrand, which is what the half edge weight buys).
+    lin = CL.field(solver.decomp)
+    fillf!(solver, lin, (x, y, z) -> x)
+    @test volume_integral(solver, lin) ≈ 1.0 atol = 1e-12
+    # A plane average of a function of x alone returns that function, and the
+    # spacing profile sums to the extent.
+    prof = plane_profile(solver, lin, 1)
+    xs = profile_coordinate(solver, 1)
+    @test length(prof) == 24
+    @test maximum(abs, prof .- xs) < 1e-12
+    @test sum(profile_spacing(solver, 1)) ≈ 2.0 atol = 1e-12
+
+    # Cylindrical with the axis fold: half-offset cells carry full weight, so
+    # the error is the O(h²) edge term at the outer wall only.
+    cyl = Solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 1.0),
+                 metric=CylindricalMetric(),
+                 bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                 art=ArtParams(enabled=false))
+    ones_c = CL.field(cyl.decomp); fill!(ones_c, 1.0)
+    h = cyl.h[1]
+    @test volume_integral(cyl, ones_c) ≈ 0.5 rtol = 1e-3    # ∫r dr dθ dz, θ collapsed
+    @test volume_integral(cyl, ones_c) - 0.5 < h^2          # the edge term, not more
+
+    # Mixing measures against states whose answers are definitional.
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 1.0, 1.4)])
+    mk(ic) = begin
+        s = Solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3,
+                   eos=eos, art=ArtParams(enabled=false))
+        Q = allocate_state(s)
+        initialize!(s, Q, ic)
+        CL.exchange_state!(Q, s.decomp); CL.primitives!(s, Q)
+        s, Q
+    end
+    # The pair W and θ exists precisely to separate stirring from mixing, and
+    # these three states are the demonstration: the first two have IDENTICAL
+    # mix width and opposite θ.
+    #
+    # (a) uniformly mixed everywhere: W is the full extent, θ = 1.
+    s1, Q1 = mk((x, y, z) -> Prim(Y=(0.5, 0.5), p=1.0, rho=1.0))
+    @test mix_width(s1, Q1) ≈ 1.0 atol = 1e-12
+    @test molecular_mixing(s1, Q1) ≈ 1.0 atol = 1e-12
+    # (b) stirred but not mixed: each plane is half pure a and half pure b, so
+    # ⟨Y_a⟩⟨Y_b⟩ is unchanged from (a) but ⟨Y_a Y_b⟩ vanishes pointwise.
+    s2, Q2 = mk((x, y, z) -> Prim(Y=(y < 0.1 ? 1.0 : 0.0, y < 0.1 ? 0.0 : 1.0),
+                                  p=1.0, rho=1.0))
+    @test mix_width(s2, Q2) ≈ 1.0 atol = 1e-12
+    @test molecular_mixing(s2, Q2) < 1e-12
+    # (c) an x-only interface: nothing varies within a plane, so θ is 1 by
+    # construction and W collapses onto the interface.
+    s3, Q3 = mk((x, y, z) -> begin
+        θ = tanh_blend(x, 0.5, 1 / 64)
+        Prim(Y=(1 - θ, θ), p=1.0, rho=1.0)
+    end)
+    @test mix_width(s3, Q3) < 0.05
+    @test molecular_mixing(s3, Q3) ≈ 1.0 atol = 1e-12
+    # The PDF of a segregated field piles up at 0 and 1 and integrates to 1.
+    centers, pdf = species_pdf(s2, 1; nbins=20)
+    @test sum(pdf) * (centers[2] - centers[1]) ≈ 1.0 atol = 1e-10
+    @test pdf[1] + pdf[end] > 0.99 * sum(pdf)
+    _, pdf1 = species_pdf(s1, 1; nbins=20)
+    @test pdf1[11] > 0.99 * sum(pdf1)                # all mass in the Y=0.5 bin
+
+    # TKE removes the plane mean, so a uniform stream carries none; a
+    # transverse-varying velocity does.
+    s4, Q4 = mk((x, y, z) -> Prim(Y=(1.0, 0.0), u=(0.7, 0, 0), p=1.0, rho=1.0))
+    @test turbulent_kinetic_energy(s4, Q4) < 1e-20
+    @test maximum(abs, tke_profile(s4, Q4)) < 1e-20
+    s5, Q5 = mk((x, y, z) -> Prim(Y=(1.0, 0.0), u=(0.7, 0.3sin(2π * y / 0.2), 0),
+                                  p=1.0, rho=1.0))
+    @test turbulent_kinetic_energy(s5, Q5) > 1e-3
+    # Dissipation is a sink: zero for a uniform state, positive under shear.
+    @test abs(dissipation_rate(s4, Q4)) < 1e-20
+    s6, Q6 = mk((x, y, z) -> Prim(Y=(1.0, 0.0), u=(0.0, 0.3sin(2π * x), 0),
+                                  p=1.0, rho=1.0))
+    s6.transport = Transport(mu0=1e-2)
+    @test dissipation_rate(s6, Q6) > 0
 end
 
 @testset "save_vtk writes a readable .pvtr/.vtr pair" begin

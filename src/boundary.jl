@@ -89,13 +89,25 @@ enforce!(::PoleBC, Q, solver, d, side) = nothing
 Default: no correction. Characteristic conditions (nscbc.jl) override this."
 correct_rhs!(bc::BoundaryCondition, solver, Q, dQ, d, side) = nothing
 
-"ρe at a wall held at temperature Twall (EOS barrier; ideal mixtures)."
+"ρe at a wall held at temperature Twall — one method per EOS."
 wall_internal_energy(eos::IdealMixture, Q, I, n_species::Int, Twall) = begin
     ρe = 0.0
     @inbounds for k in 1:n_species
         ρe += Q[I, k] * eos.cvk[k]
     end
     ρe * Twall
+end
+
+# e = c_v T + p∞/ρ, so ρe picks up the cohesive term as a constant.
+wall_internal_energy(eos::StiffenedGas, Q, I, ::Int, Twall) =
+    @inbounds Q[I, 1] * eos.cv * Twall + eos.p_inf
+
+wall_internal_energy(eos::Nasa9Mixture, Q, I, n_species::Int, Twall) = begin
+    ρe = 0.0
+    @inbounds for k in 1:n_species
+        ρe += Q[I, k] * species_energy(eos, k, Twall)
+    end
+    ρe
 end
 
 function _wall_density(Q, I, n_species)

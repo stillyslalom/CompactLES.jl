@@ -21,6 +21,27 @@ const RKC = (0.0,
              2802321613138.0 / 2924317926251.0)
 
 """
+    predicted_dt(solver, control, rate) -> dt
+
+Turn a measured CFL rate into the step to take: extrapolate the rate forward by
+`control.predict` steps, then cap the growth against the previous step.
+"""
+function predicted_dt(solver::Solver, control::StepControl, rate)
+    r = rate
+    if control.predict > 0 && solver.rate_prev > 0
+        # Linear extrapolation, one-sided: only ever raise the rate. A falling
+        # rate means the flow is relaxing, and stepping out on that prediction
+        # is how you overshoot the next shock.
+        r = max(r, r + control.predict * (r - solver.rate_prev))
+    end
+    dt = solver.cfl / r
+    if control.max_growth > 0 && solver.dt_prev > 0
+        dt = min(dt, control.max_growth * solver.dt_prev)
+    end
+    return dt
+end
+
+"""
     Workspace(Q)
     Workspace(solver)
 
@@ -74,18 +95,39 @@ step!(solver::Solver, Q, workspace::Workspace, dt) =
 CFL-limited timestep from the acoustic (|u_d| + c) / (h_d · scalefactor_d)
 rate and a diffusive rate built from the current (possibly artificial)
 transport coefficients, reduced over all ranks. Calls `primitives!` so the
-estimate is EOS-aware; artificial coefficients lag by one step.
+estimate is EOS-aware; artificial coefficients lag by one step, which
+[`StepControl`](@ref) exists to compensate for.
 """
-function compute_dt(solver::Solver, Q)
+compute_dt(solver::Solver, Q) = solver.cfl / max_rate(solver, Q)[1]
+
+"""
+    max_rate(solver, Q) -> (rate, rho_min)
+
+Global maximum of the CFL rate, and the global minimum mixture density taken
+straight from `Q`. The density comes back with the rate because it is free —
+the same loop, folded into the same collective — and because it is the only
+honest failure signal available: `primitives!` substitutes benign placeholders
+wherever ρ ≤ 0, so a state that has already gone unphysical still produces a
+finite, plausible-looking rate. Without this, loss of positivity is invisible
+until the diffusive term drives `dt` to zero some hundreds of steps later.
+"""
+function max_rate(solver::Solver, Q)
     decomp = solver.decomp
     exchange_state!(Q, decomp)   # keep halos consistent for primitives!
     primitives!(solver, Q)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
+    n_species = solver.equations.n_species
     tr = solver.transport
     rate = 0.0
+    ρ_min = Inf
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
         I = CartesianIndex(i + o1, j + o2, k + o3)
+        ρQ = 0.0
+        for sp in 1:n_species
+            ρQ += Q[I, sp]
+        end
+        ρ_min = min(ρ_min, ρQ)
         ρ = solver.rho[I]
         ri = 1 / ρ
         c = solver.c[I]
@@ -115,8 +157,10 @@ function compute_dt(solver::Solver, Q)
         acc += 2 * ν * dsum
         rate = max(rate, acc)
     end
-    rate = MPI.Allreduce(rate, max, decomp.comm)
-    return solver.cfl / rate
+    # One collective, not two: both quantities are reduced with `max` by
+    # negating the density, and this runs every step of every run.
+    red = MPI.Allreduce([rate, -ρ_min], max, decomp.comm)
+    return (red[1], -red[2])
 end
 
 """
@@ -195,18 +239,78 @@ function dt_report(solver::Solver, Q)
 end
 
 """
-    run!(solver, Q; tfinal, nmax=typemax(Int), callback=nothing)
+    run!(solver, Q; tfinal, nmax=typemax(Int), callback=nothing, control=solver.control)
 
 Advance to `tfinal` (or `nmax` steps), filtering the conserved variables every
 `s.filter_interval` steps and invoking `callback(solver, Q)` after each step.
+
+`control` is a [`StepControl`](@ref) governing timestep prediction, the floors
+below which the run is declared failed, and whether a failure is recoverable by
+rolling back and lowering the CFL. It defaults to the one the solver was built
+with. On an unrecoverable failure this throws [`SolverFailure`](@ref) rather
+than grinding — see the note at the top of this file for why that is the
+behaviour worth having.
+
+When `control.retries > 0` the CFL is lowered in place on each retry, so
+`solver.cfl` after a completed run tells you what it actually took. That is the
+number to put in the next run's `Numerics`.
 """
 function run!(solver::Solver, Q, workspace::Workspace;
-              tfinal, nmax::Int=typemax(Int), callback=nothing)
+              tfinal, nmax::Int=typemax(Int), callback=nothing,
+              control::StepControl=solver.control)
+    rank = MPI.Comm_rank(solver.decomp.comm)
+    save = control.retries > 0 ? Savepoint(copy(Q), solver.t, solver.step) : nothing
+    attempts = 0
+    dt_seen = 0.0
+    # Savepoints are suppressed at or below this step after a rollback. Without
+    # it a retry re-saves its way forward to the state that failed and then
+    # "rolls back" onto it, so every further retry starts from the corrupt state
+    # and only the CFL moves. Observed as: rolled back to step 180, failed at
+    # step 180, four times.
+    guard_step = -1
     while solver.t < tfinal && solver.step < nmax
-        dt = min(compute_dt(solver, Q), tfinal - solver.t)
+        rate, rho_min = max_rate(solver, Q)
+        dt = predicted_dt(solver, control, rate)
+        failure = check_step(control, dt, rho_min, dt_seen, solver.step,
+                             solver.t, solver.cfl)
+        if failure !== nothing
+            (save === nothing || attempts >= control.retries) && throw(failure)
+            attempts += 1
+            copyto!(Q, save.Q)
+            solver.t = save.t
+            solver.step = save.step
+            # Compounding: the CFL is reduced from its current value and never
+            # restored from the savepoint, so three retries give backoff^3.
+            solver.cfl *= control.cfl_backoff
+            guard_step = failure.step
+            # The rate history belongs to the abandoned trajectory; keeping it
+            # would have the predictor extrapolate from states that no longer
+            # exist. dt_seen goes too, or the relative floor would immediately
+            # fire again against a dt from before the rollback.
+            solver.dt_prev = zero(eltype(Q))
+            solver.rate_prev = zero(eltype(Q))
+            dt_seen = 0.0
+            rank == 0 && @warn "run!: $(failure.reason) at step $(failure.step); " *
+                               "rolled back to step $(save.step) and lowered cfl to " *
+                               "$(solver.cfl) (retry $attempts of $(control.retries))"
+            continue
+        end
+        # Q has just passed its health check, which is the only moment it is
+        # known good — the checks run on the state entering a step, so saving
+        # after stepping would bank a state nothing has yet vetted.
+        if save !== nothing && control.savepoint_interval > 0 &&
+           solver.step > guard_step && solver.step % control.savepoint_interval == 0
+            copyto!(save.Q, Q)
+            save.t = solver.t
+            save.step = solver.step
+        end
+        dt_seen = max(dt_seen, dt)
+        dt = min(dt, tfinal - solver.t)      # clip to the endpoint AFTER the checks
         step!(solver, Q, workspace, dt)
         solver.t += dt
         solver.step += 1
+        solver.dt_prev = dt
+        solver.rate_prev = rate
         if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
             filter_state!(solver, Q)
         end

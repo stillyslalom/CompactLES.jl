@@ -118,8 +118,11 @@ function compute_artificial!(solver, Q)
         end
     end
 
-    # κ* sensor: Σ_d h_d |δ⁴_d e|, smoothed; κ* = C_κ (ρ c / T_ion) · sensor.
-    # Internal energy directly from Q — EOS-agnostic.
+    # κ* sensor: Σ_d h_d |δ⁴_d e|, smoothed; κ* = C_κ · scale(EOS) · sensor,
+    # with the scale ρc/T_ion for the gas models. Internal energy comes straight
+    # from Q, so the sensor itself is EOS-agnostic; the scale is an EOS query
+    # (see the note in physics.jl on why it is the weaker of the two
+    # abstractions and what it is still singular in).
     i_energy = solver.equations.i_energy
     m1, m2, m3 = solver.equations.i_mom
     @threaded length(solver.tmp_a) for k in 1:size(solver.tmp_a, 3)
@@ -132,11 +135,13 @@ function compute_artificial!(solver, Q)
     exchange_halos!(solver.tmp_a, decomp)
     delta4_sum!(solver.sensor, solver.tmp_a, solver, 1)
     smooth!(solver.sensor, solver)
+    eos = solver.eos
     @threaded nx*ny*nz for k in 1:nz
         @inbounds for j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
-            solver.kappa_art[I] = art.C_kappa * solver.rho[I] * solver.c[I] /
-                max(solver.T_ion[I], eps()) * max(solver.sensor[I], 0.0)
+            scale = art_conductivity_scale(eos, solver.rho[I], solver.c[I],
+                                           solver.T_ion[I], solver.cp_mix[I])
+            solver.kappa_art[I] = art.C_kappa * scale * max(solver.sensor[I], 0.0)
         end
     end
 

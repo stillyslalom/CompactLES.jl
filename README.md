@@ -51,8 +51,13 @@ run!(solver, Q; tfinal=1.0)
   bulk viscosity, conductivity, and species diffusivity, driven by
   high-derivative sensors — no Riemann solvers or flux limiters.
 - **Multicomponent thermodynamics.** Any number of species, each with its own
-  transport equation, behind a pluggable equation-of-state interface (ideal
-  mixture provided).
+  transport equation, behind a pluggable equation-of-state interface. Three
+  models ship: a calorically perfect `IdealMixture`, a `Nasa9Mixture` with
+  temperature-dependent specific heats, and a `StiffenedGas` for condensed
+  materials.
+- **Mixing diagnostics as output.** Volume integrals, plane-averaged profiles,
+  mix width, molecular mixing fraction, composition PDFs, Favre turbulent
+  kinetic energy, and resolved dissipation — metric-aware and MPI-reduced.
 - **Curvilinear geometry.** Cartesian, cylindrical (r, θ, z), and spherical
   (r, θ, φ) coordinates, with regularized treatment of the cylindrical axis and
   the spherical origin and poles. Collapsed dimensions give cheap 1-D and 2-D
@@ -142,6 +147,7 @@ num = Numerics(
     filt            = compact_filter(0.45),
     art             = ArtParams(enabled=true),   # Cook artificial properties
     cfl             = 0.5,
+    control         = StepControl(retries=4),    # roll back and lower cfl on failure
     filter_interval = 1,                  # filter every N steps (0 disables)
     dims            = nothing,            # process grid; nothing → auto
     stretch         = (nothing, nothing, nothing))  # optional grid clustering
@@ -173,8 +179,10 @@ over `Numerics` with the same `Problem`.
 | Open boundaries | `NSCBCOutflowBC(pinf=...)`, `NSCBCInflowBC(u=..., T_ion=..., Y=...)`, `ExtrapolationBC` |
 | Forcing         | Typed source tuples (`ConstantBodyForce`) and time-dependent `DirichletBC` |
 | Singular axes   | `AxisBC` (cylindrical axis), `OriginBC` (spherical origin), `PoleBC` (spherical poles) |
-| Thermodynamics  | `IdealMixture` of `IdealSpecies`; EOS interface for custom models |
-| Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`) |
+| Thermodynamics  | `IdealMixture` of `IdealSpecies`, `Nasa9Mixture` (temperature-dependent cp), `StiffenedGas` (condensed matter); EOS interface for custom models |
+| Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`) — see [CALIBRATION.md](reference/CALIBRATION.md) |
+| Diagnostics     | `volume_integral`, `plane_profile`, `mix_width`, `molecular_mixing`, `species_pdf`, `tke_profile`, `dissipation_rate` |
+| Failure handling| `StepControl` timestep floors (incl. a `PLANCK_TIME` failsafe), positivity checking, and rollback-with-CFL-backoff; `SolverFailure` |
 | I/O             | `save_checkpoint` / `load_checkpoint!`, `save_vtk` |
 
 ## Timestep and CFL near coordinate singularities
@@ -248,6 +256,7 @@ Three suites, ordered so a failure points at one layer:
 julia --project=. test/runtests.jl                      # serial unit tests
 mpiexec -n 4 julia --project=. -t 1 test/mpi_tests.jl   # distributed
 julia --project=. -t auto test/convergence.jl           # order studies
+julia --project=. -t auto test/validation.jl            # shock-capturing battery
 ```
 
 The serial suite covers operator accuracy (spectral convergence of the compact
@@ -271,6 +280,18 @@ untested function drops out of the denominator instead of counting as a miss —
 `NSCBCInflowBC` path had never been compiled. A run that adds tests should be
 expected to *increase* the executable-line count, and that increase is the real
 measure of what got covered.
+
+`test/validation.jl` is the shock-capturing battery: Lax and Sedov–Taylor and
+Noh against closed-form solutions, Shu–Osher and Woodward–Colella against stored
+high-resolution profiles from this code. The distinction is kept explicit in the
+file, because only the first kind can tell you the code is wrong. Noh is run in
+all three geometries, which makes it the sharpest available probe of the axis
+and origin folds under a real strong shock, and its wall-heating number is the
+one to watch when the artificial-viscosity constants move.
+`reference/CALIBRATION.md` documents what those constants do, measured with
+`bench/artcal.jl` over the same cases — including the two operating limits the
+battery turned up: strong shocks want `cfl ≤ 0.15`, and the spherical origin
+needs its initial data resolved over at least three cells.
 
 `test/convergence.jl` is the slower second line of defence: it prints *observed*
 orders and guards them against regression. Measured on the current code, in the
@@ -299,6 +320,17 @@ least-exercised part of the code; the full-ball origin+poles combination in
 particular warrants scrutiny before production use. Other current limitations:
 
 - Float64 only.
+- Strong shocks need `cfl ≤ 0.15`, well below the 0.5 default: a dispersive
+  undershoot at the shock outruns the artificial viscosity and the state loses
+  positivity. Pass `StepControl(retries = 4)` and the solver will roll back and
+  lower the CFL itself rather than making you guess; see
+  [CALIBRATION.md](reference/CALIBRATION.md).
+- The spherical origin will not take an initial discontinuity resolved over
+  fewer than about three cells, nor a flow that converges to a singular state
+  at t = 0. The cylindrical axis takes both.
+- `Nasa9Mixture` ships the polynomial machinery but no coefficient database;
+  species data belongs in a file under your control, not transcribed into a
+  solver.
 - NSCBC inflow transverse-term accounting is not yet implemented (outflow
   has it).
 - Output is checkpoint and VTK only — no HDF5/XDMF, no GPU path.

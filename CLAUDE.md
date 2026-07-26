@@ -36,8 +36,9 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 28 testsets, 0 failures
+julia --project=. test/runtests.jl        # 31 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
+julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
   "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 26/26 each
 done
@@ -51,6 +52,15 @@ into the file: C6 6.01, C10 10.04, C6 wall closures 3.17, cylindrical axis odd
 meant to affect numerics these should come out bit-identical, down to the error
 magnitudes.** A moved digit means you hit something real — chase it before
 moving on.
+
+`test/validation.jl` prints measured errors against guards baked into its
+header. Unlike the convergence orders these are **not** bit-reproducible: each
+case integrates thousands of steps through a nonlinear sensor, so an arithmetic
+reassociation anywhere in the artificial-property path moves the fourth
+significant figure. Four digits is the level to compare at; a moved *third*
+digit is real. The cases themselves live in `test/cases.jl`, shared with
+`bench/artcal.jl` so the calibration study and the guards cannot drift apart —
+add a case there, not in either consumer.
 
 `bench/jetcheck.jl` and `bench/audit.jl` print counts, not pass/fail. Record
 them before a change and compare after; what matters is the delta. Most
@@ -82,6 +92,13 @@ Names are spelled out rather than abbreviated. Current vocabulary:
 - `inv_J`, `area_d`, `inv_h`, `inv_r`, `cot_over_r`, `coord_shift`, `flux`
 - `deriv_plans`, `filter_plans`, `line_solver`, `plan` (a DirPlan) vs `plane`
   (a wall plane), `fold`, `pair`
+- `plane_profile`, `profile_spacing`, `mix_width`, `molecular_mixing`,
+  `quad_weight`, `cell_measure`
+- `eos_phi`, `eos_dphi_dY`, `art_conductivity_scale`, `species_energy`,
+  `mixture_temperature` (the EOS contract; the whole list is at the top of
+  `physics.jl`)
+- `control` (a `StepControl`), `max_rate`, `predicted_dt`, `check_step`,
+  `dt_prev`, `rate_prev`, `savepoint`
 
 **Temperature is `T_ion`.** There is one temperature today; the name keeps
 `T_ele` / `T_rad` free for a 2T or 3T model without a second API break. Bare
@@ -119,6 +136,14 @@ says little.
 **Julia soft scope.** A top-level `for` in a script that reassigns a variable
 bound outside it throws `UndefVarError`. Wrap script bodies in a function.
 
+**A run that fails does not stop.** Losing positivity drives the diffusive rate
+in `compute_dt` up until `dt` collapses, and the run then grinds forever at no
+progress — so a sweep that visits bad configurations must pass a low `nmax`, and
+`run!` now applies `StepControl` floors so this raises `SolverFailure` instead.
+`primitives!` substitutes benign placeholders wherever ρ ≤ 0, which is why the
+positivity check reads ρ out of `Q` directly in `max_rate` rather than trusting
+`solver.rho`.
+
 ## Threading
 
 `@threaded <work> for ... end` (`src/threading.jl`) uses `Threads.@threads`
@@ -143,12 +168,46 @@ decision worth revisiting.
 - `bench/` is scratch tooling, not tests: `audit.jl` (allocation, inference),
   `jetcheck.jl` / `jetwhere.jl` (dispatch sites, and where they come from),
   `phases.jl` (RHS phase budget), `profile.jl`, `scaling.jl`, `threadscale.jl`,
-  `bcbench.jl`, `coverage.jl`.
+  `bcbench.jl`, `coverage.jl`, `artcal.jl` (artificial-property sweeps),
+  `amr_transfer.jl`.
+- A sweep over configurations expected to include bad ones must pass a low
+  `nmax`. A configuration that loses positivity does not crash — the diffusive
+  rate in `compute_dt` climbs until `dt` collapses and the run grinds — so one
+  bad point costs more wall time than the whole sweep. `test/cases.jl` threads
+  an `nmax` through every case for this.
+- The 1-D cases run single-threaded on purpose: each threaded region is well
+  under `THREAD_MIN_WORK`, so `-t auto` buys nothing and ~4% CPU on a 24-thread
+  box is the expected reading, not a bottleneck.
 - Run artifacts (`*.dat`, `*.vtr`, `*.pvtr`, `*.ckpt`, `*.cov`) are gitignored.
   Prefer `git add <paths>` over `git add -A` after running examples.
 
 ## Open items
 
+- **Strong shocks need `cfl ≤ 0.15`**, and the cause is a dispersive undershoot
+  at the shock that the artificial viscosity does not damp — the state loses
+  ~60% of its pre-shock density over 150 steps while `dt` and the CFL rate sit
+  flat, then positivity goes. It is NOT the one-step lag in `compute_dt`; that
+  hypothesis was tested with a rate predictor at up to 30 steps of lookahead and
+  rejected, and the predictor is shipped off by default with the measurement in
+  `src/stepcontrol.jl`. Fixing it properly is a spatial-regularization question.
+  `StepControl(retries = 4)` is the practical mitigation and is strictly better
+  than a lowered CFL where it applies, because the restriction is a startup one.
+- **κ\* is singular as `T_ion` → 0.** `art_conductivity_scale` is now an EOS
+  dispatch point rather than inline ideal-gas algebra, so a condensed-matter or
+  tabular model can supply its own; the ideal-gas method still divides by
+  `T_ion` and a cold ambient below p ≈ 1e-3 collapses the diffusive timestep.
+  Fixing it for gases is a numerics decision, not a refactor.
+- **The spherical origin fold is much less forgiving than the cylindrical axis**
+  — it needs initial data resolved over ≳3 cells and will not take Noh's
+  singular t = 0 start, both of which the cylindrical axis handles. Nobody has
+  worked out why.
+- `C_mu` is uncalibrated for its actual purpose. Every case in
+  `test/validation.jl` is 1-D, where the shear artificial viscosity is inert; it
+  needs a 3-D run with resolved shear (the Taylor–Green harness behind
+  `CL_RUN_TG=1` is the obvious vehicle).
+- `Nasa9Mixture` has no coefficient database, deliberately — see the note in
+  `physics.jl`. Shipping one is a data question and would let
+  `examples/shock_tube.jl` use a real CO₂ cp(T).
 - `compute_artificial!` is ~31% of the multicomponent RHS, spent in the filter
   line-solves that smooth the sensors, one sweep per species. Cutting it is a
   numerics decision (shared vs per-species sensor), not a code tweak. Note that
