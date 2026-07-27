@@ -25,19 +25,37 @@
 #   primary STABILIZER here, not just a smoother — the Cook properties alone do
 #   not hold this case together at this resolution.
 #
-#   Consequence for calibration: C_mu cannot be fitted against this dissipation
-#   curve while the filter owns ~83% of the sink, and the filter cannot be
-#   switched off to isolate it. They set the subgrid dissipation jointly.
+#   AT RESOLUTION — 128³, 224 ranks over 2 rzhound nodes, t = 10. This is what
+#   the 32³ numbers above were waiting for, and it moves three of them:
 #
-#   Resolution caveat, and it is the important one: 32³ is coarse for Re = 1600
-#   (DNS wants ~256³; 64³ is the usual coarse-LES point). Across 16³ → 32³ the
-#   artificial share falls (50% → 28% of the viscous budget) but the filter share
-#   does NOT (≈87% → 83%). Two coarse points is not a trend. Filter dominance is
-#   established at 32³ and UNESTABLISHED at a resolution worth quoting.
+#     config              peak -dKE/dt      mol    mu*   filter    wall
+#     art ON,  filter 1   1.2065e-2 @ 8.77  60.4%  2.3%   37.3%   1520 s
+#     art OFF, filter 1   1.2248e-2 @ 8.87  62.5%  0      37.5%   1063 s
+#     art ON,  filter 0   SolverFailure(:negative_density) at t = 4.66
 #
-# Cost, measured on a 24-thread desktop: 32³ to t = 10 is ~3.3 min per
-# configuration. 64³ is 8× the points and 2× the steps, so ~13 min per
-# configuration — the reason this lives in bench/ and wants a cluster.
+#   Filter dominance does NOT survive resolution: 87% → 83% → 37%. Two coarse
+#   points were not a trend.
+#
+#   The filter is still REQUIRED, and its stabilizing role is decoupled from its
+#   energy share. At 37% of the sink, removing it kills the run *earlier* than at
+#   32³ (t = 4.66 vs 5.32) through a clean energy blow-up — KE turns upward at
+#   t ≈ 4.4 and triples before positivity goes, dt collapsing to 2e-60. TGV is
+#   unforced, so that is unambiguously numerical: the filter owns ~100% of the
+#   grid-scale sink whatever its share of the total. Art-off/filter-on runs to
+#   completion. The filter is necessary and sufficient here; the Cook properties
+#   are neither.
+#
+#   Refinement does not disentangle mu* from the filter — their ratio is
+#   invariant across the 4× refinement (5.0/83 = 0.060 at 32³, 2.3/37.3 = 0.062
+#   at 128³), both shrinking together as the molecular term takes over. So
+#   "refine until the filter lets go, then fit C_mu" does not work. Holding the
+#   filter FIXED and fitting against the peak does, because the peak is resolved
+#   far below the effect size. Numbers and the open C_mu sweep are in
+#   reference/CALIBRATION.md.
+#
+# Cost: 32³ to t = 10 is ~3.3 min per configuration on a 24-thread desktop, 64³
+# ~13 min. On a cluster, 128³ is ~20–25 min per configuration at 224 ranks over
+# two nodes (0.10–0.12 s/step, ~11k–13k steps) — the reason this lives in bench/.
 #
 # Usage — positional grid and end time, then `key=value` options:
 #
@@ -63,6 +81,10 @@
 #   nmax      step cap per configuration (default none). A sweep that may visit
 #             bad configurations wants one: a run that loses positivity does not
 #             crash, it grinds — CLAUDE.md, Conventions.
+#   window    steps either side for every -dKE/dt reported (default 250, i.e. a
+#             501-step window, clamped to length(ts)/8). Do not lower it towards
+#             1 to "see more detail" — the one-step rate is contaminated by dt
+#             jitter at several times the effect size. See `windowed_rate`.
 #
 # Parsed by `script_args` (src/scriptargs.jl), shared with the cluster scripts;
 # the reasoning for ARGS over environment variables is there. An unknown key is
@@ -117,6 +139,36 @@ function diss_split(solver, Q)
     end
     v = MPI.Allreduce([s_mol, s_shear, s_bulk, s_rho], +, solver.decomp.comm)
     return (v[1] / v[4], v[2] / v[4], v[3] / v[4])
+end
+
+"""
+−dKE/dt averaged over `w` steps either side of step `i`, rather than the
+one-step centred difference this used to print.
+
+The filter removes energy per *application*, not per unit time, so the
+instantaneous rate is `(filter loss)/dt + physical` and carries the full
+step-to-step `dt` jitter divided into it. Measured at 128³: with the artificial
+properties on, the sensor feeds `compute_dt` and `dt` swings ±12% step to step,
+which against a filter supplying ~37% of the sink predicts ∓4.4% on the total —
+and that is exactly the scatter the sampled table showed. With `art` off, `dt` is
+smooth to under a percent and so is the curve. Since `C_mu` is being ranked on
+differences of well under 1%, the instantaneous rate cannot be the estimator.
+
+This is the same mechanism as the truncated-final-step artifact below; widening
+the window fixes both, but that step is still excluded because one clipped `dt`
+inside a window is a bias rather than noise.
+
+A boxcar over a curved peak reads slightly low — ~0.2% at 128³ with the default
+501-step window, growing as the window widens. That is common-mode across
+configurations run at the same `window=`, so it cancels in a `C_mu` comparison
+and only matters when quoting the peak against an external reference. The window
+is clamped to `length(ts) ÷ 8`, so hold step counts within ~8x of each other or
+the clamp will hand two configurations different windows.
+"""
+function windowed_rate(ts, kes, i, w)
+    lo, hi = max(i - w, 1), min(i + w, length(ts))
+    hi > lo || return NaN
+    return -(kes[hi] - kes[lo]) / (ts[hi] - ts[lo])
 end
 
 "Kinetic energy per unit volume, globally reduced."
@@ -176,7 +228,8 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
 end
 
 const DEFAULTS = (N = 32, tfinal = 10.0, configs = "off:1,on:1",
-                  progress = 0, sample = 100, nmax = typemax(Int))
+                  progress = 0, sample = 100, nmax = typemax(Int),
+                  window = 250)
 
 function parse_configs(spec)
     configs = NamedTuple{(:art, :filt, :C_mu),Tuple{Bool,Int,Float64}}[]
@@ -197,8 +250,8 @@ end
 function main()
     rank = MPI.Comm_rank(MPI.COMM_WORLD)
     opt = script_args(ARGS, DEFAULTS; positional = (:N, :tfinal))
-    N, tfinal, sample, progress, nmax =
-        opt.N, opt.tfinal, opt.sample, opt.progress, opt.nmax
+    N, tfinal, sample, progress, nmax, window =
+        opt.N, opt.tfinal, opt.sample, opt.progress, opt.nmax, opt.window
     configs = parse_configs(opt.configs)
     if rank == 0
         @printf("=== Taylor-Green %d^3, Re=1600, tfinal=%.1f, %d rank(s), %d thread(s)\n",
@@ -229,14 +282,26 @@ function main()
             continue
         end
         solver, ts, kes, samples = result
-        eps = -diff(kes) ./ diff(ts)
-        imax = argmax(eps)
+        # Window for every rate reported below — see `windowed_rate`. Clamped so
+        # a short run (a low `nmax`, or a smoke test) still gets a window it can
+        # fit rather than one spanning the whole history.
+        w = max(min(window, length(ts) ÷ 8), 1)
+        # The last step is excluded even so: `run!` truncates it to land exactly
+        # on `tfinal`, and one clipped dt inside a window biases rather than
+        # jitters. Before this was handled, 128³ reported a spurious 1.4226e-2 at
+        # t = 10.00 against a true peak of 1.2065e-2, i.e. +18%, on both filtered
+        # configurations. A StepControl retry could clip a step the same way and
+        # is not handled here.
+        last_full = max(length(ts) - 1, 2)
+        rates = [windowed_rate(ts, kes, i, w) for i in 2:last_full]
+        imax = argmax(rates) + 1
         @printf("\n--- %s   (%d steps, %.1f s)\n", label, solver.step, elapsed)
-        @printf("peak -dKE/dt = %.4e at t = %5.2f\n", eps[imax], ts[imax+1])
-        # Peak at the last recorded step, whatever ended the run. Testing `t`
+        @printf("peak -dKE/dt = %.4e at t = %5.2f   (%d-step window)\n",
+                rates[imax-1], ts[imax], 2w + 1)
+        # Peak at the last usable step, whatever ended the run. Testing `t`
         # against `tfinal` missed the case `nmax=` creates, where the run
         # stops early and every t is below tfinal.
-        imax + 1 >= length(ts) &&
+        imax >= last_full &&
             println("    NOTE: still rising at the last step, so this is not a " *
                     "resolved peak — either the run was cut short of t = 9 " *
                     "(check nmax=) or the configuration is diverging.")
@@ -244,7 +309,7 @@ function main()
                 "mu*/visc  filter")
         for (t, mol, shear, bulk, idx) in samples
             (idx < 2 || idx >= length(ts)) && continue
-            total = -(kes[idx+1] - kes[idx-1]) / (ts[idx+1] - ts[idx-1])
+            total = windowed_rate(ts, kes, idx, w)
             visc = mol + shear + bulk
             @printf("  %5.2f  %.4e  %.4e  %.4e  %.4e  %6.1f%%  %6.1f%%\n",
                     t, mol, shear, bulk, total,
@@ -257,8 +322,8 @@ function main()
         usable = filter(s -> 2 <= s[5] < length(ts), samples)
         isempty(usable) && continue
         t, mol, shear, bulk, idx =
-            usable[argmin(abs.(getindex.(usable, 5) .- (imax + 1)))]
-        total = -(kes[idx+1] - kes[idx-1]) / (ts[idx+1] - ts[idx-1])
+            usable[argmin(abs.(getindex.(usable, 5) .- imax))]
+        total = windowed_rate(ts, kes, idx, w)
         share(x) = 100 * x / max(abs(total), 1e-300)
         # Nearest sample to the peak, not the peak step itself — diss_split only
         # runs every `sample=` steps.

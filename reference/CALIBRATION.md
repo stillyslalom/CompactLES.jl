@@ -25,11 +25,16 @@ ArtParams(C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.01)
 
 ## How to read the tables
 
-Every number below is one-dimensional. That is a real limitation and it bounds
-what can be concluded: `C_mu` multiplies the *shear* part of the artificial
-stress, which a 1-D case cannot exercise except through its trace, so the
-`C_mu` table constrains stability and essentially nothing else. `C_beta`,
-`C_kappa` and `C_D` are all fully exercised.
+Every number in the four constant tables is one-dimensional. That bounds what
+they can say: `C_mu` multiplies the *shear* part of the artificial stress, which
+a 1-D case cannot exercise except through its trace, so the `C_mu` table
+constrains stability and essentially nothing else. `C_beta`, `C_kappa` and `C_D`
+are all fully exercised.
+
+The exception is the 3-D Taylor–Green work inside the [`C_mu`
+section](#c_mu--the-shear-viscosity), which exists precisely because the 1-D
+tables cannot reach that constant. Read those subsections as a separate study
+with its own estimator caveats, not as more rows of the table above them.
 
 Columns:
 
@@ -192,23 +197,149 @@ follow, and the first is the one that matters:
   `filter_interval = 0` fails outright with `SolverFailure(:negative_density)` at
   t = 5.32. **The compact filter is the primary stabilizer at this resolution,
   not an auxiliary smoother.** `C_mu` and the filter set the subgrid dissipation
-  jointly and have to be calibrated as a pair.
+  jointly and have to be calibrated as a pair. (Read the next section before
+  acting on this one: at 128³ the filter share collapses to 37% and `C_mu`
+  *does* become fittable — by holding the filter fixed rather than removing it.
+  The "cannot be fitted" here is a statement about 32³, not about the case.)
 - β\* is four orders below μ\* despite `C_beta = 1.0`, because at Ma 0.1 there is
   almost no dilatation for it to act on. Consistent with the `C_beta` section:
   that constant is a shock constant and TGV has no shocks.
 
-**Resolution caveat, which is the reason none of this is a recommendation yet.**
-32³ is coarse for Re = 1600 — DNS wants ~256³ and 64³ is the usual coarse-LES
-point. Across 16³ → 32³ the artificial share of the viscous budget falls
-(50% → 28%) but the filter share does *not* (≈87% → 83%). Two coarse points is
-not a trend. Filter dominance is established at 32³ and **unestablished at a
-resolution worth quoting**; 64³ costs ~13 min per configuration on a desktop,
-which is why the next step for this is a cluster rather than another sweep here.
+### At resolution: 128³ on a cluster
 
-**Recommendation: keep 0.002. Treat it as unvalidated for its intended purpose,
-and do not raise it past 0.008 without re-checking the singular geometries.**
-Unchanged by the above — TGV has not yet said `C_mu` is wrong, only that the
-experiment which would say so needs the filter treated as a second variable.
+The caveat that used to close this section — that filter dominance was
+established at 32³ and unestablished anywhere worth quoting — has been settled.
+128³, Re = 1600, t = 10, 224 ranks over two rzhound nodes, ~20–25 min per
+configuration:
+
+```
+config              peak -dKE/dt        mol    mu*   filter   steps   wall
+art ON,  filter 1   1.2044e-2 @ t≈9.06  60.4%  2.3%   37.3%   12739   1520 s
+art OFF, filter 1   1.2153e-2 @ t≈9.00  62.5%  0      37.5%   10830   1063 s
+art ON,  filter 0   SolverFailure(:negative_density) at t = 4.66, step 8515
+```
+
+Peaks are windowed rates — see [Read the rate over a
+window](#read-the-rate-over-a-window-not-instantaneously), which is not optional
+for anything with `art` on. Channel shares are from the sampled table.
+
+**Filter dominance does not survive resolution.** 87% (16³) → 83% (32³) → 37%
+(128³). Two coarse points were not a trend, and the third breaks it. The
+molecular term takes over correspondingly, 12% → 60%.
+
+**The solver is close to right here, which is a result in its own right.** Peak
+−dKE/dt of 1.2065e-2 at t ≈ 8.8 against the reference 1.2e-2 at t = 9 is under
+1% on magnitude and within a sample stride on timing. At 32³ the same case
+over-dissipated by 22% and peaked 2.5 time units early.
+
+**But the filter is still required, and its stabilizing role is decoupled from
+its share of the energy budget.** At 128³ it supplies 37% of the sink, and
+removing it kills the run *earlier* than at 32³ — t = 4.66 against 5.32. The
+failure is a clean energy blow-up, not the dispersive-undershoot signature of
+the shock cases: KE tracks the filtered run to within 0.1% until t ≈ 4.4, turns
+upward, and triples before positivity goes, with `dt` collapsing to 2e-60. TGV is
+unforced, so rising KE is unambiguously numerical. The filter owns essentially
+100% of the grid-scale sink whatever its share of the total. Meanwhile
+art-off/filter-on runs cleanly to t = 10. **The filter is necessary and
+sufficient at this resolution; the Cook properties are neither.** That inverts
+the intended division of labour and it does not soften with refinement, so
+expect the same at 256³.
+
+**Refinement does not disentangle μ\* from the filter.** Their ratio is
+essentially invariant across the 4× refinement:
+
+```
+32³ :  mu* 5.0%  / filter 83.0%  = 0.060
+128³:  mu* 2.3%  / filter 37.3%  = 0.062
+```
+
+Both shrink together. So the obvious plan — refine until the filter releases its
+grip, then fit `C_mu` against what is left — does not work: at the resolution
+where the filter lets go, μ\* has gone inert for the same reason.
+
+**What does work is holding the filter fixed rather than removing it**, and
+reading the rate over a window rather than instantaneously (see the next
+subsection — this matters more than it sounds):
+
+```
+C_mu = 0       (art off)   1.2153e-2 @ t ≈ 9.00    +1.28% vs reference
+C_mu = 0.0005              1.2108e-2 @ t ≈ 9.05    +0.90%
+C_mu = 0.002   (default)   1.2044e-2 @ t ≈ 9.06    +0.37%
+C_mu = 0.008               1.1950e-2 @ t ≈ 8.77    −0.42%
+```
+
+**Monotone across a 16× span, and it crosses the reference.** μ\* moves the peak
+in the right direction and costs 43% wall time to do it (21% per step from
+`compute_artificial!`, plus 18% more steps). Channel shares at the peak scale as
+they should: μ\* is 2.3% of the sink at `C_mu = 0.002` and 8.2% at 0.008, against
+a filter share that barely moves (37.2% → 33.1%).
+
+Interpolating the last interval gives 0.0048 linearly and 0.0038 in log — call
+the optimum **`C_mu ≈ 0.004`**.
+
+**The uncertainty band includes the shipped default, so this is not a reason to
+change it.** The slope near the crossing is −1.57e-2 per unit `C_mu`, and the
+peak estimate carries ~0.4% uncertainty — at `C_mu = 0.002` the top two windowed
+values are 0.011966 and 0.012044, 0.65% apart, so where the window falls relative
+to the true maximum matters. That is ±0.002–0.003 in `C_mu`: the band runs
+roughly 0.002–0.007 and 0.002 sits inside it.
+
+**And the top of the band is already excluded by another case.** The 1-D table
+above has Noh ν = 3 as NaN at `C_mu = 0.008` — the spherical origin does not
+complete there. So the value that best-fits TGV from above breaks a shipped case,
+and 0.004 is untested between the 0.002 and 0.008 rows. Anyone moving the default
+must run `bench/artcal.jl` at 0.004 first and confirm the origin survives; that
+is a desktop job.
+
+To narrow the band, no more compute is needed — only a better peak estimator.
+`kes` is recorded every step, so fitting a parabola to the windowed hump and
+reporting its vertex would beat taking the argmax, which is what the ±0.4% is.
+
+### Read the rate over a window, not instantaneously
+
+This was very nearly a wrong answer, so it is worth stating as a rule. The filter
+removes energy per *application*, so the instantaneous rate is
+`(filter loss)/dt + physical` and carries the full step-to-step `dt` jitter
+divided into it. With `art` on, the sensor feeds `compute_dt` and `dt` swings
+±12% step to step at 128³; against a filter supplying ~37% of the sink that
+predicts ∓4.4% on the total, and ∓4% is exactly the scatter the one-step column
+showed. With `art` off, `dt` is smooth to under a percent and so is the curve —
+which is why the artifact hid until the artificial properties were varied.
+
+`C_mu` is being ranked on differences well under 1%. The one-step rate cannot
+resolve that; the 501-step windowed rate can, and reduces the within-run scatter
+to ~0.3%. `bench/tgv_energy.jl` now reports every rate windowed (`window=`), and
+the numbers above are windowed. **Numbers quoted from output before that change
+are contaminated for any `art`-on configuration.**
+
+A boxcar over a curved peak reads ~0.2% low at this window width. That is
+common-mode across configurations, so it cancels in the `C_mu` comparison and
+only biases the absolute value against the external reference.
+
+Two caveats to carry. Fitting one scalar with one knob always succeeds, so an
+optimum near 0.002 would show the default is *consistent* with TGV, not derived
+from it; the stronger test is the whole −dKE/dt(t) curve, which these runs
+already produce at ~37 points but which needs the van Rees reference curve
+digitized to compare against. And `filter_interval` and the filter's α are
+themselves uncalibrated, so any `C_mu` fitted this way is conditional on
+`compact_filter(0.45)` applied every step.
+
+**Reading the peak.** `run!` truncates the final step to land exactly on
+`tfinal`, and the compact filter removes energy per *application* rather than per
+unit time — so a short step still pays a full filter pass and −dKE/dt inflates.
+At 128³ this produced a spurious 1.4226e-2 at t = 10.00 against the true
+1.2065e-2 at t = 8.77, on both filtered configurations. `bench/tgv_energy.jl`
+now excludes that step; output from before that fix reports the peak ~18% high.
+
+**Recommendation: keep 0.002, and it is no longer unvalidated.** TGV at 128³ with
+resolved shear brackets the reference across a 16× sweep and puts the optimum at
+`C_mu ≈ 0.004 ± 0.003` — a band that contains the shipped value. That closes the
+question this section opened with ("`C_mu` should not be claimed to be
+constrained by any case in this battery; that needs a 3-D case with resolved
+shear"). It is now constrained, to within a factor of two, and 0.002 is
+consistent with it.
+
+Do not raise it past 0.008 — Noh ν = 3 does not complete there.
 
 ## C_D — the species diffusivity
 
@@ -370,7 +501,7 @@ singularity. The cylindrical axis handles the cold start at 16× compression.
 
 | Constant | Default | Keep? | Notes |
 |---|---|---|---|
-| `C_mu` | 0.002 | yes | Unconstrained by this battery. TGV makes it active but the filter owns 83% of the sink — calibrate the pair. Ceiling ~0.008. |
+| `C_mu` | 0.002 | yes | TGV at 128³ puts the optimum at 0.004 ± 0.003, which contains 0.002. Never above 0.008. |
 | `C_beta` | 1.0 | yes | Accuracy optimum near 0.4; use 0.5 for interface-dominated work. Never 0. |
 | `C_kappa` | 0.01 | yes | 0.02–0.04 measurably reduces wall heating. Never 0. |
 | `C_D` | 0.01 | yes | Weak knob; the compact filter dominates interface thickness. |
@@ -386,6 +517,13 @@ Open items this study leaves behind, in rough priority order:
 2. Make the κ\* construction non-singular as T_ion → 0. It is an EOS dispatch
    point as of the Phase 1 work, so a tabular model can already supply its own;
    the gas models still divide by the temperature.
-3. Calibrate `C_mu` against a 3-D case with resolved shear.
+3. Narrow the `C_mu` band below ±0.003. Needs no more compute — a parabola fit
+   to the windowed hump instead of an argmax, plus denser sampling through the
+   peak. The harder follow-up is digitizing the van Rees −dKE/dt curve so the
+   fit is against the whole history rather than one scalar.
+4. Calibrate the compact filter itself. It is necessary and sufficient for
+   stability at 128³ while `filter_interval` and α have never been fitted to
+   anything, which makes every `C_mu` number conditional on
+   `compact_filter(0.45)` every step.
 4. Understand why the spherical origin fold is so much less forgiving of
    under-resolved data than the cylindrical axis fold.
