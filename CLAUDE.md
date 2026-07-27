@@ -62,7 +62,7 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 41 testsets, 0 failures
+julia --project=. test/runtests.jl        # 42 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
@@ -235,6 +235,9 @@ decision worth revisiting.
   box is the expected reading, not a bottleneck.
 - Run artifacts (`*.dat`, `*.vtr`, `*.pvtr`, `*.ckpt`, `*.cov`) are gitignored.
   Prefer `git add <paths>` over `git add -A` after running examples.
+- **Commit to `main`.** This is a single-maintainer repository and the default
+  agent habit of opening a branch per change is noise here — do not create one
+  unless asked. Commit only when asked, and run the gate above first.
 
 ## Known limitations
 

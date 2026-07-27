@@ -3,6 +3,8 @@ Manifest.toml
 # library by path, so it must never be shared between checkouts.
 LocalPreferences.toml
 docs/build/
+# generated from docs/literate/ by docs/make.jl
+docs/src/tutorials/
 docs/figures/.readme_header_cache.jls
 # coverage artifacts
 src/*.cov

@@ -1040,8 +1040,9 @@ end
     @test Q_wrap == Q_ref
     @test !switched(sw[1])
 
-    # Switched by a callback, it must actually take the other branch: the state
-    # diverges from the unswitched reference and stays finite.
+    # Switched by a callback, it must actually take the other branch. That the
+    # branch is *physically* the right one is the next testset's job; this one
+    # only pins the wrapper's mechanics.
     sw2 = (SwitchableBC(SlipWallBC(), ExtrapolationBC()),
            SwitchableBC(SlipWallBC(), ExtrapolationBC()))
     s_sw, Q_sw = mkrun(sw2)
@@ -1049,9 +1050,199 @@ end
          callback=Callback(WhenState((s, _) -> s.step >= 4),
                            (_, _) -> (switch!.(sw2); nothing)))
     @test all(switched, sw2)
-    @test all(isfinite, Q_sw)
     @test Q_sw != Q_ref
     @test switch!(sw2[1]) === sw2[1]      # idempotent
+end
+
+@testset "SwitchableBC: switching upstream lets the reflected wave leave" begin
+    # A shock/interface interaction in a translating frame, with the upstream
+    # boundary switching from inflow to outflow when the interface-reflected
+    # wave reaches it. This is the case SwitchableBC was built for, and the one
+    # a finiteness check says nothing about: whether the switched boundary
+    # actually lets the wave out.
+    #
+    #        shocked driven | driven |    heavy
+    #      ---------------->|        |
+    #        (region 2)     ^shock   ^interface
+    #      0               0.20     0.40              1
+    #
+    # The state initialized upstream of the shock is the SHOCKED driven gas —
+    # region 2 of the normal-shock relations, not a driver — so the incident
+    # shock is already formed and the run starts at the physics of interest.
+    # Sustaining that state is what makes the upstream boundary an INFLOW
+    # (u2 + U > 0 into the domain) for as long as the incident shock is being
+    # driven. NSCBCInflowBC is the condition that holds it: it replaces every
+    # incoming characteristic with a relaxation toward (u, T_ion, Y), which is
+    # exactly right while region 2 is uniform there.
+    #
+    # It becomes exactly wrong the moment the interface-reflected shock arrives.
+    # Behind that shock the state is no longer region 2, so an inflow condition
+    # still relaxing toward region-2 targets is over-constraining the boundary,
+    # and the mismatch radiates back inward onto the interface. The fix is to
+    # stop imposing and start absorbing — switch to NSCBCOutflowBC — which is
+    # the whole point of the wrapper.
+    #
+    # The frame translation U is chosen so the SHOCKED interface is nearly at
+    # rest (it drifts ~0.04 once the shock has passed it), the standard frame for a
+    # shock/interface calculation: it keeps the interface in the box, and it
+    # gives both faces a mean flow so nothing is being tested at the degenerate
+    # u = 0 point where NSCBC's Mach-dependent terms drop out.
+    γ, RL, RH, MS, U = 1.4, 1.0, 0.25, 1.5, -0.5
+    N, XS, XI, TEND = 160, 0.20, 0.40, 1.0
+    Hx = 1 / (N - 1)
+
+    # Region 1 (unshocked driven gas) and the normal-shock relations for the
+    # region 2 that sits behind a Mach MS shock running into it.
+    p1 = ρ1 = T1 = 1.0
+    c1 = sqrt(γ)
+    p2 = p1 * (2γ * MS^2 - (γ - 1)) / (γ + 1)
+    ρ2 = ρ1 * ((γ + 1) * MS^2) / ((γ - 1) * MS^2 + 2)
+    u2 = c1 * 2 / (γ + 1) * (MS^2 - 1) / MS
+    T2 = p2 / (ρ2 * RL)
+    eos2 = IdealMixture([IdealSpecies{Float64}("light", RL, γ),
+                         IdealSpecies{Float64}("heavy", RH, γ)])
+
+    # `xlo < 0` extends the domain upstream at the same spacing, which is how
+    # the reference below is built. The heavy gas is at the driven gas's p and
+    # T_ion, so RH sets the density ratio: Atwood 0.6 here.
+    build(xbc; xlo=0.0) = begin
+        n = round(Int, (1.0 - xlo) / Hx) + 1
+        δ = 2Hx
+        setup(Problem(eos=eos2, transport=Transport(mu0=0.0),
+                      domain=((xlo, xlo + (n - 1) * Hx), (0.0, Hx), (0.0, Hx)),
+                      bcs=(xbc, per3[2], per3[3]),
+                      ic=(x, y, z) -> begin
+                          s = tanh_blend(x, XS, δ)     # 0 shocked, 1 unshocked
+                          θ = tanh_blend(x, XI, δ)     # 0 light,   1 heavy
+                          Prim(Y=(1 - θ, θ), u=((1 - s) * u2 + U, 0.0, 0.0),
+                               p=(1 - s) * p2 + s * p1,
+                               T_ion=(1 - s) * T2 + s * T1)
+                      end),
+              Numerics(n_global=(n, 1, 1), art=ArtParams(enabled=true),
+                       cfl=0.4, filter_interval=1))
+    end
+
+    inflow() = NSCBCInflowBC(u=(u2 + U, 0.0, 0.0), T_ion=T2, Y=[1.0, 0.0])
+    # sigma small on purpose. The pressure this boundary will face once the
+    # reflected shock has passed is the post-reflected-shock pressure (~3.23),
+    # which is the answer to the interaction and not something the test may
+    # assume; relaxing hard toward `pinf` would impose a pressure known to be
+    # wrong and drag the driven section with it. A weak relaxation is the
+    # honest reading of "let the wave out and do not hold a pressure I do not
+    # know" — measured: sigma 0.25 costs a factor 3.5 in the agreement below.
+    outflow() = NSCBCOutflowBC(pinf=p2, sigma=0.05)
+    # Nothing reaches the downstream end within TEND (the transmitted shock
+    # gets to x ~ 0.8), so a Dirichlet on the unshocked heavy state is exact
+    # there and keeps this test about the upstream boundary alone.
+    downstream() = DirichletBC((x, y, z, t) -> Prim(Y=(0.0, 1.0),
+                                                    u=(U, 0.0, 0.0), p=p1,
+                                                    T_ion=T1))
+
+    # "The reflected shock has reached the upstream plane." A rank-local verdict
+    # on the plane this rank owns, left to WhenState to reduce — the shape the
+    # WhenState docstring asks for, and the reason a switch must never be driven
+    # from an unreduced rank-local test.
+    arrived(solver, Q) = begin
+        plane = CL.wallplane(solver.decomp, 1, 1)
+        plane === nothing && return false
+        any(I -> solver.p[I] > 1.05 * p2, plane)
+    end
+
+    xline(s, Q) = begin
+        CL.exchange_state!(Q, s.decomp)
+        CL.primitives!(s, Q)
+        nx = s.decomp.n_local[1]
+        ([xcoord(s, 1, i) for i in 1:nx],
+         [s.p[gidx(s, i, 1, 1)] for i in 1:nx],
+         [s.u[gidx(s, i, 1, 1)] for i in 1:nx],
+         [s.Y[2][gidx(s, i, 1, 1)] for i in 1:nx])
+    end
+    # Interface position, interpolated across the cell where Y_heavy crosses
+    # 1/2 — a sub-cell measure, since a re-shock moves the interface by a
+    # fraction of a cell over this run.
+    ipos(x, Y) = begin
+        i = findfirst(>=(0.5), Y)
+        x[i-1] + (0.5 - Y[i-1]) / (Y[i] - Y[i-1]) * (x[i] - x[i-1])
+    end
+
+    # (1) Switched on arrival.
+    sw = SwitchableBC(inflow(), outflow())
+    s_sw, Q_sw = build((sw, downstream()))
+    fired_step = Ref(0)
+    Q_fired = Ref{Any}(nothing)
+    run!(s_sw, Q_sw; tfinal=TEND, nmax=100_000,
+         callback=Callback(WhenState(arrived),
+                           (s, Q) -> (switch!(sw); fired_step[] = s.step;
+                                      Q_fired[] = copy(Q); nothing)))
+    @test switched(sw)
+    @test 0 < fired_step[] < 100_000          # it really did fire
+
+    # (2) Inflow held throughout — the control, and the same run bit-for-bit up
+    #     to the switch. WhenState does not clip dt, so the step sequences agree
+    #     and this is an equality, not an approximation.
+    s_h, Q_h = build((inflow(), downstream()))
+    run!(s_h, Q_h; tfinal=TEND, nmax=fired_step[])
+    @test s_h.step == fired_step[]
+    @test Q_h == Q_fired[]
+    run!(s_h, Q_h; tfinal=TEND, nmax=100_000)
+
+    # (3) The reference: the same problem with the upstream boundary one domain
+    #     length further away, so the reflected shock never reaches it and no
+    #     boundary treatment can matter. This is what makes the comparison a
+    #     measurement rather than a difference of two guesses — a non-reflecting
+    #     condition is only ever tested against a domain big enough not to need
+    #     one. Same spacing, so the grids coincide on x >= 0 to round-off.
+    s_r, Q_r = build((inflow(), downstream()); xlo=-1.0)
+    run!(s_r, Q_r; tfinal=TEND, nmax=100_000)
+
+    xr, pr, ur, Yr = xline(s_r, Q_r)
+    xh, ph, uh, Yh = xline(s_h, Q_h)
+    xs, ps, us, Ys = xline(s_sw, Q_sw)
+    keep = [i for i in eachindex(xr) if xr[i] >= -1e-9]
+    @test maximum(abs, xr[keep] .- xh) < 1e-12
+
+    win = [i for i in eachindex(xh) if 0.05 <= xh[i] <= 0.95]
+    errp(p) = maximum(abs.(p[win] .- pr[keep][win]))
+    erru(u) = maximum(abs.(u[win] .- ur[keep][win]))
+    ref_i = ipos(xr, Yr)
+
+    # The measurement. Held, the inflow condition keeps imposing region 2 after
+    # the reflected shock has arrived and the error radiates back over the
+    # interface; switched, the wave leaves. Measured against the reference:
+    # pressure 0.112 held vs 0.017 switched, velocity 0.0289 vs 0.0027,
+    # interface displacement 0.0031 vs 0.0006 (about a tenth of a cell).
+    # Guards are ratios plus loose absolute bounds: this is a nonlinear run
+    # through the artificial-property sensor, so it is not bit-reproducible and
+    # only the order of magnitude is being asserted.
+    @test errp(ps) < 0.04
+    @test errp(ph) > 0.08
+    @test errp(ph) > 3 * errp(ps)
+    @test erru(us) < 0.008
+    @test erru(uh) > 0.02
+    @test erru(uh) > 3 * erru(us)
+    @test abs(ipos(xs, Ys) - ref_i) < 0.0015
+    @test abs(ipos(xh, Yh) - ref_i) > 2.5 * abs(ipos(xs, Ys) - ref_i)
+
+    # After the switch the wrapper must not merely resemble `after` but *be* it.
+    # Compared at the RHS rather than by restarting a run, because compute_dt
+    # reads the previous step's artificial coefficients, so a fresh solver takes
+    # a different first step from the same state and the two step sequences part
+    # company for reasons that have nothing to do with the boundary. One
+    # evaluation on a shared, richly non-uniform state isolates the forwarding
+    # itself — both enforce! and correct_rhs!.
+    s_p, Q_p = build((outflow(), downstream()))
+    copyto!(Q_p, Q_sw)
+    s_p.t = s_sw.t
+    s_p.step = s_sw.step
+    s_p.tstage = s_sw.tstage
+    apply_bcs!(s_sw, Q_sw)
+    apply_bcs!(s_p, Q_p)
+    @test Q_sw == Q_p                          # enforce! forwards
+    dQ_sw, dQ_p = zero(Q_sw), zero(Q_p)
+    compute_rhs!(s_sw, Q_sw, dQ_sw)
+    compute_rhs!(s_p, Q_p, dQ_p)
+    @test maximum(abs, dQ_sw) > 1              # a non-trivial state
+    @test dQ_sw == dQ_p                        # correct_rhs! forwards
 end
 
 @testset "checkpoint round trip" begin
