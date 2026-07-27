@@ -1,9 +1,21 @@
 # Working in CompactLES
 
-Orientation for coding agents. **This file does not describe the solver** —
-`README.md` covers usage and `DESIGN.md` covers the numerics and mechanics
-(source map, distributed compact solve, folds, GCL, NSCBC). Read those for
-anything about *what* the code does. This file is about *how to work on it*.
+Orientation for coding agents, and deliberately short: it carries only what you
+need before touching anything. **It does not describe the solver**, and it is not
+the place to record a result.
+
+| file | what is in it |
+|---|---|
+| `README.md` | usage |
+| `reference/DESIGN.md` | the numerics — source map, compact solve, folds, GCL, NSCBC |
+| `reference/CLUSTER.md` | MPI configuration, launch rules, sizing, measured scaling |
+| `reference/CALIBRATION.md` | the artificial-property constants, the CFL restriction, TGV |
+| `reference/ROADMAP.md` | positioning, comparisons, phased plan |
+
+Read those for anything about *what* the code does, *where* it runs, or *where it
+is going*. This file is about *how to work on it*. When something you measure
+turns out to be durable, it belongs in one of the files above, with a one-line
+pointer here only if an instance would go wrong without it.
 
 ## Environment
 
@@ -23,273 +35,25 @@ Before reading any scaling or timing number, check what you are running on.
 `Threads.nthreads()`, the physical core count, and whether the cores are
 uniform all change the interpretation — a hybrid performance/efficiency-core
 desktop will spread threads across both and understate scaling. `ThreadPinning`
-supplies the topology queries `clusterprobe.jl` uses; see **Cluster launches**
-below. Nothing pins threads yet — the querying half is what has been validated.
+supplies the topology queries `clusterprobe.jl` uses. Nothing pins threads yet —
+the querying half is what has been validated.
 
 Windows checkouts may have CRLF line endings. Helper scripts that match
 multi-line text against `\n` will silently find nothing; match a line at a time.
 
-**On a cluster, MPI configuration is the first hurdle and it is not a code
-change.** MPI.jl defaults to its bundled JLL. That JLL can satisfy the
-scheduler's launcher perfectly well *on a single node*, over shared memory —
-which is what makes this so easy to miss. It forms a correct communicator,
-reproduces the physics bit-for-bit, and only falls apart once a run spans two
-nodes, because it never reaches the interconnect. Measured on rzhound, 256³ TGV
-at 224 ranks over two nodes: **15.19 s/step on the JLL, 0.571 s/step on the
-system MVAPICH2 — 27x, same launch line, same decomposition.** On-node the two
-are indistinguishable (1.434 vs 1.372 s/step at 56 ranks, inside run-to-run
-spread), so nothing you measure on one node will warn you.
-
-Point it at the system MPI once per checkout. The module has to be loaded first
-so `libmpi` is on `LD_LIBRARY_PATH`, and naming the launcher matters — without
-`mpiexec=`, `MPI.mpiexec` keeps handing back the JLL's binary and the helper at
-the top of this file quietly lies to you:
-
-```bash
-module load <site mpi>          # module avail mvapich2 / mpich / openmpi
-mpicc -show                     # <-- the authoritative -L path for THIS module
-julia --project=. -e 'using Pkg; Pkg.add("MPIPreferences")'
-julia --project=. -e 'using MPIPreferences; MPIPreferences.use_system_binary( \
-    library_names=["<that path>/libmpi.so"], mpiexec="srun")'
-```
-
-The bare call fails and an absolute path is what works. A site module sets `PATH`
-but often *not* `LD_LIBRARY_PATH`, because compiled binaries find their libraries
-by RPATH; `dlopen("libmpi")` has no RPATH to lean on and reports "MPI library
-could not be found" for every candidate name even though the module loaded
-cleanly. **Do not reach for `$MPI_ROOT`** — it is unset on LC machines. `mpicc
--show` names the exact `-L` directory of the build the module resolved to, which
-is the one whose Slurm integration the site tests; a bare
-`find /usr/tce/packages -name 'libmpi.so*'` turns up a dozen per-compiler builds
-with no indication which is live. `libmpi` is a C library, so the compiler in
-that path does not affect the ABI Julia needs — but if `dlopen` then complains
-about a missing Intel runtime (`libimf`, `libsvml`), switch to a gcc build of the
-same version. Prefer an MPICH-ABI implementation (MVAPICH2, MPICH) over OpenMPI
-where both are offered.
-
-On a csh login shell: `module` exists only in csh, so the module load and the
-Julia call have to run there, while `2>/dev/null` does not parse in csh ("Ambiguous
-output redirect") — use `>&` or run diagnostics in a bash subshell, remembering
-that bash inherits `PATH` but not the `module` function.
-
-Then, if `MPI.Init` hangs or every rank reports itself as rank 0 of a 1-rank
-world, the launcher needs a bootstrap it isn't defaulting to: `srun --mpi=list`,
-then `--mpi=pmi2` for MVAPICH2 or `--mpi=pmix` for OpenMPI. The rank-0-of-one
-symptom is the dangerous one — it produces plausible output at 1/N the speed
-instead of an error.
-
-Then **restart Julia** — the preference is read at precompile — and verify with
-`MPI.versioninfo()`, or run `clusterprobe.jl`, whose `MPI binary` line reports
-`system` versus a `_jll` outright and flags the JLL on any multi-node run. Do
-this inside an allocation if the login and compute nodes carry different stacks.
-
-The preference lands in `LocalPreferences.toml`, which is gitignored: it names
-one machine's library by path and must not travel between checkouts.
-
-**That file is per-project, so `--project` silently decides which MPI you get.**
-A second environment that `dev`s this package — say a driver project alongside
-`~/.julia/dev/CompactLES` — does not inherit the preference, and running the same
-script against the wrong one falls back to the JLL with no symptom other than
-speed. Measured both ways at 256³: 224 ranks over 2 nodes, 15.19 s/step on the
-JLL against 0.571; 448 ranks over 4 nodes, 19.6 against 0.2966 — **27x and 66x**,
-the penalty growing with off-node share (25% then 50% of dimension 1's links).
-Configure every environment you launch from, and run `clusterprobe.jl` with the
-same `--project` as the solver, or its `MPI binary` line describes a different
-environment than the one you are timing.
-
-With a driver environment separate from the checkout, run from the driver and
-locate the scripts through `pkgdir`. `--project=.` then always picks up the
-configured environment, and a pull into the checkout needs no copying:
-
-```bash
-srun -n 448 --cpu-bind=threads julia --project=. -t 1 \
-    -e 'using CompactLES; include(joinpath(pkgdir(CompactLES), "examples", "taylor_green.jl"))'
-```
-
-Resist promoting any of this to a login file. An invisible default that redirects
-every later invocation is the `JULIA_NUM_THREADS` trap wearing a different hat.
+**On a cluster, read `reference/CLUSTER.md` before doing anything else, and do
+not skip it because the code runs.** MPI.jl defaults to a bundled JLL that
+satisfies the scheduler perfectly well on one node and never reaches the
+interconnect off it — **27x–66x** slower on rzhound, with no symptom but speed.
+`LocalPreferences.toml` is per-project, so `--project` silently decides which MPI
+you get. `reference/CLUSTER.md` also holds the launch-line rules
+(`--cpu-bind=threads`, `-t 1`, and why a rank must never hold both SMT threads of
+a core), the sizing tools, and the measured scaling.
 
 `Manifest.toml` is gitignored, so a fresh checkout needs `Pkg.instantiate()`
-before anything runs. `bench/tgv_energy.jl` takes everything from `ARGS` —
-positional grid and end time, then `key=value` for the configuration list and the
-sampling knobs — precisely so a batch script can drive it without edits, and so
-the whole invocation lands in the job log rather than in an `export` three lines
-up. It is the intended first real workload, since it is the one bench script
-whose reductions are all collective and which reproduces serial numbers
-bit-for-bit under decomposition.
-
-## Cluster launches
-
-**Measure the launch before you believe a timing from it.** `clusterprobe.jl`
-takes seconds, runs no solver steps, and reports what the ranks actually got:
-node distribution, the MPI library in use, each rank's CPU affinity mask as
-logical *and* physical CPUs, whether any CPU is double-booked, the cgroup memory
-limit against what `Sys.total_memory()` claims, `MPI.Init` and package-load time,
-the resulting `n_local`, whether `@threaded` engages at all, and the share of
-Cartesian neighbour links that stay intra-NUMA / cross-socket / off-node.
-
-```bash
-srun -n 56 --cpu-bind=threads julia --project=. clusterprobe.jl 128
-```
-
-Run it once per new machine, and again whenever a launch flag changes. Every
-rule below came out of it, and each one was a *failed* hypothesis first. Pass the
-grid you actually intend to run — it decides the decomposition, so at the default
-64³ the `n_local` and scheme-floor lines describe a different job than yours.
-
-**`clusterlaunch.jl` sizes the run before you queue it.** It launches nothing and
-needs no allocation — given a grid and a core budget it enumerates the legal rank
-counts, taking the minimum-extent floor from the scheme objects themselves rather
-than a remembered 9, and reports points/rank, whether `@threaded` engages, and
-the padded-to-interior ratio (the redundant halo arithmetic, which is what
-actually limits how far this solver decomposes). It names two picks, because they
-answer different questions: the widest count whose halo cost is still in hand,
-and the widest legal one for when wall time is the constraint.
-
-```bash
-julia --project=. clusterlaunch.jl 256 nodes=36 cores_per_node=112
-```
-
-The gap between those two is the real sizing signal. At 64³ on one 112-core node
-it is 8 ranks against 112 (1.95x vs 4.25x halo) — that grid is simply too small
-for the node, which is the arithmetic reason `reference/CALIBRATION.md` wants a
-larger one, not just a physics preference. At 256³ on 36 nodes it is 448 against
-4032, and the whole allocation becomes defensible.
-
-**Scheduler flags do not mean what they say.** Do not assume `--cpus-per-task=N`
-yields N CPUs. Where the scheduler allocates at core granularity with SMT on,
-`-c 1` yields both threads of one core (2 logical CPUs) and `-c 2` yields one
-thread (1 logical CPU) — measured, inverted, reproducible across nodes. The mask
-is the ground truth; the flag is a request.
-
-**Never hand a rank both SMT threads of one physical core.** On rzhound (2
-sockets, 8 NUMA domains, 112 cores, SMT2) that configuration ran the 64³ TGV at
-154 s/step against 0.036 s/step for the same 56 physical cores bound one thread
-per rank — a factor of ~4300, reproduced four times. Memory, NUMA placement,
-package-load time, `MPI.Init` time, thread count and rank count were all measured
-identical across the fast and slow cases; the mask is the only difference and no
-mechanism has been established. `--cpu-bind=threads` avoids it. Treat
-`SMT sibling in a rank's own mask: false` in the probe as a pre-flight check.
-
-**Threads are usually inert under decomposition — spend the cores on ranks.**
-`@threaded` runs serially unless a region's work reaches `THREAD_MIN_WORK`
-(32768 points), so once `prod(n_local)` falls below that, every thread past the
-first is idle no matter what `-t` says. 64³ over 56 ranks is 4608 points/rank,
-seven times under; asking for `-t 56` there measured 1.7x *slower* than `-t 1`
-from runtime and GC-thread overhead alone. Compute points/rank before requesting
-threads, and remember `-t` is per rank: `-n R -t T` asks for R×T compute threads
-plus R×(T/2) GC threads, which is how a launch ends up with ~19,000 threads on a
-112-core node and never reaches step 1.
-
-And threads do not help even where `@threaded` genuinely engages. Measured at
-256³ on two nodes, every configuration using all 112 cores per node:
-
-| ranks × threads | s/step | cores/rank from the probe |
-|-----------------|--------|---------------------------|
-| 224 × 1         | 0.568  | 1–1                       |
-| 112 × 2         | 0.865  | 2–2                       |
-| 56 × 4          | 2.17   | 3–5 (ragged, see below)   |
-| 28 × 8          | 6.93   | 7–14 (ragged)             |
-
-The 112 × 2 row is the clean comparison: against 112 × 1 at 0.649, a second
-thread per rank made it **1.33x slower while using twice the cores** — same rank
-count, same `(7,4,4)` decomposition, same halo, nothing changed but the thread.
-This solver is memory-bandwidth-bound (see the ranks-per-node note below), so a
-rank is already saturated with one thread and the second buys no throughput while
-still paying task spawn and a barrier across ~150 regions per RHS call, five
-stages a step. **Use `-t 1` under MPI and spend the cores on ranks.**
-
-`--cpu-bind=threads` also distributes CPUs *non-uniformly* below 56 ranks/node —
-3 to 5 cores per rank at 28/node, 7 to 14 at 14/node. With collectives every
-step the slowest rank paces all of them, so a ragged mask is worse than a
-uniformly smaller one, and the bottom two rows above are contaminated by it
-rather than being clean threading measurements. Probe the mask before believing
-any `-t > 1` timing.
-
-**Rank count has a hard ceiling per grid.** `plan_direction` needs 9 points per
-rank per dimension for the C8 filter, so `n_global[d] >= 9 * dims[d]`. At 64³
-that caps you near 112 ranks; past it the run errors rather than degrading. Going
-wider is a reason to raise the grid, not to fight the decomposition.
-
-**Judge placement by cross-socket bytes, not percentage.** `Cart_create` is
-row-major, so the *last* dimension is the fastest-varying rank index and its
-neighbours are consecutive ranks. A dimension whose extent equals the socket
-count must cross sockets under every possible mapping, and confining the crossing
-to one axis is the good outcome — on rzhound `socket == coords[3]` exactly, which
-reads as "100% cross-socket on dim 3" while leaving dims 1 and 2 fully
-intra-socket. Weigh links × `n_halo` × the transverse plane before reaching for
-an explicit `dims=`; reshuffling to a different axis there was ~17%, not a win.
-
-**Check the shell rc before blaming the code.** `JULIA_NUM_THREADS` set in a
-login file silently overrides the default in every launch that does not pass `-t`
-explicitly (a command-line `-t` wins, so it corrupts probes rather than runs).
-The probe prints `nthreads` for exactly this reason.
-
-**Multi-node adds two failure modes single-node never shows.** MPI.jl's bundled
-JLL can satisfy the scheduler's launcher on one node over shared memory and still
-fail to reach the interconnect off it, so `MPIPreferences.use_system_binary()`
-before the first multi-node run rather than after it fails — the symptom is a
-hang at startup, not an error. And the probe's `off-node` column only becomes
-non-zero there, which makes it the first place to look when per-step time jumps
-on crossing a node boundary.
-
-**You will not get the same node twice on a busy machine, so size the effect to
-the instrument.** Order-of-magnitude differences read straight through node-to-
-node variance; the few-percent kind does not, and neither does a scaling curve.
-Hold placement fixed and repeat across whatever nodes the queue gives you, or
-accept that the comparison is measuring the queue.
-
-**Pack the nodes, then scale by adding nodes.** Measured, 256³ TGV under system
-MVAPICH2 with `--cpu-bind=threads -t 1`, seconds per step:
-
-| nodes | 56 ranks/node | 112 ranks/node |
-|-------|---------------|----------------|
-| 1     | 1.434         | 1.107          |
-| 2     | 0.649         | 0.571          |
-| 4     | 0.338         | 0.2966         |
-
-Two effects, and they pull opposite ways without contradicting each other. At a
-fixed *rank* count, halving ranks-per-node is worth **1.7x** (1.107 → 0.649 at
-112 ranks; 0.571 → 0.338 at 224 — the same ratio twice, at different widths).
-That is memory bandwidth per rank, not compute: the rank count and decomposition
-are identical within each pair, and the compact line solves are bandwidth-bound.
-It is the same mechanism behind the superlinear speedups you will see comparing
-against a single-core baseline.
-
-At a fixed *node* count, packing all 112 cores still wins, by 1.30x on one node
-and **1.14x** on two and four. So the second 56 cores per node deliver only ~14%
-more throughput for twice the core-hours. Pack if you are charged node-hours;
-half-pack if core-hours. Do not extrapolate the 1.30 → 1.14 trend to an
-inversion — it plateaus, which was checked rather than assumed.
-
-Node scaling packed is 1.107 → 0.571 → 0.2966: 1.94x and 1.93x per doubling,
-93% efficiency at four nodes. Off-node cost is close to free at this size once
-the system MPI is in place, so scale by nodes and do not agonize over placement.
-
-**Keep failure output survivable at scale.** An uncaught exception is reported
-by every rank, so a `SolverFailure` at 448 ranks is 448 stacktraces. Wrap the
-driver in `mpi_main`: full backtrace from rank 0, one line from anywhere else
-that failed, then `MPI.Abort` so ranks still blocked in a collective are killed
-rather than each printing a dump of its own. Non-zero ranks yield briefly before
-aborting, because whoever calls `MPI_Abort` first silences everyone — including
-rank 0 mid-backtrace, which is the output worth keeping. Use
-`CL_ERROR_BACKTRACE=all` when the failure is rank-local, since rank 0 is then
-blocked in a collective and nothing prints a location.
-
-Ctrl-C is a separate problem with no code fix: it arrives while a rank sits
-inside an MPI call, and Julia'''s signal handler prints a backtrace per rank
-before anything can intercept it. Pass `--handle-signals=no` to `julia` for
-sweeps, accepting that SIGSEGV backtraces go with it.
-
-**Report progress with `ProgressLog`, not a hand-rolled callback.** `run!` fills
-`solver.wall_step` and `solver.wall_total` on every step (rank-local by design —
-a reduction there would be a collective every step for every run, read or not),
-and `ProgressLog` turns those into a flushed progress line. Three details went
-wrong in every hand-rolled copy this replaced: printing from all ranks rather
-than one, not flushing (a batch launcher block-buffers stdout, so a healthy run
-looks hung for minutes), and timing the diagnostic's own reduction as solver
-cost. The `quantity` hook runs on every rank and may reduce; only the printing is
-rank-guarded, which is the collective ordering from `nscbc.jl` again.
+before anything runs. `bench/tgv_energy.jl` is the intended first real workload
+on a cluster: the one bench script whose reductions are all collective and which
+reproduces serial numbers bit-for-bit under decomposition.
 
 ## The gate
 
@@ -455,6 +219,12 @@ decision worth revisiting.
   job and saying nothing. The two remaining `CL_*` variables
   (`CL_THREAD_MIN_WORK`, `CL_ERROR_BACKTRACE`) are read from inside the package,
   where there is no `ARGS` to consult.
+- Wrap an MPI driver in `mpi_main` and report progress with `ProgressLog`
+  rather than hand-rolling either. An uncaught exception is 448 stacktraces at
+  448 ranks; a hand-rolled progress loop got at least one of printing-from-one-
+  rank, flushing, and not-timing-its-own-reduction wrong every time. Both
+  docstrings carry the reasoning. Ctrl-C has no code fix — pass
+  `--handle-signals=no` for sweeps.
 - A sweep over configurations expected to include bad ones must pass a low
   `nmax`. A configuration that loses positivity does not crash — the diffusive
   rate in `compute_dt` climbs until `dt` collapses and the run grinds — so one
@@ -466,57 +236,40 @@ decision worth revisiting.
 - Run artifacts (`*.dat`, `*.vtr`, `*.pvtr`, `*.ckpt`, `*.cov`) are gitignored.
   Prefer `git add <paths>` over `git add -A` after running examples.
 
-## Open items
+## Known limitations
 
-- **Strong shocks need `cfl ≤ 0.15`**, and the cause is a dispersive undershoot
-  at the shock that the artificial viscosity does not damp — the state loses
-  ~60% of its pre-shock density over 150 steps while `dt` and the CFL rate sit
-  flat, then positivity goes. It is NOT the one-step lag in `compute_dt`; that
-  hypothesis was tested with a rate predictor at up to 30 steps of lookahead and
-  rejected, and the predictor is shipped off by default with the measurement in
-  `src/stepcontrol.jl`. Fixing it properly is a spatial-regularization question.
-  `StepControl(retries = 4)` is the practical mitigation and is strictly better
-  than a lowered CFL where it applies, because the restriction is a startup one.
-- **κ\* is singular as `T_ion` → 0.** `art_conductivity_scale` is now an EOS
-  dispatch point rather than inline ideal-gas algebra, so a condensed-matter or
-  tabular model can supply its own; the ideal-gas method still divides by
-  `T_ion` and a cold ambient below p ≈ 1e-3 collapses the diffusive timestep.
-  Fixing it for gases is a numerics decision, not a refactor.
-- **The spherical origin fold is much less forgiving than the cylindrical axis**
-  — it needs initial data resolved over ≳3 cells and will not take Noh's
-  singular t = 0 start, both of which the cylindrical axis handles. Nobody has
-  worked out why.
-- `C_mu` is uncalibrated for its actual purpose, and `bench/tgv_energy.jl` found
-  out why it is harder than "run a 3-D case". TGV does make μ\* active (28% of
-  the viscous budget at 32³, against inert in every 1-D case), but the **compact
-  filter supplies ~83% of the total energy sink**, and it cannot be turned off to
-  isolate μ\*: `filter_interval = 4` diverges and `0` fails with
-  `SolverFailure(:negative_density)`. The filter is the primary stabilizer at
-  coarse resolution, so it and `C_mu` have to be calibrated as a pair. Measured
-  at 32³ only — the filter share did *not* fall from 16³ to 32³, and 64³ is ~13
-  min per configuration, so confirming it at a quotable resolution wants a
-  cluster. Numbers and caveats in `reference/CALIBRATION.md`.
-- The NASA CEA thermo and limited transport databases ship verbatim in `data/`,
+Each of these cost someone real time to establish. The measurements and the
+rejected hypotheses are in the file named — read it before re-deriving any of
+them.
+
+- **Strong shocks need `cfl ≤ 0.15`.** The cause is a dispersive undershoot the
+  artificial viscosity does not damp, *not* the one-step lag in `compute_dt` —
+  that was tested with a rate predictor to 30 steps of lookahead and rejected.
+  `StepControl(retries = 4)` beats a globally lowered CFL, because the
+  restriction is a startup one. → `reference/CALIBRATION.md`
+- **κ\* is singular as `T_ion` → 0**, so a cold ambient below p ≈ 1e-3 collapses
+  the diffusive timestep. `art_conductivity_scale` is an EOS dispatch point, so a
+  tabular model can supply its own; the gas models still divide by `T_ion`.
+- **The spherical origin fold is much less forgiving than the cylindrical axis.**
+  It needs initial data resolved over ≳3 cells and will not take Noh's singular
+  t = 0 start, both of which the axis handles. Nobody has worked out why.
+- **The compact filter, not the Cook artificial properties, is what holds this
+  solver together — and it has never been calibrated.** At 128³ TGV the filter
+  supplies 37% of the energy sink yet removing it kills the run, while removing
+  the artificial properties entirely does not. So every `C_mu` number is
+  conditional on `compact_filter(0.45)` applied every step, and `C_mu` itself is
+  active but not yet fitted. → `reference/CALIBRATION.md`
+- **`compute_artificial!` is ~31% of the multicomponent RHS**, in the filter
+  line-solves that smooth the sensors, one sweep per species. At `n_species == 2`
+  that machinery is measurably a no-op (`D*_1` and `D*_2` agree to 4.8e-16), and
+  it only earns its cost at three or more species. Cutting it is a numerics
+  decision (shared vs per-species sensor), not a code tweak.
+- The NASA CEA thermo and limited transport databases ship verbatim in `data/`
   with their Apache license and notice. `read_nasa9` handles multi-interval
   thermo records; the transport table is not yet connected to `Transport`.
-- `compute_artificial!` is ~31% of the multicomponent RHS, spent in the filter
-  line-solves that smooth the sensors, one sweep per species. Cutting it is a
-  numerics decision (shared vs per-species sensor), not a code tweak. Note that
-  at `n_species == 2` the per-species machinery is measurably a no-op: on a
-  sharp binary interface `D*_1` and `D*_2` agree to 4.8e-16 relative and the
-  correction velocity is 2.5e-18 against a species gradient of 84. It only
-  earns its cost at three or more species.
-- `ThreadPinning`'s querying API drives `clusterprobe.jl`; its *pinning* API is
-  still unused. Whether pinning helps is open — on the one machine measured, the
-  scheduler's own binding was already near-optimal (see **Cluster launches**),
-  and the launch-line rules there matter more than anything pinning would add.
-- **A rank holding both SMT threads of one core is catastrophic and unexplained.**
-  ~4300x on rzhound, with memory, NUMA placement, load times, thread count and
-  rank count all measured identical between the fast and slow cases. Four
-  hypotheses were tested and rejected (cgroup memory starvation, collectives
-  paying an OS timeslice, a sick node, NUMA placement). `--cpu-bind=threads`
-  avoids it entirely, so this is a curiosity rather than a blocker — but the
-  signature is sharp enough to be worth reporting to site support.
-- A `bench/` runner taking medians over repeated *processes*, to get under the
-  timing noise above.
-- `FoldSpec` parameterization would close several remaining JET dispatch sites.
+- Cluster-side open questions — whether `ThreadPinning`'s pinning API would buy
+  anything, and the unexplained ~4300x SMT-sibling collapse — are in
+  `reference/CLUSTER.md`.
+- Wanted: a `bench/` runner taking medians over repeated *processes*, to get
+  under the 10–20% run-to-run spread; and `FoldSpec` parameterization, which
+  would close several remaining JET dispatch sites.

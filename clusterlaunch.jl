@@ -159,15 +159,22 @@ if best.np > cores_per_node
     println("                  fall off a cliff on two.")
 end
 println()
-println("srun -n ", best.np, " --cpu-bind=threads julia -t 1 --project=. <script>")
+# Both lines reach the script through pkgdir rather than naming it relatively.
+# That is correct from the checkout AND from a separate driver environment, where
+# a relative path either finds nothing or -- worse -- is fixed by cd'ing to the
+# checkout, which silently swaps in that environment's MPI configuration. Same
+# --project as the solver, script located by pkgdir. See reference/CLUSTER.md.
+const reach = "-e 'using CompactLES; include(joinpath(pkgdir(CompactLES), "
+println("srun -n ", best.np, " --cpu-bind=threads julia -t 1 --project=. \\")
+println("    ", reach, "\"bench\", \"<script>.jl\"))'")
 println()
 println("Verify the launch before trusting a timing from it:")
 # Carrying the grid through matters: the probe's own default is 64³, and its
 # scheme-floor check is only about the run you are planning if it is given the
 # same grid this just sized.
-println("  srun -n ", best.np,
-        " --cpu-bind=threads julia --project=. clusterprobe.jl ", opt.grid)
-println("Check `SMT sibling in a rank's own mask: false` -- see the cluster")
-println("section of CLAUDE.md for why that one matters more than it looks.")
+println("  srun -n ", best.np, " --cpu-bind=threads julia --project=. \\")
+println("      ", reach, "\"clusterprobe.jl\"))' ", opt.grid)
+println("Check `SMT sibling in a rank's own mask: false` -- see")
+println("reference/CLUSTER.md for why that one matters more than it looks.")
 
 MPI.Finalize()

@@ -185,7 +185,7 @@ if rank == 0
     binary = try string(MPI.MPIPreferences.binary) catch; "unknown" end
     println("MPI binary      : ", binary,
             endswith(binary, "_jll") && length(hosts) > 1 ?
-            "   <-- BUNDLED JLL ON A MULTI-NODE RUN; see CLAUDE.md" : "")
+            "   <-- BUNDLED JLL ON A MULTI-NODE RUN; see reference/CLUSTER.md" : "")
     println("threadlevel     : ", MPI.Query_thread())
     println("node topology   : ", nsockets(), " sockets, ", nnuma(), " NUMA domains, ",
             ncores(), " cores, ", nsmt(), " threads/core")

@@ -29,4 +29,4 @@ coefficients**.
 
 `trans.inp` is not connected to `Transport`, which still uses constant
 properties. That is a deliberate hold, not an oversight — the measurement behind
-it is in the `Transport` open item in `CLAUDE.md`.
+it is in the `Transport` entry under **Known limitations** in `CLAUDE.md`.

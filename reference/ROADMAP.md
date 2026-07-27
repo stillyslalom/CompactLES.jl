@@ -478,7 +478,7 @@ month.
 
 **3. Concretely parameterize `Solver`.** `eos::EOS`, `metric::Metric`, and
 `folds::NTuple{3,Union{Nothing,FoldSpec}}` are abstract fields. This is already
-on the open-items list in `CLAUDE.md` as "FoldSpec parameterization"; it is the
+under **Known limitations** in `CLAUDE.md` as "FoldSpec parameterization"; it is the
 same job, and it gets strictly harder as the struct grows. Do it while it is
 still 50 fields.
 
@@ -548,7 +548,7 @@ He and CO₂ cp(T). The transport coefficients remain raw data until the constan
 
 What is *not* done: the κ\* singularity as T_ion → 0 is now visible and
 dispatchable but not cured for gases, and that is a numerics decision (see
-the open items in `CLAUDE.md`). Mie–Grüneisen proper is still ahead.
+**Known limitations** in `CLAUDE.md`). Mie–Grüneisen proper is still ahead.
 
 ## Phase 2 — HED physics
 
@@ -651,7 +651,7 @@ exchange, are structurally what multiblock needs. Worth noting as a payoff of
 the AMR work rather than a separate effort, since it is also the route to
 non-coordinate-surface geometry without going unstructured.
 
-**ThreadPinning wiring**, listed as an open item in `CLAUDE.md` and only
+**ThreadPinning wiring**, listed as open in `reference/CLUSTER.md` and only
 validatable on the target cluster.
 
 ## Non-goals
