@@ -52,15 +52,13 @@
 # plateau 2% of the exact value. Floors detect non-computation, not error.
 
 """
-Planck time in seconds. The unconditional failsafe floor on `dt`: no physical
-problem has a timescale below it, so a step this small means the run is not
-computing anything and never will.
+Planck time in seconds, used as the unconditional failsafe floor on `dt`. A
+timestep below this value indicates numerical collapse for calculations
+expressed in physical units.
 
-This floor is unit-blind and deliberately so. A non-dimensional run has no
-seconds in it, and 5.4e-44 is then simply an absurdity threshold rather than a
-physical statement — which is the intent, since it is a tripwire and not a
-model. If you genuinely work in units where the interesting timescale is
-1e-40, set `dt_min` yourself and this floor is the least of your problems.
+The floor is unit-independent. In a nondimensional calculation, 5.4e-44 serves
+only as a numerical failsafe rather than a physical scale. Calculations whose
+meaningful timestep is of comparable magnitude must set `dt_min` explicitly.
 """
 const PLANCK_TIME = 5.391247e-44
 
@@ -69,55 +67,72 @@ const PLANCK_TIME = 5.391247e-44
 
 Policy for how [`run!`](@ref) chooses, floors, and recovers a timestep.
 
-## Prediction — both off by default
+## Prediction
 
-Neither is on by default: both perturb the step sequence of a healthy run and
-neither was measured to prevent a failure. See the note at the top of this file
-for what was measured. They are kept because they are the obvious things to
-reach for, and the measurement is worth more than the code.
+Both prediction controls are disabled by default because they change the step
+sequence and did not prevent failure in the measurements recorded at the top of
+this file.
 
 - `predict = 0.0` — steps of linear extrapolation of the CFL rate, compensating
   for `compute_dt` seeing the artificial coefficients one step late. Measured:
   no lookahead between 0 and 30 steps prevents the Noh failure at cfl = 0.3.
 - `max_growth = 0.0` — cap on how fast `dt` may grow between steps; 0 disables.
-  Measured: 1.05 delays the same failure from step 175 to 186. A delay, not a
-  fix.
+  A value of 1.05 delayed the same failure from step 175 to 186 but did not
+  prevent it.
+
+## Landing on a scheduled instant
+
+- `landing_steps = 2` — how many steps ahead of a scheduled callback time
+  ([`AtTime`](@ref), [`EveryTime`](@ref)) `run!` may start shortening the step
+  so that a step ends at that instant. The remaining interval is divided into
+  equal steps, with no step below `dt/2`. A value of 1 applies a hard clip and
+  can produce an arbitrarily small step immediately before an output time.
+  Larger values distribute the adjustment over more steps while operating
+  farther below the CFL limit. `tfinal` always uses a hard clip.
 
 ## Floors
 
 - `dt_min = 0.0` — absolute floor. 0 means only [`PLANCK_TIME`](@ref) applies.
 - `dt_min_ratio = 1e-8` — floor relative to the largest `dt` this run has seen.
-  This is the one that actually catches a collapse, because it needs no
-  knowledge of the problem's units or scales: legitimate physical variation in
-  `dt` over a run is a few orders of magnitude, and a collapse is ten or more.
+  This detects collapse without prior knowledge of the problem's units or
+  scales. Physical variation in `dt` is generally a few orders of magnitude,
+  whereas a collapse spans ten or more in the measured cases.
 
 ## Recovery
 
 - `retries = 0` — number of times to roll back to the last savepoint and retry
-  with a reduced CFL. 0 fails fast. This is the mechanism worth turning on:
-  `retries = 4` recovers every Noh geometry from a deliberately bad `cfl = 0.9`,
-  in fewer steps than running the whole thing at the CFL that would have been
-  safe from the start.
+  with a reduced CFL; 0 disables recovery. In the validation cases,
+  `retries = 4` recovers every Noh geometry from `cfl = 0.9` in fewer steps than
+  running the complete calculation at the lower stable CFL.
 - `cfl_backoff = 0.5` — CFL multiplier applied on each retry.
 - `savepoint_interval = 25` — steps between savepoints. Only allocated when
   `retries > 0`; costs one extra state array.
 
-Rollback recovers an ABRUPT failure — a CFL guessed too high, which blows up
-in the first tens of steps and is fine once past it. It does not recover
-GRADUAL degradation: if the state has been quietly losing positivity for a
-hundred steps before the check fires, the last savepoint is already damaged and
-no amount of backing off from it helps. In that regime the answer is a lower
-CFL from the start, or a larger `savepoint_interval` so the rollback reaches
-further back.
+Rollback can recover an abrupt failure caused by an excessive initial CFL. It
+does not recover gradual degradation when the most recent savepoint already
+contains a loss of positivity. Such cases require a lower initial CFL or a
+larger `savepoint_interval` that places the savepoint earlier in the trajectory.
 """
 Base.@kwdef struct StepControl
     predict::Float64 = 0.0
     max_growth::Float64 = 0.0
+    landing_steps::Int = 2
     dt_min::Float64 = 0.0
     dt_min_ratio::Float64 = 1e-8
     retries::Int = 0
     cfl_backoff::Float64 = 0.5
     savepoint_interval::Int = 25
+    # `landing_steps = 0` does not simply disable the shortening. The gap clip
+    # is the same expression, so a scheduled instant would be overshot and its
+    # trigger would fire late.
+    function StepControl(predict, max_growth, landing_steps, dt_min, dt_min_ratio,
+                         retries, cfl_backoff, savepoint_interval)
+        landing_steps >= 1 ||
+            throw(ArgumentError("StepControl: landing_steps must be >= 1 " *
+                                "(1 is a hard clip onto the scheduled time)"))
+        new(predict, max_growth, landing_steps, dt_min, dt_min_ratio,
+            retries, cfl_backoff, savepoint_interval)
+    end
 end
 
 """
@@ -151,8 +166,8 @@ end
 """
 In-memory rollback point: the conserved state plus the clock that goes with it.
 
-Deliberately no CFL. The reduced CFL has to survive a rollback and compound
-across retries, so it lives on the solver and is never restored from here.
+The CFL is excluded because reductions to it must persist across rollbacks and
+compound across retries; it remains on the solver when this state is restored.
 """
 mutable struct Savepoint{A}
     Q::A

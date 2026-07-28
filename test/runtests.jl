@@ -933,6 +933,249 @@ end
     foreach(rm, files)
 end
 
+# Walk the appended-data blocks of a .vtr/.vts piece and return the Float32
+# point-data arrays by name. Each block is a UInt64 byte count followed by its
+# payload, so this also verifies that the offsets and lengths are consistent. A
+# writer that miscounted desynchronizes here rather than producing a plausible
+# file that only ParaView rejects.
+function read_vtk_pointdata(path)
+    raw = read(path)
+    marker = Vector{UInt8}("<AppendedData encoding=\"raw\">\n_")
+    i0 = findfirst(marker, raw)[end]
+    header = String(copy(raw[1:i0]))
+    decls = [(m.captures[1], parse(Int, m.captures[2])) for m in eachmatch(
+        r"<DataArray type=\"Float32\" Name=\"([^\"]+)\" NumberOfComponents=\"(\d+)\"",
+        header)]
+    blocks = Vector{Vector{UInt8}}()
+    pos = i0 + 1
+    stop = length(raw) - length("\n</AppendedData>\n</VTKFile>\n")
+    while pos <= stop
+        n = only(reinterpret(UInt64, raw[pos:pos+7]))
+        push!(blocks, raw[pos+8:pos+7+n])
+        pos += 8 + n
+    end
+    @assert length(blocks) >= length(decls)
+    geom = blocks[1:end-length(decls)]           # coordinates or points
+    out = Dict{String,Vector{Float32}}()
+    for (m, (name, nc)) in enumerate(decls)
+        arr = collect(reinterpret(Float32, blocks[end-length(decls)+m]))
+        out[name] = arr
+    end
+    return out, geom, decls
+end
+
+@testset "save_vtk: field selection and derived fields" begin
+    dir = mktempdir()
+    solver = Solver(bcs=per3, n_global=(32, 32, 12), L_domain=(1.0, 1.0, 1.0),
+                    art=ArtParams(enabled=true))
+    Q = allocate_state(solver)
+
+    # (a) A uniform stream, for which every derived field is zero by
+    # definition. This detects a sign error or a transposed index in the curl.
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0))
+    derived = (:vorticity, :vorticity_magnitude, :qcriterion, :divergence,
+               :schlieren, :mach)
+    save_vtk(solver, Q, joinpath(dir, "uniform"); fields=derived)
+    got, _, decls = read_vtk_pointdata(joinpath(dir, "uniform.r0000.vtr"))
+    @test [n for (n, _) in decls] == ["vorticity", "vorticity_magnitude",
+                                      "qcriterion", "divergence", "schlieren", "mach"]
+    for name in ("vorticity", "vorticity_magnitude", "qcriterion", "divergence",
+                 "schlieren")
+        @test maximum(abs, got[name]) < 1e-5
+    end
+    @test all(≈(0.3 / sqrt(1.4)), got["mach"])        # |u|/c, γRT = 1.4 here
+
+    # (b) A shear layer u₁ = sin(2πy), for which ω₃ = −∂u₁/∂x₂ = −2π cos(2πy)
+    # and the divergence is zero. The interior scheme is C6, so the tolerance
+    # is tight.
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(sin(2π * y), 0, 0), p=1.0, rho=1.0))
+    save_vtk(solver, Q, joinpath(dir, "shear"); fields=(:vorticity, :divergence))
+    got, _, _ = read_vtk_pointdata(joinpath(dir, "shear.r0000.vtr"))
+    ω = got["vorticity"]
+    nx, ny = 32, 32
+    werr = 0.0
+    for j in 1:ny, i in 1:nx
+        m = (j - 1) * nx + i                          # k = 1 plane, i fastest
+        want = -2π * cos(2π * xcoord(solver, 2, j))
+        werr = max(werr, abs(ω[3m] - want))           # third component
+    end
+    @test werr < 1e-4
+    @test maximum(abs, got["divergence"]) < 1e-4
+
+    # (c) The default set is unchanged from before field selection was added.
+    save_vtk(solver, Q, joinpath(dir, "default"))
+    _, _, decls = read_vtk_pointdata(joinpath(dir, "default.r0000.vtr"))
+    @test [n for (n, _) in decls] == ["rho", "velocity", "p", "T_ion", "Y1"]
+    @test [nc for (_, nc) in decls] == [1, 3, 1, 1, 1]
+
+    # (d) The artificial coefficients are readable, which is the reason for
+    # exposing them: they report the local action of the regularization.
+    save_vtk(solver, Q, joinpath(dir, "art"); fields=(:sensor, :mu_art, :D_art))
+    _, _, decls = read_vtk_pointdata(joinpath(dir, "art.r0000.vtr"))
+    @test [n for (n, _) in decls] == ["sensor", "mu_art", "D_art1"]
+
+    @test_throws ArgumentError save_vtk(solver, Q, joinpath(dir, "bad");
+                                        fields=(:not_a_field,))
+    rm(dir; recursive=true)
+end
+
+@testset "save_vtk: strided subsampling" begin
+    dir = mktempdir()
+    N = (32, 16, 16)
+    solver = Solver(bcs=per3, n_global=N, L_domain=(1.0, 1.0, 1.0),
+                    art=ArtParams(enabled=false))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0,
+                                             rho=1 + x + 2y + 4z))
+
+    # Coordinates and payload for a given stride, read back from the piece.
+    strided(stem, stride) = begin
+        save_vtk(solver, Q, stem; fields=(:rho,), stride=stride)
+        got, geom, _ = read_vtk_pointdata(stem * ".r0000.vtr")
+        coords = [collect(reinterpret(Float64, g)) for g in geom]
+        header = String(copy(read(stem * ".pvtr")))
+        whole = match(r"WholeExtent=\"([^\"]+)\"", header).captures[1]
+        (coords, got["rho"], whole)
+    end
+
+    # Stride 1 reproduces the unstrided grid, confirming that the general path
+    # introduces no index shift.
+    coords, rho1, whole = strided(joinpath(dir, "s1"), 1)
+    @test length.(coords) == [32, 16, 16]
+    @test whole == "0 31 0 15 0 15"
+    for d in 1:3
+        @test coords[d] ≈ [xcoord(solver, d, i) for i in 1:N[d]] atol = 1e-15
+    end
+
+    # Stride 2 gives half the points per dimension and extents in the coarse
+    # index space. The coordinates are the ODD global stations 1, 3, 5, ...,
+    # not a uniformly re-spaced grid.
+    coords, rho2, whole = strided(joinpath(dir, "s2"), 2)
+    @test length.(coords) == [16, 8, 8]
+    @test whole == "0 15 0 7 0 7"
+    for d in 1:3
+        @test coords[d] ≈ [xcoord(solver, d, i) for i in 1:2:N[d]] atol = 1e-15
+    end
+    @test length(rho2) == 16 * 8 * 8
+
+    # The payload holds the same values, sampled rather than averaged or
+    # shifted.
+    want = Float32[]
+    for k in 1:2:16, j in 1:2:16, i in 1:2:32
+        push!(want, Float32(solver.rho[gidx(solver, i, j, k)]))
+    end
+    @test rho2 == want
+
+    # Per-dimension strides are independent.
+    coords, _, whole = strided(joinpath(dir, "s421"), (4, 2, 1))
+    @test length.(coords) == [8, 8, 16]
+    @test whole == "0 7 0 7 0 15"
+
+    # An odd extent keeps the ceiling: 1, 3, ..., 15 out of 15 is 8 stations.
+    odd = Solver(bcs=per3, n_global=(15, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                 art=ArtParams(enabled=false))
+    Qo = allocate_state(odd)
+    initialize!(odd, Qo, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
+    save_vtk(odd, Qo, joinpath(dir, "odd"); fields=(:rho,), stride=2)
+    @test occursin("WholeExtent=\"0 7 0 7 0 7\"",
+                   String(copy(read(joinpath(dir, "odd.pvtr")))))
+
+    @test_throws ArgumentError save_vtk(solver, Q, joinpath(dir, "bad"); stride=0)
+    @test_throws ArgumentError save_vtk(solver, Q, joinpath(dir, "bad");
+                                        stride=(2, 0, 1))
+    rm(dir; recursive=true)
+end
+
+@testset "save_vtk: a resolved angle writes a curvilinear grid" begin
+    dir = mktempdir()
+    # A cylindrical annulus with θ resolved. Written as a rectilinear grid it
+    # would render unwrapped, as a box in (r, θ) rather than as an annulus.
+    bcs = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
+           (PeriodicBC(), PeriodicBC()))
+    nr, nθ, nz = 12, 24, 10
+    solver = Solver(bcs=bcs, n_global=(nr, nθ, nz), L_domain=(1.0, 2π, 1.0),
+                    origin=(0.5, 0.0, 0.0), metric=CylindricalMetric(),
+                    art=ArtParams(enabled=false))
+    Q = allocate_state(solver)
+    # Solid-body swirl: purely azimuthal, constant magnitude.
+    initialize!(solver, Q, (r, θ, z) -> Prim(u=(0.0, 0.5, 0.0), p=1.0, rho=1.0))
+
+    @test container_extension(solver) == ".pvts"
+    save_vtk(solver, Q, joinpath(dir, "annulus"))
+    @test isfile(joinpath(dir, "annulus.pvts"))
+    @test isfile(joinpath(dir, "annulus.r0000.vts"))
+    @test occursin("PStructuredGrid", read(joinpath(dir, "annulus.pvts"), String))
+
+    got, geom, _ = read_vtk_pointdata(joinpath(dir, "annulus.r0000.vts"))
+    pts = collect(reinterpret(Float64, only(geom)))
+    @test length(pts) == 3 * nr * nθ * nz
+    radii = [hypot(pts[3m-2], pts[3m-1]) for m in 1:(nr*nθ*nz)]
+    @test minimum(radii) ≈ 0.5 rtol = 1e-12
+    @test maximum(radii) ≈ 1.5 rtol = 1e-12
+
+    # The velocity must be rotated into the frame in which the points are
+    # written. Unrotated, (u_r, u_θ, u_z) = (0, 0.5, 0) would appear as a
+    # uniform y-directed stream; rotated, it is tangent to every circle.
+    vel = got["velocity"]
+    radial = 0.0; magnitude = 0.0
+    for m in 1:(nr*nθ*nz)
+        x, y = pts[3m-2], pts[3m-1]
+        ux, uy = Float64(vel[3m-2]), Float64(vel[3m-1])
+        radial = max(radial, abs(ux * x + uy * y) / hypot(x, y))
+        magnitude = max(magnitude, abs(hypot(ux, uy) - 0.5))
+    end
+    @test radial < 1e-6                    # no radial component: purely tangential
+    @test magnitude < 1e-6                 # and the swirl speed is preserved
+
+    # An axisymmetric (θ-collapsed) polar run remains rectilinear, since the
+    # meridional half-plane is the computed domain and a rectangle represents
+    # it correctly.
+    axi = Solver(bcs=(bcs[1], (PeriodicBC(), PeriodicBC()), bcs[3]),
+                 n_global=(nr, 1, nz), L_domain=(1.0, 2π, 1.0),
+                 origin=(0.5, 0.0, 0.0), metric=CylindricalMetric(),
+                 art=ArtParams(enabled=false))
+    @test container_extension(axi) == ".pvtr"
+    rm(dir; recursive=true)
+end
+
+@testset "FieldWriter: numbered frames and a .pvd carrying physical time" begin
+    dir = mktempdir()
+    solver = Solver(bcs=((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
+                         (PeriodicBC(), PeriodicBC())),
+                    n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                    art=ArtParams(enabled=false), cfl=0.4)
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
+                                             p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
+    writer = FieldWriter(joinpath(dir, "frames", "field"))
+    run!(solver, Q; tfinal=0.03,
+         callback=Callback(EveryTime(0.01), writer))
+
+    # One frame per instant, numbered from zero, with the directory created.
+    @test writer.index == 3
+    @test writer.times ≈ [0.01, 0.02, 0.03] rtol = 1e-14
+    for m in 0:2
+        @test isfile(CL.frame_prefix(writer, m) * ".pvtr")
+        @test filesize(CL.frame_prefix(writer, m) * ".pvtr") > 0
+    end
+
+    # The collection is what allows the sequence to animate against physical
+    # time rather than frame index, so its timesteps are the assertion.
+    pvd = read(joinpath(dir, "frames", "field.pvd"), String)
+    @test occursin("type=\"Collection\"", pvd)
+    @test count("<DataSet", pvd) == 3
+    stamps = [parse(Float64, m.captures[1])
+              for m in eachmatch(r"timestep=\"([^\"]+)\"", pvd)]
+    @test stamps ≈ [0.01, 0.02, 0.03] rtol = 1e-14
+    # Pieces are named relative to the .pvd's own directory rather than by
+    # absolute path, so the collection remains readable on another machine.
+    @test occursin("file=\"field_0000.pvtr\"", pvd)
+    @test !occursin(dir, pvd)
+
+    @test writer.wall_io > 0            # I/O cost is not in solver.wall_step
+    rm(dir; recursive=true)
+end
+
 @testset "conserved_from_prim / nspecies round trip" begin
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.2, 1.09)])
@@ -1007,6 +1250,152 @@ end
     run!(solver, Q; tfinal=1e9, nmax=1000,
          callback=Callback(WhenState((s, _) -> s.step >= 4), (_, _) -> true))
     @test solver.step == 4
+end
+
+@testset "EveryTime: evenly spaced instants, restart anchoring, soft landing" begin
+    wall3 = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
+             (PeriodicBC(), PeriodicBC()))
+    mkrun() = begin
+        solver = Solver(bcs=wall3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                        art=ArtParams(enabled=false), cfl=0.4)
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
+                                                 p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
+        solver, Q
+    end
+
+    # Every instant is landed on exactly, and none is skipped.
+    solver, Q = mkrun()
+    hits = Float64[]
+    run!(solver, Q; tfinal=0.05,
+         callback=Callback(EveryTime(0.01), (s, _) -> (push!(hits, s.t); nothing)))
+    @test hits ≈ collect(0.01:0.01:0.05) rtol = 1e-14
+
+    # Anchored to solver.t on first use, not to zero: a restarted run picks up at
+    # the next instant rather than replaying the schedule.
+    solver, Q = mkrun()
+    solver.t = 0.055
+    hits = Float64[]
+    run!(solver, Q; tfinal=0.08,
+         callback=Callback(EveryTime(0.01), (s, _) -> (push!(hits, s.t); nothing)))
+    @test hits ≈ [0.06, 0.07, 0.08] rtol = 1e-14
+
+    # `start` offsets the schedule, and instants before it are not visited.
+    solver, Q = mkrun()
+    hits = Float64[]
+    run!(solver, Q; tfinal=0.05,
+         callback=Callback(EveryTime(0.02; start=0.015),
+                           (s, _) -> (push!(hits, s.t); nothing)))
+    @test hits ≈ [0.015, 0.035] rtol = 1e-14
+
+    @test_throws ArgumentError EveryTime(0.0)
+    @test_throws ArgumentError StepControl(landing_steps=0)
+
+    # The soft landing is the purpose of `landing_steps`. Under a hard clip the
+    # same schedule leaves one very small step before every instant, so compare
+    # the spread of accepted steps.
+    spread(control) = begin
+        s, q = mkrun()
+        dts = Float64[]
+        run!(s, q; tfinal=0.05, control=control,
+             callback=(Callback(EveryTime(0.01), (_, _) -> nothing),
+                       (x, _) -> push!(dts, x.dt_prev)))
+        minimum(dts) / maximum(dts)
+    end
+    @test spread(StepControl(landing_steps=1)) < 0.35     # sliver: 2.2e-3 vs 7.8e-3
+    @test spread(StepControl()) > 0.99                    # split evenly instead
+end
+
+@testset "rewind!: a rollback re-arms the instants it abandoned" begin
+    # Unit behaviour first. AtTime rewinds to the first instant ahead of the
+    # restored time, EveryTime re-anchors, and a step-counting trigger has no
+    # schedule to move and takes the no-op default.
+    trigger = AtTime([0.1, 0.2, 0.3])
+    trigger.next = 3
+    CL.rewind!(trigger, 0.15, 7)
+    @test trigger.next == 2
+    CL.rewind!(trigger, 0.35, 9)
+    @test trigger.next == 4                              # all behind: none left
+    CL.rewind!(trigger, 0.0, 0)
+    @test trigger.next == 1
+
+    et = EveryTime(0.01)
+    solver = Solver(bcs=per3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                    art=ArtParams(enabled=false))
+    solver.t = 0.045
+    @test CL.next_time(et, solver) ≈ 0.05
+    CL.rewind!(et, 0.021, 3)
+    solver.t = 0.021
+    @test CL.next_time(et, solver) ≈ 0.03
+    @test CL.rewind!(EveryStep(4), 0.1, 3) === nothing
+
+    # Then the wiring, against a rollback placed where it can be reasoned about.
+    # Physical failures occur in the startup transient, before a savepoint has
+    # advanced past step 0, which demonstrates nothing here. Corrupting the
+    # state once at a chosen time and letting the positivity check find it
+    # places the rollback across instants that have already fired.
+    walls = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
+             (PeriodicBC(), PeriodicBC()))
+    s2 = Solver(bcs=walls, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                art=ArtParams(enabled=false), cfl=0.4)
+    Q2 = allocate_state(s2)
+    initialize!(s2, Q2, (x, y, z) -> Prim(u=(0.2, 0, 0),
+                                          p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
+    instants = collect(0.005:0.005:0.06)
+    seen = Float64[]
+    spoil = Callback(WhenState((x, _) -> x.t >= 0.037),
+                     (x, q) -> (q[gidx(x, 3, 3, 3), 1] = -1.0; nothing))
+    run!(s2, Q2; tfinal=0.06, nmax=5000,
+         control=StepControl(retries=2, savepoint_interval=2),
+         callback=(Callback(AtTime(instants), (x, _) -> (push!(seen, x.t); nothing)),
+                   spoil))
+    @test s2.cfl < 0.4                                    # it did roll back
+    @test s2.t ≈ 0.06 rtol = 1e-12                        # and then finished
+    # Re-arming has a positive signature: an instant crossed on the abandoned
+    # trajectory is visited a second time on the replacement trajectory. Without
+    # the rewind it is visited once and never revisited, and the `unique` check
+    # below would fall short.
+    @test length(seen) > length(instants)
+    @test sort(unique(round.(seen, digits=10))) ≈ instants rtol = 1e-9
+end
+
+@testset "state queries and refresh_primitives! in a callback" begin
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 2.0, 1.6)])
+    solver = Solver(bcs=per3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                    eos=eos, art=ArtParams(enabled=false), cfl=0.4)
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), u=(0.2, -0.1, 0.05),
+                                             p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
+    refresh_primitives!(solver, Q)
+
+    # The layout-free spellings agree with the primitives they stand in for, and
+    # do not assume a species count.
+    I = gidx(solver, 5, 4, 3)
+    @test mixture_density(solver, Q, I) ≈ solver.rho[I] rtol = 1e-14
+    @test all(velocity(solver, Q, I) .≈ (solver.u[I], solver.v[I], solver.w[I]))
+    @test mass_fraction(solver, Q, I, 2) ≈ solver.Y[2][I] rtol = 1e-14
+    @test total_energy(solver, Q, I) == Q[I, solver.equations.i_energy]
+    @test mixture_density(solver, Q, I) ≈ Q[I, 1] + Q[I, 2] rtol = 1e-14
+
+    # In serial every rank holds every edge, so the `nothing` branch is
+    # exercised only under MPI.
+    @test boundary_plane(solver, 2, 1) == CL.wallplane(solver.decomp, 2, 1)
+
+    # The contract stated by refresh_primitives!: inside a callback the
+    # primitives belong to the fifth RK stage's INPUT state, so they predate the
+    # final stage update and the filter pass. The assertion is that refreshing
+    # changes the answer, and that the refreshed value is the one Q holds.
+    stale = Ref(0.0); fresh = Ref(0.0); fromQ = Ref(0.0)
+    run!(solver, Q; tfinal=1e9, nmax=6, callback=(s, q) -> begin
+        s.step == 6 || return
+        stale[] = s.rho[I]
+        fromQ[] = mixture_density(s, q, I)
+        refresh_primitives!(s, q)
+        fresh[] = s.rho[I]
+    end)
+    @test isapprox(fresh[], fromQ[]; rtol=1e-14)         # refreshed agrees with Q
+    @test !isapprox(stale[], fromQ[]; rtol=1e-12)        # unrefreshed does not
 end
 
 @testset "SwitchableBC: transparent before the switch, forwards after" begin

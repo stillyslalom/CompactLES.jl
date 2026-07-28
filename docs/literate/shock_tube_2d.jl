@@ -139,14 +139,15 @@ solver, Q = setup(problem(upstream), numerics)
 
 # ## Field extraction
 #
-# The mixture density is the sum of the species densities and is available
-# directly from the conserved array, by the same expression in serial and
-# decomposed calculations.
+# The conserved array is always current between steps, and
+# [`mixture_density`](@ref) reads it without reference to the conserved layout —
+# the same expression in serial and decomposed calculations, and one that
+# remains correct if the species count changes. The primitive fields on the
+# solver are *not* current here; see [`refresh_primitives!`](@ref).
 
 function density(solver, Q)
     nxl, nyl, _ = solver.decomp.n_local
-    [Q[gidx(solver, i, j, 1), 1] + Q[gidx(solver, i, j, 1), 2]
-     for i in 1:nxl, j in 1:nyl]
+    [mixture_density(solver, Q, gidx(solver, i, j, 1)) for i in 1:nxl, j in 1:nyl]
 end
 
 xs = [xcoord(solver, 1, i) for i in 1:nx]
@@ -155,7 +156,7 @@ ys = [xcoord(solver, 2, j) for j in 1:ny];
 # ## Switching criterion
 #
 # The reflected shock is taken to have arrived when the density at any point on
-# the upstream plane exceeds that of state 2. `CompactLES.wallplane` returns
+# the upstream plane exceeds that of state 2. [`boundary_plane`](@ref) returns
 # that plane, or `nothing` on a rank that does not own it, so the predicate
 # below yields a rank-local verdict; [`WhenState`](@ref) reduces it across the
 # communicator before acting on it.
@@ -174,9 +175,9 @@ ys = [xcoord(solver, 2, j) for j in 1:ny];
 # arrival is defined here as first contact at any transverse station.
 
 function upstream_density(solver, Q)
-    plane = CompactLES.wallplane(solver.decomp, 1, 1)
+    plane = boundary_plane(solver, 1, 1)
     plane === nothing && return -Inf         # this rank does not own the face
-    return maximum(I -> Q[I, 1] + Q[I, 2], plane)
+    return maximum(I -> mixture_density(solver, Q, I), plane)
 end
 
 # The threshold must also exceed an unrelated transient. The initial shock is

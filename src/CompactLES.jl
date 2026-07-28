@@ -49,6 +49,7 @@ export CompactScheme, ClosureRow, lele_d1_6, pade_d1_4, compact_filter
 export BandedCompactScheme, BandedClosureRow, lele_d1_10
 export BoundaryCondition, PeriodicBC, SlipWallBC, NoSlipWallBC, ExtrapolationBC, AxisBC, OriginBC, PoleBC
 export NSCBCOutflowBC, NSCBCInflowBC, DirichletBC, save_checkpoint, load_checkpoint!, save_vtk
+export FieldWriter, DEFAULT_VTK_FIELDS, container_extension
 export SwitchableBC, switch!, switched
 export Prim, Problem, Numerics, setup, initialize!, conserved_from_prim, tanh_blend
 export DirPlan, BandPlan, apply_along!, filter_field!
@@ -62,7 +63,9 @@ export ArtParams, Solver
 export ConstantBodyForce, add_source!, add_sources!
 export Workspace, compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!, mpi_main
 export StepControl, SolverFailure, PLANCK_TIME, max_rate
-export Trigger, AtTime, EveryStep, WhenState, Callback, ProgressLog
+export Trigger, AtTime, EveryStep, EveryTime, WhenState, Callback, ProgressLog, rewind!
+export refresh_primitives!, mixture_density, velocity, total_energy, mass_fraction
+export boundary_plane
 export volume_integral, volume_average, domain_volume, plane_profile
 export profile_coordinate, profile_spacing
 export mix_width, molecular_mixing, species_pdf

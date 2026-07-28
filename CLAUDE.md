@@ -62,11 +62,11 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 42 testsets, 0 failures
+julia --project=. test/runtests.jl        # 49 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 30/30 each
+  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 53/53 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
@@ -125,8 +125,13 @@ Names are spelled out rather than abbreviated. Current vocabulary:
   `physics.jl`)
 - `control` (a `StepControl`), `max_rate`, `predicted_dt`, `check_step`,
   `dt_prev`, `rate_prev`, `savepoint`
-- `trigger` (an `AtTime` / `EveryStep` / `WhenState`), `effect!`, `fired!`,
-  `next_time`, `switch!`/`switched` (a `SwitchableBC`)
+- `trigger` (an `AtTime` / `EveryTime` / `EveryStep` / `WhenState`), `effect!`,
+  `fired!`, `next_time`, `rewind!`, `landing_steps`,
+  `switch!`/`switched` (a `SwitchableBC`)
+- `writer` (a `FieldWriter`), `frame_prefix`, `collection`, `wall_io`
+- `refresh_primitives!`, `mixture_density`, `boundary_plane` (the in-flight
+  state-query API; primitives are stale inside a callback, see the
+  `refresh_primitives!` docstring)
 
 **Temperature is `T_ion`.** There is one temperature today; the name keeps
 `T_ele` / `T_rad` free for a 2T or 3T model without a second API break. Bare
@@ -204,6 +209,10 @@ decision worth revisiting.
   `folds.jl` on the antipodal butterfly, `decomposition.jl` on the
   `Dims_create` signature). Move them with the code; don't delete the
   reasoning.
+- Prose: avoid overuse of "Claudisms" including agency for inanimate things,
+  setup-and-payoff, "what matters is/the thing that/is what makes/worth keeping",
+  emphatic fragments, editorializing, and em-dash asides. The reader expects
+  clear academic prose explaining the package - do not disappoint them.
 - `bench/` is scratch tooling, not tests: `audit.jl` (allocation, inference),
   `jetcheck.jl` / `jetwhere.jl` (dispatch sites, and where they come from),
   `phases.jl` (RHS phase budget), `profile.jl`, `scaling.jl`, `threadscale.jl`,

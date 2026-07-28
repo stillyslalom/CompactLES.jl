@@ -279,6 +279,74 @@ function gidx(solver::Solver, i::Int, j::Int, k::Int)
     return CartesianIndex(i + pad[1], j + pad[2], k + pad[3])
 end
 
+# --- Reading the in-flight conserved state -----------------------------------
+#
+# `Q` is a raw array in the layout defined by the equation set, so a caller
+# wanting the density writes `Q[I, 1] + Q[I, 2]` and has silently hardcoded a
+# two-species run. The functions below are the layout-independent equivalents,
+# for callback conditions, custom diagnostics, and any other code reading `Q`
+# between steps rather than reading the primitives, which are stale there; see
+# `refresh_primitives!`.
+#
+# All of them index the PADDED arrays, following the convention of `gidx` and
+# `boundary_plane`, and all are rank-local: they report nothing about points
+# this rank does not hold. A predicate built from them is reduced by
+# `WhenState`, or must be reduced by the caller.
+
+"""
+    mixture_density(solver, Q, I) -> ρ
+
+Mixture density at padded index `I`, the sum of the partial densities. Prefer
+this method to explicit component indices so that the expression remains valid
+when the species count changes.
+"""
+@inline function mixture_density(solver::Solver, Q, I)
+    ρ = zero(eltype(Q))
+    @inbounds for sp in 1:solver.equations.n_species
+        ρ += Q[I, sp]
+    end
+    return ρ
+end
+
+"""
+    velocity(solver, Q, I) -> (u, v, w)
+
+Physical, coordinate-aligned velocity components at padded index `I`, recovered
+from the momenta and the mixture density.
+"""
+@inline function velocity(solver::Solver, Q, I)
+    ri = one(eltype(Q)) / mixture_density(solver, Q, I)
+    m1, m2, m3 = solver.equations.i_mom
+    @inbounds return (Q[I, m1] * ri, Q[I, m2] * ri, Q[I, m3] * ri)
+end
+
+"Total energy per unit volume at padded index `I`."
+@inline total_energy(solver::Solver, Q, I) =
+    @inbounds Q[I, solver.equations.i_energy]
+
+"Mass fraction of species `sp` at padded index `I`."
+@inline mass_fraction(solver::Solver, Q, I, sp::Int) =
+    @inbounds Q[I, sp] / mixture_density(solver, Q, I)
+
+"""
+    boundary_plane(solver, d, side) -> CartesianIndices or nothing
+
+Padded indices of this rank's plane on the global `side` (1 low, 2 high) of
+dimension `d`, or `nothing` when this rank does not own that edge. For example,
+a boundary diagnostic may be written as
+
+```julia
+plane = boundary_plane(solver, 1, 1)
+plane === nothing && return -Inf
+return maximum(I -> mixture_density(solver, Q, I), plane)
+```
+
+The result is rank-local. [`WhenState`](@ref) reduces a predicate constructed
+from it; other uses require an explicit reduction. An unreduced value is valid
+globally only in a serial calculation.
+"""
+boundary_plane(solver::Solver, d::Int, side::Int) = wallplane(solver.decomp, d, side)
+
 allocate_state(solver::Solver) = allocate_state(solver.decomp, solver.equations.n_cons)
 
 # --- Operator routing through folds ----------------------------------------
@@ -393,18 +461,37 @@ function _assemble_fluxes!(solver::Solver{T}, eos, Q) where {T}
 end
 
 """
+    refresh_primitives!(solver, Q)
+
+Update the primitive fields on `solver` — `rho`, `u`, `v`, `w`, `p`, `T_ion`,
+`c`, `cp_mix`, and `Y` — from `Q` by exchanging rank-boundary halos and calling
+`primitives!`. This operation is collective and idempotent.
+
+During `compute_rhs!`, including source terms and boundary corrections, the
+primitive fields correspond to the state being evaluated. In a `run!` callback,
+they instead correspond to the input state of the fifth RK stage and predate the
+final stage update and subsequent [`filter_state!`](@ref) pass.
+
+A callback must therefore call this function before reading the primitive
+fields. `save_vtk`, `dissipation_rate`, and the mixing diagnostics perform this
+update internally. The conserved state `Q` is current in a callback;
+`mixture_density` and related functions read it without depending on the
+conserved layout.
+"""
+refresh_primitives!(solver::Solver, Q) =
+    (exchange_state!(Q, solver.decomp); primitives!(solver, Q); solver)
+
+"""
     compute_primitives_and_gradients!(solver, Q)
 
 Refresh halos, primitives, and the physical-component velocity gradients from
-`Q`. Factored out of `compute_rhs!` because `diagnostics.jl` needs exactly this
-state — a strain-rate or dissipation diagnostic is meaningless against gradients
-belonging to some earlier RK stage — and duplicating the sequence there would
-put two copies of the parity and curvature-correction routing in the codebase.
+`Q`. This shared sequence ensures that strain-rate and dissipation diagnostics
+use gradients from the current state while retaining a single implementation of
+the parity and curvature-correction routing.
 """
 function compute_primitives_and_gradients!(solver::Solver, Q)
     decomp = solver.decomp
-    exchange_state!(Q, decomp)
-    primitives!(solver, Q)
+    refresh_primitives!(solver, Q)
     vel = (solver.u, solver.v, solver.w)
     for jj in 1:3, d in 1:3
         if decomp.active[d]

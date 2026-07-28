@@ -22,26 +22,62 @@ filter_state!
 
 ## Step callbacks and switchable boundaries
 
-Triggers fire only between completed steps, and every one is globally consistent
-across ranks — see the note at the top of `src/callbacks.jl` for why both of
-those are structural rather than incidental. [`SwitchableBC`](@ref) is documented
-here rather than with the other boundary conditions because it exists to be
-driven by a [`Callback`](@ref), and is unsafe driven any other way.
+Triggers fire only between completed steps and produce the same verdict on every
+rank. These requirements preserve collective ordering; the implementation note
+at the top of `src/callbacks.jl` gives the details. [`SwitchableBC`](@ref)
+appears here because it must be driven by a [`Callback`](@ref).
+
+For [`AtTime`](@ref) and [`EveryTime`](@ref), `run!` shortens the preceding
+`StepControl(landing_steps = ...)` steps so that a step ends at the scheduled
+instant. `EveryTime` produces a uniform time axis for periodic output.
 
 ```@docs
 Trigger
 AtTime
+EveryTime
 EveryStep
 WhenState
 Callback
+rewind!
 SwitchableBC
 switch!
 ```
 
+## Reading the state between steps
+
+Between steps, the conserved array `Q` is current, whereas the primitive fields
+on the solver correspond to the input state of the last RK stage. The following
+functions read `Q` without depending on its component layout.
+[`refresh_primitives!`](@ref) updates the primitive fields before a callback or
+custom diagnostic reads them.
+
+```@docs
+refresh_primitives!
+mixture_density
+velocity
+total_energy
+mass_fraction
+boundary_plane
+```
+
 ## Checkpoint and visualization output
+
+[`FieldWriter`](@ref) pairs with a trigger, numbers its frames, and writes a
+`.pvd` collection recording the physical time of each frame. `save_vtk` provides
+an individual field dump.
+
+Both select what to write through `fields` and subsample through `stride`. The
+metric determines the grid type: a resolved angular dimension produces a
+curvilinear `.pvts` with explicit Cartesian positions and rotated vectors, and
+every other grid produces a rectilinear `.pvtr`. Strided points are selected on
+the global index, so the per-rank pieces sample one common lattice and still
+tile the coarse grid.
 
 ```@docs
 save_checkpoint
 load_checkpoint!
 save_vtk
+DEFAULT_VTK_FIELDS
+container_extension
+FieldWriter
 ```

@@ -464,10 +464,208 @@ function test_callback_consistency()
                          MPI.Allreduce(landed[m], min, comm))
     end
     check("AtTime landed exactly, identically on all ranks", hit_spread, 1e-14)
+
+    # EveryTime shortens dt in the same way and additionally re-anchors from
+    # solver.t. That anchoring must also be a global decision: a rank computing
+    # a different next instant would shorten to a different dt, and the ranks
+    # would diverge on the following step.
+    s_e, Q_e, _ = build()
+    ticks = Float64[]
+    run!(s_e, Q_e; tfinal=0.045,
+         callback=Callback(EveryTime(0.015), (s, _) -> (push!(ticks, s.t); nothing)))
+    tick_spread = length(ticks) == 3 ? 0.0 : Inf
+    for (m, want) in enumerate((0.015, 0.03, 0.045))
+        m <= length(ticks) || break
+        tick_spread = max(tick_spread, abs(ticks[m] - want),
+                          MPI.Allreduce(ticks[m], max, comm) -
+                          MPI.Allreduce(ticks[m], min, comm))
+    end
+    check("EveryTime landed exactly, identically on all ranks", tick_spread, 1e-14)
 end
 
 # ---------------------------------------------------------------------------
-# 8. Checkpoint round trip with a real decomposition — one file per rank, so
+# 8. State queries under decomposition. `boundary_plane` is rank-local by
+#    design, returning `nothing` on every rank that does not hold the face, and
+#    that branch does not arise in serial where one rank holds every edge. A
+#    callback condition reading a boundary is written in this form, so the
+#    branch is more significant than its size suggests.
+# ---------------------------------------------------------------------------
+function test_state_queries()
+    section("state queries across ranks")
+    s, Q = setup(Problem(domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
+                         bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                         ic=(x, y, z) -> Prim(u=(0.2, 0, 0),
+                                              p=1 + 0.5exp(-200(x - 0.3)^2),
+                                              rho=1 + exp(-200(x - 0.3)^2))),
+                 Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+
+    # Split along x, so exactly one rank holds the low-x face and exactly one
+    # holds the high-x face, for any number of ranks.
+    owners(side) = gsum(boundary_plane(s, 1, side) === nothing ? 0 : 1)
+    check("exactly one rank owns the low-x face",  abs(owners(1) - 1), 0.5)
+    check("exactly one rank owns the high-x face", abs(owners(2) - 1), 0.5)
+    # Transverse dimensions are undivided here, so every rank owns those faces.
+    check("every rank owns an undivided face",
+          abs(gsum(boundary_plane(s, 2, 1) === nothing ? 0 : 1) - np), 0.5)
+
+    # The `upstream_density` pattern from the tutorial: a rank-local maximum
+    # over the face held by this rank, reduced by the caller. It must agree with
+    # the same quantity taken from the refreshed primitives.
+    refresh_primitives!(s, Q)
+    face_max = let plane = boundary_plane(s, 1, 1)
+        plane === nothing ? -Inf : maximum(I -> mixture_density(s, Q, I), plane)
+    end
+    face_rho = let plane = boundary_plane(s, 1, 1)
+        plane === nothing ? -Inf : maximum(I -> s.rho[I], plane)
+    end
+    check("face maximum from Q matches the refreshed primitives",
+          abs(gmax(face_max) - gmax(face_rho)), 1e-14)
+
+    # refresh_primitives! is collective, so every rank must reach it, and
+    # afterwards each rank's primitives agree with its own Q.
+    err = 0.0
+    for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
+        I = gidx(s, i, j, k)
+        err = max(err, abs(mixture_density(s, Q, I) - s.rho[I]))
+        u, v, w = velocity(s, Q, I)
+        err = max(err, abs(u - s.u[I]), abs(v - s.v[I]), abs(w - s.w[I]))
+    end
+    check("primitives agree with Q on every rank after a refresh", gmax(err), 1e-14)
+end
+
+# ---------------------------------------------------------------------------
+# 9. FieldWriter under decomposition. save_vtk is collective, since it
+#    Allgathers the piece extents so that rank 0 can write the container, and
+#    the serial suite does not exercise this path: one rank writes one piece
+#    there, leaving the per-rank naming and the container's piece list untested.
+#    The writer adds directory creation and a rank-0 collection file, both of
+#    which can succeed in serial and deadlock at high rank counts.
+# ---------------------------------------------------------------------------
+function test_field_writer()
+    section("FieldWriter under decomposition")
+    solver, Q = setup(Problem(domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
+                              bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                              ic=(x, y, z) -> Prim(u=(0.2, 0, 0),
+                                                   p=1 + 0.1exp(-40(x - 0.5)^2),
+                                                   rho=1.0)),
+                      Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+    writer = FieldWriter(joinpath("mpi_frames", "field"))
+    run!(solver, Q; tfinal=0.03, callback=Callback(EveryTime(0.01), writer))
+
+    # Every rank must have written the same number of frames at the same times.
+    # A rank that skipped one would have desynchronized the internal Allgather.
+    check("frame count agrees on every rank",
+          MPI.Allreduce(writer.index, max, comm) -
+          MPI.Allreduce(writer.index, min, comm), 0.5)
+    tspread = 0.0
+    for m in 1:min(writer.index, 3)
+        tspread = max(tspread, abs(writer.times[m] - 0.01m),
+                      MPI.Allreduce(writer.times[m], max, comm) -
+                      MPI.Allreduce(writer.times[m], min, comm))
+    end
+    check("frame times exact and identical on every rank", tspread, 1e-14)
+
+    # One piece per rank per frame, one container per frame, one collection.
+    MPI.Barrier(comm)
+    counted = rank == 0 ? length(filter(endswith(".vtr"), readdir("mpi_frames"))) : 0
+    check("one .vtr piece per rank per frame", abs(gsum(counted) - 3 * np), 0.5)
+    containers = rank == 0 ? length(filter(endswith(".pvtr"), readdir("mpi_frames"))) : 0
+    check("one .pvtr container per frame", abs(gsum(containers) - 3), 0.5)
+    pieces = rank == 0 ?
+        count("<Piece", read(joinpath("mpi_frames", "field_0000.pvtr"), String)) : 0
+    check("container lists every rank's piece", abs(gsum(pieces) - np), 0.5)
+    sets = rank == 0 ?
+        count("<DataSet", read(joinpath("mpi_frames", "field.pvd"), String)) : 0
+    check("collection written once, by rank 0", abs(gsum(sets) - 3), 0.5)
+
+    MPI.Barrier(comm)
+    rank == 0 && rm("mpi_frames"; recursive=true)
+    MPI.Barrier(comm)
+
+    # Strided output decomposed. The retained points are defined on the GLOBAL
+    # index, so the pieces sample one common lattice and tile the coarse grid
+    # exactly. Striding each rank's block from its own first point would produce
+    # files that appear correct but tile incorrectly, with a doubled or missing
+    # plane at a rank boundary. Serial runs cannot detect this, having only one
+    # piece.
+    strided, Qs = setup(Problem(domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
+                                bcs=(per3[1], per3[2], per3[3]),
+                                ic=(x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0,
+                                                     rho=1 + x)),
+                        Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+    for sd in (2, 3)
+        save_vtk(strided, Qs, "mpi_stride"; fields=(:rho,), stride=sd)
+        MPI.Barrier(comm)
+        nkeep = (length(1:sd:SPLITN), length(1:sd:16), length(1:sd:16))
+        total, inside, whole_ok = 0, 0, 0
+        if rank == 0
+            txt = read("mpi_stride.pvtr", String)
+            whole_ok = occursin("WholeExtent=\"0 $(nkeep[1]-1) 0 $(nkeep[2]-1) " *
+                                "0 $(nkeep[3]-1)\"", txt) ? 1 : 0
+            inside = 1
+            for m in eachmatch(r"<Piece Extent=\"([^\"]+)\"", txt)
+                e = parse.(Int, split(m.captures[1]))
+                total += prod(ntuple(d -> e[2d] - e[2d-1] + 1, 3))
+                for d in 1:3
+                    (0 <= e[2d-1] <= e[2d] <= nkeep[d] - 1) || (inside = 0)
+                end
+            end
+        end
+        # Piece point counts summing to the coarse grid, with every piece
+        # inside it, admits neither an overlap nor a gap.
+        check("stride $sd: pieces tile the coarse grid",
+              abs(gsum(total) - prod(nkeep)), 0.5)
+        check("stride $sd: every piece within the whole extent",
+              abs(gsum(inside) - 1), 0.5)
+        check("stride $sd: whole extent is the coarse grid",
+              abs(gsum(whole_ok) - 1), 0.5)
+        MPI.Barrier(comm)
+        rank == 0 && foreach(rm, filter(startswith("mpi_stride"), readdir()))
+        MPI.Barrier(comm)
+    end
+
+    # A stride coarse enough to leave a rank with no points gives that rank no
+    # piece to write, and must fail on EVERY rank. One rank raising while the
+    # others proceed into the Allgather produces a hang rather than an error.
+    too_coarse = 2 * (SPLITN ÷ np) + 1
+    threw = try
+        save_vtk(strided, Qs, "mpi_toocoarse"; fields=(:rho,), stride=too_coarse)
+        0
+    catch e
+        e isa ArgumentError ? 1 : 0
+    end
+    check("an over-coarse stride throws on every rank", abs(gsum(threw) - np), 0.5)
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith("mpi_toocoarse"), readdir()))
+    MPI.Barrier(comm)
+
+    # The curvilinear path decomposed, split along the resolved angle. It writes
+    # a different piece type and container, so no check above covers it, and
+    # splitting the angle is the case in which the piece extents must agree
+    # around a periodic wrap.
+    cyl, Qc = setup(Problem(domain=((0.5, 1.5), (0.0, 2π), (0.0, 1.0)),
+                            metric=CylindricalMetric(),
+                            bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                            ic=(r, θ, z) -> Prim(u=(0.0, 0.5, 0.0), p=1.0, rho=1.0)),
+                    Numerics(n_global=(12, SPLITN, 12), dims=splitdims(2)))
+    check("resolved angle selects the structured container",
+          container_extension(cyl) == ".pvts" ? 0.0 : 1.0, 0.5)
+    save_vtk(cyl, Qc, "mpi_annulus")
+    MPI.Barrier(comm)
+    mine = isfile("mpi_annulus.r" * lpad(rank, 4, '0') * ".vts") ? 1 : 0
+    check("every rank wrote its .vts piece", abs(gsum(mine) - np), 0.5)
+    vts = rank == 0 ? read("mpi_annulus.pvts", String) : ""
+    kind = rank == 0 ? (occursin("PStructuredGrid", vts) ? 1 : 0) : 0
+    check("container is a PStructuredGrid", abs(gsum(kind) - 1), 0.5)
+    check("container lists every angular piece",
+          abs(gsum(rank == 0 ? count("<Piece", vts) : 0) - np), 0.5)
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith("mpi_annulus"), readdir()))
+    MPI.Barrier(comm)
+end
+
+# ---------------------------------------------------------------------------
+# 10. Checkpoint round trip with a real decomposition — one file per rank, so
 #    the per-rank offsets and extents must line up on write and read back.
 # ---------------------------------------------------------------------------
 function test_checkpoint()
@@ -511,6 +709,8 @@ try
     test_conservation()
     test_sync()
     test_callback_consistency()
+    test_state_queries()
+    test_field_writer()
     test_checkpoint()
 catch e
     # A throw on any rank (e.g. a setup error) must not deadlock the others.

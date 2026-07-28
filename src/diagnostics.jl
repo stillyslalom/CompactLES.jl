@@ -175,8 +175,9 @@ end
 Physical length element at each station along `d`, including the half weight at
 a node-centered edge, so that `sum(profile_spacing(solver, d))` is the domain
 extent. On a curvilinear grid the scale factor varies across the transverse
-plane, so this is its area-weighted plane average — the same weighting
-`plane_profile` uses, which is what makes the two compose into a line integral.
+plane. The returned spacing is therefore its area-weighted plane average, using
+the same weights as `plane_profile`, so the two quantities compose into a line
+integral.
 """
 function profile_spacing(solver::Solver, d::Int)
     decomp = solver.decomp
@@ -212,15 +213,15 @@ end
     mix_width(solver, Q; dim=1, species=(1, 2)) -> Float64
 
 Integral mix width W = ∫ 4⟨Y_a⟩⟨Y_b⟩ dx along `dim`, with ⟨·⟩ the plane average.
-The factor of 4 normalizes a fully mixed layer of thickness L to W = L. This is
-the standard bulk measure of how far a Rayleigh–Taylor or Richtmyer–Meshkov
-layer has grown, and it counts *stirring*: two unmixed slabs interleaved at the
-grid scale give the same W as a molecularly mixed layer. Pair it with
-[`molecular_mixing`](@ref), which is exactly the quantity that distinguishes
-those two. Collective.
+The factor of 4 normalizes a fully mixed layer of thickness L to W = L. This
+bulk measure describes the extent of a Rayleigh–Taylor or Richtmyer–Meshkov
+layer but does not distinguish stirring from molecular mixing: two unmixed
+fluids interleaved at the grid scale give the same W as a molecularly mixed
+layer. [`molecular_mixing`](@ref) provides that distinction. Collective.
 """
 function mix_width(solver::Solver, Q; dim::Int=1, species=(1, 2))
     a, b = species
+    refresh_primitives!(solver, Q)
     Ya = plane_profile(solver, solver.Y[a], dim)
     Yb = plane_profile(solver, solver.Y[b], dim)
     dx = profile_spacing(solver, dim)
@@ -231,14 +232,15 @@ end
     molecular_mixing(solver, Q; dim=1, species=(1, 2)) -> Float64
 
 Youngs' molecular mixing fraction θ = ∫⟨Y_a Y_b⟩ dx / ∫⟨Y_a⟩⟨Y_b⟩ dx along
-`dim`. θ = 0 is a layer that has been stirred but not mixed — the two fluids
-interleaved with no material between them; θ = 1 is uniform composition across
-the layer. Collective.
+`dim`. A value of 0 denotes interleaved but unmixed fluids, and a value of 1
+denotes uniform composition across the layer. Collective.
 
-`primitives!` must be current, which it is inside a `run!` callback.
+Calls [`refresh_primitives!`](@ref) before evaluating the diagnostic, including
+when invoked from a `run!` callback.
 """
 function molecular_mixing(solver::Solver, Q; dim::Int=1, species=(1, 2))
     a, b = species
+    refresh_primitives!(solver, Q)
     prod_ab = solver.tmp_a
     @inbounds for idx in eachindex(prod_ab)
         prod_ab[idx] = solver.Y[a][idx] * solver.Y[b][idx]
@@ -255,9 +257,13 @@ end
     species_pdf(solver, sp; nbins=32) -> (centers, pdf)
 
 Volume-weighted probability density of mass fraction Y_sp over the whole domain,
-on `nbins` uniform bins of [0, 1]. Normalized so that `sum(pdf) * binwidth == 1`.
-The shape is the diagnostic: two spikes at 0 and 1 means stirred and unmixed, a
-single interior hump means mixed. Collective.
+on `nbins` uniform bins of [0, 1]. It is normalized so that
+`sum(pdf) * binwidth == 1`. Peaks at 0 and 1 indicate separated fluids, whereas
+an interior distribution indicates mixed compositions. Collective.
+
+This method reads `solver.Y` directly and does not accept `Q`; call
+[`refresh_primitives!`](@ref) first when current primitive fields are not
+otherwise guaranteed, including from a `run!` callback.
 """
 function species_pdf(solver::Solver, sp::Int; nbins::Int=32)
     decomp = solver.decomp
@@ -284,14 +290,14 @@ end
     tke_profile(solver, Q; dim=1) -> Vector{Float64}
 
 Favre-averaged turbulent kinetic energy ⟨ρ|u − ũ|²⟩ / (2⟨ρ⟩) as a profile along
-`dim`, where ũ is the Favre (density-weighted) plane mean. Removing the plane
-mean is what makes this the *turbulent* energy rather than the total: in a
-mixing layer the mean is the bulk translation of the interface and carries no
-information about the instability. Collective.
+`dim`, where ũ is the Favre (density-weighted) plane mean. Subtracting the plane
+mean removes the bulk translation of the interface and retains velocity
+fluctuations associated with the instability. Collective.
 
-Requires current primitives; true inside a `run!` callback.
+Calls [`refresh_primitives!`](@ref) before evaluating the diagnostic.
 """
 function tke_profile(solver::Solver, Q; dim::Int=1)
+    refresh_primitives!(solver, Q)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -336,15 +342,14 @@ end
     dissipation_rate(solver, Q) -> Float64
 
 Volume-averaged resolved dissipation ⟨τ_ij ∂u_i/∂x_j⟩ / ⟨ρ⟩, with τ built from
-the *total* viscosity — molecular μ₀ plus the artificial μ\\* and β\\*. Including
-the artificial part is deliberate: in this scheme it is the subgrid model, so a
-dissipation rate that omitted it would understate the energy sink by whatever
-the regularization is doing, which at a shock is most of it.
+the total viscosity: molecular μ₀ plus the artificial μ\\* and β\\*. The
+artificial terms represent the subgrid model in this scheme and can dominate
+the energy sink at a shock; they are therefore included in the reported rate.
 
 Calls [`compute_primitives_and_gradients!`](@ref) and `compute_artificial!`, so
-it is valid at any point and does not depend on where in the RK cycle it is
-called. That costs one extra gradient pass; call it every few hundred steps
-rather than every step. Collective.
+the result is independent of the current RK stage. This requires one additional
+gradient pass, so the diagnostic is intended for periodic rather than per-step
+evaluation. Collective.
 """
 function dissipation_rate(solver::Solver, Q)
     compute_primitives_and_gradients!(solver, Q)

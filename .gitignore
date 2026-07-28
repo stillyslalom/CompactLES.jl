@@ -13,4 +13,5 @@ src/*.cov
 *.dat
 *.vtr
 *.pvtr
+*.pvd
 *.ckpt

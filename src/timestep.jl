@@ -104,12 +104,11 @@ compute_dt(solver::Solver, Q) = solver.cfl / max_rate(solver, Q)[1]
     max_rate(solver, Q) -> (rate, rho_min)
 
 Global maximum of the CFL rate, and the global minimum mixture density taken
-straight from `Q`. The density comes back with the rate because it is free —
-the same loop, folded into the same collective — and because it is the only
-honest failure signal available: `primitives!` substitutes benign placeholders
-wherever ρ ≤ 0, so a state that has already gone unphysical still produces a
-finite, plausible-looking rate. Without this, loss of positivity is invisible
-until the diffusive term drives `dt` to zero some hundreds of steps later.
+directly from `Q`. Both quantities are evaluated in the same loop and collective.
+The direct density check is required because `primitives!` substitutes finite
+placeholders where ρ ≤ 0; the resulting CFL rate can remain finite after the
+state has lost positivity. Without this check, failure is not detected until
+the diffusive term subsequently drives `dt` toward zero.
 """
 function max_rate(solver::Solver, Q)
     decomp = solver.decomp
@@ -190,10 +189,9 @@ end
 
 Diagnostic companion to `compute_dt`: returns a NamedTuple naming the global
 timestep limiter — `(dt, rank, index, coords, dim, kind)` where `kind` is
-`:acoustic`, `:diffusive`, or `:curvature`. Cheap enough to call every few
-hundred steps; the intended use is confirming whether a run is limited by
-the physics you care about or by the azimuthal spacing at a coordinate
-singularity (see the CFL notes in the README).
+`:acoustic`, `:diffusive`, or `:curvature`. Periodic evaluation distinguishes a
+physical timestep restriction from one imposed by azimuthal spacing near a
+coordinate singularity; see the CFL discussion in the README.
 """
 function dt_report(solver::Solver, Q)
     decomp = solver.decomp
@@ -246,20 +244,23 @@ Advance to `tfinal` (or `nmax` steps), filtering the conserved variables every
 
 `callback` may be a bare `callback(solver, Q)` invoked every step (the original
 contract, return value ignored), a [`Callback`](@ref) pairing a trigger with an
-effect, or a tuple of those. A scheduled [`AtTime`](@ref) trigger also clips `dt`
-so a step lands exactly on its time instead of overshooting it, and an effect
-returning `true` ends the run after that step.
+effect, or a tuple of those. A scheduled [`AtTime`](@ref) or [`EveryTime`](@ref)
+trigger shortens `dt` over the preceding `control.landing_steps` steps so that a
+step ends at the scheduled instant without an arbitrarily small final step. An
+effect returning `true` ends the run after that step. `tfinal` uses a direct
+clip, so scheduled callbacks do not alter the step sequence of a run that has
+none.
 
 `control` is a [`StepControl`](@ref) governing timestep prediction, the floors
 below which the run is declared failed, and whether a failure is recoverable by
 rolling back and lowering the CFL. It defaults to the one the solver was built
 with. On an unrecoverable failure this throws [`SolverFailure`](@ref) rather
-than grinding — see the note at the top of this file for why that is the
-behaviour worth having.
+than continuing with a collapsed timestep; see the implementation note at the
+top of this file.
 
-When `control.retries > 0` the CFL is lowered in place on each retry, so
-`solver.cfl` after a completed run tells you what it actually took. That is the
-number to put in the next run's `Numerics`.
+When `control.retries > 0`, the CFL is lowered in place on each retry.
+Consequently, `solver.cfl` after a completed run records the value used to
+complete the calculation and can be supplied to the next run's `Numerics`.
 """
 function run!(solver::Solver, Q, workspace::Workspace;
               tfinal, nmax::Int=typemax(Int), callback=nothing,
@@ -302,6 +303,11 @@ function run!(solver::Solver, Q, workspace::Workspace;
             solver.dt_prev = zero(eltype(Q))
             solver.rate_prev = zero(eltype(Q))
             dt_seen = 0.0
+            # Instants between the savepoint and the failure were visited on a
+            # trajectory that no longer exists. Re-arm them so the replacement
+            # trajectory visits them too; see `rewind!` for what is and is not
+            # rolled back.
+            rewind_callbacks!(callback, save.t, save.step)
             rank == 0 && @warn "run!: $(failure.reason) at step $(failure.step); " *
                                "rolled back to step $(save.step) and lowered cfl to " *
                                "$(solver.cfl) (retry $attempts of $(control.retries))"
@@ -325,7 +331,21 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # stalls the run rather than firing anything.
         dt = min(dt, tfinal - solver.t)
         gap = callback_next_time(callback, solver) - solver.t
-        gap > 0 && (dt = min(dt, gap))
+        # Soft landing. Clipping directly to the gap lands exactly but leaves an
+        # arbitrarily small step before a scheduled instant: a dump every 1e-4
+        # against a CFL step of 3.7e-5 gives steps of 3.7, 3.7, 3.7, 0.15 e-5.
+        # That wastes a step and, with `max_growth` enabled, throttles the
+        # several that follow. Dividing the remaining gap into `ceil(gap/dt)`
+        # equal steps lands equally exactly with no step below dt/2.
+        #
+        # This applies to scheduled callback times only, not to `tfinal`. At the
+        # endpoint no following step remains to be affected, and restricting the
+        # change here leaves a run without scheduled callbacks stepping as it did
+        # before, which is the condition the validation guards were measured
+        # under.
+        if gap > 0 && gap < dt * control.landing_steps
+            dt = gap / ceil(gap / dt)
+        end
         step!(solver, Q, workspace, dt)
         solver.t += dt
         solver.step += 1
@@ -386,18 +406,17 @@ end
 """
     mpi_main(body; comm = MPI.COMM_WORLD, exitcode = 1)
 
-Run `body()` under a top-level error guard scaled for large rank counts: a full
-backtrace from rank 0, a single line from any other rank that fails, then
-`MPI.Abort`. Returns whatever `body` returns.
+Run `body()` under a top-level error guard for large rank counts. Rank 0 prints a
+full backtrace, other failing ranks print one line, and the function then calls
+`MPI.Abort`. The return value is that of `body`.
 
-Wrap the driver of an MPI run in this rather than letting an exception escape.
-For interrupts rather than exceptions, pass `--handle-signals=no` to `julia`;
-Ctrl-C arriving while a rank sits inside an MPI call is printed by Julia's
-signal handler, which this cannot intercept.
+MPI drivers should use this guard to prevent an uncaught exception from
+producing a full backtrace on every rank. For interrupts, pass
+`--handle-signals=no` to `julia`; this function cannot intercept Julia's signal
+handler while a rank is inside an MPI call.
 
-Set `CL_ERROR_BACKTRACE=all` when a failure is rank-local and the one-line form
-does not say enough — rank 0 stays blocked in a collective in that case, so
-nothing would otherwise print a backtrace.
+Set `CL_ERROR_BACKTRACE=all` for a rank-local failure when rank 0 may remain
+blocked in a collective and cannot print the primary backtrace.
 
 ```julia
 mpi_main() do

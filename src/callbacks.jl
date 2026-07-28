@@ -18,22 +18,23 @@
 #
 # Rank agreement is the trap worth designing out rather than documenting. `t`
 # and `step` advance identically on every rank (`dt` comes out of an Allreduce),
-# so `AtTime` and `EveryStep` are globally consistent for free. `WhenState` is
-# the only one that reads the field, and it reduces its own condition across the
-# communicator before answering — so a user predicate that happens to be true on
-# one rank alone still fires everywhere, and cannot wedge the run.
+# so `AtTime`, `EveryTime` and `EveryStep` are globally consistent for free.
+# `WhenState` is the only one that reads the field, and it reduces its own
+# condition across the communicator before answering — so a user predicate that
+# happens to be true on one rank alone still fires everywhere, and cannot wedge
+# the run.
 
 """
     Trigger
 
 Decides *when* a [`Callback`](@ref) fires. Implementations are [`AtTime`](@ref),
-[`EveryStep`](@ref), and [`WhenState`](@ref).
+[`EveryTime`](@ref), [`EveryStep`](@ref), and [`WhenState`](@ref).
 
-A trigger implements `fired!(trigger, solver, Q) -> Bool`, called after each
-completed step, and may optionally implement `next_time(trigger, solver)` to ask
-`run!` to clip `dt` so a step lands exactly on a scheduled instant. Whatever it
-does, it must answer identically on every rank — see the note at the top of this
-file.
+A trigger implements `fired!(trigger, solver, Q) -> Bool`, which is called after
+each completed step. It may also implement `next_time(trigger, solver)` so that
+`run!` can end a step at a scheduled instant, and `rewind!(trigger, t, step)` to
+restore its schedule after a `StepControl` rollback. The verdict must be
+identical on every rank; see the implementation note at the top of this file.
 """
 abstract type Trigger end
 
@@ -43,13 +44,29 @@ abstract type Trigger end
 next_time(::Trigger, solver) = Inf
 
 """
+    rewind!(trigger, t, step)
+
+Restore a trigger's schedule to `(t, step)`. [`run!`](@ref) calls this method
+when `StepControl` restores a savepoint. Scheduled instants between the
+savepoint and the failed state are then visited on the replacement trajectory.
+
+Only the schedule is restored; callback effects are not reversed. Repeatable
+effects, such as an output file, can be evaluated again at the same instant.
+Non-repeatable effects cannot be reversed by the trigger. Consequently,
+[`WhenState`](@ref) remains in its existing armed state: a `SwitchableBC` that
+has already switched cannot be restored to its earlier condition.
+
+The default is a no-op, which is correct for any trigger reading only `step`.
+"""
+rewind!(::Trigger, t, step) = nothing
+
+"""
     AtTime(t)
     AtTime([t1, t2, ...])
 
-Fire once at each listed time. `run!` clips `dt` so a step lands exactly on the
-next one rather than overshooting it, which is what makes this usable for
-switching behaviour at a prescribed instant. Times are visited in order and each
-fires once; one already behind `solver.t` fires on the next completed step.
+Fire once at each listed time. `run!` shortens `dt` so that a step ends at the
+next scheduled instant. Times are visited in order and each fires once; a time
+already behind `solver.t` fires on the next completed step.
 """
 mutable struct AtTime <: Trigger
     times::Vector{Float64}
@@ -68,10 +85,74 @@ function fired!(trigger::AtTime, solver, Q)
     # dt was clipped to land on `target`, so equality is the expected case; the
     # tolerance only absorbs the rounding in `solver.t += dt`. It is orders of
     # magnitude below any dt, so this cannot fire a step early.
-    solver.t >= target - 8eps(max(target, one(target))) || return false
+    solver.t >= target - _land_tol(target) || return false
     trigger.next += 1
     return true
 end
+
+function rewind!(trigger::AtTime, t, step)
+    idx = findfirst(target -> target > t + _land_tol(target), trigger.times)
+    trigger.next = idx === nothing ? length(trigger.times) + 1 : idx
+    return nothing
+end
+
+# The landing tolerance shared by both time triggers, defined once so that the
+# schedule restored by `rewind!` cannot disagree with the one `fired!` reads.
+_land_tol(t) = 8eps(max(abs(t), one(t)))
+
+"""
+    EveryTime(interval; start = 0.0)
+
+Fire at `start + n*interval` for every integer `n`, with `run!` ending a step at
+each instant. This is the unbounded counterpart to [`AtTime`](@ref) and produces
+an evenly spaced output schedule. Unlike a materialized
+`AtTime(start:interval:tfinal)`, it requires no advance `tfinal` and can resume
+from a restart. The next instant is computed from `solver.t` when the trigger is
+first consulted; a run resumed at t = 0.55 with `interval = 0.1` therefore fires
+next at 0.6.
+
+Globally consistent without a reduction, since `t` is the same on every rank.
+"""
+mutable struct EveryTime <: Trigger
+    interval::Float64
+    start::Float64
+    next::Float64      # NaN until the first query anchors it to solver.t
+end
+
+function EveryTime(interval::Real; start::Real=0.0)
+    interval > 0 || throw(ArgumentError("EveryTime interval must be positive"))
+    return EveryTime(Float64(interval), Float64(start), NaN)
+end
+
+# Instants are computed as start + n*interval rather than by accumulating the
+# interval, so that a long run's schedule does not drift with the rounding in t.
+function _instant_after(trigger::EveryTime, t)
+    n = max(floor((t - trigger.start) / trigger.interval) + 1, 0.0)
+    inst = trigger.start + n * trigger.interval
+    # floor is exact, the division is not. An instant landing on or behind t
+    # would fire immediately and then again on the next step.
+    while inst <= t + _land_tol(t)
+        n += 1
+        inst = trigger.start + n * trigger.interval
+    end
+    return inst
+end
+
+function next_time(trigger::EveryTime, solver)
+    isnan(trigger.next) && (trigger.next = _instant_after(trigger, solver.t))
+    return trigger.next
+end
+
+function fired!(trigger::EveryTime, solver, Q)
+    target = next_time(trigger, solver)
+    solver.t >= target - _land_tol(target) || return false
+    trigger.next = _instant_after(trigger, solver.t)
+    return true
+end
+
+# Re-anchoring on the next query is sufficient, since the schedule is a function
+# of t alone.
+rewind!(trigger::EveryTime, t, step) = (trigger.next = NaN; nothing)
 
 """
     EveryStep(interval = 1)
@@ -95,11 +176,10 @@ fired!(trigger::EveryStep, solver, Q) = solver.step % trigger.interval == 0
 Fire when `condition(solver, Q)` first returns `true`, or on every step it does
 when `once = false`.
 
-The condition is evaluated per rank and then reduced across the communicator, so
-it may legitimately be true on only the rank owning a boundary plane. **Do not
-reduce inside the condition**; that would be a second collective and the
-framework already did the first one. Reading a plane of a field and returning a
-local verdict is the intended shape.
+The condition is evaluated on each rank and reduced across the communicator, so
+it may be true only on the rank that owns a boundary plane. The condition must
+not perform this reduction itself because the framework already supplies the
+collective. A condition may read a local field plane and return a local verdict.
 """
 mutable struct WhenState{F} <: Trigger
     condition::F
@@ -126,8 +206,8 @@ Pair a [`Trigger`](@ref) with `effect!(solver, Q)`, run after a completed step
 (and after any filtering) when the trigger fires. Returning `true` from
 `effect!` asks `run!` to stop; any other value continues.
 
-Pass one to `run!` as `callback=`, or several as a tuple. A bare function is
-still accepted there and runs every step, so existing callers are unaffected.
+Pass one to `run!` as `callback=`, or pass several as a tuple. A bare function
+is also accepted and runs after every step.
 """
 struct Callback{Tr<:Trigger,F}
     trigger::Tr
@@ -147,6 +227,14 @@ callback_next_time(cbs::Tuple, solver) =
         callback_next_time(Base.tail(cbs), solver))
 # Bare callables carry no schedule. Less specific than every method above.
 callback_next_time(_, solver) = Inf
+
+rewind_callbacks!(::Nothing, t, step) = nothing
+rewind_callbacks!(::Tuple{}, t, step) = nothing
+rewind_callbacks!(cb::Callback, t, step) = rewind!(cb.trigger, t, step)
+rewind_callbacks!(cbs::Tuple, t, step) =
+    (rewind_callbacks!(first(cbs), t, step);
+     rewind_callbacks!(Base.tail(cbs), t, step))
+rewind_callbacks!(_, t, step) = nothing
 
 run_callbacks!(::Nothing, solver, Q) = false
 run_callbacks!(::Tuple{}, solver, Q) = false
@@ -191,20 +279,19 @@ end
     ProgressLog(; every = 10, quantity = nothing, label = "", tfinal = Inf,
                   imbalance = false, io = stdout)
 
-A ready-made progress line, returned as a [`Callback`](@ref) to hand straight to
-`run!`. Reports step, `t`, `dt`, and wall time per step from `solver.wall_step`.
+Construct a [`Callback`](@ref) that reports the step, `t`, `dt`, and wall time
+per step from `solver.wall_step`.
 
-`quantity(solver, Q) -> Real` adds one scalar column, `label` names it. It is
-called on **every** rank and may reduce (`volume_integral` and friends do), so
-write it as a normal collective diagnostic and let this handle the rank guard.
+`quantity(solver, Q) -> Real` adds one scalar column, named by `label`. It is
+called on every rank and may reduce, as `volume_integral` and related diagnostics
+do. Only output is restricted to rank 0.
 
 `tfinal` adds percent-complete and a projected remaining time, from the mean
 step so far rather than the last one. `imbalance = true` adds the min/max spread
-of step time across ranks, at the cost of two extra reductions per report — the
-cheap way to see a decomposition load-imbalance without a profiler.
+of step time across ranks at the cost of two additional reductions per report.
 
-Output is flushed on every line. On a cluster stdout is block-buffered through
-the launcher, and an unflushed run is indistinguishable from a hung one.
+Output is flushed on every line because launchers commonly block-buffer cluster
+stdout; flushing preserves progress visibility during a run.
 
 ```julia
 run!(solver, Q; tfinal = 1.0,

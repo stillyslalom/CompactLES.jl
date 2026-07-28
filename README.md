@@ -22,10 +22,11 @@ properties for shock and subgrid regularization, and runs on shared-memory
 threads and distributed MPI ranks with no dependencies beyond `MPI.jl`,
 `LinearAlgebra`, and `Printf`.
 
-The solver is designed around a clean split between what you simulate (a
-`Problem`: gas model, geometry, boundary conditions, initial state) and how it
-is discretized (a `Numerics`: resolution, scheme order, CFL, process grid). The
-same problem re-runs at any resolution or scheme order without change.
+The frontend separates the physical specification (a `Problem`: gas model,
+geometry, boundary conditions, and initial state) from the discretization (a
+`Numerics`: resolution, scheme order, CFL, and process grid). The same problem
+can therefore be evaluated at different resolutions or scheme orders without
+modification.
 
 ```julia
 using MPI; MPI.Init(threadlevel=:funneled)
@@ -45,8 +46,9 @@ run!(solver, Q; tfinal=1.0)
 
 - **High-order compact spatial operators.** Sixth-order tridiagonal Lele
   derivatives by default; a tenth-order pentadiagonal derivative is available,
-  and you can supply your own compact scheme. An eighth-order Gaitonde–Visbal
-  compact filter provides dealiasing and near-wall dissipation control.
+  and the operator interface accepts custom compact schemes. An eighth-order
+  Gaitonde–Visbal compact filter provides dealiasing and near-wall dissipation
+  control.
 - **Shock and subgrid capturing.** Cook (2007) artificial shear viscosity,
   bulk viscosity, conductivity, and species diffusivity, driven by
   high-derivative sensors — no Riemann solvers or flux limiters.
@@ -60,14 +62,14 @@ run!(solver, Q; tfinal=1.0)
   kinetic energy, and resolved dissipation — metric-aware and MPI-reduced.
 - **Curvilinear geometry.** Cartesian, cylindrical (r, θ, z), and spherical
   (r, θ, φ) coordinates, with regularized treatment of the cylindrical axis and
-  the spherical origin and poles. Collapsed dimensions give cheap 1-D and 2-D
+  the spherical origin and poles. Collapsed dimensions provide efficient 1-D and 2-D
   (including axisymmetric-with-swirl) runs.
 - **Stretched meshes.** Per-dimension monotone grid clustering that composes
   with any coordinate system.
 - **Boundary conditions.** Periodic, slip / no-slip (adiabatic or isothermal)
   walls, characteristic NSCBC subsonic inflow and outflow, and time-dependent
   Dirichlet forcing (pistons, oscillating drivers, supersonic inflow).
-- **Parallelism.** MPI 3-D domain decomposition with a genuinely distributed
+- **Parallelism.** MPI 3-D domain decomposition with a distributed
   tridiagonal / pentadiagonal solve for the globally coupled compact schemes,
   plus shared-memory threading over grid lines.
 - **I/O.** Dependency-free per-rank checkpoint/restart and parallel VTK
@@ -82,8 +84,8 @@ repository root:
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 ```
 
-`MPI.jl` ships its own MPI binary by default, so no system MPI installation is
-required to get started.
+`MPI.jl` provides an MPI binary by default, so initial use does not require a
+system MPI installation.
 
 ## Running
 
@@ -101,7 +103,7 @@ mpiexec -n 4 julia --project=. -t 2 examples/shock_tube.jl
 mpiexec -n 2 julia --project=. -t 2 examples/piston_driver.jl
 ```
 
-If `mpiexec` is not on your `PATH`, use the launcher bundled with `MPI.jl`:
+If `mpiexec` is not on `PATH`, obtain the launcher configured for `MPI.jl`:
 
 ```
 julia --project=. -e 'using MPI; print(MPI.mpiexec(f -> f))'
@@ -143,7 +145,7 @@ A **`Numerics`** bundles the discretization and runtime choices:
 ```julia
 num = Numerics(
     n_global        = (256, 64, 64),      # global grid
-    deriv           = lele_d1_6(),        # or lele_d1_10(), or your own
+    deriv           = lele_d1_6(),        # or lele_d1_10(), or a custom scheme
     filt            = compact_filter(0.45),
     art             = ArtParams(enabled=true),   # Cook artificial properties
     cfl             = 0.5,
@@ -153,8 +155,8 @@ num = Numerics(
     stretch         = (nothing, nothing, nothing))  # optional grid clustering
 ```
 
-Then `setup` marries the two and returns the solver plus the initialized
-conserved state, and `run!` advances it:
+`setup` combines the two specifications and returns the solver with its
+initialized conserved state; `run!` advances that state:
 
 ```julia
 solver, Q = setup(prob, num)
@@ -163,9 +165,9 @@ run!(solver, Q; workspace, tfinal=0.25, nmax=100_000,
      callback=(solver, Q) -> ...)
 ```
 
-For progress reporting, `ProgressLog` is a ready-made callback that prints step,
-time, `dt`, wall time per step, percent complete and a projected finish, plus one
-scalar diagnostic of your choosing:
+For progress reporting, `ProgressLog` provides a callback that prints the step,
+time, `dt`, wall time per step, completion percentage, projected finish, and an
+optional scalar diagnostic:
 
 ```julia
 run!(solver, Q; tfinal=0.25,
@@ -174,14 +176,14 @@ run!(solver, Q; tfinal=0.25,
 ```
 
 `quantity` runs on every rank and may reduce; only the printing is rank-guarded.
-Output is flushed every line, which is what makes it usable under a batch
-launcher. `imbalance=true` adds the min/max spread of step time across ranks.
+Each line is flushed so that progress remains visible through a batch launcher.
+`imbalance=true` adds the minimum and maximum step times across ranks.
 `run!` records `solver.wall_step` and `solver.wall_total` whether or not anything
 reports them.
 
 Initial-condition and Dirichlet-forcing functions are plain, pure functions of
-physical coordinates (and time, for forcing). A convergence study is just a loop
-over `Numerics` with the same `Problem`.
+physical coordinates (and time, for forcing). A convergence study evaluates the
+same `Problem` with a sequence of `Numerics` values.
 
 ## Capabilities at a glance
 
@@ -199,52 +201,52 @@ over `Numerics` with the same `Problem`.
 | Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`) — see [CALIBRATION.md](reference/CALIBRATION.md) |
 | Diagnostics     | `volume_integral`, `plane_profile`, `mix_width`, `molecular_mixing`, `species_pdf`, `tke_profile`, `dissipation_rate` |
 | Failure handling| `StepControl` timestep floors (incl. a `PLANCK_TIME` failsafe), positivity checking, and rollback-with-CFL-backoff; `SolverFailure` |
-| Run control     | `Callback` with `AtTime` (lands `dt` exactly on a time), `EveryStep`, or `WhenState` triggers; `ProgressLog` for progress/timing output; `SwitchableBC` for boundaries that change mid-run |
-| I/O             | `save_checkpoint` / `load_checkpoint!`, `save_vtk` |
+| Run control     | `Callback` with `AtTime` / `EveryTime` (both landed on exactly), `EveryStep`, or `WhenState` triggers; `ProgressLog` for progress/timing output; `SwitchableBC` for boundaries that change mid-run |
+| State queries   | `refresh_primitives!`, `mixture_density`, `velocity`, `mass_fraction`, `boundary_plane`, for reading the in-flight state independently of the conserved layout |
+| I/O             | `save_checkpoint` / `load_checkpoint!`, `save_vtk` (field selection, derived fields, rectilinear or curvilinear grid), `FieldWriter` (numbered frames + `.pvd` time collection) |
 
 ## Timestep and CFL near coordinate singularities
 
-Worth understanding before running resolved-angle polar grids. `compute_dt`
-uses true physical spacings (`inv_h` carries the metric scale factor and any
-stretching Jacobian), so the estimate is *correct* at a singularity — it will
-not silently under-restrict. But correct is not the same as cheap, and the
-three regimes behave very differently:
+Resolved-angle polar grids impose timestep restrictions that are absent from
+collapsed-coordinate calculations. `compute_dt` uses physical spacings:
+`inv_h` includes the metric scale factor and any stretching Jacobian. The
+estimate therefore remains conservative near a coordinate singularity, but the
+computational cost differs among three regimes:
 
 - **Collapsed angular dimension** (1-D radial, axisymmetric, axisymmetric with
-  swirl): no pathology at all. The skipped dimension contributes no advective
+  swirl): the skipped dimension contributes no advective
   term, so `dt` is set by the radial spacing exactly as in a Cartesian run.
-  This is why `examples/converging_shock.jl` runs at a sane timestep right onto
-  the axis.
+  Consequently, `examples/converging_shock.jl` retains an ordinary timestep as
+  the shock reaches the axis.
 - **Resolved θ in cylindrical**: the azimuthal spacing is r·Δθ, so at the first
   half-offset node (r ≈ R/2N_r) the acoustic limit is tighter than the radial
   one by roughly N_θ/π. With N_θ = 64 that is a ~20× penalty, and it is a
   property of the polar grid, not of this implementation — every explicit polar
   solver pays it.
-- **Spherical**: worse, because the origin and the poles compound. The φ
-  spacing is r·sinθ·Δφ, which collapses both as r → 0 and as sinθ → 0; at the
-  first node off a pole, sinθ ≈ Δθ/2.
+- **Spherical**: the origin and poles impose simultaneous restrictions. The φ
+  spacing is r·sinθ·Δφ, which approaches zero both as r → 0 and as sinθ → 0;
+  at the first node off a pole, sinθ ≈ Δθ/2.
 
 The diffusive limit degrades faster still (it scales with the *square* of the
 inverse spacing), and artificial bulk viscosity peaks exactly where a
-converging shock reaches the axis — the worst-case combination. If you run
-resolved-angle problems seriously, plan on one of the standard remedies:
+converging shock reaches the axis. Resolved-angle calculations may therefore
+require one of the standard remedies:
 azimuthal mode truncation or radius-dependent filter strength near the axis, an
 implicit/IMEX treatment of the azimuthal direction, or local time stepping.
 None is implemented here.
 
-Collapsed angular dimensions have one subtlety the loop above would otherwise
-miss: the direction is skipped entirely, but the geometric source ρu_θ²/r still
-drives u_r stiffly at small r. For axisymmetric-with-swirl the neglected rate is
+In collapsed angular dimensions, the timestep loop skips the angular direction,
+but the geometric source ρu_θ²/r can still drive u_r stiffly at small r. For
+axisymmetric flow with swirl, the omitted rate is
 |u_θ|/r, which at the first node is the same order as the radial acoustic rate —
-enough to eat the CFL safety margin without ever appearing in the estimate.
+large enough to consume the CFL margin if omitted from the estimate.
 `curvature_rate` adds it (cylindrical and spherical, only for collapsed angular
 dimensions, since resolved ones already cover it through the advective term).
 
 `dt_report(solver, Q)` names the global limiter — value, owning rank, index,
 physical coordinates, direction, and whether it is acoustic, diffusive, or
-curvature-driven. Call it every few hundred steps to confirm a run is limited by
-the physics you care about rather than by the azimuthal spacing at a
-singularity.
+curvature-driven. Periodic evaluation can distinguish a physical timestep limit
+from one imposed by azimuthal spacing near a singularity.
 
 ## Examples
 
@@ -260,10 +262,28 @@ singularity.
 - **Checkpoints:** `save_checkpoint(solver, Q, "prefix")` writes one dependency-free
   binary file per rank; `load_checkpoint!(solver, Q, "prefix")` restores it. Restarts
   require the same global grid and decomposition.
-- **Visualization:** `save_vtk(solver, Q, "prefix")` writes per-rank `.vtr` plus a
-  `.pvtr` container with density, velocity, pressure, temperature, and mass
-  fractions on the physical grid (stretch mappings included). Open the `.pvtr`
-  in ParaView or VisIt.
+- **Visualization:** `save_vtk(solver, Q, "prefix")` writes one piece per rank plus
+  a parallel container on the physical grid, including stretch mappings. Open the
+  container in ParaView or VisIt. A grid with a resolved angular dimension is
+  written as a curvilinear `.pvts` with explicit Cartesian positions and rotated
+  velocity, so a cylindrical or spherical run renders as an annulus or shell;
+  every other grid is written as a rectilinear `.pvtr`.
+- **Field selection:** `save_vtk(...; fields = (:rho, :velocity, :schlieren, :sensor))`.
+  Besides the primitives, several derived fields are available at little cost
+  from state the solver already holds: `:vorticity`, `:qcriterion`,
+  `:divergence`, `:mach`, `:schlieren` (|∇ρ|), and the artificial-property
+  internals `:sensor`, `:strain_mag`, `:mu_art`, `:beta_art`, `:kappa_art`,
+  `:D_art`, which report the local action of the regularization.
+- **Subsampling:** `save_vtk(...; stride = 4)`, or a per-dimension 3-tuple. Points
+  are selected on the *global* index, so the per-rank pieces remain aligned and
+  still tile. This reduces file size rather than compute, since the fields are
+  still built over the whole block before sampling; at 512³ a stride of 4 reduces
+  a 2.7 GB dump to 43 MB.
+- **Time series:** `Callback(EveryTime(Δt), FieldWriter("out/field"))` dumps on an
+  evenly spaced *time* schedule, with `run!` shortening the last few steps so
+  that one ends exactly at each instant, and writes an `out/field.pvd` collection
+  recording each frame's physical time. Open the `.pvd` to animate against time
+  rather than frame index.
 
 ## Testing
 
@@ -289,25 +309,25 @@ across rank boundaries, and telescoping flux conservation. The multi-rank suite
 exits nonzero on any failure, so it is CI-gateable.
 
 Coverage is measured with `julia --code-coverage=user` over all three suites
-(and the MPI one at more than one rank count), then summarised by
-`bench/coverage.jl`. **Read the denominator, not the percentage.** Julia marks
-lines belonging to never-compiled methods as non-executable, so an entirely
-untested function drops out of the denominator instead of counting as a miss —
-`io.jl` and `nscbc.jl` both reported 100% while `save_vtk` and the whole
-`NSCBCInflowBC` path had never been compiled. A run that adds tests should be
-expected to *increase* the executable-line count, and that increase is the real
-measure of what got covered.
+(and the MPI suite at multiple rank counts), then summarized by
+`bench/coverage.jl`. The executable-line denominator must be considered with the
+percentage: Julia marks lines in never-compiled methods as non-executable, so an
+untested function can be omitted from the denominator. For example, `io.jl` and
+`nscbc.jl` once reported 100% while `save_vtk` and the complete
+`NSCBCInflowBC` path had not been compiled. Additional tests may therefore
+increase the executable-line count; that increase represents newly exercised
+code.
 
 `test/validation.jl` is the shock-capturing battery: Lax and Sedov–Taylor and
 Noh against closed-form solutions, Shu–Osher and Woodward–Colella against stored
-high-resolution profiles from this code. The distinction is kept explicit in the
-file, because only the first kind can tell you the code is wrong. Noh is run in
+high-resolution profiles from this code. The distinction is explicit because
+only comparison with an independent solution tests absolute accuracy. Noh is run in
 all three geometries, which makes it the sharpest available probe of the axis
-and origin folds under a real strong shock, and its wall-heating number is the
-one to watch when the artificial-viscosity constants move.
+and origin folds under a strong shock; its wall-heating value is sensitive to
+changes in the artificial-viscosity constants.
 `reference/CALIBRATION.md` documents what those constants do, measured with
-`bench/artcal.jl` over the same cases — including the two operating limits the
-battery turned up: strong shocks want `cfl ≤ 0.15`, and the spherical origin
+`bench/artcal.jl` over the same cases, including two identified operating limits:
+strong shocks require `cfl ≤ 0.15`, and the spherical origin
 needs its initial data resolved over at least three cells.
 
 `test/convergence.jl` is the slower second line of defence: it prints *observed*
@@ -317,11 +337,11 @@ but only ≈3 wherever a boundary closure or a coordinate-singularity fold is
 active — closed domains, the cylindrical axis, the spherical origin. The error
 there is dominated by the first node or two off the wall or axis, which is also
 why the fold tolerances in the serial suite are looser than the interior ones.
-That is a property of the closure cascade rather than a defect, and a
-*collapsed* slope (≈0 rather than ≈3) is the signature to look for: a fold sign
-error produces O(1) error at the first node, which makes this the fastest way to
-localize the antipodal sign tables. Set `CL_RUN_TG=1` to add the Taylor–Green
-Re = 1600 dissipation history.
+The reduced order is a property of the closure cascade. A collapsed slope
+(approximately 0 rather than 3) indicates a fold-sign error: such an error
+produces O(1) error at the first node and localizes the fault to the antipodal
+sign tables. Set `CL_RUN_TG=1` to add the Taylor–Green Re = 1600 dissipation
+history.
 
 ## Status and limitations
 
@@ -339,8 +359,8 @@ particular warrants scrutiny before production use. Other current limitations:
 - Float64 only.
 - Strong shocks need `cfl ≤ 0.15`, well below the 0.5 default: a dispersive
   undershoot at the shock outruns the artificial viscosity and the state loses
-  positivity. Pass `StepControl(retries = 4)` and the solver will roll back and
-  lower the CFL itself rather than making you guess; see
+  positivity. `StepControl(retries = 4)` rolls back the state and lowers the CFL
+  automatically; see
   [CALIBRATION.md](reference/CALIBRATION.md).
 - The spherical origin will not take an initial discontinuity resolved over
   fewer than about three cells, nor a flow that converges to a singular state
@@ -350,7 +370,11 @@ particular warrants scrutiny before production use. Other current limitations:
   implemented.
 - NSCBC inflow transverse-term accounting is not yet implemented (outflow
   has it).
-- Output is checkpoint and VTK only — no HDF5/XDMF, no GPU path.
+- Output is checkpoint and VTK only — no HDF5/XDMF, no GPU path. VTK output is
+  one file per rank per frame, which does not survive large rank counts, and
+  restart requires the same rank count and decomposition as the run that wrote
+  it. Adjacent pieces abut without ghost overlap, so cell-based filters may show
+  seams at rank boundaries.
 - Wall boundary conditions assume coordinate-surface walls.
 - Soret/Dufour effects and reacting-chemistry models are not implemented;
   reactions can use the typed source interface.
