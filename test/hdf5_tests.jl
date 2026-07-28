@@ -68,6 +68,11 @@ using HDF5
             @test read(file["meta/step"]) == 17
             @test Int.(read(file["meta/n_global"])) == [72, 16, 16]
             @test read(file["meta/component_names"])[1] == "rho_a"
+            # Fixed-length rather than variable-length, which parallel HDF5
+            # refuses to write. A serialized-backend workstation writes a VL
+            # string happily, so nothing else here would catch the regression.
+            @test !HDF5.API.h5t_is_variable_str(
+                HDF5.datatype(file["meta/component_names"]))
         end
     end
     MPI.Barrier(comm)

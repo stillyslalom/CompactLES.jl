@@ -60,6 +60,46 @@ function shared_dataset(file, name::AbstractString, ::Type{T}, dims,
     return file[name]
 end
 
+# --- Rank-independent metadata ----------------------------------------------
+#
+# Metadata carries the same value on every rank, but it cannot simply be written
+# from rank 0 under the parallel backend: that file is open on the MPI-IO
+# driver, where creating a group or a dataset is collective and a rank skipping
+# one leaves the ranks with divergent file structure. So every rank reaches
+# every creation call, and the write that follows is independent and done by
+# rank 0 alone. Under the serialized backend rank 0 holds the file by itself and
+# both halves are its own.
+
+function write_meta!(g, name::AbstractString, value, rank::Int)
+    dtype = datatype(value)
+    dset = create_dataset(g, name, dtype, dataspace(value))
+    rank == 0 && write_dataset(dset, dtype, value)
+    close(dset)
+    return nothing
+end
+
+# A Julia String maps to a variable-length HDF5 datatype, and parallel HDF5
+# refuses to write one ("Parallel IO does not support writing VL or region
+# reference datatypes yet"), so string metadata goes out as fixed-length
+# null-padded records. HDF5.jl strips the padding on read and returns String.
+function write_strings!(g, name::AbstractString, strs, rank::Int)
+    width = maximum(ncodeunits, strs; init=1)
+    dtype = HDF5.Datatype(HDF5.API.h5t_copy(HDF5.API.H5T_C_S1))
+    HDF5.API.h5t_set_size(dtype, width)
+    HDF5.API.h5t_set_strpad(dtype, HDF5.API.H5T_STR_NULLPAD)
+    HDF5.API.h5t_set_cset(dtype, HDF5.API.H5T_CSET_UTF8)
+    dset = create_dataset(g, name, dtype, dataspace((length(strs),)))
+    if rank == 0
+        buf = zeros(UInt8, width, length(strs))
+        for (i, s) in enumerate(strs)
+            copyto!(view(buf, 1:ncodeunits(s), i), codeunits(s))
+        end
+        write_dataset(dset, dtype, buf)
+    end
+    close(dset)
+    return nothing
+end
+
 write_region3!(dset, region::BlockRegion, data) =
     (dset[region_ranges(region)...] = data)
 write_region4!(dset, region::BlockRegion, data, ncomp::Int) =
@@ -83,19 +123,15 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver, Q, prefix::AbstractStri
 
     with_shared_file(path, "w", comm) do file
         if has_parallel() || rank == 0
-            # Metadata is rank-independent, so under the serialized backend only
-            # rank 0 writes it; under the parallel backend every rank writes the
-            # same values collectively, which HDF5 requires for attributes.
-            if rank == 0
-                g = create_group(file, "meta")
-                g["format"] = CKPT_FORMAT
-                g["t"] = Float64(solver.t)
-                g["step"] = Int64(solver.step)
-                g["n_global"] = Int64[decomp.n_global...]
-                g["n_cons"] = Int64(n_cons)
-                g["n_species"] = Int64(solver.equations.n_species)
-                g["component_names"] = solver.equations.component_names
-            end
+            g = create_group(file, "meta")
+            write_meta!(g, "format", CKPT_FORMAT, rank)
+            write_meta!(g, "t", Float64(solver.t), rank)
+            write_meta!(g, "step", Int64(solver.step), rank)
+            write_meta!(g, "n_global", Int64[decomp.n_global...], rank)
+            write_meta!(g, "n_cons", Int64(n_cons), rank)
+            write_meta!(g, "n_species", Int64(solver.equations.n_species), rank)
+            write_strings!(g, "component_names",
+                           solver.equations.component_names, rank)
         end
         dims = (decomp.n_global..., n_cons)
         dset = shared_dataset(file, "state/Q", Float64, dims, comm)
@@ -190,35 +226,45 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
     path = string(prefix, ".h5")
 
     with_shared_file(path, "w", comm) do file
-        if rank == 0
+        if has_parallel() || rank == 0
             g = create_group(file, "meta")
-            g["t"] = Float64(solver.t)
-            g["step"] = Int64(solver.step)
-            g["n_global"] = Int64[nglobal...]
-            g["stride"] = Int64[st...]
-            g["curvilinear"] = Int64(curvilinear)
+            write_meta!(g, "t", Float64(solver.t), rank)
+            write_meta!(g, "step", Int64(solver.step), rank)
+            write_meta!(g, "n_global", Int64[nglobal...], rank)
+            write_meta!(g, "stride", Int64[st...], rank)
+            write_meta!(g, "curvilinear", Int64(curvilinear), rank)
             if !curvilinear
+                # The coordinate vectors are global, so every rank already holds
+                # the same values and none of this needs communication.
                 cg = create_group(file, "grid")
                 for d in 1:3
-                    cg["xyz"[d:d]] = _coarse_axis(solver, d, st, slice)
+                    write_meta!(cg, "xyz"[d:d],
+                                _coarse_axis(solver, d, st, slice), rank)
                 end
             end
         end
-        if curvilinear && mine
-            # One position per point, component first, so the sidecar can point
-            # XDMF's XYZ geometry straight at it.
-            pts = Array{Float64}(undef, 3, nlocal...)
-            for (kk, k) in enumerate(ranges[3]), (jj, j) in enumerate(ranges[2]),
-                (ii, i) in enumerate(ranges[1])
-                x, y, z = CompactLES._cartesian_position(solver.metric,
-                    xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))
-                pts[1, ii, jj, kk] = x
-                pts[2, ii, jj, kk] = y
-                pts[3, ii, jj, kk] = z
-            end
+        if curvilinear
+            # The dataset is created whether or not this rank holds part of the
+            # plane, for the reason the field loop below gives: rank 0 may be one
+            # of the ranks with nothing to write, and every rank must reach the
+            # creation call under the parallel backend.
             dset = shared_dataset(file, "grid/points", Float64, (3, nglobal...), comm)
-            r = region_ranges(region)
-            dset[1:3, r...] = pts
+            if mine
+                # One position per point, component first, so the sidecar can
+                # point XDMF's XYZ geometry straight at it.
+                pts = Array{Float64}(undef, 3, nlocal...)
+                for (kk, k) in enumerate(ranges[3]), (jj, j) in enumerate(ranges[2]),
+                    (ii, i) in enumerate(ranges[1])
+                    x, y, z = CompactLES._cartesian_position(solver.metric,
+                        xcoord(solver, 1, i), xcoord(solver, 2, j),
+                        xcoord(solver, 3, k))
+                    pts[1, ii, jj, kk] = x
+                    pts[2, ii, jj, kk] = y
+                    pts[3, ii, jj, kk] = z
+                end
+                r = region_ranges(region)
+                dset[1:3, r...] = pts
+            end
         end
         for (name, ncomp, data) in entries
             if !mine
