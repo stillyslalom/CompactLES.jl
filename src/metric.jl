@@ -17,9 +17,30 @@
 # spherical domains must exclude the axis/origin (r > 0) and the poles
 # (0 < θ < π). Set the `origin` keyword of `Solver` accordingly.
 
+"""Abstract supertype for orthogonal coordinate metrics."""
 abstract type Metric end
+
+"""
+    CartesianMetric()
+
+Cartesian `(x, y, z)` coordinates with unit scale factors.
+"""
 struct CartesianMetric   <: Metric end
+
+"""
+    CylindricalMetric()
+
+Cylindrical `(r, theta, z)` coordinates. Velocity components are physical
+components `(u_r, u_theta, u_z)` in the local orthonormal basis.
+"""
 struct CylindricalMetric <: Metric end   # (r, θ, z)
+
+"""
+    SphericalMetric()
+
+Spherical `(r, theta, phi)` coordinates with `theta` the polar angle. Velocity
+components are physical components in the local orthonormal basis.
+"""
 struct SphericalMetric   <: Metric end   # (r, θ_polar, φ)
 
 """

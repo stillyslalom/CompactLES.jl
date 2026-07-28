@@ -53,14 +53,36 @@
 # that is finite at its own cold limit, which is the prerequisite the roadmap
 # names. Fixing the singularity for ideal gases is a separate numerics decision.
 
+"""
+    EOS
+
+Abstract equation-of-state interface mapping between conserved and primitive
+thermodynamic variables. Concrete models also supply species enthalpies and
+the derivatives required by characteristic boundaries.
+"""
 abstract type EOS end
 
+"""
+    IdealSpecies(name, R, gamma)
+
+One calorically perfect species with specific gas constant `R` and constant
+heat-capacity ratio `gamma`. Use a consistent unit system for `R`, pressure,
+density, and temperature.
+"""
 struct IdealSpecies{T}
     name::String
     R::T          # specific gas constant
     gamma::T
 end
 
+"""
+    IdealMixture(species)
+
+Thermally and calorically ideal mixture assembled from `IdealSpecies` values.
+Mixture gas constant and heat capacities are mass-fraction averages. Species
+order defines the order expected in every `Prim.Y` tuple and species-indexed
+diagnostic.
+"""
 struct IdealMixture{T} <: EOS
     sp::Vector{IdealSpecies{T}}
     Rk::Vector{T}
@@ -78,6 +100,11 @@ end
 single_species(; gamma::Real=1.4, R::Real=1.0, name::String="gas") =
     IdealMixture([IdealSpecies{Float64}(name, Float64(R), Float64(gamma))])
 
+"""
+    nspecies(eos) -> Int
+
+Number of transported species represented by an equation of state.
+"""
 nspecies(eos::IdealMixture) = length(eos.sp)
 species_enthalpy(eos::IdealMixture, k::Int, T_ion) = eos.cpk[k] * T_ion
 

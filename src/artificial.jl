@@ -13,6 +13,17 @@
 # grid-based rather than strictly physical-space regularization, standard
 # practice and consistent with resolving power following the mesh.
 
+"""
+    ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0,
+              C_kappa=0.01, C_D=0.01)
+
+Cook-style artificial-property coefficients. `C_mu`, `C_beta`, `C_kappa`, and
+`C_D` scale artificial shear viscosity, bulk viscosity, conductivity, and
+species diffusivity respectively. These are numerical regularization
+parameters rather than material properties and are conditional on resolution,
+filter strength, and the flow regime. Set `enabled=false` to skip the complete
+artificial-property calculation.
+"""
 Base.@kwdef struct ArtParams{T}
     enabled::Bool = true
     C_mu::T    = 0.002

@@ -2,16 +2,29 @@ using CompactLES
 using Documenter
 using Literate
 
-# Tutorials are written as literate Julia scripts: runnable on their own with
-# `julia --project=docs docs/literate/<name>.jl`, and rendered here into pages
-# whose code Documenter executes at build time, so a tutorial that has gone
-# stale fails the build instead of quietly lying. The generated markdown is a
-# build artifact and is gitignored.
+# Default-CI tutorials are deliberately registered rather than discovered.
+# This keeps an expensive case study from entering every documentation build
+# merely because a script was added to the repository. Each registered script
+# is runnable on its own and is executed again by Documenter after Literate
+# converts it to markdown.
 const LITERATE_DIR = joinpath(@__DIR__, "literate")
 const TUTORIAL_DIR = joinpath(@__DIR__, "src", "tutorials")
+const TUTORIALS = [
+    "acoustic_pulse.jl",
+    "shock_tube_1d.jl",
+    "multicomponent_state.jl",
+    "radial_coordinates.jl",
+]
 
-isdir(LITERATE_DIR) && for script in sort(readdir(LITERATE_DIR; join=true))
-    endswith(script, ".jl") || continue
+mkpath(TUTORIAL_DIR)
+for page in readdir(TUTORIAL_DIR; join=true)
+    isfile(page) || continue
+    endswith(page, ".md") || continue
+    rm(page)
+end
+
+for name in TUTORIALS
+    script = joinpath(LITERATE_DIR, name)
     Literate.markdown(script, TUTORIAL_DIR; documenter=true)
 end
 
@@ -26,30 +39,58 @@ makedocs(;
     modules=[CompactLES],
     authors="Alex Ames and contributors",
     sitename="CompactLES.jl",
+    repo=Documenter.Remotes.GitHub("stillyslalom", "CompactLES.jl"),
     doctest=true,
-    # The manual intentionally covers only the established API while physics
-    # interfaces are still changing.
-    checkdocs=:none,
+    checkdocs=:exports,
+    treat_markdown_warnings_as_error=true,
+    pagesonly=true,
     format=Documenter.HTML(;
         canonical="https://stillyslalom.github.io/CompactLES.jl",
         edit_link="main",
     ),
     pages=[
         "Home" => "index.md",
-        "Getting started" => "getting-started.md",
         "Tutorials" => [
-            "2-D shock tube with a switchable boundary" =>
-                "tutorials/shock_tube_2d.md",
+            "Your first simulation" => "tutorials/acoustic_pulse.md",
+            "Regularizing a shock" => "tutorials/shock_tube_1d.md",
+            "A multicomponent state" => "tutorials/multicomponent_state.md",
+            "A radial coordinate" => "tutorials/radial_coordinates.md",
         ],
-        "Numerics" => [
-            "Compact operators" => "numerics/compact-operators.md",
-            "Parallel decomposition" => "numerics/parallelism.md",
-            "Validation" => "numerics/validation.md",
+        "How-to guides" => [
+            "Define a problem" => "how-to/problem-setup.md",
+            "Choose boundary conditions" => "how-to/boundary-conditions.md",
+            "Control and diagnose a run" => "how-to/run-control.md",
+            "Write output and restart" => "how-to/output-restart.md",
+            "Run in parallel" => "how-to/parallel-runs.md",
         ],
-        "API reference" => [
+        "Explanation" => [
+            "Governing equations" => "explanation/governing-equations.md",
+            "Spatial and temporal discretization" =>
+                "explanation/discretization.md",
+            "Filtering and artificial properties" =>
+                "explanation/regularization.md",
+            "Thermodynamics and species transport" =>
+                "explanation/thermodynamics.md",
+            "Curvilinear coordinates" => "explanation/geometry.md",
+            "Characteristic open boundaries" =>
+                "explanation/open-boundaries.md",
+            "The parallel compact solve" =>
+                "explanation/parallel-compact-solve.md",
+            "Verification, validation, and calibration" =>
+                "explanation/verification-validation.md",
+        ],
+        "Case studies" => [
+            "A boundary that changes type" =>
+                "case-studies/switchable-boundary.md",
+        ],
+        "Reference" => [
             "Problem setup" => "reference/frontend.md",
+            "Physics models" => "reference/physics.md",
+            "Geometry and boundaries" => "reference/geometry-boundaries.md",
             "Operators and decomposition" => "reference/operators.md",
             "Runtime and output" => "reference/runtime.md",
+            "Diagnostics" => "reference/diagnostics.md",
+            "Public index" => "reference/index.md",
         ],
     ],
 )

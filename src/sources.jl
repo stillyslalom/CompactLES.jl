@@ -19,6 +19,14 @@ end
 ConstantBodyForce(; acceleration=(0.0, -9.81, 0.0)) =
     ConstantBodyForce(acceleration)
 
+"""
+    add_source!(source, solver, dQ, Q, t)
+
+Add one explicit source to the already assembled conserved RHS at stage time
+`t`. Extend this function for a custom concrete source type and place instances
+in `Problem.sources`. The method runs on every rank and must preserve the
+conserved component layout owned by `solver.equations`.
+"""
 function add_source!(source::ConstantBodyForce, solver, dQ, Q, t)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d

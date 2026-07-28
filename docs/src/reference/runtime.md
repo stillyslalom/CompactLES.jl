@@ -7,6 +7,7 @@ CurrentModule = CompactLES
 ## Right-hand side and integration
 
 ```@docs
+Solver
 StepControl
 SolverFailure
 PLANCK_TIME
@@ -15,12 +16,14 @@ compute_rhs!
 apply_bcs!
 compute_dt
 dt_report
+max_rate
 step!
 run!
 filter_state!
+mpi_main
 ```
 
-## Step callbacks and switchable boundaries
+## Step callbacks
 
 Triggers fire only between completed steps and produce the same verdict on every
 rank. These requirements preserve collective ordering; the implementation note
@@ -38,9 +41,8 @@ EveryTime
 EveryStep
 WhenState
 Callback
+ProgressLog
 rewind!
-SwitchableBC
-switch!
 ```
 
 ## Reading the state between steps
@@ -95,4 +97,14 @@ save_vtk
 DEFAULT_VTK_FIELDS
 container_extension
 FieldWriter
+```
+
+## Script argument helpers
+
+Repository examples and benchmark drivers use a defaults `NamedTuple` as their
+command-line schema.
+
+```@docs
+script_args
+script_grid
 ```

@@ -27,6 +27,18 @@
 # grad_u[d,d] carries curvature contributions and the wave analysis would need the
 # metric terms.
 
+"""
+    NSCBCOutflowBC(; pinf, sigma=0.25, Lref=0.0, beta_t=-1.0)
+
+Subsonic characteristic outflow. The single incoming acoustic amplitude is
+relaxed toward far-field pressure `pinf`; pressure is not imposed pointwise.
+`sigma` sets relaxation strength, `Lref <= 0` selects the domain length normal
+to the face, and negative `beta_t` selects local-Mach transverse coupling.
+
+Supersonic outflow points receive no correction. The current LODI formulation
+is intended for Cartesian faces and radial or axial curvilinear faces whose
+normal metric scale factor is one.
+"""
 Base.@kwdef struct NSCBCOutflowBC <: BoundaryCondition
     pinf::Float64            # far-field pressure target
     sigma::Float64 = 0.25    # relaxation strength (0.2–0.6 typical)
@@ -159,6 +171,22 @@ end
 # expression in the point loop went dynamic too. `F` is `Nothing` when no
 # target is supplied, which the `bc.target !== nothing` test then resolves at
 # compile time.
+"""
+    NSCBCInflowBC(; u, T_ion, Y=[1.0], eta_u=0.28, eta_T=0.28,
+                  eta_t=0.28, eta_Y=0.28, Lref=0.0, target=nothing)
+
+Subsonic characteristic inflow. Incoming acoustic, entropy, transverse, and
+species waves relax toward target velocity `u`, temperature `T_ion`, and mass
+fractions `Y`; the outgoing acoustic wave remains determined by the interior.
+
+`target` may be a stage-time function `(x, y, z, t) -> Prim` overriding the
+constant targets pointwise. Its state must contain temperature and the full
+composition. `Lref <= 0` selects the domain length normal to the face.
+
+Use `DirichletBC` rather than NSCBC inflow for a supersonic or deliberately
+full-state-forced boundary. The current LODI formulation is intended for faces
+whose normal metric scale factor is one.
+"""
 Base.@kwdef struct NSCBCInflowBC{F} <: BoundaryCondition
     u::NTuple{3,Float64}            # target velocity (coordinate-aligned)
     T_ion::Float64                  # target temperature

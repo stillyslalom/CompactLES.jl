@@ -10,13 +10,45 @@
 # are added by subtyping BoundaryCondition and defining
 # `enforce!(bc, Q, solver, dim, side)`.
 
+"""
+    BoundaryCondition
+
+Abstract supertype for physical-face conditions. A new condition implements
+hard state enforcement with `enforce!`, an RHS characteristic correction with
+`correct_rhs!`, or both. Periodic and coordinate-fold behavior must also be
+declared during solver setup.
+"""
 abstract type BoundaryCondition end
 
+"""Periodic continuation through the opposite face of one dimension."""
 struct PeriodicBC <: BoundaryCondition end
+
+"""
+    SlipWallBC()
+
+Impermeable inviscid wall: remove normal velocity while retaining tangential
+velocity. The grid is node-centered and includes the wall point.
+"""
 struct SlipWallBC <: BoundaryCondition end
+
+"""
+    NoSlipWallBC(; Twall=NaN)
+
+Impermeable viscous wall with zero velocity. The default non-finite `Twall`
+selects an adiabatic wall; a finite value selects an isothermal wall and uses
+the EOS to construct its internal energy.
+"""
 Base.@kwdef struct NoSlipWallBC <: BoundaryCondition
     Twall::Float64 = NaN   # NaN → adiabatic; finite → isothermal wall
 end
+
+"""
+    ExtrapolationBC()
+
+Copy the adjacent interior state onto the physical boundary plane. This simple
+zero-normal-gradient approximation is not a characteristic non-reflecting
+condition and should be justified for the intended flow.
+"""
 struct ExtrapolationBC <: BoundaryCondition end
 
 """

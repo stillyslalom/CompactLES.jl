@@ -3,6 +3,12 @@
 # discretization consumes this interface without reconstructing a layout from
 # the EOS species count.
 
+"""
+    EquationSet
+
+Abstract owner of conserved-component indices, names, primitive conversion,
+and coordinate-fold parity. `NavierStokes1T` is the current implementation.
+"""
 abstract type EquationSet end
 
 """

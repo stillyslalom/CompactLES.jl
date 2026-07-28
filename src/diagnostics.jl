@@ -346,7 +346,7 @@ the total viscosity: molecular μ₀ plus the artificial μ\\* and β\\*. The
 artificial terms represent the subgrid model in this scheme and can dominate
 the energy sink at a shock; they are therefore included in the reported rate.
 
-Calls [`compute_primitives_and_gradients!`](@ref) and `compute_artificial!`, so
+Calls `compute_primitives_and_gradients!` and `compute_artificial!`, so
 the result is independent of the current RK stage. This requires one additional
 gradient pass, so the diagnostic is intended for periodic rather than per-step
 evaluation. Collective.

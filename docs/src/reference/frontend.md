@@ -16,20 +16,10 @@ conserved_from_prim
 tanh_blend
 ```
 
-## Thermodynamics
-
-```@docs
-Nasa9Interval
-Nasa9Species
-Nasa9Mixture
-read_nasa9
-```
-
-## Coordinates
+## Coordinate indexing
 
 ```@docs
 xcoord
+global_xcoord
 gidx
-Stretch
-sine_cluster
 ```
