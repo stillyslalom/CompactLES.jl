@@ -262,6 +262,11 @@ from one imposed by azimuthal spacing near a singularity.
 - **Checkpoints:** `save_checkpoint(solver, Q, "prefix")` writes one dependency-free
   binary file per rank; `load_checkpoint!(solver, Q, "prefix")` restores it. Restarts
   require the same global grid and decomposition.
+- **Shared-file checkpoints:** with `using HDF5`, `save_checkpoint_hdf5` writes the
+  state as one global array in a single `.h5`, and `load_checkpoint_hdf5!` restores
+  it onto **any** rank count and process grid. This is the form to use when a run
+  may be resumed at a different scale, or on a machine with a different node count.
+  HDF5 is a weak dependency, so the package core stays dependency-free.
 - **Visualization:** `save_vtk(solver, Q, "prefix")` writes one piece per rank plus
   a parallel container on the physical grid, including stretch mappings. Open the
   container in ParaView or VisIt. A grid with a resolved angular dimension is

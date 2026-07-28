@@ -72,6 +72,16 @@ julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
 ```
 
+`test/hdf5_tests.jl` covers the HDF5 extension and is skipped by the gate above:
+HDF5 is a `[weakdeps]` entry, so it is not loadable from the package
+environment. `runtests.jl` prints when it skips. To run it, use an environment
+carrying both CompactLES and HDF5, serially and under `mpiexec` — the
+decomposition-independent restart writes on one process grid and reads on
+another, which np = 1 cannot exercise. `hdf5_parallel()` reports which write
+backend the libhdf5 build selects; it is `false` on a workstation, and the
+collective path can only be exercised where a parallel libhdf5 built against
+the run's MPI exists.
+
 `test/convergence.jl` prints measured orders against regression guards baked
 into the file: C6 6.01, C10 10.04, C6 wall closures 3.17, cylindrical axis odd
 3.71 / even 3.00, resolved-θ 3.71, spherical origin 2.99. **For a change not
@@ -129,6 +139,8 @@ Names are spelled out rather than abbreviated. Current vocabulary:
   `fired!`, `next_time`, `rewind!`, `landing_steps`,
   `switch!`/`switched` (a `SwitchableBC`)
 - `writer` (a `FieldWriter`), `frame_prefix`, `collection`, `wall_io`
+- `region` (a `BlockRegion`: global offset plus extent, the HDF5 hyperslab unit
+  and deliberately not a `Decomp`), `owned_region`, `hdf5_parallel`
 - `refresh_primitives!`, `mixture_density`, `boundary_plane` (the in-flight
   state-query API; primitives are stale inside a callback, see the
   `refresh_primitives!` docstring)

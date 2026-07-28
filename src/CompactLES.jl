@@ -38,6 +38,7 @@ include("sources.jl")
 include("rhs.jl")
 include("nscbc.jl")
 include("io.jl")
+include("hdf5.jl")
 include("callbacks.jl")
 include("timestep.jl")
 include("diagnostics.jl")
@@ -50,6 +51,8 @@ export BandedCompactScheme, BandedClosureRow, lele_d1_10
 export BoundaryCondition, PeriodicBC, SlipWallBC, NoSlipWallBC, ExtrapolationBC, AxisBC, OriginBC, PoleBC
 export NSCBCOutflowBC, NSCBCInflowBC, DirichletBC, save_checkpoint, load_checkpoint!, save_vtk
 export FieldWriter, DEFAULT_VTK_FIELDS, container_extension
+export BlockRegion, hdf5_available, hdf5_parallel
+export save_checkpoint_hdf5, load_checkpoint_hdf5!
 export SwitchableBC, switch!, switched
 export Prim, Problem, Numerics, setup, initialize!, conserved_from_prim, tanh_blend
 export DirPlan, BandPlan, apply_along!, filter_field!

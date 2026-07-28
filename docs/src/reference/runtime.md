@@ -73,9 +73,20 @@ every other grid produces a rectilinear `.pvtr`. Strided points are selected on
 the global index, so the per-rank pieces sample one common lattice and still
 tile the coarse grid.
 
+`save_checkpoint_hdf5` and `load_checkpoint_hdf5!` store the state as one global
+array in a single file, so a checkpoint restores onto any rank count rather than
+onto the decomposition that wrote it. They live in a package extension and
+require `using HDF5`; `hdf5_available` and `hdf5_parallel` report whether the
+extension is loaded and whether its libhdf5 supports MPI-parallel writes.
+
 ```@docs
 save_checkpoint
 load_checkpoint!
+save_checkpoint_hdf5
+load_checkpoint_hdf5!
+hdf5_available
+hdf5_parallel
+BlockRegion
 save_vtk
 DEFAULT_VTK_FIELDS
 container_extension

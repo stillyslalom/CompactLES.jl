@@ -1759,4 +1759,20 @@ end
     @test_throws ArgumentError script_grid("128x128")
 end
 
+# HDF5 is a weak dependency and is not loadable from the package environment
+# alone, so the extension tests run only where it is present. The skip is
+# printed rather than silent.
+if (try
+        @eval using HDF5
+        true
+    catch
+        false
+    end)
+    include("hdf5_tests.jl")
+else
+    println("HDF5 not loadable in this environment — extension tests SKIPPED. " *
+            "Run test/hdf5_tests.jl from an environment carrying both, and " *
+            "under mpiexec for the decomposition-independent restart.")
+end
+
 println("serial tests complete")
