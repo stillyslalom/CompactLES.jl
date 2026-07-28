@@ -28,5 +28,5 @@ interaction pairs, and supplies viscosity and conductivity but **no diffusion
 coefficients**.
 
 `trans.inp` is not connected to `Transport`, which still uses constant
-properties. That is a deliberate hold, not an oversight — the measurement behind
-it is in the `Transport` entry under **Known limitations** in `CLAUDE.md`.
+properties. The rationale for deferring that integration is recorded in the
+`Transport` entry under **Known limitations** in `CLAUDE.md`.

@@ -20,9 +20,9 @@ end
 True when dimension `d` is periodic and undivided, so both neighbours are this
 rank. The exchange is then a plain periodic copy of one slab onto another
 within the same array, and routing it through pack / MPI.Sendrecv! / unpack
-costs three extra passes over the slab plus a self-message. This is not just
-the serial case: with `dims = (P, 1, 1)` every y and z exchange on every rank
-takes this path.
+would add three passes over the slab and a self-message. This case also occurs
+in decomposed calculations: with `dims = (P, 1, 1)`, every y and z exchange on
+every rank uses this path.
 """
 selfwrap(decomp::Decomp, d::Int) = decomp.sub_size[d] == 1 && decomp.periodic[d]
 

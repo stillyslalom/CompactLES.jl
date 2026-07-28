@@ -1,8 +1,8 @@
 # CompactLES — Design and Mechanics
 
-This document explains how CompactLES is put together and how the solver works,
-for readers who want to modify it, extend it, or understand its numerics. For
-usage, see [README.md](reference/README.md).
+This document describes the CompactLES architecture and numerical methods. It
+is intended to support modification and extension of the solver. For usage, see
+[README.md](../README.md).
 
 ## Contents
 
@@ -103,10 +103,10 @@ forcing) evaluated through `xcoord`, so they never see halos, offsets, or the
 conserved layout. `conserved_from_prim` dispatches on the equation set and EOS,
 so a new layout or equation of state does not expose indices to the IC path.
 
-The payoff: the same `Problem` re-runs at a different resolution or scheme order
-by changing only the `Numerics`, and a convergence study is a loop over
-`Numerics` values. A future backend (GPU, permuted storage) would consume the
-identical `Problem`.
+The same `Problem` can be evaluated at a different resolution or scheme order by
+changing only `Numerics`; a convergence study is therefore a sequence of
+`Numerics` values. A future backend, such as GPU execution or permuted storage,
+can consume the same `Problem`.
 
 ## State representation and decomposition
 
@@ -176,9 +176,9 @@ passing them as `deriv=` or `filt=`.
 
 ## The distributed compact solve
 
-Because a compact operator couples an entire grid line, evaluating it is solving
-a banded linear system per line — and lines cross rank boundaries. This is the
-heart of the parallel design. Consider the tridiagonal case (`tridiag.jl`).
+Because a compact operator couples an entire grid line, its evaluation requires
+a banded linear solve for each line, including lines that cross rank boundaries.
+The tridiagonal case in `tridiag.jl` illustrates the parallel method.
 
 **Local factorization.** Each rank factorizes its local tridiagonal block `T`
 once at plan time with a Thomas factorization (`TriFactor`). Solving one RHS is
@@ -270,10 +270,11 @@ that time-dependent boundary forcing is sampled at the correct sub-step.
 (per active dimension, with the physical spacing including metric and stretch
 factors) plus a diffusive rate built from the current molecular and artificial
 transport coefficients, reduced across all ranks with `MPI.Allreduce`. The
-artificial coefficients lag by one step (they were computed in the previous
-RHS), which is standard and harmless at the usual CFL.
+artificial coefficients lag by one step because they were computed in the
+previous RHS evaluation. The stability implications are quantified in
+`reference/CALIBRATION.md`.
 
-`curvature_rate` supplies the one term the per-dimension loop cannot see. A
+`curvature_rate` supplies the term omitted by the per-dimension loop. A
 *resolved* angular dimension already bounds its own geometric source, because
 the advective rate |u_ang|/(r·Δang) dominates the source rate |u_ang|/r. A
 *collapsed* one is skipped by the loop entirely, yet ρu_θ²/r keeps driving u_r
@@ -378,14 +379,14 @@ over the full padded arrays, so they need no halo exchange; scale factors are
 clamped away from zero so that stale physical-edge halo values stay finite.
 
 **Stretched meshes** are a `Stretch(x, dxdξ)` mapping per dimension from a
-uniform computational coordinate ξ ∈ [0, 1]. The mapping Jacobian simply
+uniform computational coordinate ξ ∈ [0, 1]. The mapping Jacobian
 multiplies that dimension's scale factor, so stretching composes with
 cylindrical/spherical geometry with no new operator or parallel machinery — the
 curvature corrections were refactored to be *additive* on top of a generic 1/h
 scaling. `sine_cluster` provides a closed-form interior-clustering map. Stretched
 dimensions must be non-periodic.
 
-**Discrete GCL.** A subtlety: for the spherical θ-momentum source, the flux
+**Discrete GCL.** For the spherical θ-momentum source, the flux
 divergence `−inv_J·D_ξ2(A₂·p)` and the analytic source `+(cotθ/r)·Π_φφ` cancel
 *analytically* for a uniform state, but `D_ξ2(sinθ) ≠ cosθ` *discretely*, leaving
 an O(h⁴) freestream residual. `gcl_cotr!` restores exact discrete freestream
@@ -436,11 +437,11 @@ even number of uniform blocks (partner at +P/2), and the reversed dimension
 likewise (reflected partner). On-rank pairing runs both parity plans and selects
 per half; off-rank pairing costs two full-block exchanges per application.
 
-This is the newest and least-exercised machinery in the package. The antipodal
-sign tables and off-rank e/o bookkeeping are exactly where bugs hide — the MPI
-test suite has already found and fixed two (an odd-combo mirror sign and a
-reversed-dimension slot flip that only appeared when the reversed dimension was
-split). The full-ball origin+poles combination has had the least scrutiny.
+This is the newest and least-exercised machinery in the package. The MPI suite
+has detected two defects in the antipodal sign tables and off-rank e/o
+bookkeeping: an odd-combination mirror sign and a reversed-dimension slot flip
+that appeared only when the reversed dimension was split. The full-ball
+origin-plus-poles combination has received the least testing.
 
 ## Multicomponent thermodynamics
 
@@ -533,7 +534,7 @@ side)` for a characteristic RHS correction. Declare periodicity via `isperiodic`
 **New equation sets and equations of state.** An `EquationSet` owns component
 indices, names, conserved conversion, and fold parity. Implement the EOS contract
 (`nspecies`, the state evaluation in `primitives!`, and `species_enthalpy`) plus
-`conserved_from_prim`. The function-barrier design keeps this cheap.
+`conserved_from_prim`. The function barrier confines dispatch overhead.
 
 **New output formats.** `io.jl` shows the pattern: per-rank writes plus a rank-0
 container, using `MPI.Allgather` only to collect piece extents. HDF5/XDMF for

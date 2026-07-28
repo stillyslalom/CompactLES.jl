@@ -11,8 +11,7 @@ cylindrical converging shock](assets/readme_header.png)
 The `64³` Taylor–Green run peaks at `ε = 0.01265`, `t = 9.13`, closely matching
 the pseudo-spectral reference peak `ε = 0.01289`, `t = 8.86`.
 
-This manual deliberately documents the parts of the package that are already
-well established:
+This manual documents the established package interfaces:
 
 - the `Problem`/`Numerics` frontend;
 - compact derivative and filter schemes;

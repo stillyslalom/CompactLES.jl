@@ -18,13 +18,13 @@ Parse `args` — the leading bare values named by `positional`, then `key=value`
 pairs in any order — into a `NamedTuple` carrying the same keys as `defaults`.
 
 Each value is parsed to the type of its default, so `defaults` is both the
-fallback and the schema. `String` defaults are taken verbatim, which is how a
-script accepts its own compound syntax (`configs=on:1:0.002,off:1`) without this
-function needing to know anything about it. `Bool` defaults accept
+fallback and the schema. `String` defaults are taken verbatim, allowing scripts
+to define compound syntax such as `configs=on:1:0.002,off:1` without extending
+this parser. `Bool` defaults accept
 `true|false|yes|no|on|off|1|0`.
 
 An unknown key, a surplus positional, or a value that will not parse throws
-`ArgumentError`. Rejecting a typo is the whole point — see the note above.
+`ArgumentError`; see the rationale in the implementation note above.
 
 ```julia
 opt = script_args(ARGS, (N = 32, tfinal = 10.0, progress = 0);
@@ -82,8 +82,8 @@ end
     script_grid(spec) -> NTuple{3,Int}
 
 Parse a grid argument written either as `N` for a cubic grid or as `NX,NY,NZ`.
-Shared by `clusterprobe.jl` and `clusterlaunch.jl`, which have to agree on it —
-the launch planner prints a probe command containing the grid it just sized.
+Shared by `clusterprobe.jl` and `clusterlaunch.jl` so that the probe command
+printed by the launch planner uses the grid that was sized.
 """
 function script_grid(spec::AbstractString)
     parts = tryparse.(Int, split(spec, ','))

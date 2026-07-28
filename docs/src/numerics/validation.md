@@ -31,9 +31,9 @@ resolution. Current regression targets are approximately:
 | resolved-angle axis fold | 3.71 |
 | spherical origin | 2.99 |
 
-For a change that is not intended to alter numerics, compare the printed error
-magnitudes as well as the fitted order. A moved digit can reveal a real
-discretization change before an order guard fails.
+For a change that is not intended to alter the numerics, compare the printed
+error magnitudes as well as the fitted order. A change in the reported digits
+can identify a discretization change before an order guard fails.
 
 ## Distributed suite
 

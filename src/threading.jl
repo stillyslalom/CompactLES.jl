@@ -26,9 +26,9 @@
 # inner `j, i` nest passes `nx * ny * nz`.
 
 """
-Minimum total work (in grid points) before a loop is worth handing to the
-thread pool. Tunable at runtime; the default was chosen from the table above,
-where 32^3 is roughly break-even and 48^3 is a clear win.
+Minimum total work, in grid points, required to use the thread pool. The default
+follows the measurements above: 32^3 is approximately the break-even point and
+48^3 benefits from threading.
 Override with the `CL_THREAD_MIN_WORK` environment variable.
 """
 const THREAD_MIN_WORK = Ref(1 << 15)
@@ -51,11 +51,11 @@ Thread the loop only when `work` (total grid points touched) justifies the
 parallel-dispatch cost; otherwise run it inline. See the note at the top of
 this file.
 
-## Why Threads.@threads and not Polyester.@batch
+## Threading backend
 
-`@batch` was tried here and is a large net loss for this solver, despite doing
-exactly what it advertises on allocation (compute_rhs! at 48^3 / 24 threads:
-3,638,096 B -> 37,024 B, ~98x less). Measured on tgv 64^3 at -t 8:
+`@batch` reduced allocation in `compute_rhs!` at 48^3 on 24 threads from
+3,638,096 B to 37,024 B, but increased total runtime. The following measurements
+are for the 64^3 Taylor–Green case with `-t 8`:
 
     phase                Threads.@threads   Polyester.@batch
     primitives!                 1.11 ms          0.43 ms
@@ -65,21 +65,21 @@ exactly what it advertises on allocation (compute_rhs! at 48^3 / 24 threads:
     flux divergence             7.00 ms         60.30 ms
     compute_rhs! (total)       22.26 ms        133.29 ms
 
-`@batch` wins on the two phases that are a single large leaf loop over grid
-points, and loses by ~8-9x on every phase that drives the compact operators.
-Those phases are not nested — `apply_along!` runs its gather, solve and scatter
-regions sequentially — they simply run MANY small regions back to back (about
-36 per gradient phase), and `@batch`'s pool synchronisation per region costs
-more there than a task spawn does.
+`@batch` is faster for the two phases consisting of a single large pointwise
+loop and approximately 8–9 times slower for phases that invoke compact
+operators. The latter execute about 36 small gather, solve, and scatter regions
+sequentially per gradient phase. Synchronizing the `@batch` pool for each region
+costs more than spawning tasks in this workload.
 
-Mixing the two backends by call depth is worse still: routing the operator path
-to tasks while leaf loops stayed on `@batch` measured 1279.95 ms, 58x the
-all-tasks figure, because Polyester's spin-waiting workers occupy the very
-Julia threads `Threads.@threads` then tries to schedule onto.
+Combining the backends by call depth was also slower. Routing operator work to
+tasks while retaining `@batch` for leaf loops measured 1279.95 ms, 58 times the
+all-task result, because Polyester's spin-waiting workers occupy the Julia
+threads used by `Threads.@threads`.
 
-So: one backend, and it is tasks. The threshold above is what keeps the task
-cost off the small cases. Revisit `@batch` only if the operator path is ever
-restructured into few large regions instead of many small ones.
+The implementation therefore uses `Threads.@threads` throughout and applies the
+work threshold above to avoid task overhead on small cases. The backend choice
+should be reevaluated if the operator path is reorganized into a small number of
+large regions.
 """
 macro threaded(work, loop)
     (loop isa Expr && loop.head === :for) ||

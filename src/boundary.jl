@@ -56,25 +56,21 @@ isperiodic(::PeriodicBC) = true
     SwitchableBC(before, after)
 
 One face that behaves as `before` until [`switch!`](@ref) is called on it, then
-as `after`. Built for the two-phase shock-tube pattern: run the interaction
-against a wall, then absorb the outgoing waves instead of reflecting them back
-onto the interface.
+as `after`. This supports calculations that require one boundary condition
+during an interaction and another to transmit the resulting outgoing waves.
 
-It is a wrapper rather than a reassignment of `solver.bcs` because that field is
-concretely typed — swapping in a different BC type would fail to convert. The
-concrete type here never changes, so nothing about the solver's parameterization
-moves.
+The wrapper preserves the concrete type of `solver.bcs`; reassigning that field
+to a different boundary-condition type would fail conversion.
 
-**Every rank must switch on the same step.** `after` may run collectives that
-`before` does not (`NSCBCOutflowBC` does), and a face that only some ranks think
-is active hangs the run instead of failing it — see the collective note in
-`nscbc.jl`. Drive it from a [`Callback`](@ref), whose triggers are globally
-consistent by construction, not from a rank-local test.
+Every rank must switch on the same step. `after` may perform collectives that
+`before` does not; `NSCBCOutflowBC` is one example. Rank disagreement therefore
+causes a collective-ordering deadlock. Use a [`Callback`](@ref), whose trigger
+verdict is globally consistent, rather than a rank-local test.
 
-Both conditions must agree on periodicity, since that is read once at `setup`
-to build the decomposition and the line plans. Fold conditions (`AxisBC`,
-`OriginBC`, `PoleBC`) cannot be wrapped: `setup` detects them with `isa` on the
-BC itself, so a wrapped fold would silently not be built.
+Both conditions must agree on periodicity because `setup` uses that property to
+construct the decomposition and line plans. Fold conditions (`AxisBC`,
+`OriginBC`, and `PoleBC`) cannot be wrapped because `setup` identifies them by
+the boundary-condition type itself.
 """
 mutable struct SwitchableBC{B1<:BoundaryCondition,B2<:BoundaryCondition} <: BoundaryCondition
     before::B1
@@ -96,8 +92,8 @@ end
 """
     switch!(bc)
 
-Move a [`SwitchableBC`](@ref) onto its `after` condition. Idempotent, so a
-non-`once` trigger calling it repeatedly is harmless.
+Select the `after` condition of a [`SwitchableBC`](@ref). Repeated calls have no
+additional effect.
 """
 switch!(bc::SwitchableBC) = (bc.switched = true; bc)
 

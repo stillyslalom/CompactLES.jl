@@ -43,8 +43,8 @@ end
 Closed-form interior clustering: x(ξ) = lo + L(ξ − (a/2π)[sin 2π(ξ−ξc) +
 sin 2πξc]), dx/dξ = L(1 − a cos 2π(ξ−ξc)). Spacing is smallest at ξ = ξc
 (fractional position of the cluster point), largest opposite it, with ratio
-(1+a)/(1−a); any 0 ≤ a < 1 keeps the map monotone. For boundary-layer-style
-one-sided clustering supply your own monotone map.
+(1+a)/(1−a); any 0 ≤ a < 1 keeps the map monotone. One-sided clustering requires
+a custom monotone map.
 """
 function sine_cluster(lo::Real, hi::Real, ξc::Real, a::Real)
     0 <= a < 1 || error("sine_cluster: need 0 ≤ a < 1")

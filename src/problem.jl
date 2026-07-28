@@ -141,10 +141,9 @@ inflow a characteristic (NSCBC) treatment is physically preferable and
 remains a TODO; a full-state Dirichlet over-constrains subsonic boundaries
 and will reflect.
 
-Parametric on the callback type: a `fun::Function` field is abstract, so the
-per-point call in `enforce!` would be a runtime dispatch AND its `Prim` result
-would infer as `Any`, poisoning the rest of the loop body. Specializing on
-`typeof(fun)` makes both concrete.
+The boundary condition is parameterized by the callback type. Storing
+`fun::Function` would require runtime dispatch in `enforce!` and infer its
+`Prim` result as `Any`; specializing on `typeof(fun)` keeps both values concrete.
 """
 struct DirichletBC{F} <: BoundaryCondition
     fun::F

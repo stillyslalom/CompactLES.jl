@@ -72,7 +72,7 @@ global limiting location and rate class when a timestep is unexpectedly small.
 
 ## Run with MPI
 
-Ask MPI.jl for the launcher configured for the current environment:
+Obtain the launcher configured for the current MPI.jl environment:
 
 ```julia
 using MPI

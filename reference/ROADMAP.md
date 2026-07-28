@@ -1,17 +1,18 @@
 # CompactLES — Roadmap
 
-Where this code sits relative to the codes it will be compared against, and what
-it would take to get from shock tubes to NIF-relevant multiphysics. `README.md`
-covers usage, `DESIGN.md` the numerics, `CLAUDE.md` how to work on it.
+This roadmap compares CompactLES with related solvers and identifies the work
+required to progress from shock-tube calculations to NIF-relevant multiphysics.
+`README.md` covers usage, `DESIGN.md` describes the numerics, and `CLAUDE.md`
+defines development procedures.
 
 ## Contents
 
 1. [Positioning](#positioning)
 2. [Comparison](#comparison)
-3. [What actually blocks the target use cases](#what-actually-blocks-the-target-use-cases)
+3. [Remaining blockers](#remaining-blockers)
 4. [Adaptivity — the compact-scheme constraint](#adaptivity--the-compact-scheme-constraint)
 5. [Phase 0 — the extensibility seams](#phase-0--the-extensibility-seams-complete-july-2026)
-6. [Phase 1 — make shock tubes unimpeachable](#phase-1--make-shock-tubes-unimpeachable-largely-complete-july-2026)
+6. [Phase 1 — shock-tube validation](#phase-1--shock-tube-validation-largely-complete-july-2026)
 7. [Phase 2 — HED physics](#phase-2--hed-physics)
 8. [Phase 3 — scale, portability, and adaptivity](#phase-3--scale-portability-and-adaptivity)
 9. [Non-goals](#non-goals)
@@ -19,22 +20,19 @@ covers usage, `DESIGN.md` the numerics, `CLAUDE.md` how to work on it.
 
 ## Positioning
 
-It is worth being blunt about what CompactLES already is, because it determines
-which comparisons are informative and which are category errors.
+The existing numerical method determines which comparisons are informative.
 
 CompactLES offers tenth/sixth-order compact Padé
 derivatives, a Gaitonde–Visbal compact filter, Cook artificial fluid properties
 in place of Riemann solvers, five-stage low-storage RK45, structured curvilinear
-grids, MPI. That is, item for item, the Miranda/Pyranda recipe — minus
-patch-based adaptivity and a GPU backend. This is not a
-criticism — it is the correct recipe for variable-density turbulent mixing and
-shock–interface interaction, which is exactly the shock-tube and RM/RT physics
-in the primary use case. It does mean that the interesting comparison with
-Pyranda is about *scope and interface*, not numerics, and that the comparison
-with FLASH is about *physics catalogue*, not accuracy.
+grids, and MPI. These elements match the Miranda/Pyranda method except for
+patch-based adaptivity and a GPU backend. They are appropriate for
+variable-density turbulent mixing and shock–interface interaction, the primary
+shock-tube and RM/RT use cases. Comparisons with Pyranda therefore concern scope
+and interface, whereas comparisons with FLASH concern the physics catalogue.
 
-Three things here are genuinely differentiated today and worth protecting in
-every subsequent decision:
+Three current capabilities distinguish CompactLES and constrain subsequent
+design decisions:
 
 - **The regularized coordinate-singularity treatment.** The half-offset grid
   plus parity/antipodal folds for the cylindrical axis, spherical origin, and
@@ -42,13 +40,13 @@ every subsequent decision:
   zero — is more than Pyranda or Miranda expose, and nothing in the Julia
   ecosystem has it. Converging-shock and spherical-implosion geometry is
   directly NIF-relevant, and this is the piece that is hard to rebuild.
-- **The genuinely distributed compact solve.** The spike/reduced-interface
+- **The distributed compact solve.** The spike/reduced-interface
   banded solve reproduces the single-domain answer bit-for-bit at any rank
   count, with the reduced system factorized once at plan time. It is also, as
   argued below, the seed of the implicit infrastructure the HED physics needs.
-- **The `Problem`/`Numerics` split.** Physics specification that never mentions
-  ranks, halos, or the conserved layout. Every multiphysics code eventually
-  wants this and almost none of them get it retroactively.
+- **The `Problem`/`Numerics` split.** The physics specification does not refer to
+  ranks, halos, or the conserved layout. This separation is difficult to add
+  after a multiphysics implementation has matured.
 
 ## Comparison
 
@@ -66,59 +64,58 @@ systems.
 | Geometry | Cartesian, curvilinear, immersed boundaries | Cartesian, cylindrical, spherical with regularized singularities; stretch maps |
 | Lineage | Miranda validation heritage | validated against analytic references only |
 
-Pyranda is also the most useful *reference implementation* available here, for a
-reason unrelated to its own feature set: it carries Miranda's Fortran kernels in
+Pyranda also provides a reference implementation because it carries Miranda's
+Fortran kernels in
 `pyranda/parcop/`, including operators Pyranda itself does not expose. The
-adaptivity section below is read directly from those, and the same source is
-worth consulting before implementing anything else in this scheme family.
+adaptivity section below is derived directly from those sources.
 
-**What Pyranda has that CompactLES does not:** the DSL, which lets a user write
+**Capabilities absent from CompactLES:** Pyranda provides a DSL for defining
 a new PDE system in ten lines without touching the solver; immersed boundaries,
-which is how you get non-coordinate-surface geometry without unstructured
+which provide non-coordinate-surface geometry without unstructured
 meshes; and the credibility of being the mini-app for a production code.
 
-**The DSL is the interesting one, and it is a fork in the road.** Pyranda's
-string-based equation interpreter buys generality at the cost of type safety and
-of any physics that is not a flux divergence plus a source. Julia's answer to
-the same problem is multiple dispatch on an equation-set type — which is what
-Trixi does, and what Phase 0 below proposes. That path keeps inference and
+**Equation specification.** Pyranda's string-based equation interpreter provides
+generality at the cost of type safety and
+of any physics that is not a flux divergence plus a source. Julia multiple
+dispatch on an equation-set type, as used by Trixi and proposed in Phase 0,
+provides an alternative. This design retains inference and
 allocation discipline (`bench/audit.jl`, `bench/jetcheck.jl`) while getting most
 of the extensibility. If a symbolic frontend is later wanted for ergonomics, the
-route is a macro that *emits* an equation set at parse time — Pyranda's brevity
-with none of the runtime interpretation. What is excluded is evaluating equation
-strings at runtime, not metaprogramming.
+route is a macro that *emits* an equation set at parse time. Runtime evaluation
+of equation strings is excluded, whereas metaprogramming remains in scope.
 
-Immersed boundaries are worth considering later, but note the tension: a sharp
+Immersed boundaries remain a possible extension, although a sharp
 IB cut cell is fundamentally at odds with a line-global compact operator, which
 is why IB in this scheme family is usually done as a smeared Brinkman penalty
-term — i.e. as a *source term*, which Phase 0 provides for free.
+term, which can use the Phase 0 source-term interface.
 
 ### FLASH
 
-Category error to compare on numerics; FLASH's hydro is second-order unsplit
-PPM. The comparison that matters is the physics catalogue and AMR.
+FLASH uses second-order unsplit PPM, so the relevant comparison concerns its
+physics catalogue and AMR rather than numerical order.
 
 FLASH's HEDP capability is a set of units: 3T hydrodynamics with electron–ion
 equilibration, multigroup radiation diffusion, tabulated multi-species EOS and
 opacities (IONMIX), electron thermal conduction through an implicit diffusion
 solver, laser energy deposition by geometric-optics ray tracing, MHD, and
 anisotropic magnetized transport coefficients — all on a block-structured AMR
-mesh, validated against HYDRA. That is the thing to aim at for NIF work, and it
-is roughly a decade of physics implementation.
+mesh, validated against HYDRA. This capability set defines the long-term target
+for NIF applications and represents approximately a decade of physics
+implementation.
 
-Two structural lessons, both to copy, but only one of them the way FLASH does it:
+Two structural patterns are relevant:
 
-- **Copy the unit decomposition.** FLASH's physics units are separately
+- **Physics-unit decomposition.** FLASH's physics units are separately
   configurable, each owning its own state and contributing to the update through
   a defined interface. This is why FLASH could grow 3T and MGD without
   rewriting hydro. CompactLES's equivalent is Phase 0.
-- **Copy adaptivity, but patch-based, not octree.** FLASH's PARAMESH/AMReX
+- **Patch-based adaptivity.** FLASH's PARAMESH/AMReX
   refinement is oct-tree block AMR built around a second-order finite-volume
   update. The version that belongs here is *patch-based* (logically rectangular
   blocks of uniform resolution, SAMRAI-style), which is what Miranda uses and
-  what makes adaptivity compatible with a compact scheme. See
+  which makes adaptivity compatible with a compact scheme. See
   [Adaptivity](#adaptivity-the-compact-scheme-constraint) for why the
-  distinction is the whole argument, and Phase 3 for the plan.
+  distinction and Phase 3 for the proposed implementation.
 
 ### Trixi.jl
 
@@ -128,25 +125,25 @@ kinetic-energy-preserving split forms, shock capturing with positivity limiting,
 a large equation-set catalogue (Euler, MHD, shallow water, hyperbolic diffusion
 for self-gravitating gas dynamics), and OrdinaryDiffEq.jl integration.
 
-**What to learn from it:** the `equations` type parameter. Trixi's solvers are
+**Relevant design pattern:** the `equations` type parameter. Trixi's solvers are
 generic over an equation set that owns the variable count, names, flux
 functions, and conversions. Everything — the DG operator, AMR, the time
 integrator, the output — is written against that interface. It is why adding
-MHD to Trixi did not mean rewriting Euler. This is the single most transferable
-idea in the comparison set and it is Phase 0 item 2.
+MHD to Trixi did not require rewriting Euler. Phase 0 item 2 adopts this
+equation-set interface.
 
-**Where CompactLES stays ahead for the target problems:** compact FD is far
-cheaper per degree of freedom than DG at comparable resolving power for smooth,
-volume-filling turbulence, and the memory traffic profile is much friendlier.
+**CompactLES advantages for the target problems:** compact finite differences
+require less work per degree of freedom than DG at comparable resolving power
+for smooth, volume-filling turbulence and have lower memory traffic.
 Trixi has nothing resembling Cook artificial fluid properties, which is the
 right regularization for material interfaces at high Atwood number — DG's
-entropy-stable limiting is built for robustness at discontinuities, not for
-controlled subgrid dissipation in a mixing layer. And Trixi has no regularized
+entropy-stable limiting is intended for robustness at discontinuities rather
+than controlled subgrid dissipation in a mixing layer. Trixi also has no regularized
 polar/spherical singularity treatment.
 
-**Where to consider borrowing rather than competing:** Trixi's use of
-OrdinaryDiffEq.jl for time integration. If CompactLES grows an IMEX scheme
-(Phase 2), the SciML ecosystem already has well-tested IMEX-ARK tableaus.
+**Applicable external component:** Trixi uses OrdinaryDiffEq.jl for time
+integration. A CompactLES IMEX scheme in Phase 2 could use the tested IMEX-ARK
+tableaus in the SciML ecosystem.
 
 ### XCALibre.jl
 
@@ -155,14 +152,13 @@ and LES, OpenFOAM/unv mesh import, CPU threads or GPU through
 KernelAbstractions.jl. Different accuracy class and a different problem domain
 (engineering CFD on complex geometry), so it is not a competitor.
 
-It is, however, **the best available template for the GPU question**. A single
-KernelAbstractions.jl codebase targeting NVIDIA, AMD, and Intel, with the CPU
-path retained, is exactly the architecture Phase 3 wants — and XCALibre
-demonstrates it is achievable by a small team in Julia. Also worth watching
-Oceananigans.jl, which is the strongest example of a Julia structured-grid
-solver that went GPU-first without losing readability.
+XCALibre provides a relevant GPU architecture: a single
+KernelAbstractions.jl codebase targets NVIDIA, AMD, and Intel while retaining a
+CPU path. This is the proposed architecture for Phase 3. Oceananigans.jl
+provides an additional example of a Julia structured-grid solver designed for
+GPU execution.
 
-## What actually blocks the target use cases
+## Remaining blockers
 
 Everything below follows from the remaining architectural gaps. Phase 0 closed
 the source/layout/storage seams in July 2026; the implicit solver and EOS
@@ -174,35 +170,34 @@ indices, names, conserved conversion, and fold parity. The former hard-coded
 `n_species + 4` sites are gone. A 3T model still requires its physics, but no
 longer requires rediscovering the conserved layout throughout the solver.
 
-**There is no implicit or elliptic solver.** Radiation diffusion and electron
+**Implicit and elliptic solvers are absent.** Radiation diffusion and electron
 conduction are parabolic and stiff; explicit treatment is not an option at HED
 conditions, where the conduction timestep can be orders of magnitude below the
-acoustic one. This is the largest genuine gap.
+acoustic one. This is the largest remaining architectural gap.
 
-*But the raw material is already here.* `tridiag.jl` and `banded.jl` implement a
+`tridiag.jl` and `banded.jl` already implement a
 distributed banded line solve with cross-rank coupling and a pre-factorized
 reduced interface system. That is precisely the kernel an ADI or line-relaxation
 diffusion solver needs, and precisely the smoother a geometric multigrid wants.
-The path from "no implicit solver" to "implicit diffusion" is much shorter here
-than it looks from outside, and it should be built on this machinery rather than
-by bolting on a black-box linear algebra dependency.
+This existing machinery provides a substantial part of an implicit-diffusion
+implementation and should form its basis instead of a separate linear-algebra
+dependency.
 
 **The EOS contract is now agnostic; one physical assumption survives it.** The
-sites that quietly assumed ideal gas outside the function barrier — NSCBC's LODI
+sites that previously assumed an ideal gas outside the function barrier — NSCBC's LODI
 algebra and the artificial-conductivity scale — are EOS dispatch points as of
 July 2026, and `StiffenedGas` and `Nasa9Mixture` exercise them. A SESAME reader
 needs data plumbing and a table interpolator, not solver surgery.
 
 The assumption that survives is physical rather than structural: the artificial
 conductivity is still built as (ρc/T_ion)·sensor for every gas model here, which
-is singular at a cold ambient. A tabular EOS is free to supply something else,
-and a condensed-matter one will have to.
+is singular at a cold ambient. A tabular or condensed-matter EOS can provide an
+alternative scale.
 
 ## Adaptivity — the compact-scheme constraint
 
-Adaptivity is in long-term scope, and the constraint it imposes is specific
-enough to be worth stating before the phases, because it shapes Phase 3 and
-touches the correctness criterion the test suite is built on.
+Adaptivity is in long-term scope. Its interaction with the compact scheme shapes
+Phase 3 and affects the correctness criterion used by the test suite.
 
 **The constraint is not "no AMR," it is "no line cut mid-solve."** A compact
 operator couples an entire grid line through a banded LHS, so what it cannot
@@ -213,44 +208,41 @@ same-level neighbors or by interpolation from the underlying coarse level.
 Oct-tree cell-by-cell refinement is the incompatible one. This is the
 distinction that matters, and the earlier framing here collapsed the two.
 
-**What is actually given up is exactness, not formulation.** Today the
+**Patch interfaces replace exactness with a controlled approximation.** Today the
 spike/reduced-interface solve reproduces the single-domain answer bit-for-bit at
-any rank count — which is not just an aesthetic property, it is the *correctness
-oracle* the MPI suite depends on. An interface bug produces O(1) error rather
+any rank count, which provides the correctness criterion used by the MPI suite.
+An interface defect produces O(1) error rather
 than a small one, which is precisely how `test/mpi_tests.jl` catches it. Under
 patch AMR, coarse-fine boundaries make the solve approximate by construction,
 and that oracle stops working there. Any adaptivity work must bring its own
-replacement — most plausibly a manufactured solution across a refinement
+replacement, most plausibly a manufactured solution across a refinement
 boundary with a measured order, in the style `test/convergence.jl` already uses.
 
-**These two mechanisms compose rather than compete.** The natural design is to
+**Distributed solves remain exact within each refinement level.** The design can
 keep the exact distributed solve *within* a refinement level, where neighbors
 are at uniform resolution and the existing sub-communicator machinery already
 applies, and to localize the approximation to coarse-fine interfaces only. That
 preserves the bit-exact guarantee across the majority of patch boundaries and
 confines the new error to where it is unavoidable.
 
-**Why the error stays local.** The reassuring quantitative fact is that the
-inverse of a compact LHS decays geometrically away from the diagonal — roughly
+**Error localization.** The inverse of a compact LHS decays geometrically away
+from the diagonal, approximately
 α^|i−j|, so α = 1/3 for C6. Pollution injected at an inexact patch boundary
 decays by a factor of three per point along the line rather than contaminating
-it globally. This is worth measuring early regardless of which route below is
-taken, because it quantifies how much an approximate interface actually costs,
-and it is an afternoon's experiment.
+it globally. An early measurement of this decay will quantify the error from an
+approximate interface for either treatment considered below.
 
-### Interface treatment: what the literature offers
+### Published interface treatments
 
-The interface treatment, not the grid arrangement, is what actually decides this
-design. Two answers exist: the one with proofs, below, and the one Miranda
-actually uses, in the section after it. Read both — the second is the
-recommendation, but the first is what to fall back on and what to measure
-against.
+Two interface treatments are relevant: the SBP–SAT formulation with stability
+proofs and the compact-filter transfer used by Miranda. The latter is the
+recommended initial implementation; the former provides a rigorous alternative
+and a basis for comparison.
 
-The mature answer to "how do you couple high-order finite-difference blocks at
-an interface with provable stability and conservation" is
-**summation-by-parts operators with simultaneous-approximation-term (SAT)
-coupling**, and it is a thirty-year literature rather than a recent idea. The
-relevant chain, specifically for the *implicit/compact* case:
+Summation-by-parts operators with simultaneous-approximation-term (SAT)
+coupling provide a stable and conservative treatment of high-order
+finite-difference block interfaces. The literature for the *implicit/compact*
+case includes:
 
 - Carpenter, Gottlieb & Abarbanel (1993) established stable, accurate boundary
   treatments for compact high-order schemes, with Abarbanel & Chertock (2000)
@@ -258,50 +250,50 @@ relevant chain, specifically for the *implicit/compact* case:
 - Mattsson & Rydin (2022) derived **implicit SBP operators** for first and
   second derivatives with boundary closures on a *banded-norm* SBP framework and
   weak (penalty) boundary enforcement, reaching 8th-order global convergence.
-  This is the Padé-class case and it is the directly load-bearing reference.
+  This is the Padé-class case and the principal reference for the proposed work.
 - Nissen et al. (2015) built block-oriented adaptive grids on SBP–SAT, including
   a stable treatment of junction points where interfaces of different type meet.
 - Almquist & Dunham (2018) supplied order-preserving interpolation operators for
   **non-conforming** (refined) interfaces, which is the coarse-fine case.
 
-Worth knowing regardless of route: **CompactLES's current closures are not SBP.**
+CompactLES's current closures are not SBP.
 The `ClosureRow` cascade in `kernels.jl` implements the classical Lele one-sided
 closures — stable in practice, without an energy estimate. Moving onto an SBP
 footing would be a deeper change than anything else in this document, touching
 `kernels.jl`, the closure rows, `operators.jl`, the folds, and every order in the
-`test/convergence.jl` guard table. That cost is why the evidence below matters
-so much.
+`test/convergence.jl` guard table. The evidence below determines whether that
+larger change is necessary.
 
-One point in SBP's favor that is easy to miss: **SAT is weak enforcement of
-boundary conditions through characteristic penalty terms**, which is
+SAT weakly enforces boundary conditions through characteristic penalty terms,
+which is
 conceptually the same family as the NSCBC corrections already in `nscbc.jl` —
 those also act on the RHS as wave-amplitude corrections rather than by hard
-state enforcement. An SBP–SAT move is less alien to this codebase than it
-sounds, and it would likely subsume rather than replace that machinery.
+state enforcement. An SBP–SAT implementation could therefore subsume the
+existing NSCBC correction machinery rather than replace its underlying
+formulation.
 
-Three documented sharp edges, none fatal but all worth budgeting for:
+Three documented considerations apply:
 
 - **Accuracy drops at SAT interfaces**, below the interior stencil order. Nissen
   et al.'s response is to minimize the number of SAT interfaces and run interior
   stencils across block boundaries wherever possible; they report the local
-  reduction not severely degrading the propagated solution. Plan the block
-  layout around this rather than discovering it.
+  reduction not severely degrading the propagated solution. Block layout should
+  therefore minimize SAT interfaces.
 - **Non-conforming interfaces cost a global order** unless order-preserving
   interpolation operators are used — that is precisely what Almquist & Dunham
-  exists to fix, and it is a known trap in earlier work.
-- **Stability proofs get harder above 4th order.** The usual argument needs
+  addresses; earlier work documents this loss of order.
+- **Stability proofs above 4th order require additional terms.** The usual argument needs
   interpolation operators to be norm-contracting, which holds at 2nd and 4th
   order but *not* at 6th; recovering provable stability there required new
-  penalty terms. At the orders this code targets, that is the regime of interest,
-  not a corner case.
+  penalty terms. This limitation applies directly to the target orders.
 
-### What Miranda actually does
+### Miranda's interface treatment
 
-The question above is settled by evidence rather than by choosing. Pyranda does
-not expose AMR, but it carries Miranda's Fortran kernels, and the level-transfer
+Pyranda does not expose AMR, but it carries Miranda's Fortran kernels. The
+level-transfer
 operators are in `pyranda/parcop/stencils.f90` — `cfamrcf` and `cfamrfc`, inside
 an `#if 0` block, so they are the design rather than a live implementation. The
-header states the whole scheme:
+header defines the scheme:
 
 ```
 INVERTIBLE AMR FILTER FOR COARSE-TO-FINE AND FINE-TO-COARSE OPERATIONS (fbar <---> f):
@@ -319,27 +311,25 @@ transfer function is a Gaussian of width 3·Δx; prolongation recovers the fine
 field by *deconvolving* the same filter — the two routines are the identical
 coefficients with the LHS and RHS roles swapped (`cfamrcf` solves the
 `[c,b,a,b,c]` pentadiagonal against an `[α,1,α]` right-hand side, `cfamrfc` does
-the reverse). Five properties follow, and each one matters:
+the reverse). The pair has five relevant properties:
 
 - **Refinement ratio 3, not 2**, matched to the 3·Δx filter width. The odd ratio
-  is what lets a coarse node coincide with the middle of each fine triple, which
-  keeps both operators centered and symmetric — and therefore invertible. This
-  is also the clean answer to the question the earlier draft got wrong: Miranda
-  avoids the staggering problem by choosing an odd refinement ratio, not by
-  moving to a cell-centered grid.
+  allows a coarse node to coincide with the middle of each fine triple, keeping
+  both operators centered, symmetric, and invertible. Miranda therefore avoids
+  staggering through an odd refinement ratio rather than a cell-centered grid.
 - **Conservation comes from unit DC gain**, not from refluxing. The interior
   coefficients satisfy a + 2b + 2c = 1 + 2α to the last bit (both
   0.9356346489741322 in Float64), so the transfer preserves the mean exactly.
-- **The boundary closures preserve that gain deliberately.** The first closure
+- **The boundary closures preserve that gain.** The first closure
   row is explicit and sums to exactly 1.0; the second has an LHS summing to the
   interior RHS within one ulp. Conservation at the transfer boundary is enforced
   by construction of the closure rows.
-- **Invertibility at the boundary is the fragile part, and they say so.** The
+- **Boundary invertibility requires specialized closures.** The
   comments read "no filter (current) or bad filter at boundary causes ringing in
   the solution" and "with extended boundary data : same as one-sided to maintain
   invertibility." Four closure variants are tabulated per end — odd-symmetric,
   one-sided, even-symmetric, and extended-data — on the `-1:2` index.
-- **The parity machinery is the same machinery.** `lower_symm_weights` and
+- **The parity machinery matches the existing fold formulation.** `lower_symm_weights` and
   `upper_symm_weights` fold a ghost coefficient onto the interior with a sign
   (`alb(i2,j) += syml*alb(i1,j); alb(i1,j) = 0`). That is structurally identical
   to CompactLES's axis fold, `b[1] += σg·α` in `operators.jl`. And `nci`, "the
@@ -350,24 +340,22 @@ There is a companion family of coarsening filters — `c4ff3` ("compact filter f
 AMR coarsening," built so the transfer function integrates to 1/3 over [0, π],
 exactly the 3:1 spectral budget) and `cgff2` (a 5×5 Gaussian ≈ exp(−2k²/3)).
 
-### Why this changes the cost estimate
+### Implementation cost
 
-This is dramatically cheaper for CompactLES than either route the previous draft
-weighed, because **the transfer operators are just more compact schemes**, and
-every piece they need already exists: `BandedCompactScheme` is the type,
+The transfer operators fit the existing compact-scheme implementation.
+`BandedCompactScheme` provides the type,
 `plan_direction` binds it to a dimension, the spike solve provides the `nci`
 parallel overlap, the parity folds provide the symmetric closure variants, and
 `compact_filter` is already this shape with a boundary cascade. Adding
-Miranda-style level transfer is *writing down two schemes*, not rewriting the
-operator layer.
+Miranda-style level transfer therefore requires two scheme definitions rather
+than a new operator layer.
 
-What CompactLES would still lack is the patch and level data structure, the time
-sub-cycling bookkeeping, and the refinement criteria — **infrastructure, not
-numerics.** That is a much better problem to have, and it re-ranks the work:
-the numerics risk drops sharply, and Phase 3's cost becomes dominated by the
-patch abstraction, which is also what the GPU port wants anyway.
+CompactLES would still require patch and level data structures, time-subcycling
+bookkeeping, and refinement criteria. The numerical risk is consequently lower
+than the infrastructure cost, which is dominated by the patch abstraction also
+needed by the proposed GPU port.
 
-**What the public Pyranda patch kernel actually contains.** At commit `b4e0afc`,
+**Public Pyranda patch infrastructure.** At commit `b4e0afc`,
 `objects.f90` reserves `(patch, level)` tables (101 patches by 11 levels), each
 with its own patch metadata, Cartesian MPI communicator, compact plans, and
 mesh. `comm.f90` creates the patch communicator with `MPI_Comm_split` from the
@@ -386,9 +374,9 @@ symbols and finite one-sided matrices directly from `cfamrcf`/`cfamrfc`. For a
 Nyquist (`k = π/3`) and 20.2393 at the fine Nyquist. The finite closure operator
 has condition number 33.03 and spectral norm 20.19; six-point alternating noise
 is amplified 13.80 at an edge versus 16.11 in the interior. The closure is
-therefore not the worst amplifier. The swapped pair round-trips to
-`3.4e-15` in infinity norm. The conclusion is narrower than “safe”: the coarse
-band is well-conditioned, and the published closure preserves invertibility,
+therefore not the largest amplifier. The swapped pair round-trips to
+`3.4e-15` in infinity norm. The coarse band is well-conditioned, and the
+published closure preserves invertibility,
 but any sensor or interface operation that injects fine-grid Nyquist content
 will be amplified by roughly 20× and must be filtered or excluded.
 
@@ -401,18 +389,18 @@ the well-conditioned band. It stops being benign if a boundary closure or an
 artificial-property sensor injects grid-scale content near a transfer boundary,
 which is very likely why the source comments fuss about ringing and about
 closures that "maintain invertibility." The measurement above bounds this risk;
-the next test belongs in a real coarse–fine interface with Cook sensors active.
+the next test should use a representative coarse–fine interface with Cook
+sensors active.
 
 ### SBP–SAT as the alternative
 
-The SBP route remains the rigorous option and the one with proofs, but it is no
-longer the default recommendation: Miranda demonstrates the cheaper design works
-in this exact scheme family and physics. Keep it in view for two reasons. First,
-if the deconvolution conditioning above turns out badly, SBP–SAT is the fallback
-with guarantees rather than a research project. Second, `SummationByPartsOperators.jl`
+The SBP route remains the rigorously supported alternative, but Miranda provides
+a lower-cost design in the same scheme family and physics. SBP–SAT remains
+relevant if deconvolution conditioning proves unacceptable.
+`SummationByPartsOperators.jl`
 (Ranocha, also a Trixi core developer) is the existing Julia package and
-implementing the Mattsson–Rydin implicit operators is an open issue there, so
-that path has a collaborator rather than requiring solo work.
+implementing the Mattsson–Rydin implicit operators is an open issue there,
+providing a possible external collaboration path.
 
 A data point for calibration: **HAMeRS**, the closest *published* relative —
 patch AMR on SAMRAI, high-order FD, built by Wong & Lele for exactly this RM/RT
@@ -423,7 +411,7 @@ therefore not the only one in this space, and it is the less documented one.
 ### Remaining issues
 
 - **Temporal prolongation.** Sub-cycled levels need ghost data at each of the
-  five RK stage times, not just at step boundaries, which means Hermite
+  five RK stage times rather than only at step boundaries, which means Hermite
   interpolation in time as well as high-order interpolation in space.
 - **Sensor consistency across levels.** The Cook artificial properties are built
   from *undivided* δ⁴ differences with per-dimension h weights — a deliberately
@@ -434,27 +422,26 @@ therefore not the only one in this space, and it is the less documented one.
 - **Folds and refinement.** The antipodal fold machinery assumes uniform global
   structure in the paired dimension (partner at +P/2, reflected partner). A
   refinement patch straddling the axis or a pole breaks that assumption. The
-  pragmatic answer is to forbid refinement across a fold initially — the
-  singular region is usually where you want uniform resolution anyway.
+  initial implementation can forbid refinement across a fold and retain uniform
+  resolution in the singular region.
 
-**Framework or hand-rolled** is the open decision. Julia has nothing at the
+**Framework selection** remains open. Julia has no package at the
 maturity of SAMRAI or AMReX; Trixi's precedent is to bind an established C
 library (P4est.jl) rather than build, which preserves correctness at the cost of
-the pure-Julia dependency story that `README.md` currently advertises. Worth
-deciding deliberately rather than by default.
+the pure-Julia dependency model described in `README.md`.
 
-**A note on sourcing.** Miranda's adaptivity is not described in the public
+**Source basis.** Miranda's adaptivity is not described in the public
 literature — searches surface its numerics consistently and its AMR not at all,
 and the Ares/Miranda Rayleigh–Taylor validation study attributes AMR to Ares. The
 account above is read directly from the kernels Pyranda carries, which is
 primary evidence for the *operator design* but says nothing about the patch
 management, sub-cycling, or refinement criteria that live in Miranda proper.
-Treat the numerics here as well-founded and the surrounding infrastructure as
-unspecified — which is not the same as unknowable. Patch bookkeeping is a design
+The numerical design is supported by primary-source kernels, whereas the
+surrounding infrastructure is unspecified. Patch bookkeeping is a design
 problem with published precedent (SAMRAI, AMReX, and the SBP–SAT block literature
 above), and this code's own constraints — the fold restrictions, the
-sub-communicator machinery, the bit-exact-within-a-level guarantee — pin most of
-the choices anyway. Nothing in Phase 3 waits on access to Miranda.
+sub-communicator machinery, and the bit-exact-within-a-level guarantee constrain
+most choices. Phase 3 does not depend on access to Miranda.
 
 ## Phase 0 — the extensibility seams (complete, July 2026)
 
@@ -465,66 +452,66 @@ dropped from 16 to 2, and axis-fold RHS allocation dropped from 8,336 B to
 
 **1. A source-term interface.** Add a `sources` tuple to `Solver` and a final
 `add_sources!(solver, dQ, Q, t)` in `compute_rhs!` that dispatches per source
-type. Keep it a tuple, not a vector of an abstract type, so it stays inferable —
-check with `bench/jetcheck.jl`. Ship it with one trivial implementation
-(constant body force or a Boussinesq gravity term) so the interface has a test.
+type. A tuple rather than a vector of an abstract type preserves inference, as
+verified with `bench/jetcheck.jl`. A minimal implementation, such as a constant
+body force or Boussinesq gravity term, should test the interface.
 
 **2. An `EquationSet` type owning the conserved layout.** Move `n_cons`,
 `i_mom`, `i_energy`, component names, and the fold parity tables behind a type.
 Close the three `n_species + 4` sites. `NavierStokes1T` is the current behavior;
-`NavierStokes3T` becomes a new instance rather than a rewrite. This is the
-Trixi lesson and it is the difference between 3T taking a week and taking a
-month.
+`NavierStokes3T` then becomes a new instance rather than a rewrite, following
+the equation-set pattern used by Trixi.
 
 **3. Concretely parameterize `Solver`.** `eos::EOS`, `metric::Metric`, and
 `folds::NTuple{3,Union{Nothing,FoldSpec}}` are abstract fields. This is already
 under **Known limitations** in `CLAUDE.md` as "FoldSpec parameterization"; it is the
-same job, and it gets strictly harder as the struct grows. Do it while it is
-still 50 fields.
+same parameterization task. Completing it before the structure grows limits the
+scope of the change.
 
 **4. Split the state allocation from the solver.** `run!` allocates `dQ` and
 `du` internally. Operator splitting, sub-cycling, and IMEX all need to own the
-stage storage. Hoist it into a `Workspace` the caller can hold.
+stage storage. Move it into a caller-owned `Workspace`.
 
-## Phase 1 — make shock tubes unimpeachable (largely complete, July 2026)
+## Phase 1 — shock-tube validation (largely complete, July 2026)
 
-The primary use case, and the foundation of credibility for everything after it.
-The validation before this phase was honest but thin: Sod against the exact
+This phase establishes the validation basis for the primary use case. Before the
+phase, validation consisted of Sod against the exact
 Riemann solution, Taylor–Green, freestream, and manufactured fold solutions.
 
-**A real validation battery — done.** `test/validation.jl` runs Lax, Shu–Osher,
+**Validation battery — complete.** `test/validation.jl` runs Lax, Shu–Osher,
 Woodward–Colella, Sedov–Taylor and Noh, the last in all three geometries, in
 about 25 seconds. It is deliberately split by what each case can be measured
-against: Lax, Sedov and Noh have closed-form solutions and can therefore say the
-code is *wrong*; Shu–Osher and Woodward–Colella are guarded against stored
-4×-resolution profiles from this code and can only say it *changed*. Cases live
+against. Lax, Sedov, and Noh have closed-form solutions and test absolute
+accuracy; Shu–Osher and Woodward–Colella use stored 4×-resolution profiles from
+this code and detect regressions relative to that baseline. Cases live
 in `test/cases.jl`, shared with the calibration sweep so the two cannot drift.
 
-Two operating limits fell out of building it, both real and both now documented
-in `reference/CALIBRATION.md`: strong shocks need `cfl ≤ 0.15` because
-`compute_dt` lags the artificial coefficients by a step, and the spherical origin
-fold will not take initial data resolved over fewer than ~3 cells or the singular
-t = 0 start of spherical Noh — while the cylindrical axis takes both. The second
-of those is an unexplained asymmetry between two folds that are supposed to be
-the same machinery, and it is the most interesting loose thread in this phase.
+Construction of the battery identified two operating limits, documented in
+`reference/CALIBRATION.md`. Converging strong shocks require `cfl ≤ 0.15`
+because insufficient spatial regularization permits a dispersive density
+undershoot; tests exclude the one-step lag in `compute_dt` as the cause. The
+spherical-origin fold also does not accept initial data resolved over fewer than
+approximately three cells or the singular t = 0 start of spherical Noh, whereas
+the cylindrical axis accepts both. This difference between folds remains
+unexplained.
 
-**Calibrate the artificial-property constants — done.** `bench/artcal.jl` sweeps
-each constant over the battery; `reference/CALIBRATION.md` is the write-up. The
-defaults survive, with one substantive correction (the CFL guidance above) and
-three findings worth carrying forward: `C_beta` fails at *both* ends and its
-upper bound is a timestep-stability bound rather than an accuracy one; `C_kappa`
-= 0 will not run a converging strong shock at all, so the artificial conduction
-is load-bearing and not just an accuracy term; and `C_D` is a weak knob, because
-on a passive interface the compact filter does more smearing than D\* does.
-`C_mu` remains uncalibrated for its actual purpose — every case in the battery
-is 1-D, where the shear viscosity is inert. That needs a 3-D case.
+**Artificial-property calibration — complete.** `bench/artcal.jl` sweeps each
+constant over the battery, with results in `reference/CALIBRATION.md`. The
+defaults remain, with one substantive correction to the CFL guidance and three
+findings: `C_beta` fails at both ends and its
+upper bound is a timestep-stability bound rather than an accuracy one;
+`C_kappa = 0` does not support a converging strong shock, so artificial conduction is
+required for stability rather than only accuracy; `C_D` has weak influence because
+on a passive interface the compact filter produces more broadening than D\*.
+A separate 128³ Taylor–Green study constrains `C_mu` for resolved shear and is
+consistent with the shipped default.
 
-**Mixing diagnostics — done.** `src/diagnostics.jl` provides metric-aware,
+**Mixing diagnostics — complete.** `src/diagnostics.jl` provides metric-aware,
 MPI-reduced volume integrals and plane-averaged profiles, and on top of them mix
 width, Youngs' molecular mixing fraction θ, composition PDFs, Favre turbulent
 kinetic energy, and resolved dissipation including the artificial contribution.
-The quadrature is the load-bearing part — every mixing number is a ratio of two
-integrals, so a wrong edge weight biases θ silently — and it is exact for a
+The quadrature determines these integral ratios. An incorrect edge weight biases
+θ without changing the API. The implementation is exact for a
 constant on a Cartesian grid and second order at a node-centered curvilinear
 edge.
 
@@ -534,8 +521,8 @@ are now EOS dispatch points rather than ideal-gas algebra inlined at their call
 sites in `nscbc.jl` and `artificial.jl`. The full contract is written down at
 the top of `physics.jl`.
 
-Two models joined `IdealMixture` to prove the contract carries weight rather
-than just existing: `StiffenedGas` (`p = (γ−1)ρe − γp∞`, exact perfect-gas limit
+Two models exercise the contract in addition to `IdealMixture`:
+`StiffenedGas` (`p = (γ−1)ρe − γp∞`, exact perfect-gas limit
 at p∞ = 0, the natural precursor to Mie–Grüneisen) and `Nasa9Mixture` with
 temperature-dependent specific heats and a Newton inversion of e(T). The NASA
 CEA thermodynamic and limited transport databases ship verbatim in `data/`,
@@ -546,28 +533,27 @@ the tabulated heat-of-formation gauge). `examples/shock_tube.jl` now uses real
 He and CO₂ cp(T). The transport coefficients remain raw data until the constant
 `Transport` model grows temperature-dependent properties and mixture rules.
 
-What is *not* done: the κ\* singularity as T_ion → 0 is now visible and
-dispatchable but not cured for gases, and that is a numerics decision (see
+The κ\* singularity as T_ion → 0 is exposed through dispatch but remains for gas
+models; resolving it is a numerical-model decision (see
 **Known limitations** in `CLAUDE.md`). Mie–Grüneisen proper is still ahead.
 
 ## Phase 2 — HED physics
 
-This is the NIF path, and it is the expensive one. Ordered so each step is
-usable on its own.
+This phase supplies the NIF-oriented physics. Its items are ordered so that each
+produces an independently usable capability.
 
 **1. Implicit diffusion infrastructure.** Everything else here depends on it.
 Build it on the existing distributed banded solve: ADI or line-Jacobi sweeps as
 the smoother, wrapped in either a geometric multigrid or a Krylov method
 (Krylov.jl is the mature Julia option and is dependency-light). Validate against
 a manufactured heat-conduction solution in every metric, and against the
-existing freestream tests. **This single piece also solves the azimuthal-CFL
-problem documented in the README** — implicit treatment of the θ direction is
-one of the standard remedies listed there — so it earns its cost twice.
+existing freestream tests. Implicit treatment of the θ direction also addresses
+the azimuthal CFL restriction documented in the README.
 
 **2. IMEX time integration.** With the implicit solver in hand, an IMEX-ARK
 scheme pairing the existing explicit RK45 on hydro with an implicit treatment of
-diffusion. Phase 0 item 4 is the prerequisite. Consider borrowing tableaus from
-the SciML ecosystem rather than hand-rolling.
+diffusion. Phase 0 item 4 is the prerequisite. Existing tableaus from the SciML
+ecosystem should be evaluated before implementing new ones.
 
 **3. Three-temperature hydrodynamics.** T_ele and T_rad alongside T_ion — the
 naming convention has reserved this from the start, which is why it costs an
@@ -576,7 +562,7 @@ equations, an electron–ion equilibration source (Phase 0 item 1), and the
 electron pressure contribution to the momentum flux.
 
 **4. Electron thermal conduction.** Spitzer–Härm with a flux limiter, through
-the Phase 2.1 solver. Straightforward once 1 and 3 exist.
+the Phase 2.1 solver. This depends on items 1 and 3.
 
 **5. Tabulated EOS.** An IONMIX reader first (it is the simpler format and is
 what FLASH's HEDP demos use), SESAME later if licensing permits. The Phase 1
@@ -585,17 +571,16 @@ the artificial-property model are EOS-agnostic.
 
 **6. Multigroup radiation diffusion.** Flux-limited, gray first, then multigroup
 with a group structure and an opacity interface mirroring the EOS contract.
-Radiation groups become additional conserved components, which is what Phase 0
-item 2 exists to make cheap.
+Radiation groups become additional conserved components, supported by the
+Phase 0 item 2 equation-set interface.
 
 **7. Laser energy deposition.** Geometric-optics ray tracing with inverse
 bremsstrahlung absorption. Architecturally independent of everything above — it
 is a source term (Phase 0 item 1) plus a ray tracer that hands rays between
-ranks. Could be done earlier if a specific experiment demands it, and it is the
-most visually compelling capability on this list.
+ranks. This item can precede the others if required by a specific experiment.
 
-**8. MHD, if magnetized targets matter.** Note for planning: the ∇·B constraint
-with finite differences wants hyperbolic (GLM) divergence cleaning, which adds a
+**8. MHD, if magnetized targets matter.** The ∇·B constraint with finite
+differences requires hyperbolic (GLM) divergence cleaning, which adds a
 conserved component and a source term — again, Phase 0. Constrained transport is
 not natural in this discretization.
 
@@ -603,126 +588,116 @@ not natural in this discretization.
 
 **Patch-based AMR.** The long-term target, with the design constraints and the
 open framework decision set out in [Adaptivity](#adaptivity--the-compact-scheme-constraint)
-above. Sequence it as: implement the Miranda-style invertible transfer filter
-pair as two compact schemes and measure its conditioning under grid-scale noise
-(cheap, and it is the one real numerics risk); introduce a patch abstraction at
+above. The proposed sequence is to implement the Miranda-style invertible
+transfer-filter pair as two compact schemes and measure its conditioning under
+grid-scale noise; introduce a patch abstraction at
 a *single* level with conforming interfaces
 (pure refactoring, independently verifiable against the existing bit-exact
 tests, and immediately useful as multiblock geometry even if refinement never
 follows); then non-conforming coarse-fine interfaces, spatial prolongation,
 temporal prolongation for RK sub-cycling, and refinement criteria last.
-Conforming multiblock before non-conforming refinement is the important ordering
-— it is where the SBP–SAT literature's guarantees are cleanest and where a
-mistake is cheapest to find. The refinement criterion is nearly free when it
-arrives — the
+Conforming multiblock precedes non-conforming refinement because the SBP–SAT
+guarantees are clearest for conforming interfaces and defects are easier to
+isolate. The existing
 Cook δ⁴ sensors in `artificial.jl` are already exactly the "where is this
 under-resolved" signal an AMR tagger needs.
 
 **GPU through KernelAbstractions.jl.** The pointwise kernels — `primitives!`,
-`assemble_fluxes!`, the RK update, `compute_artificial!` — port
-straightforwardly, and they are the majority of the phase budget outside the
-line solves. The hard part is the distributed banded solve, where the batched
+`assemble_fluxes!`, the RK update, and `compute_artificial!` — account for most
+of the phase budget outside the line solves and consist of pointwise operations.
+The distributed banded solve requires separate treatment: the batched
 Thomas sweeps are sequential along the line but embarrassingly parallel across
-lines, which is actually a reasonable GPU shape given the transposed layout
+lines, a structure compatible with GPU execution given the transposed layout
 `lines_transposed.jl` already provides. Follow XCALibre's architecture; do not
 maintain two codebases.
 
-**Sequence GPU and AMR together, AMR first.** These are usually treated as
-independent workstreams and here they should not be. Patch AMR breaks the "one
+**Sequence GPU and AMR together, with AMR first.** Patch AMR breaks the "one
 global array per field" assumption that currently pervades the code and replaces
 it with many independently-sized blocks — which is precisely the shape a GPU
-port wants, since a patch is a natural kernel-launch unit with a bounded working
-set. Porting to GPU against monolithic arrays first means doing the same
-decomposition work twice, in the harder order. That Miranda has a GPU
-implementation of its patch AMR is evidence the combination is the right target
-rather than two competing ones.
+port requires, since a patch is a natural kernel-launch unit with a bounded working
+set. A GPU port against monolithic arrays would duplicate the subsequent
+decomposition work. Miranda's GPU implementation of patch AMR provides evidence
+that the two capabilities can share an architecture.
 
-**Mixed precision.** `Solver{T}` is already parameterized; the stated blocker is
-that halo buffers are concretely `Float64`. Worth closing as a small, contained
-task — it also serves as a proof that the `{T}` parameterization is real.
+**Mixed precision.** `Solver{T}` is already parameterized; the remaining blocker
+is the concrete `Float64` type of halo buffers. Generalizing those buffers would
+also verify the existing `{T}` parameterization.
 
-**Parallel HDF5/XDMF output.** The checkpoint and VTK paths are per-rank plus a
-rank-0 container, which does not survive large rank counts. `DESIGN.md` already
-sketches the shape this would take.
+**Parallel HDF5/XDMF output.** The checkpoint and VTK paths use per-rank files
+and a rank-0 container, which scales poorly to large rank counts. `DESIGN.md`
+outlines a parallel output design.
 
-**Multiblock geometry** comes nearly free once the patch abstraction exists —
-same-level patches with their own line solves, coupled through interface
-exchange, are structurally what multiblock needs. Worth noting as a payoff of
-the AMR work rather than a separate effort, since it is also the route to
-non-coordinate-surface geometry without going unstructured.
+**Multiblock geometry** follows from the patch abstraction: same-level patches
+with separate line solves and interface exchange provide the required structure.
+This also supports non-coordinate-surface geometry without an unstructured mesh.
 
 **ThreadPinning wiring**, listed as open in `reference/CLUSTER.md` and only
 validatable on the target cluster.
 
 ## Non-goals
 
-Stating these explicitly, because each is something a reviewer will ask about
-and the answer is "deliberately not."
+The following capabilities are explicitly outside the project scope.
 
 - **Oct-tree / cell-by-cell AMR.** Patch-based refinement is in long-term scope
   (Phase 3); tree refinement down to individual cells is not, because it is the
-  variant that genuinely conflicts with a line-coupled solve.
-- **Unstructured meshes.** Same reason, more so. Multiblock patches are the
-  answer to geometric complexity in this scheme family.
+  variant that is incompatible with a line-coupled solve.
+- **Unstructured meshes.** A line-coupled solve instead uses multiblock patches
+  for geometric complexity.
 - **Riemann solvers and flux limiters.** The artificial-fluid-property approach
   is the design commitment. Adding a Godunov path would double the maintenance
   surface for a capability that other codes do better.
 - **A string-based PDE interpreter**, in the Pyranda style. Note this is a
   narrower exclusion than "no symbolic frontend": a macro-based frontend that
-  *lowers* to the equation-set dispatch of Phase 0 is legitimate and arguably the
-  right long-term ergonomic answer, since it gets Pyranda's ten-line problem
+  *lowers* to the equation-set dispatch of Phase 0 remains possible and can
+  provide Pyranda's concise problem
   specification while the generated code stays concretely typed and stays
   visible to `bench/audit.jl` and `bench/jetcheck.jl`. The exclusion is on
   runtime string evaluation, not on metaprogramming. Sequencing matters: the
   dispatch layer has to exist and be exercised by hand-written equation sets
-  before a macro is written to emit it, or the macro ends up defining the
-  interface by accident.
+  before a macro emits it, so the handwritten equation sets define the
+  interface.
 - **Being a general-purpose CFD library.** XCALibre and Trixi occupy that
-  ground. This code is for compressible, variable-density, shock-driven mixing
-  and implosion, and its value is being excellent at that.
+  ground. CompactLES is scoped to compressible, variable-density, shock-driven
+  mixing and implosion.
 
 ## Suggested ordering
 
-If only three things happen, they should be:
+The three highest-priority items are:
 
-1. **Phase 0 in full.** Done, July 2026. Behavior-preserving, and it is the
-   difference between the rest of this document being tractable and being a
-   rewrite. The bit-identical convergence guards made it verifiable.
-2. **Phase 1's validation battery and EOS generalization.** Done, July 2026.
-   This is what makes the primary use case defensible and simultaneously
-   unblocks Phase 2.5.
-3. **Phase 2.1, the implicit diffusion solver.** The one true architectural gap,
-   with more of its foundation already built than is obvious, and it pays off
-   twice by also addressing the polar CFL restriction.
+1. **Phase 0 in full.** Completed in July 2026 as a behavior-preserving refactor.
+   It provides the extension interfaces required by later phases, with
+   bit-identical convergence guards verifying the change.
+2. **Phase 1's validation battery and EOS generalization.** Completed in July
+   2026. It establishes the validation basis for the primary use case and
+   enables Phase 2.5.
+3. **Phase 2.1, the implicit diffusion solver.** This closes the principal
+   architectural gap and also addresses the polar CFL restriction.
 
 Laser ray tracing (2.7) is the exception to the ordering: it is independent of
 everything else and could be pulled forward if a specific NIF experiment needs
 it before the rest of the HED stack exists.
 
-Two items from the adaptivity discussion belong earlier than Phase 3, though
-both are cheap and neither is structural:
+Two preparatory adaptivity items can precede Phase 3:
 
 - **Build the Miranda transfer filter pair and measure its conditioning.** The
-  coefficients are known and the machinery to plan them already exists, so this
-  is a small piece of work that de-risks the whole adaptivity plan. What to look
-  for is the deconvolution's response to grid-scale content near a transfer
-  boundary — the failure mode the Fortran comments hint at.
+  coefficients and planning machinery already exist. The measurement should
+  quantify the deconvolution response to grid-scale content near a transfer
+  boundary, corresponding to the failure mode identified in the Fortran comments.
 - **Design the patch infrastructure independently.** The operator design is
   settled from the kernels, and that was the part with numerics risk. Patch
-  management, time sub-cycling, and refinement criteria are what Phase 3's cost
-  now turns on, and they are absent from the public Pyranda tree — but they are
-  infrastructure, to be built against this code's own constraints (the fold
+  management, time sub-cycling, and refinement criteria dominate the remaining
+  Phase 3 cost. They are absent from the public Pyranda tree and must be designed
+  against this code's constraints: the fold
   restrictions, the sub-communicator machinery, the bit-exact-within-a-level
-  guarantee) rather than reconstructed from someone else's. Treat their absence
-  from the source as a design brief, not a missing dependency.
+  guarantee.
 
-Deliberately *not* on this list: any change to the grid arrangement. An earlier
+No change to the grid arrangement is currently proposed. An earlier
 version of this document argued that moving to a uniformly cell-centered grid
 was a now-or-never prerequisite for adaptivity. That was extrapolated from a
 single recent preprint working in the explicit WENO-family finite-difference
 lineage, and it does not survive contact with the SBP–SAT literature, where
 multiblock interfaces are node-coincident and non-conforming interfaces are
 handled by interpolation operators rather than by a staggered arrangement. If
-anything the established route points the other way. The current mixed
+The established literature does not support that prerequisite. The current mixed
 convention — half-offset only where a fold requires it — should stay until
 there is a specific reason to change it.

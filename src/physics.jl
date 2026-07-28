@@ -365,14 +365,13 @@ or straight out of the conserved array without materializing anything.
 
 Newton on f(T) = Σ Y_k e_k(T) − e, whose derivative is the mixture cv and is
 positive for any physical coefficient set, so the iteration is monotone. The
-step is clamped so it cannot cross into T ≤ 0 from a garbage state in a stale
-halo, and the iteration count is capped.
+step is clamped to remain in T > 0 even when a stale halo contains a nonphysical
+state, and the iteration count is bounded.
 
-The starting point is a pure function of the state, deliberately: seeding from
-the previous value at the same point is a percent away and would save an
-iteration, but it makes the answer depend on call history, and the bit-for-bit
-agreement between a serial and a decomposed run is the correctness oracle the
-MPI suite is built on. That is not worth one Newton step.
+The starting point is a pure function of the state. Seeding from the previous
+value at the same point generally saves one iteration but makes the result
+depend on call history. A state-based seed preserves the bit-for-bit agreement
+between serial and decomposed calculations tested by the MPI suite.
 """
 @inline function mixture_temperature(eos::Nasa9Mixture, e, Yat::F) where {F}
     n = length(eos.sp)
