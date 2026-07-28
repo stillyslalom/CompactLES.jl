@@ -99,6 +99,36 @@ container_extension
 FieldWriter
 ```
 
+## Field extraction and plotting
+
+[`field_array`](@ref) resolves a named report variable to a padded array through
+[`scalar_field`](@ref) — the same catalog `save_vtk` uses — and refreshes it from
+`Q`. [`line_profile`](@ref) and [`field_slice`](@ref) build on it: a profile is
+a collective, area-weighted reduction along one axis (the general replacement
+for a hand-written sampling loop), and a slice is a rank-0 gather of a
+transverse plane. [`cartesian_slice`](@ref) resamples a curvilinear slice onto a
+Cartesian raster, and [`revolve_profile`](@ref) revolves a collapsed radial
+profile into a disk. See the tutorials for worked cylindrical and spherical
+initializations.
+
+The plotting functions live in a package extension and require a Makie backend
+(`using CairoMakie` or `using GLMakie`); [`makie_available`](@ref) reports
+whether it is loaded. [`profileplot`](@ref) draws a `line_profile`, and
+[`fieldheatmap`](@ref) draws a `field_slice`, resampling and using an equal
+aspect for a curvilinear plane.
+
+```@docs
+field_array
+scalar_field
+line_profile
+field_slice
+cartesian_slice
+revolve_profile
+makie_available
+profileplot
+fieldheatmap
+```
+
 ## Script argument helpers
 
 Repository examples and benchmark drivers use a defaults `NamedTuple` as their

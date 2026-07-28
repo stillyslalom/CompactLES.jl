@@ -46,13 +46,11 @@ numerics = Numerics(
 
 solver, Q = setup(problem, numerics)
 
-function density_line(solver, Q)
-    n = solver.decomp.n_local[1]
-    [mixture_density(solver, Q, gidx(solver, i, 1, 1)) for i in 1:n]
-end
+# [`line_profile`](@ref) returns a `(coordinate, value)` pair. In a cylindrical
+# geometry the first-axis coordinate is the radius, so this reads the density as
+# a function of ``r`` directly.
 
-r = [xcoord(solver, 1, i) for i in 1:nr]
-density_initial = density_line(solver, Q)
+r, density_initial = line_profile(solver, Q, :rho)
 
 # ## Inspect the timestep
 #
@@ -68,7 +66,7 @@ limit = dt_report(solver, Q)
 # a long integration if a future change alters timestep selection.
 
 run!(solver, Q; tfinal = limit.dt, nmax = 1)
-density_after_one_step = density_line(solver, Q)
+_, density_after_one_step = line_profile(solver, Q, :rho)
 
 fig = Figure(size = (760, 600))
 ax1 = Axis(fig[1, 1], ylabel = "density - 1",

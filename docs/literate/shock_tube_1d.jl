@@ -54,18 +54,17 @@ numerics = Numerics(
 
 solver, Q = setup(problem, numerics)
 
-function density_line(solver, Q)
-    n = solver.decomp.n_local[1]
-    [mixture_density(solver, Q, gidx(solver, i, 1, 1)) for i in 1:n]
-end
+# [`line_profile`](@ref) returns the density along ``x`` as a
+# `(coordinate, value)` pair, resolving `:rho` through the same field catalog
+# the output writers use.
 
-x = [xcoord(solver, 1, i) for i in 1:nx]
+x, rho0 = line_profile(solver, Q, :rho)
 tfinal = 0.12
 times = collect(range(0.0, tfinal; length = 49))
-snapshots = [density_line(solver, Q)]
+snapshots = [rho0]
 
 record = Callback(AtTime(times[2:end]), function (solver, Q)
-    push!(snapshots, density_line(solver, Q))
+    push!(snapshots, line_profile(solver, Q, :rho)[2])
     nothing
 end)
 

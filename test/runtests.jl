@@ -1823,4 +1823,21 @@ else
             "under mpiexec for the decomposition-independent restart.")
 end
 
+# A Makie backend is likewise a weak dependency, absent from the package
+# environment. The extraction API it exercises is exported by the core, so this
+# skip only foregoes the extension's plotting methods and the collective-profile
+# check under decomposition.
+if (try
+        @eval using CairoMakie
+        true
+    catch
+        false
+    end)
+    include("makie_tests.jl")
+else
+    println("Makie backend not loadable in this environment — extension tests " *
+            "SKIPPED. Run test/makie_tests.jl from the docs environment, and " *
+            "under mpiexec for the decomposition-independent profile.")
+end
+
 println("serial tests complete")

@@ -42,6 +42,7 @@ include("hdf5.jl")
 include("callbacks.jl")
 include("timestep.jl")
 include("diagnostics.jl")
+include("viz.jl")
 include("problem.jl")
 include("scriptargs.jl")
 
@@ -71,6 +72,9 @@ export refresh_primitives!, mixture_density, velocity, total_energy, mass_fracti
 export boundary_plane
 export volume_integral, volume_average, domain_volume, plane_profile
 export profile_coordinate, profile_spacing
+export field_array, scalar_field, line_profile, field_slice, cartesian_slice
+export revolve_profile
+export profileplot, profileplot!, fieldheatmap, fieldheatmap!, makie_available
 export mix_width, molecular_mixing, species_pdf
 export tke_profile, turbulent_kinetic_energy, dissipation_rate
 export xcoord, global_xcoord, gidx, filter_state!

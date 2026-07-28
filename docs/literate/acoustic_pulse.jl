@@ -53,26 +53,24 @@ solver, Q = setup(problem, numerics)
 
 # ## Read the state without depending on its layout
 #
-# ``Q`` stores conserved quantities, including halo points. [`gidx`](@ref)
-# maps a local interior index to the padded array, while
-# [`mixture_density`](@ref) avoids assuming where species densities reside.
+# [`line_profile`](@ref) extracts a named report variable along one axis as a
+# `(coordinate, value)` pair. It is the general replacement for hand-written
+# sampling loops: it resolves `:rho` through the same catalog the output writers
+# use, and it is collective and geometry-aware, so the profile means the same
+# thing under MPI decomposition as it does in serial. Here it returns the
+# mixture density along ``x``.
 
-function density_line(solver, Q)
-    nx = solver.decomp.n_local[1]
-    [mixture_density(solver, Q, gidx(solver, i, 1, 1)) for i in 1:nx]
-end
-
-x = [xcoord(solver, 1, i) for i in 1:solver.decomp.n_local[1]]
+x, rho0 = line_profile(solver, Q, :rho)
 tfinal = 0.30
 times = collect(range(0.0, tfinal; length = 61))
-snapshots = [density_line(solver, Q)]
+snapshots = [rho0]
 
 # [`AtTime`](@ref) asks `run!` to end steps exactly at the requested times.
 # The columns of `rho_xt` therefore lie on a uniform physical-time axis even
 # though the CFL-controlled timestep varies slightly.
 
 record = Callback(AtTime(times[2:end]), function (solver, Q)
-    push!(snapshots, density_line(solver, Q))
+    push!(snapshots, line_profile(solver, Q, :rho)[2])
     nothing
 end)
 

@@ -14,6 +14,8 @@ const TUTORIALS = [
     "shock_tube_1d.jl",
     "multicomponent_state.jl",
     "radial_coordinates.jl",
+    "cylindrical_3d.jl",
+    "spherical_3d.jl",
 ]
 
 mkpath(TUTORIAL_DIR)
@@ -54,7 +56,9 @@ makedocs(;
             "Your first simulation" => "tutorials/acoustic_pulse.md",
             "Regularizing a shock" => "tutorials/shock_tube_1d.md",
             "A multicomponent state" => "tutorials/multicomponent_state.md",
-            "A radial coordinate" => "tutorials/radial_coordinates.md",
+            "Radial coordinates" => "tutorials/radial_coordinates.md",
+            "3D cylinder" => "tutorials/cylindrical_3d.md",
+            "3D sphere" => "tutorials/spherical_3d.md",
         ],
         "How-to guides" => [
             "Define a problem" => "how-to/problem-setup.md",

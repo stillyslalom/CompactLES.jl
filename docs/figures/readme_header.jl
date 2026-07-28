@@ -203,25 +203,6 @@ function converging_shock_data(; nr=640, tfinal=0.30)
     return (; radius, rho, pressure, time=solver.t)
 end
 
-function radial_disk(radius, values; n=420, outer_radius=1.0)
-    axis = collect(range(-outer_radius, outer_radius; length=n))
-    disk = fill(NaN, n, n)
-    for j in eachindex(axis), i in eachindex(axis)
-        r = hypot(axis[i], axis[j])
-        r <= outer_radius || continue
-        if r <= radius[1]
-            disk[i, j] = values[1]
-        elseif r >= radius[end]
-            disk[i, j] = values[end]
-        else
-            lo = searchsortedlast(radius, r)
-            weight = (r - radius[lo]) / (radius[lo + 1] - radius[lo])
-            disk[i, j] = (1 - weight) * values[lo] + weight * values[lo + 1]
-        end
-    end
-    return axis, disk
-end
-
 function upsample_periodic3(values; factor=2)
     nx, ny, nz = size(values)
     smooth = Array{Float64}(undef, factor * nx, factor * ny, factor * nz)
@@ -506,7 +487,8 @@ function render_hero(data)
     cs = data.converging_shock
     disk_layout = GridLayout()
     fig[1, 3] = disk_layout
-    disk_axis, pressure_disk = radial_disk(cs.radius, log10.(max.(cs.pressure, eps())))
+    disk_axis, pressure_disk =
+        revolve_profile(cs.radius, log10.(max.(cs.pressure, eps())); n=420)
     axdisk = Axis(
         disk_layout[1, 1],
         title="Cylindrically converging shock",

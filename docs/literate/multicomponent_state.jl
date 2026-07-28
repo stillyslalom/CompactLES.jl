@@ -56,20 +56,15 @@ solver, Q = setup(problem, numerics)
 
 # ## Inspect the initialized conserved state
 #
-# CompactLES stores partial densities rather than mass fractions. State-query
-# helpers recover mixture quantities without exposing that component layout.
+# CompactLES stores partial densities rather than mass fractions.
+# [`line_profile`](@ref) recovers mixture quantities without exposing that
+# component layout: `:rho` gives the mixture density, and `:Y` with a `species`
+# index gives a mass fraction, in the order fixed above. No evolution is run, so
+# these profiles describe the initialized state directly.
 
-x = [xcoord(solver, 1, i) for i in 1:nx]
-density = Vector{Float64}(undef, nx)
-Yhe = similar(density)
-Yco2 = similar(density)
-
-for i in 1:nx
-    I = gidx(solver, i, 1, 1)
-    density[i] = mixture_density(solver, Q, I)
-    Yhe[i] = mass_fraction(solver, Q, I, 1)
-    Yco2[i] = mass_fraction(solver, Q, I, 2)
-end
+x, density = line_profile(solver, Q, :rho)
+_, Yhe = line_profile(solver, Q, :Y; species = 1)
+_, Yco2 = line_profile(solver, Q, :Y; species = 2)
 
 fig = Figure(size = (760, 600))
 ax1 = Axis(fig[1, 1], xlabel = "x", ylabel = "mass fraction",

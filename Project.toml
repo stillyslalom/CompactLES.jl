@@ -13,14 +13,17 @@ ThreadPinning = "811555cd-349b-4f26-b7bc-1f208b848042"
 
 [weakdeps]
 HDF5 = "f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"
+Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
 
 [extensions]
 CompactLESHDF5Ext = "HDF5"
+CompactLESMakieExt = "Makie"
 
 [compat]
 ChunkSplitters = "3.2.0"
 HDF5 = "0.17"
 MPI = "0.20"
+Makie = "0.21, 0.22, 0.23, 0.24"
 Polyester = "0.7.19"
 ThreadPinning = "1.1.1"
 julia = "1.9"

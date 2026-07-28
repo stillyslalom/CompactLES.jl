@@ -349,47 +349,64 @@ function _scalar_from(solver::Solver, f)
 end
 
 """
-    vtk_field_entries(solver, Q, name, rotate) -> Vector{(label, ncomponents, data)}
-
-Expand one requested field name into the Float32 payloads written by `save_vtk`.
-Most names produce a single entry. `:Y` and `:D_art` produce one entry per
-species, and the vector fields produce one three-component entry.
+Scalar report variables that [`scalar_field`](@ref) resolves to a full padded
+array, in the order `save_vtk`'s error message lists them. The vector names
+(`:velocity`, `:vorticity`) and the species-expanded names (`:Y`, `:D_art`) are
+handled by [`vtk_field_entries`](@ref) and the viz wrappers, not here.
 """
-function vtk_field_entries(solver::Solver, Q, name::Symbol, rotate::Bool, ranges)
-    E = Tuple{String,Int,Vector{Float32}}
-    one_scalar(label, a) = E[(label, 1, _interior(solver, a, ranges))]
+const SCALAR_FIELD_NAMES = (:rho, :p, :T_ion, :c, :u, :v, :w, :mach, :divergence,
+                            :vorticity_magnitude, :qcriterion, :schlieren,
+                            :strain_mag, :sensor, :mu_art, :beta_art, :kappa_art)
+
+"""
+    scalar_field(solver, name::Symbol; species=1) -> AbstractArray{<:Real,3}
+
+The full padded array of one named scalar report variable, read from the solver
+or derived from its gradient/artificial fields. This is the single catalog that
+both [`save_vtk`](@ref) (via `vtk_field_entries`) and the viz extraction API
+([`field_array`](@ref)) resolve names through, so the two cannot drift.
+
+Stored primitives (`:rho`, `:p`, `:T_ion`, `:c`, velocity components `:u`/`:v`/
+`:w`), the per-species `:Y` and `:D_art` (selected by `species`), and derived
+scalars (`:mach`, `:divergence`, `:vorticity_magnitude`, `:qcriterion`,
+`:schlieren`, `:strain_mag`, `:sensor`, `:mu_art`, `:beta_art`, `:kappa_art`)
+are supported. The derived names assume the relevant gradient and artificial
+passes have already run; `save_vtk` and `field_array` arrange that.
+
+The result is valid only over the interior unless halos have been refreshed.
+"""
+function scalar_field(solver::Solver, name::Symbol; species::Int=1)
     g = solver.grad_u
     if name === :rho
-        return one_scalar("rho", solver.rho)
+        return solver.rho
     elseif name === :p
-        return one_scalar("p", solver.p)
+        return solver.p
     elseif name === :T_ion
-        return one_scalar("T_ion", solver.T_ion)
+        return solver.T_ion
     elseif name === :c
-        return one_scalar("c", solver.c)
-    elseif name === :velocity
-        return E[("velocity", 3, _interior_vector(solver, solver.u, solver.v,
-                                                  solver.w, rotate, ranges))]
+        return solver.c
+    elseif name === :u
+        return solver.u
+    elseif name === :v
+        return solver.v
+    elseif name === :w
+        return solver.w
     elseif name === :Y
-        return E[("Y$(sp)", 1, _interior(solver, solver.Y[sp], ranges))
-                 for sp in 1:solver.equations.n_species]
+        return solver.Y[species]
+    elseif name === :D_art
+        return solver.D_art[species]
     elseif name === :mach
-        return one_scalar("mach", _scalar_from(solver, idx ->
-            sqrt(solver.u[idx]^2 + solver.v[idx]^2 + solver.w[idx]^2) / solver.c[idx]))
+        return _scalar_from(solver, idx ->
+            sqrt(solver.u[idx]^2 + solver.v[idx]^2 + solver.w[idx]^2) / solver.c[idx])
     elseif name === :divergence
-        return one_scalar("divergence",
-            _scalar_from(solver, idx -> g[1, 1][idx] + g[2, 2][idx] + g[3, 3][idx]))
-    elseif name === :vorticity
-        w1, w2, w3 = _vorticity_arrays(solver)
-        return E[("vorticity", 3, _interior_vector(solver, w1, w2, w3, rotate, ranges))]
+        return _scalar_from(solver, idx -> g[1, 1][idx] + g[2, 2][idx] + g[3, 3][idx])
     elseif name === :vorticity_magnitude
         w1, w2, w3 = _vorticity_arrays(solver)
-        return one_scalar("vorticity_magnitude",
-            _scalar_from(solver, idx -> sqrt(w1[idx]^2 + w2[idx]^2 + w3[idx]^2)))
+        return _scalar_from(solver, idx -> sqrt(w1[idx]^2 + w2[idx]^2 + w3[idx]^2))
     elseif name === :qcriterion
         # Q = ½(Ω_ij Ω_ij − S_ij S_ij): positive where rotation beats strain,
         # which is the usual vortex-core criterion.
-        return one_scalar("qcriterion", _scalar_from(solver, idx -> begin
+        return _scalar_from(solver, idx -> begin
             ss = 0.0; oo = 0.0
             for b in 1:3, a in 1:3
                 s = 0.5 * (g[a, b][idx] + g[b, a][idx])
@@ -397,27 +414,51 @@ function vtk_field_entries(solver::Solver, Q, name::Symbol, rotate::Bool, ranges
                 ss += s * s; oo += o * o
             end
             0.5 * (oo - ss)
-        end))
+        end)
     elseif name === :schlieren
-        return one_scalar("schlieren", _schlieren(solver))
+        return _schlieren(solver)
     elseif name === :strain_mag
-        return one_scalar("strain_mag", solver.strain_mag)
+        return solver.strain_mag
     elseif name === :sensor
-        return one_scalar("sensor", solver.sensor)
+        return solver.sensor
     elseif name === :mu_art
-        return one_scalar("mu_art", solver.mu_art)
+        return solver.mu_art
     elseif name === :beta_art
-        return one_scalar("beta_art", solver.beta_art)
+        return solver.beta_art
     elseif name === :kappa_art
-        return one_scalar("kappa_art", solver.kappa_art)
+        return solver.kappa_art
+    end
+    throw(ArgumentError("unknown field $name; known scalar names are " *
+                        "rho, p, T_ion, c, u, v, w, mach, divergence, " *
+                        "vorticity_magnitude, qcriterion, schlieren, strain_mag, " *
+                        "sensor, mu_art, beta_art, kappa_art; and per-species " *
+                        "Y, D_art (also velocity, vorticity as vectors)"))
+end
+
+"""
+    vtk_field_entries(solver, Q, name, rotate) -> Vector{(label, ncomponents, data)}
+
+Expand one requested field name into the Float32 payloads written by `save_vtk`.
+Most names produce a single entry via [`scalar_field`](@ref). `:Y` and `:D_art`
+produce one entry per species, and the vector fields produce one three-component
+entry.
+"""
+function vtk_field_entries(solver::Solver, Q, name::Symbol, rotate::Bool, ranges)
+    E = Tuple{String,Int,Vector{Float32}}
+    if name === :velocity
+        return E[("velocity", 3, _interior_vector(solver, solver.u, solver.v,
+                                                  solver.w, rotate, ranges))]
+    elseif name === :vorticity
+        w1, w2, w3 = _vorticity_arrays(solver)
+        return E[("vorticity", 3, _interior_vector(solver, w1, w2, w3, rotate, ranges))]
+    elseif name === :Y
+        return E[("Y$(sp)", 1, _interior(solver, solver.Y[sp], ranges))
+                 for sp in 1:solver.equations.n_species]
     elseif name === :D_art
         return E[("D_art$(sp)", 1, _interior(solver, solver.D_art[sp], ranges))
                  for sp in 1:solver.equations.n_species]
     end
-    throw(ArgumentError("save_vtk: unknown field $name; known names are " *
-                        "rho, p, T_ion, c, velocity, Y, mach, divergence, " *
-                        "vorticity, vorticity_magnitude, qcriterion, schlieren, " *
-                        "strain_mag, sensor, mu_art, beta_art, kappa_art, D_art"))
+    return E[(String(name), 1, _interior(solver, scalar_field(solver, name), ranges))]
 end
 
 # Appended-data bookkeeping. Every block is an 8-byte UInt64 length followed by
