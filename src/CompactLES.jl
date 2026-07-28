@@ -52,7 +52,7 @@ export BoundaryCondition, PeriodicBC, SlipWallBC, NoSlipWallBC, ExtrapolationBC,
 export NSCBCOutflowBC, NSCBCInflowBC, DirichletBC, save_checkpoint, load_checkpoint!, save_vtk
 export FieldWriter, DEFAULT_VTK_FIELDS, container_extension
 export BlockRegion, hdf5_available, hdf5_parallel
-export save_checkpoint_hdf5, load_checkpoint_hdf5!
+export save_checkpoint_hdf5, load_checkpoint_hdf5!, save_hdf5
 export SwitchableBC, switch!, switched
 export Prim, Problem, Numerics, setup, initialize!, conserved_from_prim, tanh_blend
 export DirPlan, BandPlan, apply_along!, filter_field!
@@ -73,7 +73,7 @@ export volume_integral, volume_average, domain_volume, plane_profile
 export profile_coordinate, profile_spacing
 export mix_width, molecular_mixing, species_pdf
 export tke_profile, turbulent_kinetic_energy, dissipation_rate
-export xcoord, gidx, filter_state!
+export xcoord, global_xcoord, gidx, filter_state!
 export THREAD_MIN_WORK
 export script_args, script_grid
 

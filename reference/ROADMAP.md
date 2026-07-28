@@ -623,18 +623,22 @@ that the two capabilities can share an architecture.
 is the concrete `Float64` type of halo buffers. Generalizing those buffers would
 also verify the existing `{T}` parameterization.
 
-**Parallel HDF5/XDMF output.** Partially delivered. The shared-file checkpoint
-(`save_checkpoint_hdf5` / `load_checkpoint_hdf5!`) writes the state as one global
-array and restores it onto any rank count, which also removes the
-same-decomposition restriction on restart. The visualization dump and its XDMF3
-sidecar are not yet written, so field output still uses the per-rank VTK path.
+**Parallel HDF5/XDMF output.** Delivered for single dumps. `save_hdf5` writes a
+field dump as one shared file with an XDMF3 sidecar, and the shared-file
+checkpoint (`save_checkpoint_hdf5` / `load_checkpoint_hdf5!`) writes the state as
+one global array and restores it onto any rank count, removing the
+same-decomposition restriction on restart.
 
-Two constraints govern the remaining work. A parallel libhdf5 must be built
-against the run's own MPI, which no binary artifact supplies; where it is
-absent the writer falls back to a serialized token relay that produces the same
-file at O(P) cost. And VTKHDF, the obvious modern container, has no
-RectilinearGrid or StructuredGrid support as of format version 2.5, so the
-sidecar should be XDMF3.
+XDMF3 rather than VTKHDF because that container supports neither
+RectilinearGrid nor StructuredGrid as of format version 2.5, so a stretched or
+curvilinear grid could only be expressed there as an unstructured mesh.
+
+Two things remain. A time series through `FieldWriter`, which currently writes
+the VTK path only and would need an XDMF temporal collection in place of the
+`.pvd`. And validation of the collective write: a parallel libhdf5 must be built
+against the run's own MPI, which no binary artifact supplies, so on a machine
+without one the writer takes a serialized token relay that produces the same
+file at O(P) cost. Only the fallback has been exercised.
 
 **Multiblock geometry** follows from the patch abstraction: same-level patches
 with separate line solves and interface exchange provide the required structure.

@@ -160,3 +160,132 @@ end
     rank == 0 && rm(dir; recursive=true)
     MPI.Barrier(comm)
 end
+
+@testset "HDF5 extension: field dump and XDMF3 sidecar" begin
+    comm = MPI.COMM_WORLD
+    np = MPI.Comm_size(comm)
+    rank = MPI.Comm_rank(comm)
+    per3h = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+
+    dir = rank == 0 ? mktempdir() : ""
+    dir = MPI.bcast(dir, comm; root=0)
+
+    nx, ny, nz = 72, 16, 12
+    rho_of = (x, y, z) -> 1 + x + 100y + 10000z
+    s = Solver(bcs=per3h, n_global=(nx, ny, nz), L_domain=(1.0, 1.0, 1.0),
+               art=ArtParams(enabled=false), dims=(np, 1, 1))
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(u=(x, 10y, 100z), p=1.0,
+                                        rho=rho_of(x, y, z)))
+    s.t = 0.75
+    save_hdf5(s, Q, joinpath(dir, "dump"); fields=(:rho, :velocity))
+    MPI.Barrier(comm)
+
+    if rank == 0
+        # One file per frame at any rank count, plus the sidecar a reader opens.
+        @test isfile(joinpath(dir, "dump.h5"))
+        @test isfile(joinpath(dir, "dump.xmf"))
+        @test length(filter(endswith(".h5"), readdir(dir))) == 1
+
+        h5open(joinpath(dir, "dump.h5")) do h
+            @test size(h["fields/rho"]) == (nx, ny, nz)
+            @test size(h["fields/velocity"]) == (3, nx, ny, nz)
+            @test size(h["grid/x"]) == (nx,)
+            @test read(h["meta/t"]) == 0.75
+
+            # Every rank's hyperslab landed where the global index says it
+            # should. A misplaced block would still be self-consistent within
+            # its own piece, so the comparison is against the analytic field
+            # over the whole global array.
+            rho = read(h["fields/rho"])
+            vel = read(h["fields/velocity"])
+            er, ev = 0.0, 0.0
+            for k in 1:nz, j in 1:ny, i in 1:nx
+                x = global_xcoord(s, 1, i)
+                y = global_xcoord(s, 2, j)
+                z = global_xcoord(s, 3, k)
+                er = max(er, abs(rho[i, j, k] - Float32(rho_of(x, y, z))))
+                ev = max(ev, abs(vel[1, i, j, k] - Float32(x)),
+                             abs(vel[2, i, j, k] - Float32(10y)),
+                             abs(vel[3, i, j, k] - Float32(100z)))
+            end
+            @test er < 1e-2                     # Float32 payload at magnitude 1e4
+            @test ev < 1e-4
+
+            # The sidecar declares the on-disk dimension order, which is the
+            # reverse of the Julia one. If these disagree the reader transposes
+            # the field and nothing reports an error.
+            for (name, want) in (("fields/rho", UInt64[nz, ny, nx]),
+                                 ("fields/velocity", UInt64[nz, ny, nx, 3]))
+                dims, _ = HDF5.API.h5s_get_simple_extent_dims(HDF5.dataspace(h[name]))
+                @test dims == want
+            end
+        end
+
+        xmf = read(joinpath(dir, "dump.xmf"), String)
+        @test occursin("TopologyType=\"3DRectMesh\" Dimensions=\"$nz $ny $nx\"", xmf)
+        @test occursin("GeometryType=\"VXVYVZ\"", xmf)
+        @test occursin("<Time Value=\"0.75\"/>", xmf)
+        @test occursin("Dimensions=\"$nz $ny $nx\" NumberType=\"Float\" " *
+                       "Precision=\"4\" Format=\"HDF\">dump.h5:/fields/rho", xmf)
+        @test occursin("AttributeType=\"Vector\"", xmf)
+        @test occursin("Dimensions=\"$nz $ny $nx 3\"", xmf)
+        # Relative to the sidecar's own directory, so the pair stays portable.
+        @test !occursin(dir, xmf)
+    end
+    MPI.Barrier(comm)
+
+    # Subsampling reduces the declared grid, and the sidecar follows it.
+    save_hdf5(s, Q, joinpath(dir, "coarse"); fields=(:rho,), stride=(2, 2, 1))
+    MPI.Barrier(comm)
+    if rank == 0
+        h5open(joinpath(dir, "coarse.h5")) do h
+            @test size(h["fields/rho"]) == (36, 8, 12)
+            @test size(h["grid/x"]) == (36,)
+            # The retained stations are the odd global ones, not a re-spacing.
+            @test read(h["grid/x"]) ≈ [global_xcoord(s, 1, i) for i in 1:2:nx]
+        end
+        @test occursin("Dimensions=\"12 8 36\"",
+                       read(joinpath(dir, "coarse.xmf"), String))
+    end
+    MPI.Barrier(comm)
+
+    # A resolved angle writes an explicit position per point and a curvilinear
+    # topology, matching the rule the VTK path uses.
+    cyl = Solver(bcs=((SlipWallBC(), SlipWallBC()), per3h[2], per3h[3]),
+                 n_global=(12, 72, 10), L_domain=(1.0, 2π, 1.0),
+                 origin=(0.5, 0.0, 0.0), metric=CylindricalMetric(),
+                 art=ArtParams(enabled=false), dims=(1, np, 1))
+    Qc = allocate_state(cyl)
+    initialize!(cyl, Qc, (r, θ, z) -> Prim(u=(0.0, 0.5, 0.0), p=1.0, rho=1.0))
+    save_hdf5(cyl, Qc, joinpath(dir, "annulus"); fields=(:rho, :velocity))
+    MPI.Barrier(comm)
+    if rank == 0
+        h5open(joinpath(dir, "annulus.h5")) do h
+            @test size(h["grid/points"]) == (3, 12, 72, 10)
+            @test !haskey(h, "grid/x")
+            pts = read(h["grid/points"])
+            radii = [hypot(pts[1, i, j, k], pts[2, i, j, k])
+                     for i in 1:12, j in 1:72, k in 1:10]
+            @test minimum(radii) ≈ 0.5 rtol = 1e-12
+            @test maximum(radii) ≈ 1.5 rtol = 1e-12
+            # Velocity is rotated into the frame the positions are written in.
+            vel = read(h["fields/velocity"])
+            radial = 0.0
+            for k in 1:10, j in 1:72, i in 1:12
+                x, y = pts[1, i, j, k], pts[2, i, j, k]
+                radial = max(radial, abs(vel[1, i, j, k] * x +
+                                         vel[2, i, j, k] * y) / hypot(x, y))
+            end
+            @test radial < 1e-6
+        end
+        xmf = read(joinpath(dir, "annulus.xmf"), String)
+        @test occursin("TopologyType=\"3DSMesh\"", xmf)
+        @test occursin("GeometryType=\"XYZ\"", xmf)
+        @test occursin("annulus.h5:/grid/points", xmf)
+    end
+
+    MPI.Barrier(comm)
+    rank == 0 && rm(dir; recursive=true)
+    MPI.Barrier(comm)
+end

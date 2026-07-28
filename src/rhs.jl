@@ -266,9 +266,19 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
 end
 
 "Physical coordinate of local interior index i along dimension d."
-function xcoord(solver::Solver, d::Int, i::Int)
-    ξ = solver.origin[d] + solver.coord_shift[d] +
-        (solver.decomp.offset[d] + i - 1) * solver.h[d]
+xcoord(solver::Solver, d::Int, i::Int) =
+    global_xcoord(solver, d, solver.decomp.offset[d] + i)
+
+"""
+    global_xcoord(solver, d, g)
+
+Physical coordinate of *global* 1-based index `g` along dimension `d`. Every
+rank returns the same value for the same `g`, which is what a writer assembling
+a global coordinate vector needs; `xcoord` is this composed with the rank's own
+offset.
+"""
+function global_xcoord(solver::Solver, d::Int, g::Int)
+    ξ = solver.origin[d] + solver.coord_shift[d] + (g - 1) * solver.h[d]
     st = solver.stretch[d]
     return st === nothing ? ξ : st.x(ξ)
 end

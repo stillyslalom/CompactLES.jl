@@ -273,6 +273,10 @@ from one imposed by azimuthal spacing near a singularity.
   written as a curvilinear `.pvts` with explicit Cartesian positions and rotated
   velocity, so a cylindrical or spherical run renders as an annulus or shell;
   every other grid is written as a rectilinear `.pvtr`.
+- **Shared-file dumps:** with `using HDF5`, `save_hdf5(solver, Q, "prefix")` writes
+  one `.h5` per frame however many ranks there are, plus an XDMF3 `.xmf` sidecar
+  to open in ParaView or VisIt. It takes the same `fields` and `stride` as
+  `save_vtk` and follows the same rectilinear/curvilinear rule.
 - **Field selection:** `save_vtk(...; fields = (:rho, :velocity, :schlieren, :sensor))`.
   Besides the primitives, several derived fields are available at little cost
   from state the solver already holds: `:vorticity`, `:qcriterion`,

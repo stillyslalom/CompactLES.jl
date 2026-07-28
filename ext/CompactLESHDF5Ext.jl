@@ -133,4 +133,150 @@ function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractStr
     return Q
 end
 
+# --- Field dump, with an XDMF3 sidecar --------------------------------------
+#
+# Array layout is the whole of the care needed here. Julia is column-major and
+# HDF5 is row-major, and HDF5.jl bridges them by reversing the dimension list on
+# disk: a Julia (nx, ny, nz) dataset is reported by h5dump as nz x ny x nx.
+# XDMF reads in the row-major convention, so a scalar's Dimensions are written
+# "NZ NY NX".
+#
+# Vectors follow from the same rule. XDMF wants the component to vary fastest,
+# so the Julia array must be (3, nx, ny, nz) — component first — which lands on
+# disk as nz x ny x nx x 3 and is declared "NZ NY NX 3". That is exactly the
+# interleaved layout `_interior_vector` already produces, so the payload is
+# reshaped rather than permuted.
+
+const XDMF_SCALAR = "Scalar"
+const XDMF_VECTOR = "Vector"
+
+_xdmf_dims(n) = string(n[3], " ", n[2], " ", n[1])
+
+function _coarse_global(solver::Solver, stride)
+    n = solver.decomp.n_global
+    return ntuple(d -> length(1:stride[d]:n[d]), 3)
+end
+
+# Global coordinate vectors, identical on every rank, so no communication is
+# needed to write them.
+_coarse_axis(solver::Solver, d, stride) =
+    Float64[CompactLES.global_xcoord(solver, d, g)
+            for g in 1:stride[d]:solver.decomp.n_global[d]]
+
+function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
+                              fields=CompactLES.DEFAULT_VTK_FIELDS, stride=1)
+    decomp = solver.decomp
+    comm = decomp.comm
+    rank = MPI.Comm_rank(comm)
+    st = CompactLES._normalize_stride(stride)
+    ranges = CompactLES._stride_ranges(solver, st)
+    CompactLES._check_stride(solver, st, ranges)
+    CompactLES._prepare_fields!(solver, Q, fields)
+    curvilinear = CompactLES._curvilinear(solver)
+
+    entries = Tuple{String,Int,Vector{Float32}}[]
+    for name in fields
+        append!(entries, CompactLES.vtk_field_entries(solver, Q, name,
+                                                      curvilinear, ranges))
+    end
+
+    nglobal = _coarse_global(solver, st)
+    nlocal = ntuple(d -> length(ranges[d]), 3)
+    # Coarse-index offset of this rank's block, the same arithmetic the VTK
+    # piece extents use.
+    off = ntuple(d -> (decomp.offset[d] + first(ranges[d]) - 1) ÷ st[d], 3)
+    region = BlockRegion(off, nlocal)
+    path = string(prefix, ".h5")
+
+    with_shared_file(path, "w", comm) do file
+        if rank == 0
+            g = create_group(file, "meta")
+            g["t"] = Float64(solver.t)
+            g["step"] = Int64(solver.step)
+            g["n_global"] = Int64[nglobal...]
+            g["stride"] = Int64[st...]
+            g["curvilinear"] = Int64(curvilinear)
+            if !curvilinear
+                cg = create_group(file, "grid")
+                for d in 1:3
+                    cg["xyz"[d:d]] = _coarse_axis(solver, d, st)
+                end
+            end
+        end
+        if curvilinear
+            # One position per point, component first, so the sidecar can point
+            # XDMF's XYZ geometry straight at it.
+            pts = Array{Float64}(undef, 3, nlocal...)
+            for (kk, k) in enumerate(ranges[3]), (jj, j) in enumerate(ranges[2]),
+                (ii, i) in enumerate(ranges[1])
+                x, y, z = CompactLES._cartesian_position(solver.metric,
+                    xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))
+                pts[1, ii, jj, kk] = x
+                pts[2, ii, jj, kk] = y
+                pts[3, ii, jj, kk] = z
+            end
+            dset = shared_dataset(file, "grid/points", Float64, (3, nglobal...), comm)
+            r = region_ranges(region)
+            dset[1:3, r...] = pts
+        end
+        for (name, ncomp, data) in entries
+            if ncomp == 1
+                dset = shared_dataset(file, "fields/" * name, Float32, nglobal, comm)
+                write_region3!(dset, region, reshape(data, nlocal))
+            else
+                dset = shared_dataset(file, "fields/" * name, Float32,
+                                      (ncomp, nglobal...), comm)
+                r = region_ranges(region)
+                dset[1:ncomp, r...] = reshape(data, ncomp, nlocal...)
+            end
+        end
+    end
+
+    rank == 0 && _write_xdmf(string(prefix, ".xmf"), basename(path), solver,
+                             nglobal, entries, curvilinear)
+    MPI.Barrier(comm)
+    return prefix
+end
+
+function _write_xdmf(path, h5name, solver::Solver, nglobal, entries,
+                     curvilinear::Bool)
+    dims = _xdmf_dims(nglobal)
+    open(path, "w") do io
+        write(io, "<?xml version=\"1.0\" ?>\n")
+        write(io, "<!DOCTYPE Xdmf SYSTEM \"Xdmf.dtd\" []>\n")
+        write(io, "<Xdmf Version=\"3.0\">\n <Domain>\n")
+        write(io, "  <Grid Name=\"mesh\" GridType=\"Uniform\">\n")
+        write(io, "   <Time Value=\"", string(Float64(solver.t)), "\"/>\n")
+        if curvilinear
+            write(io, "   <Topology TopologyType=\"3DSMesh\" Dimensions=\"",
+                      dims, "\"/>\n")
+            write(io, "   <Geometry GeometryType=\"XYZ\">\n")
+            write(io, "    <DataItem Dimensions=\"", dims, " 3\" NumberType=\"Float\" ",
+                      "Precision=\"8\" Format=\"HDF\">", h5name, ":/grid/points",
+                      "</DataItem>\n   </Geometry>\n")
+        else
+            write(io, "   <Topology TopologyType=\"3DRectMesh\" Dimensions=\"",
+                      dims, "\"/>\n")
+            write(io, "   <Geometry GeometryType=\"VXVYVZ\">\n")
+            for d in 1:3
+                write(io, "    <DataItem Dimensions=\"", string(nglobal[d]),
+                          "\" NumberType=\"Float\" Precision=\"8\" Format=\"HDF\">",
+                          h5name, ":/grid/", "xyz"[d:d], "</DataItem>\n")
+            end
+            write(io, "   </Geometry>\n")
+        end
+        for (name, ncomp, _) in entries
+            kind = ncomp == 1 ? XDMF_SCALAR : XDMF_VECTOR
+            shape = ncomp == 1 ? dims : string(dims, " ", ncomp)
+            write(io, "   <Attribute Name=\"", name, "\" AttributeType=\"", kind,
+                      "\" Center=\"Node\">\n")
+            write(io, "    <DataItem Dimensions=\"", shape, "\" NumberType=\"Float\" ",
+                      "Precision=\"4\" Format=\"HDF\">", h5name, ":/fields/", name,
+                      "</DataItem>\n   </Attribute>\n")
+        end
+        write(io, "  </Grid>\n </Domain>\n</Xdmf>\n")
+    end
+    return path
+end
+
 end # module

@@ -95,6 +95,31 @@ Requires `using HDF5`.
 save_checkpoint_hdf5(args...; kwargs...) = _hdf5_required("save_checkpoint_hdf5")
 
 """
+    save_hdf5(solver, Q, prefix; fields = DEFAULT_VTK_FIELDS, stride = 1)
+
+Write a field dump to `prefix.h5` as one shared file, plus an XDMF3 sidecar
+`prefix.xmf` describing it, and return `prefix`. Open the **`.xmf`** in ParaView
+or VisIt; the `.h5` carries the data and no structure a reader can interpret on
+its own. Collective.
+
+`fields` and `stride` mean what they do in [`save_vtk`](@ref), which documents
+the available names and how points are selected for subsampling. The grid
+follows the metric on the same rule: a resolved angular dimension is written as
+a curvilinear mesh with explicit Cartesian positions and rotated vectors, and
+every other grid as a rectilinear mesh with three coordinate vectors.
+
+This is the form to use at large rank counts. The VTK path writes one file per
+rank per frame; this writes one file per frame regardless.
+
+XDMF3 rather than VTKHDF: as of VTKHDF format version 2.5 that container
+supports neither RectilinearGrid nor StructuredGrid, so a stretched or
+curvilinear grid could only be expressed there as an unstructured mesh.
+
+Requires `using HDF5`.
+"""
+save_hdf5(args...; kwargs...) = _hdf5_required("save_hdf5")
+
+"""
     load_checkpoint_hdf5!(solver, Q, prefix)
 
 Restore the conserved state and clock written by
