@@ -188,36 +188,91 @@ function _normalize_stride(stride)::NTuple{3,Int}
     return st
 end
 
-"Local interior indices this rank keeps along each dimension under `stride`."
-function _stride_ranges(solver::Solver, stride::NTuple{3,Int})
+# --- Slicing ----------------------------------------------------------------
+#
+# `slice = (d, g)` writes the single plane at global index `g` of dimension `d`,
+# which is the cheap way to watch a 3-D run: a mid-plane of a 512³ grid is 1/512
+# of the data. It reuses the stride machinery, since a slice is the degenerate
+# retained set {g} along one dimension and the strided set along the other two.
+#
+# One semantic difference, and it is the whole of the difference. Under a stride
+# an empty range is an error, because every rank must contribute a piece. Under
+# a slice an empty range is the normal case: only the ranks whose block spans
+# `g` hold any of the plane, and the rest write nothing at all. The parallel
+# container therefore lists fewer pieces than there are ranks, and the writers
+# skip a rank with no points rather than emitting a degenerate extent.
+#
+# The plane is kept as a 3-D grid one point thick rather than collapsed to a
+# genuine 2-D topology. Readers render it identically, and every extent, sidecar
+# dimension and hyperslab below keeps working unchanged.
+
+_slice_dim(slice) = slice === nothing ? 0 : Int(slice[1])
+
+"""
+Local interior indices this rank writes along each dimension, given `stride` and
+an optional `slice`. Empty along the sliced dimension on a rank whose block does
+not span the requested plane.
+"""
+function _output_ranges(solver::Solver, stride::NTuple{3,Int}, slice)
     decomp = solver.decomp
+    sd = _slice_dim(slice)
+    sg = slice === nothing ? 0 : Int(slice[2])
     return ntuple(3) do d
-        # Smallest local i ≥ 1 whose global index offset+i satisfies
-        # (offset + i − 1) % s == 0.
-        i0 = mod(-decomp.offset[d], stride[d]) + 1
-        i0:stride[d]:decomp.n_local[d]
+        if d == sd
+            i = sg - decomp.offset[d]
+            (1 <= i <= decomp.n_local[d]) ? (i:1:i) : (1:1:0)
+        else
+            # Smallest local i ≥ 1 whose global index offset+i satisfies
+            # (offset + i − 1) % s == 0.
+            i0 = mod(-decomp.offset[d], stride[d]) + 1
+            i0:stride[d]:decomp.n_local[d]
+        end
     end
 end
 
-# Coarse-index extent of this rank's piece, and of the whole grid.
-_strided_piece_extent(solver::Solver, stride, ranges) = begin
+"Whether this rank holds any part of the output, which a slice makes rank-local."
+_has_output(ranges) = all(!isempty, ranges)
+
+# Extent of this rank's piece in the output grid's own index space, and the
+# extent of that whole grid. The sliced dimension contributes a single point at
+# index 0 on the ranks that hold it.
+_output_piece_extent(solver::Solver, stride, slice, ranges) = begin
     off = solver.decomp.offset
-    lo = ntuple(d -> (off[d] + first(ranges[d]) - 1) ÷ stride[d], 3)
+    sd = _slice_dim(slice)
+    lo = ntuple(d -> d == sd ? 0 :
+                     (off[d] + first(ranges[d]) - 1) ÷ stride[d], 3)
     hi = ntuple(d -> lo[d] + length(ranges[d]) - 1, 3)
     lo, hi
 end
 
-_strided_whole_extent(solver::Solver, stride) = begin
+_output_whole_extent(solver::Solver, stride, slice) = begin
+    n = _output_global(solver, stride, slice)
+    ntuple(d -> 0, 3), ntuple(d -> n[d] - 1, 3)
+end
+
+_output_global(solver::Solver, stride, slice) = begin
     n = solver.decomp.n_global
-    ntuple(d -> 0, 3), ntuple(d -> length(1:stride[d]:n[d]) - 1, 3)
+    sd = _slice_dim(slice)
+    ntuple(d -> d == sd ? 1 : length(1:stride[d]:n[d]), 3)
 end
 
 # A stride large enough to leave a rank with no points along a dimension gives
 # that rank no valid piece to write. The test is collective so that every rank
 # throws; a single rank throwing would leave the others blocked in the Allgather
-# below.
-function _check_stride(solver::Solver, stride::NTuple{3,Int}, ranges)
-    bad = MPI.Allreduce(Int[isempty(ranges[d]) for d in 1:3], max,
+# below. The sliced dimension is exempt, being empty by design off the plane.
+function _check_output(solver::Solver, stride::NTuple{3,Int}, slice, ranges)
+    sd = _slice_dim(slice)
+    if slice !== nothing
+        n = solver.decomp.n_global
+        1 <= sd <= 3 ||
+            throw(ArgumentError("save_vtk: slice dimension must be 1, 2 or 3, " *
+                                "got $sd"))
+        g = Int(slice[2])
+        1 <= g <= n[sd] ||
+            throw(ArgumentError("save_vtk: slice index $g is outside " *
+                                "1:$(n[sd]) along dimension $sd"))
+    end
+    bad = MPI.Allreduce(Int[d != sd && isempty(ranges[d]) for d in 1:3], max,
                         solver.decomp.comm)
     any(>(0), bad) || return nothing
     dims = join(("xyz"[d] for d in 1:3 if bad[d] > 0), ", ")
@@ -389,7 +444,8 @@ end
 _piece_name(prefix, rank, ext) = string(prefix, ".r", lpad(rank, 4, '0'), ext)
 
 """
-    save_vtk(solver, Q, prefix; fields = DEFAULT_VTK_FIELDS, stride = 1)
+    save_vtk(solver, Q, prefix; fields = DEFAULT_VTK_FIELDS, stride = 1,
+             slice = nothing)
 
 Write one piece per rank plus a parallel container on rank 0, as Float32 point
 data on the physical grid, including stretch mappings. Open the container in
@@ -425,36 +481,50 @@ rank samples the same lattice and the pieces still tile; extents are written in
 the resulting coarse index space. At 512³ a stride of 4 reduces a 2.7 GB default
 dump to 43 MB.
 
-Subsampling reduces file size and write time only. The fields are still produced
-over the whole local block before any point is sampled, so a strided dump costs
-the same to compute as a full one. A stride large enough to leave a rank with no
-points throws, and does so collectively, so no rank is left blocked while
-another raises.
+`slice = (d, g)` writes only the plane at global index `g` of dimension `d`, as a
+grid one point thick in that dimension. A mid-plane of a 512³ run is 1/512 of the
+data, which is what makes a frequent 2-D time series affordable when a 3-D one is
+not. Only the ranks whose block spans `g` write a piece, so the container lists
+fewer pieces than there are ranks; the rest write nothing. `slice` composes with
+`stride`, which then applies to the two dimensions still resolved.
 
-Collective: every rank must call it with the same `fields` and `stride`, since
-the derived fields run distributed solves in tuple order.
+Subsampling reduces file size and write time only. The fields are still produced
+over the whole local block before any point is sampled, so a strided or sliced
+dump costs the same to compute as a full one — including on a rank that holds
+none of the plane, which must still reach the distributed solves behind the
+derived fields. A stride large enough to leave a rank with no points throws, and
+does so collectively, so no rank is left blocked while another raises.
+
+Collective: every rank must call it with the same `fields`, `stride` and
+`slice`, since the derived fields run distributed solves in tuple order.
 """
 function save_vtk(solver::Solver, Q, prefix::AbstractString;
-                  fields=DEFAULT_VTK_FIELDS, stride=1)
+                  fields=DEFAULT_VTK_FIELDS, stride=1, slice=nothing)
     st = _normalize_stride(stride)
-    ranges = _stride_ranges(solver, st)
-    _check_stride(solver, st, ranges)
+    ranges = _output_ranges(solver, st, slice)
+    _check_output(solver, st, slice, ranges)
     _prepare_fields!(solver, Q, fields)
     curvilinear = _curvilinear(solver)
     entries = Tuple{String,Int,Vector{Float32}}[]
+    # Field extraction still runs on a rank holding no part of the plane: the
+    # derived fields perform distributed solves, so every rank must reach them
+    # in the same order. Only the write below is skipped.
     for name in fields
         append!(entries, vtk_field_entries(solver, Q, name, curvilinear, ranges))
     end
-    return curvilinear ? _save_vts(solver, entries, prefix, st, ranges) :
-                         _save_vtr(solver, entries, prefix, st, ranges)
+    return curvilinear ? _save_vts(solver, entries, prefix, st, slice, ranges) :
+                         _save_vtr(solver, entries, prefix, st, slice, ranges)
 end
 
 # --- Rectilinear: three coordinate vectors, no per-point geometry.
 
-function _save_vtr(solver::Solver, entries, prefix::AbstractString, stride, ranges)
+function _save_vtr(solver::Solver, entries, prefix::AbstractString, stride,
+                   slice, ranges)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
-    lo, hi = _strided_piece_extent(solver, stride, ranges)
+    lo, hi = _output_piece_extent(solver, stride, slice, ranges)
+    _has_output(ranges) || return _write_parallel_container(
+        solver, entries, prefix, lo, hi, false, stride, slice)
     coords = ntuple(d -> Float64[xcoord(solver, d, i) for i in ranges[d]], 3)
 
     blocks = Any[coords[1], coords[2], coords[3]]
@@ -480,16 +550,19 @@ function _save_vtr(solver::Solver, entries, prefix::AbstractString, stride, rang
         write(io, "</PointData>\n</Piece>\n</RectilinearGrid>\n")
         _write_appended(io, blocks)
     end
-    _write_parallel_container(solver, entries, prefix, lo, hi, false, stride)
+    _write_parallel_container(solver, entries, prefix, lo, hi, false, stride, slice)
     return prefix
 end
 
 # --- Structured: an explicit Cartesian position per point.
 
-function _save_vts(solver::Solver, entries, prefix::AbstractString, stride, ranges)
+function _save_vts(solver::Solver, entries, prefix::AbstractString, stride,
+                   slice, ranges)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
-    lo, hi = _strided_piece_extent(solver, stride, ranges)
+    lo, hi = _output_piece_extent(solver, stride, slice, ranges)
+    _has_output(ranges) || return _write_parallel_container(
+        solver, entries, prefix, lo, hi, true, stride, slice)
 
     points = Vector{Float64}(undef, 3 * prod(length.(ranges)))
     idx = 1
@@ -521,14 +594,14 @@ function _save_vts(solver::Solver, entries, prefix::AbstractString, stride, rang
         write(io, "</PointData>\n</Piece>\n</StructuredGrid>\n")
         _write_appended(io, blocks)
     end
-    _write_parallel_container(solver, entries, prefix, lo, hi, true, stride)
+    _write_parallel_container(solver, entries, prefix, lo, hi, true, stride, slice)
     return prefix
 end
 
 # --- The container, identical in shape for both grid types.
 
 function _write_parallel_container(solver::Solver, entries, prefix, lo, hi,
-                                   curvilinear::Bool, stride)
+                                   curvilinear::Bool, stride, slice)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
     P = MPI.Comm_size(decomp.comm)
@@ -540,7 +613,7 @@ function _write_parallel_container(solver::Solver, entries, prefix, lo, hi,
     kind = curvilinear ? "StructuredGrid" : "RectilinearGrid"
     piece_ext = curvilinear ? ".vts" : ".vtr"
     open(string(prefix, curvilinear ? ".pvts" : ".pvtr"), "w") do io
-        glo, ghi = _strided_whole_extent(solver, stride)
+        glo, ghi = _output_whole_extent(solver, stride, slice)
         write(io, "<?xml version=\"1.0\"?>\n")
         write(io, "<VTKFile type=\"P", kind, "\" version=\"1.0\" ",
                   "byte_order=\"LittleEndian\" header_type=\"UInt64\">\n")
@@ -565,6 +638,9 @@ function _write_parallel_container(solver::Solver, entries, prefix, lo, hi,
         for r in 0:(P-1)
             e = allext[6r+1:6r+6]
             plo = (e[1], e[2], e[3]); phi = (e[4], e[5], e[6])
+            # A rank holding no part of a slice wrote no piece file, and has
+            # hi < lo to say so. Listing it would name a file that is not there.
+            any(phi[d] < plo[d] for d in 1:3) && continue
             write(io, "<Piece Extent=\"", _extent_str(plo, phi),
                   "\" Source=\"", basename(_piece_name(prefix, r, piece_ext)),
                   "\"/>\n")
@@ -589,8 +665,8 @@ end
 # one traversing a list of patches rather than the single block held by a rank.
 
 """
-    FieldWriter(prefix; fields = DEFAULT_VTK_FIELDS, stride = 1, pad = 4,
-                collection = true)
+    FieldWriter(prefix; fields = DEFAULT_VTK_FIELDS, stride = 1, slice = nothing,
+                pad = 4, collection = true)
 
 Write a numbered field dump each time its trigger fires, together with a `.pvd`
 collection recording the physical time of every frame. Use it as the effect of a
@@ -608,20 +684,22 @@ each frame is recorded in `out/field.pvd`. Opening the `.pvd` in ParaView or
 VisIt animates against physical time; opening individual pieces animates against
 the frame index. [`EveryTime`](@ref) supplies an evenly spaced time schedule.
 
-`fields` and `stride` are passed through to [`save_vtk`](@ref), which documents
-the available names, the cost of each, and how points are selected for
-subsampling. On a grid with a resolved angular dimension the container is
-`.pvts` rather than `.pvtr`, and the collection references it accordingly.
+`fields`, `stride` and `slice` are passed through to [`save_vtk`](@ref), which
+documents the available names, the cost of each, how points are selected for
+subsampling, and what a slice writes. On a grid with a resolved angular
+dimension the container is `.pvts` rather than `.pvtr`, and the collection
+references it accordingly.
 
 Like the wrapped `save_vtk` call, this operation is collective and must run on
 every rank. A [`Callback`](@ref) provides that guarantee. The first dump creates
 `dirname(prefix)`. The `wall_io` field records cumulative output time; callback
 execution lies outside the interval recorded by `solver.wall_step`.
 """
-mutable struct FieldWriter{F}
+mutable struct FieldWriter{F,S}
     prefix::String
     fields::F
     stride::NTuple{3,Int}
+    slice::S
     pad::Int
     collection::Bool
     index::Int
@@ -630,8 +708,8 @@ mutable struct FieldWriter{F}
 end
 
 FieldWriter(prefix::AbstractString; fields=DEFAULT_VTK_FIELDS, stride=1,
-            pad::Int=4, collection::Bool=true) =
-    FieldWriter(String(prefix), fields, _normalize_stride(stride), pad,
+            slice=nothing, pad::Int=4, collection::Bool=true) =
+    FieldWriter(String(prefix), fields, _normalize_stride(stride), slice, pad,
                 collection, 0, Float64[], 0.0)
 
 "Path stem of frame `m` (0-based) of a [`FieldWriter`](@ref), without extension."
@@ -639,7 +717,8 @@ frame_prefix(writer::FieldWriter, m::Integer) =
     string(writer.prefix, "_", lpad(m, writer.pad, '0'))
 
 _write_dump!(writer::FieldWriter, solver, Q, stem) =
-    save_vtk(solver, Q, stem; fields=writer.fields, stride=writer.stride)
+    save_vtk(solver, Q, stem; fields=writer.fields, stride=writer.stride,
+             slice=writer.slice)
 
 function (writer::FieldWriter)(solver, Q)
     wall_0 = time_ns()

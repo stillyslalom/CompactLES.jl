@@ -640,6 +640,13 @@ against the run's own MPI, which no binary artifact supplies, so on a machine
 without one the writer takes a serialized token relay that produces the same
 file at O(P) cost. Only the fallback has been exercised.
 
+Slicing interacts with the second of those. A rank holding no part of the
+requested plane currently skips its write, which is correct under the serialized
+backend. A collective write instead requires every rank to call `H5Dwrite` even
+with nothing selected, so enabling the parallel backend with slicing needs an
+empty selection (`H5S_SELECT_NONE`) rather than a skipped call. The VTK path has
+no such constraint, since each rank writes its own file.
+
 **Multiblock geometry** follows from the patch abstraction: same-level patches
 with separate line solves and interface exchange provide the required structure.
 This also supports non-coordinate-surface geometry without an unstructured mesh.

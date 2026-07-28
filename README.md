@@ -288,6 +288,11 @@ from one imposed by azimuthal spacing near a singularity.
   still tile. This reduces file size rather than compute, since the fields are
   still built over the whole block before sampling; at 512³ a stride of 4 reduces
   a 2.7 GB dump to 43 MB.
+- **Slicing:** `save_vtk(...; slice = (3, 256))` writes only the plane at global
+  index 256 of dimension 3. A mid-plane of a 512³ run is 1/512 of the data, which
+  is what makes a frequent 2-D time series affordable when a 3-D one is not. Only
+  the ranks spanning the plane write anything. Composes with `stride`, and works
+  the same way in `save_hdf5` and `FieldWriter`.
 - **Time series:** `Callback(EveryTime(Δt), FieldWriter("out/field"))` dumps on an
   evenly spaced *time* schedule, with `run!` shortening the last few steps so
   that one ends exactly at each instant, and writes an `out/field.pvd` collection

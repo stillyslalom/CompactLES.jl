@@ -665,6 +665,77 @@ function test_field_writer()
 end
 
 # ---------------------------------------------------------------------------
+# 11. Slicing under decomposition. A slice is the one case in which a rank
+#     legitimately has nothing to write: only the ranks whose block spans the
+#     requested plane hold any of it. Those ranks must write no piece file and
+#     must not be listed in the container, and the pieces that do exist must
+#     still tile the plane. Serial runs cannot show any of this.
+# ---------------------------------------------------------------------------
+function test_slicing()
+    section("slicing under decomposition")
+    solver, Q = setup(Problem(domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
+                              bcs=(per3[1], per3[2], per3[3]),
+                              ic=(x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0,
+                                                   rho=1 + x)),
+                      Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+
+    # (a) Slice across the SPLIT dimension: exactly one rank spans the plane.
+    save_vtk(solver, Q, "mpi_slice_x"; fields=(:rho,), slice=(1, SPLITN ÷ 2 + 1))
+    MPI.Barrier(comm)
+    pieces = rank == 0 ? length(filter(f -> startswith(f, "mpi_slice_x") &&
+                                            endswith(f, ".vtr"), readdir())) : 0
+    check("split-dimension slice writes one piece", abs(gsum(pieces) - 1), 0.5)
+    listed = rank == 0 ? count("<Piece", read("mpi_slice_x.pvtr", String)) : 0
+    check("container lists only the rank holding the plane",
+          abs(gsum(listed) - 1), 0.5)
+    whole = rank == 0 ?
+        (occursin("WholeExtent=\"0 0 0 15 0 15\"",
+                  read("mpi_slice_x.pvtr", String)) ? 1 : 0) : 0
+    check("sliced dimension is one point thick", abs(gsum(whole) - 1), 0.5)
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith("mpi_slice_x"), readdir()))
+    MPI.Barrier(comm)
+
+    # (b) Slice across an UNDIVIDED dimension: every rank spans the plane, and
+    #     their pieces must tile it.
+    save_vtk(solver, Q, "mpi_slice_z"; fields=(:rho,), slice=(3, 8))
+    MPI.Barrier(comm)
+    pieces = rank == 0 ? length(filter(f -> startswith(f, "mpi_slice_z") &&
+                                            endswith(f, ".vtr"), readdir())) : 0
+    check("undivided-dimension slice writes every piece",
+          abs(gsum(pieces) - np), 0.5)
+    total, inside = 0, 0
+    if rank == 0
+        txt = read("mpi_slice_z.pvtr", String)
+        inside = 1
+        for m in eachmatch(r"<Piece Extent=\"([^\"]+)\"", txt)
+            e = parse.(Int, split(m.captures[1]))
+            total += prod(ntuple(d -> e[2d] - e[2d-1] + 1, 3))
+            (e[5] == 0 && e[6] == 0) || (inside = 0)
+        end
+    end
+    check("sliced pieces tile the plane", abs(gsum(total) - SPLITN * 16), 0.5)
+    check("every piece is flat in the sliced dimension",
+          abs(gsum(inside) - 1), 0.5)
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith("mpi_slice_z"), readdir()))
+    MPI.Barrier(comm)
+
+    # An out-of-range plane is rejected on every rank, not just the one that
+    # would have held it.
+    threw = try
+        save_vtk(solver, Q, "mpi_slice_bad"; fields=(:rho,), slice=(1, SPLITN + 1))
+        0
+    catch e
+        e isa ArgumentError ? 1 : 0
+    end
+    check("an out-of-range slice throws on every rank", abs(gsum(threw) - np), 0.5)
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith("mpi_slice_bad"), readdir()))
+    MPI.Barrier(comm)
+end
+
+# ---------------------------------------------------------------------------
 # 10. Checkpoint round trip with a real decomposition — one file per rank, so
 #    the per-rank offsets and extents must line up on write and read back.
 # ---------------------------------------------------------------------------
@@ -711,6 +782,7 @@ try
     test_callback_consistency()
     test_state_queries()
     test_field_writer()
+    test_slicing()
     test_checkpoint()
 catch e
     # A throw on any rank (e.g. a setup error) must not deadlock the others.

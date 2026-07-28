@@ -289,3 +289,66 @@ end
     rank == 0 && rm(dir; recursive=true)
     MPI.Barrier(comm)
 end
+
+@testset "HDF5 extension: slicing" begin
+    comm = MPI.COMM_WORLD
+    np = MPI.Comm_size(comm)
+    rank = MPI.Comm_rank(comm)
+    per3h = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+
+    dir = rank == 0 ? mktempdir() : ""
+    dir = MPI.bcast(dir, comm; root=0)
+
+    nx, ny, nz = 72, 16, 12
+    rho_of = (x, y, z) -> 1 + x + 100y + 10000z
+    s = Solver(bcs=per3h, n_global=(nx, ny, nz), L_domain=(1.0, 1.0, 1.0),
+               art=ArtParams(enabled=false), dims=(np, 1, 1))
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0, rho=rho_of(x, y, z)))
+
+    # Across the split dimension, so most ranks hold no part of the plane and
+    # write no hyperslab; the dataset is still the full plane.
+    gx = nx ÷ 2 + 1
+    save_hdf5(s, Q, joinpath(dir, "sx"); fields=(:rho,), slice=(1, gx))
+    MPI.Barrier(comm)
+    if rank == 0
+        h5open(joinpath(dir, "sx.h5")) do h
+            @test size(h["fields/rho"]) == (1, ny, nz)
+            @test size(h["grid/x"]) == (1,)
+            @test read(h["grid/x"]) ≈ [global_xcoord(s, 1, gx)]
+            rho = read(h["fields/rho"])
+            e = 0.0
+            for k in 1:nz, j in 1:ny
+                want = rho_of(global_xcoord(s, 1, gx), global_xcoord(s, 2, j),
+                              global_xcoord(s, 3, k))
+                e = max(e, abs(rho[1, j, k] - Float32(want)))
+            end
+            @test e < 1e-2                        # Float32 at magnitude 1e4
+        end
+        @test occursin("Dimensions=\"$nz $ny 1\"",
+                       read(joinpath(dir, "sx.xmf"), String))
+    end
+    MPI.Barrier(comm)
+
+    # Across an undivided dimension, so every rank contributes part of the plane.
+    gz = 5
+    save_hdf5(s, Q, joinpath(dir, "sz"); fields=(:rho,), slice=(3, gz))
+    MPI.Barrier(comm)
+    if rank == 0
+        h5open(joinpath(dir, "sz.h5")) do h
+            @test size(h["fields/rho"]) == (nx, ny, 1)
+            rho = read(h["fields/rho"])
+            e = 0.0
+            for j in 1:ny, i in 1:nx
+                want = rho_of(global_xcoord(s, 1, i), global_xcoord(s, 2, j),
+                              global_xcoord(s, 3, gz))
+                e = max(e, abs(rho[i, j, 1] - Float32(want)))
+            end
+            @test e < 1e-2
+        end
+    end
+    MPI.Barrier(comm)
+
+    rank == 0 && rm(dir; recursive=true)
+    MPI.Barrier(comm)
+end

@@ -1086,6 +1086,54 @@ end
     rm(dir; recursive=true)
 end
 
+@testset "save_vtk: slicing" begin
+    dir = mktempdir()
+    N = (24, 16, 12)
+    solver = Solver(bcs=per3, n_global=N, L_domain=(1.0, 1.0, 1.0),
+                    art=ArtParams(enabled=false))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0,
+                                             rho=1 + x + 100y + 10000z))
+    refresh_primitives!(solver, Q)
+
+    # A slice is one point thick in the sliced dimension and full in the others.
+    for (d, g) in ((1, 7), (2, 5), (3, 9))
+        stem = joinpath(dir, "s$(d)_$(g)")
+        save_vtk(solver, Q, stem; fields=(:rho,), slice=(d, g))
+        want = ntuple(t -> t == d ? 1 : N[t], 3)
+        header = String(copy(read(stem * ".pvtr")))
+        @test occursin("WholeExtent=\"0 $(want[1]-1) 0 $(want[2]-1) " *
+                       "0 $(want[3]-1)\"", header)
+        got, geom, _ = read_vtk_pointdata(stem * ".r0000.vtr")
+        coords = [collect(reinterpret(Float64, b)) for b in geom]
+        @test length.(coords) == [want...]
+        # The retained station is the requested one, not the first.
+        @test coords[d] ≈ [xcoord(solver, d, g)] atol = 1e-15
+        @test length(got["rho"]) == prod(want)
+        # And the values are the plane at g, not some other plane.
+        idx = ntuple(t -> t == d ? (g:g) : (1:N[t]), 3)
+        expect = Float32[solver.rho[gidx(solver, i, j, k)]
+                         for i in idx[1], j in idx[2], k in idx[3]][:]
+        @test got["rho"] == expect
+    end
+
+    # A slice composes with a stride on the two dimensions still resolved.
+    stem = joinpath(dir, "both")
+    save_vtk(solver, Q, stem; fields=(:rho,), stride=2, slice=(3, 5))
+    header = String(copy(read(stem * ".pvtr")))
+    @test occursin("WholeExtent=\"0 11 0 7 0 0\"", header)
+    _, geom, _ = read_vtk_pointdata(stem * ".r0000.vtr")
+    @test length.([collect(reinterpret(Float64, b)) for b in geom]) == [12, 8, 1]
+
+    @test_throws ArgumentError save_vtk(solver, Q, joinpath(dir, "bad");
+                                        slice=(4, 1))
+    @test_throws ArgumentError save_vtk(solver, Q, joinpath(dir, "bad");
+                                        slice=(2, 0))
+    @test_throws ArgumentError save_vtk(solver, Q, joinpath(dir, "bad");
+                                        slice=(2, 17))
+    rm(dir; recursive=true)
+end
+
 @testset "save_vtk: a resolved angle writes a curvilinear grid" begin
     dir = mktempdir()
     # A cylindrical annulus with θ resolved. Written as a rectilinear grid it

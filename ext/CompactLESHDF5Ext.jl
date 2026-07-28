@@ -152,25 +152,25 @@ const XDMF_VECTOR = "Vector"
 
 _xdmf_dims(n) = string(n[3], " ", n[2], " ", n[1])
 
-function _coarse_global(solver::Solver, stride)
-    n = solver.decomp.n_global
-    return ntuple(d -> length(1:stride[d]:n[d]), 3)
+# Global coordinate vectors, identical on every rank, so no communication is
+# needed to write them. A sliced dimension contributes its single coordinate.
+function _coarse_axis(solver::Solver, d, stride, slice)
+    n = solver.decomp.n_global[d]
+    if slice !== nothing && Int(slice[1]) == d
+        return Float64[CompactLES.global_xcoord(solver, d, Int(slice[2]))]
+    end
+    return Float64[CompactLES.global_xcoord(solver, d, g) for g in 1:stride[d]:n]
 end
 
-# Global coordinate vectors, identical on every rank, so no communication is
-# needed to write them.
-_coarse_axis(solver::Solver, d, stride) =
-    Float64[CompactLES.global_xcoord(solver, d, g)
-            for g in 1:stride[d]:solver.decomp.n_global[d]]
-
 function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
-                              fields=CompactLES.DEFAULT_VTK_FIELDS, stride=1)
+                              fields=CompactLES.DEFAULT_VTK_FIELDS, stride=1,
+                              slice=nothing)
     decomp = solver.decomp
     comm = decomp.comm
     rank = MPI.Comm_rank(comm)
     st = CompactLES._normalize_stride(stride)
-    ranges = CompactLES._stride_ranges(solver, st)
-    CompactLES._check_stride(solver, st, ranges)
+    ranges = CompactLES._output_ranges(solver, st, slice)
+    CompactLES._check_output(solver, st, slice, ranges)
     CompactLES._prepare_fields!(solver, Q, fields)
     curvilinear = CompactLES._curvilinear(solver)
 
@@ -180,11 +180,12 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
                                                       curvilinear, ranges))
     end
 
-    nglobal = _coarse_global(solver, st)
+    nglobal = CompactLES._output_global(solver, st, slice)
     nlocal = ntuple(d -> length(ranges[d]), 3)
     # Coarse-index offset of this rank's block, the same arithmetic the VTK
-    # piece extents use.
-    off = ntuple(d -> (decomp.offset[d] + first(ranges[d]) - 1) ÷ st[d], 3)
+    # piece extents use. Empty on a rank holding no part of a slice.
+    off, _ = CompactLES._output_piece_extent(solver, st, slice, ranges)
+    mine = CompactLES._has_output(ranges)
     region = BlockRegion(off, nlocal)
     path = string(prefix, ".h5")
 
@@ -199,11 +200,11 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
             if !curvilinear
                 cg = create_group(file, "grid")
                 for d in 1:3
-                    cg["xyz"[d:d]] = _coarse_axis(solver, d, st)
+                    cg["xyz"[d:d]] = _coarse_axis(solver, d, st, slice)
                 end
             end
         end
-        if curvilinear
+        if curvilinear && mine
             # One position per point, component first, so the sidecar can point
             # XDMF's XYZ geometry straight at it.
             pts = Array{Float64}(undef, 3, nlocal...)
@@ -220,7 +221,14 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
             dset[1:3, r...] = pts
         end
         for (name, ncomp, data) in entries
-            if ncomp == 1
+            if !mine
+                # No part of the plane on this rank. Under the serialized
+                # backend that is simply nothing to write. A collective write
+                # would instead need every rank to call H5Dwrite with an empty
+                # selection; see the slicing note in reference/ROADMAP.md.
+                shared_dataset(file, "fields/" * name, Float32,
+                               ncomp == 1 ? nglobal : (ncomp, nglobal...), comm)
+            elseif ncomp == 1
                 dset = shared_dataset(file, "fields/" * name, Float32, nglobal, comm)
                 write_region3!(dset, region, reshape(data, nlocal))
             else
