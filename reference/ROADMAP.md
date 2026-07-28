@@ -633,12 +633,53 @@ XDMF3 rather than VTKHDF because that container supports neither
 RectilinearGrid nor StructuredGrid as of format version 2.5, so a stretched or
 curvilinear grid could only be expressed there as an unstructured mesh.
 
-Two things remain. A time series through `FieldWriter`, which currently writes
-the VTK path only and would need an XDMF temporal collection in place of the
-`.pvd`. And validation of the collective write: a parallel libhdf5 must be built
+Two things remain, the first of which is specified below. A time series through
+`FieldWriter`, which currently writes the VTK path only. And validation of the
+collective write: a parallel libhdf5 must be built
 against the run's own MPI, which no binary artifact supplies, so on a machine
 without one the writer takes a serialized token relay that produces the same
 file at O(P) cost. Only the fallback has been exercised.
+
+### `FieldWriter` over HDF5
+
+The remaining piece, written out because the design fork in it is worth settling
+before any code is cut.
+
+`FieldWriter` gains `format = :vtk` or `:hdf5`. `_write_dump!` already exists as
+the seam and dispatches on it, calling `save_hdf5` for the latter; the core stub
+in `src/hdf5.jl` supplies the error when the extension is absent, so no
+availability check is needed at the call site. `fields`, `stride` and `slice`
+flow through unchanged.
+
+The collection file is where the work is. `.pvd` has no XDMF equivalent that
+merely lists frames: a temporal collection is `<Grid GridType="Collection"
+CollectionType="Temporal">` with one full `<Grid>` inlined per frame, each
+carrying its own `<Time>`, topology, geometry and one `<Attribute>` per field.
+Write it in full on every dump, for the reason `_write_pvd` already does — a run
+killed by the scheduler then still leaves a collection naming every completed
+frame, where an appended file would lack its closing tags and not open at all.
+XInclude of the per-frame `.xmf` files was considered and rejected: reader
+support for it is inconsistent, and the per-frame files are worth keeping
+openable on their own.
+
+THE FORK. Inlining an `<Attribute>` per frame requires each field's name and
+component count, and `:Y` and `:D_art` expand to one entry per species while the
+vector fields carry three components. Recomputing that in the collection writer
+would duplicate the naming in `vtk_field_entries` and drift from it. Resolve it
+by having `save_hdf5` hand back the `(name, ncomponents)` descriptors it wrote
+and caching them on the writer at the first dump. The descriptors are identical
+across frames, since `fields`, `stride` and `slice` are fixed for the life of a
+writer.
+
+The extension seam is the same one `save_hdf5` uses: a core stub
+`_write_xdmf_collection!` that routes through `_hdf5_required`, with the real
+method defined in `ext/CompactLESHDF5Ext.jl`.
+
+Testing should assert that the frames land on the [`EveryTime`](@ref) instants,
+that the collection holds one `<Grid>` per frame with the matching `<Time>`
+value, and that each references `prefix_NNNN.h5` by a path relative to the
+collection's own directory. Run it decomposed as well: the per-frame writes are
+collective and only rank 0 writes the collection.
 
 Slicing interacts with the second of those. A rank holding no part of the
 requested plane currently skips its write, which is correct under the serialized
