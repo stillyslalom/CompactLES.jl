@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-32 -32 64 64"
+     width="64" height="64" role="img" aria-label="CompactLES">
+  <!--
+    Tridiagonal band: the compact scheme's implicit line solve. The off-
+    diagonals are drawn shorter than the main one because an n x n tridiagonal
+    carries n entries on the main diagonal and n-1 on each neighbour.
+    Colours are the Julia three.
+  -->
+  <g fill="none" stroke-linecap="round">
+    <line x1="1.1" y1="-22.3" x2="22.3" y2="-1.1" stroke="#CB3C33" stroke-width="10"/>
+    <line x1="-22" y1="-22" x2="22" y2="22" stroke="#9558B2" stroke-width="16"/>
+    <line x1="-22.3" y1="1.1" x2="-1.1" y2="22.3" stroke="#389826" stroke-width="10"/>
+  </g>
+</svg>
