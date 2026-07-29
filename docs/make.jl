@@ -92,6 +92,11 @@ DocMeta.setdocmeta!(
     format=Documenter.HTML(;
         canonical="https://stillyslalom.github.io/CompactLES.jl",
         edit_link="main",
+        # Documenter does not detect a favicon from the assets tree; the head
+        # link is emitted only for assets registered here. A raw head tag would
+        # need a per-page relative href, so the registered `.ico` (which
+        # Documenter path-corrects for each page) is the reliable route.
+        assets=["assets/favicon.ico"],
     ),
     pages=[
         "Home" => "index.md",
