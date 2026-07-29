@@ -1,6 +1,48 @@
+const T_MAKE_START = time()
+
 using CompactLES
 using Documenter
 using Literate
+using Printf
+
+const T_LOADED = time()
+
+# Documentation is the second of the two long CI jobs, and its total says
+# nothing about which tutorial is expensive. Two things are measured here.
+#
+# Phases (load, Literate conversion, makedocs, deploy) come from plain wall
+# clocks around each stage. Per-tutorial execution needs more care, because
+# the tutorials do not run here: Documenter runs them later, while expanding
+# the `@example` blocks Literate produced. `time_tutorial` injects a pair of
+# hidden `@setup` blocks into the generated markdown, which run in the same
+# module as that page's examples and write the elapsed time back into `Main`.
+# The instrumentation therefore stays in this file rather than spreading into
+# the tutorial sources, which have to remain readable and runnable on their own.
+const PAGE_TIMES = Dict{String,Float64}()
+const PHASES = Tuple{String,Float64}[]
+
+macro phase(name, ex)
+    quote
+        local t0 = time()
+        local val = $(esc(ex))
+        push!(PHASES, ($(esc(name)), time() - t0))
+        val
+    end
+end
+
+"Wrap a Literate-generated page so it reports its own execution time."
+function time_tutorial(name)
+    start = "\n```@setup $name\nMain.PAGE_TIMES[\"$name\"] = -time()\n```\n"
+    stop = "\n```@setup $name\nMain.PAGE_TIMES[\"$name\"] += time()\n```\n"
+    return function (markdown)
+        # Literate opens the page with an `@meta` block carrying the EditURL.
+        # The timer goes after it, so that block stays where the reader and
+        # Documenter both expect it.
+        cut = findfirst("```\n", markdown)
+        at = startswith(markdown, "```@meta") && cut !== nothing ? last(cut) : 0
+        return markdown[1:at] * start * markdown[at+1:end] * stop
+    end
+end
 
 # Default-CI tutorials are deliberately registered rather than discovered.
 # This keeps an expensive case study from entering every documentation build
@@ -25,9 +67,10 @@ for page in readdir(TUTORIAL_DIR; join=true)
     rm(page)
 end
 
-for name in TUTORIALS
+@phase "Literate conversion" for name in TUTORIALS
     script = joinpath(LITERATE_DIR, name)
-    Literate.markdown(script, TUTORIAL_DIR; documenter=true)
+    Literate.markdown(script, TUTORIAL_DIR; documenter=true,
+                      postprocess=time_tutorial(first(splitext(name))))
 end
 
 DocMeta.setdocmeta!(
@@ -37,7 +80,7 @@ DocMeta.setdocmeta!(
     recursive=true,
 )
 
-makedocs(;
+@phase "makedocs" makedocs(;
     modules=[CompactLES],
     authors="Alex Ames and contributors",
     sitename="CompactLES.jl",
@@ -99,7 +142,27 @@ makedocs(;
     ],
 )
 
-deploydocs(;
+@phase "deploydocs" deploydocs(;
     repo="github.com/stillyslalom/CompactLES.jl",
     devbranch="main",
 )
+
+# The tutorial times are a subset of `makedocs`, not additional to it: each page
+# runs inside the expansion stage. What is left of `makedocs` after subtracting
+# them is doctests, cross-reference resolution, and HTML rendering.
+let pages = sum(values(PAGE_TIMES); init=0.0),
+    total = time() - T_MAKE_START
+
+    println("\n=== documentation build timing ===")
+    @printf("  %-32s %7.2f s\n", "package load", T_LOADED - T_MAKE_START)
+    for (name, seconds) in sort(PHASES; by=p -> -p[2])
+        @printf("  %-32s %7.2f s\n", name, seconds)
+    end
+    println("  tutorials, inside makedocs:")
+    for (name, seconds) in sort(collect(PAGE_TIMES); by=p -> -p[2])
+        @printf("    %-30s %7.2f s\n", name, seconds)
+    end
+    @printf("  %-32s %7.2f s\n", "  tutorials, total", pages)
+    @printf("  %-32s %7.2f s\n", "TOTAL", total)
+    println()
+end

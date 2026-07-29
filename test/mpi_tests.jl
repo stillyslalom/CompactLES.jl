@@ -36,10 +36,17 @@
 # the SAME value and fail together — and compares it to the analytic result at
 # the tolerance the serial suite achieves on the same operator.
 
-using MPI
-MPI.Init(threadlevel=:funneled)
-using CompactLES
-using Printf, LinearAlgebra
+# Timing first, so that package load is measured rather than assumed. Every
+# rank compiles this suite independently, so the compile column here is
+# per-rank work that the rank count multiplies. See test/timing.jl.
+include("timing.jl")
+
+@phase "package load" begin
+    using MPI
+    MPI.Init(threadlevel=:funneled)
+    using CompactLES
+    using LinearAlgebra
+end
 
 const CL = CompactLES
 const comm = MPI.COMM_WORLD
@@ -770,20 +777,29 @@ end
 # ---------------------------------------------------------------------------
 rank == 0 && println("=== CompactLES multi-rank test suite (np = $np) ===")
 
+const SUITE = (
+    ("periodic C6", test_periodic_c6),
+    ("pentadiagonal C10", test_pentadiagonal_c10),
+    ("closed C6", test_closed_c6),
+    ("halo consistency", test_halo_consistency),
+    ("off-rank folds", test_offrank_folds),
+    ("freestream", test_freestream),
+    ("conservation", test_conservation),
+    ("sync", test_sync),
+    ("callback consistency", test_callback_consistency),
+    ("state queries", test_state_queries),
+    ("field writer", test_field_writer),
+    ("slicing", test_slicing),
+    ("checkpoint", test_checkpoint),
+)
+
 try
-    test_periodic_c6()
-    test_pentadiagonal_c10()
-    test_closed_c6()
-    test_halo_consistency()
-    test_offrank_folds()
-    test_freestream()
-    test_conservation()
-    test_sync()
-    test_callback_consistency()
-    test_state_queries()
-    test_field_writer()
-    test_slicing()
-    test_checkpoint()
+    # Barrier before each timing so that a slow rank in one test is charged to
+    # that test rather than to the next one it holds up.
+    for (name, testfn) in SUITE
+        MPI.Barrier(comm)
+        @phase name testfn()
+    end
 catch e
     # A throw on any rank (e.g. a setup error) must not deadlock the others.
     println("rank $rank: uncaught exception: ", e)
@@ -800,6 +816,21 @@ if rank == 0
             (_nfail[] == 0 ? "" : "  ($(_nfail[]) FAILED)") * " ===")
 end
 MPI.Barrier(comm)
+
+# Rank 0's own breakdown, plus two whole-communicator numbers: the slowest
+# rank's total, and the compile time summed over ranks. The second is the one
+# that scales with np — every rank compiles this suite from scratch, so the job
+# pays np times for the same code generation while the runner has far fewer
+# cores than ranks.
+let total = time() - T_SCRIPT_START,
+    compile = sum(p -> p[3], PHASE_LOG; init=0.0)
+    slowest = MPI.Allreduce(total, max, comm)
+    compile_all = MPI.Allreduce(compile, +, comm)
+    rank == 0 && timing_report(; title="mpi phase timing (np = $np, rank 0)",
+                               extra=("slowest rank (script)" => slowest,
+                                      "compiling, summed over ranks" => compile_all))
+end
+
 if _nfail[] > 0
     exit(1)
 end

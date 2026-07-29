@@ -52,16 +52,31 @@ jobs:
           arch: x64
       - uses: julia-actions/cache@v3
       - uses: julia-actions/julia-buildpkg@v1
+      # Neither step below runs with `--check-bounds=yes`. That option gives
+      # every package in the tree a second precompile cache, which this job
+      # would build from scratch before its first test, and it slows all
+      # fourteen processes the distributed step launches. The serial suite is
+      # already bounds-checked on three Julia versions by julia-runtest, and an
+      # index error in the distributed paths moves a convergence order or an
+      # interface error away from machine zero, so it does not pass unseen.
       - name: Run convergence guards
-        run: julia --project=. --color=yes --check-bounds=yes test/convergence.jl
-      - name: Run distributed suite at 2, 4, and 8 ranks
+        run: julia --project=. --color=yes test/convergence.jl
+      # np = 2 and np = 8 only. Every test puts all ranks on a single dimension
+      # via `splitdims`, so the rank count changes block sizes rather than code
+      # paths; the one exception is the corner-halo check, which uses the
+      # default Dims_create grid, and np = 8 gives that a 2x2x2 grid where
+      # np = 4 gave 2x2x1. Adding np = 4 back costs four more processes, each
+      # of which compiles the suite from scratch, for no path the other two
+      # miss.
+      - name: Run distributed suite at 2 and 8 ranks
         shell: julia --project=. --color=yes {0}
         run: |
-          using MPI
+          using MPI, Printf
           MPI.mpiexec() do mpiexec
               julia = Base.julia_cmd()
-              for np in (2, 4, 8)
-                  run(`$mpiexec -n $np $julia --project=. --check-bounds=yes test/mpi_tests.jl`)
+              for np in (2, 8)
+                  t = @elapsed run(`$mpiexec -n $np $julia --project=. test/mpi_tests.jl`)
+                  @printf("=== np = %d finished in %.1f s ===\n", np, t)
               end
           end
 

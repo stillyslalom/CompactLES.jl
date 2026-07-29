@@ -37,14 +37,18 @@ CairoMakie.activate!(type = "png")
 #     on. The axial extent below is sized for the filter, not merely the
 #     derivative.
 
-nr, ntheta, nz = 48, 32, 16
+nr, ntheta, nz = 32, 24, 12
 Lz = 2.0
 
 # The resolved azimuth also changes the explicit stability limit. Its physical
 # spacing is ``r\Delta\theta``, which is smallest at the first half-offset
-# radial node. A three-dimensional cylindrical calculation can therefore take
-# much smaller timesteps than the collapsed radial calculation even when both
-# use the same ``\Delta r``.
+# radial node, where it equals ``(L_r/2n_r)(2\pi/n_\theta)``. A
+# three-dimensional cylindrical calculation can therefore take much smaller
+# timesteps than the collapsed radial calculation even when both use the same
+# ``\Delta r``, and the cost of reaching a given time grows as
+# ``n_r^2 n_\theta^2 n_z``: refining the radius shortens the timestep as well as
+# adding points. The grid above is chosen with that product in mind rather than
+# for radial resolution alone.
 
 # ## Place an off-axis feature
 #

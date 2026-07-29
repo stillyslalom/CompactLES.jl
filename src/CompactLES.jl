@@ -85,4 +85,36 @@ export script_args, script_grid
 
 __init__() = __init_threading__()
 
+# Precompilation, kept deliberately to the signatures that cannot multiply.
+#
+# The cost this addresses is that every distinct `Solver{...}` type forces a
+# fresh compilation of `deriv_along!` and the whole call tree below it, and a
+# test process builds a dozen of them. `--trace-compile` names only the entry
+# point, so the tree is invisible there, but it is where the time goes: a
+# multi-rank test run is 44-74% compilation, paid independently by every rank.
+#
+# Only the shared floor of that tree is listed. `apply_along!` and the halo
+# exchanges take an array and a plan, never a Metric, EOS, or BoundaryCondition,
+# so there are exactly two plan types and one element type and the list cannot
+# grow with the number of physics configurations. Compiling them into the
+# package image leaves each `Solver` specialization with the thin wrapper above
+# them rather than the line solves themselves.
+#
+# Nothing here executes: `@compile_workload` would need a communicator, and MPI
+# calls during precompilation are not allowed. These are signature-directed, so
+# they cost only their own compilation.
+#
+# Do not extend this list to entry points that take a `Solver`. Those are
+# combinatorial in Metric x EOS x BoundaryCondition x scheme, and precompiling
+# any fixed subset of them mostly bloats the image for configurations a given
+# run never builds.
+let A3 = Array{Float64,3}
+    for P in (DirPlan{Float64}, BandPlan{Float64})
+        precompile(apply_along!, (A3, P, A3, Decomp))
+    end
+    precompile(exchange_halos!, (A3, Decomp))
+    precompile(exchange_dim_batch!, (Vector{A3}, Decomp, Int))
+    precompile(field, (Decomp,))
+end
+
 end # module

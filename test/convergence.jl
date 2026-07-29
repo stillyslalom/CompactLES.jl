@@ -30,10 +30,16 @@
 # a known property of the closure cascade, not a defect these studies found;
 # what they guard is that it does not get *worse*.
 
-using MPI
-MPI.Init(threadlevel=:funneled)
-using CompactLES
-using Printf, Test
+# Timing first, so that package load is measured rather than assumed. See
+# test/timing.jl for what the compile column means.
+include("timing.jl")
+
+@phase "package load" begin
+    using MPI
+    MPI.Init(threadlevel=:funneled)
+    using CompactLES
+    using Printf, Test
+end
 
 const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
@@ -60,16 +66,28 @@ function order(Ns, errs)
     -(n * sum(x .* y) - sx * sy) / (n * sum(x .^ 2) - sx^2)
 end
 
+# Each study spends its time in two places: constructing a Solver per
+# resolution, which plans every direction and builds the metric, and the single
+# derivative that the order is measured from. Splitting the two across all
+# studies says whether a cheaper study means fewer resolutions or smaller ones.
+const T_BUILD = Ref(0.0)
+const T_DERIV = Ref(0.0)
+
 function study(name, Ns, build, fld, ref; expect=nothing, tol=1.0)
+    t0 = time(); c0 = compile_ns()
     errs = Float64[]
     for N in Ns
+        tb = time()
         solver = build(N)
+        T_BUILD[] += time() - tb
+        td = time()
         f = CL.field(solver.decomp); df = CL.field(solver.decomp)
         fillf!(solver, f, fld)
         CL.exchange_halos!(f, solver.decomp)
         CL.deriv_along!(df, f, solver, 1, ref.parity)
         CL._scale_grad!(df, solver, 1)
         push!(errs, ferr(solver, df, ref.fn))
+        T_DERIV[] += time() - td
     end
     p = order(Ns, errs)
     @printf("%-38s  ", name)
@@ -77,6 +95,7 @@ function study(name, Ns, build, fld, ref; expect=nothing, tol=1.0)
         @printf("N=%-4d %.3e  ", N, e)
     end
     @printf("order ≈ %.2f\n", p)
+    push!(PHASE_LOG, (name, time() - t0, (compile_ns() - c0) / 1e9))
     expect === nothing || @test abs(p - expect) < tol
     p
 end
@@ -173,12 +192,17 @@ function taylor_green_ke(N; tfinal=10.0, Re=1600.0)
 end
 
 if get(ENV, "CL_RUN_TG", "0") == "1"
-    println("\n=== Taylor–Green Re=1600, 64³ (set CL_RUN_TG=1 to enable) ===")
-    ts, kes = taylor_green_ke(64)
-    eps = -diff(kes) ./ diff(ts)
-    imax = argmax(eps)
-    @printf("peak dissipation %.4e at t = %.2f (reference ≈ 1.2e-2 at t ≈ 9)\n",
-            eps[imax], ts[imax+1])
+    @phase "Taylor–Green 64³" begin
+        println("\n=== Taylor–Green Re=1600, 64³ (set CL_RUN_TG=1 to enable) ===")
+        ts, kes = taylor_green_ke(64)
+        eps = -diff(kes) ./ diff(ts)
+        imax = argmax(eps)
+        @printf("peak dissipation %.4e at t = %.2f (reference ≈ 1.2e-2 at t ≈ 9)\n",
+                eps[imax], ts[imax+1])
+    end
 end
 
 println("\nconvergence studies complete")
+timing_report(; title="convergence phase timing",
+              extra=("of which Solver construction" => T_BUILD[],
+                     "of which derivative and error" => T_DERIV[]))
