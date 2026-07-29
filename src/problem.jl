@@ -15,9 +15,22 @@
 """
     Prim(; u=(0,0,0), p, T_ion=NaN, rho=NaN, Y=(1.0,))
 
-Pointwise primitive state: velocity components (physical, coordinate-aligned),
-pressure, mass fractions, and exactly one of temperature or density (the EOS
-supplies the other).
+Pointwise primitive state used by initial and prescribed-boundary functions.
+All values are converted to `Float64`.
+
+# Keywords
+
+- `p`: pressure. This keyword is required.
+- `u`: three physical velocity components in the coordinate-aligned orthonormal
+  basis. The default is a stationary state.
+- `T_ion`: temperature. Specify this or `rho`, but not both.
+- `rho`: mixture density. Specify this or `T_ion`, but not both.
+- `Y`: species mass fractions, in the order used to construct the EOS. They
+  must sum to one; the default is a single species with unit mass fraction.
+
+The number of entries in `Y` is checked against [`nspecies`](@ref) when the
+state is converted with [`conserved_from_prim`](@ref). CompactLES does not
+clip negative or out-of-range primitive values.
 """
 struct Prim{N}
     Y::NTuple{N,Float64}
@@ -36,10 +49,20 @@ function Prim(; u=(0.0, 0.0, 0.0), p::Real, T_ion::Real=NaN, rho::Real=NaN, Y=(1
 end
 
 """
-    conserved_from_prim(eos, pr) -> NTuple
+    conserved_from_prim(eos, pr::Prim) -> NTuple
+    conserved_from_prim(equations, eos, pr::Prim) -> NTuple
 
-EOS contract: primitive → conserved (ρY₁..ρY_Ns, ρu, ρv, ρw, E). Implemented
-here for ideal mixtures; future EOS models supply their own method.
+Convert a pointwise primitive state to the conserved layout owned by
+`equations`. The two-argument form uses [`NavierStokes1T`](@ref).
+
+For `NavierStokes1T`, the result is
+`(rho*Y[1], ..., rho*Y[Ns], rho*u[1], rho*u[2], rho*u[3], rho*E)`,
+where the final entry is total energy per volume. The EOS obtains density from
+`(p, T_ion, Y)` or temperature from `(p, rho, Y)`, according to which value was
+supplied to `pr`.
+
+A method throws if the number of mass fractions does not match the EOS.
+Custom equation sets or EOS models extend the three-argument form.
 """
 function conserved_from_prim(::NavierStokes1T, eos::IdealMixture, pr::Prim{N}) where {N}
     N == nspecies(eos) ||
@@ -101,9 +124,15 @@ end
 """
     initialize!(solver, Q, ic)
 
-Fill the interior of `Q` from `ic(x₁, x₂, x₃) -> Prim`, evaluated at physical
-coordinates. The IC function never sees ranks, halos, offsets, or component
-layouts. IC functions should be pure (they are called from multiple threads).
+Overwrite the rank-local interior of conserved state `Q` from
+`ic(x1, x2, x3) -> Prim`, evaluated at physical coordinates. The callback sees
+neither ranks and halos nor the conserved-component layout, and should be pure
+because it can be called concurrently from multiple threads.
+
+This function leaves halo cells unchanged and does not reset solver time,
+timestep history, or diagnostics. Use it to reuse an existing solver and
+allocation for a different initial state with the same EOS, geometry, and
+numerical configuration. It returns `Q`.
 """
 initialize!(solver::Solver, Q, ic) = _initialize!(solver, solver.eos, Q, ic)
 
@@ -125,7 +154,13 @@ function _initialize!(solver::Solver, eos, Q, ic)
     return Q
 end
 
-"Smoothed step: 0 for x ≪ x0, 1 for x ≫ x0, tanh transition of width δ."
+"""
+    tanh_blend(x, x0, delta)
+
+Return `0.5 * (1 + tanh((x - x0) / delta))`, a smooth transition centered at
+`x0`. For positive `delta`, the value rises from zero to one as `x` increases;
+the magnitude of `delta` sets the transition width in the same units as `x`.
+"""
 tanh_blend(x, x0, δ) = 0.5 * (1 + tanh((x - x0) / δ))
 
 # ---------------------------------------------------------------------------
@@ -167,11 +202,35 @@ end
 # Backend-decoupled problem and numerics bundles.
 
 """
-    Problem(; eos, transport, metric, domain, bcs, ic, name)
+    Problem(; domain, bcs, ic, name="problem", eos=single_species(),
+            transport=Transport(), metric=CartesianMetric(), sources=())
 
-Physics and geometry only: EOS, transport, metric, coordinate `domain` as
-three (lo, hi) tuples, boundary conditions, and the IC function. Contains no
-resolution, scheme, or parallel information.
+Physical specification independent of grid resolution and process count. A
+`Problem` can therefore be reused with different [`Numerics`](@ref) objects.
+
+# Required keywords
+
+- `domain`: three `(lo, hi)` coordinate intervals. [`setup`](@ref) requires
+  every interval to have positive extent.
+- `bcs`: three `(low, high)` pairs of [`BoundaryCondition`](@ref) objects, one
+  pair per coordinate direction. A periodic direction must use `PeriodicBC` at
+  both ends; a collapsed direction must also use a periodic pair.
+- `ic`: pointwise function `(x1, x2, x3) -> Prim`. It should be pure because
+  setup can evaluate it from multiple threads.
+
+# Optional keywords
+
+- `name`: human-readable problem label, used in displays. Default: `"problem"`.
+- `eos`: equation of state and species definition. Default:
+  [`single_species()`](@ref).
+- `transport`: constant molecular transport properties. Default:
+  [`Transport()`](@ref), which has zero molecular viscosity.
+- `metric`: coordinate metric. Default: [`CartesianMetric()`](@ref).
+- `sources`: tuple of explicit source objects applied to the RHS. Default: `()`.
+  See [`add_source!`](@ref) when defining a custom source.
+
+Coordinates passed to `ic` and to boundary callbacks follow `metric`. Species
+mass fractions in every returned `Prim` must follow the order defined by `eos`.
 """
 Base.@kwdef struct Problem
     name::String = "problem"
@@ -185,11 +244,45 @@ Base.@kwdef struct Problem
 end
 
 """
-    Numerics(; n_global, kwargs...)
+    Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
+             art=ArtParams(), cfl=0.5, control=StepControl(),
+             filter_interval=1, dims=nothing, n_halo=4,
+             stretch=(nothing, nothing, nothing))
 
-Discretization and runtime choices: resolution, derivative/filter schemes,
-artificial-property constants, CFL, timestep control ([`StepControl`](@ref)),
-filter interval, process grid, halo width.
+Grid, scheme, timestep, and decomposition choices used to realize a
+[`Problem`](@ref).
+
+# Keywords
+
+- `n_global`: required three-tuple giving the global point count in each
+  coordinate direction. A count of one collapses that direction: it has no
+  derivative, halo, or decomposition.
+- `deriv`: compact first-derivative scheme. Default: [`lele_d1_6()`](@ref).
+- `filt`: compact state and sensor filter. Default:
+  [`compact_filter(0.45)`](@ref), where values nearer `0.5` are weaker.
+- `art`: artificial-property coefficients. Default: [`ArtParams()`](@ref).
+- `cfl`: multiplier used by [`compute_dt`](@ref). Default: `0.5`. Strong shocks
+  can require a lower startup value.
+- `control`: timestep prediction, failure floors, and retry policy. Default:
+  [`StepControl()`](@ref).
+- `filter_interval`: state-filter cadence in completed steps. A positive value
+  `k` applies `filt` every `k` steps. The default `1` filters every step; `0`
+  disables state filtering. The filter is still used to smooth
+  artificial-property sensors.
+- `dims`: MPI process-grid dimensions. `nothing` lets MPI distribute ranks over
+  resolved directions. An explicit tuple must have product equal to the
+  communicator size and must contain `1` in every collapsed direction.
+- `n_halo`: halo layers on each side of a resolved local block. Default: `4`;
+  it must be at least the largest explicit stencil half-width used by the
+  selected schemes.
+- `stretch`: one entry per direction, each either `nothing` for a uniform grid
+  or a [`Stretch`](@ref). A mapping must span the corresponding `Problem.domain`
+  interval and can be used only in a nonperiodic, non-folded direction.
+
+Compact plans impose a scheme-dependent minimum rank-local extent. With the
+defaults, each resolved local extent needs at least nine points because the
+filter is the binding scheme. Reduce decomposition in that direction or
+increase `n_global` if setup reports a smaller local block.
 """
 Base.@kwdef struct Numerics
     n_global::NTuple{3,Int}
@@ -207,8 +300,15 @@ end
 """
     setup(prob, num) -> (solver, Q)
 
-Construct the backend for `prob` at the resolution and schemes of `num` and
-return the solver plus the initialized conserved state.
+Construct the distributed solver for `prob` using `num`, allocate a
+halo-padded [`ConservedState`](@ref), and initialize its rank-local interior
+from `prob.ic`.
+
+Setup validates domain extents, boundary pairing, metric singularities,
+stretch mappings, equation/EOS species counts, process-grid dimensions, halo
+width, and scheme-specific local grid minima. MPI is initialized if necessary.
+The returned `solver` owns the operator plans and runtime state; `Q` contains
+the conserved variables and is ready to pass to [`run!`](@ref).
 """
 function setup(prob::Problem, num::Numerics)
     origin = ntuple(d -> prob.domain[d][1], 3)

@@ -1,10 +1,11 @@
 # # Your first CompactLES simulation
 #
 # This tutorial follows a small pressure disturbance around a periodic
-# one-dimensional domain. It introduces the complete path from a physical
-# problem specification to an evolved solution and an ``x``--``t`` diagram.
-# Only the ``x`` direction is resolved; the other two dimensions contain one
-# point and therefore incur no derivatives, halo storage, or filtering work.
+# one-dimensional domain. It takes a physical problem specification,
+# discretizes it, evolves the resulting system of ordinary differential
+# equations, and shows the result in an ``x``--``t`` diagram. Only ``x`` is
+# resolved; the other two dimensions contain one point and therefore carry no
+# spatial derivatives.
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
@@ -15,10 +16,12 @@ CairoMakie.activate!(type = "png")
 
 # ## Specify the physical problem
 #
-# We use nondimensional variables and a calorically perfect gas. The background
-# state is ``p_0 = rho_0 = 1``. A Gaussian pressure perturbation of amplitude
-# ``10^{-3}`` is small enough for its propagation speed to be close to the
-# acoustic speed ``c_0 = sqrt(gamma p_0/rho_0)``.
+# We use nondimensional variables and a calorically perfect gas, meaning that
+# its heat-capacity ratio ``gamma`` is constant. The background state is
+# ``p_0 = rho_0 = 1``. A Gaussian pressure perturbation of amplitude ``10^{-3}``
+# is small enough for its propagation speed to be close to the acoustic speed
+# ``c_0 = sqrt(gamma p_0/rho_0)``. Choosing
+# ``rho=rho_0(p/p_0)^{1/gamma}`` makes the initial disturbance isentropic.
 
 gamma = 1.4
 amplitude = 1.0e-3
@@ -38,8 +41,15 @@ problem = Problem(
     end,
 )
 
-# [`Numerics`](@ref) contains resolution and algorithmic choices rather than
-# physics. Filtering is disabled for this smooth, well-resolved disturbance.
+# [`Numerics`](@ref) contains the grid and algorithms rather than the physical
+# problem. `n_global = (128, 1, 1)` resolves only ``x``. `lele_d1_6()` selects a
+# sixth-order compact first derivative: derivative values along a grid line are
+# coupled by a banded spatial solve. This does not make time advancement
+# implicit.
+#
+# The CFL number scales the explicit timestep selected from the fastest local
+# acoustic and diffusive rates. Filtering is disabled because this disturbance
+# is smooth and well resolved.
 
 numerics = Numerics(
     n_global = (128, 1, 1),
@@ -51,23 +61,36 @@ numerics = Numerics(
 
 solver, Q = setup(problem, numerics)
 
-# ## Read the state without depending on its layout
+# `setup` samples the primitive initial condition (`p`, `rho`, and velocity) and
+# converts it to the conserved variables advanced by the solver: mass, three
+# momentum components, and total energy. Spatial flux derivatives turn their
+# governing equations into a finite system
+#
+# ```math
+# \frac{dQ_h}{dt}=R_h(Q_h,t),
+# ```
+#
+# which `run!` advances with a five-stage, fourth-order low-storage
+# Runge--Kutta method. See [Spatial and temporal discretization](@ref) for the
+# complete stage and timestep sequence.
+
+# ## Read the state
 #
 # [`line_profile`](@ref) extracts a named report variable along one axis as a
-# `(coordinate, value)` pair. It is the general replacement for hand-written
-# sampling loops: it resolves `:rho` through the same catalog the output writers
-# use, and it is collective and geometry-aware, so the profile means the same
-# thing under MPI decomposition as it does in serial. Here it returns the
-# mixture density along ``x``.
+# `(coordinate, value)` pair. It resolves `:rho` through the same path as the
+# visualization writers, including collective communication under MPI and
+# curvilinear geometry when applicable. Here it returns mixture density along
+# ``x``.
 
 x, rho0 = line_profile(solver, Q, :rho)
 tfinal = 0.30
 times = collect(range(0.0, tfinal; length = 61))
 snapshots = [rho0]
 
-# [`AtTime`](@ref) asks `run!` to end steps exactly at the requested times.
+# [`AtTime`](@ref) asks `run!` to end full Runge--Kutta steps exactly at the
+# requested times. `run!` otherwise recomputes a CFL timestep before every step.
 # The columns of `rho_xt` therefore lie on a uniform physical-time axis even
-# though the CFL-controlled timestep varies slightly.
+# though the timestep varies slightly.
 
 record = Callback(AtTime(times[2:end]), function (solver, Q)
     push!(snapshots, line_profile(solver, Q, :rho)[2])

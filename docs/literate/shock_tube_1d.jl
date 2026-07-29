@@ -1,10 +1,15 @@
 # # Regularizing a one-dimensional shock
 #
-# Smooth solutions are the natural regime of a high-order compact difference
-# scheme. A shock instead contains a jump: no finite grid can resolve its
-# formal derivative. CompactLES regularizes that jump with localized artificial
-# fluid properties and a compact low-pass filter. This tutorial shows their
-# action in a small Sod shock tube.
+# Smooth solutions are the natural regime of the central compact derivative
+# introduced in the first tutorial. A shock instead contains a jump: no finite
+# grid can resolve its formal derivative, and a nearly nondissipative central
+# scheme can develop grid-scale oscillations around it.
+#
+# CompactLES uses two regularization mechanisms. Shock sensors add localized
+# artificial viscosity, conductivity, and diffusivity to the physical fluxes.
+# A compact low-pass filter separately removes the shortest resolved waves from
+# the conserved state after a completed timestep. This tutorial shows their
+# combined action in a small Sod shock tube.
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
@@ -40,8 +45,9 @@ problem = Problem(
 
 # Strong startup transients require a smaller CFL than smooth flow. Retry
 # control also permits a failed step to roll back and retry at a reduced CFL.
-# The default Cook coefficients are exposed here so the numerical assumptions
-# of the calculation are visible at the point of use.
+# The Cook-style coefficients in [`ArtParams`](@ref) are exposed so the
+# numerical assumptions are visible. They are calibration choices conditional
+# on the grid, filter, and flow regime, not universal fluid constants.
 
 numerics = Numerics(
     n_global = (nx, 1, 1),
@@ -76,8 +82,9 @@ rho_xt = reduce(hcat, snapshots)
 # The space--time view distinguishes the three waves by slope and width. The
 # rarefaction occupies a widening fan, the contact remains sharp but moves more
 # slowly than the shock, and the shock forms the steep rightmost trajectory.
-# Artificial properties act locally near the two sharp features; filtering
-# removes grid-scale oscillations throughout each completed step.
+# Artificial properties act locally near the two sharp features. Filtering
+# acts globally after each completed step because `filter_interval=1`, whether
+# or not a sensor is active at a particular point.
 
 fig = Figure(size = (760, 680))
 ax1 = Axis(fig[1, 1], xlabel = "x", ylabel = "time",

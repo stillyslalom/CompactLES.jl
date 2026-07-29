@@ -17,12 +17,26 @@
     ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0,
               C_kappa=0.01, C_D=0.01)
 
-Cook-style artificial-property coefficients. `C_mu`, `C_beta`, `C_kappa`, and
-`C_D` scale artificial shear viscosity, bulk viscosity, conductivity, and
-species diffusivity respectively. These are numerical regularization
-parameters rather than material properties and are conditional on resolution,
-filter strength, and the flow regime. Set `enabled=false` to skip the complete
-artificial-property calculation.
+Cook-style artificial-property controls.
+
+# Keywords
+
+- `enabled`: compute and apply artificial properties. Set this to `false` to
+  skip the complete sensor and artificial-flux calculation.
+- `C_mu`: coefficient for artificial shear viscosity generated from the strain
+  sensor.
+- `C_beta`: coefficient for artificial bulk viscosity; this is the primary
+  shock-spreading term.
+- `C_kappa`: coefficient for artificial conductivity generated from the
+  internal-energy sensor.
+- `C_D`: coefficient for per-species artificial diffusivity generated from
+  mass-fraction sensors.
+
+The coefficients are dimensionless numerical regularization parameters, not
+material properties. Their useful values depend on resolution, flow regime,
+the scheme supplied as `Numerics.filt`, and filter cadence. The displayed
+defaults are documented starting points rather than universal values; larger
+values can reduce the explicit diffusive timestep.
 """
 Base.@kwdef struct ArtParams{T}
     enabled::Bool = true

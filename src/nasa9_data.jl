@@ -102,11 +102,23 @@ Read gas species from the fixed-column NASA CEA `thermo.inp` database. The
 specific gas constant is derived from each record's molar mass using
 `R = R_universal/M`; it is never entered independently of the coefficients.
 
-`reference=:sensible` shifts every interval's `b1` by the same constant so
-`h(T_ref) = 0`, reducing cancellation in non-reacting flow. Use
-`reference=:formation` to retain the tabulated heat-of-formation gauge.
-A vector of names returns species in the requested order; one name returns one
-[`Nasa9Species`](@ref).
+# Arguments and keywords
+
+- `names`: a species name or vector of names as written in the database. A
+  vector returns species in the requested order, including repeated names; one
+  name returns one [`Nasa9Species`](@ref).
+- `path`: database file. It defaults to the bundled `data/thermo.inp`; override
+  it to read another file in the same fixed-column CEA format.
+- `reference`: enthalpy gauge. The default `:sensible` shifts every interval's
+  `b1` by the same constant so `h(T_ref) = 0`, reducing cancellation in
+  non-reacting flow. Use `:formation` to preserve the tabulated gauge.
+- `T_ref`: positive reference temperature for the sensible-enthalpy shift.
+  Default: `298.15` K. It does not alter coefficients when
+  `reference=:formation`, but it must still be positive.
+
+The reader accepts gaseous records with one or more polynomial intervals and
+throws an `ArgumentError` for missing species, malformed records, non-gaseous
+records, or invalid keyword values.
 """
 function read_nasa9(names::AbstractVector{<:AbstractString};
                     path::AbstractString=NASA9_THERMO_PATH,

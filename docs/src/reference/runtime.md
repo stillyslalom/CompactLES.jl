@@ -12,6 +12,7 @@ StepControl
 SolverFailure
 PLANCK_TIME
 Workspace
+ConservedState
 compute_rhs!
 apply_bcs!
 compute_dt

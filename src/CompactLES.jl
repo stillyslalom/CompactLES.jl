@@ -2,7 +2,8 @@
     CompactLES
 
 Compressible large-eddy/direct-simulation solver using high-order compact
-finite differences, compact filtering, low-storage RK45 time integration,
+finite differences, compact filtering, five-stage fourth-order low-storage
+Runge--Kutta time integration,
 shared-memory threading, and MPI domain decomposition. The compact line solves
 remain globally coupled across decomposed dimensions.
 
@@ -45,8 +46,9 @@ include("diagnostics.jl")
 include("viz.jl")
 include("problem.jl")
 include("scriptargs.jl")
+include("display.jl")
 
-export Decomp, exchange_halos!, interior, field, allocate_state
+export Decomp, ConservedState, exchange_halos!, interior, field, allocate_state
 export CompactScheme, ClosureRow, lele_d1_6, pade_d1_4, compact_filter
 export BandedCompactScheme, BandedClosureRow, lele_d1_10
 export BoundaryCondition, PeriodicBC, SlipWallBC, NoSlipWallBC, ExtrapolationBC, AxisBC, OriginBC, PoleBC

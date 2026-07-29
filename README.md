@@ -191,7 +191,7 @@ same `Problem` with a sequence of `Numerics` values.
 |-----------------|----------|
 | Derivatives     | `lele_d1_6` (C6, tridiagonal), `lele_d1_10` (C10, pentadiagonal), `pade_d1_4`, custom `CompactScheme` / `BandedCompactScheme` |
 | Filter          | `compact_filter(αf)` — eighth-order Gaitonde–Visbal, boundary cascade |
-| Time integration| Five-stage fourth-order low-storage Carpenter–Kennedy RK45 |
+| Time integration| Five-stage fourth-order low-storage Carpenter–Kennedy Runge–Kutta (LSRK(5,4)) |
 | Geometry        | `CartesianMetric`, `CylindricalMetric`, `SphericalMetric`; collapsed 1-D/2-D; `Stretch` / `sine_cluster` meshes |
 | Walls           | `SlipWallBC`, `NoSlipWallBC(Twall=...)` (adiabatic or isothermal) |
 | Open boundaries | `NSCBCOutflowBC(pinf=...)`, `NSCBCInflowBC(u=..., T_ion=..., Y=...)`, `ExtrapolationBC` |
@@ -360,7 +360,7 @@ history.
 ## Status and limitations
 
 This is research code under active development. The core solver — compact
-operators, RK45 integration, artificial properties, multicomponent transport,
+operators, LSRK(5,4) integration, artificial properties, multicomponent transport,
 the curvilinear metrics, and the distributed solve — is covered by the test
 suites above and validated against analytic references (Sod, freestream, rigid
 rotation, manufactured fold solutions).

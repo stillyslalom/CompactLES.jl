@@ -1,13 +1,12 @@
 # # Initialize a resolved cylindrical domain
 #
-# The [radial coordinate tutorial](@ref "Take one step in a radial coordinate")
+# [Setting up a radial acoustic pulse](@ref)
 # collapsed the angular and axial directions to reach an axisymmetric
 # calculation at one-dimensional cost. This tutorial keeps all three cylindrical
-# directions
-# resolved: ``(r, theta, z)`` with the azimuth periodic over a full turn and the
-# axis regularized by a fold. It shows how to place an off-axis feature, which
-# constraints the axis condition imposes, and how to view a coordinate slice as
-# a physical disk.
+# directions resolved: ``(r, theta, z)`` with the azimuth periodic over a full
+# turn and the axis regularized by the fold already introduced. It shows how to
+# place an off-axis feature, which additional constraints a resolved angle
+# imposes, and how to view a coordinate slice as a physical disk.
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
@@ -19,10 +18,16 @@ CairoMakie.activate!(type = "png")
 # ## Geometry, resolution, and the axis condition
 #
 # [`CylindricalMetric`](@ref) reads the three coordinates as ``(r, theta, z)``.
-# [`AxisBC`](@ref) regularizes ``r=0``: it is a fold, not a wall, and it places
-# the grid on half-integer radii so no node lies on the singularity. Two rules
-# follow from the fold and the compact schemes, and both are checked at
-# [`setup`](@ref):
+# [`AxisBC`](@ref) continues fields through ``r=0`` on the half-offset radial
+# grid. Unlike the collapsed case, a point continued through the axis lands on
+# the radial line half a turn away:
+#
+# ```math
+# (-r,\theta,z)\equiv(r,\theta+\pi,z).
+# ```
+#
+# Two rules follow from this antipodal pairing and the compact schemes, and
+# both are checked at [`setup`](@ref):
 #
 #   * a resolved azimuth must span the full ``2\pi`` with an **even** number of
 #     points, because the fold pairs each radial line with its antipode half a
@@ -34,6 +39,12 @@ CairoMakie.activate!(type = "png")
 
 nr, ntheta, nz = 48, 32, 16
 Lz = 2.0
+
+# The resolved azimuth also changes the explicit stability limit. Its physical
+# spacing is ``r\Delta\theta``, which is smallest at the first half-offset
+# radial node. A three-dimensional cylindrical calculation can therefore take
+# much smaller timesteps than the collapsed radial calculation even when both
+# use the same ``\Delta r``.
 
 # ## Place an off-axis feature
 #

@@ -1,8 +1,10 @@
 # # Construct a multicomponent state
 #
-# A useful simulation begins with a thermodynamically consistent state. This
-# tutorial constructs a helium--carbon-dioxide interface at uniform pressure
-# and temperature using the bundled NASA-9 data. No hydrodynamic evolution is
+# A useful simulation begins with a thermodynamically consistent state. The
+# first two tutorials used a one-species equation of state (EOS) to close the
+# relation among pressure, density, temperature, and energy. This tutorial
+# constructs a helium--carbon-dioxide interface at uniform pressure and
+# temperature using the bundled NASA-9 data. No hydrodynamic evolution is
 # needed: the figure is produced directly from the initialized conserved state.
 
 using MPI
@@ -56,7 +58,9 @@ solver, Q = setup(problem, numerics)
 
 # ## Inspect the initialized conserved state
 #
-# CompactLES stores partial densities rather than mass fractions.
+# For each species, CompactLES advances the partial density ``rho Y_k``. Their
+# sum is mixture density, so this representation preserves each species mass in
+# the same conservative form introduced in the first tutorial.
 # [`line_profile`](@ref) recovers mixture quantities without exposing that
 # component layout: `:rho` gives the mixture density, and `:Y` with a `species`
 # index gives a mass fraction, in the order fixed above. No evolution is run, so

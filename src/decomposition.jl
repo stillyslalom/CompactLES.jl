@@ -36,6 +36,39 @@ struct Decomp
     recv_buf::Vector{Vector{Float64}}   # per-dim halo recv buffers
 end
 
+"""
+    ConservedState(data)
+
+Four-dimensional conserved-variable storage returned by [`allocate_state`](@ref)
+and [`setup`](@ref). It behaves as an ordinary mutable `AbstractArray`; the
+wrapper gives the state a concise REPL representation instead of printing every
+element after `setup` or [`run!`](@ref).
+
+Use `parent(Q)` to access the underlying array when an external library
+specifically requires a dense `Array`.
+"""
+struct ConservedState{T,A<:AbstractArray{T,4}} <: AbstractArray{T,4}
+    data::A
+end
+
+Base.parent(Q::ConservedState) = Q.data
+Base.size(Q::ConservedState) = size(parent(Q))
+Base.axes(Q::ConservedState) = axes(parent(Q))
+Base.IndexStyle(::Type{<:ConservedState{T,A}}) where {T,A} = IndexStyle(A)
+Base.@propagate_inbounds Base.getindex(Q::ConservedState, I...) =
+    getindex(parent(Q), I...)
+Base.@propagate_inbounds Base.setindex!(Q::ConservedState, value, I...) =
+    setindex!(parent(Q), value, I...)
+
+# Component views are the solver's common array-level operation. Returning a
+# view of the dense parent keeps MPI packing and compact line solves on the same
+# SubArray types they used before the display wrapper was introduced.
+Base.view(Q::ConservedState, I...) = view(parent(Q), I...)
+Base.copy(Q::ConservedState) = ConservedState(copy(parent(Q)))
+Base.zero(Q::ConservedState) = ConservedState(zero(parent(Q)))
+Base.copyto!(dest::ConservedState, src::ConservedState) =
+    (copyto!(parent(dest), parent(src)); dest)
+
 "Even split of N points over P ranks; rank r (0-based) gets (count, offset)."
 function local_range(N::Int, P::Int, r::Int)
     base, rem = divrem(N, P)
@@ -97,7 +130,8 @@ field(decomp::Decomp) = zeros(ntuple(d -> decomp.n_local[d] + 2*decomp.n_halo_d[
 
 "Allocate a conserved state Q(x,y,z,1:n_cons) with halos."
 allocate_state(decomp::Decomp, n_cons::Int) =
-    zeros(ntuple(d -> decomp.n_local[d] + 2*decomp.n_halo_d[d], 3)..., n_cons)
+    ConservedState(zeros(ntuple(d -> decomp.n_local[d] + 2*decomp.n_halo_d[d], 3)...,
+                         n_cons))
 
 "Is this rank at the closed (non-periodic) global low/high edge of dim d?"
 at_lo_edge(decomp::Decomp, d::Int) =

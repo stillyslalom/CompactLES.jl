@@ -62,6 +62,11 @@ freestream preservation in every metric and across MPI boundaries.
 
 ## Coordinate singularities
 
+[Setting up a radial acoustic pulse](@ref) introduces the physical picture: an
+axis is a symmetry location, not a material wall. A smooth scalar such as
+density has the same value on the two sides (even parity), while a velocity
+component whose basis direction reverses changes sign (odd parity).
+
 Nodes are half-offset from an axis, origin, or pole. Values beyond the
 singularity are related to physical points on the other side by parity and, in
 resolved angular cases, an antipodal mapping:

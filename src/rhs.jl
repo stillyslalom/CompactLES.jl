@@ -265,17 +265,23 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     return solver
 end
 
-"Physical coordinate of local interior index i along dimension d."
+"""
+    xcoord(solver, d, i)
+
+Physical coordinate of rank-local, one-based interior index `i` in direction
+`d`. The index does not include halo padding. This is equivalent to
+`global_xcoord(solver, d, solver.decomp.offset[d] + i)`.
+"""
 xcoord(solver::Solver, d::Int, i::Int) =
     global_xcoord(solver, d, solver.decomp.offset[d] + i)
 
 """
     global_xcoord(solver, d, g)
 
-Physical coordinate of *global* 1-based index `g` along dimension `d`. Every
-rank returns the same value for the same `g`, which is what a writer assembling
-a global coordinate vector needs; `xcoord` is this composed with the rank's own
-offset.
+Physical coordinate of global, one-based index `g` in direction `d`, including
+any half-cell fold offset and [`Stretch`](@ref) mapping. Every rank returns the
+same value for the same `(d, g)`. Use this form when assembling a global
+coordinate vector and [`xcoord`](@ref) for a local interior index.
 """
 function global_xcoord(solver::Solver, d::Int, g::Int)
     ξ = solver.origin[d] + solver.coord_shift[d] + (g - 1) * solver.h[d]
@@ -283,7 +289,14 @@ function global_xcoord(solver::Solver, d::Int, g::Int)
     return st === nothing ? ξ : st.x(ξ)
 end
 
-"Halo-offset CartesianIndex of local interior point (i, j, k)."
+"""
+    gidx(solver, i, j, k) -> CartesianIndex
+
+Convert rank-local, one-based interior indices to a `CartesianIndex` for the
+halo-padded state and solver fields. Collapsed directions have zero padding.
+The result is rank-local; it does not locate a global point owned by another
+rank.
+"""
 function gidx(solver::Solver, i::Int, j::Int, k::Int)
     pad = solver.decomp.n_halo_d
     return CartesianIndex(i + pad[1], j + pad[2], k + pad[3])
@@ -291,7 +304,7 @@ end
 
 # --- Reading the in-flight conserved state -----------------------------------
 #
-# `Q` is a raw array in the layout defined by the equation set, so a caller
+# `Q` is a 4-D array in the layout defined by the equation set, so a caller
 # wanting the density writes `Q[I, 1] + Q[I, 2]` and has silently hardcoded a
 # two-species run. The functions below are the layout-independent equivalents,
 # for callback conditions, custom diagnostics, and any other code reading `Q`

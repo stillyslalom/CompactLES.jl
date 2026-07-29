@@ -1,11 +1,11 @@
 # # Initialize a resolved spherical domain
 #
-# Spherical coordinates ``(r, theta, phi)`` carry two coordinate singularities:
-# the origin ``r=0`` and the polar axis ``theta \in \{0, \pi\}``. CompactLES
-# regularizes both with folds rather than walls, so a smooth field may be
-# integrated straight through them. This tutorial initializes a resolved
-# spherical domain — origin fold, both poles, periodic azimuth — advances a
-# smooth blast a short way, and views a meridional slice.
+# Spherical coordinates ``(r, theta, phi)`` extend the cylindrical construction
+# to two kinds of coordinate singularity: the origin ``r=0`` and the polar axis
+# ``theta \in \{0, \pi\}``. As in the preceding tutorials, these are not
+# material walls. CompactLES continues smooth fields through them using an
+# origin fold and two pole folds. This tutorial initializes a resolved spherical
+# domain, advances a smooth blast a short way, and views a meridional slice.
 
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
@@ -80,7 +80,7 @@ r0, rho0 = line_profile(solver, Q, :rho; dim = 1)
 # the folds, which is why a resolved spherical case is a demanding test as much
 # as a demonstration.
 
-run!(solver, Q; tfinal = 0.06, nmax = 500);
+run!(solver, Q; tfinal = 0.06, nmax = 20);
 
 # ## View a meridional slice
 #

@@ -32,6 +32,40 @@ end; f)
 # the serial suite and test/validation.jl measure against the same solution.
 include("references.jl")
 
+@testset "concise frontend displays" begin
+    prob = Problem(name="display test",
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
+                   ic=(x, y, z) -> Prim(u=(x, y, z), p=1.0, rho=1.0))
+    num = Numerics(n_global=(12, 12, 12), art=ArtParams(enabled=false))
+    solver, Q = setup(prob, num)
+
+    @test Q isa ConservedState
+    @test parent(Q) isa Array{Float64,4}
+    @test size(Q) == (20, 20, 20, 5)
+    Q[1, 1, 1, 1] = 2.0
+    @test parent(Q)[1, 1, 1, 1] == 2.0
+    @test parent(view(Q, :, :, :, 1)) === parent(Q)
+    @test copy(Q) isa ConservedState
+    @test zero(Q) isa ConservedState
+
+    q_display = sprint(show, MIME("text/plain"), Q)
+    pair_display = sprint(show, MIME("text/plain"), (solver, Q))
+    @test q_display == "ConservedState{Float64}(20 × 20 × 20 × 5)"
+    @test length(pair_display) < 200
+    @test occursin("Solver(grid=12 × 12 × 12", pair_display)
+    @test occursin(q_display, pair_display)
+    @test run!(solver, Q; tfinal=1.0, nmax=0) === Q
+
+    solver_display = sprint(show, MIME("text/plain"), solver)
+    problem_display = sprint(show, MIME("text/plain"), prob)
+    numerics_display = sprint(show, MIME("text/plain"), num)
+    @test occursin("5 conserved variables", solver_display)
+    @test occursin(prob.name, problem_display)
+    @test !occursin("#", problem_display)       # do not dump the IC closure type
+    @test occursin("artificial properties: disabled", numerics_display)
+    @test all(length.((solver_display, problem_display, numerics_display)) .< 500)
+end
+
 @testset "banded LU vs dense" begin
     for q in (1, 2), n in (9, 17)
         A = zeros(n, n)

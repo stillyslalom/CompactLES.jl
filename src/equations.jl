@@ -6,16 +6,30 @@
 """
     EquationSet
 
-Abstract owner of conserved-component indices, names, primitive conversion,
-and coordinate-fold parity. `NavierStokes1T` is the current implementation.
+Abstract interface for an equation set that owns the conserved-variable layout
+and its parity across coordinate folds. [`NavierStokes1T`](@ref) is the current
+implementation and is selected automatically by [`setup`](@ref).
+
+A concrete equation set provides `n_species`, `n_cons`, `i_mom`, `i_energy`,
+and `component_names`, together with methods for primitive-to-conserved
+conversion and conserved-variable parity. Its species count must agree with
+[`nspecies`](@ref) for the selected EOS.
 """
 abstract type EquationSet end
 
 """
     NavierStokes1T(eos)
 
-Current single-temperature multicomponent Navier–Stokes layout:
-partial densities, three momentum components, and total energy.
+Construct the single-temperature, multicomponent Navier--Stokes equation set
+for `eos`. Its conserved layout is
+`(rho*Y[1], ..., rho*Y[Ns], rho*u1, rho*u2, rho*u3, rho*E)`: one partial
+density per EOS species, three momentum components in the coordinate-aligned
+orthonormal basis, and total energy per volume.
+
+The object records the component indices and names used by I/O, source terms,
+boundary conditions, and coordinate folds. Users normally select it implicitly
+through [`setup`](@ref); construct it directly when inspecting a layout or
+using the low-level [`Solver`](@ref) constructor.
 """
 struct NavierStokes1T <: EquationSet
     n_species::Int
@@ -50,4 +64,3 @@ function flux_parities(equations::EquationSet, sigvel, dim::Int, area_parity::In
     return Int[conserved_parity(equations, sigvel, c) *
                normal_parity * area_parity for c in 1:equations.n_cons]
 end
-

@@ -27,6 +27,21 @@ therefore be studied at several resolutions without rewriting its physics.
 - **Look up exact behavior.** The reference section documents constructors,
   keywords, return values, and every exported binding.
 
+## How the tutorials build
+
+The tutorials are ordered so that each adds one layer to the preceding
+calculations. [Your first CompactLES simulation](@ref) introduces the state,
+grid, CFL-controlled time advancement, and output path. The shock tube adds
+filtering and artificial transport, and the multicomponent example adds
+thermodynamic closure and species storage. The geometry sequence then starts
+with a collapsed radial calculation before resolving a full cylinder and,
+finally, a sphere with an origin and poles.
+
+The tutorials give enough explanation to run and interpret each calculation.
+For the mathematical development, read [Governing equations](@ref) followed by
+[Spatial and temporal discretization](@ref); the later explanation pages deepen
+the regularization, thermodynamics, and geometry introduced along the way.
+
 ## Prerequisites and conventions
 
 The manual assumes graduate coursework in fluid mechanics, thermodynamics,

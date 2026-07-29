@@ -58,8 +58,9 @@ Workspace(solver::Solver) = Workspace(allocate_state(solver), allocate_state(sol
 """
     step!(solver, Q, dQ, du, dt)
 
-Advance the conserved state by one RK45 step of size `dt`. `dQ` and `du` are
-caller-provided work arrays of the same shape as `Q`.
+Advance the conserved state by one five-stage, fourth-order low-storage
+Runge--Kutta step of size `dt`. `dQ` and `du` are caller-provided work arrays of
+the same shape as `Q`.
 """
 function step!(solver::Solver, Q, dQ, du, dt)
     decomp = solver.decomp

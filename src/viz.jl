@@ -227,7 +227,7 @@ raster: the `(axis, disk)` pair a heatmap draws as a disk of radius
 `radius[end]`, with `values` interpolated radially and `fill` (default `NaN`,
 transparent) outside. This is the view for a collapsed radial calculation — the
 azimuthally symmetric run of the [radial coordinate tutorial](@ref
-"Take one step in a radial coordinate") or the converging shock — where there is no resolved
+"Setting up a radial acoustic pulse") or the converging shock — where there is no resolved
 angle to slice with [`field_slice`](@ref); the field is a function of ``r``
 alone and the disk is its surface of revolution.
 

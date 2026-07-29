@@ -3,9 +3,17 @@
 
 """
     ConstantBodyForce(acceleration)
+    ConstantBodyForce(; acceleration=(0.0, -9.81, 0.0))
 
-Uniform acceleration. Adds rho*g to momentum and (rho*u) dot g to total
-energy at every interior point.
+Uniform body acceleration with three physical components in the
+coordinate-aligned orthonormal basis. At each interior point it adds
+`rho * acceleration` to momentum and `rho * dot(u, acceleration)` to total
+energy.
+
+The positional form accepts a three-tuple of real values and promotes them to
+a common numeric type. The keyword form defaults to a gravity-like acceleration
+in the negative second direction. Values must use the length/time-squared unit
+consistent with the rest of the problem.
 """
 struct ConstantBodyForce{T}
     acceleration::NTuple{3,T}
@@ -26,6 +34,10 @@ Add one explicit source to the already assembled conserved RHS at stage time
 `t`. Extend this function for a custom concrete source type and place instances
 in `Problem.sources`. The method runs on every rank and must preserve the
 conserved component layout owned by `solver.equations`.
+
+A custom method mutates only the rank-local interior of `dQ`, adds rather than
+overwrites contributions already present, and returns `dQ`. It may inspect `Q`
+and `solver`; any collective operation must be entered by every rank.
 """
 function add_source!(source::ConstantBodyForce, solver, dQ, Q, t)
     decomp = solver.decomp
@@ -58,7 +70,12 @@ end
     return _add_sources!(Base.tail(sources), solver, dQ, Q, t)
 end
 
-"Apply every source in `solver.sources` to the already assembled RHS."
+"""
+    add_sources!(solver, dQ, Q, t)
+
+Apply every source in `solver.sources`, in tuple order, to the already assembled
+RHS `dQ` at stage time `t`. An empty tuple is a no-op. The function mutates and
+returns `dQ`; users normally call it indirectly through [`compute_rhs!`](@ref).
+"""
 add_sources!(solver, dQ, Q, t) =
     _add_sources!(solver.sources, solver, dQ, Q, t)
-

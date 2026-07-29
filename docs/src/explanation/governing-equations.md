@@ -65,11 +65,30 @@ and total energy satisfies
 `ConstantBodyForce` supplies ``f``. Additional sources enter the same
 conservative right-hand side through `Problem.sources`.
 
+The viscous stress convention is
+
+```math
+\boldsymbol{\tau}
+= \mu\left[\nabla\boldsymbol{u}+(\nabla\boldsymbol{u})^T
+-\frac{2}{3}(\nabla\!\cdot\boldsymbol{u})\boldsymbol{I}\right]
++\beta(\nabla\!\cdot\boldsymbol{u})\boldsymbol{I}.
+```
+
+Here ``\mu`` contains molecular and artificial shear viscosity. The present
+model has no molecular bulk viscosity; ``\beta`` is the artificial bulk
+viscosity used to spread shocks.
+
 ## Molecular and artificial transport
 
-Molecular viscosity is presently constant. The molecular heat conductivity is
-set through the Prandtl number and species diffusivity through the Schmidt
-number. The conductive heat flux is
+Molecular viscosity ``\mu_0`` is presently constant. The molecular heat
+conductivity and species diffusivity are
+
+```math
+\kappa_0=\frac{\mu_0c_p}{\mathrm{Pr}},\qquad
+D_0=\frac{\mu_0}{\rho\,\mathrm{Sc}}.
+```
+
+The conductive heat flux is
 
 ```math
 \boldsymbol{q} = -\kappa\nabla T,
@@ -112,6 +131,23 @@ the local orthonormal basis, not derivatives of the coordinate values. Metric
 area factors enter conservative flux divergence, and rotating-basis terms enter
 velocity gradients and momentum sources. See
 [Curvilinear coordinates](@ref).
+
+## From the equations to a numerical right-hand side
+
+After the grid and spatial operators are fixed, the nodal conserved state
+``Q_h`` satisfies a finite system of ordinary differential equations,
+
+```math
+\frac{dQ_h}{dt}=R_h(Q_h,t).
+```
+
+For every evaluation of ``R_h``, CompactLES recovers primitive and
+thermodynamic variables from ``Q_h``, differentiates velocity, temperature,
+and composition, constructs the complete physical and artificial fluxes,
+takes their metric-weighted divergence, and then adds geometric terms,
+boundary corrections, and explicit sources. The
+[Spatial and temporal discretization](@ref) page explains both that spatial
+operator and how repeated evaluations of ``R_h`` advance one timestep.
 
 ## Units and nondimensionalization
 

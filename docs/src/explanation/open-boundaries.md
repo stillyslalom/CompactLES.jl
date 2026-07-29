@@ -3,7 +3,7 @@
 At a subsonic boundary, some information travels into the domain and some
 travels out. Prescribing the complete primitive state replaces both sets and
 reflects outgoing disturbances. Navier--Stokes characteristic boundary
-conditions instead alter only incoming wave amplitudes.
+conditions (NSCBC) instead alter only incoming wave amplitudes.
 
 ## Local wave picture
 

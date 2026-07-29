@@ -57,16 +57,30 @@
     EOS
 
 Abstract equation-of-state interface mapping between conserved and primitive
-thermodynamic variables. Concrete models also supply species enthalpies and
-the derivatives required by characteristic boundaries.
+thermodynamic variables. An EOS also fixes the species count and ordering used
+by [`Prim`](@ref), the equation set, output, and species-indexed diagnostics.
+
+Concrete implementations recover pressure, temperature, sound speed, heat
+capacity, and mass fractions from a conserved state. They also provide
+primitive-to-conserved conversion, species enthalpies, the thermodynamic
+derivatives used by NSCBC, wall internal energy, and an artificial-conductivity
+scale. Built-in choices are [`IdealMixture`](@ref), [`Nasa9Mixture`](@ref), and
+[`StiffenedGas`](@ref).
 """
 abstract type EOS end
 
 """
     IdealSpecies(name, R, gamma)
 
-One calorically perfect species with specific gas constant `R` and constant
-heat-capacity ratio `gamma`. Use a consistent unit system for `R`, pressure,
+One calorically perfect species.
+
+- `name` is the label used in conserved-component names and output.
+- `R` is the specific gas constant.
+- `gamma` is the constant heat-capacity ratio.
+
+The implied heat capacities are `cv = R / (gamma - 1)` and `cp = cv + R`.
+The constructor does not validate the parameters; physical use requires
+`R > 0` and `gamma > 1`. Use a consistent unit system for `R`, pressure,
 density, and temperature.
 """
 struct IdealSpecies{T}
@@ -78,10 +92,14 @@ end
 """
     IdealMixture(species)
 
-Thermally and calorically ideal mixture assembled from `IdealSpecies` values.
-Mixture gas constant and heat capacities are mass-fraction averages. Species
-order defines the order expected in every `Prim.Y` tuple and species-indexed
-diagnostic.
+Thermally and calorically ideal mixture assembled from a nonempty vector of
+[`IdealSpecies`](@ref) values with a common numeric type. Mixture gas constant
+and heat capacities are mass-fraction averages, so each species keeps constant
+`R`, `cp`, and `cv` while mixture properties vary with composition.
+
+Vector order defines the order required by every `Prim.Y` tuple, the partial
+density components in the conserved state, and species-indexed output and
+diagnostics.
 """
 struct IdealMixture{T} <: EOS
     sp::Vector{IdealSpecies{T}}
@@ -96,14 +114,24 @@ function IdealMixture(sp::Vector{IdealSpecies{T}}) where {T}
     IdealMixture{T}(sp, Rk, cvk, Rk .+ cvk)
 end
 
-"Convenience constructor for a single calorically perfect gas."
+"""
+    single_species(; gamma=1.4, R=1.0, name="gas") -> IdealMixture
+
+Construct a one-species calorically perfect [`IdealMixture`](@ref). `gamma` is
+the heat-capacity ratio, `R` the specific gas constant, and `name` the label
+used for the partial-density component and output. This is the default EOS for
+[`Problem`](@ref).
+"""
 single_species(; gamma::Real=1.4, R::Real=1.0, name::String="gas") =
     IdealMixture([IdealSpecies{Float64}(name, Float64(R), Float64(gamma))])
 
 """
     nspecies(eos) -> Int
 
-Number of transported species represented by an equation of state.
+Number of transported species represented by `eos`. This fixes the required
+length and ordering of `Prim.Y`, the number of partial-density
+components in [`NavierStokes1T`](@ref), and the length of species-indexed
+diagnostics.
 """
 nspecies(eos::IdealMixture) = length(eos.sp)
 species_enthalpy(eos::IdealMixture, k::Int, T_ion) = eos.cpk[k] * T_ion
@@ -149,11 +177,23 @@ end
 # next member of this family.
 
 """
-    StiffenedGas(; gamma, p_inf, cv, name)
+    StiffenedGas(; gamma=4.4, p_inf=6.0e8, cv=1816.0, name="liquid")
 
-Single-component stiffened-gas equation of state, `p = (γ−1)ρe − γp∞`. With
-`p_inf = 0` this is a perfect gas and reproduces [`single_species`](@ref)
-exactly.
+Single-component stiffened-gas equation of state,
+`p = (gamma - 1) * rho * e - gamma * p_inf`.
+
+# Keywords
+
+- `gamma`: constant heat-capacity ratio.
+- `p_inf`: cohesive pressure that raises the acoustic stiffness.
+- `cv`: constant-volume specific heat.
+- `name`: species label used in conserved-component names and output.
+
+The thermal relation is `p + p_inf = rho * R * T_ion`, with
+`R = (gamma - 1) * cv`. Parameters must use a consistent unit system and be
+fitted over the intended material and state range. The defaults are a
+water-like starting point in SI units, not a general liquid model. Setting
+`p_inf = 0` recovers the perfect-gas algebra of [`single_species`](@ref).
 """
 Base.@kwdef struct StiffenedGas{T} <: EOS
     gamma::T = 4.4
@@ -235,8 +275,17 @@ end
 """
     Nasa9Interval(Tmin, Tmax, a, b1)
 
-One temperature interval of a NASA-9 polynomial. `a` holds the seven heat
-capacity coefficients and `b1` is the enthalpy integration constant.
+One temperature interval of a NASA-9 polynomial.
+
+- `Tmin` and `Tmax` are the fit bounds in kelvin and must satisfy
+  `0 < Tmin < Tmax`.
+- `a` contains the seven coefficients of `cp/R`, from the inverse-square term
+  through the fourth-power term.
+- `b1` is the integration constant in `h/R`.
+
+All values use the same numeric type. Users normally obtain intervals through
+[`read_nasa9`](@ref); direct construction is useful for analytic models and
+tests.
 """
 struct Nasa9Interval{T}
     Tmin::T
@@ -296,13 +345,20 @@ end
 
 """
     Nasa9Species(name, R, intervals)
+    Nasa9Species(; name, R, a, b1=0.0, Tmin=200.0, Tmax=6000.0)
 
-One species of a [`Nasa9Mixture`](@ref). `R` is the specific gas constant and
-`intervals` contains its piecewise NASA-9 fits. Use [`read_nasa9`](@ref) for CEA
-data so `R` is derived from the table's molar mass rather than entered by hand.
+One species of a [`Nasa9Mixture`](@ref). `name` is the output label, `R` is the
+specific gas constant, and `intervals` is an ordered vector of
+[`Nasa9Interval`](@ref) fits.
+
+Construction checks that `R` and temperature bounds are positive, intervals
+are contiguous, and `cp` and `h` are continuous at their joins to the tolerance
+used for the bundled database. Use [`read_nasa9`](@ref) for CEA data so `R` is
+derived from the table's molar mass rather than entered independently.
 
 The keyword constructor with `a`, `b1`, `Tmin`, and `Tmax` creates one interval
-and is retained for small analytic coefficient sets and tests.
+and defaults to `Float64`. It is intended for small analytic coefficient sets
+and tests.
 """
 struct Nasa9Species{T}
     name::String
@@ -330,10 +386,12 @@ end
 Nasa9Species(; kwargs...) = Nasa9Species{Float64}(; kwargs...)
 
 """
-    nasa9_constant_cp(name, R, cp)
+    nasa9_constant_cp(name, R, cp) -> Nasa9Species
 
-Degenerate `Nasa9Species` with a temperature-independent cp — the reduction
-that must reproduce an ideal-gas species exactly.
+Construct a `Float64` [`Nasa9Species`](@ref) whose specific heat `cp` is
+temperature independent. `name` is its output label and `R` its specific gas
+constant. This is the calorically perfect limiting case used to compare
+NASA-9 machinery with [`IdealSpecies`](@ref).
 """
 nasa9_constant_cp(name::String, R::Real, cp::Real) =
     Nasa9Species{Float64}(name=name, R=Float64(R),
@@ -341,11 +399,21 @@ nasa9_constant_cp(name::String, R::Real, cp::Real) =
                           b1=0.0)
 
 """
-    Nasa9Mixture(species)
+    Nasa9Mixture(species; T_guess=300.0)
 
-Multicomponent mixture with piecewise NASA-9 heat capacities. It is ideal in the
-thermal sense (`p = ρR_mT_ion`) but not calorically: cp, cv, and γ vary with
-temperature.
+Multicomponent mixture with piecewise NASA-9 heat capacities. `species` is a
+nonempty vector of [`Nasa9Species`](@ref) values; vector order defines every
+`Prim.Y` tuple, conserved partial density, and species-indexed output.
+
+The mixture is thermally ideal (`p = rho * R_mix * T_ion`) but not calorically:
+`cp`, `cv`, and `gamma` vary with temperature. Recovering temperature from
+internal energy therefore uses a bounded Newton iteration. `T_guess` is the
+fixed reference temperature used to form a state-based initial estimate; its
+default is `300.0` K. It should lie in the representative range of the fits.
+
+Temperatures outside a species' tabulated range use its first or last
+polynomial interval, so successful evaluation is not evidence that such an
+extrapolated state is physically valid.
 """
 struct Nasa9Mixture{T} <: EOS
     sp::Vector{Nasa9Species{T}}
@@ -499,8 +567,23 @@ function _primitives!(solver, eos::Nasa9Mixture, Q)
     return solver
 end
 
-"Molecular transport coefficients (constant-property draft): μ₀ plus Prandtl
-and Schmidt numbers setting molecular conductivity and species diffusivity."
+"""
+    Transport(; mu0=0.0, Pr=0.7, Sc=0.7)
+
+Constant molecular-transport model.
+
+# Keywords
+
+- `mu0`: dynamic shear viscosity. Its default `0.0` selects inviscid molecular
+  transport; artificial properties remain independently controlled by
+  [`ArtParams`](@ref).
+- `Pr`: Prandtl number. Molecular conductivity is `mu0 * cp / Pr`.
+- `Sc`: Schmidt number. Each molecular species diffusivity is
+  `mu0 / (rho * Sc)`.
+
+`Pr` and `Sc` are dimensionless and should be positive. The constructor does
+not enforce positivity. All three values must use the same numeric type.
+"""
 Base.@kwdef struct Transport{T}
     mu0::T = 0.0
     Pr::T  = 0.7
