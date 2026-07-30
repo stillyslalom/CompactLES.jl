@@ -66,8 +66,9 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false)
         lomin = at_lo_edge(decomp, d) ? 1 : -1
         himax = at_hi_edge(decomp, d) ? n_d : n_d + 2
         e = CartesianIndex(ntuple(k -> k == d ? 1 : 0, 3))
-        @threaded nx*ny*nz for k in 1:nz
-            @inbounds for j in 1:ny, i in 1:nx
+        @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+            j, k = Tuple(jk)
+            @inbounds for i in 1:nx
                 I = CartesianIndex(i + o1, j + o2, k + o3)
                 il = (d == 1 ? i : d == 2 ? j : k)
                 acc = 0.0
@@ -105,6 +106,16 @@ end
 Fill solver.mu_art, solver.beta_art, solver.kappa_art and solver.D_art from
 the current primitives and (metric-corrected) velocity gradients. No-op if
 disabled.
+
+`solver.sensor`, `solver.sensor_sp`, `solver.tmp_a` and `solver.tmp_b` are
+scratch here, and their contents are dead once this function returns: every
+value read out of them has been folded into the four coefficient arrays above.
+Later phases of the same `compute_rhs!` may therefore reuse them, and
+`NSCBCOutflowBC` does, for transverse pressure derivatives. A diagnostic, source
+term, or boundary condition that adds a reader of a sensor after this point
+invalidates the invariant and must take its own storage. One reader already
+exists outside the RHS: `scalar_field(solver, :sensor)` returns `solver.sensor`,
+which is why the NSCBC correction borrows `tmp_b` instead.
 """
 function compute_artificial!(solver, Q)
     art = solver.art
@@ -118,8 +129,9 @@ function compute_artificial!(solver, Q)
 
     # Strain-rate magnitude |S| = sqrt(S_ij S_ij) in the interior (physical
     # components — the metric corrections are already in grad_u).
-    @threaded nx*ny*nz for k in 1:nz
-        @inbounds for j in 1:ny, i in 1:nx
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ss = 0.0
             for b in 1:3, a in 1:3
@@ -134,8 +146,9 @@ function compute_artificial!(solver, Q)
     exchange_halos!(solver.strain_mag, decomp)
     delta4_sum!(solver.sensor, solver.strain_mag, solver, 2)
     smooth!(solver.sensor, solver)
-    @threaded nx*ny*nz for k in 1:nz
-        @inbounds for j in 1:ny, i in 1:nx
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ρsensor = solver.rho[I] * max(solver.sensor[I], 0.0)
             solver.mu_art[I]   = art.C_mu   * ρsensor
@@ -150,8 +163,10 @@ function compute_artificial!(solver, Q)
     # abstractions and what it is still singular in).
     i_energy = solver.equations.i_energy
     m1, m2, m3 = solver.equations.i_mom
-    @threaded length(solver.tmp_a) for k in 1:size(solver.tmp_a, 3)
-        @inbounds for j in 1:size(solver.tmp_a, 2), i in 1:size(solver.tmp_a, 1)
+    nxf, nyf, nzf = size(solver.tmp_a)
+    @threaded nxf*nyf*nzf for jk in outer_indices(nyf, nzf)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nxf
             ρ = max(solver.rho[i, j, k], 1e-300)
             ke = 0.5 * (Q[i,j,k,m1]^2 + Q[i,j,k,m2]^2 + Q[i,j,k,m3]^2) / ρ
             solver.tmp_a[i, j, k] = (Q[i, j, k, i_energy] - ke) / ρ
@@ -161,8 +176,9 @@ function compute_artificial!(solver, Q)
     delta4_sum!(solver.sensor, solver.tmp_a, solver, 1)
     smooth!(solver.sensor, solver)
     eos = solver.eos
-    @threaded nx*ny*nz for k in 1:nz
-        @inbounds for j in 1:ny, i in 1:nx
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             scale = art_conductivity_scale(eos, solver.rho[I], solver.c[I],
                                            solver.T_ion[I], solver.cp_mix[I])
@@ -178,8 +194,9 @@ function compute_artificial!(solver, Q)
         for sp in 1:solver.equations.n_species
             delta4_sum!(solver.sensor_sp, solver.Y[sp], solver, 1)
             smooth!(solver.sensor_sp, solver)
-            @threaded nx*ny*nz for k in 1:nz
-                @inbounds for j in 1:ny, i in 1:nx
+            @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+                j, k = Tuple(jk)
+                @inbounds for i in 1:nx
                     I = CartesianIndex(i + o1, j + o2, k + o3)
                     solver.D_art[sp][I] = art.C_D * solver.c[I] * max(solver.sensor_sp[I], 0.0)
                 end

@@ -22,8 +22,21 @@
 # `@threaded work for ... end` runs the loop inline, with no task spawn and no
 # allocation, when `work` is below THREAD_MIN_WORK, and defers to
 # Threads.@threads otherwise. `work` is the number of grid points the loop will
-# touch in total — NOT its trip count — so a `for k in 1:nz` loop carrying an
-# inner `j, i` nest passes `nx * ny * nz`.
+# touch in total — NOT its trip count — so a loop over (j, k) carrying an inner
+# `i` loop passes `nx * ny * nz`, not `ny * nz`.
+#
+# Total work alone is not sufficient, because only the loop `@threaded` wraps is
+# divided: a nest threaded on its outermost index over a collapsed dimension has
+# one trip and so cannot be divided at all, whatever its total work. Planar-2-D
+# runs, `n_global = (nx, ny, 1)`, hit this on every pointwise loop in the RHS,
+# running serially at any thread count while still paying the region-entry cost.
+# The policy therefore has two parts:
+#
+#   1. Pointwise nests iterate their two outer indices through `outer_indices`,
+#      one flattened `CartesianIndices` whose trip count is n2*n3. A collapsed
+#      third dimension then still divides over the second.
+#   2. `_use_threads` takes the trip count and refuses to spawn for a loop with
+#      one trip. That covers the 1-D case, which no flattening can help.
 
 """
 Minimum total work, in grid points, required to use the thread pool. The default
@@ -41,15 +54,36 @@ end
 
 # Takes Int, not Integer: an abstract parameter type leaves the `>=` below as a
 # runtime dispatch, once per threaded region (~150 per RHS call).
-@inline _use_threads(work::Int) =
-    Threads.nthreads() > 1 && work >= THREAD_MIN_WORK[]
+@inline _use_threads(work::Int, trips::Int) =
+    Threads.nthreads() > 1 && trips > 1 && work >= THREAD_MIN_WORK[]
+
+"""
+    outer_indices(n2, n3)
+
+Flattened iteration space for the two outer indices of a pointwise loop nest.
+Both arguments may be a count or an index range, and the first varies fastest,
+so
+
+```julia
+@threaded nx*ny*nz for jk in outer_indices(ny, nz)
+    j, k = Tuple(jk)
+    for i in 1:nx
+```
+
+visits the same points in the same order as the `for k in 1:nz`, `for j in 1:ny`
+nest it replaces, while giving [`@threaded`](@ref) `ny*nz` trips to divide
+instead of `nz`. See the note at the top of `threading.jl` for why that matters.
+"""
+@inline outer_indices(n2, n3) = CartesianIndices((n2, n3))
 
 """
     @threaded work for ... end
 
 Thread the loop only when `work` (total grid points touched) justifies the
-parallel-dispatch cost; otherwise run it inline. See the note at the top of
-this file.
+parallel-dispatch cost *and* the loop has more than one trip to divide;
+otherwise run it inline. A pointwise nest should iterate
+[`outer_indices`](@ref) so that the second condition does not fail on a
+collapsed dimension. See the note at the top of this file.
 
 ## Threading backend
 
@@ -84,11 +118,23 @@ large regions.
 macro threaded(work, loop)
     (loop isa Expr && loop.head === :for) ||
         error("@threaded expects `@threaded <work> for ... end`")
+    spec = loop.args[1]
+    (spec isa Expr && spec.head === :(=)) ||
+        error("@threaded expects a single-variable `for` loop")
+    var, iter, body = spec.args[1], spec.args[2], loop.args[2]
+    # The iteration space is bound to a local first, so that reading its trip
+    # count does not evaluate the expression a second time.
+    rng = gensym(:threaded_range)
     return esc(quote
-        if $CompactLES._use_threads(Int($work))
-            Threads.@threads $loop
+        local $rng = $iter
+        if $CompactLES._use_threads(Int($work), length($rng))
+            Threads.@threads for $var in $rng
+                $body
+            end
         else
-            $loop
+            for $var in $rng
+                $body
+            end
         end
     end)
 end

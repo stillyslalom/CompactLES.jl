@@ -44,11 +44,12 @@ species_names(eos::EOS) = ["species_$k" for k in 1:nspecies(eos)]
 
 function NavierStokes1T(eos::EOS)
     n_species = nspecies(eos)
+    n_cons = n_species + 4          # partial densities, three momenta, energy
     i_mom = (n_species + 1, n_species + 2, n_species + 3)
-    i_energy = n_species + 4
+    i_energy = n_species + 4        # equals n_cons only because energy is last
     names = ["rho_" * name for name in species_names(eos)]
     append!(names, ("rho_u1", "rho_u2", "rho_u3", "rho_E"))
-    return NavierStokes1T(n_species, i_energy, i_mom, i_energy, names)
+    return NavierStokes1T(n_species, n_cons, i_mom, i_energy, names)
 end
 
 "Parity of conserved component `c` under the basis change `sigvel`."

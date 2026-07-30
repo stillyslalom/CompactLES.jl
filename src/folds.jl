@@ -170,8 +170,9 @@ function pair_forward!(w, f, solver, fold::FoldSpec, σ::Int)
         half = decomp.n_local[sd] ÷ 2
         Hp = decomp.n_halo_d[sd]
         r1, r2, r3 = interior(decomp).indices
-        @threaded prod(decomp.n_local) for i3 in r3
-            @inbounds for i2 in r2, i1 in r1
+        @threaded prod(decomp.n_local) for i23 in outer_indices(r2, r3)
+            i2, i3 = Tuple(i23)
+            @inbounds for i1 in r1
                 I = CartesianIndex(i1, i2, i3)
                 v = (sd == 1 ? i1 : sd == 2 ? i2 : i3) - Hp
                 if v <= half
@@ -190,8 +191,9 @@ function pair_forward!(w, f, solver, fold::FoldSpec, σ::Int)
         MPI.Sendrecv!(f, pair.buf, decomp.comm; dest=pair.partner, source=pair.partner,
                       sendtag=41, recvtag=41)
         r1, r2, r3 = interior(decomp).indices
-        @threaded prod(decomp.n_local) for i3 in r3
-            @inbounds for i2 in r2, i1 in r1
+        @threaded prod(decomp.n_local) for i23 in outer_indices(r2, r3)
+            i2, i3 = Tuple(i23)
+            @inbounds for i1 in r1
                 I = CartesianIndex(i1, i2, i3)
                 Mx = _pair_index(I, decomp, pair)
                 if pair.keep_e
@@ -221,8 +223,9 @@ function pair_backward!(out, solver, fold::FoldSpec, σ::Int)
         half = decomp.n_local[sd] ÷ 2
         Hp = decomp.n_halo_d[sd]
         r1, r2, r3 = interior(decomp).indices
-        @threaded prod(decomp.n_local) for i3 in r3
-            @inbounds for i2 in r2, i1 in r1
+        @threaded prod(decomp.n_local) for i23 in outer_indices(r2, r3)
+            i2, i3 = Tuple(i23)
+            @inbounds for i1 in r1
                 I = CartesianIndex(i1, i2, i3)
                 v = (sd == 1 ? i1 : sd == 2 ? i2 : i3) - Hp
                 if v <= half
@@ -238,8 +241,9 @@ function pair_backward!(out, solver, fold::FoldSpec, σ::Int)
         MPI.Sendrecv!(out, pair.buf, decomp.comm; dest=pair.partner, source=pair.partner,
                       sendtag=42, recvtag=42)
         r1, r2, r3 = interior(decomp).indices
-        @threaded prod(decomp.n_local) for i3 in r3
-            @inbounds for i2 in r2, i1 in r1
+        @threaded prod(decomp.n_local) for i23 in outer_indices(r2, r3)
+            i2, i3 = Tuple(i23)
+            @inbounds for i1 in r1
                 I = CartesianIndex(i1, i2, i3)
                 Mx = _pair_index(I, decomp, pair)
                 if pair.keep_e
@@ -295,8 +299,9 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int; isfilter::Bool=fal
         half = decomp.n_local[sd] ÷ 2
         Hp = decomp.n_halo_d[sd]
         r1, r2, r3 = interior(decomp).indices
-        @threaded prod(decomp.n_local) for i3 in r3
-            @inbounds for i2 in r2, i1 in r1
+        @threaded prod(decomp.n_local) for i23 in outer_indices(r2, r3)
+            i2, i3 = Tuple(i23)
+            @inbounds for i1 in r1
                 v = (sd == 1 ? i1 : sd == 2 ? i2 : i3) - Hp
                 if v > half
                     I = CartesianIndex(i1, i2, i3)

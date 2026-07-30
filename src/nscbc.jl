@@ -19,13 +19,16 @@
 # conserved components (species scale with Y_k, energy through
 # φ = cv_m / R_m = ∂(ρe)/∂p |_{ρ,Y}, ideal mixtures). Supersonic-outflow
 # points (M ≥ 1) receive no correction: all waves leave the domain. Viscous
-# and transverse terms are left as computed (the classical NSCBC
-# approximation; transverse-term damping à la Yoo & Im is a TODO).
+# terms are left as computed, which is the classical NSCBC approximation. The
+# outflow correction carries the Yoo & Im transverse damping term (see the
+# derivation at its point loop); the inflow correction does not, and relaxes
+# its transverse waves on the LODI amplitudes alone.
 #
-# Intended for faces whose normal has unit scale factor (Cartesian faces,
+# Restricted to faces whose normal has unit scale factor (Cartesian faces,
 # cylindrical r/z faces, spherical r faces); on angular faces the stored
-# grad_u[d,d] carries curvature contributions and the wave analysis would need the
-# metric terms.
+# grad_u[d,d] carries curvature contributions and the wave analysis would need
+# the metric terms. `validate_bc` at the foot of this file enforces that at
+# setup.
 
 """
     NSCBCOutflowBC(; pinf, sigma=0.25, Lref=0.0, beta_t=-1.0)
@@ -35,9 +38,9 @@ relaxed toward far-field pressure `pinf`; pressure is not imposed pointwise.
 `sigma` sets relaxation strength, `Lref <= 0` selects the domain length normal
 to the face, and negative `beta_t` selects local-Mach transverse coupling.
 
-Supersonic outflow points receive no correction. The current LODI formulation
-is intended for Cartesian faces and radial or axial curvilinear faces whose
-normal metric scale factor is one.
+Supersonic outflow points receive no correction. The LODI formulation covers
+Cartesian faces and radial or axial curvilinear faces, whose normal metric scale
+factor is one; [`setup`](@ref) rejects this condition on an angular face.
 """
 Base.@kwdef struct NSCBCOutflowBC <: BoundaryCondition
     pinf::Float64            # far-field pressure target
@@ -68,10 +71,19 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
     # Transverse pressure gradients for the Yoo & Im correction, only along
     # active transverse dimensions (they vanish in 1-D and collapsed dims).
     # `active` is a global property, so every rank agrees on these branches.
+    #
+    # SCRATCH ALIASING. `tmp_b` and `sensor_sp` are borrowed here, and this is
+    # safe only because of where compute_rhs! calls the boundary corrections:
+    # after add_metric_sources!, by which point compute_artificial! has already
+    # consumed both sensors into mu_art/beta_art/kappa_art/D_art and the flux
+    # divergence has finished with tmp_a/tmp_b. See the invariant recorded in
+    # the `compute_artificial!` docstring. `sensor` itself is deliberately NOT
+    # reused: io.jl exposes it as the `:sensor` output field, so clobbering it
+    # would make a post-step dump of the sensor show a pressure derivative.
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
     act1 = solver.decomp.active[t1]
     act2 = solver.decomp.active[t2]
-    act1 && deriv_along!(solver.sensor, solver.p, solver, t1, 1)
+    act1 && deriv_along!(solver.tmp_b, solver.p, solver, t1, 1)
     act2 && deriv_along!(solver.sensor_sp, solver.p, solver, t2, 1)
 
     # Only now may ranks that own no piece of this face drop out.
@@ -99,27 +111,28 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
                             (un + c) * (dpn + ρ * c * dun)
         # Transverse contribution to the incoming characteristic (Yoo & Im
         # 2007). Exact transparency to obliquely incident waves requires the
-        # incoming amplitude to carry −𝒯_in, where (derived from the p and
+        # incoming amplitude to carry −𝒯_in (`transverse_in` below, which is a
+        # wave amplitude and not a temperature), where (derived from the p and
         # u_n equations projected on the incoming characteristic; ρc² = γp)
         #   𝒯_in = u_t·∇_t p + ρc² ∇_t·u_t ∓ ρc u_t·∇_t u_n
         # with − at a high face (incoming L₁) and + at a low face (L₅),
         # i.e. a coefficient of sgn·ρc in the code's sign convention.
         # β_t blends between plain LODI (0) and full accounting (1); the
         # local Mach number is the recommended damping.
-        T_ion = 0.0
+        transverse_in = 0.0
         if act1
             ut = vel[t1][I]
-            T_ion += ut * solver.inv_h[t1][I] * solver.sensor[I] +
+            transverse_in += ut * solver.inv_h[t1][I] * solver.tmp_b[I] +
                   ρ * c * c * grad_u[t1, t1][I] + sgn * ρ * c * ut * grad_u[t1, d][I]
         end
         if act2
             ut = vel[t2][I]
-            T_ion += ut * solver.inv_h[t2][I] * solver.sensor_sp[I] +
+            transverse_in += ut * solver.inv_h[t2][I] * solver.sensor_sp[I] +
                   ρ * c * c * grad_u[t2, t2][I] + sgn * ρ * c * ut * grad_u[t2, d][I]
         end
         βt = bc.beta_t < 0 ? Ma : bc.beta_t
         K = bc.sigma * (1 - Ma * Ma) * c / Lref
-        ΔL = K * (p - bc.pinf) - βt * T_ion - Lcomp
+        ΔL = K * (p - bc.pinf) - βt * transverse_in - Lcomp
         Δd1 = ΔL / (2 * c * c)
         Δd2 = ΔL / 2
         Δd3 = sgn * ΔL / (2 * ρ * c)
@@ -184,8 +197,9 @@ constant targets pointwise. Its state must contain temperature and the full
 composition. `Lref <= 0` selects the domain length normal to the face.
 
 Use `DirichletBC` rather than NSCBC inflow for a supersonic or deliberately
-full-state-forced boundary. The current LODI formulation is intended for faces
-whose normal metric scale factor is one.
+full-state-forced boundary. As for the outflow, the formulation covers only faces
+whose normal metric scale factor is one, and [`setup`](@ref) rejects an angular
+face. `Y` is checked against the EOS species count there as well.
 """
 Base.@kwdef struct NSCBCInflowBC{F} <: BoundaryCondition
     u::NTuple{3,Float64}            # target velocity (coordinate-aligned)
@@ -204,9 +218,6 @@ end
 enforce!(::NSCBCInflowBC, Q, solver, d, side) = nothing
 
 function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
-    length(bc.Y) == solver.equations.n_species ||
-        error("NSCBCInflowBC: composition length mismatch")
-
     # COLLECTIVES FIRST — see the note in the outflow method above: these are
     # distributed solves along d, so every rank must call them before any rank
     # is allowed to return early.
@@ -226,14 +237,13 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
     grad_u = solver.grad_u
     Gdd = grad_u[d, d]
     lowface = side == 1
-    n_halo_d = solver.decomp.n_halo_d
     tnow = solver.tstage
     @inbounds for I in plane
         uT = bc.u; TT = bc.T_ion; YT = bc.Y
         if bc.target !== nothing
-            pr = bc.target(xcoord(solver, 1, I[1] - n_halo_d[1]),
-                           xcoord(solver, 2, I[2] - n_halo_d[2]),
-                           xcoord(solver, 3, I[3] - n_halo_d[3]), tnow)
+            i1, i2, i3 = interior_index(solver, I)
+            pr = bc.target(xcoord(solver, 1, i1), xcoord(solver, 2, i2),
+                           xcoord(solver, 3, i3), tnow)
             isnan(pr.T_ion) && error("NSCBCInflowBC target must specify T_ion")
             uT = pr.u; TT = pr.T_ion; YT = pr.Y
         end
@@ -283,5 +293,37 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
         dQ[I, i_energy] -= ke * Δd1 + φ * Δd2 + p * ΣφY +
                      ρ * (un * Δd3 + uv[t1] * Δd4 + uv[t2] * Δd5)
     end
+    return nothing
+end
+
+# ---------------------------------------------------------------------------
+# Setup-time validation of both conditions.
+#
+# The angular-face restriction was documented in the header above and in both
+# docstrings, but nothing enforced it: an NSCBC on a cylindrical θ face or a
+# spherical θ/φ face ran to completion, on a wave analysis missing the metric
+# terms that the stored grad_u[d,d] carries there. Nothing failed and the answer
+# was wrong, which is why it is now a setup error rather than a documented
+# caveat.
+
+function _validate_nscbc_face(metric, d::Int, what::String)
+    unit_scalefactor(metric, d) && return nothing
+    error("$what on dimension $d: the LODI formulation requires a face whose " *
+          "normal metric scale factor is one (a Cartesian face, or a " *
+          "cylindrical r/z or spherical r face). Dimension $d is angular under " *
+          "$(nameof(typeof(metric))), where the wave analysis would need the " *
+          "curvature terms carried by grad_u[$d,$d].")
+end
+
+validate_bc(::NSCBCOutflowBC, metric, eos, d::Int, side::Int) =
+    _validate_nscbc_face(metric, d, "NSCBCOutflowBC")
+
+function validate_bc(bc::NSCBCInflowBC, metric, eos, d::Int, side::Int)
+    _validate_nscbc_face(metric, d, "NSCBCInflowBC")
+    # Checked here rather than in correct_rhs!, where it ran once per RHS call
+    # per rank for the life of the run to catch a setup mistake.
+    length(bc.Y) == nspecies(eos) ||
+        error("NSCBCInflowBC: target composition has $(length(bc.Y)) entries; " *
+              "the EOS has $(nspecies(eos)) species")
     return nothing
 end

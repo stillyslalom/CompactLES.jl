@@ -182,6 +182,24 @@ correct_rhs!(bc::SwitchableBC, solver, Q, dQ, d, side) =
     bc.switched ? correct_rhs!(bc.after, solver, Q, dQ, d, side) :
                   correct_rhs!(bc.before, solver, Q, dQ, d, side)
 
+"""
+    validate_bc(bc, metric, eos, d, side)
+
+Setup-time hook, called by the [`Solver`](@ref) constructor once per face. The
+default accepts anything. A condition whose derivation restricts the geometry, or
+whose keywords must agree with the EOS, validates that here. The run then fails at
+`setup`, rather than repeating the check on every RHS call or, on a face the
+formulation does not cover, completing with a wrong answer.
+
+Both arms of a [`SwitchableBC`](@ref) are validated, since the `after` condition
+is reached without passing through setup again.
+"""
+validate_bc(::BoundaryCondition, metric, eos, d::Int, side::Int) = nothing
+
+validate_bc(bc::SwitchableBC, metric, eos, d::Int, side::Int) =
+    (validate_bc(bc.before, metric, eos, d, side);
+     validate_bc(bc.after, metric, eos, d, side))
+
 "ρe at a wall held at temperature Twall — one method per EOS."
 wall_internal_energy(eos::IdealMixture, Q, I, n_species::Int, Twall) = begin
     ρe = 0.0
@@ -246,7 +264,8 @@ end
 
 function enforce!(::ExtrapolationBC, Q, solver, d, side)
     # Zeroth-order extrapolation: copy the adjacent interior plane onto the
-    # edge plane. Crude outflow; characteristic (NSCBC) treatment is a TODO.
+    # edge plane. Crude outflow; NSCBCOutflowBC is the characteristic
+    # alternative where reflections matter.
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
     e = CartesianIndex(ntuple(k -> k == d ? 1 : 0, 3))

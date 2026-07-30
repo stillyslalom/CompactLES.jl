@@ -56,25 +56,36 @@ end
 Workspace(Q::AbstractArray) = Workspace(zero(Q), zero(Q))
 Workspace(solver::Solver) = Workspace(allocate_state(solver), allocate_state(solver))
 """
-    step!(solver, Q, dQ, du, dt)
+    step!(solver, Q, dQ, du, dt, prepared=false)
 
 Advance the conserved state by one five-stage, fourth-order low-storage
 Runge--Kutta step of size `dt`. `dQ` and `du` are caller-provided work arrays of
 the same shape as `Q`.
+
+`prepared = true` asserts that boundary conditions are already enforced on `Q` at
+`solver.t` and that the primitive fields are current for it, which lets the first
+stage skip a halo exchange and a primitives pass. [`run!`](@ref) can assert this
+because [`max_rate`](@ref) has just performed both. A direct caller should leave
+the default in place unless it has performed both itself. The argument is
+positional for the reason given under [`compute_rhs!`](@ref).
 """
-function step!(solver::Solver, Q, dQ, du, dt)
+function step!(solver::Solver, Q, dQ, du, dt, prepared::Bool=false)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     for stage in 1:5
         solver.tstage = solver.t + RKC[stage] * dt
-        apply_bcs!(solver, Q)
-        compute_rhs!(solver, Q, dQ)
+        # RKC[1] = 0, so a prepared caller's boundary values are the ones this
+        # stage would compute; nothing between there and here has touched Q.
+        first_prepared = prepared && stage == 1
+        first_prepared || apply_bcs!(solver, Q)
+        compute_rhs!(solver, Q, dQ, first_prepared)
         A = RKA[stage]
         B = RKB[stage]
         for c in 1:solver.equations.n_cons
-            @threaded nx*ny*nz for k in 1:nz
-                @inbounds for j in 1:ny, i in 1:nx
+            @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+                j, k = Tuple(jk)
+                @inbounds for i in 1:nx
                     v = A * du[i+o1, j+o2, k+o3, c] + dt * dQ[i+o1, j+o2, k+o3, c]
                     du[i+o1, j+o2, k+o3, c] = v
                     Q[i+o1, j+o2, k+o3, c] += B * v
@@ -87,8 +98,8 @@ function step!(solver::Solver, Q, dQ, du, dt)
     return Q
 end
 
-step!(solver::Solver, Q, workspace::Workspace, dt) =
-    step!(solver, Q, workspace.dQ, workspace.du, dt)
+step!(solver::Solver, Q, workspace::Workspace, dt, prepared::Bool=false) =
+    step!(solver, Q, workspace.dQ, workspace.du, dt, prepared)
 
 """
     compute_dt(solver, Q)
@@ -283,6 +294,14 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # progress callback that reduces a diagnostic would otherwise be timing
         # itself, and reporting that as solver cost.
         wall_0 = time_ns()
+        # Boundary conditions before the rate measurement, for two reasons. The
+        # step should be sized from the state it is about to advance, and the
+        # previous iteration's filter_state! has smeared whatever the conditions
+        # impose on the edge planes. With Q settled here, max_rate's halo exchange
+        # and primitives pass also serve stage 1, which is what `prepared` below
+        # asserts; that removes one sixth of both from the per-step cost.
+        solver.tstage = solver.t
+        apply_bcs!(solver, Q)
         rate, rho_min = max_rate(solver, Q)
         dt = predicted_dt(solver, control, rate)
         failure = check_step(control, dt, rho_min, dt_seen, solver.step,
@@ -347,7 +366,8 @@ function run!(solver::Solver, Q, workspace::Workspace;
         if gap > 0 && gap < dt * control.landing_steps
             dt = gap / ceil(gap / dt)
         end
-        step!(solver, Q, workspace, dt)
+        prepared = true         # see the apply_bcs!/max_rate note above
+        step!(solver, Q, workspace, dt, prepared)
         solver.t += dt
         solver.step += 1
         solver.dt_prev = dt

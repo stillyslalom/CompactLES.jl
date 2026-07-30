@@ -98,12 +98,17 @@ function badtypes(f, types)
 end
 
 println("\n=== inference: non-concrete SSA values (lower is better) ===")
+# Spell out every optional trailing argument. A method with a default generates a
+# short forwarding method at the shorter arity, and `code_typed` on that arity
+# returns the forward: one SSA value, and no sight of the body. `compute_rhs!` and
+# `step!` both carry a trailing `Bool` (see their docstrings), so probing them
+# without it would report a count of 1 and hide every regression.
 probes = [
     ("primitives!",        CL.primitives!,  Tuple{typeof(solver), typeof(Q)}),
     ("_primitives!",       CL._primitives!, Tuple{typeof(solver), typeof(solver.eos), typeof(Q)}),
-    ("compute_rhs!",       compute_rhs!,    Tuple{typeof(solver), typeof(Q), typeof(dQ)}),
+    ("compute_rhs!",       compute_rhs!,    Tuple{typeof(solver), typeof(Q), typeof(dQ), Bool}),
     ("compute_dt",         compute_dt,      Tuple{typeof(solver), typeof(Q)}),
-    ("step!",              step!,           Tuple{typeof(solver), typeof(Q), typeof(dQ), typeof(du), Float64}),
+    ("step!",              step!,           Tuple{typeof(solver), typeof(Q), typeof(dQ), typeof(du), Float64, Bool}),
     ("deriv_along!",       CL.deriv_along!, Tuple{typeof(solver.tmp_a), typeof(solver.rho), typeof(solver), Int, Int}),
     ("filter_state!",      filter_state!,   Tuple{typeof(solver), typeof(Q)}),
     ("apply_bcs!",         apply_bcs!,      Tuple{typeof(solver), typeof(Q)}),

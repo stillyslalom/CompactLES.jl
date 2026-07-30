@@ -101,8 +101,10 @@ end
 "Copy the interior of `src` into `dst` (both full-sized fields)."
 function copy_interior!(dst, src, decomp::Decomp)
     o1, o2, o3 = decomp.n_halo_d
-    @inbounds @threaded prod(decomp.n_local) for k in o3+1:o3+decomp.n_local[3]
-        for j in o2+1:o2+decomp.n_local[2], i in o1+1:o1+decomp.n_local[1]
+    nx, ny, nz = decomp.n_local
+    @inbounds @threaded nx*ny*nz for jk in outer_indices(o2+1:o2+ny, o3+1:o3+nz)
+        j, k = Tuple(jk)
+        for i in o1+1:o1+nx
             dst[i, j, k] = src[i, j, k]
         end
     end

@@ -78,6 +78,20 @@ scalefactors(::CartesianMetric,   x1, x2, x3) = (1.0, 1.0, 1.0)
 scalefactors(::CylindricalMetric, r,  θ,  z ) = (1.0, r, 1.0)
 scalefactors(::SphericalMetric,   r,  θ,  φ ) = (1.0, r, r * sin(θ))
 
+"""
+    unit_scalefactor(metric, d) -> Bool
+
+Whether direction `d` has scale factor one everywhere under `metric`, i.e. its
+computational coordinate is a length and not an angle. A `Stretch` on `d` is not
+considered: the mapping Jacobian scales the coordinate derivative, which every
+consumer already divides out through `inv_h`, whereas an angular direction also
+contributes curvature terms to the physical velocity gradients. Characteristic
+boundary conditions use this to reject faces their wave analysis does not cover.
+"""
+unit_scalefactor(::CartesianMetric,   d::Int) = true
+unit_scalefactor(::CylindricalMetric, d::Int) = d != 2          # θ carries r
+unit_scalefactor(::SphericalMetric,   d::Int) = d == 1          # θ, φ carry r
+
 # Computational coordinate of full-array index `if_` along d, and the
 # corresponding physical coordinate plus mapping Jacobian (clamped into the
 # map's domain for halo layers beyond closed physical edges — those geometry
@@ -168,8 +182,9 @@ function metric_correct_gradients!(solver, ::CylindricalMetric)
     decomp = solver.decomp; o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     grad_u = solver.grad_u
-    @threaded nx*ny*nz for k in 1:nz
-        @inbounds for j in 1:ny, i in 1:nx
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ir = solver.inv_r[I]
             grad_u[2, 1][I] -= solver.v[I] * ir
@@ -183,8 +198,9 @@ function metric_correct_gradients!(solver, ::SphericalMetric)
     decomp = solver.decomp; o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     grad_u = solver.grad_u
-    @threaded nx*ny*nz for k in 1:nz
-        @inbounds for j in 1:ny, i in 1:nx
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ir  = solver.inv_r[I]               # 1/r
             ctr = solver.cot_over_r[I]          # cotθ / r
@@ -220,8 +236,9 @@ function add_metric_sources!(solver, dQ, Q, ::CylindricalMetric)
     decomp = solver.decomp; o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     m = solver.equations.i_mom
-    @threaded nx*ny*nz for k in 1:nz
-        @inbounds for j in 1:ny, i in 1:nx
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ir = solver.inv_r[I]
             dQ[I, m[1]] += ir * _Pi(solver, Q, I, 2, 2)      # +Π_θθ / r
@@ -235,8 +252,9 @@ function add_metric_sources!(solver, dQ, Q, ::SphericalMetric)
     decomp = solver.decomp; o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     m = solver.equations.i_mom
-    @threaded nx*ny*nz for k in 1:nz
-        @inbounds for j in 1:ny, i in 1:nx
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ir  = solver.inv_r[I]
             ctr = solver.cot_over_r[I]

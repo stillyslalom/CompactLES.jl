@@ -74,12 +74,50 @@ end
 """
     Solver(; n_global, L_domain, bcs, kwargs...)
 
-See earlier keywords, plus:
+Backend constructor: allocate the distributed solver, plan every compact
+operator, and fill the geometry. [`setup`](@ref) is the normal entry point and
+calls this after splitting a [`Problem`](@ref) from a [`Numerics`](@ref);
+construct a `Solver` directly when there is no `Problem` to build from, as the
+test and benchmark suites do. It allocates no conserved state, so pair it with
+[`allocate_state`](@ref) and [`initialize!`](@ref).
+
+# Required keywords
+
+- `n_global`: global point count per direction. A count of one collapses that
+  direction, as described under [`Numerics`](@ref).
+- `L_domain`: three domain *extents*, one per direction. Note the difference from
+  `Problem.domain`, which gives endpoints; here `origin` carries the low corner.
+- `bcs`: three `(low, high)` pairs of [`BoundaryCondition`](@ref) objects.
+
+# Optional keywords
+
+`eos`, `transport`, `metric`, and `sources` take their defaults and meaning from
+[`Problem`](@ref); `art`, `deriv`, `filt`, `cfl`, `control`, `filter_interval`,
+`dims`, `n_halo`, and `stretch` from [`Numerics`](@ref). The two with no
+`Problem`/`Numerics` counterpart are:
+
+- `origin`: low corner of the domain, one value per direction. Default
+  `(0.0, 0.0, 0.0)`. A folded direction requires its origin at zero.
+- `equations`: the [`EquationSet`](@ref) owning the conserved layout. The default
+  builds [`NavierStokes1T`](@ref) from `eos`; a supplied set must agree with
+  `eos` on the species count.
+
+# Geometry selected by the boundary conditions
+
+Collapsed dimensions and coordinate singularities are not keywords: setup
+recognizes them from `bcs` and validates the rest of the configuration against
+them.
+
 - Collapsed dimensions: set `n_global[d] = 1` with `(PeriodicBC(), PeriodicBC())`
   for that dimension; e.g. axisymmetric cylindrical is `n_global = (Nr, 1, Nz)`.
 - Cylindrical axis: `bcs[1] = (AxisBC(), <outer bc>)` with
-  `metric = CylindricalMetric()`, `origin[1] = 0`, θ collapsed
-  (`n_global[2] = 1`), dimension 1 unstretched. The grid is half-offset in r.
+  `metric = CylindricalMetric()`, `origin[1] = 0`, and dimension 1 unstretched.
+  θ may be collapsed (axisymmetric) or resolved over 2π with an even point
+  count. The grid is half-offset in r, so no node sits at r = 0.
+- Spherical origin and poles: [`OriginBC`](@ref) at the low end of r and
+  [`PoleBC`](@ref) at *both* ends of θ, with `metric = SphericalMetric()`. The
+  origin additionally requires a θ range symmetric about π/2, and the poles the
+  full range (0, π). Either may be combined with the other.
 """
 function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 eos::EOS=single_species(),
@@ -100,6 +138,10 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
             error("dimension $d mixes periodic and non-periodic conditions")
         n_global[d] > 1 || (isperiodic(bcs[d][1]) ||
             error("collapsed dimension $d must use (PeriodicBC(), PeriodicBC())"))
+    end
+    # Per-condition restrictions on geometry and EOS agreement (boundary.jl).
+    for d in 1:3, side in 1:2
+        validate_bc(bcs[d][side], metric, eos, d, side)
     end
     # ---- Coordinate-singularity folds -----------------------------------
     axis   = bcs[1][1] isa AxisBC
@@ -302,6 +344,29 @@ function gidx(solver::Solver, i::Int, j::Int, k::Int)
     return CartesianIndex(i + pad[1], j + pad[2], k + pad[3])
 end
 
+"""
+    interior_index(solver, I) -> (i, j, k)
+
+Rank-local, one-based interior indices of the padded `CartesianIndex` `I`; the
+inverse of [`gidx`](@ref). Use it wherever a padded index has to be handed to
+something that takes interior ones. [`boundary_plane`](@ref) yields padded
+indices, while [`xcoord`](@ref) expects an interior index:
+
+```julia
+for I in boundary_plane(solver, 1, 1)
+    i, j, k = interior_index(solver, I)
+    x1 = xcoord(solver, 1, i)
+end
+```
+
+Indices of halo cells come back outside `1:n_local[d]`, and are meaningful only
+as an offset from this rank's block.
+"""
+@inline function interior_index(solver::Solver, I::CartesianIndex{3})
+    pad = solver.decomp.n_halo_d
+    return (I[1] - pad[1], I[2] - pad[2], I[3] - pad[3])
+end
+
 # --- Reading the in-flight conserved state -----------------------------------
 #
 # `Q` is a 4-D array in the layout defined by the equation set, so a caller
@@ -367,6 +432,9 @@ return maximum(I -> mixture_density(solver, Q, I), plane)
 The result is rank-local. [`WhenState`](@ref) reduces a predicate constructed
 from it; other uses require an explicit reduction. An unreduced value is valid
 globally only in a serial calculation.
+
+These are padded indices. Convert one with [`interior_index`](@ref) before
+passing it to [`xcoord`](@ref) or anything else expecting an interior index.
 """
 boundary_plane(solver::Solver, d::Int, side::Int) = wallplane(solver.decomp, d, side)
 
@@ -434,8 +502,9 @@ function _assemble_fluxes!(solver::Solver{T}, eos, Q) where {T}
     gT = solver.grad_T_ion
     gY = solver.grad_Y
     flux = solver.flux
-    @threaded nx*ny*nz for k in 1:nz
-        @inbounds for j in 1:ny, i in 1:nx
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ρ = solver.rho[I]
             uv = (solver.u[I], solver.v[I], solver.w[I])
@@ -511,10 +580,15 @@ Refresh halos, primitives, and the physical-component velocity gradients from
 `Q`. This shared sequence ensures that strain-rate and dissipation diagnostics
 use gradients from the current state while retaining a single implementation of
 the parity and curvature-correction routing.
+
+Pass `primitives_current = true` when [`refresh_primitives!`](@ref) has already
+run on this exact `Q` and only the gradients are wanted; the caller then owns the
+claim that nothing has touched `Q` since.
 """
-function compute_primitives_and_gradients!(solver::Solver, Q)
+function compute_primitives_and_gradients!(solver::Solver, Q,
+                                           primitives_current::Bool=false)
     decomp = solver.decomp
-    refresh_primitives!(solver, Q)
+    primitives_current || refresh_primitives!(solver, Q)
     vel = (solver.u, solver.v, solver.w)
     for jj in 1:3, d in 1:3
         if decomp.active[d]
@@ -535,10 +609,18 @@ Evaluate dQ/dt into the interior of `dQ` from the conserved state `Q`
 (boundary conditions should already be enforced on `Q`). Collapsed dimensions
 contribute no derivatives; the axis dimension routes through parity-folded
 plans with mirror-filled halos.
+
+A trailing `primitives_current = true` skips the opening halo exchange and
+primitives pass, and is valid only when the caller has just performed both on
+this same `Q`. See [`compute_primitives_and_gradients!`](@ref); [`run!`](@ref)
+uses it for the first RK stage, where [`max_rate`](@ref) has already done the
+work. It is positional rather than a keyword so that `bench/audit.jl` can still
+reach the body with `code_typed`, which sees only the forwarding method of a
+function with keywords.
 """
-function compute_rhs!(solver::Solver, Q, dQ)
+function compute_rhs!(solver::Solver, Q, dQ, primitives_current::Bool=false)
     decomp = solver.decomp
-    compute_primitives_and_gradients!(solver, Q)
+    compute_primitives_and_gradients!(solver, Q, primitives_current)
     compute_artificial!(solver, Q)
     for d in 1:3
         decomp.active[d] || continue
@@ -563,8 +645,9 @@ function compute_rhs!(solver::Solver, Q, dQ)
     # largest phase. Curved or stretched grids take the general path unchanged.
     unitgeom = solver.metric isa CartesianMetric && all(isnothing, solver.stretch)
     for c in 1:solver.equations.n_cons
-        @threaded nx*ny*nz for k in 1:nz
-            @inbounds for j in 1:ny, i in 1:nx
+        @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+            j, k = Tuple(jk)
+            @inbounds for i in 1:nx
                 dQ[i+o1, j+o2, k+o3, c] = 0
             end
         end
@@ -574,8 +657,9 @@ function compute_rhs!(solver::Solver, Q, dQ)
             σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
             if unitgeom
                 deriv_along!(solver.tmp_a, Fdc, solver, d, σ)
-                @threaded nx*ny*nz for k in 1:nz
-                    @inbounds for j in 1:ny, i in 1:nx
+                @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+                    j, k = Tuple(jk)
+                    @inbounds for i in 1:nx
                         dQ[i+o1, j+o2, k+o3, c] -= solver.tmp_a[i+o1, j+o2, k+o3]
                     end
                 end
@@ -587,8 +671,9 @@ function compute_rhs!(solver::Solver, Q, dQ)
                     @inbounds solver.tmp_b[idx] = Ad[idx] * Fdc[idx]
                 end
                 deriv_along!(solver.tmp_a, solver.tmp_b, solver, d, σ)
-                @threaded nx*ny*nz for k in 1:nz
-                    @inbounds for j in 1:ny, i in 1:nx
+                @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+                    j, k = Tuple(jk)
+                    @inbounds for i in 1:nx
                         I = CartesianIndex(i + o1, j + o2, k + o3)
                         dQ[I, c] -= solver.inv_J[I] * solver.tmp_a[I]
                     end

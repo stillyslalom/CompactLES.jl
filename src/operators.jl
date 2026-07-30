@@ -252,8 +252,13 @@ function _fill_t!(B::Matrix{T}, plan, f, decomp::Decomp, ::Val{D}) where {T,D}
     a0 = plan.a0
     sym = plan.scheme.symmetric
     o1, o2, o3 = n_halo_d
-    @threaded nout*n*nx for kk in 1:nout
-        @inbounds for jr in 1:n
+    # Flattened (jr, kk) so that a run whose orthogonal dimension is collapsed
+    # still divides over the line index. That case is nout = 1, which covers
+    # every transverse direction of a planar-2-D grid. Each (kk, jr) writes a
+    # distinct nx-long block of B, so the pair is as independent as kk alone was.
+    @threaded nout*n*nx for jk in outer_indices(n, nout)
+        jr, kk = Tuple(jk)
+        @inbounds begin
             kind = _row_kind(plan, jr)
             base = (kk - 1) * nx
             if kind == 1
@@ -309,8 +314,9 @@ function _scatter_t!(out, B::Matrix{T}, plan, decomp::Decomp, ::Val{D}) where {T
     nx = decomp.n_local[1]
     nout = D == 2 ? decomp.n_local[3] : decomp.n_local[2]
     o1, o2, o3 = n_halo_d
-    @threaded nout*n*nx for kk in 1:nout
-        @inbounds for jr in 1:n
+    @threaded nout*n*nx for jk in outer_indices(n, nout)
+        jr, kk = Tuple(jk)
+        @inbounds begin
             base = (kk - 1) * nx
             if D == 2
                 for i in 1:nx

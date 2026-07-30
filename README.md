@@ -19,8 +19,10 @@ multicomponent Navier–Stokes equations, inspired by
 [Pyranda](https://github.com/LLNL/pyranda), written in pure Julia. It combines
 high-order compact (Padé) finite differences with Cook-style artificial fluid
 properties for shock and subgrid regularization, and runs on shared-memory
-threads and distributed MPI ranks with no dependencies beyond `MPI.jl`,
-`LinearAlgebra`, and `Printf`.
+threads and distributed MPI ranks. Beyond the standard libraries its only
+dependencies are `MPI.jl` and `ThreadPinning.jl`, the latter used by the cluster
+topology probe. HDF5 output and Makie plotting are weak dependencies, available
+once you load HDF5 or a Makie backend yourself.
 
 The frontend separates the physical specification (a `Problem`: gas model,
 geometry, boundary conditions, and initial state) from the discretization (a
@@ -384,11 +386,19 @@ particular warrants scrutiny before production use. Other current limitations:
   implemented.
 - NSCBC inflow transverse-term accounting is not yet implemented (outflow
   has it).
-- Output is checkpoint and VTK only — no HDF5/XDMF, no GPU path. VTK output is
-  one file per rank per frame, which does not survive large rank counts, and
-  restart requires the same rank count and decomposition as the run that wrote
-  it. Adjacent pieces abut without ghost overlap, so cell-based filters may show
-  seams at rank boundaries.
+- There is no GPU path.
+- VTK output is one file per rank per frame, which does not survive large rank
+  counts, and adjacent pieces abut without ghost overlap, so cell-based filters
+  may show seams at rank boundaries. The shared-file HDF5/XDMF path avoids both,
+  but only for single dumps: a `FieldWriter` time series is VTK, since XDMF has
+  no equivalent of the `.pvd` frame list.
+- The dependency-free binary checkpoints restart only onto the rank count and
+  decomposition that wrote them. HDF5 checkpoints restore onto any, and are the
+  form to use when a run may be resumed at a different scale.
+- HDF5 writes have been exercised only through the serialized token-relay
+  fallback. Selecting the collective backend requires a parallel libhdf5 built
+  against the run's MPI; `hdf5_parallel()` reports which one this build selects,
+  and it is `false` for the JLL that a workstation installs by default.
 - Wall boundary conditions assume coordinate-surface walls.
 - Soret/Dufour effects and reacting-chemistry models are not implemented;
   reactions can use the typed source interface.

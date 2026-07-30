@@ -79,7 +79,7 @@ export revolve_profile
 export profileplot, profileplot!, fieldheatmap, fieldheatmap!, makie_available
 export mix_width, molecular_mixing, species_pdf
 export tke_profile, turbulent_kinetic_energy, dissipation_rate
-export xcoord, global_xcoord, gidx, filter_state!
+export xcoord, global_xcoord, gidx, interior_index, filter_state!
 export THREAD_MIN_WORK
 export script_args, script_grid
 

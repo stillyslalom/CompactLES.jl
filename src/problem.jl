@@ -13,20 +13,26 @@
 # models implement.
 
 """
-    Prim(; u=(0,0,0), p, T_ion=NaN, rho=NaN, Y=(1.0,))
+    Prim(; u=(0,0,0), p=NaN, T_ion=NaN, rho=NaN, Y=(1.0,))
 
 Pointwise primitive state used by initial and prescribed-boundary functions.
 All values are converted to `Float64`.
 
 # Keywords
 
-- `p`: pressure. This keyword is required.
+- `p`, `rho`, `T_ion`: pressure, mixture density, and temperature. Supply
+  **exactly two**; [`conserved_from_prim`](@ref) derives the third through the
+  EOS. `(p, rho)` and `(p, T_ion)` suit a specified pressure field, `(rho, T_ion)`
+  a stratified or isothermal state whose pressure follows from the profile.
 - `u`: three physical velocity components in the coordinate-aligned orthonormal
   basis. The default is a stationary state.
-- `T_ion`: temperature. Specify this or `rho`, but not both.
-- `rho`: mixture density. Specify this or `T_ion`, but not both.
 - `Y`: species mass fractions, in the order used to construct the EOS. They
   must sum to one; the default is a single species with unit mass fraction.
+
+The omitted quantity is stored as `NaN` and is not filled in: a `Prim` records
+what was specified, and the conversion never reads the value it derives. Code
+reading a field back must therefore expect `NaN` in whichever one the caller
+left out.
 
 The number of entries in `Y` is checked against [`nspecies`](@ref) when the
 state is converted with [`conserved_from_prim`](@ref). CompactLES does not
@@ -40,9 +46,11 @@ struct Prim{N}
     rho::Float64
 end
 
-function Prim(; u=(0.0, 0.0, 0.0), p::Real, T_ion::Real=NaN, rho::Real=NaN, Y=(1.0,))
-    (isnan(T_ion) ⊻ isnan(rho)) ||
-        error("Prim: specify exactly one of T_ion or rho")
+function Prim(; u=(0.0, 0.0, 0.0), p::Real=NaN, T_ion::Real=NaN, rho::Real=NaN,
+              Y=(1.0,))
+    count(isnan, (Float64(p), Float64(T_ion), Float64(rho))) == 1 ||
+        error("Prim: specify exactly two of p, rho, and T_ion; the EOS derives " *
+              "the third")
     Yt = Tuple(Float64.(Y))
     abs(sum(Yt) - 1) < 1e-10 || error("Prim: mass fractions must sum to 1")
     Prim{length(Yt)}(Yt, Tuple(Float64.(u)), Float64(p), Float64(T_ion), Float64(rho))
@@ -57,9 +65,10 @@ Convert a pointwise primitive state to the conserved layout owned by
 
 For `NavierStokes1T`, the result is
 `(rho*Y[1], ..., rho*Y[Ns], rho*u[1], rho*u[2], rho*u[3], rho*E)`,
-where the final entry is total energy per volume. The EOS obtains density from
-`(p, T_ion, Y)` or temperature from `(p, rho, Y)`, according to which value was
-supplied to `pr`.
+where the final entry is total energy per volume. The EOS supplies whichever of
+density and temperature the [`Prim`](@ref) omitted, from `(p, T_ion, Y)` or
+`(p, rho, Y)`. A `Prim` giving both needs no pressure: the conserved state is a
+function of `(rho, T_ion, u, Y)` alone, which is why `p` may be left out.
 
 A method throws if the number of mass fractions does not match the EOS.
 Custom equation sets or EOS models extend the three-argument form.
@@ -140,15 +149,14 @@ function _initialize!(solver::Solver, eos, Q, ic)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    @threaded nx*ny*nz for k in 1:nz
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        x2 = xcoord(solver, 2, j)
         x3 = xcoord(solver, 3, k)
-        for j in 1:ny
-            x2 = xcoord(solver, 2, j)
-            for i in 1:nx
-                x1 = xcoord(solver, 1, i)
-                write_conserved!(Q, CartesianIndex(i + o1, j + o2, k + o3), solver,
-                                 ic(x1, x2, x3))
-            end
+        for i in 1:nx
+            x1 = xcoord(solver, 1, i)
+            write_conserved!(Q, CartesianIndex(i + o1, j + o2, k + o3), solver,
+                             ic(x1, x2, x3))
         end
     end
     return Q
@@ -170,11 +178,12 @@ tanh_blend(x, x0, δ) = 0.5 * (1 + tanh((x - x0) / δ))
     DirichletBC(fun)
 
 Hard prescription of the full state on a boundary plane from
-`fun(x₁, x₂, x₃, t) -> Prim`, evaluated at the RK stage time — suitable for
-supersonic/forced inflow, pistons, and oscillating drivers. For subsonic
-inflow a characteristic (NSCBC) treatment is physically preferable and
-remains a TODO; a full-state Dirichlet over-constrains subsonic boundaries
-and will reflect.
+`fun(x₁, x₂, x₃, t) -> Prim`, evaluated at the RK stage time. This is the right
+tool for supersonic or deliberately forced inflow, pistons, and oscillating
+drivers. It over-constrains a subsonic boundary, where it will reflect the
+outgoing acoustic wave; use [`NSCBCInflowBC`](@ref) there, which relaxes the
+incoming amplitudes toward the same targets and accepts a stage-time `target`
+function of this shape.
 
 The boundary condition is parameterized by the callback type. Storing
 `fun::Function` would require runtime dispatch in `enforce!` and infer its
@@ -187,13 +196,12 @@ end
 function enforce!(bc::DirichletBC, Q, solver, d, side)
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
-    n_halo_d = solver.decomp.n_halo_d
     t = solver.tstage
     @inbounds for I in plane
-        x1 = xcoord(solver, 1, I[1] - n_halo_d[1])
-        x2 = xcoord(solver, 2, I[2] - n_halo_d[2])
-        x3 = xcoord(solver, 3, I[3] - n_halo_d[3])
-        write_conserved!(Q, I, solver, bc.fun(x1, x2, x3, t))
+        i, j, k = interior_index(solver, I)
+        write_conserved!(Q, I, solver,
+                         bc.fun(xcoord(solver, 1, i), xcoord(solver, 2, j),
+                                xcoord(solver, 3, k), t))
     end
     nothing
 end

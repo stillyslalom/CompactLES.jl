@@ -52,9 +52,15 @@ filter is normally the binding constraint.
 ## Combine ranks and threads
 
 Point and line loops are threaded only when their work estimate exceeds
-[`THREAD_MIN_WORK`](@ref), 32768 by default. Consequently, one-dimensional and
-small documentation cases often run intentionally on one thread. More threads
-do not compensate for a small local block.
+[`THREAD_MIN_WORK`](@ref), 32768 by default, and only when the loop has more
+than one iteration to divide. Consequently, one-dimensional and small
+documentation cases often run intentionally on one thread. More threads do not
+compensate for a small local block.
+
+A grid with one collapsed dimension is not a small block, and its pointwise loops
+are threaded. They iterate their two outer indices as a single flattened space,
+so a planar `(nx, ny, 1)` or axisymmetric `(nr, 1, nz)` run divides over
+whichever of the two is resolved.
 
 On a cluster, use physical cores and verify binding. A rank must not receive
 both simultaneous-multithreading siblings of one core while another physical

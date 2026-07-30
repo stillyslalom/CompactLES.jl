@@ -22,4 +22,5 @@ tanh_blend
 xcoord
 global_xcoord
 gidx
+interior_index
 ```

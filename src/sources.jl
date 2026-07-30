@@ -47,8 +47,9 @@ function add_source!(source::ConstantBodyForce, solver, dQ, Q, t)
     m1, m2, m3 = solver.equations.i_mom
     i_energy = solver.equations.i_energy
     g1, g2, g3 = source.acceleration
-    @threaded nx*ny*nz for k in 1:nz
-        @inbounds for j in 1:ny, i in 1:nx
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             rho = zero(eltype(Q))
             for sp in 1:n_species

@@ -10,7 +10,10 @@ the place to record a result.
 | `reference/DESIGN.md` | the numerics — source map, compact solve, folds, GCL, NSCBC |
 | `reference/CLUSTER.md` | MPI configuration, launch rules, sizing, measured scaling |
 | `reference/CALIBRATION.md` | the artificial-property constants, the CFL restriction, TGV |
-| `reference/ROADMAP.md` | positioning, comparisons, phased plan |
+| `reference/ROADMAP.md` | positioning, comparisons, open work items |
+| `reference/HISTORY.md` | completed phases and their measured outcomes |
+| `reference/AMR_GPU.md` | the patch-AMR + GPU implementation plan, staged with gates |
+| `reference/IMMERSED.md` | the immersed-boundary design: level-set bodies, blend imposition |
 
 Read those for anything about *what* the code does, *where* it runs, or *where it
 is going*. This file is about *how to work on it*. When something you measure
@@ -62,7 +65,7 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 50 testsets, 0 failures
+julia --project=. test/runtests.jl        # 52 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
@@ -106,6 +109,14 @@ treat a *new* site as the signal, not the absolute number. The counts overlap
 between entry points (`step!` contains `compute_rhs!`), so compare like with
 like and never sum them.
 
+`audit.jl`'s inference probe reads `code_typed` at a spelled-out signature. A
+**keyword argument on a probed entry point, or an optional trailing argument the
+probe omits**, resolves that signature to the short forwarding method rather than
+the body, and the reported count falls to 1 while measuring nothing.
+`compute_rhs!` and `step!` therefore carry a trailing `Bool` positionally. If you
+add another optional argument to either, extend the probe tuple in the same
+commit.
+
 `bench/coverage.jl`'s header has the coverage sequence. Serial alone reaches
 94.8% of executable lines and the full set with MPI 97.2%; the difference is
 distributed-solve and off-rank-fold code that only a decomposed run touches.
@@ -144,6 +155,12 @@ Names are spelled out rather than abbreviated. Current vocabulary:
 - `refresh_primitives!`, `mixture_density`, `boundary_plane` (the in-flight
   state-query API; primitives are stale inside a callback, see the
   `refresh_primitives!` docstring)
+- `gidx` (interior indices → padded) and `interior_index` (its inverse); a
+  padded index goes through the latter before reaching `xcoord`
+- `validate_bc` (the setup-time boundary-condition hook), `unit_scalefactor`
+- `outer_indices` (the flattened outer iteration space of a pointwise nest; see
+  Threading), `prepared`/`primitives_current` (the trailing flag by which `run!`
+  tells `step!` that the state is already exchanged and its primitives current)
 
 **Temperature is `T_ion`.** There is one temperature today; the name keeps
 `T_ele` / `T_rad` free for a 2T or 3T model without a second API break. Bare
@@ -204,8 +221,18 @@ positivity check reads ρ out of `Q` directly in `max_rate` rather than trusting
 
 `@threaded <work> for ... end` (`src/threading.jl`) uses `Threads.@threads`
 only when `work >= THREAD_MIN_WORK` (32768, override via `CL_THREAD_MIN_WORK`)
-and runs serially otherwise. Allocation is per-region-per-thread rather than
-per-point, so without the threshold small cases pay spawn cost for nothing.
+*and* the loop has more than one trip; it runs serially otherwise. Allocation is
+per-region-per-thread rather than per-point, so without the threshold small cases
+pay spawn cost for nothing.
+
+Total work is not the whole test, because only the loop `@threaded` wraps is
+divided. A nest threaded on its outermost index runs serially whenever the third
+dimension is collapsed, which covers every pointwise loop of a planar
+`(nx, ny, 1)` run. **A pointwise nest therefore iterates
+`outer_indices(n2, n3)`**, a single flattened `CartesianIndices` over its two
+outer indices unpacked with `j, k = Tuple(jk)`, which divides over the second
+dimension instead. Write a new one that way. Iteration order is unchanged, so
+this is not a numerics change.
 
 The backend choice is tasks, not Polyester, and that was measured rather than
 assumed. The numbers and the reasoning are in the `@threaded` docstring —
@@ -294,6 +321,13 @@ them.
 - Cluster-side open questions — whether `ThreadPinning`'s pinning API would buy
   anything, and the unexplained ~4300x SMT-sibling collapse — are in
   `reference/CLUSTER.md`.
+- **`bench/artcal.jl` aborts partway through a sweep instead of reporting and
+  continuing.** `julia --project=. bench/artcal.jl mu` prints three rows and then
+  dies on an uncaught `SolverFailure` from spherical Noh at `C_mu = 0.008`. The
+  sweep is meant to visit that configuration and report it as bad.
+  `bench/tgv_energy.jl` has the shape to copy: it catches the failure per
+  configuration and continues. Reproduced identically on the July 2026
+  near-term-corrections commit and its parent, so it predates them.
 - Wanted: a `bench/` runner taking medians over repeated *processes*, to get
   under the 10–20% run-to-run spread; and `FoldSpec` parameterization, which
   would close several remaining JET dispatch sites.

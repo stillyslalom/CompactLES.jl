@@ -511,6 +511,35 @@ end
     @test m2 > 1e-3
 end
 
+@testset "validate_bc: NSCBC restrictions are setup errors" begin
+    # Both restrictions used to be documented and unenforced. On an angular face
+    # nothing failed: the wave analysis dropped the curvature terms carried by
+    # grad_u[d,d] and the run completed with a wrong answer.
+    two = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 2.0, 1.6)])
+    wall = (SlipWallBC(), SlipWallBC())
+    cyl(θbc) = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                      bcs=(wall, θbc, per3[3]), metric=CylindricalMetric(),
+                      origin=(1.0, 0.0, 0.0), art=ArtParams(enabled=false))
+    # r is a length under CylindricalMetric, θ is not.
+    @test cyl(wall) isa Solver
+    @test_throws ErrorException cyl((NSCBCOutflowBC(pinf=1.0), SlipWallBC()))
+    @test_throws ErrorException cyl((SlipWallBC(),
+                                     NSCBCInflowBC(u=(0.0, 0.1, 0.0), T_ion=1.0)))
+    # Wrapping does not evade it: the `after` arm never passes through setup again.
+    @test_throws ErrorException cyl((SwitchableBC(SlipWallBC(),
+                                                 NSCBCOutflowBC(pinf=1.0)),
+                                     SlipWallBC()))
+    # Composition length, previously re-checked on every RHS call of the run.
+    cart(Y) = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                     bcs=((NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0, Y=Y),
+                           NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
+                     eos=two, art=ArtParams(enabled=false))
+    @test cart([0.4, 0.6]) isa Solver
+    @test_throws ErrorException cart([1.0])
+    @test_throws ErrorException cart([0.2, 0.3, 0.5])
+end
+
 @testset "multi-species artificial diffusivity responds to Y gradients" begin
     # artificial.jl computes per-species D* only when n_species > 1; that branch was
     # never executed, since the only multi-species test disables art.
@@ -1270,6 +1299,30 @@ end
     @test q[3] / ρ ≈ 0.3 atol = 1e-12          # ρu / ρ
     Rm = 0.35 * eos.Rk[1] + 0.65 * eos.Rk[2]
     @test ρ * Rm * 1.7 ≈ 0.8 atol = 1e-12      # p = ρ R_m T_ion
+
+    # Any two of (p, rho, T_ion) determine the state; all three spellings of the
+    # same point must give the same conserved vector.
+    ρ0 = 0.8 / (Rm * 1.7)
+    from_rho_T = conserved_from_prim(eos, Prim(u=(0.3, -0.1, 0.2), rho=ρ0,
+                                              T_ion=1.7, Y=(0.35, 0.65)))
+    from_p_rho = conserved_from_prim(eos, Prim(u=(0.3, -0.1, 0.2), p=0.8,
+                                              rho=ρ0, Y=(0.35, 0.65)))
+    @test all(isapprox.(from_rho_T, q; rtol=1e-14))
+    @test all(isapprox.(from_p_rho, q; rtol=1e-14))
+    # The other two EOS models take the same three spellings. Each one's thermal
+    # relation supplies the pressure that (rho, T_ion) implies.
+    liquid = StiffenedGas(gamma=4.4, p_inf=6.0e8, cv=1816.0)
+    p_liquid = 1000.0 * CL.gas_constant(liquid) * 300.0 - liquid.p_inf
+    ideal = single_species(gamma=1.4, R=287.0)
+    for (E, p_of) in ((liquid, p_liquid), (ideal, 1000.0 * 287.0 * 300.0))
+        @test all(isapprox.(conserved_from_prim(E, Prim(rho=1000.0, T_ion=300.0)),
+                            conserved_from_prim(E, Prim(p=p_of, T_ion=300.0));
+                            rtol=1e-12))
+    end
+    # Exactly two, no more and no fewer.
+    @test_throws ErrorException Prim(p=1.0)
+    @test_throws ErrorException Prim(rho=1.0)
+    @test_throws ErrorException Prim(p=1.0, rho=1.0, T_ion=1.0)
 end
 
 @testset "callbacks: triggers, dt landing, composition, termination" begin
@@ -1463,6 +1516,18 @@ end
     # In serial every rank holds every edge, so the `nothing` branch is
     # exercised only under MPI.
     @test boundary_plane(solver, 2, 1) == CL.wallplane(solver.decomp, 2, 1)
+
+    # interior_index is the documented conversion between the two index bases:
+    # boundary_plane yields padded indices, xcoord takes interior ones.
+    @test interior_index(solver, I) == (5, 4, 3)
+    @test gidx(solver, interior_index(solver, I)...) == I
+    for J in boundary_plane(solver, 1, 2)
+        i, j, k = interior_index(solver, J)
+        @test gidx(solver, i, j, k) == J
+        @test i == solver.decomp.n_local[1]              # the high-x face
+        @test xcoord(solver, 1, i) ==
+              global_xcoord(solver, 1, solver.decomp.offset[1] + i)
+    end
 
     # The contract stated by refresh_primitives!: inside a callback the
     # primitives belong to the fifth RK stage's INPUT state, so they predate the

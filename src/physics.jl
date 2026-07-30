@@ -221,8 +221,9 @@ function _primitives!(solver, eos::StiffenedGas, Q)
     ρa, ua, va, wa = solver.rho, solver.u, solver.v, solver.w
     pa, T_iona, ca, cpa = solver.p, solver.T_ion, solver.c, solver.cp_mix
     nxf, nyf, nzf = size(ρa)
-    @threaded nxf*nyf*nzf for k in 1:nzf
-        @inbounds for j in 1:nyf, i in 1:nxf
+    @threaded nxf*nyf*nzf for jk in outer_indices(nyf, nzf)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nxf
             ρ = Q[i, j, k, 1]
             if ρ > 0
                 ri = 1 / ρ
@@ -522,8 +523,9 @@ function _primitives!(solver, eos::Nasa9Mixture, Q)
     ρa, ua, va, wa = solver.rho, solver.u, solver.v, solver.w
     pa, T_iona, ca, cpa = solver.p, solver.T_ion, solver.c, solver.cp_mix
     nxf, nyf, nzf = size(ρa)
-    @threaded nxf*nyf*nzf for k in 1:nzf
-        @inbounds for j in 1:nyf, i in 1:nxf
+    @threaded nxf*nyf*nzf for jk in outer_indices(nyf, nzf)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nxf
             ρ = 0.0
             for sp in 1:n_species
                 ρ += Q[i, j, k, sp]
@@ -607,8 +609,9 @@ function _primitives!(solver, eos::IdealMixture, Q)
     ρa, ua, va, wa = solver.rho, solver.u, solver.v, solver.w
     pa, T_iona, ca, cpa = solver.p, solver.T_ion, solver.c, solver.cp_mix
     nxf, nyf, nzf = size(ρa)
-    @threaded nxf*nyf*nzf for k in 1:nzf
-        @inbounds for j in 1:nyf, i in 1:nxf
+    @threaded nxf*nyf*nzf for jk in outer_indices(nyf, nzf)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nxf
             ρ = 0.0
             for sp in 1:n_species
                 ρ += Q[i, j, k, sp]
