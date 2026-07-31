@@ -3,7 +3,7 @@
 #   julia --project=. -t auto bench/artcal.jl            # everything (~6 min)
 #   julia --project=. -t auto bench/artcal.jl beta cfl   # named sweeps only
 #
-# Sweeps available: mu beta kappa D cfl resolution
+# Sweeps available: mu beta kappa D cfl resolution sensor
 #
 # Scratch tooling, like everything else in bench/: it prints tables, asserts
 # nothing, and is not part of the gate. The conclusions drawn from a run of it
@@ -37,7 +37,8 @@ include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
 const DEFAULTS = ArtParams()
-const WHICH = isempty(ARGS) ? ["mu", "beta", "kappa", "D", "cfl", "resolution"] : ARGS
+const ALL = ["mu", "beta", "kappa", "D", "cfl", "resolution", "sensor"]
+const WHICH = isempty(ARGS) ? ALL : ARGS
 want(name) = name in WHICH
 
 # A sweep deliberately visits settings that do not work, and a setting that does
@@ -48,20 +49,41 @@ const CAP = 30_000
 
 art(; kw...) = ArtParams(; enabled=true,
                          C_mu=DEFAULTS.C_mu, C_beta=DEFAULTS.C_beta,
-                         C_kappa=DEFAULTS.C_kappa, C_D=DEFAULTS.C_D, kw...)
+                         C_kappa=DEFAULTS.C_kappa, C_D=DEFAULTS.C_D,
+                         beta_sensor=DEFAULTS.beta_sensor, kw...)
 
 mark(v, d) = v == d ? "*" : " "     # flags the shipped default in a sweep
 
+"""
+    attempt(f, blank)
+
+Run one swept configuration, returning `blank` if it raises `SolverFailure`.
+
+`StepControl` detects positivity loss and `run!` raises, which is what a sweep
+wants for the ~150 steps of wall time it saves — but an uncaught raise ends the
+whole sweep at its first bad point, which is not. The failure is raised off a
+reduced quantity, so under `mpiexec` every rank lands here at the same step;
+nothing else may be caught, on pain of ranks disagreeing about how to continue.
+"""
+function attempt(f, blank)
+    try
+        return f()
+    catch err
+        err isa SolverFailure || rethrow()
+        return blank
+    end
+end
+
 # --- per-case measurements, one line each -----------------------------------
 
-function m_noh(ν; kw...)
+m_noh(ν; kw...) = attempt((NaN, NaN, NaN)) do
     xs, ρ, _, _, ok = noh_case(ν; nmax=CAP, kw...)
     ok || return (NaN, NaN, NaN)
     plat, deficit, Rs, _ = noh_metrics(xs, ρ, ν)
     (plat / 4.0^ν, deficit, Rs)
 end
 
-function m_lax(; kw...)
+m_lax(; kw...) = attempt((NaN, NaN)) do
     xs, ρ, u, p, ok = lax(; nmax=CAP, kw...)
     ok || return (NaN, NaN)
     ex = [riemann_profile(x, LAX_T, 0.5, LAX_L, LAX_R, 1.4) for x in xs]
@@ -70,20 +92,20 @@ function m_lax(; kw...)
     (l1(ρ, [e[1] for e in ex]), contact_width(xs, ρ, 0.5, 1.3))
 end
 
-function m_shu(; kw...)
+m_shu(; kw...) = attempt((NaN, NaN)) do
     xs, ρ, _, _, ok = shu_osher(; N=400, nmax=CAP, kw...)
     ok || return (NaN, NaN)
     band = so_band(xs)
     (maximum(ρ[band]) - minimum(ρ[band]), maximum(ρ[band]))
 end
 
-function m_wc(; kw...)
+m_wc(; kw...) = attempt((NaN, NaN)) do
     xs, ρ, _, _, ok = woodward(; N=400, nmax=CAP, kw...)
     ok || return (NaN, NaN)
     (maximum(ρ), xs[argmax(ρ)])
 end
 
-function m_mix(; kw...)
+m_mix(; kw...) = attempt(NaN) do
     xs, Y, _, _, ok = species_advection(; nmax=CAP, kw...)
     ok || return NaN
     contact_width(xs, Y, 0.0, 1.0)
@@ -170,6 +192,35 @@ if want("resolution")
         @printf("%-9d | %14.4f  %+6.0f%% | %8.1e | %.5f\n",
                 N, n1[1], 100n1[2], lx[1], m_mix(N=N))
     end
+end
+
+# ===========================================================================
+if want("sensor")
+    println("\n=== beta_sensor (strain vs compression-keyed bulk viscosity) ===")
+    println("sensor     | Noh1 plat/exact  deficit | Noh3 plat/exact | Lax L1  contact | Shu train amp | WC peak")
+    hr()
+    for s in (:strain, :gated_strain, :dilatation)
+        a = art(beta_sensor=s)
+        n1 = m_noh(1; art=a); n3 = m_noh(3; art=a)
+        lx = m_lax(art=a);    sh = m_shu(art=a); wc = m_wc(art=a)
+        @printf("%-10s%s | %14.4f  %+6.0f%% | %15.4f | %7.1e %7.4f | %13.4f | %.4f\n",
+                s, mark(s, DEFAULTS.beta_sensor), n1[1], 100n1[2], n3[1],
+                lx[1], lx[2], sh[1], wc[1])
+    end
+    # The question the sensor exists to answer: keying β* on compression is the
+    # literature's response to a front that is not damped early enough, which is
+    # the diagnosis reference/CALIBRATION.md gives for the cfl ≤ 0.15 ceiling.
+    # So the ladder is run per sensor, not just the shipped CFL.
+    println("\n--- the Noh CFL ceiling, per sensor ---")
+    println("sensor      cfl  | Noh1 plat/exact | Noh2 plat/exact | Noh3 plat/exact")
+    hr()
+    for s in (:strain, :gated_strain, :dilatation), c in (0.4, 0.3, 0.2, 0.15)
+        a = art(beta_sensor=s)
+        n1 = m_noh(1; art=a, cfl=c); n2 = m_noh(2; art=a, cfl=c)
+        n3 = m_noh(3; art=a, cfl=c)
+        @printf("%-10s %-5.3g | %15.4f | %15.4f | %15.4f\n", s, c, n1[1], n2[1], n3[1])
+    end
+    println("  (NaN = the run lost positivity or stalled before reaching t_final)")
 end
 
 println("\nartcal complete")

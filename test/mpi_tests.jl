@@ -777,6 +777,68 @@ end
 # ---------------------------------------------------------------------------
 rank == 0 && println("=== CompactLES multi-rank test suite (np = $np) ===")
 
+# ---------------------------------------------------------------------------
+# 7c. Artificial properties under decomposition. Every other test here disables
+#     them, so the sensor path had no multi-rank coverage at all — and
+#     `beta_sensor = :dilatation` adds a second distributed filter solve inside
+#     `compute_artificial!`, on the far side of no early return. Splitting the
+#     same field along each axis in turn must give the same integrated
+#     coefficients: a halo the new path forgot to exchange changes the sensor
+#     only near a rank boundary, which is exactly what a whole-domain sum of
+#     three different decompositions catches.
+# ---------------------------------------------------------------------------
+function test_artificial_decomposition()
+    section("artificial properties: coefficients independent of the split axis")
+    N = SPLITN
+    totals = Dict{Symbol,Vector{Float64}}()
+    # The strain sensor reproduces to round-off. The dilatation sensor does not,
+    # and the reason is in the switch rather than in any halo: H(−Δ) is
+    # discontinuous at Δ = 0, and with the literature ε = 1e-32 the ratio is
+    # still ≈ 1 there, so a point whose dilatation is zero to round-off toggles
+    # its whole β* between 0 and C_β·ρ·sensor depending on which way the last bit
+    # fell. Measured at 2e-6 relative for :gated_strain and 2e-7 for
+    # :dilatation, against 1e-14 for the strain sensor — :gated_strain is the
+    # worse of the two because the sensor it gates is O(1) at the points that
+    # toggle. Each tolerance leaves one to two orders on top of the measured
+    # value and stays two or more below the ~1e-2 an unexchanged halo would
+    # produce. See reference/CALIBRATION.md.
+    tol_of = Dict(:strain => 1e-10, :gated_strain => 1e-4, :dilatation => 1e-5)
+    for sensor in (:strain, :gated_strain, :dilatation)
+        sums = Float64[]
+        for ax in 1:3
+            solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3,
+                       art=ArtParams(enabled=true, beta_sensor=sensor),
+                       dims=splitdims(ax))
+            Q = allocate_state(solver)
+            # Compressible and vortical at once, so both the dilatation gate and
+            # the vorticity discriminator are away from their trivial values.
+            initialize!(solver, Q, (x, y, z) ->
+                Prim(u=(sin(x)cos(y)cos(z), -cos(x)sin(y)cos(z), 0.3sin(2z)),
+                     p=1 + 0.2cos(x), rho=1 + 0.3sin(y)))
+            compute_rhs!(solver, Q, zero(Q))
+            loc = 0.0
+            for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
+                i in 1:solver.decomp.n_local[1]
+                loc += solver.beta_art[gidx(solver, i, j, k)]
+            end
+            push!(sums, gsum(loc))
+        end
+        totals[sensor] = sums
+        spread = maximum(sums) - minimum(sums)
+        check("$sensor: Σ β* spread over the three split axes",
+              spread, tol_of[sensor] * max(maximum(sums), 1e-30))
+    end
+    # No two sensors may agree here, or the checks above would pass just as
+    # happily on a `beta_sensor` that was being ignored. `check` tests val < tol,
+    # so each relative difference is inverted into one: this passes when the
+    # totals differ by more than 0.1%.
+    for sensor in (:gated_strain, :dilatation)
+        rel = abs(totals[:strain][1] - totals[sensor][1]) /
+              max(totals[:strain][1], 1e-300)
+        check("β* differs between strain and $sensor", 1e-3 / max(rel, 1e-300), 1.0)
+    end
+end
+
 const SUITE = (
     ("periodic C6", test_periodic_c6),
     ("pentadiagonal C10", test_pentadiagonal_c10),
@@ -786,6 +848,7 @@ const SUITE = (
     ("freestream", test_freestream),
     ("conservation", test_conservation),
     ("sync", test_sync),
+    ("artificial decomposition", test_artificial_decomposition),
     ("callback consistency", test_callback_consistency),
     ("state queries", test_state_queries),
     ("field writer", test_field_writer),

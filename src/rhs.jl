@@ -139,6 +139,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         n_global[d] > 1 || (isperiodic(bcs[d][1]) ||
             error("collapsed dimension $d must use (PeriodicBC(), PeriodicBC())"))
     end
+    art.beta_sensor in (:strain, :gated_strain, :dilatation) ||
+        error("art.beta_sensor must be :strain, :gated_strain or " *
+              ":dilatation, got :$(art.beta_sensor)")
     # Per-condition restrictions on geometry and EOS agreement (boundary.jl).
     for d in 1:3, side in 1:2
         validate_bc(bcs[d][side], metric, eos, d, side)

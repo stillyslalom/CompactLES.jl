@@ -565,6 +565,68 @@ end
     @test all(isfinite, solver.D_art[1]) && all(isfinite, solver.D_art[2])
 end
 
+@testset "compression-keyed beta sensors: gated_strain and dilatation" begin
+    # The point of both non-default sensors is that bulk viscosity stops firing
+    # on vortical structures and on expansions. Both halves are checked here,
+    # along with the requirement that mu* — which keeps the strain sensor in
+    # every case — is bit-identical across the three settings.
+    tgv(sensor) = begin
+        s = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
+                   art=ArtParams(enabled=true, beta_sensor=sensor))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=100.0,
+            u=(sin(x)cos(y)cos(z), -cos(x)sin(y)cos(z), 0.0)))
+        compute_rhs!(s, Q, zero(Q))
+        s
+    end
+    ss, sg, sd = tgv(:strain), tgv(:gated_strain), tgv(:dilatation)
+    # Taylor–Green is solenoidal, so neither compression-keyed sensor has
+    # anything to fire on; the strain sensor sees the vortical structure and
+    # fires. :dilatation collapses to round-off because its sensor is built
+    # from ∇·u. :gated_strain keeps the firing sensor and leans on the switch
+    # alone, which removes 99.4% of the total but not the maximum: the strain
+    # sensor peaks at the cusps of |S|, and the switch degenerates at exactly
+    # those points, where the vorticity vanishes along with |S| itself. The
+    # test is therefore on the total, with the surviving peak recorded here
+    # rather than asserted away.
+    bsum(s) = sum(s.beta_art[gidx(s, i, j, k)] for i in 1:32, j in 1:32, k in 1:32)
+    @test maximum(sd.beta_art) < 1e-12 * maximum(ss.beta_art)
+    @test bsum(sg) < 1e-2 * bsum(ss)
+    @test sd.mu_art == ss.mu_art
+    @test sg.mu_art == ss.mu_art
+    @test all(isfinite, sd.beta_art) && all(isfinite, sg.beta_art)
+
+    # A velocity ramp: beta* must be exactly zero wherever the flow expands,
+    # and must still switch on where it compresses.
+    ramp(sensor) = begin
+        s = Solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3,
+                   art=ArtParams(enabled=true, beta_sensor=sensor))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0,
+                                            u=(0.5tanh((x - 0.5) / 0.02), 0.0, 0.0)))
+        compute_rhs!(s, Q, zero(Q))
+        s
+    end
+    div1(s, I) = s.grad_u[1, 1][I] + s.grad_u[2, 2][I] + s.grad_u[3, 3][I]
+    rstrain = ramp(:strain)
+    for sensor in (:gated_strain, :dilatation)
+        s = ramp(sensor)
+        idx = [gidx(s, i, 1, 1) for i in 1:64]
+        expanding = [I for I in idx if div1(s, I) > 0]
+        @test !isempty(expanding)
+        @test all(I -> s.beta_art[I] == 0.0, expanding)
+        @test maximum(s.beta_art) > 0.1 * maximum(rstrain.beta_art)
+    end
+    # gated_strain multiplies the strain sensor by a factor in [0, 1], so it can
+    # only ever reduce beta*, never move it somewhere new.
+    sg2 = ramp(:gated_strain)
+    @test all(i -> sg2.beta_art[gidx(sg2, i, 1, 1)] <=
+                   rstrain.beta_art[gidx(rstrain, i, 1, 1)] + 1e-300, 1:64)
+
+    @test_throws ErrorException Solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                                       bcs=per3, art=ArtParams(beta_sensor=:bogus))
+end
+
 @testset "dt_report agrees with compute_dt and names the limiter" begin
     solver = mkslv(n_global=(16, 16, 16), transport=Transport(mu0=1e-3))
     Q = allocate_state(solver)

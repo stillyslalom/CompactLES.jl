@@ -4,7 +4,10 @@
 # Sensors use *undivided* explicit fourth differences δ⁴ (1, −4, 6, −4, 1) in
 # the computational indices, so the formal grid-spacing powers reduce to
 # per-dimension weights: h² for μ*, β* (from |∇⁴S| Δ⁶), h for κ* (|∇⁴e| Δ⁵)
-# and for D* (|∇⁴Y| Δ⁵). The Gaussian test filter is approximated by one
+# and for D* (|∇⁴Y| Δ⁵). β* optionally keys on compression, either by gating
+# the strain sensor or by rebuilding it from the dilatation, which carries the
+# same h² weight (`ArtParams.beta_sensor`; see `gate_beta!` and
+# `dilatation_beta!`). The Gaussian test filter is approximated by one
 # compact-filter pass. Each species carries its own sensor and its own D*_k;
 # Σ_k J_k = 0 is then restored by the correction velocity in the flux assembly
 # (rhs.jl) rather than by giving every species the same diffusivity. Indices
@@ -15,7 +18,7 @@
 
 """
     ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0,
-              C_kappa=0.01, C_D=0.01)
+              C_kappa=0.01, C_D=0.01, beta_sensor=:strain)
 
 Cook-style artificial-property controls.
 
@@ -31,6 +34,12 @@ Cook-style artificial-property controls.
   internal-energy sensor.
 - `C_D`: coefficient for per-species artificial diffusivity generated from
   mass-fraction sensors.
+- `beta_sensor`: how the β\\* sensor is built. `:strain` is the Cook original,
+  Σ_d h_d²|δ⁴_d S|. `:gated_strain` keeps that sensor and multiplies it by a
+  Ducros-style compression switch, for one pointwise pass (`gate_beta!`).
+  `:dilatation` additionally rebuilds the sensor from ∇·u, for one further
+  smoothing pass per RHS evaluation (`dilatation_beta!`). The measured
+  differences are in `reference/CALIBRATION.md`.
 
 The coefficients are dimensionless numerical regularization parameters, not
 material properties. Their useful values depend on resolution, flow regime,
@@ -44,6 +53,7 @@ Base.@kwdef struct ArtParams{T}
     C_beta::T  = 1.0
     C_kappa::T = 0.01
     C_D::T     = 0.01
+    beta_sensor::Symbol = :strain
 end
 
 const D4 = (1.0, -4.0, 6.0, -4.0, 1.0)   # offsets −2:2
@@ -100,6 +110,137 @@ function smooth!(f, solver)
     return f
 end
 
+# Guard against 0/0 in the Ducros ratio where the flow is exactly quiescent. It
+# is an absolute floor rather than a fraction of a local scale, and the value is
+# the one used in the source literature. A relative floor scaled to the local |S|
+# was tried and reverted: it moves the twelfth digit on Taylor-Green at 32^3 and
+# nothing else, because the points where the gate fails to suppress a solenoidal
+# flow are the cusps of |S| — where the strain sensor is large precisely because
+# |S| passes through zero, taking any local scale a floor could use with it. See
+# `gate_beta!`.
+const DUCROS_EPS = 1e-32
+
+"""
+    compression_switch(grad_u, I)
+
+The shock switch H(−Δ)·Δ²/(Δ² + |ω|² + ε) at one point, from the dilatation
+Δ = ∇·u and the vorticity ω (Ducros et al., JCP 152, 1999; in this form Mani,
+Larsson & Moin, JCP 228, 2009). It is zero in expansion and small wherever
+vorticity dominates dilatation, so multiplying a sensor by it restricts that
+sensor to compression.
+
+`grad_u[d, j]` is ∂u_j/∂x_d, so the trace is the dilatation and the
+off-diagonal pairs are the curl. Both are already available wherever the
+sensors are built, which is what makes the switch free.
+"""
+@inline function compression_switch(grad_u, I)
+    @inbounds begin
+        div = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
+        div < 0 || return 0.0
+        w1 = grad_u[2, 3][I] - grad_u[3, 2][I]
+        w2 = grad_u[3, 1][I] - grad_u[1, 3][I]
+        w3 = grad_u[1, 2][I] - grad_u[2, 1][I]
+        return div^2 / (div^2 + w1^2 + w2^2 + w3^2 + DUCROS_EPS)
+    end
+end
+
+"""
+    gate_beta!(solver)
+
+Multiply `solver.beta_art` in place by `compression_switch`, leaving the
+Cook strain sensor that produced it untouched. Selected by
+`ArtParams(beta_sensor = :gated_strain)`.
+
+This is the shock-switch half of the Mani, Larsson & Moin refinement without
+the sensor-field half. The two are separable and they do different things: the
+switch confines β\\* to compression, while changing the sensor from |S| to Δ
+also changes *how much* β\\* a given compression produces. The second half is
+what loses the coordinate folds — see `dilatation_beta!` — so this variant
+exists to take the first half alone.
+
+Cost is one pointwise pass over the interior. No sensor, no smoothing, no line
+solve, in contrast to `:dilatation`.
+
+The switch cannot suppress β\\* at a cusp of |S|. The strain sensor is a fourth
+difference, so it peaks where |S| passes through zero with a kink, and the
+vorticity generally vanishes there too, leaving only ε in the denominator. On a
+solenoidal Taylor–Green field this leaves 71 of 32768 points carrying β\\* — 0.6%
+of the summed total, but the full maximum. `reference/CALIBRATION.md` has the
+measurement and why a relative ε does not help.
+"""
+function gate_beta!(solver)
+    o1, o2, o3 = solver.decomp.n_halo_d
+    nx, ny, nz = solver.decomp.n_local
+    grad_u = solver.grad_u
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
+            I = CartesianIndex(i + o1, j + o2, k + o3)
+            solver.beta_art[I] *= compression_switch(grad_u, I)
+        end
+    end
+    return solver
+end
+
+"""
+    dilatation_beta!(solver, C_beta)
+
+Rebuild `solver.beta_art` from a compression-keyed sensor, replacing the strain
+form. Selected by `ArtParams(beta_sensor = :dilatation)`.
+
+The sensor is Σ_d h_d² |δ⁴_d Δ| built from the dilatation Δ = ∇·u, smoothed as
+the strain sensor is, and then multiplied by `compression_switch`
+(Mani, Larsson & Moin, JCP 228, 2009; Kawai, Shankar & Lele, JCP 229, 2010).
+The strain form fires on any fourth difference of |S|, so it also spreads
+vortical structures and expansion fans; this form restricts β\\* to compression,
+which is where bulk viscosity has a physical interpretation. `gate_beta!`
+applies the same switch to the unchanged strain sensor, which is the other half
+of the same refinement and a great deal cheaper.
+
+Cost is one extra `delta4_sum!` and one extra `smooth!` per RHS evaluation —
+the latter is a compact filter solve per active dimension — because μ\\* still
+needs the strain sensor. `grad_u` supplies both Δ and ω, so the switch itself
+is free.
+
+Unlike the strain form, this one does not reproduce bit-for-bit under a changed
+decomposition. H(−Δ) is discontinuous at Δ = 0 and, with ε at the literature
+value, the ratio has not yet decayed there, so a point whose dilatation is zero
+to round-off carries either no β\\* or the full C_β·ρ·sensor depending on the
+last bit of a cancelling sum. The measured spread over three split axes is
+2e-7 relative, against 1e-14 for the strain sensor; `test/mpi_tests.jl` holds
+the guard.
+
+`solver.tmp_a` and `solver.tmp_b` are scratch here, under the invariant
+recorded on `compute_artificial!`.
+"""
+function dilatation_beta!(solver, C_beta)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    grad_u = solver.grad_u
+    # Δ into tmp_a, the switch into tmp_b.
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
+            I = CartesianIndex(i + o1, j + o2, k + o3)
+            solver.tmp_a[I] = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
+            solver.tmp_b[I] = compression_switch(grad_u, I)
+        end
+    end
+    exchange_halos!(solver.tmp_a, decomp)
+    delta4_sum!(solver.sensor, solver.tmp_a, solver, 2)
+    smooth!(solver.sensor, solver)      # clobbers tmp_a, which is spent by now
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
+            I = CartesianIndex(i + o1, j + o2, k + o3)
+            solver.beta_art[I] = C_beta * solver.rho[I] *
+                                 max(solver.sensor[I], 0.0) * solver.tmp_b[I]
+        end
+    end
+    return solver
+end
+
 """
     compute_artificial!(solver, Q)
 
@@ -126,6 +267,12 @@ function compute_artificial!(solver, Q)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     grad_u = solver.grad_u
+    # The coefficients are read into locals rather than off `art` inside the
+    # loops. `beta_sensor` is a Symbol, so ArtParams is not an isbits type, and
+    # a threaded closure capturing the struct boxes it once per region — 768 B
+    # per RHS call when this was written the obvious way.
+    C_mu, C_beta = art.C_mu, art.C_beta
+    C_kappa, C_D = art.C_kappa, art.C_D
 
     # Strain-rate magnitude |S| = sqrt(S_ij S_ij) in the interior (physical
     # components — the metric corrections are already in grad_u).
@@ -151,10 +298,15 @@ function compute_artificial!(solver, Q)
         @inbounds for i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
             ρsensor = solver.rho[I] * max(solver.sensor[I], 0.0)
-            solver.mu_art[I]   = art.C_mu   * ρsensor
-            solver.beta_art[I] = art.C_beta * ρsensor
+            solver.mu_art[I]   = C_mu   * ρsensor
+            solver.beta_art[I] = C_beta * ρsensor
         end
     end
+    # β* may instead be keyed on compression, either by gating what the block
+    # above just wrote into beta_art or by rebuilding it from a different
+    # sensor. Both leave mu_art alone.
+    art.beta_sensor === :gated_strain && gate_beta!(solver)
+    art.beta_sensor === :dilatation   && dilatation_beta!(solver, C_beta)
 
     # κ* sensor: Σ_d h_d |δ⁴_d e|, smoothed; κ* = C_κ · scale(EOS) · sensor,
     # with the scale ρc/T_ion for the gas models. Internal energy comes straight
@@ -182,7 +334,7 @@ function compute_artificial!(solver, Q)
             I = CartesianIndex(i + o1, j + o2, k + o3)
             scale = art_conductivity_scale(eos, solver.rho[I], solver.c[I],
                                            solver.T_ion[I], solver.cp_mix[I])
-            solver.kappa_art[I] = art.C_kappa * scale * max(solver.sensor[I], 0.0)
+            solver.kappa_art[I] = C_kappa * scale * max(solver.sensor[I], 0.0)
         end
     end
 
@@ -198,7 +350,7 @@ function compute_artificial!(solver, Q)
                 j, k = Tuple(jk)
                 @inbounds for i in 1:nx
                     I = CartesianIndex(i + o1, j + o2, k + o3)
-                    solver.D_art[sp][I] = art.C_D * solver.c[I] * max(solver.sensor_sp[I], 0.0)
+                    solver.D_art[sp][I] = C_D * solver.c[I] * max(solver.sensor_sp[I], 0.0)
                 end
             end
         end
