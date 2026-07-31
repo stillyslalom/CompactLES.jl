@@ -14,6 +14,7 @@ PLANCK_TIME
 Workspace
 ConservedState
 compute_rhs!
+CompactLES.compute_primitives_and_gradients!
 apply_bcs!
 compute_dt
 dt_report

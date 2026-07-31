@@ -1,8 +1,8 @@
 # # Initialize a resolved spherical domain
 #
-# Spherical coordinates ``(r, theta, phi)`` extend the cylindrical construction
+# Spherical coordinates ``(r,\theta,\phi)`` extend the cylindrical construction
 # to two kinds of coordinate singularity: the origin ``r=0`` and the polar axis
-# ``theta \in \{0, \pi\}``. As in the preceding tutorials, these are not
+# ``\theta \in \{0, \pi\}``. As in the preceding tutorials, these are not
 # material walls. CompactLES continues smooth fields through them using an
 # origin fold and two pole folds. This tutorial initializes a resolved spherical
 # domain, advances a smooth blast a short way, and views a meridional slice.
@@ -16,15 +16,16 @@ CairoMakie.activate!(type = "png")
 
 # ## Geometry and the two folds
 #
-# [`SphericalMetric`](@ref) reads the coordinates as ``(r, theta_{\text{polar}},
-# phi)``. Three boundary conditions cooperate to close the singular set:
+# [`SphericalMetric`](@ref) reads the coordinates as
+# ``(r, \theta_{\text{polar}}, \phi)``. Three boundary conditions cooperate to
+# close the singular set:
 #
 #   * [`OriginBC`](@ref) folds ``r=0`` with the antipodal map
-#     ``(-r, theta, phi) \equiv (r, \pi-theta, phi+\pi)``; the polar range must
+#     ``(-r,\theta,\phi) \equiv (r, \pi-\theta, \phi+\pi)``; the polar range must
 #     be symmetric about ``\pi/2`` for it, which spanning the full ``(0, \pi)``
 #     satisfies;
 #   * [`PoleBC`](@ref) folds the polar axis and is applied at **both** ends of
-#     ``theta`` over ``(0, \pi)``;
+#     ``\theta`` over ``(0, \pi)``;
 #   * the azimuth is periodic over ``2\pi`` with an even number of points.
 #
 # The origin fold is less forgiving than the cylindrical axis: it needs initial
@@ -38,7 +39,7 @@ nr, ntheta, nphi = 24, 16, 12
 #
 # The initial condition is a pressure and density bump centered on the origin.
 # It depends on ``r`` alone, so it is automatically regular under both folds:
-# nothing in it references ``theta`` or ``phi``, so there is no angular
+# nothing in it references ``\theta`` or ``\phi``, so there is no angular
 # discontinuity to reconcile at the poles or the center.
 
 blast(r) = exp(-(r / 0.25)^2)
@@ -84,7 +85,7 @@ run!(solver, Q; tfinal = 0.06, nmax = 20);
 
 # ## View a meridional slice
 #
-# A slice at fixed azimuth (`normal = 3`) is an ``(r, theta)`` half-plane — a
+# A slice at fixed azimuth (`normal = 3`) is an ``(r,\theta)`` half-plane — a
 # meridian. [`fieldheatmap`](@ref) maps it to Cartesian ``(x, y) = (r\sin\theta,
 # r\cos\theta)`` and draws it with an equal aspect, so the polar axis runs
 # vertically and the profile appears as concentric arcs of the expanding shell.

@@ -18,7 +18,7 @@ CairoMakie.activate!(type = "png")
 #
 # [`read_nasa9`](@ref) reads piecewise heat-capacity fits and derives each
 # species gas constant from its molar mass. `Nasa9Mixture` is thermally ideal,
-# ``p=rho R_m T``, but calorically imperfect: heat capacities depend on
+# ``p=\rho R_m T``, but calorically imperfect: heat capacities depend on
 # temperature. Species order fixes the order of every mass-fraction tuple.
 
 species = read_nasa9(["He", "CO2"])
@@ -58,7 +58,7 @@ solver, Q = setup(problem, numerics)
 
 # ## Inspect the initialized conserved state
 #
-# For each species, CompactLES advances the partial density ``rho Y_k``. Their
+# For each species, CompactLES advances the partial density ``\rho Y_k``. Their
 # sum is mixture density, so this representation preserves each species mass in
 # the same conservative form introduced in the first tutorial.
 # [`line_profile`](@ref) recovers mixture quantities without exposing that

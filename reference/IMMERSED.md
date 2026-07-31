@@ -8,8 +8,9 @@ folds, the RHS walkthrough); `reference/AMR_GPU.md` shares the constraint
 analysis style and one open interaction. `ROADMAP.md` holds sequencing.
 
 Motivating use cases, in mission order: obstacles and machined features in
-shock tubes (wedges, cylinders, splitter plates — directly RM-relevant),
-mounting hardware and fill tubes in converging geometry, and general
+shock tubes (wedges, cylinders, splitter plates, directly relevant to
+Richtmyer–Meshkov work, abbreviated RM throughout), mounting hardware and fill
+tubes in converging geometry, and general
 non-coordinate-surface targets that would otherwise force a different code.
 
 ## Contents
@@ -34,9 +35,10 @@ represent the body through forcing or state imposition over a smeared
 interface region.
 
 **Sharp methods are structurally excluded here**, for the same reason oct-tree
-AMR is (`reference/AMR_GPU.md`, constraint 1). A compact operator couples an
-entire grid line through a banded LHS factorized once at plan time; a cut
-cell removes unknowns mid-line and a ghost-cell constraint imposes values
+adaptive mesh refinement (AMR) is (`reference/AMR_GPU.md`, constraint 1). A
+compact operator couples an entire grid line through a banded LHS factorized
+once at plan time; a cut cell removes unknowns mid-line and a ghost-cell
+constraint imposes values
 mid-line, either of which breaks the uniform banded structure and the
 distributed spike solve, per geometry, per line. The field must therefore
 exist and remain smooth *through* the solid, with the boundary condition
@@ -45,8 +47,9 @@ entering as forcing or as post-stage state imposition — the diffuse family.
 Within that family, three formulations are relevant:
 
 - **Brinkman volume penalization** (Angot, Bruneau & Fabrie 1999; compressible
-  form Liu & Vasilyev 2007): add −(χ/η)(q − q_target) to the RHS, with χ the
-  solid indicator and η a small relaxation time. Penetration error scales as
+  form Liu & Vasilyev 2007): add −(χ/η)(Q − Q_target) to the RHS, with Q the
+  conserved state, Q_target the state the body imposes, χ the solid indicator,
+  and η a small relaxation time. Penetration error scales as
   √η; the term is stiff for small η under explicit integration.
 - **Characteristic/state-reset methods** (the ghost-fluid lineage, Fedkiw et
   al. 1999; extrapolation operators from Aslam 2004): after each step, rebuild
@@ -62,7 +65,9 @@ each RK stage,
 
     Q ← (1 − w) Q + w Q_target,     w = χ_s · (1 − e^{−Δt/η}),
 
-which is the exact integral of the Brinkman relaxation (unconditionally
+where χ_s is the smeared solid fraction of the cell (`chi_solid` below, in
+[0, 1]), Δt the step just taken, and w the resulting blend weight. This is the
+exact integral of the Brinkman relaxation (unconditionally
 stable at any η, no timestep coupling) and degenerates to the hard reset at
 η → 0 (w = χ_s). One mechanism spans soft penalization to Pyranda-style
 imposition, with η a measurable knob rather than a method fork. What
@@ -70,17 +75,20 @@ distinguishes the stages below is not the mechanism but how `Q_target` is
 built: algebraic targets first, normal-extrapolated targets later.
 
 This is a geometric-flexibility feature, not an accuracy one. Interface
-accuracy is first order in the smearing width δ regardless of the tenth-order
-interior, the same honesty that applies to the closure-order drop at fitted
-walls. A calculation whose answer depends on boundary-layer resolution at the
-body does not belong on an immersed boundary in this code.
+accuracy is first order in the smearing half-width δ (the `delta` field, in
+cells; distinct from the δ⁴ sensor difference used by the artificial
+properties) regardless of the tenth-order interior, the same honesty that
+applies to the closure-order drop at fitted walls. A calculation whose answer
+depends on boundary-layer resolution at the body does not belong on an immersed
+boundary in this code.
 
 ## In-family precedent
 
-Pyranda ships a level-set IBM (`pyranda/pyrandaIBM.py`): the body is a signed
-distance function, the wall condition is imposed by resetting the velocity in
-the solid region (with a smeared transition), and scalars are extrapolated
-into the solid along level-set normals; a wall-model variant exists. This is
+Pyranda ships a level-set immersed-boundary method (`pyranda/pyrandaIBM.py`):
+the body is a signed distance function, the wall condition is imposed by
+resetting the velocity in the solid region (with a smeared transition), and
+scalars are extrapolated into the solid along level-set normals; a wall-model
+variant exists. This is
 the state-reset end of the design above, in the same numerics family, which
 is the strongest available evidence the approach coexists with compact
 operators, the filter, and artificial properties.
@@ -114,7 +122,8 @@ At `setup`, per body, filled once over the padded arrays (static geometry):
   the geometry arrays in `metric.jl`).
 - `grad_phi` — ∇φ by the compact derivative at setup, normalized to `n_hat`.
   Its magnitude `|∇φ|` also normalizes the smearing so that φ need only be
-  *distance-like* near the interface rather than an exact SDF:
+  *distance-like* near the interface rather than an exact signed distance
+  function:
   `chi_solid = ½(1 − tanh(φ / (delta · h_phys · |∇φ|)))`, with `h_phys` the
   local mean physical spacing (metric- and stretch-aware via `inv_h`).
 - `chi_solid` — the smeared solid fraction above. Multiple bodies combine by
@@ -201,8 +210,8 @@ inference survives — verify with `bench/jetcheck.jl` deltas as usual).
    problem solved with a fitted `SlipWallBC` at the same location: reflected
    shock position and post-reflection state, error measured versus δ and
    versus h (expect first order in the interface region).
-3. The 50-testset serial suite and the MPI suite pass with a body straddling
-   rank boundaries (the mask is pointwise, so this should be trivially true;
+3. The serial suite and the MPI suite (counts in `CLAUDE.md`) pass with a body
+   straddling rank boundaries (the mask is pointwise, so this should be trivially true;
    the test exists to keep it true).
 
 ## Stage 2 — validation battery and calibration
@@ -233,9 +242,11 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
 - **Adiabatic condition done properly**: build the thermal part of
   `Q_target` by extrapolating T (or ρe) from the fluid side along −n̂,
   Aslam-style constant extrapolation — iterate
-  `∂s/∂τ = −H(−φ) (n̂·∇s)` for ~5–10 pseudo-steps with local first-order
-  upwind differences (not the compact operators: locality and monotonicity
-  are wanted here, spectral resolution is not). One halo exchange per sweep;
+  `∂s/∂τ = −H(−φ) (n̂·∇s)`, with s the scalar being carried into the solid,
+  τ a pseudo-time, H the Heaviside step and n̂ the interface normal, for ~5–10
+  pseudo-steps with local first-order upwind differences (not the compact
+  operators: locality and monotonicity are wanted here, spectral resolution is
+  not). One halo exchange per sweep;
   cost is per-step but pointwise-cheap and confined to a band around the
   body.
 - **Tangential-velocity fidelity for `SlipIB`** through the same
@@ -298,8 +309,9 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
    limit, and let the rotated-plate case quantify the minimum.
 3. **First-order interface accuracy** is inherent to the diffuse family; the
    sharp alternatives are structurally excluded. If a future problem demands
-   better, the SBP–SAT multiblock route (`reference/AMR_GPU.md`) with a
-   body-fitted block is the escape hatch, not a sharper IB.
+   better, the summation-by-parts / simultaneous-approximation-term (SBP–SAT)
+   multiblock route (`reference/AMR_GPU.md`) with a body-fitted block is the
+   escape hatch, not a sharper IB.
 4. **Filter-across-interface dissipation**: the compact filter smooths fluid
    state into the slaved solid state each application, an energy sink the
    force bookkeeping does not see. Stage 2's conservation-defect measurement
@@ -326,4 +338,5 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
 - Fedkiw, Aslam, Merriman & Osher (1999), J. Comput. Phys. — ghost-fluid
   state construction.
 - Aslam (2004), J. Comput. Phys. — PDE-based constant/linear extrapolation.
-- `pyranda/pyrandaIBM.py` — in-family level-set IBM (verify per Stage 3).
+- `pyranda/pyrandaIBM.py` — in-family level-set immersed-boundary method
+  (verify per Stage 3).

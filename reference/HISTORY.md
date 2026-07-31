@@ -13,6 +13,7 @@ points at them rather than restating them.
 3. [Parallel HDF5/XDMF output (July 2026)](#parallel-hdf5xdmf-output-july-2026)
 4. [Adaptivity groundwork (July 2026)](#adaptivity-groundwork-july-2026)
 5. [Near-term corrections (July 2026)](#near-term-corrections-july-2026)
+6. [Model debt 1 — the dilatation-gated β\* (July 2026)](#model-debt-1--the-dilatation-gated-beta-july-2026)
 
 ## Phase 0 — extensibility seams (July 2026)
 
@@ -48,12 +49,16 @@ test absolute accuracy; Shu–Osher and Woodward–Colella compare against store
 
 Construction of the battery identified two operating limits, documented with
 their measurements in `reference/CALIBRATION.md`: converging strong shocks
-require `cfl ≤ 0.15` because a dispersive density undershoot outruns the
-artificial viscosity (timestep lag was tested and excluded as the cause), and
-the spherical-origin fold does not accept initial data resolved over fewer than
-about three cells, nor the singular t = 0 start of spherical Noh. The
-cylindrical axis accepts both; the difference between folds remains
-unexplained.
+require `cfl ≤ 0.15`, and the spherical-origin fold does not accept initial data
+resolved over fewer than about three cells, nor the singular t = 0 start of
+spherical Noh. The cylindrical axis accepts both; the difference between folds
+remains unexplained.
+
+The CFL limit was attributed at the time to a dispersive density undershoot
+outrunning the artificial viscosity, with timestep lag tested and excluded. The
+undershoot attribution was itself withdrawn later on the `bench/nohprobe.jl`
+measurements recorded under [model debt 1](#model-debt-1--the-dilatation-gated-beta-july-2026):
+the failure begins at the symmetry plane, not ahead of the front.
 
 **Artificial-property calibration.** `bench/artcal.jl` swept each constant over
 the battery; results and recommendations are in `reference/CALIBRATION.md`.
@@ -184,3 +189,65 @@ The 24-thread column falls behind the 12-thread one through the hybrid
 performance/efficiency-core effect documented in `CLAUDE.md`. The
 KernelAbstractions conversion in `reference/AMR_GPU.md` supersedes the flattening
 with an ndrange over all three dimensions.
+
+<a id="model-debt-1--the-dilatation-gated-beta-july-2026"></a>
+
+## Model debt 1 — the dilatation-gated β\* (July 2026)
+
+The first model debt, closed. The two halves of the literature refinement turn
+out to be separable and to behave completely differently, which is the substance
+of the result. Full measurements are in `reference/CALIBRATION.md`.
+
+`ArtParams.beta_sensor` now takes three values. `:strain` is the Cook original
+and remains the default, bit-identical to before the change. `:gated_strain`
+multiplies that sensor by the Ducros-style compression switch
+H(−Δ)·Δ²/(Δ² + |ω|² + ε), with Δ = ∇·u the dilatation, ω the vorticity, H the
+Heaviside step and ε = 1e-32, for one pointwise pass and no line solves.
+`:dilatation` is the full form of Mani, Larsson and Moin (JCP 228, 2009), which
+also rebuilds the sensor from ∇·u and costs an additional smoothing pass per RHS
+evaluation. `bench/artcal.jl sensor` sweeps all three, including a per-sensor
+CFL ladder over the three Noh geometries.
+
+What was measured:
+
+- **The switch moves one CFL ceiling; the sensor change moves none.**
+  `:gated_strain` completes cylindrical Noh at `cfl = 0.2`, where both other
+  settings fail, reaching a plateau (0.9353) consistent with its own value at
+  0.15 (0.9344) — a 33% larger timestep for that geometry. Planar and spherical
+  Noh are unmoved by all three settings, so the `cfl ≤ 0.15` guidance for
+  converging shocks stands and is now governed by the spherical case alone.
+- **`:dilatation` loses both converging geometries**, at the coordinate fold
+  rather than at the shock. Noh starts from uniform u_r = −1, for which the two
+  sensors are analytically identical away from the axis; in the first cells
+  Δ = S_rr + S_θθ adds two same-signed components where |S| takes their
+  root-sum-square, making the dilatation sensor 2 to 70 times larger where the
+  cell measure is smallest. Positivity is lost on step one, and raising
+  `C_beta` does not recover it. `:gated_strain` applies the identical switch and
+  keeps those geometries, which attributes the failure to the sensor field.
+- **Accuracy is a wash for `:gated_strain`** — every column of the battery moves
+  in the fourth digit and the movements go both ways. The 0.25% Shu–Osher
+  wave-train gain belongs to `:dilatation` alone; gating without changing the
+  sensor gives 0.05% *less* than the default.
+- **The switch removes 99.4% of β\* on a solenoidal field but not its maximum.**
+  On Taylor–Green at 32³, `:gated_strain` leaves 71 of 32768 points above 1e-12
+  and a peak at 0.42 of the ungated value. Those are the cusps of |S|, where a
+  fourth-difference sensor peaks precisely because |S| passes through zero and
+  where the switch degenerates because the vorticity vanishes with it. A
+  relative ε scaled to the local |S| was tried and reverted: the scale it would
+  use vanishes at exactly those points.
+- **Neither compression-keyed setting is decomposition-independent to
+  round-off**: 2e-6 relative for `:gated_strain` and 2e-7 for `:dilatation` over
+  three split axes, against 1e-14 for the strain sensor. The sensor fields
+  reproduce; H(−Δ) is discontinuous at Δ = 0 and the literature ε is too small
+  to have decayed the ratio by the time Δ reaches round-off.
+
+Whether `:gated_strain` should become the default is left open: it changes
+guarded numbers in the fourth digit across the battery, so the case needs a
+re-baseline and a second geometry showing the same gain.
+
+Two things landed alongside. `bench/artcal.jl` now catches `SolverFailure` per
+configuration and continues, closing the known limitation that a sweep died at
+its first bad point — the failure is raised off a reduced quantity, so the catch
+is safe under `mpiexec`. And `test/mpi_tests.jl` gained the first multi-rank
+coverage of the artificial-property path at all: every other test in that file
+disables it.

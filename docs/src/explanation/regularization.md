@@ -61,9 +61,11 @@ when artificial properties remain enabled.
 ## Stability and timestep coupling
 
 Larger artificial coefficients increase diffusive stability rates and can make
-the explicit timestep much smaller. Strong shocks have also exhibited a
-startup dispersive undershoot requiring CFL at or below roughly 0.15. Retry
-control is often cheaper than imposing that small CFL throughout a calculation:
+the explicit timestep much smaller. Converging strong shocks separately require
+CFL at or below roughly 0.15 while the shock forms at a symmetry plane, a
+restriction measured to originate at the wall, axis or origin cell rather than
+in the artificial properties. Retry control is often cheaper than imposing that
+small CFL throughout a calculation:
 
 ```julia
 Numerics(

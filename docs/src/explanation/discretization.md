@@ -150,9 +150,19 @@ from the state entering the step. Schematically,
 
 ```math
 \Delta t=\frac{\mathrm{CFL}}{\max_i \lambda_i},\qquad
-\lambda_i=\sum_d\frac{|u_d|+c}{\Delta x_d}
-+C_D\frac{\nu}{\Delta x_d^2}+R_{\mathrm{curvature}}.
+\lambda_i=\sum_d\left(\frac{|u_d|+c}{\Delta x_d}
++\frac{2\nu}{\Delta x_d^{2}}\right)+R_{\mathrm{curvature}}.
 ```
+
+Here ``i`` indexes grid points and ``d`` the resolved directions, ``c`` is the
+mixture sound speed, ``\Delta x_d`` the physical spacing along ``d``, and ``\nu``
+the sum of the kinematic momentum, thermal, and species diffusivities at that
+point, each including its artificial contribution and the last taken over the
+most diffusive species. The factor two is the diffusive safety constant, not one
+of the `ArtParams` coefficients.
+``R_{\mathrm{curvature}}`` is the geometric source rate that a collapsed angular
+dimension would otherwise contribute unaccounted; it is zero in Cartesian
+coordinates and for every resolved angular direction.
 
 Physical spacing includes mesh stretching and metric scale factors. A resolved
 azimuthal direction therefore has spacing ``r\Delta\theta`` near a cylindrical

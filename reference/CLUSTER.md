@@ -152,8 +152,9 @@ node. At 256³ on 36 nodes, the corresponding choices are 448 and 4032 ranks.
 Scheduler flags do not necessarily correspond to the resulting CPU mask. Where
 the scheduler allocates at core granularity with SMT enabled,
 `-c 1` yields both threads of one core (2 logical CPUs) and `-c 2` yields one
-thread (1 logical CPU) — measured, inverted, reproducible across nodes. The mask
-the mask records the resulting CPU allocation.
+thread (1 logical CPU) — measured, inverted, reproducible across nodes. Read the
+flag as a request and the probe's affinity mask as the record of what the
+scheduler actually allocated.
 
 Avoid assigning both SMT threads of one physical core to a rank. On rzhound (2
 sockets, 8 NUMA domains, 112 cores, SMT2) that configuration ran the 64³ TGV at

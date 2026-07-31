@@ -1,9 +1,10 @@
 # CompactLES — Patch AMR and GPU port: implementation plan
 
-This document is the implementation plan for patch-based adaptivity and the
-GPU port, written to be executed stage by stage without re-deriving the
-constraints. Prerequisite reading: `DESIGN.md` (compact operators, the
-distributed solve, folds) and the [Evidence base](#evidence-base) below.
+This document is the implementation plan for patch-based adaptive mesh
+refinement (AMR) and the GPU port, written to be executed stage by stage
+without re-deriving the constraints. Prerequisite reading: `DESIGN.md`
+(compact operators, the distributed solve, folds) and the
+[Evidence base](#evidence-base) below.
 `ROADMAP.md` holds positioning and priorities; `HISTORY.md` records the
 groundwork already done.
 
@@ -53,9 +54,10 @@ Each of these is structural or measured; none is a preference.
    triple, so both transfer operators stay centered, symmetric, and
    invertible on a node-centered grid. Do not attempt ratio 2.
 4. **Folds require uniform structure in their paired dimension** (partner at
-   +P/2, reflected partner). Refinement across a fold's singular region or its
-   antipodal partner region is forbidden; `setup` must reject it. The singular
-   region keeps uniform resolution.
+   +P/2 for P ranks along that dimension, reflected partner for the reversed
+   one). Refinement across a fold's singular region or its antipodal partner
+   region is forbidden; `setup` must reject it. The singular region keeps
+   uniform resolution.
 5. **The bit-exact oracle survives only within a patch.** The
    spike/reduced-interface solve reproduces the single-domain answer at any
    rank count *within* one patch; patch interfaces are approximate by
@@ -63,9 +65,10 @@ Each of these is structural or measured; none is a preference.
    replacement oracle: a manufactured smooth solution across the interface
    with a measured order, in the style `test/convergence.jl` uses.
 6. **The grid arrangement stays node-centered**, half-offset only where a fold
-   requires it. The SBP–SAT multiblock literature is node-coincident and
-   handles non-conforming interfaces with interpolation operators; a
-   cell-centered migration is not a prerequisite (see `HISTORY.md`).
+   requires it. The summation-by-parts / simultaneous-approximation-term
+   (SBP–SAT) multiblock literature is node-coincident and handles
+   non-conforming interfaces with interpolation operators; a cell-centered
+   migration is not a prerequisite (see `HISTORY.md`).
 7. **Error localization is favorable.** The inverse of a compact LHS decays
    geometrically off the diagonal (≈ α^|i−j|, α = 1/3 for C6), so pollution
    injected at an inexact interface decays about 3× per point into the patch.
@@ -100,12 +103,12 @@ right-hand side; `cfamrfc` does the reverse). Five properties matter:
 
 - **Refinement ratio 3, not 2**, matched to the 3Δx filter width, keeping both
   operators centered and invertible without staggering.
-- **Conservation comes from unit DC gain**, not refluxing: a + 2b + 2c
-  = 1 + 2α to the last bit (both 0.9356346489741322 in Float64), so the
-  transfer preserves the mean exactly.
+- **Conservation comes from unit DC gain**, not refluxing: the zero-wavenumber
+  (DC) gain of the transfer pair is a + 2b + 2c = 1 + 2α to the last bit (both
+  0.9356346489741322 in Float64), so the transfer preserves the mean exactly.
 - **The boundary closures preserve that gain.** The first closure row is
   explicit and sums to exactly 1.0; the second has an LHS summing to the
-  interior RHS within one ulp.
+  interior RHS within one unit in the last place.
 - **Boundary invertibility requires specialized closures.** Source comments:
   "no filter (current) or bad filter at boundary causes ringing in the
   solution" and "with extended boundary data : same as one-sided to maintain
@@ -178,7 +181,8 @@ it. Note the family resemblance: SAT penalties act on the RHS exactly as the
 NSCBC corrections in `nscbc.jl` do, so an eventual SBP–SAT implementation
 could subsume that machinery rather than fight it.
 
-HAMeRS (Wong & Lele: patch AMR on SAMRAI for RM/RT mixing) is the closest
+HAMeRS (Wong & Lele: patch AMR on SAMRAI for Richtmyer–Meshkov and
+Rayleigh–Taylor mixing) is the closest
 published relative and uses explicit schemes; Miranda's implicit-compact
 approach is the less documented one. Julia has no SAMRAI-maturity AMR
 framework; Trixi's precedent is binding an established C library (P4est.jl).
@@ -501,7 +505,8 @@ Bit-exactness against CPU is not expected (different reassociation). Gates:
   arithmetic-order independent, so this gate is exact even on device.
 - `test/validation.jl` guards matched at the documented comparison level
   (four significant figures, a moved third digit is real).
-- The TGV −dKE/dt(t) history overlaid on the CPU curve.
+- The Taylor–Green vortex (TGV) −dKE/dt(t) history overlaid on the CPU
+  curve.
 - Per-phase speedups recorded with `bench/phases.jl` before/after, per the
   usual delta discipline.
 

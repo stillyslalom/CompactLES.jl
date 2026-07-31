@@ -14,9 +14,9 @@ Q = (\rho Y_1,\ldots,\rho Y_{N_s},
      \rho u_1,\rho u_2,\rho u_3,E)^T.
 ```
 
-Here ``rho`` is mixture density, ``Y_k`` is a species mass fraction, ``u`` is
-the physical velocity in the local coordinate basis, and ``E`` is total energy
-per unit volume. The constraints are
+Here ``\rho`` is mixture density, ``Y_k`` is a species mass fraction,
+``\boldsymbol{u}`` is the physical velocity in the local coordinate basis, and
+``E`` is total energy per unit volume. The constraints are
 
 ```math
 \rho = \sum_k \rho Y_k, \qquad \sum_k Y_k = 1,
@@ -62,8 +62,12 @@ and total energy satisfies
 = \rho\boldsymbol{f}\!\cdot\boldsymbol{u}.
 ```
 
-`ConstantBodyForce` supplies ``f``. Additional sources enter the same
-conservative right-hand side through `Problem.sources`.
+In these, ``p`` is pressure, ``\boldsymbol{I}`` the identity tensor,
+``\boldsymbol{\tau}`` the viscous stress defined below, ``\boldsymbol{J}_k`` the
+species diffusive flux and ``\boldsymbol{q}`` the conductive heat flux, both
+given in the next section, and ``\boldsymbol{f}`` a body force per unit mass.
+`ConstantBodyForce` supplies ``\boldsymbol{f}``. Additional sources enter the
+same conservative right-hand side through `Problem.sources`.
 
 The viscous stress convention is
 
@@ -85,8 +89,12 @@ conductivity and species diffusivity are
 
 ```math
 \kappa_0=\frac{\mu_0c_p}{\mathrm{Pr}},\qquad
-D_0=\frac{\mu_0}{\rho\,\mathrm{Sc}}.
+D_0=\frac{\mu_0}{\rho\,\mathrm{Sc}},
 ```
+
+where ``\mathrm{Pr}`` is the Prandtl number and ``\mathrm{Sc}`` the Schmidt
+number, both constants of the [`Transport`](@ref) model, and ``c_p`` is the
+mixture specific heat at constant pressure.
 
 The conductive heat flux is
 
@@ -101,9 +109,10 @@ and the species flux uses a correction velocity:
 + \rho Y_k\sum_j D_j\nabla Y_j.
 ```
 
-The second term makes ``sum(J_k)=0`` exactly, so species diffusion cannot create
-or destroy mixture mass. Species enthalpy transport `sum(h_k J_k)` is included
-in the energy equation.
+The second term makes ``\sum_k\boldsymbol{J}_k=0`` exactly, so species diffusion
+cannot create or destroy mixture mass. The enthalpy carried by that diffusion,
+``\sum_k h_k\boldsymbol{J}_k`` with ``h_k`` the partial specific enthalpy of
+species ``k``, is included in the energy equation above.
 
 Artificial shear viscosity, bulk viscosity, conductivity, and species
 diffusivity add to their molecular counterparts near under-resolved gradients.

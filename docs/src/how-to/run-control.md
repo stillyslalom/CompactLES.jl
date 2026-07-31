@@ -64,7 +64,7 @@ direction, and limiting mechanism. The mechanism is one of:
 
 A diffusive limit localized at a shock can be physical for the configured
 artificial properties. A limit near a resolved polar axis often reflects the
-small physical spacing `r * Delta theta`.
+small physical spacing ``r\Delta\theta``.
 
 ## Bound failure and recovery
 

@@ -9,11 +9,11 @@ fluxes to physical space.
 
 | Metric | Coordinates | Physical velocity components |
 |:--|:--|:--|
-| `CartesianMetric` | `(x, y, z)` | `(u_x, u_y, u_z)` |
-| `CylindricalMetric` | `(r, theta, z)` | `(u_r, u_theta, u_z)` |
-| `SphericalMetric` | `(r, theta, phi)` | `(u_r, u_theta, u_phi)` |
+| `CartesianMetric` | ``(x, y, z)`` | ``(u_x, u_y, u_z)`` |
+| `CylindricalMetric` | ``(r,\theta,z)`` | ``(u_r, u_\theta, u_z)`` |
+| `SphericalMetric` | ``(r,\theta,\phi)`` | ``(u_r, u_\theta, u_\phi)`` |
 
-Spherical `theta` is polar angle. Velocity components lie in the local
+Spherical ``\theta`` is polar angle. Velocity components lie in the local
 orthonormal basis and therefore have ordinary velocity units.
 
 ## Orthogonal metric factors
@@ -89,9 +89,9 @@ validation for each use.
 
 ## Timestep near a singularity
 
-With resolved cylindrical angle, azimuthal spacing is `r * Delta theta`; near
+With resolved cylindrical angle, azimuthal spacing is ``r\Delta\theta``; near
 the first radial node it can be much smaller than radial spacing. Spherical
-azimuthal spacing is `r * sin(theta) * Delta phi`, becoming small near both the
+azimuthal spacing is ``r\sin\theta\,\Delta\phi``, becoming small near both the
 origin and poles. Explicit acoustic rates scale with inverse spacing and
 diffusive rates with inverse spacing squared.
 

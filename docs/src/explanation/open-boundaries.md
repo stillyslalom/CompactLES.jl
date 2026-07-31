@@ -27,6 +27,12 @@ L^* = K(p-p_\infty),\qquad
 K=\sigma(1-M^2)c/L_{ref}.
 ```
 
+Here ``L^*`` is the imposed incoming acoustic wave amplitude, ``p_\infty`` the
+far-field pressure target (`pinf`), ``M`` the local Mach number, ``c`` the sound
+speed, ``\sigma`` the relaxation coefficient (`sigma`), and ``L_{ref}`` the
+relaxation length (`Lref`), which sets the scale over which the relaxation acts
+and defaults to the domain extent normal to the face.
+
 This does not impose `p=pinf` pointwise. It slowly controls the mean pressure
 while permitting outgoing waves to leave. `sigma` balances pressure anchoring
 against reflection; its appropriate value depends on the domain length and
@@ -67,8 +73,8 @@ correction to total energy depends on
 \phi=\left.\frac{\partial(\rho e)}{\partial p}\right|_{\rho,Y}.
 ```
 
-Composition relaxation additionally needs derivatives of `phi` with respect to
-mass fractions. These are part of the EOS extension contract, which is why
+Composition relaxation additionally needs derivatives of ``\phi`` with respect
+to mass fractions. These are part of the EOS extension contract, which is why
 ideal, NASA-9, and stiffened-gas models can share the boundary implementation.
 
 ## Parallel ordering

@@ -17,11 +17,11 @@ CairoMakie.activate!(type = "png")
 # ## Specify the physical problem
 #
 # We use nondimensional variables and a calorically perfect gas, meaning that
-# its heat-capacity ratio ``gamma`` is constant. The background state is
-# ``p_0 = rho_0 = 1``. A Gaussian pressure perturbation of amplitude ``10^{-3}``
+# its heat-capacity ratio ``\gamma`` is constant. The background state is
+# ``p_0 = \rho_0 = 1``. A Gaussian pressure perturbation of amplitude ``10^{-3}``
 # is small enough for its propagation speed to be close to the acoustic speed
-# ``c_0 = sqrt(gamma p_0/rho_0)``. Choosing
-# ``rho=rho_0(p/p_0)^{1/gamma}`` makes the initial disturbance isentropic.
+# ``c_0 = \sqrt{\gamma p_0/\rho_0}``. Choosing
+# ``\rho=\rho_0(p/p_0)^{1/\gamma}`` makes the initial disturbance isentropic.
 
 gamma = 1.4
 amplitude = 1.0e-3
@@ -111,5 +111,5 @@ fig = Figure(size = (760, 420))
 ax = Axis(fig[1, 1], xlabel = "x", ylabel = "time",
           title = "Density perturbation")
 hm = heatmap!(ax, x, times, rho_xt .- 1; colormap = :balance)
-Colorbar(fig[1, 2], hm, label = "rho - rho0")
+Colorbar(fig[1, 2], hm, label = "ρ − ρ₀")
 fig

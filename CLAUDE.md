@@ -65,11 +65,11 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 52 testsets, 0 failures
+julia --project=. test/runtests.jl        # 53 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 60/60 each
+  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 65/65 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
@@ -134,7 +134,8 @@ Names are spelled out rather than abbreviated. Current vocabulary:
   `neighbors`, `send_buf`/`recv_buf`, `sub_rank`/`sub_size`, `pad` (the
   per-dimension halo pad, as a local)
 - `n_species`, `n_cons`, `i_mom`, `i_energy`, `Y`, `cp_mix`
-- `mu_art`, `beta_art`, `kappa_art`, `D_art`, `C_mu`/`C_beta`/`C_kappa`/`C_D`
+- `mu_art`, `beta_art`, `kappa_art`, `D_art`, `C_mu`/`C_beta`/`C_kappa`/`C_D`,
+  `beta_sensor` (`:strain`, `:gated_strain` or `:dilatation`)
 - `grad_u`, `grad_T_ion`, `grad_Y`, `strain_mag`, `sensor`, `sensor_sp`
 - `inv_J`, `area_d`, `inv_h`, `inv_r`, `cot_over_r`, `coord_shift`, `flux`
 - `deriv_plans`, `filter_plans`, `line_solver`, `plan` (a DirPlan) vs `plane`
@@ -256,7 +257,9 @@ decision worth revisiting.
   `jetcheck.jl` / `jetwhere.jl` (dispatch sites, and where they come from),
   `phases.jl` (RHS phase budget), `profile.jl`, `scaling.jl`, `threadscale.jl`,
   `bcbench.jl`, `coverage.jl`, `artcal.jl` (artificial-property sweeps),
-  `amr_transfer.jl`, `tgv_energy.jl` (Taylor–Green kinetic-energy budget split
+  `nohprobe.jl` (per-step Noh state probe: where β\* is, and where the internal
+  energy goes negative), `amr_transfer.jl`,
+  `tgv_energy.jl` (Taylor–Green kinetic-energy budget split
   by dissipation channel; the one bench script that runs usefully under
   `mpiexec`, and the intended first workload on a cluster).
 - Scripts take their settings from `ARGS`, not the environment: positional
@@ -293,11 +296,21 @@ Each of these cost someone real time to establish. The measurements and the
 rejected hypotheses are in the file named — read it before re-deriving any of
 them.
 
-- **Strong shocks need `cfl ≤ 0.15`.** The cause is a dispersive undershoot the
-  artificial viscosity does not damp, *not* the one-step lag in `compute_dt` —
-  that was tested with a rate predictor to 30 steps of lookahead and rejected.
-  `StepControl(retries = 4)` beats a globally lowered CFL, because the
-  restriction is a startup one. → `reference/CALIBRATION.md`
+- **Strong shocks need `cfl ≤ 0.15`.** The failure starts at the symmetry plane
+  (wall, axis or origin cell) as the shock forms, *not* ahead of the front and
+  *not* from the one-step lag in `compute_dt`. Both of those were the standing
+  explanations and both are measured wrong: the lag was tested with a rate
+  predictor to 30 steps of lookahead, and β\* is measured to reach three to five
+  times further ahead of the front than the damage extends while sitting at or
+  near its own domain maximum on the cell that fails. The surviving candidate is
+  the fold closure, which is third order where the interior is sixth or tenth.
+  A dilatation-keyed β\* was tested and rejected: the ceiling does not move, and
+  it loses both converging Noh geometries at the coordinate fold. Gating the
+  *strain* sensor on compression (`beta_sensor = :gated_strain`) does move it,
+  0.15 → 0.2, but only for the cylindrical geometry, and it does so by relieving
+  the axis cell rather than the shock. `StepControl(retries = 4)` beats a
+  globally lowered CFL, because the restriction is a startup one.
+  → `reference/CALIBRATION.md`
 - **κ\* is singular as `T_ion` → 0**, so a cold ambient below p ≈ 1e-3 collapses
   the diffusive timestep. `art_conductivity_scale` is an EOS dispatch point, so a
   tabular model can supply its own; the gas models still divide by `T_ion`.
@@ -321,13 +334,6 @@ them.
 - Cluster-side open questions — whether `ThreadPinning`'s pinning API would buy
   anything, and the unexplained ~4300x SMT-sibling collapse — are in
   `reference/CLUSTER.md`.
-- **`bench/artcal.jl` aborts partway through a sweep instead of reporting and
-  continuing.** `julia --project=. bench/artcal.jl mu` prints three rows and then
-  dies on an uncaught `SolverFailure` from spherical Noh at `C_mu = 0.008`. The
-  sweep is meant to visit that configuration and report it as bad.
-  `bench/tgv_energy.jl` has the shape to copy: it catches the failure per
-  configuration and continues. Reproduced identically on the July 2026
-  near-term-corrections commit and its parent, so it predates them.
 - Wanted: a `bench/` runner taking medians over repeated *processes*, to get
   under the 10–20% run-to-run spread; and `FoldSpec` parameterization, which
   would close several remaining JET dispatch sites.

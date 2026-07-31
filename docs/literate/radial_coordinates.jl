@@ -17,7 +17,7 @@ CairoMakie.activate!(type = "png")
 # ## Geometry and axis condition
 #
 # [`CylindricalMetric`](@ref) interprets coordinates and physical velocity
-# components as ``(r, theta, z)`` and ``(u_r, u_theta, u_z)``. Concentric
+# components as ``(r,\theta,z)`` and ``(u_r, u_\theta, u_z)``. Concentric
 # cylindrical surfaces have different areas, so even an angle-independent
 # radial flux has a divergence proportional to
 # ``r^{-1}\partial(r F_r)/\partial r``. This geometry remains active when the

@@ -70,8 +70,9 @@ callback.
 ## Species diffusion
 
 Molecular diffusivity is presently common across species and is set by
-`mu0/Sc`. Artificial diffusivity may differ by species because each mass
-fraction has its own sensor. The correction-velocity flux
+`mu0/Sc`, the molecular viscosity over the Schmidt number. Artificial
+diffusivity may differ by species because each mass fraction has its own sensor.
+The correction-velocity flux
 
 ```math
 \boldsymbol{J}_k=-\rho D_k\nabla Y_k

@@ -51,8 +51,8 @@ problem = Problem(
 ```
 
 Coordinates and physical velocity components follow the selected metric. For
-cylindrical coordinates they are `(r, theta, z)` and `(u_r, u_theta, u_z)`;
-for spherical coordinates they are `(r, theta, phi)` and the corresponding
+cylindrical coordinates they are ``(r,\theta,z)`` and ``(u_r, u_\theta, u_z)``;
+for spherical coordinates they are ``(r,\theta,\phi)`` and the corresponding
 orthonormal components.
 
 ## Select numerical choices

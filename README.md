@@ -69,8 +69,9 @@ run!(solver, Q; tfinal=1.0)
 - **Stretched meshes.** Per-dimension monotone grid clustering that composes
   with any coordinate system.
 - **Boundary conditions.** Periodic, slip / no-slip (adiabatic or isothermal)
-  walls, characteristic NSCBC subsonic inflow and outflow, and time-dependent
-  Dirichlet forcing (pistons, oscillating drivers, supersonic inflow).
+  walls, Navier–Stokes characteristic boundary conditions (NSCBC) for subsonic
+  inflow and outflow, and time-dependent Dirichlet forcing (pistons,
+  oscillating drivers, supersonic inflow).
 - **Parallelism.** MPI 3-D domain decomposition with a distributed
   tridiagonal / pentadiagonal solve for the globally coupled compact schemes,
   plus shared-memory threading over grid lines.
@@ -132,7 +133,7 @@ A **`Problem`** bundles the physics and geometry:
 ```julia
 prob = Problem(
     eos       = single_species(gamma=1.4),          # or IdealMixture([...])
-    transport = Transport(mu0=1/1600, Pr=0.7, Sc=0.7),
+    transport = Transport(mu0=1/1600, Pr=0.7, Sc=0.7),  # viscosity, Prandtl, Schmidt
     metric    = CartesianMetric(),                  # or Cylindrical/Spherical
     sources   = (ConstantBodyForce((0.0, -9.81, 0.0)),),
     domain    = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),  # (lo, hi) per dimension
@@ -192,7 +193,7 @@ same `Problem` with a sequence of `Numerics` values.
 | Category        | Provided |
 |-----------------|----------|
 | Derivatives     | `lele_d1_6` (C6, tridiagonal), `lele_d1_10` (C10, pentadiagonal), `pade_d1_4`, custom `CompactScheme` / `BandedCompactScheme` |
-| Filter          | `compact_filter(αf)` — eighth-order Gaitonde–Visbal, boundary cascade |
+| Filter          | `compact_filter(alphaf)` — eighth-order Gaitonde–Visbal, boundary cascade; larger `alphaf` is weaker |
 | Time integration| Five-stage fourth-order low-storage Carpenter–Kennedy Runge–Kutta (LSRK(5,4)) |
 | Geometry        | `CartesianMetric`, `CylindricalMetric`, `SphericalMetric`; collapsed 1-D/2-D; `Stretch` / `sine_cluster` meshes |
 | Walls           | `SlipWallBC`, `NoSlipWallBC(Twall=...)` (adiabatic or isothermal) |
@@ -200,7 +201,7 @@ same `Problem` with a sequence of `Numerics` values.
 | Forcing         | Typed source tuples (`ConstantBodyForce`) and time-dependent `DirichletBC` |
 | Singular axes   | `AxisBC` (cylindrical axis), `OriginBC` (spherical origin), `PoleBC` (spherical poles) |
 | Thermodynamics  | `IdealMixture`, `Nasa9Mixture` / `read_nasa9` (NASA CEA piecewise cp), `StiffenedGas`; EOS interface for custom models |
-| Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`) — see [CALIBRATION.md](reference/CALIBRATION.md) |
+| Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`), with an optional compression-keyed β\* sensor — see [CALIBRATION.md](reference/CALIBRATION.md) |
 | Diagnostics     | `volume_integral`, `plane_profile`, `mix_width`, `molecular_mixing`, `species_pdf`, `tke_profile`, `dissipation_rate` |
 | Failure handling| `StepControl` timestep floors (incl. a `PLANCK_TIME` failsafe), positivity checking, and rollback-with-CFL-backoff; `SolverFailure` |
 | Run control     | `Callback` with `AtTime` / `EveryTime` (both landed on exactly), `EveryStep`, or `WhenState` triggers; `ProgressLog` for progress/timing output; `SwitchableBC` for boundaries that change mid-run |
@@ -320,8 +321,9 @@ axis, origin+poles), EOS round-trips, discrete conservation, NSCBC, checkpoint
 round-trips, and a full Sod shock tube validated against the exact Riemann
 solution. The MPI suite exercises the code paths that only run when a dimension
 is split across ranks: the distributed spike solve (tridiagonal and
-pentadiagonal), cross-rank halo exchange, off-rank folds, the discrete GCL
-across rank boundaries, and telescoping flux conservation. The multi-rank suite
+pentadiagonal), cross-rank halo exchange, off-rank folds, the discrete
+geometric conservation law (GCL) across rank boundaries, and telescoping flux
+conservation. The multi-rank suite
 exits nonzero on any failure, so it is CI-gateable.
 
 Coverage is measured with `julia --code-coverage=user` over all three suites
@@ -373,11 +375,14 @@ least-exercised part of the code; the full-ball origin+poles combination in
 particular warrants scrutiny before production use. Other current limitations:
 
 - Float64 only.
-- Strong shocks need `cfl ≤ 0.15`, well below the 0.5 default: a dispersive
-  undershoot at the shock outruns the artificial viscosity and the state loses
-  positivity. `StepControl(retries = 4)` rolls back the state and lowers the CFL
-  automatically; see
-  [CALIBRATION.md](reference/CALIBRATION.md).
+- Strong shocks need `cfl ≤ 0.15`, well below the 0.5 default. The state loses
+  positivity at the symmetry plane while the shock forms there, in the wall,
+  axis or origin cell rather than ahead of the front.
+  `StepControl(retries = 4)` rolls back the state and lowers the CFL
+  automatically. A timestep predictor, a larger `C_beta`, and a wider sensor
+  reach have each been measured against this and none moves the ceiling;
+  `ArtParams(beta_sensor = :gated_strain)` moves it to 0.2 for the cylindrical
+  geometry only. See [CALIBRATION.md](reference/CALIBRATION.md).
 - The spherical origin will not take an initial discontinuity resolved over
   fewer than about three cells, nor a flow that converges to a singular state
   at t = 0. The cylindrical axis takes both.

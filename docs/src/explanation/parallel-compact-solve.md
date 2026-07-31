@@ -23,8 +23,13 @@ For the tridiagonal case, write the equations on one rank as
 T x = d-a_L x^-_n e_1-c_R x^+_1 e_n,
 ```
 
-where neighboring ranks supply the two exterior interface values. After a
-one-time local factorization,
+where ``T`` is the rank's local tridiagonal block, ``x`` its ``n`` unknowns,
+``d`` the local right-hand side, and ``e_1``, ``e_n`` the first and last
+standard basis vectors of length ``n``. The coefficients ``a_L`` and ``c_R``
+couple the first and last local rows to their neighbors, and ``x^-_n`` and
+``x^+_1`` are the two exterior interface values those neighbors supply: the
+previous rank's last unknown and the next rank's first. After a one-time local
+factorization,
 
 ```math
 x = T^{-1}d-x^-_n T^{-1}(a_Le_1)-x^+_1T^{-1}(c_Re_n).
