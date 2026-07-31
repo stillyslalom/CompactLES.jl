@@ -458,13 +458,19 @@ function test_callback_consistency()
 
     # An AtTime trigger clips dt, which must stay a global decision: every rank
     # has to land on the same instant or they integrate different equations.
+    #
+    # The two instants sit a little over two CFL steps apart (dt ≈ 1.3e-3 here),
+    # which is inside `landing_steps`, so the soft landing subdivides the gap on
+    # the approach rather than clipping straight to it. Both branches of the clip
+    # are therefore exercised in the eight steps this takes. See the note on run
+    # length below.
     s_t, Q_t, _ = build()
     landed = Float64[]
-    run!(s_t, Q_t; tfinal=0.05,
-         callback=Callback(AtTime([0.01, 0.02]),
+    run!(s_t, Q_t; tfinal=0.008,
+         callback=Callback(AtTime([0.003, 0.006]),
                            (s, _) -> (push!(landed, s.t); nothing)))
     hit_spread = 0.0
-    for (m, want) in enumerate((0.01, 0.02))
+    for (m, want) in enumerate((0.003, 0.006))
         m <= length(landed) || (hit_spread = Inf; break)
         hit_spread = max(hit_spread, abs(landed[m] - want),
                          MPI.Allreduce(landed[m], max, comm) -
@@ -475,13 +481,35 @@ function test_callback_consistency()
     # EveryTime shortens dt in the same way and additionally re-anchors from
     # solver.t. That anchoring must also be a global decision: a rank computing
     # a different next instant would shorten to a different dt, and the ranks
-    # would diverge on the following step.
+    # would diverge on the following step. Three ticks, so the re-anchoring is
+    # exercised twice rather than once.
+    #
+    # Run length. Everything this function checks is agreement between ranks on a
+    # per-step decision, so it is the *step count* that has to be enough to catch
+    # a divergence, and every step costs the same. The four runs here take 12, 12,
+    # 8 and 9 steps, against 12, 12, 44 and 40 before the lengths were cut. That
+    # matters at high rank counts on a runner with fewer cores than ranks, where
+    # each step is a fixed toll of small collectives and the phase cost is linear
+    # in steps: at np = 8 on a four-core CI runner these runs cost ~7 s per step
+    # against ~0.04 s at np = 2, so the phase was 13 minutes of a 20-minute job.
+    # Lengthen a run here only for a check that needs the extra steps.
+    #
+    # The four runs also take the same number of steps at every rank count, which
+    # is what makes the step count the thing to watch: measured 12, 12, 44 and 40
+    # at both np = 2 and np = 8 before the cut.
+    #
+    # tfinal here is one ULP BELOW the third instant, since `0.006 + 0.003` is
+    # not the 0.009 literal. That combination used to cost 48 steps rather than 9:
+    # the soft landing in `run!` aimed at an instant past the endpoint and halved
+    # dt against it forever. Nothing in the checks below moved, so the step count
+    # is the only evidence — leave the two literals as they are, and see the note
+    # on the landing in `run!`.
     s_e, Q_e, _ = build()
     ticks = Float64[]
-    run!(s_e, Q_e; tfinal=0.045,
-         callback=Callback(EveryTime(0.015), (s, _) -> (push!(ticks, s.t); nothing)))
+    run!(s_e, Q_e; tfinal=0.009,
+         callback=Callback(EveryTime(0.003), (s, _) -> (push!(ticks, s.t); nothing)))
     tick_spread = length(ticks) == 3 ? 0.0 : Inf
-    for (m, want) in enumerate((0.015, 0.03, 0.045))
+    for (m, want) in enumerate((0.003, 0.006, 0.009))
         m <= length(ticks) || break
         tick_spread = max(tick_spread, abs(ticks[m] - want),
                           MPI.Allreduce(ticks[m], max, comm) -
@@ -557,7 +585,12 @@ function test_field_writer()
                                                    rho=1.0)),
                       Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
     writer = FieldWriter(joinpath("mpi_frames", "field"))
-    run!(solver, Q; tfinal=0.03, callback=Callback(EveryTime(0.01), writer))
+    # Three frames is what the piece and container counts below are written
+    # against; the run is then only as long as it takes to produce them, since
+    # every check here is on the files rather than on the state in them. The
+    # interval is a little over one CFL step, so the frames still land on
+    # separate steps. See the run-length note in test_callback_consistency.
+    run!(solver, Q; tfinal=0.006, callback=Callback(EveryTime(0.002), writer))
 
     # Every rank must have written the same number of frames at the same times.
     # A rank that skipped one would have desynchronized the internal Allgather.
@@ -566,7 +599,7 @@ function test_field_writer()
           MPI.Allreduce(writer.index, min, comm), 0.5)
     tspread = 0.0
     for m in 1:min(writer.index, 3)
-        tspread = max(tspread, abs(writer.times[m] - 0.01m),
+        tspread = max(tspread, abs(writer.times[m] - 0.002m),
                       MPI.Allreduce(writer.times[m], max, comm) -
                       MPI.Allreduce(writer.times[m], min, comm))
     end

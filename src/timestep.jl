@@ -350,7 +350,22 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # behind solver.t would otherwise drive dt to zero or negative, which
         # stalls the run rather than firing anything.
         dt = min(dt, tfinal - solver.t)
-        gap = callback_next_time(callback, solver) - solver.t
+        # An instant beyond `tfinal` is not reachable in this run, and aiming at
+        # one makes the soft landing below halve the step against a target it
+        # never arrives at. The case is not exotic: `EveryTime(0.003)` run to
+        # `tfinal = 0.009` schedules its third instant at `0.006 + 0.003`, which
+        # is one ULP ABOVE the 0.009 literal, so every step from there on had
+        # `gap` a shade over `tfinal - solver.t` and the division by
+        # `ceil(gap/dt) == 2` halved dt forever: 1.9e-13, 9.7e-14, 4.9e-14 and so
+        # on for forty steps until `solver.t + dt` rounded onto `tfinal`. The run
+        # did reach the endpoint and the trigger did fire — the whole cost was in
+        # steps, which is why nothing caught it.
+        #
+        # Discarding the instant rather than clamping it to `tfinal` is what keeps
+        # the endpoint out of the soft landing, per the note below. `tfinal` is
+        # still clipped to, one line up; it is just never subdivided toward.
+        next_instant = callback_next_time(callback, solver)
+        gap = next_instant - solver.t
         # Soft landing. Clipping directly to the gap lands exactly but leaves an
         # arbitrarily small step before a scheduled instant: a dump every 1e-4
         # against a CFL step of 3.7e-5 gives steps of 3.7, 3.7, 3.7, 0.15 e-5.
@@ -363,7 +378,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # change here leaves a run without scheduled callbacks stepping as it did
         # before, which is the condition the validation guards were measured
         # under.
-        if gap > 0 && gap < dt * control.landing_steps
+        if next_instant <= tfinal && gap > 0 && gap < dt * control.landing_steps
             dt = gap / ceil(gap / dt)
         end
         prepared = true         # see the apply_bcs!/max_rate note above

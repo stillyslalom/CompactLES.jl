@@ -1501,6 +1501,26 @@ end
     end
     @test spread(StepControl(landing_steps=1)) < 0.35     # sliver: 2.2e-3 vs 7.8e-3
     @test spread(StepControl()) > 0.99                    # split evenly instead
+
+    # An instant BEYOND tfinal must not be landed on. Instants are computed as
+    # `start + n*interval`, so the third one here is `3 * 0.05`, which is the next
+    # float above the 0.15 literal — the schedule ends one ULP past the endpoint.
+    # The soft landing used to aim at it anyway, and since `dt` was already
+    # clipped to `tfinal - t` the gap stayed a shade above `dt` and `ceil(gap/dt)`
+    # stayed at 2, halving the step against a target the run never reaches. The
+    # run still finished and every instant still fired, so the only symptom was
+    # step count: 48 steps against 9 in the case this was found in.
+    #
+    # Measured against the same run with no trigger rather than a fixed number,
+    # since the step count is a property of the CFL here and not of the landing.
+    @test 3 * 0.05 > 0.15                          # the ULP the case rests on
+    nsteps(cb) = begin
+        s, q = mkrun()
+        run!(s, q; tfinal=0.15, callback=cb)
+        s.step
+    end
+    bare = nsteps(nothing)
+    @test nsteps(Callback(EveryTime(0.05), (_, _) -> nothing)) <= bare + 4
 end
 
 @testset "rewind!: a rollback re-arms the instants it abandoned" begin

@@ -61,6 +61,14 @@ jobs:
       # interface error away from machine zero, so it does not pass unseen.
       - name: Run convergence guards
         run: julia --project=. --color=yes test/convergence.jl
+      # The runner has fewer cores than this job has ranks at np = 8, so the
+      # ranks are oversubscribed and every collective costs a scheduling quantum
+      # rather than a memory copy: a timestep measured at ~0.04 s per step at
+      # np = 2 costs ~7 s per step at np = 8. Phase cost there is linear in steps
+      # taken and independent of grid size, so the run lengths in the three
+      # timestepping phases of mpi_tests.jl are the job's cost, not the physics.
+      # `-t 1` because a rank must not also fan out over threads it does not have.
+      #
       # np = 2 and np = 8 only. Every test puts all ranks on a single dimension
       # via `splitdims`, so the rank count changes block sizes rather than code
       # paths; the one exception is the corner-halo check, which uses the
@@ -75,7 +83,7 @@ jobs:
           MPI.mpiexec() do mpiexec
               julia = Base.julia_cmd()
               for np in (2, 8)
-                  t = @elapsed run(`$mpiexec -n $np $julia --project=. test/mpi_tests.jl`)
+                  t = @elapsed run(`$mpiexec -n $np $julia --project=. -t 1 test/mpi_tests.jl`)
                   @printf("=== np = %d finished in %.1f s ===\n", np, t)
               end
           end
