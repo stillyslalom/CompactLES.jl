@@ -37,8 +37,14 @@ include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
 const DEFAULTS = ArtParams()
-const ALL = ["mu", "beta", "kappa", "D", "cfl", "resolution", "sensor"]
-const WHICH = isempty(ARGS) ? ALL : ARGS
+const ALL = ["mu", "beta", "kappa", "D", "cfl", "resolution", "sensor", "smoother"]
+# Sweep names are bare words; `key=value` sets the background configuration that
+# every sweep then runs against. Refitting a constant under a changed smoother
+# is exactly `artcal.jl kappa smoother=gaussian`, and keeping the two forms in
+# one argument list is what stops that turning into a second script.
+const OPTS = script_args(filter(a -> occursin('=', a), ARGS), (smoother = :compact,))
+const NAMES = filter(a -> !occursin('=', a), ARGS)
+const WHICH = isempty(NAMES) ? ALL : NAMES
 want(name) = name in WHICH
 
 # A sweep deliberately visits settings that do not work, and a setting that does
@@ -50,7 +56,8 @@ const CAP = 30_000
 art(; kw...) = ArtParams(; enabled=true,
                          C_mu=DEFAULTS.C_mu, C_beta=DEFAULTS.C_beta,
                          C_kappa=DEFAULTS.C_kappa, C_D=DEFAULTS.C_D,
-                         beta_sensor=DEFAULTS.beta_sensor, kw...)
+                         beta_sensor=DEFAULTS.beta_sensor,
+                         smoother=OPTS.smoother, kw...)
 
 mark(v, d) = v == d ? "*" : " "     # flags the shipped default in a sweep
 
@@ -216,6 +223,38 @@ if want("sensor")
     hr()
     for s in (:strain, :gated_strain, :dilatation), c in (0.4, 0.3, 0.2, 0.15)
         a = art(beta_sensor=s)
+        n1 = m_noh(1; art=a, cfl=c); n2 = m_noh(2; art=a, cfl=c)
+        n3 = m_noh(3; art=a, cfl=c)
+        @printf("%-10s %-5.3g | %15.4f | %15.4f | %15.4f\n", s, c, n1[1], n2[1], n3[1])
+    end
+    println("  (NaN = the run lost positivity or stalled before reaching t_final)")
+end
+
+# The sensor smoother stands in for Cook's Gaussian test filter. `:compact`
+# reuses the conserved-state filter, which at alphaf = 0.45 retains 99% of the
+# amplitude at four points per wavelength; `:gaussian` is the explicit
+# nine-point stencil the reference implementation applies, which retains 19%
+# and carries no line solve. The two therefore differ in cost and in answer,
+# and the four constants above are calibrated per setting — so a row that
+# improves here is not yet an improvement until those are refitted.
+# reference/CALIBRATION.md carries the transfer functions.
+if want("smoother")
+    println("\n=== smoother (the Cook test filter) ===")
+    println("smoother   | Noh1 plat/exact  deficit | Noh3 plat/exact | Lax L1  contact | Shu train amp | WC peak")
+    hr()
+    for s in (:compact, :gaussian)
+        a = art(smoother=s)
+        n1 = m_noh(1; art=a); n3 = m_noh(3; art=a)
+        lx = m_lax(art=a);    sh = m_shu(art=a); wc = m_wc(art=a)
+        @printf("%-10s%s | %14.4f  %+6.0f%% | %15.4f | %7.1e %7.4f | %13.4f | %.4f\n",
+                s, mark(s, DEFAULTS.smoother), n1[1], 100n1[2], n3[1],
+                lx[1], lx[2], sh[1], wc[1])
+    end
+    println("\n--- the Noh CFL ceiling, per smoother ---")
+    println("smoother    cfl  | Noh1 plat/exact | Noh2 plat/exact | Noh3 plat/exact")
+    hr()
+    for s in (:compact, :gaussian), c in (0.4, 0.3, 0.2, 0.15)
+        a = art(smoother=s)
         n1 = m_noh(1; art=a, cfl=c); n2 = m_noh(2; art=a, cfl=c)
         n3 = m_noh(3; art=a, cfl=c)
         @printf("%-10s %-5.3g | %15.4f | %15.4f | %15.4f\n", s, c, n1[1], n2[1], n3[1])

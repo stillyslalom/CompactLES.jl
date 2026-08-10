@@ -63,6 +63,11 @@ end
 
 _arg_value(::AbstractString, text, key) = String(text)
 
+# Symbol-valued options (`beta_sensor`, `smoother`) are taken verbatim. The
+# admissible set lives with the option itself and is checked at `setup`, so a
+# typo is reported there against the real list rather than duplicated here.
+_arg_value(::Symbol, text, key) = Symbol(text)
+
 # Ahead of the numeric method because Bool <: Integer, and "on"/"off" is what a
 # flag reads like on a launch line.
 function _arg_value(::Bool, text, key)

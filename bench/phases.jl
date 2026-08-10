@@ -88,6 +88,12 @@ function budget(name, solver, Q)
     @printf("    %-20s %8.3f\n", "(sum of phases)", 1e3tot)
 end
 
+# The sensor smoother is the one phase control worth varying from the launch
+# line: it is the only setting that changes what `artificial` costs without
+# changing the case. `smoother=gaussian` drops the line solves that smooth the
+# sensors, one per active dimension per species.
+opt = script_args(ARGS, (smoother = :compact,))
+
 # tgv-like: 3-D periodic, single species, art off
 s1 = Solver(n_global=(64, 64, 64), L_domain=(2π, 2π, 2π), bcs=per3,
             transport=Transport(mu0=1e-3), art=ArtParams(enabled=false))
@@ -101,7 +107,7 @@ eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                     IdealSpecies{Float64}("heavy", 0.2, 1.09)])
 s2 = Solver(n_global=(512, 32, 1), L_domain=(1.0, 0.06, 1.0), eos=eos,
             bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-            art=ArtParams(enabled=true))
+            art=ArtParams(enabled=true, smoother=opt.smoother))
 Q2 = allocate_state(s2)
 initialize!(s2, Q2, (x, y, z) -> begin
     θ = tanh_blend(x, 0.5, 0.02)

@@ -109,3 +109,36 @@ function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64) where {T}
     CompactScheme{T}("Gaitonde–Visbal C8 filter", af, a0,
                      T[a1/2, a2/2, a3/2, a4/2], true, cl)
 end
+
+"""
+    gaussian_filter()
+
+Explicit nine-point Gaussian test filter, the smoother Cook's artificial
+properties assume and the one Miranda applies as `gbar`
+(`pyranda/parcop/stencils.f90`, `cgfs4`). The left-hand side is the identity,
+so this is a `CompactScheme` only in the sense that it reuses the same fill,
+fold and closure machinery; [`plan_direction`](@ref) detects the zero α and
+skips the line solve and its interface reduction entirely.
+
+The weights sum to exactly 1 over the common denominator 103680, so constants
+are reproduced without relying on cancellation. Each of the four closure rows
+is the interior stencil with its overhanging weights folded back onto the
+half-offset mirror (ghost j ↔ interior j), which preserves that unit sum at a
+closed edge; the same construction is what `fold_fill!` performs at a fold, so
+the two edge treatments agree.
+
+Contrast [`compact_filter`](@ref), which is a dealiasing filter for the
+conserved state rather than a test filter: at αf = 0.45 it retains 99% of the
+amplitude at four points per wavelength where this filter retains 19%. The
+measurement is in `reference/CALIBRATION.md`.
+"""
+function gaussian_filter(::Type{T}=Float64) where {T}
+    a = T(3565//10368); b = T(3091//12960); c = T(1997//25920)
+    d = T(149//12960);  e = T(107//103680)
+    lhs = (zero(T), one(T), zero(T))
+    cl = [ClosureRow{T}(lhs, T[a+b, b+c, c+d, d+e, e]),
+          ClosureRow{T}(lhs, T[b+c, a+d, b+e, c, d, e]),
+          ClosureRow{T}(lhs, T[c+d, b+e, a, b, c, d, e]),
+          ClosureRow{T}(lhs, T[d+e, c, b, a, b, c, d, e])]
+    CompactScheme{T}("explicit 9-point Gaussian", zero(T), a, T[b, c, d, e], true, cl)
+end

@@ -61,6 +61,7 @@ mutable struct LineSolver{T}
     F::TriFactor{T}
     v::Vector{T}          # spike from left coupling aL
     w::Vector{T}          # spike from right coupling cR
+    explicit::Bool        # identity LHS: no local solve, no interface stage
     hasred::Bool
     red::Any              # LU factorization of the reduced matrix, or nothing
     comm::MPI.Comm        # sub-communicator along the dimension
@@ -81,10 +82,17 @@ end
 substituted where this rank owns a closed global edge). `aL` is the coupling of
 local row 1 to the previous rank's last unknown, `cR` that of local row n to
 the next rank's first unknown (zero at closed edges).
+
+`explicit` asserts that the left-hand side is the identity, so that both the
+local solve and the interface stage are skipped. It must be derived from the
+scheme alone and never from this rank's edge status: the interface stage
+contains a collective, and a flag that some ranks set and others do not
+deadlocks rather than fails. `aL` and `cR` are exactly such rank-dependent
+quantities, which is why they are not consulted here.
 """
 function LineSolver(a::Vector{T}, b::Vector{T}, c::Vector{T},
                     aL::T, cR::T, comm::MPI.Comm, P::Int, p::Int,
-                    lines::Int; periodic::Bool) where {T}
+                    lines::Int; periodic::Bool, explicit::Bool=false) where {T}
     F = TriFactor(a, b, c)
     n = length(b)
     v = zeros(T, n)
@@ -97,7 +105,7 @@ function LineSolver(a::Vector{T}, b::Vector{T}, c::Vector{T},
         w[n] = cR
         solve_col!(w, F)
     end
-    hasred = (P > 1) || periodic
+    hasred = !explicit && ((P > 1) || periodic)
     red = nothing
     if hasred
         quad = T[v[1], v[n], w[1], w[n]]
@@ -122,7 +130,7 @@ function LineSolver(a::Vector{T}, b::Vector{T}, c::Vector{T},
         end
         red = lu!(R)
     end
-    LineSolver{T}(n, F, v, w, hasred, red, comm, P, p, lines,
+    LineSolver{T}(n, F, v, w, explicit, hasred, red, comm, P, p, lines,
                   zeros(T, 2, lines), zeros(T, 2, lines, max(P, 1)),
                   zeros(T, 2P, lines), zeros(T, lines), zeros(T, lines))
 end
@@ -134,6 +142,7 @@ Solve the (possibly distributed) tridiagonal system for every column of
 `B` (n × lines) in place. MPI collectives run from the serial section only.
 """
 function solve_lines!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where {T}
+    line_solver.explicit && return B   # identity LHS: the fill is already the answer
     n, L = size(B)
     @threaded n*L for l in 1:L
         solve_col!(view(B, :, l), line_solver.F)

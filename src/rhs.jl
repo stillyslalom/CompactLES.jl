@@ -14,7 +14,7 @@
 # diagonal (per solution parity σg: derivatives flip field parity, filters
 # preserve it). No node sits at r = 0 and no scale factor vanishes.
 
-mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,Src}
+mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,SP,Src}
     decomp::Decomp
     equations::Eq
     eos::E
@@ -31,6 +31,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,Src}
     bcs::BC
     deriv_plans::DP
     filter_plans::FP
+    smooth_plans::SP                        # sensor smoother (see ArtParams.smoother)
     pairbuf::Array{T,3}                     # paired-fold combo scratch
     pairout::Array{T,3}                     # paired-fold second-parity result
     cfl::T
@@ -142,6 +143,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     art.beta_sensor in (:strain, :gated_strain, :dilatation) ||
         error("art.beta_sensor must be :strain, :gated_strain or " *
               ":dilatation, got :$(art.beta_sensor)")
+    art.smoother in (:compact, :gaussian) ||
+        error("art.smoother must be :compact or :gaussian, got :$(art.smoother)")
     # Per-condition restrictions on geometry and EOS agreement (boundary.jl).
     for d in 1:3, side in 1:2
         validate_bc(bcs[d][side], metric, eos, d, side)
@@ -204,6 +207,11 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     end
     coord_shift = ntuple(d -> fold_lo_dim[d] ? h[d] / 2 : zero(T), 3)
     mkd(sch, d; kw...) = plan_direction(decomp, sch, d, h[d]; kw...)
+    # The sensor smoother stands in for Cook's Gaussian test filter. `:compact`
+    # reuses `filt`, which is what shipped before the option existed and keeps
+    # every plan identical; `:gaussian` is the explicit nine-point stencil the
+    # reference implementation uses, and carries no line solve.
+    smoo = art.smoother === :gaussian ? gaussian_filter(T) : filt
     equations = equations === nothing ? NavierStokes1T(eos) : equations
     equations isa EquationSet || error("equations must be an EquationSet")
     equations.n_species == nspecies(eos) ||
@@ -258,7 +266,13 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
               mkd(deriv, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing)))
         fp = (mkd(filt, d; lo_fold=(lo ? 1 : nothing), hi_fold=(hi ? 1 : nothing)),
               mkd(filt, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing)))
-        FoldSpec(d, lo, hi, pairspec(pdim, revdim), sigvel, sigflux, dp, fp)
+        # `:compact` aliases the filter plans rather than duplicating them.
+        # That is exactly what `smooth!` did before it had an operator of its
+        # own, so the default path keeps both its answer and its footprint.
+        sp = art.smoother === :compact ? fp :
+             (mkd(smoo, d; lo_fold=(lo ? 1 : nothing), hi_fold=(hi ? 1 : nothing)),
+              mkd(smoo, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing)))
+        FoldSpec(d, lo, hi, pairspec(pdim, revdim), sigvel, sigflux, dp, fp, sp)
     end
     folds = (nothing, nothing, nothing)
     if axis
@@ -283,15 +297,19 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                          mkd(deriv, d) : nothing, 3)
     filter_plans = ntuple(d -> decomp.active[d] && folds[d] === nothing ?
                          mkd(filt, d) : nothing, 3)
+    smooth_plans = art.smoother === :compact ? filter_plans :
+                   ntuple(d -> decomp.active[d] && folds[d] === nothing ?
+                          mkd(smoo, d) : nothing, 3)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
     bcs_t = ntuple(d -> (bcs[d][1], bcs[d][2]), 3)
     solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
                     typeof(stretch),typeof(folds),typeof(bcs_t),
-                    typeof(deriv_plans),typeof(filter_plans),typeof(sources)}(
+                    typeof(deriv_plans),typeof(filter_plans),typeof(smooth_plans),
+                    typeof(sources)}(
                   decomp, equations, eos, transport, art, metric, stretch, folds, sources,
                   Lt, orig, coord_shift, h,
                   bcs_t,
-                  deriv_plans, filter_plans,
+                  deriv_plans, filter_plans, smooth_plans,
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
                   T(cfl), filter_interval, control,
@@ -457,7 +475,7 @@ function deriv_along!(out, f, solver::Solver, d::Int, σf::Int)
     if fold === nothing
         apply_along!(out, solver.deriv_plans[d], f, solver.decomp)
     else
-        fold_apply!(out, f, solver, fold, σf; isfilter=false)
+        fold_apply!(out, f, solver, fold, σf, Val(:deriv))
     end
     return out
 end
@@ -468,7 +486,25 @@ function filt_along!(out, f, solver::Solver, d::Int, σf::Int)
     if fold === nothing
         apply_along!(out, solver.filter_plans[d], f, solver.decomp)
     else
-        fold_apply!(out, f, solver, fold, σf; isfilter=true)
+        fold_apply!(out, f, solver, fold, σf, Val(:filter))
+    end
+    return out
+end
+
+"""
+    smooth_along!(out, f, solver, d, σf)
+
+Sensor smoother of `f` along dimension `d` with antipodal sign `σf`. This is
+the Cook test filter, selected by `ArtParams.smoother`, and is a distinct
+operator from [`filt_along!`](@ref) even though the default setting makes the
+two coincide. Only the artificial-property sensors go through here.
+"""
+function smooth_along!(out, f, solver::Solver, d::Int, σf::Int)
+    fold = solver.folds[d]
+    if fold === nothing
+        apply_along!(out, solver.smooth_plans[d], f, solver.decomp)
+    else
+        fold_apply!(out, f, solver, fold, σf, Val(:smooth))
     end
     return out
 end

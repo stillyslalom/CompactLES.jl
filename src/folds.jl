@@ -57,7 +57,7 @@ end
 
 "Fold description for one dimension: which ends fold, the pairing (nothing
 for the axisymmetric self-paired case), component signs, and parity plans."
-mutable struct FoldSpec{P,D,F}
+mutable struct FoldSpec{P,D,F,S}
     dim::Int
     lo::Bool
     hi::Bool
@@ -66,10 +66,12 @@ mutable struct FoldSpec{P,D,F}
     sigflux::Vector{Int}                  # antipodal flux sign per conserved comp
     deriv_plans::D                         # derivative plans, σg = (+1, −1)
     filter_plans::F                        # filter plans,     σg = (+1, −1)
+    smooth_plans::S                        # sensor-smoother plans, σg = (+1, −1)
 end
 
 fold_dplan(fold::FoldSpec, σg::Int) = fold.deriv_plans[σg > 0 ? 1 : 2]
 fold_fplan(fold::FoldSpec, σg::Int) = fold.filter_plans[σg > 0 ? 1 : 2]
+fold_splan(fold::FoldSpec, σg::Int) = fold.smooth_plans[σg > 0 ? 1 : 2]
 
 # --- Halo mirror fill (generalizes the old axis_fill!) ----------------------
 
@@ -259,26 +261,33 @@ end
 
 # --- Folded operator application -------------------------------------------
 
-"""
-    fold_apply!(out, f, solver, fold, σ; isfilter)
+# The ghost parity σg is the field parity σ for a symmetric operator and its
+# negation for an antisymmetric one; the role selects both that and which plan
+# pair to draw from. `Val` keeps the choice static, since every call site fixes
+# it. The smoother pair is built like the filter pair even when its scheme is
+# explicit, where the two parities coincide numerically because an identity
+# left-hand side has no ghost coupling to fold onto the diagonal. They are kept
+# as separate plans rather than one shared twice, so that neither aliases the
+# other's line scratch.
+@inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:deriv})  = fold_dplan(fold, -σ)
+@inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:filter}) = fold_fplan(fold, σ)
+@inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:smooth}) = fold_splan(fold, σ)
 
-Apply the compact derivative or filter along the folded dimension of `fold` to
-field `f` (current halos required) with antipodal sign `σ`. Self-paired
-(axisymmetric) folds reduce to mirror fill plus one folded plan. Paired folds
-run the even/odd butterfly; the input `f` is left untouched (the combo lives
-in scratch `s.pairbuf`).
 """
-@inline function _fold_plan(fold::FoldSpec, σ::Int, isfilter::Bool)
-    σg = isfilter ? σ : -σ
-    return isfilter ? fold_fplan(fold, σg) : fold_dplan(fold, σg)
-end
+    fold_apply!(out, f, solver, fold, σ, role = Val(:deriv))
 
-function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int; isfilter::Bool=false)
+Apply the compact operator of `role` — `:deriv`, `:filter` or `:smooth` —
+along the folded dimension of `fold` to field `f` (current halos required)
+with antipodal sign `σ`. Self-paired (axisymmetric) folds reduce to mirror
+fill plus one folded plan. Paired folds run the even/odd butterfly; the input
+`f` is left untouched (the combo lives in scratch `s.pairbuf`).
+"""
+function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:deriv))
     decomp = solver.decomp
     d = fold.dim
     if fold.pair === nothing
         fold_fill!(f, decomp, d, fold.lo, fold.hi, σ)
-        apply_along!(out, _fold_plan(fold, σ, isfilter), f, decomp)
+        apply_along!(out, _fold_plan(fold, σ, role), f, decomp)
         return out
     end
     pair = fold.pair
@@ -292,9 +301,9 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int; isfilter::Bool=fal
         # σ, and for a θ-independent radial field the whole flux lands in o and
         # must fold as odd). So the e half folds with σ and the o half with −1.
         fold_fill!(w, decomp, d, fold.lo, fold.hi, σ)
-        apply_along!(out, _fold_plan(fold, σ, isfilter), w, decomp)
+        apply_along!(out, _fold_plan(fold, σ, role), w, decomp)
         fold_fill!(w, decomp, d, fold.lo, fold.hi, -1)
-        apply_along!(solver.pairout, _fold_plan(fold, -1, isfilter), w, decomp)
+        apply_along!(solver.pairout, _fold_plan(fold, -1, role), w, decomp)
         sd = pair.pdim != 0 ? pair.pdim : pair.revdim
         half = decomp.n_local[sd] ÷ 2
         Hp = decomp.n_halo_d[sd]
@@ -315,7 +324,7 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int; isfilter::Bool=fal
         # regardless of σ. (Writing −σ here silently works only for σ = +1.)
         σc = pair.keep_e ? σ : -1
         fold_fill!(w, decomp, d, fold.lo, fold.hi, σc)
-        apply_along!(out, _fold_plan(fold, σc, isfilter), w, decomp)
+        apply_along!(out, _fold_plan(fold, σc, role), w, decomp)
     end
     pair_backward!(out, solver, fold, σ)
     return out

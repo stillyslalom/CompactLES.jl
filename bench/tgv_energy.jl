@@ -185,7 +185,7 @@ end
 
 function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                       filter_interval=1, sample=100, progress=0,
-                      nmax=typemax(Int))
+                      nmax=typemax(Int), smoother=:compact)
     γ = 1.4
     c0 = 10.0                      # Ma ≈ 0.1 at |u|max = 1
     p0 = c0^2 / γ
@@ -197,7 +197,8 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                        rho=1.0))
     solver, Q = setup(prob, Numerics(n_global=(N, N, N), cfl=0.6,
                                      filter_interval=filter_interval,
-                                     art=ArtParams(enabled=art_on, C_mu=C_mu)))
+                                     art=ArtParams(enabled=art_on, C_mu=C_mu,
+                                                   smoother=smoother)))
     cellvol = prod(solver.h)
     ts = Float64[]
     kes = Float64[]
@@ -229,7 +230,7 @@ end
 
 const DEFAULTS = (N = 32, tfinal = 10.0, configs = "off:1,on:1",
                   progress = 0, sample = 100, nmax = typemax(Int),
-                  window = 250)
+                  window = 250, smoother = :compact)
 
 function parse_configs(spec)
     configs = NamedTuple{(:art, :filt, :C_mu),Tuple{Bool,Int,Float64}}[]
@@ -264,7 +265,8 @@ function main()
             try
                 result = taylor_green(N, cfg.art; tfinal=tfinal, C_mu=cfg.C_mu,
                                       filter_interval=cfg.filt, sample=sample,
-                                      progress=progress, nmax=nmax)
+                                      progress=progress, nmax=nmax,
+                                      smoother=opt.smoother)
             catch err
                 # Collective by construction, so every rank lands here together
                 # and the sweep stays in step. See the header note.

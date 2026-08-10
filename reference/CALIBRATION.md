@@ -20,9 +20,10 @@ ArtParams(C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.01)
 5. [C_D — the species diffusivity](#c_d--the-species-diffusivity)
 6. [The β\* sensor — strain, gated, or dilatation](#the-beta-sensor--strain-or-dilatation)
 7. [CFL, which dominates all four](#cfl-which-dominates-all-four)
-8. [Grid convergence](#grid-convergence)
-9. [Geometry limits](#geometry-limits)
-10. [Recommendations](#recommendations)
+8. [Measured against the reference implementation](#measured-against-the-reference-implementation)
+9. [Grid convergence](#grid-convergence)
+10. [Geometry limits](#geometry-limits)
+11. [Recommendations](#recommendations)
 
 ## How to read the tables
 
@@ -642,6 +643,59 @@ also accounts for the one setting that moved a ceiling: `:gated_strain` at
 −90…−212, where the ungated sensor holds i = 1 at −1.1e4 to −1.2e4
 indefinitely. Its gain is at the fold rather than at the shock.
 
+The half of that conclusion exonerating the artificial properties does not
+survive the smoother measurement. Changing the sensor smoother alone, with every
+constant held, moves the ν = 3 ceiling from 0.15 to 0.4 and the ν = 2 ceiling
+from 0.15 to 0.2. The artificial-property path does set the restriction at the
+fold, through the *continuity* of β\* rather than its magnitude, which is what
+the saturation argument above measured and correctly ruled out. The subsection
+below carries the measurement. The fold closure itself remains untested.
+
+### The sensor is intermittent at the damage site
+
+The readings above establish that β\* is present at the damaged cell on average.
+Sampling the ν = 3 origin every 25 steps rather than every 1000 shows that the
+average conceals an alternation. Both smoothers at `cfl = 0.15`, where both runs
+complete, reporting `b*@e/b*max`:
+
+```
+step        150    175    200    225    250    275    300    325    350    375    400
+compact    0.393  0.004  0.302  0.007  0.305  0.009  0.300  0.011  0.306  0.007  0.213
+gaussian   0.103  0.336  0.118  0.429  0.415  0.120  0.143  0.131  0.108  0.375  0.130
+```
+
+Under the shipped smoother the cell being damaged carries about 30% of the
+domain maximum on one sample and under 1% on the next. Under the explicit
+Gaussian of
+[the reference comparison](#measured-against-the-reference-implementation) it
+never falls below 0.100. `reach/h` is 6–11 cells for both, so reach is again not
+the discriminating quantity, and `n_e<0` holds at 7–9 for both, so the
+negative-internal-energy condition below is independent of this axis.
+
+The same signature precedes the failure at `cfl = 0.3`, where `:compact` reads
+0.002, 0.045, 0.251, 0.025, 0.270 before losing density at step 172 while
+`:gaussian` completes 400 steps with a floor near 0.09.
+
+What this indicates is sensor roughness rather than sensor magnitude. The
+undivided δ⁴ applied to |S| produces a spiky field; the damaged cell drifts
+outward over the run (i = 30 → 39) and, under a smoother that is close to the
+identity across the resolved band, drifts alternately onto spikes and into
+troughs. A nine-point Gaussian spreads each spike widely enough that no trough
+remains to fall into.
+
+**This neither overturns the ν = 1 readings above nor confirms them.** That
+table samples every 1000 steps, which cannot resolve an alternation of this
+period, so its steady 0.14–0.21 is consistent both with a genuinely steady
+sensor and with the average of an alternation. Re-running the ν = 1 probe at
+`every = 25` is the cheap way to settle it and has not been done.
+
+The consequence for the eighth-derivative detector is a sequencing one. A
+sharper high-pass produces narrower spikes, so on its own it would be expected
+to worsen intermittency; the reference implementation pairs it with the Gaussian
+and never with a near-identity filter. A measurement of the detector must
+therefore be taken on top of the Gaussian smoother, or it will reject a
+refinement for a reason belonging to the smoother.
+
 ### Negative internal energy in runs that pass
 
 The `n_e<0` column above is not zero in any sampled configuration, including
@@ -682,7 +736,175 @@ check fires. The latter case requires a lower initial CFL.
 
 **Recommendation:** use `cfl = 0.5` for smooth and moderately compressible flow,
 `cfl = 0.3` with shocks, and `StepControl(retries = 4)` for automatic recovery.
-Use `cfl = 0.15` for converging geometry when rollback is disabled.
+For converging geometry with rollback disabled, the ceiling is now set by
+`ArtParams.smoother`: under the default `:gaussian` it is 0.4 at the spherical
+origin and 0.2 at the cylindrical axis, against 0.15 for both under `:compact`.
+The tables in this section were measured under `:compact` and are retained as
+the record of that setting.
+
+## Measured against the reference implementation
+
+Miranda's Fortran kernels, carried by Pyranda in `pyranda/parcop/`, implement
+the same Cook artificial-property method. Reading them against `artificial.jl`
+identifies four differences that bear on the constants calibrated above. None
+of the four has been measured here; this section records what the reference
+does and what is analytically established about the gap, so that the
+investigation does not start from source archaeology a second time.
+
+### The ringing detector is an eighth derivative, not a fourth difference
+
+`ring()` in `parcop/operators.f90` dispatches to `d8x/d8y/d8z`, a full compact
+operator (`c10d8`, `parcop/stencils.f90`) with a pentadiagonal left-hand side,
+a nine-point right-hand side, and its own symmetric and antisymmetric boundary
+closures. `artificial.jl` instead uses the undivided fourth difference
+δ⁴ = (1, −4, 6, −4, 1), following Cook (2007) literally.
+
+The fields differ too. Miranda builds μ\* from `ringV(u, v, w)`, the ring of
+each velocity *component* along each direction reduced by `MAX` over the nine
+combinations, and β\* from `ring(∇·u)`. This code builds both from δ⁴|S|
+summed over directions.
+
+Two consequences follow analytically. An eighth derivative has negligible
+response below the grid scale, whereas a fourth difference of |S| responds to
+smooth curvature in the strain field, which is the behaviour
+[the ceiling measurement](#where-the-restriction-originates) recorded when it
+found β\* reaching three to five times further ahead of the front than the
+damage extends. And `MAX` over directions does not accumulate with dimension
+where `Σ_d` does.
+
+Note also that Miranda's default β\* is `gbar(|ring(∇·u)| ρ)` with **no**
+compression switch. The `:dilatation` variant rejected above is a dilatation
+sensor *plus* the switch. Dilatation sensor without the switch, which is what
+the reference actually ships, has not been tried.
+
+### The test filter is an explicit Gaussian, not a compact-filter pass
+
+Cook's sensor smoothing is `gbar` in Miranda, which resolves to `cgfs4`
+(`parcop/stencils.f90`): an explicit nine-point symmetric stencil with
+`nol = 0` and `implicit_op = .false.`, weights 3565/10368, 3091/12960,
+1997/25920, 149/12960 and 107/103680. Over the common denominator 103680 these
+sum to exactly 1, so the filter preserves constants without relying on
+cancellation, and at boundaries the overhanging weight is folded onto the
+mirror point, which preserves the unit sum there as well. There is no linear
+solve and no interface reduction; the operator needs a halo of four.
+
+`smooth!` in `artificial.jl` substitutes one pass of `compact_filter(0.45)`.
+The two are not interchangeable. Evaluating both transfer functions at
+modified wavenumber k:
+
+```
+k/pi   Gaitonde-Visbal 0.45   Miranda 9-point Gaussian
+0.125            1.000000                     0.902300
+0.25             0.999972                     0.662818
+0.375            0.999325                     0.396188
+0.5              0.993750                     0.191821
+0.625            0.965155                     0.073590
+0.75             0.854020                     0.020747
+0.875            0.491876                     0.003309
+1.0              0.000000                     0.000000
+```
+
+As a Cook test filter the shipped smoother is close to the identity over the
+whole resolved band, and its cost is a distributed line solve per active
+dimension per sensor — `n_species` of them per RHS evaluation for the species
+sensors. That cost is the ~31% of the multicomponent right-hand side recorded
+in the known limitations. The explicit Gaussian would remove those solves and
+their `Allgather`s while smoothing considerably more, so the two effects move
+together rather than trading off.
+
+`ArtParams.smoother` selects between them, and the converging cases answer the
+question the transfer functions raise. Highest CFL reaching `t_final` with a
+correct plateau, ladder extended until both settings fail:
+
+```
+Noh geometry              :compact   :gaussian
+nu = 1  planar wall          0.2        0.2
+nu = 2  cylindrical axis     0.15       0.2
+nu = 3  spherical origin     0.15       0.4
+```
+
+Both fail at 0.5 everywhere, so 0.4 is measured rather than a table edge. The
+origin, recorded under [Geometry limits](#geometry-limits) as the least
+forgiving fold, becomes the most forgiving one. Cost moves the same way: on the
+two-species tube of `bench/phases.jl` the `artificial` phase falls from 1.360 ms
+to 0.971 ms, 31.8% to 24.8% of the right-hand side, against a run-to-run spread
+of about 1.3% over three `:compact` readings.
+
+The mechanism is
+[sensor intermittency](#the-sensor-is-intermittent-at-the-damage-site), measured
+rather than inferred. Accuracy is mixed and small by comparison, with wall
+heating the one clear regression: the ν = 1 deficit moves +58% → +64%, while
+plateaux and the Shu–Osher train move in the fourth digit.
+
+Two refit diagnostics were run against that regression, and both are negative
+in the useful sense of closing a question.
+
+**κ\* cannot buy the wall heating back.** Sweeping `C_kappa` under each smoother,
+ν = 1 wall deficit:
+
+```
+C_kappa      0      0.0025    0.01*     0.04     0.16
+compact    +64%     +61%      +58%      +57%     +70%
+gaussian   +65%     +64%      +64%      +68%     +91%
+```
+
+The lever inverts. Under `:compact` the trough is at 0.01–0.04, as recorded
+under [C_kappa](#c_kappa--the-conductivity); under `:gaussian` the trough is
++64% and raising the constant makes wall heating worse, sooner and more steeply.
+This follows from the same mechanism: the Gaussian widens the κ\* footprint and
+lowers its peak, so added conductivity is spread across a region instead of
+concentrated in the wall cell where the entropy error is deposited. The
+regression is a property of the smoother, not a mis-set constant. Incidentally,
+at `C_kappa = 0` the ν = 3 case fails under `:compact` and completes under
+`:gaussian`, and the ν = 3 plateau is better under `:gaussian` across the whole
+sweep, 0.9745–0.9822 against 0.9728–0.9796.
+
+**Three dimensions are neutral.** Taylor–Green at 64³ to t = 10, dissipation
+split at the peak:
+
+```
+smoother   t_peak   molecular   mu*     beta*   filter
+compact     8.39      32.6%     4.0%     0.0%   63.5%
+gaussian    8.45      33.8%     4.5%     0.0%   61.6%
+```
+
+The channel that `C_mu` controls moves from 4.0% to 4.5% of the sink and the
+filter still dominates, so nothing here argues that `C_mu` needs refitting.
+A full `C_mu` sweep under `:gaussian` has not been run; this is the weaker
+statement that the 3-D budget does not shift enough to demand one.
+
+### The conservative filter is normalized by a filtered cell volume
+
+`filter` in `parcop/operators.f90` treats non-Cartesian coordinates by
+filtering the volume-weighted field and dividing by a cell volume that has
+been passed through **the same filter once at setup** (`CellVolG`, `CellVolS`
+in `parcop/mesh.f90`). The filtered field then reproduces a constant exactly
+on any non-uniform metric, and the integrated quantity is preserved. The
+radial parity flips in the process, because the cylindrical cell volume is
+proportional to r and therefore odd across the axis — the same algebra
+`sigflux` encodes for the flux products in `rhs.jl`.
+
+`filter_state!` filters the conserved components unweighted. On a uniform
+Cartesian grid the two agree identically, which is why nothing in the
+Taylor–Green numbers above would show it. On cylindrical, spherical or
+stretched grids the filter is not conservative, and the filter supplies 37% of
+the energy sink at 128³.
+
+### The CFL rate is normalized differently
+
+Miranda forms `Σ_d |u_d|/Δ_d` for advection and adds `|c|/min_d(Δ_d)` once for
+the acoustic part, then takes the diffusive limits as separate minima with
+their own coefficients (0.1 and 0.2). `max_rate` sums `(|u_d| + c)/h_d` over
+active dimensions and folds the diffusive rate into the same sum.
+
+The sound speed is therefore counted once there and once per active dimension
+here. On an isotropic three-dimensional grid the rate computed here is up to
+three times larger for the same state, so `cfl = 0.15` corresponds to a step
+comparable to `cfl ≈ 0.4` under the reference convention. This matters for
+comparing the numbers in this document against the literature; it does **not**
+explain away [the ceiling](#cfl-which-dominates-all-four), because the cases
+that establish it are one- and two-dimensional converging geometries, where
+the two conventions largely agree.
 
 ## Grid convergence
 
@@ -737,7 +959,8 @@ cylindrical axis accepts the cold start at 16× compression.
 | `C_kappa` | 0.01 | yes | 0.02–0.04 measurably reduces wall heating; avoid zero. |
 | `C_D` | 0.01 | yes | The compact filter dominates interface broadening, so sensitivity to `C_D` is weak. |
 | `beta_sensor` | `:strain` | yes | `:gated_strain` raises the cylindrical Noh CFL ceiling from 0.15 to 0.2 for one pointwise pass and is otherwise a wash; `:dilatation` buys 0.25% of the Shu–Osher wave train and loses both converging Noh geometries at the fold. |
-| `cfl` | 0.5 | **no** | Use 0.3 with shocks and `StepControl(retries = 4)` for recovery. |
+| `smoother` | `:gaussian` | yes | Changed from `:compact` in August 2026. Raises the spherical-origin CFL ceiling 0.15 → 0.4 and the cylindrical 0.15 → 0.2, cuts the sensor phase 29%, and improves every Noh plateau and pre-shock L1. Costs wall heating at ν = 1 (+58 → +64%) and ν = 2 (+41 → +56%), improves it at ν = 3 (+31 → +27%), and moves the two stored cases by 1–3% of their L1. `C_kappa` cannot recover the wall heating. |
+| `cfl` | 0.5 | **no** | Use 0.3 with shocks and `StepControl(retries = 4)` for recovery. Converging geometry now tolerates 0.4 (spherical) and 0.2 (cylindrical) under the default smoother. |
 
 Remaining items, in approximate priority order:
 
@@ -751,9 +974,17 @@ Remaining items, in approximate priority order:
    the sensor stencil was the standing hypothesis and is now ruled out: β\*
    already reaches three to five times further ahead of the front than the
    damage extends, and sits at or near its own domain maximum on the cell that
-   fails. The fold closure itself remains untested, that is, whether the
-   third-order closure at the axis and origin sets the step size there rather
-   than the artificial properties.
+   fails. **Largely addressed by `smoother = :gaussian`**, which moves the ν = 3
+   ceiling 0.15 → 0.4 and the ν = 2 ceiling 0.15 → 0.2 while making the sensor
+   phase cheaper; the mechanism is
+   [sensor intermittency](#the-sensor-is-intermittent-at-the-damage-site) and the
+   remaining work is the refit under item 6 below rather than a further search.
+   ν = 1 is unmoved at 0.2, and the fold closure is still untested, that is,
+   whether the third-order closure at the axis and origin sets the step size
+   there. The eighth-derivative detector of
+   [the reference comparison](#measured-against-the-reference-implementation)
+   remains open and must be measured on top of the Gaussian, never against the
+   compact smoother.
 2. Make the κ\* construction non-singular as T_ion → 0. It is an EOS dispatch
    point as of the Phase 1 work, so a tabular model can already supply its own;
    the gas models still divide by the temperature.
@@ -767,3 +998,20 @@ Remaining items, in approximate priority order:
    `compact_filter(0.45)` every step.
 5. Determine why the spherical-origin fold is less tolerant of
    under-resolved data than the cylindrical axis fold.
+6. Decide whether `smoother = :gaussian` becomes the default. The measurements
+   are in
+   [the reference comparison](#measured-against-the-reference-implementation):
+   it buys a 0.15 → 0.4 ceiling at the spherical origin, 0.15 → 0.2 at the
+   cylindrical axis, and a 29% cheaper sensor phase, and it costs +57 → +64% of
+   ν = 1 wall heating, which `C_kappa` has been measured unable to recover.
+   Taylor–Green is neutral. What remains open is a `C_mu` sweep under the new
+   smoother and whether the wall-heating cost is acceptable against the
+   converging-geometry gain, which is a judgement about the intended workload
+   rather than a measurement. `C_beta` and `C_D` were not swept: the former has
+   a broad optimum and an upper bound that is a stability bound which has just
+   moved favourably, the latter is documented as weakly sensitive because the
+   filter dominates interface broadening.
+7. Make `filter_state!` conservative on non-Cartesian metrics, by the
+   filtered-cell-volume normalization recorded in the same section. Uniform
+   Cartesian results are unaffected by construction, so this is measurable
+   against the converging cases alone.

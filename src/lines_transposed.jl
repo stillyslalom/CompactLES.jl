@@ -20,6 +20,7 @@ end
 
 "Row-sweep Thomas over B (lines × n), vectorized across lines."
 function solve_lines_t!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where {T}
+    line_solver.explicit && return B   # identity LHS: the fill is already the answer
     L, n = size(B)
     F = line_solver.F
     @threaded n*L for rng in collect(_line_chunks(L))

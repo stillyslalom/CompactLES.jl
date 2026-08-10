@@ -40,6 +40,17 @@ Cook-style artificial-property controls.
   `:dilatation` additionally rebuilds the sensor from ∇·u, for one further
   smoothing pass per RHS evaluation (`dilatation_beta!`). The measured
   differences are in `reference/CALIBRATION.md`.
+- `smoother`: which operator stands in for Cook's Gaussian test filter in
+  [`smooth!`](@ref). `:gaussian` (default) is [`gaussian_filter`](@ref), the
+  explicit nine-point stencil, which carries no line solve and no interface
+  collective. `:compact` reuses `Numerics.filt` and is what shipped before this
+  option existed; it retains 99% of the amplitude at four points per wavelength
+  where the Gaussian retains 19%, which leaves the β\\* field rough enough to
+  drop out intermittently at a symmetry cell. The default was changed on that
+  measurement: it raises the spherical-origin CFL ceiling from 0.15 to 0.4 and
+  the cylindrical from 0.15 to 0.2, and makes the sensor phase 29% cheaper, at
+  the cost of about seven points of planar wall heating. The four constants
+  above are calibrated per setting. All of it is in `reference/CALIBRATION.md`.
 
 The coefficients are dimensionless numerical regularization parameters, not
 material properties. Their useful values depend on resolution, flow regime,
@@ -54,6 +65,7 @@ Base.@kwdef struct ArtParams{T}
     C_kappa::T = 0.01
     C_D::T     = 0.01
     beta_sensor::Symbol = :strain
+    smoother::Symbol = :gaussian
 end
 
 const D4 = (1.0, -4.0, 6.0, -4.0, 1.0)   # offsets −2:2
@@ -93,8 +105,13 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false)
     return out
 end
 
-"One directional compact-filter pass per active dimension as a
-Gaussian-filter proxy (even-parity axis fill along r when applicable)."
+"""
+    smooth!(f, solver)
+
+One directional smoother pass per active dimension, standing in for Cook's
+Gaussian test filter (even-parity axis fill along r when applicable). Which
+operator runs is `ArtParams.smoother`; see [`smooth_along!`](@ref).
+"""
 function smooth!(f, solver)
     for d in 1:3
         solver.decomp.active[d] || continue
@@ -104,7 +121,7 @@ function smooth!(f, solver)
         # three times the traffic it needs in a 3-D run, on a routine that
         # runs once per sensor per species per RHS.
         exchange_dim!(f, solver.decomp, d)
-        filt_along!(solver.tmp_a, f, solver, d, 1)
+        smooth_along!(solver.tmp_a, f, solver, d, 1)
         copy_interior!(f, solver.tmp_a, solver.decomp)
     end
     return f
@@ -268,9 +285,14 @@ function compute_artificial!(solver, Q)
     nx, ny, nz = decomp.n_local
     grad_u = solver.grad_u
     # The coefficients are read into locals rather than off `art` inside the
-    # loops. `beta_sensor` is a Symbol, so ArtParams is not an isbits type, and
-    # a threaded closure capturing the struct boxes it once per region — 768 B
-    # per RHS call when this was written the obvious way.
+    # loops. A threaded closure that captures the struct allocates once per
+    # region in proportion to the closure's size: 768 B per RHS call when this
+    # was written the obvious way. The driver is that size, not `beta_sensor`
+    # making ArtParams non-isbits, since an isbits struct of the same shape
+    # measures the same +128 B per region when captured. Unpacking is therefore
+    # the fix, and a further ArtParams field costs nothing so long as no loop
+    # closes over the struct. A field consulted *inside* a loop is the case to
+    # avoid: keep the test at a function barrier, as `beta_sensor` is below.
     C_mu, C_beta = art.C_mu, art.C_beta
     C_kappa, C_D = art.C_kappa, art.C_D
 

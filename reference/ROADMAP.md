@@ -70,7 +70,76 @@ systems.
 Pyranda also provides a reference implementation because it carries Miranda's
 Fortran kernels in `pyranda/parcop/`, including operators Pyranda itself does
 not expose. The AMR level-transfer analysis derived from those sources now
-lives in `reference/AMR_GPU.md`.
+lives in `reference/AMR_GPU.md`; a reading of the artificial-property and
+filter path against `artificial.jl` is in
+`reference/CALIBRATION.md`, and of the immersed-boundary method in
+`reference/IMMERSED.md`.
+
+Three structural comparisons came out of that reading and need no action.
+
+- **The distributed compact solve is the same algorithm.** Miranda factorizes
+  the local banded operator, solves for the influence of the interface
+  unknowns, gathers those blocks and factorizes a block-tridiagonal interface
+  system once at setup; each application is one `Allgather` of end values plus
+  a correction. `LineSolver` does the same. Miranda additionally offers a
+  gather-solve-scatter mode (`directcom = 2`) for the case where the
+  `Allgather` dominates, which is the shape to reach for if the interface
+  solve ever appears in a scaling curve.
+- **Symmetry is handled by equivalent means.** Miranda instantiates a
+  symmetric and an antisymmetric operator per direction and folds parity into
+  the coefficient tables at setup, then propagates a parity multiplier through
+  products. The fold plans plus `sigflux` are the same algebra.
+- **The freestream claim above holds against the source.** Miranda's spherical
+  metric sources use analytic `1/tan θ` and `1/sin θ`, so the discrete
+  redefinition of `cot_over_r` that makes freestream preservation exact is
+  genuinely beyond what the reference does. Its r = 0 is an ordinary reflective
+  symmetry plane, not a half-offset antipodal fold.
+
+#### Work arising from the source comparison
+
+Closed by the August 2026 pass:
+
+- **The sensor smoother.** Cook's Gaussian test filter is an explicit
+  nine-point stencil in the reference, not a compact-filter pass;
+  `ArtParams.smoother` now offers both, the mechanism and the measurements are
+  in `reference/CALIBRATION.md`, and the default is settled there.
+- **The immersed-boundary account** in `reference/IMMERSED.md`, corrected
+  against `pyrandaIBM.py`.
+- **CFL normalization.** The reference counts the sound speed once against the
+  minimum spacing where `max_rate` counts it per active dimension. Documented
+  in `reference/CALIBRATION.md`; deliberately *not* changed, because it would
+  silently rescale `cfl` for every existing script.
+
+Open, in rough order of expected value:
+
+1. **The eighth-derivative detector.** `ring()` is a compact d8 with a
+   pentadiagonal left-hand side, against the undivided δ⁴ used here; measured
+   selectivity is 569× at eight points per wavelength. It must be measured on
+   top of `smoother = :gaussian` and never against the compact smoother, for
+   the sequencing reason recorded in `reference/CALIBRATION.md`. Needs a
+   pentadiagonal-LHS scheme, so it also exercises `banded.jl` rather than
+   `tridiag.jl`.
+2. **Conservative filtering on non-Cartesian metrics.** The reference filters
+   the volume-weighted field and divides by a cell volume passed through the
+   same filter once at setup, which reproduces constants exactly on a
+   non-uniform metric; `filter_state!` filters the conserved components
+   unweighted. Uniform Cartesian results are unaffected by construction, so the
+   measurement is the converging cases plus a conservation-defect probe.
+3. **A `C_mu` sweep under the adopted smoother.** Taylor–Green at 64³ shows the
+   μ\* channel moving 4.0% → 4.5% of the sink, which does not demand a refit but
+   does not rule one out.
+4. **Directional artificial bulk viscosity**, with the per-direction diffusive
+   timestep limit that goes with it. **Blocked**: no anisotropic or strongly
+   stretched case exists in the validation battery, so measuring it against the
+   present cases would produce a null result that means nothing. Build the case
+   first.
+5. **Anchored-difference closure rows.** The reference writes boundary rows as
+   differences from the anchor point so a constant is annihilated exactly in
+   floating point rather than by cancellation. **Gated** on measuring the
+   present residual first; if it is 1e-16 times the field scale the change is
+   cosmetic and should be recorded as such rather than made.
+6. **Minor:** `bench/phases.jl` still reports "24 compact line-solves per RHS"
+   under `smoother = :gaussian`, where the sensor solves no longer run.
 
 **Capabilities absent from CompactLES:** a DSL for defining a new PDE system
 in ten lines without touching the solver; immersed boundaries, which provide
@@ -517,6 +586,13 @@ guidance for one geometry only. That leaves:
    above settle, because it touches every file and rebasing physics changes
    across it is the expensive order. Subsequent stages follow
    `reference/AMR_GPU.md`.
+
+The open items from the source comparison
+([work arising](#work-arising-from-the-source-comparison)) sit alongside these
+rather than inside the ordering: the detector is the one with measured evidence
+behind it and is worth pulling whenever the converging-geometry work is active,
+while the rest are either blocked on a missing case or gated on a measurement
+that has not been taken.
 
 Two items sit outside the ordering because they are independent of everything
 above and pullable on demand: laser ray tracing (Phase 2.7), if a specific

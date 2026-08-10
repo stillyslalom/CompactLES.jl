@@ -91,9 +91,18 @@ function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
     clo = [row.rhs .* scale for row in scheme.closures]
     chi = [row.rhs .* (scale * sgn) for row in scheme.closures]
 
+    # An identity left-hand side (α = 0 and every closure row diagonal) makes
+    # the fill the answer, so the line solve and its interface stage are both
+    # skipped. This is read off the scheme and nothing else: the interface
+    # stage carries a collective, and a flag derived from per-rank edge status
+    # would deadlock rather than fail. `gaussian_filter` is the case in hand.
+    explicit = iszero(α) && all(row -> iszero(row.lhs[1]) && isone(row.lhs[2]) &&
+                                       iszero(row.lhs[3]), scheme.closures)
+
     lines = prod(decomp.n_local[k] for k in 1:3 if k != dim)
     line_solver = LineSolver(a, b, c, aL, cR, decomp.sub[dim], decomp.sub_size[dim],
-                    decomp.sub_rank[dim], lines; periodic=decomp.periodic[dim])
+                    decomp.sub_rank[dim], lines; periodic=decomp.periodic[dim],
+                    explicit=explicit)
     tr = dim > 1
     DirPlan{T}(dim, n, lines, tr, scheme, line_solver, lo_closed, hi_closed,
                scheme.a0, ci, clo, chi,

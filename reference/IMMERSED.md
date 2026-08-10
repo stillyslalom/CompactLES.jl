@@ -84,19 +84,41 @@ boundary in this code.
 
 ## In-family precedent
 
-Pyranda ships a level-set immersed-boundary method (`pyranda/pyrandaIBM.py`):
-the body is a signed distance function, the wall condition is imposed by
-resetting the velocity in the solid region (with a smeared transition), and
-scalars are extrapolated into the solid along level-set normals; a wall-model
-variant exists. This is
-the state-reset end of the design above, in the same numerics family, which
-is the strongest available evidence the approach coexists with compact
+Pyranda ships a level-set immersed-boundary method (`pyranda/pyrandaIBM.py`).
+The account below is from the source; an earlier version of this section was
+from memory and is corrected in two places, marked as such.
+
+The body is a signed distance function φ, positive in the fluid, and the
+exposed operations are `ibmS` for a scalar, `ibmV` for a slip velocity and
+`ibmWall` for a no-slip one. All three route through `smooth_terrain`, which is
+Aslam-style constant extrapolation run as pseudo-time marching: two iterations
+(`immersed_iter = 2`) of `val += 0.5 · GridLen · (∇val · n̂)`, where the
+coefficient is `immersed_CFL` and n̂ = ∇φ is supplied by the caller. Each
+iteration is applied only where φ ≤ ε, and each is followed by a Gaussian
+filter pass whose result is likewise kept only inside the body. The gradient is
+the solver's own compact derivative rather than a local upwind difference, and
+the filter is what stabilizes the sweep.
+
+The velocity conditions add a reconstruction through the zero level. Within a
+band of width `GridLen · immersed_EPS`, that is a tenth of a cell, the normal
+component is removed outright; outside it the ratio |v_n|/φ is formed, carried
+inward by the same `smooth_terrain`, and multiplied by φ to restore a linear
+normal profile across the interface. `ibmV` projects onto ∇φ and `ibmWall` onto
+the velocity direction itself. An optional `phivar` argument subtracts and
+re-adds an interface velocity, which is the hook a moving body would use.
+
+This is the state-reset end of the design above, in the same numerics family,
+which is the strongest available evidence the approach coexists with compact
 operators, the filter, and artificial properties.
 
-As with the AMR archaeology, the account above is from memory of the source
-and must be verified against `pyrandaIBM.py` before Stage 3 fixes the
-extrapolation details — primary-source reading paid for itself once already
-(`reference/HISTORY.md`, adaptivity groundwork). Record findings here.
+**First correction: there is no wall model.** No `ibmWM`, and no wall model
+under any name, exists anywhere in public Pyranda. The deferral in
+`ROADMAP.md` stands on its own merits, but with no precedent behind it.
+
+**Second correction: the scalar and velocity paths are the same routine.** The
+earlier account separated velocity reset from scalar extrapolation. Both are
+`smooth_terrain`; the velocity entry points differ only in the normal-component
+reconstruction they wrap around it.
 
 ## Design
 
@@ -248,16 +270,17 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
   operators: locality and monotonicity are wanted here, spectral resolution is
   not). One halo exchange per sweep;
   cost is per-step but pointwise-cheap and confined to a band around the
-  body.
+  body. Pyranda takes the opposite choice on both counts — two sweeps, the
+  compact gradient, and a filter pass in place of upwinding
+  ([In-family precedent](#in-family-precedent)) — so if the upwind sweep proves
+  expensive or fragile, that combination is the tested alternative.
 - **Tangential-velocity fidelity for `SlipIB`** through the same
   extrapolation of u_t, if Stage 2 shows the algebraic target dragging the
   outer flow.
-- Verify the Pyranda `pyrandaIBM.py` account (see
-  [In-family precedent](#in-family-precedent)) before fixing conventions,
-  and record the findings here.
-- Wall models (Pyranda's `ibmWM` shows the shape) remain out of scope, per
-  the wall-treatment deferral in `ROADMAP.md`; the extrapolation machinery
-  built here is where one would attach.
+- Wall models remain out of scope, per the wall-treatment deferral in
+  `ROADMAP.md`; the extrapolation machinery built here is where one would
+  attach. There is no in-family precedent to copy, contrary to an earlier note
+  here ([In-family precedent](#in-family-precedent)).
 
 ## Stage 4 — moving bodies
 
@@ -317,8 +340,12 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
    force bookkeeping does not see. Stage 2's conservation-defect measurement
    covers it; if significant, the fix is including the filter's χ-region
    delta in the same bookkeeping, not exempting the region from filtering.
-5. **The Pyranda account is from memory** until the Stage 3 verification
-   task reads the source.
+5. **The in-family precedent is state reset with extrapolation, not a graded
+   blend.** The source has now been read
+   ([In-family precedent](#in-family-precedent)), and it supports the family
+   working beside compact operators and the filter. It says nothing about the
+   η parameterization, which is this design's own and remains unvalidated
+   until Stage 2 measures it.
 6. **`compute_dt` blind spot**: velocity inside the body is imposed ≈ 0
    *after* stages, but mid-stage the RHS can transiently accelerate solid
    cells; the CFL sweep sees the post-imposition state only. Expected
@@ -338,5 +365,6 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
 - Fedkiw, Aslam, Merriman & Osher (1999), J. Comput. Phys. — ghost-fluid
   state construction.
 - Aslam (2004), J. Comput. Phys. — PDE-based constant/linear extrapolation.
-- `pyranda/pyrandaIBM.py` — in-family level-set immersed-boundary method
-  (verify per Stage 3).
+- `pyranda/pyrandaIBM.py` — in-family level-set immersed-boundary method;
+  read against this document, findings under
+  [In-family precedent](#in-family-precedent).

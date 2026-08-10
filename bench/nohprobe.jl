@@ -46,6 +46,7 @@
 #   julia --project=. bench/nohprobe.jl 1                    # planar, cfl 0.3
 #   julia --project=. bench/nohprobe.jl 1 cfl=0.15 nmax=5000 every=500
 #   julia --project=. bench/nohprobe.jl 2 cfl=0.2 sensor=gated_strain
+#   julia --project=. bench/nohprobe.jl 3 cfl=0.3 smoother=gaussian
 #   julia --project=. bench/nohprobe.jl 1 cfl=0.3 dump=125    # full profile
 #
 # Scratch tooling, like everything else in bench/: it prints tables and asserts
@@ -63,7 +64,8 @@ include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
 opt = script_args(ARGS, (nu = 1, cfl = 0.3, N = 0, nmax = 400, every = 25,
-                         sensor = "strain", dump = -1, profile = 32);
+                         sensor = "strain", smoother = "compact",
+                         dump = -1, profile = 32);
                   positional = (:nu,))
 
 const ν = opt.nu
@@ -116,7 +118,8 @@ function make_probe(solver, xs, h)
 end
 
 function main()
-    art = ArtParams(beta_sensor = Symbol(opt.sensor))
+    art = ArtParams(beta_sensor = Symbol(opt.sensor),
+                smoother = Symbol(opt.smoother))
     metric = ν == 1 ? CartesianMetric() :
              ν == 2 ? CylindricalMetric() : SphericalMetric()
     lobc = ν == 1 ? SlipWallBC() : ν == 2 ? AxisBC() : OriginBC()
@@ -147,7 +150,7 @@ function main()
     xs = Float64[xcoord(solver, 1, i) for i in 1:N]
     h = xs[2] - xs[1]
     println("nu = $ν, N = $N, cfl = $(opt.cfl), t0 = $T0, " *
-            "beta_sensor = $(opt.sensor)")
+            "beta_sensor = $(opt.sensor), smoother = $(opt.smoother)")
     @printf("%6s %8s %7s | %8s %5s | %10s %5s %6s | %10s %7s\n",
             "step", "t", "x_sh/h", "rho_min", "i", "e/e0_min", "i", "n_e<0",
             "b*@e/b*max", "reach/h")

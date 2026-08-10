@@ -49,7 +49,7 @@ include("scriptargs.jl")
 include("display.jl")
 
 export Decomp, ConservedState, exchange_halos!, interior, field, allocate_state
-export CompactScheme, ClosureRow, lele_d1_6, pade_d1_4, compact_filter
+export CompactScheme, ClosureRow, lele_d1_6, pade_d1_4, compact_filter, gaussian_filter
 export BandedCompactScheme, BandedClosureRow, lele_d1_10
 export BoundaryCondition, PeriodicBC, SlipWallBC, NoSlipWallBC, ExtrapolationBC, AxisBC, OriginBC, PoleBC
 export NSCBCOutflowBC, NSCBCInflowBC, DirichletBC, save_checkpoint, load_checkpoint!, save_vtk

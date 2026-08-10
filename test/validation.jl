@@ -38,13 +38,20 @@
 # Measured on this code (serial, C6, ArtParams defaults; each case's CFL is in
 # test/cases.jl):
 #
-#   Lax        L1 rho 5.01e-3, u 7.53e-3, p 7.57e-3
-#   Shu-Osher  L1 rho 6.84e-3, wave train 2.08e-2, train peak 4.682
-#   Woodward   L1 rho 3.15e-2, peak rho 6.595 at x = 0.7785
-#   Sedov      R_s 0.8084 vs 0.8000 analytic (+1.04%), peak rho 5.17 (jump 6)
-#   Noh nu=1   plateau 3.9968/4    shock 0.2043/0.2   wall deficit 58%
-#   Noh nu=2   plateau 14.968/16   shock 0.2094/0.2   wall deficit 41%
-#   Noh nu=3   plateau 62.287/64   shock 0.2092/0.2   wall deficit 31%
+#   Lax        L1 rho 4.99e-3, u 7.47e-3, p 7.56e-3
+#   Shu-Osher  L1 rho 6.91e-3, wave train 2.09e-2, train peak 4.680
+#   Woodward   L1 rho 3.25e-2, peak rho 6.608 at x = 0.7785
+#   Sedov      R_s 0.8086 vs 0.8000 analytic (+1.07%), peak rho 5.12 (jump 6)
+#   Noh nu=1   plateau 3.9971/4    shock 0.2044/0.2   wall deficit 64%
+#   Noh nu=2   plateau 14.988/16   shock 0.2093/0.2   wall deficit 56%
+#   Noh nu=3   plateau 62.406/64   shock 0.2091/0.2   wall deficit 27%
+#
+# These were re-measured in August 2026 when ArtParams.smoother moved to
+# :gaussian; reference/CALIBRATION.md carries why, and the previous set under
+# :compact for comparison. Every plateau and every pre-shock L1 improved, wall
+# heating worsened at nu = 1 and nu = 2 and improved at nu = 3, and the two
+# STORED cases drifted by about 1% and 3% of their L1. None of that is a bug:
+# it is a different regularization, held to the same guards.
 #
 # Four significant figures is as far as these are reproducible. A shock-capturing
 # run integrates thousands of steps through a nonlinear sensor, so an arithmetic
