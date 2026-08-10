@@ -627,6 +627,121 @@ end
                                        bcs=per3, art=ArtParams(beta_sensor=:bogus))
 end
 
+@testset "compact_d8 ring detector: symbol, closures, and selectivity" begin
+    # The whole point of the d8 detector is what it does BELOW the Nyquist,
+    # so the operator is pinned against its analytic symbol rather than
+    # against a convergence order. It is also the only symmetric banded
+    # scheme in the package, hence the only exercise of BandPlan's filter-side
+    # sign conventions (RHS added rather than subtracted, high-edge closure
+    # rows mirrored rather than negated).
+    N = 64
+    art8 = ArtParams(detector=:d8)
+    s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), art=art8, bcs=per3)
+    f = CL.field(s.decomp); out = CL.field(s.decomp)
+    pad = s.decomp.n_halo_d[1]
+    A(k) = 1 + 2 * (14 / 29) * cos(k) + 2 * (3 / 58) * cos(2k)
+    # RHS is 60/(240·29) times the undivided eighth difference (2 − 2cos k)⁴.
+    symbol(k) = (60 / (240 * 29)) * (2 - 2cos(k))^4 / A(k)
+    for kf in (0.25, 0.5, 0.75, 1.0)
+        k = kf * π
+        for i in 1:N
+            f[i+pad, 1, 1] = cos(k * i)
+        end
+        CL.exchange_halos!(f, s.decomp)
+        CL.apply_along!(out, s.ring_plans[1], f, s.decomp)
+        i0 = N ÷ 2
+        # rtol is 1e-9, not machine epsilon: the detector is a high-pass, so a
+        # well-resolved wave is the difference of coefficients of order 1
+        # producing an answer of order 1e-4, and three digits go to
+        # cancellation. That is a property of the operator, not slack here.
+        @test out[i0+pad, 1, 1] / cos(k * i0) ≈ symbol(k) rtol = 1e-9
+    end
+    # Normalization: the response at two points per wavelength is 16, which is
+    # what undivided δ⁴ gives there. That is what lets the four artificial
+    # constants transfer between detectors.
+    @test symbol(π) ≈ 16.0 rtol = 1e-12
+    # Selectivity against undivided δ⁴ on the same normalization: measured
+    # 569× at eight points per wavelength and 26× at four.
+    d4(k) = (2 - 2cos(k))^2
+    @test symbol(0.25π) < d4(0.25π) / 500
+    @test symbol(0.5π) < d4(0.5π) / 25
+
+    # Constants must be annihilated exactly through the four closure rows, not
+    # by cancellation: every row's weights sum to zero by construction.
+    sw = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), art=art8,
+                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]))
+    fw = CL.field(sw.decomp); ow = CL.field(sw.decomp)
+    fill!(fw, 1.0)
+    CL.exchange_halos!(fw, sw.decomp)
+    CL.apply_along!(ow, sw.ring_plans[1], fw, sw.decomp)
+    @test maximum(abs, ow[(pad+1):(pad+N), 1, 1]) < 1e-14
+
+    @test_throws ErrorException Solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                                       bcs=per3, art=ArtParams(detector=:bogus))
+end
+
+@testset "detector = :d8 through compute_artificial!" begin
+    # End to end on all three dimensions and both sensor weights, against the
+    # δ⁴ default on identical data. A near-grid-scale ramp must still fire; a
+    # resolved wave must fire far less than δ⁴ does, which is the reason the
+    # detector exists.
+    #
+    # The selectivity assertion is on κ\*, not β\*, and that is the measurement
+    # rather than a convenience. κ\*'s input is the internal energy, which is
+    # smooth when the flow is; β\*'s is |S|, which has a cusp wherever the
+    # strain passes through zero, and a cusp is a grid-scale feature no
+    # detector can decline to see. On a resolved sine the two detectors
+    # therefore differ by 2.6e6 on κ\* and by a factor of 1.8 on β\*. See
+    # `reference/CALIBRATION.md`.
+    sensors(detector, fn) = begin
+        s = Solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3,
+                   art=ArtParams(enabled=true, detector=detector))
+        Q = allocate_state(s)
+        initialize!(s, Q, fn)
+        compute_rhs!(s, Q, zero(Q))
+        s
+    end
+    ramp = (x, y, z) -> Prim(rho=1.0, p=1.0, u=(0.5tanh((x - 0.5) / 0.02), 0.0, 0.0))
+    wave = (x, y, z) -> Prim(rho=1.0, p=1.0 + 0.1sinpi(2x), u=(0.0, 0.0, 0.0))
+    r4, r8 = sensors(:delta4, ramp), sensors(:d8, ramp)
+    w4, w8 = sensors(:delta4, wave), sensors(:d8, wave)
+    for s in (r8, w8)
+        @test all(isfinite, s.beta_art) && all(isfinite, s.mu_art)
+        @test all(isfinite, s.kappa_art)
+        @test all(>=(0.0), s.beta_art)
+    end
+    # A ramp two to three cells wide is close enough to the grid scale that
+    # the shared normalization holds; an order of magnitude either way would
+    # mean the scaling is wrong. Measured 0.23.
+    @test 0.1 < maximum(r8.beta_art) / maximum(r4.beta_art) < 10
+    # A pressure wave resolved over 64 points is where they must not agree.
+    # Measured 3.9e-7.
+    @test maximum(w8.kappa_art) < 1e-4 * maximum(w4.kappa_art)
+    @test maximum(w4.kappa_art) > 0
+end
+
+@testset "detector = :d8 through a coordinate-singularity fold" begin
+    # BandPlan's fold assembly with a SYMMETRIC scheme, plus the :ring role in
+    # fold_apply!. The C10 fold test covers the antisymmetric case only.
+    s = Solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 0.5),
+               metric=CylindricalMetric(),
+               bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+               art=ArtParams(enabled=true, detector=:d8))
+    f = CL.field(s.decomp); out = CL.field(s.decomp)
+    # An even function of r: d8 across the axis fold must stay smooth and
+    # small, and in particular must not blow up in the first cells.
+    fillf!(s, f, (r, θ, z) -> exp(-4r^2))
+    CL.exchange_halos!(f, s.decomp)
+    CL.ring_along!(out, f, s, 1, 1)
+    @test all(isfinite, out)
+    @test maximum(abs, out[gidx(s, i, 1, k)] for i in 1:64, k in 1:12) < 1e-3
+    # And the full sensor path runs through the fold.
+    Q = allocate_state(s)
+    initialize!(s, Q, (r, θ, z) -> Prim(rho=1.0, p=1.0, u=(-1.0, 0.0, 0.0)))
+    compute_rhs!(s, Q, zero(Q))
+    @test all(isfinite, s.beta_art) && maximum(s.beta_art) > 0
+end
+
 @testset "dt_report agrees with compute_dt and names the limiter" begin
     solver = mkslv(n_global=(16, 16, 16), transport=Transport(mu0=1e-3))
     Q = allocate_state(solver)

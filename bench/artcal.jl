@@ -3,7 +3,7 @@
 #   julia --project=. -t auto bench/artcal.jl            # everything (~6 min)
 #   julia --project=. -t auto bench/artcal.jl beta cfl   # named sweeps only
 #
-# Sweeps available: mu beta kappa D cfl resolution sensor
+# Sweeps available: mu beta kappa D cfl resolution sensor smoother detector
 #
 # Scratch tooling, like everything else in bench/: it prints tables, asserts
 # nothing, and is not part of the gate. The conclusions drawn from a run of it
@@ -37,12 +37,21 @@ include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
 const DEFAULTS = ArtParams()
-const ALL = ["mu", "beta", "kappa", "D", "cfl", "resolution", "sensor", "smoother"]
+const ALL = ["mu", "beta", "kappa", "D", "cfl", "resolution", "sensor", "smoother",
+             "detector"]
 # Sweep names are bare words; `key=value` sets the background configuration that
 # every sweep then runs against. Refitting a constant under a changed smoother
 # is exactly `artcal.jl kappa smoother=gaussian`, and keeping the two forms in
 # one argument list is what stops that turning into a second script.
-const OPTS = script_args(filter(a -> occursin('=', a), ARGS), (smoother = :compact,))
+#
+# The background defaults are read off `ArtParams()` rather than written out, so
+# a bare run measures against the shipped configuration and follows it when the
+# shipped one moves. They used to be spelled out, and went stale the day the
+# smoother default changed: every sweep then silently measured on top of
+# `:compact` while the solver shipped `:gaussian`.
+const OPTS = script_args(filter(a -> occursin('=', a), ARGS),
+                         (smoother = DEFAULTS.smoother,
+                          detector = DEFAULTS.detector))
 const NAMES = filter(a -> !occursin('=', a), ARGS)
 const WHICH = isempty(NAMES) ? ALL : NAMES
 want(name) = name in WHICH
@@ -57,7 +66,7 @@ art(; kw...) = ArtParams(; enabled=true,
                          C_mu=DEFAULTS.C_mu, C_beta=DEFAULTS.C_beta,
                          C_kappa=DEFAULTS.C_kappa, C_D=DEFAULTS.C_D,
                          beta_sensor=DEFAULTS.beta_sensor,
-                         smoother=OPTS.smoother, kw...)
+                         smoother=OPTS.smoother, detector=OPTS.detector, kw...)
 
 mark(v, d) = v == d ? "*" : " "     # flags the shipped default in a sweep
 
@@ -255,6 +264,37 @@ if want("smoother")
     hr()
     for s in (:compact, :gaussian), c in (0.4, 0.3, 0.2, 0.15)
         a = art(smoother=s)
+        n1 = m_noh(1; art=a, cfl=c); n2 = m_noh(2; art=a, cfl=c)
+        n3 = m_noh(3; art=a, cfl=c)
+        @printf("%-10s %-5.3g | %15.4f | %15.4f | %15.4f\n", s, c, n1[1], n2[1], n3[1])
+    end
+    println("  (NaN = the run lost positivity or stalled before reaching t_final)")
+end
+
+# The detector is the high-pass every sensor is built from: Cook's undivided
+# δ⁴, or the reference implementation's compact eighth derivative. The two are
+# normalized to the same response at two points per wavelength and diverge
+# below it — by 26x at four points and 569x at eight — so this sweep asks what
+# the solver does with a sensor that stops seeing resolved structure. As with
+# the smoother, the four constants are calibrated per setting, so a row that
+# improves is not yet an improvement.
+if want("detector")
+    println("\n=== detector (the sensor high-pass) ===")
+    println("detector   | Noh1 plat/exact  deficit | Noh3 plat/exact | Lax L1  contact | Shu train amp | WC peak")
+    hr()
+    for s in (:delta4, :d8)
+        a = art(detector=s)
+        n1 = m_noh(1; art=a); n3 = m_noh(3; art=a)
+        lx = m_lax(art=a);    sh = m_shu(art=a); wc = m_wc(art=a)
+        @printf("%-10s%s | %14.4f  %+6.0f%% | %15.4f | %7.1e %7.4f | %13.4f | %.4f\n",
+                s, mark(s, DEFAULTS.detector), n1[1], 100n1[2], n3[1],
+                lx[1], lx[2], sh[1], wc[1])
+    end
+    println("\n--- the Noh CFL ceiling, per detector ---")
+    println("detector    cfl  | Noh1 plat/exact | Noh2 plat/exact | Noh3 plat/exact")
+    hr()
+    for s in (:delta4, :d8), c in (0.5, 0.4, 0.3, 0.2, 0.15)
+        a = art(detector=s)
         n1 = m_noh(1; art=a, cfl=c); n2 = m_noh(2; art=a, cfl=c)
         n3 = m_noh(3; art=a, cfl=c)
         @printf("%-10s %-5.3g | %15.4f | %15.4f | %15.4f\n", s, c, n1[1], n2[1], n3[1])

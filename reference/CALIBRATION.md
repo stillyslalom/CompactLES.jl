@@ -746,36 +746,176 @@ the record of that setting.
 
 Miranda's Fortran kernels, carried by Pyranda in `pyranda/parcop/`, implement
 the same Cook artificial-property method. Reading them against `artificial.jl`
-identifies four differences that bear on the constants calibrated above. None
-of the four has been measured here; this section records what the reference
-does and what is analytically established about the gap, so that the
-investigation does not start from source archaeology a second time.
+identifies four differences that bear on the constants calibrated above. Two
+have since been measured and their subsections record the outcome; the other
+two record what the reference does and what is analytically established about
+the gap, so that the investigation does not start from source archaeology a
+second time.
 
 ### The ringing detector is an eighth derivative, not a fourth difference
 
 `ring()` in `parcop/operators.f90` dispatches to `d8x/d8y/d8z`, a full compact
 operator (`c10d8`, `parcop/stencils.f90`) with a pentadiagonal left-hand side,
 a nine-point right-hand side, and its own symmetric and antisymmetric boundary
-closures. `artificial.jl` instead uses the undivided fourth difference
+closures. `artificial.jl` uses the undivided fourth difference
 δ⁴ = (1, −4, 6, −4, 1), following Cook (2007) literally.
 
-The fields differ too. Miranda builds μ\* from `ringV(u, v, w)`, the ring of
-each velocity *component* along each direction reduced by `MAX` over the nine
-combinations, and β\* from `ring(∇·u)`. This code builds both from δ⁴|S|
-summed over directions.
+`ArtParams.detector` now selects between them: `:delta4` is the default and
+`:d8` is [`compact_d8`](../src/kernels_banded.jl), the reference operator
+transcribed. Its interior rows are
 
-Two consequences follow analytically. An eighth derivative has negligible
-response below the grid scale, whereas a fourth difference of |S| responds to
-smooth curvature in the strain field, which is the behaviour
-[the ceiling measurement](#where-the-restriction-originates) recorded when it
-found β\* reaching three to five times further ahead of the front than the
-damage extends. And `MAX` over directions does not accumulate with dimension
-where `Σ_d` does.
+```
+1.5 g_{i-2} + 14 g_{i-1} + 29 g_i + 14 g_{i+1} + 1.5 g_{i+2} = 60 δ⁸f_i,
+```
+
+with δ⁸ the undivided eighth difference. An even derivative preserves parity,
+so it is planned as a symmetric operator rather than as a derivative: no `1/h`
+scaling, mirrored rather than negated at a high edge, and folded with the
+filter-side parity at a coordinate singularity. It is the only symmetric
+banded scheme in the package and therefore the only exercise of that
+combination.
+
+The reference's `-1:2` boundary variant 0 turns out to be the interior stencil
+with its overhanging weights folded onto the **half-offset mirror**, ghost j ↔
+interior j, which is the same construction `gaussian_filter` uses and the same
+convention the fold machinery already implements. Four closure rows are
+needed, since the right-hand side reaches ±4, and every row's weights sum to
+zero, so a constant is annihilated in floating point rather than by
+cancellation (measured 1.2e-16 through the closure rows).
+
+#### Normalization, and why it is not the reference's
+
+The coefficients are divided by ζ = 29 to put a unit diagonal on the
+left-hand side, and by a further 240. The second factor sets the response to
+a grid-to-grid oscillation to 16, which is what undivided δ⁴ gives there. Both
+detectors then agree at the wavelength both exist to catch, and diverge only
+below it:
+
+```
+k/pi     delta4     d8        ratio
+0.25     3.43e-1    6.03e-4   569x
+0.5      4.00e+0    1.54e-1    26x
+0.75     1.17e+1    3.69e+0    3.2x
+1.0      1.60e+1    1.60e+1     1x
+```
+
+Without that second factor `:d8` would produce sensors 240× larger at the
+Nyquist and the four constants would have to be refit by two orders before
+any case could be run at all. With it they transfer as starting points, which
+is what makes the comparison below a one-variable one.
+
+#### Results
+
+Measured on top of `smoother = :gaussian`, which is a requirement rather than
+a convenience: the failure the Gaussian fixes is
+[β\* intermittency](#the-sensor-is-intermittent-at-the-damage-site) at a
+symmetry cell, and a sharper high-pass makes narrower sensor spikes. Testing
+`:d8` against the compact smoother would have rejected it for a defect
+belonging to the smoother. `bench/artcal.jl detector`, shipped constants:
+
+```
+detector    Noh1 plat  deficit   Noh3 plat   Lax L1   contact   Shu train   WC peak
+delta4*      0.9993     +64%      0.9751     5.0e-3   0.0053     1.6180     6.6049
+d8           0.9997     +53%      0.9951     4.7e-3   0.0044     1.6360     6.3953
+```
+
+Six of the seven columns improve, several of them well beyond the fourth
+digit that separated the β\* sensor variants. The ν = 3 plateau error falls
+from 2.45% to 0.42%. Wall heating, the standing regression of the smoother
+change, recovers eleven of the points it lost. The Shu–Osher wave train, which
+is the column that pulls against every damping constant, gains 1.1%: the
+detector declines to fire on structure the scheme resolves, which is precisely
+what it was adopted for. Woodward–Colella peak density is the one regression,
+6.6049 → 6.3953 at N = 400.
+
+The CFL ceiling is where the result is largest, and where it is mixed. Highest
+CFL reaching `t_final` with a correct plateau:
+
+```
+Noh geometry              :delta4    :d8
+nu = 1  planar wall          0.2      1.0+
+nu = 2  cylindrical axis     0.2      1.0+
+nu = 3  spherical origin     0.4      0.25
+```
+
+`1.0+` is not a table edge: the plateau under `:d8` is flat to four digits
+from 0.15 to 1.0 in both geometries (ν = 1 at 0.9997, ν = 2 at 0.9481–0.9500),
+so the artificial-property restriction on those two is not raised, it is gone.
+The spherical origin moves the other way, 0.4 to 0.25.
+
+#### Where the spherical loss comes from
+
+`bench/nohprobe.jl 3 detector=d8 cfl=0.3` puts the failure at the origin cell.
+Through steps 50–100 the worst internal-energy cell travels with the front at
+i = 30–32, carrying β\* at 15–36% of its own domain maximum. At step 125 the
+worst cell is **i = 1**, the origin, at e/e₀ = −6335 with β\* at **1.8%** of
+maximum, and the run loses density three steps later.
+
+This is the mechanism already recorded under
+[where the restriction originates](#where-the-restriction-originates), not a
+new one: the restriction is a symmetry-plane startup problem, and `:d8` moves
+its threshold rather than its character. The reading that fits every number
+here is that δ⁴'s poor selectivity was doing double duty. It was also
+supplying a background regularization at the coordinate fold, where the field
+is smooth and even by construction and a selective detector correctly returns
+almost nothing. Removing that background helps at a wall and at the axis and
+hurts at the origin, which is the fold whose closure is third order against a
+sixth- or tenth-order interior and which
+[Geometry limits](#geometry-limits) already records as the least forgiving.
+That closure remains the untested candidate for the whole restriction, and
+this measurement raises rather than lowers the value of testing it.
+
+#### What the detector cannot help with
+
+The selectivity is available to the κ\* and D\* channels and largely
+unavailable to μ\* and β\*. On a pressure wave resolved over 64 points the two
+detectors differ by 2.6e6 on κ\*, whose input is the internal energy. On a
+velocity sine on the same grid they differ by a factor of 1.8 on β\*, whose
+input is |S|. The absolute value is the reason: |S| has a cusp wherever the
+strain passes through zero, a cusp is a grid-scale feature, and no detector
+can decline to see one. This is the same geometry that
+[defeats the Ducros switch](#what-the-switch-removes) on a solenoidal field,
+observed from the other side.
+
+It is also why the reference does not build the sensor this way. Miranda takes
+μ\* from `ringV(u, v, w)` — the ring of each velocity *component* along each
+direction, reduced by `MAX` over the nine combinations — and β\* from
+`ring(∇·u)`. Neither input carries an absolute value. So the detector swap and
+the sensor-field change are not independent improvements to be assessed
+separately: this measurement is a lower bound on what the reference method
+gains, and the remaining gap is a reason to run the field change next.
+`MAX` over directions also does not accumulate with dimension where `Σ_d`
+does.
 
 Note also that Miranda's default β\* is `gbar(|ring(∇·u)| ρ)` with **no**
 compression switch. The `:dilatation` variant rejected above is a dilatation
 sensor *plus* the switch. Dilatation sensor without the switch, which is what
 the reference actually ships, has not been tried.
+
+#### Cost, and why the default has not moved
+
+On the two-species tube of `bench/phases.jl`, back to back on one machine:
+
+```
+detector   artificial   % of RHS   compute_rhs!   line solves
+delta4      0.946 ms     23.5%       3.927 ms     24 + 0
+d8          1.707 ms     34.6%       4.689 ms     24 + 8
+```
+
+Eight pentadiagonal solves per right-hand side, one per active dimension per
+sensor, for +80% on the sensor phase and +19% on the whole evaluation. Against
+a 10–20% run-to-run spread the phase figure is resolved and the total is
+marginal.
+
+`:delta4` remains the default. The battery says `:d8` is better and the
+planar and cylindrical ceilings say so emphatically, but the general guidance
+for converging shocks rests on the spherical case alone, and that is the case
+`:d8` costs 40% of its timestep. The four constants are also still the δ⁴ fit;
+a detector that changes the sensor's spatial support by this much has no claim
+on them. Two things would settle it: `C_beta` refit under `:d8`, and an
+account of the origin cell good enough to say whether the loss is the detector
+or the third-order fold closure. The evidence above says the latter, in which
+case fixing the closure would leave `:d8` better everywhere.
 
 ### The test filter is an explicit Gaussian, not a compact-filter pass
 
@@ -960,6 +1100,7 @@ cylindrical axis accepts the cold start at 16× compression.
 | `C_D` | 0.01 | yes | The compact filter dominates interface broadening, so sensitivity to `C_D` is weak. |
 | `beta_sensor` | `:strain` | yes | `:gated_strain` raises the cylindrical Noh CFL ceiling from 0.15 to 0.2 for one pointwise pass and is otherwise a wash; `:dilatation` buys 0.25% of the Shu–Osher wave train and loses both converging Noh geometries at the fold. |
 | `smoother` | `:gaussian` | yes | Changed from `:compact` in August 2026. Raises the spherical-origin CFL ceiling 0.15 → 0.4 and the cylindrical 0.15 → 0.2, cuts the sensor phase 29%, and improves every Noh plateau and pre-shock L1. Costs wall heating at ν = 1 (+58 → +64%) and ν = 2 (+41 → +56%), improves it at ν = 3 (+31 → +27%), and moves the two stored cases by 1–3% of their L1. `C_kappa` cannot recover the wall heating. |
+| `detector` | `:delta4` | provisionally | `:d8` improves six of seven battery columns and removes the artificial-property CFL restriction outright at the planar wall and the cylindrical axis (0.2 → 1.0+), at 40% of the spherical-origin timestep (0.4 → 0.25) and +19% on the right-hand side. Held at `:delta4` pending a `C_beta` refit and an account of the origin cell. [Measurements](#the-ringing-detector-is-an-eighth-derivative-not-a-fourth-difference). |
 | `cfl` | 0.5 | **no** | Use 0.3 with shocks and `StepControl(retries = 4)` for recovery. Converging geometry now tolerates 0.4 (spherical) and 0.2 (cylindrical) under the default smoother. |
 
 Remaining items, in approximate priority order:
@@ -979,12 +1120,14 @@ Remaining items, in approximate priority order:
    phase cheaper; the mechanism is
    [sensor intermittency](#the-sensor-is-intermittent-at-the-damage-site) and the
    remaining work is the refit under item 6 below rather than a further search.
-   ν = 1 is unmoved at 0.2, and the fold closure is still untested, that is,
-   whether the third-order closure at the axis and origin sets the step size
-   there. The eighth-derivative detector of
-   [the reference comparison](#measured-against-the-reference-implementation)
-   remains open and must be measured on top of the Gaussian, never against the
-   compact smoother.
+   ν = 1 is unmoved at 0.2. **The eighth-derivative detector has since been
+   measured** and moves ν = 1 and ν = 2 from 0.2 to 1.0 or beyond, which is the
+   restriction lifted rather than raised, while moving ν = 3 from 0.4 to 0.25.
+   That leaves the fold closure as the one candidate still standing and as the
+   thing now worth testing first: the failure under `:d8` is at the origin cell
+   with β\* at 1.8% of its maximum, the origin closure is third order against a
+   sixth- or tenth-order interior, and it is the only geometry of the three
+   that the detector costs anything.
 2. Make the κ\* construction non-singular as T_ion → 0. It is an EOS dispatch
    point as of the Phase 1 work, so a tabular model can already supply its own;
    the gas models still divide by the temperature.
@@ -998,19 +1141,16 @@ Remaining items, in approximate priority order:
    `compact_filter(0.45)` every step.
 5. Determine why the spherical-origin fold is less tolerant of
    under-resolved data than the cylindrical axis fold.
-6. Decide whether `smoother = :gaussian` becomes the default. The measurements
-   are in
-   [the reference comparison](#measured-against-the-reference-implementation):
-   it buys a 0.15 → 0.4 ceiling at the spherical origin, 0.15 → 0.2 at the
-   cylindrical axis, and a 29% cheaper sensor phase, and it costs +57 → +64% of
-   ν = 1 wall heating, which `C_kappa` has been measured unable to recover.
-   Taylor–Green is neutral. What remains open is a `C_mu` sweep under the new
-   smoother and whether the wall-heating cost is acceptable against the
-   converging-geometry gain, which is a judgement about the intended workload
-   rather than a measurement. `C_beta` and `C_D` were not swept: the former has
-   a broad optimum and an upper bound that is a stability bound which has just
-   moved favourably, the latter is documented as weakly sensitive because the
-   filter dominates interface broadening.
+6. Refit under the adopted smoother, and decide the detector.
+   `smoother = :gaussian` is the shipped default as of August 2026; what it did
+   not come with is a refit. A `C_mu` sweep under it has still not been run,
+   and `C_beta` and `C_D` were not swept either, the former because its optimum
+   is broad and its upper bound is a stability bound that has since moved
+   favourably, the latter because the filter dominates interface broadening.
+   `detector = :d8` now needs the same treatment and needs it more: it changes
+   the sensor's spatial support far more than the smoother did, and the
+   decision on whether it becomes the default turns on a `C_beta` refit and on
+   the origin cell of item 1 rather than on any further battery run.
 7. Make `filter_state!` conservative on non-Cartesian metrics, by the
    filtered-cell-volume normalization recorded in the same section. Uniform
    Cartesian results are unaffected by construction, so this is measurable

@@ -872,6 +872,54 @@ function test_artificial_decomposition()
     end
 end
 
+# ---------------------------------------------------------------------------
+# 7d. The d8 ringing detector under decomposition. `detector = :d8` puts a
+#     pentadiagonal distributed line solve inside `compute_artificial!`, which
+#     is the first time the banded reduced-interface stage — and its
+#     `Allgather` — runs anywhere except the derivative path. It sits below no
+#     early return and must be reached by every rank, so a mistake here hangs
+#     rather than fails. Unlike the compression-keyed sensors this one has no
+#     discontinuous switch in it, so it must reproduce to round-off.
+# ---------------------------------------------------------------------------
+function test_ring_detector_decomposition()
+    section("d8 detector: sensors independent of the split axis")
+    N = SPLITN
+    totals = Dict{Symbol,NTuple{2,Vector{Float64}}}()
+    for detector in (:delta4, :d8)
+        bsums, ksums = Float64[], Float64[]
+        for ax in 1:3
+            solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3,
+                       art=ArtParams(enabled=true, detector=detector),
+                       dims=splitdims(ax))
+            Q = allocate_state(solver)
+            initialize!(solver, Q, (x, y, z) ->
+                Prim(u=(sin(x)cos(y)cos(z), -cos(x)sin(y)cos(z), 0.3sin(2z)),
+                     p=1 + 0.2cos(x), rho=1 + 0.3sin(y)))
+            compute_rhs!(solver, Q, zero(Q))
+            bloc, kloc = 0.0, 0.0
+            for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
+                i in 1:solver.decomp.n_local[1]
+                I = gidx(solver, i, j, k)
+                bloc += solver.beta_art[I]
+                kloc += solver.kappa_art[I]
+            end
+            push!(bsums, gsum(bloc)); push!(ksums, gsum(kloc))
+        end
+        totals[detector] = (bsums, ksums)
+        for (label, sums) in (("β*", bsums), ("κ*", ksums))
+            check("$detector: Σ $label spread over the three split axes",
+                  maximum(sums) - minimum(sums), 1e-10 * max(maximum(sums), 1e-30))
+        end
+    end
+    # As in 7c: the checks above would pass just as happily on a `detector`
+    # that was being ignored, so require the two to disagree. κ* is the
+    # channel where they separate by orders rather than by a factor, its input
+    # being smooth where β*'s is not.
+    rel = abs(totals[:delta4][2][1] - totals[:d8][2][1]) /
+          max(totals[:delta4][2][1], 1e-300)
+    check("κ* differs between delta4 and d8", 1e-3 / max(rel, 1e-300), 1.0)
+end
+
 const SUITE = (
     ("periodic C6", test_periodic_c6),
     ("pentadiagonal C10", test_pentadiagonal_c10),
@@ -882,6 +930,7 @@ const SUITE = (
     ("conservation", test_conservation),
     ("sync", test_sync),
     ("artificial decomposition", test_artificial_decomposition),
+    ("d8 detector decomposition", test_ring_detector_decomposition),
     ("callback consistency", test_callback_consistency),
     ("state queries", test_state_queries),
     ("field writer", test_field_writer),

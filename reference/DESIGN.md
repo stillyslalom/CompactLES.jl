@@ -83,7 +83,7 @@ validation cases are discussed, and never a viscosity.
 | `src/banded.jl`            | Generalization of the distributed solve to half-bandwidth q (pentadiagonal and up) |
 | `src/lines_transposed.jl`  | Cache-friendly (lines × n) fill/solve/scatter for the y/z sweeps |
 | `src/kernels.jl`           | `CompactScheme`, `ClosureRow`, and tridiagonal presets (C6, C4, C8 filter) |
-| `src/kernels_banded.jl`    | `BandedCompactScheme` and the C10 pentadiagonal preset |
+| `src/kernels_banded.jl`    | `BandedCompactScheme`, the C10 pentadiagonal preset, and the d8 ring detector |
 | `src/operators.jl`         | `DirPlan`: bind a scheme to a dimension; line fill, distributed solve, scatter |
 | `src/operators_banded.jl`  | `BandPlan`: the banded counterpart |
 | `src/physics.jl`           | EOS abstraction, `IdealMixture`, `Transport`, `primitives!` |
@@ -92,7 +92,7 @@ validation cases are discussed, and never a viscosity.
 | `src/nscbc.jl`             | Navier–Stokes characteristic boundary conditions (NSCBC): subsonic outflow and inflow |
 | `src/metric.jl`            | Cartesian/cylindrical/spherical metrics, stretch mappings, curvature corrections, momentum sources, the discrete geometric conservation law (GCL) |
 | `src/folds.jl`             | Coordinate-singularity (axis/origin/pole) parity and antipodal folds |
-| `src/artificial.jl`        | Cook artificial μ\*, β\*, κ\*, D\* from δ⁴ sensors |
+| `src/artificial.jl`        | Cook artificial μ\*, β\*, κ\*, D\* from δ⁴ or compact-d8 sensors |
 | `src/sources.jl`           | Inferable tuple source interface and `ConstantBodyForce` |
 | `src/rhs.jl`               | `Solver` container, flux assembly, the conservative NS RHS |
 | `src/timestep.jl`          | RK45, CFL timestep, the `run!` loop, per-step filtering |
@@ -196,6 +196,12 @@ via `BandedCompactScheme` (q = 1 is tridiagonal, q = 2 is pentadiagonal, which
 admits schemes to tenth order). `lele_d1_10()` is the classical tenth-order
 pentadiagonal derivative (β = 1/20, α = 1/2) with a C6-cascade closure on the
 first three rows; its RHS reaches ±3, so the default `n_halo = 4` suffices.
+`compact_d8()` is the second preset and the one symmetric banded scheme: an
+undivided compact eighth derivative used as the sensor high-pass under
+`ArtParams.detector = :d8`. Being an even derivative it preserves parity, so it
+is planned with the filter conventions rather than the derivative ones, and its
+four mirror-folded closure rows put the same nine-point minimum extent on a
+rank as the C8 filter.
 
 Users supply their own operators by constructing these types directly and
 passing them as `deriv=` or `filt=`.
@@ -368,16 +374,22 @@ call sits in a serial section between threaded regions.
 
 ## Artificial fluid properties
 
-`artificial.jl` implements the Cook (2007) model. The sensors are **undivided**
-explicit fourth differences δ⁴ = (1, −4, 6, −4, 1) in the computational indices,
-so the formal grid-spacing powers reduce to per-dimension weights: h_d² for the
+`artificial.jl` implements the Cook (2007) model. The sensors are built from an
+**undivided** high-pass in the computational indices — by default the explicit
+fourth difference δ⁴ = (1, −4, 6, −4, 1), or the compact eighth derivative of
+`compact_d8()` under `ArtParams.detector = :d8`, which is the reference
+implementation's operator and is normalized to the same response at two points
+per wavelength so that the four constants carry over. Being undivided,
+the formal grid-spacing powers reduce to per-dimension weights: h_d² for the
 shear/bulk viscosities (from Cook's |∇⁴S|·Δ⁶) and h_d for conductivity and
 species diffusivity (from |∇⁴e|·Δ⁵ and |∇⁴Y|·Δ⁵), where Δ is the local grid
 spacing in Cook's continuous form, h_d the spacing along dimension d, S the
 strain-rate tensor, e the specific internal energy, and Y a mass fraction.
 Note that Δ means the grid spacing in this paragraph only; in the sensor
 discussion below it is the dilatation ∇·u. The Gaussian test filter of the
-original model is approximated by one compact-filter pass (`smooth!`).
+original model is `smooth!`, by default the explicit nine-point stencil the
+reference applies and optionally a compact-filter pass
+(`ArtParams.smoother`).
 
 Concretely, `compute_artificial!`:
 

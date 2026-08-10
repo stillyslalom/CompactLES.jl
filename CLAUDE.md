@@ -65,11 +65,11 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 53 testsets, 0 failures
+julia --project=. test/runtests.jl        # 56 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 65/65 each
+  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 70/70 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
@@ -135,7 +135,8 @@ Names are spelled out rather than abbreviated. Current vocabulary:
   per-dimension halo pad, as a local)
 - `n_species`, `n_cons`, `i_mom`, `i_energy`, `Y`, `cp_mix`
 - `mu_art`, `beta_art`, `kappa_art`, `D_art`, `C_mu`/`C_beta`/`C_kappa`/`C_D`,
-  `beta_sensor` (`:strain`, `:gated_strain` or `:dilatation`)
+  `beta_sensor` (`:strain`, `:gated_strain` or `:dilatation`), `smoother`
+  (`:gaussian` or `:compact`), `detector` (`:delta4` or `:d8`)
 - `grad_u`, `grad_T_ion`, `grad_Y`, `strain_mag`, `sensor`, `sensor_sp`
 - `inv_J`, `area_d`, `inv_h`, `inv_r`, `cot_over_r`, `coord_shift`, `flux`
 - `deriv_plans`, `filter_plans`, `line_solver`, `plan` (a DirPlan) vs `plane`
@@ -310,6 +311,10 @@ them.
   0.15 → 0.2, but only for the cylindrical geometry, and it does so by relieving
   the axis cell rather than the shock. `StepControl(retries = 4)` beats a
   globally lowered CFL, because the restriction is a startup one.
+  The eighth-derivative detector (`detector = :d8`) lifts the restriction
+  outright at the planar wall and the cylindrical axis, 0.2 → 1.0 or beyond,
+  and costs the spherical origin 0.4 → 0.25 — which leaves the fold closure as
+  the only candidate still standing, and the origin cell as where to look.
   → `reference/CALIBRATION.md`
 - **κ\* is singular as `T_ion` → 0**, so a cold ambient below p ≈ 1e-3 collapses
   the diffusive timestep. `art_conductivity_scale` is an EOS dispatch point, so a

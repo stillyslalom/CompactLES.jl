@@ -103,6 +103,17 @@ Closed by the August 2026 pass:
   nine-point stencil in the reference, not a compact-filter pass;
   `ArtParams.smoother` now offers both, the mechanism and the measurements are
   in `reference/CALIBRATION.md`, and the default is settled there.
+- **The eighth-derivative detector.** `ArtParams.detector = :d8` supplies the
+  reference's compact `ring` operator ([`compact_d8`](../src/kernels_banded.jl))
+  against Cook's undivided δ⁴, normalized to the same grid-oscillation
+  response so the four constants transfer. Measured on top of the Gaussian
+  smoother, it improves six of seven battery columns and **removes the
+  artificial-property CFL restriction at the planar wall and the cylindrical
+  axis**, 0.2 → 1.0 or beyond with the plateau flat to four digits across that
+  whole range. It costs the spherical origin 0.4 → 0.25 and +19% on the
+  right-hand side. `:delta4` remains the default pending a `C_beta` refit;
+  the measurements, the mechanism at the origin cell, and what would settle
+  the default are in `reference/CALIBRATION.md`.
 - **The immersed-boundary account** in `reference/IMMERSED.md`, corrected
   against `pyrandaIBM.py`.
 - **CFL normalization.** The reference counts the sound speed once against the
@@ -112,22 +123,27 @@ Closed by the August 2026 pass:
 
 Open, in rough order of expected value:
 
-1. **The eighth-derivative detector.** `ring()` is a compact d8 with a
-   pentadiagonal left-hand side, against the undivided δ⁴ used here; measured
-   selectivity is 569× at eight points per wavelength. It must be measured on
-   top of `smoother = :gaussian` and never against the compact smoother, for
-   the sequencing reason recorded in `reference/CALIBRATION.md`. Needs a
-   pentadiagonal-LHS scheme, so it also exercises `banded.jl` rather than
-   `tridiag.jl`.
+1. **The sensor fields, not just the detector.** The detector swap above is a
+   lower bound on what the reference method gains, because the reference does
+   not build the sensors from |S|. Miranda takes μ\* from `ringV(u, v, w)`, the
+   ring of each velocity component along each direction reduced by `MAX` over
+   the nine pairs, and β\* from `ring(∇·u)`. The absolute value in |S| puts a
+   cusp wherever the strain passes through zero, and a cusp is a grid-scale
+   feature no detector declines to see: on a resolved wave `:d8` separates from
+   δ⁴ by 2.6e6 on κ\*, whose input is smooth, and by 1.8 on β\*, whose input is
+   not. That gap is the measurement motivating this item. `MAX` versus `Σ_d`
+   over directions is a separable and much cheaper sub-experiment within it.
 2. **Conservative filtering on non-Cartesian metrics.** The reference filters
    the volume-weighted field and divides by a cell volume passed through the
    same filter once at setup, which reproduces constants exactly on a
    non-uniform metric; `filter_state!` filters the conserved components
    unweighted. Uniform Cartesian results are unaffected by construction, so the
    measurement is the converging cases plus a conservation-defect probe.
-3. **A `C_mu` sweep under the adopted smoother.** Taylor–Green at 64³ shows the
-   μ\* channel moving 4.0% → 4.5% of the sink, which does not demand a refit but
-   does not rule one out.
+3. **A `C_beta` and `C_mu` refit under the adopted smoother and detector.**
+   Taylor–Green at 64³ shows the μ\* channel moving 4.0% → 4.5% of the sink
+   under the Gaussian, which does not demand a refit but does not rule one out.
+   `C_beta` under `:d8` is the sharper case and is what the detector's default
+   turns on.
 4. **Directional artificial bulk viscosity**, with the per-direction diffusive
    timestep limit that goes with it. **Blocked**: no anisotropic or strongly
    stretched case exists in the validation battery, so measuring it against the
@@ -138,8 +154,9 @@ Open, in rough order of expected value:
    floating point rather than by cancellation. **Gated** on measuring the
    present residual first; if it is 1e-16 times the field scale the change is
    cosmetic and should be recorded as such rather than made.
-6. **Minor:** `bench/phases.jl` still reports "24 compact line-solves per RHS"
-   under `smoother = :gaussian`, where the sensor solves no longer run.
+The line-solve counter in `bench/phases.jl`, listed here as a minor item, is
+done: it never counted the sensor path at all, and now reports the derivative,
+smoother and detector solves separately.
 
 **Capabilities absent from CompactLES:** a DSL for defining a new PDE system
 in ten lines without touching the solver; immersed boundaries, which provide
@@ -589,10 +606,11 @@ guidance for one geometry only. That leaves:
 
 The open items from the source comparison
 ([work arising](#work-arising-from-the-source-comparison)) sit alongside these
-rather than inside the ordering: the detector is the one with measured evidence
-behind it and is worth pulling whenever the converging-geometry work is active,
-while the rest are either blocked on a missing case or gated on a measurement
-that has not been taken.
+rather than inside the ordering. The sensor-field change is now the one with
+measured evidence behind it, since the detector that closed ahead of it
+established both that the reference method is better here and that most of the
+remaining gap is in the fields rather than the operator. The rest are either
+blocked on a missing case or gated on a measurement that has not been taken.
 
 Two items sit outside the ordering because they are independent of everything
 above and pullable on demand: laser ray tracing (Phase 2.7), if a specific

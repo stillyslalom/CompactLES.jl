@@ -57,7 +57,7 @@ end
 
 "Fold description for one dimension: which ends fold, the pairing (nothing
 for the axisymmetric self-paired case), component signs, and parity plans."
-mutable struct FoldSpec{P,D,F,S}
+mutable struct FoldSpec{P,D,F,S,R}
     dim::Int
     lo::Bool
     hi::Bool
@@ -67,11 +67,14 @@ mutable struct FoldSpec{P,D,F,S}
     deriv_plans::D                         # derivative plans, σg = (+1, −1)
     filter_plans::F                        # filter plans,     σg = (+1, −1)
     smooth_plans::S                        # sensor-smoother plans, σg = (+1, −1)
+    ring_plans::R                          # d8 detector plans, σg = (+1, −1);
+                                           # (nothing, nothing) unless :d8
 end
 
 fold_dplan(fold::FoldSpec, σg::Int) = fold.deriv_plans[σg > 0 ? 1 : 2]
 fold_fplan(fold::FoldSpec, σg::Int) = fold.filter_plans[σg > 0 ? 1 : 2]
 fold_splan(fold::FoldSpec, σg::Int) = fold.smooth_plans[σg > 0 ? 1 : 2]
+fold_rplan(fold::FoldSpec, σg::Int) = fold.ring_plans[σg > 0 ? 1 : 2]
 
 # --- Halo mirror fill (generalizes the old axis_fill!) ----------------------
 
@@ -268,19 +271,22 @@ end
 # explicit, where the two parities coincide numerically because an identity
 # left-hand side has no ghost coupling to fold onto the diagonal. They are kept
 # as separate plans rather than one shared twice, so that neither aliases the
-# other's line scratch.
+# other's line scratch. The ring detector is an eighth derivative, which is an
+# even one and so preserves parity: it is planned with the symmetric roles
+# rather than with `:deriv`.
 @inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:deriv})  = fold_dplan(fold, -σ)
 @inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:filter}) = fold_fplan(fold, σ)
 @inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:smooth}) = fold_splan(fold, σ)
+@inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:ring})   = fold_rplan(fold, σ)
 
 """
     fold_apply!(out, f, solver, fold, σ, role = Val(:deriv))
 
-Apply the compact operator of `role` — `:deriv`, `:filter` or `:smooth` —
-along the folded dimension of `fold` to field `f` (current halos required)
-with antipodal sign `σ`. Self-paired (axisymmetric) folds reduce to mirror
-fill plus one folded plan. Paired folds run the even/odd butterfly; the input
-`f` is left untouched (the combo lives in scratch `s.pairbuf`).
+Apply the compact operator of `role` — `:deriv`, `:filter`, `:smooth` or
+`:ring` — along the folded dimension of `fold` to field `f` (current halos
+required) with antipodal sign `σ`. Self-paired (axisymmetric) folds reduce to
+mirror fill plus one folded plan. Paired folds run the even/odd butterfly; the
+input `f` is left untouched (the combo lives in scratch `s.pairbuf`).
 """
 function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:deriv))
     decomp = solver.decomp

@@ -14,6 +14,7 @@ points at them rather than restating them.
 4. [Adaptivity groundwork (July 2026)](#adaptivity-groundwork-july-2026)
 5. [Near-term corrections (July 2026)](#near-term-corrections-july-2026)
 6. [Model debt 1 — the dilatation-gated β\* (July 2026)](#model-debt-1--the-dilatation-gated-beta-july-2026)
+7. [The reference-implementation pass (August 2026)](#the-reference-implementation-pass-august-2026)
 
 ## Phase 0 — extensibility seams (July 2026)
 
@@ -251,3 +252,75 @@ its first bad point — the failure is raised off a reduced quantity, so the cat
 is safe under `mpiexec`. And `test/mpi_tests.jl` gained the first multi-rank
 coverage of the artificial-property path at all: every other test in that file
 disables it.
+
+## The reference-implementation pass (August 2026)
+
+Reading Miranda's kernels, carried by Pyranda in `pyranda/parcop/`, against
+`artificial.jl` identified four differences in the Cook artificial-property
+path. Two of the four are now implemented and measured. The measurements are in
+`reference/CALIBRATION.md` under "Measured against the reference
+implementation"; what follows is what was decided.
+
+**The sensor smoother** is an explicit nine-point Gaussian in the reference, not
+a compact-filter pass. `ArtParams.smoother` offers both and `:gaussian` became
+the default: it raises the spherical-origin CFL ceiling 0.15 → 0.4 and the
+cylindrical 0.15 → 0.2, and makes the sensor phase 29% cheaper, at the cost of
+about seven points of planar wall heating.
+
+**The ringing detector** is a compact eighth derivative in the reference, not
+Cook's undivided fourth difference. `ArtParams.detector` offers both;
+`compact_d8` is the transcribed operator and `:delta4` remains the default.
+The sequencing mattered and is worth keeping in view: a sharper high-pass makes
+narrower sensor spikes, and the defect the Gaussian fixes is β\* intermittency
+at a symmetry cell, so measuring the detector against the old smoother would
+have rejected it for the smoother's fault.
+
+What was measured:
+
+- **The planar and cylindrical CFL restrictions are lifted, not raised.** Under
+  `:d8` both geometries reach `t_final` at `cfl = 1.0` with the plateau flat to
+  four digits from 0.15 upward, against a ceiling of 0.2 under `:delta4`. This
+  is the first setting measured against the `cfl ≤ 0.15` guidance that removes
+  the artificial-property restriction rather than moving it.
+- **The spherical origin goes the other way**, 0.4 → 0.25, and
+  `bench/nohprobe.jl` puts the failure at the origin cell with β\* at 1.8% of
+  its own maximum. δ⁴'s poor selectivity was also supplying a background
+  regularization at the coordinate fold, where the field is smooth and even by
+  construction; a selective detector correctly returns nothing there. With the
+  timestep predictor, `C_beta`, the dilatation sensor and the sensor reach all
+  ruled out previously, the third-order fold closure is the one candidate left
+  and the origin cell is where to look.
+- **Accuracy improves on six of seven battery columns**, several well beyond
+  the fourth digit that separated the β\* sensor variants: the ν = 3 Noh plateau
+  error falls 2.45% → 0.42%, ν = 1 wall heating recovers +64% → +53%, and the
+  Shu–Osher wave train gains 1.1%. Woodward–Colella peak density is the
+  regression, −3.2%.
+- **The selectivity is unavailable to μ\* and β\*.** On a resolved wave the two
+  detectors separate by 2.6e6 on κ\*, whose input is the internal energy, and by
+  1.8 on β\*, whose input is |S| — which carries a cusp wherever the strain
+  passes through zero. This is the same geometry that defeats the Ducros switch
+  on a solenoidal field, seen from the other side, and it is why the reference
+  builds μ\* and β\* from velocity components and the dilatation instead. The
+  detector result is therefore a lower bound on what the reference method gains,
+  which promoted the sensor-field change to the head of the open list.
+- **Cost** is eight pentadiagonal line solves per right-hand side, one per
+  active dimension per sensor: +80% on the sensor phase and +19% on the whole
+  evaluation for the two-species tube.
+
+The default was left at `:delta4`. The battery favours `:d8` and the planar and
+cylindrical ceilings favour it emphatically, but the converging-shock guidance
+rests on the spherical case alone and that is the case it costs, while the four
+constants are still the δ⁴ fit. A `C_beta` refit and an account of the origin
+cell would settle it.
+
+`compact_d8` is the first symmetric banded scheme in the package, so it is also
+the first exercise of `BandPlan` with filter-side conventions: right-hand side
+added rather than subtracted, high-edge closure rows mirrored rather than
+negated, and the filter parity used at a coordinate fold. `test/mpi_tests.jl`
+gained the corresponding coverage, the banded reduced-interface `Allgather`
+having never before run inside `compute_artificial!`; both sensors reproduce to
+round-off across three split axes. `bench/artcal.jl`, `bench/phases.jl` and
+`bench/nohprobe.jl` now take their sensor-shape defaults from `ArtParams()`
+rather than spelling them out, which is what let them go stale against the
+shipped smoother, and the `phases.jl` line-solve counter reports the derivative,
+smoother and detector solves separately instead of omitting the sensor path.

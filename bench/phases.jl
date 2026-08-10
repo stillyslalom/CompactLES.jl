@@ -73,13 +73,26 @@ function budget(name, solver, Q)
 
     whole = best(() -> compute_rhs!(solver, Q, dQ))
     npt = prod(decomp.n_local)
-    # velocity + scalar + flux solves
+    # Velocity + scalar + flux solves, then the sensor path, which used to be
+    # left out of this count altogether — so the number reported the derivative
+    # traffic while being labelled as all of it. Both sensor-path settings can
+    # remove their solves or add them: `gaussian_filter` has an identity
+    # left-hand side and runs none, `compact_filter` runs one per active
+    # dimension per sensor, and `detector = :d8` adds one pentadiagonal solve
+    # on the same footing.
+    art = solver.art
+    nsensor = art.enabled ?
+              1 + 1 + (solver.equations.n_species > 1 ? solver.equations.n_species : 0) +
+              (art.beta_sensor === :dilatation ? 1 : 0) : 0
+    nsmooth = art.smoother === :compact ? nact * nsensor : 0
+    nring = art.detector === :d8 ? nact * nsensor : 0
     nsolves = 3 * nact + nact * (1 + solver.equations.n_species) +
-              solver.equations.n_cons * nact
+              solver.equations.n_cons * nact + nsmooth + nring
     @printf("\n===== %s =====\n", name)
     @printf("  %d points, %d species, %d active dims; compute_rhs! = %.3f ms (%.1f ns/pt)\n",
             npt, solver.equations.n_species, nact, 1e3whole, 1e9whole / npt)
-    @printf("  %d compact line-solves per RHS\n", nsolves)
+    @printf("  %d compact line-solves per RHS (%d derivative, %d smoother, %d detector)\n",
+            nsolves, nsolves - nsmooth - nring, nsmooth, nring)
     tot = sum(values(t))
     println("  phase                    ms      % of sum")
     for (k, v) in sort(collect(t), by=x -> -x[2])
@@ -88,11 +101,15 @@ function budget(name, solver, Q)
     @printf("    %-20s %8.3f\n", "(sum of phases)", 1e3tot)
 end
 
-# The sensor smoother is the one phase control worth varying from the launch
-# line: it is the only setting that changes what `artificial` costs without
-# changing the case. `smoother=gaussian` drops the line solves that smooth the
-# sensors, one per active dimension per species.
-opt = script_args(ARGS, (smoother = :compact,))
+# The smoother and the detector are the phase controls worth varying from the
+# launch line: they are the settings that change what `artificial` costs
+# without changing the case. `smoother=compact` restores the line solves that
+# smooth the sensors, one per active dimension per species; `detector=d8`
+# adds a pentadiagonal solve per active dimension per sensor. Defaults track
+# `ArtParams()` so a bare run profiles the shipped configuration.
+const ART_DEFAULTS = ArtParams()
+opt = script_args(ARGS, (smoother = ART_DEFAULTS.smoother,
+                         detector = ART_DEFAULTS.detector))
 
 # tgv-like: 3-D periodic, single species, art off
 s1 = Solver(n_global=(64, 64, 64), L_domain=(2π, 2π, 2π), bcs=per3,
@@ -107,7 +124,8 @@ eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                     IdealSpecies{Float64}("heavy", 0.2, 1.09)])
 s2 = Solver(n_global=(512, 32, 1), L_domain=(1.0, 0.06, 1.0), eos=eos,
             bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-            art=ArtParams(enabled=true, smoother=opt.smoother))
+            art=ArtParams(enabled=true, smoother=opt.smoother,
+                          detector=opt.detector))
 Q2 = allocate_state(s2)
 initialize!(s2, Q2, (x, y, z) -> begin
     θ = tanh_blend(x, 0.5, 0.02)

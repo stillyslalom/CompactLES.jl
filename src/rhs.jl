@@ -14,7 +14,7 @@
 # diagonal (per solution parity σg: derivatives flip field parity, filters
 # preserve it). No node sits at r = 0 and no scale factor vanishes.
 
-mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,SP,Src}
+mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,SP,RP,Src}
     decomp::Decomp
     equations::Eq
     eos::E
@@ -32,6 +32,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,SP,Src}
     deriv_plans::DP
     filter_plans::FP
     smooth_plans::SP                        # sensor smoother (see ArtParams.smoother)
+    ring_plans::RP                          # sensor detector (see ArtParams.detector)
     pairbuf::Array{T,3}                     # paired-fold combo scratch
     pairout::Array{T,3}                     # paired-fold second-parity result
     cfl::T
@@ -50,6 +51,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,SP,Src}
     D_art::Vector{Array{T,3}}
     strain_mag::Array{T,3}; sensor::Array{T,3}; sensor_sp::Array{T,3}
     tmp_a::Array{T,3}; tmp_b::Array{T,3}
+    ring_buf::Array{T,3}                    # d8 detector output, empty otherwise
     # geometry
     inv_J::Array{T,3}
     area_d::NTuple{3,Array{T,3}}
@@ -145,6 +147,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
               ":dilatation, got :$(art.beta_sensor)")
     art.smoother in (:compact, :gaussian) ||
         error("art.smoother must be :compact or :gaussian, got :$(art.smoother)")
+    art.detector in (:delta4, :d8) ||
+        error("art.detector must be :delta4 or :d8, got :$(art.detector)")
     # Per-condition restrictions on geometry and EOS agreement (boundary.jl).
     for d in 1:3, side in 1:2
         validate_bc(bcs[d][side], metric, eos, d, side)
@@ -212,6 +216,11 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     # every plan identical; `:gaussian` is the explicit nine-point stencil the
     # reference implementation uses, and carries no line solve.
     smoo = art.smoother === :gaussian ? gaussian_filter(T) : filt
+    # The sensor detector. `:delta4` is the explicit undivided fourth
+    # difference applied inside `delta4_sum!`, which needs no plan at all;
+    # `:d8` is the pentadiagonal compact eighth derivative and needs one per
+    # dimension, and one pair per fold, exactly as the smoother does.
+    ring = compact_d8(T)
     equations = equations === nothing ? NavierStokes1T(eos) : equations
     equations isa EquationSet || error("equations must be an EquationSet")
     equations.n_species == nspecies(eos) ||
@@ -272,7 +281,10 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         sp = art.smoother === :compact ? fp :
              (mkd(smoo, d; lo_fold=(lo ? 1 : nothing), hi_fold=(hi ? 1 : nothing)),
               mkd(smoo, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing)))
-        FoldSpec(d, lo, hi, pairspec(pdim, revdim), sigvel, sigflux, dp, fp, sp)
+        rp = art.detector === :delta4 ? (nothing, nothing) :
+             (mkd(ring, d; lo_fold=(lo ? 1 : nothing), hi_fold=(hi ? 1 : nothing)),
+              mkd(ring, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing)))
+        FoldSpec(d, lo, hi, pairspec(pdim, revdim), sigvel, sigflux, dp, fp, sp, rp)
     end
     folds = (nothing, nothing, nothing)
     if axis
@@ -300,16 +312,26 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     smooth_plans = art.smoother === :compact ? filter_plans :
                    ntuple(d -> decomp.active[d] && folds[d] === nothing ?
                           mkd(smoo, d) : nothing, 3)
+    # `nothing` rather than a tuple of nothings, and the difference matters:
+    # `detect_sum!` dispatches on this field's type to decide which detector
+    # runs, so under `:delta4` the whole d8 path — `ring_sum!`, `ring_along!`,
+    # and the `apply_along!` call taking a possibly-absent plan — is not
+    # reachable from inference and costs the default configuration nothing.
+    # A tuple would not serve: a fully folded run carries no plans here even
+    # under `:d8`, since those live on the FoldSpec.
+    ring_plans = art.detector === :delta4 ? nothing :
+                 ntuple(d -> decomp.active[d] && folds[d] === nothing ?
+                        mkd(ring, d) : nothing, 3)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
     bcs_t = ntuple(d -> (bcs[d][1], bcs[d][2]), 3)
     solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
                     typeof(stretch),typeof(folds),typeof(bcs_t),
                     typeof(deriv_plans),typeof(filter_plans),typeof(smooth_plans),
-                    typeof(sources)}(
+                    typeof(ring_plans),typeof(sources)}(
                   decomp, equations, eos, transport, art, metric, stretch, folds, sources,
                   Lt, orig, coord_shift, h,
                   bcs_t,
-                  deriv_plans, filter_plans, smooth_plans,
+                  deriv_plans, filter_plans, smooth_plans, ring_plans,
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
                   T(cfl), filter_interval, control,
@@ -321,6 +343,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   f(), f(), f(),
                   [f() for _ in 1:n_species],
                   f(), f(), f(), f(), f(),
+                  art.detector === :delta4 ? zeros(T, 0, 0, 0) : f(),
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(),
                   [f() for _ in 1:3, _ in 1:n_cons],
                   zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0)
@@ -505,6 +528,25 @@ function smooth_along!(out, f, solver::Solver, d::Int, σf::Int)
         apply_along!(out, solver.smooth_plans[d], f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:smooth))
+    end
+    return out
+end
+
+"""
+    ring_along!(out, f, solver, d, σf)
+
+Compact eighth derivative of `f` along dimension `d` with antipodal sign `σf`,
+the ringing detector selected by `ArtParams(detector = :d8)`. Only
+[`ring_sum!`](@ref) calls this, and only under that setting: `solver.ring_plans`
+is `nothing` otherwise, which is what keeps this function off the default
+configuration's inference path. See [`detect_sum!`](@ref).
+"""
+function ring_along!(out, f, solver::Solver, d::Int, σf::Int)
+    fold = solver.folds[d]
+    if fold === nothing
+        apply_along!(out, solver.ring_plans[d], f, solver.decomp)
+    else
+        fold_apply!(out, f, solver, fold, σf, Val(:ring))
     end
     return out
 end

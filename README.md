@@ -201,7 +201,7 @@ same `Problem` with a sequence of `Numerics` values.
 | Forcing         | Typed source tuples (`ConstantBodyForce`) and time-dependent `DirichletBC` |
 | Singular axes   | `AxisBC` (cylindrical axis), `OriginBC` (spherical origin), `PoleBC` (spherical poles) |
 | Thermodynamics  | `IdealMixture`, `Nasa9Mixture` / `read_nasa9` (NASA CEA piecewise cp), `StiffenedGas`; EOS interface for custom models |
-| Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`), with an optional compression-keyed β\* sensor — see [CALIBRATION.md](reference/CALIBRATION.md) |
+| Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`), with an optional compression-keyed β\* sensor and a choice of sensor high-pass and test filter — see [CALIBRATION.md](reference/CALIBRATION.md) |
 | Diagnostics     | `volume_integral`, `plane_profile`, `mix_width`, `molecular_mixing`, `species_pdf`, `tke_profile`, `dissipation_rate` |
 | Failure handling| `StepControl` timestep floors (incl. a `PLANCK_TIME` failsafe), positivity checking, and rollback-with-CFL-backoff; `SolverFailure` |
 | Run control     | `Callback` with `AtTime` / `EveryTime` (both landed on exactly), `EveryStep`, or `WhenState` triggers; `ProgressLog` for progress/timing output; `SwitchableBC` for boundaries that change mid-run |
@@ -382,7 +382,10 @@ particular warrants scrutiny before production use. Other current limitations:
   automatically. A timestep predictor, a larger `C_beta`, and a wider sensor
   reach have each been measured against this and none moves the ceiling;
   `ArtParams(beta_sensor = :gated_strain)` moves it to 0.2 for the cylindrical
-  geometry only. See [CALIBRATION.md](reference/CALIBRATION.md).
+  geometry only. `ArtParams(detector = :d8)`, the reference implementation's
+  eighth-derivative ringing detector, removes the restriction altogether at the
+  planar wall and the cylindrical axis and tightens it at the spherical origin;
+  it is not yet the default. See [CALIBRATION.md](reference/CALIBRATION.md).
 - The spherical origin will not take an initial discontinuity resolved over
   fewer than about three cells, nor a flow that converges to a singular state
   at t = 0. The cylindrical axis takes both.

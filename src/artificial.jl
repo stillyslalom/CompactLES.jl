@@ -1,14 +1,16 @@
 # Cook-style artificial fluid properties (Cook, Phys. Fluids 2007), extended
 # with the artificial species diffusivity for multicomponent mixing.
 #
-# Sensors use *undivided* explicit fourth differences δ⁴ (1, −4, 6, −4, 1) in
-# the computational indices, so the formal grid-spacing powers reduce to
+# Sensors use an undivided high-pass in the computational indices — Cook's
+# explicit fourth difference δ⁴ (1, −4, 6, −4, 1) by default, or the reference
+# implementation's compact eighth derivative under
+# `ArtParams.detector = :d8` — so the formal grid-spacing powers reduce to
 # per-dimension weights: h² for μ*, β* (from |∇⁴S| Δ⁶), h for κ* (|∇⁴e| Δ⁵)
 # and for D* (|∇⁴Y| Δ⁵). β* optionally keys on compression, either by gating
 # the strain sensor or by rebuilding it from the dilatation, which carries the
 # same h² weight (`ArtParams.beta_sensor`; see `gate_beta!` and
-# `dilatation_beta!`). The Gaussian test filter is approximated by one
-# compact-filter pass. Each species carries its own sensor and its own D*_k;
+# `dilatation_beta!`). The Gaussian test filter is `smooth!`, selected by
+# `ArtParams.smoother`. Each species carries its own sensor and its own D*_k;
 # Σ_k J_k = 0 is then restored by the correction velocity in the flux assembly
 # (rhs.jl) rather than by giving every species the same diffusivity. Indices
 # are clamped at closed physical edges; halos cover rank boundaries. On
@@ -17,8 +19,8 @@
 # practice and consistent with resolving power following the mesh.
 
 """
-    ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0,
-              C_kappa=0.01, C_D=0.01, beta_sensor=:strain)
+    ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01, C_D=0.01,
+              beta_sensor=:strain, smoother=:gaussian, detector=:delta4)
 
 Cook-style artificial-property controls.
 
@@ -51,6 +53,15 @@ Cook-style artificial-property controls.
   the cylindrical from 0.15 to 0.2, and makes the sensor phase 29% cheaper, at
   the cost of about seven points of planar wall heating. The four constants
   above are calibrated per setting. All of it is in `reference/CALIBRATION.md`.
+- `detector`: the high-pass that builds every sensor, in
+  [`detect_sum!`](@ref). `:delta4` (default) is Cook's undivided fourth
+  difference, computed explicitly. `:d8` is the reference implementation's
+  compact eighth derivative ([`compact_d8`](@ref)), which is two to three
+  orders of magnitude more selective below the Nyquist and costs a
+  pentadiagonal line solve per direction per sensor, where `:delta4` costs
+  none. Both carry the same per-dimension `h` weights and are normalized to
+  the same grid-oscillation response, so the four constants transfer between
+  them as starting points.
 
 The coefficients are dimensionless numerical regularization parameters, not
 material properties. Their useful values depend on resolution, flow regime,
@@ -66,6 +77,7 @@ Base.@kwdef struct ArtParams{T}
     C_D::T     = 0.01
     beta_sensor::Symbol = :strain
     smoother::Symbol = :gaussian
+    detector::Symbol = :delta4
 end
 
 const D4 = (1.0, -4.0, 6.0, -4.0, 1.0)   # offsets −2:2
@@ -104,6 +116,74 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false)
     end
     return out
 end
+
+"""
+    ring_sum!(out, f, solver, wpow; accumulate=false)
+
+The [`compact_d8`](@ref) counterpart of [`delta4_sum!`](@ref): accumulates
+Σ_d h_d^wpow |d⁸_d f| into `out`, one distributed pentadiagonal line solve per
+active dimension. Requires current rank-boundary halos of `f` to depth 4.
+
+`f` is always an even scalar across a coordinate fold — the strain magnitude,
+the internal energy, a mass fraction, the dilatation — so the antipodal sign
+passed through is `+1`. Closed physical edges are handled by the scheme's own
+closure rows, where `delta4_sum!` instead clamps its indices.
+
+`solver.ring_buf` receives the directional result and is scratch belonging to
+this function alone. That it is not `tmp_a` or `tmp_b` is deliberate: both of
+those hold live inputs at two of the four call sites (the internal energy for
+κ\\*, and the dilatation and its compression switch in
+[`dilatation_beta!`](@ref)).
+"""
+function ring_sum!(out, f, solver, wpow::Int; accumulate::Bool=false)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    accumulate || fill!(out, 0)
+    # Read out of the solver before the loop, not inside the threaded closure:
+    # a closure capturing `solver` allocates once per region in proportion to
+    # its size, as recorded on `compute_artificial!`.
+    ring_buf = solver.ring_buf
+    for d in 1:3
+        decomp.active[d] || continue
+        wd = solver.h[d]^wpow
+        ring_along!(ring_buf, f, solver, d, 1)
+        @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+            j, k = Tuple(jk)
+            @inbounds for i in 1:nx
+                I = CartesianIndex(i + o1, j + o2, k + o3)
+                out[I] += wd * abs(ring_buf[I])
+            end
+        end
+    end
+    return out
+end
+
+"""
+    detect_sum!(out, f, solver, wpow; accumulate=false)
+
+Apply the detector named by `ArtParams.detector` — [`delta4_sum!`](@ref) or
+[`ring_sum!`](@ref) — to build one sensor field.
+
+The choice is made once per sensor rather than inside either kernel: both are
+full array passes, and a per-point test would cost more than the difference
+between the detectors themselves.
+
+It is also made on a type rather than on the `Symbol`. `solver.ring_plans` is
+`nothing` exactly when the detector is `:delta4`, so that case never reaches
+`ring_sum!` at all — reaching it in dead code would leave `bench/jetcheck.jl`
+reporting the runtime dispatch of an `apply_along!` on an absent plan, charged
+to every run whether or not it uses the detector. Both settings are setup-time
+constants identical on every rank, so either form of the branch is safe to sit
+above `ring_sum!`'s collectives.
+"""
+detect_sum!(out, f, solver, wpow::Int; accumulate::Bool=false) =
+    _detect_sum!(out, f, solver, wpow, accumulate, solver.ring_plans)
+
+_detect_sum!(out, f, solver, wpow::Int, acc::Bool, ::Nothing) =
+    delta4_sum!(out, f, solver, wpow; accumulate=acc)
+_detect_sum!(out, f, solver, wpow::Int, acc::Bool, ::Tuple) =
+    ring_sum!(out, f, solver, wpow; accumulate=acc)
 
 """
     smooth!(f, solver)
@@ -245,7 +325,7 @@ function dilatation_beta!(solver, C_beta)
         end
     end
     exchange_halos!(solver.tmp_a, decomp)
-    delta4_sum!(solver.sensor, solver.tmp_a, solver, 2)
+    detect_sum!(solver.sensor, solver.tmp_a, solver, 2)
     smooth!(solver.sensor, solver)      # clobbers tmp_a, which is spent by now
     @threaded nx*ny*nz for jk in outer_indices(ny, nz)
         j, k = Tuple(jk)
@@ -311,9 +391,9 @@ function compute_artificial!(solver, Q)
         end
     end
 
-    # μ*, β* sensor: Σ_d h_d² |δ⁴_d S|, smoothed.
+    # μ*, β* sensor: Σ_d h_d² |D_d S| for the selected detector D, smoothed.
     exchange_halos!(solver.strain_mag, decomp)
-    delta4_sum!(solver.sensor, solver.strain_mag, solver, 2)
+    detect_sum!(solver.sensor, solver.strain_mag, solver, 2)
     smooth!(solver.sensor, solver)
     @threaded nx*ny*nz for jk in outer_indices(ny, nz)
         j, k = Tuple(jk)
@@ -330,7 +410,7 @@ function compute_artificial!(solver, Q)
     art.beta_sensor === :gated_strain && gate_beta!(solver)
     art.beta_sensor === :dilatation   && dilatation_beta!(solver, C_beta)
 
-    # κ* sensor: Σ_d h_d |δ⁴_d e|, smoothed; κ* = C_κ · scale(EOS) · sensor,
+    # κ* sensor: Σ_d h_d |D_d e|, smoothed; κ* = C_κ · scale(EOS) · sensor,
     # with the scale ρc/T_ion for the gas models. Internal energy comes straight
     # from Q, so the sensor itself is EOS-agnostic; the scale is an EOS query
     # (see the note in physics.jl on why it is the weaker of the two
@@ -347,7 +427,7 @@ function compute_artificial!(solver, Q)
         end
     end
     exchange_halos!(solver.tmp_a, decomp)
-    delta4_sum!(solver.sensor, solver.tmp_a, solver, 1)
+    detect_sum!(solver.sensor, solver.tmp_a, solver, 1)
     smooth!(solver.sensor, solver)
     eos = solver.eos
     @threaded nx*ny*nz for jk in outer_indices(ny, nz)
@@ -360,13 +440,13 @@ function compute_artificial!(solver, Q)
         end
     end
 
-    # Per-species D*_k sensors: Σ_d h_d |δ⁴_d Y_k|, each smoothed;
+    # Per-species D*_k sensors: Σ_d h_d |D_d Y_k|, each smoothed;
     # D*_k = C_D c · sensor_k. Costs n_species filter sweeps per RHS; the flux
     # assembly's correction velocity keeps Σ_k J_k = 0 despite unequal D_k.
     # Only meaningful with more than one species.
     if solver.equations.n_species > 1
         for sp in 1:solver.equations.n_species
-            delta4_sum!(solver.sensor_sp, solver.Y[sp], solver, 1)
+            detect_sum!(solver.sensor_sp, solver.Y[sp], solver, 1)
             smooth!(solver.sensor_sp, solver)
             @threaded nx*ny*nz for jk in outer_indices(ny, nz)
                 j, k = Tuple(jk)
