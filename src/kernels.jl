@@ -117,7 +117,7 @@ Explicit nine-point Gaussian test filter, the smoother Cook's artificial
 properties assume and the one Miranda applies as `gbar`
 (`pyranda/parcop/stencils.f90`, `cgfs4`). The left-hand side is the identity,
 so this is a `CompactScheme` only in the sense that it reuses the same fill,
-fold and closure machinery; [`plan_direction`](@ref) detects the zero α and
+fold and closure machinery; `plan_direction` detects the zero α and
 skips the line solve and its interface reduction entirely.
 
 The weights sum to exactly 1 over the common denominator 103680, so constants

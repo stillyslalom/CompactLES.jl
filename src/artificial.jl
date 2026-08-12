@@ -43,7 +43,7 @@ Cook-style artificial-property controls.
   smoothing pass per RHS evaluation (`dilatation_beta!`). The measured
   differences are in `reference/CALIBRATION.md`.
 - `smoother`: which operator stands in for Cook's Gaussian test filter in
-  [`smooth!`](@ref). `:gaussian` (default) is [`gaussian_filter`](@ref), the
+  `smooth!`. `:gaussian` (default) is [`gaussian_filter`](@ref), the
   explicit nine-point stencil, which carries no line solve and no interface
   collective. `:compact` reuses `Numerics.filt` and is what shipped before this
   option existed; it retains 99% of the amplitude at four points per wavelength
@@ -54,7 +54,7 @@ Cook-style artificial-property controls.
   the cost of about seven points of planar wall heating. The four constants
   above are calibrated per setting. All of it is in `reference/CALIBRATION.md`.
 - `detector`: the high-pass that builds every sensor, in
-  [`detect_sum!`](@ref). `:delta4` (default) is Cook's undivided fourth
+  `detect_sum!`. `:delta4` (default) is Cook's undivided fourth
   difference, computed explicitly. `:d8` is the reference implementation's
   compact eighth derivative ([`compact_d8`](@ref)), which is two to three
   orders of magnitude more selective below the Nyquist and costs a
