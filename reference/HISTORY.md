@@ -13,8 +13,9 @@ points at them rather than restating them.
 3. [Parallel HDF5/XDMF output (July 2026)](#parallel-hdf5xdmf-output-july-2026)
 4. [Adaptivity groundwork (July 2026)](#adaptivity-groundwork-july-2026)
 5. [Near-term corrections (July 2026)](#near-term-corrections-july-2026)
-6. [Model debt 1 — the dilatation-gated β\* (July 2026)](#model-debt-1--the-dilatation-gated-beta-july-2026)
+6. [The compression-keyed β\* sensors (July 2026)](#compression-keyed-beta-sensors-july-2026)
 7. [The reference-implementation pass (August 2026)](#the-reference-implementation-pass-august-2026)
+8. [The sensor fields (August 2026)](#the-sensor-fields-august-2026)
 
 ## Phase 0 — extensibility seams (July 2026)
 
@@ -58,7 +59,8 @@ remains unexplained.
 The CFL limit was attributed at the time to a dispersive density undershoot
 outrunning the artificial viscosity, with timestep lag tested and excluded. The
 undershoot attribution was itself withdrawn later on the `bench/nohprobe.jl`
-measurements recorded under [model debt 1](#model-debt-1--the-dilatation-gated-beta-july-2026):
+measurements recorded under [the compression-keyed
+sensors](#compression-keyed-beta-sensors-july-2026):
 the failure begins at the symmetry plane, not ahead of the front.
 
 **Artificial-property calibration.** `bench/artcal.jl` swept each constant over
@@ -191,11 +193,11 @@ performance/efficiency-core effect documented in `CLAUDE.md`. The
 KernelAbstractions conversion in `reference/AMR_GPU.md` supersedes the flattening
 with an ndrange over all three dimensions.
 
-<a id="model-debt-1--the-dilatation-gated-beta-july-2026"></a>
+<a id="compression-keyed-beta-sensors-july-2026"></a>
 
-## Model debt 1 — the dilatation-gated β\* (July 2026)
+## The compression-keyed β\* sensors (July 2026)
 
-The first model debt, closed. The two halves of the literature refinement turn
+The first of the model debts, closed. The two halves of the literature refinement turn
 out to be separable and to behave completely differently, which is the substance
 of the result. Full measurements are in `reference/CALIBRATION.md`.
 
@@ -242,9 +244,35 @@ What was measured:
   reproduce; H(−Δ) is discontinuous at Δ = 0 and the literature ε is too small
   to have decayed the ratio by the time Δ reaches round-off.
 
+**The reach hypothesis is closed, and the diagnosis it rested on was wrong.**
+The suspicion on record was that β\* does not reach far enough *ahead* of the
+front, which pointed at a wider sensor stencil. `bench/nohprobe.jl` was written
+to test it and refutes it three ways. β\* reach holds at 14.2–14.8 cells ahead of
+the front through a complete run, while the damage sits 3–5 cells ahead. β\*
+stands at 14–21% of its own domain maximum on the worst cell at the shipped CFL,
+and at 84–100% of it at the failing one. And above the ceiling the failure does
+not begin ahead of the front at all: at ν = 1 the wall cell degrades first,
+within five steps, and at ν = 3 the origin cell carries an outward u = +5.6
+against an inflow of −1 one step after a density minimum of 1.92 over the whole
+line. The restriction is a symmetry-plane startup problem, consistent with
+`:gated_strain` moving the one ceiling it moves by relieving the axis cell rather
+than the shock. Measurements are in
+[CALIBRATION.md](CALIBRATION.md#where-the-restriction-originates).
+
+The probe also surfaced a defect outside the item's scope. Runs that
+**complete**, including the shipped ν = 1 validation case, carry six to eight
+cells of negative internal energy travelling with the front for their whole
+duration. `primitives!` floors T_ion at 1e-300 and continues, while the
+positivity check reads ρ, which stays positive. The internal energy is
+ill-conditioned at the Noh ambient rather than merely inaccurate, so this became
+a requirement on the positivity failsafe in `ROADMAP.md`: it has to cover
+internal energy, not density alone.
+
 Whether `:gated_strain` should become the default is left open: it changes
 guarded numbers in the fourth digit across the battery, so the case needs a
-re-baseline and a second geometry showing the same gain.
+re-baseline and a second geometry showing the same gain, and by the mechanism
+above that geometry would have to be one whose ceiling is also set by a fold the
+gate relieves.
 
 Two things landed alongside. `bench/artcal.jl` now catches `SolverFailure` per
 configuration and continues, closing the known limitation that a sweep died at
@@ -313,6 +341,16 @@ rests on the spherical case alone and that is the case it costs, while the four
 constants are still the δ⁴ fit. A `C_beta` refit and an account of the origin
 cell would settle it.
 
+Two findings from the same reading needed no code change. The reference counts
+the sound speed once against the minimum spacing where `max_rate` counts it per
+active dimension; the difference is recorded in `reference/CALIBRATION.md` and
+deliberately not adopted, because it would silently rescale `cfl` for every
+existing script. And `reference/IMMERSED.md`, written from Pyranda's
+documentation, was corrected against `pyrandaIBM.py`. Of the differences left
+outstanding, the sensor fields were taken up next and are recorded below;
+conservative filtering on a non-Cartesian metric, directional bulk viscosity
+and the anchored-difference closure rows are listed in `ROADMAP.md`.
+
 `compact_d8` is the first symmetric banded scheme in the package, so it is also
 the first exercise of `BandPlan` with filter-side conventions: right-hand side
 added rather than subtracted, high-edge closure rows mirrored rather than
@@ -324,3 +362,79 @@ round-off across three split axes. `bench/artcal.jl`, `bench/phases.jl` and
 rather than spelling them out, which is what let them go stale against the
 shipped smoother, and the `phases.jl` line-solve counter reports the derivative,
 smoother and detector solves separately instead of omitting the sensor path.
+
+## The sensor fields (August 2026)
+
+The third difference identified by the same reading, taken up next because the
+detector measurement placed it at the head of the list. Cook builds μ\* and β\*
+from the strain magnitude |S|; Miranda builds μ\* from the velocity components
+and β\* from the dilatation, neither of which carries an absolute value.
+`ArtParams` gained `mu_sensor` (`:strain`, `:velocity`), `reduction` (`:sum`,
+`:max`, the directional combination) and a fourth `beta_sensor` setting,
+`:ungated_dilatation`, which is the reference's own β\*; the variant tested
+previously was that sensor together with a Ducros switch. Every default is
+unchanged. Measurements are in `reference/CALIBRATION.md` under "The sensors
+read |S|".
+
+**The sensor field determines how much of the detector's selectivity is
+usable.** On a velocity sine with no time integration (`bench/artcal.jl
+response`), the two detectors reproduce their designed separation of 569× at
+eight points per wavelength and 26× at four, to four figures, when applied to
+the velocity or the dilatation. Applied to |S| they lie within 1.8× of each
+other at every wavelength, the cusps of |S| being grid-scale structure whatever
+the flow. The previous pass inferred this from two cases; this measures it
+across the spectrum.
+
+**A two-point wave produces no response in any sensor built through a
+derivative.** A centered scheme annihilates the Nyquist mode, so |S| and ∇·u
+are identically zero there and both Cook's μ\* sensor and the reference's β\*
+sensor return zero on the shortest wave the grid carries. Only the
+velocity-component sensor responds to it. The property was not recorded here
+before and is a second view of the earlier finding that grid-scale dissipation
+comes from the compact filter rather than from the Cook properties.
+
+What the cases showed:
+
+- **μ\* from the velocity components is a null result on the battery.** Every
+  column moves in the fourth or fifth digit under both detectors, and no CFL
+  ceiling moves in any of the three Noh geometries. Every case there is
+  one-dimensional and `C_mu` is 0.002, so the shear channel does very little in
+  them, and this outcome was the expected one.
+- **On Taylor–Green, where that channel is active, it behaves as the response
+  measurement predicts.** At 64³ the μ\* share of the sink rises 4.5% → 6.0% at
+  the expense of the filter's share, and the peak falls 0.3% toward the van
+  Rees reference. The directional maximum instead cuts the share to 2.7% and
+  moves the peak from t = 8.49 to 8.97, against a reference peak at t = 9.
+  Neither effect is distinguishable from a rescaling of `C_mu` at this
+  resolution. The velocity field costs +46% on the sensor phase, detecting
+  three fields where the strain sensor detects one, and paired with `:d8` it
+  makes the sensor phase larger than the rest of the right-hand side.
+- **β\* from the ungated dilatation improves accuracy and loses the cylindrical
+  axis.** Under `:d8` the ν = 3 plateau error falls 0.49% → 0.24%, wall heating
+  +53% → +51% and the Lax contact 0.0044 → 0.0041, while the Shu–Osher train
+  loses 0.5% and the Woodward–Colella peak 1.5%. The axis ceiling falls from
+  1.0+ to 0.2 under `:d8`, and the geometry is lost outright under `:delta4`.
+  The gated variant loses both converging geometries and this one loses only
+  the axis, which separates the attribution: the spherical loss belongs to the
+  switch and the cylindrical loss to the sensor field.
+- **The directional reduction is invisible to the battery.** Every case there
+  is one-dimensional, and Σ_d and MAX are the same operation in one dimension.
+
+One defect was found and fixed in the process. `delta4_sum!` extends a field
+past a closed edge by clamping the index, which is wrong at O(h) rather than
+O(h²) for a field that is odd across a fold, and the velocity sensor is the
+first such field. On u_r = r at the cylindrical axis, the regular behaviour of
+a radial velocity, the clamp produced C_mu·ρ·h² of viscosity on the axis cell
+where every converging case fails. The odd path now uses the half-offset
+mirror, which annihilates that field exactly and agrees with the result `:d8`
+obtains through its fold plans. The even path is left on the clamp, since
+changing it would move guarded numbers for a second-order effect that nobody
+has measured; it is item 8 of the calibration remainders.
+
+No default changed, and the item is closed on the measurement.
+`mu_sensor = :velocity` has a mechanism behind it, no case in the battery that
+resolves it, and a Taylor–Green effect indistinguishable from a rescaling of a
+constant that has never been fitted; settling it needs the `C_mu` refit and the
+filter calibration, which wait on the same 3-D campaign.
+`beta_sensor = :ungated_dilatation` is a measured negative for converging
+geometry. `reduction = :max` is a third setting acting on an unfitted constant.

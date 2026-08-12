@@ -38,7 +38,7 @@ include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
 const DEFAULTS = ArtParams()
 const ALL = ["mu", "beta", "kappa", "D", "cfl", "resolution", "sensor", "smoother",
-             "detector"]
+             "detector", "field", "response"]
 # Sweep names are bare words; `key=value` sets the background configuration that
 # every sweep then runs against. Refitting a constant under a changed smoother
 # is exactly `artcal.jl kappa smoother=gaussian`, and keeping the two forms in
@@ -65,7 +65,9 @@ const CAP = 30_000
 art(; kw...) = ArtParams(; enabled=true,
                          C_mu=DEFAULTS.C_mu, C_beta=DEFAULTS.C_beta,
                          C_kappa=DEFAULTS.C_kappa, C_D=DEFAULTS.C_D,
+                         mu_sensor=DEFAULTS.mu_sensor,
                          beta_sensor=DEFAULTS.beta_sensor,
+                         reduction=DEFAULTS.reduction,
                          smoother=OPTS.smoother, detector=OPTS.detector, kw...)
 
 mark(v, d) = v == d ? "*" : " "     # flags the shipped default in a sweep
@@ -300,6 +302,93 @@ if want("detector")
         @printf("%-10s %-5.3g | %15.4f | %15.4f | %15.4f\n", s, c, n1[1], n2[1], n3[1])
     end
     println("  (NaN = the run lost positivity or stalled before reaching t_final)")
+end
+
+# The field each channel's detector reads. Cook takes μ* and β* from the strain
+# magnitude |S|; the reference implementation takes μ* from the velocity
+# components and β* from the dilatation, and neither of those carries an
+# absolute value. |S| has a cusp wherever the strain passes through zero, and a
+# cusp is grid-scale structure at any resolution, so a selective detector and an
+# unselective one return the same magnitude through that field. The `response`
+# sweep below measures that. The field and the detector are therefore not
+# independent changes, and this sweep runs the fields against both detectors.
+if want("field")
+    println("\n=== sensor fields (which field each channel's detector reads) ===")
+    println("detector mu*/beta*             | Noh1 plat/exact  deficit | Noh3 plat/exact | Lax L1  contact | Shu train amp | WC peak")
+    hr()
+    for det in (:delta4, :d8),
+        (ms, bs) in ((:strain, :strain), (:velocity, :strain),
+                     (:strain, :ungated_dilatation),
+                     (:velocity, :ungated_dilatation))
+        a = art(mu_sensor=ms, beta_sensor=bs, detector=det)
+        n1 = m_noh(1; art=a); n3 = m_noh(3; art=a)
+        lx = m_lax(art=a);    sh = m_shu(art=a); wc = m_wc(art=a)
+        @printf("%-8s %-9s %-9s%s | %14.4f  %+6.0f%% | %15.4f | %7.1e %7.4f | %13.4f | %.4f\n",
+                det, ms, bs,
+                mark((det, ms, bs), (DEFAULTS.detector, DEFAULTS.mu_sensor,
+                                     DEFAULTS.beta_sensor)),
+                n1[1], 100n1[2], n3[1], lx[1], lx[2], sh[1], wc[1])
+    end
+    println("\n--- the Noh CFL ceiling, per field pairing ---")
+    println("detector mu*/beta*              cfl  | Noh1 plat/exact | Noh2 plat/exact | Noh3 plat/exact")
+    hr()
+    for det in (:delta4, :d8),
+        (ms, bs) in ((:strain, :strain), (:velocity, :strain),
+                     (:strain, :ungated_dilatation),
+                     (:velocity, :ungated_dilatation)),
+        c in (1.0, 0.4, 0.2, 0.15)
+        a = art(mu_sensor=ms, beta_sensor=bs, detector=det)
+        n1 = m_noh(1; art=a, cfl=c); n2 = m_noh(2; art=a, cfl=c)
+        n3 = m_noh(3; art=a, cfl=c)
+        @printf("%-8s %-9s %-10s %-5.3g | %15.4f | %15.4f | %15.4f\n",
+                det, ms, bs, c, n1[1], n2[1], n3[1])
+    end
+    println("  (NaN = the run lost positivity or stalled before reaching t_final)")
+end
+
+# Sensor response against wavelength, on one velocity sine and with no time
+# integration: what each (field, detector) pair reports before any case is run.
+# The comparison is against the detector's own designed response, a factor of
+# 569 at eight points per wavelength, 26 at four and 1 at the Nyquist
+# (reference/CALIBRATION.md). A pair applied to a smooth field recovers that
+# separation; applied to |S| it recovers almost none of it.
+if want("response")
+    N = 64
+    function sine_solver(k, a)
+        prob = Problem(eos=single_species(gamma=1.4, R=1.0),
+                       transport=Transport(mu0=0.0),
+                       domain=((0.0, 2π), (0.0, 0.1), (0.0, 0.1)), bcs=per3,
+                       ic=(x, y, z) -> Prim(rho=1.0, p=1.0,
+                                            u=(cos(k * x), 0.0, 0.0)))
+        solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=a))
+        CL.compute_primitives_and_gradients!(solver, Q)
+        CL.compute_artificial!(solver, Q)
+        return solver
+    end
+    peak_mu(k, ms, det) = maximum(sine_solver(k, art(mu_sensor=ms, detector=det)).mu_art)
+    peak_beta(k, bs, det) = maximum(sine_solver(k, art(beta_sensor=bs, detector=det)).beta_art)
+
+    println("\n=== sensor response on u = cos(kx), N = $N periodic ===")
+    println("k/pi    ppw  | mu* strain: d4     d8     ratio | mu* velocity: d4     d8     ratio")
+    hr()
+    for k in (2, 4, 8, 16, 24, 32)
+        s4 = peak_mu(k, :strain, :delta4);   s8 = peak_mu(k, :strain, :d8)
+        v4 = peak_mu(k, :velocity, :delta4); v8 = peak_mu(k, :velocity, :d8)
+        @printf("%-6.3f %5.1f | %9.3e %9.3e %7.3g | %9.3e %9.3e %7.3g\n",
+                2k / N, N / k, s4, s8, s4 / s8, v4, v8, v4 / v8)
+    end
+    println("k/pi    ppw  | beta* strain: d4    d8     ratio | beta* dilatation: d4  d8     ratio")
+    hr()
+    for k in (2, 4, 8, 16, 24, 32)
+        s4 = peak_beta(k, :strain, :delta4)
+        s8 = peak_beta(k, :strain, :d8)
+        v4 = peak_beta(k, :ungated_dilatation, :delta4)
+        v8 = peak_beta(k, :ungated_dilatation, :d8)
+        @printf("%-6.3f %5.1f | %9.3e %9.3e %7.3g | %9.3e %9.3e %7.3g\n",
+                2k / N, N / k, s4, s8, s4 / s8, v4, v8, v4 / v8)
+    end
+    println("  (k/pi = 1 is the two-point wave; a centered derivative annihilates it,")
+    println("   so every sensor built from |S| or from div u reports exactly zero there)")
 end
 
 println("\nartcal complete")

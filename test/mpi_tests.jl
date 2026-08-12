@@ -835,8 +835,12 @@ function test_artificial_decomposition()
     # toggle. Each tolerance leaves one to two orders on top of the measured
     # value and stays two or more below the ~1e-2 an unexchanged halo would
     # produce. See reference/CALIBRATION.md.
-    tol_of = Dict(:strain => 1e-10, :gated_strain => 1e-4, :dilatation => 1e-5)
-    for sensor in (:strain, :gated_strain, :dilatation)
+    # `:ungated_dilatation` is the same sensor field with no switch on it, so it
+    # goes back into the round-off class the strain sensor is in: the field
+    # itself always reproduced, and only the discontinuity spoiled it.
+    tol_of = Dict(:strain => 1e-10, :gated_strain => 1e-4, :dilatation => 1e-5,
+                  :ungated_dilatation => 1e-10)
+    for sensor in (:strain, :gated_strain, :dilatation, :ungated_dilatation)
         sums = Float64[]
         for ax in 1:3
             solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3,
@@ -865,10 +869,44 @@ function test_artificial_decomposition()
     # happily on a `beta_sensor` that was being ignored. `check` tests val < tol,
     # so each relative difference is inverted into one: this passes when the
     # totals differ by more than 0.1%.
-    for sensor in (:gated_strain, :dilatation)
+    for sensor in (:gated_strain, :dilatation, :ungated_dilatation)
         rel = abs(totals[:strain][1] - totals[sensor][1]) /
               max(totals[:strain][1], 1e-300)
         check("β* differs between strain and $sensor", 1e-3 / max(rel, 1e-300), 1.0)
+    end
+    # The μ* channel, whose two settings are the field it reads and how the
+    # directions combine. Both are plain reductions with no switch, so both
+    # reproduce to round-off; `:max` is the one setting in `ArtParams` that a
+    # one-dimensional test cannot distinguish from the default at all, which
+    # leaves this its only coverage outside Taylor–Green.
+    musums = Dict{Symbol,Vector{Float64}}()
+    for (label, art) in ((:strain_sum, ArtParams(enabled=true)),
+                         (:velocity_sum, ArtParams(enabled=true, mu_sensor=:velocity)),
+                         (:strain_max, ArtParams(enabled=true, reduction=:max)))
+        sums = Float64[]
+        for ax in 1:3
+            solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3,
+                       art=art, dims=splitdims(ax))
+            Q = allocate_state(solver)
+            initialize!(solver, Q, (x, y, z) ->
+                Prim(u=(sin(x)cos(y)cos(z), -cos(x)sin(y)cos(z), 0.3sin(2z)),
+                     p=1 + 0.2cos(x), rho=1 + 0.3sin(y)))
+            compute_rhs!(solver, Q, zero(Q))
+            loc = 0.0
+            for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
+                i in 1:solver.decomp.n_local[1]
+                loc += solver.mu_art[gidx(solver, i, j, k)]
+            end
+            push!(sums, gsum(loc))
+        end
+        musums[label] = sums
+        check("$label: Σ μ* spread over the three split axes",
+              maximum(sums) - minimum(sums), 1e-10 * max(maximum(sums), 1e-30))
+    end
+    for label in (:velocity_sum, :strain_max)
+        rel = abs(musums[:strain_sum][1] - musums[label][1]) /
+              max(musums[:strain_sum][1], 1e-300)
+        check("μ* differs between strain_sum and $label", 1e-3 / max(rel, 1e-300), 1.0)
     end
 end
 

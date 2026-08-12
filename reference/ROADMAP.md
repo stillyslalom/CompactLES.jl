@@ -40,9 +40,9 @@ design decisions:
   plus parity/antipodal folds for the cylindrical axis, spherical origin, and
   spherical poles — with a discrete geometric conservation law (GCL) that
   preserves freestream to machine zero — is more than Pyranda or Miranda
-  expose, and nothing in the Julia
-  ecosystem has it. Converging-shock and spherical-implosion geometry is
-  directly NIF-relevant, and this is the piece that is hard to rebuild.
+  expose, and nothing in the Julia ecosystem has it. Converging-shock and
+  spherical-implosion geometry is directly NIF-relevant, and this is the piece
+  that is hard to rebuild.
 - **The distributed compact solve.** The spike/reduced-interface banded solve
   reproduces the single-domain answer bit-for-bit at any rank count, with the
   reduced system factorized once at plan time. It is also, as argued below,
@@ -65,98 +65,56 @@ systems.
 | Regularization | artificial bulk viscosity | Cook μ\*, β\*, κ\*, per-species D\* |
 | Problem specification | Python domain-specific language (DSL) over symbolic PDE strings | typed `Problem` / `Numerics` |
 | Geometry | Cartesian, curvilinear, immersed boundaries | Cartesian, cylindrical, spherical with regularized singularities; stretch maps |
-| Lineage | Miranda validation heritage | validated against analytic references only (see item 4 of the model debts) |
+| Lineage | Miranda validation heritage | validated against analytic references only (see model debt 3) |
 
-Pyranda also provides a reference implementation because it carries Miranda's
+Pyranda also provides a reference implementation, because it carries Miranda's
 Fortran kernels in `pyranda/parcop/`, including operators Pyranda itself does
-not expose. The AMR level-transfer analysis derived from those sources now
-lives in `reference/AMR_GPU.md`; a reading of the artificial-property and
-filter path against `artificial.jl` is in
-`reference/CALIBRATION.md`, and of the immersed-boundary method in
-`reference/IMMERSED.md`.
+not expose. The readings of those sources are recorded elsewhere: level
+transfer in `reference/AMR_GPU.md`, the artificial-property and filter path in
+`reference/CALIBRATION.md`, the immersed-boundary method in
+`reference/IMMERSED.md`, and what the August 2026 pass changed in
+`reference/HISTORY.md`.
 
-Three structural comparisons came out of that reading and need no action.
+Three structural comparisons came out of that reading and need no action. The
+distributed compact solve is the same algorithm as Miranda's, down to the
+factorized interface system and the single `Allgather` per application;
+Miranda's additional gather-solve-scatter mode (`directcom = 2`) is the shape
+to reach for if the interface solve ever appears in a scaling curve. Symmetry
+is handled by equivalent means, Miranda folding parity into the coefficient
+tables at setup where the fold plans plus `sigflux` carry the same algebra. And
+the freestream claim above holds against the source: Miranda's spherical metric
+sources use analytic `1/tan θ` and `1/sin θ`, so the discrete redefinition of
+`cot_over_r` is genuinely beyond the reference, whose r = 0 is an ordinary
+reflective symmetry plane rather than a half-offset antipodal fold.
 
-- **The distributed compact solve is the same algorithm.** Miranda factorizes
-  the local banded operator, solves for the influence of the interface
-  unknowns, gathers those blocks and factorizes a block-tridiagonal interface
-  system once at setup; each application is one `Allgather` of end values plus
-  a correction. `LineSolver` does the same. Miranda additionally offers a
-  gather-solve-scatter mode (`directcom = 2`) for the case where the
-  `Allgather` dominates, which is the shape to reach for if the interface
-  solve ever appears in a scaling curve.
-- **Symmetry is handled by equivalent means.** Miranda instantiates a
-  symmetric and an antisymmetric operator per direction and folds parity into
-  the coefficient tables at setup, then propagates a parity multiplier through
-  products. The fold plans plus `sigflux` are the same algebra.
-- **The freestream claim above holds against the source.** Miranda's spherical
-  metric sources use analytic `1/tan θ` and `1/sin θ`, so the discrete
-  redefinition of `cot_over_r` that makes freestream preservation exact is
-  genuinely beyond what the reference does. Its r = 0 is an ordinary reflective
-  symmetry plane, not a half-offset antipodal fold.
+#### Open work from the source comparison
 
-#### Work arising from the source comparison
+In rough order of expected value. The sensor fields stood at the head of this
+list and are now measured and closed (`reference/HISTORY.md`): μ\* from the
+velocity components, β\* from the dilatation, and MAX against Σ_d over
+directions. All three are `ArtParams` settings and none of them is a default.
 
-Closed by the August 2026 pass:
-
-- **The sensor smoother.** Cook's Gaussian test filter is an explicit
-  nine-point stencil in the reference, not a compact-filter pass;
-  `ArtParams.smoother` now offers both, the mechanism and the measurements are
-  in `reference/CALIBRATION.md`, and the default is settled there.
-- **The eighth-derivative detector.** `ArtParams.detector = :d8` supplies the
-  reference's compact `ring` operator ([`compact_d8`](../src/kernels_banded.jl))
-  against Cook's undivided δ⁴, normalized to the same grid-oscillation
-  response so the four constants transfer. Measured on top of the Gaussian
-  smoother, it improves six of seven battery columns and **removes the
-  artificial-property CFL restriction at the planar wall and the cylindrical
-  axis**, 0.2 → 1.0 or beyond with the plateau flat to four digits across that
-  whole range. It costs the spherical origin 0.4 → 0.25 and +19% on the
-  right-hand side. `:delta4` remains the default pending a `C_beta` refit;
-  the measurements, the mechanism at the origin cell, and what would settle
-  the default are in `reference/CALIBRATION.md`.
-- **The immersed-boundary account** in `reference/IMMERSED.md`, corrected
-  against `pyrandaIBM.py`.
-- **CFL normalization.** The reference counts the sound speed once against the
-  minimum spacing where `max_rate` counts it per active dimension. Documented
-  in `reference/CALIBRATION.md`; deliberately *not* changed, because it would
-  silently rescale `cfl` for every existing script.
-
-Open, in rough order of expected value:
-
-1. **The sensor fields, not just the detector.** The detector swap above is a
-   lower bound on what the reference method gains, because the reference does
-   not build the sensors from |S|. Miranda takes μ\* from `ringV(u, v, w)`, the
-   ring of each velocity component along each direction reduced by `MAX` over
-   the nine pairs, and β\* from `ring(∇·u)`. The absolute value in |S| puts a
-   cusp wherever the strain passes through zero, and a cusp is a grid-scale
-   feature no detector declines to see: on a resolved wave `:d8` separates from
-   δ⁴ by 2.6e6 on κ\*, whose input is smooth, and by 1.8 on β\*, whose input is
-   not. That gap is the measurement motivating this item. `MAX` versus `Σ_d`
-   over directions is a separable and much cheaper sub-experiment within it.
-2. **Conservative filtering on non-Cartesian metrics.** The reference filters
+1. **Conservative filtering on non-Cartesian metrics.** The reference filters
    the volume-weighted field and divides by a cell volume passed through the
    same filter once at setup, which reproduces constants exactly on a
    non-uniform metric; `filter_state!` filters the conserved components
    unweighted. Uniform Cartesian results are unaffected by construction, so the
    measurement is the converging cases plus a conservation-defect probe.
-3. **A `C_beta` and `C_mu` refit under the adopted smoother and detector.**
+2. **A `C_beta` and `C_mu` refit under the adopted smoother and detector.**
    Taylor–Green at 64³ shows the μ\* channel moving 4.0% → 4.5% of the sink
    under the Gaussian, which does not demand a refit but does not rule one out.
-   `C_beta` under `:d8` is the sharper case and is what the detector's default
-   turns on.
-4. **Directional artificial bulk viscosity**, with the per-direction diffusive
+   `C_beta` under `:d8` is the sharper case, and it is what the detector's
+   default turns on.
+3. **Directional artificial bulk viscosity**, with the per-direction diffusive
    timestep limit that goes with it. **Blocked**: no anisotropic or strongly
    stretched case exists in the validation battery, so measuring it against the
    present cases would produce a null result that means nothing. Build the case
    first.
-5. **Anchored-difference closure rows.** The reference writes boundary rows as
+4. **Anchored-difference closure rows.** The reference writes boundary rows as
    differences from the anchor point so a constant is annihilated exactly in
    floating point rather than by cancellation. **Gated** on measuring the
    present residual first; if it is 1e-16 times the field scale the change is
    cosmetic and should be recorded as such rather than made.
-The line-solve counter in `bench/phases.jl`, listed here as a minor item, is
-done: it never counted the sensor path at all, and now reports the derivative,
-smoother and detector solves separately.
 
 **Capabilities absent from CompactLES:** a DSL for defining a new PDE system
 in ten lines without touching the solver; immersed boundaries, which provide
@@ -172,8 +130,8 @@ retaining inference and allocation discipline (`bench/audit.jl`,
 the route is a macro that *emits* an equation set at parse time; runtime
 evaluation of equation strings is excluded (see Non-goals).
 
-Immersed boundaries are now designed in `reference/IMMERSED.md`: a sharp IB
-cut cell is fundamentally at odds with a line-global compact operator, so the
+Immersed boundaries are designed in `reference/IMMERSED.md`: a sharp IB cut
+cell is fundamentally at odds with a line-global compact operator, so the
 design commits to the diffuse family — a graded post-stage state blend that
 unifies smeared Brinkman penalization with Pyranda's level-set reset — staged
 with validation gates.
@@ -187,13 +145,12 @@ relevant comparison concerns its physics catalogue and adaptive mesh refinement
 FLASH's high-energy-density physics (HEDP) capability is a set of units: 3T
 hydrodynamics (separate ion, electron and radiation temperatures) with
 electron–ion equilibration, multigroup radiation diffusion, tabulated
-multi-species EOS and
-opacities (IONMIX), electron thermal conduction through an implicit diffusion
-solver, laser energy deposition by geometric-optics ray tracing, MHD, and
-anisotropic magnetized transport coefficients — all on a block-structured AMR
-mesh, validated against HYDRA. This capability set defines the long-term
-target for NIF applications and represents approximately a decade of physics
-implementation.
+multi-species EOS and opacities (IONMIX), electron thermal conduction through
+an implicit diffusion solver, laser energy deposition by geometric-optics ray
+tracing, MHD, and anisotropic magnetized transport coefficients — all on a
+block-structured AMR mesh, validated against HYDRA. This capability set defines
+the long-term target for NIF applications and represents approximately a decade
+of physics implementation.
 
 Two structural patterns are relevant:
 
@@ -213,9 +170,9 @@ Two structural patterns are relevant:
 
 The Julia reference for high-order conservation laws: nodal discontinuous
 Galerkin spectral element (DG-SEM) on a quad/octree with AMR, `p4est` for
-unstructured curved meshes, entropy-stable
-and kinetic-energy-preserving split forms, shock capturing with positivity
-limiting, a large equation-set catalogue, and OrdinaryDiffEq.jl integration.
+unstructured curved meshes, entropy-stable and kinetic-energy-preserving split
+forms, shock capturing with positivity limiting, a large equation-set
+catalogue, and OrdinaryDiffEq.jl integration.
 
 **Relevant design pattern:** the `equations` type parameter. Trixi's solvers
 are generic over an equation set that owns the variable count, names, flux
@@ -254,22 +211,25 @@ and `banded.jl` already implement a distributed banded line solve with
 cross-rank coupling and a pre-factorized reduced interface system — precisely
 the kernel an alternating-direction implicit (ADI) or line-relaxation
 diffusion solver needs and precisely the smoother a geometric multigrid
-wants. The implicit implementation should be
-built on that machinery rather than on a separate linear-algebra dependency.
+wants. The implicit implementation should be built on that machinery rather
+than on a separate linear-algebra dependency.
 
 **The regularization model carries one structural debt.** The July 2026
-calibration study (`reference/CALIBRATION.md`) established that the compact
-filter, not the Cook properties, is the primary stabilizer at every measured
-resolution, while the filter itself has never been calibrated and its
-dissipation is applied per filter pass rather than per unit time. It is
-elevated from a "known limitation" to a work item in the
-[model debts](#model-debts--regularization-and-validation) section, because
-every mixing result this solver produces is currently conditional on it. The
-second debt in this class — that β\* keyed on the strain magnitude rather than
-the dilatation — has since been measured and closed. Both compression-keyed
-forms are available and neither is the default: the dilatation sensor is worse
-where it matters, while gating the strain sensor buys one geometry a larger
-timestep and is a candidate default pending a re-baseline (`reference/HISTORY.md`).
+calibration study established that the compact filter, not the Cook
+properties, is the primary stabilizer at every measured resolution, while the
+filter itself has never been calibrated and its dissipation is applied per
+filter pass rather than per unit time (`reference/CALIBRATION.md`). Every
+mixing result this solver produces is currently conditional on it, which is why
+it is a work item below rather than a known limitation. The second debt in this
+class — β\* keyed on the strain magnitude rather than the dilatation — has been
+measured and closed (`reference/HISTORY.md`).
+
+What that work left open is the converging-shock `cfl ≤ 0.15` ceiling itself.
+The timestep predictor, `C_beta`, the dilatation sensor and the sensor reach
+are ruled out by measurement, and the `:d8` detector lifts the planar and
+cylindrical ceilings outright while costing the spherical origin. The
+third-order fold closure is the one candidate still standing and the origin
+cell is where to look (`reference/CALIBRATION.md`).
 
 **One EOS assumption survives the Phase 1 generalization.** The artificial
 conductivity is still built as (ρc/T_ion)·sensor for every gas model, which is
@@ -281,98 +241,42 @@ non-singular is a numerics decision, tracked in `reference/CALIBRATION.md`.
 
 These items carry the physics credibility of the solver for its primary
 mission. They are ordered by information gained per unit effort, and items 1–3
-change guarded numbers, so each concludes by re-baselining
-`test/validation.jl` and updating `reference/CALIBRATION.md`.
+change guarded numbers, so each concludes by re-baselining `test/validation.jl`
+and updating `reference/CALIBRATION.md`.
 
-**1. A dilatation-based β\* with a shock switch — done. The switch is worth
-having; the sensor change is not.** Three settings now exist and the two halves
-of the literature refinement turn out to be separable, which is the substance of
-the result. `ArtParams(beta_sensor = ...)` takes `:strain` (the Cook original,
-still the default), `:gated_strain` (that sensor multiplied by a Ducros-style
-compression switch, one pointwise pass), and `:dilatation` (the full Mani,
-Larsson & Moin form, which also rebuilds the sensor from ∇·u). `bench/artcal.jl
-sensor` sweeps all three; measurements are in [CALIBRATION.md](CALIBRATION.md).
-
-On the question that motivated the work — does a compression-keyed β\* move the
-`cfl ≤ 0.15` ceiling — the answer is **partially, and from the switch alone**.
-`:gated_strain` completes cylindrical Noh at `cfl = 0.2`, where the default
-fails, and the plateau it reaches there agrees with its own value at 0.15, so
-the larger step is genuine. Planar and spherical Noh do not move under any
-setting. One geometry of three therefore gains a 33% larger timestep, and the
-general guidance for converging shocks now rests on the spherical case alone.
-
-`:dilatation` moves nothing and loses both converging geometries outright, at
-the coordinate fold rather than at the shock: with u_r uniform, Δ = S_rr + S_θθ
-adds where |S| takes their root-sum-square, so the dilatation sensor is 2 to 70
-times larger in the first cells at the axis and Noh loses positivity on step
-one. `:gated_strain` applies the identical switch and keeps those geometries,
-which is what attributes the failure to the sensor field rather than the gate.
-Its one benefit is 0.25% of the Shu–Osher wave-train amplitude, and that too
-belongs to the sensor field — the gate alone gives 0.05% less than the default.
-
-**The reach hypothesis is closed, and the diagnosis it rested on was wrong.**
-The suspicion on record was that β\* does not reach far enough *ahead* of the
-front, which pointed at a wider sensor stencil. `bench/nohprobe.jl` was written
-to test it and refutes it three ways. β\* reach holds at 14.2–14.8 cells ahead
-of the front through a complete run, while the damage sits 3–5 cells ahead. β\*
-stands at 14–21% of its own domain maximum on the worst cell at the shipped CFL,
-and at 84–100% of it at the failing one. And above the ceiling the failure does
-not begin ahead of the front at all: at ν = 1 (the Noh geometry index; 1 planar,
-2 cylindrical, 3 spherical) the wall cell degrades first,
-within five steps, and at ν = 3 the origin cell carries an outward u = +5.6
-against an inflow of −1 one step after a density minimum of 1.92 over the whole
-line. The restriction is a symmetry-plane startup problem, consistent with
-`:gated_strain` moving the one ceiling it moves by relieving the axis cell
-rather than the shock. Measurements are in
-[CALIBRATION.md](CALIBRATION.md#where-the-restriction-originates).
-
-Left open. Whether `:gated_strain` should *become* the default: it changes
-guarded numbers in the fourth digit across the validation battery, so the case
-needs a re-baseline and a second geometry showing the same gain, and by the
-mechanism above that geometry would have to be one whose ceiling is also set by
-a fold the gate relieves. And the ceilings themselves, now that the artificial
-properties are ruled out. The untested candidate is the fold closure, which is
-third order at the axis and origin where the interior is sixth or tenth.
-
-The probe also surfaced a defect outside this item's scope. Runs that
-**complete**, including the shipped ν = 1 validation case, carry six to eight
-cells of negative internal energy travelling with the front for their whole
-duration. `primitives!` floors T_ion at 1e-300 and continues, while the
-positivity check reads ρ, which stays positive. This is a concrete requirement
-on item 3 below: the failsafe has to cover internal energy, not density alone.
-**2. Filter calibration and dt-consistency.** Two coupled problems. First,
+**1. Filter calibration and dt-consistency.** Two coupled problems. First,
 `compact_filter(0.45)` applied every step has never been fitted to anything,
 while supplying 37–87% of the measured energy sink and being necessary and
-sufficient for stability (`reference/CALIBRATION.md`). Second — and stated
-nowhere until now — the filter removes energy per *application*, not per unit
-time, so the effective subgrid dissipation depends on the CFL number and
-`filter_interval`, and does not converge as dt → 0 at fixed resolution. The
-truncated-final-step artifact in `bench/tgv_energy.jl` (an 18% peak
-overestimate from one short step) is a symptom. Work items: fit α and cadence
-against the digitized van Rees −dKE/dt(t) history and spectra at 128³ (the
-digitization is already listed in the calibration remainders); measure the
-validation battery's sensitivity to cadence; and evaluate a per-unit-time
-formulation — filter application as a relaxation `Q ← (1−w)Q + w·F(Q)` with
-`w ∝ dt` — which would also resolve the cross-level cadence question raised
-in `reference/AMR_GPU.md`. Deliverable: a filter section of
-`reference/CALIBRATION.md` with the same standing as the four-constant
-tables. Cluster time is required; budget runs per the usual discipline.
+sufficient for stability (`reference/CALIBRATION.md`). Second, the filter
+removes energy per *application* rather than per unit time, so the effective
+subgrid dissipation depends on the CFL number and `filter_interval` and does
+not converge as dt → 0 at fixed resolution; the truncated-final-step artifact
+in `bench/tgv_energy.jl` (an 18% peak overestimate from one short step) is a
+symptom. Work items: fit α and cadence against the digitized van Rees
+−dKE/dt(t) history and spectra at 128³ (the digitization is already listed in
+the calibration remainders); measure the validation battery's sensitivity to
+cadence; and evaluate a per-unit-time formulation — filter application as a
+relaxation `Q ← (1−w)Q + w·F(Q)` with `w ∝ dt` — which would also resolve the
+cross-level cadence question raised in `reference/AMR_GPU.md`. Deliverable: a
+filter section of `reference/CALIBRATION.md` with the same standing as the
+four-constant tables. Cluster time is required; budget runs per the usual
+discipline.
 
-**3. A positivity failsafe.** `StepControl` detects positivity loss and can
+**2. A positivity failsafe.** `StepControl` detects positivity loss and can
 roll back, but rollback recovers only abrupt failures; gradual degradation
 lands the savepoint on an already-corrupt state, and sweeps still burn wall
-time. Add a last-resort, conservation-aware local floor (clip negative
-partial densities, renormalize, adjust energy consistently), applied only on
-detection, counted, and reported loudly — never silent. **It must cover
-internal energy and not only density**, which is the measured gap: item 1's
-probe found six to eight cells of negative internal energy in runs that pass,
-floored silently by `primitives!` and invisible to a ρ-only check. This narrows rather
-than violates the Riemann-solver non-goal below: the scheme is unchanged; the
-failsafe is an instrumented recovery from states the scheme has already left.
-The immediate beneficiaries are calibration sweeps and the AMR development
-runs ahead.
+time. Add a last-resort, conservation-aware local floor (clip negative partial
+densities, renormalize, adjust energy consistently), applied only on detection,
+counted, and reported loudly — never silent. **It must cover internal energy
+and not only density**, which is the measured gap: `bench/nohprobe.jl` found
+six to eight cells of negative internal energy in runs that pass, floored
+silently by `primitives!` and invisible to a ρ-only check
+(`reference/CALIBRATION.md`). This narrows rather than violates the
+Riemann-solver non-goal below: the scheme is unchanged, and the failsafe is an
+instrumented recovery from states the scheme has already left. The immediate
+beneficiaries are calibration sweeps and the AMR development runs ahead.
 
-**4. External validation.** Everything to date compares against analytic
+**3. External validation.** Everything to date compares against analytic
 references or this code's own high-resolution profiles — the comparison table
 above says so. Two campaigns close the gap. First, a direct
 CompactLES-vs-Pyranda comparison (Pyranda is runnable): TGV at Re = 1600 and
@@ -384,20 +288,20 @@ accessible, and asking the originating groups for specifications beats
 reverse-engineering them from figures. Deliverable: a validation section in
 the docs comparing against something this code did not produce.
 
-**5. Turbulent inflow generation.** RM/RT comparisons with experiments need a
+**4. Turbulent inflow generation.** RM/RT comparisons with experiments need a
 perturbed or turbulent inflow. The digital-filter method (Klein et al., 2003)
 or a synthetic-eddy variant fits the existing frontend with no solver surgery:
 a generator utility producing an `(x, y, z, t) -> Prim` closure consumed by
 `DirichletBC` or the `NSCBCInflowBC` target. Modest scope; pairs naturally
-with item 4's experiment campaign.
+with item 3's experiment campaign.
 
-**6. NSCBC completion.** Add the Yoo–Im transverse terms to the inflow
+**5. NSCBC completion.** Add the Yoo–Im transverse terms to the inflow
 correction, mirroring the outflow implementation (the README documents the
-asymmetry). This is now the only piece outstanding: the setup-time validation of
+asymmetry). This is the only piece outstanding; the setup-time validation of
 the face and of the target composition landed with the near-term corrections
 (`reference/HISTORY.md`).
 
-**7. Temperature-dependent transport.** The NASA CEA transport table ships in
+**6. Temperature-dependent transport.** The NASA CEA transport table ships in
 `data/` but is not connected; `Transport` is constant-coefficient with one
 Schmidt number for all species. Implement the coefficient reader, per-species
 μ_k(T) and λ_k(T) evaluations, a Wilke-type mixture rule, and
@@ -409,7 +313,7 @@ consumed behind the existing function barrier — so a plasma transport model
 transport equations, not the transport coefficients; the README should say
 so.
 
-**8. Wall treatment — deliberately deferred.** The target problems (RM/RT
+**7. Wall treatment — deliberately deferred.** The target problems (RM/RT
 mixing, converging shocks, implosions) are wall-free or slip-walled;
 `NoSlipWallBC` exists for verification cases. Wall-resolved or wall-modeled
 LES is out of scope until a target problem requires it. Recorded here so the
@@ -498,7 +402,9 @@ token-relay fallback has been exercised.
 as the seam and dispatches on it, calling `save_hdf5` for the latter; the
 core stub in `src/hdf5.jl` supplies the error when the extension is absent,
 so no availability check is needed at the call site. `fields`, `stride` and
-`slice` flow through unchanged.
+`slice` flow through unchanged. The extension seam is the same one `save_hdf5`
+uses: a core stub `_write_xdmf_collection!` routed through `_hdf5_required`,
+with the real method in `ext/CompactLESHDF5Ext.jl`.
 
 The collection file is where the work is. `.pvd` has no XDMF equivalent that
 merely lists frames: a temporal collection is `<Grid GridType="Collection"
@@ -519,10 +425,6 @@ Resolve it by having `save_hdf5` hand back the `(name, ncomponents)`
 descriptors it wrote and caching them on the writer at the first dump. The
 descriptors are identical across frames, since `fields`, `stride` and `slice`
 are fixed for the life of a writer.
-
-The extension seam is the same one `save_hdf5` uses: a core stub
-`_write_xdmf_collection!` that routes through `_hdf5_required`, with the real
-method defined in `ext/CompactLESHDF5Ext.jl`.
 
 Testing should assert that the frames land on the [`EveryTime`](@ref)
 instants, that the collection holds one `<Grid>` per frame with the matching
@@ -569,7 +471,7 @@ The following capabilities are explicitly outside the project scope.
   artificial-fluid-property approach is the design commitment; adding a
   Godunov path would double the maintenance surface for a capability other
   codes do better. This exclusion does not cover the instrumented positivity
-  failsafe of model-debt item 3, which recovers from states the scheme has
+  failsafe of model debt 2, which recovers from states the scheme has
   already left rather than altering the scheme.
 - **A string-based PDE interpreter**, in the Pyranda style. This is narrower
   than "no symbolic frontend": a macro that *lowers* to the equation-set
@@ -582,19 +484,18 @@ The following capabilities are explicitly outside the project scope.
   ground. CompactLES is scoped to compressible, variable-density,
   shock-driven mixing and implosion.
 
-Wall-modeled LES is deferred rather than excluded; see model-debt item 8.
+Wall-modeled LES is deferred rather than excluded; see model debt 7.
 
 ## Suggested ordering
 
-The near-term corrections that used to head this list are done
-(`reference/HISTORY.md`), as is the dilatation-gated β\* experiment that headed
-it after them — it left the `C_beta` tables untouched and moved the `cfl ≤ 0.15`
-guidance for one geometry only. That leaves:
+The near-term corrections, the dilatation-gated β\* experiment, and the
+reference-implementation pass that headed this list are done
+(`reference/HISTORY.md`). That leaves:
 
-1. **Filter calibration** (model debt 2), which every other physics number is
-   conditional on. Requires cluster time; run it alongside item 2's Pyranda
+1. **Filter calibration** (model debt 1), which every other physics number is
+   conditional on. Requires cluster time; run it alongside the Pyranda
    comparison, which needs the same machines and cases.
-2. **External validation** (model debt 4), promoted early because it changes
+2. **External validation** (model debt 3), promoted early because it changes
    how much the remaining calibration work can be trusted.
 3. **Phase 2.1, the implicit diffusion solver** — the principal architectural
    gap, which also addresses the polar CFL restriction.
@@ -605,12 +506,11 @@ guidance for one geometry only. That leaves:
    `reference/AMR_GPU.md`.
 
 The open items from the source comparison
-([work arising](#work-arising-from-the-source-comparison)) sit alongside these
-rather than inside the ordering. The sensor-field change is now the one with
-measured evidence behind it, since the detector that closed ahead of it
-established both that the reference method is better here and that most of the
-remaining gap is in the fields rather than the operator. The rest are either
-blocked on a missing case or gated on a measurement that has not been taken.
+([above](#open-work-from-the-source-comparison)) sit alongside these rather
+than inside the ordering. What remains there is either blocked on a missing
+case or gated on a measurement that has not been taken, with one exception: the
+`C_beta` refit under `:d8`, which is what the detector's default turns on and
+which the sensor-field measurement did not settle.
 
 Two items sit outside the ordering because they are independent of everything
 above and pullable on demand: laser ray tracing (Phase 2.7), if a specific

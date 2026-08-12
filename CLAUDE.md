@@ -65,11 +65,11 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 56 testsets, 0 failures
+julia --project=. test/runtests.jl        # 57 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 70/70 each
+  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 77/77 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
@@ -135,8 +135,10 @@ Names are spelled out rather than abbreviated. Current vocabulary:
   per-dimension halo pad, as a local)
 - `n_species`, `n_cons`, `i_mom`, `i_energy`, `Y`, `cp_mix`
 - `mu_art`, `beta_art`, `kappa_art`, `D_art`, `C_mu`/`C_beta`/`C_kappa`/`C_D`,
-  `beta_sensor` (`:strain`, `:gated_strain` or `:dilatation`), `smoother`
-  (`:gaussian` or `:compact`), `detector` (`:delta4` or `:d8`)
+  `mu_sensor` (`:strain` or `:velocity`), `beta_sensor` (`:strain`,
+  `:gated_strain`, `:dilatation` or `:ungated_dilatation`), `reduction` (`:sum`
+  or `:max`), `smoother` (`:gaussian` or `:compact`), `detector` (`:delta4` or
+  `:d8`)
 - `grad_u`, `grad_T_ion`, `grad_Y`, `strain_mag`, `sensor`, `sensor_sp`
 - `inv_J`, `area_d`, `inv_h`, `inv_r`, `cot_over_r`, `coord_shift`, `flux`
 - `deriv_plans`, `filter_plans`, `line_solver`, `plan` (a DirPlan) vs `plane`

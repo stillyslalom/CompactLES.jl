@@ -81,6 +81,17 @@
 #   nmax      step cap per configuration (default none). A sweep that may visit
 #             bad configurations wants one: a run that loses positivity does not
 #             crash, it grinds — CLAUDE.md, Conventions.
+#   smoother, mu_sensor, beta_sensor, reduction
+#             `ArtParams` settings applied to every configuration in the sweep,
+#             so a comparison across them is one invocation each rather than one
+#             entry each. `mu_sensor` is the setting this case answers: TGV is
+#             the only case in the repository where the μ* channel carries a
+#             measurable share of the sink, and no case in the 1-D battery of
+#             bench/artcal.jl exercises a shear sensor at all. Note that
+#             `smoother` still defaults to `:compact`, which the solver no longer
+#             ships, because the 128³ numbers above were measured under it. Pass
+#             `smoother=gaussian` for a comparison against the shipped
+#             configuration.
 #   window    steps either side for every -dKE/dt reported (default 250, i.e. a
 #             501-step window, clamped to length(ts)/8). Do not lower it towards
 #             1 to "see more detail" — the one-step rate is contaminated by dt
@@ -185,7 +196,8 @@ end
 
 function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                       filter_interval=1, sample=100, progress=0,
-                      nmax=typemax(Int), smoother=:compact)
+                      nmax=typemax(Int), smoother=:compact,
+                      mu_sensor=:strain, beta_sensor=:strain, reduction=:sum)
     γ = 1.4
     c0 = 10.0                      # Ma ≈ 0.1 at |u|max = 1
     p0 = c0^2 / γ
@@ -198,7 +210,10 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
     solver, Q = setup(prob, Numerics(n_global=(N, N, N), cfl=0.6,
                                      filter_interval=filter_interval,
                                      art=ArtParams(enabled=art_on, C_mu=C_mu,
-                                                   smoother=smoother)))
+                                                   smoother=smoother,
+                                                   mu_sensor=mu_sensor,
+                                                   beta_sensor=beta_sensor,
+                                                   reduction=reduction)))
     cellvol = prod(solver.h)
     ts = Float64[]
     kes = Float64[]
@@ -230,7 +245,8 @@ end
 
 const DEFAULTS = (N = 32, tfinal = 10.0, configs = "off:1,on:1",
                   progress = 0, sample = 100, nmax = typemax(Int),
-                  window = 250, smoother = :compact)
+                  window = 250, smoother = :compact,
+                  mu_sensor = :strain, beta_sensor = :strain, reduction = :sum)
 
 function parse_configs(spec)
     configs = NamedTuple{(:art, :filt, :C_mu),Tuple{Bool,Int,Float64}}[]
@@ -266,7 +282,10 @@ function main()
                 result = taylor_green(N, cfg.art; tfinal=tfinal, C_mu=cfg.C_mu,
                                       filter_interval=cfg.filt, sample=sample,
                                       progress=progress, nmax=nmax,
-                                      smoother=opt.smoother)
+                                      smoother=opt.smoother,
+                                      mu_sensor=opt.mu_sensor,
+                                      beta_sensor=opt.beta_sensor,
+                                      reduction=opt.reduction)
             catch err
                 # Collective by construction, so every rank lands here together
                 # and the sweep stays in step. See the header note.
@@ -275,8 +294,9 @@ function main()
             end
         end
         rank == 0 || continue
-        label = @sprintf("art %s, filter_interval %d, C_mu %.4g",
-                         cfg.art ? "ON " : "OFF", cfg.filt, cfg.C_mu)
+        label = @sprintf("art %s, filter_interval %d, C_mu %.4g, %s/%s/%s/%s",
+                         cfg.art ? "ON " : "OFF", cfg.filt, cfg.C_mu,
+                         opt.smoother, opt.mu_sensor, opt.beta_sensor, opt.reduction)
         if failure !== nothing
             @printf("\n--- %s   (FAILED after %.1f s)\n", label, elapsed)
             @printf("    SolverFailure(:%s) at step %d, t = %.4f, dt = %.3e\n",

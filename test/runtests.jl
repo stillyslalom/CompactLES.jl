@@ -742,6 +742,105 @@ end
     @test all(isfinite, s.beta_art) && maximum(s.beta_art) > 0
 end
 
+@testset "sensor fields: mu* from the velocity, beta* from the dilatation" begin
+    # Cook builds both sensors from |S|; the reference implementation builds
+    # them from the velocity components and from ∇·u. The difference between
+    # the two is the absolute value, and these tests pin its two consequences.
+    oned(art, fn; N=64) = begin
+        s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, art=art)
+        Q = allocate_state(s)
+        initialize!(s, Q, fn)
+        compute_rhs!(s, Q, zero(Q))
+        s
+    end
+    # 1. The two-point wave. A centered derivative annihilates it exactly, so
+    # |S| and ∇·u are identically zero on the shortest wave the grid carries
+    # and every sensor built from them returns zero there. The velocity sensor
+    # returns the full undivided response, C_mu·ρ·16h.
+    nyq = (x, y, z) -> Prim(rho=1.0, p=1.0, u=(cospi(64x), 0.0, 0.0))
+    @test maximum(oned(ArtParams(mu_sensor=:strain), nyq).mu_art) == 0.0
+    @test maximum(oned(ArtParams(mu_sensor=:velocity), nyq).mu_art) ≈
+          0.002 * 16 / 64 rtol = 1e-12
+    @test maximum(oned(ArtParams(beta_sensor=:ungated_dilatation), nyq).beta_art) == 0.0
+
+    # 2. The detector's selectivity survives the field change, which is the
+    # reason for making it. On a wave resolved over eight points the two
+    # detectors are built to differ by 569×, and they do so when applied to a
+    # smooth field. Applied to |S| the same pair differs by 1.28×, the cusps
+    # where the strain passes through zero being grid-scale structure at every
+    # wavelength. Measured 569 and 1.28.
+    wave = (x, y, z) -> Prim(rho=1.0, p=1.0, u=(cospi(16x), 0.0, 0.0))
+    peak(ms, det) = maximum(oned(ArtParams(mu_sensor=ms, detector=det), wave).mu_art)
+    @test peak(:velocity, :d8) < peak(:velocity, :delta4) / 100
+    @test peak(:strain, :d8) > peak(:strain, :delta4) / 10
+
+    # 3. Σ_d against MAX. They are the same operation in one dimension, and the
+    # reduction is a per-direction one, so MAX can never exceed Σ_d anywhere.
+    ramp1 = (x, y, z) -> Prim(rho=1.0, p=1.0, u=(0.5tanh((x - 0.5) / 0.02), 0.0, 0.0))
+    @test oned(ArtParams(reduction=:sum), ramp1).mu_art ==
+          oned(ArtParams(reduction=:max), ramp1).mu_art
+    tgv3(red) = begin
+        s = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
+                   art=ArtParams(reduction=red))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=100.0,
+            u=(sin(x)cos(y)cos(z), -cos(x)sin(y)cos(z), 0.0)))
+        compute_rhs!(s, Q, zero(Q))
+        s
+    end
+    tsum, tmax = tgv3(:sum), tgv3(:max)
+    @test all(tmax.mu_art .<= tsum.mu_art)
+    @test maximum(tmax.mu_art) < maximum(tsum.mu_art)
+
+    # 4. Parity across a fold. u_r is odd there, so the detector requires the
+    # sign. With it, u_r = r produces no sensor at all, that being the regular
+    # behaviour of a radial velocity at the axis, while a uniform u_r produces
+    # one on the first cell, the folded field having a genuine kink there.
+    axial(art, fn) = begin
+        s = Solver(n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   metric=CylindricalMetric(),
+                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), art=art)
+        Q = allocate_state(s)
+        initialize!(s, Q, fn)
+        compute_rhs!(s, Q, zero(Q))
+        s
+    end
+    lin = (r, θ, z) -> Prim(rho=1.0, p=1.0, u=(r, 0.0, 0.0))
+    uni = (r, θ, z) -> Prim(rho=1.0, p=1.0, u=(-1.0, 0.0, 0.0))
+    # δ⁴ across the fold reads the half-offset mirror for an odd field, so this
+    # is exact; the d8 closure reaches it through a line solve, hence round-off.
+    sl = axial(ArtParams(mu_sensor=:velocity), lin)
+    @test sl.mu_art[gidx(sl, 1, 1, 1)] == 0.0
+    s8 = axial(ArtParams(mu_sensor=:velocity, detector=:d8), lin)
+    @test s8.mu_art[gidx(s8, 1, 1, 1)] < 1e-14
+    su = axial(ArtParams(mu_sensor=:velocity), uni)
+    @test su.mu_art[gidx(su, 1, 1, 1)] > 0
+
+    # 5. The ungated dilatation sensor is the form the reference ships. The
+    # gated one is that sensor multiplied by the Ducros switch, so it is never
+    # larger, and is exactly zero wherever the flow expands.
+    ug = oned(ArtParams(beta_sensor=:ungated_dilatation), ramp1)
+    g = oned(ArtParams(beta_sensor=:dilatation), ramp1)
+    @test all(g.beta_art .<= ug.beta_art .+ 1e-300)
+    div1(s, I) = s.grad_u[1, 1][I] + s.grad_u[2, 2][I] + s.grad_u[3, 3][I]
+    expanding = [gidx(ug, i, 1, 1) for i in 1:64 if div1(ug, gidx(ug, i, 1, 1)) > 0]
+    @test !isempty(expanding)
+    @test all(I -> g.beta_art[I] == 0.0, expanding)
+    @test any(I -> ug.beta_art[I] > 0.0, expanding)
+
+    # 6. The channels are independent: rebuilding one leaves the other's
+    # numbers bit-identical to the shipped configuration's.
+    base = oned(ArtParams(), ramp1)
+    @test oned(ArtParams(mu_sensor=:velocity), ramp1).beta_art == base.beta_art
+    @test oned(ArtParams(beta_sensor=:ungated_dilatation), ramp1).mu_art == base.mu_art
+    @test oned(ArtParams(mu_sensor=:velocity), ramp1).mu_art != base.mu_art
+
+    @test_throws ErrorException Solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                                       bcs=per3, art=ArtParams(mu_sensor=:bogus))
+    @test_throws ErrorException Solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                                       bcs=per3, art=ArtParams(reduction=:bogus))
+end
+
 @testset "dt_report agrees with compute_dt and names the limiter" begin
     solver = mkslv(n_global=(16, 16, 16), transport=Transport(mu0=1e-3))
     Q = allocate_state(solver)

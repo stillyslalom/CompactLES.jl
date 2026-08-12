@@ -80,12 +80,19 @@ function budget(name, solver, Q)
     # left-hand side and runs none, `compact_filter` runs one per active
     # dimension per sensor, and `detector = :d8` adds one pentadiagonal solve
     # on the same footing.
+    # Detector applications and smoothing passes are counted separately, since
+    # `mu_sensor = :velocity` is the one setting where they differ: it detects
+    # three fields (one per velocity component) and smooths their reduction
+    # once.
     art = solver.art
-    nsensor = art.enabled ?
-              1 + 1 + (solver.equations.n_species > 1 ? solver.equations.n_species : 0) +
-              (art.beta_sensor === :dilatation ? 1 : 0) : 0
+    nsp = solver.equations.n_species > 1 ? solver.equations.n_species : 0
+    strain = art.mu_sensor === :strain || art.beta_sensor in (:strain, :gated_strain)
+    dilat = art.beta_sensor in (:dilatation, :ungated_dilatation)
+    nsensor = art.enabled ? (strain ? 1 : 0) + (art.mu_sensor === :velocity ? 1 : 0) +
+                            (dilat ? 1 : 0) + 1 + nsp : 0
+    ndetect = art.enabled ? nsensor + (art.mu_sensor === :velocity ? 2 : 0) : 0
     nsmooth = art.smoother === :compact ? nact * nsensor : 0
-    nring = art.detector === :d8 ? nact * nsensor : 0
+    nring = art.detector === :d8 ? nact * ndetect : 0
     nsolves = 3 * nact + nact * (1 + solver.equations.n_species) +
               solver.equations.n_cons * nact + nsmooth + nring
     @printf("\n===== %s =====\n", name)
@@ -101,15 +108,20 @@ function budget(name, solver, Q)
     @printf("    %-20s %8.3f\n", "(sum of phases)", 1e3tot)
 end
 
-# The smoother and the detector are the phase controls worth varying from the
-# launch line: they are the settings that change what `artificial` costs
-# without changing the case. `smoother=compact` restores the line solves that
-# smooth the sensors, one per active dimension per species; `detector=d8`
-# adds a pentadiagonal solve per active dimension per sensor. Defaults track
-# `ArtParams()` so a bare run profiles the shipped configuration.
+# The smoother, the detector and the sensor fields are the phase controls worth
+# varying from the launch line: they are the settings that change what
+# `artificial` costs without changing the case. `smoother=compact` restores the
+# line solves that smooth the sensors, one per active dimension per sensor;
+# `detector=d8` adds a pentadiagonal solve per active dimension per detected
+# field; `mu_sensor=velocity` triples the fields the μ* channel detects, which
+# is free under `:delta4` and three line solves per dimension under `:d8`.
+# Defaults track `ArtParams()` so a bare run profiles the shipped configuration.
 const ART_DEFAULTS = ArtParams()
 opt = script_args(ARGS, (smoother = ART_DEFAULTS.smoother,
-                         detector = ART_DEFAULTS.detector))
+                         detector = ART_DEFAULTS.detector,
+                         mu_sensor = ART_DEFAULTS.mu_sensor,
+                         beta_sensor = ART_DEFAULTS.beta_sensor,
+                         reduction = ART_DEFAULTS.reduction))
 
 # tgv-like: 3-D periodic, single species, art off
 s1 = Solver(n_global=(64, 64, 64), L_domain=(2π, 2π, 2π), bcs=per3,
@@ -125,7 +137,8 @@ eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
 s2 = Solver(n_global=(512, 32, 1), L_domain=(1.0, 0.06, 1.0), eos=eos,
             bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
             art=ArtParams(enabled=true, smoother=opt.smoother,
-                          detector=opt.detector))
+                          detector=opt.detector, mu_sensor=opt.mu_sensor,
+                          beta_sensor=opt.beta_sensor, reduction=opt.reduction))
 Q2 = allocate_state(s2)
 initialize!(s2, Q2, (x, y, z) -> begin
     θ = tanh_blend(x, 0.5, 0.02)

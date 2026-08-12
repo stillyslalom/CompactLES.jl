@@ -5,22 +5,31 @@
 # explicit fourth difference δ⁴ (1, −4, 6, −4, 1) by default, or the reference
 # implementation's compact eighth derivative under
 # `ArtParams.detector = :d8` — so the formal grid-spacing powers reduce to
-# per-dimension weights: h² for μ*, β* (from |∇⁴S| Δ⁶), h for κ* (|∇⁴e| Δ⁵)
-# and for D* (|∇⁴Y| Δ⁵). β* optionally keys on compression, either by gating
-# the strain sensor or by rebuilding it from the dilatation, which carries the
-# same h² weight (`ArtParams.beta_sensor`; see `gate_beta!` and
-# `dilatation_beta!`). The Gaussian test filter is `smooth!`, selected by
+# per-dimension weights: h² for a field carrying one velocity derivative (|S|,
+# ∇·u) and h for a field carrying none (the velocity components themselves, the
+# internal energy, a mass fraction). The two weights coincide at the grid scale,
+# so one set of constants covers both.
+#
+# `ArtParams.mu_sensor` and `ArtParams.beta_sensor` select the field each of the
+# two viscosities is built from. Cook takes both from the strain magnitude |S|;
+# the reference implementation takes μ* from the velocity components and β* from
+# the dilatation, neither of which carries an absolute value (see `velocity_mu!`
+# and `dilatation_beta!`). β* may also key on compression through a Ducros
+# switch (`gate_beta!`). Directions combine by Σ_d or by MAX, under
+# `ArtParams.reduction`. The Gaussian test filter is `smooth!`, selected by
 # `ArtParams.smoother`. Each species carries its own sensor and its own D*_k;
 # Σ_k J_k = 0 is then restored by the correction velocity in the flux assembly
-# (rhs.jl) rather than by giving every species the same diffusivity. Indices
-# are clamped at closed physical edges; halos cover rank boundaries. On
+# (rhs.jl) rather than by giving every species the same diffusivity. Indices are
+# clamped at closed physical edges, except for an odd field across a fold, which
+# takes the half-offset mirror; halos cover rank boundaries. On
 # curvilinear grids the sensors are computed in computational space — a
 # grid-based rather than strictly physical-space regularization, standard
 # practice and consistent with resolving power following the mesh.
 
 """
     ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01, C_D=0.01,
-              beta_sensor=:strain, smoother=:gaussian, detector=:delta4)
+              mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
+              smoother=:gaussian, detector=:delta4)
 
 Cook-style artificial-property controls.
 
@@ -36,12 +45,26 @@ Cook-style artificial-property controls.
   internal-energy sensor.
 - `C_D`: coefficient for per-species artificial diffusivity generated from
   mass-fraction sensors.
-- `beta_sensor`: how the β\\* sensor is built. `:strain` is the Cook original,
-  Σ_d h_d²|δ⁴_d S|. `:gated_strain` keeps that sensor and multiplies it by a
-  Ducros-style compression switch, for one pointwise pass (`gate_beta!`).
-  `:dilatation` additionally rebuilds the sensor from ∇·u, for one further
-  smoothing pass per RHS evaluation (`dilatation_beta!`). The measured
-  differences are in `reference/CALIBRATION.md`.
+- `mu_sensor`: how the μ\\* sensor is built. `:strain` is the Cook original,
+  Σ_d h_d²|δ⁴_d S| from the strain magnitude. `:velocity` is the reference
+  implementation's, built from the velocity components themselves and costing
+  three detector applications per direction instead of one (`velocity_mu!`).
+  The two differ in the absolute value taken by |S|, which places a cusp
+  wherever the strain passes through zero; a cusp is grid-scale structure at
+  any resolution, so a sensor built from |S| responds to smooth flow.
+- `beta_sensor`: how the β\\* sensor is built. `:strain` is the Cook original
+  and shares its sensor with `mu_sensor = :strain` when both are selected.
+  `:gated_strain` keeps that sensor and multiplies it by a Ducros-style
+  compression switch, for one pointwise pass (`gate_beta!`).
+  `:ungated_dilatation` rebuilds the sensor from ∇·u, which is the reference
+  implementation's form, and `:dilatation` applies the compression switch to
+  that as well; both cost one further smoothing pass per RHS evaluation
+  (`dilatation_beta!`). The measured differences are in
+  `reference/CALIBRATION.md`.
+- `reduction`: how the per-direction detector outputs combine into one sensor.
+  `:sum` is Σ_d, which is Cook's form and grows with the number of active
+  dimensions; `:max` is the reference implementation's MAX, which does not. The
+  two are identical in a one-dimensional calculation.
 - `smoother`: which operator stands in for Cook's Gaussian test filter in
   `smooth!`. `:gaussian` (default) is [`gaussian_filter`](@ref), the
   explicit nine-point stencil, which carries no line solve and no interface
@@ -75,7 +98,9 @@ Base.@kwdef struct ArtParams{T}
     C_beta::T  = 1.0
     C_kappa::T = 0.01
     C_D::T     = 0.01
+    mu_sensor::Symbol = :strain
     beta_sensor::Symbol = :strain
+    reduction::Symbol = :sum
     smoother::Symbol = :gaussian
     detector::Symbol = :delta4
 end
@@ -83,15 +108,35 @@ end
 const D4 = (1.0, -4.0, 6.0, -4.0, 1.0)   # offsets −2:2
 
 """
-    delta4_sum!(out, f, solver, wpow; accumulate=false)
+    delta4_sum!(out, f, solver, wpow; accumulate=false, parity=(1, 1, 1))
 
-Interior accumulation of Σ_d h_d^wpow |δ⁴_d f| into `out` (added to existing
-contents when `accumulate`). Requires current rank-boundary halos of `f`.
+Interior reduction of h_d^wpow |δ⁴_d f| over the active directions into `out`,
+combined by Σ_d or by MAX according to `ArtParams.reduction` and combined with
+the existing contents when `accumulate`. Requires current rank-boundary halos
+of `f`.
+
+`parity[d]` is the field's sign across a coordinate fold on dimension `d`,
+which is −1 only for a velocity component (`velocity_mu!`). It is applied at a
+folded edge and nowhere else: an outer wall carries no reflection symmetry to
+exploit, and the fold is also the only edge whose grid is half-offset.
+
+Indices at a closed edge are clamped, a zeroth-order extension of the field
+past it, except across a fold with `parity[d] == -1`, where the half-offset
+mirror (ghost j ↔ interior j, negated) is used instead. The two differ in
+order. For an even field the clamp misplaces one δ⁴ tap by a term that the
+vanishing edge derivative makes O(h²); for an odd field the edge derivative is
+the largest quantity there, the same tap is wrong at O(h), and the result is a
+nonzero sensor on a field as regular as u_r = r, which the mirror annihilates
+exactly. Putting the even path on the mirror as well would move guarded numbers
+for an effect expected to be small, and nobody has measured it;
+`reference/CALIBRATION.md` carries it as an open item.
 """
-function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false)
+function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
+                     parity::NTuple{3,Int}=(1, 1, 1))
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
+    maxred = solver.art.reduction === :max
     accumulate || fill!(out, 0)
     for d in 1:3
         decomp.active[d] || continue
@@ -99,6 +144,11 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false)
         n_d = decomp.n_local[d]
         lomin = at_lo_edge(decomp, d) ? 1 : -1
         himax = at_hi_edge(decomp, d) ? n_d : n_d + 2
+        fold = solver.folds[d]
+        odd_lo = parity[d] == -1 && at_lo_edge(decomp, d) &&
+                 fold !== nothing && fold.lo
+        odd_hi = parity[d] == -1 && at_hi_edge(decomp, d) &&
+                 fold !== nothing && fold.hi
         e = CartesianIndex(ntuple(k -> k == d ? 1 : 0, 3))
         @threaded nx*ny*nz for jk in outer_indices(ny, nz)
             j, k = Tuple(jk)
@@ -106,11 +156,30 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false)
                 I = CartesianIndex(i + o1, j + o2, k + o3)
                 il = (d == 1 ? i : d == 2 ? j : k)
                 acc = 0.0
-                for m in -2:2
-                    ilm = clamp(il + m, lomin, himax)
-                    acc += D4[m + 3] * f[I + (ilm - il) * e]
+                # The parity test sits outside the stencil loop rather than on
+                # each tap: both flags are invariant over the whole nest, and
+                # the clamped branch is the one every sensor but a velocity
+                # component across a fold takes.
+                if !(odd_lo | odd_hi)
+                    for m in -2:2
+                        ilm = clamp(il + m, lomin, himax)
+                        acc += D4[m + 3] * f[I + (ilm - il) * e]
+                    end
+                else
+                    for m in -2:2
+                        q = il + m
+                        if odd_lo && q < 1              # ghost 1−q, negated
+                            acc -= D4[m + 3] * f[I + (1 - q - il) * e]
+                        elseif odd_hi && q > n_d        # ghost 2n+1−q, negated
+                            acc -= D4[m + 3] * f[I + (2n_d + 1 - q - il) * e]
+                        else
+                            ilm = clamp(q, lomin, himax)
+                            acc += D4[m + 3] * f[I + (ilm - il) * e]
+                        end
+                    end
                 end
-                out[I] += wd * abs(acc)
+                v = wd * abs(acc)
+                out[I] = maxred ? max(out[I], v) : out[I] + v
             end
         end
     end
@@ -118,27 +187,34 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false)
 end
 
 """
-    ring_sum!(out, f, solver, wpow; accumulate=false)
+    ring_sum!(out, f, solver, wpow; accumulate=false, parity=(1, 1, 1))
 
-The [`compact_d8`](@ref) counterpart of [`delta4_sum!`](@ref): accumulates
-Σ_d h_d^wpow |d⁸_d f| into `out`, one distributed pentadiagonal line solve per
-active dimension. Requires current rank-boundary halos of `f` to depth 4.
+The [`compact_d8`](@ref) counterpart of [`delta4_sum!`](@ref): reduces
+h_d^wpow |d⁸_d f| over the active directions into `out`, one distributed
+pentadiagonal line solve per direction. Requires current rank-boundary halos of
+`f` to depth 4.
 
-`f` is always an even scalar across a coordinate fold — the strain magnitude,
-the internal energy, a mass fraction, the dilatation — so the antipodal sign
-passed through is `+1`. Closed physical edges are handled by the scheme's own
-closure rows, where `delta4_sum!` instead clamps its indices.
+`parity[d]` is the field's antipodal sign across a fold on dimension `d`, and
+is `+1` for every even scalar the sensors are built from: the strain magnitude,
+the internal energy, a mass fraction, the dilatation. Only
+`velocity_mu!` passes anything else. A closed physical edge that is not
+a fold takes the scheme's own closure rows, which mirror symmetrically whatever
+the parity of the field; the reference implementation instead carries a second,
+antisymmetric closure for that case, and this is the one part of its sensor
+construction not reproduced here.
 
 `solver.ring_buf` receives the directional result and is scratch belonging to
 this function alone. That it is not `tmp_a` or `tmp_b` is deliberate: both of
-those hold live inputs at two of the four call sites (the internal energy for
+those hold live inputs at two of the call sites (the internal energy for
 κ\\*, and the dilatation and its compression switch in
 [`dilatation_beta!`](@ref)).
 """
-function ring_sum!(out, f, solver, wpow::Int; accumulate::Bool=false)
+function ring_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
+                   parity::NTuple{3,Int}=(1, 1, 1))
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
+    maxred = solver.art.reduction === :max
     accumulate || fill!(out, 0)
     # Read out of the solver before the loop, not inside the threaded closure:
     # a closure capturing `solver` allocates once per region in proportion to
@@ -147,12 +223,13 @@ function ring_sum!(out, f, solver, wpow::Int; accumulate::Bool=false)
     for d in 1:3
         decomp.active[d] || continue
         wd = solver.h[d]^wpow
-        ring_along!(ring_buf, f, solver, d, 1)
+        ring_along!(ring_buf, f, solver, d, parity[d])
         @threaded nx*ny*nz for jk in outer_indices(ny, nz)
             j, k = Tuple(jk)
             @inbounds for i in 1:nx
                 I = CartesianIndex(i + o1, j + o2, k + o3)
-                out[I] += wd * abs(ring_buf[I])
+                v = wd * abs(ring_buf[I])
+                out[I] = maxred ? max(out[I], v) : out[I] + v
             end
         end
     end
@@ -160,7 +237,7 @@ function ring_sum!(out, f, solver, wpow::Int; accumulate::Bool=false)
 end
 
 """
-    detect_sum!(out, f, solver, wpow; accumulate=false)
+    detect_sum!(out, f, solver, wpow; accumulate=false, parity=(1, 1, 1))
 
 Apply the detector named by `ArtParams.detector` — [`delta4_sum!`](@ref) or
 [`ring_sum!`](@ref) — to build one sensor field.
@@ -177,13 +254,14 @@ to every run whether or not it uses the detector. Both settings are setup-time
 constants identical on every rank, so either form of the branch is safe to sit
 above `ring_sum!`'s collectives.
 """
-detect_sum!(out, f, solver, wpow::Int; accumulate::Bool=false) =
-    _detect_sum!(out, f, solver, wpow, accumulate, solver.ring_plans)
+detect_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
+            parity::NTuple{3,Int}=(1, 1, 1)) =
+    _detect_sum!(out, f, solver, wpow, accumulate, parity, solver.ring_plans)
 
-_detect_sum!(out, f, solver, wpow::Int, acc::Bool, ::Nothing) =
-    delta4_sum!(out, f, solver, wpow; accumulate=acc)
-_detect_sum!(out, f, solver, wpow::Int, acc::Bool, ::Tuple) =
-    ring_sum!(out, f, solver, wpow; accumulate=acc)
+_detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, ::Nothing) =
+    delta4_sum!(out, f, solver, wpow; accumulate=acc, parity=par)
+_detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, ::Tuple) =
+    ring_sum!(out, f, solver, wpow; accumulate=acc, parity=par)
 
 """
     smooth!(f, solver)
@@ -205,6 +283,75 @@ function smooth!(f, solver)
         copy_interior!(f, solver.tmp_a, solver.decomp)
     end
     return f
+end
+
+"""
+    rho_sensor!(dest, solver, C)
+
+Write `C · ρ · max(sensor, 0)` over the interior of `dest` from the smoothed
+sensor `solver.sensor`, the form every Cook coefficient except κ\\* takes. The
+clamp is against a smoother that undershoots, not against a negative detector
+output: |δ⁴f| and |d⁸f| are non-negative by construction.
+"""
+function rho_sensor!(dest, solver, C)
+    o1, o2, o3 = solver.decomp.n_halo_d
+    nx, ny, nz = solver.decomp.n_local
+    rho, sensor = solver.rho, solver.sensor
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        @inbounds for i in 1:nx
+            I = CartesianIndex(i + o1, j + o2, k + o3)
+            dest[I] = C * rho[I] * max(sensor[I], 0.0)
+        end
+    end
+    return dest
+end
+
+"""
+    velocity_mu!(solver, C_mu)
+
+Rebuild `solver.mu_art` from the velocity components, replacing the strain
+form. Selected by `ArtParams(mu_sensor = :velocity)`.
+
+The sensor is the reduction of h_d |D_d u_j| over the nine (direction,
+component) pairs, smoothed as the strain sensor is; this is Miranda's `ringV`,
+and `ArtParams.reduction` chooses between its MAX and Cook's Σ. The weight is
+h rather than the strain form's h² because u carries one velocity derivative
+fewer than |S|, and the two agree at the grid scale: a grid-to-grid oscillation
+of amplitude A gives 16Ah either way, so `C_mu` transfers between the settings
+as a starting point.
+
+The motivation is the absolute value in |S| = sqrt(S_ij S_ij), which places a
+cusp wherever the strain passes through zero, and a cusp is grid-scale
+structure at any resolution. Applied to |S|, the two detectors stay within a
+factor of 1.8 of each other at every wavelength; applied to the velocity, they
+reproduce their designed separation of 569× at eight points per wavelength.
+`reference/CALIBRATION.md` has the response table.
+
+Cost is nine detector applications per RHS evaluation against the strain form's
+three, which under `detector = :d8` is nine pentadiagonal line solves. The
+strain magnitude itself is still computed, since `scalar_field(solver,
+:strain_mag)` exposes it as a diagnostic.
+
+Each call carries a parity, which distinguishes this from three further
+`detect_sum!` calls on scalars. A velocity component is odd across the fold
+that reverses its axis, and `vel_parity` supplies the sign for it. At a closed
+edge that is not a fold, such as a slip wall, neither detector applies a parity
+at all, so a wall-normal velocity is differenced as though it were even. That
+is a gap against the reference implementation, which carries an antisymmetric
+closure for the case, and it bounds what this sensor can do at the planar Noh
+wall.
+"""
+function velocity_mu!(solver, C_mu)
+    vel = (solver.u, solver.v, solver.w)
+    fill!(solver.sensor, 0)
+    for j in 1:3
+        detect_sum!(solver.sensor, vel[j], solver, 1; accumulate=true,
+                    parity=ntuple(d -> vel_parity(solver, d, j), 3))
+    end
+    smooth!(solver.sensor, solver)
+    rho_sensor!(solver.mu_art, solver, C_mu)
+    return solver
 end
 
 # Guard against 0/0 in the Ducros ratio where the flow is exactly quiescent. It
@@ -280,53 +427,74 @@ function gate_beta!(solver)
 end
 
 """
-    dilatation_beta!(solver, C_beta)
+    dilatation_beta!(solver, C_beta, gated)
 
-Rebuild `solver.beta_art` from a compression-keyed sensor, replacing the strain
-form. Selected by `ArtParams(beta_sensor = :dilatation)`.
+Rebuild `solver.beta_art` from a sensor built on the dilatation, replacing the
+strain form. Selected by `ArtParams(beta_sensor = :ungated_dilatation)` for
+`gated = false` and `= :dilatation` for `gated = true`.
 
-The sensor is Σ_d h_d² |δ⁴_d Δ| built from the dilatation Δ = ∇·u, smoothed as
-the strain sensor is, and then multiplied by `compression_switch`
-(Mani, Larsson & Moin, JCP 228, 2009; Kawai, Shankar & Lele, JCP 229, 2010).
-The strain form fires on any fourth difference of |S|, so it also spreads
-vortical structures and expansion fans; this form restricts β\\* to compression,
-which is where bulk viscosity has a physical interpretation. `gate_beta!`
-applies the same switch to the unchanged strain sensor, which is the other half
-of the same refinement and a great deal cheaper.
+The sensor is the reduction of h_d² |δ⁴_d Δ| over the active directions, built
+from the dilatation Δ = ∇·u and smoothed as the strain sensor is. The ungated
+form is the one the reference implementation ships. The gated form multiplies it
+by `compression_switch` (Mani, Larsson & Moin, JCP 228, 2009; Kawai, Shankar &
+Lele, JCP 229, 2010), which restricts β\\* to compression, where bulk viscosity
+has a physical interpretation; `gate_beta!` applies that same switch to the
+unchanged strain sensor, which is the other half of the same refinement and a
+great deal cheaper.
+
+Either form differs from the strain sensor in what it measures rather than in
+where: the strain form fires on any fourth difference of |S|, and |S| takes the
+root-sum-square of components that Δ adds, so the two separate wherever a
+converging flow compresses along more than one axis at once.
 
 Cost is one extra `delta4_sum!` and one extra `smooth!` per RHS evaluation —
-the latter is a compact filter solve per active dimension — because μ\\* still
+the latter is a compact filter solve per active dimension — whenever μ\\* still
 needs the strain sensor. `grad_u` supplies both Δ and ω, so the switch itself
 is free.
 
-Unlike the strain form, this one does not reproduce bit-for-bit under a changed
-decomposition. H(−Δ) is discontinuous at Δ = 0 and, with ε at the literature
-value, the ratio has not yet decayed there, so a point whose dilatation is zero
-to round-off carries either no β\\* or the full C_β·ρ·sensor depending on the
-last bit of a cancelling sum. The measured spread over three split axes is
-2e-7 relative, against 1e-14 for the strain sensor; `test/mpi_tests.jl` holds
-the guard.
+Unlike the strain form, the gated one does not reproduce bit-for-bit under a
+changed decomposition. H(−Δ) is discontinuous at Δ = 0 and, with ε at the
+literature value, the ratio has not yet decayed there, so a point whose
+dilatation is zero to round-off carries either no β\\* or the full C_β·ρ·sensor
+depending on the last bit of a cancelling sum. The measured spread over three
+split axes is 2e-7 relative, against 1e-14 for the strain sensor;
+`test/mpi_tests.jl` holds the guard. The ungated form has no switch and no such
+discontinuity, and reproduces as the strain sensor does.
 
 `solver.tmp_a` and `solver.tmp_b` are scratch here, under the invariant
 recorded on `compute_artificial!`.
 """
-function dilatation_beta!(solver, C_beta)
+function dilatation_beta!(solver, C_beta, gated::Bool)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     grad_u = solver.grad_u
-    # Δ into tmp_a, the switch into tmp_b.
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            solver.tmp_a[I] = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
-            solver.tmp_b[I] = compression_switch(grad_u, I)
+    if gated
+        # Δ into tmp_a, the switch into tmp_b.
+        @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+            j, k = Tuple(jk)
+            @inbounds for i in 1:nx
+                I = CartesianIndex(i + o1, j + o2, k + o3)
+                solver.tmp_a[I] = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
+                solver.tmp_b[I] = compression_switch(grad_u, I)
+            end
+        end
+    else
+        @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+            j, k = Tuple(jk)
+            @inbounds for i in 1:nx
+                I = CartesianIndex(i + o1, j + o2, k + o3)
+                solver.tmp_a[I] = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
+            end
         end
     end
     exchange_halos!(solver.tmp_a, decomp)
     detect_sum!(solver.sensor, solver.tmp_a, solver, 2)
     smooth!(solver.sensor, solver)      # clobbers tmp_a, which is spent by now
+    if !gated
+        rho_sensor!(solver.beta_art, solver, C_beta)
+        return solver
+    end
     @threaded nx*ny*nz for jk in outer_indices(ny, nz)
         j, k = Tuple(jk)
         @inbounds for i in 1:nx
@@ -391,24 +559,41 @@ function compute_artificial!(solver, Q)
         end
     end
 
-    # μ*, β* sensor: Σ_d h_d² |D_d S| for the selected detector D, smoothed.
-    exchange_halos!(solver.strain_mag, decomp)
-    detect_sum!(solver.sensor, solver.strain_mag, solver, 2)
-    smooth!(solver.sensor, solver)
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            ρsensor = solver.rho[I] * max(solver.sensor[I], 0.0)
-            solver.mu_art[I]   = C_mu   * ρsensor
-            solver.beta_art[I] = C_beta * ρsensor
+    # Strain sensor: h_d² |D_d S| reduced over directions for the selected
+    # detector D, smoothed. One pass serves μ* and β* where both are built from
+    # it, which is the shipped configuration; a setting that rebuilds either
+    # channel from its own field skips the corresponding write here rather than
+    # overwriting it afterwards. The strain magnitude above is computed either
+    # way, since `scalar_field(solver, :strain_mag)` exposes it.
+    strain_mu = art.mu_sensor === :strain
+    strain_beta = art.beta_sensor === :strain || art.beta_sensor === :gated_strain
+    if strain_mu || strain_beta
+        exchange_halos!(solver.strain_mag, decomp)
+        detect_sum!(solver.sensor, solver.strain_mag, solver, 2)
+        smooth!(solver.sensor, solver)
+        if strain_mu && strain_beta
+            @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+                j, k = Tuple(jk)
+                @inbounds for i in 1:nx
+                    I = CartesianIndex(i + o1, j + o2, k + o3)
+                    ρsensor = solver.rho[I] * max(solver.sensor[I], 0.0)
+                    solver.mu_art[I]   = C_mu   * ρsensor
+                    solver.beta_art[I] = C_beta * ρsensor
+                end
+            end
+        elseif strain_mu
+            rho_sensor!(solver.mu_art, solver, C_mu)
+        else
+            rho_sensor!(solver.beta_art, solver, C_beta)
         end
     end
-    # β* may instead be keyed on compression, either by gating what the block
-    # above just wrote into beta_art or by rebuilding it from a different
-    # sensor. Both leave mu_art alone.
+    # μ* may instead come from the velocity components, and β* may be keyed on
+    # compression, rebuilt from the dilatation, or both. Each rebuild writes one
+    # coefficient array and leaves the other untouched.
+    art.mu_sensor === :velocity && velocity_mu!(solver, C_mu)
     art.beta_sensor === :gated_strain && gate_beta!(solver)
-    art.beta_sensor === :dilatation   && dilatation_beta!(solver, C_beta)
+    art.beta_sensor === :dilatation && dilatation_beta!(solver, C_beta, true)
+    art.beta_sensor === :ungated_dilatation && dilatation_beta!(solver, C_beta, false)
 
     # κ* sensor: Σ_d h_d |D_d e|, smoothed; κ* = C_κ · scale(EOS) · sensor,
     # with the scale ρc/T_ion for the gas models. Internal energy comes straight

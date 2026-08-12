@@ -710,8 +710,8 @@ At the Noh ambient p₀ = 1e-4 the internal energy is 1.5e-4 while the kinetic
 energy is 0.5, so e is recovered as a difference of terms that agree to within
 0.03%, and a rounding-level error in either produces a sign error in e. Since
 the κ\* sensor is built on e, this also bounds the artificial conductivity. It
-is the concrete case for extending item 3 of the model debts, the positivity
-failsafe, to cover internal energy rather than density alone.
+is the concrete case for extending model debt 2, the positivity failsafe, to
+cover internal energy rather than density alone.
 
 ### Recovery strategy
 
@@ -883,14 +883,14 @@ direction, reduced by `MAX` over the nine combinations — and β\* from
 `ring(∇·u)`. Neither input carries an absolute value. So the detector swap and
 the sensor-field change are not independent improvements to be assessed
 separately: this measurement is a lower bound on what the reference method
-gains, and the remaining gap is a reason to run the field change next.
-`MAX` over directions also does not accumulate with dimension where `Σ_d`
-does.
+gains.
 
-Note also that Miranda's default β\* is `gbar(|ring(∇·u)| ρ)` with **no**
-compression switch. The `:dilatation` variant rejected above is a dilatation
-sensor *plus* the switch. Dilatation sensor without the switch, which is what
-the reference actually ships, has not been tried.
+Both fields have since been measured, along with `MAX` against `Σ_d` over
+directions and the ungated dilatation the reference actually ships, under
+[the sensors read |S|](#the-sensors-read-s-not-the-velocity-and-the-dilatation).
+In summary: the field determines how much of the detector's selectivity
+survives; the μ\* field change is nonetheless a null result on every case in
+the battery; and the β\* field change costs the cylindrical axis.
 
 #### Cost, and why the default has not moved
 
@@ -916,6 +916,180 @@ on them. Two things would settle it: `C_beta` refit under `:d8`, and an
 account of the origin cell good enough to say whether the loss is the detector
 or the third-order fold closure. The evidence above says the latter, in which
 case fixing the closure would leave `:d8` better everywhere.
+
+### The sensors read |S|, not the velocity and the dilatation
+
+Cook builds μ\* and β\* from the strain magnitude |S| = sqrt(S_ij S_ij).
+Miranda builds μ\* from `ringV(u, v, w)`, the ring of each velocity *component*
+along each direction reduced by `MAX` over the nine pairs, and β\* from
+`ring(∇·u)`. Neither reference field carries an absolute value.
+`ArtParams.mu_sensor` (`:strain`, `:velocity`), `ArtParams.beta_sensor`
+(`:ungated_dilatation` alongside the three already there) and
+`ArtParams.reduction` (`:sum`, `:max`) now select between them. The weight is
+h_d for a field carrying one velocity derivative fewer, against h_d² for |S|
+and ∇·u, and the two coincide at the grid scale, so the four constants transfer
+as starting points exactly as they do between detectors.
+
+#### The field and the detector are not independent
+
+`bench/artcal.jl response` puts a velocity sine of one wavelength on a periodic
+64-point line and reads the peak coefficient back, with no time integration.
+The comparison is against the detectors' own designed separation, a factor of
+569 at eight points per wavelength, 26 at four, and 1 at the Nyquist:
+
+```
+k/pi   ppw  |  mu* from |S|:   d4       d8    ratio  |  mu* from u:    d4       d8     ratio
+0.125  16.0 |             7.24e-5  4.20e-5   1.72    |            4.11e-6  4.18e-10  9.8e+03
+0.250   8.0 |             3.31e-4  2.58e-4   1.28    |            4.71e-5  8.29e-08     569
+0.500   4.0 |             2.44e-3  2.44e-3   1.00    |            3.93e-4  1.51e-05      26
+0.750   2.7 |             8.33e-4  6.49e-4   1.28    |            1.60e-3  5.07e-04    3.16
+1.000   2.0 |             0.00e+0  0.00e+0    ---    |            3.14e-3  3.14e-03       1
+```
+
+Applied to the velocity, the two detectors reproduce their designed ratios to
+four figures at every wavelength. Applied to |S| they differ by a factor of 1.8
+or less from 32 points per wavelength down to the Nyquist. The cause is the
+absolute value: |S| has a cusp wherever the strain passes through zero, and a
+cusp is grid-scale structure at any resolution, so both detectors receive
+grid-scale content from a resolved field. β\* from ∇·u gives the right-hand
+ratios to the digits printed, except in the last row. The 2.6e6 versus 1.8 gap
+recorded under
+[what the detector cannot help with](#what-the-detector-cannot-help-with) has
+the same cause.
+
+The last row is a property of every field obtained by differentiation. A
+centered scheme has zero modified wavenumber at the Nyquist, so |S| and ∇·u
+vanish identically for a two-point velocity wave and the sensors built from
+them return zero there, whichever detector is used. Only the velocity-component
+sensor responds, with the full undivided 16Ah. The calculation is stable in
+spite of that, for the reason the C_mu section records at 128³: grid-scale
+dissipation comes from the compact filter and not from the Cook properties.
+
+#### Results on the battery
+
+`bench/artcal.jl field`, shipped constants, both detectors, at the shipped CFL:
+
+```
+detector  mu*       beta*         Noh1 plat  deficit  Noh3 plat  Lax L1   contact  Shu train  WC peak
+delta4*   strain*   strain*        0.9993     +64%      0.9751   5.0e-3   0.0053   1.6180     6.6049
+delta4    velocity  strain         0.9993     +64%      0.9750   5.0e-3   0.0053   1.6180     6.6046
+delta4    strain    ungated_dil    0.9993     +64%      0.9715   5.0e-3   0.0051   1.6181     6.5367
+delta4    velocity  ungated_dil    0.9993     +64%      0.9714   5.0e-3   0.0051   1.6181     6.5361
+d8        strain    strain         0.9997     +53%      0.9951   4.7e-3   0.0044   1.6360     6.3953
+d8        velocity  strain         0.9997     +53%      0.9951   4.7e-3   0.0044   1.6368     6.3948
+d8        strain    ungated_dil    0.9997     +51%      0.9976   4.6e-3   0.0041   1.6279     6.3005
+d8        velocity  ungated_dil    0.9997     +51%      0.9975   4.6e-3   0.0041   1.6279     6.3002
+```
+
+**μ\* from the velocity components moves no column past the fourth digit.** The
+largest movement in the table is the Shu–Osher train under `:d8`, 1.6360 →
+1.6368, or 0.05%. Every case here is one-dimensional and C_mu is 0.002, so the
+shear channel does very little in them; it is active in the Taylor–Green
+measurement below.
+
+**β\* from the dilatation improves four columns and degrades two.** Under `:d8`
+the ν = 3 plateau error falls from 0.49% to 0.24%, ν = 1 wall heating from
++53% to +51%, the Lax contact sharpens 0.0044 → 0.0041 and its L1 falls
+4.7e-3 → 4.6e-3, while the Shu–Osher train loses 0.5% (1.6360 → 1.6279) and
+the Woodward–Colella peak 1.5% (6.3953 → 6.3005). Under `:delta4` the same
+change gives up more and gains less: 0.4% of the ν = 3 plateau and 1.0% of the
+Woodward peak, for the same contact gain.
+
+#### The dilatation sensor loses the cylindrical axis
+
+Highest CFL reaching `t_final` with a correct plateau:
+
+```
+                             nu = 1     nu = 2      nu = 3
+detector  mu*       beta*     wall       axis       origin
+delta4    strain    strain      0.2       0.2         0.4
+delta4    velocity  strain      0.2       0.2         0.4
+delta4    any       ungated_dil 0.2      none         0.2
+d8        strain    strain      1.0+      1.0+        0.2
+d8        velocity  strain      1.0+      1.0+        0.2
+d8        any       ungated_dil 1.0+      0.2         0.2
+```
+
+The ungated form keeps the spherical origin and loses the cylindrical axis. No
+CFL sampled reaches `t_final` at ν = 2 under `:delta4`, and under `:d8` the
+axis ceiling falls from 1.0+ to 0.2. `:dilatation`, which is the same sensor
+with the Ducros switch applied to it, loses both geometries. The spherical loss
+is therefore attributable to the switch and the cylindrical loss to the sensor
+field, a separation the earlier measurement could not make. The mechanism for
+the cylindrical loss is unchanged from
+[why the dilatation sensor loses the converging cases](#why-the-dilatation-sensor-loses-the-converging-cases):
+Δ = S_rr + S_θθ adds two same-signed components in the first cells where |S|
+takes their root-sum-square, so the sensor is 2 to 70 times larger where the
+cell measure is smallest.
+
+This bears on the detector result above. `:d8` removes the artificial-property
+CFL restriction at the wall and the axis; pairing it with the reference's β\*
+field restores the axis restriction.
+
+#### The μ\* channel on Taylor–Green
+
+No case in the battery exercises μ\*, so the field change for that channel is
+measured where it carries a share of the sink. 64³, Re = 1600, to t = 10 under
+the shipped smoother, dissipation split at the peak
+(`bench/tgv_energy.jl 64 10.0 configs=on:1 smoother=gaussian mu_sensor=…`):
+
+```
+mu*        reduction   steps   t_peak   peak -dKE/dt   molecular   mu*    filter
+strain*    sum*        5888     8.49      1.2459e-2      33.8%     4.5%   61.6%
+velocity   sum         5884     8.49      1.2421e-2      33.6%     6.0%   60.4%
+strain     max         5682     8.97      1.2496e-2      33.3%     2.7%   64.0%
+```
+
+β\* is 0.0% in all three, as in every Taylor–Green measurement here: at Ma 0.1
+there is almost no dilatation for it to act on.
+
+The velocity sensor raises the μ\* share by a third at the expense of the
+filter's, and the directional maximum cuts it by 40%, which is what reducing
+rather than summing three directions gives. Both are moves of one to two points
+in a 4.5% channel, within a sink the filter dominates, so neither is
+distinguishable from a rescaling of `C_mu`. Two further results are not
+rescalings. The peak falls 0.3% under `:velocity`, toward the van Rees
+reference of 1.2e-2, and the peak *time* under `:max` moves 8.49 → 8.97 against
+a reference peak at t = 9, the other two settings being half a time unit early.
+
+#### Cost
+
+`bench/phases.jl` on the two-species tube, back to back on one machine:
+
+```
+setting                          artificial   % of RHS   compute_rhs!   line solves
+strain / strain / delta4*         1.050 ms     26.0%       4.178 ms      24 + 0
+mu_sensor = velocity              1.535 ms     33.7%       4.690 ms      24 + 0
+beta_sensor = ungated_dilatation  1.287 ms     29.8%       4.349 ms      24 + 0
+detector = d8                     1.733 ms     35.9%       4.798 ms      24 + 8
+mu_sensor = velocity, d8          2.678 ms     47.1%       5.775 ms      24 + 14
+```
+
+The velocity sensor detects three fields where the strain sensor detects one,
+which is +46% on the sensor phase under δ⁴. Paired with `:d8` it adds six more
+pentadiagonal solves per right-hand side, and the sensor phase then costs more
+than everything else in the evaluation combined. Against a 10–20% run-to-run
+spread the phase figures are resolved and the totals are marginal.
+
+#### The fourth-difference clamp at a fold
+
+`delta4_sum!` extends the field past a closed edge by clamping the index, a
+zeroth-order extension where the compact closures use the half-offset mirror.
+The velocity sensor is the first sensor whose field is *odd* across a fold,
+which is where the two extensions differ in order. For an even field the clamp
+misplaces one δ⁴ tap by a term that the vanishing edge derivative makes O(h²);
+for an odd field the edge derivative is the largest quantity there and the same
+tap is wrong at O(h). The test case is u_r = r at the cylindrical axis, N = 32,
+the regular behaviour of a radial velocity, which should produce no sensor at
+all. The clamp gives μ\* = 1.2e-6 on the axis cell against 0 for the mirror,
+or C_mu·ρ·h² of spurious viscosity on the cell where every converging case
+fails. `delta4_sum!` therefore uses the mirror wherever the parity is −1 at a
+folded edge. The two detectors then agree there, `:d8` reaching its own
+half-offset closure through the fold plans and giving 7e-16 on the same field.
+
+The even path is left on the clamp, so no shipped number moves. Its error is
+two orders smaller in h, and changing it would move every guarded number in
+`test/validation.jl`, a separate measurement that nobody has taken.
 
 ### The test filter is an explicit Gaussian, not a compact-filter pass
 
@@ -1098,7 +1272,9 @@ cylindrical axis accepts the cold start at 16× compression.
 | `C_beta` | 1.0 | yes | Accuracy optimum near 0.4; use 0.5 for interface-dominated work and avoid zero. |
 | `C_kappa` | 0.01 | yes | 0.02–0.04 measurably reduces wall heating; avoid zero. |
 | `C_D` | 0.01 | yes | The compact filter dominates interface broadening, so sensitivity to `C_D` is weak. |
-| `beta_sensor` | `:strain` | yes | `:gated_strain` raises the cylindrical Noh CFL ceiling from 0.15 to 0.2 for one pointwise pass and is otherwise a wash; `:dilatation` buys 0.25% of the Shu–Osher wave train and loses both converging Noh geometries at the fold. |
+| `mu_sensor` | `:strain` | yes | `:velocity` is the reference field and recovers the detector's full designed selectivity, which `:strain` destroys through the cusps of \|S\|; it then moves no column of the battery past the fourth digit, because no case there gives the shear channel anything to do. On Taylor–Green it raises the μ\* share of the sink 4.5% → 6.0% for +46% on the sensor phase. [Measurements](#the-sensors-read-s-not-the-velocity-and-the-dilatation). |
+| `beta_sensor` | `:strain` | yes | `:gated_strain` raises the cylindrical Noh CFL ceiling from 0.15 to 0.2 for one pointwise pass and is otherwise a wash; `:dilatation` buys 0.25% of the Shu–Osher wave train and loses both converging Noh geometries at the fold; `:ungated_dilatation`, the reference form, keeps the origin and still loses the axis, improves the ν = 3 plateau and the Lax contact, and costs 0.5% of the Shu–Osher train and 1.5% of the Woodward peak. |
+| `reduction` | `:sum` | yes | `:max` is the reference's directional reduction. Identical in one dimension, so the whole battery is blind to it; on Taylor–Green it cuts the μ\* share 4.5% → 2.7% and moves the dissipation peak from t = 8.49 to 8.97 against a reference peak at t = 9. |
 | `smoother` | `:gaussian` | yes | Changed from `:compact` in August 2026. Raises the spherical-origin CFL ceiling 0.15 → 0.4 and the cylindrical 0.15 → 0.2, cuts the sensor phase 29%, and improves every Noh plateau and pre-shock L1. Costs wall heating at ν = 1 (+58 → +64%) and ν = 2 (+41 → +56%), improves it at ν = 3 (+31 → +27%), and moves the two stored cases by 1–3% of their L1. `C_kappa` cannot recover the wall heating. |
 | `detector` | `:delta4` | provisionally | `:d8` improves six of seven battery columns and removes the artificial-property CFL restriction outright at the planar wall and the cylindrical axis (0.2 → 1.0+), at 40% of the spherical-origin timestep (0.4 → 0.25) and +19% on the right-hand side. Held at `:delta4` pending a `C_beta` refit and an account of the origin cell. [Measurements](#the-ringing-detector-is-an-eighth-derivative-not-a-fourth-difference). |
 | `cfl` | 0.5 | **no** | Use 0.3 with shocks and `StepControl(retries = 4)` for recovery. Converging geometry now tolerates 0.4 (spherical) and 0.2 (cylindrical) under the default smoother. |
@@ -1150,8 +1326,18 @@ Remaining items, in approximate priority order:
    `detector = :d8` now needs the same treatment and needs it more: it changes
    the sensor's spatial support far more than the smoother did, and the
    decision on whether it becomes the default turns on a `C_beta` refit and on
-   the origin cell of item 1 rather than on any further battery run.
+   the origin cell of item 1 rather than on any further battery run. The sensor
+   fields are a third setting in the same class and the clearest case for it:
+   `mu_sensor = :velocity` moves the μ\* share of the Taylor–Green sink by a
+   third with `C_mu` held fixed, so what it is worth cannot be read off until
+   the constant is refitted under it.
 7. Make `filter_state!` conservative on non-Cartesian metrics, by the
    filtered-cell-volume normalization recorded in the same section. Uniform
    Cartesian results are unaffected by construction, so this is measurable
    against the converging cases alone.
+8. Put `delta4_sum!`'s even path on the half-offset mirror as well. The clamp
+   it uses instead is second-order-consistent for an even field, so this is
+   expected to be small, but it is a spurious sensor at the fold cell where
+   every converging case fails and the size of it has not been measured. The
+   odd path already uses the mirror,
+   [for a reason worth reading first](#the-fourth-difference-clamp-at-a-fold).

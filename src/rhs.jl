@@ -142,9 +142,13 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         n_global[d] > 1 || (isperiodic(bcs[d][1]) ||
             error("collapsed dimension $d must use (PeriodicBC(), PeriodicBC())"))
     end
-    art.beta_sensor in (:strain, :gated_strain, :dilatation) ||
-        error("art.beta_sensor must be :strain, :gated_strain or " *
-              ":dilatation, got :$(art.beta_sensor)")
+    art.mu_sensor in (:strain, :velocity) ||
+        error("art.mu_sensor must be :strain or :velocity, got :$(art.mu_sensor)")
+    art.beta_sensor in (:strain, :gated_strain, :dilatation, :ungated_dilatation) ||
+        error("art.beta_sensor must be :strain, :gated_strain, :dilatation or " *
+              ":ungated_dilatation, got :$(art.beta_sensor)")
+    art.reduction in (:sum, :max) ||
+        error("art.reduction must be :sum or :max, got :$(art.reduction)")
     art.smoother in (:compact, :gaussian) ||
         error("art.smoother must be :compact or :gaussian, got :$(art.smoother)")
     art.detector in (:delta4, :d8) ||

@@ -26,7 +26,7 @@
 # front, for their whole duration. `primitives!` floors T_ion at 1e-300 wherever
 # e <= 0, so p goes to rho*R*1e-300 and the run continues, while the positivity
 # check in `max_rate` guards rho, which stays positive throughout. See the
-# `n_e<0` column, and model debt 3 in reference/ROADMAP.md.
+# `n_e<0` column, and model debt 2 in reference/ROADMAP.md.
 #
 # Columns, one line per sampled step:
 #

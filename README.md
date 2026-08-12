@@ -201,7 +201,7 @@ same `Problem` with a sequence of `Numerics` values.
 | Forcing         | Typed source tuples (`ConstantBodyForce`) and time-dependent `DirichletBC` |
 | Singular axes   | `AxisBC` (cylindrical axis), `OriginBC` (spherical origin), `PoleBC` (spherical poles) |
 | Thermodynamics  | `IdealMixture`, `Nasa9Mixture` / `read_nasa9` (NASA CEA piecewise cp), `StiffenedGas`; EOS interface for custom models |
-| Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`), with an optional compression-keyed β\* sensor and a choice of sensor high-pass and test filter — see [CALIBRATION.md](reference/CALIBRATION.md) |
+| Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`), with an optional compression-keyed β\* sensor and a choice of sensor field, high-pass and test filter — see [CALIBRATION.md](reference/CALIBRATION.md) |
 | Diagnostics     | `volume_integral`, `plane_profile`, `mix_width`, `molecular_mixing`, `species_pdf`, `tke_profile`, `dissipation_rate` |
 | Failure handling| `StepControl` timestep floors (incl. a `PLANCK_TIME` failsafe), positivity checking, and rollback-with-CFL-backoff; `SolverFailure` |
 | Run control     | `Callback` with `AtTime` / `EveryTime` (both landed on exactly), `EveryStep`, or `WhenState` triggers; `ProgressLog` for progress/timing output; `SwitchableBC` for boundaries that change mid-run |

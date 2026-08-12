@@ -395,23 +395,36 @@ Concretely, `compute_artificial!`:
 
 - Builds the strain-rate magnitude |S| from the metric-corrected `grad_u`, computes
   its δ⁴ sensor summed over directions, smooths it, and sets
-  μ\* = C_μ·ρ·sensor and β\* = C_β·ρ·sensor.
+  μ\* = C_μ·ρ·sensor and β\* = C_β·ρ·sensor. Directions combine by Σ_d or,
+  under `ArtParams.reduction = :max`, by the reference implementation's MAX;
+  the two are the same operation in one dimension.
 - Computes the internal energy directly from `Q` (EOS-agnostic), takes its δ⁴
   sensor, smooths, and sets κ\* = C_κ·(ρc/T_ion)·sensor.
 - For each species, takes the δ⁴ sensor of Y_k, smooths, and sets
   D\*_k = C_D·c·sensor_k.
 
-`ArtParams.beta_sensor` optionally keys β\* on compression, through the two
-separable halves of the Mani, Larsson & Moin refinement (JCP 228, 2009). Write
-Δ = ∇·u for the dilatation, ω for the vorticity vector, H for the Heaviside
-step, and ε for a fixed regularizer at the literature value 1e-32.
-`:gated_strain` multiplies the strain-sensor β\* above by the switch
-H(−Δ)·Δ²/(Δ² + |ω|² + ε), which is zero in expansion and small where vorticity
-dominates; that is one pointwise pass, since `grad_u` already supplies both Δ
-and ω. `:dilatation` additionally takes the δ⁴ sensor of Δ rather than of
-|S|, which costs one more sensor smoothing pass per RHS evaluation. μ\* keeps
-the strain sensor in every case. The two behave very differently at a
-coordinate fold; measured effects are in [CALIBRATION.md](CALIBRATION.md).
+`ArtParams.mu_sensor` and `ArtParams.beta_sensor` select which field each of
+the first two channels reads. Cook takes both from |S|, as above; the reference
+implementation takes μ\* from the velocity components and β\* from the
+dilatation Δ = ∇·u, and the difference is the absolute value in
+|S| = sqrt(S_ij S_ij), which puts a cusp wherever the strain passes through
+zero. `mu_sensor = :velocity` reduces h_d|D_d u_j| over the nine (direction,
+component) pairs. The weight is h_d rather than h_d² because u carries one
+velocity derivative fewer, and the two coincide at the grid scale. This sensor
+also requires the fold parity of each component, a velocity component being odd
+across the fold that reverses its axis.
+
+`beta_sensor` additionally offers the compression keying of the Mani, Larsson &
+Moin refinement (JCP 228, 2009), in two separable halves. Write ω for the
+vorticity vector, H for the Heaviside step, and ε for a fixed regularizer at
+the literature value 1e-32. `:gated_strain` multiplies the strain-sensor β\*
+above by the switch H(−Δ)·Δ²/(Δ² + |ω|² + ε), which is zero in expansion and
+small where vorticity dominates; that is one pointwise pass, since `grad_u`
+already supplies both Δ and ω. `:ungated_dilatation` instead takes the δ⁴
+sensor of Δ, which is the reference's own β\*, and `:dilatation` applies the
+switch to that as well; either costs one more sensor smoothing pass per RHS
+evaluation. The settings behave very differently at a coordinate fold; measured
+effects are in [CALIBRATION.md](CALIBRATION.md).
 
 Constants live in `ArtParams` (defaults C_μ = 0.002, C_β = 1.0, C_κ = 0.01,
 C_D = 0.01) and should be revisited per configuration. `enabled=false` skips the
