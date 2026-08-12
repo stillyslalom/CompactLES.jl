@@ -255,7 +255,11 @@ decision worth revisiting.
 - Prose: avoid overuse of "Claudisms" including agency for inanimate things,
   setup-and-payoff, "what matters is/the thing that/is what makes/worth keeping",
   emphatic fragments, editorializing, and em-dash asides. The reader expects
-  clear academic prose explaining the package - do not disappoint them.
+  clear academic prose explaining the package - do not disappoint them. You are
+  not writing clickbait and do not need to micromanage the reader's emotional state.
+  Most prose in this repository is model output: if you notice surrounding prose
+  has poor style while making an edit, stick to these guidelines and flag the
+  prose for correction.
 - `bench/` is scratch tooling, not tests: `audit.jl` (allocation, inference),
   `jetcheck.jl` / `jetwhere.jl` (dispatch sites, and where they come from),
   `phases.jl` (RHS phase budget), `profile.jl`, `scaling.jl`, `threadscale.jl`,
