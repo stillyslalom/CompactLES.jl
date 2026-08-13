@@ -230,7 +230,7 @@ of length `n`. `aL` couples local row 1 to the previous rank's last unknown and
 
     x = y − x_prev_last·v − x_next_first·w.
 
-The vectors `v` and `w` — the **spikes** — depend only on the scheme, so they
+The vectors `v` and `w`, the **spikes**, depend only on the scheme, so they
 are computed once at plan time. Evaluating `x` at the first and last row of
 every rank yields a dense **2P × 2P reduced system** in the interface unknowns
 `(x₁⁽⁰⁾, xₙ⁽⁰⁾, x₁⁽¹⁾, xₙ⁽¹⁾, …)`. That reduced matrix also depends only on the
@@ -337,8 +337,8 @@ step for diagnostics or output.
 assuming boundary conditions are already enforced on `Q`. Step by step:
 
 1. **Exchange state halos** (`exchange_state!`) and **recover primitives**
-   (`primitives!`) — ρ, u, v, w, p, T_ion, sound speed, mixture cₚ, and the mass
-   fractions — over the full padded arrays.
+   (`primitives!`) over the full padded arrays: ρ, u, v, w, p, T_ion, sound
+   speed, mixture cₚ, and the mass fractions.
 2. **Velocity gradients.** For each direction `d` and velocity component `j`,
    apply the compact derivative and scale by 1/h_d (which carries the stretch
    Jacobian). `grad_u[d, j]` holds the d-derivative of the j-th component. Collapsed
@@ -472,8 +472,8 @@ freestream-preservation test verifies this to machine zero in every metric.
 
 Cylindrical and spherical grids have coordinate singularities (r = 0, the
 spherical poles) where scale factors vanish. Rather than excluding them,
-CompactLES **regularizes** them on a half-offset grid — `r_i = (i − ½)h`, so no
-node sits on the singularity and no scale factor is zero — plus parity/antipodal
+CompactLES **regularizes** them on a half-offset grid (`r_i = (i − ½)h`, so no
+node sits on the singularity and no scale factor is zero) plus parity/antipodal
 folds implemented in `folds.jl`.
 
 **The axisymmetric axis** (`AxisBC`, cylindrical, θ collapsed) is the simplest
@@ -485,16 +485,16 @@ diagonal — per solution parity, since derivatives flip field parity and filter
 preserve it. `operators.jl` implements the diagonal fold (`b[1] += σg·α`); the
 scheme is planned in both parities and the RHS reads the mirror-filled halo.
 
-**The resolved cases** — resolved-θ cylindrical axis, spherical origin, spherical
-poles — all reduce to one structure: a fold whose partner is *antipodal* rather
-than the line itself:
+**The resolved cases**, resolved-θ cylindrical axis, spherical origin and
+spherical poles, all reduce to one structure: a fold whose partner is
+*antipodal* rather than the line itself:
 
     cylindrical axis:  (−r, θ)      ≡ (r, θ+π)
     spherical origin:  (−r, θ, φ)   ≡ (r, π−θ, φ+π)
     spherical poles:   (−θ, φ)      ≡ (θ, φ+π)
 
-The even/odd decomposition `e = ½(f + σ f∘M)`, `o = ½(f − σ f∘M)` — with M the
-pairing map and σ the component's antipodal basis sign — turns each into two
+The even/odd decomposition `e = ½(f + σ f∘M)`, `o = ½(f − σ f∘M)`, with M the
+pairing map and σ the component's antipodal basis sign, turns each into two
 problems the parity-fold machinery already solves exactly: e is even across the
 singular point, o is odd. The folded compact plans apply unchanged and
 reconstruction is the inverse butterfly. Component signs are tabulated in

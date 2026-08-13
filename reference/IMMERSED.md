@@ -29,8 +29,8 @@ non-coordinate-surface targets that would otherwise force a different code.
 ## Method selection under the compact-scheme constraint
 
 The IB literature (Mittal & Iaccarino 2005 is the survey) divides into sharp
-methods — cut cells and ghost cells, which modify the discretization at the
-interface — and diffuse methods, which keep the discretization uniform and
+methods, cut cells and ghost cells, which modify the discretization at the
+interface, and diffuse methods, which keep the discretization uniform and
 represent the body through forcing or state imposition over a smeared
 interface region.
 

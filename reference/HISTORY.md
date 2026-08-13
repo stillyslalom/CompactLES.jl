@@ -85,9 +85,9 @@ energy, and resolved dissipation including the artificial contribution. The
 quadrature is exact for a constant on a Cartesian grid and second order at a
 node-centered curvilinear edge.
 
-**EOS generalization.** The sites that previously assumed an ideal gas outside
-the function barrier — NSCBC's LODI algebra (φ = ∂(ρe)/∂p, ∂φ/∂Y_k) and the
-artificial-conductivity scale — became EOS dispatch points. The full contract
+**EOS generalization.** Two sites previously assumed an ideal gas outside the
+function barrier, NSCBC's LODI algebra (φ = ∂(ρe)/∂p, ∂φ/∂Y_k) and the
+artificial-conductivity scale. Both became EOS dispatch points. The full contract
 is written down at the top of `physics.jl`. Two models exercise it beyond
 `IdealMixture`: `StiffenedGas` (exact perfect-gas limit at p∞ = 0, the natural
 precursor to Mie–Grüneisen) and `Nasa9Mixture` (piecewise temperature-dependent
@@ -180,7 +180,7 @@ so an `(nx, ny, 1)` grid divided a loop of one trip and ran serially at any thre
 count while still paying the region-entry cost. Those loops now iterate a
 flattened `outer_indices(n2, n3)`, which preserves iteration order and divides
 over the second dimension when the third is collapsed; `_use_threads` also takes
-the trip count and refuses to spawn for one. Measured at 256×256×1 on the
+the trip count and does not spawn for one. Measured at 256×256×1 on the
 24-thread development workstation, `compute_rhs!` and `step!` per call:
 
     threads      before                  after
@@ -301,7 +301,7 @@ about seven points of planar wall heating.
 **The ringing detector** is a compact eighth derivative in the reference, not
 Cook's undivided fourth difference. `ArtParams.detector` offers both;
 `compact_d8` is the transcribed operator and `:delta4` remains the default.
-The sequencing mattered and is worth keeping in view: a sharper high-pass makes
+The sequencing mattered: a sharper high-pass makes
 narrower sensor spikes, and the defect the Gaussian fixes is β\* intermittency
 at a symmetry cell, so measuring the detector against the old smoother would
 have rejected it for the smoother's fault.

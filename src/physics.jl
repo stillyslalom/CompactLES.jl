@@ -12,8 +12,8 @@
 #
 # A new EOS supplies these and nothing else. The first four are the ones that
 # were always here; the last three existed as ideal-gas algebra inlined at their
-# call sites, which is what made the rest of the solver quietly ideal-gas even
-# though this file was not.
+# call sites, which left the rest of the solver quietly ideal-gas even though
+# this file was not.
 #
 #   nspecies(eos)                        number of species Ns
 #   _primitives!(solver, eos, Q)         ρ, u, p, T_ion, c, cp_mix, Y over the

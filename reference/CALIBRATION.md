@@ -650,8 +650,8 @@ changes. Summed over the domain, three different split axes agree to 2e-6
 relative for `:gated_strain` and 2e-7 for `:dilatation`, against 1e-14 for the
 strain sensor. `:gated_strain` is the worse of the two for the same reason its
 maximum survives a solenoidal field: the sensor it gates is O(1) at the points
-where the gate toggles. The cause is not a missing halo
-exchange — the sensor fields themselves reproduce to 1e-14 — but the switch.
+where the gate toggles. The cause is the switch rather than a missing halo
+exchange, since the sensor fields themselves reproduce to 1e-14.
 H(−Δ) is discontinuous at Δ = 0, and with ε at the literature value of 1e-32 the
 ratio Δ²/(Δ² + |ω|² + ε) has not decayed by the time Δ reaches round-off, so a
 point whose dilatation cancels to zero carries either no β\* or the full
@@ -771,8 +771,8 @@ inflow of −1, with e/e₀ = +2.6e5 against −1.6e4 in its neighbour, under a 
 The restriction is therefore a symmetry-plane startup problem. β\* is already
 saturated at the fold, so the surviving candidate is the fold closure rather
 than the artificial properties. (The fold closure has since been measured and
-is *not* third order — see
-[the fold closure is not third order](#the-fold-closure-is-not-third-order) —
+is *not* third order (see
+[the fold closure is not third order](#the-fold-closure-is-not-third-order)),
 so this sentence records what was believed here, not a live candidate. The
 startup character of the restriction survives that correction and is
 strengthened by it.) This is consistent with `cfl ≤ 0.15` binding in
@@ -1075,7 +1075,7 @@ k/pi     delta4     d8        ratio
 Without that second factor `:d8` would produce sensors 240× larger at the
 Nyquist and the four constants would have to be refit by two orders before
 any case could be run at all. With it they transfer as starting points, which
-is what makes the comparison below a one-variable one.
+keeps the comparison below a one-variable one.
 
 #### Results
 
@@ -1097,7 +1097,7 @@ digit that separated the β\* sensor variants. The ν = 3 plateau error falls
 from 2.45% to 0.42%. Wall heating, the standing regression of the smoother
 change, recovers eleven of the points it lost. The Shu–Osher wave train, which
 is the column that pulls against every damping constant, gains 1.1%: the
-detector declines to fire on structure the scheme resolves, which is precisely
+detector does not fire on structure the scheme resolves, which is precisely
 what it was adopted for. Woodward–Colella peak density is the one regression,
 6.6049 → 6.3953 at N = 400.
 
@@ -1149,7 +1149,7 @@ detectors differ by 2.6e6 on κ\*, whose input is the internal energy. On a
 velocity sine on the same grid they differ by a factor of 1.8 on β\*, whose
 input is |S|. The absolute value is the reason: |S| has a cusp wherever the
 strain passes through zero, a cusp is a grid-scale feature, and no detector
-can decline to see one. This is the same geometry that
+is insensitive to one. This is the same geometry that
 [defeats the Ducros switch](#what-the-switch-removes) on a solenoidal field,
 observed from the other side.
 

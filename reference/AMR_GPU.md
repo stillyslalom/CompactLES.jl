@@ -25,7 +25,7 @@ groundwork already done.
 
 Patch AMR replaces the "one global array per field" assumption with many
 independently sized blocks, each with its own line plans and ghost regions. A
-GPU port wants exactly that shape: a patch is a natural kernel-launch unit with
+GPU port needs exactly that shape: a patch is a natural kernel-launch unit with
 a bounded working set, and a port against the current monolithic arrays would
 have to be redone once patches exist. The two capabilities therefore share the
 Stage 2 refactor: the patch abstraction and the storage-type generalization
@@ -112,8 +112,8 @@ right-hand side; `cfamrfc` does the reverse). Five properties matter:
 - **Boundary invertibility requires specialized closures.** Source comments:
   "no filter (current) or bad filter at boundary causes ringing in the
   solution" and "with extended boundary data : same as one-sided to maintain
-  invertibility." Four closure variants are tabulated per end — odd-symmetric,
-  one-sided, even-symmetric, and extended-data — on the `-1:2` index.
+  invertibility." Four closure variants are tabulated per end on the `-1:2`
+  index: odd-symmetric, one-sided, even-symmetric, and extended-data.
 - **The parity machinery matches the existing fold formulation.**
   `lower_symm_weights`/`upper_symm_weights` fold a ghost coefficient onto the
   interior with a sign, structurally identical to the axis fold
@@ -230,7 +230,7 @@ pair, plus tests. No solver changes.
 - The sensor-injection test named in the groundwork: apply the Cook δ⁴ sensor
   chain (`delta4_sum!` + `smooth!`) to data containing a captured-shock-like
   profile near a transfer boundary, prolong, and measure the amplification
-  against the ~20× bound. This number decides how much buffering Stage 3
+  against the ~20× bound. This number sets how much buffering Stage 3
   interfaces need and whether the coarsening filter (`c4ff3` analog) must run
   before every restriction.
 
@@ -311,8 +311,8 @@ averaging the two patches' values (cheap, symmetric, removes the drift mode).
 
 Accuracy at an interface drops toward the closure order, as at any closed
 boundary; the α^|i−j| decay confines it. Patch layouts should therefore
-minimize interface count — patches as large as memory allows, which is also
-what the GPU wants.
+minimize interface count, taking patches as large as memory allows, which also
+suits the GPU.
 
 ### Mechanical refactor list
 
@@ -392,7 +392,7 @@ the interface; conservation drift versus a uniform-fine reference.
   then three fine steps (Berger–Oliger order: coarse first, fine after, then
   restrict). Fine ghost data at fine stage times needs coarse values *between*
   coarse steps: store the coarse boundary rings (not full arrays) at t^n and
-  t^{n+1} together with their RHS values — both already computed — and use
+  t^{n+1} together with their RHS values, both already computed, and use
   cubic Hermite interpolation in time, O(dt⁴), matching the integrator. LSRK
   has no free dense output; the Hermite construction is the standard
   substitute.
@@ -563,7 +563,7 @@ expensive order.
    in the same change that deletes the three unused dependencies noted in
    `ROADMAP.md`.
 7. **Fold-adjacent refinement** is forbidden, not solved. Converging-shock
-   problems want resolution *at* the axis/origin, which is exactly where
+   problems need resolution *at* the axis/origin, which is exactly where
    refinement is excluded. The mitigation is that level 0 can be globally
    fine in r near the fold (stretching is also excluded on folded dimensions,
    so this costs points); lifting the restriction is future work that

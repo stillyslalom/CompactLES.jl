@@ -48,7 +48,7 @@ multi-line text against `\n` will silently find nothing; match a line at a time.
 not skip it because the code runs.** MPI.jl defaults to a bundled JLL that
 satisfies the scheduler perfectly well on one node and never reaches the
 interconnect off it — **27x–66x** slower on rzhound, with no symptom but speed.
-`LocalPreferences.toml` is per-project, so `--project` silently decides which MPI
+`LocalPreferences.toml` is per-project, so `--project` silently determines which MPI
 you get. `reference/CLUSTER.md` also holds the launch-line rules
 (`--cpu-bind=threads`, `-t 1`, and why a rank must never hold both SMT threads of
 a core), the sizing tools, and the measured scaling.
@@ -102,10 +102,10 @@ digit is real. The cases themselves live in `test/cases.jl`, shared with
 add a case there, not in either consumer.
 
 `bench/jetcheck.jl` and `bench/audit.jl` print counts, not pass/fail. Record
-them before a change and compare after; what matters is the delta. Most
-remaining dispatch sites are `Metric` / `EOS` / `BoundaryCondition` field reads
-behind function barriers — one dispatch per array pass, not per point — so
-treat a *new* site as the signal, not the absolute number. The counts overlap
+them before a change and compare after, reading the delta rather than the
+absolute count. Most remaining dispatch sites are `Metric` / `EOS` /
+`BoundaryCondition` field reads behind function barriers, one dispatch per
+array pass rather than per point, so treat a *new* site as the signal. The counts overlap
 between entry points (`step!` contains `compute_rhs!`), so compare like with
 like and never sum them.
 
@@ -190,8 +190,8 @@ crash, so it looks like a hang rather than a bug.
 
 **A boundary condition that changes mid-run must change on every rank at the
 same step.** This is the same collective trap from the other side: `SwitchableBC`
-forwards to `after` only once switched, and if `after` runs collectives that
-`before` does not — `NSCBCOutflowBC` does — then ranks disagreeing about the
+forwards to `after` only once switched. If `after` runs collectives that
+`before` does not, as `NSCBCOutflowBC` does, then ranks disagreeing about the
 switch is a deadlock, not a wrong answer. `WhenState` reduces its condition
 across the communicator for exactly this reason, so drive a switch from a
 `Callback` and never from a rank-local test. `AtTime` and `EveryStep` are safe
@@ -290,8 +290,8 @@ decision worth revisiting.
   docstrings carry the reasoning. Ctrl-C has no code fix — pass
   `--handle-signals=no` for sweeps.
 - A sweep over configurations expected to include bad ones must pass a low
-  `nmax`. A configuration that loses positivity does not crash — the diffusive
-  rate in `compute_dt` climbs until `dt` collapses and the run grinds — so one
+  `nmax`. A configuration that loses positivity does not crash: the diffusive
+  rate in `compute_dt` climbs until `dt` collapses and the run grinds, so one
   bad point costs more wall time than the whole sweep. `test/cases.jl` threads
   an `nmax` through every case for this.
 - The 1-D cases run single-threaded on purpose: each threaded region is well

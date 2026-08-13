@@ -217,7 +217,7 @@ and `banded.jl` already implement a distributed banded line solve with
 cross-rank coupling and a pre-factorized reduced interface system — precisely
 the kernel an alternating-direction implicit (ADI) or line-relaxation
 diffusion solver needs and precisely the smoother a geometric multigrid
-wants. The implicit implementation should be built on that machinery rather
+requires. The implicit implementation should be built on that machinery rather
 than on a separate linear-algebra dependency.
 
 **The regularization model carries one structural debt.** The July 2026
@@ -227,7 +227,7 @@ filter itself has never been calibrated and its dissipation is applied per
 filter pass rather than per unit time (`reference/CALIBRATION.md`). Every
 mixing result this solver produces is currently conditional on it, which is why
 it is a work item below rather than a known limitation. The second debt in this
-class — β\* keyed on the strain magnitude rather than the dilatation — has been
+class, β\* keyed on the strain magnitude rather than the dilatation, has been
 measured and closed (`reference/HISTORY.md`).
 
 What that work left open is the converging-shock `cfl ≤ 0.15` ceiling itself,
@@ -292,9 +292,9 @@ the four-constant tables; it exists now and carries the dt-consistency half.
 Cluster time is required; budget runs per the usual discipline.
 
 Whether `filter_cfl` becomes the default is part of that fit rather than a
-separate decision. It changes what α means — under the relaxation α and the
-reference CFL set the dissipation jointly — so fitting α first under the old
-formulation and switching afterwards would waste the fit.
+separate decision. It changes what α means, since under the relaxation α and
+the reference CFL set the dissipation jointly, so fitting α first under the
+old formulation and switching afterwards would waste the fit.
 
 **2. A positivity failsafe.** `StepControl` detects positivity loss and can
 roll back, but rollback recovers only abrupt failures; gradual degradation
@@ -340,8 +340,8 @@ the face and of the target composition landed with the near-term corrections
 Schmidt number for all species. Implement the coefficient reader, per-species
 μ_k(T) and λ_k(T) evaluations, a Wilke-type mixture rule, and
 mixture-averaged diffusivities (unity-Lewis fallback retained). Structure it
-the way the EOS contract is structured — a dispatchable transport model
-consumed behind the existing function barrier — so a plasma transport model
+the way the EOS contract is structured, as a dispatchable transport model
+consumed behind the existing function barrier, so a plasma transport model
 (Phase 2) is a new instance rather than a rewrite. Until this lands,
 "multicomponent" accurately describes the thermodynamics and the species
 transport equations, not the transport coefficients; the README should say
@@ -482,8 +482,8 @@ the required structure without an unstructured mesh.
 bodies imposed by a graded post-stage state blend (exact Brinkman relaxation,
 degenerating to Pyranda-style hard reset at η = 0), with force and heat-flux
 diagnostics from the imposition bookkeeping. The design is
-ordering-independent of the patch refactor — the imposition is pointwise and
-mask-driven — so it can be implemented on today's arrays and ported
+ordering-independent of the patch refactor, since the imposition is pointwise
+and mask-driven, so it can be implemented on today's arrays and ported
 mechanically. Multiblock and IB are complements, not alternatives: multiblock
 handles geometry that must be accurate (coordinate-aligned blocks at full
 closure order), IB handles geometry that must merely exist (first-order at
@@ -554,5 +554,5 @@ above and pullable on demand: laser ray tracing (Phase 2.7), if a specific
 experiment needs it before the rest of the HED stack exists, and immersed
 boundaries (`reference/IMMERSED.md`) Stage 1, when a target problem first
 needs non-coordinate-surface geometry — its main sequencing constraint is
-that the Stage 2 calibration sweep deserves the same measurement discipline
+that the Stage 2 calibration sweep requires the same measurement discipline
 as `bench/artcal.jl`, not that it depends on other work.

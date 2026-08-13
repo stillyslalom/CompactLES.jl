@@ -65,7 +65,7 @@ then `--mpi=pmi2` for MVAPICH2 or `--mpi=pmix` for OpenMPI. The rank-0-of-one
 rank-0-of-one case produces plausible output at approximately 1/N of the
 expected speed rather than raising an error.
 
-Then **restart Julia** — the preference is read at precompile — and verify with
+Then **restart Julia**, since the preference is read at precompile, and verify with
 `MPI.versioninfo()`, or run `clusterprobe.jl`, whose `MPI binary` line reports
 `system` versus a `_jll` outright and flags the JLL on any multi-node run. Do
 this inside an allocation if the login and compute nodes carry different stacks.
@@ -75,8 +75,8 @@ one machine's library by path and must not travel between checkouts.
 
 `LocalPreferences.toml` is project-specific, so `--project` determines the MPI
 implementation.
-A second environment that `dev`s this package — say a driver project alongside
-`~/.julia/dev/CompactLES` — does not inherit the preference, and running the same
+A second environment that `dev`s this package, say a driver project alongside
+`~/.julia/dev/CompactLES`, does not inherit the preference, and running the same
 script against the wrong one falls back to the JLL with no symptom other than
 speed. Measured both ways at 256³: 224 ranks over 2 nodes, 15.19 s/step on the
 JLL against 0.571; 448 ranks over 4 nodes, 19.6 against 0.2966 — **27x and 66x**,

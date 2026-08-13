@@ -524,7 +524,7 @@ dump to 43 MB.
 
 `slice = (d, g)` writes only the plane at global index `g` of dimension `d`, as a
 grid one point thick in that dimension. A mid-plane of a 512³ run is 1/512 of the
-data, which is what makes a frequent 2-D time series affordable when a 3-D one is
+data, which makes a frequent 2-D time series affordable where a 3-D one is
 not. Only the ranks whose block spans `g` write a piece, so the container lists
 fewer pieces than there are ranks; the rest write nothing. `slice` composes with
 `stride`, which then applies to the two dimensions still resolved.

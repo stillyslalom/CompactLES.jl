@@ -294,7 +294,7 @@ from one imposed by azimuthal spacing near a singularity.
   a 2.7 GB dump to 43 MB.
 - **Slicing:** `save_vtk(...; slice = (3, 256))` writes only the plane at global
   index 256 of dimension 3. A mid-plane of a 512³ run is 1/512 of the data, which
-  is what makes a frequent 2-D time series affordable when a 3-D one is not. Only
+  makes a frequent 2-D time series affordable where a 3-D one is not. Only
   the ranks spanning the plane write anything. Composes with `stride`, and works
   the same way in `save_hdf5` and `FieldWriter`.
 - **Time series:** `Callback(EveryTime(Δt), FieldWriter("out/field"))` dumps on an

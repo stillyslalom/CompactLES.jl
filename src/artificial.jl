@@ -375,7 +375,7 @@ sensor to compression.
 
 `grad_u[d, j]` is ∂u_j/∂x_d, so the trace is the dilatation and the
 off-diagonal pairs are the curl. Both are already available wherever the
-sensors are built, which is what makes the switch free.
+sensors are built, which is why the switch is free.
 """
 @inline function compression_switch(grad_u, I)
     @inbounds begin
