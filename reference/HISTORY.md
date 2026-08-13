@@ -18,6 +18,7 @@ points at them rather than restating them.
 8. [The sensor fields (August 2026)](#the-sensor-fields-august-2026)
 9. [The C_beta refit (August 2026)](#the-c_beta-refit-august-2026)
 10. [The origin cell (August 2026)](#the-origin-cell-august-2026)
+11. [Filter dt-consistency (August 2026)](#filter-dt-consistency-august-2026)
 
 ## Phase 0 — extensibility seams (July 2026)
 
@@ -534,3 +535,50 @@ applied per step rather than per unit time, which is the standing model debt 1
 and which the `C_beta` ladder implicates independently. The ceiling now reads as
 a robustness problem at a symmetry cell, which is model debt 2, rather than a
 numerics problem at a fold.
+
+## Filter dt-consistency (August 2026)
+
+The second half of model debt 1, taken up because the `C_beta` ladder reached it
+from an unexpected direction: a failure that got worse as the timestep fell is
+the signature of a per-step operation, and the filter is applied once per step.
+`Numerics` gains `filter_cfl`, off by default. Measurements are in
+`reference/CALIBRATION.md` under "The filter dissipates per application, not per
+unit time"; the instrument is `bench/filterrate.jl`, new, and `bench/tgv_energy.jl`
+gains `cfl` and `filter_cfl` options.
+
+**The filter dissipated per application, by a factor of 3.93 across a 4× CFL
+change.** On a parallel shear layer, which is an exact steady Euler solution and
+so leaves the filter as the only sink of kinetic energy, the loss tracks the
+step count rather than the elapsed time (73 : 145 : 289 steps giving
+1 : 1.98 : 3.93). Under `filter_cfl` the loss is constant to six significant
+figures over the same range.
+
+Two obvious cases do not measure this and both were tried first. A broadband
+field saturates, losing 64% of its kinetic energy within tens of steps and then
+no more, which collapses the spread to 1.2%. A velocity sine at uniform pressure
+is an acoustic oscillation trading kinetic for internal energy far faster than
+the filter acts, and measuring total energy instead sees nothing at all, because
+a symmetric filter on a periodic grid conserves the discrete sum of every
+conserved variable exactly.
+
+**What this costs the calibration is the attribution, not the total.** At 32³
+Taylor–Green, halving the CFL changes peak dissipation by 0.6% but moves the
+filter's share of it from 82.2% to 85.0% and the μ\* share from 5.1% to 3.6%,
+with `C_mu` held fixed. The sinks compete rather than add: the cascade rate is
+set at the large scales, so a filter taking more at the grid scale leaves less
+for μ\* and molecular dissipation. A `C_mu` fitted under the unrelaxed
+formulation is therefore only reproducible at the CFL it was fitted at. Under
+the relaxation the split holds to 0.1 points.
+
+The formulation is `Q ← (1 − w)Q + w·F(Q)` with
+`w = filter_interval · dt · rate / filter_cfl`, capped at one. Reading `dt · rate`
+rather than `solver.cfl` recovers the CFL actually taken, so `StepControl`
+backoff and callback-landing shortening are both accounted for, which is also
+the truncated-final-step artifact removed. At `w = 1` the code takes the
+original copy path rather than a blend, so the default is bit-identical: the
+full gate reproduces every convergence order and error magnitude exactly, and
+77/77 MPI checks pass at 2, 4 and 8 ranks.
+
+Whether the relaxation should become the default belongs to the α and cadence
+fit rather than to this work, since under the relaxation α and the reference CFL
+set the dissipation jointly.

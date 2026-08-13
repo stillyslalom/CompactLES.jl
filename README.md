@@ -154,6 +154,7 @@ num = Numerics(
     cfl             = 0.5,
     control         = StepControl(retries=4),    # roll back and lower cfl on failure
     filter_interval = 1,                  # filter every N steps (0 disables)
+    filter_cfl      = 0.0,                # 0 → filter per application; see below
     dims            = nothing,            # process grid; nothing → auto
     stretch         = (nothing, nothing, nothing))  # optional grid clustering
 ```
@@ -193,7 +194,7 @@ same `Problem` with a sequence of `Numerics` values.
 | Category        | Provided |
 |-----------------|----------|
 | Derivatives     | `lele_d1_6` (C6, tridiagonal), `lele_d1_10` (C10, pentadiagonal), `pade_d1_4`, custom `CompactScheme` / `BandedCompactScheme` |
-| Filter          | `compact_filter(alphaf)` — eighth-order Gaitonde–Visbal, boundary cascade; larger `alphaf` is weaker |
+| Filter          | `compact_filter(alphaf)` — eighth-order Gaitonde–Visbal, boundary cascade; larger `alphaf` is weaker. By default it is applied at full strength every `filter_interval` steps, so its dissipation is a per-application amount and scales with the step count rather than with elapsed time; `filter_cfl` relaxes each pass in proportion to the timestep and makes it a rate instead — see [CALIBRATION.md](reference/CALIBRATION.md) |
 | Time integration| Five-stage fourth-order low-storage Carpenter–Kennedy Runge–Kutta (LSRK(5,4)) |
 | Geometry        | `CartesianMetric`, `CylindricalMetric`, `SphericalMetric`; collapsed 1-D/2-D; `Stretch` / `sine_cluster` meshes |
 | Walls           | `SlipWallBC`, `NoSlipWallBC(Twall=...)` (adiabatic or isothermal) |

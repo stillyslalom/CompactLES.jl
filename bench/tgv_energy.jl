@@ -92,6 +92,15 @@
 #             ships, because the 128³ numbers above were measured under it. Pass
 #             `smoother=gaussian` for a comparison against the shipped
 #             configuration.
+#   cfl       timestep multiplier (default 0.6). Exposed because the filter's
+#             share of the sink depends on it: unrelaxed, the filter removes
+#             energy per APPLICATION, so halving the CFL doubles the number of
+#             applications covering the same interval and doubles what the
+#             filter takes. Sweep it to measure that, not to tune anything.
+#   filter_cfl  reference CFL for a full-strength filter pass, 0 (default) for
+#             the unrelaxed formulation. Positive makes the filter dissipation
+#             a rate rather than a per-application amount, so the sweep above
+#             flattens. See `filter_weight`.
 #   window    steps either side for every -dKE/dt reported (default 250, i.e. a
 #             501-step window, clamped to length(ts)/8). Do not lower it towards
 #             1 to "see more detail" — the one-step rate is contaminated by dt
@@ -197,6 +206,7 @@ end
 function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                       filter_interval=1, sample=100, progress=0,
                       nmax=typemax(Int), smoother=:compact,
+                      cfl=0.6, filter_cfl=0.0,
                       mu_sensor=:strain, beta_sensor=:strain, reduction=:sum)
     γ = 1.4
     c0 = 10.0                      # Ma ≈ 0.1 at |u|max = 1
@@ -207,8 +217,9 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                        u=(sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), 0.0),
                        p=p0 + (1 / 16) * (cos(2x) + cos(2y)) * (cos(2z) + 2),
                        rho=1.0))
-    solver, Q = setup(prob, Numerics(n_global=(N, N, N), cfl=0.6,
+    solver, Q = setup(prob, Numerics(n_global=(N, N, N), cfl=cfl,
                                      filter_interval=filter_interval,
+                                     filter_cfl=filter_cfl,
                                      art=ArtParams(enabled=art_on, C_mu=C_mu,
                                                    smoother=smoother,
                                                    mu_sensor=mu_sensor,
@@ -246,6 +257,7 @@ end
 const DEFAULTS = (N = 32, tfinal = 10.0, configs = "off:1,on:1",
                   progress = 0, sample = 100, nmax = typemax(Int),
                   window = 250, smoother = :compact,
+                  cfl = 0.6, filter_cfl = 0.0,
                   mu_sensor = :strain, beta_sensor = :strain, reduction = :sum)
 
 function parse_configs(spec)
@@ -283,6 +295,7 @@ function main()
                                       filter_interval=cfg.filt, sample=sample,
                                       progress=progress, nmax=nmax,
                                       smoother=opt.smoother,
+                                      cfl=opt.cfl, filter_cfl=opt.filter_cfl,
                                       mu_sensor=opt.mu_sensor,
                                       beta_sensor=opt.beta_sensor,
                                       reduction=opt.reduction)

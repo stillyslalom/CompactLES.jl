@@ -18,14 +18,15 @@ ArtParams(C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.01)
 3. [C_kappa — the conductivity](#c_kappa--the-conductivity)
 4. [C_mu — the shear viscosity](#c_mu--the-shear-viscosity)
 5. [C_D — the species diffusivity](#c_d--the-species-diffusivity)
-6. [The β\* sensor — strain, gated, or dilatation](#the-beta-sensor--strain-or-dilatation)
-7. [CFL, which dominates all four](#cfl-which-dominates-all-four)
-8. [The fold closure is not third order](#the-fold-closure-is-not-third-order)
-9. [The origin cell is a startup transient](#the-origin-cell-is-a-startup-transient)
-10. [Measured against the reference implementation](#measured-against-the-reference-implementation)
-11. [Grid convergence](#grid-convergence)
-12. [Geometry limits](#geometry-limits)
-13. [Recommendations](#recommendations)
+6. [The filter dissipates per application, not per unit time](#the-filter-dissipates-per-application-not-per-unit-time)
+7. [The β\* sensor — strain, gated, or dilatation](#the-beta-sensor--strain-or-dilatation)
+8. [CFL, which dominates all four](#cfl-which-dominates-all-four)
+9. [The fold closure is not third order](#the-fold-closure-is-not-third-order)
+10. [The origin cell is a startup transient](#the-origin-cell-is-a-startup-transient)
+11. [Measured against the reference implementation](#measured-against-the-reference-implementation)
+12. [Grid convergence](#grid-convergence)
+13. [Geometry limits](#geometry-limits)
+14. [Recommendations](#recommendations)
 
 ## How to read the tables
 
@@ -411,6 +412,99 @@ at least three species, where the correction velocity can alter the species
 fluxes.
 
 <a id="the-beta-sensor--strain-or-dilatation"></a>
+
+## The filter dissipates per application, not per unit time
+
+The compact filter supplies most of the energy sink at every resolution
+measured here, and it has never been calibrated. This section covers one half
+of that debt, the half that is a property of the formulation rather than of a
+constant: the filter removes energy per *application*, so its dissipation is
+not a rate and does not converge as `dt → 0` at fixed resolution. Fitting α and
+the cadence against a reference dissipation history is the other half and still
+wants cluster time.
+
+### The measurement
+
+A parallel shear layer, `u_x = 0.1 sin(4y)` at uniform ρ and p, is an exact
+steady solution of the Euler equations and stays one discretely, since every
+x-derivative of the field vanishes. Kinetic energy is then constant in time and
+the filter is the only mechanism that can change it. `bench/filterrate.jl`,
+N = 32 to t = 0.5, zero viscosity and artificial properties off:
+
+```
+cfl    steps   unrelaxed          relaxed (filter_cfl = 0.4)
+0.4      73    4.092e-3  1.000    4.042e-3  1.000
+0.2     145    8.107e-3  1.981    4.042e-3  1.000
+0.1     289    1.608e-2  3.930    4.042e-3  1.000
+```
+
+Unrelaxed, the loss tracks the **step count** (73 : 145 : 289 = 1 : 1.99 : 3.96)
+rather than the elapsed time. A calculation at half the CFL applies twice the
+subgrid dissipation over the same physical interval. Relaxed, the loss is
+constant to six significant figures across a fourfold change in timestep.
+
+Getting a clean reading required the right case, and two obvious ones do not
+work. A broadband field loses 64% of its kinetic energy within tens of steps
+and then cannot lose more, collapsing the spread across a 4× CFL change to
+1.2%. A velocity sine at uniform pressure is an acoustic oscillation trading
+kinetic for internal energy hundreds of times faster than the filter acts.
+Measuring total energy instead sees nothing at all: a symmetric filter on a
+periodic grid conserves the discrete sum of every conserved variable exactly,
+so the filter moves energy between the two reservoirs rather than removing it.
+
+### What it costs on a real case
+
+Taylor–Green at 32³, Re = 1600, artificial properties on, Gaussian smoother,
+`bench/tgv_energy.jl` at the dissipation peak:
+
+```
+filter_cfl   cfl    peak -dKE/dt        filter    mu*     molecular
+0 (shipped)  0.6    1.4216e-2 @ 6.58    82.2%     5.1%    12.6%
+0 (shipped)  0.3    1.4297e-2 @ 6.61    85.0%     3.6%    11.4%
+0.6          0.6    1.4216e-2 @ 6.58    82.2%     5.1%    12.6%
+0.6          0.3    1.4373e-2 @ 6.44    82.1%     5.2%    12.7%
+```
+
+At the reference CFL the relaxed run reproduces the unrelaxed one to every
+printed digit, which is the `w = 1` path and a check on the implementation.
+
+**What moves with the timestep is the attribution, not the total.** Halving the
+CFL changes the peak dissipation by 0.6%, but moves the filter's share of it
+from 82.2% to 85.0% and the μ\* share from 5.1% to 3.6% — a 29% relative
+change in the artificial-viscosity channel from a timestep change alone, with
+`C_mu` held fixed. Under the relaxation both hold: 82.1% and 5.2%.
+
+The total barely moves because the sinks compete rather than add. The cascade
+rate is set at the large scales, and a filter that takes more at the grid scale
+leaves less to reach the scales where μ\* and molecular dissipation act. This
+is why filter dominance can be large and still leave the peak near the
+reference value.
+
+**The consequence for calibration is that `C_mu` is conditional on the CFL as
+well as on the filter.** The μ\* share of the sink is the quantity `C_mu` is
+fitted against, and it moves by 29% relative under a change that has nothing to
+do with the physics. Any refit under the unrelaxed formulation has to state its
+CFL to be reproducible. This is measured at 32³ only; the shares themselves are
+strongly resolution dependent (the filter falls to 37% at 128³), and whether
+the CFL sensitivity survives refinement has not been tested.
+
+### The formulation
+
+`filter_cfl` is the CFL at which one pass is applied at full strength. Below it
+the state is relaxed toward the filtered image rather than replaced by it,
+
+    Q ← (1 − w) Q + w F(Q),    w = filter_interval · dt · rate / filter_cfl
+
+capped at one, which holds the dissipation per unit time fixed. Since
+`compute_dt` sets `dt = cfl / rate`, the product `dt · rate` recovers the CFL
+actually taken, including `StepControl` backoff and the shortening applied to
+land on a callback instant. Reading it that way rather than reading
+`solver.cfl` is what makes a shortened step filter proportionally less, which
+is the truncated-final-step artifact recorded against `bench/tgv_energy.jl`.
+
+The default is `filter_cfl = 0`, the unrelaxed formulation, and it takes the
+original code path exactly rather than a blend at `w = 1`. Every guarded number
+in the suite was measured there and none of them moves.
 
 ## The β\* sensor — strain, gated, or dilatation
 
@@ -1557,7 +1651,8 @@ cylindrical axis accepts the cold start at 16× compression.
 | `reduction` | `:sum` | yes | `:max` is the reference's directional reduction. Identical in one dimension, so the whole battery is blind to it; on Taylor–Green it cuts the μ\* share 4.5% → 2.7% and moves the dissipation peak from t = 8.49 to 8.97 against a reference peak at t = 9. |
 | `smoother` | `:gaussian` | yes | Changed from `:compact` in August 2026. Raises the spherical-origin CFL ceiling 0.15 → 0.4 and the cylindrical 0.15 → 0.2, cuts the sensor phase 29%, and improves every Noh plateau and pre-shock L1. Costs wall heating at ν = 1 (+58 → +64%) and ν = 2 (+41 → +56%), improves it at ν = 3 (+31 → +27%), and moves the two stored cases by 1–3% of their L1. `C_kappa` cannot recover the wall heating. |
 | `detector` | `:delta4` | provisionally | `:d8` improves six of seven battery columns and removes the artificial-property CFL restriction outright at the planar wall and the cylindrical axis (0.2 → 1.0+), at 40% of the spherical-origin timestep (0.4 → 0.25) and +19% on the right-hand side. The `C_beta` refit is [done](#the-c_beta-refit-under-d8): 1.0 is retained, no value in 0.25–4 recovers the origin, and the worst geometry improves 0.2 → 0.25 under `:d8`. Held at `:delta4` on the origin cell alone. [Measurements](#the-ringing-detector-is-an-eighth-derivative-not-a-fourth-difference). |
-| `cfl` | 0.5 | **no** | Use 0.3 with shocks and `StepControl(retries = 4)` for recovery. Converging geometry now tolerates 0.4 (spherical) and 0.2 (cylindrical) under the default smoother. |
+| `cfl` | 0.5 | **no** | Use 0.3 with shocks and `StepControl(retries = 4)` for recovery. Converging geometry now tolerates 0.4 (spherical) and 0.2 (cylindrical) under the default smoother. Note that under `filter_cfl = 0` the CFL is not only a stability choice: it sets how much subgrid dissipation the filter supplies, and moves the μ\* share of the Taylor–Green sink by 29% relative across a factor of two. |
+| `filter_cfl` | 0.0 | provisionally | Reference CFL for a full-strength filter pass. The default is the unrelaxed formulation, in which the filter dissipates per application and its subgrid dissipation does not converge as `dt → 0`. A positive value makes it a rate: filter loss is constant to six figures across a 4× CFL change, and the Taylor–Green channel split holds to 0.1 points where it otherwise moves 2.8. Held at 0 pending the α and cadence fit, which is the other half of the same debt and wants the 3-D campaign. [Measurements](#the-filter-dissipates-per-application-not-per-unit-time). |
 
 Remaining items, in approximate priority order:
 
@@ -1613,7 +1708,14 @@ Remaining items, in approximate priority order:
 4. Calibrate the compact filter itself. It is necessary and sufficient for
    stability at 128³ while `filter_interval` and α have never been fitted to
    anything, which makes every `C_mu` number conditional on
-   `compact_filter(0.45)` every step.
+   `compact_filter(0.45)` every step. **The dt-consistency half of this is
+   done**: the filter dissipates per application rather than per unit time, the
+   effect is a factor of 3.93 across a 4× CFL change, and `filter_cfl` makes it
+   a rate ([measurements](#the-filter-dissipates-per-application-not-per-unit-time)).
+   What remains is fitting α and the cadence against a reference dissipation
+   history, which wants the 3-D campaign. Note that the two are coupled: a fit
+   taken under the unrelaxed formulation is only reproducible at the CFL it was
+   taken at.
 5. Determine why the spherical-origin fold is less tolerant of
    under-resolved data than the cylindrical axis fold.
 6. Refit under the adopted smoother, and decide the detector.

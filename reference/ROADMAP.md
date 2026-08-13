@@ -264,23 +264,37 @@ mission. They are ordered by information gained per unit effort, and items 1–3
 change guarded numbers, so each concludes by re-baselining `test/validation.jl`
 and updating `reference/CALIBRATION.md`.
 
-**1. Filter calibration and dt-consistency.** Two coupled problems. First,
-`compact_filter(0.45)` applied every step has never been fitted to anything,
-while supplying 37–87% of the measured energy sink and being necessary and
-sufficient for stability (`reference/CALIBRATION.md`). Second, the filter
-removes energy per *application* rather than per unit time, so the effective
-subgrid dissipation depends on the CFL number and `filter_interval` and does
-not converge as dt → 0 at fixed resolution; the truncated-final-step artifact
-in `bench/tgv_energy.jl` (an 18% peak overestimate from one short step) is a
-symptom. Work items: fit α and cadence against the digitized van Rees
-−dKE/dt(t) history and spectra at 128³ (the digitization is already listed in
-the calibration remainders); measure the validation battery's sensitivity to
-cadence; and evaluate a per-unit-time formulation — filter application as a
-relaxation `Q ← (1−w)Q + w·F(Q)` with `w ∝ dt` — which would also resolve the
-cross-level cadence question raised in `reference/AMR_GPU.md`. Deliverable: a
-filter section of `reference/CALIBRATION.md` with the same standing as the
-four-constant tables. Cluster time is required; budget runs per the usual
-discipline.
+**1. Filter calibration and dt-consistency.** Two coupled problems, and the
+second is now done. `compact_filter(0.45)` applied every step has never been
+fitted to anything, while supplying 37–87% of the measured energy sink and
+being necessary and sufficient for stability (`reference/CALIBRATION.md`).
+
+The dt-consistency half is delivered. The filter removed energy per
+*application* rather than per unit time, measured at a factor of 3.93 across a
+4× CFL change on a case where the filter is the only sink, so the subgrid
+dissipation did not converge as dt → 0 at fixed resolution. `Numerics.filter_cfl`
+supplies the per-unit-time formulation, `Q ← (1−w)Q + w·F(Q)` with `w ∝ dt`,
+which holds the loss constant to six significant figures over the same range
+and also removes the truncated-final-step artifact, since a shortened step now
+filters proportionally less. It is off by default. The measurement that makes
+this matter for the rest of the debt: with `C_mu` held fixed, halving the CFL
+moves the μ\* share of the Taylor–Green sink by 29% relative, so a constant
+fitted under the unrelaxed formulation is only reproducible at the CFL it was
+fitted at. It should also resolve the cross-level cadence question raised in
+`reference/AMR_GPU.md`, which has not been checked.
+
+What remains is the calibration proper: fit α and cadence against the digitized
+van Rees −dKE/dt(t) history and spectra at 128³ (the digitization is already
+listed in the calibration remainders), and measure the validation battery's
+sensitivity to cadence. Deliverable: the
+filter section of `reference/CALIBRATION.md` brought to the same standing as
+the four-constant tables; it exists now and carries the dt-consistency half.
+Cluster time is required; budget runs per the usual discipline.
+
+Whether `filter_cfl` becomes the default is part of that fit rather than a
+separate decision. It changes what α means — under the relaxation α and the
+reference CFL set the dissipation jointly — so fitting α first under the old
+formulation and switching afterwards would waste the fit.
 
 **2. A positivity failsafe.** `StepControl` detects positivity loss and can
 roll back, but rollback recovers only abrupt failures; gradual degradation
@@ -514,7 +528,9 @@ reference-implementation pass that headed this list are done
 
 1. **Filter calibration** (model debt 1), which every other physics number is
    conditional on. Requires cluster time; run it alongside the Pyranda
-   comparison, which needs the same machines and cases.
+   comparison, which needs the same machines and cases. The dt-consistency half
+   is done and `filter_cfl` exists; what is left is the α and cadence fit, and
+   the decision on whether to ship the relaxation belongs to that fit.
 2. **External validation** (model debt 3), promoted early because it changes
    how much the remaining calibration work can be trusted.
 3. **Phase 2.1, the implicit diffusion solver** — the principal architectural

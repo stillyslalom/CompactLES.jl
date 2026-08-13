@@ -22,6 +22,7 @@ max_rate
 step!
 run!
 filter_state!
+CompactLES.filter_weight
 mpi_main
 ```
 

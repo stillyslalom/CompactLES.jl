@@ -65,7 +65,7 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 57 testsets, 0 failures
+julia --project=. test/runtests.jl        # 58 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
@@ -141,6 +141,8 @@ Names are spelled out rather than abbreviated. Current vocabulary:
   `:d8`)
 - `grad_u`, `grad_T_ion`, `grad_Y`, `strain_mag`, `sensor`, `sensor_sp`
 - `inv_J`, `area_d`, `inv_h`, `inv_r`, `cot_over_r`, `coord_shift`, `flux`
+- `filter_interval` (cadence in steps) vs `filter_cfl` (the reference CFL at
+  which a filter pass is full strength; 0 disables the relaxation), `filter_weight`
 - `deriv_plans`, `filter_plans`, `line_solver`, `plan` (a DirPlan) vs `plane`
   (a wall plane), `fold`, `pair`
 - `plane_profile`, `profile_spacing`, `mix_width`, `molecular_mixing`,
@@ -267,7 +269,9 @@ decision worth revisiting.
   `nohprobe.jl` (per-step Noh state probe: where β\* is, where the internal
   energy goes negative, and what the symmetry cell is doing),
   `foldorder.jl` (convergence error split by region of the line — the fold end
-  against the outer wall, which a global max norm conflates), `amr_transfer.jl`,
+  against the outer wall, which a global max norm conflates),
+  `filterrate.jl` (whether the state filter dissipates per application or per
+  unit time), `amr_transfer.jl`,
   `tgv_energy.jl` (Taylor–Green kinetic-energy budget split
   by dissipation channel; the one bench script that runs usefully under
   `mpiexec`, and the intended first workload on a cluster).

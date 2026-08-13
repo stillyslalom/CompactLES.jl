@@ -405,21 +405,72 @@ function run!(solver::Solver, Q; workspace=nothing, kwargs...)
 end
 
 """
+    filter_weight(solver) -> w
+
+Relaxation weight for one [`filter_state!`](@ref) pass, in `(0, 1]`.
+
+`solver.filter_cfl == 0` returns `1`, which is the unrelaxed formulation: the
+filter is applied at full strength on every pass, so it removes energy per
+*application* rather than per unit time and its effective dissipation depends on
+the timestep. Halving the CFL then doubles the number of applications covering
+the same interval and doubles the dissipation, which is why the subgrid
+dissipation does not converge as `dt → 0` at fixed resolution.
+
+A positive `filter_cfl` restores that convergence by scaling the weight with the
+step actually taken,
+
+    w = filter_interval · dt · rate / filter_cfl
+
+capped at 1. Since `compute_dt` sets `dt = cfl / rate`, the product `dt · rate`
+recovers the CFL that was actually used, including `StepControl` backoff and the
+shortening applied to land on a callback instant. So `w` is `cfl / filter_cfl`
+in normal running, `filter_cfl` is the CFL at which one pass is applied at full
+strength, and dissipation per unit time is invariant below it.
+
+Reading `dt · rate` rather than `solver.cfl` is what makes a shortened step
+filter proportionally less, which is the truncated-final-step artifact in
+`bench/tgv_energy.jl`.
+
+`dt_prev == 0` before the first step, where the unrelaxed meaning is the only
+sensible one, so the weight is 1 there.
+"""
+function filter_weight(solver::Solver{T}) where {T}
+    solver.filter_cfl > 0 || return one(T)
+    solver.dt_prev > 0 || return one(T)
+    w = solver.filter_interval * solver.dt_prev * solver.rate_prev /
+        solver.filter_cfl
+    return min(one(T), w)
+end
+
+"""
     filter_state!(solver, Q)
 
 Apply the compact filter to every conserved component along every active
 dimension, with batched per-dimension halo exchange and axis parity routing
 (ρu_r and ρu_θ are odd across the axis; everything else is even).
+
+Under a positive `filter_cfl` the result is relaxed toward the filtered state
+rather than replaced by it, with the weight [`filter_weight`](@ref) supplies.
+The weight is a reduced quantity by construction, since `rate_prev` comes from
+the collective in `max_rate`, so every rank blends by the same amount without a
+further reduction here.
 """
 function filter_state!(solver::Solver, Q)
     decomp = solver.decomp
     comps = [view(Q, :, :, :, c) for c in 1:solver.equations.n_cons]
+    w = filter_weight(solver)
     for d in 1:3
         decomp.active[d] || continue
         exchange_dim_batch!(comps, decomp, d)
         for c in 1:solver.equations.n_cons
             filt_along!(solver.tmp_a, comps[c], solver, d, cons_parity(solver, d, c))
-            copy_interior!(comps[c], solver.tmp_a, decomp)
+            # w == 1 takes the original path exactly, so the default configuration
+            # stays bit-identical to the unrelaxed solver.
+            if w == 1
+                copy_interior!(comps[c], solver.tmp_a, decomp)
+            else
+                blend_interior!(comps[c], solver.tmp_a, w, decomp)
+            end
         end
     end
     return Q

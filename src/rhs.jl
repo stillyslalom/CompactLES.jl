@@ -37,6 +37,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,SP,RP,Sr
     pairout::Array{T,3}                     # paired-fold second-parity result
     cfl::T
     filter_interval::Int
+    filter_cfl::T                           # 0 = unrelaxed; see filter_weight
     control::StepControl                    # timestep floors, prediction, retry
     # primitives (full padded arrays)
     rho::Array{T,3}; u::Array{T,3}; v::Array{T,3}; w::Array{T,3}
@@ -96,7 +97,7 @@ test and benchmark suites do. It allocates no conserved state, so pair it with
 
 `eos`, `transport`, `metric`, and `sources` take their defaults and meaning from
 [`Problem`](@ref); `art`, `deriv`, `filt`, `cfl`, `control`, `filter_interval`,
-`dims`, `n_halo`, and `stretch` from [`Numerics`](@ref). The two with no
+`filter_cfl`, `dims`, `n_halo`, and `stretch` from [`Numerics`](@ref). The two with no
 `Problem`/`Numerics` counterpart are:
 
 - `origin`: low corner of the domain, one value per direction. Default
@@ -133,7 +134,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 origin=(0.0, 0.0, 0.0),
                 deriv::AbstractCompactScheme=lele_d1_6(),
                 filt::AbstractCompactScheme=compact_filter(0.45),
-                cfl::Real=0.5, filter_interval::Int=1,
+                cfl::Real=0.5, filter_interval::Int=1, filter_cfl::Real=0.0,
                 control::StepControl=StepControl(),
                 dims=nothing, n_halo::Int=4) where {T}
     for d in 1:3
@@ -338,7 +339,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   deriv_plans, filter_plans, smooth_plans, ring_plans,
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
-                  T(cfl), filter_interval, control,
+                  T(cfl), filter_interval, T(filter_cfl), control,
                   f(), f(), f(), f(), f(), f(), f(), f(),
                   [f() for _ in 1:n_species],
                   [f() for _ in 1:3, _ in 1:3],

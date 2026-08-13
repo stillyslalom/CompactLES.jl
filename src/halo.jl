@@ -112,6 +112,28 @@ function copy_interior!(dst, src, decomp::Decomp)
 end
 
 """
+    blend_interior!(dst, src, w, decomp)
+
+Interior-only relaxation `dst ← (1 − w) dst + w src`.
+
+`w = 1` reproduces `copy_interior!` exactly and is dispatched to it by the
+caller rather than computed here, so a full-strength application stays
+bit-identical to the unrelaxed path.
+"""
+function blend_interior!(dst, src, w, decomp::Decomp)
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    w1 = one(w) - w
+    @inbounds @threaded nx*ny*nz for jk in outer_indices(o2+1:o2+ny, o3+1:o3+nz)
+        j, k = Tuple(jk)
+        for i in o1+1:o1+nx
+            dst[i, j, k] = w1 * dst[i, j, k] + w * src[i, j, k]
+        end
+    end
+    return dst
+end
+
+"""
     axis_fill!(f, decomp, σf)
 
 Parity fill of the low-dim-1 halos for the cylindrical-axis treatment on a

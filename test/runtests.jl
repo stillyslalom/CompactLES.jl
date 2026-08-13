@@ -228,6 +228,70 @@ end
     @test dev < 0.35                                      # sawtooth strongly damped
 end
 
+@testset "filter relaxation: weight, exact blend, unrelaxed default" begin
+    # The relaxed filter must be an exact linear interpolation between the state
+    # and its filtered image, and must reduce to the unrelaxed pass at w = 1 —
+    # bit-identically, since every guarded number in the suite was measured on
+    # that path.
+    ic = (x, y, z) -> Prim(rho=1.0 + 0.2sin(x) * cos(2y), p=1.0 + 0.1sin(3z),
+                           u=(0.3sin(2x), 0.2cos(y), 0.1sin(z) * cos(x)))
+    build(fc) = setup(Problem(eos=single_species(gamma=1.4, R=1.0),
+                              transport=Transport(mu0=0.0),
+                              domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)),
+                              bcs=per3, ic=ic),
+                      Numerics(n_global=(16, 16, 16), art=ArtParams(enabled=false),
+                               cfl=0.4, filter_cfl=fc))
+
+    solver0, Q0 = build(0.0)
+    @test CL.filter_weight(solver0) == 1.0          # disabled: full strength
+
+    # dt_prev = 0 before any step, where the unrelaxed meaning is the only one
+    # available, so the weight must be 1 even with the relaxation configured.
+    solverW, _ = build(0.4)
+    @test CL.filter_weight(solverW) == 1.0
+    solverW.dt_prev = 0.2; solverW.rate_prev = 1.0  # dt*rate = 0.2, filter_cfl 0.4
+    @test CL.filter_weight(solverW) ≈ 0.5
+    solverW.dt_prev = 2.0                            # dt*rate = 2.0, well over
+    @test CL.filter_weight(solverW) == 1.0           # capped, never over-filters
+
+    # Interior only. `filter_state!` exchanges halos, so comparing whole padded
+    # arrays measures halo initialization rather than the filter — a difference
+    # of 2.83 against a filter effect three orders smaller.
+    function interior(solver, Q)
+        nx, ny, nz = solver.decomp.n_local
+        [Q[gidx(solver, i, j, k), c]
+         for i in 1:nx, j in 1:ny, k in 1:nz, c in 1:solver.equations.n_cons]
+    end
+    dev(A, B) = maximum(abs, A .- B)
+
+    ref = interior(solver0, Q0)                      # unfiltered state
+    filter_state!(solver0, Q0)
+    full = dev(interior(solver0, Q0), ref)           # fully filtered image
+    @test full > 0
+
+    solverB, QB = build(0.8)                         # w = dt*rate/0.8
+    solverB.dt_prev = 0.4; solverB.rate_prev = 1.0   # w = 0.5
+    @test CL.filter_weight(solverB) ≈ 0.5
+    filter_state!(solverB, QB)
+    # Filtering is applied dimension by dimension, so the composite is not
+    # (1-w)Q + w·F(Q) exactly; it is that per direction. Check the property that
+    # does hold globally and is what the relaxation is for: the blended state
+    # lies strictly between the two, and approaches each end as w does.
+    @test 0 < dev(interior(solverB, QB), ref) < full
+
+    solverS, QS = build(1000.0)                      # w = 4e-4, nearly no filter
+    solverS.dt_prev = 0.4; solverS.rate_prev = 1.0
+    filter_state!(solverS, QS)
+    @test dev(interior(solverS, QS), ref) < 0.01 * full
+
+    # w == 1 must take the copy path, not the blend, so the default is exact.
+    solverE, QE = build(0.4)
+    solverE.dt_prev = 0.4; solverE.rate_prev = 1.0   # dt*rate = 0.4 = filter_cfl
+    @test CL.filter_weight(solverE) == 1.0
+    filter_state!(solverE, QE)
+    @test QE == Q0                                   # bit-identical, not approx
+end
+
 @testset "axisymmetric axis fold: manufactured smooth solution" begin
     # u_r = r·g(r) is an odd smooth function; d/dr through the fold must
     # match analytics at the first half-offset nodes — the sharpest probe of

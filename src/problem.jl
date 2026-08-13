@@ -254,7 +254,7 @@ end
 """
     Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
              art=ArtParams(), cfl=0.5, control=StepControl(),
-             filter_interval=1, dims=nothing, n_halo=4,
+             filter_interval=1, filter_cfl=0.0, dims=nothing, n_halo=4,
              stretch=(nothing, nothing, nothing))
 
 Grid, scheme, timestep, and decomposition choices used to realize a
@@ -277,6 +277,15 @@ Grid, scheme, timestep, and decomposition choices used to realize a
   `k` applies `filt` every `k` steps. The default `1` filters every step; `0`
   disables state filtering. The filter is still used to smooth
   artificial-property sensors.
+- `filter_cfl`: reference CFL for a full-strength filter pass, making the
+  filter's dissipation a rate rather than a per-application amount. The default
+  `0.0` disables the relaxation and reproduces the unrelaxed solver bit for bit:
+  each pass replaces the state with its filtered image, so halving the CFL
+  doubles the number of passes over an interval and doubles the dissipation. A
+  positive value instead relaxes toward the filtered state by
+  `filter_interval · dt · rate / filter_cfl`, capped at one, which holds the
+  dissipation per unit time fixed below that CFL. See
+  [`filter_weight`](@ref).
 - `dims`: MPI process-grid dimensions. `nothing` lets MPI distribute ranks over
   resolved directions. An explicit tuple must have product equal to the
   communicator size and must contain `1` in every collapsed direction.
@@ -300,6 +309,7 @@ Base.@kwdef struct Numerics
     cfl::Float64 = 0.5
     control::StepControl = StepControl()
     filter_interval::Int = 1
+    filter_cfl::Float64 = 0.0
     dims::Union{Nothing,NTuple{3,Int}} = nothing
     n_halo::Int = 4
     stretch::NTuple{3,Union{Nothing,Stretch}} = (nothing, nothing, nothing)
@@ -338,6 +348,7 @@ function setup(prob::Problem, num::Numerics)
                deriv=num.deriv, filt=num.filt,
                cfl=num.cfl, control=num.control,
                filter_interval=num.filter_interval,
+               filter_cfl=num.filter_cfl,
                dims=num.dims, n_halo=num.n_halo)
     Q = allocate_state(solver)
     initialize!(solver, Q, prob.ic)
