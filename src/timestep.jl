@@ -427,8 +427,8 @@ shortening applied to land on a callback instant. So `w` is `cfl / filter_cfl`
 in normal running, `filter_cfl` is the CFL at which one pass is applied at full
 strength, and dissipation per unit time is invariant below it.
 
-Reading `dt · rate` rather than `solver.cfl` is what makes a shortened step
-filter proportionally less, which is the truncated-final-step artifact in
+Reading `dt · rate` rather than `solver.cfl` makes a shortened step filter
+proportionally less, which removes the truncated-final-step artifact in
 `bench/tgv_energy.jl`.
 
 `dt_prev == 0` before the first step, where the unrelaxed meaning is the only

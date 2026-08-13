@@ -17,7 +17,7 @@
 # half the CFL applies twice the subgrid dissipation over the same interval.
 # `filter_cfl` makes it a rate, constant to six figures across a 4x CFL change.
 #
-# THE CASE IS THE HARD PART, and two earlier attempts are worth not repeating.
+# CHOOSING THE CASE. Two earlier attempts are worth not repeating.
 #
 #   A broadband field loses 64% of its kinetic energy within tens of steps and
 #   then cannot lose more. The scaling saturates out of sight, and the measured
@@ -25,10 +25,10 @@
 #
 #   A velocity sine in x at uniform pressure is an acoustic oscillation: it
 #   trades kinetic for internal energy at the sound speed, hundreds of times
-#   faster than the filter acts. Measuring TOTAL energy instead sees nothing at
-#   all, because a symmetric filter on a periodic grid conserves the discrete
-#   sum of every conserved variable exactly. The filter moves energy between the
-#   two reservoirs; it does not remove it.
+#   faster than the filter acts. TOTAL energy shows nothing either, because a
+#   symmetric filter on a periodic grid conserves the discrete sum of every
+#   conserved variable exactly. The filter moves energy between the two
+#   reservoirs; it does not remove it.
 #
 # What works is a parallel shear layer. u_x = f(y) at uniform rho and p is an
 # exact steady solution of the Euler equations and stays one discretely, since

@@ -167,7 +167,7 @@ if want("beta")
     end
     # C_beta and the CFL ceiling are not separable. The accuracy table above is
     # read at NOH_CFL, and a constant that looks worse there can still be the one
-    # that holds a geometry at a larger timestep — which is the whole question
+    # that holds a geometry at a larger timestep. That is the whole question
     # under `detector = :d8`, where the planar and cylindrical ceilings are gone
     # and the spherical one falls to 0.25. Run the ladder per constant for the
     # same reason the sensor and detector sweeps run it per setting.

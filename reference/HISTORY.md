@@ -480,14 +480,16 @@ constant at six timesteps rather than at `NOH_CFL` alone.
   restriction, found no movement, and concluded the constant was not involved.
 - **Under `:d8` at reduced `C_beta` the cylindrical axis fails below a CFL
   rather than above one**, verified as positivity loss rather than the step cap.
-  No stability restriction produces that sign; a per-step error at the fold
-  does, since a fixed physical interval at half the timestep applies the closure
-  twice as often. It is independent support for the third-order fold closure and
-  it appears exactly where that account predicts.
+  No stability restriction produces that sign; a per-step operation does, since
+  a fixed physical interval at half the timestep applies it twice as often. This
+  was written up at the time as support for the third-order fold closure, which
+  the next entry retires; the observation stands and the attribution does not.
+  The per-step operation now carrying it is the compact filter, and the
+  measurement is under [filter dt-consistency](#filter-dt-consistency-august-2026).
 
 The sweep now distinguishes its two failure modes, printing positivity loss as
-`NaN` and the step cap as `Inf`. Collapsing both into `NaN` is what made the
-second finding look like an artifact, and cost a separate probe to resolve.
+`NaN` and the step cap as `Inf`. Collapsing both into `NaN` made the second
+finding look like an artifact and cost a separate probe to resolve.
 
 ## The origin cell (August 2026)
 
@@ -500,13 +502,13 @@ Measurements are in `reference/CALIBRATION.md` under "The fold closure is not
 third order" and "The origin cell is a startup transient". No default changed
 and no solver source was touched.
 
-**The fold closure is not third order, and the number saying it was belongs to
-the outer wall.** `test/convergence.jl` reports a global max norm, and every one
+**The fold closure is not third order, and the number behind that claim
+belongs to the outer wall.** `test/convergence.jl` reports a global max norm, and every one
 of its fold studies closes the outer end with a `SlipWallBC` measuring 3.17 on
 its own. Split by region, the global maximum sits at the last interior cell in
 all four studies, and the fold's own error converges at 6.05 to 7.01 while
 sitting three to five orders of magnitude below the interior. A both-ends-walls
-control reports 3.23 in the same window, so the instrument does see a
+control reports 3.23 in the same window, so the instrument does detect a
 third-order closure where one exists. Both parities were measured, including the
 odd one `test/convergence.jl` does not cover and that a converging calculation
 differentiates at the origin.
@@ -517,7 +519,7 @@ field is smooth, but the cell does not fail while the field is smooth. During
 the excursion that fails, β\* there reaches the *line maximum* under both
 detectors.
 
-**What the origin cell actually does is evacuate during a startup transient.**
+**The origin cell evacuates during a startup transient.**
 It holds `rho1/rho2` within 0.2% of unity for the first eighty-odd steps, then
 undergoes one large excursion. `:delta4` at cfl 0.3 and `:d8` at cfl 0.25 pass
 through it; `:d8` at cfl 0.3 enters it about forty steps earlier and the cell
@@ -538,9 +540,9 @@ numerics problem at a fold.
 
 ## Filter dt-consistency (August 2026)
 
-The second half of model debt 1, taken up because the `C_beta` ladder reached it
-from an unexpected direction: a failure that got worse as the timestep fell is
-the signature of a per-step operation, and the filter is applied once per step.
+The second half of model debt 1, taken up because the `C_beta` ladder pointed at
+it: a failure that got worse as the timestep fell is the signature of a
+per-step operation, and the filter is applied once per step.
 `Numerics` gains `filter_cfl`, off by default. Measurements are in
 `reference/CALIBRATION.md` under "The filter dissipates per application, not per
 unit time"; the instrument is `bench/filterrate.jl`, new, and `bench/tgv_energy.jl`
@@ -557,11 +559,11 @@ Two obvious cases do not measure this and both were tried first. A broadband
 field saturates, losing 64% of its kinetic energy within tens of steps and then
 no more, which collapses the spread to 1.2%. A velocity sine at uniform pressure
 is an acoustic oscillation trading kinetic for internal energy far faster than
-the filter acts, and measuring total energy instead sees nothing at all, because
-a symmetric filter on a periodic grid conserves the discrete sum of every
-conserved variable exactly.
+the filter acts. Total energy shows nothing either, because a symmetric filter
+on a periodic grid conserves the discrete sum of every conserved variable
+exactly.
 
-**What this costs the calibration is the attribution, not the total.** At 32³
+**The cost to the calibration is in the attribution, not the total.** At 32³
 Taylor–Green, halving the CFL changes peak dissipation by 0.6% but moves the
 filter's share of it from 82.2% to 85.0% and the μ\* share from 5.1% to 3.6%,
 with `C_mu` held fixed. The sinks compete rather than add: the cascade rate is
@@ -573,8 +575,8 @@ the relaxation the split holds to 0.1 points.
 The formulation is `Q ← (1 − w)Q + w·F(Q)` with
 `w = filter_interval · dt · rate / filter_cfl`, capped at one. Reading `dt · rate`
 rather than `solver.cfl` recovers the CFL actually taken, so `StepControl`
-backoff and callback-landing shortening are both accounted for, which is also
-the truncated-final-step artifact removed. At `w = 1` the code takes the
+backoff and callback-landing shortening are both accounted for, which also
+removes the truncated-final-step artifact. At `w = 1` the code takes the
 original copy path rather than a blend, so the default is bit-identical: the
 full gate reproduces every convergence order and error magnitude exactly, and
 77/77 MPI checks pass at 2, 4 and 8 ranks.

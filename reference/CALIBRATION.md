@@ -421,7 +421,7 @@ of that debt, the half that is a property of the formulation rather than of a
 constant: the filter removes energy per *application*, so its dissipation is
 not a rate and does not converge as `dt → 0` at fixed resolution. Fitting α and
 the cadence against a reference dissipation history is the other half and still
-wants cluster time.
+requires cluster time.
 
 ### The measurement
 
@@ -448,9 +448,9 @@ work. A broadband field loses 64% of its kinetic energy within tens of steps
 and then cannot lose more, collapsing the spread across a 4× CFL change to
 1.2%. A velocity sine at uniform pressure is an acoustic oscillation trading
 kinetic for internal energy hundreds of times faster than the filter acts.
-Measuring total energy instead sees nothing at all: a symmetric filter on a
-periodic grid conserves the discrete sum of every conserved variable exactly,
-so the filter moves energy between the two reservoirs rather than removing it.
+Total energy shows nothing either: a symmetric filter on a periodic grid
+conserves the discrete sum of every conserved variable exactly, so the filter
+moves energy between the two reservoirs rather than removing it.
 
 ### What it costs on a real case
 
@@ -468,7 +468,7 @@ filter_cfl   cfl    peak -dKE/dt        filter    mu*     molecular
 At the reference CFL the relaxed run reproduces the unrelaxed one to every
 printed digit, which is the `w = 1` path and a check on the implementation.
 
-**What moves with the timestep is the attribution, not the total.** Halving the
+**The timestep moves the attribution rather than the total.** Halving the
 CFL changes the peak dissipation by 0.6%, but moves the filter's share of it
 from 82.2% to 85.0% and the μ\* share from 5.1% to 3.6% — a 29% relative
 change in the artificial-viscosity channel from a timestep change alone, with
@@ -499,8 +499,8 @@ capped at one, which holds the dissipation per unit time fixed. Since
 `compute_dt` sets `dt = cfl / rate`, the product `dt · rate` recovers the CFL
 actually taken, including `StepControl` backoff and the shortening applied to
 land on a callback instant. Reading it that way rather than reading
-`solver.cfl` is what makes a shortened step filter proportionally less, which
-is the truncated-final-step artifact recorded against `bench/tgv_energy.jl`.
+`solver.cfl` makes a shortened step filter proportionally less, which removes
+the truncated-final-step artifact recorded against `bench/tgv_energy.jl`.
 
 The default is `filter_cfl = 0`, the unrelaxed formulation, and it takes the
 original code path exactly rather than a blend at `w = 1`. Every guarded number
@@ -888,8 +888,8 @@ the record of that setting.
 
 The candidate this document carried longest for the converging-shock ceiling was
 the fold closure: third order against a sixth- or tenth-order interior, at the
-one geometry the `:d8` detector costs anything. The premise is wrong. The
-number it rests on belongs to the outer wall.
+one geometry the `:d8` detector costs anything. That premise does not hold,
+and the number behind it belongs to the outer wall rather than to the fold.
 
 `test/convergence.jl` reports a **global** max norm, and every one of its fold
 studies closes the outer end with a `SlipWallBC` whose closure rows measure 3.17
@@ -909,17 +909,17 @@ spherical origin, odd  (u_r-like)     6.07     3.86     3.81       i = n
 own error converges at 6.05 to 7.01 and is three to five orders of magnitude
 below the interior: at N = 96 the spherical origin carries 7.0e-12 against
 1.9e-7 in the middle of the line. The fold is the most accurate region of the
-domain, not the least.
+line.
 
-The identification is exact rather than approximate. Every global error
-`test/convergence.jl` prints equals the outer-window norm above to every digit
-printed — 7.707e-05, 1.953e-07, 1.992e-06 and 4.730e-06 at the finest
-resolution of each study. The guarded numbers in that file are measurements of
-the outer wall, taken through a norm that never sees the fold.
+Every global error `test/convergence.jl` prints equals the outer-window norm
+above to every digit printed: 7.707e-05, 1.953e-07, 1.992e-06 and 4.730e-06 at
+the finest resolution of each study. The identification is therefore exact
+rather than approximate, and the guarded numbers in that file are measurements
+of the outer wall, taken through a norm insensitive to the fold.
 
-The control is what makes this readable. With walls at both ends the same window
-reports 3.23, so the instrument does detect a third-order closure when one is
-there. The middle of the line converges at 3 as well, which is the compact
+The control establishes that the split is meaningful. With walls at both ends
+the same window reports 3.23, so the instrument does detect a third-order
+closure where one is present. The middle of the line converges at 3 as well, which is the compact
 scheme's line-global coupling carrying the wall's closure error inward, not a
 property of the fold.
 
@@ -930,17 +930,16 @@ differentiates at the origin.
 ### What this leaves
 
 Retiring the closure removes the last standing candidate for the ceiling rather
-than replacing it. Three of the four mechanisms this document has proposed are
-now measured wrong: the timestep predictor, the sensor reach, and the fold
-closure. Sensor blindness at the fold is the fourth, and
-[the origin-cell probe](#the-origin-cell-is-a-startup-transient) rules it out
-as well.
+than replacing it. All four mechanisms this document has proposed are now
+measured wrong: the timestep predictor, the sensor reach, the fold closure, and
+sensor blindness at the fold, which
+[the origin-cell probe](#the-origin-cell-is-a-startup-transient) rules out.
 
 ## The origin cell is a startup transient
 
 `bench/nohprobe.jl` now reports the symmetry cell on every line rather than only
-when it happens to be the worst cell, which is what made the following legible.
-The argmin columns track the front for most of a run, so a symmetry cell
+when it is the worst cell. The argmin columns track the front for most of a
+run, so a symmetry cell
 degrading underneath them stays invisible until it overtakes the front, by which
 point the run is a few steps from losing positivity.
 
@@ -970,9 +969,9 @@ reaches the domain maximum, 1.000, in both surviving configurations. The
 [detector account](#where-the-spherical-loss-comes-from) proposed that δ⁴'s poor
 selectivity was supplying a background regularization at the fold, where the
 field is smooth and even by construction and a selective detector correctly
-returns almost nothing. The first half is right — β\* is negligible there while
-the field is smooth — and the conclusion is not: when the field stops being
-smooth the sensor responds, under either detector.
+returns almost nothing. The first half of that holds: β\* is negligible at the
+fold while the field is smooth. The conclusion does not, because the field does
+not stay smooth, and once it stops the sensor responds under either detector.
 
 **Every configuration has the excursion; the ceiling is whether the cell
 survives it.** `:delta4` at cfl 0.3 and `:d8` at cfl 0.25 both pass through it
@@ -1004,10 +1003,11 @@ with `StepControl(retries = 4)` beating a globally lowered CFL.
 (`src/artificial.jl:502`). At the failing step the symmetry cell has thinned to
 0.23 of its neighbour, and β\* there has fallen 0.304 → 0.018 of the line
 maximum while the cell is the worst in the domain. The step-126 profile puts
-ρ = 38.1 at the origin against 136.7 and 162.1 at the next two cells, with the
-velocity there reversed to +1.19 against −0.51 alongside.
+ρ = 38.1 at the origin against 136.7 and 162.1 at the next two cells, and the
+velocity at the origin reversed to +1.19 against −0.51 in its neighbour.
 
-An evacuating cell therefore suppresses its own regularization. This is Cook's
+The regularization at an evacuating cell is therefore suppressed by the
+evacuation itself. This is Cook's
 formulation working as specified rather than a defect, and it is a mechanism
 consistent with the numbers rather than a demonstrated cause: establishing it
 requires a β\* that does not vanish with the density, which has not been run.
@@ -1232,12 +1232,12 @@ shipped one.
 `:d8` also flattens the response to the constant on every smooth measure. Over
 0.25 → 4 the contact broadens 31% under `:d8` against 80% under `:delta4`, the
 Shu–Osher train loses 1.6% against 2.8%, and Lax L1 moves 4.7e-3 → 4.9e-3
-against 4.8e-3 → 5.4e-3. A detector that declines to fire on resolved structure
-makes the resolved structure less sensitive to how hard the sensor is driven,
-which is the behaviour it was adopted for, measured on the constant instead of
+against 4.8e-3 → 5.4e-3. Selectivity against resolved structure also makes the
+resolved structure less sensitive to the magnitude of the constant, which is
+the behaviour `:d8` was adopted for, observed here on the constant rather than
 on the cases.
 
-The CFL ladder is where the refit answers the question it was run for:
+The CFL ladder answers the question the refit was run for:
 
 ```
              nu = 1    nu = 2                nu = 3
@@ -1277,11 +1277,11 @@ integrated at half the timestep applies it twice as many times. The sign of the
 dependence is the evidence here; the accumulation itself has not been measured
 step by step, which `bench/nohprobe.jl` could do.
 
-The obvious per-step operation is the compact filter, which runs once per step
-at `filter_interval = 1` and is already recorded as removing energy per
+The per-step operation in the loop is the compact filter, which runs once per
+step at `filter_interval = 1` and is already recorded as removing energy per
 application rather than per unit time, so that its effective dissipation depends
 on the CFL number and does not converge as dt → 0 at fixed resolution. That is
-[model debt 1](ROADMAP.md), reached from a direction it was not expected from.
+[model debt 1](ROADMAP.md), arrived at from an unrelated measurement.
 
 This was first written up as support for the fold closure, which
 [has since been measured](#the-fold-closure-is-not-third-order) at sixth to
@@ -1652,7 +1652,7 @@ cylindrical axis accepts the cold start at 16× compression.
 | `smoother` | `:gaussian` | yes | Changed from `:compact` in August 2026. Raises the spherical-origin CFL ceiling 0.15 → 0.4 and the cylindrical 0.15 → 0.2, cuts the sensor phase 29%, and improves every Noh plateau and pre-shock L1. Costs wall heating at ν = 1 (+58 → +64%) and ν = 2 (+41 → +56%), improves it at ν = 3 (+31 → +27%), and moves the two stored cases by 1–3% of their L1. `C_kappa` cannot recover the wall heating. |
 | `detector` | `:delta4` | provisionally | `:d8` improves six of seven battery columns and removes the artificial-property CFL restriction outright at the planar wall and the cylindrical axis (0.2 → 1.0+), at 40% of the spherical-origin timestep (0.4 → 0.25) and +19% on the right-hand side. The `C_beta` refit is [done](#the-c_beta-refit-under-d8): 1.0 is retained, no value in 0.25–4 recovers the origin, and the worst geometry improves 0.2 → 0.25 under `:d8`. Held at `:delta4` on the origin cell alone. [Measurements](#the-ringing-detector-is-an-eighth-derivative-not-a-fourth-difference). |
 | `cfl` | 0.5 | **no** | Use 0.3 with shocks and `StepControl(retries = 4)` for recovery. Converging geometry now tolerates 0.4 (spherical) and 0.2 (cylindrical) under the default smoother. Note that under `filter_cfl = 0` the CFL is not only a stability choice: it sets how much subgrid dissipation the filter supplies, and moves the μ\* share of the Taylor–Green sink by 29% relative across a factor of two. |
-| `filter_cfl` | 0.0 | provisionally | Reference CFL for a full-strength filter pass. The default is the unrelaxed formulation, in which the filter dissipates per application and its subgrid dissipation does not converge as `dt → 0`. A positive value makes it a rate: filter loss is constant to six figures across a 4× CFL change, and the Taylor–Green channel split holds to 0.1 points where it otherwise moves 2.8. Held at 0 pending the α and cadence fit, which is the other half of the same debt and wants the 3-D campaign. [Measurements](#the-filter-dissipates-per-application-not-per-unit-time). |
+| `filter_cfl` | 0.0 | provisionally | Reference CFL for a full-strength filter pass. The default is the unrelaxed formulation, in which the filter dissipates per application and its subgrid dissipation does not converge as `dt → 0`. A positive value makes it a rate: filter loss is constant to six figures across a 4× CFL change, and the Taylor–Green channel split holds to 0.1 points where it otherwise moves 2.8. Held at 0 pending the α and cadence fit, which is the other half of the same debt and requires the 3-D campaign. [Measurements](#the-filter-dissipates-per-application-not-per-unit-time). |
 
 Remaining items, in approximate priority order:
 
@@ -1713,7 +1713,7 @@ Remaining items, in approximate priority order:
    effect is a factor of 3.93 across a 4× CFL change, and `filter_cfl` makes it
    a rate ([measurements](#the-filter-dissipates-per-application-not-per-unit-time)).
    What remains is fitting α and the cadence against a reference dissipation
-   history, which wants the 3-D campaign. Note that the two are coupled: a fit
+   history, which requires the 3-D campaign. Note that the two are coupled: a fit
    taken under the unrelaxed formulation is only reproducible at the CFL it was
    taken at.
 5. Determine why the spherical-origin fold is less tolerant of

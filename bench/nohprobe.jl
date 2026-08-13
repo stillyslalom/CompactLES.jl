@@ -131,7 +131,7 @@ function make_probe(solver, xs, h)
         # The symmetry cell reported unconditionally, not only when it happens to
         # be the worst. The argmin columns track the front for most of a run, so
         # a symmetry cell degrading underneath is invisible in them until it
-        # overtakes the front — which is exactly the question the ceiling poses.
+        # overtakes the front, which is the question the ceiling poses.
         # rho_1/rho_2 is the evacuation measure: the cell thinning relative to
         # its neighbour suppresses its own beta*, which is proportional to rho.
         # Two calls because @printf needs a literal format string, and one
