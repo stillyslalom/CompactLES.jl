@@ -16,6 +16,8 @@ points at them rather than restating them.
 6. [The compression-keyed β\* sensors (July 2026)](#compression-keyed-beta-sensors-july-2026)
 7. [The reference-implementation pass (August 2026)](#the-reference-implementation-pass-august-2026)
 8. [The sensor fields (August 2026)](#the-sensor-fields-august-2026)
+9. [The C_beta refit (August 2026)](#the-c_beta-refit-august-2026)
+10. [The origin cell (August 2026)](#the-origin-cell-august-2026)
 
 ## Phase 0 — extensibility seams (July 2026)
 
@@ -438,3 +440,97 @@ constant that has never been fitted; settling it needs the `C_mu` refit and the
 filter calibration, which wait on the same 3-D campaign.
 `beta_sensor = :ungated_dilatation` is a measured negative for converging
 geometry. `reduction = :max` is a third setting acting on an unfitted constant.
+
+## The C_beta refit (August 2026)
+
+The last open item of the reference-implementation comparison that was neither
+blocked on a missing case nor gated on an unmeasured residual. `:d8` changes the
+sensor's spatial support enough that the shipped constants, fitted under δ⁴,
+had no claim on it, and the detector's default was held pending the refit.
+`bench/artcal.jl beta` and `bench/artcal.jl beta detector=d8`, with a fresh
+`:delta4` control that reproduces the detector comparison in every column.
+Measurements are in `reference/CALIBRATION.md` under "The C_beta refit under
+`:d8`". No default changed.
+
+**`C_beta = 1.0` survives the refit, and does so for a different reason than it
+was chosen.** Under `:delta4` the viable window runs 0.25 to 1.0, bounded above
+by planar Noh, and 1.0 is a robustness margin over an accuracy optimum near 0.4.
+Under `:d8` the window runs 1.0 to 4.0, bounded below by both converging
+geometries, which fail outright at 0.5. The two windows intersect in the single
+value 1.0. `:d8` also flattens the response to the constant on every smooth
+measure: over 0.25 → 4 the Lax contact broadens 31% against 80%, and the
+Shu–Osher train loses 1.6% against 2.8%.
+
+**The refit does not rescue the spherical origin, which settles what the
+detector decision rests on.** The best ν = 3 ceiling available under `:d8` is
+0.3 at `C_beta = 2`, below the 0.4 that `:delta4` reaches at the shipped
+constant, and it costs the ν = 2 ceiling, the ν = 3 plateau and part of the
+Shu–Osher train. The detector therefore waits on the origin cell alone, which is
+where the previous pass placed it.
+
+Two findings came out of the CFL ladder the sweep gained, which reads the
+constant at six timesteps rather than at `NOH_CFL` alone.
+
+- **`C_beta` trades the ceilings against each other rather than raising them.**
+  At 0.25 the planar ceiling passes 1.0 and the cylindrical reaches 1.0 while
+  the spherical falls to 0.2; at 1.0 the spherical is highest and the other two
+  are lowest. This corrects a one-sided earlier result recorded in the
+  calibration remainders, which tested a *larger* `C_beta` against the ν = 1
+  restriction, found no movement, and concluded the constant was not involved.
+- **Under `:d8` at reduced `C_beta` the cylindrical axis fails below a CFL
+  rather than above one**, verified as positivity loss rather than the step cap.
+  No stability restriction produces that sign; a per-step error at the fold
+  does, since a fixed physical interval at half the timestep applies the closure
+  twice as often. It is independent support for the third-order fold closure and
+  it appears exactly where that account predicts.
+
+The sweep now distinguishes its two failure modes, printing positivity loss as
+`NaN` and the step cap as `Inf`. Collapsing both into `NaN` is what made the
+second finding look like an artifact, and cost a separate probe to resolve.
+
+## The origin cell (August 2026)
+
+The second half of what the detector decision was waiting on, and the item the
+`C_beta` refit left as the only one standing. Two instruments:
+`bench/foldorder.jl`, new, which splits the convergence studies' error norm by
+region of the line; and three columns added to `bench/nohprobe.jl` reporting the
+symmetry cell on every line rather than only when it is the worst cell.
+Measurements are in `reference/CALIBRATION.md` under "The fold closure is not
+third order" and "The origin cell is a startup transient". No default changed
+and no solver source was touched.
+
+**The fold closure is not third order, and the number saying it was belongs to
+the outer wall.** `test/convergence.jl` reports a global max norm, and every one
+of its fold studies closes the outer end with a `SlipWallBC` measuring 3.17 on
+its own. Split by region, the global maximum sits at the last interior cell in
+all four studies, and the fold's own error converges at 6.05 to 7.01 while
+sitting three to five orders of magnitude below the interior. A both-ends-walls
+control reports 3.23 in the same window, so the instrument does see a
+third-order closure where one exists. Both parities were measured, including the
+odd one `test/convergence.jl` does not cover and that a converging calculation
+differentiates at the origin.
+
+**The companion reading, that a selective detector is blind at the fold, is
+wrong for the same case.** β\* at the origin is indeed negligible while the
+field is smooth, but the cell does not fail while the field is smooth. During
+the excursion that fails, β\* there reaches the *line maximum* under both
+detectors.
+
+**What the origin cell actually does is evacuate during a startup transient.**
+It holds `rho1/rho2` within 0.2% of unity for the first eighty-odd steps, then
+undergoes one large excursion. `:delta4` at cfl 0.3 and `:d8` at cfl 0.25 pass
+through it; `:d8` at cfl 0.3 enters it about forty steps earlier and the cell
+collapses from 1.31 to 0.23 of its neighbour within one sampling interval, with
+the internal energy reaching −6335 e₀. The excursion lands at t ≈ 0.394 at
+N = 128, 256 and 512 while its step number scales with N, and its relative
+amplitude weakens under refinement, so it is a resolved feature of the warm
+start rather than a grid-scale artifact.
+
+This retires every discretization-order candidate for the converging-shock CFL
+ceiling. Two mechanisms are live and neither is demonstrated: β\* is
+proportional to the density (`src/artificial.jl:502`), so the regularization
+collapses on exactly the cell that is thinning; and the compact filter is
+applied per step rather than per unit time, which is the standing model debt 1
+and which the `C_beta` ladder implicates independently. The ceiling now reads as
+a robustness problem at a symmetry cell, which is model debt 2, rather than a
+numerics problem at a fold.

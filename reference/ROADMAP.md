@@ -100,11 +100,17 @@ directions. All three are `ArtParams` settings and none of them is a default.
    non-uniform metric; `filter_state!` filters the conserved components
    unweighted. Uniform Cartesian results are unaffected by construction, so the
    measurement is the converging cases plus a conservation-defect probe.
-2. **A `C_beta` and `C_mu` refit under the adopted smoother and detector.**
-   Taylor–Green at 64³ shows the μ\* channel moving 4.0% → 4.5% of the sink
-   under the Gaussian, which does not demand a refit but does not rule one out.
-   `C_beta` under `:d8` is the sharper case, and it is what the detector's
-   default turns on.
+2. **A `C_mu` refit under the adopted smoother and detector.** Taylor–Green at
+   64³ shows the μ\* channel moving 4.0% → 4.5% of the sink under the Gaussian,
+   which does not demand a refit but does not rule one out. **Blocked** on the
+   same 3-D campaign as the filter calibration, since no case in the
+   one-dimensional battery gives the shear channel anything to do. The `C_beta`
+   half is done and retained 1.0 under both detectors
+   (`reference/CALIBRATION.md`); it also established that no `C_beta` in
+   0.25–4 recovers the spherical-origin ceiling under `:d8`. The origin cell
+   has since been accounted for as well, retiring the fold closure, so the
+   detector default now rests on which configuration survives the startup
+   excursion rather than on any unmeasured numerics.
 3. **Directional artificial bulk viscosity**, with the per-direction diffusive
    timestep limit that goes with it. **Blocked**: no anisotropic or strongly
    stretched case exists in the validation battery, so measuring it against the
@@ -224,12 +230,26 @@ it is a work item below rather than a known limitation. The second debt in this
 class — β\* keyed on the strain magnitude rather than the dilatation — has been
 measured and closed (`reference/HISTORY.md`).
 
-What that work left open is the converging-shock `cfl ≤ 0.15` ceiling itself.
-The timestep predictor, `C_beta`, the dilatation sensor and the sensor reach
-are ruled out by measurement, and the `:d8` detector lifts the planar and
-cylindrical ceilings outright while costing the spherical origin. The
-third-order fold closure is the one candidate still standing and the origin
-cell is where to look (`reference/CALIBRATION.md`).
+What that work left open is the converging-shock `cfl ≤ 0.15` ceiling itself,
+and **every discretization-order candidate for it has now been measured and
+ruled out**. The timestep predictor, the dilatation sensor and the sensor reach
+went first. The fold closure, which stood last and longest, is not third order:
+it is sixth to seventh order at the fold, and the third-order figure attributed
+to it belongs to the outer wall through a global max norm. The companion
+reading, that a selective detector is blind at the fold, fails on the same
+measurement, since β\* at the origin reaches the line maximum during the
+excursion that fails.
+
+The origin cell instead evacuates during a startup transient that lands at a
+fixed physical time regardless of resolution and that every configuration
+passes through. That makes the ceiling a robustness problem at a symmetry cell
+rather than a numerics problem, and points at model debt 2 below. Two
+mechanisms are live and neither is yet demonstrated: β\* is proportional to the
+density, so it collapses on exactly the cell that is thinning, and the compact
+filter is applied per step rather than per unit time, which is model debt 1 and
+which the `C_beta` ladder implicates independently — under `:d8` at reduced β\*
+the cylindrical axis fails *below* a CFL rather than above one
+(`reference/CALIBRATION.md`).
 
 **One EOS assumption survives the Phase 1 generalization.** The artificial
 conductivity is still built as (ρc/T_ion)·sensor for every gas model, which is
@@ -507,10 +527,11 @@ reference-implementation pass that headed this list are done
 
 The open items from the source comparison
 ([above](#open-work-from-the-source-comparison)) sit alongside these rather
-than inside the ordering. What remains there is either blocked on a missing
-case or gated on a measurement that has not been taken, with one exception: the
-`C_beta` refit under `:d8`, which is what the detector's default turns on and
-which the sensor-field measurement did not settle.
+than inside the ordering. Everything remaining there is now either blocked on a
+missing case or gated on a measurement that has not been taken. The one
+exception, the `C_beta` refit under `:d8`, is closed: the constant holds at 1.0
+and the detector default turns out to rest on the spherical origin rather than
+on the fit.
 
 Two items sit outside the ordering because they are independent of everything
 above and pullable on demand: laser ray tracing (Phase 2.7), if a specific

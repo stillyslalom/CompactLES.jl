@@ -58,8 +58,15 @@ want(name) = name in WHICH
 
 # A sweep deliberately visits settings that do not work, and a setting that does
 # not work costs unbounded time rather than failing (see NMAX in cases.jl). Every
-# case here is capped at a few times the healthy step count; anything that hits
-# the cap is reported as NaN, which is the answer the sweep wants anyway.
+# case here is capped at a few times the healthy step count.
+#
+# The two ways of not working print differently, and the distinction is not
+# cosmetic. **NaN is positivity loss** — a `SolverFailure`, which is a real limit
+# of the configuration. **Inf is the step cap** — the run was still healthy and
+# simply had not arrived, which is an artifact of CAP and of the timestep, not a
+# result. Reporting both as NaN reads as a ceiling that moves with the CFL, since
+# a smaller timestep needs more steps to cover the same interval; separating them
+# is what shows a genuine failure that gets *worse* as the timestep falls.
 const CAP = 30_000
 
 art(; kw...) = ArtParams(; enabled=true,
@@ -96,14 +103,14 @@ end
 
 m_noh(ν; kw...) = attempt((NaN, NaN, NaN)) do
     xs, ρ, _, _, ok = noh_case(ν; nmax=CAP, kw...)
-    ok || return (NaN, NaN, NaN)
+    ok || return (Inf, Inf, Inf)
     plat, deficit, Rs, _ = noh_metrics(xs, ρ, ν)
     (plat / 4.0^ν, deficit, Rs)
 end
 
 m_lax(; kw...) = attempt((NaN, NaN)) do
     xs, ρ, u, p, ok = lax(; nmax=CAP, kw...)
-    ok || return (NaN, NaN)
+    ok || return (Inf, Inf)
     ex = [riemann_profile(x, LAX_T, 0.5, LAX_L, LAX_R, 1.4) for x in xs]
     # Contact width across the star-region density jump, which is where an
     # over-large C_kappa or C_beta shows up first.
@@ -112,20 +119,20 @@ end
 
 m_shu(; kw...) = attempt((NaN, NaN)) do
     xs, ρ, _, _, ok = shu_osher(; N=400, nmax=CAP, kw...)
-    ok || return (NaN, NaN)
+    ok || return (Inf, Inf)
     band = so_band(xs)
     (maximum(ρ[band]) - minimum(ρ[band]), maximum(ρ[band]))
 end
 
 m_wc(; kw...) = attempt((NaN, NaN)) do
     xs, ρ, _, _, ok = woodward(; N=400, nmax=CAP, kw...)
-    ok || return (NaN, NaN)
+    ok || return (Inf, Inf)
     (maximum(ρ), xs[argmax(ρ)])
 end
 
 m_mix(; kw...) = attempt(NaN) do
     xs, Y, _, _, ok = species_advection(; nmax=CAP, kw...)
-    ok || return NaN
+    ok || return Inf
     contact_width(xs, Y, 0.0, 1.0)
 end
 
@@ -158,6 +165,23 @@ if want("beta")
                 c, mark(c, DEFAULTS.C_beta), n1[1], 100n1[2], n3[1],
                 lx[1], lx[2], sh[1], wc[1])
     end
+    # C_beta and the CFL ceiling are not separable. The accuracy table above is
+    # read at NOH_CFL, and a constant that looks worse there can still be the one
+    # that holds a geometry at a larger timestep — which is the whole question
+    # under `detector = :d8`, where the planar and cylindrical ceilings are gone
+    # and the spherical one falls to 0.25. Run the ladder per constant for the
+    # same reason the sensor and detector sweeps run it per setting.
+    println("\n--- the Noh CFL ceiling, per C_beta ---")
+    println("C_beta      cfl  | Noh1 plat/exact | Noh2 plat/exact | Noh3 plat/exact")
+    hr()
+    for c in (0.25, 0.5, 1.0, 2.0), cf in (1.0, 0.4, 0.3, 0.25, 0.2, 0.15)
+        a = art(C_beta=c)
+        n1 = m_noh(1; art=a, cfl=cf); n2 = m_noh(2; art=a, cfl=cf)
+        n3 = m_noh(3; art=a, cfl=cf)
+        @printf("%-10.4g %-5.3g | %15.4f | %15.4f | %15.4f\n",
+                c, cf, n1[1], n2[1], n3[1])
+    end
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end
 
 # ===========================================================================
@@ -196,7 +220,7 @@ if want("cfl")
         @printf("%-9.3g | %14.4f  %+6.0f%% | %15.4f | %15.4f | %.4f\n",
                 c, n1[1], 100n1[2], n2[1], n3[1], wc[1])
     end
-    println("  (NaN = the run lost positivity or stalled before reaching t_final)")
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end
 
 # ===========================================================================
@@ -238,7 +262,7 @@ if want("sensor")
         n3 = m_noh(3; art=a, cfl=c)
         @printf("%-10s %-5.3g | %15.4f | %15.4f | %15.4f\n", s, c, n1[1], n2[1], n3[1])
     end
-    println("  (NaN = the run lost positivity or stalled before reaching t_final)")
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end
 
 # The sensor smoother stands in for Cook's Gaussian test filter. `:compact`
@@ -270,7 +294,7 @@ if want("smoother")
         n3 = m_noh(3; art=a, cfl=c)
         @printf("%-10s %-5.3g | %15.4f | %15.4f | %15.4f\n", s, c, n1[1], n2[1], n3[1])
     end
-    println("  (NaN = the run lost positivity or stalled before reaching t_final)")
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end
 
 # The detector is the high-pass every sensor is built from: Cook's undivided
@@ -301,7 +325,7 @@ if want("detector")
         n3 = m_noh(3; art=a, cfl=c)
         @printf("%-10s %-5.3g | %15.4f | %15.4f | %15.4f\n", s, c, n1[1], n2[1], n3[1])
     end
-    println("  (NaN = the run lost positivity or stalled before reaching t_final)")
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end
 
 # The field each channel's detector reads. Cook takes μ* and β* from the strain
@@ -343,7 +367,7 @@ if want("field")
         @printf("%-8s %-9s %-10s %-5.3g | %15.4f | %15.4f | %15.4f\n",
                 det, ms, bs, c, n1[1], n2[1], n3[1])
     end
-    println("  (NaN = the run lost positivity or stalled before reaching t_final)")
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end
 
 # Sensor response against wavelength, on one velocity sine and with no time

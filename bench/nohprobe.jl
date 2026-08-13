@@ -21,6 +21,20 @@
 #      The density hole that CALIBRATION.md recorded as a pre-shock undershoot
 #      is at i = 3, between the wall and the front rather than ahead of it.
 #
+#   4. The symmetry cell fails through a STARTUP EXCURSION, not a gradual
+#      degradation. Added later with the rho1/rho2, e1/e0 and b*1/max columns:
+#      at nu = 3 the origin holds rho1/rho2 within 0.2% of unity for eighty-odd
+#      steps carrying beta* at a thousandth of the line maximum, then goes
+#      through one large excursion during which beta* there reaches the line
+#      MAXIMUM. Surviving configurations pass through it; failing ones evacuate
+#      the cell inside a single sampling interval. The excursion lands at
+#      t ~ 0.394 at N = 128, 256 and 512 while its step number scales with N, so
+#      it is a resolved feature of the warm start rather than a grid artifact.
+#      This retired the two standing explanations at once: the fold closure is
+#      sixth to seventh order (see bench/foldorder.jl), and the sensor is not
+#      blind at the fold. Write-up under "The origin cell is a startup
+#      transient".
+#
 # The probe also surfaces a condition no existing diagnostic reports: runs that
 # COMPLETE carry 6-8 cells of negative internal energy, travelling with the
 # front, for their whole duration. `primitives!` floors T_ion at 1e-300 wherever
@@ -40,6 +54,17 @@
 #                direct test of whether regularization is present there
 #   reach/h      furthest cell ahead of the front carrying beta* above a
 #                thousandth of the maximum
+#   rho1/rho2    symmetry cell density over its neighbour's. 1 is a healthy
+#                converging profile; falling well below 1 is the symmetry cell
+#                evacuating, which matters because beta* is proportional to rho
+#                and a thinning cell therefore suppresses its own regularization
+#   e1/e0        internal energy at the symmetry cell, ambient multiples
+#   b*1/max      beta* at the symmetry cell over the line maximum
+#
+# The last three are reported every line whether or not the symmetry cell is the
+# worst one. The argmin columns track the front through most of a run, so a
+# symmetry cell degrading underneath them stays invisible until it overtakes the
+# front, by which point the run is a few steps from losing positivity.
 #
 # Usage: positional nu, then `key=value`.
 #
@@ -103,9 +128,19 @@ function make_probe(solver, xs, h)
         bmax = maximum(b)
         ahead = [i for i in 1:n if xs[i] > xsh && b[i] > 1e-3 * bmax]
         reach = isempty(ahead) ? 0.0 : (xs[maximum(ahead)] - xsh) / h
-        @printf("%6d %8.5f %7.2f | %8.5f %5d | %10.1f %5d %6d | %10.3f %7.2f\n",
+        # The symmetry cell reported unconditionally, not only when it happens to
+        # be the worst. The argmin columns track the front for most of a run, so
+        # a symmetry cell degrading underneath is invisible in them until it
+        # overtakes the front — which is exactly the question the ceiling poses.
+        # rho_1/rho_2 is the evacuation measure: the cell thinning relative to
+        # its neighbour suppresses its own beta*, which is proportional to rho.
+        # Two calls because @printf needs a literal format string, and one
+        # literal covering all thirteen columns runs past the line limit.
+        @printf("%6d %8.5f %7.2f | %8.5f %5d | %10.1f %5d %6d | %10.3f %7.2f",
                 solver.step, t, xsh / h + 1, rho[im], im,
                 e[ie] / E0, ie, count(<=(0), e), b[ie] / bmax, reach)
+        @printf(" | %8.4f %10.1f %8.3f\n",
+                rho[1] / rho[2], e[1] / E0, b[1] / bmax)
         if solver.step == opt.dump
             s = grab(solver.sensor)
             println("\n  --- step $(solver.step), front at cell " *
@@ -158,10 +193,11 @@ function main()
     println("nu = $ν, N = $N, cfl = $(opt.cfl), t0 = $T0, " *
             "beta_sensor = $(opt.sensor), smoother = $(opt.smoother), " *
             "detector = $(opt.detector)")
-    @printf("%6s %8s %7s | %8s %5s | %10s %5s %6s | %10s %7s\n",
+    @printf("%6s %8s %7s | %8s %5s | %10s %5s %6s | %10s %7s",
             "step", "t", "x_sh/h", "rho_min", "i", "e/e0_min", "i", "n_e<0",
             "b*@e/b*max", "reach/h")
-    println(repeat("-", 96))
+    @printf(" | %8s %10s %8s\n", "rho1/rho2", "e1/e0", "b*1/max")
+    println(repeat("-", 128))
 
     cb = Callback(EveryStep(opt.every), make_probe(solver, xs, h))
     try

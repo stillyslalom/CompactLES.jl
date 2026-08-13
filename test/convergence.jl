@@ -24,11 +24,19 @@
 #   cyl axis odd 3.71 | cyl axis even 3.00 | resolved-θ axis 3.71
 #   spherical origin 2.99
 #
-# The boundary closures and the singular-axis folds are third-order in the max
-# norm — the error is dominated by the first node or two off the wall/axis,
-# which is why the serial suite's fold tolerances carry the same note. That is
-# a known property of the closure cascade, not a defect these studies found;
-# what they guard is that it does not get *worse*.
+# These are GLOBAL max norms, and every fold study closes its outer end with a
+# SlipWallBC. The orders near 3 therefore belong to the WALL, not to the fold:
+# the global max is attained at the last interior cell in all four fold studies,
+# and splitting the norm by region shows the fold's own error converging at
+# 6.05-7.01 and sitting three to five orders of magnitude below the interior.
+# `bench/foldorder.jl` does that split and carries the numbers; the write-up is
+# in reference/CALIBRATION.md under "The fold closure is not third order".
+#
+# So a fold study here guards two things at once, and only the weaker of them is
+# about the fold. The slope confirms the outer wall's closure cascade, which is
+# a known property rather than a defect. What the fold contributes is the LEVEL:
+# a fold sign error gives O(1) error at the first node and collapses the slope
+# to ~0, which is what item 3 above is really watching for.
 
 # Timing first, so that package load is measured rather than assumed. See
 # test/timing.jl for what the compile column means.

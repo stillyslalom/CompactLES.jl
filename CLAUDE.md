@@ -264,8 +264,10 @@ decision worth revisiting.
   `jetcheck.jl` / `jetwhere.jl` (dispatch sites, and where they come from),
   `phases.jl` (RHS phase budget), `profile.jl`, `scaling.jl`, `threadscale.jl`,
   `bcbench.jl`, `coverage.jl`, `artcal.jl` (artificial-property sweeps),
-  `nohprobe.jl` (per-step Noh state probe: where β\* is, and where the internal
-  energy goes negative), `amr_transfer.jl`,
+  `nohprobe.jl` (per-step Noh state probe: where β\* is, where the internal
+  energy goes negative, and what the symmetry cell is doing),
+  `foldorder.jl` (convergence error split by region of the line — the fold end
+  against the outer wall, which a global max norm conflates), `amr_transfer.jl`,
   `tgv_energy.jl` (Taylor–Green kinetic-energy budget split
   by dissipation channel; the one bench script that runs usefully under
   `mpiexec`, and the intended first workload on a cluster).
@@ -309,8 +311,7 @@ them.
   explanations and both are measured wrong: the lag was tested with a rate
   predictor to 30 steps of lookahead, and β\* is measured to reach three to five
   times further ahead of the front than the damage extends while sitting at or
-  near its own domain maximum on the cell that fails. The surviving candidate is
-  the fold closure, which is third order where the interior is sixth or tenth.
+  near its own domain maximum on the cell that fails.
   A dilatation-keyed β\* was tested and rejected: the ceiling does not move, and
   it loses both converging Noh geometries at the coordinate fold. Gating the
   *strain* sensor on compression (`beta_sensor = :gated_strain`) does move it,
@@ -319,8 +320,13 @@ them.
   globally lowered CFL, because the restriction is a startup one.
   The eighth-derivative detector (`detector = :d8`) lifts the restriction
   outright at the planar wall and the cylindrical axis, 0.2 → 1.0 or beyond,
-  and costs the spherical origin 0.4 → 0.25 — which leaves the fold closure as
-  the only candidate still standing, and the origin cell as where to look.
+  and costs the spherical origin 0.4 → 0.25. **Every discretization-order
+  candidate is now ruled out**, including the fold closure, which is sixth to
+  seventh order at the fold — the third-order figure long attributed to it is
+  the outer wall's, read through a global max norm (`bench/foldorder.jl`). The
+  origin cell instead evacuates during a startup transient at a fixed physical
+  time that every configuration passes through, so treat this as a robustness
+  problem at a symmetry cell, not a numerics problem at a fold.
   → `reference/CALIBRATION.md`
 - **κ\* is singular as `T_ion` → 0**, so a cold ambient below p ≈ 1e-3 collapses
   the diffusive timestep. `art_conductivity_scale` is an EOS dispatch point, so a

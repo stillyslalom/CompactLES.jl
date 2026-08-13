@@ -20,10 +20,12 @@ ArtParams(C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.01)
 5. [C_D — the species diffusivity](#c_d--the-species-diffusivity)
 6. [The β\* sensor — strain, gated, or dilatation](#the-beta-sensor--strain-or-dilatation)
 7. [CFL, which dominates all four](#cfl-which-dominates-all-four)
-8. [Measured against the reference implementation](#measured-against-the-reference-implementation)
-9. [Grid convergence](#grid-convergence)
-10. [Geometry limits](#geometry-limits)
-11. [Recommendations](#recommendations)
+8. [The fold closure is not third order](#the-fold-closure-is-not-third-order)
+9. [The origin cell is a startup transient](#the-origin-cell-is-a-startup-transient)
+10. [Measured against the reference implementation](#measured-against-the-reference-implementation)
+11. [Grid convergence](#grid-convergence)
+12. [Geometry limits](#geometry-limits)
+13. [Recommendations](#recommendations)
 
 ## How to read the tables
 
@@ -67,13 +69,21 @@ Columns:
 
 ```
 C_beta    | Noh1 plat  deficit | Noh3 plat | Lax L1  contact | Shu train | WC peak
-0         |     NaN       NaN  |      NaN  | 5.7e-3   0.0032 |    1.6638 |    NaN
-0.25      |  0.9993       +54% |   1.0122  | 4.9e-3   0.0041 |    1.6406 | 6.4556
-0.5       |  0.9992       +57% |   0.9953  | 4.9e-3   0.0045 |    1.6310 | 6.4702
-1.0    *  |  0.9992       +58% |   0.9732  | 5.0e-3   0.0051 |    1.6185 | 6.5731
-2.0       |     NaN       NaN  |   0.9516  | 5.2e-3   0.0062 |    1.6155 | 6.7221
-4.0       |     NaN       NaN  |      NaN  | 6.2e-3   0.0074 |    1.5859 | 6.7711
+0         |     NaN       NaN  |      NaN  | 5.7e-3   0.0032 |    1.6610 |    NaN
+0.25      |  0.9995       +56% |   1.0098  | 4.8e-3   0.0041 |    1.6408 | 6.4151
+0.5       |  0.9994       +61% |   0.9931  | 4.9e-3   0.0045 |    1.6297 | 6.4742
+1.0    *  |  0.9993       +64% |   0.9751  | 5.0e-3   0.0053 |    1.6180 | 6.6049
+2.0       |     NaN       NaN  |   0.9569  | 5.2e-3   0.0063 |    1.6055 | 6.6859
+4.0       |     NaN       NaN  |   0.9408  | 5.4e-3   0.0074 |    1.5945 | 6.8366
 ```
+
+Measured under the shipped `smoother = :gaussian`. The table previously held the
+`:compact` measurement and was not re-run when that default changed in August
+2026; the differences are in the third and fourth digits everywhere except the
+ν = 1 deficit, which reads +64% rather than +58% because the Gaussian smoother
+costs wall heating. Two entries changed qualitatively: `C_beta = 4` completes
+spherical Noh under the Gaussian where it did not under `:compact`, and the
+CFL ladder below is new.
 
 The lower and upper ends of the sampled range fail for different reasons.
 
@@ -94,20 +104,52 @@ exclude timestep lag as the cause.
 Between the two limits, the accuracy measures vary monotonically:
 
 - Contact width grows roughly linearly, 0.0041 → 0.0074 over 0.25 → 4.
-- The Shu–Osher wave train loses about 3.5% of its amplitude over the same
+- The Shu–Osher wave train loses about 2.8% of its amplitude over the same
   range. Because the entropy waves are smooth, this reduction measures
   overdamping relevant to a mixing calculation.
-- The Noh ν = 3 plateau *degrades* with increasing `C_beta` (1.0122 → 0.9516),
+- The Noh ν = 3 plateau *degrades* with increasing `C_beta` (1.0098 → 0.9408),
   crossing exact between 0.25 and 0.5.
 
 Accuracy alone gives an optimum near `C_beta = 0.4`. The shipped value of 1.0
 instead provides a robustness margin: Woodward–Colella and both Noh geometries
-complete, at the cost of a 13% wider contact and 0.8% lower wave-train amplitude
+complete, at the cost of an 18% wider contact and 0.7% lower wave-train amplitude
 relative to 0.5.
 
+### The CFL ladder per constant
+
+The table above is read at `NOH_CFL = 0.15`, which hides the interaction that
+matters most for converging geometry. Highest CFL reaching `t_final` with a
+correct plateau, from `bench/artcal.jl beta`:
+
+```
+C_beta      nu = 1     nu = 2     nu = 3
+0.25         1.0+       1.0        0.2
+0.5          0.4        0.4        0.25
+1.0    *     0.25       0.2        0.4
+2.0          none       none       0.3
+```
+
+`C_beta` trades the planar and cylindrical ceilings against the spherical one,
+monotonically across the sampled range. Lowering it to 0.25 removes the
+restriction at the wall and the axis and costs the origin a factor of two;
+raising it does the reverse. The shipped value of 1.0 is the setting that
+maximizes the spherical ceiling, which is the geometry the general guidance for
+converging shocks rests on.
+
+This corrects a claim carried in the remainders list below since the CFL study.
+A *larger* `C_beta` was measured against the ν = 1 restriction and does not move
+it; a smaller one moves it from 0.25 to beyond 1.0. The earlier measurement was
+not wrong, it was one-sided.
+
+The trade is the same one `detector = :d8` makes, and in the same direction:
+both act by reducing β\* where the field is smooth, and both help at the wall
+and the axis while costing the origin. That is the reason the two are refitted
+together [below](#the-c_beta-refit-under-d8).
+
 **Recommendation:** retain 1.0 as the default. Use 0.5 for interface-dominated
-Richtmyer–Meshkov or Rayleigh–Taylor calculations with moderate shocks. Values
-below 0.25 or above 2 are not recommended.
+Richtmyer–Meshkov or Rayleigh–Taylor calculations with moderate shocks, noting
+that it costs the spherical origin half its timestep. Values below 0.25 or
+above 2 are not recommended.
 
 ## C_kappa — the conductivity
 
@@ -634,7 +676,12 @@ inflow of −1, with e/e₀ = +2.6e5 against −1.6e4 in its neighbour, under a 
 
 The restriction is therefore a symmetry-plane startup problem. β\* is already
 saturated at the fold, so the surviving candidate is the fold closure rather
-than the artificial properties. This is consistent with `cfl ≤ 0.15` binding in
+than the artificial properties. (The fold closure has since been measured and
+is *not* third order — see
+[the fold closure is not third order](#the-fold-closure-is-not-third-order) —
+so this sentence records what was believed here, not a live candidate. The
+startup character of the restriction survives that correction and is
+strengthened by it.) This is consistent with `cfl ≤ 0.15` binding in
 all three geometries, and with `StepControl(retries = 4)` recovering afterwards,
 since the restriction applies while the shock forms at the symmetry point. It
 also accounts for the one setting that moved a ceiling: `:gated_strain` at
@@ -649,7 +696,8 @@ constant held, moves the ν = 3 ceiling from 0.15 to 0.4 and the ν = 2 ceiling
 from 0.15 to 0.2. The artificial-property path does set the restriction at the
 fold, through the *continuity* of β\* rather than its magnitude, which is what
 the saturation argument above measured and correctly ruled out. The subsection
-below carries the measurement. The fold closure itself remains untested.
+below carries the measurement. The fold closure has since been tested and
+retired as a candidate.
 
 ### The sensor is intermittent at the damage site
 
@@ -741,6 +789,137 @@ For converging geometry with rollback disabled, the ceiling is now set by
 origin and 0.2 at the cylindrical axis, against 0.15 for both under `:compact`.
 The tables in this section were measured under `:compact` and are retained as
 the record of that setting.
+
+## The fold closure is not third order
+
+The candidate this document carried longest for the converging-shock ceiling was
+the fold closure: third order against a sixth- or tenth-order interior, at the
+one geometry the `:d8` detector costs anything. The premise is wrong. The
+number it rests on belongs to the outer wall.
+
+`test/convergence.jl` reports a **global** max norm, and every one of its fold
+studies closes the outer end with a `SlipWallBC` whose closure rows measure 3.17
+on their own. Splitting that norm by region (`bench/foldorder.jl`, same fields
+and resolutions) separates the two ends:
+
+```
+study                              fold(1:3)   mid    outer(3)   global argmax
+C6, both ends walls (control)         3.23     3.19     3.17       i = n
+cylindrical axis, odd  (u_r-like)     6.05     3.76     3.71       i = n
+cylindrical axis, even (scalar)       7.01     2.99     3.00       i = n
+spherical origin, even (scalar)       7.00     2.97     2.99       i = n
+spherical origin, odd  (u_r-like)     6.07     3.86     3.81       i = n
+```
+
+**The global maximum sits at the outer wall in every fold study.** The fold's
+own error converges at 6.05 to 7.01 and is three to five orders of magnitude
+below the interior: at N = 96 the spherical origin carries 7.0e-12 against
+1.9e-7 in the middle of the line. The fold is the most accurate region of the
+domain, not the least.
+
+The identification is exact rather than approximate. Every global error
+`test/convergence.jl` prints equals the outer-window norm above to every digit
+printed — 7.707e-05, 1.953e-07, 1.992e-06 and 4.730e-06 at the finest
+resolution of each study. The guarded numbers in that file are measurements of
+the outer wall, taken through a norm that never sees the fold.
+
+The control is what makes this readable. With walls at both ends the same window
+reports 3.23, so the instrument does detect a third-order closure when one is
+there. The middle of the line converges at 3 as well, which is the compact
+scheme's line-global coupling carrying the wall's closure error inward, not a
+property of the fold.
+
+Both parities were measured, including the odd one that
+`test/convergence.jl` does not cover and that a converging calculation actually
+differentiates at the origin.
+
+### What this leaves
+
+Retiring the closure removes the last standing candidate for the ceiling rather
+than replacing it. Three of the four mechanisms this document has proposed are
+now measured wrong: the timestep predictor, the sensor reach, and the fold
+closure. Sensor blindness at the fold is the fourth, and
+[the origin-cell probe](#the-origin-cell-is-a-startup-transient) rules it out
+as well.
+
+## The origin cell is a startup transient
+
+`bench/nohprobe.jl` now reports the symmetry cell on every line rather than only
+when it happens to be the worst cell, which is what made the following legible.
+The argmin columns track the front for most of a run, so a symmetry cell
+degrading underneath them stays invisible until it overtakes the front, by which
+point the run is a few steps from losing positivity.
+
+Spherical Noh, N = 256, sampling `rho1/rho2` (the symmetry cell over its
+neighbour) and β\* at the symmetry cell over the line maximum:
+
+```
+                  :d8, cfl 0.3 (fails)     :delta4, cfl 0.3 (survives)
+step   rho1/rho2   b*1/max            step   rho1/rho2   b*1/max
+  85     1.0021      0.001              80     0.9993      0.004
+  90     0.9879      0.009             120     0.9808      0.172
+ 110     0.8930      0.043             140     0.7469      0.964
+ 115     1.0532      0.101             160     0.9652      1.000
+ 120     1.3089      0.304             180     0.9223      0.346
+ 125     0.2257      0.018             200     0.9530      0.010
+ 128     FAILED
+```
+
+Three readings follow, and the first two retire standing explanations.
+
+**The symmetry cell is quiescent for most of the run.** Through step 85 it holds
+`rho1/rho2` to within 0.2% of unity and carries β\* at a thousandth of the line
+maximum. Whatever sets the ceiling does not act gradually from the start.
+
+**The sensor is not blind at the fold.** During the excursion β\* at the origin
+reaches the domain maximum, 1.000, in both surviving configurations. The
+[detector account](#where-the-spherical-loss-comes-from) proposed that δ⁴'s poor
+selectivity was supplying a background regularization at the fold, where the
+field is smooth and even by construction and a selective detector correctly
+returns almost nothing. The first half is right — β\* is negligible there while
+the field is smooth — and the conclusion is not: when the field stops being
+smooth the sensor responds, under either detector.
+
+**Every configuration has the excursion; the ceiling is whether the cell
+survives it.** `:delta4` at cfl 0.3 and `:d8` at cfl 0.25 both pass through it
+and continue to `t_final`. `:d8` at cfl 0.3 enters it around forty steps earlier
+and the cell evacuates within one sampling interval, `rho1/rho2` falling
+1.3089 → 0.2257 with the internal energy reaching −6335 e₀.
+
+### The excursion is physical, not grid-scale
+
+Peak of β\*1/max under refinement, `:delta4` at cfl 0.3:
+
+```
+N      step   t          peak b*1/max
+128      58   0.377-0.382    1.000
+256     160   0.392-0.395    1.000
+512     342   0.393-0.395    0.950
+```
+
+The step number scales with N while the time does not: the excursion lands at
+t ≈ 0.394 at every resolution, converging as the grid refines, and its amplitude
+relative to the line maximum weakens. It is a resolved feature of the warm start
+at t₀ = 0.3 rather than a grid-scale artifact, which is consistent with
+[the restriction being a startup one](#where-the-restriction-originates) and
+with `StepControl(retries = 4)` beating a globally lowered CFL.
+
+### Where the regularization goes at the moment of failure
+
+β\* is proportional to the density by construction, `C_beta * rho * sensor`
+(`src/artificial.jl:502`). At the failing step the symmetry cell has thinned to
+0.23 of its neighbour, and β\* there has fallen 0.304 → 0.018 of the line
+maximum while the cell is the worst in the domain. The step-126 profile puts
+ρ = 38.1 at the origin against 136.7 and 162.1 at the next two cells, with the
+velocity there reversed to +1.19 against −0.51 alongside.
+
+An evacuating cell therefore suppresses its own regularization. This is Cook's
+formulation working as specified rather than a defect, and it is a mechanism
+consistent with the numbers rather than a demonstrated cause: establishing it
+requires a β\* that does not vanish with the density, which has not been run.
+The immediate consequence for the roadmap is that the origin ceiling looks like
+a robustness problem at a symmetry cell under a startup transient, which is
+[model debt 2](ROADMAP.md), not a discretization-order problem.
 
 ## Measured against the reference implementation
 
@@ -854,16 +1033,19 @@ maximum, and the run loses density three steps later.
 This is the mechanism already recorded under
 [where the restriction originates](#where-the-restriction-originates), not a
 new one: the restriction is a symmetry-plane startup problem, and `:d8` moves
-its threshold rather than its character. The reading that fits every number
-here is that δ⁴'s poor selectivity was doing double duty. It was also
-supplying a background regularization at the coordinate fold, where the field
-is smooth and even by construction and a selective detector correctly returns
-almost nothing. Removing that background helps at a wall and at the axis and
-hurts at the origin, which is the fold whose closure is third order against a
-sixth- or tenth-order interior and which
-[Geometry limits](#geometry-limits) already records as the least forgiving.
-That closure remains the untested candidate for the whole restriction, and
-this measurement raises rather than lowers the value of testing it.
+its threshold rather than its character. The reading offered here was that δ⁴'s
+poor selectivity was doing double duty, also supplying a background
+regularization at the coordinate fold, where the field is smooth and even by
+construction and a selective detector correctly returns almost nothing.
+
+**Half of that reading is now measured wrong.** β\* is indeed negligible at the
+fold while the field is smooth, but the symmetry cell does not fail while the
+field is smooth: it fails during a startup excursion, and during that excursion
+β\* at the origin reaches the *line maximum* under both detectors. The sensor is
+not blind there. The fold closure the paragraph pointed at is not third order
+either. Both corrections are in
+[the origin cell is a startup transient](#the-origin-cell-is-a-startup-transient)
+and [the fold closure is not third order](#the-fold-closure-is-not-third-order).
 
 #### What the detector cannot help with
 
@@ -914,8 +1096,102 @@ for converging shocks rests on the spherical case alone, and that is the case
 a detector that changes the sensor's spatial support by this much has no claim
 on them. Two things would settle it: `C_beta` refit under `:d8`, and an
 account of the origin cell good enough to say whether the loss is the detector
-or the third-order fold closure. The evidence above says the latter, in which
-case fixing the closure would leave `:d8` better everywhere.
+or the third-order fold closure.
+
+Both have since been done, and neither settles it the way this paragraph
+expected. The [refit](#the-c_beta-refit-under-d8) retains `C_beta = 1.0` and
+finds no value in 0.25–4 that recovers the origin. The
+[account of the origin cell](#the-origin-cell-is-a-startup-transient) retires
+the closure and the blind-sensor reading together: the closure is sixth to
+seventh order at the fold, and β\* there reaches the line maximum during the
+excursion that fails. What the two leave is a symmetry cell that evacuates
+under a startup transient every configuration goes through, which is a
+robustness question rather than a detector question. `:delta4` remains the
+default because it survives that excursion at a larger timestep, not because
+anything has been shown wrong with `:d8`.
+
+#### The C_beta refit under `:d8`
+
+`bench/artcal.jl beta` and `bench/artcal.jl beta detector=d8`, back to back on
+one machine. The `:delta4` column is a fresh control rather than the
+[C_beta table](#c_beta--the-shock-constant) above, and it reproduces the
+`:delta4` row of the detector comparison in every column, so the two detectors
+are separated by one variable.
+
+```
+                :delta4                                  :d8
+C_beta   Noh1 deficit  Noh3 plat  contact  Shu     Noh1 deficit  Noh3 plat  contact  Shu
+0.25        +56%        1.0098    0.0041  1.6408      +33%          NaN     0.0039  1.6489
+0.5         +61%        0.9931    0.0045  1.6297      +44%          NaN     0.0041  1.6420
+1.0   *     +64%        0.9751    0.0053  1.6180      +53%        0.9951    0.0044  1.6360
+2.0         NaN           0.9569  0.0063  1.6055      +58%        0.9767    0.0046  1.6300
+4.0         NaN           0.9408  0.0074  1.5945      +62%        0.9578    0.0051  1.6232
+```
+
+The viable window moves rather than the optimum inside it. Under `:delta4` the
+window is bounded above by planar Noh, which fails at 2.0, and runs 0.25 to 1.0.
+Under `:d8` it is bounded *below* by the two converging geometries, which fail
+at 0.5 and at 0.25, and runs 1.0 to 4.0 without reaching an upper bound in the
+sample. **The two windows intersect in the single value 1.0**, which is the
+shipped one.
+
+`:d8` also flattens the response to the constant on every smooth measure. Over
+0.25 → 4 the contact broadens 31% under `:d8` against 80% under `:delta4`, the
+Shu–Osher train loses 1.6% against 2.8%, and Lax L1 moves 4.7e-3 → 4.9e-3
+against 4.8e-3 → 5.4e-3. A detector that declines to fire on resolved structure
+makes the resolved structure less sensitive to how hard the sensor is driven,
+which is the behaviour it was adopted for, measured on the constant instead of
+on the cases.
+
+The CFL ladder is where the refit answers the question it was run for:
+
+```
+             nu = 1    nu = 2                nu = 3
+C_beta    :d4  :d8   :d4     :d8          :d4   :d8
+0.25      1.0+ 1.0+  1.0     0.4 only     0.2   none
+0.5       0.4  1.0+  0.4     >= 0.4       0.25  none
+1.0  *    0.25 1.0+  0.2     1.0+         0.4   0.25
+2.0       none 1.0+  none    0.4          0.3   0.3
+```
+
+No `C_beta` in the sample recovers the spherical origin under `:d8`. The best
+available is 0.3 at `C_beta = 2`, still below the 0.4 that `:delta4` reaches at
+the shipped constant, and it is bought at 2.33% ν = 3 plateau error against
+0.49%, the ν = 2 ceiling falling from 1.0+ to 0.4, 0.4% of the Shu–Osher train
+and five points of wall heating. **`C_beta = 1.0` is retained under `:d8`**, and
+the detector decision falls entirely to the origin cell, as the cost section
+above anticipated.
+
+One further reading favours the detector and was not visible before the ladder
+existed. At `C_beta = 1.0` the *worst* geometry improves under `:d8`, 0.2 to
+0.25, because ν = 2 rises from 0.2 to beyond 1.0 while ν = 3 falls from 0.4 to
+0.25. A user who does not know which geometry is ahead is better off under
+`:d8`; the case against it is specifically the converging spherical one.
+
+##### A failure that gets worse as the timestep falls
+
+Two cells of the `:d8` ladder are not ceilings. At `C_beta = 0.25`, ν = 2
+completes at cfl = 0.4 and fails at 1.0 and at everything from 0.3 down; at
+`C_beta = 0.5` it completes at 1.0 and 0.4 and fails from 0.3 down. Both were
+re-run against a probe separating the two ways `m_noh` returns NaN, and every
+one of those cells is a genuine positivity loss rather than the step cap. The
+sweep now prints the step cap as `Inf` so the distinction survives.
+
+A CFL-type stability restriction cannot produce a failure that appears only
+*below* a CFL. A per-*step* operation can, because a fixed physical interval
+integrated at half the timestep applies it twice as many times. The sign of the
+dependence is the evidence here; the accumulation itself has not been measured
+step by step, which `bench/nohprobe.jl` could do.
+
+The obvious per-step operation is the compact filter, which runs once per step
+at `filter_interval = 1` and is already recorded as removing energy per
+application rather than per unit time, so that its effective dissipation depends
+on the CFL number and does not converge as dt → 0 at fixed resolution. That is
+[model debt 1](ROADMAP.md), reached from a direction it was not expected from.
+
+This was first written up as support for the fold closure, which
+[has since been measured](#the-fold-closure-is-not-third-order) at sixth to
+seventh order and retired. The observation stands; its attribution does not.
 
 ### The sensors read |S|, not the velocity and the dilatation
 
@@ -1253,9 +1529,13 @@ Construction of the validation battery identified two geometry limits.
 initialized as a top hat with a 1–2 cell transition loses positivity within
 tens of steps; at 3 cells and wider it runs to completion. The cylindrical axis
 accepts a 1-cell transition, and the same top hat completes in
-Cartesian, so this is specific to the origin fold and its antipodal pairing —
-where a discontinuity is being differentiated through a fold whose closure is
-third order. `test/cases.jl` therefore initializes Sedov with a Gaussian deposit.
+Cartesian, so this is specific to the origin fold and its antipodal pairing.
+The explanation offered here was that the fold's closure is third order, which
+[is not the case](#the-fold-closure-is-not-third-order): the fold is sixth to
+seventh order and the most accurate region of the line. The limit itself is
+measured and stands; why the origin fold is less forgiving than the cylindrical
+axis remains open, and is item 5 below. `test/cases.jl` therefore initializes
+Sedov with a Gaussian deposit.
 
 **The spherical origin is incompatible with the singular t = 0 start of Noh.** Every
 CFL and every constant setting fails; the exact solution requires 64× compression
@@ -1269,14 +1549,14 @@ cylindrical axis accepts the cold start at 16× compression.
 | Constant | Default | Keep? | Notes |
 |---|---|---|---|
 | `C_mu` | 0.002 | yes | TGV at 128³ gives an optimum of 0.004 ± 0.003, which contains 0.002; values above 0.008 are unstable in spherical Noh. |
-| `C_beta` | 1.0 | yes | Accuracy optimum near 0.4; use 0.5 for interface-dominated work and avoid zero. |
+| `C_beta` | 1.0 | yes | Accuracy optimum near 0.4; use 0.5 for interface-dominated work and avoid zero. The constant trades the planar and cylindrical CFL ceilings against the spherical one, and 1.0 is the value that maximizes the spherical one. Refit under `:d8`, where the viable window moves from 0.25–1.0 up to 1.0–4.0 and intersects the `:delta4` window only at the shipped value. [Measurements](#the-c_beta-refit-under-d8). |
 | `C_kappa` | 0.01 | yes | 0.02–0.04 measurably reduces wall heating; avoid zero. |
 | `C_D` | 0.01 | yes | The compact filter dominates interface broadening, so sensitivity to `C_D` is weak. |
 | `mu_sensor` | `:strain` | yes | `:velocity` is the reference field and recovers the detector's full designed selectivity, which `:strain` destroys through the cusps of \|S\|; it then moves no column of the battery past the fourth digit, because no case there gives the shear channel anything to do. On Taylor–Green it raises the μ\* share of the sink 4.5% → 6.0% for +46% on the sensor phase. [Measurements](#the-sensors-read-s-not-the-velocity-and-the-dilatation). |
 | `beta_sensor` | `:strain` | yes | `:gated_strain` raises the cylindrical Noh CFL ceiling from 0.15 to 0.2 for one pointwise pass and is otherwise a wash; `:dilatation` buys 0.25% of the Shu–Osher wave train and loses both converging Noh geometries at the fold; `:ungated_dilatation`, the reference form, keeps the origin and still loses the axis, improves the ν = 3 plateau and the Lax contact, and costs 0.5% of the Shu–Osher train and 1.5% of the Woodward peak. |
 | `reduction` | `:sum` | yes | `:max` is the reference's directional reduction. Identical in one dimension, so the whole battery is blind to it; on Taylor–Green it cuts the μ\* share 4.5% → 2.7% and moves the dissipation peak from t = 8.49 to 8.97 against a reference peak at t = 9. |
 | `smoother` | `:gaussian` | yes | Changed from `:compact` in August 2026. Raises the spherical-origin CFL ceiling 0.15 → 0.4 and the cylindrical 0.15 → 0.2, cuts the sensor phase 29%, and improves every Noh plateau and pre-shock L1. Costs wall heating at ν = 1 (+58 → +64%) and ν = 2 (+41 → +56%), improves it at ν = 3 (+31 → +27%), and moves the two stored cases by 1–3% of their L1. `C_kappa` cannot recover the wall heating. |
-| `detector` | `:delta4` | provisionally | `:d8` improves six of seven battery columns and removes the artificial-property CFL restriction outright at the planar wall and the cylindrical axis (0.2 → 1.0+), at 40% of the spherical-origin timestep (0.4 → 0.25) and +19% on the right-hand side. Held at `:delta4` pending a `C_beta` refit and an account of the origin cell. [Measurements](#the-ringing-detector-is-an-eighth-derivative-not-a-fourth-difference). |
+| `detector` | `:delta4` | provisionally | `:d8` improves six of seven battery columns and removes the artificial-property CFL restriction outright at the planar wall and the cylindrical axis (0.2 → 1.0+), at 40% of the spherical-origin timestep (0.4 → 0.25) and +19% on the right-hand side. The `C_beta` refit is [done](#the-c_beta-refit-under-d8): 1.0 is retained, no value in 0.25–4 recovers the origin, and the worst geometry improves 0.2 → 0.25 under `:d8`. Held at `:delta4` on the origin cell alone. [Measurements](#the-ringing-detector-is-an-eighth-derivative-not-a-fourth-difference). |
 | `cfl` | 0.5 | **no** | Use 0.3 with shocks and `StepControl(retries = 4)` for recovery. Converging geometry now tolerates 0.4 (spherical) and 0.2 (cylindrical) under the default smoother. |
 
 Remaining items, in approximate priority order:
@@ -1287,7 +1567,11 @@ Remaining items, in approximate priority order:
    A timestep predictor, a larger `C_beta`, and a dilatation-built β\* have all
    been measured against it and none moves the ceiling; gating the existing
    sensor on compression (`:gated_strain`) moves it for the cylindrical
-   geometry only, 0.15 to 0.2, and does so by relieving the axis cell. Widening
+   geometry only, 0.15 to 0.2, and does so by relieving the axis cell. A
+   *smaller* `C_beta` does move it, which the one-sided earlier test missed:
+   0.25 lifts ν = 1 past 1.0 and ν = 2 to 1.0 while cutting ν = 3 to 0.2, so
+   the constant trades the ceilings against each other rather than raising them
+   ([the ladder](#the-cfl-ladder-per-constant)). Widening
    the sensor stencil was the standing hypothesis and is now ruled out: β\*
    already reaches three to five times further ahead of the front than the
    damage extends, and sits at or near its own domain maximum on the cell that
@@ -1299,11 +1583,26 @@ Remaining items, in approximate priority order:
    ν = 1 is unmoved at 0.2. **The eighth-derivative detector has since been
    measured** and moves ν = 1 and ν = 2 from 0.2 to 1.0 or beyond, which is the
    restriction lifted rather than raised, while moving ν = 3 from 0.4 to 0.25.
-   That leaves the fold closure as the one candidate still standing and as the
-   thing now worth testing first: the failure under `:d8` is at the origin cell
-   with β\* at 1.8% of its maximum, the origin closure is third order against a
-   sixth- or tenth-order interior, and it is the only geometry of the three
-   that the detector costs anything.
+   **The fold closure, which stood as the last candidate, has since been
+   measured and retired.** It is sixth to seventh order at the fold and three to
+   five orders of magnitude more accurate than the interior; the third-order
+   number attributed to it belongs to the outer wall, through a global max norm
+   ([the measurement](#the-fold-closure-is-not-third-order)). The companion
+   reading, that a selective detector is blind at the fold, is retired by the
+   same pass: β\* at the origin reaches the *line maximum* during the excursion
+   that fails ([the probe](#the-origin-cell-is-a-startup-transient)).
+
+   What the origin cell actually does is evacuate during a startup transient
+   that lands at t ≈ 0.394 regardless of resolution and that every
+   configuration passes through, surviving or not. No discretization-order
+   candidate remains. The two live leads are the density proportionality of
+   β\*, which suppresses the regularization of exactly the cell that is
+   thinning, and the per-step compact filter, which the `C_beta` ladder
+   implicates from another direction: under `:d8` at reduced `C_beta` the
+   cylindrical axis fails *below* a CFL rather than above one
+   ([the measurement](#a-failure-that-gets-worse-as-the-timestep-falls)), and a
+   per-step operation is what produces that sign. Both leads point at item 4
+   and at model debt 2 rather than at the numerics of the fold.
 2. Make the κ\* construction non-singular as T_ion → 0. It is an EOS dispatch
    point as of the Phase 1 work, so a tabular model can already supply its own;
    the gas models still divide by the temperature.
@@ -1319,14 +1618,13 @@ Remaining items, in approximate priority order:
    under-resolved data than the cylindrical axis fold.
 6. Refit under the adopted smoother, and decide the detector.
    `smoother = :gaussian` is the shipped default as of August 2026; what it did
-   not come with is a refit. A `C_mu` sweep under it has still not been run,
-   and `C_beta` and `C_D` were not swept either, the former because its optimum
-   is broad and its upper bound is a stability bound that has since moved
-   favourably, the latter because the filter dominates interface broadening.
-   `detector = :d8` now needs the same treatment and needs it more: it changes
-   the sensor's spatial support far more than the smoother did, and the
-   decision on whether it becomes the default turns on a `C_beta` refit and on
-   the origin cell of item 1 rather than on any further battery run. The sensor
+   not come with is a refit. `C_beta` has since been swept under it and under
+   `:d8`, retaining 1.0 in both ([measurements](#the-c_beta-refit-under-d8)); a
+   `C_mu` sweep under the Gaussian has still not been run, and `C_D` was not
+   swept because the filter dominates interface broadening. The detector
+   decision no longer waits on the constant. It waits only on the origin cell
+   of item 1, since no `C_beta` in 0.25–4 recovers the spherical ceiling under
+   `:d8`. The sensor
    fields are a third setting in the same class and the clearest case for it:
    `mu_sensor = :velocity` moves the μ\* share of the Taylor–Green sink by a
    third with `C_mu` held fixed, so what it is worth cannot be read off until
