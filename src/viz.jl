@@ -31,9 +31,15 @@ primitives (`:rho`, `:p`, `:T_ion`, `:c`, `:u`, `:v`, `:w`), the per-species
 `:divergence`, `:vorticity_magnitude`, `:qcriterion`, `:schlieren`,
 `:strain_mag`, `:sensor`, `:mu_art`, `:beta_art`, `:kappa_art`).
 
+`species` selects the array for `:Y` and `:D_art` and is ignored by every other
+name.
+
 Collective: it calls [`refresh_primitives!`](@ref), and a derived name runs the
 gradient pass (and `compute_artificial!` for an artificial coefficient) that the
-name needs. The returned array is a fresh copy, safe to keep past the next step.
+name needs. The gradient pass overwrites `solver.grad_u`, and the artificial
+pass additionally overwrites the artificial coefficient and sensor fields and the
+`tmp_a`/`tmp_b` scratch; `compute_rhs!` rebuilds all of them at every stage. The
+returned array is a fresh copy, safe to keep past the next step.
 """
 function field_array(solver::Solver, Q, name::Symbol; species::Int=1)
     if _wants_gradients(name) || _wants_artificial(name)
@@ -91,11 +97,16 @@ coordinate vectors and the `length(x1) × length(x2)` matrix of values; returns
 replicated reduction. The in-plane axes are the two dimensions other than
 `normal`, in increasing order (for `normal = 3` they are dimensions 1 and 2).
 
-The coordinates are the metric's own — `(r, θ)`, `(r, φ)`, or a Cartesian pair —
+The coordinates are the metric's own, `(r, θ)`, `(r, φ)`, or a Cartesian pair,
 so a curvilinear slice is on a coordinate surface. Pass the result through
-[`cartesian_slice`](@ref) to resample it onto a Cartesian grid for a heatmap.
+[`cartesian_slice`](@ref), along with the in-plane dimension pair, to resample it
+onto a Cartesian grid for a heatmap.
 
-Collective (see [`field_array`](@ref)); every rank must call it.
+`index` is a global index and must lie in `1:n_global[normal]`; an index outside
+that range throws `ArgumentError`, as does a `normal` outside `1:3`.
+
+Collective (see [`field_array`](@ref)); every rank must call it, including a rank
+whose block holds no part of the requested plane.
 """
 function field_slice(solver::Solver, Q, name::Symbol; normal::Int=3, index::Int=1,
                      species::Int=1)
@@ -110,9 +121,9 @@ function field_slice(solver::Solver, Q, name::Symbol; normal::Int=3, index::Int=
     a, b = _plane_dims(normal)
     na, nb = decomp.n_global[a], decomp.n_global[b]
     # Assemble the global plane by having each rank that owns the slice scatter
-    # its local block into a zeroed global array, then sum across the whole
-    # communicator. A slice is two-dimensional and cheap, so the O(na·nb)
-    # all-reduce is not a concern, and it needs no per-dimension gather logic.
+    # its local block into a zeroed global array, then sum onto rank 0. A slice
+    # is two-dimensional and cheap, so the O(na·nb) reduction is not a concern,
+    # and it needs no per-dimension gather logic.
     plane = zeros(Float64, na, nb)
     local_i = index - decomp.offset[normal]
     if 1 <= local_i <= decomp.n_local[normal]
@@ -145,29 +156,34 @@ end
 # --- Curvilinear slice → Cartesian raster -----------------------------------
 
 """
-    cartesian_slice(metric, dims, x1, x2, values; n = 400, fill = NaN)
-        -> (X, Y, grid)
+    cartesian_slice(metric, dims, x1, x2, values; n = 400, fill = NaN,
+                    period = nothing) -> (X, Y, grid)
+    cartesian_slice(solver, dims, x1, x2, values; period = :auto, kwargs...)
 
-Resample a coordinate-surface slice — the `(x1, x2, values)` triple from
-[`field_slice`](@ref) — onto a uniform Cartesian raster suitable for a heatmap.
-`dims` is the `(a, b)` pair of in-plane dimensions the slice spans (as returned
-alongside it), which fixes how `metric` maps a coordinate pair to a Cartesian
-position. Returns the two Cartesian axis vectors `X`, `Y` (length `n`) and the
-`n × n` grid, with `fill` (default `NaN`, which renders transparent) outside the
-sampled region.
+Resample a coordinate-surface slice, the `(x1, x2, values)` triple from
+[`field_slice`](@ref), onto a uniform Cartesian raster suitable for a heatmap.
+`dims` is the `(a, b)` pair of in-plane dimensions the slice spans: the two
+dimensions other than `field_slice`'s `normal`, in increasing order, so
+`normal = 3` gives `(1, 2)`. It fixes how `metric` maps a coordinate pair to a
+Cartesian position. Returns the two Cartesian axis vectors `X`, `Y` (length `n`)
+and the `n × n` grid, with `grid[i, j]` the value at `(X[i], Y[j])` and `fill`
+(default `NaN`, which renders transparent) outside the sampled region.
 
-For a `CartesianMetric` the mapping is the identity and the values are
-interpolated onto the axis-aligned raster directly. For a cylindrical `(r, θ)`
-or spherical `(r, θ)`/`(r, φ)` plane the raster covers the physical disk or
-annulus and each cell is filled by bilinear interpolation in the coordinate
-values. For a collapsed radial calculation with no resolved angle to slice, use
-[`revolve_profile`](@ref) instead.
+The polar mapping is applied only when `dims == (1, 2)`: the cylindrical
+`(r, θ)` plane, whose raster covers the physical disk or annulus, and the
+spherical `(r, θ_polar)` meridian, mapped to `X = r sin θ`, `Y = r cos θ` and so
+covering a half-disk or half-annulus. Every other pair, including a
+`CartesianMetric` plane and a spherical `(r, φ)` one, is treated as already
+Cartesian and rastered on its own axes. Raster cells are filled by bilinear
+interpolation in the coordinate values either way. For a collapsed radial
+calculation with no resolved angle to slice, use [`revolve_profile`](@ref)
+instead.
 
 The second in-plane coordinate `x2` is treated as periodic when `period` is
 given (its full period, e.g. `2π` for an azimuth): a wrapped node is appended so
 the raster has no unfilled wedge across the `x2[end] → x2[1]` seam. The
-`solver`-taking method fills `period` automatically for a periodic angular
-dimension.
+`solver`-taking method fills `period` from the grid when the second in-plane
+dimension is active and periodic, and passes `nothing` otherwise.
 """
 function cartesian_slice(metric::Metric, dims::Tuple{Int,Int},
                          x1::AbstractVector, x2::AbstractVector,
@@ -225,14 +241,18 @@ end
 Revolve a one-dimensional radial profile into a two-dimensional axisymmetric
 raster: the `(axis, disk)` pair a heatmap draws as a disk of radius
 `radius[end]`, with `values` interpolated radially and `fill` (default `NaN`,
-transparent) outside. This is the view for a collapsed radial calculation — the
-azimuthally symmetric run of the [radial coordinate tutorial](@ref
-"Setting up a radial acoustic pulse") or the converging shock — where there is no resolved
-angle to slice with [`field_slice`](@ref); the field is a function of ``r``
-alone and the disk is its surface of revolution.
+transparent) outside. This is the view for a collapsed radial calculation, such
+as the azimuthally symmetric run of the [radial coordinate tutorial](@ref
+"Setting up a radial acoustic pulse") or the converging shock, where there is no
+resolved angle to slice with [`field_slice`](@ref). The field is a function of
+``r`` alone and the disk is its surface of revolution.
 
-`radius` must be sorted ascending. Use [`line_profile`](@ref) to obtain the
-`(radius, values)` pair from a running solver.
+`axis` is the length-`n` Cartesian axis spanning `[-radius[end], radius[end]]`
+and `disk` the `n × n` raster over it. `radius` must be sorted ascending and of
+the same length as `values`; a length mismatch throws `ArgumentError`. Radii
+inside `radius[1]` take `values[1]`. Use [`line_profile`](@ref) to obtain
+the `(radius, values)` pair from a running solver. This is a pure function and
+performs no communication.
 """
 function revolve_profile(radius::AbstractVector, values::AbstractVector;
                          n::Int=400, fill=NaN)
@@ -333,36 +353,43 @@ function _makie_required(name)
 end
 
 """
-    profileplot(solver, Q, name; dim = 1, species = 1, kwargs...) -> (figure, axis, plot)
+    profileplot(solver, Q, name; dim = 1, species = 1, figure = (;), axis = (;),
+                kwargs...) -> (figure, axis, plot)
     profileplot!(axis, solver, Q, name; dim = 1, species = 1, kwargs...) -> plot
 
 Plot the [`line_profile`](@ref) of the named scalar along `dim`. `profileplot`
 builds a figure with axis labels drawn from the metric (`r`/`θ`/`z` for
 cylindrical, `r`/`θ`/`φ` for spherical, `x`/`y`/`z` for Cartesian);
-`profileplot!` draws into an existing axis. Extra keyword arguments pass through
-to Makie's `lines!`.
+`profileplot!` draws into an existing axis. On `profileplot`, `figure` and `axis`
+are keyword collections forwarded to Makie's `Figure` and `Axis`. Extra keyword
+arguments pass through to Makie's `lines!`.
 
 Requires a Makie backend (see [`makie_available`](@ref)). Collective, because it
-extracts through [`field_array`](@ref); call it on every rank and add the result
-to a figure on rank 0.
+extracts through [`field_array`](@ref), so every rank must call it. A profile is
+replicated across ranks, so both forms return a plot on every rank; drawing on
+rank 0 is the convention.
 """
 profileplot(args...; kwargs...) = _makie_required("profileplot")
 profileplot!(args...; kwargs...) = _makie_required("profileplot!")
 
 """
-    fieldheatmap(solver, Q, name; normal = 3, index = 1, species = 1, kwargs...)
+    fieldheatmap(solver, Q, name; normal = 3, index = 1, species = 1,
+                 figure = (;), axis = (;), colorbar = true, kwargs...)
         -> (figure, axis, plot)
-    fieldheatmap!(axis, solver, Q, name; normal = 3, index = 1, kwargs...) -> plot
+    fieldheatmap!(axis, solver, Q, name; normal = 3, index = 1, species = 1,
+                  kwargs...) -> plot
 
-Plot the [`field_slice`](@ref) of the named scalar as a heatmap. For a Cartesian
-or collapsed-angular slice the coordinate axes are used directly; for a
-curvilinear slice the plane is resampled onto a Cartesian raster with
+Plot the [`field_slice`](@ref) of the named scalar as a heatmap. On a grid with
+a resolved angular dimension the plane is resampled onto a Cartesian raster with
 [`cartesian_slice`](@ref) and drawn with an equal data aspect, so a cylindrical
-`(r, θ)` plane renders as its physical disk. Extra keyword arguments pass through
-to Makie's `heatmap!`.
+`(r, θ)` plane renders as its physical disk; on every other grid the coordinate
+axes are used directly. On `fieldheatmap`, `figure` and `axis` are keyword
+collections forwarded to Makie's `Figure` and `Axis`, and `colorbar = false`
+omits the colorbar. Extra keyword arguments pass through to Makie's `heatmap!`.
 
-Requires a Makie backend (see [`makie_available`](@ref)). Collective; the plot
-is produced on rank 0 and the call returns `nothing` on other ranks.
+Requires a Makie backend (see [`makie_available`](@ref)). Collective, so every
+rank must call it; the plot is produced on rank 0 and both forms return
+`nothing` on other ranks.
 """
 fieldheatmap(args...; kwargs...) = _makie_required("fieldheatmap")
 fieldheatmap!(args...; kwargs...) = _makie_required("fieldheatmap!")

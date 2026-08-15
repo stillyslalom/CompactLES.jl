@@ -12,8 +12,12 @@ _ckpt_name(prefix::AbstractString, rank::Int) =
     save_checkpoint(solver, Q, prefix)
 
 Write the interior of `Q` plus (t, step) to `prefix.rNNNN.ckpt`, one file per
-rank. Collective only in the trivial sense that every rank writes; no
-communication is involved.
+rank, and return `prefix`. `NNNN` is the rank zero-padded to four digits, and an
+existing file of that name is truncated. Collective only in the trivial sense
+that every rank writes; no communication is involved.
+
+The header records the conserved count, the global and local extents, and this
+rank's Cartesian coordinates, all of which [`load_checkpoint!`](@ref) checks.
 """
 function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
     decomp = solver.decomp
@@ -42,8 +46,12 @@ end
 """
     load_checkpoint!(solver, Q, prefix)
 
-Restore the interior of `Q` and (t, step) from `prefix.rNNNN.ckpt`, verifying
-grid, decomposition, and conserved-layout compatibility.
+Restore the interior of `Q` and (t, step) from `prefix.rNNNN.ckpt`, and return
+`Q`. Halos are left untouched. The conserved count, the global grid, this rank's
+local extent and its Cartesian coordinates must all match the values in the
+header, so a checkpoint restores only onto the decomposition that wrote it; any
+mismatch throws. [`load_checkpoint_hdf5!`](@ref) is the decomposition-independent
+alternative.
 """
 function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
     decomp = solver.decomp
@@ -350,9 +358,10 @@ end
 
 """
 Scalar report variables that [`scalar_field`](@ref) resolves to a full padded
-array, in the order `save_vtk`'s error message lists them. The vector names
-(`:velocity`, `:vorticity`) and the species-expanded names (`:Y`, `:D_art`) are
-handled by [`vtk_field_entries`](@ref) and the viz wrappers, not here.
+array, in the order its error message lists them. The vector names (`:velocity`,
+`:vorticity`) are not among them, since `scalar_field` rejects those; the
+species-expanded names (`:Y`, `:D_art`) are omitted because they name one array
+per species, which [`vtk_field_entries`](@ref) and the viz wrappers expand.
 """
 const SCALAR_FIELD_NAMES = (:rho, :p, :T_ion, :c, :u, :v, :w, :mach, :divergence,
                             :vorticity_magnitude, :qcriterion, :schlieren,
@@ -362,16 +371,24 @@ const SCALAR_FIELD_NAMES = (:rho, :p, :T_ion, :c, :u, :v, :w, :mach, :divergence
     scalar_field(solver, name::Symbol; species=1) -> AbstractArray{<:Real,3}
 
 The full padded array of one named scalar report variable, read from the solver
-or derived from its gradient/artificial fields. This is the single catalog that
-both [`save_vtk`](@ref) (via `vtk_field_entries`) and the viz extraction API
+or derived from its gradient and artificial fields. This is the single catalog
+that both [`save_vtk`](@ref) (via `vtk_field_entries`) and the viz extraction API
 ([`field_array`](@ref)) resolve names through, so the two cannot drift.
+The constant `SCALAR_FIELD_NAMES` lists the names other than the per-species
+ones. An unrecognized name throws `ArgumentError`, as does a vector name such as
+`:velocity`.
 
-Stored primitives (`:rho`, `:p`, `:T_ion`, `:c`, velocity components `:u`/`:v`/
-`:w`), the per-species `:Y` and `:D_art` (selected by `species`), and derived
-scalars (`:mach`, `:divergence`, `:vorticity_magnitude`, `:qcriterion`,
-`:schlieren`, `:strain_mag`, `:sensor`, `:mu_art`, `:beta_art`, `:kappa_art`)
-are supported. The derived names assume the relevant gradient and artificial
-passes have already run; `save_vtk` and `field_array` arrange that.
+The stored fields are returned as the solver's own arrays rather than as copies,
+so writing to the result writes to the solver: `:rho`, `:p`, `:T_ion`, `:c`, the
+velocity components `:u`/`:v`/`:w`, the per-species `:Y` and `:D_art` (selected
+by `species`), and `:strain_mag`, `:sensor`, `:mu_art`, `:beta_art`,
+`:kappa_art`. The derived names `:mach`, `:divergence`, `:vorticity_magnitude`,
+`:qcriterion` and `:schlieren` allocate a new array, and assume the relevant
+gradient and artificial passes have already run; `save_vtk` and `field_array`
+arrange that, and `field_array` also copies in every case.
+
+`:schlieren` takes a derivative pass of its own, which is a distributed solve.
+That name therefore makes this call collective, and every rank must reach it.
 
 The result is valid only over the interior unless halos have been refreshed.
 """
@@ -436,12 +453,20 @@ function scalar_field(solver::Solver, name::Symbol; species::Int=1)
 end
 
 """
-    vtk_field_entries(solver, Q, name, rotate) -> Vector{(label, ncomponents, data)}
+    vtk_field_entries(solver, Q, name, rotate, ranges)
+        -> Vector{Tuple{String,Int,Vector{Float32}}}
 
-Expand one requested field name into the Float32 payloads written by `save_vtk`.
+Expand one requested field name into the Float32 payloads written by `save_vtk`,
+each entry a `(label, ncomponents, data)` triple. `ranges` holds the local
+interior indices to sample along each dimension, as `_output_ranges` returns
+them. `rotate` requests the rotation of a vector field's coordinate-aligned
+components into the Cartesian frame, which the curvilinear `.vts` grids need and
+the rectilinear ones do not; it has no effect on a scalar name.
+
 Most names produce a single entry via [`scalar_field`](@ref). `:Y` and `:D_art`
-produce one entry per species, and the vector fields produce one three-component
-entry.
+produce one entry per species, and `:velocity` and `:vorticity` produce one
+three-component entry. `Q` is taken for uniformity with the rest of the write
+path and is not read.
 """
 function vtk_field_entries(solver::Solver, Q, name::Symbol, rotate::Bool, ranges)
     E = Tuple{String,Int,Vector{Float32}}
@@ -489,9 +514,11 @@ _piece_name(prefix, rank, ext) = string(prefix, ".r", lpad(rank, 4, '0'), ext)
              slice = nothing)
 
 Write one piece per rank plus a parallel container on rank 0, as Float32 point
-data on the physical grid, including stretch mappings. Open the container in
-ParaView or VisIt: `prefix.pvtr`, or `prefix.pvts` when an angular dimension is
-resolved. This writes a single dump; use [`FieldWriter`](@ref) for a sequence.
+data on the physical grid, including stretch mappings, and return `prefix`. The
+pieces are `prefix.rNNNN.vtr` and the container `prefix.pvtr`, becoming `.vts`
+and `.pvts` when an angular dimension is resolved; an existing file of either
+name is truncated. Open the container in ParaView or VisIt. This writes a single
+dump; use [`FieldWriter`](@ref) for a sequence.
 
 `fields` selects what is written, as a tuple of names. The default is
 [`DEFAULT_VTK_FIELDS`](@ref). Available:
@@ -722,19 +749,24 @@ run!(solver, Q; tfinal = 2.5e-3,
 
 The first frame is written as `out/field_0000.pvtr` with its per-rank pieces, and
 each frame is recorded in `out/field.pvd`. Opening the `.pvd` in ParaView or
-VisIt animates against physical time; opening individual pieces animates against
-the frame index. [`EveryTime`](@ref) supplies an evenly spaced time schedule.
+VisIt animates against physical time; opening the numbered containers as a file
+series animates against the frame index instead. [`EveryTime`](@ref) supplies an
+evenly spaced time schedule.
 
 `fields`, `stride` and `slice` are passed through to [`save_vtk`](@ref), which
 documents the available names, the cost of each, how points are selected for
-subsampling, and what a slice writes. On a grid with a resolved angular
-dimension the container is `.pvts` rather than `.pvtr`, and the collection
-references it accordingly.
+subsampling, and what a slice writes. `pad` sets the width of the zero-padded
+frame number, and `collection = false` suppresses the `.pvd`. On a grid with a
+resolved angular dimension the container is `.pvts` rather than `.pvtr`, and the
+collection references it accordingly.
 
 Like the wrapped `save_vtk` call, this operation is collective and must run on
 every rank. A [`Callback`](@ref) provides that guarantee. The first dump creates
-`dirname(prefix)`. The `wall_io` field records cumulative output time; callback
-execution lies outside the interval recorded by `solver.wall_step`.
+`dirname(prefix)` if it does not already exist. Frame numbering starts at 0 for
+each new writer, so a second writer given the same prefix overwrites the earlier
+frames. The effect returns `false` and so never stops a run. The `wall_io` field
+records cumulative output time; callback execution lies outside the interval
+recorded by `solver.wall_step`.
 """
 mutable struct FieldWriter{F,S}
     prefix::String

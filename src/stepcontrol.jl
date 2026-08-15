@@ -52,13 +52,16 @@
 # plateau 2% of the exact value. Floors detect non-computation, not error.
 
 """
-Planck time in seconds, used as the unconditional failsafe floor on `dt`. A
-timestep below this value indicates numerical collapse for calculations
-expressed in physical units.
+Planck time in seconds, the unconditional failsafe floor on `dt`. `check_step`
+rejects any step not strictly greater than it whatever the rest of a
+[`StepControl`](@ref) says, so for a calculation expressed in physical units a
+step this small ends the run as numerical collapse.
 
-The floor is unit-independent. In a nondimensional calculation, 5.4e-44 serves
-only as a numerical failsafe rather than a physical scale. Calculations whose
-meaningful timestep is of comparable magnitude must set `dt_min` explicitly.
+The comparison is made against `dt` in whatever units the calculation carries.
+In a nondimensional calculation 5.4e-44 is a numerical failsafe rather than a
+physical scale, and a calculation whose meaningful timestep is of comparable
+magnitude cannot run at all: `dt_min` raises the floor and nothing lowers it,
+so such a problem has to be rescaled.
 """
 const PLANCK_TIME = 5.391247e-44
 
@@ -74,11 +77,13 @@ sequence and did not prevent failure in the measurements recorded at the top of
 this file.
 
 - `predict = 0.0` — steps of linear extrapolation of the CFL rate, compensating
-  for `compute_dt` seeing the artificial coefficients one step late. Measured:
-  no lookahead between 0 and 30 steps prevents the Noh failure at cfl = 0.3.
-- `max_growth = 0.0` — cap on how fast `dt` may grow between steps; 0 disables.
-  A value of 1.05 delayed the same failure from step 175 to 186 but did not
-  prevent it.
+  for `compute_dt` seeing the artificial coefficients one step late. The
+  extrapolation is one-sided and only ever raises the rate, so it can shorten a
+  step but never lengthen one. Measured: no lookahead between 0 and 30 steps
+  prevents the Noh failure at cfl = 0.3.
+- `max_growth = 0.0` — largest multiple of the previous step that `dt` may take;
+  0 disables the cap. A value of 1.05 delayed the same failure from step 175 to
+  186 but did not prevent it.
 
 ## Landing on a scheduled instant
 
@@ -88,15 +93,19 @@ this file.
   equal steps, with no step below `dt/2`. A value of 1 applies a hard clip and
   can produce an arbitrarily small step immediately before an output time.
   Larger values distribute the adjustment over more steps while operating
-  farther below the CFL limit. `tfinal` always uses a hard clip.
+  farther below the CFL limit. A value below 1 is rejected at construction.
+  `tfinal` always uses a hard clip.
 
 ## Floors
 
-- `dt_min = 0.0` — absolute floor. 0 means only [`PLANCK_TIME`](@ref) applies.
-- `dt_min_ratio = 1e-8` — floor relative to the largest `dt` this run has seen.
-  This detects collapse without prior knowledge of the problem's units or
-  scales. Physical variation in `dt` is generally a few orders of magnitude,
-  whereas a collapse spans ten or more in the measured cases.
+- `dt_min = 0.0` — absolute floor on `dt`; 0 disables it. The unconditional
+  [`PLANCK_TIME`](@ref) floor and the relative floor below apply either way.
+- `dt_min_ratio = 1e-8` — floor relative to the largest `dt` taken so far in
+  the current `run!` call; 0 disables it. This detects collapse without prior
+  knowledge of the problem's units or scales. Physical variation in `dt` is
+  generally a few orders of magnitude, whereas a collapse spans ten or more in
+  the measured cases. A rollback resets the reference, so after a retry the
+  floor measures the replacement trajectory alone.
 
 ## Recovery
 
@@ -104,9 +113,12 @@ this file.
   with a reduced CFL; 0 disables recovery. In the validation cases,
   `retries = 4` recovers every Noh geometry from `cfl = 0.9` in fewer steps than
   running the complete calculation at the lower stable CFL.
-- `cfl_backoff = 0.5` — CFL multiplier applied on each retry.
-- `savepoint_interval = 25` — steps between savepoints. Only allocated when
-  `retries > 0`; costs one extra state array.
+- `cfl_backoff = 0.5` — multiplier applied to the solver's current CFL on each
+  retry, so successive retries compound.
+- `savepoint_interval = 25` — steps between savepoints, counted on the solver's
+  step number. The savepoint costs one extra state array and is allocated only
+  when `retries > 0`; a value of 0 or less leaves the state on entry to `run!`
+  as the only rollback target.
 
 Rollback can recover an abrupt failure caused by an excessive initial CFL. It
 does not recover gradual degradation when the most recent savepoint already
@@ -140,7 +152,10 @@ end
 
 Thrown by [`run!`](@ref) when the timestep or the state fails a
 [`StepControl`](@ref) check and no retries remain. `reason` is one of
-`:nonfinite`, `:planck`, `:dt_min`, `:dt_collapse`, or `:negative_density`.
+`:nonfinite`, `:planck`, `:dt_min`, `:dt_collapse`, or `:negative_density`. The
+remaining fields record the state the check rejected: `step`, `t`, `dt`, `cfl`,
+and a `detail` string describing the failure, which `showerror` prints below the
+summary line.
 """
 struct SolverFailure <: Exception
     reason::Symbol
@@ -165,6 +180,9 @@ end
 
 """
 In-memory rollback point: the conserved state plus the clock that goes with it.
+`Q` is a private copy of the conserved array, which [`run!`](@ref) allocates
+when `StepControl.retries > 0` and refreshes in place at each savepoint; `t`
+and `step` are the solver clock at the moment of that copy.
 
 The CFL is excluded because reductions to it must persist across rollbacks and
 compound across retries; it remains on the solver when this state is restored.
@@ -176,10 +194,19 @@ mutable struct Savepoint{A}
 end
 
 """
-    check_step(control, dt, rate, rho_min, dt_seen, solver) -> Union{Nothing,SolverFailure}
+    check_step(control, dt, rho_min, dt_seen, step, t, cfl) -> Union{Nothing,SolverFailure}
 
-Apply the floors and the positivity check. Returns `nothing` when the step is
-acceptable. Pure: the caller decides whether to throw or to retry.
+Apply the floors and the positivity check to a proposed step. `dt` is the step
+about to be taken, `rho_min` the global minimum mixture density and `dt_seen`
+the largest `dt` this run has taken so far; `step`, `t` and `cfl` are recorded
+on the returned [`SolverFailure`](@ref) and are not tested. Returns `nothing`
+when the step is acceptable.
+
+Pure: the caller decides whether to throw or to retry. Not collective either,
+but every argument is a reduced quantity or advances identically on all ranks
+(`rho_min` and the rate behind `dt` come from the collective in
+[`max_rate`](@ref)), so the verdict agrees across the communicator and
+[`run!`](@ref) can roll back on it without deadlocking.
 """
 function check_step(control::StepControl, dt, rho_min, dt_seen, step, t, cfl)
     fail(reason, detail) = SolverFailure(reason, step, t, dt, cfl, detail)

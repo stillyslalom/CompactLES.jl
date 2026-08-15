@@ -1,6 +1,6 @@
 # Time integration: five-stage fourth-order low-storage Runge–Kutta
 # (Carpenter & Kennedy 1994), CFL-limited timestep, and the outer run loop
-# with per-step conservative-variable filtering.
+# with conservative-variable filtering every `filter_interval` steps.
 
 const RKA = (0.0,
              -567301805773.0 / 1357537059087.0,
@@ -24,7 +24,15 @@ const RKC = (0.0,
     predicted_dt(solver, control, rate) -> dt
 
 Turn a measured CFL rate into the step to take: extrapolate the rate forward by
-`control.predict` steps, then cap the growth against the previous step.
+`control.predict` steps, then cap the growth against the previous step. `rate`
+is the reduced rate from [`max_rate`](@ref); the result is `solver.cfl` divided
+by the extrapolated rate, capped at `control.max_growth * solver.dt_prev`.
+
+Each is skipped when its control is zero, which is the default for both, and
+also while `solver.rate_prev` and `solver.dt_prev` are still zero, which holds
+on a freshly built solver and after a rollback but not on a second `run!` of the
+same solver. The extrapolation is one-sided and only ever raises the rate; see
+the comment in the body. Nothing on the solver is modified here.
 """
 function predicted_dt(solver::Solver, control::StepControl, rate)
     r = rate
@@ -57,17 +65,25 @@ Workspace(Q::AbstractArray) = Workspace(zero(Q), zero(Q))
 Workspace(solver::Solver) = Workspace(allocate_state(solver), allocate_state(solver))
 """
     step!(solver, Q, dQ, du, dt, prepared=false)
+    step!(solver, Q, workspace, dt, prepared=false)
 
 Advance the conserved state by one five-stage, fourth-order low-storage
-Runge--Kutta step of size `dt`. `dQ` and `du` are caller-provided work arrays of
-the same shape as `Q`.
+Runge--Kutta step of size `dt`, returning `Q`. `dQ` and `du` are caller-provided
+work arrays of the same shape as `Q`, holding the stage right-hand side and the
+low-storage accumulator; both are overwritten during the step, as is `Q`. A
+[`Workspace`](@ref) supplies the pair. `solver.tstage` is left at
+`solver.t + dt`, and boundary conditions are enforced on `Q` at that time before
+returning; `solver.t` itself is not advanced, which [`run!`](@ref) does.
+
+Collective, since every stage evaluates [`compute_rhs!`](@ref).
 
 `prepared = true` asserts that boundary conditions are already enforced on `Q` at
 `solver.t` and that the primitive fields are current for it, which lets the first
 stage skip a halo exchange and a primitives pass. [`run!`](@ref) can assert this
-because [`max_rate`](@ref) has just performed both. A direct caller should leave
-the default in place unless it has performed both itself. The argument is
-positional for the reason given under [`compute_rhs!`](@ref).
+because it applies the boundary conditions itself immediately before calling
+[`max_rate`](@ref), which performs the exchange and the primitives pass. A direct
+caller should leave the default in place unless it has done the same. The
+argument is positional for the reason given under [`compute_rhs!`](@ref).
 """
 function step!(solver::Solver, Q, dQ, du, dt, prepared::Bool=false)
     decomp = solver.decomp
@@ -106,9 +122,15 @@ step!(solver::Solver, Q, workspace::Workspace, dt, prepared::Bool=false) =
 
 CFL-limited timestep from the acoustic (|u_d| + c) / (h_d · scalefactor_d)
 rate and a diffusive rate built from the current (possibly artificial)
-transport coefficients, reduced over all ranks. Calls `primitives!` so the
-estimate is EOS-aware; artificial coefficients lag by one step, which
-[`StepControl`](@ref) exists to compensate for.
+transport coefficients, reduced over all ranks. This is `solver.cfl` divided by
+the rate [`max_rate`](@ref) returns, discarding the density it returns
+alongside, so it carries that function's collective and its side effects on
+`Q`'s halos and on the primitive fields.
+
+The artificial coefficients are those left by the previous step, so the
+diffusive rate lags by one. `StepControl.predict` extrapolates against that lag
+and is off by default; the note at the top of `stepcontrol.jl` records the
+measurement behind that default.
 """
 compute_dt(solver::Solver, Q) = solver.cfl / max_rate(solver, Q)[1]
 
@@ -116,7 +138,13 @@ compute_dt(solver::Solver, Q) = solver.cfl / max_rate(solver, Q)[1]
     max_rate(solver, Q) -> (rate, rho_min)
 
 Global maximum of the CFL rate, and the global minimum mixture density taken
-directly from `Q`. Both quantities are evaluated in the same loop and collective.
+directly from `Q`. Both quantities are evaluated in the same loop and reduced by
+one `Allreduce`, so every rank must call this and all receive the same pair.
+
+Before the loop it exchanges `Q`'s halos and refreshes the primitive fields from
+`Q`, which [`run!`](@ref) relies on when it passes `prepared = true` to
+[`step!`](@ref).
+
 The direct density check is required because `primitives!` substitutes finite
 placeholders where ρ ≤ 0; the resulting CFL rate can remain finite after the
 state has lost positivity. Without this check, failure is not detected until
@@ -199,11 +227,24 @@ end
 """
     dt_report(solver, Q)
 
-Diagnostic companion to `compute_dt`: returns a NamedTuple naming the global
-timestep limiter — `(dt, rank, index, coords, dim, kind)` where `kind` is
-`:acoustic`, `:diffusive`, or `:curvature`. Periodic evaluation distinguishes a
-physical timestep restriction from one imposed by azimuthal spacing near a
-coordinate singularity; see the CFL discussion in the README.
+Diagnostic companion to [`compute_dt`](@ref), returning the NamedTuple
+`(dt, rank, index, coords, dim, kind)`. `dt` is the same limited timestep
+`compute_dt` returns and `rank` is the rank owning the point that set it; the
+lowest such rank is named if several tie. `index` is that point's rank-local,
+one-based interior index, `coords` its physical coordinates, `dim` the direction
+carrying the largest acoustic rate there, and `kind` is `:acoustic`,
+`:diffusive` or `:curvature`, whichever of the diffusive rate, the curvature rate
+and the acoustic rate in direction `dim` is largest, ties going to `:acoustic`.
+The acoustic entry in that comparison is the one direction, not the sum over
+directions that the selecting rate and `dt` are built from.
+
+Only `dt` and `rank` are global. The remaining four describe the calling rank's
+own local maximum, so read them from the rank named by `rank`.
+
+Collective: two `Allreduce`s, plus the halo exchange and primitives refresh that
+[`max_rate`](@ref) also performs. Periodic evaluation distinguishes a physical
+timestep restriction from one imposed by azimuthal spacing near a coordinate
+singularity; see the CFL discussion in the README.
 """
 function dt_report(solver::Solver, Q)
     decomp = solver.decomp
@@ -250,9 +291,16 @@ end
 
 """
     run!(solver, Q; tfinal, nmax=typemax(Int), callback=nothing, control=solver.control)
+    run!(solver, Q, workspace; tfinal, ...)
 
-Advance to `tfinal` (or `nmax` steps), filtering the conserved variables every
-`s.filter_interval` steps and invoking `callback` after each step.
+Advance until `solver.t` reaches `tfinal` or `solver.step` reaches `nmax`,
+filtering the conserved variables every `solver.filter_interval` steps and
+invoking `callback` after each step. `nmax` bounds the solver's step counter
+rather than the steps taken by this call, so a second `run!` on the same solver
+must raise it. Returns `Q`, which is advanced in place.
+
+The first form allocates a [`Workspace`](@ref) per call; pass `workspace` (as
+the third positional argument or the keyword of the same name) to reuse one.
 
 `callback` may be a bare `callback(solver, Q)` invoked every step (the original
 contract, return value ignored), a [`Callback`](@ref) pairing a trigger with an
@@ -267,12 +315,20 @@ none.
 below which the run is declared failed, and whether a failure is recoverable by
 rolling back and lowering the CFL. It defaults to the one the solver was built
 with. On an unrecoverable failure this throws [`SolverFailure`](@ref) rather
-than continuing with a collapsed timestep; see the implementation note at the
-top of this file.
+than continuing with a collapsed timestep; the note at the top of
+`stepcontrol.jl` records what that failure mode looks like and which of the
+three mechanisms was measured to help.
 
 When `control.retries > 0`, the CFL is lowered in place on each retry.
 Consequently, `solver.cfl` after a completed run records the value used to
 complete the calculation and can be supplied to the next run's `Numerics`.
+
+Each step updates `solver.t`, `solver.step`, `solver.dt_prev`,
+`solver.rate_prev`, `solver.tstage`, `solver.wall_step` and
+`solver.wall_total`; a rolled-back iteration records no wall time. The loop is
+collective through [`max_rate`](@ref) and the line solves beneath
+[`step!`](@ref), so every rank must call it with the same `tfinal`, `nmax` and
+callbacks.
 """
 function run!(solver::Solver, Q, workspace::Workspace;
               tfinal, nmax::Int=typemax(Int), callback=nothing,
@@ -431,8 +487,10 @@ Reading `dt · rate` rather than `solver.cfl` makes a shortened step filter
 proportionally less, which removes the truncated-final-step artifact in
 `bench/tgv_energy.jl`.
 
-`dt_prev == 0` before the first step, where the unrelaxed meaning is the only
-sensible one, so the weight is 1 there.
+The weight is also 1 whenever `dt_prev == 0`, since there is no step to scale
+against. That holds on a freshly built solver and after a rollback; inside
+`run!` the step is recorded before the filter runs, so the relaxed weight is in
+force from the first pass.
 """
 function filter_weight(solver::Solver{T}) where {T}
     solver.filter_cfl > 0 || return one(T)
@@ -445,9 +503,17 @@ end
 """
     filter_state!(solver, Q)
 
-Apply the compact filter to every conserved component along every active
-dimension, with batched per-dimension halo exchange and axis parity routing
-(ρu_r and ρu_θ are odd across the axis; everything else is even).
+Apply the compact filter to every conserved component of `Q` in place along every
+active dimension, with batched per-dimension halo exchange and fold parity
+routing from `cons_parity`: under the fold on the swept dimension each momentum
+component takes the antipodal sign of its own velocity component, and partial
+densities and energy are even. At the cylindrical axis this makes ρu_r and ρu_θ
+odd and everything else even.
+
+Collective, since each directional pass is a distributed line solve.
+`solver.tmp_a` is scratch here. The filtered result lands in the interior of `Q`
+only; each pass writes the halos from the exchange, so they are left
+inconsistent with the filtered interior until the next step exchanges again.
 
 Under a positive `filter_cfl` the result is relaxed toward the filtered state
 rather than replaced by it, with the weight [`filter_weight`](@ref) supplies.
@@ -491,11 +557,14 @@ end
 # Julia's signal handler and printing a dump of its own.
 
 """
-    mpi_main(body; comm = MPI.COMM_WORLD, exitcode = 1)
+    mpi_main(body; comm = MPI.COMM_WORLD, exitcode = 1, grace = 0.5)
 
 Run `body()` under a top-level error guard for large rank counts. Rank 0 prints a
 full backtrace, other failing ranks print one line, and the function then calls
-`MPI.Abort`. The return value is that of `body`.
+`MPI.Abort(comm, exitcode)`, which does not return. The return value on the
+successful path is that of `body`. A failing rank other than rank 0 sleeps
+`grace` seconds before aborting, so that rank 0's backtrace is not truncated by
+the abort; see the comment in the body.
 
 MPI drivers should use this guard to prevent an uncaught exception from
 producing a full backtrace on every rank. For interrupts, pass

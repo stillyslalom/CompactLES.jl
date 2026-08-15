@@ -16,12 +16,14 @@
 # the dilatation, neither of which carries an absolute value (see `velocity_mu!`
 # and `dilatation_beta!`). β* may also key on compression through a Ducros
 # switch (`gate_beta!`). Directions combine by Σ_d or by MAX, under
-# `ArtParams.reduction`. The Gaussian test filter is `smooth!`, selected by
-# `ArtParams.smoother`. Each species carries its own sensor and its own D*_k;
-# Σ_k J_k = 0 is then restored by the correction velocity in the flux assembly
-# (rhs.jl) rather than by giving every species the same diffusivity. Indices are
+# `ArtParams.reduction`. `smooth!` stands in for Cook's Gaussian test filter,
+# and `ArtParams.smoother` selects the operator it applies. With more than one
+# species, each carries its own sensor and its own D*_k; Σ_k J_k = 0 is then
+# restored by the correction velocity in the flux assembly (rhs.jl) rather than
+# by giving every species the same diffusivity. Under `:delta4`, indices are
 # clamped at closed physical edges, except for an odd field across a fold, which
-# takes the half-offset mirror; halos cover rank boundaries. On
+# takes the half-offset mirror; `:d8` uses the scheme's own closure rows there
+# instead. Halos cover rank boundaries. On
 # curvilinear grids the sensors are computed in computational space — a
 # grid-based rather than strictly physical-space regularization, standard
 # practice and consistent with resolving power following the mesh.
@@ -35,10 +37,11 @@ Cook-style artificial-property controls.
 
 # Keywords
 
-- `enabled`: compute and apply artificial properties. Set this to `false` to
-  skip the complete sensor and artificial-flux calculation.
-- `C_mu`: coefficient for artificial shear viscosity generated from the strain
-  sensor.
+- `enabled`: compute the artificial properties. Set this to `false` to skip the
+  sensor and coefficient calculation entirely; the four coefficient arrays then
+  stay zero and contribute nothing to the assembled fluxes.
+- `C_mu`: coefficient for artificial shear viscosity, multiplying whichever
+  sensor `mu_sensor` selects.
 - `C_beta`: coefficient for artificial bulk viscosity; this is the primary
   shock-spreading term.
 - `C_kappa`: coefficient for artificial conductivity generated from the
@@ -46,9 +49,11 @@ Cook-style artificial-property controls.
 - `C_D`: coefficient for per-species artificial diffusivity generated from
   mass-fraction sensors.
 - `mu_sensor`: how the μ\\* sensor is built. `:strain` is the Cook original,
-  Σ_d h_d²|δ⁴_d S| from the strain magnitude. `:velocity` is the reference
-  implementation's, built from the velocity components themselves and costing
-  three detector applications per direction instead of one (`velocity_mu!`).
+  h_d²|D_d S| from the strain magnitude reduced over directions, for the
+  detector D and the reduction the two fields below name. `:velocity` is the
+  reference implementation's, built from the velocity components themselves and
+  costing three detector applications per direction instead of one
+  (`velocity_mu!`).
   The two differ in the absolute value taken by |S|, which places a cusp
   wherever the strain passes through zero; a cusp is grid-scale structure at
   any resolution, so a sensor built from |S| responds to smooth flow.
@@ -113,7 +118,7 @@ const D4 = (1.0, -4.0, 6.0, -4.0, 1.0)   # offsets −2:2
 Interior reduction of h_d^wpow |δ⁴_d f| over the active directions into `out`,
 combined by Σ_d or by MAX according to `ArtParams.reduction` and combined with
 the existing contents when `accumulate`. Requires current rank-boundary halos
-of `f`.
+of `f` to depth 2; the kernel itself communicates nothing.
 
 `parity[d]` is the field's sign across a coordinate fold on dimension `d`,
 which is −1 only for a velocity component (`velocity_mu!`). It is applied at a
@@ -191,8 +196,9 @@ end
 
 The [`compact_d8`](@ref) counterpart of [`delta4_sum!`](@ref): reduces
 h_d^wpow |d⁸_d f| over the active directions into `out`, one distributed
-pentadiagonal line solve per direction. Requires current rank-boundary halos of
-`f` to depth 4.
+pentadiagonal line solve per direction, combined with the existing contents of
+`out` when `accumulate`, exactly as `delta4_sum!` does. Requires current
+rank-boundary halos of `f` to depth 4. Collective: every rank must call it.
 
 `parity[d]` is the field's antipodal sign across a fold on dimension `d`, and
 is `+1` for every even scalar the sensors are built from: the strain magnitude,
@@ -267,8 +273,14 @@ _detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, ::Tuple) =
     smooth!(f, solver)
 
 One directional smoother pass per active dimension, standing in for Cook's
-Gaussian test filter (even-parity axis fill along r when applicable). Which
-operator runs is `ArtParams.smoother`; see [`smooth_along!`](@ref).
+Gaussian test filter, applied to `f` in place and returned. A fold is crossed
+with even parity, which is correct for every field smoothed here: each is a
+detector output, and each detector ends in an absolute value. Which operator
+runs is `ArtParams.smoother`; see [`smooth_along!`](@ref).
+
+`solver.tmp_a` is scratch and is overwritten. Collective: the halos of `f` are
+exchanged along each active dimension, and under `smoother = :compact` the pass
+is itself a distributed line solve, so every rank must call this.
 """
 function smooth!(f, solver)
     for d in 1:3
@@ -289,9 +301,11 @@ end
     rho_sensor!(dest, solver, C)
 
 Write `C · ρ · max(sensor, 0)` over the interior of `dest` from the smoothed
-sensor `solver.sensor`, the form every Cook coefficient except κ\\* takes. The
-clamp is against a smoother that undershoots, not against a negative detector
-output: |δ⁴f| and |d⁸f| are non-negative by construction.
+sensor `solver.sensor`, the form μ\\* and β\\* take. κ\\* and D\\* carry their
+own scale in place of ρ, an EOS query and the sound speed respectively, and are
+assembled in `compute_artificial!` rather than here. The clamp is against a
+smoother that undershoots, not against a negative detector output: |δ⁴f| and
+|d⁸f| are non-negative by construction.
 """
 function rho_sensor!(dest, solver, C)
     o1, o2, o3 = solver.decomp.n_halo_d
@@ -313,10 +327,11 @@ end
 Rebuild `solver.mu_art` from the velocity components, replacing the strain
 form. Selected by `ArtParams(mu_sensor = :velocity)`.
 
-The sensor is the reduction of h_d |D_d u_j| over the nine (direction,
-component) pairs, smoothed as the strain sensor is; this is Miranda's `ringV`,
-and `ArtParams.reduction` chooses between its MAX and Cook's Σ. The weight is
-h rather than the strain form's h² because u carries one velocity derivative
+The sensor is the reduction of h_d |D_d u_j| over the (direction, component)
+pairs, three velocity components by each active direction and so nine pairs in
+a three-dimensional run, smoothed as the strain sensor is; this is Miranda's
+`ringV`, and `ArtParams.reduction` chooses between its MAX and Cook's Σ. The
+weight is h rather than the strain form's h² because u carries one derivative
 fewer than |S|, and the two agree at the grid scale: a grid-to-grid oscillation
 of amplitude A gives 16Ah either way, so `C_mu` transfers between the settings
 as a starting point.
@@ -328,10 +343,10 @@ factor of 1.8 of each other at every wavelength; applied to the velocity, they
 reproduce their designed separation of 569× at eight points per wavelength.
 `reference/CALIBRATION.md` has the response table.
 
-Cost is nine detector applications per RHS evaluation against the strain form's
-three, which under `detector = :d8` is nine pentadiagonal line solves. The
-strain magnitude itself is still computed, since `scalar_field(solver,
-:strain_mag)` exposes it as a diagnostic.
+Cost is one detector application per component per active direction, three
+times the strain form's, which under `detector = :d8` is three pentadiagonal
+line solves per direction instead of one. The strain magnitude itself is still
+computed, since `scalar_field(solver, :strain_mag)` exposes it as a diagnostic.
 
 Each call carries a parity, which distinguishes this from three further
 `detect_sum!` calls on scalars. A velocity component is odd across the fold
@@ -375,7 +390,8 @@ sensor to compression.
 
 `grad_u[d, j]` is ∂u_j/∂x_d, so the trace is the dilatation and the
 off-diagonal pairs are the curl. Both are already available wherever the
-sensors are built, which is why the switch is free.
+sensors are built, so the switch evaluates no further derivatives. `I` is a
+`CartesianIndex` into the padded arrays.
 """
 @inline function compression_switch(grad_u, I)
     @inbounds begin
@@ -398,18 +414,19 @@ Cook strain sensor that produced it untouched. Selected by
 This is the shock-switch half of the Mani, Larsson & Moin refinement without
 the sensor-field half. The two are separable and they do different things: the
 switch confines β\\* to compression, while changing the sensor from |S| to Δ
-also changes *how much* β\\* a given compression produces. The second half is
-what loses the coordinate folds — see `dilatation_beta!` — so this variant
-exists to take the first half alone.
+also changes *how much* β\\* a given compression produces. The second half
+loses the coordinate folds (see `dilatation_beta!`), so this variant takes the
+first half alone.
 
-Cost is one pointwise pass over the interior. No sensor, no smoothing, no line
-solve, in contrast to `:dilatation`.
+Cost is one pointwise pass over the interior of `solver.beta_art`, reading
+`solver.grad_u`. It builds no sensor, smooths nothing, runs no line solve and
+communicates nothing, unlike `:dilatation`.
 
-The switch cannot suppress β\\* at a cusp of |S|. The strain sensor is a fourth
-difference, so it peaks where |S| passes through zero with a kink, and the
+The switch cannot suppress β\\* at a cusp of |S|. The strain sensor is a
+high-pass, so it peaks where |S| passes through zero with a kink, and the
 vorticity generally vanishes there too, leaving only ε in the denominator. On a
-solenoidal Taylor–Green field this leaves 71 of 32768 points carrying β\\* — 0.6%
-of the summed total, but the full maximum. `reference/CALIBRATION.md` has the
+solenoidal Taylor–Green field this leaves 71 of 32768 points carrying β\\*:
+0.6% of the summed total, but the full maximum. `reference/CALIBRATION.md` has the
 measurement and why a relative ε does not help.
 """
 function gate_beta!(solver)
@@ -433,24 +450,36 @@ Rebuild `solver.beta_art` from a sensor built on the dilatation, replacing the
 strain form. Selected by `ArtParams(beta_sensor = :ungated_dilatation)` for
 `gated = false` and `= :dilatation` for `gated = true`.
 
-The sensor is the reduction of h_d² |δ⁴_d Δ| over the active directions, built
-from the dilatation Δ = ∇·u and smoothed as the strain sensor is. The ungated
-form is the one the reference implementation ships. The gated form multiplies it
-by `compression_switch` (Mani, Larsson & Moin, JCP 228, 2009; Kawai, Shankar &
+The sensor is the reduction of h_d² |D_d Δ| over the active directions, for the
+detector D named by `ArtParams.detector`, built from the dilatation Δ = ∇·u and
+smoothed as the strain sensor is. The ungated form is the one the reference
+implementation ships. The gated form multiplies it by `compression_switch`
+(Mani, Larsson & Moin, JCP 228, 2009; Kawai, Shankar &
 Lele, JCP 229, 2010), which restricts β\\* to compression, where bulk viscosity
 has a physical interpretation; `gate_beta!` applies that same switch to the
 unchanged strain sensor, which is the other half of the same refinement and a
 great deal cheaper.
 
-Either form differs from the strain sensor in what it measures rather than in
-where: the strain form fires on any fourth difference of |S|, and |S| takes the
-root-sum-square of components that Δ adds, so the two separate wherever a
-converging flow compresses along more than one axis at once.
+Either form applies the same detector, weights and smoothing as the strain
+sensor and differs only in the field underneath: Δ, the signed sum of the three
+diagonal strain components, in place of |S|, the root-sum-square of all nine.
+The two therefore respond differently in two ways. Δ carries no off-diagonal
+component and is signed, so pure shear leaves it at zero while reaching |S|, and
+compression on one axis against expansion on another cancels in Δ while adding
+in |S|. That is the sense in which the strain form places β\\* where nothing is
+being compressed, and the switch above corrects it. Δ also grows with
+the number of axes compressing at once where |S| grows as its square root:
+isotropic compression at rate a along n axes gives |Δ| = na against |S| = a√n.
+The converging geometries compress along two or three axes at once, so the
+second difference is largest there.
 
-Cost is one extra `delta4_sum!` and one extra `smooth!` per RHS evaluation —
-the latter is a compact filter solve per active dimension — whenever μ\\* still
-needs the strain sensor. `grad_u` supplies both Δ and ω, so the switch itself
-is free.
+Cost is one extra `detect_sum!` and one extra `smooth!` per RHS evaluation
+whenever μ\\* still needs the strain sensor. The smoothing is one pass per
+active dimension, and a line solve only under `smoother = :compact`. `grad_u`
+supplies both Δ and ω, so the switch itself adds no derivatives.
+
+Collective: the dilatation is halo-exchanged and both `detect_sum!` and
+`smooth!` run over every active dimension, so every rank must call this.
 
 Unlike the strain form, the gated one does not reproduce bit-for-bit under a
 changed decomposition. H(−Δ) is discontinuous at Δ = 0 and, with ε at the
@@ -461,8 +490,8 @@ split axes is 2e-7 relative, against 1e-14 for the strain sensor;
 `test/mpi_tests.jl` holds the guard. The ungated form has no switch and no such
 discontinuity, and reproduces as the strain sensor does.
 
-`solver.tmp_a` and `solver.tmp_b` are scratch here, under the invariant
-recorded on `compute_artificial!`.
+`solver.sensor` and `solver.tmp_a` are scratch here, as is `solver.tmp_b` in
+the gated form, under the invariant recorded on `compute_artificial!`.
 """
 function dilatation_beta!(solver, C_beta, gated::Bool)
     decomp = solver.decomp
@@ -509,19 +538,32 @@ end
 """
     compute_artificial!(solver, Q)
 
-Fill solver.mu_art, solver.beta_art, solver.kappa_art and solver.D_art from
-the current primitives and (metric-corrected) velocity gradients. No-op if
-disabled.
+Fill `solver.mu_art`, `solver.beta_art` and `solver.kappa_art`, and
+`solver.D_art` when the equation set carries more than one species, from the
+current primitives and (metric-corrected) velocity gradients. A single-species
+run never enters the per-species sweep, so its `D_art` keeps the zeros it was
+allocated with. `solver.strain_mag` is written whichever sensors are selected,
+since `scalar_field(solver, :strain_mag)` exposes it. `Q` is the padded
+conserved array, read only for the internal energy behind the κ\\* sensor.
+No-op if disabled.
+
+The caller supplies the primitives and the velocity gradients: `compute_rhs!`
+runs `compute_primitives_and_gradients!` on the same `Q` immediately before
+this. Collective, since `smooth!` exchanges halos along every active dimension
+and both it and `detect_sum!` may run a distributed line solve; every rank must
+call it. The `enabled` early return sits above all of that and is safe only
+because `ArtParams` is a setup-time constant identical on every rank.
 
 `solver.sensor`, `solver.sensor_sp`, `solver.tmp_a` and `solver.tmp_b` are
-scratch here, and their contents are dead once this function returns: every
-value read out of them has been folded into the four coefficient arrays above.
+scratch here, as is `solver.ring_buf` under `detector = :d8`, and their
+contents are dead once this function returns: every value read out of them has
+been folded into the coefficient arrays above.
 Later phases of the same `compute_rhs!` may therefore reuse them, and
 `NSCBCOutflowBC` does, for transverse pressure derivatives. A diagnostic, source
 term, or boundary condition that adds a reader of a sensor after this point
 invalidates the invariant and must take its own storage. One reader already
 exists outside the RHS: `scalar_field(solver, :sensor)` returns `solver.sensor`,
-which is why the NSCBC correction borrows `tmp_b` instead.
+which is why the NSCBC correction borrows `tmp_b` and `sensor_sp` instead.
 """
 function compute_artificial!(solver, Q)
     art = solver.art

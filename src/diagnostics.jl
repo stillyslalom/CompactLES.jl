@@ -55,8 +55,9 @@ cell_measure(solver::Solver) = prod(ntuple(d -> solver.decomp.active[d] ?
 """
     volume_integral(solver, f) -> Float64
 
-∫ f dV over the global domain, with `f` a full padded scalar array. Collective.
-See the quadrature note at the top of this file for the edge treatment.
+∫ f dV over the global domain, with `f` a full padded scalar array. Only the
+interior is read, so halo values do not enter the result. Collective. See the
+quadrature note at the top of this file for the edge treatment.
 """
 function volume_integral(solver::Solver, f::AbstractArray{<:Real,3})
     decomp = solver.decomp
@@ -108,7 +109,8 @@ volume_average(solver::Solver, f) = volume_integral(solver, f) / domain_volume(s
     plane_profile(solver, f, d) -> Vector{Float64}
 
 Area-weighted average of `f` over the two dimensions transverse to `d`, as a
-profile of length `n_global[d]` returned on every rank. The weight is the
+freshly allocated profile of length `n_global[d]` returned on every rank. `f` is
+a full padded scalar array, of which only the interior is read. The weight is the
 transverse area element `area_d[d]`, so this is the plain arithmetic mean on a
 Cartesian grid and the correct area average on a curvilinear one. Collective.
 """
@@ -155,9 +157,9 @@ end
 """
     profile_coordinate(solver, d) -> Vector{Float64}
 
-Physical coordinate of each station of a `plane_profile` along `d`, and its
-companion spacing `profile_spacing`. Collective, and returns the same vector on
-every rank.
+Physical coordinate of each station of a `plane_profile` along `d`, as a vector
+of length `n_global[d]`. The companion length element is `profile_spacing`.
+Collective, and returns the same vector on every rank.
 """
 function profile_coordinate(solver::Solver, d::Int)
     decomp = solver.decomp
@@ -178,6 +180,11 @@ extent. On a curvilinear grid the scale factor varies across the transverse
 plane. The returned spacing is therefore its area-weighted plane average, using
 the same weights as `plane_profile`, so the two quantities compose into a line
 integral.
+
+On an active dimension this is collective, since the plane average is. For a
+collapsed dimension the result is `[1.0]` instead, the factor-of-one convention
+described at the top of this file, and no communication takes place; every rank
+takes that branch together.
 """
 function profile_spacing(solver::Solver, d::Int)
     decomp = solver.decomp
@@ -217,7 +224,11 @@ The factor of 4 normalizes a fully mixed layer of thickness L to W = L. This
 bulk measure describes the extent of a Rayleigh–Taylor or Richtmyer–Meshkov
 layer but does not distinguish stirring from molecular mixing: two unmixed
 fluids interleaved at the grid scale give the same W as a molecularly mixed
-layer. [`molecular_mixing`](@ref) provides that distinction. Collective.
+layer. [`molecular_mixing`](@ref) provides that distinction. `species` names the
+pair `(a, b)` of species indices. Collective.
+
+Calls [`refresh_primitives!`](@ref) before evaluating the diagnostic, including
+when invoked from a `run!` callback.
 """
 function mix_width(solver::Solver, Q; dim::Int=1, species=(1, 2))
     a, b = species
@@ -233,10 +244,12 @@ end
 
 Youngs' molecular mixing fraction θ = ∫⟨Y_a Y_b⟩ dx / ∫⟨Y_a⟩⟨Y_b⟩ dx along
 `dim`. A value of 0 denotes interleaved but unmixed fluids, and a value of 1
-denotes uniform composition across the layer. Collective.
+denotes uniform composition across the layer. The result is 0 when the
+denominator is not positive, which is the case where the two species overlap
+nowhere. Collective.
 
 Calls [`refresh_primitives!`](@ref) before evaluating the diagnostic, including
-when invoked from a `run!` callback.
+when invoked from a `run!` callback, and overwrites `solver.tmp_a` as scratch.
 """
 function molecular_mixing(solver::Solver, Q; dim::Int=1, species=(1, 2))
     a, b = species
@@ -292,9 +305,11 @@ end
 Favre-averaged turbulent kinetic energy ⟨ρ|u − ũ|²⟩ / (2⟨ρ⟩) as a profile along
 `dim`, where ũ is the Favre (density-weighted) plane mean. Subtracting the plane
 mean removes the bulk translation of the interface and retains velocity
-fluctuations associated with the instability. Collective.
+fluctuations associated with the instability. The profile has length
+`n_global[dim]` and is the same on every rank. Collective.
 
-Calls [`refresh_primitives!`](@ref) before evaluating the diagnostic.
+Calls [`refresh_primitives!`](@ref) before evaluating the diagnostic, and
+overwrites `solver.tmp_a` as scratch.
 """
 function tke_profile(solver::Solver, Q; dim::Int=1)
     refresh_primitives!(solver, Q)
@@ -329,8 +344,9 @@ end
 """
     turbulent_kinetic_energy(solver, Q; dim=1) -> Float64
 
-Volume average of [`tke_profile`](@ref) — one number for the whole layer.
-Collective.
+Average of [`tke_profile`](@ref) along `dim` weighted by `profile_spacing`, so
+one number for the whole layer. Collective, and it inherits `tke_profile`'s
+refresh of the primitives and its use of `solver.tmp_a` as scratch.
 """
 function turbulent_kinetic_energy(solver::Solver, Q; dim::Int=1)
     k = tke_profile(solver, Q; dim=dim)
@@ -349,7 +365,10 @@ the energy sink at a shock; they are therefore included in the reported rate.
 Calls `compute_primitives_and_gradients!` and `compute_artificial!`, so
 the result is independent of the current RK stage. This requires one additional
 gradient pass, so the diagnostic is intended for periodic rather than per-step
-evaluation. Collective.
+evaluation. Those two passes overwrite `solver.grad_u` and the artificial
+coefficient, sensor and scratch fields, and the integrand is then accumulated
+into `solver.tmp_b`; `compute_rhs!` rebuilds all of them at the next stage.
+Collective.
 """
 function dissipation_rate(solver::Solver, Q)
     compute_primitives_and_gradients!(solver, Q)

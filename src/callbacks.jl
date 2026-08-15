@@ -12,11 +12,11 @@
 #     decision, or a boundary routine that only some ranks think is active
 #     deadlocks on its collectives (see the collective note in `nscbc.jl`).
 #
-# Firing only between completed steps satisfies both, and costs nothing that
-# matters: the physical events these exist to catch — a wave nearing a boundary,
-# an interaction finishing — are not resolved to better than a timestep anyway.
+# Firing only between completed steps satisfies both at little cost: the physical
+# events these exist to catch, a wave nearing a boundary or an interaction
+# finishing, are not resolved to better than a timestep anyway.
 #
-# Rank agreement is the trap worth designing out rather than documenting. `t`
+# Rank disagreement is designed out rather than left to the caller. `t`
 # and `step` advance identically on every rank (`dt` comes out of an Allreduce),
 # so `AtTime`, `EveryTime` and `EveryStep` are globally consistent for free.
 # `WhenState` is the only one that reads the field, and it reduces its own
@@ -64,9 +64,11 @@ rewind!(::Trigger, t, step) = nothing
     AtTime(t)
     AtTime([t1, t2, ...])
 
-Fire once at each listed time. `run!` shortens `dt` so that a step ends at the
-next scheduled instant. Times are visited in order and each fires once; a time
-already behind `solver.t` fires on the next completed step.
+Fire once at each listed time. The list is sorted on construction, and `run!`
+shortens `dt` so that a step ends at the next scheduled instant. Times are
+visited in order and each fires once; a time already behind `solver.t` fires on
+the next completed step. At most one time is consumed per step, so several times
+behind `solver.t` are visited one per step.
 """
 mutable struct AtTime <: Trigger
     times::Vector{Float64}
@@ -103,8 +105,8 @@ _land_tol(t) = 8eps(max(abs(t), one(t)))
 """
     EveryTime(interval; start = 0.0)
 
-Fire at `start + n*interval` for every integer `n`, with `run!` ending a step at
-each instant. This is the unbounded counterpart to [`AtTime`](@ref) and produces
+Fire at `start + n*interval` for every integer `n >= 0`, with `run!` ending a step
+at each instant. This is the unbounded counterpart to [`AtTime`](@ref) and produces
 an evenly spaced output schedule. Unlike a materialized
 `AtTime(start:interval:tfinal)`, it requires no advance `tfinal` and can resume
 from a restart. The next instant is computed from `solver.t` when the trigger is
@@ -174,12 +176,12 @@ fired!(trigger::EveryStep, solver, Q) = solver.step % trigger.interval == 0
     WhenState(condition; once = true)
 
 Fire when `condition(solver, Q)` first returns `true`, or on every step it does
-when `once = false`.
+when `once = false`. The condition must return a `Bool`.
 
 The condition is evaluated on each rank and reduced across the communicator, so
-it may be true only on the rank that owns a boundary plane. The condition must
-not perform this reduction itself because the framework already supplies the
-collective. A condition may read a local field plane and return a local verdict.
+it may be true only on the rank that owns a boundary plane. It need not perform
+this reduction itself, since the framework already supplies the collective: a
+condition may read a local field plane and return a local verdict.
 """
 mutable struct WhenState{F} <: Trigger
     condition::F
@@ -206,8 +208,9 @@ Pair a [`Trigger`](@ref) with `effect!(solver, Q)`, run after a completed step
 (and after any filtering) when the trigger fires. Returning `true` from
 `effect!` asks `run!` to stop; any other value continues.
 
-Pass one to `run!` as `callback=`, or pass several as a tuple. A bare function
-is also accepted and runs after every step.
+Pass one to `run!` as `callback=`, or pass several as a tuple. Every element of a
+tuple runs, including after one has asked to stop. A bare function is also
+accepted; it runs after every step and its return value is ignored.
 """
 struct Callback{Tr<:Trigger,F}
     trigger::Tr
@@ -279,8 +282,10 @@ end
     ProgressLog(; every = 10, quantity = nothing, label = "", tfinal = Inf,
                   imbalance = false, io = stdout)
 
-Construct a [`Callback`](@ref) that reports the step, `t`, `dt`, and wall time
-per step from `solver.wall_step`.
+Construct a [`Callback`](@ref) that reports the step, `t`, the `dt` of the
+completed step (`solver.dt_prev`), and wall time per step from
+`solver.wall_step`. It reports once every `every` completed steps, writes to
+`io`, and never stops a run.
 
 `quantity(solver, Q) -> Real` adds one scalar column, named by `label`. It is
 called on every rank and may reduce, as `volume_integral` and related diagnostics

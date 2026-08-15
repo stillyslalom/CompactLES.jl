@@ -40,9 +40,10 @@
 
 """
 Minimum total work, in grid points, required to use the thread pool. The default
-follows the measurements above: 32^3 is approximately the break-even point and
-48^3 benefits from threading.
-Override with the `CL_THREAD_MIN_WORK` environment variable.
+follows the measurements in the note at the top of `src/threading.jl`: 32^3 is
+approximately the break-even point and 48^3 benefits from threading.
+Override with the `CL_THREAD_MIN_WORK` environment variable, which is read once,
+when the module initializes.
 """
 const THREAD_MIN_WORK = Ref(1 << 15)
 
@@ -72,18 +73,19 @@ so
 
 visits the same points in the same order as the `for k in 1:nz`, `for j in 1:ny`
 nest it replaces, while giving [`@threaded`](@ref) `ny*nz` trips to divide
-instead of `nz`. See the note at the top of `threading.jl` for why that matters.
+instead of `nz`. The note at the top of `threading.jl` has the reasoning.
 """
 @inline outer_indices(n2, n3) = CartesianIndices((n2, n3))
 
 """
     @threaded work for ... end
 
-Thread the loop only when `work` (total grid points touched) justifies the
-parallel-dispatch cost *and* the loop has more than one trip to divide;
-otherwise run it inline. A pointwise nest should iterate
-[`outer_indices`](@ref) so that the second condition does not fail on a
-collapsed dimension. See the note at the top of this file.
+Thread the loop only when the session has more than one thread, `work` (total
+grid points touched, converted with `Int`) reaches [`THREAD_MIN_WORK`](@ref),
+*and* the loop has more than one trip to divide; otherwise run it inline. The
+iteration expression is evaluated once either way. A pointwise nest should
+iterate [`outer_indices`](@ref) so that the trip-count condition does not fail
+on a collapsed dimension. See the note at the top of this file.
 
 ## Threading backend
 
