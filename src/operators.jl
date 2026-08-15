@@ -6,7 +6,10 @@
 # scratch matrix B of shape n × lines. Application packs every grid line along
 # the dimension into B (threaded), performs the distributed solve, and
 # scatters back into the interior of the output field. Input fields must have
-# current rank-boundary halos; physical-edge halos are never read.
+# current rank-boundary halos. At a closed physical edge the closure rows
+# reference interior points only, so no halo is read there; a fold plan (built
+# with `lo_fold`/`hi_fold`) instead runs the interior stencil to the edge and
+# reads the mirror halo that `fold_fill!` writes before the sweep.
 
 abstract type AbstractDirPlan end
 
