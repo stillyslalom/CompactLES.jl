@@ -100,6 +100,75 @@ using HDF5
     Q3 = allocate_state(s3)
     @test_throws ErrorException load_checkpoint_hdf5!(s3, Q3, stem)
 
+    # Everything the state's interpretation depends on is in the header. Each
+    # solver below reads the file cleanly if its own field is not checked: the
+    # array has the right shape in every case and means something else. The
+    # expected message is asserted so that each case exercises the check it is
+    # there for rather than tripping an earlier one.
+    reject(s, msg) = begin
+        Qx = allocate_state(s)
+        @test_throws msg load_checkpoint_hdf5!(s, Qx, stem)
+    end
+
+    # A different species set of the same size: same n_cons, same extent, same
+    # metric. Only the component names separate them.
+    other = IdealMixture([IdealSpecies{Float64}("c", 1.0, 1.4),
+                          IdealSpecies{Float64}("d", 2.0, 1.6)])
+    reject(Solver(bcs=per3h, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                  eos=other, art=ArtParams(enabled=false), dims=(np, 1, 1)),
+           "conserved component mismatch")
+
+    # A different species count, which also moves n_cons.
+    reject(Solver(bcs=per3h, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                  eos=IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4)]),
+                  art=ArtParams(enabled=false), dims=(np, 1, 1)),
+           "conserved layout mismatch")
+
+    # The same grid dimensions over a longer domain, which n_global cannot see
+    # and the coordinates can.
+    reject(Solver(bcs=per3h, n_global=(72, 16, 16), L_domain=(2.0, 1.0, 1.0),
+                  eos=eos, art=ArtParams(enabled=false), dims=(np, 1, 1)),
+           "grid coordinate mismatch")
+
+    # The same grid shifted, likewise invisible to every other field.
+    reject(Solver(bcs=per3h, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                  origin=(0.5, 0.0, 0.0), eos=eos,
+                  art=ArtParams(enabled=false), dims=(np, 1, 1)),
+           "grid coordinate mismatch")
+
+    # A stretched dimension against the uniform grid it was written on. The two
+    # agree on extent, origin, species and metric and differ only point by
+    # point, which is why the coordinates are stored rather than the extent.
+    # A stretched dimension must be non-periodic, so this pair needs a
+    # checkpoint of its own rather than the periodic one above.
+    wall1 = ((SlipWallBC(), SlipWallBC()), per3h[2], per3h[3])
+    mkw(st) = begin
+        s = Solver(bcs=wall1, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                   stretch=(st, nothing, nothing), eos=eos,
+                   art=ArtParams(enabled=false), dims=(np, 1, 1))
+        s, allocate_state(s)
+    end
+    su, Qu = mkw(nothing)
+    initialize!(su, Qu, (x, y, z) -> Prim(Y=(0.3, 0.7), p=1.0, rho=1.0))
+    uniform_stem = joinpath(dir, "uniform1")
+    save_checkpoint_hdf5(su, Qu, uniform_stem)
+    MPI.Barrier(comm)
+    ss, Qs = mkw(sine_cluster(0.0, 1.0, 0.5, 0.3))
+    @test_throws "grid coordinate mismatch" load_checkpoint_hdf5!(ss, Qs,
+                                                                 uniform_stem)
+    # ...and the same file loads onto the grid it was written on.
+    su2, Qu2 = mkw(nothing)
+    load_checkpoint_hdf5!(su2, Qu2, uniform_stem)
+    @test su2.step == su.step
+
+    # A different metric on the same grid dimensions: the state array is the
+    # same shape and every momentum component means something else.
+    reject(Solver(bcs=((SlipWallBC(), SlipWallBC()), per3h[2], per3h[3]),
+                  n_global=(72, 16, 16), L_domain=(1.0, 2π, 1.0),
+                  origin=(0.5, 0.0, 0.0), metric=CylindricalMetric(),
+                  eos=eos, art=ArtParams(enabled=false), dims=(np, 1, 1)),
+           "metric mismatch")
+
     MPI.Barrier(comm)
     rank == 0 && rm(dir; recursive=true)
     MPI.Barrier(comm)

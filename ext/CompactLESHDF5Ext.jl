@@ -11,7 +11,11 @@ using HDF5
 
 has_parallel() = HDF5.has_parallel()
 
-const CKPT_FORMAT = 1
+# Format 2 added the species set, the metric and the grid coordinates to the
+# checkpoint header, which format 1 has no record of. The reader requires an
+# exact match rather than accepting the older file, since the point of those
+# fields is that a restart they do not cover cannot be validated at all.
+const CKPT_FORMAT = 2
 
 # --- Opening a shared file --------------------------------------------------
 #
@@ -109,6 +113,50 @@ read_region4(dset, region::BlockRegion, ncomp::Int) =
     dset[region_ranges(region)..., 1:ncomp]
 
 # --- Checkpoint / restart ---------------------------------------------------
+#
+# WHAT THE HEADER HAS TO PIN DOWN. The state is one flat global array of
+# conserved components, and nothing in `state/Q` records what those components
+# mean or where the points are. A restart onto a solver that disagrees is
+# therefore not detectable from the array: it reads cleanly and means something
+# else. The header records everything the interpretation depends on, and
+# `load_checkpoint_hdf5!` checks all of it.
+#
+# The conserved layout needs the species set, not just `n_cons`. Two species
+# sets of the same size give the same `n_cons`, so only `component_names`
+# separates them, and it covers the momentum and energy slots at the same time.
+#
+# The grid needs the coordinates, not the extent. `n_global` alone admits a
+# different domain length, a different origin, and any `Stretch` mapping; the
+# global coordinate vector along each dimension pins all three at once. It is
+# also the only form a `Stretch` can be stored in, being a pair of closures.
+# Three vectors of `n_global[d]` doubles are negligible beside the state.
+#
+# The metric and the EOS are stored by type name. For the metric that is a
+# complete description, the types being singletons, and the scale factors it
+# implies are already reflected in the coordinates. For the EOS it is a coarse
+# check that catches a different model at the same `n_cons`; the species
+# themselves are identified by the names in `component_names`, so two species
+# sets sharing names but differing in their thermodynamic constants are not
+# distinguished. Recording those would need a serialization contract every EOS
+# implements, which is a larger change than this.
+
+type_name(x) = string(nameof(typeof(x)))
+
+# Global coordinate vector along `d`, identical on every rank, so writing it
+# needs no communication.
+global_axis(solver::Solver, d::Int) =
+    Float64[CompactLES.global_xcoord(solver, d, i)
+            for i in 1:solver.decomp.n_global[d]]
+
+# Compared with a tolerance rather than exactly: the stored vector and the one
+# rebuilt here come from the same expression, but a `Stretch` mapping evaluated
+# on a different machine or Julia version may land a few ulp away, and a grid
+# that genuinely differs does so by orders of magnitude more than this.
+function axis_matches(stored, mine)
+    length(stored) == length(mine) || return false
+    scale = max(1.0, maximum(abs, mine; init=0.0))
+    return maximum(abs.(stored .- mine); init=0.0) <= 1e-10 * scale
+end
 
 function CompactLES.save_checkpoint_hdf5(solver::Solver, Q, prefix::AbstractString)
     decomp = solver.decomp
@@ -132,6 +180,12 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver, Q, prefix::AbstractStri
             write_meta!(g, "n_species", Int64(solver.equations.n_species), rank)
             write_strings!(g, "component_names",
                            solver.equations.component_names, rank)
+            write_strings!(g, "metric", [type_name(solver.metric)], rank)
+            write_strings!(g, "eos", [type_name(solver.eos)], rank)
+            cg = create_group(file, "grid")
+            for d in 1:3
+                write_meta!(cg, "xyz"[d:d], global_axis(solver, d), rank)
+            end
         end
         dims = (decomp.n_global..., n_cons)
         dset = shared_dataset(file, "state/Q", Float64, dims, comm)
@@ -152,8 +206,12 @@ function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractStr
     # Read is not a write, so every rank may open the file at once even without
     # a parallel build.
     h5open(path, "r") do file
-        read(file["meta/format"]) == CKPT_FORMAT ||
-            error("checkpoint format mismatch in $path")
+        fmt = Int(read(file["meta/format"]))
+        fmt == CKPT_FORMAT ||
+            error("checkpoint format mismatch in $path: file is format $fmt, " *
+                  "this version writes and reads format $CKPT_FORMAT. A file " *
+                  "written before format $CKPT_FORMAT carries no grid or metric " *
+                  "record and cannot be validated; rerun to regenerate it.")
         ng = read(file["meta/n_global"])
         Tuple(Int.(ng)) == Tuple(decomp.n_global) ||
             error("global grid mismatch: file has $(Tuple(Int.(ng))), " *
@@ -161,6 +219,33 @@ function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractStr
         Int(read(file["meta/n_cons"])) == n_cons ||
             error("conserved layout mismatch: file has " *
                   "$(Int(read(file["meta/n_cons"]))), solver has $n_cons")
+        # `n_cons` alone does not identify the conserved layout: two species
+        # sets of the same size agree on it and mean different things.
+        nsp = Int(read(file["meta/n_species"]))
+        nsp == solver.equations.n_species ||
+            error("species count mismatch: file has $nsp, solver has " *
+                  "$(solver.equations.n_species)")
+        names = String.(read(file["meta/component_names"]))
+        names == solver.equations.component_names ||
+            error("conserved component mismatch: file has $names, solver has " *
+                  "$(solver.equations.component_names)")
+        stored_metric = String(first(read(file["meta/metric"])))
+        stored_metric == type_name(solver.metric) ||
+            error("metric mismatch: file has $stored_metric, solver has " *
+                  "$(type_name(solver.metric))")
+        stored_eos = String(first(read(file["meta/eos"])))
+        stored_eos == type_name(solver.eos) ||
+            error("equation of state mismatch: file has $stored_eos, solver " *
+                  "has $(type_name(solver.eos))")
+        # The coordinates carry the domain extent, the origin and any `Stretch`,
+        # none of which `n_global` constrains.
+        for d in 1:3
+            axis_matches(read(file["grid/" * "xyz"[d:d]]), global_axis(solver, d)) ||
+                error("grid coordinate mismatch on dimension $d: the stored " *
+                      "coordinates differ from this solver's, so the domain " *
+                      "extent, the origin or a Stretch mapping is not the one " *
+                      "the checkpoint was written on")
+        end
         solver.t = read(file["meta/t"])
         solver.step = Int(read(file["meta/step"]))
         block = read_region4(file["state/Q"], region, n_cons)

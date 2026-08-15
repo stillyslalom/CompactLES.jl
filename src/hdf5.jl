@@ -81,14 +81,21 @@ end
 """
     save_checkpoint_hdf5(solver, Q, prefix)
 
-Write the conserved state and clock to `prefix.h5` as one global array, and
-return `prefix`. Collective.
+Write the interior of `Q` plus (t, step) to `prefix.h5` as one global array, and
+return `prefix`. An existing file of that name is truncated. Collective.
 
 Unlike [`save_checkpoint`](@ref), which writes one raw file per rank and can
 only be restored onto the identical decomposition, this stores the state in
 global index space. [`load_checkpoint_hdf5!`](@ref) therefore restores it onto
 **any** rank count and process grid, so a run may be moved between machines or
 resumed at a different scale.
+
+The header describes the state well enough for the reader to reject a solver it
+does not belong to: the format version, the global extent, the conserved count,
+the species count, the conserved component names, the metric and EOS type names,
+and the global coordinate vector along each dimension. The coordinates carry the
+domain extent, the origin and any [`Stretch`](@ref) mapping, none of which the
+extent alone constrains.
 
 Requires `using HDF5`.
 """
@@ -99,9 +106,10 @@ save_checkpoint_hdf5(args...; kwargs...) = _hdf5_required("save_checkpoint_hdf5"
               slice = nothing)
 
 Write a field dump to `prefix.h5` as one shared file, plus an XDMF3 sidecar
-`prefix.xmf` describing it, and return `prefix`. Open the **`.xmf`** in ParaView
-or VisIt; the `.h5` carries the data and no structure a reader can interpret on
-its own. Collective.
+`prefix.xmf` written by rank 0 describing it, and return `prefix`. An existing
+file of either name is truncated. Open the **`.xmf`** in ParaView or VisIt; the
+`.h5` carries the data and no structure a reader can interpret on its own.
+Collective.
 
 `fields`, `stride` and `slice` mean what they do in [`save_vtk`](@ref), which
 documents the available names, how points are selected for subsampling, and what
@@ -124,10 +132,23 @@ save_hdf5(args...; kwargs...) = _hdf5_required("save_hdf5")
 """
     load_checkpoint_hdf5!(solver, Q, prefix)
 
-Restore the conserved state and clock written by
-[`save_checkpoint_hdf5`](@ref), onto whatever decomposition `solver` has. The
-global grid and conserved layout must match; the rank count need not.
-Collective.
+Restore the interior of `Q` and (t, step) from the file written by
+[`save_checkpoint_hdf5`](@ref), onto whatever decomposition `solver` has, and
+return `Q`. Halos are left untouched. Every rank must call it, since each reads
+its own block, but the read is independent and involves no communication.
+
+The rank count and process grid need not match the ones that wrote the file, and
+nothing else may differ. Every field of the header
+[`save_checkpoint_hdf5`](@ref) records is compared against `solver` and any
+mismatch throws: format version, global extent, conserved count, species count,
+conserved component names, metric and EOS type names, and the coordinates along
+each dimension. Coordinates are compared to a relative tolerance of 1e-10, which
+separates a rebuilt identical grid from any different one.
+
+Two limits apply. Species are identified by name, so two species sets that share
+names while differing in their thermodynamic constants are not distinguished.
+A checkpoint written in an earlier format is rejected rather than partially
+validated.
 
 Requires `using HDF5`.
 """
