@@ -142,6 +142,10 @@ This function leaves halo cells unchanged and does not reset solver time,
 timestep history, or diagnostics. Use it to reuse an existing solver and
 allocation for a different initial state with the same EOS, geometry, and
 numerical configuration. It returns `Q`.
+
+Rank-local and non-collective. Each rank writes only its own block, so the
+halos hold whatever they held before and a caller needing them current must
+exchange afterwards; [`run!`](@ref) and [`step!`](@ref) do so themselves.
 """
 initialize!(solver::Solver, Q, ic) = _initialize!(solver, solver.eos, Q, ic)
 
@@ -266,17 +270,21 @@ Grid, scheme, timestep, and decomposition choices used to realize a
   coordinate direction. A count of one collapses that direction: it has no
   derivative, halo, or decomposition.
 - `deriv`: compact first-derivative scheme. Default: [`lele_d1_6()`](@ref).
-- `filt`: compact state and sensor filter. Default:
-  [`compact_filter(0.45)`](@ref), where values nearer `0.5` are weaker.
+- `filt`: compact filter applied to the conserved state. Default:
+  [`compact_filter(0.45)`](@ref), where values nearer `0.5` filter more weakly.
+  It doubles as the artificial-property sensor smoother only under
+  `ArtParams(smoother = :compact)`; the default `:gaussian` smoother is an
+  explicit stencil that ignores this keyword.
 - `art`: artificial-property coefficients. Default: [`ArtParams()`](@ref).
 - `cfl`: multiplier used by [`compute_dt`](@ref). Default: `0.5`. Strong shocks
   can require a lower startup value.
 - `control`: timestep prediction, failure floors, and retry policy. Default:
   [`StepControl()`](@ref).
 - `filter_interval`: state-filter cadence in completed steps. A positive value
-  `k` applies `filt` every `k` steps. The default `1` filters every step; `0`
-  disables state filtering. The filter is still used to smooth
-  artificial-property sensors.
+  `k` applies `filt` every `k` steps, counted from the completed step number.
+  The default `1` filters every step; `0` disables state filtering, which leaves
+  `filt` unused altogether unless `ArtParams(smoother = :compact)` also selects
+  it as the sensor smoother.
 - `filter_cfl`: reference CFL for a full-strength filter pass, making the
   filter's dissipation a rate rather than a per-application amount. The default
   `0.0` disables the relaxation and reproduces the unrelaxed solver bit for bit:
@@ -327,6 +335,10 @@ stretch mappings, equation/EOS species counts, process-grid dimensions, halo
 width, and scheme-specific local grid minima. MPI is initialized if necessary.
 The returned `solver` owns the operator plans and runtime state; `Q` contains
 the conserved variables and is ready to pass to [`run!`](@ref).
+
+Collective over `MPI.COMM_WORLD`: the decomposition is built with
+`MPI.Cart_create` and its sub-communicators, so every rank must call `setup`
+with the same `prob` and `num`.
 """
 function setup(prob::Problem, num::Numerics)
     origin = ntuple(d -> prob.domain[d][1], 3)

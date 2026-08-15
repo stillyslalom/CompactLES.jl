@@ -2,11 +2,11 @@
 #
 # The original layout stores each batch of lines as B (n × lines) filled
 # line-by-line, which for dims 2 and 3 reads the field with strides of nx or
-# nx·ny — the dominant cache cost of the whole RHS. The transposed path
+# nx·ny, the dominant cache cost of the whole RHS. The transposed path
 # stores B as (lines × n) and iterates everything in the field's memory
 # order: fills and scatters read/write both the field and B contiguously
 # (the innermost index runs along x), and the Thomas/banded elimination is
-# rewritten as row-outer sweeps vectorized across contiguous line blocks —
+# rewritten as row-outer sweeps vectorized across contiguous line blocks,
 # the classic batched-SIMD tridiagonal, threaded by chunking the lines. The
 # x sweep keeps the original layout, which is already contiguous both ways.
 
@@ -18,7 +18,11 @@ function _line_chunks(L::Int)
     ((1 + (t - 1) * chunk):min(t * chunk, L) for t in 1:nth)
 end
 
-"Row-sweep Thomas over B (lines × n), vectorized across lines."
+"""
+Row-sweep Thomas over B (lines × n), vectorized across lines. Solves in place and
+returns `B`, unchanged for an identity left-hand side. The interface stage is
+collective, so every rank of the solver's sub-communicator must call this.
+"""
 function solve_lines_t!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where {T}
     line_solver.explicit && return B   # identity LHS: the fill is already the answer
     L, n = size(B)
@@ -83,7 +87,11 @@ function solve_lines_t!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where 
     return B
 end
 
-"Row-sweep banded elimination over B (lines × n), vectorized across lines."
+"""
+Row-sweep banded elimination over B (lines × n), vectorized across lines. Solves
+in place and returns `B`. The interface stage is collective, so every rank of the
+solver's sub-communicator must call this.
+"""
 function solve_lines_t!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T}) where {T}
     L, n = size(B)
     q = line_solver.q

@@ -1,14 +1,19 @@
 # Boundary conditions.
 #
 # Grids are node-centered: closed dimensions include their endpoints
-# (h = L/(N−1)), so wall states are enforced directly on the wall-plane nodes
-# after each stage. Periodic dimensions omit the duplicate endpoint (h = L/N).
+# (h = L/(N−1)), so wall states are enforced directly on the wall-plane nodes.
+# `apply_bcs!` runs at the head of every Runge-Kutta stage and once more after
+# the final update. Periodic dimensions omit the duplicate endpoint (h = L/N);
+# a dimension carrying a coordinate fold is half-offset instead, so no node
+# sits on the singular set and no state is enforced there.
 #
 # Spatial closure near boundaries is handled by the scheme's ClosureRows (see
-# kernels.jl); the BC objects here (a) declare periodicity to the decomposition
-# and (b) enforce state values on wall planes via `enforce!`. New conditions
-# are added by subtyping BoundaryCondition and defining
-# `enforce!(bc, Q, solver, dim, side)`.
+# kernels.jl). The BC objects here declare periodicity to the decomposition
+# through `isperiodic`, enforce state values on wall planes through `enforce!`,
+# and correct the right-hand side through `correct_rhs!`. A new condition is a
+# subtype of BoundaryCondition defining whichever of `enforce!(bc, Q, solver,
+# dim, side)` and `correct_rhs!(bc, solver, Q, dQ, dim, side)` it needs, plus
+# `validate_bc` when its derivation restricts the geometry or the EOS.
 
 """
     BoundaryCondition
@@ -27,16 +32,20 @@ struct PeriodicBC <: BoundaryCondition end
     SlipWallBC()
 
 Impermeable inviscid wall: remove normal velocity while retaining tangential
-velocity. The grid is node-centered and includes the wall point.
+velocity. The grid is node-centered and includes the wall point. On the wall
+plane the normal momentum is set to zero and the total energy is reduced by the
+normal kinetic energy it carried, so the internal energy is unchanged.
 """
 struct SlipWallBC <: BoundaryCondition end
 
 """
     NoSlipWallBC(; Twall=NaN)
 
-Impermeable viscous wall with zero velocity. The default non-finite `Twall`
-selects an adiabatic wall; a finite value selects an isothermal wall and uses
-the EOS to construct its internal energy.
+Impermeable viscous wall with zero velocity. All three momentum components on
+the wall plane are set to zero and the total energy is reduced by the kinetic
+energy they carried. The default non-finite `Twall` selects an adiabatic wall,
+which stops there; a finite value selects an isothermal wall and overwrites the
+total energy with the internal energy the EOS gives at `Twall`.
 """
 Base.@kwdef struct NoSlipWallBC <: BoundaryCondition
     Twall::Float64 = NaN   # NaN → adiabatic; finite → isothermal wall
@@ -56,9 +65,14 @@ struct ExtrapolationBC <: BoundaryCondition end
 
 Regularized cylindrical axis at the low end of dimension 1: half-offset grid
 (no node at r = 0) with parity mirror conditions. Requires
-`CylindricalMetric`, collapsed θ (axisymmetric), and an unstretched r
-dimension. No wall-plane state enforcement is needed — the parity fill and
-folded implicit rows carry the whole treatment.
+`CylindricalMetric`, an r origin at zero, and an unstretched r dimension. θ may
+be either collapsed (axisymmetric, where each radial line continues into
+itself) or resolved over 2π with an even point count, where it continues into
+its antipodal partner. See folds.jl for the signs and the parallel-layout
+restrictions.
+
+There is no wall-plane state enforcement: the parity fill and the folded
+implicit rows carry the whole treatment.
 """
 struct AxisBC <: BoundaryCondition end
 
@@ -66,9 +80,10 @@ struct AxisBC <: BoundaryCondition end
     OriginBC()
 
 Regularized spherical origin at the low end of r: half-offset grid plus the
-antipodal fold (−r, θ, φ) ≡ (r, π−θ, φ+π). Requires `SphericalMetric`, a θ
-range symmetric about π/2, and φ collapsed or spanning 2π with an even point
-count. See folds.jl for signs and parallel-layout restrictions.
+antipodal fold (−r, θ, φ) ≡ (r, π−θ, φ+π). Requires `SphericalMetric`, an r
+origin at zero, an unstretched r dimension, a θ range symmetric about π/2, and
+φ collapsed or spanning 2π with an even point count. See folds.jl for signs and
+parallel-layout restrictions.
 """
 struct OriginBC <: BoundaryCondition end
 
@@ -77,7 +92,8 @@ struct OriginBC <: BoundaryCondition end
 
 Regularized spherical polar axis: apply at BOTH ends of θ over (0, π) with a
 half-offset θ grid; the fold pairs (−θ, φ) ≡ (θ, φ+π). Requires
-`SphericalMetric` and φ collapsed or spanning 2π with an even point count.
+`SphericalMetric`, an unstretched θ dimension, and φ collapsed or spanning 2π
+with an even point count. Setup errors if it is applied at only one end of θ.
 """
 struct PoleBC <: BoundaryCondition end
 
@@ -145,8 +161,18 @@ enforce!(bc::SwitchableBC, Q, solver, d, side) =
 rather than `Any`. See the note on the constructor below."
 const WallPlane = CartesianIndices{3,Tuple{UnitRange{Int},UnitRange{Int},UnitRange{Int}}}
 
-"CartesianIndices of the wall plane for (dim, side), or nothing if this rank
-does not own that global edge."
+"""
+    wallplane(decomp, d, side) -> Union{Nothing,WallPlane}
+
+Halo-offset `CartesianIndices` of the boundary plane on `side` of dimension `d`,
+`side` being 1 for the low end and 2 for the high end, or `nothing` when this
+rank does not own that global edge. The plane spans the full local extent of the
+other two dimensions and is one point thick in `d`.
+
+Ownership along `d` is the only test applied, so a periodic dimension yields a
+plane as well; `apply_bcs!` and the `correct_rhs!` loop skip collapsed
+dimensions before calling.
+"""
 function wallplane(decomp::Decomp, d::Int, side::Int)::Union{Nothing,WallPlane}
     if side == 1
         decomp.sub_rank[d] == 0 || return nothing
@@ -174,8 +200,21 @@ enforce!(::AxisBC, Q, solver, d, side) = nothing
 enforce!(::OriginBC, Q, solver, d, side) = nothing
 enforce!(::PoleBC, Q, solver, d, side) = nothing
 
-"RHS-level boundary hook, called at the end of compute_rhs! for every face.
-Default: no correction. Characteristic conditions (nscbc.jl) override this."
+"""
+    correct_rhs!(bc, solver, Q, dQ, d, side)
+
+RHS-level boundary hook, called once per face of every active dimension near the
+end of `compute_rhs!`, after the metric sources and before the explicit sources.
+An implementation adds its correction to `dQ` in place. The default is no
+correction; the characteristic conditions in nscbc.jl override it.
+
+Every rank calls this for every face, including ranks owning no part of the
+plane. An implementation needing a distributed operator, `deriv_along!` among
+them, must therefore issue it before testing `wallplane` for `nothing` and
+returning; a collective below that return deadlocks as soon as the
+boundary-normal dimension is decomposed. Both methods in nscbc.jl are written in
+that order.
+"""
 correct_rhs!(bc::BoundaryCondition, solver, Q, dQ, d, side) = nothing
 
 correct_rhs!(bc::SwitchableBC, solver, Q, dQ, d, side) =
@@ -276,7 +315,10 @@ function enforce!(::ExtrapolationBC, Q, solver, d, side)
     nothing
 end
 
-"Enforce all boundary conditions on the conserved state (active dims only)."
+"Enforce every boundary condition on the conserved state `Q` in place, over the
+active dimensions only, and return `Q`. No condition shipped with CompactLES
+communicates here; each acts through `wallplane` and so does nothing on a rank
+owning no part of the face."
 function apply_bcs!(solver, Q)
     for d in 1:3, side in 1:2
         solver.decomp.active[d] || continue

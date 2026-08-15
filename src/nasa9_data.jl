@@ -100,13 +100,17 @@ _nasa9_record_lines(n_intervals) = n_intervals == 0 ? 3 : 2 + 3 * n_intervals
 
 Read gas species from the fixed-column NASA CEA `thermo.inp` database. The
 specific gas constant is derived from each record's molar mass using
-`R = R_universal/M`; it is never entered independently of the coefficients.
+`R = R_universal/M`, with the tabulated molar mass converted from g/mol to
+kg/mol; it is never entered independently of the coefficients.
 
 # Arguments and keywords
 
 - `names`: a species name or vector of names as written in the database. A
-  vector returns species in the requested order, including repeated names; one
-  name returns one [`Nasa9Species`](@ref).
+  vector returns a `Vector{Nasa9Species{Float64}}` in the requested order,
+  including repeated names, and an empty vector returns an empty vector; a
+  single name returns one [`Nasa9Species`](@ref). Where the database repeats a
+  name, across phases or across the product/reactant split, the first record
+  wins.
 - `path`: database file. It defaults to the bundled `data/thermo.inp`; override
   it to read another file in the same fixed-column CEA format.
 - `reference`: enthalpy gauge. The default `:sensible` shifts every interval's

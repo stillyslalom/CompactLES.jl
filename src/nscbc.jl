@@ -12,11 +12,13 @@
 # time-derivative deltas
 #
 #   Δ(∂ρ/∂t) = −ΔL / (2c²),   Δ(∂p/∂t) = −ΔL / 2,
-#   Δ(∂u_n/∂t) = ∓ΔL / (2ρc)   (− at the high face where L₁ is incoming,
-#                                + at the low face where L₅ is incoming),
+#   Δ(∂u_n/∂t) = ±ΔL / (2ρc)   (+ at the high face where L₁ is incoming,
+#                                − at the low face where L₅ is incoming),
 #
-# with mass fractions and transverse velocities untouched. These map onto the
-# conserved components (species scale with Y_k, energy through
+# with mass fractions and transverse velocities untouched. The three are −Δd₁,
+# −Δd₂ and −Δd₃ for the LODI deltas listed with the inflow below, and it is Δd₃
+# that the code forms, as sgn·ΔL/(2ρc) with sgn = −1 at the high face. These
+# map onto the conserved components (species scale with Y_k, energy through
 # φ = cv_m / R_m = ∂(ρe)/∂p |_{ρ,Y}, ideal mixtures). Supersonic-outflow
 # points (M ≥ 1) receive no correction: all waves leave the domain. Viscous
 # terms are left as computed, which is the classical NSCBC approximation. The

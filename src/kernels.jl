@@ -4,16 +4,18 @@
 #
 #   α g_{i-1} + g_i + α g_{i+1} = a0 f_i + Σ_m coeffs[m] (f_{i+m} ± f_{i-m}),
 #
-# with '−' (antisymmetric) for derivatives — the RHS is additionally scaled by
-# 1/h at plan time — and '+' (symmetric, plus the a0 center weight) for
-# filters. Non-periodic edges are closed by explicit ClosureRows: row j at the
+# with '−' (antisymmetric) for first derivatives, whose RHS is divided by h at
+# plan time, and '+' (symmetric, plus the a0 center weight) for filters.
+# Non-periodic edges are closed by explicit ClosureRows: row j at the
 # low edge has LHS (sub, diag, super) on columns (j−1, j, j+1) and an RHS
 # stencil applied to f[1:length(rhs)]. High-edge rows are mirrored
 # automatically (LHS sub/super swapped; RHS reversed, negated for derivatives).
 #
 # Users supply their own schemes by constructing CompactScheme directly; the
 # presets below cover the standard Lele sixth-order interior, a fourth-order
-# Padé variant, and the Gaitonde–Visbal eighth-order filter.
+# Padé variant, the Gaitonde–Visbal eighth-order filter, and the explicit
+# nine-point Gaussian test filter. Each preset takes the element type as an
+# optional trailing argument, defaulting to Float64.
 
 abstract type AbstractCompactScheme end
 
@@ -34,8 +36,9 @@ end
     CompactScheme(name, alpha, a0, coeffs, symmetric, closures)
 
 Tridiagonal compact operator definition. Antisymmetric schemes represent first
-derivatives and are scaled by the grid spacing when planned; symmetric schemes
-represent filters and include the center coefficient `a0`.
+derivatives and have their right-hand side divided by the grid spacing when
+planned; symmetric schemes represent filters and include the center coefficient
+`a0`.
 
 Use [`lele_d1_6`](@ref), [`pade_d1_4`](@ref), or [`compact_filter`](@ref) unless
 defining a custom compact scheme.
@@ -56,7 +59,8 @@ halfwidth(scheme::CompactScheme) = length(scheme.coeffs)
     lele_d1_6()
 
 Sixth-order tridiagonal first derivative (Lele 1992): α = 1/3, a = 14/9,
-b = 1/9, with third/fourth-order one-sided closures on the first two rows.
+b = 1/9. A closed edge takes two closure rows: a third-order one-sided row 1
+and a fourth-order centered Padé row 2.
 """
 function lele_d1_6(::Type{T}=Float64) where {T}
     CompactScheme{T}("Lele C6 first derivative", T(1//3), zero(T),
@@ -82,9 +86,9 @@ end
     compact_filter(alphaf=0.45)
 
 Eighth-order Gaitonde–Visbal compact filter. `alphaf ∈ (−0.5, 0.5)` sets the
-strength (larger → weaker filtering). Near closed edges the first row is
-left unfiltered and rows 2–4 apply centered compact filters of order 2, 4, 6
-with the same αf — the standard reduced-order boundary cascade.
+strength (larger → weaker filtering). At a closed edge the first row is left
+unfiltered and rows 2–4 apply centered compact filters of order 2, 4 and 6 with
+the same αf, the standard reduced-order boundary cascade.
 """
 function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64) where {T}
     af = T(alphaf)
@@ -95,7 +99,7 @@ function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64) where {T}
     a4 = (-1 + 2af) / 128
     # Boundary closures: row 1 identity; rows 2–4 host centered compact
     # filters of order 2, 4, 6 (same αf), the standard reduced-order cascade.
-    # Consistency: RHS coefficients of each row sum to 1 + 2αf.
+    # Consistency: the RHS coefficients of each of these rows sum to 1 + 2αf.
     b2 = (T((1 + 2af) / 2), T((1 + 2af) / 2))                        # F2: a0, a1
     b4 = (T((5 + 6af) / 8), T((1 + 2af) / 2), T((-1 + 2af) / 8))     # F4
     b6 = (T((11 + 10af) / 16), T((15 + 34af) / 32),

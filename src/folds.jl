@@ -20,9 +20,9 @@
 # e is even across the singular point along the folded dimension and o is
 # odd, so each solves with the existing parity-folded plans (halo mirror fill
 # plus the diagonal LHS fold, per solution parity). Reconstruction is the
-# inverse butterfly: (op f)(x) = Re + Ro and (op f)(Mx) = σ (Re − Ro) — the
-# operator's own parity behavior is already inside the folded closures, so
-# the reconstruction sign is just σ, for derivatives and filters alike.
+# inverse butterfly: (op f)(x) = Re + Ro and (op f)(Mx) = σ (Re − Ro). The
+# operator's own parity behavior is already inside the folded closures, so the
+# reconstruction sign is just σ, for derivatives and filters alike.
 #
 # Component signs σ (scalars are always +1):
 #   cyl axis:    (u_r, u_θ, u_z) → (−1, −1, +1)
@@ -35,8 +35,8 @@
 #     period, and is either on one rank or split into an even number of
 #     uniform blocks (partner rank = +P/2, same local slot);
 #   - the reversed dimension of the spherical origin (θ) is either on one
-#     rank or split into uniform blocks (partner rank reflects, local slot
-#     reverses);
+#     rank or split into an even number of uniform blocks (partner rank
+#     reflects, local slot reverses);
 #   - folded dimensions use half-offset grids (no node on the singular set).
 #
 # Cost: when the partner block is on-rank, folded-dimension operators run
@@ -81,9 +81,13 @@ fold_rplan(fold::FoldSpec, σg::Int) = fold.ring_plans[σg > 0 ? 1 : 2]
 """
     fold_fill!(f, decomp, d, lo, hi, σ)
 
-Mirror-fill the halos of `f` beyond the folded end(solver) of dimension `d` with
-sign `σ` (half-offset mirror: ghost layer j ↔ interior layer j). Only acts on
-ranks owning the corresponding global edge.
+Mirror-fill the halos of `f` beyond the folded ends of dimension `d` with sign
+`σ` (half-offset mirror: ghost layer j ↔ interior layer j). `lo` and `hi` select
+which ends of `d` carry a fold.
+
+`f` is written in place on the ranks owning the corresponding global edge and
+left unchanged on the others; it is returned either way. No communication takes
+place here, so this is not a collective call.
 """
 function fold_fill!(f, decomp::Decomp, d::Int, lo::Bool, hi::Bool, σ::Int)
     pad = decomp.n_halo_d[d]
@@ -159,10 +163,15 @@ end
 """
     pair_forward!(w, f, solver, fold, σ)
 
-Load the even/odd combination of `f` (interior only) into `w` for the fold of
-`fold`, using field sign `σ`. On-rank pairing: lower pdim half of `w` holds e,
-upper half holds o (canonically indexed on the lower half). Off-rank: `w`
-holds this rank's designated combo after a pairwise block exchange.
+Load the even/odd combination of `f` under the pairing of `fold` into `w`,
+using field sign `σ`. `f` is read but not modified; only the interior of `w` is
+written, and `w` is returned.
+
+When the partner block is on this rank, the lower half of the mapping dimension
+(`pdim`, or `revdim` when the shift is degenerate) receives e at the canonical
+slot and the upper half receives o at the partner slot. Otherwise each rank
+keeps the single combo named by `keep_e` after a pairwise full-block
+`MPI.Sendrecv!`, so both partners must reach this call.
 """
 function pair_forward!(w, f, solver, fold::FoldSpec, σ::Int)
     decomp = solver.decomp
@@ -215,9 +224,12 @@ end
 """
     pair_backward!(out, solver, fold, σ)
 
-Inverse butterfly applied in place to the operator result `out`:
-final(x) = Re + Ro, final(Mx) = σ (Re − Ro). Off-rank: one pairwise exchange
-of result blocks.
+Inverse butterfly applied in place to the interior of the operator result
+`out`: final(x) = Re + Ro, final(Mx) = σ (Re − Ro). Halo cells are left
+untouched and `out` is returned.
+
+When the partner block is off-rank the result blocks are exchanged through one
+pairwise `MPI.Sendrecv!`, so both partners must reach this call.
 """
 function pair_backward!(out, solver, fold::FoldSpec, σ::Int)
     decomp = solver.decomp
@@ -282,11 +294,20 @@ end
 """
     fold_apply!(out, f, solver, fold, σ, role = Val(:deriv))
 
-Apply the compact operator of `role` — `:deriv`, `:filter`, `:smooth` or
-`:ring` — along the folded dimension of `fold` to field `f` (current halos
-required) with antipodal sign `σ`. Self-paired (axisymmetric) folds reduce to
-mirror fill plus one folded plan. Paired folds run the even/odd butterfly; the
-input `f` is left untouched (the combo lives in scratch `s.pairbuf`).
+Apply the compact operator selected by `role`, one of `Val(:deriv)`,
+`Val(:filter)`, `Val(:smooth)` and `Val(:ring)`, along the folded dimension of
+`fold` to field `f` with antipodal sign `σ`. `f` must carry current
+rank-boundary halos. The result is written to the interior of `out`, which is
+returned.
+
+A self-paired (axisymmetric) fold reduces to a mirror fill plus one folded
+plan, and so writes the folded-end halos of `f` in place. A paired fold runs
+the even/odd butterfly instead and leaves `f` unmodified, taking
+`solver.pairbuf` as scratch for the combination and, when the partner block is
+on-rank, `solver.pairout` for the second parity result. Neither may alias `out`.
+
+The line solves are collective along the folded dimension and a paired fold
+adds pairwise exchanges, so every rank must reach this call.
 """
 function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:deriv))
     decomp = solver.decomp

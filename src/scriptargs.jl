@@ -12,19 +12,27 @@
 # read from inside the package, where there is no ARGS to consult.
 
 """
-    script_args(args, defaults; positional = ())
+    script_args(args, defaults; positional = ()) -> NamedTuple
 
-Parse `args` — the leading bare values named by `positional`, then `key=value`
-pairs in any order — into a `NamedTuple` carrying the same keys as `defaults`.
+Parse `args`, normally `ARGS`, into a `NamedTuple` carrying the same keys as
+`defaults`, in the same order. A key absent from `args` keeps its default.
+
+An entry of `args` containing `=` is a `key=value` pair, split at the first `=`;
+an entry without one is a bare value, taken as `positional[1]`, `positional[2]`,
+... in the order the bare values appear. Pairs and bare values may be
+interleaved, although scripts are invoked with the positional values first.
 
 Each value is parsed to the type of its default, so `defaults` is both the
-fallback and the schema. `String` defaults are taken verbatim, allowing scripts
-to define compound syntax such as `configs=on:1:0.002,off:1` without extending
-this parser. `Bool` defaults accept
-`true|false|yes|no|on|off|1|0`.
+fallback and the schema. `String` and `Symbol` defaults are taken verbatim,
+which lets a script define compound syntax such as `configs=on:1:0.002,off:1`,
+or leave a symbol option's admissible set to be checked at `setup`, without
+extending this parser. `Bool` defaults accept `true|false|yes|no|on|off|1|0`;
+integer and float defaults are parsed at the default's own type. A default of
+any other type has no parse method here.
 
-An unknown key, a surplus positional, or a value that will not parse throws
-`ArgumentError`; see the rationale in the implementation note above.
+An unknown key, a bare value beyond the length of `positional`, a name in
+`positional` that is not a key of `defaults`, or a value that will not parse
+throws `ArgumentError`; see the rationale in the implementation note above.
 
 ```julia
 opt = script_args(ARGS, (N = 32, tfinal = 10.0, progress = 0);

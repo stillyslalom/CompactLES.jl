@@ -3,12 +3,12 @@
 
 Compressible large-eddy/direct-simulation solver using high-order compact
 finite differences, compact filtering, five-stage fourth-order low-storage
-Runge--Kutta time integration,
-shared-memory threading, and MPI domain decomposition. The compact line solves
-remain globally coupled across decomposed dimensions.
+Runge–Kutta time integration, shared-memory threading, and MPI domain
+decomposition. The compact line solves remain globally coupled across
+decomposed dimensions.
 
 The public frontend separates a pointwise [`Problem`](@ref) from its
-[`Numerics`](@ref); [`setup`](@ref) constructs the distributed solver and
+[`Numerics`](@ref); [`setup`](@ref) returns the distributed solver and the
 initialized conserved state.
 """
 module CompactLES

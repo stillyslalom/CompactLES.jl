@@ -60,6 +60,7 @@ function BandFactor(Ab::Matrix{T}, q::Int) where {T}
     BandFactor{T}(n, q, L, U)
 end
 
+"In-place banded forward and back substitution of one right-hand side."
 function solve_col!(x::AbstractVector{T}, F::BandFactor{T}) where {T}
     n, q = F.n, F.q
     L, U = F.L, F.U
@@ -101,9 +102,21 @@ end
 """
     BandLineSolver(Ab, AL, CR, comm, P, p, lines; periodic)
 
-`Ab` is the local band matrix ((2q+1) × n, closure rows already substituted at
-closed global edges). `AL`, `CR` are the q×q coupling blocks to the previous
-rank's tail and the next rank's head (zero matrices at closed edges).
+`Ab` is the local band matrix, (2q+1) × n in the storage
+`Ab[q+1+s, i] = A[i, i+s]`, with closure rows already substituted where this
+rank owns a closed global edge and the ghost couplings already folded back where
+it owns a parity fold. `AL`, `CR` are the q×q coupling blocks to the previous
+rank's tail and the next rank's head; `AL` is zero where this rank owns a closed
+low edge or a low fold, and `CR` likewise at the high edge. `q` is taken from
+`size(AL, 1)` and `n` from `size(Ab, 2)`, and `n > 2q` is required.
+
+`comm` is the sub-communicator along the dimension, `P` its size, and `p` this
+rank's 0-based position in it. `lines` is the number of right-hand sides that
+[`solve_lines!`](@ref) will carry, and sizes the interface workspaces allocated
+here. `periodic` marks the dimension as wrapping, which retains the reduced
+interface stage even at `P == 1`. Assembling that stage is collective when
+`P > 1`, so every rank of `comm` must construct the solver. `Ab`, `AL` and `CR`
+are read, not modified.
 """
 function BandLineSolver(Ab::Matrix{T}, AL::Matrix{T}, CR::Matrix{T},
                         comm::MPI.Comm, P::Int, p::Int, lines::Int;
@@ -174,6 +187,13 @@ function BandLineSolver(Ab::Matrix{T}, AL::Matrix{T}, CR::Matrix{T},
                       zeros(T, lines, q), zeros(T, lines, q))
 end
 
+"""
+    solve_lines!(B, line_solver::BandLineSolver)
+
+Solve the (possibly distributed) banded system for every column of `B`
+(n × lines) in place, and return `B`. MPI collectives run from the serial
+section only, and every rank of the solver's sub-communicator must call this.
+"""
 function solve_lines!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T}) where {T}
     n, L = size(B)
     q = line_solver.q

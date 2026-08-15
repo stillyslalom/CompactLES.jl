@@ -76,12 +76,22 @@ mutable struct LineSolver{T}
 end
 
 """
-    LineSolver(a, b, c, aL, cR, comm, P, p, lines; periodic)
+    LineSolver(a, b, c, aL, cR, comm, P, p, lines; periodic, explicit=false)
 
-`a`, `b`, `c` are the local sub/diag/super-diagonals (closure rows already
-substituted where this rank owns a closed global edge). `aL` is the coupling of
-local row 1 to the previous rank's last unknown, `cR` that of local row n to
-the next rank's first unknown (zero at closed edges).
+`a`, `b`, `c` are the local sub/diag/super-diagonals, each of length n, with the
+closure rows already substituted where this rank owns a closed global edge and
+the ghost coupling already folded onto the diagonal where it owns a parity fold.
+`aL` is the coupling of local row 1 to the previous rank's last unknown, `cR`
+that of local row n to the next rank's first unknown; `aL` is zero where this
+rank owns a closed low edge or a low fold, and `cR` likewise at the high edge.
+
+`comm` is the sub-communicator along the dimension, `P` its size, and `p` this
+rank's 0-based position in it. `lines` is the number of right-hand sides that
+[`solve_lines!`](@ref) will carry, and sizes the interface workspaces allocated
+here. `periodic` marks the dimension as wrapping, which retains the reduced
+interface stage even at `P == 1`. Unless `explicit` is set, assembling that
+stage is collective when `P > 1`, so every rank of `comm` must construct the
+solver.
 
 `explicit` asserts that the left-hand side is the identity, so that both the
 local solve and the interface stage are skipped. It must be derived from the
@@ -139,7 +149,11 @@ end
     solve_lines!(B, line_solver)
 
 Solve the (possibly distributed) tridiagonal system for every column of
-`B` (n × lines) in place. MPI collectives run from the serial section only.
+`B` (n × lines) in place, and return `B`. MPI collectives run from the serial
+section only, and every rank of the solver's sub-communicator must call this.
+
+An identity left-hand side (`line_solver.explicit`) returns `B` unchanged, since
+the caller's fill is already the solution.
 """
 function solve_lines!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where {T}
     line_solver.explicit && return B   # identity LHS: the fill is already the answer

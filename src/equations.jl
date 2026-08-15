@@ -52,14 +52,24 @@ function NavierStokes1T(eos::EOS)
     return NavierStokes1T(n_species, n_cons, i_mom, i_energy, names)
 end
 
-"Parity of conserved component `c` under the basis change `sigvel`."
+"""Parity of conserved component `c` under the basis change `sigvel`: `+1` for a
+partial density or the energy, and `sigvel[j]` for momentum component `j`."""
 @inline function conserved_parity(equations::NavierStokes1T, sigvel, c::Int)
     c <= equations.n_species && return 1
     c == equations.i_energy && return 1
     return sigvel[c - equations.n_species]
 end
 
-"Flux parity table for a fold along `dim`, including area-factor parity."
+"""
+    flux_parities(equations, sigvel, dim, area_parity) -> Vector{Int}
+
+Antipodal sign of each conserved flux across a fold along `dim`, one entry per
+conserved component. `sigvel` holds the antipodal signs of the three velocity
+components and `area_parity` that of the area factor A_dim (`-1` for A₁ = r at
+the cylindrical axis, `+1` for A₁ = r² sinθ at the spherical origin). Each entry
+is the parity of the conserved component times those of the normal velocity and
+the area factor.
+"""
 function flux_parities(equations::EquationSet, sigvel, dim::Int, area_parity::Int)
     normal_parity = sigvel[dim]
     return Int[conserved_parity(equations, sigvel, c) *

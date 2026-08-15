@@ -10,14 +10,14 @@
 #
 # --- The contract ----------------------------------------------------------
 #
-# A new EOS supplies these and nothing else. The first four are the ones that
-# were always here; the last three existed as ideal-gas algebra inlined at their
-# call sites, which left the rest of the solver quietly ideal-gas even though
-# this file was not.
+# A new EOS supplies these. `eos_phi`, `eos_dphi_dY` and `art_conductivity_scale`
+# existed as ideal-gas algebra inlined at their call sites, which left the rest of
+# the solver quietly ideal-gas even though this file was not; the others have been
+# dispatch points throughout.
 #
 #   nspecies(eos)                        number of species Ns
-#   _primitives!(solver, eos, Q)         ρ, u, p, T_ion, c, cp_mix, Y over the
-#                                        padded arrays — the bulk conversion
+#   _primitives!(solver, eos, Q)         ρ, u, v, w, p, T_ion, c, cp_mix, Y over
+#                                        the padded arrays — the bulk conversion
 #   species_enthalpy(eos, k, T_ion)      partial specific enthalpy h_k(T_ion)
 #   conserved_from_prim(eqns, eos, pr)   primitive → conserved (problem.jl)
 #
@@ -32,8 +32,15 @@
 #   wall_internal_energy(eos, Q, I,      ρe at a wall held at Twall (boundary.jl)
 #                        n_species, Twall)
 #
-# Every one of them is called from behind a function barrier, once per array
-# pass or once per boundary plane — never per point through an abstract field.
+# One further method is optional: `species_names(eos)` labels the partial-density
+# components, and the fallback in equations.jl returns "species_1", "species_2"
+# and so on for an EOS that does not define it.
+#
+# Several of these are evaluated per point: `species_enthalpy` in
+# `_assemble_fluxes!`, `art_conductivity_scale` in `compute_artificial!`, and
+# `wall_internal_energy` over an isothermal wall plane. Each such loop sits inside
+# a routine specialized on the concrete solver or EOS type, so the dispatch on
+# `eos` is paid once per array pass or once per boundary plane, not per point.
 #
 # --- Why φ and the κ* scale are in the contract ----------------------------
 #
@@ -462,7 +469,9 @@ or straight out of the conserved array without materializing anything.
 Newton on f(T) = Σ Y_k e_k(T) − e, whose derivative is the mixture cv and is
 positive for any physical coefficient set, so the iteration is monotone. The
 step is clamped to remain in T > 0 even when a stale halo contains a nonphysical
-state, and the iteration count is bounded.
+state, the initial estimate is clamped to [1e-3, 1e9], and the iteration count is
+capped at 30. The iteration also stops early if the mixture cv is not positive,
+which returns the current estimate rather than raising.
 
 The starting point is a pure function of the state. Seeding from the previous
 value at the same point generally saves one iteration but makes the result
@@ -596,8 +605,18 @@ end
     primitives!(solver, Q)
 
 Recover ρ, u, v, w, p, T_ion, c, cp_mix, and the species mass fractions Y_k over
-the full padded arrays (rank-boundary halos of Q must be current). Stale
-physical-edge halos get benign placeholders; they are never read.
+the full padded arrays. The rank-boundary halos of `Q` must already be current;
+this function performs no communication of its own, and
+[`refresh_primitives!`](@ref) is the collective wrapper that exchanges first.
+
+Wherever the partial densities of `Q` do not sum to a positive density, the point
+receives finite placeholders (ρ = 1, zero velocity, unit pressure, temperature
+and sound speed, all mass on the first species) instead of a division by zero.
+A physical-edge halo is the ordinary case, since no exchange reaches it and the
+boundary conditions write the edge plane rather than the halo behind it. No
+compact operator reads those halos either: at a closed edge the closure rows
+reference interior points only, and at a fold `fold_fill!` overwrites them from
+the interior before the sweep.
 """
 primitives!(solver, Q) = _primitives!(solver, solver.eos, Q)
 

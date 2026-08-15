@@ -8,7 +8,7 @@
 Uniform body acceleration with three physical components in the
 coordinate-aligned orthonormal basis. At each interior point it adds
 `rho * acceleration` to momentum and `rho * dot(u, acceleration)` to total
-energy.
+energy, with `rho` the mixture density summed over the species entries of `Q`.
 
 The positional form accepts a three-tuple of real values and promotes them to
 a common numeric type. The keyword form defaults to a gravity-like acceleration
@@ -30,10 +30,12 @@ ConstantBodyForce(; acceleration=(0.0, -9.81, 0.0)) =
 """
     add_source!(source, solver, dQ, Q, t)
 
-Add one explicit source to the already assembled conserved RHS at stage time
-`t`. Extend this function for a custom concrete source type and place instances
-in `Problem.sources`. The method runs on every rank and must preserve the
-conserved component layout owned by `solver.equations`.
+Add one explicit source to the already assembled conserved RHS at Runge-Kutta
+stage time `t`. `Q` and `dQ` are halo-padded conserved arrays indexed
+`[I, component]`, with the component layout defined by `solver.equations`.
+Extend this function for a custom concrete source type and place instances in
+`Problem.sources`. The method runs on every rank and must preserve that
+component layout.
 
 A custom method mutates only the rank-local interior of `dQ`, adds rather than
 overwrites contributions already present, and returns `dQ`. It may inspect `Q`

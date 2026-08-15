@@ -40,9 +40,27 @@ struct DirPlan{T} <: AbstractDirPlan
 end
 
 """
-    plan_direction(decomp, scheme, dim, h)
+    plan_direction(decomp, scheme, dim, h; lo_fold=nothing, hi_fold=nothing)
 
-Build a DirPlan for `scheme` along dimension `dim` with grid spacing `h`.
+Build a [`DirPlan`](@ref) for `scheme` along dimension `dim` of `decomp`, with
+uniform grid spacing `h` along that dimension. Antisymmetric (derivative)
+schemes have their right-hand side prescaled by `1/h`; symmetric ones are not
+scaled.
+
+`lo_fold` and `hi_fold` carry the antipodal sign `σg = ±1` of a parity fold at
+the low and high global edge. Either keyword acts only on the rank owning the
+edge in question. The default `nothing` leaves that edge closed, so the scheme's
+closure rows are substituted there; a sign instead moves the ghost coupling onto
+the diagonal and leaves the right-hand side running the interior stencil, which
+reads the mirror halo that `fold_fill!` writes.
+
+The local extent `decomp.n_local[dim]` must be at least `max(2nc + 1, 2M + 1)`
+for `nc` closure rows and right-hand-side half-width `M`, and `M` must not
+exceed `decomp.n_halo`; both conditions raise an error when violated.
+Construction allocates the packed-line buffer (`n × lines` for `dim == 1`,
+`lines × n` otherwise) and factorizes the line solver. Unless the scheme has an
+identity left-hand side, a decomposed `dim` makes that factorization collective,
+so every rank of the sub-communicator along `dim` must build the plan.
 """
 function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
                         h::Real; lo_fold::Union{Nothing,Int}=nothing,
@@ -206,7 +224,12 @@ end
     apply_along!(out, plan, f, decomp)
 
 Apply the compact operator of `plan` to field `f` along `plan.dim`, writing the
-result into the interior of `out`. `f` must have current rank-boundary halos.
+result into the interior of `out` and returning `out`. Halo cells of `out` are
+left untouched. `f` must have current rank-boundary halos.
+
+`plan.B` is scratch and is overwritten. When `plan.dim` is decomposed the line
+solve is collective over the sub-communicator along that dimension, so every
+rank of it must call this.
 """
 function apply_along!(out, plan::AbstractDirPlan, f, decomp::Decomp)
     d = plan.dim
@@ -229,8 +252,15 @@ end
 """
     filter_field!(f, solver; σf=1)
 
-Apply the compact filter along all active dimensions of `f` in place, with a
-halo exchange before each directional pass; `σf` is the field's axis parity.
+Apply the compact filter to `f` in place along every active dimension in
+increasing order, exchanging halos before each directional pass, and return `f`.
+`σf` is the field's antipodal sign (±1) for the fold on the dimension being
+swept; it is ignored on a dimension carrying no fold.
+
+Only the interior of `f` is updated, so its halos hold pre-filter values on
+return. `solver.tmp_a` is scratch and is overwritten. Every rank must call this:
+the halo exchanges are matched point-to-point pairs and the line solve carries a
+collective along each decomposed dimension.
 """
 function filter_field!(f, solver; σf::Int=1)
     for d in 1:3

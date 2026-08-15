@@ -4,7 +4,7 @@
 #   Σ_{s=1}^{q} lhs[s] (g_{i-s} + g_{i+s}) + g_i
 #       = a0 f_i + Σ_m coeffs[m] (f_{i+m} ± f_{i-m}),
 #
-# with '−' for odd derivatives (RHS scaled by 1/h at plan time) and '+' for
+# with '−' for first derivatives (RHS divided by h at plan time) and '+' for
 # symmetric operators: filters, and the undivided even derivative that serves as
 # the ringing detector.
 #
@@ -16,8 +16,10 @@
 """
     BandedClosureRow(lhs, rhs)
 
-One edge closure row for a [`BandedCompactScheme`](@ref). `lhs` contains the
-full centered band and `rhs` contains weights counted inward from the edge.
+One low-edge closure row for a [`BandedCompactScheme`](@ref). `lhs` is the full
+centered band, of length `2q + 1` with the diagonal at index `q + 1` and entries
+reaching outside the domain set to zero; `rhs` holds weights on `f[1]`, `f[2]`,
+... counted inward from the edge. High-edge rows are mirrored automatically.
 """
 struct BandedClosureRow{T}
     lhs::Vector{T}    # length 2q+1, centered on the diagonal
@@ -49,10 +51,11 @@ halfwidth(scheme::BandedCompactScheme) = length(scheme.coeffs)
 
 Tenth-order pentadiagonal first derivative (Lele 1992): β = 1/20, α = 1/2,
 a = 17/12, b = 101/150, c = 1/100 (consistency: a + b + c = 1 + 2α + 2β).
-Three closure rows are needed at closed edges (the interior RHS reaches ±3):
-the C6 third/fourth-order one-sided rows on rows 1–2 and the C6 tridiagonal
-interior row on row 3 — the usual boundary cascade, with local order reduction
-near walls. Requires halo width n_halo ≥ 3 (default n_halo = 4 is fine).
+Three closure rows are needed at a closed edge, since the interior RHS reaches
+±3: the C6 third-order one-sided row 1, the C6 fourth-order centered Padé row 2,
+and the C6 tridiagonal interior row on row 3. This is the usual boundary
+cascade, with local order reduction near walls. Requires halo width n_halo ≥ 3
+(the default n_halo = 4 is sufficient).
 """
 function lele_d1_10(::Type{T}=Float64) where {T}
     BandedCompactScheme{T}("Lele C10 first derivative", 2,
@@ -76,7 +79,7 @@ operator (`pyranda/parcop/stencils.f90`, `c10d8`), whose interior rows are
     1.5 g_{i-2} + 14 g_{i-1} + 29 g_i + 14 g_{i+1} + 1.5 g_{i+2} = 60 δ⁸f_i,
 
 with δ⁸ the undivided eighth difference (1, −8, 28, −56, 70, −56, 28, −8, 1).
-The operator is symmetric — an even derivative preserves parity — so it is
+The operator is symmetric, since an even derivative preserves parity, so it is
 planned like a filter rather than a derivative: no `1/h` scaling, and mirrored
 rather than negated at a high edge.
 
@@ -84,13 +87,12 @@ rather than negated at a high edge.
 
 The coefficients below are the reference ones divided by 29 (making the
 left-hand-side diagonal one, as `BandedCompactScheme` requires) and by a
-further 240, which sets the response to a grid-to-grid oscillation to 16 —
-the value the undivided δ⁴ detector it replaces produces there. The two
-detectors therefore agree at the wavelength both are built to catch, and the
-`C_mu`, `C_beta`, `C_kappa` and `C_D` calibrations carry over as starting
-points instead of being off by two orders of magnitude. Everything below the
-Nyquist is where the detectors differ, which is the measurement:
-`reference/CALIBRATION.md` records the response at 8, 4 and 2.7 points per
+further 240, which sets the response to a grid-to-grid oscillation to 16, the
+value the undivided δ⁴ detector it replaces produces there. The two detectors
+therefore agree at the wavelength both are built to catch, and the `C_mu`,
+`C_beta`, `C_kappa` and `C_D` calibrations carry over as starting points
+instead of being off by two orders of magnitude. The two responses differ below
+the Nyquist; `reference/CALIBRATION.md` records them at 8, 4 and 2.7 points per
 wavelength.
 
 # Closure rows

@@ -101,7 +101,9 @@ test and benchmark suites do. It allocates no conserved state, so pair it with
 `Problem`/`Numerics` counterpart are:
 
 - `origin`: low corner of the domain, one value per direction. Default
-  `(0.0, 0.0, 0.0)`. A folded direction requires its origin at zero.
+  `(0.0, 0.0, 0.0)`. A folded direction requires its origin at zero. A stretched
+  direction ignores this entry: its computational coordinate runs over [0, 1] and
+  the [`Stretch`](@ref) mapping carries both endpoints.
 - `equations`: the [`EquationSet`](@ref) owning the conserved layout. The default
   builds [`NavierStokes1T`](@ref) from `eos`; a supplied set must agree with
   `eos` on the species count.
@@ -121,7 +123,8 @@ them.
 - Spherical origin and poles: [`OriginBC`](@ref) at the low end of r and
   [`PoleBC`](@ref) at *both* ends of θ, with `metric = SphericalMetric()`. The
   origin additionally requires a θ range symmetric about π/2, and the poles the
-  full range (0, π). Either may be combined with the other.
+  full range (0, π). Either may be combined with the other. φ may be collapsed
+  or resolved over 2π with an even point count, as θ may be at the axis.
 """
 function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 eos::EOS=single_species(),
@@ -469,8 +472,11 @@ end
     boundary_plane(solver, d, side) -> CartesianIndices or nothing
 
 Padded indices of this rank's plane on the global `side` (1 low, 2 high) of
-dimension `d`, or `nothing` when this rank does not own that edge. For example,
-a boundary diagnostic may be written as
+dimension `d`, or `nothing` when this rank does not own that edge. Ownership
+along `d` is the only test applied, so a periodic or collapsed dimension yields
+a plane as well. The plane spans the full local extent of the other two
+dimensions and is one point thick in `d`. For example, a boundary diagnostic may
+be written as
 
 ```julia
 plane = boundary_plane(solver, 1, 1)
@@ -495,8 +501,16 @@ allocate_state(solver::Solver) = allocate_state(solver.decomp, solver.equations.
     deriv_along!(out, f, solver, d, σf)
 
 Compact derivative of `f` along active dimension `d`; `σf` is the field's
-antipodal sign for the fold on `d` (ignored when there is none). Caller
-ensures current halos.
+antipodal sign for the fold on `d` (ignored when there is none). The caller
+ensures current rank-boundary halos of `f`. Only the interior of `out` is
+written.
+
+This is a distributed line solve along `d`, so it is collective over that
+dimension's sub-communicator and every rank must call it, including ranks
+holding no part of a fold. At a self-paired fold `f` is also written:
+`fold_fill!` mirrors its halos beyond the folded end before the sweep. A paired
+fold leaves `f` untouched, running the even/odd butterfly through
+`solver.pairbuf` instead.
 """
 function deriv_along!(out, f, solver::Solver, d::Int, σf::Int)
     fold = solver.folds[d]
@@ -508,7 +522,8 @@ function deriv_along!(out, f, solver::Solver, d::Int, σf::Int)
     return out
 end
 
-"Compact filter of `f` along dimension `d` with antipodal sign `σf`."
+"""Compact filter of `f` along dimension `d` with antipodal sign `σf`. Collective,
+with the same halo and fold contract as `deriv_along!`."""
 function filt_along!(out, f, solver::Solver, d::Int, σf::Int)
     fold = solver.folds[d]
     if fold === nothing
@@ -524,8 +539,13 @@ end
 
 Sensor smoother of `f` along dimension `d` with antipodal sign `σf`. This is
 the Cook test filter, selected by `ArtParams.smoother`, and is a distinct
-operator from [`filt_along!`](@ref) even though the default setting makes the
-two coincide. Only the artificial-property sensors go through here.
+operator from `filt_along!`: the two coincide only under
+`ArtParams(smoother = :compact)`, which aliases the filter plans rather than
+planning an operator of its own; the default `:gaussian` plans the explicit
+nine-point stencil of [`gaussian_filter`](@ref). Only the artificial-property
+sensors go through here, by way of `smooth!`.
+
+Collective, as `deriv_along!` is.
 """
 function smooth_along!(out, f, solver::Solver, d::Int, σf::Int)
     fold = solver.folds[d]
@@ -541,10 +561,12 @@ end
     ring_along!(out, f, solver, d, σf)
 
 Compact eighth derivative of `f` along dimension `d` with antipodal sign `σf`,
-the ringing detector selected by `ArtParams(detector = :d8)`. Only
-[`ring_sum!`](@ref) calls this, and only under that setting: `solver.ring_plans`
-is `nothing` otherwise, which is what keeps this function off the default
-configuration's inference path. See [`detect_sum!`](@ref).
+the ringing detector selected by `ArtParams(detector = :d8)`. Only `ring_sum!`
+calls this, and only under that setting: `solver.ring_plans` is `nothing`
+otherwise, which keeps this function off the default configuration's inference
+path. Indexing that field under `:delta4` would throw. See `detect_sum!`.
+
+Collective, with the same halo and fold contract as `deriv_along!`.
 """
 function ring_along!(out, f, solver::Solver, d::Int, σf::Int)
     fold = solver.folds[d]
@@ -660,16 +682,21 @@ refresh_primitives!(solver::Solver, Q) =
     (exchange_state!(Q, solver.decomp); primitives!(solver, Q); solver)
 
 """
-    compute_primitives_and_gradients!(solver, Q)
+    compute_primitives_and_gradients!(solver, Q, primitives_current=false)
 
 Refresh halos, primitives, and the physical-component velocity gradients from
-`Q`. This shared sequence ensures that strain-rate and dissipation diagnostics
-use gradients from the current state while retaining a single implementation of
-the parity and curvature-correction routing.
+`Q`. Sharing this sequence between the RHS and the diagnostics gives both the
+same parity and curvature-correction routing, and gradients taken from the
+current state.
+
+`solver.grad_u[d, j]` is overwritten with the physical component (∇u)_{dj},
+zeroed on a collapsed dimension, and the metric curvature terms are added on
+top. Collective: every rank must call it, since each active dimension is a
+distributed line solve.
 
 Pass `primitives_current = true` when [`refresh_primitives!`](@ref) has already
-run on this exact `Q` and only the gradients are wanted; the caller then owns the
-claim that nothing has touched `Q` since.
+run on this exact `Q` and only the gradients are wanted; the caller is then
+responsible for the claim that nothing has touched `Q` since.
 """
 function compute_primitives_and_gradients!(solver::Solver, Q,
                                            primitives_current::Bool=false)
@@ -689,20 +716,33 @@ function compute_primitives_and_gradients!(solver::Solver, Q,
 end
 
 """
-    compute_rhs!(solver, Q, dQ)
+    compute_rhs!(solver, Q, dQ, primitives_current=false)
 
 Evaluate dQ/dt into the interior of `dQ` from the conserved state `Q`
 (boundary conditions should already be enforced on `Q`). Collapsed dimensions
 contribute no derivatives; the axis dimension routes through parity-folded
-plans with mirror-filled halos.
+plans with mirror-filled halos. The interior of `dQ` is zeroed first, so it is
+overwritten rather than accumulated into.
+
+This is collective: it exchanges halos, runs a distributed line solve per active
+dimension per field, and calls `correct_rhs!` for every boundary condition,
+which under NSCBC carries collectives of its own. Every rank must call it at the
+same point in the step.
+
+The primitives, the gradients, the artificial coefficients, `strain_mag`,
+`flux`, and the scratch fields `tmp_a`, `tmp_b`, `sensor` and `sensor_sp` on
+`solver` are all overwritten; so are `pairbuf` and `pairout` wherever a paired
+fold exists, and `ring_buf` under `detector = :d8`. The docstring of
+`compute_artificial!` records which of the sensor scratch fields are dead on
+return and may therefore be borrowed by a later phase of the same call.
 
 A trailing `primitives_current = true` skips the opening halo exchange and
 primitives pass, and is valid only when the caller has just performed both on
-this same `Q`. See [`compute_primitives_and_gradients!`](@ref); [`run!`](@ref)
-uses it for the first RK stage, where [`max_rate`](@ref) has already done the
-work. It is positional rather than a keyword so that `bench/audit.jl` can still
-reach the body with `code_typed`, which sees only the forwarding method of a
-function with keywords.
+this same `Q`. See [`compute_primitives_and_gradients!`](@ref); [`step!`](@ref)
+passes it for the first RK stage of a `prepared` step, where [`max_rate`](@ref)
+has already done the work. It is positional rather than a keyword so that
+`bench/audit.jl` can still reach the body with `code_typed`, which sees only the
+forwarding method of a function with keywords.
 """
 function compute_rhs!(solver::Solver, Q, dQ, primitives_current::Bool=false)
     decomp = solver.decomp

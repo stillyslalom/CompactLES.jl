@@ -11,11 +11,18 @@
 #      (Π_ab = ρ u_a u_b + p δ_ab − τ_ab) acquires per-metric algebraic terms.
 #
 # Geometry arrays (J⁻¹, A_d, 1/h_d, 1/r, cotθ/r) are filled analytically over
-# the full padded arrays, so they need no halo exchange; scale factors are
-# clamped away from zero so stale physical-edge halos stay finite (they are
-# never read). Coordinate singularities are NOT treated: cylindrical and
-# spherical domains must exclude the axis/origin (r > 0) and the poles
-# (0 < θ < π). Set the `origin` keyword of `Solver` accordingly.
+# the full padded arrays, so they need no halo exchange. Scale factors are
+# clamped away from zero, which keeps the halo layers beyond a physical edge
+# finite: A_d there is multiplied into the flux over the whole array (rhs.jl),
+# and the product is discarded, either because the closure rows at a closed
+# edge read interior points only or because `fold_fill!` overwrites it at a
+# fold.
+#
+# Nothing in this file treats a coordinate singularity. A cylindrical or
+# spherical domain either excludes the axis/origin (r > 0) and the poles
+# (0 < θ < π), with the `origin` keyword of `Solver` set accordingly, or
+# declares them through `AxisBC`, `OriginBC` and `PoleBC`, which place the grid
+# half-offset from the singular set and fold the operators across it (folds.jl).
 
 """Abstract supertype for orthogonal coordinate metrics."""
 abstract type Metric end
@@ -51,7 +58,13 @@ coordinate ξ is uniform on [0, 1] and `x(ξ)` gives the physical coordinate,
 with `dxdξ(ξ)` its derivative. Composes with any base metric (the mapping
 Jacobian multiplies that dimension's scale factor), so clustered radial grids
 in cylindrical coordinates work the same way as clustered Cartesian ones.
-Stretched dimensions must be non-periodic.
+
+`x` and `dxdξ` are called at setup only, over the full padded index range. The
+argument is clamped to [0, 1] first, so both need only be defined on the unit
+interval, including in the halo layers. A stretched dimension must be
+non-periodic and must carry no coordinate fold, and its mapping must reproduce
+the endpoints of the corresponding `Problem.domain` interval. [`setup`](@ref)
+checks all three.
 """
 struct Stretch{F,G}
     x::F
@@ -61,11 +74,16 @@ end
 """
     sine_cluster(lo, hi, ξc, a)
 
-Closed-form interior clustering: x(ξ) = lo + L(ξ − (a/2π)[sin 2π(ξ−ξc) +
-sin 2πξc]), dx/dξ = L(1 − a cos 2π(ξ−ξc)). Spacing is smallest at ξ = ξc
-(fractional position of the cluster point), largest opposite it, with ratio
-(1+a)/(1−a); any 0 ≤ a < 1 keeps the map monotone. One-sided clustering requires
-a custom monotone map.
+Closed-form interior clustering, returned as a [`Stretch`](@ref) over the
+interval `[lo, hi]` of length L = hi − lo: x(ξ) = lo + L(ξ − (a/2π)[sin 2π(ξ−ξc)
++ sin 2πξc]), dx/dξ = L(1 − a cos 2π(ξ−ξc)). The map reproduces `lo` at ξ = 0
+and `hi` at ξ = 1 for any `ξc`, so it satisfies the domain check in
+[`setup`](@ref).
+
+Spacing is smallest at ξ = ξc (fractional position of the cluster point),
+largest opposite it, with ratio (1+a)/(1−a); any 0 ≤ a < 1 keeps the map
+monotone and a larger value is an error. One-sided clustering requires a custom
+monotone map.
 """
 function sine_cluster(lo::Real, hi::Real, ξc::Real, a::Real)
     0 <= a < 1 || error("sine_cluster: need 0 ≤ a < 1")
@@ -93,9 +111,9 @@ unit_scalefactor(::CylindricalMetric, d::Int) = d != 2          # θ carries r
 unit_scalefactor(::SphericalMetric,   d::Int) = d == 1          # θ, φ carry r
 
 # Computational coordinate of full-array index `if_` along d, and the
-# corresponding physical coordinate plus mapping Jacobian (clamped into the
-# map's domain for halo layers beyond closed physical edges — those geometry
-# values are never read).
+# corresponding physical coordinate plus mapping Jacobian. ξ is clamped into
+# the map's domain for halo layers beyond a closed physical edge, whose geometry
+# values do not reach the answer (see the header).
 @inline function _phys_and_jac(solver, d::Int, if_::Int)
     ξ = solver.origin[d] + solver.coord_shift[d] +
         (solver.decomp.offset[d] + (if_ - solver.decomp.n_halo_d[d]) - 1) * solver.h[d]
@@ -105,7 +123,16 @@ unit_scalefactor(::SphericalMetric,   d::Int) = d == 1          # θ, φ carry r
     return st.x(ξc), st.dxdξ(ξc)
 end
 
-"Fill the geometric arrays of the solver over the full padded extent."
+"""
+Fill the geometric arrays of `solver` over the full padded extent, in place, and
+return `solver`. No halo exchange is needed, since every value is evaluated from
+the global index.
+
+Under `SphericalMetric` with a resolved θ the last step is `gcl_cotr!`, which
+runs a distributed compact solve along θ. Every rank must therefore reach this
+function in that configuration; the two conditions guarding the call are global
+properties, so no rank can take the other branch on its own.
+"""
 function init_geometry!(solver)
     decomp = solver.decomp
     n_halo = decomp.n_halo

@@ -9,9 +9,18 @@
     Decomp(n_global, periodic; dims=nothing, n_halo=4)
 
 Three-dimensional Cartesian MPI decomposition of a structured global grid.
-`dims` is the process grid; when omitted MPI chooses it over active dimensions.
-Each rank owns `n_local` interior points and halo-padded storage. Dimensions
-with one global point are collapsed and are never decomposed.
+`dims` is the process grid; when omitted MPI chooses it over active dimensions,
+and when given explicitly its product must equal the communicator size. Each
+rank owns `n_local` interior points and halo-padded storage, `n_halo` layers on
+each side of every active dimension. Dimensions with one global point are
+collapsed: they are never decomposed, carry no halo pad, and take no part in an
+exchange.
+
+The constructor is collective over `MPI.COMM_WORLD`, which it initializes at
+thread level `:funneled` if that has not happened already. It builds a Cartesian
+communicator with reordering permitted, so a rank's Cartesian coordinates need
+not follow its world rank, along with one sub-communicator per dimension for the
+distributed line solves.
 
 Most users receive a `Decomp` through [`setup`](@ref). Construct one directly
 only when using the low-level field and compact-operator APIs.
@@ -69,7 +78,9 @@ Base.zero(Q::ConservedState) = ConservedState(zero(parent(Q)))
 Base.copyto!(dest::ConservedState, src::ConservedState) =
     (copyto!(parent(dest), parent(src)); dest)
 
-"Even split of N points over P ranks; rank r (0-based) gets (count, offset)."
+"Balanced split of N points over P ranks; rank r (0-based) gets its
+(count, 0-based offset). The first `N % P` ranks take one point more than the
+rest, so counts differ by at most one and the offsets are contiguous."
 function local_range(N::Int, P::Int, r::Int)
     base, rem = divrem(N, P)
     n = base + (r < rem ? 1 : 0)
@@ -125,10 +136,13 @@ end
 interior(decomp::Decomp) = CartesianIndices(
     ntuple(d -> decomp.n_halo_d[d]+1:decomp.n_halo_d[d]+decomp.n_local[d], 3))
 
-"Allocate a scalar field with halos (collapsed dims carry no padding)."
+"Allocate a zero-filled `Array{Float64,3}` of extent `n_local .+ 2 .* n_halo_d`:
+one rank-local scalar field with its halos, collapsed dimensions carrying no
+padding."
 field(decomp::Decomp) = zeros(ntuple(d -> decomp.n_local[d] + 2*decomp.n_halo_d[d], 3))
 
-"Allocate a conserved state Q(x,y,z,1:n_cons) with halos."
+"Allocate a zero-filled [`ConservedState`](@ref) Q(x,y,z,1:n_cons), the spatial
+extents padded by halos exactly as [`field`](@ref) pads them."
 allocate_state(decomp::Decomp, n_cons::Int) =
     ConservedState(zeros(ntuple(d -> decomp.n_local[d] + 2*decomp.n_halo_d[d], 3)...,
                          n_cons))

@@ -1,7 +1,7 @@
 # Directional plans for banded compact schemes. BandPlan mirrors DirPlan
-# field-for-field (the shared _fill_lines!/_scatter_lines! machinery in
-# operators.jl is duck-typed over both), swapping the tridiagonal LineSolver
-# for the block-banded BandLineSolver.
+# field-for-field (the fill and scatter machinery in operators.jl, both the
+# direct and the transposed path, is duck-typed over both), swapping the
+# tridiagonal LineSolver for the block-banded BandLineSolver.
 
 """
     BandPlan
@@ -26,6 +26,15 @@ struct BandPlan{T} <: AbstractDirPlan
     B::Matrix{T}
 end
 
+"""
+    plan_direction(decomp, scheme::BandedCompactScheme, dim, h;
+                   lo_fold=nothing, hi_fold=nothing)
+
+Build a [`BandPlan`](@ref). Prescaling, fold handling and the `lo_fold` /
+`hi_fold` keywords match the [`CompactScheme`](@ref) method. The minimum local
+extent is `max(2nc + 1, 2M + 1, 2q + 1)`, because the reduced interface system
+couples the last `q` unknowns of one rank to the first `q` of the next.
+"""
 function plan_direction(decomp::Decomp, scheme::BandedCompactScheme{T}, dim::Int,
                         h::Real; lo_fold::Union{Nothing,Int}=nothing,
                         hi_fold::Union{Nothing,Int}=nothing) where {T}
