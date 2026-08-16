@@ -290,6 +290,211 @@ function dt_report(solver::Solver, Q)
 end
 
 """
+    positivity_floors(solver, Q, control) -> (rho_floor, e_floor)
+
+Absolute floors for `apply_positivity_floor!`, derived from `Q` as
+`control.floor_ratio` times the global minimum mixture density and the global
+minimum internal energy over the interior.
+
+Returns `(0, 0)`, which leaves the failsafe inactive, when `floor_ratio` is zero
+and also when either reference is not itself positive: a state that has already
+left the physical space supplies no scale to floor against, and [`run!`](@ref)
+warns rather than inventing one.
+
+Collective, one `Allreduce`. `run!` calls it once before its loop rather than
+once per step, so a second `run!` on the same solver re-derives the floors from
+the state that call starts with.
+"""
+function positivity_floors(solver::Solver, Q, control::StepControl)
+    control.floor_ratio > 0 || return (0.0, 0.0)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    n_species = solver.equations.n_species
+    m1, m2, m3 = solver.equations.i_mom
+    i_energy = solver.equations.i_energy
+    ρ_min = Inf
+    e_min = Inf
+    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        ρ = 0.0
+        for sp in 1:n_species
+            ρ += Q[I, sp]
+        end
+        ρ_min = min(ρ_min, ρ)
+        # The internal energy is not recoverable where the density is not
+        # positive. Such a point drives ρ_min below zero and disables the
+        # failsafe on the line below, so skipping it here cannot hide anything.
+        ρ > 0 || continue
+        ke = 0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / ρ
+        e_min = min(e_min, (Q[I, i_energy] - ke) / ρ)
+    end
+    red = MPI.Allreduce([ρ_min, e_min], min, decomp.comm)
+    (red[1] > 0 && red[2] > 0) || return (0.0, 0.0)
+    return (control.floor_ratio * red[1], control.floor_ratio * red[2])
+end
+
+"""
+    apply_positivity_floor!(solver, Q, rho_floor, e_floor, scope) -> tally
+
+Inspect the interior of `Q` for points outside the physical state space, repair
+them in place as far as `scope` allows, and report the global
+`(cells, low_energy, mass, energy, momentum)` tally of what that cost. The
+floors come from `positivity_floors`, `scope` is `StepControl.floor_scope`, and
+[`run!`](@ref) applies this after each completed step when
+`StepControl.floor_ratio` is set.
+
+Three repairs, in the order they have to run, since each depends on the state
+the previous one leaves:
+
+1. **Negative partial densities** are clipped to zero and the remaining positive
+   ones rescaled onto the mixture density the point already carried, which
+   leaves that density and therefore the mixture mass exactly unchanged.
+2. **A mixture density below `rho_floor`** is raised to it, distributed over the
+   positive partial densities, or onto the first species where there are none,
+   which is the composition `primitives!` already substitutes at a point it
+   cannot invert. Nothing conserves mass here, so the addition is tallied.
+3. **Energy**, at a point whose internal energy `E/ρ − ½|u|²` is below
+   `e_floor`. The point is counted as `low_energy` whatever the scope. It is
+   repaired when `scope === :internal_energy`, and under `:representable` only
+   when the *total* energy density `E` is itself below the floor, which is the
+   state no frame can represent. The repair damps the velocity, scaling the
+   momentum by `sqrt((E/ρ − e_floor) / (½|u|²))` with `E` untouched, so it moves
+   kinetic energy into internal energy rather than creating any: total energy is
+   conserved exactly and the momentum removed is tallied. Where there is no
+   kinetic energy to convert, `E` being at or below the floor already, the
+   fallback raises `E` instead and conserves the momentum exactly. Each branch
+   conserves one of the two exactly and tallies what it did to the other.
+
+`:representable` repairs only when `E` is below the floor, which is also the
+condition selecting the fallback, so that scope always raises the energy and
+never damps a velocity.
+
+Collective, one `Allreduce` of the five-element tally, so every rank sees the
+same totals and rank 0 reports on the whole domain rather than on its own block.
+
+The repair writes the interior only. Halos are left as the step left them, and
+nothing downstream depends on that: [`max_rate`](@ref) exchanges before reading
+anything at the top of the next iteration.
+"""
+function apply_positivity_floor!(solver::Solver, Q, rho_floor, e_floor,
+                                 scope::Symbol)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    n_species = solver.equations.n_species
+    m1, m2, m3 = solver.equations.i_mom
+    i_energy = solver.equations.i_energy
+    dV = cell_measure(solver)
+    repair_e = scope === :internal_energy
+    cells = 0.0; low_energy = 0.0; mass = 0.0; energy = 0.0; momentum = 0.0
+    # Serial, as `max_rate` is: one pass per step over the same interior, and
+    # only when a run enables the failsafe.
+    @inbounds for k in 1:nz
+        wk = quad_weight(solver, 3, k)
+        for j in 1:ny
+            wj = wk * quad_weight(solver, 2, j)
+            for i in 1:nx
+                I = CartesianIndex(i + o1, j + o2, k + o3)
+                ρ = 0.0
+                any_negative = false
+                for sp in 1:n_species
+                    q = Q[I, sp]
+                    ρ += q
+                    any_negative |= q < 0
+                end
+                if !any_negative && ρ >= rho_floor
+                    ri = 1 / ρ
+                    ke = 0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) * ri
+                    Q[I, i_energy] - ke >= ρ * e_floor && continue
+                end
+                # dV / inv_J is the physical cell volume, since inv_J carries any
+                # stretching. This follows `volume_integral`'s convention, so a
+                # tally is comparable with an integral of the field it perturbs.
+                vol = wj * quad_weight(solver, 1, i) * dV / solver.inv_J[I]
+                repaired = false
+                if any_negative && ρ >= rho_floor
+                    repaired = true
+                    pos = 0.0
+                    for sp in 1:n_species
+                        pos += max(Q[I, sp], 0.0)
+                    end
+                    # pos >= ρ > 0, so the rescale only ever shrinks.
+                    s = ρ / pos
+                    for sp in 1:n_species
+                        Q[I, sp] = max(Q[I, sp], 0.0) * s
+                    end
+                end
+                if ρ < rho_floor
+                    pos = 0.0
+                    for sp in 1:n_species
+                        pos += max(Q[I, sp], 0.0)
+                    end
+                    if pos > 0
+                        s = rho_floor / pos
+                        for sp in 1:n_species
+                            Q[I, sp] = max(Q[I, sp], 0.0) * s
+                        end
+                    else
+                        for sp in 1:n_species
+                            Q[I, sp] = sp == 1 ? rho_floor : 0.0
+                        end
+                    end
+                    mass += (rho_floor - ρ) * vol
+                    ρ = rho_floor
+                    repaired = true
+                end
+                ri = 1 / ρ
+                ke = 0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) * ri
+                target = ρ * e_floor
+                if Q[I, i_energy] - ke < target
+                    low_energy += 1.0
+                    if repair_e || Q[I, i_energy] < target
+                        if Q[I, i_energy] > target && ke > 0
+                            s = sqrt((Q[I, i_energy] - target) / ke)
+                            pmag = sqrt(Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2)
+                            Q[I, m1] *= s; Q[I, m2] *= s; Q[I, m3] *= s
+                            momentum += (1 - s) * pmag * vol
+                        else
+                            energy += (target + ke - Q[I, i_energy]) * vol
+                            Q[I, i_energy] = target + ke
+                        end
+                        repaired = true
+                    end
+                end
+                repaired && (cells += 1.0)
+            end
+        end
+    end
+    red = MPI.Allreduce([cells, low_energy, mass, energy, momentum], +, decomp.comm)
+    return (cells=round(Int, red[1]), low_energy=round(Int, red[2]), mass=red[3],
+            energy=red[4], momentum=red[5])
+end
+
+"""
+    record_floor!(solver, tally) -> FloorTally
+
+Accumulate one step's positivity-floor `tally` onto `solver.floor_tally` and
+return it. Bookkeeping only. [`run!`](@ref) does the reporting, warning on the
+first firing of a run and again in summary when that run ends, because a front
+carrying a handful of repaired cells for the length of a run would otherwise
+produce thousands of identical warnings.
+
+The tally is cumulative across `run!` calls on the same solver, as the
+wall-clock fields beside it are.
+"""
+function record_floor!(solver::Solver, tally)
+    ft = solver.floor_tally
+    ft.steps += 1
+    ft.cells += tally.cells
+    ft.low_energy += tally.low_energy
+    ft.mass += tally.mass
+    ft.energy += tally.energy
+    ft.momentum += tally.momentum
+    return ft
+end
+
+"""
     run!(solver, Q; tfinal, nmax=typemax(Int), callback=nothing, control=solver.control)
     run!(solver, Q, workspace; tfinal, ...)
 
@@ -323,6 +528,12 @@ When `control.retries > 0`, the CFL is lowered in place on each retry.
 Consequently, `solver.cfl` after a completed run records the value used to
 complete the calculation and can be supplied to the next run's `Numerics`.
 
+When `control.floor_ratio > 0`, `apply_positivity_floor!` inspects the conserved
+state after each completed step and repairs it as far as `control.floor_scope`
+allows, against floors `positivity_floors` derives once from the state this call
+starts with. The first firing warns, the totals warn again when the run ends,
+and `solver.floor_tally` carries them either way.
+
 Each step updates `solver.t`, `solver.step`, `solver.dt_prev`,
 `solver.rate_prev`, `solver.tstage`, `solver.wall_step` and
 `solver.wall_total`; a rolled-back iteration records no wall time. The loop is
@@ -337,6 +548,18 @@ function run!(solver::Solver, Q, workspace::Workspace;
     save = control.retries > 0 ? Savepoint(copy(Q), solver.t, solver.step) : nothing
     attempts = 0
     dt_seen = 0.0
+    rho_floor, e_floor = positivity_floors(solver, Q, control)
+    if control.floor_ratio > 0 && rho_floor <= 0
+        rank == 0 && @warn "run!: the positivity failsafe is inactive. The global " *
+                           "minimum density or internal energy of the state " *
+                           "entering this run is not positive, so floor_ratio " *
+                           "has nothing to scale."
+    end
+    # Snapshot of the cumulative tally, so the summary below reports this
+    # call's own repairs rather than everything the solver has accumulated.
+    ft0 = solver.floor_tally
+    floor_0 = (steps=ft0.steps, cells=ft0.cells, low_energy=ft0.low_energy,
+               mass=ft0.mass, energy=ft0.energy, momentum=ft0.momentum)
     # Savepoints are suppressed at or below this step after a rollback. Without
     # it a retry re-saves its way forward to the state that failed and then
     # "rolls back" onto it, so every further retry starts from the corrupt state
@@ -446,11 +669,41 @@ function run!(solver::Solver, Q, workspace::Workspace;
         if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
             filter_state!(solver, Q)
         end
+        # After the filter rather than immediately after step!, so that the state
+        # entering the next iteration's checks is the repaired one whichever of
+        # the two damaged it. The compact filter is not monotone, so it can
+        # produce sub-floor values itself.
+        if rho_floor > 0
+            tally = apply_positivity_floor!(solver, Q, rho_floor, e_floor,
+                                            control.floor_scope)
+            if tally.cells > 0 || tally.low_energy > 0
+                ft = record_floor!(solver, tally)
+                ft.steps == floor_0.steps + 1 && rank == 0 &&
+                    @warn "run!: the positivity failsafe saw $(tally.low_energy) " *
+                          "cell(s) below the internal-energy floor and repaired " *
+                          "$(tally.cells) at step $(solver.step), t = $(solver.t). " *
+                          "Later steps are counted in solver.floor_tally and " *
+                          "summarized when this run ends."
+            end
+        end
         # A rollback `continue`s above this, so an abandoned iteration never
         # records a step time — wall_total counts work that stood.
         solver.wall_step = (time_ns() - wall_0) / 1e9
         solver.wall_total += solver.wall_step
         run_callbacks!(callback, solver, Q) && break
+    end
+    ft = solver.floor_tally
+    if ft.steps > floor_0.steps && rank == 0
+        repaired = ft.cells - floor_0.cells
+        @warn "run!: the positivity failsafe was active on " *
+              "$(ft.steps - floor_0.steps) of this run's steps, over which it " *
+              "saw $(ft.low_energy - floor_0.low_energy) cell(s) below the " *
+              "internal-energy floor and repaired $repaired. Mass added " *
+              "$(ft.mass - floor_0.mass), energy added " *
+              "$(ft.energy - floor_0.energy), momentum removed " *
+              "$(ft.momentum - floor_0.momentum)." *
+              (repaired > 0 ? " A repaired cell makes this a repaired " *
+                              "trajectory rather than a converged one." : "")
     end
     return Q
 end

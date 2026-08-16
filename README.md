@@ -204,7 +204,7 @@ same `Problem` with a sequence of `Numerics` values.
 | Thermodynamics  | `IdealMixture`, `Nasa9Mixture` / `read_nasa9` (NASA CEA piecewise cp), `StiffenedGas`; EOS interface for custom models |
 | Regularization  | Cook artificial μ\*, β\*, κ\*, D\* (`ArtParams`), with an optional compression-keyed β\* sensor and a choice of sensor field, high-pass and test filter — see [CALIBRATION.md](reference/CALIBRATION.md) |
 | Diagnostics     | `volume_integral`, `plane_profile`, `mix_width`, `molecular_mixing`, `species_pdf`, `tke_profile`, `dissipation_rate` |
-| Failure handling| `StepControl` timestep floors (incl. a `PLANCK_TIME` failsafe), positivity checking, and rollback-with-CFL-backoff; `SolverFailure` |
+| Failure handling| `StepControl` timestep floors (incl. a `PLANCK_TIME` failsafe), positivity checking, rollback-with-CFL-backoff, and an optional state floor that counts and repairs unphysical cells (`floor_ratio`, `FloorTally`); `SolverFailure` |
 | Run control     | `Callback` with `AtTime` / `EveryTime` (both landed on exactly), `EveryStep`, or `WhenState` triggers; `ProgressLog` for progress/timing output; `SwitchableBC` for boundaries that change mid-run |
 | State queries   | `refresh_primitives!`, `mixture_density`, `velocity`, `mass_fraction`, `boundary_plane`, for reading the in-flight state independently of the conserved layout |
 | I/O             | `save_checkpoint` / `load_checkpoint!`, `save_vtk` (field selection, derived fields, rectilinear or curvilinear grid), `FieldWriter` (numbered frames + `.pvd` time collection) |
@@ -390,6 +390,14 @@ particular warrants scrutiny before production use. Other current limitations:
   eighth-derivative ringing detector, removes the restriction altogether at the
   planar wall and the cylindrical axis and tightens it at the spherical origin;
   it is not yet the default. See [CALIBRATION.md](reference/CALIBRATION.md).
+- Converging-shock runs carry cells of negative internal energy for their whole
+  duration, at the wall and travelling with the front, while density and total
+  energy stay positive and the Noh plateau still comes out to within 0.07%.
+  `StepControl(floor_ratio = 1e-8)` counts them and reports the totals in
+  `solver.floor_tally`; `floor_scope = :internal_energy` additionally repairs
+  them, which on Noh ν = 1 is a percent-level intervention that terminates the
+  run. Both are off by default. See
+  [CALIBRATION.md](reference/CALIBRATION.md).
 - The spherical origin will not take an initial discontinuity resolved over
   fewer than about three cells, nor a flow that converges to a singular state
   at t = 0. The cylindrical axis takes both.

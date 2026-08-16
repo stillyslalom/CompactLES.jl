@@ -10,6 +10,7 @@ CurrentModule = CompactLES
 Solver
 StepControl
 SolverFailure
+FloorTally
 PLANCK_TIME
 Workspace
 ConservedState
@@ -21,6 +22,8 @@ dt_report
 max_rate
 step!
 run!
+CompactLES.positivity_floors
+CompactLES.apply_positivity_floor!
 filter_state!
 CompactLES.filter_weight
 mpi_main

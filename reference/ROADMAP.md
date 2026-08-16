@@ -243,7 +243,10 @@ excursion that fails.
 The origin cell instead evacuates during a startup transient that lands at a
 fixed physical time regardless of resolution and that every configuration
 passes through. That makes the ceiling a robustness problem at a symmetry cell
-rather than a numerics problem, and points at model debt 2 below. Two
+rather than a numerics problem. Model debt 2 below has since supplied an
+instrument for that question: `StepControl.floor_ratio` counts sub-floor cells
+and can repair them. The converging geometries have not been measured through
+it, only the planar case. Two
 mechanisms are live and neither is yet demonstrated: β\* is proportional to the
 density, so it collapses on exactly the cell that is thinning, and the compact
 filter is applied per step rather than per unit time, which is model debt 1 and
@@ -260,9 +263,11 @@ non-singular is a numerics decision, tracked in `reference/CALIBRATION.md`.
 ## Model debts — regularization and validation
 
 These items carry the physics credibility of the solver for its primary
-mission. They are ordered by information gained per unit effort, and items 1–3
+mission. They are ordered by information gained per unit effort. Items 1 and 3
 change guarded numbers, so each concludes by re-baselining `test/validation.jl`
-and updating `reference/CALIBRATION.md`.
+and updating `reference/CALIBRATION.md`. Item 2 was expected to change them and
+does not, its default scope being measured bit-identical to the unfloored
+solver.
 
 **1. Filter calibration and dt-consistency.** Two coupled problems, and the
 second is now done. `compact_filter(0.45)` applied every step has never been
@@ -296,19 +301,29 @@ separate decision. It changes what α means, since under the relaxation α and
 the reference CFL set the dissipation jointly, so fitting α first under the
 old formulation and switching afterwards would waste the fit.
 
-**2. A positivity failsafe.** `StepControl` detects positivity loss and can
-roll back, but rollback recovers only abrupt failures; gradual degradation
-lands the savepoint on an already-corrupt state, and sweeps still burn wall
-time. Add a last-resort, conservation-aware local floor (clip negative partial
-densities, renormalize, adjust energy consistently), applied only on detection,
-counted, and reported loudly — never silent. **It must cover internal energy
-and not only density**, which is the measured gap: `bench/nohprobe.jl` found
-six to eight cells of negative internal energy in runs that pass, floored
-silently by `primitives!` and invisible to a ρ-only check
-(`reference/CALIBRATION.md`). This narrows rather than violates the
-Riemann-solver non-goal below: the scheme is unchanged, and the failsafe is an
-instrumented recovery from states the scheme has already left. The immediate
-beneficiaries are calibration sweeps and the AMR development runs ahead.
+**2. A positivity failsafe — delivered** (`reference/HISTORY.md`).
+`StepControl.floor_ratio` enables it and `floor_scope` sets how much of the
+state space it insists on; both are off by default, and the repair narrows
+rather than violates the Riemann-solver non-goal below, since the scheme is
+unchanged and the failsafe recovers from states it has already left.
+
+The delivery changed the scope of the repair, because building the floor made
+the condition measurable and the measurement did not support repairing all of
+it. The negative internal energy that motivated the debt is neither a rounding
+artifact nor a state the scheme cannot handle: the shipped Noh ν = 1 case
+carries 24991 cell-steps of it, reaching −718 ambient units, while density and
+total energy stay positive throughout and the run still reaches its plateau to
+within 0.07%. Forcing it positive costs a 5% velocity damping on the worst cell,
+and the run fails at step 18. The default scope therefore repairs only what no
+frame can represent and *counts* the rest, which closes the part of the debt the
+evidence supports: the condition was invisible, floored silently by
+`primitives!`. → `reference/CALIBRATION.md`
+
+The measurement leaves one question open rather than answering it. A calculation
+whose wall region runs as a pressureless layer for its whole duration reaches
+the right plateau for reasons nobody has checked, and the `:internal_energy`
+scope is the instrument for asking what that costs. The question belongs with
+the filter calibration below rather than with the failsafe.
 
 **3. External validation.** Everything to date compares against analytic
 references or this code's own high-resolution profiles — the comparison table
@@ -454,9 +469,11 @@ not open at all. XInclude of the per-frame `.xmf` files was considered and
 rejected: reader support for it is inconsistent, and the per-frame files are
 worth keeping openable on their own.
 
-THE FORK. Inlining an `<Attribute>` per frame requires each field's name and
-component count, and `:Y` and `:D_art` expand to one entry per species while
-the vector fields carry three components. Recomputing that in the collection
+#### The fork
+
+Inlining an `<Attribute>` per frame requires each field's name and component
+count, and `:Y` and `:D_art` expand to one entry per species while the vector
+fields carry three components. Recomputing that in the collection
 writer would duplicate the naming in `vtk_field_entries` and drift from it.
 Resolve it by having `save_hdf5` hand back the `(name, ncomponents)`
 descriptors it wrote and caching them on the writer at the first dump. The

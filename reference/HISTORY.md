@@ -19,6 +19,7 @@ points at them rather than restating them.
 9. [The C_beta refit (August 2026)](#the-c_beta-refit-august-2026)
 10. [The origin cell (August 2026)](#the-origin-cell-august-2026)
 11. [Filter dt-consistency (August 2026)](#filter-dt-consistency-august-2026)
+12. [The positivity failsafe (August 2026)](#the-positivity-failsafe-august-2026)
 
 ## Phase 0 — extensibility seams (July 2026)
 
@@ -584,3 +585,60 @@ full gate reproduces every convergence order and error magnitude exactly, and
 Whether the relaxation should become the default belongs to the α and cadence
 fit rather than to this work, since under the relaxation α and the reference CFL
 set the dissipation jointly.
+
+## The positivity failsafe (August 2026)
+
+Model debt 2, delivered as `StepControl.floor_ratio` and `floor_scope` with the
+repair in `apply_positivity_floor!`. Both are off by default. Measurements are
+in `reference/CALIBRATION.md` under "The negative internal energy is not a
+rounding artifact".
+
+The debt asked for a conservation-aware local floor covering internal energy and
+not only density, applied on detection, counted, and reported loudly. The work
+changed the *scope* of that repair, because building the floor made the
+condition measurable for the first time and the measurement did not support
+repairing all of it.
+
+**The negative internal energy `bench/nohprobe.jl` found is not a rounding
+artifact, and it is not a state the scheme cannot handle.** Over the complete
+shipped ν = 1 Noh case the state carries 24991 cell-steps of negative internal
+energy reaching −718 ambient units, while the total energy density and the
+mixture density stay positive at every cell of every one of its 3724 steps. The
+run still reaches the plateau to within 0.07%. The wall region runs as a
+pressureless layer, and the scheme remains stable there.
+
+**Forcing that internal energy positive terminates the run.** The worst cell
+needs a 5% velocity damping after one step. Applied every step it removes 1.5e-4
+of the total momentum immediately and produces cells of negative total energy by
+step 4 that the unrepaired trajectory never produces; the run then fails at step
+18 with `:dt_collapse`, where the unfloored run completes. Raising the total
+energy instead is the same order of intervention, so this is a property of the
+case rather than of the repair policy.
+
+The failsafe therefore carries a scope. `:representable`, the default when
+enabled, repairs a mixture density or a total energy density below the floor and
+counts internal energy below it without touching it; on the Noh case it repairs
+nothing and reproduces the unfloored run bit for bit while reporting all 24991
+cell-steps. `:internal_energy` opts into the repair above, for sweeps and
+development runs where the goal is a bounded run rather than a faithful
+trajectory.
+
+The floors themselves are unit-free, derived once per `run!` as `floor_ratio`
+times the global minimum density and internal energy of the state that call
+starts with, on the same reasoning as `dt_min_ratio`. The repair clips negative
+partial densities and rescales the survivors onto the density the point already
+carried, so mass is exactly preserved wherever the mixture density is healthy;
+the internal-energy repair damps the velocity at fixed total energy, and the
+fallback where there is no kinetic energy left to convert raises the total
+energy at fixed momentum. Each branch conserves one of the two exactly and
+tallies what it did to the other. `FloorTally` on the solver accumulates the
+reduced counts; `run!` warns on the first firing and summarizes on the way out.
+
+Enabling the failsafe removes `:negative_density` as a route to
+`SolverFailure`, since the density that check reads can no longer reach zero;
+`:dt_collapse` and `:nonfinite` remain, so a sweep still terminates rather than
+grinding. The default configuration is untouched: the full gate reproduces every
+convergence order and error magnitude exactly, the validation battery matches
+its guards to every printed digit, and MPI checks pass 90/90 at 2, 4 and 8
+ranks, twelve of them new and covering decomposition-independence of the repair
+and its tally.

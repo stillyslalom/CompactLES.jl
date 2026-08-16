@@ -2,9 +2,10 @@
 # the `cfl <= 0.15` ceiling: that beta* does not reach far enough AHEAD of the
 # front to damp the dispersive undershoot that precedes the positivity loss.
 #
-# WHAT THIS MEASURED, so the next person does not have to rediscover it. The
-# hypothesis is wrong on three independent readings, and the write-up is in
-# reference/CALIBRATION.md under "Where the restriction originates".
+# --- What this measured, so it is not rediscovered ---------------------------
+#
+# The hypothesis is wrong on three independent readings, and the write-up is
+# in reference/CALIBRATION.md under "Where the restriction originates".
 #
 #   1. Reach is not short. beta* carries above a thousandth of its own maximum
 #      out to 14.2-14.8 cells ahead of the front, held steady over a complete
@@ -35,12 +36,20 @@
 #      blind at the fold. Write-up under "The origin cell is a startup
 #      transient".
 #
-# The probe also surfaces a condition no existing diagnostic reports: runs that
+# The probe also surfaced a condition no diagnostic then reported: runs that
 # COMPLETE carry 6-8 cells of negative internal energy, travelling with the
 # front, for their whole duration. `primitives!` floors T_ion at 1e-300 wherever
 # e <= 0, so p goes to rho*R*1e-300 and the run continues, while the positivity
 # check in `max_rate` guards rho, which stays positive throughout. See the
-# `n_e<0` column, and model debt 2 in reference/ROADMAP.md.
+# `n_e<0` column.
+#
+# That condition is now measured rather than merely visible, and the positivity
+# failsafe is the instrument. `floor=1e-8` counts it over a whole run without
+# changing the trajectory, while `floor=1e-8 scope=internal_energy` repairs it,
+# which on nu=1 at cfl 0.15 costs a 5% velocity damping on the worst cell and
+# fails at step 18. The write-up is in reference/CALIBRATION.md under "The
+# negative internal energy is not a rounding artifact". The converging
+# geometries have not been measured through it; only the planar case has.
 #
 # Columns, one line per sampled step:
 #
@@ -95,7 +104,8 @@ opt = script_args(ARGS, (nu = 1, cfl = 0.3, N = 0, nmax = 400, every = 25,
                          sensor = string(ART_DEFAULTS.beta_sensor),
                          smoother = string(ART_DEFAULTS.smoother),
                          detector = string(ART_DEFAULTS.detector),
-                         dump = -1, profile = 32);
+                         dump = -1, profile = 32,
+                         floor = 0.0, scope = "representable");
                   positional = (:nu,))
 
 const ν = opt.nu
@@ -185,8 +195,10 @@ function main()
                    transport = Transport(mu0 = 0.0), metric = metric,
                    domain = ((0.0, 1.0), dom2, dom3),
                    bcs = ((lobc, inflow), per3[2], per3[3]), ic = ic)
+    control = StepControl(floor_ratio = opt.floor, floor_scope = Symbol(opt.scope))
     solver, Q = setup(prob, Numerics(n_global = (N, 1, 1), art = art,
-                                     cfl = opt.cfl, filter_interval = 1))
+                                     cfl = opt.cfl, control = control,
+                                     filter_interval = 1))
 
     xs = Float64[xcoord(solver, 1, i) for i in 1:N]
     h = xs[2] - xs[1]

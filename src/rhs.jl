@@ -73,6 +73,11 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,SP,RP,Sr
     # `ProgressLog`. Seconds, and Float64 regardless of T.
     wall_step::Float64                      # last completed step, excl. callbacks
     wall_total::Float64                     # cumulative over the run
+    # What the positivity failsafe has seen and repaired. Global rather than
+    # rank-local, unlike the wall-clock fields above: the repair reduces its own
+    # tally on every step it runs, and it runs only when
+    # `StepControl.floor_ratio` is set, so a run that leaves it off pays nothing.
+    floor_tally::FloorTally
 end
 
 """
@@ -354,7 +359,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   art.detector === :delta4 ? zeros(T, 0, 0, 0) : f(),
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(),
                   [f() for _ in 1:3, _ in 1:n_cons],
-                  zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0)
+                  zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
     init_geometry!(solver)
     return solver
 end

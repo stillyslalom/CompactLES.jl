@@ -847,13 +847,48 @@ validation case. No diagnostic reports this: `primitives!` floors T_ion at
 1e-300 wherever e ≤ 0, so p becomes ρ·R·1e-300 and the run continues, while the
 positivity check in `max_rate` reads ρ, which stays positive throughout.
 
-The quantity is ill-conditioned in this problem rather than merely inaccurate.
-At the Noh ambient p₀ = 1e-4 the internal energy is 1.5e-4 while the kinetic
-energy is 0.5, so e is recovered as a difference of terms that agree to within
-0.03%, and a rounding-level error in either produces a sign error in e. Since
-the κ\* sensor is built on e, this also bounds the artificial conductivity. It
-is the concrete case for extending model debt 2, the positivity failsafe, to
-cover internal energy rather than density alone.
+The quantity is ill-conditioned in this problem. At the Noh ambient p₀ = 1e-4
+the internal energy is 1.5e-4 while the kinetic energy is 0.5, so e is recovered
+as a difference of terms that agree to within 0.03%, and a rounding-level error
+in either produces a sign error in e. Since the κ\* sensor is built on e, this
+also bounds the artificial conductivity.
+
+### The negative internal energy is not a rounding artifact
+
+That conditioning argument implies the affected cells sit a rounding step below
+zero. They do not, and the positivity failsafe measured how far below. Over the
+complete shipped ν = 1 case, which takes 3724 steps at cfl 0.15 and returns a
+plateau of 3.99708 against the exact 4:
+
+```
+cell-steps with e < 0        24991   (peak 8 cells at once, worst -718 e0)
+cell-steps with E <= 0           0
+cell-steps with rho <= 0         0
+```
+
+The worst cell reaches −1.08e-1, which is −718 ambient internal energies rather
+than a rounding step. The total energy density and the mixture density stay
+positive at every cell of every step, so the state never leaves the set any
+frame can represent. The wall region runs as a pressureless layer, `primitives!`
+maps the whole of it to T_ion = 1e-300, and the calculation still reaches the
+plateau to within 0.07%.
+
+**Repairing those cells is a percent-level intervention, and it terminates the
+run.** After a single step the worst cell needs a 5% velocity damping to return
+its internal energy to a floor at 1e-8 of the initial minimum; the next four
+need 0.7%, 0.08%, 0.05% and 0.02%. Applied every step under
+`StepControl(floor_ratio = 1e-8, floor_scope = :internal_energy)` this removes
+1.5e-4 of the total momentum on step 1 and produces cells of negative *total*
+energy by step 4 that the unrepaired trajectory never produces; the run then
+fails at step 18 with `:dt_collapse`. Raising the total energy instead of
+damping the velocity is the same order of intervention, about 11% of that cell's
+energy, so the cost belongs to the case and not to the choice of repair.
+
+The default `floor_scope = :representable` follows from that. It repairs only
+what no frame can represent and counts the rest, so on this case it repairs
+nothing and reproduces the unfloored run bit for bit while reporting all 24991
+cell-steps. The condition was invisible, and making it visible is the part of
+model debt 2 the evidence supports.
 
 ### Recovery strategy
 

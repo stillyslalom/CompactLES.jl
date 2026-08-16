@@ -68,7 +68,7 @@ export Stretch, sine_cluster
 export ArtParams, Solver
 export ConstantBodyForce, add_source!, add_sources!
 export Workspace, compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!, mpi_main
-export StepControl, SolverFailure, PLANCK_TIME, max_rate
+export StepControl, SolverFailure, PLANCK_TIME, max_rate, FloorTally
 export Trigger, AtTime, EveryStep, EveryTime, WhenState, Callback, ProgressLog, rewind!
 export refresh_primitives!, mixture_density, velocity, total_energy, mass_fraction
 export boundary_plane

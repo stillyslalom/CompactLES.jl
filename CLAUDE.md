@@ -65,11 +65,11 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 59 testsets, 0 failures
+julia --project=. test/runtests.jl        # 60 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 78/78 each
+  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 90/90 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA

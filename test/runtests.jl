@@ -987,6 +987,108 @@ end
     @test CL.predicted_dt(solver, StepControl(max_growth=1.5), rate) ≈ 1.5e-9 rtol = 1e-14
 end
 
+@testset "positivity failsafe: floors, scope, and what each conserves" begin
+    @test_throws ArgumentError StepControl(floor_ratio=1.0)
+    @test_throws ArgumentError StepControl(floor_ratio=-1e-9)
+    @test_throws ArgumentError StepControl(floor_scope=:everything)
+    @test StepControl().floor_ratio == 0.0                 # off by default
+    @test StepControl().floor_scope === :representable
+
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 2.0, 1.6)])
+    solver = mkslv(n_global=(12, 12, 12), eos=eos)
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(rho=2.0, u=(0.5, 0.0, 0.0), p=1.0,
+                                             Y=(0.25, 0.75)))
+    m1, m2, m3 = solver.equations.i_mom
+    ie = solver.equations.i_energy
+    # The reference state is uniform, so the derived floors are exactly the
+    # ratio times the values it carries: e = p / ((γ_m − 1) ρ) with the
+    # mass-averaged mixture constants.
+    ρ0 = 2.0
+    e0 = let Rm = 0.25 * 1.0 + 0.75 * 2.0, cvm = 0.25 * 1.0 / 0.4 + 0.75 * 2.0 / 0.6
+        1.0 / (ρ0 * Rm) * cvm
+    end
+    rho_floor, e_floor = CL.positivity_floors(solver, Q, StepControl(floor_ratio=1e-6))
+    @test rho_floor ≈ 1e-6 * ρ0 rtol = 1e-12
+    @test e_floor ≈ 1e-6 * e0 rtol = 1e-12
+    # Disabled by default, and disabled again when the state supplies no scale.
+    @test CL.positivity_floors(solver, Q, StepControl()) == (0.0, 0.0)
+    saved = Q[gidx(solver, 2, 2, 2), 1]
+    Q[gidx(solver, 2, 2, 2), 1] = -3.0
+    @test CL.positivity_floors(solver, Q, StepControl(floor_ratio=1e-6)) == (0.0, 0.0)
+    Q[gidx(solver, 2, 2, 2), 1] = saved
+
+    floor!(Qx, scope) = CL.apply_positivity_floor!(solver, Qx, rho_floor, e_floor,
+                                                   scope)
+    # A healthy state is untouched under either scope, and reports nothing.
+    for scope in (:representable, :internal_energy)
+        Q1 = copy(Q)
+        t = floor!(Q1, scope)
+        @test (t.cells, t.low_energy) == (0, 0)
+        @test Q1 == Q
+    end
+
+    # 1. A negative partial density is clipped and the mixture density is left
+    #    exactly where it was, so the repair adds no mass at all.
+    I = gidx(solver, 3, 3, 3)
+    Q2 = copy(Q)
+    ρ_before = mixture_density(solver, Q2, I)
+    Q2[I, 1] = -0.4
+    Q2[I, 2] = ρ_before + 0.4
+    t = floor!(Q2, :representable)
+    @test t.cells == 1
+    @test t.mass == 0.0
+    @test Q2[I, 1] == 0.0
+    @test mixture_density(solver, Q2, I) ≈ ρ_before rtol = 1e-15
+
+    # 2. A mixture density below the floor cannot be repaired conservatively, so
+    #    the added mass is reported.
+    Q3 = copy(Q)
+    Q3[I, 1] = 1e-30
+    Q3[I, 2] = 1e-30
+    t = floor!(Q3, :representable)
+    @test t.cells == 1
+    @test mixture_density(solver, Q3, I) ≈ rho_floor rtol = 1e-12
+    @test t.mass > 0
+
+    # 3. Internal energy below the floor: counted under both scopes, repaired
+    #    only under :internal_energy. This is the case the shipped Noh run
+    #    carries for its whole duration while still reaching the exact plateau.
+    Q4 = copy(Q)
+    ke = 0.5 * (Q4[I, m1]^2 + Q4[I, m2]^2 + Q4[I, m3]^2) / ρ0
+    Q4[I, ie] = ke * 0.9                       # e = −0.1 ke / ρ, E still positive
+    Q5 = copy(Q4)
+    t = floor!(Q4, :representable)
+    @test (t.cells, t.low_energy) == (0, 1)
+    @test Q4 == Q5                              # counted, and nothing else
+    E_before = Q5[I, ie]
+    p_before = sqrt(Q5[I, m1]^2 + Q5[I, m2]^2 + Q5[I, m3]^2)
+    t = floor!(Q5, :internal_energy)
+    @test (t.cells, t.low_energy) == (1, 1)
+    @test Q5[I, ie] == E_before                 # total energy conserved exactly
+    @test t.energy == 0.0
+    ke5 = 0.5 * (Q5[I, m1]^2 + Q5[I, m2]^2 + Q5[I, m3]^2) / ρ0
+    @test (Q5[I, ie] - ke5) / ρ0 ≈ e_floor rtol = 1e-10
+    @test t.momentum > 0
+    @test sqrt(Q5[I, m1]^2 + Q5[I, m2]^2 + Q5[I, m3]^2) < p_before
+
+    # 4. A negative total energy density is unrepresentable in any frame, so
+    #    both scopes repair it, and the branch that does conserves momentum.
+    for scope in (:representable, :internal_energy)
+        Q6 = copy(Q)
+        Q6[I, ie] = -1.0
+        p_before = (Q6[I, m1], Q6[I, m2], Q6[I, m3])
+        t = floor!(Q6, scope)
+        @test (t.cells, t.low_energy) == (1, 1)
+        @test (Q6[I, m1], Q6[I, m2], Q6[I, m3]) == p_before
+        @test t.momentum == 0.0
+        @test t.energy > 0
+        ke6 = 0.5 * sum(x -> x^2, p_before) / ρ0
+        @test (Q6[I, ie] - ke6) / ρ0 ≈ e_floor rtol = 1e-10
+    end
+end
+
 @testset "run!: failure is raised, and recoverable with retries" begin
     # Noh at nu=1. Two distinct behaviours, and the distinction is the whole
     # point of the rollback:

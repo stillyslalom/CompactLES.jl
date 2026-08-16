@@ -971,6 +971,84 @@ function test_ring_detector_decomposition()
     check("κ* differs between delta4 and d8", 1e-3 / max(rel, 1e-300), 1.0)
 end
 
+function test_positivity_floor()
+    section("positivity failsafe: same tally and same repair under any split")
+    # Six cells damaged by hand at known global indices, so that whichever rank
+    # owns each one, the reduced tally has to come out the same. Two carry a
+    # negative partial density with the mixture density still healthy, two an
+    # internal energy below the floor with the total energy still positive, and
+    # two a negative total energy. Two species, so that the first pair exercises
+    # the clip-and-rescale path rather than the density floor.
+    #
+    # The first entry of each triple is the index along whichever axis is split,
+    # which is the only one carrying SPLITN points; the other two follow in
+    # ascending dimension order. Writing them the other way round would put a
+    # 66 on a 16-point dimension and silently damage nothing.
+    damaged = ((7, 3, 3), (41, 9, 5), (13, 5, 11), (58, 2, 8), (22, 7, 2),
+               (66, 12, 14))
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 2.0, 1.6)])
+    counts = Float64[]
+    masses = Float64[]
+    energies = Float64[]
+    for ax in 1:3
+        n_global = ntuple(d -> d == ax ? SPLITN : 16, 3)
+        solver = Solver(n_global=n_global, L_domain=(2π, 2π, 2π), bcs=per3,
+                        eos=eos, art=ArtParams(enabled=false), dims=splitdims(ax))
+        others = filter(d -> d != ax, 1:3)
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> Prim(rho=1.5, u=(0.4, 0.0, 0.0), p=1.0,
+                                                 Y=(0.5, 0.5)))
+        rho_floor, e_floor =
+            CL.positivity_floors(solver, Q, StepControl(floor_ratio=1e-6))
+        ie = solver.equations.i_energy
+        m1 = solver.equations.i_mom[1]
+        off = solver.decomp.offset
+        nloc = solver.decomp.n_local
+        for (n, g) in enumerate(damaged)
+            gi = ntuple(d -> d == ax ? g[1] : (d == others[1] ? g[2] : g[3]), 3)
+            # Global index to this rank's local one; skip what it does not own.
+            loc = ntuple(d -> gi[d] - off[d], 3)
+            all(d -> 1 <= loc[d] <= nloc[d], 1:3) || continue
+            I = gidx(solver, loc...)
+            if n <= 2
+                ρ = mixture_density(solver, Q, I)
+                Q[I, 1] = -0.5
+                Q[I, 2] = ρ + 0.5                  # mixture density unchanged
+            elseif n <= 4
+                ke = 0.5 * Q[I, m1]^2 / 1.5
+                Q[I, ie] = 0.95 * ke               # e < 0, E > 0
+            else
+                Q[I, ie] = -2.0                    # unrepresentable
+            end
+        end
+        t = CL.apply_positivity_floor!(solver, Q, rho_floor, e_floor,
+                                       :internal_energy)
+        push!(counts, t.cells); push!(masses, t.mass); push!(energies, t.energy)
+        check("split axis $ax: repaired cells (expect 6)", abs(t.cells - 6), 0.5)
+        check("split axis $ax: low-energy cells (expect 4)",
+              abs(t.low_energy - 4), 0.5)
+        # Every damaged cell is now representable on the rank that owns it.
+        nbad = 0.0
+        for k in 1:nloc[3], j in 1:nloc[2], i in 1:nloc[1]
+            I = gidx(solver, i, j, k)
+            ρ = mixture_density(solver, Q, I)
+            ρ >= rho_floor || (nbad += 1)
+            ke = 0.5 * (Q[I, m1]^2 + Q[I, m1 + 1]^2 + Q[I, m1 + 2]^2) / ρ
+            (Q[I, ie] - ke) / ρ >= e_floor * (1 - 1e-9) || (nbad += 1)
+        end
+        check("split axis $ax: cells left below a floor", gsum(nbad), 0.5)
+    end
+    # The tally is a reduced quantity, so it must not depend on who owns what.
+    check("repaired-cell count independent of the split",
+          maximum(counts) - minimum(counts), 0.5)
+    check("mass added independent of the split",
+          maximum(masses) - minimum(masses), 1e-12 * max(maximum(masses), 1e-30))
+    check("energy added independent of the split",
+          maximum(energies) - minimum(energies),
+          1e-12 * max(maximum(energies), 1e-30))
+end
+
 const SUITE = (
     ("periodic C6", test_periodic_c6),
     ("pentadiagonal C10", test_pentadiagonal_c10),
@@ -982,6 +1060,7 @@ const SUITE = (
     ("sync", test_sync),
     ("artificial decomposition", test_artificial_decomposition),
     ("d8 detector decomposition", test_ring_detector_decomposition),
+    ("positivity floor", test_positivity_floor),
     ("callback consistency", test_callback_consistency),
     ("state queries", test_state_queries),
     ("field writer", test_field_writer),
