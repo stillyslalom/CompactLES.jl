@@ -155,26 +155,6 @@ function blend_interior!(dst, src, w, decomp::Decomp)
 end
 
 """
-    axis_fill!(f, decomp, σf)
-
-Parity fill of the low-dim-1 halos for the cylindrical-axis treatment on a
-half-offset grid (r_i = (i − ½)h): ghost layer j mirrors interior layer j
-with sign `σf` (+1 even fields, −1 odd). No-op unless this rank owns the low
-edge of dimension 1.
-"""
-function axis_fill!(f, decomp::Decomp, σf::Int)
-    (decomp.active[1] && !decomp.periodic[1] && decomp.sub_rank[1] == 0) || return f
-    pad = decomp.n_halo_d[1]
-    sgn = Float64(σf)
-    @inbounds for j in 1:pad
-        g = pad - j + 1         # ghost full index
-        m = pad + j             # mirrored interior full index
-        @views f[g, :, :] .= sgn .* f[m, :, :]
-    end
-    return f
-end
-
-"""
     exchange_dim_batch!(fields, decomp, d)
 
 Exchange rank-boundary halos of many fields along a single dimension `d`, in

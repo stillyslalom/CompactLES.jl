@@ -76,7 +76,7 @@ fold_fplan(fold::FoldSpec, σg::Int) = fold.filter_plans[σg > 0 ? 1 : 2]
 fold_splan(fold::FoldSpec, σg::Int) = fold.smooth_plans[σg > 0 ? 1 : 2]
 fold_rplan(fold::FoldSpec, σg::Int) = fold.ring_plans[σg > 0 ? 1 : 2]
 
-# --- Halo mirror fill (generalizes the old axis_fill!) ----------------------
+# --- Halo mirror fill -------------------------------------------------------
 
 """
     fold_fill!(f, decomp, d, lo, hi, σ)

@@ -287,8 +287,9 @@ Two batching optimizations matter for performance:
 - `exchange_state!` applies that to all conserved components at once — six
   messages per state exchange instead of `6 × (Ns + 4) × 3`.
 
-`axis_fill!` handles the parity mirror fill used by the coordinate-singularity
-folds (see below).
+`fold_fill!` (`folds.jl`) handles the parity mirror fill used by the
+coordinate-singularity folds (see below). It is rank-local and involves no
+communication.
 
 ## Time integration
 
