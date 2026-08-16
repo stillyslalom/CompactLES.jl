@@ -12,11 +12,29 @@
 
 # --- Vectorized batched solves ---------------------------------------------
 
-function _line_chunks(L::Int)
-    nth = max(Threads.nthreads(), 1)
-    chunk = cld(L, nth)
-    ((1 + (t - 1) * chunk):min(t * chunk, L) for t in 1:nth)
+# Contiguous blocks of lines, one per thread, as the iteration space of the
+# solves below. `Threads.@threads` indexes what it iterates, so this is an
+# indexable object rather than a generator: a generator has to be collected at
+# every call site, and these sit on the per-sweep path of the whole RHS.
+struct LineChunks
+    n_lines::Int
+    chunk::Int
+    n_chunks::Int
 end
+
+function _line_chunks(L::Int)
+    n_chunks = max(Threads.nthreads(), 1)
+    return LineChunks(L, cld(L, n_chunks), n_chunks)
+end
+
+Base.length(chunks::LineChunks) = chunks.n_chunks
+Base.eltype(::Type{LineChunks}) = UnitRange{Int}
+Base.firstindex(::LineChunks) = 1
+Base.lastindex(chunks::LineChunks) = chunks.n_chunks
+@inline Base.getindex(chunks::LineChunks, t::Int) =
+    (1 + (t - 1) * chunks.chunk):min(t * chunks.chunk, chunks.n_lines)
+Base.iterate(chunks::LineChunks, t::Int=1) =
+    t > chunks.n_chunks ? nothing : (chunks[t], t + 1)
 
 """
 Row-sweep Thomas over B (lines × n), vectorized across lines. Solves in place and
@@ -27,7 +45,7 @@ function solve_lines_t!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where 
     line_solver.explicit && return B   # identity LHS: the fill is already the answer
     L, n = size(B)
     F = line_solver.F
-    @threaded n*L for rng in collect(_line_chunks(L))
+    @threaded n*L for rng in _line_chunks(L)
         isempty(rng) && continue
         @inbounds begin
             for i in 2:n
@@ -74,7 +92,7 @@ function solve_lines_t!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where 
         zn[l] = line_solver.z[cnext, l]
     end
     v, w = line_solver.v, line_solver.w
-    @threaded n*L for rng in collect(_line_chunks(L))
+    @threaded n*L for rng in _line_chunks(L)
         isempty(rng) && continue
         @inbounds for i in 1:size(B, 2)
             vi = v[i]
@@ -96,7 +114,7 @@ function solve_lines_t!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T}) wh
     L, n = size(B)
     q = line_solver.q
     F = line_solver.F
-    @threaded n*L for rng in collect(_line_chunks(L))
+    @threaded n*L for rng in _line_chunks(L)
         isempty(rng) && continue
         @inbounds begin
             for k in 1:(n-1)
@@ -146,7 +164,7 @@ function solve_lines_t!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T}) wh
         line_solver.zbn[l, t] = line_solver.z[cnext+t, l]
     end
     V, W = line_solver.V, line_solver.W
-    @threaded n*L for rng in collect(_line_chunks(L))
+    @threaded n*L for rng in _line_chunks(L)
         isempty(rng) && continue
         @inbounds for i in 1:n, t in 1:q
             vi = V[i, t]
