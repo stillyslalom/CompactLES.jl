@@ -797,6 +797,19 @@ function test_checkpoint()
         d = max(d, abs(Q2[gidx(solver, i, j, k), c] - Q[gidx(solver, i, j, k), c]))
     end
     check("state bit-identical after round trip", gmax(d), 1e-300)
+    # The header describes the state, not only its shape. Each rank writes the
+    # global coordinates rather than its own slice of them, so a solver holding
+    # the same extents over a longer domain is refused on every rank at once
+    # rather than on whichever ranks happen to notice.
+    stretched = Solver(n_global=(SPLITN, 16, 16), L_domain=(4π, 2π, 2π), bcs=per3,
+                       art=ArtParams(enabled=false), dims=splitdims(1))
+    threw = try
+        load_checkpoint!(stretched, allocate_state(stretched), "mpi_ckpt")
+        0
+    catch e
+        occursin("grid coordinate mismatch", sprint(showerror, e)) ? 1 : 0
+    end
+    check("a different domain is refused on every rank", abs(gsum(threw) - np), 0.5)
     # One rank does the cleanup: every rank wrote its own file, but all of them
     # racing to rm the whole glob just makes them delete each other's entries
     # and throw ENOENT.

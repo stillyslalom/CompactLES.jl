@@ -2,11 +2,98 @@
 # header. Deliberately dependency-free (no HDF5); restart requires the same
 # global grid, decomposition, and conserved layout. Parallel-aware
 # postprocessing formats are a separate concern.
+#
+# WHAT THE HEADER HAS TO PIN DOWN. The payload is a block of conserved
+# components, and nothing in it records what those components mean or where the
+# points are, so a restart onto a solver that disagrees is not detectable from
+# the payload: it reads cleanly and means something else. The extents and the
+# rank's Cartesian coordinates rule out a different decomposition, and the rest
+# of the header rules out the cases they do not see. This is the same set the
+# shared-file path records, and `type_name`, `global_axis` and `axis_matches`
+# below are shared with it so the two cannot drift apart.
+#
+#   The conserved layout needs the species set, not just `n_cons`. Two species
+#   sets of the same size give the same `n_cons`, so only `component_names`
+#   separates them, and it covers the momentum and energy slots at the same time.
+#
+#   The grid needs the coordinates, not the extent. `n_global` alone admits a
+#   different domain length, a different origin, and any `Stretch` mapping; the
+#   global coordinate vector along each dimension pins all three at once, and is
+#   also the only form a `Stretch` can be stored in, being a pair of closures.
+#   Every rank writes the whole of it rather than its own slice, so that one
+#   file validates the grid: three vectors of `n_global[d]` doubles against a
+#   block of `prod(n_local) * n_cons` values.
+#
+#   The metric and the EOS are stored by type name. For the metric that is a
+#   complete description, the types being singletons. For the EOS it is a coarse
+#   check that catches a different model at the same `n_cons`; the species are
+#   identified by the names in `component_names`, so two species sets sharing
+#   names while differing in their thermodynamic constants are not distinguished.
+#
+# THE FORMAT WORD. The header is a fixed binary layout, so a field added to it
+# shifts every field after it and a file written by an earlier version is
+# misread rather than rejected. The magic was therefore changed when the fields
+# above were added, so that a file in the original format is rejected by name;
+# the version word that follows the magic means no later addition needs a
+# second change to it.
 
-const CKPT_MAGIC = 0x434c4553_434b5054   # "CLES CKPT"
+const CKPT_MAGIC_V1 = 0x434c4553_434b5054   # "CLESCKPT", the unversioned format
+const CKPT_MAGIC = 0x434c4553_52434b50      # "CLESRCKP"
+const CKPT_VERSION = 2
 
 _ckpt_name(prefix::AbstractString, rank::Int) =
     string(prefix, ".r", lpad(rank, 4, '0'), ".ckpt")
+
+# Strings in a format that has no other framing: a byte length, then the UTF-8
+# bytes; a list of them is prefixed by its own count.
+function _write_string(io, s::AbstractString)
+    b = codeunits(String(s))
+    write(io, Int64(length(b)))
+    write(io, b)
+    return io
+end
+
+_read_string(io) = String(read(io, Int(read(io, Int64))))
+
+function _write_strings(io, strings)
+    write(io, Int64(length(strings)))
+    for s in strings
+        _write_string(io, s)
+    end
+    return io
+end
+
+_read_strings(io) = [_read_string(io) for _ in 1:Int(read(io, Int64))]
+
+"""
+Type name of `x`, the form in which a checkpoint header records a metric or an
+equation of state. Both are compared by name rather than by value: a metric type
+is a singleton and so fully described by its name, while an EOS carries
+thermodynamic constants that no serialization contract covers yet.
+"""
+type_name(x) = string(nameof(typeof(x)))
+
+"""
+Global coordinate vector along dimension `d`, covering the whole domain rather
+than this rank's block. It is identical on every rank, so building it needs no
+communication.
+"""
+global_axis(solver::Solver, d::Int) =
+    Float64[global_xcoord(solver, d, i) for i in 1:solver.decomp.n_global[d]]
+
+"""
+Whether the coordinate vector `stored` read from a checkpoint and the vector
+`mine` rebuilt from a solver describe the same grid, to a relative tolerance of
+1e-10. Compared with a tolerance rather than exactly: the two come from the same
+expression, but a [`Stretch`](@ref) mapping evaluated on a different machine or
+Julia version may land a few ulp away, while a grid that genuinely differs does
+so by orders of magnitude more than this.
+"""
+function axis_matches(stored, mine)
+    length(stored) == length(mine) || return false
+    scale = max(1.0, maximum(abs, mine; init=0.0))
+    return maximum(abs.(stored .- mine); init=0.0) <= 1e-10 * scale
+end
 
 """
     save_checkpoint(solver, Q, prefix)
@@ -16,8 +103,13 @@ rank, and return `prefix`. `NNNN` is the rank zero-padded to four digits, and an
 existing file of that name is truncated. Collective only in the trivial sense
 that every rank writes; no communication is involved.
 
-The header records the conserved count, the global and local extents, and this
-rank's Cartesian coordinates, all of which [`load_checkpoint!`](@ref) checks.
+The header describes the state well enough for [`load_checkpoint!`](@ref) to
+reject a solver it does not belong to: the format version, the conserved and
+species counts, the global and local extents, this rank's Cartesian coordinates,
+the conserved component names, the metric and EOS type names, and the global
+coordinate vector along each dimension. The coordinates carry the domain extent,
+the origin and any [`Stretch`](@ref) mapping, none of which the extent alone
+constrains.
 """
 function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
     decomp = solver.decomp
@@ -26,7 +118,9 @@ function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
     nx, ny, nz = decomp.n_local
     open(_ckpt_name(prefix, rank), "w") do io
         write(io, UInt64(CKPT_MAGIC))
+        write(io, Int64(CKPT_VERSION))
         write(io, Int64(solver.equations.n_cons))
+        write(io, Int64(solver.equations.n_species))
         for d in 1:3
             write(io, Int64(decomp.n_global[d]))
         end
@@ -35,6 +129,12 @@ function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
         end
         for d in 1:3
             write(io, Int64(decomp.coords[d]))
+        end
+        _write_strings(io, solver.equations.component_names)
+        _write_string(io, type_name(solver.metric))
+        _write_string(io, type_name(solver.eos))
+        for d in 1:3
+            write(io, global_axis(solver, d))
         end
         write(io, Float64(solver.t))
         write(io, Int64(solver.step))
@@ -47,20 +147,49 @@ end
     load_checkpoint!(solver, Q, prefix)
 
 Restore the interior of `Q` and (t, step) from `prefix.rNNNN.ckpt`, and return
-`Q`. Halos are left untouched. The conserved count, the global grid, this rank's
-local extent and its Cartesian coordinates must all match the values in the
-header, so a checkpoint restores only onto the decomposition that wrote it; any
-mismatch throws. [`load_checkpoint_hdf5!`](@ref) is the decomposition-independent
-alternative.
+`Q`. Halos are left untouched. Every field of the header
+[`save_checkpoint`](@ref) records is compared against `solver` and any mismatch
+throws, so a checkpoint restores only onto the decomposition that wrote it and
+only onto a solver whose species set, metric, EOS and grid coordinates are the
+ones it was written from. Coordinates are compared to a relative tolerance of
+1e-10, which separates a rebuilt identical grid from any different one.
+
+A file written in the original unversioned format is rejected rather than
+partially validated: it carries no record of the species set, the metric or the
+grid, so accepting it would mean accepting exactly the restart the header was
+extended to refuse.
+
+[`load_checkpoint_hdf5!`](@ref) is the decomposition-independent alternative,
+and checks the same fields.
 """
 function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    open(_ckpt_name(prefix, rank), "r") do io
-        read(io, UInt64) == CKPT_MAGIC || error("not a CompactLES checkpoint")
-        Int(read(io, Int64)) == solver.equations.n_cons || error("conserved layout mismatch")
+    n_cons = solver.equations.n_cons
+    path = _ckpt_name(prefix, rank)
+    open(path, "r") do io
+        magic = read(io, UInt64)
+        magic == CKPT_MAGIC_V1 &&
+            error("$path is a checkpoint in the original unversioned format, " *
+                  "which carries no record of the species set, the metric or " *
+                  "the grid and cannot be validated; rerun to regenerate it")
+        magic == CKPT_MAGIC || error("$path is not a CompactLES checkpoint")
+        version = Int(read(io, Int64))
+        version == CKPT_VERSION ||
+            error("checkpoint version mismatch in $path: the file is version " *
+                  "$version; this build writes and reads version $CKPT_VERSION")
+        file_n_cons = Int(read(io, Int64))
+        file_n_cons == n_cons ||
+            error("conserved layout mismatch: file has $file_n_cons, solver " *
+                  "has $n_cons")
+        # `n_cons` alone does not identify the conserved layout: two species
+        # sets of the same size agree on it and mean different things.
+        n_species = Int(read(io, Int64))
+        n_species == solver.equations.n_species ||
+            error("species count mismatch: file has $n_species, solver has " *
+                  "$(solver.equations.n_species)")
         for d in 1:3
             Int(read(io, Int64)) == decomp.n_global[d] || error("global grid mismatch")
         end
@@ -70,9 +199,31 @@ function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
         for d in 1:3
             Int(read(io, Int64)) == decomp.coords[d] || error("rank layout mismatch")
         end
+        names = _read_strings(io)
+        names == solver.equations.component_names ||
+            error("conserved component mismatch: file has $names, solver has " *
+                  "$(solver.equations.component_names)")
+        stored_metric = _read_string(io)
+        stored_metric == type_name(solver.metric) ||
+            error("metric mismatch: file has $stored_metric, solver has " *
+                  "$(type_name(solver.metric))")
+        stored_eos = _read_string(io)
+        stored_eos == type_name(solver.eos) ||
+            error("equation of state mismatch: file has $stored_eos, solver " *
+                  "has $(type_name(solver.eos))")
+        # The coordinates carry the domain extent, the origin and any `Stretch`,
+        # none of which the extents above constrain.
+        for d in 1:3
+            stored = read!(io, Vector{Float64}(undef, decomp.n_global[d]))
+            axis_matches(stored, global_axis(solver, d)) ||
+                error("grid coordinate mismatch on dimension $d: the stored " *
+                      "coordinates differ from this solver's, so the domain " *
+                      "extent, the origin or a Stretch mapping is not the one " *
+                      "the checkpoint was written on")
+        end
         solver.t = read(io, Float64)
         solver.step = Int(read(io, Int64))
-        buf = Array{Float64}(undef, nx, ny, nz, solver.equations.n_cons)
+        buf = Array{Float64}(undef, nx, ny, nz, n_cons)
         read!(io, buf)
         Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :] .= buf
     end

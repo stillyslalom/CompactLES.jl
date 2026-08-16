@@ -6,6 +6,7 @@ module CompactLESHDF5Ext
 
 using CompactLES
 using CompactLES: BlockRegion, Decomp, Solver, owned_region, region_ranges
+using CompactLES: axis_matches, global_axis, type_name
 using MPI
 using HDF5
 
@@ -121,42 +122,10 @@ read_region4(dset, region::BlockRegion, ncomp::Int) =
 # else. The header records everything the interpretation depends on, and
 # `load_checkpoint_hdf5!` checks all of it.
 #
-# The conserved layout needs the species set, not just `n_cons`. Two species
-# sets of the same size give the same `n_cons`, so only `component_names`
-# separates them, and it covers the momentum and energy slots at the same time.
-#
-# The grid needs the coordinates, not the extent. `n_global` alone admits a
-# different domain length, a different origin, and any `Stretch` mapping; the
-# global coordinate vector along each dimension pins all three at once. It is
-# also the only form a `Stretch` can be stored in, being a pair of closures.
-# Three vectors of `n_global[d]` doubles are negligible beside the state.
-#
-# The metric and the EOS are stored by type name. For the metric that is a
-# complete description, the types being singletons, and the scale factors it
-# implies are already reflected in the coordinates. For the EOS it is a coarse
-# check that catches a different model at the same `n_cons`; the species
-# themselves are identified by the names in `component_names`, so two species
-# sets sharing names but differing in their thermodynamic constants are not
-# distinguished. Recording those would need a serialization contract every EOS
-# implements, which is a larger change than this.
-
-type_name(x) = string(nameof(typeof(x)))
-
-# Global coordinate vector along `d`, identical on every rank, so writing it
-# needs no communication.
-global_axis(solver::Solver, d::Int) =
-    Float64[CompactLES.global_xcoord(solver, d, i)
-            for i in 1:solver.decomp.n_global[d]]
-
-# Compared with a tolerance rather than exactly: the stored vector and the one
-# rebuilt here come from the same expression, but a `Stretch` mapping evaluated
-# on a different machine or Julia version may land a few ulp away, and a grid
-# that genuinely differs does so by orders of magnitude more than this.
-function axis_matches(stored, mine)
-    length(stored) == length(mine) || return false
-    scale = max(1.0, maximum(abs, mine; init=0.0))
-    return maximum(abs.(stored .- mine); init=0.0) <= 1e-10 * scale
-end
+# The reasoning for each field is at the top of `src/io.jl`, whose per-rank
+# checkpoint records the same set for the same reasons, and `type_name`,
+# `global_axis` and `axis_matches` are taken from there rather than restated
+# here so that the two paths cannot drift apart.
 
 function CompactLES.save_checkpoint_hdf5(solver::Solver, Q, prefix::AbstractString)
     decomp = solver.decomp

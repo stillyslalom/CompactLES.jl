@@ -2155,6 +2155,76 @@ end
     foreach(rm, filter(startswith("test_ckpt"), readdir()))
 end
 
+@testset "checkpoint header rejects a solver it does not describe" begin
+    # Everything the payload's interpretation depends on is in the header. Each
+    # solver below reads the block cleanly if its own field is not checked: the
+    # extents agree in every case and the state means something else. The
+    # expected message is asserted so that each case exercises the check it is
+    # there for rather than tripping an earlier one.
+    mk(; kw...) = Solver(; n_global=(12, 12, 12), bcs=per3, L_domain=(2π, 2π, 2π),
+                         art=ArtParams(enabled=false), kw...)
+    eos2 = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                         IdealSpecies{Float64}("b", 2.0, 1.6)])
+    base = mk(eos=eos2)
+    Qb = allocate_state(base)
+    initialize!(base, Qb, (x, y, z) -> Prim(Y=(0.3, 0.7), p=1.0, rho=1.0))
+    save_checkpoint(base, Qb, "test_ckpt_header")
+    reject(solver, msg) =
+        @test_throws msg load_checkpoint!(solver, allocate_state(solver),
+                                          "test_ckpt_header")
+
+    # A different species set of the same size: same conserved count, same grid,
+    # same metric. Only the component names separate them.
+    reject(mk(eos=IdealMixture([IdealSpecies{Float64}("c", 1.0, 1.4),
+                                IdealSpecies{Float64}("d", 2.0, 1.6)])),
+           "conserved component mismatch")
+    # A different species count, which also moves the conserved count.
+    reject(mk(eos=IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4)])),
+           "conserved layout mismatch")
+    # The same grid dimensions over a longer domain, which the extents cannot
+    # see and the coordinates can.
+    reject(mk(eos=eos2, L_domain=(4π, 2π, 2π)), "grid coordinate mismatch")
+    # The same grid shifted, likewise invisible to every other field.
+    reject(mk(eos=eos2, origin=(0.5, 0.0, 0.0)), "grid coordinate mismatch")
+    # A different metric on the same grid dimensions: the block is the same
+    # shape and every momentum component means something else.
+    reject(mk(eos=eos2, bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+              origin=(0.5, 0.0, 0.0), metric=CylindricalMetric()),
+           "metric mismatch")
+
+    # A file in the original unversioned format. The layout is fixed, so the
+    # fields added since would be read from the wrong offsets; the magic
+    # identifies it instead.
+    open("test_ckpt_header_old.r0000.ckpt", "w") do io
+        write(io, UInt64(CL.CKPT_MAGIC_V1))
+    end
+    @test_throws "unversioned format" load_checkpoint!(base, Qb,
+                                                       "test_ckpt_header_old")
+
+    # A stretched dimension against the uniform grid it was written on. The two
+    # agree on extent, origin, species and metric and differ only point by
+    # point, which is why the coordinates are stored rather than the extent. A
+    # stretched dimension must be non-periodic, so this pair needs a checkpoint
+    # of its own, and it is paired with a reload onto the grid that wrote it so
+    # that the check is shown to discriminate rather than to refuse everything.
+    mkw(st) = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                     bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                     stretch=(st, nothing, nothing), art=ArtParams(enabled=false))
+    uniform = mkw(nothing)
+    Qu = allocate_state(uniform)
+    initialize!(uniform, Qu, (x, y, z) -> Prim(p=1.0, rho=1.0))
+    uniform.step = 7
+    save_checkpoint(uniform, Qu, "test_ckpt_uniform")
+    stretched = mkw(sine_cluster(0.0, 1.0, 0.5, 0.3))
+    @test_throws "grid coordinate mismatch" load_checkpoint!(
+        stretched, allocate_state(stretched), "test_ckpt_uniform")
+    reload = mkw(nothing)
+    load_checkpoint!(reload, allocate_state(reload), "test_ckpt_uniform")
+    @test reload.step == 7
+
+    foreach(rm, filter(startswith("test_ckpt"), readdir()))
+end
+
 @testset "smoke: three RK steps of every headline configuration" begin
     for build in (
         () -> setup(Problem(domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3,

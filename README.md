@@ -265,7 +265,10 @@ from one imposed by azimuthal spacing near a singularity.
 
 - **Checkpoints:** `save_checkpoint(solver, Q, "prefix")` writes one dependency-free
   binary file per rank; `load_checkpoint!(solver, Q, "prefix")` restores it. Restarts
-  require the same global grid and decomposition.
+  require the same global grid and decomposition. The header also records the
+  species set, the metric, the EOS and the grid coordinates, so a solver the file
+  does not describe is rejected rather than misread; a file written before those
+  fields existed is rejected as well, since it cannot be checked against them.
 - **Shared-file checkpoints:** with `using HDF5`, `save_checkpoint_hdf5` writes the
   state as one global array in a single `.h5`, and `load_checkpoint_hdf5!` restores
   it onto **any** rank count and process grid. This is the form to use when a run
