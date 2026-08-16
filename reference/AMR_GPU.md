@@ -425,10 +425,12 @@ extensions for backend-specific glue.
 - Field arrays: `Array{T,3}` → type parameter `A<:AbstractArray{T,3}` on
   `Patch`; allocation goes through a backend object
   (`field(backend, decomp)`), defaulting to CPU.
-- Halo and pair buffers: concretely `Float64` today (`decomposition.jl`),
-  the known blocker for `Solver{T}` generality. Type them `T` and allocate
-  them with the backend. This also unlocks the mixed-precision item in
-  `ROADMAP.md` and verifies the existing `{T}` parameterization.
+- Field allocation and the halo and pair buffers: concretely `Float64` today
+  (`decomposition.jl`, where `field` is a bare `zeros(...)`), the known blocker
+  for `Solver{T}` generality. Type them `T` and allocate them with the backend.
+  `viz.jl` converts to `Array{Float64,3}` on extraction and has to follow. This
+  also unlocks the mixed-precision item in `ROADMAP.md` and verifies the
+  existing `{T}` parameterization.
 - `Vector{Array{T,3}}` fields (`Y`, `D_art`) and `Matrix{Array{T,3}}`
   (`grad_u`, `grad_Y`, `flux`) become collections of `A`.
 

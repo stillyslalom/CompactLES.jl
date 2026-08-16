@@ -419,10 +419,13 @@ kernels and device line solves; subcycling, sensor-driven tagging, and
 regridding last. Conforming multiblock is independently useful geometry even
 if refinement never follows.
 
-**Mixed precision.** `Solver{T}` is already parameterized; the concrete
-`Float64` halo buffers are the blocker. This generalization is folded into
-AMR Stage 2 / GPU Stage G0 (`reference/AMR_GPU.md`) so the structs are
-rewritten once.
+**Mixed precision.** `Solver{T}` is already parameterized, but the allocation
+does not follow `T`: `field` (`decomposition.jl`) is a bare `zeros(...)` and so
+returns `Array{Float64,3}`, and it allocates every solver field, not only the
+halo and pair buffers. `viz.jl` likewise converts to `Array{Float64,3}` on
+extraction. Making `T` reach the storage is the blocker, and it is a wider
+change than the buffers alone. This generalization is folded into AMR Stage 2 /
+GPU Stage G0 (`reference/AMR_GPU.md`) so the structs are rewritten once.
 
 **Parallel HDF5/XDMF time series.** Single dumps and shared-file checkpoints
 are delivered (`reference/HISTORY.md`). Two pieces remain, the first
