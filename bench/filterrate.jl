@@ -3,8 +3,9 @@
 #   julia --project=. -t auto bench/filterrate.jl
 #   julia --project=. -t auto bench/filterrate.jl 64 filter_cfl=0.4
 #
-# WHAT THIS MEASURED, so the next person does not have to rediscover it. At
-# N = 32 to t = 0.5, kinetic energy removed by the filter alone:
+# --- What this measured, so it is not rediscovered ---------------------------
+#
+# At N = 32 to t = 0.5, kinetic energy removed by the filter alone:
 #
 #   cfl    steps   unrelaxed          relaxed (filter_cfl = 0.4)
 #   0.4      73    4.092e-3  1.000    4.042e-3  1.000
@@ -17,7 +18,9 @@
 # half the CFL applies twice the subgrid dissipation over the same interval.
 # `filter_cfl` makes it a rate, constant to six figures across a 4x CFL change.
 #
-# CHOOSING THE CASE. Two earlier attempts are worth not repeating.
+# --- Choosing the case -------------------------------------------------------
+#
+# Two earlier attempts are worth not repeating.
 #
 #   A broadband field loses 64% of its kinetic energy within tens of steps and
 #   then cannot lose more. The scaling saturates out of sight, and the measured

@@ -2,9 +2,11 @@
 #
 #   julia --project=. -t auto bench/foldorder.jl
 #
-# WHY THIS EXISTS. test/convergence.jl measures a max norm over the whole line,
-# and every one of its fold studies closes the outer end with a SlipWallBC whose
-# closure rows measure 3.17 on their own. A reported fold order near 3 is
+# --- Why this exists ---------------------------------------------------------
+#
+# test/convergence.jl measures a max norm over the whole line, and every one of
+# its fold studies closes the outer end with a SlipWallBC whose closure rows
+# measure 3.17 on their own. A reported fold order near 3 is
 # therefore consistent with two different worlds: the fold is third order, or
 # the fold is accurate and the outer wall dominates the norm. Splitting the norm
 # by region separates them, and the answer is the second one — see

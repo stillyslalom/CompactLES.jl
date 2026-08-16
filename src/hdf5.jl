@@ -9,20 +9,24 @@
 # supply one must still be able to run the solver, so nothing here is loadable
 # unless the caller writes `using HDF5`.
 #
-# WHY A SHARED FILE. The VTK path writes one file per rank per frame, which at
-# 448 ranks and 100 frames is 44,800 files. That is a filesystem metadata
-# problem before it is a bandwidth problem. A single file per dump also makes
-# restart independent of the rank count, since the state is stored as one
-# global array rather than as a set of per-rank blocks.
+# --- Why a shared file -------------------------------------------------------
 #
-# TWO WRITE BACKENDS. With a parallel libhdf5 every rank writes its own
-# hyperslab collectively, which is the configuration this exists for. Without
-# one, HDF5 cannot be opened by more than one process at a time, so the ranks
-# take turns: rank 0 creates the file and writes its block, then passes a token
-# along the communicator, and each rank in turn opens the file, writes its
-# block, and closes it. The result is byte-identical and the cost is O(P)
-# serialized opens. It is intended for a workstation and for tests, not for a
-# production run; `hdf5_parallel()` reports which backend is in use.
+# The VTK path writes one file per rank per frame, which at 448 ranks and 100
+# frames is 44,800 files. That is a filesystem metadata problem before it is a
+# bandwidth problem. A single file per dump also makes restart independent of
+# the rank count, since the state is stored as one global array rather than as
+# a set of per-rank blocks.
+#
+# --- Two write backends ------------------------------------------------------
+#
+# With a parallel libhdf5 every rank writes its own hyperslab collectively,
+# which is the configuration this exists for. Without one, HDF5 cannot be opened
+# by more than one process at a time, so the ranks take turns: rank 0 creates
+# the file and writes its block, then passes a token along the communicator, and
+# each rank in turn opens the file, writes its block, and closes it. The result
+# is byte-identical and the cost is O(P) serialized opens. It is intended for a
+# workstation and for tests, not for a production run; `hdf5_parallel()` reports
+# which backend is in use.
 
 """
     BlockRegion(offset, extent)
@@ -45,7 +49,7 @@ owned_region(decomp::Decomp) =
 region_ranges(region::BlockRegion) =
     ntuple(d -> (region.offset[d]+1):(region.offset[d]+region.extent[d]), 3)
 
-# --- Extension plumbing -----------------------------------------------------
+# --- Extension plumbing ------------------------------------------------------
 
 _hdf5_extension() = Base.get_extension(@__MODULE__, :CompactLESHDF5Ext)
 

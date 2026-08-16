@@ -3,14 +3,16 @@
 # global grid, decomposition, and conserved layout. Parallel-aware
 # postprocessing formats are a separate concern.
 #
-# WHAT THE HEADER HAS TO PIN DOWN. The payload is a block of conserved
-# components, and nothing in it records what those components mean or where the
-# points are, so a restart onto a solver that disagrees is not detectable from
-# the payload: it reads cleanly and means something else. The extents and the
-# rank's Cartesian coordinates rule out a different decomposition, and the rest
-# of the header rules out the cases they do not see. This is the same set the
-# shared-file path records, and `type_name`, `global_axis` and `axis_matches`
-# below are shared with it so the two cannot drift apart.
+# --- What the header has to pin down -----------------------------------------
+#
+# The payload is a block of conserved components, and nothing in it records what
+# those components mean or where the points are, so a restart onto a solver that
+# disagrees is not detectable from the payload: it reads cleanly and means
+# something else. The extents and the rank's Cartesian coordinates rule out a
+# different decomposition, and the rest of the header rules out the cases they
+# do not see. This is the same set the shared-file path records, and
+# `type_name`, `global_axis` and `axis_matches` below are shared with it so the
+# two cannot drift apart.
 #
 #   The conserved layout needs the species set, not just `n_cons`. Two species
 #   sets of the same size give the same `n_cons`, so only `component_names`
@@ -30,12 +32,13 @@
 #   identified by the names in `component_names`, so two species sets sharing
 #   names while differing in their thermodynamic constants are not distinguished.
 #
-# THE FORMAT WORD. The header is a fixed binary layout, so a field added to it
-# shifts every field after it and a file written by an earlier version is
-# misread rather than rejected. The magic was therefore changed when the fields
-# above were added, so that a file in the original format is rejected by name;
-# the version word that follows the magic means no later addition needs a
-# second change to it.
+# --- The format word ---------------------------------------------------------
+#
+# The header is a fixed binary layout, so a field added to it shifts every field
+# after it and a file written by an earlier version is misread rather than
+# rejected. The magic was therefore changed when the fields above were added, so
+# that a file in the original format is rejected by name; the version word that
+# follows the magic means no later addition needs a second change to it.
 
 const CKPT_MAGIC_V1 = 0x434c4553_434b5054   # "CLESCKPT", the unversioned format
 const CKPT_MAGIC = 0x434c4553_52434b50      # "CLESRCKP"
@@ -347,7 +350,7 @@ function _normalize_stride(stride)::NTuple{3,Int}
     return st
 end
 
-# --- Slicing ----------------------------------------------------------------
+# --- Slicing -----------------------------------------------------------------
 #
 # `slice = (d, g)` writes the single plane at global index `g` of dimension `d`,
 # which is the cheap way to watch a 3-D run: a mid-plane of a 512³ grid is 1/512

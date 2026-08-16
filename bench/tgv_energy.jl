@@ -9,7 +9,7 @@
 # internal energy that shows up as a slightly negative residual while the flow
 # is still smooth). Three channels, and only two of them have a coefficient.
 #
-# WHAT THIS MEASURED, so the next person does not have to rediscover it:
+# --- What this measured, so it is not rediscovered ---------------------------
 #
 #   32³, Re=1600, filter_interval=1, C_mu=0.002 default, at the dissipation peak
 #   (t ≈ 6.3): molecular 12%, artificial shear 5%, artificial bulk ~0%,
