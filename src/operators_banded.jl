@@ -23,6 +23,8 @@ struct BandPlan{T} <: AbstractDirPlan
     ci::Vector{T}
     clo::Vector{Vector{T}}
     chi::Vector{Vector{T}}
+    clo_first::Vector{Int}     # always 1: banded closures read from the edge
+    chi_first::Vector{Int}
     B::Matrix{T}
 end
 
@@ -129,6 +131,6 @@ function plan_direction(decomp::Decomp, scheme::BandedCompactScheme{T}, dim::Int
                         decomp.sub_rank[dim], lines; periodic=decomp.periodic[dim])
     tr = dim > 1
     BandPlan{T}(dim, n, lines, tr, scheme, line_solver, lo_closed, hi_closed,
-                scheme.a0, ci, clo, chi,
+                scheme.a0, ci, clo, chi, fill(1, nc), fill(1, nc),
                 tr ? zeros(T, lines, n) : zeros(T, n, lines))
 end

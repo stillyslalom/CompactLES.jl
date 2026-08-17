@@ -676,3 +676,37 @@ a distributed pair round trip on split dimensions and a transverse-decomposed
 transfer (93/93 at 2, 4 and 8 ranks). Convergence and validation guards are
 unchanged to every printed digit, as they must be for a change that adds
 operators without touching the solver.
+
+## AMR/GPU Stage 2 — patch abstraction and storage generalization (August 2026)
+
+Stage 2 of `reference/AMR_GPU.md` is delivered, carrying GPU Stage G0 in the
+same change: `Solver` is split into physics configuration plus per-patch state
+(`src/patches.jl`), each `Patch` holding its own communicator, `Decomp`,
+operator plans, folds, and every field array typed
+`A <: AbstractArray{T,3}` behind a backend object (`CPUBackend` default).
+`Decomp{T}` types the halo and pair buffers, closing the known `Float64`
+hardcodes in `decomposition.jl` and `viz.jl` and clearing the mixed-precision
+storage blocker in `reference/ROADMAP.md`. A single-patch solver forwards the
+patch-owned property names to its sole patch, so the entire existing surface
+reads unchanged.
+
+The hard gate held: `test/convergence.jl` bit-identical down to the error
+magnitudes, validation guards matched to every printed digit, 64/64 serial
+testsets and 93/93 MPI checks unchanged at 2, 4 and 8 ranks, and
+`bench/jetcheck.jl` two reports *lower* (a `Nothing`-plan `apply_along!`
+method makes the dead fold branch statically resolvable).
+
+Multi-patch delivery, first cut: slab layouts along one dimension
+(`patch_grid`), rank partitioning by one `MPI.Comm_split` proportional to
+patch volume, interface ghost exchange and shared-plane averaging between RK
+stages (`sync_patches!`), and extended-data interface closures whose
+left-hand sides couple no ghost unknown. The measured gates — manufactured
+smooth solution at order 3.1–3.5 across the interface, pulse reflection
+2.3e-3 of incident at 192 points converging at ≈ 5th order, conservation
+drift 1.2e-8 relative against 4.5e-15 single-patch, and reproduction of the
+serial two-patch answer under rank partitioning (bitwise at one rank per
+patch, round-off-level once a patch is itself decomposed) — are recorded
+with the scope restrictions (no folds, no banded schemes, no `:d8`,
+single-patch I/O) in the Stage 2 status block of `reference/AMR_GPU.md`.
+Serial coverage adds five testsets (69 total); the MPI suite adds the
+rank-partitioned oracle (95/95 at 2, 4 and 8 ranks).

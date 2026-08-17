@@ -38,7 +38,7 @@ Quadrature weight of local interior index `i` along dimension `d`: 1 in the
 interior and on any folded (half-offset) edge, ½ on a node-centered physical
 edge, 1 on collapsed and periodic dimensions.
 """
-@inline function quad_weight(solver::Solver, d::Int, i::Int)
+@inline function quad_weight(solver::SolverLike, d::Int, i::Int)
     decomp = solver.decomp
     (decomp.active[d] && !decomp.periodic[d]) || return 1.0
     g = decomp.offset[d] + i                          # 1-based global index
@@ -49,7 +49,7 @@ edge, 1 on collapsed and periodic dimensions.
 end
 
 "Computational cell measure Πh_d over active dimensions (collapsed dims give 1)."
-cell_measure(solver::Solver) = prod(ntuple(d -> solver.decomp.active[d] ?
+cell_measure(solver::SolverLike) = prod(ntuple(d -> solver.decomp.active[d] ?
                                            solver.h[d] : one(eltype(solver.h)), 3))
 
 """
@@ -59,7 +59,28 @@ cell_measure(solver::Solver) = prod(ntuple(d -> solver.decomp.active[d] ?
 interior is read, so halo values do not enter the result. Collective. See the
 quadrature note at the top of this file for the edge treatment.
 """
-function volume_integral(solver::Solver, f::AbstractArray{<:Real,3})
+function volume_integral(solver::SolverLike, f::AbstractArray{<:Real,3})
+    return MPI.Allreduce(_local_volume_integral(solver, f), +, solver.comm)
+end
+
+"""
+    volume_integral(solver, fs::Vector) -> Float64
+
+Multi-patch form: `fs` holds one full padded array per local patch, aligned
+with `solver.patches`. Patch contributions accumulate locally and reduce over
+`solver.comm` once. A shared interface-plane node carries a half weight on each
+side (each patch's interface end is a node-centered closed edge to its own
+quadrature), so the plane is counted exactly once in the total.
+"""
+function volume_integral(solver::Solver, fs::Vector{<:AbstractArray{<:Real,3}})
+    acc = 0.0
+    for (i, p) in enumerate(getfield(solver, :patches))
+        acc += _local_volume_integral(PatchSolver(solver, p), fs[i])
+    end
+    return MPI.Allreduce(acc, +, solver.comm)
+end
+
+function _local_volume_integral(solver::SolverLike, f::AbstractArray{<:Real,3})
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -77,7 +98,7 @@ function volume_integral(solver::Solver, f::AbstractArray{<:Real,3})
             end
         end
     end
-    return MPI.Allreduce(acc * dV, +, decomp.comm)
+    return acc * dV
 end
 
 """
@@ -85,7 +106,7 @@ end
 
 ∫ dV, i.e. `volume_integral` of unity. Collective.
 """
-function domain_volume(solver::Solver)
+function domain_volume(solver::SolverLike)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -95,7 +116,7 @@ function domain_volume(solver::Solver)
         acc += quad_weight(solver, 1, i) * quad_weight(solver, 2, j) *
                quad_weight(solver, 3, k) / solver.inv_J[I]
     end
-    return MPI.Allreduce(acc * cell_measure(solver), +, decomp.comm)
+    return MPI.Allreduce(acc * cell_measure(solver), +, solver.comm)
 end
 
 """
@@ -103,7 +124,7 @@ end
 
 ∫ f dV / ∫ dV. Collective.
 """
-volume_average(solver::Solver, f) = volume_integral(solver, f) / domain_volume(solver)
+volume_average(solver::SolverLike, f) = volume_integral(solver, f) / domain_volume(solver)
 
 """
     plane_profile(solver, f, d) -> Vector{Float64}

@@ -28,26 +28,9 @@
 # workstation and for tests, not for a production run; `hdf5_parallel()` reports
 # which backend is in use.
 
-"""
-    BlockRegion(offset, extent)
-
-One rectangular block of a global array: its 0-based `offset` and its per-
-dimension `extent`. This is the unit an HDF5 hyperslab is written from. It is
-deliberately independent of [`Decomp`](@ref), so that the same write path serves
-both a rank's owned block and, later, a refinement patch.
-"""
-struct BlockRegion
-    offset::NTuple{3,Int}
-    extent::NTuple{3,Int}
-end
-
-"The block of the global array owned by this rank."
-owned_region(decomp::Decomp) =
-    BlockRegion(ntuple(d -> decomp.offset[d], 3), ntuple(d -> decomp.n_local[d], 3))
-
-"1-based index ranges of `region` within the global array, as an HDF5 hyperslab."
-region_ranges(region::BlockRegion) =
-    ntuple(d -> (region.offset[d]+1):(region.offset[d]+region.extent[d]), 3)
+# `BlockRegion`, `owned_region` and `region_ranges` — the block description the
+# hyperslab writes are phrased over — live in decomposition.jl, since the patch
+# layout is expressed in the same unit.
 
 # --- Extension plumbing ------------------------------------------------------
 

@@ -196,7 +196,7 @@ function fired!(trigger::WhenState, solver, Q)
     # Reduced as an Int with `max` rather than a Bool with `|`, matching the
     # reductions elsewhere in the solver; semantically this is a logical OR.
     local_hit = trigger.condition(solver, Q)::Bool
-    hit = MPI.Allreduce(Int(local_hit), max, solver.decomp.comm) > 0
+    hit = MPI.Allreduce(Int(local_hit), max, solver.comm) > 0
     hit && trigger.once && (trigger.done = true)
     return hit
 end
@@ -312,7 +312,7 @@ function ProgressLog(; every::Int=10, quantity=nothing, label::AbstractString=""
 end
 
 function (effect::ProgressEffect)(solver, Q)
-    comm = solver.decomp.comm
+    comm = solver.comm
     # Both collectives are unconditional: every rank reaches them, before the
     # rank-0 guard below. Reversing that order is the deadlock in `nscbc.jl`.
     value = effect.quantity === nothing ? nothing : effect.quantity(solver, Q)

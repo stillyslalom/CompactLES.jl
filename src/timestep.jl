@@ -56,12 +56,14 @@ end
 Reusable low-storage RK stage arrays. Pass a retained workspace to [`run!`](@ref)
 or [`step!`](@ref) to avoid reallocating stage storage across calls.
 """
-struct Workspace{A<:AbstractArray}
+struct Workspace{A}
     dQ::A
     du::A
 end
 
 Workspace(Q::AbstractArray) = Workspace(zero(Q), zero(Q))
+Workspace(states::Vector{<:ConservedState}) =
+    Workspace([zero(Q) for Q in states], [zero(Q) for Q in states])
 Workspace(solver::Solver) = Workspace(allocate_state(solver), allocate_state(solver))
 """
     step!(solver, Q, dQ, du, dt, prepared=false)
@@ -87,8 +89,6 @@ argument is positional for the reason given under [`compute_rhs!`](@ref).
 """
 function step!(solver::Solver, Q, dQ, du, dt, prepared::Bool=false)
     decomp = solver.decomp
-    o1, o2, o3 = decomp.n_halo_d
-    nx, ny, nz = decomp.n_local
     for stage in 1:5
         solver.tstage = solver.t + RKC[stage] * dt
         # RKC[1] = 0, so a prepared caller's boundary values are the ones this
@@ -96,22 +96,64 @@ function step!(solver::Solver, Q, dQ, du, dt, prepared::Bool=false)
         first_prepared = prepared && stage == 1
         first_prepared || apply_bcs!(solver, Q)
         compute_rhs!(solver, Q, dQ, first_prepared)
-        A = RKA[stage]
-        B = RKB[stage]
-        for c in 1:solver.equations.n_cons
-            @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-                j, k = Tuple(jk)
-                @inbounds for i in 1:nx
-                    v = A * du[i+o1, j+o2, k+o3, c] + dt * dQ[i+o1, j+o2, k+o3, c]
-                    du[i+o1, j+o2, k+o3, c] = v
-                    Q[i+o1, j+o2, k+o3, c] += B * v
-                end
-            end
-        end
+        _rk_update!(decomp, solver.equations.n_cons, Q, dQ, du,
+                    RKA[stage], RKB[stage], dt)
     end
     solver.tstage = solver.t + dt
     apply_bcs!(solver, Q)
     return Q
+end
+
+# The low-storage stage update over one patch's interior, shared between the
+# single-patch and multi-patch step drivers.
+function _rk_update!(decomp::Decomp, n_cons::Int, Q, dQ, du, A, B, dt)
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    for c in 1:n_cons
+        @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+            j, k = Tuple(jk)
+            @inbounds for i in 1:nx
+                v = A * du[i+o1, j+o2, k+o3, c] + dt * dQ[i+o1, j+o2, k+o3, c]
+                du[i+o1, j+o2, k+o3, c] = v
+                Q[i+o1, j+o2, k+o3, c] += B * v
+            end
+        end
+    end
+    return Q
+end
+
+"""
+    step!(solver, states, dQs, dus, dt, prepared=false)
+
+Multi-patch form of [`step!`](@ref): `states`, `dQs` and `dus` are vectors
+aligned with `solver.patches`. Each stage evaluates every local patch's RHS and
+update in the global patch order, then makes the interfaces consistent with
+[`sync_patches!`](@ref) — the shared-plane averaging and ghost refill after
+every stage. Collective over `solver.comm`.
+"""
+function step!(solver::Solver, states::Vector{<:ConservedState},
+               dQs::Vector{<:ConservedState}, dus::Vector{<:ConservedState},
+               dt, prepared::Bool=false)
+    patches = getfield(solver, :patches)
+    for stage in 1:5
+        solver.tstage = solver.t + RKC[stage] * dt
+        first_prepared = prepared && stage == 1
+        for (i, p) in enumerate(patches)
+            ps = PatchSolver(solver, p)
+            first_prepared || apply_bcs!(ps, states[i])
+            compute_rhs!(ps, states[i], dQs[i], first_prepared)
+        end
+        for (i, p) in enumerate(patches)
+            _rk_update!(p.decomp, solver.equations.n_cons, states[i], dQs[i],
+                        dus[i], RKA[stage], RKB[stage], dt)
+        end
+        sync_patches!(solver, states)
+    end
+    solver.tstage = solver.t + dt
+    for (i, p) in enumerate(patches)
+        apply_bcs!(PatchSolver(solver, p), states[i])
+    end
+    return states
 end
 
 step!(solver::Solver, Q, workspace::Workspace, dt, prepared::Bool=false) =
@@ -133,6 +175,8 @@ and is off by default; the note at the top of `stepcontrol.jl` records the
 measurement behind that default.
 """
 compute_dt(solver::Solver, Q) = solver.cfl / max_rate(solver, Q)[1]
+compute_dt(solver::Solver, states::Vector{<:ConservedState}) =
+    solver.cfl / max_rate(solver, states)[1]
 
 """
     max_rate(solver, Q) -> (rate, rho_min)
@@ -151,9 +195,41 @@ state has lost positivity. Without this check, failure is not detected until
 the diffusive term subsequently drives `dt` toward zero.
 """
 function max_rate(solver::Solver, Q)
-    decomp = solver.decomp
-    exchange_state!(Q, decomp)   # keep halos consistent for primitives!
+    exchange_state!(Q, solver.decomp)   # keep halos consistent for primitives!
     primitives!(solver, Q)
+    rate, ρ_min = _local_max_rate(solver, Q)
+    # One collective, not two: both quantities are reduced with `max` by
+    # negating the density, and this runs every step of every run.
+    red = MPI.Allreduce([rate, -ρ_min], max, solver.comm)
+    return (red[1], -red[2])
+end
+
+"""
+    max_rate(solver, states::Vector) -> (rate, rho_min)
+
+Multi-patch form: the per-patch exchange, primitives pass and interior sweep
+run patch by patch, and the two quantities reduce over `solver.comm` — the
+whole rank set — exactly once, hoisted outside the patch loop as the
+collective discipline requires.
+"""
+function max_rate(solver::Solver, states::Vector{<:ConservedState})
+    rate = 0.0
+    ρ_min = Inf
+    for (ps, Q) in eachpatch(solver, states)
+        exchange_state!(Q, ps.decomp)
+        primitives!(ps, Q)
+        r, m = _local_max_rate(ps, Q)
+        rate = max(rate, r)
+        ρ_min = min(ρ_min, m)
+    end
+    red = MPI.Allreduce([rate, -ρ_min], max, solver.comm)
+    return (red[1], -red[2])
+end
+
+# The interior sweep of max_rate over one patch, rank-local and free of
+# collectives.
+function _local_max_rate(solver::SolverLike, Q)
+    decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     n_species = solver.equations.n_species
@@ -196,10 +272,7 @@ function max_rate(solver::Solver, Q)
         acc += 2 * ν * dsum
         rate = max(rate, acc)
     end
-    # One collective, not two: both quantities are reduced with `max` by
-    # negating the density, and this runs every step of every run.
-    red = MPI.Allreduce([rate, -ρ_min], max, decomp.comm)
-    return (red[1], -red[2])
+    return (rate, ρ_min)
 end
 
 """
@@ -280,9 +353,9 @@ function dt_report(solver::Solver, Q)
             best = (rate=total, i=i, j=j, k=k, dim=wdim, kind=kind)
         end
     end
-    grate = MPI.Allreduce(best.rate, max, decomp.comm)
-    mine = best.rate >= grate ? MPI.Comm_rank(decomp.comm) : typemax(Int)
-    owner = MPI.Allreduce(mine, min, decomp.comm)
+    grate = MPI.Allreduce(best.rate, max, solver.comm)
+    mine = best.rate >= grate ? MPI.Comm_rank(solver.comm) : typemax(Int)
+    owner = MPI.Allreduce(mine, min, solver.comm)
     return (dt=solver.cfl / grate, rank=owner, index=(best.i, best.j, best.k),
             coords=(xcoord(solver, 1, best.i), xcoord(solver, 2, best.j),
                     xcoord(solver, 3, best.k)),
@@ -307,6 +380,28 @@ the state that call starts with.
 """
 function positivity_floors(solver::Solver, Q, control::StepControl)
     control.floor_ratio > 0 || return (0.0, 0.0)
+    ρ_min, e_min = _local_positivity_mins(solver, Q)
+    red = MPI.Allreduce([ρ_min, e_min], min, solver.comm)
+    (red[1] > 0 && red[2] > 0) || return (0.0, 0.0)
+    return (control.floor_ratio * red[1], control.floor_ratio * red[2])
+end
+
+function positivity_floors(solver::Solver, states::Vector{<:ConservedState},
+                           control::StepControl)
+    control.floor_ratio > 0 || return (0.0, 0.0)
+    ρ_min = Inf
+    e_min = Inf
+    for (ps, Q) in eachpatch(solver, states)
+        r, e = _local_positivity_mins(ps, Q)
+        ρ_min = min(ρ_min, r)
+        e_min = min(e_min, e)
+    end
+    red = MPI.Allreduce([ρ_min, e_min], min, solver.comm)
+    (red[1] > 0 && red[2] > 0) || return (0.0, 0.0)
+    return (control.floor_ratio * red[1], control.floor_ratio * red[2])
+end
+
+function _local_positivity_mins(solver::SolverLike, Q)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -329,9 +424,7 @@ function positivity_floors(solver::Solver, Q, control::StepControl)
         ke = 0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / ρ
         e_min = min(e_min, (Q[I, i_energy] - ke) / ρ)
     end
-    red = MPI.Allreduce([ρ_min, e_min], min, decomp.comm)
-    (red[1] > 0 && red[2] > 0) || return (0.0, 0.0)
-    return (control.floor_ratio * red[1], control.floor_ratio * red[2])
+    return (ρ_min, e_min)
 end
 
 """
@@ -379,6 +472,25 @@ anything at the top of the next iteration.
 """
 function apply_positivity_floor!(solver::Solver, Q, rho_floor, e_floor,
                                  scope::Symbol)
+    tally = _local_positivity_repair!(solver, Q, rho_floor, e_floor, scope)
+    red = MPI.Allreduce(collect(tally), +, solver.comm)
+    return (cells=round(Int, red[1]), low_energy=round(Int, red[2]), mass=red[3],
+            energy=red[4], momentum=red[5])
+end
+
+function apply_positivity_floor!(solver::Solver, states::Vector{<:ConservedState},
+                                 rho_floor, e_floor, scope::Symbol)
+    acc = (0.0, 0.0, 0.0, 0.0, 0.0)
+    for (ps, Q) in eachpatch(solver, states)
+        acc = acc .+ _local_positivity_repair!(ps, Q, rho_floor, e_floor, scope)
+    end
+    red = MPI.Allreduce(collect(acc), +, solver.comm)
+    return (cells=round(Int, red[1]), low_energy=round(Int, red[2]), mass=red[3],
+            energy=red[4], momentum=red[5])
+end
+
+function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
+                                   scope::Symbol)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -466,9 +578,7 @@ function apply_positivity_floor!(solver::Solver, Q, rho_floor, e_floor,
             end
         end
     end
-    red = MPI.Allreduce([cells, low_energy, mass, energy, momentum], +, decomp.comm)
-    return (cells=round(Int, red[1]), low_energy=round(Int, red[2]), mass=red[3],
-            energy=red[4], momentum=red[5])
+    return (cells, low_energy, mass, energy, momentum)
 end
 
 """
@@ -541,11 +651,36 @@ collective through [`max_rate`](@ref) and the line solves beneath
 [`step!`](@ref), so every rank must call it with the same `tfinal`, `nmax` and
 callbacks.
 """
+# Multi-patch counterparts of the per-step state operations `run!` composes.
+# Each loops this rank's patches in the global order; none reduces.
+apply_bcs!(solver::Solver, states::Vector{<:ConservedState}) =
+    (foreach(((ps, Q),) -> apply_bcs!(ps, Q), eachpatch(solver, states)); states)
+
+filter_state!(solver::Solver, states::Vector{<:ConservedState}) =
+    (foreach(((ps, Q),) -> filter_state!(ps, Q), eachpatch(solver, states));
+     sync_patches!(solver, states))
+
+# Savepoint copies for either state representation.
+_snapshot(Q) = copy(Q)
+_snapshot(states::Vector{<:ConservedState}) = [copy(Q) for Q in states]
+_restore_state!(dst, src) = copyto!(dst, src)
+function _restore_state!(dst::Vector{<:ConservedState}, src::Vector{<:ConservedState})
+    for i in eachindex(dst)
+        copyto!(dst[i], src[i])
+    end
+    return dst
+end
+
+# Interface consistency before the pre-step reads. The single-patch path has
+# no interfaces and skips this entirely.
+_presync!(solver, Q) = Q
+_presync!(solver, states::Vector{<:ConservedState}) = sync_patches!(solver, states)
+
 function run!(solver::Solver, Q, workspace::Workspace;
               tfinal, nmax::Int=typemax(Int), callback=nothing,
               control::StepControl=solver.control)
-    rank = MPI.Comm_rank(solver.decomp.comm)
-    save = control.retries > 0 ? Savepoint(copy(Q), solver.t, solver.step) : nothing
+    rank = MPI.Comm_rank(solver.comm)
+    save = control.retries > 0 ? Savepoint(_snapshot(Q), solver.t, solver.step) : nothing
     attempts = 0
     dt_seen = 0.0
     rho_floor, e_floor = positivity_floors(solver, Q, control)
@@ -573,6 +708,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # progress callback that reduces a diagnostic would otherwise be timing
         # itself, and reporting that as solver cost.
         wall_0 = time_ns()
+        _presync!(solver, Q)
         # Boundary conditions before the rate measurement, for two reasons. The
         # step should be sized from the state it is about to advance, and the
         # previous iteration's filter_state! has smeared whatever the conditions
@@ -588,7 +724,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         if failure !== nothing
             (save === nothing || attempts >= control.retries) && throw(failure)
             attempts += 1
-            copyto!(Q, save.Q)
+            _restore_state!(Q, save.Q)
             solver.t = save.t
             solver.step = save.step
             # Compounding: the CFL is reduced from its current value and never
@@ -599,8 +735,8 @@ function run!(solver::Solver, Q, workspace::Workspace;
             # would have the predictor extrapolate from states that no longer
             # exist. dt_seen goes too, or the relative floor would immediately
             # fire again against a dt from before the rollback.
-            solver.dt_prev = zero(eltype(Q))
-            solver.rate_prev = zero(eltype(Q))
+            solver.dt_prev = zero(solver.dt_prev)
+            solver.rate_prev = zero(solver.rate_prev)
             dt_seen = 0.0
             # Instants between the savepoint and the failure were visited on a
             # trajectory that no longer exists. Re-arm them so the replacement
@@ -617,7 +753,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # after stepping would bank a state nothing has yet vetted.
         if save !== nothing && control.savepoint_interval > 0 &&
            solver.step > guard_step && solver.step % control.savepoint_interval == 0
-            copyto!(save.Q, Q)
+            _restore_state!(save.Q, Q)
             save.t = solver.t
             save.step = solver.step
         end
@@ -745,7 +881,7 @@ against. That holds on a freshly built solver and after a rollback; inside
 `run!` the step is recorded before the filter runs, so the relaxed weight is in
 force from the first pass.
 """
-function filter_weight(solver::Solver{T}) where {T}
+function filter_weight(solver::SolverLike{T}) where {T}
     solver.filter_cfl > 0 || return one(T)
     solver.dt_prev > 0 || return one(T)
     w = solver.filter_interval * solver.dt_prev * solver.rate_prev /
@@ -774,7 +910,7 @@ The weight is a reduced quantity by construction, since `rate_prev` comes from
 the collective in `max_rate`, so every rank blends by the same amount without a
 further reduction here.
 """
-function filter_state!(solver::Solver, Q)
+function filter_state!(solver::SolverLike, Q)
     decomp = solver.decomp
     comps = [view(Q, :, :, :, c) for c in 1:solver.equations.n_cons]
     w = filter_weight(solver)

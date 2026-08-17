@@ -1107,6 +1107,49 @@ function test_positivity_floor()
           1e-12 * max(maximum(energies), 1e-30))
 end
 
+# ---------------------------------------------------------------------------
+# 8. Two-patch layout under rank partitioning. The patch machinery splits the
+#    rank set with MPI.Comm_split, each patch running its own decomposition and
+#    plans; the interface ghost exchange, shared-plane averaging and the
+#    world-hoisted reductions in run! are all np > 1-only paths. Within a patch
+#    the spike solve reproduces the single-domain answer bit for bit at any
+#    rank count, and every cross-patch transfer moves values unchanged, so the
+#    max-norm error of the run — an associativity-free reduction — must equal
+#    the serial two-patch value EXACTLY at every np. The reference below was
+#    measured with test/patch_tests.jl's entropy-wave case at np = 1.
+# ---------------------------------------------------------------------------
+function test_two_patch_layout()
+    section("two-patch layout: rank-partitioned run matches the serial answer")
+    u0 = 0.5
+    ic(x, y, z) = Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x))
+    solver = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                    art=ArtParams(enabled=false), filter_interval=0,
+                    patch_grid=(2, 1, 1))
+    states = allocate_state(solver)
+    initialize!(solver, states, ic)
+    run!(solver, states; tfinal=0.5)
+    err = 0.0
+    for (ps, Q) in CL.eachpatch(solver, states)
+        for i in 1:ps.decomp.n_local[1]
+            I = gidx(ps, i, 1, 1)
+            exact = 1.0 + 0.2 * sin(xcoord(ps, 1, i) - u0 * solver.t)
+            err = max(err, abs(Q[I, 1] - exact))
+        end
+    end
+    gerr = gmax(err)
+    # Serial (np = 1) value of the identical run. At np = 2 each patch sits on
+    # one rank, the arithmetic is identical to the serial patch-sequential
+    # order, and the reproduction is bitwise. At np ≥ 4 the patch itself is
+    # decomposed and its closed lines take the spike/reduced path where the
+    # serial patch ran a plain Thomas sweep, so the answer agrees to round-off
+    # accumulation instead (measured 3.1e-15 at np = 4, 6.7e-16 at np = 8,
+    # against a 9.5e-8 signal).
+    ref = 9.5442217462604617e-8
+    tol = np <= 2 ? 1e-20 : 1e-13
+    check("two-patch entropy wave: max error matches serial", abs(gerr - ref), tol)
+    check("two-patch run: step count matches serial", abs(solver.step - 28), 0.5)
+end
+
 const SUITE = (
     ("periodic C6", test_periodic_c6),
     ("pentadiagonal C10", test_pentadiagonal_c10),
@@ -1125,6 +1168,7 @@ const SUITE = (
     ("field writer", test_field_writer),
     ("slicing", test_slicing),
     ("checkpoint", test_checkpoint),
+    ("two-patch layout", test_two_patch_layout),
 )
 
 try

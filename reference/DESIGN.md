@@ -94,6 +94,7 @@ validation cases are discussed, and never a viscosity.
 | `src/folds.jl`             | Coordinate-singularity (axis/origin/pole) parity and antipodal folds |
 | `src/artificial.jl`        | Cook artificial μ\*, β\*, κ\*, D\* from δ⁴ or compact-d8 sensors |
 | `src/sources.jl`           | Inferable tuple source interface and `ConstantBodyForce` |
+| `src/patches.jl`           | `Patch` (per-patch state), `PatchSolver`, slab layout, interface ghost exchange and shared-plane averaging |
 | `src/rhs.jl`               | `Solver` container, flux assembly, the conservative NS RHS |
 | `src/timestep.jl`          | RK45, CFL timestep, the `run!` loop, per-step filtering |
 | `src/io.jl`                | Per-rank checkpoint/restart, parallel VTK output |
@@ -156,13 +157,31 @@ throughout: `gidx(solver, i, j, k)` maps a local interior index to the halo-offs
 `CartesianIndex`, and `xcoord(solver, d, i)` maps a local index to a physical
 coordinate (including any stretch mapping and half-cell offset).
 
-The `Solver` struct (in `rhs.jl`) is the backend container: it holds the
-`Decomp`, concrete equation set, EOS, transport and source tuple, the
-artificial-property parameters, the metric
-and any fold specs, the per-dimension operator plans (`deriv_plans`, `filter_plans`),
-pre-allocated primitive/gradient/flux/geometry scratch arrays, and the current
-time and step. All hot-loop scratch is allocated once at setup; the RHS
-allocates nothing.
+The `Solver` struct (in `rhs.jl`) is the backend container, split since the
+patch refactor (`reference/AMR_GPU.md`, Stage 2) into configuration and
+per-patch state. The solver itself holds the concrete equation set, EOS,
+transport and source tuple, the artificial-property parameters, the metric,
+the run clock, and a vector of `Patch` objects (`patches.jl`); each patch
+holds its `Decomp`, fold specs, per-dimension operator plans (`deriv_plans`,
+`filter_plans`), and every pre-allocated primitive/gradient/flux/geometry
+array, typed `A <: AbstractArray{T,3}` against a storage backend
+(`CPUBackend` is the default and allocates `Array`s). A single-patch solver —
+the common case — forwards the patch-owned property names to its sole patch
+through `Base.getproperty`, so `solver.rho` and `solver.decomp` read as they
+always did; multi-patch drivers bind one patch at a time as a `PatchSolver`
+and pass that to the same routines. All hot-loop scratch is allocated once at
+setup; the RHS allocates nothing.
+
+With more than one patch, the rank set is partitioned over the patches by one
+`MPI.Comm_split` (ranks proportional to patch volume), the compact line solves
+stay collective over each patch's own communicator, and the per-step
+reductions (`max_rate`, `WhenState`, diagnostics) reduce over `solver.comm` —
+the whole rank set — exactly once, hoisted outside the patch loop. Abutting
+patches share their interface plane node; between RK stages `sync_patches!`
+averages the shared planes, refills interface ghost layers from the
+neighboring interiors, and re-exchanges each patch's own halos. The interface
+line-solve closures and the measured interface accuracy are in
+`reference/AMR_GPU.md` under Stage 2.
 
 ## Compact schemes
 

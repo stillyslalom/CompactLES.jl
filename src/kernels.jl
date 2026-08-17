@@ -20,17 +20,29 @@
 abstract type AbstractCompactScheme end
 
 """
-    ClosureRow(lhs, rhs)
+    ClosureRow(lhs, rhs, first=1)
 
 One low-edge closure row for a tridiagonal [`CompactScheme`](@ref). `lhs` is
 the `(subdiagonal, diagonal, superdiagonal)` tuple and `rhs` contains weights
-on points counted inward from the edge. High-edge rows are mirrored
-automatically.
+on the points `f[first], f[first+1], ...`, indices counted from the edge node
+at 1. High-edge rows are mirrored automatically.
+
+`first = 1` is the closed-boundary case: the stencil reads interior points
+only, so nothing beyond the edge is touched and stale physical-edge halos are
+never read. A `first <= 0` row reads ghost points beyond the edge and is valid
+only where those ghosts carry data — a patch-interface end filled by
+`exchange_patch_ghosts!` — which `plan_direction` selects through its
+`lo_closures`/`hi_closures` keywords rather than through the scheme itself.
 """
 struct ClosureRow{T}
     lhs::NTuple{3,T}   # (sub, diag, super); sub is ignored on row 1
-    rhs::Vector{T}     # coefficients on f[1], f[2], ..., counted from the edge
+    rhs::Vector{T}     # coefficients on f[first], f[first+1], ...
+    first::Int         # index of the first rhs point (1 = the edge node)
 end
+
+ClosureRow{T}(lhs::NTuple{3,T}, rhs::Vector{T}) where {T} =
+    ClosureRow{T}(lhs, rhs, 1)
+ClosureRow(lhs, rhs) = ClosureRow(lhs, rhs, 1)
 
 """
     CompactScheme(name, alpha, a0, coeffs, symmetric, closures)
@@ -145,4 +157,51 @@ function gaussian_filter(::Type{T}=Float64) where {T}
           ClosureRow{T}(lhs, T[c+d, b+e, a, b, c, d, e]),
           ClosureRow{T}(lhs, T[d+e, c, b, a, b, c, d, e])]
     CompactScheme{T}("explicit 9-point Gaussian", zero(T), a, T[b, c, d, e], true, cl)
+end
+
+# --- Patch-interface closures ------------------------------------------------
+#
+# At a patch interface the ghost layers carry the abutting patch's data, but the
+# ghost UNKNOWNS belong to that patch's solve, so a row's left-hand side must
+# couple interior unknowns only (Miranda tabulates the extended-data transfer
+# closures identically to the one-sided ones for this reason — "same as
+# one-sided to maintain invertibility"). The right-hand side is free to read the
+# copied ghost data. The rows below exploit that: only the edge row's LHS
+# couples a ghost unknown in the interior scheme, so a single replacement row
+# per end suffices, and every following row keeps the full interior stencil,
+# its RHS reaching into ghosts the exchange has filled.
+
+# Central explicit first-derivative weights of order 2m on offsets -m:m,
+# exact rationals, undivided (plan_direction applies the 1/h scale).
+function _central_d1_weights(::Type{T}, m::Int) where {T}
+    m == 1 && return T[-1//2, 0, 1//2]
+    m == 2 && return T[1//12, -8//12, 0, 8//12, -1//12]
+    m == 3 && return T[-1//60, 9//60, -45//60, 0, 45//60, -9//60, 1//60]
+    m == 4 && return T[3//840, -32//840, 168//840, -672//840, 0,
+                       672//840, -168//840, 32//840, -3//840]
+    error("central first-derivative weights tabulated for half-widths 1-4, got $m")
+end
+
+"""
+    interface_closures(scheme) -> Vector{ClosureRow}
+
+Closure rows for a patch-interface end of `scheme`, per the extended-data
+convention above. For a derivative the single replacement row is an explicit
+central difference of order `2(M+1)` (the interior formal order) whose stencil
+reads `M+1` ghost points; for a filter it is the identity, leaving the shared
+interface-plane node to the post-stage averaging; and a scheme that is explicit
+throughout (`gaussian_filter`) needs no closure at all — the interior stencil
+simply reads the exchanged ghosts. `plan_direction` verifies the ghost reach
+against the halo width.
+"""
+function interface_closures(scheme::CompactScheme{T}) where {T}
+    lhs = (zero(T), one(T), zero(T))
+    if !scheme.symmetric
+        m = halfwidth(scheme) + 1
+        return [ClosureRow{T}(lhs, _central_d1_weights(T, m), 1 - m)]
+    end
+    # Explicit symmetric schemes close themselves: identity LHS everywhere and
+    # an RHS that reads ghosts directly.
+    iszero(scheme.alpha) && return ClosureRow{T}[]
+    return [ClosureRow{T}(lhs, T[1], 1)]
 end

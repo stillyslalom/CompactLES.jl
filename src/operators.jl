@@ -36,6 +36,8 @@ struct DirPlan{T} <: AbstractDirPlan
     ci::Vector{T}              # prescaled interior coefficients
     clo::Vector{Vector{T}}     # prescaled low-edge closure RHS stencils
     chi::Vector{Vector{T}}     # prescaled, sign-adjusted high-edge stencils
+    clo_first::Vector{Int}     # first point read by clo[j] (1 = edge; ≤ 0 = ghost)
+    chi_first::Vector{Int}     # first point of the unmirrored stencil behind chi[j]
     B::Matrix{T}
 end
 
@@ -61,10 +63,19 @@ Construction allocates the packed-line buffer (`n × lines` for `dim == 1`,
 `lines × n` otherwise) and factorizes the line solver. Unless the scheme has an
 identity left-hand side, a decomposed `dim` makes that factorization collective,
 so every rank of the sub-communicator along `dim` must build the plan.
+
+`lo_closures` and `hi_closures` substitute an alternative closure-row set at
+the corresponding closed end, in place of `scheme.closures`. This is the
+patch-interface seam: [`interface_closures`](@ref) supplies rows whose
+right-hand sides read the exchanged ghost data (`ClosureRow.first ≤ 0`), which
+`plan_direction` verifies fit inside the halo width. Like the fold keywords,
+either may be passed on every rank and acts only on the rank owning that edge.
 """
 function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
                         h::Real; lo_fold::Union{Nothing,Int}=nothing,
-                        hi_fold::Union{Nothing,Int}=nothing) where {T}
+                        hi_fold::Union{Nothing,Int}=nothing,
+                        lo_closures::Union{Nothing,Vector{ClosureRow{T}}}=nothing,
+                        hi_closures::Union{Nothing,Vector{ClosureRow{T}}}=nothing) where {T}
     n = decomp.n_local[dim]
     nc = nclosure(scheme)
     M = halfwidth(scheme)
@@ -72,11 +83,27 @@ function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
         "local extent $n along dim $dim too small for scheme '$(scheme.name)' " *
         "(need ≥ $(max(2nc + 1, 2M + 1))); use fewer ranks in this dimension")
     M <= decomp.n_halo || error("stencil half-width $M exceeds halo width $(decomp.n_halo)")
+    for rows in (lo_closures, hi_closures)
+        rows === nothing && continue
+        for row in rows
+            reach = 1 - row.first
+            reach <= decomp.n_halo || error(
+                "closure row of scheme '$(scheme.name)' reads $reach ghost " *
+                "layers; halo width is $(decomp.n_halo)")
+        end
+        # A shortened closure set exposes interior rows whose RHS reaches
+        # 1 + length(rows) - M points past the edge; that reach must also fit.
+        M - length(rows) <= decomp.n_halo || error(
+            "interior stencil behind $(length(rows)) closure rows reads " *
+            "$(M - length(rows)) ghost layers; halo width is $(decomp.n_halo)")
+    end
 
     lo_closed = at_lo_edge(decomp, dim) && lo_fold === nothing
     hi_closed = at_hi_edge(decomp, dim) && hi_fold === nothing
     fold_lo = lo_fold !== nothing && at_lo_edge(decomp, dim)
     fold_hi = hi_fold !== nothing && at_hi_edge(decomp, dim)
+    lo_rows = lo_closures === nothing ? scheme.closures : lo_closures
+    hi_rows = hi_closures === nothing ? scheme.closures : hi_closures
     α = scheme.alpha
     a = fill(α, n); b = fill(one(T), n); c = fill(α, n)
     if fold_lo
@@ -90,14 +117,14 @@ function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
         b[n] += T(hi_fold) * α
     end
     if lo_closed
-        for j in 1:nc
-            sub, dia, sup = scheme.closures[j].lhs
+        for (j, row) in enumerate(lo_rows)
+            sub, dia, sup = row.lhs
             a[j] = sub; b[j] = dia; c[j] = sup
         end
     end
     if hi_closed
-        for j in 1:nc
-            sub, dia, sup = scheme.closures[j].lhs
+        for (j, row) in enumerate(hi_rows)
+            sub, dia, sup = row.lhs
             r = n + 1 - j
             a[r] = sup; b[r] = dia; c[r] = sub   # mirrored
         end
@@ -109,16 +136,20 @@ function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
     sgn = scheme.symmetric ? one(T) : -one(T)
     scale = scheme.symmetric ? one(T) : hinv
     ci = scheme.coeffs .* scale
-    clo = [row.rhs .* scale for row in scheme.closures]
-    chi = [row.rhs .* (scale * sgn) for row in scheme.closures]
+    clo = [row.rhs .* scale for row in lo_rows]
+    chi = [row.rhs .* (scale * sgn) for row in hi_rows]
+    clo_first = [row.first for row in lo_rows]
+    chi_first = [row.first for row in hi_rows]
 
     # An identity left-hand side (α = 0 and every closure row diagonal) makes
     # the fill the answer, so the line solve and its interface stage are both
-    # skipped. This is read off the scheme and nothing else: the interface
-    # stage carries a collective, and a flag derived from per-rank edge status
-    # would deadlock rather than fail. `gaussian_filter` is the case in hand.
-    explicit = iszero(α) && all(row -> iszero(row.lhs[1]) && isone(row.lhs[2]) &&
-                                       iszero(row.lhs[3]), scheme.closures)
+    # skipped. This is read off the scheme and the supplied closure sets and
+    # nothing else: the interface stage carries a collective, and a flag derived
+    # from per-rank edge status would deadlock rather than fail.
+    # `gaussian_filter` is the case in hand.
+    identity_lhs(row) = iszero(row.lhs[1]) && isone(row.lhs[2]) && iszero(row.lhs[3])
+    explicit = iszero(α) && all(identity_lhs, scheme.closures) &&
+               all(identity_lhs, lo_rows) && all(identity_lhs, hi_rows)
 
     lines = prod(decomp.n_local[k] for k in 1:3 if k != dim)
     line_solver = LineSolver(a, b, c, aL, cR, decomp.sub[dim], decomp.sub_size[dim],
@@ -126,7 +157,7 @@ function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
                     explicit=explicit)
     tr = dim > 1
     DirPlan{T}(dim, n, lines, tr, scheme, line_solver, lo_closed, hi_closed,
-               scheme.a0, ci, clo, chi,
+               scheme.a0, ci, clo, chi, clo_first, chi_first,
                tr ? zeros(T, lines, n) : zeros(T, n, lines))
 end
 
@@ -150,7 +181,8 @@ function _fill_lines!(B::Matrix{T}, plan, f, decomp::Decomp,
     M = length(ci)
     a0 = plan.a0
     sym = plan.scheme.symmetric
-    nc = length(plan.clo)
+    nclo = length(plan.clo)
+    nchi = length(plan.chi)
     @threaded plan.lines*n for l in 1:plan.lines
         kk, jj = divrem(l - 1, n1)
         j = jj + 1
@@ -158,26 +190,28 @@ function _fill_lines!(B::Matrix{T}, plan, f, decomp::Decomp,
         i1, i2 = 1, n
         @inbounds begin
             if plan.lo_closed
-                for jr in 1:nc
+                for jr in 1:nclo
                     rhs = plan.clo[jr]
+                    i0 = plan.clo_first[jr] - 1
                     acc = zero(T)
                     for κ in eachindex(rhs)
-                        acc += rhs[κ] * f[_gidx(Val(D), κ, j, k, n_halo_d)]
+                        acc += rhs[κ] * f[_gidx(Val(D), i0 + κ, j, k, n_halo_d)]
                     end
                     B[jr, l] = acc
                 end
-                i1 = nc + 1
+                i1 = nclo + 1
             end
             if plan.hi_closed
-                for jr in 1:nc
+                for jr in 1:nchi
                     rhs = plan.chi[jr]
+                    i0 = n + 2 - plan.chi_first[jr]
                     acc = zero(T)
                     for κ in eachindex(rhs)
-                        acc += rhs[κ] * f[_gidx(Val(D), n + 1 - κ, j, k, n_halo_d)]
+                        acc += rhs[κ] * f[_gidx(Val(D), i0 - κ, j, k, n_halo_d)]
                     end
                     B[n + 1 - jr, l] = acc
                 end
-                i2 = n - nc
+                i2 = n - nchi
             end
             if sym
                 for i in i1:i2
@@ -231,6 +265,16 @@ left untouched. `f` must have current rank-boundary halos.
 solve is collective over the sub-communicator along that dimension, so every
 rank of it must call this.
 """
+# A `nothing` plan slot is reachable in types but not in execution: a plans
+# tuple holds `nothing` exactly where the dimension is collapsed or folded, and
+# every caller branches on those conditions first. This method makes the dead
+# branch statically resolvable, so it neither shows up as a runtime-dispatch
+# site in `bench/jetcheck.jl` nor hides a genuine routing bug behind a
+# MethodError.
+apply_along!(out, ::Nothing, f, decomp::Decomp) =
+    error("apply_along! reached a dimension with no plan; the caller should " *
+          "have routed a collapsed or folded dimension elsewhere")
+
 function apply_along!(out, plan::AbstractDirPlan, f, decomp::Decomp)
     d = plan.dim
     if d == 1
@@ -278,9 +322,8 @@ end
 # rows are classified per row of the sweep dimension.
 
 @inline function _row_kind(plan, jr)
-    nc = length(plan.clo)
-    plan.lo_closed && jr <= nc && return 1
-    plan.hi_closed && jr > plan.n - nc && return 2
+    plan.lo_closed && jr <= length(plan.clo) && return 1
+    plan.hi_closed && jr > plan.n - length(plan.chi) && return 2
     return 0
 end
 
@@ -305,21 +348,23 @@ function _fill_t!(B::Matrix{T}, plan, f, decomp::Decomp, ::Val{D}) where {T,D}
             base = (kk - 1) * nx
             if kind == 1
                 rhs = plan.clo[jr]
+                i0 = plan.clo_first[jr] - 1
                 for i in 1:nx
                     sensor_sp = zero(T)
                     for κ in eachindex(rhs)
-                        sensor_sp += rhs[κ] * (D == 2 ? f[i+o1, κ+o2, kk+o3] :
-                                                    f[i+o1, kk+o2, κ+o3])
+                        sensor_sp += rhs[κ] * (D == 2 ? f[i+o1, i0+κ+o2, kk+o3] :
+                                                    f[i+o1, kk+o2, i0+κ+o3])
                     end
                     B[base+i, jr] = sensor_sp
                 end
             elseif kind == 2
                 rhs = plan.chi[n + 1 - jr]
+                i0 = n + 2 - plan.chi_first[n + 1 - jr]
                 for i in 1:nx
                     sensor_sp = zero(T)
                     for κ in eachindex(rhs)
-                        sensor_sp += rhs[κ] * (D == 2 ? f[i+o1, n+1-κ+o2, kk+o3] :
-                                                    f[i+o1, kk+o2, n+1-κ+o3])
+                        sensor_sp += rhs[κ] * (D == 2 ? f[i+o1, i0-κ+o2, kk+o3] :
+                                                    f[i+o1, kk+o2, i0-κ+o3])
                     end
                     B[base+i, jr] = sensor_sp
                 end

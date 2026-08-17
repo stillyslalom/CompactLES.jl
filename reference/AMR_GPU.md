@@ -302,6 +302,65 @@ carries GPU Stage G0 (storage-type generalization), because both rewrite the
 same struct definitions and doing them separately means touching every
 signature twice.
 
+**Status: delivered** (August 2026), with the scope notes below. `Solver`
+holds configuration plus a vector of `Patch` objects (`src/patches.jl`), each
+with its own communicator, `Decomp`, plans, folds and field arrays typed
+`A <: AbstractArray{T,3}`; allocation goes through a backend object
+(`CPUBackend` today), `Decomp{T}` types the halo and pair buffers, and
+`viz.jl` extraction preserves the element type — the G0 items. A single-patch
+solver forwards the patch-owned property names to its sole patch through
+`Base.getproperty`, which is what kept the refactor behavior-preserving: the
+hard gate passed with `test/convergence.jl` bit-identical down to the error
+magnitudes, 64/64 serial testsets, 93/93 MPI checks at np 2/4/8, validation
+values unchanged at four significant figures, and a net *reduction* of two
+runtime-dispatch reports in `bench/jetcheck.jl` (a `Nothing`-plan method made
+the dead fold branch statically resolvable).
+
+Multi-patch findings, from the two-conforming-patch gates
+(`test/patch_tests.jl` serial, `test/mpi_tests.jl` under rank partitioning):
+
+- The extended-data interface treatment measured well. Gradient and filter
+  plans take `interface_closures` rows — a derivative end closes with one
+  explicit central row of the interior's formal order reading `M + 1`
+  exchanged ghost layers (the LHS couples no ghost unknown, per Miranda's
+  invertibility convention); a compact filter end leaves the shared plane
+  node to the averaging and lets rows ≥ 2 read ghosts. The flux divergence
+  keeps the scheme's own one-sided closures (`Patch.div_plans`), since ghost
+  *fluxes* would need a second communication phase inside the RHS, which the
+  sequential-patch execution order forbids; `gcl_cotr!` routes through the
+  same plans so the discrete GCL cancellation is preserved.
+- Measured: the entropy-wave manufactured solution converges across the
+  interface at order 3.1–3.5 (the gate expected ≈ 3, the divergence's
+  one-sided rows binding); an acoustic pulse crosses with reflected
+  amplitude 2.3e-3 of incident at 192 points, converging at ≈ 5th order
+  (6.5e-2 at 96, 4.9e-5 at 384); conservation drift over a long periodic run
+  is 1.2e-8 relative against 4.5e-15 single-patch, so the drift term exists
+  as predicted and no refluxing machinery is warranted yet.
+- Rank partitioning (one `MPI.Comm_split`, ranks proportional to patch
+  volume) reproduces the serial two-patch answer bit for bit at one rank per
+  patch, where every interface transfer moves values unchanged and the
+  arithmetic order is identical. Once a patch is itself decomposed the
+  reproduction is round-off-level rather than bitwise (3.1e-15 at np = 4,
+  6.7e-16 at np = 8, against a 9.5e-8 error signal): the patch's closed lines
+  then take the spike/reduced path where the undecomposed patch ran a plain
+  Thomas sweep. The step counts and dt sequences agree exactly at every np.
+- Interface consistency is three mechanisms between stages, never inside a
+  per-patch RHS (`sync_patches!`): shared-plane averaging, ghost refill,
+  then each patch's own halo exchange, in that order, after every RK stage.
+  A rank advancing several patches sequentially is why no cross-patch
+  communication may sit inside `compute_rhs!`.
+
+Scope notes, i.e. what Stage 2 deliberately did not generalize. The layout
+generator tiles slabs along one dimension (`patch_grid` with a single entry
+> 1), so corner-coupled patch adjacency does not yet arise; patched runs
+reject folds (constraint 4), banded schemes (C10 interface closures are not
+tabulated), the `:d8` detector, stretching along the patched dimension, and
+an explicit `dims`; the artificial-property sensors are built per patch with
+closed-edge clamping at interfaces (documented, not measured to matter at
+this stage); and checkpoint/VTK output remains single-patch (a patch writes
+its `region` exactly as a rank block does, so the HDF5 hyperslab extension
+is mechanical when Stage 3 needs it).
+
 ### Data structures
 
 Split `Solver` (currently physics config + one block's arrays and plans) into

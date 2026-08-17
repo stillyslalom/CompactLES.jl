@@ -17,9 +17,10 @@
 # --- Named scalar → padded array -------------------------------------------
 
 """
-    field_array(solver, Q, name::Symbol; species = 1) -> Array{Float64,3}
+    field_array(solver, Q, name::Symbol; species = 1) -> Array{T,3}
 
-The full padded array of the named scalar report variable, refreshed from `Q`.
+The full padded array of the named scalar report variable, refreshed from `Q`,
+in the solver's own element type.
 This is the extraction primitive the profile and slice helpers build on, and it
 composes with the reductions in diagnostics.jl (`plane_profile`,
 `volume_integral`) and with `boundary_plane`.
@@ -50,7 +51,9 @@ function field_array(solver::Solver, Q, name::Symbol; species::Int=1)
     else
         refresh_primitives!(solver, Q)
     end
-    return Array{Float64,3}(scalar_field(solver, name; species=species))
+    # An eltype-preserving copy: extraction must not hardcode Float64 now that
+    # the storage type is a backend decision (GPU Stage G0).
+    return Array(scalar_field(solver, name; species=species))
 end
 
 # --- Line profiles ----------------------------------------------------------

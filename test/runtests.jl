@@ -635,7 +635,9 @@ end
           ["rho_a", "rho_b", "rho_u1", "rho_u2", "rho_u3", "rho_E"]
     @test fieldtype(typeof(solver), :eos) === typeof(solver.eos)
     @test fieldtype(typeof(solver), :metric) === typeof(solver.metric)
-    @test fieldtype(typeof(solver), :folds) === typeof(solver.folds)
+    # `folds` is per-patch state; the concreteness contract moved with it.
+    @test fieldtype(eltype(fieldtype(typeof(solver), :patches)), :folds) ===
+          typeof(solver.folds)
 end
 
 @testset "tuple source terms add momentum and energy work" begin
@@ -2640,6 +2642,8 @@ end
     @test_throws ArgumentError script_grid("128,256")
     @test_throws ArgumentError script_grid("128x128")
 end
+
+include("patch_tests.jl")
 
 # HDF5 is a weak dependency and is not loadable from the package environment
 # alone, so the extension tests run only where it is present. The skip is

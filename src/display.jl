@@ -23,7 +23,8 @@ Base.show(io::IO, ::MIME"text/plain", Q::ConservedState) = show(io, Q)
 
 function Base.show(io::IO, solver::Solver)
     print(io, "Solver(grid=")
-    _show_dimensions(io, solver.decomp.n_global)
+    _show_dimensions(io, solver.n_global)
+    npatches(solver) == 1 || print(io, ", patches=", length(solver.patch_regions))
     print(io, ", t=", solver.t, ", step=", solver.step,
           ", cfl=", solver.cfl, ", metric=", _type_name(solver.metric), ')')
 end
@@ -31,13 +32,18 @@ end
 function Base.show(io::IO, ::MIME"text/plain", solver::Solver)
     println(io, "Solver")
     print(io, "  grid: ")
-    _show_dimensions(io, solver.decomp.n_global)
-    print(io, " (local ")
-    _show_dimensions(io, solver.decomp.n_local)
-    println(io, ')')
-    print(io, "  process grid: ")
-    _show_dimensions(io, solver.decomp.dims)
-    println(io, " (rank ", MPI.Comm_rank(solver.decomp.comm), ')')
+    _show_dimensions(io, solver.n_global)
+    if npatches(solver) == 1
+        print(io, " (local ")
+        _show_dimensions(io, solver.decomp.n_local)
+        println(io, ')')
+        print(io, "  process grid: ")
+        _show_dimensions(io, solver.decomp.dims)
+        println(io, " (rank ", MPI.Comm_rank(solver.comm), ')')
+    else
+        println(io, " (", length(solver.patch_regions), " patches, ",
+                npatches(solver), " on this rank)")
+    end
     println(io, "  equations: ", _type_name(solver.equations), " (",
             solver.equations.n_species, " species, ",
             solver.equations.n_cons, " conserved variables)")

@@ -434,13 +434,13 @@ kernels and device line solves; subcycling, sensor-driven tagging, and
 regridding last. Conforming multiblock is independently useful geometry even
 if refinement never follows.
 
-**Mixed precision.** `Solver{T}` is already parameterized, but the allocation
-does not follow `T`: `field` (`decomposition.jl`) is a bare `zeros(...)` and so
-returns `Array{Float64,3}`, and it allocates every solver field, not only the
-halo and pair buffers. `viz.jl` likewise converts to `Array{Float64,3}` on
-extraction. Making `T` reach the storage is the blocker, and it is a wider
-change than the buffers alone. This generalization is folded into AMR Stage 2 /
-GPU Stage G0 (`reference/AMR_GPU.md`) so the structs are rewritten once.
+**Mixed precision.** The storage blocker is cleared: AMR Stage 2 / GPU Stage
+G0 (`reference/AMR_GPU.md`) delivered `Decomp{T}` with `T`-typed halo and
+pair buffers, backend-routed allocation (`field(backend, decomp)`), and
+eltype-preserving `viz.jl` extraction, so `T` now reaches every field array.
+What remains for an actual `Float32` run is exercising it: the constants
+sprinkled through the physics (`1e-300` clamps, `DUCROS_EPS`) assume Float64
+range, and nobody has measured which phases tolerate reduced precision.
 
 **Parallel HDF5/XDMF time series.** Single dumps and shared-file checkpoints
 are delivered (`reference/HISTORY.md`). Two pieces remain, the first
@@ -555,13 +555,14 @@ reference-implementation pass that headed this list are done
    how much the remaining calibration work can be trusted.
 3. **Phase 2.1, the implicit diffusion solver** — the principal architectural
    gap, which also addresses the polar CFL restriction.
-4. **AMR/GPU Stage 1** (transfer operators) is delivered
-   (`reference/HISTORY.md`); the sampling convention and the
-   sensor-amplification risk are both resolved by measurement in the Stage 1
-   status block of `reference/AMR_GPU.md`. **Stage 2** (the patch refactor)
-   waits until the model debts above settle, because it touches every file
-   and rebasing physics changes across it is the expensive order. Subsequent
-   stages follow `reference/AMR_GPU.md`.
+4. **AMR/GPU Stages 1 and 2 are delivered** (`reference/HISTORY.md` and the
+   status blocks in `reference/AMR_GPU.md`): the transfer operators, and the
+   patch abstraction at a single level carrying the G0 storage
+   generalization. Stage 2 was originally sequenced after the model debts
+   above; it was executed early by explicit decision, kept
+   behavior-preserving (the single-patch path is bit-identical), so physics
+   changes rebase onto it cleanly. Subsequent stages follow
+   `reference/AMR_GPU.md`.
 
 The open items from the source comparison
 ([above](#open-work-from-the-source-comparison)) sit alongside these rather

@@ -66,11 +66,11 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 64 testsets, 0 failures
+julia --project=. test/runtests.jl        # 69 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 93/93 each
+  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 95/95 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
@@ -157,8 +157,17 @@ Names are spelled out rather than abbreviated. Current vocabulary:
   `fired!`, `next_time`, `rewind!`, `landing_steps`,
   `switch!`/`switched` (a `SwitchableBC`)
 - `writer` (a `FieldWriter`), `frame_prefix`, `collection`, `wall_io`
-- `region` (a `BlockRegion`: global offset plus extent, the HDF5 hyperslab unit
-  and deliberately not a `Decomp`), `owned_region`, `hdf5_parallel`
+- `region` (a `BlockRegion`: global offset plus extent, the patch-layout and
+  HDF5 hyperslab unit and deliberately not a `Decomp`), `owned_region`,
+  `hdf5_parallel`
+- `patch` (a `Patch`: per-patch state split out of `Solver`), `patch_grid`,
+  `patches`, `patch_regions`, `backend` (an `AbstractBackend`; `CPUBackend`),
+  `interface_rhs` (`:extended` or `:onesided`), `div_plans` (divergence plans,
+  = `deriv_plans` except at interface ends), `ghost_sends`/`ghost_recvs`/
+  `plane_pairs`, `sync_patches!`, `eachpatch`; a routine below the step
+  drivers takes a `SolverLike` (single-patch `Solver` or `PatchSolver`), and
+  a single-patch `Solver` forwards patch-owned property names to its sole
+  patch, so `solver.rho` and `solver.decomp` still read as before
 - `refresh_primitives!`, `mixture_density`, `boundary_plane` (the in-flight
   state-query API; primitives are stale inside a callback, see the
   `refresh_primitives!` docstring)

@@ -147,9 +147,13 @@ Rank-local and non-collective. Each rank writes only its own block, so the
 halos hold whatever they held before and a caller needing them current must
 exchange afterwards; [`run!`](@ref) and [`step!`](@ref) do so themselves.
 """
-initialize!(solver::Solver, Q, ic) = _initialize!(solver, solver.eos, Q, ic)
+initialize!(solver::SolverLike, Q, ic) = _initialize!(solver, solver.eos, Q, ic)
 
-function _initialize!(solver::Solver, eos, Q, ic)
+initialize!(solver::Solver, states::Vector{<:ConservedState}, ic) =
+    (foreach(((ps, Q),) -> _initialize!(ps, ps.eos, Q, ic),
+             eachpatch(solver, states)); states)
+
+function _initialize!(solver::SolverLike, eos, Q, ic)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -321,6 +325,9 @@ Base.@kwdef struct Numerics
     dims::Union{Nothing,NTuple{3,Int}} = nothing
     n_halo::Int = 4
     stretch::NTuple{3,Union{Nothing,Stretch}} = (nothing, nothing, nothing)
+    patch_grid::NTuple{3,Int} = (1, 1, 1)
+    backend::AbstractBackend = CPUBackend()
+    interface_rhs::Symbol = :extended
 end
 
 """
@@ -361,7 +368,9 @@ function setup(prob::Problem, num::Numerics)
                cfl=num.cfl, control=num.control,
                filter_interval=num.filter_interval,
                filter_cfl=num.filter_cfl,
-               dims=num.dims, n_halo=num.n_halo)
+               dims=num.dims, n_halo=num.n_halo,
+               patch_grid=num.patch_grid, backend=num.backend,
+               interface_rhs=num.interface_rhs)
     Q = allocate_state(solver)
     initialize!(solver, Q, prob.ic)
     return solver, Q

@@ -97,6 +97,22 @@ with an even point count. Setup errors if it is applied at only one end of θ.
 """
 struct PoleBC <: BoundaryCondition end
 
+"""
+    InterfaceBC(neighbor)
+
+Marker condition on a patch face abutting another patch at the same level.
+There is no state to enforce and no RHS correction: the coupling runs through
+the interface ghost exchange, the interface closure rows, and the shared-plane
+averaging (see patches.jl). `Solver` substitutes this onto interface faces
+itself; it is not a user-supplied condition. `neighbor` is the abutting patch
+id.
+"""
+struct InterfaceBC <: BoundaryCondition
+    neighbor::Int
+end
+
+enforce!(::InterfaceBC, Q, solver, d, side) = nothing
+
 isperiodic(::BoundaryCondition) = false
 isperiodic(::PeriodicBC) = true
 

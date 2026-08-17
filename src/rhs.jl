@@ -14,53 +14,35 @@
 # diagonal (per solution parity σg: derivatives flip field parity, filters
 # preserve it). No node sits at r = 0 and no scale factor vanishes.
 
-mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,SP,RP,Src}
-    decomp::Decomp
+mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P<:Patch{T}}
     equations::Eq
     eos::E
     transport::Transport{T}
     art::ArtParams{T}
     metric::M
     stretch::St
-    folds::Fo                                  # coordinate-singularity folds
     sources::Src
     L_domain::NTuple{3,T}
     origin::NTuple{3,T}
     coord_shift::NTuple{3,T}                # half-cell offset (axis grids)
     h::NTuple{3,T}
-    bcs::BC
-    deriv_plans::DP
-    filter_plans::FP
-    smooth_plans::SP                        # sensor smoother (see ArtParams.smoother)
-    ring_plans::RP                          # sensor detector (see ArtParams.detector)
-    pairbuf::Array{T,3}                     # paired-fold combo scratch
-    pairout::Array{T,3}                     # paired-fold second-parity result
     cfl::T
     filter_interval::Int
     filter_cfl::T                           # 0 = unrelaxed; see filter_weight
     control::StepControl                    # timestep floors, prediction, retry
-    # primitives (full padded arrays)
-    rho::Array{T,3}; u::Array{T,3}; v::Array{T,3}; w::Array{T,3}
-    p::Array{T,3};  T_ion::Array{T,3}; c::Array{T,3}; cp_mix::Array{T,3}
-    Y::Vector{Array{T,3}}
-    # gradients
-    grad_u::Matrix{Array{T,3}}              # grad_u[d, j] = physical (∇u)_{dj}
-    grad_T_ion::NTuple{3,Array{T,3}}
-    grad_Y::Matrix{Array{T,3}}              # grad_Y[d, k]
-    # artificial properties and scratch
-    mu_art::Array{T,3}; beta_art::Array{T,3}; kappa_art::Array{T,3}
-    D_art::Vector{Array{T,3}}
-    strain_mag::Array{T,3}; sensor::Array{T,3}; sensor_sp::Array{T,3}
-    tmp_a::Array{T,3}; tmp_b::Array{T,3}
-    ring_buf::Array{T,3}                    # d8 detector output, empty otherwise
-    # geometry
-    inv_J::Array{T,3}
-    area_d::NTuple{3,Array{T,3}}
-    inv_h::NTuple{3,Array{T,3}}
-    inv_r::Array{T,3}
-    cot_over_r::Array{T,3}
-    # fluxes flux[d, c]
-    flux::Matrix{Array{T,3}}
+    n_global::NTuple{3,Int}                 # whole-grid extents (all patches)
+    # Per-patch state: everything from the decomposition and the operator plans
+    # through the field arrays lives on `Patch` (patches.jl). With one patch,
+    # `Base.getproperty` below forwards the patch-owned names to it, so
+    # `solver.rho`, `solver.decomp` and the rest read as they always did.
+    patches::Vector{P}                      # this rank's patches, globally ordered
+    patch_regions::Vector{BlockRegion}      # every patch, id order, global nodes
+    comm::MPI.Comm                          # reduction communicator spanning all
+                                            # ranks (the sole patch's Cartesian
+                                            # communicator when there is one patch)
+    ghost_sends::Vector{GhostRecord{T}}     # interface exchange records; empty
+    ghost_recvs::Vector{GhostRecord{T}}     # with one patch
+    plane_pairs::Vector{PlaneRecord{T}}
     t::T
     tstage::T
     step::Int
@@ -79,6 +61,41 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Fo,BC,DP,FP,SP,RP,Sr
     # `StepControl.floor_ratio` is set, so a run that leaves it off pays nothing.
     floor_tally::FloorTally
 end
+
+# Patch-owned property names forward to the sole patch, which keeps every
+# existing consumer of the pre-patch field layout — tests, benches, examples,
+# and the compute path itself in the single-patch case — reading unchanged.
+# On a multi-patch solver those names have no single answer, so the forward
+# throws; the multi-patch drivers hand each routine a `PatchSolver` instead.
+@inline function Base.getproperty(s::Solver, name::Symbol)
+    if _is_patch_prop(name)
+        ps = getfield(s, :patches)
+        length(ps) == 1 || _patch_prop_error(name)
+        return getfield(@inbounds(ps[1]), name)
+    end
+    return getfield(s, name)
+end
+
+@noinline _patch_prop_error(name::Symbol) =
+    error("property `$name` is per-patch state and this solver holds several " *
+          "patches; access it through solver.patches or a per-patch driver")
+
+"""
+Union of the two objects the compute path accepts: a (single-patch) `Solver`,
+whose property forwarding exposes its sole patch, and a [`PatchSolver`](@ref)
+binding one patch of a multi-patch solver. Every routine between the
+step drivers and the arrays is written against this type.
+"""
+const SolverLike{T} = Union{Solver{T},PatchSolver{T}}
+
+"Number of patches this rank's solver holds."
+npatches(s::Solver) = length(getfield(s, :patches))
+
+"Iterate `(patch_solver, state)` pairs over this rank's patches, in the global
+patch order, with `states` aligned with `solver.patches`."
+eachpatch(solver::Solver, states) =
+    ((PatchSolver(solver, p), states[i]) for (i, p) in
+     enumerate(getfield(solver, :patches)))
 
 """
     Solver(; n_global, L_domain, bcs, kwargs...)
@@ -144,7 +161,10 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 filt::AbstractCompactScheme=compact_filter(0.45),
                 cfl::Real=0.5, filter_interval::Int=1, filter_cfl::Real=0.0,
                 control::StepControl=StepControl(),
-                dims=nothing, n_halo::Int=4) where {T}
+                dims=nothing, n_halo::Int=4,
+                patch_grid::NTuple{3,Int}=(1, 1, 1),
+                backend::AbstractBackend=CPUBackend(),
+                interface_rhs::Symbol=:extended) where {T}
     for d in 1:3
         isperiodic(bcs[d][1]) == isperiodic(bcs[d][2]) ||
             error("dimension $d mixes periodic and non-periodic conditions")
@@ -206,8 +226,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         stretch[d] === nothing || !periodic[d] ||
             error("dimension $d: stretched dimensions must be non-periodic")
     end
-    decomp = Decomp(n_global, periodic; dims=dims, n_halo=n_halo)
     Lt = ntuple(d -> T(L_domain[d]), 3)
+    active_g = ntuple(d -> n_global[d] > 1, 3)
     # Grid spacing: computational ξ ∈ [0,1] for stretched dims; half-offset
     # r ∈ (0, R] for axis grids (h = R/(N − ½), r₁ = h/2); standard otherwise.
     # Half-offset grids on folded dimensions: fold at the low end only
@@ -216,14 +236,49 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     fold_lo_dim = ntuple(d -> (d == 1 && (axis || orig1)) || (d == 2 && poles), 3)
     fold_hi_dim = ntuple(d -> d == 2 && poles, 3)
     h = ntuple(3) do d
-        decomp.active[d] || return one(T)
+        active_g[d] || return one(T)
         stretch[d] === nothing || return one(T) / (n_global[d] - 1)
         fold_lo_dim[d] && fold_hi_dim[d] && return Lt[d] / n_global[d]
         fold_lo_dim[d] && return Lt[d] / (n_global[d] - T(0.5))
         periodic[d] ? Lt[d] / n_global[d] : Lt[d] / (n_global[d] - 1)
     end
     coord_shift = ntuple(d -> fold_lo_dim[d] ? h[d] / 2 : zero(T), 3)
-    mkd(sch, d; kw...) = plan_direction(decomp, sch, d, h[d]; kw...)
+    # --- Patch layout ----------------------------------------------------
+    npatch = prod(patch_grid)
+    regions = patch_slabs(n_global, periodic, patch_grid)
+    if npatch > 1
+        (axis || orig1 || poles) &&
+            error("patch decomposition across a coordinate fold is not " *
+                  "supported; a folded run takes a single patch")
+        (deriv isa CompactScheme && filt isa CompactScheme) ||
+            error("patch interfaces carry closure variants for tridiagonal " *
+                  "schemes only; banded schemes (C10) take a single patch")
+        art.detector === :delta4 ||
+            error("patch interfaces support the :delta4 detector only; the " *
+                  ":d8 detector's banded scheme takes a single patch")
+        dims === nothing ||
+            error("an explicit process grid cannot combine with patch_grid; " *
+                  "each patch derives its own")
+        interface_rhs in (:extended, :onesided) ||
+            error("interface_rhs must be :extended or :onesided, " *
+                  "got :$interface_rhs")
+        ds = findfirst(>(1), patch_grid)
+        stretch[ds] === nothing ||
+            error("the patched dimension cannot be stretched")
+        for r in regions
+            r.extent[ds] >= max(9, n_halo + 2) ||
+                error("patch extent $(r.extent[ds]) along dim $ds is below " *
+                      "the scheme minimum; use fewer patches or more points")
+        end
+    end
+    ds_split = npatch > 1 ? findfirst(>(1), patch_grid) : 0
+    faces_all = [ntuple(3) do d
+        d != ds_split && return (0, 0)
+        P = patch_grid[d]
+        lo = pid > 1 ? pid - 1 : (periodic[d] ? P : 0)
+        hi = pid < P ? pid + 1 : (periodic[d] ? 1 : 0)
+        (lo, hi)
+    end for pid in 1:npatch]
     # The sensor smoother stands in for Cook's Gaussian test filter. `:compact`
     # reuses `filt`, which is what shipped before the option existed and keeps
     # every plan identical; `:gaussian` is the explicit nine-point stencil the
@@ -241,7 +296,18 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
               "EOS has $(nspecies(eos))")
     n_species = equations.n_species
     n_cons = equations.n_cons
-    f() = field(decomp)
+    if npatch > 1
+        return _build_patched_solver(T, n_global, periodic, regions, faces_all,
+                                     patch_grid, bcs, eos, equations, transport,
+                                     art, metric, stretch, sources, origin, Lt,
+                                     coord_shift, h, deriv, filt, smoo, cfl,
+                                     filter_interval, filter_cfl, control,
+                                     n_halo, backend, interface_rhs, n_cons,
+                                     n_species)
+    end
+    decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo)
+    mkd(sch, d; kw...) = plan_direction(decomp, sch, d, h[d]; kw...)
+    f() = field(backend, decomp)
 
     # Fold specs. sigvel/sigflux derivations live in folds.jl and the README.
     function pairspec(pdim, revdim)
@@ -317,7 +383,6 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         sf2 = flux_parities(equations, sv, 2, -1)
         folds = (folds[1], foldspec(2, true, true, 3, 0, sv, sf2), folds[3])
     end
-    haspair = any(fold -> fold !== nothing && fold.pair !== nothing, folds)
     deriv_plans = ntuple(d -> decomp.active[d] && folds[d] === nothing ?
                          mkd(deriv, d) : nothing, 3)
     filter_plans = ntuple(d -> decomp.active[d] && folds[d] === nothing ?
@@ -337,17 +402,11 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                         mkd(ring, d) : nothing, 3)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
     bcs_t = ntuple(d -> (bcs[d][1], bcs[d][2]), 3)
-    solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
-                    typeof(stretch),typeof(folds),typeof(bcs_t),
-                    typeof(deriv_plans),typeof(filter_plans),typeof(smooth_plans),
-                    typeof(ring_plans),typeof(sources)}(
-                  decomp, equations, eos, transport, art, metric, stretch, folds, sources,
-                  Lt, orig, coord_shift, h,
-                  bcs_t,
-                  deriv_plans, filter_plans, smooth_plans, ring_plans,
+    patch = Patch(1, 0, regions[1], MPI.COMM_WORLD, decomp,
+                  ntuple(d -> (0, 0), 3), bcs_t, folds,
+                  deriv_plans, deriv_plans, filter_plans, smooth_plans, ring_plans,
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
-                  T(cfl), filter_interval, T(filter_cfl), control,
                   f(), f(), f(), f(), f(), f(), f(), f(),
                   [f() for _ in 1:n_species],
                   [f() for _ in 1:3, _ in 1:3],
@@ -358,9 +417,106 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   f(), f(), f(), f(), f(),
                   art.detector === :delta4 ? zeros(T, 0, 0, 0) : f(),
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(),
-                  [f() for _ in 1:3, _ in 1:n_cons],
+                  [f() for _ in 1:3, _ in 1:n_cons])
+    patches = [patch]
+    solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
+                    typeof(stretch),typeof(sources),typeof(patch)}(
+                  equations, eos, transport, art, metric, stretch, sources,
+                  Lt, orig, coord_shift, h,
+                  T(cfl), filter_interval, T(filter_cfl), control,
+                  n_global, patches, regions, decomp.comm,
+                  GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
                   zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
     init_geometry!(solver)
+    return solver
+end
+
+# Multi-patch construction: the rank set is partitioned over the patch slabs,
+# each patch builds its own decomposition, plans and arrays over its own
+# communicator, and the interface exchange records are derived from one
+# world Allgather. Folds, banded schemes, the :d8 detector, and an explicit
+# process grid are rejected by the caller before this runs.
+function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all,
+                               patch_grid, bcs, eos, equations, transport, art,
+                               metric, stretch, sources, origin, Lt, coord_shift,
+                               h, deriv, filt, smoo, cfl, filter_interval,
+                               filter_cfl, control, n_halo, backend,
+                               interface_rhs, n_cons, n_species) where {T}
+    MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+    world = MPI.COMM_WORLD
+    np = MPI.Comm_size(world)
+    npatch = length(regions)
+    if np == 1
+        my_pids = collect(1:npatch)
+        pcomm = world
+    else
+        counts = patch_rank_counts(regions, np)
+        myrank = MPI.Comm_rank(world)
+        color = searchsortedfirst(cumsum(counts), myrank + 1)
+        pcomm = MPI.Comm_split(world, color, myrank)
+        my_pids = [color]
+    end
+    ext = interface_rhs === :extended
+    icd = ext ? interface_closures(deriv) : nothing
+    icf = ext ? interface_closures(filt) : nothing
+    nofold = (nothing, nothing, nothing)
+    patches = map(my_pids) do pid
+        region = regions[pid]
+        faces = faces_all[pid]
+        pper = ntuple(d -> patch_grid[d] > 1 ? false : periodic[d], 3)
+        dcp = Decomp{T}(region.extent, pper; n_halo=n_halo, comm=pcomm)
+        pbcs = ntuple(d -> (faces[d][1] == 0 ? bcs[d][1] : InterfaceBC(faces[d][1]),
+                            faces[d][2] == 0 ? bcs[d][2] : InterfaceBC(faces[d][2])), 3)
+        mk(sch, d; kw...) = plan_direction(dcp, sch, d, h[d]; kw...)
+        locl(rows, d) = faces[d][1] == 0 ? nothing : rows
+        hicl(rows, d) = faces[d][2] == 0 ? nothing : rows
+        dplans = ntuple(d -> dcp.active[d] ?
+            mk(deriv, d; lo_closures=locl(icd, d), hi_closures=hicl(icd, d)) :
+            nothing, 3)
+        # The flux divergence keeps the scheme's own one-sided closures at an
+        # interface (ghost fluxes are unavailable; see patches.jl), so it takes
+        # separate plans exactly where the gradient plans read ghosts.
+        vplans = ntuple(d -> !dcp.active[d] ? nothing :
+            (ext && (faces[d][1] != 0 || faces[d][2] != 0) ? mk(deriv, d) :
+             dplans[d]), 3)
+        fplans = ntuple(d -> dcp.active[d] ?
+            mk(filt, d; lo_closures=locl(icf, d), hi_closures=hicl(icf, d)) :
+            nothing, 3)
+        # The sensor smoother's input is built per patch, so its interface
+        # ghosts carry no data and its plans keep the standard closures even
+        # under `smoother = :compact`.
+        splans = ntuple(d -> dcp.active[d] ? mk(smoo, d) : nothing, 3)
+        g() = field(backend, dcp)
+        empty3 = zeros(T, 0, 0, 0)
+        Patch(pid, 0, region, pcomm, dcp, faces, pbcs, nofold,
+              dplans, vplans, fplans, splans, nothing,
+              empty3, empty3,
+              g(), g(), g(), g(), g(), g(), g(), g(),
+              [g() for _ in 1:n_species],
+              [g() for _ in 1:3, _ in 1:3],
+              (g(), g(), g()),
+              [g() for _ in 1:3, _ in 1:n_species],
+              g(), g(), g(),
+              [g() for _ in 1:n_species],
+              g(), g(), g(), g(), g(),
+              empty3,
+              g(), (g(), g(), g()), (g(), g(), g()), g(), g(),
+              [g() for _ in 1:3, _ in 1:n_cons])
+    end
+    ghost_sends, ghost_recvs, plane_pairs = build_interface_records(
+        T, world, regions, faces_all, my_pids, [p.decomp for p in patches], n_cons)
+    orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
+    solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
+                    typeof(stretch),typeof(sources),eltype(patches)}(
+                  equations, eos, transport, art, metric, stretch, sources,
+                  Lt, orig, coord_shift, h,
+                  T(cfl), filter_interval, T(filter_cfl), control,
+                  n_global, patches, regions, world,
+                  ghost_sends, ghost_recvs, plane_pairs,
+                  zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
+    for p in getfield(solver, :patches)
+        init_geometry!(PatchSolver(solver, p))
+    end
     return solver
 end
 
@@ -369,20 +525,24 @@ end
 
 Physical coordinate of rank-local, one-based interior index `i` in direction
 `d`. The index does not include halo padding. This is equivalent to
-`global_xcoord(solver, d, solver.decomp.offset[d] + i)`.
+`global_xcoord(solver, d, solver.region.offset[d] + solver.decomp.offset[d] + i)`,
+the patch region offset placing a patch's block in the whole grid (zero for a
+single-patch solver).
 """
-xcoord(solver::Solver, d::Int, i::Int) =
-    global_xcoord(solver, d, solver.decomp.offset[d] + i)
+xcoord(solver::SolverLike, d::Int, i::Int) =
+    global_xcoord(solver, d,
+                  solver.region.offset[d] + solver.decomp.offset[d] + i)
 
 """
     global_xcoord(solver, d, g)
 
 Physical coordinate of global, one-based index `g` in direction `d`, including
-any half-cell fold offset and [`Stretch`](@ref) mapping. Every rank returns the
-same value for the same `(d, g)`. Use this form when assembling a global
-coordinate vector and [`xcoord`](@ref) for a local interior index.
+any half-cell fold offset and [`Stretch`](@ref) mapping. `g` indexes the whole
+grid, not a patch. Every rank returns the same value for the same `(d, g)`.
+Use this form when assembling a global coordinate vector and [`xcoord`](@ref)
+for a local interior index.
 """
-function global_xcoord(solver::Solver, d::Int, g::Int)
+function global_xcoord(solver::SolverLike, d::Int, g::Int)
     ξ = solver.origin[d] + solver.coord_shift[d] + (g - 1) * solver.h[d]
     st = solver.stretch[d]
     return st === nothing ? ξ : st.x(ξ)
@@ -396,7 +556,7 @@ halo-padded state and solver fields. Collapsed directions have zero padding.
 The result is rank-local; it does not locate a global point owned by another
 rank.
 """
-function gidx(solver::Solver, i::Int, j::Int, k::Int)
+function gidx(solver::SolverLike, i::Int, j::Int, k::Int)
     pad = solver.decomp.n_halo_d
     return CartesianIndex(i + pad[1], j + pad[2], k + pad[3])
 end
@@ -419,7 +579,7 @@ end
 Indices of halo cells come back outside `1:n_local[d]`, and are meaningful only
 as an offset from this rank's block.
 """
-@inline function interior_index(solver::Solver, I::CartesianIndex{3})
+@inline function interior_index(solver::SolverLike, I::CartesianIndex{3})
     pad = solver.decomp.n_halo_d
     return (I[1] - pad[1], I[2] - pad[2], I[3] - pad[3])
 end
@@ -445,7 +605,7 @@ Mixture density at padded index `I`, the sum of the partial densities. Prefer
 this method to explicit component indices so that the expression remains valid
 when the species count changes.
 """
-@inline function mixture_density(solver::Solver, Q, I)
+@inline function mixture_density(solver::SolverLike, Q, I)
     ρ = zero(eltype(Q))
     @inbounds for sp in 1:solver.equations.n_species
         ρ += Q[I, sp]
@@ -459,18 +619,18 @@ end
 Physical, coordinate-aligned velocity components at padded index `I`, recovered
 from the momenta and the mixture density.
 """
-@inline function velocity(solver::Solver, Q, I)
+@inline function velocity(solver::SolverLike, Q, I)
     ri = one(eltype(Q)) / mixture_density(solver, Q, I)
     m1, m2, m3 = solver.equations.i_mom
     @inbounds return (Q[I, m1] * ri, Q[I, m2] * ri, Q[I, m3] * ri)
 end
 
 "Total energy per unit volume at padded index `I`."
-@inline total_energy(solver::Solver, Q, I) =
+@inline total_energy(solver::SolverLike, Q, I) =
     @inbounds Q[I, solver.equations.i_energy]
 
 "Mass fraction of species `sp` at padded index `I`."
-@inline mass_fraction(solver::Solver, Q, I, sp::Int) =
+@inline mass_fraction(solver::SolverLike, Q, I, sp::Int) =
     @inbounds Q[I, sp] / mixture_density(solver, Q, I)
 
 """
@@ -496,9 +656,24 @@ globally only in a serial calculation.
 These are padded indices. Convert one with [`interior_index`](@ref) before
 passing it to [`xcoord`](@ref) or anything else expecting an interior index.
 """
-boundary_plane(solver::Solver, d::Int, side::Int) = wallplane(solver.decomp, d, side)
+boundary_plane(solver::SolverLike, d::Int, side::Int) = wallplane(solver.decomp, d, side)
 
-allocate_state(solver::Solver) = allocate_state(solver.decomp, solver.equations.n_cons)
+"""
+    allocate_state(solver)
+
+Zero-filled conserved storage for `solver`: a [`ConservedState`](@ref) matching
+its sole patch, or, for a patch-decomposed solver, a `Vector` of them aligned
+with `solver.patches`. The vector form is selected by the *global* patch
+count: a rank of a partitioned multi-patch run holds exactly one local patch,
+but its state must still be the vector the multi-patch drivers dispatch on,
+or the run would silently skip the interface synchronization.
+"""
+allocate_state(solver::Solver) =
+    length(getfield(solver, :patch_regions)) == 1 ?
+        allocate_state(solver.decomp, solver.equations.n_cons) :
+        [allocate_state(p.decomp, solver.equations.n_cons)
+         for p in getfield(solver, :patches)]
+allocate_state(ps::PatchSolver) = allocate_state(ps.decomp, ps.equations.n_cons)
 
 # --- Operator routing through folds ----------------------------------------
 
@@ -517,7 +692,7 @@ holding no part of a fold. At a self-paired fold `f` is also written:
 fold leaves `f` untouched, running the even/odd butterfly through
 `solver.pairbuf` instead.
 """
-function deriv_along!(out, f, solver::Solver, d::Int, σf::Int)
+function deriv_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
     if fold === nothing
         apply_along!(out, solver.deriv_plans[d], f, solver.decomp)
@@ -527,9 +702,31 @@ function deriv_along!(out, f, solver::Solver, d::Int, σf::Int)
     return out
 end
 
+"""
+    div_along!(out, f, solver, d, σf)
+
+Compact derivative of `f` along `d` through the divergence plans. These are
+`solver.deriv_plans` except at a patch-interface end under
+`interface_rhs = :extended`, where the gradient plans read exchanged ghost
+data that a flux array does not carry, so the divergence keeps the scheme's
+one-sided closure rows (`solver.div_plans`). The flux-divergence loop and the
+discrete-GCL construction `gcl_cotr!` go through here so the two apply the
+identical operator. Same collective, halo, and fold contract as
+[`deriv_along!`](@ref).
+"""
+function div_along!(out, f, solver::SolverLike, d::Int, σf::Int)
+    fold = solver.folds[d]
+    if fold === nothing
+        apply_along!(out, solver.div_plans[d], f, solver.decomp)
+    else
+        fold_apply!(out, f, solver, fold, σf, Val(:deriv))
+    end
+    return out
+end
+
 """Compact filter of `f` along dimension `d` with antipodal sign `σf`. Collective,
 with the same halo and fold contract as `deriv_along!`."""
-function filt_along!(out, f, solver::Solver, d::Int, σf::Int)
+function filt_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
     if fold === nothing
         apply_along!(out, solver.filter_plans[d], f, solver.decomp)
@@ -552,7 +749,7 @@ sensors go through here, by way of `smooth!`.
 
 Collective, as `deriv_along!` is.
 """
-function smooth_along!(out, f, solver::Solver, d::Int, σf::Int)
+function smooth_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
     if fold === nothing
         apply_along!(out, solver.smooth_plans[d], f, solver.decomp)
@@ -573,7 +770,7 @@ path. Indexing that field under `:delta4` would throw. See `detect_sum!`.
 
 Collective, with the same halo and fold contract as `deriv_along!`.
 """
-function ring_along!(out, f, solver::Solver, d::Int, σf::Int)
+function ring_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
     if fold === nothing
         apply_along!(out, solver.ring_plans[d], f, solver.decomp)
@@ -594,15 +791,15 @@ end
 
 # Antipodal signs of velocity and conserved components for the fold (if any)
 # on dimension d; scalars, partial densities, and energy are always +1.
-vel_parity(solver::Solver, d::Int, j::Int) =
+vel_parity(solver::SolverLike, d::Int, j::Int) =
     solver.folds[d] === nothing ? 1 : solver.folds[d].sigvel[j]
-cons_parity(solver::Solver, d::Int, c::Int) =
+cons_parity(solver::SolverLike, d::Int, c::Int) =
     solver.folds[d] === nothing ? 1 :
     conserved_parity(solver.equations, solver.folds[d].sigvel, c)
 
-assemble_fluxes!(solver::Solver, Q) = _assemble_fluxes!(solver, solver.eos, Q)
+assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, Q)
 
-function _assemble_fluxes!(solver::Solver{T}, eos, Q) where {T}
+function _assemble_fluxes!(solver::SolverLike{T}, eos, Q) where {T}
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -683,7 +880,7 @@ update internally. The conserved state `Q` is current in a callback;
 `mixture_density` and related functions read it without depending on the
 conserved layout.
 """
-refresh_primitives!(solver::Solver, Q) =
+refresh_primitives!(solver::SolverLike, Q) =
     (exchange_state!(Q, solver.decomp); primitives!(solver, Q); solver)
 
 """
@@ -703,7 +900,7 @@ Pass `primitives_current = true` when [`refresh_primitives!`](@ref) has already
 run on this exact `Q` and only the gradients are wanted; the caller is then
 responsible for the claim that nothing has touched `Q` since.
 """
-function compute_primitives_and_gradients!(solver::Solver, Q,
+function compute_primitives_and_gradients!(solver::SolverLike, Q,
                                            primitives_current::Bool=false)
     decomp = solver.decomp
     primitives_current || refresh_primitives!(solver, Q)
@@ -749,7 +946,7 @@ has already done the work. It is positional rather than a keyword so that
 `bench/audit.jl` can still reach the body with `code_typed`, which sees only the
 forwarding method of a function with keywords.
 """
-function compute_rhs!(solver::Solver, Q, dQ, primitives_current::Bool=false)
+function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
     decomp = solver.decomp
     compute_primitives_and_gradients!(solver, Q, primitives_current)
     compute_artificial!(solver, Q)
@@ -787,7 +984,7 @@ function compute_rhs!(solver::Solver, Q, dQ, primitives_current::Bool=false)
             Fdc = solver.flux[d, c]
             σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
             if unitgeom
-                deriv_along!(solver.tmp_a, Fdc, solver, d, σ)
+                div_along!(solver.tmp_a, Fdc, solver, d, σ)
                 @threaded nx*ny*nz for jk in outer_indices(ny, nz)
                     j, k = Tuple(jk)
                     @inbounds for i in 1:nx
@@ -801,7 +998,7 @@ function compute_rhs!(solver::Solver, Q, dQ, primitives_current::Bool=false)
                 @threaded length(solver.tmp_b) for idx in eachindex(solver.tmp_b)
                     @inbounds solver.tmp_b[idx] = Ad[idx] * Fdc[idx]
                 end
-                deriv_along!(solver.tmp_a, solver.tmp_b, solver, d, σ)
+                div_along!(solver.tmp_a, solver.tmp_b, solver, d, σ)
                 @threaded nx*ny*nz for jk in outer_indices(ny, nz)
                     j, k = Tuple(jk)
                     @inbounds for i in 1:nx

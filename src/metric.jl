@@ -116,7 +116,8 @@ unit_scalefactor(::SphericalMetric,   d::Int) = d == 1          # θ, φ carry r
 # values do not reach the answer (see the header).
 @inline function _phys_and_jac(solver, d::Int, if_::Int)
     ξ = solver.origin[d] + solver.coord_shift[d] +
-        (solver.decomp.offset[d] + (if_ - solver.decomp.n_halo_d[d]) - 1) * solver.h[d]
+        (solver.region.offset[d] + solver.decomp.offset[d] +
+         (if_ - solver.decomp.n_halo_d[d]) - 1) * solver.h[d]
     st = solver.stretch[d]
     st === nothing && return ξ, 1.0
     ξc = clamp(ξ, 0.0, 1.0)
@@ -183,8 +184,9 @@ function gcl_cotr!(solver)
     # Same antipodal sign the flux-divergence loop uses for the θ-momentum
     # (m2) pressure flux across the θ pole fold (ignored when there is no fold).
     σ = solver.folds[2] === nothing ? 1 : solver.folds[2].sigflux[solver.equations.i_mom[2]]
-    # D_ξ2(A₂) with the m2 fold sign
-    deriv_along!(solver.tmp_a, solver.area_d[2], solver, 2, σ)
+    # D_ξ2(A₂) with the m2 fold sign, through the divergence plans so the
+    # cancellation holds against the operator the divergence loop applies.
+    div_along!(solver.tmp_a, solver.area_d[2], solver, 2, σ)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx

@@ -949,7 +949,7 @@ _write_dump!(writer::FieldWriter, solver, Q, stem) =
 
 function (writer::FieldWriter)(solver, Q)
     wall_0 = time_ns()
-    comm = solver.decomp.comm
+    comm = solver.comm
     if writer.index == 0
         # One rank creates the directory and the others wait for it. Concurrent
         # `mkpath` of the same path is not reliably idempotent across

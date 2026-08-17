@@ -37,6 +37,7 @@ include("folds.jl")
 include("artificial.jl")
 include("stepcontrol.jl")
 include("sources.jl")
+include("patches.jl")
 include("rhs.jl")
 include("nscbc.jl")
 include("io.jl")
@@ -69,6 +70,9 @@ export EquationSet, NavierStokes1T
 export Metric, CartesianMetric, CylindricalMetric, SphericalMetric
 export Stretch, sine_cluster
 export ArtParams, Solver
+export AbstractBackend, CPUBackend
+export Patch, PatchSolver, InterfaceBC, npatches, eachpatch
+export exchange_patch_ghosts!, average_shared_planes!, sync_patches!
 export ConstantBodyForce, add_source!, add_sources!
 export Workspace, compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!, mpi_main
 export StepControl, SolverFailure, PLANCK_TIME, max_rate, FloorTally
@@ -111,13 +115,13 @@ __init__() = __init_threading__()
 # combinatorial in Metric x EOS x BoundaryCondition x scheme, and precompiling
 # any fixed subset of them mostly bloats the image for configurations a given
 # run never builds.
-let A3 = Array{Float64,3}
+let A3 = Array{Float64,3}, D = Decomp{Float64}
     for P in (DirPlan{Float64}, BandPlan{Float64})
-        precompile(apply_along!, (A3, P, A3, Decomp))
+        precompile(apply_along!, (A3, P, A3, D))
     end
-    precompile(exchange_halos!, (A3, Decomp))
-    precompile(exchange_dim_batch!, (Vector{A3}, Decomp, Int))
-    precompile(field, (Decomp,))
+    precompile(exchange_halos!, (A3, D))
+    precompile(exchange_dim_batch!, (Vector{A3}, D, Int))
+    precompile(field, (D,))
 end
 
 end # module
