@@ -605,6 +605,39 @@ function record_floor!(solver::Solver, tally)
     return ft
 end
 
+# Multi-patch counterparts of the per-step state operations `run!` composes.
+# Each loops this rank's patches in the global order; none reduces.
+apply_bcs!(solver::Solver, states::Vector{<:ConservedState}) =
+    (foreach(((ps, Q),) -> apply_bcs!(ps, Q), eachpatch(solver, states)); states)
+
+filter_state!(solver::Solver, states::Vector{<:ConservedState}) =
+    (foreach(((ps, Q),) -> filter_state!(ps, Q), eachpatch(solver, states));
+     sync_patches!(solver, states))
+
+# Savepoint copies for either state representation.
+_snapshot(Q) = copy(Q)
+_snapshot(states::Vector{<:ConservedState}) = [copy(Q) for Q in states]
+_restore_state!(dst, src) = copyto!(dst, src)
+function _restore_state!(dst::Vector{<:ConservedState}, src::Vector{<:ConservedState})
+    for i in eachindex(dst)
+        copyto!(dst[i], src[i])
+    end
+    return dst
+end
+
+# Interface and level consistency before the pre-step reads. The single-patch
+# path has neither and skips this entirely.
+_presync!(solver, Q) = Q
+_presync!(solver, states::Vector{<:ConservedState}) =
+    (sync_patches!(solver, states); sync_levels!(solver, states))
+
+# Per-step level maintenance, after the state filter: restrict the fine state
+# onto the covered coarse region, then re-impose the fine shell from the
+# restricted coarse state. No-ops without refinement.
+_post_step!(solver, Q) = Q
+_post_step!(solver, states::Vector{<:ConservedState}) =
+    sync_levels!(solver, states)
+
 """
     run!(solver, Q; tfinal, nmax=typemax(Int), callback=nothing, control=solver.control)
     run!(solver, Q, workspace; tfinal, ...)
@@ -652,39 +685,6 @@ collective through [`max_rate`](@ref) and the line solves beneath
 [`step!`](@ref), so every rank must call it with the same `tfinal`, `nmax` and
 callbacks.
 """
-# Multi-patch counterparts of the per-step state operations `run!` composes.
-# Each loops this rank's patches in the global order; none reduces.
-apply_bcs!(solver::Solver, states::Vector{<:ConservedState}) =
-    (foreach(((ps, Q),) -> apply_bcs!(ps, Q), eachpatch(solver, states)); states)
-
-filter_state!(solver::Solver, states::Vector{<:ConservedState}) =
-    (foreach(((ps, Q),) -> filter_state!(ps, Q), eachpatch(solver, states));
-     sync_patches!(solver, states))
-
-# Savepoint copies for either state representation.
-_snapshot(Q) = copy(Q)
-_snapshot(states::Vector{<:ConservedState}) = [copy(Q) for Q in states]
-_restore_state!(dst, src) = copyto!(dst, src)
-function _restore_state!(dst::Vector{<:ConservedState}, src::Vector{<:ConservedState})
-    for i in eachindex(dst)
-        copyto!(dst[i], src[i])
-    end
-    return dst
-end
-
-# Interface and level consistency before the pre-step reads. The single-patch
-# path has neither and skips this entirely.
-_presync!(solver, Q) = Q
-_presync!(solver, states::Vector{<:ConservedState}) =
-    (sync_patches!(solver, states); sync_levels!(solver, states))
-
-# Per-step level maintenance, after the state filter: restrict the fine state
-# onto the covered coarse region, then re-impose the fine shell from the
-# restricted coarse state. No-ops without refinement.
-_post_step!(solver, Q) = Q
-_post_step!(solver, states::Vector{<:ConservedState}) =
-    sync_levels!(solver, states)
-
 function run!(solver::Solver, Q, workspace::Workspace;
               tfinal, nmax::Int=typemax(Int), callback=nothing,
               control::StepControl=solver.control)

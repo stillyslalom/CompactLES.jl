@@ -48,3 +48,13 @@ SwitchableBC
 switch!
 switched
 ```
+
+## Patch-interface markers
+
+`Solver` places these on internal patch faces itself; they are not
+user-supplied conditions.
+
+```@docs
+InterfaceBC
+CoarseFineBC
+```

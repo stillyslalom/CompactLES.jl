@@ -254,6 +254,16 @@ function _scatter_lines!(out, B::Matrix{T}, plan, decomp::Decomp,
     return out
 end
 
+# A `nothing` plan slot is reachable in types but not in execution: a plans
+# tuple holds `nothing` exactly where the dimension is collapsed or folded, and
+# every caller branches on those conditions first. This method makes the dead
+# branch statically resolvable, so it neither shows up as a runtime-dispatch
+# site in `bench/jetcheck.jl` nor hides a genuine routing bug behind a
+# MethodError.
+apply_along!(out, ::Nothing, f, decomp::Decomp) =
+    error("apply_along! reached a dimension with no plan; the caller should " *
+          "have routed a collapsed or folded dimension elsewhere")
+
 """
     apply_along!(out, plan, f, decomp)
 
@@ -265,16 +275,6 @@ left untouched. `f` must have current rank-boundary halos.
 solve is collective over the sub-communicator along that dimension, so every
 rank of it must call this.
 """
-# A `nothing` plan slot is reachable in types but not in execution: a plans
-# tuple holds `nothing` exactly where the dimension is collapsed or folded, and
-# every caller branches on those conditions first. This method makes the dead
-# branch statically resolvable, so it neither shows up as a runtime-dispatch
-# site in `bench/jetcheck.jl` nor hides a genuine routing bug behind a
-# MethodError.
-apply_along!(out, ::Nothing, f, decomp::Decomp) =
-    error("apply_along! reached a dimension with no plan; the caller should " *
-          "have routed a collapsed or folded dimension elsewhere")
-
 function apply_along!(out, plan::AbstractDirPlan, f, decomp::Decomp)
     d = plan.dim
     if d == 1

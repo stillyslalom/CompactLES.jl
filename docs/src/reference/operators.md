@@ -21,12 +21,19 @@ compact_d8
 
 ## Decomposition and storage
 
+Field allocation is routed through a storage backend, so the same setup code
+can later place arrays in device memory; [`CPUBackend`](@ref) is the only
+implementation today.
+
 ```@docs
 Decomp
 interior
 field
 allocate_state
 exchange_halos!
+CompactLES.exchange_state!
+AbstractBackend
+CPUBackend
 ```
 
 ## Directional plans
@@ -34,9 +41,28 @@ exchange_halos!
 ```@docs
 DirPlan
 BandPlan
+plan_direction
+CompactLES.interface_closures
 apply_along!
 filter_field!
 THREAD_MIN_WORK
+```
+
+## Patches
+
+A multi-patch solver holds one [`Patch`](@ref) per tile of the domain and
+synchronizes them between Runge–Kutta stages. The compute routines are written
+against the property surface that [`PatchSolver`](@ref) and a single-patch
+`Solver` present identically, so they run unchanged in either configuration.
+
+```@docs
+Patch
+PatchSolver
+npatches
+eachpatch
+sync_patches!
+exchange_patch_ghosts!
+average_shared_planes!
 ```
 
 ## AMR level transfer
@@ -50,4 +76,8 @@ TransferPlan
 plan_transfer
 restrict!
 prolong!
+LevelTransfer
+sync_levels!
+prolong_level_ghosts!
+restrict_level!
 ```
