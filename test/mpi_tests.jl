@@ -192,6 +192,64 @@ function test_closed_c6()
 end
 
 # ---------------------------------------------------------------------------
+# 3b. AMR transfer pair (reference/AMR_GPU.md, Stage 1). The invertibility
+#     identity prolong(restrict(f)) == f holds at any rank count, so applying
+#     the pair along a split dimension pins the distributed tridiagonal solve
+#     of the restriction filter and the pentadiagonal spike solve of the
+#     deconvolution, edge-rank closure rows included, at machine precision —
+#     any interface bug is an O(1) error. The TransferPlan check decomposes a
+#     transverse dimension instead (the transfer dimension itself must not be
+#     split in Stage 1) and asserts the coarse → fine → coarse left inverse.
+# ---------------------------------------------------------------------------
+function test_transfer_pair()
+    section("AMR transfer operators: distributed pair and left inverse")
+    restriction, prolongation = amr_transfer_schemes()
+    for ax in (1, 2)
+        n_global = ntuple(d -> d == ax ? SPLITN : 6, 3)
+        decomp = Decomp(n_global, (false, false, false); dims=splitdims(ax))
+        rplan = CL.plan_direction(decomp, restriction, ax, 1)
+        pplan = CL.plan_direction(decomp, prolongation, ax, 1)
+        f = CL.field(decomp); fbar = CL.field(decomp); back = CL.field(decomp)
+        pad = decomp.n_halo_d; off = decomp.offset
+        for k in 1:decomp.n_local[3], j in 1:decomp.n_local[2], i in 1:decomp.n_local[1]
+            gx, gy, gz = i + off[1], j + off[2], k + off[3]
+            f[i+pad[1], j+pad[2], k+pad[3]] =
+                sin(0.37 * (gx, gy, gz)[ax]) + 0.5cos(0.11gx + 0.23gy + 0.05gz)
+        end
+        CL.exchange_dim!(f, decomp, ax)
+        CL.apply_along!(fbar, rplan, f, decomp)
+        CL.exchange_dim!(fbar, decomp, ax)
+        CL.apply_along!(back, pplan, fbar, decomp)
+        e = 0.0
+        for k in 1:decomp.n_local[3], j in 1:decomp.n_local[2], i in 1:decomp.n_local[1]
+            e = max(e, abs(back[i+pad[1], j+pad[2], k+pad[3]] -
+                           f[i+pad[1], j+pad[2], k+pad[3]]))
+        end
+        check("pair round trip, dim $ax split", gmax(e), 1e-13)
+    end
+
+    nc = 17
+    nf = 3nc - 2
+    df = Decomp((nf, SPLITN, 1), (false, false, true); dims=splitdims(2))
+    dc = Decomp((nc, SPLITN, 1), (false, false, true); dims=splitdims(2))
+    tp = plan_transfer(df, dc, 1)
+    coarse = CL.field(dc); coarse2 = CL.field(dc); fine = CL.field(df)
+    pad = dc.n_halo_d; off = dc.offset
+    for k in 1:dc.n_local[3], j in 1:dc.n_local[2], i in 1:dc.n_local[1]
+        coarse[i+pad[1], j+pad[2], k+pad[3]] =
+            exp(sin(0.5 * (i + off[1]))) + 0.1 * (j + off[2])
+    end
+    prolong!(fine, tp, coarse)
+    restrict!(coarse2, tp, fine)
+    e = 0.0
+    for k in 1:dc.n_local[3], j in 1:dc.n_local[2], i in 1:dc.n_local[1]
+        e = max(e, abs(coarse2[i+pad[1], j+pad[2], k+pad[3]] -
+                       coarse[i+pad[1], j+pad[2], k+pad[3]]))
+    end
+    check("coarse->fine->coarse, transverse split", gmax(e), 1e-13)
+end
+
+# ---------------------------------------------------------------------------
 # 4. Off-rank folds. Splitting the pairing (or reversed) dimension across ranks
 #    forces the pair_forward!/pair_backward! block-Sendrecv butterfly that the
 #    serial suite (always local_pair) never reaches.
@@ -1053,6 +1111,7 @@ const SUITE = (
     ("periodic C6", test_periodic_c6),
     ("pentadiagonal C10", test_pentadiagonal_c10),
     ("closed C6", test_closed_c6),
+    ("AMR transfer pair", test_transfer_pair),
     ("halo consistency", test_halo_consistency),
     ("off-rank folds", test_offrank_folds),
     ("freestream", test_freestream),

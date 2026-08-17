@@ -31,6 +31,7 @@ include("equations.jl")
 include("boundary.jl")
 include("operators.jl")
 include("operators_banded.jl")
+include("transfer.jl")
 include("metric.jl")
 include("folds.jl")
 include("artificial.jl")
@@ -59,6 +60,8 @@ export save_checkpoint_hdf5, load_checkpoint_hdf5!, save_hdf5
 export SwitchableBC, switch!, switched
 export Prim, Problem, Numerics, setup, initialize!, conserved_from_prim, tanh_blend
 export DirPlan, BandPlan, apply_along!, filter_field!
+export amr_transfer_schemes, amr_restriction_scheme, amr_prolongation_scheme
+export TransferPlan, plan_transfer, restrict!, prolong!
 export EOS, IdealSpecies, IdealMixture, single_species, nspecies, Transport
 export StiffenedGas, Nasa9Interval, Nasa9Species, Nasa9Mixture
 export nasa9_constant_cp, read_nasa9

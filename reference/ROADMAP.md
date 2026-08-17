@@ -555,11 +555,13 @@ reference-implementation pass that headed this list are done
    how much the remaining calibration work can be trusted.
 3. **Phase 2.1, the implicit diffusion solver** — the principal architectural
    gap, which also addresses the polar CFL restriction.
-4. **AMR/GPU Stage 1** (transfer operators) any time — it is small and
-   independent. **Stage 2** (the patch refactor) waits until the model debts
-   above settle, because it touches every file and rebasing physics changes
-   across it is the expensive order. Subsequent stages follow
-   `reference/AMR_GPU.md`.
+4. **AMR/GPU Stage 1** (transfer operators) is delivered
+   (`reference/HISTORY.md`); the sampling convention and the
+   sensor-amplification risk are both resolved by measurement in the Stage 1
+   status block of `reference/AMR_GPU.md`. **Stage 2** (the patch refactor)
+   waits until the model debts above settle, because it touches every file
+   and rebasing physics changes across it is the expensive order. Subsequent
+   stages follow `reference/AMR_GPU.md`.
 
 The open items from the source comparison
 ([above](#open-work-from-the-source-comparison)) sit alongside these rather

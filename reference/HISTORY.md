@@ -20,6 +20,7 @@ points at them rather than restating them.
 10. [The origin cell (August 2026)](#the-origin-cell-august-2026)
 11. [Filter dt-consistency (August 2026)](#filter-dt-consistency-august-2026)
 12. [The positivity failsafe (August 2026)](#the-positivity-failsafe-august-2026)
+13. [AMR/GPU Stage 1 — level-transfer operators (August 2026)](#amrgpu-stage-1--level-transfer-operators-august-2026)
 
 ## Phase 0 — extensibility seams (July 2026)
 
@@ -642,3 +643,36 @@ convergence order and error magnitude exactly, the validation battery matches
 its guards to every printed digit, and MPI checks pass 90/90 at 2, 4 and 8
 ranks, twelve of them new and covering decomposition-independence of the repair
 and its tally.
+
+## AMR/GPU Stage 1 — level-transfer operators (August 2026)
+
+Stage 1 of `reference/AMR_GPU.md` is delivered: `src/transfer.jl` implements
+the Miranda 3:1 invertible transfer pair as ordinary compact schemes —
+restriction a `CompactScheme` (tridiagonal left-hand side against the
+pentadiagonal Gaussian), prolongation a `BandedCompactScheme` with q = 2 and
+its interior rows normalized to a unit diagonal — so `plan_direction` supplies
+the distributed spike solve and the fold parity variants without new solver
+machinery. `plan_transfer`, `restrict!` and `prolong!` bind the pair to a
+dimension of matched fine/coarse decompositions; the transfer dimension itself
+must not be decomposed until the patch stages own the 3:1 rank alignment.
+
+The stage's open questions were resolved by measurement, recorded in the
+Stage 1 status block of `reference/AMR_GPU.md`: the sampling convention is
+filter-then-subsample against interpolate-then-deconvolve, which makes
+restriction an exact left inverse of prolongation (coarse → fine → coarse at
+8.9e-16 for arbitrary data) while fine → coarse → fine converges at the
+selectable interpolation order (measured 3.97 / 5.93 / 7.97 at orders 4/6/8);
+the smoothed Cook sensor of a captured-shock profile round-trips at ≤ 1.13×
+against the feared ~20× deconvolution bound; shock round-trip pollution decays
+≈ 3.4× per point outside the shock footprint, giving the ~4-coarse-cell buffer
+figure for Stage 3/4 tagging; and the anti-aliasing prefilter question is
+answered (trades accuracy for undershoot margin, held in reserve).
+
+Verification: four new serial testsets (64 total) covering DC gain to the
+last bit, closure-row sums, pair invertibility at 2e-15 through the live
+plans, the left-inverse identity, measured round-trip order, the fold-variant
+equivalence row for row, and the sensor-injection bounds; the MPI suite gains
+a distributed pair round trip on split dimensions and a transverse-decomposed
+transfer (93/93 at 2, 4 and 8 ranks). Convergence and validation guards are
+unchanged to every printed digit, as they must be for a change that adds
+operators without touching the solver.

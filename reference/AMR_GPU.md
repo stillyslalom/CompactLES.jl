@@ -192,6 +192,59 @@ The patch bookkeeping below is deliberately simple enough not to need either.
 
 Small, independent of everything else, and can be done at any time.
 
+**Status: delivered** (August 2026). `src/transfer.jl` carries the pair and
+the sampling plumbing; the measurements below were taken with
+`bench/amr_transfer.jl` and are guarded by four serial testsets plus a
+multi-rank section.
+
+- The pair maps onto the existing types with no new solver machinery:
+  restriction is a `CompactScheme` (tridiagonal LHS, Gaussian RHS) and
+  prolongation a `BandedCompactScheme` with q = 2, its interior rows divided
+  by the Gaussian center weight so the LHS diagonal is one (the `compact_d8`
+  normalization; closure rows enter verbatim, since row scaling leaves the
+  solution unchanged). The source's third tabulated closure row per end is
+  the interior stencil, so each scheme carries two genuine closure rows and
+  the minimum line extent is 5.
+- The extended-data closure variant is tabulated identically to the
+  one-sided one — the source says so ("same as one-sided to maintain
+  invertibility") — so one closure set serves physical edges and patch
+  interfaces alike. The ±1 symmetric variants are exactly the
+  `lo_fold`/`hi_fold` ghost-folding algebra: a half line under a parity fold
+  with mirror halos reproduces the closed full line on parity-extended data
+  row for row (measured ≤ 1e-13, both schemes, both signs).
+- **The 3:1 sampling convention (risk 1) is resolved.** Restriction filters
+  the fine line and takes the coincident nodes (fine node 3m − 2 ↔ coarse
+  node m; a closed line has n_f = 3n_c − 2, a periodic one 3n_c).
+  Prolongation interpolates the coarse field — which is samples of the
+  *filtered* field — onto the two intermediate fine nodes of each interval
+  by Lagrange interpolation (exact rational weights, order 4/6/8, default
+  6), then deconvolves. Measured: the pair round-trips through the live
+  plans at 1.6e-15 closed / 2.7e-15 periodic (the 3.4e-15 dense figure);
+  restriction is a **left inverse** of prolongation, so coarse → fine →
+  coarse is exact (8.9e-16) for arbitrary data, which is what keeps levels
+  consistent without refluxing; fine → coarse → fine converges at the
+  interpolation order (measured 3.97 / 5.93 / 7.97), the subsampled content
+  being unrecoverable by construction. A constant survives restriction to
+  the last bit and prolongation to 13 ULPs.
+- At a closed end the fine → coarse → fine error within 6 points of the
+  boundary converges at ≈ 3 (the closure order, consistent with the Stage 2
+  interface expectation) against 6 in the interior.
+- **The sensor-injection risk (risk 3) measures small.** The smoothed δ⁴
+  sensor of a 2h shock profile round-trips with amplification 1.03–1.13
+  regardless of distance from the end — after the smoother there is no
+  fine-Nyquist content left for the deconvolution to amplify, so the ~20×
+  symbol bound is not approached. The state field itself undershoots by
+  ≤ 3% of ambient (−2.9e-2 on a 0.5 jump), independent of boundary
+  proximity, and the round-trip error decays ≈ 3.4× per point once outside
+  the shock's own footprint: 6.1e-2 at the shock, 1.6e-4 by 12 fine cells,
+  7.4e-7 by 21. A tagging buffer of ~4 coarse cells therefore drops
+  interface pollution by two orders of magnitude.
+- **The c4ff3 question is answered for now**: an explicit Gaussian pass
+  ahead of restriction cuts the shock undershoot 2.8× (−2.9e-2 → −1.1e-2)
+  but raises the total round-trip error (it smears the profile further), so
+  it is not a default; it is the tool to reach for if Stage 4 regridding
+  onto captured shocks proves positivity-limited.
+
 **Deliverable.** A new `src/transfer.jl` defining the level-transfer operator
 pair, plus tests. No solver changes.
 
@@ -211,28 +264,35 @@ pair, plus tests. No solver changes.
   patch face type. Start with one-sided and extended-data; the symmetric pair
   maps onto the existing fold machinery.
 - The 3:1 sampling convention between the filter pair and the coarse grid is
-  not fully specified by the public kernels (see
-  [Risks](#risks-and-open-questions)); pin it down numerically before writing
-  the patch code that consumes it. The working hypothesis: restriction =
-  filter on the fine line, then take every third node (the ones coincident
-  with coarse nodes); prolongation = inject coarse values onto every third
-  fine node, fill the intermediate nodes by the deconvolution solve.
-  `bench/amr_transfer.jl` already reconstructs the operators; extend it until
-  the round-trip on smooth data reproduces its 3.4e-15 figure through the new
-  `src/transfer.jl` types.
+  not fully specified by the public kernels; it was pinned down numerically
+  (see the status block and [Risks](#risks-and-open-questions)). The working
+  hypothesis held once "fill the intermediate nodes" was made concrete:
+  restriction = filter on the fine line, then take every third node;
+  prolongation = inject coarse values onto the coincident fine nodes, fill
+  the intermediate nodes by Lagrange interpolation of the (filtered) coarse
+  field, then run the deconvolution solve. `bench/amr_transfer.jl`
+  reconstructs the operators and reproduces its 3.4e-15 round-trip figure
+  through the `src/transfer.jl` types.
 
-**Tests (gate for the stage).**
+**Tests (gate for the stage — delivered; the measured values are in the
+status block and asserted with headroom in `test/runtests.jl`).**
 
-- Round-trip fine → coarse → fine on smooth periodic data ≤ 1e-14.
+- Round-trip through the operator pair ≤ 1e-14 on any data (measured
+  ~2e-15), and coarse → fine → coarse ≤ 1e-14 through the full sampled
+  transfer. The fine → coarse → fine direction is finite-order, not exact:
+  3:1 subsampling discards content above the coarse Nyquist, so this
+  round trip is the "measured order" item below rather than a machine-zero
+  identity.
 - DC gain exactly 1 (constant in, constant out, to the last bit) in the
-  interior and through each closure variant.
-- Measured order of the restriction/prolongation pair on a smooth field.
+  interior and through each closure variant. Measured: bit-exact through
+  restriction, 13 ULPs through prolongation.
+- Measured order of the restriction/prolongation pair on a smooth field:
+  the interpolation order, 3.97 / 5.93 / 7.97 at orders 4 / 6 / 8.
 - The sensor-injection test named in the groundwork: apply the Cook δ⁴ sensor
   chain (`delta4_sum!` + `smooth!`) to data containing a captured-shock-like
   profile near a transfer boundary, prolong, and measure the amplification
-  against the ~20× bound. This number sets how much buffering Stage 3
-  interfaces need and whether the coarsening filter (`c4ff3` analog) must run
-  before every restriction.
+  against the ~20× bound. Measured 1.03–1.13; the buffering and
+  coarsening-filter conclusions are in the status block.
 
 ## Stage 2 — patch abstraction, single level
 
@@ -300,9 +360,15 @@ Collective discipline, which is where this refactor can go wrong silently
 
 A patch face is `Physical` (existing BC machinery), or `Interface`: ghost
 layers filled by copy from the abutting patch at the same level, then the line
-solve closed with the extended-data closure rows from Stage 1's tabulated set
-(interior-like stencils reading ghost data, one-sided beyond it). This is
-Miranda's `ghost.f90` shape. Interface exchange is a new
+solve closed at the face with rows whose left-hand side couples no ghost
+unknown (the ghost values belong to the neighboring patch's solve), while
+their right-hand side may read the copied ghost data. Stage 1's reading of
+the source sets the precedent for the left-hand side: Miranda tabulates the
+extended-data transfer closures identically to the one-sided ones, "to
+maintain invertibility", even where ghost data is available. Whether each
+solver scheme's interface rows keep one-sided right-hand sides as well or
+read across the face is a Stage 2 accuracy measurement, made against the
+manufactured-solution gate below. This is Miranda's `ghost.f90` shape. Interface exchange is a new
 `exchange_patch_ghosts!` alongside `halo.jl`: for each face pair, a
 `Sendrecv!` between the owning rank subsets; same-rank faces are copies.
 Since the grids are node-coincident, abutting patches share the interface
@@ -530,10 +596,11 @@ expensive order.
 
 ## Risks and open questions
 
-1. **The 3:1 sampling convention** between the filter pair and the coarse
-   node set is inferred, not documented; Stage 1 resolves it numerically
-   before any patch code consumes it. Symptom of getting it wrong: the
-   round-trip fails at O(1), not subtly.
+1. **The 3:1 sampling convention** — resolved by Stage 1 (see its status
+   block): filter-then-subsample / interpolate-then-deconvolve, with
+   restriction a measured left inverse of prolongation. The remaining
+   freedom is the interpolation order (default 6), which sets the
+   fine → coarse → fine order and nothing else.
 2. **Conservation at interfaces.** The transfer operators preserve the mean
    (unit DC gain), and restriction-over-covered-region keeps levels
    consistent, but the compact divergence with closure rows at an interface
@@ -543,11 +610,14 @@ expensive order.
    fallback is a surface correction on the interface fluxes. Do not build
    refluxing machinery speculatively.
 3. **Deconvolution amplification** (~20× at fine Nyquist) interacting with
-   Cook sensors near interfaces — the measured risk from the groundwork. The
-   Stage 1 sensor-injection test sizes it; mitigations, in order: run the
-   coarsening filter before every restriction, keep refinement boundaries
-   the buffer distance away from tagged features, and only then consider
-   SBP–SAT interfaces.
+   Cook sensors near interfaces — sized by the Stage 1 sensor-injection
+   measurement and found small: the smoothed sensor round-trips at ≤ 1.13×,
+   and shock round-trip pollution decays ≈ 3.4× per point outside the shock
+   footprint. The mitigation that remains live is keeping refinement
+   boundaries a ~4-coarse-cell buffer away from tagged features; the
+   coarsening filter ahead of restriction is measured (it trades accuracy
+   for undershoot margin) and held in reserve, and SBP–SAT stays the
+   fallback of last resort.
 4. **Filter cadence across subcycled levels.** A fine level filtering every
    fine step filters 3× as often per unit time as its parent, and the
    filter's dissipation is per-application. This is the same dt-consistency

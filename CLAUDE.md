@@ -66,11 +66,11 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 60 testsets, 0 failures
+julia --project=. test/runtests.jl        # 64 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 90/90 each
+  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 93/93 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
@@ -272,7 +272,9 @@ decision worth revisiting.
   `foldorder.jl` (convergence error split by region of the line — the fold end
   against the outer wall, which a global max norm conflates),
   `filterrate.jl` (whether the state filter dissipates per application or per
-  unit time), `amr_transfer.jl`,
+  unit time), `amr_transfer.jl` (AMR transfer-pair conditioning plus the
+  Stage 1 measurement battery: sampling convention, round-trip orders,
+  sensor-injection amplification, pollution decay),
   `tgv_energy.jl` (Taylor–Green kinetic-energy budget split
   by dissipation channel; the one bench script that runs usefully under
   `mpiexec`, and the intended first workload on a cluster).
