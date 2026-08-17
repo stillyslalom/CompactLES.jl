@@ -57,9 +57,14 @@ them for a single-patch run) rather than holding a `Patch` directly.
 struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP}
     id::Int
     level::Int
-    region::BlockRegion                     # global node offset + extent
+    region::BlockRegion                     # offset + extent, in this LEVEL's node
+                                            # index space (level ℓ spacing h/3^ℓ,
+                                            # so physical coordinates follow from
+                                            # region.offset and h alone)
     comm::MPI.Comm                          # ranks owning pieces of this patch
     decomp::Decomp{T}                       # decomposition of the patch over comm
+    h::NTuple{3,T}                          # this level's grid spacing (h/3 per
+                                            # refinement level below the root)
     faces::NTuple{3,NTuple{2,Int}}          # 0 = physical/periodic; else neighbor patch id
     bcs::BC                                 # per-face conditions (InterfaceBC at interfaces)
     folds::Fo
@@ -102,7 +107,7 @@ end
 # `getfield` at every call site.
 @inline _is_patch_prop(n::Symbol) =
     n === :decomp || n === :bcs || n === :folds || n === :faces ||
-    n === :region || n === :deriv_plans || n === :div_plans ||
+    n === :region || n === :h || n === :deriv_plans || n === :div_plans ||
     n === :filter_plans || n === :smooth_plans || n === :ring_plans ||
     n === :pairbuf || n === :pairout ||
     n === :rho || n === :u || n === :v || n === :w ||

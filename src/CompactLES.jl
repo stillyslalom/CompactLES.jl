@@ -38,6 +38,7 @@ include("artificial.jl")
 include("stepcontrol.jl")
 include("sources.jl")
 include("patches.jl")
+include("levels.jl")
 include("rhs.jl")
 include("nscbc.jl")
 include("io.jl")
@@ -71,8 +72,9 @@ export Metric, CartesianMetric, CylindricalMetric, SphericalMetric
 export Stretch, sine_cluster
 export ArtParams, Solver
 export AbstractBackend, CPUBackend
-export Patch, PatchSolver, InterfaceBC, npatches, eachpatch
+export Patch, PatchSolver, InterfaceBC, CoarseFineBC, npatches, eachpatch
 export exchange_patch_ghosts!, average_shared_planes!, sync_patches!
+export LevelTransfer, prolong_level_ghosts!, restrict_level!, sync_levels!
 export ConstantBodyForce, add_source!, add_sources!
 export Workspace, compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!, mpi_main
 export StepControl, SolverFailure, PLANCK_TIME, max_rate, FloorTally

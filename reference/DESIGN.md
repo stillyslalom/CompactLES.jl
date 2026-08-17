@@ -95,6 +95,7 @@ validation cases are discussed, and never a viscosity.
 | `src/artificial.jl`        | Cook artificial μ\*, β\*, κ\*, D\* from δ⁴ or compact-d8 sensors |
 | `src/sources.jl`           | Inferable tuple source interface and `ConstantBodyForce` |
 | `src/patches.jl`           | `Patch` (per-patch state), `PatchSolver`, slab layout, interface ghost exchange and shared-plane averaging |
+| `src/levels.jl`            | Static two-level refinement: fine-patch coupling schedules, level transfer chains |
 | `src/rhs.jl`               | `Solver` container, flux assembly, the conservative NS RHS |
 | `src/timestep.jl`          | RK45, CFL timestep, the `run!` loop, per-step filtering |
 | `src/io.jl`                | Per-rank checkpoint/restart, parallel VTK output |

@@ -66,7 +66,7 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 69 testsets, 0 failures
+julia --project=. test/runtests.jl        # 73 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
@@ -168,6 +168,12 @@ Names are spelled out rather than abbreviated. Current vocabulary:
   drivers takes a `SolverLike` (single-patch `Solver` or `PatchSolver`), and
   a single-patch `Solver` forwards patch-owned property names to its sole
   patch, so `solver.rho` and `solver.decomp` still read as before
+- `refine` (a `BlockRegion` in root node space), `level_transfer` (a
+  `LevelTransfer`), `level_restriction` (`:inject` or `:filter`),
+  `prolong_level_ghosts!`, `restrict_level!`, `sync_levels!`,
+  `LEVEL_BUFFER`, `RESTRICT_MARGIN`; `Patch.h` is the patch's own spacing
+  (h/3 on a level-1 patch), which the property forwarding serves as
+  `solver.h`
 - `refresh_primitives!`, `mixture_density`, `boundary_plane` (the in-flight
   state-query API; primitives are stale inside a callback, see the
   `refresh_primitives!` docstring)

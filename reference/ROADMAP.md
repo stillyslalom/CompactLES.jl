@@ -555,14 +555,16 @@ reference-implementation pass that headed this list are done
    how much the remaining calibration work can be trusted.
 3. **Phase 2.1, the implicit diffusion solver** — the principal architectural
    gap, which also addresses the polar CFL restriction.
-4. **AMR/GPU Stages 1 and 2 are delivered** (`reference/HISTORY.md` and the
-   status blocks in `reference/AMR_GPU.md`): the transfer operators, and the
+4. **AMR/GPU Stages 1–3 are delivered** (`reference/HISTORY.md` and the
+   status blocks in `reference/AMR_GPU.md`): the transfer operators, the
    patch abstraction at a single level carrying the G0 storage
-   generalization. Stage 2 was originally sequenced after the model debts
-   above; it was executed early by explicit decision, kept
-   behavior-preserving (the single-patch path is bit-identical), so physics
-   changes rebase onto it cleanly. Subsequent stages follow
-   `reference/AMR_GPU.md`.
+   generalization, and static two-level refinement at a global timestep
+   (serial first cut). Stages 2 and 3 were originally sequenced after the
+   model debts above; they were executed early by explicit decision, kept
+   behavior-preserving (the unrefined single-patch path is bit-identical),
+   so physics changes rebase onto them cleanly. Next per the plan's
+   ordering: G1 (KernelAbstractions pointwise kernels) and Stage 4
+   (subcycling, tagging, regridding), plus distributing the level transfer.
 
 The open items from the source comparison
 ([above](#open-work-from-the-source-comparison)) sit alongside these rather

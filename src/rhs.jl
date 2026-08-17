@@ -14,7 +14,13 @@
 # diagonal (per solution parity σg: derivatives flip field parity, filters
 # preserve it). No node sits at r = 0 and no scale factor vanishes.
 
-mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P<:Patch{T}}
+# The patch parameter `P` is unconstrained rather than `P <: Patch{T}`: a
+# refined solver stores its root and level-1 patches in one vector, and the
+# two differ in their boundary-condition type, so `P` is their typejoin. The
+# per-patch loops then cost one dynamic dispatch per patch per call — behind
+# the PatchSolver function barrier, so the bodies stay concrete — while the
+# single-patch and same-level multi-patch cases keep a concrete `P`.
+mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P}
     equations::Eq
     eos::E
     transport::Transport{T}
@@ -43,6 +49,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P<:Patch{T}}
     ghost_sends::Vector{GhostRecord{T}}     # interface exchange records; empty
     ghost_recvs::Vector{GhostRecord{T}}     # with one patch
     plane_pairs::Vector{PlaneRecord{T}}
+    level_transfer::Union{Nothing,LevelTransfer{T}}   # two-level coupling; see levels.jl
     t::T
     tstage::T
     step::Int
@@ -164,7 +171,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 dims=nothing, n_halo::Int=4,
                 patch_grid::NTuple{3,Int}=(1, 1, 1),
                 backend::AbstractBackend=CPUBackend(),
-                interface_rhs::Symbol=:extended) where {T}
+                interface_rhs::Symbol=:extended,
+                refine::Union{Nothing,BlockRegion}=nothing,
+                level_restriction::Symbol=:inject) where {T}
     for d in 1:3
         isperiodic(bcs[d][1]) == isperiodic(bcs[d][2]) ||
             error("dimension $d mixes periodic and non-periodic conditions")
@@ -269,6 +278,47 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
             r.extent[ds] >= max(9, n_halo + 2) ||
                 error("patch extent $(r.extent[ds]) along dim $ds is below " *
                       "the scheme minimum; use fewer patches or more points")
+        end
+    end
+    # --- Static refinement (Stage 3, levels.jl) --------------------------
+    if refine !== nothing
+        MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+        MPI.Comm_size(MPI.COMM_WORLD) == 1 ||
+            error("static refinement is serial in this stage; the distributed " *
+                  "level transfer arrives with the follow-up that lifts " *
+                  "plan_transfer's alignment restriction")
+        npatch == 1 ||
+            error("refine cannot combine with a same-level patch_grid yet")
+        metric isa CartesianMetric ||
+            error("refinement requires CartesianMetric in this stage")
+        all(isnothing, stretch) ||
+            error("refinement requires an unstretched grid")
+        (axis || orig1 || poles) &&
+            error("refinement across a coordinate fold is forbidden " *
+                  "(constraint 4 of reference/AMR_GPU.md)")
+        (deriv isa CompactScheme && filt isa CompactScheme) ||
+            error("the coarse-fine boundary carries closure variants for " *
+                  "tridiagonal schemes only")
+        art.detector === :delta4 ||
+            error("refinement supports the :delta4 detector only")
+        level_restriction in (:inject, :filter) ||
+            error("level_restriction must be :inject or :filter, " *
+                  "got :$level_restriction")
+        margin = max(n_halo, LEVEL_BUFFER)
+        for d in 1:3
+            if active_g[d]
+                refine.offset[d] >= margin &&
+                    refine.offset[d] + refine.extent[d] <= n_global[d] - margin ||
+                    error("refined region must be nested at least $margin coarse " *
+                          "nodes inside the domain along dimension $d")
+                refine.extent[d] >= 4 ||
+                    error("refined region needs at least 4 coarse nodes along " *
+                          "dimension $d (9 fine points for the C8 filter)")
+            else
+                refine.offset[d] == 0 && refine.extent[d] == 1 ||
+                    error("refined region must span collapsed dimension $d " *
+                          "with offset 0 and extent 1")
+            end
         end
     end
     ds_split = npatch > 1 ? findfirst(>(1), patch_grid) : 0
@@ -402,7 +452,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                         mkd(ring, d) : nothing, 3)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
     bcs_t = ntuple(d -> (bcs[d][1], bcs[d][2]), 3)
-    patch = Patch(1, 0, regions[1], MPI.COMM_WORLD, decomp,
+    patch = Patch(1, 0, regions[1], MPI.COMM_WORLD, decomp, h,
                   ntuple(d -> (0, 0), 3), bcs_t, folds,
                   deriv_plans, deriv_plans, filter_plans, smooth_plans, ring_plans,
                   any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
@@ -418,16 +468,72 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   art.detector === :delta4 ? zeros(T, 0, 0, 0) : f(),
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(),
                   [f() for _ in 1:3, _ in 1:n_cons])
-    patches = [patch]
+    if refine === nothing
+        patches = [patch]
+        solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
+                        typeof(stretch),typeof(sources),typeof(patch)}(
+                      equations, eos, transport, art, metric, stretch, sources,
+                      Lt, orig, coord_shift, h,
+                      T(cfl), filter_interval, T(filter_cfl), control,
+                      n_global, patches, regions, decomp.comm,
+                      GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
+                      nothing,
+                      zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
+        init_geometry!(solver)
+        return solver
+    end
+    # --- Level-1 patch and the two-level coupling (levels.jl) ------------
+    hf = ntuple(d -> active_g[d] ? h[d] / 3 : h[d], 3)
+    region_f = BlockRegion(ntuple(d -> active_g[d] ? 3 * refine.offset[d] : 0, 3),
+                           fine_extent(refine, active_g))
+    pper_f = ntuple(d -> !active_g[d], 3)
+    decomp_f = Decomp{T}(region_f.extent, pper_f; dims=(1, 1, 1), n_halo=n_halo)
+    bcs_f = ntuple(d -> active_g[d] ? (CoarseFineBC(), CoarseFineBC()) :
+                                      (PeriodicBC(), PeriodicBC()), 3)
+    mkf(sch, d; kw...) = plan_direction(decomp_f, sch, d, hf[d]; kw...)
+    ext_f = interface_rhs === :extended
+    icd = ext_f ? interface_closures(deriv) : nothing
+    icf = ext_f ? interface_closures(filt) : nothing
+    dplans_f = ntuple(d -> decomp_f.active[d] ?
+        mkf(deriv, d; lo_closures=icd, hi_closures=icd) : nothing, 3)
+    vplans_f = ntuple(d -> !decomp_f.active[d] ? nothing :
+        (ext_f ? mkf(deriv, d) : dplans_f[d]), 3)
+    fplans_f = ntuple(d -> decomp_f.active[d] ?
+        mkf(filt, d; lo_closures=icf, hi_closures=icf) : nothing, 3)
+    splans_f = art.smoother === :compact ? fplans_f :
+               ntuple(d -> decomp_f.active[d] ? mkf(smoo, d) : nothing, 3)
+    g() = field(backend, decomp_f)
+    empty3 = zeros(T, 0, 0, 0)
+    fine = Patch(2, 1, region_f, MPI.COMM_WORLD, decomp_f, hf,
+                 ntuple(d -> (0, 0), 3), bcs_f, (nothing, nothing, nothing),
+                 dplans_f, vplans_f, fplans_f, splans_f, nothing,
+                 empty3, empty3,
+                 g(), g(), g(), g(), g(), g(), g(), g(),
+                 [g() for _ in 1:n_species],
+                 [g() for _ in 1:3, _ in 1:3],
+                 (g(), g(), g()),
+                 [g() for _ in 1:3, _ in 1:n_species],
+                 g(), g(), g(),
+                 [g() for _ in 1:n_species],
+                 g(), g(), g(), g(), g(),
+                 empty3,
+                 g(), (g(), g(), g()), (g(), g(), g()), g(), g(),
+                 [g() for _ in 1:3, _ in 1:n_cons])
+    level_transfer = build_level_transfer(T, refine, active_g, n_halo, 2,
+                                          level_restriction)
+    patches = [patch, fine]
     solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
-                    typeof(stretch),typeof(sources),typeof(patch)}(
+                    typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,
                   Lt, orig, coord_shift, h,
                   T(cfl), filter_interval, T(filter_cfl), control,
                   n_global, patches, regions, decomp.comm,
                   GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
+                  level_transfer,
                   zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
-    init_geometry!(solver)
+    for p in getfield(solver, :patches)
+        init_geometry!(PatchSolver(solver, p))
+    end
     return solver
 end
 
@@ -488,7 +594,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
         splans = ntuple(d -> dcp.active[d] ? mk(smoo, d) : nothing, 3)
         g() = field(backend, dcp)
         empty3 = zeros(T, 0, 0, 0)
-        Patch(pid, 0, region, pcomm, dcp, faces, pbcs, nofold,
+        Patch(pid, 0, region, pcomm, dcp, h, faces, pbcs, nofold,
               dplans, vplans, fplans, splans, nothing,
               empty3, empty3,
               g(), g(), g(), g(), g(), g(), g(), g(),
@@ -512,7 +618,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                   Lt, orig, coord_shift, h,
                   T(cfl), filter_interval, T(filter_cfl), control,
                   n_global, patches, regions, world,
-                  ghost_sends, ghost_recvs, plane_pairs,
+                  ghost_sends, ghost_recvs, plane_pairs, nothing,
                   zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
@@ -669,7 +775,7 @@ but its state must still be the vector the multi-patch drivers dispatch on,
 or the run would silently skip the interface synchronization.
 """
 allocate_state(solver::Solver) =
-    length(getfield(solver, :patch_regions)) == 1 ?
+    (length(getfield(solver, :patch_regions)) == 1 && npatches(solver) == 1) ?
         allocate_state(solver.decomp, solver.equations.n_cons) :
         [allocate_state(p.decomp, solver.equations.n_cons)
          for p in getfield(solver, :patches)]

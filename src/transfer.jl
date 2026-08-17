@@ -311,16 +311,62 @@ inverse of this map: restriction of the prolonged field reproduces
 `coarse_field` to solver precision.
 """
 function prolong!(fine_field, plan::TransferPlan, coarse_field)
-    exchange_dim!(coarse_field, plan.coarse, plan.dim)
-    d = plan.dim
-    if d == 1
-        _inject_interpolate!(plan.tmp, coarse_field, plan, Val(1))
-    elseif d == 2
-        _inject_interpolate!(plan.tmp, coarse_field, plan, Val(2))
-    else
-        _inject_interpolate!(plan.tmp, coarse_field, plan, Val(3))
-    end
+    interpolate!(plan.tmp, plan, coarse_field)
     exchange_dim!(plan.tmp, plan.fine, plan.dim)
     apply_along!(fine_field, plan.prolong_plan, plan.tmp, plan.fine)
     return fine_field
+end
+
+"""
+    interpolate!(fine_field, plan, coarse_field)
+
+The non-deconvolving half of [`prolong!`](@ref): inject the coarse values onto
+the coincident fine nodes and fill the intermediate nodes by Lagrange
+interpolation of order `plan.interp_order`, writing the interior of
+`fine_field` and returning it.
+
+Use this rather than `prolong!` when the coarse data are point samples of the
+field itself. The deconvolution in `prolong!` inverts the 3Δx Gaussian and is
+exact only when its input is samples of the *filtered* field — i.e. data a
+[`restrict!`](@ref) produced. Applied to raw point samples it "sharpens" a
+field that was never smoothed, an O(h²) error from the filter deficit, which
+is how the Stage 3 ghost fill measured at order ≈ 1.7 before this split (see
+levels.jl). On point samples this interpolation is O(h^interp_order) instead.
+"""
+function interpolate!(fine_field, plan::TransferPlan, coarse_field)
+    exchange_dim!(coarse_field, plan.coarse, plan.dim)
+    d = plan.dim
+    if d == 1
+        _inject_interpolate!(fine_field, coarse_field, plan, Val(1))
+    elseif d == 2
+        _inject_interpolate!(fine_field, coarse_field, plan, Val(2))
+    else
+        _inject_interpolate!(fine_field, coarse_field, plan, Val(3))
+    end
+    return fine_field
+end
+
+"""
+    inject!(coarse_field, plan, fine_field)
+
+The non-filtering half of [`restrict!`](@ref): copy the fine field's
+coincident-node values onto the interior of `coarse_field` and return it.
+Exact pointwise on the shared nodes; unlike `restrict!` it applies no
+anti-alias filter, so content between the coarse and fine Nyquist folds onto
+the coarse grid and must be handled by the coarse level's own regularization.
+The Stage 3 level sync uses this as its default for the converse of the
+reasoning on [`interpolate!`](@ref): the filtered restriction writes an
+attenuated representation into a coarse field that everywhere else holds
+point samples.
+"""
+function inject!(coarse_field, plan::TransferPlan, fine_field)
+    d = plan.dim
+    if d == 1
+        _subsample!(coarse_field, fine_field, plan, Val(1))
+    elseif d == 2
+        _subsample!(coarse_field, fine_field, plan, Val(2))
+    else
+        _subsample!(coarse_field, fine_field, plan, Val(3))
+    end
+    return coarse_field
 end

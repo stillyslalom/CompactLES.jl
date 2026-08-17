@@ -2644,6 +2644,7 @@ end
 end
 
 include("patch_tests.jl")
+include("level_tests.jl")
 
 # HDF5 is a weak dependency and is not loadable from the package environment
 # alone, so the extension tests run only where it is present. The skip is

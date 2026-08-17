@@ -481,6 +481,53 @@ Two levels, refinement regions fixed at setup, every level advancing with the
 same `dt` (the global minimum). Removing subcycling from this stage isolates
 the spatial coupling, which is where the numerical risk is.
 
+**Status: delivered** (August 2026), first cut, with one numerics finding
+that revises the plan's transfer prescription. `src/levels.jl` implements one
+level-1 patch over a user-given `refine::BlockRegion` at ratio 3, joining
+`solver.patches` so the Stage 2 drivers advance it and the shared `max_rate`
+reduction supplies the global dt. Ghost coupling is the Dirichlet-forcing
+form: after every RK stage the fine patch's ghost ring *and* boundary-plane
+nodes are overwritten from the coarse state over a 4-coarse-node buffered
+box; after every step the fine state is written back onto the covered coarse
+region, holding 2 coarse nodes off the boundary (`RESTRICT_MARGIN` — writing
+to the boundary closes a feedback loop through the fine solution's
+least-accurate nodes, measured gain ≈ 2 per step; the margin flattens it).
+
+**The finding: the invertible transfer pair is not the right live coupling.**
+Its contract is that prolongation input is samples of the *filtered* field —
+which restricted data is, and the live coarse solution is not. Deconvolving
+point samples sharpens data that was never smoothed, and filtered restriction
+writes an attenuated representation into a field of point samples; both are
+O(h²) against the solution, and the manufactured-solution gate measured
+order 1.3–1.7 through the pair. The default coupling is therefore the
+point-sample halves of the same machinery — order-6 Lagrange interpolation
+up (`interpolate!`), coincident-node injection down (`inject!`) — which
+measures **order 3.46/3.64** with errors three decades lower.
+`level_restriction = :filter` keeps the anti-aliasing pair selectable, and
+the pair remains what Stage 4 regridding initializes *new* fine regions
+from, where the coarse data is all there is.
+
+Measured gates (`test/level_tests.jl`): entropy-wave MMS across the boundary
+8.4e-8 / 7.7e-9 / 6.2e-10 at N = 48/96/192 (orders 3.46/3.64, one-sided
+divergence closures binding as at a Stage 2 interface); Sod crossing the
+refinement boundary in both directions with Cook sensors and the state
+filter live — ahead-of-shock interface noise 6.4e-10 in momentum against
+1.9e-10 unrefined, positivity held throughout (the in-situ form of the
+Stage 1 sensor-injection measurement); two-level composite mass drift
+1.36e-4 relative over the full crossing (`:filter` halves it; unrefined
+5e-11); and a 2-D refined region under diagonal advection at 4.3e-8,
+exercising the tensor-product transfer chain.
+
+Scope of the first cut, enforced at setup: **serial only** (the coarse-box
+copy and restriction write-back are direct array copies; distributing the
+level transfer is the follow-up that also lifts `plan_transfer`'s alignment
+restriction), Cartesian metric, unstretched, no folds (constraint 4),
+tridiagonal schemes, `:delta4`, one refined region, and no same-level
+`patch_grid` alongside refinement. Each level filters its own state at the
+shared cadence and computes sensors with its own h, as prescribed; the
+combined-dissipation TGV measurement prescribed below remains open, tied to
+the filter-calibration item in `ROADMAP.md`.
+
 - **Level layout.** `solver.levels::Vector{Vector{Patch}}`; level-1 patches
   cover user-specified regions at ratio 3, properly nested with a margin of
   at least `n_halo` coarse cells inside level 0, never overlapping a fold's

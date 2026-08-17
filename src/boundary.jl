@@ -113,6 +113,20 @@ end
 
 enforce!(::InterfaceBC, Q, solver, d, side) = nothing
 
+"""
+    CoarseFineBC()
+
+Marker condition on a fine-patch face abutting the coarse level below it
+(levels.jl). As with [`InterfaceBC`](@ref) there is nothing to enforce here:
+the face's ghost layers and its boundary plane are overwritten from the
+prolonged coarse state after every RK stage, and the line solves close with
+the same extended-data rows a same-level interface uses. `Solver` substitutes
+this onto refined-patch faces itself.
+"""
+struct CoarseFineBC <: BoundaryCondition end
+
+enforce!(::CoarseFineBC, Q, solver, d, side) = nothing
+
 isperiodic(::BoundaryCondition) = false
 isperiodic(::PeriodicBC) = true
 

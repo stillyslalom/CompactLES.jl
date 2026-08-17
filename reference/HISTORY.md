@@ -21,6 +21,8 @@ points at them rather than restating them.
 11. [Filter dt-consistency (August 2026)](#filter-dt-consistency-august-2026)
 12. [The positivity failsafe (August 2026)](#the-positivity-failsafe-august-2026)
 13. [AMR/GPU Stage 1 — level-transfer operators (August 2026)](#amrgpu-stage-1--level-transfer-operators-august-2026)
+14. [AMR/GPU Stage 2 — patch abstraction and storage generalization (August 2026)](#amrgpu-stage-2--patch-abstraction-and-storage-generalization-august-2026)
+15. [AMR/GPU Stage 3 — static two-level refinement (August 2026)](#amrgpu-stage-3--static-two-level-refinement-august-2026)
 
 ## Phase 0 — extensibility seams (July 2026)
 
@@ -710,3 +712,32 @@ with the scope restrictions (no folds, no banded schemes, no `:d8`,
 single-patch I/O) in the Stage 2 status block of `reference/AMR_GPU.md`.
 Serial coverage adds five testsets (69 total); the MPI suite adds the
 rank-partitioned oracle (95/95 at 2, 4 and 8 ranks).
+
+## AMR/GPU Stage 3 — static two-level refinement (August 2026)
+
+Stage 3 of `reference/AMR_GPU.md` is delivered in its first cut: one level-1
+patch at refinement ratio 3 over a setup-time region, advancing with the
+global timestep inside `solver.patches`, coupled to the root level by a
+per-stage ghost-and-boundary-plane imposition from the coarse state and a
+per-step write-back of the fine state onto the covered region
+(`src/levels.jl`). Two measured corrections to the plan's prescription came
+out of the gates. First, the invertible Stage 1 transfer pair is not the
+right live coupling: deconvolution assumes filtered-sample input and the
+live coarse solution is point samples, so the pair measured order 1.3–1.7
+where the point-sample halves — order-6 interpolation up, coincident-node
+injection down — measure order 3.46/3.64 with errors three decades lower.
+The pair stays selectable (`level_restriction = :filter`) and remains the
+tool for initializing new fine regions in Stage 4. Second, restricting all
+the way to the coarse-fine boundary closes an amplifying feedback loop
+(measured gain ≈ 2 per step); holding the write-back two coarse nodes off
+the boundary flattens it.
+
+Gates, recorded in the Stage 3 status block and guarded in
+`test/level_tests.jl`: manufactured solution across the boundary at order
+3.46/3.64; Sod crossing the refinement boundary in both directions with the
+sensors live at 6.4e-10 ahead-of-shock interface noise; two-level mass
+drift 1.36e-4 over the crossing against 5e-11 unrefined; a 2-D refined
+region under diagonal advection at 4.3e-8. Scope: serial, Cartesian,
+unstretched, tridiagonal schemes, `:delta4`, one region. The unrefined
+solver is untouched: convergence and validation guards reproduce to every
+printed digit and the MPI suite is unchanged.

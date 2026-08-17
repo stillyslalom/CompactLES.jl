@@ -148,6 +148,7 @@ function step!(solver::Solver, states::Vector{<:ConservedState},
                         dus[i], RKA[stage], RKB[stage], dt)
         end
         sync_patches!(solver, states)
+        prolong_level_ghosts!(solver, states)
     end
     solver.tstage = solver.t + dt
     for (i, p) in enumerate(patches)
@@ -671,10 +672,18 @@ function _restore_state!(dst::Vector{<:ConservedState}, src::Vector{<:ConservedS
     return dst
 end
 
-# Interface consistency before the pre-step reads. The single-patch path has
-# no interfaces and skips this entirely.
+# Interface and level consistency before the pre-step reads. The single-patch
+# path has neither and skips this entirely.
 _presync!(solver, Q) = Q
-_presync!(solver, states::Vector{<:ConservedState}) = sync_patches!(solver, states)
+_presync!(solver, states::Vector{<:ConservedState}) =
+    (sync_patches!(solver, states); sync_levels!(solver, states))
+
+# Per-step level maintenance, after the state filter: restrict the fine state
+# onto the covered coarse region, then re-impose the fine shell from the
+# restricted coarse state. No-ops without refinement.
+_post_step!(solver, Q) = Q
+_post_step!(solver, states::Vector{<:ConservedState}) =
+    sync_levels!(solver, states)
 
 function run!(solver::Solver, Q, workspace::Workspace;
               tfinal, nmax::Int=typemax(Int), callback=nothing,
@@ -805,6 +814,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
             filter_state!(solver, Q)
         end
+        _post_step!(solver, Q)
         # After the filter rather than immediately after step!, so that the state
         # entering the next iteration's checks is the repaired one whichever of
         # the two damaged it. The compact filter is not monotone, so it can

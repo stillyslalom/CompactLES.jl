@@ -328,6 +328,7 @@ Base.@kwdef struct Numerics
     patch_grid::NTuple{3,Int} = (1, 1, 1)
     backend::AbstractBackend = CPUBackend()
     interface_rhs::Symbol = :extended
+    refine::Union{Nothing,BlockRegion} = nothing
 end
 
 """
@@ -370,7 +371,7 @@ function setup(prob::Problem, num::Numerics)
                filter_cfl=num.filter_cfl,
                dims=num.dims, n_halo=num.n_halo,
                patch_grid=num.patch_grid, backend=num.backend,
-               interface_rhs=num.interface_rhs)
+               interface_rhs=num.interface_rhs, refine=num.refine)
     Q = allocate_state(solver)
     initialize!(solver, Q, prob.ic)
     return solver, Q
