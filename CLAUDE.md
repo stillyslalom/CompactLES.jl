@@ -14,6 +14,7 @@ the place to record a result.
 | `reference/HISTORY.md` | completed phases and their measured outcomes |
 | `reference/AMR_GPU.md` | the patch-AMR + GPU implementation plan, staged with gates |
 | `reference/IMMERSED.md` | the immersed-boundary design: level-set bodies, blend imposition |
+| `reference/MODE_TRUNCATION.md` | azimuthal mode truncation plan for the pole CFL squeeze |
 
 Read those for anything about *what* the code does, *where* it runs, or *where it
 is going*. This file is about *how to work on it*. When something you measure

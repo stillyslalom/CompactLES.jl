@@ -237,7 +237,8 @@ converging shock reaches the axis. Resolved-angle calculations may therefore
 require one of the standard remedies:
 azimuthal mode truncation or radius-dependent filter strength near the axis, an
 implicit/IMEX treatment of the azimuthal direction, or local time stepping.
-None is implemented here.
+None is implemented here; a staged implementation plan for azimuthal mode
+truncation is in [MODE_TRUNCATION.md](reference/MODE_TRUNCATION.md).
 
 In collapsed angular dimensions, the timestep loop skips the angular direction,
 but the geometric source ρu_θ²/r can still drive u_r stiffly at small r. For
