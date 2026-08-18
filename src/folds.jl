@@ -93,37 +93,38 @@ function fold_fill!(f, decomp::Decomp, d::Int, lo::Bool, hi::Bool, σ::Int)
     pad = decomp.n_halo_d[d]
     n = decomp.n_local[d]
     sgn = eltype(f)(σ)
+    o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
+    no1, no2 = size(f, o1), size(f, o2)
     if lo && decomp.sub_rank[d] == 0
-        if d == 1
-            @inbounds for k in axes(f, 3), j in axes(f, 2), q in 1:pad
-                f[pad-q+1, j, k] = sgn * f[pad+q, j, k]
-            end
-        elseif d == 2
-            @inbounds for k in axes(f, 3), i in axes(f, 1), q in 1:pad
-                f[i, pad-q+1, k] = sgn * f[i, pad+q, k]
-            end
-        else
-            @inbounds for j in axes(f, 2), i in axes(f, 1), q in 1:pad
-                f[i, j, pad-q+1] = sgn * f[i, j, pad+q]
-            end
-        end
+        pointwise!(_fold_fill_point!, f, pad, no1, no2, f, sgn, d, pad, n, true)
     end
     if hi && decomp.sub_rank[d] == decomp.sub_size[d] - 1
-        if d == 1
-            @inbounds for k in axes(f, 3), j in axes(f, 2), q in 1:pad
-                f[pad+n+q, j, k] = sgn * f[pad+n-q+1, j, k]
-            end
-        elseif d == 2
-            @inbounds for k in axes(f, 3), i in axes(f, 1), q in 1:pad
-                f[i, pad+n+q, k] = sgn * f[i, pad+n-q+1, k]
-            end
-        else
-            @inbounds for j in axes(f, 2), i in axes(f, 1), q in 1:pad
-                f[i, j, pad+n+q] = sgn * f[i, j, pad+n-q+1]
-            end
-        end
+        pointwise!(_fold_fill_point!, f, pad, no1, no2, f, sgn, d, pad, n, false)
     end
     return f
+end
+
+# One mirrored ghost write: `i` indexes the halo layer 1:pad, `j`/`k` the two
+# orthogonal FULL axes in ascending dimension order (matching `_odims`).
+@inline function _fold_fill_point!(f, sgn, d, pad, n, lo, i, j, k)
+    @inbounds if lo
+        if d == 1
+            f[pad-i+1, j, k] = sgn * f[pad+i, j, k]
+        elseif d == 2
+            f[j, pad-i+1, k] = sgn * f[j, pad+i, k]
+        else
+            f[j, k, pad-i+1] = sgn * f[j, k, pad+i]
+        end
+    else
+        if d == 1
+            f[pad+n+i, j, k] = sgn * f[pad+n-i+1, j, k]
+        elseif d == 2
+            f[j, pad+n+i, k] = sgn * f[j, pad+n-i+1, k]
+        else
+            f[j, k, pad+n+i] = sgn * f[j, k, pad+n-i+1]
+        end
+    end
+    return nothing
 end
 
 # --- Pairing transforms -----------------------------------------------------
@@ -134,28 +135,36 @@ end
 # revdim reversal; each component is applied within the local block when the
 # corresponding dimension is undecomposed (locally resolved), and by rank
 # pairing otherwise. This helper applies exactly the locally-resolved parts.
-@inline function _pair_index(I::CartesianIndex{3}, decomp::Decomp, pair::PairSpec)
+@inline _pair_index(I::CartesianIndex{3}, decomp::Decomp, pair::PairSpec) =
+    _pair_slot(I, pair.pdim, pair.shift_local, pair.revdim,
+               decomp.n_local, decomp.n_halo_d)
+
+# The launchable form of `_pair_index`: plain values in place of the Decomp
+# and the PairSpec (whose scratch array a kernel argument may not carry).
+@inline function _pair_slot(I::CartesianIndex{3}, pdim::Int, shift_local::Bool,
+                            revdim::Int, n_local::NTuple{3,Int},
+                            halo::NTuple{3,Int})
     i1, i2, i3 = Tuple(I)
-    if pair.pdim != 0 && pair.shift_local
-        pd = pair.pdim
-        half = decomp.n_local[pd] ÷ 2
-        Hp = decomp.n_halo_d[pd]
-        v = (pd == 1 ? i1 : pd == 2 ? i2 : i3) - Hp
+    if pdim != 0 && shift_local
+        half = n_local[pdim] ÷ 2
+        Hp = halo[pdim]
+        v = (pdim == 1 ? i1 : pdim == 2 ? i2 : i3) - Hp
         v = v <= half ? v + half : v - half
         v += Hp
-        i1 = pd == 1 ? v : i1; i2 = pd == 2 ? v : i2; i3 = pd == 3 ? v : i3
+        i1 = pdim == 1 ? v : i1; i2 = pdim == 2 ? v : i2; i3 = pdim == 3 ? v : i3
     end
-    if pair.revdim != 0
+    if revdim != 0
         # The reversal g → n_global+1−g always flips the intra-block slot
         # i ↔ n_local+1−i. When revdim is split (rev_local == false) the partner
         # rank is the reflected one (chosen at setup) and the slot flip is
         # STILL required to index its block; when it is on one rank the flip is
         # the whole reversal. (The half-period shift differs: split blocks map
         # slot-for-slot, so that stays gated on shift_local above.)
-        rd = pair.revdim
-        Hr = decomp.n_halo_d[rd]
-        v = decomp.n_local[rd] + 1 - ((rd == 1 ? i1 : rd == 2 ? i2 : i3) - Hr) + Hr
-        i1 = rd == 1 ? v : i1; i2 = rd == 2 ? v : i2; i3 = rd == 3 ? v : i3
+        Hr = halo[revdim]
+        v = n_local[revdim] + 1 -
+            ((revdim == 1 ? i1 : revdim == 2 ? i2 : i3) - Hr) + Hr
+        i1 = revdim == 1 ? v : i1; i2 = revdim == 2 ? v : i2
+        i3 = revdim == 3 ? v : i3
     end
     CartesianIndex(i1, i2, i3)
 end
@@ -177,48 +186,60 @@ function pair_forward!(w, f, solver, fold::FoldSpec, σ::Int)
     decomp = solver.decomp
     pair = fold.pair
     sf = eltype(f)(σ)
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
     if pair.local_pair
         # Butterfly in place: the lower half of the locally-active
         # mapping dimension holds e (canonically indexed), upper half o.
         sd = pair.pdim != 0 ? pair.pdim : pair.revdim
         half = decomp.n_local[sd] ÷ 2
-        Hp = decomp.n_halo_d[sd]
-        r1, r2, r3 = interior(decomp).indices
-        @threaded prod(decomp.n_local) for i23 in outer_indices(r2, r3)
-            i2, i3 = Tuple(i23)
-            @inbounds for i1 in r1
-                I = CartesianIndex(i1, i2, i3)
-                v = (sd == 1 ? i1 : sd == 2 ? i2 : i3) - Hp
-                if v <= half
-                    Mx = _pair_index(I, decomp, pair)
-                    a = f[I]
-                    b = sf * f[Mx]
-                    w[I] = (a + b) / oftype(a, 2)  # e at the canonical slot
-                    w[Mx] = (a - b) / oftype(a, 2) # o at the partner slot
-                end
-            end
-        end
+        pointwise!(_pair_forward_local_point!, w, nx, ny, nz,
+                   w, f, sf, sd, half, pair.pdim, pair.shift_local,
+                   pair.revdim, decomp.n_local, decomp.n_halo_d, o1, o2, o3)
     else
         # Full-block pairwise exchange, then this rank's designated combo.
         # e-keeper: e(x) = ½[f(x) + σ buf(Mx)];
         # o-keeper (slots y = Mx): o(My) = ½[buf(My) − σ f(y)].
         MPI.Sendrecv!(f, pair.buf, decomp.comm; dest=pair.partner, source=pair.partner,
                       sendtag=41, recvtag=41)
-        r1, r2, r3 = interior(decomp).indices
-        @threaded prod(decomp.n_local) for i23 in outer_indices(r2, r3)
-            i2, i3 = Tuple(i23)
-            @inbounds for i1 in r1
-                I = CartesianIndex(i1, i2, i3)
-                Mx = _pair_index(I, decomp, pair)
-                if pair.keep_e
-                    w[I] = (f[I] + sf * pair.buf[Mx]) / oftype(sf, 2)
-                else
-                    w[I] = (pair.buf[Mx] - sf * f[I]) / oftype(sf, 2)
-                end
-            end
-        end
+        pointwise!(_pair_forward_remote_point!, w, nx, ny, nz,
+                   w, f, pair.buf, sf, pair.keep_e, pair.pdim,
+                   pair.shift_local, pair.revdim, decomp.n_local,
+                   decomp.n_halo_d, o1, o2, o3)
     end
     return w
+end
+
+@inline function _pair_forward_local_point!(w, f, sf, sd, half, pdim,
+                                            shift_local, revdim, n_local, halo,
+                                            o1, o2, o3, i, j, k)
+    @inbounds begin
+        v = sd == 1 ? i : sd == 2 ? j : k
+        if v <= half
+            I = CartesianIndex(i + o1, j + o2, k + o3)
+            Mx = _pair_slot(I, pdim, shift_local, revdim, n_local, halo)
+            a = f[I]
+            b = sf * f[Mx]
+            w[I] = (a + b) / oftype(a, 2)  # e at the canonical slot
+            w[Mx] = (a - b) / oftype(a, 2) # o at the partner slot
+        end
+    end
+    return nothing
+end
+
+@inline function _pair_forward_remote_point!(w, f, buf, sf, keep_e, pdim,
+                                             shift_local, revdim, n_local,
+                                             halo, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        Mx = _pair_slot(I, pdim, shift_local, revdim, n_local, halo)
+        if keep_e
+            w[I] = (f[I] + sf * buf[Mx]) / oftype(sf, 2)
+        else
+            w[I] = (buf[Mx] - sf * f[I]) / oftype(sf, 2)
+        end
+    end
+    return nothing
 end
 
 """
@@ -235,43 +256,54 @@ function pair_backward!(out, solver, fold::FoldSpec, σ::Int)
     decomp = solver.decomp
     pair = fold.pair
     sf = eltype(out)(σ)
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
     if pair.local_pair
         sd = pair.pdim != 0 ? pair.pdim : pair.revdim
         half = decomp.n_local[sd] ÷ 2
-        Hp = decomp.n_halo_d[sd]
-        r1, r2, r3 = interior(decomp).indices
-        @threaded prod(decomp.n_local) for i23 in outer_indices(r2, r3)
-            i2, i3 = Tuple(i23)
-            @inbounds for i1 in r1
-                I = CartesianIndex(i1, i2, i3)
-                v = (sd == 1 ? i1 : sd == 2 ? i2 : i3) - Hp
-                if v <= half
-                    Mx = _pair_index(I, decomp, pair)
-                    Re = out[I]
-                    Ro = out[Mx]
-                    out[I] = Re + Ro
-                    out[Mx] = sf * (Re - Ro)
-                end
-            end
-        end
+        pointwise!(_pair_backward_local_point!, out, nx, ny, nz,
+                   out, sf, sd, half, pair.pdim, pair.shift_local, pair.revdim,
+                   decomp.n_local, decomp.n_halo_d, o1, o2, o3)
     else
         MPI.Sendrecv!(out, pair.buf, decomp.comm; dest=pair.partner, source=pair.partner,
                       sendtag=42, recvtag=42)
-        r1, r2, r3 = interior(decomp).indices
-        @threaded prod(decomp.n_local) for i23 in outer_indices(r2, r3)
-            i2, i3 = Tuple(i23)
-            @inbounds for i1 in r1
-                I = CartesianIndex(i1, i2, i3)
-                Mx = _pair_index(I, decomp, pair)
-                if pair.keep_e
-                    out[I] = out[I] + pair.buf[Mx]         # Re + Ro
-                else
-                    out[I] = sf * (pair.buf[Mx] - out[I])  # σ(Re − Ro)
-                end
-            end
-        end
+        pointwise!(_pair_backward_remote_point!, out, nx, ny, nz,
+                   out, pair.buf, sf, pair.keep_e, pair.pdim, pair.shift_local,
+                   pair.revdim, decomp.n_local, decomp.n_halo_d, o1, o2, o3)
     end
     return out
+end
+
+@inline function _pair_backward_local_point!(out, sf, sd, half, pdim,
+                                             shift_local, revdim, n_local,
+                                             halo, o1, o2, o3, i, j, k)
+    @inbounds begin
+        v = sd == 1 ? i : sd == 2 ? j : k
+        if v <= half
+            I = CartesianIndex(i + o1, j + o2, k + o3)
+            Mx = _pair_slot(I, pdim, shift_local, revdim, n_local, halo)
+            Re = out[I]
+            Ro = out[Mx]
+            out[I] = Re + Ro
+            out[Mx] = sf * (Re - Ro)
+        end
+    end
+    return nothing
+end
+
+@inline function _pair_backward_remote_point!(out, buf, sf, keep_e, pdim,
+                                              shift_local, revdim, n_local,
+                                              halo, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        Mx = _pair_slot(I, pdim, shift_local, revdim, n_local, halo)
+        if keep_e
+            out[I] = out[I] + buf[Mx]         # Re + Ro
+        else
+            out[I] = sf * (buf[Mx] - out[I])  # σ(Re − Ro)
+        end
+    end
+    return nothing
 end
 
 # --- Folded operator application -------------------------------------------
@@ -333,18 +365,10 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:der
         apply_along!(solver.pairout, _fold_plan(fold, -1, role), w, decomp)
         sd = pair.pdim != 0 ? pair.pdim : pair.revdim
         half = decomp.n_local[sd] ÷ 2
-        Hp = decomp.n_halo_d[sd]
-        r1, r2, r3 = interior(decomp).indices
-        @threaded prod(decomp.n_local) for i23 in outer_indices(r2, r3)
-            i2, i3 = Tuple(i23)
-            @inbounds for i1 in r1
-                v = (sd == 1 ? i1 : sd == 2 ? i2 : i3) - Hp
-                if v > half
-                    I = CartesianIndex(i1, i2, i3)
-                    out[I] = solver.pairout[I]
-                end
-            end
-        end
+        o1, o2, o3 = decomp.n_halo_d
+        nx, ny, nz = decomp.n_local
+        pointwise!(_pair_select_point!, out, nx, ny, nz,
+                   out, solver.pairout, sd, half, o1, o2, o3)
     else
         # e combo mirrors with σ, o combo is ALWAYS odd (−1) — matching the
         # local branch above, where the o half uses fold_fill(−1)/plan(−1)
@@ -355,4 +379,15 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:der
     end
     pair_backward!(out, solver, fold, σ)
     return out
+end
+
+@inline function _pair_select_point!(out, pairout, sd, half, o1, o2, o3, i, j, k)
+    @inbounds begin
+        v = sd == 1 ? i : sd == 2 ? j : k
+        if v > half
+            I = CartesianIndex(i + o1, j + o2, k + o3)
+            out[I] = pairout[I]
+        end
+    end
+    return nothing
 end

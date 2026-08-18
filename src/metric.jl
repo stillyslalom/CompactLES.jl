@@ -135,10 +135,38 @@ function in that configuration; the two conditions guarding the call are global
 properties, so no rank can take the other branch on its own.
 """
 function init_geometry!(solver)
-    decomp = solver.decomp
-    n_halo = decomp.n_halo
-    tiny = positive_floor(eltype(solver.inv_J))
-    nxf, nyf, nzf = size(solver.inv_J)
+    if _cpu_storage(solver.inv_J)
+        _fill_geometry!(solver, solver.inv_J, solver.area_d, solver.inv_h,
+                        solver.inv_r, solver.cot_over_r)
+    else
+        # The analytic evaluation runs per global index through the host-side
+        # stretch closures, so a device-resident patch fills host mirrors once
+        # at setup and uploads them; nothing here repeats during a run.
+        T = eltype(solver.inv_J)
+        sz = size(solver.inv_J)
+        inv_J = zeros(T, sz)
+        area_d = (zeros(T, sz), zeros(T, sz), zeros(T, sz))
+        inv_h = (zeros(T, sz), zeros(T, sz), zeros(T, sz))
+        inv_r = zeros(T, sz)
+        cot_over_r = zeros(T, sz)
+        _fill_geometry!(solver, inv_J, area_d, inv_h, inv_r, cot_over_r)
+        copyto!(solver.inv_J, inv_J)
+        for d in 1:3
+            copyto!(solver.area_d[d], area_d[d])
+            copyto!(solver.inv_h[d], inv_h[d])
+        end
+        copyto!(solver.inv_r, inv_r)
+        copyto!(solver.cot_over_r, cot_over_r)
+    end
+    solver.metric isa SphericalMetric && solver.decomp.active[2] && gcl_cotr!(solver)
+    return solver
+end
+
+# The analytic fill of `init_geometry!`, into the supplied host arrays: the
+# solver's own fields on a CPU patch, staging mirrors on a device one.
+function _fill_geometry!(solver, inv_J, area_d, inv_h, inv_r, cot_over_r)
+    tiny = positive_floor(eltype(inv_J))
+    nxf, nyf, nzf = size(inv_J)
     for k in 1:nzf, j in 1:nyf, i in 1:nxf
         x1, m1 = _phys_and_jac(solver, 1, i)
         x2, m2 = _phys_and_jac(solver, 2, j)
@@ -147,21 +175,20 @@ function init_geometry!(solver)
         h1 *= m1; h2 *= m2; h3 *= m3
         h1 = max(h1, tiny); h2 = max(h2, tiny); h3 = max(h3, tiny)
         J = h1 * h2 * h3
-        solver.inv_J[i, j, k] = 1 / J
-        solver.area_d[1][i, j, k] = J / h1
-        solver.area_d[2][i, j, k] = J / h2
-        solver.area_d[3][i, j, k] = J / h3
-        solver.inv_h[1][i, j, k] = 1 / h1
-        solver.inv_h[2][i, j, k] = 1 / h2
-        solver.inv_h[3][i, j, k] = 1 / h3
+        inv_J[i, j, k] = 1 / J
+        area_d[1][i, j, k] = J / h1
+        area_d[2][i, j, k] = J / h2
+        area_d[3][i, j, k] = J / h3
+        inv_h[1][i, j, k] = 1 / h1
+        inv_h[2][i, j, k] = 1 / h2
+        inv_h[3][i, j, k] = 1 / h3
         if solver.metric isa CylindricalMetric
-            solver.inv_r[i, j, k] = 1 / max(x1, tiny)
+            inv_r[i, j, k] = 1 / max(x1, tiny)
         elseif solver.metric isa SphericalMetric
-            solver.inv_r[i, j, k] = 1 / max(x1, tiny)
-            solver.cot_over_r[i, j, k] = cos(x2) / max(x1 * sin(x2), tiny)   # cotθ / r
+            inv_r[i, j, k] = 1 / max(x1, tiny)
+            cot_over_r[i, j, k] = cos(x2) / max(x1 * sin(x2), tiny)   # cotθ / r
         end
     end
-    solver.metric isa SphericalMetric && solver.decomp.active[2] && gcl_cotr!(solver)
     return solver
 end
 
@@ -189,11 +216,17 @@ function gcl_cotr!(solver)
     div_along!(solver.tmp_a, solver.area_d[2], solver, 2, σ)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        I = CartesianIndex(i + o1, j + o2, k + o3)
-        solver.cot_over_r[I] = solver.inv_J[I] * solver.tmp_a[I]
-    end
+    pointwise!(_gcl_cotr_point!, solver.cot_over_r, nx, ny, nz,
+               solver.cot_over_r, solver.inv_J, solver.tmp_a, o1, o2, o3)
     return solver
+end
+
+@inline function _gcl_cotr_point!(cot_over_r, inv_J, tmp_a, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        cot_over_r[I] = inv_J[I] * tmp_a[I]
+    end
+    return nothing
 end
 
 # ---------------------------------------------------------------------------

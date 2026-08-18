@@ -30,12 +30,25 @@ every rank uses this path.
 """
 selfwrap(decomp::Decomp, d::Int) = decomp.sub_size[d] == 1 && decomp.periodic[d]
 
+# One slab-onto-slab assignment inside a field: `copyto!` on host storage, a
+# broadcast on device storage — the generic `copyto!` fallback between two
+# device views iterates scalar indices, which errors (or crawls) there. Both
+# forms are element copies, so the result is identical.
+@inline function _assign_slab!(f, d::Int, rdst::UnitRange{Int}, rsrc::UnitRange{Int})
+    if _cpu_storage(f)
+        copyto!(_slab(f, d, rdst), _slab(f, d, rsrc))
+    else
+        _slab(f, d, rdst) .= _slab(f, d, rsrc)
+    end
+    return f
+end
+
 "Periodic wrap of one field along `d`, in place, no buffers and no MPI."
 function wrap_dim!(f, decomp::Decomp, d::Int)
     n_halo = decomp.n_halo
     n = decomp.n_local[d]
-    copyto!(_slab(f, d, 1:n_halo),                  _slab(f, d, (n+1):(n+n_halo)))
-    copyto!(_slab(f, d, (n+n_halo+1):(n+2*n_halo)), _slab(f, d, (n_halo+1):(2*n_halo)))
+    _assign_slab!(f, d, 1:n_halo,                  (n+1):(n+n_halo))
+    _assign_slab!(f, d, (n+n_halo+1):(n+2*n_halo), (n_halo+1):(2*n_halo))
     return f
 end
 
@@ -113,17 +126,18 @@ function exchange_state!(Q::AbstractArray{<:Real,4}, decomp::Decomp)
     return Q
 end
 
+@inline function _copy_interior_point!(dst, src, o1, o2, o3, i, j, k)
+    @inbounds dst[i+o1, j+o2, k+o3] = src[i+o1, j+o2, k+o3]
+    return nothing
+end
+
 "Copy the interior of `src` into `dst` (both full-sized fields), leaving the
-halos of `dst` untouched, and return `dst`. Threaded, rank-local, no exchange."
+halos of `dst` untouched, and return `dst`. A pointwise launch, rank-local,
+no exchange."
 function copy_interior!(dst, src, decomp::Decomp)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    @inbounds @threaded nx*ny*nz for jk in outer_indices(o2+1:o2+ny, o3+1:o3+nz)
-        j, k = Tuple(jk)
-        for i in o1+1:o1+nx
-            dst[i, j, k] = src[i, j, k]
-        end
-    end
+    pointwise!(_copy_interior_point!, dst, nx, ny, nz, dst, src, o1, o2, o3)
     return dst
 end
 
@@ -141,16 +155,20 @@ bit-identical to the unrelaxed path.
 value on every rank; [`filter_weight`](@ref) builds it out of already-reduced
 quantities for that reason.
 """
+@inline function _blend_interior_point!(dst, src, w1, w, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        dst[I] = w1 * dst[I] + w * src[I]
+    end
+    return nothing
+end
+
 function blend_interior!(dst, src, w, decomp::Decomp)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     w1 = one(w) - w
-    @inbounds @threaded nx*ny*nz for jk in outer_indices(o2+1:o2+ny, o3+1:o3+nz)
-        j, k = Tuple(jk)
-        for i in o1+1:o1+nx
-            dst[i, j, k] = w1 * dst[i, j, k] + w * src[i, j, k]
-        end
-    end
+    pointwise!(_blend_interior_point!, dst, nx, ny, nz, dst, src, w1, w,
+               o1, o2, o3)
     return dst
 end
 

@@ -83,6 +83,9 @@ Base.copy(Q::ConservedState) = ConservedState(copy(parent(Q)))
 Base.zero(Q::ConservedState) = ConservedState(zero(parent(Q)))
 Base.copyto!(dest::ConservedState, src::ConservedState) =
     (copyto!(parent(dest), parent(src)); dest)
+# Forward to the parent rather than the AbstractArray fallback, whose
+# element-by-element loop is a scalar-indexing error on device storage.
+Base.fill!(Q::ConservedState, x) = (fill!(parent(Q), x); Q)
 
 "Balanced split of N points over P ranks; rank r (0-based) gets its
 (count, 0-based offset). The first `N % P` ranks take one point more than the
@@ -171,6 +174,12 @@ padding. The one-argument form allocates on the CPU."
 field(decomp::Decomp{T}) where {T} =
     zeros(T, ntuple(d -> decomp.n_local[d] + 2*decomp.n_halo_d[d], 3))
 field(::CPUBackend, decomp::Decomp) = field(decomp)
+
+"Zero-extent placeholder array on the backend's storage, for `Patch` fields a
+configuration does not use (`pairbuf` without a fold, `ring_buf` under
+`:delta4`). Typed like [`field`](@ref) so every array of a patch shares one
+storage type."
+empty_field(::CPUBackend, ::Type{T}) where {T} = zeros(T, 0, 0, 0)
 
 "Allocate a zero-filled [`ConservedState`](@ref) Q(x,y,z,1:n_cons), the spatial
 extents padded by halos exactly as [`field`](@ref) pads them."

@@ -100,24 +100,47 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
 
     T = eltype(Q)
     Lref = bc.Lref > 0 ? T(bc.Lref) : solver.L_domain[d]
-    vel = (solver.u, solver.v, solver.w)
     m = solver.equations.i_mom
-    i_energy = solver.equations.i_energy
-    n_species = solver.equations.n_species
-    grad_u = solver.grad_u
-    Gdd = grad_u[d, d]
-    sgn = side == 2 ? -one(T) : one(T) # sign of Δd3 (see header)
-    @inbounds for I in plane
-        ρ = solver.rho[I]
-        c = solver.c[I]
-        p = solver.p[I]
-        un = vel[d][I]
+    ft = solver.field_tuples
+    # Scalars ride in tuples: a splatted kernel-argument tuple longer than 32
+    # elements lowers through the dynamic apply and is an InvalidIRError on
+    # device (measured on the first NSCBC device run). bc fields pass in their
+    # own type so the body's promotion reproduces the former plane loop bit
+    # for bit.
+    plane_pointwise!(_nscbc_outflow_point!, Q, plane,
+                     dQ, solver.eos, solver.rho, solver.u, solver.v, solver.w,
+                     solver.p, solver.c, solver.T_ion, solver.cp_mix, ft.Y,
+                     ft.grad_u, solver.tmp_a, solver.tmp_b, solver.sensor_sp,
+                     solver.inv_h[d], solver.inv_h[t1], solver.inv_h[t2],
+                     (bc.pinf, bc.sigma, bc.beta_t), Lref,
+                     side == 2, (act1, act2), (d, t1, t2), m,
+                     solver.equations.i_energy, solver.equations.n_species)
+    return nothing
+end
+
+@inline function _nscbc_outflow_point!(dQ, eos, rho, u, v, w, p_a, c_a, T_a,
+                                       cp_a, Y, grad_u, dp_n, dp_t1, dp_t2,
+                                       ih_d, ih_t1, ih_t2, bcp, Lref, hiface,
+                                       acts, dts, m, i_energy, n_species,
+                                       o1, o2, o3, i, j, k)
+    @inbounds begin
+        pinf, sigma, beta_t = bcp
+        act1, act2 = acts
+        d, t1, t2 = dts
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        T = eltype(rho)
+        ρ = rho[I]
+        c = c_a[I]
+        p = p_a[I]
+        uv = (u[I], v[I], w[I])
+        un = uv[d]
         Ma = abs(un) / c
-        Ma < 1 || continue            # supersonic: all waves outgoing
-        dpn = solver.inv_h[d][I] * solver.tmp_a[I]
-        dun = Gdd[I]
-        Lcomp = side == 2 ? (un - c) * (dpn - ρ * c * dun) :
-                            (un + c) * (dpn + ρ * c * dun)
+        Ma < 1 || return nothing      # supersonic: all waves outgoing
+        sgn = hiface ? -one(T) : one(T) # sign of Δd3 (see header)
+        dpn = ih_d[I] * dp_n[I]
+        dun = grad_u[d, d][I]
+        Lcomp = hiface ? (un - c) * (dpn - ρ * c * dun) :
+                         (un + c) * (dpn + ρ * c * dun)
         # Transverse contribution to the incoming characteristic (Yoo & Im
         # 2007). Exact transparency to obliquely incident waves requires the
         # incoming amplitude to carry −𝒯_in (`transverse_in` below, which is a
@@ -130,30 +153,28 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
         # local Mach number is the recommended damping.
         transverse_in = zero(T)
         if act1
-            ut = vel[t1][I]
-            transverse_in += ut * solver.inv_h[t1][I] * solver.tmp_b[I] +
+            ut = uv[t1]
+            transverse_in += ut * ih_t1[I] * dp_t1[I] +
                   ρ * c * c * grad_u[t1, t1][I] + sgn * ρ * c * ut * grad_u[t1, d][I]
         end
         if act2
-            ut = vel[t2][I]
-            transverse_in += ut * solver.inv_h[t2][I] * solver.sensor_sp[I] +
+            ut = uv[t2]
+            transverse_in += ut * ih_t2[I] * dp_t2[I] +
                   ρ * c * c * grad_u[t2, t2][I] + sgn * ρ * c * ut * grad_u[t2, d][I]
         end
-        βt = bc.beta_t < 0 ? Ma : bc.beta_t
-        K = bc.sigma * (1 - Ma * Ma) * c / Lref
-        ΔL = K * (p - bc.pinf) - βt * transverse_in - Lcomp
+        βt = beta_t < 0 ? Ma : beta_t
+        K = sigma * (1 - Ma * Ma) * c / Lref
+        ΔL = K * (p - pinf) - βt * transverse_in - Lcomp
         Δd1 = ΔL / (2 * c * c)
         Δd2 = ΔL / 2
         Δd3 = sgn * ΔL / (2 * ρ * c)
         # φ = ∂(ρe)/∂p |_{ρ,Y}, from the EOS rather than from ideal-gas algebra
         # (physics.jl). For an ideal mixture this is cv_m/R_m as before.
-        φ = eos_phi(solver.eos, ρ, p, solver.T_ion[I], solver.cp_mix[I])
-        u1, u2, u3 = solver.u[I], solver.v[I], solver.w[I]
-        ke = (u1*u1 + u2*u2 + u3*u3) / T(2)
-        for k in 1:n_species
-            dQ[I, k] -= solver.Y[k][I] * Δd1
+        φ = eos_phi(eos, ρ, p, T_a[I], cp_a[I])
+        ke = (uv[1]*uv[1] + uv[2]*uv[2] + uv[3]*uv[3]) / T(2)
+        for kk in 1:n_species
+            dQ[I, kk] -= Y[kk][I] * Δd1
         end
-        uv = (u1, u2, u3)
         for a in 1:3
             dQ[I, m[a]] -= uv[a] * Δd1 + (a == d ? ρ * Δd3 : zero(T))
         end
@@ -251,24 +272,41 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
 
     T = eltype(Q)
     Lref = bc.Lref > 0 ? T(bc.Lref) : solver.L_domain[d]
-    vel = (solver.u, solver.v, solver.w)
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)   # transverse dims
     m = solver.equations.i_mom
     i_energy = solver.equations.i_energy
     n_species = solver.equations.n_species
+    lowface = side == 1
+    if bc.target === nothing
+        # Constant targets: one launchable plane body, the composition tuple
+        # materialized at launch exactly as the field collections are.
+        ft = solver.field_tuples
+        YT = (bc.Y...,)
+        plane_pointwise!(_nscbc_inflow_point!, Q, plane,
+                         dQ, solver.eos, solver.rho, solver.u, solver.v,
+                         solver.w, solver.p, solver.c, solver.T_ion,
+                         solver.cp_mix, ft.Y, ft.grad_u, ft.grad_Y,
+                         solver.tmp_a, solver.tmp_b, solver.inv_h[d],
+                         bc.u, bc.T_ion, YT,
+                         (bc.eta_u, bc.eta_T, bc.eta_t, bc.eta_Y), Lref,
+                         lowface, (d, t1, t2), m, i_energy, n_species)
+        return nothing
+    end
+    # A pointwise `target` is an arbitrary host closure; the loop stays on the
+    # host, which a device-resident patch cannot serve yet.
+    _cpu_storage(Q) ||
+        error("NSCBCInflowBC with a pointwise target is host-only; use " *
+              "constant targets on a DeviceBackend")
+    vel = (solver.u, solver.v, solver.w)
     grad_u = solver.grad_u
     Gdd = grad_u[d, d]
-    lowface = side == 1
     tnow = solver.tstage
     @inbounds for I in plane
-        uT = bc.u; TT = bc.T_ion; YT = bc.Y
-        if bc.target !== nothing
-            i1, i2, i3 = interior_index(solver, I)
-            pr = bc.target(xcoord(solver, 1, i1), xcoord(solver, 2, i2),
-                           xcoord(solver, 3, i3), tnow)
-            isnan(pr.T_ion) && error("NSCBCInflowBC target must specify T_ion")
-            uT = pr.u; TT = pr.T_ion; YT = pr.Y
-        end
+        i1, i2, i3 = interior_index(solver, I)
+        pr = bc.target(xcoord(solver, 1, i1), xcoord(solver, 2, i2),
+                       xcoord(solver, 3, i3), tnow)
+        isnan(pr.T_ion) && error("NSCBCInflowBC target must specify T_ion")
+        uT = pr.u; TT = pr.T_ion; YT = pr.Y
         ρ = solver.rho[I]
         c = solver.c[I]
         p = solver.p[I]
@@ -307,6 +345,64 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
                   un * solver.grad_Y[d, k][I]
             dQ[I, k] -= solver.Y[k][I] * Δd1 + ρ * ΔLs
             ΣφY += eos_dphi_dY(solver.eos, k, ρ, p, Tp, cpm) * ΔLs
+        end
+        for a in 1:3
+            extra = a == d ? ρ * Δd3 : a == t1 ? ρ * Δd4 : ρ * Δd5
+            dQ[I, m[a]] -= uv[a] * Δd1 + extra
+        end
+        dQ[I, i_energy] -= ke * Δd1 + φ * Δd2 + p * ΣφY +
+                     ρ * (un * Δd3 + uv[t1] * Δd4 + uv[t2] * Δd5)
+    end
+    return nothing
+end
+
+@inline function _nscbc_inflow_point!(dQ, eos, rho, u, v, w, p_a, c_a, T_a,
+                                      cp_a, Y, grad_u, grad_Y, dp_n, dr_n,
+                                      ih_d, uT, TT, YT, etas, Lref, lowface,
+                                      dts, m, i_energy, n_species,
+                                      o1, o2, o3, i, j, k)
+    @inbounds begin
+        eta_u, eta_T, eta_t, eta_Y = etas
+        d, t1, t2 = dts
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        T = eltype(rho)
+        ρ = rho[I]
+        c = c_a[I]
+        p = p_a[I]
+        Tp = T_a[I]
+        uv = (u[I], v[I], w[I])
+        un = uv[d]
+        Ma = abs(un) / c
+        Ma < 1 || return nothing
+        ih = ih_d[I]
+        dpn = ih * dp_n[I]
+        drn = ih * dr_n[I]
+        dun = grad_u[d, d][I]
+        K = c / Lref
+        # Physically computed amplitudes.
+        L1c = (un - c) * (dpn - ρ * c * dun)
+        L5c = (un + c) * (dpn + ρ * c * dun)
+        L2c = un * (c * c * drn - dpn)
+        # Imposed incoming amplitudes (outgoing one kept as computed).
+        rel_ac = eta_u * ρ * c * c * (1 - Ma * Ma) / Lref * (un - uT[d])
+        ΔL1 = lowface ? zero(T) : (-rel_ac - L1c)
+        ΔL5 = lowface ? (rel_ac - L5c) : zero(T)
+        ΔL2 = eta_T * ρ * c^3 * (TT - Tp) / (Lref * Tp) - L2c
+        Δd1 = ΔL2 / (c * c) + (ΔL5 + ΔL1) / (2 * c * c)
+        Δd2 = (ΔL5 + ΔL1) / 2
+        Δd3 = (ΔL5 - ΔL1) / (2 * ρ * c)
+        Δd4 = eta_t * K * (uv[t1] - uT[t1]) - un * grad_u[d, t1][I]
+        Δd5 = eta_t * K * (uv[t2] - uT[t2]) - un * grad_u[d, t2][I]
+        # Mixture quantities for the energy mapping, through the EOS contract.
+        cpm = cp_a[I]
+        φ = eos_phi(eos, ρ, p, Tp, cpm)
+        ke = (uv[1]*uv[1] + uv[2]*uv[2] + uv[3]*uv[3]) / T(2)
+        ΣφY = zero(T)
+        for kk in 1:n_species
+            ΔLs = eta_Y * K * (Y[kk][I] - YT[kk]) -
+                  un * grad_Y[d, kk][I]
+            dQ[I, kk] -= Y[kk][I] * Δd1 + ρ * ΔLs
+            ΣφY += eos_dphi_dY(eos, kk, ρ, p, Tp, cpm) * ΔLs
         end
         for a in 1:3
             extra = a == d ? ρ * Δd3 : a == t1 ? ρ * Δd4 : ρ * Δd5

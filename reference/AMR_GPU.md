@@ -736,13 +736,13 @@ already been removed by the time G1 landed).
   collection plus the mirrored EOS — runs on the RX 6800 XT bitwise
   against the CPU and 9.9× faster than 8-thread `@threaded` at 64³, two
   species (0.236 ms vs 2.33 ms, `bench/device_bringup.jl`).
-- **Remaining on the G-track before a whole solver lives on device:** G3a's
-  plan conversion and residency work (`max_rate`, initialization, boundaries,
-  folds, and the launch synchronization policy), followed by G3b's halo/MPI
-  path. `Nasa9Mixture` remains a separate fixed-width-mirror item after the
-  simple EOS models run end to end. Device allocation and operator-level line
-  solves are delivered with G2 below; this paragraph previously still listed
-  both as future work and is corrected here.
+- **Remaining on the G-track before a whole solver lives on device:** G3a
+  delivered the plan conversion and residency work (`max_rate`,
+  initialization, boundaries, folds; see its status block), so what remains
+  is G3b's halo/MPI path, the launch synchronization policy (G3d), and the
+  `Nasa9Mixture` fixed-width mirror. Device allocation and operator-level
+  line solves are delivered with G2 below; this paragraph previously still
+  listed both as future work and is corrected here.
 
 The plan text for the stage, for reference — convert the phases that are
 pointwise loops, per `bench/phases.jl` the majority of the budget outside
@@ -820,10 +820,11 @@ entry point on fields living on that backend.
   residency and stream work exists to remove, with the one already-won case
   (C10 dim 1: 0.73 vs 0.96 ms) showing where the sweeps themselves stand.
 - `DeviceBackend` wraps a KA backend behind `field(backend, decomp)` and
-  `allocate_state` — the allocation half of the seam. A full `Solver` on a
-  `DeviceBackend` is **not** yet supported: halo exchange, boundary
-  machinery, and `max_rate` are still host loops, which is G3's residency
-  scope together with the `Nasa9Mixture` fixed-width mirror.
+  `allocate_state` — the allocation half of the seam. When G2 landed, a full
+  `Solver` on a `DeviceBackend` was not yet supported; G3a has since
+  delivered that for one patch on one rank (see its status block), leaving
+  the distributed path to G3b and the `Nasa9Mixture` fixed-width mirror
+  open.
 - **FP64 vs FP32, measured on the RX 6800 XT at 64³** (RDNA2 vector FP64 is
   1/16 the FP32 rate, so an ALU-bound kernel would show a ratio near 16):
   the launch-bound pointwise phases run at 1.03–1.10×, the line solves at
@@ -870,6 +871,69 @@ the desired end state but omitted the work between the operator-level G2 proof
 and a supported `Solver` on `DeviceBackend`.
 
 #### G3a — one device-resident patch
+
+**Status: delivered** (August 2026). `Solver(backend = DeviceBackend(ka))` is
+a supported configuration for one patch on one rank: construction converts
+every compact plan — fold parity plans included — to a `DevicePlan` through
+`backend_plan`, allocates every patch field, the pair and ring scratch, and
+the conserved state on the backend, and each phase between the step drivers
+and the arrays runs as a launchable body, a `DevicePlan` solve, or an exact
+storage-level reduction.
+
+- Converted to launchable form in this gate: wall-plane enforcement (slip,
+  no-slip, extrapolation, through `plane_pointwise!`), both NSCBC plane
+  corrections (the inflow's constant composition target materializes as a
+  tuple at launch, exactly as the field collections do), the fold mirror
+  fills, the local pair butterflies and the parity-select pass
+  (`_pair_slot`), the d8 detector accumulation, `gcl_cotr!`,
+  `copy_interior!` / `blend_interior!`, and the periodic halo wrap (a
+  broadcast slab assignment on device storage). `max_rate` evaluates the CFL
+  rate through a pointwise body into `tmp_a`/`tmp_b` and reduces with the
+  storage's own `maximum`/`minimum`; max and min are exact, so the launch
+  path agrees with the fused serial loop bitwise, and `FORCE_KA` pins that
+  on ordinary arrays.
+- **Two traps found on the first device runs**, both invisible on the KA CPU
+  backend. A kernel argument of the un-adapted `ConservedState` wrapper does
+  not lower, so the wrapper now carries an Adapt rule and reaches kernels
+  wrapping the device-side array. And a splatted kernel-argument tuple longer
+  than 32 elements lowers through the dynamic apply — an `InvalidIRError` on
+  device — which the NSCBC bodies hit at 36 arguments; their scalars now ride
+  in small tuples. Treat 32 as the body-argument budget.
+- Host-staged on purpose, per the plan's I/O rule: geometry fills host
+  mirrors once at setup and uploads; `initialize!` and `DirichletBC` evaluate
+  their host closures into staging blocks (setup-time, and one plane upload
+  per stage respectively).
+- The conservative synchronized launch mode is retained throughout:
+  `pointwise_ka!` and the `DevicePlan` stages synchronize as in G1/G2.
+  Removing synchronization is G3d work and a correctness change. The
+  vendor-profiler transfer audit is deferred to G3d for the same reason: at
+  the measured launch-bound floor it would time synchronization, not overlap.
+- Guarded at setup rather than failing mid-run: more than one rank or patch
+  (G3b), `refine` (G3c), `Nasa9Mixture` (needs the fixed-width mirror), an
+  NSCBC inflow with a pointwise `target`, `StepControl.floor_ratio > 0`, and
+  `dt_report` (both host sweeps).
+- **The comparison gate came out bitwise, on both backends.** On the KA CPU
+  backend (`test/device_tests.jl`), full runs on
+  `DeviceBackend(KernelAbstractions.CPU())` under `FORCE_KA` reproduce the
+  `CPUBackend` solver exactly: multispecies closed/periodic tube, NSCBC duct
+  with isothermal no-slip wall and relaxed filter, resolved-θ axis fold,
+  Dirichlet-forced face, spherical origin+poles freestream RHS, `max_rate`,
+  and a Float32 run. On the RX 6800 XT (`bench/device_solver.jl`) every
+  gate case is max |device − cpu| = 0 over full runs: periodic smooth 32³,
+  the closed multispecies tube, the NSCBC duct, the resolved-θ axis fold,
+  spherical freestream/GCL (|dQ|max 5.7e-14 on both), a 578-step Sod
+  validation at N = 400, and 20-step 64³ TGV histories in Float64 and
+  Float32. The GPU-verification section's expectation that bit-exactness
+  would be lost to reassociation did not materialize: every phase is either
+  per-point independent, a host-mirrored sweep, or an exact max/min.
+- **Timing at 64³ TGV, warm** (RX 6800 XT vs 8-thread CPU): device
+  0.188 s/step vs 0.093 (Float64), 0.168 vs 0.072 (Float32) — 0.4–0.5× CPU.
+  This is the launch-latency profile G2 predicted, now measured at whole-step
+  granularity under the synchronized mode: a step is hundreds of small
+  synchronized launches plus the reduced-solve round trips. G3d owns removing
+  that floor; G3a is the correctness milestone.
+
+The plan text for the gate, for reference:
 
 - Convert every host `DirPlan`/`BandPlan` to a `DevicePlan` while a patch is
   constructed on `DeviceBackend`; G2 exposes the conversion but `Solver`

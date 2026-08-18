@@ -585,12 +585,18 @@ reference-implementation pass that headed this list are done
    adaptation) and G2 (operator-level device line solves plus backend-routed
    allocation) are also delivered and measured bitwise-correct on the
    workstation's RX 6800 XT through AMDGPU.jl (`bench/device_bringup.jl`).
-   Next per the revised plan: G3a makes one complete patch resident and unlocks
-   the final G4a Float32 device gate. G3b then adds device MPI, and distributing
-   the level transfer gates both G3c device AMR and the Stage 4 cost
-   demonstration on a 3-D mixing case. G4b policy selection uses the G3a/G4a
-   measurements; stream overlap comes last, after the residency and
-   communication profiles expose useful concurrency.
+   G3a is delivered as well: a whole single-patch solver runs resident on
+   that GPU (`Solver(backend = DeviceBackend(ka))`), reproducing the CPU
+   solver bitwise over full runs — periodic/closed smooth cases, NSCBC, the
+   axis fold, freestream/GCL, a 578-step Sod validation, and short TGV
+   histories in both precisions (`bench/device_solver.jl`,
+   `test/device_tests.jl`). At 64³ the synchronized launch mode runs at
+   0.4–0.5× the 8-thread CPU, the launch-latency floor G3d exists to remove.
+   Next per the revised plan: G3b adds device MPI, and distributing the
+   level transfer gates both G3c device AMR and the Stage 4 cost
+   demonstration on a 3-D mixing case. G4b policy selection uses the
+   G3a/G4a device measurements; stream overlap comes last, after the
+   residency and communication profiles expose useful concurrency.
 
 The open items from the source comparison
 ([above](#open-work-from-the-source-comparison)) sit alongside these rather

@@ -237,16 +237,20 @@ function ring_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
         decomp.active[d] || continue
         wd = solver.h[d]^wpow
         ring_along!(ring_buf, f, solver, d, parity[d])
-        @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-            j, k = Tuple(jk)
-            @inbounds for i in 1:nx
-                I = CartesianIndex(i + o1, j + o2, k + o3)
-                v = wd * abs(ring_buf[I])
-                out[I] = maxred ? max(out[I], v) : out[I] + v
-            end
-        end
+        pointwise!(_ring_accum_point!, out, nx, ny, nz,
+                   out, ring_buf, wd, maxred, o1, o2, o3)
     end
     return out
+end
+
+@inline function _ring_accum_point!(out, ring_buf, wd, maxred, o1, o2, o3,
+                                    i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        v = wd * abs(ring_buf[I])
+        out[I] = maxred ? max(out[I], v) : out[I] + v
+    end
+    return nothing
 end
 
 """

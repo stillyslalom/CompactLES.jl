@@ -49,6 +49,22 @@ allocate_state(backend::DeviceBackend, decomp::Decomp{T}, n_cons::Int) where {T}
     ConservedState(KernelAbstractions.zeros(backend.ka, T,
         ntuple(d -> decomp.n_local[d] + 2*decomp.n_halo_d[d], 3)..., n_cons))
 
+empty_field(backend::DeviceBackend, ::Type{T}) where {T} =
+    KernelAbstractions.zeros(backend.ka, T, 0, 0, 0)
+
+"""
+    backend_plan(backend, plan)
+
+Construction-time plan routing (G3a): the identity on `CPUBackend`, and
+[`device_plan`](@ref) on a `DeviceBackend`, so a solver built on device storage
+stores `DevicePlan`s and every `apply_along!` below the step drivers runs the
+device kernels without a per-call conversion. Every plan-construction site of
+the `Solver` constructor goes through here, fold parity plans included.
+"""
+backend_plan(::CPUBackend, plan::AbstractDirPlan) = plan
+backend_plan(backend::DeviceBackend, plan::AbstractDirPlan) =
+    device_plan(plan, backend.ka)
+
 # Device mirrors of the Thomas factorization and its spike vectors, plus the
 # interface staging buffers: `ends` packs (y₁, yₙ) per line in the layout of
 # `line_solver.ends`, and `zp`/`zn` carry the per-line correction values back

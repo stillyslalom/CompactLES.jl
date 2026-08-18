@@ -1,0 +1,194 @@
+# G3a (reference/AMR_GPU.md): a Solver built on a DeviceBackend is a
+# supported configuration — construction converts every compact plan to a
+# DevicePlan, allocates every field through the backend, and the whole step
+# (boundary enforcement, folds, NSCBC, max_rate, the filter) runs through
+# launchable bodies. On the KernelAbstractions CPU backend the storage is an
+# ordinary Array, so these tests pin two things on one machine: that the
+# DeviceBackend construction path produces a runnable solver whose line solves
+# go through the DevicePlan kernels, and that a full run through those kernels
+# under FORCE_KA reproduces the CPUBackend solver BITWISE — the same equality
+# gate G1 and G2 established. The host-staging branches an actual device takes
+# (geometry upload, initialize!, Dirichlet planes) and the GPUArrays
+# reductions are measured on the GPU itself by bench/device_solver.jl.
+
+@testset "device-resident patch: construction" begin
+    cpu_ka = CL.KernelAbstractions.CPU()
+    bk = DeviceBackend(cpu_ka)
+    per = (PeriodicBC(), PeriodicBC())
+    s = Solver(n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
+               bcs=(per, per, per), backend=bk)
+    @test s.deriv_plans[1] isa DevicePlan
+    @test s.filter_plans[3] isa DevicePlan
+    @test s.smooth_plans === s.filter_plans ||
+          s.smooth_plans[1] isa Union{Nothing,DevicePlan}
+    Q = allocate_state(s)
+    @test Q isa ConservedState
+    @test size(Q) == (size(s.rho)..., s.equations.n_cons)
+
+    # Fold plans convert too, and the pair scratch is backend-allocated.
+    sax = Solver(n_global=(16, 12, 12), L_domain=(1.0, 2π, 1.0),
+                 bcs=((AxisBC(), SlipWallBC()), per, per),
+                 metric=CylindricalMetric(), backend=bk)
+    @test CL.fold_dplan(sax.folds[1], 1) isa DevicePlan
+    @test CL.fold_fplan(sax.folds[1], -1) isa DevicePlan
+
+    # Unsupported combinations fail at setup, not mid-run.
+    @test_throws ErrorException Solver(n_global=(32, 12, 12),
+        L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per), backend=bk,
+        patch_grid=(2, 1, 1))
+    @test_throws ErrorException Solver(n_global=(32, 12, 12),
+        L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per), backend=bk,
+        refine=BlockRegion((12, 4, 4), (8, 4, 4)))
+end
+
+@testset "device-resident patch: full runs reproduce the CPU solver" begin
+    cpu_ka = CL.KernelAbstractions.CPU()
+    per = (PeriodicBC(), PeriodicBC())
+
+    # Run the same configuration on both backends; the DeviceBackend run goes
+    # through the DevicePlan line solves by construction and through the KA
+    # kernel bodies under FORCE_KA.
+    function compare(build; nmax, tfinal)
+        s1, Q1 = build(CPUBackend())
+        run!(s1, Q1; tfinal=tfinal, nmax=nmax)
+        s2, Q2 = build(DeviceBackend(cpu_ka))
+        CL.FORCE_KA[] = true
+        try
+            run!(s2, Q2; tfinal=tfinal, nmax=nmax)
+        finally
+            CL.FORCE_KA[] = false
+        end
+        return s1.step == s2.step && parent(Q1) == parent(Q2)
+    end
+
+    # Multispecies closed/periodic tube: primitives, fluxes, sensors, species
+    # diffusion, slip walls, the RK update, and the state filter.
+    @test compare(; nmax=8, tfinal=0.02) do backend
+        eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                            IdealSpecies{Float64}("heavy", 0.2, 1.09)])
+        s = Solver(n_global=(32, 24, 12), L_domain=(1.0, 0.6, 0.3), eos=eos,
+                   bcs=((SlipWallBC(), SlipWallBC()), per, per),
+                   backend=backend)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> begin
+            θ = 0.5 * (1 + tanh((x - 0.5) / 0.05))
+            Prim(Y=(1 - θ, θ), rho=(1 - θ) + 0.625θ, p=(1 - θ) + 0.1θ,
+                 u=(0.1 * sin(2π * y / 0.6), 0.0, 0.05 * cos(2π * z / 0.3)))
+        end)
+        return s, Q
+    end
+
+    # NSCBC inflow/outflow with an isothermal no-slip wall: the plane bodies
+    # and their EOS queries, plus the relaxed filter blend.
+    @test compare(; nmax=8, tfinal=0.05) do backend
+        s = Solver(n_global=(48, 16, 1), L_domain=(2.0, 1.0, 1.0),
+                   bcs=((NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0),
+                         NSCBCOutflowBC(pinf=1.0)),
+                        (NoSlipWallBC(Twall=1.0), SlipWallBC()), per),
+                   backend=backend, cfl=0.4, filter_cfl=0.6)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0, u=(0.3, 0.0, 0.0)))
+        return s, Q
+    end
+
+    # Resolved-θ cylindrical axis: the fold fill, pair butterfly, and select
+    # bodies on the antipodal path.
+    @test compare(; nmax=6, tfinal=0.02) do backend
+        s = Solver(n_global=(20, 16, 12), L_domain=(1.0, 2π, 0.5),
+                   bcs=((AxisBC(), SlipWallBC()), per, per),
+                   metric=CylindricalMetric(), backend=backend)
+        Q = allocate_state(s)
+        initialize!(s, Q, (r, θ, z) ->
+            Prim(u=(0.05r * cos(θ), 0.2r, 0.05 * sin(2π * z / 0.5)),
+                 p=1.0 + 0.02r^2, rho=1.0))
+        return s, Q
+    end
+
+    # Dirichlet-forced face (host-evaluated targets) with extrapolation
+    # outflow.
+    @test compare(; nmax=6, tfinal=0.02) do backend
+        s = Solver(n_global=(32, 12, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((DirichletBC((x, y, z, t) ->
+                             Prim(rho=1.0, p=1.0 + 0.01 * sin(20t),
+                                  u=(0.2, 0.0, 0.0))),
+                         ExtrapolationBC()), per, per),
+                   backend=backend, cfl=0.4)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0, u=(0.2, 0.0, 0.0)))
+        return s, Q
+    end
+end
+
+@testset "device-resident patch: freestream and max_rate" begin
+    cpu_ka = CL.KernelAbstractions.CPU()
+    per = (PeriodicBC(), PeriodicBC())
+
+    # Spherical origin + poles freestream: gcl_cotr! through the device plans
+    # and both pair-fold parities. The discrete GCL cancels stored operator
+    # output node-by-node, so this is exact on either path.
+    function sph(backend)
+        s = Solver(n_global=(12, 12, 12), L_domain=(1.0, Float64(π), 2π),
+                   bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
+                   metric=SphericalMetric(), backend=backend,
+                   art=ArtParams(enabled=false), transport=Transport(mu0=0.0))
+        Q = allocate_state(s)
+        initialize!(s, Q, (r, θ, φ) -> Prim(rho=1.0, p=1.0, u=(0.0, 0.0, 0.0)))
+        return s, Q
+    end
+    s1, Q1 = sph(CPUBackend())
+    dQ1 = zero(Q1)
+    compute_rhs!(s1, Q1, dQ1)
+    s2, Q2 = sph(DeviceBackend(cpu_ka))
+    dQ2 = zero(Q2)
+    CL.FORCE_KA[] = true
+    try
+        compute_rhs!(s2, Q2, dQ2)
+    finally
+        CL.FORCE_KA[] = false
+    end
+    @test parent(dQ1) == parent(dQ2)
+
+    # The launch-path rate measurement agrees with the fused serial loop
+    # bitwise: same candidates, exact max/min.
+    r1 = max_rate(s1, Q1)
+    CL.FORCE_KA[] = true
+    r2 = try
+        max_rate(s2, Q2)
+    finally
+        CL.FORCE_KA[] = false
+    end
+    @test r1 == r2
+end
+
+@testset "device-resident patch: Float32 step" begin
+    # The G4a device tie-in at test scale: a Float32 solver on the
+    # DeviceBackend construction path advances and stays finite, bitwise
+    # against the Float32 CPU solver.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    T = Float32
+    per = (PeriodicBC(), PeriodicBC())
+    function build(backend)
+        s = Solver(n_global=(16, 12, 12), L_domain=(T(2π), T(2π), T(2π)),
+                   bcs=(per, per, per), transport=Transport{T}(),
+                   art=ArtParams{T}(), deriv=lele_d1_6(T),
+                   filt=compact_filter(T(0.45), T), cfl=T(0.4),
+                   backend=backend)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) ->
+            Prim(rho=1 + 0.01sin(x), T_ion=1, u=(0.1cos(y), 0.05sin(z), 0.0)))
+        return s, Q
+    end
+    s1, Q1 = build(CPUBackend())
+    run!(s1, Q1; tfinal=T(0.05), nmax=5)
+    s2, Q2 = build(DeviceBackend(cpu_ka))
+    @test s2.deriv_plans[1] isa DevicePlan{T}
+    CL.FORCE_KA[] = true
+    try
+        run!(s2, Q2; tfinal=T(0.05), nmax=5)
+    finally
+        CL.FORCE_KA[] = false
+    end
+    @test s1.step == s2.step
+    @test all(isfinite, parent(Q2))
+    @test parent(Q1) == parent(Q2)
+end

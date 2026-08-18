@@ -118,6 +118,13 @@
 #             float32, or both. Diagnostics intentionally accumulate in
 #             Float64 in either mode; this option changes the solver state,
 #             schemes, EOS, transport, artificial controls, and RK workspace.
+#   backend   cpu (default), amdgpu, or cuda: where the solver lives. A device
+#             backend needs an environment carrying the device package (see
+#             bench/device_bringup.jl) and runs on one rank; the solver and
+#             state are device-resident (G3a) and the energy diagnostics here
+#             read a host copy of the state, downloaded per callback — the
+#             documented I/O-gathers-to-host path, excluded from solver wall
+#             time by the same accounting that excludes callbacks on the CPU.
 #   window    steps either side for every -dKE/dt reported (default 250, i.e. a
 #             501-step window, clamped to length(ts)/8). Do not lower it towards
 #             1 to "see more detail" — the one-step rate is contaminated by dt
@@ -143,6 +150,25 @@ using Printf
 const CL = CompactLES
 const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
+# Host view of one field: the identity on host storage, a download on device
+# storage. Diagnostics-only; nothing in the stepped path calls it.
+_host(a::Array) = a
+_host(a) = Array(a)
+
+function make_backend(spec::AbstractString)
+    spec == "cpu" && return CPUBackend()
+    if spec == "amdgpu"
+        @eval using AMDGPU
+        @eval AMDGPU.functional() || error("AMDGPU is not functional here")
+        return DeviceBackend(@eval ROCBackend())
+    elseif spec == "cuda"
+        @eval using CUDA
+        @eval CUDA.functional() || error("CUDA is not functional here")
+        return DeviceBackend(@eval CUDABackend())
+    end
+    error("backend must be cpu, amdgpu, or cuda; got '$spec'")
+end
+
 """
 Volume-averaged resolved dissipation split into molecular, artificial-shear and
 artificial-bulk contributions. Same tensor contraction as `dissipation_rate` in
@@ -157,14 +183,20 @@ function diss_split(solver, Q)
     CL.compute_artificial!(solver, Q)
     o1, o2, o3 = solver.decomp.n_halo_d
     nx, ny, nz = solver.decomp.n_local
-    g = solver.grad_u
+    # `_host` aliases host arrays and downloads device ones, so the same
+    # scalar accumulation serves a device-resident solver (sampled, so the
+    # transfer runs every `sample=` steps, not every step).
+    g = [_host(solver.grad_u[a, b]) for a in 1:3, b in 1:3]
+    mu_art = _host(solver.mu_art)
+    beta_art = _host(solver.beta_art)
+    rho = _host(solver.rho)
     mu0 = solver.transport.mu0
     s_mol, s_shear, s_bulk, s_rho = 0.0, 0.0, 0.0, 0.0
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
         I = CartesianIndex(i + o1, j + o2, k + o3)
         divu = g[1, 1][I] + g[2, 2][I] + g[3, 3][I]
-        mu_a = solver.mu_art[I]
-        beta_a = solver.beta_art[I]
+        mu_a = mu_art[I]
+        beta_a = beta_art[I]
         for b in 1:3, a in 1:3
             S2 = g[a, b][I] + g[b, a][I]
             trace = a == b ? divu : 0.0
@@ -172,7 +204,7 @@ function diss_split(solver, Q)
             s_shear += (mu_a * S2 - 2mu_a / 3 * trace) * g[a, b][I]
             s_bulk += beta_a * trace * g[a, b][I]
         end
-        s_rho += solver.rho[I]
+        s_rho += rho[I]
     end
     v = MPI.Allreduce([s_mol, s_shear, s_bulk, s_rho], +, solver.decomp.comm)
     return (v[1] / v[4], v[2] / v[4], v[3] / v[4])
@@ -239,7 +271,8 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                       nmax=typemax(Int), smoother=:compact,
                       cfl=0.6, filter_cfl=0.0,
                       mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
-                      T::Type{<:AbstractFloat}=Float64)
+                      T::Type{<:AbstractFloat}=Float64,
+                      backend::AbstractBackend=CPUBackend())
     γ = T(1.4)
     c0 = T(10)                     # Ma ≈ 0.1 at |u|max = 1
     p0 = c0^2 / γ
@@ -265,13 +298,20 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                                       smoother=smoother,
                                       mu_sensor=mu_sensor,
                                       beta_sensor=beta_sensor,
-                                      reduction=reduction)))
+                                      reduction=reduction),
+                     backend=backend))
     end
     cellvol = prod(solver.h)
     workspace = Workspace(Q)
     footprint = (solver=Base.summarysize(solver), state=Base.summarysize(Q),
                  workspace=Base.summarysize(workspace))
-    mass0 = mean_density(solver, Q, cellvol)
+    # Device-resident state reads through one reused host buffer: the scalar
+    # energy/mass loops index this instead of Q. On the CPU it aliases Q and
+    # the download is a no-op.
+    devres = !(parent(Q) isa Array)
+    Qhost = devres ? Array(parent(Q)) : parent(Q)
+    sync_host!(Q) = (devres && copyto!(Qhost, parent(Q)); Qhost)
+    mass0 = mean_density(solver, sync_host!(Q), cellvol)
 
     # Compile the precision-specific hot path before timing. The warm state is
     # disposable; the measured state and solver time remain at t = 0.
@@ -280,7 +320,7 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
     dtwarm = compute_dt(solver, Qwarm)
     step!(solver, Qwarm, warmspace, dtwarm)
     filter_interval > 0 && CL.filter_state!(solver, Qwarm)
-    kinetic_energy(solver, Qwarm, cellvol)
+    kinetic_energy(solver, sync_host!(Qwarm), cellvol)
     Qwarm = warmspace = nothing
     GC.gc()
 
@@ -289,7 +329,7 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
     samples = Tuple{Float64,Float64,Float64,Float64,Int}[]
     record = Callback(EveryStep(1), (s, Q) -> begin
         push!(ts, s.t)
-        push!(kes, kinetic_energy(s, Q, cellvol))
+        push!(kes, kinetic_energy(s, sync_host!(Q), cellvol))
         nothing
     end)
     # diss_split costs an extra gradient pass, so it is sampled, not stepwise.
@@ -312,7 +352,7 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
         run!(solver, Q, workspace; tfinal=T(tfinal), nmax=nmax,
              callback=callbacks)
     end
-    mass1 = mean_density(solver, Q, cellvol)
+    mass1 = mean_density(solver, sync_host!(Q), cellvol)
     return (; solver, Q, workspace, ts, kes, samples, setup_elapsed,
             run_elapsed, footprint, mass0, mass1)
 end
@@ -322,7 +362,7 @@ const DEFAULTS = (N = 32, tfinal = 10.0, configs = "off:1,on:1",
                   window = 250, smoother = :compact,
                   cfl = 0.6, filter_cfl = 0.0,
                   mu_sensor = :strain, beta_sensor = :strain, reduction = :sum,
-                  precision = "float64")
+                  precision = "float64", backend = "cpu")
 
 function parse_configs(spec)
     configs = NamedTuple{(:art, :filt, :C_mu),Tuple{Bool,Int,Float64}}[]
@@ -353,17 +393,19 @@ function parse_precisions(spec)
     return Tuple(out)
 end
 
-function main()
+function main(opt, backend)
     rank = MPI.Comm_rank(MPI.COMM_WORLD)
-    opt = script_args(ARGS, DEFAULTS; positional = (:N, :tfinal))
     N, tfinal, sample, progress, nmax, window =
         opt.N, opt.tfinal, opt.sample, opt.progress, opt.nmax, opt.window
     configs = parse_configs(opt.configs)
     precisions = parse_precisions(opt.precision)
+    backend isa DeviceBackend && MPI.Comm_size(MPI.COMM_WORLD) > 1 &&
+        error("backend=$(opt.backend) runs on one rank until G3b")
     summaries = NamedTuple[]
     if rank == 0
-        @printf("=== Taylor-Green %d^3, Re=1600, tfinal=%.1f, %d rank(s), %d thread(s)\n",
-                N, tfinal, MPI.Comm_size(MPI.COMM_WORLD), Threads.nthreads())
+        @printf("=== Taylor-Green %d^3, Re=1600, tfinal=%.1f, %d rank(s), ",
+                N, tfinal, MPI.Comm_size(MPI.COMM_WORLD))
+        @printf("%d thread(s), backend %s\n", Threads.nthreads(), opt.backend)
         println("    reference peak -dKE/dt = 1.2e-2 at t = 9 (van Rees et al. 2011)")
     end
     for T in precisions, cfg in configs
@@ -377,7 +419,8 @@ function main()
                                       cfl=opt.cfl, filter_cfl=opt.filter_cfl,
                                       mu_sensor=opt.mu_sensor,
                                       beta_sensor=opt.beta_sensor,
-                                      reduction=opt.reduction, T=T)
+                                      reduction=opt.reduction, T=T,
+                                      backend=backend)
             catch err
                 # Collective by construction, so every rank lands here together
                 # and the sweep stays in step. See the header note.
@@ -482,4 +525,9 @@ function main()
     end
 end
 
-mpi_main(main)
+# Argument parsing and the backend load run at top level: a device package
+# loaded inside `main` would define its methods in a newer world than the one
+# `main` executes in, and every launch would raise a world-age error.
+const _opt = script_args(ARGS, DEFAULTS; positional = (:N, :tfinal))
+const _backend = make_backend(_opt.backend)
+mpi_main(() -> main(_opt, _backend))

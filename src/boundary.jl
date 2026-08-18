@@ -284,6 +284,19 @@ end
 wall_internal_energy(eos::StiffenedGas, Q, I, ::Int, Twall) =
     @inbounds Q[I, 1] * eos.cv * Twall + eos.p_inf
 
+# The device coefficient mirrors (physics.jl) reach here when the no-slip
+# body runs as a kernel; same algebra as the host objects above.
+wall_internal_energy(eos::IdealMixtureCoeffs, Q, I, n_species::Int, Twall) = begin
+    ρe = zero(eltype(Q))
+    @inbounds for k in 1:n_species
+        ρe += Q[I, k] * eos.cvk[k]
+    end
+    ρe * Twall
+end
+
+wall_internal_energy(eos::StiffenedGasCoeffs, Q, I, ::Int, Twall) =
+    @inbounds Q[I, 1] * eos.cv * Twall + eos.p_inf
+
 wall_internal_energy(eos::Nasa9Mixture, Q, I, n_species::Int, Twall) = begin
     ρe = zero(eltype(Q))
     @inbounds for k in 1:n_species
@@ -300,38 +313,85 @@ function _wall_density(Q, I, n_species)
     return ρ
 end
 
+# Wall-plane enforcement runs as pointwise bodies over the plane's index box
+# (G3a): one shared body per condition, launched by `plane_pointwise!`, so a
+# device-resident patch enforces its walls without a host round trip. The
+# per-point writes are independent, so the launch reproduces the former serial
+# plane loop bitwise on the host path too.
+
+"""
+    plane_pointwise!(body!, route, plane, args...)
+
+Launch `body!` through [`pointwise!`](@ref) over the padded index box of a
+[`wallplane`](@ref) result, appending the plane's index offsets in the
+`(o1, o2, o3)` slots the pointwise bodies already use. The caller has tested
+`plane` for `nothing`.
+"""
+@inline function plane_pointwise!(body!::F, route, plane::WallPlane,
+                                  args...) where {F}
+    r1, r2, r3 = plane.indices
+    return pointwise!(body!, route, length(r1), length(r2), length(r3),
+                      args..., first(r1) - 1, first(r2) - 1, first(r3) - 1)
+end
+
+@inline function _slip_wall_point!(Q, mc, i_energy, n_species, o1, o2, o3,
+                                   i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        ρ = _wall_density(Q, I, n_species)
+        mn = Q[I, mc]
+        Q[I, i_energy] -= mn * mn / (oftype(ρ, 2) * ρ)
+        Q[I, mc] = 0
+    end
+    return nothing
+end
+
 function enforce!(::SlipWallBC, Q, solver, d, side)
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
-    mc = solver.equations.i_mom[d]
-    @inbounds for I in plane
-        ρ = _wall_density(Q, I, solver.equations.n_species)
-        mn = Q[I, mc]
-        Q[I, solver.equations.i_energy] -= mn * mn / (oftype(ρ, 2) * ρ)
-        Q[I, mc] = 0
-    end
+    plane_pointwise!(_slip_wall_point!, Q, plane, Q, solver.equations.i_mom[d],
+                     solver.equations.i_energy, solver.equations.n_species)
     nothing
+end
+
+@inline function _no_slip_wall_point!(Q, eos, Twall, iso, m1, m2, m3, i_energy,
+                                      n_species, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        ρ = _wall_density(Q, I, n_species)
+        ke = (Q[I,m1]^2 + Q[I,m2]^2 + Q[I,m3]^2) /
+             (oftype(ρ, 2) * ρ)
+        Q[I, i_energy] -= ke
+        Q[I, m1] = 0
+        Q[I, m2] = 0
+        Q[I, m3] = 0
+        if iso
+            Q[I, i_energy] = wall_internal_energy(eos, Q, I, n_species, Twall)
+        end
+    end
+    return nothing
 end
 
 function enforce!(bc::NoSlipWallBC, Q, solver, d, side)
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
     m1, m2, m3 = solver.equations.i_mom
-    iso = !isnan(bc.Twall)
-    @inbounds for I in plane
-        ρ = _wall_density(Q, I, solver.equations.n_species)
-        ke = (Q[I,m1]^2 + Q[I,m2]^2 + Q[I,m3]^2) /
-             (oftype(ρ, 2) * ρ)
-        Q[I, solver.equations.i_energy] -= ke
-        Q[I, m1] = 0
-        Q[I, m2] = 0
-        Q[I, m3] = 0
-        if iso
-            Q[I, solver.equations.i_energy] =
-                wall_internal_energy(solver.eos, Q, I, solver.equations.n_species, bc.Twall)
+    plane_pointwise!(_no_slip_wall_point!, Q, plane, Q, solver.eos, bc.Twall,
+                     !isnan(bc.Twall), m1, m2, m3, solver.equations.i_energy,
+                     solver.equations.n_species)
+    nothing
+end
+
+@inline function _extrapolation_point!(Q, s1, s2, s3, n_cons, o1, o2, o3,
+                                       i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        J = CartesianIndex(i + o1 + s1, j + o2 + s2, k + o3 + s3)
+        for c in 1:n_cons
+            Q[I, c] = Q[J, c]
         end
     end
-    nothing
+    return nothing
 end
 
 function enforce!(::ExtrapolationBC, Q, solver, d, side)
@@ -340,11 +400,10 @@ function enforce!(::ExtrapolationBC, Q, solver, d, side)
     # alternative where reflections matter.
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
-    e = CartesianIndex(ntuple(k -> k == d ? 1 : 0, 3))
-    shift = side == 1 ? e : -e
-    @inbounds for I in plane, c in 1:solver.equations.n_cons
-        Q[I, c] = Q[I + shift, c]
-    end
+    sgn = side == 1 ? 1 : -1
+    s = ntuple(k -> k == d ? sgn : 0, 3)
+    plane_pointwise!(_extrapolation_point!, Q, plane, Q, s[1], s[2], s[3],
+                     solver.equations.n_cons)
     nothing
 end
 

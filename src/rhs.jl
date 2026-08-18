@@ -343,6 +343,24 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
             end
         end
     end
+    # --- Device residency (G3a of reference/AMR_GPU.md) -------------------
+    # A DeviceBackend supports one patch on one rank today. The halo pack /
+    # unpack against MPI buffers, the interface-record copies, and the level
+    # transfer are still host loops; G3b lifts the rank restriction and G3c
+    # the refinement one.
+    if backend isa DeviceBackend
+        MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+        MPI.Comm_size(MPI.COMM_WORLD) == 1 ||
+            error("a DeviceBackend runs on one rank until the distributed " *
+                  "device communication of stage G3b lands")
+        npatch == 1 ||
+            error("a DeviceBackend takes a single patch until stage G3b")
+        refine === nothing ||
+            error("refinement on a DeviceBackend arrives with stage G3c")
+        eos isa Nasa9Mixture &&
+            error("Nasa9Mixture has no device coefficient mirror yet; use " *
+                  "IdealMixture or StiffenedGas on a DeviceBackend")
+    end
     ds_split = npatch > 1 ? findfirst(>(1), patch_grid) : 0
     faces_all = [ntuple(3) do d
         d != ds_split && return (0, 0)
@@ -378,7 +396,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                      n_species)
     end
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo)
-    mkd(sch, d; kw...) = plan_direction(decomp, sch, d, h[d]; kw...)
+    mkd(sch, d; kw...) =
+        backend_plan(backend, plan_direction(decomp, sch, d, h[d]; kw...))
     f() = field(backend, decomp)
 
     # Fold specs. sigvel/sigflux derivations live in folds.jl and the README.
@@ -419,7 +438,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         end
         PairSpec(shift_needed ? pdim : 0, rev_needed ? revdim : 0,
                  shift_local, rev_local, loc, partner, keep_e,
-                 loc ? zeros(0, 0, 0) : field(decomp))
+                 loc ? empty_field(backend, T) : field(backend, decomp))
     end
     function foldspec(d, lo, hi, pdim, revdim, sigvel, sigflux)
         dp = (mkd(deriv, d; lo_fold=(lo ? 1 : nothing), hi_fold=(hi ? 1 : nothing)),
@@ -477,8 +496,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     patch = Patch(1, 0, regions[1], MPI.COMM_WORLD, decomp, h,
                   ntuple(d -> (0, 0), 3), bcs_t, folds,
                   deriv_plans, deriv_plans, filter_plans, smooth_plans, ring_plans,
-                  any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
-                  any(fold -> fold !== nothing, folds) ? field(decomp) : zeros(T, 0, 0, 0),
+                  any(fold -> fold !== nothing, folds) ? f() : empty_field(backend, T),
+                  any(fold -> fold !== nothing, folds) ? f() : empty_field(backend, T),
                   f(), f(), f(), f(), f(), f(), f(), f(),
                   [f() for _ in 1:n_species],
                   [f() for _ in 1:3, _ in 1:3],
@@ -487,7 +506,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   f(), f(), f(),
                   [f() for _ in 1:n_species],
                   f(), f(), f(), f(), f(),
-                  art.detector === :delta4 ? zeros(T, 0, 0, 0) : f(),
+                  art.detector === :delta4 ? empty_field(backend, T) : f(),
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(),
                   [f() for _ in 1:3, _ in 1:n_cons])
     if refine === nothing
@@ -816,10 +835,16 @@ or the run would silently skip the interface synchronization.
 """
 allocate_state(solver::Solver) =
     (length(getfield(solver, :patch_regions)) == 1 && npatches(solver) == 1) ?
-        allocate_state(solver.decomp, solver.equations.n_cons) :
-        [allocate_state(p.decomp, solver.equations.n_cons)
+        _state_like(solver.rho, solver.equations.n_cons) :
+        [_state_like(p.rho, solver.equations.n_cons)
          for p in getfield(solver, :patches)]
-allocate_state(ps::PatchSolver) = allocate_state(ps.decomp, ps.equations.n_cons)
+allocate_state(ps::PatchSolver) = _state_like(ps.rho, ps.equations.n_cons)
+
+# Zero-filled conserved storage matching one patch's field storage, so a
+# device-resident patch gets device state without the solver carrying its
+# backend object around.
+_state_like(rho::AbstractArray{T,3}, n_cons::Int) where {T} =
+    ConservedState(fill!(similar(rho, size(rho)..., n_cons), zero(T)))
 
 # --- Operator routing through folds ----------------------------------------
 

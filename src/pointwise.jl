@@ -27,14 +27,21 @@ using KernelAbstractions
 using KernelAbstractions: get_backend, synchronize
 using Adapt
 
-# The routing test, seeing through the ConservedState display wrapper: `Array`
-# storage takes the @threaded path, anything else the KA kernel path. Each
-# method resolves statically for a concrete storage type.
+# The routing test, seeing through the ConservedState display wrapper and
+# SubArray views: `Array` storage takes the @threaded path, anything else the
+# KA kernel path. Each method resolves statically for a concrete storage type.
 @inline _cpu_storage(::Array) = true
 @inline _cpu_storage(Q::ConservedState) = _cpu_storage(parent(Q))
+@inline _cpu_storage(f::SubArray) = _cpu_storage(parent(f))
 @inline _cpu_storage(::AbstractArray) = false
 
 KernelAbstractions.get_backend(Q::ConservedState) = get_backend(parent(Q))
+
+# A conserved state reaches device kernels as the same wrapper around the
+# adapted (device-side) array, so the bodies index `Q[I, c]` unchanged. Without
+# this rule the wrapper would carry the host-side device-array object into the
+# kernel, which does not lower.
+Adapt.adapt_structure(to, Q::ConservedState) = ConservedState(adapt(to, parent(Q)))
 
 """
     FieldVector(v::AbstractVector)

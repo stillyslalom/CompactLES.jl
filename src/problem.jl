@@ -154,6 +154,21 @@ initialize!(solver::Solver, states::Vector{<:ConservedState}, ic) =
              eachpatch(solver, states)); states)
 
 function _initialize!(solver::SolverLike, eos, Q, ic)
+    if _cpu_storage(Q)
+        _initialize_interior!(solver, Q, ic)
+    else
+        # `ic` is an arbitrary host closure evaluated at physical coordinates,
+        # so a device-resident patch initializes through a host staging copy:
+        # download (preserving whatever the halos held, per the contract
+        # above), fill the interior on the host, upload. Setup-only cost.
+        Qh = Array(parent(Q))
+        _initialize_interior!(solver, Qh, ic)
+        copyto!(parent(Q), Qh)
+    end
+    return Q
+end
+
+function _initialize_interior!(solver::SolverLike, Q, ic)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -205,12 +220,36 @@ function enforce!(bc::DirichletBC, Q, solver, d, side)
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
     t = solver.tstage
-    @inbounds for I in plane
-        i, j, k = interior_index(solver, I)
-        write_conserved!(Q, I, solver,
-                         bc.fun(xcoord(solver, 1, i), xcoord(solver, 2, j),
-                                xcoord(solver, 3, k), t))
+    if _cpu_storage(Q)
+        @inbounds for I in plane
+            i, j, k = interior_index(solver, I)
+            write_conserved!(Q, I, solver,
+                             bc.fun(xcoord(solver, 1, i), xcoord(solver, 2, j),
+                                    xcoord(solver, 3, k), t))
+        end
+        return nothing
     end
+    # `fun` is a host closure, so a device-resident patch evaluates the plane
+    # block on the host and uploads it — one small strided assignment per face
+    # per RK stage, the documented Dirichlet staging cost of G3a.
+    r1, r2, r3 = plane.indices
+    T = eltype(Q)
+    n_cons = solver.equations.n_cons
+    block = Array{T,4}(undef, length(r1), length(r2), length(r3), n_cons)
+    @inbounds for (kk, K) in enumerate(r3), (jj, J) in enumerate(r2),
+                  (ii, I1) in enumerate(r1)
+        I = CartesianIndex(I1, J, K)
+        i, j, k = interior_index(solver, I)
+        q = conserved_from_prim(solver.equations, solver.eos,
+                                bc.fun(xcoord(solver, 1, i), xcoord(solver, 2, j),
+                                       xcoord(solver, 3, k), t))
+        for c in 1:n_cons
+            block[ii, jj, kk, c] = q[c]
+        end
+    end
+    dev = similar(parent(Q), size(block))
+    copyto!(dev, block)
+    view(parent(Q), r1, r2, r3, :) .= dev
     nothing
 end
 

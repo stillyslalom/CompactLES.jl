@@ -191,6 +191,16 @@ Base.@propagate_inbounds species_enthalpy(eos::IdealMixtureCoeffs, k::Int, T_ion
     eos.cpk[k] * T_ion
 @inline art_conductivity_scale(::IdealMixtureCoeffs, ρ, c, T_ion, cp_mix) =
     ρ * c / max(T_ion, eps(typeof(T_ion)))
+@inline function eos_phi(::IdealMixtureCoeffs, ρ, p, T_ion, cp_mix)
+    Rm = p / (ρ * T_ion)
+    return cp_mix / Rm - 1
+end
+@inline function eos_dphi_dY(eos::IdealMixtureCoeffs, k::Int, ρ, p, T_ion,
+                             cp_mix)
+    Rm = p / (ρ * T_ion)
+    cvm = cp_mix - Rm
+    return (eos.cvk[k] * Rm - eos.Rk[k] * cvm) / (Rm * Rm)
+end
 
 # ---------------------------------------------------------------------------
 # Stiffened gas: the minimal condensed-matter EOS.
@@ -254,16 +264,20 @@ species_enthalpy(eos::StiffenedGas, ::Int, T_ion) = eos.gamma * eos.cv * T_ion
 # mirror treatment as `IdealMixture` above.
 struct StiffenedGasCoeffs{T}
     gamma::T
+    p_inf::T
     cv::T
 end
 
 Adapt.adapt_structure(to, eos::StiffenedGas) =
-    StiffenedGasCoeffs(eos.gamma, eos.cv)
+    StiffenedGasCoeffs(eos.gamma, eos.p_inf, eos.cv)
 
 @inline species_enthalpy(eos::StiffenedGasCoeffs, ::Int, T_ion) =
     eos.gamma * eos.cv * T_ion
 @inline art_conductivity_scale(::StiffenedGasCoeffs, ρ, c, T_ion, cp_mix) =
     ρ * c / max(T_ion, eps(typeof(T_ion)))
+@inline eos_phi(eos::StiffenedGasCoeffs, ρ, p, T_ion, cp_mix) =
+    1 / (eos.gamma - 1)
+@inline eos_dphi_dY(::StiffenedGasCoeffs, ::Int, ρ, p, T_ion, cp_mix) = 0.0
 
 @inline function _primitives_stiffened_point!(Q, ρa, ua, va, wa, pa, T_iona,
                                               ca, cpa, Y1, γ, p_inf, cv, R,

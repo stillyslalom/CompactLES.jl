@@ -324,8 +324,82 @@ function max_rate(solver::Solver, states::Vector{<:ConservedState})
 end
 
 # The interior sweep of max_rate over one patch, rank-local and free of
-# collectives.
+# collectives. `Array` storage keeps the fused serial loop; device storage
+# (and FORCE_KA, which is how the test suite pins the launch path on one
+# machine) evaluates the rate through a pointwise body into `tmp_a`/`tmp_b`
+# and reduces each with the storage's own `maximum`/`minimum`. Both scratch
+# fields are free here: max_rate runs before the step's first RHS evaluation.
+# Maximum and minimum are exact and order-independent, so the two paths agree
+# bitwise.
 function _local_max_rate(solver::SolverLike, Q)
+    if _cpu_storage(Q) && !FORCE_KA[]
+        return _local_max_rate_loop(solver, Q)
+    end
+    return _local_max_rate_launch(solver, Q)
+end
+
+@inline function _rate_point!(rate_out, rhoq_out, Q, rho, u, v, w, carr, cparr,
+                              mu_art, beta_art, kappa_art, D_art,
+                              inv_h1, inv_h2, inv_h3, inv_r, cot_over_r,
+                              metric, a1, a2, a3, h1, h2, h3,
+                              mu0, Pr, Sc, n_species, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        T = eltype(rho)
+        ρQ = zero(T)
+        for sp in 1:n_species
+            ρQ += Q[I, sp]
+        end
+        rhoq_out[I] = ρQ
+        ρ = rho[I]
+        ri = one(T) / ρ
+        c = carr[I]
+        cp = cparr[I]
+        uv = (u[I], v[I], w[I])
+        ih = (inv_h1, inv_h2, inv_h3)
+        hh = (h1, h2, h3)
+        act = (a1, a2, a3)
+        acc = zero(T)
+        dsum = zero(T)
+        for d in 1:3
+            act[d] || continue
+            idx = ih[d][I] / hh[d]
+            acc += (abs(uv[d]) + c) * idx
+            dsum += idx * idx
+        end
+        acc += _curvature_rate_point(metric, a2, a3, inv_r, cot_over_r, I, uv)
+        Dmax = mu0 / (Sc * ρ)
+        for sp in 1:n_species
+            Dmax = max(Dmax, mu0 / (Sc * ρ) + D_art[sp][I])
+        end
+        ν = (mu0 + mu_art[I] + beta_art[I]) * ri +
+            (mu0 * cp / Pr + kappa_art[I]) * ri / cp + Dmax
+        rate_out[I] = acc + 2 * ν * dsum
+    end
+    return nothing
+end
+
+function _local_max_rate_launch(solver::SolverLike, Q)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    tr = solver.transport
+    ft = solver.field_tuples
+    pointwise!(_rate_point!, solver.tmp_a, nx, ny, nz,
+               solver.tmp_a, solver.tmp_b, Q, solver.rho, solver.u, solver.v,
+               solver.w, solver.c, solver.cp_mix, solver.mu_art,
+               solver.beta_art, solver.kappa_art, ft.D_art,
+               solver.inv_h[1], solver.inv_h[2], solver.inv_h[3],
+               solver.inv_r, solver.cot_over_r, solver.metric,
+               decomp.active[1], decomp.active[2], decomp.active[3],
+               solver.h[1], solver.h[2], solver.h[3],
+               tr.mu0, tr.Pr, tr.Sc, solver.equations.n_species, o1, o2, o3)
+    rates = view(solver.tmp_a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
+    rhos = view(solver.tmp_b, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
+    return (maximum(rates), minimum(rhos))
+end
+
+function _local_max_rate_loop(solver::SolverLike, Q)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -380,18 +454,29 @@ Rate contribution from geometric momentum sources on angular dimensions that
 are collapsed (and therefore contribute no advective CFL term). Zero in
 Cartesian coordinates and whenever the corresponding dimension is resolved.
 """
-curvature_rate(solver, ::CartesianMetric, I, uv) = zero(first(uv))
+curvature_rate(solver, metric::Metric, I, uv) =
+    _curvature_rate_point(metric, solver.decomp.active[2],
+                          solver.decomp.active[3], solver.inv_r,
+                          solver.cot_over_r, I, uv)
 
-function curvature_rate(solver, ::CylindricalMetric, I, uv)
-    solver.decomp.active[2] && return zero(first(uv)) # covered by θ advection
-    return abs(uv[2]) * solver.inv_r[I]          # ρu_θ²/r driving u_r
+# The launchable form: plain arrays and activity flags in place of the solver,
+# shared with the `_rate_point!` kernel body of `max_rate`.
+@inline _curvature_rate_point(::CartesianMetric, a2, a3, inv_r, cot_over_r,
+                              I, uv) = zero(first(uv))
+
+@inline function _curvature_rate_point(::CylindricalMetric, a2, a3, inv_r,
+                                       cot_over_r, I, uv)
+    a2 && return zero(first(uv))            # covered by θ advection
+    return @inbounds abs(uv[2]) * inv_r[I]  # ρu_θ²/r driving u_r
 end
 
-function curvature_rate(solver, ::SphericalMetric, I, uv)
+@inline function _curvature_rate_point(::SphericalMetric, a2, a3, inv_r,
+                                       cot_over_r, I, uv)
     a = zero(first(uv))
-    solver.decomp.active[2] || (a += abs(uv[2]) * solver.inv_r[I])
-    solver.decomp.active[3] ||
-        (a += abs(uv[3]) * (solver.inv_r[I] + abs(solver.cot_over_r[I])))
+    @inbounds begin
+        a2 || (a += abs(uv[2]) * inv_r[I])
+        a3 || (a += abs(uv[3]) * (inv_r[I] + abs(cot_over_r[I])))
+    end
     return a
 end
 
@@ -418,6 +503,9 @@ timestep restriction from one imposed by azimuthal spacing near a coordinate
 singularity; see the CFL discussion in the README.
 """
 function dt_report(solver::Solver, Q)
+    _cpu_storage(Q) ||
+        error("dt_report is a host sweep; copy the state to a CPU solver " *
+              "for this diagnostic on a DeviceBackend")
     decomp = solver.decomp
     exchange_state!(Q, decomp)
     primitives!(solver, Q)
@@ -478,6 +566,9 @@ the state that call starts with.
 """
 function positivity_floors(solver::Solver, Q, control::StepControl)
     control.floor_ratio > 0 || return (0.0, 0.0)
+    _cpu_storage(Q) ||
+        error("StepControl.floor_ratio: the positivity failsafe is a host " *
+              "sweep and is not yet supported on a DeviceBackend")
     ρ_min, e_min = _local_positivity_mins(solver, Q)
     red = MPI.Allreduce([ρ_min, e_min], min, solver.comm)
     (red[1] > 0 && red[2] > 0) || return (0.0, 0.0)
