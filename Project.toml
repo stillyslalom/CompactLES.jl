@@ -4,6 +4,7 @@ authors = ["Alex Ames <alexander.m.ames@gmail.com> and contributors"]
 version = "0.1.0"
 
 [deps]
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MPI = "da04e1cc-30fd-572f-bb4f-1f8673147195"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
@@ -19,6 +20,7 @@ CompactLESMakieExt = "Makie"
 
 [compat]
 HDF5 = "0.17"
+KernelAbstractions = "0.9"
 MPI = "0.20"
 Makie = "0.21, 0.22, 0.23, 0.24"
 ThreadPinning = "1.1.1"

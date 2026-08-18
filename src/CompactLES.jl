@@ -19,6 +19,7 @@ using Printf
 
 include("threading.jl")
 include("decomposition.jl")
+include("pointwise.jl")
 include("halo.jl")
 include("tridiag.jl")
 include("banded.jl")

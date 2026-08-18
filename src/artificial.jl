@@ -154,41 +154,46 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
                  fold !== nothing && fold.lo
         odd_hi = parity[d] == -1 && at_hi_edge(decomp, d) &&
                  fold !== nothing && fold.hi
-        e = CartesianIndex(ntuple(k -> k == d ? 1 : 0, 3))
-        @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-            j, k = Tuple(jk)
-            @inbounds for i in 1:nx
-                I = CartesianIndex(i + o1, j + o2, k + o3)
-                il = (d == 1 ? i : d == 2 ? j : k)
-                acc = 0.0
-                # The parity test sits outside the stencil loop rather than on
-                # each tap: both flags are invariant over the whole nest, and
-                # the clamped branch is the one every sensor but a velocity
-                # component across a fold takes.
-                if !(odd_lo | odd_hi)
-                    for m in -2:2
-                        ilm = clamp(il + m, lomin, himax)
-                        acc += D4[m + 3] * f[I + (ilm - il) * e]
-                    end
-                else
-                    for m in -2:2
-                        q = il + m
-                        if odd_lo && q < 1              # ghost 1−q, negated
-                            acc -= D4[m + 3] * f[I + (1 - q - il) * e]
-                        elseif odd_hi && q > n_d        # ghost 2n+1−q, negated
-                            acc -= D4[m + 3] * f[I + (2n_d + 1 - q - il) * e]
-                        else
-                            ilm = clamp(q, lomin, himax)
-                            acc += D4[m + 3] * f[I + (ilm - il) * e]
-                        end
-                    end
-                end
-                v = wd * abs(acc)
-                out[I] = maxred ? max(out[I], v) : out[I] + v
-            end
-        end
+        pointwise!(_delta4_point!, out, nx, ny, nz,
+                   out, f, wd, d, n_d, lomin, himax, odd_lo, odd_hi, maxred,
+                   o1, o2, o3)
     end
     return out
+end
+
+@inline function _delta4_point!(out, f, wd, d, n_d, lomin, himax,
+                                odd_lo, odd_hi, maxred, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        e = CartesianIndex(ntuple(q -> q == d ? 1 : 0, 3))
+        il = (d == 1 ? i : d == 2 ? j : k)
+        acc = 0.0
+        # The parity test sits outside the stencil loop rather than on each
+        # tap: both flags are invariant over the whole sweep, and the clamped
+        # branch is the one every sensor but a velocity component across a
+        # fold takes.
+        if !(odd_lo | odd_hi)
+            for m in -2:2
+                ilm = clamp(il + m, lomin, himax)
+                acc += D4[m + 3] * f[I + (ilm - il) * e]
+            end
+        else
+            for m in -2:2
+                q = il + m
+                if odd_lo && q < 1              # ghost 1−q, negated
+                    acc -= D4[m + 3] * f[I + (1 - q - il) * e]
+                elseif odd_hi && q > n_d        # ghost 2n+1−q, negated
+                    acc -= D4[m + 3] * f[I + (2n_d + 1 - q - il) * e]
+                else
+                    ilm = clamp(q, lomin, himax)
+                    acc += D4[m + 3] * f[I + (ilm - il) * e]
+                end
+            end
+        end
+        v = wd * abs(acc)
+        out[I] = maxred ? max(out[I], v) : out[I] + v
+    end
+    return nothing
 end
 
 """
@@ -297,6 +302,14 @@ function smooth!(f, solver)
     return f
 end
 
+@inline function _rho_sensor_point!(dest, rho, sensor, C, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        dest[I] = C * rho[I] * max(sensor[I], 0.0)
+    end
+    return nothing
+end
+
 """
     rho_sensor!(dest, solver, C)
 
@@ -310,14 +323,8 @@ smoother that undershoots, not against a negative detector output: |δ⁴f| and
 function rho_sensor!(dest, solver, C)
     o1, o2, o3 = solver.decomp.n_halo_d
     nx, ny, nz = solver.decomp.n_local
-    rho, sensor = solver.rho, solver.sensor
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            dest[I] = C * rho[I] * max(sensor[I], 0.0)
-        end
-    end
+    pointwise!(_rho_sensor_point!, dest, nx, ny, nz,
+               dest, solver.rho, solver.sensor, C, o1, o2, o3)
     return dest
 end
 
@@ -432,15 +439,17 @@ measurement and why a relative ε does not help.
 function gate_beta!(solver)
     o1, o2, o3 = solver.decomp.n_halo_d
     nx, ny, nz = solver.decomp.n_local
-    grad_u = solver.grad_u
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            solver.beta_art[I] *= compression_switch(grad_u, I)
-        end
-    end
+    pointwise!(_gate_beta_point!, solver.beta_art, nx, ny, nz,
+               solver.beta_art, solver.grad_u, o1, o2, o3)
     return solver
+end
+
+@inline function _gate_beta_point!(beta_art, grad_u, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        beta_art[I] *= compression_switch(grad_u, I)
+    end
+    return nothing
 end
 
 """
@@ -500,22 +509,11 @@ function dilatation_beta!(solver, C_beta, gated::Bool)
     grad_u = solver.grad_u
     if gated
         # Δ into tmp_a, the switch into tmp_b.
-        @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-            j, k = Tuple(jk)
-            @inbounds for i in 1:nx
-                I = CartesianIndex(i + o1, j + o2, k + o3)
-                solver.tmp_a[I] = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
-                solver.tmp_b[I] = compression_switch(grad_u, I)
-            end
-        end
+        pointwise!(_dilatation_switch_point!, solver.tmp_a, nx, ny, nz,
+                   solver.tmp_a, solver.tmp_b, grad_u, o1, o2, o3)
     else
-        @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-            j, k = Tuple(jk)
-            @inbounds for i in 1:nx
-                I = CartesianIndex(i + o1, j + o2, k + o3)
-                solver.tmp_a[I] = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
-            end
-        end
+        pointwise!(_dilatation_point!, solver.tmp_a, nx, ny, nz,
+                   solver.tmp_a, grad_u, o1, o2, o3)
     end
     exchange_halos!(solver.tmp_a, decomp)
     detect_sum!(solver.sensor, solver.tmp_a, solver, 2)
@@ -524,15 +522,37 @@ function dilatation_beta!(solver, C_beta, gated::Bool)
         rho_sensor!(solver.beta_art, solver, C_beta)
         return solver
     end
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            solver.beta_art[I] = C_beta * solver.rho[I] *
-                                 max(solver.sensor[I], 0.0) * solver.tmp_b[I]
-        end
-    end
+    pointwise!(_gated_beta_point!, solver.beta_art, nx, ny, nz,
+               solver.beta_art, solver.rho, solver.sensor, solver.tmp_b,
+               C_beta, o1, o2, o3)
     return solver
+end
+
+@inline function _dilatation_switch_point!(tmp_a, tmp_b, grad_u, o1, o2, o3,
+                                           i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        tmp_a[I] = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
+        tmp_b[I] = compression_switch(grad_u, I)
+    end
+    return nothing
+end
+
+@inline function _dilatation_point!(tmp_a, grad_u, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        tmp_a[I] = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
+    end
+    return nothing
+end
+
+@inline function _gated_beta_point!(beta_art, rho, sensor, switch, C_beta,
+                                    o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        beta_art[I] = C_beta * rho[I] * max(sensor[I], 0.0) * switch[I]
+    end
+    return nothing
 end
 
 """
@@ -588,18 +608,8 @@ function compute_artificial!(solver, Q)
 
     # Strain-rate magnitude |S| = sqrt(S_ij S_ij) in the interior (physical
     # components — the metric corrections are already in grad_u).
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            ss = 0.0
-            for b in 1:3, a in 1:3
-                Sab = 0.5 * (grad_u[a, b][I] + grad_u[b, a][I])
-                ss += Sab * Sab
-            end
-            solver.strain_mag[I] = sqrt(ss)
-        end
-    end
+    pointwise!(_strain_mag_point!, solver.strain_mag, nx, ny, nz,
+               solver.strain_mag, grad_u, o1, o2, o3)
 
     # Strain sensor: h_d² |D_d S| reduced over directions for the selected
     # detector D, smoothed. One pass serves μ* and β* where both are built from
@@ -614,15 +624,9 @@ function compute_artificial!(solver, Q)
         detect_sum!(solver.sensor, solver.strain_mag, solver, 2)
         smooth!(solver.sensor, solver)
         if strain_mu && strain_beta
-            @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-                j, k = Tuple(jk)
-                @inbounds for i in 1:nx
-                    I = CartesianIndex(i + o1, j + o2, k + o3)
-                    ρsensor = solver.rho[I] * max(solver.sensor[I], 0.0)
-                    solver.mu_art[I]   = C_mu   * ρsensor
-                    solver.beta_art[I] = C_beta * ρsensor
-                end
-            end
+            pointwise!(_mu_beta_point!, solver.mu_art, nx, ny, nz,
+                       solver.mu_art, solver.beta_art, solver.rho,
+                       solver.sensor, C_mu, C_beta, o1, o2, o3)
         elseif strain_mu
             rho_sensor!(solver.mu_art, solver, C_mu)
         else
@@ -645,27 +649,15 @@ function compute_artificial!(solver, Q)
     i_energy = solver.equations.i_energy
     m1, m2, m3 = solver.equations.i_mom
     nxf, nyf, nzf = size(solver.tmp_a)
-    @threaded nxf*nyf*nzf for jk in outer_indices(nyf, nzf)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nxf
-            ρ = max(solver.rho[i, j, k], 1e-300)
-            ke = 0.5 * (Q[i,j,k,m1]^2 + Q[i,j,k,m2]^2 + Q[i,j,k,m3]^2) / ρ
-            solver.tmp_a[i, j, k] = (Q[i, j, k, i_energy] - ke) / ρ
-        end
-    end
+    pointwise!(_internal_energy_point!, solver.tmp_a, nxf, nyf, nzf,
+               solver.tmp_a, Q, solver.rho, m1, m2, m3, i_energy)
     exchange_halos!(solver.tmp_a, decomp)
     detect_sum!(solver.sensor, solver.tmp_a, solver, 1)
     smooth!(solver.sensor, solver)
-    eos = solver.eos
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            scale = art_conductivity_scale(eos, solver.rho[I], solver.c[I],
-                                           solver.T_ion[I], solver.cp_mix[I])
-            solver.kappa_art[I] = C_kappa * scale * max(solver.sensor[I], 0.0)
-        end
-    end
+    pointwise!(_kappa_point!, solver.kappa_art, nx, ny, nz,
+               solver.kappa_art, solver.eos, solver.rho, solver.c,
+               solver.T_ion, solver.cp_mix, solver.sensor, C_kappa,
+               o1, o2, o3)
 
     # Per-species D*_k sensors: Σ_d h_d |D_d Y_k|, each smoothed;
     # D*_k = C_D c · sensor_k. Costs n_species filter sweeps per RHS; the flux
@@ -675,14 +667,64 @@ function compute_artificial!(solver, Q)
         for sp in 1:solver.equations.n_species
             detect_sum!(solver.sensor_sp, solver.Y[sp], solver, 1)
             smooth!(solver.sensor_sp, solver)
-            @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-                j, k = Tuple(jk)
-                @inbounds for i in 1:nx
-                    I = CartesianIndex(i + o1, j + o2, k + o3)
-                    solver.D_art[sp][I] = C_D * solver.c[I] * max(solver.sensor_sp[I], 0.0)
-                end
-            end
+            pointwise!(_species_diffusivity_point!, solver.sensor_sp,
+                       nx, ny, nz, solver.D_art[sp], solver.c,
+                       solver.sensor_sp, C_D, o1, o2, o3)
         end
     end
     return solver
+end
+
+# Per-point bodies of the sensor-to-coefficient loops above, in order of use.
+@inline function _strain_mag_point!(strain_mag, grad_u, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        ss = 0.0
+        for b in 1:3, a in 1:3
+            Sab = 0.5 * (grad_u[a, b][I] + grad_u[b, a][I])
+            ss += Sab * Sab
+        end
+        strain_mag[I] = sqrt(ss)
+    end
+    return nothing
+end
+
+@inline function _mu_beta_point!(mu_art, beta_art, rho, sensor, C_mu, C_beta,
+                                 o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        ρsensor = rho[I] * max(sensor[I], 0.0)
+        mu_art[I]   = C_mu   * ρsensor
+        beta_art[I] = C_beta * ρsensor
+    end
+    return nothing
+end
+
+@inline function _internal_energy_point!(tmp_a, Q, rho, m1, m2, m3, i_energy,
+                                         i, j, k)
+    @inbounds begin
+        ρ = max(rho[i, j, k], 1e-300)
+        ke = 0.5 * (Q[i,j,k,m1]^2 + Q[i,j,k,m2]^2 + Q[i,j,k,m3]^2) / ρ
+        tmp_a[i, j, k] = (Q[i, j, k, i_energy] - ke) / ρ
+    end
+    return nothing
+end
+
+@inline function _kappa_point!(kappa_art, eos, rho, c, T_ion, cp_mix, sensor,
+                               C_kappa, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        scale = art_conductivity_scale(eos, rho[I], c[I], T_ion[I], cp_mix[I])
+        kappa_art[I] = C_kappa * scale * max(sensor[I], 0.0)
+    end
+    return nothing
+end
+
+@inline function _species_diffusivity_point!(D_sp, c, sensor_sp, C_D,
+                                             o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        D_sp[I] = C_D * c[I] * max(sensor_sp[I], 0.0)
+    end
+    return nothing
 end

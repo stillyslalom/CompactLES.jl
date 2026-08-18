@@ -675,8 +675,50 @@ extensions for backend-specific glue.
 
 ### G1 — pointwise kernels
 
-Convert the phases that are pointwise loops — per `bench/phases.jl` the
-majority of the budget outside the line solves:
+**Status: delivered** (August 2026), first cut: the kernel architecture, the
+CPU acceptance measurement, and the routing decision. Every pointwise phase
+on the list below (Nasa9 primitives excepted, per the plan) is one shared
+`@inline` per-point body launched through `pointwise!` (`src/pointwise.jl`):
+`Array` storage takes the `@threaded` loop, any other storage a
+KernelAbstractions kernel on `get_backend` of a representative field array —
+one generic `@kernel` splatting the body, so there is no hand-maintained
+second kernel body anywhere. KernelAbstractions is the hard dependency the
+plan accepted (the three unused dependencies it was to arrive alongside had
+already been removed by the time G1 landed).
+
+- **The acceptance measurement went against KA-CPU**
+  (`bench/pointwise_ka.jl`, 8 threads): at 64³ the KA CPU backend is 2.8×
+  (assemble_fluxes!), 5.7× (primitives!) and 40–50× (RK update, scale_grad)
+  slower than `@threaded` — per-launch task spawn with no work threshold, the
+  same cost profile `threading.jl` documents for unconditional `@threads`.
+  On the small 512×32 two-species case KA-CPU is instead *faster* (0.42× on
+  assemble_fluxes!, 0.55× on primitives!), so the deficit is the launch
+  policy, not the generated code. Per the plan's contingency, `Array`
+  storage keeps `@threaded` and only device arrays route to KA; the branch
+  resolves statically, and jetcheck/audit are unchanged probe for probe.
+- **The KA path reproduces the threaded path bitwise** over full runs — the
+  bodies are per-point independent, so this is an equality gate, not a
+  round-off one. `FORCE_KA` routes ordinary arrays through the KA CPU
+  backend for exactly this testset and the bench.
+- **One trap found and fixed:** a `::Type{T}` argument inside `pointwise!`'s
+  Vararg defeats Julia's specialization heuristics, turning the body call
+  into a per-point runtime dispatch — measured as assemble_fluxes! at 9× its
+  cost on *both* paths. Bodies take no `Type` arguments; the element type
+  comes off an array.
+- `outer_indices` was not dropped as the plan anticipated: with `@threaded`
+  retained as the CPU path it survives — but in exactly one place, the
+  launcher inside `pointwise!`, rather than at every loop site.
+- **Remaining before a device actually runs these kernels:** argument
+  adaptation (the `Vector{A}`/`Matrix{A}` field collections and the EOS
+  coefficient tables are not isbits and need Adapt.jl mirrors), the
+  `max_rate` mapreduce, and the `Nasa9Mixture` fixed-width mirror. All are
+  deliberately deferred to first device bring-up, where they can be
+  validated: the workstation's RX 6800 XT has no ROCm on Windows, so the
+  first real target is a CUDA box or an LLNL AMD machine.
+
+The plan text for the stage, for reference — convert the phases that are
+pointwise loops, per `bench/phases.jl` the majority of the budget outside
+the line solves:
 
 - `primitives!` (per EOS), `assemble_fluxes!`, the RK update in `step!`,
   `delta4_sum!`, the sensor-to-coefficient loops in `compute_artificial!`,

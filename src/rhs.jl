@@ -921,12 +921,42 @@ function ring_along!(out, f, solver::SolverLike, d::Int, σf::Int)
 end
 
 # Scale a raw coordinate-derivative field by 1/h_d pointwise (full array).
+@inline function _scale_grad_point!(g, ih, i, j, k)
+    @inbounds g[i, j, k] *= ih[i, j, k]
+    return nothing
+end
+
 function _scale_grad!(g, solver, d)
     ih = solver.inv_h[d]
-    @threaded length(g) for idx in eachindex(g)
-        @inbounds g[idx] *= ih[idx]
-    end
+    n1, n2, n3 = size(g)
+    pointwise!(_scale_grad_point!, g, n1, n2, n3, g, ih)
     return g
+end
+
+# The flux-divergence accumulation bodies of compute_rhs!: zero one conserved
+# component's interior, subtract a divergence, subtract a Jacobian-scaled
+# divergence, and form the A_d·F_d product over the full padded array.
+@inline function _zero_component_point!(dQ, c, o1, o2, o3, i, j, k)
+    @inbounds dQ[i+o1, j+o2, k+o3, c] = 0
+    return nothing
+end
+
+@inline function _subtract_div_point!(dQ, tmp, c, o1, o2, o3, i, j, k)
+    @inbounds dQ[i+o1, j+o2, k+o3, c] -= tmp[i+o1, j+o2, k+o3]
+    return nothing
+end
+
+@inline function _subtract_jac_div_point!(dQ, tmp, inv_J, c, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        dQ[I, c] -= inv_J[I] * tmp[I]
+    end
+    return nothing
+end
+
+@inline function _area_flux_point!(tmp_b, Ad, F, i, j, k)
+    @inbounds tmp_b[i, j, k] = Ad[i, j, k] * F[i, j, k]
+    return nothing
 end
 
 # Antipodal signs of velocity and conserved components for the fold (if any)
@@ -939,66 +969,77 @@ cons_parity(solver::SolverLike, d::Int, c::Int) =
 
 assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, Q)
 
+# No `::Type` argument here: a `Type` inside `pointwise!`'s Vararg defeats
+# Julia's specialization heuristics and the body call turns into a per-point
+# runtime dispatch — measured as assemble_fluxes! at 9× its cost. The element
+# type comes off an array argument instead.
+@inline function _fluxes_point!(Q, eos, rho, u, v, w, p, T_ion,
+                                cp_mix, mu_art, beta_art, kappa_art, D_art, Y,
+                                grad_u, gT, gY, flux, mu0, Pr, Sc, n_species,
+                                m1, m2, m3, i_energy, o1, o2, o3, i, j, k)
+    T = eltype(rho)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        ρ = rho[I]
+        uv = (u[I], v[I], w[I])
+        pI = p[I]
+        Tp = T_ion[I]
+        E = Q[I, i_energy]
+        μ = mu0 + mu_art[I]
+        β = beta_art[I]
+        κ = mu0 * cp_mix[I] / Pr + kappa_art[I]
+        D0 = mu0 / (Sc * ρ)                  # molecular part of each D_k
+        divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
+        τ11 = μ * (2*grad_u[1,1][I] - (2/3) * divu) + β * divu
+        τ22 = μ * (2*grad_u[2,2][I] - (2/3) * divu) + β * divu
+        τ33 = μ * (2*grad_u[3,3][I] - (2/3) * divu) + β * divu
+        τ12 = μ * (grad_u[1,2][I] + grad_u[2,1][I])
+        τ13 = μ * (grad_u[1,3][I] + grad_u[3,1][I])
+        τ23 = μ * (grad_u[2,3][I] + grad_u[3,2][I])
+        τ = ((τ11, τ12, τ13), (τ12, τ22, τ23), (τ13, τ23, τ33))
+        for d in 1:3
+            ud = uv[d]
+            τd = τ[d]
+            # Per-species diffusion with a correction velocity:
+            # J_k = −ρ D_k ∇Y_k + ρ Y_k V_c, V_c = Σ_j D_j ∇Y_j,
+            # which enforces Σ_k J_k = 0 exactly since ΣY_k = 1.
+            Vc = zero(T)
+            for sp in 1:n_species
+                Vc += (D0 + D_art[sp][I]) * gY[d, sp][I]
+            end
+            hdiff = zero(T)              # Σ_k h_k J_{k,d}
+            for sp in 1:n_species
+                Dk = D0 + D_art[sp][I]
+                Jkd = ρ * (-Dk * gY[d, sp][I] + Y[sp][I] * Vc)
+                flux[d, sp][I] = ρ * Y[sp][I] * ud + Jkd
+                hdiff += species_enthalpy(eos, sp, Tp) * Jkd
+            end
+            flux[d, m1][I] = ρ * ud * uv[1] + (d == 1 ? pI : zero(T)) - τd[1]
+            flux[d, m2][I] = ρ * ud * uv[2] + (d == 2 ? pI : zero(T)) - τd[2]
+            flux[d, m3][I] = ρ * ud * uv[3] + (d == 3 ? pI : zero(T)) - τd[3]
+            flux[d, i_energy][I] = (E + pI) * ud -
+                           (uv[1]*τd[1] + uv[2]*τd[2] + uv[3]*τd[3]) -
+                           κ * gT[d][I] + hdiff
+        end
+    end
+    return nothing
+end
+
 function _assemble_fluxes!(solver::SolverLike{T}, eos, Q) where {T}
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     tr = solver.transport
-    mu0 = tr.mu0
     n_species = solver.equations.n_species
     i_energy = solver.equations.i_energy
     m1, m2, m3 = solver.equations.i_mom
-    grad_u = solver.grad_u
-    gT = solver.grad_T_ion
-    gY = solver.grad_Y
-    flux = solver.flux
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            ρ = solver.rho[I]
-            uv = (solver.u[I], solver.v[I], solver.w[I])
-            p = solver.p[I]
-            Tp = solver.T_ion[I]
-            E = Q[I, i_energy]
-            μ = mu0 + solver.mu_art[I]
-            β = solver.beta_art[I]
-            κ = mu0 * solver.cp_mix[I] / tr.Pr + solver.kappa_art[I]
-            D0 = mu0 / (tr.Sc * ρ)               # molecular part of each D_k
-            divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
-            τ11 = μ * (2*grad_u[1,1][I] - (2/3) * divu) + β * divu
-            τ22 = μ * (2*grad_u[2,2][I] - (2/3) * divu) + β * divu
-            τ33 = μ * (2*grad_u[3,3][I] - (2/3) * divu) + β * divu
-            τ12 = μ * (grad_u[1,2][I] + grad_u[2,1][I])
-            τ13 = μ * (grad_u[1,3][I] + grad_u[3,1][I])
-            τ23 = μ * (grad_u[2,3][I] + grad_u[3,2][I])
-            τ = ((τ11, τ12, τ13), (τ12, τ22, τ23), (τ13, τ23, τ33))
-            for d in 1:3
-                ud = uv[d]
-                τd = τ[d]
-                # Per-species diffusion with a correction velocity:
-                # J_k = −ρ D_k ∇Y_k + ρ Y_k V_c, V_c = Σ_j D_j ∇Y_j,
-                # which enforces Σ_k J_k = 0 exactly since ΣY_k = 1.
-                Vc = zero(T)
-                for sp in 1:n_species
-                    Vc += (D0 + solver.D_art[sp][I]) * gY[d, sp][I]
-                end
-                hdiff = zero(T)              # Σ_k h_k J_{k,d}
-                for sp in 1:n_species
-                    Dk = D0 + solver.D_art[sp][I]
-                    Jkd = ρ * (-Dk * gY[d, sp][I] + solver.Y[sp][I] * Vc)
-                    flux[d, sp][I] = ρ * solver.Y[sp][I] * ud + Jkd
-                    hdiff += species_enthalpy(eos, sp, Tp) * Jkd
-                end
-                flux[d, m1][I] = ρ * ud * uv[1] + (d == 1 ? p : zero(T)) - τd[1]
-                flux[d, m2][I] = ρ * ud * uv[2] + (d == 2 ? p : zero(T)) - τd[2]
-                flux[d, m3][I] = ρ * ud * uv[3] + (d == 3 ? p : zero(T)) - τd[3]
-                flux[d, i_energy][I] = (E + p) * ud -
-                               (uv[1]*τd[1] + uv[2]*τd[2] + uv[3]*τd[3]) -
-                               κ * gT[d][I] + hdiff
-            end
-        end
-    end
+    pointwise!(_fluxes_point!, solver.rho, nx, ny, nz,
+               Q, eos, solver.rho, solver.u, solver.v, solver.w, solver.p,
+               solver.T_ion, solver.cp_mix, solver.mu_art, solver.beta_art,
+               solver.kappa_art, solver.D_art, solver.Y, solver.grad_u,
+               solver.grad_T_ion, solver.grad_Y, solver.flux,
+               tr.mu0, tr.Pr, tr.Sc, n_species, m1, m2, m3, i_energy,
+               o1, o2, o3)
     return solver
 end
 
@@ -1113,39 +1154,25 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
     # largest phase. Curved or stretched grids take the general path unchanged.
     unitgeom = solver.metric isa CartesianMetric && all(isnothing, solver.stretch)
     for c in 1:solver.equations.n_cons
-        @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-            j, k = Tuple(jk)
-            @inbounds for i in 1:nx
-                dQ[i+o1, j+o2, k+o3, c] = 0
-            end
-        end
+        pointwise!(_zero_component_point!, dQ, nx, ny, nz, dQ, c, o1, o2, o3)
         for d in 1:3
             decomp.active[d] || continue
             Fdc = solver.flux[d, c]
             σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
             if unitgeom
                 div_along!(solver.tmp_a, Fdc, solver, d, σ)
-                @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-                    j, k = Tuple(jk)
-                    @inbounds for i in 1:nx
-                        dQ[i+o1, j+o2, k+o3, c] -= solver.tmp_a[i+o1, j+o2, k+o3]
-                    end
-                end
+                pointwise!(_subtract_div_point!, dQ, nx, ny, nz,
+                           dQ, solver.tmp_a, c, o1, o2, o3)
             else
                 # tmp_b = A_d F_d over the full array; A_d is odd in r for the
                 # cylindrical axis (A₁ = r), flipping the flux parity.
                 Ad = solver.area_d[d]
-                @threaded length(solver.tmp_b) for idx in eachindex(solver.tmp_b)
-                    @inbounds solver.tmp_b[idx] = Ad[idx] * Fdc[idx]
-                end
+                n1f, n2f, n3f = size(solver.tmp_b)
+                pointwise!(_area_flux_point!, solver.tmp_b, n1f, n2f, n3f,
+                           solver.tmp_b, Ad, Fdc)
                 div_along!(solver.tmp_a, solver.tmp_b, solver, d, σ)
-                @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-                    j, k = Tuple(jk)
-                    @inbounds for i in 1:nx
-                        I = CartesianIndex(i + o1, j + o2, k + o3)
-                        dQ[I, c] -= solver.inv_J[I] * solver.tmp_a[I]
-                    end
-                end
+                pointwise!(_subtract_jac_div_point!, dQ, nx, ny, nz,
+                           dQ, solver.tmp_a, solver.inv_J, c, o1, o2, o3)
             end
         end
     end

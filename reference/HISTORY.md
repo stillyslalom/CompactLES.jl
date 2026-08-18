@@ -776,3 +776,30 @@ the low-storage accumulator after a non-finite failure), both now fixed and
 gated on that failure kind. Still open from the stage's gate list: the
 3-D wall-time and memory demonstration, tile clustering, and the TGV
 filter-cadence measurement.
+
+## GPU Stage G1 — pointwise kernels via KernelAbstractions (August 2026)
+
+G1 of the `reference/AMR_GPU.md` GPU track is delivered in its first cut:
+every pointwise phase (both gas-model `primitives!` methods, the flux
+assembly, the RK update, the δ⁴ detector and every sensor-to-coefficient
+loop, the metric gradient corrections and momentum sources, the body-force
+source, the gradient scaling, and the flux-divergence accumulation) is now
+one shared per-point body launched through `pointwise!`
+(`src/pointwise.jl`): `Array` storage takes the existing `@threaded` loop
+and any other storage a KernelAbstractions kernel on its own backend, with
+one generic kernel splatting the body so no second kernel body exists
+anywhere. KernelAbstractions becomes the package's fifth dependency.
+
+The plan's CPU acceptance measurement went against replacing `@threaded`:
+at 64³ the KA CPU backend runs 2.8× (fluxes) to 50× (RK update) slower —
+per-launch task spawn with no work threshold — while on a small 2-D case it
+is up to 2.4× faster, so the deficit is launch policy, not generated code.
+Per the plan's contingency the routing is static: `Array` on `@threaded`,
+device arrays on KA. The KA CPU path reproduces the threaded path bitwise
+over full runs (the new testset, 78 serial testsets total), the default
+path is bit-identical to the pre-G1 solver on every convergence and
+validation guard, and jetcheck/audit hold probe for probe. One trap is
+recorded in `CLAUDE.md`: a `Type` argument inside the launcher's Vararg
+defeats specialization and cost `assemble_fluxes!` 9× until removed.
+Device bring-up (isbits argument adaptation, the `max_rate` mapreduce, the
+Nasa9 mirror) is deferred to the first machine with a usable GPU backend.

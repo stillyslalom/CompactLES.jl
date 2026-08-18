@@ -207,40 +207,46 @@ function metric_correct_gradients!(solver, ::CartesianMetric)
     return solver   # scale factors are unity; nothing to do
 end
 
+@inline function _grad_corr_cyl_point!(grad_u, u, v, inv_r, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        ir = inv_r[I]
+        grad_u[2, 1][I] -= v[I] * ir
+        grad_u[2, 2][I] += u[I] * ir
+    end
+    return nothing
+end
+
 function metric_correct_gradients!(solver, ::CylindricalMetric)
     decomp = solver.decomp; o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    grad_u = solver.grad_u
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            ir = solver.inv_r[I]
-            grad_u[2, 1][I] -= solver.v[I] * ir
-            grad_u[2, 2][I] += solver.u[I] * ir
-        end
-    end
+    pointwise!(_grad_corr_cyl_point!, solver.inv_r, nx, ny, nz,
+               solver.grad_u, solver.u, solver.v, solver.inv_r, o1, o2, o3)
     return solver
+end
+
+@inline function _grad_corr_sph_point!(grad_u, u, v, w, inv_r, cot_over_r,
+                                       o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        ir  = inv_r[I]                      # 1/r
+        ctr = cot_over_r[I]                 # cotθ / r
+        ur, uθ, uφ = u[I], v[I], w[I]
+        grad_u[2, 1][I] -= uθ * ir
+        grad_u[2, 2][I] += ur * ir
+        grad_u[3, 1][I] -= uφ * ir
+        grad_u[3, 2][I] -= uφ * ctr
+        grad_u[3, 3][I] += ur * ir + uθ * ctr
+    end
+    return nothing
 end
 
 function metric_correct_gradients!(solver, ::SphericalMetric)
     decomp = solver.decomp; o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    grad_u = solver.grad_u
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            ir  = solver.inv_r[I]               # 1/r
-            ctr = solver.cot_over_r[I]          # cotθ / r
-            ur, uθ, uφ = solver.u[I], solver.v[I], solver.w[I]
-            grad_u[2, 1][I] -= uθ * ir
-            grad_u[2, 2][I] += ur * ir
-            grad_u[3, 1][I] -= uφ * ir
-            grad_u[3, 2][I] -= uφ * ctr
-            grad_u[3, 3][I] += ur * ir + uθ * ctr
-        end
-    end
+    pointwise!(_grad_corr_sph_point!, solver.inv_r, nx, ny, nz,
+               solver.grad_u, solver.u, solver.v, solver.w, solver.inv_r,
+               solver.cot_over_r, o1, o2, o3)
     return solver
 end
 
@@ -251,48 +257,67 @@ end
 
 add_metric_sources!(solver, dQ, Q, ::CartesianMetric) = solver
 
-@inline function _Pi(solver, Q, I, a, b)
-    grad_u = solver.grad_u
-    μ = solver.transport.mu0 + solver.mu_art[I]
-    β = solver.beta_art[I]
+# The stress-tensor sample takes the field arrays rather than the solver so
+# the momentum-source bodies below stay launchable as device kernels.
+@inline function _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, a, b)
+    μ = mu0 + mu_art[I]
+    β = beta_art[I]
     divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
     τ = μ * (grad_u[a, b][I] + grad_u[b, a][I]) + (a == b ? (β - 2μ/3) * divu : 0.0)
-    uv = (solver.u[I], solver.v[I], solver.w[I])
-    solver.rho[I] * uv[a] * uv[b] + (a == b ? solver.p[I] : 0.0) - τ
+    uv = (u[I], v[I], w[I])
+    rho[I] * uv[a] * uv[b] + (a == b ? p[I] : 0.0) - τ
+end
+
+@inline function _metric_src_cyl_point!(dQ, grad_u, mu0, mu_art, beta_art,
+                                        rho, u, v, w, p, inv_r, m1, m2,
+                                        o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        ir = inv_r[I]
+        # +Π_θθ / r on radial momentum, −Π_θr / r on the azimuthal one.
+        dQ[I, m1] += ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 2)
+        dQ[I, m2] -= ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 1)
+    end
+    return nothing
 end
 
 function add_metric_sources!(solver, dQ, Q, ::CylindricalMetric)
     decomp = solver.decomp; o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     m = solver.equations.i_mom
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            ir = solver.inv_r[I]
-            dQ[I, m[1]] += ir * _Pi(solver, Q, I, 2, 2)      # +Π_θθ / r
-            dQ[I, m[2]] -= ir * _Pi(solver, Q, I, 2, 1)      # −Π_θr / r
-        end
-    end
+    pointwise!(_metric_src_cyl_point!, solver.inv_r, nx, ny, nz,
+               dQ, solver.grad_u, solver.transport.mu0, solver.mu_art,
+               solver.beta_art, solver.rho, solver.u, solver.v, solver.w,
+               solver.p, solver.inv_r, m[1], m[2], o1, o2, o3)
     return solver
+end
+
+@inline function _metric_src_sph_point!(dQ, grad_u, mu0, mu_art, beta_art,
+                                        rho, u, v, w, p, inv_r, cot_over_r,
+                                        m1, m2, m3, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        ir  = inv_r[I]
+        ctr = cot_over_r[I]
+        Pθθ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 2)
+        Pφφ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 3)
+        dQ[I, m1] += ir * (Pθθ + Pφφ)
+        dQ[I, m2] += -ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 1) +
+                     ctr * Pφφ
+        dQ[I, m3] += -ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 1) -
+                     ctr * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 3, 2)
+    end
+    return nothing
 end
 
 function add_metric_sources!(solver, dQ, Q, ::SphericalMetric)
     decomp = solver.decomp; o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     m = solver.equations.i_mom
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            ir  = solver.inv_r[I]
-            ctr = solver.cot_over_r[I]
-            Pθθ = _Pi(solver, Q, I, 2, 2)
-            Pφφ = _Pi(solver, Q, I, 3, 3)
-            dQ[I, m[1]] += ir * (Pθθ + Pφφ)
-            dQ[I, m[2]] += -ir * _Pi(solver, Q, I, 2, 1) + ctr * Pφφ
-            dQ[I, m[3]] += -ir * _Pi(solver, Q, I, 3, 1) - ctr * _Pi(solver, Q, I, 3, 2)
-        end
-    end
+    pointwise!(_metric_src_sph_point!, solver.inv_r, nx, ny, nz,
+               dQ, solver.grad_u, solver.transport.mu0, solver.mu_art,
+               solver.beta_art, solver.rho, solver.u, solver.v, solver.w,
+               solver.p, solver.inv_r, solver.cot_over_r, m[1], m[2], m[3],
+               o1, o2, o3)
     return solver
 end

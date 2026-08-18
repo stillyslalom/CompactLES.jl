@@ -1,0 +1,90 @@
+# Pointwise-phase launch machinery (GPU Stage G1 of reference/AMR_GPU.md).
+#
+# Every pointwise phase of the solver — the loops that visit each grid point
+# independently, as opposed to the compact line solves — is written as one
+# per-point body function beside its driver and launched through one of two
+# paths: `Array` storage takes the existing `@threaded` loop, which keeps the
+# default CPU path bit-identical to the pre-G1 solver, and any other storage
+# type launches a KernelAbstractions kernel on the backend its arrays belong
+# to. `get_backend(::Array)` is the KA CPU backend, so tests and benches
+# exercise the kernel path on ordinary arrays by calling [`pointwise_ka!`]
+# directly; a device array reaches it automatically through [`pointwise!`].
+#
+# The bodies take plain arrays and scalars rather than the solver, which is
+# most of what a device launch requires of them. What remains before a GPU
+# actually runs them is argument adaptation: the `Vector{A}` and `Matrix{A}`
+# field collections (`Y`, `D_art`, `grad_u`, `grad_Y`, `flux`) and the EOS
+# objects carrying `Vector` coefficient tables are not isbits and need
+# Adapt.jl mirrors (tuples or device arrays). That conversion is deliberately
+# deferred to first device bring-up, where it can be validated; the KA CPU
+# backend accepts the current argument shapes unchanged.
+
+using KernelAbstractions
+using KernelAbstractions: get_backend, synchronize
+
+# The routing test, seeing through the ConservedState display wrapper: `Array`
+# storage takes the @threaded path, anything else the KA kernel path. Each
+# method resolves statically for a concrete storage type.
+@inline _cpu_storage(::Array) = true
+@inline _cpu_storage(Q::ConservedState) = _cpu_storage(parent(Q))
+@inline _cpu_storage(::AbstractArray) = false
+
+KernelAbstractions.get_backend(Q::ConservedState) = get_backend(parent(Q))
+
+"""
+Test and benchmark toggle: `true` routes every [`pointwise!`](@ref) launch
+through the KernelAbstractions path even on `Array` storage, where
+`get_backend` supplies the KA CPU backend. The default `false` keeps `Array`
+storage on the `@threaded` path, which is the configuration every guard was
+measured under. The KA testset and `bench/pointwise_ka.jl` flip this around
+their comparisons; nothing else should.
+"""
+const FORCE_KA = Ref(false)
+
+@kernel function _point_kernel!(body!, args)
+    i, j, k = @index(Global, NTuple)
+    body!(args..., i, j, k)
+end
+
+"""
+    pointwise!(body!, route, n1, n2, n3, args...)
+
+Run `body!(args..., i, j, k)` over the `(1:n1) × (1:n2) × (1:n3)` index box.
+`route` is a representative field array: `Array` storage takes the
+`@threaded` loop over [`outer_indices`](@ref), anything else a
+KernelAbstractions kernel on `get_backend(route)`. The branch resolves
+statically for a concrete storage type. The body owns its own `@inbounds`
+and any halo offsets, so the index box is the body's iteration count, not
+necessarily a padded extent, and every body must be safe to run at any point
+of the box in any order — the pointwise contract.
+"""
+@inline function pointwise!(body!::F, route::AbstractArray, n1::Int, n2::Int,
+                            n3::Int, args...) where {F}
+    if _cpu_storage(route) && !FORCE_KA[]
+        @threaded n1 * n2 * n3 for jk in outer_indices(n2, n3)
+            j, k = Tuple(jk)
+            for i in 1:n1
+                body!(args..., i, j, k)
+            end
+        end
+        return nothing
+    end
+    return pointwise_ka!(body!, get_backend(route), n1, n2, n3, args...)
+end
+
+"""
+    pointwise_ka!(body!, backend, n1, n2, n3, args...)
+
+The KernelAbstractions launch of [`pointwise!`](@ref) on an explicit
+`backend`, synchronizing before returning. Called with
+`KernelAbstractions.CPU()` — what `get_backend` returns for an `Array` —
+this runs the same bodies through the kernel path on ordinary storage, which
+is how the KA testset and `bench/pointwise_ka.jl` compare the two paths on
+one machine.
+"""
+function pointwise_ka!(body!::F, backend, n1::Int, n2::Int, n3::Int,
+                       args...) where {F}
+    _point_kernel!(backend)(body!, args; ndrange=(n1, n2, n3))
+    synchronize(backend)
+    return nothing
+end

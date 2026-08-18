@@ -66,7 +66,7 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 77 testsets, 0 failures
+julia --project=. test/runtests.jl        # 78 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
@@ -178,6 +178,13 @@ Names are spelled out rather than abbreviated. Current vocabulary:
   `save_level_box!`/`hermite_level_shell!` (the Hermite box, `box_Q0` ..
   `box_dQ1`), `regrid` (a `RegridSpec`), `regrid_interval`,
   `tag_threshold`/`tag_buffer`, `tagged_region`, `regrid!`
+- `pointwise!` (the shared launcher of every per-point loop: `Array` storage
+  takes `@threaded`, device storage a KernelAbstractions kernel),
+  `pointwise_ka!`, `FORCE_KA` (test/bench toggle), and the `_point!` suffix
+  for a per-point body. A body takes plain arrays and scalars, never the
+  solver, and never a `Type` argument — a `Type` inside the launcher's
+  Vararg defeats specialization and turns the body call into a per-point
+  runtime dispatch (measured 9× on `assemble_fluxes!`).
 - `refresh_primitives!`, `mixture_density`, `boundary_plane` (the in-flight
   state-query API; primitives are stale inside a callback, see the
   `refresh_primitives!` docstring)
@@ -294,6 +301,8 @@ decision worth revisiting.
   unit time), `amr_transfer.jl` (AMR transfer-pair conditioning plus the
   Stage 1 measurement battery: sampling convention, round-trip orders,
   sensor-injection amplification, pollution decay),
+  `pointwise_ka.jl` (the G1 acceptance table: each pointwise phase timed
+  through `@threaded` and the KernelAbstractions CPU backend),
   `tgv_energy.jl` (Taylor–Green kinetic-energy budget split
   by dissipation channel; the one bench script that runs usefully under
   `mpiexec`, and the intended first workload on a cluster).

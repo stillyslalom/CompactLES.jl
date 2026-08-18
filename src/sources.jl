@@ -41,6 +41,22 @@ A custom method mutates only the rank-local interior of `dQ`, adds rather than
 overwrites contributions already present, and returns `dQ`. It may inspect `Q`
 and `solver`; any collective operation must be entered by every rank.
 """
+@inline function _body_force_point!(dQ, Q, g1, g2, g3, n_species,
+                                    m1, m2, m3, i_energy, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        rho = zero(eltype(Q))
+        for sp in 1:n_species
+            rho += Q[I, sp]
+        end
+        dQ[I, m1] += rho * g1
+        dQ[I, m2] += rho * g2
+        dQ[I, m3] += rho * g3
+        dQ[I, i_energy] += Q[I, m1] * g1 + Q[I, m2] * g2 + Q[I, m3] * g3
+    end
+    return nothing
+end
+
 function add_source!(source::ConstantBodyForce, solver, dQ, Q, t)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
@@ -49,20 +65,8 @@ function add_source!(source::ConstantBodyForce, solver, dQ, Q, t)
     m1, m2, m3 = solver.equations.i_mom
     i_energy = solver.equations.i_energy
     g1, g2, g3 = source.acceleration
-    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            rho = zero(eltype(Q))
-            for sp in 1:n_species
-                rho += Q[I, sp]
-            end
-            dQ[I, m1] += rho * g1
-            dQ[I, m2] += rho * g2
-            dQ[I, m3] += rho * g3
-            dQ[I, i_energy] += Q[I, m1] * g1 + Q[I, m2] * g2 + Q[I, m3] * g3
-        end
-    end
+    pointwise!(_body_force_point!, dQ, nx, ny, nz,
+               dQ, Q, g1, g2, g3, n_species, m1, m2, m3, i_energy, o1, o2, o3)
     return dQ
 end
 

@@ -106,18 +106,20 @@ end
 
 # The low-storage stage update over one patch's interior, shared between the
 # single-patch and multi-patch step drivers.
+@inline function _rk_point!(Q, dQ, du, A, B, dt, c, o1, o2, o3, i, j, k)
+    @inbounds begin
+        v = A * du[i+o1, j+o2, k+o3, c] + dt * dQ[i+o1, j+o2, k+o3, c]
+        du[i+o1, j+o2, k+o3, c] = v
+        Q[i+o1, j+o2, k+o3, c] += B * v
+    end
+    return nothing
+end
+
 function _rk_update!(decomp::Decomp, n_cons::Int, Q, dQ, du, A, B, dt)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     for c in 1:n_cons
-        @threaded nx*ny*nz for jk in outer_indices(ny, nz)
-            j, k = Tuple(jk)
-            @inbounds for i in 1:nx
-                v = A * du[i+o1, j+o2, k+o3, c] + dt * dQ[i+o1, j+o2, k+o3, c]
-                du[i+o1, j+o2, k+o3, c] = v
-                Q[i+o1, j+o2, k+o3, c] += B * v
-            end
-        end
+        pointwise!(_rk_point!, Q, nx, ny, nz, Q, dQ, du, A, B, dt, c, o1, o2, o3)
     end
     return Q
 end

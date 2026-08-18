@@ -2643,6 +2643,56 @@ end
     @test_throws ArgumentError script_grid("128x128")
 end
 
+@testset "pointwise kernels: the KA path reproduces the threaded path" begin
+    # G1 (reference/AMR_GPU.md): every pointwise phase is one shared per-point
+    # body behind two launchers. The bodies are per-point independent, so the
+    # KernelAbstractions CPU path must reproduce the @threaded path BITWISE —
+    # not to round-off — over a full run touching primitives, fluxes, sensors,
+    # species diffusion, the RK update, and the state filter. Cylindrical
+    # geometry in the second case adds the metric-correction and metric-source
+    # bodies.
+    per3k = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    function tube_pair()
+        eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                            IdealSpecies{Float64}("heavy", 0.2, 1.09)])
+        s = Solver(n_global=(48, 32, 1), L_domain=(1.0, 0.6, 1.0), eos=eos,
+                   bcs=((SlipWallBC(), SlipWallBC()), per3k[2], per3k[3]))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> begin
+            θ = 0.5 * (1 + tanh((x - 0.5) / 0.05))
+            Prim(Y=(1 - θ, θ), rho=(1 - θ) + 0.625θ, p=(1 - θ) + 0.1θ,
+                 u=(0.1 * sin(2π * y / 0.6), 0.0, 0.0))
+        end)
+        return s, Q
+    end
+    s1, Q1 = tube_pair()
+    run!(s1, Q1; tfinal=0.02, nmax=50)
+    CL.FORCE_KA[] = true
+    s2, Q2 = tube_pair()
+    run!(s2, Q2; tfinal=0.02, nmax=50)
+    CL.FORCE_KA[] = false
+    @test s1.step == s2.step
+    @test parent(Q1) == parent(Q2)
+
+    function axis_pair()
+        s = Solver(n_global=(32, 1, 24), L_domain=(1.0, 2π, 1.0),
+                   bcs=((AxisBC(), SlipWallBC()), per3k[2], per3k[3]),
+                   metric=CylindricalMetric())
+        Q = allocate_state(s)
+        initialize!(s, Q, (r, θ, z) ->
+            Prim(u=(0.0, 0.2r, 0.05 * sin(2π * z)), p=1.0 + 0.02r^2, rho=1.0))
+        return s, Q
+    end
+    s3, Q3 = axis_pair()
+    run!(s3, Q3; tfinal=0.02, nmax=20)
+    CL.FORCE_KA[] = true
+    s4, Q4 = axis_pair()
+    run!(s4, Q4; tfinal=0.02, nmax=20)
+    CL.FORCE_KA[] = false
+    @test s3.step == s4.step
+    @test parent(Q3) == parent(Q4)
+end
+
 include("patch_tests.jl")
 include("level_tests.jl")
 

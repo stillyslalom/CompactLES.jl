@@ -220,6 +220,36 @@ species_enthalpy(eos::StiffenedGas, ::Int, T_ion) = eos.gamma * eos.cv * T_ion
 @inline art_conductivity_scale(::StiffenedGas, ρ, c, T_ion, cp_mix) =
     ρ * c / max(T_ion, eps(typeof(T_ion)))
 
+@inline function _primitives_stiffened_point!(Q, ρa, ua, va, wa, pa, T_iona,
+                                              ca, cpa, Y1, γ, p_inf, cv, R,
+                                              m1, m2, m3, i_energy, i, j, k)
+    @inbounds begin
+        ρ = Q[i, j, k, 1]
+        if ρ > 0
+            ri = 1 / ρ
+            u = Q[i, j, k, m1] * ri
+            v = Q[i, j, k, m2] * ri
+            w = Q[i, j, k, m3] * ri
+            e = Q[i, j, k, i_energy] * ri - 0.5 * (u*u + v*v + w*w)
+            p = (γ - 1) * ρ * e - γ * p_inf
+            ρa[i, j, k] = ρ
+            ua[i, j, k] = u; va[i, j, k] = v; wa[i, j, k] = w
+            pa[i, j, k] = p
+            T_iona[i, j, k] = max((p + p_inf) / (ρ * R), 1e-300)
+            ca[i, j, k] = sqrt(max(γ * (p + p_inf) * ri, 0.0))
+            cpa[i, j, k] = γ * cv
+            Y1[i, j, k] = 1.0
+        else
+            ρa[i, j, k] = 1
+            ua[i, j, k] = 0; va[i, j, k] = 0; wa[i, j, k] = 0
+            pa[i, j, k] = 1; T_iona[i, j, k] = 1; ca[i, j, k] = 1
+            cpa[i, j, k] = γ * cv
+            Y1[i, j, k] = 1.0
+        end
+    end
+    return nothing
+end
+
 function _primitives!(solver, eos::StiffenedGas, Q)
     m1, m2, m3 = solver.equations.i_mom
     i_energy = solver.equations.i_energy
@@ -228,33 +258,9 @@ function _primitives!(solver, eos::StiffenedGas, Q)
     ρa, ua, va, wa = solver.rho, solver.u, solver.v, solver.w
     pa, T_iona, ca, cpa = solver.p, solver.T_ion, solver.c, solver.cp_mix
     nxf, nyf, nzf = size(ρa)
-    @threaded nxf*nyf*nzf for jk in outer_indices(nyf, nzf)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nxf
-            ρ = Q[i, j, k, 1]
-            if ρ > 0
-                ri = 1 / ρ
-                u = Q[i, j, k, m1] * ri
-                v = Q[i, j, k, m2] * ri
-                w = Q[i, j, k, m3] * ri
-                e = Q[i, j, k, i_energy] * ri - 0.5 * (u*u + v*v + w*w)
-                p = (γ - 1) * ρ * e - γ * p_inf
-                ρa[i, j, k] = ρ
-                ua[i, j, k] = u; va[i, j, k] = v; wa[i, j, k] = w
-                pa[i, j, k] = p
-                T_iona[i, j, k] = max((p + p_inf) / (ρ * R), 1e-300)
-                ca[i, j, k] = sqrt(max(γ * (p + p_inf) * ri, 0.0))
-                cpa[i, j, k] = γ * cv
-                solver.Y[1][i, j, k] = 1.0
-            else
-                ρa[i, j, k] = 1
-                ua[i, j, k] = 0; va[i, j, k] = 0; wa[i, j, k] = 0
-                pa[i, j, k] = 1; T_iona[i, j, k] = 1; ca[i, j, k] = 1
-                cpa[i, j, k] = γ * cv
-                solver.Y[1][i, j, k] = 1.0
-            end
-        end
-    end
+    pointwise!(_primitives_stiffened_point!, ρa, nxf, nyf, nzf,
+               Q, ρa, ua, va, wa, pa, T_iona, ca, cpa, solver.Y[1],
+               γ, p_inf, cv, R, m1, m2, m3, i_energy)
     return solver
 end
 
@@ -620,6 +626,49 @@ the interior before the sweep.
 """
 primitives!(solver, Q) = _primitives!(solver, solver.eos, Q)
 
+@inline function _primitives_ideal_point!(Q, ρa, ua, va, wa, pa, T_iona, ca,
+                                          cpa, Y, Rk, cvk, n_species,
+                                          m1, m2, m3, i_energy, i, j, k)
+    @inbounds begin
+        ρ = 0.0
+        for sp in 1:n_species
+            ρ += Q[i, j, k, sp]
+        end
+        if ρ > 0
+            ri = 1 / ρ
+            Rm = 0.0; cvm = 0.0
+            for sp in 1:n_species
+                Rm  += Q[i, j, k, sp] * Rk[sp]
+                cvm += Q[i, j, k, sp] * cvk[sp]
+                Y[sp][i, j, k] = Q[i, j, k, sp] * ri
+            end
+            Rm *= ri; cvm *= ri
+            u = Q[i, j, k, m1] * ri
+            v = Q[i, j, k, m2] * ri
+            w = Q[i, j, k, m3] * ri
+            e = Q[i, j, k, i_energy] * ri - 0.5 * (u*u + v*v + w*w)
+            T_ion = max(e / cvm, 1e-300)
+            p = ρ * Rm * T_ion
+            γm = 1 + Rm / cvm
+            ρa[i, j, k] = ρ
+            ua[i, j, k] = u; va[i, j, k] = v; wa[i, j, k] = w
+            pa[i, j, k] = p
+            T_iona[i, j, k] = T_ion
+            ca[i, j, k] = sqrt(γm * Rm * T_ion)
+            cpa[i, j, k] = cvm + Rm
+        else
+            ρa[i, j, k] = 1
+            ua[i, j, k] = 0; va[i, j, k] = 0; wa[i, j, k] = 0
+            pa[i, j, k] = 1; T_iona[i, j, k] = 1; ca[i, j, k] = 1
+            cpa[i, j, k] = 1
+            for sp in 1:n_species
+                Y[sp][i, j, k] = sp == 1 ? 1.0 : 0.0
+            end
+        end
+    end
+    return nothing
+end
+
 function _primitives!(solver, eos::IdealMixture, Q)
     n_species = solver.equations.n_species
     m1, m2, m3 = solver.equations.i_mom
@@ -628,45 +677,8 @@ function _primitives!(solver, eos::IdealMixture, Q)
     ρa, ua, va, wa = solver.rho, solver.u, solver.v, solver.w
     pa, T_iona, ca, cpa = solver.p, solver.T_ion, solver.c, solver.cp_mix
     nxf, nyf, nzf = size(ρa)
-    @threaded nxf*nyf*nzf for jk in outer_indices(nyf, nzf)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nxf
-            ρ = 0.0
-            for sp in 1:n_species
-                ρ += Q[i, j, k, sp]
-            end
-            if ρ > 0
-                ri = 1 / ρ
-                Rm = 0.0; cvm = 0.0
-                for sp in 1:n_species
-                    Rm  += Q[i, j, k, sp] * Rk[sp]
-                    cvm += Q[i, j, k, sp] * cvk[sp]
-                    solver.Y[sp][i, j, k] = Q[i, j, k, sp] * ri
-                end
-                Rm *= ri; cvm *= ri
-                u = Q[i, j, k, m1] * ri
-                v = Q[i, j, k, m2] * ri
-                w = Q[i, j, k, m3] * ri
-                e = Q[i, j, k, i_energy] * ri - 0.5 * (u*u + v*v + w*w)
-                T_ion = max(e / cvm, 1e-300)
-                p = ρ * Rm * T_ion
-                γm = 1 + Rm / cvm
-                ρa[i, j, k] = ρ
-                ua[i, j, k] = u; va[i, j, k] = v; wa[i, j, k] = w
-                pa[i, j, k] = p
-                T_iona[i, j, k] = T_ion
-                ca[i, j, k] = sqrt(γm * Rm * T_ion)
-                cpa[i, j, k] = cvm + Rm
-            else
-                ρa[i, j, k] = 1
-                ua[i, j, k] = 0; va[i, j, k] = 0; wa[i, j, k] = 0
-                pa[i, j, k] = 1; T_iona[i, j, k] = 1; ca[i, j, k] = 1
-                cpa[i, j, k] = 1
-                for sp in 1:n_species
-                    solver.Y[sp][i, j, k] = sp == 1 ? 1.0 : 0.0
-                end
-            end
-        end
-    end
+    pointwise!(_primitives_ideal_point!, ρa, nxf, nyf, nzf,
+               Q, ρa, ua, va, wa, pa, T_iona, ca, cpa, solver.Y, Rk, cvk,
+               n_species, m1, m2, m3, i_energy)
     return solver
 end
