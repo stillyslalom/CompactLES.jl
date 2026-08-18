@@ -312,6 +312,25 @@ Compact plans impose a scheme-dependent minimum rank-local extent. With the
 defaults, each resolved local extent needs at least nine points because the
 filter is the binding scheme. Reduce decomposition in that direction or
 increase `n_global` if setup reports a smaller local block.
+
+# Refinement keywords (reference/AMR_GPU.md)
+
+- `refine`: a `BlockRegion` in coarse node space selecting static two-level
+  refinement at ratio 3 over that region. Default `nothing`. Serial only in
+  this stage; the [`Solver`](@ref) constructor enforces the scope.
+- `level_restriction`: `:inject` (default) writes the fine coincident-node
+  values onto the covered coarse region; `:filter` applies the invertible
+  transfer pair's anti-alias filter first.
+- `subcycle`: `false` (default) advances both levels at the global dt; `true`
+  selects the Berger–Oliger step, three fine steps of `dt/3` per coarse step
+  with Hermite boundary forcing. Requires `refine`.
+- `regrid_interval`: `0` (default) keeps the region static; a positive `K`
+  retags the coarse level every `K` steps and moves the region to the
+  buffered bounding box of the tagged cells. Requires `refine` for the
+  initial region.
+- `tag_threshold` (default `0.02`) and `tag_buffer` (default `4`): the
+  tagging threshold on the relative undivided fourth difference of the
+  mixture density, and the coarse-cell buffer added around tagged cells.
 """
 Base.@kwdef struct Numerics
     n_global::NTuple{3,Int}
@@ -329,6 +348,11 @@ Base.@kwdef struct Numerics
     backend::AbstractBackend = CPUBackend()
     interface_rhs::Symbol = :extended
     refine::Union{Nothing,BlockRegion} = nothing
+    level_restriction::Symbol = :inject
+    subcycle::Bool = false
+    regrid_interval::Int = 0
+    tag_threshold::Float64 = 0.02
+    tag_buffer::Int = 4
 end
 
 """
@@ -371,7 +395,10 @@ function setup(prob::Problem, num::Numerics)
                filter_cfl=num.filter_cfl,
                dims=num.dims, n_halo=num.n_halo,
                patch_grid=num.patch_grid, backend=num.backend,
-               interface_rhs=num.interface_rhs, refine=num.refine)
+               interface_rhs=num.interface_rhs, refine=num.refine,
+               level_restriction=num.level_restriction, subcycle=num.subcycle,
+               regrid_interval=num.regrid_interval,
+               tag_threshold=num.tag_threshold, tag_buffer=num.tag_buffer)
     Q = allocate_state(solver)
     initialize!(solver, Q, prob.ic)
     return solver, Q

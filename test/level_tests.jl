@@ -35,12 +35,12 @@
     @test xcoord(ps, 1, 46) ≈ xcoord(pc, 1, 56) atol = 1e-13
 end
 
-function _level_wave_error(N; mode=:inject, tfinal=0.5)
+function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false)
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     u0 = 0.5
     solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
                     art=ArtParams(enabled=false), filter_interval=0,
-                    level_restriction=mode,
+                    level_restriction=mode, subcycle=subcycle,
                     refine=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1)))
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
@@ -169,4 +169,135 @@ end
     @info "2-D refined advection" e
     # Measured 4.3e-8.
     @test e < 1e-6
+end
+
+# --- Stage 4: subcycling, tagging, regridding --------------------------------
+
+@testset "stage 4 configuration guards" begin
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    mk(; kw...) = Solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
+                         bcs=per3l, kw...)
+    # Both features require an initial refined region.
+    @test_throws ErrorException mk(subcycle=true)
+    @test_throws ErrorException mk(regrid_interval=10)
+    @test_throws ErrorException mk(refine=BlockRegion((40, 0, 0), (16, 1, 1)),
+                                   regrid_interval=-1)
+end
+
+@testset "subcycled two levels: manufactured solution across the boundary" begin
+    errs = [_level_wave_error(N; subcycle=true) for N in (48, 96, 192)]
+    orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
+    @info "subcycled two-level entropy wave" errs orders
+    # Measured 8.4e-8 / 7.5e-9 / 5.9e-10, orders 3.49 / 3.66 — within a few
+    # percent of the global-dt coupling's figures, so the cubic Hermite
+    # boundary data does not bind. The step count drops threefold: dt is now
+    # coarse-limited (the fine rate enters the reduction divided by 3).
+    @test all(>(3.0), orders)
+    @test errs[2] < 3e-8
+end
+
+@testset "subcycled Sod through the refinement boundary" begin
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    N = 201
+    # The Stage 3 gate's configuration with subcycling on: the same region,
+    # CFL, and crossing schedule, so the guards compare directly.
+    solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                    bcs=(wall2, per, per), cfl=0.4, subcycle=true,
+                    refine=BlockRegion((120, 0, 0), (41, 1, 1)))
+    states = allocate_state(solver)
+    initialize!(solver, states, ic)
+    m0 = _two_level_mass(solver, states, N)
+    run!(solver, states; tfinal=0.1, nmax=20000)
+    ps = PatchSolver(solver, solver.patches[1])
+    pad = ps.decomp.n_halo_d[1]
+    m1 = solver.equations.i_mom[1]
+    noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
+    @info "subcycled Sod through refinement boundary" noise
+    # Measured 5.7e-11 against the global-dt gate's 6.4e-10.
+    @test noise < 1e-8
+    for (psq, Q) in CL.eachpatch(solver, states)
+        n = psq.decomp.n_local[1]
+        padq = psq.decomp.n_halo_d[1]
+        @test minimum(Q[i + padq, 1, 1, 1] for i in 1:n) > 0.05
+    end
+    run!(solver, states; tfinal=0.2, nmax=40000)
+    drift = abs(_two_level_mass(solver, states, N) - m0) / m0
+    @info "subcycled two-level Sod mass drift" drift
+    # Measured 9.8e-5 against the global-dt gate's 1.36e-4.
+    @test drift < 5e-4
+end
+
+@testset "tagging and regridding track a Sod shock" begin
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    N = 201
+    Nf = 3N - 2
+    tf = 0.15
+    # Uniform-fine reference and uniform-coarse baseline, the comparison the
+    # plan's Stage 4 gate prescribes. CFL 0.2 throughout: the initial
+    # discontinuity sits inside the refined region here, and a subcycled fine
+    # level runs three substeps on one rate measurement, which tightens the
+    # documented startup restriction (reference/AMR_GPU.md Stage 4).
+    sf = Solver(n_global=(Nf, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                bcs=(wall2, per, per), cfl=0.2)
+    Qf = allocate_state(sf)
+    initialize!(sf, Qf, ic)
+    run!(sf, Qf; tfinal=tf, nmax=40000)
+    padF = sf.decomp.n_halo_d[1]
+    rho_ref = [Qf[i + padF, 1, 1, 1] for i in 1:Nf]
+    sc = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                bcs=(wall2, per, per), cfl=0.2)
+    Qc = allocate_state(sc)
+    initialize!(sc, Qc, ic)
+    run!(sc, Qc; tfinal=tf, nmax=40000)
+    padC = sc.decomp.n_halo_d[1]
+    e_base = maximum(abs(Qc[i + padC, 1, 1, 1] - rho_ref[3i - 2]) for i in 1:N)
+    # AMR: subcycled with the region retagged every 5 coarse steps.
+    sa = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                bcs=(wall2, per, per), cfl=0.2, subcycle=true,
+                regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)))
+    states = allocate_state(sa)
+    initialize!(sa, states, ic)
+    run!(sa, states; tfinal=tf, nmax=40000)
+    lt = sa.level_transfer
+    lo = lt.region.offset[1] + 1
+    hi = lt.region.offset[1] + lt.region.extent[1]
+    # The region moved off its initial site and holds the shock (x ≈ 0.76).
+    shock_node = round(Int, (0.5 + 1.75 * sa.t) * (N - 1)) + 1
+    @info "regrid tracking" region=(lo, hi) shock_node
+    @test lt.region.offset[1] != 85
+    @test lo < shock_node < hi
+    padc = sa.patches[1].decomp.n_halo_d[1]
+    padf = sa.patches[2].decomp.n_halo_d[1]
+    e_amr = 0.0
+    for i in 1:N
+        v = lo <= i <= hi ? states[2][3 * (i - lo) + 1 + padf, 1, 1, 1] :
+                            states[1][i + padc, 1, 1, 1]
+        e_amr = max(e_amr, abs(v - rho_ref[3i - 2]))
+    end
+    @info "moving-region Sod vs uniform fine" e_amr e_base
+    # Measured: composite 3.9e-3 against the uniform-coarse baseline's
+    # 7.3e-2 — the refinement recovers most of the uniform-fine answer at a
+    # third of the fine points.
+    @test e_amr < 1.5e-2
+    @test e_base > 5e-2
+    @test e_amr < e_base / 3
+    for (psq, Q) in CL.eachpatch(sa, states)
+        n = psq.decomp.n_local
+        padq = psq.decomp.n_halo_d[1]
+        @test minimum(Q[i + padq, 1, 1, 1] for i in 1:n[1]) > 0.05
+    end
+    # The global-dt coupling regrids through the same machinery.
+    sg = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                bcs=(wall2, per, per), cfl=0.2, regrid_interval=5,
+                refine=BlockRegion((85, 0, 0), (31, 1, 1)))
+    states_g = allocate_state(sg)
+    initialize!(sg, states_g, ic)
+    run!(sg, states_g; tfinal=0.05, nmax=20000)
+    @test sg.level_transfer.region.offset[1] != 85
 end

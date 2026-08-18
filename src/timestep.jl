@@ -129,11 +129,14 @@ Multi-patch form of [`step!`](@ref): `states`, `dQs` and `dus` are vectors
 aligned with `solver.patches`. Each stage evaluates every local patch's RHS and
 update in the global patch order, then makes the interfaces consistent with
 [`sync_patches!`](@ref) — the shared-plane averaging and ghost refill after
-every stage. Collective over `solver.comm`.
+every stage. Collective over `solver.comm`. A solver built with
+`subcycle = true` delegates to [`subcycled_step!`](@ref) instead.
 """
 function step!(solver::Solver, states::Vector{<:ConservedState},
                dQs::Vector{<:ConservedState}, dus::Vector{<:ConservedState},
                dt, prepared::Bool=false)
+    getfield(solver, :subcycle) &&
+        return subcycled_step!(solver, states, dQs, dus, dt, prepared)
     patches = getfield(solver, :patches)
     for stage in 1:5
         solver.tstage = solver.t + RKC[stage] * dt
@@ -159,6 +162,87 @@ end
 
 step!(solver::Solver, Q, workspace::Workspace, dt, prepared::Bool=false) =
     step!(solver, Q, workspace.dQ, workspace.du, dt, prepared)
+
+"""
+    subcycled_step!(solver, states, dQs, dus, dt, prepared=false)
+
+Berger–Oliger subcycled step (Stage 4 of `reference/AMR_GPU.md`): advance the
+coarse level by one step of `dt` with the fine level frozen, then the fine
+level by three steps of `dt/3`, its shell imposed at every fine stage time
+from the cubic Hermite reconstruction of the coarse trajectory
+([`hermite_level_shell!`](@ref)). The `t^{n+1}` Hermite endpoint costs one
+extra coarse RHS evaluation per step, taken before the fine subcycles so it
+samples the coarse trajectory, not the restricted composite.
+
+The fine level filters its own state at its own step cadence — fine substep
+`3·step + m` filters when `filter_interval` divides it — so each level
+filters once per step of its own, exactly as an unrefined run does. Under a
+positive `filter_cfl` the fine pass's relaxation weight reads the coarse
+`dt · rate` product, an upper bound on the fine level's own CFL, so the fine
+filter is never weaker than the convention intends. `run!`'s own per-step
+filter pass covers the coarse level only in this mode, and the post-step
+restriction then rebuilds the covered coarse region from the filtered fine
+state.
+
+Selected by `step!` when the solver was built with `subcycle = true`; serial,
+like the level coupling itself.
+"""
+function subcycled_step!(solver::Solver, states::Vector{<:ConservedState},
+                         dQs::Vector{<:ConservedState},
+                         dus::Vector{<:ConservedState}, dt,
+                         prepared::Bool=false)
+    lt = solver.level_transfer
+    patches = getfield(solver, :patches)
+    n_cons = solver.equations.n_cons
+    coarse = patches[1]
+    fine = patches[lt.fine_index]
+    psc = PatchSolver(solver, coarse)
+    psf = PatchSolver(solver, fine)
+    Qc, dQc, duc = states[1], dQs[1], dus[1]
+    Qf, dQf, duf = states[lt.fine_index], dQs[lt.fine_index], dus[lt.fine_index]
+    t0 = solver.t
+    # --- Coarse step over [t, t + dt]; the covered region is advanced too and
+    # overwritten by the restriction afterwards, as in the global-dt mode.
+    for stage in 1:5
+        solver.tstage = t0 + RKC[stage] * dt
+        first_prepared = prepared && stage == 1
+        first_prepared || apply_bcs!(psc, Qc)
+        compute_rhs!(psc, Qc, dQc, first_prepared)
+        # RKC[1] = 0, so stage 1's dQ is the RHS at t^n on the unmodified Q.
+        stage == 1 && save_level_box!(lt, coarse.decomp, Qc, dQc, false)
+        _rk_update!(coarse.decomp, n_cons, Qc, dQc, duc,
+                    RKA[stage], RKB[stage], dt)
+    end
+    solver.tstage = t0 + dt
+    apply_bcs!(psc, Qc)
+    compute_rhs!(psc, Qc, dQc, false)
+    save_level_box!(lt, coarse.decomp, Qc, dQc, true)
+    # --- Three fine steps of dt/3, boundary-forced from the Hermite box.
+    dtf = dt / 3
+    for m in 1:3
+        tm = t0 + (m - 1) * dtf
+        for stage in 1:5
+            solver.tstage = tm + RKC[stage] * dtf
+            hermite_level_shell!(solver, states, ((m - 1) + RKC[stage]) / 3, dt)
+            apply_bcs!(psf, Qf)
+            compute_rhs!(psf, Qf, dQf, false)
+            _rk_update!(fine.decomp, n_cons, Qf, dQf, duf,
+                        RKA[stage], RKB[stage], dtf)
+        end
+        solver.tstage = tm + dtf
+        hermite_level_shell!(solver, states, m / 3, dt)
+        apply_bcs!(psf, Qf)
+        if solver.filter_interval > 0 &&
+           (3 * solver.step + m) % solver.filter_interval == 0
+            filter_state!(psf, Qf)
+            # The filter is not shell-preserving; re-impose the forcing so the
+            # next substep (or the restriction) reads a consistent boundary.
+            hermite_level_shell!(solver, states, m / 3, dt)
+        end
+    end
+    solver.tstage = t0 + dt
+    return states
+end
 
 """
     compute_dt(solver, Q)
@@ -216,10 +300,14 @@ collective discipline requires.
 function max_rate(solver::Solver, states::Vector{<:ConservedState})
     rate = 0.0
     ρ_min = Inf
+    subcycle = getfield(solver, :subcycle)
     for (ps, Q) in eachpatch(solver, states)
         exchange_state!(Q, ps.decomp)
         primitives!(ps, Q)
         r, m = _local_max_rate(ps, Q)
+        # A subcycled level ℓ advances at dt / 3^ℓ, so its rate constrains the
+        # coarse step three times more weakly per level.
+        subcycle && (r /= 3.0^ps.patch.level)
         rate = max(rate, r)
         ρ_min = min(ρ_min, m)
     end
@@ -610,9 +698,38 @@ end
 apply_bcs!(solver::Solver, states::Vector{<:ConservedState}) =
     (foreach(((ps, Q),) -> apply_bcs!(ps, Q), eachpatch(solver, states)); states)
 
-filter_state!(solver::Solver, states::Vector{<:ConservedState}) =
-    (foreach(((ps, Q),) -> filter_state!(ps, Q), eachpatch(solver, states));
-     sync_patches!(solver, states))
+# Under subcycling the fine level filters itself inside `subcycled_step!` at
+# its own step cadence, so the per-coarse-step pass here covers level 0 only.
+function filter_state!(solver::Solver, states::Vector{<:ConservedState})
+    subcycle = getfield(solver, :subcycle)
+    for (ps, Q) in eachpatch(solver, states)
+        subcycle && ps.patch.level > 0 && continue
+        filter_state!(ps, Q)
+    end
+    return sync_patches!(solver, states)
+end
+
+# Zero the artificial coefficient arrays on every patch. Rollback support:
+# the coefficients are regenerated by each RHS evaluation, so zero is the
+# state a freshly built solver starts from, and the diffusive term of the
+# retry's first rate measurement simply lags one step as it does on the first
+# step of any run.
+function _reset_artificial!(solver::Solver)
+    for p in getfield(solver, :patches)
+        fill!(p.mu_art, 0)
+        fill!(p.beta_art, 0)
+        fill!(p.kappa_art, 0)
+        for D in p.D_art
+            fill!(D, 0)
+        end
+    end
+    return solver
+end
+
+_zero_state!(Q) = fill!(Q, 0)
+_zero_state!(states::Vector{<:ConservedState}) =
+    (foreach(Q -> fill!(Q, 0), states); states)
+_reset_workspace!(w::Workspace) = (_zero_state!(w.dQ); _zero_state!(w.du); w)
 
 # Savepoint copies for either state representation.
 _snapshot(Q) = copy(Q)
@@ -717,6 +834,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # progress callback that reduces a diagnostic would otherwise be timing
         # itself, and reporting that as solver cost.
         wall_0 = time_ns()
+        _maybe_regrid!(solver, Q, workspace, save)
         _presync!(solver, Q)
         # Boundary conditions before the rate measurement, for two reasons. The
         # step should be sized from the state it is about to advance, and the
@@ -747,6 +865,21 @@ function run!(solver::Solver, Q, workspace::Workspace;
             solver.dt_prev = zero(solver.dt_prev)
             solver.rate_prev = zero(solver.rate_prev)
             dt_seen = 0.0
+            # A trajectory that failed NON-FINITE also leaves NaN in two
+            # places a restore does not touch, either of which re-fails every
+            # retry at the savepoint: the artificial coefficient arrays, which
+            # max_rate reads before the retry's first RHS recomputes them, and
+            # the low-storage accumulator, whose usual amnesia via RKA[1] = 0
+            # cannot forget NaN (0.0 · NaN is NaN). Both were observed on a
+            # subcycled Sod whose plain restart at the same lowered CFL
+            # succeeded. The reset is deliberately gated on :nonfinite: after
+            # a finite failure the stale coefficients are large where the
+            # trouble is, and the small first dt they induce is a measured
+            # part of the recovery the retry test pins.
+            if failure.reason === :nonfinite
+                _reset_artificial!(solver)
+                _reset_workspace!(workspace)
+            end
             # Instants between the savepoint and the failure were visited on a
             # trajectory that no longer exists. Re-arm them so the replacement
             # trajectory visits them too; see `rewind!` for what is and is not

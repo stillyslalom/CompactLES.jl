@@ -4,10 +4,13 @@
 # One user-specified region of the root grid is covered by a single level-1
 # patch at refinement ratio 3, node-centered: a region of m coarse nodes per
 # refined dimension carries 3m − 2 fine nodes, coarse node a + k − 1 coinciding
-# with fine node 3k − 2. Both levels advance every RK stage with the same dt
-# (the global minimum, which the shared `max_rate` reduction already supplies
-# once the fine patch joins `solver.patches`), so no temporal interpolation
-# arises anywhere.
+# with fine node 3k − 2. By default both levels advance every RK stage with
+# the same dt (the global minimum, which the shared `max_rate` reduction
+# already supplies once the fine patch joins `solver.patches`), so no temporal
+# interpolation arises anywhere. Under `subcycle = true` (Stage 4) the fine
+# level instead takes three steps of dt/3 per coarse step, and the temporal
+# interpolation this needs is the Hermite box at the end of this file; the
+# region can also move under `regrid_interval` (src/regrid.jl).
 #
 # The two levels are coupled on two schedules, both by default through the
 # POINT-SAMPLE halves of the Stage 1 transfer machinery:
@@ -89,6 +92,15 @@ struct LevelTransfer{T}
     rdecomps::Vector{Decomp{T}}      # restriction chain, stage 0 (region) .. K
     rplans::Vector{TransferPlan{T}}
     rstage::Vector{Array{T,3}}       # scratch for stages 0 .. K-1
+    # Subcycling storage (Stage 4): the coarse solution on the buffered box at
+    # the two ends of the current coarse step, values and RHS rates, per
+    # conserved component — the data of the cubic Hermite interpolant that
+    # supplies the fine shell at fine stage times. Shaped like pstage[1] with a
+    # trailing component index; empty when the solver does not subcycle.
+    box_Q0::Array{T,4}               # coarse box state at t^n
+    box_dQ0::Array{T,4}              # coarse box RHS at t^n
+    box_Q1::Array{T,4}               # coarse box state at t^n + dt
+    box_dQ1::Array{T,4}              # coarse box RHS at t^n + dt
 end
 
 # Decomp chain refining `dims_to_refine` one at a time, starting from the
@@ -114,7 +126,8 @@ end
 
 function build_level_transfer(::Type{T}, region::BlockRegion,
                               active::NTuple{3,Bool}, n_halo::Int,
-                              fine_index::Int, restriction::Symbol) where {T}
+                              fine_index::Int, restriction::Symbol,
+                              n_cons::Int=0, subcycle::Bool=false) where {T}
     dims_to_refine = [d for d in 1:3 if active[d]]
     boxext = ntuple(d -> active[d] ? region.extent[d] + 2 * LEVEL_BUFFER :
                                      region.extent[d], 3)
@@ -125,9 +138,12 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
     # smallest legal regions.
     rdecomps, rplans, rstage = _refine_chain(T, region.extent, active,
                                              dims_to_refine, n_halo, 2)
+    boxsize = subcycle ? (size(pstage[1])..., n_cons) : (0, 0, 0, 0)
     return LevelTransfer{T}(region, fine_index, restriction, dims_to_refine,
                             pdecomps, pplans, pstage,
-                            rdecomps, rplans, rstage)
+                            rdecomps, rplans, rstage,
+                            zeros(T, boxsize), zeros(T, boxsize),
+                            zeros(T, boxsize), zeros(T, boxsize))
 end
 
 "Fine extent of a refined region: 3m − 2 nodes per active dimension."
@@ -154,11 +170,13 @@ function _copy_coarse_box!(dst, coarse_Q, c::Int, lt::LevelTransfer,
 end
 
 function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
-                            df::Decomp, boxf::Decomp)
+                            df::Decomp, boxf::Decomp, shell_only::Bool=true)
     # Fine patch node i ↔ fine box node i + 3·LEVEL_BUFFER (active dims). The
     # shell is every padded slot outside the strict interior [2, n−1] of each
     # active dimension: the ghost ring plus the boundary planes, both imposed
-    # from the prolonged coarse state.
+    # from the prolonged coarse state. `shell_only = false` writes every slot
+    # instead — the whole-patch initialization a regrid performs on a freshly
+    # created fine region.
     padf = df.n_halo_d
     padb = boxf.n_halo_d
     nf = df.n_local
@@ -168,7 +186,7 @@ function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
         interior = (!df.active[1] || 2 <= i <= nf[1] - 1) &&
                    (!df.active[2] || 2 <= j <= nf[2] - 1) &&
                    (!df.active[3] || 2 <= k <= nf[3] - 1)
-        interior && continue
+        shell_only && interior && continue
         fine_Q[i + padf[1], j + padf[2], k + padf[3], c] =
             box_field[i + shift[1] + padb[1], j + shift[2] + padb[2],
                       k + shift[3] + padb[3]]
@@ -280,5 +298,113 @@ runs, since restriction is a per-step operation by the plan's schedule.
 function sync_levels!(solver, states)
     restrict_level!(solver, states)
     prolong_level_ghosts!(solver, states)
+    return states
+end
+
+# --- Subcycling support (Stage 4): the Hermite box -------------------------
+#
+# Under subcycling (three fine steps of dt/3 per coarse step, Berger–Oliger
+# order: coarse first, fine after), the fine shell needs coarse values at fine
+# stage times BETWEEN t^n and t^{n+1}. The coarse solution over the step is
+# reconstructed on the buffered box by cubic Hermite interpolation from its
+# endpoint values and endpoint RHS rates, O(dt⁴), matching the integrator's
+# order; LSRK54 has no free dense output and this is the standard substitute.
+# The t^n data falls out of the coarse step's first stage; the t^{n+1} data
+# costs one extra coarse RHS evaluation per step, taken before the fine
+# subcycles so it samples the coarse trajectory rather than the restricted
+# composite (the restriction write-back would perturb the box values read
+# here).
+
+"""
+    save_level_box!(lt, decomp, Q, dQ, at_end)
+
+Copy the coarse state `Q` and its RHS `dQ` over the buffered prolongation box
+into the [`LevelTransfer`](@ref)'s Hermite storage — the `t^n` slots when
+`at_end` is false, the `t^n + dt` slots when true. `decomp` is the coarse
+patch's decomposition. Serial, per the level-transfer scope.
+"""
+function save_level_box!(lt::LevelTransfer, decomp::Decomp, Q, dQ, at_end::Bool)
+    boxQ = at_end ? lt.box_Q1 : lt.box_Q0
+    boxdQ = at_end ? lt.box_dQ1 : lt.box_dQ0
+    box = lt.pdecomps[1]
+    for c in 1:size(boxQ, 4)
+        _copy_coarse_box!(view(boxQ, :, :, :, c), Q, c, lt, decomp, box)
+        _copy_coarse_box!(view(boxdQ, :, :, :, c), dQ, c, lt, decomp, box)
+    end
+    return lt
+end
+
+# Cubic Hermite blend of the stored box data at fraction θ ∈ [0, 1] of the
+# coarse step, written into `dst` (the chain's stage-0 scratch) for component
+# `c`. `dt` is the coarse step, which scales the stored rates.
+function _hermite_box!(dst, lt::LevelTransfer, c::Int, θ, dt)
+    h00 = (1 + 2θ) * (1 - θ)^2
+    h10 = θ * (1 - θ)^2
+    h01 = θ^2 * (3 - 2θ)
+    h11 = θ^2 * (θ - 1)
+    box = lt.pdecomps[1]
+    pad = box.n_halo_d
+    nb = box.n_local
+    Q0, dQ0 = lt.box_Q0, lt.box_dQ0
+    Q1, dQ1 = lt.box_Q1, lt.box_dQ1
+    @inbounds for k in 1:nb[3], j in 1:nb[2], i in 1:nb[1]
+        I = CartesianIndex(i + pad[1], j + pad[2], k + pad[3])
+        dst[I] = h00 * Q0[I, c] + h01 * Q1[I, c] +
+                 dt * (h10 * dQ0[I, c] + h11 * dQ1[I, c])
+    end
+    return dst
+end
+
+"""
+    RegridSpec
+
+Configuration and rebuild inputs for tagging-driven regridding (Stage 4,
+`src/regrid.jl`): the regrid cadence in coarse steps, the tagging threshold on
+the relative undivided fourth difference of the mixture density, the buffer of
+coarse cells added around tagged cells, the nesting margin, and everything a
+fine-patch rebuild needs that the `Solver` does not itself retain — the
+schemes, halo width, interface treatment, and backend. `last_step` records the
+step of the most recent regrid check so a run resumed on the same solver keeps
+the cadence. Constructed by the [`Solver`](@ref) constructor's
+`regrid_interval` keyword; consumed by `regrid!`.
+"""
+mutable struct RegridSpec{T}
+    interval::Int
+    threshold::T
+    buffer::Int
+    margin::Int
+    n_halo::Int
+    interface_rhs::Symbol
+    deriv::CompactScheme{T}
+    filt::CompactScheme{T}
+    smoo::CompactScheme{T}
+    backend::AbstractBackend
+    last_step::Int
+end
+
+"""
+    hermite_level_shell!(solver, states, θ, dt)
+
+Impose the fine patch's shell (ghost ring plus boundary planes) from the cubic
+Hermite reconstruction of the coarse solution at fraction `θ` of the coarse
+step of size `dt`, through the same order-6 interpolation chain
+[`prolong_level_ghosts!`](@ref) uses. Requires both endpoint slots filled by
+[`save_level_box!`](@ref); at `θ = 0` the result is exactly the `t^n` coarse
+state and the imposition reduces to the unsubcycled one.
+"""
+function hermite_level_shell!(solver, states, θ, dt)
+    lt = solver.level_transfer
+    patches = getfield(solver, :patches)
+    fine = patches[lt.fine_index]
+    Qf = states[lt.fine_index]
+    K = length(lt.pplans)
+    for c in 1:solver.equations.n_cons
+        _hermite_box!(lt.pstage[1], lt, c, θ, dt)
+        for k in 1:K
+            interpolate!(lt.pstage[k+1], lt.pplans[k], lt.pstage[k])
+        end
+        _write_fine_shell!(Qf, c, lt.pstage[K+1], lt, fine.decomp,
+                           lt.pdecomps[K+1])
+    end
     return states
 end

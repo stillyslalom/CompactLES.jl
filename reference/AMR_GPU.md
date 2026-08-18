@@ -560,6 +560,73 @@ the interface; conservation drift versus a uniform-fine reference.
 
 ## Stage 4 — subcycling, tagging, and regridding
 
+**Status: delivered** (August 2026), first cut, on the Stage 3 single-region
+base and inheriting its scope (serial, Cartesian, unstretched, tridiagonal
+schemes, `:delta4`, one refined region). `subcycle = true` selects the
+Berger–Oliger step in `timestep.jl`; `regrid_interval = K` retags every K
+coarse steps through `src/regrid.jl`.
+
+- **Subcycling** is as prescribed: coarse step first with the fine level
+  frozen, then three fine steps of dt/3 whose shell is imposed at every fine
+  stage time from a cubic Hermite reconstruction of the coarse trajectory on
+  the buffered box. One deviation from the plan text: the `t^{n+1}` endpoint
+  RHS is *not* already computed — the next step's stage-1 RHS arrives too
+  late and restriction invalidates a cached one — so it costs one extra
+  coarse RHS evaluation per step, a fifth of a coarse step on the coarse
+  level only. The global dt reduction divides each patch's rate by
+  3^level, so dt is coarse-limited. Each level filters its own state at its
+  own step cadence (the fine level inside the subcycle loop); under
+  `filter_cfl > 0` the fine pass reads the coarse `dt · rate` product, an
+  upper bound on its own CFL.
+- **Measured (test/level_tests.jl):** the entropy-wave MMS across the
+  boundary is unchanged from the global-dt coupling — 8.4e-8 / 7.5e-9 /
+  5.9e-10 at N = 48/96/192, orders 3.49/3.66, so the Hermite boundary data
+  does not bind — at a third of the steps. The Stage 3 Sod gate rerun
+  subcycled *improves*: ahead-of-shock noise 5.7e-11 against 6.4e-10, mass
+  drift 9.8e-5 against 1.36e-4.
+- **Tagging** is the relative undivided fourth difference of the mixture
+  density, Σ_d |δ⁴_d ρ|/ρ > `tag_threshold` (default 0.02), read from Q
+  directly so it needs no primitives pass; buffered by `tag_buffer` (default
+  4, the Stage 1 pollution-decay figure) and clamped to the nesting margin.
+  Clustering is the bounding box of the tagged set — a single moving region,
+  matching the one-fine-patch base; the plan's fixed-size tiles wait on a
+  multi-patch fine level. An empty tag set keeps the current region.
+- **Regridding** rebuilds the fine patch and `LevelTransfer` from schemes
+  retained on a `RegridSpec`, initializes the new fine state by the order-6
+  point-sample interpolation (the Stage 3 finding applies to fresh regions
+  too: the coarse data are point samples, so the deconvolving pair stays on
+  the shelf), and copies surviving fine data across the region overlap on
+  the coincident lattice, one node off both boundary planes. The retry
+  savepoint is refreshed at a regrid, since a snapshot with the old extents
+  cannot be restored onto the new layout.
+- **Measured, moving-region gates:** Sod at N = 201 coarse (601-node
+  uniform-fine reference, t = 0.15, regrid every 5): the region tracks the
+  shock and the composite density error against uniform-fine is 2.8e-3
+  where the uniform-coarse baseline is 7.3e-2 — 26× — with fine resolution
+  over a third of the domain. Shu–Osher at N = 267 coarse (799-node
+  reference, t = 1.8):
+  the region grows to hold shock plus wave train, and over the train the
+  composite is 10× better in L∞ (2.8e-2 vs 2.8e-1) and 6.7× in L1 at 2497
+  coarse steps against the reference's 4662.
+- **Startup finding.** Subcycling widens `compute_dt`'s one-step lag to
+  three fine substeps on one rate measurement, so a discontinuity *inside*
+  the refined region at t = 0 fails at cfl = 0.4 where the global-dt mode
+  survived — the global-dt mode was implicitly running the whole composite
+  at the fine level's dt. cfl ≤ 0.2 or `StepControl(retries)` clears it,
+  the same startup restriction `reference/CALIBRATION.md` documents.
+  Chasing it exposed two latent rollback defects, both now fixed: a
+  non-finite trajectory left NaN in the artificial coefficient arrays
+  (which `max_rate` reads before the retry's first RHS) and in the
+  low-storage `du` accumulator (`RKA[1] = 0` cannot forget NaN, since
+  `0.0 · NaN = NaN`), so every retry re-failed at the savepoint.
+- **Still open from this stage's gate list:** the wall-time and memory
+  demonstration on a 3-D mixing case (1-D wave-train accuracy is measured
+  above; the cost case needs the distributed level transfer first), tile
+  clustering, and the TGV filter-cadence measurement of risk 4 under the
+  per-level cadence chosen here.
+
+The plan text for the stage, for reference:
+
 - **Subcycling.** Ratio 3 in space gives ratio 3 in time: one coarse step,
   then three fine steps (Berger–Oliger order: coarse first, fine after, then
   restrict). Fine ghost data at fine stage times needs coarse values *between*
@@ -728,9 +795,11 @@ expensive order.
    fine step filters 3× as often per unit time as its parent, and the
    filter's dissipation is per-application. This is the same dt-consistency
    defect already on the roadmap for the single-grid code, sharpened by
-   subcycling. If the roadmap item lands first (filter strength tied to dt),
-   the AMR consequence resolves itself; otherwise Stage 4 must pick a
-   convention and measure its effect on TGV.
+   subcycling. Stage 4 picked the convention — each level filters at its own
+   step cadence, which is what an unrefined run of either level would do,
+   and is dt-consistent whenever `filter_cfl > 0` — and measured it on the
+   Sod gates only; the TGV measurement remains open, tied to the roadmap's
+   filter-calibration item.
 5. **Load balance.** Volume-proportional rank assignment ignores that fine
    patches cost 3× the steps under subcycling. Weight patch cost by
    level (volume × 3^level) when partitioning; revisit only with

@@ -50,6 +50,8 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P}
     ghost_recvs::Vector{GhostRecord{T}}     # with one patch
     plane_pairs::Vector{PlaneRecord{T}}
     level_transfer::Union{Nothing,LevelTransfer{T}}   # two-level coupling; see levels.jl
+    subcycle::Bool                          # Berger–Oliger subcycling; timestep.jl
+    regrid::Union{Nothing,RegridSpec{T}}    # tagging + regridding; regrid.jl
     t::T
     tstage::T
     step::Int
@@ -173,7 +175,11 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 backend::AbstractBackend=CPUBackend(),
                 interface_rhs::Symbol=:extended,
                 refine::Union{Nothing,BlockRegion}=nothing,
-                level_restriction::Symbol=:inject) where {T}
+                level_restriction::Symbol=:inject,
+                subcycle::Bool=false,
+                regrid_interval::Int=0,
+                tag_threshold::Real=0.02,
+                tag_buffer::Int=4) where {T}
     for d in 1:3
         isperiodic(bcs[d][1]) == isperiodic(bcs[d][2]) ||
             error("dimension $d mixes periodic and non-periodic conditions")
@@ -281,6 +287,16 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         end
     end
     # --- Static refinement (Stage 3, levels.jl) --------------------------
+    if refine === nothing
+        subcycle &&
+            error("subcycle requires a refined region (the refine keyword)")
+        regrid_interval == 0 ||
+            error("regrid_interval requires a refined region (the refine " *
+                  "keyword supplies the initial one)")
+    end
+    regrid_interval >= 0 || error("regrid_interval must be non-negative")
+    tag_buffer >= 0 || error("tag_buffer must be non-negative")
+    tag_threshold > 0 || error("tag_threshold must be positive")
     if refine !== nothing
         MPI.Initialized() || MPI.Init(threadlevel=:funneled)
         MPI.Comm_size(MPI.COMM_WORLD) == 1 ||
@@ -477,12 +493,46 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                       T(cfl), filter_interval, T(filter_cfl), control,
                       n_global, patches, regions, decomp.comm,
                       GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
-                      nothing,
+                      nothing, false, nothing,
                       zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
         init_geometry!(solver)
         return solver
     end
     # --- Level-1 patch and the two-level coupling (levels.jl) ------------
+    fine = _build_fine_patch(T, refine, active_g, h, n_halo, deriv, filt, smoo,
+                             art.smoother, interface_rhs, backend, n_species,
+                             n_cons)
+    level_transfer = build_level_transfer(T, refine, active_g, n_halo, 2,
+                                          level_restriction, n_cons, subcycle)
+    regrid = regrid_interval == 0 ? nothing :
+             RegridSpec{T}(regrid_interval, T(tag_threshold), tag_buffer,
+                           max(n_halo, LEVEL_BUFFER), n_halo, interface_rhs,
+                           deriv, filt, smoo, backend, 0)
+    patches = [patch, fine]
+    solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
+                    typeof(stretch),typeof(sources),eltype(patches)}(
+                  equations, eos, transport, art, metric, stretch, sources,
+                  Lt, orig, coord_shift, h,
+                  T(cfl), filter_interval, T(filter_cfl), control,
+                  n_global, patches, regions, decomp.comm,
+                  GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
+                  level_transfer, subcycle, regrid,
+                  zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
+    for p in getfield(solver, :patches)
+        init_geometry!(PatchSolver(solver, p))
+    end
+    return solver
+end
+
+# Level-1 patch construction over the refined region `refine` (root node
+# space), shared between the `Solver` constructor and `regrid!`, which is why
+# it takes the schemes rather than reading plans off an existing patch: a
+# regrid changes the extents and every plan must be rebuilt.
+function _build_fine_patch(::Type{T}, refine::BlockRegion,
+                           active_g::NTuple{3,Bool}, h::NTuple{3,T},
+                           n_halo::Int, deriv, filt, smoo, smoother::Symbol,
+                           interface_rhs::Symbol, backend::AbstractBackend,
+                           n_species::Int, n_cons::Int) where {T}
     hf = ntuple(d -> active_g[d] ? h[d] / 3 : h[d], 3)
     region_f = BlockRegion(ntuple(d -> active_g[d] ? 3 * refine.offset[d] : 0, 3),
                            fine_extent(refine, active_g))
@@ -500,11 +550,11 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         (ext_f ? mkf(deriv, d) : dplans_f[d]), 3)
     fplans_f = ntuple(d -> decomp_f.active[d] ?
         mkf(filt, d; lo_closures=icf, hi_closures=icf) : nothing, 3)
-    splans_f = art.smoother === :compact ? fplans_f :
+    splans_f = smoother === :compact ? fplans_f :
                ntuple(d -> decomp_f.active[d] ? mkf(smoo, d) : nothing, 3)
     g() = field(backend, decomp_f)
     empty3 = zeros(T, 0, 0, 0)
-    fine = Patch(2, 1, region_f, MPI.COMM_WORLD, decomp_f, hf,
+    return Patch(2, 1, region_f, MPI.COMM_WORLD, decomp_f, hf,
                  ntuple(d -> (0, 0), 3), bcs_f, (nothing, nothing, nothing),
                  dplans_f, vplans_f, fplans_f, splans_f, nothing,
                  empty3, empty3,
@@ -519,22 +569,6 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                  empty3,
                  g(), (g(), g(), g()), (g(), g(), g()), g(), g(),
                  [g() for _ in 1:3, _ in 1:n_cons])
-    level_transfer = build_level_transfer(T, refine, active_g, n_halo, 2,
-                                          level_restriction)
-    patches = [patch, fine]
-    solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
-                    typeof(stretch),typeof(sources),eltype(patches)}(
-                  equations, eos, transport, art, metric, stretch, sources,
-                  Lt, orig, coord_shift, h,
-                  T(cfl), filter_interval, T(filter_cfl), control,
-                  n_global, patches, regions, decomp.comm,
-                  GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
-                  level_transfer,
-                  zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
-    for p in getfield(solver, :patches)
-        init_geometry!(PatchSolver(solver, p))
-    end
-    return solver
 end
 
 # Multi-patch construction: the rank set is partitioned over the patch slabs,
@@ -618,7 +652,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                   Lt, orig, coord_shift, h,
                   T(cfl), filter_interval, T(filter_cfl), control,
                   n_global, patches, regions, world,
-                  ghost_sends, ghost_recvs, plane_pairs, nothing,
+                  ghost_sends, ghost_recvs, plane_pairs, nothing, false, nothing,
                   zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))

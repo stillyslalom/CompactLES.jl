@@ -741,3 +741,38 @@ region under diagonal advection at 4.3e-8. Scope: serial, Cartesian,
 unstretched, tridiagonal schemes, `:delta4`, one region. The unrefined
 solver is untouched: convergence and validation guards reproduce to every
 printed digit and the MPI suite is unchanged.
+
+## AMR/GPU Stage 4 — subcycling, tagging, and regridding (August 2026)
+
+Stage 4 of `reference/AMR_GPU.md` is delivered in its first cut on the
+Stage 3 single-region base. `subcycle = true` selects the Berger–Oliger
+step: the coarse level advances first with the fine level frozen, then the
+fine level takes three steps of dt/3, its shell imposed at every fine stage
+time from a cubic Hermite reconstruction of the coarse trajectory on the
+buffered box (one extra coarse RHS evaluation per step supplies the second
+endpoint). The global dt reduction weights each patch's rate by 3^-level,
+so the step is coarse-limited, and each level filters its own state at its
+own step cadence. `regrid_interval = K` adds tagging and regridding: every
+K coarse steps the region moves to the buffered bounding box of the cells
+where the relative undivided fourth difference of the mixture density
+exceeds `tag_threshold`, the new fine patch is initialized by the order-6
+point-sample interpolation, and surviving fine data is copied across the
+overlap on the coincident lattice.
+
+Measured gates (`test/level_tests.jl`, values in the Stage 4 status block):
+the subcycled entropy-wave MMS reproduces the global-dt orders (3.49/3.66)
+at a third of the steps, so the Hermite boundary data does not bind; the
+Stage 3 Sod gate rerun subcycled improves both guards (noise 5.7e-11
+against 6.4e-10, drift 9.8e-5 against 1.36e-4); a moving region tracks the
+Sod shock with composite error 2.8e-3 against the uniform-fine reference
+where the uniform-coarse baseline sits at 7.3e-2; and on Shu–Osher the
+region grows to hold the wave train, 10× better in L-infinity over the
+train than uniform-coarse at half the reference's steps. One robustness
+finding: subcycling widens the `compute_dt` lag to three substeps, so a
+discontinuity inside the region at t = 0 needs cfl ≤ 0.2 or
+`StepControl(retries)` — and making retries work exposed two latent
+rollback defects (NaN surviving in the artificial coefficient arrays and in
+the low-storage accumulator after a non-finite failure), both now fixed and
+gated on that failure kind. Still open from the stage's gate list: the
+3-D wall-time and memory demonstration, tile clustering, and the TGV
+filter-cadence measurement.
