@@ -110,7 +110,9 @@ Base.@kwdef struct ArtParams{T}
     detector::Symbol = :delta4
 end
 
-const D4 = (1.0, -4.0, 6.0, -4.0, 1.0)   # offsets −2:2
+# Integer coefficients keep the exact stencil while adopting the field's
+# arithmetic type under multiplication (rather than forcing Float64 on FP32).
+const D4 = (1, -4, 6, -4, 1)   # offsets −2:2
 
 """
     delta4_sum!(out, f, solver, wpow; accumulate=false, parity=(1, 1, 1))
@@ -167,7 +169,7 @@ end
         I = CartesianIndex(i + o1, j + o2, k + o3)
         e = CartesianIndex(ntuple(q -> q == d ? 1 : 0, 3))
         il = (d == 1 ? i : d == 2 ? j : k)
-        acc = 0.0
+        acc = zero(eltype(out))
         # The parity test sits outside the stencil loop rather than on each
         # tap: both flags are invariant over the whole sweep, and the clamped
         # branch is the one every sensor but a velocity component across a
@@ -305,7 +307,7 @@ end
 @inline function _rho_sensor_point!(dest, rho, sensor, C, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        dest[I] = C * rho[I] * max(sensor[I], 0.0)
+        dest[I] = C * rho[I] * max(sensor[I], zero(sensor[I]))
     end
     return nothing
 end
@@ -384,6 +386,8 @@ end
 # flow are the cusps of |S| — where the strain sensor is large precisely because
 # |S| passes through zero, taking any local scale a floor could use with it. See
 # `gate_beta!`.
+# Converted to the state type where used; a separately measured Float32 value
+# is still owed (G4a item 1, reference/AMR_GPU.md).
 const DUCROS_EPS = 1e-32
 
 """
@@ -403,11 +407,12 @@ sensors are built, so the switch evaluates no further derivatives. `I` is a
 @inline function compression_switch(grad_u, I)
     @inbounds begin
         div = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
-        div < 0 || return 0.0
+        div < 0 || return zero(div)
         w1 = grad_u[2, 3][I] - grad_u[3, 2][I]
         w2 = grad_u[3, 1][I] - grad_u[1, 3][I]
         w3 = grad_u[1, 2][I] - grad_u[2, 1][I]
-        return div^2 / (div^2 + w1^2 + w2^2 + w3^2 + DUCROS_EPS)
+        return div^2 / (div^2 + w1^2 + w2^2 + w3^2 +
+                        oftype(div, DUCROS_EPS))
     end
 end
 
@@ -550,7 +555,8 @@ end
                                     o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        beta_art[I] = C_beta * rho[I] * max(sensor[I], 0.0) * switch[I]
+        beta_art[I] = C_beta * rho[I] *
+                      max(sensor[I], zero(sensor[I])) * switch[I]
     end
     return nothing
 end
@@ -678,9 +684,9 @@ end
 @inline function _strain_mag_point!(strain_mag, grad_u, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        ss = 0.0
+        ss = zero(grad_u[1, 1][I])
         for b in 1:3, a in 1:3
-            Sab = 0.5 * (grad_u[a, b][I] + grad_u[b, a][I])
+            Sab = (grad_u[a, b][I] + grad_u[b, a][I]) / oftype(ss, 2)
             ss += Sab * Sab
         end
         strain_mag[I] = sqrt(ss)
@@ -692,7 +698,7 @@ end
                                  o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        ρsensor = rho[I] * max(sensor[I], 0.0)
+        ρsensor = rho[I] * max(sensor[I], zero(sensor[I]))
         mu_art[I]   = C_mu   * ρsensor
         beta_art[I] = C_beta * ρsensor
     end
@@ -702,8 +708,9 @@ end
 @inline function _internal_energy_point!(tmp_a, Q, rho, m1, m2, m3, i_energy,
                                          i, j, k)
     @inbounds begin
-        ρ = max(rho[i, j, k], 1e-300)
-        ke = 0.5 * (Q[i,j,k,m1]^2 + Q[i,j,k,m2]^2 + Q[i,j,k,m3]^2) / ρ
+        ρ = positive_floor(rho[i, j, k])
+        ke = (Q[i,j,k,m1]^2 + Q[i,j,k,m2]^2 + Q[i,j,k,m3]^2) /
+             (oftype(ρ, 2) * ρ)
         tmp_a[i, j, k] = (Q[i, j, k, i_energy] - ke) / ρ
     end
     return nothing
@@ -714,7 +721,7 @@ end
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         scale = art_conductivity_scale(eos, rho[I], c[I], T_ion[I], cp_mix[I])
-        kappa_art[I] = C_kappa * scale * max(sensor[I], 0.0)
+        kappa_art[I] = C_kappa * scale * max(sensor[I], zero(sensor[I]))
     end
     return nothing
 end
@@ -723,7 +730,7 @@ end
                                              o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        D_sp[I] = C_D * c[I] * max(sensor_sp[I], 0.0)
+        D_sp[I] = C_D * c[I] * max(sensor_sp[I], zero(sensor_sp[I]))
     end
     return nothing
 end

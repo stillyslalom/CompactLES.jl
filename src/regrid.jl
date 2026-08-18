@@ -48,7 +48,7 @@ function _tag_bounds(solver::Solver, Qc)
     ext = ntuple(d -> dcp.active[d] ? (-1:n[d]+2) : (1:1), 3)
     @inbounds for k in ext[3], j in ext[2], i in ext[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
-        acc = 0.0
+        acc = zero(eltype(Qc))
         for sp in 1:n_species
             acc += Qc[I, sp]
         end
@@ -61,12 +61,12 @@ function _tag_bounds(solver::Solver, Qc)
     hi = (0, 0, 0)
     @inbounds for k in 1:n[3], j in 1:n[2], i in 1:n[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
-        s = 0.0
+        s = zero(eltype(Qc))
         for d in 1:3
             dcp.active[d] || continue
             il = (d == 1 ? i : d == 2 ? j : k)
             e = CartesianIndex(ntuple(q -> q == d ? 1 : 0, 3))
-            acc = 0.0
+            acc = zero(eltype(Qc))
             for m in -2:2
                 ilm = clamp(il + m, lomin[d], himax[d])
                 acc += D4[m + 3] * rho[I + (ilm - il) * e]

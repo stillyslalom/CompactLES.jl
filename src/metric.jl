@@ -92,9 +92,9 @@ function sine_cluster(lo::Real, hi::Real, ξc::Real, a::Real)
             ξ -> L * (1 - a * cos(2π * (ξ - ξc))))
 end
 
-scalefactors(::CartesianMetric,   x1, x2, x3) = (1.0, 1.0, 1.0)
-scalefactors(::CylindricalMetric, r,  θ,  z ) = (1.0, r, 1.0)
-scalefactors(::SphericalMetric,   r,  θ,  φ ) = (1.0, r, r * sin(θ))
+scalefactors(::CartesianMetric,   x1, x2, x3) = (one(x1), one(x2), one(x3))
+scalefactors(::CylindricalMetric, r,  θ,  z ) = (one(r), r, one(z))
+scalefactors(::SphericalMetric,   r,  θ,  φ ) = (one(r), r, r * sin(θ))
 
 """
     unit_scalefactor(metric, d) -> Bool
@@ -119,8 +119,8 @@ unit_scalefactor(::SphericalMetric,   d::Int) = d == 1          # θ, φ carry r
         (solver.region.offset[d] + solver.decomp.offset[d] +
          (if_ - solver.decomp.n_halo_d[d]) - 1) * solver.h[d]
     st = solver.stretch[d]
-    st === nothing && return ξ, 1.0
-    ξc = clamp(ξ, 0.0, 1.0)
+    st === nothing && return ξ, one(ξ)
+    ξc = clamp(ξ, zero(ξ), one(ξ))
     return st.x(ξc), st.dxdξ(ξc)
 end
 
@@ -137,7 +137,7 @@ properties, so no rank can take the other branch on its own.
 function init_geometry!(solver)
     decomp = solver.decomp
     n_halo = decomp.n_halo
-    tiny = 1e-300
+    tiny = positive_floor(eltype(solver.inv_J))
     nxf, nyf, nzf = size(solver.inv_J)
     for k in 1:nzf, j in 1:nyf, i in 1:nxf
         x1, m1 = _phys_and_jac(solver, 1, i)
@@ -264,9 +264,10 @@ add_metric_sources!(solver, dQ, Q, ::CartesianMetric) = solver
     μ = mu0 + mu_art[I]
     β = beta_art[I]
     divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
-    τ = μ * (grad_u[a, b][I] + grad_u[b, a][I]) + (a == b ? (β - 2μ/3) * divu : 0.0)
+    τ = μ * (grad_u[a, b][I] + grad_u[b, a][I]) +
+        (a == b ? (β - 2μ/3) * divu : zero(divu))
     uv = (u[I], v[I], w[I])
-    rho[I] * uv[a] * uv[b] + (a == b ? p[I] : 0.0) - τ
+    rho[I] * uv[a] * uv[b] + (a == b ? p[I] : zero(p[I])) - τ
 end
 
 @inline function _metric_src_cyl_point!(dQ, grad_u, mu0, mu_art, beta_art,

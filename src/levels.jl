@@ -338,10 +338,13 @@ end
 # coarse step, written into `dst` (the chain's stage-0 scratch) for component
 # `c`. `dt` is the coarse step, which scales the stored rates.
 function _hermite_box!(dst, lt::LevelTransfer, c::Int, θ, dt)
-    h00 = (1 + 2θ) * (1 - θ)^2
-    h10 = θ * (1 - θ)^2
-    h01 = θ^2 * (3 - 2θ)
-    h11 = θ^2 * (θ - 1)
+    θT = eltype(dst)(θ)
+    dtT = eltype(dst)(dt)
+    oneT = one(θT)
+    h00 = (oneT + eltype(dst)(2) * θT) * (oneT - θT)^2
+    h10 = θT * (oneT - θT)^2
+    h01 = θT^2 * (eltype(dst)(3) - eltype(dst)(2) * θT)
+    h11 = θT^2 * (θT - oneT)
     box = lt.pdecomps[1]
     pad = box.n_halo_d
     nb = box.n_local
@@ -350,7 +353,7 @@ function _hermite_box!(dst, lt::LevelTransfer, c::Int, θ, dt)
     @inbounds for k in 1:nb[3], j in 1:nb[2], i in 1:nb[1]
         I = CartesianIndex(i + pad[1], j + pad[2], k + pad[3])
         dst[I] = h00 * Q0[I, c] + h01 * Q1[I, c] +
-                 dt * (h10 * dQ0[I, c] + h11 * dQ1[I, c])
+                 dtT * (h10 * dQ0[I, c] + h11 * dQ1[I, c])
     end
     return dst
 end

@@ -92,7 +92,7 @@ place here, so this is not a collective call.
 function fold_fill!(f, decomp::Decomp, d::Int, lo::Bool, hi::Bool, σ::Int)
     pad = decomp.n_halo_d[d]
     n = decomp.n_local[d]
-    sgn = Float64(σ)
+    sgn = eltype(f)(σ)
     if lo && decomp.sub_rank[d] == 0
         if d == 1
             @inbounds for k in axes(f, 3), j in axes(f, 2), q in 1:pad
@@ -176,7 +176,7 @@ keeps the single combo named by `keep_e` after a pairwise full-block
 function pair_forward!(w, f, solver, fold::FoldSpec, σ::Int)
     decomp = solver.decomp
     pair = fold.pair
-    sf = Float64(σ)
+    sf = eltype(f)(σ)
     if pair.local_pair
         # Butterfly in place: the lower half of the locally-active
         # mapping dimension holds e (canonically indexed), upper half o.
@@ -193,8 +193,8 @@ function pair_forward!(w, f, solver, fold::FoldSpec, σ::Int)
                     Mx = _pair_index(I, decomp, pair)
                     a = f[I]
                     b = sf * f[Mx]
-                    w[I] = 0.5 * (a + b)      # e at the canonical slot
-                    w[Mx] = 0.5 * (a - b)     # o stored at the partner slot
+                    w[I] = (a + b) / oftype(a, 2)  # e at the canonical slot
+                    w[Mx] = (a - b) / oftype(a, 2) # o at the partner slot
                 end
             end
         end
@@ -211,9 +211,9 @@ function pair_forward!(w, f, solver, fold::FoldSpec, σ::Int)
                 I = CartesianIndex(i1, i2, i3)
                 Mx = _pair_index(I, decomp, pair)
                 if pair.keep_e
-                    w[I] = 0.5 * (f[I] + sf * pair.buf[Mx])
+                    w[I] = (f[I] + sf * pair.buf[Mx]) / oftype(sf, 2)
                 else
-                    w[I] = 0.5 * (pair.buf[Mx] - sf * f[I])
+                    w[I] = (pair.buf[Mx] - sf * f[I]) / oftype(sf, 2)
                 end
             end
         end
@@ -234,7 +234,7 @@ pairwise `MPI.Sendrecv!`, so both partners must reach this call.
 function pair_backward!(out, solver, fold::FoldSpec, σ::Int)
     decomp = solver.decomp
     pair = fold.pair
-    sf = Float64(σ)
+    sf = eltype(out)(σ)
     if pair.local_pair
         sd = pair.pdim != 0 ? pair.pdim : pair.revdim
         half = decomp.n_local[sd] ÷ 2

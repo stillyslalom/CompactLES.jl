@@ -44,15 +44,21 @@ Supersonic outflow points receive no correction. The LODI formulation covers
 Cartesian faces and radial or axial curvilinear faces, whose normal metric scale
 factor is one; [`setup`](@ref) rejects this condition on an angular face.
 """
-Base.@kwdef struct NSCBCOutflowBC <: BoundaryCondition
-    pinf::Float64            # far-field pressure target
-    sigma::Float64 = 0.25    # relaxation strength (0.2–0.6 typical)
-    Lref::Float64  = 0.0     # relaxation length; ≤ 0 → domain length in d
-    beta_t::Float64 = -1.0   # transverse-term coupling (Yoo & Im): fraction
+struct NSCBCOutflowBC{T<:AbstractFloat} <: BoundaryCondition
+    pinf::T                  # far-field pressure target
+    sigma::T                 # relaxation strength (0.2–0.6 typical)
+    Lref::T                  # relaxation length; ≤ 0 → domain length in d
+    beta_t::T                # transverse-term coupling (Yoo & Im): fraction
                              # of the transverse contribution carried by the
                              # imposed wave; 0 → plain LODI, 1 → full
                              # accounting, negative → local Mach number
                              # (the Yoo–Im recommendation)
+end
+
+function NSCBCOutflowBC(; pinf::Real, sigma::Real=0.25, Lref::Real=0.0,
+                        beta_t::Real=-1.0)
+    T = typeof(float(pinf))
+    return NSCBCOutflowBC{T}(T(pinf), T(sigma), T(Lref), T(beta_t))
 end
 
 # No hard state enforcement; the physics enters through the RHS correction.
@@ -92,14 +98,15 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
 
-    Lref = bc.Lref > 0 ? bc.Lref : Float64(solver.L_domain[d])
+    T = eltype(Q)
+    Lref = bc.Lref > 0 ? T(bc.Lref) : solver.L_domain[d]
     vel = (solver.u, solver.v, solver.w)
     m = solver.equations.i_mom
     i_energy = solver.equations.i_energy
     n_species = solver.equations.n_species
     grad_u = solver.grad_u
     Gdd = grad_u[d, d]
-    sgn = side == 2 ? -1.0 : 1.0      # sign of Δd3 (see header)
+    sgn = side == 2 ? -one(T) : one(T) # sign of Δd3 (see header)
     @inbounds for I in plane
         ρ = solver.rho[I]
         c = solver.c[I]
@@ -121,7 +128,7 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
         # i.e. a coefficient of sgn·ρc in the code's sign convention.
         # β_t blends between plain LODI (0) and full accounting (1); the
         # local Mach number is the recommended damping.
-        transverse_in = 0.0
+        transverse_in = zero(T)
         if act1
             ut = vel[t1][I]
             transverse_in += ut * solver.inv_h[t1][I] * solver.tmp_b[I] +
@@ -142,13 +149,13 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
         # (physics.jl). For an ideal mixture this is cv_m/R_m as before.
         φ = eos_phi(solver.eos, ρ, p, solver.T_ion[I], solver.cp_mix[I])
         u1, u2, u3 = solver.u[I], solver.v[I], solver.w[I]
-        ke = 0.5 * (u1*u1 + u2*u2 + u3*u3)
+        ke = (u1*u1 + u2*u2 + u3*u3) / T(2)
         for k in 1:n_species
             dQ[I, k] -= solver.Y[k][I] * Δd1
         end
         uv = (u1, u2, u3)
         for a in 1:3
-            dQ[I, m[a]] -= uv[a] * Δd1 + (a == d ? ρ * Δd3 : 0.0)
+            dQ[I, m[a]] -= uv[a] * Δd1 + (a == d ? ρ * Δd3 : zero(T))
         end
         dQ[I, i_energy] -= ke * Δd1 + φ * Δd2 + ρ * un * Δd3
     end
@@ -203,18 +210,30 @@ full-state-forced boundary. As for the outflow, the formulation covers only face
 whose normal metric scale factor is one, and [`setup`](@ref) rejects an angular
 face. `Y` is checked against the EOS species count there as well.
 """
-Base.@kwdef struct NSCBCInflowBC{F} <: BoundaryCondition
-    u::NTuple{3,Float64}            # target velocity (coordinate-aligned)
-    T_ion::Float64                  # target temperature
-    Y::Vector{Float64} = [1.0]      # target composition
-    eta_u::Float64 = 0.28
-    eta_T::Float64 = 0.28
-    eta_t::Float64 = 0.28
-    eta_Y::Float64 = 0.28
-    Lref::Float64  = 0.0            # ≤ 0 → domain length in d
-    target::F = nothing
+struct NSCBCInflowBC{T<:AbstractFloat,F} <: BoundaryCondition
+    u::NTuple{3,T}                  # target velocity (coordinate-aligned)
+    T_ion::T                        # target temperature
+    Y::Vector{T}                    # target composition
+    eta_u::T
+    eta_T::T
+    eta_t::T
+    eta_Y::T
+    Lref::T                         # ≤ 0 → domain length in d
+    target::F
     # Optional (x₁, x₂, x₃, t) -> Prim overriding the constant targets per
     # point at the RK stage time (the Prim must carry T_ion and the full Y).
+end
+
+
+function NSCBCInflowBC(; u, T_ion::Real, Y=[1.0], eta_u::Real=0.28,
+                       eta_T::Real=0.28, eta_t::Real=0.28,
+                       eta_Y::Real=0.28, Lref::Real=0.0, target=nothing)
+    T = typeof(float(T_ion))
+    uT = ntuple(i -> T(u[i]), 3)
+    YT = T.(collect(Y))
+    return NSCBCInflowBC{T,typeof(target)}(uT, T(T_ion), YT, T(eta_u),
+                                           T(eta_T), T(eta_t), T(eta_Y),
+                                           T(Lref), target)
 end
 
 enforce!(::NSCBCInflowBC, Q, solver, d, side) = nothing
@@ -230,7 +249,8 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
 
-    Lref = bc.Lref > 0 ? bc.Lref : Float64(solver.L_domain[d])
+    T = eltype(Q)
+    Lref = bc.Lref > 0 ? T(bc.Lref) : solver.L_domain[d]
     vel = (solver.u, solver.v, solver.w)
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)   # transverse dims
     m = solver.equations.i_mom
@@ -267,8 +287,8 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
         L2c = un * (c * c * drn - dpn)
         # Imposed incoming amplitudes (outgoing one kept as computed).
         rel_ac = bc.eta_u * ρ * c * c * (1 - Ma * Ma) / Lref * (un - uT[d])
-        ΔL1 = lowface ? 0.0 : (-rel_ac - L1c)
-        ΔL5 = lowface ? (rel_ac - L5c) : 0.0
+        ΔL1 = lowface ? zero(T) : (-rel_ac - L1c)
+        ΔL5 = lowface ? (rel_ac - L5c) : zero(T)
         ΔL2 = bc.eta_T * ρ * c^3 * (TT - Tp) / (Lref * Tp) - L2c
         Δd1 = ΔL2 / (c * c) + (ΔL5 + ΔL1) / (2 * c * c)
         Δd2 = (ΔL5 + ΔL1) / 2
@@ -279,9 +299,9 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
         cpm = solver.cp_mix[I]
         φ = eos_phi(solver.eos, ρ, p, Tp, cpm)
         u1, u2, u3 = solver.u[I], solver.v[I], solver.w[I]
-        ke = 0.5 * (u1*u1 + u2*u2 + u3*u3)
+        ke = (u1*u1 + u2*u2 + u3*u3) / T(2)
         uv = (u1, u2, u3)
-        ΣφY = 0.0
+        ΣφY = zero(T)
         for k in 1:n_species
             ΔLs = bc.eta_Y * K * (solver.Y[k][I] - YT[k]) -
                   un * solver.grad_Y[d, k][I]

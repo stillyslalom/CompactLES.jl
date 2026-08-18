@@ -208,6 +208,11 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     pole_h = bcs[2][2] isa PoleBC
     pole_l == pole_h || error("PoleBC must be applied at both ends of θ")
     poles = pole_l
+    # A domain endpoint supplied in the solver's storage type can only
+    # represent π to that type's precision. Configuration checks should reject
+    # a genuinely different angular range, not the Float32 representation of
+    # the requested one.
+    angle_tol = max(1e-10, 8 * Float64(eps(T)) * π)
     if axis
         metric isa CylindricalMetric || error("AxisBC requires CylindricalMetric")
         stretch[1] === nothing ||
@@ -223,13 +228,14 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         n_global[3] == 1 || iseven(n_global[3]) ||
             error("resolved-φ OriginBC requires an even φ point count over 2π")
         θsum = 2 * Float64(origin[2]) + Float64(L_domain[2])
-        n_global[2] == 1 || isapprox(θsum, π; atol=1e-10) ||
+        n_global[2] == 1 || isapprox(θsum, π; atol=angle_tol) ||
             error("OriginBC requires a θ range symmetric about π/2")
     end
     if poles
         metric isa SphericalMetric || error("PoleBC requires SphericalMetric")
         stretch[2] === nothing || error("folded dimensions cannot be stretched")
-        abs(Float64(origin[2])) < 1e-14 && isapprox(Float64(L_domain[2]), π; atol=1e-10) ||
+        abs(Float64(origin[2])) < 1e-14 &&
+            isapprox(Float64(L_domain[2]), π; atol=angle_tol) ||
             error("PoleBC requires the θ domain (0, π)")
         n_global[3] == 1 || iseven(n_global[3]) ||
             error("resolved-φ PoleBC requires an even φ point count over 2π")

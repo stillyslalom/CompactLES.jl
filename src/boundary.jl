@@ -47,9 +47,11 @@ energy they carried. The default non-finite `Twall` selects an adiabatic wall,
 which stops there; a finite value selects an isothermal wall and overwrites the
 total energy with the internal energy the EOS gives at `Twall`.
 """
-Base.@kwdef struct NoSlipWallBC <: BoundaryCondition
-    Twall::Float64 = NaN   # NaN → adiabatic; finite → isothermal wall
+struct NoSlipWallBC{T<:AbstractFloat} <: BoundaryCondition
+    Twall::T   # NaN → adiabatic; finite → isothermal wall
 end
+
+NoSlipWallBC(; Twall::Real=NaN) = NoSlipWallBC(float(Twall))
 
 """
     ExtrapolationBC()
@@ -271,7 +273,7 @@ validate_bc(bc::SwitchableBC, metric, eos, d::Int, side::Int) =
 
 "ρe at a wall held at temperature Twall — one method per EOS."
 wall_internal_energy(eos::IdealMixture, Q, I, n_species::Int, Twall) = begin
-    ρe = 0.0
+    ρe = zero(eltype(Q))
     @inbounds for k in 1:n_species
         ρe += Q[I, k] * eos.cvk[k]
     end
@@ -283,7 +285,7 @@ wall_internal_energy(eos::StiffenedGas, Q, I, ::Int, Twall) =
     @inbounds Q[I, 1] * eos.cv * Twall + eos.p_inf
 
 wall_internal_energy(eos::Nasa9Mixture, Q, I, n_species::Int, Twall) = begin
-    ρe = 0.0
+    ρe = zero(eltype(Q))
     @inbounds for k in 1:n_species
         ρe += Q[I, k] * species_energy(eos, k, Twall)
     end
@@ -291,7 +293,7 @@ wall_internal_energy(eos::Nasa9Mixture, Q, I, n_species::Int, Twall) = begin
 end
 
 function _wall_density(Q, I, n_species)
-    ρ = 0.0
+    ρ = zero(eltype(Q))
     @inbounds for k in 1:n_species
         ρ += Q[I, k]
     end
@@ -305,7 +307,7 @@ function enforce!(::SlipWallBC, Q, solver, d, side)
     @inbounds for I in plane
         ρ = _wall_density(Q, I, solver.equations.n_species)
         mn = Q[I, mc]
-        Q[I, solver.equations.i_energy] -= 0.5 * mn * mn / ρ   # remove normal kinetic energy
+        Q[I, solver.equations.i_energy] -= mn * mn / (oftype(ρ, 2) * ρ)
         Q[I, mc] = 0
     end
     nothing
@@ -318,7 +320,8 @@ function enforce!(bc::NoSlipWallBC, Q, solver, d, side)
     iso = !isnan(bc.Twall)
     @inbounds for I in plane
         ρ = _wall_density(Q, I, solver.equations.n_species)
-        ke = 0.5 * (Q[I,m1]^2 + Q[I,m2]^2 + Q[I,m3]^2) / ρ
+        ke = (Q[I,m1]^2 + Q[I,m2]^2 + Q[I,m3]^2) /
+             (oftype(ρ, 2) * ρ)
         Q[I, solver.equations.i_energy] -= ke
         Q[I, m1] = 0
         Q[I, m2] = 0

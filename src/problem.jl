@@ -251,7 +251,7 @@ mass fractions in every returned `Prim` must follow the order defined by `eos`.
 Base.@kwdef struct Problem
     name::String = "problem"
     eos::EOS = single_species()
-    transport::Transport{Float64} = Transport()
+    transport::Transport = Transport()
     metric::Metric = CartesianMetric()
     sources::Tuple = ()
     domain::NTuple{3,Tuple{Float64,Float64}}
@@ -336,7 +336,7 @@ Base.@kwdef struct Numerics
     n_global::NTuple{3,Int}
     deriv::AbstractCompactScheme = lele_d1_6()
     filt::AbstractCompactScheme = compact_filter(0.45)
-    art::ArtParams{Float64} = ArtParams()
+    art::ArtParams = ArtParams()
     cfl::Float64 = 0.5
     control::StepControl = StepControl()
     filter_interval::Int = 1

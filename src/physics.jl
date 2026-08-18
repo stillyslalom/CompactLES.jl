@@ -122,15 +122,23 @@ function IdealMixture(sp::Vector{IdealSpecies{T}}) where {T}
 end
 
 """
-    single_species(; gamma=1.4, R=1.0, name="gas") -> IdealMixture
+    single_species([T=Float64]; gamma=1.4, R=1.0, name="gas") -> IdealMixture
 
 Construct a one-species calorically perfect [`IdealMixture`](@ref). `gamma` is
 the heat-capacity ratio, `R` the specific gas constant, and `name` the label
 used for the partial-density component and output. This is the default EOS for
 [`Problem`](@ref).
 """
-single_species(; gamma::Real=1.4, R::Real=1.0, name::String="gas") =
-    IdealMixture([IdealSpecies{Float64}(name, Float64(R), Float64(gamma))])
+single_species(::Type{T}=Float64; gamma::Real=1.4, R::Real=1.0,
+               name::String="gas") where {T<:AbstractFloat} =
+    IdealMixture([IdealSpecies{T}(name, T(R), T(gamma))])
+
+# A literal 1e-300 is a useful nonzero division guard in Float64 but rounds
+# to zero in Float32. Preserve the established Float64 value and choose the
+# smallest normal value for narrower floating-point types.
+@inline positive_floor(::Type{T}) where {T<:AbstractFloat} =
+    max(T(1e-300), floatmin(T))
+@inline positive_floor(x::T) where {T<:AbstractFloat} = max(x, positive_floor(T))
 
 """
     nspecies(eos) -> Int
@@ -263,17 +271,18 @@ Adapt.adapt_structure(to, eos::StiffenedGas) =
     @inbounds begin
         ρ = Q[i, j, k, 1]
         if ρ > 0
-            ri = 1 / ρ
+            ri = one(ρ) / ρ
             u = Q[i, j, k, m1] * ri
             v = Q[i, j, k, m2] * ri
             w = Q[i, j, k, m3] * ri
-            e = Q[i, j, k, i_energy] * ri - 0.5 * (u*u + v*v + w*w)
+            e = Q[i, j, k, i_energy] * ri -
+                (u*u + v*v + w*w) / oftype(ρ, 2)
             p = (γ - 1) * ρ * e - γ * p_inf
             ρa[i, j, k] = ρ
             ua[i, j, k] = u; va[i, j, k] = v; wa[i, j, k] = w
             pa[i, j, k] = p
-            T_iona[i, j, k] = max((p + p_inf) / (ρ * R), 1e-300)
-            ca[i, j, k] = sqrt(max(γ * (p + p_inf) * ri, 0.0))
+            T_iona[i, j, k] = positive_floor((p + p_inf) / (ρ * R))
+            ca[i, j, k] = sqrt(max(γ * (p + p_inf) * ri, zero(ρ)))
             cpa[i, j, k] = γ * cv
             Y1[i, j, k] = 1.0
         else
@@ -437,17 +446,23 @@ end
 Nasa9Species(; kwargs...) = Nasa9Species{Float64}(; kwargs...)
 
 """
-    nasa9_constant_cp(name, R, cp) -> Nasa9Species
+    nasa9_constant_cp([T=Float64], name, R, cp) -> Nasa9Species
 
-Construct a `Float64` [`Nasa9Species`](@ref) whose specific heat `cp` is
-temperature independent. `name` is its output label and `R` its specific gas
-constant. This is the calorically perfect limiting case used to compare
-NASA-9 machinery with [`IdealSpecies`](@ref).
+Construct a [`Nasa9Species`](@ref) whose specific heat `cp` is temperature
+independent. The default coefficient type is `Float64`; pass `Float32` as the
+first argument for a Float32 mechanism. `name` is its output label and `R` its
+specific gas constant. This is the calorically perfect limiting case used to
+compare NASA-9 machinery with [`IdealSpecies`](@ref).
 """
+function nasa9_constant_cp(::Type{T}, name::String, R::Real,
+                           cp::Real) where {T<:AbstractFloat}
+    z = zero(T)
+    return Nasa9Species{T}(name=name, R=T(R),
+                           a=(z, z, T(cp / R), z, z, z, z), b1=z)
+end
+
 nasa9_constant_cp(name::String, R::Real, cp::Real) =
-    Nasa9Species{Float64}(name=name, R=Float64(R),
-                          a=(0.0, 0.0, Float64(cp / R), 0.0, 0.0, 0.0, 0.0),
-                          b1=0.0)
+    nasa9_constant_cp(Float64, name, R, cp)
 
 """
     Nasa9Mixture(species; T_guess=300.0)
@@ -525,17 +540,20 @@ between serial and decomposed calculations tested by the MPI suite.
     n = length(eos.sp)
     # First-order inversion about a fixed reference state. This handles any
     # enthalpy gauge; when e_k = cv_k*T it reduces algebraically to e/cv.
-    e0 = 0.0
-    cv0 = 0.0
+    Tnum = typeof(eos.T_guess)
+    e0 = zero(Tnum)
+    cv0 = zero(Tnum)
     for k in 1:n
         Yk = Yat(k)
         e0 += Yk * species_energy(eos, k, eos.T_guess)
         cv0 += Yk * (species_cp(eos, k, eos.T_guess) - eos.Rk[k])
     end
-    T_ion = cv0 > 0 ? clamp(eos.T_guess + (e - e0) / cv0, 1e-3, 1e9) :
+    T_ion = cv0 > 0 ? clamp(eos.T_guess + (e - e0) / cv0,
+                            Tnum(1e-3), Tnum(1e9)) :
             eos.T_guess
+    rtol = max(Tnum(1e-14), Tnum(32) * eps(Tnum))
     for _ in 1:30
-        f = -e; cvm = 0.0
+        f = -e; cvm = zero(Tnum)
         for k in 1:n
             Yk = Yat(k)
             f += Yk * species_energy(eos, k, T_ion)
@@ -543,8 +561,8 @@ between serial and decomposed calculations tested by the MPI suite.
         end
         cvm > 0 || break
         δ = f / cvm
-        T_ion = max(T_ion - δ, 0.25 * T_ion)     # never overshoot into T ≤ 0
-        abs(δ) <= 1e-14 * T_ion && break
+        T_ion = max(T_ion - δ, Tnum(0.25) * T_ion) # never overshoot into T ≤ 0
+        abs(δ) <= rtol * T_ion && break
     end
     return T_ion
 end
@@ -578,13 +596,14 @@ function _primitives!(solver, eos::Nasa9Mixture, Q)
     @threaded nxf*nyf*nzf for jk in outer_indices(nyf, nzf)
         j, k = Tuple(jk)
         @inbounds for i in 1:nxf
-            ρ = 0.0
+            Tnum = eltype(Q)
+            ρ = zero(Tnum)
             for sp in 1:n_species
                 ρ += Q[i, j, k, sp]
             end
             if ρ > 0
-                ri = 1 / ρ
-                Rm = 0.0
+                ri = one(Tnum) / ρ
+                Rm = zero(Tnum)
                 for sp in 1:n_species
                     solver.Y[sp][i, j, k] = Q[i, j, k, sp] * ri
                     Rm += Q[i, j, k, sp] * ri * Rk[sp]
@@ -592,11 +611,12 @@ function _primitives!(solver, eos::Nasa9Mixture, Q)
                 u = Q[i, j, k, m1] * ri
                 v = Q[i, j, k, m2] * ri
                 w = Q[i, j, k, m3] * ri
-                e = Q[i, j, k, i_energy] * ri - 0.5 * (u*u + v*v + w*w)
+                e = Q[i, j, k, i_energy] * ri -
+                    (u*u + v*v + w*w) / Tnum(2)
                 # Mass fractions straight out of Q: the Newton solve takes an
                 # accessor rather than a vector so this stays allocation-free.
                 T_ion = mixture_temperature(eos, e, sp -> Q[i, j, k, sp] * ri)
-                cpm = 0.0
+                cpm = zero(Tnum)
                 for sp in 1:n_species
                     cpm += solver.Y[sp][i, j, k] * species_cp(eos, sp, T_ion)
                 end
@@ -605,7 +625,7 @@ function _primitives!(solver, eos::Nasa9Mixture, Q)
                 ua[i, j, k] = u; va[i, j, k] = v; wa[i, j, k] = w
                 pa[i, j, k] = ρ * Rm * T_ion
                 T_iona[i, j, k] = T_ion
-                ca[i, j, k] = sqrt(max((cpm / cvm) * Rm * T_ion, 0.0))
+                ca[i, j, k] = sqrt(max((cpm / cvm) * Rm * T_ion, zero(Tnum)))
                 cpa[i, j, k] = cpm
             else
                 ρa[i, j, k] = 1
@@ -668,13 +688,13 @@ primitives!(solver, Q) = _primitives!(solver, solver.eos, Q)
                                           m1, m2, m3, i_energy, i, j, k)
     @inbounds begin
         Rk, cvk = eos.Rk, eos.cvk
-        ρ = 0.0
+        ρ = zero(eltype(Q))
         for sp in 1:n_species
             ρ += Q[i, j, k, sp]
         end
         if ρ > 0
-            ri = 1 / ρ
-            Rm = 0.0; cvm = 0.0
+            ri = one(ρ) / ρ
+            Rm = zero(ρ); cvm = zero(ρ)
             for sp in 1:n_species
                 Rm  += Q[i, j, k, sp] * Rk[sp]
                 cvm += Q[i, j, k, sp] * cvk[sp]
@@ -684,8 +704,9 @@ primitives!(solver, Q) = _primitives!(solver, solver.eos, Q)
             u = Q[i, j, k, m1] * ri
             v = Q[i, j, k, m2] * ri
             w = Q[i, j, k, m3] * ri
-            e = Q[i, j, k, i_energy] * ri - 0.5 * (u*u + v*v + w*w)
-            T_ion = max(e / cvm, 1e-300)
+            e = Q[i, j, k, i_energy] * ri -
+                (u*u + v*v + w*w) / oftype(ρ, 2)
+            T_ion = positive_floor(e / cvm)
             p = ρ * Rm * T_ion
             γm = 1 + Rm / cvm
             ρa[i, j, k] = ρ

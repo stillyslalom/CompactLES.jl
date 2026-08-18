@@ -736,14 +736,13 @@ already been removed by the time G1 landed).
   collection plus the mirrored EOS — runs on the RX 6800 XT bitwise
   against the CPU and 9.9× faster than 8-thread `@threaded` at 64³, two
   species (0.236 ms vs 2.33 ms, `bench/device_bringup.jl`).
-- **Remaining on the G-track before a whole solver lives on device:** the
-  `max_rate` mapreduce, the `Nasa9Mixture` fixed-width mirror, a device
-  backend behind `field(backend, decomp)` for allocation, and G2 — the
-  line solves, without which every compact operator still round-trips
-  through the host. (The allocation backend and the line solves have since
-  landed with G2, below; the mapreduce and the Nasa9 mirror remain, along
-  with halo exchange and the boundary machinery, under G3's residency
-  scope.)
+- **Remaining on the G-track before a whole solver lives on device:** G3a's
+  plan conversion and residency work (`max_rate`, initialization, boundaries,
+  folds, and the launch synchronization policy), followed by G3b's halo/MPI
+  path. `Nasa9Mixture` remains a separate fixed-width-mirror item after the
+  simple EOS models run end to end. Device allocation and operator-level line
+  solves are delivered with G2 below; this paragraph previously still listed
+  both as future work and is corrected here.
 
 The plan text for the stage, for reference — convert the phases that are
 pointwise loops, per `bench/phases.jl` the majority of the budget outside
@@ -856,18 +855,162 @@ one thread per line with coalesced access at every sweep position.
   pre-factorized LU, copy corrections back. The transfer is 2q values per
   line, small next to the field itself; move it on-device only if profiling
   shows the transfer dominating.
-- Halo/ghost exchange: pack/unpack kernels into contiguous device buffers;
-  pass device pointers to MPI when the library is CUDA-aware
-  (`MPI.has_cuda()`), else stage through pinned host buffers. Runtime
-  detection, no build-time switch.
+- Halo/ghost exchange: pack/unpack kernels into contiguous device buffers.
+  A backend-specific capability query decides whether MPI may receive that
+  device's pointers directly; otherwise stage through pinned host buffers.
+  CUDA's capability query is one implementation, not the portable interface:
+  the measured workstation target is AMD, and an MPI stack may support one
+  device runtime without supporting another. Runtime detection, no build-time
+  switch.
 
 ### G3 — residency and patches as launch units
 
+G3 is four gates, not one porting pass. The earlier three-bullet version named
+the desired end state but omitted the work between the operator-level G2 proof
+and a supported `Solver` on `DeviceBackend`.
+
+#### G3a — one device-resident patch
+
+- Convert every host `DirPlan`/`BandPlan` to a `DevicePlan` while a patch is
+  constructed on `DeviceBackend`; G2 exposes the conversion but `Solver`
+  construction does not yet select it.
+- Move initialization, physical boundary conditions, NSCBC, fold fills and
+  pair operations, and `max_rate` onto launchable bodies/reductions. Start with
+  Cartesian periodic and closed-edge cases plus `IdealMixture` and
+  `StiffenedGas`; the `Nasa9Mixture` fixed-width mirror is a later gate.
+- Replace the unconditional synchronization in `pointwise_ka!` and between
+  the line-solve subkernels with returned events and explicit dependencies.
+  Keep a conservative synchronized mode until the full-step comparison is
+  green; removing synchronization is a correctness change, not merely tuning.
 - Audit with the vendor profiler that a full step performs no host transfers
-  except the reduced solves, `Allreduce`, and halo staging.
-- One patch = one stream of kernel launches; independent patches on a rank
-  can overlap. This is where the Stage 2 architecture pays off.
-- I/O gathers to host explicitly; no change to the HDF5/VTK design.
+  except the compact reduced solves and the global timestep reduction. I/O
+  gathers to host explicitly; no change to the HDF5/VTK design.
+
+Gate: an end-to-end single-patch run on device, not isolated bodies: periodic
+and closed-boundary smooth convergence, one shock validation, freestream/GCL,
+and TGV history against CPU, first in Float64 and then under G4's accepted
+Float32 mode.
+
+#### G3b — distributed device communication
+
+- Pack/unpack halos and fold-pair slabs on device. Use direct device-pointer
+  MPI only when the active array backend and MPI library report that exact
+  capability; otherwise use reusable pinned host staging.
+- Make `max_rate` a componentwise reduction of `(rate, -rho_min)` on device,
+  followed by the existing world `Allreduce`. Do not rely on tuple ordering:
+  the monoid is componentwise maximum.
+- Preserve the compact reduced solve on the host initially, but batch and
+  profile its device/host transfers before considering backend-specific
+  device collectives.
+
+Gate: the existing 2/4/8-rank operator and full-run comparisons on device,
+with transfer volume and synchronization time recorded separately.
+
+#### G3c — device-resident AMR
+
+- Generalize `LevelTransfer`'s host-only `Array` stages and Hermite trajectory
+  storage through the backend seam. Convert coarse-box copies, fine-shell
+  writes, restriction, tagging, overlap copies, and regridding initialization
+  from scalar host loops to kernels or backend copies.
+- Distribute the level transfer, which is already the prerequisite for the
+  Stage 4 three-dimensional cost demonstration. A `DeviceBackend + refine`
+  configuration is unsupported until this gate lands; single-patch G3a does
+  not imply it.
+
+Gate: static and moving-region AMR comparisons against the CPU composite and
+uniform-fine references, followed by the deferred 3-D wall-time/memory case.
+
+#### G3d — patches as asynchronous launch units
+
+- Give each concurrently executable patch a queue/stream and express halo,
+  shared-plane, coarse/fine, and reduced-solve dependencies with events.
+  Coarse and fine patches are not automatically independent under subcycling;
+  overlap only branches whose dependency graph permits it.
+- Remove host synchronizations only where a profile shows useful overlap.
+  Record full-step improvement rather than isolated launch savings.
+
+Gate: profiler evidence of overlap and no transfers beyond the documented MPI,
+reduced-solve, and I/O staging. One stream remains the correctness fallback.
+
+### G4 — Float32 and mixed precision
+
+Two milestones are deliberately separate:
+
+**Status: G4a in progress** (August 2026). The public `Problem`/`Numerics` path now
+accepts `Transport{Float32}` and `ArtParams{Float32}`, `single_species(Float32)`
+constructs typed EOS coefficients, and a serial test exercises
+`setup -> compute_dt -> compute_rhs! -> run!` with Float32 state, schemes,
+operators, artificial properties, RK arithmetic, and timestep reduction. The
+first literal audit made the positive division floor representable, typed the
+ideal/stiffened primitive bodies and Cook sensor bodies, and removed the RK and
+`max_rate` Float64 promotions. The next matrix slice is also delivered: C6
+accuracy is guarded down to its measured Float32 roundoff floor, the NASA-9
+Newton inversion and constant-cp constructor are typed, a closed SlipWall
+stiffened-gas step is finite, and static two-level AMR advances with Float32
+state and timestep throughout. A third slice adds varying-cp multicomponent
+NASA-9 recovery, typed NSCBC and isothermal no-slip state, a resolved-angle
+axis fold, typed Hermite subcycle coefficients and regrid sensor
+accumulation, and a moving subcycled/regridded Sod smoke test. The measured
+serial gates are finite and positive throughout; the full serial suite passes.
+A fourth slice delivers the test-scale CPU validation matrix in
+`test/float32_validation.jl`: Cartesian, stretched, cylindrical, axis-fold
+and spherical freestream/GCL; closed-wall and spherical smooth convergence;
+an exact-Riemann Sod profile with mass drift below 1e-5; and a short TGV
+kinetic-energy history whose Float32/Float64 difference stays below 1e-7.
+It also makes spherical angular-domain validation respect the
+solver type's representation of π instead of rejecting `Float32(π)` against
+a fixed 1e-10 tolerance.
+
+The fifth slice completes the CPU measurement with
+`bench/tgv_energy.jl precision=both`. On the 24-thread workstation, the
+published-reference 64³, t = 10, art-off TGV histories peak at 1.2471e-2
+(`Float64`) and 1.2472e-2 (`Float32`), both at t = 8.93, versus the
+reference 1.2e-2 near t = 9. Solver wall time is 621.41 s versus
+563.52 s (1.10× speedup), while the measured solver/state/RK footprint is
+219.5 versus 109.8 MiB (2.00× smaller). Mean-density drift is
+7.49e-13 versus 1.39e-4. The same comparison at 32³ gives identical peaks
+at the printed precision, 1.06× speedup, and
+the same 2× memory reduction.
+
+That accepts the CPU numerical and memory gates but does not justify making
+Float32 the CPU default: its speedup is modest and its conservation drift is
+material. Uniform Float32 remains opt-in, and the final G4a acceptance gate is
+the same end-to-end history on a resident GPU patch after G3a. G4b must use
+that device measurement when deciding whether any explicit Float64
+accumulation role pays for itself; the diagnostics here already accumulate in
+Float64, so diagnostic precision alone does not remove state drift.
+
+Two literal-audit items remain open from item 1 below. The Ducros epsilon is
+still the Float64 `DUCROS_EPS` converted to the state type at its point of
+use (`compression_switch`, artificial.jl), not the separately measured value
+the item calls for; the conversion is safe (1e-32 is representable in
+Float32, and the compression branch guarantees a nonzero denominator) but is
+an interim choice. The stretch-map closures built by `sine_cluster` evaluate
+in Float64 internally, so `_phys_and_jac` returns Float64 on a stretched
+Float32 grid; this runs once at setup and converts at store, and the
+stretched Float32 freestream case passes, but it belongs to the same
+literal sweep.
+
+1. **Uniform Float32 execution.** Expose Float32 through `Problem`/`Numerics`,
+   use Float32 schemes and EOS coefficients, and remove accidental Float64
+   promotion from pointwise bodies, RK updates, sensors, geometry floors, and
+   timestep reductions. Replace each small constant according to its meaning:
+   typed zero/one for algebra, a representable positive floor for division,
+   and a separately measured Ducros epsilon. A blanket cast is not a policy.
+2. **Mixed precision.** After the uniform run is measured, choose explicit
+   roles such as `Tstate` and `Taccum` (and only add a distinct plan/geometry
+   type if measurements justify it). Candidate Float64 operations are global
+   reductions, conservation diagnostics, simulation time, and possibly the
+   reduced compact interface solve. State/RHS fields and the bulk kernels are
+   the Float32 candidates. The choice must be representable in types rather
+   than arising from Float64 literals in otherwise Float32 code.
+
+Gates: CPU Float32 setup and a full run first; then the same GPU convergence,
+freestream, validation and TGV gates as Float64. Record conservation drift and
+positivity behavior on the AMR shock cases, phase timings, memory, and the
+accuracy/performance delta for every candidate mixed policy. Select a shipped
+policy only from that matrix; retaining Float64 accumulation is acceptable,
+but it must be intentional and tested.
 
 ### GPU verification
 
@@ -893,7 +1036,12 @@ G1 (pointwise kernels)  ─┐
 Stage 3 (two-level)     ─┴─ either order or interleaved, both need Stage 2
 G2 (device line solves)         — after G1
 Stage 4 (subcycle/tag/regrid)   — after Stage 3
-G3 (residency, streams)         — after G2, benefits from Stage 4 patches
+G3a (one-patch residency)       — after G2
+G4a (uniform Float32)           — begins on CPU; device gate follows G3a
+G3b (device MPI)                — after G3a
+G3c (device AMR)                — after G3b + distributed level transfer
+G3d (streams/overlap)           — last, after residency is measured
+G4b (mixed policy)              — selected from G3/G4a measurements
 ```
 
 Do Stage 2 only after the regularization debts in `ROADMAP.md` settle: the

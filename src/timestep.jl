@@ -90,7 +90,7 @@ argument is positional for the reason given under [`compute_rhs!`](@ref).
 function step!(solver::Solver, Q, dQ, du, dt, prepared::Bool=false)
     decomp = solver.decomp
     for stage in 1:5
-        solver.tstage = solver.t + RKC[stage] * dt
+        solver.tstage = solver.t + oftype(solver.t, RKC[stage]) * dt
         # RKC[1] = 0, so a prepared caller's boundary values are the ones this
         # stage would compute; nothing between there and here has touched Q.
         first_prepared = prepared && stage == 1
@@ -118,8 +118,11 @@ end
 function _rk_update!(decomp::Decomp, n_cons::Int, Q, dQ, du, A, B, dt)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
+    T = eltype(Q)
+    At, Bt, dtt = T(A), T(B), T(dt)
     for c in 1:n_cons
-        pointwise!(_rk_point!, Q, nx, ny, nz, Q, dQ, du, A, B, dt, c, o1, o2, o3)
+        pointwise!(_rk_point!, Q, nx, ny, nz, Q, dQ, du,
+                   At, Bt, dtt, c, o1, o2, o3)
     end
     return Q
 end
@@ -132,7 +135,7 @@ aligned with `solver.patches`. Each stage evaluates every local patch's RHS and
 update in the global patch order, then makes the interfaces consistent with
 [`sync_patches!`](@ref) — the shared-plane averaging and ghost refill after
 every stage. Collective over `solver.comm`. A solver built with
-`subcycle = true` delegates to [`subcycled_step!`](@ref) instead.
+`subcycle = true` delegates to `subcycled_step!` instead.
 """
 function step!(solver::Solver, states::Vector{<:ConservedState},
                dQs::Vector{<:ConservedState}, dus::Vector{<:ConservedState},
@@ -141,7 +144,7 @@ function step!(solver::Solver, states::Vector{<:ConservedState},
         return subcycled_step!(solver, states, dQs, dus, dt, prepared)
     patches = getfield(solver, :patches)
     for stage in 1:5
-        solver.tstage = solver.t + RKC[stage] * dt
+        solver.tstage = solver.t + oftype(solver.t, RKC[stage]) * dt
         first_prepared = prepared && stage == 1
         for (i, p) in enumerate(patches)
             ps = PatchSolver(solver, p)
@@ -206,7 +209,7 @@ function subcycled_step!(solver::Solver, states::Vector{<:ConservedState},
     # --- Coarse step over [t, t + dt]; the covered region is advanced too and
     # overwritten by the restriction afterwards, as in the global-dt mode.
     for stage in 1:5
-        solver.tstage = t0 + RKC[stage] * dt
+        solver.tstage = t0 + oftype(t0, RKC[stage]) * dt
         first_prepared = prepared && stage == 1
         first_prepared || apply_bcs!(psc, Qc)
         compute_rhs!(psc, Qc, dQc, first_prepared)
@@ -220,26 +223,28 @@ function subcycled_step!(solver::Solver, states::Vector{<:ConservedState},
     compute_rhs!(psc, Qc, dQc, false)
     save_level_box!(lt, coarse.decomp, Qc, dQc, true)
     # --- Three fine steps of dt/3, boundary-forced from the Hermite box.
-    dtf = dt / 3
+    dtf = dt / oftype(dt, 3)
     for m in 1:3
         tm = t0 + (m - 1) * dtf
         for stage in 1:5
-            solver.tstage = tm + RKC[stage] * dtf
-            hermite_level_shell!(solver, states, ((m - 1) + RKC[stage]) / 3, dt)
+            solver.tstage = tm + oftype(tm, RKC[stage]) * dtf
+            θ = (oftype(dt, m - 1) + oftype(dt, RKC[stage])) / oftype(dt, 3)
+            hermite_level_shell!(solver, states, θ, dt)
             apply_bcs!(psf, Qf)
             compute_rhs!(psf, Qf, dQf, false)
             _rk_update!(fine.decomp, n_cons, Qf, dQf, duf,
                         RKA[stage], RKB[stage], dtf)
         end
         solver.tstage = tm + dtf
-        hermite_level_shell!(solver, states, m / 3, dt)
+        θ = oftype(dt, m) / oftype(dt, 3)
+        hermite_level_shell!(solver, states, θ, dt)
         apply_bcs!(psf, Qf)
         if solver.filter_interval > 0 &&
            (3 * solver.step + m) % solver.filter_interval == 0
             filter_state!(psf, Qf)
             # The filter is not shell-preserving; re-impose the forcing so the
             # next substep (or the restriction) reads a consistent boundary.
-            hermite_level_shell!(solver, states, m / 3, dt)
+            hermite_level_shell!(solver, states, θ, dt)
         end
     end
     solver.tstage = t0 + dt
@@ -300,8 +305,9 @@ whole rank set — exactly once, hoisted outside the patch loop as the
 collective discipline requires.
 """
 function max_rate(solver::Solver, states::Vector{<:ConservedState})
-    rate = 0.0
-    ρ_min = Inf
+    T = typeof(solver.cfl)
+    rate = zero(T)
+    ρ_min = T(Inf)
     subcycle = getfield(solver, :subcycle)
     for (ps, Q) in eachpatch(solver, states)
         exchange_state!(Q, ps.decomp)
@@ -309,7 +315,7 @@ function max_rate(solver::Solver, states::Vector{<:ConservedState})
         r, m = _local_max_rate(ps, Q)
         # A subcycled level ℓ advances at dt / 3^ℓ, so its rate constrains the
         # coarse step three times more weakly per level.
-        subcycle && (r /= 3.0^ps.patch.level)
+        subcycle && (r /= oftype(r, 3)^ps.patch.level)
         rate = max(rate, r)
         ρ_min = min(ρ_min, m)
     end
@@ -325,22 +331,23 @@ function _local_max_rate(solver::SolverLike, Q)
     nx, ny, nz = decomp.n_local
     n_species = solver.equations.n_species
     tr = solver.transport
-    rate = 0.0
-    ρ_min = Inf
+    T = eltype(Q)
+    rate = zero(T)
+    ρ_min = T(Inf)
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        ρQ = 0.0
+        ρQ = zero(T)
         for sp in 1:n_species
             ρQ += Q[I, sp]
         end
         ρ_min = min(ρ_min, ρQ)
         ρ = solver.rho[I]
-        ri = 1 / ρ
+        ri = one(T) / ρ
         c = solver.c[I]
         cp = solver.cp_mix[I]
         uv = (solver.u[I], solver.v[I], solver.w[I])
-        acc = 0.0
-        dsum = 0.0
+        acc = zero(T)
+        dsum = zero(T)
         for d in 1:3
             decomp.active[d] || continue      # no resolved variation
             idx = solver.inv_h[d][I] / solver.h[d]      # inverse physical spacing
@@ -373,15 +380,15 @@ Rate contribution from geometric momentum sources on angular dimensions that
 are collapsed (and therefore contribute no advective CFL term). Zero in
 Cartesian coordinates and whenever the corresponding dimension is resolved.
 """
-curvature_rate(solver, ::CartesianMetric, I, uv) = 0.0
+curvature_rate(solver, ::CartesianMetric, I, uv) = zero(first(uv))
 
 function curvature_rate(solver, ::CylindricalMetric, I, uv)
-    solver.decomp.active[2] && return 0.0          # covered by the θ advective term
+    solver.decomp.active[2] && return zero(first(uv)) # covered by θ advection
     return abs(uv[2]) * solver.inv_r[I]          # ρu_θ²/r driving u_r
 end
 
 function curvature_rate(solver, ::SphericalMetric, I, uv)
-    a = 0.0
+    a = zero(first(uv))
     solver.decomp.active[2] || (a += abs(uv[2]) * solver.inv_r[I])
     solver.decomp.active[3] ||
         (a += abs(uv[3]) * (solver.inv_r[I] + abs(solver.cot_over_r[I])))
