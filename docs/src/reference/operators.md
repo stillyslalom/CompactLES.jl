@@ -22,8 +22,10 @@ compact_d8
 ## Decomposition and storage
 
 Field allocation is routed through a storage backend, so the same setup code
-can later place arrays in device memory; [`CPUBackend`](@ref) is the only
-implementation today.
+can place arrays in device memory. [`CPUBackend`](@ref) is the default;
+[`DeviceBackend`](@ref) allocates on a KernelAbstractions backend and is
+operator-level machinery today, not yet a supported whole-solver
+configuration.
 
 ```@docs
 Decomp
@@ -34,6 +36,7 @@ exchange_halos!
 CompactLES.exchange_state!
 AbstractBackend
 CPUBackend
+DeviceBackend
 ```
 
 ## Directional plans
@@ -46,6 +49,8 @@ CompactLES.interface_closures
 apply_along!
 filter_field!
 THREAD_MIN_WORK
+DevicePlan
+device_plan
 ```
 
 ## Patches

@@ -27,20 +27,6 @@ end
 ConstantBodyForce(; acceleration=(0.0, -9.81, 0.0)) =
     ConstantBodyForce(acceleration)
 
-"""
-    add_source!(source, solver, dQ, Q, t)
-
-Add one explicit source to the already assembled conserved RHS at Runge-Kutta
-stage time `t`. `Q` and `dQ` are halo-padded conserved arrays indexed
-`[I, component]`, with the component layout defined by `solver.equations`.
-Extend this function for a custom concrete source type and place instances in
-`Problem.sources`. The method runs on every rank and must preserve that
-component layout.
-
-A custom method mutates only the rank-local interior of `dQ`, adds rather than
-overwrites contributions already present, and returns `dQ`. It may inspect `Q`
-and `solver`; any collective operation must be entered by every rank.
-"""
 @inline function _body_force_point!(dQ, Q, g1, g2, g3, n_species,
                                     m1, m2, m3, i_energy, o1, o2, o3, i, j, k)
     @inbounds begin
@@ -57,6 +43,20 @@ and `solver`; any collective operation must be entered by every rank.
     return nothing
 end
 
+"""
+    add_source!(source, solver, dQ, Q, t)
+
+Add one explicit source to the already assembled conserved RHS at Runge-Kutta
+stage time `t`. `Q` and `dQ` are halo-padded conserved arrays indexed
+`[I, component]`, with the component layout defined by `solver.equations`.
+Extend this function for a custom concrete source type and place instances in
+`Problem.sources`. The method runs on every rank and must preserve that
+component layout.
+
+A custom method mutates only the rank-local interior of `dQ`, adds rather than
+overwrites contributions already present, and returns `dQ`. It may inspect `Q`
+and `solver`; any collective operation must be entered by every rank.
+"""
 function add_source!(source::ConstantBodyForce, solver, dQ, Q, t)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
