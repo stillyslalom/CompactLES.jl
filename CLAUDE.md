@@ -303,6 +303,9 @@ decision worth revisiting.
   sensor-injection amplification, pollution decay),
   `pointwise_ka.jl` (the G1 acceptance table: each pointwise phase timed
   through `@threaded` and the KernelAbstractions CPU backend),
+  `device_bringup.jl` (the G1 kernels on an actual GPU — needs an
+  environment carrying a device package; see the header for the
+  collection-argument hang it exists to warn about),
   `tgv_energy.jl` (Taylor–Green kinetic-energy budget split
   by dissipation channel; the one bench script that runs usefully under
   `mpiexec`, and the intended first workload on a cluster).

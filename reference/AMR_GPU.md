@@ -708,13 +708,25 @@ already been removed by the time G1 landed).
 - `outer_indices` was not dropped as the plan anticipated: with `@threaded`
   retained as the CPU path it survives — but in exactly one place, the
   launcher inside `pointwise!`, rather than at every loop site.
-- **Remaining before a device actually runs these kernels:** argument
-  adaptation (the `Vector{A}`/`Matrix{A}` field collections and the EOS
-  coefficient tables are not isbits and need Adapt.jl mirrors), the
-  `max_rate` mapreduce, and the `Nasa9Mixture` fixed-width mirror. All are
-  deliberately deferred to first device bring-up, where they can be
-  validated: the workstation's RX 6800 XT has no ROCm on Windows, so the
-  first real target is a CUDA box or an LLNL AMD machine.
+- **First device execution is measured** (RX 6800 XT, gfx1030, AMDGPU.jl
+  v2.7.2 on Windows against the HIP SDK — the workstation is a real target,
+  no cluster required). The plain-argument bodies run on device through
+  `pointwise_ka!` and through `pointwise!`'s automatic routing on a
+  `ROCArray`, and reproduce the CPU results **bitwise**: the RK update, the
+  δ⁴ detector body, and the gradient scale all at max |gpu − cpu| = 0.
+  Timing at 64³: the δ⁴ stencil runs 4× faster than 8-thread `@threaded`
+  in a single launch (0.075 ms vs 0.302 ms), while the RK update's five
+  per-component launches run 0.6× — `pointwise_ka!` synchronizes per call,
+  so many small launches pay the round trip that G3's streams-and-residency
+  work exists to remove. First-launch kernel compilation is ~9 s per body.
+- **Remaining before the whole RHS runs on device:** argument adaptation.
+  The `Vector{A}`/`Matrix{A}` field collections and the EOS coefficient
+  tables are not isbits, and the failure mode is worse than an error: a
+  `Matrix{ROCArray}` kernel argument *hangs* in kernel-argument adaptation
+  rather than raising anything. Adapt.jl mirrors (tuples or device arrays)
+  for `Y`, `D_art`, `grad_u`, `grad_Y`, `flux` and the EOS tables, the
+  `max_rate` mapreduce, and the `Nasa9Mixture` fixed-width mirror are the
+  open items.
 
 The plan text for the stage, for reference — convert the phases that are
 pointwise loops, per `bench/phases.jl` the majority of the budget outside

@@ -566,10 +566,12 @@ reference-implementation pass that headed this list are done
    path is bit-identical), so physics changes rebase onto them cleanly.
    G1 (the KernelAbstractions pointwise kernels) is also delivered on the
    CPU side, with the acceptance measurement keeping `@threaded` for `Array`
-   storage. Next per the plan's ordering: G2 (device line solves), which
-   waits on a machine with a usable GPU backend, and distributing the level
-   transfer, which also gates the Stage 4 cost demonstration on a 3-D
-   mixing case.
+   storage, and its kernels are measured running bitwise-correct on the
+   workstation's RX 6800 XT through AMDGPU.jl (`bench/device_bringup.jl`).
+   Next per the plan's ordering: the device-argument adaptation that lets
+   the whole RHS run there, G2 (device line solves), and distributing the
+   level transfer, which also gates the Stage 4 cost demonstration on a
+   3-D mixing case.
 
 The open items from the source comparison
 ([above](#open-work-from-the-source-comparison)) sit alongside these rather

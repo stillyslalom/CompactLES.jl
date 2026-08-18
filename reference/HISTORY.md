@@ -801,5 +801,11 @@ path is bit-identical to the pre-G1 solver on every convergence and
 validation guard, and jetcheck/audit hold probe for probe. One trap is
 recorded in `CLAUDE.md`: a `Type` argument inside the launcher's Vararg
 defeats specialization and cost `assemble_fluxes!` 9× until removed.
-Device bring-up (isbits argument adaptation, the `max_rate` mapreduce, the
-Nasa9 mirror) is deferred to the first machine with a usable GPU backend.
+Device bring-up started the same week on the workstation's RX 6800 XT
+(AMDGPU.jl on Windows): the plain-argument bodies reproduce the CPU bitwise
+on device through `pointwise_ka!` and the automatic routing, the δ⁴ stencil
+already runs 4× faster than 8-thread CPU in a single launch, and a
+collection-typed kernel argument was found to hang in adaptation rather
+than error — so the isbits argument adaptation (with the `max_rate`
+mapreduce and the Nasa9 mirror) is the open G-track work, and
+`bench/device_bringup.jl` is the script that reproduces the measurements.
