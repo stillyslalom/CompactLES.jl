@@ -453,8 +453,12 @@ measurement is now also complete: Float32 matches the Float64 peak and time,
 halves the measured 219.5 MiB footprint, and improves CPU solver wall time by
 1.10×, while increasing mean-density drift from 7.5e-13 to 1.4e-4. This
 supports opt-in CPU Float32, not a new CPU default.
-The remaining G4a gate is the same end-to-end measurement on a resident GPU
-patch after G3a; G4b policy selection follows those device numbers.
+The device gate is measured too, closing G4a: on the RX 6800 XT the same
+64³ histories on a resident device patch reproduce the CPU numbers to every
+printed digit in both precisions (the G3a step is bitwise), and Float32 runs
+1.12× the Float64 device rate in the synchronized launch mode. G4b policy
+selection waits on the G3d launch-floor profile, with the CPU matrix and the
+device histories as its accepted inputs.
 `Solver{T}` still gives storage, geometry and runtime scalars one common type,
 so actual mixed precision remains a later, measured choice of explicit state
 and accumulation types rather than whatever Float64 literals happen to induce.

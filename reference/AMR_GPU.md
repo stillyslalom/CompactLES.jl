@@ -1000,7 +1000,9 @@ reduced-solve, and I/O staging. One stream remains the correctness fallback.
 
 Two milestones are deliberately separate:
 
-**Status: G4a in progress** (August 2026). The public `Problem`/`Numerics` path now
+**Status: G4a delivered** (August 2026, device gate included below); G4b
+remains open, waiting on the G3d launch-floor work for its device timings.
+The public `Problem`/`Numerics` path now
 accepts `Transport{Float32}` and `ArtParams{Float32}`, `single_species(Float32)`
 constructs typed EOS coefficients, and a serial test exercises
 `setup -> compute_dt -> compute_rhs! -> run!` with Float32 state, schemes,
@@ -1038,11 +1040,25 @@ the same 2× memory reduction.
 
 That accepts the CPU numerical and memory gates but does not justify making
 Float32 the CPU default: its speedup is modest and its conservation drift is
-material. Uniform Float32 remains opt-in, and the final G4a acceptance gate is
-the same end-to-end history on a resident GPU patch after G3a. G4b must use
-that device measurement when deciding whether any explicit Float64
-accumulation role pays for itself; the diagnostics here already accumulate in
-Float64, so diagnostic precision alone does not remove state drift.
+material. Uniform Float32 remains opt-in.
+
+The device gate is now measured as well, closing G4a. On the RX 6800 XT
+(`bench/tgv_energy.jl 64 10.0 backend=amdgpu configs=off:1 precision=both`),
+the 64³, t = 10, art-off histories on a resident device patch reproduce the
+CPU histories to every printed digit, as the bitwise G3a step implies:
+Float64 peaks at 1.2471e-2 at t = 8.93 with mean-density drift 7.491e-13,
+Float32 at 1.2472e-2 at t = 8.93 with drift 1.386e-4. The energy diagnostics
+read a host copy of the state per step — the documented I/O staging, outside
+solver wall time. The run's own wall-clock ratio between the precision legs
+is not a usable speedup figure (the Float64 leg shared its host with
+concurrent CPU jobs); the clean measurement is the G3a battery's warm
+20-step timing, where Float32 runs 1.12× the Float64 device rate and both
+sit at 0.4–0.5× the 8-thread CPU under the synchronized launch mode. So the
+G4b question — whether Float32 pays on device — is launch-bound at this size
+either way, and its policy selection waits on the G3d profile, with the CPU
+matrix above and these device histories as accepted inputs. The diagnostics
+already accumulate in Float64, so diagnostic precision alone does not remove
+state drift.
 
 Two literal-audit items remain open from item 1 below. The Ducros epsilon is
 still the Float64 `DUCROS_EPS` converted to the state type at its point of
