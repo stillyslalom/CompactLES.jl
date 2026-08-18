@@ -738,11 +738,12 @@ already been removed by the time G1 landed).
   species (0.236 ms vs 2.33 ms, `bench/device_bringup.jl`).
 - **Remaining on the G-track before a whole solver lives on device:** G3a
   delivered the plan conversion and residency work (`max_rate`,
-  initialization, boundaries, folds; see its status block), so what remains
-  is G3b's halo/MPI path, the launch synchronization policy (G3d), and the
-  `Nasa9Mixture` fixed-width mirror. Device allocation and operator-level
-  line solves are delivered with G2 below; this paragraph previously still
-  listed both as future work and is corrected here.
+  initialization, boundaries, folds) and G3b the distributed halo/MPI path
+  (see their status blocks), so what remains is device AMR (G3c), the
+  launch synchronization policy (G3d), and the `Nasa9Mixture` fixed-width
+  mirror. Device allocation and operator-level line solves are delivered
+  with G2 below; this paragraph previously still listed both as future
+  work and is corrected here.
 
 The plan text for the stage, for reference — convert the phases that are
 pointwise loops, per `bench/phases.jl` the majority of the budget outside
@@ -956,6 +957,57 @@ and TGV history against CPU, first in Float64 and then under G4's accepted
 Float32 mode.
 
 #### G3b — distributed device communication
+
+**Status: delivered** (August 2026). A device-resident patch now runs
+decomposed: G3a's rank restriction is lifted, and every message a
+distributed single-patch run sends crosses ranks through backend staging —
+a broadcast pack of the strided slab into a contiguous device buffer, one
+contiguous device↔host copy per message, and the unchanged MPI path over
+the host halo buffers (`_exchange_dim_staged!`, halo.jl). The fold-pair
+whole-block Sendrecv stages the same way (`sendrecv_block!`), and message
+tags and phase order match the direct host path exactly.
+
+- Direct device-pointer MPI is a guarded branch no measured stack takes:
+  `device_mpi_direct(backend)` defaults to `false` (host staging), and the
+  workstation's MS-MPI has no ROCm awareness to override it with. It is a
+  runtime property of the backend and MPI library together, per the plan,
+  not a build-time switch.
+- The staging buffers allocate per exchange through `similar`, whose result
+  type is inferable from the field. A keyed cache was tried first and
+  reverted: its `Any`-typed lookup put 33 runtime-dispatch sites into
+  `compute_rhs!`'s jetcheck report, because the staged branch sits behind a
+  runtime `Ref` read and is always inferred into the RHS call graph. Device
+  allocators pool, so the per-exchange cost is a pool hit; retaining the
+  stages is G3d work if its profile shows the pool hit at all.
+- `max_rate` on device already reduces componentwise — an exact `maximum`
+  of the rate field and an exact `minimum` of the density field feeding the
+  unchanged `[rate, -rho_min]` world `Allreduce` — so nothing relies on
+  lexicographic tuple ordering, which is what this plan bullet exists to
+  forbid. Fusing the two launches into one reduction is G3d launch-count
+  work.
+- `FORCE_DEVICE_EXCHANGE` routes host arrays through the staged path — the
+  identical element copies — so the MPI suite pins it bitwise without a
+  GPU: combined with `FORCE_KA` and a `DeviceBackend(CPU())` solver, a
+  decomposed multispecies tube and a θ-split resolved axis fold reproduce
+  the `CPUBackend` runs bitwise at np = 2, 4, 8 (suite now 103/103).
+- **On the RX 6800 XT under mpiexec** (`bench/device_mpi.jl`, every rank
+  sharing the one device), all six gate cases — the tube split along x and
+  the resolved-θ axis fold split along θ, at np = 2, 4, 8 — are
+  max |device − cpu| = 0 over full 10-step runs, including the off-rank
+  pair butterfly. Transfer accounting over those runs: the staged
+  halo/fold-pair copies are 0.6–6.6% of device wall (the fold cases
+  dominate the volume — whole blocks per pair application, 1.1–1.9 GiB
+  over ten steps — where the tube's halo slabs total 56–394 MiB), and the
+  reduced-interface copies 2–5%. Wall time itself is not a performance
+  result at these sizes: N ranks time-share one GPU under the synchronized
+  launch mode (np = 8 reaches 77 s/step on a 72×16×12 grid), so the
+  measured story is unchanged from G3a — correctness delivered, the launch
+  floor is G3d's.
+- Still barred at setup: several patches per solver on a device backend
+  (the interface-record pack/copy loops are host-side) and refinement
+  (G3c).
+
+The plan text for the gate, for reference:
 
 - Pack/unpack halos and fold-pair slabs on device. Use direct device-pointer
   MPI only when the active array backend and MPI library report that exact

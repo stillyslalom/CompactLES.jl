@@ -6,6 +6,14 @@
 # non-periodic global edges the neighbor is MPI.PROC_NULL: the Sendrecv is a
 # no-op on that side and the physical-edge halos are left stale.
 #
+# Device-resident fields (GPU stage G3b of reference/AMR_GPU.md) stage each
+# message through the backend: a broadcast pack of the strided slab into a
+# contiguous device buffer, one contiguous device<->host copy per message, and
+# the existing MPI path over the host buffers. Direct device-pointer MPI is
+# deliberately not taken on any stack that does not report the capability for
+# the active array type; no stack on the measured machines does, so the direct
+# path is a future branch behind `device_mpi_direct`, not dead code today.
+#
 # At a CLOSED edge a stale halo is never read: the closure rows are applied to
 # points counted inward from the edge, so a closure row indexes interior points
 # by construction. A fold is the exception. There the interior stencil runs to
@@ -16,6 +24,109 @@ const PNULL = Int(MPI.PROC_NULL)
 
 @inline function _slab(f, d::Int, r::UnitRange{Int})
     view(f, ntuple(k -> k == d ? r : (1:size(f, k)), 3)...)
+end
+
+# --- Device staging (G3b) ---------------------------------------------------
+
+"""
+Test toggle: `true` routes the halo and fold-pair exchanges of ordinary
+`Array` fields through the device staging path — pack buffers, offset copies,
+and all — which on host storage performs the identical element copies. The
+MPI suite flips this to pin the staging path bitwise on machines without a
+GPU, exactly as `FORCE_KA` pins the kernel path. The default `false` keeps
+host fields on the direct slab copies.
+"""
+const FORCE_DEVICE_EXCHANGE = Ref(false)
+
+@inline _staged_exchange(f) = !_cpu_storage(f) || FORCE_DEVICE_EXCHANGE[]
+
+"""
+    device_mpi_direct(backend) -> Bool
+
+Whether MPI may receive this storage backend's device pointers directly. The
+conservative default is `false`, which selects host staging; a device-aware
+MPI stack can override this per backend once such a stack is measured. This
+is a runtime property of the MPI library *and* the array type, so it is a
+function of the backend rather than a build-time switch.
+"""
+device_mpi_direct(backend) = false
+
+# Staging buffers allocate per exchange through `similar`, whose result type
+# is inferable from the field — a keyed cache was tried first and its
+# `Any`-typed lookup put 33 runtime-dispatch sites into `compute_rhs!`'s
+# jetcheck report, since the staged branch sits behind a runtime Ref read and
+# is always inferred into the RHS call graph. Device allocators pool, so the
+# per-exchange cost is a pool hit, not a device allocation; hoisting these
+# into retained storage is G3d work if its profile shows the pool hit at all.
+@inline _device_stage(f, need::Int) =
+    (similar(f, eltype(f), need), similar(f, eltype(f), need))
+
+# Transfer accounting for the G3b gate: bytes staged through the device
+# buffers and the wall time of the synchronous copies, accumulated only while
+# a bench turns the toggle on (the timer synchronizes nothing extra — the
+# copies are synchronous already — but the clock calls are not free).
+const TRACK_DEVICE_TRANSFERS = Ref(false)
+const DEVICE_TRANSFER_BYTES = Ref(0)
+const DEVICE_TRANSFER_TIME = Ref(0.0)
+
+@inline function _tracked_copy!(dest, doffs::Int, src, soffs::Int, n::Int)
+    if TRACK_DEVICE_TRANSFERS[]
+        t0 = time_ns()
+        copyto!(dest, doffs, src, soffs, n)
+        DEVICE_TRANSFER_TIME[] += (time_ns() - t0) / 1e9
+        DEVICE_TRANSFER_BYTES[] += n * sizeof(eltype(src))
+    else
+        copyto!(dest, doffs, src, soffs, n)
+    end
+    return dest
+end
+
+"""
+    sendrecv_block!(send, recv, decomp, d, partner, tag)
+
+Pairwise whole-array `MPI.Sendrecv!` used by the fold pairing: direct on host
+storage, staged through dimension `d`'s host buffers on device storage (the
+arrays are contiguous, so no pack kernel is needed — one copy each way).
+Both partners must call it with the same tag.
+"""
+function sendrecv_block!(send, recv, decomp::Decomp, d::Int, partner::Int,
+                         tag::Int)
+    if _staged_exchange(send)
+        n = length(send)
+        sb, rb = decomp.send_buf[d], decomp.recv_buf[d]
+        length(sb) < n && resize!(sb, n)
+        length(rb) < n && resize!(rb, n)
+        # Through the device stage even though the block is contiguous: the
+        # broadcast handles wrapped storage (a component view of Q reaches
+        # here from filter_state!), and the host copy then runs on the dense
+        # stage vector, the one shape every backend's fast path covers.
+        dsend, drecv = _device_stage(send, n)
+        view(dsend, 1:n) .= vec(send)
+        _tracked_copy!(sb, 1, dsend, 1, n)
+        MPI.Sendrecv!(view(sb, 1:n), view(rb, 1:n), decomp.comm;
+                      dest=partner, source=partner, sendtag=tag, recvtag=tag)
+        _tracked_copy!(drecv, 1, rb, 1, n)
+        vec(recv) .= view(drecv, 1:n)
+    else
+        MPI.Sendrecv!(send, recv, decomp.comm; dest=partner, source=partner,
+                      sendtag=tag, recvtag=tag)
+    end
+    return recv
+end
+
+# Pack/unpack between a strided slab and the leading `slabsz` elements of a
+# contiguous stage vector, as broadcasts so device storage runs them as
+# kernels. `at` is a zero-based element offset into the stage vector.
+@inline function _pack_stage!(stage, at::Int, f, d::Int, r::UnitRange{Int})
+    s = _slab(f, d, r)
+    reshape(view(stage, at+1:at+length(s)), size(s)) .= s
+    return stage
+end
+
+@inline function _unpack_stage!(f, d::Int, r::UnitRange{Int}, stage, at::Int)
+    s = _slab(f, d, r)
+    s .= reshape(view(stage, at+1:at+length(s)), size(s))
+    return f
 end
 
 """
@@ -71,6 +182,7 @@ demand.
 function exchange_dim!(f::AbstractArray{<:Real,3}, decomp::Decomp, d::Int)
     decomp.active[d] || return f
     selfwrap(decomp, d) && return wrap_dim!(f, decomp, d)
+    _staged_exchange(f) && return _exchange_dim_staged!(f, decomp, d)
     let n_halo = decomp.n_halo
         n = decomp.n_local[d]
         lo, hi = decomp.neighbors[d]
@@ -93,6 +205,47 @@ function exchange_dim!(f::AbstractArray{<:Real,3}, decomp::Decomp, d::Int)
         MPI.Sendrecv!(sv, rv, decomp.comm; dest=lo, source=hi,
                       sendtag=10d + 1, recvtag=10d + 1)
         hi != PNULL && copyto!(_slab(f, d, (n+n_halo+1):(n+2*n_halo)), rv)
+    end
+    return f
+end
+
+# The staged counterpart of `exchange_dim!`: broadcast pack into the device
+# stage, one contiguous copy each way around the same Sendrecv over the host
+# buffers, broadcast unpack. Message tags and phase order are identical to the
+# direct path, so mixed CPU/GPU rank sets would still pair up (not a
+# supported configuration, but the property costs nothing to keep).
+function _exchange_dim_staged!(f, decomp::Decomp, d::Int)
+    n_halo = decomp.n_halo
+    n = decomp.n_local[d]
+    lo, hi = decomp.neighbors[d]
+    slabsz = n_halo * prod(size(f, k) for k in 1:3 if k != d)
+    sb, rb = decomp.send_buf[d], decomp.recv_buf[d]
+    length(sb) < slabsz && resize!(sb, slabsz)
+    length(rb) < slabsz && resize!(rb, slabsz)
+    dsend, drecv = _device_stage(f, slabsz)
+    sv = view(sb, 1:slabsz)
+    rv = view(rb, 1:slabsz)
+    # phase 1: send high-interior planes to hi neighbor, receive from lo
+    if hi != PNULL
+        _pack_stage!(dsend, 0, f, d, (n+1):(n+n_halo))
+        _tracked_copy!(sb, 1, dsend, 1, slabsz)
+    end
+    MPI.Sendrecv!(sv, rv, decomp.comm; dest=hi, source=lo,
+                  sendtag=10d, recvtag=10d)
+    if lo != PNULL
+        _tracked_copy!(drecv, 1, rb, 1, slabsz)
+        _unpack_stage!(f, d, 1:n_halo, drecv, 0)
+    end
+    # phase 2: send low-interior planes to lo neighbor, receive from hi
+    if lo != PNULL
+        _pack_stage!(dsend, 0, f, d, (n_halo+1):(2*n_halo))
+        _tracked_copy!(sb, 1, dsend, 1, slabsz)
+    end
+    MPI.Sendrecv!(sv, rv, decomp.comm; dest=lo, source=hi,
+                  sendtag=10d + 1, recvtag=10d + 1)
+    if hi != PNULL
+        _tracked_copy!(drecv, 1, rb, 1, slabsz)
+        _unpack_stage!(f, d, (n+n_halo+1):(n+2*n_halo), drecv, 0)
     end
     return f
 end
@@ -196,6 +349,8 @@ function exchange_dim_batch!(fields::AbstractVector, decomp::Decomp, d::Int)
         end
         return fields
     end
+    _staged_exchange(fields[1]) &&
+        return _exchange_dim_batch_staged!(fields, decomp, d)
     n_halo = decomp.n_halo
     n = decomp.n_local[d]
     lo, hi = decomp.neighbors[d]
@@ -235,6 +390,59 @@ function exchange_dim_batch!(fields::AbstractVector, decomp::Decomp, d::Int)
         for (fi, f) in enumerate(fields)
             copyto!(_slab(f, d, (n+n_halo+1):(n+2*n_halo)), 1, rb,
                     (fi - 1) * slabsz + 1, slabsz)
+        end
+    end
+    return fields
+end
+
+# Staged batch exchange: every field's slab packs into one device stage at
+# its own offset, so each phase still costs one device-to-host copy, one
+# Sendrecv, and one host-to-device copy however many components ride along.
+function _exchange_dim_batch_staged!(fields::AbstractVector, decomp::Decomp,
+                                     d::Int)
+    n_halo = decomp.n_halo
+    n = decomp.n_local[d]
+    lo, hi = decomp.neighbors[d]
+    f1 = fields[1]
+    slabsz = n_halo * prod(size(f1, k) for k in 1:3 if k != d)
+    nf = length(fields)
+    need = nf * slabsz
+    sb, rb = decomp.send_buf[d], decomp.recv_buf[d]
+    length(sb) < need && resize!(sb, need)
+    length(rb) < need && resize!(rb, need)
+    dsend, drecv = _device_stage(f1, need)
+    sv = view(sb, 1:need)
+    rv = view(rb, 1:need)
+    # phase 1: send high-interior planes to hi neighbor, receive from lo
+    if hi != PNULL
+        for (fi, f) in enumerate(fields)
+            _pack_stage!(dsend, (fi - 1) * slabsz, f, d, (n+1):(n+n_halo))
+        end
+        _tracked_copy!(sb, 1, dsend, 1, need)
+    end
+    MPI.Sendrecv!(sv, rv, decomp.comm; dest=hi, source=lo,
+                  sendtag=20d, recvtag=20d)
+    if lo != PNULL
+        _tracked_copy!(drecv, 1, rb, 1, need)
+        for (fi, f) in enumerate(fields)
+            _unpack_stage!(f, d, 1:n_halo, drecv, (fi - 1) * slabsz)
+        end
+    end
+    # phase 2: send low-interior planes to lo neighbor, receive from hi
+    if lo != PNULL
+        for (fi, f) in enumerate(fields)
+            _pack_stage!(dsend, (fi - 1) * slabsz, f, d,
+                         (n_halo+1):(2*n_halo))
+        end
+        _tracked_copy!(sb, 1, dsend, 1, need)
+    end
+    MPI.Sendrecv!(sv, rv, decomp.comm; dest=lo, source=hi,
+                  sendtag=20d + 1, recvtag=20d + 1)
+    if hi != PNULL
+        _tracked_copy!(drecv, 1, rb, 1, need)
+        for (fi, f) in enumerate(fields)
+            _unpack_stage!(f, d, (n+n_halo+1):(n+2*n_halo), drecv,
+                           (fi - 1) * slabsz)
         end
     end
     return fields

@@ -596,8 +596,12 @@ reference-implementation pass that headed this list are done
    histories in both precisions (`bench/device_solver.jl`,
    `test/device_tests.jl`). At 64³ the synchronized launch mode runs at
    0.4–0.5× the 8-thread CPU, the launch-latency floor G3d exists to remove.
-   Next per the revised plan: G3b adds device MPI, and distributing the
-   level transfer gates both G3c device AMR and the Stage 4 cost
+   G3b is delivered too: a device-resident patch runs decomposed, its halo
+   and fold-pair messages staged through contiguous device buffers around
+   the unchanged MPI path, bitwise against the CPU solver at np = 2/4/8 on
+   the shared workstation GPU, with the staged and reduced-interface
+   transfer shares recorded (`bench/device_mpi.jl`). Next: distributing
+   the level transfer gates both G3c device AMR and the Stage 4 cost
    demonstration on a 3-D mixing case. G4b policy selection uses the
    G3a/G4a device measurements; stream overlap comes last, after the
    residency and communication profiles expose useful concurrency.

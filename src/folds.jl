@@ -200,8 +200,7 @@ function pair_forward!(w, f, solver, fold::FoldSpec, σ::Int)
         # Full-block pairwise exchange, then this rank's designated combo.
         # e-keeper: e(x) = ½[f(x) + σ buf(Mx)];
         # o-keeper (slots y = Mx): o(My) = ½[buf(My) − σ f(y)].
-        MPI.Sendrecv!(f, pair.buf, decomp.comm; dest=pair.partner, source=pair.partner,
-                      sendtag=41, recvtag=41)
+        sendrecv_block!(f, pair.buf, decomp, fold.dim, pair.partner, 41)
         pointwise!(_pair_forward_remote_point!, w, nx, ny, nz,
                    w, f, pair.buf, sf, pair.keep_e, pair.pdim,
                    pair.shift_local, pair.revdim, decomp.n_local,
@@ -265,8 +264,7 @@ function pair_backward!(out, solver, fold::FoldSpec, σ::Int)
                    out, sf, sd, half, pair.pdim, pair.shift_local, pair.revdim,
                    decomp.n_local, decomp.n_halo_d, o1, o2, o3)
     else
-        MPI.Sendrecv!(out, pair.buf, decomp.comm; dest=pair.partner, source=pair.partner,
-                      sendtag=42, recvtag=42)
+        sendrecv_block!(out, pair.buf, decomp, fold.dim, pair.partner, 42)
         pointwise!(_pair_backward_remote_point!, out, nx, ny, nz,
                    out, pair.buf, sf, pair.keep_e, pair.pdim, pair.shift_local,
                    pair.revdim, decomp.n_local, decomp.n_halo_d, o1, o2, o3)

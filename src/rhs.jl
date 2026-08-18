@@ -343,18 +343,15 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
             end
         end
     end
-    # --- Device residency (G3a of reference/AMR_GPU.md) -------------------
-    # A DeviceBackend supports one patch on one rank today. The halo pack /
-    # unpack against MPI buffers, the interface-record copies, and the level
-    # transfer are still host loops; G3b lifts the rank restriction and G3c
-    # the refinement one.
+    # --- Device residency (G3a/G3b of reference/AMR_GPU.md) ---------------
+    # A DeviceBackend supports a single decomposed patch: the halo and
+    # fold-pair exchanges stage through the backend (halo.jl). The
+    # interface-record copies and the level transfer are still host loops,
+    # so several patches wait on their staging and refinement on G3c.
     if backend isa DeviceBackend
-        MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-        MPI.Comm_size(MPI.COMM_WORLD) == 1 ||
-            error("a DeviceBackend runs on one rank until the distributed " *
-                  "device communication of stage G3b lands")
         npatch == 1 ||
-            error("a DeviceBackend takes a single patch until stage G3b")
+            error("a DeviceBackend takes a single patch today; the " *
+                  "interface-record staging has not been converted")
         refine === nothing ||
             error("refinement on a DeviceBackend arrives with stage G3c")
         eos isa Nasa9Mixture &&

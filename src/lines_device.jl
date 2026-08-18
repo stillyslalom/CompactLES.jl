@@ -52,6 +52,25 @@ allocate_state(backend::DeviceBackend, decomp::Decomp{T}, n_cons::Int) where {T}
 empty_field(backend::DeviceBackend, ::Type{T}) where {T} =
     KernelAbstractions.zeros(backend.ka, T, 0, 0, 0)
 
+# Reduced-interface transfer accounting (G3b): the per-apply device/host
+# copies of the interface values and correction factors, tallied apart from
+# the halo staging so the two shares are readable separately. Active only
+# under `TRACK_DEVICE_TRANSFERS` (halo.jl), like the halo counters.
+const REDUCED_TRANSFER_BYTES = Ref(0)
+const REDUCED_TRANSFER_TIME = Ref(0.0)
+
+@inline function _reduced_copy!(dest, src)
+    if TRACK_DEVICE_TRANSFERS[]
+        t0 = time_ns()
+        copyto!(dest, src)
+        REDUCED_TRANSFER_TIME[] += (time_ns() - t0) / 1e9
+        REDUCED_TRANSFER_BYTES[] += length(src) * sizeof(eltype(src))
+    else
+        copyto!(dest, src)
+    end
+    return dest
+end
+
 """
     backend_plan(backend, plan)
 
@@ -355,10 +374,10 @@ function _dev_solve!(plan::DevicePlan, sweep::DeviceThomas)
 
     _dev_pack_ends2_kernel!(plan.backend)(sweep.ends, plan.B, n; ndrange=L)
     synchronize(plan.backend)
-    copyto!(ls.ends, sweep.ends)
+    _reduced_copy!(ls.ends, sweep.ends)
     _reduced_solve!(ls, L)
-    copyto!(sweep.zp, ls.zbp)
-    copyto!(sweep.zn, ls.zbn)
+    _reduced_copy!(sweep.zp, ls.zbp)
+    _reduced_copy!(sweep.zn, ls.zbn)
     synchronize(plan.backend)
     _dev_correct2_kernel!(plan.backend)(plan.B, sweep.v, sweep.w, sweep.zp,
                                         sweep.zn; ndrange=(L, n))
@@ -376,10 +395,10 @@ function _dev_solve!(plan::DevicePlan, sweep::DeviceBanded)
 
     _dev_pack_endsq_kernel!(plan.backend)(sweep.ends, plan.B, n, q; ndrange=L)
     synchronize(plan.backend)
-    copyto!(ls.ends, sweep.ends)
+    _reduced_copy!(ls.ends, sweep.ends)
     _reduced_solve!(ls, L)
-    copyto!(sweep.zbp, ls.zbp)
-    copyto!(sweep.zbn, ls.zbn)
+    _reduced_copy!(sweep.zbp, ls.zbp)
+    _reduced_copy!(sweep.zbn, ls.zbn)
     synchronize(plan.backend)
     _dev_correctq_kernel!(plan.backend)(plan.B, sweep.V, sweep.W, sweep.zbp,
                                         sweep.zbn, q, plan.colwise;

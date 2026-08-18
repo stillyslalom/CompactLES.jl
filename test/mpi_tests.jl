@@ -1195,11 +1195,81 @@ function test_device_lines()
     end
 end
 
+# ---------------------------------------------------------------------------
+# Staged device exchange (reference/AMR_GPU.md, G3b). A device-resident field
+# packs each halo slab into a contiguous backend stage by broadcast, crosses
+# ranks through one contiguous copy each way around the same Sendrecv, and the
+# fold pairing stages its whole blocks the same way. On host arrays those are
+# the identical element copies, so FORCE_DEVICE_EXCHANGE pins the staged path
+# bitwise here — combined with FORCE_KA and a DeviceBackend(CPU()) solver,
+# a full decomposed run takes the closest CPU analog of a distributed device
+# run: DevicePlans, kernel bodies, and staged communication together.
+# ---------------------------------------------------------------------------
+function test_staged_exchange()
+    section("staged device exchange: decomposed runs bitwise (G3b)")
+    cpu = KernelAbstractions.CPU()
+    function tube(backend)
+        eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                            IdealSpecies{Float64}("heavy", 0.2, 1.09)])
+        s = Solver(n_global=(SPLITN, 16, 12), L_domain=(1.0, 0.6, 0.3),
+                   eos=eos, bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                   dims=splitdims(1), backend=backend)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> begin
+            θ = 0.5 * (1 + tanh((x - 0.5) / 0.05))
+            Prim(Y=(1 - θ, θ), rho=(1 - θ) + 0.625θ, p=(1 - θ) + 0.1θ,
+                 u=(0.1 * sin(2π * y / 0.6), 0.0, 0.05 * cos(2π * z / 0.3)))
+        end)
+        return s, Q
+    end
+    s1, Q1 = tube(CPUBackend())
+    run!(s1, Q1; tfinal=0.02, nmax=6)
+    CL.FORCE_KA[] = true
+    CL.FORCE_DEVICE_EXCHANGE[] = true
+    s2, Q2 = tube(DeviceBackend(cpu))
+    try
+        run!(s2, Q2; tfinal=0.02, nmax=6)
+    finally
+        CL.FORCE_KA[] = false
+        CL.FORCE_DEVICE_EXCHANGE[] = false
+    end
+    check("staged multispecies tube, split x: bitwise",
+          gmax(maximum(abs.(parent(Q1) .- parent(Q2)))), 1e-300)
+
+    # Off-rank fold pairing: θ-split resolved axis, whole-block Sendrecv
+    # through sendrecv_block!'s staging.
+    function axis(backend)
+        s = Solver(n_global=(20, SPLITN, 12), L_domain=(1.0, 2π, 0.5),
+                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                   metric=CylindricalMetric(), dims=splitdims(2),
+                   backend=backend)
+        Q = allocate_state(s)
+        initialize!(s, Q, (r, θ, z) ->
+            Prim(u=(0.05r * cos(θ), 0.2r, 0.05 * sin(2π * z / 0.5)),
+                 p=1.0 + 0.02r^2, rho=1.0))
+        return s, Q
+    end
+    s3, Q3 = axis(CPUBackend())
+    run!(s3, Q3; tfinal=0.02, nmax=4)
+    CL.FORCE_KA[] = true
+    CL.FORCE_DEVICE_EXCHANGE[] = true
+    s4, Q4 = axis(DeviceBackend(cpu))
+    try
+        run!(s4, Q4; tfinal=0.02, nmax=4)
+    finally
+        CL.FORCE_KA[] = false
+        CL.FORCE_DEVICE_EXCHANGE[] = false
+    end
+    check("staged axis fold pair, split θ: bitwise",
+          gmax(maximum(abs.(parent(Q3) .- parent(Q4)))), 1e-300)
+end
+
 const SUITE = (
     ("periodic C6", test_periodic_c6),
     ("pentadiagonal C10", test_pentadiagonal_c10),
     ("closed C6", test_closed_c6),
     ("device line solves", test_device_lines),
+    ("staged device exchange", test_staged_exchange),
     ("AMR transfer pair", test_transfer_pair),
     ("halo consistency", test_halo_consistency),
     ("off-rank folds", test_offrank_folds),
