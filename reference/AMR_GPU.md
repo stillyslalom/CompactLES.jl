@@ -825,6 +825,18 @@ entry point on fields living on that backend.
   `DeviceBackend` is **not** yet supported: halo exchange, boundary
   machinery, and `max_rate` are still host loops, which is G3's residency
   scope together with the `Nasa9Mixture` fixed-width mirror.
+- **FP64 vs FP32, measured on the RX 6800 XT at 64³** (RDNA2 vector FP64 is
+  1/16 the FP32 rate, so an ALU-bound kernel would show a ratio near 16):
+  the launch-bound pointwise phases run at 1.03–1.10×, the line solves at
+  1.15–1.29×, and the compute-heaviest body (flux assembly, two species) at
+  1.73× — everything is launch- and bandwidth-bound, and the FP64 ALU
+  penalty is invisible at this size. FP32's payoff approaches a clean 2×
+  only once G3 removes the launch floor. The attempt also showed the code
+  is not yet FP32-clean: a Float64 `2/3` literal in the viscous stresses
+  made the `τ` tuple heterogeneous under `Float32` and its runtime indexing
+  an `InvalidIRError` on device (fixed, `rhs.jl`); bodies not yet run in
+  FP32 (primitives, the artificial-property loops) may hide the same
+  pattern, which the mixed-precision item in `ROADMAP.md` should sweep.
 
 The plan text for the stage, for reference:
 
