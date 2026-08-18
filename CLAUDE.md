@@ -185,6 +185,13 @@ Names are spelled out rather than abbreviated. Current vocabulary:
   solver, and never a `Type` argument — a `Type` inside the launcher's
   Vararg defeats specialization and turns the body call into a per-point
   runtime dispatch (measured 9× on `assemble_fluxes!`).
+- `FieldVector`/`FieldMatrix` and `field_tuples` (the launchable forms of
+  `Y`, `D_art`, `grad_u`, `grad_Y`, `flux`: zero-cost host wrappers that
+  adapt to isbits `DeviceFieldVector`/`DeviceFieldMatrix` tuples at device
+  launch). Never hand a bare `Vector`/`Matrix` of arrays to a device
+  kernel — it hangs in kernel-argument adaptation instead of erroring —
+  and never hold the tuple form on the host: runtime tuple indexing cost
+  `assemble_fluxes!` 3× on the `@threaded` path when it was tried.
 - `refresh_primitives!`, `mixture_density`, `boundary_plane` (the in-flight
   state-query API; primitives are stale inside a callback, see the
   `refresh_primitives!` docstring)

@@ -719,14 +719,28 @@ already been removed by the time G1 landed).
   per-component launches run 0.6× — `pointwise_ka!` synchronizes per call,
   so many small launches pay the round trip that G3's streams-and-residency
   work exists to remove. First-launch kernel compilation is ~9 s per body.
-- **Remaining before the whole RHS runs on device:** argument adaptation.
-  The `Vector{A}`/`Matrix{A}` field collections and the EOS coefficient
-  tables are not isbits, and the failure mode is worse than an error: a
-  `Matrix{ROCArray}` kernel argument *hangs* in kernel-argument adaptation
-  rather than raising anything. Adapt.jl mirrors (tuples or device arrays)
-  for `Y`, `D_art`, `grad_u`, `grad_Y`, `flux` and the EOS tables, the
-  `max_rate` mapreduce, and the `Nasa9Mixture` fixed-width mirror are the
-  open items.
+- **The argument adaptation is delivered and measured.** The field
+  collections reach the bodies as `FieldVector`/`FieldMatrix`
+  (`src/pointwise.jl`, built once per patch as `Patch.field_tuples`):
+  zero-cost host wrappers whose only job is to carry the Adapt rule, so
+  the `@threaded` path indexes exactly what it always indexed while a
+  device launch adapts them to isbits `NTuple` mirrors. The gas-model EOS
+  objects adapt the same way (`IdealMixtureCoeffs`/`StiffenedGasCoeffs`,
+  physics.jl), since both carry name strings and `IdealMixture` carries
+  `Vector` tables — a bare collection kernel argument *hangs* in
+  kernel-argument adaptation rather than raising anything, which is why
+  the wrappers are mandatory. Two designs were measured: holding the
+  tuple on the host cost `assemble_fluxes!` 3× on the `@threaded` path
+  (runtime tuple indexing in the species loops), so the tuple materializes
+  only at launch. With it, the *full flux-assembly body* — every
+  collection plus the mirrored EOS — runs on the RX 6800 XT bitwise
+  against the CPU and 9.9× faster than 8-thread `@threaded` at 64³, two
+  species (0.236 ms vs 2.33 ms, `bench/device_bringup.jl`).
+- **Remaining on the G-track before a whole solver lives on device:** the
+  `max_rate` mapreduce, the `Nasa9Mixture` fixed-width mirror, a device
+  backend behind `field(backend, decomp)` for allocation, and G2 — the
+  line solves, without which every compact operator still round-trips
+  through the host.
 
 The plan text for the stage, for reference — convert the phases that are
 pointwise loops, per `bench/phases.jl` the majority of the budget outside

@@ -440,7 +440,7 @@ function gate_beta!(solver)
     o1, o2, o3 = solver.decomp.n_halo_d
     nx, ny, nz = solver.decomp.n_local
     pointwise!(_gate_beta_point!, solver.beta_art, nx, ny, nz,
-               solver.beta_art, solver.grad_u, o1, o2, o3)
+               solver.beta_art, solver.field_tuples.grad_u, o1, o2, o3)
     return solver
 end
 
@@ -506,14 +506,14 @@ function dilatation_beta!(solver, C_beta, gated::Bool)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    grad_u = solver.grad_u
     if gated
         # Δ into tmp_a, the switch into tmp_b.
         pointwise!(_dilatation_switch_point!, solver.tmp_a, nx, ny, nz,
-                   solver.tmp_a, solver.tmp_b, grad_u, o1, o2, o3)
+                   solver.tmp_a, solver.tmp_b, solver.field_tuples.grad_u,
+                   o1, o2, o3)
     else
         pointwise!(_dilatation_point!, solver.tmp_a, nx, ny, nz,
-                   solver.tmp_a, grad_u, o1, o2, o3)
+                   solver.tmp_a, solver.field_tuples.grad_u, o1, o2, o3)
     end
     exchange_halos!(solver.tmp_a, decomp)
     detect_sum!(solver.sensor, solver.tmp_a, solver, 2)
@@ -593,7 +593,6 @@ function compute_artificial!(solver, Q)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    grad_u = solver.grad_u
     # The coefficients are read into locals rather than off `art` inside the
     # loops. A threaded closure that captures the struct allocates once per
     # region in proportion to the closure's size: 768 B per RHS call when this
@@ -609,7 +608,7 @@ function compute_artificial!(solver, Q)
     # Strain-rate magnitude |S| = sqrt(S_ij S_ij) in the interior (physical
     # components — the metric corrections are already in grad_u).
     pointwise!(_strain_mag_point!, solver.strain_mag, nx, ny, nz,
-               solver.strain_mag, grad_u, o1, o2, o3)
+               solver.strain_mag, solver.field_tuples.grad_u, o1, o2, o3)
 
     # Strain sensor: h_d² |D_d S| reduced over directions for the selected
     # detector D, smoothed. One pass serves μ* and β* where both are built from

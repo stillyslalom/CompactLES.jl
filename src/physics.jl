@@ -162,6 +162,28 @@ end
 @inline art_conductivity_scale(::IdealMixture, ρ, c, T_ion, cp_mix) =
     ρ * c / max(T_ion, eps(typeof(T_ion)))
 
+# Device-side mirror of the coefficient tables (GPU Stage G1, pointwise.jl):
+# an `IdealMixture` holds `Vector` tables and species names, neither of which
+# a kernel argument may carry, so `Adapt.adapt_structure` replaces the whole
+# object with this isbits form at kernel launch. Only the methods the
+# per-point bodies call exist for it. The tuple construction runs host-side
+# once per device launch; the KA CPU backend converts nothing, so the CPU
+# paths never see the mirror.
+struct IdealMixtureCoeffs{T,N}
+    Rk::NTuple{N,T}
+    cvk::NTuple{N,T}
+    cpk::NTuple{N,T}
+end
+
+Adapt.adapt_structure(to, eos::IdealMixture{T}) where {T} =
+    IdealMixtureCoeffs{T,length(eos.Rk)}((eos.Rk...,), (eos.cvk...,),
+                                         (eos.cpk...,))
+
+Base.@propagate_inbounds species_enthalpy(eos::IdealMixtureCoeffs, k::Int, T_ion) =
+    eos.cpk[k] * T_ion
+@inline art_conductivity_scale(::IdealMixtureCoeffs, ρ, c, T_ion, cp_mix) =
+    ρ * c / max(T_ion, eps(typeof(T_ion)))
+
 # ---------------------------------------------------------------------------
 # Stiffened gas: the minimal condensed-matter EOS.
 #
@@ -218,6 +240,21 @@ species_enthalpy(eos::StiffenedGas, ::Int, T_ion) = eos.gamma * eos.cv * T_ion
 @inline eos_phi(eos::StiffenedGas, ρ, p, T_ion, cp_mix) = 1 / (eos.gamma - 1)
 @inline eos_dphi_dY(::StiffenedGas, ::Int, ρ, p, T_ion, cp_mix) = 0.0
 @inline art_conductivity_scale(::StiffenedGas, ρ, c, T_ion, cp_mix) =
+    ρ * c / max(T_ion, eps(typeof(T_ion)))
+
+# `StiffenedGas` carries a name string, so it takes the same launch-time
+# mirror treatment as `IdealMixture` above.
+struct StiffenedGasCoeffs{T}
+    gamma::T
+    cv::T
+end
+
+Adapt.adapt_structure(to, eos::StiffenedGas) =
+    StiffenedGasCoeffs(eos.gamma, eos.cv)
+
+@inline species_enthalpy(eos::StiffenedGasCoeffs, ::Int, T_ion) =
+    eos.gamma * eos.cv * T_ion
+@inline art_conductivity_scale(::StiffenedGasCoeffs, ρ, c, T_ion, cp_mix) =
     ρ * c / max(T_ion, eps(typeof(T_ion)))
 
 @inline function _primitives_stiffened_point!(Q, ρa, ua, va, wa, pa, T_iona,
@@ -627,9 +664,10 @@ the interior before the sweep.
 primitives!(solver, Q) = _primitives!(solver, solver.eos, Q)
 
 @inline function _primitives_ideal_point!(Q, ρa, ua, va, wa, pa, T_iona, ca,
-                                          cpa, Y, Rk, cvk, n_species,
+                                          cpa, Y, eos, n_species,
                                           m1, m2, m3, i_energy, i, j, k)
     @inbounds begin
+        Rk, cvk = eos.Rk, eos.cvk
         ρ = 0.0
         for sp in 1:n_species
             ρ += Q[i, j, k, sp]
@@ -673,12 +711,12 @@ function _primitives!(solver, eos::IdealMixture, Q)
     n_species = solver.equations.n_species
     m1, m2, m3 = solver.equations.i_mom
     i_energy = solver.equations.i_energy
-    Rk, cvk = eos.Rk, eos.cvk
     ρa, ua, va, wa = solver.rho, solver.u, solver.v, solver.w
     pa, T_iona, ca, cpa = solver.p, solver.T_ion, solver.c, solver.cp_mix
     nxf, nyf, nzf = size(ρa)
     pointwise!(_primitives_ideal_point!, ρa, nxf, nyf, nzf,
-               Q, ρa, ua, va, wa, pa, T_iona, ca, cpa, solver.Y, Rk, cvk,
+               Q, ρa, ua, va, wa, pa, T_iona, ca, cpa,
+               solver.field_tuples.Y, eos,
                n_species, m1, m2, m3, i_energy)
     return solver
 end

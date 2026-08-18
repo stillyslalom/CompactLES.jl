@@ -11,11 +11,12 @@
 #   julia --project=<env-with-AMDGPU> -t 8 bench/device_bringup.jl backend=amdgpu
 #   julia --project=<env-with-CUDA>   -t 8 bench/device_bringup.jl backend=cuda
 #
-# Do NOT pass a `Vector{<:AbstractArray}` or `Matrix{<:AbstractArray}` kernel
-# argument to a device launch: it does not raise an error, it HANGS in
-# kernel-argument adaptation (measured on AMDGPU). The collection-argument
-# bodies (fluxes, strain, primitives) stay CPU-side until the Adapt mirrors
-# exist.
+# Do NOT pass a bare `Vector{<:AbstractArray}` or `Matrix{<:AbstractArray}`
+# kernel argument to a device launch: it does not raise an error, it HANGS
+# in kernel-argument adaptation (measured on AMDGPU). The FieldVector /
+# FieldMatrix wrappers (src/pointwise.jl) are the supported route — zero-cost
+# on the host, adapted to isbits tuples at launch — and the section below
+# runs the full flux-assembly body through them, Adapt-mirrored EOS included.
 
 using CompactLES
 using Printf
@@ -104,6 +105,49 @@ function main(opt, device_array)
     end)
     @printf("rk update x%d launches: device %.3f ms   @threaded(%d) %.3f ms\n",
             nc, 1e3t_gpu, Threads.nthreads(), 1e3t_thr)
+
+    # --- Collection-argument bodies through the FieldVector/FieldMatrix
+    # wrappers and the Adapt EOS mirror: the full flux assembly, two species.
+    nsp = 2
+    ncons2 = nsp + 4
+    pdims = n .+ 2pad
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.2, 1.09)])
+    mkp() = abs.(randn(pdims...)) .+ 1.0
+    Qc2 = randn(pdims..., ncons2)
+    prims = [mkp() for _ in 1:7]                 # rho,u,v,w,p,T_ion,cp_mix
+    arts = [abs.(randn(pdims...)) .* 1e-3 for _ in 1:3]
+    D_c = [abs.(randn(pdims...)) .* 1e-3 for _ in 1:nsp]
+    Y_c = [rand(pdims...) for _ in 1:nsp]
+    gu_c = [randn(pdims...) for _ in 1:3, _ in 1:3]
+    gT_c = (randn(pdims...), randn(pdims...), randn(pdims...))
+    gY_c = [randn(pdims...) for _ in 1:3, _ in 1:nsp]
+    fl_c = [zeros(pdims...) for _ in 1:3, _ in 1:ncons2]
+    m1, m2, m3, ie = nsp + 1, nsp + 2, nsp + 3, nsp + 4
+    fluxargs(Q, pr, ar, D, Y, gu, gT, gY, fl) =
+        (Q, eos, pr[1], pr[2], pr[3], pr[4], pr[5], pr[6], pr[7],
+         ar[1], ar[2], ar[3], CL.FieldVector(D), CL.FieldVector(Y),
+         CL.FieldMatrix(gu), gT, CL.FieldMatrix(gY), CL.FieldMatrix(fl),
+         1e-3, 0.7, 0.7, nsp, m1, m2, m3, ie, pad, pad, pad)
+    ac = fluxargs(Qc2, prims, arts, D_c, Y_c, gu_c, gT_c, gY_c, fl_c)
+    CL.pointwise!(CL._fluxes_point!, Qc2, n..., ac...)
+    Qg2 = device_array(Qc2)
+    prims_g = map(device_array, prims)
+    arts_g = map(device_array, arts)
+    D_g = map(device_array, D_c)
+    Y_g = map(device_array, Y_c)
+    gu_g = [device_array(gu_c[a, b]) for a in 1:3, b in 1:3]
+    gT_g = map(device_array, gT_c)
+    gY_g = [device_array(gY_c[dd, s]) for dd in 1:3, s in 1:nsp]
+    fl_g = [device_array(zeros(pdims...)) for _ in 1:3, _ in 1:ncons2]
+    ag = fluxargs(Qg2, prims_g, arts_g, D_g, Y_g, gu_g, gT_g, gY_g, fl_g)
+    CL.pointwise_ka!(CL._fluxes_point!, gpu, n..., ag...)
+    d = maximum(maximum(abs.(Array(fl_g[i]) .- fl_c[i])) for i in eachindex(fl_c))
+    println("flux assembly  max |gpu - cpu| = ", d, d == 0 ? "  (bitwise)" : "")
+    t_gpu = best(() -> CL.pointwise_ka!(CL._fluxes_point!, gpu, n..., ag...))
+    t_thr = best(() -> CL.pointwise!(CL._fluxes_point!, Qc2, n..., ac...))
+    @printf("flux assembly %d^3 2sp: device %.3f ms   @threaded(%d) %.3f ms\n",
+            opt.n, 1e3t_gpu, Threads.nthreads(), 1e3t_thr)
     return nothing
 end
 

@@ -221,7 +221,8 @@ function metric_correct_gradients!(solver, ::CylindricalMetric)
     decomp = solver.decomp; o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     pointwise!(_grad_corr_cyl_point!, solver.inv_r, nx, ny, nz,
-               solver.grad_u, solver.u, solver.v, solver.inv_r, o1, o2, o3)
+               solver.field_tuples.grad_u, solver.u, solver.v, solver.inv_r,
+               o1, o2, o3)
     return solver
 end
 
@@ -245,8 +246,8 @@ function metric_correct_gradients!(solver, ::SphericalMetric)
     decomp = solver.decomp; o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     pointwise!(_grad_corr_sph_point!, solver.inv_r, nx, ny, nz,
-               solver.grad_u, solver.u, solver.v, solver.w, solver.inv_r,
-               solver.cot_over_r, o1, o2, o3)
+               solver.field_tuples.grad_u, solver.u, solver.v, solver.w,
+               solver.inv_r, solver.cot_over_r, o1, o2, o3)
     return solver
 end
 
@@ -286,7 +287,7 @@ function add_metric_sources!(solver, dQ, Q, ::CylindricalMetric)
     nx, ny, nz = decomp.n_local
     m = solver.equations.i_mom
     pointwise!(_metric_src_cyl_point!, solver.inv_r, nx, ny, nz,
-               dQ, solver.grad_u, solver.transport.mu0, solver.mu_art,
+               dQ, solver.field_tuples.grad_u, solver.transport.mu0, solver.mu_art,
                solver.beta_art, solver.rho, solver.u, solver.v, solver.w,
                solver.p, solver.inv_r, m[1], m[2], o1, o2, o3)
     return solver
@@ -315,7 +316,7 @@ function add_metric_sources!(solver, dQ, Q, ::SphericalMetric)
     nx, ny, nz = decomp.n_local
     m = solver.equations.i_mom
     pointwise!(_metric_src_sph_point!, solver.inv_r, nx, ny, nz,
-               dQ, solver.grad_u, solver.transport.mu0, solver.mu_art,
+               dQ, solver.field_tuples.grad_u, solver.transport.mu0, solver.mu_art,
                solver.beta_art, solver.rho, solver.u, solver.v, solver.w,
                solver.p, solver.inv_r, solver.cot_over_r, m[1], m[2], m[3],
                o1, o2, o3)

@@ -54,7 +54,7 @@ its operator plans and folds, and every field array, typed
 user code normally reaches these fields through the solver (which forwards
 them for a single-patch run) rather than holding a `Patch` directly.
 """
-struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP}
+struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,TF}
     id::Int
     level::Int
     region::BlockRegion                     # offset + extent, in this LEVEL's node
@@ -98,6 +98,33 @@ struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP}
     cot_over_r::A
     # fluxes flux[d, c]
     flux::Matrix{A}
+    # The same collections as isbits-adaptable tuples (FieldVector /
+    # FieldMatrix, pointwise.jl): what the pointwise per-point bodies index,
+    # since a Vector or Matrix kernel argument hangs a device launch. Same
+    # array objects, no copies; the convenience constructor below derives
+    # them.
+    field_tuples::TF
+end
+
+# The positional argument list every construction site uses; `field_tuples`
+# is derived here rather than at the sites so the sites never fall out of
+# step with the wrapper set.
+function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
+               deriv_plans, div_plans, filter_plans, smooth_plans, ring_plans,
+               pairbuf, pairout, rho, u, v, w, p, T_ion, c, cp_mix, Y,
+               grad_u, grad_T_ion, grad_Y, mu_art, beta_art, kappa_art, D_art,
+               strain_mag, sensor, sensor_sp, tmp_a, tmp_b, ring_buf,
+               inv_J, area_d, inv_h, inv_r, cot_over_r, flux)
+    field_tuples = (Y=FieldVector(Y), D_art=FieldVector(D_art),
+                    grad_u=FieldMatrix(grad_u), grad_Y=FieldMatrix(grad_Y),
+                    flux=FieldMatrix(flux))
+    return Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
+                 deriv_plans, div_plans, filter_plans, smooth_plans,
+                 ring_plans, pairbuf, pairout, rho, u, v, w, p, T_ion, c,
+                 cp_mix, Y, grad_u, grad_T_ion, grad_Y, mu_art, beta_art,
+                 kappa_art, D_art, strain_mag, sensor, sensor_sp, tmp_a,
+                 tmp_b, ring_buf, inv_J, area_d, inv_h, inv_r, cot_over_r,
+                 flux, field_tuples)
 end
 
 # Property names owned by the patch rather than the solver configuration.
@@ -117,7 +144,7 @@ end
     n === :strain_mag || n === :sensor || n === :sensor_sp ||
     n === :tmp_a || n === :tmp_b || n === :ring_buf ||
     n === :inv_J || n === :area_d || n === :inv_h || n === :inv_r ||
-    n === :cot_over_r || n === :flux
+    n === :cot_over_r || n === :flux || n === :field_tuples
 
 """
     PatchSolver(solver, patch)

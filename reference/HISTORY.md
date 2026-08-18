@@ -23,6 +23,8 @@ points at them rather than restating them.
 13. [AMR/GPU Stage 1 — level-transfer operators (August 2026)](#amrgpu-stage-1--level-transfer-operators-august-2026)
 14. [AMR/GPU Stage 2 — patch abstraction and storage generalization (August 2026)](#amrgpu-stage-2--patch-abstraction-and-storage-generalization-august-2026)
 15. [AMR/GPU Stage 3 — static two-level refinement (August 2026)](#amrgpu-stage-3--static-two-level-refinement-august-2026)
+16. [AMR/GPU Stage 4 — subcycling, tagging, and regridding (August 2026)](#amrgpu-stage-4--subcycling-tagging-and-regridding-august-2026)
+17. [GPU Stage G1 — pointwise kernels via KernelAbstractions (August 2026)](#gpu-stage-g1--pointwise-kernels-via-kernelabstractions-august-2026)
 
 ## Phase 0 — extensibility seams (July 2026)
 
@@ -809,3 +811,17 @@ collection-typed kernel argument was found to hang in adaptation rather
 than error — so the isbits argument adaptation (with the `max_rate`
 mapreduce and the Nasa9 mirror) is the open G-track work, and
 `bench/device_bringup.jl` is the script that reproduces the measurements.
+
+The device-argument adaptation followed in the same push: the field
+collections reach the per-point bodies as `FieldVector`/`FieldMatrix`
+(zero-cost host wrappers, built once per patch as `Patch.field_tuples`,
+whose only job is to carry the Adapt rule), and the gas-model EOS objects
+adapt to isbits coefficient mirrors at kernel launch. A first design held
+the tuples on the host and cost `assemble_fluxes!` 3× on the `@threaded`
+path through runtime tuple indexing, so the tuples materialize only at
+launch. With the adaptation in place the full flux-assembly body — every
+collection plus the mirrored `IdealMixture` — runs on the RX 6800 XT
+bitwise against the CPU and 9.9× faster than 8-thread `@threaded` at 64³
+with two species; `bench/device_bringup.jl` carries the measurement. The
+default path stayed bit-identical on every guard, and jetcheck/audit held
+probe for probe.

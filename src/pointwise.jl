@@ -11,16 +11,21 @@
 # directly; a device array reaches it automatically through [`pointwise!`].
 #
 # The bodies take plain arrays and scalars rather than the solver, which is
-# most of what a device launch requires of them. What remains before a GPU
-# actually runs them is argument adaptation: the `Vector{A}` and `Matrix{A}`
-# field collections (`Y`, `D_art`, `grad_u`, `grad_Y`, `flux`) and the EOS
-# objects carrying `Vector` coefficient tables are not isbits and need
-# Adapt.jl mirrors (tuples or device arrays). That conversion is deliberately
-# deferred to first device bring-up, where it can be validated; the KA CPU
-# backend accepts the current argument shapes unchanged.
+# most of what a device launch requires of them. The remaining device
+# requirement is that every kernel argument adapt to an isbits form, and a
+# `Vector{A}` or `Matrix{A}` does not — worse, it HANGS in kernel-argument
+# adaptation rather than erroring (measured on AMDGPU). The field
+# collections therefore reach the bodies as the [`FieldVector`](@ref) and
+# [`FieldMatrix`](@ref) wrappers below — tuples of the same arrays, built
+# once at `Patch` construction (`Patch.field_tuples`), indexed exactly as
+# the `Vector`/`Matrix` forms are so the bodies read identically on either
+# path — and the gas-model EOS objects adapt to coefficient mirrors at
+# launch time (`physics.jl`). `Nasa9Mixture` has no mirror yet, per the
+# plan's ordering: it needs the fixed-width interval table.
 
 using KernelAbstractions
 using KernelAbstractions: get_backend, synchronize
+using Adapt
 
 # The routing test, seeing through the ConservedState display wrapper: `Array`
 # storage takes the @threaded path, anything else the KA kernel path. Each
@@ -30,6 +35,74 @@ using KernelAbstractions: get_backend, synchronize
 @inline _cpu_storage(::AbstractArray) = false
 
 KernelAbstractions.get_backend(Q::ConservedState) = get_backend(parent(Q))
+
+"""
+    FieldVector(v::AbstractVector)
+
+Launchable stand-in for a `Vector` of field arrays (`Y`, `D_art`). On the
+host it is a zero-cost wrapper — `getindex` forwards to the vector, so the
+`@threaded` path indexes exactly what it always indexed — and its whole
+purpose is to carry the Adapt rule: at device-kernel launch it adapts to a
+[`DeviceFieldVector`](@ref), an isbits `NTuple` of the device-side arrays.
+A bare `Vector` kernel argument instead *hangs* in kernel-argument
+adaptation (measured on AMDGPU), which is why the bodies never see one.
+An early version held the `NTuple` on the host too; runtime tuple indexing
+in the species loops cost `assemble_fluxes!` 3× on the `@threaded` path,
+so the tuple now materializes only at launch. Built once per patch
+(`Patch.field_tuples`).
+"""
+struct FieldVector{A,V<:AbstractVector{A}}
+    v::V
+end
+
+Base.@propagate_inbounds Base.getindex(w::FieldVector, i::Int) = w.v[i]
+Base.length(w::FieldVector) = length(w.v)
+
+"""
+    DeviceFieldVector
+
+The device-side form of a [`FieldVector`](@ref): the same arrays as an
+isbits `NTuple`, indexed as the vector was. Constructed by Adapt at kernel
+launch; never on the host path.
+"""
+struct DeviceFieldVector{N,A}
+    data::NTuple{N,A}
+end
+
+Base.@propagate_inbounds Base.getindex(w::DeviceFieldVector, i::Int) = w.data[i]
+Base.length(::DeviceFieldVector{N}) where {N} = N
+
+Adapt.adapt_structure(to, w::FieldVector) =
+    DeviceFieldVector(map(x -> adapt(to, x), (w.v...,)))
+
+"""
+    FieldMatrix(m::AbstractMatrix)
+
+The two-index counterpart of [`FieldVector`](@ref) for `grad_u`, `grad_Y`
+and `flux`: a zero-cost host wrapper of the `Matrix` that adapts to a
+[`DeviceFieldMatrix`](@ref) at device-kernel launch, so `grad_u[a, b][I]`
+reads unchanged on either path.
+"""
+struct FieldMatrix{A,M<:AbstractMatrix{A}}
+    m::M
+end
+
+Base.@propagate_inbounds Base.getindex(w::FieldMatrix, a::Int, b::Int) = w.m[a, b]
+Base.size(w::FieldMatrix) = size(w.m)
+
+"The device-side form of a [`FieldMatrix`](@ref): column-major `NTuple`."
+struct DeviceFieldMatrix{N1,L,A}
+    data::NTuple{L,A}
+end
+
+Base.@propagate_inbounds Base.getindex(w::DeviceFieldMatrix{N1}, a::Int,
+                                       b::Int) where {N1} =
+    w.data[(b - 1) * N1 + a]
+
+Adapt.adapt_structure(to, w::FieldMatrix) =
+    DeviceFieldMatrix{size(w.m, 1),length(w.m),
+                      typeof(adapt(to, first(w.m)))}(
+        map(x -> adapt(to, x), (w.m...,)))
 
 """
 Test and benchmark toggle: `true` routes every [`pointwise!`](@ref) launch

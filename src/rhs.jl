@@ -1033,11 +1033,12 @@ function _assemble_fluxes!(solver::SolverLike{T}, eos, Q) where {T}
     n_species = solver.equations.n_species
     i_energy = solver.equations.i_energy
     m1, m2, m3 = solver.equations.i_mom
+    ft = solver.field_tuples
     pointwise!(_fluxes_point!, solver.rho, nx, ny, nz,
                Q, eos, solver.rho, solver.u, solver.v, solver.w, solver.p,
                solver.T_ion, solver.cp_mix, solver.mu_art, solver.beta_art,
-               solver.kappa_art, solver.D_art, solver.Y, solver.grad_u,
-               solver.grad_T_ion, solver.grad_Y, solver.flux,
+               solver.kappa_art, ft.D_art, ft.Y, ft.grad_u,
+               solver.grad_T_ion, ft.grad_Y, ft.flux,
                tr.mu0, tr.Pr, tr.Sc, n_species, m1, m2, m3, i_energy,
                o1, o2, o3)
     return solver
