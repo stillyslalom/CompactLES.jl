@@ -192,6 +192,15 @@ Names are spelled out rather than abbreviated. Current vocabulary:
   kernel — it hangs in kernel-argument adaptation instead of erroring —
   and never hold the tuple form on the host: runtime tuple indexing cost
   `assemble_fluxes!` 3× on the `@threaded` path when it was tried.
+- `DeviceBackend` (an `AbstractBackend` wrapping a KernelAbstractions
+  backend, behind `field(backend, decomp)` and `allocate_state`),
+  `device_plan`/`DevicePlan` (device mirror of a `DirPlan`/`BandPlan`:
+  fill, sweep, spike correction and scatter as KA kernels in a
+  (lines × n) layout, one thread per line; the reduced interface stage
+  stays host-side through the wrapped plan's `line_solver`, so the device
+  method of `apply_along!` is collective exactly as the host one is), and
+  `colwise` (dim 1 mirrors the `solve_col!` banded arithmetic so the
+  KA-CPU comparison stays bitwise per dimension)
 - `refresh_primitives!`, `mixture_density`, `boundary_plane` (the in-flight
   state-query API; primitives are stale inside a callback, see the
   `refresh_primitives!` docstring)

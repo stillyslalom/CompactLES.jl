@@ -740,7 +740,10 @@ already been removed by the time G1 landed).
   `max_rate` mapreduce, the `Nasa9Mixture` fixed-width mirror, a device
   backend behind `field(backend, decomp)` for allocation, and G2 — the
   line solves, without which every compact operator still round-trips
-  through the host.
+  through the host. (The allocation backend and the line solves have since
+  landed with G2, below; the mapreduce and the Nasa9 mirror remain, along
+  with halo exchange and the boundary machinery, under G3's residency
+  scope.)
 
 The plan text for the stage, for reference — convert the phases that are
 pointwise loops, per `bench/phases.jl` the majority of the budget outside
@@ -774,6 +777,56 @@ the line solves:
   mechanism is proven on the simple models.
 
 ### G2 — line solves on device
+
+**Status: delivered** (August 2026) at the operator level: `device_plan`
+mirrors a host `DirPlan`/`BandPlan` onto a KernelAbstractions backend as a
+`DevicePlan` (`src/lines_device.jl`), applied through the same `apply_along!`
+entry point on fields living on that backend.
+
+- **Layout**: every dimension uses the (lines × n) layout on device — one
+  thread per line for the elimination sweeps, one thread per point for the
+  fill, scatter, and spike-correction kernels, so consecutive threads touch
+  consecutive memory at every sweep position. The plan's permute-vs-second-
+  kernel question for the x sweep resolved to neither: the (lines × n) fill
+  reads the field strided for dim 1, but the sweep is the O(n)-pass stage,
+  so the sweep-coalesced layout is the only one implemented — and the
+  measured dim-1 applies (0.71–0.74 ms at 64³) sit inside the dim-2/3
+  spread, so no second layout is warranted at this size.
+- **The reduced 2qP × 2qP interface stage stays host-side** as planned: a
+  pack kernel writes the 2q interface values per line in the layout of
+  `line_solver.ends`, one device-to-host copy feeds `_reduced_solve!` — the
+  stage factored out of the two host layouts (`tridiag.jl`, `banded.jl`), so
+  host and device run literally the same Allgather + prefactorized `ldiv!`
+  code — and one host-to-device copy returns the per-line correction values.
+  Collective ordering is identical to the host path, and the factoring
+  merged the two JET-visible `ldiv!` dispatch sites on the `Any`-typed
+  reduced LU into one (jetcheck deriv_along! 2 → 1, same site).
+- **The comparison gate is bitwise, host convention per dimension.** The
+  device kernels mirror the host arithmetic per line operation for
+  operation. The two host layouts themselves disagree in the banded solve —
+  the x sweep divides by the diagonal where the transposed y/z sweeps
+  multiply by its inverse, and they accumulate the spike correction
+  differently — so the kernels carry a `colwise` switch selecting the
+  convention of the plan's dimension. With it, C6, C10, the C8 filter, the
+  explicit Gaussian filter, and the d8 detector reproduce the host plans
+  **bitwise** over closed edges, folds, and periodic wrap in all three
+  dimensions: on the KA CPU backend (serial testset + a decomposed MPI
+  testset that pins the cross-rank Allgather through the device staging),
+  and on the RX 6800 XT itself (`bench/device_bringup.jl`), where every
+  case is also max |gpu − cpu| = 0.
+- **Timing at 64³ is a correctness milestone, not a win yet**: 0.68–0.80 ms
+  per apply on device vs 0.31–0.96 ms for the 8-thread host path. Each apply
+  is five synchronized launches plus the host round trip, and 64³ offers
+  only 4096 lines of parallelism; this is the launch-latency profile G3's
+  residency and stream work exists to remove, with the one already-won case
+  (C10 dim 1: 0.73 vs 0.96 ms) showing where the sweeps themselves stand.
+- `DeviceBackend` wraps a KA backend behind `field(backend, decomp)` and
+  `allocate_state` — the allocation half of the seam. A full `Solver` on a
+  `DeviceBackend` is **not** yet supported: halo exchange, boundary
+  machinery, and `max_rate` are still host loops, which is G3's residency
+  scope together with the `Nasa9Mixture` fixed-width mirror.
+
+The plan text for the stage, for reference:
 
 The distributed compact solve is batched Thomas/banded sweeps: sequential
 along a line, embarrassingly parallel across lines. The transposed

@@ -73,24 +73,8 @@ function solve_lines_t!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where 
         line_solver.ends[1, l] = B[l, 1]
         line_solver.ends[2, l] = B[l, n]
     end
-    if line_solver.P > 1
-        MPI.Allgather!(line_solver.ends,
-                       MPI.UBuffer(vec(line_solver.gath), 2L), line_solver.comm)
-    else
-        copyto!(view(line_solver.gath, :, :, 1), line_solver.ends)
-    end
-    @inbounds for q in 0:(line_solver.P-1), l in 1:L
-        line_solver.z[2q+1, l] = line_solver.gath[1, l, q+1]
-        line_solver.z[2q+2, l] = line_solver.gath[2, l, q+1]
-    end
-    ldiv!(line_solver.red, line_solver.z)
-    cprev = 2 * mod(line_solver.p - 1, line_solver.P) + 2
-    cnext = 2 * mod(line_solver.p + 1, line_solver.P) + 1
+    _reduced_solve!(line_solver, L)
     zp, zn = line_solver.zbp, line_solver.zbn
-    @inbounds for l in 1:L
-        zp[l] = line_solver.z[cprev, l]
-        zn[l] = line_solver.z[cnext, l]
-    end
     v, w = line_solver.v, line_solver.w
     @threaded n*L for rng in _line_chunks(L)
         isempty(rng) && continue
@@ -146,23 +130,7 @@ function solve_lines_t!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T}) wh
         line_solver.ends[r, l] = B[l, r]
         line_solver.ends[q+r, l] = B[l, n-q+r]
     end
-    if line_solver.P > 1
-        MPI.Allgather!(line_solver.ends,
-                       MPI.UBuffer(vec(line_solver.gath), 2q * L), line_solver.comm)
-    else
-        copyto!(view(line_solver.gath, :, :, 1), line_solver.ends)
-    end
-    m2 = 2q
-    @inbounds for rk in 0:(line_solver.P-1), l in 1:L, r in 1:m2
-        line_solver.z[m2*rk+r, l] = line_solver.gath[r, l, rk+1]
-    end
-    ldiv!(line_solver.red, line_solver.z)
-    cprev = m2 * mod(line_solver.p - 1, line_solver.P) + q
-    cnext = m2 * mod(line_solver.p + 1, line_solver.P)
-    @inbounds for l in 1:L, t in 1:q
-        line_solver.zbp[l, t] = line_solver.z[cprev+t, l]
-        line_solver.zbn[l, t] = line_solver.z[cnext+t, l]
-    end
+    _reduced_solve!(line_solver, L)
     V, W = line_solver.V, line_solver.W
     @threaded n*L for rng in _line_chunks(L)
         isempty(rng) && continue

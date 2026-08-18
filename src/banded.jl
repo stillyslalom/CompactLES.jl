@@ -188,6 +188,37 @@ function BandLineSolver(Ab::Matrix{T}, AL::Matrix{T}, CR::Matrix{T},
 end
 
 """
+Reduced interface stage shared by every layout of the banded solve: from
+`line_solver.ends` already holding the local head and tail values (2q per line),
+gather the interface values, solve the dense reduced system, and leave the `q`
+correction values each line needs from the previous rank's tail and the next
+rank's head in `line_solver.zbp` and `line_solver.zbn` (lines × q). The gather
+is collective when `P > 1`, so every rank of the sub-communicator must call
+this.
+"""
+function _reduced_solve!(line_solver::BandLineSolver{T}, L::Int) where {T}
+    q = line_solver.q
+    if line_solver.P > 1
+        MPI.Allgather!(line_solver.ends,
+                       MPI.UBuffer(vec(line_solver.gath), 2q * L), line_solver.comm)
+    else
+        copyto!(view(line_solver.gath, :, :, 1), line_solver.ends)
+    end
+    m2 = 2q
+    @inbounds for rk in 0:(line_solver.P-1), l in 1:L, r in 1:m2
+        line_solver.z[m2*rk+r, l] = line_solver.gath[r, l, rk+1]
+    end
+    ldiv!(line_solver.red, line_solver.z)
+    cprev = m2 * mod(line_solver.p - 1, line_solver.P) + q
+    cnext = m2 * mod(line_solver.p + 1, line_solver.P)
+    @inbounds for l in 1:L, t in 1:q
+        line_solver.zbp[l, t] = line_solver.z[cprev+t, l]
+        line_solver.zbn[l, t] = line_solver.z[cnext+t, l]
+    end
+    return nothing
+end
+
+"""
     solve_lines!(B, line_solver::BandLineSolver)
 
 Solve the (possibly distributed) banded system for every column of `B`
@@ -206,26 +237,14 @@ function solve_lines!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T}) wher
         line_solver.ends[r, l] = B[r, l]
         line_solver.ends[q+r, l] = B[n-q+r, l]
     end
-    if line_solver.P > 1
-        MPI.Allgather!(line_solver.ends,
-                       MPI.UBuffer(vec(line_solver.gath), 2q * L), line_solver.comm)
-    else
-        copyto!(view(line_solver.gath, :, :, 1), line_solver.ends)
-    end
-    m2 = 2q
-    @inbounds for rk in 0:(line_solver.P-1), l in 1:L, r in 1:m2
-        line_solver.z[m2*rk+r, l] = line_solver.gath[r, l, rk+1]
-    end
-    ldiv!(line_solver.red, line_solver.z)
-
-    cprev = m2 * mod(line_solver.p - 1, line_solver.P) + q
-    cnext = m2 * mod(line_solver.p + 1, line_solver.P)
-    V, W, z = line_solver.V, line_solver.W, line_solver.z
+    _reduced_solve!(line_solver, L)
+    V, W = line_solver.V, line_solver.W
+    zbp, zbn = line_solver.zbp, line_solver.zbn
     @threaded n*L for l in 1:L
         @inbounds for i in 1:n
             acc = zero(T)
             for t in 1:q
-                acc += V[i, t] * z[cprev+t, l] + W[i, t] * z[cnext+t, l]
+                acc += V[i, t] * zbp[l, t] + W[i, t] * zbn[l, t]
             end
             B[i, l] -= acc
         end

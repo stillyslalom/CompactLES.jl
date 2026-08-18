@@ -46,6 +46,7 @@ include("timing.jl")
     MPI.Init(threadlevel=:funneled)
     using CompactLES
     using LinearAlgebra
+    import KernelAbstractions
 end
 
 const CL = CompactLES
@@ -1150,10 +1151,55 @@ function test_two_patch_layout()
     check("two-patch run: step count matches serial", abs(solver.step - 28), 0.5)
 end
 
+# ---------------------------------------------------------------------------
+# Device line solves (reference/AMR_GPU.md, G2). A DevicePlan runs the fill,
+# sweep, spike correction and scatter as KernelAbstractions kernels and keeps
+# the reduced interface stage on the host, mirroring the host arithmetic per
+# line operation for operation — so on the KA CPU backend the decomposed
+# comparison is BITWISE, not to round-off. Splitting each dimension in turn
+# forces the cross-rank Allgather of the reduced stage through the device
+# path's pack/unpack staging, for both the tridiagonal C6 (periodic wrap) and
+# the pentadiagonal C10 (closed edge ranks carrying closure rows).
+# ---------------------------------------------------------------------------
+function test_device_lines()
+    section("device line solves: DevicePlan bitwise vs host under decomposition")
+    cpu = KernelAbstractions.CPU()
+    for (label, scheme, periodic) in (("C6 periodic", CL.lele_d1_6(Float64), true),
+                                      ("C10 closed", CL.lele_d1_10(Float64), false))
+        for ax in 1:3
+            n_global = ntuple(d -> d == ax ? SPLITN : 12, 3)
+            decomp = Decomp(n_global, (periodic, periodic, periodic);
+                            dims=splitdims(ax))
+            plan = CL.plan_direction(decomp, scheme, ax, 0.05)
+            dplan = device_plan(plan, cpu)
+            f = CL.field(decomp)
+            pad = decomp.n_halo_d; off = decomp.offset
+            for k in 1:decomp.n_local[3], j in 1:decomp.n_local[2],
+                    i in 1:decomp.n_local[1]
+                gx, gy, gz = i + off[1], j + off[2], k + off[3]
+                f[i+pad[1], j+pad[2], k+pad[3]] =
+                    sin(0.31gx) + cos(0.17gy) + 0.5sin(0.23gz + 0.4gx)
+            end
+            CL.exchange_dim!(f, decomp, ax)
+            out_h = CL.field(decomp); out_d = CL.field(decomp)
+            CL.apply_along!(out_h, plan, f, decomp)
+            CL.apply_along!(out_d, dplan, f, decomp)
+            e = 0.0
+            for k in 1:decomp.n_local[3], j in 1:decomp.n_local[2],
+                    i in 1:decomp.n_local[1]
+                e = max(e, abs(out_h[i+pad[1], j+pad[2], k+pad[3]] -
+                               out_d[i+pad[1], j+pad[2], k+pad[3]]))
+            end
+            check("$label device path bitwise, dim $ax split", gmax(e), 1e-300)
+        end
+    end
+end
+
 const SUITE = (
     ("periodic C6", test_periodic_c6),
     ("pentadiagonal C10", test_pentadiagonal_c10),
     ("closed C6", test_closed_c6),
+    ("device line solves", test_device_lines),
     ("AMR transfer pair", test_transfer_pair),
     ("halo consistency", test_halo_consistency),
     ("off-rank folds", test_offrank_folds),

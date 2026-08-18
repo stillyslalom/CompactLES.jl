@@ -146,6 +146,35 @@ function LineSolver(a::Vector{T}, b::Vector{T}, c::Vector{T},
 end
 
 """
+Reduced interface stage shared by every layout of the tridiagonal solve: from
+`line_solver.ends` already holding the local `(y₁, yₙ)` of each line, gather the
+interface values, solve the dense reduced system, and leave the two correction
+values each line needs — the previous rank's last unknown and the next rank's
+first — in `line_solver.zbp` and `line_solver.zbn`. The gather is collective
+when `P > 1`, so every rank of the sub-communicator must call this.
+"""
+function _reduced_solve!(line_solver::LineSolver{T}, L::Int) where {T}
+    if line_solver.P > 1
+        MPI.Allgather!(line_solver.ends,
+                       MPI.UBuffer(vec(line_solver.gath), 2L), line_solver.comm)
+    else
+        copyto!(view(line_solver.gath, :, :, 1), line_solver.ends)
+    end
+    @inbounds for q in 0:(line_solver.P-1), l in 1:L
+        line_solver.z[2q+1, l] = line_solver.gath[1, l, q+1]
+        line_solver.z[2q+2, l] = line_solver.gath[2, l, q+1]
+    end
+    ldiv!(line_solver.red, line_solver.z)
+    cprev = 2 * mod(line_solver.p - 1, line_solver.P) + 2
+    cnext = 2 * mod(line_solver.p + 1, line_solver.P) + 1
+    @inbounds for l in 1:L
+        line_solver.zbp[l] = line_solver.z[cprev, l]
+        line_solver.zbn[l] = line_solver.z[cnext, l]
+    end
+    return nothing
+end
+
+"""
     solve_lines!(B, line_solver)
 
 Solve the (possibly distributed) tridiagonal system for every column of
@@ -167,24 +196,12 @@ function solve_lines!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where {T
         line_solver.ends[1, l] = B[1, l]
         line_solver.ends[2, l] = B[n, l]
     end
-    if line_solver.P > 1
-        MPI.Allgather!(line_solver.ends,
-                       MPI.UBuffer(vec(line_solver.gath), 2L), line_solver.comm)
-    else
-        copyto!(view(line_solver.gath, :, :, 1), line_solver.ends)
-    end
-    @inbounds for q in 0:(line_solver.P-1), l in 1:L
-        line_solver.z[2q+1, l] = line_solver.gath[1, l, q+1]
-        line_solver.z[2q+2, l] = line_solver.gath[2, l, q+1]
-    end
-    ldiv!(line_solver.red, line_solver.z)
-
-    cprev = 2 * mod(line_solver.p - 1, line_solver.P) + 2
-    cnext = 2 * mod(line_solver.p + 1, line_solver.P) + 1
-    v, w, z = line_solver.v, line_solver.w, line_solver.z
+    _reduced_solve!(line_solver, L)
+    v, w = line_solver.v, line_solver.w
+    zp, zn = line_solver.zbp, line_solver.zbn
     @threaded n*L for l in 1:L
-        xl = z[cprev, l]
-        xr = z[cnext, l]
+        xl = zp[l]
+        xr = zn[l]
         @inbounds for i in 1:n
             B[i, l] -= v[i] * xl + w[i] * xr
         end

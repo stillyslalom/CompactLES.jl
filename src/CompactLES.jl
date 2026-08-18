@@ -32,6 +32,7 @@ include("equations.jl")
 include("boundary.jl")
 include("operators.jl")
 include("operators_banded.jl")
+include("lines_device.jl")
 include("transfer.jl")
 include("metric.jl")
 include("folds.jl")
@@ -63,7 +64,7 @@ export BlockRegion, hdf5_available, hdf5_parallel
 export save_checkpoint_hdf5, load_checkpoint_hdf5!, save_hdf5
 export SwitchableBC, switch!, switched
 export Prim, Problem, Numerics, setup, initialize!, conserved_from_prim, tanh_blend
-export DirPlan, BandPlan, apply_along!, filter_field!
+export DirPlan, BandPlan, DevicePlan, device_plan, apply_along!, filter_field!
 export amr_transfer_schemes, amr_restriction_scheme, amr_prolongation_scheme
 export TransferPlan, plan_transfer, restrict!, prolong!
 export EOS, IdealSpecies, IdealMixture, single_species, nspecies, Transport
@@ -73,7 +74,7 @@ export EquationSet, NavierStokes1T
 export Metric, CartesianMetric, CylindricalMetric, SphericalMetric
 export Stretch, sine_cluster
 export ArtParams, Solver
-export AbstractBackend, CPUBackend
+export AbstractBackend, CPUBackend, DeviceBackend
 export Patch, PatchSolver, InterfaceBC, CoarseFineBC, npatches, eachpatch
 export exchange_patch_ghosts!, average_shared_planes!, sync_patches!
 export LevelTransfer, prolong_level_ghosts!, restrict_level!, sync_levels!

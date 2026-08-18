@@ -148,6 +148,56 @@ function main(opt, device_array)
     t_thr = best(() -> CL.pointwise!(CL._fluxes_point!, Qc2, n..., ac...))
     @printf("flux assembly %d^3 2sp: device %.3f ms   @threaded(%d) %.3f ms\n",
             opt.n, 1e3t_gpu, Threads.nthreads(), 1e3t_thr)
+
+    # --- G2: compact line solves through DevicePlan. Fill, sweep, spike
+    # correction and scatter run as kernels; the reduced interface stage stays
+    # on the host (self-coupling only here — single rank, periodic wrap).
+    # Arithmetic mirrors the host path per line, so the comparison is bitwise.
+    decomp = Decomp((opt.n, opt.n, opt.n), (true, true, true); dims=(1, 1, 1))
+    fh = CL.field(decomp)
+    copyto!(fh, randn(size(fh)...))
+    CL.exchange_halos!(fh, decomp)
+    fg2 = device_array(fh)
+    for (label, scheme) in (("C6 ", CL.lele_d1_6(Float64)),
+                            ("C10", CL.lele_d1_10(Float64)),
+                            ("filt", CL.compact_filter(0.45)))
+        for dim in 1:3
+            plan = CL.plan_direction(decomp, scheme, dim, 1.0 / opt.n)
+            dplan = device_plan(plan, gpu)
+            oh = CL.field(decomp)
+            og = device_array(CL.field(decomp))
+            CL.apply_along!(oh, plan, fh, decomp)
+            CL.apply_along!(og, dplan, fg2, decomp)
+            dmax = maximum(abs.(view(Array(og), CL.interior(decomp)) .-
+                                view(oh, CL.interior(decomp))))
+            t_gpu = best(() -> CL.apply_along!(og, dplan, fg2, decomp))
+            t_thr = best(() -> CL.apply_along!(oh, plan, fh, decomp))
+            @printf("%s line dim %d %d^3: dev %.3f ms  host(%d) %.3f ms  |Δ|=%g%s\n",
+                    label, dim, opt.n, 1e3t_gpu, Threads.nthreads(), 1e3t_thr,
+                    dmax, dmax == 0 ? "  (bitwise)" : "")
+        end
+    end
+
+    # Closed edges: the closure-row branches of the fill kernel, C6 and C10.
+    decomp_c = Decomp((opt.n, opt.n, opt.n), (false, false, false); dims=(1, 1, 1))
+    fc = CL.field(decomp_c)
+    copyto!(fc, randn(size(fc)...))
+    fcg = device_array(fc)
+    for (label, scheme) in (("C6 closed ", CL.lele_d1_6(Float64)),
+                            ("C10 closed", CL.lele_d1_10(Float64)))
+        for dim in 1:3
+            plan = CL.plan_direction(decomp_c, scheme, dim, 1.0 / opt.n)
+            dplan = device_plan(plan, gpu)
+            oh = CL.field(decomp_c)
+            og = device_array(CL.field(decomp_c))
+            CL.apply_along!(oh, plan, fc, decomp_c)
+            CL.apply_along!(og, dplan, fcg, decomp_c)
+            dmax = maximum(abs.(view(Array(og), CL.interior(decomp_c)) .-
+                                view(oh, CL.interior(decomp_c))))
+            @printf("%s dim %d: max|Δ| = %g%s\n", label, dim, dmax,
+                    dmax == 0 ? "  (bitwise)" : "")
+        end
+    end
     return nothing
 end
 

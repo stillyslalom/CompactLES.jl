@@ -2693,6 +2693,53 @@ end
     @test parent(Q3) == parent(Q4)
 end
 
+@testset "device line solves: DevicePlan reproduces the host plans" begin
+    # G2 (reference/AMR_GPU.md): the compact line solves run as
+    # KernelAbstractions kernels in a (lines × n) layout, one thread per line,
+    # with the reduced interface stage on the host. The device arithmetic
+    # mirrors the host path per line operation for operation (including the
+    # divide-vs-multiply-by-inverse split between the banded x and y/z
+    # conventions), so on the KA CPU backend the comparison is BITWISE, the
+    # same equality gate the G1 pointwise kernels carry. Closed edges, folds
+    # and periodic wrap all route through the same kernels; the fold cases
+    # fill the halos with random data, since path equality does not require
+    # physically meaningful mirror values.
+    cpu = CL.KernelAbstractions.CPU()
+    function compare(scheme, dim; periodic=false, lo_fold=nothing)
+        d = CL.Decomp((16, 12, 14), (periodic, periodic, periodic); dims=(1, 1, 1))
+        plan = CL.plan_direction(d, scheme, dim, 0.1; lo_fold=lo_fold)
+        dplan = device_plan(plan, cpu)
+        f = CL.field(d)
+        rand!(f)
+        CL.exchange_halos!(f, d)
+        out_h = CL.field(d)
+        out_d = CL.field(d)
+        apply_along!(out_h, plan, f, d)
+        apply_along!(out_d, dplan, f, d)
+        return view(out_h, CL.interior(d)) == view(out_d, CL.interior(d))
+    end
+    schemes = (lele_d1_6(Float64), lele_d1_10(Float64), compact_filter(0.45),
+               gaussian_filter(Float64), compact_d8(Float64))
+    for scheme in schemes, periodic in (false, true), dim in 1:3
+        @test compare(scheme, dim; periodic=periodic)
+    end
+    for dim in 1:3, σ in (1, -1)
+        @test compare(lele_d1_6(Float64), dim; lo_fold=σ)
+    end
+
+    # The allocation half of the seam: DeviceBackend routes field and
+    # allocate_state through KernelAbstractions.zeros with the same halo
+    # padding as the CPU backend.
+    d = CL.Decomp((16, 12, 14), (false, true, true); dims=(1, 1, 1))
+    bk = DeviceBackend(cpu)
+    f = CL.field(bk, d)
+    @test size(f) == size(CL.field(d))
+    @test all(iszero, f)
+    Q = allocate_state(bk, d, 7)
+    @test Q isa ConservedState
+    @test size(Q) == (size(CL.field(d))..., 7)
+end
+
 include("patch_tests.jl")
 include("level_tests.jl")
 
