@@ -990,9 +990,14 @@ assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, 
         κ = mu0 * cp_mix[I] / Pr + kappa_art[I]
         D0 = mu0 / (Sc * ρ)                  # molecular part of each D_k
         divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
-        τ11 = μ * (2*grad_u[1,1][I] - (2/3) * divu) + β * divu
-        τ22 = μ * (2*grad_u[2,2][I] - (2/3) * divu) + β * divu
-        τ33 = μ * (2*grad_u[3,3][I] - (2/3) * divu) + β * divu
+        # T(2)/T(3), not the literal 2/3: the Float64 literal promotes the
+        # normal stresses under a narrower T, making τ a heterogeneous tuple
+        # whose runtime indexing is a dynamic field access — an InvalidIRError
+        # on device. The Float64 value is identical.
+        two_thirds = T(2) / T(3)
+        τ11 = μ * (2*grad_u[1,1][I] - two_thirds * divu) + β * divu
+        τ22 = μ * (2*grad_u[2,2][I] - two_thirds * divu) + β * divu
+        τ33 = μ * (2*grad_u[3,3][I] - two_thirds * divu) + β * divu
         τ12 = μ * (grad_u[1,2][I] + grad_u[2,1][I])
         τ13 = μ * (grad_u[1,3][I] + grad_u[3,1][I])
         τ23 = μ * (grad_u[2,3][I] + grad_u[3,2][I])
