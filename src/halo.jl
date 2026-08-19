@@ -6,7 +6,7 @@
 # non-periodic global edges the neighbor is MPI.PROC_NULL: the Sendrecv is a
 # no-op on that side and the physical-edge halos are left stale.
 #
-# Device-resident fields (GPU stage G3b of reference/AMR_GPU.md) stage each
+# Device-resident fields stage each
 # message through the backend: a broadcast pack of the strided slab into a
 # contiguous device buffer, one contiguous device<->host copy per message, and
 # the existing MPI path over the host buffers. Direct device-pointer MPI is
@@ -26,7 +26,7 @@ const PNULL = Int(MPI.PROC_NULL)
     view(f, ntuple(k -> k == d ? r : (1:size(f, k)), 3)...)
 end
 
-# --- Device staging (G3b) ---------------------------------------------------
+# --- Device staging ---------------------------------------------------------
 
 """
 Test toggle: `true` routes the halo and fold-pair exchanges of ordinary
@@ -56,12 +56,13 @@ device_mpi_direct(backend) = false
 # `Any`-typed lookup put 33 runtime-dispatch sites into `compute_rhs!`'s
 # jetcheck report, since the staged branch sits behind a runtime Ref read and
 # is always inferred into the RHS call graph. Device allocators pool, so the
-# per-exchange cost is a pool hit, not a device allocation; hoisting these
-# into retained storage is G3d work if its profile shows the pool hit at all.
+# per-exchange cost is a pool hit, not a device allocation; hoist them into
+# retained storage only if a launch-level profile shows the pool hit at all.
 @inline _device_stage(f, need::Int) =
     (similar(f, eltype(f), need), similar(f, eltype(f), need))
 
-# Transfer accounting for the G3b gate: bytes staged through the device
+# Transfer accounting for the distributed-device measurements: bytes staged
+# through the device
 # buffers and the wall time of the synchronous copies, accumulated only while
 # a bench turns the toggle on (the timer synchronizes nothing extra — the
 # copies are synchronous already — but the clock calls are not free).

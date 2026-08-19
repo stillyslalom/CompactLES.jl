@@ -1,10 +1,9 @@
-# Patch abstraction: per-patch state split out of the solver configuration
-# (Stage 2 of reference/AMR_GPU.md, single level).
+# Patch abstraction: per-patch state split out of the solver configuration.
 #
 # A Patch is a logically rectangular block of uniform resolution carrying its
 # own communicator, decomposition, operator plans, folds, and every field
-# array, typed A <: AbstractArray{T,3} against the storage backend (GPU Stage
-# G0). The Solver in rhs.jl keeps the physics configuration and the run clock,
+# array, typed A <: AbstractArray{T,3} against the storage backend. The
+# Solver in rhs.jl keeps the physics configuration and the run clock,
 # plus the vector of this rank's patches in global order. In the common case of
 # one patch spanning all ranks, that patch's decomposition is built over
 # MPI.COMM_WORLD exactly as the pre-patch solver's was, and `Base.getproperty`
@@ -42,7 +41,8 @@
 # transverse extent equal to the full domain width, so diagonal patch
 # adjacency does not arise; general patch grids extend the same record
 # machinery with corner exchanges and are future work, as is patching across a
-# coordinate fold (constraint 4 of the plan; `Solver` rejects both).
+# coordinate fold (constraint 4 of reference/AMR_GPU.md; `Solver` rejects
+# both).
 
 """
     Patch

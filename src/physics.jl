@@ -170,7 +170,7 @@ end
 @inline art_conductivity_scale(::IdealMixture, ρ, c, T_ion, cp_mix) =
     ρ * c / max(T_ion, eps(typeof(T_ion)))
 
-# Device-side mirror of the coefficient tables (GPU Stage G1, pointwise.jl):
+# Device-side mirror of the coefficient tables (see pointwise.jl):
 # an `IdealMixture` holds `Vector` tables and species names, neither of which
 # a kernel argument may carry, so `Adapt.adapt_structure` replaces the whole
 # object with this isbits form at kernel launch. Only the methods the

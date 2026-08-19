@@ -1,5 +1,6 @@
-# Static two-level refinement at a global timestep (Stage 3 of
-# reference/AMR_GPU.md).
+# Two-level refinement: one level-1 patch over a refined region of the root
+# grid, its coupling to the coarse level, and the machinery that distributes
+# that coupling. Design rationale and measurements: reference/AMR_GPU.md.
 #
 # One user-specified region of the root grid is covered by a single level-1
 # patch at refinement ratio 3, node-centered: a region of m coarse nodes per
@@ -7,13 +8,13 @@
 # with fine node 3k − 2. By default both levels advance every RK stage with
 # the same dt (the global minimum, which the shared `max_rate` reduction
 # already supplies once the fine patch joins `solver.patches`), so no temporal
-# interpolation arises anywhere. Under `subcycle = true` (Stage 4) the fine
+# interpolation arises anywhere. Under `subcycle = true` the fine
 # level instead takes three steps of dt/3 per coarse step, and the temporal
 # interpolation this needs is the Hermite box at the end of this file; the
 # region can also move under `regrid_interval` (src/regrid.jl).
 #
 # The two levels are coupled on two schedules, both by default through the
-# POINT-SAMPLE halves of the Stage 1 transfer machinery:
+# POINT-SAMPLE halves of the transfer machinery (transfer.jl):
 #
 #   - After every RK stage update, `prolong_level_ghosts!` interpolates the
 #     coarse state (order 6) over a box extending `LEVEL_BUFFER` coarse nodes
@@ -29,7 +30,7 @@
 #     constant for the measured amplifying loop the margin breaks).
 #
 # The invertible filter pair itself (`prolong!`/`restrict!`, deconvolution
-# against Gaussian filtering) is NOT the default coupling, on a Stage 3
+# against Gaussian filtering) is NOT the default coupling, on a
 # measurement: the pair's contract is that prolongation input is samples of
 # the FILTERED field, while the live coarse solution is point samples of the
 # field itself. Deconvolving point samples "sharpens" data that was never
@@ -37,11 +38,12 @@
 # O(h²) against the solution — the entropy-wave gate measured order 1.3–1.7
 # and errors three decades above the interpolation/injection coupling's,
 # which measures order ≈ 3.5 (the one-sided divergence closures binding, as
-# at a Stage 2 interface). `level_restriction = :filter` keeps the filtered
-# path selectable — its anti-alias smoothing is the tool to reach for if
-# injection restriction proves positivity-limited on captured shocks — and
-# the full pair remains what Stage 4 regridding will initialize NEW fine
-# regions from, where the coarse data is all there is.
+# at a same-level patch interface). `level_restriction = :filter` keeps the
+# filtered path selectable — its anti-alias smoothing is the tool to reach
+# for if
+# injection restriction proves positivity-limited on captured shocks.
+# Regridding likewise initializes NEW fine regions by interpolation, since
+# freshly covered coarse data are point samples too (regrid.jl).
 #
 # Multi-dimensional transfer is a tensor product realized as a chain: each
 # active dimension is refined in turn, so a chain of K = (number of active
@@ -51,10 +53,10 @@
 # Scope, enforced by `Solver`: Cartesian metric, no stretching, no folds,
 # tridiagonal schemes, the `:delta4` detector, and no same-level patch
 # decomposition alongside refinement. The fine patch's line solves close at
-# the coarse–fine boundary with the Stage 2 interface rows (extended-data
+# the coarse–fine boundary with the same-level interface rows (extended-data
 # gradients and filters, one-sided divergence).
 #
-# Distribution (G3c): both levels decompose over the whole rank set. The
+# Distribution: both levels decompose over the whole rank set. The
 # coupling DATA is replicated — every rank gathers the buffered coarse box
 # (and, for restriction, the coincident-node samples of the fine patch) with
 # one Allgatherv and writes only the shell or covered nodes it owns — while
@@ -96,7 +98,7 @@ struct LevelTransfer{T}
     region::BlockRegion              # refined region, root (coarse) node space
     fine_index::Int                  # index of the level-1 patch in solver.patches
     restriction::Symbol              # :inject (coincident-node copy, default)
-                                     # or :filter (the invertible Stage 1 pair)
+                                     # or :filter (the invertible transfer pair)
     active_dims::Vector{Int}
     pdecomps::Vector{Decomp{T}}      # prolongation chain, stage 0 (coarse box) .. K
     pplans::Vector{TransferPlan{T}}
@@ -104,7 +106,7 @@ struct LevelTransfer{T}
     rdecomps::Vector{Decomp{T}}      # restriction chain, stage 0 (region) .. K
     rplans::Vector{TransferPlan{T}}
     rstage::Vector{Array{T,3}}       # scratch for stages 0 .. K-1
-    # Subcycling storage (Stage 4): the coarse solution on the buffered box at
+    # Subcycling storage: the coarse solution on the buffered box at
     # the two ends of the current coarse step, values and RHS rates, per
     # conserved component — the data of the cubic Hermite interpolant that
     # supplies the fine shell at fine stage times. Shaped like pstage[1] with a
@@ -113,7 +115,7 @@ struct LevelTransfer{T}
     box_dQ0::Array{T,4}              # coarse box RHS at t^n
     box_Q1::Array{T,4}               # coarse box state at t^n + dt
     box_dQ1::Array{T,4}              # coarse box RHS at t^n + dt
-    # Distribution (G3c): the level transfer runs replicated — every rank
+    # Distribution: the level transfer runs replicated — every rank
     # gathers the (small) coupling regions, runs the identical interpolation
     # chain, and writes only what it owns, so no consistency question arises
     # and the chain needs no halo exchanges of its own. These tables record
@@ -189,7 +191,7 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
                             zeros(T, region.extent..., n_cons))
 end
 
-# --- Replicated-region gathers (G3c) ----------------------------------------
+# --- Replicated-region gathers ----------------------------------------------
 #
 # Every rank assembles the full coupling region: each contributes the
 # intersection of its owned block with the requested node region through one
@@ -412,7 +414,7 @@ end
     return nothing
 end
 
-# --- Component-distributed shell imposition (G3c) ---------------------------
+# --- Component-distributed shell imposition ---------------------------------
 #
 # The interpolation chain, not the physics, is the expensive half of the
 # coupling: a subcycled step imposes the shell ~20 times (five coarse stages
@@ -710,7 +712,7 @@ end
 Bring the two levels to mutual consistency: restrict the fine state onto the
 covered coarse region, then re-impose the fine shell from the (updated) coarse
 state. This is the pre-step form; within a step only the prolongation half
-runs, since restriction is a per-step operation by the plan's schedule.
+runs, since restriction is a per-step operation in the coupling schedule.
 """
 function sync_levels!(solver, states)
     restrict_level!(solver, states)
@@ -718,7 +720,7 @@ function sync_levels!(solver, states)
     return states
 end
 
-# --- Subcycling support (Stage 4): the Hermite box -------------------------
+# --- Subcycling support: the Hermite box ------------------------------------
 #
 # Under subcycling (three fine steps of dt/3 per coarse step, Berger–Oliger
 # order: coarse first, fine after), the fine shell needs coarse values at fine
@@ -777,8 +779,8 @@ end
 """
     RegridSpec
 
-Configuration and rebuild inputs for tagging-driven regridding (Stage 4,
-`src/regrid.jl`): the regrid cadence in coarse steps, the tagging threshold on
+Configuration and rebuild inputs for tagging-driven regridding
+(`src/regrid.jl`): the regrid cadence in coarse steps, the tagging threshold on
 the relative undivided fourth difference of the mixture density, the buffer of
 coarse cells added around tagged cells, the nesting margin, and everything a
 fine-patch rebuild needs that the `Solver` does not itself retain — the

@@ -292,7 +292,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                       "the scheme minimum; use fewer patches or more points")
         end
     end
-    # --- Static refinement (Stage 3, levels.jl) --------------------------
+    # --- Static refinement (levels.jl) -----------------------------------
     if refine === nothing
         subcycle &&
             error("subcycle requires a refined region (the refine keyword)")
@@ -343,7 +343,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
             end
         end
     end
-    # --- Device residency (G3a/G3b/G3c of reference/AMR_GPU.md) -----------
+    # --- Device residency -------------------------------------------------
     # A DeviceBackend supports a decomposed patch, refined or not: halos,
     # fold pairs, and the level transfer's gathers and writes stage through
     # the backend. The same-level interface records are still host loops, so

@@ -1,5 +1,5 @@
-# G3a (reference/AMR_GPU.md): a Solver built on a DeviceBackend is a
-# supported configuration — construction converts every compact plan to a
+# A Solver built on a DeviceBackend is a supported configuration —
+# construction converts every compact plan to a
 # DevicePlan, allocates every field through the backend, and the whole step
 # (boundary enforcement, folds, NSCBC, max_rate, the filter) runs through
 # launchable bodies. On the KernelAbstractions CPU backend the storage is an
@@ -7,7 +7,8 @@
 # DeviceBackend construction path produces a runnable solver whose line solves
 # go through the DevicePlan kernels, and that a full run through those kernels
 # under FORCE_KA reproduces the CPUBackend solver BITWISE — the same equality
-# gate G1 and G2 established. The host-staging branches an actual device takes
+# gate the pointwise-kernel and device-line-solve testsets carry. The
+# host-staging branches an actual device takes
 # (geometry upload, initialize!, Dirichlet planes) and the GPUArrays
 # reductions are measured on the GPU itself by bench/device_solver.jl.
 
@@ -32,9 +33,7 @@
     @test CL.fold_dplan(sax.folds[1], 1) isa DevicePlan
     @test CL.fold_fplan(sax.folds[1], -1) isa DevicePlan
 
-    # Unsupported combinations fail at setup, not mid-run. (Refinement on a
-    # DeviceBackend was in this list until G3c delivered it; the G3c testset
-    # below covers it.)
+    # Unsupported combinations fail at setup, not mid-run.
     @test_throws ErrorException Solver(n_global=(32, 12, 12),
         L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per), backend=bk,
         patch_grid=(2, 1, 1))
@@ -159,7 +158,7 @@ end
     @test r1 == r2
 end
 
-@testset "device-resident refinement (G3c)" begin
+@testset "device-resident refinement" begin
     # A refined solver on the DeviceBackend construction path: DevicePlans on
     # both levels, the level transfer's gathers and writes routed through the
     # backend seam, in all three coupling modes. Bitwise against the
@@ -202,7 +201,7 @@ end
         level_restriction=:filter, backend=DeviceBackend(cpu_ka))
 end
 
-@testset "launch policy toggle (G3d)" begin
+@testset "launch policy toggle" begin
     # DEVICE_SYNC[] switches between the deferred default and the
     # synchronize-per-launch fallback; both must produce identical states.
     # On the KA CPU backend kernels run synchronously either way, so this
@@ -238,7 +237,8 @@ end
 end
 
 @testset "device-resident patch: Float32 step" begin
-    # The G4a device tie-in at test scale: a Float32 solver on the
+    # Float32 through the device construction path, at test scale: a
+    # Float32 solver on the
     # DeviceBackend construction path advances and stays finite, bitwise
     # against the Float32 CPU solver.
     cpu_ka = CL.KernelAbstractions.CPU()

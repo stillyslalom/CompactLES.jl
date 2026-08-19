@@ -1,4 +1,5 @@
-# AMR level-transfer operators (reference/AMR_GPU.md, Stage 1).
+# AMR level-transfer operators. Provenance, conditioning measurements, and
+# design rationale: reference/AMR_GPU.md (transfer operators).
 #
 # The 3:1 level transfer is an invertible compact filter pair transcribed from
 # Miranda (LLNL/pyranda@b4e0afc, pyranda/parcop/stencils.f90, cfamrcf/cfamrfc,
@@ -15,8 +16,8 @@
 # symmetric positive definite and factorizes without pivoting; its inverse
 # amplifies the fine Nyquist by ≈ 20 (`bench/amr_transfer.jl`).
 #
-# Sampling convention (risk 1 of the plan, resolved here and pinned by the
-# bench and the test gate): the grid is node-centered with refinement ratio 3,
+# Sampling convention (pinned numerically by the bench and the test gate,
+# since the source kernels do not fully specify it): the grid is node-centered with refinement ratio 3,
 # so coarse node m coincides with fine node 3m − 2 and a closed line has
 # n_fine = 3 n_coarse − 2 (a periodic one n_fine = 3 n_coarse). Restriction is
 # filter-then-subsample: apply the compact filter along the fine line, then
@@ -39,7 +40,8 @@
 # the same ghost-folding algebra `plan_direction` performs for `lo_fold` /
 # `hi_fold`, so a folded end needs no tabulated rows here. `plan_transfer`
 # itself never builds fold plans: refinement across a fold's singular region
-# is forbidden (constraint 4 of the plan), so a transfer dimension is closed
+# is forbidden (constraint 4 of reference/AMR_GPU.md), so a transfer
+# dimension is closed
 # or periodic. The source's row 3 per end is the interior stencil, so each
 # scheme carries two genuine closure rows.
 
@@ -171,12 +173,14 @@ dimension requires `n_fine = 3 n_coarse − 2` globally and a periodic one
 decompositions rank by rank.
 
 The transfer dimension must not be decomposed: distributing the subsampling
-and interpolation requires the per-rank 3:1 alignment the patch machinery of
-Stage 2/3 will own. Transverse dimensions may be decomposed freely, and the
+and interpolation would require per-rank 3:1 alignment. The level machinery
+sidesteps this by running its transfer chains replicated on single-rank
+communicators (levels.jl); a rank-partitioned transfer would have to own
+that alignment. Transverse dimensions may be decomposed freely, and the
 compact solves themselves remain collective over them. Folds are excluded on
 a transfer dimension (refinement across a fold's singular region is
 forbidden); the schemes accept `lo_fold`/`hi_fold` through
-[`plan_direction`](@ref) directly should a future stage lift that.
+[`plan_direction`](@ref) directly should future work lift that.
 
 `interp_order` (even, 2–8, default 6) sets the Lagrange stencil width of the
 coarse-to-fine interpolation and therefore the measured order of the
@@ -330,8 +334,8 @@ field itself. The deconvolution in `prolong!` inverts the 3Δx Gaussian and is
 exact only when its input is samples of the *filtered* field — i.e. data a
 [`restrict!`](@ref) produced. Applied to raw point samples it "sharpens" a
 field that was never smoothed, an O(h²) error from the filter deficit, which
-is how the Stage 3 ghost fill measured at order ≈ 1.7 before this split (see
-levels.jl). On point samples this interpolation is O(h^interp_order) instead.
+is how the live level-ghost fill measured at order ≈ 1.7 before this split
+(see levels.jl). On point samples this interpolation is O(h^interp_order) instead.
 """
 function interpolate!(fine_field, plan::TransferPlan, coarse_field)
     exchange_dim!(coarse_field, plan.coarse, plan.dim)
@@ -354,7 +358,7 @@ coincident-node values onto the interior of `coarse_field` and return it.
 Exact pointwise on the shared nodes; unlike `restrict!` it applies no
 anti-alias filter, so content between the coarse and fine Nyquist folds onto
 the coarse grid and must be handled by the coarse level's own regularization.
-The Stage 3 level sync uses this as its default for the converse of the
+The level sync uses this as its default for the converse of the
 reasoning on [`interpolate!`](@ref): the filtered restriction writes an
 attenuated representation into a coarse field that everywhere else holds
 point samples.

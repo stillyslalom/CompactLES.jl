@@ -1,4 +1,4 @@
-# Device bring-up check for the G1 pointwise kernels: launch the
+# Device bring-up check for the pointwise kernels: launch the
 # plain-argument bodies on a GPU through `pointwise_ka!` and through
 # `pointwise!`'s automatic routing, compare against the CPU bitwise, and time
 # a stencil-shaped and a launch-bound body. First measured on the reference
@@ -149,7 +149,7 @@ function main(opt, device_array)
     @printf("flux assembly %d^3 2sp: device %.3f ms   @threaded(%d) %.3f ms\n",
             opt.n, 1e3t_gpu, Threads.nthreads(), 1e3t_thr)
 
-    # --- G2: compact line solves through DevicePlan. Fill, sweep, spike
+    # --- Compact line solves through DevicePlan. Fill, sweep, spike
     # correction and scatter run as kernels; the reduced interface stage stays
     # on the host (self-coupling only here — single rank, periodic wrap).
     # Arithmetic mirrors the host path per line, so the comparison is bitwise.

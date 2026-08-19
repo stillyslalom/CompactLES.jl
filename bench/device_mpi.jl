@@ -1,7 +1,7 @@
-# G3b acceptance (reference/AMR_GPU.md): distributed device runs. Every rank
+# Distributed device runs (reference/AMR_GPU.md, communication). Every rank
 # holds a block of the one device-resident patch — on the workstation all
 # ranks share the RX 6800 XT — and the halo, fold-pair, and reduced-solve
-# traffic crosses ranks through the G3b staging: broadcast pack into a
+# traffic crosses ranks through backend staging: broadcast pack into a
 # contiguous device buffer, one contiguous device<->host copy per message,
 # MPI over the host buffers. The runs are compared against the identically
 # decomposed CPU solver, and the staged transfer volume and copy time are

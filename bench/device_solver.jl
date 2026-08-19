@@ -1,6 +1,6 @@
-# G3a acceptance battery (reference/AMR_GPU.md): a whole single-patch solver
+# Whole-solver device acceptance battery (reference/AMR_GPU.md): a solver
 # resident on an actual GPU, compared end-to-end against the CPU solver — not
-# isolated bodies. Covers the gate's four cases: smooth periodic and
+# isolated bodies. Covers four case families: smooth periodic and
 # closed-boundary runs, freestream/GCL, one shock validation (Sod), and a
 # short Taylor–Green energy history, in Float64 and Float32. The long-form
 # 64³ TGV history on device runs through bench/tgv_energy.jl backend=amdgpu.
@@ -10,8 +10,8 @@
 #
 #   julia --project=<env-with-AMDGPU> -t 8 bench/device_solver.jl backend=amdgpu
 #
-# The G1/G2 kernels reproduce the host bitwise, and every remaining phase of
-# a step is either a pointwise body, a DevicePlan solve, an exact reduction
+# The pointwise and line-solve kernels reproduce the host bitwise, and
+# every remaining phase of a step is either a pointwise body, a DevicePlan solve, an exact reduction
 # (max/min), or an element copy — so the whole-step comparison here is
 # expected bitwise as well, and the printout says whether that held.
 
@@ -21,7 +21,7 @@ const CL = CompactLES
 
 opt = script_args(ARGS, (backend = "amdgpu", n = 64, steps = 20, sync = false))
 
-# G3d: `sync=true` restores the synchronize-per-launch conservative mode, so
+# `sync=true` restores the synchronize-per-launch conservative mode, so
 # the launch-policy delta is one flag apart on identical cases. Either mode
 # must be bitwise; only the wall time may move.
 CompactLES.DEVICE_SYNC[] = opt.sync
@@ -153,7 +153,7 @@ function main(opt)
         return s, Q
     end
 
-    # --- G3c: refined solver resident on device ---------------------------
+    # --- Refined solver resident on device --------------------------------
     function refined_wave(backend; kw...)
         N = 96
         s = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0),

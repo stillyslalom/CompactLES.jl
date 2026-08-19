@@ -1,10 +1,11 @@
-# Pointwise-phase launch machinery (GPU Stage G1 of reference/AMR_GPU.md).
+# Pointwise-phase launch machinery for the CPU and device backends. Design
+# rationale and measurements: reference/AMR_GPU.md (pointwise kernels).
 #
 # Every pointwise phase of the solver — the loops that visit each grid point
 # independently, as opposed to the compact line solves — is written as one
 # per-point body function beside its driver and launched through one of two
-# paths: `Array` storage takes the existing `@threaded` loop, which keeps the
-# default CPU path bit-identical to the pre-G1 solver, and any other storage
+# paths: `Array` storage takes the existing `@threaded` loop — the
+# configuration every regression guard was measured under — and any other storage
 # type launches a KernelAbstractions kernel on the backend its arrays belong
 # to. `get_backend(::Array)` is the KA CPU backend, so tests and benches
 # exercise the kernel path on ordinary arrays by calling [`pointwise_ka!`]
@@ -20,8 +21,8 @@
 # once at `Patch` construction (`Patch.field_tuples`), indexed exactly as
 # the `Vector`/`Matrix` forms are so the bodies read identically on either
 # path — and the gas-model EOS objects adapt to coefficient mirrors at
-# launch time (`physics.jl`). `Nasa9Mixture` has no mirror yet, per the
-# plan's ordering: it needs the fixed-width interval table.
+# launch time (`physics.jl`). `Nasa9Mixture` has no mirror yet: it needs
+# the fixed-width interval table (reference/AMR_GPU.md, roadmap).
 
 using KernelAbstractions
 using KernelAbstractions: get_backend, synchronize
@@ -122,14 +123,15 @@ their comparisons; nothing else should.
 const FORCE_KA = Ref(false)
 
 """
-Launch synchronization policy (G3d): `false` (the default) defers — kernels
+Launch synchronization policy: `false` (the default) defers — kernels
 queue on the backend's one in-order stream and the host synchronizes only at
 its interaction points (the reduced-solve staging fence, the synchronous
 device↔host copies of the halo/ring staging and the reductions), which is
-what removes the per-launch round trip the G1/G2 timings measured. `true`
-restores the G3a conservative mode — a host synchronize after every
+what removes the per-launch round trip measured at 28–32% of a device step
+(reference/AMR_GPU.md, launch policy). `true` restores the conservative
+mode — a host synchronize after every
 pointwise launch and between every line-solve subkernel — and is the
-correctness fallback the plan requires: flip it when bisecting a device
+correctness fallback: flip it when bisecting a device
 discrepancy, so ordering bugs separate from arithmetic ones.
 """
 const DEVICE_SYNC = Ref(false)

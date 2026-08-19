@@ -1,7 +1,8 @@
-# G1 acceptance measurement (reference/AMR_GPU.md, GPU track): each pointwise
+# Pointwise launcher acceptance measurement (reference/AMR_GPU.md): each
+# pointwise
 # phase timed through its two launch paths — the default @threaded loop and
 # the KernelAbstractions CPU backend — on the same solver and state. The
-# plan's acceptance for replacing @threaded outright is KA-CPU within 10% per
+# acceptance bar for replacing @threaded outright was KA-CPU within 10% per
 # phase at 64³; a larger regression keeps the current static routing (Array
 # storage on @threaded, device storage on KA), which is the shipped default
 # either way. Run with threads (`-t 8` matches the numbers recorded in the

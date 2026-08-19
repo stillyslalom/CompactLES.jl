@@ -1,5 +1,5 @@
-# Device path for the compact line solves (GPU Stage G2 of
-# reference/AMR_GPU.md).
+# Device path for the compact line solves. Design rationale and
+# measurements: reference/AMR_GPU.md (line solves).
 #
 # The distributed compact solve is sequential along a line and independent
 # across lines, so the device mapping is one thread per line for the
@@ -10,7 +10,7 @@
 # transposed host path in lines_transposed.jl, with warp coalescing in place
 # of SIMD.
 #
-# The reduced 2qP × 2qP interface system stays host-side, per the plan: the
+# The reduced 2qP × 2qP interface system stays host-side by design: the
 # device packs the 2q interface values per line into a buffer whose layout
 # matches `line_solver.ends`, one device-to-host copy feeds the existing
 # `_reduced_solve!` (Allgather + factorized `ldiv!`), and one host-to-device
@@ -20,7 +20,7 @@
 #
 # Arithmetic mirrors the host path per line, operation for operation, so a
 # [`DevicePlan`](@ref) reproduces its host plan bitwise — the same equality
-# gate G1 established for the pointwise kernels. The one place the two host
+# gate the pointwise kernels carry. The one place the two host
 # layouts themselves disagree is the banded solve: the x-sweep divides by the
 # diagonal (`solve_col!`) where the transposed y/z sweeps multiply by its
 # inverse, and the x-sweep accumulates the spike correction before one
@@ -52,7 +52,7 @@ allocate_state(backend::DeviceBackend, decomp::Decomp{T}, n_cons::Int) where {T}
 empty_field(backend::DeviceBackend, ::Type{T}) where {T} =
     KernelAbstractions.zeros(backend.ka, T, 0, 0, 0)
 
-# Reduced-interface transfer accounting (G3b): the per-apply device/host
+# Reduced-interface transfer accounting: the per-apply device/host
 # copies of the interface values and correction factors, tallied apart from
 # the halo staging so the two shares are readable separately. Active only
 # under `TRACK_DEVICE_TRANSFERS` (halo.jl), like the halo counters.
@@ -74,7 +74,7 @@ end
 """
     backend_plan(backend, plan)
 
-Construction-time plan routing (G3a): the identity on `CPUBackend`, and
+Construction-time plan routing: the identity on `CPUBackend`, and
 [`device_plan`](@ref) on a `DeviceBackend`, so a solver built on device storage
 stores `DevicePlan`s and every `apply_along!` below the step drivers runs the
 device kernels without a per-call conversion. Every plan-construction site of
@@ -373,7 +373,7 @@ function _dev_solve!(plan::DevicePlan, sweep::DeviceThomas)
     ls.hasred || return nothing
 
     _dev_pack_ends2_kernel!(plan.backend)(sweep.ends, plan.B, n; ndrange=L)
-    # The one unconditional fence per apply (G3d): the host is about to read
+    # The one unconditional fence per apply: the host is about to read
     # the packed interface values, so the queue must have drained to here.
     # The H2D copies below block the host until complete, and every later
     # kernel queues after them on the same in-order stream, so no further

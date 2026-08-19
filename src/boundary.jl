@@ -313,8 +313,8 @@ function _wall_density(Q, I, n_species)
     return ρ
 end
 
-# Wall-plane enforcement runs as pointwise bodies over the plane's index box
-# (G3a): one shared body per condition, launched by `plane_pointwise!`, so a
+# Wall-plane enforcement runs as pointwise bodies over the plane's index
+# box: one shared body per condition, launched by `plane_pointwise!`, so a
 # device-resident patch enforces its walls without a host round trip. The
 # per-point writes are independent, so the launch reproduces the former serial
 # plane loop bitwise on the host path too.

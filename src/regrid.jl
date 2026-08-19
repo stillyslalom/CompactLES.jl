@@ -1,5 +1,4 @@
-# Tagging and regridding for the two-level refinement (Stage 4 of
-# reference/AMR_GPU.md).
+# Tagging and regridding for the two-level refinement.
 #
 # Every `RegridSpec.interval` coarse steps, `run!` retags the coarse level and
 # rebuilds the level-1 patch when the tagged region moved. The tag is the
@@ -8,12 +7,14 @@
 # δ⁴ sensors are built from, read from the conserved state directly so tagging
 # needs no primitives pass and can run at the head of the step loop. A coarse
 # cell tags when that ratio exceeds `RegridSpec.threshold`; the tagged set is
-# grown by `RegridSpec.buffer` coarse cells (the Stage 1 measurement: shock
-# round-trip pollution decays ≈ 3.4× per point, so a ~4-cell buffer drops
-# interface pollution by two orders of magnitude) and its bounding box, clamped
+# grown by `RegridSpec.buffer` coarse cells (measured: shock round-trip
+# pollution decays ≈ 3.4× per point, bench/amr_transfer.jl, so a ~4-cell
+# buffer drops interface pollution by two orders of magnitude) and its
+# bounding box, clamped
 # to the nesting margin, becomes the new refined region. A single box rather
-# than a tile set is deliberate: the Stage 3 base carries one level-1 patch,
-# and the plan's tile clustering only pays once several fine patches exist.
+# than a tile set is deliberate: the solver carries one level-1 patch, and
+# tile clustering only pays once several fine patches exist
+# (reference/AMR_GPU.md, roadmap).
 #
 # The new fine state is initialized by the order-6 interpolation of the coarse
 # state — the same operator as the live shell coupling, and the right one here

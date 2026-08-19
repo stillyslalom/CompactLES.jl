@@ -1,4 +1,5 @@
-# Focused CPU validation matrix for G4a of reference/AMR_GPU.md. The basic
+# Focused CPU validation matrix for uniform Float32 execution
+# (reference/AMR_GPU.md, precision). The basic
 # Float32 tests in runtests.jl compile the individual paths; these cases ask
 # whether they retain the solver's physical invariants and reference behavior.
 

@@ -57,7 +57,7 @@
 # ~13 min. On a cluster, 128³ is ~20–25 min per configuration at 224 ranks over
 # two nodes (0.10–0.12 s/step, ~11k–13k steps) — the reason this lives in bench/.
 #
-#   G4a precision measurement (24-thread desktop, art off, filter every step):
+#   Precision measurement (24-thread desktop, art off, filter every step):
 #
 #     N   type       peak -dKE/dt @ t    solver wall   footprint    ρ̄ drift
 #     32  Float64    1.4714e-2 @ 6.86      149.77 s      37.3 MiB   1.67e-13
@@ -120,9 +120,9 @@
 #             schemes, EOS, transport, artificial controls, and RK workspace.
 #   backend   cpu (default), amdgpu, or cuda: where the solver lives. A device
 #             backend needs an environment carrying the device package (see
-#             bench/device_bringup.jl) and runs on one rank; the solver and
-#             state are device-resident (G3a) and the energy diagnostics here
-#             read a host copy of the state, downloaded per callback — the
+#             bench/device_bringup.jl); the solver and state are
+#             device-resident and the energy diagnostics read a host copy
+#             of the state, downloaded per callback — the
 #             documented I/O-gathers-to-host path, excluded from solver wall
 #             time by the same accounting that excludes callbacks on the CPU.
 #   window    steps either side for every -dKE/dt reported (default 250, i.e. a
@@ -399,8 +399,6 @@ function main(opt, backend)
         opt.N, opt.tfinal, opt.sample, opt.progress, opt.nmax, opt.window
     configs = parse_configs(opt.configs)
     precisions = parse_precisions(opt.precision)
-    backend isa DeviceBackend && MPI.Comm_size(MPI.COMM_WORLD) > 1 &&
-        error("backend=$(opt.backend) runs on one rank until G3b")
     summaries = NamedTuple[]
     if rank == 0
         @printf("=== Taylor-Green %d^3, Re=1600, tfinal=%.1f, %d rank(s), ",

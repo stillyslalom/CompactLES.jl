@@ -1,8 +1,8 @@
-# Stage 3 static-refinement tests: the two-level gates of reference/AMR_GPU.md
-# (manufactured smooth solution spanning the coarse-fine boundary, a Sod shock
-# through the refinement boundary in both directions with Cook sensors live,
-# and conservation drift), plus the configuration guards. Serial, like the
-# stage itself.
+# Two-level refinement tests: manufactured smooth solution spanning the
+# coarse-fine boundary, a Sod shock through the refinement boundary in both
+# directions with Cook sensors live, conservation drift, and the
+# configuration guards; then the subcycled, tagged, and regridded variants.
+# Serial; the decomposed forms live in mpi_tests.jl.
 #
 # Guards are measured values with headroom, per the convergence-suite
 # convention. The interpolation/injection coupling and the reasons the
@@ -62,7 +62,7 @@ end
     orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
     @info "two-level entropy wave" errs orders
     # Measured 8.5e-8 / 7.7e-9 / 6.2e-10, orders 3.46 / 3.64: the one-sided
-    # divergence closures bind, as at a Stage 2 interface.
+    # divergence closures bind, as at a same-level patch interface.
     @test all(>(3.0), orders)
     @test errs[2] < 3e-8
     # The deconvolution/filter coupling measures order 1.3-1.7 (see the
@@ -108,7 +108,7 @@ end
     # Region x ∈ [0.6, 0.8]: the shock (speed ≈ 1.75) enters through the low
     # face at t ≈ 0.057 and leaves through the high face at t ≈ 0.17, so one
     # run crosses the boundary in both directions, with the Cook sensors and
-    # the state filter live throughout — the in-situ form of the Stage 1
+    # the state filter live throughout — the in-situ form of the
     # sensor-injection measurement.
     solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
                     bcs=(wall2, per, per), cfl=0.4,
@@ -171,9 +171,9 @@ end
     @test e < 1e-6
 end
 
-# --- Stage 4: subcycling, tagging, regridding --------------------------------
+# --- Subcycling, tagging, regridding -----------------------------------------
 
-@testset "stage 4 configuration guards" begin
+@testset "subcycle and regrid configuration guards" begin
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     mk(; kw...) = Solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
                          bcs=per3l, kw...)
@@ -202,7 +202,7 @@ end
     ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                             Prim(u=(0, 0, 0), p=0.1, rho=0.125)
     N = 201
-    # The Stage 3 gate's configuration with subcycling on: the same region,
+    # The static gate's configuration with subcycling on: the same region,
     # CFL, and crossing schedule, so the guards compare directly.
     solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
                     bcs=(wall2, per, per), cfl=0.4, subcycle=true,
@@ -238,11 +238,11 @@ end
     N = 201
     Nf = 3N - 2
     tf = 0.15
-    # Uniform-fine reference and uniform-coarse baseline, the comparison the
-    # plan's Stage 4 gate prescribes. CFL 0.2 throughout: the initial
-    # discontinuity sits inside the refined region here, and a subcycled fine
+    # Uniform-fine reference and uniform-coarse baseline. CFL 0.2
+    # throughout: the initial discontinuity sits inside the refined region, and a subcycled fine
     # level runs three substeps on one rate measurement, which tightens the
-    # documented startup restriction (reference/AMR_GPU.md Stage 4).
+    # documented startup restriction (reference/AMR_GPU.md, two-level
+    # refinement).
     sf = Solver(n_global=(Nf, 1, 1), L_domain=(1.0, 1.0, 1.0),
                 bcs=(wall2, per, per), cfl=0.2)
     Qf = allocate_state(sf)

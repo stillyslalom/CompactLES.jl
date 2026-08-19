@@ -193,14 +193,14 @@ function test_closed_c6()
 end
 
 # ---------------------------------------------------------------------------
-# 3b. AMR transfer pair (reference/AMR_GPU.md, Stage 1). The invertibility
+# 3b. AMR transfer pair (reference/AMR_GPU.md). The invertibility
 #     identity prolong(restrict(f)) == f holds at any rank count, so applying
 #     the pair along a split dimension pins the distributed tridiagonal solve
 #     of the restriction filter and the pentadiagonal spike solve of the
 #     deconvolution, edge-rank closure rows included, at machine precision —
 #     any interface bug is an O(1) error. The TransferPlan check decomposes a
-#     transverse dimension instead (the transfer dimension itself must not be
-#     split in Stage 1) and asserts the coarse → fine → coarse left inverse.
+#     transverse dimension instead (the transfer dimension itself must not
+#     be split; see transfer.jl) and asserts the coarse → fine → coarse left inverse.
 # ---------------------------------------------------------------------------
 function test_transfer_pair()
     section("AMR transfer operators: distributed pair and left inverse")
@@ -1152,7 +1152,7 @@ function test_two_patch_layout()
 end
 
 # ---------------------------------------------------------------------------
-# Device line solves (reference/AMR_GPU.md, G2). A DevicePlan runs the fill,
+# Device line solves (reference/AMR_GPU.md). A DevicePlan runs the fill,
 # sweep, spike correction and scatter as KernelAbstractions kernels and keeps
 # the reduced interface stage on the host, mirroring the host arithmetic per
 # line operation for operation — so on the KA CPU backend the decomposed
@@ -1196,7 +1196,7 @@ function test_device_lines()
 end
 
 # ---------------------------------------------------------------------------
-# Staged device exchange (reference/AMR_GPU.md, G3b). A device-resident field
+# Staged device exchange (reference/AMR_GPU.md). A device-resident field
 # packs each halo slab into a contiguous backend stage by broadcast, crosses
 # ranks through one contiguous copy each way around the same Sendrecv, and the
 # fold pairing stages its whole blocks the same way. On host arrays those are
@@ -1206,7 +1206,7 @@ end
 # run: DevicePlans, kernel bodies, and staged communication together.
 # ---------------------------------------------------------------------------
 function test_staged_exchange()
-    section("staged device exchange: decomposed runs bitwise (G3b)")
+    section("staged device exchange: decomposed runs bitwise")
     cpu = KernelAbstractions.CPU()
     function tube(backend)
         eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
@@ -1265,7 +1265,7 @@ function test_staged_exchange()
 end
 
 # ---------------------------------------------------------------------------
-# Distributed level transfer (reference/AMR_GPU.md, G3c). Both levels
+# Distributed level transfer (reference/AMR_GPU.md). Both levels
 # decompose over the whole rank set and the coupling runs replicated:
 # region-sized Allgathers, identical serial chains per rank, owned-slot
 # writes. The references are the np = 1 values of the identical cases; a
@@ -1275,7 +1275,7 @@ end
 # region through the same step count.
 # ---------------------------------------------------------------------------
 function test_refined_decomposed()
-    section("distributed two-level refinement (G3c)")
+    section("distributed two-level refinement")
     u0 = 0.5
     function wave_error(; subcycle)
         N = 192

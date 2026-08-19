@@ -1,4 +1,4 @@
-# The Stage 4 / G3c cost demonstration (reference/AMR_GPU.md): equal accuracy
+# The AMR cost demonstration (reference/AMR_GPU.md): equal accuracy
 # at reduced cost on a 3-D mixing case, now that the level transfer is
 # distributed. A heavy-gas blob in a light background advects diagonally; the
 # interface is the feature worth resolving, and three configurations run the

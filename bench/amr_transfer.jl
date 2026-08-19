@@ -13,8 +13,8 @@
 # invertibility through the plans, coarse → fine → coarse exactness,
 # fine → coarse → fine measured order against the interpolation order, the
 # edge/interior error split at closed ends, and the sensor-injection
-# amplification sweep that sizes Stage 3 interface buffers
-# (reference/AMR_GPU.md, Stage 1).
+# amplification sweep that sizes the coarse-fine interface buffers
+# (reference/AMR_GPU.md, transfer operators).
 
 using MPI
 MPI.Init(threadlevel=:funneled)
@@ -310,7 +310,8 @@ function prefilter_comparison()
     end
 end
 
-# The α^|i−j| localization (constraint 7 of the plan): how fast the round-trip
+# The α^|i−j| localization (constraint 7 of reference/AMR_GPU.md): how fast
+# the round-trip
 # error of a mid-domain shock decays with distance from it, in fine cells.
 # This is the measured basis for interface-adjacent buffer widths.
 function pollution_decay()

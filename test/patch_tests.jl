@@ -1,5 +1,5 @@
-# Stage 2 patch-abstraction tests: layout arithmetic, and the two-conforming-
-# patch verification gates of reference/AMR_GPU.md (manufactured smooth
+# Patch-abstraction tests: layout arithmetic, and the two-conforming-patch
+# verification gates of reference/AMR_GPU.md (manufactured smooth
 # solution across the interface, acoustic pulse reflection, conservation
 # drift against the single-patch baseline). Serial; the rank-partitioned
 # multi-patch path is exercised by test/mpi_tests.jl.
@@ -58,8 +58,8 @@ end
     errs = [_entropy_wave_error(N, (2, 1, 1)) for N in (48, 96, 192)]
     orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
     @info "two-patch entropy wave" errs orders
-    # The interface treatment must not stall convergence: the plan's gate
-    # expects at least the closure-cascade order ≈ 3.
+    # The interface treatment must not stall convergence: the expectation
+    # is at least the closure-cascade order ≈ 3.
     @test all(>(2.5), orders)
     # And it must stay a small perturbation on the single-patch answer.
     ref = _entropy_wave_error(192, (1, 1, 1))

@@ -13,8 +13,8 @@ script or testset produced it and usually still guards it; where a design
 choice contradicts the original plan, the measurement that forced the change
 is stated next to it.
 
-Source comments, tests, and `HISTORY.md` cite the old plan's stage and gate
-names. They map onto this document as follows: Stage 1 (transfer operators)
+`HISTORY.md` and the git history cite the old plan's stage and gate names.
+They map onto this document as follows: Stage 1 (transfer operators)
 → [The transfer operators](#the-transfer-operators); Stage 2 (patch
 abstraction, with GPU G0 storage generalization) → [Patches and same-level
 interfaces](#patches-and-same-level-interfaces); Stages 3–4 (two-level

@@ -391,7 +391,7 @@ end
 # |S| passes through zero, taking any local scale a floor could use with it. See
 # `gate_beta!`.
 # Converted to the state type where used; a separately measured Float32 value
-# is still owed (G4a item 1, reference/AMR_GPU.md).
+# is still owed (reference/AMR_GPU.md, precision).
 const DUCROS_EPS = 1e-32
 
 """

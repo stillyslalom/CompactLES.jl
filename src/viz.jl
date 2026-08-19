@@ -51,8 +51,8 @@ function field_array(solver::Solver, Q, name::Symbol; species::Int=1)
     else
         refresh_primitives!(solver, Q)
     end
-    # An eltype-preserving copy: extraction must not hardcode Float64 now that
-    # the storage type is a backend decision (GPU Stage G0).
+    # An eltype-preserving copy: extraction must not hardcode Float64, since
+    # the storage type is a backend decision.
     return Array(scalar_field(solver, name; species=species))
 end
 

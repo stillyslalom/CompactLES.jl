@@ -534,7 +534,7 @@ end
     @test QE == Q0                                   # bit-identical, not approx
 end
 
-# --- AMR level-transfer operators (reference/AMR_GPU.md, Stage 1) ----------
+# --- AMR level-transfer operators (reference/AMR_GPU.md) -------------------
 
 "Fill the interior of a padded field with fn(x), x = (i-1)h along `dim`."
 function transfer_fill!(f, decomp, dim, fn, h)
@@ -2886,7 +2886,7 @@ end
 end
 
 @testset "pointwise kernels: the KA path reproduces the threaded path" begin
-    # G1 (reference/AMR_GPU.md): every pointwise phase is one shared per-point
+    # Every pointwise phase is one shared per-point
     # body behind two launchers. The bodies are per-point independent, so the
     # KernelAbstractions CPU path must reproduce the @threaded path BITWISE —
     # not to round-off — over a full run touching primitives, fluxes, sensors,
@@ -2936,13 +2936,13 @@ end
 end
 
 @testset "device line solves: DevicePlan reproduces the host plans" begin
-    # G2 (reference/AMR_GPU.md): the compact line solves run as
+    # The compact line solves run as
     # KernelAbstractions kernels in a (lines × n) layout, one thread per line,
     # with the reduced interface stage on the host. The device arithmetic
     # mirrors the host path per line operation for operation (including the
     # divide-vs-multiply-by-inverse split between the banded x and y/z
     # conventions), so on the KA CPU backend the comparison is BITWISE, the
-    # same equality gate the G1 pointwise kernels carry. Closed edges, folds
+    # same equality gate the pointwise kernels carry. Closed edges, folds
     # and periodic wrap all route through the same kernels; the fold cases
     # fill the halos with random data, since path equality does not require
     # physically meaningful mirror values.
