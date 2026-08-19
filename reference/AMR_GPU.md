@@ -60,8 +60,10 @@ One solver runs on four axes of configuration, combinable except where
 - **Storage backend**: `CPUBackend` (ordinary `Array`s, `@threaded` loops)
   or `DeviceBackend(ka)` wrapping any KernelAbstractions backend. A
   device-resident solver — decomposed, refined, regridding, Float64 or
-  Float32 — reproduces the CPU solver bitwise over full runs; the RX 6800 XT
-  through AMDGPU.jl is the measured target.
+  Float32 — reproduces the CPU solver bitwise over full runs. The
+  workstation's RX 6800 XT through AMDGPU.jl is the measured bring-up
+  target; the deployment target is rzadams / El Capitan-class hardware
+  (see [Performance summary](#performance-summary)).
 
 The pointwise physics is written once as per-point bodies launched through
 `pointwise!` (`src/pointwise.jl`); the compact line solves run through host
@@ -546,9 +548,20 @@ workstation keeps one at `~/.julia/dev/CompactLES_gpu_env`.
 
 ## Performance summary
 
-All figures from the RX 6800 XT (gfx1030, AMDGPU.jl on Windows/HIP) against
-the same workstation's CPU, warm, on the scripts named above. Run-to-run
-spread on this machine is 10–20%; read ratios, not third digits.
+The performance target is an LLNL rzadams / El Capitan-class machine
+(MI300A APUs, GPU-aware Cray MPICH), not the development workstation.
+Everything below was measured on the workstation's RX 6800 XT (gfx1030,
+AMDGPU.jl on Windows/HIP) against its own CPU, and is to be read as
+evidence that the structural pitfalls are gone — launch floors, transfer
+stalls, adaptation hangs — never as a performance claim about the target.
+The hardware differs where it matters: consumer RDNA2 runs vector FP64 at
+1/16 the FP32 rate where MI300A runs it at full rate; the APU's unified
+memory removes the discrete-VRAM staging economics every device↔host
+number below is priced in; and a GPU-aware MPI flips `device_mpi_direct`
+from its host-staging default. Wall targets, the G4b precision policy, and
+the reduced-solve question are rzadams measurements to make, not
+extrapolations from this table. Run-to-run spread on the workstation is
+10–20%; read ratios, not third digits.
 
 - 64³ TGV, single species, full step: device 0.146 s/step (Float64) and
   0.117 (Float32) under the deferred launch policy, against 0.203/0.171
@@ -676,13 +689,15 @@ should trigger it; nothing here is worth building speculatively.
    (intervals padded to a maximum count) with `Adapt.adapt_structure`, plus
    the Newton inversion in the kernel body. The last EOS off the device;
    mechanical now that the mirror pattern is proven twice.
-2. **G4b — mixed precision policy.** Deliberately open: with the device step
-   launch- and fence-bound, uniform Float32 buys 1.25× on device (1.10× on
-   CPU) against a real 1e-4 conservation drift, and no explicit
-   `Tstate`/`Taccum` split can pay while precision moves the step by a
-   quarter at most. Reopen when the remaining launch floor drops (items 3–4)
-   or a memory-capacity-bound case appears; the accepted inputs are the CPU
-   matrix, the device histories, and the G2 kernel-level FP64/FP32 numbers.
+2. **G4b — mixed precision policy.** Deliberately open, and to be settled
+   on the target machine, not the workstation: uniform Float32 buys 1.25×
+   on the launch- and fence-bound RX 6800 XT step (1.10× on CPU) against a
+   real 1e-4 conservation drift, but that ratio is a consumer-RDNA2
+   number. MI300A runs FP64 at full rate, so on the target the question
+   is memory traffic and capacity, not FLOPs.
+   Reopen with rzadams measurements once a memory-capacity-bound case
+   appears or the fence floor drops (items 3–4); the workstation matrix
+   stays useful only for the drift and footprint halves.
 3. **Same-level multi-patch on device.** Stage the interface-record
    pack/copy loops through the backend as the halo path was staged. This is
    also the event that makes per-patch streams worth revisiting: those
@@ -691,8 +706,11 @@ should trigger it; nothing here is worth building speculatively.
    the measured remaining serialization. Two routes: move the small
    reduced solve onto the device (device collectives, or redundant
    per-rank solves on gathered ends), or a GPU-aware MPI stack via the
-   `device_mpi_direct` hook plus pinned staging buffers. Needs a machine
-   whose stack supports either; the workstation's does not.
+   `device_mpi_direct` hook plus pinned staging buffers. The workstation's
+   stack supports neither; rzadams (GPU-aware Cray MPICH on MI300A, where
+   unified APU memory also collapses the staging question) is where both
+   routes get measured, and this item is the natural first rzadams
+   campaign together with re-basing the performance summary there.
 5. **Fine-level sub-communicators.** A small refined region at high rank
    count fails `_amr_dims` (9·np along a 1-D region). Letting a subset of
    ranks own the fine level, with the rest idling through its collectives,

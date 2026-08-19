@@ -615,10 +615,16 @@ reference-implementation pass that headed this list are done
    the conservative mode). Per-patch streams were measured against and set
    aside — the remaining gap to CPU is fence-bound, which a second stream
    cannot remove; the reasoning is in `AMR_GPU.md`'s launch-policy
-   section. What remains on
-   the GPU track: G4b policy selection (uniform device Float32 measures
-   1.25×), the `Nasa9Mixture` device mirror, and the G3d follow-ups
-   (same-level multi-patch on device, an on-device reduced solve).
+   section. Every device timing above is from the workstation's RX 6800
+   XT and reads as pitfall clearance only; the performance target is
+   rzadams / El Capitan-class hardware (MI300A, GPU-aware MPI), where
+   the FP64 rate, unified APU memory, and MPI stack all differ — see the
+   framing in `AMR_GPU.md`'s performance summary. What remains on the
+   GPU track: an rzadams measurement campaign to re-base the numbers and
+   settle the fence-floor routes, G4b policy selection there, the
+   `Nasa9Mixture` device mirror, and the follow-ups recorded in
+   `AMR_GPU.md` (same-level multi-patch on device, an on-device reduced
+   solve).
 
 The open items from the source comparison
 ([above](#open-work-from-the-source-comparison)) sit alongside these rather
