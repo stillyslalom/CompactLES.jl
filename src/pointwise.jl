@@ -121,6 +121,21 @@ their comparisons; nothing else should.
 """
 const FORCE_KA = Ref(false)
 
+"""
+Launch synchronization policy (G3d): `false` (the default) defers — kernels
+queue on the backend's one in-order stream and the host synchronizes only at
+its interaction points (the reduced-solve staging fence, the synchronous
+device↔host copies of the halo/ring staging and the reductions), which is
+what removes the per-launch round trip the G1/G2 timings measured. `true`
+restores the G3a conservative mode — a host synchronize after every
+pointwise launch and between every line-solve subkernel — and is the
+correctness fallback the plan requires: flip it when bisecting a device
+discrepancy, so ordering bugs separate from arithmetic ones.
+"""
+const DEVICE_SYNC = Ref(false)
+
+@inline _maybe_sync(backend) = (DEVICE_SYNC[] && synchronize(backend); nothing)
+
 @kernel function _point_kernel!(body!, args)
     i, j, k = @index(Global, NTuple)
     body!(args..., i, j, k)
@@ -156,7 +171,9 @@ end
     pointwise_ka!(body!, backend, n1, n2, n3, args...)
 
 The KernelAbstractions launch of [`pointwise!`](@ref) on an explicit
-`backend`, synchronizing before returning. Called with
+`backend`. Under the default deferred policy the launch queues on the
+backend's in-order stream and returns; [`DEVICE_SYNC`](@ref) restores the
+synchronize-per-launch conservative mode. Called with
 `KernelAbstractions.CPU()` — what `get_backend` returns for an `Array` —
 this runs the same bodies through the kernel path on ordinary storage, which
 is how the KA testset and `bench/pointwise_ka.jl` compare the two paths on
@@ -165,6 +182,6 @@ one machine.
 function pointwise_ka!(body!::F, backend, n1::Int, n2::Int, n3::Int,
                        args...) where {F}
     _point_kernel!(backend)(body!, args; ndrange=(n1, n2, n3))
-    synchronize(backend)
+    _maybe_sync(backend)
     return nothing
 end

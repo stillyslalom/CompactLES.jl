@@ -739,9 +739,10 @@ already been removed by the time G1 landed).
 - **Remaining on the G-track before a whole solver lives on device:** G3a
   delivered the plan conversion and residency work (`max_rate`,
   initialization, boundaries, folds), G3b the distributed halo/MPI path,
-  and G3c device-resident AMR (see their status blocks), so what remains is
-  the launch synchronization policy (G3d) and the `Nasa9Mixture`
-  fixed-width mirror. Device allocation and operator-level line solves are delivered
+  G3c device-resident AMR, and G3d the deferred launch policy (see their
+  status blocks), so what remains on the device track is the `Nasa9Mixture`
+  fixed-width mirror, G4b's precision policy, and the recorded follow-ups
+  in the G3d block. Device allocation and operator-level line solves are delivered
   with G2 below; this paragraph previously still listed both as future
   work and is corrected here.
 
@@ -1110,6 +1111,49 @@ uniform-fine references, followed by the deferred 3-D wall-time/memory case.
 
 #### G3d — patches as asynchronous launch units
 
+**Status: delivered** (August 2026), as a launch-policy change rather than a
+stream graph — the plan's per-patch streams were measured against and set
+aside; the reasoning and numbers are below.
+
+- **The unconditional synchronization is removed.** Kernels queue on the
+  backend's one in-order stream: `pointwise_ka!` and the `DevicePlan` stages
+  no longer synchronize per launch, and the only unconditional fence left is
+  the one the algorithm requires — before the host reads the packed
+  interface values of the reduced solve, once per `apply_along!`. Every
+  other host interaction is a synchronous device↔host copy or a reduction,
+  which drains the queue itself. `DEVICE_SYNC[] = true` restores the
+  synchronize-per-launch G3a mode and is the correctness fallback the plan
+  requires; a testset pins that the two modes agree.
+- **Full-step improvement, measured paired on the RX 6800 XT** (64³ TGV, 20
+  warm steps, same session, both modes bitwise): Float64 0.203 → 0.146
+  s/step and Float32 0.171 → 0.117 — the deferred policy removes 28–32% of
+  the device step, the host-round-trip share of the launch floor. The whole
+  acceptance battery (G3a's cases plus the G3c refined runs) is bitwise
+  under the deferred mode. Device now stands at 0.83×/0.91× of the 8-thread
+  CPU at this size, up from 0.4–0.5× under the synchronized mode.
+- **Per-patch streams are not implemented, on the measurement.** The
+  supported device configurations hold one patch per rank, or coarse+fine
+  whose coupling is sequential under Berger–Oliger subcycling; and the
+  remaining gap to CPU after the deferred policy is bound by the per-apply
+  reduced-solve fence — a host serialization a second stream cannot remove.
+  Stream machinery would add scheduling complexity to overlap kernels that
+  an in-order queue already back-to-backs. Revisit when same-level
+  multi-patch reaches device (its patches are genuinely independent within
+  a stage) or when the reduced solve moves on-device; both are recorded
+  follow-ups, not this gate's scope.
+- **The transfer audit is an inventory, not a profiler trace** — rocprof is
+  not available on this Windows/HIP stack, so the gate's "no transfers
+  beyond the documented set" is established by enumeration, which the
+  staging seams make complete: (1) halo and fold-pair MPI staging and (2)
+  the reduced-solve staging, both counted by the G3b trackers; (3) the
+  level-transfer coupling (gather packs, ring/box/window uploads, the tag
+  download) at stage or regrid cadence; (4) `DirichletBC` plane uploads per
+  stage; (5) setup-only geometry and initialization staging; (6) explicit
+  diagnostics/I/O gathers. Nothing else in the solver crosses the
+  device↔host boundary.
+
+The plan text for the gate, for reference:
+
 - Give each concurrently executable patch a queue/stream and express halo,
   shared-plane, coarse/fine, and reduced-solve dependencies with events.
   Coarse and fine patches are not automatically independent under subcycling;
@@ -1177,12 +1221,16 @@ solver wall time. The run's own wall-clock ratio between the precision legs
 is not a usable speedup figure (the Float64 leg shared its host with
 concurrent CPU jobs); the clean measurement is the G3a battery's warm
 20-step timing, where Float32 runs 1.12× the Float64 device rate and both
-sit at 0.4–0.5× the 8-thread CPU under the synchronized launch mode. So the
-G4b question — whether Float32 pays on device — is launch-bound at this size
-either way, and its policy selection waits on the G3d profile, with the CPU
-matrix above and these device histories as accepted inputs. The diagnostics
-already accumulate in Float64, so diagnostic precision alone does not remove
-state drift.
+sit at 0.4–0.5× the 8-thread CPU under the synchronized launch mode. G3d has
+since removed the per-launch synchronization (its status block): under the
+deferred policy Float32 runs 1.25× the Float64 device rate
+(0.117 vs 0.146 s/step at 64³) — better than the CPU's 1.10× but still far
+from the clean 2×, because the step remains bounded by launch submission and
+the reduced-solve fences rather than arithmetic. Those are the accepted
+inputs to G4b, which stays open: selecting a mixed policy is not warranted
+while precision changes move the device step by a quarter at most. The
+diagnostics already accumulate in Float64, so diagnostic precision alone
+does not remove state drift.
 
 Two literal-audit items remain open from item 1 below. The Ducros epsilon is
 still the Float64 `DUCROS_EPS` converted to the state type at its point of

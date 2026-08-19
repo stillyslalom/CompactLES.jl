@@ -19,7 +19,12 @@ using CompactLES
 using Printf
 const CL = CompactLES
 
-opt = script_args(ARGS, (backend = "amdgpu", n = 64, steps = 20))
+opt = script_args(ARGS, (backend = "amdgpu", n = 64, steps = 20, sync = false))
+
+# G3d: `sync=true` restores the synchronize-per-launch conservative mode, so
+# the launch-policy delta is one flag apart on identical cases. Either mode
+# must be bitwise; only the wall time may move.
+CompactLES.DEVICE_SYNC[] = opt.sync
 
 device_array, ka_backend = if opt.backend == "amdgpu"
     @eval using AMDGPU

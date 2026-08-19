@@ -608,9 +608,16 @@ reference-implementation pass that headed this list are done
    on a 3-D mixing blob at np = 8 the subcycled, regridding composite
    lands 5× closer to the uniform-fine mixing answer than the coarse run
    at 49% of the fine wall and 24% of its memory (`bench/amr_cost.jl`).
-   What remains on the GPU track: G3d stream overlap and the launch
-   synchronization policy, G4b policy selection from its profile, and the
-   `Nasa9Mixture` device mirror.
+   G3d closed the track's four gates by removing the per-launch
+   synchronization: kernels defer on one in-order stream with a single
+   reduced-solve fence per apply, cutting the device step 28–32% (64³ TGV
+   0.203 → 0.146 s/step Float64, both modes bitwise; DEVICE_SYNC restores
+   the conservative mode). Per-patch streams were measured against and set
+   aside — the remaining gap to CPU is fence-bound, which a second stream
+   cannot remove; the reasoning is in the G3d status block. What remains on
+   the GPU track: G4b policy selection (uniform device Float32 measures
+   1.25×), the `Nasa9Mixture` device mirror, and the G3d follow-ups
+   (same-level multi-patch on device, an on-device reduced solve).
 
 The open items from the source comparison
 ([above](#open-work-from-the-source-comparison)) sit alongside these rather

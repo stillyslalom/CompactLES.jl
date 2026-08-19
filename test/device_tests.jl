@@ -202,6 +202,41 @@ end
         level_restriction=:filter, backend=DeviceBackend(cpu_ka))
 end
 
+@testset "launch policy toggle (G3d)" begin
+    # DEVICE_SYNC[] switches between the deferred default and the
+    # synchronize-per-launch fallback; both must produce identical states.
+    # On the KA CPU backend kernels run synchronously either way, so this
+    # pins the toggle's plumbing; the GPU delta is bench/device_solver.jl's
+    # sync= comparison.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    per = (PeriodicBC(), PeriodicBC())
+    function short(backend)
+        s = Solver(n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(per, per, per), backend=backend)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) ->
+            Prim(rho=1 + 0.05sin(2π * x), p=1.0, u=(0.1, 0.0, 0.0)))
+        run!(s, Q; tfinal=0.05, nmax=4)
+        return parent(Q)
+    end
+    @test CL.DEVICE_SYNC[] == false
+    CL.FORCE_KA[] = true
+    a = try
+        short(DeviceBackend(cpu_ka))
+    finally
+        CL.FORCE_KA[] = false
+    end
+    CL.FORCE_KA[] = true
+    CL.DEVICE_SYNC[] = true
+    b = try
+        short(DeviceBackend(cpu_ka))
+    finally
+        CL.FORCE_KA[] = false
+        CL.DEVICE_SYNC[] = false
+    end
+    @test a == b
+end
+
 @testset "device-resident patch: Float32 step" begin
     # The G4a device tie-in at test scale: a Float32 solver on the
     # DeviceBackend construction path advances and stays finite, bitwise

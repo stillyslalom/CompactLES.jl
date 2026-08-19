@@ -348,7 +348,7 @@ function _dev_fill!(plan::DevicePlan, f, decomp::Decomp, ::Val{D}) where {D}
         plan.chi, plan.chi_first, plan.chi_len, plan.n, plan.nclo, plan.nchi,
         plan.a0, plan.sym, plan.lo_closed, plan.hi_closed, n_o1,
         decomp.n_halo_d, Val(D); ndrange=(n_o1, n_o2, plan.n))
-    synchronize(plan.backend)
+    _maybe_sync(plan.backend)
     return nothing
 end
 
@@ -359,7 +359,7 @@ function _dev_scatter!(out, plan::DevicePlan, decomp::Decomp, ::Val{D}) where {D
     _dev_scatter_kernel!(plan.backend)(
         out, plan.B, n_o1, decomp.n_halo_d, Val(D);
         ndrange=(n_o1, n_o2, plan.n))
-    synchronize(plan.backend)
+    _maybe_sync(plan.backend)
     return nothing
 end
 
@@ -369,19 +369,23 @@ function _dev_solve!(plan::DevicePlan, sweep::DeviceThomas)
     L, n = plan.lines, plan.n
     _dev_thomas_kernel!(plan.backend)(plan.B, sweep.l, sweep.dinv, sweep.c, n;
                                       ndrange=L)
-    synchronize(plan.backend)
+    _maybe_sync(plan.backend)
     ls.hasred || return nothing
 
     _dev_pack_ends2_kernel!(plan.backend)(sweep.ends, plan.B, n; ndrange=L)
+    # The one unconditional fence per apply (G3d): the host is about to read
+    # the packed interface values, so the queue must have drained to here.
+    # The H2D copies below block the host until complete, and every later
+    # kernel queues after them on the same in-order stream, so no further
+    # fence is needed on the way back down.
     synchronize(plan.backend)
     _reduced_copy!(ls.ends, sweep.ends)
     _reduced_solve!(ls, L)
     _reduced_copy!(sweep.zp, ls.zbp)
     _reduced_copy!(sweep.zn, ls.zbn)
-    synchronize(plan.backend)
     _dev_correct2_kernel!(plan.backend)(plan.B, sweep.v, sweep.w, sweep.zp,
                                         sweep.zn; ndrange=(L, n))
-    synchronize(plan.backend)
+    _maybe_sync(plan.backend)
     return nothing
 end
 
@@ -390,20 +394,19 @@ function _dev_solve!(plan::DevicePlan, sweep::DeviceBanded)
     L, n, q = plan.lines, plan.n, sweep.q
     _dev_banded_kernel!(plan.backend)(plan.B, sweep.L, sweep.U, n, q,
                                       plan.colwise; ndrange=L)
-    synchronize(plan.backend)
+    _maybe_sync(plan.backend)
     ls.hasred || return nothing
 
     _dev_pack_endsq_kernel!(plan.backend)(sweep.ends, plan.B, n, q; ndrange=L)
-    synchronize(plan.backend)
+    synchronize(plan.backend)   # the reduced-solve fence; see the tridiagonal method
     _reduced_copy!(ls.ends, sweep.ends)
     _reduced_solve!(ls, L)
     _reduced_copy!(sweep.zbp, ls.zbp)
     _reduced_copy!(sweep.zbn, ls.zbn)
-    synchronize(plan.backend)
     _dev_correctq_kernel!(plan.backend)(plan.B, sweep.V, sweep.W, sweep.zbp,
                                         sweep.zbn, q, plan.colwise;
                                         ndrange=(L, n))
-    synchronize(plan.backend)
+    _maybe_sync(plan.backend)
     return nothing
 end
 
