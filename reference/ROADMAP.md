@@ -5,7 +5,8 @@ required to progress from shock-tube calculations to multiphysics relevant to
 the National Ignition Facility (NIF). `README.md` covers usage, `DESIGN.md`
 describes the numerics, and `CLAUDE.md` defines development procedures.
 Completed phases are recorded in `reference/HISTORY.md`; the patch-AMR and GPU
-implementation plan is `reference/AMR_GPU.md`.
+design, its measured lessons, and its remaining roadmap are
+`reference/AMR_GPU.md`.
 
 ## Contents
 
@@ -170,7 +171,7 @@ Two structural patterns are relevant:
   that belongs here is *patch-based* (logically rectangular blocks of uniform
   resolution, SAMRAI-style), which is what Miranda uses and which makes
   adaptivity compatible with a compact scheme. `reference/AMR_GPU.md` carries
-  the constraint analysis and the implementation plan.
+  the constraint analysis and the delivered design.
 
 ### Trixi.jl
 
@@ -422,17 +423,15 @@ in this discretization.
 
 ## Phase 3 — scale, portability, and adaptivity
 
-**Patch-based AMR and the GPU port** are specified in `reference/AMR_GPU.md`,
-including the compact-scheme constraints, the Miranda transfer-operator
-evidence, the SBP–SAT fallback, staged implementation with verification gates,
-and the argument for sequencing them together with AMR's patch refactor
-first. Summary of the sequence: transfer operators as compact schemes
-(independent, small); the patch abstraction at a single level with conforming
-interfaces, carrying the storage-type generalization for GPU; static
-two-level refinement at a global timestep; KernelAbstractions pointwise
-kernels and device line solves; subcycling, sensor-driven tagging, and
-regridding last. Conforming multiblock is independently useful geometry even
-if refinement never follows.
+**Patch-based AMR and the GPU port are delivered**; `reference/AMR_GPU.md`
+describes the design, the compact-scheme constraints, the Miranda
+transfer-operator evidence, the SBP–SAT fallback, the measured lessons, and
+the remaining device-track roadmap. The capability: conforming same-level
+patches, a two-level refined region (static or regridding, subcycled),
+both distributed over the rank set, and a device backend on which the whole
+solver — decomposed, refined, either precision — reproduces the CPU answer
+bitwise. Conforming multiblock is independently useful geometry even where
+refinement is not used.
 
 **Float32 and mixed precision.** The storage blocker is cleared: AMR Stage 2 /
 GPU Stage G0 (`reference/AMR_GPU.md`) delivered `Decomp{T}` with `T`-typed halo
@@ -576,8 +575,9 @@ reference-implementation pass that headed this list are done
    how much the remaining calibration work can be trusted.
 3. **Phase 2.1, the implicit diffusion solver** — the principal architectural
    gap, which also addresses the polar CFL restriction.
-4. **AMR/GPU Stages 1–4 are delivered** (`reference/HISTORY.md` and the
-   status blocks in `reference/AMR_GPU.md`): the transfer operators, the
+4. **AMR/GPU Stages 1–4 are delivered** (`reference/HISTORY.md`;
+   `reference/AMR_GPU.md` carries the design and measurements): the
+   transfer operators, the
    patch abstraction at a single level carrying the G0 storage
    generalization, static two-level refinement at a global timestep, and
    Berger–Oliger subcycling with tagging-driven regridding of a single
@@ -614,7 +614,8 @@ reference-implementation pass that headed this list are done
    0.203 → 0.146 s/step Float64, both modes bitwise; DEVICE_SYNC restores
    the conservative mode). Per-patch streams were measured against and set
    aside — the remaining gap to CPU is fence-bound, which a second stream
-   cannot remove; the reasoning is in the G3d status block. What remains on
+   cannot remove; the reasoning is in `AMR_GPU.md`'s launch-policy
+   section. What remains on
    the GPU track: G4b policy selection (uniform device Float32 measures
    1.25×), the `Nasa9Mixture` device mirror, and the G3d follow-ups
    (same-level multi-patch on device, an on-device reduced solve).

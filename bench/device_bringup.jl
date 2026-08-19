@@ -3,7 +3,7 @@
 # `pointwise!`'s automatic routing, compare against the CPU bitwise, and time
 # a stencil-shaped and a launch-bound body. First measured on the reference
 # workstation's RX 6800 XT (AMDGPU.jl v2.7.2 on Windows against the HIP SDK);
-# the recorded numbers are in the G1 status block of `reference/AMR_GPU.md`.
+# the recorded numbers are in `reference/AMR_GPU.md` (pointwise kernels).
 #
 # Device packages are not CompactLES dependencies, so this script must run
 # from an environment carrying CompactLES AND the device package:

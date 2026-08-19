@@ -12,7 +12,7 @@ the place to record a result.
 | `reference/CALIBRATION.md` | the artificial-property constants, the CFL restriction, TGV |
 | `reference/ROADMAP.md` | positioning, comparisons, open work items |
 | `reference/HISTORY.md` | completed phases and their measured outcomes |
-| `reference/AMR_GPU.md` | the patch-AMR + GPU implementation plan, staged with gates |
+| `reference/AMR_GPU.md` | the patch-AMR + GPU design as delivered, measured lessons, roadmap |
 | `reference/IMMERSED.md` | the immersed-boundary design: level-set bodies, blend imposition |
 | `reference/MODE_TRUNCATION.md` | azimuthal mode truncation plan for the pole CFL squeeze |
 
