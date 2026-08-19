@@ -1,0 +1,103 @@
+rzadams1017:~/dev/cles 13:21 $ julia --project
+               _
+   _       _ _(_)_     |  Documentation: https://docs.julialang.org
+  (_)     | (_) (_)    |
+   _ _   _| |_  __ _   |  Type "?" for help, "]?" for Pkg help.
+  | | | | | | |/ _` |  |
+  | | |_| | | | (_| |  |  Version 1.12.7 (2026-08-15)
+ _/ |\__'_|_|_|\__'_|  |  Official https://julialang.org release
+|__/                   |
+
+(cles) pkg> st
+Status `~/dev/cles/Project.toml`
+  [21141c5a] AMDGPU v2.7.2
+  [b1f6c1e2] CompactLES v0.1.0 `~/.julia/dev/CompactLES`
+  [da04e1cc] MPI v0.20.26
+  [3da0fdf6] MPIPreferences v0.1.12
+  [811555cd] ThreadPinning v1.1.1
+
+julia> exit()
+
+rzadams1017:~/dev/cles 13:23 $ module load rocm
+rzadams1017:~/dev/cles 13:23 $ srun julia --project -t 8 ~/.julia/dev/CompactLES/bench/device_bringup.jl backend=amdgpu
+flux-job: f46ymnt1r3uh started                                                                                                        00:00:03
+device: HIPDevice(id=1, name=AMD Radeon Graphics, gcn_arch=gfx942:sramecc+:xnack-)
+rk update      max |gpu - cpu| = 0.0  (bitwise)
+delta4 sensor  max |gpu - cpu| = 0.0  (bitwise)
+routing        max |gpu - cpu| = 0.0
+delta4 (one dir) 64^3:  device 0.016 ms   @threaded(8) 0.145 ms
+rk update x5 launches: device 0.080 ms   @threaded(8) 0.544 ms
+flux assembly  max |gpu - cpu| = 0.0  (bitwise)
+flux assembly 64^3 2sp: device 0.042 ms   @threaded(8) 9.564 ms
+C6  line dim 1 64^3: dev 2.998 ms  host(8) 2.835 ms  |Δ|=0  (bitwise)
+C6  line dim 2 64^3: dev 5.999 ms  host(8) 3.237 ms  |Δ|=0  (bitwise)
+C6  line dim 3 64^3: dev 0.313 ms  host(8) 4.451 ms  |Δ|=0  (bitwise)
+C10 line dim 1 64^3: dev 0.420 ms  host(8) 3.386 ms  |Δ|=0  (bitwise)
+C10 line dim 2 64^3: dev 0.404 ms  host(8) 4.584 ms  |Δ|=0  (bitwise)
+C10 line dim 3 64^3: dev 0.377 ms  host(8) 1.287 ms  |Δ|=0  (bitwise)
+filt line dim 1 64^3: dev 0.322 ms  host(8) 4.953 ms  |Δ|=0  (bitwise)
+filt line dim 2 64^3: dev 0.310 ms  host(8) 3.414 ms  |Δ|=0  (bitwise)
+filt line dim 3 64^3: dev 0.324 ms  host(8) 4.048 ms  |Δ|=0  (bitwise)
+C6 closed  dim 1: max|Δ| = 0  (bitwise)
+C6 closed  dim 2: max|Δ| = 0  (bitwise)
+C6 closed  dim 3: max|Δ| = 0  (bitwise)
+C10 closed dim 1: max|Δ| = 0  (bitwise)
+C10 closed dim 2: max|Δ| = 0  (bitwise)
+C10 closed dim 3: max|Δ| = 0  (bitwise)
+
+rzadams1017:~/dev/cles 13:28 $ module load cray-mpich
+rzadams1017:~/dev/cles 13:28 $ srun julia --project -t 8 ~/.julia/dev/CompactLES/bench/device_mpi.jl backend=amdgpu
+flux-job: f46yzVYwVkZM started                                                                                                        00:00:03
+=== distributed device runs, np = 1, backend amdgpu
+multispecies tube, split x     steps  10/ 10  max|dev-cpu| = 0  (bitwise)
+  wall/step: cpu 0.853 s  device 3.490 s
+  staged halo/pair: 0.0 MiB total, 0.000 s slowest rank (0.0% of device wall)
+  reduced interface: 40.6 MiB total, 0.097 s slowest rank (0.3% of device wall)
+resolved-θ axis fold, split θ  steps  10/ 10  max|dev-cpu| = 0  (bitwise)
+  wall/step: cpu 0.430 s  device 1.313 s
+  staged halo/pair: 0.0 MiB total, 0.000 s slowest rank (0.0% of device wall)
+  reduced interface: 28.2 MiB total, 0.074 s slowest rank (0.6% of device wall)
+rzadams1017:~/dev/cles 13:53 $ srun -n 2 julia --project -t 64 ~/.julia/dev/CompactLES/bench/device_mpi.jl backend=amdgpu
+flux-job: f46z1vLrRYtf started                                                                                                        00:00:04
+=== distributed device runs, np = 2, backend amdgpu
+multispecies tube, split x     steps  10/ 10  max|dev-cpu| = 0  (bitwise)
+  wall/step: cpu 0.060 s  device 3.944 s
+  staged halo/pair: 56.2 MiB total, 0.046 s slowest rank (0.1% of device wall)
+  reduced interface: 48.3 MiB total, 0.114 s slowest rank (0.3% of device wall)
+resolved-θ axis fold, split θ  steps  10/ 10  max|dev-cpu| = 0  (bitwise)
+  wall/step: cpu 0.117 s  device 1.387 s
+  staged halo/pair: 1080.1 MiB total, 0.629 s slowest rank (4.5% of device wall)
+  reduced interface: 32.2 MiB total, 0.065 s slowest rank (0.5% of device wall)
+
+rzadams1017:~/dev/cles 14:01 $ srun julia --project -t 8 ~/.julia/dev/CompactLES/bench/device_solver.jl backend=amdgpu
+flux-job: f46z5SVwXM2f started                                                                                                        00:00:03
+device: HIPDevice(id=1, name=AMD Radeon Graphics, gcn_arch=gfx942:sramecc+:xnack-)
+periodic smooth 32^3               steps  10/ 10  max|dev-cpu| = 0  (bitwise)
+closed multispecies tube           steps   7/  7  max|dev-cpu| = 0  (bitwise)
+NSCBC duct                         steps  10/ 10  max|dev-cpu| = 0  (bitwise)
+cylindrical axis fold              steps   8/  8  max|dev-cpu| = 0  (bitwise)
+spherical freestream/GCL           |dQ|max cpu 5.68434e-14 dev 5.68434e-14  max|dev-cpu| = 0  (bitwise)
+max_rate                           cpu (515.7514606713082, 1.0) dev (515.7514606713082, 1.0)  (equal)
+Sod shock N=400                    steps 578/578  max|dev-cpu| = 0  (bitwise)
+refined static wave                steps  48/ 48  max|dev-cpu| = 0  (bitwise)
+refined subcycle+regrid            steps  17/ 17  max|dev-cpu| = 0  (bitwise)
+TGV Float64 64^3 x20 steps         steps  20/ 20  max|dev-cpu| = 0  (bitwise)
+  timing (warm): cpu 4.103 s/step (8 thr)   device 2.118 s/step   ratio 1.94x
+TGV Float32 64^3 x20 steps         steps  20/ 20  max|dev-cpu| = 0  (bitwise)
+  timing (warm): cpu 3.317 s/step (8 thr)   device 0.080 s/step   ratio 41.53x
+  
+  rzadams1017:~/dev/cles 14:26 $ srun julia -e "using InteractiveUtils; versioninfo()"
+flux-job: f46zGb9PkVm1 started                                                                                                        00:00:04
+Julia Version 1.12.7
+Commit 6d172b025e4 (2026-08-15 08:05 UTC)
+Build Info:
+  Official https://julialang.org release
+Platform Info:
+  OS: Linux (x86_64-linux-gnu)
+  CPU: 192 × AMD Instinct MI300A Accelerator
+  WORD_SIZE: 64
+  LLVM: libLLVM-18.1.7 (ORCJIT, znver3)
+  GC: Built with stock GC
+Threads: 1 default, 1 interactive, 1 GC (on 192 virtual cores)
+Environment:
+  LD_LIBRARY_PATH = /opt/rocm-6.4.3/lib:/g/g14/ames6/fakelib:/opt/cray/pe/lib64:/opt/cray/lib64:/opt/cray/pe/papi/7.2.0.2/lib64
