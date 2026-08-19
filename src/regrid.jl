@@ -41,10 +41,15 @@ function _tag_bounds(solver::Solver, Qc)
     o = dcp.n_halo_d
     n = dcp.n_local
     n_species = solver.equations.n_species
+    # A device-resident coarse patch downloads its block for the tag sweep —
+    # a backend copy at the regrid cadence, not per step — and takes a host
+    # scratch in place of tmp_a.
+    Qc = _cpu_storage(Qc) ? Qc : Array(parent(Qc))
     # Mixture density over the interior extended two layers along each active
     # dimension: the δ⁴ taps reach that far, and beyond a closed edge the
     # clamped indexing below never reads it.
-    rho = coarse.tmp_a
+    rho = _cpu_storage(coarse.tmp_a) ? coarse.tmp_a :
+          zeros(eltype(Qc), size(coarse.tmp_a))
     ext = ntuple(d -> dcp.active[d] ? (-1:n[d]+2) : (1:1), 3)
     @inbounds for k in ext[3], j in ext[2], i in ext[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
@@ -78,8 +83,17 @@ function _tag_bounds(solver::Solver, Qc)
             hi = max.(hi, (i, j, k))
         end
     end
-    hi[1] == 0 && hi[2] == 0 && hi[3] == 0 && return nothing
-    return (lo, hi)
+    # Global bounding box of the tagged set: shift this rank's bounds into
+    # global indices (the sentinels survive the shift ordering below) and
+    # reduce, so every rank derives the identical region. A rank with no
+    # tagged cell contributes typemax/0 sentinels that lose every min/max.
+    lo_g = ntuple(d -> hi[d] == 0 ? typemax(Int) ÷ 2 : lo[d] + dcp.offset[d], 3)
+    hi_g = ntuple(d -> hi[d] == 0 ? 0 : hi[d] + dcp.offset[d], 3)
+    red = MPI.Allreduce(Int64[lo_g..., (-).(hi_g)...], min, dcp.comm)
+    glo = ntuple(d -> Int(red[d]), 3)
+    ghi = ntuple(d -> -Int(red[3 + d]), 3)
+    ghi[1] == 0 && ghi[2] == 0 && ghi[3] == 0 && return nothing
+    return (glo, ghi)
 end
 
 """
@@ -89,8 +103,9 @@ The refined region the current coarse state calls for: the bounding box of
 the tagged cells, buffered by `RegridSpec.buffer` coarse cells per side,
 clamped to the nesting margin, and widened where necessary to the four-node
 minimum extent. Returns `nothing` when no cell exceeds the threshold.
-Collapsed dimensions keep offset 0 and extent 1. Serial, like the level
-machinery.
+Collapsed dimensions keep offset 0 and extent 1. Collective over the coarse
+communicator (one Allreduce of the tag bounds), so every rank returns the
+identical region.
 """
 function tagged_region(solver::Solver, Qc)
     spec = getfield(solver, :regrid)
@@ -126,8 +141,9 @@ function _fill_fine_from_coarse!(solver::Solver, states)
     Qc = states[1]
     Qf = states[lt.fine_index]
     K = length(lt.pplans)
+    _gather_box!(lt.box_gather, lt, Qc, coarse.decomp)
     for c in 1:solver.equations.n_cons
-        _copy_coarse_box!(lt.pstage[1], Qc, c, lt, coarse.decomp, lt.pdecomps[1])
+        lt.pstage[1] .= view(lt.box_gather, :, :, :, c)
         for k in 1:K
             interpolate!(lt.pstage[k+1], lt.pplans[k], lt.pstage[k])
         end
@@ -139,29 +155,48 @@ end
 
 # Copy surviving fine data from the old patch onto the new one over the
 # coincident fine lattice of the region overlap, holding one node off both
-# patches' boundary planes.
+# patches' boundary planes. Distributed: the old fine state gathers
+# replicated over the old region (one transient region-sized array per rank,
+# at the regrid cadence only), and each rank writes the overlap slots of its
+# own new block. `old_gather` is that replica, indexed by old patch node.
 function _carry_over!(Qf_new, dnew::Decomp, rnew::BlockRegion,
-                      Qf_old, dold::Decomp, rold::BlockRegion,
+                      old_gather, Nf_old::NTuple{3,Int}, rold::BlockRegion,
                       active::NTuple{3,Bool}, n_cons::Int)
-    # Root node g maps to fine-local 3(g − offset) − 2 on either patch, so the
-    # old-to-new fine index shift is 3(offset_old − offset_new).
+    # Root node g maps to fine-global 3(g − offset) − 2 on either patch, so
+    # the old-to-new fine index shift is 3(offset_old − offset_new).
     shift = ntuple(d -> active[d] ? 3 * (rold.offset[d] - rnew.offset[d]) : 0, 3)
+    Nf_new = ntuple(d -> active[d] ? 3 * rnew.extent[d] - 2 : rnew.extent[d], 3)
     rng = ntuple(3) do d
         active[d] || return 1:1
         glo = max(rold.offset[d], rnew.offset[d]) + 1
         ghi = min(rold.offset[d] + rold.extent[d], rnew.offset[d] + rnew.extent[d])
         f_lo = max(3 * (glo - rold.offset[d]) - 2, 2)
-        f_hi = min(3 * (ghi - rold.offset[d]) - 2, dold.n_local[d] - 1)
-        max(f_lo + shift[d], 2):min(f_hi + shift[d], dnew.n_local[d] - 1)
+        f_hi = min(3 * (ghi - rold.offset[d]) - 2, Nf_old[d] - 1)
+        # Window in NEW patch global nodes, then this rank's slice of it.
+        w = max(f_lo + shift[d], 2):min(f_hi + shift[d], Nf_new[d] - 1)
+        max(first(w), dnew.offset[d] + 1):min(last(w),
+                                              dnew.offset[d] + dnew.n_local[d])
     end
     any(isempty, rng) && return Qf_new
     pn = dnew.n_halo_d
-    po = dold.n_halo_d
-    @inbounds for c in 1:n_cons, k in rng[3], j in rng[2], i in rng[1]
-        Qf_new[i + pn[1], j + pn[2], k + pn[3], c] =
-            Qf_old[i - shift[1] + po[1], j - shift[2] + po[2],
-                   k - shift[3] + po[3], c]
+    off = dnew.offset
+    if _cpu_storage(Qf_new)
+        @inbounds for c in 1:n_cons, k in rng[3], j in rng[2], i in rng[1]
+            Qf_new[i - off[1] + pn[1], j - off[2] + pn[2],
+                   k - off[3] + pn[3], c] =
+                old_gather[i - shift[1], j - shift[2], k - shift[3], c]
+        end
+        return Qf_new
     end
+    # Device patch: the overlap window is one rectangular block, uploaded and
+    # assigned by broadcast at the regrid cadence.
+    win = view(old_gather, (rng[1] .- shift[1]), (rng[2] .- shift[2]),
+               (rng[3] .- shift[3]), 1:n_cons)
+    dev_win = similar(parent(Qf_new), size(win))
+    copyto!(dev_win, Array(win))
+    lr = ntuple(d -> (first(rng[d]) - off[d] + pn[d]):
+                     (last(rng[d]) - off[d] + pn[d]), 3)
+    view(parent(Qf_new), lr[1], lr[2], lr[3], 1:n_cons) .= dev_win
     return Qf_new
 end
 
@@ -197,6 +232,14 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
     n_cons = solver.equations.n_cons
     # getfield: `h` is also a patch property name, and the property forwarding
     # refuses it on a multi-patch solver; the root spacing lives on the config.
+    # Gather the surviving fine state BEFORE the patch swap, while the old
+    # decomposition and block table are still live. Replicated over the old
+    # region; freed when this call returns.
+    dold = oldfine.decomp
+    Nf_old = dold.n_global
+    old_gather = zeros(T, Nf_old..., n_cons)
+    gather_region!(old_gather, ntuple(d -> 1:Nf_old[d], 3), (0, 0, 0),
+                   (0, 0, 0), Qf_old, dold, lt.fine_blocks)
     newfine = _build_fine_patch(T, newregion, active_g, getfield(solver, :h),
                                 spec.n_halo,
                                 spec.deriv, spec.filt, spec.smoo,
@@ -205,8 +248,9 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
                                 n_cons)
     newlt = build_level_transfer(T, newregion, active_g, spec.n_halo, fi,
                                  lt.restriction, n_cons,
-                                 getfield(solver, :subcycle))
-    Qf_new = allocate_state(newfine.decomp, n_cons)
+                                 getfield(solver, :subcycle),
+                                 patches[1].decomp, newfine.decomp)
+    Qf_new = _state_like(newfine.rho, n_cons)
     patches[fi] = newfine
     solver.level_transfer = newlt
     states[fi] = Qf_new
@@ -214,7 +258,7 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
     workspace.du[fi] = zero(Qf_new)
     init_geometry!(PatchSolver(solver, newfine))
     _fill_fine_from_coarse!(solver, states)
-    _carry_over!(Qf_new, newfine.decomp, newregion, Qf_old, oldfine.decomp,
+    _carry_over!(Qf_new, newfine.decomp, newregion, old_gather, Nf_old,
                  oldregion, active_g, n_cons)
     if save !== nothing
         save.Q = _snapshot(states)

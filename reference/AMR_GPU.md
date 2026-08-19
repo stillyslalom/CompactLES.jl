@@ -619,11 +619,11 @@ coarse steps through `src/regrid.jl`.
   (which `max_rate` reads before the retry's first RHS) and in the
   low-storage `du` accumulator (`RKA[1] = 0` cannot forget NaN, since
   `0.0 · NaN = NaN`), so every retry re-failed at the savepoint.
-- **Still open from this stage's gate list:** the wall-time and memory
-  demonstration on a 3-D mixing case (1-D wave-train accuracy is measured
-  above; the cost case needs the distributed level transfer first), tile
-  clustering, and the TGV filter-cadence measurement of risk 4 under the
-  per-level cadence chosen here.
+- **Still open from this stage's gate list:** tile clustering, and the TGV
+  filter-cadence measurement of risk 4 under the per-level cadence chosen
+  here. The wall-time and memory demonstration on a 3-D mixing case is now
+  measured — the distributed level transfer it waited on arrived with G3c,
+  and the numbers are in that status block (`bench/amr_cost.jl`).
 
 The plan text for the stage, for reference:
 
@@ -738,10 +738,10 @@ already been removed by the time G1 landed).
   species (0.236 ms vs 2.33 ms, `bench/device_bringup.jl`).
 - **Remaining on the G-track before a whole solver lives on device:** G3a
   delivered the plan conversion and residency work (`max_rate`,
-  initialization, boundaries, folds) and G3b the distributed halo/MPI path
-  (see their status blocks), so what remains is device AMR (G3c), the
-  launch synchronization policy (G3d), and the `Nasa9Mixture` fixed-width
-  mirror. Device allocation and operator-level line solves are delivered
+  initialization, boundaries, folds), G3b the distributed halo/MPI path,
+  and G3c device-resident AMR (see their status blocks), so what remains is
+  the launch synchronization policy (G3d) and the `Nasa9Mixture`
+  fixed-width mirror. Device allocation and operator-level line solves are delivered
   with G2 below; this paragraph previously still listed both as future
   work and is corrected here.
 
@@ -1023,6 +1023,78 @@ Gate: the existing 2/4/8-rank operator and full-run comparisons on device,
 with transfer volume and synchronization time recorded separately.
 
 #### G3c — device-resident AMR
+
+**Status: delivered** (August 2026), in two connected pieces: the level
+transfer is distributed, and a refined solver runs on a `DeviceBackend`.
+
+Distribution. Both levels decompose over the whole rank set (the fine patch
+picks its process grid through `_amr_dims`, which refuses a grid that would
+put any rank below the C8 filter's 9-point minimum rather than letting a
+regrid die mid-run). The coupling data replicates — one Allgatherv per
+gather assembles the buffered coarse box, and the `:inject` restriction is a
+coincident-node sampled gather, identical in values to the former
+per-dimension `inject!` chain — while every rank writes only the shell or
+covered nodes it owns, by patch-global index. Tagging reduces its bounds
+globally, and a regrid gathers the surviving fine state once at the regrid
+cadence for the overlap carry.
+
+- **The interpolation chain had to distribute too, and that was measured,
+  not assumed.** The first cut ran the chains replicated per rank; on the
+  3-D cost case at np = 8 that put the composite at 85% of the uniform-fine
+  wall — a subcycled step imposes the shell ~20 times, each a K-stage
+  tensor-product interpolation over the box per component, and replication
+  multiplied all of it by the rank count. The chains now distribute by
+  conserved component and share only the thin shell ring (two slabs of
+  thickness pad+1 per active dimension) through one Allgatherv per
+  imposition (`_impose_shell!`); the same values move instead of being
+  recomputed, and the composite fell to 49% of the fine wall.
+- `level_restriction = :filter` stays serial-only (a whole-patch line
+  solve), guarded at setup; `:inject` is the distributed default.
+- A 1-D fine patch needs ≥ 9·np nodes along its only active dimension —
+  `_amr_dims` errors with the numbers. Letting ranks idle on the fine level
+  is the recorded alternative if a measured case needs small regions at
+  high rank counts.
+
+Device residency. The transfer stages route through the backend seam: the
+gathers pack by broadcast into a device stage and one contiguous copy (the
+G3b staging pattern), the shell imposition uploads the ring and writes
+through a kernel, the covered-region write and the regrid overlap carry are
+uploaded-window broadcasts, tagging downloads the coarse block at the regrid
+cadence, and geometry and state allocation were already backend-routed.
+`Nasa9Mixture` and `:filter` restriction remain the barred pieces.
+
+Gates measured:
+
+- Serial values are bit-identical to the pre-G3c solver — the level tests,
+  the convergence guards, and the wave/regrid references all unchanged: the
+  gathers and rings move the same values the removed loops moved.
+- Distributed comparisons (`test/mpi_tests.jl`, np = 2/4/8, suite now
+  110/110): the static and subcycled two-level wave errors match the serial
+  references to ~1e-14 (the spike-solve round-off tier) with identical step
+  counts, and the regridding Sod tracks to the identical region through the
+  identical step count.
+- Device comparisons: refined runs on `DeviceBackend(KA.CPU())` under
+  `FORCE_KA` reproduce the CPU solver bitwise in all three modes — static,
+  subcycled, and subcycled with regridding (`test/device_tests.jl`, suite
+  now 94 testsets) — and the same three cases are exercised on the
+  RX 6800 XT by `bench/device_solver.jl`.
+- **The Stage 4 cost demonstration is measured** (`bench/amr_cost.jl`,
+  np = 8 on the workstation): a heavy-gas blob mixing case on a 48³ root
+  grid with a subcycled, regridding refined region (26³ coarse nodes at the
+  end), against uniform 48³ and uniform 142³ references, t = 1. On the
+  physical mixing metric ∫Y(1−Y)dV the composite lands 5× closer to the
+  fine answer than the coarse run (error vs fine +1.4e-3 against +6.9e-3,
+  i.e. 0.4% vs 1.9% relative) at **49% of the fine wall and 24% of its
+  memory** (342 s / 655 MiB vs 696 s / 2737 MiB; coarse runs 45 s /
+  179 MiB). Pointwise in-region error is NOT the metric to read: both
+  coarse and composite sit at max ≈ 0.19 against fine there, which is the
+  sub-cell displacement of a near-discontinuous interface, not a mixing
+  error; outside the region the composite is 2.4× closer to fine than the
+  coarse run. The advantage widens as the refined fraction shrinks — here
+  the region covers a sixth of the volume, which is a conservative
+  configuration for the claim.
+
+The plan text for the gate, for reference:
 
 - Generalize `LevelTransfer`'s host-only `Array` stages and Hermite trajectory
   storage through the backend seam. Convert coarse-box copies, fine-shell

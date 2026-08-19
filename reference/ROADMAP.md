@@ -600,11 +600,17 @@ reference-implementation pass that headed this list are done
    and fold-pair messages staged through contiguous device buffers around
    the unchanged MPI path, bitwise against the CPU solver at np = 2/4/8 on
    the shared workstation GPU, with the staged and reduced-interface
-   transfer shares recorded (`bench/device_mpi.jl`). Next: distributing
-   the level transfer gates both G3c device AMR and the Stage 4 cost
-   demonstration on a 3-D mixing case. G4b policy selection uses the
-   G3a/G4a device measurements; stream overlap comes last, after the
-   residency and communication profiles expose useful concurrency.
+   transfer shares recorded (`bench/device_mpi.jl`). G3c followed: the
+   level transfer is distributed (both levels decompose over all ranks;
+   the coupling gathers replicated data and distributes the interpolation
+   chains by component), a refined solver runs on a DeviceBackend bitwise
+   against CPU, and the deferred Stage 4 cost demonstration is measured —
+   on a 3-D mixing blob at np = 8 the subcycled, regridding composite
+   lands 5× closer to the uniform-fine mixing answer than the coarse run
+   at 49% of the fine wall and 24% of its memory (`bench/amr_cost.jl`).
+   What remains on the GPU track: G3d stream overlap and the launch
+   synchronization policy, G4b policy selection from its profile, and the
+   `Nasa9Mixture` device mirror.
 
 The open items from the source comparison
 ([above](#open-work-from-the-source-comparison)) sit alongside these rather

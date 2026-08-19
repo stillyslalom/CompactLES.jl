@@ -148,6 +148,31 @@ function main(opt)
         return s, Q
     end
 
+    # --- G3c: refined solver resident on device ---------------------------
+    function refined_wave(backend; kw...)
+        N = 96
+        s = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0),
+                   bcs=(per, per, per), art=ArtParams(enabled=false),
+                   filter_interval=0,
+                   refine=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1)),
+                   backend=backend; kw...)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) ->
+            Prim(u=(0.5, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
+        run!(s, states; tfinal=0.3)
+        return s, states
+    end
+    for (label, kw) in (("refined static wave", (;)),
+                        ("refined subcycle+regrid",
+                         (subcycle=true, regrid_interval=20, tag_buffer=8)))
+        s1, q1 = refined_wave(CPUBackend(); kw...)
+        s2, q2 = refined_wave(DeviceBackend(ka_backend); kw...)
+        dmax = maximum(maximum(abs.(Array(parent(q2[i])) .- parent(q1[i])))
+                       for i in 1:2)
+        @printf("%-34s steps %3d/%3d  max|dev-cpu| = %g%s\n", label,
+                s1.step, s2.step, dmax, dmax == 0 ? "  (bitwise)" : "")
+    end
+
     # --- Float32 TGV short history + step timing at n^3 -------------------
     for Tp in (Float64, Float32)
         n = opt.n

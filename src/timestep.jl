@@ -189,8 +189,11 @@ filter pass covers the coarse level only in this mode, and the post-step
 restriction then rebuilds the covered coarse region from the filtered fine
 state.
 
-Selected by `step!` when the solver was built with `subcycle = true`; serial,
-like the level coupling itself.
+Selected by `step!` when the solver was built with `subcycle = true`.
+Collective, like the level coupling itself since G3c: the Hermite box saves
+gather over the coarse communicator and every shell imposition carries the
+component-distributed chain's ring Allgatherv, so every rank must take the
+same substep sequence.
 """
 function subcycled_step!(solver::Solver, states::Vector{<:ConservedState},
                          dQs::Vector{<:ConservedState},

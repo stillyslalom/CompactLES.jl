@@ -32,13 +32,12 @@
     @test CL.fold_dplan(sax.folds[1], 1) isa DevicePlan
     @test CL.fold_fplan(sax.folds[1], -1) isa DevicePlan
 
-    # Unsupported combinations fail at setup, not mid-run.
+    # Unsupported combinations fail at setup, not mid-run. (Refinement on a
+    # DeviceBackend was in this list until G3c delivered it; the G3c testset
+    # below covers it.)
     @test_throws ErrorException Solver(n_global=(32, 12, 12),
         L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per), backend=bk,
         patch_grid=(2, 1, 1))
-    @test_throws ErrorException Solver(n_global=(32, 12, 12),
-        L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per), backend=bk,
-        refine=BlockRegion((12, 4, 4), (8, 4, 4)))
 end
 
 @testset "device-resident patch: full runs reproduce the CPU solver" begin
@@ -158,6 +157,49 @@ end
         CL.FORCE_KA[] = false
     end
     @test r1 == r2
+end
+
+@testset "device-resident refinement (G3c)" begin
+    # A refined solver on the DeviceBackend construction path: DevicePlans on
+    # both levels, the level transfer's gathers and writes routed through the
+    # backend seam, in all three coupling modes. Bitwise against the
+    # CPUBackend runs under FORCE_KA, as every device gate is. The
+    # device-only write branches (`_fine_shell_point!`, the covered-region
+    # and carry-over broadcasts, the staged gather pack) run on the real GPU
+    # through bench/device_solver.jl.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    per = (PeriodicBC(), PeriodicBC())
+    function wave(backend; kw...)
+        N = 96
+        solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0),
+                        bcs=(per, per, per), art=ArtParams(enabled=false),
+                        filter_interval=0,
+                        refine=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0),
+                                           (N ÷ 6, 1, 1)),
+                        backend=backend; kw...)
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) ->
+            Prim(u=(0.5, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
+        run!(solver, states; tfinal=0.3)
+        return solver, states
+    end
+    for kw in ((;), (subcycle=true,),
+               (subcycle=true, regrid_interval=20, tag_buffer=8))
+        s1, q1 = wave(CPUBackend(); kw...)
+        CL.FORCE_KA[] = true
+        s2, q2 = try
+            wave(DeviceBackend(cpu_ka); kw...)
+        finally
+            CL.FORCE_KA[] = false
+        end
+        @test s1.step == s2.step
+        @test all(parent(q1[i]) == parent(q2[i]) for i in 1:2)
+    end
+    # :filter restriction is host-only and refused at setup on device.
+    @test_throws ErrorException Solver(n_global=(96, 1, 1),
+        L_domain=(2π, 1.0, 1.0), bcs=(per, per, per),
+        refine=BlockRegion((40, 0, 0), (16, 1, 1)),
+        level_restriction=:filter, backend=DeviceBackend(cpu_ka))
 end
 
 @testset "device-resident patch: Float32 step" begin

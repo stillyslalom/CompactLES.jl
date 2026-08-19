@@ -1264,12 +1264,78 @@ function test_staged_exchange()
           gmax(maximum(abs.(parent(Q3) .- parent(Q4)))), 1e-300)
 end
 
+# ---------------------------------------------------------------------------
+# Distributed level transfer (reference/AMR_GPU.md, G3c). Both levels
+# decompose over the whole rank set and the coupling runs replicated:
+# region-sized Allgathers, identical serial chains per rank, owned-slot
+# writes. The references are the np = 1 values of the identical cases; a
+# decomposed run differs only where closed lines take the spike solve in
+# place of the serial sweep, so the error metrics agree to round-off
+# (the two-patch testset's tier), and the regridder must track to the same
+# region through the same step count.
+# ---------------------------------------------------------------------------
+function test_refined_decomposed()
+    section("distributed two-level refinement (G3c)")
+    u0 = 0.5
+    function wave_error(; subcycle)
+        N = 192
+        solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                        art=ArtParams(enabled=false), filter_interval=0,
+                        subcycle=subcycle,
+                        refine=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0),
+                                           (N ÷ 6, 1, 1)))
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) ->
+            Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
+        run!(solver, states; tfinal=0.5)
+        e = 0.0
+        for (ps, Q) in CL.eachpatch(solver, states)
+            for i in 1:ps.decomp.n_local[1]
+                I = gidx(ps, i, 1, 1)
+                e = max(e, abs(Q[I, 1] - (1.0 + 0.2 * sin(xcoord(ps, 1, i) -
+                                                          u0 * solver.t))))
+            end
+        end
+        return gmax(e), solver.step
+    end
+    e_static, n_static = wave_error(subcycle=false)
+    check("static two-level wave error matches serial",
+          abs(e_static - 6.178253464383943e-10), 1e-12)
+    check("static two-level step count matches serial",
+          abs(n_static - 159), 0.5)
+    e_sub, n_sub = wave_error(subcycle=true)
+    check("subcycled two-level wave error matches serial",
+          abs(e_sub - 5.946196868222842e-10), 1e-12)
+    check("subcycled two-level step count matches serial",
+          abs(n_sub - 56), 0.5)
+
+    # Tagging-driven regridding tracks a Sod shock to the same region.
+    wall2 = (SlipWallBC(), SlipWallBC())
+    solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                    bcs=(wall2, per3[2], per3[3]), cfl=0.2,
+                    refine=BlockRegion((160, 0, 0), (60, 1, 1)),
+                    subcycle=true, regrid_interval=20, tag_buffer=16)
+    states = allocate_state(solver)
+    initialize!(solver, states, (x, y, z) -> x < 0.45 ?
+        Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+        Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+    run!(solver, states; tfinal=0.12, nmax=2000)
+    lt = solver.level_transfer
+    fin = all(all(isfinite, parent(Q)) for Q in states)
+    check("regridded Sod: finite composite state", fin ? 0.0 : 1.0, 0.5)
+    check("regridded Sod: region tracks as serial (offset 161)",
+          abs(gmax(lt.region.offset[1]) - 161), 0.5)
+    check("regridded Sod: step count matches serial",
+          abs(gmax(solver.step) - 1001), 0.5)
+end
+
 const SUITE = (
     ("periodic C6", test_periodic_c6),
     ("pentadiagonal C10", test_pentadiagonal_c10),
     ("closed C6", test_closed_c6),
     ("device line solves", test_device_lines),
     ("staged device exchange", test_staged_exchange),
+    ("distributed refinement", test_refined_decomposed),
     ("AMR transfer pair", test_transfer_pair),
     ("halo consistency", test_halo_consistency),
     ("off-rank folds", test_offrank_folds),

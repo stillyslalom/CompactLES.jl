@@ -305,10 +305,10 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     tag_threshold > 0 || error("tag_threshold must be positive")
     if refine !== nothing
         MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-        MPI.Comm_size(MPI.COMM_WORLD) == 1 ||
-            error("static refinement is serial in this stage; the distributed " *
-                  "level transfer arrives with the follow-up that lifts " *
-                  "plan_transfer's alignment restriction")
+        MPI.Comm_size(MPI.COMM_WORLD) == 1 || level_restriction === :inject ||
+            error("level_restriction = :filter restricts through a " *
+                  "whole-patch line solve and is serial-only; use :inject " *
+                  "under MPI")
         npatch == 1 ||
             error("refine cannot combine with a same-level patch_grid yet")
         metric isa CartesianMetric ||
@@ -343,17 +343,19 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
             end
         end
     end
-    # --- Device residency (G3a/G3b of reference/AMR_GPU.md) ---------------
-    # A DeviceBackend supports a single decomposed patch: the halo and
-    # fold-pair exchanges stage through the backend (halo.jl). The
-    # interface-record copies and the level transfer are still host loops,
-    # so several patches wait on their staging and refinement on G3c.
+    # --- Device residency (G3a/G3b/G3c of reference/AMR_GPU.md) -----------
+    # A DeviceBackend supports a decomposed patch, refined or not: halos,
+    # fold pairs, and the level transfer's gathers and writes stage through
+    # the backend. The same-level interface records are still host loops, so
+    # a patch_grid on device stays barred, as does the `:filter` restriction
+    # (a whole-patch host line solve).
     if backend isa DeviceBackend
         npatch == 1 ||
             error("a DeviceBackend takes a single patch today; the " *
                   "interface-record staging has not been converted")
-        refine === nothing ||
-            error("refinement on a DeviceBackend arrives with stage G3c")
+        refine === nothing || level_restriction === :inject ||
+            error("level_restriction = :filter is host-only; use :inject " *
+                  "on a DeviceBackend")
         eos isa Nasa9Mixture &&
             error("Nasa9Mixture has no device coefficient mirror yet; use " *
                   "IdealMixture or StiffenedGas on a DeviceBackend")
@@ -525,7 +527,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                              art.smoother, interface_rhs, backend, n_species,
                              n_cons)
     level_transfer = build_level_transfer(T, refine, active_g, n_halo, 2,
-                                          level_restriction, n_cons, subcycle)
+                                          level_restriction, n_cons, subcycle,
+                                          decomp, fine.decomp)
     regrid = regrid_interval == 0 ? nothing :
              RegridSpec{T}(regrid_interval, T(tag_threshold), tag_buffer,
                            max(n_halo, LEVEL_BUFFER), n_halo, interface_rhs,
@@ -559,10 +562,17 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     region_f = BlockRegion(ntuple(d -> active_g[d] ? 3 * refine.offset[d] : 0, 3),
                            fine_extent(refine, active_g))
     pper_f = ntuple(d -> !active_g[d], 3)
-    decomp_f = Decomp{T}(region_f.extent, pper_f; dims=(1, 1, 1), n_halo=n_halo)
+    np_f = (MPI.Initialized() || MPI.Init(threadlevel=:funneled);
+            MPI.Comm_size(MPI.COMM_WORLD))
+    decomp_f = Decomp{T}(region_f.extent, pper_f;
+                         dims=_amr_dims(region_f.extent,
+                                        ntuple(d -> region_f.extent[d] > 1, 3),
+                                        np_f),
+                         n_halo=n_halo)
     bcs_f = ntuple(d -> active_g[d] ? (CoarseFineBC(), CoarseFineBC()) :
                                       (PeriodicBC(), PeriodicBC()), 3)
-    mkf(sch, d; kw...) = plan_direction(decomp_f, sch, d, hf[d]; kw...)
+    mkf(sch, d; kw...) =
+        backend_plan(backend, plan_direction(decomp_f, sch, d, hf[d]; kw...))
     ext_f = interface_rhs === :extended
     icd = ext_f ? interface_closures(deriv) : nothing
     icf = ext_f ? interface_closures(filt) : nothing
@@ -575,7 +585,7 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     splans_f = smoother === :compact ? fplans_f :
                ntuple(d -> decomp_f.active[d] ? mkf(smoo, d) : nothing, 3)
     g() = field(backend, decomp_f)
-    empty3 = zeros(T, 0, 0, 0)
+    empty3 = empty_field(backend, T)
     return Patch(2, 1, region_f, MPI.COMM_WORLD, decomp_f, hf,
                  ntuple(d -> (0, 0), 3), bcs_f, (nothing, nothing, nothing),
                  dplans_f, vplans_f, fplans_f, splans_f, nothing,
