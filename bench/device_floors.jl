@@ -15,6 +15,15 @@
 #   floors — kernel submission, submission+synchronize round trip, and an
 #       idle-queue synchronize. These bound what any launch policy can recover
 #       and price the per-apply reduced-solve fence.
+#   stall watch — one fixed apply hammered for `watch` seconds with every
+#       call timed. rzadams (MI300A, ROCm 6.4.3, Julia 1.12.7) shows sustained
+#       episodes, seconds long, in which each device wait costs an integer
+#       number of milliseconds instead of ~0.15 ms; they strike arbitrary
+#       scheme/dim/precision cells (min-over-50 readings of 2/3/5/13 ms and
+#       one whole TGV leg at 27x) and are invisible in a table that samples
+#       each cell once. This section measures their rate and dwell time and
+#       reports GC time alongside, since the ms quantization implicates a
+#       sleeping wait path (OS timer granularity) or the runtime's scheduler.
 #   line solves — scheme (C6/C10/C8 filter) x dim x precision x size, device
 #       and host apply walls. A per-apply cost flat across sizes is a
 #       latency/serialization floor; one that scales with n is throughput
@@ -56,7 +65,7 @@ const CL = CompactLES
 const KA = CL.KernelAbstractions
 
 opt = script_args(ARGS, (backend = "amdgpu", sizes = "32,64,96", n = 64,
-                         steps = 10, reps = 50))
+                         steps = 10, reps = 50, watch = 30))
 
 # select_device! takes the node-local rank and is a no-op when the launcher
 # already restricts each rank to one visible device.
@@ -130,6 +139,73 @@ function floors(io, gpu, device_array, reps)
     t_idle = best(() -> KA.synchronize(gpu); reps=reps)
     @printf(io, "submission %.1f us   launch+sync %.1f us   idle sync %.1f us\n",
             1e6t_sub, 1e6t_rt, 1e6t_idle)
+    return nothing
+end
+
+function _median_sorted(s::Vector{Float64})
+    n = length(s)
+    return isodd(n) ? s[(n + 1) >> 1] : 0.5 * (s[n >> 1] + s[(n >> 1) + 1])
+end
+
+function stall_watch(io, gpu, device_array, seconds)
+    T = Float64
+    nn = 32
+    decomp = Decomp{T}((nn, nn, nn), (true, true, true);
+                       dims=(1, 1, 1), comm=MPI.COMM_SELF)
+    fh = CL.field(decomp)
+    copyto!(fh, randn(T, size(fh)...))
+    CL.exchange_halos!(fh, decomp)
+    fg = device_array(fh)
+    og = device_array(CL.field(decomp))
+    plan = CL.plan_direction(decomp, lele_d1_6(T), 1, T(1) / nn)
+    dplan = device_plan(plan, gpu)
+    CL.apply_along!(og, dplan, fg, decomp)
+    CL.apply_along!(og, dplan, fg, decomp)
+    times = Float64[]
+    sizehint!(times, ceil(Int, 1e4 * seconds))
+    gc0 = Base.gc_num()
+    t0 = time()
+    while time() - t0 < seconds
+        push!(times, @elapsed CL.apply_along!(og, dplan, fg, decomp))
+    end
+    gc_ms = Base.GC_Diff(Base.gc_num(), gc0).total_time / 1e6
+    s = sort(times)
+    med = _median_sorted(s)
+    p99 = s[ceil(Int, 0.99 * length(s))]
+    @printf(io, "%d calls: median %.3f ms  p99 %.3f ms  max %.3f ms  ",
+            length(s), 1e3med, 1e3p99, 1e3s[end])
+    @printf(io, "gc %.0f ms\n", gc_ms)
+    # An episode is a maximal run of consecutive calls above 5x the median;
+    # the rzadams stalls are sustained, so dwell time separates them from
+    # one-off hiccups (GC pauses, scheduler preemption).
+    thr = 5 * med
+    n_ep = 0
+    stall_t = 0.0
+    cur = 0.0
+    longest = 0.0
+    for t in times
+        if t > thr
+            cur == 0.0 && (n_ep += 1)
+            cur += t
+            stall_t += t
+            longest = max(longest, cur)
+        else
+            cur = 0.0
+        end
+    end
+    @printf(io, "episodes >5x median: %d, %.2f s total (%.1f%% of watch), ",
+            n_ep, stall_t, 100stall_t / sum(times))
+    @printf(io, "longest %.2f s\n", longest)
+    edges = [0.25e-3, 0.5e-3, 1e-3, 2e-3, 5e-3, 10e-3]
+    counts = zeros(Int, length(edges) + 1)
+    for t in times
+        counts[searchsortedfirst(edges, t)] += 1
+    end
+    labels = ("<=0.25ms", "0.25-0.5", "0.5-1", "1-2", "2-5", "5-10", ">10ms")
+    for (lab, c) in zip(labels, counts)
+        c > 0 && @printf(io, "  %s: %d", lab, c)
+    end
+    println(io)
     return nothing
 end
 
@@ -226,6 +302,8 @@ function main(opt, device_array, ka_backend, device_description, select_device!)
     host_sanity(io)
     println(io, "-- launch floors (min over $(opt.reps))")
     floors(io, ka_backend, device_array, opt.reps)
+    println(io, "-- stall watch ($(opt.watch) s of C6 F64 dim-1 n=32 applies)")
+    stall_watch(io, ka_backend, device_array, opt.watch)
     println(io, "-- line solves, ms/apply (device, host in parens; ",
             "min over $(opt.reps))")
     line_matrix(io, ka_backend, device_array, sizes, opt.reps)
