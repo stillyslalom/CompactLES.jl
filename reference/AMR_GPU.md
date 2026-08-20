@@ -602,6 +602,25 @@ number from a multithreaded process as untrustworthy without a stall
 watch beside it. Run-to-run spread on the workstation is
 10–20%; read ratios, not third digits.
 
+The first production-scale run (2026-08-20) adds a data point at `-t 1`: a 256³
+single-species TGV, artificial properties on, decomposed over 4 APUs, 24,490
+steps to t = 10 in 3.69 h (`bench/tgv_energy.jl`, recorded in
+`reference/CALIBRATION.md`). The step baseline held at 0.35 s/step in Float64,
+but the solver-time average was 0.52 s/step, about 1.5× the baseline, from
+sporadic 100-step progress windows near 1.2 s/step (~3.5×) that make up roughly
+20% of the run. This is at `-t 1`, where the watch-only runs above measured zero
+episodes in 480 rank-seconds; over the ~52,000 rank-seconds here the incidence
+is low but not zero, which the e⁻²⁰ discrimination at short duration does not
+exclude. The measurement cannot attribute the elevated windows. They are
+100-step averages rather than per-wait timings, no stall watch ran beside the
+job, and per-step-collective and GC jitter are not ruled out — although the
+per-step kinetic-energy Allreduce is a separately accounted 437 s of diagnostics
+and is not the cause, since the inflation sits in the solver time. A stall watch
+at `-t 1` over a comparable duration, or per-step instrumentation of a
+production run, would settle whether the quantized wait-stall persists at `-t 1`
+at a low rate or these windows are something else. See
+`reference/rocm_wait_stall_report.md`.
+
 - 64³ TGV, single species, full step: device 0.146 s/step (Float64) and
   0.117 (Float32) under the deferred launch policy, against 0.203/0.171
   synchronized — the policy removed 28–32% of the step — and against

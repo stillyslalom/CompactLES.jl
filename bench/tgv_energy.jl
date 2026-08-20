@@ -33,8 +33,9 @@
 #     art OFF, filter 1   1.2248e-2 @ 8.87  62.5%  0      37.5%   1063 s
 #     art ON,  filter 0   SolverFailure(:negative_density) at t = 4.66
 #
-#   Filter dominance does NOT survive resolution: 87% → 83% → 37%. Two coarse
-#   points were not a trend.
+#   Filter dominance does NOT survive resolution: 87% → 83% → 37% → 12.8% at
+#   16³, 32³, 128³, 256³. Two coarse points were not a trend, and the fall
+#   continues at 256³.
 #
 #   The filter is still REQUIRED, and its stabilizing role is decoupled from its
 #   energy share. At 37% of the sink, removing it kills the run *earlier* than at
@@ -46,16 +47,26 @@
 #   are neither.
 #
 #   Refinement does not disentangle mu* from the filter — their ratio is
-#   invariant across the 4× refinement (5.0/83 = 0.060 at 32³, 2.3/37.3 = 0.062
-#   at 128³), both shrinking together as the molecular term takes over. So
-#   "refine until the filter lets go, then fit C_mu" does not work. Holding the
-#   filter FIXED and fitting against the peak does, because the peak is resolved
-#   far below the effect size. Numbers and the open C_mu sweep are in
-#   reference/CALIBRATION.md.
+#   invariant across an 8× refinement in linear resolution (5.0/83 = 0.060 at
+#   32³, 2.3/37.3 = 0.062 at 128³, 0.8/12.8 = 0.0625 at 256³), both shrinking
+#   together as the molecular term takes over. So "refine until the filter lets
+#   go, then fit C_mu" does not work. Holding the filter FIXED and fitting
+#   against the peak does, because the peak is resolved far below the effect
+#   size. Numbers and the open C_mu sweep are in reference/CALIBRATION.md.
+#
+#   256³, art ON, filter 1, 4 MI300A APUs on rzadams (backend=amdgpu), t = 10:
+#   peak -dKE/dt 1.3043e-2 @ 8.84, mol 86.4%, mu* 0.8%, beta* 0.0%, filter 12.8%.
+#   The peak sits ~4% above the rounded 1.2e-2 banner, within the well-resolved
+#   DNS range (~1.25-1.28e-2 near t = 9), with its time converged toward 9; the
+#   coarse-grid early overprediction is gone. Only the art-ON leg was run, so the
+#   filter necessary-and-sufficient test (art OFF completes, filter 0 fails) is
+#   measured at 128³ but not yet at 256³.
 #
 # Cost: 32³ to t = 10 is ~3.3 min per configuration on a 24-thread desktop, 64³
 # ~13 min. On a cluster, 128³ is ~20–25 min per configuration at 224 ranks over
 # two nodes (0.10–0.12 s/step, ~11k–13k steps) — the reason this lives in bench/.
+# 256³ art on over 4 MI300A APUs on rzadams at -t 1 is ~3.7 h (24.5k steps,
+# 0.35 s/step baseline inflated ~1.5× by device stall episodes; AMR_GPU.md).
 #
 #   Precision measurement (24-thread desktop, art off, filter every step):
 #

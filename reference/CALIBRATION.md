@@ -269,8 +269,9 @@ Peaks are windowed rates; see [Read the rate over a
 window](#read-the-rate-over-a-window-not-instantaneously). Windowing is required
 when `art` is enabled. Channel shares are taken from the sampled table.
 
-The filter share decreases from 87% at 16³ and 83% at 32³ to 37% at 128³. The
-molecular contribution increases correspondingly from 12% to 60%.
+The filter share decreases from 87% at 16³ and 83% at 32³ to 37% at 128³ and
+12.8% at 256³ (below). The molecular contribution increases correspondingly from
+12% through 60% to 86%.
 
 The peak −dKE/dt is 1.2065e-2 at t ≈ 8.8, compared with the reference 1.2e-2 at
 t = 9. The magnitude differs by less than 1%, and the time lies within one
@@ -287,19 +288,45 @@ unforced, so rising KE is unambiguously numerical. The filter owns essentially
 100% of the grid-scale sink whatever its share of the total. Meanwhile
 art-off/filter-on configuration reaches t = 10. The filter is therefore
 necessary and sufficient for stability at this resolution, whereas the Cook
-properties are neither. Whether this remains true at 256³ requires measurement.
+properties are neither. The art-on channel split has since been measured at 256³
+(below); the art-off and filter-0 legs that would extend this necessary-and-
+sufficient test to 256³ have not been run.
 
 **Refinement does not disentangle μ\* from the filter.** Their ratio is
-essentially invariant across the 4× refinement:
+essentially invariant across the refinement:
 
 ```
 32³ :  mu* 5.0%  / filter 83.0%  = 0.060
 128³:  mu* 2.3%  / filter 37.3%  = 0.062
+256³:  mu* 0.8%  / filter 12.8%  = 0.0625
 ```
 
 Both contributions decrease together. Refinement alone therefore does not
 isolate `C_mu`: the μ\* contribution becomes small as the filter contribution
 decreases.
+
+### Results at 256³ on rzadams
+
+The 256³ point extends both trends and was the first production-scale run on the
+GPU target: 4 MI300A APUs, `backend=amdgpu`, `flux run -N1 -n4` at `-t 1`,
+Re = 1600, t = 10, 24,490 steps in 3.69 h. Art on, filter 1:
+
+```
+config              peak -dKE/dt      mol    mu*   beta*  filter
+art ON, filter 1    1.3043e-2 @ 8.84  86.4%  0.8%  0.0%   12.8%
+```
+
+The filter share falls to 12.8% and the molecular channel rises to 86.4%,
+continuing 83 → 37 → 13% and 12 → 60 → 86% monotonically. The μ\*/filter ratio
+holds at 0.8/12.8 = 0.0625, the third point of the invariant above. The peak
+lies about 4% above the rounded 1.2e-2 reference and within the well-resolved
+DNS range (≈1.25–1.28e-2 near t = 9), with its time converged to 8.84; the
+coarse-grid early overprediction is gone.
+
+Only the art-on leg was run. The art-off and filter-0 configurations that would
+extend the necessary-and-sufficient test above to 256³ have not been measured,
+so the stabilizer claim rests on the 128³ result. The wall time carries a device
+stall cost documented in `reference/AMR_GPU.md`.
 
 The calibration instead holds the filter fixed and evaluates the dissipation
 rate over a time window:
