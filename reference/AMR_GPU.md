@@ -562,9 +562,30 @@ from its host-staging default. Wall targets, the G4b precision policy, and
 the reduced-solve question are rzadams measurements to make, not
 extrapolations from this table. `bench/device_floors.jl` is the instrument
 for those sessions: the same host-sanity probe, launch-floor timings,
-line-solve matrix, and TGV step table run unchanged on every machine, so a
-behavior seen on one machine can be checked for on another instead of being
-attributed to the implementation. Run-to-run spread on the workstation is
+stall watch, line-solve matrix, and TGV step table run unchanged on every
+machine, so a behavior seen on one machine can be checked for on another
+instead of being attributed to the implementation.
+
+The first rzadams sessions (2026-08-19, `bench/logs/rzadams_20260819*.txt`)
+established the baseline and one open issue. Baseline, per MI300A under
+`flux run -N1 -n4 --exclusive`: kernel submission 10 µs, launch+sync 25 µs
+(against 57–85 µs on the workstation), line solves 0.14–0.40 ms/apply with
+C10 above C6 and F64 above F32 as arithmetic predicts, and the 64³ TGV
+decomposed over 4 APUs at 0.074–0.088 s/step with an F64/F32 ratio near
+1.2, consistent with full-rate FP64 on a fence-bound step. The open issue
+is an intermittent stall mode: a process enters a state, sustained for
+seconds to beyond 30 s, in which every device wait costs an integer number
+of milliseconds (measured medians of exactly 13.000 ms, doubles at 26 ms)
+instead of ~0.15 ms, then recovers. It strikes arbitrary scheme, dimension,
+precision, and size cells and once held a whole TGV leg at 27× — which is
+also what the first session's log looked like before the larger sample
+resolved it, when the pattern read as a C6/Float64 defect. It is not
+garbage collection (one fully stalled 30 s window recorded zero GC time),
+and the millisecond quantization implicates a sleeping wait path or the
+runtime scheduler rather than the kernels. The stall watch measures its
+rate and dwell; wait-path discrimination and a trace over a stalled window
+are the next probes, ahead of any tuning, since no wall number from a
+stalled process means anything. Run-to-run spread on the workstation is
 10–20%; read ratios, not third digits.
 
 - 64³ TGV, single species, full step: device 0.146 s/step (Float64) and
@@ -714,7 +735,11 @@ should trigger it; nothing here is worth building speculatively.
    stack supports neither; rzadams (GPU-aware Cray MPICH on MI300A, where
    unified APU memory also collapses the staging question) is where both
    routes get measured, and this item is the natural first rzadams
-   campaign together with re-basing the performance summary there.
+   campaign together with re-basing the performance summary there. Its
+   first order of business is the intermittent wait-stall mode recorded in
+   the performance summary: until a process can be shown stall-free, or
+   stalls can be detected and excluded, no fence-floor measurement on that
+   machine is trustworthy.
 5. **Fine-level sub-communicators.** A small refined region at high rank
    count fails `_amr_dims` (9·np along a 1-D region). Letting a subset of
    ranks own the fine level, with the rest idling through its collectives,

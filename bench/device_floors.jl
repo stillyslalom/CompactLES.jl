@@ -175,27 +175,42 @@ function stall_watch(io, gpu, device_array, seconds)
     @printf(io, "%d calls: median %.3f ms  p99 %.3f ms  max %.3f ms  ",
             length(s), 1e3med, 1e3p99, 1e3s[end])
     @printf(io, "gc %.0f ms\n", gc_ms)
-    # An episode is a maximal run of consecutive calls above 5x the median;
-    # the rzadams stalls are sustained, so dwell time separates them from
-    # one-off hiccups (GC pauses, scheduler preemption).
-    thr = 5 * med
+    # A slow call is one above 1 ms absolute. The fast baseline for this
+    # apply is 0.13-0.45 ms on every machine measured and stalled calls sit
+    # at 2 ms and above; a relative (multiple-of-median) threshold inverts
+    # when a window is stalled throughout, since the median itself is then
+    # milliseconds (measured on rzadams: median 13.000 ms for a full watch).
+    # An episode is a maximal run of consecutive slow calls; dwell time
+    # separates sustained stalls from one-off hiccups (GC, preemption).
+    thr = 1e-3
     n_ep = 0
+    n_slow = 0
     stall_t = 0.0
     cur = 0.0
     longest = 0.0
+    offset = 0.0
+    ep_start = 0.0
+    episodes = NTuple{2,Float64}[]
     for t in times
         if t > thr
-            cur == 0.0 && (n_ep += 1)
+            cur == 0.0 && (n_ep += 1; ep_start = offset)
+            n_slow += 1
             cur += t
             stall_t += t
             longest = max(longest, cur)
         else
+            cur >= 0.1 && length(episodes) < 8 && push!(episodes, (ep_start, cur))
             cur = 0.0
         end
+        offset += t
     end
-    @printf(io, "episodes >5x median: %d, %.2f s total (%.1f%% of watch), ",
-            n_ep, stall_t, 100stall_t / sum(times))
-    @printf(io, "longest %.2f s\n", longest)
+    cur >= 0.1 && length(episodes) < 8 && push!(episodes, (ep_start, cur))
+    @printf(io, "slow calls >1 ms: %d, %.2f s total (%.1f%% of watch); ",
+            n_slow, stall_t, 100stall_t / sum(times))
+    @printf(io, "episodes: %d, longest %.2f s\n", n_ep, longest)
+    for (st, du) in episodes
+        @printf(io, "    sustained episode at %6.2f s, %.3f s long\n", st, du)
+    end
     edges = [0.25e-3, 0.5e-3, 1e-3, 2e-3, 5e-3, 10e-3]
     counts = zeros(Int, length(edges) + 1)
     for t in times
