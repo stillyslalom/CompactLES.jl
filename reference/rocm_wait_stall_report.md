@@ -121,10 +121,18 @@ not get driver-team priority on a whole-application report).
    synchronize per call (`mode=kernel`), with rungs adding a second
    launch, a device-to-host copy, and a round trip (`kernel2`, `copy`,
    `full`), and `sync=direct` bypassing all AMDGPU.jl wait logic through
-   a raw `hipStreamSynchronize` ccall. Run `-t 8` against `-t 1`,
-   `watch=120`, a few repetitions each; climb the ladder only if the
-   bottom rung stays clean. A stalling bottom rung is a ~40-line
-   single-file reproducer.
+   a raw `hipStreamSynchronize` ccall. **Measured: the bottom rung does
+   not reproduce** — two 120 s windows at `-t 8` and one at `-t 1`,
+   single rank, all clean (≤1 slow call per 256k). The differences from
+   the reliably stalling configuration are process count (every reliable
+   reproduction was a 4-rank job) and call content (the solver call is
+   many short kernels plus copies in an MPI-initialized process, with
+   waits of tens of microseconds; the MWE is one 0.47 ms kernel whose
+   sync always waits on a single signal — and several stalled windows
+   were stalled from t = 0, implicating startup activity such as MPI
+   init or the kernel-compilation burst). The discriminating 2×2, with
+   floors@`-n4` stalling and MWE@`-n1` clean as the known corners: the
+   floors watch at `-n1`, and the MWE at `-n4`.
 2. **`bench/stall_mwe.cpp`** — the Julia-free rung: the same loop in
    plain HIP with N extra dormant (or busy) host threads
    (`hipcc -O2 -o stall_mwe stall_mwe.cpp`; `./stall_mwe 120 20000 7`).
