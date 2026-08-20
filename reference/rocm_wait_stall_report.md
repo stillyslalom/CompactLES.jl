@@ -138,20 +138,31 @@ not get driver-team priority on a whole-application report).
    confound dominates the corners: every run observed to stall had MPI
    initialized (Cray MPICH — progress threads, memory-registration
    hooks, GPU-aware transport plumbing), and every clean MWE run did
-   not. **`mpi=1` measured clean** (120 s at `-t 8`, 1 slow call in
-   255k): MPI initialization alone is insufficient. The leading rung is
-   now `alloc=N`, which allocates N heap bytes per call to drive the
-   garbage collector the way the real call does (its device-to-host
-   staging materializes a host array every apply, ~1 s of GC per 120 s
-   window; the clean MWE rungs allocate nothing per call). The
-   hypothesis it tests: GC does not sustain the stalled state (a fully
-   stalled window measured zero GC time), but a collection's
-   inter-thread stop signals could be the *entry* event that knocks
-   ROCR's event wait into its degraded mode — which would also explain
-   the more-than-one-default-thread gate, since stopping the world only
-   signals other threads when other threads exist. Behind it in the
-   queue: `mode=full` (the copy path), `work=2000` (tens-of-microsecond
-   waits racing signal completion), and the startup compile burst.
+   not. The rung scoreboard (all 120 s windows at `-t 8`, `-n1`,
+   `flux --exclusive`, 2026-08-19 evening session):
+
+   | rung | tests | result |
+   |---|---|---|
+   | `mode=kernel` | launch + blocking sync | clean, also at `-n4` |
+   | `mpi=1` | Cray MPICH initialized | clean (1 slow / 255k) |
+   | `alloc=16384 work=2000` | GC at production dose (989 ms/window), short waits | clean (3 / 2.1M) |
+   | `mode=full` | D2H + host arithmetic + H2D per call | clean (1 / 240k) |
+   | `mode=full work=2000` | copies with tens-of-µs waits | clean (4 / 1.3M) |
+   | `mode=multi work=2000 burst=1 alloc=16384 mpi=1` | kitchen sink: 8 distinct kernel objects per call, 40-kernel startup compile burst, GC, MPI | clean (6 / 1.8M, gc 1351 ms) |
+
+   Every ingredient below KernelAbstractions is exonerated, individually
+   and in combination — while the survey watch (`device_floors.jl
+   only=watch`), whose call is a DevicePlan compact-solve apply through
+   KA, stalls even at `-n1` (25.7% of a 120 s window). The GC-entry
+   hypothesis is dead alongside the rest. Remaining suspects, in order:
+   the **KernelAbstractions launch path** (`mode=ka` rung is in the
+   script — the same kernel through `ROCBackend`; the environment needs
+   `Pkg.add("KernelAbstractions")`), and the **DevicePlan kernels
+   themselves** (argument shapes, the `(lines × n)` ndrange, the larger
+   buffers). Next session: run `mode=ka work=2000 watch=120` at `-t 8`;
+   if clean, the bisection moves top-down inside the apply (a
+   CompactLES-dependent rung is fine for bisection even though the
+   eventual ticket wants the bottom-up MWE).
 2. **`bench/stall_mwe.cpp`** — the Julia-free rung: the same loop in
    plain HIP with N extra dormant (or busy) host threads
    (`hipcc -O2 -o stall_mwe stall_mwe.cpp`; `./stall_mwe 120 20000 7`).

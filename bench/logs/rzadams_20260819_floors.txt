@@ -344,3 +344,19 @@ minutes. HSA_ENABLE_INTERRUPT=0 is the pathology made permanent, not a
 workaround. The mixed windows show thousands of sub-0.25 ms calls
 interleaved with 13 ms calls, so even forced polling sometimes completes
 within its initial spin; the 13 ms is the first sleep quantum.)
+
+rzadams1017:~/dev/cles 22:25-22:51 $ stall_mwe.jl rung results (all -n1 -t 8, watch=120, flux --exclusive)
+f4742uuvoqWo  mpi=1                                  clean (1 slow call / 255k)
+f4746jC9EXiP  alloc=16384 work=2000                  clean (3 / 2.1M, gc 989 ms - production GC dose)
+f4749PJ5Ji1u  mode=full                              clean (1 / 240k)
+f474AfjNfGZd  mode=full work=2000                    clean (4 / 1.3M)
+f474EwSx19pj  mode=multi work=2000 burst=1 alloc=16384 mpi=1  clean (6 / 1.8M, gc 1351 ms)
+(The kitchen-sink run exonerates every ingredient below KernelAbstractions
+individually and in combination: process count, MPI init, GC at production
+dose, D2H/H2D copies, short waits, kernel-object diversity per call, and
+the startup compile burst. The 2x2 corners remain: the survey watch stalls
+even at -n1 (25.7% of a 120 s window) while every @roc-based MWE rung is
+clean. Remaining suspects: the KernelAbstractions launch path (mode=ka
+rung added, needs Pkg.add KernelAbstractions in the env) and the
+DevicePlan kernels themselves - argument shapes, the (lines x n) ndrange,
+buffer sizes.)

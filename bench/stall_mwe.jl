@@ -20,6 +20,11 @@
 #   mode=copy     kernel + device-to-host copy (adds the Managed sync path)
 #   mode=full     kernel + D2H + host arithmetic + H2D (the shape of one
 #                 compact-solve apply, with no solver code)
+#   mode=ka       the kernel launched through KernelAbstractions on
+#                 ROCBackend instead of @roc — the one layer between the
+#                 clean rungs and the stalling survey watch. Needs
+#                 KernelAbstractions in the environment
+#                 (import Pkg; Pkg.add("KernelAbstractions")).
 # Orthogonal additions: mpi=1 (initialize MPI, communicate nothing),
 # alloc=N (N heap bytes per call, drives GC), burst=1 (compile and launch
 # 40 distinct kernels before the watch — the startup storm).
@@ -68,6 +73,18 @@ const use_burst = getopt("burst", "0") == "1"
 if use_mpi
     @eval using MPI
     @eval MPI.Init(threadlevel=:funneled)
+end
+
+if mode == "ka"
+    @eval using KernelAbstractions
+    @eval KernelAbstractions.@kernel function ka_spin!(x, iters)
+        i = KernelAbstractions.@index(Global)
+        acc = x[i]
+        for _ in 1:iters
+            acc = muladd(acc, 0.9999f0, 1f-7)
+        end
+        x[i] = acc
+    end
 end
 
 function spin_kernel!(x, iters)
@@ -133,6 +150,10 @@ function main()
     end
     call! = if mode == "kernel"
         () -> (@roc groupsize=n spin_kernel!(x, work); dosync())
+    elseif mode == "ka"
+        kab = KernelAbstractions.get_backend(x)
+        k! = ka_spin!(kab)
+        () -> (k!(x, work; ndrange=n); dosync())
     elseif mode == "multi"
         wk = max(1, work ÷ 8)
         () -> begin
@@ -152,7 +173,7 @@ function main()
                copyto!(host, x); host .= host .* 0.5f0 .+ 0.25f0;
                copyto!(x, host))
     else
-        error("mode must be kernel, kernel2, multi, copy or full, got $mode")
+        error("mode must be kernel, kernel2, multi, copy, full or ka, got $mode")
     end
     # alloc=N allocates N heap bytes per call, driving the garbage
     # collector the way the real solver call does (its device-to-host
