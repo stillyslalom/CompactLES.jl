@@ -130,9 +130,18 @@ not get driver-team priority on a whole-application report).
    waits of tens of microseconds; the MWE is one 0.47 ms kernel whose
    sync always waits on a single signal — and several stalled windows
    were stalled from t = 0, implicating startup activity such as MPI
-   init or the kernel-compilation burst). The discriminating 2×2, with
-   floors@`-n4` stalling and MWE@`-n1` clean as the known corners: the
-   floors watch at `-n1`, and the MWE at `-n4`.
+   init or the kernel-compilation burst). **The 2×2 is measured and
+   decided**: the floors watch stalls at `-n1` (29.7 s episode, 25.7% of
+   a 120 s window) and the MWE stays clean at `-n4` (four ranks × 120 s,
+   ≤2 slow calls each). Process count is neither necessary nor
+   sufficient; the ingredient is call content or process history. One
+   confound dominates the corners: every run observed to stall had MPI
+   initialized (Cray MPICH — progress threads, memory-registration
+   hooks, GPU-aware transport plumbing), and every clean MWE run did
+   not. `mpi=1` (initialize MPI, communicate nothing) is therefore the
+   next rung, ahead of the call-content candidates (`mode=copy/full`,
+   `work=2000` for tens-of-microseconds waits, the startup compile
+   burst).
 2. **`bench/stall_mwe.cpp`** — the Julia-free rung: the same loop in
    plain HIP with N extra dormant (or busy) host threads
    (`hipcc -O2 -o stall_mwe stall_mwe.cpp`; `./stall_mwe 120 20000 7`).

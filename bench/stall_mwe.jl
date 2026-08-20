@@ -19,10 +19,15 @@
 #   mode=full     kernel + D2H + host arithmetic + H2D (the shape of one
 #                 compact-solve apply, with no solver code)
 #
-# Climb only as far as needed: if mode=kernel stalls at -t 8 and not at
-# -t 1, the reproducer is ~40 lines of AMDGPU.jl and the next
-# discrimination is stall_mwe.cpp (does a plain HIP loop with dormant
-# extra threads stall — Julia involved or not?). sync= selects the wait:
+# Climb only as far as needed: if a rung stalls at -t 8 and not at -t 1,
+# that rung is the reproducer and the next discrimination is
+# stall_mwe.cpp (does a plain HIP loop with dormant extra threads stall —
+# Julia involved or not?). Measured so far on rzadams: mode=kernel is
+# clean at -n1 and -n4 (120 s windows), while the full survey's watch
+# stalls even at -n1 — the ingredient is call content or process history,
+# and mpi=1 (initialize MPI, communicate nothing) is the highest-prior
+# single addition since every stalling run had MPI initialized.
+# sync= selects the wait:
 #   blocking  AMDGPU.synchronize(blocking=true)  (default; no Julia tasks)
 #   default   AMDGPU.synchronize()               (spin + task fallback)
 #   direct    raw hipStreamSynchronize ccall     (bypasses AMDGPU.jl logic)
@@ -46,6 +51,17 @@ const mode = getopt("mode", "kernel")
 const watch = parse(Float64, getopt("watch", "120"))
 const work = parse(Int, getopt("work", "20000"))
 const syncmode = getopt("sync", "blocking")
+const use_mpi = getopt("mpi", "0") == "1"
+
+# mpi=1 initializes MPI and nothing else — no communication follows. Every
+# run observed to stall had MPI initialized (Cray MPICH: progress threads,
+# memory-registration hooks, GPU-aware transport plumbing) and every clean
+# MWE run did not, so MPI initialization is the single highest-prior
+# ingredient. The default stays 0 to keep the file AMDGPU-only.
+if use_mpi
+    @eval using MPI
+    @eval MPI.Init(threadlevel=:funneled)
+end
 
 function spin_kernel!(x, iters)
     i = workitemIdx().x
@@ -90,8 +106,8 @@ function main()
             Threads.nthreads(:interactive), getpid())
     println("device: ", AMDGPU.device())
     hsaint = get(ENV, "HSA_ENABLE_INTERRUPT", "(unset)")
-    @printf("mode=%s sync=%s work=%d  HSA_ENABLE_INTERRUPT=%s  ",
-            mode, syncmode, work, hsaint)
+    @printf("mode=%s sync=%s work=%d mpi=%d  HSA_ENABLE_INTERRUPT=%s  ",
+            mode, syncmode, work, use_mpi ? 1 : 0, hsaint)
     @printf("calibration %.3f ms/call\n", 1e3t_call)
 
     times = Float64[]
