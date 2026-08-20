@@ -328,3 +328,19 @@ Sustained-episode incidence per rank-window across the scan: 0/8 at -t 1,
 (178/300 ms vs ~0.9-1.1 s on clean ranks - fewer calls, fewer
 allocations), reconfirming GC is a consequence of call rate, not a cause.
 Once entered, the state typically holds to the end of the watch.)
+
+rzadams1017:~/dev/cles 21:41 and 21:47 $ flux run -N1 -n4 --exclusive --env=HSA_ENABLE_INTERRUPT=0 julia --project -t 8 ~/.julia/dev/CompactLES/bench/device_floors.jl backend=amdgpu only=watch watch=60
+flux-jobs: f473iknQRhHq, f473jiJhPgWb
+(ROCR wait-mode experiment, decisive by inversion: forcing memory-polling
+signal waits reproduces the stall state deterministically. Six of eight
+rank-windows spent 100.0% of the watch stalled from t = 0 with medians of
+exactly 12.999-13.001 ms and p99 at 26.00 ms - the identical cadence the
+intermittent state shows under default interrupt mode - and the other two
+windows read 94.9% / 99.2%. The stall state is therefore identified as
+ROCR's polling-backoff wait path (BusyWaitSignal): under default settings
+InterruptSignal waits normally return fast, and the intermittent episodes
+are that wait degrading to the same polling cadence for seconds to
+minutes. HSA_ENABLE_INTERRUPT=0 is the pathology made permanent, not a
+workaround. The mixed windows show thousands of sub-0.25 ms calls
+interleaved with 13 ms calls, so even forced polling sometimes completes
+within its initial spin; the 13 ms is the first sleep quantum.)

@@ -77,11 +77,9 @@ above 1 and incidence grows with thread count. Note that a Julia 1.12
 reports "1 default, 1 interactive"), so the discriminator is more than
 one default-pool thread, not more than one OS thread. The stall requires
 a multithreaded Julia process yet survives the removal of every
-Julia-level wait construct — consistent with an interaction between the
-multithreaded runtime (thread parking/futex behavior, foreign-call
-transitions) and ROCR's interrupt-driven signal waits, whose wakeup
-cadence is the natural source of the millisecond ticks. Untested
-hypothesis; discriminating experiments below. Once entered, the state
+Julia-level wait construct, placing it in ROCR's signal waits — confirmed
+by the wait-mode experiment in the next section, which reproduces the
+stalled cadence deterministically by forcing the polling wait class. Once entered, the state
 typically holds to the end of the measurement window (multiple episodes
 censored at the boundary), so dwell has no observed upper bound. Stalled
 ranks report *less* GC time than clean siblings (fewer calls, fewer
@@ -92,21 +90,38 @@ the same deterministic pair of startup events (~0.15 s near 1 s, ~0.11 s
 near 7 s, plus one ~150 ms call) reproducible across jobs; the same ~7 s
 event appears at `-t 8`. This is not the stall mode.
 
-## Open experiments
+## The stall state identified: ROCR's polling wait
 
-1. ROCR wait mode: `HSA_ENABLE_INTERRUPT=0` switches completion-signal
-   detection from interrupts to memory-based polling (current ROCR
-   documentation lists it, describing it as the diagnostic for interrupt
-   delivery problems in the driver). If the 13/26 ms ticks are interrupt
-   wakeups, this removes or transforms them:
-   `flux run -N1 -n4 --exclusive --env=HSA_ENABLE_INTERRUPT=0 julia
-   --project -t 8 bench/device_floors.jl backend=amdgpu only=watch
-   watch=60`.
-2. `rocprofv2` sys-trace over a watch that contains a stall: does the time
-   sit in kernel execution, in gaps between kernels, or inside the HSA
-   signal wait?
-3. LC ticket: driver/firmware state and node health are visible to LC and
-   not to us, and MI300A wait-latency issues may be known.
+`HSA_ENABLE_INTERRUPT=0` switches completion-signal detection from
+interrupts (`InterruptSignal`) to memory-based polling (`BusyWaitSignal`).
+Running the watch under it (two 4-rank jobs, `-t 8`) reproduced the stall
+state **deterministically**: six of eight rank-windows spent 100.0% of the
+watch stalled from t = 0 with medians of exactly 12.999–13.001 ms and p99
+at 26.00 ms — the identical cadence the intermittent episodes show under
+default interrupt mode — and the other two windows read 94.9% and 99.2%.
+The mixed windows interleave thousands of sub-0.25 ms calls, so even
+forced polling sometimes completes within its initial spin; ~13 ms is the
+first sleep quantum of the polling wait, 26 ms two quanta.
+
+The finding therefore reduces to: **under default interrupt mode, a
+process's signal waits intermittently degrade to the polling-backoff
+cadence for seconds to minutes** — interrupt wakeups stop arriving
+promptly (or stop being waited on) and waiters ride the polling fallback —
+and the degradation requires more than one Julia default-pool thread.
+`HSA_ENABLE_INTERRUPT=0` is the pathology made permanent, not a
+workaround.
+
+## Remaining steps
+
+1. LC ticket — now the primary move: the interrupt-delivery path
+   (KFD events, driver, firmware) is theirs to inspect, this report plus
+   the two logs is the evidence, and the deterministic
+   `HSA_ENABLE_INTERRUPT=0` reproduction gives them a knob that isolates
+   the wait path.
+2. Optional corroboration: a `rocprofv2` sys-trace over a stalled window
+   should show the gap inside the HSA signal wait rather than in kernel
+   execution; and the ~13 ms constant should be findable in ROCR's
+   `BusyWaitSignal` implementation.
 
 ## Practical guidance until resolved
 
