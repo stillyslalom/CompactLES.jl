@@ -581,22 +581,23 @@ precision, and size cells and once held a whole TGV leg at 27× — which is
 also what the first session's log looked like before the larger sample
 resolved it, when the pattern read as a C6/Float64 defect. It is not
 garbage collection (one fully stalled 30 s window recorded zero GC time),
-and it is thread-count-dependent: at `-t 1` the same job runs the same
-watches with 7–9 slow calls per 200k against 131–1990 at `-t 8`, and a
-spotless line matrix. The mechanism is in AMDGPU.jl v2.7.2's stream
-synchronize (`src/hip/stream.jl`), which every fence reaches through
-`KA.synchronize(ROCBackend)` and every device→host copy of a dirty array
-reaches through `synchronize(::Managed)`: a spin of at most 256 iterations,
-then a fallback that waits through a `Base.Event`, a libuv
-`AsyncCondition` host-function callback, a watchdog `Timer`, and two
-spawned tasks under `Base.@sync` — Julia-scheduler machinery whose latency
-is millisecond-quantized under thread contention and whose behavior
-changed between Julia 1.11 (workstation, never stalls) and 1.12 (rzadams).
-The package preference `nonblocking_synchronization = false` (a
-`LocalPreferences.toml` entry for AMDGPU) bypasses the fallback entirely
-in favor of a plain `hipStreamSynchronize`; confirming that this removes
-the stalls at `-t 8` is the one outstanding experiment, and until a
-process is shown stall-free, no wall number from it means anything. Run-to-run spread on the workstation is
+and it is not AMDGPU.jl's task-based synchronize fallback, which was the
+first attribution and is measured wrong: setting the AMDGPU preference
+`nonblocking_synchronization = false` (verified active by the recompile
+and by the launch+sync floor dropping 25 → 19 µs) routes every wait
+through a plain `hipStreamSynchronize` with no Julia tasks, and the stalls
+persisted with the identical quantization — one rank spent 97% of its
+watch at a p99 of exactly 26.004 ms. The quantized wait therefore sits
+below the Julia layer, in HIP/ROCR's own stream wait or the driver. One
+`-t 1` run showed no sustained stalls, but per-rank incidence is variable
+enough (a `-t 8` rank in the same job ran nearly clean) that thread-count
+dependence needs replication before it is believed. Open probes, in
+order: repeated watch-only runs across `-t 1/2/4/8` for incidence
+statistics; the ROCR busy-wait signal setting (interrupt-driven signal
+waits are the natural source of millisecond wakeups; verify the exact
+variable against the ROCm 6.4 docs); and a rocprof trace over a stalled
+window. Until a process can be shown stall-free, or stalls detected and
+excluded, no wall number from that machine means anything. Run-to-run spread on the workstation is
 10–20%; read ratios, not third digits.
 
 - 64³ TGV, single species, full step: device 0.146 s/step (Float64) and

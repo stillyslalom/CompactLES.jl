@@ -22,13 +22,13 @@
 #       scheme/dim/precision cells (min-over-50 readings of 2/3/5/13 ms and
 #       one whole TGV leg at 27x) and are invisible in a table that samples
 #       each cell once. This section measures their rate and dwell time and
-#       reports GC time alongside. Measured mechanism: AMDGPU.jl's stream
-#       synchronize falls back, after a 256-iteration spin, to a task-based
-#       wait (Base.Event + libuv AsyncCondition + Timer under Base.@sync)
-#       whose latency quantizes at milliseconds under thread contention;
-#       -t 1 suppresses it, and the AMDGPU `nonblocking_synchronization =
-#       false` preference bypasses it. reference/AMR_GPU.md, performance
-#       summary, has the measurements.
+#       reports GC time alongside. Ruled out by measurement: garbage
+#       collection (a fully stalled window with zero GC time) and AMDGPU.jl's
+#       task-based synchronize fallback (the `nonblocking_synchronization =
+#       false` preference routes every wait through plain
+#       hipStreamSynchronize and the stalls persist, same quantization), so
+#       the wait sits below the Julia layer. reference/AMR_GPU.md,
+#       performance summary, has the measurements and the open probes.
 #   line solves — scheme (C6/C10/C8 filter) x dim x precision x size, device
 #       and host apply walls. A per-apply cost flat across sizes is a
 #       latency/serialization floor; one that scales with n is throughput
@@ -69,8 +69,11 @@ const CL = CompactLES
 # any environment carrying CompactLES plus a device package and nothing else.
 const KA = CL.KernelAbstractions
 
+# `only` restricts to a comma-separated subset of sections (sanity, floors,
+# watch, lines, tgv); empty runs everything. Incidence statistics on the
+# stall mode need many short watch-only runs, not one long full survey.
 opt = script_args(ARGS, (backend = "amdgpu", sizes = "32,64,96", n = 64,
-                         steps = 10, reps = 50, watch = 30))
+                         steps = 10, reps = 50, watch = 30, only = ""))
 
 # select_device! takes the node-local rank and is a no-op when the launcher
 # already restricts each rank to one visible device.
@@ -316,27 +319,40 @@ function main(opt, device_array, ka_backend, device_description, select_device!)
     local_comm = MPI.Comm_split_type(comm, MPI.COMM_TYPE_SHARED, rank)
     select_device!(MPI.Comm_rank(local_comm))
     sizes = parse.(Int, split(opt.sizes, ','))
+    want(s) = isempty(opt.only) || s in split(opt.only, ',')
     io = IOBuffer()
     println(io, "device: ", device_description())
-    println(io, "-- host sanity")
-    host_sanity(io)
-    println(io, "-- launch floors (min over $(opt.reps))")
-    floors(io, ka_backend, device_array, opt.reps)
-    println(io, "-- stall watch ($(opt.watch) s of C6 F64 dim-1 n=32 applies)")
-    stall_watch(io, ka_backend, device_array, opt.watch)
-    println(io, "-- line solves, ms/apply (device, host in parens; ",
-            "min over $(opt.reps))")
-    line_matrix(io, ka_backend, device_array, sizes, opt.reps)
+    if want("sanity")
+        println(io, "-- host sanity")
+        host_sanity(io)
+    end
+    if want("floors")
+        println(io, "-- launch floors (min over $(opt.reps))")
+        floors(io, ka_backend, device_array, opt.reps)
+    end
+    if want("watch")
+        println(io, "-- stall watch ($(opt.watch) s of C6 F64 dim-1 ",
+                "n=32 applies)")
+        stall_watch(io, ka_backend, device_array, opt.watch)
+    end
+    if want("lines")
+        println(io, "-- line solves, ms/apply (device, host in parens; ",
+                "min over $(opt.reps))")
+        line_matrix(io, ka_backend, device_array, sizes, opt.reps)
+    end
     reports = MPI.gather(String(take!(io)), comm)
     if rank == 0
         for (r, report) in enumerate(reports)
             np > 1 && println("======== rank $(r - 1)")
             print(report)
         end
-        println(np > 1 ? "== TGV device steps (decomposed over $np ranks)" :
-                "== TGV device steps")
     end
-    tgv_steps(ka_backend, opt.n, opt.steps, comm)
+    if want("tgv")
+        rank == 0 &&
+            println(np > 1 ? "== TGV device steps (decomposed over $np ranks)" :
+                    "== TGV device steps")
+        tgv_steps(ka_backend, opt.n, opt.steps, comm)
+    end
     return nothing
 end
 

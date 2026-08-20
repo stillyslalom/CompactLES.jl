@@ -261,3 +261,17 @@ TGV F64 C6  64^3: device 0.0882 s/step (warm, 10 steps)
 TGV F64 C10 64^3: device 0.1011 s/step (warm, 10 steps)
 TGV F32 C6  64^3: device 0.0650 s/step (warm, 10 steps)
 TGV F32 C10 64^3: device 0.0738 s/step (warm, 10 steps)
+
+rzadams1017:~/dev/cles 20:33 $ flux run -N1 -n4 --exclusive julia --project -t 8 ~/.julia/dev/CompactLES/bench/device_floors.jl backend=amdgpu
+flux-job: f4739fX21RZH started
+(Run following the AMDGPU nonblocking_synchronization = false preference
+change: a precompile storm on entry, and the launch+sync floor dropped from
+~25 to 17.7-19.2 us with idle sync 0.6 -> 0.4 us, both consistent with the
+blocking path being active. The stalls persisted with identical
+quantization, falsifying the task-fallback attribution: rank 1 spent 96.9%
+of its watch stalled (episode from 1.36 s lasting 28.646 s, p99 26.004 ms,
+gc 30 ms), rank 3 39.5% (episode from 18.64 s lasting 11.362 s), ranks 0/2
+ran nearly clean at -t 8 - which also weakens the single-sample -t 1
+discrimination. Line-matrix spikes again scattered: 12.983 / 11.015 /
+3.010 / 3.003 / 10.997 / 9.004 / 2.016 ms across schemes, dims, and
+precisions. TGV legs 0.0902 / 0.0908 / 0.1011 / 0.0745 s/step.)
