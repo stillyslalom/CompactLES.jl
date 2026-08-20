@@ -588,16 +588,18 @@ and by the launch+sync floor dropping 25 → 19 µs) routes every wait
 through a plain `hipStreamSynchronize` with no Julia tasks, and the stalls
 persisted with the identical quantization — one rank spent 97% of its
 watch at a p99 of exactly 26.004 ms. The quantized wait therefore sits
-below the Julia layer, in HIP/ROCR's own stream wait or the driver. One
-`-t 1` run showed no sustained stalls, but per-rank incidence is variable
-enough (a `-t 8` rank in the same job ran nearly clean) that thread-count
-dependence needs replication before it is believed. Open probes, in
-order: repeated watch-only runs across `-t 1/2/4/8` for incidence
-statistics; the ROCR busy-wait signal setting (interrupt-driven signal
-waits are the natural source of millisecond wakeups; verify the exact
-variable against the ROCm 6.4 docs); and a rocprof trace over a stalled
-window. Until a process can be shown stall-free, or stalls detected and
-excluded, no wall number from that machine means anything. Run-to-run spread on the workstation is
+below the Julia layer, in HIP/ROCR's own stream wait or the driver — but
+it requires a multithreaded Julia process: watch-only incidence runs
+measured ~10 sustained episodes in 240 rank-seconds at `-t 8` (ranks up
+to 89% stalled) against zero in 480 rank-seconds at `-t 1`, a
+discrimination at the e⁻²⁰ level. The full characterization, the ruled-out
+mechanisms, and the open experiments (thread-threshold scan, ROCR wait
+mode, rocprof trace, LC ticket) are in
+`reference/rocm_wait_stall_report.md`. Until it is resolved, run
+device-resident rzadams jobs at `-t 1` per rank — the device step does not
+need host threads and its measured cost is nil — and treat any wall
+number from a multithreaded process as untrustworthy without a stall
+watch beside it. Run-to-run spread on the workstation is
 10–20%; read ratios, not third digits.
 
 - 64³ TGV, single species, full step: device 0.146 s/step (Float64) and

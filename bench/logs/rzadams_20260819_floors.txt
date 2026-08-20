@@ -275,3 +275,43 @@ ran nearly clean at -t 8 - which also weakens the single-sample -t 1
 discrimination. Line-matrix spikes again scattered: 12.983 / 11.015 /
 3.010 / 3.003 / 10.997 / 9.004 / 2.016 ms across schemes, dims, and
 precisions. TGV legs 0.0902 / 0.0908 / 0.1011 / 0.0745 s/step.)
+
+rzadams1017:~/dev/cles 21:12 $ flux run -N1 -n4 --exclusive julia --project -t 8 ~/.julia/dev/CompactLES/bench/device_floors.jl backend=amdgpu only=watch watch=60
+flux-job: f473U1UkuEm5 started
+(-t 8 watch-only incidence baseline, nonblocking_synchronization = false
+still active. Stall fraction per rank: 88.9% / 27.3% / 1.5% / 34.8%.
+Rank 0: episodes at 6.82 s (11.347 s) and 18.17 s (41.827 s) - the second
+begins exactly where the first ends (6.82 + 11.347 = 18.167), so the rank
+was effectively stalled continuously from 6.8 s to the end of the watch
+with at most a call-scale gap. Rank 3's 19.321 s episode starting at
+40.66 s runs to the watch boundary, so its true duration is censored.
+Entry offsets scatter across the whole window (4-41 s); stalled calls sit
+in the >10 ms bucket (13-16 ms each), a ~100x per-call throughput drop.)
+======== rank 0
+52945 calls: median 0.134 ms  p99 13.013 ms  max 179.461 ms  gc 339 ms
+slow calls >1 ms: 3935, 53.37 s total (88.9% of watch); episodes: 4, longest 41.83 s
+======== rank 1
+312330 calls: median 0.138 ms  p99 0.248 ms  max 40.341 ms  gc 566 ms
+slow calls >1 ms: 917, 16.40 s total (27.3% of watch); episodes: 21, longest 15.85 s
+======== rank 2
+426273 calls: median 0.137 ms  p99 0.148 ms  max 46.519 ms  gc 759 ms
+slow calls >1 ms: 38, 0.88 s total (1.5% of watch); episodes: 28, longest 0.08 s
+======== rank 3
+279522 calls: median 0.139 ms  p99 0.290 ms  max 60.597 ms  gc 605 ms
+slow calls >1 ms: 1419, 20.88 s total (34.8% of watch); episodes: 18, longest 19.32 s
+
+rzadams1017:~/dev/cles 21:22 and 21:28 $ flux run -N1 -n4 --exclusive julia --project -t 1 ~/.julia/dev/CompactLES/bench/device_floors.jl backend=amdgpu only=watch watch=60
+flux-jobs: f473Zeou4Dxb, f473bBsKFvsh
+(-t 1 counterpart, two jobs, 8 rank-windows, 480 rank-seconds: zero
+sustained stall episodes. Every rank in both jobs is statistically
+identical: 415k-451k calls, median 0.129-0.140 ms, 15-17 slow calls
+totaling 1.03-1.09 s (1.7-1.8%), longest episode 0.14-0.16 s. Against the
+-t 8 baseline (~10 sustained episodes in 240 rank-seconds, ranks stalled
+up to 88.9%), eight clean 60 s windows is decisive: the stall mode
+requires a multithreaded Julia process. The slow calls at -t 1 are a
+reproducible startup signature, distinct from the stall mode: a ~0.15 s
+episode at 0.5-1.5 s and a ~0.11 s episode at 6.4-7.8 s on every rank in
+both jobs, offsets drifting ~0.3-0.5 s with rank index, plus one ~150 ms
+single call; the same ~0.12 s event at 5-8 s appears in the earlier -t 8
+full-survey runs. GC 1.0-1.1 s per rank with zero stalls, reconfirming GC
+is uncorrelated.)
