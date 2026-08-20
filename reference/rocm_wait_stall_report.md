@@ -111,17 +111,34 @@ and the degradation requires more than one Julia default-pool thread.
 `HSA_ENABLE_INTERRUPT=0` is the pathology made permanent, not a
 workaround.
 
-## Remaining steps
+## Remaining steps: the reproducer ladder
 
-1. LC ticket — now the primary move: the interrupt-delivery path
-   (KFD events, driver, firmware) is theirs to inspect, this report plus
-   the two logs is the evidence, and the deterministic
-   `HSA_ENABLE_INTERRUPT=0` reproduction gives them a knob that isolates
-   the wait path.
-2. Optional corroboration: a `rocprofv2` sys-trace over a stalled window
-   should show the gap inside the HSA signal wait rather than in kernel
-   execution; and the ~13 ms constant should be findable in ROCR's
-   `BusyWaitSignal` implementation.
+Isolate to the smallest reproducer before filing (a research code will
+not get driver-team priority on a whole-application report).
+
+1. **`bench/stall_mwe.jl`** — AMDGPU.jl alone, no CompactLES, no
+   KernelAbstractions, no MPI: one trivial kernel plus one stream
+   synchronize per call (`mode=kernel`), with rungs adding a second
+   launch, a device-to-host copy, and a round trip (`kernel2`, `copy`,
+   `full`), and `sync=direct` bypassing all AMDGPU.jl wait logic through
+   a raw `hipStreamSynchronize` ccall. Run `-t 8` against `-t 1`,
+   `watch=120`, a few repetitions each; climb the ladder only if the
+   bottom rung stays clean. A stalling bottom rung is a ~40-line
+   single-file reproducer.
+2. **`bench/stall_mwe.cpp`** — the Julia-free rung: the same loop in
+   plain HIP with N extra dormant (or busy) host threads
+   (`hipcc -O2 -o stall_mwe stall_mwe.cpp`; `./stall_mwe 120 20000 7`).
+   This is the decisive fork: if it stalls with extra threads, the
+   trigger is any multithreaded process and the ticket is unambiguously
+   ROCR/driver territory; if it never stalls, the trigger involves the
+   Julia runtime specifically (GC and scheduler threads, signal use,
+   foreign-call transitions) and the report goes to AMDGPU.jl/Julia
+   upstream first, with LC secondary.
+3. File with whichever party the fork selects, attaching the winning MWE,
+   this report, and the two logs. Optional corroboration if asked: a
+   `rocprofv2` sys-trace over a stalled window should show the gap inside
+   the HSA signal wait rather than in kernel execution, and the ~13 ms
+   constant should be findable in ROCR's `BusyWaitSignal` implementation.
 
 ## Practical guidance until resolved
 
