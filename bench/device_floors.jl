@@ -22,8 +22,13 @@
 #       scheme/dim/precision cells (min-over-50 readings of 2/3/5/13 ms and
 #       one whole TGV leg at 27x) and are invisible in a table that samples
 #       each cell once. This section measures their rate and dwell time and
-#       reports GC time alongside, since the ms quantization implicates a
-#       sleeping wait path (OS timer granularity) or the runtime's scheduler.
+#       reports GC time alongside. Measured mechanism: AMDGPU.jl's stream
+#       synchronize falls back, after a 256-iteration spin, to a task-based
+#       wait (Base.Event + libuv AsyncCondition + Timer under Base.@sync)
+#       whose latency quantizes at milliseconds under thread contention;
+#       -t 1 suppresses it, and the AMDGPU `nonblocking_synchronization =
+#       false` preference bypasses it. reference/AMR_GPU.md, performance
+#       summary, has the measurements.
 #   line solves — scheme (C6/C10/C8 filter) x dim x precision x size, device
 #       and host apply walls. A per-apply cost flat across sizes is a
 #       latency/serialization floor; one that scales with n is throughput

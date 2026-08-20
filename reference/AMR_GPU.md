@@ -581,11 +581,22 @@ precision, and size cells and once held a whole TGV leg at 27× — which is
 also what the first session's log looked like before the larger sample
 resolved it, when the pattern read as a C6/Float64 defect. It is not
 garbage collection (one fully stalled 30 s window recorded zero GC time),
-and the millisecond quantization implicates a sleeping wait path or the
-runtime scheduler rather than the kernels. The stall watch measures its
-rate and dwell; wait-path discrimination and a trace over a stalled window
-are the next probes, ahead of any tuning, since no wall number from a
-stalled process means anything. Run-to-run spread on the workstation is
+and it is thread-count-dependent: at `-t 1` the same job runs the same
+watches with 7–9 slow calls per 200k against 131–1990 at `-t 8`, and a
+spotless line matrix. The mechanism is in AMDGPU.jl v2.7.2's stream
+synchronize (`src/hip/stream.jl`), which every fence reaches through
+`KA.synchronize(ROCBackend)` and every device→host copy of a dirty array
+reaches through `synchronize(::Managed)`: a spin of at most 256 iterations,
+then a fallback that waits through a `Base.Event`, a libuv
+`AsyncCondition` host-function callback, a watchdog `Timer`, and two
+spawned tasks under `Base.@sync` — Julia-scheduler machinery whose latency
+is millisecond-quantized under thread contention and whose behavior
+changed between Julia 1.11 (workstation, never stalls) and 1.12 (rzadams).
+The package preference `nonblocking_synchronization = false` (a
+`LocalPreferences.toml` entry for AMDGPU) bypasses the fallback entirely
+in favor of a plain `hipStreamSynchronize`; confirming that this removes
+the stalls at `-t 8` is the one outstanding experiment, and until a
+process is shown stall-free, no wall number from it means anything. Run-to-run spread on the workstation is
 10–20%; read ratios, not third digits.
 
 - 64³ TGV, single species, full step: device 0.146 s/step (Float64) and

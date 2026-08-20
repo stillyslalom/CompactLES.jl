@@ -245,3 +245,19 @@ TGV F64 C6  64^3: device 0.0875 s/step (warm, 10 steps)
 TGV F64 C10 64^3: device 0.0988 s/step (warm, 10 steps)
 TGV F32 C6  64^3: device 0.0588 s/step (warm, 10 steps)
 TGV F32 C10 64^3: device 0.0977 s/step (warm, 10 steps)
+
+rzadams1017:~/dev/cles 20:14 $ flux run -N1 -n4 --exclusive julia --project -t 1 ~/.julia/dev/CompactLES/bench/device_floors.jl backend=amdgpu
+flux-job: f4731RG7X3Uj started
+(-t 1 discrimination run: the sustained stall mode is absent. Per-rank stall
+watches read medians of 0.143-0.153 ms with 7-9 slow calls in ~200k, against
+131-1990 slow calls and one fully stalled 30 s window at -t 8 on the previous
+run. The line matrix is clean in all 4 x 36 cells. Residuals at -t 1: one
+~1.5 s single call near watch start on ranks 2/3 (max 1530.219 / 1553.150 ms;
+the same ~1.55 s event appeared at -t 8), and one ~0.116-0.122 s episode at
+5.25 / 5.65 / 7.28 / 7.91 s on ranks 0-3 respectively. GC 453-572 ms per rank
+with stalls nearly absent, reconfirming GC is uncorrelated.)
+== TGV device steps (decomposed over 4 ranks)
+TGV F64 C6  64^3: device 0.0882 s/step (warm, 10 steps)
+TGV F64 C10 64^3: device 0.1011 s/step (warm, 10 steps)
+TGV F32 C6  64^3: device 0.0650 s/step (warm, 10 steps)
+TGV F32 C10 64^3: device 0.0738 s/step (warm, 10 steps)
