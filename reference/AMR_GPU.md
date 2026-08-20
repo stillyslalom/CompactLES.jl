@@ -560,7 +560,11 @@ memory removes the discrete-VRAM staging economics every device↔host
 number below is priced in; and a GPU-aware MPI flips `device_mpi_direct`
 from its host-staging default. Wall targets, the G4b precision policy, and
 the reduced-solve question are rzadams measurements to make, not
-extrapolations from this table. Run-to-run spread on the workstation is
+extrapolations from this table. `bench/device_floors.jl` is the instrument
+for those sessions: the same host-sanity probe, launch-floor timings,
+line-solve matrix, and TGV step table run unchanged on every machine, so a
+behavior seen on one machine can be checked for on another instead of being
+attributed to the implementation. Run-to-run spread on the workstation is
 10–20%; read ratios, not third digits.
 
 - 64³ TGV, single species, full step: device 0.146 s/step (Float64) and

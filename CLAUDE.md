@@ -322,6 +322,10 @@ decision worth revisiting.
   `device_bringup.jl` (the G1 kernels on an actual GPU — needs an
   environment carrying a device package; see the header for the
   collection-argument hang it exists to warn about),
+  `device_floors.jl` (the cross-machine device survey: host-starvation
+  probe, launch/sync floors, line-solve scheme × dim × precision × size
+  matrix, warm TGV steps at scheme × precision; run it unchanged on each
+  machine and compare tables),
   `tgv_energy.jl` (Taylor–Green kinetic-energy budget split
   by dissipation channel; the one bench script that runs usefully under
   `mpiexec`, and the intended first workload on a cluster).
