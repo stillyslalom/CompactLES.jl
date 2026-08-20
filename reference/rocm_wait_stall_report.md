@@ -94,10 +94,14 @@ event appears at `-t 8`. This is not the stall mode.
 
 ## Open experiments
 
-1. ROCR wait mode: busy-wait signal polling instead of interrupt waits
-   (`HSA_ENABLE_INTERRUPT=0` is the historical spelling; verify against
-   ROCm 6.4 documentation) — if the 13/26 ms ticks are interrupt wakeups,
-   this should remove or transform them.
+1. ROCR wait mode: `HSA_ENABLE_INTERRUPT=0` switches completion-signal
+   detection from interrupts to memory-based polling (current ROCR
+   documentation lists it, describing it as the diagnostic for interrupt
+   delivery problems in the driver). If the 13/26 ms ticks are interrupt
+   wakeups, this removes or transforms them:
+   `flux run -N1 -n4 --exclusive --env=HSA_ENABLE_INTERRUPT=0 julia
+   --project -t 8 bench/device_floors.jl backend=amdgpu only=watch
+   watch=60`.
 2. `rocprofv2` sys-trace over a watch that contains a stall: does the time
    sit in kernel execution, in gaps between kernels, or inside the HSA
    signal wait?
