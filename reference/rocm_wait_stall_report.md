@@ -63,19 +63,29 @@ a ~100× per-call throughput drop.
 Watch-only incidence runs, 60 s per rank, 4 ranks per job, identical
 nodes/launch line, `nonblocking_synchronization = false` throughout:
 
-| threads | jobs | rank-windows | sustained episodes | stalled fraction per rank |
+| threads | jobs | rank-windows | windows with a sustained episode | worst rank |
 |---|---|---|---|---|
-| `-t 8` | 1 | 4 (240 rank-s) | ~10 (up to 41.8 s) | 88.9% / 27.3% / 1.5% / 34.8% |
-| `-t 1` | 2 | 8 (480 rank-s) | 0 | 1.7–1.8% on every rank |
+| `-t 1` | 2 | 8 (480 rank-s) | 0 | 1.8% slow |
+| `-t 2` | 1 | 4 | 1 | 78.9% stalled (38.6 s + 8.5 s back-to-back, censored) |
+| `-t 4` | 1 | 4 | 1 | 83.6% stalled (49.9 s episode, censored) |
+| `-t 8` | 1 | 4 | 3 | 88.9% stalled (41.8 s episode) |
 
 At the `-t 8` episode rate, eight consecutive clean 60 s windows has
-probability on the order of e⁻²⁰. The stall mode requires a multithreaded
-Julia process, yet survives the removal of every Julia-level wait
-construct — consistent with an interaction between the multithreaded
-runtime (thread parking/futex behavior, foreign-call transitions) and
-ROCR's interrupt-driven signal waits, whose wakeup cadence is the natural
-source of the millisecond ticks. Untested hypothesis; discriminating
-experiments below.
+probability on the order of e⁻²⁰; the mode exists at every thread count
+above 1 and incidence grows with thread count. Note that a Julia 1.12
+`-t 1` process already carries an interactive thread (`versioninfo`
+reports "1 default, 1 interactive"), so the discriminator is more than
+one default-pool thread, not more than one OS thread. The stall requires
+a multithreaded Julia process yet survives the removal of every
+Julia-level wait construct — consistent with an interaction between the
+multithreaded runtime (thread parking/futex behavior, foreign-call
+transitions) and ROCR's interrupt-driven signal waits, whose wakeup
+cadence is the natural source of the millisecond ticks. Untested
+hypothesis; discriminating experiments below. Once entered, the state
+typically holds to the end of the measurement window (multiple episodes
+censored at the boundary), so dwell has no observed upper bound. Stalled
+ranks report *less* GC time than clean siblings (fewer calls, fewer
+allocations): GC is a consequence of the call rate here, not a cause.
 
 An unrelated, benign signature for contrast: at `-t 1` every rank shows
 the same deterministic pair of startup events (~0.15 s near 1 s, ~0.11 s
@@ -84,15 +94,14 @@ event appears at `-t 8`. This is not the stall mode.
 
 ## Open experiments
 
-1. Thread threshold: the same watch pair at `-t 2` and `-t 4`.
-2. ROCR wait mode: busy-wait signal polling instead of interrupt waits
+1. ROCR wait mode: busy-wait signal polling instead of interrupt waits
    (`HSA_ENABLE_INTERRUPT=0` is the historical spelling; verify against
    ROCm 6.4 documentation) — if the 13/26 ms ticks are interrupt wakeups,
    this should remove or transform them.
-3. `rocprofv2` sys-trace over a watch that contains a stall: does the time
+2. `rocprofv2` sys-trace over a watch that contains a stall: does the time
    sit in kernel execution, in gaps between kernels, or inside the HSA
    signal wait?
-4. LC ticket: driver/firmware state and node health are visible to LC and
+3. LC ticket: driver/firmware state and node health are visible to LC and
    not to us, and MI300A wait-latency issues may be known.
 
 ## Practical guidance until resolved
