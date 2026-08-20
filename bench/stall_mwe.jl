@@ -15,9 +15,14 @@
 #
 #   mode=kernel   one trivial kernel launch + stream synchronize per call
 #   mode=kernel2  two launches, one synchronize
+#   mode=multi    eight launches of eight DISTINCT kernel objects, one
+#                 synchronize (the real call's kernel diversity)
 #   mode=copy     kernel + device-to-host copy (adds the Managed sync path)
 #   mode=full     kernel + D2H + host arithmetic + H2D (the shape of one
 #                 compact-solve apply, with no solver code)
+# Orthogonal additions: mpi=1 (initialize MPI, communicate nothing),
+# alloc=N (N heap bytes per call, drives GC), burst=1 (compile and launch
+# 40 distinct kernels before the watch — the startup storm).
 #
 # Climb only as far as needed: if a rung stalls at -t 8 and not at -t 1,
 # that rung is the reproducer and the next discrimination is
@@ -53,6 +58,7 @@ const work = parse(Int, getopt("work", "20000"))
 const syncmode = getopt("sync", "blocking")
 const use_mpi = getopt("mpi", "0") == "1"
 const allocbytes = parse(Int, getopt("alloc", "0"))
+const use_burst = getopt("burst", "0") == "1"
 
 # mpi=1 initializes MPI and nothing else — no communication follows. Every
 # run observed to stall had MPI initialized (Cray MPICH: progress threads,
@@ -74,6 +80,37 @@ function spin_kernel!(x, iters)
     return
 end
 
+# Eight structurally distinct kernels for mode=multi: the real solver call
+# launches ~6-8 different kernel objects per apply (fill, sweeps, spike
+# correction, pack, scatter), cycling that many completion signals, where
+# the clean rungs reuse one kernel object. The perturbation constant makes
+# each function unique so each compiles to its own code object.
+for k in 1:8
+    @eval function $(Symbol(:spin_kernel_, k, :!))(x, iters)
+        i = workitemIdx().x
+        acc = x[i] + $(Float32(k)) * 1.0f-6
+        for _ in 1:iters
+            acc = muladd(acc, 0.9999f0, 1f-7)
+        end
+        x[i] = acc
+        return
+    end
+end
+const multi_kernels = (spin_kernel_1!, spin_kernel_2!, spin_kernel_3!,
+                       spin_kernel_4!, spin_kernel_5!, spin_kernel_6!,
+                       spin_kernel_7!, spin_kernel_8!)
+
+# Defined at top level (not inside main) so the fresh methods are visible
+# when launched — an @eval inside the running function trips world age.
+for k in 1:40
+    @eval function $(Symbol(:burst_kernel_, k, :!))(x)
+        i = workitemIdx().x
+        x[i] += $(Float32(k)) * 1.0f-9
+        return
+    end
+end
+const burst_kernels = Tuple(eval(Symbol(:burst_kernel_, k, :!)) for k in 1:40)
+
 sync_default() = AMDGPU.synchronize()
 sync_blocking() = AMDGPU.synchronize(; blocking=true)
 sync_direct() = AMDGPU.HIP.hipStreamSynchronize(AMDGPU.stream())
@@ -84,8 +121,26 @@ function main()
     n = 256
     x = ROCArray(fill(1.0f0, n))
     host = zeros(Float32, n)
+    # burst=1 compiles and launches 40 additional distinct kernels before
+    # the watch: several stalled survey windows were stalled from t = 0,
+    # implicating the startup compile/module-load storm as the event that
+    # leaves the process in the degraded state.
+    if use_burst
+        for f in burst_kernels
+            @roc groupsize=n f(x)
+        end
+        AMDGPU.synchronize(; blocking=true)
+    end
     call! = if mode == "kernel"
         () -> (@roc groupsize=n spin_kernel!(x, work); dosync())
+    elseif mode == "multi"
+        wk = max(1, work ÷ 8)
+        () -> begin
+            for f in multi_kernels
+                @roc groupsize=n f(x, wk)
+            end
+            dosync()
+        end
     elseif mode == "kernel2"
         () -> (@roc groupsize=n spin_kernel!(x, work);
                @roc groupsize=n spin_kernel!(x, work); dosync())
@@ -97,7 +152,7 @@ function main()
                copyto!(host, x); host .= host .* 0.5f0 .+ 0.25f0;
                copyto!(x, host))
     else
-        error("mode must be kernel, kernel2, copy or full, got $mode")
+        error("mode must be kernel, kernel2, multi, copy or full, got $mode")
     end
     # alloc=N allocates N heap bytes per call, driving the garbage
     # collector the way the real solver call does (its device-to-host
@@ -120,8 +175,9 @@ function main()
             Threads.nthreads(:interactive), getpid())
     println("device: ", AMDGPU.device())
     hsaint = get(ENV, "HSA_ENABLE_INTERRUPT", "(unset)")
-    @printf("mode=%s sync=%s work=%d mpi=%d alloc=%d  ",
-            mode, syncmode, work, use_mpi ? 1 : 0, allocbytes)
+    @printf("mode=%s sync=%s work=%d mpi=%d alloc=%d burst=%d  ",
+            mode, syncmode, work, use_mpi ? 1 : 0, allocbytes,
+            use_burst ? 1 : 0)
     @printf("HSA_ENABLE_INTERRUPT=%s  calibration %.3f ms/call\n",
             hsaint, 1e3t_call)
 
