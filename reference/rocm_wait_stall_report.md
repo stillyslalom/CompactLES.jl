@@ -138,10 +138,20 @@ not get driver-team priority on a whole-application report).
    confound dominates the corners: every run observed to stall had MPI
    initialized (Cray MPICH — progress threads, memory-registration
    hooks, GPU-aware transport plumbing), and every clean MWE run did
-   not. `mpi=1` (initialize MPI, communicate nothing) is therefore the
-   next rung, ahead of the call-content candidates (`mode=copy/full`,
-   `work=2000` for tens-of-microseconds waits, the startup compile
-   burst).
+   not. **`mpi=1` measured clean** (120 s at `-t 8`, 1 slow call in
+   255k): MPI initialization alone is insufficient. The leading rung is
+   now `alloc=N`, which allocates N heap bytes per call to drive the
+   garbage collector the way the real call does (its device-to-host
+   staging materializes a host array every apply, ~1 s of GC per 120 s
+   window; the clean MWE rungs allocate nothing per call). The
+   hypothesis it tests: GC does not sustain the stalled state (a fully
+   stalled window measured zero GC time), but a collection's
+   inter-thread stop signals could be the *entry* event that knocks
+   ROCR's event wait into its degraded mode — which would also explain
+   the more-than-one-default-thread gate, since stopping the world only
+   signals other threads when other threads exist. Behind it in the
+   queue: `mode=full` (the copy path), `work=2000` (tens-of-microsecond
+   waits racing signal completion), and the startup compile burst.
 2. **`bench/stall_mwe.cpp`** — the Julia-free rung: the same loop in
    plain HIP with N extra dormant (or busy) host threads
    (`hipcc -O2 -o stall_mwe stall_mwe.cpp`; `./stall_mwe 120 20000 7`).

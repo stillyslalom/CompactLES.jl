@@ -52,6 +52,7 @@ const watch = parse(Float64, getopt("watch", "120"))
 const work = parse(Int, getopt("work", "20000"))
 const syncmode = getopt("sync", "blocking")
 const use_mpi = getopt("mpi", "0") == "1"
+const allocbytes = parse(Int, getopt("alloc", "0"))
 
 # mpi=1 initializes MPI and nothing else — no communication follows. Every
 # run observed to stall had MPI initialized (Cray MPICH: progress threads,
@@ -98,6 +99,19 @@ function main()
     else
         error("mode must be kernel, kernel2, copy or full, got $mode")
     end
+    # alloc=N allocates N heap bytes per call, driving the garbage
+    # collector the way the real solver call does (its device-to-host
+    # staging materializes a host array every apply; ~1 s of GC per 120 s
+    # window). GC does not sustain the stalled state — a fully stalled
+    # window measured zero GC time — but a collection's inter-thread stop
+    # signals are a candidate for the *entry* event, and would explain the
+    # more-than-one-default-thread gate: stopping the world only signals
+    # other threads when other threads exist.
+    if allocbytes > 0
+        inner! = call!
+        call! = () -> (Base.donotdelete(Vector{UInt8}(undef, allocbytes));
+                       inner!())
+    end
     call!(); call!()
     t_call = minimum(@elapsed(call!()) for _ in 1:50)
 
@@ -106,22 +120,25 @@ function main()
             Threads.nthreads(:interactive), getpid())
     println("device: ", AMDGPU.device())
     hsaint = get(ENV, "HSA_ENABLE_INTERRUPT", "(unset)")
-    @printf("mode=%s sync=%s work=%d mpi=%d  HSA_ENABLE_INTERRUPT=%s  ",
-            mode, syncmode, work, use_mpi ? 1 : 0, hsaint)
-    @printf("calibration %.3f ms/call\n", 1e3t_call)
+    @printf("mode=%s sync=%s work=%d mpi=%d alloc=%d  ",
+            mode, syncmode, work, use_mpi ? 1 : 0, allocbytes)
+    @printf("HSA_ENABLE_INTERRUPT=%s  calibration %.3f ms/call\n",
+            hsaint, 1e3t_call)
 
     times = Float64[]
     sizehint!(times, ceil(Int, 2e4 * watch))
+    gc0 = Base.gc_num()
     t0 = time()
     while time() - t0 < watch
         push!(times, @elapsed call!())
     end
+    gc_ms = Base.GC_Diff(Base.gc_num(), gc0).total_time / 1e6
 
     s = sort(times)
     med = s[(length(s) + 1) >> 1]
     p99 = s[ceil(Int, 0.99 * length(s))]
-    @printf("%d calls: median %.3f ms  p99 %.3f ms  max %.3f ms\n",
-            length(s), 1e3med, 1e3p99, 1e3s[end])
+    @printf("%d calls: median %.3f ms  p99 %.3f ms  max %.3f ms  gc %.0f ms\n",
+            length(s), 1e3med, 1e3p99, 1e3s[end], gc_ms)
     # Slow threshold 1 ms absolute: baseline calls sit well under 0.5 ms
     # and ROCR's polling sleep quantum is ~13 ms; a relative threshold
     # inverts when the whole window is stalled.
