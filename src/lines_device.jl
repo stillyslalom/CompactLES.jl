@@ -436,3 +436,14 @@ function apply_along!(out, plan::DevicePlan, f, decomp::Decomp)
     end
     return out
 end
+
+# The fused-scatter entry points are host-only; a device solver routes through
+# the two-pass form (apply into scratch, then a pointwise device kernel) in
+# `deriv_scaled_along!` / `div_subtract_along!`. Reaching these methods means
+# that routing broke, so fail loudly rather than scalar-indexing device arrays.
+apply_along_scaled!(out, plan::DevicePlan, f, decomp::Decomp, scale) =
+    error("apply_along_scaled! is host-only; a DevicePlan takes the two-pass " *
+          "route in deriv_scaled_along!")
+apply_along_subtract!(dQ, c::Int, plan::DevicePlan, f, decomp::Decomp, inv_J) =
+    error("apply_along_subtract! is host-only; a DevicePlan takes the " *
+          "two-pass route in div_subtract_along!")

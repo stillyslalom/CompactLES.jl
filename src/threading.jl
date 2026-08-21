@@ -2,10 +2,11 @@
 #
 # `Threads.@threads` spawns one Task per thread per region. That is free when
 # the loop body is large and ruinous when it is not, and this solver is full of
-# small regions: one compute_rhs! evaluation runs ~150 of them (one per
-# direction per velocity component, per species, per flux, plus every pointwise
-# rescale), so at 24 threads a single RHS call spawns ~3600 tasks and allocates
-# ~150 kB *per thread*, independent of grid size.
+# small regions: one compute_rhs! evaluation runs ~120 of them (one per
+# direction per velocity component, per species, per flux, plus the remaining
+# pointwise passes; the fused scatters in operators.jl removed ~30), so at 24
+# threads a single RHS call spawns ~2900 tasks and allocates ~110 kB *per
+# thread*, independent of grid size.
 #
 # Measured before this policy existed (24 logical cores, compute_rhs!):
 #
@@ -39,15 +40,35 @@
 #      one trip. That covers the 1-D case, which no flattening can help.
 
 """
-Minimum total work, in grid points, required to use the thread pool. The default
-follows the measurements in the note at the top of `src/threading.jl`: 32^3 is
-approximately the break-even point and 48^3 benefits from threading.
-Override with the `CL_THREAD_MIN_WORK` environment variable, which is read once,
-when the module initializes.
+Minimum total work, in grid points, required to use the thread pool, stored as
+the effective total for this session. The default is
+[`THREAD_MIN_WORK_PER_THREAD`](@ref) `* Threads.nthreads()`, set when the
+module initializes: the spawn/join floor of one threaded region grows with the
+thread count (measured 0.6 µs at 1 thread to 14 µs at 24 on a 24-core
+desktop), so the work needed to amortize it grows with it. A fixed total of
+32768 was measured to leave 25-30% on the table for planar-2-D RHS evaluations
+of 16384 points at 8 and 16 threads, while at 24 threads that same work is
+better off serial — no constant total serves both. Override the total with
+the `CL_THREAD_MIN_WORK` environment variable, which is read once, when the
+module initializes.
 """
 const THREAD_MIN_WORK = Ref(1 << 15)
 
+"""
+Per-thread work floor, in grid points per thread, from which the
+[`THREAD_MIN_WORK`](@ref) default is built. The break-even sits near 1024
+points per thread across the measured anchors (24-core desktop, minimum over
+30 calls, several processes): threading 16384-point regions is 25-30% faster
+at 8 and 16 threads (2048 and 1024 points per thread) and slightly slower at
+24 (683 per thread); threading 4096-point regions at 16 threads (256 per
+thread) is 1.8x slower; and the previous fixed total of 32768, tuned at 24
+threads, is 1365 per thread — the same figure from an independent
+measurement.
+"""
+const THREAD_MIN_WORK_PER_THREAD = 1024
+
 function __init_threading__()
+    THREAD_MIN_WORK[] = THREAD_MIN_WORK_PER_THREAD * Threads.nthreads()
     v = get(ENV, "CL_THREAD_MIN_WORK", nothing)
     v === nothing || (THREAD_MIN_WORK[] = parse(Int, v))
     return nothing

@@ -52,8 +52,9 @@ filter is normally the binding constraint.
 ## Combine ranks and threads
 
 Point and line loops are threaded only when their work estimate exceeds
-[`THREAD_MIN_WORK`](@ref), 32768 by default, and only when the loop has more
-than one iteration to divide. Consequently, one-dimensional and small
+[`THREAD_MIN_WORK`](@ref) — by default 1024 points per thread times the
+session's thread count — and only when the loop has more than one iteration to
+divide. Consequently, one-dimensional and small
 documentation cases often run intentionally on one thread. More threads do not
 compensate for a small local block.
 

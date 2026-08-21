@@ -269,8 +269,9 @@ positivity check reads ρ out of `Q` directly in `max_rate` rather than trusting
 ## Threading
 
 `@threaded <work> for ... end` (`src/threading.jl`) uses `Threads.@threads`
-only when `work >= THREAD_MIN_WORK` (32768, override via `CL_THREAD_MIN_WORK`)
-*and* the loop has more than one trip; it runs serially otherwise. Allocation is
+only when `work >= THREAD_MIN_WORK` (1024 points per thread × the session's
+thread count; override the total via `CL_THREAD_MIN_WORK`) *and* the loop has
+more than one trip; it runs serially otherwise. Allocation is
 per-region-per-thread rather than per-point, so without the threshold small cases
 pay spawn cost for nothing.
 

@@ -56,6 +56,44 @@ function solve_col!(x::AbstractVector{T}, F::TriFactor{T}) where {T}
     return x
 end
 
+# Columns interleaved per solve_cols! below: the recurrence in each column is
+# a dependent multiply-add chain, so a lone column exposes the full FMA
+# latency at every row while the arithmetic units sit idle. Sweeping a small
+# block of independent columns row by row fills the pipeline (measured 1.5-1.7x
+# on the x-sweep solve of a 64^3 RHS; widths 16 and 32 tie, 8 is slightly
+# behind). Per column the operations and their order
+# match solve_col! exactly, so the result is bitwise identical to it; only
+# the interleaving across columns differs, and the device `colwise` mirror
+# of the x-sweep arithmetic is unaffected.
+const COL_BLOCK = 16
+
+"In-place Thomas solve of columns `lo:hi` of `B` (n × lines), interleaved."
+function solve_cols!(B::AbstractMatrix{T}, F::TriFactor{T},
+                     lo::Int, hi::Int) where {T}
+    n = F.n
+    l, dinv, c = F.l, F.dinv, F.c
+    @inbounds for i in 2:n
+        li = l[i]
+        for col in lo:hi
+            B[i, col] -= li * B[i-1, col]
+        end
+    end
+    @inbounds begin
+        dn = dinv[n]
+        for col in lo:hi
+            B[n, col] *= dn
+        end
+    end
+    @inbounds for i in (n-1):-1:1
+        ci = c[i]
+        di = dinv[i]
+        for col in lo:hi
+            B[i, col] = (B[i, col] - ci * B[i+1, col]) * di
+        end
+    end
+    return B
+end
+
 mutable struct LineSolver{T}
     n::Int
     F::TriFactor{T}
@@ -187,8 +225,9 @@ the caller's fill is already the solution.
 function solve_lines!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where {T}
     line_solver.explicit && return B   # identity LHS: the fill is already the answer
     n, L = size(B)
-    @threaded n*L for l in 1:L
-        solve_col!(view(B, :, l), line_solver.F)
+    @threaded n*L for b in 1:cld(L, COL_BLOCK)
+        lo = (b - 1) * COL_BLOCK + 1
+        solve_cols!(B, line_solver.F, lo, min(lo + COL_BLOCK - 1, L))
     end
     line_solver.hasred || return B
 

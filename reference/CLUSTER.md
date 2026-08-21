@@ -167,10 +167,12 @@ mechanism has been established. `--cpu-bind=threads` avoids it. Treat
 
 Shared-memory threads are generally inactive under fine decomposition.
 `@threaded` runs serially unless a region's work reaches `THREAD_MIN_WORK`
-(32768 points), so once `prod(n_local)` falls below that, every thread past the
-first is idle no matter what `-t` says. 64³ over 56 ranks is 4608 points/rank,
-seven times under; asking for `-t 56` there measured 1.7x *slower* than `-t 1`
-from runtime and GC-thread overhead alone. Because `-t` applies per rank,
+(1024 points per thread times the rank's `-t`, so the bar rises with the
+threads requested), and once `prod(n_local)` falls below it every thread past
+the first is idle no matter what `-t` says. 64³ over 56 ranks is 4608
+points/rank, twelve times under the `-t 56` bar; asking for `-t 56` there
+measured 1.7x *slower* than `-t 1` from runtime and GC-thread overhead alone.
+Because `-t` applies per rank,
 `-n R -t T` requests R×T compute threads plus R×(T/2) GC threads. One tested
 configuration consequently created approximately 19,000 threads on a 112-core
 node and did not reach the first step.

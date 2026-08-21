@@ -418,3 +418,169 @@ function _scatter_t!(out, B::Matrix{T}, plan, decomp::Decomp, ::Val{D}) where {T
     end
     return out
 end
+
+# --- Fused scatters ---------------------------------------------------------
+# The RHS is bandwidth-bound (see bench/phases.jl), and two of its per-solve
+# companions were separate full-array passes over data the scatter had just
+# written: the 1/h gradient rescale and the flux-divergence subtraction into
+# dQ. The scatter variants below apply those operations in the scatter itself,
+# removing two array streams per line solve. The per-point arithmetic is the
+# same product and the same subtraction in the same order as the two-pass
+# form, so interior results are bit-identical. Halo cells differ from the
+# two-pass rescale, which scaled them along with the interior: gradient-array
+# halos hold no data any consumer reads without a fresh exchange, so nothing
+# observes the difference.
+
+@inline _jacobian_weight(::Nothing, I, b) = b
+@inline _jacobian_weight(inv_J, I, b) = @inbounds inv_J[I] * b
+
+function _scatter_lines_scaled!(out, B::Matrix{T}, plan, decomp::Decomp, scale,
+                                ::Val{D}) where {T,D}
+    n_halo_d = decomp.n_halo_d
+    n = plan.n
+    o1, _ = _odims(Val(D))
+    n1 = decomp.n_local[o1]
+    @threaded plan.lines*n for l in 1:plan.lines
+        kk, jj = divrem(l - 1, n1)
+        j = jj + 1
+        k = kk + 1
+        @inbounds for i in 1:n
+            G = _gidx(Val(D), i, j, k, n_halo_d)
+            out[G] = B[i, l] * scale[G]
+        end
+    end
+    return out
+end
+
+function _scatter_t_scaled!(out, B::Matrix{T}, plan, decomp::Decomp, scale,
+                            ::Val{D}) where {T,D}
+    n_halo_d = decomp.n_halo_d
+    n = plan.n
+    nx = decomp.n_local[1]
+    nout = D == 2 ? decomp.n_local[3] : decomp.n_local[2]
+    o1, o2, o3 = n_halo_d
+    @threaded nout*n*nx for jk in outer_indices(n, nout)
+        jr, kk = Tuple(jk)
+        @inbounds begin
+            base = (kk - 1) * nx
+            if D == 2
+                for i in 1:nx
+                    G = CartesianIndex(i + o1, jr + o2, kk + o3)
+                    out[G] = B[base+i, jr] * scale[G]
+                end
+            else
+                for i in 1:nx
+                    G = CartesianIndex(i + o1, kk + o2, jr + o3)
+                    out[G] = B[base+i, jr] * scale[G]
+                end
+            end
+        end
+    end
+    return out
+end
+
+function _scatter_lines_subtract!(dQ, c::Int, B::Matrix{T}, plan,
+                                  decomp::Decomp, inv_J, ::Val{D}) where {T,D}
+    n_halo_d = decomp.n_halo_d
+    n = plan.n
+    o1, _ = _odims(Val(D))
+    n1 = decomp.n_local[o1]
+    @threaded plan.lines*n for l in 1:plan.lines
+        kk, jj = divrem(l - 1, n1)
+        j = jj + 1
+        k = kk + 1
+        @inbounds for i in 1:n
+            G = _gidx(Val(D), i, j, k, n_halo_d)
+            dQ[G, c] -= _jacobian_weight(inv_J, G, B[i, l])
+        end
+    end
+    return dQ
+end
+
+function _scatter_t_subtract!(dQ, c::Int, B::Matrix{T}, plan, decomp::Decomp,
+                              inv_J, ::Val{D}) where {T,D}
+    n_halo_d = decomp.n_halo_d
+    n = plan.n
+    nx = decomp.n_local[1]
+    nout = D == 2 ? decomp.n_local[3] : decomp.n_local[2]
+    o1, o2, o3 = n_halo_d
+    @threaded nout*n*nx for jk in outer_indices(n, nout)
+        jr, kk = Tuple(jk)
+        @inbounds begin
+            base = (kk - 1) * nx
+            if D == 2
+                for i in 1:nx
+                    G = CartesianIndex(i + o1, jr + o2, kk + o3)
+                    dQ[G, c] -= _jacobian_weight(inv_J, G, B[base+i, jr])
+                end
+            else
+                for i in 1:nx
+                    G = CartesianIndex(i + o1, kk + o2, jr + o3)
+                    dQ[G, c] -= _jacobian_weight(inv_J, G, B[base+i, jr])
+                end
+            end
+        end
+    end
+    return dQ
+end
+
+apply_along_scaled!(out, ::Nothing, f, decomp::Decomp, scale) =
+    error("apply_along_scaled! reached a dimension with no plan; the caller " *
+          "should have routed a collapsed or folded dimension elsewhere")
+
+"""
+    apply_along_scaled!(out, plan, f, decomp, scale)
+
+[`apply_along!`](@ref) with the scatter multiplying each interior point by
+`scale` at the same index: `out[I] = (D f)[I] * scale[I]`. Halo cells of `out`
+are left untouched. Same collective and halo contract as `apply_along!`.
+"""
+function apply_along_scaled!(out, plan::AbstractDirPlan, f, decomp::Decomp,
+                             scale)
+    d = plan.dim
+    if d == 1
+        _fill_lines!(plan.B, plan, f, decomp, Val(1))
+        solve_lines!(plan.B, plan.line_solver)
+        _scatter_lines_scaled!(out, plan.B, plan, decomp, scale, Val(1))
+    elseif d == 2
+        _fill_t!(plan.B, plan, f, decomp, Val(2))
+        solve_lines_t!(plan.B, plan.line_solver)
+        _scatter_t_scaled!(out, plan.B, plan, decomp, scale, Val(2))
+    else
+        _fill_t!(plan.B, plan, f, decomp, Val(3))
+        solve_lines_t!(plan.B, plan.line_solver)
+        _scatter_t_scaled!(out, plan.B, plan, decomp, scale, Val(3))
+    end
+    return out
+end
+
+apply_along_subtract!(dQ, c::Int, ::Nothing, f, decomp::Decomp, inv_J) =
+    error("apply_along_subtract! reached a dimension with no plan; the " *
+          "caller should have routed a collapsed or folded dimension elsewhere")
+
+"""
+    apply_along_subtract!(dQ, c, plan, f, decomp, inv_J)
+
+[`apply_along!`](@ref) with the scatter subtracting each interior point from
+conserved component `c` of `dQ`: `dQ[I, c] -= inv_J[I] * (D f)[I]`, or
+`dQ[I, c] -= (D f)[I]` when `inv_J === nothing`. Halo cells of `dQ` are left
+untouched. Same collective and halo contract as `apply_along!`.
+"""
+function apply_along_subtract!(dQ, c::Int, plan::AbstractDirPlan, f,
+                               decomp::Decomp, inv_J)
+    d = plan.dim
+    if d == 1
+        _fill_lines!(plan.B, plan, f, decomp, Val(1))
+        solve_lines!(plan.B, plan.line_solver)
+        _scatter_lines_subtract!(dQ, c, plan.B, plan, decomp, inv_J, Val(1))
+    elseif d == 2
+        _fill_t!(plan.B, plan, f, decomp, Val(2))
+        solve_lines_t!(plan.B, plan.line_solver)
+        _scatter_t_subtract!(dQ, c, plan.B, plan, decomp, inv_J, Val(2))
+    else
+        _fill_t!(plan.B, plan, f, decomp, Val(3))
+        solve_lines_t!(plan.B, plan.line_solver)
+        _scatter_t_subtract!(dQ, c, plan.B, plan, decomp, inv_J, Val(3))
+    end
+    return dQ
+end

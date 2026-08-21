@@ -49,6 +49,7 @@ CompactLES.interface_closures
 apply_along!
 filter_field!
 THREAD_MIN_WORK
+CompactLES.THREAD_MIN_WORK_PER_THREAD
 DevicePlan
 device_plan
 ```

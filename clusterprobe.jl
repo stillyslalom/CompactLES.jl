@@ -237,7 +237,9 @@ if rank == 0
         println("  Solver. Use fewer ranks in those dimensions or a larger grid;")
         println("  pass the grid you actually intend to run as the argument.")
     end
-    println("  THREAD_MIN_WORK = ", CompactLES.THREAD_MIN_WORK[])
+    println("  THREAD_MIN_WORK = ", CompactLES.THREAD_MIN_WORK[],
+            " (", CompactLES.THREAD_MIN_WORK_PER_THREAD, " per thread x -t ",
+            Threads.nthreads(), ")")
     engages = maximum(getfield.(all_info, :pts)) >= CompactLES.THREAD_MIN_WORK[]
     println("  @threaded engages on the largest per-rank loop: ", engages)
     engages || println("  -> every `-t` thread beyond the first is idle in this run.")

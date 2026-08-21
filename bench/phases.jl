@@ -27,44 +27,42 @@ function budget(name, solver, Q)
     t["primitives!"]     = best(() -> CL.primitives!(solver, Q))
     t["velocity grads"]  = best(() -> for jj in 1:3, d in 1:3
         if decomp.active[d]
-            CL.deriv_along!(solver.grad_u[d, jj], vel[jj], solver, d, CL.vel_parity(solver, d, jj))
-            CL._scale_grad!(solver.grad_u[d, jj], solver, d)
+            CL.deriv_scaled_along!(solver.grad_u[d, jj], vel[jj], solver, d,
+                                   CL.vel_parity(solver, d, jj))
         end
     end)
     t["metric grad corr"] = best(() -> CL.metric_correct_gradients!(solver, solver.metric))
     t["artificial"]       = best(() -> CL.compute_artificial!(solver, Q))
     t["scalar grads"]     = best(() -> for d in 1:3
         decomp.active[d] || continue
-        CL.deriv_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1); CL._scale_grad!(solver.grad_T_ion[d], solver, d)
+        CL.deriv_scaled_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1)
         for sp in 1:solver.equations.n_species
-            CL.deriv_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
-            CL._scale_grad!(solver.grad_Y[d, sp], solver, d)
+            CL.deriv_scaled_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
         end
     end)
     t["assemble_fluxes!"] = best(() -> CL.assemble_fluxes!(solver, Q))
     t["flux halo exch"]   = best(() -> for d in 1:3
         CL.exchange_dim_batch!(view(solver.flux, d, :), decomp, d)
     end)
-    # mirrors the branch compute_rhs! actually takes for this solver
+    # mirrors the branch compute_rhs! actually takes for this solver, calling
+    # the same pointwise! and fused-scatter routines: a hand-rolled serial
+    # accumulation loop here once overstated this phase by roughly 2x
     unitgeom = solver.metric isa CartesianMetric && all(isnothing, solver.stretch)
-    t["flux divergence"]  = best(() -> for c in 1:solver.equations.n_cons, d in 1:3
-        decomp.active[d] || continue
-        Fdc = solver.flux[d, c]
-        σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
-        if unitgeom
-            CL.deriv_along!(solver.tmp_a, Fdc, solver, d, σ)
-            @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-                dQ[i+o1, j+o2, k+o3, c] -= solver.tmp_a[i+o1, j+o2, k+o3]
-            end
-        else
-            Ad = solver.area_d[d]
-            @inbounds for idx in eachindex(solver.tmp_b)
-                solver.tmp_b[idx] = Ad[idx] * Fdc[idx]
-            end
-            CL.deriv_along!(solver.tmp_a, solver.tmp_b, solver, d, σ)
-            @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-                I = CartesianIndex(i + o1, j + o2, k + o3)
-                dQ[I, c] -= solver.inv_J[I] * solver.tmp_a[I]
+    t["flux divergence"]  = best(() -> for c in 1:solver.equations.n_cons
+        CL.pointwise!(CL._zero_component_point!, dQ, nx, ny, nz, dQ, c, o1, o2, o3)
+        for d in 1:3
+            decomp.active[d] || continue
+            Fdc = solver.flux[d, c]
+            σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
+            if unitgeom
+                CL.div_subtract_along!(dQ, c, Fdc, solver, d, σ, nothing)
+            else
+                Ad = solver.area_d[d]
+                n1f, n2f, n3f = size(solver.tmp_b)
+                CL.pointwise!(CL._area_flux_point!, solver.tmp_b, n1f, n2f, n3f,
+                              solver.tmp_b, Ad, Fdc)
+                CL.div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ,
+                                       solver.inv_J)
             end
         end
     end)

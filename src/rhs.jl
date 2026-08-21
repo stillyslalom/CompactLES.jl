@@ -902,6 +902,62 @@ function div_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     return out
 end
 
+"""
+    deriv_scaled_along!(out, f, solver, d, σf)
+
+Compact derivative of `f` along active dimension `d`, scaled pointwise by
+`solver.inv_h[d]` inside the scatter of the line solve. Interior results are
+bit-identical to [`deriv_along!`](@ref) followed by `_scale_grad!`; only halo
+cells of `out` differ (the two-pass rescale also scaled them, but they hold no
+data any consumer reads without a fresh exchange). A fold dimension or a
+device plan takes the two-pass route unchanged. Same collective, halo, and
+fold contract as `deriv_along!`.
+"""
+function deriv_scaled_along!(out, f, solver::SolverLike, d::Int, σf::Int)
+    fold = solver.folds[d]
+    plan = solver.deriv_plans[d]
+    if fold === nothing && !(plan isa DevicePlan)
+        apply_along_scaled!(out, plan, f, solver.decomp, solver.inv_h[d])
+    else
+        deriv_along!(out, f, solver, d, σf)
+        _scale_grad!(out, solver, d)
+    end
+    return out
+end
+
+"""
+    div_subtract_along!(dQ, c, f, solver, d, σf, inv_J)
+
+Compact derivative of `f` along `d` through the divergence plans, subtracted
+from conserved component `c` of `dQ` inside the scatter of the line solve:
+`dQ[I, c] -= inv_J[I] * (D f)[I]`, or `dQ[I, c] -= (D f)[I]` when
+`inv_J === nothing` (the unit-geometry case). Interior results are
+bit-identical to [`div_along!`](@ref) into scratch followed by the
+subtraction pass. A fold dimension or a device plan takes that two-pass route
+through `solver.tmp_a`. Same collective, halo, and fold contract as
+`div_along!`.
+"""
+function div_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int,
+                             σf::Int, inv_J)
+    fold = solver.folds[d]
+    plan = solver.div_plans[d]
+    if fold === nothing && !(plan isa DevicePlan)
+        apply_along_subtract!(dQ, c, plan, f, solver.decomp, inv_J)
+    else
+        div_along!(solver.tmp_a, f, solver, d, σf)
+        nx, ny, nz = solver.decomp.n_local
+        o1, o2, o3 = solver.decomp.n_halo_d
+        if inv_J === nothing
+            pointwise!(_subtract_div_point!, dQ, nx, ny, nz,
+                       dQ, solver.tmp_a, c, o1, o2, o3)
+        else
+            pointwise!(_subtract_jac_div_point!, dQ, nx, ny, nz,
+                       dQ, solver.tmp_a, inv_J, c, o1, o2, o3)
+        end
+    end
+    return dQ
+end
+
 """Compact filter of `f` along dimension `d` with antipodal sign `σf`. Collective,
 with the same halo and fold contract as `deriv_along!`."""
 function filt_along!(out, f, solver::SolverLike, d::Int, σf::Int)
@@ -1132,8 +1188,9 @@ function compute_primitives_and_gradients!(solver::SolverLike, Q,
     vel = (solver.u, solver.v, solver.w)
     for jj in 1:3, d in 1:3
         if decomp.active[d]
-            deriv_along!(solver.grad_u[d, jj], vel[jj], solver, d, vel_parity(solver, d, jj))
-            _scale_grad!(solver.grad_u[d, jj], solver, d)   # 1/h_d incl. stretching Jacobian
+            # scaled by 1/h_d incl. stretching Jacobian
+            deriv_scaled_along!(solver.grad_u[d, jj], vel[jj], solver, d,
+                                vel_parity(solver, d, jj))
         else
             fill!(solver.grad_u[d, jj], 0)
         end
@@ -1177,11 +1234,9 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
     compute_artificial!(solver, Q)
     for d in 1:3
         decomp.active[d] || continue
-        deriv_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1)
-        _scale_grad!(solver.grad_T_ion[d], solver, d)
+        deriv_scaled_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1)
         for sp in 1:solver.equations.n_species
-            deriv_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
-            _scale_grad!(solver.grad_Y[d, sp], solver, d)
+            deriv_scaled_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
         end
     end
     assemble_fluxes!(solver, Q)
@@ -1204,9 +1259,7 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
             Fdc = solver.flux[d, c]
             σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
             if unitgeom
-                div_along!(solver.tmp_a, Fdc, solver, d, σ)
-                pointwise!(_subtract_div_point!, dQ, nx, ny, nz,
-                           dQ, solver.tmp_a, c, o1, o2, o3)
+                div_subtract_along!(dQ, c, Fdc, solver, d, σ, nothing)
             else
                 # tmp_b = A_d F_d over the full array; A_d is odd in r for the
                 # cylindrical axis (A₁ = r), flipping the flux parity.
@@ -1214,9 +1267,8 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
                 n1f, n2f, n3f = size(solver.tmp_b)
                 pointwise!(_area_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                            solver.tmp_b, Ad, Fdc)
-                div_along!(solver.tmp_a, solver.tmp_b, solver, d, σ)
-                pointwise!(_subtract_jac_div_point!, dQ, nx, ny, nz,
-                           dQ, solver.tmp_a, solver.inv_J, c, o1, o2, o3)
+                div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ,
+                                    solver.inv_J)
             end
         end
     end

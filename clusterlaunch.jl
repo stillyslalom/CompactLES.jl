@@ -79,9 +79,12 @@ function evaluate(np)
     # point. Communication is the usual worry when over-decomposing, but with a
     # 4-deep halo on every active face the redundant *compute* grows faster.
     padded = prod(ntuple(d -> active(d) ? nl[d] + 2 * n_halo : nl[d], 3))
+    # The threading threshold scales with the job's own -t (1024 points per
+    # thread), which this planning process cannot know, so the column reports
+    # whether threading could engage at all: the lowest bar is -t 2.
     return (np = np, dims = dims, n_local = nl, legal = legal,
             pts = interior, overhead = padded / interior,
-            threads = interior >= CL.THREAD_MIN_WORK[])
+            threads = interior >= 2 * CL.THREAD_MIN_WORK_PER_THREAD)
 end
 
 candidates = if !isempty(opt.ranks)
@@ -98,7 +101,8 @@ println("budget          : ", nodes, " node(s) x ", cores_per_node,
 println("scheme          : ", deriv.name,
         use_filter ? " + $(compact_filter().name)" : " (filter floor ignored)")
 println("min local extent: ", nmin, " points per rank per active dimension")
-println("THREAD_MIN_WORK : ", CL.THREAD_MIN_WORK[])
+println("THREAD_MIN_WORK : ", CL.THREAD_MIN_WORK_PER_THREAD,
+        " points per thread x the job's -t")
 println()
 println("  ranks   process grid    min n_local      pts/rank  halo mult  threads?")
 

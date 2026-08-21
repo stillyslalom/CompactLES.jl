@@ -471,15 +471,15 @@ end
 
 # |∇ρ|, the numerical schlieren used to visualize shock structure. It requires
 # its own derivative pass because `grad_u` carries velocity gradients only.
-# Collective: `deriv_along!` is a distributed solve, and is safe here only
-# because every rank traverses the same `fields` tuple in the same order.
+# Collective: `deriv_scaled_along!` is a distributed solve, and is safe here
+# only because every rank traverses the same `fields` tuple in the same order.
 function _schlieren(solver::Solver)
     g = similar(solver.rho)
     acc = zeros(eltype(solver.rho), size(solver.rho))
     for d in 1:3
         solver.decomp.active[d] || continue
-        deriv_along!(g, solver.rho, solver, d, 1)   # a scalar is even across a fold
-        _scale_grad!(g, solver, d)
+        # a scalar is even across a fold
+        deriv_scaled_along!(g, solver.rho, solver, d, 1)
         @inbounds for idx in eachindex(acc)
             acc[idx] += g[idx] * g[idx]
         end

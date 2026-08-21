@@ -80,6 +80,36 @@ function solve_col!(x::AbstractVector{T}, F::BandFactor{T}) where {T}
     return x
 end
 
+# Interleaved counterpart of solve_col!, as the tridiagonal solve_cols! in
+# tridiag.jl: a block of independent columns swept row by row hides the
+# recurrence latency a lone column exposes. Per column the operations and
+# their order match solve_col! exactly, so the result is bitwise identical.
+"In-place banded solve of columns `lo:hi` of `B` (n × lines), interleaved."
+function solve_cols!(B::AbstractMatrix{T}, F::BandFactor{T},
+                     lo::Int, hi::Int) where {T}
+    n, q = F.n, F.q
+    Lb, U = F.L, F.U
+    @inbounds for k in 1:(n-1)
+        for m in 1:min(q, n - k)
+            lm = Lb[m, k]
+            for col in lo:hi
+                B[k+m, col] -= lm * B[k, col]
+            end
+        end
+    end
+    @inbounds for i in n:-1:1
+        u0 = U[1, i]
+        for col in lo:hi
+            acc = B[i, col]
+            for t in 1:min(q, n - i)
+                acc -= U[1+t, i] * B[i+t, col]
+            end
+            B[i, col] = acc / u0
+        end
+    end
+    return B
+end
+
 mutable struct BandLineSolver{T}
     n::Int
     q::Int
@@ -228,8 +258,9 @@ section only, and every rank of the solver's sub-communicator must call this.
 function solve_lines!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T}) where {T}
     n, L = size(B)
     q = line_solver.q
-    @threaded n*L for l in 1:L
-        solve_col!(view(B, :, l), line_solver.F)
+    @threaded n*L for b in 1:cld(L, COL_BLOCK)
+        lo = (b - 1) * COL_BLOCK + 1
+        solve_cols!(B, line_solver.F, lo, min(lo + COL_BLOCK - 1, L))
     end
     line_solver.hasred || return B
 
