@@ -113,6 +113,7 @@ on rzadams) and selected from `.cshrc`:
 ```csh
 if ($?SYS_TYPE) then
     setenv JULIA_PROJECT "@$SYS_TYPE"
+    setenv JULIA_DEPOT_PATH "$HOME/.julia/$SYS_TYPE"":$HOME/.julia:"
     switch ($SYS_TYPE)
         case toss_4_x86_64_ib_cray:     # rzadams
             module load cray-mpich rocm
@@ -123,6 +124,15 @@ if ($?SYS_TYPE) then
     endsw
 endif
 ```
+
+The depot line is written in two adjacent quoted strings because csh parses a
+`:` immediately after a variable name as a history-style modifier; adjacent
+strings concatenate. Its three entries are the per-architecture depot, which
+receives every write including precompile caches; the shared `~/.julia`, which
+must be listed explicitly and serves package sources, artifacts, and
+registries read-through; and a trailing empty entry, which expands to Julia's
+bundled system depots only — it does *not* include the user depot (verified on
+1.11.4), so omitting the middle entry orphans every installed package.
 
 A shared environment lives at `~/.julia/environments/<name>/` and is
 addressable from anywhere as `--project=@<name>` or
@@ -144,11 +154,21 @@ in the environment, so an `[AMDGPU]` block is inert without
 MVAPICH2 module does not, which is why rzhound needs the absolute path from
 `mpicc -show`.
 
-The shared depot itself is unproblematic: precompile caches are keyed by
-preferences and CPU target, and the clusters occupy separate cache slots. If
-precompile churn appears when alternating machines, a per-`$SYS_TYPE` entry in
-`JULIA_DEPOT_PATH` separates the depots at the cost of duplicated package
-installs.
+Sharing the depot's `compiled/` directory between the clusters does not work
+in practice, which is why the depot line above is part of the standing
+configuration rather than a contingency. In principle the cache slots are
+keyed by CPU target and preferences and the machines should coexist; measured
+on rzhound (Julia 1.12.7), precompilation instead failed repeatedly with
+"Image file failed consistency check: maybe opened the wrong version?" while
+recompiling two dozen stdlibs, and deleting the caches of the packages named
+in the error did not clear it — the corrupt image belonged to a dependency
+the error never named. After introducing the per-architecture depot, wipe the
+poisoned shared cache once (`rm -rf ~/.julia/compiled/v1.12`, the directory
+tracking the Julia minor version in use): the shared depot remains in the
+search stack, so a bad image there is still findable until removed. The first
+`Pkg.precompile()` in the new stack rebuilds everything into the
+per-architecture depot; it completed cleanly on rzhound, and rzadams builds
+its own set on its next login with no further action.
 
 ## Measuring the launch
 
