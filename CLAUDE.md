@@ -309,7 +309,9 @@ decision worth revisiting.
 - `bench/` is scratch tooling, not tests: `audit.jl` (allocation, inference),
   `jetcheck.jl` / `jetwhere.jl` (dispatch sites, and where they come from),
   `phases.jl` (RHS phase budget), `profile.jl`, `scaling.jl`, `threadscale.jl`,
-  `bcbench.jl`, `coverage.jl`, `artcal.jl` (artificial-property sweeps),
+  `bcbench.jl`, `coverage.jl`, `spawnfloor.jl` (per-region spawn/join floor of
+  `Threads.@threads` at the session's `-t`; run once per thread count),
+  `artcal.jl` (artificial-property sweeps),
   `nohprobe.jl` (per-step Noh state probe: where β\* is, where the internal
   energy goes negative, and what the symmetry cell is doing),
   `foldorder.jl` (convergence error split by region of the line — the fold end
