@@ -97,6 +97,52 @@ srun -n 448 --cpu-bind=threads julia --project=. -t 1 \
 Do not place project-specific MPI preferences in a login file because they would
 redirect unrelated Julia environments.
 
+### One home directory, several clusters
+
+LC home directories are shared across the RZ clusters, so one checkout and one
+`~/.julia` depot serve every machine — and one `LocalPreferences.toml` cannot
+be correct for more than one of them. A checkout configured against rzadams'
+`libmpi_cray` fails loudly on rzhound, since the Cray name resolves nowhere
+there; the reverse misconfiguration, or an unconfigured environment, falls back
+to the JLL silently. Keep one driver environment per architecture instead,
+keyed on `$SYS_TYPE` (`toss_4_x86_64_ib` on rzhound, `toss_4_x86_64_ib_cray`
+on rzadams) and selected from `.cshrc`:
+
+```csh
+if ($?SYS_TYPE) then
+    setenv JULIA_PROJECT $HOME/juliaenv/$SYS_TYPE
+    switch ($SYS_TYPE)
+        case toss_4_x86_64_ib_cray:     # rzadams
+            module load cray-mpich rocm
+            breaksw
+        case toss_4_x86_64_ib:          # rzhound
+            module load mvapich2
+            breaksw
+    endsw
+endif
+```
+
+`JULIA_PROJECT` selects the project for every `julia` invocation that does not
+pass `--project`, which makes launch lines portable between the clusters. This
+does not conflict with the rule against preferences in login files: the login
+file selects a project, and the preferences stay in that project's
+`LocalPreferences.toml`. An explicit `--project` still overrides the variable,
+so `--project=.` in the checkout runs against whatever the checkout's own
+preference file holds. Set each environment up once on its own cluster:
+`Pkg.develop` the checkout, add `MPIPreferences` (and the device package where
+there is a device — preferences apply only to packages present in the
+environment, so an `[AMDGPU]` block is inert without `Pkg.add("AMDGPU")`),
+then configure the MPI preference as above. The Cray PE sets
+`LD_LIBRARY_PATH`, so the bare name `libmpi_cray` resolves on rzadams; the
+MVAPICH2 module does not, which is why rzhound needs the absolute path from
+`mpicc -show`.
+
+The shared depot itself is unproblematic: precompile caches are keyed by
+preferences and CPU target, and the clusters occupy separate cache slots. If
+precompile churn appears when alternating machines, a per-`$SYS_TYPE` entry in
+`JULIA_DEPOT_PATH` separates the depots at the cost of duplicated package
+installs.
+
 ## Measuring the launch
 
 Run `clusterprobe.jl` before interpreting performance measurements. It takes
