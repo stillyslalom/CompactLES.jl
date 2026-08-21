@@ -105,12 +105,14 @@ be correct for more than one of them. A checkout configured against rzadams'
 `libmpi_cray` fails loudly on rzhound, since the Cray name resolves nowhere
 there; the reverse misconfiguration, or an unconfigured environment, falls back
 to the JLL silently. Keep one driver environment per architecture instead,
-keyed on `$SYS_TYPE` (`toss_4_x86_64_ib` on rzhound, `toss_4_x86_64_ib_cray`
+using Julia's [shared
+environments](https://pkgdocs.julialang.org/v1/environments/#Shared-environments)
+named by `$SYS_TYPE` (`toss_4_x86_64_ib` on rzhound, `toss_4_x86_64_ib_cray`
 on rzadams) and selected from `.cshrc`:
 
 ```csh
 if ($?SYS_TYPE) then
-    setenv JULIA_PROJECT $HOME/juliaenv/$SYS_TYPE
+    setenv JULIA_PROJECT "@$SYS_TYPE"
     switch ($SYS_TYPE)
         case toss_4_x86_64_ib_cray:     # rzadams
             module load cray-mpich rocm
@@ -122,17 +124,22 @@ if ($?SYS_TYPE) then
 endif
 ```
 
-`JULIA_PROJECT` selects the project for every `julia` invocation that does not
-pass `--project`, which makes launch lines portable between the clusters. This
-does not conflict with the rule against preferences in login files: the login
-file selects a project, and the preferences stay in that project's
-`LocalPreferences.toml`. An explicit `--project` still overrides the variable,
-so `--project=.` in the checkout runs against whatever the checkout's own
-preference file holds. Set each environment up once on its own cluster:
-`Pkg.develop` the checkout, add `MPIPreferences` (and the device package where
-there is a device — preferences apply only to packages present in the
-environment, so an `[AMDGPU]` block is inert without `Pkg.add("AMDGPU")`),
-then configure the MPI preference as above. The Cray PE sets
+A shared environment lives at `~/.julia/environments/<name>/` and is
+addressable from anywhere as `--project=@<name>` or
+`Pkg.activate("<name>"; shared = true)`; both `JULIA_PROJECT` and `--project`
+accept the `@` form, and a name that does not exist yet resolves to the path
+it will occupy, so the first `Pkg.add` creates it (verified on Julia 1.11.4).
+`JULIA_PROJECT` then selects the right environment for every `julia`
+invocation that does not pass `--project`, which makes launch lines portable
+between the clusters. This does not conflict with the rule against preferences
+in login files: the login file selects a project, and the preferences stay in
+that project's `LocalPreferences.toml`. An explicit `--project` still
+overrides the variable, so `--project=.` in the checkout runs against whatever
+the checkout's own preference file holds. Set each environment up once on its
+own cluster: `Pkg.develop` the checkout, add `MPIPreferences` (and the device
+package where there is a device — preferences apply only to packages present
+in the environment, so an `[AMDGPU]` block is inert without
+`Pkg.add("AMDGPU")`), then configure the MPI preference as above. The Cray PE sets
 `LD_LIBRARY_PATH`, so the bare name `libmpi_cray` resolves on rzadams; the
 MVAPICH2 module does not, which is why rzhound needs the absolute path from
 `mpicc -show`.
