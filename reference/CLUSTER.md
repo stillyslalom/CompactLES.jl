@@ -5,9 +5,12 @@ scheduler launch rules. `CLAUDE.md` contains a summary and refers to this
 document for cluster-specific procedures.
 
 The rules are based on `clusterprobe.jl` measurements and tests of alternative
-hypotheses. Numerical results are from rzhound (LLNL): 2 sockets, 8 NUMA
-domains, 112 cores, and SMT2. The mechanisms may generalize, but the values are
-specific to that system.
+hypotheses. Numerical results are from rzhound and rzwhippet (LLNL), which
+share one topology: 2 sockets, 8 NUMA domains, 112 cores, SMT2. Each number is
+labeled with its machine. The mechanisms may generalize, but machine-to-machine
+differences exceed run-to-run spread, so values from different machines are not
+comparable — even the meaning of a scheduler flag differs between them (see
+[Launch rules](#launch-rules)).
 
 ## Contents
 
@@ -222,12 +225,26 @@ node. At 256³ on 36 nodes, the corresponding choices are 448 and 4032 ranks.
 
 ## Launch rules
 
-Scheduler flags do not necessarily correspond to the resulting CPU mask. Where
-the scheduler allocates at core granularity with SMT enabled,
-`-c 1` yields both threads of one core (2 logical CPUs) and `-c 2` yields one
-thread (1 logical CPU) — measured, inverted, reproducible across nodes. Read the
-flag as a request and the probe's affinity mask as the record of what the
-scheduler actually allocated.
+Scheduler flags do not necessarily correspond to the resulting CPU mask, and
+the mapping differs between machines. On rzhound, where the scheduler
+allocates at core granularity with SMT enabled, `-c 1` yields both threads of
+one core (2 logical CPUs) and `-c 2` yields one thread (1 logical CPU) —
+measured, inverted, reproducible across nodes. On rzwhippet, `-c` counts
+physical cores: `--ntasks-per-node=56 -c 2` fills a 112-core node exactly and
+gives each rank 2 physical cores with no SMT siblings, while `-c 4` at 56
+tasks/node is refused outright ("CPU count per node can not be satisfied").
+Read the flag as a request and the probe's affinity mask as the record of
+what the scheduler actually allocated.
+
+`-N` alone does not spread ranks across nodes. Without `--ntasks-per-node`,
+Slurm may block-pack: `-N 2 -n 112 --cpu-bind=threads` on rzwhippet placed
+111 ranks on one node and 1 on the other, one logical CPU per rank, leaving
+the second node nearly idle. The failure mode is not an error but a plausible
+timing — that configuration ran the 256³ TGV at 1.655 s/step, self-consistent
+with 111 single-CPU ranks sharing one node — and it invalidated a full matrix
+of threaded measurements before the probe's node-distribution line revealed
+the packing. Pass `--ntasks-per-node` whenever ranks-per-node is below full
+packing, and read the node distribution before trusting any number.
 
 Avoid assigning both SMT threads of one physical core to a rank. On rzhound (2
 sockets, 8 NUMA domains, 112 cores, SMT2) that configuration ran the 64³ TGV at
@@ -251,7 +268,8 @@ configuration consequently created approximately 19,000 threads on a 112-core
 node and did not reach the first step.
 
 Threads also reduced performance in cases where `@threaded` was active. The
-following measurements use 256³ on two nodes and all 112 cores per node:
+following measurements, on rzhound, use 256³ on two nodes and all 112 cores
+per node:
 
 | ranks × threads | s/step | cores/rank from the probe |
 |-----------------|--------|---------------------------|
@@ -269,10 +287,13 @@ approximately 150 regions per RHS call. The measured configuration therefore
 supports `-t 1` under MPI.
 
 `--cpu-bind=threads` also distributes CPUs *non-uniformly* below 56 ranks/node —
-3 to 5 cores per rank at 28/node, 7 to 14 at 14/node. With collectives every
-step the slowest rank determines performance. The nonuniform masks confound the
-bottom two rows, so they do not isolate thread scaling. Inspect the mask before
-interpreting any `-t > 1` result.
+3 to 5 cores per rank at 28/node, 7 to 14 at 14/node, measured the same on
+both machines — and an explicit `-c` does not repair it: on rzwhippet,
+`--ntasks-per-node=28 -c 4` still produced 3–5 cores per rank. With
+collectives every step the slowest rank determines performance. The nonuniform
+masks confound the bottom two rows of both threads tables, so they do not
+isolate thread scaling. Inspect the mask before interpreting any `-t > 1`
+result.
 
 Rank count has a fixed ceiling for a given grid. `plan_direction` needs 9 points per
 rank per dimension for the C8 filter, so `n_global[d] >= 9 * dims[d]`. At 64³
@@ -308,11 +329,64 @@ comparisons. Order-of-magnitude differences exceed this variance, whereas
 few-percent effects and scaling curves require fixed placement or repeated
 measurements across the nodes assigned by the scheduler.
 
+### Threads versus ranks, re-measured (rzwhippet, 2026-08)
+
+The question was reopened after the fused scatters, the blocked x-sweep
+solve, and the per-thread `THREAD_MIN_WORK` default changed the threading
+economics: roughly 30 fewer threaded regions per RHS call (~120 remain), a
+faster serial baseline, and no spawns wasted on undersized regions. Measured
+on rzwhippet under Julia 1.12.7 — 256³ TGV with artificial properties on, 60
+steps, single runs, launch flags per the rules above and every row's mask
+probe-verified:
+
+| ranks × threads | s/step | cores/rank from the probe |
+|-----------------|--------|---------------------------|
+| 224 × 1         | 0.640  | 1–1                       |
+| 112 × 2         | 1.206  | 2–2                       |
+| 56 × 4          | 2.94   | 3–5 (ragged)              |
+| 28 × 8          | 7.97   | 7–14 (ragged)             |
+
+The verdict at fixed core count is unchanged: two threads per rank on
+verified two-core masks lost to pure per-core ranks by 1.88x, with
+`@threaded` fully engaged (~150k points/rank against a 2048-point floor).
+The condensation benefit that motivated the hybrid is real on the
+communication side — at 28 ranks the decomposition drops to (7, 2, 2) with
+dimension 3 entirely intra-NUMA and only dimension 1 off-node — but the
+thread-side losses consume it entirely. Not yet measured here: the
+fixed-rank control (112 × 1 on the identical `-c 2` masks; the analogous
+rzhound comparison is what separated bandwidth-per-rank from active thread
+overhead) and medians over repeats.
+
+The per-region cost was measured directly with `bench/spawnfloor.jl` (one
+rank on one node, one process per `-t`). The spawn/join floor of a single
+`Threads.@threads` region grows linearly at ~0.6–0.8 µs per thread through
+`-t 56` (0.86 µs at 1 thread, 41 µs at 56). At ~120 regions per RHS call
+that is 0.2–0.5 ms per RHS at `-t 2`–`-t 8`, three orders of magnitude under
+the step time, so the table's losses are not spawn cost; they are memory
+bandwidth and per-region barriers. The linear growth itself is inherent to
+`@threads`, which spawns one task per thread and joins a barrier over all of
+them. At `-t 112` the floor was pathological rather than linear (minimum
+838 µs, median 20 ms): that part is a Julia runtime defect, the scheduler
+wake-storm of [JuliaLang/julia#50425](https://github.com/JuliaLang/julia/issues/50425)
+— each region entry woke every thread through a serial lock/signal/unlock
+loop — fixed by [#61826](https://github.com/JuliaLang/julia/pull/61826)
+(June 2026, backported to 1.13). Under 1.13-rc3 the floor remains linear at
+a similar slope while the `-t 112` median collapses 30x (21.7 ms → 0.72 ms).
+A Julia upgrade therefore repairs only the extreme tail and does not change
+the economics at thread counts a production hybrid would use.
+
+Community experience agrees: task-spawn floors of 3.5–70 µs across machines
+are documented in the Julia Discourse thread ["Overhead of
+`Threads.@threads`"](https://discourse.julialang.org/t/overhead-of-threads-threads/53964),
+whose consensus is that `@threads` does not suit many small regions, and
+Trixi.jl — the nearest comparable solver, which ships a hybrid MPI-threads
+mode — published its 2026 large-scale Taylor–Green scaling as pure MPI
+without multithreading.
 
 ## Scaling, measured
 
 The measured scaling strategy packs each node before adding nodes. The following
-table gives seconds per step for 256³ TGV under system MVAPICH2 with
+table gives seconds per step for 256³ TGV on rzhound under system MVAPICH2 with
 `--cpu-bind=threads -t 1`:
 
 | nodes | 56 ranks/node | 112 ranks/node |
@@ -341,6 +415,15 @@ small measured cost at this size.
 
 ## Open cluster questions
 
+- Whether shared-memory threads can ever beat per-core ranks was re-measured
+  on rzwhippet after the threading-economics changes and the verdict is
+  unchanged: 1.88x slower at fixed core count with verified masks (see
+  [Threads versus ranks, re-measured](#threads-versus-ranks-re-measured-rzwhippet-2026-08)).
+  Outstanding: the fixed-rank 112 × 1 control on identical masks, medians
+  over repeats, and the one configuration with a theoretical opening — one
+  rank per NUMA domain with pinned threads under Julia ≥ 1.13 — which depends
+  on the pinning item below and on masks the scheduler will not produce
+  unaided.
 - `ThreadPinning`'s querying API drives `clusterprobe.jl`; its *pinning* API is
   still unused. Whether pinning helps is open — on the one machine measured, the
   scheduler's own binding was already near-optimal (see [Launch
