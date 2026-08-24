@@ -278,12 +278,6 @@ if rank == 0
     println()
     println("  dims=", decomp.dims, " -> Cart_create is row-major, so dimension 3 is")
     println("  the fastest-varying rank index and its neighbours are consecutive ranks.")
-    println("  A high cross-socket share there is not automatically a defect: when a")
-    println("  dimension's extent equals the socket count, every mapping must cross it,")
-    println("  and confining the crossing to ONE axis is the good outcome -- measured on")
-    println("  rzhound, socket == coords[3] exactly, leaving dims 1 and 2 fully intra-")
-    println("  socket. Judge by cross-socket BYTES (links x n_halo x the transverse")
-    println("  plane), not by the percentage, before reaching for an explicit dims=.")
 end
 
 MPI.Barrier(comm)
