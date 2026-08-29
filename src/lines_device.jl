@@ -343,9 +343,16 @@ end
         end
         B[l, i] -= acc
     else
+        # One load and one store, accumulating per-t in a register: the CPU
+        # backend runs kernel bodies under `@simd ivdep`, whose metadata
+        # declares B[l, i] dependence-free across the t iterations, so a
+        # per-t read-modify-write can lose all but the last update. The
+        # subtraction order matches the host transposed sweep term for term.
+        x = B[l, i]
         for t in 1:q
-            B[l, i] -= V[i, t] * zbp[l, t] + W[i, t] * zbn[l, t]
+            x -= V[i, t] * zbp[l, t] + W[i, t] * zbn[l, t]
         end
+        B[l, i] = x
     end
 end
 
