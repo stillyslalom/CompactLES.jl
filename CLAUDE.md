@@ -336,42 +336,8 @@ be revisited.
   prose that explains the package without managing the reader's emotional state.
   Most prose in this repository is model output. When an edit exposes poor style
   in the surrounding prose, follow these guidelines and flag it for correction.
-- `bench/` is scratch tooling, not tests: `audit.jl` (allocation, inference),
-  `jetcheck.jl` / `jetwhere.jl` (dispatch sites, and where they come from),
-  `phases.jl` (RHS phase budget), `profile.jl`, `scaling.jl`, `threadscale.jl`,
-  `bcbench.jl`, `coverage.jl`, `spawnfloor.jl` (per-region spawn/join floor of
-  `Threads.@threads` at the session's `-t`; run once per thread count),
-  `artcal.jl` (artificial-property sweeps),
-  `nohprobe.jl` (per-step Noh state probe: where β\* is, where the internal
-  energy goes negative, and what the symmetry cell is doing),
-  `foldorder.jl` (convergence error split by region of the line, the fold end
-  against the outer wall, which a global max norm conflates),
-  `filterrate.jl` (whether the state filter dissipates per application or per
-  unit time), `amr_transfer.jl` (AMR transfer-pair conditioning plus the
-  Stage 1 measurement battery: sampling convention, round-trip orders,
-  sensor-injection amplification, pollution decay),
-  `pointwise_ka.jl` (the G1 acceptance table: each pointwise phase timed
-  through `@threaded` and the KernelAbstractions CPU backend),
-  `device_bringup.jl` (the G1 kernels on an actual GPU; needs an
-  environment carrying a device package; see the header for the
-  collection-argument hang it exists to warn about),
-  `device_floors.jl` (the cross-machine device survey: host-starvation
-  probe, launch/sync floors, line-solve scheme × dim × precision × size
-  matrix, warm TGV steps at scheme × precision; run it unchanged on each
-  machine and compare tables),
-  `tgv_energy.jl` (Taylor–Green kinetic-energy budget split
-  by dissipation channel; the one bench script that runs usefully under
-  `mpiexec`, and the intended first workload on a cluster),
-  `amr_cost.jl` (equal accuracy at reduced cost: a coarse, a composite and a
-  uniform-fine run of the same 3-D mixing case, differenced on the shared
-  coarse lattice),
-  `device_solver.jl` (whole-solver device acceptance battery against the CPU
-  solver, in Float64 and Float32; needs a device package),
-  `device_mpi.jl` (distributed device runs: staged halo, fold-pair and
-  reduced-solve traffic, with transfer volume and copy time from the tracking
-  counters),
-  `stall_mwe.jl` (the MI300A wait-stall reproducer ladder; depends on AMDGPU.jl
-  alone so it can be attached to a ticket as-is).
+- `bench/` is scratch tooling, not tests. Each script's header comment says
+  what it measures and how to run it; read that before running one.
 - Scripts take their settings from `ARGS`, not the environment: positional
   values first, then `key=value`, parsed by `script_args` (`src/scriptargs.jl`)
   against a defaults `NamedTuple` that doubles as the schema. Give a new script
