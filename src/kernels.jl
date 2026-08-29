@@ -30,9 +30,9 @@ at 1. High-edge rows are mirrored automatically.
 `first = 1` is the closed-boundary case: the stencil reads interior points
 only, so nothing beyond the edge is touched and stale physical-edge halos are
 never read. A `first <= 0` row reads ghost points beyond the edge and is valid
-only where those ghosts carry data — a patch-interface end filled by
-`exchange_patch_ghosts!` — which `plan_direction` selects through its
-`lo_closures`/`hi_closures` keywords rather than through the scheme itself.
+only where those ghosts carry data (a patch-interface end filled by
+`exchange_patch_ghosts!`); `plan_direction` selects such rows through its
+`lo_closures`/`hi_closures` keywords, not through the scheme itself.
 """
 struct ClosureRow{T}
     lhs::NTuple{3,T}   # (sub, diag, super); sub is ignored on row 1
@@ -225,8 +225,8 @@ the interior left-hand side `(af, 1, af)`. The `2M + 1` weights are fixed by
 exactness on polynomials of degree `0:2M-1` and a zero response at the Nyquist
 wavenumber, which is the interior filter's own construction: at `i = M + 1`
 the system returns the centered stencil to round-off, and at `i = 2` it
-reproduces the published `(1 + 254αf)/256, (31 + 2αf)/32, ...` row. Solved
-here rather than tabulated so the rows follow `af` exactly.
+reproduces the published `(1 + 254αf)/256, (31 + 2αf)/32, ...` row. The rows
+are solved here, not tabulated, so they follow `af` exactly.
 """
 function onesided_filter_row(af::T, i::Int, M::Int) where {T}
     K = 2M + 1
@@ -312,11 +312,11 @@ The weights sum to exactly 1 over the common denominator 103680, so constants
 are reproduced without relying on cancellation. Each of the four closure rows
 is the interior stencil with its overhanging weights folded back onto the
 half-offset mirror (ghost j ↔ interior j), which preserves that unit sum at a
-closed edge; the same construction is what `fold_fill!` performs at a fold, so
+closed edge; `fold_fill!` uses the same construction at a fold, so
 the two edge treatments agree.
 
-Contrast [`compact_filter`](@ref), which is a dealiasing filter for the
-conserved state rather than a test filter: at αf = 0.45 it retains 99% of the
+Contrast [`compact_filter`](@ref), a dealiasing filter for the conserved
+state and not a test filter: at αf = 0.45 it retains 99% of the
 amplitude at four points per wavelength where this filter retains 19%. The
 measurement is in `reference/CALIBRATION.md`.
 """
@@ -334,9 +334,9 @@ end
 # --- Patch-interface closures ------------------------------------------------
 #
 # At a patch interface the ghost layers carry the abutting patch's data, but the
-# ghost UNKNOWNS belong to that patch's solve, so a row's left-hand side must
+# ghost unknowns belong to that patch's solve, so a row's left-hand side must
 # couple interior unknowns only (Miranda tabulates the extended-data transfer
-# closures identically to the one-sided ones for this reason — "same as
+# closures identically to the one-sided ones for this reason: "same as
 # one-sided to maintain invertibility"). The right-hand side is free to read the
 # copied ghost data. The rows below exploit that: only the edge row's LHS
 # couples a ghost unknown in the interior scheme, so a single replacement row
@@ -362,8 +362,8 @@ convention above. For a derivative the single replacement row is an explicit
 central difference of order `2(M+1)` (the interior formal order) whose stencil
 reads `M+1` ghost points; for a filter it is the identity, leaving the shared
 interface-plane node to the post-stage averaging; and a scheme that is explicit
-throughout (`gaussian_filter`) needs no closure at all — the interior stencil
-simply reads the exchanged ghosts. `plan_direction` verifies the ghost reach
+throughout (`gaussian_filter`) needs no closure at all, since the interior
+stencil reads the exchanged ghosts. `plan_direction` verifies the ghost reach
 against the halo width.
 """
 function interface_closures(scheme::CompactScheme{T}) where {T}

@@ -58,11 +58,11 @@ scheme has zero modified wavenumber at the two-point wave, so both the
 strain-rate magnitude and the dilatation vanish identically for a grid-to-grid
 velocity oscillation, and the sensors built from them return zero there. Only
 `mu_sensor = :velocity` responds to that mode. Grid-scale content of the
-conserved state is removed by the compact filter rather than by the artificial
+conserved state is removed by the compact filter, not by the artificial
 properties, consistent with the Taylor--Green dissipation budgets recorded in
 [`reference/CALIBRATION.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION.md).
 
-The defaults ship unchanged because the alternatives were measured and did not
+The defaults are unchanged because the alternatives were measured and did not
 improve the validation battery. The velocity field for artificial shear
 viscosity moves no case beyond its fourth digit, and the dilatation field for
 artificial bulk viscosity improves several cases while losing the converging
@@ -117,8 +117,8 @@ the explicit timestep much smaller. Converging strong shocks separately require
 a reduced CFL while the shock forms at a symmetry plane: under the default
 `smoother = :gaussian`, 0.4 at the spherical origin and 0.2 at the cylindrical
 axis and the planar wall. The restriction is measured to originate at the wall,
-axis or origin cell rather than in the artificial properties. Retry control is often cheaper than imposing that
-small CFL throughout a calculation:
+axis or origin cell, not in the artificial properties. Retry control is often
+cheaper than imposing that small CFL throughout a calculation:
 
 ```julia
 Numerics(

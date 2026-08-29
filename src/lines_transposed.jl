@@ -8,13 +8,13 @@
 # (the innermost index runs along x), and the Thomas/banded elimination is
 # rewritten as row-outer sweeps vectorized across contiguous line blocks,
 # the classic batched-SIMD tridiagonal, threaded by chunking the lines. The
-# x sweep keeps the original layout, which is already contiguous both ways.
+# x sweep keeps the original layout, which is contiguous both ways.
 
 # --- Vectorized batched solves ---------------------------------------------
 
 # Contiguous blocks of lines, one per thread, as the iteration space of the
 # solves below. `Threads.@threads` indexes what it iterates, so this is an
-# indexable object rather than a generator: a generator has to be collected at
+# indexable object, not a generator: a generator has to be collected at
 # every call site, and these sit on the per-sweep path of the whole RHS.
 struct LineChunks
     n_lines::Int
@@ -44,7 +44,7 @@ returns `B`, unchanged for an identity left-hand side. The interface stage is
 collective, so every rank of the solver's sub-communicator must call this.
 """
 function solve_lines_t!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where {T}
-    line_solver.explicit && return B   # identity LHS: the fill is already the answer
+    line_solver.explicit && return B   # identity LHS: the fill is the answer
     L, n = size(B)
     F = line_solver.F
     @threaded n*L for rng in _line_chunks(L)

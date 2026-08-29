@@ -46,15 +46,15 @@ end
 """
     add_source!(source, solver, dQ, Q, t)
 
-Add one explicit source to the already assembled conserved RHS at Runge-Kutta
+Add one explicit source to the assembled conserved RHS at Runge-Kutta
 stage time `t`. `Q` and `dQ` are halo-padded conserved arrays indexed
 `[I, component]`, with the component layout defined by `solver.equations`.
 Extend this function for a custom concrete source type and place instances in
 `Problem.sources`. The method runs on every rank and must preserve that
 component layout.
 
-A custom method mutates only the rank-local interior of `dQ`, adds rather than
-overwrites contributions already present, and returns `dQ`. It may inspect `Q`
+A custom method mutates only the rank-local interior of `dQ`, adds to the
+contributions present without overwriting them, and returns `dQ`. It may inspect `Q`
 and `solver`; any collective operation must be entered by every rank.
 """
 function add_source!(source::ConstantBodyForce, solver, dQ, Q, t)
@@ -80,8 +80,8 @@ end
 """
     add_sources!(solver, dQ, Q, t)
 
-Apply every source in `solver.sources`, in tuple order, to the already assembled
-RHS `dQ` at stage time `t`. An empty tuple is a no-op. The function mutates and
+Apply every source in `solver.sources`, in tuple order, to the assembled RHS
+`dQ` at stage time `t`. An empty tuple is a no-op. The function mutates and
 returns `dQ`; users normally call it indirectly through [`compute_rhs!`](@ref).
 """
 add_sources!(solver, dQ, Q, t) =

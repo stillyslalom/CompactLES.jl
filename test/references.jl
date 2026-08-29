@@ -121,7 +121,7 @@ end
 #
 # with ξ₀ a pure number fixed by the energy integral over the similarity
 # profile. The profile itself is parametric and is not reproduced here; what
-# is checked in `validation.jl` is the trajectory (which is what the origin
+# is checked in `validation.jl` is the trajectory (the origin
 # fold and the geometric source terms actually determine) together with the
 # strong-shock density jump (γ+1)/(γ−1).
 #

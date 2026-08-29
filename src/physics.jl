@@ -17,7 +17,7 @@
 #
 #   nspecies(eos)                        number of species Ns
 #   _primitives!(solver, eos, Q)         ρ, u, v, w, p, T_ion, c, cp_mix, Y over
-#                                        the padded arrays — the bulk conversion
+#                                        the padded arrays (the bulk conversion)
 #   species_enthalpy(eos, k, T_ion)      partial specific enthalpy h_k(T_ion)
 #   conserved_from_prim(eqns, eos, pr)   primitive → conserved (problem.jl)
 #
@@ -44,16 +44,16 @@
 #
 # --- Why φ and the κ* scale are in the contract ----------------------------
 #
-# φ = ∂(ρe)/∂p is what turns the LODI wave analysis in nscbc.jl from ideal-gas
+# φ = ∂(ρe)/∂p generalizes the LODI wave analysis in nscbc.jl from ideal-gas
 # algebra into an EOS query. For an ideal mixture φ = cv_m/R_m; for a stiffened
 # gas it is 1/(γ−1) with no composition dependence at all; for a table it is a
-# derivative of the table. The wave amplitudes themselves are EOS-independent —
-# it is only the projection onto the conserved energy that is not.
+# derivative of the table. The wave amplitudes themselves are EOS-independent;
+# only the projection onto the conserved energy is not.
 #
-# The κ* scale is the weaker of the two abstractions and is worth being explicit
-# about. Cook's artificial conductivity is κ* = C_κ (ρc/T_ion)·sensor, which is
+# The κ* scale is the weaker of the two abstractions. Cook's artificial
+# conductivity is κ* = C_κ (ρc/T_ion)·sensor, which is
 # an ideal-gas construction twice over: it assumes e ∝ T, and it is singular as
-# T_ion → 0. The singularity is real and reachable — a cold ambient at p ≲ 1e-3
+# T_ion → 0. The singularity is reachable: a cold ambient at p ≲ 1e-3
 # drives the diffusive timestep to collapse (reference/CALIBRATION.md has the
 # measurement). Making it a dispatch point does not fix that; it makes the
 # assumption visible and lets a condensed-matter or tabular EOS supply a scale
@@ -151,7 +151,7 @@ diagnostics.
 nspecies(eos::IdealMixture) = length(eos.sp)
 species_enthalpy(eos::IdealMixture, k::Int, T_ion) = eos.cpk[k] * T_ion
 
-# φ = cv_m/R_m, recovered from the stored primitives rather than from Y: the
+# φ = cv_m/R_m, recovered from the stored primitives, not from Y: the
 # mixture gas constant is R_m = p/(ρT_ion) by definition of the state, and
 # cv_m = cp_m − R_m. That keeps the signature identical for every EOS.
 @inline function eos_phi(::IdealMixture, ρ, p, T_ion, cp_mix)
@@ -170,7 +170,7 @@ end
 # run's temperature units, not a relative one, and it couples to the
 # internal-energy floor in `_primitives_ideal_point!`: a point with e < 0
 # gets `T_ion = positive_floor(T)` (1e-300) there, lands on this guard here,
-# and contributes ρc/temperature_floor to the diffusive rate, which is what
+# and contributes ρc/temperature_floor to the diffusive rate, which
 # collapses `dt` when a run loses positivity (`stepcontrol.jl`). Nothing in
 # the primitives pass signals that it floored; `dt_report` names the cell
 # after the fact.
@@ -238,7 +238,7 @@ end
 #   p + p∞ = ρ R T_ion,  R = (γ − 1) c_v,   c² = γ (p + p∞) / ρ
 #   e = c_v T_ion + p∞/ρ,  so  ρe = ρ c_v T_ion + p∞
 #
-# and the two derived quantities the contract asks for are unusually clean:
+# and the two derived quantities required by the contract are unusually clean:
 # φ = ∂(ρe)/∂p = 1/(γ − 1) exactly, independent of state, and there is no
 # composition dependence because this is single-component.
 #
@@ -358,9 +358,9 @@ end
 #   h/(RT) = −a₁T⁻² + a₂ln(T)/T + a₃ + a₄T/2 + a₅T²/3 + a₆T³/4 + a₇T⁴/5 + b₁/T
 #
 # with the h expression the exact integral of the cp one, which is the property
-# the consistency test checks numerically rather than trusting the transcription.
+# the consistency test checks numerically without trusting the transcription.
 #
-# The NASA CEA coefficient database is shipped verbatim in `data/thermo.inp`;
+# The NASA CEA coefficient database is bundled verbatim in `data/thermo.inp`;
 # its Apache license and notice live beside it. `read_nasa9` reads the piecewise
 # fixed-column records and derives each specific R from the tabulated molar mass,
 # keeping coefficients and gas constants coupled. `nasa9_constant_cp` builds the
@@ -406,11 +406,11 @@ end
 end
 
 # The join check exists to catch a mistranscribed coefficient, which puts an
-# O(1) kink in cp — not to audit the quality of the upstream fit. Sized from the
-# shipped CEA table: of 1276 gaseous multi-interval records, the relative cp/R
+# O(1) kink in cp, not to audit the quality of the upstream fit. Sized from the
+# bundled CEA table: of 1276 gaseous multi-interval records, the relative cp/R
 # jump at a join is ≲1e-8 for all but two (SnCL2 at 1.0e-5, ALOCL at 5.1e-4).
-# Rejecting those would be the check overreaching — 0.05% in cp is far below any
-# discretization error here — so the threshold sits above them and well below
+# Rejecting those would be overreach, since 0.05% in cp is far below any
+# discretization error here, so the threshold sits above them and well below
 # anything a wrong digit could produce.
 const NASA9_CONTINUITY_RTOL = 2e-3
 
@@ -452,7 +452,7 @@ specific gas constant, and `intervals` is an ordered vector of
 Construction checks that `R` and temperature bounds are positive, intervals
 are contiguous, and `cp` and `h` are continuous at their joins to the tolerance
 used for the bundled database. Use [`read_nasa9`](@ref) for CEA data so `R` is
-derived from the table's molar mass rather than entered independently.
+derived from the table's molar mass, not entered independently.
 
 The keyword constructor with `a`, `b1`, `Tmin`, and `Tmax` creates one interval
 and defaults to `Float64`. It is intended for small analytic coefficient sets
@@ -567,7 +567,7 @@ positive for any physical coefficient set, so the iteration is monotone. The
 step is clamped to remain in T > 0 even when a stale halo contains a nonphysical
 state, the initial estimate is clamped to [1e-3, 1e9], and the iteration count is
 capped at 30. The iteration also stops early if the mixture cv is not positive,
-which returns the current estimate rather than raising.
+which returns the current estimate without raising.
 
 The starting point is a pure function of the state. Seeding from the previous
 value at the same point generally saves one iteration but makes the result
@@ -653,7 +653,7 @@ function _primitives!(solver, eos::Nasa9Mixture, Q)
                 e = Q[i, j, k, i_energy] * ri -
                     (u*u + v*v + w*w) / Tnum(2)
                 # Mass fractions straight out of Q: the Newton solve takes an
-                # accessor rather than a vector so this stays allocation-free.
+                # accessor, not a vector, so this stays allocation-free.
                 T_ion = mixture_temperature(eos, e, sp -> Q[i, j, k, sp] * ri)
                 cpm = zero(Tnum)
                 for sp in 1:n_species
@@ -707,15 +707,15 @@ end
     primitives!(solver, Q)
 
 Recover ρ, u, v, w, p, T_ion, c, cp_mix, and the species mass fractions Y_k over
-the full padded arrays. The rank-boundary halos of `Q` must already be current;
+the full padded arrays. The rank-boundary halos of `Q` must be current;
 this function performs no communication of its own, and
 [`refresh_primitives!`](@ref) is the collective wrapper that exchanges first.
 
 Wherever the partial densities of `Q` do not sum to a positive density, the point
 receives finite placeholders (ρ = 1, zero velocity, unit pressure, temperature
-and sound speed, all mass on the first species) instead of a division by zero.
+and sound speed, all mass on the first species), preventing a division by zero.
 A physical-edge halo is the ordinary case, since no exchange reaches it and the
-boundary conditions write the edge plane rather than the halo behind it. No
+boundary conditions write the edge plane, not the halo behind it. No
 compact operator reads those halos either: at a closed edge the closure rows
 reference interior points only, and at a fold `fold_fill!` overwrites them from
 the interior before the sweep.

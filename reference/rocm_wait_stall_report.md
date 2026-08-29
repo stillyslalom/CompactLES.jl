@@ -4,15 +4,15 @@
 (AMDGPU.jl, ROCR). Raw session transcripts:
 `bench/logs/rzadams_20260819.txt`, `bench/logs/rzadams_20260819_floors.txt`.
 Reproducer: `bench/device_floors.jl only=watch watch=60` (times a fixed
-small compact-solve apply — several kernel launches, a device→host and a
-host→device copy, one stream synchronize — continuously and reports
-per-call statistics and episode structure).
+small compact-solve apply, consisting of several kernel launches, a
+device→host and a host→device copy, and one stream synchronize,
+continuously and reports per-call statistics and episode structure).
 
 ## Symptom
 
 A process spontaneously enters a state in which every device wait costs an
-integer number of milliseconds instead of the ~0.14 ms baseline, holds that
-state for seconds to at least 42 s, then recovers. While stalled, the
+integer number of milliseconds against the ~0.14 ms baseline. The process holds
+that state for seconds to at least 42 s, then recovers. While stalled, the
 per-call distribution collapses onto 13 ms and 26 ms (one fully stalled
 30 s window measured a median of exactly 13.000 ms and a p99 of 26.007 ms),
 a ~100× per-call throughput drop.
@@ -37,7 +37,7 @@ a ~100× per-call throughput drop.
 - Julia 1.12.7, AMDGPU.jl v2.7.2, Cray MPICH (host-staged MPI; the
   reproducer's watch section performs no inter-rank communication).
 - Not reproduced on the one other machine measured: Windows 11 /
-  RX 6800 XT (gfx1030) / HIP SDK / Julia 1.11.4 / same AMDGPU.jl — but OS,
+  RX 6800 XT (gfx1030) / HIP SDK / Julia 1.11.4 / same AMDGPU.jl. OS,
   driver, GPU, and Julia version all differ, so this discriminates
   nothing by itself.
 
@@ -50,7 +50,7 @@ a ~100× per-call throughput drop.
    preference `nonblocking_synchronization = false` (verified active by
    the recompile on entry and by the launch+sync floor dropping from
    ~25 µs to 18–19 µs), every wait routes through plain
-   `hipStreamSynchronize` with no Julia tasks or libuv involvement — and
+   `hipStreamSynchronize` with no Julia tasks or libuv involvement, and
    the stalls persisted with identical quantization (one rank 96.9% of its
    watch at p99 26.004 ms). The quantized wait is below the Julia layer.
 3. **Workload dependence.** See above; also the artifact scheme/precision
@@ -72,15 +72,16 @@ nodes/launch line, `nonblocking_synchronization = false` throughout:
 
 At the `-t 8` episode rate, eight consecutive clean 60 s windows has
 probability on the order of e⁻²⁰; the mode exists at every thread count
-above 1 and incidence grows with thread count. Note that a Julia 1.12
-`-t 1` process already carries an interactive thread (`versioninfo`
+above 1 and incidence grows with thread count. A Julia 1.12 `-t 1`
+process carries an interactive thread as well (`versioninfo`
 reports "1 default, 1 interactive"), so the discriminator is more than
 one default-pool thread, not more than one OS thread. The stall requires
 a multithreaded Julia process yet survives the removal of every
-Julia-level wait construct, placing it in ROCR's signal waits — confirmed
-by the wait-mode experiment in the next section, which reproduces the
-stalled cadence deterministically by forcing the polling wait class. Once entered, the state
-typically holds to the end of the measurement window (multiple episodes
+Julia-level wait construct, placing it in ROCR's signal waits; the
+wait-mode experiment in the next section confirms this by reproducing
+the stalled cadence deterministically under the forced polling wait
+class. Once entered, the state typically holds to the end of the
+measurement window (multiple episodes
 censored at the boundary), so dwell has no observed upper bound. Stalled
 ranks report *less* GC time than clean siblings (fewer calls, fewer
 allocations): GC is a consequence of the call rate here, not a cause.
@@ -97,17 +98,17 @@ interrupts (`InterruptSignal`) to memory-based polling (`BusyWaitSignal`).
 Running the watch under it (two 4-rank jobs, `-t 8`) reproduced the stall
 state **deterministically**: six of eight rank-windows spent 100.0% of the
 watch stalled from t = 0 with medians of exactly 12.999–13.001 ms and p99
-at 26.00 ms — the identical cadence the intermittent episodes show under
-default interrupt mode — and the other two windows read 94.9% and 99.2%.
+at 26.00 ms (the identical cadence the intermittent episodes show under
+default interrupt mode), and the other two windows read 94.9% and 99.2%.
 The mixed windows interleave thousands of sub-0.25 ms calls, so even
 forced polling sometimes completes within its initial spin; ~13 ms is the
 first sleep quantum of the polling wait, 26 ms two quanta.
 
 The finding therefore reduces to: **under default interrupt mode, a
 process's signal waits intermittently degrade to the polling-backoff
-cadence for seconds to minutes** — interrupt wakeups stop arriving
-promptly (or stop being waited on) and waiters ride the polling fallback —
-and the degradation requires more than one Julia default-pool thread.
+cadence for seconds to minutes**, and the degradation requires more than
+one Julia default-pool thread. Interrupt wakeups stop arriving promptly
+(or stop being waited on) and waiters ride the polling fallback.
 `HSA_ENABLE_INTERRUPT=0` is the pathology made permanent, not a
 workaround.
 
@@ -116,27 +117,27 @@ workaround.
 Isolate to the smallest reproducer before filing (a research code will
 not get driver-team priority on a whole-application report).
 
-1. **`bench/stall_mwe.jl`** — AMDGPU.jl alone, no CompactLES, no
-   KernelAbstractions, no MPI: one trivial kernel plus one stream
+1. **`bench/stall_mwe.jl`** (AMDGPU.jl alone, no CompactLES, no
+   KernelAbstractions, no MPI): one trivial kernel plus one stream
    synchronize per call (`mode=kernel`), with rungs adding a second
    launch, a device-to-host copy, and a round trip (`kernel2`, `copy`,
    `full`), and `sync=direct` bypassing all AMDGPU.jl wait logic through
    a raw `hipStreamSynchronize` ccall. **Measured: the bottom rung does
-   not reproduce** — two 120 s windows at `-t 8` and one at `-t 1`,
+   not reproduce.** Two 120 s windows at `-t 8` and one at `-t 1`,
    single rank, all clean (≤1 slow call per 256k). The differences from
    the reliably stalling configuration are process count (every reliable
    reproduction was a 4-rank job) and call content (the solver call is
    many short kernels plus copies in an MPI-initialized process, with
    waits of tens of microseconds; the MWE is one 0.47 ms kernel whose
-   sync always waits on a single signal — and several stalled windows
+   sync always waits on a single signal). Several stalled windows
    were stalled from t = 0, implicating startup activity such as MPI
-   init or the kernel-compilation burst). **The 2×2 is measured and
+   init or the kernel-compilation burst. **The 2×2 is measured and
    decided**: the floors watch stalls at `-n1` (29.7 s episode, 25.7% of
    a 120 s window) and the MWE stays clean at `-n4` (four ranks × 120 s,
    ≤2 slow calls each). Process count is neither necessary nor
    sufficient; the ingredient is call content or process history. One
    confound dominates the corners: every run observed to stall had MPI
-   initialized (Cray MPICH — progress threads, memory-registration
+   initialized (Cray MPICH: progress threads, memory-registration
    hooks, GPU-aware transport plumbing), and every clean MWE run did
    not. The rung scoreboard (all 120 s windows at `-t 8`, `-n1`,
    `flux --exclusive`, 2026-08-19 evening session):
@@ -151,19 +152,19 @@ not get driver-team priority on a whole-application report).
    | `mode=multi work=2000 burst=1 alloc=16384 mpi=1` | kitchen sink: 8 distinct kernel objects per call, 40-kernel startup compile burst, GC, MPI | clean (6 / 1.8M, gc 1351 ms) |
 
    Every ingredient below KernelAbstractions is exonerated, individually
-   and in combination — while the survey watch (`device_floors.jl
+   and in combination, while the survey watch (`device_floors.jl
    only=watch`), whose call is a DevicePlan compact-solve apply through
    KA, stalls even at `-n1` (25.7% of a 120 s window). The GC-entry
-   hypothesis is dead alongside the rest. Remaining suspects, in order:
-   the **KernelAbstractions launch path** (`mode=ka` rung is in the
-   script — the same kernel through `ROCBackend`; the environment needs
+   hypothesis is rejected with the rest. Remaining suspects, in order:
+   the **KernelAbstractions launch path** (the `mode=ka` rung, the same
+   kernel through `ROCBackend`, is in the script; the environment needs
    `Pkg.add("KernelAbstractions")`), and the **DevicePlan kernels
    themselves** (argument shapes, the `(lines × n)` ndrange, the larger
    buffers). Next session: run `mode=ka work=2000 watch=120` at `-t 8`;
    if clean, the bisection moves top-down inside the apply (a
    CompactLES-dependent rung is fine for bisection even though filing the
    eventual ticket requires the bottom-up MWE).
-2. **`bench/stall_mwe.cpp`** — the Julia-free rung: the same loop in
+2. **`bench/stall_mwe.cpp`**, the Julia-free rung: the same loop in
    plain HIP with N extra dormant (or busy) host threads
    (`hipcc -O2 -o stall_mwe stall_mwe.cpp`; `./stall_mwe 120 20000 7`).
    This is the decisive fork: if it stalls with extra threads, the
@@ -175,7 +176,7 @@ not get driver-team priority on a whole-application report).
 3. File with whichever party the fork selects, attaching the winning MWE,
    this report, and the two logs. Optional corroboration if asked: a
    `rocprofv2` sys-trace over a stalled window should show the gap inside
-   the HSA signal wait rather than in kernel execution, and the ~13 ms
+   the HSA signal wait, not in kernel execution, and the ~13 ms
    constant should be findable in ROCR's `BusyWaitSignal` implementation.
 
 ## Practical guidance until resolved

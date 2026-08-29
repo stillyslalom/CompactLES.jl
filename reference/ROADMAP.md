@@ -39,8 +39,8 @@ design decisions:
 
 - **The regularized coordinate-singularity treatment.** The half-offset grid
   plus parity/antipodal folds for the cylindrical axis, spherical origin, and
-  spherical poles — with a discrete geometric conservation law (GCL) that
-  preserves freestream to machine zero — is more than Pyranda or Miranda
+  spherical poles, with a discrete geometric conservation law (GCL) that
+  preserves freestream to machine zero, is more than Pyranda or Miranda
   expose, and nothing in the Julia ecosystem has it. Converging-shock and
   spherical-implosion geometry is directly NIF-relevant, and this is the piece
   that is hard to rebuild.
@@ -57,7 +57,7 @@ design decisions:
 
 ### Pyranda (LLNL)
 
-The closest relative — the Miranda mini-app, Python-driven with a Fortran
+The closest relative: the Miranda mini-app, Python-driven with a Fortran
 kernel, 10th-order compact plus RK45, MPI, aimed at arbitrary hyperbolic
 systems.
 
@@ -82,12 +82,12 @@ distributed compact solve is the same algorithm as Miranda's, down to the
 factorized interface system and the single `Allgather` per application;
 Miranda's additional gather-solve-scatter mode (`directcom = 2`) is the shape
 to reach for if the interface solve ever appears in a scaling curve. Symmetry
-is handled by equivalent means, Miranda folding parity into the coefficient
+is handled equivalently, Miranda folding parity into the coefficient
 tables at setup where the fold plans plus `sigflux` carry the same algebra. And
 the freestream claim above holds against the source: Miranda's spherical metric
 sources use analytic `1/tan θ` and `1/sin θ`, so the discrete redefinition of
-`cot_over_r` is genuinely beyond the reference, whose r = 0 is an ordinary
-reflective symmetry plane rather than a half-offset antipodal fold.
+`cot_over_r` lies beyond the reference, whose r = 0 is an ordinary
+reflective symmetry plane, not a half-offset antipodal fold.
 
 #### Open work from the source comparison
 
@@ -112,17 +112,17 @@ directions. All three are `ArtParams` settings and none of them is a default.
    0.25–4 recovers the spherical-origin ceiling under `:d8`. The origin cell
    has since been accounted for as well, retiring the fold closure, so the
    detector default now rests on which configuration survives the startup
-   excursion rather than on any unmeasured numerics.
+   excursion, not on any unmeasured numerics.
 3. **Directional artificial bulk viscosity**, with the per-direction diffusive
    timestep limit that goes with it. **Blocked**: no anisotropic or strongly
    stretched case exists in the validation battery, so measuring it against the
-   present cases would produce a null result that means nothing. Build the case
+   present cases would produce an uninformative null result. Build the case
    first.
 4. **Anchored-difference closure rows.** The reference writes boundary rows as
    differences from the anchor point so a constant is annihilated exactly in
-   floating point rather than by cancellation. **Gated** on measuring the
+   floating point, not through cancellation. **Gated** on measuring the
    present residual first; if it is 1e-16 times the field scale the change is
-   cosmetic and should be recorded as such rather than made.
+   cosmetic and should be recorded as such, not made.
 
 **Capabilities absent from CompactLES:** a DSL for defining a new PDE system
 in ten lines without touching the solver; immersed boundaries, which provide
@@ -140,22 +140,22 @@ evaluation of equation strings is excluded (see Non-goals).
 
 Immersed boundaries are designed in `reference/IMMERSED.md`: a sharp IB cut
 cell is fundamentally at odds with a line-global compact operator, so the
-design commits to the diffuse family — a graded post-stage state blend that
-unifies smeared Brinkman penalization with Pyranda's level-set reset — staged
+design commits to the diffuse family (a graded post-stage state blend that
+unifies smeared Brinkman penalization with Pyranda's level-set reset), staged
 with validation gates.
 
 ### FLASH
 
 FLASH uses second-order unsplit PPM (the piecewise parabolic method), so the
 relevant comparison concerns its physics catalogue and adaptive mesh refinement
-(AMR) rather than numerical order.
+(AMR), not numerical order.
 
 FLASH's high-energy-density physics (HEDP) capability is a set of units: 3T
 hydrodynamics (separate ion, electron and radiation temperatures) with
 electron–ion equilibration, multigroup radiation diffusion, tabulated
 multi-species EOS and opacities (IONMIX), electron thermal conduction through
 an implicit diffusion solver, laser energy deposition by geometric-optics ray
-tracing, MHD, and anisotropic magnetized transport coefficients — all on a
+tracing, MHD, and anisotropic magnetized transport coefficients, all on a
 block-structured AMR mesh, validated against HYDRA. This capability set defines
 the long-term target for NIF applications and represents approximately a decade
 of physics implementation.
@@ -164,14 +164,14 @@ Two structural patterns are relevant:
 
 - **Physics-unit decomposition.** FLASH's physics units are separately
   configurable, each owning its own state and contributing to the update
-  through a defined interface. This is why FLASH could grow 3T and multigroup
-  diffusion (MGD) without rewriting hydro. CompactLES's equivalent is the
-  Phase 0 seams (`reference/HISTORY.md`).
+  through a defined interface. That separation is how FLASH grew 3T and
+  multigroup diffusion (MGD) without rewriting hydro. CompactLES's equivalent is the
+  Phase 0 hooks (`reference/HISTORY.md`).
 - **Patch-based adaptivity.** FLASH's PARAMESH/AMReX refinement is oct-tree
   block AMR built around a second-order finite-volume update. The version
   that belongs here is *patch-based* (logically rectangular blocks of uniform
-  resolution, SAMRAI-style), which is what Miranda uses and which makes
-  adaptivity compatible with a compact scheme. `reference/AMR_GPU.md` carries
+  resolution, SAMRAI-style), the form Miranda uses and the one compatible
+  with a compact scheme. `reference/AMR_GPU.md` carries
   the constraint analysis and the delivered design.
 
 ### Trixi.jl
@@ -215,26 +215,26 @@ structured-grid solver designed this way.
 conduction are parabolic and stiff; explicit treatment is not an option at HED
 conditions, where the conduction timestep can be orders of magnitude below the
 acoustic one. This is the largest remaining architectural gap. `tridiag.jl`
-and `banded.jl` already implement a distributed banded line solve with
-cross-rank coupling and a pre-factorized reduced interface system — precisely
-the kernel an alternating-direction implicit (ADI) or line-relaxation
-diffusion solver needs and precisely the smoother a geometric multigrid
-requires. The implicit implementation should be built on that machinery rather
-than on a separate linear-algebra dependency.
+and `banded.jl` implement a distributed banded line solve with cross-rank
+coupling and a pre-factorized reduced interface system, which is the kernel an
+alternating-direction implicit (ADI) or line-relaxation diffusion solver needs
+and the smoother a geometric multigrid requires. The implicit implementation
+should be built on that machinery, not on a separate linear-algebra
+dependency.
 
 **The regularization model carries one structural debt.** The July 2026
 calibration study established that the compact filter, not the Cook
 properties, is the primary stabilizer at every measured resolution, while the
 filter itself has never been calibrated and its dissipation is applied per
-filter pass rather than per unit time (`reference/CALIBRATION.md`). Every
-mixing result this solver produces is currently conditional on it, which is why
-it is a work item below rather than a known limitation. The second debt in this
-class, β\* keyed on the strain magnitude rather than the dilatation, has been
+filter pass, not per unit time (`reference/CALIBRATION.md`). Every mixing
+result this solver produces is currently conditional on it, so it is listed as
+a work item below and not as a known limitation. The second debt in this
+class, β\* keyed on the strain magnitude, not the dilatation, has been
 measured and closed (`reference/HISTORY.md`).
 
-What that work left open is the converging-shock `cfl ≤ 0.15` ceiling itself,
-and **every discretization-order candidate for it has now been measured and
-ruled out**. The timestep predictor, the dilatation sensor and the sensor reach
+The converging-shock `cfl ≤ 0.15` ceiling remains open, although measurements
+have ruled out every discretization-order candidate. The timestep predictor,
+the dilatation sensor and the sensor reach
 went first. The fold closure, which stood last and longest, is not third order:
 it is sixth to seventh order at the fold, and the third-order figure attributed
 to it belongs to the outer wall through a global max norm. The companion
@@ -244,16 +244,16 @@ excursion that fails.
 
 The origin cell instead evacuates during a startup transient that lands at a
 fixed physical time regardless of resolution and that every configuration
-passes through. That makes the ceiling a robustness problem at a symmetry cell
-rather than a numerics problem. Model debt 2 below has since supplied an
+passes through. The ceiling is therefore a robustness problem at a symmetry
+cell, not a numerics problem. Model debt 2 below has since supplied an
 instrument for that question: `StepControl.floor_ratio` counts sub-floor cells
 and can repair them. The converging geometries have not been measured through
 it, only the planar case. Two
 mechanisms are live and neither is yet demonstrated: β\* is proportional to the
-density, so it collapses on exactly the cell that is thinning, and the compact
-filter is applied per step rather than per unit time, which is model debt 1 and
-which the `C_beta` ladder implicates independently — under `:d8` at reduced β\*
-the cylindrical axis fails *below* a CFL rather than above one
+density, so it collapses in the same cell that is thinning, and the compact
+filter is applied per step, not per unit time, which is model debt 1 and
+which the `C_beta` ladder implicates independently: under `:d8` at reduced β\*
+the cylindrical axis fails *below* a CFL, not above one
 (`reference/CALIBRATION.md`).
 
 **One EOS assumption survives the Phase 1 generalization.** The artificial
@@ -277,42 +277,42 @@ fitted to anything, while supplying 37–87% of the measured energy sink and
 being necessary and sufficient for stability (`reference/CALIBRATION.md`).
 
 The dt-consistency half is delivered. The filter removed energy per
-*application* rather than per unit time, measured at a factor of 3.93 across a
+*application*, not per unit time, measured at a factor of 3.93 across a
 4× CFL change on a case where the filter is the only sink, so the subgrid
 dissipation did not converge as dt → 0 at fixed resolution. `Numerics.filter_cfl`
 supplies the per-unit-time formulation, `Q ← (1−w)Q + w·F(Q)` with `w ∝ dt`,
 which holds the loss constant to six significant figures over the same range
 and also removes the truncated-final-step artifact, since a shortened step now
-filters proportionally less. It is off by default. The measurement that makes
-this matter for the rest of the debt: with `C_mu` held fixed, halving the CFL
+filters proportionally less. It is off by default. The measurement bearing on
+the rest of the debt: with `C_mu` held fixed, halving the CFL
 moves the μ\* share of the Taylor–Green sink by 29% relative, so a constant
 fitted under the unrelaxed formulation is only reproducible at the CFL it was
 fitted at. It should also resolve the cross-level cadence question raised in
 `reference/AMR_GPU.md`, which has not been checked.
 
-What remains is the calibration proper: fit α and cadence against the digitized
-van Rees −dKE/dt(t) history and spectra at 128³ (the digitization is already
-listed in the calibration remainders), and measure the validation battery's
+Calibration remains: fit α and cadence against the digitized
+van Rees −dKE/dt(t) history and spectra at 128³ (the digitization is listed
+in the calibration remainders), and measure the validation battery's
 sensitivity to cadence. Deliverable: the
 filter section of `reference/CALIBRATION.md` brought to the same standing as
 the four-constant tables; it exists now and carries the dt-consistency half.
 Cluster time is required; budget runs per the usual discipline.
 
-Whether `filter_cfl` becomes the default is part of that fit rather than a
-separate decision. It changes what α means, since under the relaxation α and
+Whether `filter_cfl` becomes the default is part of that fit, not a separate
+decision. It changes the meaning of α, since under the relaxation α and
 the reference CFL set the dissipation jointly, so fitting α first under the
 old formulation and switching afterwards would waste the fit.
 
-**2. A positivity failsafe — delivered** (`reference/HISTORY.md`).
+**2. A positivity failsafe, delivered** (`reference/HISTORY.md`).
 `StepControl.floor_ratio` enables it and `floor_scope` sets how much of the
-state space is repaired; both are off by default, and the repair narrows
-rather than violates the Riemann-solver non-goal below, since the scheme is
-unchanged and the failsafe recovers from states it has already left.
+state space is repaired; both are off by default, and the repair narrows the
+Riemann-solver non-goal below without violating it, since the scheme is
+unchanged and the failsafe recovers from states the scheme has left.
 
 The delivery changed the scope of the repair, because building the floor made
 the condition measurable and the measurement did not support repairing all of
 it. The negative internal energy that motivated the debt is neither a rounding
-artifact nor a state the scheme cannot handle: the shipped Noh ν = 1 case
+artifact nor a state the scheme cannot handle: the Noh ν = 1 validation case
 carries 24991 cell-steps of it, reaching −718 ambient units, while density and
 total energy stay positive throughout and the run still reaches its plateau to
 within 0.07%. Forcing it positive costs a 5% velocity damping on the worst cell,
@@ -321,19 +321,19 @@ frame can represent and *counts* the rest, which closes the part of the debt the
 evidence supports: the condition was invisible, floored silently by
 `primitives!`. → `reference/CALIBRATION.md`
 
-The measurement leaves one question open rather than answering it. A calculation
+The measurement leaves one question open. A calculation
 whose wall region runs as a pressureless layer for its whole duration reaches
-the right plateau for reasons nobody has checked, and the `:internal_energy`
-scope is the instrument for asking what that costs. The question belongs with
-the filter calibration below rather than with the failsafe.
+the right plateau through an unverified mechanism, and the `:internal_energy`
+scope provides the measurement of its cost. The question belongs with
+the filter calibration below, not with the failsafe.
 
 **3. External validation.** Everything to date compares against analytic
-references or this code's own high-resolution profiles — the comparison table
-above says so. Two campaigns close the gap. First, a direct
+references or this code's own high-resolution profiles, as the comparison
+table above records. Two campaigns close the gap. First, a direct
 CompactLES-vs-Pyranda comparison (Pyranda is runnable): TGV at Re = 1600 and
 one RM shock-tube case, comparing dissipation histories and mix widths, which
 converts "matches the Miranda method" from a design claim into a measured
-one. Second, one published RM experiment as a data target — community
+one. Second, one published RM experiment as a data target: community
 benchmark cases with published initial-condition specifications are
 accessible, and asking the originating groups for specifications beats
 reverse-engineering them from figures. Deliverable: a validation section in
@@ -352,23 +352,23 @@ asymmetry). This is the only piece outstanding; the setup-time validation of
 the face and of the target composition landed with the near-term corrections
 (`reference/HISTORY.md`).
 
-**6. Temperature-dependent transport.** The NASA CEA transport table ships in
+**6. Temperature-dependent transport.** The NASA CEA transport table is bundled in
 `data/` but is not connected; `Transport` is constant-coefficient with one
 Schmidt number for all species. Implement the coefficient reader, per-species
 μ_k(T) and λ_k(T) evaluations, a Wilke-type mixture rule, and
 mixture-averaged diffusivities (unity-Lewis fallback retained). Structure it
 the way the EOS contract is structured, as a dispatchable transport model
 consumed behind the existing function barrier, so a plasma transport model
-(Phase 2) is a new instance rather than a rewrite. Until this lands,
+(Phase 2) is a new instance, not a rewrite. Until this lands,
 "multicomponent" accurately describes the thermodynamics and the species
 transport equations, not the transport coefficients; the README should say
 so.
 
-**7. Wall treatment — deliberately deferred.** The target problems (RM/RT
+**7. Wall treatment, deferred.** The target problems (RM/RT
 mixing, converging shocks, implosions) are wall-free or slip-walled;
 `NoSlipWallBC` exists for verification cases. Wall-resolved or wall-modeled
 LES is out of scope until a target problem requires it. Recorded here so the
-gap is a decision rather than an oversight.
+gap stands as a decision, not an oversight.
 
 ## Phase 2 — HED physics
 
@@ -376,8 +376,8 @@ HED is high-energy-density: the pressure and temperature regime of inertial
 confinement fusion, where radiation transport and electron conduction are
 comparable to hydrodynamics in importance.
 
-This phase supplies the NIF-oriented physics. Its items are ordered so that
-each produces an independently usable capability.
+This phase supplies the NIF-oriented physics. Its items are ordered to produce
+an independently usable capability at each step.
 
 **1. Implicit diffusion infrastructure.** Everything else here depends on it.
 Build it on the existing distributed banded solve: ADI or line-Jacobi sweeps
@@ -392,9 +392,9 @@ scheme pairing the existing explicit RK45 on hydro with implicit diffusion.
 The caller-owned `Workspace` (Phase 0) is the prerequisite. Existing tableaus
 from the SciML ecosystem should be evaluated before implementing new ones.
 
-**3. Three-temperature hydrodynamics.** T_ele and T_rad alongside T_ion — the
-naming convention has reserved this from the start, which is why it costs an
-equation set rather than an API break. Separate electron and ion energy
+**3. Three-temperature hydrodynamics.** T_ele and T_rad alongside T_ion. The
+naming convention has reserved this from the start, so it costs an equation
+set, not an API break. Separate electron and ion energy
 equations, an electron–ion equilibration source (through the source
 interface), and the electron pressure contribution to the momentum flux.
 
@@ -413,11 +413,11 @@ contract. Radiation groups become additional conserved components, supported
 by the equation-set interface.
 
 **7. Laser energy deposition.** Geometric-optics ray tracing with inverse
-bremsstrahlung absorption. Architecturally independent of everything above —
+bremsstrahlung absorption. Architecturally independent of everything above:
 a source term plus a ray tracer that hands rays between ranks. This item can
 precede the others if required by a specific experiment.
 
-**8. MHD, if magnetized targets matter.** The ∇·B constraint with finite
+**8. MHD, if magnetized targets are relevant.** The ∇·B constraint with finite
 differences requires hyperbolic (GLM) divergence cleaning, which adds a
 conserved component and a source term. Constrained transport is not natural
 in this discretization.
@@ -430,7 +430,7 @@ transfer-operator evidence, the SBP–SAT fallback, the measured lessons, and
 the remaining device-track roadmap. The capability: conforming same-level
 patches, a two-level refined region (static or regridding, subcycled),
 both distributed over the rank set, and a device backend on which the whole
-solver — decomposed, refined, either precision — reproduces the CPU answer
+solver (decomposed, refined, either precision) reproduces the CPU answer
 bitwise. Conforming multiblock is independently useful geometry even where
 refinement is not used.
 
@@ -460,35 +460,35 @@ printed digit in both precisions (the G3a step is bitwise), and Float32 runs
 selection waits on the G3d launch-floor profile, with the CPU matrix and the
 device histories as its accepted inputs.
 `Solver{T}` still gives storage, geometry and runtime scalars one common type,
-so actual mixed precision remains a later, measured choice of explicit state
-and accumulation types rather than whatever Float64 literals happen to induce.
+so mixed precision proper remains a later, measured choice of explicit state
+and accumulation types, not the mixture that Float64 literals happen to induce.
 
 **Parallel HDF5/XDMF time series.** Single dumps and shared-file checkpoints
 are delivered (`reference/HISTORY.md`). Two pieces remain, the first
 specified below; the second is validating the collective write on a machine
-with a parallel libhdf5 built against the run's MPI — only the serialized
+with a parallel libhdf5 built against the run's MPI; only the serialized
 token-relay fallback has been exercised.
 
 ### `FieldWriter` over HDF5
 
-`FieldWriter` gains `format = :vtk` or `:hdf5`. `_write_dump!` already exists
-as the seam and dispatches on it, calling `save_hdf5` for the latter; the
+`FieldWriter` gains `format = :vtk` or `:hdf5`. `_write_dump!` exists
+as the dispatch point and dispatches on it, calling `save_hdf5` for the latter; the
 core stub in `src/hdf5.jl` supplies the error when the extension is absent,
 so no availability check is needed at the call site. `fields`, `stride` and
-`slice` flow through unchanged. The extension seam is the same one `save_hdf5`
+`slice` flow through unchanged. The extension point is the same one `save_hdf5`
 uses: a core stub `_write_xdmf_collection!` routed through `_hdf5_required`,
 with the real method in `ext/CompactLESHDF5Ext.jl`.
 
 The collection file is where the work is. `.pvd` has no XDMF equivalent that
-merely lists frames: a temporal collection is `<Grid GridType="Collection"
+only lists frames: a temporal collection is `<Grid GridType="Collection"
 CollectionType="Temporal">` with one full `<Grid>` inlined per frame, each
 carrying its own `<Time>`, topology, geometry and one `<Attribute>` per
-field. Write it in full on every dump, for the reason `_write_pvd` already
-does — a run killed by the scheduler then still leaves a collection naming
+field. Write it in full on every dump, as `_write_pvd` does: a run killed by
+the scheduler then still leaves a collection naming
 every completed frame, where an appended file would lack its closing tags and
 not open at all. XInclude of the per-frame `.xmf` files was considered and
-rejected: reader support for it is inconsistent, and the per-frame files are
-worth keeping openable on their own.
+rejected: reader support for it is inconsistent, and the per-frame files
+should stay openable on their own.
 
 #### The fork
 
@@ -511,9 +511,8 @@ Slicing interacts with the second of those. A rank holding no part of the
 requested plane currently skips its write, which is correct under the
 serialized backend. A collective write instead requires every rank to call
 `H5Dwrite` even with nothing selected, so enabling the parallel backend with
-slicing needs an empty selection (`H5S_SELECT_NONE`) rather than a skipped
-call. The VTK path has no such constraint, since each rank writes its own
-file.
+slicing needs an empty selection (`H5S_SELECT_NONE`), not a skipped call. The
+VTK path has no such constraint, since each rank writes its own file.
 
 **Multiblock geometry** follows from the patch abstraction (AMR Stage 2):
 same-level patches with separate line solves and interface exchange provide
@@ -527,7 +526,7 @@ ordering-independent of the patch refactor, since the imposition is pointwise
 and mask-driven, so it can be implemented on today's arrays and ported
 mechanically. Multiblock and IB are complements, not alternatives: multiblock
 handles geometry that must be accurate (coordinate-aligned blocks at full
-closure order), IB handles geometry that must merely exist (first-order at
+closure order), IB handles geometry that need only exist (first-order at
 the interface, any shape, no meshing).
 
 **ThreadPinning wiring**, listed as open in `reference/CLUSTER.md` and only
@@ -546,20 +545,20 @@ The following capabilities are explicitly outside the project scope.
   artificial-fluid-property approach is the design commitment; adding a
   Godunov path would double the maintenance surface for a capability other
   codes do better. This exclusion does not cover the instrumented positivity
-  failsafe of model debt 2, which recovers from states the scheme has
-  already left rather than altering the scheme.
+  failsafe of model debt 2, which recovers from states the scheme has left
+  and does not alter the scheme.
 - **A string-based PDE interpreter**, in the Pyranda style. This is narrower
   than "no symbolic frontend": a macro that *lowers* to the equation-set
   dispatch remains possible and can provide Pyranda's concise problem
   specification while the generated code stays concretely typed and visible
   to `bench/audit.jl` and `bench/jetcheck.jl`. The exclusion is on runtime
-  string evaluation. Sequencing matters: hand-written equation sets define
-  the interface before any macro emits it.
+  string evaluation. The sequence is constrained: hand-written equation sets
+  define the interface before any macro emits it.
 - **Being a general-purpose CFD library.** XCALibre and Trixi occupy that
   ground. CompactLES is scoped to compressible, variable-density,
   shock-driven mixing and implosion.
 
-Wall-modeled LES is deferred rather than excluded; see model debt 7.
+Wall-modeled LES is deferred, not excluded; see model debt 7.
 
 ## Suggested ordering
 
@@ -571,10 +570,10 @@ reference-implementation pass that headed this list are done
    conditional on. Requires cluster time; run it alongside the Pyranda
    comparison, which needs the same machines and cases. The dt-consistency half
    is done and `filter_cfl` exists; what is left is the α and cadence fit, and
-   the decision on whether to ship the relaxation belongs to that fit.
+   the decision on whether to adopt the relaxation belongs to that fit.
 2. **External validation** (model debt 3), promoted early because it changes
    how much the remaining calibration work can be trusted.
-3. **Phase 2.1, the implicit diffusion solver** — the principal architectural
+3. **Phase 2.1, the implicit diffusion solver**, the principal architectural
    gap, which also addresses the polar CFL restriction.
 4. **AMR/GPU Stages 1–4 are delivered** (`reference/HISTORY.md`;
    `reference/AMR_GPU.md` carries the design and measurements): the
@@ -592,9 +591,9 @@ reference-implementation pass that headed this list are done
    workstation's RX 6800 XT through AMDGPU.jl (`bench/device_bringup.jl`).
    G3a is delivered as well: a whole single-patch solver runs resident on
    that GPU (`Solver(backend = DeviceBackend(ka))`), reproducing the CPU
-   solver bitwise over full runs — periodic/closed smooth cases, NSCBC, the
+   solver bitwise over full runs (periodic/closed smooth cases, NSCBC, the
    axis fold, freestream/GCL, a 578-step Sod validation, and short TGV
-   histories in both precisions (`bench/device_solver.jl`,
+   histories in both precisions; `bench/device_solver.jl`,
    `test/device_tests.jl`). At 64³ the synchronized launch mode runs at
    0.4–0.5× the 8-thread CPU, the launch-latency floor G3d exists to remove.
    G3b is delivered too: a device-resident patch runs decomposed, its halo
@@ -605,7 +604,7 @@ reference-implementation pass that headed this list are done
    level transfer is distributed (both levels decompose over all ranks;
    the coupling gathers replicated data and distributes the interpolation
    chains by component), a refined solver runs on a DeviceBackend bitwise
-   against CPU, and the deferred Stage 4 cost demonstration is measured —
+   against CPU, and the deferred Stage 4 cost demonstration is measured:
    on a 3-D mixing blob at np = 8 the subcycled, regridding composite
    lands 5× closer to the uniform-fine mixing answer than the coarse run
    at 49% of the fine wall and 24% of its memory (`bench/amr_cost.jl`).
@@ -614,13 +613,13 @@ reference-implementation pass that headed this list are done
    reduced-solve fence per apply, cutting the device step 28–32% (64³ TGV
    0.203 → 0.146 s/step Float64, both modes bitwise; DEVICE_SYNC restores
    the conservative mode). Per-patch streams were measured against and set
-   aside — the remaining gap to CPU is fence-bound, which a second stream
+   aside: the remaining gap to CPU is fence-bound, which a second stream
    cannot remove; the reasoning is in `AMR_GPU.md`'s launch-policy
    section. Every device timing above is from the workstation's RX 6800
    XT and reads as pitfall clearance only; the performance target is
    rzadams / El Capitan-class hardware (MI300A, GPU-aware MPI), where
-   the FP64 rate, unified APU memory, and MPI stack all differ — see the
-   framing in `AMR_GPU.md`'s performance summary. What remains on the
+   the FP64 rate, unified APU memory, and MPI stack all differ (see the
+   framing in `AMR_GPU.md`'s performance summary). What remains on the
    GPU track: an rzadams measurement campaign to re-base the numbers and
    settle the fence-floor routes, G4b policy selection there, the
    `Nasa9Mixture` device mirror, and the follow-ups recorded in
@@ -628,17 +627,16 @@ reference-implementation pass that headed this list are done
    solve).
 
 The open items from the source comparison
-([above](#open-work-from-the-source-comparison)) sit alongside these rather
-than inside the ordering. Everything remaining there is now either blocked on a
+([above](#open-work-from-the-source-comparison)) sit alongside these and
+outside the ordering. Everything remaining there is now either blocked on a
 missing case or gated on a measurement that has not been taken. The one
 exception, the `C_beta` refit under `:d8`, is closed: the constant holds at 1.0
-and the detector default turns out to rest on the spherical origin rather than
-on the fit.
+and the detector default rests on the spherical origin, not on the fit.
 
 Two items sit outside the ordering because they are independent of everything
 above and pullable on demand: laser ray tracing (Phase 2.7), if a specific
 experiment needs it before the rest of the HED stack exists, and immersed
 boundaries (`reference/IMMERSED.md`) Stage 1, when a target problem first
-needs non-coordinate-surface geometry — its main sequencing constraint is
+needs non-coordinate-surface geometry; its main sequencing constraint is
 that the Stage 2 calibration sweep requires the same measurement discipline
 as `bench/artcal.jl`, not that it depends on other work.

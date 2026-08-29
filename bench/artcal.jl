@@ -42,13 +42,13 @@ const ALL = ["mu", "beta", "kappa", "D", "cfl", "resolution", "sensor", "smoothe
 # Sweep names are bare words; `key=value` sets the background configuration that
 # every sweep then runs against. Refitting a constant under a changed smoother
 # is exactly `artcal.jl kappa smoother=gaussian`, and keeping the two forms in
-# one argument list is what stops that turning into a second script.
+# using one argument list avoids a second script.
 #
 # The background defaults are read off `ArtParams()` rather than written out, so
-# a bare run measures against the shipped configuration and follows it when the
-# shipped one moves. They used to be spelled out, and went stale the day the
-# smoother default changed: every sweep then silently measured on top of
-# `:compact` while the solver shipped `:gaussian`.
+# a bare run measures against the default configuration and follows it when the
+# default moves. Spelled-out values became stale when the smoother default
+# changed: every sweep then silently measured on top of
+# `:compact` while the solver defaulted to `:gaussian`.
 const OPTS = script_args(filter(a -> occursin('=', a), ARGS),
                          (smoother = DEFAULTS.smoother,
                           detector = DEFAULTS.detector))
@@ -63,10 +63,11 @@ want(name) = name in WHICH
 # The two ways of not working print differently, and the distinction is not
 # cosmetic. **NaN is positivity loss** — a `SolverFailure`, which is a real limit
 # of the configuration. **Inf is the step cap** — the run was still healthy and
-# simply had not arrived, which is an artifact of CAP and of the timestep, not a
-# result. Reporting both as NaN reads as a ceiling that moves with the CFL, since
+# had not reached the target time, which is an artifact of CAP and of the
+# timestep, not a result. Reporting both as NaN reads as a ceiling that moves
+# with the CFL, since
 # a smaller timestep needs more steps to cover the same interval; separating them
-# is what shows a genuine failure that gets *worse* as the timestep falls.
+# exposes a failure that gets *worse* as the timestep falls.
 const CAP = 30_000
 
 art(; kw...) = ArtParams(; enabled=true,
@@ -77,18 +78,18 @@ art(; kw...) = ArtParams(; enabled=true,
                          reduction=DEFAULTS.reduction,
                          smoother=OPTS.smoother, detector=OPTS.detector, kw...)
 
-mark(v, d) = v == d ? "*" : " "     # flags the shipped default in a sweep
+mark(v, d) = v == d ? "*" : " "     # flags the default in a sweep
 
 """
     attempt(f, blank)
 
 Run one swept configuration, returning `blank` if it raises `SolverFailure`.
 
-`StepControl` detects positivity loss and `run!` raises, which is what a sweep
-wants for the ~150 steps of wall time it saves — but an uncaught raise ends the
-whole sweep at its first bad point, which is not. The failure is raised off a
+`StepControl` detects positivity loss and `run!` raises, saving a sweep ~150
+steps of wall time. An uncaught exception would end the whole sweep at its first
+bad point. The failure is raised off a
 reduced quantity, so under `mpiexec` every rank lands here at the same step;
-nothing else may be caught, on pain of ranks disagreeing about how to continue.
+no other exception may be caught because ranks could disagree about how to continue.
 """
 function attempt(f, blank)
     try
@@ -252,7 +253,7 @@ if want("sensor")
     # The question the sensor exists to answer: keying β* on compression is the
     # literature's response to a front that is not damped early enough, which is
     # the diagnosis reference/CALIBRATION.md gives for the cfl ≤ 0.15 ceiling.
-    # So the ladder is run per sensor, not just the shipped CFL.
+    # The ladder therefore runs per sensor, not only for the default CFL.
     println("\n--- the Noh CFL ceiling, per sensor ---")
     println("sensor      cfl  | Noh1 plat/exact | Noh2 plat/exact | Noh3 plat/exact")
     hr()
@@ -300,8 +301,8 @@ end
 # The detector is the high-pass every sensor is built from: Cook's undivided
 # δ⁴, or the reference implementation's compact eighth derivative. The two are
 # normalized to the same response at two points per wavelength and diverge
-# below it — by 26x at four points and 569x at eight — so this sweep asks what
-# the solver does with a sensor that stops seeing resolved structure. As with
+# below it — by 26x at four points and 569x at eight — so this sweep measures the
+# solver response to a sensor that stops responding to resolved structure. As with
 # the smoother, the four constants are calibrated per setting, so a row that
 # improves is not yet an improvement.
 if want("detector")

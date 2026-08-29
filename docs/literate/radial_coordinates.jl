@@ -74,7 +74,7 @@ r, density_initial = line_profile(solver, Q, :rho)
 # [`dt_report`](@ref) identifies the point and mechanism that limit the global
 # explicit timestep. With the angular and axial dimensions collapsed and no
 # swirl, this
-# case is limited by radial acoustic propagation rather than a vanishing
+# case is limited by radial acoustic propagation, not by a vanishing
 # azimuthal cell width.
 
 limit = dt_report(solver, Q)

@@ -104,5 +104,5 @@ curvature rate for collapsed swirl. Use `dt_report` to distinguish these cases.
 Axis and fold convergence is presently approximately third order because the
 closure region controls the maximum error. The spherical origin also requires
 smooth initial data resolved over several cells and does not support a singular
-Noh initial condition at `t=0`. These are documented operating limits rather
-than consequences of the continuum equations.
+Noh initial condition at `t=0`. These are documented operating limits of the
+discretization, not consequences of the continuum equations.

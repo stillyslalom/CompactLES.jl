@@ -20,7 +20,7 @@
 #
 # --- Choosing the case -------------------------------------------------------
 #
-# Two earlier attempts are worth not repeating.
+# Two earlier attempts failed for useful reasons.
 #
 #   A broadband field loses 64% of its kinetic energy within tens of steps and
 #   then cannot lose more. The scaling saturates out of sight, and the measured
@@ -91,7 +91,7 @@ function main()
             opt.N, opt.tfinal, opt.amplitude, opt.k)
     println("Steady shear layer: the filter is the only sink of kinetic energy.\n")
     for fc in (0.0, opt.filter_cfl)
-        println(fc == 0 ? "--- unrelaxed (filter_cfl = 0, shipped) ---" :
+        println(fc == 0 ? "--- unrelaxed (filter_cfl = 0, default) ---" :
                           "--- relaxed (filter_cfl = $fc) ---")
         @printf("  %6s %7s %13s %12s\n", "cfl", "steps", "KE loss", "vs first")
         ref = NaN

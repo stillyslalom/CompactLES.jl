@@ -29,8 +29,8 @@ using HDF5
     # run. Both produce the same file; only the cost differs.
     @test hdf5_parallel() isa Bool
 
-    # A block description is independent of Decomp, so that a refinement patch
-    # can be written by the same path later.
+    # A block description is independent of Decomp, allowing a refinement patch
+    # to use the same write path later.
     region = BlockRegion((4, 0, 2), (8, 16, 4))
     @test CL.region_ranges(region) == (5:12, 1:16, 3:6)
 
@@ -108,8 +108,8 @@ using HDF5
     # Everything the state's interpretation depends on is in the header. Each
     # solver below reads the file cleanly if its own field is not checked: the
     # array has the right shape in every case and means something else. The
-    # expected message is asserted so that each case exercises the check it is
-    # there for rather than tripping an earlier one.
+    # expected message is asserted to ensure each case exercises its intended
+    # check, not an earlier one.
     reject(s, msg) = begin
         Qx = allocate_state(s)
         @test_throws msg load_checkpoint_hdf5!(s, Qx, stem)
@@ -231,8 +231,8 @@ end
     stem = joinpath(dir, "across")
 
     # Split along x to write and along y to read: a genuinely different block
-    # decomposition of the same global array. Both dimensions are 72 so that
-    # every rank keeps at least the 9 points the C8 filter closure needs.
+    # decomposition of the same global array. Both dimensions are 72, keeping at
+    # least the 9 points the C8 filter closure needs on every rank.
     build(dims) = begin
         s = Solver(bcs=per3h, n_global=(72, 72, 12), L_domain=(1.0, 1.0, 1.0),
                    art=ArtParams(enabled=false), dims=dims)

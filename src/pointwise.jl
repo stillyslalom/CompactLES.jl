@@ -1,28 +1,28 @@
 # Pointwise-phase launch machinery for the CPU and device backends. Design
 # rationale and measurements: reference/AMR_GPU.md (pointwise kernels).
 #
-# Every pointwise phase of the solver — the loops that visit each grid point
-# independently, as opposed to the compact line solves — is written as one
+# Every pointwise phase of the solver (the loops that visit each grid point
+# independently, as opposed to the compact line solves) is written as one
 # per-point body function beside its driver and launched through one of two
-# paths: `Array` storage takes the existing `@threaded` loop — the
-# configuration every regression guard was measured under — and any other storage
-# type launches a KernelAbstractions kernel on the backend its arrays belong
-# to. `get_backend(::Array)` is the KA CPU backend, so tests and benches
+# paths: `Array` storage takes the existing `@threaded` loop, the
+# configuration every regression guard was measured under, and any other
+# storage type launches a KernelAbstractions kernel on the backend its arrays
+# belong to. `get_backend(::Array)` is the KA CPU backend, so tests and benches
 # exercise the kernel path on ordinary arrays by calling [`pointwise_ka!`]
 # directly; a device array reaches it automatically through [`pointwise!`].
 #
-# The bodies take plain arrays and scalars rather than the solver, which is
-# most of what a device launch requires of them. The remaining device
-# requirement is that every kernel argument adapt to an isbits form, and a
-# `Vector{A}` or `Matrix{A}` does not — worse, it HANGS in kernel-argument
-# adaptation rather than erroring (measured on AMDGPU). The field
-# collections therefore reach the bodies as the [`FieldVector`](@ref) and
-# [`FieldMatrix`](@ref) wrappers below — tuples of the same arrays, built
-# once at `Patch` construction (`Patch.field_tuples`), indexed exactly as
-# the `Vector`/`Matrix` forms are so the bodies read identically on either
-# path — and the gas-model EOS objects adapt to coefficient mirrors at
-# launch time (`physics.jl`). `Nasa9Mixture` has no mirror yet: it needs
-# the fixed-width interval table (reference/AMR_GPU.md, roadmap).
+# The bodies take plain arrays and scalars, not the solver, which is most of
+# what a device launch requires of them. The remaining device requirement is
+# that every kernel argument adapt to an isbits form, and a `Vector{A}` or
+# `Matrix{A}` does not: it hangs in kernel-argument adaptation without an
+# error (measured on AMDGPU). The field collections therefore reach the
+# bodies as the [`FieldVector`](@ref) and [`FieldMatrix`](@ref) wrappers
+# below, tuples of the same arrays, built once at `Patch` construction
+# (`Patch.field_tuples`) and using the same indexing as the `Vector`/`Matrix`
+# forms, so the bodies read identically on either path; the gas-model EOS
+# objects adapt to coefficient mirrors at launch time (`physics.jl`).
+# `Nasa9Mixture` has no mirror yet: it needs the fixed-width interval table
+# (reference/AMR_GPU.md, roadmap).
 
 using KernelAbstractions
 using KernelAbstractions: get_backend, synchronize
@@ -48,12 +48,12 @@ Adapt.adapt_structure(to, Q::ConservedState) = ConservedState(adapt(to, parent(Q
     FieldVector(v::AbstractVector)
 
 Launchable stand-in for a `Vector` of field arrays (`Y`, `D_art`). On the
-host it is a zero-cost wrapper — `getindex` forwards to the vector, so the
-`@threaded` path indexes exactly what it always indexed — and its whole
-purpose is to carry the Adapt rule: at device-kernel launch it adapts to a
+host it is a zero-cost wrapper: `getindex` forwards to the vector, so the
+`@threaded` path indexes the same fields as before. Its purpose
+is to carry the Adapt rule: at device-kernel launch it adapts to a
 [`DeviceFieldVector`](@ref), an isbits `NTuple` of the device-side arrays.
 A bare `Vector` kernel argument instead *hangs* in kernel-argument
-adaptation (measured on AMDGPU), which is why the bodies never see one.
+adaptation (measured on AMDGPU), so the bodies never see one.
 An early version held the `NTuple` on the host too; runtime tuple indexing
 in the species loops cost `assemble_fluxes!` 3× on the `@threaded` path,
 so the tuple now materializes only at launch. Built once per patch
@@ -124,16 +124,16 @@ against the `CPUBackend` bitwise; nothing else should.
 const FORCE_KA = Ref(false)
 
 """
-Launch synchronization policy: `false` (the default) defers — kernels
-queue on the backend's one in-order stream and the host synchronizes only at
-its interaction points (the reduced-solve staging fence, the synchronous
-device↔host copies of the halo/ring staging and the reductions), which is
-what removes the per-launch round trip measured at 28–32% of a device step
+Launch synchronization policy: `false` (the default) defers. Kernels queue
+on the backend's one in-order stream and the host synchronizes only at its
+interaction points (the reduced-solve staging fence, the synchronous
+device↔host copies of the halo/ring staging and the reductions); this
+removes the per-launch round trip measured at 28–32% of a device step
 (reference/AMR_GPU.md, launch policy). `true` restores the conservative
-mode — a host synchronize after every
-pointwise launch and between every line-solve subkernel — and is the
-correctness fallback: flip it when bisecting a device
-discrepancy, so ordering bugs separate from arithmetic ones.
+mode, a host synchronize after every pointwise launch and between every
+line-solve subkernel, and is the correctness fallback: flip it when
+bisecting a device discrepancy, so ordering bugs separate from arithmetic
+ones.
 """
 const DEVICE_SYNC = Ref(false)
 
@@ -154,7 +154,7 @@ KernelAbstractions kernel on `get_backend(route)`. The branch resolves
 statically for a concrete storage type. The body owns its own `@inbounds`
 and any halo offsets, so the index box is the body's iteration count, not
 necessarily a padded extent, and every body must be safe to run at any point
-of the box in any order — the pointwise contract.
+of the box in any order; this is the pointwise contract.
 """
 @inline function pointwise!(body!::F, route::AbstractArray, n1::Int, n2::Int,
                             n3::Int, args...) where {F}
@@ -177,11 +177,11 @@ The KernelAbstractions launch of [`pointwise!`](@ref) on an explicit
 `backend`. Under the default deferred policy the launch queues on the
 backend's in-order stream and returns; [`DEVICE_SYNC`](@ref) restores the
 synchronize-per-launch conservative mode. Called with
-`KernelAbstractions.CPU()` — what `get_backend` returns for an `Array` —
+`KernelAbstractions.CPU()`, the backend `get_backend` returns for an `Array`,
 this runs the same bodies through the kernel path on ordinary storage, which
 is how `bench/pointwise_ka.jl` times the two paths against each other on one
-machine. The test suite reaches the same path through [`FORCE_KA`](@ref)
-instead, so that a whole run routes through it.
+machine. The test suite uses [`FORCE_KA`](@ref) to route a whole run through the
+same path.
 """
 function pointwise_ka!(body!::F, backend, n1::Int, n2::Int, n3::Int,
                        args...) where {F}

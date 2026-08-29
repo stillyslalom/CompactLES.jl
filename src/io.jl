@@ -1,5 +1,5 @@
 # Checkpoint / restart: per-rank raw binary files with a small validating
-# header. Deliberately dependency-free (no HDF5); restart requires the same
+# header. It has no dependencies (no HDF5); restart requires the same
 # global grid, decomposition, and conserved layout. Parallel-aware
 # postprocessing formats are a separate concern.
 #
@@ -7,14 +7,14 @@
 #
 # The payload is a block of conserved components, and nothing in it records what
 # those components mean or where the points are, so a restart onto a solver that
-# disagrees is not detectable from the payload: it reads cleanly and means
-# something else. The extents and the rank's Cartesian coordinates rule out a
+# disagrees is not detectable from the payload: it reads cleanly and decodes
+# to a different state. The extents and the rank's Cartesian coordinates rule out a
 # different decomposition, and the rest of the header rules out the cases they
 # do not see. This is the same set the shared-file path records, and
 # `type_name`, `global_axis` and `axis_matches` below are shared with it so the
 # two cannot drift apart.
 #
-#   The conserved layout needs the species set, not just `n_cons`. Two species
+#   The conserved layout needs the species set, not only `n_cons`. Two species
 #   sets of the same size give the same `n_cons`, so only `component_names`
 #   separates them, and it covers the momentum and energy slots at the same time.
 #
@@ -22,8 +22,8 @@
 #   different domain length, a different origin, and any `Stretch` mapping; the
 #   global coordinate vector along each dimension pins all three at once, and is
 #   also the only form a `Stretch` can be stored in, being a pair of closures.
-#   Every rank writes the whole of it rather than its own slice, so that one
-#   file validates the grid: three vectors of `n_global[d]` doubles against a
+#   Every rank writes the whole of it, not its own slice, allowing one file to
+#   validate the grid: three vectors of `n_global[d]` doubles against a
 #   block of `prod(n_local) * n_cons` values.
 #
 #   The metric and the EOS are stored by type name. For the metric that is a
@@ -47,7 +47,7 @@
 # `switched` flag per face; resuming with it cleared would run the whole
 # remainder of the calculation under the pre-switch boundary condition, and on a
 # switch that changes the collective pattern (`NSCBCOutflowBC`) a rank set
-# disagreeing about it deadlocks rather than answers wrongly.
+# disagreeing about it deadlocks.
 #
 # The checkpoint does not carry the caller's own bookkeeping. Callback schedules
 # and a `FieldWriter`'s frame index live outside the solver, and both docstrings
@@ -56,10 +56,10 @@
 # --- The format word ---------------------------------------------------------
 #
 # The header is a fixed binary layout, so a field added to it shifts every field
-# after it and a file written by an earlier version is misread rather than
-# rejected. The magic was therefore changed when the fields above were added, so
-# that a file in the original format is rejected by name; the version word that
-# follows the magic means no later addition needs a second change to it.
+# after it and a file written by an earlier version is misread, not rejected.
+# The magic was therefore changed when the fields above were added, causing a
+# file in the original format to be rejected by name; with the version word that
+# follows the magic, no later addition needs a second change to it.
 
 const CKPT_MAGIC_V1 = 0x434c4553_434b5054   # "CLESCKPT", the unversioned format
 const CKPT_MAGIC = 0x434c4553_52434b50      # "CLESRCKP"
@@ -91,15 +91,15 @@ _read_strings(io) = [_read_string(io) for _ in 1:Int(read(io, Int64))]
 
 """
 Type name of `x`, the form in which a checkpoint header records a metric or an
-equation of state. Both are compared by name rather than by value: a metric type
+equation of state. Both are compared by name, not by value: a metric type
 is a singleton and so fully described by its name, while an EOS carries
 thermodynamic constants that no serialization contract covers yet.
 """
 type_name(x) = string(nameof(typeof(x)))
 
 """
-Global coordinate vector along dimension `d`, covering the whole domain rather
-than this rank's block. It is identical on every rank, so building it needs no
+Global coordinate vector along dimension `d`, covering the whole domain, not
+this rank's block. It is identical on every rank, so building it needs no
 communication.
 """
 global_axis(solver::Solver, d::Int) =
@@ -108,10 +108,10 @@ global_axis(solver::Solver, d::Int) =
 """
 Whether the coordinate vector `stored` read from a checkpoint and the vector
 `mine` rebuilt from a solver describe the same grid, to a relative tolerance of
-1e-10. Compared with a tolerance rather than exactly: the two come from the same
+1e-10. The comparison carries a tolerance because the two come from the same
 expression, but a [`Stretch`](@ref) mapping evaluated on a different machine or
-Julia version may land a few ulp away, while a grid that genuinely differs does
-so by orders of magnitude more than this.
+Julia version may land a few ulp away, while a different grid differs by orders
+of magnitude more than this.
 """
 function axis_matches(stored, mine)
     length(stored) == length(mine) || return false
@@ -123,9 +123,9 @@ end
 The `switched` flag of each of the six boundary faces, in the order
 `(1, lo), (1, hi), (2, lo), ..., (3, hi)`, as `0` or `1` on a
 [`SwitchableBC`](@ref) and `-1` on any other condition. The `-1` records the
-absence of a switchable face, so that a restart placing a plain condition where
-a switchable one was written is rejected by [`restore_switches!`](@ref) rather
-than resumed under a boundary the checkpoint never described. Shared between the
+absence of a switchable face. A restart placing a plain condition where a
+switchable one was written is rejected by [`restore_switches!`](@ref); resuming
+it would run under a boundary the checkpoint never described. Shared between the
 per-rank and shared-file checkpoint paths.
 """
 switch_codes(solver::Solver) =
@@ -138,9 +138,9 @@ conditions, and return `solver`. `source` names the file in any error message.
 
 A face the codes record as switched is switched through [`switch!`](@ref), which
 is the supported route and is reached with the same code on every rank. The
-reverse is refused rather than performed: `switch!` is one-way by design, so a
-solver whose face has already switched cannot be returned to the state a
-checkpoint written before the switch describes.
+reverse is refused because `switch!` is one-way, so a solver whose face has
+switched cannot be returned to the state a checkpoint written before the switch
+describes.
 """
 function restore_switches!(solver::Solver, codes, source::AbstractString)
     length(codes) == 6 ||
@@ -212,8 +212,8 @@ growth cap, the rate predictor and [`filter_weight`](@ref) read them.
 
 Callback schedules and a [`FieldWriter`](@ref)'s frame index are the caller's
 responsibility: both live outside the solver, and nothing here records or
-restores them. Give a restarted writer a `start_index` so that it continues the
-frame sequence rather than overwriting it.
+restores them. Give a restarted writer a `start_index` to continue the frame
+sequence without overwriting it.
 """
 function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
     decomp = solver.decomp
@@ -268,14 +268,13 @@ different one.
 The run state restored is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`, and the
 `switched` flag of every [`SwitchableBC`](@ref) face. A face the checkpoint
 records as switched is switched here through [`switch!`](@ref); a face recorded
-as unswitched on a solver that has already switched is rejected, `switch!` being
+as unswitched on a solver that has switched is rejected, `switch!` being
 one-way. Callback schedules and a [`FieldWriter`](@ref)'s frame index are not
 recorded and remain the caller's to restore.
 
-A file written in the original unversioned format is rejected rather than
-partially validated: it carries no record of the species set, the metric or the
-grid, so accepting it would mean accepting exactly the restart the header was
-extended to refuse.
+A file written in the original unversioned format is rejected outright: it
+carries no record of the species set, the metric or the grid, so a partial
+validation would accept exactly the restart the header was extended to refuse.
 
 [`load_checkpoint_hdf5!`](@ref) is the decomposition-independent alternative,
 and checks the same fields.
@@ -329,9 +328,9 @@ function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
         stored_eos == type_name(solver.eos) ||
             error("equation of state mismatch: file has $stored_eos, solver " *
                   "has $(type_name(solver.eos))")
-        # The payload is raw binary, so its element type decides how long the
-        # block is as well as what it means; a Float32 file read as Float64
-        # would run off the end rather than give wrong numbers.
+        # The payload is raw binary, so its element type fixes both the length
+        # of the block and the decoding of its bytes; a Float32 file read as
+        # Float64 runs off the end, a read error, not wrong numbers.
         stored_eltype = _read_string(io)
         stored_eltype == string(eltype(Q)) ||
             error("element type mismatch: file holds $stored_eltype, this " *
@@ -370,8 +369,8 @@ end
 #     domain and a rectangle represents it correctly.
 #
 #   StructuredGrid (.vts / .pvts) is used when an angular dimension is resolved.
-#     Writing (r, θ, z) as a rectilinear grid would draw the domain unwrapped, as
-#     a box in the angle rather than as an annulus, so these grids carry an
+#     Writing (r, θ, z) as a rectilinear grid would draw the domain unwrapped,
+#     as an angular box, not an annulus, so these grids carry an
 #     explicit Cartesian position per point. Vectors are rotated to the same
 #     frame: the solver's velocity components are coordinate-aligned
 #     (u_r, u_θ, u_z), and a glyph or streamline drawn from those components on a
@@ -386,8 +385,8 @@ _extent_str(lo, hi) = join(("$(lo[d]) $(hi[d])" for d in 1:3), " ")
 """
 Byte order declared in every VTK header written here. The appended raw blocks
 are `write`n in the host's native order, so the declaration is derived from
-`Base.ENDIAN_BOM` rather than fixed: a file written on a big-endian host and
-labelled `LittleEndian` reads as noise, and nothing in the format catches it.
+`Base.ENDIAN_BOM` and not fixed: a file written on a big-endian host and
+labelled `LittleEndian` reads as noise, and the format has no check for it.
 """
 const VTK_BYTE_ORDER = Base.ENDIAN_BOM == 0x04030201 ? "LittleEndian" : "BigEndian"
 
@@ -461,7 +460,7 @@ end
 # each rank writes its own intersection with that set. Striding a rank's block
 # from its own first local point would give the pieces offset lattices that
 # neither tile nor align. The result is a doubled or missing plane at a rank
-# boundary rather than an error.
+# boundary, not an error.
 #
 # Extents are then expressed in the COARSE index space, where global index g
 # sits at (g − 1) ÷ s. The resulting per-rank ranges are contiguous, disjoint,
@@ -471,10 +470,10 @@ end
 # cost of producing the fields: a gradient or schlieren pass still runs over the
 # whole local block before any point is sampled.
 
-# Positivity is checked here rather than with the emptiness test below because
+# Positivity is checked here, separately from the emptiness test below, because
 # `_stride_ranges` divides by the stride, and a zero would fault before any
 # check could run. Every rank receives the same stride, so a local throw is
-# already consistent across the communicator.
+# consistent across the communicator.
 function _normalize_stride(stride)::NTuple{3,Int}
     st = stride isa Integer ? ntuple(_ -> Int(stride), 3) :
                               ntuple(d -> Int(stride[d]), 3)
@@ -496,10 +495,10 @@ end
 # a slice an empty range is the normal case: only the ranks whose block spans
 # `g` hold any of the plane, and the rest write nothing at all. The parallel
 # container therefore lists fewer pieces than there are ranks, and the writers
-# skip a rank with no points rather than emitting a degenerate extent.
+# omit ranks with no points, avoiding degenerate extents.
 #
-# The plane is kept as a 3-D grid one point thick rather than collapsed to a
-# genuine 2-D topology. Readers render it identically, and every extent, sidecar
+# The plane is kept as a 3-D grid one point thick and is not collapsed to a
+# 2-D topology. Readers render it identically, and every extent, sidecar
 # dimension and hyperslab below keeps working unchanged.
 
 _slice_dim(slice) = slice === nothing ? 0 : Int(slice[1])
@@ -553,9 +552,9 @@ _output_global(solver::Solver, stride, slice) = begin
 end
 
 # A stride large enough to leave a rank with no points along a dimension gives
-# that rank no valid piece to write. The test is collective so that every rank
-# throws; a single rank throwing would leave the others blocked in the Allgather
-# below. The sliced dimension is exempt, being empty by design off the plane.
+# that rank no valid piece to write. The test is collective, making every rank
+# throw; a single rank throwing would leave the others blocked in the Allgather
+# below. The sliced dimension is exempt because it is empty off the plane.
 function _check_output(solver::Solver, stride::NTuple{3,Int}, slice, ranges)
     sd = _slice_dim(slice)
     if slice !== nothing
@@ -666,13 +665,13 @@ The constant `SCALAR_FIELD_NAMES` lists the names other than the per-species
 ones. An unrecognized name throws `ArgumentError`, as does a vector name such as
 `:velocity`.
 
-The stored fields are returned as the solver's own arrays rather than as copies,
+The stored fields are returned as the solver's own arrays, not as copies,
 so writing to the result writes to the solver: `:rho`, `:p`, `:T_ion`, `:c`, the
 velocity components `:u`/`:v`/`:w`, the per-species `:Y` and `:D_art` (selected
 by `species`), and `:strain_mag`, `:sensor`, `:mu_art`, `:beta_art`,
 `:kappa_art`. The derived names `:mach`, `:divergence`, `:vorticity_magnitude`,
 `:qcriterion` and `:schlieren` allocate a new array, and assume the relevant
-gradient and artificial passes have already run; `save_vtk` and `field_array`
+gradient and artificial passes have run; `save_vtk` and `field_array`
 arrange that, and `field_array` also copies in every case.
 
 `:schlieren` takes a derivative pass of its own, which is a distributed solve.
@@ -846,7 +845,7 @@ fewer pieces than there are ranks; the rest write nothing. `slice` composes with
 
 Subsampling reduces file size and write time only. The fields are still produced
 over the whole local block before any point is sampled, so a strided or sliced
-dump costs the same to compute as a full one — including on a rank that holds
+dump costs the same to compute as a full one, including on a rank that holds
 none of the plane, which must still reach the distributed solves behind the
 derived fields. A stride large enough to leave a rank with no points throws, and
 does so collectively, so no rank is left blocked while another raises.
@@ -1012,13 +1011,12 @@ end
 # uniquely named files, and a container recording the physical time of each one.
 # `save_vtk` given a bare prefix provides neither, so every example built its own
 # `lpad` and then animated against the frame index because no file recorded the
-# time. This supplies both, and takes its schedule from a trigger rather than
-# implementing one.
+# time. This supplies both, and a trigger supplies the schedule.
 #
 # `_write_dump!` is the extension point. Naming, sequencing, and the collection
 # file above it are independent of the output format. A format writing one
-# shared file rather than one file per rank replaces that single call, as does
-# one traversing a list of patches rather than the single block held by a rank.
+# shared file in place of one file per rank replaces that single call, as does
+# one traversing a list of patches in place of the single block held by a rank.
 
 """
     FieldWriter(prefix; fields = DEFAULT_VTK_FIELDS, stride = 1, slice = nothing,
@@ -1045,18 +1043,18 @@ evenly spaced time schedule.
 documents the available names, the cost of each, how points are selected for
 subsampling, and what a slice writes. `pad` sets the width of the zero-padded
 frame number, and `collection = false` suppresses the `.pvd`. On a grid with a
-resolved angular dimension the container is `.pvts` rather than `.pvtr`, and the
-collection references it accordingly.
+resolved angular dimension the container is `.pvts`, and the collection
+references it accordingly.
 
 Like the wrapped `save_vtk` call, this operation is collective and must run on
 every rank. A [`Callback`](@ref) provides that guarantee. The first dump creates
-`dirname(prefix)` if it does not already exist. The effect returns `false` and so
+`dirname(prefix)` if it does not exist. The effect returns `false` and so
 never stops a run. The `wall_io` field records cumulative output time; callback
 execution lies outside the interval recorded by `solver.wall_step`.
 
 `start_index` is the number of the first frame, and defaults to 0. A writer
 given the same prefix as an earlier one overwrites that one's frames unless it
-starts past them, which is what a restart from [`load_checkpoint!`](@ref) needs:
+starts past them, as a restart from [`load_checkpoint!`](@ref) requires:
 the checkpoint carries the solver's run state and not the caller's frame
 counter, so the number of the next frame has to be supplied here. The `.pvd` of
 a restarted writer lists only the frames that writer wrote, since it has no
@@ -1092,8 +1090,8 @@ _write_dump!(writer::FieldWriter, solver, Q, stem) =
 function (writer::FieldWriter)(solver, Q)
     wall_0 = time_ns()
     comm = solver.comm
-    # Once per writer rather than once per frame, and keyed on the frame list
-    # rather than on the index, which `start_index` no longer pins to zero.
+    # Once per writer, not once per frame, and keyed on the frame list because
+    # `start_index` no longer pins the index to zero.
     isempty(writer.times) && ensure_output_dir(writer.prefix, comm)
     _write_dump!(writer, solver, Q, frame_prefix(writer, writer.index))
     push!(writer.times, Float64(solver.t))
@@ -1104,8 +1102,8 @@ function (writer::FieldWriter)(solver, Q)
     return false
 end
 
-# Rewritten in full on every dump rather than appended to. The cost is O(frames)
-# per frame, negligible at the frame counts actually written, and in exchange a
+# Rewritten in full on every dump, not appended to. The cost is O(frames) per
+# frame, negligible at realistic frame counts, and in exchange a
 # run terminated by the scheduler still leaves a valid collection naming every
 # completed frame. An appended file would lack its closing tags and would not
 # open at all.

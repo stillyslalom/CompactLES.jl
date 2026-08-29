@@ -10,14 +10,14 @@
 # message through the backend: a broadcast pack of the strided slab into a
 # contiguous device buffer, one contiguous device<->host copy per message, and
 # the existing MPI path over the host buffers. Direct device-pointer MPI is
-# deliberately not taken on any stack that does not report the capability for
+# not taken on any stack that does not report the capability for
 # the active array type; no stack on the measured machines does, so the direct
 # path is a future branch behind `device_mpi_direct`, not dead code today.
 #
 # At a CLOSED edge a stale halo is never read: the closure rows are applied to
 # points counted inward from the edge, so a closure row indexes interior points
 # by construction. A fold is the exception. There the interior stencil runs to
-# the edge and does read the physical-edge halo, which is why `fold_fill!`
+# the edge and does read the physical-edge halo, so `fold_fill!`
 # writes the parity mirror into it before every folded sweep (folds.jl).
 #
 # --- Message tags ------------------------------------------------------------
@@ -33,8 +33,8 @@
 # Disjointness is not the property correctness rests on. Every message here is
 # a blocking `MPI.Sendrecv!` that all ranks of the sub-communicator reach in
 # the same order, so at most one message per partner is in flight at a time and
-# a receive cannot match a send from a later phase. The ranges are kept apart
-# so that a caller interleaving two families, or a future non-blocking variant,
+# a receive cannot match a send from a later phase. The ranges are kept apart;
+# a caller interleaving two families, or a future non-blocking variant, therefore
 # does not depend on that argument. The patch interface records (patches.jl)
 # tag from 2000 and 16000 over the world communicator and cannot reach these
 # values.
@@ -49,10 +49,10 @@ end
 
 """
 Test toggle: `true` routes the halo and fold-pair exchanges of ordinary
-`Array` fields through the device staging path — pack buffers, offset copies,
-and all — which on host storage performs the identical element copies. The
+`Array` fields through the device staging path (pack buffers, offset copies,
+and all), which on host storage performs the identical element copies. The
 MPI suite flips this to pin the staging path bitwise on machines without a
-GPU, exactly as `FORCE_KA` pins the kernel path. The default `false` keeps
+GPU; `FORCE_KA` likewise pins the kernel path. The default `false` keeps
 host fields on the direct slab copies.
 """
 const FORCE_DEVICE_EXCHANGE = Ref(false)
@@ -66,12 +66,12 @@ Whether MPI may receive this storage backend's device pointers directly. The
 conservative default is `false`, which selects host staging; a device-aware
 MPI stack can override this per backend once such a stack is measured. This
 is a runtime property of the MPI library *and* the array type, so it is a
-function of the backend rather than a build-time switch.
+function of the backend, not a build-time switch.
 """
 device_mpi_direct(backend) = false
 
 # Staging buffers allocate per exchange through `similar`, whose result type
-# is inferable from the field — a keyed cache was tried first and its
+# is inferable from the field; a keyed cache was tried first and its
 # `Any`-typed lookup put 33 runtime-dispatch sites into `compute_rhs!`'s
 # jetcheck report, since the staged branch sits behind a runtime Ref read and
 # is always inferred into the RHS call graph. Device allocators pool, so the
@@ -83,8 +83,8 @@ device_mpi_direct(backend) = false
 # Transfer accounting for the distributed-device measurements: bytes staged
 # through the device
 # buffers and the wall time of the synchronous copies, accumulated only while
-# a bench turns the toggle on (the timer synchronizes nothing extra — the
-# copies are synchronous already — but the clock calls are not free).
+# a bench turns the toggle on (the timer synchronizes nothing extra, since the
+# copies are synchronous, but the clock calls are not free).
 const TRACK_DEVICE_TRANSFERS = Ref(false)
 const DEVICE_TRANSFER_BYTES = Ref(0)
 const DEVICE_TRANSFER_TIME = Ref(0.0)
@@ -106,7 +106,7 @@ end
 
 Pairwise whole-array `MPI.Sendrecv!` used by the fold pairing: direct on host
 storage, staged through dimension `d`'s host buffers on device storage (the
-arrays are contiguous, so no pack kernel is needed — one copy each way).
+arrays are contiguous, so no pack kernel is needed: one copy each way).
 Both partners must call it with the same tag.
 """
 function sendrecv_block!(send, recv, decomp::Decomp, d::Int, partner::Int,
@@ -162,7 +162,7 @@ every rank uses this path.
 selfwrap(decomp::Decomp, d::Int) = decomp.sub_size[d] == 1 && decomp.periodic[d]
 
 # One slab-onto-slab assignment inside a field: `copyto!` on host storage, a
-# broadcast on device storage — the generic `copyto!` fallback between two
+# broadcast on device storage, since the generic `copyto!` fallback between two
 # device views iterates scalar indices, which errors (or crawls) there. Both
 # forms are element copies, so the result is identical.
 @inline function _assign_slab!(f, d::Int, rdst::UnitRange{Int}, rsrc::UnitRange{Int})
@@ -191,8 +191,8 @@ end
 Fill the rank-boundary halos of scalar field `f` along ONE dimension, in place,
 and return `f`. A 1-D stencil along `d` needs no more, since corner halos are
 read only by operators that reach off-axis; a caller applying a directional
-operator (the compact filter in `smooth!`, for one) should take this route
-rather than paying for all three dimensions per direction.
+operator (the compact filter in `smooth!`, for one) should take this route to
+avoid paying for all three dimensions per direction.
 
 A no-op when `d` is collapsed, and a buffer-free local copy when `d` is
 undivided and periodic (see [`selfwrap`](@ref)). Otherwise every rank of the
@@ -284,7 +284,7 @@ end
 
 Fill the rank-boundary halos of scalar field `f` from neighboring ranks over all
 three dimensions, in place, and return `f`. `f` must be sized
-`n_local .+ 2 .* n_halo_d`, which is what [`field`](@ref) allocates; collapsed
+`n_local .+ 2 .* n_halo_d`, the size [`field`](@ref) allocates; collapsed
 dimensions carry no pad and are skipped. Dimensions are exchanged in turn, so
 edge and corner halos come out filled without dedicated diagonal messages.
 Every rank must call it, from a serial (non-threaded) section. `f` carries the
@@ -298,9 +298,9 @@ function exchange_halos!(f::AbstractArray{T,3}, decomp::Decomp{T}) where {T<:Rea
 end
 
 """
-Component views of the 4-D conserved array, indexed on demand rather than
+Component views of the 4-D conserved array, indexed on demand and not
 collected into a `Vector`. [`exchange_state!`](@ref) runs twice per step and
-built that vector — and one `SubArray` per conserved component — on every
+built that vector, and one `SubArray` per conserved component, on every
 call; this wrapper is immutable, so the same loop allocates nothing.
 """
 struct ComponentViews{V,A} <: AbstractVector{V}
@@ -350,11 +350,11 @@ Interior-only relaxation `dst ← (1 − w) dst + w src`. The halos of `dst` are
 left untouched and `dst` is returned.
 
 `w = 1` reproduces `copy_interior!` exactly and is dispatched to it by the
-caller rather than computed here, so a full-strength application stays
+caller, not computed here, so a full-strength application stays
 bit-identical to the unrelaxed path.
 
 `w` is used as given and is not reduced here, so a caller must supply the same
-value on every rank; [`filter_weight`](@ref) builds it out of already-reduced
+value on every rank; [`filter_weight`](@ref) builds it out of globally reduced
 quantities for that reason.
 """
 @inline function _blend_interior_point!(dst, src, w1, w, o1, o2, o3, i, j, k)

@@ -8,7 +8,7 @@ face, not from the desired visual appearance of the solution.
 | Periodic continuation | [`PeriodicBC`](@ref) | matching opposite face |
 | Inviscid or symmetry wall | [`SlipWallBC`](@ref) | wall normal |
 | Viscous solid wall | [`NoSlipWallBC`](@ref) | optional wall temperature |
-| Supersonic or deliberately forced state | [`DirichletBC`](@ref) | full state as a function of position and time |
+| Supersonic or fully prescribed state | [`DirichletBC`](@ref) | full state as a function of position and time |
 | Subsonic inflow | [`NSCBCInflowBC`](@ref) | velocity, temperature, composition |
 | Subsonic outflow | [`NSCBCOutflowBC`](@ref) | far-field pressure and relaxation scale |
 | Simple zero-normal-gradient approximation | [`ExtrapolationBC`](@ref) | no target state |
@@ -60,7 +60,7 @@ For a subsonic outflow:
 NSCBCOutflowBC(pinf = 1.0, sigma = 0.25)
 ```
 
-`pinf` is a relaxation target rather than a hard boundary pressure. Reducing
+`pinf` is a relaxation target, not a hard boundary pressure. Reducing
 `sigma` transmits an outgoing transient with weaker pressure anchoring; making
 it too small permits slow pressure drift. See
 [Characteristic open boundaries](@ref) for the wave interpretation and model

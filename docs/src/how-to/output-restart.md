@@ -37,7 +37,7 @@ save_vtk(solver, Q, "midplane"; slice = (3, 128), stride = 2)
 
 Slicing usually saves more space than striding for a three-dimensional time
 series. Field construction still occurs on the local block before sampling, so
-these options reduce I/O volume rather than RHS cost.
+these options reduce I/O volume and leave RHS cost unchanged.
 
 ## Write a time series
 

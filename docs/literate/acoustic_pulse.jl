@@ -16,8 +16,8 @@ CairoMakie.activate!(type = "png")
 
 # ## Specify the physical problem
 #
-# We use nondimensional variables and a calorically perfect gas, meaning that
-# its heat-capacity ratio ``\gamma`` is constant. The background state is
+# We use nondimensional variables and a calorically perfect gas, whose
+# heat-capacity ratio ``\gamma`` is constant. The background state is
 # ``p_0 = \rho_0 = 1``. A Gaussian pressure perturbation of amplitude ``10^{-3}``
 # is small enough for its propagation speed to be close to the acoustic speed
 # ``c_0 = \sqrt{\gamma p_0/\rho_0}``. Choosing
@@ -41,11 +41,11 @@ problem = Problem(
     end,
 )
 
-# [`Numerics`](@ref) contains the grid and algorithms rather than the physical
-# problem. `n_global = (128, 1, 1)` resolves only ``x``. `lele_d1_6()` selects a
-# sixth-order compact first derivative: derivative values along a grid line are
-# coupled by a banded spatial solve. This does not make time advancement
-# implicit.
+# [`Numerics`](@ref) contains the grid and algorithms, separate from the
+# physical problem. `n_global = (128, 1, 1)` resolves only ``x``. `lele_d1_6()`
+# selects a sixth-order compact first derivative: derivative values along a
+# grid line are coupled by a banded spatial solve. This does not make time
+# advancement implicit.
 #
 # The CFL number scales the explicit timestep selected from the fastest local
 # acoustic and diffusive rates. Filtering is disabled because this disturbance
@@ -87,8 +87,8 @@ tfinal = 0.30
 times = collect(range(0.0, tfinal; length = 61))
 snapshots = [rho0]
 
-# [`AtTime`](@ref) asks `run!` to end full Runge--Kutta steps exactly at the
-# requested times. `run!` otherwise recomputes a CFL timestep before every step.
+# `run!` ends full Runge--Kutta steps exactly at times requested by
+# [`AtTime`](@ref). It otherwise recomputes a CFL timestep before every step.
 # The columns of `rho_xt` therefore lie on a uniform physical-time axis even
 # though the timestep varies slightly.
 
@@ -104,8 +104,8 @@ rho_xt = reduce(hcat, snapshots)
 #
 # With zero initial velocity, the perturbation separates into equal left- and
 # right-travelling waves. Periodicity makes a wave leaving one side re-enter
-# from the other. The plotted quantity is the density perturbation rather than
-# density itself so the small acoustic signal remains visible.
+# from the other. The plotted quantity is the density perturbation, not the
+# density itself, so the small acoustic signal remains visible.
 
 fig = Figure(size = (760, 420))
 ax = Axis(fig[1, 1], xlabel = "x", ylabel = "time",

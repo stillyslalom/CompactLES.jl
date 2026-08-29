@@ -63,8 +63,8 @@ run!(solver, Q; tfinal=1.0)
 
 Targets Julia ≥ 1.10 and `MPI.jl` v0.20. Its dependencies are `MPI.jl`,
 `ThreadPinning.jl`, and `KernelAbstractions.jl` / `Adapt.jl`; HDF5 and Makie are
-weak dependencies, loaded only if you use them. A GPU run additionally needs a
-device package (`AMDGPU.jl` or `CUDA.jl`) in your environment.
+weak dependencies, loaded only when imported. A GPU run additionally needs a
+device package (`AMDGPU.jl` or `CUDA.jl`) in the active environment.
 
 ```
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
@@ -166,7 +166,7 @@ patch per solver.
 
 `compute_dt` uses physical spacings, so the estimate stays conservative near a
 singularity. A collapsed angular dimension (1-D radial, axisymmetric) keeps a
-Cartesian-like step, but a resolved polar angle pays roughly N_θ/π — a ~20×
+Cartesian-like step, but a resolved polar angle pays roughly N_θ/π, a ~20×
 penalty at N_θ = 64, like any resolved-singularity polar grid. `dt_report(solver,
 Q)` locates the CFL-limiting cell and whether the limit is acoustic, diffusive, or
 curvature-driven. The standard remedies (azimuthal mode truncation, IMEX, local

@@ -32,8 +32,8 @@ Interior (x, ρ, u, p) along dimension 1 at j = k = 1, gathered across the
 dimension-1 sub-communicator so the cases read the same under `mpiexec`.
 
 Named apart from the exported `line_profile`, which these files bring into
-scope through `using CompactLES` and which returns a single named field rather
-than the four the cases compare against.
+scope through `using CompactLES` and which returns one named field, not the four
+the cases compare against.
 """
 function case_line_profile(solver, Q)
     CL.exchange_state!(Q, solver.decomp)
@@ -120,8 +120,8 @@ const LAX_N = 400
 lax(; N=LAX_N, kw...) = tube(LAX_L, LAX_R; N=N, tfin=LAX_T, kw...)
 
 # Shu–Osher: Mach 3 shock into a sinusoidal density field. The post-shock wave
-# train is the diagnostic — a scheme that smears it loses amplitude, which is
-# exactly what an over-eager artificial viscosity does.
+# train is the diagnostic — a scheme that smears it loses amplitude, as does an
+# over-eager artificial viscosity.
 const SO_L = (3.857143, 2.629369, 10.333333333333333)
 const SO_T = 1.8
 const SO_N = 800
@@ -163,7 +163,7 @@ end
 # (see reference/CALIBRATION.md), and a smoothed source is standard practice
 # for Sedov anyway.
 
-const SEDOV_E = 0.851 * 0.8^5      # chosen so that R_s(t = 1) ≈ 0.8
+const SEDOV_E = 0.851 * 0.8^5      # chosen for R_s(t = 1) ≈ 0.8
 const SEDOV_T = 1.0
 const SEDOV_S = 0.06               # deposit width, ≈ 13 cells at N = 256
 const SEDOV_N = 256
@@ -191,7 +191,7 @@ end
 #
 # Cold gas at u = −1 stagnating on a symmetry point. Every feature of the answer
 # is a fixed number, so the artificial viscosity has to produce the right
-# plateau AND avoid depositing spurious entropy at the point of symmetry.
+# plateau and avoid depositing spurious entropy at the point of symmetry.
 #
 # ν = 1 planar (slip wall), ν = 2 cylindrical axis fold, ν = 3 spherical origin
 # fold. Only ν = 3 is warm-started, because the spherical origin will not take
@@ -208,7 +208,7 @@ const NOH_T0 = (1 => 0.0, 2 => 0.0, 3 => 0.3)
     noh_case(ν; N, t0, art, cfl) -> (x, rho, u, p, completed)
 
 Noh in ν dimensions, integrated from `t0` to `NOH_T`. `t0 > 0` initializes from
-the exact solution instead of the uniform cold inflow. The outer boundary
+the exact solution, bypassing the uniform cold inflow. The outer boundary
 carries the exact time-dependent inflow, which for ν > 1 is compressing as it
 converges and is therefore not a constant state.
 """
@@ -252,8 +252,8 @@ end
 #
 # A sharp binary interface carried through a periodic domain at uniform ρ, p and
 # u. Nothing else happens: no shock, no shear, no pressure gradient, so the
-# growth of the interface is exactly what the artificial species diffusivity
-# did to it. This is the only case in the set that isolates C_D.
+# interface growth measures the effect of artificial species diffusivity. This
+# is the only case in the set that isolates C_D.
 
 const MIX_N = 256
 const MIX_T = 0.5

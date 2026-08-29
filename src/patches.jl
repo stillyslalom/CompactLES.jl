@@ -6,7 +6,7 @@
 # Solver in rhs.jl keeps the physics configuration and the run clock,
 # plus the vector of this rank's patches in global order. In the common case of
 # one patch spanning all ranks, that patch's decomposition is built over
-# MPI.COMM_WORLD exactly as the pre-patch solver's was, and `Base.getproperty`
+# MPI.COMM_WORLD, matching the pre-patch solver, and `Base.getproperty`
 # on Solver forwards the patch-owned names to the sole patch, so the whole
 # existing surface (`solver.rho`, `solver.decomp`, ...) reads unchanged and the
 # single-patch code path is the old code path.
@@ -14,8 +14,8 @@
 # With several patches, the rank set is partitioned: MPI.Comm_split assigns
 # each rank to exactly one patch's communicator, ranks in proportion to patch
 # volume, except in a serial run where the one rank advances every patch in
-# sequence. Patch interfaces are node-coincident — abutting patches share the
-# interface plane — and are coupled by three mechanisms, all between stages and
+# sequence. Patch interfaces are node-coincident (abutting patches share the
+# interface plane) and are coupled by three mechanisms, all between stages and
 # never inside a per-patch RHS evaluation (a shared rank advances its patches
 # sequentially, so cross-patch communication inside compute_rhs! would wait on
 # work that has not run yet):
@@ -23,8 +23,7 @@
 #   1. `exchange_patch_ghosts!` copies each patch's interface ghost layers from
 #      the abutting patch's interior. The ghosts carry conserved state; every
 #      derived quantity in them (primitives, internal energy, mass fractions)
-#      is recomputed locally by the full-padded-array passes that already
-#      exist.
+#      is recomputed locally by the existing full-padded-array passes.
 #   2. The line solves are closed at the face with rows whose left-hand side
 #      couples no ghost unknown (`interface_closures` in kernels.jl); whether
 #      their right-hand sides read the exchanged ghosts (`:extended`) or stay
@@ -52,7 +51,7 @@ Per-patch state of a [`Solver`](@ref): the patch's place in the global grid
 its operator plans and folds, and every field array, typed
 `A <: AbstractArray{T,3}` by the storage backend. Constructed by `Solver`;
 user code normally reaches these fields through the solver (which forwards
-them for a single-patch run) rather than holding a `Patch` directly.
+them for a single-patch run) without holding a `Patch` directly.
 """
 struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,TF}
     id::Int
@@ -109,7 +108,7 @@ struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,TF}
 end
 
 # The positional argument list every construction site uses; `field_tuples`
-# is derived here rather than at the sites so the sites never fall out of
+# is derived here, not at the sites, so the sites never fall out of
 # step with the wrapper set.
 function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                deriv_plans, div_plans, filter_plans, smooth_plans, ring_plans,
@@ -129,10 +128,10 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                  cot_over_r_gcl, flux, field_tuples)
 end
 
-# Property names owned by the patch rather than the solver configuration.
+# Property names owned by the patch, not the solver configuration.
 # `Base.getproperty(::Solver, name)` forwards these to the sole patch of a
 # single-patch solver, and `PatchSolver` routes them per patch. The test is a
-# `===` chain so that a literal property name constant-folds to a plain
+# `===` chain, allowing a literal property name to constant-fold to a plain
 # `getfield` at every call site.
 @inline _is_patch_prop(n::Symbol) =
     n === :decomp || n === :bcs || n === :folds || n === :faces ||
@@ -367,7 +366,7 @@ end
 
 # Every rank's block, known everywhere. With the rank set partitioned over
 # patches each rank contributes its one block through a single Allgather; a
-# serial run holds every patch already and communicates nothing.
+# serial run holds every patch and communicates nothing.
 function _block_table(comm::MPI.Comm, my_pids::Vector{Int}, my_decomps)
     np = MPI.Comm_size(comm)
     if np == 1
@@ -520,8 +519,8 @@ Fill every patch's interface ghost layers from the abutting patch's interior
 values of the conserved state, and return `states` (the per-patch state vector
 aligned with `solver.patches`). Ghost strips span each rank's own transverse
 interior; the following within-patch [`exchange_state!`](@ref) carries them
-into edge and corner halos, exactly as the sequential-dimension halo exchange
-already fills corners. Collective over the ranks owning either side of any
+into edge and corner halos using the sequential-dimension halo exchange that
+fills corners. Collective over the ranks owning either side of any
 interface; a run with one patch returns immediately.
 """
 function exchange_patch_ghosts!(solver, states)
@@ -567,7 +566,7 @@ function average_shared_planes!(solver, states)
     for pl in planes
         if pl.partner == me
             # A local pairing appears once from each side; averaging is
-            # idempotent, so the second application is a no-op rather than a
+            # idempotent, so the second application is a no-op, not a
             # double count.
             _average_blocks!(states[pl.patch], pl.mine,
                              states[pl.partner_patch], pl.theirs)

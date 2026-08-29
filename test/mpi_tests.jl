@@ -36,7 +36,7 @@
 # the SAME value and fail together — and compares it to the analytic result at
 # the tolerance the serial suite achieves on the same operator.
 
-# Timing first, so that package load is measured rather than assumed. Every
+# Timing first, ensuring package load is measured rather than assumed. Every
 # rank compiles this suite independently, so the compile column here is
 # per-rank work that the rank count multiplies. See test/timing.jl.
 include("timing.jl")
@@ -258,7 +258,7 @@ end
 function test_offrank_folds()
     section("off-rank folds: antipodal pairing butterfly across ranks")
 
-    # (a) Resolved-θ cylindrical axis, θ SPLIT. The fold is on r (dim 1, one
+    # (a) Resolved-θ cylindrical axis, θ split. The fold is on r (dim 1, one
     # rank); the antipodal partner is the θ+π slot, so splitting θ makes the
     # partner live on rank +np/2 → off-rank shift butterfly. f = r cosθ e^{−4r²}
     # is smooth through the axis and ODD under (r,θ)→(−r,θ) with the pairing.
@@ -277,7 +277,7 @@ function test_offrank_folds()
     check("cyl axis ∂/∂r, θ split (off-rank shift)", gmax(ferr(solver, df,
           (r, θ, z) -> cos(θ) * (1 - 8r^2) * exp(-4r^2))), 1e-4)
 
-    # (b) Spherical origin + poles, θ SPLIT. The origin fold reverses θ in its
+    # (b) Spherical origin + poles, θ split. The origin fold reverses θ in its
     # partner map (revdim = 2), so splitting θ triggers the off-rank REVERSED
     # butterfly. f = e^{−4r²} is smooth at the origin and both poles.
     ssθ = Solver(n_global=(40, SPLITN, 12), L_domain=(1.0, π, 2π),
@@ -467,10 +467,10 @@ end
 #     switch on the same step everywhere. This is the deadlock case, not an
 #     accuracy case: NSCBCOutflowBC runs collectives that SlipWallBC does not,
 #     so if the ranks disagree about whether the switch has happened, some enter
-#     a collective the others never reach and the run hangs at zero CPU rather
-#     than failing. WhenState reduces its condition for exactly this reason.
+#     a collective the others never reach and the run hangs at zero CPU without
+#     failing. WhenState reduces its condition to prevent this.
 #
-#     The condition below is deliberately the worst case: true on ONE rank only
+#     The condition below tests the worst case: true on one rank only
 #     — the one owning the high-x boundary plane, which is where NSCBC would
 #     run. Without the reduction inside WhenState this test hangs. With it, the
 #     rank-local condition must produce bit-identical state to a condition every
@@ -549,14 +549,15 @@ function test_callback_consistency()
     # per-step decision, so it is the *step count* that has to be enough to catch
     # a divergence, and every step costs the same. The four runs here take 12, 12,
     # 8 and 9 steps, against 12, 12, 44 and 40 before the lengths were cut. That
-    # matters at high rank counts on a runner with fewer cores than ranks, where
+    # The shorter runs reduce runtime at high rank counts on a runner with fewer
+    # cores than ranks,
     # each step is a fixed toll of small collectives and the phase cost is linear
     # in steps: at np = 8 on a four-core CI runner these runs cost ~7 s per step
     # against ~0.04 s at np = 2, so the phase was 13 minutes of a 20-minute job.
     # Lengthen a run here only for a check that needs the extra steps.
     #
     # The four runs also take the same number of steps at every rank count, which
-    # is what makes the step count the thing to watch: measured 12, 12, 44 and 40
+    # makes step count the relevant measure: measured 12, 12, 44 and 40
     # at both np = 2 and np = 8 before the cut.
     #
     # tfinal here is one ULP BELOW the third instant, since `0.006 + 0.003` is
@@ -631,7 +632,7 @@ end
 
 # ---------------------------------------------------------------------------
 # 9. FieldWriter under decomposition. save_vtk is collective, since it
-#    Allgathers the piece extents so that rank 0 can write the container, and
+#    Allgathers the piece extents, allowing rank 0 to write the container, and
 #    the serial suite does not exercise this path: one rank writes one piece
 #    there, leaving the per-rank naming and the container's piece list untested.
 #    The writer adds directory creation and a rank-0 collection file, both of
@@ -646,8 +647,8 @@ function test_field_writer()
                                                    rho=1.0)),
                       Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
     writer = FieldWriter(joinpath("mpi_frames", "field"))
-    # Three frames is what the piece and container counts below are written
-    # against; the run is then only as long as it takes to produce them, since
+    # The piece and container counts below assume three frames; the run is only
+    # as long as it takes to produce them, since
     # every check here is on the files rather than on the state in them. The
     # interval is a little over one CFL step, so the frames still land on
     # separate steps. See the run-length note in test_callback_consistency.
@@ -780,7 +781,7 @@ function test_slicing()
                                                    rho=1 + x)),
                       Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
 
-    # (a) Slice across the SPLIT dimension: exactly one rank spans the plane.
+    # (a) Slice across the split dimension: exactly one rank spans the plane.
     save_vtk(solver, Q, "mpi_slice_x"; fields=(:rho,), slice=(1, SPLITN ÷ 2 + 1))
     MPI.Barrier(comm)
     pieces = rank == 0 ? length(filter(f -> startswith(f, "mpi_slice_x") &&
@@ -822,7 +823,7 @@ function test_slicing()
     rank == 0 && foreach(rm, filter(startswith("mpi_slice_z"), readdir()))
     MPI.Barrier(comm)
 
-    # An out-of-range plane is rejected on every rank, not just the one that
+    # An out-of-range plane is rejected on every rank, not only the one that
     # would have held it.
     threw = try
         save_vtk(solver, Q, "mpi_slice_bad"; fields=(:rho,), slice=(1, SPLITN + 1))
@@ -872,7 +873,7 @@ function test_checkpoint()
     end
     check("a different domain is refused on every rank", abs(gsum(threw) - np), 0.5)
     # One rank does the cleanup: every rank wrote its own file, but all of them
-    # racing to rm the whole glob just makes them delete each other's entries
+    # racing to rm the whole glob makes them delete each other's entries
     # and throw ENOENT.
     MPI.Barrier(comm)
     rank == 0 && foreach(rm, filter(startswith("mpi_ckpt"), readdir()))
@@ -891,8 +892,8 @@ rank == 0 && println("=== CompactLES multi-rank test suite (np = $np) ===")
 #     `compute_artificial!`, on the far side of no early return. Splitting the
 #     same field along each axis in turn must give the same integrated
 #     coefficients: a halo the new path forgot to exchange changes the sensor
-#     only near a rank boundary, which is exactly what a whole-domain sum of
-#     three different decompositions catches.
+#     only near a rank boundary. A whole-domain sum over three different
+#     decompositions detects that error.
 # ---------------------------------------------------------------------------
 function test_artificial_decomposition()
     section("artificial properties: coefficients independent of the split axis")
@@ -939,8 +940,8 @@ function test_artificial_decomposition()
         check("$sensor: Σ β* spread over the three split axes",
               spread, tol_of[sensor] * max(maximum(sums), 1e-30))
     end
-    # No two sensors may agree here, or the checks above would pass just as
-    # happily on a `beta_sensor` that was being ignored. `check` tests val < tol,
+    # No two sensors may agree here, or the checks above would also pass with an
+    # ignored `beta_sensor`. `check` tests val < tol,
     # so each relative difference is inverted into one: this passes when the
     # totals differ by more than 0.1%.
     for sensor in (:gated_strain, :dilatation, :ungated_dilatation)
@@ -1023,8 +1024,8 @@ function test_ring_detector_decomposition()
                   maximum(sums) - minimum(sums), 1e-10 * max(maximum(sums), 1e-30))
         end
     end
-    # As in 7c: the checks above would pass just as happily on a `detector`
-    # that was being ignored, so require the two to disagree. κ* is the
+    # As in 7c, the checks above would also pass with an ignored `detector`, so
+    # require the two to disagree. κ* is the
     # channel where they separate by orders rather than by a factor, its input
     # being smooth where β*'s is not.
     rel = abs(totals[:delta4][2][1] - totals[:d8][2][1]) /
@@ -1034,11 +1035,11 @@ end
 
 function test_positivity_floor()
     section("positivity failsafe: same tally and same repair under any split")
-    # Six cells damaged by hand at known global indices, so that whichever rank
-    # owns each one, the reduced tally has to come out the same. Two carry a
+    # Six cells are damaged by hand at known global indices. Regardless of which
+    # rank owns each one, the reduced tally must be the same. Two carry a
     # negative partial density with the mixture density still healthy, two an
     # internal energy below the floor with the total energy still positive, and
-    # two a negative total energy. Two species, so that the first pair exercises
+    # two a negative total energy. Two species make the first pair exercise
     # the clip-and-rescale path rather than the density floor.
     #
     # The first entry of each triple is the index along whichever axis is split,
@@ -1118,7 +1119,7 @@ end
 #    the spike solve reproduces the single-domain answer bit for bit at any
 #    rank count, and every cross-patch transfer moves values unchanged, so the
 #    max-norm error of the run — an associativity-free reduction — must equal
-#    the serial two-patch value EXACTLY at every np. The reference below was
+#    the serial two-patch value at every np. The reference below was
 #    measured with test/patch_tests.jl's entropy-wave case at np = 1.
 # ---------------------------------------------------------------------------
 function test_two_patch_layout()
@@ -1356,7 +1357,7 @@ const SUITE = (
 )
 
 try
-    # Barrier before each timing so that a slow rank in one test is charged to
+    # Barrier before each timing, ensuring a slow rank in one test is charged to
     # that test rather than to the next one it holds up.
     for (name, testfn) in SUITE
         MPI.Barrier(comm)

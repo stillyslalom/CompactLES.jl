@@ -4,7 +4,7 @@
 # the KernelAbstractions CPU backend — on the same solver and state. The
 # acceptance bar for replacing @threaded outright was KA-CPU within 10% per
 # phase at 64³; a larger regression keeps the current static routing (Array
-# storage on @threaded, device storage on KA), which is the shipped default
+# storage on @threaded, device storage on KA), which is the default
 # either way. Run with threads (`-t 8` matches the numbers recorded in the
 # threading.jl docstring) and read ratios, not absolutes: run-to-run spread
 # is the usual 10–20%.

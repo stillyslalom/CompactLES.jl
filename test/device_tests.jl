@@ -161,7 +161,7 @@ end
 @testset "device-resident refinement" begin
     # A refined solver on the DeviceBackend construction path: DevicePlans on
     # both levels, the level transfer's gathers and writes routed through the
-    # backend seam, in all three coupling modes. Bitwise against the
+    # backend interface, in all three coupling modes. Bitwise against the
     # CPUBackend runs under FORCE_KA, as every device gate is. The
     # device-only write branches (`_fine_shell_point!`, the covered-region
     # and carry-over broadcasts, the staged gather pack) run on the real GPU
@@ -309,8 +309,8 @@ end
     @test parent(dQ) === parent(Q)
 end
 
-# Every per-point body launched through `pointwise!`, spelled out so that a
-# new one has to be added here deliberately. The scan below fails when this
+# Every per-point body launched through `pointwise!` is spelled out. A new one
+# must be added here deliberately. The scan below fails when this
 # list and the call sites disagree, in either direction.
 const POINTWISE_BODIES = (
     :_area_flux_point!, :_blend_interior_point!, :_body_force_point!,
@@ -335,7 +335,7 @@ const POINTWISE_BODIES = (
     # splatted tuple of at most 32 elements into a static call and falls back
     # to the dynamic `_apply_iterate` beyond it, which is an InvalidIRError on
     # device (reference/AMR_GPU.md, pointwise kernels — the NSCBC bodies pack
-    # their scalars into small tuples for exactly this reason). The budget is
+    # their scalars into small tuples to stay below this limit). The budget is
     # therefore 32 launcher arguments, or 35 declared arguments once i, j, k
     # are counted. `_rate_point!` and `_fluxes_point!` are the two that have
     # come nearest it; both pack scalars into isbits tuples to stay under.

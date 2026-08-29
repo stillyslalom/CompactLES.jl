@@ -1,9 +1,9 @@
 # Reader for the fixed-column NASA CEA thermodynamic database. The source table,
-# its Apache license, and its NOTICE are shipped verbatim in `data/`.
+# its Apache license, and its NOTICE are bundled verbatim in `data/`.
 #
 # Every magic column number below comes from the CEA record format, which is
-# Fortran and therefore positional rather than delimited — a field is where it
-# is, and whitespace inside one is significant:
+# Fortran and therefore positional, not delimited. A field is where it is, and
+# whitespace inside one is significant:
 #
 #   name     A16 name (cols 1-16), then a free-text reference comment
 #   header   (I2, 1X, A6, 1X, 5(A2,F6.2), I2, F13.5, F15.3)
@@ -12,8 +12,8 @@
 #   bounds   (2F11.3, I1, 8F5.1, F17.3) → Tmin 1-11, Tmax 12-22
 #   coeffs   (5D16.8) then (2D16.8, 16X, 2D16.8) → a₁..a₅, a₆a₇, b₁ 49-64
 #
-# Exponents are written `D` rather than `E`, which is why the float parser
-# substitutes before parsing.
+# Exponents are written `D` instead of `E`, so the float parser substitutes
+# before parsing.
 
 const NASA9_THERMO_PATH = normpath(joinpath(@__DIR__, "..", "data", "thermo.inp"))
 const UNIVERSAL_GAS_CONSTANT = 8.31446261815324 # J/(mol K)
@@ -88,10 +88,10 @@ function _nasa9_record(lines, i, header, n_intervals, name, path)
 end
 
 # Lines consumed by one record: the name line, the header, and three lines per
-# interval — except that a zero-interval record (the REACTANTS section lists
+# interval, except that a zero-interval record (the REACTANTS section lists
 # some species by heat of formation alone) still carries one temperature line.
-# Getting this wrong desynchronizes the scan against the file rather than
-# failing locally, so it is written down once here.
+# Getting this wrong desynchronizes the scan against the file, with no local
+# failure, so it is written down once here.
 _nasa9_record_lines(n_intervals) = n_intervals == 0 ? 3 : 2 + 3 * n_intervals
 
 """

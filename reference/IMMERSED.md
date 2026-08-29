@@ -2,7 +2,7 @@
 
 This document is the design for immersed-boundary (IB) geometry: solid bodies
 that do not lie on coordinate surfaces, represented on the existing structured
-grid rather than by a boundary-fitted or unstructured mesh. It is written to
+grid without a boundary-fitted or unstructured mesh. It is written to
 be implemented stage by stage. Prerequisite reading: `DESIGN.md` (operators,
 folds, the RHS walkthrough); `reference/AMR_GPU.md` shares the constraint
 analysis style and one open interaction. `ROADMAP.md` holds sequencing.
@@ -42,7 +42,7 @@ constraint imposes values
 mid-line, either of which breaks the uniform banded structure and the
 distributed spike solve, per geometry, per line. The field must therefore
 exist and remain smooth *through* the solid, with the boundary condition
-entering as forcing or as post-stage state imposition — the diffuse family.
+entering as forcing or as post-stage state imposition, the diffuse family.
 
 Within that family, three formulations are relevant:
 
@@ -70,21 +70,21 @@ where χ_s is the smeared solid fraction of the cell (`chi_solid` below, in
 exact integral of the Brinkman relaxation (unconditionally
 stable at any η, no timestep coupling) and degenerates to the hard reset at
 η → 0 (w = χ_s). One mechanism spans soft penalization to Pyranda-style
-imposition, with η a measurable knob rather than a method fork. What
-distinguishes the stages below is not the mechanism but how `Q_target` is
-built: algebraic targets first, normal-extrapolated targets later.
+imposition, with η a measurable parameter, not a method fork. The stages
+below share this mechanism and differ in how `Q_target` is built: algebraic
+targets first, normal-extrapolated targets later.
 
 This is a geometric-flexibility feature, not an accuracy one. Interface
 accuracy is first order in the smearing half-width δ (the `delta` field, in
 cells; distinct from the δ⁴ sensor difference used by the artificial
-properties) regardless of the tenth-order interior, the same honesty that
-applies to the closure-order drop at fitted walls. A calculation whose answer
+properties) regardless of the tenth-order interior, as with the closure-order
+drop at fitted walls. A calculation whose answer
 depends on boundary-layer resolution at the body does not belong on an immersed
 boundary in this code.
 
 ## In-family precedent
 
-Pyranda ships a level-set immersed-boundary method (`pyranda/pyrandaIBM.py`).
+Pyranda includes a level-set immersed-boundary method (`pyranda/pyrandaIBM.py`).
 The account below is from the source; an earlier version of this section was
 from memory and is corrected in two places, marked as such.
 
@@ -96,7 +96,7 @@ Aslam-style constant extrapolation run as pseudo-time marching: two iterations
 coefficient is `immersed_CFL` and n̂ = ∇φ is supplied by the caller. Each
 iteration is applied only where φ ≤ ε, and each is followed by a Gaussian
 filter pass whose result is likewise kept only inside the body. The gradient is
-the solver's own compact derivative rather than a local upwind difference, and
+the solver's own compact derivative, not a local upwind difference, and
 the filter stabilizes the sweep.
 
 The velocity conditions add a reconstruction through the zero level. Within a
@@ -125,8 +125,8 @@ reconstruction they wrap around it.
 ### Geometry specification
 
 A body is a user-supplied pointwise function of physical coordinates,
-matching the `ic` pattern — pure, evaluated through `xcoord`, never seeing
-ranks or halos:
+matching the `ic` pattern (pure, evaluated through `xcoord`, never seeing
+ranks or halos):
 
 ```julia
 body = ImmersedBody(
@@ -140,22 +140,22 @@ Problem(..., bodies = (body,))     # tuple, like sources; empty default
 
 At `setup`, per body, filled once over the padded arrays (static geometry):
 
-- `phi_body` — φ sampled pointwise; no halo exchange needed (analytic, like
+- `phi_body`: φ sampled pointwise; no halo exchange needed (analytic, like
   the geometry arrays in `metric.jl`).
-- `grad_phi` — ∇φ by the compact derivative at setup, normalized to `n_hat`.
-  Its magnitude `|∇φ|` also normalizes the smearing so that φ need only be
-  *distance-like* near the interface rather than an exact signed distance
+- `grad_phi`: ∇φ by the compact derivative at setup, normalized to `n_hat`.
+  Its magnitude `|∇φ|` also normalizes the smearing, so φ need only be
+  *distance-like* near the interface and not an exact signed distance
   function:
   `chi_solid = ½(1 − tanh(φ / (delta · h_phys · |∇φ|)))`, with `h_phys` the
   local mean physical spacing (metric- and stretch-aware via `inv_h`).
-- `chi_solid` — the smeared solid fraction above. Multiple bodies combine by
+- `chi_solid`: the smeared solid fraction above. Multiple bodies combine by
   `max`.
 - A deep-solid anchor state: the conserved IC snapshot where
   `chi_solid > 0.99`, stored sparsely (index list + values), toward which the
   deep interior relaxes. This prevents slow drift of the fictitious solid
   state without costing a full extra state array.
 
-Bodies are first-class on `Problem`/`Solver` rather than entries in
+Bodies are first-class on `Problem`/`Solver`, not entries in
 `sources`: the mask arrays require setup-time construction (grid-dependent,
 which a user-built source tuple predates), and the imposition runs outside
 the RHS (below), which a source cannot do.
@@ -165,13 +165,13 @@ the RHS (below), which a source cannot do.
 Built pointwise from the current state; velocities are physical components in
 the local orthonormal basis, consistent with everything else:
 
-- `SlipIB` — remove the normal velocity: `u_t = u − (u·n̂)n̂`, kinetic energy
+- `SlipIB`: remove the normal velocity, `u_t = u − (u·n̂)n̂`, kinetic energy
   reduced accordingly (the `SlipWallBC` pattern); thermal state and
   composition untouched.
-- `NoSlipIB` adiabatic (`Twall = NaN`) — `u_t = u_body` (zero for static
+- `NoSlipIB` adiabatic (`Twall = NaN`): `u_t = u_body` (zero for static
   bodies), kinetic energy removed; thermal state untouched. The residual
-  spurious heat flux into the body is O(δ) and is what Stage 3 improves.
-- `NoSlipIB` isothermal — additionally relax ρe toward
+  spurious heat flux into the body is O(δ); Stage 3 reduces it.
+- `NoSlipIB` isothermal: additionally relax ρe toward
   `wall_internal_energy(eos, Q, I, n_species, Twall)`, reusing the existing
   per-EOS hook from `boundary.jl` unchanged.
 - Species: never forced; Σ J_k = 0 machinery is untouched and the interface
@@ -179,9 +179,9 @@ the local orthonormal basis, consistent with everything else:
 
 ### Where the imposition runs
 
-In `step!`, immediately after `apply_bcs!`, every RK stage — it *is* a
-boundary condition, and the RHS then differentiates a state that already
-honors the body, exactly as it does for wall planes. It is pointwise and
+In `step!`, immediately after `apply_bcs!`, at every RK stage. The imposition
+is a boundary condition, and the RHS then differentiates a state that
+honors the body, as it does for wall planes. It is pointwise and
 χ-masked, so the cost is negligible and there are no collectives (no
 early-return trap). It is not an RHS source: putting −(χ/η)(q − q_target) in
 `dQ` would couple η to the RK45 stability limit and poison `compute_dt`,
@@ -193,8 +193,9 @@ and the blend is unconditionally stable.
 
 The compact filter and the Cook sensors run unmodified through the body. The
 smeared interface is smooth over ~2δ cells, so the δ⁴ sensors see a resolved
-feature and respond moderately — likely beneficial, since they damp exactly
-the interface-generated noise the penalization literature worries about.
+feature and respond moderately. This response may help by damping the
+interface-generated noise discussed in the penalization literature.
+
 Whether artificial properties should be scaled down by `(1 − chi_solid)` deep
 inside the body is a measurement question for Stage 2, not a design
 commitment; the diffusive-rate contribution of interface β\* to `compute_dt`
@@ -202,17 +203,17 @@ is part of that same measurement.
 
 ### Diagnostics
 
-The imposition is bookkept, which makes force and heat-flux extraction exact
-with respect to what the scheme actually did: per step,
+The imposition is bookkept, so force and heat-flux extraction is exact with
+respect to the state change the scheme applied: per step,
 
     F_body   = −Σ w (Q_target − Q)[momentum] · cell_measure / Δt
     q̇_body   = −Σ w (Q_target − Q)[energy]   · cell_measure / Δt
 
-accumulated in the imposition loop and reduced on demand (`body_force`,
-`body_heat_flux` — MPI-reduced like the existing diagnostics). The same sums
+accumulated in the imposition loop and reduced on demand (`body_force` and
+`body_heat_flux`, MPI-reduced like the existing diagnostics). The same sums
 are the conservation-defect report: diffuse IB does not conserve inside the
-body, and the defect should be printed by the validation cases rather than
-hidden. `save_vtk`/`save_hdf5` gain `:chi_solid` and `:phi_body` derived
+body, and the validation cases should print the defect.
+`save_vtk`/`save_hdf5` gain `:chi_solid` and `:phi_body` derived
 fields for inspection.
 
 ## Stage 1 — geometry and blend imposition
@@ -222,7 +223,7 @@ setup-time mask/normal/anchor construction, the per-stage imposition, the
 force/heat diagnostics, and the two output fields. Static geometry only.
 Frontend: `Problem(..., bodies=...)` threaded through `setup` and `Solver`
 (one new type-parameterized field, following the `sources` tuple pattern so
-inference survives — verify with `bench/jetcheck.jl` deltas as usual).
+inference survives; verify with `bench/jetcheck.jl` deltas as usual).
 
 **Gates.**
 
@@ -233,8 +234,8 @@ inference survives — verify with `bench/jetcheck.jl` deltas as usual).
    shock position and post-reflection state, error measured versus δ and
    versus h (expect first order in the interface region).
 3. The serial suite and the MPI suite (counts in `CLAUDE.md`) pass with a body
-   straddling rank boundaries (the mask is pointwise, so this should be trivially true;
-   the test exists to keep it true).
+   straddling rank boundaries (the mask is pointwise, so this is expected to
+   hold; the test keeps it so).
 
 ## Stage 2 — validation battery and calibration
 
@@ -242,12 +243,12 @@ Measure before refining; this stage produces the numbers Stage 3 decisions
 need. Cases small enough to respect the run-cost discipline, added to
 `test/cases.jl` shape-compatibly so a future guard can consume them:
 
-- **Rotated immersed plate** versus the fitted-grid solution — the
-  angle-independence check that is the entire point of IB.
+- **Rotated immersed plate** versus the fitted-grid solution: the
+  angle-independence check that is the primary motivation for IB.
 - **Supersonic cylinder**: shock standoff distance versus the Billig
   correlation; drag from `body_force`.
 - **Low-Mach cylinder shedding** at Re = 100–200: Strouhal number against
-  the established range (≈ 0.16–0.20) — exercises force diagnostics and
+  the established range (≈ 0.16–0.20); exercises force diagnostics and
   long-time interface stability.
 - **Shock–cylinder diffraction** (Bryson & Gross): shock trajectory
   comparison; the RM-relevant case and the sternest interface-noise test.
@@ -263,17 +264,17 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
 
 - **Adiabatic condition done properly**: build the thermal part of
   `Q_target` by extrapolating T (or ρe) from the fluid side along −n̂,
-  Aslam-style constant extrapolation — iterate
+  Aslam-style constant extrapolation. Iterate
   `∂s/∂τ = −H(−φ) (n̂·∇s)`, with s the scalar being carried into the solid,
   τ a pseudo-time, H the Heaviside step and n̂ the interface normal, for ~5–10
   pseudo-steps with local first-order upwind differences (not the compact
   operators: locality and monotonicity are wanted here, spectral resolution is
   not). One halo exchange per sweep;
   cost is per-step but pointwise-cheap and confined to a band around the
-  body. Pyranda takes the opposite choice on both counts — two sweeps, the
-  compact gradient, and a filter pass in place of upwinding
-  ([In-family precedent](#in-family-precedent)) — so if the upwind sweep proves
-  expensive or fragile, that combination is the tested alternative.
+  body. Pyranda takes the opposite choice on both counts (two sweeps, the
+  compact gradient, and a filter pass in place of upwinding; see
+  [In-family precedent](#in-family-precedent)), so if the upwind sweep
+  proves expensive or fragile, that combination is the tested alternative.
 - **Tangential-velocity fidelity for `SlipIB`** through the same
   extrapolation of u_t, if Stage 2 shows the algebraic target dragging the
   outer flow.
@@ -286,11 +287,11 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
 
 - `phi = (x1, x2, x3, t)` and `u_body(x, t)` variants; masks, normals, and
   anchors rebuilt per step from the analytic function (pointwise, cheap; no
-  re-planning — the operators never see the body, which is the payoff of the
-  diffuse formulation).
+  re-planning, since in the diffuse formulation the operators never see the
+  body).
 - Fresh cells (solid → fluid) are handled by construction: the uncovered
   state was being relaxed toward a physical target throughout, so no special
-  reinitialization is required — this claim is exactly what the gate tests.
+  reinitialization is required; the gate tests this claim.
 - **Gates**: an impulsively started and an oscillating immersed piston versus
   the existing fitted `DirichletBC` piston (`examples/piston_driver.jl`)
   for radiated wave amplitude and phase; a moving cylinder versus the fixed
@@ -305,13 +306,13 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
   arrays and on patches; implementing before AMR Stage 2 costs only the
   mechanical port of one loop and two setup arrays. If AMR lands first, χ
   and n̂ are built per patch and per level from the same analytic φ.
-- **AMR synergy**: the interface is precisely where the sensor tagger will
-  refine, and δ in cells means the physical smearing shrinks under
-  refinement — the body sharpens where it is refined, for free. A body
+- **AMR synergy**: the sensor tagger will refine at the interface, and
+  because δ is fixed in cells the physical smearing shrinks under refinement,
+  so the body sharpens where it is refined at no extra cost. A body
   crossing a coarse–fine boundary needs the Stage 2 sweep repeated at the
   interface; note it in the AMR plan's Stage 3 gates when both exist.
-- **GPU**: the imposition and mask construction are pointwise — trivial
-  KernelAbstractions kernels under G1; the Stage 3 extrapolation sweeps are
+- **GPU**: the imposition and mask construction are pointwise (trivial
+  KernelAbstractions kernels under G1); the Stage 3 extrapolation sweeps are
   the only new stencil kernels and they are local.
 - **Folds and metrics**: φ is a function of physical coordinates, so bodies
   compose with cylindrical/spherical metrics and stretch maps with no new
@@ -321,10 +322,10 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
 
 ## Risks and open questions
 
-1. **Spurious acoustics from the interface under strong shocks** — the known
+1. **Spurious acoustics from the interface under strong shocks**, the known
    failure mode of diffuse IB. Mitigations, in order: δ ≥ 2 cells (echoing
-   the ≥ 3-cell resolution lesson from the spherical origin), the sensors
-   already damping interface noise, and η > 0 softening the imposition. The
+   the ≥ 3-cell resolution lesson from the spherical origin), the sensors,
+   which damp interface noise, and η > 0 softening the imposition. The
    shock–cylinder case is the designated probe.
 2. **Thin geometry.** A body feature under ~3 cells thick cannot hold a χ
    plateau and leaks. No general setup-time detection is possible from a
@@ -343,8 +344,8 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
 5. **The in-family precedent is state reset with extrapolation, not a graded
    blend.** The source has now been read
    ([In-family precedent](#in-family-precedent)), and it supports the family
-   working beside compact operators and the filter. It says nothing about the
-   η parameterization, which is this design's own and remains unvalidated
+   working beside compact operators and the filter. It gives no evidence on
+   the η parameterization, which is this design's own and remains unvalidated
    until Stage 2 measures it.
 6. **`compute_dt` blind spot**: velocity inside the body is imposed ≈ 0
    *after* stages, but mid-stage the RHS can transiently accelerate solid
@@ -354,17 +355,17 @@ Driven by Stage 2 measurements; skip whatever they do not justify.
 
 ## References
 
-- Mittal & Iaccarino (2005), Annu. Rev. Fluid Mech. — IB taxonomy and survey.
-- Angot, Bruneau & Fabrie (1999), Numer. Math. — Brinkman penalization and
+- Mittal & Iaccarino (2005), Annu. Rev. Fluid Mech.: IB taxonomy and survey.
+- Angot, Bruneau & Fabrie (1999), Numer. Math.: Brinkman penalization and
   its error analysis.
-- Liu & Vasilyev (2007), J. Comput. Phys. — Brinkman penalization for
+- Liu & Vasilyev (2007), J. Comput. Phys.: Brinkman penalization for
   compressible flow.
-- Boiron, Chiavassa & Donat (2009) — penalization with shocks at high Mach.
-- Kevlahan & Ghidaglia (2001), Eur. J. Mech. B — penalization in a
+- Boiron, Chiavassa & Donat (2009): penalization with shocks at high Mach.
+- Kevlahan & Ghidaglia (2001), Eur. J. Mech. B: penalization in a
   spectral-family discretization.
-- Fedkiw, Aslam, Merriman & Osher (1999), J. Comput. Phys. — ghost-fluid
+- Fedkiw, Aslam, Merriman & Osher (1999), J. Comput. Phys.: ghost-fluid
   state construction.
-- Aslam (2004), J. Comput. Phys. — PDE-based constant/linear extrapolation.
-- `pyranda/pyrandaIBM.py` — in-family level-set immersed-boundary method;
+- Aslam (2004), J. Comput. Phys.: PDE-based constant/linear extrapolation.
+- `pyranda/pyrandaIBM.py`: in-family level-set immersed-boundary method;
   read against this document, findings under
   [In-family precedent](#in-family-precedent).

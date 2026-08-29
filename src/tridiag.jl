@@ -117,8 +117,8 @@ end
     LineSolver(a, b, c, aL, cR, comm, P, p, lines; periodic, explicit=false)
 
 `a`, `b`, `c` are the local sub/diag/super-diagonals, each of length n, with the
-closure rows already substituted where this rank owns a closed global edge and
-the ghost coupling already folded onto the diagonal where it owns a parity fold.
+closure rows substituted where this rank owns a closed global edge and
+the ghost coupling folded onto the diagonal where it owns a parity fold.
 `aL` is the coupling of local row 1 to the previous rank's last unknown, `cR`
 that of local row n to the next rank's first unknown; `aL` is zero where this
 rank owns a closed low edge or a low fold, and `cR` likewise at the high edge.
@@ -131,12 +131,12 @@ interface stage even at `P == 1`. Unless `explicit` is set, assembling that
 stage is collective when `P > 1`, so every rank of `comm` must construct the
 solver.
 
-`explicit` asserts that the left-hand side is the identity, so that both the
-local solve and the interface stage are skipped. It must be derived from the
+`explicit` asserts that the left-hand side is the identity, allowing both the
+local solve and the interface stage to be skipped. It must be derived from the
 scheme alone and never from this rank's edge status: the interface stage
 contains a collective, and a flag that some ranks set and others do not
-deadlocks rather than fails. `aL` and `cR` are exactly such rank-dependent
-quantities, which is why they are not consulted here.
+causes a deadlock. `aL` and `cR` are rank-dependent quantities of
+this kind, so they are not consulted here.
 """
 function LineSolver(a::Vector{T}, b::Vector{T}, c::Vector{T},
                     aL::T, cR::T, comm::MPI.Comm, P::Int, p::Int,
@@ -185,10 +185,10 @@ end
 
 """
 Reduced interface stage shared by every layout of the tridiagonal solve: from
-`line_solver.ends` already holding the local `(y₁, yₙ)` of each line, gather the
+`line_solver.ends` holding the local `(y₁, yₙ)` of each line, gather the
 interface values, solve the dense reduced system, and leave the two correction
-values each line needs — the previous rank's last unknown and the next rank's
-first — in `line_solver.zbp` and `line_solver.zbn`. The gather is collective
+values each line needs, the previous rank's last unknown and the next rank's
+first, in `line_solver.zbp` and `line_solver.zbn`. The gather is collective
 when `P > 1`, so every rank of the sub-communicator must call this.
 """
 function _reduced_solve!(line_solver::LineSolver{T}, L::Int) where {T}
@@ -220,10 +220,10 @@ Solve the (possibly distributed) tridiagonal system for every column of
 section only, and every rank of the solver's sub-communicator must call this.
 
 An identity left-hand side (`line_solver.explicit`) returns `B` unchanged, since
-the caller's fill is already the solution.
+the caller's fill is the solution.
 """
 function solve_lines!(B::AbstractMatrix{T}, line_solver::LineSolver{T}) where {T}
-    line_solver.explicit && return B   # identity LHS: the fill is already the answer
+    line_solver.explicit && return B   # identity LHS: the fill is the answer
     n, L = size(B)
     @threaded n*L for b in 1:cld(L, COL_BLOCK)
         lo = (b - 1) * COL_BLOCK + 1

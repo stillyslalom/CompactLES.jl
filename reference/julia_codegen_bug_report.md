@@ -1,8 +1,8 @@
 # Julia 1.12.7 codegen crash under multithreaded test run (Windows)
 
 **Status:** diagnosis for a JuliaLang/julia bug report. Not a CompactLES logic
-bug — the `device line solves` testset asserts *bitwise* host==device equality,
-so it is the canary that trips first when codegen misbehaves.
+bug: the `device line solves` testset asserts *bitwise* host==device equality,
+so it is the first check to trip when codegen misbehaves.
 
 ## Symptom
 
@@ -19,7 +19,7 @@ typekeyvalue_hash   at C:/workdir/src/jltypes.c:1828     (type interning)
 llvm::MachineInstr::setPCSections ... in libLLVM-18jl.dll (SelectionDAG emit)
 ```
 
-Crucially the **crash source line moves between runs**: one run died compiling
+The **crash source line moves between runs**: one run died compiling
 the top-level expression at `test/runtests.jl:179` (a `Float32` static-AMR
 testset), another at the `device line solves` testset (`:2966`). A fault whose
 location floats across unrelated top-level expressions, with three different
@@ -54,8 +54,8 @@ jl_interpret_toplevel_thunk at interpreter.c:898
 ```
 
 All three signatures sit in the compile path (TBAA metadata; type interning;
-machine-instruction PC-section metadata) — consistent with a concurrent-JIT /
-type-intern race rather than a numerics fault.
+machine-instruction PC-section metadata), consistent with a concurrent-JIT /
+type-intern race, not a numerics fault.
 
 ## Why it is not a CompactLES bug
 
@@ -85,7 +85,7 @@ threaded-ORCJIT-specific fault.
 
 1. `cd CompactLES` at commit `0f04783` (clean tree).
 2. Ensure `JULIA_NUM_THREADS=8` (or `-t 8`).
-3. `julia --project=. test/runtests.jl` — repeat ~5×; expect a hard crash on
+3. Run `julia --project=. test/runtests.jl` ~5×; expect a hard crash on
    roughly a third of runs (or, more rarely, `device line solves` 4/40).
 4. Contrast: `julia --project=. -t 1 test/runtests.jl`.
 
@@ -102,15 +102,15 @@ have only ever been seen at `-t 8`. This is the core thread-count correlation.
 
 ## Narrowing still open
 
-- **A standalone, CompactLES-free reproducer has so far NOT triggered the
-  crash.** Three synthetic stressors were tried at `-t 8`: (a) 400 distinct
+- **A standalone, CompactLES-free reproducer has not yet triggered the crash.**
+  Three synthetic stressors were tried at `-t 8`: (a) 400 distinct
   arithmetic-loop functions, (b) struct-of-arrays + tuple functions, (c)
-  tuple/`ntuple` + mutable-struct + small-Union functions — each generated into a
+  tuple/`ntuple` + mutable-struct + small-Union functions, each generated into a
   fresh `Module` per rep and first-compiled concurrently via
   `Threads.@threads :static` + `Base.invokelatest`, 250–400 functions × 15–25
   reps. All completed cleanly. The earlier observation stands: the trigger is
   concurrent **first** compilation, but synthetic method bodies do not reproduce
-  it — the real suite's mix of deeply parametric specializations (parametric on
+  it; the real suite's mix of deeply parametric specializations (parametric on
   `T`/`Metric`/`EOS`/`BoundaryCondition`, StaticArrays, function barriers)
   appears necessary. **For now the minimal reproducer is the package suite at
   `-t 8`.** (Scratch scripts `tmp_jit_race*.jl` were used for this and removed.)

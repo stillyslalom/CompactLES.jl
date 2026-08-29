@@ -80,8 +80,8 @@ operator (`pyranda/parcop/stencils.f90`, `c10d8`), whose interior rows are
 
 with δ⁸ the undivided eighth difference (1, −8, 28, −56, 70, −56, 28, −8, 1).
 The operator is symmetric, since an even derivative preserves parity, so it is
-planned like a filter rather than a derivative: no `1/h` scaling, and mirrored
-rather than negated at a high edge.
+planned like a filter, not a derivative: no `1/h` scaling, and the high-edge
+rows are mirrored, not negated.
 
 # Normalization
 
@@ -90,8 +90,8 @@ left-hand-side diagonal one, as `BandedCompactScheme` requires) and by a
 further 240, which sets the response to a grid-to-grid oscillation to 16, the
 value the undivided δ⁴ detector it replaces produces there. The two detectors
 therefore agree at the wavelength both are built to catch, and the `C_mu`,
-`C_beta`, `C_kappa` and `C_D` calibrations carry over as starting points
-instead of being off by two orders of magnitude. The two responses differ below
+`C_beta`, `C_kappa` and `C_D` calibrations carry over as starting points and are
+not off by two orders of magnitude. The two responses differ below
 the Nyquist; `reference/CALIBRATION.md` records them at 8, 4 and 2.7 points per
 wavelength.
 
@@ -102,7 +102,7 @@ reaches ±4. They are the interior stencil with its overhanging weights folded
 back onto the half-offset mirror (ghost j ↔ interior j), which is the
 reference's own `-1:2` boundary variant 0 and the same construction
 [`gaussian_filter`](@ref) uses. Every row's weights sum to zero, so a constant
-is annihilated exactly rather than by cancellation. Minimum local extent is 9
+is annihilated exactly, without cancellation. Minimum local extent is 9
 points per rank, matching [`compact_filter`](@ref).
 """
 function compact_d8(::Type{T}=Float64) where {T}

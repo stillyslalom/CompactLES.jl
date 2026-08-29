@@ -1,15 +1,15 @@
 # Argument parsing for the scripts in `bench/` and at the repo root.
 #
 # Not solver code. It lives here because three scripts had grown three copies of
-# it, and because the alternative each of them started from — `get(ENV, ...)`
-# scattered through the body — has a failure mode this does not: a mistyped
-# environment variable runs the default for the length of the job and says
+# it, and because the alternative each of them started from, `get(ENV, ...)`
+# scattered through the body, has a failure mode this does not: a mistyped
+# environment variable runs the default for the length of the job and reports
 # nothing. `CL_TGV_PROGERSS` is a silent hour; `progerss=200` is a message.
 #
 # ARGS also puts the whole invocation in the batch script and in the job log,
-# where an `export` three lines up does not. Two library-level knobs stay in the
-# environment on purpose (`CL_THREAD_MIN_WORK`, `CL_ERROR_BACKTRACE`): those are
-# read from inside the package, where there is no ARGS to consult.
+# where an `export` three lines up does not. Two library-level knobs remain in
+# the environment (`CL_THREAD_MIN_WORK`, `CL_ERROR_BACKTRACE`): those are read
+# from inside the package, where there is no ARGS to consult.
 
 """
     script_args(args, defaults; positional = ()) -> NamedTuple
@@ -73,10 +73,10 @@ _arg_value(::AbstractString, text, key) = String(text)
 
 # Symbol-valued options (`beta_sensor`, `smoother`) are taken verbatim. The
 # admissible set lives with the option itself and is checked at `setup`, so a
-# typo is reported there against the real list rather than duplicated here.
+# typo is reported there against the real list, which is not duplicated here.
 _arg_value(::Symbol, text, key) = Symbol(text)
 
-# Ahead of the numeric method because Bool <: Integer, and "on"/"off" is what a
+# Ahead of the numeric method because Bool <: Integer; "on"/"off" is the form a
 # flag reads like on a launch line.
 function _arg_value(::Bool, text, key)
     lowercase(text) in ("1", "true", "yes", "on") && return true
@@ -95,7 +95,7 @@ end
     script_grid(spec) -> NTuple{3,Int}
 
 Parse a grid argument written either as `N` for a cubic grid or as `NX,NY,NZ`.
-Shared by `clusterprobe.jl` and `clusterlaunch.jl` so that the probe command
+Shared by `clusterprobe.jl` and `clusterlaunch.jl`, ensuring the probe command
 printed by the launch planner uses the grid that was sized.
 """
 function script_grid(spec::AbstractString)

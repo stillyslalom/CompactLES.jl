@@ -27,7 +27,7 @@ eos = Nasa9Mixture(species)
 # ## Define pressure, temperature, and composition
 #
 # [`Prim`](@ref) requires pressure, mass fractions, and exactly one of density
-# or temperature. Supplying temperature asks the EOS to calculate density.
+# or temperature. When temperature is supplied, the EOS calculates density.
 # Here the pressure and temperature are uniform while composition varies, so
 # the density change follows solely from the mixture gas constant.
 

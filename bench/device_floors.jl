@@ -18,7 +18,7 @@
 #   stall watch — one fixed apply hammered for `watch` seconds with every
 #       call timed. rzadams (MI300A, ROCm 6.4.3, Julia 1.12.7) shows sustained
 #       episodes, seconds long, in which each device wait costs an integer
-#       number of milliseconds instead of ~0.15 ms; they strike arbitrary
+#       number of milliseconds, far above ~0.15 ms; they strike arbitrary
 #       scheme/dim/precision cells (min-over-50 readings of 2/3/5/13 ms and
 #       one whole TGV leg at 27x) and are invisible in a table that samples
 #       each cell once. This section measures their rate and dwell time and
@@ -36,7 +36,7 @@
 #       bench/device_bringup.jl so rows compare with existing logs.
 #   TGV steps — warm device s/step at scheme x precision, single species,
 #       artificial properties off. If a Float64 step anomaly collapses when
-#       C6 is swapped for C10, the line solve owns it; if it persists, it is
+#       C6 is swapped for C10, the line solve causes it; if it persists, it is
 #       precision-wide. CPU-vs-device TGV lives in bench/device_solver.jl and
 #       is not repeated here.
 #
@@ -51,7 +51,7 @@
 # silently share one accelerator.
 #
 # Device packages are not CompactLES dependencies, so run from an environment
-# carrying CompactLES AND the device package:
+# carrying CompactLES and the device package:
 #
 #   julia --project=<env-with-AMDGPU> -t 8 bench/device_floors.jl backend=amdgpu
 #   flux run -N1 -n4 --exclusive julia --project -t 8 \
@@ -98,7 +98,7 @@ device_array, ka_backend, device_description, select_device! =
 best(f; reps) = (f(); f(); minimum(@elapsed(f()) for _ in 1:reps))
 
 # A dependent multiply-add chain: it measures fair core time per thread, not
-# peak FLOPs, which is exactly what a starved allocation distorts.
+# peak FLOPs, the quantity a starved allocation distorts.
 function _spin(seed::Float64, iters::Int)
     s = seed
     for _ in 1:iters

@@ -2,7 +2,7 @@
 
 This case studies a two-dimensional Richtmyer--Meshkov interaction whose
 upstream boundary must change from subsonic inflow to subsonic outflow. It is a
-scientific case study rather than a default tutorial: reproducing the complete
+scientific case study, not a default tutorial: reproducing the complete
 comparison evolves two `160 x 80` shock calculations and takes about 100 seconds
 on the development workstation after package setup.
 
@@ -45,15 +45,15 @@ change = Callback(arrived, (solver, Q) -> switch!(upstream))
 
 Global agreement is required because the outflow correction enters collective
 compact derivatives that the inflow path does not. Rank disagreement would
-deadlock rather than merely produce different boundary values.
+cause a deadlock, a more severe failure than differing boundary values.
 
 ## Control calculation
 
 The case repeats the calculation with the original inflow retained. Both runs
 are identical until the switch, so their subsequent density difference
 isolates the disturbance returned by the inappropriate boundary. The error
-propagates to the material interface rather than remaining confined to a few
-boundary cells.
+propagates to the material interface; it is not confined to a few boundary
+cells.
 
 ## Evidence and limits
 

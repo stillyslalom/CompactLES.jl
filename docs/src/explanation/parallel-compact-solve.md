@@ -49,8 +49,8 @@ factorized once. Each operator application then performs:
 4. local spike corrections.
 
 The pentadiagonal path generalizes the interface to the first and last two
-values. It reproduces the serial compact solution rather than approximating the
-rank interface with an explicit stencil.
+values. It reproduces the serial compact solution exactly; the rank interface
+is not approximated with an explicit stencil.
 
 ## Memory layout
 
@@ -63,7 +63,7 @@ ranks.
 ## Halo exchange
 
 Explicit right-hand-side stencils still need neighbor values. Halo slabs are
-exchanged one dimension at a time, with later slabs including halos already
+exchanged one dimension at a time, with later slabs including the halos
 filled in earlier dimensions. This populates edges and corners without separate
 diagonal messages.
 

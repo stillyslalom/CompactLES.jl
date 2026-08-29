@@ -2,7 +2,7 @@ module CompactLESHDF5Ext
 
 # HDF5 implementation of the shared-file writes declared in src/hdf5.jl. Read
 # the note at the top of that file first: it explains why this is an extension,
-# and why there are two write backends rather than one.
+# and why there are two write backends.
 
 using CompactLES
 using CompactLES: BlockRegion, Decomp, Solver, owned_region, region_ranges
@@ -17,9 +17,8 @@ has_parallel() = HDF5.has_parallel()
 # checkpoint header, which format 1 has no record of. Format 3 added the element
 # type of the state and the mutable run state (`cfl`, `dt_prev`, `rate_prev`,
 # and the `switched` flag of each boundary face); the reasoning is at the top of
-# `src/io.jl`. The reader requires an exact match rather than accepting an older
-# file, since the point of those fields is that a restart they do not cover
-# cannot be validated at all.
+# `src/io.jl`. The reader requires an exact match and does not accept an older
+# file, since a restart those fields do not cover cannot be validated at all.
 const CKPT_FORMAT = 3
 
 # --- Opening a shared file --------------------------------------------------
@@ -30,20 +29,20 @@ const CKPT_FORMAT = 3
 # The serialized backend is a token relay. Rank 0 runs `body` first, because it
 # is the rank that must create the file and its datasets; every other rank then
 # waits for its predecessor, opens the existing file, runs `body`, and closes.
-# Closing before passing the token is what makes this safe: two processes with
-# the file open at once is precisely what a serial libhdf5 cannot do, and it
-# corrupts rather than fails.
+# Closing before passing the token makes this safe: a serial libhdf5 cannot
+# have the file open in two processes at once, and the result is corruption,
+# not a failure.
 #
-# An exception inside `body` is a collective problem rather than a local one. A
+# An exception inside `body` is a collective problem, not a local one. A
 # rank that threw before passing its token leaves its successor blocked in
 # `Recv!` and its predecessors blocked in the closing collective, so the token
 # moves from a `finally` and the failure is then reduced across the
-# communicator. The ranks that succeeded raise as well, instead of returning
-# into a communicator whose next collective they no longer agree on.
+# communicator. The ranks that succeeded also raise, avoiding a return into a
+# communicator whose next collective they no longer agree on.
 #
 # The parallel backend cannot be made safe to the same degree. `h5open` on the
 # MPI-IO driver and every dataset creation under it are themselves collective, so
-# a rank throwing partway through `body` has already diverged from the others and
+# a rank throwing partway through `body` has diverged from the others and
 # blocks them where they stand. The reduction below still covers a failure raised
 # on every rank, or one raised after the last collective call in `body`.
 
@@ -52,16 +51,16 @@ const CKPT_FORMAT = 3
 # Nothing here sets `dxpl_mpio = :collective`, so every hyperslab write below
 # goes out under HDF5's default independent transfer mode. That is correct but
 # not fast: a collective transfer lets the MPI-IO layer aggregate the per-rank
-# hyperslabs into a few large contiguous writes, which is most of what makes a
+# hyperslabs into a few large contiguous writes, accounting for most of a
 # shared write scale at high rank counts.
 #
-# Adopting it is a behavioural change rather than a keyword. A collective
+# Adopting it is a behavioural change, not a keyword. A collective
 # transfer requires every rank of the file's communicator to call H5Dwrite on
 # the same dataset in the same order, and the slice path does not: a rank
 # holding no part of the requested plane writes nothing today and would instead
 # have to issue a write with an empty selection. Making that change belongs on a
 # machine with a parallel libhdf5 built against the run's MPI, which is the only
-# place it can be exercised — `hdf5_parallel()` is false on a workstation, where
+# place it can be exercised: `hdf5_parallel()` is false on a workstation, where
 # the serialized relay above runs instead and no transfer property applies.
 
 # The relay token's tag. Nothing else uses 0 on these communicators; the halo
@@ -126,7 +125,7 @@ end
 
 # --- Rank-independent metadata ----------------------------------------------
 #
-# Metadata carries the same value on every rank, but it cannot simply be written
+# Metadata carries the same value on every rank, but it cannot be written only
 # from rank 0 under the parallel backend: that file is open on the MPI-IO
 # driver, where creating a group or a dataset is collective and a rank skipping
 # one leaves the ranks with divergent file structure. So every rank reaches
@@ -177,14 +176,14 @@ read_region4(dset, region::BlockRegion, ncomp::Int) =
 # WHAT THE HEADER HAS TO PIN DOWN. The state is one flat global array of
 # conserved components, and nothing in `state/Q` records what those components
 # mean or where the points are. A restart onto a solver that disagrees is
-# therefore not detectable from the array: it reads cleanly and means something
-# else. The header records everything the interpretation depends on, and
+# therefore not detectable from the array: it reads cleanly and decodes to a
+# different state. The header records everything the interpretation depends on, and
 # `load_checkpoint_hdf5!` checks all of it.
 #
 # The reasoning for each field is at the top of `src/io.jl`, whose per-rank
 # checkpoint records the same set for the same reasons, and `type_name`,
-# `global_axis` and `axis_matches` are taken from there rather than restated
-# here so that the two paths cannot drift apart.
+# `global_axis` and `axis_matches` are taken from there, not restated here, so
+# that the two paths cannot drift apart.
 
 function CompactLES.save_checkpoint_hdf5(solver::Solver, Q, prefix::AbstractString)
     decomp = solver.decomp
@@ -314,11 +313,11 @@ end
 # XDMF reads in the row-major convention, so a scalar's Dimensions are written
 # "NZ NY NX".
 #
-# Vectors follow from the same rule. XDMF wants the component to vary fastest,
-# so the Julia array must be (3, nx, ny, nz) — component first — which lands on
-# disk as nz x ny x nx x 3 and is declared "NZ NY NX 3". That is exactly the
-# interleaved layout `_interior_vector` already produces, so the payload is
-# reshaped rather than permuted.
+# Vectors follow from the same rule. XDMF requires the component to vary fastest,
+# so the Julia array must be (3, nx, ny, nz), component first, which lands on
+# disk as nz x ny x nx x 3 and is declared "NZ NY NX 3". That is the
+# interleaved layout `_interior_vector` produces, so the payload is reshaped,
+# not permuted.
 
 const XDMF_SCALAR = "Scalar"
 const XDMF_VECTOR = "Vector"
@@ -372,7 +371,7 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
             write_meta!(g, "stride", Int64[st...], rank)
             write_meta!(g, "curvilinear", Int64(curvilinear), rank)
             if !curvilinear
-                # The coordinate vectors are global, so every rank already holds
+                # The coordinate vectors are global, so every rank holds
                 # the same values and none of this needs communication.
                 cg = create_group(file, "grid")
                 for d in 1:3
@@ -416,7 +415,7 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
                 # A rank holding no part of the plane creates the dataset and
                 # writes nothing into it, which is all the serialized backend
                 # needs. Under the parallel backend the write is independent
-                # rather than collective; see the note on `dxpl_mpio` at the
+                # and not collective; see the note on `dxpl_mpio` at the
                 # head of this file.
                 if mine
                     if ncomp == 1

@@ -17,10 +17,10 @@ using MPI
 using LinearAlgebra
 using Printf
 
-# Re-exported as a module rather than used here: nothing in the solver pins or
+# Re-exported as a module and not used here: nothing in the solver pins or
 # queries threads, but `clusterprobe.jl` needs the topology queries and is run
-# from a driver environment that lists only CompactLES. `import` rather than
-# `using` so none of ThreadPinning's exported names (`ncores`, `nsockets`, ...)
+# from a driver environment that lists only CompactLES. `import`, not
+# `using`, so none of ThreadPinning's exported names (`ncores`, `nsockets`, ...)
 # enter this namespace.
 import ThreadPinning
 
@@ -105,7 +105,7 @@ export script_args, script_grid
 
 __init__() = __init_threading__()
 
-# Precompilation, kept deliberately to the signatures that cannot multiply.
+# Precompilation, limited to the signatures that cannot multiply.
 #
 # The cost this addresses is that every distinct `Solver{...}` type forces a
 # fresh compilation of `deriv_along!` and the whole call tree below it, and a
@@ -117,8 +117,8 @@ __init__() = __init_threading__()
 # exchanges take an array and a plan, never a Metric, EOS, or BoundaryCondition,
 # so there are exactly two plan types and one element type and the list cannot
 # grow with the number of physics configurations. Compiling them into the
-# package image leaves each `Solver` specialization with the thin wrapper above
-# them rather than the line solves themselves.
+# package image leaves each `Solver` specialization only the thin wrapper above
+# them to compile, not the line solves themselves.
 #
 # Nothing here executes: `@compile_workload` would need a communicator, and MPI
 # calls during precompilation are not allowed. These are signature-directed, so

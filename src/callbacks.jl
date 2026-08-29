@@ -1,8 +1,8 @@
 # Step-boundary callbacks: a trigger deciding *when*, an effect deciding *what*.
 #
-# The split is DiffEqCallbacks' `condition`/`affect!` design, deliberately
-# without its continuous (root-found) callbacks. Two reasons, both structural
-# rather than a matter of effort:
+# The split is DiffEqCallbacks' `condition`/`affect!` design without its
+# continuous (root-found) callbacks. The omission is structural, for two
+# reasons:
 #
 #   - The low-storage RK45 keeps no dense output between step boundaries, so
 #     there is nothing to root-find a crossing against without re-integrating.
@@ -16,30 +16,31 @@
 # events these exist to catch, a wave nearing a boundary or an interaction
 # finishing, are not resolved to better than a timestep anyway.
 #
-# Rank disagreement is designed out rather than left to the caller. `t`
+# Rank disagreement is designed out; the caller need not guard against it. `t`
 # and `step` advance identically on every rank (`dt` comes out of an Allreduce),
-# so `AtTime`, `EveryTime` and `EveryStep` are globally consistent for free.
-# `WhenState` is the only one that reads the field, and it reduces its own
-# condition across the communicator before answering — so a user predicate that
+# so `AtTime`, `EveryTime` and `EveryStep` are globally consistent without a
+# reduction. `WhenState` is the only one that reads the field, and it reduces
+# its own condition across the communicator before answering, so a user
+# predicate that
 # happens to be true on one rank alone still fires everywhere, and cannot wedge
 # the run.
 
 """
     Trigger
 
-Decides *when* a [`Callback`](@ref) fires. Implementations are [`AtTime`](@ref),
+Controls *when* a [`Callback`](@ref) fires. Implementations are [`AtTime`](@ref),
 [`EveryTime`](@ref), [`EveryStep`](@ref), and [`WhenState`](@ref).
 
 A trigger implements `fired!(trigger, solver, Q) -> Bool`, which is called after
-each completed step. It may also implement `next_time(trigger, solver)` so that
-`run!` can end a step at a scheduled instant, and `rewind!(trigger, t, step)` to
+each completed step. It may also implement `next_time(trigger, solver)`, allowing
+`run!` to end a step at a scheduled instant, and `rewind!(trigger, t, step)` to
 restore its schedule after a `StepControl` rollback. The verdict must be
 identical on every rank; see the implementation note at the top of this file.
 """
 abstract type Trigger end
 
-# Landing exactly on a requested time is the one thing a caller cannot arrange
-# from outside: it needs `dt` clipped before the step, which only `run!` can do.
+# A caller cannot arrange exact landing on a requested time from outside: `dt`
+# must be clipped before the step, which only `run!` can do.
 # Everything else reports Inf and lets the timestep alone.
 next_time(::Trigger, solver) = Inf
 
@@ -54,7 +55,7 @@ Only the schedule is restored; callback effects are not reversed. Repeatable
 effects, such as an output file, can be evaluated again at the same instant.
 Non-repeatable effects cannot be reversed by the trigger. Consequently,
 [`WhenState`](@ref) remains in its existing armed state: a `SwitchableBC` that
-has already switched cannot be restored to its earlier condition.
+has switched cannot be restored to its earlier condition.
 
 The default is a no-op, which is correct for any trigger reading only `step`.
 """
@@ -65,8 +66,8 @@ rewind!(::Trigger, t, step) = nothing
     AtTime([t1, t2, ...])
 
 Fire once at each listed time. The list is sorted on construction, and `run!`
-shortens `dt` so that a step ends at the next scheduled instant. Times are
-visited in order and each fires once; a time already behind `solver.t` fires on
+shortens `dt` to end a step at the next scheduled instant. Times are
+visited in order and each fires once; a time behind `solver.t` fires on
 the next completed step. At most one time is consumed per step, so several times
 behind `solver.t` are visited one per step.
 """
@@ -98,8 +99,8 @@ function rewind!(trigger::AtTime, t, step)
     return nothing
 end
 
-# The landing tolerance shared by both time triggers, defined once so that the
-# schedule restored by `rewind!` cannot disagree with the one `fired!` reads.
+# The landing tolerance is shared by both time triggers, preventing disagreement
+# between the schedule restored by `rewind!` and the one `fired!` reads.
 _land_tol(t) = 8eps(max(abs(t), one(t)))
 
 """
@@ -126,8 +127,8 @@ function EveryTime(interval::Real; start::Real=0.0)
     return EveryTime(Float64(interval), Float64(start), NaN)
 end
 
-# Instants are computed as start + n*interval rather than by accumulating the
-# interval, so that a long run's schedule does not drift with the rounding in t.
+# Instants are computed as start + n*interval, not by accumulating the interval,
+# preventing schedule drift from rounding in t during a long run.
 function _instant_after(trigger::EveryTime, t)
     n = max(floor((t - trigger.start) / trigger.interval) + 1, 0.0)
     inst = trigger.start + n * trigger.interval
@@ -180,7 +181,7 @@ when `once = false`. The condition must return a `Bool`.
 
 The condition is evaluated on each rank and reduced across the communicator, so
 it may be true only on the rank that owns a boundary plane. It need not perform
-this reduction itself, since the framework already supplies the collective: a
+this reduction itself, since the framework supplies the collective: a
 condition may read a local field plane and return a local verdict.
 """
 mutable struct WhenState{F} <: Trigger
@@ -193,7 +194,7 @@ WhenState(condition; once::Bool=true) = WhenState(condition, once, false)
 
 function fired!(trigger::WhenState, solver, Q)
     trigger.done && return false
-    # Reduced as an Int with `max` rather than a Bool with `|`, matching the
+    # Reduced as an Int with `max`, not a Bool with `|`, matching the
     # reductions elsewhere in the solver; semantically this is a logical OR.
     local_hit = trigger.condition(solver, Q)::Bool
     hit = MPI.Allreduce(Int(local_hit), max, solver.comm) > 0
@@ -206,10 +207,10 @@ end
 
 Pair a [`Trigger`](@ref) with `effect!(solver, Q)`, run after a completed step
 (and after any filtering) when the trigger fires. Returning `true` from
-`effect!` asks `run!` to stop; any other value continues.
+`effect!` requests that `run!` stop; any other value continues.
 
 Pass one to `run!` as `callback=`, or pass several as a tuple. Every element of a
-tuple runs, including after one has asked to stop. A bare function is also
+tuple runs, including after one has requested a stop. A bare function is also
 accepted; it runs after every step and its return value is ignored.
 """
 struct Callback{Tr<:Trigger,F}
@@ -218,8 +219,8 @@ struct Callback{Tr<:Trigger,F}
 end
 
 # --- Dispatch over what `run!` was handed: nothing, a bare callable, one
-# Callback, or a tuple of them. Tuples recurse rather than iterate so the whole
-# thing stays inferable with mixed trigger types, the same reason `sources` is a
+# Callback, or a tuple of them. Tuple dispatch recurses without iteration, so the
+# whole call stays inferable with mixed trigger types, the same reason `sources` is a
 # tuple (see sources.jl).
 
 callback_next_time(::Nothing, solver) = Inf
@@ -249,8 +250,7 @@ end
 
 function run_callbacks!(cbs::Tuple, solver, Q)
     # Both sides run: an early return would let the first stop request skip the
-    # rest, and a diagnostic callback silently missing its last step is exactly
-    # the kind of bug that gets blamed on the physics.
+    # rest, causing a diagnostic callback to miss its final step.
     stop_first = run_callbacks!(first(cbs), solver, Q)
     stop_rest = run_callbacks!(Base.tail(cbs), solver, Q)
     return stop_first || stop_rest
@@ -263,11 +263,11 @@ run_callbacks!(cb, solver, Q) = (cb(solver, Q); false)
 
 # --- Progress reporting.
 #
-# Every example grew its own copy of this loop, and every copy got at least one
-# of the three cluster details wrong: printing from all ranks instead of one,
+# Examples once contained separate copies of this loop, with errors in at least
+# one of three cluster details: printing from all ranks, not one,
 # forgetting to flush (srun buffers stdout, so a run appears hung for minutes),
 # and timing the diagnostic's own reduction as if it were solver cost. The
-# collective-ordering rule from the top of this file applies too — `quantity`
+# collective-ordering rule from the top of this file applies too: `quantity`
 # runs on every rank, and only the printing is guarded.
 
 struct ProgressEffect{Q,I}
@@ -292,7 +292,7 @@ called on every rank and may reduce, as `volume_integral` and related diagnostic
 do. Only output is restricted to rank 0.
 
 `tfinal` adds percent-complete and a projected remaining time, from the mean
-step so far rather than the last one. `imbalance = true` adds the min/max spread
+step so far, not the last one. `imbalance = true` adds the min/max spread
 of step time across ranks at the cost of two additional reductions per report.
 
 Output is flushed on every line because launchers commonly block-buffer cluster

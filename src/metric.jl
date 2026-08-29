@@ -102,7 +102,7 @@ scalefactors(::SphericalMetric,   r,  θ,  φ ) = (one(r), r, r * sin(θ))
 Whether direction `d` has scale factor one everywhere under `metric`, i.e. its
 computational coordinate is a length and not an angle. A `Stretch` on `d` is not
 considered: the mapping Jacobian scales the coordinate derivative, which every
-consumer already divides out through `inv_h`, whereas an angular direction also
+consumer divides out through `inv_h`, whereas an angular direction also
 contributes curvature terms to the physical velocity gradients. Characteristic
 boundary conditions use this to reject faces their wave analysis does not cover.
 """
@@ -305,7 +305,7 @@ end
 
 add_metric_sources!(solver, dQ, Q, ::CartesianMetric) = solver
 
-# The stress-tensor sample takes the field arrays rather than the solver so
+# The stress-tensor sample takes the field arrays, not the solver, so
 # the momentum-source bodies below stay launchable as device kernels.
 @inline function _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, a, b)
     μ = mu0 + mu_art[I]

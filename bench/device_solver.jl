@@ -6,7 +6,7 @@
 # 64³ TGV history on device runs through bench/tgv_energy.jl backend=amdgpu.
 #
 # Device packages are not CompactLES dependencies; run from an environment
-# carrying CompactLES AND the device package (see bench/device_bringup.jl):
+# carrying CompactLES and the device package (see bench/device_bringup.jl):
 #
 #   julia --project=<env-with-AMDGPU> -t 8 bench/device_solver.jl backend=amdgpu
 #

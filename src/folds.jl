@@ -21,8 +21,8 @@
 # odd, so each solves with the existing parity-folded plans (halo mirror fill
 # plus the diagonal LHS fold, per solution parity). Reconstruction is the
 # inverse butterfly: (op f)(x) = Re + Ro and (op f)(Mx) = σ (Re − Ro). The
-# operator's own parity behavior is already inside the folded closures, so the
-# reconstruction sign is just σ, for derivatives and filters alike.
+# operator's own parity behavior is contained in the folded closures, so the
+# reconstruction sign is σ for derivatives and filters alike.
 #
 # Component signs σ (scalars are always +1):
 #   cyl axis:    (u_r, u_θ, u_z) → (−1, −1, +1)
@@ -157,9 +157,9 @@ end
         # The reversal g → n_global+1−g always flips the intra-block slot
         # i ↔ n_local+1−i. When revdim is split (rev_local == false) the partner
         # rank is the reflected one (chosen at setup) and the slot flip is
-        # STILL required to index its block; when it is on one rank the flip is
+        # still required to index its block; when it is on one rank the flip is
         # the whole reversal. (The half-period shift differs: split blocks map
-        # slot-for-slot, so that stays gated on shift_local above.)
+        # slot-for-slot, and remains gated on shift_local above.)
         Hr = halo[revdim]
         v = n_local[revdim] + 1 -
             ((revdim == 1 ? i1 : revdim == 2 ? i2 : i3) - Hr) + Hr
@@ -312,10 +312,10 @@ end
 # it. The smoother pair is built like the filter pair even when its scheme is
 # explicit, where the two parities coincide numerically because an identity
 # left-hand side has no ghost coupling to fold onto the diagonal. They are kept
-# as separate plans rather than one shared twice, so that neither aliases the
+# as two separate plans, not one shared twice, preventing either from aliasing the
 # other's line scratch. The ring detector is an eighth derivative, which is an
-# even one and so preserves parity: it is planned with the symmetric roles
-# rather than with `:deriv`.
+# even one and so preserves parity: it is planned with the symmetric roles,
+# not with `:deriv`.
 @inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:deriv})  = fold_dplan(fold, -σ)
 @inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:filter}) = fold_fplan(fold, σ)
 @inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:smooth}) = fold_splan(fold, σ)

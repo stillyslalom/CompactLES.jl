@@ -17,12 +17,12 @@ collapsed: they are never decomposed, carry no halo pad, and take no part in an
 exchange.
 
 The constructor is collective over `comm` (default `MPI.COMM_WORLD`), and
-initializes MPI at thread level `:funneled` if that has not happened already. It
+initializes MPI at thread level `:funneled` if it is not yet initialized. It
 builds a Cartesian communicator with reordering permitted, so a rank's Cartesian
 coordinates need not follow its rank in `comm`, along with one sub-communicator
 per dimension for the distributed line solves. A patch-decomposed solver passes
 the patch communicator produced by `MPI.Comm_split`; `n_global` is then the
-patch extent rather than the whole grid's.
+patch extent, not the whole grid's.
 
 The type parameter `T` is the element type of the halo exchange buffers, and
 therefore of every field exchanged through them; the untyped constructor
@@ -56,7 +56,7 @@ end
 
 Four-dimensional conserved-variable storage returned by [`allocate_state`](@ref)
 and [`setup`](@ref). It behaves as an ordinary mutable `AbstractArray`; the
-wrapper gives the state a concise REPL representation instead of printing every
+wrapper gives the state a concise REPL representation and avoids printing every
 element after `setup` or [`run!`](@ref).
 
 Use `parent(Q)` to access the underlying array when an external library
@@ -83,7 +83,7 @@ Base.copy(Q::ConservedState) = ConservedState(copy(parent(Q)))
 Base.zero(Q::ConservedState) = ConservedState(zero(parent(Q)))
 Base.copyto!(dest::ConservedState, src::ConservedState) =
     (copyto!(parent(dest), parent(src)); dest)
-# Forward to the parent rather than the AbstractArray fallback, whose
+# Forward to the parent, bypassing the AbstractArray fallback, whose
 # element-by-element loop is a scalar-indexing error on device storage.
 Base.fill!(Q::ConservedState, x) = (fill!(parent(Q), x); Q)
 
@@ -112,7 +112,7 @@ function Decomp{T}(n_global::NTuple{3,Int}, periodic::NTuple{3,Bool};
         # not the number of dimensions. Passing the count instead silently asks
         # for a 0-dimensional grid: it returns a 0-d array for nact ≤ 2 (which
         # popfirst! below cannot index) and throws MPIError(779) "cannot
-        # partition nodes as requested" for nact == 3 — i.e. the default
+        # partition nodes as requested" for nact == 3; that is, the default
         # dims=nothing path failed for every 3-D grid, at every rank count.
         adims = nact == 0 ? Int[] : Int.(MPI.Dims_create(np, zeros(Cint, nact)))
         pdims = ntuple(3) do dd
@@ -136,7 +136,7 @@ function Decomp{T}(n_global::NTuple{3,Int}, periodic::NTuple{3,Bool};
     # `sub_rank[d] == coords[d]` throughout the package: `at_lo_edge` and
     # `at_hi_edge` below, the fold pairing, the NSCBC wall tests and the
     # profile gathers in diagnostics.jl all read one where the other would do.
-    # MPI_Cart_sub guarantees it — the sub-communicator along `d` is ordered by
+    # MPI_Cart_sub guarantees it: the sub-communicator along `d` is ordered by
     # the Cartesian coordinate in `d`, so a rank's position in it is its own
     # `coords[d]`. Nothing here re-derives the identity, so a decomposition
     # built by some route other than Cart_create/Cart_sub would have to supply
@@ -164,7 +164,7 @@ Storage backend selecting where field arrays live. [`CPUBackend`](@ref) is the
 default and allocates ordinary `Array`s; a GPU backend supplies device arrays
 through the same [`field`](@ref) and [`allocate_state`](@ref) methods
 (`reference/AMR_GPU.md`). Every solver array is typed
-`A <: AbstractArray{T,3}` against this seam.
+`A <: AbstractArray{T,3}` against this interface.
 """
 abstract type AbstractBackend end
 
@@ -189,8 +189,8 @@ configuration does not use (`pairbuf` without a fold, `ring_buf` under
 storage type."
 empty_field(::CPUBackend, ::Type{T}) where {T} = zeros(T, 0, 0, 0)
 
-"Allocate a zero-filled [`ConservedState`](@ref) Q(x,y,z,1:n_cons), the spatial
-extents padded by halos exactly as [`field`](@ref) pads them."
+"Allocate a zero-filled [`ConservedState`](@ref) Q(x,y,z,1:n_cons), with the
+same spatial halo padding as [`field`](@ref)."
 allocate_state(decomp::Decomp{T}, n_cons::Int) where {T} =
     ConservedState(zeros(T, ntuple(d -> decomp.n_local[d] + 2*decomp.n_halo_d[d], 3)...,
                          n_cons))
@@ -203,7 +203,7 @@ allocate_state(::CPUBackend, decomp::Decomp, n_cons::Int) =
 A rectangular index-space region of the global grid: a zero-based `offset` and
 an `extent` per dimension, so the region covers global indices
 `offset[d]+1 : offset[d]+extent[d]`. This is the unit both the patch layout and
-the HDF5 hyperslab writes are expressed in, and it is deliberately not a
+the HDF5 hyperslab writes are expressed in, and it is distinct from a
 `Decomp`: a region carries no communicator, no halo width and no process grid,
 only where a block of data sits in the global index space.
 """

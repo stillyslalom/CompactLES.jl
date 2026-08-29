@@ -57,7 +57,7 @@ EOS.
 The LODI approximation separates normal waves. `beta_t` controls how much of
 the transverse contribution is carried by the imposed acoustic wave; a negative
 value selects the local-Mach recommendation. Viscous boundary terms are retained
-as computed rather than included in the characteristic derivation.
+as computed and are not included in the characteristic derivation.
 
 Current NSCBC is intended for faces whose normal coordinate has unit scale
 factor: Cartesian faces, cylindrical radial or axial faces, and spherical
@@ -74,8 +74,8 @@ correction to total energy depends on
 ```
 
 Composition relaxation additionally needs derivatives of ``\phi`` with respect
-to mass fractions. These are part of the EOS extension contract, which is why
-ideal, NASA-9, and stiffened-gas models can share the boundary implementation.
+to mass fractions. These are part of the EOS extension contract, so the
+ideal, NASA-9, and stiffened-gas models share one boundary implementation.
 
 ## Parallel ordering
 

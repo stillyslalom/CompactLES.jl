@@ -1,13 +1,13 @@
 # Geometry- and variable-aware extraction of report fields for visualization,
-# and the Makie plotting seam layered on top of it.
+# and the Makie plotting interface layered on top of it.
 #
 # The tutorials used to each redefine a private `density_line(solver, Q)` that
 # sampled `mixture_density` along dimension 1 at `(i, 1, 1)`. That helper was
-# rank-local — correct only when the sampled line lived on one rank — and hard
+# rank-local (correct only when the sampled line lived on one rank) and hard
 # wired to one variable and one geometry. The functions here replace it with a
 # collective, geometry-aware API that resolves any named scalar through the same
 # catalog `save_vtk` uses (`scalar_field` in io.jl), so a profile or a slice is
-# one call and means the same thing under MPI decomposition as in serial.
+# one call with the same meaning under MPI decomposition as in serial.
 #
 # Nothing here depends on a plotting package. `profileplot`, `fieldheatmap`, and
 # their mutating forms are declared as stubs that error until a Makie backend is
@@ -25,8 +25,8 @@ This is the extraction primitive the profile and slice helpers build on, and it
 composes with the reductions in diagnostics.jl (`plane_profile`,
 `volume_integral`) and with `boundary_plane`.
 
-`name` is resolved through [`scalar_field`](@ref) — the same catalog
-[`save_vtk`](@ref) uses — so the available names are identical: stored
+`name` is resolved through [`scalar_field`](@ref), the catalog
+[`save_vtk`](@ref) also uses, so the available names are identical: stored
 primitives (`:rho`, `:p`, `:T_ion`, `:c`, `:u`, `:v`, `:w`), the per-species
 `:Y` and `:D_art` (selected with `species`), and derived scalars (`:mach`,
 `:divergence`, `:vorticity_magnitude`, `:qcriterion`, `:schlieren`,
@@ -70,11 +70,11 @@ axis.
 The coordinate comes from [`profile_coordinate`](@ref) and the value from
 [`plane_profile`](@ref), so the semantics are that file's: `value` is the
 area-weighted average over the two dimensions transverse to `dim`. When those
-dimensions are collapsed — the common tutorial case of `n_global = (N, 1, 1)` —
+dimensions are collapsed, as in the common tutorial case of `n_global = (N, 1, 1)`,
 the average is over a single point and the profile is exactly the line through
 `(i, 1, 1)`. With a transverse dimension resolved it is the correct area mean,
 which is usually what a radial or axial profile of a multidimensional field
-should show. For a line integral rather than an average, weight by
+should show. For a line integral in place of an average, weight by
 [`profile_spacing`](@ref).
 
 Collective (see [`field_array`](@ref)).
@@ -96,7 +96,7 @@ end
 The plane of the named scalar transverse to dimension `normal`, taken at the
 global index `index` along `normal`. Returns, on rank 0, the two in-plane
 coordinate vectors and the `length(x1) × length(x2)` matrix of values; returns
-`nothing` on every other rank, since a slice is a rank-0 gather rather than a
+`nothing` on every other rank, since a slice is a rank-0 gather, not a
 replicated reduction. The in-plane axes are the two dimensions other than
 `normal`, in increasing order (for `normal = 3` they are dimensions 1 and 2).
 
@@ -176,7 +176,7 @@ The polar mapping is applied only when `dims == (1, 2)`: the cylindrical
 `(r, θ)` plane, whose raster covers the physical disk or annulus, and the
 spherical `(r, θ_polar)` meridian, mapped to `X = r sin θ`, `Y = r cos θ` and so
 covering a half-disk or half-annulus. Every other pair, including a
-`CartesianMetric` plane and a spherical `(r, φ)` one, is treated as already
+`CartesianMetric` plane and a spherical `(r, φ)` one, is treated as
 Cartesian and rastered on its own axes. Raster cells are filled by bilinear
 interpolation in the coordinate values either way. For a collapsed radial
 calculation with no resolved angle to slice, use [`revolve_profile`](@ref)
@@ -195,7 +195,7 @@ function cartesian_slice(metric::Metric, dims::Tuple{Int,Int},
     a, b = dims
     # Close a periodic second coordinate by appending the first node shifted by
     # one period, so the seam between the last stored angle and the first is
-    # interpolated across rather than left blank.
+    # interpolated across.
     if period !== nothing
         x2 = vcat(collect(float.(x2)), float(first(x2)) + float(period))
         values = hcat(values, values[:, 1:1])
@@ -283,15 +283,15 @@ end
 # Coordinate pair (along dims a, b) → in-plane Cartesian (X, Y). Each method is
 # the inverse of the matching `_slice_coordinate` below, and the pair must stay
 # consistent: a meridian embeds in a plane spanned by two Cartesian axes that
-# are not `(a, b)` themselves — the spherical (r, θ) meridian lives in x–z with
-# the pole vertical, not x–y — so slicing the full 3-D position by `(a, b)` is
+# are not `(a, b)` themselves (the spherical (r, θ) meridian lives in x–z with
+# the pole vertical, not x–y), so slicing the full 3-D position by `(a, b)` is
 # wrong and would collapse the plane onto a line.
 _slice_cartesian(::CartesianMetric, a::Int, b::Int, ca, cb) = (ca, cb)
 function _slice_cartesian(::CylindricalMetric, a::Int, b::Int, ca, cb)
     if (a, b) == (1, 2)      # (r, θ) disk in the x–y plane
         return ca * cos(cb), ca * sin(cb)
     end
-    return ca, cb            # (r, z) or (θ, z): already Cartesian in one axis
+    return ca, cb            # (r, z) or (θ, z): Cartesian in one axis
 end
 function _slice_cartesian(::SphericalMetric, a::Int, b::Int, ca, cb)
     if (a, b) == (1, 2)      # (r, θ_polar) meridian: X = r·sinθ, Y = r·cosθ
@@ -307,7 +307,7 @@ function _slice_coordinate(::CartesianMetric, a::Int, b::Int, X, Y)
 end
 function _slice_coordinate(::CylindricalMetric, a::Int, b::Int, X, Y)
     # In-plane dims are (1, 2) = (r, θ); z-normal slice. Other orientations of a
-    # cylindrical slice are already Cartesian in one axis.
+    # cylindrical slice are Cartesian in one axis.
     if (a, b) == (1, 2)
         return hypot(X, Y), _wrap_angle(atan(Y, X))
     end
@@ -336,7 +336,7 @@ function _bilinear(x1::AbstractVector, x2::AbstractVector, values::AbstractMatri
            (1 - t) * u * v01 + t * u * v11
 end
 
-# --- Makie plotting seam (implemented in ext/CompactLESMakieExt.jl) ---------
+# --- Makie plotting interface (implemented in ext/CompactLESMakieExt.jl) ---------
 
 _makie_extension() = Base.get_extension(@__MODULE__, :CompactLESMakieExt)
 

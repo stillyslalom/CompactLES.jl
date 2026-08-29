@@ -3,8 +3,8 @@
 # The user-facing vocabulary is primitive and pointwise. Initial conditions
 # are functions (x₁, x₂, x₃) → Prim; Dirichlet boundary forcing is a function
 # (x₁, x₂, x₃, t) → Prim evaluated at the RK stage time. A `Problem` bundles
-# physics, domain, boundary conditions, and the IC — with no reference to
-# grids, ranks, halos, or conserved layouts — while `Numerics` bundles
+# physics, domain, boundary conditions, and the IC, with no reference to
+# grids, ranks, halos, or conserved layouts, while `Numerics` bundles
 # resolution and scheme choices. `setup(problem, numerics)` marries the two
 # and returns (solver, Q). The same Problem can therefore be re-run at
 # different resolutions, orders, or (eventually) against a different backend
@@ -68,7 +68,7 @@ For `NavierStokes1T`, the result is
 where the final entry is total energy per volume. The EOS supplies whichever of
 density and temperature the [`Prim`](@ref) omitted, from `(p, T_ion, Y)` or
 `(p, rho, Y)`. A `Prim` giving both needs no pressure: the conserved state is a
-function of `(rho, T_ion, u, Y)` alone, which is why `p` may be left out.
+function of `(rho, T_ion, u, Y)` alone, so `p` may be left out.
 
 A method throws if the number of mass fractions does not match the EOS.
 Custom equation sets or EOS models extend the three-argument form.
@@ -134,7 +134,7 @@ end
     initialize!(solver, Q, ic)
 
 Overwrite the rank-local interior of conserved state `Q` from
-`ic(x1, x2, x3) -> Prim`, evaluated at physical coordinates. The callback sees
+`ic(x1, x2, x3) -> Prim`, evaluated at physical coordinates. The callback receives
 neither ranks and halos nor the conserved-component layout, and should be pure
 because it can be called concurrently from multiple threads.
 
@@ -202,7 +202,7 @@ tanh_blend(x, x0, δ) = 0.5 * (1 + tanh((x - x0) / δ))
 
 Hard prescription of the full state on a boundary plane from
 `fun(x₁, x₂, x₃, t) -> Prim`, evaluated at the RK stage time. This is the right
-tool for supersonic or deliberately forced inflow, pistons, and oscillating
+tool for supersonic or forced inflow, pistons, and oscillating
 drivers. It over-constrains a subsonic boundary, where it will reflect the
 outgoing acoustic wave; use [`NSCBCInflowBC`](@ref) there, which relaxes the
 incoming amplitudes toward the same targets and accepts a stage-time `target`
@@ -230,7 +230,7 @@ function enforce!(bc::DirichletBC, Q, solver, d, side)
         return nothing
     end
     # `fun` is a host closure, so a device-resident patch evaluates the plane
-    # block on the host and uploads it — one small strided assignment per face
+    # block on the host and uploads it, one small strided assignment per face
     # per RK stage, the Dirichlet staging cost recorded in reference/AMR_GPU.md.
     r1, r2, r3 = plane.indices
     T = eltype(Q)
@@ -330,7 +330,7 @@ Grid, scheme, timestep, and decomposition choices used to realize a
   `filt` unused altogether unless `ArtParams(smoother = :compact)` also selects
   it as the sensor smoother.
 - `filter_cfl`: reference CFL for a full-strength filter pass, making the
-  filter's dissipation a rate rather than a per-application amount. The default
+  filter's dissipation a rate, not a per-application amount. The default
   `0.0` disables the relaxation and reproduces the unrelaxed solver bit for bit:
   each pass replaces the state with its filtered image, so halving the CFL
   doubles the number of passes over an interval and doubles the dissipation. A

@@ -7,7 +7,7 @@
 # decomposed CPU solver, and the staged transfer volume and copy time are
 # read from the tracking counters, halo and reduced-interface separately.
 #
-# Run from an environment carrying CompactLES AND the device package:
+# Run from an environment carrying CompactLES and the device package:
 #
 #   mpiexec -n 2 julia --project=<env-with-AMDGPU> bench/device_mpi.jl backend=amdgpu
 #   (repeat at -n 4 and -n 8; grids here satisfy 9 points/rank up to 8 ranks)

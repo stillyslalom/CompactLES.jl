@@ -1,7 +1,7 @@
 # The AMR cost demonstration (reference/AMR_GPU.md): equal accuracy
 # at reduced cost on a 3-D mixing case, now that the level transfer is
 # distributed. A heavy-gas blob in a light background advects diagonally; the
-# interface is the feature worth resolving, and three configurations run the
+# interface is the refinement target, and three configurations run the
 # identical physics:
 #
 #   coarse     — uniform N³

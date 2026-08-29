@@ -14,8 +14,9 @@
 #   mpiexec -n 8 julia --project=. --code-coverage=user test/mpi_tests.jl
 #   julia --project=. bench/coverage.jl
 #
-# The MPI runs matter: serial alone reaches 94.8% of executable lines, the full
-# set 97.2%, and everything in between is distributed-solve and off-rank-fold
+# The MPI runs add coverage: serial reaches 94.8% of executable lines and the
+# full set reaches 97.2%. Everything in between is distributed-solve and
+# off-rank-fold
 # code that only a decomposed run reaches.
 #
 #   .cov format: one line per source line, prefixed

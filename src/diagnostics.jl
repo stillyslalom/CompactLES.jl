@@ -4,24 +4,24 @@
 # For variable-density mixing the answer is not the flow field: it is the mix
 # width, the molecular mixing fraction, the composition PDF, and where the
 # kinetic energy went. Those were previously the user's problem to write inside
-# a `callback`, which meant every user rewrote the same three MPI reductions and
+# a `callback`, so every user rewrote the same three MPI reductions and
 # got the metric weighting wrong in curvilinear coordinates.
 #
 # Everything here reduces over the `Decomp` communicators: the transverse
 # sub-communicators for a plane average, the full Cartesian communicator for a
-# volume integral. Every routine is collective — every rank must call it — and
+# volume integral. Every routine is collective (every rank must call it) and
 # every routine returns the same value on every rank.
 #
 # Quadrature. The computational grid is uniform, so the integrals are midpoint
 # sums with the metric Jacobian as the weight, times a half weight at a
 # node-centered physical edge. Half-offset (folded) edges take a full weight,
 # because those grids are cell-centered by construction and the first node
-# already sits half a cell in.
+# sits half a cell in.
 #
 # That is exact for a constant on a Cartesian grid, which is the property the
-# test asserts. It is NOT exact in curvilinear coordinates: at a node-centered
-# edge the half cell is sampled at its boundary rather than its midpoint, so the
-# varying Jacobian is caught to O(h²) — e.g. a cylindrical domain closed at
+# test asserts. It is not exact in curvilinear coordinates: at a node-centered
+# edge the half cell is sampled at its boundary, not its midpoint, so the
+# varying Jacobian is approximated to O(h²); e.g. a cylindrical domain closed at
 # r = R integrates to (R²/2)(1 + h²/4R²). Second order is well below the O(h)
 # statistical noise of the mixing quantities these feed, and the alternative is
 # a metric-specific edge rule for a diagnostic. A folded edge has no such term,
@@ -29,7 +29,7 @@
 #
 # Collapsed dimensions contribute a factor of one: a 2-D run integrates per unit
 # depth and an axisymmetric run per radian, the same convention the flux
-# divergence already uses.
+# divergence uses.
 
 """
     quad_weight(solver, d, i) -> Float64
@@ -92,7 +92,7 @@ function _local_volume_integral(solver::SolverLike, f::AbstractArray{<:Real,3})
             wj = wk * quad_weight(solver, 2, j)
             for i in 1:nx
                 I = CartesianIndex(i + o1, j + o2, k + o3)
-                # J = 1/inv_J is the metric Jacobian; inv_J already carries any
+                # J = 1/inv_J is the metric Jacobian; inv_J carries any
                 # stretching, so this is the physical cell volume.
                 acc += wj * quad_weight(solver, 1, i) * f[I] / solver.inv_J[I]
             end
@@ -200,7 +200,7 @@ end
     profile_spacing(solver, d) -> Vector{Float64}
 
 Physical length element at each station along `d`, including the half weight at
-a node-centered edge, so that `sum(profile_spacing(solver, d))` is the domain
+a node-centered edge. `sum(profile_spacing(solver, d))` is therefore the domain
 extent. On a curvilinear grid the scale factor varies across the transverse
 plane. The returned spacing is therefore its area-weighted plane average, using
 the same weights as `plane_profile`, so the two quantities compose into a line
@@ -235,11 +235,11 @@ end
 # Mixing diagnostics.
 #
 # Conventions follow the variable-density turbulent-mixing literature (Youngs;
-# Cook & Dimotakis). `dim` is the inhomogeneous direction — the one the
-# interface moves along — and everything is an integral of plane averages along
-# it. Mass fractions are used rather than volume fractions, which is what the
+# Cook & Dimotakis). `dim` is the inhomogeneous direction, the one the
+# interface moves along, and everything is an integral of plane averages along
+# it. Mass fractions are used, not volume fractions: they are what the
 # conserved layout carries directly and what an Atwood-number-independent
-# statement of θ wants.
+# statement of θ supports.
 
 """
     mix_width(solver, Q; dim=1, species=(1, 2)) -> Float64
@@ -295,7 +295,7 @@ end
     species_pdf(solver, sp; nbins=32) -> (centers, pdf)
 
 Volume-weighted probability density of mass fraction Y_sp over the whole domain,
-on `nbins` uniform bins of [0, 1]. It is normalized so that
+on `nbins` uniform bins of [0, 1]. Its normalization gives
 `sum(pdf) * binwidth == 1`. Peaks at 0 and 1 indicate separated fluids, whereas
 an interior distribution indicates mixed compositions. Collective.
 
@@ -389,7 +389,7 @@ the energy sink at a shock; they are therefore included in the reported rate.
 
 Calls `compute_primitives_and_gradients!` and `compute_artificial!`, so
 the result is independent of the current RK stage. This requires one additional
-gradient pass, so the diagnostic is intended for periodic rather than per-step
+gradient pass, so the diagnostic is intended for periodic, not per-step,
 evaluation. Those two passes overwrite `solver.grad_u` and the artificial
 coefficient, sensor and scratch fields, and the integrand is then accumulated
 into `solver.tmp_b`; `compute_rhs!` rebuilds all of them at the next stage.

@@ -9,8 +9,8 @@
 # The full survey (bench/device_floors.jl) measures the stall at every
 # thread count above 1: episodes of seconds to minutes in which every
 # device wait costs ~13 or ~26 ms — ROCR's polling-wait sleep cadence,
-# reproduced deterministically by HSA_ENABLE_INTERRUPT=0 — instead of the
-# microseconds the interrupt path delivers. This script asks how little it
+# reproduced deterministically by HSA_ENABLE_INTERRUPT=0 — while the interrupt
+# path delivers microseconds. This script tests how little it
 # takes to trigger the same degradation:
 #
 #   mode=kernel   one trivial kernel launch + stream synchronize per call
@@ -21,7 +21,7 @@
 #   mode=full     kernel + D2H + host arithmetic + H2D (the shape of one
 #                 compact-solve apply, with no solver code)
 #   mode=ka       the kernel launched through KernelAbstractions on
-#                 ROCBackend instead of @roc — the one layer between the
+#                 ROCBackend, not @roc — the one layer between the
 #                 clean rungs and the stalling survey watch. Needs
 #                 KernelAbstractions in the environment
 #                 (import Pkg; Pkg.add("KernelAbstractions")).
@@ -52,7 +52,7 @@ using Printf
 
 # Settings come from ARGS as key=value, the shape `script_args` gives every
 # other script here. This file carries no CompactLES dependency, so the
-# parse is spelled out, including the two failure modes that matter: an
+# parse is spelled out, including two consequential failure modes: an
 # unknown key is an error rather than a default silently run for the length
 # of a job, and an argument without '=' is named rather than a BoundsError.
 const KNOWN_KEYS = ("mode", "watch", "work", "sync", "mpi", "alloc", "burst")

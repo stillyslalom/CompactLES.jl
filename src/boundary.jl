@@ -145,7 +145,7 @@ to a different boundary-condition type would fail conversion.
 Every rank must switch on the same step. `after` may perform collectives that
 `before` does not; `NSCBCOutflowBC` is one example. Rank disagreement therefore
 causes a collective-ordering deadlock. Use a [`Callback`](@ref), whose trigger
-verdict is globally consistent, rather than a rank-local test.
+verdict is globally consistent, not a rank-local test.
 
 Both conditions must agree on periodicity because `setup` uses that property to
 construct the decomposition and line plans. Fold conditions (`AxisBC`,
@@ -182,15 +182,15 @@ switched(bc::SwitchableBC) = bc.switched
 
 isperiodic(bc::SwitchableBC) = isperiodic(bc.before)
 
-# Branch at the call site rather than returning the active condition from a
-# helper: each arm is then a concrete call, where a shared `active(bc)` would
-# return a small Union and widen both.
+# Branch at the call site. Returning the active condition from a helper would
+# make `active(bc)` return a small Union and widen both arms; here each arm is
+# a concrete call.
 enforce!(bc::SwitchableBC, Q, solver, d, side) =
     bc.switched ? enforce!(bc.after, Q, solver, d, side) :
                   enforce!(bc.before, Q, solver, d, side)
 
-"Concrete plane type, so `for I in wallplane(...)` yields `CartesianIndex{3}`
-rather than `Any`. See the note on the constructor below."
+"Concrete plane type, so `for I in wallplane(...)` yields `CartesianIndex{3}`,
+not `Any`. See the note on the constructor below."
 const WallPlane = CartesianIndices{3,Tuple{UnitRange{Int},UnitRange{Int},UnitRange{Int}}}
 
 """
@@ -213,11 +213,11 @@ function wallplane(decomp::Decomp, d::Int, side::Int)::Union{Nothing,WallPlane}
         decomp.sub_rank[d] == decomp.sub_size[d] - 1 || return nothing
         i = decomp.n_local[d]
     end
-    # Built out of three explicit locals rather than ntuple(closure, 3):
+    # Built out of three explicit locals, not ntuple(closure, 3):
     # inference widens the closure form to CartesianIndices{3,<:Tuple{
     # OrdinalRange,...}} even though every runtime value is a UnitRange, which
     # makes the loop variable in `for I in plane` infer as Any. Every array access
-    # in the wall and NSCBC loops then goes through runtime dispatch — O(N^2)
+    # in the wall and NSCBC loops then goes through runtime dispatch, O(N^2)
     # of them per face per RK stage.
     n_halo_d = decomp.n_halo_d
     n = decomp.n_local
@@ -259,8 +259,8 @@ correct_rhs!(bc::SwitchableBC, solver, Q, dQ, d, side) =
 Setup-time hook, called by the [`Solver`](@ref) constructor once per face. The
 default accepts anything. A condition whose derivation restricts the geometry, or
 whose keywords must agree with the EOS, validates that here. The run then fails at
-`setup`, rather than repeating the check on every RHS call or, on a face the
-formulation does not cover, completing with a wrong answer.
+`setup`, avoiding a repeated check on every RHS call and preventing an uncovered
+face from completing with a wrong answer.
 
 Both arms of a [`SwitchableBC`](@ref) are validated, since the `after` condition
 is reached without passing through setup again.
@@ -271,7 +271,7 @@ validate_bc(bc::SwitchableBC, metric, eos, d::Int, side::Int) =
     (validate_bc(bc.before, metric, eos, d, side);
      validate_bc(bc.after, metric, eos, d, side))
 
-"ρe at a wall held at temperature Twall — one method per EOS."
+"ρe at a wall held at temperature Twall, one method per EOS."
 wall_internal_energy(eos::IdealMixture, Q, I, n_species::Int, Twall) = begin
     ρe = zero(eltype(Q))
     @inbounds for k in 1:n_species
@@ -324,7 +324,7 @@ end
 
 Launch `body!` through [`pointwise!`](@ref) over the padded index box of a
 [`wallplane`](@ref) result, appending the plane's index offsets in the
-`(o1, o2, o3)` slots the pointwise bodies already use. The caller has tested
+`(o1, o2, o3)` slots the pointwise bodies use. The caller has tested
 `plane` for `nothing`.
 """
 @inline function plane_pointwise!(body!::F, route, plane::WallPlane,
@@ -398,7 +398,7 @@ end
 function enforce!(::ExtrapolationBC, Q, solver, d, side)
     # Zeroth-order extrapolation: copy the adjacent interior plane onto the
     # edge plane. Crude outflow; NSCBCOutflowBC is the characteristic
-    # alternative where reflections matter.
+    # alternative when reflections affect the solution.
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
     sgn = side == 1 ? 1 : -1
@@ -409,7 +409,7 @@ function enforce!(::ExtrapolationBC, Q, solver, d, side)
 end
 
 "Enforce every boundary condition on the conserved state `Q` in place, over the
-active dimensions only, and return `Q`. No condition shipped with CompactLES
+active dimensions only, and return `Q`. No condition CompactLES provides
 communicates here; each acts through `wallplane` and so does nothing on a rank
 owning no part of the face."
 function apply_bcs!(solver, Q)

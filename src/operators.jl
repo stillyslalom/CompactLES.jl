@@ -21,7 +21,7 @@ the scheme to one dimension and decomposition, with prescaled coefficients,
 edge closures, distributed line solver, and reusable packed-line storage.
 
 Plans are constructed by [`setup`](@ref); users normally pass them to
-[`apply_along!`](@ref) rather than constructing them directly.
+[`apply_along!`](@ref) and rarely construct one directly.
 """
 struct DirPlan{T} <: AbstractDirPlan
     dim::Int
@@ -69,7 +69,7 @@ so every rank of the sub-communicator along `dim` must build the plan.
 
 `lo_closures` and `hi_closures` substitute an alternative closure-row set at
 the corresponding closed end, in place of `scheme.closures`. This is the
-patch-interface seam: [`interface_closures`](@ref) supplies rows whose
+patch-interface hook: [`interface_closures`](@ref) supplies rows whose
 right-hand sides read the exchanged ghost data (`ClosureRow.first ≤ 0`), which
 `plan_direction` verifies fit inside the halo width. Like the fold keywords,
 either may be passed on every rank and acts only on the rank owning that edge.
@@ -167,7 +167,7 @@ function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
     # the fill the answer, so the line solve and its interface stage are both
     # skipped. This is read off the scheme and the supplied closure sets and
     # nothing else: the interface stage carries a collective, and a flag derived
-    # from per-rank edge status would deadlock rather than fail.
+    # from per-rank edge status would produce a deadlock, not an error.
     # `gaussian_filter` is the case in hand.
     identity_lhs(row) = iszero(row.lhs[1]) && isone(row.lhs[2]) && iszero(row.lhs[3])
     explicit = iszero(α) && all(identity_lhs, scheme.closures) &&
@@ -280,7 +280,7 @@ end
 # tuple holds `nothing` exactly where the dimension is collapsed or folded, and
 # every caller branches on those conditions first. This method makes the dead
 # branch statically resolvable, so it neither shows up as a runtime-dispatch
-# site in `bench/jetcheck.jl` nor hides a genuine routing bug behind a
+# site in `bench/jetcheck.jl` nor hides a routing bug behind a
 # MethodError.
 apply_along!(out, ::Nothing, f, decomp::Decomp) =
     error("apply_along! reached a dimension with no plan; the caller should " *
@@ -332,7 +332,7 @@ function filter_field!(f, solver; σf::Int=1)
     for d in 1:3
         solver.decomp.active[d] || continue
         # Only dimension d: the pass is a 1-D stencil along d, so the other
-        # two dimensions' halos are dead, exactly as in `smooth!`.
+        # two dimensions' halos are dead, as in `smooth!`.
         exchange_dim!(f, solver.decomp, d)
         filt_along!(solver.tmp_a, f, solver, d, σf)
         copy_interior!(f, solver.tmp_a, solver.decomp)
@@ -361,8 +361,8 @@ function _fill_t!(B::Matrix{T}, plan, f, decomp::Decomp, ::Val{D}) where {T,D}
     a0 = plan.a0
     sym = plan.scheme.symmetric
     o1, o2, o3 = n_halo_d
-    # Flattened (jr, kk) so that a run whose orthogonal dimension is collapsed
-    # still divides over the line index. That case is nout = 1, which covers
+    # Flattened (jr, kk), allowing a run whose orthogonal dimension is collapsed
+    # to divide over the line index. That case is nout = 1, which covers
     # every transverse direction of a planar-2-D grid. Each (kk, jr) writes a
     # distinct nx-long block of B, so the pair is as independent as kk alone was.
     @threaded nout*n*nx for jk in outer_indices(n, nout)
@@ -445,8 +445,8 @@ end
 
 # --- Fused scatters ---------------------------------------------------------
 # The RHS is bandwidth-bound (see bench/phases.jl), and two of its per-solve
-# companions were separate full-array passes over data the scatter had just
-# written: the 1/h gradient rescale and the flux-divergence subtraction into
+# companions were separate full-array passes over data written by the scatter:
+# the 1/h gradient rescale and the flux-divergence subtraction into
 # dQ. The scatter variants below apply those operations in the scatter itself,
 # removing two array streams per line solve. The per-point arithmetic is the
 # same product and the same subtraction in the same order as the two-pass

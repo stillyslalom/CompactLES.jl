@@ -3,10 +3,10 @@
 # a regularized cylindrical axis.
 #
 # Collapsed dimensions (n_global[d] == 1) carry no derivatives, filters, halos,
-# or exchanges — but keep their velocity component and all metric source
-# terms, which is exactly what axisymmetric (r, z) flow with optional swirl
+# or exchanges, but keep their velocity component and all metric source
+# terms, as axisymmetric (r, z) flow with optional swirl
 # requires. Coordinate singularities (cylindrical axis, spherical origin and
-# poles — axisymmetric or fully resolved) are regularized
+# poles, axisymmetric or fully resolved) are regularized
 # by a half-offset grid, r_i = (i − ½)h, plus parity conditions: halos below
 # the axis are mirror-filled with per-field signs (even scalars/u_z, odd
 # u_r/u_θ), interior stencils run all the way to the first node, and the
@@ -14,11 +14,11 @@
 # diagonal (per solution parity σg: derivatives flip field parity, filters
 # preserve it). No node sits at r = 0 and no scale factor vanishes.
 
-# The patch parameter `P` is unconstrained rather than `P <: Patch{T}`: a
+# The patch parameter `P` is unconstrained, not `P <: Patch{T}`: a
 # refined solver stores its root and level-1 patches in one vector, and the
 # two differ in their boundary-condition type, so `P` is their typejoin. The
-# per-patch loops then cost one dynamic dispatch per patch per call — behind
-# the PatchSolver function barrier, so the bodies stay concrete — while the
+# per-patch loops then cost one dynamic dispatch per patch per call, behind
+# the PatchSolver function barrier so the bodies stay concrete, while the
 # single-patch and same-level multi-patch cases keep a concrete `P`.
 mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P}
     equations::Eq
@@ -57,23 +57,23 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P}
     step::Int
     dt_prev::T                              # last accepted step, for growth capping
     rate_prev::T                            # last CFL rate, for the predictor
-    # Wall-clock accounting, filled in by `run!`. Rank-local and deliberately so:
-    # a reduction here would be a collective on every step, paid by every run
-    # whether or not anything reads it. Callers wanting load imbalance reduce
-    # these themselves at their own (much lower) reporting frequency — see
+    # Wall-clock accounting, filled in by `run!`. Rank-local: a reduction here
+    # would be a collective on every step, paid by every run whether or not
+    # anything reads it. Callers wanting load imbalance reduce these
+    # themselves at their own (much lower) reporting frequency; see
     # `ProgressLog`. Seconds, and Float64 regardless of T.
     wall_step::Float64                      # last completed step, excl. callbacks
     wall_total::Float64                     # cumulative over the run
-    # What the positivity failsafe has seen and repaired. Global rather than
-    # rank-local, unlike the wall-clock fields above: the repair reduces its own
+    # What the positivity failsafe has seen and repaired. Global, unlike the
+    # rank-local wall-clock fields above: the repair reduces its own
     # tally on every step it runs, and it runs only when
     # `StepControl.floor_ratio` is set, so a run that leaves it off pays nothing.
     floor_tally::FloorTally
 end
 
 # Patch-owned property names forward to the sole patch, which keeps every
-# existing consumer of the pre-patch field layout — tests, benches, examples,
-# and the compute path itself in the single-patch case — reading unchanged.
+# existing consumer of the pre-patch field layout (tests, benches, examples,
+# and the compute path itself in the single-patch case) reading unchanged.
 # On a multi-patch solver those names have no single answer, so the forward
 # throws; the multi-patch drivers hand each routine a `PatchSolver` instead.
 @inline function Base.getproperty(s::Solver, name::Symbol)
@@ -211,7 +211,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     poles = pole_l
     # A domain endpoint supplied in the solver's storage type can only
     # represent π to that type's precision. Configuration checks should reject
-    # a genuinely different angular range, not the Float32 representation of
+    # a different angular range, not the Float32 representation of
     # the requested one.
     angle_tol = max(1e-10, 8 * Float64(eps(T)) * π)
     if axis
@@ -375,14 +375,14 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         (lo, hi)
     end for pid in 1:npatch]
     # The sensor smoother stands in for Cook's Gaussian test filter. `:compact`
-    # reuses `filt`, which is what shipped before the option existed and keeps
+    # reuses `filt`, which was the smoother before the option existed and keeps
     # every plan identical; `:gaussian` is the explicit nine-point stencil the
     # reference implementation uses, and carries no line solve.
     smoo = art.smoother === :gaussian ? gaussian_filter(T) : filt
     # The sensor detector. `:delta4` is the explicit undivided fourth
     # difference applied inside `delta4_sum!`, which needs no plan at all;
     # `:d8` is the pentadiagonal compact eighth derivative and needs one per
-    # dimension, and one pair per fold, exactly as the smoother does.
+    # dimension and one pair per fold, matching the smoother.
     ring = compact_d8(T)
     equations = equations === nothing ? NavierStokes1T(eos) : equations
     equations isa EquationSet || error("equations must be an EquationSet")
@@ -450,8 +450,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
               mkd(deriv, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing)))
         fp = (mkd(filt, d; lo_fold=(lo ? 1 : nothing), hi_fold=(hi ? 1 : nothing)),
               mkd(filt, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing)))
-        # `:compact` aliases the filter plans rather than duplicating them.
-        # That is exactly what `smooth!` did before it had an operator of its
+        # `:compact` aliases the filter plans to avoid duplicating them.
+        # This matches `smooth!` before it had an operator of its
         # own, so the default path keeps both its answer and its footprint.
         sp = art.smoother === :compact ? fp :
              (mkd(smoo, d; lo_fold=(lo ? 1 : nothing), hi_fold=(hi ? 1 : nothing)),
@@ -486,11 +486,11 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     smooth_plans = art.smoother === :compact ? filter_plans :
                    ntuple(d -> decomp.active[d] && folds[d] === nothing ?
                           mkd(smoo, d) : nothing, 3)
-    # `nothing` rather than a tuple of nothings, and the difference matters:
-    # `detect_sum!` dispatches on this field's type to decide which detector
-    # runs, so under `:delta4` the whole d8 path — `ring_sum!`, `ring_along!`,
-    # and the `apply_along!` call taking a possibly-absent plan — is not
-    # reachable from inference and costs the default configuration nothing.
+    # `nothing`, not a tuple of nothings: `detect_sum!` dispatches on this
+    # field's type to decide which detector runs, so under `:delta4` the whole
+    # d8 path (`ring_sum!`, `ring_along!`, and the `apply_along!` call taking a
+    # possibly-absent plan) is not reachable from inference and costs the
+    # default configuration nothing.
     # A tuple would not serve: a fully folded run carries no plans here even
     # under `:d8`, since those live on the FoldSpec.
     ring_plans = art.detector === :delta4 ? nothing :
@@ -556,9 +556,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
 end
 
 # Level-1 patch construction over the refined region `refine` (root node
-# space), shared between the `Solver` constructor and `regrid!`, which is why
-# it takes the schemes rather than reading plans off an existing patch: a
-# regrid changes the extents and every plan must be rebuilt.
+# space), shared between the `Solver` constructor and `regrid!`. It takes the
+# schemes, not plans off an existing patch, because a regrid changes the
+# extents and every plan must be rebuilt.
 function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            active_g::NTuple{3,Bool}, h::NTuple{3,T},
                            n_halo::Int, comm::MPI.Comm, deriv, filt, smoo,
@@ -774,7 +774,7 @@ end
 # wanting the density writes `Q[I, 1] + Q[I, 2]` and has silently hardcoded a
 # two-species run. The functions below are the layout-independent equivalents,
 # for callback conditions, custom diagnostics, and any other code reading `Q`
-# between steps rather than reading the primitives, which are stale there; see
+# between steps, when the primitives are stale; see
 # `refresh_primitives!`.
 #
 # All of them index the PADDED arrays, following the convention of `gidx` and
@@ -786,7 +786,7 @@ end
     mixture_density(solver, Q, I) -> ρ
 
 Mixture density at padded index `I`, the sum of the partial densities. Prefer
-this method to explicit component indices so that the expression remains valid
+this method to explicit component indices; the expression then remains valid
 when the species count changes.
 """
 @inline function mixture_density(solver::SolverLike, Q, I)
@@ -1000,7 +1000,7 @@ end
 Sensor smoother of `f` along dimension `d` with antipodal sign `σf`. This is
 the Cook test filter, selected by `ArtParams.smoother`, and is a distinct
 operator from `filt_along!`: the two coincide only under
-`ArtParams(smoother = :compact)`, which aliases the filter plans rather than
+`ArtParams(smoother = :compact)`, which aliases the filter plans and avoids
 planning an operator of its own; the default `:gaussian` plans the explicit
 nine-point stencil of [`gaussian_filter`](@ref). Only the artificial-property
 sensors go through here, by way of `smooth!`.
@@ -1089,7 +1089,7 @@ assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, 
 
 # No `::Type` argument here: a `Type` inside `pointwise!`'s Vararg defeats
 # Julia's specialization heuristics and the body call turns into a per-point
-# runtime dispatch — measured as assemble_fluxes! at 9× its cost. The element
+# runtime dispatch, measured as assemble_fluxes! at 9× its cost. The element
 # type comes off an array argument instead.
 @inline function _fluxes_point!(Q, eos, rho, u, v, w, p, T_ion,
                                 cp_mix, mu_art, beta_art, kappa_art, D_art, Y,
@@ -1110,7 +1110,7 @@ assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, 
         divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
         # T(2)/T(3), not the literal 2/3: the Float64 literal promotes the
         # normal stresses under a narrower T, making τ a heterogeneous tuple
-        # whose runtime indexing is a dynamic field access — an InvalidIRError
+        # whose runtime indexing is a dynamic field access, an InvalidIRError
         # on device. The Float64 value is identical.
         two_thirds = T(2) / T(3)
         τ11 = μ * (2*grad_u[1,1][I] - two_thirds * divu) + β * divu
@@ -1173,8 +1173,8 @@ end
 """
     refresh_primitives!(solver, Q)
 
-Update the primitive fields on `solver` — `rho`, `u`, `v`, `w`, `p`, `T_ion`,
-`c`, `cp_mix`, and `Y` — from `Q` by exchanging rank-boundary halos and calling
+Update the primitive fields on `solver` (`rho`, `u`, `v`, `w`, `p`, `T_ion`,
+`c`, `cp_mix`, and `Y`) from `Q` by exchanging rank-boundary halos and calling
 `primitives!`. This operation is collective and idempotent.
 
 During `compute_rhs!`, including source terms and boundary corrections, the
@@ -1204,7 +1204,7 @@ zeroed on a collapsed dimension, and the metric curvature terms are added on
 top. Collective: every rank must call it, since each active dimension is a
 distributed line solve.
 
-Pass `primitives_current = true` when [`refresh_primitives!`](@ref) has already
+Pass `primitives_current = true` when [`refresh_primitives!`](@ref) has
 run on this exact `Q` and only the gradients are wanted; the caller is then
 responsible for the claim that nothing has touched `Q` since.
 """
@@ -1230,10 +1230,10 @@ end
     compute_rhs!(solver, Q, dQ, primitives_current=false)
 
 Evaluate dQ/dt into the interior of `dQ` from the conserved state `Q`
-(boundary conditions should already be enforced on `Q`). Collapsed dimensions
+(boundary conditions should be enforced on `Q` beforehand). Collapsed dimensions
 contribute no derivatives; the axis dimension routes through parity-folded
 plans with mirror-filled halos. The interior of `dQ` is zeroed first, so it is
-overwritten rather than accumulated into.
+overwritten, not accumulated into.
 
 This is collective: it exchanges halos, runs a distributed line solve per active
 dimension per field, and calls `correct_rhs!` for every boundary condition,
@@ -1248,11 +1248,11 @@ fold exists, and `ring_buf` under `detector = :d8`. The docstring of
 return and may therefore be borrowed by a later phase of the same call.
 
 A trailing `primitives_current = true` skips the opening halo exchange and
-primitives pass, and is valid only when the caller has just performed both on
+primitives pass, and is valid only immediately after the caller performs both on
 this same `Q`. See [`compute_primitives_and_gradients!`](@ref); [`step!`](@ref)
 passes it for the first RK stage of a `prepared` step, where [`max_rate`](@ref)
-has already done the work. It is positional rather than a keyword so that
-`bench/audit.jl` can still reach the body with `code_typed`, which sees only the
+has done the work. It is positional, not a keyword, allowing `bench/audit.jl`
+to reach the body with `code_typed`, which returns only the
 forwarding method of a function with keywords.
 """
 function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
@@ -1275,7 +1275,7 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
     # On an unstretched Cartesian grid every scale factor is exactly 1, so
     # A_d ≡ 1 and inv_J ≡ 1: the A_d·F_d product below is a full-array copy
     # whose result equals its input, and the inv_J multiply is a no-op. Skipping
-    # both removes three array streams per (component, dimension) — 45 of them
+    # both removes three array streams per (component, dimension), 45 of them
     # for a 5-component 3-D RHS, in what the phase budget shows is the single
     # largest phase. Curved or stretched grids take the general path unchanged.
     unitgeom = solver.metric isa CartesianMetric && all(isnothing, solver.stretch)

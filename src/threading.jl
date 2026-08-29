@@ -16,14 +16,14 @@
 #     48^3         45.6  ms    21.3  ms     2.1x faster
 #     96^3        340.7  ms    87.5  ms     3.9x faster
 #
-# So the axisymmetric and 1-D radial runs — converging_shock.jl, the Sod tube,
-# anything with a collapsed dimension — were paying a large penalty for asking
+# So the axisymmetric and 1-D radial runs (converging_shock.jl, the Sod tube,
+# anything with a collapsed dimension) were paying a large penalty for asking
 # for threads, which the README tells users to do.
 #
 # `@threaded work for ... end` runs the loop inline, with no task spawn and no
 # allocation, when `work` is below THREAD_MIN_WORK, and defers to
 # Threads.@threads otherwise. `work` is the number of grid points the loop will
-# touch in total — NOT its trip count — so a loop over (j, k) carrying an inner
+# touch in total, not its trip count, so a loop over (j, k) carrying an inner
 # `i` loop passes `nx * ny * nz`, not `ny * nz`.
 #
 # Total work alone is not sufficient, because only the loop `@threaded` wraps is
@@ -48,7 +48,7 @@ thread count (measured 0.6 µs at 1 thread to 14 µs at 24 on a 24-core
 desktop), so the work needed to amortize it grows with it. A fixed total of
 32768 was measured to leave 25-30% on the table for planar-2-D RHS evaluations
 of 16384 points at 8 and 16 threads, while at 24 threads that same work is
-better off serial — no constant total serves both. Override the total with
+better off serial; no constant total serves both. Override the total with
 the `CL_THREAD_MIN_WORK` environment variable, which is read once, when the
 module initializes.
 """
@@ -62,7 +62,7 @@ points per thread across the measured anchors (24-core desktop, minimum over
 at 8 and 16 threads (2048 and 1024 points per thread) and slightly slower at
 24 (683 per thread); threading 4096-point regions at 16 threads (256 per
 thread) is 1.8x slower; and the previous fixed total of 32768, tuned at 24
-threads, is 1365 per thread — the same figure from an independent
+threads, is 1365 per thread, the same figure from an independent
 measurement.
 """
 const THREAD_MIN_WORK_PER_THREAD = 1024
@@ -102,8 +102,8 @@ so
 ```
 
 visits the same points in the same order as the `for k in 1:nz`, `for j in 1:ny`
-nest it replaces, while giving [`@threaded`](@ref) `ny*nz` trips to divide
-instead of `nz`. The note at the top of `threading.jl` has the reasoning.
+nest it replaces, while giving [`@threaded`](@ref) `ny*nz` trips to divide,
+compared with `nz`. The note at the top of `threading.jl` has the reasoning.
 """
 @inline outer_indices(n2, n3) = CartesianIndices((n2, n3))
 
@@ -114,8 +114,8 @@ Thread the loop only when the session has more than one thread, `work` (total
 grid points touched, converted with `Int`) reaches [`THREAD_MIN_WORK`](@ref),
 *and* the loop has more than one trip to divide; otherwise run it inline. The
 iteration expression is evaluated once either way. A pointwise nest should
-iterate [`outer_indices`](@ref) so that the trip-count condition does not fail
-on a collapsed dimension. See the note at the top of this file.
+iterate [`outer_indices`](@ref) to keep the trip-count condition valid on a
+collapsed dimension. See the note at the top of this file.
 
 ## Threading backend
 
@@ -154,8 +154,8 @@ macro threaded(work, loop)
     (spec isa Expr && spec.head === :(=)) ||
         error("@threaded expects a single-variable `for` loop")
     var, iter, body = spec.args[1], spec.args[2], loop.args[2]
-    # The iteration space is bound to a local first, so that reading its trip
-    # count does not evaluate the expression a second time.
+    # The iteration space is bound to a local first, preventing its trip-count
+    # read from evaluating the expression a second time.
     rng = gensym(:threaded_range)
     return esc(quote
         local $rng = $iter

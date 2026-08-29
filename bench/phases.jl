@@ -1,6 +1,6 @@
 # Phase budget of compute_rhs!. A sampling profile of this solver is flat --
 # it is bandwidth-bound across many full-array passes, not concentrated in one
-# kernel -- so what matters is which PHASE owns the traffic, and how many array
+# kernel -- the useful measurements are which phase accounts for the traffic and
 # passes each phase costs. This replays compute_rhs! phase by phase and times
 # each, plus counts the derivative solves it issues.
 using MPI
@@ -106,14 +106,14 @@ function budget(name, solver, Q)
     @printf("    %-20s %8.3f\n", "(sum of phases)", 1e3tot)
 end
 
-# The smoother, the detector and the sensor fields are the phase controls worth
-# varying from the launch line: they are the settings that change what
-# `artificial` costs without changing the case. `smoother=compact` restores the
+# Vary the smoother, detector, and sensor fields from the launch line: these
+# settings change the cost of `artificial` without changing the case.
+# `smoother=compact` restores the
 # line solves that smooth the sensors, one per active dimension per sensor;
 # `detector=d8` adds a pentadiagonal solve per active dimension per detected
 # field; `mu_sensor=velocity` triples the fields the μ* channel detects, which
 # is free under `:delta4` and three line solves per dimension under `:d8`.
-# Defaults track `ArtParams()` so a bare run profiles the shipped configuration.
+# Defaults track `ArtParams()` so a bare run profiles the default configuration.
 const ART_DEFAULTS = ArtParams()
 opt = script_args(ARGS, (smoother = ART_DEFAULTS.smoother,
                          detector = ART_DEFAULTS.detector,

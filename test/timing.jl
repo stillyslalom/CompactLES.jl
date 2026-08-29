@@ -17,8 +17,8 @@
 # phase can report more compile time than wall time. Read the column as
 # compiler work performed, not as a fraction of the phase.
 #
-# Include this first, before `using`, so the package load lands inside a phase
-# instead of ahead of the first measurement.
+# Include this first, before `using`, to include package loading in the first
+# timing measurement.
 
 using Printf
 
@@ -43,8 +43,8 @@ end
     @phase "name" expr
 
 Evaluate `expr`, recording its wall time and the share of it spent compiling.
-Expands to a plain block so that `using` and other top-level-only forms stay
-legal inside it.
+Expands to a plain block, keeping `using` and other top-level-only forms legal
+inside it.
 """
 macro phase(name, ex)
     quote

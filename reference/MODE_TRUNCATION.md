@@ -24,11 +24,11 @@ gates below inherit.
 `max_rate` (timestep.jl) charges the acoustic rate in an angular dimension at
 `(|u| + c) / (r·Δθ)`. On a half-offset polar grid the first node sits at
 r₁ = Δr/2, where the azimuthal spacing is tighter than the radial one by a
-factor of roughly N_θ/π — about 20× at N_θ = 64. The diffusive rate scales
+factor of roughly N_θ/π, about 20× at N_θ = 64. The diffusive rate scales
 with the square of the inverse spacing, so its penalty is that factor squared,
-and the artificial bulk viscosity β\* peaks at the axis exactly when a
-converging shock arrives, so the squared penalty is realized in precisely the
-target problems. In spherical coordinates the φ spacing r·sinθ·Δφ goes to
+and the artificial bulk viscosity β\* peaks at the axis as a
+converging shock arrives, so the squared penalty is realized in the target
+problems. In spherical coordinates the φ spacing r·sinθ·Δφ goes to
 zero at both the origin and the poles simultaneously.
 
 The physics does not require this. Analytic regularity at the axis forces
@@ -39,20 +39,21 @@ almost entirely for modes the continuous problem excludes.
 
 Two consequences fix the shape of the fix:
 
-1. **The unresolvable modes must be removed every step, not merely ignored.**
+1. **The unresolvable modes must be removed every step, not discounted and
+   left in place.**
    Stability is a property of the scheme, not of the state. Discounting the
    modes in `compute_dt` without enforcing their absence lets them grow, and
    the failure mode is the `dt`-collapse grind described under Traps in
    `CLAUDE.md`, not a crash.
 2. **The rate cap in `max_rate` and the enforcement must derive from the same
-   table**, so that what is charged and what is removed cannot drift apart.
+   table**, so the charged and the removed sets cannot drift apart.
 
-Precedent: this is the standard remedy in solvers of exactly this class.
+Precedent: this is the standard remedy in solvers of this class.
 HiPSTAR (Sandberg's compact-FD/spectral turbomachinery LES) runs production
 with radius-dependent azimuthal mode reduction; latitude–longitude
 atmospheric dynamical cores have used polar Fourier filters for decades;
 Mohseni & Colonius (2000) is the reference pole treatment for the fold-style
-grids this code already uses.
+grids this code uses.
 
 ## Why truncation and not the alternatives
 
@@ -60,8 +61,8 @@ Evaluated and set aside, with the disqualifying constraint for each, so they
 are not re-derived:
 
 - **Radius-dependent strength of the existing C8 filter.** Nearly free
-  (`blend_interior!` already blends with a scalar weight), but the C8
-  passband is deliberately narrow: full strength removes only near-Nyquist
+  (`blend_interior!` blends with a scalar weight), but the C8
+  passband is narrow: full strength removes only near-Nyquist
   content and cannot reach the mid-band modes (m ~ N_θ/4) that set `dt`.
   Buys perhaps 1.5–2×, not 20×.
 - **Implicit/IMEX θ.** Needs block-coupled periodic implicit solves (the
@@ -73,7 +74,7 @@ are not re-derived:
   (`AMR_GPU.md` Stage 4) is the sanctioned form of the idea.
 - **Reduced-θ inner patch via patch AMR.** Legitimate long-term home: the
   fold region must stay uniform (`AMR_GPU.md` constraint 4), so the innermost
-  patch is the coarse-θ one with 3× θ-refinement rings outward — the classic
+  patch is the coarse-θ one with 3× θ-refinement rings outward, the classic
   reduced polar grid. Requires θ-only anisotropic refinement ratios to be
   admitted into AMR Stages 2–3, which should be decided when those stages are
   designed. Not a near-term fix, and truncation remains useful on the coarse
@@ -93,7 +94,7 @@ Each is structural or follows from a repo convention; none is a preference.
 1. **Direct low-mode projection, not an FFT.** Per (r, z) ring the truncated
    field is reconstructed from the Fourier coefficients a_m, m ≤ m_max,
    computed against explicit cos/sin tables: O(N_θ·m_max) per ring per
-   component. m_max is small exactly where the truncation is active, so the
+   component. m_max is small wherever the truncation is active, so the
    total across all active rings of a z-plane is on the order of N_θ³/8π
    operations, negligible against one compact line-solve pass over the same
    plane. This avoids adding an FFT dependency, is an exact projection, and
@@ -107,9 +108,9 @@ Each is structural or follows from a repo convention; none is a preference.
    with Δr the physical radial spacing (`solver.h[1]`; uniform, since a
    stretched dimension cannot carry a fold) and κ ≥ 1 the safety margin
    exposed as the enabling keyword. This targets an effective azimuthal
-   spacing of κ·Δr. The floor of 1 is load-bearing: the m = 0 coefficient is
-   untouched, so ring sums of every conserved component — and hence mass and
-   energy — are conserved exactly (uniform θ quadrature weights, metric
+   spacing of κ·Δr. The floor of 1 is essential: the m = 0 coefficient is
+   untouched, so ring sums of every conserved component, and hence mass and
+   energy, are conserved exactly (uniform θ quadrature weights, metric
    factors independent of θ), and the Cartesian momentum components live in
    the m = ±1 modes of the physical-component momenta, so mode_limit ≥ 1
    preserves them exactly. A discretely sampled m = 1 field is projected
@@ -121,9 +122,10 @@ Each is structural or follows from a repo convention; none is a preference.
 4. **Placement: once per step in `run!`**, after `filter_state!` (when it
    fires) and before `apply_positivity_floor!`, writing the interior only.
    Halos are left stale by the same convention the floor uses; `max_rate`
-   exchanges before reading anything at the top of the next iteration. Once
-   per step rather than per RK stage is standard practice in the precedent
-   codes; a mode above the cap grows for at most one step before removal,
+   exchanges before reading anything at the top of the next iteration.
+   Application once per step, not per RK stage, is standard practice in the
+   precedent codes; a mode above the cap grows for at most one step before
+   removal,
    and the margin κ absorbs that (measured in Stage 3, see Risks).
 5. **The rate cap.** In `max_rate` (and mirrored in `dt_report`, which
    duplicates the loop), the angular direction's inverse physical spacing is
@@ -222,7 +224,7 @@ Deliverables:
 - README: replace "None is implemented here" in the CFL section with the
   implemented status and the measured factor.
 
-Sweep hygiene: κ values that fail will grind, not crash — pass a low `nmax`
+Sweep hygiene: κ values that fail will grind, not crash; pass a low `nmax`
 and rely on the `StepControl` floors, per Traps. Stop at sufficient evidence;
 each point is a full shock run.
 
@@ -261,15 +263,14 @@ guards; the serial and MPI gates.
 - **One step of growth between truncations.** A mode above the cap amplifies
   through five RK stages before removal. The amplification per step is
   finite and the mode is then zeroed exactly, so the loop is bounded if
-  nonlinear production feeds from resolved modes, which is the standard
-  argument in the atmospheric literature — but the margin has not been
-  measured on this scheme. Stage 3's κ sweep is the measurement; if κ = 1 is
-  unstable and κ = 2 is not, the default moves and the README states the
-  achieved factor honestly.
+  nonlinear production feeds from resolved modes, the standard argument in
+  the atmospheric literature, but the margin has not been measured on this
+  scheme. Stage 3's κ sweep is the measurement; if κ = 1 is unstable and
+  κ = 2 is not, the default moves and the README states the achieved factor.
 - **Aliasing repopulation.** The projection is applied after the nonlinear
   step, so truncated modes are repopulated by aliasing each step and removed
-  each step. Expected benign at these amplitudes; watch the inner-ring
-  energy in Stage 3 rather than assuming.
+  each step. Expected benign at these amplitudes; measure the inner-ring
+  energy in Stage 3.
 - **Shock structure crossing the active region.** Near the axis a converging
   front is nearly axisymmetric by geometry, and regularity bounds its
   angular structure by the same r^m argument, so the cap discards nothing a

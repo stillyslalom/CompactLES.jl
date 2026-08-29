@@ -52,8 +52,8 @@ filter is normally the binding constraint.
 ## Combine ranks and threads
 
 Point and line loops are threaded only when their work estimate exceeds
-[`THREAD_MIN_WORK`](@ref) — by default 1024 points per thread times the
-session's thread count — and only when the loop has more than one iteration to
+[`THREAD_MIN_WORK`](@ref) (by default 1024 points per thread times the
+session's thread count) and only when the loop has more than one iteration to
 divide. Consequently, one-dimensional and small
 documentation cases often run intentionally on one thread. More threads do not
 compensate for a small local block.
@@ -78,7 +78,7 @@ subcommunicator. Every rank must enter them in the same order. In particular:
 - switch a [`SwitchableBC`](@ref) from a globally consistent callback; and
 - call collective diagnostics on every rank, even if only rank zero prints.
 
-A collective-ordering error usually appears as a zero-CPU hang rather than an
+A collective-ordering error usually appears as a zero-CPU hang, not an
 exception.
 
 ## Record enough information to interpret timing

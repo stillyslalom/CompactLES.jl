@@ -7,7 +7,7 @@
 # refined dimension carries 3m − 2 fine nodes, coarse node a + k − 1 coinciding
 # with fine node 3k − 2. By default both levels advance every RK stage with
 # the same dt (the global minimum, which the shared `max_rate` reduction
-# already supplies once the fine patch joins `solver.patches`), so no temporal
+# supplies once the fine patch joins `solver.patches`), so no temporal
 # interpolation arises anywhere. Under `subcycle = true` the fine
 # level instead takes three steps of dt/3 per coarse step, and the temporal
 # interpolation this needs is the Hermite box at the end of this file; the
@@ -18,11 +18,11 @@
 #
 #   - After every RK stage update, `prolong_level_ghosts!` interpolates the
 #     coarse state (order 6) over a box extending `LEVEL_BUFFER` coarse nodes
-#     beyond the refined region and overwrites the fine patch's ghost ring AND
-#     its boundary-plane nodes from the result. The plane nodes are included
-#     deliberately: the fine solve is then boundary-forced by the coarse
-#     solution exactly as a `DirichletBC` face would be, which removes the
-#     drift mode between the levels without an averaging step.
+#     beyond the refined region and overwrites the fine patch's ghost ring and
+#     its boundary-plane nodes from the result. Including the plane nodes lets
+#     the coarse solution force the fine solve's boundary as a `DirichletBC`
+#     face would, removing the drift mode
+#     between the levels without an averaging step.
 #
 #   - After every completed step (post-filter), `restrict_level!` copies the
 #     fine field's coincident-node values onto the covered coarse region,
@@ -30,18 +30,17 @@
 #     constant for the measured amplifying loop the margin breaks).
 #
 # The invertible filter pair itself (`prolong!`/`restrict!`, deconvolution
-# against Gaussian filtering) is NOT the default coupling, on a
+# against Gaussian filtering) is not the default coupling, on a
 # measurement: the pair's contract is that prolongation input is samples of
 # the FILTERED field, while the live coarse solution is point samples of the
 # field itself. Deconvolving point samples "sharpens" data that was never
 # smoothed and filtering on the way down attenuates resolved content, both
-# O(h²) against the solution — the entropy-wave gate measured order 1.3–1.7
+# O(h²) against the solution: the entropy-wave gate measured order 1.3–1.7
 # and errors three decades above the interpolation/injection coupling's,
 # which measures order ≈ 3.5 (the one-sided divergence closures binding, as
 # at a same-level patch interface). `level_restriction = :filter` keeps the
-# filtered path selectable — its anti-alias smoothing is the tool to reach
-# for if
-# injection restriction proves positivity-limited on captured shocks.
+# filtered path selectable; its anti-alias smoothing is the tool to reach
+# for if injection restriction proves positivity-limited on captured shocks.
 # Regridding likewise initializes NEW fine regions by interpolation, since
 # freshly covered coarse data are point samples too (regrid.jl).
 #
@@ -57,10 +56,10 @@
 # gradients and filters, one-sided divergence).
 #
 # Distribution: both levels decompose over the whole rank set. The
-# coupling DATA is replicated — every rank gathers the buffered coarse box
+# coupling DATA is replicated: every rank gathers the buffered coarse box
 # (and, for restriction, the coincident-node samples of the fine patch) with
-# one Allgatherv and writes only the shell or covered nodes it owns — while
-# the interpolation CHAINS distribute by conserved component, each rank
+# one Allgatherv and writes only the shell or covered nodes it owns. The
+# interpolation CHAINS distribute by conserved component, each rank
 # running the serial chain (COMM_SELF Decomps) for its own components and
 # sharing only the thin shell ring; see the section comment above
 # `_impose_shell!` for the measurement that forced that split. No halo
@@ -69,7 +68,7 @@
 # gather volume (region-sized messages, several per step) and one replicated
 # region-sized array per rank; a rank-partitioned transfer is the recorded
 # follow-up if a measured case outgrows them. `level_restriction = :filter`
-# remains serial-only — its restriction is a whole-patch line solve.
+# remains serial-only, since its restriction is a whole-patch line solve.
 
 "Coarse nodes of prolongation buffer beyond the refined region, per side."
 const LEVEL_BUFFER = 4
@@ -79,8 +78,8 @@ const LEVEL_BUFFER = 4
 # amplifying loop: the fine solution is least accurate at its imposed
 # boundary, the restriction segment's one-sided closure rows read exactly
 # those values, and the polluted coarse boundary nodes feed the next fine
-# shell — measured gain ≈ 2 per step on the entropy-wave test, against a flat
-# error with the write-back held off the boundary. Two coarse nodes clear
+# shell. The measured gain is ≈ 2 per step on the entropy-wave test, against
+# a flat error with the write-back held off the boundary. Two coarse nodes clear
 # both the closure rows' footprint and the imposed plane's neighborhood.
 const RESTRICT_MARGIN = 2
 
@@ -109,8 +108,8 @@ Geometry and staging of the fine shell ring: the slab ranges, the writers'
 per-rank Allgatherv counts, and the ring's own buffers. All of it follows
 from the refined region and the fine decomposition, which do not change over
 a [`LevelTransfer`](@ref)'s life, so it is built once at setup. A subcycled
-step imposes the shell about twenty times, which is what makes the
-per-call rebuild worth avoiding.
+step imposes the shell about twenty times, so the geometry is not rebuilt
+per call.
 """
 struct ShellRing{T}
     slabs::Vector{NTuple{3,UnitRange{Int}}}
@@ -145,14 +144,14 @@ struct LevelTransfer{T}
     rstage::Vector{Array{T,3}}       # scratch for stages 0 .. K-1
     # Subcycling storage: the coarse solution on the buffered box at
     # the two ends of the current coarse step, values and RHS rates, per
-    # conserved component — the data of the cubic Hermite interpolant that
+    # conserved component: the data of the cubic Hermite interpolant that
     # supplies the fine shell at fine stage times. Shaped like pstage[1] with a
     # trailing component index; empty when the solver does not subcycle.
     box_Q0::Array{T,4}               # coarse box state at t^n
     box_dQ0::Array{T,4}              # coarse box RHS at t^n
     box_Q1::Array{T,4}               # coarse box state at t^n + dt
     box_dQ1::Array{T,4}              # coarse box RHS at t^n + dt
-    # Distribution: the level transfer runs replicated — every rank
+    # Distribution: the level transfer runs replicated; every rank
     # gathers the (small) coupling regions, runs the identical interpolation
     # chain, and writes only what it owns, so no consistency question arises
     # and the chain needs no halo exchanges of its own. These tables record
@@ -247,7 +246,7 @@ end
 # intersection of its owned block with the requested node region through one
 # Allgatherv, and unpacks every rank's contribution into its own replica.
 # The regions are small by construction (the refined region plus its buffer),
-# which is what makes replication the right first distribution — no halo
+# so replication is the right first distribution: no halo
 # machinery inside the transfer chains, no consistency questions, and the
 # serial path is the same code with a one-rank communicator. The cost grows
 # with region volume times rank count in message total, not per-rank memory;
@@ -274,7 +273,7 @@ distributed field `Q` (padded, 4-D) into the replicated array `dst` on every
 rank: node `n` lands at `dst[n - dst_off + dst_pad, ..., c]`, where `dst_off`
 maps node space onto `dst`'s unpadded box. With `sample = s`, only nodes
 `n ≡ 1 (mod s)` along active dimensions participate and land at
-`dst[(n-1) ÷ s + 1 ...]` — the coincident-node form the `:inject` restriction
+`dst[(n-1) ÷ s + 1 ...]`, the coincident-node form the `:inject` restriction
 uses (`s = 3` per refined dimension). Collective over `decomp.comm`.
 
 `buffers` supplies the MPI staging. The per-step call sites pass the
@@ -310,9 +309,9 @@ function gather_region!(dst::AbstractArray{T,4},
             idx += 1
         end
     elseif counts[me+1] > 0
-        # Device storage packs by broadcast into a contiguous stage — the
+        # Device storage packs by broadcast into a contiguous stage (the
         # same strided-to-contiguous move the halo staging makes, with the
-        # sampled ranges expressed as strided views — and one contiguous
+        # sampled ranges expressed as strided views), and one contiguous
         # device-to-host copy fills the MPI buffer. Column-major broadcast
         # order matches the scalar pack's (c slowest, i fastest).
         lr = ntuple(d -> (first(mine[d]) - decomp.offset[d] + pad[d]):sample[d]:
@@ -348,7 +347,7 @@ fine_extent(region::BlockRegion, active::NTuple{3,Bool}) =
 Process grid for the fine patch: a factorization of `np` over the active
 dimensions whose smallest local block stays at or above the C8 filter's
 9-point minimum, preferring the factorization with the largest smallest
-block. `MPI.Dims_create` cannot be used here because it knows nothing of the
+block. `MPI.Dims_create` cannot be used here because it lacks the
 scheme minimum, and a regrid that picked an infeasible grid would kill a run
 mid-flight; this errors with the actual numbers instead, at setup or at the
 regrid that shrank the region.
@@ -422,7 +421,7 @@ function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
     # decomposed rank writes only its own padded slots, so an interior rank
     # writes nothing under `shell_only` and its rank-boundary halos keep the
     # exchanged neighbor values. `shell_only = false` writes every slot
-    # instead — the whole-patch initialization a regrid performs on a freshly
+    # instead: the whole-patch initialization a regrid performs on a freshly
     # created fine region.
     padf = df.n_halo_d
     padb = boxf.n_halo_d
@@ -480,7 +479,7 @@ end
 # The interpolation chain, not the physics, is the expensive half of the
 # coupling: a subcycled step imposes the shell ~20 times (five coarse stages
 # plus every fine stage's Hermite shell), each a K-stage tensor-product
-# interpolation over the whole buffered box per conserved component — and a
+# interpolation over the whole buffered box per conserved component, and a
 # replicated chain repeats all of it on every rank. Measured on the 3-D cost
 # case at np = 8, that put the composite at 85% of the uniform-fine wall.
 # The chains therefore distribute BY COMPONENT: rank r runs the chain only
@@ -489,8 +488,8 @@ end
 # extent, in patch-padded node space), and one Allgatherv replicates the
 # rings; every rank then writes its own shell slots from the ring. The chain
 # work per rank drops by ~min(np, n_cons)×, and the collective carries the
-# ring, not the box. Values are bit-identical to the replicated form — the
-# same chain output moves through a pack/unpack instead of being recomputed.
+# ring, not the box. Values are bit-identical to the replicated form: the
+# same chain output moves through a pack/unpack without recomputation.
 
 # Ring slabs in patch-padded node space, ascending dimension order, low side
 # then high per active dimension. Slabs overlap at corners; both copies of a
@@ -521,12 +520,12 @@ end
 
 # One-based ring offset of shell node (g1, g2, g3), or 0 when no slab holds
 # it. Invariant: the slabs of `_ring_slabs` cover every padded slot whose
-# patch-global index lies outside the strict interior, which is exactly the
-# shell test both writers apply before calling here, so a shell slot always
-# matches. A 0 return therefore means the slab set and the shell test have
-# fallen out of step; `_write_shell_from_ring!` raises on it rather than
-# indexing the ring at 0 under its `@inbounds`. The device body cannot raise,
-# so the host path carries the check for both — it runs the identical
+# patch-global index lies outside the strict interior, matching the shell test
+# both writers apply before calling here. A shell slot therefore always matches.
+# A 0 return indicates that the slab set and the shell test
+# have fallen out of step; `_write_shell_from_ring!` raises before indexing the
+# ring at 0 under its `@inbounds`. The device body cannot raise,
+# so the host path carries the check for both, running the identical
 # arithmetic on the identical table.
 @inline function _ring_offset(table, g1, g2, g3)
     for (lo, hi, base) in table
@@ -565,7 +564,7 @@ function _impose_shell!(solver, states, fill0!::F) where {F}
     ring = shell.ring
     padb = lt.pdecomps[K+1].n_halo_d
     shift = ntuple(d -> fdcp.active[d] ? 3 * LEVEL_BUFFER : 0, 3)
-    # This rank's components, as a range rather than a filtered vector: the
+    # This rank's components, as a range, not a filtered vector: the
     # ascending order is the one the ring unpack below assumes.
     owned = (me+1):np:n_cons
     sendbuf = _fit!(shell.buffers.send, ringlen * length(owned))
@@ -586,7 +585,7 @@ function _impose_shell!(solver, states, fill0!::F) where {F}
         end
     end
     if np == 1
-        # Every component is this rank's, in order, so the send buffer already
+        # Every component is this rank's, in order, so the send buffer
         # holds the ring column by column.
         copyto!(ring, 1, sendbuf, 1, ringlen * n_cons)
         _write_shell_from_ring!(Qf, ring, table, lt, fdcp, n_cons)
@@ -627,7 +626,7 @@ function _write_shell_from_ring!(Qf, ring, table, lt::LevelTransfer,
         return Qf
     end
     # Device patch: the ring (thin) uploads and one kernel writes every
-    # component of every shell slot — far less traffic than the whole box.
+    # component of every shell slot, far less traffic than the whole box.
     dev_ring = similar(parent(Qf), size(ring))
     copyto!(dev_ring, ring)
     pointwise!(_shell_ring_point!, Qf,
@@ -664,7 +663,7 @@ interpolation of the current coarse state over the buffered box, per conserved
 component, and return `states`. Runs after every RK stage update and inside
 the pre-step synchronization; a solver without refinement returns immediately.
 Collective: one replicated box gather, the component-distributed chains, and
-the ring Allgatherv of `_impose_shell!`. The name says "prolong" for
+the ring Allgatherv of `_impose_shell!`. The name "prolong" refers to
 the operation's role; the operator is `interpolate!`, per the header note on
 why the deconvolving `prolong!` is not used here.
 """
@@ -725,7 +724,7 @@ end
 Restrict the fine state onto the covered coarse region, per conserved
 component, and return `states`. Under the default `:inject` mode the
 coincident-node values gather directly (a sampled [`gather_region!`](@ref),
-which subsamples the fine lattice in one collective rather than one
+which subsamples the fine lattice in one collective and avoids one
 `TransferPlan` per dimension); under `:filter` the invertible pair's
 Gaussian filter runs over the
 fine patch's extent before subsampling, which is a whole-patch line solve and
@@ -807,7 +806,7 @@ end
 # order; LSRK54 has no free dense output and this is the standard substitute.
 # The t^n data falls out of the coarse step's first stage; the t^{n+1} data
 # costs one extra coarse RHS evaluation per step, taken before the fine
-# subcycles so it samples the coarse trajectory rather than the restricted
+# subcycles so it samples the coarse trajectory, not the restricted
 # composite (the restriction write-back would perturb the box values read
 # here).
 
@@ -815,11 +814,11 @@ end
     save_level_box!(lt, decomp, Q, dQ, at_end)
 
 Gather the coarse state `Q` and its RHS `dQ` over the buffered prolongation
-box into the [`LevelTransfer`](@ref)'s Hermite storage — the `t^n` slots when
+box into the [`LevelTransfer`](@ref)'s Hermite storage: the `t^n` slots when
 `at_end` is false, the `t^n + dt` slots when true. `decomp` is the coarse
 patch's decomposition. Collective over it (two replicated-box gathers); the
-box data is then identical on every rank, which is what lets the Hermite
-shell evaluation stay communication-free at every fine stage.
+box data is then identical on every rank, so the Hermite shell evaluation
+is communication-free at every fine stage.
 """
 function save_level_box!(lt::LevelTransfer, decomp::Decomp, Q, dQ, at_end::Bool)
     boxQ = at_end ? lt.box_Q1 : lt.box_Q0
@@ -860,7 +859,7 @@ Configuration and rebuild inputs for tagging-driven regridding
 (`src/regrid.jl`): the regrid cadence in coarse steps, the tagging threshold on
 the relative undivided fourth difference of the mixture density, the buffer of
 coarse cells added around tagged cells, the nesting margin, and everything a
-fine-patch rebuild needs that the `Solver` does not itself retain — the
+fine-patch rebuild needs that the `Solver` does not itself retain: the
 schemes, halo width, interface treatment, and backend. `last_step` records the
 step of the most recent regrid check so a run resumed on the same solver keeps
 the cadence. Constructed by the [`Solver`](@ref) constructor's

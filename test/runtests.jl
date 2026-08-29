@@ -354,7 +354,7 @@ end
     @test ferr(solver, df, (x, y, z) -> -2sin(3x) * sin(2y)) < 1e-8   # transposed path
     CL.deriv_along!(df, f, solver, 3, 1); CL._scale_grad!(df, solver, 3)
     @test ferr(solver, df, (x, y, z) -> 0.0) < 1e-12
-    # C10 must decisively beat the tridiagonal C6 on the same field (≈ 2000× here).
+    # C10 error on this field is ≈2000× below C6; the guard requires 100×.
     s6 = mkslv(n_global=(32, 32, 32), deriv=lele_d1_6())
     f6 = CL.field(s6.decomp); df6 = CL.field(s6.decomp)
     fillf!(s6, f6, (x, y, z) -> sin(3x) * cos(2y))
@@ -576,7 +576,7 @@ end
     filter_state!(solverB, QB)
     # Filtering is applied dimension by dimension, so the composite is not
     # (1-w)Q + w·F(Q) exactly; it is that per direction. Check the property that
-    # does hold globally and is what the relaxation is for: the blended state
+    # does hold globally and motivates the relaxation: the blended state
     # lies strictly between the two, and approaches each end as w does.
     @test 0 < dev(interior(solverB, QB), ref) < full
 
@@ -1153,7 +1153,7 @@ end
     end
     ss, sg, sd = tgv(:strain), tgv(:gated_strain), tgv(:dilatation)
     # Taylor–Green is solenoidal, so neither compression-keyed sensor has
-    # anything to fire on; the strain sensor sees the vortical structure and
+    # anything to fire on; the strain sensor responds to the vortical structure and
     # fires. :dilatation collapses to round-off because its sensor is built
     # from ∇·u. :gated_strain keeps the firing sensor and leans on the switch
     # alone, which removes 99.4% of the total but not the maximum: the strain
@@ -1200,7 +1200,7 @@ end
 end
 
 @testset "compact_d8 ring detector: symbol, closures, and selectivity" begin
-    # The whole point of the d8 detector is what it does BELOW the Nyquist,
+    # The d8 detector differs below the Nyquist,
     # so the operator is pinned against its analytic symbol rather than
     # against a convergence order. It is also the only symmetric banded
     # scheme in the package, hence the only exercise of BandPlan's filter-side
@@ -1228,8 +1228,8 @@ end
         # cancellation. That is a property of the operator, not slack here.
         @test out[i0+pad, 1, 1] / cos(k * i0) ≈ symbol(k) rtol = 1e-9
     end
-    # Normalization: the response at two points per wavelength is 16, which is
-    # what undivided δ⁴ gives there. That is what lets the four artificial
+    # Normalization: the response at two points per wavelength is 16, matching
+    # undivided δ⁴ there. This separation lets the four
     # constants transfer between detectors.
     @test symbol(π) ≈ 16.0 rtol = 1e-12
     # Selectivity against undivided δ⁴ on the same normalization: measured
@@ -1388,7 +1388,7 @@ end
     su = axial(ArtParams(mu_sensor=:velocity), uni)
     @test su.mu_art[gidx(su, 1, 1, 1)] > 0
 
-    # 5. The ungated dilatation sensor is the form the reference ships. The
+    # 5. The ungated dilatation sensor is the form the reference uses. The
     # gated one is that sensor multiplied by the Ducros switch, so it is never
     # larger, and is exactly zero wherever the flow expands.
     ug = oned(ArtParams(beta_sensor=:ungated_dilatation), ramp1)
@@ -1401,7 +1401,7 @@ end
     @test any(I -> ug.beta_art[I] > 0.0, expanding)
 
     # 6. The channels are independent: rebuilding one leaves the other's
-    # numbers bit-identical to the shipped configuration's.
+    # numbers bit-identical to the default configuration's.
     base = oned(ArtParams(), ramp1)
     @test oned(ArtParams(mu_sensor=:velocity), ramp1).beta_art == base.beta_art
     @test oned(ArtParams(beta_sensor=:ungated_dilatation), ramp1).mu_art == base.mu_art
@@ -1561,7 +1561,7 @@ end
     @test t.mass > 0
 
     # 3. Internal energy below the floor: counted under both scopes, repaired
-    #    only under :internal_energy. This is the case the shipped Noh run
+    #    only under :internal_energy. This is the case the Noh validation run
     #    carries for its whole duration while still reaching the exact plateau.
     Q4 = copy(Q)
     ke = 0.5 * (Q4[I, m1]^2 + Q4[I, m2]^2 + Q4[I, m3]^2) / ρ0
@@ -1601,14 +1601,14 @@ end
     # Noh at nu=1. Two distinct behaviours, and the distinction is the whole
     # point of the rollback:
     #
-    #   cfl = 0.3 degrades GRADUALLY — the density undershoot grows for ~150
-    #   steps before positivity goes — so the run must fail loudly rather than
-    #   grind, and rollback cannot save it because the savepoint is already
+    #   cfl = 0.3 degrades gradually — the density undershoot grows for ~150
+    #   steps before positivity goes — so the run must fail loudly, not grind.
+    #   Rollback cannot save it because the savepoint is already
     #   damaged by the time anything notices.
     #
-    #   cfl = 0.9 fails ABRUPTLY in the startup transient, which is what a user
-    #   who guessed a CFL actually hits, and rolling back past it with a halved
-    #   CFL recovers the correct answer.
+    #   cfl = 0.9 fails abruptly in the startup transient, representative of a
+    #   guessed CFL. Rolling back past it with a halved CFL recovers the correct
+    #   answer.
     γ = 5 / 3; p0 = 1e-4; tfin = 0.6; N = 400
     build(cfl, control) = begin
         inflow = DirichletBC((x, y, z, t) -> begin
@@ -1773,13 +1773,13 @@ end
     @test_throws ArgumentError read_nasa9("CO2"; reference=:unknown)
 
     # Zero-interval records list a heat of formation and no fit, and are three
-    # lines rather than two. Miscounting them desynchronizes the scan against
-    # the file instead of failing locally, so pin both the record that has to be
+    # lines, not two. Miscounting them desynchronizes the scan against
+    # the file without a local failure, so pin both the record that has to be
     # rejected and a real species that only parses if the skip is right.
     @test_throws "no temperature intervals" read_nasa9("n-Butanol")
     @test length(read_nasa9("Jet-A(g)").intervals) == 2
-    # The message matters: a desynchronized scan also throws ArgumentError, from
-    # misreading a coefficient line as a species header.
+    # Assert the message because a desynchronized scan also throws ArgumentError
+    # after misreading a coefficient line as a species header.
     @test_throws "NASA CEA species not found" read_nasa9("not-a-CEA-species")
 
     # The two CEA records whose interval joins are loosest; the tolerance is
@@ -1795,7 +1795,7 @@ end
 
 @testset "StiffenedGas: perfect-gas limit, and a real liquid" begin
     # p_inf = 0 must reproduce a perfect gas exactly, which pins the algebra;
-    # then a water-like parameter set exercises the branch that matters.
+    # then a water-like parameter set exercises the nonzero-p_inf branch.
     γ = 1.4; R = 1.0; cv = R / (γ - 1)
     sg = StiffenedGas(gamma=γ, p_inf=0.0, cv=cv, name="gas")
     @test nspecies(sg) == 1
@@ -1853,7 +1853,7 @@ end
     @test volume_integral(solver, ones_f) ≈ 1.0 atol = 1e-12
     @test volume_average(solver, ones_f) ≈ 1.0 atol = 1e-12
     # ∫x dV over x ∈ [0,2] with unit transverse area = 1.0 (trapezoid is exact
-    # for a linear integrand, which is what the half edge weight buys).
+    # for a linear integrand, as provided by the half edge weight).
     lin = CL.field(solver.decomp)
     fillf!(solver, lin, (x, y, z) -> x)
     @test volume_integral(solver, lin) ≈ 1.0 atol = 1e-12
@@ -2220,8 +2220,8 @@ end
         @test filesize(CL.frame_prefix(writer, m) * ".pvtr") > 0
     end
 
-    # The collection is what allows the sequence to animate against physical
-    # time rather than frame index, so its timesteps are the assertion.
+    # The collection allows the sequence to animate against physical time, not
+    # frame index, so its timesteps are the assertion.
     pvd = read(joinpath(dir, "frames", "field.pvd"), String)
     @test occursin("type=\"Collection\"", pvd)
     @test count("<DataSet", pvd) == 3
@@ -2310,7 +2310,7 @@ end
     @test length(late) == 1 && solver.step > 0
 
     # EveryStep, and a bare function still runs every step with its return
-    # value ignored — returning true must NOT stop the run.
+    # value ignored — returning true must not stop the run.
     solver, Q = mkrun()
     steps = Int[]
     every = 0
@@ -2536,7 +2536,7 @@ end
     end
 
     # Unswitched, the wrapper must be bit-identical to the condition it wraps —
-    # that is what makes it safe to leave in a problem specification.
+    # making it safe to leave in a problem specification.
     s_ref, Q_ref = mkrun((SlipWallBC(), SlipWallBC()))
     run!(s_ref, Q_ref; tfinal=1e9, nmax=12)
     sw = (SwitchableBC(SlipWallBC(), ExtrapolationBC()),
@@ -2575,13 +2575,13 @@ end
     # The state initialized upstream of the shock is the SHOCKED driven gas —
     # region 2 of the normal-shock relations, not a driver — so the incident
     # shock is already formed and the run starts at the physics of interest.
-    # Sustaining that state is what makes the upstream boundary an INFLOW
+    # Sustaining that state makes the upstream boundary an inflow
     # (u2 + U > 0 into the domain) for as long as the incident shock is being
     # driven. NSCBCInflowBC is the condition that holds it: it replaces every
-    # incoming characteristic with a relaxation toward (u, T_ion, Y), which is
-    # exactly right while region 2 is uniform there.
+    # incoming characteristic with a relaxation toward (u, T_ion, Y), the
+    # appropriate condition while region 2 is uniform there.
     #
-    # It becomes exactly wrong the moment the interface-reflected shock arrives.
+    # It becomes inappropriate when the interface-reflected shock arrives.
     # Behind that shock the state is no longer region 2, so an inflow condition
     # still relaxing toward region-2 targets is over-constraining the boundary,
     # and the mismatch radiates back inward onto the interface. The fix is to
@@ -2694,7 +2694,7 @@ end
 
     # (3) The reference: the same problem with the upstream boundary one domain
     #     length further away, so the reflected shock never reaches it and no
-    #     boundary treatment can matter. This is what makes the comparison a
+    #     boundary treatment is relevant. This makes the comparison a
     #     measurement rather than a difference of two guesses — a non-reflecting
     #     condition is only ever tested against a domain big enough not to need
     #     one. Same spacing, so the grids coincide on x >= 0 to round-off.
@@ -2769,8 +2769,8 @@ end
     # Everything the payload's interpretation depends on is in the header. Each
     # solver below reads the block cleanly if its own field is not checked: the
     # extents agree in every case and the state means something else. The
-    # expected message is asserted so that each case exercises the check it is
-    # there for rather than tripping an earlier one.
+    # expected message is asserted to ensure each case exercises its intended
+    # check, not an earlier one.
     mk(; kw...) = Solver(; n_global=(12, 12, 12), bcs=per3, L_domain=(2π, 2π, 2π),
                          art=ArtParams(enabled=false), kw...)
     eos2 = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
@@ -3045,7 +3045,7 @@ end
         @test compare(lele_d1_6(Float64), dim; lo_fold=σ)
     end
 
-    # The allocation half of the seam: DeviceBackend routes field and
+    # The allocation half of the backend interface: DeviceBackend routes field and
     # allocate_state through KernelAbstractions.zeros with the same halo
     # padding as the CPU backend.
     d = CL.Decomp((16, 12, 14), (false, true, true); dims=(1, 1, 1))
@@ -3085,7 +3085,7 @@ end
 # skip only foregoes the extension's plotting methods and the collective-profile
 # check under decomposition.
 #
-# Unlike HDF5, CairoMakie is deliberately NOT in Project.toml's test target: it
+# Unlike HDF5, CairoMakie is not in Project.toml's test target: it
 # is a heavy dependency to resolve and precompile for two testsets, so
 # `Pkg.test` never reaches this branch. The Makie extension is therefore
 # verified only from the docs environment, which carries CairoMakie already.

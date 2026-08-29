@@ -49,12 +49,12 @@
 # in reference/CALIBRATION.md under "The fold closure is not third order".
 #
 # So a fold study here guards two things at once, and only the weaker of them is
-# about the fold. The slope confirms the outer wall's closure cascade, which is
-# a known property rather than a defect. What the fold contributes is the LEVEL:
-# a fold sign error gives O(1) error at the first node and collapses the slope
-# to ~0, which is what item 3 above is really watching for.
+# about the fold. The slope confirms the outer wall's closure cascade, a known
+# property, not a defect. The fold contributes the error level: a fold sign error
+# gives O(1) error at the first node and collapses the slope to ~0. Item 3 guards
+# against that collapse.
 
-# Timing first, so that package load is measured rather than assumed. See
+# Timing first, ensuring package load is measured rather than assumed. See
 # test/timing.jl for what the compile column means.
 include("timing.jl")
 
@@ -111,13 +111,13 @@ const T_DERIV = Ref(0.0)
 
 # Each study carries two guards, which fail for different reasons.
 #
-#   `expect` / `tol` is wide. It catches an order that has REGRESSED: a wrong
+#   `expect` / `tol` is wide. It detects a regressed order: a wrong
 #   interior coefficient, a wrong closure row or a fold sign error moves the
 #   slope by whole integers, and the width leaves room for the scatter of a
 #   three-point least-squares fit.
 #
 #   `recorded` is the order this code measures today, listed in the header
-#   above, guarded to DRIFT_TOL. A change not meant to affect numerics
+#   above, guarded to DRIFT_TOL. A change not intended to affect numerics
 #   reproduces it to the printed precision, so a moved digit says the change
 #   reached the numerics — which is information, not necessarily a defect.
 #
@@ -226,7 +226,7 @@ study("C8 wall closures, :brady_livescu", (24, 48, 96),
       expect=8.0, tol=1.2, recorded=7.91)
 
 # One pass of the state filter on a closed line, measured as |F f − f|. The
-# shipped wall cascade (identity, F2, F4, F6) is second order along the whole
+# default wall cascade (identity, F2, F4, F6) is second order along the whole
 # line, not only at the wall, because the compact solve carries the row-2
 # error inward; the one-sided Gaitonde–Visbal rows restore the interior
 # order. Resolutions are lower because the eighth-order pass reaches

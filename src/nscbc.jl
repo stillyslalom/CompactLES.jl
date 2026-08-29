@@ -2,8 +2,8 @@
 # subsonic non-reflecting outflow with pressure relaxation, extended to the
 # multicomponent conserved layout.
 #
-# Implementation: LODI wave-amplitude correction of the RHS rather than a hard
-# state enforcement. The interior scheme already produces one-sided normal
+# Implementation: LODI wave-amplitude correction of the RHS, not a hard
+# state enforcement. The interior scheme produces one-sided normal
 # derivatives at boundary planes (compact closure rows), so the conventionally
 # computed dQ contains the physically evaluated incoming acoustic wave. The
 # correction replaces only that wave: with L computed from one-sided ∂p and
@@ -69,7 +69,7 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
     # is collective over the sub-communicator of its dimension: EVERY rank must
     # reach it, including the ones that own no part of this boundary plane.
     # Testing `wallplane === nothing` before these calls deadlocks as soon as
-    # the boundary-normal dimension is decomposed — i.e. the normal way to run
+    # the boundary-normal dimension is decomposed, i.e. the normal way to run
     # an NSCBC problem, splitting along the flow direction.
 
     # One-sided coordinate derivative of p along d (full-field call; the
@@ -82,10 +82,10 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
     #
     # SCRATCH ALIASING. `tmp_b` and `sensor_sp` are borrowed here, and this is
     # safe only because of where compute_rhs! calls the boundary corrections:
-    # after add_metric_sources!, by which point compute_artificial! has already
+    # after add_metric_sources!, by which point compute_artificial! has
     # consumed both sensors into mu_art/beta_art/kappa_art/D_art and the flux
     # divergence has finished with tmp_a/tmp_b. See the invariant recorded in
-    # the `compute_artificial!` docstring. `sensor` itself is deliberately NOT
+    # the `compute_artificial!` docstring. `sensor` itself is not
     # reused: io.jl exposes it as the `:sensor` output field, so clobbering it
     # would make a post-step dump of the sensor show a pressure derivative.
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
@@ -168,7 +168,7 @@ end
         Δd1 = ΔL / (2 * c * c)
         Δd2 = ΔL / 2
         Δd3 = sgn * ΔL / (2 * ρ * c)
-        # φ = ∂(ρe)/∂p |_{ρ,Y}, from the EOS rather than from ideal-gas algebra
+        # φ = ∂(ρe)/∂p |_{ρ,Y}, from the EOS, not from ideal-gas algebra
         # (physics.jl). For an ideal mixture this is cv_m/R_m as before.
         φ = eos_phi(eos, ρ, p, T_a[I], cp_a[I])
         ke = (uv[1]*uv[1] + uv[2]*uv[2] + uv[3]*uv[3]) / T(2)
@@ -201,8 +201,8 @@ end
 #   transverse:  ∂u_t/∂t = −L₃,₄, so L₃,₄* = η_t (c/L)(u_t − u_t∞);
 #   species:     ∂Y_k/∂t = −L_{s,k}, so L_{s,k}* = η_Y (c/L)(Y_k − Y∞_k).
 #
-# The deltas relative to the physically computed amplitudes then map to the
-# conserved components exactly as for the outflow, with the species terms
+# The deltas relative to the physically computed amplitudes then use the
+# outflow mapping to conserved components, with the species terms
 # entering the energy through ρe = p·φ(Y), ∂φ/∂Y_k = (cv_k R_m − R_k cv_m)/R_m².
 # Supersonic points are skipped (full-state DirichletBC is the right tool
 # there). Constant targets for now; (x, t)-dependent targets are a natural
@@ -210,7 +210,7 @@ end
 
 # Parametric on the target-callback type: a `Union{Nothing,Function}` field is
 # abstract, so `bc.target(...)` was a runtime dispatch whose `Prim` result
-# inferred as `Any` — and since uT/TT/YT are read from it, every downstream
+# inferred as `Any`; since uT/TT/YT are read from it, every downstream
 # expression in the point loop went dynamic too. `F` is `Nothing` when no
 # target is supplied, which the `bc.target !== nothing` test then resolves at
 # compile time.
@@ -226,8 +226,8 @@ fractions `Y`; the outgoing acoustic wave remains determined by the interior.
 constant targets pointwise. Its state must contain temperature and the full
 composition. `Lref <= 0` selects the domain length normal to the face.
 
-Use `DirichletBC` rather than NSCBC inflow for a supersonic or deliberately
-full-state-forced boundary. As for the outflow, the formulation covers only faces
+Use `DirichletBC`, not NSCBC inflow, for a supersonic boundary or one whose
+full state is to be forced. As for the outflow, the formulation covers only faces
 whose normal metric scale factor is one, and [`setup`](@ref) rejects an angular
 face. `Y` is checked against the EOS species count there as well.
 """
@@ -260,7 +260,7 @@ end
 enforce!(::NSCBCInflowBC, Q, solver, d, side) = nothing
 
 function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
-    # COLLECTIVES FIRST — see the note in the outflow method above: these are
+    # COLLECTIVES FIRST; see the note in the outflow method above: these are
     # distributed solves along d, so every rank must call them before any rank
     # is allowed to return early.
     # One-sided coordinate derivatives of p and ρ along d.
@@ -278,8 +278,8 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
     n_species = solver.equations.n_species
     lowface = side == 1
     if bc.target === nothing
-        # Constant targets: one launchable plane body, the composition tuple
-        # materialized at launch exactly as the field collections are.
+        # Constant targets: one launchable plane body, with the composition
+        # tuple and field collections materialized at launch.
         ft = solver.field_tuples
         YT = (bc.Y...,)
         plane_pointwise!(_nscbc_inflow_point!, Q, plane,
@@ -421,8 +421,7 @@ end
 # docstrings, but nothing enforced it: an NSCBC on a cylindrical θ face or a
 # spherical θ/φ face ran to completion, on a wave analysis missing the metric
 # terms that the stored grad_u[d,d] carries there. Nothing failed and the answer
-# was wrong, which is why it is now a setup error rather than a documented
-# caveat.
+# was wrong, so it is now a setup error, not a documented caveat.
 
 function _validate_nscbc_face(metric, d::Int, what::String)
     unit_scalefactor(metric, d) && return nothing
@@ -438,7 +437,7 @@ validate_bc(::NSCBCOutflowBC, metric, eos, d::Int, side::Int) =
 
 function validate_bc(bc::NSCBCInflowBC, metric, eos, d::Int, side::Int)
     _validate_nscbc_face(metric, d, "NSCBCInflowBC")
-    # Checked here rather than in correct_rhs!, where it ran once per RHS call
+    # Checked here, not in correct_rhs!, where it ran once per RHS call
     # per rank for the life of the run to catch a setup mistake.
     length(bc.Y) == nspecies(eos) ||
         error("NSCBCInflowBC: target composition has $(length(bc.Y)) entries; " *

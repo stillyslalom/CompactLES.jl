@@ -6,11 +6,11 @@
 # elimination sweeps and one thread per point for the fill, scatter, and
 # spike-correction passes. Every dimension uses the (lines × n) layout on
 # device: consecutive threads are consecutive lines, so each sweep position
-# touches a contiguous block of memory — the same reasoning that produced the
+# touches a contiguous block of memory, the same reasoning that produced the
 # transposed host path in lines_transposed.jl, with warp coalescing in place
 # of SIMD.
 #
-# The reduced 2qP × 2qP interface system stays host-side by design: the
+# The reduced 2qP × 2qP interface system stays host-side: the
 # device packs the 2q interface values per line into a buffer whose layout
 # matches `line_solver.ends`, one device-to-host copy feeds the existing
 # `_reduced_solve!` (Allgather + factorized `ldiv!`), and one host-to-device
@@ -19,21 +19,21 @@
 # profiling shows it dominating.
 #
 # Arithmetic mirrors the host path per line, operation for operation, so a
-# [`DevicePlan`](@ref) reproduces its host plan bitwise — the same equality
+# [`DevicePlan`](@ref) reproduces its host plan bitwise, the same equality
 # gate the pointwise kernels carry. One place in the banded solve the two host
 # layouts still disagree: the x-sweep accumulates the spike correction before
 # one subtraction where the transposed sweeps subtract term by term, and
 # `colwise` selects the convention matching the plan's dimension. The
 # elimination sweep and the back-substitution pivot were once such places too
-# and are no longer — every host path now skips a zero multiplier and
+# and are no longer: every host path now skips a zero multiplier and
 # multiplies by `inv(U[1, i])`, so the device kernel does both unconditionally.
 
 """
     DeviceBackend(ka)
 
-Storage backend wrapping a `KernelAbstractions.Backend`, so that
+Storage backend wrapping a `KernelAbstractions.Backend`. This makes
 [`field`](@ref) and [`allocate_state`](@ref) allocate zero-filled device
-arrays through the same seam `CPUBackend` allocates `Array`s. A whole
+arrays through the same interface `CPUBackend` allocates `Array`s. A whole
 `Solver` runs on one: [`backend_plan`](@ref) mirrors every compact plan onto
 the backend at construction, the pointwise phases launch as
 KernelAbstractions kernels, and the halo, fold-pair and level-transfer
@@ -217,7 +217,7 @@ end
 # --- Kernels ----------------------------------------------------------------
 # The fill and scatter iterate (a, b, i): the two orthogonal coordinates in
 # ascending dimension order, then the sweep coordinate, so the line index is
-# l = (b−1)·n_o1 + a — the same line ordering as both host layouts. `a` is
+# l = (b−1)·n_o1 + a, the same line ordering as both host layouts. `a` is
 # the first ndrange dimension, so for the y and z sweeps consecutive threads
 # run along x: field reads and B writes coalesce.
 
@@ -292,7 +292,7 @@ end
                 lm = Lm[m, k]
                 # Skip a zero multiplier, as all three host sweeps do.
                 # Identical to multiplying on finite data, but 0 * Inf is
-                # NaN, so the skip is what keeps a non-finite field from
+                # NaN, so the skip keeps a non-finite field from
                 # spreading along rows the host leaves untouched. One
                 # comparison per line-step.
                 iszero(lm) && continue
@@ -377,7 +377,7 @@ end
 
 function _dev_solve!(plan::DevicePlan, sweep::DeviceThomas)
     ls = plan.host.line_solver
-    ls.explicit && return nothing   # identity LHS: the fill is already the answer
+    ls.explicit && return nothing   # identity LHS: the fill is the answer
     L, n = plan.lines, plan.n
     _dev_thomas_kernel!(plan.backend)(plan.B, sweep.l, sweep.dinv, sweep.c, n;
                                       ndrange=L)
@@ -431,8 +431,8 @@ end
 The device counterpart of the host method: fill, sweep, spike correction, and
 scatter run as kernels on `plan.backend`, with the reduced interface stage on
 the host. `out` and `f` must live on the same backend as the plan, and `f`
-must have current rank-boundary halos. Collective exactly as the host method
-is: every rank of the sub-communicator along `plan.dim` must call this.
+must have current rank-boundary halos. Like the host method, it is collective:
+every rank of the sub-communicator along `plan.dim` must call this.
 """
 function apply_along!(out, plan::DevicePlan, f, decomp::Decomp)
     d = plan.dim
@@ -454,8 +454,9 @@ end
 
 # The fused-scatter entry points are host-only; a device solver routes through
 # the two-pass form (apply into scratch, then a pointwise device kernel) in
-# `deriv_scaled_along!` / `div_subtract_along!`. Reaching these methods means
-# that routing broke, so fail loudly rather than scalar-indexing device arrays.
+# `deriv_scaled_along!` / `div_subtract_along!`. Reaching these methods
+# implies that routing broke, so they raise an error before any scalar
+# indexing of device arrays.
 apply_along_scaled!(out, plan::DevicePlan, f, decomp::Decomp, scale) =
     error("apply_along_scaled! is host-only; a DevicePlan takes the two-pass " *
           "route in deriv_scaled_along!")

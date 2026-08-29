@@ -43,7 +43,7 @@
 # is forbidden (constraint 4 of reference/AMR_GPU.md), so a transfer
 # dimension is closed
 # or periodic. The source's row 3 per end is the interior stencil, so each
-# scheme carries two genuine closure rows.
+# scheme carries two closure rows, not three.
 
 # Interior coefficients of the transfer pair. The zero-wavenumber gains agree
 # to the last bit: a + 2b + 2c == 1 + 2α == 0.9356346489741322, so the pair
@@ -84,9 +84,9 @@ end
 
 Coarse-to-fine AMR deconvolution (Miranda's `cfamrcf`) as a
 [`BandedCompactScheme`](@ref) with `q = 2`: the pentadiagonal Gaussian
-left-hand side against the tridiagonal `[α, 1, α]` right-hand side — the
+left-hand side against the tridiagonal `[α, 1, α]` right-hand side: the
 same coefficients as [`amr_restriction_scheme`](@ref) with the two sides
-swapped, which is what makes the pair invertible. Interior rows are divided
+swapped, so the pair is invertible. Interior rows are divided
 by the Gaussian center weight `a` so the left-hand-side diagonal is one, as
 `BandedCompactScheme` requires; the closure rows enter verbatim, since
 scaling a row of a linear system leaves its solution unchanged.
@@ -106,7 +106,7 @@ end
 """
     amr_transfer_schemes(T=Float64)
 
-The `(restriction, prolongation)` pair —
+The `(restriction, prolongation)` pair,
 [`amr_restriction_scheme`](@ref) and [`amr_prolongation_scheme`](@ref).
 """
 amr_transfer_schemes(::Type{T}=Float64) where {T} =
@@ -329,9 +329,9 @@ the coincident fine nodes and fill the intermediate nodes by Lagrange
 interpolation of order `plan.interp_order`, writing the interior of
 `fine_field` and returning it.
 
-Use this rather than `prolong!` when the coarse data are point samples of the
+Use this, not `prolong!`, when the coarse data are point samples of the
 field itself. The deconvolution in `prolong!` inverts the 3Δx Gaussian and is
-exact only when its input is samples of the *filtered* field — i.e. data a
+exact only when its input is samples of the *filtered* field, i.e. data a
 [`restrict!`](@ref) produced. Applied to raw point samples it "sharpens" a
 field that was never smoothed, an O(h²) error from the filter deficit, which
 is how the live level-ghost fill measured at order ≈ 1.7 before this split

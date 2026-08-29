@@ -6,7 +6,7 @@ module CompactLESMakieExt
 # the methods once the caller writes `using CairoMakie` (or `using GLMakie`).
 #
 # The extension holds no numerics. Every value it draws comes from the core
-# `line_profile` / `field_slice` / `cartesian_slice`, so a plot means exactly the
+# `line_profile` / `field_slice` / `cartesian_slice`, so a plot shows exactly the
 # extracted data and the two cannot disagree. Those calls are collective; the
 # figure is assembled on rank 0, where the gathered slice lives.
 
@@ -29,7 +29,7 @@ function CompactLES.profileplot(solver::Solver, Q, name::Symbol;
                                 figure=(;), axis=(;), kwargs...)
     # Extraction is collective; every rank must reach it. Only rank 0 owns a
     # figure, but the profile itself is replicated, so a caller may render on
-    # any rank — rank 0 is the convention.
+    # any rank; rank 0 is the convention.
     coord, value = line_profile(solver, Q, name; dim=dim, species=species)
     fig = Figure(; figure...)
     ax = Axis(fig[1, 1];
@@ -67,7 +67,7 @@ function CompactLES.fieldheatmap(solver::Solver, Q, name::Symbol;
     fig = Figure(; figure...)
     if curvi
         # A curvilinear plane is a physical disk or meridian; equal aspect keeps
-        # it undistorted, and the axes are Cartesian rather than coordinate.
+        # it undistorted, and the axes are Cartesian, not coordinate.
         ax = Axis(fig[1, 1]; aspect=DataAspect(),
                   xlabel="x", ylabel="y", axis...)
         X, Y, grid = cartesian_slice(solver, dims, x1, x2, values)

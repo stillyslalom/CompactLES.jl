@@ -3,21 +3,20 @@
 # Every `RegridSpec.interval` coarse steps, `run!` retags the coarse level and
 # rebuilds the level-1 patch when the tagged region moved. The tag is the
 # undivided fourth difference of the mixture density, summed over the active
-# dimensions and normalized by the local density — the same quantity the Cook
-# δ⁴ sensors are built from, read from the conserved state directly so tagging
-# needs no primitives pass and can run at the head of the step loop. A coarse
-# cell tags when that ratio exceeds `RegridSpec.threshold`; the tagged set is
-# grown by `RegridSpec.buffer` coarse cells (measured: shock round-trip
+# dimensions and normalized by the local density, the same quantity the Cook
+# δ⁴ sensors are built from. It is read from the conserved state directly, so
+# tagging needs no primitives pass and can run at the head of the step loop.
+# A coarse cell tags when that ratio exceeds `RegridSpec.threshold`; the tagged
+# set is grown by `RegridSpec.buffer` coarse cells (measured: shock round-trip
 # pollution decays ≈ 3.4× per point, bench/amr_transfer.jl, so a ~4-cell
 # buffer drops interface pollution by two orders of magnitude) and its
-# bounding box, clamped
-# to the nesting margin, becomes the new refined region. A single box rather
-# than a tile set is deliberate: the solver carries one level-1 patch, and
-# tile clustering only pays once several fine patches exist
+# bounding box, clamped to the nesting margin, becomes the new refined region.
+# The region is a single box, not a tile set, because the solver carries one
+# level-1 patch and tile clustering only pays once several fine patches exist
 # (reference/AMR_GPU.md, roadmap).
 #
 # The new fine state is initialized by the order-6 interpolation of the coarse
-# state — the same operator as the live shell coupling, and the right one here
+# state, the same operator as the live shell coupling and the right one here
 # for the same reason: the coarse data are point samples, which the
 # deconvolving `prolong!` would sharpen spuriously (see `interpolate!`).
 # Surviving fine data on the overlap of the old and new regions is then copied
@@ -26,12 +25,12 @@
 # the next shell fill).
 #
 # When no cell tags, or the box did not move, the current region is kept: a
-# feature fading below threshold leaves refinement where it last was rather
-# than collapsing it, which is the conservative choice for a machinery whose
-# purpose is robustness at captured features.
+# feature fading below threshold leaves refinement where it last was instead
+# of collapsing it, the conservative choice for a machinery whose purpose is
+# robustness at captured features.
 
-# One coarse cell's tag quantity: Σ_d |δ⁴_d ρ| / ρ, indices clamped at closed
-# edges exactly as `delta4_sum!` clamps (a zeroth-order extension), halos read
+# One coarse cell's tag quantity: Σ_d |δ⁴_d ρ| / ρ, using the zeroth-order
+# closed-edge clamp from `delta4_sum!`, with halos read
 # across periodic wraps.
 function _tag_bounds(solver::Solver, Qc)
     patches = getfield(solver, :patches)
@@ -42,8 +41,8 @@ function _tag_bounds(solver::Solver, Qc)
     o = dcp.n_halo_d
     n = dcp.n_local
     n_species = solver.equations.n_species
-    # A device-resident coarse patch downloads its block for the tag sweep —
-    # a backend copy at the regrid cadence, not per step — and takes a host
+    # A device-resident coarse patch downloads its block for the tag sweep (a
+    # backend copy at the regrid cadence, not per step) and takes a host
     # scratch in place of tmp_a.
     Qc = _cpu_storage(Qc) ? Qc : Array(parent(Qc))
     # Mixture density over the interior extended two layers along each active

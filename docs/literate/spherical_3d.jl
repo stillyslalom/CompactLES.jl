@@ -78,14 +78,14 @@ r0, rho0 = line_profile(solver, Q, :rho; dim = 1)
 # The overpressure drives an outward spherical shell. Because the initial data
 # has no angular dependence the evolved state should remain nearly spherically
 # symmetric; departures from that symmetry measure the discretization error of
-# the folds, which is why a resolved spherical case is a demanding test as much
-# as a demonstration.
+# the folds, so a resolved spherical case is a demanding test as much as a
+# demonstration.
 
 run!(solver, Q; tfinal = 0.06, nmax = 20);
 
 # ## View a meridional slice
 #
-# A slice at fixed azimuth (`normal = 3`) is an ``(r,\theta)`` half-plane — a
+# A slice at fixed azimuth (`normal = 3`) is an ``(r,\theta)`` half-plane, a
 # meridian. [`fieldheatmap`](@ref) maps it to Cartesian ``(x, y) = (r\sin\theta,
 # r\cos\theta)`` and draws it with an equal aspect, so the polar axis runs
 # vertically and the profile appears as concentric arcs of the expanding shell.
@@ -97,7 +97,7 @@ fig
 
 # The radial profile, averaged over the resolved angles, is the one-dimensional
 # view of the same shell. Comparing it against a collapsed ``(N_r, 1, 1)`` radial
-# run — as in the spherical Sedov case of `test/runtests.jl` — is how the
+# run, as in the spherical Sedov case of `test/runtests.jl`, is how the
 # resolved folds are checked against the axisymmetric reference.
 #
 # A second axis overlaid on the same grid shows the change relative to the

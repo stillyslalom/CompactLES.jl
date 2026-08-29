@@ -4,7 +4,7 @@
 #
 # Threading overhead is a fixed cost per @threads region per thread, so it
 # shows up as poor (or negative) scaling at small N and good scaling at large
-# N. The crossover tells us where threading starts paying for itself.
+# N. The crossover identifies where threading starts paying for itself.
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES

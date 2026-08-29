@@ -37,7 +37,7 @@ at the top of `src/callbacks.jl` gives the details. [`SwitchableBC`](@ref)
 appears here because it must be driven by a [`Callback`](@ref).
 
 For [`AtTime`](@ref) and [`EveryTime`](@ref), `run!` shortens the preceding
-`StepControl(landing_steps = ...)` steps so that a step ends at the scheduled
+`StepControl(landing_steps = ...)` steps to end a step at the scheduled
 instant. `EveryTime` produces a uniform time axis for periodic output.
 
 ```@docs
@@ -85,7 +85,7 @@ tile the coarse grid.
 is the form to use at large rank counts: the VTK path writes one file per rank
 per frame, this one file per frame. `save_checkpoint_hdf5` and
 `load_checkpoint_hdf5!` store the state as one global array, so a checkpoint
-restores onto any rank count rather than onto the decomposition that wrote it.
+restores onto any rank count, not only onto the decomposition that wrote it.
 All three live in a package extension and require `using HDF5`;
 `hdf5_available` and `hdf5_parallel` report whether the extension is loaded and
 whether its libhdf5 supports MPI-parallel writes.
@@ -108,7 +108,7 @@ FieldWriter
 ## Field extraction and plotting
 
 [`field_array`](@ref) resolves a named report variable to a padded array through
-[`scalar_field`](@ref) — the same catalog `save_vtk` uses — and refreshes it from
+[`scalar_field`](@ref), the same catalog `save_vtk` uses, and refreshes it from
 `Q`. [`line_profile`](@ref) and [`field_slice`](@ref) build on it: a profile is
 a collective, area-weighted reduction along one axis (the general replacement
 for a hand-written sampling loop), and a slice is a rank-0 gather of a

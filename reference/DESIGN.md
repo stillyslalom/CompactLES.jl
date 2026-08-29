@@ -40,15 +40,15 @@ width. Because the operator is line-global, the central parallel challenge is a
 reduced-interface method.
 
 There is no Riemann solver and no flux limiter. Shocks and under-resolved
-gradients are regularized instead by **Cook-style artificial fluid properties** —
-localized artificial viscosity, bulk viscosity, conductivity, and species
-diffusivity keyed to high-order derivative sensors — together with a compact
+gradients are regularized instead by **Cook-style artificial fluid properties**
+(localized artificial viscosity, bulk viscosity, conductivity, and species
+diffusivity keyed to high-order derivative sensors) together with a compact
 low-pass **filter** applied to the conserved state. Time advances with a
 low-storage five-stage RK45.
 
 The guiding architectural idea is a strict separation between the physical
-problem specification and the numerical discretization, so that the same problem
-can be run at any resolution, scheme order, or process count without change.
+problem specification and the numerical discretization, allowing the same
+problem to run at any resolution, scheme order, or process count without change.
 
 ### Notation
 
@@ -87,7 +87,7 @@ validation cases are discussed, and never a viscosity.
 | `src/kernels.jl`          | `CompactScheme`, `ClosureRow`, and tridiagonal presets (C6, C4, C8 filter) |
 | `src/kernels_banded.jl`   | `BandedCompactScheme`, the C10 pentadiagonal preset, and the d8 ring detector |
 | `src/physics.jl`          | EOS abstraction, `IdealMixture`, `Transport`, `primitives!` |
-| `src/nasa9_data.jl`       | Reader for the fixed-column NASA CEA thermodynamic database shipped in `data/` |
+| `src/nasa9_data.jl`       | Reader for the fixed-column NASA CEA thermodynamic database bundled in `data/` |
 | `src/equations.jl`        | `EquationSet`, conserved layout, names, and fold parity rules |
 | `src/boundary.jl`         | `BoundaryCondition` types, wall enforcement, `apply_bcs!` |
 | `src/operators.jl`        | `DirPlan`: bind a scheme to a dimension; line fill, distributed solve, scatter |
@@ -104,12 +104,12 @@ validation cases are discussed, and never a viscosity.
 | `src/rhs.jl`              | `Solver` container, flux assembly, the conservative NS RHS |
 | `src/nscbc.jl`            | Navier–Stokes characteristic boundary conditions (NSCBC): subsonic outflow and inflow |
 | `src/io.jl`               | Per-rank checkpoint/restart, parallel VTK output |
-| `src/hdf5.jl`             | `BlockRegion` and the shared-file HDF5 seam; the writer itself is the `ext/` extension |
+| `src/hdf5.jl`             | `BlockRegion` and the shared-file HDF5 interface; the writer itself is the `ext/` extension |
 | `src/callbacks.jl`        | Step-boundary callbacks: the `AtTime` / `EveryTime` / `EveryStep` / `WhenState` triggers and their effects |
 | `src/timestep.jl`         | RK45, CFL timestep, the `run!` loop, per-step filtering |
 | `src/regrid.jl`           | Tagging and regridding for the two-level refinement |
 | `src/diagnostics.jl`      | Volume and plane reductions, and the variable-density mixing diagnostics built on them |
-| `src/viz.jl`              | Geometry-aware extraction of report fields (`line_profile`, `field_slice`) and the Makie plotting seam |
+| `src/viz.jl`              | Geometry-aware extraction of report fields (`line_profile`, `field_slice`) and the Makie plotting interface |
 | `src/problem.jl`          | Frontend: `Prim`, `Problem`, `Numerics`, `setup`, initialization |
 | `src/scriptargs.jl`       | `script_args`: `ARGS` parsing for the scripts in `bench/` and at the repo root |
 | `src/display.jl`          | Concise `show` methods for `Solver`, `Problem`, `Numerics`, and the `(solver, Q)` pair |
@@ -120,17 +120,17 @@ that compose them.
 
 ## The frontend/backend split
 
-The user-facing vocabulary lives in `problem.jl` and is deliberately ignorant of
-the backend:
+The user-facing vocabulary lives in `problem.jl` and is independent of the
+backend:
 
-- **`Prim`** — a pointwise primitive state: velocity, composition, and exactly
+- **`Prim`**: a pointwise primitive state: velocity, composition, and exactly
   two of p, ρ and T_ion, the EOS deriving the third. Construction validates that
   mass fractions sum to one and that exactly one of the three is omitted.
-- **`Problem`** — physics and geometry only: EOS, transport model, metric,
+- **`Problem`**: physics and geometry only: EOS, transport model, metric,
   explicit source tuple,
   coordinate `domain` as three `(lo, hi)` pairs, boundary conditions, and the
   initial-condition function. No grid, scheme, or rank information.
-- **`Numerics`** — the discretization: resolution `n_global`, derivative and filter
+- **`Numerics`**: the discretization: resolution `n_global`, derivative and filter
   schemes, artificial-property constants, CFL, filter interval, process grid,
   halo width, and stretch mappings.
 
@@ -156,14 +156,14 @@ width defaults to 4, matching the widest stencil reach of the default schemes.
 
 Key derived quantities on `Decomp`:
 
-- `active[d]` — whether dimension `d` is resolved (`n_global[d] > 1`). **Collapsed**
+- `active[d]`: whether dimension `d` is resolved (`n_global[d] > 1`). **Collapsed**
   dimensions (`n_global[d] == 1`) carry no halos, derivatives, filters, or
-  exchanges; `n_halo_d[d]` (per-dimension halo pad) is zero for them. This is what
-  makes a 1-D or 2-D or axisymmetric run cost 1-D/2-D memory and work rather
-  than a thin 3-D slab.
-- `neighbors[d]` — the `(lo, hi)` neighbor ranks along `d`, with `MPI.PROC_NULL` at
+  exchanges; `n_halo_d[d]` (per-dimension halo pad) is zero for them. A 1-D,
+  2-D or axisymmetric run therefore costs 1-D/2-D memory and work, not that
+  of a thin 3-D slab.
+- `neighbors[d]`: the `(lo, hi)` neighbor ranks along `d`, with `MPI.PROC_NULL` at
   open (non-periodic) global edges.
-- `sub[d]` — a sub-communicator containing exactly the ranks along dimension
+- `sub[d]`: a sub-communicator containing exactly the ranks along dimension
   `d`, used by the distributed line solves and line-wise reductions.
 
 Fields are allocated by `field(decomp)` (a scalar with halos) and `allocate_state`
@@ -180,8 +180,8 @@ the run clock, and a vector of `Patch` objects (`patches.jl`); each patch
 holds its `Decomp`, fold specs, per-dimension operator plans (`deriv_plans`,
 `filter_plans`), and every pre-allocated primitive/gradient/flux/geometry
 array, typed `A <: AbstractArray{T,3}` against a storage backend
-(`CPUBackend` is the default and allocates `Array`s). A single-patch solver —
-the common case — forwards the patch-owned property names to its sole patch
+(`CPUBackend` is the default and allocates `Array`s). A single-patch solver,
+the common case, forwards the patch-owned property names to its sole patch
 through `Base.getproperty`, so `solver.rho` and `solver.decomp` read as they
 always did; multi-patch drivers bind one patch at a time as a `PatchSolver`
 and pass that to the same routines. All hot-loop scratch is allocated once at
@@ -190,8 +190,8 @@ setup; the RHS allocates nothing.
 With more than one patch, the rank set is partitioned over the patches by one
 `MPI.Comm_split` (ranks proportional to patch volume), the compact line solves
 stay collective over each patch's own communicator, and the per-step
-reductions (`max_rate`, `WhenState`, diagnostics) reduce over `solver.comm` —
-the whole rank set — exactly once, hoisted outside the patch loop. Abutting
+reductions (`max_rate`, `WhenState`, diagnostics) reduce over `solver.comm`,
+the whole rank set, exactly once, hoisted outside the patch loop. Abutting
 patches share their interface plane node; between RK stages `sync_patches!`
 averages the shared planes, refills interface ghost layers from the
 neighboring interiors, and re-exchanges each patch's own halos. The interface
@@ -216,9 +216,9 @@ mirroring (LHS sub/super swapped; RHS reversed, and negated for derivatives).
 
 Presets:
 
-- `lele_d1_6()` — sixth-order tridiagonal first derivative (α = 1/3, a = 14/9,
+- `lele_d1_6()`: sixth-order tridiagonal first derivative (α = 1/3, a = 14/9,
   b = 1/9) with third/fourth-order one-sided closures on the first two rows.
-- `lele_d1_8()` — eighth-order tridiagonal first derivative (α = 3/8,
+- `lele_d1_8()`: eighth-order tridiagonal first derivative (α = 3/8,
   a = 25/16, b = 1/5, c = −1/80), the seven-point member of Lele's
   tridiagonal family. It shares the tridiagonal line solve and every path
   built on it (decomposed, multi-patch, device) with `lele_d1_6`, which the
@@ -245,8 +245,8 @@ Presets:
   Brady–Livescu wall error floors near 1e-3, above the cascade's, from
   N = 48 up. The runs are in `reference/CALIBRATION.md` under "Wall
   closures under the artificial properties".
-- `pade_d1_4()` — fourth-order Padé first derivative.
-- `compact_filter(alphaf; closures)` — the eighth-order Gaitonde–Visbal
+- `pade_d1_4()`: fourth-order Padé first derivative.
+- `compact_filter(alphaf; closures)`: the eighth-order Gaitonde–Visbal
   filter, whose strength parameter α is spelled `alphaf` in the code.
   `alphaf ∈ (−½, ½)` sets the strength (larger → weaker). Near closed edges
   the first row is left unfiltered; `closures = :cascade` (default) applies
@@ -262,7 +262,7 @@ Presets:
   density deficit from 64% to 27% at N = 400 (65% to 38% at N = 800), with
   the plateau and shock position unchanged, and they are what lets the C8
   Brady–Livescu rows run at all. They stay optional because `:cascade4`
-  needs the F2 row and because the shipped constants were calibrated under
+  needs the F2 row and because the default constants were calibrated under
   the cascade; `reference/CALIBRATION.md` has the measurements.
 
 `kernels_banded.jl` generalizes this to a **banded LHS** of half-bandwidth `q`
@@ -273,7 +273,7 @@ first three rows; its RHS reaches ±3, so the default `n_halo = 4` suffices.
 `compact_d8()` is the second preset and the one symmetric banded scheme: an
 undivided compact eighth derivative used as the sensor high-pass under
 `ArtParams.detector = :d8`. Being an even derivative it preserves parity, so it
-is planned with the filter conventions rather than the derivative ones, and its
+is planned with the filter conventions, not the derivative ones, and its
 four mirror-folded closure rows put the same nine-point minimum extent on a
 rank as the C8 filter.
 
@@ -315,9 +315,9 @@ scheme; it is assembled from a single `Allgather` of the spike corners
 lines), one `Allgather` of the two interface values per line, one dense
 triangular solve for *all lines simultaneously* (`ldiv!` on the pre-factorized
 reduced LU), and a threaded rank-local correction `x ← x − v·xl − w·xr`. This
-reproduces the *exact* single-domain solution regardless of rank count — an
-interface bug shows up as an O(1) error, not a small one, which is precisely how
-the MPI test suite catches it.
+reproduces the *exact* single-domain solution regardless of rank count, so an
+interface bug appears as an O(1) error, not a small one, and the MPI test
+suite catches it by that signature.
 
 Periodic single-rank directions reuse the same path through self-coupling (no
 communication); non-periodic single-rank directions skip the reduced stage
@@ -326,8 +326,8 @@ entirely (`v = w = 0`).
 `banded.jl` extends all of this to half-bandwidth `q`: the cross-rank coupling
 runs through triangular `q×q` blocks, the spikes become `n×q` blocks, the
 interface unknowns per rank become its first and last `q` values, and the
-reduced system grows to `(2qP)²` — still one `Allgather` of four `q×q` corner
-blocks per rank, still factorized once. The banded LU is unpivoted, which is
+reduced system grows to `(2qP)²`; it is still one `Allgather` of four `q×q`
+corner blocks per rank, still factorized once. The banded LU is unpivoted, which is
 standard practice for the well-conditioned (if not strictly diagonally dominant)
 compact LHS matrices.
 
@@ -344,22 +344,22 @@ extra field copies and no cross-rank transposes are needed.
 ## Halo exchange
 
 `halo.jl` fills rank-boundary halos with `MPI.Sendrecv!`. The three dimensions
-are exchanged **sequentially**, and each dimension's exchange includes the
-halo layers already filled by previous dimensions in its slabs — so edge and
-corner halos are populated correctly without dedicated diagonal messages. At
+are exchanged **sequentially**, and each dimension's exchange includes in its
+slabs the halo layers filled by previous dimensions, so edge and corner
+halos are populated correctly without dedicated diagonal messages. At
 non-periodic global edges the neighbor is `MPI.PROC_NULL`, making the Sendrecv a
 no-op on that side; those physical-edge halos are left stale and **never read**,
 because derivative closures are one-sided and filter closures are identities
 there. This keeps the halo logic uniform.
 
-Two batching optimizations matter for performance:
+Two batching optimizations reduce communication overhead:
 
 - `exchange_dim_batch!` exchanges many same-sized fields along one dimension in a
   single message per neighbor per phase. Flux arrays are differentiated only
   along their own direction, so they exchange halos only in that dimension; the
   conserved state is batched the same way per dimension.
-- `exchange_state!` applies that to all conserved components at once — six
-  messages per state exchange instead of `6 × (Ns + 4) × 3`.
+- `exchange_state!` applies that to all conserved components at once, reducing
+  each state exchange from `6 × (Ns + 4) × 3` messages to six.
 
 `fold_fill!` (`folds.jl`) handles the parity mirror fill used by the
 coordinate-singularity folds (see below). It is rank-local and involves no
@@ -385,11 +385,11 @@ previous RHS evaluation. The stability implications are quantified in
 `reference/CALIBRATION.md`.
 
 `curvature_rate` supplies the term omitted by the per-dimension loop. A
-*resolved* angular dimension already bounds its own geometric source, because
+*resolved* angular dimension bounds its own geometric source, because
 the advective rate |u_ang|/(r·Δang) dominates the source rate |u_ang|/r. A
 *collapsed* one is skipped by the loop entirely, yet ρu_θ²/r keeps driving u_r
-as a stiff source at small r — axisymmetric-with-swirl being the case that
-matters. `curvature_rate` is dispatched on the metric and returns zero for
+as a stiff source at small r; axisymmetric flow with swirl is the affected
+case. `curvature_rate` is dispatched on the metric and returns zero for
 Cartesian and for every resolved angular dimension. `dt_report` is the
 diagnostic companion: it repeats the `compute_dt` sweep while tracking *which*
 node and which term set the limit, and returns `(dt, rank, index, coords, dim,
@@ -409,7 +409,7 @@ step for diagnostics or output.
 ## The RHS: a walkthrough
 
 `compute_rhs!` (in `rhs.jl`) evaluates dQ/dt into the interior of `dQ`,
-assuming boundary conditions are already enforced on `Q`. Step by step:
+assuming boundary conditions have been enforced on `Q`. Step by step:
 
 1. **Exchange state halos** (`exchange_state!`) and **recover primitives**
    (`primitives!`) over the full padded arrays: ρ, u, v, w, p, T_ion, sound
@@ -419,7 +419,7 @@ assuming boundary conditions are already enforced on `Q`. Step by step:
    Jacobian). `grad_u[d, j]` holds the d-derivative of the j-th component. Collapsed
    dimensions contribute zero.
 3. **Curvature corrections** (`metric_correct_gradients!`) add the algebraic
-   terms from the rotating unit vectors so that `grad_u` holds *physical* tensor
+   terms from the rotating unit vectors, leaving `grad_u` with *physical* tensor
    components (e.g. in cylindrical, `grad_u[2,2] += u_r/r`).
 4. **Artificial properties** (`compute_artificial!`) fill μ\*, β\*, κ\*, and the
    per-species D\* from the current gradients and primitives.
@@ -450,17 +450,17 @@ call sits in a serial section between threaded regions.
 ## Artificial fluid properties
 
 `artificial.jl` implements the Cook (2007) model. The sensors are built from an
-**undivided** high-pass in the computational indices — by default the explicit
+**undivided** high-pass in the computational indices: by default the explicit
 fourth difference δ⁴ = (1, −4, 6, −4, 1), or the compact eighth derivative of
 `compact_d8()` under `ArtParams.detector = :d8`, which is the reference
 implementation's operator and is normalized to the same response at two points
-per wavelength so that the four constants carry over. Being undivided,
+per wavelength, allowing the four constants to carry over. Being undivided,
 the formal grid-spacing powers reduce to per-dimension weights: h_d² for the
 shear/bulk viscosities (from Cook's |∇⁴S|·Δ⁶) and h_d for conductivity and
 species diffusivity (from |∇⁴e|·Δ⁵ and |∇⁴Y|·Δ⁵), where Δ is the local grid
 spacing in Cook's continuous form, h_d the spacing along dimension d, S the
 strain-rate tensor, e the specific internal energy, and Y a mass fraction.
-Note that Δ means the grid spacing in this paragraph only; in the sensor
+In this paragraph only, Δ denotes the grid spacing; in the sensor
 discussion below it is the dilatation ∇·u. The Gaussian test filter of the
 original model is `smooth!`, by default the explicit nine-point stencil the
 reference applies and optionally a compact-filter pass
@@ -484,7 +484,7 @@ implementation takes μ\* from the velocity components and β\* from the
 dilatation Δ = ∇·u, and the difference is the absolute value in
 |S| = sqrt(S_ij S_ij), which puts a cusp wherever the strain passes through
 zero. `mu_sensor = :velocity` reduces h_d|D_d u_j| over the nine (direction,
-component) pairs. The weight is h_d rather than h_d² because u carries one
+component) pairs. The weight is h_d, not h_d², because u carries one
 velocity derivative fewer, and the two coincide at the grid scale. This sensor
 also requires the fold parity of each component, a velocity component being odd
 across the fold that reverses its axis.
@@ -495,7 +495,7 @@ vorticity vector, H for the Heaviside step, and ε for a fixed regularizer at
 the literature value 1e-32. `:gated_strain` multiplies the strain-sensor β\*
 above by the switch H(−Δ)·Δ²/(Δ² + |ω|² + ε), which is zero in expansion and
 small where vorticity dominates; that is one pointwise pass, since `grad_u`
-already supplies both Δ and ω. `:ungated_dilatation` instead takes the δ⁴
+supplies both Δ and ω. `:ungated_dilatation` instead takes the δ⁴
 sensor of Δ, which is the reference's own β\*, and `:dilatation` applies the
 switch to that as well; either costs one more sensor smoothing pass per RHS
 evaluation. The settings behave very differently at a coordinate fold; measured
@@ -504,7 +504,7 @@ effects are in [CALIBRATION.md](CALIBRATION.md).
 Constants live in `ArtParams` (defaults C_μ = 0.002, C_β = 1.0, C_κ = 0.01,
 C_D = 0.01) and should be revisited per configuration. `enabled=false` skips the
 whole computation and leaves the coefficient arrays zero. On curvilinear grids
-the sensors act in computational index space — a grid-based regularization,
+the sensors act in computational index space, a grid-based regularization
 consistent with resolving power following the mesh.
 
 ## Curvilinear metrics and the discrete GCL
@@ -513,41 +513,41 @@ consistent with resolving power following the mesh.
 coordinates, uniformly spaced in the computational directions. Geometry enters
 through orthogonal scale factors `h_d(x)` in three places:
 
-1. **Divergence** — `∇·F = (1/J) Σ_d ∂(A_d F_d)/∂x_d`, applied per flux
+1. **Divergence**: `∇·F = (1/J) Σ_d ∂(A_d F_d)/∂x_d`, applied per flux
    component with the compact derivative (step 8 above).
-2. **Gradients** — `(∇f)_d = (1/h_d) ∂f/∂x_d`, plus the curvature corrections to
+2. **Gradients**: `(∇f)_d = (1/h_d) ∂f/∂x_d`, plus the curvature corrections to
    the physical velocity-gradient components.
-3. **Momentum sources** — the algebraic terms of ∇·Π from the rotating basis.
+3. **Momentum sources**: the algebraic terms of ∇·Π from the rotating basis.
 
 The geometric arrays (J⁻¹, A_d, 1/h_d, 1/r, cotθ/r) are evaluated analytically
 over the full padded arrays, so they need no halo exchange; scale factors are
-clamped away from zero so that stale physical-edge halo values stay finite.
+clamped away from zero to keep stale physical-edge halo values finite.
 
 **Stretched meshes** are a `Stretch(x, dxdξ)` mapping per dimension from a
 uniform computational coordinate ξ ∈ [0, 1]. The mapping Jacobian
 multiplies that dimension's scale factor, so stretching composes with
-cylindrical/spherical geometry with no new operator or parallel machinery — the
+cylindrical/spherical geometry with no new operator or parallel machinery; the
 curvature corrections were refactored to be *additive* on top of a generic 1/h
 scaling. `sine_cluster` provides a closed-form interior-clustering map. Stretched
 dimensions must be non-periodic.
 
 **Discrete GCL.** The geometric conservation law is the requirement that the
-discretized metric terms cancel exactly for a uniform state, so that a
-freestream is preserved rather than accruing a residual from the geometry
+discretized metric terms cancel exactly for a uniform state, preserving a
+freestream without a residual from the geometry
 alone. For the spherical θ-momentum source, the flux
 divergence `−inv_J·D_ξ2(A₂·p)` and the analytic source `+(cotθ/r)·Π_φφ` cancel
 *analytically* for a uniform state, but `D_ξ2(sinθ) ≠ cosθ` *discretely*, leaving
 an O(h⁴) freestream residual. `gcl_cotr!` restores exact discrete freestream
-preservation by redefining `cotθ/r` as `inv_J·D_ξ2(A₂)` — the identical operator
+preservation by redefining `cotθ/r` as `inv_J·D_ξ2(A₂)`, the identical operator
 (same scheme, same fold, same antipodal sign) applied to the identical area
-factor — so the source cancels the divergence node-by-node by construction. The
+factor, so the source cancels the divergence node-by-node by construction. The
 freestream-preservation test verifies this to machine zero in every metric.
 
 ## Coordinate-singularity folds
 
 Cylindrical and spherical grids have coordinate singularities (r = 0, the
-spherical poles) where scale factors vanish. Rather than excluding them,
-CompactLES **regularizes** them on a half-offset grid (`r_i = (i − ½)h`, so no
+spherical poles) where scale factors vanish. CompactLES retains these points
+and **regularizes** them on a half-offset grid (`r_i = (i − ½)h`, so no
 node sits on the singularity and no scale factor is zero) plus parity/antipodal
 folds implemented in `folds.jl`.
 
@@ -556,13 +556,13 @@ case: halos below the axis are mirror-filled with a per-field sign (scalars and
 u_z even, u_r and u_θ odd; radial fluxes pick up the A₁ = r area weight, which
 is odd and flips parity), interior stencils run to the first node, and the
 implicit LHS coupling to the ghost unknown folds analytically onto the matrix
-diagonal — per solution parity, since derivatives flip field parity and filters
+diagonal, per solution parity, since derivatives flip field parity and filters
 preserve it. `operators.jl` implements the diagonal fold (`b[1] += σg·α`); the
 scheme is planned in both parities and the RHS reads the mirror-filled halo.
 
 **The resolved cases**, resolved-θ cylindrical axis, spherical origin and
 spherical poles, all reduce to one structure: a fold whose partner is
-*antipodal* rather than the line itself:
+the *antipodal* line, not the line itself:
 
     cylindrical axis:  (−r, θ)      ≡ (r, θ+π)
     spherical origin:  (−r, θ, φ)   ≡ (r, π−θ, φ+π)
@@ -570,7 +570,7 @@ spherical poles, all reduce to one structure: a fold whose partner is
 
 The even/odd decomposition `e = ½(f + σ f∘M)`, `o = ½(f − σ f∘M)`, with M the
 pairing map and σ the component's antipodal basis sign, turns each into two
-problems the parity-fold machinery already solves exactly: e is even across the
+problems the parity-fold machinery solves exactly: e is even across the
 singular point, o is odd. The folded compact plans apply unchanged and
 reconstruction is the inverse butterfly. Component signs are tabulated in
 `folds.jl`: cylindrical axis (u_r, u_θ, u_z) → (−1, −1, +1); spherical origin
@@ -630,15 +630,16 @@ corrections of the RHS**, not hard state enforcement. LODI is the
 locally-one-dimensional-inviscid approximation: the wave decomposition is taken
 along the face normal only, with transverse and viscous terms carried
 separately. The
-interior scheme's one-sided closure rows already produce the physically
+interior scheme's one-sided closure rows produce the physically
 evaluated incoming wave in `dQ`; the correction replaces only that wave's
 amplitude and propagates the difference analytically to the conserved
 components.
 
 - **Outflow** (`NSCBCOutflowBC(pinf=..., sigma=...)`) imposes the incoming
-  acoustic amplitude `L* = K(p − p∞)` with `K = σ(1 − M²)c/L_ref` — σ the
-  relaxation coefficient, M the local Mach number, c the sound speed, and L_ref
-  the relaxation length, defaulting to the domain extent normal to the face.
+  acoustic amplitude `L* = K(p − p∞)` with `K = σ(1 − M²)c/L_ref`, where σ is
+  the relaxation coefficient, M the local Mach number, c the sound speed, and
+  L_ref the relaxation length, defaulting to the domain extent normal to the
+  face.
   It maps the
   delta onto ρ, momentum, and energy (species scale with Y_k, energy through
   φ = ∂(ρe)/∂p|_{ρ,Y}, which is cv_m/R_m for an ideal mixture). It optionally
@@ -652,13 +653,13 @@ components.
   time. The LODI derivation of each relaxation form is spelled out in the source
   so the signs can be audited.
 
-The full LODI algebra — the mapping from wave-amplitude deltas to conserved
-components, including the species contribution to the energy through ∂φ/∂Y_k — is
-written out in the file's header comments.
+The full LODI algebra (the mapping from wave-amplitude deltas to conserved
+components, including the species contribution to the energy through ∂φ/∂Y_k)
+is written out in the file's header comments.
 
 Time-dependent full-state forcing is `DirichletBC((x,y,z,t) -> Prim)`, suitable
-for pistons, oscillating drivers, and supersonic inflow. Note that a full-state
-Dirichlet over-constrains a *subsonic* boundary and will reflect — characteristic
+for pistons, oscillating drivers, and supersonic inflow. A full-state
+Dirichlet over-constrains a *subsonic* boundary and will reflect; characteristic
 inflow is the right tool there.
 
 ## Threading and MPI discipline

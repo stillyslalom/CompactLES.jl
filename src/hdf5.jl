@@ -1,7 +1,7 @@
 # Shared-file HDF5 output, and the block description it is phrased over.
 #
-# The implementation lives in a package extension (`ext/CompactLESHDF5Ext.jl`)
-# so that the package keeps its dependency-free core. HDF5.jl requires a
+# The implementation lives in a package extension (`ext/CompactLESHDF5Ext.jl`),
+# preserving the package's dependency-free core. HDF5.jl requires a
 # libhdf5 binary, and a *parallel* libhdf5 must additionally be built against
 # the same MPI implementation the run uses. That is the same coupling
 # `reference/CLUSTER.md` documents for MPI.jl itself, with the same failure
@@ -14,8 +14,8 @@
 # The VTK path writes one file per rank per frame, which at 448 ranks and 100
 # frames is 44,800 files. That is a filesystem metadata problem before it is a
 # bandwidth problem. A single file per dump also makes restart independent of
-# the rank count, since the state is stored as one global array rather than as
-# a set of per-rank blocks.
+# the rank count, since the state is stored as one global array, not as a set
+# of per-rank blocks.
 #
 # --- Two write backends ------------------------------------------------------
 #
@@ -28,8 +28,8 @@
 # workstation and for tests, not for a production run; `hdf5_parallel()` reports
 # which backend is in use.
 
-# `BlockRegion`, `owned_region` and `region_ranges` — the block description the
-# hyperslab writes are phrased over — live in decomposition.jl, since the patch
+# `BlockRegion`, `owned_region` and `region_ranges`, the block description the
+# hyperslab writes are phrased over, live in decomposition.jl, since the patch
 # layout is expressed in the same unit.
 
 # --- Extension plumbing ------------------------------------------------------
@@ -113,7 +113,7 @@ coordinate vectors.
 This is the form to use at large rank counts. The VTK path writes one file per
 rank per frame; this writes one file per frame regardless.
 
-XDMF3 rather than VTKHDF: as of VTKHDF format version 2.5 that container
+The sidecar is XDMF3, not VTKHDF: as of VTKHDF format version 2.5 that container
 supports neither RectilinearGrid nor StructuredGrid, so a stretched or
 curvilinear grid could only be expressed there as an unstructured mesh.
 
@@ -143,8 +143,7 @@ identical grid from any different one.
 
 Two limits apply. Species are identified by name, so two species sets that share
 names while differing in their thermodynamic constants are not distinguished.
-A checkpoint written in an earlier format is rejected rather than partially
-validated.
+A checkpoint written in an earlier format is rejected outright.
 
 Requires `using HDF5`.
 """

@@ -9,7 +9,7 @@
 #
 #   1. Reach is not short. beta* carries above a thousandth of its own maximum
 #      out to 14.2-14.8 cells ahead of the front, held steady over a complete
-#      nu = 1 run at the shipped cfl = 0.15, while the damage sits 3-5 cells
+#      nu = 1 run at the default cfl = 0.15, while the damage sits 3-5 cells
 #      ahead. That is a margin of 3-5x rather than a deficit.
 #
 #   2. beta* is present where the damage is, at 14-21% of its maximum, and the
@@ -65,8 +65,8 @@
 #                thousandth of the maximum
 #   rho1/rho2    symmetry cell density over its neighbour's. 1 is a healthy
 #                converging profile; falling well below 1 is the symmetry cell
-#                evacuating, which matters because beta* is proportional to rho
-#                and a thinning cell therefore suppresses its own regularization
+#                evacuating. Because beta* is proportional to rho, a thinning
+#                cell suppresses its own regularization
 #   e1/e0        internal energy at the symmetry cell, ambient multiples
 #   b*1/max      beta* at the symmetry cell over the line maximum
 #
@@ -84,7 +84,7 @@
 #   julia --project=. bench/nohprobe.jl 1 cfl=0.3 dump=125    # full profile
 #
 # Scratch tooling, like everything else in bench/: it prints tables and asserts
-# nothing. It runs serially by design, since the cases are one-dimensional and a
+# nothing. It runs serially because the cases are one-dimensional and a
 # threaded region here falls far under THREAD_MIN_WORK, so `-t auto` buys
 # nothing.
 
@@ -97,8 +97,8 @@ const CL = CompactLES
 include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
-# Sensor-shape defaults track `ArtParams()`, so a bare run probes the shipped
-# configuration rather than whatever it shipped when this line was written.
+# Sensor-shape defaults track `ArtParams()`, so a bare run probes the current
+# defaults rather than whatever they were when this line was written.
 const ART_DEFAULTS = ArtParams()
 opt = script_args(ARGS, (nu = 1, cfl = 0.3, N = 0, nmax = 400, every = 25,
                          sensor = string(ART_DEFAULTS.beta_sensor),

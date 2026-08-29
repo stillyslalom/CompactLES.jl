@@ -1,7 +1,7 @@
 # Per-region spawn/join floor of `Threads.@threads` at this session's thread
 # count. One threaded region over a trivial body is timed many times; the
-# minimum is the floor a region pays before any work happens, and it is what
-# `THREAD_MIN_WORK` exists to amortize (see the `@threaded` docstring). The
+# minimum is the cost before any region work happens and the quantity
+# `THREAD_MIN_WORK` amortizes (see the `@threaded` docstring). The
 # floor grows with the thread count — 0.6 µs at 1 thread to 14 µs at 24 on a
 # 24-thread desktop — so the curve comes from running this script at several
 # `-t` values, one process each, not from one process varying anything:

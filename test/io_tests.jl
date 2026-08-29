@@ -19,7 +19,7 @@ end
 
 const io_per = (PeriodicBC(), PeriodicBC())
 
-# Dimension 1 closed so that a SwitchableBC can sit on it; the other two
+# Dimension 1 is closed to hold a SwitchableBC; the other two are
 # periodic, which keeps the grid small enough to build several of these.
 io_solver(lo, hi; kw...) =
     Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),

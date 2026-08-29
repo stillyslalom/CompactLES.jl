@@ -96,6 +96,6 @@ A new EOS must define the complete closure used by the solver, including:
 - internal energy at an isothermal wall.
 
 These calls occur behind array-level function barriers. Dynamic dispatch is
-therefore paid once per pass rather than at every grid point. The detailed
+therefore paid once per pass, not at every grid point. The detailed
 method names and mathematical contracts are recorded at the top of
 `src/physics.jl` for extension authors.

@@ -75,7 +75,7 @@ function solve_col!(x::AbstractVector{T}, F::BandFactor{T}) where {T}
             x[k+m] -= lm * xk
         end
     end
-    # Multiply by the reciprocal pivot rather than divide, on every banded
+    # Multiply by the reciprocal pivot on every banded
     # path: the transposed y/z sweep hoists `inv(U[1, i])` out of its line
     # loop, and dividing here made the x sweep a different-rounding operator
     # from the y and z sweeps (8.9e-16 on a q = 2, n = 40 line), which cost an
@@ -144,8 +144,8 @@ end
     BandLineSolver(Ab, AL, CR, comm, P, p, lines; periodic)
 
 `Ab` is the local band matrix, (2q+1) × n in the storage
-`Ab[q+1+s, i] = A[i, i+s]`, with closure rows already substituted where this
-rank owns a closed global edge and the ghost couplings already folded back where
+`Ab[q+1+s, i] = A[i, i+s]`, with closure rows substituted where this
+rank owns a closed global edge and the ghost couplings folded back where
 it owns a parity fold. `AL`, `CR` are the q×q coupling blocks to the previous
 rank's tail and the next rank's head; `AL` is zero where this rank owns a closed
 low edge or a low fold, and `CR` likewise at the high edge. `q` is taken from
@@ -230,7 +230,7 @@ end
 
 """
 Reduced interface stage shared by every layout of the banded solve: from
-`line_solver.ends` already holding the local head and tail values (2q per line),
+`line_solver.ends` holding the local head and tail values (2q per line),
 gather the interface values, solve the dense reduced system, and leave the `q`
 correction values each line needs from the previous rank's tail and the next
 rank's head in `line_solver.zbp` and `line_solver.zbn` (lines × q). The gather

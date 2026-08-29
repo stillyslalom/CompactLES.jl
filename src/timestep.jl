@@ -38,8 +38,8 @@ function predicted_dt(solver::Solver, control::StepControl, rate)
     r = rate
     if control.predict > 0 && solver.rate_prev > 0
         # Linear extrapolation, one-sided: only ever raise the rate. A falling
-        # rate means the flow is relaxing, and stepping out on that prediction
-        # is how you overshoot the next shock.
+        # rate indicates a relaxing flow, and stepping out on that prediction
+        # overshoots the next shock.
         r = max(r, r + control.predict * (r - solver.rate_prev))
     end
     dt = solver.cfl / r
@@ -79,7 +79,7 @@ returning; `solver.t` itself is not advanced, which [`run!`](@ref) does.
 
 Collective, since every stage evaluates [`compute_rhs!`](@ref).
 
-`prepared = true` asserts that boundary conditions are already enforced on `Q` at
+`prepared = true` asserts that boundary conditions are enforced on `Q` at
 `solver.t` and that the primitive fields are current for it, which lets the first
 stage skip a halo exchange and a primitives pass. [`run!`](@ref) can assert this
 because it applies the boundary conditions itself immediately before calling
@@ -133,7 +133,7 @@ end
 Multi-patch form of [`step!`](@ref): `states`, `dQs` and `dus` are vectors
 aligned with `solver.patches`. Each stage evaluates every local patch's RHS and
 update in the global patch order, then makes the interfaces consistent with
-[`sync_patches!`](@ref) — the shared-plane averaging and ghost refill after
+[`sync_patches!`](@ref), the shared-plane averaging and ghost refill after
 every stage. Collective over `solver.comm`. A solver built with
 `subcycle = true` delegates to `subcycled_step!` instead.
 """
@@ -179,9 +179,9 @@ from the cubic Hermite reconstruction of the coarse trajectory
 extra coarse RHS evaluation per step, taken before the fine subcycles so it
 samples the coarse trajectory, not the restricted composite.
 
-The fine level filters its own state at its own step cadence — fine substep
-`3·step + m` filters when `filter_interval` divides it — so each level
-filters once per step of its own, exactly as an unrefined run does. Under a
+The fine level filters its own state at its own step cadence (fine substep
+`3·step + m` filters when `filter_interval` divides it), giving each level the
+same one-pass-per-step cadence as an unrefined run. Under a
 positive `filter_cfl` the fine pass's relaxation weight reads the coarse
 `dt · rate` product, an upper bound on the fine level's own CFL, so the fine
 filter is never weaker than the convention intends. `run!`'s own per-step
@@ -303,8 +303,8 @@ end
     max_rate(solver, states::Vector) -> (rate, rho_min)
 
 Multi-patch form: the per-patch exchange, primitives pass and interior sweep
-run patch by patch, and the two quantities reduce over `solver.comm` — the
-whole rank set — exactly once, hoisted outside the patch loop as the
+run patch by patch, and the two quantities reduce over `solver.comm`, the
+whole rank set, exactly once, hoisted outside the patch loop as the
 collective discipline requires.
 """
 function max_rate(solver::Solver, states::Vector{<:ConservedState})
@@ -346,7 +346,7 @@ end
 # cv, not cp, sets its explicit limit, and the earlier κ/(ρ cp) admitted a
 # step γ times too long wherever conduction (molecular or κ*) governed. The
 # placeholder state `primitives!` writes where ρ ≤ 0 has cv = 0, and a point
-# like that has already failed the positivity check `max_rate` reports, so the
+# like that has failed the positivity check `max_rate` reports, so the
 # fallback there only needs to stay finite.
 @inline function _diffusive_rate(eos, ρ, p, T_ion, cp, mu0, Pr, Sc,
                                  mu_art, beta_art, kappa_art, D_art, I,
@@ -447,8 +447,8 @@ function _local_max_rate_loop(solver::SolverLike, Q)
         end
         # Curvature-source stiffness. When an angular dimension is RESOLVED,
         # its source rate (|u_ang|/r) is smaller than its advective rate
-        # (|u_ang|/(r Δang)) and is already covered above. When it is
-        # COLLAPSED — axisymmetric-with-swirl being the important case — the
+        # (|u_ang|/(r Δang)) and is covered above. When it is COLLAPSED
+        # (axisymmetric flow with swirl is the important case), the
         # loop skips it entirely, yet ρu_θ²/r still drives u_r as a stiff
         # source at small r. That term is added here.
         acc += curvature_rate(solver, solver.metric, I, uv)
@@ -569,12 +569,12 @@ Absolute floors for `apply_positivity_floor!`, derived from `Q` as
 minimum internal energy over the interior.
 
 Returns `(0, 0)`, which leaves the failsafe inactive, when `floor_ratio` is zero
-and also when either reference is not itself positive: a state that has already
-left the physical space supplies no scale to floor against, and [`run!`](@ref)
-warns rather than inventing one.
+and also when either reference is not itself positive: a state that has left
+the physical space supplies no scale to floor against, so [`run!`](@ref) warns
+and invents none.
 
-Collective, one `Allreduce`. `run!` calls it once before its loop rather than
-once per step, so a second `run!` on the same solver re-derives the floors from
+Collective, one `Allreduce`. `run!` calls it once before its loop, not once per
+step, so a second `run!` on the same solver re-derives the floors from
 the state that call starts with.
 """
 function positivity_floors(solver::Solver, Q, control::StepControl)
@@ -646,11 +646,11 @@ Three repairs, in the order they have to run, since each depends on the state
 the previous one leaves:
 
 1. **Negative partial densities** are clipped to zero and the remaining positive
-   ones rescaled onto the mixture density the point already carried, which
+   ones rescaled onto the mixture density the point carried, which
    leaves that density and therefore the mixture mass exactly unchanged.
 2. **A mixture density below `rho_floor`** is raised to it, distributed over the
    positive partial densities, or onto the first species where there are none,
-   which is the composition `primitives!` already substitutes at a point it
+   which is the composition `primitives!` substitutes at a point it
    cannot invert. Nothing conserves mass here, so the addition is tallied.
 3. **Energy**, at a point whose internal energy `E/ρ − ½|u|²` is below
    `e_floor`. The point is counted as `low_energy` whatever the scope. It is
@@ -658,18 +658,18 @@ the previous one leaves:
    when the *total* energy density `E` is itself below the floor, which is the
    state no frame can represent. The repair damps the velocity, scaling the
    momentum by `sqrt((E/ρ − e_floor) / (½|u|²))` with `E` untouched, so it moves
-   kinetic energy into internal energy rather than creating any: total energy is
+   kinetic energy into internal energy and creates none: total energy is
    conserved exactly and the momentum removed is tallied. Where there is no
-   kinetic energy to convert, `E` being at or below the floor already, the
+   kinetic energy to convert, `E` being at or below the floor, the
    fallback raises `E` instead and conserves the momentum exactly. Each branch
    conserves one of the two exactly and tallies what it did to the other.
 
 `:representable` repairs only when `E` is below the floor, which is also the
-condition selecting the fallback, so that scope always raises the energy and
-never damps a velocity.
+condition selecting the fallback. That scope therefore always raises the energy
+and never damps a velocity.
 
 Collective, one `Allreduce` of the five-element tally, so every rank sees the
-same totals and rank 0 reports on the whole domain rather than on its own block.
+same totals and rank 0 reports on the whole domain, not on its own block.
 
 The repair writes the interior only. Halos are left as the step left them, and
 nothing downstream depends on that: [`max_rate`](@ref) exchanges before reading
@@ -832,7 +832,7 @@ end
 # Zero the artificial coefficient arrays on every patch. Rollback support:
 # the coefficients are regenerated by each RHS evaluation, so zero is the
 # state a freshly built solver starts from, and the diffusive term of the
-# retry's first rate measurement simply lags one step as it does on the first
+# retry's first rate measurement lags one step as it does on the first
 # step of any run.
 function _reset_artificial!(solver::Solver)
     for p in getfield(solver, :patches)
@@ -881,8 +881,8 @@ _post_step!(solver, states::Vector{<:ConservedState}) =
 
 Advance until `solver.t` reaches `tfinal` or `solver.step` reaches `nmax`,
 filtering the conserved variables every `solver.filter_interval` steps and
-invoking `callback` after each step. `nmax` bounds the solver's step counter
-rather than the steps taken by this call, so a second `run!` on the same solver
+invoking `callback` after each step. `nmax` bounds the solver's step counter,
+not the steps taken by this call, so a second `run!` on the same solver
 must raise it. Returns `Q`, which is advanced in place.
 
 The first form allocates a [`Workspace`](@ref) per call; pass `workspace` (as
@@ -891,8 +891,8 @@ the third positional argument or the keyword of the same name) to reuse one.
 `callback` may be a bare `callback(solver, Q)` invoked every step (the original
 contract, return value ignored), a [`Callback`](@ref) pairing a trigger with an
 effect, or a tuple of those. A scheduled [`AtTime`](@ref) or [`EveryTime`](@ref)
-trigger shortens `dt` over the preceding `control.landing_steps` steps so that a
-step ends at the scheduled instant without an arbitrarily small final step. An
+trigger shortens `dt` over the preceding `control.landing_steps` steps to end a
+step at the scheduled instant without an arbitrarily small final step. An
 effect returning `true` ends the run after that step. `tfinal` uses a direct
 clip, so scheduled callbacks do not alter the step sequence of a run that has
 none.
@@ -900,8 +900,8 @@ none.
 `control` is a [`StepControl`](@ref) governing timestep prediction, the floors
 below which the run is declared failed, and whether a failure is recoverable by
 rolling back and lowering the CFL. It defaults to the one the solver was built
-with. On an unrecoverable failure this throws [`SolverFailure`](@ref) rather
-than continuing with a collapsed timestep; the note at the top of
+with. On an unrecoverable failure this throws [`SolverFailure`](@ref) and does
+not continue with a collapsed timestep; the note at the top of
 `stepcontrol.jl` records what that failure mode looks like and which of the
 three mechanisms was measured to help.
 
@@ -938,7 +938,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
                            "has nothing to scale."
     end
     # Snapshot of the cumulative tally, so the summary below reports this
-    # call's own repairs rather than everything the solver has accumulated.
+    # call's own repairs, not everything the solver has accumulated.
     ft0 = solver.floor_tally
     floor_0 = (steps=ft0.steps, cells=ft0.cells, low_energy=ft0.low_energy,
                mass=ft0.mass, energy=ft0.energy, momentum=ft0.momentum)
@@ -948,11 +948,11 @@ function run!(solver::Solver, Q, workspace::Workspace;
     # the corrupt state and only the CFL moves. Observed as: rolled back to
     # step 180, failed at step 180, four times. `regrid!` honours it too.
     while solver.t < tfinal && solver.step < nmax
-        # Timed from here rather than around step! alone: max_rate carries the
+        # Timed from here, not around step! alone: max_rate carries the
         # per-step Allreduce and the filter is a full set of line solves, so both
-        # are step cost a user is trying to see. Callbacks are outside it — a
-        # progress callback that reduces a diagnostic would otherwise be timing
-        # itself, and reporting that as solver cost.
+        # are step cost a user is trying to see. Callbacks are outside it, since
+        # a progress callback that reduces a diagnostic would otherwise time
+        # itself and report that as solver cost.
         wall_0 = time_ns()
         _maybe_regrid!(solver, Q, workspace, save)
         _presync!(solver, Q)
@@ -960,7 +960,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # step should be sized from the state it is about to advance, and the
         # previous iteration's filter_state! has smeared whatever the conditions
         # impose on the edge planes. With Q settled here, max_rate's halo exchange
-        # and primitives pass also serve stage 1, which is what `prepared` below
+        # and primitives pass also serve stage 1, as `prepared` below
         # asserts; that removes one sixth of both from the per-step cost.
         solver.tstage = solver.t
         apply_bcs!(solver, Q)
@@ -992,7 +992,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
             # the low-storage accumulator, whose usual amnesia via RKA[1] = 0
             # cannot forget NaN (0.0 · NaN is NaN). Both were observed on a
             # subcycled Sod whose plain restart at the same lowered CFL
-            # succeeded. The reset is deliberately gated on :nonfinite: after
+            # succeeded. The reset is gated on :nonfinite: after
             # a finite failure the stale coefficients are large where the
             # trouble is, and the small first dt they induce is a measured
             # part of the recovery the retry test pins.
@@ -1010,8 +1010,8 @@ function run!(solver::Solver, Q, workspace::Workspace;
                                "$(solver.cfl) (retry $attempts of $(control.retries))"
             continue
         end
-        # Q has just passed its health check, which is the only moment it is
-        # known good — the checks run on the state entering a step, so saving
+        # Q has passed its health check, the only point at which it is
+        # known good: the checks run on the state entering a step, so saving
         # after stepping would bank a state nothing has yet vetted.
         if save !== nothing && control.savepoint_interval > 0 &&
            solver.step > save.guard && solver.step % control.savepoint_interval == 0
@@ -1023,9 +1023,9 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # Clip to the endpoint AFTER the checks, and to the next scheduled
         # callback time as well: an AtTime trigger has to be landed on exactly,
         # not overshot, and nothing outside run! can reach dt to arrange that.
-        # The gap is only applied when it is positive — a requested time already
-        # behind solver.t would otherwise drive dt to zero or negative, which
-        # stalls the run rather than firing anything.
+        # The gap is only applied when it is positive: a requested time behind
+        # solver.t would otherwise drive dt to zero or negative, which stalls
+        # the run and fires nothing.
         dt = min(dt, tfinal - solver.t)
         # An instant beyond `tfinal` is not reachable in this run, and aiming at
         # one makes the soft landing below halve the step against a target it
@@ -1035,12 +1035,12 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # `gap` a shade over `tfinal - solver.t` and the division by
         # `ceil(gap/dt) == 2` halved dt forever: 1.9e-13, 9.7e-14, 4.9e-14 and so
         # on for forty steps until `solver.t + dt` rounded onto `tfinal`. The run
-        # did reach the endpoint and the trigger did fire — the whole cost was in
-        # steps, which is why nothing caught it.
+        # did reach the endpoint and the trigger did fire; the whole cost was in
+        # steps, so no check detected it.
         #
-        # Discarding the instant rather than clamping it to `tfinal` is what keeps
-        # the endpoint out of the soft landing, per the note below. `tfinal` is
-        # still clipped to, one line up; it is just never subdivided toward.
+        # The instant is discarded, not clamped to `tfinal`, which keeps the
+        # endpoint out of the soft landing, per the note below. `tfinal` is
+        # still clipped to, one line up; it is never subdivided toward.
         next_instant = callback_next_time(callback, solver)
         gap = next_instant - solver.t
         # Soft landing. Clipping directly to the gap lands exactly but leaves an
@@ -1068,7 +1068,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
             filter_state!(solver, Q)
         end
         _post_step!(solver, Q)
-        # After the filter rather than immediately after step!, so that the state
+        # After the filter, not immediately after step!, ensuring the state
         # entering the next iteration's checks is the repaired one whichever of
         # the two damaged it. The compact filter is not monotone, so it can
         # produce sub-floor values itself.
@@ -1086,7 +1086,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
             end
         end
         # A rollback `continue`s above this, so an abandoned iteration never
-        # records a step time — wall_total counts work that stood.
+        # records a step time; wall_total counts work that stood.
         solver.wall_step = (time_ns() - wall_0) / 1e9
         solver.wall_total += solver.wall_step
         run_callbacks!(callback, solver, Q) && break
@@ -1119,23 +1119,23 @@ Relaxation weight for one [`filter_state!`](@ref) pass, in `(0, 1]`.
 
 `solver.filter_cfl == 0` returns `1`, which is the unrelaxed formulation: the
 filter is applied at full strength on every pass, so it removes energy per
-*application* rather than per unit time and its effective dissipation depends on
-the timestep. Halving the CFL then doubles the number of applications covering
-the same interval and doubles the dissipation, which is why the subgrid
-dissipation does not converge as `dt → 0` at fixed resolution.
+*application*, not per unit time, and its effective dissipation depends on the
+timestep. Halving the CFL then doubles the number of applications covering the
+same interval and doubles the dissipation, so the subgrid dissipation does not
+converge as `dt → 0` at fixed resolution.
 
 A positive `filter_cfl` restores that convergence by scaling the weight with the
-step actually taken,
+step taken,
 
     w = filter_interval · dt · rate / filter_cfl
 
 capped at 1. Since `compute_dt` sets `dt = cfl / rate`, the product `dt · rate`
-recovers the CFL that was actually used, including `StepControl` backoff and the
+recovers the CFL in force, including `StepControl` backoff and the
 shortening applied to land on a callback instant. So `w` is `cfl / filter_cfl`
 in normal running, `filter_cfl` is the CFL at which one pass is applied at full
 strength, and dissipation per unit time is invariant below it.
 
-Reading `dt · rate` rather than `solver.cfl` makes a shortened step filter
+Because `dt · rate` is read and not `solver.cfl`, a shortened step filters
 proportionally less, which removes the truncated-final-step artifact in
 `bench/tgv_energy.jl`.
 
@@ -1168,7 +1168,7 @@ only; each pass writes the halos from the exchange, so they are left
 inconsistent with the filtered interior until the next step exchanges again.
 
 Under a positive `filter_cfl` the result is relaxed toward the filtered state
-rather than replaced by it, with the weight [`filter_weight`](@ref) supplies.
+and not replaced by it, with the weight [`filter_weight`](@ref) supplies.
 The weight is a reduced quantity by construction, since `rate_prev` comes from
 the collective in `max_rate`, so every rank blends by the same amount without a
 further reduction here.
@@ -1197,16 +1197,16 @@ end
 # --- Top-level error reporting under many ranks.
 #
 # An uncaught exception is reported by *every* rank, so a SolverFailure at 448
-# ranks produces 448 stacktraces — several thousand lines burying the one fact
-# you need. And because the failures that matter here are raised off collective
+# ranks produces 448 stacktraces, several thousand lines burying the one fact
+# needed. Because the failures handled here arise from collective
 # quantities (`max_rate` reduces, `check_step` reads the reduced result), they
 # are usually identical on every rank, so 447 of those copies carry nothing.
 #
 # One backtrace, from rank 0, plus a one-line identification from anywhere else
-# that failed — which is what catches the genuinely rank-local errors, like
-# `plan_direction` rejecting one rank's block. Then MPI_Abort, so the ranks still
-# blocked in a collective are killed outright rather than each unwinding through
-# Julia's signal handler and printing a dump of its own.
+# that failed; the latter handles rank-local errors, like `plan_direction`
+# rejecting one rank's block. Then MPI_Abort, so the ranks still blocked in a
+# collective are killed outright and do not each unwind through Julia's signal
+# handler and print a dump of their own.
 
 """
     mpi_main(body; comm = MPI.COMM_WORLD, exitcode = 1, grace = 0.5)
@@ -1215,8 +1215,8 @@ Run `body()` under a top-level error guard for large rank counts. Rank 0 prints 
 full backtrace, other failing ranks print one line, and the function then calls
 `MPI.Abort(comm, exitcode)`, which does not return. The return value on the
 successful path is that of `body`. A failing rank other than rank 0 sleeps
-`grace` seconds before aborting, so that rank 0's backtrace is not truncated by
-the abort; see the comment in the body.
+`grace` seconds before aborting to keep the abort from truncating rank 0's
+backtrace; see the comment in the body.
 
 MPI drivers should use this guard to prevent an uncaught exception from
 producing a full backtrace on every rank. For interrupts, pass
@@ -1240,10 +1240,10 @@ function mpi_main(body; comm::MPI.Comm=MPI.COMM_WORLD, exitcode::Int=1,
         rank = MPI.Comm_rank(comm)
         # One write, not several. Concurrent ranks writing a line in pieces
         # interleave character-by-character, and the result is unreadable well
-        # before you get to 448 of them.
+        # long before 448 ranks are involved.
         # A failure on one rank alone leaves rank 0 blocked in a collective, so
-        # nobody prints a backtrace and the one-liner carries no location. Set
-        # CL_ERROR_BACKTRACE=all to get one from every failing rank — the right
+        # no backtrace is printed and the one-line message has no location. Set
+        # CL_ERROR_BACKTRACE=all to get one from every failing rank: the right
         # setting for chasing a rank-local error, and the wrong one at 448 ranks
         # when they all fail together.
         all_bt = get(ENV, "CL_ERROR_BACKTRACE", "") == "all"
@@ -1256,8 +1256,8 @@ function mpi_main(body; comm::MPI.Comm=MPI.COMM_WORLD, exitcode::Int=1,
         end
         flush(stderr)
         # MPI_Abort kills the whole job, so whoever calls it first silences
-        # everyone else — including rank 0 mid-backtrace, which is exactly the
-        # output worth keeping. Non-zero ranks therefore yield briefly. If rank 0
+        # everyone else, including rank 0 mid-backtrace, whose output is the one
+        # to preserve. Non-zero ranks therefore yield briefly. If rank 0
         # did not fail it is blocked in a collective and gets killed regardless,
         # so the only cost is `grace` seconds on the way down.
         rank == 0 || sleep(grace)

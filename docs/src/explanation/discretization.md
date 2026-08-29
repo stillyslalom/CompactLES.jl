@@ -68,7 +68,7 @@ computational area. Differentiating ``A_dF_d`` as one quantity is essential:
 expanding the product into separately discretized terms would not generally
 produce the same global balance.
 
-### What “telescoping conservation” means
+### The telescoping conservation identity
 
 In one dimension, let ``D`` be the discrete derivative and ``w_i`` the
 computational quadrature weights. A conservative summation identity has the
@@ -124,7 +124,7 @@ the reason the cascade remains the default.
 
 Formal interior order should not be quoted as the accuracy of a wall-bounded
 calculation. If the error is dominated by closure points, refinement exposes
-the lower closure order. This is why the validation suite reports interior and
+the lower closure order. The validation suite therefore reports interior and
 closed-domain convergence separately, and reports the closed-domain order for
 each closure set.
 
@@ -143,8 +143,8 @@ Q^{(s)} = Q^{(s-1)}+b_sG^{(s)},
 
 for ``s=1,\ldots,5``. The first coefficient ``a_1=0`` resets the residual
 register at the start of every step. Apart from the conserved state, the
-implementation retains one right-hand-side array and one residual array rather
-than storing all five stage states.
+implementation retains one right-hand-side array and one residual array without
+retaining all five stage states.
 
 At each stage, `step!` sets the stage time, applies hard boundary conditions,
 evaluates ``R_h``, and updates the low-storage state and residual. Time-dependent
@@ -152,8 +152,8 @@ Dirichlet and NSCBC targets and explicit sources therefore see the appropriate
 stage time. After stage five, boundary conditions are applied once more to the
 completed state.
 
-The older shorthand “RK45” in implementation-oriented material means five
-stages and fourth-order accuracy here. It does **not** mean an embedded
+The older shorthand “RK45” in implementation-oriented material denotes five
+stages and fourth-order accuracy here. It does **not** denote an embedded
 adaptive fourth/fifth-order pair: there is no temporal error estimate and no
 accept/reject controller based on truncation error.
 

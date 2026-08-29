@@ -85,7 +85,7 @@ function plan_direction(decomp::Decomp, scheme::BandedCompactScheme{T}, dim::Int
     end
     # Fewer closure rows than the half-bandwidth would leave rows nc+1..q
     # coupled to ghost unknowns that the zeroed coupling blocks below drop
-    # silently; both shipped banded schemes satisfy this, a user-supplied one
+    # silently; both built-in banded schemes satisfy this, a user-supplied one
     # need not.
     (lo_closed || hi_closed) && nc < q &&
         error("scheme '$(scheme.name)' has $nc closure rows but half-bandwidth " *

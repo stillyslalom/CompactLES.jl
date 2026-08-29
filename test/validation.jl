@@ -5,8 +5,8 @@
 #   julia --project=. test/validation.jl --generate   # rebuild stored references
 #
 # The cases themselves live in test/cases.jl, shared with bench/artcal.jl so the
-# calibration study and this battery cannot drift apart. What lives here is the
-# reference each case is measured against, and the guard.
+# calibration study and this battery cannot drift apart. This file holds the
+# reference and guard for each case.
 #
 # The battery is split by what each case can be measured against, because the
 # two kinds of reference carry very different weight:
@@ -23,17 +23,17 @@
 #              symmetry point shows up as a density deficit with nowhere to
 #              hide. This is the case that constrains C_beta and the CFL.
 #
-#   STORED — this code at 4x resolution. A regression guard, NOT validation.
+#   Stored — this code at 4x resolution. A regression guard, not validation.
 #     Shu–Osher        — shock/entropy-wave interaction, the problem the
-#                        high-order interior scheme exists for. What matters is
-#                        that the post-shock wave train survives, and there is
+#                        high-order interior scheme exists for. The criterion is
+#                        survival of the post-shock wave train, and there is
 #                        no closed form for its amplitude.
 #     Woodward–Colella — blast-wave collision; strong-shock robustness plus the
 #                        collided contact position after two reflections.
 #
 # Guards are set from measured behaviour, as in test/convergence.jl, at roughly
 # 1.5–2x the measured value. The measured numbers print every run; a moved digit
-# on a change that was not meant to touch numerics means something real happened.
+# after a change not intended to touch numerics indicates a numerical effect.
 #
 # Measured on this code (serial, C6, ArtParams defaults; each case's CFL is in
 # test/cases.jl):
@@ -64,7 +64,7 @@
 #
 #   * Strong shocks need cfl <= 0.15, not the 0.5 default: above ~0.2 the Noh
 #     cases lose positivity within a few hundred steps. The cause is a dispersive
-#     undershoot at the shock that the artificial viscosity does not damp, NOT
+#     undershoot at the shock that the artificial viscosity does not damp, not
 #     the one-step lag in compute_dt — that hypothesis was tested with a rate
 #     predictor and rejected. StepControl(retries = 4) is the practical answer;
 #     reference/CALIBRATION.md has the trace.

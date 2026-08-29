@@ -22,26 +22,26 @@
 #   Filter sweep at 32³, art on: interval 1 gives the above; interval 4 diverges
 #   (9.5e-2 still rising at t = 10); interval 0 fails outright with
 #   SolverFailure(:negative_density) at t = 5.32. The compact filter is the
-#   primary STABILIZER here, not just a smoother — the Cook properties alone do
+#   primary stabilizer here, beyond its smoothing role — the Cook properties do
 #   not hold this case together at this resolution.
 #
-#   AT RESOLUTION — 128³, 224 ranks over 2 rzhound nodes, t = 10. This is what
-#   the 32³ numbers above were waiting for, and it moves three of them:
+#   At resolution — 128³, 224 ranks over 2 rzhound nodes, t = 10. The 32³ trends
+#   above change in three ways:
 #
 #     config              peak -dKE/dt      mol    mu*   filter    wall
 #     art ON,  filter 1   1.2065e-2 @ 8.77  60.4%  2.3%   37.3%   1520 s
 #     art OFF, filter 1   1.2248e-2 @ 8.87  62.5%  0      37.5%   1063 s
 #     art ON,  filter 0   SolverFailure(:negative_density) at t = 4.66
 #
-#   Filter dominance does NOT survive resolution: 87% → 83% → 37% → 12.8% at
+#   Filter dominance does not survive resolution: 87% → 83% → 37% → 12.8% at
 #   16³, 32³, 128³, 256³. Two coarse points were not a trend, and the fall
 #   continues at 256³.
 #
-#   The filter is still REQUIRED, and its stabilizing role is decoupled from its
+#   The filter is still required, and its stabilizing role is decoupled from its
 #   energy share. At 37% of the sink, removing it kills the run *earlier* than at
 #   32³ (t = 4.66 vs 5.32) through a clean energy blow-up — KE turns upward at
 #   t ≈ 4.4 and triples before positivity goes, dt collapsing to 2e-60. TGV is
-#   unforced, so that is unambiguously numerical: the filter owns ~100% of the
+#   unforced, so that is unambiguously numerical: the filter contributes ~100% of
 #   grid-scale sink whatever its share of the total. Art-off/filter-on runs to
 #   completion. The filter is necessary and sufficient here; the Cook properties
 #   are neither.
@@ -103,7 +103,7 @@
 #   sample    steps between diss_split samples (default 100). Scale it with the
 #             step count or a long run prints hundreds of rows.
 #   nmax      step cap per configuration (default none). A sweep that may visit
-#             bad configurations wants one: a run that loses positivity does not
+#             bad configurations should set one: a run that loses positivity does
 #             crash, it grinds — CLAUDE.md, Conventions.
 #   smoother, mu_sensor, beta_sensor, reduction
 #             `ArtParams` settings applied to every configuration in the sweep,
@@ -112,9 +112,9 @@
 #             the only case in the repository where the μ* channel carries a
 #             measurable share of the sink, and no case in the 1-D battery of
 #             bench/artcal.jl exercises a shear sensor at all. Note that
-#             `smoother` still defaults to `:compact`, which the solver no longer
-#             ships, because the 128³ numbers above were measured under it. Pass
-#             `smoother=gaussian` for a comparison against the shipped
+#             `smoother` still defaults to `:compact`, which is no longer the
+#             solver default, because the 128³ numbers above were measured under it. Pass
+#             `smoother=gaussian` for a comparison against the default
 #             configuration.
 #   cfl       timestep multiplier (default 0.6). Exposed because the filter's
 #             share of the sink depends on it: unrelaxed, the filter removes
@@ -230,7 +230,7 @@ instantaneous rate is `(filter loss)/dt + physical` and carries the full
 step-to-step `dt` jitter divided into it. Measured at 128³: with the artificial
 properties on, the sensor feeds `compute_dt` and `dt` swings ±12% step to step,
 which against a filter supplying ~37% of the sink predicts ∓4.4% on the total —
-and that is exactly the scatter the sampled table showed. With `art` off, `dt` is
+matching the scatter in the sampled table. With `art` off, `dt` is
 smooth to under a percent and so is the curve. Since `C_mu` is being ranked on
 differences of well under 1%, the instantaneous rate cannot be the estimator.
 
@@ -241,7 +241,7 @@ inside a window is a bias rather than noise.
 A boxcar over a curved peak reads slightly low — ~0.2% at 128³ with the default
 501-step window, growing as the window widens. That is common-mode across
 configurations run at the same `window=`, so it cancels in a `C_mu` comparison
-and only matters when quoting the peak against an external reference. The window
+and affects only comparisons with an external peak reference. The window
 is clamped to `length(ts) ÷ 8`, so hold step counts within ~8x of each other or
 the clamp will hand two configurations different windows.
 """
@@ -317,7 +317,7 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
     footprint = (solver=Base.summarysize(solver), state=Base.summarysize(Q),
                  workspace=Base.summarysize(workspace))
     # Device-resident state reads through one reused host buffer: the scalar
-    # energy/mass loops index this instead of Q. On the CPU it aliases Q and
+    # energy/mass loops index this, not Q. On the CPU it aliases Q and
     # the download is a no-op.
     devres = !(parent(Q) isa Array)
     Qhost = devres ? Array(parent(Q)) : parent(Q)
