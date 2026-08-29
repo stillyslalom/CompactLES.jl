@@ -137,7 +137,7 @@ const WC_T = 0.038
 const WC_N = 800
 
 function woodward(; N=WC_N, art=ArtParams(enabled=true), cfl=0.3, nmax=NMAX,
-                  delta=nothing)
+                  delta=nothing, deriv=lele_d1_6(), filt=compact_filter(0.45))
     h = 1.0 / (N - 1)
     δ = delta === nothing ? 2h : delta
     prob = Problem(eos=single_species(gamma=1.4, R=1.0),
@@ -149,7 +149,7 @@ function woodward(; N=WC_N, art=ArtParams(enabled=true), cfl=0.3, nmax=NMAX,
                             0.01 * (tanh_blend(x, 0.1, δ) - tanh_blend(x, 0.9, δ)) +
                             100 * tanh_blend(x, 0.9, δ)))
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filter_interval=1))
+                                     deriv=deriv, filt=filt, filter_interval=1))
     run!(solver, Q; tfinal=WC_T, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, WC_T)
 end
@@ -213,7 +213,8 @@ carries the exact time-dependent inflow, which for ν > 1 is compressing as it
 converges and is therefore not a constant state.
 """
 function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
-                  art=ArtParams(enabled=true), cfl=NOH_CFL, R=1.0, nmax=NMAX)
+                  art=ArtParams(enabled=true), cfl=NOH_CFL, R=1.0, nmax=NMAX,
+                  deriv=lele_d1_6(), filt=compact_filter(0.45))
     metric = ν == 1 ? CartesianMetric() :
              ν == 2 ? CylindricalMetric() : SphericalMetric()
     lobc = ν == 1 ? SlipWallBC() : ν == 2 ? AxisBC() : OriginBC()
@@ -242,7 +243,7 @@ function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
                    domain=((0.0, R), dom2, dom3),
                    bcs=((lobc, inflow), per3[2], per3[3]), ic=ic)
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filter_interval=1))
+                                     deriv=deriv, filt=filt, filter_interval=1))
     run!(solver, Q; tfinal=NOH_T - t0, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, NOH_T - t0)
 end

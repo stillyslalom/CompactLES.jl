@@ -22,11 +22,12 @@ ArtParams(C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.01)
 7. [The β\* sensor — strain, gated, or dilatation](#the-beta-sensor--strain-or-dilatation)
 8. [CFL, which dominates all four](#cfl-which-dominates-all-four)
 9. [The fold closure is not third order](#the-fold-closure-is-not-third-order)
-10. [The origin cell is a startup transient](#the-origin-cell-is-a-startup-transient)
-11. [Measured against the reference implementation](#measured-against-the-reference-implementation)
-12. [Grid convergence](#grid-convergence)
-13. [Geometry limits](#geometry-limits)
-14. [Recommendations](#recommendations)
+10. [Wall closures under the artificial properties](#wall-closures-under-the-artificial-properties)
+11. [The origin cell is a startup transient](#the-origin-cell-is-a-startup-transient)
+12. [Measured against the reference implementation](#measured-against-the-reference-implementation)
+13. [Grid convergence](#grid-convergence)
+14. [Geometry limits](#geometry-limits)
+15. [Recommendations](#recommendations)
 
 ## How to read the tables
 
@@ -1016,6 +1017,157 @@ than replacing it. All four mechanisms this document has proposed are now
 measured wrong: the timestep predictor, the sensor reach, the fold closure, and
 sensor blindness at the fold, which
 [the origin-cell probe](#the-origin-cell-is-a-startup-transient) rules out.
+
+## Wall closures under the artificial properties
+
+`lele_d1_6(closures = :brady_livescu)` and `lele_d1_8(closures = :brady_livescu)`
+raise the smooth-field wall order from 3.17 to 5.88 and 7.91
+(`test/convergence.jl`). Brady and Livescu state that their rows are not
+stable at discontinuities, and nothing had run them against a captured shock
+under the artificial properties. The two wall-bounded cases of
+`test/cases.jl` now take `deriv` and `filt` keywords for this purpose. With
+the default filter wall cascade and `nmax = 20_000`:
+
+```
+case                closures          cfl     outcome
+Woodward–Colella    :cascade3         0.3     L1 rho 3.252e-2, peak 6.6074 at 0.7785
+                    :cascade4         0.3     L1 rho 3.250e-2, peak 6.6075 at 0.7785
+                    :brady_livescu    0.3     negative density, step 854, t = 0.0059
+                    :brady_livescu    0.15    negative density, step 677, t = 0.0023
+                    :brady_livescu    0.075   negative density, step 1000, t = 0.0016
+                    C8 :brady_livescu 0.3     negative density, step 43
+                    C8 :brady_livescu 0.15    dt collapse, step 273
+Noh planar          :cascade3         0.15    plateau 3.9971, wall deficit 64%
+                    :cascade4         0.15    plateau 3.9983, wall deficit 58%
+                    :brady_livescu    0.15    dt collapse, step 87
+                    :brady_livescu    0.075   dt collapse, step 366
+                    C8 :brady_livescu 0.15    negative density, step 1
+```
+
+Lowering the CFL moves the failure earlier in time, so this is not the
+startup restriction of the [CFL section](#cfl-which-dominates-all-four), and
+`StepControl(retries = 4)` would not recover it. `:cascade4` is a free
+improvement under the default filter: it takes the planar Noh wall deficit
+from 64% to 58% at an unchanged plateau and shock position, and leaves
+Woodward–Colella unchanged to four digits.
+
+### The wall mode
+
+The failure is a wall mode driven by the artificial bulk viscosity, not the
+discontinuity itself. A planar Noh warm-started from the exact solution at
+t = 0.3 has a uniform ρ = 4, u = 0 plateau at the wall, and nothing reaches
+the wall before the run ends; under `:brady_livescu` the wall density still
+departs from 4 at t ≈ 0.06 and grows in a two-cell alternating pattern,
+doubling every ≈ 0.01 time units (4.006 at t = 0.063, 4.087 at 0.076, 4.61 at
+0.085) until it ends the run at ρ_wall = 20.3 against 3.99 under `:cascade3`.
+Zeroing `C_kappa` and `C_mu` together leaves that growth unchanged
+(ρ_wall = 19.8), so β\* is the driver; zeroing `C_beta` loses the shock
+instead. The rows are innocuous wherever β\* is not active at a wall:
+
+- A 1% Gaussian pressure pulse between two slip walls, artificial properties
+  on or off, filter on or off, runs three acoustic transits under C6
+  `:brady_livescu` with the same wall density as `:cascade3` to four digits.
+  With the filter off it is the only alternative set that survives at all:
+  `:cascade4` loses positivity at t = 1.74 there, consistent with its closed
+  operator having eigenvalues of negative real part (−8.9e-3 at N = 32 under
+  inflow injection, where `:cascade3` and `:brady_livescu` are entirely in
+  the right half-plane).
+- The mirrored Noh problem on (−1, 1), inflow at both ends and no wall, runs
+  to completion under `:brady_livescu` with a final profile identical to
+  `:cascade3`'s; a captured shock and a Dirichlet inflow through the rows
+  are both fine.
+
+The scalar spectra therefore do not predict the failure. What separates the
+sets is the wall mode of the diffusion operator D(β D) that the bulk term
+assembles from the first-derivative rows: at N = 64 and h = 1 the largest
+real eigenvalue of D² is 1.3e-6 for `:cascade3`, 1.7e-5 for `:cascade4`,
+1.4e-4 for C6 `:brady_livescu` and 3.7e-3 for C8 `:brady_livescu` with the
+end rows free, and −2.5e-3 for all five with both end rows injected. Only
+the momentum is injected at a slip wall, so the density and energy rows see
+the free-end spectrum.
+
+### The filter's wall cascade is the other half
+
+The other ingredient is the state filter's wall cascade. `compact_filter`
+leaves row 1 unfiltered and applies centered F2/F4/F6 rows at rows 2–4;
+measured as one pass |F f − f| on a smooth closed line, that is **second
+order along the whole line**, not only at the wall, because the compact
+solve carries the row-2 error inward (`test/convergence.jl`, 1.88 in the
+max norm, 2.21 in L2). The filter, not the derivative closure, is therefore
+the wall-order cap of every filtered run, and its row-2 error is an O(h²)
+disturbance deposited two cells from the wall on every step. With that row
+replaced, the mode does not appear.
+
+`compact_filter(closures = :onesided)` replaces rows 2–4 by the one-sided
+eighth-order rows of Gaitonde and Visbal, derived at construction from
+polynomial exactness through degree 7 plus a Nyquist zero, which is the
+interior stencil's own construction (the derivation reproduces the centered
+stencil at the centered point to 1e-16 and the published row 2 to 1e-14).
+One pass is then eighth order everywhere (8.07 max norm, 8.75 L2). Taken
+alone, rows 2 and 3 exceed unit gain at some wavenumbers (1.10 and 1.03 at
+αf = 0.45; 1.39 and 1.32 at αf = 0), which the paper notes too, but the
+closed operator as a whole amplifies *less* under repeated application than
+the cascade does: ‖F¹⁰⁰‖₂ is 1.05 against 1.14 at αf = 0.45 and N = 64, and
+1.42 against 1.35 only at αf = 0. Both keep every eigenvalue inside the
+unit disk apart from the two exact ones at 1 (the constant and the
+unfiltered end rows).
+
+Same cases under the one-sided filter rows:
+
+```
+case                closures          outcome
+Woodward–Colella    :cascade3         L1 rho 3.259e-2, peak 6.6076 at 0.7785
+                    :cascade4         negative density, step 2485, t = 0.019
+                    :brady_livescu    L1 rho 3.253e-2, peak 6.6073 at 0.7785
+                    C8 :brady_livescu L1 rho 3.265e-2, peak 6.6159 at 0.7785
+Noh planar          :cascade3         plateau 3.9982, wall deficit 27%, shock 0.2025
+                    :cascade4         plateau 3.65, wall density 89.6, unusable
+                    :brady_livescu    dt collapse, step 275
+                    C8 :brady_livescu negative density, step 1
+Noh planar, N=800   :cascade3         plateau 3.9983, wall deficit 38% (cascade: 65%)
+Noh warm t0=0.3     :cascade3         rho[1:4] 3.906 4.042 4.026 3.974
+                    :brady_livescu    rho[1:4] 4.036 3.979 4.009 4.007 (cascade: 20.3 at the wall)
+                    C8 :brady_livescu negative density, step 757, t = 0.126
+smooth pulse        C8 :brady_livescu completes (cascade filter: negative density, step 36)
+```
+
+Three results follow. The wall deficit of the default configuration is
+largely the filter's: the one-sided rows take the planar Noh wall heating
+from 64% to 27% at N = 400 and 65% to 38% at N = 800, with the plateau,
+shock position and Woodward–Colella profile unchanged to three digits. C6
+`:brady_livescu` becomes usable at a shock-bounded wall (the wall mode is
+gone from the warm-started Noh and Woodward–Colella completes); what it
+still cannot take is the singular t = 0 start of cold Noh, where u jumps
+from −1 to 0 on the wall row itself. And `:cascade4` depends on the F2 row:
+without it, its negative-real-part eigenvalues are no longer damped and it
+fails even the smooth pulse (t = 0.915). So the two knobs are coupled:
+`:cascade4` with the cascade filter, or `:cascade3` / C6 `:brady_livescu`
+with the one-sided filter.
+
+The one-sided rows stay optional. Every constant in this document was
+calibrated under the cascade, the `test/validation.jl` guards are set from
+it, and no periodic case can tell the two apart. Switching the default is a
+recalibration of the wall cases, not a code change.
+
+### Float32
+
+The Brady–Livescu conditioning is the error in Float32. On the smooth
+closed-line derivative of `test/convergence.jl` the Float32 wall error is
+(C6 / C8 `:brady_livescu`, then `:cascade3` and `:cascade4`):
+
+```
+N     C6 BL f32  f64        C8 BL f32  f64        cascade3 f32  f64      cascade4 f32  f64
+24    1.02e-3    1.21e-3    2.48e-3    2.03e-3    6.24e-3  6.26e-3        8.40e-4  8.35e-4
+48    1.21e-3    1.94e-5    2.36e-3    2.46e-6    6.88e-4  6.71e-4        1.31e-4  5.22e-5
+96    2.80e-3    3.48e-7    1.49e-3    3.52e-8    8.99e-5  7.71e-5        9.06e-5  3.15e-6
+192   4.52e-3    7.42e-9    3.33e-3    2.92e-10   9.82e-5  9.22e-6        3.24e-4  1.92e-7
+```
+
+The Brady–Livescu sets floor between 1e-3 and 5e-3 absolute on a derivative
+of magnitude 8, about four digits, and rise with N; the cascade floors near
+1e-4. From N = 48 up the default closure is the more accurate one in
+Float32, which is the precision the device path runs at.
+`test/float32_validation.jl` pins this.
 
 ## The origin cell is a startup transient
 

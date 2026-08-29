@@ -843,10 +843,7 @@ degree five on every row, and set 1 is both the published table and among
 the best conditioned. Measured wall orders are 5.88 for C6 and 7.91 for C8.
 The cost is conditioning: those rows are far from diagonally dominant, and
 the closed line's condition number rises from 16 to about 1e3 (T6) and 4e3
-(T8), which is why `:cascade3` stays the default. Whether the rows hold
-under the artificial properties near a wall, and whether the filter's own
-closure cascade then caps the observed Navier–Stokes wall order, has not
-been measured.
+(T8), which is why `:cascade3` stays the default.
 
 `lele_d1_8` is the seven-point tridiagonal member of Lele's family (α = 3/8,
 a = 25/16, b = 1/5, c = −1/80), measuring 8.00 periodic. It exists because
@@ -855,3 +852,43 @@ solve carries the decomposed, multi-patch and device paths, so C8 is the
 highest order available on the full stack; the KA-CPU device comparison is
 bitwise for it and for both Brady–Livescu sets. Every default-path guard
 came out bit-identical.
+
+## Wall closures under shocks, and the filter's wall rows (August 2026)
+
+The Brady–Livescu rows were then run against the wall-bounded shock cases,
+which `test/cases.jl` now exposes through `deriv` and `filt` keywords on
+`woodward` and `noh_case`. Both sets fail every case at every CFL under
+the shipped configuration, and the cause was traced to a two-cell wall
+mode of the bulk-viscosity operator D(β D) seeded each step by the state
+filter's second-order F2 wall row: the warm-started planar Noh, with a
+smooth plateau at the wall and nothing arriving, grows ρ_wall from 4 to 20
+with κ\* and μ\* switched off, while the same rows are clean on a smooth
+pulse with the filter on or off and on a wall-free mirrored Noh. One filter
+pass measured on a closed line is second order along the whole line under
+the cascade, which makes the filter, not the derivative closure, the wall
+order of every filtered run.
+
+`compact_filter(closures = :onesided)` adds the paper's one-sided
+eighth-order rows, derived at construction from polynomial exactness plus a
+Nyquist zero rather than tabulated (the derivation reproduces the interior
+stencil and the published row 2). One pass is then eighth order (8.07,
+recorded in `test/convergence.jl` beside the cascade's 1.88), the closed
+operator amplifies less under repeated application than the cascade, and on
+the planar Noh case the wall density deficit falls from 64% to 27% at
+N = 400 with the plateau and shock unchanged. Under it C6 `:brady_livescu`
+survives Woodward–Colella and the warm-started Noh, the C8 set survives the
+smooth pulse it failed under the cascade, and `:cascade4` fails even the
+smooth pulse, since the F2 row was what damped its negative-real-part
+eigenvalues. The default stays the cascade: the constants and the
+validation guards were calibrated under it.
+
+Two smaller items closed alongside. In Float32 the Brady–Livescu closed
+lines floor near 1e-3 and the default cascade is the more accurate closure
+from N = 48 up, pinned in `test/float32_validation.jl`; and `plan_direction`
+now counts closure rows only at a rank's closed ends, so the T8 set needs 13
+points along a dimension closed at both ends rather than on every dimension.
+`test/convergence.jl` also prints each study's L2 order beside the guarded
+max-norm one: 3.69 / 4.44 / 6.51 / 8.45 for the four C6 and C8 wall studies
+against 3.17 / 4.02 / 5.88 / 7.91, the half-order the solution norm gains
+over the pointwise wall error. Every previously recorded order and error
+magnitude came out bit-identical.

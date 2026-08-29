@@ -13,7 +13,9 @@
 #      order near walls. A slope of 1 means the boundary rows are wrong; a
 #      slope of 6 means the closures are never being hit. The default
 #      `:cascade3` closures are measured alongside the `:cascade4` and
-#      `:brady_livescu` alternatives, whose whole purpose is this slope.
+#      `:brady_livescu` alternatives, whose whole purpose is this slope, and
+#      one pass of the state filter is measured the same way under its two
+#      wall closures, since a filtered run cannot exceed the filter's order.
 #   3. Axis/origin/pole order — the sharpest scalar diagnostic of the fold
 #      signs: a sign error usually gives O(1) error at the first node, so the
 #      slope collapses to ~0 rather than degrading gracefully.
@@ -26,12 +28,17 @@
 #   C6 interior 6.01 | C8 interior 8.00 | C10 interior 10.04
 #   C6 wall closures 3.17 | C6 wall closures :cascade4 4.02
 #   C6 wall closures :brady_livescu 5.88 | C8 wall closures :brady_livescu 7.91
+#   filter pass :cascade 1.88 | filter pass :onesided 8.07
 #   cyl axis odd 3.71 | cyl axis even 3.00 | resolved-θ axis 3.71
 #   spherical origin 2.99
 #
-# Those eleven numbers are also passed to each study as `recorded` and guarded to
+# Those thirteen numbers are also passed to each study as `recorded` and guarded to
 # ±0.02, separately from the wide `expect`/`tol` pair. See the comment on
-# `study` for which failure each guard reports.
+# `study` for which failure each guard reports. Each study also prints the
+# order of the L2 norm over the interior, unguarded: the max norm is set by
+# the wall rows alone, and Gustafsson's theorem allows the solution norm one
+# order more than a boundary closure delivers pointwise, so the two together
+# say what a closure set buys in a solution rather than at the wall.
 #
 # These are GLOBAL max norms, and every fold study closes its outer end with a
 # SlipWallBC. The orders near 3 therefore belong to the WALL, not to the fold:
@@ -75,6 +82,18 @@ function ferr(solver, f, fn)
     e
 end
 
+"Root-mean-square error over the interior, the discrete L2 norm per point."
+function ferr2(solver, f, fn)
+    e = 0.0; n = 0
+    nl = solver.decomp.n_local
+    for k in 1:nl[3], j in 1:nl[2], i in 1:nl[1]
+        e += (f[gidx(solver, i, j, k)] -
+              fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k)))^2
+        n += 1
+    end
+    sqrt(e / n)
+end
+
 "Least-squares slope of log(err) vs log(N), i.e. the observed order."
 function order(Ns, errs)
     x = log.(Float64.(Ns)); y = log.(max.(errs, 1e-16))
@@ -106,9 +125,10 @@ const T_DERIV = Ref(0.0)
 # cause of the move is understood.
 const DRIFT_TOL = 0.02
 
-function study(name, Ns, build, fld, ref; expect=nothing, tol=1.0, recorded=nothing)
+function study(name, Ns, build, fld, ref; expect=nothing, tol=1.0, recorded=nothing,
+               op=:deriv)
     t0 = time(); c0 = compile_ns()
-    errs = Float64[]
+    errs = Float64[]; errs2 = Float64[]
     for N in Ns
         tb = time()
         solver = build(N)
@@ -117,9 +137,14 @@ function study(name, Ns, build, fld, ref; expect=nothing, tol=1.0, recorded=noth
         f = CL.field(solver.decomp); df = CL.field(solver.decomp)
         fillf!(solver, f, fld)
         CL.exchange_halos!(f, solver.decomp)
-        CL.deriv_along!(df, f, solver, 1, ref.parity)
-        CL._scale_grad!(df, solver, 1)
+        if op === :deriv
+            CL.deriv_along!(df, f, solver, 1, ref.parity)
+            CL._scale_grad!(df, solver, 1)
+        else
+            CL.filt_along!(df, f, solver, 1, ref.parity)
+        end
         push!(errs, ferr(solver, df, ref.fn))
+        push!(errs2, ferr2(solver, df, ref.fn))
         T_DERIV[] += time() - td
     end
     p = order(Ns, errs)
@@ -127,7 +152,7 @@ function study(name, Ns, build, fld, ref; expect=nothing, tol=1.0, recorded=noth
     for (N, e) in zip(Ns, errs)
         @printf("N=%-4d %.3e  ", N, e)
     end
-    @printf("order ≈ %.2f\n", p)
+    @printf("order ≈ %.2f  (L2 %.2f)\n", p, order(Ns, errs2))
     push!(PHASE_LOG, (name, time() - t0, (compile_ns() - c0) / 1e9))
     if expect !== nothing
         abs(p - expect) < tol || println(
@@ -191,16 +216,37 @@ study("C6 wall closures, :brady_livescu", (24, 48, 96),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=6.0, tol=1.0, recorded=5.88)
 
-# The six-row T8 closure set needs 13 points per dimension on every rank,
-# periodic dimensions included (plan_direction's extent check), hence 16.
 study("C8 wall closures, :brady_livescu", (24, 48, 96),
-      N -> Solver(n_global=(N, 16, 16), L_domain=(1.0, 1.0, 1.0),
+      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                   deriv=lele_d1_8(closures=:brady_livescu),
                   art=ArtParams(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=8.0, tol=1.2, recorded=7.91)
+
+# One pass of the state filter on a closed line, measured as |F f − f|. The
+# shipped wall cascade (identity, F2, F4, F6) is second order along the whole
+# line, not only at the wall, because the compact solve carries the row-2
+# error inward; the one-sided Gaitonde–Visbal rows restore the interior
+# order. Resolutions are lower because the eighth-order pass reaches
+# round-off by N = 48 on this field.
+study("C8 filter pass, :cascade", (12, 16, 24, 32),
+      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                  art=ArtParams(enabled=false)),
+      (x, y, z) -> exp(sin(3x)),
+      (fn=(x, y, z) -> exp(sin(3x)), parity=1);
+      expect=2.0, tol=0.6, recorded=1.88, op=:filter)
+
+study("C8 filter pass, :onesided", (12, 16, 24, 32),
+      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                  filt=compact_filter(0.45; closures=:onesided),
+                  art=ArtParams(enabled=false)),
+      (x, y, z) -> exp(sin(3x)),
+      (fn=(x, y, z) -> exp(sin(3x)), parity=1);
+      expect=8.0, tol=1.5, recorded=8.07, op=:filter)
 
 println("\n=== coordinate-singularity folds ===")
 study("cylindrical axis, odd field (u_r-like)", (32, 64, 128),

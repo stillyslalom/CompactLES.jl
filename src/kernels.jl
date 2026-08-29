@@ -166,6 +166,13 @@ b = 1/9. `closures` selects the rows applied at a closed edge:
 - `:brady_livescu`: the four fifth-order rows of Brady & Livescu (2019),
   scheme T6, conservative and stable without a filter on their tests but
   with a closed-line condition number near 1e3 (see the source comment).
+  Under the default filter wall cascade these rows grow a wall mode
+  wherever the artificial bulk viscosity is active at a slip wall, which
+  ends every wall-bounded shock case; with
+  `compact_filter(closures = :onesided)` they survive a captured shock at a
+  wall but not a singular start there. In Float32 the closed line's
+  conditioning floors the wall error near 1e-3, above the default
+  cascade's, from N = 48 up. The runs are in `reference/CALIBRATION.md`.
 """
 function lele_d1_6(::Type{T}=Float64; closures::Symbol=:cascade3) where {T}
     CompactScheme{T}("Lele C6 first derivative", T(1//3), zero(T),
@@ -185,7 +192,10 @@ that the pentadiagonal [`lele_d1_10`](@ref) does not have, at two more
 multiply-adds per point. The interior reaches ±3, so a closed edge takes three
 rows under `:cascade3`/`:cascade4` (the C6 cascade plus the C6 interior row)
 and the six seventh-order rows of Brady & Livescu's scheme T8 under
-`:brady_livescu`. Requires `n_halo ≥ 3`.
+`:brady_livescu`. Requires `n_halo ≥ 3`. The T8 rows carry the slip-wall and
+Float32 restrictions of the T6 ones (see `lele_d1_6`), fail under the default
+filter wall cascade even on smooth data, and need 13 points along a dimension
+closed at both ends.
 """
 function lele_d1_8(::Type{T}=Float64; closures::Symbol=:cascade3) where {T}
     CompactScheme{T}("Lele C8 first derivative", T(3//8), zero(T),
@@ -207,14 +217,55 @@ function pade_d1_4(::Type{T}=Float64) where {T}
 end
 
 """
-    compact_filter(alphaf=0.45)
+    onesided_filter_row(af, i, M) -> Vector
+
+Right-hand side of the one-sided compact filter row at point `i` (counted from
+the edge node at 1) of Gaitonde & Visbal (2000), over the points `1:2M+1` with
+the interior left-hand side `(af, 1, af)`. The `2M + 1` weights are fixed by
+exactness on polynomials of degree `0:2M-1` and a zero response at the Nyquist
+wavenumber, which is the interior filter's own construction: at `i = M + 1`
+the system returns the centered stencil to round-off, and at `i = 2` it
+reproduces the published `(1 + 254αf)/256, (31 + 2αf)/32, ...` row. Solved
+here rather than tabulated so the rows follow `af` exactly.
+"""
+function onesided_filter_row(af::T, i::Int, M::Int) where {T}
+    K = 2M + 1
+    V = zeros(T, K, K); rhs = zeros(T, K)
+    for p in 0:2M-1
+        for n in 1:K
+            V[p + 1, n] = T(n - i)^p
+        end
+        rhs[p + 1] = af * T(-1)^p + (p == 0 ? one(T) : zero(T)) + af
+    end
+    for n in 1:K
+        V[K, n] = T(-1)^n
+    end
+    return V \ rhs
+end
+
+"""
+    compact_filter(alphaf=0.45; closures=:cascade)
 
 Eighth-order Gaitonde–Visbal compact filter. `alphaf ∈ (−0.5, 0.5)` sets the
-strength (larger → weaker filtering). At a closed edge the first row is left
-unfiltered and rows 2–4 apply centered compact filters of order 2, 4 and 6 with
-the same αf, the standard reduced-order boundary cascade.
+strength (larger → weaker filtering). At a closed edge the first row is always
+left unfiltered; `closures` selects rows 2–4:
+
+- `:cascade` (default): centered compact filters of order 2, 4 and 6 with the
+  same αf, the standard reduced-order boundary cascade. One filter pass of a
+  smooth field is then second order in the maximum norm along the whole line,
+  not only at the wall, because the compact solve carries the row-2 error
+  inward.
+- `:onesided`: the one-sided eighth-order rows of Gaitonde & Visbal (2000),
+  derived at construction by `onesided_filter_row`. One pass is
+  eighth order everywhere, and under repeated application the closed
+  operator amplifies less than the cascade does (‖F¹⁰⁰‖₂ 1.05 against 1.14
+  at αf = 0.45, N = 64). Its rows 2 and 3 do exceed unit gain at some
+  wavenumbers taken alone (1.10 and 1.03 at αf = 0.45, worse at smaller αf),
+  which the paper also notes; the measurements are in
+  `reference/CALIBRATION.md`.
 """
-function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64) where {T}
+function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64;
+                        closures::Symbol=:cascade) where {T}
     af = T(alphaf)
     a0 = (93 + 70af) / 128
     a1 = (7 + 18af) / 16
@@ -230,10 +281,19 @@ function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64) where {T}
           T((-3 + 6af) / 16), T((1 - 2af) / 32))                     # F6
     ctr(c) = [ [c[m + 1] / 2 for m in length(c)-1:-1:1]; c[1];
                [c[m + 1] / 2 for m in 1:length(c)-1] ]
-    cl = [ClosureRow{T}((zero(T), one(T), zero(T)), T[1]),
-          ClosureRow{T}((af, one(T), af), ctr(b2)),
-          ClosureRow{T}((af, one(T), af), ctr(b4)),
-          ClosureRow{T}((af, one(T), af), ctr(b6))]
+    row1 = ClosureRow{T}((zero(T), one(T), zero(T)), T[1])
+    cl = if closures === :cascade
+        [row1,
+         ClosureRow{T}((af, one(T), af), ctr(b2)),
+         ClosureRow{T}((af, one(T), af), ctr(b4)),
+         ClosureRow{T}((af, one(T), af), ctr(b6))]
+    elseif closures === :onesided
+        [row1; [ClosureRow{T}((af, one(T), af), onesided_filter_row(af, i, 4))
+                for i in 2:4]]
+    else
+        error("unknown filter closure set $(repr(closures)); " *
+              "use :cascade or :onesided")
+    end
     CompactScheme{T}("Gaitonde–Visbal C8 filter", af, a0,
                      T[a1/2, a2/2, a3/2, a4/2], true, cl)
 end

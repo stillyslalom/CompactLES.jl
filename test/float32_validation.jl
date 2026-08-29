@@ -67,20 +67,25 @@ _f32_numerics(; art=false) =
     @test maximum(residuals) < T(2e-4)
 end
 
-function _f32_closed_derivative_error(N; spherical=false)
-    T = Float32
+function _f32_closed_derivative_error(N; spherical=false, T=Float32,
+                                      deriv=lele_d1_6(T))
     per = (PeriodicBC(), PeriodicBC())
+    numerics = (_f32_numerics()..., deriv=deriv)
+    if T === Float64
+        numerics = (transport=Transport{T}(), art=ArtParams{T}(enabled=false),
+                    deriv=deriv, filt=compact_filter(T(0.45), T))
+    end
     solver = if spherical
         Solver(; n_global=(N, 12, 12),
                L_domain=(one(T), T(π), T(2π)),
                metric=SphericalMetric(),
                bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
-               eos=single_species(T), _f32_numerics()...)
+               eos=single_species(T), numerics...)
     else
         Solver(; n_global=(N, 12, 12),
                L_domain=(one(T), one(T), one(T)),
                bcs=((SlipWallBC(), SlipWallBC()), per, per),
-               eos=single_species(T), _f32_numerics()...)
+               eos=single_species(T), numerics...)
     end
     f = CL.field(solver.decomp)
     df = similar(f)
@@ -117,6 +122,28 @@ end
     @test minimum(wall_orders) > Float32(2.7)
     @test sphere_order > Float32(2.7)
     @test sphere[end] < Float32(2e-5)
+end
+
+@testset "Float32 Brady–Livescu closed lines are roundoff-limited" begin
+    # The Brady–Livescu rows raise a closed line's condition number from 16
+    # to about 1e3 (T6) and 4e3 (T8), and in Float32 that conditioning is
+    # the error: the wall derivative floors near 1e-3 absolute (about four
+    # digits on a derivative of magnitude 8) and rises with N rather than
+    # falling, while Float64 continues down at the closure order. Measured
+    # at N = 96: C6 2.8e-3 / 3.5e-7, C8 1.5e-3 / 3.5e-8 (Float32 / Float64),
+    # against 9.0e-5 / 7.7e-5 for the default cascade. So in Float32 the
+    # default closure is the more accurate one from N = 48 up, which is the
+    # restriction this testset pins; the device path runs Float32.
+    for mk in (T -> lele_d1_6(T; closures=:brady_livescu),
+               T -> lele_d1_8(T; closures=:brady_livescu))
+        e32 = _f32_closed_derivative_error(96; deriv=mk(Float32))
+        e64 = _f32_closed_derivative_error(96; T=Float64, deriv=mk(Float64))
+        @test e64 < Float64(1e-6)
+        @test Float32(2e-4) < e32 < Float32(1e-2)
+        @test e32 > 100 * e64
+    end
+    ecas = _f32_closed_derivative_error(96)
+    @test ecas < Float32(2e-4)
 end
 
 @testset "Float32 Sod profile and conservation" begin

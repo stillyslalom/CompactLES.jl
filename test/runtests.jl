@@ -484,6 +484,36 @@ end
     @test_throws ErrorException lele_d1_6(closures=:unknown)
 end
 
+@testset "filter closures: one-sided rows, published row, wall exactness" begin
+    af = 0.45
+    # The derivation reproduces the interior stencil at the centered point
+    # and Gaitonde–Visbal's tabulated row 2 (their (1 + 254αf)/256 and
+    # (31 + 2αf)/32 leading entries), and follows the element type.
+    base = compact_filter(af)
+    r5 = CL.onesided_filter_row(af, 5, 4)
+    @test maximum(abs.(r5 .- [reverse(base.coeffs); base.a0; base.coeffs])) < 1e-14
+    os = compact_filter(af; closures=:onesided)
+    @test abs(os.closures[2].rhs[1] - (1 + 254af) / 256) < 1e-14
+    @test abs(os.closures[2].rhs[2] - (31 + 2af) / 32) < 1e-14
+    @test os.closures[1].rhs == [1.0]
+    os32 = compact_filter(0.45f0, Float32; closures=:onesided)
+    @test eltype(os32.closures[2].rhs) === Float32
+    @test_throws ErrorException compact_filter(af; closures=:unknown)
+    # One closed-domain pass: the one-sided rows leave a degree-7 polynomial
+    # unchanged; the cascade's F2 row alters anything above degree 1.
+    for (filt, deg, exact) in ((os, 7, true), (base, 3, false))
+        solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                        bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                        filt=filt, art=ArtParams(enabled=false))
+        f = CL.field(solver.decomp); g = CL.field(solver.decomp)
+        fillf!(solver, f, (x, y, z) -> sum(x^m for m in 0:deg))
+        CL.exchange_halos!(f, solver.decomp)
+        CL.filt_along!(g, f, solver, 1, 1)
+        e = ferr(solver, g, (x, y, z) -> sum(x^m for m in 0:deg))
+        @test exact ? e < 1e-12 : e > 1e-6
+    end
+end
+
 @testset "filter: constants exact, Nyquist damped, parity of closures" begin
     solver = mkslv(n_global=(32, 12, 12))
     f = CL.field(solver.decomp)

@@ -56,9 +56,12 @@ closure rows are substituted there; a sign instead moves the ghost coupling onto
 the diagonal and leaves the right-hand side running the interior stencil, which
 reads the mirror halo that `fold_fill!` writes.
 
-The local extent `decomp.n_local[dim]` must be at least `max(2nc + 1, 2M + 1)`
-for `nc` closure rows and right-hand-side half-width `M`, and `M` must not
-exceed `decomp.n_halo`; both conditions raise an error when violated.
+The local extent `decomp.n_local[dim]` must be at least `2M + 1` for
+right-hand-side half-width `M`, plus one more than the closure rows applied at
+this rank's closed ends (`2nc + 1` for `nc` rows with both ends closed, `nc + 1`
+with one, none on a periodic or interior block), and a closure row's stencil
+must fit inside the block and the halo of the opposite end. `M` must not
+exceed `decomp.n_halo`. Each condition raises an error when violated.
 Construction allocates the packed-line buffer (`n × lines` for `dim == 1`,
 `lines × n` otherwise) and factorizes the line solver. Unless the scheme has an
 identity left-hand side, a decomposed `dim` makes that factorization collective,
@@ -77,11 +80,7 @@ function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
                         lo_closures::Union{Nothing,Vector{ClosureRow{T}}}=nothing,
                         hi_closures::Union{Nothing,Vector{ClosureRow{T}}}=nothing) where {T}
     n = decomp.n_local[dim]
-    nc = nclosure(scheme)
     M = halfwidth(scheme)
-    n >= max(2nc + 1, 2M + 1) || error(
-        "local extent $n along dim $dim too small for scheme '$(scheme.name)' " *
-        "(need ≥ $(max(2nc + 1, 2M + 1))); use fewer ranks in this dimension")
     M <= decomp.n_halo || error("stencil half-width $M exceeds halo width $(decomp.n_halo)")
     for rows in (lo_closures, hi_closures)
         rows === nothing && continue
@@ -104,6 +103,29 @@ function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
     fold_hi = hi_fold !== nothing && at_hi_edge(decomp, dim)
     lo_rows = lo_closures === nothing ? scheme.closures : lo_closures
     hi_rows = hi_closures === nothing ? scheme.closures : hi_closures
+    # Closure rows exist only at a closed end, so the extent a block needs
+    # depends on which of its ends are closed: a periodic or interior block
+    # needs the interior stencil alone. Counting both ends everywhere forced
+    # the six-row T8 set to 13 points on periodic dimensions too.
+    nlo = lo_closed ? length(lo_rows) : 0
+    nhi = hi_closed ? length(hi_rows) : 0
+    need = max(nlo + nhi + 1, 2M + 1)
+    n >= need || error(
+        "local extent $n along dim $dim too small for scheme '$(scheme.name)' " *
+        "(need ≥ $need); use fewer ranks in this dimension")
+    # A closure row reads `first + length(rhs) - 1` points in from its edge;
+    # past the block that is the opposite end's halo, valid only when that
+    # end is open (exchanged, or mirror-filled at a fold).
+    reach(rows) = maximum((row.first + length(row.rhs) - 1 for row in rows); init=0)
+    for (closed, rows, other_closed) in ((lo_closed, lo_rows, hi_closed),
+                                         (hi_closed, hi_rows, lo_closed))
+        closed || continue
+        limit = n + (other_closed ? 0 : decomp.n_halo)
+        reach(rows) <= limit || error(
+            "closure rows of scheme '$(scheme.name)' read $(reach(rows)) points " *
+            "from a closed end of a block of extent $n along dim $dim; use " *
+            "fewer ranks in this dimension")
+    end
     α = scheme.alpha
     a = fill(α, n); b = fill(one(T), n); c = fill(α, n)
     if fold_lo

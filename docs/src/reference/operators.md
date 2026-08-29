@@ -35,6 +35,9 @@ field
 allocate_state
 exchange_halos!
 CompactLES.exchange_state!
+CompactLES.exchange_dim!
+CompactLES.exchange_dim_batch!
+CompactLES.selfwrap
 AbstractBackend
 CPUBackend
 DeviceBackend
@@ -53,6 +56,7 @@ THREAD_MIN_WORK
 CompactLES.THREAD_MIN_WORK_PER_THREAD
 DevicePlan
 device_plan
+CompactLES.backend_plan
 ```
 
 ## Patches
@@ -87,4 +91,6 @@ LevelTransfer
 sync_levels!
 prolong_level_ghosts!
 restrict_level!
+CompactLES.gather_region!
+CompactLES.GatherBuffers
 ```

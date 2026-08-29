@@ -69,7 +69,7 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 95 testsets, 0 failures
+julia --project=. test/runtests.jl        # 109 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
@@ -79,7 +79,7 @@ julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
 ```
 
-The `95 testsets` and the `110/110` are counted by different mechanisms and are
+The `109 testsets` and the `110/110` are counted by different mechanisms and are
 not comparable. `runtests.jl` reports `@testset` blocks under `Test`, each
 holding many `@test`s, and its includes (`float32_validation.jl`,
 `device_tests.jl`, `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, and the
@@ -110,8 +110,9 @@ decomposition-independent profile.
 
 `test/convergence.jl` prints measured orders against regression guards baked
 into the file: C6 6.01, C8 8.00, C10 10.04, C6 wall closures 3.17 (`:cascade4`
-4.02, `:brady_livescu` 5.88), C8 wall closures `:brady_livescu` 7.91,
-cylindrical axis odd 3.71 / even 3.00, resolved-θ 3.71, spherical origin 2.99. **For a change not
+4.02, `:brady_livescu` 5.88), C8 wall closures `:brady_livescu` 7.91, filter
+pass `:cascade` 1.88 / `:onesided` 8.07, cylindrical axis odd 3.71 / even
+3.00, resolved-θ 3.71, spherical origin 2.99. **For a change not
 meant to affect numerics these should come out bit-identical, down to the error
 magnitudes.** A moved digit means you hit something real — chase it before
 moving on. Each study now asserts both a wide guard, which fails when the order
