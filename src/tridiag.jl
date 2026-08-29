@@ -94,6 +94,11 @@ function solve_cols!(B::AbstractMatrix{T}, F::TriFactor{T},
     return B
 end
 
+# Concrete type of `lu!` on a dense Matrix{T}. Typing `red` as a small union of
+# this and Nothing (rather than Any) keeps the solver structs concrete without
+# a type parameter that would ripple into every plan struct that holds one.
+const RedLU{T} = LU{T, Matrix{T}, Vector{Int}}
+
 mutable struct LineSolver{T}
     n::Int
     F::TriFactor{T}
@@ -101,7 +106,7 @@ mutable struct LineSolver{T}
     w::Vector{T}          # spike from right coupling cR
     explicit::Bool        # identity LHS: no local solve, no interface stage
     hasred::Bool
-    red::Any              # LU factorization of the reduced matrix, or nothing
+    red::Union{RedLU{T}, Nothing}   # LU of the reduced matrix, or nothing
     comm::MPI.Comm        # sub-communicator along the dimension
     P::Int
     p::Int                # 0-based rank within sub-communicator

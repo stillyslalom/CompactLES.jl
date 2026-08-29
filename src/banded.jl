@@ -128,7 +128,7 @@ mutable struct BandLineSolver{T}
     V::Matrix{T}          # n × q spikes from the left coupling block AL
     W::Matrix{T}          # n × q spikes from the right coupling block CR
     hasred::Bool
-    red::Any              # LU of the (2qP)² reduced matrix, or nothing
+    red::Union{RedLU{T}, Nothing}   # LU of the (2qP)² reduced matrix, or nothing
     comm::MPI.Comm
     P::Int
     p::Int                # 0-based rank within the sub-communicator
