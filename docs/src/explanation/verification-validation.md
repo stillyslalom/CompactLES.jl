@@ -38,8 +38,12 @@ approximately:
 | Configuration | Observed maximum-norm order |
 |:--|--:|
 | periodic C6 | 6.01 |
+| periodic C8 | 8.00 |
 | periodic C10 | 10.04 |
-| closed C6 wall closure | 3.17 |
+| closed C6 wall closure, `:cascade3` | 3.17 |
+| closed C6 wall closure, `:cascade4` | 4.02 |
+| closed C6 wall closure, `:brady_livescu` | 5.88 |
+| closed C8 wall closure, `:brady_livescu` | 7.91 |
 | cylindrical-axis odd/even folds | 3.71 / 3.00 |
 | resolved-angle cylindrical fold | 3.71 |
 | spherical origin | 2.99 |

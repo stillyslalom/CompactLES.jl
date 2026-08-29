@@ -455,6 +455,35 @@ end
     @test ferr(solver, df, (x, y, z) -> 2 + 6x - 3x^2) < 1e-10
 end
 
+@testset "closure sets: exact through the closure order, not beyond" begin
+    # Each closure set is exact for polynomials up to the order of its lowest
+    # row and visibly inexact one degree higher, which pins both the
+    # coefficients and the row count: a dropped row would expose an interior
+    # stencil reading past the edge, and a wrong coefficient breaks exactness
+    # at some degree ≤ 3. The Brady–Livescu rows are held to the same
+    # tolerance despite their ~1e3 closed-line condition number.
+    for (deriv, deg) in ((lele_d1_6(), 3),
+                         (lele_d1_6(closures=:cascade4), 4),
+                         (lele_d1_6(closures=:brady_livescu), 5),
+                         (lele_d1_8(), 3),
+                         (lele_d1_8(closures=:cascade4), 4),
+                         (lele_d1_8(closures=:brady_livescu), 7))
+        solver = Solver(n_global=(32, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                        bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                        deriv=deriv, art=ArtParams(enabled=false))
+        f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+        fillf!(solver, f, (x, y, z) -> sum(x^m for m in 0:deg))
+        CL.exchange_halos!(f, solver.decomp)
+        CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
+        @test ferr(solver, df, (x, y, z) -> sum(m * x^(m - 1) for m in 1:deg)) < 1e-10
+        fillf!(solver, f, (x, y, z) -> x^(deg + 1))
+        CL.exchange_halos!(f, solver.decomp)
+        CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
+        @test ferr(solver, df, (x, y, z) -> (deg + 1) * x^deg) > 1e-7
+    end
+    @test_throws ErrorException lele_d1_6(closures=:unknown)
+end
+
 @testset "filter: constants exact, Nyquist damped, parity of closures" begin
     solver = mkslv(n_global=(32, 12, 12))
     f = CL.field(solver.decomp)
@@ -2962,7 +2991,8 @@ end
     # physically meaningful mirror values.
     cpu = CL.KernelAbstractions.CPU()
     function compare(scheme, dim; periodic=false, lo_fold=nothing)
-        d = CL.Decomp((16, 12, 14), (periodic, periodic, periodic); dims=(1, 1, 1))
+        # 13 is the smallest extent the six-row T8 closure set accepts.
+        d = CL.Decomp((16, 13, 14), (periodic, periodic, periodic); dims=(1, 1, 1))
         plan = CL.plan_direction(d, scheme, dim, 0.1; lo_fold=lo_fold)
         dplan = device_plan(plan, cpu)
         f = CL.field(d)
@@ -2974,7 +3004,9 @@ end
         apply_along!(out_d, dplan, f, d)
         return view(out_h, CL.interior(d)) == view(out_d, CL.interior(d))
     end
-    schemes = (lele_d1_6(Float64), lele_d1_10(Float64), compact_filter(0.45),
+    schemes = (lele_d1_6(Float64), lele_d1_6(Float64; closures=:brady_livescu),
+               lele_d1_8(Float64), lele_d1_8(Float64; closures=:brady_livescu),
+               lele_d1_10(Float64), compact_filter(0.45),
                gaussian_filter(Float64), compact_d8(Float64))
     for scheme in schemes, periodic in (false, true), dim in 1:3
         @test compare(scheme, dim; periodic=periodic)

@@ -218,6 +218,23 @@ Presets:
 
 - `lele_d1_6()` — sixth-order tridiagonal first derivative (α = 1/3, a = 14/9,
   b = 1/9) with third/fourth-order one-sided closures on the first two rows.
+- `lele_d1_8()` — eighth-order tridiagonal first derivative (α = 3/8,
+  a = 25/16, b = 1/5, c = −1/80), the seven-point member of Lele's
+  tridiagonal family. It shares the tridiagonal line solve and every path
+  built on it (decomposed, multi-patch, device) with `lele_d1_6`, which the
+  pentadiagonal `lele_d1_10` does not; its closed edge takes three rows.
+- Both tridiagonal derivatives take `closures = :cascade3` (default; row 1 is
+  Lele's third-order one-sided row, row 2 the fourth-order Padé row, row 3 the
+  C6 interior), `:cascade4` (row 1 at α = 3, fourth order) or
+  `:brady_livescu` (Brady & Livescu, Computers & Fluids 2019, schemes T6 and
+  T8, set 1 of their Data in Brief databases: four fifth-order rows for C6, six
+  seventh-order rows for C8, discretely conservative and stable on their
+  long-time Euler tests without a filter). Measured maximum-norm wall orders
+  in `test/convergence.jl` are 3.17 / 4.02 / 5.88 for C6 and 7.91 for C8 under
+  `:brady_livescu`. The Brady–Livescu rows are far from diagonally dominant,
+  and a closed line's condition number rises from 16 to about 1e3 (C6) and
+  4e3 (C8); the cascade stays the default for that reason. The T8 set needs
+  13 points per dimension on every rank.
 - `pade_d1_4()` — fourth-order Padé first derivative.
 - `compact_filter(alphaf)` — the eighth-order Gaitonde–Visbal filter, whose
   strength parameter α is spelled `alphaf` in the code. `alphaf ∈ (−½, ½)`

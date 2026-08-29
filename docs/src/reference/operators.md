@@ -13,6 +13,7 @@ BandedClosureRow
 BandedCompactScheme
 pade_d1_4
 lele_d1_6
+lele_d1_8
 lele_d1_10
 compact_filter
 gaussian_filter

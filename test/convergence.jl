@@ -6,11 +6,14 @@
 #   julia --project=. -t auto test/convergence.jl
 #
 # What each study pins down:
-#   1. Interior order — 6 for lele_d1_6, 10 for lele_d1_10 on periodic grids.
-#      A wrong interior coefficient shows as a wrong slope, not a wrong level.
+#   1. Interior order — 6 for lele_d1_6, 8 for lele_d1_8, 10 for lele_d1_10
+#      on periodic grids. A wrong interior coefficient shows as a wrong slope,
+#      not a wrong level.
 #   2. Closed-domain order — the global max-norm order drops to the closure
 #      order near walls. A slope of 1 means the boundary rows are wrong; a
-#      slope of 6 means the closures are never being hit.
+#      slope of 6 means the closures are never being hit. The default
+#      `:cascade3` closures are measured alongside the `:cascade4` and
+#      `:brady_livescu` alternatives, whose whole purpose is this slope.
 #   3. Axis/origin/pole order — the sharpest scalar diagnostic of the fold
 #      signs: a sign error usually gives O(1) error at the first node, so the
 #      slope collapses to ~0 rather than degrading gracefully.
@@ -20,11 +23,13 @@
 # The `expect` values below are REGRESSION GUARDS set from measured behaviour,
 # not from the formal interior order. Measured on this code (max norm):
 #
-#   C6 interior 6.01 | C10 interior 10.04 | C6 wall closures 3.17
+#   C6 interior 6.01 | C8 interior 8.00 | C10 interior 10.04
+#   C6 wall closures 3.17 | C6 wall closures :cascade4 4.02
+#   C6 wall closures :brady_livescu 5.88 | C8 wall closures :brady_livescu 7.91
 #   cyl axis odd 3.71 | cyl axis even 3.00 | resolved-θ axis 3.71
 #   spherical origin 2.99
 #
-# Those seven numbers are also passed to each study as `recorded` and guarded to
+# Those eleven numbers are also passed to each study as `recorded` and guarded to
 # ±0.02, separately from the wide `expect`/`tol` pair. See the comment on
 # `study` for which failure each guard reports.
 #
@@ -147,6 +152,12 @@ study("C6 periodic derivative", (16, 32, 64),
       (x, y, z) -> sin(x),
       (fn=(x, y, z) -> cos(x), parity=1); expect=6.0, tol=1.2, recorded=6.01)
 
+study("C8 periodic derivative", (16, 32, 64),
+      N -> Solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
+                  deriv=lele_d1_8(), art=ArtParams(enabled=false)),
+      (x, y, z) -> sin(x),
+      (fn=(x, y, z) -> cos(x), parity=1); expect=8.0, tol=1.5, recorded=8.00)
+
 study("C10 periodic derivative", (16, 24, 32),
       N -> Solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
                   deriv=lele_d1_10(), art=ArtParams(enabled=false)),
@@ -161,6 +172,35 @@ study("C6 with wall closures", (24, 48, 96),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=3.2, tol=0.8, recorded=3.17)
+
+study("C6 wall closures, :cascade4", (24, 48, 96),
+      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                  deriv=lele_d1_6(closures=:cascade4),
+                  art=ArtParams(enabled=false)),
+      (x, y, z) -> exp(sin(3x)),
+      (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
+      expect=4.0, tol=0.8, recorded=4.02)
+
+study("C6 wall closures, :brady_livescu", (24, 48, 96),
+      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                  deriv=lele_d1_6(closures=:brady_livescu),
+                  art=ArtParams(enabled=false)),
+      (x, y, z) -> exp(sin(3x)),
+      (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
+      expect=6.0, tol=1.0, recorded=5.88)
+
+# The six-row T8 closure set needs 13 points per dimension on every rank,
+# periodic dimensions included (plan_direction's extent check), hence 16.
+study("C8 wall closures, :brady_livescu", (24, 48, 96),
+      N -> Solver(n_global=(N, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                  deriv=lele_d1_8(closures=:brady_livescu),
+                  art=ArtParams(enabled=false)),
+      (x, y, z) -> exp(sin(3x)),
+      (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
+      expect=8.0, tol=1.2, recorded=7.91)
 
 println("\n=== coordinate-singularity folds ===")
 study("cylindrical axis, odd field (u_r-like)", (32, 64, 128),

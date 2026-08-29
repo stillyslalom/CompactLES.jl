@@ -109,8 +109,9 @@ which carries CairoMakie already, and under `mpiexec` for the
 decomposition-independent profile.
 
 `test/convergence.jl` prints measured orders against regression guards baked
-into the file: C6 6.01, C10 10.04, C6 wall closures 3.17, cylindrical axis odd
-3.71 / even 3.00, resolved-θ 3.71, spherical origin 2.99. **For a change not
+into the file: C6 6.01, C8 8.00, C10 10.04, C6 wall closures 3.17 (`:cascade4`
+4.02, `:brady_livescu` 5.88), C8 wall closures `:brady_livescu` 7.91,
+cylindrical axis odd 3.71 / even 3.00, resolved-θ 3.71, spherical origin 2.99. **For a change not
 meant to affect numerics these should come out bit-identical, down to the error
 magnitudes.** A moved digit means you hit something real — chase it before
 moving on. Each study now asserts both a wide guard, which fails when the order

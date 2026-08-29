@@ -825,3 +825,33 @@ bitwise against the CPU and 9.9× faster than 8-thread `@threaded` at 64³
 with two species; `bench/device_bringup.jl` carries the measurement. The
 default path stayed bit-identical on every guard, and jetcheck/audit held
 probe for probe.
+
+## Wall closures and the tridiagonal C8 (August 2026)
+
+The closed-domain order of the tridiagonal derivatives had sat at 3.17 since
+the first convergence study, set by the third-order one-sided first row of
+the Carpenter–Gottlieb–Abarbanel cascade. Two alternatives now sit behind a
+`closures` keyword on `lele_d1_6` and the new `lele_d1_8`. `:cascade4`
+substitutes Lele's fourth-order one-sided row (α = 3) and measures 4.02.
+`:brady_livescu` applies the rows of Brady and Livescu (Computers & Fluids
+2019), set 1 of the T6 and T8 databases in their Data in Brief companion:
+every row one order below the interior, discretely conservative under
+tabulated quadrature weights, and chosen by optimization on the 1-D Euler
+equations for stability without a filter. All sixteen T6 sets were
+evaluated from the published constraint files; every one is exact through
+degree five on every row, and set 1 is both the published table and among
+the best conditioned. Measured wall orders are 5.88 for C6 and 7.91 for C8.
+The cost is conditioning: those rows are far from diagonally dominant, and
+the closed line's condition number rises from 16 to about 1e3 (T6) and 4e3
+(T8), which is why `:cascade3` stays the default. Whether the rows hold
+under the artificial properties near a wall, and whether the filter's own
+closure cascade then caps the observed Navier–Stokes wall order, has not
+been measured.
+
+`lele_d1_8` is the seven-point tridiagonal member of Lele's family (α = 3/8,
+a = 25/16, b = 1/5, c = −1/80), measuring 8.00 periodic. It exists because
+the pentadiagonal C10 is confined to a single patch while the tridiagonal
+solve carries the decomposed, multi-patch and device paths, so C8 is the
+highest order available on the full stack; the KA-CPU device comparison is
+bitwise for it and for both Brady–Livescu sets. Every default-path guard
+came out bit-identical.

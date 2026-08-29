@@ -117,7 +117,7 @@ prob = Problem(
 
 num = Numerics(
     n_global = (256, 64, 64),                # global grid
-    deriv    = lele_d1_6(),                  # or lele_d1_10(), or a custom scheme
+    deriv    = lele_d1_6(),                  # or lele_d1_8(), lele_d1_10(), or a custom scheme
     cfl      = 0.5,
     control  = StepControl(retries=4),       # roll back and lower cfl on failure
     dims     = nothing)                      # process grid; nothing → auto

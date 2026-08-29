@@ -12,10 +12,10 @@
 # automatically (LHS sub/super swapped; RHS reversed, negated for derivatives).
 #
 # Users supply their own schemes by constructing CompactScheme directly; the
-# presets below cover the standard Lele sixth-order interior, a fourth-order
-# Padé variant, the Gaitonde–Visbal eighth-order filter, and the explicit
-# nine-point Gaussian test filter. Each preset takes the element type as an
-# optional trailing argument, defaulting to Float64.
+# presets below cover the standard Lele sixth- and eighth-order tridiagonal
+# interiors, a fourth-order Padé variant, the Gaitonde–Visbal eighth-order
+# filter, and the explicit nine-point Gaussian test filter. Each preset takes
+# the element type as an optional trailing argument, defaulting to Float64.
 
 abstract type AbstractCompactScheme end
 
@@ -67,19 +67,131 @@ end
 nclosure(scheme::CompactScheme) = length(scheme.closures)
 halfwidth(scheme::CompactScheme) = length(scheme.coeffs)
 
+# Closure rows for the tridiagonal derivative presets. Three sets are offered,
+# selected by the `closures` keyword of `lele_d1_6` and `lele_d1_8`:
+#
+#   :cascade3      Lele's one-sided row 1 at α = 2 (third order), the centered
+#                  Padé row 2 (fourth), then the C6 interior row (sixth) for a
+#                  scheme reaching ±3. This is the reduced-order cascade of
+#                  Carpenter, Gottlieb & Abarbanel (1993) and the default.
+#   :cascade4      The same with row 1 at α = 3, Lele's fourth-order one-sided
+#                  row. Gaitonde & Visbal run it under the compact filter.
+#   :brady_livescu Brady & Livescu (Computers & Fluids 2019), scheme T6 or
+#                  T8, set 1 of the companion Data in Brief databases
+#                  (doi 10.1016/j.dib.2019.104086): every row one order below
+#                  the interior, discretely conservative under the quadrature
+#                  weights the paper tabulates, and stable on their long-time
+#                  Euler tests without a filter. The tables below are
+#                  evaluated from the published constraint files in 256-bit
+#                  arithmetic and rounded once.
+#
+# The Brady–Livescu rows are far from diagonally dominant (row 1 of T6 has a
+# superdiagonal of 6.74, row 2 of T8 one of 42.1), so a closed line's
+# unpivoted Thomas factorization carries a condition number near 1e3–4e3
+# against 16 for the cascades. That is three lost digits in Float64 and is
+# the reason the cascade stays the default.
+
+function cascade_closures(::Type{T}, nrows::Int, first_order::Int) where {T}
+    row1 = first_order == 3 ?
+        ClosureRow{T}((zero(T), one(T), T(2)), T[-5//2, 2, 1//2]) :
+        ClosureRow{T}((zero(T), one(T), T(3)), T[-17//6, 3//2, 3//2, -1//6])
+    rows = [row1,
+            ClosureRow{T}((T(1//4), one(T), T(1//4)), T[-3//4, 0, 3//4]),
+            ClosureRow{T}((T(1//3), one(T), T(1//3)),
+                          T[-1//36, -7//9, 0, 7//9, 1//36])]
+    rows[1:nrows]
+end
+
+# Brady–Livescu T6 set 1 (Table A.10 of the paper), four fifth-order rows.
+const BRADY_LIVESCU_T6 = (
+    ((0.0, 1.0, 6.736832494852786),
+     [-3.6306998323038906, -2.298235202757185, 8.473664989705572,
+      -3.4034991615194525, 0.9956108316175953, -0.1368416247426393]),
+    ((0.4885251620537965, 1.0, 2.7185849538712983),
+     [-1.1795365389959371, 0.0, -1.3488207948927484,
+      3.3470021607172864, -0.9569693577017367, 0.1383245308731359]),
+    ((-0.3891997445794, 1.0, -1.1117328224921332),
+     [0.1648977096656178, -0.35630014899535, 0.0,
+      1.0186221370820223, -0.9355996594392, 0.10837996168691]),
+    ((-0.5719411698333021, 1.0, -0.11930391824998438),
+     [-0.06789558773749765, 0.5757385576666458, -0.9286568616388837,
+      0.0, 0.5137393810208425, -0.09292548931110695]))
+
+# Brady–Livescu T8 set 1 (Table 5 of the paper), six seventh-order rows.
+const BRADY_LIVESCU_T8 = (
+    ((0.0, 1.0, 3.210113927329531),
+     [-3.0514448467613615, 2.34533480537218, -0.8696582180114064,
+      3.6413818483428386, -3.399810121117448, 1.7924145545028516,
+      -0.5246438812007604, 0.0664258588731064]),
+    ((2.2111047304323885, 1.0, 42.08319933908016),
+     [-4.873954900119213, 0.0, -53.18177248515288, 93.43488742017814,
+      -52.749832507183534, 22.564372980842755, -5.886555463761134,
+      0.6928549551958666]),
+    ((1.557633196122124, 1.0, 6.482610425055064),
+     [-0.2604486511132088, -1.9436404252049067, 0.0, -3.8480689299024093,
+      8.245332418591937, -2.7796746912747787, 0.6603673342280957,
+      -0.0738670553247296]),
+    ((-1.329341564172446, 1.0, -2.4655692736207433),
+     [-0.05878600824425403, 0.7074851396321983, -0.29835322348447363, 0.0,
+      1.4913923184051858, -2.222455418896595, 0.42400205770977817,
+      -0.0432848651218399]),
+    ((-1.2137038102472755, 1.0, 1.6607695424897684),
+     [0.05619441751764611, -0.47611421984355806, 1.967293657743865,
+      -2.297921866880886, 0.0, -0.7202751534930104, 1.8653374792388604,
+      -0.4478236435362061, 0.0533093292532889]),
+    ((-0.1776191023391514, 1.0, 0.22329248864693368),
+     [-0.00535309375150073, 0.0495326225233603, -0.2157074945553578,
+      0.6319138819385538, -1.1442347131478185, 0.0, 0.678311555099823,
+      0.005414306071706973, 0.00012293582123288293]))
+
+function derivative_closures(::Type{T}, closures::Symbol, nrows::Int, table) where {T}
+    closures === :cascade3 && return cascade_closures(T, nrows, 3)
+    closures === :cascade4 && return cascade_closures(T, nrows, 4)
+    closures === :brady_livescu && return [
+        ClosureRow{T}(T.(lhs), T.(rhs)) for (lhs, rhs) in table]
+    error("unknown closure set $(repr(closures)); " *
+          "use :cascade3, :cascade4 or :brady_livescu")
+end
+
 """
-    lele_d1_6()
+    lele_d1_6(T=Float64; closures=:cascade3)
 
 Sixth-order tridiagonal first derivative (Lele 1992): α = 1/3, a = 14/9,
-b = 1/9. A closed edge takes two closure rows: a third-order one-sided row 1
-and a fourth-order centered Padé row 2.
+b = 1/9. `closures` selects the rows applied at a closed edge:
+
+- `:cascade3` (default): a third-order one-sided row 1 and a fourth-order
+  centered Padé row 2, the usual reduced-order cascade.
+- `:cascade4`: Lele's fourth-order one-sided row 1 (α = 3) over the same
+  Padé row 2.
+- `:brady_livescu`: the four fifth-order rows of Brady & Livescu (2019),
+  scheme T6, conservative and stable without a filter on their tests but
+  with a closed-line condition number near 1e3 (see the source comment).
 """
-function lele_d1_6(::Type{T}=Float64) where {T}
+function lele_d1_6(::Type{T}=Float64; closures::Symbol=:cascade3) where {T}
     CompactScheme{T}("Lele C6 first derivative", T(1//3), zero(T),
         T[7//9, 1//36],   # a/2, b/4  (multiply (f_{i+1}−f_{i-1}), (f_{i+2}−f_{i-2}))
         false,
-        [ClosureRow{T}((zero(T), one(T), T(2)), T[-5//2, 2, 1//2]),
-         ClosureRow{T}((T(1//4), one(T), T(1//4)), T[-3//4, 0, 3//4])])
+        derivative_closures(T, closures, 2, BRADY_LIVESCU_T6))
+end
+
+"""
+    lele_d1_8(T=Float64; closures=:cascade3)
+
+Eighth-order tridiagonal first derivative (Lele 1992, eq. 2.1 with a
+seven-point right-hand side): α = 3/8, a = 25/16, b = 1/5, c = −1/80
+(consistency: a + b + c = 1 + 2α). It keeps the tridiagonal line solve of
+[`lele_d1_6`](@ref), and with it the multi-patch, device and decomposed paths
+that the pentadiagonal [`lele_d1_10`](@ref) does not have, at two more
+multiply-adds per point. The interior reaches ±3, so a closed edge takes three
+rows under `:cascade3`/`:cascade4` (the C6 cascade plus the C6 interior row)
+and the six seventh-order rows of Brady & Livescu's scheme T8 under
+`:brady_livescu`. Requires `n_halo ≥ 3`.
+"""
+function lele_d1_8(::Type{T}=Float64; closures::Symbol=:cascade3) where {T}
+    CompactScheme{T}("Lele C8 first derivative", T(3//8), zero(T),
+        T[25//32, 1//20, -1//480],   # a/2, b/4, c/6
+        false,
+        derivative_closures(T, closures, 3, BRADY_LIVESCU_T8))
 end
 
 """

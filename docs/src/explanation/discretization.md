@@ -109,10 +109,24 @@ periodic dimension omits the duplicate endpoint and uses a cyclic compact
 system. Coordinate singularities instead use the parity and antipodal folds
 described in [Curvilinear coordinates](@ref).
 
+The tridiagonal derivatives [`lele_d1_6`](@ref) and [`lele_d1_8`](@ref) offer
+three closure sets through their `closures` keyword. The default `:cascade3`
+is the reduced-order cascade of Carpenter, Gottlieb and Abarbanel (1993): a
+third-order one-sided first row, a fourth-order Padé second row, and the
+sixth-order interior row where a third is needed. `:cascade4` raises the first
+row to Lele's fourth-order one-sided relation. `:brady_livescu` applies the
+closure rows of Brady and Livescu (2019), one order below the interior on
+every row, constructed to be discretely conservative and selected by
+optimization on the Euler equations for stability without a filter. Their
+rows are far from diagonally dominant, and the closed-line condition number
+rises from about 16 to about 1e3, which costs three digits at the wall and is
+the reason the cascade remains the default.
+
 Formal interior order should not be quoted as the accuracy of a wall-bounded
 calculation. If the error is dominated by closure points, refinement exposes
 the lower closure order. This is why the validation suite reports interior and
-closed-domain convergence separately.
+closed-domain convergence separately, and reports the closed-domain order for
+each closure set.
 
 ## Five-stage time advancement
 

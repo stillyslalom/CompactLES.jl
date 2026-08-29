@@ -312,7 +312,8 @@ Grid, scheme, timestep, and decomposition choices used to realize a
 - `n_global`: required three-tuple giving the global point count in each
   coordinate direction. A count of one collapses that direction: it has no
   derivative, halo, or decomposition.
-- `deriv`: compact first-derivative scheme. Default: [`lele_d1_6()`](@ref).
+- `deriv`: compact first-derivative scheme. Default: [`lele_d1_6()`](@ref);
+  [`lele_d1_8()`](@ref) and [`lele_d1_10()`](@ref) are the higher-order presets.
 - `filt`: compact filter applied to the conserved state. Default:
   [`compact_filter(0.45)`](@ref), where values nearer `0.5` filter more weakly.
   It doubles as the artificial-property sensor smoother only under
