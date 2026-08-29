@@ -309,7 +309,9 @@ collective along each decomposed dimension.
 function filter_field!(f, solver; σf::Int=1)
     for d in 1:3
         solver.decomp.active[d] || continue
-        exchange_halos!(f, solver.decomp)
+        # Only dimension d: the pass is a 1-D stencil along d, so the other
+        # two dimensions' halos are dead, exactly as in `smooth!`.
+        exchange_dim!(f, solver.decomp, d)
         filt_along!(solver.tmp_a, f, solver, d, σf)
         copy_interior!(f, solver.tmp_a, solver.decomp)
     end
@@ -350,44 +352,44 @@ function _fill_t!(B::Matrix{T}, plan, f, decomp::Decomp, ::Val{D}) where {T,D}
                 rhs = plan.clo[jr]
                 i0 = plan.clo_first[jr] - 1
                 for i in 1:nx
-                    sensor_sp = zero(T)
+                    acc = zero(T)
                     for κ in eachindex(rhs)
-                        sensor_sp += rhs[κ] * (D == 2 ? f[i+o1, i0+κ+o2, kk+o3] :
+                        acc += rhs[κ] * (D == 2 ? f[i+o1, i0+κ+o2, kk+o3] :
                                                     f[i+o1, kk+o2, i0+κ+o3])
                     end
-                    B[base+i, jr] = sensor_sp
+                    B[base+i, jr] = acc
                 end
             elseif kind == 2
                 rhs = plan.chi[n + 1 - jr]
                 i0 = n + 2 - plan.chi_first[n + 1 - jr]
                 for i in 1:nx
-                    sensor_sp = zero(T)
+                    acc = zero(T)
                     for κ in eachindex(rhs)
-                        sensor_sp += rhs[κ] * (D == 2 ? f[i+o1, i0-κ+o2, kk+o3] :
+                        acc += rhs[κ] * (D == 2 ? f[i+o1, i0-κ+o2, kk+o3] :
                                                     f[i+o1, kk+o2, i0-κ+o3])
                     end
-                    B[base+i, jr] = sensor_sp
+                    B[base+i, jr] = acc
                 end
             elseif sym
                 for i in 1:nx
-                    sensor_sp = a0 * (D == 2 ? f[i+o1, jr+o2, kk+o3] :
+                    acc = a0 * (D == 2 ? f[i+o1, jr+o2, kk+o3] :
                                           f[i+o1, kk+o2, jr+o3])
                     for mm in 1:M
-                        sensor_sp += ci[mm] * (D == 2 ?
+                        acc += ci[mm] * (D == 2 ?
                             (f[i+o1, jr+mm+o2, kk+o3] + f[i+o1, jr-mm+o2, kk+o3]) :
                             (f[i+o1, kk+o2, jr+mm+o3] + f[i+o1, kk+o2, jr-mm+o3]))
                     end
-                    B[base+i, jr] = sensor_sp
+                    B[base+i, jr] = acc
                 end
             else
                 for i in 1:nx
-                    sensor_sp = zero(T)
+                    acc = zero(T)
                     for mm in 1:M
-                        sensor_sp += ci[mm] * (D == 2 ?
+                        acc += ci[mm] * (D == 2 ?
                             (f[i+o1, jr+mm+o2, kk+o3] - f[i+o1, jr-mm+o2, kk+o3]) :
                             (f[i+o1, kk+o2, jr+mm+o3] - f[i+o1, kk+o2, jr-mm+o3]))
                     end
-                    B[base+i, jr] = sensor_sp
+                    B[base+i, jr] = acc
                 end
             end
         end

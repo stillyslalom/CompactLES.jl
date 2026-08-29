@@ -349,28 +349,3 @@ function interpolate!(fine_field, plan::TransferPlan, coarse_field)
     end
     return fine_field
 end
-
-"""
-    inject!(coarse_field, plan, fine_field)
-
-The non-filtering half of [`restrict!`](@ref): copy the fine field's
-coincident-node values onto the interior of `coarse_field` and return it.
-Exact pointwise on the shared nodes; unlike `restrict!` it applies no
-anti-alias filter, so content between the coarse and fine Nyquist folds onto
-the coarse grid and must be handled by the coarse level's own regularization.
-The level sync uses this as its default for the converse of the
-reasoning on [`interpolate!`](@ref): the filtered restriction writes an
-attenuated representation into a coarse field that everywhere else holds
-point samples.
-"""
-function inject!(coarse_field, plan::TransferPlan, fine_field)
-    d = plan.dim
-    if d == 1
-        _subsample!(coarse_field, fine_field, plan, Val(1))
-    elseif d == 2
-        _subsample!(coarse_field, fine_field, plan, Val(2))
-    else
-        _subsample!(coarse_field, fine_field, plan, Val(3))
-    end
-    return coarse_field
-end

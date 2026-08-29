@@ -26,12 +26,16 @@ const NMAX = 2_000_000
 # --- profile extraction -----------------------------------------------------
 
 """
-    line_profile(solver, Q) -> (x, rho, u, p)
+    case_line_profile(solver, Q) -> (x, rho, u, p)
 
 Interior (x, ρ, u, p) along dimension 1 at j = k = 1, gathered across the
 dimension-1 sub-communicator so the cases read the same under `mpiexec`.
+
+Named apart from the exported `line_profile`, which these files bring into
+scope through `using CompactLES` and which returns a single named field rather
+than the four the cases compare against.
 """
-function line_profile(solver, Q)
+function case_line_profile(solver, Q)
     CL.exchange_state!(Q, solver.decomp)
     CL.primitives!(solver, Q)
     nx = solver.decomp.n_local[1]
@@ -102,7 +106,7 @@ function tube(left, right; N, L=1.0, x0=0.5, tfin, γ=1.4,
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filter_interval=1))
     run!(solver, Q; tfinal=tfin, nmax=nmax)
-    return line_profile(solver, Q)..., completed(solver, tfin)
+    return case_line_profile(solver, Q)..., completed(solver, tfin)
 end
 
 # Lax: Sod's harder sibling. The left state carries momentum, so the star
@@ -147,7 +151,7 @@ function woodward(; N=WC_N, art=ArtParams(enabled=true), cfl=0.3, nmax=NMAX,
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filter_interval=1))
     run!(solver, Q; tfinal=WC_T, nmax=nmax)
-    return line_profile(solver, Q)..., completed(solver, WC_T)
+    return case_line_profile(solver, Q)..., completed(solver, WC_T)
 end
 
 # --- Sedov–Taylor -----------------------------------------------------------
@@ -180,7 +184,7 @@ function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtParams(enabled=true), cfl=
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filter_interval=1))
     run!(solver, Q; tfinal=SEDOV_T, nmax=nmax)
-    return line_profile(solver, Q)..., completed(solver, SEDOV_T)
+    return case_line_profile(solver, Q)..., completed(solver, SEDOV_T)
 end
 
 # --- Noh --------------------------------------------------------------------
@@ -240,7 +244,7 @@ function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filter_interval=1))
     run!(solver, Q; tfinal=NOH_T - t0, nmax=nmax)
-    return line_profile(solver, Q)..., completed(solver, NOH_T - t0)
+    return case_line_profile(solver, Q)..., completed(solver, NOH_T - t0)
 end
 
 # --- species interface ------------------------------------------------------

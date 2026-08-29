@@ -15,6 +15,7 @@ the place to record a result.
 | `reference/AMR_GPU.md` | the patch-AMR + GPU design as delivered, measured lessons, roadmap |
 | `reference/IMMERSED.md` | the immersed-boundary design: level-set bodies, blend imposition |
 | `reference/MODE_TRUNCATION.md` | azimuthal mode truncation plan for the pole CFL squeeze |
+| `docs/` | the Documenter site: `make.jl` and the `src/` pages. `docs/src/tutorials/` and `docs/build/` are generated (from `docs/literate/`) and gitignored, so edit `literate/`, never `src/tutorials/` |
 
 Read those for anything about *what* the code does, *where* it runs, or *where it
 is going*. This file is about *how to work on it*. When something you measure
@@ -56,8 +57,10 @@ a core), the sizing tools, and the measured scaling.
 
 `Manifest.toml` is gitignored, so a fresh checkout needs `Pkg.instantiate()`
 before anything runs. `bench/tgv_energy.jl` is the intended first real workload
-on a cluster: the one bench script whose reductions are all collective and which
-reproduces serial numbers bit-for-bit under decomposition.
+on a cluster: the one bench script whose reductions are all collective. Those
+reductions are order-dependent `Allreduce(+)`, so it reproduces serial numbers
+to round-off (of order 1e-14 relative), not bit-for-bit; `test/mpi_tests.jl`
+measures 3.1e-15 at np = 4 for the decomposed compact solve it rests on.
 
 ## The gate
 
@@ -76,6 +79,17 @@ julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
 ```
 
+The `95 testsets` and the `110/110` are counted by different mechanisms and are
+not comparable. `runtests.jl` reports `@testset` blocks under `Test`, each
+holding many `@test`s, and its includes (`float32_validation.jl`,
+`device_tests.jl`, `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, and the
+device/adapt testsets) contribute to that total; `mpi_tests.jl` uses `Test` not
+at all and counts individual `check(name, val, tol)` assertions, printing
+`passed/total` and exiting nonzero on any failure. Adding a testset moves the
+first number, adding one assertion moves the second, and neither is a fraction
+of the other, so treat both as figures to record before a change and compare
+after.
+
 `test/hdf5_tests.jl` covers the HDF5 extension and is skipped by the gate above:
 HDF5 is a `[weakdeps]` entry, so it is not loadable from the package
 environment. `runtests.jl` prints when it skips. To run it, use an environment
@@ -86,12 +100,23 @@ backend the libhdf5 build selects; it is `false` on a workstation, and the
 collective path can only be exercised where a parallel libhdf5 built against
 the run's MPI exists.
 
+`test/makie_tests.jl` covers the Makie extension and is skipped the same way,
+but for a different reason: HDF5 is in `Project.toml`'s test target and
+CairoMakie deliberately is not, because resolving and precompiling it for two
+testsets is out of proportion to what they cover. **`Pkg.test` therefore never
+runs them.** The Makie extension is verified only from the docs environment,
+which carries CairoMakie already, and under `mpiexec` for the
+decomposition-independent profile.
+
 `test/convergence.jl` prints measured orders against regression guards baked
 into the file: C6 6.01, C10 10.04, C6 wall closures 3.17, cylindrical axis odd
 3.71 / even 3.00, resolved-θ 3.71, spherical origin 2.99. **For a change not
 meant to affect numerics these should come out bit-identical, down to the error
 magnitudes.** A moved digit means you hit something real — chase it before
-moving on.
+moving on. Each study now asserts both a wide guard, which fails when the order
+has regressed, and a ±0.02 guard against the number above, which fails when it
+has drifted; the two print different diagnostics. Update a `recorded` value only
+together with the list here and the table in the file's header.
 
 `test/validation.jl` prints measured errors against guards baked into its
 header. Unlike the convergence orders these are **not** bit-reproducible: each
@@ -258,6 +283,13 @@ says little.
 **Julia soft scope.** A top-level `for` in a script that reassigns a variable
 bound outside it throws `UndefVarError`. Wrap script bodies in a function.
 
+**A nondeterministic crash or bitwise failure in the serial suite under Julia
+1.12.7 on Windows may not be yours.** `reference/julia_codegen_bug_report.md`
+diagnoses a concurrent-JIT race: three `EXCEPTION_ACCESS_VIOLATION` signatures
+in the compile path, a crash line that moves between runs, and the `device line
+solves` testset failing a bitwise comparison on a few of forty. Read it before
+bisecting a change against a failure of that shape.
+
 **A run that fails does not stop.** Losing positivity drives the diffusive rate
 in `compute_dt` up until `dt` collapses, and the run then grinds forever at no
 progress — so a sweep that visits bad configurations must pass a low `nmax`, and
@@ -331,7 +363,17 @@ decision worth revisiting.
   machine and compare tables),
   `tgv_energy.jl` (Taylor–Green kinetic-energy budget split
   by dissipation channel; the one bench script that runs usefully under
-  `mpiexec`, and the intended first workload on a cluster).
+  `mpiexec`, and the intended first workload on a cluster),
+  `amr_cost.jl` (equal accuracy at reduced cost: a coarse, a composite and a
+  uniform-fine run of the same 3-D mixing case, differenced on the shared
+  coarse lattice),
+  `device_solver.jl` (whole-solver device acceptance battery against the CPU
+  solver, in Float64 and Float32; needs a device package),
+  `device_mpi.jl` (distributed device runs: staged halo, fold-pair and
+  reduced-solve traffic, with transfer volume and copy time from the tracking
+  counters),
+  `stall_mwe.jl` (the MI300A wait-stall reproducer ladder; depends on AMDGPU.jl
+  alone so it can be attached to a ticket as-is).
 - Scripts take their settings from `ARGS`, not the environment: positional
   values first, then `key=value`, parsed by `script_args` (`src/scriptargs.jl`)
   against a defaults `NamedTuple` that doubles as the schema. Give a new script
@@ -366,28 +408,14 @@ Each of these cost someone real time to establish. The measurements and the
 rejected hypotheses are in the file named — read it before re-deriving any of
 them.
 
-- **Strong shocks need `cfl ≤ 0.15`.** The failure starts at the symmetry plane
-  (wall, axis or origin cell) as the shock forms, *not* ahead of the front and
-  *not* from the one-step lag in `compute_dt`. Both of those were the standing
-  explanations and both are measured wrong: the lag was tested with a rate
-  predictor to 30 steps of lookahead, and β\* is measured to reach three to five
-  times further ahead of the front than the damage extends while sitting at or
-  near its own domain maximum on the cell that fails.
-  A dilatation-keyed β\* was tested and rejected: the ceiling does not move, and
-  it loses both converging Noh geometries at the coordinate fold. Gating the
-  *strain* sensor on compression (`beta_sensor = :gated_strain`) does move it,
-  0.15 → 0.2, but only for the cylindrical geometry, and it does so by relieving
-  the axis cell rather than the shock. `StepControl(retries = 4)` beats a
-  globally lowered CFL, because the restriction is a startup one.
-  The eighth-derivative detector (`detector = :d8`) lifts the restriction
-  outright at the planar wall and the cylindrical axis, 0.2 → 1.0 or beyond,
-  and costs the spherical origin 0.4 → 0.25. **Every discretization-order
-  candidate is now ruled out**, including the fold closure, which is sixth to
-  seventh order at the fold — the third-order figure long attributed to it is
-  the outer wall's, read through a global max norm (`bench/foldorder.jl`). The
-  origin cell instead evacuates during a startup transient at a fixed physical
-  time that every configuration passes through, so treat this as a robustness
-  problem at a symmetry cell, not a numerics problem at a fold.
+- **A converging strong shock is CFL-limited at the symmetry cell**, not ahead
+  of the front. Under the shipped `smoother = :gaussian` the ceilings are 0.4 at
+  the spherical origin and 0.2 at both the cylindrical axis and the planar wall;
+  `detector = :d8` lifts the latter two past 1.0 and costs the origin 0.4 →
+  0.25. The restriction is a startup one, so `StepControl(retries = 4)` beats a
+  globally lowered CFL. Every discretization-order explanation has been measured
+  and ruled out, the fold closure included. The `cfl ≤ 0.15` figure recorded
+  here previously is the retired `:compact` smoother's.
   → `reference/CALIBRATION.md`
 - **κ\* is singular as `T_ion` → 0**, so a cold ambient below p ≈ 1e-3 collapses
   the diffusive timestep. `art_conductivity_scale` is an EOS dispatch point, so a
@@ -395,15 +423,17 @@ them.
 - **The spherical origin fold is much less forgiving than the cylindrical axis.**
   It needs initial data resolved over ≳3 cells and will not take Noh's singular
   t = 0 start, both of which the axis handles. Nobody has worked out why.
-- **The compact filter, not the Cook artificial properties, is what holds this
-  solver together — and it has never been calibrated.** At 128³ TGV the filter
+- **The compact filter, not the Cook artificial properties, holds this solver
+  together, and it has never been calibrated.** At 128³ TGV the filter
   supplies 37% of the energy sink yet removing it kills the run, while removing
   the artificial properties entirely does not. So every `C_mu` number is
   conditional on `compact_filter(0.45)` applied every step, and `C_mu` itself is
   active but not yet fitted. → `reference/CALIBRATION.md`
-- **`compute_artificial!` is ~31% of the multicomponent RHS**, in the filter
-  line-solves that smooth the sensors, one sweep per species. At `n_species == 2`
-  that machinery is measurably a no-op (`D*_1` and `D*_2` agree to 4.8e-16), and
+- **`compute_artificial!` is 24.8–26.0% of the multicomponent RHS** under the
+  shipped `:gaussian` smoother (the 31.8% figure is the retired `:compact` one),
+  in the filter line-solves that smooth the sensors, one sweep per species. At
+  `n_species == 2` that machinery is measurably a no-op (`D*_1` and `D*_2` agree
+  to 4.8e-16), and
   it only earns its cost at three or more species. Cutting it is a numerics
   decision (shared vs per-species sensor), not a code tweak.
 - The NASA CEA thermo and limited transport databases ship verbatim in `data/`

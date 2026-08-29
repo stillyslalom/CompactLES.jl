@@ -19,6 +19,25 @@
 # by construction. A fold is the exception. There the interior stencil runs to
 # the edge and does read the physical-edge halo, which is why `fold_fill!`
 # writes the parity mirror into it before every folded sweep (folds.jl).
+#
+# --- Message tags ------------------------------------------------------------
+#
+# Three families of point-to-point message travel over `decomp.comm` and its
+# sub-communicators, so their tags are allocated from disjoint ranges:
+#
+#   10d, 10d + 1     `exchange_dim!` and `_exchange_dim_staged!`, phase 1 and 2
+#   100d, 100d + 1   `exchange_dim_batch!` and `_exchange_dim_batch_staged!`
+#   41, 42           the fold pair exchanges in folds.jl, which reach the
+#                    network through `sendrecv_block!`
+#
+# Disjointness is not the property correctness rests on. Every message here is
+# a blocking `MPI.Sendrecv!` that all ranks of the sub-communicator reach in
+# the same order, so at most one message per partner is in flight at a time and
+# a receive cannot match a send from a later phase. The ranges are kept apart
+# so that a caller interleaving two families, or a future non-blocking variant,
+# does not depend on that argument. The patch interface records (patches.jl)
+# tag from 2000 and 16000 over the world communicator and cannot reach these
+# values.
 
 const PNULL = Int(MPI.PROC_NULL)
 
@@ -157,7 +176,9 @@ end
 
 "Periodic wrap of one field along `d`, in place, no buffers and no MPI."
 function wrap_dim!(f, decomp::Decomp, d::Int)
-    n_halo = decomp.n_halo
+    # The per-dimension pad, not `decomp.n_halo`: the two agree on an active
+    # dimension, and a collapsed one has no pad at all.
+    n_halo = decomp.n_halo_d[d]
     n = decomp.n_local[d]
     _assign_slab!(f, d, 1:n_halo,                  (n+1):(n+n_halo))
     _assign_slab!(f, d, (n+n_halo+1):(n+2*n_halo), (n_halo+1):(2*n_halo))
@@ -179,8 +200,15 @@ sub-communicator along `d` must call it, from a serial section: the exchange is
 two `MPI.Sendrecv!` phases through `decomp.send_buf[d]` and
 `decomp.recv_buf[d]`, shared with [`exchange_dim_batch!`](@ref) and resized on
 demand.
+
+`f` must carry the `Decomp`'s own element type. The staging buffers are
+`Vector{T}` for a `Decomp{T}`, so a field of any other type would be converted
+into and back out of them one element at a time, losing precision on the way
+out and costing a full pass over the slab in each direction. The signature
+rejects that pairing instead.
 """
-function exchange_dim!(f::AbstractArray{<:Real,3}, decomp::Decomp, d::Int)
+function exchange_dim!(f::AbstractArray{T,3}, decomp::Decomp{T},
+                       d::Int) where {T<:Real}
     decomp.active[d] || return f
     selfwrap(decomp, d) && return wrap_dim!(f, decomp, d)
     _staged_exchange(f) && return _exchange_dim_staged!(f, decomp, d)
@@ -259,21 +287,41 @@ three dimensions, in place, and return `f`. `f` must be sized
 `n_local .+ 2 .* n_halo_d`, which is what [`field`](@ref) allocates; collapsed
 dimensions carry no pad and are skipped. Dimensions are exchanged in turn, so
 edge and corner halos come out filled without dedicated diagonal messages.
-Every rank must call it, from a serial (non-threaded) section.
+Every rank must call it, from a serial (non-threaded) section. `f` carries the
+`Decomp`'s element type, for the reason [`exchange_dim!`](@ref) gives.
 """
-function exchange_halos!(f::AbstractArray{<:Real,3}, decomp::Decomp)
+function exchange_halos!(f::AbstractArray{T,3}, decomp::Decomp{T}) where {T<:Real}
     for d in 1:3
         exchange_dim!(f, decomp, d)
     end
     return f
 end
 
+"""
+Component views of the 4-D conserved array, indexed on demand rather than
+collected into a `Vector`. [`exchange_state!`](@ref) runs twice per step and
+built that vector — and one `SubArray` per conserved component — on every
+call; this wrapper is immutable, so the same loop allocates nothing.
+"""
+struct ComponentViews{V,A} <: AbstractVector{V}
+    Q::A
+end
+
+# `typeof` of a view that is never built: the expression is only inferred.
+ComponentViews(Q::AbstractArray{<:Any,4}) =
+    ComponentViews{typeof(view(Q, :, :, :, 1)),typeof(Q)}(Q)
+
+Base.size(c::ComponentViews) = (size(c.Q, 4),)
+Base.IndexStyle(::Type{<:ComponentViews}) = IndexLinear()
+Base.@propagate_inbounds Base.getindex(c::ComponentViews, i::Int) =
+    view(c.Q, :, :, :, i)
+
 "Exchange halos of every conserved component of the 4-D state array in place,
 returning `Q`. Components are batched into one message per neighbor per
 dimension per phase, six per rank when all three dimensions are active and
 decomposed. Every rank must call it, from a serial section."
-function exchange_state!(Q::AbstractArray{<:Real,4}, decomp::Decomp)
-    comps = [view(Q, :, :, :, c) for c in 1:size(Q, 4)]
+function exchange_state!(Q::AbstractArray{T,4}, decomp::Decomp{T}) where {T<:Real}
+    comps = ComponentViews(Q)
     for d in 1:3
         exchange_dim_batch!(comps, decomp, d)
     end
@@ -336,13 +384,18 @@ flux arrays, which are differentiated only along their own direction and
 therefore need halos only in that dimension, and for the conserved state (per
 dim).
 
-The slab size is taken from `fields[1]` and applied to all of them. Buffers are
-grown on demand. As with [`exchange_dim!`](@ref), every rank of the
-sub-communicator along `d` must call this with the same number of fields, from a
-serial section.
+The slab size is taken from `fields[1]` and applied to all of them, as is the
+element type, which must be the `Decomp`'s own for the reason
+[`exchange_dim!`](@ref) gives. Buffers are grown on demand. As with
+[`exchange_dim!`](@ref), every rank of the sub-communicator along `d` must call
+this with the same number of fields, from a serial section.
 """
-function exchange_dim_batch!(fields::AbstractVector, decomp::Decomp, d::Int)
+function exchange_dim_batch!(fields::AbstractVector, decomp::Decomp{T},
+                             d::Int) where {T}
     isempty(fields) && return fields
+    eltype(eltype(fields)) === T ||
+        error("exchange_dim_batch!: fields carry $(eltype(eltype(fields))) " *
+              "but the decomposition's exchange buffers are Vector{$T}")
     decomp.active[d] || return fields
     if selfwrap(decomp, d)
         for f in fields
@@ -372,7 +425,7 @@ function exchange_dim_batch!(fields::AbstractVector, decomp::Decomp, d::Int)
         end
     end
     MPI.Sendrecv!(sv, rv, decomp.comm; dest=hi, source=lo,
-                  sendtag=20d, recvtag=20d)
+                  sendtag=100d, recvtag=100d)
     if lo != PNULL
         for (fi, f) in enumerate(fields)
             copyto!(_slab(f, d, 1:n_halo), 1, rb, (fi - 1) * slabsz + 1, slabsz)
@@ -386,7 +439,7 @@ function exchange_dim_batch!(fields::AbstractVector, decomp::Decomp, d::Int)
         end
     end
     MPI.Sendrecv!(sv, rv, decomp.comm; dest=lo, source=hi,
-                  sendtag=20d + 1, recvtag=20d + 1)
+                  sendtag=100d + 1, recvtag=100d + 1)
     if hi != PNULL
         for (fi, f) in enumerate(fields)
             copyto!(_slab(f, d, (n+n_halo+1):(n+2*n_halo)), 1, rb,
@@ -422,7 +475,7 @@ function _exchange_dim_batch_staged!(fields::AbstractVector, decomp::Decomp,
         _tracked_copy!(sb, 1, dsend, 1, need)
     end
     MPI.Sendrecv!(sv, rv, decomp.comm; dest=hi, source=lo,
-                  sendtag=20d, recvtag=20d)
+                  sendtag=100d, recvtag=100d)
     if lo != PNULL
         _tracked_copy!(drecv, 1, rb, 1, need)
         for (fi, f) in enumerate(fields)
@@ -438,7 +491,7 @@ function _exchange_dim_batch_staged!(fields::AbstractVector, decomp::Decomp,
         _tracked_copy!(sb, 1, dsend, 1, need)
     end
     MPI.Sendrecv!(sv, rv, decomp.comm; dest=lo, source=hi,
-                  sendtag=20d + 1, recvtag=20d + 1)
+                  sendtag=100d + 1, recvtag=100d + 1)
     if hi != PNULL
         _tracked_copy!(drecv, 1, rb, 1, need)
         for (fi, f) in enumerate(fields)

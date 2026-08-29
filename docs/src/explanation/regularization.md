@@ -60,7 +60,7 @@ velocity oscillation, and the sensors built from them return zero there. Only
 `mu_sensor = :velocity` responds to that mode. Grid-scale content of the
 conserved state is removed by the compact filter rather than by the artificial
 properties, consistent with the Taylor--Green dissipation budgets recorded in
-`reference/CALIBRATION.md`.
+[`reference/CALIBRATION.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION.md).
 
 The defaults ship unchanged because the alternatives were measured and did not
 improve the validation battery. The velocity field for artificial shear
@@ -114,9 +114,10 @@ when artificial properties remain enabled.
 
 Larger artificial coefficients increase diffusive stability rates and can make
 the explicit timestep much smaller. Converging strong shocks separately require
-CFL at or below roughly 0.15 while the shock forms at a symmetry plane, a
-restriction measured to originate at the wall, axis or origin cell rather than
-in the artificial properties. Retry control is often cheaper than imposing that
+a reduced CFL while the shock forms at a symmetry plane: under the default
+`smoother = :gaussian`, 0.4 at the spherical origin and 0.2 at the cylindrical
+axis and the planar wall. The restriction is measured to originate at the wall,
+axis or origin cell rather than in the artificial properties. Retry control is often cheaper than imposing that
 small CFL throughout a calculation:
 
 ```julia
@@ -143,6 +144,7 @@ The defaults are a starting point, not a material model. For a new regime:
 4. repeat across resolution and CFL; and
 5. record the filter strength and cadence with every coefficient result.
 
-`reference/CALIBRATION.md` records the current parameter sweeps, rejected
+[`reference/CALIBRATION.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION.md)
+records the current parameter sweeps, rejected
 hypotheses, and identified operating limits. Those measurements should not be
 generalized beyond the documented configurations without new evidence.

@@ -32,6 +32,27 @@
 #   identified by the names in `component_names`, so two species sets sharing
 #   names while differing in their thermodynamic constants are not distinguished.
 #
+#   The element type is stored by name too. The payload is raw binary, so the
+#   element type fixes both the length of the block and the meaning of its
+#   bytes; a Float32 block read at Float64 is half the expected length and
+#   decodes to unrelated numbers. The reader allocates at `eltype(Q)` and
+#   rejects a stored name that disagrees.
+#
+# --- Mutable run state -------------------------------------------------------
+#
+# (t, step) are not the whole of what a restart has to carry. `run!` also reads
+# `solver.cfl`, which a `StepControl` retry lowers and which then has to persist
+# across the rollback, and `dt_prev` / `rate_prev`, which the growth cap, the
+# rate predictor and `filter_weight` all read. A `SwitchableBC` carries a
+# `switched` flag per face; resuming with it cleared would run the whole
+# remainder of the calculation under the pre-switch boundary condition, and on a
+# switch that changes the collective pattern (`NSCBCOutflowBC`) a rank set
+# disagreeing about it deadlocks rather than answers wrongly.
+#
+# The checkpoint does not carry the caller's own bookkeeping. Callback schedules
+# and a `FieldWriter`'s frame index live outside the solver, and both docstrings
+# below say that restoring them is the caller's part.
+#
 # --- The format word ---------------------------------------------------------
 #
 # The header is a fixed binary layout, so a field added to it shifts every field
@@ -42,7 +63,7 @@
 
 const CKPT_MAGIC_V1 = 0x434c4553_434b5054   # "CLESCKPT", the unversioned format
 const CKPT_MAGIC = 0x434c4553_52434b50      # "CLESRCKP"
-const CKPT_VERSION = 2
+const CKPT_VERSION = 3
 
 _ckpt_name(prefix::AbstractString, rank::Int) =
     string(prefix, ".r", lpad(rank, 4, '0'), ".ckpt")
@@ -99,26 +120,107 @@ function axis_matches(stored, mine)
 end
 
 """
+The `switched` flag of each of the six boundary faces, in the order
+`(1, lo), (1, hi), (2, lo), ..., (3, hi)`, as `0` or `1` on a
+[`SwitchableBC`](@ref) and `-1` on any other condition. The `-1` records the
+absence of a switchable face, so that a restart placing a plain condition where
+a switchable one was written is rejected by [`restore_switches!`](@ref) rather
+than resumed under a boundary the checkpoint never described. Shared between the
+per-rank and shared-file checkpoint paths.
+"""
+switch_codes(solver::Solver) =
+    Int64[bc isa SwitchableBC ? Int64(switched(bc)) : Int64(-1)
+          for d in 1:3 for bc in solver.bcs[d]]
+
+"""
+Apply six codes as [`switch_codes`](@ref) produced them to `solver`'s boundary
+conditions, and return `solver`. `source` names the file in any error message.
+
+A face the codes record as switched is switched through [`switch!`](@ref), which
+is the supported route and is reached with the same code on every rank. The
+reverse is refused rather than performed: `switch!` is one-way by design, so a
+solver whose face has already switched cannot be returned to the state a
+checkpoint written before the switch describes.
+"""
+function restore_switches!(solver::Solver, codes, source::AbstractString)
+    length(codes) == 6 ||
+        error("$source records $(length(codes)) boundary faces, not 6")
+    i = 0
+    for d in 1:3, side in 1:2
+        i += 1
+        bc = solver.bcs[d][side]
+        code = Int(codes[i])
+        face = "dimension $d, " * (side == 1 ? "low" : "high") * " face"
+        if !(bc isa SwitchableBC)
+            code < 0 ||
+                error("boundary mismatch at $face: $source was written with a " *
+                      "SwitchableBC there and this solver has a " *
+                      "$(type_name(bc))")
+            continue
+        end
+        code < 0 &&
+            error("boundary mismatch at $face: this solver has a SwitchableBC " *
+                  "there and $source was written without one")
+        if code == 1
+            switch!(bc)
+        elseif switched(bc)
+            error("boundary mismatch at $face: this solver's SwitchableBC has " *
+                  "already switched and $source was written before it did; " *
+                  "switch! is one-way, so restart from an unswitched solver")
+        end
+    end
+    return solver
+end
+
+"""
+    ensure_output_dir(prefix, comm)
+
+Create `dirname(prefix)` if it does not exist and return `prefix`. Rank 0 makes
+the directory and the others wait for it: concurrent `mkpath` of one path is not
+reliably idempotent across filesystems, and a rank writing into a directory that
+does not yet exist fails at `open` without indicating the cause. Collective over
+`comm`, and used by every writer here that names a path the caller chose.
+"""
+function ensure_output_dir(prefix::AbstractString, comm::MPI.Comm)
+    dir = dirname(String(prefix))
+    MPI.Comm_rank(comm) == 0 && !isempty(dir) && mkpath(dir)
+    MPI.Barrier(comm)
+    return prefix
+end
+
+"""
     save_checkpoint(solver, Q, prefix)
 
-Write the interior of `Q` plus (t, step) to `prefix.rNNNN.ckpt`, one file per
-rank, and return `prefix`. `NNNN` is the rank zero-padded to four digits, and an
-existing file of that name is truncated. Collective only in the trivial sense
-that every rank writes; no communication is involved.
+Write the interior of `Q` plus the solver's mutable run state to
+`prefix.rNNNN.ckpt`, one file per rank, and return `prefix`. `NNNN` is the rank
+zero-padded to four digits, and an existing file of that name is truncated.
+Collective: rank 0 creates `dirname(prefix)` and the others wait for it, after
+which every rank writes its own file with no further communication.
 
 The header describes the state well enough for [`load_checkpoint!`](@ref) to
 reject a solver it does not belong to: the format version, the conserved and
 species counts, the global and local extents, this rank's Cartesian coordinates,
-the conserved component names, the metric and EOS type names, and the global
-coordinate vector along each dimension. The coordinates carry the domain extent,
-the origin and any [`Stretch`](@ref) mapping, none of which the extent alone
-constrains.
+the conserved component names, the metric and EOS type names, the element type
+of `Q`, and the global coordinate vector along each dimension. The coordinates
+carry the domain extent, the origin and any [`Stretch`](@ref) mapping, none of
+which the extent alone constrains.
+
+The run state is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`, and the `switched`
+flag of every [`SwitchableBC`](@ref) face. `cfl` is recorded because a
+[`StepControl`](@ref) retry lowers it, and `dt_prev` / `rate_prev` because the
+growth cap, the rate predictor and [`filter_weight`](@ref) read them.
+
+Callback schedules and a [`FieldWriter`](@ref)'s frame index are the caller's
+responsibility: both live outside the solver, and nothing here records or
+restores them. Give a restarted writer a `start_index` so that it continues the
+frame sequence rather than overwriting it.
 """
 function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
+    ensure_output_dir(prefix, decomp.comm)
     open(_ckpt_name(prefix, rank), "w") do io
         write(io, UInt64(CKPT_MAGIC))
         write(io, Int64(CKPT_VERSION))
@@ -136,11 +238,16 @@ function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
         _write_strings(io, solver.equations.component_names)
         _write_string(io, type_name(solver.metric))
         _write_string(io, type_name(solver.eos))
+        _write_string(io, string(eltype(Q)))
         for d in 1:3
             write(io, global_axis(solver, d))
         end
         write(io, Float64(solver.t))
         write(io, Int64(solver.step))
+        write(io, Float64(solver.cfl))
+        write(io, Float64(solver.dt_prev))
+        write(io, Float64(solver.rate_prev))
+        write(io, switch_codes(solver))
         write(io, Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :])
     end
     return prefix
@@ -149,13 +256,21 @@ end
 """
     load_checkpoint!(solver, Q, prefix)
 
-Restore the interior of `Q` and (t, step) from `prefix.rNNNN.ckpt`, and return
-`Q`. Halos are left untouched. Every field of the header
+Restore the interior of `Q` and the solver's run state from `prefix.rNNNN.ckpt`,
+and return `Q`. Halos are left untouched. Every field of the header
 [`save_checkpoint`](@ref) records is compared against `solver` and any mismatch
 throws, so a checkpoint restores only onto the decomposition that wrote it and
-only onto a solver whose species set, metric, EOS and grid coordinates are the
-ones it was written from. Coordinates are compared to a relative tolerance of
-1e-10, which separates a rebuilt identical grid from any different one.
+only onto a solver whose species set, metric, EOS, element type and grid
+coordinates are the ones it was written from. Coordinates are compared to a
+relative tolerance of 1e-10, which separates a rebuilt identical grid from any
+different one.
+
+The run state restored is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`, and the
+`switched` flag of every [`SwitchableBC`](@ref) face. A face the checkpoint
+records as switched is switched here through [`switch!`](@ref); a face recorded
+as unswitched on a solver that has already switched is rejected, `switch!` being
+one-way. Callback schedules and a [`FieldWriter`](@ref)'s frame index are not
+recorded and remain the caller's to restore.
 
 A file written in the original unversioned format is rejected rather than
 partially validated: it carries no record of the species set, the metric or the
@@ -214,6 +329,13 @@ function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
         stored_eos == type_name(solver.eos) ||
             error("equation of state mismatch: file has $stored_eos, solver " *
                   "has $(type_name(solver.eos))")
+        # The payload is raw binary, so its element type decides how long the
+        # block is as well as what it means; a Float32 file read as Float64
+        # would run off the end rather than give wrong numbers.
+        stored_eltype = _read_string(io)
+        stored_eltype == string(eltype(Q)) ||
+            error("element type mismatch: file holds $stored_eltype, this " *
+                  "state array holds $(eltype(Q))")
         # The coordinates carry the domain extent, the origin and any `Stretch`,
         # none of which the extents above constrain.
         for d in 1:3
@@ -226,7 +348,11 @@ function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
         end
         solver.t = read(io, Float64)
         solver.step = Int(read(io, Int64))
-        buf = Array{Float64}(undef, nx, ny, nz, n_cons)
+        solver.cfl = read(io, Float64)
+        solver.dt_prev = read(io, Float64)
+        solver.rate_prev = read(io, Float64)
+        restore_switches!(solver, read!(io, Vector{Int64}(undef, 6)), path)
+        buf = Array{eltype(Q)}(undef, nx, ny, nz, n_cons)
         read!(io, buf)
         Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :] .= buf
     end
@@ -256,6 +382,14 @@ end
 # applies to both grid types and is unchanged from the original writer.
 
 _extent_str(lo, hi) = join(("$(lo[d]) $(hi[d])" for d in 1:3), " ")
+
+"""
+Byte order declared in every VTK header written here. The appended raw blocks
+are `write`n in the host's native order, so the declaration is derived from
+`Base.ENDIAN_BOM` rather than fixed: a file written on a big-endian host and
+labelled `LittleEndian` reads as noise, and nothing in the format catches it.
+"""
+const VTK_BYTE_ORDER = Base.ENDIAN_BOM == 0x04030201 ? "LittleEndian" : "BigEndian"
 
 # A resolved angular dimension makes the grid curvilinear; a collapsed angular
 # dimension leaves a tensor-product grid.
@@ -756,7 +890,7 @@ function _save_vtr(solver::Solver, entries, prefix::AbstractString, stride,
     open(_piece_name(prefix, rank, ".vtr"), "w") do io
         write(io, "<?xml version=\"1.0\"?>\n")
         write(io, "<VTKFile type=\"RectilinearGrid\" version=\"1.0\" ",
-                  "byte_order=\"LittleEndian\" header_type=\"UInt64\">\n")
+                  "byte_order=\"", VTK_BYTE_ORDER, "\" header_type=\"UInt64\">\n")
         write(io, "<RectilinearGrid WholeExtent=\"", _extent_str(lo, hi), "\">\n")
         write(io, "<Piece Extent=\"", _extent_str(lo, hi), "\">\n<Coordinates>\n")
         for d in 1:3
@@ -802,7 +936,7 @@ function _save_vts(solver::Solver, entries, prefix::AbstractString, stride,
     open(_piece_name(prefix, rank, ".vts"), "w") do io
         write(io, "<?xml version=\"1.0\"?>\n")
         write(io, "<VTKFile type=\"StructuredGrid\" version=\"1.0\" ",
-                  "byte_order=\"LittleEndian\" header_type=\"UInt64\">\n")
+                  "byte_order=\"", VTK_BYTE_ORDER, "\" header_type=\"UInt64\">\n")
         write(io, "<StructuredGrid WholeExtent=\"", _extent_str(lo, hi), "\">\n")
         write(io, "<Piece Extent=\"", _extent_str(lo, hi), "\">\n<Points>\n")
         write(io, "<DataArray type=\"Float64\" NumberOfComponents=\"3\" ",
@@ -838,7 +972,7 @@ function _write_parallel_container(solver::Solver, entries, prefix, lo, hi,
         glo, ghi = _output_whole_extent(solver, stride, slice)
         write(io, "<?xml version=\"1.0\"?>\n")
         write(io, "<VTKFile type=\"P", kind, "\" version=\"1.0\" ",
-                  "byte_order=\"LittleEndian\" header_type=\"UInt64\">\n")
+                  "byte_order=\"", VTK_BYTE_ORDER, "\" header_type=\"UInt64\">\n")
         write(io, "<P", kind, " WholeExtent=\"", _extent_str(glo, ghi),
                   "\" GhostLevel=\"0\">\n")
         if curvilinear
@@ -888,7 +1022,7 @@ end
 
 """
     FieldWriter(prefix; fields = DEFAULT_VTK_FIELDS, stride = 1, slice = nothing,
-                pad = 4, collection = true)
+                pad = 4, collection = true, start_index = 0)
 
 Write a numbered field dump each time its trigger fires, together with a `.pvd`
 collection recording the physical time of every frame. Use it as the effect of a
@@ -916,11 +1050,17 @@ collection references it accordingly.
 
 Like the wrapped `save_vtk` call, this operation is collective and must run on
 every rank. A [`Callback`](@ref) provides that guarantee. The first dump creates
-`dirname(prefix)` if it does not already exist. Frame numbering starts at 0 for
-each new writer, so a second writer given the same prefix overwrites the earlier
-frames. The effect returns `false` and so never stops a run. The `wall_io` field
-records cumulative output time; callback execution lies outside the interval
-recorded by `solver.wall_step`.
+`dirname(prefix)` if it does not already exist. The effect returns `false` and so
+never stops a run. The `wall_io` field records cumulative output time; callback
+execution lies outside the interval recorded by `solver.wall_step`.
+
+`start_index` is the number of the first frame, and defaults to 0. A writer
+given the same prefix as an earlier one overwrites that one's frames unless it
+starts past them, which is what a restart from [`load_checkpoint!`](@ref) needs:
+the checkpoint carries the solver's run state and not the caller's frame
+counter, so the number of the next frame has to be supplied here. The `.pvd` of
+a restarted writer lists only the frames that writer wrote, since it has no
+record of the times of the earlier ones.
 """
 mutable struct FieldWriter{F,S}
     prefix::String
@@ -929,15 +1069,17 @@ mutable struct FieldWriter{F,S}
     slice::S
     pad::Int
     collection::Bool
+    start_index::Int
     index::Int
     times::Vector{Float64}
     wall_io::Float64
 end
 
 FieldWriter(prefix::AbstractString; fields=DEFAULT_VTK_FIELDS, stride=1,
-            slice=nothing, pad::Int=4, collection::Bool=true) =
+            slice=nothing, pad::Int=4, collection::Bool=true,
+            start_index::Int=0) =
     FieldWriter(String(prefix), fields, _normalize_stride(stride), slice, pad,
-                collection, 0, Float64[], 0.0)
+                collection, start_index, start_index, Float64[], 0.0)
 
 "Path stem of frame `m` (0-based) of a [`FieldWriter`](@ref), without extension."
 frame_prefix(writer::FieldWriter, m::Integer) =
@@ -950,15 +1092,9 @@ _write_dump!(writer::FieldWriter, solver, Q, stem) =
 function (writer::FieldWriter)(solver, Q)
     wall_0 = time_ns()
     comm = solver.comm
-    if writer.index == 0
-        # One rank creates the directory and the others wait for it. Concurrent
-        # `mkpath` of the same path is not reliably idempotent across
-        # filesystems, and a rank writing into a directory that does not yet
-        # exist fails at `open` without indicating the cause.
-        MPI.Comm_rank(comm) == 0 && !isempty(dirname(writer.prefix)) &&
-            mkpath(dirname(writer.prefix))
-        MPI.Barrier(comm)
-    end
+    # Once per writer rather than once per frame, and keyed on the frame list
+    # rather than on the index, which `start_index` no longer pins to zero.
+    isempty(writer.times) && ensure_output_dir(writer.prefix, comm)
     _write_dump!(writer, solver, Q, frame_prefix(writer, writer.index))
     push!(writer.times, Float64(solver.t))
     writer.index += 1
@@ -977,10 +1113,11 @@ function _write_pvd(writer::FieldWriter, ext::AbstractString)
     open(string(writer.prefix, ".pvd"), "w") do io
         write(io, "<?xml version=\"1.0\"?>\n")
         write(io, "<VTKFile type=\"Collection\" version=\"1.0\" ",
-                  "byte_order=\"LittleEndian\">\n<Collection>\n")
+                  "byte_order=\"", VTK_BYTE_ORDER, "\">\n<Collection>\n")
         for (m, t) in enumerate(writer.times)
             # Relative to the .pvd's own directory, which is where the pieces are.
-            src = string(basename(frame_prefix(writer, m - 1)), ext)
+            src = string(basename(frame_prefix(writer, writer.start_index + m - 1)),
+                         ext)
             write(io, "<DataSet timestep=\"", string(t),
                   "\" group=\"\" part=\"0\" file=\"", src, "\"/>\n")
         end

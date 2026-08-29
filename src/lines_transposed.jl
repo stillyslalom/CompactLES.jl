@@ -23,7 +23,9 @@ struct LineChunks
 end
 
 function _line_chunks(L::Int)
-    n_chunks = max(Threads.nthreads(), 1)
+    # No more chunks than lines: a surplus chunk is an empty range that still
+    # costs `@threaded` a task spawn.
+    n_chunks = clamp(L, 1, Threads.nthreads())
     return LineChunks(L, cld(L, n_chunks), n_chunks)
 end
 

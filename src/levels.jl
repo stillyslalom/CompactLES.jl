@@ -85,6 +85,43 @@ const LEVEL_BUFFER = 4
 const RESTRICT_MARGIN = 2
 
 """
+    GatherBuffers{T}()
+
+Send and receive staging for one of the coupling's collectives, resized on
+first use and retained for the life of the [`LevelTransfer`](@ref). Every
+call site's message sizes are fixed by the region and the rank set, so the
+resize is a no-op after the first call.
+"""
+struct GatherBuffers{T}
+    send::Vector{T}
+    recv::Vector{T}
+end
+
+GatherBuffers{T}() where {T} = GatherBuffers{T}(T[], T[])
+
+@inline _fit!(buf::Vector, n::Int) = (length(buf) == n || resize!(buf, n); buf)
+
+"""
+    ShellRing
+
+Geometry and staging of the fine shell ring: the slab ranges, the writers'
+`(lo, hi, offset)` table, the ring length, the replicated ring itself, the
+per-rank Allgatherv counts, and the ring's own buffers. All of it follows
+from the refined region and the fine decomposition, which do not change over
+a [`LevelTransfer`](@ref)'s life, so it is built once at setup. A subcycled
+step imposes the shell about twenty times, which is what makes the
+per-call rebuild worth avoiding.
+"""
+struct ShellRing{T}
+    slabs::Vector{NTuple{3,UnitRange{Int}}}
+    table::Vector{Tuple{NTuple{3,Int},NTuple{3,Int},Int}}
+    len::Int
+    ring::Matrix{T}
+    counts::Vector{Int}
+    buffers::GatherBuffers{T}
+end
+
+"""
     LevelTransfer
 
 Bound form of the two-level coupling: the refined region, the prolongation
@@ -126,6 +163,10 @@ struct LevelTransfer{T}
     box_gather::Array{T,4}           # replicated box state, all components
     restricted::Array{T,4}           # replicated coincident-sample of the fine
                                      # patch over the region, all components
+    # Retained staging for the three collectives that run every step.
+    box_buffers::GatherBuffers{T}
+    restrict_buffers::GatherBuffers{T}
+    shell::ShellRing{T}
 end
 
 # Decomp chain refining `dims_to_refine` one at a time, starting from the
@@ -180,6 +221,14 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
     rdecomps, rplans, rstage = _refine_chain(T, region.extent, active,
                                              dims_to_refine, n_halo, 2)
     boxsize = subcycle ? (size(pstage[1])..., n_cons) : (0, 0, 0, 0)
+    slabs = _ring_slabs(region, fine_decomp)
+    table, ringlen = _slab_table(slabs)
+    npf = MPI.Comm_size(fine_decomp.comm)
+    # Component-distributed chains: rank r owns components r+1, r+1+npf, ...
+    ring_counts = [ringlen * length((r+1):npf:n_cons) for r in 0:npf-1]
+    shell = ShellRing{T}(slabs, table, ringlen,
+                         Matrix{T}(undef, ringlen, n_cons), ring_counts,
+                         GatherBuffers{T}())
     return LevelTransfer{T}(region, fine_index, restriction, dims_to_refine,
                             pdecomps, pplans, pstage,
                             rdecomps, rplans, rstage,
@@ -188,7 +237,8 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
                             _owned_blocks(coarse_decomp),
                             _owned_blocks(fine_decomp),
                             zeros(T, size(pstage[1])..., n_cons),
-                            zeros(T, region.extent..., n_cons))
+                            zeros(T, region.extent..., n_cons),
+                            GatherBuffers{T}(), GatherBuffers{T}(), shell)
 end
 
 # --- Replicated-region gathers ----------------------------------------------
@@ -204,6 +254,11 @@ end
 # a rank-partitioned transfer is the recorded follow-up if a measured case
 # outgrows it.
 
+# One-way counterpart of `_device_stage` (halo.jl): the gather packs and
+# copies out, never in, so only the send half is allocated. `similar` keeps
+# the result type inferable from the field, as the two-buffer form does.
+@inline _device_send_stage(f, need::Int) = similar(f, eltype(f), need)
+
 # Intersection of a node region with an owned block, as node ranges.
 function _region_isect(region::NTuple{3,UnitRange{Int}}, block::BlockRegion)
     return ntuple(d -> max(first(region[d]), block.offset[d] + 1):
@@ -212,7 +267,7 @@ end
 
 """
     gather_region!(dst, region_ranges, dst_off, dst_pad, Q, decomp, blocks,
-                   sample=1)
+                   sample=1; buffers=GatherBuffers{T}())
 
 Assemble the node region `region_ranges` (in `decomp`'s node space) of the
 distributed field `Q` (padded, 4-D) into the replicated array `dst` on every
@@ -221,12 +276,17 @@ maps node space onto `dst`'s unpadded box. With `sample = s`, only nodes
 `n ≡ 1 (mod s)` along active dimensions participate and land at
 `dst[(n-1) ÷ s + 1 ...]` — the coincident-node form the `:inject` restriction
 uses (`s = 3` per refined dimension). Collective over `decomp.comm`.
+
+`buffers` supplies the MPI staging. The per-step call sites pass the
+[`GatherBuffers`](@ref) retained on the [`LevelTransfer`](@ref); a caller
+running at the regrid cadence can let the default allocate.
 """
 function gather_region!(dst::AbstractArray{T,4},
                         region_ranges::NTuple{3,UnitRange{Int}},
                         dst_off::NTuple{3,Int}, dst_pad::NTuple{3,Int},
                         Q, decomp::Decomp{T}, blocks::Vector{BlockRegion},
-                        sample::NTuple{3,Int}=(1, 1, 1)) where {T}
+                        sample::NTuple{3,Int}=(1, 1, 1);
+                        buffers::GatherBuffers{T}=GatherBuffers{T}()) where {T}
     comm = decomp.comm
     np = MPI.Comm_size(comm)
     me = MPI.Comm_rank(comm)
@@ -239,7 +299,7 @@ function gather_region!(dst::AbstractArray{T,4},
               for r in 0:np-1]
     counts = [n_cons * prod(max(length(ir[d]), 0) for d in 1:3)
               for ir in isects]
-    sendbuf = Vector{T}(undef, counts[me+1])
+    sendbuf = _fit!(buffers.send, counts[me+1])
     mine = isects[me+1]
     if _cpu_storage(Q)
         idx = 1
@@ -258,11 +318,11 @@ function gather_region!(dst::AbstractArray{T,4},
         lr = ntuple(d -> (first(mine[d]) - decomp.offset[d] + pad[d]):sample[d]:
                          (last(mine[d]) - decomp.offset[d] + pad[d]), 3)
         v = view(parent(Q), lr[1], lr[2], lr[3], 1:n_cons)
-        dsend, _ = _device_stage(parent(Q), counts[me+1])
+        dsend = _device_send_stage(parent(Q), counts[me+1])
         reshape(view(dsend, 1:counts[me+1]), size(v)) .= v
         _tracked_copy!(sendbuf, 1, dsend, 1, counts[me+1])
     end
-    recvbuf = Vector{T}(undef, sum(counts))
+    recvbuf = _fit!(buffers.recv, sum(counts))
     MPI.Allgatherv!(sendbuf, MPI.VBuffer(recvbuf, counts), comm)
     pos = 0
     for r in 0:np-1
@@ -348,7 +408,8 @@ end
 function _gather_box!(dst4, lt::LevelTransfer, Qc, dp::Decomp)
     active = dp.active
     gather_region!(dst4, _box_ranges(lt, active), _box_offset(lt, active),
-                   lt.pdecomps[1].n_halo_d, Qc, dp, lt.coarse_blocks)
+                   lt.pdecomps[1].n_halo_d, Qc, dp, lt.coarse_blocks;
+                   buffers=lt.box_buffers)
     return dst4
 end
 
@@ -384,9 +445,9 @@ function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
         return fine_Q
     end
     # Device patch: the interpolated box (a host chain product) uploads once
-    # per component and a kernel imposes the shell. Batching components into
-    # one upload per stage is a G3d traffic item; this is the correctness
-    # form.
+    # per component and a kernel imposes the shell. Batching the components
+    # into one upload per stage would cut that traffic; this is the
+    # correctness form.
     dev_box = similar(parent(fine_Q), size(box_field))
     copyto!(dev_box, box_field)
     pointwise!(_fine_shell_point!, fine_Q,
@@ -434,8 +495,8 @@ end
 # Ring slabs in patch-padded node space, ascending dimension order, low side
 # then high per active dimension. Slabs overlap at corners; both copies of a
 # corner value come from the same chain output, so the first match wins.
-function _ring_slabs(lt::LevelTransfer, df::Decomp)
-    Nf = fine_extent(lt.region, ntuple(d -> df.active[d], 3))
+function _ring_slabs(region::BlockRegion, df::Decomp)
+    Nf = fine_extent(region, ntuple(d -> df.active[d], 3))
     pad = df.n_halo_d
     full = ntuple(d -> (1 - pad[d]):(Nf[d] + pad[d]), 3)
     slabs = NTuple{3,UnitRange{Int}}[]
@@ -459,7 +520,14 @@ function _slab_table(slabs)
 end
 
 # One-based ring offset of shell node (g1, g2, g3), or 0 when no slab holds
-# it (the caller's shell test guarantees a match for shell slots).
+# it. Invariant: the slabs of `_ring_slabs` cover every padded slot whose
+# patch-global index lies outside the strict interior, which is exactly the
+# shell test both writers apply before calling here, so a shell slot always
+# matches. A 0 return therefore means the slab set and the shell test have
+# fallen out of step; `_write_shell_from_ring!` raises on it rather than
+# indexing the ring at 0 under its `@inbounds`. The device body cannot raise,
+# so the host path carries the check for both — it runs the identical
+# arithmetic on the identical table.
 @inline function _ring_offset(table, g1, g2, g3)
     for (lo, hi, base) in table
         if lo[1] <= g1 <= hi[1] && lo[2] <= g2 <= hi[2] && lo[3] <= g3 <= hi[3]
@@ -471,6 +539,10 @@ end
     end
     return 0
 end
+
+@noinline _ring_miss(g1, g2, g3) =
+    error("fine shell node ($g1, $g2, $g3) lies in no ring slab; the slab " *
+          "set and the shell test disagree")
 
 # Shared driver: run the chain for this rank's components with `fill0!(dst, c)`
 # supplying stage 0, replicate the shell rings, and impose each rank's own
@@ -486,13 +558,17 @@ function _impose_shell!(solver, states, fill0!::F) where {F}
     me = MPI.Comm_rank(comm)
     n_cons = solver.equations.n_cons
     K = length(lt.pplans)
-    T = eltype(lt.pstage[1])
-    slabs = _ring_slabs(lt, fdcp)
-    table, ringlen = _slab_table(slabs)
+    shell = lt.shell
+    slabs = shell.slabs
+    table = shell.table
+    ringlen = shell.len
+    ring = shell.ring
     padb = lt.pdecomps[K+1].n_halo_d
     shift = ntuple(d -> fdcp.active[d] ? 3 * LEVEL_BUFFER : 0, 3)
-    owned = [c for c in 1:n_cons if (c - 1) % np == me]
-    sendbuf = Vector{T}(undef, ringlen * length(owned))
+    # This rank's components, as a range rather than a filtered vector: the
+    # ascending order is the one the ring unpack below assumes.
+    owned = (me+1):np:n_cons
+    sendbuf = _fit!(shell.buffers.send, ringlen * length(owned))
     pos = 0
     for c in owned
         fill0!(lt.pstage[1], c)
@@ -510,18 +586,17 @@ function _impose_shell!(solver, states, fill0!::F) where {F}
         end
     end
     if np == 1
-        ring = reshape(sendbuf, ringlen, n_cons)
+        # Every component is this rank's, in order, so the send buffer already
+        # holds the ring column by column.
+        copyto!(ring, 1, sendbuf, 1, ringlen * n_cons)
         _write_shell_from_ring!(Qf, ring, table, lt, fdcp, n_cons)
         return states
     end
-    counts = [ringlen * count(c -> (c - 1) % np == r, 1:n_cons)
-              for r in 0:np-1]
-    recv = Vector{T}(undef, sum(counts))
+    counts = shell.counts
+    recv = _fit!(shell.buffers.recv, sum(counts))
     MPI.Allgatherv!(sendbuf, MPI.VBuffer(recv, counts), comm)
-    ring = Matrix{T}(undef, ringlen, n_cons)
     at = 0
-    for r in 0:np-1, c in 1:n_cons
-        (c - 1) % np == r || continue
+    for r in 0:np-1, c in (r+1):np:n_cons
         copyto!(view(ring, :, c), view(recv, at+1:at+ringlen))
         at += ringlen
     end
@@ -544,6 +619,7 @@ function _write_shell_from_ring!(Qf, ring, table, lt::LevelTransfer,
                        (!df.active[3] || 2 <= g3 <= Nf[3] - 1)
             interior && continue
             at = _ring_offset(table, g1, g2, g3)
+            at == 0 && _ring_miss(g1, g2, g3)
             for c in 1:n_cons
                 Qf[i + padf[1], j + padf[2], k + padf[3], c] = ring[at, c]
             end
@@ -648,9 +724,10 @@ end
 
 Restrict the fine state onto the covered coarse region, per conserved
 component, and return `states`. Under the default `:inject` mode the
-coincident-node values gather directly (a sampled `gather_region!`,
-identical to the former per-dimension `inject!` chain and distributed for
-free); under `:filter` the invertible pair's Gaussian filter runs over the
+coincident-node values gather directly (a sampled [`gather_region!`](@ref),
+which subsamples the fine lattice in one collective rather than one
+`TransferPlan` per dimension); under `:filter` the invertible pair's
+Gaussian filter runs over the
 fine patch's extent before subsampling, which is a whole-patch line solve and
 therefore still serial-only (guarded at setup). Either way the write-back
 stops `RESTRICT_MARGIN` coarse nodes short of the coarse-fine boundary. Runs
@@ -683,7 +760,7 @@ function restrict_level!(solver, states)
     fr = ntuple(d -> 1:(dfine.n_global[d]), 3)
     sample = ntuple(d -> dfine.active[d] ? 3 : 1, 3)
     gather_region!(lt.restricted, fr, (0, 0, 0), (0, 0, 0), Qf, dfine,
-                   lt.fine_blocks, sample)
+                   lt.fine_blocks, sample; buffers=lt.restrict_buffers)
     _write_covered_region!(Qc, lt.restricted, lt, coarse.decomp)
     return states
 end

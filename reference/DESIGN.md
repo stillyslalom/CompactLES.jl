@@ -76,42 +76,56 @@ validation cases are discussed, and never a viscosity.
 
 | File | Responsibility |
 |------|----------------|
-| `src/CompactLES.jl`        | Module: include order and exports |
-| `src/decomposition.jl`     | 3-D MPI Cartesian decomposition, sub-communicators, halo buffers |
-| `src/halo.jl`              | Sequential-dimension `Sendrecv!` halo exchange; batched multi-field exchange; axis parity fill |
-| `src/tridiag.jl`           | Thomas factorization + spike/reduced-interface distributed tridiagonal solve |
-| `src/banded.jl`            | Generalization of the distributed solve to half-bandwidth q (pentadiagonal and up) |
-| `src/lines_transposed.jl`  | Cache-friendly (lines × n) fill/solve/scatter for the y/z sweeps |
-| `src/kernels.jl`           | `CompactScheme`, `ClosureRow`, and tridiagonal presets (C6, C4, C8 filter) |
-| `src/kernels_banded.jl`    | `BandedCompactScheme`, the C10 pentadiagonal preset, and the d8 ring detector |
-| `src/operators.jl`         | `DirPlan`: bind a scheme to a dimension; line fill, distributed solve, scatter |
-| `src/operators_banded.jl`  | `BandPlan`: the banded counterpart |
-| `src/physics.jl`           | EOS abstraction, `IdealMixture`, `Transport`, `primitives!` |
-| `src/equations.jl`         | `EquationSet`, conserved layout, names, and fold parity rules |
-| `src/boundary.jl`          | `BoundaryCondition` types, wall enforcement, `apply_bcs!` |
-| `src/nscbc.jl`             | Navier–Stokes characteristic boundary conditions (NSCBC): subsonic outflow and inflow |
-| `src/metric.jl`            | Cartesian/cylindrical/spherical metrics, stretch mappings, curvature corrections, momentum sources, the discrete geometric conservation law (GCL) |
-| `src/folds.jl`             | Coordinate-singularity (axis/origin/pole) parity and antipodal folds |
-| `src/artificial.jl`        | Cook artificial μ\*, β\*, κ\*, D\* from δ⁴ or compact-d8 sensors |
-| `src/sources.jl`           | Inferable tuple source interface and `ConstantBodyForce` |
-| `src/patches.jl`           | `Patch` (per-patch state), `PatchSolver`, slab layout, interface ghost exchange and shared-plane averaging |
-| `src/levels.jl`            | Static two-level refinement: fine-patch coupling schedules, level transfer chains |
-| `src/rhs.jl`               | `Solver` container, flux assembly, the conservative NS RHS |
-| `src/timestep.jl`          | RK45, CFL timestep, the `run!` loop, per-step filtering |
-| `src/io.jl`                | Per-rank checkpoint/restart, parallel VTK output |
-| `src/problem.jl`           | Frontend: `Prim`, `Problem`, `Numerics`, `setup`, initialization |
+| `src/CompactLES.jl`       | Module: include order and exports |
+| `src/threading.jl`        | `@threaded`: the per-region work threshold, and the task backend it was measured against |
+| `src/decomposition.jl`    | 3-D MPI Cartesian decomposition, sub-communicators, halo buffers |
+| `src/pointwise.jl`        | `pointwise!`: the shared launcher of every per-point body, over `@threaded` or KernelAbstractions |
+| `src/halo.jl`             | Sequential-dimension `Sendrecv!` halo exchange; batched multi-field exchange; axis parity fill |
+| `src/tridiag.jl`          | Thomas factorization + spike/reduced-interface distributed tridiagonal solve |
+| `src/banded.jl`           | Generalization of the distributed solve to half-bandwidth q (pentadiagonal and up) |
+| `src/lines_transposed.jl` | Cache-friendly (lines × n) fill/solve/scatter for the y/z sweeps |
+| `src/kernels.jl`          | `CompactScheme`, `ClosureRow`, and tridiagonal presets (C6, C4, C8 filter) |
+| `src/kernels_banded.jl`   | `BandedCompactScheme`, the C10 pentadiagonal preset, and the d8 ring detector |
+| `src/physics.jl`          | EOS abstraction, `IdealMixture`, `Transport`, `primitives!` |
+| `src/nasa9_data.jl`       | Reader for the fixed-column NASA CEA thermodynamic database shipped in `data/` |
+| `src/equations.jl`        | `EquationSet`, conserved layout, names, and fold parity rules |
+| `src/boundary.jl`         | `BoundaryCondition` types, wall enforcement, `apply_bcs!` |
+| `src/operators.jl`        | `DirPlan`: bind a scheme to a dimension; line fill, distributed solve, scatter |
+| `src/operators_banded.jl` | `BandPlan`: the banded counterpart |
+| `src/lines_device.jl`     | `DevicePlan`: the device mirror of a plan, one thread per line, reduced interface stage on the host |
+| `src/transfer.jl`         | AMR level-transfer operators: the invertible 3:1 compact filter pair and its conditioning |
+| `src/metric.jl`           | Cartesian/cylindrical/spherical metrics, stretch mappings, curvature corrections, momentum sources, the discrete geometric conservation law (GCL) |
+| `src/folds.jl`            | Coordinate-singularity (axis/origin/pole) parity and antipodal folds |
+| `src/artificial.jl`       | Cook artificial μ\*, β\*, κ\*, D\* from δ⁴ or compact-d8 sensors |
+| `src/stepcontrol.jl`      | `StepControl`: timestep floors, prediction, and rollback-and-retry recovery |
+| `src/sources.jl`          | Inferable tuple source interface and `ConstantBodyForce` |
+| `src/patches.jl`          | `Patch` (per-patch state), `PatchSolver`, slab layout, interface ghost exchange and shared-plane averaging |
+| `src/levels.jl`           | Static two-level refinement: fine-patch coupling schedules, level transfer chains |
+| `src/rhs.jl`              | `Solver` container, flux assembly, the conservative NS RHS |
+| `src/nscbc.jl`            | Navier–Stokes characteristic boundary conditions (NSCBC): subsonic outflow and inflow |
+| `src/io.jl`               | Per-rank checkpoint/restart, parallel VTK output |
+| `src/hdf5.jl`             | `BlockRegion` and the shared-file HDF5 seam; the writer itself is the `ext/` extension |
+| `src/callbacks.jl`        | Step-boundary callbacks: the `AtTime` / `EveryTime` / `EveryStep` / `WhenState` triggers and their effects |
+| `src/timestep.jl`         | RK45, CFL timestep, the `run!` loop, per-step filtering |
+| `src/regrid.jl`           | Tagging and regridding for the two-level refinement |
+| `src/diagnostics.jl`      | Volume and plane reductions, and the variable-density mixing diagnostics built on them |
+| `src/viz.jl`              | Geometry-aware extraction of report fields (`line_profile`, `field_slice`) and the Makie plotting seam |
+| `src/problem.jl`          | Frontend: `Prim`, `Problem`, `Numerics`, `setup`, initialization |
+| `src/scriptargs.jl`       | `script_args`: `ARGS` parsing for the scripts in `bench/` and at the repo root |
+| `src/display.jl`          | Concise `show` methods for `Solver`, `Problem`, `Numerics`, and the `(solver, Q)` pair |
 
-The include order in `CompactLES.jl` is bottom-up: low-level solvers first, then
-operators, then physics, then the RHS and frontend that compose them.
+The table follows the include order in `CompactLES.jl`, which is bottom-up:
+low-level solvers first, then operators, then physics, then the RHS and frontend
+that compose them.
 
 ## The frontend/backend split
 
 The user-facing vocabulary lives in `problem.jl` and is deliberately ignorant of
 the backend:
 
-- **`Prim`** — a pointwise primitive state (velocity, pressure, composition,
-  and one of T_ion or ρ). Construction validates that mass fractions sum to one and
-  that exactly one of temperature or density is given.
+- **`Prim`** — a pointwise primitive state: velocity, composition, and exactly
+  two of p, ρ and T_ion, the EOS deriving the third. Construction validates that
+  mass fractions sum to one and that exactly one of the three is omitted.
 - **`Problem`** — physics and geometry only: EOS, transport model, metric,
   explicit source tuple,
   coordinate `domain` as three `(lo, hi)` pairs, boundary conditions, and the
@@ -296,7 +310,7 @@ corner halos are populated correctly without dedicated diagonal messages. At
 non-periodic global edges the neighbor is `MPI.PROC_NULL`, making the Sendrecv a
 no-op on that side; those physical-edge halos are left stale and **never read**,
 because derivative closures are one-sided and filter closures are identities
-there. This is what keeps the halo logic uniform.
+there. This keeps the halo logic uniform.
 
 Two batching optimizations matter for performance:
 

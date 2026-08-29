@@ -164,6 +164,10 @@ function plane_profile(solver::Solver, f::AbstractArray{<:Real,3}, d::Int)
     for t in 1:3
         t == d && continue
         decomp.active[t] || continue
+        # An undivided transverse dimension has a one-rank sub-communicator,
+        # where the reduction is a copy of a length-n_d vector for no effect.
+        # The same guard covers the gather along `d` below.
+        decomp.sub_size[t] == 1 && continue
         num = MPI.Allreduce(num, +, decomp.sub[t])
         den = MPI.Allreduce(den, +, decomp.sub[t])
     end
@@ -414,5 +418,10 @@ function dissipation_rate(solver::Solver, Q)
         end
         diss[I] = acc
     end
-    return volume_integral(solver, diss) / volume_integral(solver, solver.rho)
+    # One collective, not two: both integrals are sums over the same rank set,
+    # and this is called once per diagnostic output on every rank.
+    red = MPI.Allreduce([_local_volume_integral(solver, diss),
+                         _local_volume_integral(solver, solver.rho)], +,
+                        solver.comm)
+    return red[1] / red[2]
 end

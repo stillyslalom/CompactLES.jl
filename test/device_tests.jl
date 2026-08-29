@@ -269,3 +269,91 @@ end
     @test all(isfinite, parent(Q2))
     @test parent(Q1) == parent(Q2)
 end
+
+@testset "field collections adapt to their device forms" begin
+    # DeviceFieldVector, DeviceFieldMatrix and the ConservedState rule are
+    # what a real device launch builds out of the host wrappers. Nothing
+    # above reaches them: the KernelAbstractions CPU backend adapts no kernel
+    # argument, so neither FORCE_KA nor the DeviceBackend runs constructs one.
+    # Apply the rules directly instead, to the collections a patch carries.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    adapt = CL.Adapt.adapt
+    per = (PeriodicBC(), PeriodicBC())
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.2, 1.09)])
+    s = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), eos=eos,
+               bcs=(per, per, per))
+    ft = s.field_tuples
+
+    for name in (:Y, :D_art)
+        w = getfield(ft, name)
+        d = adapt(cpu_ka, w)
+        @test d isa CL.DeviceFieldVector
+        @test length(d) == length(w) > 1
+        # Identity, not equality: the tuple must hold the patch's own arrays.
+        @test all(d[i] === w[i] for i in 1:length(w))
+    end
+    for name in (:grad_u, :grad_Y, :flux)
+        w = getfield(ft, name)
+        d = adapt(cpu_ka, w)
+        @test d isa CL.DeviceFieldMatrix
+        n1, n2 = size(w)
+        @test size(d) == (n1, n2)
+        @test all(d[a, b] === w[a, b] for a in 1:n1, b in 1:n2)
+    end
+    # The conserved state adapts to the same wrapper around the adapted array,
+    # so a body still indexes Q[I, c] on either path.
+    Q = allocate_state(s)
+    dQ = adapt(cpu_ka, Q)
+    @test dQ isa ConservedState
+    @test parent(dQ) === parent(Q)
+end
+
+# Every per-point body launched through `pointwise!`, spelled out so that a
+# new one has to be added here deliberately. The scan below fails when this
+# list and the call sites disagree, in either direction.
+const POINTWISE_BODIES = (
+    :_area_flux_point!, :_blend_interior_point!, :_body_force_point!,
+    :_copy_interior_point!, :_delta4_point!, :_delta4_signed_point!,
+    :_dilatation_point!, :_dilatation_switch_point!, :_extrapolation_point!,
+    :_fine_shell_point!, :_fluxes_point!, :_fold_fill_point!,
+    :_gate_beta_point!, :_gated_beta_point!, :_gcl_cotr_point!,
+    :_grad_corr_cyl_point!, :_grad_corr_sph_point!, :_internal_energy_point!,
+    :_kappa_point!, :_metric_src_cyl_point!, :_metric_src_sph_point!,
+    :_mu_beta_point!, :_no_slip_wall_point!, :_nscbc_inflow_point!,
+    :_nscbc_outflow_point!, :_pair_backward_local_point!,
+    :_pair_backward_remote_point!, :_pair_forward_local_point!,
+    :_pair_forward_remote_point!, :_pair_select_point!,
+    :_primitives_ideal_point!, :_primitives_stiffened_point!, :_rate_point!,
+    :_rho_sensor_point!, :_ring_accum_point!, :_rk_point!,
+    :_scale_grad_point!, :_shell_ring_point!, :_slip_wall_point!,
+    :_species_diffusivity_point!, :_strain_mag_point!, :_subtract_div_point!,
+    :_subtract_jac_div_point!, :_zero_component_point!)
+
+@testset "pointwise bodies stay inside the splat budget" begin
+    # `_point_kernel!` calls `body!(args..., i, j, k)`. Julia expands a
+    # splatted tuple of at most 32 elements into a static call and falls back
+    # to the dynamic `_apply_iterate` beyond it, which is an InvalidIRError on
+    # device (reference/AMR_GPU.md, pointwise kernels — the NSCBC bodies pack
+    # their scalars into small tuples for exactly this reason). The budget is
+    # therefore 32 launcher arguments, or 35 declared arguments once i, j, k
+    # are counted. `_rate_point!` and `_fluxes_point!` are the two that have
+    # come nearest it; both pack scalars into isbits tuples to stay under.
+    src = joinpath(@__DIR__, "..", "src")
+    found = Set{Symbol}()
+    for f in readdir(src; join=true)
+        endswith(f, ".jl") || continue
+        for m in eachmatch(r"pointwise!\(\s*(_[A-Za-z0-9_]*point!)",
+                           read(f, String))
+            push!(found, Symbol(m.captures[1]))
+        end
+    end
+    @test sort(collect(found)) == sort(collect(POINTWISE_BODIES))
+
+    arity(f) = maximum(m -> m.nargs, methods(f)) - 1
+    over = [(n, arity(getfield(CL, n)) - 3) for n in POINTWISE_BODIES
+            if arity(getfield(CL, n)) - 3 > 32]
+    @test isempty(over)
+    @test arity(CL._rate_point!) - 3 <= 32
+    @test arity(CL._fluxes_point!) - 3 <= 32
+end

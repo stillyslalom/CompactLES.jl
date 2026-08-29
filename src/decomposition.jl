@@ -133,6 +133,14 @@ function Decomp{T}(n_global::NTuple{3,Int}, periodic::NTuple{3,Bool};
     nl_off = ntuple(d -> local_range(n_global[d], pdims[d], coords[d]), 3)
     n_local = ntuple(d -> nl_off[d][1], 3)
     offset  = ntuple(d -> nl_off[d][2], 3)
+    # `sub_rank[d] == coords[d]` throughout the package: `at_lo_edge` and
+    # `at_hi_edge` below, the fold pairing, the NSCBC wall tests and the
+    # profile gathers in diagnostics.jl all read one where the other would do.
+    # MPI_Cart_sub guarantees it — the sub-communicator along `d` is ordered by
+    # the Cartesian coordinate in `d`, so a rank's position in it is its own
+    # `coords[d]`. Nothing here re-derives the identity, so a decomposition
+    # built by some route other than Cart_create/Cart_sub would have to supply
+    # it.
     sub = ntuple(d -> MPI.Cart_sub(cart, [k == d for k in 1:3]), 3)
     sub_rank = ntuple(d -> MPI.Comm_rank(sub[d]), 3)
     sub_size = ntuple(d -> MPI.Comm_size(sub[d]), 3)

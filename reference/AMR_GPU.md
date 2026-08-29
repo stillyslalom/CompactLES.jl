@@ -204,10 +204,9 @@ framework, the Padé-class reference; Nissen et al. (2015) on block-adaptive
 grids; Almquist & Dunham (2018) on order-preserving interpolation at
 non-conforming interfaces. The documented costs (interface-order loss,
 penalty terms above 4th order, a rewrite of the closure cascade and every
-convergence guard) were never justified: no measurement forced it. The
-family resemblance is worth remembering — SAT penalties act on the RHS
-exactly as the NSCBC corrections do, so an eventual SBP–SAT implementation
-could subsume that machinery rather than fight it.
+convergence guard) were never justified: no measurement forced it. SAT
+penalties act on the RHS exactly as the NSCBC corrections do, so an eventual
+SBP–SAT implementation could subsume that machinery rather than fight it.
 
 ## Patches and same-level interfaces
 
@@ -216,9 +215,9 @@ could subsume that machinery rather than fight it.
 every field array, typed `A <: AbstractArray{T,3}` by the storage backend.
 `Solver` holds the physics configuration plus this rank's patches; a
 single-patch solver forwards patch-owned property names to its sole patch
-through `Base.getproperty`, which is what kept the refactor
-behavior-preserving — the single-patch code path *is* the old code path, and
-the hard gate held it to bit-identical convergence output. Routines between
+through `Base.getproperty`, which kept the refactor behavior-preserving: the
+single-patch code path is the old code path, and the hard gate held it to
+bit-identical convergence output. Routines between
 the step drivers and the arrays take a `SolverLike` (single-patch `Solver`
 or `PatchSolver`), so one body serves both.
 
@@ -266,7 +265,8 @@ down writes an attenuated representation into a field of point samples; both
 are O(h²) against the solution, and the manufactured-solution gate measured
 order 1.3–1.7 through the pair. The default coupling is therefore the
 point-sample halves of the same machinery — order-6 Lagrange interpolation
-up (`interpolate!`), coincident-node injection down (`inject!`) — which
+up (`interpolate!`), coincident-node injection down (a sampled
+`gather_region!`) — which
 measures order 3.46/3.64 with errors three decades lower.
 `level_restriction = :filter` keeps the anti-aliasing pair selectable, and
 regridding still initializes *new* fine cells by interpolation for the same
@@ -338,8 +338,8 @@ each. The coupling runs on a replicated-data, distributed-work split:
 - **Data replicates.** `gather_region!` assembles a node region of a
   distributed field on every rank with one Allgatherv; the buffered coarse
   box gathers per shell imposition, the `:inject` restriction is a sampled
-  gather of the coincident nodes (identical values to the former
-  per-dimension `inject!` chain), and a regrid gathers the surviving fine
+  gather of the coincident nodes (identical values to the per-dimension
+  subsampling chain it replaced), and a regrid gathers the surviving fine
   state
   once at the regrid cadence. Regions are small by construction, which is
   what makes replication the right first distribution: no halo machinery
@@ -414,8 +414,9 @@ itself around the device-side array. Bodies take no `::Type` argument — a
 body call into per-point runtime dispatch, measured at 9× on the flux
 assembly on *both* paths. A splatted kernel-argument tuple longer than 32
 elements lowers through the dynamic apply and is an `InvalidIRError` on
-device; 32 is the body-argument budget, and the NSCBC bodies carry their
-scalars in small tuples for exactly this reason.
+device; the budget is 32 launcher arguments, or 35 declared once `i, j, k`
+are counted, and the NSCBC bodies carry their scalars in small tuples for
+exactly this reason. `test/device_tests.jl` asserts it for every body.
 
 ### Line solves
 
@@ -431,8 +432,8 @@ ordering is identical to the host path. The kernels carry a `colwise` switch
 because the two *host* layouts themselves disagree in the banded solve (the
 x sweep divides by the diagonal where the transposed y/z sweeps multiply by
 its inverse, and they accumulate the spike correction differently);
-mirroring each dimension's own convention is what makes the device output
-bitwise per dimension.
+mirroring each dimension's own convention keeps the device output bitwise
+per dimension.
 
 ### Residency
 
@@ -677,12 +678,13 @@ guarded somewhere; none should be re-derived.
    `Any`-typed cache lookup behind a runtime `Ref` branch put 33 dispatch
    sites into the RHS report without ever executing. Jetcheck deltas are the
    tripwire for both, which is why the gate compares them probe for probe.
-6. **Bitwise device equality is achievable and worth engineering for.**
-   Mirroring each host layout's arithmetic (the `colwise` switch), keeping
-   reductions exact, and moving rather than recomputing values in the
-   transfer paths bought a whole-run equality oracle that catches what
-   tolerance-based gates blur. When a device result differs in the last
-   bit, something specific is wrong somewhere findable.
+6. **Bitwise device equality is achievable, and it pays for itself as a test
+   oracle.** Mirroring each host layout's arithmetic (the `colwise` switch),
+   keeping reductions exact, and moving rather than recomputing values in the
+   transfer paths gives a whole-run equality check over every phase at once,
+   where a tolerance-based gate would have to be loose enough to pass the
+   accumulated round-off and would then also pass a real defect of that size.
+   A difference in the last bit localizes to one operation.
 7. **The launch floor was host round trips, not kernels.** Synchronizing
    per launch cost 28–32% of the device step; one in-order stream with a single
    algorithmic fence removed it without any event graph. Streams and events
@@ -708,9 +710,9 @@ guarded somewhere; none should be re-derived.
     methods are newer than the running function's world; every launch then
     errors. Bench scripts load the backend at top level before `mpi_main`
     (`bench/tgv_energy.jl` carries the comment).
-12. **`MPI.Dims_create` knows nothing about scheme minima.** Letting it pick
-    a fine-patch grid means a regrid can die mid-run on the 9-point closure
-    constraint; `_amr_dims` searches factorizations under the constraint
+12. **`MPI.Dims_create`'s factorization takes no account of scheme minima.**
+    Letting it pick a fine-patch grid means a regrid can die mid-run on the
+    9-point closure constraint; `_amr_dims` searches factorizations under it
     and errors at setup or at the regrid that shrank the region, with the
     numbers in the message.
 

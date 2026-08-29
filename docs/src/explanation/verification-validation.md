@@ -79,14 +79,17 @@ figures; movement in an earlier digit warrants investigation.
 
 ## Artificial-property calibration
 
-`reference/CALIBRATION.md` records sweeps over Cook coefficients, CFL, and
+[`reference/CALIBRATION.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION.md)
+records sweeps over Cook coefficients, CFL, and
 Taylor--Green dissipation. Every reported coefficient is conditional on filter
 strength, filter cadence, grid, EOS, and the reference cases used to select it.
 Changing any of those invalidates a claim of unchanged calibration.
 
 Current evidence includes two important limits:
 
-- strong startup shocks may require CFL at or below about 0.15; and
+- a converging strong shock is CFL-limited at the symmetry cell, at 0.4 for the
+  spherical origin and 0.2 for the cylindrical axis and the planar wall under
+  the default `smoother = :gaussian`; and
 - the spherical origin requires initial data smooth over at least several
   cells.
 

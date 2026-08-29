@@ -161,8 +161,8 @@ not get driver-team priority on a whole-application report).
    themselves** (argument shapes, the `(lines × n)` ndrange, the larger
    buffers). Next session: run `mode=ka work=2000 watch=120` at `-t 8`;
    if clean, the bisection moves top-down inside the apply (a
-   CompactLES-dependent rung is fine for bisection even though the
-   eventual ticket wants the bottom-up MWE).
+   CompactLES-dependent rung is fine for bisection even though filing the
+   eventual ticket requires the bottom-up MWE).
 2. **`bench/stall_mwe.cpp`** — the Julia-free rung: the same loop in
    plain HIP with N extra dormant (or busy) host threads
    (`hipcc -O2 -o stall_mwe stall_mwe.cpp`; `./stall_mwe 120 20000 7`).

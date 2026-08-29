@@ -20,22 +20,25 @@
 #
 # Arithmetic mirrors the host path per line, operation for operation, so a
 # [`DevicePlan`](@ref) reproduces its host plan bitwise — the same equality
-# gate the pointwise kernels carry. The one place the two host
-# layouts themselves disagree is the banded solve: the x-sweep divides by the
-# diagonal (`solve_col!`) where the transposed y/z sweeps multiply by its
-# inverse, and the x-sweep accumulates the spike correction before one
-# subtraction where the transposed sweeps subtract term by term. `colwise`
-# selects the convention matching the plan's dimension.
+# gate the pointwise kernels carry. One place in the banded solve the two host
+# layouts still disagree: the x-sweep accumulates the spike correction before
+# one subtraction where the transposed sweeps subtract term by term, and
+# `colwise` selects the convention matching the plan's dimension. The
+# elimination sweep and the back-substitution pivot were once such places too
+# and are no longer — every host path now skips a zero multiplier and
+# multiplies by `inv(U[1, i])`, so the device kernel does both unconditionally.
 
 """
     DeviceBackend(ka)
 
 Storage backend wrapping a `KernelAbstractions.Backend`, so that
 [`field`](@ref) and [`allocate_state`](@ref) allocate zero-filled device
-arrays through the same seam `CPUBackend` allocates `Array`s. This is the
-allocation half of the G-track; the solver's halo exchange and boundary
-machinery do not yet run on device arrays, so a full `Solver` on a
-`DeviceBackend` is G3 work, not a supported configuration today.
+arrays through the same seam `CPUBackend` allocates `Array`s. A whole
+`Solver` runs on one: [`backend_plan`](@ref) mirrors every compact plan onto
+the backend at construction, the pointwise phases launch as
+KernelAbstractions kernels, and the halo, fold-pair and level-transfer
+exchanges take their staged forms. The configurations refused at setup are
+listed with the `Solver` constructor.
 """
 struct DeviceBackend{B} <: AbstractBackend
     ka::B
@@ -280,13 +283,20 @@ end
     end
 end
 
-@kernel function _dev_banded_kernel!(B, @Const(Lm), @Const(U), n, q, colwise)
+@kernel function _dev_banded_kernel!(B, @Const(Lm), @Const(U), n, q)
     l = @index(Global, Linear)
     @inbounds begin
         for k in 1:(n-1)
             xk = B[l, k]
             for m in 1:min(q, n - k)
-                B[l, k+m] -= Lm[m, k] * xk
+                lm = Lm[m, k]
+                # Skip a zero multiplier, as all three host sweeps do.
+                # Identical to multiplying on finite data, but 0 * Inf is
+                # NaN, so the skip is what keeps a non-finite field from
+                # spreading along rows the host leaves untouched. One
+                # comparison per line-step.
+                iszero(lm) && continue
+                B[l, k+m] -= lm * xk
             end
         end
         for i in n:-1:1
@@ -294,7 +304,9 @@ end
             for t in 1:min(q, n - i)
                 acc -= U[1+t, i] * B[l, i+t]
             end
-            B[l, i] = colwise ? acc / U[1, i] : acc * inv(U[1, i])
+            # Reciprocal pivot on every dimension, as all three host banded
+            # back-substitutions now do (`solve_col!` carries the reason).
+            B[l, i] = acc * inv(U[1, i])
         end
     end
 end
@@ -392,8 +404,11 @@ end
 function _dev_solve!(plan::DevicePlan, sweep::DeviceBanded)
     ls = plan.host.line_solver
     L, n, q = plan.lines, plan.n, sweep.q
-    _dev_banded_kernel!(plan.backend)(plan.B, sweep.L, sweep.U, n, q,
-                                      plan.colwise; ndrange=L)
+    # No `colwise`: the elimination sweep and the pivot are now the same
+    # arithmetic on every dimension. Only the spike correction below still
+    # follows the plan's dimension.
+    _dev_banded_kernel!(plan.backend)(plan.B, sweep.L, sweep.U, n, q;
+                                      ndrange=L)
     _maybe_sync(plan.backend)
     ls.hasred || return nothing
 

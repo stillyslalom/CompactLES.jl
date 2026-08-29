@@ -216,7 +216,8 @@ end
     m1 = solver.equations.i_mom[1]
     noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
     @info "subcycled Sod through refinement boundary" noise
-    # Measured 5.7e-11 against the global-dt gate's 6.4e-10.
+    # Measured 1.3e-10 against the global-dt gate's 6.4e-10 (5.7e-11 under the
+    # former κ/(ρ cp) diffusive limit; the cv form takes different steps).
     @test noise < 1e-8
     for (psq, Q) in CL.eachpatch(solver, states)
         n = psq.decomp.n_local[1]
@@ -281,8 +282,9 @@ end
         e_amr = max(e_amr, abs(v - rho_ref[3i - 2]))
     end
     @info "moving-region Sod vs uniform fine" e_amr e_base
-    # Measured: composite 3.9e-3 against the uniform-coarse baseline's
-    # 7.3e-2 — the refinement recovers most of the uniform-fine answer at a
+    # Measured: composite 2.7e-3 against the uniform-coarse baseline's
+    # 7.3e-2 (3.9e-3 under the former κ/(ρ cp) diffusive limit, whose steps
+    # differ); the refinement recovers most of the uniform-fine answer at a
     # third of the fine points.
     @test e_amr < 1.5e-2
     @test e_base > 5e-2

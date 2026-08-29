@@ -128,7 +128,7 @@ function main(opt, device_array)
         (Q, eos, pr[1], pr[2], pr[3], pr[4], pr[5], pr[6], pr[7],
          ar[1], ar[2], ar[3], CL.FieldVector(D), CL.FieldVector(Y),
          CL.FieldMatrix(gu), gT, CL.FieldMatrix(gY), CL.FieldMatrix(fl),
-         1e-3, 0.7, 0.7, nsp, m1, m2, m3, ie, pad, pad, pad)
+         1e-3, 0.7, 0.7, nsp, m1, m2, m3, ie, (true, true, true), pad, pad, pad)
     ac = fluxargs(Qc2, prims, arts, D_c, Y_c, gu_c, gT_c, gY_c, fl_c)
     CL.pointwise!(CL._fluxes_point!, Qc2, n..., ac...)
     Qg2 = device_array(Qc2)

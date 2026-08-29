@@ -7,16 +7,20 @@ module CompactLESHDF5Ext
 using CompactLES
 using CompactLES: BlockRegion, Decomp, Solver, owned_region, region_ranges
 using CompactLES: axis_matches, global_axis, type_name
+using CompactLES: ensure_output_dir, restore_switches!, switch_codes
 using MPI
 using HDF5
 
 has_parallel() = HDF5.has_parallel()
 
 # Format 2 added the species set, the metric and the grid coordinates to the
-# checkpoint header, which format 1 has no record of. The reader requires an
-# exact match rather than accepting the older file, since the point of those
-# fields is that a restart they do not cover cannot be validated at all.
-const CKPT_FORMAT = 2
+# checkpoint header, which format 1 has no record of. Format 3 added the element
+# type of the state and the mutable run state (`cfl`, `dt_prev`, `rate_prev`,
+# and the `switched` flag of each boundary face); the reasoning is at the top of
+# `src/io.jl`. The reader requires an exact match rather than accepting an older
+# file, since the point of those fields is that a restart they do not cover
+# cannot be validated at all.
+const CKPT_FORMAT = 3
 
 # --- Opening a shared file --------------------------------------------------
 #
@@ -29,30 +33,85 @@ const CKPT_FORMAT = 2
 # Closing before passing the token is what makes this safe: two processes with
 # the file open at once is precisely what a serial libhdf5 cannot do, and it
 # corrupts rather than fails.
+#
+# An exception inside `body` is a collective problem rather than a local one. A
+# rank that threw before passing its token leaves its successor blocked in
+# `Recv!` and its predecessors blocked in the closing collective, so the token
+# moves from a `finally` and the failure is then reduced across the
+# communicator. The ranks that succeeded raise as well, instead of returning
+# into a communicator whose next collective they no longer agree on.
+#
+# The parallel backend cannot be made safe to the same degree. `h5open` on the
+# MPI-IO driver and every dataset creation under it are themselves collective, so
+# a rank throwing partway through `body` has already diverged from the others and
+# blocks them where they stand. The reduction below still covers a failure raised
+# on every rank, or one raised after the last collective call in `body`.
+
+# --- Transfer mode under the parallel backend --------------------------------
+#
+# Nothing here sets `dxpl_mpio = :collective`, so every hyperslab write below
+# goes out under HDF5's default independent transfer mode. That is correct but
+# not fast: a collective transfer lets the MPI-IO layer aggregate the per-rank
+# hyperslabs into a few large contiguous writes, which is most of what makes a
+# shared write scale at high rank counts.
+#
+# Adopting it is a behavioural change rather than a keyword. A collective
+# transfer requires every rank of the file's communicator to call H5Dwrite on
+# the same dataset in the same order, and the slice path does not: a rank
+# holding no part of the requested plane writes nothing today and would instead
+# have to issue a write with an empty selection. Making that change belongs on a
+# machine with a parallel libhdf5 built against the run's MPI, which is the only
+# place it can be exercised — `hdf5_parallel()` is false on a workstation, where
+# the serialized relay above runs instead and no transfer property applies.
+
+# The relay token's tag. Nothing else uses 0 on these communicators; the halo
+# families start at 10 (see the tag note in src/halo.jl).
+const TOKEN_TAG = 0
 
 function with_shared_file(body, path::AbstractString, mode::AbstractString,
                           comm::MPI.Comm)
     if has_parallel()
-        # One collective open. `dxpl_mpio=:collective` on the writes themselves
-        # is set at the call sites, where the dataset is known.
-        h5open(path, mode, comm) do file
-            body(file)
+        failure = nothing
+        try
+            # One collective open.
+            h5open(path, mode, comm) do file
+                body(file)
+            end
+        catch e
+            failure = e
         end
-        MPI.Barrier(comm)
+        _raise_shared_failure(failure, path, comm)
         return path
     end
     rank = MPI.Comm_rank(comm)
-    size = MPI.Comm_size(comm)
+    nranks = MPI.Comm_size(comm)
     token = Ref(0)
-    rank == 0 || MPI.Recv!(token, comm; source=rank - 1, tag=0)
+    rank == 0 || MPI.Recv!(token, comm; source=rank - 1, tag=TOKEN_TAG)
     # Rank 0 creates ("w" / "cw"), everyone after appends to what exists.
     local_mode = rank == 0 ? mode : (mode == "r" ? "r" : "r+")
-    h5open(path, local_mode) do file
-        body(file)
+    failure = nothing
+    try
+        h5open(path, local_mode) do file
+            body(file)
+        end
+    catch e
+        failure = e
+    finally
+        rank == nranks - 1 || MPI.Send(token, comm; dest=rank + 1, tag=TOKEN_TAG)
     end
-    rank == size - 1 || MPI.Send(token, comm; dest=rank + 1, tag=0)
-    MPI.Barrier(comm)
+    _raise_shared_failure(failure, path, comm)
     return path
+end
+
+# The reduction doubles as the barrier that used to close `with_shared_file`:
+# every rank has finished with the file by the time it returns.
+function _raise_shared_failure(failure, path::AbstractString, comm::MPI.Comm)
+    anyfail = MPI.Allreduce(failure === nothing ? 0 : 1, max, comm)
+    failure === nothing || throw(failure)
+    anyfail == 0 ||
+        error("with_shared_file: another rank failed on $path and raised the " *
+              "cause; this rank's own write completed")
+    return nothing
 end
 
 # A dataset covering the whole global array, created once and written in
@@ -137,6 +196,7 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver, Q, prefix::AbstractStri
     nx, ny, nz = decomp.n_local
     block = Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :]
     path = string(prefix, ".h5")
+    ensure_output_dir(prefix, comm)
 
     with_shared_file(path, "w", comm) do file
         if has_parallel() || rank == 0
@@ -151,14 +211,29 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver, Q, prefix::AbstractStri
                            solver.equations.component_names, rank)
             write_strings!(g, "metric", [type_name(solver.metric)], rank)
             write_strings!(g, "eos", [type_name(solver.eos)], rank)
+            write_strings!(g, "eltype", [string(eltype(Q))], rank)
+            # The mutable run state, for the reasons src/io.jl gives: a retry
+            # lowers `cfl`, the growth cap and `filter_weight` read `dt_prev`
+            # and `rate_prev`, and a boundary face that has switched must not
+            # come back unswitched on any rank.
+            write_meta!(g, "cfl", Float64(solver.cfl), rank)
+            write_meta!(g, "dt_prev", Float64(solver.dt_prev), rank)
+            write_meta!(g, "rate_prev", Float64(solver.rate_prev), rank)
+            write_meta!(g, "switched", switch_codes(solver), rank)
             cg = create_group(file, "grid")
             for d in 1:3
                 write_meta!(cg, "xyz"[d:d], global_axis(solver, d), rank)
             end
         end
         dims = (decomp.n_global..., n_cons)
-        dset = shared_dataset(file, "state/Q", Float64, dims, comm)
-        write_region4!(dset, region, block, n_cons)
+        # `eltype(Q)`, not Float64: a Float32 solver would otherwise write a
+        # widened copy that no longer round-trips bit for bit.
+        dset = shared_dataset(file, "state/Q", eltype(Q), dims, comm)
+        try
+            write_region4!(dset, region, block, n_cons)
+        finally
+            close(dset)
+        end
     end
     return prefix
 end
@@ -206,6 +281,10 @@ function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractStr
         stored_eos == type_name(solver.eos) ||
             error("equation of state mismatch: file has $stored_eos, solver " *
                   "has $(type_name(solver.eos))")
+        stored_eltype = String(first(read(file["meta/eltype"])))
+        stored_eltype == string(eltype(Q)) ||
+            error("element type mismatch: file holds $stored_eltype, this " *
+                  "state array holds $(eltype(Q))")
         # The coordinates carry the domain extent, the origin and any `Stretch`,
         # none of which `n_global` constrains.
         for d in 1:3
@@ -217,6 +296,10 @@ function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractStr
         end
         solver.t = read(file["meta/t"])
         solver.step = Int(read(file["meta/step"]))
+        solver.cfl = read(file["meta/cfl"])
+        solver.dt_prev = read(file["meta/dt_prev"])
+        solver.rate_prev = read(file["meta/rate_prev"])
+        restore_switches!(solver, read(file["meta/switched"]), path)
         block = read_region4(file["state/Q"], region, n_cons)
         Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :] .= block
     end
@@ -278,6 +361,7 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
     mine = CompactLES._has_output(ranges)
     region = BlockRegion(off, nlocal)
     path = string(prefix, ".h5")
+    ensure_output_dir(prefix, comm)
 
     with_shared_file(path, "w", comm) do file
         if has_parallel() || rank == 0
@@ -303,39 +387,47 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
             # of the ranks with nothing to write, and every rank must reach the
             # creation call under the parallel backend.
             dset = shared_dataset(file, "grid/points", Float64, (3, nglobal...), comm)
-            if mine
-                # One position per point, component first, so the sidecar can
-                # point XDMF's XYZ geometry straight at it.
-                pts = Array{Float64}(undef, 3, nlocal...)
-                for (kk, k) in enumerate(ranges[3]), (jj, j) in enumerate(ranges[2]),
-                    (ii, i) in enumerate(ranges[1])
-                    x, y, z = CompactLES._cartesian_position(solver.metric,
-                        xcoord(solver, 1, i), xcoord(solver, 2, j),
-                        xcoord(solver, 3, k))
-                    pts[1, ii, jj, kk] = x
-                    pts[2, ii, jj, kk] = y
-                    pts[3, ii, jj, kk] = z
+            try
+                if mine
+                    # One position per point, component first, so the sidecar
+                    # can point XDMF's XYZ geometry straight at it.
+                    pts = Array{Float64}(undef, 3, nlocal...)
+                    for (kk, k) in enumerate(ranges[3]),
+                        (jj, j) in enumerate(ranges[2]),
+                        (ii, i) in enumerate(ranges[1])
+                        x, y, z = CompactLES._cartesian_position(solver.metric,
+                            xcoord(solver, 1, i), xcoord(solver, 2, j),
+                            xcoord(solver, 3, k))
+                        pts[1, ii, jj, kk] = x
+                        pts[2, ii, jj, kk] = y
+                        pts[3, ii, jj, kk] = z
+                    end
+                    r = region_ranges(region)
+                    dset[1:3, r...] = pts
                 end
-                r = region_ranges(region)
-                dset[1:3, r...] = pts
+            finally
+                close(dset)
             end
         end
         for (name, ncomp, data) in entries
-            if !mine
-                # No part of the plane on this rank. Under the serialized
-                # backend that is simply nothing to write. A collective write
-                # would instead need every rank to call H5Dwrite with an empty
-                # selection; see the slicing note in reference/ROADMAP.md.
-                shared_dataset(file, "fields/" * name, Float32,
-                               ncomp == 1 ? nglobal : (ncomp, nglobal...), comm)
-            elseif ncomp == 1
-                dset = shared_dataset(file, "fields/" * name, Float32, nglobal, comm)
-                write_region3!(dset, region, reshape(data, nlocal))
-            else
-                dset = shared_dataset(file, "fields/" * name, Float32,
-                                      (ncomp, nglobal...), comm)
-                r = region_ranges(region)
-                dset[1:ncomp, r...] = reshape(data, ncomp, nlocal...)
+            dims = ncomp == 1 ? nglobal : (ncomp, nglobal...)
+            dset = shared_dataset(file, "fields/" * name, Float32, dims, comm)
+            try
+                # A rank holding no part of the plane creates the dataset and
+                # writes nothing into it, which is all the serialized backend
+                # needs. Under the parallel backend the write is independent
+                # rather than collective; see the note on `dxpl_mpio` at the
+                # head of this file.
+                if mine
+                    if ncomp == 1
+                        write_region3!(dset, region, reshape(data, nlocal))
+                    else
+                        r = region_ranges(region)
+                        dset[1:ncomp, r...] = reshape(data, ncomp, nlocal...)
+                    end
+                end
+            finally
+                close(dset)
             end
         end
     end

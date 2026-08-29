@@ -158,6 +158,10 @@ function init_geometry!(solver)
         copyto!(solver.inv_r, inv_r)
         copyto!(solver.cot_over_r, cot_over_r)
     end
+    # The momentum sources read the discrete-GCL cotθ/r; everything else
+    # (the velocity-gradient correction, the rate estimate) keeps the
+    # analytic value. Without a resolved θ the two coincide.
+    copyto!(solver.cot_over_r_gcl, solver.cot_over_r)
     solver.metric isa SphericalMetric && solver.decomp.active[2] && gcl_cotr!(solver)
     return solver
 end
@@ -204,8 +208,15 @@ end
 # inv_J·D_ξ2(A₂): the identical operator (same compact scheme, same pole/antipodal
 # fold, same antipodal sign σ as the m2 pressure flux) applied to the identical
 # area factor. By linearity the source then cancels the divergence node-by-node
-# for any uniform state, by construction. The correction is O(h⁴) from the
-# analytic value, so it does not degrade the scheme's formal order elsewhere.
+# for any uniform state, by construction.
+#
+# The result lives in `cot_over_r_gcl`, read by `add_metric_sources!` alone,
+# and not in `cot_over_r`, which `metric_correct_gradients!` reads for the
+# curvature terms of ∇u. The discrete value deviates from the analytic one at
+# the order of the θ closure, measured third order on a spherical shell both
+# at the walls and in the interior (the compact solve is global), so sharing
+# one array put a third-order error into `grad_u[3,2]`, `grad_u[3,3]` and
+# everything built from them at every scheme order.
 function gcl_cotr!(solver)
     decomp = solver.decomp
     # Same antipodal sign the flux-divergence loop uses for the θ-momentum
@@ -216,15 +227,18 @@ function gcl_cotr!(solver)
     div_along!(solver.tmp_a, solver.area_d[2], solver, 2, σ)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    pointwise!(_gcl_cotr_point!, solver.cot_over_r, nx, ny, nz,
-               solver.cot_over_r, solver.inv_J, solver.tmp_a, o1, o2, o3)
+    pointwise!(_gcl_cotr_point!, solver.cot_over_r_gcl, nx, ny, nz,
+               solver.cot_over_r_gcl, solver.inv_J, solver.tmp_a, o1, o2, o3)
     return solver
 end
 
-@inline function _gcl_cotr_point!(cot_over_r, inv_J, tmp_a, o1, o2, o3, i, j, k)
+# Interior only: the halo layers keep the analytic value copied in by
+# `init_geometry!`, and no consumer of `cot_over_r_gcl` reads a halo.
+@inline function _gcl_cotr_point!(cot_over_r_gcl, inv_J, tmp_a, o1, o2, o3,
+                                  i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        cot_over_r[I] = inv_J[I] * tmp_a[I]
+        cot_over_r_gcl[I] = inv_J[I] * tmp_a[I]
     end
     return nothing
 end
@@ -352,7 +366,7 @@ function add_metric_sources!(solver, dQ, Q, ::SphericalMetric)
     pointwise!(_metric_src_sph_point!, solver.inv_r, nx, ny, nz,
                dQ, solver.field_tuples.grad_u, solver.transport.mu0, solver.mu_art,
                solver.beta_art, solver.rho, solver.u, solver.v, solver.w,
-               solver.p, solver.inv_r, solver.cot_over_r, m[1], m[2], m[3],
+               solver.p, solver.inv_r, solver.cot_over_r_gcl, m[1], m[2], m[3],
                o1, o2, o3)
     return solver
 end

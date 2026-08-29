@@ -50,10 +50,22 @@
 using AMDGPU
 using Printf
 
+# Settings come from ARGS as key=value, the shape `script_args` gives every
+# other script here. This file carries no CompactLES dependency, so the
+# parse is spelled out, including the two failure modes that matter: an
+# unknown key is an error rather than a default silently run for the length
+# of a job, and an argument without '=' is named rather than a BoundsError.
+const KNOWN_KEYS = ("mode", "watch", "work", "sync", "mpi", "alloc", "burst")
 const opts = Dict{String,String}()
 for a in ARGS
-    k, v = split(a, '='; limit=2)
-    opts[String(k)] = String(v)
+    parts = split(a, '='; limit=2)
+    length(parts) == 2 ||
+        error("argument \"$a\" is not key=value; keys: " *
+              join(KNOWN_KEYS, ", "))
+    key = String(parts[1])
+    key in KNOWN_KEYS ||
+        error("unknown key \"$key\"; keys: " * join(KNOWN_KEYS, ", "))
+    opts[key] = String(parts[2])
 end
 getopt(k, d) = get(opts, k, d)
 

@@ -66,6 +66,26 @@ Columns:
   `test/cases.jl`. `StepControl` now raises a `SolverFailure` in `run!`, detecting
   the positivity loss approximately 150 steps before the timestep collapse.
 
+### The shipped settings
+
+The sections below carry the measurements each row rests on, and the rows that
+turn on a single study link to it. The open items these settings leave are under
+[Recommendations](#recommendations) at the end.
+
+| Constant | Default | Keep? | Notes |
+|---|---|---|---|
+| `C_mu` | 0.002 | yes | TGV at 128³ gives an optimum of 0.004 ± 0.003, which contains 0.002; values above 0.008 are unstable in spherical Noh. |
+| `C_beta` | 1.0 | yes | Accuracy optimum near 0.4; use 0.5 for interface-dominated work and avoid zero. The constant trades the planar and cylindrical CFL ceilings against the spherical one, and 1.0 is the value that maximizes the spherical one. Refit under `:d8`, where the viable window moves from 0.25–1.0 up to 1.0–4.0 and intersects the `:delta4` window only at the shipped value. [Measurements](#the-c_beta-refit-under-d8). |
+| `C_kappa` | 0.01 | yes | 0.02–0.04 measurably reduces wall heating; avoid zero. |
+| `C_D` | 0.01 | yes | The compact filter dominates interface broadening, so sensitivity to `C_D` is weak. |
+| `mu_sensor` | `:strain` | yes | `:velocity` is the reference field and recovers the detector's full designed selectivity, which `:strain` destroys through the cusps of \|S\|; it then moves no column of the battery past the fourth digit, because no case there gives the shear channel anything to do. On Taylor–Green it raises the μ\* share of the sink 4.5% → 6.0% for +46% on the sensor phase. [Measurements](#the-sensors-read-s-not-the-velocity-and-the-dilatation). |
+| `beta_sensor` | `:strain` | yes | `:gated_strain` raises the cylindrical Noh CFL ceiling from 0.15 to 0.2 for one pointwise pass and is otherwise a wash; `:dilatation` buys 0.25% of the Shu–Osher wave train and loses both converging Noh geometries at the fold; `:ungated_dilatation`, the reference form, keeps the origin and still loses the axis, improves the ν = 3 plateau and the Lax contact, and costs 0.5% of the Shu–Osher train and 1.5% of the Woodward peak. |
+| `reduction` | `:sum` | yes | `:max` is the reference's directional reduction. Identical in one dimension, so the whole battery is blind to it; on Taylor–Green it cuts the μ\* share 4.5% → 2.7% and moves the dissipation peak from t = 8.49 to 8.97 against a reference peak at t = 9. |
+| `smoother` | `:gaussian` | yes | Changed from `:compact` in August 2026. Raises the spherical-origin CFL ceiling 0.15 → 0.4 and the cylindrical 0.15 → 0.2, cuts the sensor phase 29%, and improves every Noh plateau and pre-shock L1. Costs wall heating at ν = 1 (+58 → +64%) and ν = 2 (+41 → +56%), improves it at ν = 3 (+31 → +27%), and moves the two stored cases by 1–3% of their L1. `C_kappa` cannot recover the wall heating. |
+| `detector` | `:delta4` | provisionally | `:d8` improves six of seven battery columns and removes the artificial-property CFL restriction outright at the planar wall and the cylindrical axis (0.2 → 1.0+), at 40% of the spherical-origin timestep (0.4 → 0.25) and +19% on the right-hand side. The `C_beta` refit is [done](#the-c_beta-refit-under-d8): 1.0 is retained, no value in 0.25–4 recovers the origin, and the worst geometry improves 0.2 → 0.25 under `:d8`. Held at `:delta4` on the origin cell alone. [Measurements](#the-ringing-detector-is-an-eighth-derivative-not-a-fourth-difference). |
+| `cfl` | 0.5 | **no** | Use 0.3 with shocks and `StepControl(retries = 4)` for recovery. Converging geometry now tolerates 0.4 (spherical) and 0.2 (cylindrical) under the default smoother. Note that under `filter_cfl = 0` the CFL is not only a stability choice: it sets how much subgrid dissipation the filter supplies, and moves the μ\* share of the Taylor–Green sink by 29% relative across a factor of two. |
+| `filter_cfl` | 0.0 | provisionally | Reference CFL for a full-strength filter pass. The default is the unrelaxed formulation, in which the filter dissipates per application and its subgrid dissipation does not converge as `dt → 0`. A positive value makes it a rate: filter loss is constant to six figures across a 4× CFL change, and the Taylor–Green channel split holds to 0.1 points where it otherwise moves 2.8. Held at 0 pending the α and cadence fit, which is the other half of the same debt and requires the 3-D campaign. [Measurements](#the-filter-dissipates-per-application-not-per-unit-time). |
+
 ## C_beta — the shock constant
 
 ```
@@ -140,7 +160,7 @@ converging shocks rests on.
 This corrects a claim carried in the remainders list below since the CFL study.
 A *larger* `C_beta` was measured against the ν = 1 restriction and does not move
 it; a smaller one moves it from 0.25 to beyond 1.0. The earlier measurement was
-not wrong, it was one-sided.
+not wrong; it was one-sided.
 
 The trade is the same one `detector = :d8` makes, and in the same direction:
 both act by reducing β\* where the field is smooth, and both help at the wall
@@ -438,8 +458,6 @@ measurable no-op at `n_species == 2`: not only do `D*_1` and `D*_2` agree to
 at least three species, where the correction velocity can alter the species
 fluxes.
 
-<a id="the-beta-sensor--strain-or-dilatation"></a>
-
 ## The filter dissipates per application, not per unit time
 
 The compact filter supplies most of the energy sink at every resolution
@@ -532,6 +550,8 @@ the truncated-final-step artifact recorded against `bench/tgv_energy.jl`.
 The default is `filter_cfl = 0`, the unrelaxed formulation, and it takes the
 original code path exactly rather than a blend at `w = 1`. Every guarded number
 in the suite was measured there and none of them moves.
+
+<a id="the-beta-sensor--strain-or-dilatation"></a>
 
 ## The β\* sensor — strain, gated, or dilatation
 
@@ -1175,7 +1195,7 @@ nu = 3  spherical origin     0.4      0.25
 
 `1.0+` is not a table edge: the plateau under `:d8` is flat to four digits
 from 0.15 to 1.0 in both geometries (ν = 1 at 0.9997, ν = 2 at 0.9481–0.9500),
-so the artificial-property restriction on those two is not raised, it is gone.
+so the artificial-property restriction on those two is not raised; it is gone.
 The spherical origin moves the other way, 0.4 to 0.25.
 
 #### Where the spherical loss comes from
@@ -1476,9 +1496,9 @@ strain     max         5682     8.97      1.2496e-2      33.3%     2.7%   64.0%
 there is almost no dilatation for it to act on.
 
 The velocity sensor raises the μ\* share by a third at the expense of the
-filter's, and the directional maximum cuts it by 40%, which is what reducing
-rather than summing three directions gives. Both are moves of one to two points
-in a 4.5% channel, within a sink the filter dominates, so neither is
+filter's, and the directional maximum cuts it by 40%, because reducing rather
+than summing three directions gives a smaller number. Both are moves of one to
+two points in a 4.5% channel, within a sink the filter dominates, so neither is
 distinguishable from a rescaling of `C_mu`. Two further results are not
 rescalings. The peak falls 0.3% under `:velocity`, toward the van Rees
 reference of 1.2e-2, and the peak *time* under `:max` moves 8.49 → 8.97 against
@@ -1646,9 +1666,10 @@ active dimensions and folds the diffusive rate into the same sum.
 The sound speed is therefore counted once there and once per active dimension
 here. On an isotropic three-dimensional grid the rate computed here is up to
 three times larger for the same state, so `cfl = 0.15` corresponds to a step
-comparable to `cfl ≈ 0.4` under the reference convention. This matters for
-comparing the numbers in this document against the literature; it does **not**
-explain away [the ceiling](#cfl-which-dominates-all-four), because the cases
+comparable to `cfl ≈ 0.4` under the reference convention. The factor of three
+has to be applied when comparing any CFL number in this document against the
+literature; it does **not** explain away
+[the ceiling](#cfl-which-dominates-all-four), because the cases
 that establish it are one- and two-dimensional converging geometries, where
 the two conventions largely agree.
 
@@ -1702,21 +1723,9 @@ cylindrical axis accepts the cold start at 16× compression.
 
 ## Recommendations
 
-| Constant | Default | Keep? | Notes |
-|---|---|---|---|
-| `C_mu` | 0.002 | yes | TGV at 128³ gives an optimum of 0.004 ± 0.003, which contains 0.002; values above 0.008 are unstable in spherical Noh. |
-| `C_beta` | 1.0 | yes | Accuracy optimum near 0.4; use 0.5 for interface-dominated work and avoid zero. The constant trades the planar and cylindrical CFL ceilings against the spherical one, and 1.0 is the value that maximizes the spherical one. Refit under `:d8`, where the viable window moves from 0.25–1.0 up to 1.0–4.0 and intersects the `:delta4` window only at the shipped value. [Measurements](#the-c_beta-refit-under-d8). |
-| `C_kappa` | 0.01 | yes | 0.02–0.04 measurably reduces wall heating; avoid zero. |
-| `C_D` | 0.01 | yes | The compact filter dominates interface broadening, so sensitivity to `C_D` is weak. |
-| `mu_sensor` | `:strain` | yes | `:velocity` is the reference field and recovers the detector's full designed selectivity, which `:strain` destroys through the cusps of \|S\|; it then moves no column of the battery past the fourth digit, because no case there gives the shear channel anything to do. On Taylor–Green it raises the μ\* share of the sink 4.5% → 6.0% for +46% on the sensor phase. [Measurements](#the-sensors-read-s-not-the-velocity-and-the-dilatation). |
-| `beta_sensor` | `:strain` | yes | `:gated_strain` raises the cylindrical Noh CFL ceiling from 0.15 to 0.2 for one pointwise pass and is otherwise a wash; `:dilatation` buys 0.25% of the Shu–Osher wave train and loses both converging Noh geometries at the fold; `:ungated_dilatation`, the reference form, keeps the origin and still loses the axis, improves the ν = 3 plateau and the Lax contact, and costs 0.5% of the Shu–Osher train and 1.5% of the Woodward peak. |
-| `reduction` | `:sum` | yes | `:max` is the reference's directional reduction. Identical in one dimension, so the whole battery is blind to it; on Taylor–Green it cuts the μ\* share 4.5% → 2.7% and moves the dissipation peak from t = 8.49 to 8.97 against a reference peak at t = 9. |
-| `smoother` | `:gaussian` | yes | Changed from `:compact` in August 2026. Raises the spherical-origin CFL ceiling 0.15 → 0.4 and the cylindrical 0.15 → 0.2, cuts the sensor phase 29%, and improves every Noh plateau and pre-shock L1. Costs wall heating at ν = 1 (+58 → +64%) and ν = 2 (+41 → +56%), improves it at ν = 3 (+31 → +27%), and moves the two stored cases by 1–3% of their L1. `C_kappa` cannot recover the wall heating. |
-| `detector` | `:delta4` | provisionally | `:d8` improves six of seven battery columns and removes the artificial-property CFL restriction outright at the planar wall and the cylindrical axis (0.2 → 1.0+), at 40% of the spherical-origin timestep (0.4 → 0.25) and +19% on the right-hand side. The `C_beta` refit is [done](#the-c_beta-refit-under-d8): 1.0 is retained, no value in 0.25–4 recovers the origin, and the worst geometry improves 0.2 → 0.25 under `:d8`. Held at `:delta4` on the origin cell alone. [Measurements](#the-ringing-detector-is-an-eighth-derivative-not-a-fourth-difference). |
-| `cfl` | 0.5 | **no** | Use 0.3 with shocks and `StepControl(retries = 4)` for recovery. Converging geometry now tolerates 0.4 (spherical) and 0.2 (cylindrical) under the default smoother. Note that under `filter_cfl = 0` the CFL is not only a stability choice: it sets how much subgrid dissipation the filter supplies, and moves the μ\* share of the Taylor–Green sink by 29% relative across a factor of two. |
-| `filter_cfl` | 0.0 | provisionally | Reference CFL for a full-strength filter pass. The default is the unrelaxed formulation, in which the filter dissipates per application and its subgrid dissipation does not converge as `dt → 0`. A positive value makes it a rate: filter loss is constant to six figures across a 4× CFL change, and the Taylor–Green channel split holds to 0.1 points where it otherwise moves 2.8. Held at 0 pending the α and cadence fit, which is the other half of the same debt and requires the 3-D campaign. [Measurements](#the-filter-dissipates-per-application-not-per-unit-time). |
-
-Remaining items, in approximate priority order:
+The table of shipped settings is [near the top](#the-shipped-settings), ahead
+of the measurements it rests on. What remains here are the open items those
+settings leave, in approximate priority order:
 
 1. Raise the CFL ceiling at the symmetry plane. This is the observed
    restriction, and [the measurement above](#where-the-restriction-originates)

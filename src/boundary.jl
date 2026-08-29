@@ -361,13 +361,14 @@ end
         ρ = _wall_density(Q, I, n_species)
         ke = (Q[I,m1]^2 + Q[I,m2]^2 + Q[I,m3]^2) /
              (oftype(ρ, 2) * ρ)
-        Q[I, i_energy] -= ke
         Q[I, m1] = 0
         Q[I, m2] = 0
         Q[I, m3] = 0
-        if iso
-            Q[I, i_energy] = wall_internal_energy(eos, Q, I, n_species, Twall)
-        end
+        # Adiabatic: the kinetic energy leaves with the momentum. Isothermal:
+        # the wall temperature sets the internal energy outright.
+        Q[I, i_energy] = iso ?
+            wall_internal_energy(eos, Q, I, n_species, Twall) :
+            Q[I, i_energy] - ke
     end
     return nothing
 end

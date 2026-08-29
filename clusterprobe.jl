@@ -24,7 +24,7 @@ MPI.Init(threadlevel=:funneled)
 const t_mpi = time()
 
 using CompactLES
-using ThreadPinning
+using CompactLES.ThreadPinning
 const t_load = time()
 
 # Linux exposes the affinity mask the scheduler handed this process. This is the

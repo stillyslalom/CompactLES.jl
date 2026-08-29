@@ -51,8 +51,9 @@ run!(solver, Q; tfinal=1.0)
   walls, Navier-Stokes characteristic subsonic inflow/outflow, and time-dependent Dirichlet forcing.
 - **Parallelism.** MPI 3-D decomposition with a distributed tridiagonal /
   pentadiagonal solve for the globally coupled compact schemes, over threads.
-- **Adaptive refinement.** Under development - block-structured AMR with 
-  sensor-driven tagging and refinement. 
+- **Adaptive refinement.** Block-structured AMR with sensor-driven tagging and
+  regridding, optionally Berger–Oliger subcycled; currently Cartesian-only and
+  one refined region.
 - **GPU execution.** A `KernelAbstractions.jl` device backend runs the whole
   solver on any supported GPU, bit-for-bit against the CPU, in Float64 or Float32.
 - **Diagnostics and I/O.** Coordinate-system-aware, MPI-reduced mixing diagnostics;
@@ -69,8 +70,12 @@ device package (`AMDGPU.jl` or `CUDA.jl`) in your environment.
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 ```
 
-`MPI.jl` includes an MPI binary, so deskop use requires no user-managed binaries. If running on
-HPC, use the [system's MPI binary](https://juliaparallel.org/MPI.jl/stable/configuration/#using_system_mpi)
+`MPI.jl` includes an MPI binary, so desktop use requires no user-managed
+binaries. On a cluster, configure `MPI.jl` against the
+[system's MPI binary](https://juliaparallel.org/MPI.jl/stable/configuration/#using_system_mpi)
+before running: the bundled binary satisfies a single-node run but may fail to
+use the interconnect off it, and the launch rules and measured penalties are in
+[`reference/CLUSTER.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CLUSTER.md).
 
 ## Running
 
@@ -91,8 +96,8 @@ dimensions from splitting too finely.
 
 Problems are described in **primitive, pointwise** terms and never reference
 ranks, halos, or the conserved-variable layout. A `Prim` gives velocity,
-pressure, composition, and exactly one of temperature or density (the EOS
-supplies the other):
+composition, and exactly two of pressure, density and temperature; the EOS
+supplies the third:
 
 ```julia
 Prim(; u=(0,0,0), p, T_ion=NaN, rho=NaN, Y=(1.0,))
@@ -217,10 +222,11 @@ and validated against analytic references.
 
 - Float64 by default; a uniform Float32 mode (CPU and GPU) halves the memory
   footprint but carries a mean-density drift of order 1e-4.
-- Strong shocks need `cfl ≤ 0.15`: the state loses positivity at the symmetry
-  cell as the shock forms there. `StepControl(retries=4)` handles it
+- A converging strong shock is CFL-limited at the symmetry cell, where the state
+  loses positivity as the shock forms: 0.4 at the spherical origin, 0.2 at the
+  cylindrical axis and the planar wall. `StepControl(retries=4)` handles it
   automatically, and `ArtParams(detector=:d8)` lifts the restriction at the
-  planar wall and cylindrical axis.
+  planar wall and cylindrical axis at the cost of the origin (0.4 → 0.25).
 - Converging-shock runs carry cells of negative internal energy at the front,
   while density, total energy, and the Noh plateau stay sound (within 0.07%); an
   optional floor repairs negative-energy cells.

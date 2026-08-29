@@ -134,11 +134,14 @@ Each is structural or follows from a repo convention; none is a preference.
 6. **Reproducibility over cheapness in the MPI path.** When θ is decomposed,
    the ring is gathered in global θ order (`Allgatherv` over
    `decomp.sub[2]`) and the projection evaluated redundantly on every rank
-   of that sub-communicator, so summation order is fixed and the result is
-   decomposition-independent bit-for-bit — the standard `bench/tgv_energy.jl`
-   sets. The cheaper alternative (Allreduce of partial coefficient sums,
-   2·mode_limit+1 values per ring) was rejected because its summation order
-   depends on the process grid.
+   of that sub-communicator, so the summation order is fixed and the
+   projection itself is decomposition-independent bit-for-bit. The run as a
+   whole is not: the collective reductions elsewhere are order-dependent
+   `Allreduce(+)` and reproduce serially to round-off, of order 1e-14
+   relative. The cheaper alternative (Allreduce of partial coefficient sums,
+   2·mode_limit+1 values per ring) was rejected because it would put the
+   projection in that second category as well, for a saving of a few values
+   per ring.
 7. **No fold interaction.** Rings sit at r > 0 and never touch the fold; the
    fold pairs radial lines. Fourier modes have definite parity under
    θ → θ + π (sign (−1)^m), so the projection commutes with the antipodal

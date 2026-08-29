@@ -70,7 +70,16 @@ const THREAD_MIN_WORK_PER_THREAD = 1024
 function __init_threading__()
     THREAD_MIN_WORK[] = THREAD_MIN_WORK_PER_THREAD * Threads.nthreads()
     v = get(ENV, "CL_THREAD_MIN_WORK", nothing)
-    v === nothing || (THREAD_MIN_WORK[] = parse(Int, v))
+    if v !== nothing
+        # Named, because this runs in `__init__`: a bare `parse` failure there
+        # surfaces as an initialization error naming neither the variable nor
+        # its value, and the environment form has no `script_args` to check it.
+        n = tryparse(Int, v)
+        n === nothing &&
+            error("CL_THREAD_MIN_WORK must be an integer number of grid " *
+                  "points, got \"$v\"")
+        THREAD_MIN_WORK[] = n
+    end
     return nothing
 end
 

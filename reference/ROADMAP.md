@@ -45,7 +45,8 @@ design decisions:
   spherical-implosion geometry is directly NIF-relevant, and this is the piece
   that is hard to rebuild.
 - **The distributed compact solve.** The spike/reduced-interface banded solve
-  reproduces the single-domain answer bit-for-bit at any rank count, with the
+  reproduces the single-domain answer to round-off at any rank count (measured
+  3.1e-15 at np = 4, and bitwise wherever a line stays on one rank), with the
   reduced system factorized once at plan time. It is also, as argued below,
   the seed of the implicit infrastructure the HED physics needs.
 - **The `Problem`/`Numerics` split.** The physics specification does not refer
@@ -304,7 +305,7 @@ old formulation and switching afterwards would waste the fit.
 
 **2. A positivity failsafe — delivered** (`reference/HISTORY.md`).
 `StepControl.floor_ratio` enables it and `floor_scope` sets how much of the
-state space it insists on; both are off by default, and the repair narrows
+state space is repaired; both are off by default, and the repair narrows
 rather than violates the Riemann-solver non-goal below, since the scheme is
 unchanged and the failsafe recovers from states it has already left.
 

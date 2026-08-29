@@ -120,7 +120,10 @@ const D4 = (1, -4, 6, -4, 1)   # offsets −2:2
 Interior reduction of h_d^wpow |δ⁴_d f| over the active directions into `out`,
 combined by Σ_d or by MAX according to `ArtParams.reduction` and combined with
 the existing contents when `accumulate`. Requires current rank-boundary halos
-of `f` to depth 2; the kernel itself communicates nothing.
+of `f` to depth 2. The kernel itself communicates nothing except across a
+paired fold with `parity[d] == -1`, described below, so every rank must call
+it whenever one may take that path; the parity is a property of the field,
+identical everywhere, so no rank can disagree.
 
 `parity[d]` is the field's sign across a coordinate fold on dimension `d`,
 which is −1 only for a velocity component (`velocity_mu!`). It is applied at a
@@ -129,14 +132,25 @@ exploit, and the fold is also the only edge whose grid is half-offset.
 
 Indices at a closed edge are clamped, a zeroth-order extension of the field
 past it, except across a fold with `parity[d] == -1`, where the half-offset
-mirror (ghost j ↔ interior j, negated) is used instead. The two differ in
-order. For an even field the clamp misplaces one δ⁴ tap by a term that the
-vanishing edge derivative makes O(h²); for an odd field the edge derivative is
-the largest quantity there, the same tap is wrong at O(h), and the result is a
-nonzero sensor on a field as regular as u_r = r, which the mirror annihilates
-exactly. Putting the even path on the mirror as well would move guarded numbers
-for an effect expected to be small, and nobody has measured it;
-`reference/CALIBRATION.md` carries it as an open item.
+mirror (ghost j ↔ interior j, with the fold's sign) is used instead. The two
+differ in order. For an even field the clamp misplaces one δ⁴ tap by a term
+that the vanishing edge derivative makes O(h²); for an odd field the edge
+derivative is the largest quantity there, the same tap is wrong at O(h), and
+the result is a nonzero sensor on a field as regular as u_r = r, which the
+mirror annihilates exactly. Putting the even path on the mirror as well would
+move guarded numbers for an effect expected to be small, and nobody has
+measured it; `reference/CALIBRATION.md` carries it as an open item.
+
+At a self-paired fold the mirror is the negated line itself. At a paired fold
+the line continues into its antipodal partner, `f(−r, θ) = σ f(r, θ+π)`, and a
+self-mirror there is wrong by the full θ-variation of the field: on a uniform
+Cartesian velocity through a resolved cylindrical axis it produced a sensor
+2.8×10⁴ times the interior floor on the two cells beside the axis. That case
+takes the even/odd butterfly of `folds.jl` instead, exactly as `fold_apply!`
+does: the even combination mirrors as even and the odd one as odd, the
+signed δ⁴ of each is taken through `solver.pairout`, and `pair_backward!`
+reassembles the line before the absolute value is accumulated. Both scratch
+arrays of the pairing are overwritten.
 """
 function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
                      parity::NTuple{3,Int}=(1, 1, 1))
@@ -152,48 +166,102 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
         lomin = at_lo_edge(decomp, d) ? 1 : -1
         himax = at_hi_edge(decomp, d) ? n_d : n_d + 2
         fold = solver.folds[d]
-        odd_lo = parity[d] == -1 && at_lo_edge(decomp, d) &&
-                 fold !== nothing && fold.lo
-        odd_hi = parity[d] == -1 && at_hi_edge(decomp, d) &&
-                 fold !== nothing && fold.hi
-        pointwise!(_delta4_point!, out, nx, ny, nz,
-                   out, f, wd, d, n_d, lomin, himax, odd_lo, odd_hi, maxred,
-                   o1, o2, o3)
+        mirror = parity[d] == -1 && fold !== nothing
+        mirror_lo = mirror && at_lo_edge(decomp, d) && fold.lo
+        mirror_hi = mirror && at_hi_edge(decomp, d) && fold.hi
+        if mirror && fold.pair !== nothing
+            pair = fold.pair
+            σ = parity[d]
+            w = solver.pairbuf
+            pair_forward!(w, f, solver, fold, σ)
+            exchange_dim!(w, decomp, d)
+            # Per-half mirror signs, matching `fold_apply!`: the even combo
+            # is even and the odd combo odd across the mirror whatever σ is.
+            if pair.local_pair
+                sd = pair.pdim != 0 ? pair.pdim : pair.revdim
+                half = decomp.n_local[sd] ÷ 2
+                sgn_a, sgn_b = 1, -1
+            else
+                sd, half = 0, 0
+                sgn_a = pair.keep_e ? 1 : -1
+                sgn_b = sgn_a
+            end
+            signed = solver.pairout
+            pointwise!(_delta4_signed_point!, signed, nx, ny, nz,
+                       signed, w, d, n_d, lomin, himax, mirror_lo, mirror_hi,
+                       sd, half, sgn_a, sgn_b, o1, o2, o3)
+            pair_backward!(signed, solver, fold, σ)
+            pointwise!(_ring_accum_point!, out, nx, ny, nz,
+                       out, signed, wd, maxred, o1, o2, o3)
+        else
+            pointwise!(_delta4_point!, out, nx, ny, nz,
+                       out, f, wd, d, n_d, lomin, himax, mirror_lo, mirror_hi,
+                       maxred, o1, o2, o3)
+        end
     end
     return out
 end
 
+# The signed δ⁴ along `d` of the line through `il`, with ghost taps past a
+# folded end read from the half-offset mirror scaled by `sgn` and every other
+# out-of-range tap clamped.
+@inline function _delta4_line(f, I, e, il, n_d, lomin, himax,
+                              mirror_lo, mirror_hi, sgn)
+    acc = zero(eltype(f))
+    @inbounds for m in -2:2
+        q = il + m
+        if mirror_lo && q < 1              # ghost 1−q
+            acc += sgn * D4[m + 3] * f[I + (1 - q - il) * e]
+        elseif mirror_hi && q > n_d        # ghost 2n+1−q
+            acc += sgn * D4[m + 3] * f[I + (2n_d + 1 - q - il) * e]
+        else
+            ilm = clamp(q, lomin, himax)
+            acc += D4[m + 3] * f[I + (ilm - il) * e]
+        end
+    end
+    return acc
+end
+
 @inline function _delta4_point!(out, f, wd, d, n_d, lomin, himax,
-                                odd_lo, odd_hi, maxred, o1, o2, o3, i, j, k)
+                                mirror_lo, mirror_hi, maxred, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         e = CartesianIndex(ntuple(q -> q == d ? 1 : 0, 3))
         il = (d == 1 ? i : d == 2 ? j : k)
-        acc = zero(eltype(out))
         # The parity test sits outside the stencil loop rather than on each
         # tap: both flags are invariant over the whole sweep, and the clamped
         # branch is the one every sensor but a velocity component across a
         # fold takes.
-        if !(odd_lo | odd_hi)
+        if !(mirror_lo | mirror_hi)
+            acc = zero(eltype(out))
             for m in -2:2
                 ilm = clamp(il + m, lomin, himax)
                 acc += D4[m + 3] * f[I + (ilm - il) * e]
             end
         else
-            for m in -2:2
-                q = il + m
-                if odd_lo && q < 1              # ghost 1−q, negated
-                    acc -= D4[m + 3] * f[I + (1 - q - il) * e]
-                elseif odd_hi && q > n_d        # ghost 2n+1−q, negated
-                    acc -= D4[m + 3] * f[I + (2n_d + 1 - q - il) * e]
-                else
-                    ilm = clamp(q, lomin, himax)
-                    acc += D4[m + 3] * f[I + (ilm - il) * e]
-                end
-            end
+            acc = _delta4_line(f, I, e, il, n_d, lomin, himax,
+                               mirror_lo, mirror_hi, -1)
         end
         v = wd * abs(acc)
         out[I] = maxred ? max(out[I], v) : out[I] + v
+    end
+    return nothing
+end
+
+# The paired-fold form: the signed δ⁴ of the even/odd combination `w`, with
+# the mirror sign chosen per half of the pairing dimension `sd` (`sgn_a` below
+# `half`, `sgn_b` above; `sd == 0` selects `sgn_a` everywhere).
+@inline function _delta4_signed_point!(signed, w, d, n_d, lomin, himax,
+                                       mirror_lo, mirror_hi, sd, half,
+                                       sgn_a, sgn_b, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        e = CartesianIndex(ntuple(q -> q == d ? 1 : 0, 3))
+        il = (d == 1 ? i : d == 2 ? j : k)
+        v = sd == 1 ? i : sd == 2 ? j : k
+        sgn = (sd == 0 || v <= half) ? sgn_a : sgn_b
+        signed[I] = _delta4_line(w, I, e, il, n_d, lomin, himax,
+                                 mirror_lo, mirror_hi, sgn)
     end
     return nothing
 end

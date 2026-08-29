@@ -65,8 +65,9 @@ whichever of the two is resolved.
 
 On a cluster, use physical cores and verify binding. A rank must not receive
 both simultaneous-multithreading siblings of one core while another physical
-core is idle. The repository's `reference/CLUSTER.md` records machine-specific
-configuration and measured launch rules.
+core is idle. The repository's
+[`reference/CLUSTER.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CLUSTER.md)
+records machine-specific configuration and measured launch rules.
 
 ## Respect collective ordering
 

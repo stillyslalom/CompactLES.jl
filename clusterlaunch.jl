@@ -129,10 +129,19 @@ end
 # strong scaling has stopped being real. Throughput is simply the widest legal
 # count, which is what you want when wall time is the constraint and you have
 # already accepted paying for it.
-efficient = last(filter(e -> e.overhead <= 2.0, viable))
+in_hand = filter(e -> e.overhead <= 2.0, viable)
+# A grid small enough that even one rank is mostly halo leaves nothing under
+# the 2x bar. Falling back to the least-padded legal count keeps the
+# recommendation meaningful; the note says why it is not the usual answer.
+efficient = isempty(in_hand) ? first(viable) : last(in_hand)
 widest = last(viable)
 
 println()
+isempty(in_hand) &&
+    println("note            : no rank count keeps the padded-to-interior ratio ",
+            "at or below 2x;\n                  the grid is small for these ",
+            "schemes. Reporting the least-padded\n                  legal count ",
+            "instead.")
 if efficient.np == widest.np
     println("recommended     : ", widest.np, " ranks, dims ", widest.dims,
             ", ", widest.pts, " pts/rank, halo ",

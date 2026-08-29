@@ -231,7 +231,7 @@ function enforce!(bc::DirichletBC, Q, solver, d, side)
     end
     # `fun` is a host closure, so a device-resident patch evaluates the plane
     # block on the host and uploads it — one small strided assignment per face
-    # per RK stage, the documented Dirichlet staging cost of G3a.
+    # per RK stage, the Dirichlet staging cost recorded in reference/AMR_GPU.md.
     r1, r2, r3 = plane.indices
     T = eltype(Q)
     n_cons = solver.equations.n_cons
@@ -382,6 +382,7 @@ Base.@kwdef struct Numerics
     filter_cfl::Float64 = 0.0
     dims::Union{Nothing,NTuple{3,Int}} = nothing
     n_halo::Int = 4
+    comm::MPI.Comm = MPI.COMM_WORLD
     stretch::NTuple{3,Union{Nothing,Stretch}} = (nothing, nothing, nothing)
     patch_grid::NTuple{3,Int} = (1, 1, 1)
     backend::AbstractBackend = CPUBackend()
@@ -407,9 +408,10 @@ width, and scheme-specific local grid minima. MPI is initialized if necessary.
 The returned `solver` owns the operator plans and runtime state; `Q` contains
 the conserved variables and is ready to pass to [`run!`](@ref).
 
-Collective over `MPI.COMM_WORLD`: the decomposition is built with
-`MPI.Cart_create` and its sub-communicators, so every rank must call `setup`
-with the same `prob` and `num`.
+Collective over `num.comm` (`MPI.COMM_WORLD` by default): the decomposition
+is built with `MPI.Cart_create` and its sub-communicators, so every rank of
+that communicator must call `setup` with the same `prob` and `num`. A split
+communicator lets two independent solvers share one job.
 """
 function setup(prob::Problem, num::Numerics)
     origin = ntuple(d -> prob.domain[d][1], 3)
@@ -432,7 +434,7 @@ function setup(prob::Problem, num::Numerics)
                cfl=num.cfl, control=num.control,
                filter_interval=num.filter_interval,
                filter_cfl=num.filter_cfl,
-               dims=num.dims, n_halo=num.n_halo,
+               dims=num.dims, n_halo=num.n_halo, comm=num.comm,
                patch_grid=num.patch_grid, backend=num.backend,
                interface_rhs=num.interface_rhs, refine=num.refine,
                level_restriction=num.level_restriction, subcycle=num.subcycle,

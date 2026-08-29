@@ -17,6 +17,13 @@ using MPI
 using LinearAlgebra
 using Printf
 
+# Re-exported as a module rather than used here: nothing in the solver pins or
+# queries threads, but `clusterprobe.jl` needs the topology queries and is run
+# from a driver environment that lists only CompactLES. `import` rather than
+# `using` so none of ThreadPinning's exported names (`ncores`, `nsockets`, ...)
+# enter this namespace.
+import ThreadPinning
+
 include("threading.jl")
 include("decomposition.jl")
 include("pointwise.jl")

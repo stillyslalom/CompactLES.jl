@@ -350,15 +350,20 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:der
     pair = fold.pair
     w = solver.pairbuf
     pair_forward!(w, f, solver, fold, σ)
-    exchange_dim_batch!([w], decomp, d)   # rank-boundary halos along the fold dim
+    exchange_dim!(w, decomp, d)   # rank-boundary halos along the fold dim
     if pair.local_pair
-        # Mixed parities per pdim half: run both plans and select. The even
-        # combo e carries the field's antipodal sign σ across the r-mirror,
-        # while the odd combo o is ALWAYS odd (o(−r,θ)=−o(r,θ) holds for either
-        # σ, and for a θ-independent radial field the whole flux lands in o and
-        # must fold as odd). So the e half folds with σ and the o half with −1.
-        fold_fill!(w, decomp, d, fold.lo, fold.hi, σ)
-        apply_along!(out, _fold_plan(fold, σ, role), w, decomp)
+        # Mixed parities per pdim half: run both plans and select. The line
+        # continued through the singular point reads f(−r,θ) = σ f(Mx), so
+        # e(−r,θ) = ½[σ f(Mx) + σ² f(x)] = e(x) and o(−r,θ) = −o(x): the even
+        # combo is even and the odd combo odd across the mirror WHATEVER σ is
+        # (the header of this file derives it). σ enters only through the
+        # combination and the reconstruction. Folding e with σ instead, as an
+        # earlier version did, is correct only where e vanishes, which every
+        # axisymmetric field and the odd-pairing scalar of the test suite
+        # satisfy; a uniform Cartesian velocity through the axis has e = f and
+        # its radial derivative came out O(1/h) at the axis.
+        fold_fill!(w, decomp, d, fold.lo, fold.hi, 1)
+        apply_along!(out, _fold_plan(fold, 1, role), w, decomp)
         fold_fill!(w, decomp, d, fold.lo, fold.hi, -1)
         apply_along!(solver.pairout, _fold_plan(fold, -1, role), w, decomp)
         sd = pair.pdim != 0 ? pair.pdim : pair.revdim
@@ -368,10 +373,9 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:der
         pointwise!(_pair_select_point!, out, nx, ny, nz,
                    out, solver.pairout, sd, half, o1, o2, o3)
     else
-        # e combo mirrors with σ, o combo is ALWAYS odd (−1) — matching the
-        # local branch above, where the o half uses fold_fill(−1)/plan(−1)
-        # regardless of σ. (Writing −σ here silently works only for σ = +1.)
-        σc = pair.keep_e ? σ : -1
+        # The e combo mirrors even and the o combo odd, as in the local
+        # branch above; σ plays no part in the mirror.
+        σc = pair.keep_e ? 1 : -1
         fold_fill!(w, decomp, d, fold.lo, fold.hi, σc)
         apply_along!(out, _fold_plan(fold, σc, role), w, decomp)
     end

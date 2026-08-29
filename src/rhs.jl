@@ -171,6 +171,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 cfl::Real=0.5, filter_interval::Int=1, filter_cfl::Real=0.0,
                 control::StepControl=StepControl(),
                 dims=nothing, n_halo::Int=4,
+                comm::MPI.Comm=MPI.COMM_WORLD,
                 patch_grid::NTuple{3,Int}=(1, 1, 1),
                 backend::AbstractBackend=CPUBackend(),
                 interface_rhs::Symbol=:extended,
@@ -305,7 +306,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     tag_threshold > 0 || error("tag_threshold must be positive")
     if refine !== nothing
         MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-        MPI.Comm_size(MPI.COMM_WORLD) == 1 || level_restriction === :inject ||
+        MPI.Comm_size(comm) == 1 || level_restriction === :inject ||
             error("level_restriction = :filter restricts through a " *
                   "whole-patch line solve and is serial-only; use :inject " *
                   "under MPI")
@@ -326,6 +327,11 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         level_restriction in (:inject, :filter) ||
             error("level_restriction must be :inject or :filter, " *
                   "got :$level_restriction")
+        # The level shell is read from the fine box at an offset of
+        # 3·LEVEL_BUFFER nodes; a halo wider than that would index the box's
+        # own zero halo silently (`_write_fine_shell!`, `_impose_shell!`).
+        n_halo <= 3 * LEVEL_BUFFER ||
+            error("refinement supports n_halo ≤ $(3 * LEVEL_BUFFER), got $n_halo")
         margin = max(n_halo, LEVEL_BUFFER)
         for d in 1:3
             if active_g[d]
@@ -391,10 +397,10 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                      art, metric, stretch, sources, origin, Lt,
                                      coord_shift, h, deriv, filt, smoo, cfl,
                                      filter_interval, filter_cfl, control,
-                                     n_halo, backend, interface_rhs, n_cons,
+                                     n_halo, comm, backend, interface_rhs, n_cons,
                                      n_species)
     end
-    decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo)
+    decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
     mkd(sch, d; kw...) =
         backend_plan(backend, plan_direction(decomp, sch, d, h[d]; kw...))
     f() = field(backend, decomp)
@@ -492,7 +498,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                         mkd(ring, d) : nothing, 3)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
     bcs_t = ntuple(d -> (bcs[d][1], bcs[d][2]), 3)
-    patch = Patch(1, 0, regions[1], MPI.COMM_WORLD, decomp, h,
+    patch = Patch(1, 0, regions[1], comm, decomp, h,
                   ntuple(d -> (0, 0), 3), bcs_t, folds,
                   deriv_plans, deriv_plans, filter_plans, smooth_plans, ring_plans,
                   any(fold -> fold !== nothing, folds) ? f() : empty_field(backend, T),
@@ -506,7 +512,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   [f() for _ in 1:n_species],
                   f(), f(), f(), f(), f(),
                   art.detector === :delta4 ? empty_field(backend, T) : f(),
-                  f(), (f(), f(), f()), (f(), f(), f()), f(), f(),
+                  f(), (f(), f(), f()), (f(), f(), f()), f(), f(), f(),
                   [f() for _ in 1:3, _ in 1:n_cons])
     if refine === nothing
         patches = [patch]
@@ -523,7 +529,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         return solver
     end
     # --- Level-1 patch and the two-level coupling (levels.jl) ------------
-    fine = _build_fine_patch(T, refine, active_g, h, n_halo, deriv, filt, smoo,
+    fine = _build_fine_patch(T, refine, active_g, h, n_halo, comm, deriv, filt, smoo,
                              art.smoother, interface_rhs, backend, n_species,
                              n_cons)
     level_transfer = build_level_transfer(T, refine, active_g, n_halo, 2,
@@ -555,7 +561,8 @@ end
 # regrid changes the extents and every plan must be rebuilt.
 function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            active_g::NTuple{3,Bool}, h::NTuple{3,T},
-                           n_halo::Int, deriv, filt, smoo, smoother::Symbol,
+                           n_halo::Int, comm::MPI.Comm, deriv, filt, smoo,
+                           smoother::Symbol,
                            interface_rhs::Symbol, backend::AbstractBackend,
                            n_species::Int, n_cons::Int) where {T}
     hf = ntuple(d -> active_g[d] ? h[d] / 3 : h[d], 3)
@@ -563,12 +570,12 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            fine_extent(refine, active_g))
     pper_f = ntuple(d -> !active_g[d], 3)
     np_f = (MPI.Initialized() || MPI.Init(threadlevel=:funneled);
-            MPI.Comm_size(MPI.COMM_WORLD))
+            MPI.Comm_size(comm))
     decomp_f = Decomp{T}(region_f.extent, pper_f;
                          dims=_amr_dims(region_f.extent,
                                         ntuple(d -> region_f.extent[d] > 1, 3),
                                         np_f),
-                         n_halo=n_halo)
+                         n_halo=n_halo, comm=comm)
     bcs_f = ntuple(d -> active_g[d] ? (CoarseFineBC(), CoarseFineBC()) :
                                       (PeriodicBC(), PeriodicBC()), 3)
     mkf(sch, d; kw...) =
@@ -582,11 +589,16 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
         (ext_f ? mkf(deriv, d) : dplans_f[d]), 3)
     fplans_f = ntuple(d -> decomp_f.active[d] ?
         mkf(filt, d; lo_closures=icf, hi_closures=icf) : nothing, 3)
-    splans_f = smoother === :compact ? fplans_f :
-               ntuple(d -> decomp_f.active[d] ? mkf(smoo, d) : nothing, 3)
+    # The sensor smoother's input is built per patch and its coarse-fine
+    # ghosts are never filled, so its plans keep the standard closures even
+    # under `smoother = :compact`, as the same-level patch path does below.
+    # Aliasing `fplans_f` here would read four ghost layers of allocation
+    # zeros at every coarse-fine face through the C8 interior rows the
+    # interface closures leave in place.
+    splans_f = ntuple(d -> decomp_f.active[d] ? mkf(smoo, d) : nothing, 3)
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
-    return Patch(2, 1, region_f, MPI.COMM_WORLD, decomp_f, hf,
+    return Patch(2, 1, region_f, comm, decomp_f, hf,
                  ntuple(d -> (0, 0), 3), bcs_f, (nothing, nothing, nothing),
                  dplans_f, vplans_f, fplans_f, splans_f, nothing,
                  empty3, empty3,
@@ -599,7 +611,7 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                  [g() for _ in 1:n_species],
                  g(), g(), g(), g(), g(),
                  empty3,
-                 g(), (g(), g(), g()), (g(), g(), g()), g(), g(),
+                 g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
                  [g() for _ in 1:3, _ in 1:n_cons])
 end
 
@@ -612,10 +624,10 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                                patch_grid, bcs, eos, equations, transport, art,
                                metric, stretch, sources, origin, Lt, coord_shift,
                                h, deriv, filt, smoo, cfl, filter_interval,
-                               filter_cfl, control, n_halo, backend,
+                               filter_cfl, control, n_halo, comm, backend,
                                interface_rhs, n_cons, n_species) where {T}
     MPI.Initialized() || MPI.Init(threadlevel=:funneled)
-    world = MPI.COMM_WORLD
+    world = comm
     np = MPI.Comm_size(world)
     npatch = length(regions)
     if np == 1
@@ -672,7 +684,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
               [g() for _ in 1:n_species],
               g(), g(), g(), g(), g(),
               empty3,
-              g(), (g(), g(), g()), (g(), g(), g()), g(), g(),
+              g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
               [g() for _ in 1:3, _ in 1:n_cons])
     end
     ghost_sends, ghost_recvs, plane_pairs = build_interface_records(
@@ -855,6 +867,16 @@ _state_like(rho::AbstractArray{T,3}, n_cons::Int) where {T} =
 
 # --- Operator routing through folds ----------------------------------------
 
+# A plans tuple is heterogeneous whenever a dimension is collapsed or folded
+# (`nothing` in that slot), so indexing it with a runtime `d` yields a union
+# that the call below it must split: measured ~330 B per operator application
+# and 11.9 kB per RHS on a planar (32, 16, 1) run against 336 B in 3-D.
+# Branching on `d` cuts that to 160 B per application and 3.8 kB per RHS; the
+# remainder is the union itself, and removing it would take a sentinel plan of
+# the concrete type in the empty slot, which needs a `LineSolver` and a
+# communicator to construct for a dimension that is never swept.
+@inline _plan_at(plans::Tuple, d::Int) = d == 1 ? plans[1] : d == 2 ? plans[2] : plans[3]
+
 """
     deriv_along!(out, f, solver, d, σf)
 
@@ -873,7 +895,7 @@ fold leaves `f` untouched, running the even/odd butterfly through
 function deriv_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
     if fold === nothing
-        apply_along!(out, solver.deriv_plans[d], f, solver.decomp)
+        apply_along!(out, _plan_at(solver.deriv_plans, d), f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:deriv))
     end
@@ -887,7 +909,9 @@ Compact derivative of `f` along `d` through the divergence plans. These are
 `solver.deriv_plans` except at a patch-interface end under
 `interface_rhs = :extended`, where the gradient plans read exchanged ghost
 data that a flux array does not carry, so the divergence keeps the scheme's
-one-sided closure rows (`solver.div_plans`). The flux-divergence loop and the
+one-sided closure rows (`solver.div_plans`). A folded dimension draws on the
+fold's own derivative plans instead, which is the same operator because folds
+and patch interfaces never share a dimension. The flux-divergence loop and the
 discrete-GCL construction `gcl_cotr!` go through here so the two apply the
 identical operator. Same collective, halo, and fold contract as
 [`deriv_along!`](@ref).
@@ -895,7 +919,7 @@ identical operator. Same collective, halo, and fold contract as
 function div_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
     if fold === nothing
-        apply_along!(out, solver.div_plans[d], f, solver.decomp)
+        apply_along!(out, _plan_at(solver.div_plans, d), f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:deriv))
     end
@@ -915,7 +939,7 @@ fold contract as `deriv_along!`.
 """
 function deriv_scaled_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
-    plan = solver.deriv_plans[d]
+    plan = _plan_at(solver.deriv_plans, d)
     if fold === nothing && !(plan isa DevicePlan)
         apply_along_scaled!(out, plan, f, solver.decomp, solver.inv_h[d])
     else
@@ -940,7 +964,7 @@ through `solver.tmp_a`. Same collective, halo, and fold contract as
 function div_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int,
                              σf::Int, inv_J)
     fold = solver.folds[d]
-    plan = solver.div_plans[d]
+    plan = _plan_at(solver.div_plans, d)
     if fold === nothing && !(plan isa DevicePlan)
         apply_along_subtract!(dQ, c, plan, f, solver.decomp, inv_J)
     else
@@ -963,7 +987,7 @@ with the same halo and fold contract as `deriv_along!`."""
 function filt_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
     if fold === nothing
-        apply_along!(out, solver.filter_plans[d], f, solver.decomp)
+        apply_along!(out, _plan_at(solver.filter_plans, d), f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:filter))
     end
@@ -986,7 +1010,7 @@ Collective, as `deriv_along!` is.
 function smooth_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
     if fold === nothing
-        apply_along!(out, solver.smooth_plans[d], f, solver.decomp)
+        apply_along!(out, _plan_at(solver.smooth_plans, d), f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:smooth))
     end
@@ -1007,7 +1031,7 @@ Collective, with the same halo and fold contract as `deriv_along!`.
 function ring_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
     if fold === nothing
-        apply_along!(out, solver.ring_plans[d], f, solver.decomp)
+        apply_along!(out, _plan_at(solver.ring_plans, d), f, solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:ring))
     end
@@ -1070,7 +1094,7 @@ assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, 
 @inline function _fluxes_point!(Q, eos, rho, u, v, w, p, T_ion,
                                 cp_mix, mu_art, beta_art, kappa_art, D_art, Y,
                                 grad_u, gT, gY, flux, mu0, Pr, Sc, n_species,
-                                m1, m2, m3, i_energy, o1, o2, o3, i, j, k)
+                                m1, m2, m3, i_energy, act, o1, o2, o3, i, j, k)
     T = eltype(rho)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -1096,7 +1120,10 @@ assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, 
         τ13 = μ * (grad_u[1,3][I] + grad_u[3,1][I])
         τ23 = μ * (grad_u[2,3][I] + grad_u[3,2][I])
         τ = ((τ11, τ12, τ13), (τ12, τ22, τ23), (τ13, τ23, τ33))
+        # A collapsed dimension's flux is neither exchanged nor differenced,
+        # so assembling it was a third of this phase wasted on a planar run.
         for d in 1:3
+            act[d] || continue
             ud = uv[d]
             τd = τ[d]
             # Per-species diffusion with a correction velocity:
@@ -1139,7 +1166,7 @@ function _assemble_fluxes!(solver::SolverLike{T}, eos, Q) where {T}
                solver.kappa_art, ft.D_art, ft.Y, ft.grad_u,
                solver.grad_T_ion, ft.grad_Y, ft.flux,
                tr.mu0, tr.Pr, tr.Sc, n_species, m1, m2, m3, i_energy,
-               o1, o2, o3)
+               decomp.active, o1, o2, o3)
     return solver
 end
 

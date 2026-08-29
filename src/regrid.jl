@@ -216,6 +216,11 @@ its snapshot has the old extents, and restoring across a layout change is not
 meaningful. The state being banked completed its last step's health checks, so
 this keeps the retry mechanism live at the cost of never rolling back past a
 regrid.
+
+The refresh observes the same suppression `run!` applies to its own
+savepoint writes: after a rollback nothing is banked at or below the step
+that failed (`Savepoint.guard`), so a regrid landing inside that window
+cannot re-arm the retry loop that guard exists to break.
 """
 function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
                  workspace::Workspace, save) where {T}
@@ -242,7 +247,7 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
     gather_region!(old_gather, ntuple(d -> 1:Nf_old[d], 3), (0, 0, 0),
                    (0, 0, 0), Qf_old, dold, lt.fine_blocks)
     newfine = _build_fine_patch(T, newregion, active_g, getfield(solver, :h),
-                                spec.n_halo,
+                                spec.n_halo, getfield(solver, :comm),
                                 spec.deriv, spec.filt, spec.smoo,
                                 solver.art.smoother, spec.interface_rhs,
                                 spec.backend, solver.equations.n_species,
@@ -261,7 +266,10 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
     _fill_fine_from_coarse!(solver, states)
     _carry_over!(Qf_new, newfine.decomp, newregion, old_gather, Nf_old,
                  oldregion, active_g, n_cons)
-    if save !== nothing
+    # Re-bank only where `run!` itself would: a regrid landing on a retried
+    # trajectory at or below the rollback guard would otherwise re-arm the
+    # rolled-back-to-the-failing-step loop that guard exists to break.
+    if save !== nothing && solver.step > save.guard
         save.Q = _snapshot(states)
         save.t = solver.t
         save.step = solver.step

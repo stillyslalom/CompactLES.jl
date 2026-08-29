@@ -64,18 +64,28 @@ end
 function solve_col!(x::AbstractVector{T}, F::BandFactor{T}) where {T}
     n, q = F.n, F.q
     L, U = F.L, F.U
+    # Skip a zero multiplier, as the transposed sweep does: identical on
+    # finite data, and it keeps the x sweep from spreading a NaN or Inf
+    # through 0 * x where the y/z sweeps leave the row untouched.
     @inbounds for k in 1:(n-1)
         xk = x[k]
         for m in 1:min(q, n - k)
-            x[k+m] -= L[m, k] * xk
+            lm = L[m, k]
+            iszero(lm) && continue
+            x[k+m] -= lm * xk
         end
     end
+    # Multiply by the reciprocal pivot rather than divide, on every banded
+    # path: the transposed y/z sweep hoists `inv(U[1, i])` out of its line
+    # loop, and dividing here made the x sweep a different-rounding operator
+    # from the y and z sweeps (8.9e-16 on a q = 2, n = 40 line), which cost an
+    # exactly symmetric problem its exact directional symmetry under C10.
     @inbounds for i in n:-1:1
         acc = x[i]
         for t in 1:min(q, n - i)
             acc -= U[1+t, i] * x[i+t]
         end
-        x[i] = acc / U[1, i]
+        x[i] = acc * inv(U[1, i])
     end
     return x
 end
@@ -92,19 +102,20 @@ function solve_cols!(B::AbstractMatrix{T}, F::BandFactor{T},
     @inbounds for k in 1:(n-1)
         for m in 1:min(q, n - k)
             lm = Lb[m, k]
+            iszero(lm) && continue
             for col in lo:hi
                 B[k+m, col] -= lm * B[k, col]
             end
         end
     end
     @inbounds for i in n:-1:1
-        u0 = U[1, i]
-        for col in lo:hi
+        u0 = inv(U[1, i])            # reciprocal, as `solve_col!` and the
+        for col in lo:hi             # transposed sweep: one rounding per path
             acc = B[i, col]
             for t in 1:min(q, n - i)
                 acc -= U[1+t, i] * B[i+t, col]
             end
-            B[i, col] = acc / u0
+            B[i, col] = acc * u0
         end
     end
     return B

@@ -68,6 +68,11 @@ using HDF5
             @test read(file["meta/step"]) == 17
             @test Int.(read(file["meta/n_global"])) == [72, 16, 16]
             @test read(file["meta/component_names"])[1] == "rho_a"
+            # The state's element type, recorded and used: written as Float64
+            # here, and a Float32 solver would write a Float32 dataset that a
+            # Float64 one is refused rather than allowed to widen.
+            @test eltype(file["state/Q"]) == Float64
+            @test read(file["meta/eltype"])[1] == "Float64"
             # Fixed-length rather than variable-length, which parallel HDF5
             # refuses to write. A serialized-backend workstation writes a VL
             # string happily, so nothing else here would catch the regression.
@@ -168,6 +173,41 @@ using HDF5
                   origin=(0.5, 0.0, 0.0), metric=CylindricalMetric(),
                   eos=eos, art=ArtParams(enabled=false), dims=(np, 1, 1)),
            "metric mismatch")
+
+    # The mutable run state. (t, step) alone leaves behind a retry's reduced
+    # CFL, the step history the growth cap and `filter_weight` read, and a
+    # boundary face that has already switched — which on a switch that changes
+    # the collective pattern is a deadlock on resume, not a wrong answer.
+    mkstate(bcs) = begin
+        s = Solver(bcs=bcs, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                   eos=eos, art=ArtParams(enabled=false), dims=(np, 1, 1))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), p=1.0, rho=1.0))
+        s, Q
+    end
+    written_face = SwitchableBC(SlipWallBC(), ExtrapolationBC())
+    sst, Qst = mkstate(((written_face, SlipWallBC()), per3h[2], per3h[3]))
+    sst.cfl = 0.125
+    sst.dt_prev = 1.5e-4
+    sst.rate_prev = 987.5
+    switch!(written_face)
+    state_stem = joinpath(dir, "runstate")
+    save_checkpoint_hdf5(sst, Qst, state_stem)
+    MPI.Barrier(comm)
+
+    read_face = SwitchableBC(SlipWallBC(), ExtrapolationBC())
+    sback, Qback = mkstate(((read_face, SlipWallBC()), per3h[2], per3h[3]))
+    load_checkpoint_hdf5!(sback, Qback, state_stem)
+    @test sback.cfl == 0.125
+    @test sback.dt_prev == 1.5e-4
+    @test sback.rate_prev == 987.5
+    @test switched(read_face)
+
+    # A face the file describes as switchable where this solver has a plain
+    # condition: the boundary would silently differ for the rest of the run.
+    splain, Qplain = mkstate(((SlipWallBC(), SlipWallBC()), per3h[2], per3h[3]))
+    @test_throws "boundary mismatch" load_checkpoint_hdf5!(splain, Qplain,
+                                                           state_stem)
 
     MPI.Barrier(comm)
     rank == 0 && rm(dir; recursive=true)

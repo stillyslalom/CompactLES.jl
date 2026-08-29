@@ -83,6 +83,13 @@ function plan_direction(decomp::Decomp, scheme::BandedCompactScheme{T}, dim::Int
             Ab[q + 1 + (jcol - i), i] += σ * scheme.lhs[m]
         end
     end
+    # Fewer closure rows than the half-bandwidth would leave rows nc+1..q
+    # coupled to ghost unknowns that the zeroed coupling blocks below drop
+    # silently; both shipped banded schemes satisfy this, a user-supplied one
+    # need not.
+    (lo_closed || hi_closed) && nc < q &&
+        error("scheme '$(scheme.name)' has $nc closure rows but half-bandwidth " *
+              "$q; a closed edge needs at least q")
     if lo_closed
         for j in 1:nc
             row = scheme.closures[j].lhs

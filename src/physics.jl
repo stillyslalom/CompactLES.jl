@@ -166,9 +166,33 @@ end
     return (eos.cvk[k] * Rm - eos.Rk[k] * cvm) / (Rm * Rm)
 end
 
+# The temperature floor of Cook's ρc/T_ion. It is an absolute floor in the
+# run's temperature units, not a relative one, and it couples to the
+# internal-energy floor in `_primitives_ideal_point!`: a point with e < 0
+# gets `T_ion = positive_floor(T)` (1e-300) there, lands on this guard here,
+# and contributes ρc/temperature_floor to the diffusive rate, which is what
+# collapses `dt` when a run loses positivity (`stepcontrol.jl`). Nothing in
+# the primitives pass signals that it floored; `dt_report` names the cell
+# after the fact.
+@inline temperature_floor(::Type{T}) where {T<:AbstractFloat} = eps(T)
+
 "Cook's ρc/T_ion. See the note on the singularity at the top of this file."
 @inline art_conductivity_scale(::IdealMixture, ρ, c, T_ion, cp_mix) =
-    ρ * c / max(T_ion, eps(typeof(T_ion)))
+    ρ * c / max(T_ion, temperature_floor(typeof(T_ion)))
+
+"""
+    mixture_cv(eos, ρ, p, T_ion, cp_mix)
+
+Mixture constant-volume heat capacity from the stored primitives, through the
+EOS contract: `eos_phi` is cv_m/R_m and cp_m = cv_m + R_m, so
+cv_m = cp_m φ/(1 + φ). The explicit thermal-diffusion limit of `compute_dt`
+needs κ/(ρ cv), the diffusivity of the internal-energy equation, and this is
+the one place it is formed.
+"""
+@inline function mixture_cv(eos, ρ, p, T_ion, cp_mix)
+    φ = eos_phi(eos, ρ, p, T_ion, cp_mix)
+    return cp_mix * φ / (1 + φ)
+end
 
 # Device-side mirror of the coefficient tables (see pointwise.jl):
 # an `IdealMixture` holds `Vector` tables and species names, neither of which
@@ -190,7 +214,7 @@ Adapt.adapt_structure(to, eos::IdealMixture{T}) where {T} =
 Base.@propagate_inbounds species_enthalpy(eos::IdealMixtureCoeffs, k::Int, T_ion) =
     eos.cpk[k] * T_ion
 @inline art_conductivity_scale(::IdealMixtureCoeffs, ρ, c, T_ion, cp_mix) =
-    ρ * c / max(T_ion, eps(typeof(T_ion)))
+    ρ * c / max(T_ion, temperature_floor(typeof(T_ion)))
 @inline function eos_phi(::IdealMixtureCoeffs, ρ, p, T_ion, cp_mix)
     Rm = p / (ρ * T_ion)
     return cp_mix / Rm - 1
@@ -258,7 +282,7 @@ species_enthalpy(eos::StiffenedGas, ::Int, T_ion) = eos.gamma * eos.cv * T_ion
 @inline eos_phi(eos::StiffenedGas, ρ, p, T_ion, cp_mix) = 1 / (eos.gamma - 1)
 @inline eos_dphi_dY(::StiffenedGas, ::Int, ρ, p, T_ion, cp_mix) = 0.0
 @inline art_conductivity_scale(::StiffenedGas, ρ, c, T_ion, cp_mix) =
-    ρ * c / max(T_ion, eps(typeof(T_ion)))
+    ρ * c / max(T_ion, temperature_floor(typeof(T_ion)))
 
 # `StiffenedGas` carries a name string, so it takes the same launch-time
 # mirror treatment as `IdealMixture` above.
@@ -274,7 +298,7 @@ Adapt.adapt_structure(to, eos::StiffenedGas) =
 @inline species_enthalpy(eos::StiffenedGasCoeffs, ::Int, T_ion) =
     eos.gamma * eos.cv * T_ion
 @inline art_conductivity_scale(::StiffenedGasCoeffs, ρ, c, T_ion, cp_mix) =
-    ρ * c / max(T_ion, eps(typeof(T_ion)))
+    ρ * c / max(T_ion, temperature_floor(typeof(T_ion)))
 @inline eos_phi(eos::StiffenedGasCoeffs, ρ, p, T_ion, cp_mix) =
     1 / (eos.gamma - 1)
 @inline eos_dphi_dY(::StiffenedGasCoeffs, ::Int, ρ, p, T_ion, cp_mix) = 0.0
@@ -597,7 +621,7 @@ end
 end
 
 @inline art_conductivity_scale(::Nasa9Mixture, ρ, c, T_ion, cp_mix) =
-    ρ * c / max(T_ion, eps(typeof(T_ion)))
+    ρ * c / max(T_ion, temperature_floor(typeof(T_ion)))
 
 function _primitives!(solver, eos::Nasa9Mixture, Q)
     n_species = solver.equations.n_species
@@ -620,8 +644,9 @@ function _primitives!(solver, eos::Nasa9Mixture, Q)
                 Rm = zero(Tnum)
                 for sp in 1:n_species
                     solver.Y[sp][i, j, k] = Q[i, j, k, sp] * ri
-                    Rm += Q[i, j, k, sp] * ri * Rk[sp]
+                    Rm += Q[i, j, k, sp] * Rk[sp]
                 end
+                Rm *= ri   # one scaling, as `_primitives_ideal_point!` does
                 u = Q[i, j, k, m1] * ri
                 v = Q[i, j, k, m2] * ri
                 w = Q[i, j, k, m3] * ri

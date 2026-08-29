@@ -368,7 +368,7 @@ gained the corresponding coverage, the banded reduced-interface `Allgather`
 having never before run inside `compute_artificial!`; both sensors reproduce to
 round-off across three split axes. `bench/artcal.jl`, `bench/phases.jl` and
 `bench/nohprobe.jl` now take their sensor-shape defaults from `ArtParams()`
-rather than spelling them out, which is what let them go stale against the
+rather than spelling them out, which let them go stale against the
 shipped smoother, and the `phases.jl` line-solve counter reports the derivative,
 smoother and detector solves separately instead of omitting the sensor path.
 
@@ -793,7 +793,7 @@ one generic kernel splatting the body so no second kernel body exists
 anywhere. KernelAbstractions becomes the package's fifth dependency.
 
 The plan's CPU acceptance measurement went against replacing `@threaded`:
-at 64³ the KA CPU backend runs 2.8× (fluxes) to 50× (RK update) slower —
+at 64³ the KA CPU backend runs 2.8× (fluxes) to 40–50× (RK update) slower —
 per-launch task spawn with no work threshold — while on a small 2-D case it
 is up to 2.4× faster, so the deficit is launch policy, not generated code.
 Per the plan's contingency the routing is static: `Array` on `@threaded`,

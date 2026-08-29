@@ -96,6 +96,8 @@ struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,TF}
     inv_h::NTuple{3,A}
     inv_r::A
     cot_over_r::A
+    # discrete-GCL cotθ/r (metric.jl gcl_cotr!): read by the momentum sources only
+    cot_over_r_gcl::A
     # fluxes flux[d, c]
     flux::Matrix{A}
     # The same collections as isbits-adaptable tuples (FieldVector /
@@ -114,7 +116,7 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                pairbuf, pairout, rho, u, v, w, p, T_ion, c, cp_mix, Y,
                grad_u, grad_T_ion, grad_Y, mu_art, beta_art, kappa_art, D_art,
                strain_mag, sensor, sensor_sp, tmp_a, tmp_b, ring_buf,
-               inv_J, area_d, inv_h, inv_r, cot_over_r, flux)
+               inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl, flux)
     field_tuples = (Y=FieldVector(Y), D_art=FieldVector(D_art),
                     grad_u=FieldMatrix(grad_u), grad_Y=FieldMatrix(grad_Y),
                     flux=FieldMatrix(flux))
@@ -124,7 +126,7 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                  cp_mix, Y, grad_u, grad_T_ion, grad_Y, mu_art, beta_art,
                  kappa_art, D_art, strain_mag, sensor, sensor_sp, tmp_a,
                  tmp_b, ring_buf, inv_J, area_d, inv_h, inv_r, cot_over_r,
-                 flux, field_tuples)
+                 cot_over_r_gcl, flux, field_tuples)
 end
 
 # Property names owned by the patch rather than the solver configuration.
@@ -144,7 +146,8 @@ end
     n === :strain_mag || n === :sensor || n === :sensor_sp ||
     n === :tmp_a || n === :tmp_b || n === :ring_buf ||
     n === :inv_J || n === :area_d || n === :inv_h || n === :inv_r ||
-    n === :cot_over_r || n === :flux || n === :field_tuples
+    n === :cot_over_r || n === :cot_over_r_gcl ||
+    n === :flux || n === :field_tuples
 
 """
     PatchSolver(solver, patch)

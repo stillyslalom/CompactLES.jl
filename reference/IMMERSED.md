@@ -97,7 +97,7 @@ coefficient is `immersed_CFL` and n̂ = ∇φ is supplied by the caller. Each
 iteration is applied only where φ ≤ ε, and each is followed by a Gaussian
 filter pass whose result is likewise kept only inside the body. The gradient is
 the solver's own compact derivative rather than a local upwind difference, and
-the filter is what stabilizes the sweep.
+the filter stabilizes the sweep.
 
 The velocity conditions add a reconstruction through the zero level. Within a
 band of width `GridLen · immersed_EPS`, that is a tenth of a cell, the normal

@@ -302,6 +302,8 @@ mutable struct Savepoint{A}
     Q::A
     t::Float64
     step::Int
+    guard::Int   # step at or below which re-banking is suppressed after a
+                 # rollback; -1 when none (see `run!`)
 end
 
 """

@@ -269,9 +269,11 @@ function test_offrank_folds()
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
                art=ArtParams(enabled=false), dims=splitdims(2))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+    # A scalar whose antipodal image is −f: σ = +1, the odd combination
+    # carries all of it (see the fold_apply! comment on the mirror signs).
     fillf!(solver, f, (r, θ, z) -> r * cos(θ) * exp(-4r^2))
     CL.exchange_halos!(f, solver.decomp)
-    CL.deriv_along!(df, f, solver, 1, -1); CL._scale_grad!(df, solver, 1)
+    CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
     check("cyl axis ∂/∂r, θ split (off-rank shift)", gmax(ferr(solver, df,
           (r, θ, z) -> cos(θ) * (1 - 8r^2) * exp(-4r^2))), 1e-4)
 

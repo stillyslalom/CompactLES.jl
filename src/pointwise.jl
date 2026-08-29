@@ -106,6 +106,7 @@ end
 Base.@propagate_inbounds Base.getindex(w::DeviceFieldMatrix{N1}, a::Int,
                                        b::Int) where {N1} =
     w.data[(b - 1) * N1 + a]
+Base.size(::DeviceFieldMatrix{N1,L}) where {N1,L} = (N1, L ÷ N1)
 
 Adapt.adapt_structure(to, w::FieldMatrix) =
     DeviceFieldMatrix{size(w.m, 1),length(w.m),
@@ -117,8 +118,8 @@ Test and benchmark toggle: `true` routes every [`pointwise!`](@ref) launch
 through the KernelAbstractions path even on `Array` storage, where
 `get_backend` supplies the KA CPU backend. The default `false` keeps `Array`
 storage on the `@threaded` path, which is the configuration every guard was
-measured under. The KA testset and `bench/pointwise_ka.jl` flip this around
-their comparisons; nothing else should.
+measured under. The device testsets flip this around the runs they compare
+against the `CPUBackend` bitwise; nothing else should.
 """
 const FORCE_KA = Ref(false)
 
@@ -178,8 +179,9 @@ backend's in-order stream and returns; [`DEVICE_SYNC`](@ref) restores the
 synchronize-per-launch conservative mode. Called with
 `KernelAbstractions.CPU()` — what `get_backend` returns for an `Array` —
 this runs the same bodies through the kernel path on ordinary storage, which
-is how the KA testset and `bench/pointwise_ka.jl` compare the two paths on
-one machine.
+is how `bench/pointwise_ka.jl` times the two paths against each other on one
+machine. The test suite reaches the same path through [`FORCE_KA`](@ref)
+instead, so that a whole run routes through it.
 """
 function pointwise_ka!(body!::F, backend, n1::Int, n2::Int, n3::Int,
                        args...) where {F}

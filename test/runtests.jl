@@ -278,7 +278,7 @@ end
     df = similar(f)
     fillf!(sf, f, (r, θ, z) -> r * cos(θ) * exp(-T(4) * r^2))
     CL.exchange_halos!(f, sf.decomp)
-    CL.deriv_along!(df, f, sf, 1, -1)
+    CL.deriv_along!(df, f, sf, 1, 1)
     CL._scale_grad!(df, sf, 1)
     @test ferr(sf, df, (r, θ, z) ->
         cos(θ) * (one(T) - T(8) * r^2) * exp(-T(4) * r^2)) < T(6e-5)
@@ -757,8 +757,10 @@ end
 end
 
 @testset "resolved-θ axis: antipodal pairing (local)" begin
-    # f = r cosθ · e^{−4r²} = x·g is globally smooth through the axis and is
-    # ODD under (r,θ)→(−r,θ) with the pairing (θ+π picks up the cos sign).
+    # f = r cosθ · e^{−4r²} = x·g is a scalar that is globally smooth through
+    # the axis; its antipodal image is −f, so the odd combination carries all
+    # of it. It is not a velocity component (a u_r of that form has no smooth
+    # Cartesian preimage), so σ = +1.
     solver = Solver(n_global=(48, 16, 1), L_domain=(1.0, 2π, 1.0),
                metric=CylindricalMetric(),
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
@@ -766,7 +768,7 @@ end
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     fillf!(solver, f, (r, θ, z) -> r * cos(θ) * exp(-4r^2))
     CL.exchange_halos!(f, solver.decomp)
-    CL.deriv_along!(df, f, solver, 1, -1); CL._scale_grad!(df, solver, 1)
+    CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
     @test ferr(solver, df, (r, θ, z) -> cos(θ) * (1 - 8r^2) * exp(-4r^2)) < 1e-5
     # A scalar even case: f = e^{−4r²}·(1 + ½cos 2θ) maps to itself at θ+π.
     fillf!(solver, f, (r, θ, z) -> exp(-4r^2) * (1 + 0.5cos(2θ)))
@@ -2841,9 +2843,13 @@ end
         eρ += abs(solver.rho[I] - r); eu += abs(solver.u[I] - u); ep += abs(solver.p[I] - p)
     end
     eρ /= nx; eu /= nx; ep /= nx
-    @test eρ < 2e-2      # measured ≈ 2.9e-3
-    @test eu < 2e-2      # measured ≈ 4.6e-3
-    @test ep < 1e-2      # measured ≈ 2.5e-3
+    # Guards at roughly twice the measured error, as in test/validation.jl. The
+    # run integrates a nonlinear sensor for hundreds of steps, so the fourth
+    # significant figure moves under an arithmetic reassociation; a moved third
+    # digit is real.
+    @test eρ < 6.0e-3    # measured 2.901e-3
+    @test eu < 9.5e-3    # measured 4.622e-3
+    @test ep < 5.0e-3    # measured 2.458e-3
 end
 
 # Not solver code, but `bench/` and the cluster scripts are not imported by this
@@ -2909,10 +2915,14 @@ end
     end
     s1, Q1 = tube_pair()
     run!(s1, Q1; tfinal=0.02, nmax=50)
+    local s2, Q2
     CL.FORCE_KA[] = true
-    s2, Q2 = tube_pair()
-    run!(s2, Q2; tfinal=0.02, nmax=50)
-    CL.FORCE_KA[] = false
+    try
+        s2, Q2 = tube_pair()
+        run!(s2, Q2; tfinal=0.02, nmax=50)
+    finally
+        CL.FORCE_KA[] = false
+    end
     @test s1.step == s2.step
     @test parent(Q1) == parent(Q2)
 
@@ -2927,10 +2937,14 @@ end
     end
     s3, Q3 = axis_pair()
     run!(s3, Q3; tfinal=0.02, nmax=20)
+    local s4, Q4
     CL.FORCE_KA[] = true
-    s4, Q4 = axis_pair()
-    run!(s4, Q4; tfinal=0.02, nmax=20)
-    CL.FORCE_KA[] = false
+    try
+        s4, Q4 = axis_pair()
+        run!(s4, Q4; tfinal=0.02, nmax=20)
+    finally
+        CL.FORCE_KA[] = false
+    end
     @test s3.step == s4.step
     @test parent(Q3) == parent(Q4)
 end
@@ -2985,6 +2999,8 @@ end
 include("device_tests.jl")
 include("patch_tests.jl")
 include("level_tests.jl")
+include("seam_tests.jl")
+include("io_tests.jl")
 
 # HDF5 is a weak dependency and is not loadable from the package environment
 # alone, so the extension tests run only where it is present. The skip is
@@ -3006,6 +3022,11 @@ end
 # environment. The extraction API it exercises is exported by the core, so this
 # skip only foregoes the extension's plotting methods and the collective-profile
 # check under decomposition.
+#
+# Unlike HDF5, CairoMakie is deliberately NOT in Project.toml's test target: it
+# is a heavy dependency to resolve and precompile for two testsets, so
+# `Pkg.test` never reaches this branch. The Makie extension is therefore
+# verified only from the docs environment, which carries CairoMakie already.
 if (try
         @eval using CairoMakie
         true
@@ -3015,8 +3036,9 @@ if (try
     include("makie_tests.jl")
 else
     println("Makie backend not loadable in this environment — extension tests " *
-            "SKIPPED. Run test/makie_tests.jl from the docs environment, and " *
-            "under mpiexec for the decomposition-independent profile.")
+            "SKIPPED. CairoMakie is not in the test target, so Pkg.test always " *
+            "skips these: run test/makie_tests.jl from the docs environment, " *
+            "and under mpiexec for the decomposition-independent profile.")
 end
 
 println("serial tests complete")

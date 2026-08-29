@@ -341,11 +341,32 @@ function _local_max_rate(solver::SolverLike, Q)
     return _local_max_rate_launch(solver, Q)
 end
 
-@inline function _rate_point!(rate_out, rhoq_out, Q, rho, u, v, w, carr, cparr,
-                              mu_art, beta_art, kappa_art, D_art,
-                              inv_h1, inv_h2, inv_h3, inv_r, cot_over_r,
-                              metric, a1, a2, a3, h1, h2, h3,
-                              mu0, Pr, Sc, n_species, o1, o2, o3, i, j, k)
+# The diffusive rate shared by the three sweeps below. The thermal term is
+# κ/(ρ cv): the internal-energy equation reduces to ρ cv DT/Dt = ∇·(κ∇T), so
+# cv, not cp, sets its explicit limit, and the earlier κ/(ρ cp) admitted a
+# step γ times too long wherever conduction (molecular or κ*) governed. The
+# placeholder state `primitives!` writes where ρ ≤ 0 has cv = 0, and a point
+# like that has already failed the positivity check `max_rate` reports, so the
+# fallback there only needs to stay finite.
+@inline function _diffusive_rate(eos, ρ, p, T_ion, cp, mu0, Pr, Sc,
+                                 mu_art, beta_art, kappa_art, D_art, I,
+                                 n_species)
+    ri = one(ρ) / ρ
+    Dmax = mu0 / (Sc * ρ)
+    for sp in 1:n_species
+        Dmax = max(Dmax, mu0 / (Sc * ρ) + D_art[sp][I])
+    end
+    κ = mu0 * cp / Pr + kappa_art[I]
+    cv = mixture_cv(eos, ρ, p, T_ion, cp)
+    thermal = κ * ri / (cv > 0 ? cv : cp)
+    return (mu0 + mu_art[I] + beta_art[I]) * ri + thermal + Dmax
+end
+
+@inline function _rate_point!(rate_out, rhoq_out, Q, rho, u, v, w, parr, Tarr,
+                              carr, cparr, eos, mu_art, beta_art, kappa_art,
+                              D_art, inv_h1, inv_h2, inv_h3, inv_r, cot_over_r,
+                              metric, act, hh, mu0, Pr, Sc, n_species,
+                              o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         T = eltype(rho)
@@ -355,13 +376,10 @@ end
         end
         rhoq_out[I] = ρQ
         ρ = rho[I]
-        ri = one(T) / ρ
         c = carr[I]
         cp = cparr[I]
         uv = (u[I], v[I], w[I])
         ih = (inv_h1, inv_h2, inv_h3)
-        hh = (h1, h2, h3)
-        act = (a1, a2, a3)
         acc = zero(T)
         dsum = zero(T)
         for d in 1:3
@@ -370,13 +388,10 @@ end
             acc += (abs(uv[d]) + c) * idx
             dsum += idx * idx
         end
-        acc += _curvature_rate_point(metric, a2, a3, inv_r, cot_over_r, I, uv)
-        Dmax = mu0 / (Sc * ρ)
-        for sp in 1:n_species
-            Dmax = max(Dmax, mu0 / (Sc * ρ) + D_art[sp][I])
-        end
-        ν = (mu0 + mu_art[I] + beta_art[I]) * ri +
-            (mu0 * cp / Pr + kappa_art[I]) * ri / cp + Dmax
+        acc += _curvature_rate_point(metric, act[2], act[3], inv_r, cot_over_r,
+                                     I, uv)
+        ν = _diffusive_rate(eos, ρ, parr[I], Tarr[I], cp, mu0, Pr, Sc,
+                            mu_art, beta_art, kappa_art, D_art, I, n_species)
         rate_out[I] = acc + 2 * ν * dsum
     end
     return nothing
@@ -390,12 +405,11 @@ function _local_max_rate_launch(solver::SolverLike, Q)
     ft = solver.field_tuples
     pointwise!(_rate_point!, solver.tmp_a, nx, ny, nz,
                solver.tmp_a, solver.tmp_b, Q, solver.rho, solver.u, solver.v,
-               solver.w, solver.c, solver.cp_mix, solver.mu_art,
-               solver.beta_art, solver.kappa_art, ft.D_art,
-               solver.inv_h[1], solver.inv_h[2], solver.inv_h[3],
+               solver.w, solver.p, solver.T_ion, solver.c, solver.cp_mix,
+               solver.eos, solver.mu_art, solver.beta_art, solver.kappa_art,
+               ft.D_art, solver.inv_h[1], solver.inv_h[2], solver.inv_h[3],
                solver.inv_r, solver.cot_over_r, solver.metric,
-               decomp.active[1], decomp.active[2], decomp.active[3],
-               solver.h[1], solver.h[2], solver.h[3],
+               decomp.active, solver.h,
                tr.mu0, tr.Pr, tr.Sc, solver.equations.n_species, o1, o2, o3)
     rates = view(solver.tmp_a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
     rhos = view(solver.tmp_b, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
@@ -438,12 +452,10 @@ function _local_max_rate_loop(solver::SolverLike, Q)
         # loop skips it entirely, yet ρu_θ²/r still drives u_r as a stiff
         # source at small r. That term is added here.
         acc += curvature_rate(solver, solver.metric, I, uv)
-        Dmax = tr.mu0 / (tr.Sc * ρ)
-        for sp in 1:solver.equations.n_species
-            Dmax = max(Dmax, tr.mu0 / (tr.Sc * ρ) + solver.D_art[sp][I])
-        end
-        ν = (tr.mu0 + solver.mu_art[I] + solver.beta_art[I]) * ri +
-            (tr.mu0 * cp / tr.Pr + solver.kappa_art[I]) * ri / cp + Dmax
+        ν = _diffusive_rate(solver.eos, ρ, solver.p[I], solver.T_ion[I], cp,
+                            tr.mu0, tr.Pr, tr.Sc, solver.mu_art, solver.beta_art,
+                            solver.kappa_art, solver.D_art, I,
+                            solver.equations.n_species)
         acc += 2 * ν * dsum
         rate = max(rate, acc)
     end
@@ -528,12 +540,10 @@ function dt_report(solver::Solver, Q)
             rd > wrate && (wrate = rd; wdim = d)
         end
         crate = curvature_rate(solver, solver.metric, I, uv)
-        Dmax = tr.mu0 / (tr.Sc * ρ)
-        for sp in 1:solver.equations.n_species
-            Dmax = max(Dmax, tr.mu0 / (tr.Sc * ρ) + solver.D_art[sp][I])
-        end
-        ν = (tr.mu0 + solver.mu_art[I] + solver.beta_art[I]) * ri +
-            (tr.mu0 * cp / tr.Pr + solver.kappa_art[I]) * ri / cp + Dmax
+        ν = _diffusive_rate(solver.eos, ρ, solver.p[I], solver.T_ion[I], cp,
+                            tr.mu0, tr.Pr, tr.Sc, solver.mu_art, solver.beta_art,
+                            solver.kappa_art, solver.D_art, I,
+                            solver.equations.n_species)
         drate = 2 * ν * dsum
         total = acc + crate + drate
         if total > best.rate
@@ -600,11 +610,14 @@ function _local_positivity_mins(solver::SolverLike, Q)
     n_species = solver.equations.n_species
     m1, m2, m3 = solver.equations.i_mom
     i_energy = solver.equations.i_energy
+    # Arithmetic in the state's own type, so the failsafe reads the same
+    # numbers the solver does under Float32; the reduced minima are Float64.
+    T = eltype(Q)
     ρ_min = Inf
     e_min = Inf
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        ρ = 0.0
+        ρ = zero(T)
         for sp in 1:n_species
             ρ += Q[I, sp]
         end
@@ -613,7 +626,7 @@ function _local_positivity_mins(solver::SolverLike, Q)
         # positive. Such a point drives ρ_min below zero and disables the
         # failsafe on the line below, so skipping it here cannot hide anything.
         ρ > 0 || continue
-        ke = 0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / ρ
+        ke = (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / (2ρ)
         e_min = min(e_min, (Q[I, i_energy] - ke) / ρ)
     end
     return (ρ_min, e_min)
@@ -691,6 +704,11 @@ function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
     i_energy = solver.equations.i_energy
     dV = cell_measure(solver)
     repair_e = scope === :internal_energy
+    # The rescale below divides by the positive part of the species mass,
+    # which is bounded away from zero only because the floor itself is;
+    # `run!` guarantees that by construction and this makes it local.
+    rho_floor > 0 || error("apply_positivity_floor!: rho_floor must be positive")
+    T = eltype(Q)
     cells = 0.0; low_energy = 0.0; mass = 0.0; energy = 0.0; momentum = 0.0
     # Serial, as `max_rate` is: one pass per step over the same interior, and
     # only when a run enables the failsafe.
@@ -700,7 +718,7 @@ function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
             wj = wk * quad_weight(solver, 2, j)
             for i in 1:nx
                 I = CartesianIndex(i + o1, j + o2, k + o3)
-                ρ = 0.0
+                ρ = zero(T)
                 any_negative = false
                 for sp in 1:n_species
                     q = Q[I, sp]
@@ -708,8 +726,7 @@ function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
                     any_negative |= q < 0
                 end
                 if !any_negative && ρ >= rho_floor
-                    ri = 1 / ρ
-                    ke = 0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) * ri
+                    ke = (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / (2ρ)
                     Q[I, i_energy] - ke >= ρ * e_floor && continue
                 end
                 # dV / inv_J is the physical cell volume, since inv_J carries any
@@ -719,38 +736,38 @@ function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
                 repaired = false
                 if any_negative && ρ >= rho_floor
                     repaired = true
-                    pos = 0.0
+                    pos = zero(T)
                     for sp in 1:n_species
-                        pos += max(Q[I, sp], 0.0)
+                        pos += max(Q[I, sp], zero(T))
                     end
-                    # pos >= ρ > 0, so the rescale only ever shrinks.
+                    # pos >= ρ >= rho_floor > 0, so the rescale only ever
+                    # shrinks and never divides by zero.
                     s = ρ / pos
                     for sp in 1:n_species
-                        Q[I, sp] = max(Q[I, sp], 0.0) * s
+                        Q[I, sp] = max(Q[I, sp], zero(T)) * s
                     end
                 end
                 if ρ < rho_floor
-                    pos = 0.0
+                    pos = zero(T)
                     for sp in 1:n_species
-                        pos += max(Q[I, sp], 0.0)
+                        pos += max(Q[I, sp], zero(T))
                     end
                     if pos > 0
-                        s = rho_floor / pos
+                        s = T(rho_floor) / pos
                         for sp in 1:n_species
-                            Q[I, sp] = max(Q[I, sp], 0.0) * s
+                            Q[I, sp] = max(Q[I, sp], zero(T)) * s
                         end
                     else
                         for sp in 1:n_species
-                            Q[I, sp] = sp == 1 ? rho_floor : 0.0
+                            Q[I, sp] = sp == 1 ? T(rho_floor) : zero(T)
                         end
                     end
                     mass += (rho_floor - ρ) * vol
-                    ρ = rho_floor
+                    ρ = T(rho_floor)
                     repaired = true
                 end
-                ri = 1 / ρ
-                ke = 0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) * ri
-                target = ρ * e_floor
+                ke = (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / (2ρ)
+                target = ρ * T(e_floor)
                 if Q[I, i_energy] - ke < target
                     low_energy += 1.0
                     if repair_e || Q[I, i_energy] < target
@@ -909,7 +926,8 @@ function run!(solver::Solver, Q, workspace::Workspace;
               tfinal, nmax::Int=typemax(Int), callback=nothing,
               control::StepControl=solver.control)
     rank = MPI.Comm_rank(solver.comm)
-    save = control.retries > 0 ? Savepoint(_snapshot(Q), solver.t, solver.step) : nothing
+    save = control.retries > 0 ?
+           Savepoint(_snapshot(Q), solver.t, solver.step, -1) : nothing
     attempts = 0
     dt_seen = 0.0
     rho_floor, e_floor = positivity_floors(solver, Q, control)
@@ -924,12 +942,11 @@ function run!(solver::Solver, Q, workspace::Workspace;
     ft0 = solver.floor_tally
     floor_0 = (steps=ft0.steps, cells=ft0.cells, low_energy=ft0.low_energy,
                mass=ft0.mass, energy=ft0.energy, momentum=ft0.momentum)
-    # Savepoints are suppressed at or below this step after a rollback. Without
-    # it a retry re-saves its way forward to the state that failed and then
-    # "rolls back" onto it, so every further retry starts from the corrupt state
-    # and only the CFL moves. Observed as: rolled back to step 180, failed at
-    # step 180, four times.
-    guard_step = -1
+    # `save.guard` suppresses re-banking at or below the failing step after a
+    # rollback. Without it a retry re-saves its way forward to the state that
+    # failed and then "rolls back" onto it, so every further retry starts from
+    # the corrupt state and only the CFL moves. Observed as: rolled back to
+    # step 180, failed at step 180, four times. `regrid!` honours it too.
     while solver.t < tfinal && solver.step < nmax
         # Timed from here rather than around step! alone: max_rate carries the
         # per-step Allreduce and the filter is a full set of line solves, so both
@@ -960,7 +977,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
             # Compounding: the CFL is reduced from its current value and never
             # restored from the savepoint, so three retries give backoff^3.
             solver.cfl *= control.cfl_backoff
-            guard_step = failure.step
+            save.guard = failure.step
             # The rate history belongs to the abandoned trajectory; keeping it
             # would have the predictor extrapolate from states that no longer
             # exist. dt_seen goes too, or the relative floor would immediately
@@ -997,7 +1014,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # known good — the checks run on the state entering a step, so saving
         # after stepping would bank a state nothing has yet vetted.
         if save !== nothing && control.savepoint_interval > 0 &&
-           solver.step > guard_step && solver.step % control.savepoint_interval == 0
+           solver.step > save.guard && solver.step % control.savepoint_interval == 0
             _restore_state!(save.Q, Q)
             save.t = solver.t
             save.step = solver.step
