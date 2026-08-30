@@ -364,23 +364,28 @@ struct BlockEntry
     n_local::NTuple{3,Int}
 end
 
-# Every rank's block, known everywhere. With the rank set partitioned over
-# patches each rank contributes its one block through a single Allgather; a
-# serial run holds every patch and communicates nothing.
+# Every rank's block, known everywhere. Each rank contributes its blocks
+# through a single Allgather: one block with the rank set partitioned over
+# root slabs, a block of every tile on a refined level, and in either case
+# the same count on every rank. A serial run holds every patch and
+# communicates nothing.
 function _block_table(comm::MPI.Comm, my_pids::Vector{Int}, my_decomps)
     np = MPI.Comm_size(comm)
     if np == 1
         return [BlockEntry(0, my_pids[i], my_decomps[i].offset, my_decomps[i].n_local)
                 for i in eachindex(my_pids)]
     end
-    length(my_pids) == 1 ||
-        error("rank partitioning gives one patch per rank; got $(length(my_pids))")
-    d = my_decomps[1]
-    mine = Int64[my_pids[1], d.offset..., d.n_local...]
+    n = length(my_pids)
+    mine = Int64[]
+    for (p, d) in zip(my_pids, my_decomps)
+        append!(mine, Int64[p, d.offset..., d.n_local...])
+    end
     flat = MPI.Allgather(mine, comm)
+    length(flat) == 7 * n * np ||
+        error("interface records need the same patch count on every rank")
     table = BlockEntry[]
-    for r in 0:np-1
-        e = flat[7r+1:7r+7]
+    for r in 0:np-1, i in 1:n
+        e = flat[7 * (n * r + i - 1) .+ (1:7)]
         push!(table, BlockEntry(r, Int(e[1]), (Int(e[2]), Int(e[3]), Int(e[4])),
                                 (Int(e[5]), Int(e[6]), Int(e[7]))))
     end
@@ -407,6 +412,13 @@ function build_interface_records(::Type{T}, comm::MPI.Comm,
     ghost_recvs = GhostRecord{T}[]
     plane_pairs = PlaneRecord{T}[]
     npatch == 1 && return ghost_sends, ghost_recvs, plane_pairs
+    # The tag space grows with the square of the patch count; the MPI
+    # implementation's bound is checked once here rather than discovered
+    # as a truncated tag mid-run.
+    maxtag = _iface_tag(_PLANE_TAG_BASE, npatch, npatch, npatch, 3, 2)
+    (MPI.Comm_size(comm) == 1 || maxtag <= MPI.tag_ub()) ||
+        error("$npatch patches need interface tags up to $maxtag, above " *
+              "this MPI implementation's bound $(MPI.tag_ub())")
     table = _block_table(comm, my_pids, my_decomps)
     me = MPI.Comm_rank(comm)
     local_of = Dict(p => i for (i, p) in enumerate(my_pids))
@@ -523,9 +535,10 @@ into edge and corner halos using the sequential-dimension halo exchange that
 fills corners. Collective over the ranks owning either side of any
 interface; a run with one patch returns immediately.
 """
-function exchange_patch_ghosts!(solver, states)
-    recvs = solver.ghost_recvs
-    sends = solver.ghost_sends
+exchange_patch_ghosts!(solver, states) =
+    _exchange_ghosts!(solver, states, solver.ghost_sends, solver.ghost_recvs)
+
+function _exchange_ghosts!(solver, states, sends, recvs)
     (isempty(recvs) && isempty(sends)) && return states
     me = MPI.Comm_rank(solver.comm)
     reqs = MPI.Request[]
@@ -558,8 +571,10 @@ copies with their mean, over each rank's transverse interior, and return
 result does not depend on which side is asked. Collective as
 [`exchange_patch_ghosts!`](@ref) is; no-op with one patch.
 """
-function average_shared_planes!(solver, states)
-    planes = solver.plane_pairs
+average_shared_planes!(solver, states) =
+    _average_planes!(solver, states, solver.plane_pairs)
+
+function _average_planes!(solver, states, planes)
     isempty(planes) && return states
     me = MPI.Comm_rank(solver.comm)
     reqs = MPI.Request[]
@@ -593,14 +608,19 @@ end
 
 Bring the whole multi-patch state to mutual consistency: average the shared
 interface planes, refill the interface ghost layers from the (averaged)
-neighboring interiors, and exchange each patch's own rank-boundary halos so
-edge and corner cells agree with both. Called by the multi-patch drivers after
-every RK stage update and at the head of each `run!` iteration; a single-patch
-solver never reaches it. Collective over `solver.comm`.
+neighboring interiors, at the root and on every refined level through that
+level's own records, and exchange each patch's own rank-boundary halos so
+edge and corner cells agree with both. Called by the multi-patch drivers
+after every RK stage update and at the head of each `run!` iteration; a
+single-patch solver never reaches it. Collective over `solver.comm`.
 """
 function sync_patches!(solver, states)
     average_shared_planes!(solver, states)
     exchange_patch_ghosts!(solver, states)
+    levels = getfield(solver, :levels)
+    for ℓ in 2:length(levels)
+        _sync_level_records!(solver, states, levels[ℓ])
+    end
     for (i, patch) in enumerate(solver.patches)
         exchange_state!(states[i], patch.decomp)
     end

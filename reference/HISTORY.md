@@ -918,3 +918,30 @@ pairs stays positive with ahead-of-shock noise 6.4e-10, the two-level
 figure. The serial suite grew to 112 testsets and the MPI suite to 114
 checks. Regridding remains two-level; per-substep rate re-evaluation is
 deferred.
+
+## Tiled levels (August 2026)
+
+Item 2 of the production-AMR sequencing in `reference/AMR_GPU.md`. A
+refined level is now a set of tiles on a global lattice of edge `tile`
+parent nodes (0 keeps one patch per level), abutting tiles sharing their
+interface plane and coupled through the root's interface records, held on
+the `Level` and run by `sync_patches!` and after every stage of the
+subcycled driver. The shell imposition writes only parent-fed faces
+(`LevelTransfer.imposed`), the restriction margin stands off those faces
+only, a transfer reads and writes several parent patches
+(`coarse_indices`), and regions are given in the parent level's node space.
+A two-level regrid on a tiled level is a set difference over lattice
+cells: surviving tiles keep their arrays and state.
+
+Measured: `tile = 0` bit-identical to before; a tiled 1-D level at 6.0e-10
+against the one-patch 6.2e-10 (orders 3.95 / 3.91); a 2×2 tile nest in
+2-D at 4.29e-8 against 4.27e-8; decomposed tiled runs at serial values to
+round-off; the tiled regrid tracks the Sod shock through contiguous lattice
+cells. An annular tag set in 2-D is covered at 41% (tile 6) and 47% (tile
+12) of its bounding box (`bench/amr_tiles.jl`); per-tile scratch memory
+(0.4–2.5 MB per 2-D tile) and setup (0.06–0.12 s per tile) argue for tile
+edges of 12 or more in 3-D. The warm step cost of a tiled level is not yet
+measured; the bench script is the instrument. The serial suite grew to
+116 testsets and the MPI suite to 119 checks; the MPI tiled check is
+bounded to ten steps because any 2-D case at np = 8 runs at ~7 s/step on
+the workstation, one patch or four tiles alike.

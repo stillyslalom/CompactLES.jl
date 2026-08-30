@@ -143,8 +143,8 @@ across a sequence of `Numerics`.
 AMR & GPU are selected within `Numerics`.
 `refine` places a refined level at ratio 3 over a `BlockRegion` of the
 coarse grid (a zero-based node offset and extent), or a nested chain of them
-(a vector, each region in its parent patch's node space), optionally subcycled and
-regridding:
+(a vector, each region in the parent level's node space), optionally tiled on a
+lattice (`tile`), subcycled, and regridding:
 
 ```julia
 num = Numerics(n_global = (48, 48, 48),

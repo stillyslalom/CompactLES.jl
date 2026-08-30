@@ -182,7 +182,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 subcycle::Bool=false,
                 regrid_interval::Int=0,
                 tag_threshold::Real=0.02,
-                tag_buffer::Int=4) where {T}
+                tag_buffer::Int=4,
+                tile::Int=0) where {T}
     for d in 1:3
         isperiodic(bcs[d][1]) == isperiodic(bcs[d][2]) ||
             error("dimension $d mixes periodic and non-periodic conditions")
@@ -309,6 +310,13 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     regrid_interval >= 0 || error("regrid_interval must be non-negative")
     tag_buffer >= 0 || error("tag_buffer must be non-negative")
     tag_threshold > 0 || error("tag_threshold must be positive")
+    # A lattice cell of `tile` parent nodes is a patch of tile + 1 nodes,
+    # 3·tile + 1 fine nodes; the four-node minimum gives tile ≥ 3.
+    tile == 0 || tile >= 3 ||
+        error("tile must be 0 (one patch per level) or at least 3 parent nodes")
+    tile == 0 || !(backend isa DeviceBackend) ||
+        error("tiled levels take the host backend; the same-level " *
+              "interface records are host loops")
     regrid_interval == 0 || length(refines) <= 1 ||
         error("regridding is implemented for a two-level hierarchy; " *
               "$(length(refines)) refined levels were given")
@@ -340,24 +348,29 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         # own zero halo silently (`_write_fine_shell!`, `_impose_shell!`).
         n_halo <= 3 * LEVEL_BUFFER ||
             error("refinement supports n_halo ≤ $(3 * LEVEL_BUFFER), got $n_halo")
+        # Each region is nested by the margin inside the patches of the level
+        # above it, in that level's node space (the root's is the grid).
         margin = max(n_halo, LEVEL_BUFFER)
-        parent_extent = n_global
-        for (ℓ, rg) in enumerate(refines), d in 1:3
-            if active_g[d]
-                rg.offset[d] >= margin &&
-                    rg.offset[d] + rg.extent[d] <= parent_extent[d] - margin ||
-                    error("level $ℓ region must be nested at least $margin " *
-                          "level-$(ℓ - 1) nodes inside its parent along " *
-                          "dimension $d")
-                rg.extent[d] >= 4 ||
-                    error("level $ℓ region needs at least 4 parent nodes along " *
-                          "dimension $d (9 fine points for the C8 filter)")
-            else
-                rg.offset[d] == 0 && rg.extent[d] == 1 ||
-                    error("level $ℓ region must span collapsed dimension $d " *
-                          "with offset 0 and extent 1")
+        parent_regions = [BlockRegion((0, 0, 0), n_global)]
+        for (ℓ, rg) in enumerate(refines)
+            for d in 1:3
+                if active_g[d]
+                    rg.extent[d] >= 4 ||
+                        error("level $ℓ region needs at least 4 parent nodes " *
+                              "along dimension $d (9 fine points for the C8 " *
+                              "filter)")
+                else
+                    rg.offset[d] == 0 && rg.extent[d] == 1 ||
+                        error("level $ℓ region must span collapsed dimension " *
+                              "$d with offset 0 and extent 1")
+                end
             end
-            d == 3 && (parent_extent = fine_extent(rg, active_g))
+            _covered_by(_buffered(rg, active_g, margin), parent_regions) ||
+                error("level $ℓ region must be nested at least $margin " *
+                      "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches")
+            parent_regions = [BlockRegion(
+                ntuple(d -> active_g[d] ? 3 * rg.offset[d] : 0, 3),
+                fine_extent(rg, active_g))]
         end
     end
     # --- Device residency -------------------------------------------------
@@ -540,20 +553,63 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         return solver
     end
     # --- Refined patches and their couplings (levels.jl) ------------------
-    # Patch ℓ + 1 covers `refines[ℓ]` of patch ℓ; the hierarchy is a chain.
+    # Level ℓ covers `refines[ℓ]` of level ℓ − 1: one patch over the region
+    # exactly with `tile = 0`, the lattice tiles meeting it otherwise.
     fines = Patch{T}[]
     levels = [Level{T}(0, [1], LevelTransfer{T}[])]
+    parent_indices = [1]
+    parent_regions = [BlockRegion((0, 0, 0), n_global)]
+    parent_h = h
+    decomp_of = Dict{Int,Decomp{T}}(1 => decomp)
+    margin = max(n_halo, LEVEL_BUFFER)
     for (ℓ, rg) in enumerate(refines)
-        parent = isempty(fines) ? patch : fines[end]
-        fine = _build_fine_patch(T, rg, active_g, parent.h, n_halo, comm, deriv,
-                                 filt, smoo, art.smoother, interface_rhs,
-                                 backend, n_species, n_cons, ℓ + 1, ℓ,
-                                 parent.region.offset)
-        lt = build_level_transfer(T, rg, active_g, n_halo, ℓ, ℓ + 1,
-                                  level_restriction, n_cons, subcycle,
-                                  parent.decomp, fine.decomp)
-        push!(fines, fine)
-        push!(levels, Level{T}(ℓ, [ℓ + 1], [lt]))
+        if tile == 0
+            tregions = [rg]
+        else
+            # Clip the lattice to the parent patches' bounding box less the
+            # margin; a tile that then still leaves the union is refused.
+            lo = ntuple(d -> minimum(r.offset[d] for r in parent_regions) +
+                             1 + margin, 3)
+            hi = ntuple(d -> maximum(r.offset[d] + r.extent[d]
+                                     for r in parent_regions) - margin, 3)
+            tregions = _level_tiles(rg, active_g, tile, lo, hi)
+            isempty(tregions) &&
+                error("level $ℓ region admits no tile of edge $tile inside " *
+                      "the nesting margin")
+        end
+        faces = _tile_faces(tregions)
+        indices = Int[]
+        transfers = LevelTransfer{T}[]
+        for (ti, tr) in enumerate(tregions)
+            _covered_by(_buffered(tr, active_g, margin), parent_regions) ||
+                error("level $ℓ tile $tr must be nested at least $margin " *
+                      "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches")
+            idx = length(fines) + 2
+            fine = _build_fine_patch(T, tr, active_g, parent_h, n_halo, comm,
+                                     deriv, filt, smoo, art.smoother,
+                                     interface_rhs, backend, n_species, n_cons,
+                                     idx, ℓ, faces[ti])
+            pidx = _parents_of(tr, active_g, parent_indices, parent_regions)
+            lt = build_level_transfer(T, tr, active_g, n_halo, pidx, idx,
+                                      level_restriction, n_cons, subcycle,
+                                      [decomp_of[i] for i in pidx], fine.decomp,
+                                      faces[ti])
+            push!(fines, fine)
+            push!(indices, idx)
+            push!(transfers, lt)
+            decomp_of[idx] = fine.decomp
+        end
+        lvl = fines[end-length(tregions)+1:end]
+        # Records address ranks of the communicator the exchange runs over,
+        # the root's Cartesian one (`solver.comm`), whose numbering may be
+        # reordered relative to `comm`.
+        sends, recvs, planes = _level_records(T, decomp.comm, [p.region for p in lvl],
+                                              indices, [p.decomp for p in lvl],
+                                              n_cons)
+        push!(levels, Level{T}(ℓ, indices, transfers, sends, recvs, planes))
+        parent_indices = indices
+        parent_regions = [p.region for p in lvl]
+        parent_h = lvl[1].h
     end
     # The literal form types the vector by the patches' join (the root's
     # boundary-condition tuple differs from a refined patch's), as the
@@ -561,8 +617,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     patches = [patch, fines...]
     regrid = regrid_interval == 0 ? nothing :
              RegridSpec{T}(regrid_interval, T(tag_threshold), tag_buffer,
-                           max(n_halo, LEVEL_BUFFER), n_halo, interface_rhs,
-                           deriv, filt, smoo, backend, 0)
+                           margin, n_halo, interface_rhs,
+                           deriv, filt, smoo, backend, tile, 0)
     solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,
@@ -578,24 +634,22 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     return solver
 end
 
-# Refined patch construction over the region `refine` of a parent patch
-# (given in the parent's node space, with the parent's spacing `h` and its
-# region offset `parent_offset` in the parent level's node space), shared
-# between the `Solver` constructor and `regrid!`. It takes the schemes, not
-# plans off an existing patch, because a regrid changes the extents and every
-# plan must be rebuilt.
+# Refined patch construction over the region `refine` (in the parent level's
+# node space; `h` is the parent level's spacing), shared between the `Solver`
+# constructor and `regrid!`. It takes the schemes, not plans off an existing
+# patch, because a regrid changes the extents and every plan must be
+# rebuilt.
 function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            active_g::NTuple{3,Bool}, h::NTuple{3,T},
                            n_halo::Int, comm::MPI.Comm, deriv, filt, smoo,
                            smoother::Symbol,
                            interface_rhs::Symbol, backend::AbstractBackend,
                            n_species::Int, n_cons::Int, id::Int, level::Int,
-                           parent_offset::NTuple{3,Int}) where {T}
+                           faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3)
+                           ) where {T}
     hf = ntuple(d -> active_g[d] ? h[d] / 3 : h[d], 3)
-    # Parent patch-local node k sits at parent-level node parent_offset + k,
-    # and coincident nodes carry index 3(g − 1) + 1 one level down.
-    region_f = BlockRegion(ntuple(d -> active_g[d] ?
-                                  3 * (parent_offset[d] + refine.offset[d]) : 0, 3),
+    # Parent-level node g is refined-level node 3(g − 1) + 1.
+    region_f = BlockRegion(ntuple(d -> active_g[d] ? 3 * refine.offset[d] : 0, 3),
                            fine_extent(refine, active_g))
     pper_f = ntuple(d -> !active_g[d], 3)
     np_f = (MPI.Initialized() || MPI.Init(threadlevel=:funneled);
@@ -605,8 +659,9 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                                         ntuple(d -> region_f.extent[d] > 1, 3),
                                         np_f),
                          n_halo=n_halo, comm=comm)
-    bcs_f = ntuple(d -> active_g[d] ? (CoarseFineBC(), CoarseFineBC()) :
-                                      (PeriodicBC(), PeriodicBC()), 3)
+    # Every face of a refined patch closes with the interface rows and reads
+    # ghosts; the boundary condition only records where they come from.
+    bcs_f = _fine_bcs(active_g, faces)
     mkf(sch, d; kw...) =
         backend_plan(backend, plan_direction(decomp_f, sch, d, hf[d]; kw...))
     ext_f = interface_rhs === :extended
@@ -628,7 +683,7 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
     return Patch(id, level, region_f, comm, decomp_f, hf,
-                 ntuple(d -> (0, 0), 3), bcs_f, (nothing, nothing, nothing),
+                 faces, bcs_f, (nothing, nothing, nothing),
                  dplans_f, vplans_f, fplans_f, splans_f, nothing,
                  empty3, empty3,
                  g(), g(), g(), g(), g(), g(), g(), g(),
@@ -642,6 +697,21 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                  empty3,
                  g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
                  [g() for _ in 1:3, _ in 1:n_cons])
+end
+
+_fine_bcs(active_g::NTuple{3,Bool}, faces::NTuple{3,NTuple{2,Int}}) =
+    ntuple(d -> !active_g[d] ? (PeriodicBC(), PeriodicBC()) :
+                (faces[d][1] == 0 ? CoarseFineBC() : InterfaceBC(faces[d][1]),
+                 faces[d][2] == 0 ? CoarseFineBC() : InterfaceBC(faces[d][2])), 3)
+
+# A patch with new id, faces and boundary conditions sharing every array and
+# plan of `p`: what a regrid hands a surviving tile whose neighbors changed.
+function _repatch(p::Patch, id::Int, faces::NTuple{3,NTuple{2,Int}}, bcs)
+    names = fieldnames(typeof(p))[1:end-1]     # field_tuples is derived
+    args = map(names) do f
+        f === :id ? id : f === :faces ? faces : f === :bcs ? bcs : getfield(p, f)
+    end
+    return Patch(args...)
 end
 
 # Multi-patch construction: the rank set is partitioned over the patch slabs,

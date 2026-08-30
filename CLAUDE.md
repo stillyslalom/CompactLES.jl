@@ -69,17 +69,17 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 112 testsets, 0 failures
+julia --project=. test/runtests.jl        # 116 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 114/114 each
+  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 119/119 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
 ```
 
-The `112 testsets` and the `114/114` are counted by different mechanisms and are
+The `116 testsets` and the `119/119` are counted by different mechanisms and are
 not comparable. `runtests.jl` reports `@testset` blocks under `Test`, each
 holding many `@test`s, and its includes (`float32_validation.jl`,
 `device_tests.jl`, `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, and the
@@ -197,10 +197,14 @@ Names are spelled out in full. Current vocabulary:
 - `refine` (a `BlockRegion` in the parent level's node space, or a vector
   of them for a nested chain), `levels` (a `Vector{Level}`, root first;
   each `Level` holds `index`, `patches` as indices into `solver.patches`,
-  and `transfers`, one `LevelTransfer` per patch with `coarse_index` /
-  `fine_index`), `refined_region`, `nlevels`, `level_restriction`
-  (`:inject` or `:filter`), `prolong_level_ghosts!`, `restrict_level!`,
-  `sync_levels!`, `LEVEL_BUFFER`, `RESTRICT_MARGIN`; `Patch.h` is the
+  `transfers`, one `LevelTransfer` per patch with `coarse_indices` /
+  `fine_index` / `imposed`, and the level's own `ghost_sends` /
+  `ghost_recvs` / `plane_pairs`), `tile` (the lattice edge in parent
+  nodes; 0 = one patch per level), `_tile_span`/`_lattice_tile`/
+  `_level_tiles`/`_tile_faces`, `_in_shell`, `refined_region`,
+  `level_regions`, `nlevels`, `level_restriction` (`:inject` or
+  `:filter`), `prolong_level_ghosts!`, `restrict_level!`, `sync_levels!`,
+  `_sync_level!`, `LEVEL_BUFFER`, `RESTRICT_MARGIN`; `Patch.h` is the
   patch's own spacing (h/3 on a level-1 patch), which the property
   forwarding serves as `solver.h`
 - `subcycle` (the Berger–Oliger mode flag), `subcycled_step!` and the

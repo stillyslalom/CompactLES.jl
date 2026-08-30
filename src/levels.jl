@@ -135,9 +135,13 @@ held on the patch's [`Level`](@ref); consumed by `prolong_level_ghosts!`
 and `restrict_level!`.
 """
 struct LevelTransfer{T}
-    region::BlockRegion              # refined region, parent patch node space
-    coarse_index::Int                # index of the parent patch in solver.patches
+    region::BlockRegion              # refined region, parent LEVEL node space
+    coarse_indices::Vector{Int}      # solver.patches indices of the parent-level
+                                     # patches meeting the buffered box
     fine_index::Int                  # index of the refined patch in solver.patches
+    imposed::NTuple{3,NTuple{2,Bool}} # per face: shell imposed from the parent
+                                     # (false where a same-level neighbor
+                                     # supplies the face through the records)
     restriction::Symbol              # :inject (coincident-node copy, default)
                                      # or :filter (the invertible transfer pair)
     active_dims::Vector{Int}
@@ -161,8 +165,9 @@ struct LevelTransfer{T}
     # chain, and writes only what it owns, so no consistency question arises
     # and the chain needs no halo exchanges of its own. These tables record
     # every rank's owned block of each patch, in that patch's node space and
-    # in the rank order of the patch's Cartesian communicator.
-    coarse_blocks::Vector{BlockRegion}
+    # in the rank order of the patch's Cartesian communicator; one table per
+    # parent patch, aligned with `coarse_indices`.
+    coarse_blocks::Vector{Vector{BlockRegion}}
     fine_blocks::Vector{BlockRegion}
     box_gather::Array{T,4}           # replicated box state, all components
     restricted::Array{T,4}           # replicated coincident-sample of the fine
@@ -179,14 +184,26 @@ end
 One level of the refinement hierarchy: its index (0 is the root), the
 indices into `solver.patches` of the patches at this level, and, aligned
 with those, the [`LevelTransfer`](@ref) coupling each patch to its parent
-(empty at the root). `solver.levels` holds them in ascending order, and
-every level below the root is nested inside the one above it.
+(empty at the root), plus the same-level interface records among the
+level's patches (the root's live on the `Solver`). `solver.levels` holds
+them in ascending order, and every level below the root is nested inside
+the one above it. Below the root a level is a set of tiles on a lattice of
+edge `tile` parent nodes (one patch over the whole region when `tile` is
+0), abutting tiles sharing their interface plane as root slabs do.
 """
 struct Level{T}
     index::Int
     patches::Vector{Int}
     transfers::Vector{LevelTransfer{T}}
+    ghost_sends::Vector{GhostRecord{T}}
+    ghost_recvs::Vector{GhostRecord{T}}
+    plane_pairs::Vector{PlaneRecord{T}}
 end
+
+Level{T}(index::Int, patches::Vector{Int},
+         transfers::Vector{LevelTransfer{T}}) where {T} =
+    Level{T}(index, patches, transfers, GhostRecord{T}[], GhostRecord{T}[],
+             PlaneRecord{T}[])
 
 "Number of levels in the hierarchy, the root included."
 nlevels(solver) = length(getfield(solver, :levels))
@@ -194,8 +211,9 @@ nlevels(solver) = length(getfield(solver, :levels))
 """
     refined_region(solver, level=1) -> BlockRegion
 
-The refined region of the sole patch on `level`, in its parent's node space.
-Errors on a level holding several patches.
+The refined region of the sole patch on `level`, in the parent level's node
+space. Errors on a level holding several patches; see
+[`level_regions`](@ref) for those.
 """
 function refined_region(solver, level::Int=1)
     lev = getfield(solver, :levels)[level + 1]
@@ -203,6 +221,163 @@ function refined_region(solver, level::Int=1)
         error("level $level holds $(length(lev.transfers)) patches; " *
               "refined_region needs one")
     return lev.transfers[1].region
+end
+
+"""
+    level_regions(solver, level) -> Vector{BlockRegion}
+
+The regions of the patches on `level`, in the parent level's node space, in
+patch order.
+"""
+level_regions(solver, level::Int) =
+    [lt.region for lt in getfield(solver, :levels)[level + 1].transfers]
+
+# --- Tile lattice -------------------------------------------------------------
+#
+# A refined level is tiled on a lattice of edge `tile` parent nodes anchored
+# at parent node 0: lattice cell k spans parent nodes k·tile + 1 .. (k+1)·tile
+# + 1, so abutting tiles share their interface plane (as root slabs do) and
+# every tile face is either fully shared with one neighbor or fully fed from
+# the parent. Tiles at the domain edge are clipped to the nesting margin and
+# dropped when clipping leaves them below the four-node minimum. The lattice
+# is global so that a regrid moves tiles in and out of the set without ever
+# changing a surviving tile's region.
+
+# Lattice cell indices meeting the node interval [lo, hi]. A node on a
+# lattice plane belongs to both cells it separates, but an interval of two
+# or more nodes needs a cell only where it reaches past the plane, so its
+# end nodes count toward the cell on the inner side alone.
+function _tile_span(lo::Int, hi::Int, tile::Int)
+    hi > lo && return (max(lo - 1, 0) ÷ tile):((hi - 2) ÷ tile)
+    return (max(lo - 2, 0) ÷ tile):(max(lo - 1, 0) ÷ tile)
+end
+
+# The tile of lattice cell `k` clipped to the feasible node interval
+# `[lo, hi]`, or `nothing` when clipping leaves fewer than four nodes.
+function _lattice_tile(k::NTuple{3,Int}, active::NTuple{3,Bool}, tile::Int,
+                       lo::NTuple{3,Int}, hi::NTuple{3,Int})
+    offext = ntuple(3) do d
+        active[d] || return (0, 1)
+        a = max(k[d] * tile + 1, lo[d])
+        b = min(k[d] * tile + tile + 1, hi[d])
+        (a - 1, b - a + 1)
+    end
+    any(d -> active[d] && offext[d][2] < 4, 1:3) && return nothing
+    return BlockRegion(ntuple(d -> offext[d][1], 3), ntuple(d -> offext[d][2], 3))
+end
+
+# Tiles covering `box` (parent-level node space), in lattice order.
+function _level_tiles(box::BlockRegion, active::NTuple{3,Bool}, tile::Int,
+                      lo::NTuple{3,Int}, hi::NTuple{3,Int})
+    spans = ntuple(d -> active[d] ?
+                   _tile_span(box.offset[d] + 1, box.offset[d] + box.extent[d], tile) :
+                   (0:0), 3)
+    tiles = BlockRegion[]
+    for k3 in spans[3], k2 in spans[2], k1 in spans[1]
+        t = _lattice_tile((k1, k2, k3), active, tile, lo, hi)
+        t === nothing || push!(tiles, t)
+    end
+    return tiles
+end
+
+# Face table of a tile set: neighbor patch index (1-based within the set)
+# per face, 0 where none. Two tiles abut along `d` when one's high plane is
+# the other's low plane and their transverse extents coincide, which the
+# lattice guarantees whenever they touch at all.
+function _tile_faces(regions::Vector{BlockRegion})
+    n = length(regions)
+    faces = Vector{NTuple{3,NTuple{2,Int}}}(undef, n)
+    for p in 1:n
+        rp = regions[p]
+        faces[p] = ntuple(3) do d
+            lo = 0
+            hi = 0
+            for q in 1:n
+                q == p && continue
+                rq = regions[q]
+                same = all(e -> e == d || (rq.offset[e] == rp.offset[e] &&
+                                           rq.extent[e] == rp.extent[e]), 1:3)
+                same || continue
+                rq.offset[d] + rq.extent[d] - 1 == rp.offset[d] && (lo = q)
+                rp.offset[d] + rp.extent[d] - 1 == rq.offset[d] && (hi = q)
+            end
+            (lo, hi)
+        end
+    end
+    return faces
+end
+
+# The parent-level patches (solver indices) whose regions meet the buffered
+# box of `region`, from the parent level's transfers (the root's patches
+# from `patch_regions`).
+function _parents_of(region::BlockRegion, active::NTuple{3,Bool},
+                     parent_indices::Vector{Int}, parent_regions::Vector{BlockRegion})
+    box = _buffered(region, active, LEVEL_BUFFER)
+    hits = Int[]
+    for (i, r) in zip(parent_indices, parent_regions)
+        any(d -> box.offset[d] + box.extent[d] <= r.offset[d] ||
+                 r.offset[d] + r.extent[d] <= box.offset[d], 1:3) && continue
+        push!(hits, i)
+    end
+    return hits
+end
+
+# Same-level records among the patches of a refined level, built through the
+# root machinery on level-local ids and shifted onto solver patch indices.
+# Collective over `comm` (one Allgather of every rank's blocks of every
+# tile: each rank holds a block of every tile of a refined level).
+function _level_records(::Type{T}, comm::MPI.Comm, regions::Vector{BlockRegion},
+                        patch_indices::Vector{Int}, decomps, n_cons::Int) where {T}
+    length(regions) > 1 || return GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[]
+    faces = _tile_faces(regions)
+    sends, recvs, planes = build_interface_records(T, comm, regions, faces,
+                                                   collect(1:length(regions)),
+                                                   decomps, n_cons)
+    shift(r::GhostRecord{T}) =
+        GhostRecord{T}(patch_indices[r.patch], r.partner,
+                       r.partner_patch == 0 ? 0 : patch_indices[r.partner_patch],
+                       r.tag, r.mine, r.theirs, r.buf)
+    shift(r::PlaneRecord{T}) =
+        PlaneRecord{T}(patch_indices[r.patch], r.partner,
+                       r.partner_patch == 0 ? 0 : patch_indices[r.partner_patch],
+                       r.tag, r.sendtag, r.mine, r.theirs, r.buf, r.sbuf)
+    return map(shift, sends), map(shift, recvs), map(shift, planes)
+end
+
+# Whether the fine shell slot at patch-global node `g` (padded slots included)
+# is imposed from the parent: outside the strict interior along some active
+# dimension whose face on that side is parent-fed. With every face imposed
+# this is the complement of the strict interior [2, N − 1]^3.
+@inline function _in_shell(g1, g2, g3, Nf, active, imposed)
+    @inbounds begin
+        (active[1] && ((g1 <= 1 && imposed[1][1]) || (g1 >= Nf[1] && imposed[1][2]))) ||
+        (active[2] && ((g2 <= 1 && imposed[2][1]) || (g2 >= Nf[2] && imposed[2][2]))) ||
+        (active[3] && ((g3 <= 1 && imposed[3][1]) || (g3 >= Nf[3] && imposed[3][2])))
+    end
+end
+
+# Same-level consistency of one refined level: shared-plane averaging and
+# ghost refill through the level's records. The per-patch halo exchange that
+# carries the strips into corners is the caller's, as for the root.
+function _sync_level_records!(solver, states, lev::Level)
+    isempty(lev.plane_pairs) && isempty(lev.ghost_sends) &&
+        isempty(lev.ghost_recvs) && return states
+    _average_planes!(solver, states, lev.plane_pairs)
+    _exchange_ghosts!(solver, states, lev.ghost_sends, lev.ghost_recvs)
+    return states
+end
+
+# Level sync inside the subcycled driver: records, then each patch's own
+# halo exchange, skipped entirely for a one-tile level (its RHS evaluation
+# exchanges halos itself).
+function _sync_level!(solver, states, lev::Level)
+    length(lev.patches) > 1 || return states
+    _sync_level_records!(solver, states, lev)
+    patches = getfield(solver, :patches)
+    for pi in lev.patches
+        exchange_state!(states[pi], patches[pi].decomp)
+    end
+    return states
 end
 
 # The transfers of every level below the root, root-adjacent first (the
@@ -246,11 +421,14 @@ end
 
 function build_level_transfer(::Type{T}, region::BlockRegion,
                               active::NTuple{3,Bool}, n_halo::Int,
-                              coarse_index::Int, fine_index::Int,
+                              coarse_indices::Vector{Int}, fine_index::Int,
                               restriction::Symbol,
                               n_cons::Int, subcycle::Bool,
-                              coarse_decomp::Decomp{T},
-                              fine_decomp::Decomp{T}) where {T}
+                              coarse_decomps::Vector{<:Decomp{T}},
+                              fine_decomp::Decomp{T},
+                              faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3)
+                              ) where {T}
+    imposed = ntuple(d -> (faces[d][1] == 0, faces[d][2] == 0), 3)
     dims_to_refine = [d for d in 1:3 if active[d]]
     boxext = ntuple(d -> active[d] ? region.extent[d] + 2 * LEVEL_BUFFER :
                                      region.extent[d], 3)
@@ -271,13 +449,13 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
     shell = ShellRing{T}(slabs, table, ringlen,
                          Matrix{T}(undef, ringlen, n_cons), ring_counts,
                          GatherBuffers{T}())
-    return LevelTransfer{T}(region, coarse_index, fine_index, restriction,
-                            dims_to_refine,
+    return LevelTransfer{T}(region, coarse_indices, fine_index, imposed,
+                            restriction, dims_to_refine,
                             pdecomps, pplans, pstage,
                             rdecomps, rplans, rstage,
                             zeros(T, boxsize), zeros(T, boxsize),
                             zeros(T, boxsize), zeros(T, boxsize),
-                            _owned_blocks(coarse_decomp),
+                            [_owned_blocks(dc) for dc in coarse_decomps],
                             _owned_blocks(fine_decomp),
                             zeros(T, size(pstage[1])..., n_cons),
                             zeros(T, region.extent..., n_cons),
@@ -385,6 +563,22 @@ end
 fine_extent(region::BlockRegion, active::NTuple{3,Bool}) =
     ntuple(d -> active[d] ? 3 * region.extent[d] - 2 : region.extent[d], 3)
 
+# `region` grown by `margin` nodes per side along active dimensions.
+_buffered(region::BlockRegion, active::NTuple{3,Bool}, margin::Int) =
+    BlockRegion(ntuple(d -> region.offset[d] - (active[d] ? margin : 0), 3),
+                ntuple(d -> region.extent[d] + (active[d] ? 2 * margin : 0), 3))
+
+# Whether every node of `region` lies in some member of `regions` (a union
+# of boxes, not one box: the test is by node, and regions are small).
+function _covered_by(region::BlockRegion, regions::Vector{BlockRegion})
+    inside(g, r) = all(d -> r.offset[d] < g[d] <= r.offset[d] + r.extent[d], 1:3)
+    for k in 1:region.extent[3], j in 1:region.extent[2], i in 1:region.extent[1]
+        g = region.offset .+ (i, j, k)
+        any(r -> inside(g, r), regions) || return false
+    end
+    return true
+end
+
 """
     _amr_dims(extent, active, np) -> NTuple{3,Int}
 
@@ -434,9 +628,9 @@ end
 
 # --- Prolongation: coarse state → fine ghost ring and boundary planes -------
 
-# The buffered box as coarse node ranges, and its node-space offset (box node
-# 1 sits at node offset + 1). The box lies strictly inside the root patch by
-# the nesting margin, so every gathered value is an interior one.
+# The buffered box as parent-level node ranges, and its node-space offset
+# (box node 1 sits at node offset + 1). The box lies inside the union of the
+# parent patches by the nesting margin, so every gathered value exists.
 _box_offset(lt::LevelTransfer, active::NTuple{3,Bool}) =
     ntuple(d -> lt.region.offset[d] - (active[d] ? LEVEL_BUFFER : 0), 3)
 
@@ -446,13 +640,34 @@ function _box_ranges(lt::LevelTransfer, active::NTuple{3,Bool})
     return ntuple(d -> (off[d] + 1):(off[d] + box.n_local[d]), 3)
 end
 
-# Gather the coarse box, all components, into `dst4` (shaped like the chain's
-# stage 0 with a trailing component index) on every rank. Collective.
-function _gather_box!(dst4, lt::LevelTransfer, Qc, dp::Decomp)
-    active = dp.active
-    gather_region!(dst4, _box_ranges(lt, active), _box_offset(lt, active),
-                   lt.pdecomps[1].n_halo_d, Qc, dp, lt.coarse_blocks;
-                   buffers=lt.box_buffers)
+# Parent-level node ranges of `ranges` that fall in `region`, as that patch's
+# own (local) node ranges: patch node = level node − region offset.
+function _patch_local(ranges::NTuple{3,UnitRange{Int}}, region::BlockRegion)
+    return ntuple(d -> (max(first(ranges[d]), region.offset[d] + 1) -
+                        region.offset[d]):
+                       (min(last(ranges[d]), region.offset[d] + region.extent[d]) -
+                        region.offset[d]), 3)
+end
+
+# Gather the parent box, all components, into `dst4` (shaped like the chain's
+# stage 0 with a trailing component index) on every rank: one gather per
+# parent patch meeting the box, each placing its part by parent-level node.
+# Collective over every parent patch's communicator, in `coarse_indices`
+# order. `states` and `patches` are the solver's full vectors.
+function _gather_box!(dst4, lt::LevelTransfer, states, patches)
+    fine = patches[lt.fine_index]
+    active = fine.decomp.active
+    box = _box_ranges(lt, active)
+    boxoff = _box_offset(lt, active)
+    pad = lt.pdecomps[1].n_halo_d
+    for (k, ci) in enumerate(lt.coarse_indices)
+        parent = patches[ci]
+        local_r = _patch_local(box, parent.region)
+        any(isempty, local_r) && continue
+        gather_region!(dst4, local_r, boxoff .- parent.region.offset, pad,
+                       states[ci], parent.decomp, lt.coarse_blocks[k];
+                       buffers=lt.box_buffers)
+    end
     return dst4
 end
 
@@ -460,10 +675,12 @@ function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
                             df::Decomp, boxf::Decomp, shell_only::Bool=true)
     # Fine patch node g ↔ fine box node g + 3·LEVEL_BUFFER (active dims). The
     # shell is every padded slot whose PATCH-GLOBAL index lies outside the
-    # strict interior [2, N−1] of each active dimension: the ghost ring plus
-    # the boundary planes, both imposed from the prolonged coarse state. A
-    # decomposed rank writes only its own padded slots, so an interior rank
-    # writes nothing under `shell_only` and its rank-boundary halos keep the
+    # strict interior [2, N−1] along an active dimension whose face on that
+    # side is parent-fed (`lt.imposed`): the ghost ring plus the boundary
+    # planes, both imposed from the prolonged parent state; a face shared
+    # with a same-level tile is left to the level's records. A decomposed
+    # rank writes only its own padded slots, so an interior rank writes
+    # nothing under `shell_only` and its rank-boundary halos keep the
     # exchanged neighbor values. `shell_only = false` writes every slot
     # instead: the whole-patch initialization a regrid performs on a freshly
     # created fine region.
@@ -473,14 +690,13 @@ function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
     off = df.offset
     Nf = fine_extent(lt.region, ntuple(d -> df.active[d], 3))
     shift = ntuple(d -> df.active[d] ? 3 * LEVEL_BUFFER : 0, 3)
+    active = (df.active[1], df.active[2], df.active[3])
+    imposed = lt.imposed
     if _cpu_storage(fine_Q)
         r = ntuple(d -> (1 - padf[d]):(nf[d] + padf[d]), 3)
         @inbounds for k in r[3], j in r[2], i in r[1]
             g1, g2, g3 = i + off[1], j + off[2], k + off[3]
-            interior = (!df.active[1] || 2 <= g1 <= Nf[1] - 1) &&
-                       (!df.active[2] || 2 <= g2 <= Nf[2] - 1) &&
-                       (!df.active[3] || 2 <= g3 <= Nf[3] - 1)
-            shell_only && interior && continue
+            shell_only && !_in_shell(g1, g2, g3, Nf, active, imposed) && continue
             fine_Q[i + padf[1], j + padf[2], k + padf[3], c] =
                 box_field[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
                           g3 + shift[3] + padb[3]]
@@ -496,20 +712,18 @@ function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
     pointwise!(_fine_shell_point!, fine_Q,
                nf[1] + 2 * padf[1], nf[2] + 2 * padf[2], nf[3] + 2 * padf[3],
                fine_Q, dev_box, c, off, padf, padb, shift, Nf,
-               (df.active[1], df.active[2], df.active[3]), shell_only)
+               active, imposed, shell_only)
     return fine_Q
 end
 
 @inline function _fine_shell_point!(fine_Q, box_field, c, off, padf, padb,
-                                    shift, Nf, active, shell_only, i, j, k)
+                                    shift, Nf, active, imposed, shell_only,
+                                    i, j, k)
     @inbounds begin
         g1 = i - padf[1] + off[1]
         g2 = j - padf[2] + off[2]
         g3 = k - padf[3] + off[3]
-        interior = (!active[1] || 2 <= g1 <= Nf[1] - 1) &&
-                   (!active[2] || 2 <= g2 <= Nf[2] - 1) &&
-                   (!active[3] || 2 <= g3 <= Nf[3] - 1)
-        if !(shell_only && interior)
+        if !shell_only || _in_shell(g1, g2, g3, Nf, active, imposed)
             fine_Q[i, j, k, c] =
                 box_field[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
                           g3 + shift[3] + padb[3]]
@@ -652,14 +866,13 @@ function _write_shell_from_ring!(Qf, ring, table, lt::LevelTransfer,
     nf = df.n_local
     off = df.offset
     Nf = fine_extent(lt.region, ntuple(d -> df.active[d], 3))
+    active = (df.active[1], df.active[2], df.active[3])
+    imposed = lt.imposed
     if _cpu_storage(Qf)
         r = ntuple(d -> (1 - padf[d]):(nf[d] + padf[d]), 3)
         @inbounds for k in r[3], j in r[2], i in r[1]
             g1, g2, g3 = i + off[1], j + off[2], k + off[3]
-            interior = (!df.active[1] || 2 <= g1 <= Nf[1] - 1) &&
-                       (!df.active[2] || 2 <= g2 <= Nf[2] - 1) &&
-                       (!df.active[3] || 2 <= g3 <= Nf[3] - 1)
-            interior && continue
+            _in_shell(g1, g2, g3, Nf, active, imposed) || continue
             at = _ring_offset(table, g1, g2, g3)
             at == 0 && _ring_miss(g1, g2, g3)
             for c in 1:n_cons
@@ -674,21 +887,17 @@ function _write_shell_from_ring!(Qf, ring, table, lt::LevelTransfer,
     copyto!(dev_ring, ring)
     pointwise!(_shell_ring_point!, Qf,
                nf[1] + 2 * padf[1], nf[2] + 2 * padf[2], nf[3] + 2 * padf[3],
-               Qf, dev_ring, (table...,), off, padf, Nf,
-               (df.active[1], df.active[2], df.active[3]), n_cons)
+               Qf, dev_ring, (table...,), off, padf, Nf, active, imposed, n_cons)
     return Qf
 end
 
 @inline function _shell_ring_point!(Qf, ring, table, off, padf, Nf, active,
-                                    n_cons, i, j, k)
+                                    imposed, n_cons, i, j, k)
     @inbounds begin
         g1 = i - padf[1] + off[1]
         g2 = j - padf[2] + off[2]
         g3 = k - padf[3] + off[3]
-        interior = (!active[1] || 2 <= g1 <= Nf[1] - 1) &&
-                   (!active[2] || 2 <= g2 <= Nf[2] - 1) &&
-                   (!active[3] || 2 <= g3 <= Nf[3] - 1)
-        if !interior
+        if _in_shell(g1, g2, g3, Nf, active, imposed)
             at = _ring_offset(table, g1, g2, g3)
             for c in 1:n_cons
                 Qf[i, j, k, c] = ring[at, c]
@@ -720,9 +929,7 @@ function prolong_level_ghosts!(solver, states)
 end
 
 function _prolong_ghosts!(solver, states, lt::LevelTransfer)
-    patches = getfield(solver, :patches)
-    coarse = patches[lt.coarse_index]
-    _gather_box!(lt.box_gather, lt, states[lt.coarse_index], coarse.decomp)
+    _gather_box!(lt.box_gather, lt, states, getfield(solver, :patches))
     _impose_shell!(solver, states, lt,
                    (dst, c) -> dst .= view(lt.box_gather, :, :, :, c))
     # The imposed shell replaces the halo values the previous exchange left
@@ -735,35 +942,57 @@ end
 # --- Restriction: fine state → covered coarse region ------------------------
 
 # Write the replicated restricted values (`src4`, region-shaped, unpadded)
-# onto the coarse nodes this rank owns inside the covered region, holding
-# `RESTRICT_MARGIN` region nodes back from the boundary along active dims.
-function _write_covered_region!(coarse_Q, src4, lt::LevelTransfer, dp::Decomp)
-    padc = dp.n_halo_d
+# onto the parent-level nodes this rank owns inside the covered region,
+# holding `RESTRICT_MARGIN` region nodes back from the boundary along active
+# dims, one parent patch at a time.
+function _write_covered_region!(src4, lt::LevelTransfer, states, patches)
+    fine = patches[lt.fine_index]
+    active = fine.decomp.active
     off = lt.region.offset
     ext = lt.region.extent
+    # The written window in region-local nodes: the margin applies at a
+    # parent-fed face only, since at a face shared with a same-level tile
+    # the fine solution is not imposed data.
+    win = ntuple(3) do d
+        active[d] || return 1:ext[d]
+        lo = lt.imposed[d][1] ? 1 + RESTRICT_MARGIN : 1
+        hi = lt.imposed[d][2] ? ext[d] - RESTRICT_MARGIN : ext[d]
+        lo:hi
+    end
+    for ci in lt.coarse_indices
+        _write_covered_patch!(states[ci], src4, win, off, patches[ci])
+    end
+    return src4
+end
+
+# The part of the window this rank owns of one parent patch. `src4[i, j, k]`
+# is region-local node (i, j, k) ↔ parent-level node off + (i, j, k) ↔ that
+# patch's local node minus its region offset ↔ padded index minus the rank's
+# block offset plus the pad.
+function _write_covered_patch!(coarse_Q, src4, win, off, parent::Patch)
+    dp = parent.decomp
+    padc = dp.n_halo_d
+    poff = parent.region.offset
     r = ntuple(3) do d
-        m = dp.active[d] ? RESTRICT_MARGIN : 0
-        # Region-local nodes intersected with this rank's owned root nodes.
-        lo = max(1 + m, dp.offset[d] + 1 - off[d])
-        hi = min(ext[d] - m, dp.offset[d] + dp.n_local[d] - off[d])
+        # Region-local nodes intersected with this rank's owned patch nodes.
+        lo = max(first(win[d]), dp.offset[d] + 1 + poff[d] - off[d])
+        hi = min(last(win[d]), dp.offset[d] + dp.n_local[d] + poff[d] - off[d])
         lo:hi
     end
     any(isempty, r) && return coarse_Q
+    sh = ntuple(d -> off[d] - poff[d] - dp.offset[d] + padc[d], 3)
     if _cpu_storage(coarse_Q)
         @inbounds for c in 1:size(src4, 4), k in r[3], j in r[2], i in r[1]
-            coarse_Q[off[1] + i - dp.offset[1] + padc[1],
-                     off[2] + j - dp.offset[2] + padc[2],
-                     off[3] + k - dp.offset[3] + padc[3], c] = src4[i, j, k, c]
+            coarse_Q[i + sh[1], j + sh[2], k + sh[3], c] = src4[i, j, k, c]
         end
         return coarse_Q
     end
-    # Device coarse patch: the covered write is a rectangular block copy, so
+    # Device parent patch: the covered write is a rectangular block copy, so
     # the replicated window uploads once and a broadcast assigns it.
-    win = view(src4, r[1], r[2], r[3], :)
-    dev_win = similar(parent(coarse_Q), size(win))
-    copyto!(dev_win, Array(win))
-    lr = ntuple(d -> (off[d] + first(r[d]) - dp.offset[d] + padc[d]):
-                     (off[d] + last(r[d]) - dp.offset[d] + padc[d]), 3)
+    w = view(src4, r[1], r[2], r[3], :)
+    dev_win = similar(parent(coarse_Q), size(w))
+    copyto!(dev_win, Array(w))
+    lr = ntuple(d -> (first(r[d]) + sh[d]):(last(r[d]) + sh[d]), 3)
     view(parent(coarse_Q), lr[1], lr[2], lr[3], 1:size(src4, 4)) .= dev_win
     return coarse_Q
 end
@@ -793,12 +1022,12 @@ end
 
 function _restrict_patch!(solver, states, lt::LevelTransfer)
     patches = getfield(solver, :patches)
-    coarse = patches[lt.coarse_index]
     fine = patches[lt.fine_index]
-    Qc = states[lt.coarse_index]
     Qf = states[lt.fine_index]
     if lt.restriction === :filter
         K = length(lt.rplans)
+        padb = lt.rdecomps[1].n_halo_d
+        ext = lt.region.extent
         for c in 1:solver.equations.n_cons
             src = view(Qf, :, :, :, c)
             for k in K:-1:1
@@ -806,9 +1035,15 @@ function _restrict_patch!(solver, states, lt::LevelTransfer)
                 input = k == K ? src : lt.rstage[k+1]
                 restrict!(dst, lt.rplans[k], input)
             end
-            _write_covered_filtered!(Qc, c, lt.rstage[1], lt, coarse.decomp,
-                                     lt.rdecomps[1])
+            # The chain's output is padded region-shaped scratch; the shared
+            # write-back takes the unpadded region form (serial-only, so the
+            # copy is one small array per component).
+            view(lt.restricted, :, :, :, c) .=
+                view(lt.rstage[1], (1 + padb[1]):(ext[1] + padb[1]),
+                     (1 + padb[2]):(ext[2] + padb[2]),
+                     (1 + padb[3]):(ext[3] + padb[3]))
         end
+        _write_covered_region!(lt.restricted, lt, states, patches)
         return states
     end
     dfine = fine.decomp
@@ -816,26 +1051,8 @@ function _restrict_patch!(solver, states, lt::LevelTransfer)
     sample = ntuple(d -> dfine.active[d] ? 3 : 1, 3)
     gather_region!(lt.restricted, fr, (0, 0, 0), (0, 0, 0), Qf, dfine,
                    lt.fine_blocks, sample; buffers=lt.restrict_buffers)
-    _write_covered_region!(Qc, lt.restricted, lt, coarse.decomp)
+    _write_covered_region!(lt.restricted, lt, states, patches)
     return states
-end
-
-# The `:filter` write-back (serial-only, whole region on this rank): the
-# restricted chain output is padded region-shaped scratch.
-function _write_covered_filtered!(coarse_Q, c::Int, restricted,
-                                  lt::LevelTransfer, dp::Decomp, box::Decomp)
-    padc = dp.n_halo_d
-    padb = box.n_halo_d
-    off = lt.region.offset
-    nb = box.n_local
-    r = ntuple(d -> dp.active[d] ?
-               ((1 + RESTRICT_MARGIN):(nb[d] - RESTRICT_MARGIN)) : (1:nb[d]), 3)
-    @inbounds for k in r[3], j in r[2], i in r[1]
-        coarse_Q[off[1] + i + padc[1], off[2] + j + padc[2],
-                 off[3] + k + padc[3], c] =
-            restricted[i + padb[1], j + padb[2], k + padb[3]]
-    end
-    return coarse_Q
 end
 
 """
@@ -870,20 +1087,21 @@ end
 # that level.
 
 """
-    save_level_box!(lt, decomp, Q, dQ, at_end)
+    save_level_box!(lt, patches, states, dQs, at_end)
 
-Gather the coarse state `Q` and its RHS `dQ` over the buffered prolongation
-box into the [`LevelTransfer`](@ref)'s Hermite storage: the `t^n` slots when
-`at_end` is false, the `t^n + dt` slots when true. `decomp` is the coarse
-patch's decomposition. Collective over it (two replicated-box gathers); the
-box data is then identical on every rank, so the Hermite shell evaluation
-is communication-free at every fine stage.
+Gather the parent state and its RHS over the buffered prolongation box into
+the [`LevelTransfer`](@ref)'s Hermite storage: the `t^n` slots when `at_end`
+is false, the `t^n + dt` slots when true. `patches`, `states` and `dQs` are
+the solver's full vectors. Collective over the parent patches'
+communicators (two replicated-box gathers); the box data is then identical
+on every rank, so the Hermite shell evaluation is communication-free at
+every fine stage.
 """
-function save_level_box!(lt::LevelTransfer, decomp::Decomp, Q, dQ, at_end::Bool)
+function save_level_box!(lt::LevelTransfer, patches, states, dQs, at_end::Bool)
     boxQ = at_end ? lt.box_Q1 : lt.box_Q0
     boxdQ = at_end ? lt.box_dQ1 : lt.box_dQ0
-    _gather_box!(boxQ, lt, Q, decomp)
-    _gather_box!(boxdQ, lt, dQ, decomp)
+    _gather_box!(boxQ, lt, states, patches)
+    _gather_box!(boxdQ, lt, dQs, patches)
     return lt
 end
 
@@ -935,6 +1153,7 @@ mutable struct RegridSpec{T}
     filt::CompactScheme{T}
     smoo::CompactScheme{T}
     backend::AbstractBackend
+    tile::Int                        # lattice edge; 0 = one box over the tags
     last_step::Int
 end
 

@@ -40,10 +40,11 @@ One solver runs on four axes of configuration, combinable except where
   along one dimension, the rank set partitioned over them, coupled by ghost
   exchange, interface closure rows, and shared-plane averaging
   (`src/patches.jl`).
-- **Nested refinement**: a chain of levels, each one patch covering a
-  region of its parent at ratio 3, at a global timestep or Berger–Oliger
-  subcycled recursively; a two-level hierarchy can move under
-  sensor-driven tagging and regridding (`src/levels.jl`, `src/regrid.jl`).
+- **Nested refinement**: a chain of levels, each covering a region of its
+  parent at ratio 3 with one patch or with the tiles of a global lattice,
+  at a global timestep or Berger–Oliger subcycled recursively; a two-level
+  hierarchy can move under sensor-driven tagging and regridding, tiles
+  entering and leaving the set (`src/levels.jl`, `src/regrid.jl`).
 - **Distribution**: both levels decompose over the whole rank set; the level
   coupling gathers replicated region data and distributes its interpolation
   chains by conserved component.
@@ -58,10 +59,11 @@ plans or their device mirrors (`src/lines_device.jl`) behind one
 `apply_along!` entry point. There is no second code path for the device
 beyond the launchers.
 
-What this is not: a production AMR. Each level is one box, regridding is
-two-level only, every rank holds every level, I/O is single-patch, the
-device takes one patch per solver, and the banded (C10) schemes have no
-interface closures. Each of these is a structural assumption, and
+What this is not: a production AMR. The tag is one criterion without
+hysteresis, regridding is two-level only, every rank holds every level,
+I/O is single-patch, diagnostics do not mask covered nodes, tiled levels
+are host-only, and the banded (C10) schemes have no interface closures.
+Each of these is a structural assumption, and
 [Production AMR: design](#production-amr-design) replaces them.
 
 ## Target problems
@@ -254,9 +256,10 @@ signal) with identical step counts.
 nodes ↔ 3m − 2 fine nodes), joining `solver.patches` so the same drivers
 advance it and the shared `max_rate` reduction supplies the timestep. The
 hierarchy generalizes to a chain (`refine` as a vector of regions, each in
-its parent's node space; `solver.levels`, one `Level` per depth with one
-`LevelTransfer` per patch), and every mechanism below applies between a
-patch and its parent; the measurements are two-level ones.
+the parent level's node space; `solver.levels`, one `Level` per depth with
+one `LevelTransfer` per patch) and each level to a set of lattice tiles
+(`tile`), and every mechanism below applies between a patch and its
+parents; the measurements are two-level, one-patch ones.
 
 **The live coupling is interpolation and injection, not the invertible
 pair.** The pair's contract is that prolongation input is samples of the
@@ -552,10 +555,13 @@ Configurations rejected at setup, and the reason:
   slabs along one dimension, so corner-coupled adjacency does not arise.
   Checkpoint/VTK output is single-patch.
 - **Refined runs** require Cartesian metric, no stretching, no folds,
-  tridiagonal schemes, `:delta4`, one refined region, and no same-level
-  `patch_grid` alongside. `level_restriction = :filter` is serial-only. The
-  region must nest by `max(n_halo, LEVEL_BUFFER)` coarse nodes and span ≥ 4
-  coarse nodes per active dimension.
+  tridiagonal schemes, `:delta4`, one region per level, and no same-level
+  `patch_grid` alongside. `level_restriction = :filter` is serial-only.
+  Each region must nest by `max(n_halo, LEVEL_BUFFER)` parent nodes inside
+  the patches of the level above and span ≥ 4 parent nodes per active
+  dimension; a tiled level's tiles are clipped to that margin at the
+  domain edge and must still lie inside the parent tiles. Regridding is
+  two-level. Tiled levels take the host backend.
 - **Device runs** take a single patch per solver (the interface-record
   copies are host loops), reject `Nasa9Mixture` (no fixed-width device
   mirror), a pointwise NSCBC inflow `target` (host closure),
@@ -604,31 +610,72 @@ a silent overstep). That re-evaluation is not built.
 
 ### Tiles and adjacency
 
-The fine level of an implosion is a shell of tiles, so a level is a set of
-fixed-size tiles on a lattice, not one box and not slabs. Tile edge is a
-level parameter in coarse nodes of the parent (default 6; the floor is 3
-from constraint 2). Tiles sit on the lattice so that every tile face is
-either fully shared with a same-level neighbor or fully coarse-fed; a
-partially covered face would need a mixed closure and is excluded by
-construction.
+Delivered (sequencing item 2). The fine level of an implosion is a shell
+of tiles, so a level is a set of fixed-size tiles on a lattice, not one box
+and not slabs. `tile` is the lattice edge in parent nodes (0, the default,
+keeps one patch per level; the floor is 3 from constraint 2); lattice cell
+k spans parent nodes k·tile + 1 .. (k+1)·tile + 1, so abutting tiles share
+their interface plane as root slabs do, and every tile face is either
+fully shared with one neighbor or fully parent-fed. A static `refine` box
+expands to the lattice cells that reach past its planes; cells at the
+domain edge are clipped to the nesting margin and dropped below four
+nodes. The lattice is global so that a regrid never changes a surviving
+tile's region.
 
-Adjacency is full 3-D. The compact solves need only face ghosts along each
-line, but the artificial-property smoother, the δ⁴ tag, and the filter
-cascade read a full padded box, so edge and corner ghosts must be filled.
-The exchange sends each neighbor the full padded slab including the
-sender's own already-filled ghosts, one pass, at a volume that is small
-against tile sizes of ~20³ fine. Each face's closure is chosen per tile per
-face at regrid: interface closure rows where a same-level neighbor exists,
-coarse imposition otherwise. Ordering on every stage: coarse imposition
-first over the whole ring, then same-level exchange, so a same-level
-neighbor's data wins wherever both exist.
+Same-level coupling reuses the root machinery: `build_interface_records`
+over the level's tiles (every rank holds a block of every tile, so the
+block table gathers all of them; the tag bound is checked against
+`MPI.tag_ub`), records held on the `Level` and run by `sync_patches!` and,
+inside the subcycled driver, after every stage of a level. Each face's
+treatment follows the tile's neighbors: the shell imposition writes only
+parent-fed faces (`LevelTransfer.imposed`, applied by `_in_shell`), the
+restriction margin stands off parent-fed faces only, and the closure rows
+are the same interface rows on every face, since both kinds read ghosts.
+Ordering on every stage: same-level records after the update, then the
+parent imposition at the head of the next stage, so a same-level
+neighbor's data wins wherever both exist. Corner ghosts come from the
+within-patch halo exchange that follows the face strips, as at the root.
+A tile's buffered box may span several parent patches
+(`coarse_indices`); the gathers and the restriction write-back run per
+parent. Corner-coupled adjacency at level 0 does not arise; the root level
+stays a slab layout or a single patch.
 
-Fixed tiles are chosen over Berger–Rigoutsos for three reasons: equal
+Measured: a tiled level costs nothing visible against the one-patch level
+(1-D entropy wave, tile 8: 6.0e-10 against 6.2e-10 at N = 192, orders
+3.95/3.91; a 2×2 tile nest in 2-D, corner included, 4.29e-8 against
+4.27e-8), decomposed runs reproduce serial to round-off, and the tiled
+regrid tracks the Sod shock through lattice cells that stay contiguous. On
+an annular tag set in 2-D (`bench/amr_tiles.jl`, N = 192) the cover is 41%
+of the bounding box at tile 6 and 47% at tile 12.
+
+Costs, measured and not. Every tile carries the full set of padded scratch
+fields (0.4 MB per 19² tile, 1.1 MB per 37², 2.5 MB per 73² in 2-D; the
+pad inflates a 19³ tile 2.9×), and setup costs 0.06–0.12 s per tile in
+plan construction; both argue for tile edges of 12 or more in 3-D, and the
+memory half has a design answer not yet built: a rank advances its tiles
+sequentially, so the ~30 scratch fields could be one per-level pool sized
+to the largest tile instead of one set per tile, leaving only state and
+geometry per tile. The warm per-step cost of a tiled level has not been
+measured cleanly (the runs taken so far include compilation or shared the
+machine with other jobs); `bench/amr_tiles.jl` now times steps after a
+warm-up and is the instrument. A rough count says the RHS work of the
+tiles, at 3 substeps per root step over padded extents, should dominate
+and land near 2 s per subcycled step for 40 tiles of 37² on a 96² root;
+the cold measurement was 8–10 s, so a real overhead may remain. Separately,
+any 2-D case at np = 8 on the workstation runs at ~7 s/step, one patch or
+four tiles alike, against ~0.5 s at np = 4: a machine pathology of the
+kind `CLUSTER.md` records for hybrid cores, not a tile cost, and the
+reason the MPI suite's tiled check is bounded to ten steps. Under MPI
+every tile is decomposed over every rank, so each tile pays the whole
+rank set's collective latency per imposition; sub-communicators
+(sequencing item 5) are the fix and become urgent at the first many-tile
+production run.
+
+Fixed tiles were chosen over Berger–Rigoutsos for three reasons: equal
 extents let the device batch line solves across a level's tiles (below);
 the lattice makes the face-closure decision binary; and the measured waste
 on the target problems is the only thing that would justify the clustering
-algorithm, and it has not been measured. Corner-coupled adjacency at level 0
-does not arise; the root level stays a slab layout or a single patch.
+algorithm.
 
 ### Tagging and clustering
 
@@ -644,16 +691,21 @@ level's state:
 
 Derefinement uses hysteresis: a tag threshold and a lower untag threshold
 (default ratio 2), and a minimum tile lifetime in regrid intervals, so a
-tile at the edge of a feature does not flicker. Clustering is then the set
-of lattice tiles containing any buffered tagged node, clamped to nesting;
-`tag_buffer` stays the pollution-decay figure and is remeasured for C10.
+tile at the edge of a feature does not flicker. Clustering is the set of
+lattice tiles meeting any buffered tagged node, clamped to nesting
+(delivered: `_tag_tiles`, one flag per lattice cell reduced over the
+communicator); `tag_buffer` stays the pollution-decay figure and is
+remeasured for C10.
 
-A regrid at a tiled level is a set difference: tiles that survive keep
-their state and plans; new tiles initialize by interpolation from the
-parent; dropped tiles restrict once before removal. Carry-over between old
-and new tiles is `BlockRegion` intersection, which `_carry_over!` already
-does for one box. The tag is evaluated on the device where the level lives
-(a `pointwise!` body and an exact bounds reduction), so the regrid cadence
+A regrid at a tiled level is a set difference (delivered:
+`_regrid_tiles!`): tiles that survive keep their arrays and state, taking
+only a new id, faces and transfer; new tiles initialize by interpolation
+from the parent; dropped tiles leave, their last restriction already on
+the parent. No carry-over arises, since distinct lattice cells overlap in
+a shared plane at most; that plane takes the neighbor's values at the
+first averaging after the regrid, a one-node perturbation of interpolation
+order. The tag is still evaluated on the host; on the device it becomes a
+`pointwise!` body and an exact bounds reduction, so the regrid cadence
 stops being a download.
 
 ### Ownership and load balance
@@ -772,12 +824,14 @@ Each item names its gate. Nothing is built ahead of the item before it.
    the entropy wave converges at the two-level orders in both stepping
    modes (`test/level_tests.jl`). Per-substep rate re-evaluation is
    deferred to the item that first needs it.
-2. **Tiled fine level with full adjacency** (CPU). Lattice tiles, per-face
-   closure choice, edge/corner exchange, set-difference regrid. Gate: a
-   manufactured smooth solution across a tile corner at the same-level
-   interface order; the Sod moving-region gate reproduced with tiles; an
-   implosion test case (a converging spherical shell on a Cartesian root
-   grid) whose fine volume is ≤ half the bounding box's.
+2. **Tiled fine level with full adjacency** (CPU). Delivered: lattice
+   tiles, per-face treatment, corner ghosts through the records plus the
+   halo exchange, set-difference regrid. Gate held: the 2-D tile nest with
+   a corner at the one-patch level's error, the Sod moving-region gate
+   reproduced with tiles, decomposed tiled runs at serial values, and an
+   annular tag set in 2-D covered at 41–47% of its bounding box
+   (`bench/amr_tiles.jl`); the 3-D shell awaits a memory-sized tile (the
+   per-tile cost above) and is a bench measurement, not a testset.
 3. **Tag criteria and hysteresis; covered masks in every diagnostic.** Gate:
    the mixing-layer cost case reproduced through the sensor-based tag; the
    TGV energy history on a refined run equal to the single-level history

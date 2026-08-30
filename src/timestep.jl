@@ -231,12 +231,12 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         hermite_level_shell!(solver, states, lt, θ, parent_dt)
     end
     # Hermite endpoints for the children: the RHS at t^n falls out of stage 1
-    # (RKC[1] = 0, so stage 1's dQ is the RHS on the unmodified Q).
-    save_boxes!(pi, at_end) = child === nothing ? nothing :
+    # (RKC[1] = 0, so stage 1's dQ is the RHS on the unmodified Q). Every
+    # patch of this level has its RHS before the gathers, since a child's box
+    # may span several of them.
+    save_boxes!(at_end) = child === nothing ? nothing :
         for lt in child.transfers
-            lt.coarse_index == pi &&
-                save_level_box!(lt, patches[pi].decomp, states[pi], dQs[pi],
-                                at_end)
+            save_level_box!(lt, patches, states, dQs, at_end)
         end
     for stage in 1:5
         solver.tstage = t0 + oftype(t0, RKC[stage]) * dt
@@ -246,12 +246,15 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
             ps = PatchSolver(solver, patches[pi])
             first_prepared || apply_bcs!(ps, states[pi])
             compute_rhs!(ps, states[pi], dQs[pi], first_prepared)
-            stage == 1 && save_boxes!(pi, false)
         end
+        stage == 1 && save_boxes!(false)
         for pi in lev.patches
             _rk_update!(patches[pi].decomp, n_cons, states[pi], dQs[pi],
                         dus[pi], RKA[stage], RKB[stage], dt)
         end
+        # Same-level consistency before the next stage's shell imposition,
+        # which leaves the shared faces to these records.
+        _sync_level!(solver, states, lev)
     end
     solver.tstage = t0 + dt
     θ_end = T(m) / T(3)
@@ -263,6 +266,7 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         for pi in lev.patches
             filter_state!(PatchSolver(solver, patches[pi]), states[pi])
         end
+        _sync_level!(solver, states, lev)
         # The filter is not shell-preserving; re-impose the forcing so the
         # next substep (or the restriction) reads a consistent boundary.
         shell!(θ_end)
@@ -270,8 +274,8 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     child === nothing && return states
     for pi in lev.patches
         compute_rhs!(PatchSolver(solver, patches[pi]), states[pi], dQs[pi], false)
-        save_boxes!(pi, true)
     end
+    save_boxes!(true)
     dtf = dt / T(3)
     for mc in 1:3
         _advance_level!(solver, ℓ + 1, states, dQs, dus, t0 + (mc - 1) * dtf,

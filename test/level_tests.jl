@@ -36,17 +36,17 @@
 end
 
 function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false,
-                           levels=2)
+                           levels=2, tile=0)
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     u0 = 0.5
     r1 = BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1))
-    # A third level over the middle half of the level-1 patch, in that
-    # patch's node space, so the nest scales with N.
+    # A third level over the middle half of the level-1 patch, in level-1
+    # node space, so the nest scales with N.
     e1 = 3 * (N ÷ 6) - 2
-    r2 = BlockRegion((e1 ÷ 4, 0, 0), (e1 ÷ 2, 1, 1))
+    r2 = BlockRegion((3 * r1.offset[1] + e1 ÷ 4, 0, 0), (e1 ÷ 2, 1, 1))
     solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
                     art=ArtParams(enabled=false), filter_interval=0,
-                    level_restriction=mode, subcycle=subcycle,
+                    level_restriction=mode, subcycle=subcycle, tile=tile,
                     refine=levels == 3 ? [r1, r2] : r1)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
@@ -315,29 +315,29 @@ end
 
 @testset "three levels: configuration and geometry" begin
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    r1 = BlockRegion((40, 0, 0), (16, 1, 1))        # level-1 extent 46
+    r1 = BlockRegion((40, 0, 0), (16, 1, 1))   # level-1 nodes 121..166
     mk(r2; kw...) = Solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
                            bcs=per3l, refine=[r1, r2], kw...)
-    # Nesting is checked against the parent patch, not the root grid.
-    @test_throws ErrorException mk(BlockRegion((2, 0, 0), (10, 1, 1)))
-    @test_throws ErrorException mk(BlockRegion((30, 0, 0), (14, 1, 1)))
-    @test_throws ErrorException mk(BlockRegion((10, 0, 0), (3, 1, 1)))
+    # Nesting is checked against the parent patch (level-1 node space),
+    # not the root grid.
+    @test_throws ErrorException mk(BlockRegion((122, 0, 0), (10, 1, 1)))
+    @test_throws ErrorException mk(BlockRegion((150, 0, 0), (14, 1, 1)))
+    @test_throws ErrorException mk(BlockRegion((130, 0, 0), (3, 1, 1)))
     # Regridding stays two-level.
-    @test_throws ErrorException mk(BlockRegion((10, 0, 0), (20, 1, 1)),
+    @test_throws ErrorException mk(BlockRegion((130, 0, 0), (20, 1, 1)),
                                    regrid_interval=5)
-    solver = mk(BlockRegion((10, 0, 0), (20, 1, 1)))
+    solver = mk(BlockRegion((130, 0, 0), (20, 1, 1)))
     @test nlevels(solver) == 3
     @test npatches(solver) == 3
     @test [p.level for p in solver.patches] == [0, 1, 2]
-    @test refined_region(solver, 2).offset == (10, 0, 0)
+    @test refined_region(solver, 2).offset == (130, 0, 0)
     p0 = PatchSolver(solver, solver.patches[1])
     p1 = PatchSolver(solver, solver.patches[2])
     p2 = PatchSolver(solver, solver.patches[3])
     @test p2.h[1] ≈ p0.h[1] / 9
     @test p2.decomp.n_local[1] == 3 * 20 - 2
-    # Level-2 node 1 coincides with level-1 node 11 and root node 40 + 11/3
-    # does not exist; level-2 node 4 ↔ level-1 node 12, and level-1 node 13
-    # ↔ root node 45.
+    # Level-2 node 1 is level-1 node 131, patch-local 11; level-2 node 7 is
+    # level-1 node 133, patch-local 13, which is root node 45.
     @test xcoord(p2, 1, 1) ≈ xcoord(p1, 1, 11) atol = 1e-14
     @test xcoord(p2, 1, 7) ≈ xcoord(p1, 1, 13) atol = 1e-14
     @test xcoord(p1, 1, 13) ≈ xcoord(p0, 1, 45) atol = 1e-14
@@ -370,7 +370,7 @@ end
     solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
                     bcs=(wall2, per, per), cfl=0.4, subcycle=true,
                     refine=[BlockRegion((120, 0, 0), (41, 1, 1)),
-                            BlockRegion((30, 0, 0), (60, 1, 1))])
+                            BlockRegion((390, 0, 0), (60, 1, 1))])
     states = allocate_state(solver)
     initialize!(solver, states, ic)
     run!(solver, states; tfinal=0.1, nmax=20000)
@@ -389,4 +389,123 @@ end
         n = psq.decomp.n_local[1]
         @test minimum(Q[gidx(psq, i, 1, 1), 1] for i in 1:n) > 0.05
     end
+end
+
+
+# --- Tiled levels ------------------------------------------------------------
+
+@testset "tiled level: lattice cover, faces, and configuration guards" begin
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    mk(; kw...) = Solver(; n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0),
+                         bcs=per3l, refine=BlockRegion((80, 0, 0), (32, 1, 1)),
+                         kw...)
+    @test_throws ErrorException mk(tile=2)
+    @test_throws ErrorException mk(tile=-1)
+    # Lattice cells of edge 8 meeting nodes 81..112: cells 10..13, each of
+    # nine nodes sharing its planes with its neighbors.
+    solver = mk(tile=8)
+    regs = level_regions(solver, 1)
+    @test [(r.offset[1], r.extent[1]) for r in regs] ==
+          [(80, 9), (88, 9), (96, 9), (104, 9)]
+    @test npatches(solver) == 5
+    @test_throws ErrorException refined_region(solver)
+    lev = solver.levels[2]
+    @test length(lev.plane_pairs) == 6 && length(lev.ghost_sends) == 6
+    # Faces: the outer faces are parent-fed, the inner ones shared.
+    @test [lt.imposed[1] for lt in lev.transfers] ==
+          [(true, false), (false, false), (false, false), (false, true)]
+    @test solver.patches[2].faces[1] == (0, 2)
+    @test solver.patches[3].faces[1] == (1, 3)
+    @test solver.patches[2].bcs[1][2] isa InterfaceBC
+    @test solver.patches[2].bcs[1][1] isa CoarseFineBC
+    # A box node on a lattice plane pulls in the cell on its inner side only.
+    @test CL._tile_span(81, 112, 8) == 10:13
+    @test CL._tile_span(82, 113, 8) == 10:13
+    @test CL._tile_span(81, 81, 8) == 9:10
+    # A tile that would leave the nesting margin is clipped, and dropped when
+    # fewer than four nodes remain: region 5..24 at margin 4 keeps cell 0
+    # clipped to nodes 5..9, then cells 1 and 2.
+    s2 = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
+                refine=BlockRegion((4, 0, 0), (20, 1, 1)), tile=8)
+    @test [(r.offset[1], r.extent[1]) for r in level_regions(s2, 1)] ==
+          [(4, 5), (8, 9), (16, 9)]
+end
+
+@testset "tiled level: manufactured solution across tile and level faces" begin
+    errs = [_level_wave_error(N; tile=8) for N in (48, 96, 192)]
+    orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
+    @info "tiled entropy wave" errs orders
+    # Measured 1.39e-7 / 9.0e-9 / 6.0e-10, orders 3.95 / 3.91, beside the
+    # one-patch level's 8.5e-8 / 7.7e-9 / 6.2e-10: the tile interfaces
+    # inside the level cost nothing visible at N = 192.
+    @test all(>(3.0), orders)
+    @test errs[3] < 2e-9
+    # Subcycled, one tiled level: measured 5.8e-10 against 5.9e-10.
+    @test _level_wave_error(192; tile=8, subcycle=true) < 2e-9
+end
+
+@testset "tiled level: 2-D tile nest with corners" begin
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    u0, v0 = 0.4, 0.3
+    function vortex(; tile, subcycle)
+        solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
+                        art=ArtParams(enabled=false), filter_interval=0,
+                        subcycle=subcycle, tile=tile,
+                        refine=BlockRegion((18, 18, 0), (12, 12, 1)))
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) ->
+            Prim(u=(u0, v0, 0), p=1.0, rho=1.0 + 0.1 * sin(x) * sin(y)))
+        run!(solver, states; tfinal=0.5)
+        e = 0.0
+        for (ps, Q) in CL.eachpatch(solver, states)
+            n = ps.decomp.n_local
+            for j in 1:n[2], i in 1:n[1]
+                I = gidx(ps, i, j, 1)
+                exact = 1.0 + 0.1 * sin(xcoord(ps, 1, i) - u0 * solver.t) *
+                              sin(xcoord(ps, 2, j) - v0 * solver.t)
+                e = max(e, abs(Q[I, 1] - exact))
+            end
+        end
+        return e, npatches(solver)
+    end
+    # Four 7×7 tiles meeting at a corner, both stepping modes: measured
+    # 4.29e-8 against the one-patch level's 4.27e-8, so the corner ghosts
+    # and the two-way shared faces are consistent.
+    for subcycle in (false, true)
+        e, np = vortex(tile=6, subcycle=subcycle)
+        @info "2-D tile nest" subcycle e
+        @test np == 5
+        @test e < 1e-7
+    end
+end
+
+@testset "tiled regridding tracks a Sod shock" begin
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    N = 201
+    sa = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                bcs=(wall2, per, per), cfl=0.2, subcycle=true,
+                regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
+                tile=8)
+    states = allocate_state(sa)
+    initialize!(sa, states, ic)
+    initial = level_regions(sa, 1)
+    run!(sa, states; tfinal=0.15, nmax=40000)
+    regs = level_regions(sa, 1)
+    shock_node = round(Int, (0.5 + 1.75 * sa.t) * (N - 1)) + 1
+    @info "tiled regrid tracking" tiles=[(r.offset[1], r.extent[1]) for r in regs] shock_node
+    @test regs != initial
+    # Every tile is a lattice cell, the set is contiguous, and it holds the
+    # shock.
+    @test all(r -> r.offset[1] % 8 == 0 && r.extent[1] == 9, regs)
+    @test all(i -> regs[i+1].offset[1] == regs[i].offset[1] + 8, 1:length(regs)-1)
+    @test regs[1].offset[1] < shock_node <= regs[end].offset[1] + 9
+    @test all(all(isfinite, parent(Q)) for Q in states)
+    for (psq, Q) in CL.eachpatch(sa, states)
+        n = psq.decomp.n_local[1]
+        @test minimum(Q[gidx(psq, i, 1, 1), 1] for i in 1:n) > 0.05
+    end
+    @test length(sa.patches) == length(states) == length(regs) + 1
 end

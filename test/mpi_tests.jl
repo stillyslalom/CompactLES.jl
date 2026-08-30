@@ -1284,7 +1284,7 @@ function test_refined_decomposed()
         N = 192
         r1 = BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1))
         e1 = 3 * (N ÷ 6) - 2
-        r2 = BlockRegion((e1 ÷ 4, 0, 0), (e1 ÷ 2, 1, 1))
+        r2 = BlockRegion((3 * r1.offset[1] + e1 ÷ 4, 0, 0), (e1 ÷ 2, 1, 1))
         solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
                         art=ArtParams(enabled=false), filter_interval=0,
                         subcycle=subcycle,
@@ -1325,6 +1325,43 @@ function test_refined_decomposed()
           abs(e3s - 6.348908065945125e-10), 1e-12)
     check("subcycled three-level step count matches serial",
           abs(n3s - 56), 0.5)
+
+    # A tiled level: four 37×37 tiles meeting at a corner, each decomposed
+    # over every rank through _amr_dims, coupled by the level's own records.
+    # Ten steps: a 2-D case at np = 8 runs slowly on the workstation
+    # (7 s/step, one patch or four; see CLUSTER.md on the hybrid cores),
+    # and ten cross every interface many times over.
+    function tiled_error(; subcycle)
+        u0v, v0 = 0.4, 0.3
+        solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3,
+                        art=ArtParams(enabled=false), filter_interval=0,
+                        subcycle=subcycle, tile=12,
+                        refine=BlockRegion((12, 12, 0), (24, 24, 1)))
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) ->
+            Prim(u=(u0v, v0, 0), p=1.0, rho=1.0 + 0.1 * sin(x) * sin(y)))
+        run!(solver, states; tfinal=0.5, nmax=10)
+        e = 0.0
+        for (ps, Q) in CL.eachpatch(solver, states)
+            n = ps.decomp.n_local
+            for j in 1:n[2], i in 1:n[1]
+                I = gidx(ps, i, j, 1)
+                exact = 1.0 + 0.1 * sin(xcoord(ps, 1, i) - u0v * solver.t) *
+                              sin(xcoord(ps, 2, j) - v0 * solver.t)
+                e = max(e, abs(Q[I, 1] - exact))
+            end
+        end
+        return gmax(e), solver.step, npatches(solver)
+    end
+    et, nt, pt = tiled_error(subcycle=false)
+    check("tiled 2-D level: four tiles", abs(pt - 5), 0.5)
+    check("tiled 2-D wave error matches serial",
+          abs(et - 2.4153780309177364e-8), 1e-12)
+    check("tiled 2-D step count matches serial", abs(nt - 10), 0.5)
+    ets, nts, _ = tiled_error(subcycle=true)
+    check("subcycled tiled 2-D wave error matches serial",
+          abs(ets - 6.663296114872708e-8), 1e-12)
+    check("subcycled tiled 2-D step count matches serial", abs(nts - 10), 0.5)
 
     # Tagging-driven regridding tracks a Sod shock to the same region.
     wall2 = (SlipWallBC(), SlipWallBC())

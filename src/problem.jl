@@ -357,9 +357,10 @@ increase `n_global` if setup reports a smaller local block.
 
 - `refine`: a `BlockRegion` in root node space selecting static refinement
   at ratio 3 over that region, or a vector of them selecting a nested
-  hierarchy, region ℓ given in the node space of the level-(ℓ−1) patch it
-  refines. Default `nothing`. The [`Solver`](@ref) constructor enforces the
-  scope (Cartesian, unstretched, unfolded, tridiagonal schemes, nesting).
+  hierarchy, region ℓ given in level ℓ−1's node space (level-(ℓ−1) node
+  `g` is level-ℓ node `3(g − 1) + 1`). Default `nothing`. The
+  [`Solver`](@ref) constructor enforces the scope (Cartesian, unstretched,
+  unfolded, tridiagonal schemes, nesting).
 - `level_restriction`: `:inject` (default) writes the fine coincident-node
   values onto the covered region of the parent; `:filter` applies the
   invertible transfer pair's anti-alias filter first.
@@ -374,6 +375,11 @@ increase `n_global` if setup reports a smaller local block.
 - `tag_threshold` (default `0.02`) and `tag_buffer` (default `4`): the
   tagging threshold on the relative undivided fourth difference of the
   mixture density, and the coarse-cell buffer added around tagged cells.
+- `tile`: `0` (default) covers each refined region with one patch; a
+  positive edge (in parent nodes, at least 3) covers it with the tiles of a
+  global lattice of that edge instead, abutting tiles sharing their
+  interface plane and coupled as root slabs are. Regridding then moves
+  tiles in and out of the set, a surviving tile never changing its region.
 """
 Base.@kwdef struct Numerics
     n_global::NTuple{3,Int}
@@ -397,6 +403,7 @@ Base.@kwdef struct Numerics
     regrid_interval::Int = 0
     tag_threshold::Float64 = 0.02
     tag_buffer::Int = 4
+    tile::Int = 0
 end
 
 """
@@ -443,7 +450,8 @@ function setup(prob::Problem, num::Numerics)
                interface_rhs=num.interface_rhs, refine=num.refine,
                level_restriction=num.level_restriction, subcycle=num.subcycle,
                regrid_interval=num.regrid_interval,
-               tag_threshold=num.tag_threshold, tag_buffer=num.tag_buffer)
+               tag_threshold=num.tag_threshold, tag_buffer=num.tag_buffer,
+               tile=num.tile)
     Q = allocate_state(solver)
     initialize!(solver, Q, prob.ic)
     return solver, Q

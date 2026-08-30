@@ -30,9 +30,10 @@
 # robustness at captured features.
 
 # One coarse cell's tag quantity: Σ_d |δ⁴_d ρ| / ρ, using the zeroth-order
-# closed-edge clamp from `delta4_sum!`, with halos read
-# across periodic wraps.
-function _tag_bounds(solver::Solver, Qc)
+# closed-edge clamp from `delta4_sum!`, with halos read across periodic
+# wraps. `mark!(g1, g2, g3)` is called for every tagged cell of this rank's
+# interior, in global node indices. Rank-local apart from the halo exchange.
+function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     patches = getfield(solver, :patches)
     coarse = patches[1]
     dcp = coarse.decomp
@@ -62,8 +63,7 @@ function _tag_bounds(solver::Solver, Qc)
     lomin = ntuple(d -> at_lo_edge(dcp, d) ? 1 : -1, 3)
     himax = ntuple(d -> at_hi_edge(dcp, d) ? n[d] : n[d] + 2, 3)
     thr = spec.threshold
-    lo = (typemax(Int), typemax(Int), typemax(Int))
-    hi = (0, 0, 0)
+    off = dcp.offset
     @inbounds for k in 1:n[3], j in 1:n[2], i in 1:n[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
         s = zero(eltype(Qc))
@@ -78,17 +78,25 @@ function _tag_bounds(solver::Solver, Qc)
             end
             s += abs(acc)
         end
-        if s > thr * rho[I]
-            lo = min.(lo, (i, j, k))
-            hi = max.(hi, (i, j, k))
-        end
+        s > thr * rho[I] && mark!(i + off[1], j + off[2], k + off[3])
     end
-    # Global bounding box of the tagged set: shift this rank's bounds into
-    # global indices (the sentinels survive the shift ordering below) and
-    # reduce, so every rank derives the identical region. A rank with no
-    # tagged cell contributes typemax/0 sentinels that lose every min/max.
-    lo_g = ntuple(d -> hi[d] == 0 ? typemax(Int) ÷ 2 : lo[d] + dcp.offset[d], 3)
-    hi_g = ntuple(d -> hi[d] == 0 ? 0 : hi[d] + dcp.offset[d], 3)
+    return nothing
+end
+
+# Global bounding box of the tagged set, or `nothing`. Collective (one
+# Allreduce), so every rank derives the identical box.
+function _tag_bounds(solver::Solver, Qc)
+    dcp = getfield(solver, :patches)[1].decomp
+    lo = Ref((typemax(Int), typemax(Int), typemax(Int)))
+    hi = Ref((0, 0, 0))
+    _tag_sweep!(solver, Qc) do g1, g2, g3
+        lo[] = min.(lo[], (g1, g2, g3))
+        hi[] = max.(hi[], (g1, g2, g3))
+    end
+    # A rank with no tagged cell contributes typemax/0 sentinels that lose
+    # every min/max.
+    lo_g = ntuple(d -> hi[][d] == 0 ? typemax(Int) ÷ 2 : lo[][d], 3)
+    hi_g = hi[]
     red = MPI.Allreduce(Int64[lo_g..., (-).(hi_g)...], min, dcp.comm)
     glo = ntuple(d -> Int(red[d]), 3)
     ghi = ntuple(d -> -Int(red[3 + d]), 3)
@@ -135,12 +143,10 @@ end
 # state over the buffered box and write every slot, interior and shell alike.
 function _fill_fine_from_coarse!(solver::Solver, states, lt::LevelTransfer)
     patches = getfield(solver, :patches)
-    coarse = patches[lt.coarse_index]
     fine = patches[lt.fine_index]
-    Qc = states[lt.coarse_index]
     Qf = states[lt.fine_index]
     K = length(lt.pplans)
-    _gather_box!(lt.box_gather, lt, Qc, coarse.decomp)
+    _gather_box!(lt.box_gather, lt, states, patches)
     for c in 1:solver.equations.n_cons
         lt.pstage[1] .= view(lt.box_gather, :, :, :, c)
         for k in 1:K
@@ -223,6 +229,7 @@ cannot re-arm the retry loop that guard exists to break.
 function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
                  workspace::Workspace, save) where {T}
     spec = getfield(solver, :regrid)
+    spec.tile > 0 && return _regrid_tiles!(solver, states, workspace, save)
     levels = getfield(solver, :levels)
     # A two-level hierarchy, enforced at setup: the root and one refined
     # patch, the sole transfer of level 1.
@@ -252,11 +259,11 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
                                 spec.deriv, spec.filt, spec.smoo,
                                 solver.art.smoother, spec.interface_rhs,
                                 spec.backend, solver.equations.n_species,
-                                n_cons, fi, 1, patches[1].region.offset)
-    newlt = build_level_transfer(T, newregion, active_g, spec.n_halo, 1, fi,
+                                n_cons, fi, 1)
+    newlt = build_level_transfer(T, newregion, active_g, spec.n_halo, [1], fi,
                                  lt.restriction, n_cons,
                                  getfield(solver, :subcycle),
-                                 patches[1].decomp, newfine.decomp)
+                                 [patches[1].decomp], newfine.decomp)
     Qf_new = _state_like(newfine.rho, n_cons)
     patches[fi] = newfine
     levels[2] = Level{T}(1, [fi], [newlt])
@@ -267,14 +274,134 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
     _fill_fine_from_coarse!(solver, states, newlt)
     _carry_over!(Qf_new, newfine.decomp, newregion, old_gather, Nf_old,
                  oldregion, active_g, n_cons)
-    # Re-bank only where `run!` itself would: a regrid landing on a retried
-    # trajectory at or below the rollback guard would otherwise re-arm the
-    # rolled-back-to-the-failing-step loop that guard exists to break.
+    _rebank!(solver, states, save)
+    return true
+end
+
+# Re-bank only where `run!` itself would: a regrid landing on a retried
+# trajectory at or below the rollback guard would otherwise re-arm the
+# rolled-back-to-the-failing-step loop that guard exists to break.
+function _rebank!(solver, states, save)
     if save !== nothing && solver.step > save.guard
         save.Q = _snapshot(states)
         save.t = solver.t
         save.step = solver.step
     end
+    return save
+end
+
+# --- Tiled regridding -------------------------------------------------------
+#
+# On a tiled level the tagged set selects lattice cells, not a box: a cell is
+# wanted when any tagged coarse node, grown by the buffer, meets it. Because
+# the lattice is global, a wanted tile that already exists keeps its region,
+# its arrays and its state untouched (only its neighbor faces and transfer
+# are rebuilt); a newly wanted tile is built and initialized by
+# interpolation of the coarse state; an unwanted one is dropped, its last
+# restriction already on the coarse level. No carry-over arises: distinct
+# lattice cells overlap in a shared plane at most, and that plane takes the
+# neighbor's values at the first averaging after the regrid.
+
+# Flags over the lattice cells, reduced so every rank derives the same set.
+function _tag_tiles(solver::Solver, Qc, spec::RegridSpec)
+    n_global = solver.n_global
+    active = ntuple(d -> n_global[d] > 1, 3)
+    a = spec.tile
+    K = ntuple(d -> active[d] ? (n_global[d] - 1) ÷ a + 1 : 1, 3)
+    flags = zeros(Int8, K)
+    b = spec.buffer
+    _tag_sweep!(solver, Qc) do g1, g2, g3
+        g = (g1, g2, g3)
+        spans = ntuple(d -> active[d] ?
+                       intersect(_tile_span(g[d] - b, g[d] + b, a), 0:K[d]-1) :
+                       (0:0), 3)
+        for k3 in spans[3], k2 in spans[2], k1 in spans[1]
+            flags[k1 + 1, k2 + 1, k3 + 1] = one(Int8)
+        end
+    end
+    return MPI.Allreduce(flags, max, getfield(solver, :comm)), K
+end
+
+function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
+                        workspace::Workspace, save) where {T}
+    spec = getfield(solver, :regrid)
+    levels = getfield(solver, :levels)
+    patches = getfield(solver, :patches)
+    lev = levels[2]
+    n_global = solver.n_global
+    active = ntuple(d -> n_global[d] > 1, 3)
+    flags, K = _tag_tiles(solver, states[1], spec)
+    any(!=(0), flags) || return false
+    lo = ntuple(d -> 1 + spec.margin, 3)
+    hi = ntuple(d -> n_global[d] - spec.margin, 3)
+    wanted = BlockRegion[]
+    for k3 in 0:K[3]-1, k2 in 0:K[2]-1, k1 in 0:K[1]-1
+        flags[k1 + 1, k2 + 1, k3 + 1] == 0 && continue
+        t = _lattice_tile((k1, k2, k3), active, spec.tile, lo, hi)
+        t === nothing || push!(wanted, t)
+    end
+    isempty(wanted) && return false
+    old_regions = [lt.region for lt in lev.transfers]
+    wanted == old_regions && return false
+    old_index = Dict(r => lev.patches[i] for (i, r) in enumerate(old_regions))
+    n_cons = solver.equations.n_cons
+    root = patches[1]
+    comm = getfield(solver, :comm)
+    faces = _tile_faces(wanted)
+    new_patches = Any[]
+    new_states = similar(states, 0)
+    new_dQ = similar(workspace.dQ, 0)
+    new_du = similar(workspace.du, 0)
+    transfers = LevelTransfer{T}[]
+    indices = Int[]
+    fresh = Int[]
+    for (ti, tr) in enumerate(wanted)
+        idx = ti + 1
+        bcs = _fine_bcs(active, faces[ti])
+        if haskey(old_index, tr)
+            oi = old_index[tr]
+            p = _repatch(patches[oi], idx, faces[ti], bcs)
+            push!(new_states, states[oi])
+            push!(new_dQ, workspace.dQ[oi])
+            push!(new_du, workspace.du[oi])
+        else
+            p = _build_fine_patch(T, tr, active, root.h, spec.n_halo, comm,
+                                  spec.deriv, spec.filt, spec.smoo,
+                                  solver.art.smoother, spec.interface_rhs,
+                                  spec.backend, solver.equations.n_species,
+                                  n_cons, idx, 1, faces[ti])
+            Q = _state_like(p.rho, n_cons)
+            push!(new_states, Q)
+            push!(new_dQ, zero(Q))
+            push!(new_du, zero(Q))
+            push!(fresh, ti)
+        end
+        push!(new_patches, p)
+        push!(indices, idx)
+        push!(transfers, build_level_transfer(T, tr, active, spec.n_halo, [1],
+                                              idx, lev.transfers[1].restriction,
+                                              n_cons, getfield(solver, :subcycle),
+                                              [root.decomp], p.decomp, faces[ti]))
+    end
+    sends, recvs, planes = _level_records(T, comm, [p.region for p in new_patches],
+                                          indices, [p.decomp for p in new_patches],
+                                          n_cons)
+    resize!(patches, 1 + length(wanted))
+    resize!(states, 1 + length(wanted))
+    resize!(workspace.dQ, 1 + length(wanted))
+    resize!(workspace.du, 1 + length(wanted))
+    for ti in eachindex(wanted)
+        patches[ti + 1] = new_patches[ti]
+        states[ti + 1] = new_states[ti]
+        workspace.dQ[ti + 1] = new_dQ[ti]
+        workspace.du[ti + 1] = new_du[ti]
+    end
+    levels[2] = Level{T}(1, indices, transfers, sends, recvs, planes)
+    for ti in fresh
+        init_geometry!(PatchSolver(solver, patches[ti + 1]))
+        _fill_fine_from_coarse!(solver, states, transfers[ti])
+    end
+    _rebank!(solver, states, save)
     return true
 end
 
