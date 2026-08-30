@@ -137,9 +137,8 @@ add a case there, not in either consumer.
 
 `bench/jetcheck.jl` and `bench/audit.jl` print counts, not pass/fail. Record
 them before a change and compare after, and read the delta, not the absolute
-count. Most remaining dispatch sites are `Metric` / `EOS` / `BoundaryCondition`
-field reads behind function barriers, one dispatch per array pass, not per
-point. A *new* site indicates a regression. The counts overlap between entry points
+count. `jetcheck.jl` reports zero dispatch sites at every probed entry point,
+so *any* report is a regression. The counts overlap between entry points
 (`step!` contains `compute_rhs!`), so compare like with like and never sum them.
 
 `audit.jl`'s inference probe reads `code_typed` at a spelled-out signature. A
@@ -423,5 +422,4 @@ them.
   anything, and the unexplained ~4300x SMT-sibling collapse) are in
   `reference/CLUSTER.md`.
 - Wanted: a `bench/` runner taking medians over repeated *processes*, to get
-  under the 10–20% run-to-run spread; and `FoldSpec` parameterization, which
-  would close several remaining JET dispatch sites.
+  under the 10–20% run-to-run spread.

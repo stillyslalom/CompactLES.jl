@@ -249,7 +249,13 @@ function _reduced_solve!(line_solver::BandLineSolver{T}, L::Int) where {T}
     @inbounds for rk in 0:(line_solver.P-1), l in 1:L, r in 1:m2
         line_solver.z[m2*rk+r, l] = line_solver.gath[r, l, rk+1]
     end
-    ldiv!(line_solver.red, line_solver.z)
+    # `red` is a small union (see RedLU in tridiag.jl); every caller sits
+    # behind `hasred`, which the constructor pairs with the factorization,
+    # so the narrowing check is dead at runtime. It closes the union at the
+    # `ldiv!` call, which JET otherwise reports at every solver entry point.
+    red = line_solver.red
+    red === nothing && error("reduced solve without a reduced factorization")
+    ldiv!(red, line_solver.z)
     cprev = m2 * mod(line_solver.p - 1, line_solver.P) + q
     cnext = m2 * mod(line_solver.p + 1, line_solver.P)
     @inbounds for l in 1:L, t in 1:q

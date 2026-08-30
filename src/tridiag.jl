@@ -207,7 +207,13 @@ function _reduced_solve!(line_solver::LineSolver{T}, L::Int) where {T}
         line_solver.z[2q+1, l] = line_solver.gath[1, l, q+1]
         line_solver.z[2q+2, l] = line_solver.gath[2, l, q+1]
     end
-    ldiv!(line_solver.red, line_solver.z)
+    # `red` is a small union (see RedLU above); every caller sits behind
+    # `hasred`, which the constructor pairs with the factorization, so the
+    # narrowing check is dead at runtime. It closes the union at the
+    # `ldiv!` call, which JET otherwise reports at every solver entry point.
+    red = line_solver.red
+    red === nothing && error("reduced solve without a reduced factorization")
+    ldiv!(red, line_solver.z)
     cprev = 2 * mod(line_solver.p - 1, line_solver.P) + 2
     cnext = 2 * mod(line_solver.p + 1, line_solver.P) + 1
     @inbounds for l in 1:L

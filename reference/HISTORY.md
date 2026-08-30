@@ -43,8 +43,12 @@ bit-identical; serial and 2/4/8-rank gates passed throughout. JET reports for
    costs one equation set, with no rediscovery of the layout throughout the
    solver.
 3. **Concrete parameterization of `Solver`** for the fields that were abstract.
-   `FoldSpec` parameterization remains open and is listed under Known
-   limitations in `CLAUDE.md`.
+   `FoldSpec` parameterization was left open, motivated by the JET dispatch
+   sites it would close. Those sites turned out to be one reduced-stage
+   `ldiv!` on the `Union{RedLU, Nothing}` field, closed in August 2026 by
+   narrowing in both `_reduced_solve!` methods (`jetcheck.jl` now reports
+   zero at every probed entry point), so the parameterization is no longer
+   tracked as a work item.
 4. **Caller-owned stage storage.** `Workspace` holds the two low-storage RK
    arrays, so splitting, subcycling, and future IMEX schemes can own their
    stage storage; `run!` no longer allocates it internally.
