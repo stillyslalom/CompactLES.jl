@@ -270,6 +270,8 @@ end
                 regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)))
     states = allocate_state(sa)
     initialize!(sa, states, ic)
+    lt0 = getfield(sa, :levels)[2].transfers[1]
+    decomp0 = sa.patches[2].decomp
     run!(sa, states; tfinal=tf, nmax=40000)
     region = CL.refined_region(sa)
     lo = region.offset[1] + 1
@@ -279,6 +281,12 @@ end
     @info "regrid tracking" region=(lo, hi) shock_node
     @test region.offset[1] != 85
     @test lo < shock_node < hi
+    # The regrids dropped the initial transfer and fine patch. Their
+    # communicators must be freed at the drop, not left to the garbage
+    # collector: at the regrid cadence the finalizer backlog exhausts
+    # MPICH's 2048-context-id budget whenever collection lags.
+    @test lt0.pdecomps[1].comm == CL.MPI.COMM_NULL
+    @test decomp0.comm == CL.MPI.COMM_NULL
     padc = sa.patches[1].decomp.n_halo_d[1]
     padf = sa.patches[2].decomp.n_halo_d[1]
     e_amr = 0.0
@@ -493,11 +501,15 @@ end
     states = allocate_state(sa)
     initialize!(sa, states, ic)
     initial = level_regions(sa, 1)
+    transfers0 = getfield(sa, :levels)[2].transfers
     run!(sa, states; tfinal=0.15, nmax=40000)
     regs = level_regions(sa, 1)
     shock_node = round(Int, (0.5 + 1.75 * sa.t) * (N - 1)) + 1
     @info "tiled regrid tracking" tiles=[(r.offset[1], r.extent[1]) for r in regs] shock_node
     @test regs != initial
+    # The tile set changed, so every setup-time transfer was replaced and
+    # its chain communicators were freed at the drop.
+    @test all(lt.pdecomps[1].comm == CL.MPI.COMM_NULL for lt in transfers0)
     # Every tile is a lattice cell, the set is contiguous, and it holds the
     # shock.
     @test all(r -> r.offset[1] % 8 == 0 && r.extent[1] == 9, regs)

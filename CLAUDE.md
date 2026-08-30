@@ -165,7 +165,8 @@ Names are spelled out in full. Current vocabulary:
 
 - `solver`, `decomp`, `n_global`, `n_local`, `n_halo`, `n_halo_d`, `offset`,
   `neighbors`, `send_buf`/`recv_buf`, `sub_rank`/`sub_size`, `pad` (the
-  per-dimension halo pad, as a local)
+  per-dimension halo pad, as a local), `free_communicators!` (called when a
+  `Decomp` is permanently dropped; MPI frees nothing until GC otherwise)
 - `n_species`, `n_cons`, `i_mom`, `i_energy`, `Y`, `cp_mix`
 - `mu_art`, `beta_art`, `kappa_art`, `D_art`, `C_mu`/`C_beta`/`C_kappa`/`C_D`,
   `mu_sensor` (`:strain` or `:velocity`), `beta_sensor` (`:strain`,

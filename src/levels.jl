@@ -477,6 +477,20 @@ function _refine_chain(::Type{T}, ext0::NTuple{3,Int}, active::NTuple{3,Bool},
     return decomps, plans, stages
 end
 
+# Free the chain decompositions a discarded transfer owns. Both chains are
+# built by `_refine_chain` on `COMM_SELF`, so these frees are rank-local.
+# The parent and fine patch decompositions are not stored on the transfer
+# (only their `_owned_blocks` tables are) and are owned by their patches.
+function free_transfer_decomps!(lt::LevelTransfer)
+    for decomp in lt.pdecomps
+        free_communicators!(decomp)
+    end
+    for decomp in lt.rdecomps
+        free_communicators!(decomp)
+    end
+    return nothing
+end
+
 "Every rank's owned interior block of `decomp`, in that decomp's node space
 and communicator rank order. Collective over `decomp.comm` (one Allgather)."
 function _owned_blocks(decomp::Decomp)

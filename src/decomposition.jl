@@ -153,6 +153,30 @@ function Decomp{T}(n_global::NTuple{3,Int}, periodic::NTuple{3,Bool};
               n_halo_d, neighbors, sub, sub_rank, sub_size, send_buf, recv_buf)
 end
 
+"""
+    free_communicators!(decomp)
+
+Free the four communicators the constructor created: the Cartesian
+communicator and its three sub-communicators. MPI.jl frees a communicator
+only when garbage collection finalizes it, so a path that discards
+decompositions in a loop (regridding rebuilds every level transfer's
+refinement chains) exhausts MPICH's 2048-context-id budget whenever
+collection lags, presenting as an intermittent `MPI_Cart_sub` "Too many
+communicators" failure. Call this when a `Decomp` is permanently dropped;
+the `Decomp` must not be used afterward. `MPI_Comm_free` is collective, so
+every rank of the communicator must make the same call; the regrid paths
+satisfy this because the tagged sets are reduced before any rank rebuilds,
+and the chain decompositions are on `COMM_SELF`. Freeing sets each handle
+to `MPI_COMM_NULL` in place, which MPI.jl's finalizer guard then skips.
+"""
+function free_communicators!(decomp::Decomp)
+    for d in 1:3
+        MPI.free(decomp.sub[d])
+    end
+    MPI.free(decomp.comm)
+    return nothing
+end
+
 "CartesianIndices of the interior (halo-offset) block."
 interior(decomp::Decomp) = CartesianIndices(
     ntuple(d -> decomp.n_halo_d[d]+1:decomp.n_halo_d[d]+decomp.n_local[d], 3))

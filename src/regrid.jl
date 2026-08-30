@@ -275,6 +275,13 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
     _carry_over!(Qf_new, newfine.decomp, newregion, old_gather, Nf_old,
                  oldregion, active_g, n_cons)
     _rebank!(solver, states, save)
+    # The old fine decomposition and the old transfer's chains have no
+    # further reader; free their communicators now rather than at
+    # finalization, where they accumulate at the regrid cadence against
+    # MPI's context-id budget. `tagged_region` is reduced, so every rank
+    # reaches these collective frees together.
+    free_communicators!(dold)
+    free_transfer_decomps!(lt)
     return true
 end
 
@@ -349,6 +356,11 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     for (i, r) in enumerate(old_regions)
         r in wanted || _restrict_patch!(solver, states, lev.transfers[i])
     end
+    # Decompositions of departing tiles, collected before the patch vector
+    # is overwritten below; a surviving tile keeps its decomposition through
+    # `_repatch` and must not appear here.
+    dropped_decomps = [patches[old_index[r]].decomp
+                       for r in old_regions if !(r in wanted)]
     n_cons = solver.equations.n_cons
     root = patches[1]
     comm = getfield(solver, :comm)
@@ -415,6 +427,18 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         _seed_planes!(solver, states, levels[2], is_fresh)
     end
     _rebank!(solver, states, save)
+    # Every old transfer was replaced above, surviving tiles included, and a
+    # departing tile's decomposition has no further reader. Free their
+    # communicators now: left to garbage collection they accumulate at the
+    # regrid cadence and exhaust MPI's context-id budget (2048 per process
+    # under MPICH). The tile flags are Allreduced, so every rank frees the
+    # same communicators.
+    for old_lt in lev.transfers
+        free_transfer_decomps!(old_lt)
+    end
+    for decomp in dropped_decomps
+        free_communicators!(decomp)
+    end
     return true
 end
 
