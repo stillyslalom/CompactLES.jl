@@ -56,7 +56,13 @@ implementation. `reference/CLUSTER.md` also holds the launch-line rules
 a core), the sizing tools, and the measured scaling.
 
 `Manifest.toml` is gitignored, so a fresh checkout needs `Pkg.instantiate()`
-before anything runs. `bench/tgv_energy.jl` is the intended first production workload
+before anything runs. Precompiling the package takes about a minute, most
+of it the workload in `src/precompile.jl`, which runs the test suites'
+solver configurations at np = 1 under a singleton `MPI.Init` so that a
+test rank compiles a quarter of what it otherwise would; it is skipped
+under a system MPI. Julia 1.11+ keys the cache on content, so `touch`
+does not rebuild it; force one with
+`Base.compilecache(Base.identify_package("CompactLES"))`. `bench/tgv_energy.jl` is the intended first production workload
 on a cluster: the one bench script whose reductions are all collective. Those
 reductions are order-dependent `Allreduce(+)`, so it reproduces serial numbers
 to round-off (of order 1e-14 relative), not bit-for-bit; `test/mpi_tests.jl`

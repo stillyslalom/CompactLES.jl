@@ -51,6 +51,17 @@ for OpenMPI. Then **restart Julia** (the preference is read at precompile) and
 verify with `clusterprobe.jl`, whose `MPI binary` line reports `system` vs a
 `_jll` and flags the JLL on any multi-node run.
 
+Selecting the system binary also switches off the package's precompile
+workload (`src/precompile.jl`), which initializes MPI as a singleton inside
+the precompile process to build its solvers. Under the bundled binaries that
+cuts the per-rank compile of a test run by about three quarters; under a
+scheduler's process manager a singleton init on a login node may fail or
+hang, and installing the package must not depend on it. Whether the workload
+can run on a given cluster is untested; the check is a plain `julia
+--project=. -e 'using MPI; MPI.Init()'` on the login node with the preference
+set, and the gate to lift is the `MPIPreferences.binary` test at the top of
+that file.
+
 The preference lands in `LocalPreferences.toml`: gitignored, naming one machine's
 library by path, and per-project, so `--project` determines the MPI. A driver
 project that `dev`s this package does not inherit the preference and falls back to

@@ -106,29 +106,24 @@ export script_args, script_grid
 
 __init__() = __init_threading__()
 
-# Precompilation, limited to the signatures that cannot multiply.
+# Precompilation. Two mechanisms: the signature-directed statements below, and
+# the executed workload in precompile.jl.
 #
-# The cost this addresses is that every distinct `Solver{...}` type forces a
-# fresh compilation of `deriv_along!` and the whole call tree below it, and a
-# test process builds a dozen of them. `--trace-compile` names only the entry
-# point, so the tree is invisible there, but it is where the time goes: a
-# multi-rank test run is 44-74% compilation, paid independently by every rank.
+# The statements cover the shared floor of every `Solver` specialization.
+# `apply_along!` and the halo exchanges take an array and a plan, never a
+# Metric, EOS, or BoundaryCondition, so there are exactly two plan types and
+# one element type and this list cannot grow with the number of physics
+# configurations. They are signature-directed, so they cost only their own
+# compilation and need no communicator. Do not extend this list to entry
+# points that take a `Solver`: those are combinatorial in Metric x EOS x
+# BoundaryCondition x scheme, and a fixed subset of them as bare statements
+# bloats the image for configurations a run never builds.
 #
-# Only the shared floor of that tree is listed. `apply_along!` and the halo
-# exchanges take an array and a plan, never a Metric, EOS, or BoundaryCondition,
-# so there are exactly two plan types and one element type and the list cannot
-# grow with the number of physics configurations. Compiling them into the
-# package image leaves each `Solver` specialization only the thin wrapper above
-# them to compile, not the line solves themselves.
-#
-# Nothing here executes: `@compile_workload` would need a communicator, and MPI
-# calls during precompilation are not allowed. These are signature-directed, so
-# they cost only their own compilation.
-#
-# Do not extend this list to entry points that take a `Solver`. Those are
-# combinatorial in Metric x EOS x BoundaryCondition x scheme, and precompiling
-# any fixed subset of them mostly bloats the image for configurations a given
-# run never builds.
+# The trees above the floor, keyed on the `Solver` type, are what the
+# workload compiles: it runs the configurations the test suites build, and
+# so is a curated subset rather than a combinatorial one. Its cost, its
+# measured effect, and the reason it is skipped under a system MPI are in
+# precompile.jl.
 let A3 = Array{Float64,3}, D = Decomp{Float64}
     for P in (DirPlan{Float64}, BandPlan{Float64})
         precompile(apply_along!, (A3, P, A3, D))
@@ -137,5 +132,7 @@ let A3 = Array{Float64,3}, D = Decomp{Float64}
     precompile(exchange_dim_batch!, (Vector{A3}, D, Int))
     precompile(field, (D,))
 end
+
+include("precompile.jl")
 
 end # module
