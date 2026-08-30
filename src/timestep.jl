@@ -171,27 +171,32 @@ step!(solver::Solver, Q, workspace::Workspace, dt, prepared::Bool=false) =
 """
     subcycled_step!(solver, states, dQs, dus, dt, prepared=false)
 
-Berger–Oliger subcycled step: advance the
-coarse level by one step of `dt` with the fine level frozen, then the fine
-level by three steps of `dt/3`, its shell imposed at every fine stage time
-from the cubic Hermite reconstruction of the coarse trajectory
+Berger–Oliger subcycled step over the whole level hierarchy: advance the
+root level by one step of `dt` with every finer level frozen, then each
+finer level by three steps of a third of its parent's step, recursively,
+with each refined patch's shell imposed at every stage time from the cubic
+Hermite reconstruction of its parent's trajectory
 ([`hermite_level_shell!`](@ref)). The `t^{n+1}` Hermite endpoint costs one
-extra coarse RHS evaluation per step, taken before the fine subcycles so it
-samples the coarse trajectory, not the restricted composite.
+extra RHS evaluation per step of every level that has children, taken
+before the children's substeps so it samples the parent trajectory, not the
+restricted composite.
 
-The fine level filters its own state at its own step cadence (fine substep
-`3·step + m` filters when `filter_interval` divides it), giving each level the
-same one-pass-per-step cadence as an unrefined run. Under a
-positive `filter_cfl` the fine pass's relaxation weight reads the coarse
-`dt · rate` product, an upper bound on the fine level's own CFL, so the fine
-filter is never weaker than the convention intends. `run!`'s own per-step
-filter pass covers the coarse level only in this mode, and the post-step
-restriction then rebuilds the covered coarse region from the filtered fine
-state.
+Each level below the root filters its own state at its own step cadence:
+the substep of level ℓ with global index `3·(parent index) + m` filters when
+`filter_interval` divides it, the root's index being `solver.step`, giving
+every level the same one-pass-per-step cadence as an unrefined run. Under a
+positive `filter_cfl` a refined pass's relaxation weight reads the root
+`dt · rate` product, an upper bound on that level's own CFL, so the filter
+is never weaker than the convention intends. `run!`'s own per-step filter
+pass covers the root level only in this mode, and the post-step restriction
+then rebuilds every covered region from the filtered finer state. Levels two
+or more below the root are restricted onto their parent inside the driver,
+after each parent substep, so that the parent's next substep starts from
+the composite.
 
 Selected by `step!` when the solver was built with `subcycle = true`.
-Collective, like the level coupling itself: the Hermite box saves
-gather over the coarse communicator and every shell imposition carries the
+Collective, like the level coupling itself: the Hermite box saves gather
+over the parent communicator and every shell imposition carries the
 component-distributed chain's ring Allgatherv, so every rank must take the
 same substep sequence.
 """
@@ -199,58 +204,86 @@ function subcycled_step!(solver::Solver, states::Vector{<:ConservedState},
                          dQs::Vector{<:ConservedState},
                          dus::Vector{<:ConservedState}, dt,
                          prepared::Bool=false)
-    lt = solver.level_transfer
+    t0 = solver.t
+    _advance_level!(solver, 1, states, dQs, dus, t0, dt, prepared,
+                    solver.step, dt, 1)
+    solver.tstage = t0 + dt
+    return states
+end
+
+# One step of size `dt` from `t0` on level `ℓ` (1-based index into
+# `solver.levels`), followed by three substeps of each child and their
+# restriction back. `count` is this level's global step index (the filter
+# cadence); `parent_dt` and `m` place the step as substep `m` of its parent's
+# step, which the Hermite shell reads as θ = (m − 1 + RKC) / 3; both are
+# unused at the root. The operation order at two levels is the one the
+# two-level driver established, so a two-level run is unchanged by the
+# recursion.
+function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
+                         prepared::Bool, count::Int, parent_dt, m::Int)
+    levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
     n_cons = solver.equations.n_cons
-    coarse = patches[1]
-    fine = patches[lt.fine_index]
-    psc = PatchSolver(solver, coarse)
-    psf = PatchSolver(solver, fine)
-    Qc, dQc, duc = states[1], dQs[1], dus[1]
-    Qf, dQf, duf = states[lt.fine_index], dQs[lt.fine_index], dus[lt.fine_index]
-    t0 = solver.t
-    # --- Coarse step over [t, t + dt]; the covered region is advanced too and
-    # overwritten by the restriction afterwards, as in the global-dt mode.
+    lev = levels[ℓ]
+    child = ℓ < length(levels) ? levels[ℓ+1] : nothing
+    T = typeof(dt)
+    shell!(θ) = for lt in lev.transfers
+        hermite_level_shell!(solver, states, lt, θ, parent_dt)
+    end
+    # Hermite endpoints for the children: the RHS at t^n falls out of stage 1
+    # (RKC[1] = 0, so stage 1's dQ is the RHS on the unmodified Q).
+    save_boxes!(pi, at_end) = child === nothing ? nothing :
+        for lt in child.transfers
+            lt.coarse_index == pi &&
+                save_level_box!(lt, patches[pi].decomp, states[pi], dQs[pi],
+                                at_end)
+        end
     for stage in 1:5
         solver.tstage = t0 + oftype(t0, RKC[stage]) * dt
         first_prepared = prepared && stage == 1
-        first_prepared || apply_bcs!(psc, Qc)
-        compute_rhs!(psc, Qc, dQc, first_prepared)
-        # RKC[1] = 0, so stage 1's dQ is the RHS at t^n on the unmodified Q.
-        stage == 1 && save_level_box!(lt, coarse.decomp, Qc, dQc, false)
-        _rk_update!(coarse.decomp, n_cons, Qc, dQc, duc,
-                    RKA[stage], RKB[stage], dt)
-    end
-    solver.tstage = t0 + dt
-    apply_bcs!(psc, Qc)
-    compute_rhs!(psc, Qc, dQc, false)
-    save_level_box!(lt, coarse.decomp, Qc, dQc, true)
-    # --- Three fine steps of dt/3, boundary-forced from the Hermite box.
-    dtf = dt / oftype(dt, 3)
-    for m in 1:3
-        tm = t0 + (m - 1) * dtf
-        for stage in 1:5
-            solver.tstage = tm + oftype(tm, RKC[stage]) * dtf
-            θ = (oftype(dt, m - 1) + oftype(dt, RKC[stage])) / oftype(dt, 3)
-            hermite_level_shell!(solver, states, θ, dt)
-            apply_bcs!(psf, Qf)
-            compute_rhs!(psf, Qf, dQf, false)
-            _rk_update!(fine.decomp, n_cons, Qf, dQf, duf,
-                        RKA[stage], RKB[stage], dtf)
+        ℓ > 1 && shell!((T(m - 1) + T(RKC[stage])) / T(3))
+        for pi in lev.patches
+            ps = PatchSolver(solver, patches[pi])
+            first_prepared || apply_bcs!(ps, states[pi])
+            compute_rhs!(ps, states[pi], dQs[pi], first_prepared)
+            stage == 1 && save_boxes!(pi, false)
         end
-        solver.tstage = tm + dtf
-        θ = oftype(dt, m) / oftype(dt, 3)
-        hermite_level_shell!(solver, states, θ, dt)
-        apply_bcs!(psf, Qf)
-        if solver.filter_interval > 0 &&
-           (3 * solver.step + m) % solver.filter_interval == 0
-            filter_state!(psf, Qf)
-            # The filter is not shell-preserving; re-impose the forcing so the
-            # next substep (or the restriction) reads a consistent boundary.
-            hermite_level_shell!(solver, states, θ, dt)
+        for pi in lev.patches
+            _rk_update!(patches[pi].decomp, n_cons, states[pi], dQs[pi],
+                        dus[pi], RKA[stage], RKB[stage], dt)
         end
     end
     solver.tstage = t0 + dt
+    θ_end = T(m) / T(3)
+    ℓ > 1 && shell!(θ_end)
+    for pi in lev.patches
+        apply_bcs!(PatchSolver(solver, patches[pi]), states[pi])
+    end
+    if ℓ > 1 && solver.filter_interval > 0 && count % solver.filter_interval == 0
+        for pi in lev.patches
+            filter_state!(PatchSolver(solver, patches[pi]), states[pi])
+        end
+        # The filter is not shell-preserving; re-impose the forcing so the
+        # next substep (or the restriction) reads a consistent boundary.
+        shell!(θ_end)
+    end
+    child === nothing && return states
+    for pi in lev.patches
+        compute_rhs!(PatchSolver(solver, patches[pi]), states[pi], dQs[pi], false)
+        save_boxes!(pi, true)
+    end
+    dtf = dt / T(3)
+    for mc in 1:3
+        _advance_level!(solver, ℓ + 1, states, dQs, dus, t0 + (mc - 1) * dtf,
+                        dtf, false, 3 * count + mc, dt, mc)
+    end
+    # The root's restriction is `run!`'s, after its filter pass; every deeper
+    # level restricts here so its parent's next substep sees the composite.
+    if ℓ > 1
+        for lt in child.transfers
+            _restrict_patch!(solver, states, lt)
+        end
+    end
     return states
 end
 

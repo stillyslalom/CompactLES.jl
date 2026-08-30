@@ -40,9 +40,10 @@ One solver runs on four axes of configuration, combinable except where
   along one dimension, the rank set partitioned over them, coupled by ghost
   exchange, interface closure rows, and shared-plane averaging
   (`src/patches.jl`).
-- **Two-level refinement**: one refined region at ratio 3, static or moving
-  under sensor-driven tagging and regridding, at a global timestep or
-  Berger–Oliger subcycled (`src/levels.jl`, `src/regrid.jl`).
+- **Nested refinement**: a chain of levels, each one patch covering a
+  region of its parent at ratio 3, at a global timestep or Berger–Oliger
+  subcycled recursively; a two-level hierarchy can move under
+  sensor-driven tagging and regridding (`src/levels.jl`, `src/regrid.jl`).
 - **Distribution**: both levels decompose over the whole rank set; the level
   coupling gathers replicated region data and distributes its interpolation
   chains by conserved component.
@@ -57,13 +58,11 @@ plans or their device mirrors (`src/lines_device.jl`) behind one
 `apply_along!` entry point. There is no second code path for the device
 beyond the launchers.
 
-What this is not: a production AMR. `solver.level_transfer` is one
-`LevelTransfer`, `subcycled_step!` hardcodes a coarse/fine pair, `patches`
-is a flat vector with no level index, the fine level is one box, every rank
-holds every level, I/O is single-patch, the device takes one patch per
-solver, and the banded (C10) schemes have no interface closures. Each of
-these is a structural assumption, and [Production AMR: design](#production-amr-design)
-replaces them.
+What this is not: a production AMR. Each level is one box, regridding is
+two-level only, every rank holds every level, I/O is single-patch, the
+device takes one patch per solver, and the banded (C10) schemes have no
+interface closures. Each of these is a structural assumption, and
+[Production AMR: design](#production-amr-design) replaces them.
 
 ## Target problems
 
@@ -253,7 +252,11 @@ signal) with identical step counts.
 `src/levels.jl`, `src/regrid.jl`. One level-1 patch covers a
 `refine::BlockRegion` of the root grid at ratio 3, node-centered (m coarse
 nodes ↔ 3m − 2 fine nodes), joining `solver.patches` so the same drivers
-advance it and the shared `max_rate` reduction supplies the timestep.
+advance it and the shared `max_rate` reduction supplies the timestep. The
+hierarchy generalizes to a chain (`refine` as a vector of regions, each in
+its parent's node space; `solver.levels`, one `Level` per depth with one
+`LevelTransfer` per patch), and every mechanism below applies between a
+patch and its parent; the measurements are two-level ones.
 
 **The live coupling is interpolation and injection, not the invertible
 pair.** The pair's contract is that prolongation input is samples of the
@@ -569,34 +572,35 @@ section turns it into deliverables with gates.
 
 ### Level hierarchy
 
-A `Level` is a first-class object: a vector of patches at one spacing
-(h/3^ℓ), its own `dt` and filter cadence, its interface records among its
-patches, and the transfer state to its parent. `solver.patches` becomes
-`solver.levels[ℓ].patches`; the property forwarding that serves a
-single-patch `Solver` is unchanged, and the single-patch and existing
-two-level paths remain the gate for the refactor (bit-identical
-convergence output and level-test output).
+Delivered (sequencing item 1). `Level` holds a depth, the indices into
+`solver.patches` of its patches, and one `LevelTransfer` per patch coupling
+it to its parent (its own buffered box, shell ring, Hermite storage
+`box_Q0` .. `box_dQ1`, and `coarse_index`); `solver.levels` is the chain,
+root first. The flat `solver.patches` stays the drivers' iteration space,
+so the property forwarding that serves a single-patch `Solver` is
+unchanged, and the two-level results are bit-identical to before the
+refactor (wave errors and step counts to the last digit). A refined
+region is specified in its parent's node space, so a level-ℓ patch's region
+offset is `3 · (parent offset + region offset)`, and nesting requires
+`max(n_halo, LEVEL_BUFFER)` parent nodes of margin at every depth.
 
-`LevelTransfer` becomes per fine patch: each carries its own buffered box,
-shell ring, and Hermite storage (`box_Q0` .. `box_dQ1`). The buffered box
-of a fine patch may cross the boundaries of several parent-level patches;
-the replicated gather over the parent level already handles that, since it
-assembles a node region of the whole level and not of one patch.
+The step driver is recursive Berger–Oliger (`_advance_level!`): one step
+of level ℓ, the extra RHS that saves the Hermite endpoint for its children,
+three substeps of level ℓ+1 at dt/3, then restriction of ℓ+1 onto ℓ for
+every ℓ above the root (the root's restriction stays in `run!`, after its
+filter pass). Each level below the root filters itself at its own cadence,
+substep index `3 · parent index + m`. The extra parent RHS recurs on every
+level that has children; whether a cheaper dense output is worth it at
+three or more levels is a measurement to make once a case demands it.
 
-The step driver is recursive Berger–Oliger: `advance_level!(ℓ, dt)` takes
-one step of level ℓ, then calls itself three times at dt/3 on level ℓ+1,
-restricts, and returns. The Hermite reconstruction needs values and RHS at
-both ends of the *parent's* step at every level, so the one extra parent
-RHS per step recurs per level. Whether a cheaper dense output is worth it
-at three or more levels is a measurement to make once a three-level case
-exists, not before.
-
-Proper nesting: level ℓ+1 lies inside level ℓ by `max(n_halo,
-LEVEL_BUFFER)` level-ℓ nodes. The startup restriction compounds: the
-`compute_dt` lag that gives cfl ≤ 0.2 at two levels widens at each level
-unless the rate is re-evaluated after each fine substep, which the
-recursive driver should do (one `max_rate` reduction per substep on the
-sub-communicator of the level, cheap against the substep).
+Still open here: the buffered box of a fine patch may cross the boundaries
+of several parent patches once a level holds more than one, which the
+replicated gather over the parent level handles by construction; and the
+startup restriction compounds with depth, since the `compute_dt` lag that
+gives cfl ≤ 0.2 at two levels widens at each level unless the rate is
+re-evaluated after each substep (one `max_rate` reduction per substep,
+which would turn a violated rate into a `SolverFailure` retry rather than
+a silent overstep). That re-evaluation is not built.
 
 ### Tiles and adjacency
 
@@ -761,11 +765,13 @@ routes through it.
 
 Each item names its gate. Nothing is built ahead of the item before it.
 
-1. **Level hierarchy** (CPU). `Level`, per-patch `LevelTransfer`, recursive
-   `advance_level!`, per-substep rate re-evaluation. Gate: single-patch and
-   existing two-level paths bit-identical (`test/convergence.jl`,
-   `test/level_tests.jl`, the MPI suite); a three-level static nest on Sod
-   converging at the two-level orders.
+1. **Level hierarchy** (CPU). Delivered: `Level`, per-patch
+   `LevelTransfer`, recursive `_advance_level!`. Gate held: single-patch
+   and two-level paths bit-identical (`test/convergence.jl`,
+   `test/level_tests.jl`, the MPI suite), and a three-level static nest on
+   the entropy wave converges at the two-level orders in both stepping
+   modes (`test/level_tests.jl`). Per-substep rate re-evaluation is
+   deferred to the item that first needs it.
 2. **Tiled fine level with full adjacency** (CPU). Lattice tiles, per-face
    closure choice, edge/corner exchange, set-difference regrid. Gate: a
    manufactured smooth solution across a tile corner at the same-level

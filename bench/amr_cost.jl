@@ -77,7 +77,7 @@ function run_config(mode, N, tfinal, nmax, progress)
     end
     CL.gather_region!(sample, ntuple(d -> 1:dcp.n_global[d], 3), (0, 0, 0),
                       (0, 0, 0), frac, dcp, blocks, st)
-    region = mode === :composite ? solver.level_transfer.region :
+    region = mode === :composite ? CL.refined_region(solver) :
              BlockRegion((0, 0, 0), (0, 0, 0))
     # Mixedness ∫ Y(1−Y) dV on each run's own grid(s): the physical mixing
     # metric, insensitive to the sub-cell interface displacement that

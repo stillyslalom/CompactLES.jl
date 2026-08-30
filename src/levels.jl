@@ -1,20 +1,22 @@
-# Two-level refinement: one level-1 patch over a refined region of the root
-# grid, its coupling to the coarse level, and the machinery that distributes
-# that coupling. Design rationale and measurements: reference/AMR_GPU.md.
+# Level refinement: a hierarchy of nested patches, each level one patch over
+# a refined region of its parent, the coupling between a patch and its
+# parent, and the machinery that distributes that coupling. Design rationale
+# and measurements: reference/AMR_GPU.md.
 #
-# One user-specified region of the root grid is covered by a single level-1
-# patch at refinement ratio 3, node-centered: a region of m coarse nodes per
-# refined dimension carries 3m − 2 fine nodes, coarse node a + k − 1 coinciding
-# with fine node 3k − 2. By default both levels advance every RK stage with
-# the same dt (the global minimum, which the shared `max_rate` reduction
-# supplies once the fine patch joins `solver.patches`), so no temporal
-# interpolation arises anywhere. Under `subcycle = true` the fine
-# level instead takes three steps of dt/3 per coarse step, and the temporal
-# interpolation this needs is the Hermite box at the end of this file; the
-# region can also move under `regrid_interval` (src/regrid.jl).
+# Each refined region is given in its PARENT level's node space and is
+# covered by one patch at refinement ratio 3, node-centered: a region of m
+# parent nodes per refined dimension carries 3m − 2 fine nodes, parent node
+# a + k − 1 coinciding with fine node 3k − 2. By default every level advances
+# every RK stage with the same dt (the global minimum, which the shared
+# `max_rate` reduction supplies once the patches join `solver.patches`), so
+# no temporal interpolation arises anywhere. Under `subcycle = true` each
+# level instead takes three steps of dt/3 per step of its parent, recursively
+# (`_advance_level!`, timestep.jl), and the temporal interpolation this
+# needs is the Hermite box at the end of this file; a two-level region can
+# also move under `regrid_interval` (src/regrid.jl).
 #
-# The two levels are coupled on two schedules, both by default through the
-# POINT-SAMPLE halves of the transfer machinery (transfer.jl):
+# A patch and its parent are coupled on two schedules, both by default
+# through the POINT-SAMPLE halves of the transfer machinery (transfer.jl):
 #
 #   - After every RK stage update, `prolong_level_ghosts!` interpolates the
 #     coarse state (order 6) over a box extending `LEVEL_BUFFER` coarse nodes
@@ -123,16 +125,19 @@ end
 """
     LevelTransfer
 
-Bound form of the two-level coupling: the refined region, the prolongation
-chain over the buffered box, and the restriction chain over the fine patch's
+Bound form of the coupling between one refined patch and its parent: the
+refined region (in the parent patch's node space), the prolongation chain
+over the buffered box, and the restriction chain over the fine patch's
 extent, each a sequence of [`TransferPlan`](@ref)s refining one active
 dimension at a time with per-stage scratch. Constructed at setup by the
-[`Solver`](@ref) constructor's `refine` keyword; consumed by
-`prolong_level_ghosts!` and `restrict_level!`.
+[`Solver`](@ref) constructor's `refine` keyword, one per refined patch, and
+held on the patch's [`Level`](@ref); consumed by `prolong_level_ghosts!`
+and `restrict_level!`.
 """
 struct LevelTransfer{T}
-    region::BlockRegion              # refined region, root (coarse) node space
-    fine_index::Int                  # index of the level-1 patch in solver.patches
+    region::BlockRegion              # refined region, parent patch node space
+    coarse_index::Int                # index of the parent patch in solver.patches
+    fine_index::Int                  # index of the refined patch in solver.patches
     restriction::Symbol              # :inject (coincident-node copy, default)
                                      # or :filter (the invertible transfer pair)
     active_dims::Vector{Int}
@@ -167,6 +172,43 @@ struct LevelTransfer{T}
     restrict_buffers::GatherBuffers{T}
     shell::ShellRing{T}
 end
+
+"""
+    Level
+
+One level of the refinement hierarchy: its index (0 is the root), the
+indices into `solver.patches` of the patches at this level, and, aligned
+with those, the [`LevelTransfer`](@ref) coupling each patch to its parent
+(empty at the root). `solver.levels` holds them in ascending order, and
+every level below the root is nested inside the one above it.
+"""
+struct Level{T}
+    index::Int
+    patches::Vector{Int}
+    transfers::Vector{LevelTransfer{T}}
+end
+
+"Number of levels in the hierarchy, the root included."
+nlevels(solver) = length(getfield(solver, :levels))
+
+"""
+    refined_region(solver, level=1) -> BlockRegion
+
+The refined region of the sole patch on `level`, in its parent's node space.
+Errors on a level holding several patches.
+"""
+function refined_region(solver, level::Int=1)
+    lev = getfield(solver, :levels)[level + 1]
+    length(lev.transfers) == 1 ||
+        error("level $level holds $(length(lev.transfers)) patches; " *
+              "refined_region needs one")
+    return lev.transfers[1].region
+end
+
+# The transfers of every level below the root, root-adjacent first (the
+# order shell imposition runs in; restriction runs it reversed).
+_all_transfers(solver) =
+    (lt for lev in getfield(solver, :levels) for lt in lev.transfers)
 
 # Decomp chain refining `dims_to_refine` one at a time, starting from the
 # coarse extents. Every stage runs replicated per rank (COMM_SELF, so the
@@ -204,7 +246,8 @@ end
 
 function build_level_transfer(::Type{T}, region::BlockRegion,
                               active::NTuple{3,Bool}, n_halo::Int,
-                              fine_index::Int, restriction::Symbol,
+                              coarse_index::Int, fine_index::Int,
+                              restriction::Symbol,
                               n_cons::Int, subcycle::Bool,
                               coarse_decomp::Decomp{T},
                               fine_decomp::Decomp{T}) where {T}
@@ -228,7 +271,8 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
     shell = ShellRing{T}(slabs, table, ringlen,
                          Matrix{T}(undef, ringlen, n_cons), ring_counts,
                          GatherBuffers{T}())
-    return LevelTransfer{T}(region, fine_index, restriction, dims_to_refine,
+    return LevelTransfer{T}(region, coarse_index, fine_index, restriction,
+                            dims_to_refine,
                             pdecomps, pplans, pstage,
                             rdecomps, rplans, rstage,
                             zeros(T, boxsize), zeros(T, boxsize),
@@ -546,8 +590,7 @@ end
 # Shared driver: run the chain for this rank's components with `fill0!(dst, c)`
 # supplying stage 0, replicate the shell rings, and impose each rank's own
 # shell slots. Collective over the fine communicator.
-function _impose_shell!(solver, states, fill0!::F) where {F}
-    lt = solver.level_transfer
+function _impose_shell!(solver, states, lt::LevelTransfer, fill0!::F) where {F}
     patches = getfield(solver, :patches)
     fine = patches[lt.fine_index]
     Qf = states[lt.fine_index]
@@ -658,22 +701,29 @@ end
 """
     prolong_level_ghosts!(solver, states)
 
-Impose the fine patch's ghost ring and boundary-plane nodes from the order-6
-interpolation of the current coarse state over the buffered box, per conserved
-component, and return `states`. Runs after every RK stage update and inside
-the pre-step synchronization; a solver without refinement returns immediately.
+Impose every refined patch's ghost ring and boundary-plane nodes from the
+order-6 interpolation of the current state of its parent over the buffered
+box, per conserved component, and return `states`. Levels are visited from
+the root down, so a patch two levels deep reads a parent whose own shell has
+just been imposed. Runs after every RK stage update and inside the pre-step
+synchronization; a solver without refinement returns immediately.
 Collective: one replicated box gather, the component-distributed chains, and
-the ring Allgatherv of `_impose_shell!`. The name "prolong" refers to
-the operation's role; the operator is `interpolate!`, per the header note on
-why the deconvolving `prolong!` is not used here.
+the ring Allgatherv of `_impose_shell!` per transfer. The name "prolong"
+refers to the operation's role; the operator is `interpolate!`, per the
+header note on why the deconvolving `prolong!` is not used here.
 """
 function prolong_level_ghosts!(solver, states)
-    lt = solver.level_transfer
-    lt === nothing && return states
+    for lt in _all_transfers(solver)
+        _prolong_ghosts!(solver, states, lt)
+    end
+    return states
+end
+
+function _prolong_ghosts!(solver, states, lt::LevelTransfer)
     patches = getfield(solver, :patches)
-    coarse = patches[1]
-    _gather_box!(lt.box_gather, lt, states[1], coarse.decomp)
-    _impose_shell!(solver, states,
+    coarse = patches[lt.coarse_index]
+    _gather_box!(lt.box_gather, lt, states[lt.coarse_index], coarse.decomp)
+    _impose_shell!(solver, states, lt,
                    (dst, c) -> dst .= view(lt.box_gather, :, :, :, c))
     # The imposed shell replaces the halo values the previous exchange left
     # wherever the two overlap (the edge-owning ranks' outer halos); interior
@@ -721,25 +771,31 @@ end
 """
     restrict_level!(solver, states)
 
-Restrict the fine state onto the covered coarse region, per conserved
-component, and return `states`. Under the default `:inject` mode the
-coincident-node values gather directly (a sampled [`gather_region!`](@ref),
-which subsamples the fine lattice in one collective and avoids one
-`TransferPlan` per dimension); under `:filter` the invertible pair's
-Gaussian filter runs over the
-fine patch's extent before subsampling, which is a whole-patch line solve and
-therefore still serial-only (guarded at setup). Either way the write-back
-stops `RESTRICT_MARGIN` coarse nodes short of the coarse-fine boundary. Runs
-once per completed step, after the state filter; a solver without refinement
-returns immediately. Collective under `:inject`.
+Restrict every refined patch's state onto the covered region of its parent,
+per conserved component, finest level first, and return `states`. Under the
+default `:inject` mode the coincident-node values gather directly (a sampled
+[`gather_region!`](@ref), which subsamples the fine lattice in one collective
+and avoids one `TransferPlan` per dimension); under `:filter` the invertible
+pair's Gaussian filter runs over the fine patch's extent before subsampling,
+which is a whole-patch line solve and therefore still serial-only (guarded at
+setup). Either way the write-back stops `RESTRICT_MARGIN` coarse nodes short
+of the coarse-fine boundary. Runs once per completed step, after the state
+filter; a solver without refinement returns immediately. Collective under
+`:inject`.
 """
 function restrict_level!(solver, states)
-    lt = solver.level_transfer
-    lt === nothing && return states
+    levels = getfield(solver, :levels)
+    for ℓ in length(levels):-1:2, lt in levels[ℓ].transfers
+        _restrict_patch!(solver, states, lt)
+    end
+    return states
+end
+
+function _restrict_patch!(solver, states, lt::LevelTransfer)
     patches = getfield(solver, :patches)
-    coarse = patches[1]
+    coarse = patches[lt.coarse_index]
     fine = patches[lt.fine_index]
-    Qc = states[1]
+    Qc = states[lt.coarse_index]
     Qf = states[lt.fine_index]
     if lt.restriction === :filter
         K = length(lt.rplans)
@@ -785,10 +841,11 @@ end
 """
     sync_levels!(solver, states)
 
-Bring the two levels to mutual consistency: restrict the fine state onto the
-covered coarse region, then re-impose the fine shell from the (updated) coarse
-state. This is the pre-step form; within a step only the prolongation half
-runs, since restriction is a per-step operation in the coupling schedule.
+Bring the levels to mutual consistency: restrict each refined state onto the
+covered region of its parent, finest first, then re-impose every shell from
+the (updated) parent states, root first. This is the pre-step form; within a
+step only the prolongation half runs, since restriction is a per-step
+operation in the coupling schedule.
 """
 function sync_levels!(solver, states)
     restrict_level!(solver, states)
@@ -798,17 +855,19 @@ end
 
 # --- Subcycling support: the Hermite box ------------------------------------
 #
-# Under subcycling (three fine steps of dt/3 per coarse step, Berger–Oliger
-# order: coarse first, fine after), the fine shell needs coarse values at fine
-# stage times BETWEEN t^n and t^{n+1}. The coarse solution over the step is
-# reconstructed on the buffered box by cubic Hermite interpolation from its
-# endpoint values and endpoint RHS rates, O(dt⁴), matching the integrator's
-# order; LSRK54 has no free dense output and this is the standard substitute.
-# The t^n data falls out of the coarse step's first stage; the t^{n+1} data
-# costs one extra coarse RHS evaluation per step, taken before the fine
-# subcycles so it samples the coarse trajectory, not the restricted
-# composite (the restriction write-back would perturb the box values read
-# here).
+# Under subcycling (three fine steps of dt/3 per parent step, Berger–Oliger
+# order: parent first, children after), a refined patch's shell needs parent
+# values at its stage times BETWEEN the parent's t^n and t^{n+1}. The parent
+# solution over its step is reconstructed on the buffered box by cubic
+# Hermite interpolation from its endpoint values and endpoint RHS rates,
+# O(dt⁴), matching the integrator's order; LSRK54 has no free dense output
+# and this is the standard substitute. The t^n data falls out of the parent
+# step's first stage; the t^{n+1} data costs one extra parent RHS evaluation
+# per parent step, taken before the children's substeps so it samples the
+# parent trajectory, not the restricted composite (the restriction write-back
+# would perturb the box values read here). At three or more levels the
+# extra RHS recurs on every level that has children, once per substep of
+# that level.
 
 """
     save_level_box!(lt, decomp, Q, dQ, at_end)
@@ -880,18 +939,18 @@ mutable struct RegridSpec{T}
 end
 
 """
-    hermite_level_shell!(solver, states, θ, dt)
+    hermite_level_shell!(solver, states, lt, θ, dt)
 
-Impose the fine patch's shell (ghost ring plus boundary planes) from the cubic
-Hermite reconstruction of the coarse solution at fraction `θ` of the coarse
-step of size `dt`, through the same order-6 interpolation chain
-[`prolong_level_ghosts!`](@ref) uses. Requires both endpoint slots filled by
-[`save_level_box!`](@ref); at `θ = 0` the result is exactly the `t^n` coarse
-state and the imposition reduces to the unsubcycled one.
+Impose the shell (ghost ring plus boundary planes) of the refined patch of
+`lt` from the cubic Hermite reconstruction of its parent's solution at
+fraction `θ` of the parent step of size `dt`, through the same order-6
+interpolation chain [`prolong_level_ghosts!`](@ref) uses. Requires both
+endpoint slots filled by [`save_level_box!`](@ref); at `θ = 0` the result is
+exactly the parent's `t^n` state and the imposition reduces to the
+unsubcycled one.
 """
-function hermite_level_shell!(solver, states, θ, dt)
-    lt = solver.level_transfer
-    _impose_shell!(solver, states,
+function hermite_level_shell!(solver, states, lt::LevelTransfer, θ, dt)
+    _impose_shell!(solver, states, lt,
                    (dst, c) -> _hermite_box!(dst, lt, c, θ, dt))
     return states
 end

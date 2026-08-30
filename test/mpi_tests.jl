@@ -1280,13 +1280,15 @@ end
 function test_refined_decomposed()
     section("distributed two-level refinement")
     u0 = 0.5
-    function wave_error(; subcycle)
+    function wave_error(; subcycle, levels=2)
         N = 192
+        r1 = BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1))
+        e1 = 3 * (N ÷ 6) - 2
+        r2 = BlockRegion((e1 ÷ 4, 0, 0), (e1 ÷ 2, 1, 1))
         solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
                         art=ArtParams(enabled=false), filter_interval=0,
                         subcycle=subcycle,
-                        refine=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0),
-                                           (N ÷ 6, 1, 1)))
+                        refine=levels == 3 ? [r1, r2] : r1)
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) ->
             Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
@@ -1311,6 +1313,18 @@ function test_refined_decomposed()
           abs(e_sub - 5.946196868222842e-10), 1e-12)
     check("subcycled two-level step count matches serial",
           abs(n_sub - 56), 0.5)
+    # Three levels: the level-2 patch's coupling gathers over the level-1
+    # patch's own decomposition, and the recursive driver's substep sequence
+    # is collective at every depth.
+    e3, n3 = wave_error(subcycle=false, levels=3)
+    check("static three-level wave error matches serial",
+          abs(e3 - 6.775497940481046e-10), 1e-12)
+    check("static three-level step count matches serial", abs(n3 - 467), 0.5)
+    e3s, n3s = wave_error(subcycle=true, levels=3)
+    check("subcycled three-level wave error matches serial",
+          abs(e3s - 6.348908065945125e-10), 1e-12)
+    check("subcycled three-level step count matches serial",
+          abs(n3s - 56), 0.5)
 
     # Tagging-driven regridding tracks a Sod shock to the same region.
     wall2 = (SlipWallBC(), SlipWallBC())
@@ -1323,11 +1337,11 @@ function test_refined_decomposed()
         Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
         Prim(u=(0, 0, 0), p=0.1, rho=0.125))
     run!(solver, states; tfinal=0.12, nmax=2000)
-    lt = solver.level_transfer
+    region = CL.refined_region(solver)
     fin = all(all(isfinite, parent(Q)) for Q in states)
     check("regridded Sod: finite composite state", fin ? 0.0 : 1.0, 0.5)
     check("regridded Sod: region tracks as serial (offset 161)",
-          abs(gmax(lt.region.offset[1]) - 161), 0.5)
+          abs(gmax(region.offset[1]) - 161), 0.5)
     check("regridded Sod: step count matches serial",
           abs(gmax(solver.step) - 1001), 0.5)
 end

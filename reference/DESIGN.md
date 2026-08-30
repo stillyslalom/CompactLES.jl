@@ -100,14 +100,14 @@ validation cases are discussed, and never a viscosity.
 | `src/stepcontrol.jl`      | `StepControl`: timestep floors, prediction, and rollback-and-retry recovery |
 | `src/sources.jl`          | Inferable tuple source interface and `ConstantBodyForce` |
 | `src/patches.jl`          | `Patch` (per-patch state), `PatchSolver`, slab layout, interface ghost exchange and shared-plane averaging |
-| `src/levels.jl`           | Static two-level refinement: fine-patch coupling schedules, level transfer chains |
+| `src/levels.jl`           | Nested level refinement: patch–parent coupling schedules, level transfer chains, the level hierarchy |
 | `src/rhs.jl`              | `Solver` container, flux assembly, the conservative NS RHS |
 | `src/nscbc.jl`            | Navier–Stokes characteristic boundary conditions (NSCBC): subsonic outflow and inflow |
 | `src/io.jl`               | Per-rank checkpoint/restart, parallel VTK output |
 | `src/hdf5.jl`             | `BlockRegion` and the shared-file HDF5 interface; the writer itself is the `ext/` extension |
 | `src/callbacks.jl`        | Step-boundary callbacks: the `AtTime` / `EveryTime` / `EveryStep` / `WhenState` triggers and their effects |
 | `src/timestep.jl`         | RK45, CFL timestep, the `run!` loop, per-step filtering |
-| `src/regrid.jl`           | Tagging and regridding for the two-level refinement |
+| `src/regrid.jl`           | Tagging and regridding (two-level hierarchies) |
 | `src/diagnostics.jl`      | Volume and plane reductions, and the variable-density mixing diagnostics built on them |
 | `src/viz.jl`              | Geometry-aware extraction of report fields (`line_profile`, `field_slice`) and the Makie plotting interface |
 | `src/problem.jl`          | Frontend: `Prim`, `Problem`, `Numerics`, `setup`, initialization |

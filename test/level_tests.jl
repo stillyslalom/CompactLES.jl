@@ -35,13 +35,19 @@
     @test xcoord(ps, 1, 46) ≈ xcoord(pc, 1, 56) atol = 1e-13
 end
 
-function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false)
+function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false,
+                           levels=2)
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     u0 = 0.5
+    r1 = BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1))
+    # A third level over the middle half of the level-1 patch, in that
+    # patch's node space, so the nest scales with N.
+    e1 = 3 * (N ÷ 6) - 2
+    r2 = BlockRegion((e1 ÷ 4, 0, 0), (e1 ÷ 2, 1, 1))
     solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
                     art=ArtParams(enabled=false), filter_interval=0,
                     level_restriction=mode, subcycle=subcycle,
-                    refine=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1)))
+                    refine=levels == 3 ? [r1, r2] : r1)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
@@ -75,12 +81,12 @@ end
 # covered region plus the fine level inside it, the shared boundary plane
 # taking half weight from each.
 function _two_level_mass(solver, states, N)
-    lt = solver.level_transfer
+    region = CL.refined_region(solver)
     ps = PatchSolver(solver, solver.patches[1])
     pad = ps.decomp.n_halo_d[1]
     h = ps.h[1]
-    lo = lt.region.offset[1] + 1
-    hi = lt.region.offset[1] + lt.region.extent[1]
+    lo = region.offset[1] + 1
+    hi = region.offset[1] + region.extent[1]
     m = 0.0
     for i in 1:N
         w = (i == 1 || i == N) ? 0.5 : 1.0
@@ -265,13 +271,13 @@ end
     states = allocate_state(sa)
     initialize!(sa, states, ic)
     run!(sa, states; tfinal=tf, nmax=40000)
-    lt = sa.level_transfer
-    lo = lt.region.offset[1] + 1
-    hi = lt.region.offset[1] + lt.region.extent[1]
+    region = CL.refined_region(sa)
+    lo = region.offset[1] + 1
+    hi = region.offset[1] + region.extent[1]
     # The region moved off its initial site and holds the shock (x ≈ 0.76).
     shock_node = round(Int, (0.5 + 1.75 * sa.t) * (N - 1)) + 1
     @info "regrid tracking" region=(lo, hi) shock_node
-    @test lt.region.offset[1] != 85
+    @test region.offset[1] != 85
     @test lo < shock_node < hi
     padc = sa.patches[1].decomp.n_halo_d[1]
     padf = sa.patches[2].decomp.n_halo_d[1]
@@ -281,6 +287,7 @@ end
                             states[1][i + padc, 1, 1, 1]
         e_amr = max(e_amr, abs(v - rho_ref[3i - 2]))
     end
+    @test nlevels(sa) == 2
     @info "moving-region Sod vs uniform fine" e_amr e_base
     # Measured: composite 2.7e-3 against the uniform-coarse baseline's
     # 7.3e-2 (3.9e-3 under the former κ/(ρ cp) diffusive limit, whose steps
@@ -301,5 +308,85 @@ end
     states_g = allocate_state(sg)
     initialize!(sg, states_g, ic)
     run!(sg, states_g; tfinal=0.05, nmax=20000)
-    @test sg.level_transfer.region.offset[1] != 85
+    @test CL.refined_region(sg).offset[1] != 85
+end
+
+# --- Three levels ------------------------------------------------------------
+
+@testset "three levels: configuration and geometry" begin
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    r1 = BlockRegion((40, 0, 0), (16, 1, 1))        # level-1 extent 46
+    mk(r2; kw...) = Solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
+                           bcs=per3l, refine=[r1, r2], kw...)
+    # Nesting is checked against the parent patch, not the root grid.
+    @test_throws ErrorException mk(BlockRegion((2, 0, 0), (10, 1, 1)))
+    @test_throws ErrorException mk(BlockRegion((30, 0, 0), (14, 1, 1)))
+    @test_throws ErrorException mk(BlockRegion((10, 0, 0), (3, 1, 1)))
+    # Regridding stays two-level.
+    @test_throws ErrorException mk(BlockRegion((10, 0, 0), (20, 1, 1)),
+                                   regrid_interval=5)
+    solver = mk(BlockRegion((10, 0, 0), (20, 1, 1)))
+    @test nlevels(solver) == 3
+    @test npatches(solver) == 3
+    @test [p.level for p in solver.patches] == [0, 1, 2]
+    @test refined_region(solver, 2).offset == (10, 0, 0)
+    p0 = PatchSolver(solver, solver.patches[1])
+    p1 = PatchSolver(solver, solver.patches[2])
+    p2 = PatchSolver(solver, solver.patches[3])
+    @test p2.h[1] ≈ p0.h[1] / 9
+    @test p2.decomp.n_local[1] == 3 * 20 - 2
+    # Level-2 node 1 coincides with level-1 node 11 and root node 40 + 11/3
+    # does not exist; level-2 node 4 ↔ level-1 node 12, and level-1 node 13
+    # ↔ root node 45.
+    @test xcoord(p2, 1, 1) ≈ xcoord(p1, 1, 11) atol = 1e-14
+    @test xcoord(p2, 1, 7) ≈ xcoord(p1, 1, 13) atol = 1e-14
+    @test xcoord(p1, 1, 13) ≈ xcoord(p0, 1, 45) atol = 1e-14
+end
+
+@testset "three levels: manufactured solution across nested boundaries" begin
+    for subcycle in (false, true)
+        errs = [_level_wave_error(N; levels=3, subcycle=subcycle)
+                for N in (48, 96, 192)]
+        orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
+        @info "three-level entropy wave" subcycle errs orders
+        # Measured 9.0e-8 / 9.1e-9 / 6.8e-10, orders 3.31 / 3.74 at the
+        # global dt and 9.0e-8 / 8.8e-9 / 6.3e-10, orders 3.35 / 3.79
+        # subcycled: the two-level figures (3.46 / 3.64) with a second
+        # coarse-fine boundary pair inside the first.
+        @test all(>(3.0), orders)
+        @test errs[2] < 3e-8
+    end
+end
+
+@testset "three levels: Sod through nested refinement boundaries" begin
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    N = 201
+    # The two-level Sod gate's region with a level-2 patch over the middle
+    # of the level-1 patch (extent 121): the shock crosses four coarse-fine
+    # boundaries with the sensors and filter live.
+    solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                    bcs=(wall2, per, per), cfl=0.4, subcycle=true,
+                    refine=[BlockRegion((120, 0, 0), (41, 1, 1)),
+                            BlockRegion((30, 0, 0), (60, 1, 1))])
+    states = allocate_state(solver)
+    initialize!(solver, states, ic)
+    run!(solver, states; tfinal=0.1, nmax=20000)
+    ps = PatchSolver(solver, solver.patches[1])
+    pad = ps.decomp.n_halo_d[1]
+    m1 = solver.equations.i_mom[1]
+    # Momentum ahead of the shock on the two-level gate's schedule (t = 0.1,
+    # x > 0.85) is refinement-boundary noise; measured 6.4e-10, the
+    # two-level figure, so the inner boundary pair adds nothing visible.
+    noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
+    @info "three-level Sod noise ahead of the shock" noise
+    @test noise < 1e-8
+    run!(solver, states; tfinal=0.2, nmax=40000)
+    @test all(all(isfinite, parent(Q)) for Q in states)
+    for (psq, Q) in CL.eachpatch(solver, states)
+        n = psq.decomp.n_local[1]
+        @test minimum(Q[gidx(psq, i, 1, 1), 1] for i in 1:n) > 0.05
+    end
 end

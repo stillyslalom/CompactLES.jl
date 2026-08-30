@@ -141,8 +141,9 @@ across a sequence of `Numerics`.
 ## Adaptive refinement and GPU execution
 
 AMR & GPU are selected within `Numerics`.
-`refine` places one two-level region at ratio 3 over a `BlockRegion` of the
-coarse grid (a zero-based node offset and extent), optionally subcycled and
+`refine` places a refined level at ratio 3 over a `BlockRegion` of the
+coarse grid (a zero-based node offset and extent), or a nested chain of them
+(a vector, each region in its parent patch's node space), optionally subcycled and
 regridding:
 
 ```julia

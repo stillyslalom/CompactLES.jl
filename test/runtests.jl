@@ -295,9 +295,9 @@ end
     initialize!(sr, states, (x, y, z) ->
         x < T(0.5) ? Prim(u=(0, 0, 0), p=1, rho=1) :
                      Prim(u=(0, 0, 0), p=0.1, rho=0.125))
-    initial_offset = sr.level_transfer.region.offset[1]
+    initial_offset = CL.refined_region(sr).offset[1]
     run!(sr, states; tfinal=one(T), nmax=2)
-    @test sr.level_transfer.region.offset[1] != initial_offset
+    @test CL.refined_region(sr).offset[1] != initial_offset
     @test sr.t isa T
     @test all(Q -> eltype(Q) === T && all(isfinite, parent(Q)), states)
     for (ps, Q) in CL.eachpatch(sr, states)

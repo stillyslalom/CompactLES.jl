@@ -355,19 +355,22 @@ increase `n_global` if setup reports a smaller local block.
 
 # Refinement keywords (reference/AMR_GPU.md)
 
-- `refine`: a `BlockRegion` in coarse node space selecting static two-level
-  refinement at ratio 3 over that region. Default `nothing`. Serial only in
-  this stage; the [`Solver`](@ref) constructor enforces the scope.
+- `refine`: a `BlockRegion` in root node space selecting static refinement
+  at ratio 3 over that region, or a vector of them selecting a nested
+  hierarchy, region ℓ given in the node space of the level-(ℓ−1) patch it
+  refines. Default `nothing`. The [`Solver`](@ref) constructor enforces the
+  scope (Cartesian, unstretched, unfolded, tridiagonal schemes, nesting).
 - `level_restriction`: `:inject` (default) writes the fine coincident-node
-  values onto the covered coarse region; `:filter` applies the invertible
-  transfer pair's anti-alias filter first.
-- `subcycle`: `false` (default) advances both levels at the global dt; `true`
-  selects the Berger–Oliger step, three fine steps of `dt/3` per coarse step
-  with Hermite boundary forcing. Requires `refine`.
+  values onto the covered region of the parent; `:filter` applies the
+  invertible transfer pair's anti-alias filter first.
+- `subcycle`: `false` (default) advances every level at the global dt;
+  `true` selects the Berger–Oliger step, three steps of a third of the
+  parent's step on each refined level, recursively, with Hermite boundary
+  forcing. Requires `refine`.
 - `regrid_interval`: `0` (default) keeps the region static; a positive `K`
   retags the coarse level every `K` steps and moves the region to the
-  buffered bounding box of the tagged cells. Requires `refine` for the
-  initial region.
+  buffered bounding box of the tagged cells. Requires `refine` with a single
+  region.
 - `tag_threshold` (default `0.02`) and `tag_buffer` (default `4`): the
   tagging threshold on the relative undivided fourth difference of the
   mixture density, and the coarse-cell buffer added around tagged cells.
@@ -388,7 +391,7 @@ Base.@kwdef struct Numerics
     patch_grid::NTuple{3,Int} = (1, 1, 1)
     backend::AbstractBackend = CPUBackend()
     interface_rhs::Symbol = :extended
-    refine::Union{Nothing,BlockRegion} = nothing
+    refine::Union{Nothing,BlockRegion,Vector{BlockRegion}} = nothing
     level_restriction::Symbol = :inject
     subcycle::Bool = false
     regrid_interval::Int = 0

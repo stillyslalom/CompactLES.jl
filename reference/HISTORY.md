@@ -893,3 +893,28 @@ max-norm one: 3.69 / 4.44 / 6.51 / 8.45 for the four C6 and C8 wall studies
 against 3.17 / 4.02 / 5.88 / 7.91, the half-order the solution norm gains
 over the pointwise wall error. Every previously recorded order and error
 magnitude came out bit-identical.
+
+## The level hierarchy (August 2026)
+
+Item 1 of the production-AMR sequencing in `reference/AMR_GPU.md`. The
+two-level coupling generalized to a chain of nested levels: `Level` holds
+a depth, its patch indices, and one `LevelTransfer` per patch (now
+carrying `coarse_index`), `solver.levels` replaces the single
+`solver.level_transfer`, the coupling routines take a transfer explicitly
+and loop over the hierarchy (root down for shell imposition, finest up for
+restriction), and `subcycled_step!` became the recursive
+`_advance_level!`, with the operation order at two levels preserved. A
+refined region is given in its parent patch's node space; `refine` accepts
+a vector of them.
+
+Measured: the two-level entropy-wave errors and step counts are
+bit-identical to the recorded serial references (6.178253464383943e-10 at
+159 steps; subcycled 5.946196868222842e-10 at 56), every convergence
+order and error magnitude came out bit-identical, and the jetcheck and
+audit counts are unchanged. A three-level nest on the entropy wave
+converges at 3.31 / 3.74 (global dt) and 3.35 / 3.79 (subcycled) against
+the two-level 3.46 / 3.64, and a subcycled Sod through two nested region
+pairs stays positive with ahead-of-shock noise 6.4e-10, the two-level
+figure. The serial suite grew to 112 testsets and the MPI suite to 114
+checks. Regridding remains two-level; per-substep rate re-evaluation is
+deferred.

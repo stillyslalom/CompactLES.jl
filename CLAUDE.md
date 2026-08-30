@@ -69,17 +69,17 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 109 testsets, 0 failures
+julia --project=. test/runtests.jl        # 112 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 110/110 each
+  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 114/114 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
 ```
 
-The `109 testsets` and the `110/110` are counted by different mechanisms and are
+The `112 testsets` and the `114/114` are counted by different mechanisms and are
 not comparable. `runtests.jl` reports `@testset` blocks under `Test`, each
 holding many `@test`s, and its includes (`float32_validation.jl`,
 `device_tests.jl`, `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, and the
@@ -194,16 +194,20 @@ Names are spelled out in full. Current vocabulary:
   drivers takes a `SolverLike` (single-patch `Solver` or `PatchSolver`), and
   a single-patch `Solver` forwards patch-owned property names to its sole
   patch, so `solver.rho` and `solver.decomp` still read as before
-- `refine` (a `BlockRegion` in root node space), `level_transfer` (a
-  `LevelTransfer`), `level_restriction` (`:inject` or `:filter`),
-  `prolong_level_ghosts!`, `restrict_level!`, `sync_levels!`,
-  `LEVEL_BUFFER`, `RESTRICT_MARGIN`; `Patch.h` is the patch's own spacing
-  (h/3 on a level-1 patch), which the property forwarding serves as
-  `solver.h`
-- `subcycle` (the Berger–Oliger mode flag), `subcycled_step!`,
-  `save_level_box!`/`hermite_level_shell!` (the Hermite box, `box_Q0` ..
-  `box_dQ1`), `regrid` (a `RegridSpec`), `regrid_interval`,
-  `tag_threshold`/`tag_buffer`, `tagged_region`, `regrid!`
+- `refine` (a `BlockRegion` in the parent level's node space, or a vector
+  of them for a nested chain), `levels` (a `Vector{Level}`, root first;
+  each `Level` holds `index`, `patches` as indices into `solver.patches`,
+  and `transfers`, one `LevelTransfer` per patch with `coarse_index` /
+  `fine_index`), `refined_region`, `nlevels`, `level_restriction`
+  (`:inject` or `:filter`), `prolong_level_ghosts!`, `restrict_level!`,
+  `sync_levels!`, `LEVEL_BUFFER`, `RESTRICT_MARGIN`; `Patch.h` is the
+  patch's own spacing (h/3 on a level-1 patch), which the property
+  forwarding serves as `solver.h`
+- `subcycle` (the Berger–Oliger mode flag), `subcycled_step!` and the
+  recursive `_advance_level!` beneath it, `save_level_box!`/
+  `hermite_level_shell!` (the Hermite box, `box_Q0` .. `box_dQ1`),
+  `regrid` (a `RegridSpec`), `regrid_interval`, `tag_threshold`/
+  `tag_buffer`, `tagged_region`, `regrid!`
 - `pointwise!` (the shared launcher of every per-point loop: `Array` storage
   takes `@threaded`, device storage a KernelAbstractions kernel),
   `pointwise_ka!`, `FORCE_KA` (test/bench toggle), and the `_point!` suffix

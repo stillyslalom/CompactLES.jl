@@ -131,14 +131,13 @@ function tagged_region(solver::Solver, Qc)
                        ntuple(d -> offext[d][2], 3))
 end
 
-# Whole-patch initialization of a fresh fine state: interpolate the coarse
+# Whole-patch initialization of a fresh fine state: interpolate the parent
 # state over the buffered box and write every slot, interior and shell alike.
-function _fill_fine_from_coarse!(solver::Solver, states)
-    lt = solver.level_transfer
+function _fill_fine_from_coarse!(solver::Solver, states, lt::LevelTransfer)
     patches = getfield(solver, :patches)
-    coarse = patches[1]
+    coarse = patches[lt.coarse_index]
     fine = patches[lt.fine_index]
-    Qc = states[1]
+    Qc = states[lt.coarse_index]
     Qf = states[lt.fine_index]
     K = length(lt.pplans)
     _gather_box!(lt.box_gather, lt, Qc, coarse.decomp)
@@ -224,7 +223,10 @@ cannot re-arm the retry loop that guard exists to break.
 function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
                  workspace::Workspace, save) where {T}
     spec = getfield(solver, :regrid)
-    lt = getfield(solver, :level_transfer)
+    levels = getfield(solver, :levels)
+    # A two-level hierarchy, enforced at setup: the root and one refined
+    # patch, the sole transfer of level 1.
+    lt = levels[2].transfers[1]
     newregion = tagged_region(solver, states[1])
     newregion === nothing && return false
     newregion == lt.region && return false
@@ -250,19 +252,19 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
                                 spec.deriv, spec.filt, spec.smoo,
                                 solver.art.smoother, spec.interface_rhs,
                                 spec.backend, solver.equations.n_species,
-                                n_cons)
-    newlt = build_level_transfer(T, newregion, active_g, spec.n_halo, fi,
+                                n_cons, fi, 1, patches[1].region.offset)
+    newlt = build_level_transfer(T, newregion, active_g, spec.n_halo, 1, fi,
                                  lt.restriction, n_cons,
                                  getfield(solver, :subcycle),
                                  patches[1].decomp, newfine.decomp)
     Qf_new = _state_like(newfine.rho, n_cons)
     patches[fi] = newfine
-    solver.level_transfer = newlt
+    levels[2] = Level{T}(1, [fi], [newlt])
     states[fi] = Qf_new
     workspace.dQ[fi] = zero(Qf_new)
     workspace.du[fi] = zero(Qf_new)
     init_geometry!(PatchSolver(solver, newfine))
-    _fill_fine_from_coarse!(solver, states)
+    _fill_fine_from_coarse!(solver, states, newlt)
     _carry_over!(Qf_new, newfine.decomp, newregion, old_gather, Nf_old,
                  oldregion, active_g, n_cons)
     # Re-bank only where `run!` itself would: a regrid landing on a retried
