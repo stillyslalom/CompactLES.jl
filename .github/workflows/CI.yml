@@ -71,22 +71,28 @@ jobs:
       # callback consistency, staged device exchange, sync) 100–250x slower.
       # The full suite at np = 8 was 29 minutes of the job.
       #
-      # So the full suite runs at np = 2 and 4, the largest counts the runner
-      # holds without oversubscription, and np = 8 runs the phases where
-      # eight ranks reach something four do not. Most tests put all ranks on
-      # one dimension of SPLITN = 72 points via `splitdims`, and at np = 8
-      # that is 9 points per rank, the C8 filter's minimum block and the
-      # smallest the reduced-interface solves, the transfer operators, the
-      # fold butterfly and the positivity repair ever see: those phases run.
-      # Two grids change shape outright: the corner-halo check's default
-      # Dims_create grid (2x2x2 at np = 8, 2x2x1 at np = 4) and the tiled
-      # fine level's _amr_dims grid (4x2 against 2x2). The slicing phase
-      # derives its over-coarse stride from np. The remaining phases (the
-      # timestepping runs, the writers, the checkpoint, the sensor
-      # comparisons) count ranks or change block sizes only, and they are
-      # the step-bound ones. `-t 1` because a rank must not also fan out
+      # The package's precompile workload (src/precompile.jl) removes most
+      # of the compile from every rank; what remains is step-bound runtime,
+      # and with two physical cores even np = 4 pays for it (a full np = 4
+      # leg measured 416 s against 58 s at np = 2, with 43 s of compile).
+      #
+      # So the full suite runs at np = 2, and np = 8 runs the phases whose
+      # code path depends on the rank count, which four ranks would not add
+      # to. Most tests put all ranks on one dimension of SPLITN = 72 points
+      # via `splitdims`, and at np = 8 that is 9 points per rank, the C8
+      # filter's minimum block and the smallest the reduced-interface
+      # solves, the transfer operators, the fold butterfly and the
+      # positivity repair ever see: those phases run. Two grids change
+      # shape outright: the corner-halo check's default Dims_create grid
+      # (2x2x2 at np = 8, 2x1x1 at np = 2) and the tiled fine level's
+      # _amr_dims grid (4x2 against 2x1). The slicing phase derives its
+      # over-coarse stride from np. The remaining phases (the timestepping
+      # runs, the writers, the checkpoint, the sensor comparisons) count
+      # ranks or change block sizes only, and they are the step-bound ones.
+      # The tiled phase is the leg's cost, ~470 s for twenty steps of a
+      # five-patch 2-D case. `-t 1` because a rank must not also fan out
       # over threads it does not have.
-      - name: Run distributed suite at 2 and 4 ranks, rank-shape phases at 8
+      - name: Run distributed suite at 2 ranks, rank-shape phases at 8
         shell: julia --project=. --color=yes {0}
         run: |
           using MPI, Printf
@@ -97,8 +103,7 @@ jobs:
                         "slicing"), ',')
           MPI.mpiexec() do mpiexec
               julia = Base.julia_cmd()
-              for (np, args) in ((2, String[]), (4, String[]),
-                                 (8, ["phases=" * eight]))
+              for (np, args) in ((2, String[]), (8, ["phases=" * eight]))
                   t = @elapsed run(`$mpiexec -n $np $julia --project=. -t 1 test/mpi_tests.jl $args`)
                   @printf("=== np = %d finished in %.1f s ===\n", np, t)
               end
