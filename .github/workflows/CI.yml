@@ -61,29 +61,45 @@ jobs:
       # interface error away from machine zero, so it does not pass unseen.
       - name: Run convergence guards
         run: julia --project=. --color=yes test/convergence.jl
-      # The runner has fewer cores than this job has ranks at np = 8, so the
-      # ranks are oversubscribed and every collective costs a scheduling quantum
-      # rather than a memory copy: a timestep measured at ~0.04 s per step at
-      # np = 2 costs ~7 s per step at np = 8. Phase cost there is linear in steps
-      # taken and independent of grid size, so the run lengths in the three
-      # timestepping phases of mpi_tests.jl are the job's cost, not the physics.
-      # `-t 1` because a rank must not also fan out over threads it does not have.
+      # The runner has four vCPUs. The bundled MPICH (ch4) waits in a
+      # collective by spinning with sched_yield between polls, which under
+      # Linux CFS does not hand the core to a runnable sibling, so at np = 8
+      # every rank blocked in a collective takes a core from a rank still
+      # computing or compiling. Measured: the per-rank compile of the suite
+      # goes from 181 s at np = 2 to 628 s at np = 8, and a timestep from
+      # ~0.04 s to ~7 s, with the step-bound phases (distributed refinement,
+      # callback consistency, staged device exchange, sync) 100–250x slower.
+      # The full suite at np = 8 was 29 minutes of the job.
       #
-      # np = 2 and np = 8 only. Every test puts all ranks on a single dimension
-      # via `splitdims`, so the rank count changes block sizes rather than code
-      # paths; the one exception is the corner-halo check, which uses the
-      # default Dims_create grid, and np = 8 gives that a 2x2x2 grid where
-      # np = 4 gave 2x2x1. Adding np = 4 back costs four more processes, each
-      # of which compiles the suite from scratch, for no path the other two
-      # miss.
-      - name: Run distributed suite at 2 and 8 ranks
+      # So the full suite runs at np = 2 and 4, the largest counts the runner
+      # holds without oversubscription, and np = 8 runs the phases where
+      # eight ranks reach something four do not. Most tests put all ranks on
+      # one dimension of SPLITN = 72 points via `splitdims`, and at np = 8
+      # that is 9 points per rank, the C8 filter's minimum block and the
+      # smallest the reduced-interface solves, the transfer operators, the
+      # fold butterfly and the positivity repair ever see: those phases run.
+      # Two grids change shape outright: the corner-halo check's default
+      # Dims_create grid (2x2x2 at np = 8, 2x2x1 at np = 4) and the tiled
+      # fine level's _amr_dims grid (4x2 against 2x2). The slicing phase
+      # derives its over-coarse stride from np. The remaining phases (the
+      # timestepping runs, the writers, the checkpoint, the sensor
+      # comparisons) count ranks or change block sizes only, and they are
+      # the step-bound ones. `-t 1` because a rank must not also fan out
+      # over threads it does not have.
+      - name: Run distributed suite at 2 and 4 ranks, rank-shape phases at 8
         shell: julia --project=. --color=yes {0}
         run: |
           using MPI, Printf
+          eight = join(("periodic C6", "pentadiagonal C10", "closed C6",
+                        "device line solves", "tiled refinement",
+                        "AMR transfer pair", "halo consistency",
+                        "off-rank folds", "freestream", "positivity floor",
+                        "slicing"), ',')
           MPI.mpiexec() do mpiexec
               julia = Base.julia_cmd()
-              for np in (2, 8)
-                  t = @elapsed run(`$mpiexec -n $np $julia --project=. -t 1 test/mpi_tests.jl`)
+              for (np, args) in ((2, String[]), (4, String[]),
+                                 (8, ["phases=" * eight]))
+                  t = @elapsed run(`$mpiexec -n $np $julia --project=. -t 1 test/mpi_tests.jl $args`)
                   @printf("=== np = %d finished in %.1f s ===\n", np, t)
               end
           end

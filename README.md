@@ -200,7 +200,7 @@ time stepping) are not yet implemented.
 
 ```
 julia --project=. test/runtests.jl                      # serial unit tests
-mpiexec -n 4 julia --project=. -t 1 test/mpi_tests.jl   # distributed
+mpiexec -n 4 julia --project=. -t 1 test/mpi_tests.jl   # distributed (phases=a,b selects)
 julia --project=. -t auto test/convergence.jl           # order studies
 julia --project=. -t auto test/validation.jl            # shock-capturing battery
 ```

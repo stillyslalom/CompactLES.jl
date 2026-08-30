@@ -5,6 +5,10 @@
 #   mpiexec -n 4 julia --project=. -t 1 test/mpi_tests.jl
 #   mpiexec -n 8 julia --project=. -t 1 test/mpi_tests.jl
 #
+# `phases=` runs a subset of the suite by phase name, comma-separated (the
+# names are the first elements of SUITE at the bottom of this file):
+#   mpiexec -n 8 julia --project=. -t 1 test/mpi_tests.jl "phases=halo consistency"
+#
 # This suite targets the code paths that ONLY execute when a dimension is
 # split across more than one rank and are therefore UNREACHABLE from the serial
 # suite (which runs at np == 1):
@@ -1329,9 +1333,52 @@ function test_refined_decomposed()
     check("subcycled three-level step count matches serial",
           abs(n3s - 20), 0.5)
 
-    # A tiled level: four 37×37 tiles meeting at a corner, each decomposed
-    # over every rank through _amr_dims, coupled by the level's own records.
-    # Ten steps: a 2-D case at np = 8 runs slowly on the workstation
+    # Tagging-driven regridding tracks a Sod shock to the same region.
+    wall2 = (SlipWallBC(), SlipWallBC())
+    solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                    bcs=(wall2, per3[2], per3[3]), cfl=0.2,
+                    refine=BlockRegion((160, 0, 0), (60, 1, 1)),
+                    subcycle=true, regrid_interval=20, tag_buffer=16)
+    states = allocate_state(solver)
+    initialize!(solver, states, (x, y, z) -> x < 0.45 ?
+        Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+        Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+    # Sixty-one steps: three regrids, at steps 21, 41 and 61. Measured
+    # serially, the region goes 160/60 → 161/39 → 160/41 → 159/43
+    # (offset/extent), so the third regrid is the first to leave the region
+    # both moved and grown, and both numbers are checked. The run used to go
+    # to t = 0.03 (265 steps, offset 149), which is the same test many more
+    # times over: every regrid is a replicated tag-and-rebuild over the same
+    # collectives, and on an oversubscribed runner the phase cost is linear in
+    # steps (see the callback phase). The full crossing costs 1001 steps.
+    run!(solver, states; tfinal=0.03, nmax=61)
+    region = CL.refined_region(solver)
+    fin = all(all(isfinite, parent(Q)) for Q in states)
+    check("regridded Sod: finite composite state", fin ? 0.0 : 1.0, 0.5)
+    check("regridded Sod: region offset tracks as serial (159)",
+          abs(gmax(region.offset[1]) - 159), 0.5)
+    check("regridded Sod: region extent tracks as serial (43)",
+          abs(gmax(region.extent[1]) - 43), 0.5)
+    # The step count is nmax by construction; the time reached is not. It is
+    # the sum of 61 global dt decisions through three regrids, so a rank-count
+    # dependence anywhere in the coarse–fine CFL reduction or the regridded
+    # level's spacing moves it. Serial value at step 61; the tolerance is the
+    # Allreduce round-off tier.
+    check("regridded Sod: time reached matches serial",
+          abs(gmax(solver.t) - 0.005484081097503982), 1e-14)
+end
+
+# ---------------------------------------------------------------------------
+# Tiled level, decomposed: each tile splits over every rank through
+# _amr_dims, which factors np over the two active dimensions under the
+# 9-point filter minimum. With 37-node tiles that is 2x2 at np = 4 and 4x2
+# at np = 8, the only rank count in the gate that gives a non-square tile
+# grid, which the CI job runs this phase at for that reason.
+# ---------------------------------------------------------------------------
+function test_tiled_level()
+    section("tiled level: decomposed tiles and corner consensus")
+    # Four 37×37 tiles meeting at a corner, coupled by the level's own
+    # records. Ten steps: a 2-D case at np = 8 runs slowly on the workstation
     # (7 s/step, one patch or four; see CLUSTER.md on the hybrid cores),
     # and ten cross every interface many times over.
     function tiled_error(; subcycle)
@@ -1397,27 +1444,6 @@ function test_refined_decomposed()
         check("tiled corner: diagonal ghosts from the diagonal tile",
               gmax(e_ghost), 1e-15)
     end
-
-    # Tagging-driven regridding tracks a Sod shock to the same region.
-    wall2 = (SlipWallBC(), SlipWallBC())
-    solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=(wall2, per3[2], per3[3]), cfl=0.2,
-                    refine=BlockRegion((160, 0, 0), (60, 1, 1)),
-                    subcycle=true, regrid_interval=20, tag_buffer=16)
-    states = allocate_state(solver)
-    initialize!(solver, states, (x, y, z) -> x < 0.45 ?
-        Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
-        Prim(u=(0, 0, 0), p=0.1, rho=0.125))
-    # To t = 0.03 (265 steps), long enough for one regrid to have moved the
-    # region off its initial offset 160; the full crossing costs 1001 steps.
-    run!(solver, states; tfinal=0.03, nmax=2000)
-    region = CL.refined_region(solver)
-    fin = all(all(isfinite, parent(Q)) for Q in states)
-    check("regridded Sod: finite composite state", fin ? 0.0 : 1.0, 0.5)
-    check("regridded Sod: region tracks as serial (offset 149)",
-          abs(gmax(region.offset[1]) - 149), 0.5)
-    check("regridded Sod: step count matches serial",
-          abs(gmax(solver.step) - 265), 0.5)
 end
 
 const SUITE = (
@@ -1427,6 +1453,7 @@ const SUITE = (
     ("device line solves", test_device_lines),
     ("staged device exchange", test_staged_exchange),
     ("distributed refinement", test_refined_decomposed),
+    ("tiled refinement", test_tiled_level),
     ("AMR transfer pair", test_transfer_pair),
     ("halo consistency", test_halo_consistency),
     ("off-rank folds", test_offrank_folds),
@@ -1444,10 +1471,26 @@ const SUITE = (
     ("two-patch layout", test_two_patch_layout),
 )
 
+# `phases=` selects phases by name from SUITE, comma-separated and in SUITE's
+# order; empty runs everything. CI uses it to run only the phases whose code
+# path depends on the rank count at a count that oversubscribes the runner
+# (see .github/workflows/CI.yml), where a compiled suite costs minutes per
+# rank. An unknown name is an error on every rank, not a silently empty run.
+const OPTS = script_args(ARGS, (phases = "",))
+const SELECTED = let names = first.(SUITE),
+    wanted = isempty(OPTS.phases) ? collect(names) :
+             strip.(split(OPTS.phases, ','))
+    unknown = setdiff(wanted, names)
+    isempty(unknown) ||
+        throw(ArgumentError("phases= names no phase of SUITE: " *
+                            join(unknown, ", ")))
+    Tuple(p for p in SUITE if first(p) in wanted)
+end
+
 try
     # Barrier before each timing, ensuring a slow rank in one test is charged to
     # that test rather than to the next one it holds up.
-    for (name, testfn) in SUITE
+    for (name, testfn) in SELECTED
         MPI.Barrier(comm)
         @phase name testfn()
     end
