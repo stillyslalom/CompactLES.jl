@@ -69,17 +69,17 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 116 testsets, 0 failures
+julia --project=. test/runtests.jl        # 118 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 119/119 each
+  "$MPIEXEC" -n $np julia --project=. test/mpi_tests.jl   # 121/121 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
 ```
 
-The `116 testsets` and the `119/119` are counted by different mechanisms and are
+The `118 testsets` and the `121/121` are counted by different mechanisms and are
 not comparable. `runtests.jl` reports `@testset` blocks under `Test`, each
 holding many `@test`s, and its includes (`float32_validation.jl`,
 `device_tests.jl`, `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, and the
@@ -201,7 +201,8 @@ Names are spelled out in full. Current vocabulary:
   `fine_index` / `imposed`, and the level's own `ghost_sends` /
   `ghost_recvs` / `plane_pairs`), `tile` (the lattice edge in parent
   nodes; 0 = one patch per level), `_tile_span`/`_lattice_tile`/
-  `_level_tiles`/`_tile_faces`, `_in_shell`, `refined_region`,
+  `_level_tiles`/`_tile_faces`, `_in_shell`, `phases` (the dimension-phased
+  level sync), `_combine_planes!`/`_seed_planes!`, `_erode`, `refined_region`,
   `level_regions`, `nlevels`, `level_restriction` (`:inject` or
   `:filter`), `prolong_level_ghosts!`, `restrict_level!`, `sync_levels!`,
   `_sync_level!`, `LEVEL_BUFFER`, `RESTRICT_MARGIN`; `Patch.h` is the

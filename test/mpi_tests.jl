@@ -1363,6 +1363,38 @@ function test_refined_decomposed()
           abs(ets - 6.663296114872708e-8), 1e-12)
     check("subcycled tiled 2-D step count matches serial", abs(nts - 10), 0.5)
 
+    # Multi-tile corner consensus and diagonal ghosts, decomposed: the
+    # dimension-phased sync must give every copy of the corner node the
+    # mean of four tiles and fill a corner ghost from the diagonal tile.
+    let
+        solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3,
+                        tile=12, refine=BlockRegion((12, 12, 0), (24, 24, 1)))
+        states = allocate_state(solver)
+        for (i, Q) in enumerate(states)
+            fill!(parent(Q), i - 1.0)
+        end
+        CL._sync_level_records!(solver, states, solver.levels[2])
+        # Tiles A (12,12), B (24,12), C (12,24), D (24,24) of 37 fine nodes.
+        function owned(p, i, j)
+            dp = solver.patches[p].decomp
+            pad = dp.n_halo_d
+            inside = all(((g, o, n),) -> o + 1 - pad[1] <= g <= o + n,
+                         ((i, dp.offset[1], dp.n_local[1]),
+                          (j, dp.offset[2], dp.n_local[2])))
+            inside || return nothing
+            return states[p][i - dp.offset[1] + pad[1], j - dp.offset[2] + pad[2],
+                             1 + pad[3], 1]
+        end
+        dev(p, i, j, want) = (v = owned(p, i, j); v === nothing ? 0.0 : abs(v - want))
+        e_corner = max(dev(2, 37, 37, 2.5), dev(3, 1, 37, 2.5),
+                       dev(4, 37, 1, 2.5), dev(5, 1, 1, 2.5))
+        e_ghost = max(dev(5, 0, 0, 1.0), dev(2, 38, 38, 4.0),
+                      dev(3, 0, 38, 3.0), dev(4, 38, 0, 2.0))
+        check("tiled corner: four copies at the mean", gmax(e_corner), 1e-15)
+        check("tiled corner: diagonal ghosts from the diagonal tile",
+              gmax(e_ghost), 1e-15)
+    end
+
     # Tagging-driven regridding tracks a Sod shock to the same region.
     wall2 = (SlipWallBC(), SlipWallBC())
     solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),

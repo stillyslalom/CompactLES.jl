@@ -945,3 +945,26 @@ measured; the bench script is the instrument. The serial suite grew to
 116 testsets and the MPI suite to 119 checks; the MPI tiled check is
 bounded to ten steps because any 2-D case at np = 8 runs at ~7 s/step on
 the workstation, one patch or four tiles alike.
+
+## Review fixes on the tiled levels (August 2026)
+
+A design review of the two items above found four defects, all fixed. A
+node shared by four tiles (eight in 3-D) did not reach a common value
+under one flat pass of pairwise plane averaging (copies 1, 2, 3, 4 ended
+at 2.23, 2.68, 2.41, 2.68), and the diagonal corner ghosts of an interior
+tile were written by nothing; the level records are now built and run per
+dimension, each phase's records spanning the earlier dimensions' padded
+ranges with the halo exchange between phases (`_sync_level_records!`),
+which gives every copy the mean and fills the corners, pinned exactly in
+both suites. A parent level's tile ghosts went stale after its children's
+restriction; the level now re-syncs after restriction in the driver and
+in `restrict_level!`. A child's buffered box could reach a parent's
+imposed boundary plane; nesting is now checked against the parents' own
+nodes (`_erode`). After a regrid a fresh tile now takes the planes it
+shares with survivors one-way (`_seed_planes!`, through weighted plane
+combination) and a departing tile restricts once more before removal.
+The review also reordered the sequencing (ownership and the
+patch/workspace split ahead of tagging and I/O) and recorded why a
+per-substep rate check is not yet built; both are in `AMR_GPU.md`. The
+tile=0 paths stay bit-identical; the 2×2 tile nest moved at the 1e-15
+level. Serial suite 118 testsets; MPI 121 checks.

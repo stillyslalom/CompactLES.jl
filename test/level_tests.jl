@@ -410,7 +410,8 @@ end
     @test npatches(solver) == 5
     @test_throws ErrorException refined_region(solver)
     lev = solver.levels[2]
-    @test length(lev.plane_pairs) == 6 && length(lev.ghost_sends) == 6
+    @test length(lev.plane_pairs[1]) == 6 && length(lev.ghost_sends[1]) == 6
+    @test lev.phases == (true, false, false)
     # Faces: the outer faces are parent-fed, the inner ones shared.
     @test [lt.imposed[1] for lt in lev.transfers] ==
           [(true, false), (false, false), (false, false), (false, true)]
@@ -508,4 +509,72 @@ end
         @test minimum(Q[gidx(psq, i, 1, 1), 1] for i in 1:n) > 0.05
     end
     @test length(sa.patches) == length(states) == length(regs) + 1
+end
+
+
+@testset "tiled level: multi-tile corner consensus and corner ghosts" begin
+    # Four tiles meet at one fine node. Pairwise averaging in one flat pass
+    # leaves the four copies unequal (a later pair reads a value an earlier
+    # pair changed); the dimension-phased sync gives every copy the mean,
+    # and the phase-2 strips, padded along x, fill the diagonal ghosts.
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
+                    refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6)
+    states = allocate_state(solver)
+    for (i, Q) in enumerate(states)
+        fill!(parent(Q), i - 1.0)              # tiles 2..5 carry 1..4
+    end
+    lev = solver.levels[2]
+    @test lev.phases == (true, true, false)
+    CL._sync_level_records!(solver, states, lev)
+    # Tile order is lattice order: A (18,18), B (24,18), C (18,24), D (24,24),
+    # each 19 fine nodes; the common corner is A(19,19), B(1,19), C(19,1),
+    # D(1,1).
+    at(p, i, j) = (ps = PatchSolver(solver, solver.patches[p]);
+                   pad = ps.decomp.n_halo_d; states[p][i + pad[1], j + pad[2], 1 + pad[3], 1])
+    @test at(2, 19, 19) == at(3, 1, 19) == at(4, 19, 1) == at(5, 1, 1) == 2.5
+    # Two-tile planes away from the corner take the pair mean.
+    @test at(2, 19, 10) == at(3, 1, 10) == 1.5
+    @test at(2, 10, 19) == at(4, 10, 1) == 2.0
+    # Diagonal corner ghosts hold the diagonal neighbor's interior.
+    @test at(5, 0, 0) == 1.0 && at(2, 20, 20) == 4.0
+    @test at(3, 0, 20) == 3.0 && at(4, 20, 0) == 2.0
+    # Face ghosts hold the face neighbor's interior, and a parent-fed
+    # ghost is untouched.
+    @test at(5, 0, 10) == 3.0 && at(5, 10, 0) == 2.0
+    @test at(2, 0, 10) == 1.0
+    # Idempotent: a second pass changes nothing.
+    snapshot = [copy(parent(Q)) for Q in states]
+    CL._sync_level_records!(solver, states, lev)
+    @test all(parent(states[i]) == snapshot[i] for i in eachindex(states))
+end
+
+@testset "tiled regrid seeds fresh tiles from surviving neighbors" begin
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    N = 201
+    sa = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                bcs=(wall2, per, per), cfl=0.2, subcycle=true,
+                regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
+                tile=8)
+    states = allocate_state(sa)
+    initialize!(sa, states, ic)
+    run!(sa, states; tfinal=1.0, nmax=20)
+    before = level_regions(sa, 1)
+    # Perturb a survivor's interior so the seeding is visible: the plane a
+    # fresh tile shares with it must carry the survivor's value exactly.
+    workspace = CL.Workspace(states)
+    changed = CL.regrid!(sa, states, workspace, nothing)
+    after = level_regions(sa, 1)
+    @test changed && after != before
+    for (i, r) in enumerate(after), (j, s) in enumerate(after)
+        (r in before) && !(s in before) || continue
+        r.offset[1] + r.extent[1] - 1 == s.offset[1] || continue
+        ps = PatchSolver(sa, sa.patches[i + 1])
+        qs = PatchSolver(sa, sa.patches[j + 1])
+        nr = ps.decomp.n_local[1]
+        @test states[i + 1][gidx(ps, nr, 1, 1), 1] == states[j + 1][gidx(qs, 1, 1, 1), 1]
+    end
 end

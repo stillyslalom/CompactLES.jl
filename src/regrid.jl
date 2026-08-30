@@ -344,6 +344,11 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     old_regions = [lt.region for lt in lev.transfers]
     wanted == old_regions && return false
     old_index = Dict(r => lev.patches[i] for (i, r) in enumerate(old_regions))
+    # A tile about to leave restricts once more: the post-step restriction
+    # preceded the positivity repair, and nothing else writes it back.
+    for (i, r) in enumerate(old_regions)
+        r in wanted || _restrict_patch!(solver, states, lev.transfers[i])
+    end
     n_cons = solver.equations.n_cons
     root = patches[1]
     comm = getfield(solver, :comm)
@@ -383,9 +388,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                               n_cons, getfield(solver, :subcycle),
                                               [root.decomp], p.decomp, faces[ti]))
     end
-    sends, recvs, planes = _level_records(T, comm, [p.region for p in new_patches],
-                                          indices, [p.decomp for p in new_patches],
-                                          n_cons)
+    records = _level_records(T, comm, [p.region for p in new_patches], indices,
+                             [p.decomp for p in new_patches], n_cons)
     resize!(patches, 1 + length(wanted))
     resize!(states, 1 + length(wanted))
     resize!(workspace.dQ, 1 + length(wanted))
@@ -396,10 +400,19 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         workspace.dQ[ti + 1] = new_dQ[ti]
         workspace.du[ti + 1] = new_du[ti]
     end
-    levels[2] = Level{T}(1, indices, transfers, sends, recvs, planes)
+    levels[2] = Level{T}(1, indices, transfers, records)
     for ti in fresh
         init_geometry!(PatchSolver(solver, patches[ti + 1]))
         _fill_fine_from_coarse!(solver, states, transfers[ti])
+    end
+    # A fresh tile's plane shared with a survivor takes the survivor's
+    # evolved values rather than averaging its interpolation into them.
+    if !isempty(fresh)
+        is_fresh = falses(length(patches))
+        for ti in fresh
+            is_fresh[ti + 1] = true
+        end
+        _seed_planes!(solver, states, levels[2], is_fresh)
     end
     _rebank!(solver, states, save)
     return true

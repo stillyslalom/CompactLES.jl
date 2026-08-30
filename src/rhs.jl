@@ -367,10 +367,14 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
             end
             _covered_by(_buffered(rg, active_g, margin), parent_regions) ||
                 error("level $ℓ region must be nested at least $margin " *
-                      "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches")
-            parent_regions = [BlockRegion(
+                      "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches' " *
+                      "own (not imposed) nodes")
+            # The next level reads this one's own nodes: a one-patch level's
+            # boundary planes are imposed data and are eroded (the tiled
+            # cover is checked face by face at construction).
+            parent_regions = [_erode(BlockRegion(
                 ntuple(d -> active_g[d] ? 3 * rg.offset[d] : 0, 3),
-                fine_extent(rg, active_g))]
+                fine_extent(rg, active_g)), ntuple(d -> (true, true), 3), active_g)]
         end
     end
     # --- Device residency -------------------------------------------------
@@ -559,6 +563,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     levels = [Level{T}(0, [1], LevelTransfer{T}[])]
     parent_indices = [1]
     parent_regions = [BlockRegion((0, 0, 0), n_global)]
+    # The parent nodes a child may read: the root's are all its own; a
+    # refined parent's parent-fed planes are imposed data and are eroded.
+    parent_valid = parent_regions
     parent_h = h
     decomp_of = Dict{Int,Decomp{T}}(1 => decomp)
     margin = max(n_halo, LEVEL_BUFFER)
@@ -581,9 +588,10 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         indices = Int[]
         transfers = LevelTransfer{T}[]
         for (ti, tr) in enumerate(tregions)
-            _covered_by(_buffered(tr, active_g, margin), parent_regions) ||
+            _covered_by(_buffered(tr, active_g, margin), parent_valid) ||
                 error("level $ℓ tile $tr must be nested at least $margin " *
-                      "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches")
+                      "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches' " *
+                      "own (not imposed) nodes")
             idx = length(fines) + 2
             fine = _build_fine_patch(T, tr, active_g, parent_h, n_halo, comm,
                                      deriv, filt, smoo, art.smoother,
@@ -603,12 +611,13 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         # Records address ranks of the communicator the exchange runs over,
         # the root's Cartesian one (`solver.comm`), whose numbering may be
         # reordered relative to `comm`.
-        sends, recvs, planes = _level_records(T, decomp.comm, [p.region for p in lvl],
-                                              indices, [p.decomp for p in lvl],
-                                              n_cons)
-        push!(levels, Level{T}(ℓ, indices, transfers, sends, recvs, planes))
+        records = _level_records(T, decomp.comm, [p.region for p in lvl],
+                                 indices, [p.decomp for p in lvl], n_cons)
+        push!(levels, Level{T}(ℓ, indices, transfers, records))
         parent_indices = indices
         parent_regions = [p.region for p in lvl]
+        parent_valid = [_erode(p.region, lt.imposed, active_g)
+                        for (p, lt) in zip(lvl, transfers)]
         parent_h = lvl[1].h
     end
     # The literal form types the vector by the patches' join (the root's

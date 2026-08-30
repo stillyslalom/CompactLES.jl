@@ -633,12 +633,39 @@ restriction margin stands off parent-fed faces only, and the closure rows
 are the same interface rows on every face, since both kinds read ghosts.
 Ordering on every stage: same-level records after the update, then the
 parent imposition at the head of the next stage, so a same-level
-neighbor's data wins wherever both exist. Corner ghosts come from the
-within-patch halo exchange that follows the face strips, as at the root.
-A tile's buffered box may span several parent patches
+neighbor's data wins wherever both exist; and after a level receives its
+children's restriction, its records run again before it is read (the
+restricted nodes can sit beside a tile interface). The records are
+dimension-phased (`_sync_level_records!`): the records of dimension d span
+the transverse dimensions before d over their padded ranges, with the
+per-patch halo exchange between phases. Two things depend on that. A node
+shared by four tiles (eight in 3-D) reaches the mean of all its copies
+only that way, since one flat pairwise pass reads values an earlier pair
+has changed (a probe with copies 1, 2, 3, 4 ended at 2.23, 2.68, 2.41,
+2.68); and the edge and corner ghosts of an interior tile, which no shell
+writes and no face strip covers, are reached by the later phases' strips
+through the earlier phases' ghosts, the argument `halo.jl` makes for rank
+halos. A tile's buffered box may span several parent patches
 (`coarse_indices`); the gathers and the restriction write-back run per
-parent. Corner-coupled adjacency at level 0 does not arise; the root level
-stays a slab layout or a single patch.
+parent, and a child's buffered box must lie in the parents' own nodes,
+their parent-fed planes eroded (imposed data is the class `RESTRICT_MARGIN`
+exists to keep out of the closure rows). After a regrid a fresh tile takes
+the planes it shares with surviving tiles from the survivors one-way
+(`_seed_planes!`), and a tile about to leave restricts once more first.
+Corner-coupled adjacency at level 0 does not arise; the root level stays
+a slab layout or a single patch.
+
+Not built, on review: a rate check per substep. Depth widens the number of
+fine substeps one root rate measurement covers, so a startup or regrid
+transient is a real unguarded case, but the three-level Sod gate runs at
+cfl 0.4 without one, so it is not yet a compounding ceiling. When it is
+built it should sit after the stage-1 RHS has refreshed the artificial
+coefficients and before the update, limited at first to startup and
+regrid steps, and it must return a failure to `run!` rather than throw:
+the retry handling runs before `step!`, and an exception inside
+`_advance_level!` would escape it. The recurring Hermite endpoint RHS is
+about 1/15 of the RHS work at similarly weighted levels, not a fraction
+that compounds with depth.
 
 Measured: a tiled level costs nothing visible against the one-patch level
 (1-D entropy wave, tile 8: 6.0e-10 against 6.2e-10 at N = 192, orders
@@ -832,16 +859,31 @@ Each item names its gate. Nothing is built ahead of the item before it.
    annular tag set in 2-D covered at 41–47% of its bounding box
    (`bench/amr_tiles.jl`); the 3-D shell awaits a memory-sized tile (the
    per-tile cost above) and is a bench measurement, not a testset.
-3. **Tag criteria and hysteresis; covered masks in every diagnostic.** Gate:
+3. **Ownership: per-level sub-communicators, weighted SFC partitioning,
+   and the patch/workspace split.** Pulled ahead of tagging and I/O after
+   review: the flat globally ordered `solver.patches`, the equal patch
+   count per rank the block table assumes, and the full-communicator
+   gather tables on every `LevelTransfer` are structural, and diagnostics
+   or I/O built on them would be rebuilt once ranks hold different tile
+   subsets. The scratch-memory answer belongs here too, and it is not a
+   single pool: `mu_art`/`beta_art`/`kappa_art`/`D_art` survive into the
+   next `max_rate`, the primitives must be current on every tile for the
+   prepared first stage, `du` persists across stages, and geometry is
+   persistent; so `Patch` splits into persistent state/geometry and an
+   ephemeral RHS workspace, and only the latter is pooled per concurrently
+   advanced tile. Minimal hysteresis lands with this item so rebalancing
+   is not driven by tile flicker, and the covered-mask data model is
+   defined here even if the diagnostic conversion follows. Gate: the
+   implosion case at a rank count for which every-rank-on-every-level
+   fails `_amr_dims`; per-rank step wall spread measured; a tile owned by
+   a rank subset reproduces the every-rank answer to round-off.
+4. **Tag criteria and hysteresis; covered masks in every diagnostic.** Gate:
    the mixing-layer cost case reproduced through the sensor-based tag; the
    TGV energy history on a refined run equal to the single-level history
    where the refined region is inactive.
-4. **Multi-level HDF5 and VTK, restart of the hierarchy.** Gate: restart on
+5. **Multi-level HDF5 and VTK, restart of the hierarchy.** Gate: restart on
    a different rank count continues bit-identically for the delivered
    serial-restart cases and to round-off under MPI.
-5. **Per-level sub-communicators and weighted SFC partitioning.** Gate: the
-   implosion case at a rank count for which every-rank-on-every-level fails
-   `_amr_dims`; per-rank step wall spread measured.
 6. **Banded interface closures and remeasured buffers.** Gate: the
    two-conforming-patch orders and reflection amplitude reproduced at C10;
    the localization study at C10 setting the buffers.

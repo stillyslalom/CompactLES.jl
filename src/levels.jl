@@ -195,15 +195,27 @@ struct Level{T}
     index::Int
     patches::Vector{Int}
     transfers::Vector{LevelTransfer{T}}
-    ghost_sends::Vector{GhostRecord{T}}
-    ghost_recvs::Vector{GhostRecord{T}}
-    plane_pairs::Vector{PlaneRecord{T}}
+    # Same-level records per dimension, applied in dimension order: the
+    # records of dimension d span the transverse dimensions before d over
+    # their padded ranges, so edges and corners are reached, and a node
+    # shared by 2^k tiles ends at the mean of all its copies. See
+    # `_sync_level_records!`.
+    ghost_sends::NTuple{3,Vector{GhostRecord{T}}}
+    ghost_recvs::NTuple{3,Vector{GhostRecord{T}}}
+    plane_pairs::NTuple{3,Vector{PlaneRecord{T}}}
+    phases::NTuple{3,Bool}           # some tile has a neighbor along d
 end
 
 Level{T}(index::Int, patches::Vector{Int},
          transfers::Vector{LevelTransfer{T}}) where {T} =
-    Level{T}(index, patches, transfers, GhostRecord{T}[], GhostRecord{T}[],
-             PlaneRecord{T}[])
+    Level{T}(index, patches, transfers,
+             ntuple(_ -> GhostRecord{T}[], 3), ntuple(_ -> GhostRecord{T}[], 3),
+             ntuple(_ -> PlaneRecord{T}[], 3), (false, false, false))
+
+# A level with the records `_level_records` returns.
+Level{T}(index::Int, patches::Vector{Int}, transfers::Vector{LevelTransfer{T}},
+         records::Tuple) where {T} =
+    Level{T}(index, patches, transfers, records...)
 
 "Number of levels in the hierarchy, the root included."
 nlevels(solver) = length(getfield(solver, :levels))
@@ -323,16 +335,19 @@ function _parents_of(region::BlockRegion, active::NTuple{3,Bool},
 end
 
 # Same-level records among the patches of a refined level, built through the
-# root machinery on level-local ids and shifted onto solver patch indices.
-# Collective over `comm` (one Allgather of every rank's blocks of every
-# tile: each rank holds a block of every tile of a refined level).
+# root machinery on level-local ids and shifted onto solver patch indices,
+# one record set per dimension for the phased sync. Collective over `comm`
+# (one Allgather per dimension of every rank's blocks of every tile: each
+# rank holds a block of every tile of a refined level). Returns the tuple
+# `Level{T}(index, patches, transfers, records)` takes.
 function _level_records(::Type{T}, comm::MPI.Comm, regions::Vector{BlockRegion},
                         patch_indices::Vector{Int}, decomps, n_cons::Int) where {T}
-    length(regions) > 1 || return GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[]
+    sends = ntuple(_ -> GhostRecord{T}[], 3)
+    recvs = ntuple(_ -> GhostRecord{T}[], 3)
+    planes = ntuple(_ -> PlaneRecord{T}[], 3)
+    length(regions) > 1 || return sends, recvs, planes, (false, false, false)
     faces = _tile_faces(regions)
-    sends, recvs, planes = build_interface_records(T, comm, regions, faces,
-                                                   collect(1:length(regions)),
-                                                   decomps, n_cons)
+    phases = ntuple(d -> any(f -> f[d] != (0, 0), faces), 3)
     shift(r::GhostRecord{T}) =
         GhostRecord{T}(patch_indices[r.patch], r.partner,
                        r.partner_patch == 0 ? 0 : patch_indices[r.partner_patch],
@@ -340,9 +355,29 @@ function _level_records(::Type{T}, comm::MPI.Comm, regions::Vector{BlockRegion},
     shift(r::PlaneRecord{T}) =
         PlaneRecord{T}(patch_indices[r.patch], r.partner,
                        r.partner_patch == 0 ? 0 : patch_indices[r.partner_patch],
+                       patch_indices[r.partner_pid],
                        r.tag, r.sendtag, r.mine, r.theirs, r.buf, r.sbuf)
-    return map(shift, sends), map(shift, recvs), map(shift, planes)
+    for d in 1:3
+        phases[d] || continue
+        faces_d = [ntuple(e -> e == d ? f[e] : (0, 0), 3) for f in faces]
+        s, r, p = build_interface_records(T, comm, regions, faces_d,
+                                          collect(1:length(regions)), decomps,
+                                          n_cons;
+                                          padded_transverse=ntuple(e -> e < d, 3))
+        append!(sends[d], map(shift, s))
+        append!(recvs[d], map(shift, r))
+        append!(planes[d], map(shift, p))
+    end
+    return sends, recvs, planes, phases
 end
+
+# `region` shrunk by one node on each face flagged in `imposed`: the nodes
+# of a refined patch that are its own solution rather than imposed data.
+_erode(region::BlockRegion, imposed::NTuple{3,NTuple{2,Bool}},
+       active::NTuple{3,Bool}) =
+    BlockRegion(ntuple(d -> region.offset[d] + (active[d] && imposed[d][1]), 3),
+                ntuple(d -> region.extent[d] - (active[d] && imposed[d][1]) -
+                            (active[d] && imposed[d][2]), 3))
 
 # Whether the fine shell slot at patch-global node `g` (padded slots included)
 # is imposed from the parent: outside the strict interior along some active
@@ -356,14 +391,48 @@ end
     end
 end
 
-# Same-level consistency of one refined level: shared-plane averaging and
-# ghost refill through the level's records. The per-patch halo exchange that
-# carries the strips into corners is the caller's, as for the root.
+# Same-level consistency of one refined level, one dimension at a time:
+# shared-plane averaging and ghost refill through the records of dimension
+# d, whose transverse ranges are padded along the dimensions already done,
+# then each patch's own halo exchange so the rank halos carry the result
+# into the next phase. Pairwise averaging in one flat pass is not
+# idempotent where four (2-D) or eight (3-D) tiles share a node, since a
+# later pair reads a value an earlier pair changed; phased over dimensions
+# every copy ends at the mean of all of them, and the phase-d ghost strips,
+# read over the padded transverse ranges, carry the earlier phases' ghosts
+# into the edge and corner ghosts. The trailing per-patch halo exchange is
+# the caller's, as for the root.
 function _sync_level_records!(solver, states, lev::Level)
-    isempty(lev.plane_pairs) && isempty(lev.ghost_sends) &&
-        isempty(lev.ghost_recvs) && return states
-    _average_planes!(solver, states, lev.plane_pairs)
-    _exchange_ghosts!(solver, states, lev.ghost_sends, lev.ghost_recvs)
+    any(lev.phases) || return states
+    patches = getfield(solver, :patches)
+    last = findlast(lev.phases)
+    for d in 1:last
+        lev.phases[d] || continue
+        _average_planes!(solver, states, lev.plane_pairs[d])
+        _exchange_ghosts!(solver, states, lev.ghost_sends[d], lev.ghost_recvs[d])
+        d == last && break
+        for pi in lev.patches
+            exchange_state!(states[pi], patches[pi].decomp)
+        end
+    end
+    return states
+end
+
+# One-way seeding of the planes fresh tiles share with surviving ones after
+# a regrid: a fresh tile takes the survivor's plane (its evolved value)
+# instead of averaging its interpolated one into it; two fresh tiles, or
+# two survivors, take the mean. Phased as the sync is.
+function _seed_planes!(solver, states, lev::Level, fresh::AbstractVector{Bool})
+    weight(pl) = fresh[pl.patch] == fresh[pl.partner_pid] ? 0.5 :
+                 fresh[pl.patch] ? 0.0 : 1.0
+    patches = getfield(solver, :patches)
+    for d in 1:3
+        lev.phases[d] || continue
+        _combine_planes!(solver, states, lev.plane_pairs[d], weight)
+        for pi in lev.patches
+            exchange_state!(states[pi], patches[pi].decomp)
+        end
+    end
     return states
 end
 
@@ -1014,8 +1083,14 @@ filter; a solver without refinement returns immediately. Collective under
 """
 function restrict_level!(solver, states)
     levels = getfield(solver, :levels)
-    for ℓ in length(levels):-1:2, lt in levels[ℓ].transfers
-        _restrict_patch!(solver, states, lt)
+    for ℓ in length(levels):-1:2
+        for lt in levels[ℓ].transfers
+            _restrict_patch!(solver, states, lt)
+        end
+        # The written parent nodes can sit beside a parent-level tile
+        # interface; refresh that level's records before it is read again
+        # (by its own restriction outward, or by the shells below it).
+        ℓ > 2 && _sync_level!(solver, states, levels[ℓ - 1])
     end
     return states
 end

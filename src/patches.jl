@@ -275,6 +275,7 @@ struct PlaneRecord{T}
     patch::Int
     partner::Int                      # world rank (== my rank for a local pairing)
     partner_patch::Int
+    partner_pid::Int                  # the partner's patch id (every case)
     tag::Int                          # tag this side receives on
     sendtag::Int                      # tag the partner receives on
     mine::NTuple{3,UnitRange{Int}}
@@ -319,11 +320,22 @@ function _unpack!(Q, buf::AbstractVector, r::NTuple{3,UnitRange{Int}})
     return Q
 end
 
-function _average_from!(Q, buf::AbstractVector, r::NTuple{3,UnitRange{Int}})
+# Q ← w·Q + (1 − w)·buf over `r`; the equal-weight form keeps the mean's
+# original arithmetic, since the root path is held bitwise against it.
+function _combine_from!(Q, buf::AbstractVector, r::NTuple{3,UnitRange{Int}}, w)
     idx = 1
-    @inbounds for c in 1:size(Q, 4), k in r[3], j in r[2], i in r[1]
-        Q[i, j, k, c] = 0.5 * (Q[i, j, k, c] + buf[idx])
-        idx += 1
+    if w == 0.5
+        @inbounds for c in 1:size(Q, 4), k in r[3], j in r[2], i in r[1]
+            Q[i, j, k, c] = 0.5 * (Q[i, j, k, c] + buf[idx])
+            idx += 1
+        end
+    else
+        wT = eltype(Q)(w)
+        vT = one(wT) - wT
+        @inbounds for c in 1:size(Q, 4), k in r[3], j in r[2], i in r[1]
+            Q[i, j, k, c] = wT * Q[i, j, k, c] + vT * buf[idx]
+            idx += 1
+        end
     end
     return Q
 end
@@ -340,12 +352,17 @@ function _copy_block!(Qdst, rdst::NTuple{3,UnitRange{Int}},
     return Qdst
 end
 
-function _average_blocks!(Qa, ra::NTuple{3,UnitRange{Int}},
-                          Qb, rb::NTuple{3,UnitRange{Int}})
+# Both copies ← wa·Qa + (1 − wa)·Qb, from the old values, so a pairing that
+# appears once from each side is idempotent for any weight.
+function _combine_blocks!(Qa, ra::NTuple{3,UnitRange{Int}},
+                          Qb, rb::NTuple{3,UnitRange{Int}}, wa)
+    wT = eltype(Qa)(wa)
+    vT = one(wT) - wT
     @inbounds for c in 1:size(Qa, 4)
         for (ka, kb) in zip(ra[3], rb[3]), (ja, jb) in zip(ra[2], rb[2])
             for (ia, ib) in zip(ra[1], rb[1])
-                m = 0.5 * (Qa[ia, ja, ka, c] + Qb[ib, jb, kb, c])
+                m = wa == 0.5 ? 0.5 * (Qa[ia, ja, ka, c] + Qb[ib, jb, kb, c]) :
+                                wT * Qa[ia, ja, ka, c] + vT * Qb[ib, jb, kb, c]
                 Qa[ia, ja, ka, c] = m
                 Qb[ib, jb, kb, c] = m
             end
@@ -406,7 +423,9 @@ receivers agree without negotiation.
 function build_interface_records(::Type{T}, comm::MPI.Comm,
                                  regions::Vector{BlockRegion}, faces_all,
                                  my_pids::Vector{Int}, my_decomps,
-                                 n_cons::Int) where {T}
+                                 n_cons::Int;
+                                 padded_transverse::NTuple{3,Bool}=(false, false, false)
+                                 ) where {T}
     npatch = length(regions)
     ghost_sends = GhostRecord{T}[]
     ghost_recvs = GhostRecord{T}[]
@@ -431,6 +450,12 @@ function build_interface_records(::Type{T}, comm::MPI.Comm,
         pad = dp.n_halo_d
         n_halo = dp.n_halo
         myint = ntuple(d -> dp.offset[d]+1:dp.offset[d]+dp.n_local[d], 3)
+        # Transverse ranges: the block interior, or the block padded by the
+        # halo along dimensions whose ghosts an earlier phase has already
+        # filled (the dimension-phased sync of a tiled level, levels.jl),
+        # which is how a record reaches the edge and corner ghosts.
+        widen(r, d) = padded_transverse[d] ? ((first(r) - pad[d]):(last(r) + pad[d])) : r
+        myrng = ntuple(d -> widen(myint[d], d), 3)
         for ds in 1:3, side in 1:2
             q = faces_all[p][ds][side]
             q == 0 && continue
@@ -459,7 +484,8 @@ function build_interface_records(::Type{T}, comm::MPI.Comm,
             for e in table
                 e.pid == q || continue
                 eint = ntuple(d -> e.offset[d]+1:e.offset[d]+e.n_local[d], 3)
-                tover = ntuple(d -> d == ds ? (1:1) : _isect(myint[d], eint[d]), 3)
+                tover = ntuple(d -> d == ds ? (1:1) :
+                               _isect(myrng[d], widen(eint[d], d)), 3)
                 any(d -> d != ds && isempty(tover[d]), 1:3) && continue
                 # Only the partner block that owns its own face plane holds the
                 # ghost-source nodes (its extent is at least the scheme minimum,
@@ -507,12 +533,12 @@ function build_interface_records(::Type{T}, comm::MPI.Comm,
                         dq = my_decomps[lq]
                         theirs_r = ntuple(d -> d == ds ? (plane_q:plane_q) : tover[d], 3)
                         theirsp = padded3(theirs_r, dq.offset, dq.n_halo_d)
-                        push!(plane_pairs, PlaneRecord{T}(li, me, lq, prtag, pstag,
+                        push!(plane_pairs, PlaneRecord{T}(li, me, lq, q, prtag, pstag,
                               minep, theirsp, Vector{T}(), Vector{T}()))
                     else
                         nvals = n_cons * prod(length.(minep))
-                        push!(plane_pairs, PlaneRecord{T}(li, e.rank, 0, prtag, pstag,
-                              minep, minep, Vector{T}(undef, nvals),
+                        push!(plane_pairs, PlaneRecord{T}(li, e.rank, 0, q, prtag,
+                              pstag, minep, minep, Vector{T}(undef, nvals),
                               Vector{T}(undef, nvals)))
                     end
                 end
@@ -574,17 +600,24 @@ result does not depend on which side is asked. Collective as
 average_shared_planes!(solver, states) =
     _average_planes!(solver, states, solver.plane_pairs)
 
-function _average_planes!(solver, states, planes)
+_average_planes!(solver, states, planes) =
+    _combine_planes!(solver, states, planes, _ -> 0.5)
+
+# Each shared-plane node ← w·(own copy) + (1 − w)·(partner's copy), with
+# `wself(record)` the weight of this side; the two sides' weights must sum
+# to one, which the mean (0.5 everywhere) and a one-way seeding (0 on the
+# taking side, 1 on the giving side) both satisfy.
+function _combine_planes!(solver, states, planes, wself::F) where {F}
     isempty(planes) && return states
     me = MPI.Comm_rank(solver.comm)
     reqs = MPI.Request[]
     for pl in planes
         if pl.partner == me
-            # A local pairing appears once from each side; averaging is
-            # idempotent, so the second application is a no-op, not a
-            # double count.
-            _average_blocks!(states[pl.patch], pl.mine,
-                             states[pl.partner_patch], pl.theirs)
+            # A local pairing appears once from each side; the combination
+            # writes both copies from the old values and is idempotent, so
+            # the second application is a no-op, not a double count.
+            _combine_blocks!(states[pl.patch], pl.mine,
+                             states[pl.partner_patch], pl.theirs, wself(pl))
         else
             push!(reqs, MPI.Irecv!(pl.buf, solver.comm; source=pl.partner, tag=pl.tag))
         end
@@ -598,7 +631,7 @@ function _average_planes!(solver, states, planes)
     MPI.Waitall(reqs)
     for pl in planes
         pl.partner == me && continue
-        _average_from!(states[pl.patch], pl.buf, pl.mine)
+        _combine_from!(states[pl.patch], pl.buf, pl.mine, wself(pl))
     end
     return states
 end

@@ -287,6 +287,9 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         for lt in child.transfers
             _restrict_patch!(solver, states, lt)
         end
+        # The restriction can change nodes beside a tile interface of this
+        # level; its neighbors' ghosts must see them before the next substep.
+        _sync_level!(solver, states, lev)
     end
     return states
 end
