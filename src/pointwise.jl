@@ -22,7 +22,7 @@
 # forms, so the bodies read identically on either path; the gas-model EOS
 # objects adapt to coefficient mirrors at launch time (`physics.jl`).
 # `Nasa9Mixture` has no mirror yet: it needs the fixed-width interval table
-# (reference/AMR_GPU.md, roadmap).
+# (reference/AMR_GPU.md, open numerics).
 
 using KernelAbstractions
 using KernelAbstractions: get_backend, synchronize

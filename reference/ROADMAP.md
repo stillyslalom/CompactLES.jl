@@ -622,9 +622,9 @@ reference-implementation pass that headed this list are done
    framing in `AMR_GPU.md`'s performance summary). What remains on the
    GPU track: an rzadams measurement campaign to re-base the numbers and
    settle the fence-floor routes, G4b policy selection there, the
-   `Nasa9Mixture` device mirror, and the follow-ups recorded in
-   `AMR_GPU.md` (same-level multi-patch on device, an on-device reduced
-   solve).
+   `Nasa9Mixture` device mirror, and the device items of `AMR_GPU.md`'s
+   production-AMR design and sequencing (staged interface records, the
+   device transfer chain, batched cross-tile launches).
 
 The open items from the source comparison
 ([above](#open-work-from-the-source-comparison)) sit alongside these and

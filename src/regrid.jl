@@ -13,7 +13,7 @@
 # bounding box, clamped to the nesting margin, becomes the new refined region.
 # The region is a single box, not a tile set, because the solver carries one
 # level-1 patch and tile clustering only pays once several fine patches exist
-# (reference/AMR_GPU.md, roadmap).
+# (reference/AMR_GPU.md, tiles and adjacency).
 #
 # The new fine state is initialized by the order-6 interpolation of the coarse
 # state, the same operator as the live shell coupling and the right one here
