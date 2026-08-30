@@ -1280,6 +1280,9 @@ end
 function test_refined_decomposed()
     section("distributed two-level refinement")
     u0 = 0.5
+    # Twenty steps of each run: the checks are agreement with serial to
+    # round-off, which every step tests alike, and on an oversubscribed
+    # runner the phase cost is linear in steps (see the callback phase).
     function wave_error(; subcycle, levels=2)
         N = 192
         r1 = BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1))
@@ -1292,7 +1295,7 @@ function test_refined_decomposed()
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) ->
             Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
-        run!(solver, states; tfinal=0.5)
+        run!(solver, states; tfinal=0.5, nmax=20)
         e = 0.0
         for (ps, Q) in CL.eachpatch(solver, states)
             for i in 1:ps.decomp.n_local[1]
@@ -1305,26 +1308,26 @@ function test_refined_decomposed()
     end
     e_static, n_static = wave_error(subcycle=false)
     check("static two-level wave error matches serial",
-          abs(e_static - 6.178253464383943e-10), 1e-12)
+          abs(e_static - 3.237645707088177e-10), 1e-12)
     check("static two-level step count matches serial",
-          abs(n_static - 159), 0.5)
+          abs(n_static - 20), 0.5)
     e_sub, n_sub = wave_error(subcycle=true)
     check("subcycled two-level wave error matches serial",
-          abs(e_sub - 5.946196868222842e-10), 1e-12)
+          abs(e_sub - 3.523323854892624e-10), 1e-12)
     check("subcycled two-level step count matches serial",
-          abs(n_sub - 56), 0.5)
+          abs(n_sub - 20), 0.5)
     # Three levels: the level-2 patch's coupling gathers over the level-1
     # patch's own decomposition, and the recursive driver's substep sequence
     # is collective at every depth.
     e3, n3 = wave_error(subcycle=false, levels=3)
     check("static three-level wave error matches serial",
-          abs(e3 - 6.775497940481046e-10), 1e-12)
-    check("static three-level step count matches serial", abs(n3 - 467), 0.5)
+          abs(e3 - 1.0962919461121601e-10), 1e-12)
+    check("static three-level step count matches serial", abs(n3 - 20), 0.5)
     e3s, n3s = wave_error(subcycle=true, levels=3)
     check("subcycled three-level wave error matches serial",
-          abs(e3s - 6.348908065945125e-10), 1e-12)
+          abs(e3s - 3.545892468537204e-10), 1e-12)
     check("subcycled three-level step count matches serial",
-          abs(n3s - 56), 0.5)
+          abs(n3s - 20), 0.5)
 
     # A tiled level: four 37×37 tiles meeting at a corner, each decomposed
     # over every rank through _amr_dims, coupled by the level's own records.
@@ -1405,14 +1408,16 @@ function test_refined_decomposed()
     initialize!(solver, states, (x, y, z) -> x < 0.45 ?
         Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
         Prim(u=(0, 0, 0), p=0.1, rho=0.125))
-    run!(solver, states; tfinal=0.12, nmax=2000)
+    # To t = 0.03 (265 steps), long enough for one regrid to have moved the
+    # region off its initial offset 160; the full crossing costs 1001 steps.
+    run!(solver, states; tfinal=0.03, nmax=2000)
     region = CL.refined_region(solver)
     fin = all(all(isfinite, parent(Q)) for Q in states)
     check("regridded Sod: finite composite state", fin ? 0.0 : 1.0, 0.5)
-    check("regridded Sod: region tracks as serial (offset 161)",
-          abs(gmax(region.offset[1]) - 161), 0.5)
+    check("regridded Sod: region tracks as serial (offset 149)",
+          abs(gmax(region.offset[1]) - 149), 0.5)
     check("regridded Sod: step count matches serial",
-          abs(gmax(solver.step) - 1001), 0.5)
+          abs(gmax(solver.step) - 265), 0.5)
 end
 
 const SUITE = (

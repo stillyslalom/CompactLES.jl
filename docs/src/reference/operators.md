@@ -88,6 +88,10 @@ plan_transfer
 restrict!
 prolong!
 LevelTransfer
+Level
+nlevels
+refined_region
+level_regions
 sync_levels!
 prolong_level_ghosts!
 restrict_level!
