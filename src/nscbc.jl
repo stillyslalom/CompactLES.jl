@@ -104,15 +104,16 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
     ft = solver.field_tuples
     # Scalars ride in tuples: a splatted kernel-argument tuple longer than 32
     # elements lowers through the dynamic apply and is an InvalidIRError on
-    # device (measured on the first NSCBC device run). bc fields pass in their
-    # own type so the body's promotion reproduces the former plane loop bit
-    # for bit.
+    # device (measured on the first NSCBC device run). The bc carries its own
+    # element type, fixed by the type of `pinf` at construction, so it is
+    # converted to the state's here: an unconverted Float64 field promotes the
+    # whole LODI algebra below to Float64 in a Float32 solver.
     plane_pointwise!(_nscbc_outflow_point!, Q, plane,
                      dQ, solver.eos, solver.rho, solver.u, solver.v, solver.w,
                      solver.p, solver.c, solver.T_ion, solver.cp_mix, ft.Y,
                      ft.grad_u, solver.tmp_a, solver.tmp_b, solver.sensor_sp,
                      solver.inv_h[d], solver.inv_h[t1], solver.inv_h[t2],
-                     (bc.pinf, bc.sigma, bc.beta_t), Lref,
+                     (T(bc.pinf), T(bc.sigma), T(bc.beta_t)), Lref,
                      side == 2, (act1, act2), (d, t1, t2), m,
                      solver.equations.i_energy, solver.equations.n_species)
     return nothing
@@ -272,6 +273,12 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
 
     T = eltype(Q)
     Lref = bc.Lref > 0 ? T(bc.Lref) : solver.L_domain[d]
+    # The bc carries its own element type, fixed by the type of `T_ion` at
+    # construction, and `Prim` targets are Float64 by definition. Both are
+    # converted to the state's type before any arithmetic: an unconverted
+    # Float64 target or relaxation rate promotes the whole LODI algebra below
+    # to Float64 in a Float32 solver.
+    etas = (T(bc.eta_u), T(bc.eta_T), T(bc.eta_t), T(bc.eta_Y))
     t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)   # transverse dims
     m = solver.equations.i_mom
     i_energy = solver.equations.i_energy
@@ -281,14 +288,14 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
         # Constant targets: one launchable plane body, with the composition
         # tuple and field collections materialized at launch.
         ft = solver.field_tuples
-        YT = (bc.Y...,)
+        YT = map(T, (bc.Y...,))   # splat first: `T.(bc.Y)` would allocate
         plane_pointwise!(_nscbc_inflow_point!, Q, plane,
                          dQ, solver.eos, solver.rho, solver.u, solver.v,
                          solver.w, solver.p, solver.c, solver.T_ion,
                          solver.cp_mix, ft.Y, ft.grad_u, ft.grad_Y,
                          solver.tmp_a, solver.tmp_b, solver.inv_h[d],
-                         bc.u, bc.T_ion, YT,
-                         (bc.eta_u, bc.eta_T, bc.eta_t, bc.eta_Y), Lref,
+                         map(T, bc.u), T(bc.T_ion), YT,
+                         etas, Lref,
                          lowface, (d, t1, t2), m, i_energy, n_species)
         return nothing
     end
@@ -306,7 +313,7 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
         pr = bc.target(xcoord(solver, 1, i1), xcoord(solver, 2, i2),
                        xcoord(solver, 3, i3), tnow)
         isnan(pr.T_ion) && error("NSCBCInflowBC target must specify T_ion")
-        uT = pr.u; TT = pr.T_ion; YT = pr.Y
+        uT = map(T, pr.u); TT = T(pr.T_ion); YT = map(T, pr.Y)
         ρ = solver.rho[I]
         c = solver.c[I]
         p = solver.p[I]
@@ -324,15 +331,15 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
         L5c = (un + c) * (dpn + ρ * c * dun)
         L2c = un * (c * c * drn - dpn)
         # Imposed incoming amplitudes (outgoing one kept as computed).
-        rel_ac = bc.eta_u * ρ * c * c * (1 - Ma * Ma) / Lref * (un - uT[d])
+        rel_ac = etas[1] * ρ * c * c * (1 - Ma * Ma) / Lref * (un - uT[d])
         ΔL1 = lowface ? zero(T) : (-rel_ac - L1c)
         ΔL5 = lowface ? (rel_ac - L5c) : zero(T)
-        ΔL2 = bc.eta_T * ρ * c^3 * (TT - Tp) / (Lref * Tp) - L2c
+        ΔL2 = etas[2] * ρ * c^3 * (TT - Tp) / (Lref * Tp) - L2c
         Δd1 = ΔL2 / (c * c) + (ΔL5 + ΔL1) / (2 * c * c)
         Δd2 = (ΔL5 + ΔL1) / 2
         Δd3 = (ΔL5 - ΔL1) / (2 * ρ * c)
-        Δd4 = bc.eta_t * K * (vel[t1][I] - uT[t1]) - un * solver.grad_u[d, t1][I]
-        Δd5 = bc.eta_t * K * (vel[t2][I] - uT[t2]) - un * solver.grad_u[d, t2][I]
+        Δd4 = etas[3] * K * (vel[t1][I] - uT[t1]) - un * solver.grad_u[d, t1][I]
+        Δd5 = etas[3] * K * (vel[t2][I] - uT[t2]) - un * solver.grad_u[d, t2][I]
         # Mixture quantities for the energy mapping, through the EOS contract.
         cpm = solver.cp_mix[I]
         φ = eos_phi(solver.eos, ρ, p, Tp, cpm)
@@ -341,7 +348,7 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
         uv = (u1, u2, u3)
         ΣφY = zero(T)
         for k in 1:n_species
-            ΔLs = bc.eta_Y * K * (solver.Y[k][I] - YT[k]) -
+            ΔLs = etas[4] * K * (solver.Y[k][I] - YT[k]) -
                   un * solver.grad_Y[d, k][I]
             dQ[I, k] -= solver.Y[k][I] * Δd1 + ρ * ΔLs
             ΣφY += eos_dphi_dY(solver.eos, k, ρ, p, Tp, cpm) * ΔLs

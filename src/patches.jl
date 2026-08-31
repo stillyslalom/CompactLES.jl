@@ -321,12 +321,16 @@ function _unpack!(Q, buf::AbstractVector, r::NTuple{3,UnitRange{Int}})
 end
 
 # Q ← w·Q + (1 − w)·buf over `r`; the equal-weight form keeps the mean's
-# original arithmetic, since the root path is held bitwise against it.
+# original arithmetic, since the root path is held bitwise against it. The half
+# is taken in the state's type: a bare 0.5 widens each Float32 sum to Float64
+# for the multiply, which rounds back to the same value (0.5 scales exactly)
+# but emits a double-precision instruction per point.
 function _combine_from!(Q, buf::AbstractVector, r::NTuple{3,UnitRange{Int}}, w)
     idx = 1
     if w == 0.5
+        half = eltype(Q)(0.5)
         @inbounds for c in 1:size(Q, 4), k in r[3], j in r[2], i in r[1]
-            Q[i, j, k, c] = 0.5 * (Q[i, j, k, c] + buf[idx])
+            Q[i, j, k, c] = half * (Q[i, j, k, c] + buf[idx])
             idx += 1
         end
     else
@@ -358,10 +362,11 @@ function _combine_blocks!(Qa, ra::NTuple{3,UnitRange{Int}},
                           Qb, rb::NTuple{3,UnitRange{Int}}, wa)
     wT = eltype(Qa)(wa)
     vT = one(wT) - wT
+    half = eltype(Qa)(0.5)     # in the state's type; see `_combine_from!`
     @inbounds for c in 1:size(Qa, 4)
         for (ka, kb) in zip(ra[3], rb[3]), (ja, jb) in zip(ra[2], rb[2])
             for (ia, ib) in zip(ra[1], rb[1])
-                m = wa == 0.5 ? 0.5 * (Qa[ia, ja, ka, c] + Qb[ib, jb, kb, c]) :
+                m = wa == 0.5 ? half * (Qa[ia, ja, ka, c] + Qb[ib, jb, kb, c]) :
                                 wT * Qa[ia, ja, ka, c] + vT * Qb[ib, jb, kb, c]
                 Qa[ia, ja, ka, c] = m
                 Qb[ib, jb, kb, c] = m

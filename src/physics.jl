@@ -322,13 +322,13 @@ Adapt.adapt_structure(to, eos::StiffenedGas) =
             T_iona[i, j, k] = positive_floor((p + p_inf) / (ρ * R))
             ca[i, j, k] = sqrt(max(γ * (p + p_inf) * ri, zero(ρ)))
             cpa[i, j, k] = γ * cv
-            Y1[i, j, k] = 1.0
+            Y1[i, j, k] = 1
         else
             ρa[i, j, k] = 1
             ua[i, j, k] = 0; va[i, j, k] = 0; wa[i, j, k] = 0
             pa[i, j, k] = 1; T_iona[i, j, k] = 1; ca[i, j, k] = 1
             cpa[i, j, k] = γ * cv
-            Y1[i, j, k] = 1.0
+            Y1[i, j, k] = 1
         end
     end
     return nothing
@@ -672,7 +672,7 @@ function _primitives!(solver, eos::Nasa9Mixture, Q)
                 pa[i, j, k] = 1; T_iona[i, j, k] = 1; ca[i, j, k] = 1
                 cpa[i, j, k] = 1
                 for sp in 1:n_species
-                    solver.Y[sp][i, j, k] = sp == 1 ? 1.0 : 0.0
+                    solver.Y[sp][i, j, k] = sp == 1 ? 1 : 0
                 end
             end
         end
@@ -760,7 +760,7 @@ primitives!(solver, Q) = _primitives!(solver, solver.eos, Q)
             pa[i, j, k] = 1; T_iona[i, j, k] = 1; ca[i, j, k] = 1
             cpa[i, j, k] = 1
             for sp in 1:n_species
-                Y[sp][i, j, k] = sp == 1 ? 1.0 : 0.0
+                Y[sp][i, j, k] = sp == 1 ? 1 : 0
             end
         end
     end

@@ -64,7 +64,12 @@ function add_source!(source::ConstantBodyForce, solver, dQ, Q, t)
     n_species = solver.equations.n_species
     m1, m2, m3 = solver.equations.i_mom
     i_energy = solver.equations.i_energy
-    g1, g2, g3 = source.acceleration
+    # The source carries its own element type, promoted from the acceleration
+    # components at construction, and the keyword form's default is Float64.
+    # Converting to the state's type keeps the point body's arithmetic there;
+    # an unconverted Float64 component promotes every `rho * g` below.
+    T = eltype(Q)
+    g1, g2, g3 = map(T, source.acceleration)
     pointwise!(_body_force_point!, dQ, nx, ny, nz,
                dQ, Q, g1, g2, g3, n_species, m1, m2, m3, i_energy, o1, o2, o3)
     return dQ

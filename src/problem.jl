@@ -52,7 +52,14 @@ function Prim(; u=(0.0, 0.0, 0.0), p::Real=NaN, T_ion::Real=NaN, rho::Real=NaN,
         error("Prim: specify exactly two of p, rho, and T_ion; the EOS derives " *
               "the third")
     Yt = Tuple(Float64.(Y))
-    abs(sum(Yt) - 1) < 1e-10 || error("Prim: mass fractions must sum to 1")
+    # The sum is taken in Float64, but the entries may arrive in a narrower type
+    # whose own rounding is all the accuracy there is: (0.6f0, 0.4f0) widens to a
+    # sum 3.0e-8 off unity, which a fixed 1e-10 rejects. Scale the tolerance with
+    # the input's eps, as `setup`'s angle_tol does.
+    Ytol = max(1e-10, 8 * length(Yt) *
+                      maximum(x -> Float64(eps(float(typeof(x)))), Y;
+                              init=eps(Float64)))
+    abs(sum(Yt) - 1) < Ytol || error("Prim: mass fractions must sum to 1")
     Prim{length(Yt)}(Yt, Tuple(Float64.(u)), Float64(p), Float64(T_ion), Float64(rho))
 end
 
