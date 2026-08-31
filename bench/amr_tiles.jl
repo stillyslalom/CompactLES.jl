@@ -10,11 +10,12 @@
 #
 # Measured on the workstation (N = 192, r0 = 0.75, w = 0.02, buffer 1):
 # tile 6 covers 41% of the bounding box with 208 tiles of 19² fine nodes
-# (0.41 MB each); tile 12 covers 47% with 80 tiles of 37² (1.1 MB each).
+# (0.40 MB each); tile 12 covers 47% with 80 tiles of 37² (1.1 MB each).
 # Setup costs 0.06–0.12 s per tile in plan construction (N = 96: 64 tiles
-# in 7.6 s, 196 in 11.4 s), which with the padded-scratch memory per tile
-# is why tile edges below about 12 are impractical in 3-D. The warm
-# per-step cost is not yet recorded; the last line of the output is it.
+# in 7.6 s, 196 in 11.4 s), which is why tile edges below about 12 are
+# impractical in 3-D. At tile 6 the patch set totals 60.3 MB against
+# 103.0 MB before the shared RHS workspace (0.207 MB of each tile's
+# 0.398 MB is now pooled), and the warm step is 0.55–0.56 s.
 
 using CompactLES
 const CL = CompactLES
@@ -50,7 +51,12 @@ function main()
     @printf("tile %d: %d tiles at setup (%.1f s), %d after the regrid (%.1f s)\n",
             args.tile, n0, t_setup, length(regs), t_regrid)
     @printf("cover / bounding box = %d / %d = %.3f\n", cover, box, cover / box)
-    @printf("memory per tile ≈ %.2f MB\n", Base.summarysize(solver.patches[2]) / 1e6)
+    # summarysize over the whole vector counts a shared RHS workspace once,
+    # so the total is the figure the pooling moves; the per-tile number counts
+    # the shared set again for each tile and is an upper bound.
+    @printf("patch memory: %.1f MB over %d patches, %.2f MB per tile\n",
+            Base.summarysize(solver.patches) / 1e6, length(solver.patches),
+            Base.summarysize(solver.patches[2]) / 1e6)
     # One step first, so the timed steps exclude compilation of the
     # multi-tile paths.
     run!(solver, states, workspace; tfinal=1.0, nmax=1)

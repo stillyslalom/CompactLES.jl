@@ -49,8 +49,8 @@ function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     # Mixture density over the interior extended two layers along each active
     # dimension: the δ⁴ taps reach that far, and beyond a closed edge the
     # clamped indexing below never reads it.
-    rho = _cpu_storage(coarse.tmp_a) ? coarse.tmp_a :
-          zeros(eltype(Qc), size(coarse.tmp_a))
+    tmp_a = coarse.rhs_workspace.tmp_a
+    rho = _cpu_storage(tmp_a) ? tmp_a : zeros(eltype(Qc), size(tmp_a))
     ext = ntuple(d -> dcp.active[d] ? (-1:n[d]+2) : (1:1), 3)
     @inbounds for k in ext[3], j in ext[2], i in ext[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
@@ -212,7 +212,9 @@ Retag the coarse level and, when the tagged region moved, rebuild the level-1
 patch over it: a new [`Patch`](@ref) and [`LevelTransfer`](@ref) from the
 schemes retained on [`RegridSpec`](@ref), a new fine state initialized by
 order-6 interpolation of the coarse state with surviving fine data copied
-across the region overlap, and fresh workspace arrays for the new extents.
+across the region overlap, and stage arrays for the new extents. The RHS
+scratch is taken from the rank's pool, which the departing patch's set rejoins,
+so a region that moved without changing extent allocates none.
 Returns whether anything changed.
 
 The retry savepoint, when one exists, is refreshed to the post-regrid state:
@@ -254,11 +256,15 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
     old_gather = zeros(T, Nf_old..., n_cons)
     gather_region!(old_gather, ntuple(d -> 1:Nf_old[d], 3), (0, 0, 0),
                    (0, 0, 0), Qf_old, dold, lt.fine_blocks)
+    # The rank's scratch sets, the departing patch's included: a new region of
+    # the same extent takes it over instead of allocating beside it.
+    ws_pool = [patches[1].rhs_workspace, oldfine.rhs_workspace]
     newfine = _build_fine_patch(T, newregion, active_g, getfield(solver, :h),
                                 spec.n_halo, getfield(solver, :comm),
                                 spec.deriv, spec.filt, spec.smoo,
                                 solver.art.smoother, spec.interface_rhs,
-                                spec.backend, solver.equations.n_species,
+                                spec.backend, ws_pool,
+                                solver.equations.n_species,
                                 n_cons, fi, 1)
     newlt = build_level_transfer(T, newregion, active_g, spec.n_halo, [1], fi,
                                  lt.restriction, n_cons,
@@ -365,6 +371,12 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     root = patches[1]
     comm = getfield(solver, :comm)
     faces = _tile_faces(wanted)
+    # The rank's scratch sets before the swap, departing tiles included: a
+    # fresh tile of the lattice edge reuses one rather than allocating, and the
+    # pool grows only for an extent nothing on the rank already carries (an
+    # edge-clipped cell). Whatever no surviving or new patch takes is dropped
+    # with the old patch vector.
+    ws_pool = [p.rhs_workspace for p in patches]
     new_patches = Any[]
     new_states = similar(states, 0)
     new_dQ = similar(workspace.dQ, 0)
@@ -385,7 +397,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
             p = _build_fine_patch(T, tr, active, root.h, spec.n_halo, comm,
                                   spec.deriv, spec.filt, spec.smoo,
                                   solver.art.smoother, spec.interface_rhs,
-                                  spec.backend, solver.equations.n_species,
+                                  spec.backend, ws_pool,
+                                  solver.equations.n_species,
                                   n_cons, idx, 1, faces[ti])
             Q = _state_like(p.rho, n_cons)
             push!(new_states, Q)

@@ -744,11 +744,11 @@ function _gather_box!(dst4, lt::LevelTransfer, states, patches)
     boxoff = _box_offset(lt, active)
     pad = lt.pdecomps[1].n_halo_d
     for (k, ci) in enumerate(lt.coarse_indices)
-        parent = patches[ci]
-        local_r = _patch_local(box, parent.region)
+        parent_patch = patches[ci]
+        local_r = _patch_local(box, parent_patch.region)
         any(isempty, local_r) && continue
-        gather_region!(dst4, local_r, boxoff .- parent.region.offset, pad,
-                       states[ci], parent.decomp, lt.coarse_blocks[k];
+        gather_region!(dst4, local_r, boxoff .- parent_patch.region.offset, pad,
+                       states[ci], parent_patch.decomp, lt.coarse_blocks[k];
                        buffers=lt.box_buffers)
     end
     return dst4
@@ -1052,10 +1052,12 @@ end
 # is region-local node (i, j, k) ↔ parent-level node off + (i, j, k) ↔ that
 # patch's local node minus its region offset ↔ padded index minus the rank's
 # block offset plus the pad.
-function _write_covered_patch!(coarse_Q, src4, win, off, parent::Patch)
-    dp = parent.decomp
+# `parent_patch`, not `parent`: the device branch below calls `Base.parent` on
+# the conserved state, which a parameter of that name shadows.
+function _write_covered_patch!(coarse_Q, src4, win, off, parent_patch::Patch)
+    dp = parent_patch.decomp
     padc = dp.n_halo_d
-    poff = parent.region.offset
+    poff = parent_patch.region.offset
     r = ntuple(3) do d
         # Region-local nodes intersected with this rank's owned patch nodes.
         lo = max(first(win[d]), dp.offset[d] + 1 + poff[d] - off[d])

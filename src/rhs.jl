@@ -82,7 +82,7 @@ end
     if _is_patch_prop(name)
         ps = getfield(s, :patches)
         length(ps) == 1 || _patch_prop_error(name)
-        return getfield(@inbounds(ps[1]), name)
+        return _patch_property(@inbounds(ps[1]), name)
     end
     return getfield(s, name)
 end
@@ -526,6 +526,11 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                         mkd(ring, d) : nothing, 3)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
     bcs_t = ntuple(d -> (bcs[d][1], bcs[d][2]), 3)
+    # One RHS scratch pool per rank, seeded with the root patch's set and
+    # handed to every refined patch below (patches.jl).
+    ws_pool = rhs_workspace_pool(backend, T)
+    ws_root = rhs_workspace!(ws_pool, backend, decomp, n_species, n_cons,
+                             art.detector !== :delta4)
     patch = Patch(1, 0, regions[1], comm, decomp, h,
                   ntuple(d -> (0, 0), 3), bcs_t, folds,
                   deriv_plans, deriv_plans, filter_plans, smooth_plans, ring_plans,
@@ -533,15 +538,10 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   any(fold -> fold !== nothing, folds) ? f() : empty_field(backend, T),
                   f(), f(), f(), f(), f(), f(), f(), f(),
                   [f() for _ in 1:n_species],
-                  [f() for _ in 1:3, _ in 1:3],
-                  (f(), f(), f()),
-                  [f() for _ in 1:3, _ in 1:n_species],
                   f(), f(), f(),
                   [f() for _ in 1:n_species],
-                  f(), f(), f(), f(), f(),
-                  art.detector === :delta4 ? empty_field(backend, T) : f(),
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(), f(),
-                  [f() for _ in 1:3, _ in 1:n_cons])
+                  ws_root)
     if isempty(refines)
         patches = [patch]
         solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
@@ -595,8 +595,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
             idx = length(fines) + 2
             fine = _build_fine_patch(T, tr, active_g, parent_h, n_halo, comm,
                                      deriv, filt, smoo, art.smoother,
-                                     interface_rhs, backend, n_species, n_cons,
-                                     idx, ℓ, faces[ti])
+                                     interface_rhs, backend, ws_pool, n_species,
+                                     n_cons, idx, ℓ, faces[ti])
             pidx = _parents_of(tr, active_g, parent_indices, parent_regions)
             lt = build_level_transfer(T, tr, active_g, n_halo, pidx, idx,
                                       level_restriction, n_cons, subcycle,
@@ -647,12 +647,14 @@ end
 # node space; `h` is the parent level's spacing), shared between the `Solver`
 # constructor and `regrid!`. It takes the schemes, not plans off an existing
 # patch, because a regrid changes the extents and every plan must be
-# rebuilt.
+# rebuilt. `ws_pool` carries the rank's RHS scratch sets: a tile of an extent
+# already held reuses one, and only an unlike extent allocates.
 function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            active_g::NTuple{3,Bool}, h::NTuple{3,T},
                            n_halo::Int, comm::MPI.Comm, deriv, filt, smoo,
                            smoother::Symbol,
                            interface_rhs::Symbol, backend::AbstractBackend,
+                           ws_pool::AbstractVector,
                            n_species::Int, n_cons::Int, id::Int, level::Int,
                            faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3)
                            ) where {T}
@@ -691,21 +693,19 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     splans_f = ntuple(d -> decomp_f.active[d] ? mkf(smoo, d) : nothing, 3)
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
+    # Refinement takes the `:delta4` detector (rejected otherwise at setup),
+    # so no refined patch carries the `:d8` ringing buffer.
+    ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons, false)
     return Patch(id, level, region_f, comm, decomp_f, hf,
                  faces, bcs_f, (nothing, nothing, nothing),
                  dplans_f, vplans_f, fplans_f, splans_f, nothing,
                  empty3, empty3,
                  g(), g(), g(), g(), g(), g(), g(), g(),
                  [g() for _ in 1:n_species],
-                 [g() for _ in 1:3, _ in 1:3],
-                 (g(), g(), g()),
-                 [g() for _ in 1:3, _ in 1:n_species],
                  g(), g(), g(),
                  [g() for _ in 1:n_species],
-                 g(), g(), g(), g(), g(),
-                 empty3,
                  g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
-                 [g() for _ in 1:3, _ in 1:n_cons])
+                 ws)
 end
 
 _fine_bcs(active_g::NTuple{3,Bool}, faces::NTuple{3,NTuple{2,Int}}) =
@@ -752,6 +752,10 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
     icd = ext ? interface_closures(deriv) : nothing
     icf = ext ? interface_closures(filt) : nothing
     nofold = (nothing, nothing, nothing)
+    # One RHS scratch pool for the rank's patches. A partitioned run gives each
+    # rank one patch; a serial one holds every slab, and equal-extent slabs
+    # then share a single set (patches.jl).
+    ws_pool = rhs_workspace_pool(backend, T)
     patches = map(my_pids) do pid
         region = regions[pid]
         faces = faces_all[pid]
@@ -780,20 +784,18 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
         splans = ntuple(d -> dcp.active[d] ? mk(smoo, d) : nothing, 3)
         g() = field(backend, dcp)
         empty3 = zeros(T, 0, 0, 0)
+        # A patched run takes the `:delta4` detector, rejected otherwise at
+        # setup, so no patch carries the `:d8` ringing buffer.
+        ws = rhs_workspace!(ws_pool, backend, dcp, n_species, n_cons, false)
         Patch(pid, 0, region, pcomm, dcp, h, faces, pbcs, nofold,
               dplans, vplans, fplans, splans, nothing,
               empty3, empty3,
               g(), g(), g(), g(), g(), g(), g(), g(),
               [g() for _ in 1:n_species],
-              [g() for _ in 1:3, _ in 1:3],
-              (g(), g(), g()),
-              [g() for _ in 1:3, _ in 1:n_species],
               g(), g(), g(),
               [g() for _ in 1:n_species],
-              g(), g(), g(), g(), g(),
-              empty3,
               g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
-              [g() for _ in 1:3, _ in 1:n_cons])
+              ws)
     end
     ghost_sends, ghost_recvs, plane_pairs = build_interface_records(
         T, world, regions, faces_all, my_pids, [p.decomp for p in patches], n_cons)
@@ -1353,7 +1355,11 @@ same point in the step.
 The primitives, the gradients, the artificial coefficients, `strain_mag`,
 `flux`, and the scratch fields `tmp_a`, `tmp_b`, `sensor` and `sensor_sp` on
 `solver` are all overwritten; so are `pairbuf` and `pairout` wherever a paired
-fold exists, and `ring_buf` under `detector = :d8`. The docstring of
+fold exists, and `ring_buf` under `detector = :d8`. Everything in that list
+except the primitives, the artificial coefficients and the fold pair buffers
+lives on the [`RHSWorkspace`](@ref) this patch shares with the rank's other
+patches of the same extent, so on a multi-patch solver those fields carry the
+patch evaluated last, not this one, once the call returns. The docstring of
 `compute_artificial!` records which of the sensor scratch fields are dead on
 return and may therefore be borrowed by a later phase of the same call.
 

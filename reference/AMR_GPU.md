@@ -216,7 +216,10 @@ convergence guard) have not been justified by any measurement.
 
 `src/patches.jl`. A `Patch` carries a block's place in the global grid
 (`region`), its communicator and `Decomp`, its operator plans and folds, and
-every field array, typed `A <: AbstractArray{T,3}` by the storage backend.
+every persistent field array, typed `A <: AbstractArray{T,3}` by the storage
+backend; the scratch of one right-hand-side evaluation sits on an
+`RHSWorkspace` the rank's patches share (see
+[Tiles and adjacency](#tiles-and-adjacency)).
 `Solver` holds the physics configuration plus this rank's patches; a
 single-patch solver forwards patch-owned property names to its sole patch,
 so the single-patch code path is the old code path. Routines between the
@@ -513,11 +516,13 @@ guarded somewhere; none should be re-derived.
    values: distributing the chains by component recovered the cost
    advantage (85% → 49% of uniform-fine wall) while keeping serial results
    bit-identical.
-3. **KA-CPU equality cannot certify the device path.** Three defects passed
+3. **KA-CPU equality cannot certify the device path.** Four defects passed
    every KA-CPU test and failed only on real device storage (an un-adapted
    kernel argument, the >32-element splat, host-typed placeholders in
-   `_build_fine_patch`). On the KA CPU backend device arrays *are* host
-   arrays.
+   `_build_fine_patch`, and a parameter named `parent` shadowing
+   `Base.parent` in the covered-region write, whose host branch never calls
+   it). On the KA CPU backend device arrays *are* host arrays, and the last
+   of those shows the branch need not be a kernel to be device-only.
 4. **A `Vector` of arrays as a kernel argument hangs; adaptation is a
    design surface.** Every new collection that reaches a kernel needs its
    adapt story decided first.
@@ -675,27 +680,38 @@ regrid tracks the Sod shock through lattice cells that stay contiguous. On
 an annular tag set in 2-D (`bench/amr_tiles.jl`, N = 192) the cover is 41%
 of the bounding box at tile 6 and 47% at tile 12.
 
-Costs, measured and not. Every tile carries the full set of padded scratch
-fields (0.4 MB per 19² tile, 1.1 MB per 37², 2.5 MB per 73² in 2-D; the
-pad inflates a 19³ tile 2.9×), and setup costs 0.06–0.12 s per tile in
-plan construction; both argue for tile edges of 12 or more in 3-D, and the
-memory half has a design answer not yet built: a rank advances its tiles
-sequentially, so the ~30 scratch fields could be one per-level pool sized
-to the largest tile instead of one set per tile, leaving only state and
-geometry per tile. The warm per-step cost of a tiled level has not been
-measured cleanly (the runs taken so far include compilation or shared the
-machine with other jobs); `bench/amr_tiles.jl` now times steps after a
-warm-up and is the instrument. A rough count says the RHS work of the
-tiles, at 3 substeps per root step over padded extents, should dominate
-and land near 2 s per subcycled step for 40 tiles of 37² on a 96² root;
-the cold measurement was 8–10 s, so a real overhead may remain. Separately,
+Costs, measured and not. Setup costs 0.06–0.12 s per tile in plan
+construction, which argues for tile edges of 12 or more in 3-D. A rank
+advances its tiles in sequence and nothing in the right-hand side's scratch
+outlives the evaluation that filled it, so the gradients, the sensor fields
+and their scratch, and the assembled fluxes live on an `RHSWorkspace`
+(`src/patches.jl`) shared by every patch of equal padded extent; the
+conserved state, the artificial coefficients, the primitives and the geometry
+remain per tile, each for a reason recorded on that type. Sharing is keyed on
+the padded extent rather than served as views of one largest allocation, so
+every array a patch holds is the one it would have allocated alone, with its
+own storage type and strides, and the host and device routing is untouched; a
+lattice level's tiles carry equal extents by construction, so the key costs
+nothing. Measured on the annular case (N = 192, tile 6, 208 tiles of 19²
+plus the root): 103.0 MB over the patch set before, 60.3 MB after, a factor
+of 1.71, with 0.207 MB of each tile's 0.398 MB now shared.
+
+The warm per-step wall of that same case is 0.55 s before the pooling and
+0.56 s after, at one rank on 16 threads, which is inside the run-to-run
+spread; `bench/amr_tiles.jl` times steps after a warm-up and is the
+instrument. That is the first clean reading for a tiled level, and it does
+not settle the earlier open question, which was posed at a different
+configuration: a rough count says the RHS work of the tiles, at 3 substeps
+per root step over padded extents, should dominate and land near 2 s per
+subcycled step for 40 tiles of 37² on a 96² root, where the cold measurement
+was 8–10 s, so a real overhead may remain there. Separately,
 any 2-D case at np = 8 on the workstation runs at ~7 s/step, one patch or
 four tiles alike, against ~0.5 s at np = 4: a machine pathology of the
 kind `CLUSTER.md` records for hybrid cores, not a tile cost, and the
 reason the MPI suite's tiled check is bounded to ten steps. Under MPI
 every tile is decomposed over every rank, so each tile pays the whole
 rank set's collective latency per imposition; sub-communicators
-(sequencing item 5) are the fix and become urgent at the first many-tile
+(sequencing item 3) are the fix and become urgent at the first many-tile
 production run.
 
 Fixed tiles were chosen over Berger–Rigoutsos for three reasons: equal
@@ -865,13 +881,26 @@ Each item names its gate. Nothing is built ahead of the item before it.
    count per rank the block table assumes, and the full-communicator
    gather tables on every `LevelTransfer` are structural, and diagnostics
    or I/O built on them would be rebuilt once ranks hold different tile
-   subsets. The scratch-memory answer belongs here too, and it is not a
-   single pool: `mu_art`/`beta_art`/`kappa_art`/`D_art` survive into the
-   next `max_rate`, the primitives must be current on every tile for the
-   prepared first stage, `du` persists across stages, and geometry is
-   persistent; so `Patch` splits into persistent state/geometry and an
-   ephemeral RHS workspace, and only the latter is pooled per concurrently
-   advanced tile. Minimal hysteresis lands with this item so rebalancing
+   subsets. The patch/workspace split is delivered: `mu_art`/`beta_art`/
+   `kappa_art`/`D_art` survive into the next `max_rate`, the primitives must
+   be current on every tile for the prepared first stage, `du` persists
+   across stages, and geometry is persistent, so `Patch` keeps those and the
+   gradients, sensors, sensor scratch and assembled fluxes move to an
+   `RHSWorkspace` shared by the rank's patches of equal padded extent
+   (`src/patches.jl`; measurement under
+   [Tiles and adjacency](#tiles-and-adjacency)). Gate held: the whole serial
+   and MPI gate reproduces, `test/convergence.jl` bit-identically and
+   `test/validation.jl` to every printed digit, with no change to the
+   `bench/jetcheck.jl` reports or to the per-step allocation
+   `bench/audit.jl` measures; and the sharing itself is guarded in
+   `test/level_tests.jl`, since no other figure in the gate moves if the
+   pooling silently stops. Two sensor fields are pooled despite a reader
+   outside the RHS: `scalar_field(solver, :strain_mag)` and `:sensor` take a
+   `Solver` and read through the single-patch property forwarding, so they
+   are reachable only where the pool is one patch's own set, and a
+   multi-patch output path will have to take storage of its own.
+   Sub-communicators and the weighted SFC partitioning remain unbuilt. Minimal
+   hysteresis lands with this item so rebalancing
    is not driven by tile flicker, and the covered-mask data model is
    defined here even if the diagnostic conversion follows. Gate: the
    implosion case at a rank count for which every-rank-on-every-level

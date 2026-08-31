@@ -75,7 +75,7 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 118 testsets, 0 failures
+julia --project=. test/runtests.jl        # 119 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
@@ -85,7 +85,7 @@ julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
 ```
 
-The `118 testsets` and the `122/122` are counted by different mechanisms and are
+The `119 testsets` and the `122/122` are counted by different mechanisms and are
 not comparable. `runtests.jl` reports `@testset` blocks under `Test`, each
 holding many `@test`s, and its includes (`float32_validation.jl`,
 `device_tests.jl`, `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, and the
@@ -200,6 +200,17 @@ Names are spelled out in full. Current vocabulary:
   drivers takes a `SolverLike` (single-patch `Solver` or `PatchSolver`), and
   a single-patch `Solver` forwards patch-owned property names to its sole
   patch, so `solver.rho` and `solver.decomp` still read as before
+- `rhs_workspace` (an `RHSWorkspace`: the scratch of one right-hand-side
+  evaluation, `grad_u`, `grad_T_ion`, `grad_Y`, `strain_mag`, `sensor`,
+  `sensor_sp`, `tmp_a`, `tmp_b`, `ring_buf`, and `flux`, held once per
+  distinct padded local extent on a rank rather than once per patch, since a rank
+  advances its patches in sequence and none of it outlives the evaluation
+  that filled it; a level's tiles share one set), `rhs_workspace_pool` and
+  `rhs_workspace!` (the pool and its lookup on that extent; a regrid seeds
+  the pool from the sets its patches already hold, departing tiles
+  included). The names reach callers through the same property forwarding, so
+  `solver.grad_u` and `solver.tmp_a` read as before, and
+  `_is_workspace_prop` is the branch that routes them
 - `refine` (a `BlockRegion` in the parent level's node space, or a vector
   of them for a nested chain), `levels` (a `Vector{Level}`, root first;
   each `Level` holds `index`, `patches` as indices into `solver.patches`,

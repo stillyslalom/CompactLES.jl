@@ -1,8 +1,12 @@
 # Patch abstraction: per-patch state split out of the solver configuration.
 #
 # A Patch is a logically rectangular block of uniform resolution carrying its
-# own communicator, decomposition, operator plans, folds, and every field
-# array, typed A <: AbstractArray{T,3} against the storage backend. The
+# own communicator, decomposition, operator plans, folds, and every persistent
+# field array, typed A <: AbstractArray{T,3} against the storage backend. The
+# scratch of a right-hand-side evaluation is not per patch: it lives on an
+# RHSWorkspace shared by the rank's patches of equal padded extent, since a
+# rank advances them in sequence and nothing in that scratch outlives the
+# evaluation that filled it. The
 # Solver in rhs.jl keeps the physics configuration and the run clock,
 # plus the vector of this rank's patches in global order. In the common case of
 # one patch spanning all ranks, that patch's decomposition is built over
@@ -44,16 +48,110 @@
 # both).
 
 """
+    RHSWorkspace
+
+The scratch fields of one right-hand-side evaluation, shared by every patch on
+a rank whose padded local extent matches. A rank advances its patches in
+sequence and every value in these arrays is consumed before the next patch's
+`compute_rhs!` begins, so one set serves them all; only the persistent state
+and geometry on [`Patch`](@ref) are per patch. A tiled level's lattice cells
+carry equal extents by construction, so its tiles hold one set between them,
+a cell clipped at the domain edge excepted.
+
+The split follows the lifetimes, not the naming: `mu_art`/`beta_art`/
+`kappa_art`/`D_art` survive into the next step's [`max_rate`](@ref), the
+primitives must be current on every patch for a `prepared` first stage, and
+the geometry never changes, so all three groups stay on the patch. What
+remains is written and read inside one patch's own RHS: the gradients, the
+sensor fields and their scratch, and the assembled fluxes.
+
+Two fields with a reader outside the RHS are here nonetheless.
+`scalar_field(solver, :strain_mag)` and `:sensor` expose the smoothed sensors
+for output after a step, but that method takes a `Solver` and reads through
+the single-patch property forwarding, so it is reachable only where the pool
+is that one patch's own set; on a multi-patch solver the forward refuses the
+name outright. A multi-patch output path has to take storage of its own.
+
+`pairbuf`/`pairout` stay on the patch instead: their allocation follows that
+patch's coordinate folds, and a fold is rejected on every patched and refined
+run, so they are never duplicated across a rank's patches.
+"""
+struct RHSWorkspace{T,A<:AbstractArray{T,3}}
+    grad_u::Matrix{A}
+    grad_T_ion::NTuple{3,A}
+    grad_Y::Matrix{A}
+    strain_mag::A
+    sensor::A
+    sensor_sp::A
+    tmp_a::A
+    tmp_b::A
+    ring_buf::A                    # detector = :d8 only; empty otherwise
+    flux::Matrix{A}                # flux[d, c]
+end
+
+"""
+    RHSWorkspace(backend, decomp, n_species, n_cons, ring)
+
+Allocate one scratch set on `backend` for a patch decomposed as `decomp`.
+`ring` selects the `detector = :d8` ringing buffer, which is a zero-extent
+placeholder under the default `:delta4`.
+"""
+function RHSWorkspace(backend::AbstractBackend, decomp::Decomp{T},
+                      n_species::Int, n_cons::Int, ring::Bool) where {T}
+    f() = field(backend, decomp)
+    return RHSWorkspace([f() for _ in 1:3, _ in 1:3],
+                        (f(), f(), f()),
+                        [f() for _ in 1:3, _ in 1:n_species],
+                        f(), f(), f(), f(), f(),
+                        ring ? f() : empty_field(backend, T),
+                        [f() for _ in 1:3, _ in 1:n_cons])
+end
+
+"An empty, concretely typed pool of [`RHSWorkspace`](@ref) sets for `backend`."
+rhs_workspace_pool(backend::AbstractBackend, ::Type{T}) where {T} =
+    RHSWorkspace{T,typeof(empty_field(backend, T))}[]
+
+"""
+    rhs_workspace!(pool, backend, decomp, n_species, n_cons, ring)
+
+The [`RHSWorkspace`](@ref) serving a patch decomposed as `decomp`: an existing
+set of `pool` whose arrays already carry the padded extent this patch needs,
+or a fresh one appended to `pool`. Sharing is keyed on the padded extent alone,
+so every array a patch is handed is the one it would have allocated for
+itself, with its own storage type and strides; a level's equal-extent tiles
+therefore collapse onto one set without any patch seeing a view or a reshape.
+Callers seed `pool` with the workspaces already in use on the rank, which is
+how a regrid grows it: a new tile whose extent is unlike anything held gets
+its own set, and a departing tile's is available to a replacement of the same
+size.
+"""
+function rhs_workspace!(pool::AbstractVector, backend::AbstractBackend,
+                        decomp::Decomp{T}, n_species::Int, n_cons::Int,
+                        ring::Bool) where {T}
+    n = ntuple(d -> decomp.n_local[d] + 2 * decomp.n_halo_d[d], 3)
+    for w in pool
+        size(w.tmp_a) == n && (!isempty(w.ring_buf) == ring) && return w
+    end
+    w = RHSWorkspace(backend, decomp, n_species, n_cons, ring)
+    push!(pool, w)
+    return w
+end
+
+"""
     Patch
 
 Per-patch state of a [`Solver`](@ref): the patch's place in the global grid
 (`region`, in global node index space), its communicator and [`Decomp`](@ref),
-its operator plans and folds, and every field array, typed
-`A <: AbstractArray{T,3}` by the storage backend. Constructed by `Solver`;
-user code normally reaches these fields through the solver (which forwards
-them for a single-patch run) without holding a `Patch` directly.
+its operator plans and folds, and every persistent field array, typed
+`A <: AbstractArray{T,3}` by the storage backend. The scratch of a
+right-hand-side evaluation is not per patch; it lives on the
+[`RHSWorkspace`](@ref) this patch shares with the rank's other patches of the
+same extent, and the property forwarding below reaches it by the same names as
+before. Constructed by `Solver`; user code normally reaches these fields
+through the solver (which forwards them for a single-patch run) without
+holding a `Patch` directly.
 """
-struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,TF}
+struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,W,TF}
     id::Int
     level::Int
     region::BlockRegion                     # offset + extent, in this LEVEL's node
@@ -79,16 +177,10 @@ struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,TF}
     rho::A; u::A; v::A; w::A
     p::A; T_ion::A; c::A; cp_mix::A
     Y::Vector{A}
-    # gradients
-    grad_u::Matrix{A}
-    grad_T_ion::NTuple{3,A}
-    grad_Y::Matrix{A}
-    # artificial properties and scratch
+    # artificial properties: written by one RHS and read by the next step's
+    # max_rate, so they outlive the evaluation that fills them
     mu_art::A; beta_art::A; kappa_art::A
     D_art::Vector{A}
-    strain_mag::A; sensor::A; sensor_sp::A
-    tmp_a::A; tmp_b::A
-    ring_buf::A
     # geometry
     inv_J::A
     area_d::NTuple{3,A}
@@ -97,13 +189,16 @@ struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,TF}
     cot_over_r::A
     # discrete-GCL cotθ/r (metric.jl gcl_cotr!): read by the momentum sources only
     cot_over_r_gcl::A
-    # fluxes flux[d, c]
-    flux::Matrix{A}
+    # The RHS scratch set (RHSWorkspace), shared with the rank's other patches
+    # of the same padded extent. Its names reach callers through the property
+    # forwarding below, so `solver.grad_u` and `solver.tmp_a` read as before.
+    rhs_workspace::W
     # The same collections as isbits-adaptable tuples (FieldVector /
     # FieldMatrix, pointwise.jl): what the pointwise per-point bodies index,
     # since a Vector or Matrix kernel argument hangs a device launch. Same
-    # array objects, no copies; the convenience constructor below derives
-    # them.
+    # array objects, no copies (`Y` and `D_art` off the patch, `grad_u`,
+    # `grad_Y` and `flux` off the workspace); the convenience constructor
+    # below derives them.
     field_tuples::TF
 end
 
@@ -113,26 +208,34 @@ end
 function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                deriv_plans, div_plans, filter_plans, smooth_plans, ring_plans,
                pairbuf, pairout, rho, u, v, w, p, T_ion, c, cp_mix, Y,
-               grad_u, grad_T_ion, grad_Y, mu_art, beta_art, kappa_art, D_art,
-               strain_mag, sensor, sensor_sp, tmp_a, tmp_b, ring_buf,
-               inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl, flux)
+               mu_art, beta_art, kappa_art, D_art,
+               inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
+               rhs_workspace)
     field_tuples = (Y=FieldVector(Y), D_art=FieldVector(D_art),
-                    grad_u=FieldMatrix(grad_u), grad_Y=FieldMatrix(grad_Y),
-                    flux=FieldMatrix(flux))
+                    grad_u=FieldMatrix(rhs_workspace.grad_u),
+                    grad_Y=FieldMatrix(rhs_workspace.grad_Y),
+                    flux=FieldMatrix(rhs_workspace.flux))
     return Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                  deriv_plans, div_plans, filter_plans, smooth_plans,
                  ring_plans, pairbuf, pairout, rho, u, v, w, p, T_ion, c,
-                 cp_mix, Y, grad_u, grad_T_ion, grad_Y, mu_art, beta_art,
-                 kappa_art, D_art, strain_mag, sensor, sensor_sp, tmp_a,
-                 tmp_b, ring_buf, inv_J, area_d, inv_h, inv_r, cot_over_r,
-                 cot_over_r_gcl, flux, field_tuples)
+                 cp_mix, Y, mu_art, beta_art, kappa_art, D_art,
+                 inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
+                 rhs_workspace, field_tuples)
 end
 
-# Property names owned by the patch, not the solver configuration.
-# `Base.getproperty(::Solver, name)` forwards these to the sole patch of a
-# single-patch solver, and `PatchSolver` routes them per patch. The test is a
-# `===` chain, allowing a literal property name to constant-fold to a plain
-# `getfield` at every call site.
+# Property names owned by the patch's shared [`RHSWorkspace`](@ref) rather than
+# by the patch itself. Split out of the test below so that one `===` chain
+# still decides both questions at a literal call site.
+@inline _is_workspace_prop(n::Symbol) =
+    n === :grad_u || n === :grad_T_ion || n === :grad_Y ||
+    n === :strain_mag || n === :sensor || n === :sensor_sp ||
+    n === :tmp_a || n === :tmp_b || n === :ring_buf || n === :flux
+
+# Property names owned by the patch or its workspace, not by the solver
+# configuration. `Base.getproperty(::Solver, name)` forwards these to the sole
+# patch of a single-patch solver, and `PatchSolver` routes them per patch. The
+# test is a `===` chain, allowing a literal property name to constant-fold to a
+# plain `getfield` at every call site.
 @inline _is_patch_prop(n::Symbol) =
     n === :decomp || n === :bcs || n === :folds || n === :faces ||
     n === :region || n === :h || n === :deriv_plans || n === :div_plans ||
@@ -140,13 +243,15 @@ end
     n === :pairbuf || n === :pairout ||
     n === :rho || n === :u || n === :v || n === :w ||
     n === :p || n === :T_ion || n === :c || n === :cp_mix || n === :Y ||
-    n === :grad_u || n === :grad_T_ion || n === :grad_Y ||
     n === :mu_art || n === :beta_art || n === :kappa_art || n === :D_art ||
-    n === :strain_mag || n === :sensor || n === :sensor_sp ||
-    n === :tmp_a || n === :tmp_b || n === :ring_buf ||
     n === :inv_J || n === :area_d || n === :inv_h || n === :inv_r ||
     n === :cot_over_r || n === :cot_over_r_gcl ||
-    n === :flux || n === :field_tuples
+    n === :field_tuples || _is_workspace_prop(n)
+
+# The read behind both forwards: a workspace name takes one further hop.
+@inline _patch_property(p::Patch, n::Symbol) =
+    _is_workspace_prop(n) ? getfield(getfield(p, :rhs_workspace), n) :
+                            getfield(p, n)
 
 """
     PatchSolver(solver, patch)
@@ -166,7 +271,7 @@ struct PatchSolver{T,S,P<:Patch{T}}
 end
 
 @inline function Base.getproperty(ps::PatchSolver, name::Symbol)
-    _is_patch_prop(name) && return getfield(getfield(ps, :patch), name)
+    _is_patch_prop(name) && return _patch_property(getfield(ps, :patch), name)
     name === :solver && return getfield(ps, :solver)
     name === :patch && return getfield(ps, :patch)
     return getproperty(getfield(ps, :solver), name)

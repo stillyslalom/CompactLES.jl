@@ -561,6 +561,39 @@ end
     @test all(parent(states[i]) == snapshot[i] for i in eachindex(states))
 end
 
+@testset "tiled level: one RHS workspace per padded extent" begin
+    # A rank advances its patches in sequence and nothing in the RHS scratch
+    # outlives the evaluation that filled it, so that scratch is pooled on the
+    # padded local extent (patches.jl): a lattice level's tiles, whose extents
+    # are equal by construction, hold one set between them. Nothing else in the
+    # gate moves if the pooling silently stops.
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
+                    refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6)
+    padded(p) = ntuple(d -> p.decomp.n_local[d] + 2 * p.decomp.n_halo_d[d], 3)
+    extents = unique(padded(p) for p in solver.patches)
+    sets = unique(objectid(p.rhs_workspace) for p in solver.patches)
+    @test length(solver.patches) == 5          # the root slab plus four tiles
+    @test length(extents) == 2                 # the root's extent and the tiles'
+    @test length(sets) == length(extents)
+    @test all(p.rhs_workspace === solver.patches[2].rhs_workspace
+              for p in solver.patches[2:end])
+    @test solver.patches[1].rhs_workspace !== solver.patches[2].rhs_workspace
+    # Whatever a patch is handed carries that patch's own extent.
+    @test all(size(p.rhs_workspace.tmp_a) == padded(p) for p in solver.patches)
+    @test all(size(p.rhs_workspace.flux[1, 1]) == padded(p) for p in solver.patches)
+    # The single-patch property forwarding serves the workspace's own arrays,
+    # and the launchable wrappers hold those same objects.
+    single = Solver(n_global=(16, 16, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3l)
+    ws = single.patches[1].rhs_workspace
+    @test single.tmp_a === ws.tmp_a && single.tmp_b === ws.tmp_b
+    @test single.sensor === ws.sensor && single.strain_mag === ws.strain_mag
+    @test single.grad_u === ws.grad_u && single.flux === ws.flux
+    @test single.field_tuples.grad_u[1, 1] === ws.grad_u[1, 1]
+    @test single.field_tuples.flux[1, 1] === ws.flux[1, 1]
+    @test single.field_tuples.Y[1] === single.patches[1].Y[1]
+end
+
 @testset "tiled regrid seeds fresh tiles from surviving neighbors" begin
     wall2 = (SlipWallBC(), SlipWallBC())
     per = (PeriodicBC(), PeriodicBC())
