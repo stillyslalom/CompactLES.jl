@@ -1446,6 +1446,122 @@ function test_tiled_level()
     end
 end
 
+# ---------------------------------------------------------------------------
+# Per-level rank subsets. A refined level too small to give every rank nine
+# fine points is owned by a prefix of the ranks instead of failing at setup,
+# and its level-local collectives run on that subset's communicator.
+# Three fine extents pin the sizing: 22 nodes admit two ranks and no more
+# (22 ÷ 3 = 7), 10 admit one, and 70 admit seven. Agreement with the serial
+# answer is round-off, not bitwise, because a subset is a different
+# decomposition of the fine patch; that is the tier the two-patch and
+# distributed-refinement phases already use.
+# ---------------------------------------------------------------------------
+function test_level_subset()
+    section("per-level rank subsets")
+    N = 192
+    u0 = 0.5
+    # A refined region of `ext` coarse nodes at the middle of the domain,
+    # advanced twenty steps. With `landing`, an `EveryTime` trigger shortens
+    # the steps approaching each scheduled instant; a rank outside the
+    # level's subset holds no state from which that shortening follows, so
+    # its agreement rests on the global dt reduction alone. `fires` counts
+    # the firings this rank saw.
+    function wave(ext; subcycle=false, landing=false)
+        solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                        art=ArtParams(enabled=false), filter_interval=0,
+                        subcycle=subcycle,
+                        refine=BlockRegion((N ÷ 2, 0, 0), (ext, 1, 1)))
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) ->
+            Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
+        fires = Ref(0)
+        cb = landing ?
+             Callback(EveryTime(0.02), (_, _) -> (fires[] += 1; nothing)) : nothing
+        run!(solver, states; tfinal=0.5, nmax=20, callback=cb)
+        e = 0.0
+        for (ps, Q) in CL.eachpatch(solver, states)
+            for i in 1:ps.decomp.n_local[1]
+                I = gidx(ps, i, 1, 1)
+                e = max(e, abs(Q[I, 1] - (1.0 + 0.2 * sin(xcoord(ps, 1, i) -
+                                                          u0 * solver.t))))
+            end
+        end
+        owners = MPI.Allreduce(Int(solver.levels[2].level_comm.owned), +, comm)
+        return solver, gmax(e), owners, fires[]
+    end
+    spread(x) = MPI.Allreduce(Float64(x), max, comm) -
+                MPI.Allreduce(Float64(x), min, comm)
+
+    # Twenty-two fine nodes: two ranks, so np = 2 owns the level whole and
+    # np = 4 and 8 own it on a prefix.
+    s8, e8, own8, _ = wave(8)
+    check("22-node level takes two ranks", abs(own8 - min(np, 2)), 0.5)
+    check("subset-owned level: wave error matches serial",
+          abs(e8 - 1.3106626894909823e-11), 1e-13)
+    check("subset-owned level: step count matches serial", abs(s8.step - 20), 0.5)
+    s8s, e8s, _, _ = wave(8; subcycle=true)
+    check("subcycled subset-owned level: wave error matches serial",
+          abs(e8s - 9.6783026037883246e-11), 1e-13)
+    check("subcycled subset-owned level: step count matches serial",
+          abs(s8s.step - 20), 0.5)
+
+    # Ten fine nodes cannot be split at all: without a one-rank subset this
+    # configuration admits no process grid at any np > 1.
+    s4, e4, own4, _ = wave(4)
+    check("10-node level takes one rank", abs(own4 - 1), 0.5)
+    check("one-rank level: wave error matches serial",
+          abs(e4 - 2.0219825813683201e-11), 1e-13)
+    check("one-rank level: step count matches serial", abs(s4.step - 20), 0.5)
+    # A rank outside the level's subset runs no part of it, yet agrees on
+    # the step sequence and on every trigger: dt comes from one reduction
+    # over the whole run, and `t` and `step` advance from it. The
+    # scheduled trigger also shortens dt on its approach, so a rank that
+    # disagreed anywhere would land on a different instant.
+    sL, eL, _, firesL = wave(4; landing=true)
+    check("landed one-rank level: wave error matches serial",
+          abs(eL - 1.6264545266153618e-11), 1e-13)
+    check("one-rank level: time agrees on every rank",
+          spread(sL.t), 1e-14 * max(sL.t, 1e-30))
+    check("one-rank level: step agrees on every rank", spread(sL.step), 0.5)
+    check("one-rank level: callback fired equally on every rank",
+          spread(firesL), 0.5)
+    check("one-rank level: callback fired as serially",
+          abs(firesL - 2), 0.5)
+
+    # Regridding under subset ownership: the region grows from 8 coarse nodes
+    # (22 fine, two ranks) to 24 (70 fine, seven), so the subset is resized
+    # and the communicator it replaces is freed rather than left to the
+    # garbage collector, as a dropped `Decomp` is.
+    wall2 = (SlipWallBC(), SlipWallBC())
+    solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                    bcs=(wall2, per3[2], per3[3]), cfl=0.2,
+                    refine=BlockRegion((180, 0, 0), (8, 1, 1)),
+                    subcycle=true, regrid_interval=20, tag_buffer=2)
+    lc0 = solver.levels[2].level_comm
+    owners0 = MPI.Allreduce(Int(lc0.owned), +, comm)
+    states = allocate_state(solver)
+    initialize!(solver, states, (x, y, z) -> x < 0.45 ?
+        Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+        Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+    # Forty-one steps: two regrids, the second of which resizes the subset.
+    run!(solver, states; tfinal=0.03, nmax=41)
+    region = CL.refined_region(solver)
+    owners1 = MPI.Allreduce(Int(solver.levels[2].level_comm.owned), +, comm)
+    fin = all(all(isfinite, parent(Q)) for Q in states)
+    check("regrid: setup subset is two ranks", abs(owners0 - min(np, 2)), 0.5)
+    check("regrid: subset recomputed for the grown region",
+          abs(owners1 - min(np, 7)), 0.5)
+    check("regrid: the replaced level communicator was freed",
+          (!lc0.scoped || lc0.comm == MPI.COMM_NULL) ? 0.0 : 1.0, 0.5)
+    check("regrid under subsets: finite composite state", fin ? 0.0 : 1.0, 0.5)
+    check("regrid under subsets: region offset tracks as serial (171)",
+          abs(gmax(region.offset[1]) - 171), 0.5)
+    check("regrid under subsets: region extent tracks as serial (24)",
+          abs(gmax(region.extent[1]) - 24), 0.5)
+    check("regrid under subsets: time reached matches serial",
+          abs(gmax(solver.t) - 0.0055480541568169563), 1e-13)
+end
+
 const SUITE = (
     ("periodic C6", test_periodic_c6),
     ("pentadiagonal C10", test_pentadiagonal_c10),
@@ -1453,6 +1569,7 @@ const SUITE = (
     ("device line solves", test_device_lines),
     ("staged device exchange", test_staged_exchange),
     ("distributed refinement", test_refined_decomposed),
+    ("level rank subsets", test_level_subset),
     ("tiled refinement", test_tiled_level),
     ("AMR transfer pair", test_transfer_pair),
     ("halo consistency", test_halo_consistency),

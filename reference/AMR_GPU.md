@@ -45,9 +45,10 @@ One solver runs on four axes of configuration, combinable except where
   at a global timestep or Berger–Oliger subcycled recursively; a two-level
   hierarchy can move under sensor-driven tagging and regridding, tiles
   entering and leaving the set (`src/levels.jl`, `src/regrid.jl`).
-- **Distribution**: both levels decompose over the whole rank set; the level
-  coupling gathers replicated region data and distributes its interpolation
-  chains by conserved component.
+- **Distribution**: each level decomposes over its own rank subset, a prefix
+  of its parent's chosen as the largest count the scheme minimum admits; the
+  level coupling gathers replicated region data and distributes its
+  interpolation chains by conserved component.
 - **Storage backend**: `CPUBackend` (`Array`s, `@threaded` loops) or
   `DeviceBackend(ka)` wrapping any KernelAbstractions backend. A
   device-resident solver (decomposed, refined, regridding, Float64 or
@@ -60,9 +61,10 @@ plans or their device mirrors (`src/lines_device.jl`) behind one
 beyond the launchers.
 
 What this is not: a production AMR. The tag is one criterion without
-hysteresis, regridding is two-level only, every rank holds every level,
-I/O is single-patch, diagnostics do not mask covered nodes, tiled levels
-are host-only, and the banded (C10) schemes have no interface closures.
+hysteresis, regridding is two-level only, every rank of a level's subset
+holds every tile of it, I/O is single-patch, diagnostics do not mask covered
+nodes, tiled levels are host-only, and the banded (C10) schemes have no
+interface closures.
 Each of these is a structural assumption, and
 [Production AMR: design](#production-amr-design) replaces them.
 
@@ -330,7 +332,8 @@ retry's first RHS) and the low-storage `du` accumulator (0.0·NaN = NaN, so
 failures only; after a *finite* failure the stale coefficients are a
 measured part of the recovery.
 
-**Distribution.** Both levels decompose over the whole rank set, and the
+**Distribution.** Each level decomposes over its own rank subset (see
+[Ownership and load balance](#ownership-and-load-balance)), and the
 coupling runs on a replicated-data, distributed-work split. Data
 replicates: `gather_region!` assembles a node region of a distributed field
 on every rank with one Allgatherv (the buffered coarse box per shell
@@ -343,7 +346,8 @@ components c ≡ r (mod np) and shares the thin shell ring through one
 Allgatherv, which moves the same values instead of recomputing them (serial
 results bit-identical) and brought the composite to 49%. Every rank writes
 only the nodes it owns; tagging reduces its bounds globally; the fine patch
-picks its process grid through `_amr_dims`.
+picks its process grid through `_amr_dims` over the rank subset
+[`_level_ranks`](#ownership-and-load-balance) assigns its level.
 
 **The cost case** (`bench/amr_cost.jl`, np = 8): a heavy-gas blob mixing
 case on a 48³ root grid with a subcycled, regridding region covering a
@@ -628,9 +632,10 @@ nodes. The lattice is global so that a regrid never changes a surviving
 tile's region.
 
 Same-level coupling reuses the root machinery: `build_interface_records`
-over the level's tiles (every rank holds a block of every tile, so the
-block table gathers all of them; the tag bound is checked against
-`MPI.tag_ub`), records held on the `Level` and run by `sync_patches!` and,
+over the level's tiles (every rank of the level's subset holds a block of
+every tile, so the block table gathers all of them; the tag bound is checked
+against `MPI.tag_ub`), records held on the `Level`, addressed in the level's
+own communicator, and run by `sync_patches!` and,
 inside the subcycled driver, after every stage of a level. Each face's
 treatment follows the tile's neighbors: the shell imposition writes only
 parent-fed faces (`LevelTransfer.imposed`, applied by `_in_shell`), the
@@ -708,11 +713,16 @@ was 8–10 s, so a real overhead may remain there. Separately,
 any 2-D case at np = 8 on the workstation runs at ~7 s/step, one patch or
 four tiles alike, against ~0.5 s at np = 4: a machine pathology of the
 kind `CLUSTER.md` records for hybrid cores, not a tile cost, and the
-reason the MPI suite's tiled check is bounded to ten steps. Under MPI
-every tile is decomposed over every rank, so each tile pays the whole
-rank set's collective latency per imposition; sub-communicators
-(sequencing item 3) are the fix and become urgent at the first many-tile
-production run.
+reason the MPI suite's tiled check is bounded to ten steps. Under MPI every
+tile is decomposed over every rank of the level's subset, so each tile pays
+that subset's collective latency per imposition rather than the whole run's:
+per-level sub-communicators (sequencing item 3) cut the factor from the rank
+count to the subset size, and the further cut to one tile's owners requires
+the per-tile subsets that item still defers. The level subset is the rank count
+the tiles admit a process grid over, which on a many-tile run with small
+tiles sits far below the rank count; whether the per-tile latency still binds
+after that reduction is a cluster measurement, not a workstation one, and it
+has not been made.
 
 Fixed tiles were chosen over Berger–Rigoutsos for three reasons: equal
 extents let the device batch line solves across a level's tiles (below);
@@ -747,7 +757,14 @@ from the parent; dropped tiles leave, their last restriction already on
 the parent. No carry-over arises, since distinct lattice cells overlap in
 a shared plane at most; that plane takes the neighbor's values at the
 first averaging after the regrid, a one-node perturbation of interpolation
-order. The tag is still evaluated on the host; on the device it becomes a
+order. The one exception is a regrid that resizes the level's rank subset,
+where the new tiles are decomposed over a different communicator and no array
+survives: there a surviving tile's solution is gathered replicated over the
+root communicator while its old decomposition is still live, then written
+back onto the rebuilt tile, as the single-box regrid carries its overlap.
+Lattice cells have equal extents, so this arises only when an edge-clipped
+cell enters or leaves the set. The tag is still evaluated on the host; on the
+device it becomes a
 `pointwise!` body and an exact bounds reduction, so the regrid cadence
 stops being a download.
 
@@ -755,24 +772,95 @@ stops being a download.
 
 Every rank holding every level does not survive a shell of a few hundred
 tiles or a small hot spot on many ranks (constraint 2 via `_amr_dims`).
-Each level gets a sub-communicator at regrid (`MPI.Comm_split`, cheap
-against the regrid), and each tile an owner subset within it, normally one
-rank; the collectives a level runs (`max_rate`, the gathers, the reduced
-solves) run on the level's communicator, and one global reduction at the
-step boundary combines the timesteps. A rank without a tile on level ℓ does
-not enter level ℓ's collectives.
 
-Assignment orders the tiles along a space-filling curve and partitions the
-curve contiguously by weight, so neighbors land on the same rank and most
-same-level exchange stays local. Weight is volume × 3^ℓ (the subcycled step
-count) × an interface factor measured once, since the per-apply
-reduced-solve fence makes small tiles cost more than their volume. Migration
-of a tile to a new owner rides the regrid: rebuild on the new owner and
-carry over through the replicated gather, which is affordable while tiles
-are small and is the point at which the replicated gathers should be
-replaced by rank-partitioned ones if a measured case outgrows them.
-Rebalance only at regrid and only when the measured max/mean of per-rank
-step wall exceeds a threshold.
+**Delivered: per-level ownership** (sequencing item 3, second slice). A level
+is owned by a rank subset of its parent's, and `_level_ranks` sizes that
+subset as the largest count at or below the parent's for which every tile of
+the level admits a process grid under the 9-point minimum. When every tile
+admits the whole parent set, the subset is the parent set: this covers every
+uniform run, every serial run, and every refined run whose region is large
+against the rank count, and there no communicator is created and no code
+path changes. Where the subset is
+smaller, `split_level_comm` splits it off the parent's communicator with
+`MPI.Comm_split` at setup and at the regrid that changed its size, and
+`free_level_comm!` frees it when it is dropped, following the rule already
+applied to a dropped `Decomp`: MPI frees nothing until garbage collection
+finalizes a handle, and a regrid discards one per call.
+
+The subset is the parent communicator's first `np` ranks. Locality-aware
+assignment along a space-filling curve is deferred (below), and a contiguous
+prefix has one structural property for the SFC ordering to preserve:
+prefixes nest, so a rank outside level ℓ is outside every level below it, and
+`Solver.patches` is therefore a *prefix* of the global patch order on every
+rank. Every global patch index a rank can reach means the same thing
+everywhere, and the flat globally ordered patch vector the drivers iterate
+survives unchanged.
+
+The alternative considered was placeholder
+`Patch` entries on non-owning ranks, keeping the vector globally complete at
+the price of a guard at every driver, every interface record and every
+transfer table, and of a `Patch` with no communicator to decompose over; the
+prefix property makes the placeholders unnecessary, and the same-level slab
+layout has always had a rank-dependent patch vector.
+
+Each collective is scoped to the rank set that owns the data it moves:
+
+| collective | communicator | ranks entering |
+|---|---|---|
+| line solves and halo exchange | the patch's `Decomp` | the level's owners |
+| `_sync_level_records!`, `_seed_planes!` | the level's own | the level's owners |
+| `_impose_shell!` ring Allgatherv | the refined patch's `Decomp` | the level's owners |
+| `_gather_box!`, `save_level_box!` | each parent patch's `Decomp` | the parent's owners |
+| `_restrict_patch!` gather | the parent level's own | the parent's owners |
+| `_tag_tiles`, `regrid!`'s carry-over | the root communicator | every rank |
+| `max_rate`, `positivity_floors`, `WhenState` | the root communicator | every rank |
+
+The level's own communicator is the one its patches' `Decomp`s are built on,
+so the first three rows follow from the construction rather than from a
+separate scoping decision, and a level record's partner is a rank number in
+it. `LevelTransfer.fine_blocks` is in the parent communicator's
+rank order for the fifth row, with a zero-extent entry for each parent rank
+outside the child's subset.
+
+Because of the two cross-level rows, a rank owning level ℓ but not level
+ℓ+1 still holds level ℓ+1's `LevelTransfer`: the box gather reads parent
+state that such a rank owns part of, and the restriction write-back is
+collective over every parent rank owning a covered node. Scoping those to
+the child's subset
+instead would require the child's ranks to hold the parent's covered blocks,
+which is a rank-partitioned transfer and a separate piece of work. The rank
+set of every collective follows from the level index alone, never from
+rank-local data, so no participation decision can turn into a deadlock.
+
+The rate reduction stays one `Allreduce` over the whole run at the step
+boundary rather than one per level plus a combine: a rank reduces the maximum
+over the patches it holds, and the maximum is exact and order-independent, so
+the per-level and per-rank groupings give the same number. `dt`, `t`, `step`
+and every trigger therefore agree on ranks that hold no part of a level, and
+the retry decision, which reads only the reduced rate and density, remains
+global.
+
+`_advance_level!` is entered by exactly the ranks owning the level it
+advances. Every collective inside it is on that level's communicator: its own
+stages, its shell, and its children's box gathers and restriction. The
+recursion into a child is guarded on child ownership, and the substep count is
+fixed, so the rank sets do not diverge.
+
+A level owned by a proper subset is a different decomposition of the refined
+patch, so it reproduces the every-rank answer to round-off rather than
+bitwise, the tier the MPI suite already applies to decomposed patches.
+
+**Deferred.** Assignment orders the tiles along a space-filling curve and
+partitions the curve contiguously by weight, so neighbors land on the same
+rank and most same-level exchange stays local. Weight is volume × 3^ℓ (the
+subcycled step count) × an interface factor measured once, since the per-apply
+reduced-solve fence makes small tiles cost more than their volume. Per-tile
+owner subsets, migration of a tile to a new owner riding the regrid,
+rebalancing on a measured max/mean of per-rank step wall, and the hysteresis
+that keeps rebalancing off tile flicker are all unbuilt. Under per-level
+ownership every rank of a level's subset still holds every tile of it, so the
+per-tile latency argument under [Tiles and adjacency](#tiles-and-adjacency) is
+reduced by the subset size, not removed.
 
 ### Banded schemes
 
@@ -899,13 +987,33 @@ Each item names its gate. Nothing is built ahead of the item before it.
    `Solver` and read through the single-patch property forwarding, so they
    are reachable only where the pool is one patch's own set, and a
    multi-patch output path will have to take storage of its own.
-   Sub-communicators and the weighted SFC partitioning remain unbuilt. Minimal
-   hysteresis lands with this item so rebalancing
-   is not driven by tile flicker, and the covered-mask data model is
-   defined here even if the diagnostic conversion follows. Gate: the
-   implosion case at a rank count for which every-rank-on-every-level
-   fails `_amr_dims`; per-rank step wall spread measured; a tile owned by
-   a rank subset reproduces the every-rank answer to round-off.
+
+   Per-level sub-communicators are delivered as the second slice:
+   `_level_ranks` sizes each level's subset, `split_level_comm` and
+   `free_level_comm!` create and release it, and the level's own collectives
+   move onto it while the cross-level gathers stay on the parent's; the
+   communicator table and the structural decision behind the prefix subsets
+   are under [Ownership and load balance](#ownership-and-load-balance). Gate
+   held: `test/convergence.jl`, `test/validation.jl`, `bench/jetcheck.jl` and
+   `bench/audit.jl` reproducing to every printed digit and `test/runtests.jl`
+   to every logged value, since every level of every existing configuration
+   owns the whole communicator and takes no split; the serial count moved
+   119 → 120 for a testset pinning the sizing rule, and `test/mpi_tests.jl`
+   122 → 142 at np = 2/4/8 for twenty checks holding a subset-owned level to
+   the serial wave error, pinning the subset size, holding a rank outside a
+   subset to the same step sequence and trigger firing, and reproducing the
+   region track of a regrid that resizes the subset and frees the
+   communicator it replaces. The smallest of those checks refines a region
+   of four coarse nodes, which `_amr_dims` cannot split over two ranks and
+   which runs with the level owned by one.
+
+   Per-tile owner subsets, the weighted SFC partitioning, migration and
+   rebalancing remain unbuilt, as does the minimal hysteresis that would keep
+   rebalancing off tile flicker; the covered-mask data model is still to be
+   defined here even if the diagnostic conversion follows. Gate for those: the
+   implosion case at a rank count for which every-rank-on-every-level fails
+   `_amr_dims`; per-rank step wall spread measured; a tile owned by a rank
+   subset reproduces the every-rank answer to round-off.
 4. **Tag criteria and hysteresis; covered masks in every diagnostic.** Gate:
    the mixing-layer cost case reproduced through the sensor-based tag; the
    TGV energy history on a refined run equal to the single-level history

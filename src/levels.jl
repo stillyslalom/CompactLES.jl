@@ -57,8 +57,25 @@
 # the coarse–fine boundary with the same-level interface rows (extended-data
 # gradients and filters, one-sided divergence).
 #
-# Distribution: both levels decompose over the whole rank set. The
-# coupling DATA is replicated: every rank gathers the buffered coarse box
+# Distribution: each level is owned by a rank subset of its parent's, a
+# contiguous prefix of the parent level's communicator, chosen as the largest
+# count for which every tile of the level admits a process grid under the
+# 9-point scheme minimum (`_level_ranks`, `LevelComm`). When that count is
+# the whole parent set, the case of every uniform run and of every refined
+# run whose region is large against the rank count, no communicator is split
+# and no code path changes. Level-local collectives run on the level's own
+# communicator: the compact line solves and halo exchanges beneath its
+# patches, its same-level records, and the shell ring of `_impose_shell!`.
+# The rate reduction is a single Allreduce over the whole run at the step
+# boundary: each rank reduces the maximum over the patches it holds, and the
+# maximum is exact and order-independent, so the grouping is immaterial.
+# Cross-level coupling runs on the PARENT level's communicator, which
+# contains the child's: the buffered-box gathers read parent state, and the
+# covered nodes of the restriction write-back lie on parent ranks outside
+# the child's subset, so a rank that owns a level but not its child enters
+# both.
+#
+# The coupling DATA is replicated: every rank gathers the buffered coarse box
 # (and, for restriction, the coincident-node samples of the fine patch) with
 # one Allgatherv and writes only the shell or covered nodes it owns. The
 # interpolation CHAINS distribute by conserved component, each rank
@@ -84,6 +101,71 @@ const LEVEL_BUFFER = 4
 # a flat error with the write-back held off the boundary. Two coarse nodes clear
 # both the closure rows' footprint and the imposed plane's neighborhood.
 const RESTRICT_MARGIN = 2
+
+# --- Level ownership ----------------------------------------------------------
+
+"""
+    LevelComm
+
+The rank subset owning one level of the hierarchy: the communicator spanning
+it, whether the calling rank belongs to it, whether that communicator was
+split for this level (and is freed when the level is dropped), and its size.
+A level whose subset is its parent's whole set holds the parent's
+communicator itself, so no split exists in an unrefined run, a serial run,
+or a refined run large enough for every rank.
+
+The subset is a contiguous prefix of the parent level's communicator, which
+makes the subsets nested: a rank outside level ℓ is outside every level below
+it. `Solver.patches` is therefore a prefix of the global patch order on every
+rank, and a global patch index means the same thing everywhere it is defined.
+Locality-aware assignment along a space-filling curve is the recorded
+follow-up (`reference/AMR_GPU.md`).
+"""
+struct LevelComm
+    comm::MPI.Comm      # MPI_COMM_NULL on a rank outside the subset
+    owned::Bool
+    scoped::Bool        # split for this level; freed by `free_level_comm!`
+    size::Int
+end
+
+"The root level's ownership: every rank of `comm`, unsplit."
+root_level_comm(comm::MPI.Comm) =
+    LevelComm(comm, true, false, MPI.Initialized() ? MPI.Comm_size(comm) : 1)
+
+"The ownership entry for a level this rank holds no part of: not owned, no
+communicator, size zero. A rank outside the parent's subset carries it so
+that `solver.levels` has the same length everywhere."
+absent_level_comm() = LevelComm(MPI.COMM_NULL, false, false, 0)
+
+"""
+    split_level_comm(parent, np) -> LevelComm
+
+The [`LevelComm`](@ref) of a level owned by the first `np` ranks of `parent`.
+Returns `parent` unsplit when `np` is its whole size, so the common case adds
+no communicator. Collective over `parent.comm`; a rank outside `parent` must
+not call it, and every rank inside must pass the same `np`.
+"""
+function split_level_comm(parent::LevelComm, np::Int)
+    np == parent.size && return LevelComm(parent.comm, true, false, np)
+    key = MPI.Comm_rank(parent.comm)
+    inside = key < np
+    sub = MPI.Comm_split(parent.comm, inside ? 0 : nothing, key)
+    return LevelComm(sub, inside, true, np)
+end
+
+"""
+    free_level_comm!(level_comm)
+
+Free a level communicator that [`split_level_comm`](@ref) created, for the
+reason `free_communicators!` records: MPI frees nothing until garbage
+collection finalizes the handle, and a regrid that resizes a level's subset
+discards one per call. A no-op on an unsplit subset and on a rank outside it.
+`MPI_Comm_free` is collective, so every owner must reach this together; in
+the regrid paths that holds because the tile set is reduced before any rank
+rebuilds.
+"""
+free_level_comm!(lc::LevelComm) =
+    (lc.scoped && lc.owned && MPI.free(lc.comm); nothing)
 
 """
     GatherBuffers{T}()
@@ -136,6 +218,10 @@ and `restrict_level!`.
 """
 struct LevelTransfer{T}
     region::BlockRegion              # refined region, parent LEVEL node space
+    active::NTuple{3,Bool}           # resolved dimensions of the refined patch;
+                                     # held here rather than read off the fine
+                                     # decomposition, which a parent-only rank
+                                     # does not have
     coarse_indices::Vector{Int}      # solver.patches indices of the parent-level
                                      # patches meeting the buffered box
     fine_index::Int                  # index of the refined patch in solver.patches
@@ -164,9 +250,14 @@ struct LevelTransfer{T}
     # gathers the (small) coupling regions, runs the identical interpolation
     # chain, and writes only what it owns, so no consistency question arises
     # and the chain needs no halo exchanges of its own. These tables record
-    # every rank's owned block of each patch, in that patch's node space and
-    # in the rank order of the patch's Cartesian communicator; one table per
-    # parent patch, aligned with `coarse_indices`.
+    # every rank's owned block of each patch, in that patch's node space.
+    # `coarse_blocks` holds one table per parent patch, aligned with
+    # `coarse_indices` and in the rank order of that patch's Cartesian
+    # communicator, which the box gather runs on. `fine_blocks` is in the rank
+    # order of the PARENT level's communicator instead: covered nodes lie on
+    # parent ranks outside the child's subset, so the restriction gather is
+    # collective over the parent's ranks, and one outside the child's subset
+    # holds a zero-extent entry there.
     coarse_blocks::Vector{Vector{BlockRegion}}
     fine_blocks::Vector{BlockRegion}
     box_gather::Array{T,4}           # replicated box state, all components
@@ -181,18 +272,25 @@ end
 """
     Level
 
-One level of the refinement hierarchy: its index (0 is the root), the
-indices into `solver.patches` of the patches at this level, and, aligned
-with those, the [`LevelTransfer`](@ref) coupling each patch to its parent
-(empty at the root), plus the same-level interface records among the
-level's patches (the root's live on the `Solver`). `solver.levels` holds
-them in ascending order, and every level below the root is nested inside
-the one above it. Below the root a level is a set of tiles on a lattice of
-edge `tile` parent nodes (one patch over the whole region when `tile` is
-0), abutting tiles sharing their interface plane as root slabs do.
+One level of the refinement hierarchy: its index (0 is the root), the rank
+subset owning it ([`LevelComm`](@ref)), the indices into `solver.patches` of
+the patches at this level, the [`LevelTransfer`](@ref) coupling each patch to
+its parent (empty at the root), and the same-level interface records among the
+level's patches (the root's live on the `Solver`). `solver.levels` holds them
+in ascending order, and every level below the root is nested inside the one
+above it. Below the root a level is a set of tiles on a lattice of edge `tile`
+parent nodes (one patch over the whole region when `tile` is 0), abutting
+tiles sharing their interface plane as root slabs do.
+
+`patches` and the records are this rank's own and are empty on a rank outside
+`level_comm`; `transfers` are held by every rank of the PARENT level's subset,
+since the box gathers and the restriction write-back built on them run there.
+`patches` and `transfers` therefore align only where this rank owns the
+level; use `LevelTransfer.fine_index` to reach a transfer's patch.
 """
 struct Level{T}
     index::Int
+    level_comm::LevelComm
     patches::Vector{Int}
     transfers::Vector{LevelTransfer{T}}
     # Same-level records per dimension, applied in dimension order: the
@@ -206,16 +304,16 @@ struct Level{T}
     phases::NTuple{3,Bool}           # some tile has a neighbor along d
 end
 
-Level{T}(index::Int, patches::Vector{Int},
+Level{T}(index::Int, lc::LevelComm, patches::Vector{Int},
          transfers::Vector{LevelTransfer{T}}) where {T} =
-    Level{T}(index, patches, transfers,
+    Level{T}(index, lc, patches, transfers,
              ntuple(_ -> GhostRecord{T}[], 3), ntuple(_ -> GhostRecord{T}[], 3),
              ntuple(_ -> PlaneRecord{T}[], 3), (false, false, false))
 
 # A level with the records `_level_records` returns.
-Level{T}(index::Int, patches::Vector{Int}, transfers::Vector{LevelTransfer{T}},
-         records::Tuple) where {T} =
-    Level{T}(index, patches, transfers, records...)
+Level{T}(index::Int, lc::LevelComm, patches::Vector{Int},
+         transfers::Vector{LevelTransfer{T}}, records::Tuple) where {T} =
+    Level{T}(index, lc, patches, transfers, records...)
 
 "Number of levels in the hierarchy, the root included."
 nlevels(solver) = length(getfield(solver, :levels))
@@ -336,9 +434,12 @@ end
 
 # Same-level records among the patches of a refined level, built through the
 # root machinery on level-local ids and shifted onto solver patch indices,
-# one record set per dimension for the phased sync. Collective over `comm`
-# (one Allgather per dimension of every rank's blocks of every tile: each
-# rank holds a block of every tile of a refined level). Returns the tuple
+# one record set per dimension for the phased sync. Collective over `comm`,
+# the LEVEL's own communicator (one Allgather per dimension of every rank's
+# blocks of every tile: each owner holds a block of every tile of the level,
+# and a rank outside the subset holds none and must not call). Each record's
+# `partner` is therefore a rank number in that communicator, the one
+# `_sync_level_records!` exchanges over. Returns the tuple
 # `Level{T}(index, patches, transfers, records)` takes.
 function _level_records(::Type{T}, comm::MPI.Comm, regions::Vector{BlockRegion},
                         patch_indices::Vector{Int}, decomps, n_cons::Int) where {T}
@@ -405,11 +506,13 @@ end
 function _sync_level_records!(solver, states, lev::Level)
     any(lev.phases) || return states
     patches = getfield(solver, :patches)
+    comm = lev.level_comm.comm
     last = findlast(lev.phases)
     for d in 1:last
         lev.phases[d] || continue
-        _average_planes!(solver, states, lev.plane_pairs[d])
-        _exchange_ghosts!(solver, states, lev.ghost_sends[d], lev.ghost_recvs[d])
+        _average_planes!(solver, states, comm, lev.plane_pairs[d])
+        _exchange_ghosts!(solver, states, comm, lev.ghost_sends[d],
+                          lev.ghost_recvs[d])
         d == last && break
         for pi in lev.patches
             exchange_state!(states[pi], patches[pi].decomp)
@@ -428,7 +531,8 @@ function _seed_planes!(solver, states, lev::Level, fresh::AbstractVector{Bool})
     patches = getfield(solver, :patches)
     for d in 1:3
         lev.phases[d] || continue
-        _combine_planes!(solver, states, lev.plane_pairs[d], weight)
+        _combine_planes!(solver, states, lev.level_comm.comm,
+                         lev.plane_pairs[d], weight)
         for pi in lev.patches
             exchange_state!(states[pi], patches[pi].decomp)
         end
@@ -448,11 +552,6 @@ function _sync_level!(solver, states, lev::Level)
     end
     return states
 end
-
-# The transfers of every level below the root, root-adjacent first (the
-# order shell imposition runs in; restriction runs it reversed).
-_all_transfers(solver) =
-    (lt for lev in getfield(solver, :levels) for lt in lev.transfers)
 
 # Decomp chain refining `dims_to_refine` one at a time, starting from the
 # coarse extents. Every stage runs replicated per rank (COMM_SELF, so the
@@ -493,22 +592,53 @@ end
 
 "Every rank's owned interior block of `decomp`, in that decomp's node space
 and communicator rank order. Collective over `decomp.comm` (one Allgather)."
-function _owned_blocks(decomp::Decomp)
-    np = MPI.Comm_size(decomp.comm)
-    mine = Int64[decomp.offset..., decomp.n_local...]
-    flat = MPI.Allgather(mine, decomp.comm)
+_owned_blocks(decomp::Decomp) = _owned_blocks(decomp, decomp.comm)
+
+"""
+    _owned_blocks(decomp, comm) -> Vector{BlockRegion}
+
+One entry per rank of `comm`: that rank's owned interior block of the patch
+decomposed as `decomp`, in the patch's node space and in `comm`'s rank
+order. `decomp`
+may be `nothing`, passed by a rank of `comm` that holds no block of the
+patch: such a rank contributes a zero-extent region, which every consumer
+intersects away, and receives the table like any other rank. Collective over
+`comm` (one Allgather); `comm` must contain every rank that owns a block.
+"""
+function _owned_blocks(decomp::Union{Nothing,Decomp}, comm::MPI.Comm)
+    np = MPI.Comm_size(comm)
+    mine = decomp === nothing ? Int64[0, 0, 0, 0, 0, 0] :
+           Int64[decomp.offset..., decomp.n_local...]
+    flat = MPI.Allgather(mine, comm)
     return [BlockRegion((Int(flat[6r+1]), Int(flat[6r+2]), Int(flat[6r+3])),
                         (Int(flat[6r+4]), Int(flat[6r+5]), Int(flat[6r+6])))
             for r in 0:np-1]
 end
 
+"""
+    build_level_transfer(T, region, active, n_halo, coarse_indices, fine_index,
+                         restriction, n_cons, subcycle, coarse_decomps,
+                         fine_decomp, parent_comm, np_level, faces)
+
+The [`LevelTransfer`](@ref) coupling one refined patch to its parents. Built
+on every rank of the parent level's subset, the child's owners and the ranks
+outside it alike, because the box gathers and the restriction write-back run
+there; `fine_decomp` is `nothing` on a rank that owns no piece of the refined
+patch, and the pieces such a rank never reads (the shell ring's staging) come
+out empty. `parent_comm` is the parent level's communicator, whose rank order
+`fine_blocks` follows, and `np_level` the child subset's size.
+
+Collective over `parent_comm` (the block-table Allgathers) and over each
+parent patch's own communicator.
+"""
 function build_level_transfer(::Type{T}, region::BlockRegion,
                               active::NTuple{3,Bool}, n_halo::Int,
                               coarse_indices::Vector{Int}, fine_index::Int,
                               restriction::Symbol,
                               n_cons::Int, subcycle::Bool,
                               coarse_decomps::Vector{<:Decomp{T}},
-                              fine_decomp::Decomp{T},
+                              fine_decomp::Union{Nothing,Decomp{T}},
+                              parent_comm::MPI.Comm, np_level::Int,
                               faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3)
                               ) where {T}
     imposed = ntuple(d -> (faces[d][1] == 0, faces[d][2] == 0), 3)
@@ -524,22 +654,34 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
     rdecomps, rplans, rstage = _refine_chain(T, region.extent, active,
                                              dims_to_refine, n_halo, 2)
     boxsize = subcycle ? (size(pstage[1])..., n_cons) : (0, 0, 0, 0)
-    slabs = _ring_slabs(region, fine_decomp)
-    table, ringlen = _slab_table(slabs)
-    npf = MPI.Comm_size(fine_decomp.comm)
-    # Component-distributed chains: rank r owns components r+1, r+1+npf, ...
-    ring_counts = [ringlen * length((r+1):npf:n_cons) for r in 0:npf-1]
-    shell = ShellRing{T}(slabs, table, ringlen,
-                         Matrix{T}(undef, ringlen, n_cons), ring_counts,
-                         GatherBuffers{T}())
-    return LevelTransfer{T}(region, coarse_indices, fine_index, imposed,
+    # The ring geometry follows from the region and the halo width alone, so it
+    # is available on a rank with no fine decomposition; only the staging that
+    # `_impose_shell!` fills is left empty there, and that runs on the child's
+    # owners only.
+    if fine_decomp === nothing
+        slabs = NTuple{3,UnitRange{Int}}[]
+        table, ringlen = _slab_table(slabs)
+        shell = ShellRing{T}(slabs, table, ringlen, Matrix{T}(undef, 0, n_cons),
+                             Int[], GatherBuffers{T}())
+    else
+        slabs = _ring_slabs(region, ntuple(d -> fine_decomp.active[d], 3),
+                            fine_decomp.n_halo_d)
+        table, ringlen = _slab_table(slabs)
+        # Component-distributed chains: rank r owns components r+1, r+1+npf, ...
+        ring_counts = [ringlen * length((r+1):np_level:n_cons)
+                       for r in 0:np_level-1]
+        shell = ShellRing{T}(slabs, table, ringlen,
+                             Matrix{T}(undef, ringlen, n_cons), ring_counts,
+                             GatherBuffers{T}())
+    end
+    return LevelTransfer{T}(region, active, coarse_indices, fine_index, imposed,
                             restriction, dims_to_refine,
                             pdecomps, pplans, pstage,
                             rdecomps, rplans, rstage,
                             zeros(T, boxsize), zeros(T, boxsize),
                             zeros(T, boxsize), zeros(T, boxsize),
                             [_owned_blocks(dc) for dc in coarse_decomps],
-                            _owned_blocks(fine_decomp),
+                            _owned_blocks(fine_decomp, parent_comm),
                             zeros(T, size(pstage[1])..., n_cons),
                             zeros(T, region.extent..., n_cons),
                             GatherBuffers{T}(), GatherBuffers{T}(), shell)
@@ -572,30 +714,48 @@ end
 """
     gather_region!(dst, region_ranges, dst_off, dst_pad, Q, decomp, blocks,
                    sample=1; buffers=GatherBuffers{T}())
+    gather_region!(dst, region_ranges, dst_off, dst_pad, Q, comm, blocks,
+                   src_off, src_pad, sample=1; buffers=GatherBuffers{T}())
 
-Assemble the node region `region_ranges` (in `decomp`'s node space) of the
+Assemble the node region `region_ranges` (in the patch's node space) of the
 distributed field `Q` (padded, 4-D) into the replicated array `dst` on every
 rank: node `n` lands at `dst[n - dst_off + dst_pad, ..., c]`, where `dst_off`
 maps node space onto `dst`'s unpadded box. With `sample = s`, only nodes
 `n ≡ 1 (mod s)` along active dimensions participate and land at
 `dst[(n-1) ÷ s + 1 ...]`, the coincident-node form the `:inject` restriction
-uses (`s = 3` per refined dimension). Collective over `decomp.comm`.
+uses (`s = 3` per refined dimension).
+
+The first form gathers over the field's own decomposition and is collective
+over `decomp.comm`. The second names the communicator explicitly, with
+`blocks` in its rank order and `src_off`/`src_pad` describing this rank's own
+block; a rank of `comm` holding no block of the field passes `nothing` for `Q`
+and contributes nothing. The restriction uses this second form: parent ranks
+outside the refined level's subset own covered nodes but no fine state.
 
 `buffers` supplies the MPI staging. The per-step call sites pass the
 [`GatherBuffers`](@ref) retained on the [`LevelTransfer`](@ref); a caller
 running at the regrid cadence can let the default allocate.
 """
+gather_region!(dst::AbstractArray{T,4},
+               region_ranges::NTuple{3,UnitRange{Int}},
+               dst_off::NTuple{3,Int}, dst_pad::NTuple{3,Int},
+               Q, decomp::Decomp{T}, blocks::Vector{BlockRegion},
+               sample::NTuple{3,Int}=(1, 1, 1);
+               buffers::GatherBuffers{T}=GatherBuffers{T}()) where {T} =
+    gather_region!(dst, region_ranges, dst_off, dst_pad, Q, decomp.comm, blocks,
+                   decomp.offset, decomp.n_halo_d, sample; buffers=buffers)
+
 function gather_region!(dst::AbstractArray{T,4},
                         region_ranges::NTuple{3,UnitRange{Int}},
                         dst_off::NTuple{3,Int}, dst_pad::NTuple{3,Int},
-                        Q, decomp::Decomp{T}, blocks::Vector{BlockRegion},
+                        Q, comm::MPI.Comm, blocks::Vector{BlockRegion},
+                        src_off::NTuple{3,Int}, src_pad::NTuple{3,Int},
                         sample::NTuple{3,Int}=(1, 1, 1);
                         buffers::GatherBuffers{T}=GatherBuffers{T}()) where {T}
-    comm = decomp.comm
     np = MPI.Comm_size(comm)
     me = MPI.Comm_rank(comm)
     n_cons = size(dst, 4)
-    pad = decomp.n_halo_d
+    pad = src_pad
     # A sampled gather keeps nodes n with (n − 1) % sample == 0.
     keep(r, d) = first(r) + mod(sample[d] - mod(first(r) - 1, sample[d]),
                                 sample[d]):sample[d]:last(r)
@@ -605,22 +765,26 @@ function gather_region!(dst::AbstractArray{T,4},
               for ir in isects]
     sendbuf = _fit!(buffers.send, counts[me+1])
     mine = isects[me+1]
-    if _cpu_storage(Q)
+    if counts[me+1] == 0
+        # Nothing of this rank's own is wanted, `Q` may be absent, and the
+        # packs below would read it: the Allgatherv still runs, with an empty
+        # contribution.
+    elseif _cpu_storage(Q)
         idx = 1
         @inbounds for c in 1:n_cons, k in mine[3], j in mine[2], i in mine[1]
-            sendbuf[idx] = Q[i - decomp.offset[1] + pad[1],
-                             j - decomp.offset[2] + pad[2],
-                             k - decomp.offset[3] + pad[3], c]
+            sendbuf[idx] = Q[i - src_off[1] + pad[1],
+                             j - src_off[2] + pad[2],
+                             k - src_off[3] + pad[3], c]
             idx += 1
         end
-    elseif counts[me+1] > 0
+    else
         # Device storage packs by broadcast into a contiguous stage (the
         # same strided-to-contiguous move the halo staging makes, with the
         # sampled ranges expressed as strided views), and one contiguous
         # device-to-host copy fills the MPI buffer. Column-major broadcast
         # order matches the scalar pack's (c slowest, i fastest).
-        lr = ntuple(d -> (first(mine[d]) - decomp.offset[d] + pad[d]):sample[d]:
-                         (last(mine[d]) - decomp.offset[d] + pad[d]), 3)
+        lr = ntuple(d -> (first(mine[d]) - src_off[d] + pad[d]):sample[d]:
+                         (last(mine[d]) - src_off[d] + pad[d]), 3)
         v = view(parent(Q), lr[1], lr[2], lr[3], 1:n_cons)
         dsend = _device_send_stage(parent(Q), counts[me+1])
         reshape(view(dsend, 1:counts[me+1]), size(v)) .= v
@@ -672,8 +836,25 @@ block. `MPI.Dims_create` cannot be used here because it lacks the
 scheme minimum, and a regrid that picked an infeasible grid would kill a run
 mid-flight; this errors with the actual numbers instead, at setup or at the
 regrid that shrank the region.
+
+Refined-level construction sizes its rank subset first
+([`_level_ranks`](@ref)), so from that path only an `np` the search below
+admits reaches this method.
 """
 function _amr_dims(extent::NTuple{3,Int}, active::NTuple{3,Bool}, np::Int)
+    dims = _amr_dims_or_nothing(extent, active, np)
+    dims === nothing &&
+        error("no process grid over $np rank(s) gives every rank ≥ 9 fine " *
+              "points per split dimension of a $extent fine patch; use " *
+              "fewer ranks or a larger refined region")
+    return dims
+end
+
+# The search itself, returning `nothing` where no factorization qualifies:
+# `_amr_dims` raises on that, `_level_ranks` reads it as "this rank count does
+# not fit" and tries a smaller one.
+function _amr_dims_or_nothing(extent::NTuple{3,Int}, active::NTuple{3,Bool},
+                              np::Int)
     best = (0, 0, 0)
     bestmin = -1
     for p1 in 1:np
@@ -702,11 +883,35 @@ function _amr_dims(extent::NTuple{3,Int}, active::NTuple{3,Bool}, np::Int)
             end
         end
     end
-    bestmin < 0 &&
-        error("no process grid over $np rank(s) gives every rank ≥ 9 fine " *
-              "points per split dimension of a $extent fine patch; use " *
-              "fewer ranks or a larger refined region")
+    bestmin < 0 && return nothing
     return best
+end
+
+"""
+    _level_ranks(regions, active, np) -> Int
+
+The rank count of a refined level: the largest count at or below `np` for
+which every one of its `regions` (parent-level node space) admits a process
+grid under [`_amr_dims`](@ref)'s 9-point minimum. The level's owners are the
+first that many ranks of the parent level's communicator
+([`split_level_comm`](@ref)).
+
+The search runs downward from `np` and stops at the first count that fits,
+so a level large enough for the whole rank set returns `np` itself. One rank
+always fits: a region spans at least four parent nodes, hence ten fine ones.
+Feasibility is not monotone in the rank count (27 fine nodes fit three ranks
+and not four), so the search is a linear scan rather than a bisection.
+"""
+function _level_ranks(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
+                      np::Int)
+    for p in np:-1:1
+        fits = all(regions) do r
+            ext = fine_extent(r, active)
+            _amr_dims_or_nothing(ext, ntuple(d -> ext[d] > 1, 3), p) !== nothing
+        end
+        fits && return p
+    end
+    return 1
 end
 
 # --- Prolongation: coarse state → fine ghost ring and boundary planes -------
@@ -738,8 +943,7 @@ end
 # Collective over every parent patch's communicator, in `coarse_indices`
 # order. `states` and `patches` are the solver's full vectors.
 function _gather_box!(dst4, lt::LevelTransfer, states, patches)
-    fine = patches[lt.fine_index]
-    active = fine.decomp.active
+    active = lt.active
     box = _box_ranges(lt, active)
     boxoff = _box_offset(lt, active)
     pad = lt.pdecomps[1].n_halo_d
@@ -835,13 +1039,13 @@ end
 # Ring slabs in patch-padded node space, ascending dimension order, low side
 # then high per active dimension. Slabs overlap at corners; both copies of a
 # corner value come from the same chain output, so the first match wins.
-function _ring_slabs(region::BlockRegion, df::Decomp)
-    Nf = fine_extent(region, ntuple(d -> df.active[d], 3))
-    pad = df.n_halo_d
+function _ring_slabs(region::BlockRegion, active::NTuple{3,Bool},
+                     pad::NTuple{3,Int})
+    Nf = fine_extent(region, active)
     full = ntuple(d -> (1 - pad[d]):(Nf[d] + pad[d]), 3)
     slabs = NTuple{3,UnitRange{Int}}[]
     for d in 1:3
-        df.active[d] || continue
+        active[d] || continue
         push!(slabs, ntuple(q -> q == d ? ((1 - pad[d]):1) : full[q], 3))
         push!(slabs, ntuple(q -> q == d ? (Nf[d]:(Nf[d] + pad[d])) : full[q], 3))
     end
@@ -999,26 +1203,34 @@ box, per conserved component, and return `states`. Levels are visited from
 the root down, so a patch two levels deep reads a parent whose own shell has
 just been imposed. Runs after every RK stage update and inside the pre-step
 synchronization; a solver without refinement returns immediately.
-Collective: one replicated box gather, the component-distributed chains, and
-the ring Allgatherv of `_impose_shell!` per transfer. The name "prolong"
-refers to the operation's role; the operator is `interpolate!`, per the
-header note on why the deconvolving `prolong!` is not used here.
+Collective in two rank sets per transfer, so the loop is written over levels
+rather than over one flat transfer list: the box gather reads the
+parent state and runs over the parent level's communicator, so every rank
+owning the parent enters it; the chains and the ring Allgatherv of
+`_impose_shell!` run over the refined level's own communicator, which only its
+owners enter. The name "prolong" refers to the operation's role; the operator
+is `interpolate!`, per the header note on why the deconvolving `prolong!` is
+not used here.
 """
 function prolong_level_ghosts!(solver, states)
-    for lt in _all_transfers(solver)
-        _prolong_ghosts!(solver, states, lt)
+    levels = getfield(solver, :levels)
+    patches = getfield(solver, :patches)
+    for ℓ in 2:length(levels)
+        # Outside the parent's subset there is no parent state to gather and,
+        # the subsets being nested, no piece of this level or any below it.
+        levels[ℓ-1].level_comm.owned || continue
+        child_owned = levels[ℓ].level_comm.owned
+        for lt in levels[ℓ].transfers
+            _gather_box!(lt.box_gather, lt, states, patches)
+            child_owned && _impose_shell!(solver, states, lt,
+                (dst, c) -> dst .= view(lt.box_gather, :, :, :, c))
+            # The imposed shell replaces the halo values the previous exchange
+            # left wherever the two overlap (the edge-owning ranks' outer
+            # halos); interior rank-boundary halos keep their exchanged values,
+            # so the composite fine state is self-consistent without a further
+            # exchange.
+        end
     end
-    return states
-end
-
-function _prolong_ghosts!(solver, states, lt::LevelTransfer)
-    _gather_box!(lt.box_gather, lt, states, getfield(solver, :patches))
-    _impose_shell!(solver, states, lt,
-                   (dst, c) -> dst .= view(lt.box_gather, :, :, :, c))
-    # The imposed shell replaces the halo values the previous exchange left
-    # wherever the two overlap (the edge-owning ranks' outer halos); interior
-    # rank-boundary halos keep their exchanged values, so the composite fine
-    # state is self-consistent without a further exchange.
     return states
 end
 
@@ -1029,8 +1241,7 @@ end
 # holding `RESTRICT_MARGIN` region nodes back from the boundary along active
 # dims, one parent patch at a time.
 function _write_covered_region!(src4, lt::LevelTransfer, states, patches)
-    fine = patches[lt.fine_index]
-    active = fine.decomp.active
+    active = lt.active
     off = lt.region.offset
     ext = lt.region.extent
     # The written window in region-local nodes: the margin applies at a
@@ -1095,13 +1306,17 @@ which is a whole-patch line solve and therefore still serial-only (guarded at
 setup). Either way the write-back stops `RESTRICT_MARGIN` coarse nodes short
 of the coarse-fine boundary. Runs once per completed step, after the state
 filter; a solver without refinement returns immediately. Collective under
-`:inject`.
+`:inject`, over the PARENT level's communicator: the covered nodes are spread
+over every rank owning the parent, including those outside the refined level's
+own subset, so all of them enter the gather and none of them may skip it.
 """
 function restrict_level!(solver, states)
     levels = getfield(solver, :levels)
     for ℓ in length(levels):-1:2
+        levels[ℓ-1].level_comm.owned || continue
         for lt in levels[ℓ].transfers
-            _restrict_patch!(solver, states, lt)
+            _restrict_patch!(solver, states, lt, levels[ℓ-1].level_comm,
+                             levels[ℓ].level_comm)
         end
         # The written parent nodes can sit beside a parent-level tile
         # interface; refresh that level's records before it is read again
@@ -1111,11 +1326,13 @@ function restrict_level!(solver, states)
     return states
 end
 
-function _restrict_patch!(solver, states, lt::LevelTransfer)
+function _restrict_patch!(solver, states, lt::LevelTransfer,
+                          parent::LevelComm, child::LevelComm)
     patches = getfield(solver, :patches)
-    fine = patches[lt.fine_index]
-    Qf = states[lt.fine_index]
     if lt.restriction === :filter
+        # Serial only (rejected at setup under MPI), so the refined level's
+        # subset is the one rank and `child.owned` holds.
+        Qf = states[lt.fine_index]
         K = length(lt.rplans)
         padb = lt.rdecomps[1].n_halo_d
         ext = lt.region.extent
@@ -1137,11 +1354,23 @@ function _restrict_patch!(solver, states, lt::LevelTransfer)
         _write_covered_region!(lt.restricted, lt, states, patches)
         return states
     end
-    dfine = fine.decomp
-    fr = ntuple(d -> 1:(dfine.n_global[d]), 3)
-    sample = ntuple(d -> dfine.active[d] ? 3 : 1, 3)
-    gather_region!(lt.restricted, fr, (0, 0, 0), (0, 0, 0), Qf, dfine,
-                   lt.fine_blocks, sample; buffers=lt.restrict_buffers)
+    # The gather runs on the PARENT's communicator, not the refined level's:
+    # the covered coarse nodes are spread over every rank owning the parent,
+    # and one outside the refined subset holds no fine block but does hold
+    # covered nodes. `fine_blocks` is in the parent communicator's rank order
+    # for that reason, with a zero-extent entry wherever a rank owns no fine
+    # state, and such a rank contributes nothing and receives everything.
+    active = lt.active
+    Nf = fine_extent(lt.region, active)
+    fr = ntuple(d -> 1:Nf[d], 3)
+    sample = ntuple(d -> active[d] ? 3 : 1, 3)
+    dfine = child.owned ? patches[lt.fine_index].decomp : nothing
+    Qf = child.owned ? states[lt.fine_index] : nothing
+    off = dfine === nothing ? (0, 0, 0) : dfine.offset
+    pad = dfine === nothing ? (0, 0, 0) : dfine.n_halo_d
+    gather_region!(lt.restricted, fr, (0, 0, 0), (0, 0, 0), Qf, parent.comm,
+                   lt.fine_blocks, off, pad, sample;
+                   buffers=lt.restrict_buffers)
     _write_covered_region!(lt.restricted, lt, states, patches)
     return states
 end
@@ -1184,9 +1413,10 @@ Gather the parent state and its RHS over the buffered prolongation box into
 the [`LevelTransfer`](@ref)'s Hermite storage: the `t^n` slots when `at_end`
 is false, the `t^n + dt` slots when true. `patches`, `states` and `dQs` are
 the solver's full vectors. Collective over the parent patches'
-communicators (two replicated-box gathers); the box data is then identical
-on every rank, so the Hermite shell evaluation is communication-free at
-every fine stage.
+communicators (two replicated-box gathers), so every rank owning the parent
+level calls it whether or not it owns the refined one; the box data is then
+identical across the parent's subset, so the Hermite shell evaluation is
+communication-free at every fine stage.
 """
 function save_level_box!(lt::LevelTransfer, patches, states, dQs, at_end::Bool)
     boxQ = at_end ? lt.box_Q1 : lt.box_Q0

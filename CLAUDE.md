@@ -75,17 +75,17 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 119 testsets, 0 failures
+julia --project=. test/runtests.jl        # 120 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 122/122 each
+  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 142/142 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
 ```
 
-The `119 testsets` and the `122/122` are counted by different mechanisms and are
+The `120 testsets` and the `142/142` are counted by different mechanisms and are
 not comparable. `runtests.jl` reports `@testset` blocks under `Test`, each
 holding many `@test`s, and its includes (`float32_validation.jl`,
 `device_tests.jl`, `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, and the
@@ -220,7 +220,14 @@ Names are spelled out in full. Current vocabulary:
   nodes; 0 = one patch per level), `_tile_span`/`_lattice_tile`/
   `_level_tiles`/`_tile_faces`, `_in_shell`, `phases` (the dimension-phased
   level sync), `_combine_planes!`/`_seed_planes!`, `_erode`, `refined_region`,
-  `level_regions`, `nlevels`, `level_restriction` (`:inject` or
+  `level_regions`, `nlevels`, `level_comm` (a `LevelComm`: the rank subset
+  owning one level, holding its communicator, whether this rank is in it,
+  whether the communicator was split for it, and its size; the root's spans
+  the whole run, a level that fits every rank holds its parent's
+  communicator, and no split exists in that case), `root_level_comm` /
+  `absent_level_comm` / `split_level_comm` / `free_level_comm!`,
+  `_level_ranks` (the largest rank count a level's tiles admit under
+  `_amr_dims`), `level_restriction` (`:inject` or
   `:filter`), `prolong_level_ghosts!`, `restrict_level!`, `sync_levels!`,
   `_sync_level!`, `LEVEL_BUFFER`, `RESTRICT_MARGIN`; `Patch.h` is the
   patch's own spacing (h/3 on a level-1 patch), which the property

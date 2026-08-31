@@ -141,12 +141,17 @@ end
 
 # Whole-patch initialization of a fresh fine state: interpolate the parent
 # state over the buffered box and write every slot, interior and shell alike.
-function _fill_fine_from_coarse!(solver::Solver, states, lt::LevelTransfer)
+# The gather runs on the parent's communicator, so every rank owning the
+# parent calls this; `owned` says whether this one also holds the fine patch
+# and therefore has anything to write.
+function _fill_fine_from_coarse!(solver::Solver, states, lt::LevelTransfer,
+                                 owned::Bool)
     patches = getfield(solver, :patches)
+    _gather_box!(lt.box_gather, lt, states, patches)
+    owned || return states
     fine = patches[lt.fine_index]
     Qf = states[lt.fine_index]
     K = length(lt.pplans)
-    _gather_box!(lt.box_gather, lt, states, patches)
     for c in 1:solver.equations.n_cons
         lt.pstage[1] .= view(lt.box_gather, :, :, :, c)
         for k in 1:K
@@ -213,8 +218,9 @@ patch over it: a new [`Patch`](@ref) and [`LevelTransfer`](@ref) from the
 schemes retained on [`RegridSpec`](@ref), a new fine state initialized by
 order-6 interpolation of the coarse state with surviving fine data copied
 across the region overlap, and stage arrays for the new extents. The RHS
-scratch is taken from the rank's pool, which the departing patch's set rejoins,
-so a region that moved without changing extent allocates none.
+scratch is taken from the rank's pool, into which the departing patch's set
+is returned first, so a region that moved without changing extent allocates
+none.
 Returns whether anything changed.
 
 The retry savepoint, when one exists, is refreshed to the post-regrid state:
@@ -241,54 +247,97 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
     newregion == lt.region && return false
     patches = getfield(solver, :patches)
     fi = lt.fine_index
-    oldfine = patches[fi]
+    old_lc = levels[2].level_comm
+    root_lc = levels[1].level_comm
     oldregion = lt.region
-    Qf_old = states[fi]
     active_g = ntuple(d -> solver.n_global[d] > 1, 3)
     n_cons = solver.equations.n_cons
     # getfield: `h` is also a patch property name, and the property forwarding
     # refuses it on a multi-patch solver; the root spacing lives on the config.
     # Gather the surviving fine state BEFORE the patch swap, while the old
     # decomposition and block table are still live. Replicated over the old
-    # region; freed when this call returns.
-    dold = oldfine.decomp
-    Nf_old = dold.n_global
+    # region on every rank of the root communicator, since the level's next
+    # subset may hold ranks the old one did not; freed when this call returns.
+    Nf_old = fine_extent(oldregion, active_g)
     old_gather = zeros(T, Nf_old..., n_cons)
+    dold = old_lc.owned ? patches[fi].decomp : nothing
     gather_region!(old_gather, ntuple(d -> 1:Nf_old[d], 3), (0, 0, 0),
-                   (0, 0, 0), Qf_old, dold, lt.fine_blocks)
+                   (0, 0, 0), old_lc.owned ? states[fi] : nothing,
+                   root_lc.comm, lt.fine_blocks,
+                   dold === nothing ? (0, 0, 0) : dold.offset,
+                   dold === nothing ? (0, 0, 0) : dold.n_halo_d)
+    # Free the old level's decomposition and, where the new region's rank
+    # count differs, the level communicator itself, before the
+    # replacements are built: MPI frees neither until garbage collection
+    # finalizes it, and a regrid discards one per call. `tagged_region` is
+    # reduced, so every rank reaches these collective frees together.
+    old_lc.owned && free_communicators!(dold)
+    np_new = _level_ranks([newregion], active_g, root_lc.size)
+    resized = np_new != old_lc.size
+    resized && free_level_comm!(old_lc)
+    new_lc = resized ? split_level_comm(root_lc, np_new) : old_lc
     # The rank's scratch sets, the departing patch's included: a new region of
     # the same extent takes it over instead of allocating beside it.
-    ws_pool = [patches[1].rhs_workspace, oldfine.rhs_workspace]
-    newfine = _build_fine_patch(T, newregion, active_g, getfield(solver, :h),
-                                spec.n_halo, getfield(solver, :comm),
-                                spec.deriv, spec.filt, spec.smoo,
-                                solver.art.smoother, spec.interface_rhs,
-                                spec.backend, ws_pool,
-                                solver.equations.n_species,
-                                n_cons, fi, 1)
+    ws_pool = old_lc.owned ? [patches[1].rhs_workspace,
+                              patches[fi].rhs_workspace] :
+                             [patches[1].rhs_workspace]
+    newfine = new_lc.owned ?
+        _build_fine_patch(T, newregion, active_g, getfield(solver, :h),
+                          spec.n_halo, new_lc.comm,
+                          spec.deriv, spec.filt, spec.smoo,
+                          solver.art.smoother, spec.interface_rhs,
+                          spec.backend, ws_pool,
+                          solver.equations.n_species, n_cons, fi, 1) : nothing
     newlt = build_level_transfer(T, newregion, active_g, spec.n_halo, [1], fi,
                                  lt.restriction, n_cons,
                                  getfield(solver, :subcycle),
-                                 [patches[1].decomp], newfine.decomp)
-    Qf_new = _state_like(newfine.rho, n_cons)
-    patches[fi] = newfine
-    levels[2] = Level{T}(1, [fi], [newlt])
-    states[fi] = Qf_new
-    workspace.dQ[fi] = zero(Qf_new)
-    workspace.du[fi] = zero(Qf_new)
-    init_geometry!(PatchSolver(solver, newfine))
-    _fill_fine_from_coarse!(solver, states, newlt)
-    _carry_over!(Qf_new, newfine.decomp, newregion, old_gather, Nf_old,
-                 oldregion, active_g, n_cons)
+                                 [patches[1].decomp],
+                                 newfine === nothing ? nothing : newfine.decomp,
+                                 root_lc.comm, new_lc.size)
+    _resize_level_patches!(solver, states, workspace,
+                           new_lc.owned ? fi : fi - 1)
+    if new_lc.owned
+        Qf_new = _state_like(newfine.rho, n_cons)
+        patches[fi] = newfine
+        states[fi] = Qf_new
+        workspace.dQ[fi] = zero(Qf_new)
+        workspace.du[fi] = zero(Qf_new)
+    end
+    levels[2] = Level{T}(1, new_lc, new_lc.owned ? [fi] : Int[], [newlt])
+    new_lc.owned && init_geometry!(PatchSolver(solver, newfine))
+    _fill_fine_from_coarse!(solver, states, newlt, new_lc.owned)
+    new_lc.owned &&
+        _carry_over!(states[fi], newfine.decomp, newregion, old_gather, Nf_old,
+                     oldregion, active_g, n_cons)
     _rebank!(solver, states, save)
-    # The old fine decomposition and the old transfer's chains have no
-    # further reader; free their communicators now rather than at
-    # finalization, where they accumulate at the regrid cadence against
-    # MPI's context-id budget. `tagged_region` is reduced, so every rank
-    # reaches these collective frees together.
-    free_communicators!(dold)
+    # The old transfer's chains are on COMM_SELF, so this free is rank-local
+    # and every holder of the transfer makes it.
     free_transfer_decomps!(lt)
     return true
+end
+
+# Grow or shrink this rank's patch vector (and the state vectors aligned with
+# it) to `n` entries. `Solver.patches` is a prefix of the global patch order,
+# because the level subsets are nested, so a rank that gains or loses a level
+# gains or loses a trailing run of entries and every index below stays put.
+# The added entries are placeholders the caller overwrites.
+function _resize_level_patches!(solver::Solver, states, workspace, n::Int)
+    patches = getfield(solver, :patches)
+    length(patches) == n && return solver
+    if n < length(patches)
+        resize!(patches, n)
+        resize!(states, n)
+        resize!(workspace.dQ, n)
+        resize!(workspace.du, n)
+        return solver
+    end
+    for _ in (length(patches)+1):n
+        push!(patches, patches[1])
+        push!(states, states[1])
+        push!(workspace.dQ, workspace.dQ[1])
+        push!(workspace.du, workspace.du[1])
+    end
+    return solver
 end
 
 # Re-bank only where `run!` itself would: a regrid landing on a retried
@@ -335,6 +384,24 @@ function _tag_tiles(solver::Solver, Qc, spec::RegridSpec)
     return MPI.Allreduce(flags, max, getfield(solver, :comm)), K
 end
 
+# One tile's whole state, replicated on every rank of the root communicator.
+# Used only when a regrid resizes the level's rank subset, where every tile is
+# rebuilt and a surviving tile's solution crosses to a decomposition that
+# ranks outside the old subset may hold part of. Collective over the root
+# communicator; a rank with no block of the tile contributes nothing.
+function _gather_tile(::Type{T}, region::BlockRegion, active::NTuple{3,Bool},
+                      n_cons::Int, lt::LevelTransfer, solver, states,
+                      old::LevelComm, root::LevelComm) where {T}
+    Nf = fine_extent(region, active)
+    dst = zeros(T, Nf..., n_cons)
+    dp = old.owned ? getfield(solver, :patches)[lt.fine_index].decomp : nothing
+    gather_region!(dst, ntuple(d -> 1:Nf[d], 3), (0, 0, 0), (0, 0, 0),
+                   old.owned ? states[lt.fine_index] : nothing, root.comm,
+                   lt.fine_blocks, dp === nothing ? (0, 0, 0) : dp.offset,
+                   dp === nothing ? (0, 0, 0) : dp.n_halo_d)
+    return dst
+end
+
 function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                         workspace::Workspace, save) where {T}
     spec = getfield(solver, :regrid)
@@ -356,20 +423,52 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     isempty(wanted) && return false
     old_regions = [lt.region for lt in lev.transfers]
     wanted == old_regions && return false
-    old_index = Dict(r => lev.patches[i] for (i, r) in enumerate(old_regions))
+    old_lc = lev.level_comm
+    root_lc = levels[1].level_comm
+    # Patch index of an old tile by region, off the transfers rather than off
+    # `lev.patches`: the transfers are held by every rank of the parent's
+    # subset, the patches only by the level's owners.
+    old_of = Dict(lt.region => lt.fine_index for lt in lev.transfers)
+    n_cons = solver.equations.n_cons
     # A tile about to leave restricts once more: the post-step restriction
     # preceded the positivity repair, and nothing else writes it back.
     for (i, r) in enumerate(old_regions)
-        r in wanted || _restrict_patch!(solver, states, lev.transfers[i])
+        r in wanted ||
+            _restrict_patch!(solver, states, lev.transfers[i], root_lc, old_lc)
     end
+    # Lattice cells carry equal extents, so the rank count a level admits
+    # normally survives a regrid; it moves only when an edge-clipped cell
+    # enters or leaves the set.
+    np_new = _level_ranks(wanted, active, root_lc.size)
+    resized = np_new != old_lc.size
+    carried = Dict{BlockRegion,Array{T,4}}()
+    if resized
+        # The subset changed, so every tile's decomposition is rebuilt on the
+        # new communicator and no array survives. A surviving tile keeps its
+        # SOLUTION instead: gathered replicated over the root communicator
+        # while the old decompositions are still live, and written back onto
+        # the rebuilt tile the way the box regrid carries its overlap.
+        for (i, r) in enumerate(old_regions)
+            r in wanted || continue
+            carried[r] = _gather_tile(T, r, active, n_cons, lev.transfers[i],
+                                      solver, states, old_lc, root_lc)
+        end
+        if old_lc.owned
+            for lt in lev.transfers
+                free_communicators!(patches[lt.fine_index].decomp)
+            end
+        end
+        free_level_comm!(old_lc)
+    end
+    new_lc = resized ? split_level_comm(root_lc, np_new) : old_lc
     # Decompositions of departing tiles, collected before the patch vector
     # is overwritten below; a surviving tile keeps its decomposition through
-    # `_repatch` and must not appear here.
-    dropped_decomps = [patches[old_index[r]].decomp
+    # `_repatch` and must not appear here. Empty after a resize, which freed
+    # every old decomposition above.
+    dropped_decomps = resized || !old_lc.owned ? Decomp{T}[] :
+                      [patches[old_of[r]].decomp
                        for r in old_regions if !(r in wanted)]
-    n_cons = solver.equations.n_cons
     root = patches[1]
-    comm = getfield(solver, :comm)
     faces = _tile_faces(wanted)
     # The rank's scratch sets before the swap, departing tiles included: a
     # fresh tile of the lattice edge reuses one rather than allocating, and the
@@ -386,53 +485,68 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     fresh = Int[]
     for (ti, tr) in enumerate(wanted)
         idx = ti + 1
-        bcs = _fine_bcs(active, faces[ti])
-        if haskey(old_index, tr)
-            oi = old_index[tr]
-            p = _repatch(patches[oi], idx, faces[ti], bcs)
-            push!(new_states, states[oi])
-            push!(new_dQ, workspace.dQ[oi])
-            push!(new_du, workspace.du[oi])
-        else
-            p = _build_fine_patch(T, tr, active, root.h, spec.n_halo, comm,
-                                  spec.deriv, spec.filt, spec.smoo,
-                                  solver.art.smoother, spec.interface_rhs,
-                                  spec.backend, ws_pool,
-                                  solver.equations.n_species,
-                                  n_cons, idx, 1, faces[ti])
-            Q = _state_like(p.rho, n_cons)
-            push!(new_states, Q)
-            push!(new_dQ, zero(Q))
-            push!(new_du, zero(Q))
-            push!(fresh, ti)
-        end
-        push!(new_patches, p)
         push!(indices, idx)
-        push!(transfers, build_level_transfer(T, tr, active, spec.n_halo, [1],
-                                              idx, lev.transfers[1].restriction,
-                                              n_cons, getfield(solver, :subcycle),
-                                              [root.decomp], p.decomp, faces[ti]))
+        survives = !resized && haskey(old_of, tr)
+        survives || push!(fresh, ti)
+        if new_lc.owned
+            bcs = _fine_bcs(active, faces[ti])
+            if survives
+                oi = old_of[tr]
+                p = _repatch(patches[oi], idx, faces[ti], bcs)
+                push!(new_states, states[oi])
+                push!(new_dQ, workspace.dQ[oi])
+                push!(new_du, workspace.du[oi])
+            else
+                p = _build_fine_patch(T, tr, active, root.h, spec.n_halo,
+                                      new_lc.comm, spec.deriv, spec.filt,
+                                      spec.smoo, solver.art.smoother,
+                                      spec.interface_rhs, spec.backend, ws_pool,
+                                      solver.equations.n_species,
+                                      n_cons, idx, 1, faces[ti])
+                Q = _state_like(p.rho, n_cons)
+                push!(new_states, Q)
+                push!(new_dQ, zero(Q))
+                push!(new_du, zero(Q))
+            end
+            push!(new_patches, p)
+        end
+        push!(transfers, build_level_transfer(
+            T, tr, active, spec.n_halo, [1], idx, lev.transfers[1].restriction,
+            n_cons, getfield(solver, :subcycle), [root.decomp],
+            new_lc.owned ? new_patches[ti].decomp : nothing, root_lc.comm,
+            new_lc.size, faces[ti]))
     end
-    records = _level_records(T, comm, [p.region for p in new_patches], indices,
-                             [p.decomp for p in new_patches], n_cons)
-    resize!(patches, 1 + length(wanted))
-    resize!(states, 1 + length(wanted))
-    resize!(workspace.dQ, 1 + length(wanted))
-    resize!(workspace.du, 1 + length(wanted))
-    for ti in eachindex(wanted)
-        patches[ti + 1] = new_patches[ti]
-        states[ti + 1] = new_states[ti]
-        workspace.dQ[ti + 1] = new_dQ[ti]
-        workspace.du[ti + 1] = new_du[ti]
+    n_local_patches = new_lc.owned ? 1 + length(wanted) : 1
+    _resize_level_patches!(solver, states, workspace, n_local_patches)
+    if new_lc.owned
+        for ti in eachindex(wanted)
+            patches[ti + 1] = new_patches[ti]
+            states[ti + 1] = new_states[ti]
+            workspace.dQ[ti + 1] = new_dQ[ti]
+            workspace.du[ti + 1] = new_du[ti]
+        end
+        # The records are built on the patches' own regions (fine node space),
+        # not on the lattice cells `wanted` holds, which are the parent's.
+        records = _level_records(T, new_lc.comm, [p.region for p in new_patches],
+                                 indices, [p.decomp for p in new_patches], n_cons)
+        levels[2] = Level{T}(1, new_lc, indices, transfers, records)
+    else
+        levels[2] = Level{T}(1, new_lc, Int[], transfers)
     end
-    levels[2] = Level{T}(1, indices, transfers, records)
     for ti in fresh
-        init_geometry!(PatchSolver(solver, patches[ti + 1]))
-        _fill_fine_from_coarse!(solver, states, transfers[ti])
+        new_lc.owned && init_geometry!(PatchSolver(solver, patches[ti + 1]))
+        _fill_fine_from_coarse!(solver, states, transfers[ti], new_lc.owned)
+        # After a resize every tile is rebuilt; one whose region survived takes
+        # its evolved interior back over the interpolated initialization.
+        r = wanted[ti]
+        if new_lc.owned && haskey(carried, r)
+            _carry_over!(states[ti + 1], patches[ti + 1].decomp, r, carried[r],
+                         fine_extent(r, active), r, active, n_cons)
+        end
     end
     # A fresh tile's plane shared with a survivor takes the survivor's
     # evolved values rather than averaging its interpolation into them.
-    if !isempty(fresh)
+    if !isempty(fresh) && new_lc.owned
         is_fresh = falses(length(patches))
         for ti in fresh
             is_fresh[ti + 1] = true

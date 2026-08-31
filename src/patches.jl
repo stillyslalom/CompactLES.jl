@@ -672,22 +672,28 @@ fills corners. Collective over the ranks owning either side of any
 interface; a run with one patch returns immediately.
 """
 exchange_patch_ghosts!(solver, states) =
-    _exchange_ghosts!(solver, states, solver.ghost_sends, solver.ghost_recvs)
+    _exchange_ghosts!(solver, states, solver.comm, solver.ghost_sends,
+                      solver.ghost_recvs)
 
-function _exchange_ghosts!(solver, states, sends, recvs)
+# `comm` must be the communicator the records were built over, because each
+# record's `partner` is a rank number in that communicator: `solver.comm` for
+# the root's records, the owning level's communicator for a refined level's
+# (levels.jl). It is a parameter rather than a read of `solver.comm` so that
+# a refined level's exchange stays among its subset's ranks.
+function _exchange_ghosts!(solver, states, comm::MPI.Comm, sends, recvs)
     (isempty(recvs) && isempty(sends)) && return states
-    me = MPI.Comm_rank(solver.comm)
+    me = MPI.Comm_rank(comm)
     reqs = MPI.Request[]
     for r in recvs
         r.partner == me && continue
-        push!(reqs, MPI.Irecv!(r.buf, solver.comm; source=r.partner, tag=r.tag))
+        push!(reqs, MPI.Irecv!(r.buf, comm; source=r.partner, tag=r.tag))
     end
     for s in sends
         if s.partner == me
             _copy_block!(states[s.partner_patch], s.theirs, states[s.patch], s.mine)
         else
             _pack!(s.buf, states[s.patch], s.mine)
-            push!(reqs, MPI.Isend(s.buf, solver.comm; dest=s.partner, tag=s.tag))
+            push!(reqs, MPI.Isend(s.buf, comm; dest=s.partner, tag=s.tag))
         end
     end
     MPI.Waitall(reqs)
@@ -708,18 +714,19 @@ result does not depend on which side is asked. Collective as
 [`exchange_patch_ghosts!`](@ref) is; no-op with one patch.
 """
 average_shared_planes!(solver, states) =
-    _average_planes!(solver, states, solver.plane_pairs)
+    _average_planes!(solver, states, solver.comm, solver.plane_pairs)
 
-_average_planes!(solver, states, planes) =
-    _combine_planes!(solver, states, planes, _ -> 0.5)
+_average_planes!(solver, states, comm::MPI.Comm, planes) =
+    _combine_planes!(solver, states, comm, planes, _ -> 0.5)
 
 # Each shared-plane node ← w·(own copy) + (1 − w)·(partner's copy), with
 # `wself(record)` the weight of this side; the two sides' weights must sum
 # to one, which the mean (0.5 everywhere) and a one-way seeding (0 on the
 # taking side, 1 on the giving side) both satisfy.
-function _combine_planes!(solver, states, planes, wself::F) where {F}
+function _combine_planes!(solver, states, comm::MPI.Comm, planes,
+                          wself::F) where {F}
     isempty(planes) && return states
-    me = MPI.Comm_rank(solver.comm)
+    me = MPI.Comm_rank(comm)
     reqs = MPI.Request[]
     for pl in planes
         if pl.partner == me
@@ -729,14 +736,14 @@ function _combine_planes!(solver, states, planes, wself::F) where {F}
             _combine_blocks!(states[pl.patch], pl.mine,
                              states[pl.partner_patch], pl.theirs, wself(pl))
         else
-            push!(reqs, MPI.Irecv!(pl.buf, solver.comm; source=pl.partner, tag=pl.tag))
+            push!(reqs, MPI.Irecv!(pl.buf, comm; source=pl.partner, tag=pl.tag))
         end
     end
     for pl in planes
         pl.partner == me && continue
         _pack!(pl.sbuf, states[pl.patch], pl.mine)
         # The send uses the RECEIVER's tag, computed at record build time.
-        push!(reqs, MPI.Isend(pl.sbuf, solver.comm; dest=pl.partner, tag=pl.sendtag))
+        push!(reqs, MPI.Isend(pl.sbuf, comm; dest=pl.partner, tag=pl.sendtag))
     end
     MPI.Waitall(reqs)
     for pl in planes
@@ -755,13 +762,19 @@ neighboring interiors, at the root and on every refined level through that
 level's own records, and exchange each patch's own rank-boundary halos so
 edge and corner cells agree with both. Called by the multi-patch drivers
 after every RK stage update and at the head of each `run!` iteration; a
-single-patch solver never reaches it. Collective over `solver.comm`.
+single-patch solver never reaches it. Collective over `solver.comm` for the
+root's records and over each refined level's own communicator for that
+level's, which only the level's owners enter.
 """
 function sync_patches!(solver, states)
     average_shared_planes!(solver, states)
     exchange_patch_ghosts!(solver, states)
     levels = getfield(solver, :levels)
     for ℓ in 2:length(levels)
+        # The records of a refined level are addressed in that level's own
+        # communicator, so only its owners may enter them; a rank without
+        # state on the level holds no record to run either.
+        levels[ℓ].level_comm.owned || continue
         _sync_level_records!(solver, states, levels[ℓ])
     end
     for (i, patch) in enumerate(solver.patches)

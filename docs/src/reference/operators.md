@@ -89,6 +89,7 @@ restrict!
 prolong!
 LevelTransfer
 Level
+LevelComm
 nlevels
 refined_region
 level_regions

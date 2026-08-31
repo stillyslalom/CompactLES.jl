@@ -227,6 +227,12 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     lev = levels[ℓ]
     child = ℓ < length(levels) ? levels[ℓ+1] : nothing
     T = typeof(dt)
+    # Every collective this function runs is on level ℓ's own communicator:
+    # its patches' line solves and halo exchanges, its records, its shell
+    # imposition, and its children's box gathers and restriction, which read
+    # the parent state and write back onto it. This function is therefore
+    # entered by exactly the ranks owning level ℓ, and the recursion below
+    # guards on the child's ownership for the same reason.
     shell!(θ) = for lt in lev.transfers
         hermite_level_shell!(solver, states, lt, θ, parent_dt)
     end
@@ -277,15 +283,22 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     end
     save_boxes!(true)
     dtf = dt / T(3)
-    for mc in 1:3
-        _advance_level!(solver, ℓ + 1, states, dQs, dus, t0 + (mc - 1) * dtf,
-                        dtf, false, 3 * count + mc, dt, mc)
+    # A rank owning level ℓ but not level ℓ+1 skips the substeps: they carry
+    # only level-(ℓ+1) collectives, which its owners alone enter. The substep
+    # count is fixed, so the two rank sets do not diverge.
+    if child.level_comm.owned
+        for mc in 1:3
+            _advance_level!(solver, ℓ + 1, states, dQs, dus,
+                            t0 + (mc - 1) * dtf, dtf, false, 3 * count + mc,
+                            dt, mc)
+        end
     end
     # The root's restriction is `run!`'s, after its filter pass; every deeper
     # level restricts here so its parent's next substep sees the composite.
     if ℓ > 1
         for lt in child.transfers
-            _restrict_patch!(solver, states, lt)
+            _restrict_patch!(solver, states, lt, lev.level_comm,
+                             child.level_comm)
         end
         # The restriction can change nodes beside a tile interface of this
         # level; its neighbors' ghosts must see them before the next substep.

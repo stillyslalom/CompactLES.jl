@@ -85,7 +85,7 @@ export ArtParams, Solver
 export AbstractBackend, CPUBackend, DeviceBackend
 export Patch, PatchSolver, InterfaceBC, CoarseFineBC, npatches, eachpatch
 export exchange_patch_ghosts!, average_shared_planes!, sync_patches!
-export LevelTransfer, Level, nlevels, refined_region, level_regions,
+export LevelTransfer, Level, LevelComm, nlevels, refined_region, level_regions,
        prolong_level_ghosts!, restrict_level!, sync_levels!
 export ConstantBodyForce, add_source!, add_sources!
 export Workspace, compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!, mpi_main

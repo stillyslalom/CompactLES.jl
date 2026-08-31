@@ -190,6 +190,39 @@ end
                                    regrid_interval=-1)
 end
 
+@testset "level rank subsets: sizing and the serial ownership" begin
+    # `_level_ranks` sizes a level's rank subset from the largest count for
+    # which every tile clears the C8 filter's nine-point minimum. The numbers
+    # below are the ones the MPI suite's subset checks are built on, pinned
+    # here because a serial run exercises the sizing rule without ever
+    # reaching a split communicator.
+    act = (true, false, false)
+    r(ext) = BlockRegion((96, 0, 0), (ext, 1, 1))
+    # 4 coarse nodes are 10 fine ones: one rank, since even 10 ÷ 2 = 5 < 9.
+    @test CL._level_ranks([r(4)], act, 1) == 1
+    @test CL._level_ranks([r(4)], act, 8) == 1
+    # 8 coarse nodes are 22 fine: two ranks (22 ÷ 3 = 7 falls short).
+    @test CL._level_ranks([r(8)], act, 2) == 2
+    @test CL._level_ranks([r(8)], act, 8) == 2
+    # 24 coarse nodes are 70 fine: seven, not eight (70 ÷ 8 = 8).
+    @test CL._level_ranks([r(24)], act, 8) == 7
+    # A level takes the whole set whenever it fits, and the smallest tile of
+    # the set binds.
+    @test CL._level_ranks([r(64)], act, 4) == 4
+    @test CL._level_ranks([r(64), r(4)], act, 4) == 1
+    # A serial refined solver holds every level unsplit, so no communicator
+    # is created and none is freed.
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    solver = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
+                    refine=r(8))
+    lc = solver.levels[2].level_comm
+    @test lc.owned
+    @test !lc.scoped
+    @test lc.size == 1
+    @test solver.levels[1].level_comm.size == 1
+    @test npatches(solver) == 2
+end
+
 @testset "subcycled two levels: manufactured solution across the boundary" begin
     errs = [_level_wave_error(N; subcycle=true) for N in (48, 96, 192)]
     orders = [log2(errs[i] / errs[i+1]) for i in 1:2]

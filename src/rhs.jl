@@ -551,7 +551,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                       T(cfl), filter_interval, T(filter_cfl), control,
                       n_global, patches, regions, decomp.comm,
                       GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
-                      [Level{T}(0, [1], LevelTransfer{T}[])], false, nothing,
+                      [Level{T}(0, root_level_comm(comm), [1],
+                                LevelTransfer{T}[])], false, nothing,
                       zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
         init_geometry!(solver)
         return solver
@@ -560,7 +561,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     # Level ℓ covers `refines[ℓ]` of level ℓ − 1: one patch over the region
     # exactly with `tile = 0`, the lattice tiles meeting it otherwise.
     fines = Patch{T}[]
-    levels = [Level{T}(0, [1], LevelTransfer{T}[])]
+    root_lc = root_level_comm(comm)
+    levels = [Level{T}(0, root_lc, [1], LevelTransfer{T}[])]
     parent_indices = [1]
     parent_regions = [BlockRegion((0, 0, 0), n_global)]
     # The parent nodes a child may read: the root's are all its own; a
@@ -569,6 +571,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     parent_h = h
     decomp_of = Dict{Int,Decomp{T}}(1 => decomp)
     margin = max(n_halo, LEVEL_BUFFER)
+    parent_lc = root_lc
     for (ℓ, rg) in enumerate(refines)
         if tile == 0
             tregions = [rg]
@@ -585,45 +588,86 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                       "the nesting margin")
         end
         faces = _tile_faces(tregions)
-        indices = Int[]
-        transfers = LevelTransfer{T}[]
-        for (ti, tr) in enumerate(tregions)
+        for tr in tregions
             _covered_by(_buffered(tr, active_g, margin), parent_valid) ||
                 error("level $ℓ tile $tr must be nested at least $margin " *
                       "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches' " *
                       "own (not imposed) nodes")
-            idx = length(fines) + 2
-            fine = _build_fine_patch(T, tr, active_g, parent_h, n_halo, comm,
-                                     deriv, filt, smoo, art.smoother,
-                                     interface_rhs, backend, ws_pool, n_species,
-                                     n_cons, idx, ℓ, faces[ti])
-            pidx = _parents_of(tr, active_g, parent_indices, parent_regions)
-            lt = build_level_transfer(T, tr, active_g, n_halo, pidx, idx,
-                                      level_restriction, n_cons, subcycle,
-                                      [decomp_of[i] for i in pidx], fine.decomp,
-                                      faces[ti])
-            push!(fines, fine)
-            push!(indices, idx)
-            push!(transfers, lt)
-            decomp_of[idx] = fine.decomp
         end
-        lvl = fines[end-length(tregions)+1:end]
-        # Records address ranks of the communicator the exchange runs over,
-        # the root's Cartesian one (`solver.comm`), whose numbering may be
-        # reordered relative to `comm`.
-        records = _level_records(T, decomp.comm, [p.region for p in lvl],
-                                 indices, [p.decomp for p in lvl], n_cons)
-        push!(levels, Level{T}(ℓ, indices, transfers, records))
+        # The level's geometry is derived, not read off built patches, so a
+        # rank outside the level's subset carries the same node spaces into
+        # the next level's nesting checks as its owners do.
+        fine_regions = [BlockRegion(
+            ntuple(d -> active_g[d] ? 3 * tr.offset[d] : 0, 3),
+            fine_extent(tr, active_g)) for tr in tregions]
+        imposed_all = [ntuple(d -> (f[d][1] == 0, f[d][2] == 0), 3)
+                       for f in faces]
+        indices = [length(fines) + 1 + ti for ti in eachindex(tregions)]
+        next_h = ntuple(d -> active_g[d] ? parent_h[d] / 3 : parent_h[d], 3)
+        if parent_lc.owned
+            # This level is owned by the first np ranks of the parent's
+            # subset, where np = `_level_ranks(...)`; np equals the parent's
+            # whole size whenever every tile is large enough to split over
+            # it. `split_level_comm` is collective over the parent's
+            # communicator, and np depends only on the tile geometry, which
+            # every rank holds, so all ranks pass the same np with no
+            # communication beyond the split itself.
+            lc = split_level_comm(parent_lc, _level_ranks(tregions, active_g,
+                                                          parent_lc.size))
+            transfers = LevelTransfer{T}[]
+            for (ti, tr) in enumerate(tregions)
+                idx = indices[ti]
+                if lc.owned
+                    fine = _build_fine_patch(T, tr, active_g, parent_h, n_halo,
+                                             lc.comm, deriv, filt, smoo,
+                                             art.smoother, interface_rhs,
+                                             backend, ws_pool, n_species,
+                                             n_cons, idx, ℓ, faces[ti])
+                    push!(fines, fine)
+                    decomp_of[idx] = fine.decomp
+                end
+                pidx = _parents_of(tr, active_g, parent_indices, parent_regions)
+                push!(transfers, build_level_transfer(
+                    T, tr, active_g, n_halo, pidx, idx, level_restriction,
+                    n_cons, subcycle, [decomp_of[i] for i in pidx],
+                    lc.owned ? fines[end].decomp : nothing, parent_lc.comm,
+                    lc.size, faces[ti]))
+            end
+            if lc.owned
+                # A record's partner is a rank number in the communicator the
+                # exchange runs over, here the level's own; that numbering
+                # may differ from a patch's Cartesian communicator's.
+                records = _level_records(T, lc.comm, fine_regions, indices,
+                                         [fines[end-length(tregions)+ti].decomp
+                                          for ti in eachindex(tregions)], n_cons)
+                push!(levels, Level{T}(ℓ, lc, indices, transfers, records))
+            else
+                # The level's transfers are still held: their box gathers and
+                # restriction write-back run on the parent's communicator.
+                push!(levels, Level{T}(ℓ, lc, Int[], transfers))
+            end
+            parent_lc = lc
+        else
+            # Outside the parent's subset, and so outside this level and every
+            # level below it: no patch, no transfer, no communicator.
+            push!(levels, Level{T}(ℓ, absent_level_comm(), Int[],
+                                   LevelTransfer{T}[]))
+        end
         parent_indices = indices
-        parent_regions = [p.region for p in lvl]
-        parent_valid = [_erode(p.region, lt.imposed, active_g)
-                        for (p, lt) in zip(lvl, transfers)]
-        parent_h = lvl[1].h
+        parent_regions = fine_regions
+        parent_valid = [_erode(r, imp, active_g)
+                        for (r, imp) in zip(fine_regions, imposed_all)]
+        parent_h = next_h
     end
-    # The literal form types the vector by the patches' join (the root's
-    # boundary-condition tuple differs from a refined patch's), as the
-    # two-patch construction always has.
-    patches = [patch, fines...]
+    # `[patch, fines...]` gives the vector the narrowest element type
+    # covering both kinds of patch (the root's boundary-condition tuple
+    # differs from a refined patch's), the same type the two-patch
+    # construction has always produced. A rank outside every refined level's
+    # subset holds only the root, and `[patch]` alone would infer that one
+    # patch's concrete type; the annotated `Patch[patch]` keeps the element
+    # type wide, because it is fixed for the life of the solver and a regrid
+    # that grows the subset later pushes a refined patch into this vector.
+    patches = isempty(fines) ? Patch[patch] : [patch, fines...]
     regrid = regrid_interval == 0 ? nothing :
              RegridSpec{T}(regrid_interval, T(tag_threshold), tag_buffer,
                            margin, n_halo, interface_rhs,
@@ -807,7 +851,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                   T(cfl), filter_interval, T(filter_cfl), control,
                   n_global, patches, regions, world,
                   ghost_sends, ghost_recvs, plane_pairs,
-                  [Level{T}(0, collect(eachindex(patches)), LevelTransfer{T}[])],
+                  [Level{T}(0, root_level_comm(world),
+                            collect(eachindex(patches)), LevelTransfer{T}[])],
                   false, nothing,
                   zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
     for p in getfield(solver, :patches)
@@ -959,16 +1004,24 @@ boundary_plane(solver::SolverLike, d::Int, side::Int) = wallplane(solver.decomp,
 
 Zero-filled conserved storage for `solver`: a [`ConservedState`](@ref) matching
 its sole patch, or, for a patch-decomposed solver, a `Vector` of them aligned
-with `solver.patches`. The vector form is selected by the *global* patch
-count: a rank of a partitioned multi-patch run holds exactly one local patch,
-but its state must still be the vector the multi-patch drivers dispatch on,
-or the run would silently skip the interface synchronization.
+with `solver.patches`. The vector form is selected by the *global* layout, not
+by the local patch count: a rank of a partitioned slab run holds exactly one
+patch, and a rank outside a refined level's rank subset holds only the root,
+but the multi-patch drivers dispatch on the vector form, and a single-array
+state on such a rank silently skips the interface and level synchronization.
 """
 allocate_state(solver::Solver) =
-    (length(getfield(solver, :patch_regions)) == 1 && npatches(solver) == 1) ?
-        _state_like(solver.rho, solver.equations.n_cons) :
+    _multipatch(solver) ?
         [_state_like(p.rho, solver.equations.n_cons)
-         for p in getfield(solver, :patches)]
+         for p in getfield(solver, :patches)] :
+        _state_like(solver.rho, solver.equations.n_cons)
+
+# Whether the solver's layout is a multi-patch one, asked of the layout rather
+# than of `npatches`: both a slab partition and a refined level's rank subset
+# leave some rank holding one patch of a layout that has several.
+_multipatch(solver::Solver) =
+    length(getfield(solver, :patch_regions)) > 1 ||
+    length(getfield(solver, :levels)) > 1
 allocate_state(ps::PatchSolver) = _state_like(ps.rho, ps.equations.n_cons)
 
 # Zero-filled conserved storage matching one patch's field storage, so a
