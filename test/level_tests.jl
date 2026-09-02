@@ -256,6 +256,81 @@ end
     @test [lt.fine_index for lt in lev.transfers] == [2, 3, 4, 5]
 end
 
+@testset "stored ownership across regrids and measured rebalance weights" begin
+    # `_place_tiles` keeps a survivor's range and places fresh tiles among
+    # the ranks left free; `_tile_owners` would shift every range behind a
+    # tile entering ahead on the curve. A synthetic tile-set sequence, no
+    # run: 9-node 1-D tiles (25 fine nodes, two ranks each at most) over
+    # eight ranks.
+    act = (true, false, false)
+    t(k) = BlockRegion((80 + 8k, 0, 0), (9, 1, 1))
+    four = [t(0), t(1), t(2), t(3)]
+    o0, n0 = CL._tile_owners(four, act, 8)
+    @test (o0, n0) == ([0:1, 2:3, 4:5, 6:7], 8)
+    # The shock moves right: t0 leaves, t4 enters. The survivors keep their
+    # ranges and t4 takes the ranks t0 freed, where the fresh partition
+    # would have moved all three survivors down.
+    oA, nA = CL._place_tiles([t(1), t(2), t(3), t(4)], act, 8, four, o0)
+    @test (oA, nA) == ([2:3, 4:5, 6:7, 0:1], 8)
+    @test CL._tile_owners([t(1), t(2), t(3), t(4)], act, 8)[1] == o0
+    # No rank free: a fresh tile joins the group of the survivor nearest it
+    # on the curve, here t4's.
+    oB, nB = CL._place_tiles([t(1), t(2), t(3), t(4), t(5)], act, 8,
+                             [t(1), t(2), t(3), t(4)], oA)
+    @test (oB, nB) == ([2:3, 4:5, 6:7, 0:1, 0:1], 8)
+    # Two departures free a run of four ranks; the one fresh tile takes the
+    # two it admits, and the other two hold nothing on the level.
+    oC, nC = CL._place_tiles([t(3), t(4), t(5), t(6)], act, 8,
+                             [t(1), t(2), t(3), t(4), t(5)], oB)
+    @test (oC, nC) == ([6:7, 0:1, 0:1, 2:3], 8)
+    # Free ranks with a gap: the ranks dealt to a fresh tile are cut at the
+    # gap, so a group stays contiguous (ranks 0, 2, 3 free; the tile takes
+    # 0 alone). The level's rank count follows the highest rank in use.
+    oD, nD = CL._place_tiles([t(1), t(2), t(3)], act, 6, [t(1), t(2)], [1:1, 4:5])
+    @test (oD, nD) == ([1:1, 4:5, 0:0], 6)
+    # A departure from the top of the level shrinks it.
+    @test CL._place_tiles([t(1)], act, 6, [t(1), t(2)], [1:1, 4:5]) == ([1:1], 2)
+    # With no survivor the level is partitioned afresh.
+    @test CL._place_tiles([t(5), t(6)], act, 8, [t(1)], [3:4]) ==
+          CL._tile_owners([t(5), t(6)], act, 8)
+    # Measured weights: a tile costs the busy time of its owner ranks, a
+    # group's shared by volume, and a fresh tile the mean cost per node.
+    w = CL._measured_weights([t(1), t(2), t(3)], act, [t(1), t(2)],
+                             [0:1, 2:2], [1.0, 1.0, 3.0])
+    @test w == [2.0, 3.0, 2.5]
+    wg = CL._measured_weights([t(1), t(2)], act, [t(1), t(2)], [0:0, 0:0], [4.0])
+    @test wg == [2.0, 2.0]
+    @test CL._measured_weights([t(1), t(3)], act, [t(1)], [0:0], [0.0]) ==
+          [25.0, 25.0]
+    # The weighted partition: shares 1.6 : 2.4 : 2.0 of six ranks, at the
+    # two-rank cap each.
+    @test CL._tile_owners([t(1), t(2), t(3)], act, 6; weights=w) ==
+          ([0:1, 2:3, 4:5], 6)
+    # Unequal weights past the cap: the heavy tile stops at two ranks.
+    @test CL._tile_owners([t(1), t(2)], act, 4; weights=[1.0, 9.0]) == ([0:1, 2:3], 4)
+    @test CL._rank_counts([1.0, 9.0], [2, 2], 4) == [2, 2]
+    @test CL._rank_counts([1.0, 9.0], [4, 4], 4) == [1, 3]
+    # Configuration guards.
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    mk(; kw...) = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
+                         refine=BlockRegion((80, 0, 0), (32, 1, 1)); kw...)
+    @test_throws ErrorException mk(tile=8, regrid_interval=5, rebalance=0.5)
+    @test_throws ErrorException mk(tile=8, rebalance=1.5)
+    @test_throws ErrorException mk(regrid_interval=5, rebalance=1.5)
+    @test_throws ErrorException mk(tile=8, regrid_interval=5, rebalance=1.5,
+                                   rebalance_persist=0)
+    spec = getfield(mk(tile=8, regrid_interval=5, rebalance=1.5), :regrid)
+    @test spec.rebalance == 1.5 && spec.persist == 2 && spec.streak == 0
+    # A serial rebalance never fires: one rank's max/mean is exactly one.
+    sa = mk(tile=8, regrid_interval=5, rebalance=1.0, rebalance_persist=1)
+    Q = allocate_state(sa)
+    initialize!(sa, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0 + 0.1sin(x)))
+    run!(sa, Q; tfinal=1.0, nmax=12)
+    spec = getfield(sa, :regrid)
+    @test spec.imbalance == 1.0 && spec.streak == 0
+    @test sa.wait_total >= 0 && sa.wait_total <= sa.wall_total
+end
+
 @testset "subcycled two levels: manufactured solution across the boundary" begin
     errs = [_level_wave_error(N; subcycle=true) for N in (48, 96, 192)]
     orders = [log2(errs[i] / errs[i+1]) for i in 1:2]

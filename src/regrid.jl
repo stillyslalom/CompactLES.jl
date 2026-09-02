@@ -357,10 +357,20 @@ end
 # state; an unwanted one is dropped, its last restriction already on the
 # coarse level. Between distinct lattice cells no carry-over arises: they
 # overlap in a shared plane at most, and that plane takes the neighbor's
-# values at the first averaging after the regrid. A surviving tile whose
-# owner range moved, because the tile set around it changed the partition,
-# is rebuilt on its new owners and takes its evolved solution back through a
-# replicated gather, one tile at a time at the regrid cadence.
+# values at the first averaging after the regrid.
+#
+# Ownership is stored, not recomputed: `Level.owners` is the authority, a
+# surviving tile keeps its range there, and a fresh tile is placed among the
+# ranks the survivors leave free (`_place_tiles`). The partition is
+# recomputed only by a rebalance, when the per-rank busy time the run
+# measures over the last interval is imbalanced past `RegridSpec.rebalance`
+# at `RegridSpec.persist` consecutive checks (`_rebalance_due!`); the
+# weights are then the measured per-tile costs (`_measured_weights`), so
+# the interface factor is measured inside the job rather than calibrated. A
+# surviving tile whose owner range a rebalance moved is rebuilt on its new
+# owners and takes its evolved solution back through a replicated gather,
+# one tile at a time at the regrid cadence; point-to-point migration is the
+# recorded follow-up (reference/AMR_GPU.md, ownership and load balance).
 
 # Flags over the lattice cells, reduced so every rank derives the same set.
 function _tag_tiles(solver::Solver, Qc, spec::RegridSpec)
@@ -400,6 +410,32 @@ function _gather_tile(::Type{T}, region::BlockRegion, active::NTuple{3,Bool},
     return dst
 end
 
+# Whether this regrid check repartitions the level on measured load, and
+# the measurement when it does: each rank's busy time over the interval
+# since the last check (its step wall less its time inside the run-wide
+# collectives, less its own regrid work), Allgathered so every rank holds
+# the same vector. The ratio of the largest to the mean must exceed
+# `spec.rebalance` at `spec.persist` consecutive checks. Collective over the
+# root communicator whenever rebalancing is on, and every rank takes the
+# same decision from the same reduced data; a rank-local decision here
+# would be a deadlock, since the ranks would then split different
+# communicators. Returns `nothing` when nothing is due.
+function _rebalance_due!(solver::Solver, spec::RegridSpec)
+    spec.rebalance > 0 || return nothing
+    busy = (solver.wall_total - spec.wall_mark) -
+           (solver.wait_total - spec.wait_mark) - spec.wall_regrid
+    spec.wall_mark = solver.wall_total
+    spec.wait_mark = solver.wait_total
+    spec.wall_regrid = 0.0
+    walls = MPI.Allgather(max(busy, 0.0), getfield(solver, :comm))
+    mean = sum(walls) / length(walls)
+    spec.imbalance = mean > 0 ? maximum(walls) / mean : 1.0
+    spec.streak = spec.imbalance > spec.rebalance ? spec.streak + 1 : 0
+    spec.streak >= spec.persist || return nothing
+    spec.streak = 0
+    return walls
+end
+
 function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                         workspace::Workspace, save) where {T}
     spec = getfield(solver, :regrid)
@@ -409,6 +445,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     n_global = solver.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
     flags, K = _tag_tiles(solver, states[1], spec)
+    busy = _rebalance_due!(solver, spec)
     any(!=(0), flags) || return false
     lo = ntuple(d -> 1 + spec.margin, 3)
     hi = ntuple(d -> n_global[d] - spec.margin, 3)
@@ -420,7 +457,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     end
     isempty(wanted) && return false
     old_regions = [lt.region for lt in lev.transfers]
-    wanted == old_regions && return false
+    wanted != old_regions || busy !== nothing || return false
     old_lc = lev.level_comm
     root_lc = levels[1].level_comm
     # Old and new tile of a region: the transfers are held by every rank of
@@ -428,22 +465,36 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     old_of = Dict(r => i for (i, r) in enumerate(old_regions))
     new_of = Dict(r => i for (i, r) in enumerate(wanted))
     n_cons = solver.equations.n_cons
+    # Ownership is stored: a surviving tile keeps its range and a fresh one
+    # is placed among the ranks left free, so the tile set changing around
+    # a survivor does not move it. A rebalance repartitions the whole level
+    # instead, weighted by the costs the last interval measured. Either
+    # way the inputs are the reduced tile flags and the owners every rank
+    # holds, so every rank derives the same assignment. A tile stays in
+    # place, arrays and state included, when both its region and its range
+    # survive; otherwise it is rebuilt, and one whose region survived takes
+    # its solution back below. The level's rank count moves when a fresh
+    # tile takes ranks beyond the old level or a departure vacates its top
+    # ranks; a survivor's Cartesian communicator is independent of the
+    # level communicator the resize replaces, so it survives the resize.
+    if busy === nothing
+        owners, np_new = _place_tiles(wanted, active, root_lc.size,
+                                      old_regions, lev.owners)
+    else
+        weights = _measured_weights(wanted, active, old_regions, lev.owners, busy)
+        owners, np_new = _tile_owners(wanted, active, root_lc.size; weights)
+    end
+    resized = np_new != old_lc.size
+    kept = [haskey(old_of, r) && lev.owners[old_of[r]] == owners[ti]
+            for (ti, r) in enumerate(wanted)]
+    # A rebalance that moved nothing, with the tile set unchanged, is no
+    # regrid; the decision is reduced, so every rank returns here together.
+    wanted == old_regions && all(kept) && return false
     # A tile about to leave restricts once more: the post-step restriction
     # preceded the positivity repair, and nothing else writes it back.
     for (i, r) in enumerate(old_regions)
         haskey(new_of, r) || _restrict_patch!(solver, states, lev.transfers[i], root_lc)
     end
-    # Lattice cells carry equal extents, so the rank count a level admits
-    # normally survives a regrid; it moves only when an edge-clipped cell
-    # enters or leaves the set. The owner ranges move more often: a tile
-    # entering the set ahead of a surviving one on the curve shifts every
-    # range behind it. A tile stays in place, arrays and state included,
-    # when both its region and its range survive; otherwise it is rebuilt,
-    # and one whose region survived takes its solution back below.
-    owners, np_new = _tile_owners(wanted, active, root_lc.size)
-    resized = np_new != old_lc.size
-    kept = [!resized && haskey(old_of, r) &&
-            lev.owners[old_of[r]] == owners[ti] for (ti, r) in enumerate(wanted)]
     carried = Dict{BlockRegion,Array{T,4}}()
     for (ti, r) in enumerate(wanted)
         (kept[ti] || !haskey(old_of, r)) && continue
@@ -585,6 +636,12 @@ function _maybe_regrid!(solver::Solver, states::Vector{<:ConservedState},
     spec === nothing && return nothing
     solver.step - spec.last_step >= spec.interval || return nothing
     spec.last_step = solver.step
+    # The regrid's own work is excluded from the busy time the next check
+    # measures: its gathers and frees are charged to the waiting account as
+    # they run, and the rest is charged here.
+    t0 = time_ns()
+    wait0 = solver.wall_wait
     regrid!(solver, states, workspace, save)
+    spec.wall_regrid += (time_ns() - t0) / 1e9 - (solver.wall_wait - wait0)
     return nothing
 end

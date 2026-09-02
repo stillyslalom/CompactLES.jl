@@ -1526,6 +1526,91 @@ function test_tiled_level()
         check("tiled regrid under ownership: time reached matches serial",
               abs(gmax(solver.t) - 0.0033221635376072057), 1e-13)
     end
+
+    # Stored ownership and rebalancing on the same regrids. A callback at
+    # every step compares each surviving tile's owner range with the one it
+    # had (the regrid runs at the head of the next step, so consecutive
+    # readings straddle it): with rebalancing off no survivor moves, and
+    # with it on at a threshold of one, which any measured spread of busy
+    # time exceeds, the level is repartitioned on the measured weights, a
+    # survivor moves, and the tracked tile set and time are still the
+    # serial ones to round-off.
+    function regrid_track(; rebalance, persist)
+        moved = Ref(0)
+        prev = Dict{BlockRegion,UnitRange{Int}}()
+        watch = Callback(EveryStep(1), (s, _) -> begin
+            lev = getfield(s, :levels)[2]
+            for (lt, o) in zip(lev.transfers, lev.owners)
+                haskey(prev, lt.region) && prev[lt.region] != o && (moved[] += 1)
+            end
+            empty!(prev)
+            for (lt, o) in zip(lev.transfers, lev.owners)
+                prev[lt.region] = o
+            end
+            false
+        end)
+        wall2 = (SlipWallBC(), SlipWallBC())
+        solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
+                        regrid_interval=5, tag_buffer=2, tile=8,
+                        refine=BlockRegion((176, 0, 0), (16, 1, 1)),
+                        rebalance=rebalance, rebalance_persist=persist)
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) -> x < 0.45 ?
+            Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+            Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+        run!(solver, states; tfinal=0.03, nmax=41, callback=watch)
+        offs = [r.offset[1] for r in level_regions(solver, 1)]
+        return solver, offs, moved[]
+    end
+    let
+        _, offs, moved = regrid_track(rebalance=0, persist=1)
+        check("stored ownership: no survivor moved with rebalance off",
+              gmax(moved), 0.5)
+        check("stored ownership: tile set tracks as serial",
+              abs(gmax(first(offs)) - 168) + abs(gmax(last(offs)) - 192), 0.5)
+        solver, offs, moved = regrid_track(rebalance=1.0, persist=1)
+        spec = getfield(solver, :regrid)
+        check("rebalance on: a measured spread repartitioned the level",
+              np > 1 && gmax(moved) == 0 ? 1.0 : 0.0, 0.5)
+        check("rebalance on: tile count tracks as serial (4)",
+              abs(gmax(length(offs)) - 4), 0.5)
+        check("rebalance on: first tile tracks as serial (168)",
+              abs(gmax(first(offs)) - 168), 0.5)
+        check("rebalance on: last tile tracks as serial (192)",
+              abs(gmax(last(offs)) - 192), 0.5)
+        check("rebalance on: time reached matches serial",
+              abs(gmax(solver.t) - 0.0033221635376072057), 1e-13)
+        check("rebalance on: max/mean busy time measured",
+              isfinite(spec.imbalance) && spec.imbalance >= 1 ? 0.0 : 1.0, 0.5)
+        # Hysteresis, on synthetic per-rank busy times: rank r reports
+        # 1 + 3r seconds for an interval, a spread above the threshold at
+        # every rank count here. With `persist = 2` the first check holds,
+        # the second consecutive one repartitions and hands back the
+        # Allgathered vector, and a balanced interval resets the streak.
+        spec.rebalance = 1.5
+        spec.persist = 2
+        spec.streak = 0
+        spec.wall_mark = solver.wall_total
+        spec.wait_mark = solver.wait_total
+        spec.wall_regrid = 0.0
+        solver.wall_total += 1.0 + 3rank
+        r1 = CL._rebalance_due!(solver, spec)
+        held = r1 === nothing && spec.streak == 1 && spec.imbalance > 1.5
+        solver.wall_total += 1.0 + 3rank
+        r2 = CL._rebalance_due!(solver, spec)
+        solver.wall_total += 1.0
+        r3 = CL._rebalance_due!(solver, spec)
+        check("hysteresis: the first imbalanced check holds",
+              held ? 0.0 : 1.0, 0.5)
+        check("hysteresis: the second consecutive check repartitions",
+              r2 === nothing ? 1.0 :
+              maximum(abs.(r2 .- [1.0 + 3r for r in 0:np-1])), 1e-9)
+        check("hysteresis: a balanced interval resets the streak",
+              r3 === nothing && spec.streak == 0 ? 0.0 : 1.0, 0.5)
+        check("hysteresis: the balanced interval measures max/mean = 1",
+              abs(spec.imbalance - 1.0), 1e-12)
+    end
 end
 
 # ---------------------------------------------------------------------------

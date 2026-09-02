@@ -222,7 +222,7 @@ every tile sits at its cap, when the sum is the cap total and the remaining
 ranks hold nothing on the level. Deterministic, so every rank computes the
 same partition without communication.
 """
-function _rank_counts(weights::Vector{Int}, caps::Vector{Int}, np::Int)
+function _rank_counts(weights::AbstractVector{<:Real}, caps::Vector{Int}, np::Int)
     n = length(weights)
     np >= n || error("$np ranks cannot each take a tile of $n")
     total = sum(weights)
@@ -248,7 +248,7 @@ function _rank_counts(weights::Vector{Int}, caps::Vector{Int}, np::Int)
 end
 
 """
-    _tile_owners(regions, active, np) -> (owners, np_level)
+    _tile_owners(regions, active, np; weights) -> (owners, np_level)
 
 The owner rank range of every tile of a level, as 0-based ranges in the
 level's communicator, and the level's rank count, from the tile geometry
@@ -259,15 +259,18 @@ that neighboring tiles sit on neighboring ranks; with more tiles than ranks
 each tile takes one rank, the curve cut into `np` runs of about equal weight.
 Ranges never straddle: a rank belongs to one group, the tiles sharing its
 range, and one communicator per group serves all of them. The weight is the
-tile's fine volume; the interface factor the design records
-(`reference/AMR_GPU.md`) is unmeasured and not applied. A level of one tile
+tile's fine volume unless `weights` supplies one per tile, as a rebalance
+does from the per-rank step wall it measured (`_measured_weights`); a caller
+passing weights must pass the same on every rank. A level of one tile
 reduces to `_level_ranks`.
 """
 function _tile_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
-                      np::Int)
+                      np::Int;
+                      weights::AbstractVector{<:Real}=
+                          [prod(fine_extent(r, active)) for r in regions])
     n = length(regions)
+    length(weights) == n || error("one weight per tile: $(length(weights)) for $n")
     order = _sfc_order(regions)
-    weights = [prod(fine_extent(r, active)) for r in regions]
     owners = Vector{UnitRange{Int}}(undef, n)
     if np >= n
         caps = [_level_ranks([r], active, np) for r in regions]
@@ -288,6 +291,105 @@ function _tile_owners(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
         before += weights[t]
     end
     return owners, np
+end
+
+"""
+    _place_tiles(regions, active, np, old_regions, old_owners) -> (owners, np_level)
+
+The owner ranges of a regridded level under stored ownership: a tile whose
+region survives from `old_regions` keeps the range `old_owners` recorded for
+it, and a fresh tile is placed by the rule [`_tile_owners`](@ref) applies to
+a whole level, restricted to the ranks the survivors leave free. The free
+ranks are dealt to the fresh tiles as if they were contiguous, and a range
+that would straddle a gap between free ranks is cut at the gap, so a group
+stays a contiguous rank range; when the survivors leave no rank free, a
+fresh tile joins the group of the survivor nearest it on the space-filling
+curve. With no survivor the level is partitioned afresh. The level's rank
+count is one past the highest rank any range uses, so a rank inside the
+level may hold no tile of it after a departure. Every input is identical on
+every rank (the wanted set is reduced, and the previous owners are held by
+every rank of the parent's subset), so the answer is too.
+"""
+function _place_tiles(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
+                      np::Int, old_regions::Vector{BlockRegion},
+                      old_owners::Vector{UnitRange{Int}})
+    n = length(regions)
+    old_of = Dict(r => i for (i, r) in enumerate(old_regions))
+    owners = Vector{UnitRange{Int}}(undef, n)
+    fresh = Int[]
+    survivors = Int[]
+    for (t, r) in enumerate(regions)
+        if haskey(old_of, r)
+            owners[t] = old_owners[old_of[r]]
+            push!(survivors, t)
+        else
+            push!(fresh, t)
+        end
+    end
+    isempty(survivors) && return _tile_owners(regions, active, np)
+    if !isempty(fresh)
+        taken = falses(np)
+        for t in survivors, r in owners[t]
+            taken[r + 1] = true
+        end
+        free = [r for r in 0:(np - 1) if !taken[r + 1]]
+        if isempty(free)
+            keys = [_morton(r.offset) for r in regions]
+            for t in fresh
+                nearest = survivors[argmin([abs(keys[t] - keys[s])
+                                            for s in survivors])]
+                owners[t] = owners[nearest]
+            end
+        else
+            virtual, _ = _tile_owners(regions[fresh], active, length(free))
+            for (k, t) in enumerate(fresh)
+                v = virtual[k]
+                lo = free[first(v) + 1]
+                hi = lo
+                for i in (first(v) + 1):last(v)
+                    free[i + 1] == hi + 1 || break
+                    hi += 1
+                end
+                owners[t] = lo:hi
+            end
+        end
+    end
+    return owners, maximum(last, owners) + 1
+end
+
+"""
+    _measured_weights(regions, active, old_regions, old_owners, busy) -> Vector{Float64}
+
+Per-tile weights for a rebalance, from `busy`, each rank's measured step
+wall over the last regrid interval less its time inside the run-wide
+collectives, indexed by rank of the level's communicator. A tile of the old
+level costs the busy time of its owner ranks, summed, times its share by
+fine volume of the tiles those ranks held (a group's tiles all share its
+range); a tile in `regions` that survives from `old_regions` takes that
+cost, and a fresh one takes its volume at the mean measured cost per fine
+node. The interface factor the design anticipates, small tiles costing more
+than their volume, is therefore measured by the run itself rather than
+calibrated. Falls back to the volumes when nothing was measured. `busy` must
+be the same vector on every rank.
+"""
+function _measured_weights(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
+                           old_regions::Vector{BlockRegion},
+                           old_owners::Vector{UnitRange{Int}},
+                           busy::Vector{Float64})
+    old_vol = [Float64(prod(fine_extent(r, active))) for r in old_regions]
+    group_vol = Dict{UnitRange{Int},Float64}()
+    for (t, rg) in enumerate(old_owners)
+        group_vol[rg] = get(group_vol, rg, 0.0) + old_vol[t]
+    end
+    cost = [sum(busy[r + 1] for r in old_owners[t]) *
+            old_vol[t] / group_vol[old_owners[t]] for t in eachindex(old_regions)]
+    vol = [Float64(prod(fine_extent(r, active))) for r in regions]
+    total_cost = sum(cost; init=0.0)
+    total_cost > 0 || return vol
+    per_node = total_cost / sum(old_vol)
+    old_of = Dict(r => i for (i, r) in enumerate(old_regions))
+    return [haskey(old_of, r) ? cost[old_of[r]] : vol[t] * per_node
+            for (t, r) in enumerate(regions)]
 end
 
 # The owner range containing rank `me`, or `nothing`.
@@ -452,7 +554,9 @@ interface plane as root slabs do.
 `patches`, `tiles` and the records are this rank's own and are empty on a
 rank holding no tile of the level; `owners` and `transfers` are held by every
 rank of the PARENT level's subset, since the box gathers and the restriction
-write-back built on them run there, and are indexed by tile.
+write-back built on them run there, and are indexed by tile. `owners` is the
+authority across regrids: a surviving tile keeps its range there until a
+rebalance moves it (`_place_tiles`, `src/regrid.jl`).
 `patches[i]` is tile `tiles[i]`; `transfers[t].fine_index` is the
 `solver.patches` index of tile `t` on this rank, or 0.
 """
@@ -693,6 +797,11 @@ function _sync_level_records!(solver, states, lev::Level)
     patches = getfield(solver, :patches)
     comm = lev.level_comm.comm
     last = findlast(lev.phases)
+    # Counted as waiting, not work, for the rebalance measure: a rank with
+    # fewer tiles than its neighbor's owner blocks here until that rank
+    # reaches the same phase, and the work of the exchange itself is a few
+    # planes.
+    t0 = time_ns()
     for d in 1:last
         lev.phases[d] || continue
         _average_planes!(solver, states, comm, lev.plane_pairs[d])
@@ -703,6 +812,7 @@ function _sync_level_records!(solver, states, lev::Level)
             exchange_state!(states[pi], patches[pi].decomp)
         end
     end
+    _wait!(solver, t0)
     return states
 end
 
@@ -1418,7 +1528,9 @@ function prolong_level_ghosts!(solver, states)
         # the subsets being nested, no piece of this level or any below it.
         levels[ℓ-1].level_comm.owned || continue
         for lt in levels[ℓ].transfers
+            t0 = time_ns()
             _gather_box!(lt.box_gather, lt, states, patches)
+            _wait!(solver, t0)
             # The imposition is collective over the tile's own communicator,
             # which its holders alone enter.
             lt.fine_index == 0 || _impose_shell!(solver, states, lt,
@@ -1567,9 +1679,11 @@ function _restrict_patch!(solver, states, lt::LevelTransfer, parent::LevelComm)
     Qf = held ? states[lt.fine_index] : nothing
     off = dfine === nothing ? (0, 0, 0) : dfine.offset
     pad = dfine === nothing ? (0, 0, 0) : dfine.n_halo_d
+    t0 = time_ns()
     gather_region!(lt.restricted, fr, (0, 0, 0), (0, 0, 0), Qf, parent.comm,
                    lt.fine_blocks, off, pad, sample;
                    buffers=lt.restrict_buffers)
+    _wait!(solver, t0)
     _write_covered_region!(lt.restricted, lt, states, patches)
     return states
 end
@@ -1661,6 +1775,16 @@ schemes, halo width, interface treatment, and backend. `last_step` records the
 step of the most recent regrid check so a run resumed on the same solver keeps
 the cadence. Constructed by the [`Solver`](@ref) constructor's
 `regrid_interval` keyword; consumed by `regrid!`.
+
+The rebalance fields drive the repartition of a tiled level on measured
+load: `rebalance` is the threshold on the ratio of the largest to the mean
+per-rank busy time over the last interval (0 leaves ownership stored as it
+is), and `persist` the number of consecutive checks the ratio must exceed
+it before the level is repartitioned, so tile flicker at the tag boundary
+does not move state every interval. `streak` counts those checks,
+`imbalance` holds the last measured ratio, and `wall_mark`, `wait_mark` and
+`wall_regrid` are the marks the interval's busy time is taken against
+(`_rebalance_due!`).
 """
 mutable struct RegridSpec{T}
     interval::Int
@@ -1675,7 +1799,20 @@ mutable struct RegridSpec{T}
     backend::AbstractBackend
     tile::Int                        # lattice edge; 0 = one box over the tags
     last_step::Int
+    rebalance::Float64               # max/mean busy-time threshold; 0 = off
+    persist::Int                     # consecutive checks above it before moving
+    streak::Int
+    imbalance::Float64               # last measured max/mean
+    wall_mark::Float64               # solver.wall_total at the last check
+    wait_mark::Float64               # solver.wait_total at the last check
+    wall_regrid::Float64             # this rank's regrid work since, excluded
 end
+
+RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
+              deriv, filt, smoo, backend, tile, last_step) where {T} =
+    RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
+                  deriv, filt, smoo, backend, tile, last_step,
+                  0.0, 1, 0, 1.0, 0.0, 0.0, 0.0)
 
 """
     hermite_level_shell!(solver, states, lt, θ, dt)

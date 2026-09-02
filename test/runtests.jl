@@ -32,6 +32,16 @@ end; f)
 # the serial suite and test/validation.jl measure against the same solution.
 include("references.jl")
 
+# One top-level testset holds the whole suite, the included files' testsets
+# too (nesting is dynamic, so a testset created inside an `include` call
+# made from here reports under this one). A failure is then recorded and the
+# suite runs on to report every failure in one pass, with the outer testset
+# raising at the end; a bare top-level testset would raise at its own end and
+# stop the file there. The body keeps its indentation as it was, since
+# nothing in it is scoped differently by the wrap: every testset body was
+# already a local scope, and the helpers defined between them become locals.
+@testset "CompactLES serial suite" verbose=true begin
+
 @testset "concise frontend displays" begin
     prob = Problem(name="display test",
                    domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
@@ -3103,5 +3113,7 @@ else
             "skips these: run test/makie_tests.jl from the docs environment, " *
             "and under mpiexec for the decomposition-independent profile.")
 end
+
+end   # CompactLES serial suite
 
 println("serial tests complete")

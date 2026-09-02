@@ -387,6 +387,13 @@ increase `n_global` if setup reports a smaller local block.
   global lattice of that edge instead, abutting tiles sharing their
   interface plane and coupled as root slabs are. Regridding then moves
   tiles in and out of the set, a surviving tile never changing its region.
+- `rebalance` (default `0`, off) and `rebalance_persist` (default `2`): a
+  threshold on the ratio of the largest to the mean per-rank busy time over
+  a regrid interval, measured by the run, above which a tiled level is
+  repartitioned on those measurements once the ratio has exceeded it at
+  that many consecutive regrid checks. Requires `tile` and
+  `regrid_interval`. Off, a surviving tile keeps its owner ranks across
+  every regrid.
 """
 Base.@kwdef struct Numerics
     n_global::NTuple{3,Int}
@@ -411,6 +418,8 @@ Base.@kwdef struct Numerics
     tag_threshold::Float64 = 0.02
     tag_buffer::Int = 4
     tile::Int = 0
+    rebalance::Float64 = 0.0
+    rebalance_persist::Int = 2
 end
 
 """
@@ -458,7 +467,8 @@ function setup(prob::Problem, num::Numerics)
                level_restriction=num.level_restriction, subcycle=num.subcycle,
                regrid_interval=num.regrid_interval,
                tag_threshold=num.tag_threshold, tag_buffer=num.tag_buffer,
-               tile=num.tile)
+               tile=num.tile, rebalance=num.rebalance,
+               rebalance_persist=num.rebalance_persist)
     Q = allocate_state(solver)
     initialize!(solver, Q, prob.ic)
     return solver, Q

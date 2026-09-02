@@ -68,6 +68,15 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P}
     # `ProgressLog`. Seconds, and Float64 regardless of T.
     wall_step::Float64                      # last completed step, excl. callbacks
     wall_total::Float64                     # cumulative over the run
+    # Of those, the seconds spent inside the collectives every rank of a run
+    # enters (the rate and floor reductions, the level box and restriction
+    # gathers) and in a refined level's record exchange, where a lightly
+    # loaded rank blocks on a heavier one. `wall_step - wall_wait` is the
+    # rank's own work, the quantity a rebalance compares across ranks
+    # (`_rebalance_due!`); the step wall alone is nearly uniform under any
+    # load, since every rank waits at the same reductions.
+    wall_wait::Float64                      # in the last completed step
+    wait_total::Float64                     # cumulative over the run
     # What the positivity failsafe has seen and repaired. Global, unlike the
     # rank-local wall-clock fields above: the repair reduces its own
     # tally on every step it runs, and it runs only when
@@ -185,7 +194,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 regrid_interval::Int=0,
                 tag_threshold::Real=0.02,
                 tag_buffer::Int=4,
-                tile::Int=0) where {T}
+                tile::Int=0,
+                rebalance::Real=0,
+                rebalance_persist::Int=2) where {T}
     for d in 1:3
         isperiodic(bcs[d][1]) == isperiodic(bcs[d][2]) ||
             error("dimension $d mixes periodic and non-periodic conditions")
@@ -319,6 +330,13 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     tile == 0 || !(backend isa DeviceBackend) ||
         error("tiled levels take the host backend; the same-level " *
               "interface records are host loops")
+    # max/mean is at least one, so a threshold below one is not a setting.
+    rebalance == 0 || rebalance >= 1 ||
+        error("rebalance must be 0 (off) or a max/mean threshold of at least 1")
+    rebalance == 0 || (tile > 0 && regrid_interval > 0) ||
+        error("rebalance repartitions a tiled level at the regrid cadence; " *
+              "it requires tile > 0 and regrid_interval > 0")
+    rebalance_persist >= 1 || error("rebalance_persist must be at least 1")
     regrid_interval == 0 || length(refines) <= 1 ||
         error("regridding is implemented for a two-level hierarchy; " *
               "$(length(refines)) refined levels were given")
@@ -555,7 +573,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                       GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
                       [Level{T}(0, root_level_comm(comm), [1],
                                 LevelTransfer{T}[])], false, nothing,
-                      zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
+                      zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, 0.0, 0.0, FloorTally())
         init_geometry!(solver)
         return solver
     end
@@ -685,7 +703,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     regrid = regrid_interval == 0 ? nothing :
              RegridSpec{T}(regrid_interval, T(tag_threshold), tag_buffer,
                            margin, n_halo, interface_rhs,
-                           deriv, filt, smoo, backend, tile, 0)
+                           deriv, filt, smoo, backend, tile, 0,
+                           Float64(rebalance), rebalance_persist, 0, 1.0,
+                           0.0, 0.0, 0.0)
     solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,
@@ -694,7 +714,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   n_global, patches, regions, decomp.comm,
                   GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
                   levels, subcycle, regrid,
-                  zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
+                  zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, 0.0, 0.0, FloorTally())
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
@@ -868,7 +888,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                   [Level{T}(0, root_level_comm(world),
                             collect(eachindex(patches)), LevelTransfer{T}[])],
                   false, nothing,
-                  zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, FloorTally())
+                  zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, 0.0, 0.0, FloorTally())
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end

@@ -75,11 +75,11 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 121 testsets, 0 failures
+julia --project=. test/runtests.jl        # 122 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 154/154 each
+  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 166/166 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
@@ -98,12 +98,15 @@ binding and that every exported name with a docstring is rendered somewhere
 it is listed in a `@docs` block on some page; otherwise write it in plain
 backticks. `runtests.jl` includes the same check as its last testset.
 
-The `121 testsets` and the `154/154` are counted by different mechanisms and are
-not comparable. `runtests.jl` reports `@testset` blocks under `Test`, each
-holding many `@test`s, and its includes (`float32_validation.jl`,
-`device_tests.jl`, `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`,
-`docrefs_tests.jl`, and the
-device/adapt testsets) contribute to that total; `mpi_tests.jl` uses `Test` not
+The `122 testsets` and the `166/166` are counted by different mechanisms and are
+not comparable. `runtests.jl` runs everything inside one top-level
+`@testset` and prints one summary tree at the end: the top row totals the
+`@test`s, and each row beneath it is one `@testset` of the suite, the ones
+its includes contribute too (`float32_validation.jl`, `device_tests.jl`,
+`patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, `docrefs_tests.jl`, and
+the device/adapt testsets); the `122` counts those rows. A failure is
+recorded and the suite runs on, so one run reports every failure, and the
+outer testset raises at the end. `mpi_tests.jl` uses `Test` not
 at all and counts individual `check(name, val, tol)` assertions, printing
 `passed/total` and exiting nonzero on any failure. Adding a testset moves the
 first number, adding one assertion moves the second, and neither is a fraction
@@ -255,6 +258,16 @@ Names are spelled out in full. Current vocabulary:
   `_sync_level!`, `LEVEL_BUFFER`, `RESTRICT_MARGIN`; `Patch.h` is the
   patch's own spacing (h/3 on a level-1 patch), which the property
   forwarding serves as `solver.h`
+- `_place_tiles` (the stored-ownership rule at a regrid: survivors keep
+  their range in `Level.owners`, fresh tiles take the free ranks or join
+  the nearest survivor's group), `rebalance` (the `Solver`/`Numerics`
+  keyword and `RegridSpec` field: max/mean busy-time threshold, 0 off),
+  `rebalance_persist` (keyword; `RegridSpec.persist`), `streak`,
+  `imbalance`, `wall_mark`/`wait_mark`/`wall_regrid`, `_rebalance_due!`
+  (the collective check; returns the Allgathered per-rank busy time when
+  due), `_measured_weights`, `busy` (a rank's step wall less its waiting),
+  `wall_wait`/`wait_total` (`Solver` fields: time inside the run-wide
+  collectives and the level record exchange, charged through `_wait!`)
 - `subcycle` (the Berger–Oliger mode flag), `subcycled_step!` and the
   recursive `_advance_level!` beneath it, `save_level_box!`/
   `hermite_level_shell!` (the Hermite box, `box_Q0` .. `box_dQ1`),

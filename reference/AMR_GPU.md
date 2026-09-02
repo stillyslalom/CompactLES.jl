@@ -48,7 +48,10 @@ One solver runs on four axes of configuration, combinable except where
 - **Distribution**: each level decomposes over its own rank subset, a prefix
   of its parent's, and within it each tile over its own rank range, the
   ranges dealt out along a Morton curve by tile volume; a rank holds the
-  root and the tiles of its range only. The
+  root and the tiles of its range only. Ownership is stored across regrids,
+  a survivor keeping its range, and a tiled level repartitions on the
+  per-rank busy time the run measures when that stays imbalanced past a
+  threshold for a set number of checks. The
   level coupling gathers replicated region data and distributes its
   interpolation chains by conserved component.
 - **Storage backend**: `CPUBackend` (`Array`s, `@threaded` loops) or
@@ -64,8 +67,8 @@ beyond the launchers.
 
 What this is not: a production AMR. The tag is one criterion without
 hysteresis, regridding is two-level only, a tile whose owner range moves at
-a regrid is carried through a replicated gather rather than migrated
-point-to-point, nothing rebalances on measured load, I/O is single-patch,
+a rebalance is carried through a replicated gather rather than migrated
+point-to-point, I/O is single-patch,
 diagnostics do not mask covered nodes, tiled levels are host-only, and the
 banded (C10) schemes have no interface closures.
 Each of these is a structural assumption, and
@@ -856,29 +859,72 @@ another; its records, and its children's box gathers and restriction, run on
 the level's communicator. The recursion into a child is guarded on child
 ownership, and the substep count is fixed, so the rank sets do not diverge.
 
-At a regrid the owner ranges are recomputed from the wanted tile set. A tile
-whose region and range both survive keeps its arrays and its state; a tile
-entering the set ahead of a survivor on the curve shifts the survivor's
-range, and the survivor is then rebuilt on its new owners and takes its
-evolved solution back through the replicated gather the box regrid has
-always used for a moved region, one tile at a time. Each regrid frees the
-tile groups and splits them afresh; a surviving tile's Cartesian
-communicator is independent of the group it was split from. The
-communicators a regrid discards are freed at the regrid, for the reason
-`free_communicators!` records.
+**Delivered: stored ownership and rebalancing on measured load** (sequencing
+item 3, fourth slice). `Level.owners` is the authority across regrids. At a
+regrid a surviving tile keeps its range, and a fresh tile is placed by the
+rule above restricted to the ranks the survivors leave free (`_place_tiles`):
+the free ranks are dealt to the fresh tiles as if contiguous, a range that
+would straddle a gap between them is cut at the gap so that every group stays
+a contiguous rank range, and when no rank is free a fresh tile joins the
+group of the survivor nearest it on the curve. The level's rank count is one
+past the highest rank in use, so a departure can leave a rank inside the
+level holding no tile; such a rank enters the level's point-to-point records
+with none of its own and the cross-level gathers with nothing to contribute,
+which the block tables already allowed. Under the third slice's recomputed
+partition a tile entering ahead of a survivor on the curve moved the survivor
+at every regrid; the MPI suite now pins, at np = 2, 4 and 8, that no survivor
+moves across the tiled Sod regrids with rebalancing off.
+
+The partition is recomputed only by a rebalance. Every rank measures its own
+busy time per step, the step wall less the time it spent inside the
+collectives every rank enters (the rate and floor reductions, the level box
+and restriction gathers) and in the refined level's record exchange
+(`Solver.wall_wait`); the step wall alone is nearly uniform under any load,
+since a lightly loaded rank simply waits longer at the same reductions. At
+each regrid check the busy time over the interval, the check's own regrid
+work excluded, is Allgathered over the root communicator, and the level is
+repartitioned when the ratio of the largest to the mean exceeds
+`RegridSpec.rebalance` at `RegridSpec.persist` consecutive checks
+(`_rebalance_due!`); the streak resets at a balanced check, so tile flicker
+at the tag boundary does not move state every interval. The weights are
+then measured rather than assumed (`_measured_weights`): a tile costs the
+busy time of its owner ranks, a group's shared among its tiles by fine
+volume, and a fresh tile takes its volume at the mean measured cost per
+node. The interface factor is therefore taken by the run that it balances,
+which is the only place it can be taken, since the per-rank costs on
+rzhound and rzadams differ from the workstation's by 27–66x and move with
+rank placement. The default is off (`rebalance = 0`), and a threshold of one
+repartitions whenever the streak reaches `persist`, since any measured
+spread exceeds it; `bench/amr_balance.jl` prints the per-check max/mean and owner ranges
+of a tiled Sod run with rebalancing off and on, as a check of the
+mechanics only.
+
+A tile that stays in place keeps its arrays and its state; one whose range
+moved, by a rebalance, is rebuilt on its new owners and takes its evolved
+solution back through the replicated gather the box regrid has always used
+for a moved region, one tile at a time. Each regrid frees the tile groups
+and splits them afresh; a surviving tile's Cartesian communicator is
+independent of the group it was split from and of the level communicator a
+resize replaces, so it survives both. The communicators a regrid discards
+are freed at the regrid, for the reason `free_communicators!` records.
+
+| collective | communicator | ranks entering |
+|---|---|---|
+| `_rebalance_due!` busy-time Allgather | the root communicator | every rank, when `rebalance > 0` |
 
 A tile owned by a proper subset is a different decomposition of it, so it
 reproduces the every-rank answer to round-off rather than bitwise, the tier
 the MPI suite already applies to decomposed patches; the suite measures 0 to
-6e-15 on the tiled wave cases at np = 2, 4 and 8.
+6e-15 on the tiled wave cases at np = 2, 4 and 8, and the tiled Sod regrid
+with rebalancing on reaches the serial time to 5e-18.
 
 **Deferred.** Migration of a moved tile point-to-point, from its old owners'
 blocks to its new owners', in place of the replicated gather, whose transient
-memory is one tile's state per rank per moved tile. Rebalancing on a measured
-max/mean of per-rank step wall, and the hysteresis that keeps rebalancing off
-tile flicker, which needs the assignment to be stored rather than recomputed
-so that a survivor can keep its owners against the deterministic partition.
-The interface factor in the weight, once measured.
+memory is one tile's state per rank per moved tile; this is the slice after
+the present one. The measured weights carry each rank's root-level work
+along with its tiles', which overstates the cost of a tile on a rank holding
+few; a rank holding no tile measures that baseline, and subtracting it is a
+refinement to make once a cluster case shows the bias.
 
 ### Banded schemes
 
@@ -1047,12 +1093,32 @@ Each item names its gate. Nothing is built ahead of the item before it.
    ranges move, tracking the serial tile set and time. The tiled wave cases
    reproduce serial to 0–6e-15.
 
-   Point-to-point migration, rebalancing on measured per-rank step wall with
-   its hysteresis, and the interface factor in the weight remain unbuilt;
-   the covered-mask data model is still to be defined here even if the
-   diagnostic conversion follows. Gate for those: the implosion case at a
-   rank count for which the replicated carry is measurably the regrid's
-   cost; per-rank step wall spread measured before and after a rebalance.
+   Stored ownership and rebalancing on measured load are the fourth slice:
+   `_place_tiles` keeps a survivor's range and places fresh tiles among the
+   free ranks, `Solver.wall_wait` measures each rank's time inside the
+   run-wide collectives so that `wall_step - wall_wait` is its own work,
+   `_rebalance_due!` Allgathers that busy time at the regrid cadence and
+   repartitions when max/mean exceeds `rebalance` for `rebalance_persist`
+   consecutive checks, and `_measured_weights` turns the measurement into
+   per-tile weights; the design is under
+   [Ownership and load balance](#ownership-and-load-balance). Gate held:
+   `test/convergence.jl`, `bench/jetcheck.jl` and `bench/audit.jl`
+   reproducing to every printed digit and `test/validation.jl` to every
+   printed digit, since the default leaves every existing configuration
+   with a single regrid path whose serial assignment is unchanged; the
+   serial count moved 121 → 122 for a testset pinning the placement rule
+   on a synthetic tile-set sequence and the measured weights, and
+   `test/mpi_tests.jl` 154 → 166 at np = 2/4/8 for the tiled Sod regrid
+   moving no survivor with rebalancing off, reproducing the serial tile
+   track and time to round-off with it on at a threshold every measured
+   spread exceeds, and the hysteresis on synthetic per-rank busy times.
+   `bench/amr_balance.jl` prints the per-check max/mean and owner ranges
+   with rebalancing off and on, mechanics only.
+
+   Point-to-point migration is the next slice; the covered-mask data model
+   is still to be defined here even if the diagnostic conversion follows.
+   Gate for those: the implosion case at a rank count for which the
+   replicated carry is measurably the regrid's cost.
 4. **Tag criteria and hysteresis; covered masks in every diagnostic.** Gate:
    the mixing-layer cost case reproduced through the sensor-based tag; the
    TGV energy history on a refined run equal to the single-level history

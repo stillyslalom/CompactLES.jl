@@ -243,10 +243,18 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     # (RKC[1] = 0, so stage 1's dQ is the RHS on the unmodified Q). Every
     # patch of this level has its RHS before the gathers, since a child's box
     # may span several of them.
-    save_boxes!(at_end) = child === nothing ? nothing :
+    # The box gathers are collective over this level's communicator, so a
+    # rank holding no tile of the child waits here for the ranks that do;
+    # the rebalance measure counts them as waiting, not work.
+    function save_boxes!(at_end)
+        child === nothing && return nothing
+        wall_gather = time_ns()
         for lt in child.transfers
             save_level_box!(lt, patches, states, dQs, at_end)
         end
+        _wait!(solver, wall_gather)
+        return nothing
+    end
     for stage in 1:5
         solver.tstage = t0 + oftype(t0, RKC[stage]) * dt
         first_prepared = prepared && stage == 1
@@ -350,7 +358,9 @@ function max_rate(solver::Solver, Q)
     rate, ρ_min = _local_max_rate(solver, Q)
     # One collective, not two: both quantities are reduced with `max` by
     # negating the density, and this runs every step of every run.
+    t0 = time_ns()
     red = MPI.Allreduce([rate, -ρ_min], max, solver.comm)
+    _wait!(solver, t0)
     return (red[1], -red[2])
 end
 
@@ -377,9 +387,16 @@ function max_rate(solver::Solver, states::Vector{<:ConservedState})
         rate = max(rate, r)
         ρ_min = min(ρ_min, m)
     end
+    t0 = time_ns()
     red = MPI.Allreduce([rate, -ρ_min], max, solver.comm)
+    _wait!(solver, t0)
     return (red[1], -red[2])
 end
+
+# Charge the time since `t0` (a `time_ns` reading) to the rank's waiting
+# account for this step; see the `wall_wait` field of `Solver`.
+_wait!(solver::Solver, t0::UInt64) =
+    (solver.wall_wait += (time_ns() - t0) / 1e9; nothing)
 
 # The interior sweep of max_rate over one patch, rank-local and free of
 # collectives. `Array` storage keeps the fused serial loop; device storage
@@ -638,7 +655,9 @@ function positivity_floors(solver::Solver, Q, control::StepControl)
         error("StepControl.floor_ratio: the positivity failsafe is a host " *
               "sweep and is not yet supported on a DeviceBackend")
     ρ_min, e_min = _local_positivity_mins(solver, Q)
+    t0 = time_ns()
     red = MPI.Allreduce([ρ_min, e_min], min, solver.comm)
+    _wait!(solver, t0)
     (red[1] > 0 && red[2] > 0) || return (0.0, 0.0)
     return (control.floor_ratio * red[1], control.floor_ratio * red[2])
 end
@@ -653,7 +672,9 @@ function positivity_floors(solver::Solver, states::Vector{<:ConservedState},
         ρ_min = min(ρ_min, r)
         e_min = min(e_min, e)
     end
+    t0 = time_ns()
     red = MPI.Allreduce([ρ_min, e_min], min, solver.comm)
+    _wait!(solver, t0)
     (red[1] > 0 && red[2] > 0) || return (0.0, 0.0)
     return (control.floor_ratio * red[1], control.floor_ratio * red[2])
 end
@@ -733,7 +754,9 @@ anything at the top of the next iteration.
 function apply_positivity_floor!(solver::Solver, Q, rho_floor, e_floor,
                                  scope::Symbol)
     tally = _local_positivity_repair!(solver, Q, rho_floor, e_floor, scope)
+    t0 = time_ns()
     red = MPI.Allreduce(collect(tally), +, solver.comm)
+    _wait!(solver, t0)
     return (cells=round(Int, red[1]), low_energy=round(Int, red[2]), mass=red[3],
             energy=red[4], momentum=red[5])
 end
@@ -744,7 +767,9 @@ function apply_positivity_floor!(solver::Solver, states::Vector{<:ConservedState
     for (ps, Q) in eachpatch(solver, states)
         acc = acc .+ _local_positivity_repair!(ps, Q, rho_floor, e_floor, scope)
     end
+    t0 = time_ns()
     red = MPI.Allreduce(collect(acc), +, solver.comm)
+    _wait!(solver, t0)
     return (cells=round(Int, red[1]), low_energy=round(Int, red[2]), mass=red[3],
             energy=red[4], momentum=red[5])
 end
@@ -1009,6 +1034,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # a progress callback that reduces a diagnostic would otherwise time
         # itself and report that as solver cost.
         wall_0 = time_ns()
+        solver.wall_wait = 0.0
         _maybe_regrid!(solver, Q, workspace, save)
         _presync!(solver, Q)
         # Boundary conditions before the rate measurement, for two reasons. The
@@ -1144,6 +1170,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # records a step time; wall_total counts work that stood.
         solver.wall_step = (time_ns() - wall_0) / 1e9
         solver.wall_total += solver.wall_step
+        solver.wait_total += solver.wall_wait
         run_callbacks!(callback, solver, Q) && break
     end
     ft = solver.floor_tally
