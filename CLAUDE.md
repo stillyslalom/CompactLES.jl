@@ -75,20 +75,34 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 120 testsets, 0 failures
+julia --project=. test/runtests.jl        # 121 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 142/142 each
+  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 154/154 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
+julia --project=. test/docrefs_tests.jl   # every docs @ref resolves; also in runtests
 ```
 
-The `120 testsets` and the `142/142` are counted by different mechanisms and are
+**Run `test/docrefs_tests.jl` before every push, and after any docstring or
+`docs/` edit.** The documentation job is the slowest leg of CI and the last
+to report, and it has failed repeatedly on a `[`Name`](@ref)` whose target no
+`@docs` block renders: Documenter cannot resolve the link and fails the
+build. The file resolves every `@ref` in the rendered docstrings and pages
+the way Documenter will, without building the docs, in about a second after
+the package loads; it also checks that every `@docs` entry is a documented
+binding and that every exported name with a docstring is rendered somewhere
+(`checkdocs = :exports`). A private name may be linked with `@ref` only if
+it is listed in a `@docs` block on some page; otherwise write it in plain
+backticks. `runtests.jl` includes the same check as its last testset.
+
+The `121 testsets` and the `154/154` are counted by different mechanisms and are
 not comparable. `runtests.jl` reports `@testset` blocks under `Test`, each
 holding many `@test`s, and its includes (`float32_validation.jl`,
-`device_tests.jl`, `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, and the
+`device_tests.jl`, `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`,
+`docrefs_tests.jl`, and the
 device/adapt testsets) contribute to that total; `mpi_tests.jl` uses `Test` not
 at all and counts individual `check(name, val, tol)` assertions, printing
 `passed/total` and exiting nonzero on any failure. Adding a testset moves the
@@ -226,8 +240,17 @@ Names are spelled out in full. Current vocabulary:
   the whole run, a level that fits every rank holds its parent's
   communicator, and no split exists in that case), `root_level_comm` /
   `absent_level_comm` / `split_level_comm` / `free_level_comm!`,
-  `_level_ranks` (the largest rank count a level's tiles admit under
-  `_amr_dims`), `level_restriction` (`:inject` or
+  `_level_ranks` (the largest rank count one tile admits under
+  `_amr_dims`), `owners` (per tile, its rank range in the level's
+  communicator) and `_tile_owners` (the ranges of a level's tiles, laid along
+  a Morton curve by tile volume, through `_sfc_order`/`_morton` and
+  `_rank_counts`), `group` (a `TileGroup`: this rank's group communicator,
+  its rank range and whether it was split; one per rank per level, shared
+  by the tiles of the range), `split_tile_comm` / `free_tile_group!` /
+  `absent_tile_group`, `tiles` (the tile of each patch a rank holds on a
+  level; a rank holds the root and the tiles of its own range only, so
+  `LevelTransfer.fine_index` and `coarse_local` are local indices, 0 where
+  the rank holds no piece), `level_restriction` (`:inject` or
   `:filter`), `prolong_level_ghosts!`, `restrict_level!`, `sync_levels!`,
   `_sync_level!`, `LEVEL_BUFFER`, `RESTRICT_MARGIN`; `Patch.h` is the
   patch's own spacing (h/3 on a level-1 patch), which the property

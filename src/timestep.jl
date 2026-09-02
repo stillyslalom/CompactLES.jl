@@ -227,14 +227,17 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     lev = levels[ℓ]
     child = ℓ < length(levels) ? levels[ℓ+1] : nothing
     T = typeof(dt)
-    # Every collective this function runs is on level ℓ's own communicator:
-    # its patches' line solves and halo exchanges, its records, its shell
-    # imposition, and its children's box gathers and restriction, which read
-    # the parent state and write back onto it. This function is therefore
-    # entered by exactly the ranks owning level ℓ, and the recursion below
-    # guards on the child's ownership for the same reason.
+    # Every collective this function runs is on level ℓ's own communicator
+    # or on a tile's within it: its patches' line solves, halo exchanges and
+    # shell impositions on the tile's, its records point-to-point on the
+    # level's, and its children's box gathers and restriction, which read
+    # the parent state and write back onto it, on the level's. This function
+    # is therefore entered by exactly the ranks owning level ℓ, and the
+    # recursion below guards on the child's ownership for the same reason. A
+    # tile's imposition is entered by the ranks holding it.
     shell!(θ) = for lt in lev.transfers
-        hermite_level_shell!(solver, states, lt, θ, parent_dt)
+        lt.fine_index == 0 ||
+            hermite_level_shell!(solver, states, lt, θ, parent_dt)
     end
     # Hermite endpoints for the children: the RHS at t^n falls out of stage 1
     # (RKC[1] = 0, so stage 1's dQ is the RHS on the unmodified Q). Every
@@ -297,8 +300,7 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     # level restricts here so its parent's next substep sees the composite.
     if ℓ > 1
         for lt in child.transfers
-            _restrict_patch!(solver, states, lt, lev.level_comm,
-                             child.level_comm)
+            _restrict_patch!(solver, states, lt, lev.level_comm)
         end
         # The restriction can change nodes beside a tile interface of this
         # level; its neighbors' ghosts must see them before the next substep.

@@ -210,6 +210,30 @@ end
     # the set binds.
     @test CL._level_ranks([r(64)], act, 4) == 4
     @test CL._level_ranks([r(64), r(4)], act, 4) == 1
+    # Per-tile owners: four 9-node tiles (25 fine, two ranks each at most).
+    t(k) = BlockRegion((80 + 8k, 0, 0), (9, 1, 1))
+    four = [t(0), t(1), t(2), t(3)]
+    # One tile reduces to `_level_ranks`.
+    @test CL._tile_owners([t(0)], act, 8) == ([0:1], 2)
+    # Ranks at least as many as tiles: each tile its own range, by weight,
+    # capped by what it admits; the level takes the union.
+    @test CL._tile_owners(four, act, 4) == ([0:0, 1:1, 2:2, 3:3], 4)
+    @test CL._tile_owners(four, act, 8) == ([0:1, 2:3, 4:5, 6:7], 8)
+    @test CL._tile_owners(four, act, 16) == ([0:1, 2:3, 4:5, 6:7], 8)
+    # Unequal weights: 25 and 49 fine nodes over six ranks split 2 : 4.
+    @test CL._tile_owners([t(0), BlockRegion((88, 0, 0), (17, 1, 1))], act, 6) ==
+          ([0:1, 2:5], 6)
+    # More tiles than ranks: one rank per tile, the curve cut into runs.
+    @test CL._tile_owners(four, act, 2) == ([0:0, 0:0, 1:1, 1:1], 2)
+    # The curve is a Morton order, not the lattice raster: a 3 × 2 block of
+    # tiles over three ranks pairs the (0,0)/(12,0) and (0,12)/(12,12)
+    # tiles, then the x = 24 column, where the raster would pair (24,0) with
+    # (0,12).
+    act2 = (true, true, false)
+    six = [BlockRegion((x, y, 0), (13, 13, 1)) for x in (0, 12, 24), y in (0, 12)]
+    @test CL._sfc_order(vec(six)) == [1, 2, 4, 5, 3, 6]
+    @test CL._tile_owners(vec(six), act2, 3) ==
+          ([0:0, 0:0, 2:2, 1:1, 1:1, 2:2], 3)
     # A serial refined solver holds every level unsplit, so no communicator
     # is created and none is freed.
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
@@ -221,6 +245,15 @@ end
     @test lc.size == 1
     @test solver.levels[1].level_comm.size == 1
     @test npatches(solver) == 2
+    # Likewise for the tile group: one rank spans every tile, so the group
+    # is the level's communicator itself, and the tiles are held in order.
+    tiled = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
+                   refine=BlockRegion((80, 0, 0), (32, 1, 1)), tile=8)
+    lev = tiled.levels[2]
+    @test lev.owners == [0:0, 0:0, 0:0, 0:0]
+    @test !lev.group.scoped && lev.group.ranks == 0:0
+    @test lev.tiles == [1, 2, 3, 4] && lev.patches == [2, 3, 4, 5]
+    @test [lt.fine_index for lt in lev.transfers] == [2, 3, 4, 5]
 end
 
 @testset "subcycled two levels: manufactured solution across the boundary" begin

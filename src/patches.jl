@@ -492,29 +492,29 @@ struct BlockEntry
 end
 
 # Every rank's block, known everywhere. Each rank contributes its blocks
-# through a single Allgather: one block with the rank set partitioned over
-# root slabs, a block of every tile on a refined level, and in either case
-# the same count on every rank. A serial run holds every patch and
-# communicates nothing.
+# through a single Allgatherv: one block with the rank set partitioned over
+# root slabs, a block of each tile it holds on a refined level, any number
+# per rank. A serial run holds every patch and communicates nothing.
 function _block_table(comm::MPI.Comm, my_pids::Vector{Int}, my_decomps)
     np = MPI.Comm_size(comm)
     if np == 1
         return [BlockEntry(0, my_pids[i], my_decomps[i].offset, my_decomps[i].n_local)
                 for i in eachindex(my_pids)]
     end
-    n = length(my_pids)
     mine = Int64[]
     for (p, d) in zip(my_pids, my_decomps)
         append!(mine, Int64[p, d.offset..., d.n_local...])
     end
-    flat = MPI.Allgather(mine, comm)
-    length(flat) == 7 * n * np ||
-        error("interface records need the same patch count on every rank")
+    counts = MPI.Allgather(Cint(length(mine)), comm)
+    flat = Vector{Int64}(undef, sum(counts))
+    MPI.Allgatherv!(mine, MPI.VBuffer(flat, counts), comm)
     table = BlockEntry[]
-    for r in 0:np-1, i in 1:n
-        e = flat[7 * (n * r + i - 1) .+ (1:7)]
+    at = 0
+    for r in 0:np-1, _ in 1:(counts[r + 1] ÷ 7)
+        e = flat[at .+ (1:7)]
         push!(table, BlockEntry(r, Int(e[1]), (Int(e[2]), Int(e[3]), Int(e[4])),
                                 (Int(e[5]), Int(e[6]), Int(e[7]))))
+        at += 7
     end
     return table
 end
@@ -526,7 +526,7 @@ end
 Construct the interface exchange records for this rank's patches: ghost sends,
 ghost receives, and shared-plane averaging pairs, each carrying padded local
 index ranges, the partner world rank, a deterministic tag, and its buffer.
-Collective over `comm` (one Allgather of the per-rank blocks); every rank
+Collective over `comm` (one Allgatherv of the per-rank blocks); every rank
 derives every record it participates in from the same table, so senders and
 receivers agree without negotiation.
 """

@@ -3063,6 +3063,7 @@ include("patch_tests.jl")
 include("level_tests.jl")
 include("seam_tests.jl")
 include("io_tests.jl")
+include("docrefs_tests.jl")
 
 # HDF5 is a weak dependency and is not loadable from the package environment
 # alone, so the extension tests run only where it is present. The skip is

@@ -69,6 +69,8 @@ against the property surface that [`PatchSolver`](@ref) and a single-patch
 ```@docs
 Patch
 PatchSolver
+RHSWorkspace
+rhs_workspace!
 npatches
 eachpatch
 sync_patches!
@@ -90,6 +92,8 @@ prolong!
 LevelTransfer
 Level
 LevelComm
+TileGroup
+CompactLES._tile_owners
 nlevels
 refined_region
 level_regions

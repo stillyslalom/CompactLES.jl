@@ -1369,11 +1369,12 @@ function test_refined_decomposed()
 end
 
 # ---------------------------------------------------------------------------
-# Tiled level, decomposed: each tile splits over every rank through
-# _amr_dims, which factors np over the two active dimensions under the
-# 9-point filter minimum. With 37-node tiles that is 2x2 at np = 4 and 4x2
-# at np = 8, the only rank count in the gate that gives a non-square tile
-# grid, which the CI job runs this phase at for that reason.
+# Tiled level, decomposed: each tile is decomposed over its own rank range
+# within the level (`_tile_owners`), the ranges dealt out along a Morton
+# curve. Four 37-node tiles admit up to sixteen ranks each, so at np = 2 the
+# curve is cut into two runs of two tiles, at np = 4 each tile takes one
+# rank, and at np = 8 each takes two, through _amr_dims (2x1); the CI job
+# runs this phase at np = 8 for that last shape.
 # ---------------------------------------------------------------------------
 function test_tiled_level()
     section("tiled level: decomposed tiles and corner consensus")
@@ -1401,10 +1402,19 @@ function test_tiled_level()
                 e = max(e, abs(Q[I, 1] - exact))
             end
         end
-        return gmax(e), solver.step, npatches(solver)
+        return gmax(e), solver.step, solver
     end
-    et, nt, pt = tiled_error(subcycle=false)
-    check("tiled 2-D level: four tiles", abs(pt - 5), 0.5)
+    et, nt, s4 = tiled_error(subcycle=false)
+    lev = s4.levels[2]
+    per_tile = max(1, np ÷ 4)
+    blocks = MPI.Allreduce(length(lev.patches), +, comm)
+    check("tiled 2-D level: four tiles", abs(length(lev.transfers) - 4), 0.5)
+    check("tiled 2-D level: each tile over its own rank range",
+          all(length(o) == per_tile for o in lev.owners) ? 0.0 : 1.0, 0.5)
+    check("tiled 2-D level: tile blocks held over the ranks",
+          abs(blocks - 4 * per_tile), 0.5)
+    check("tiled 2-D level: a rank holds its group's tiles only",
+          all(lev.owners[t] == lev.group.ranks for t in lev.tiles) ? 0.0 : 1.0, 0.5)
     check("tiled 2-D wave error matches serial",
           abs(et - 2.4153780309177364e-8), 1e-12)
     check("tiled 2-D step count matches serial", abs(nt - 10), 0.5)
@@ -1415,17 +1425,23 @@ function test_tiled_level()
 
     # Multi-tile corner consensus and diagonal ghosts, decomposed: the
     # dimension-phased sync must give every copy of the corner node the
-    # mean of four tiles and fill a corner ghost from the diagonal tile.
+    # mean of four tiles and fill a corner ghost from the diagonal tile,
+    # across ranks now that a tile's neighbor may sit on another rank.
     let
         solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3,
                         tile=12, refine=BlockRegion((12, 12, 0), (24, 24, 1)))
         states = allocate_state(solver)
-        for (i, Q) in enumerate(states)
-            fill!(parent(Q), i - 1.0)
+        lev = solver.levels[2]
+        for (li, ti) in zip(lev.patches, lev.tiles)
+            fill!(parent(states[li]), Float64(ti))
         end
-        CL._sync_level_records!(solver, states, solver.levels[2])
-        # Tiles A (12,12), B (24,12), C (12,24), D (24,24) of 37 fine nodes.
-        function owned(p, i, j)
+        CL._sync_level_records!(solver, states, lev)
+        # Tiles A (12,12), B (24,12), C (12,24), D (24,24) of 37 fine nodes,
+        # tile ids 1..4 in lattice order, carrying 1..4.
+        function owned(t, i, j)
+            k = findfirst(==(t), lev.tiles)
+            k === nothing && return nothing
+            p = lev.patches[k]
             dp = solver.patches[p].decomp
             pad = dp.n_halo_d
             inside = all(((g, o, n),) -> o + 1 - pad[1] <= g <= o + n,
@@ -1435,14 +1451,80 @@ function test_tiled_level()
             return states[p][i - dp.offset[1] + pad[1], j - dp.offset[2] + pad[2],
                              1 + pad[3], 1]
         end
-        dev(p, i, j, want) = (v = owned(p, i, j); v === nothing ? 0.0 : abs(v - want))
-        e_corner = max(dev(2, 37, 37, 2.5), dev(3, 1, 37, 2.5),
-                       dev(4, 37, 1, 2.5), dev(5, 1, 1, 2.5))
-        e_ghost = max(dev(5, 0, 0, 1.0), dev(2, 38, 38, 4.0),
-                      dev(3, 0, 38, 3.0), dev(4, 38, 0, 2.0))
+        dev(t, i, j, want) = (v = owned(t, i, j); v === nothing ? 0.0 : abs(v - want))
+        e_corner = max(dev(1, 37, 37, 2.5), dev(2, 1, 37, 2.5),
+                       dev(3, 37, 1, 2.5), dev(4, 1, 1, 2.5))
+        e_ghost = max(dev(4, 0, 0, 1.0), dev(1, 38, 38, 4.0),
+                      dev(2, 0, 38, 3.0), dev(3, 38, 0, 2.0))
         check("tiled corner: four copies at the mean", gmax(e_corner), 1e-15)
         check("tiled corner: diagonal ghosts from the diagonal tile",
               gmax(e_ghost), 1e-15)
+    end
+
+    # More tiles than ranks: twelve 25-node tiles of a 1-D level, each
+    # admitting two ranks, so np = 2 and 4 cut the curve into runs of six
+    # and three tiles and np = 8 gives four ranks two tiles and four one.
+    # The wave error is the serial one to round-off.
+    let
+        u0 = 0.5
+        solver = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                        art=ArtParams(enabled=false), filter_interval=0,
+                        subcycle=true, tile=8,
+                        refine=BlockRegion((40, 0, 0), (96, 1, 1)))
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) ->
+            Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
+        run!(solver, states; tfinal=0.5, nmax=20)
+        e = 0.0
+        for (ps, Q) in CL.eachpatch(solver, states)
+            for i in 1:ps.decomp.n_local[1]
+                I = gidx(ps, i, 1, 1)
+                e = max(e, abs(Q[I, 1] - (1.0 + 0.2 * sin(xcoord(ps, 1, i) -
+                                                          u0 * solver.t))))
+            end
+        end
+        lev = solver.levels[2]
+        held = length(lev.patches)
+        most = MPI.Allreduce(held, max, comm)
+        fewest = MPI.Allreduce(held, min, comm)
+        check("twelve tiles: one rank per tile",
+              all(length(o) == 1 for o in lev.owners) ? 0.0 : 1.0, 0.5)
+        check("twelve tiles: tiles per rank balanced",
+              abs(most - cld(12, np)) + abs(fewest - fld(12, np)), 0.5)
+        check("twelve tiles: wave error matches serial",
+              abs(gmax(e) - 6.0773008847547771e-10), 1e-13)
+        check("twelve tiles: step count matches serial", abs(solver.step - 20), 0.5)
+    end
+
+    # A tiled regrid under per-tile ownership: the Sod shock's tile set moves
+    # every five steps, a tile entering ahead of a survivor on the curve
+    # shifts the survivor's owner range, and the survivor is rebuilt there
+    # with its solution carried across. The tracked tile set and the time
+    # reached are the serial ones.
+    let
+        wall2 = (SlipWallBC(), SlipWallBC())
+        solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
+                        regrid_interval=5, tag_buffer=2, tile=8,
+                        refine=BlockRegion((176, 0, 0), (16, 1, 1)))
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) -> x < 0.45 ?
+            Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+            Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+        run!(solver, states; tfinal=0.03, nmax=41)
+        regs = level_regions(solver, 1)
+        offs = [r.offset[1] for r in regs]
+        fin = all(all(isfinite, parent(Q)) for Q in states)
+        check("tiled regrid under ownership: finite composite state",
+              fin ? 0.0 : 1.0, 0.5)
+        check("tiled regrid under ownership: tile count tracks as serial (4)",
+              abs(gmax(length(regs)) - 4), 0.5)
+        check("tiled regrid under ownership: first tile tracks as serial (168)",
+              abs(gmax(first(offs)) - 168), 0.5)
+        check("tiled regrid under ownership: last tile tracks as serial (192)",
+              abs(gmax(last(offs)) - 192), 0.5)
+        check("tiled regrid under ownership: time reached matches serial",
+              abs(gmax(solver.t) - 0.0033221635376072057), 1e-13)
     end
 end
 
