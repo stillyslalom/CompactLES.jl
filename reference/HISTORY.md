@@ -25,6 +25,7 @@ points at them and does not restate them.
 15. [AMR/GPU Stage 3 — static two-level refinement (August 2026)](#amrgpu-stage-3--static-two-level-refinement-august-2026)
 16. [AMR/GPU Stage 4 — subcycling, tagging, and regridding (August 2026)](#amrgpu-stage-4--subcycling-tagging-and-regridding-august-2026)
 17. [GPU Stage G1 — pointwise kernels via KernelAbstractions (August 2026)](#gpu-stage-g1--pointwise-kernels-via-kernelabstractions-august-2026)
+18. [Hierarchy checkpoint, restart and multiblock output (September 2026)](#hierarchy-checkpoint-restart-and-multiblock-output-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -1011,3 +1012,30 @@ driver passed the root's 0-based step count into a 1-based recursion, so
 level 2 saw substep counts 4–12 in place of 1–9 and `filter_interval > 1`
 applied the wrong number and phase of passes at depth two; two-level runs
 were unaffected. Serial suite 128 testsets.
+
+## Hierarchy checkpoint, restart and multiblock output (September 2026)
+
+AMR sequencing item 5 (`reference/AMR_GPU.md`, I/O and restart). The
+checkpoint first gained the artificial coefficient arrays beside the
+state in both formats, because `max_rate` sizes the next step from the
+ones the last right-hand side left behind and a restart from the state
+alone took a different first step: a Sod restart now continues the
+uninterrupted run bit for bit. A checkpoint of a refined run then carries
+the hierarchy record (per level the tile layout and the stored ownership;
+the regrid state, with the tag history) and every tile's state, as
+readable tables and per-tile datasets in the shared HDF5 file and as a
+flat image with this rank's blocks in the per-rank files. A restart
+rebuilds level 1 from the record through the shape of the tiled regrid
+with every tile fresh, restoring the stored ownership on the writing rank
+count, where the tiled and box Sod regrid cases checkpointed at step 23
+continue to step 130 bitwise through their later regrids (the 400-node
+tiled case at np = 2, 4 and 8 likewise), and partitioning afresh on
+another, where a twelve-tile wave written on half the ranks continues to
+1e-12 in the wave error. `save_vtk` and `FieldWriter` on a state vector
+write one piece per patch under a `.vtm` multiblock index with the
+covered coarse nodes blanked through `vtkGhostType`. Not carried: the
+primitives the sensor tag criterion reads beside the coefficients, so a
+marginal node may tag differently at the first check after a restart
+under that criterion; not covered: a shared-file field dump of a
+hierarchy and the checkpoint of a same-level slab layout. Serial suite
+131 testsets; MPI 195 checks.

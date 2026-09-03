@@ -944,6 +944,13 @@ function test_hierarchy_checkpoint()
     load_checkpoint!(moved, mstates, "mpi_hier")
     check("restart from another initial region: recorded tile set rebuilt",
           level_regions(moved, 1) == regs ? 0.0 : 1.0, 0.5)
+    # The multiblock dump of the hierarchy: one piece per patch per rank,
+    # every rank's pieces listed under the index rank 0 writes.
+    save_vtk(restarted, rstates, "mpi_hier_dump"; fields=(:rho,))
+    MPI.Barrier(comm)
+    held = MPI.Allreduce(length(restarted.patches), +, comm)
+    listed = rank == 0 ? count("<DataSet", read("mpi_hier_dump.vtm", String)) : 0
+    check("multiblock dump lists every rank's pieces", abs(gsum(listed) - held), 0.5)
     MPI.Barrier(comm)
     rank == 0 && foreach(rm, filter(startswith("mpi_hier"), readdir()))
     MPI.Barrier(comm)

@@ -90,6 +90,13 @@ All three live in a package extension and require `using HDF5`;
 `hdf5_available` and `hdf5_parallel` report whether the extension is loaded and
 whether its libhdf5 supports MPI-parallel writes.
 
+A refined solver's state is a vector of per-patch arrays, and every writer
+and checkpoint above takes it: `save_vtk` and `FieldWriter` then write one
+piece per patch under a `.vtm` multiblock index with the covered coarse
+nodes blanked, and the checkpoints record the hierarchy (the tile layout,
+the stored ownership and the tag history) beside every tile's state, so a
+restart rebuilds the level on whatever rank count it is given.
+
 ```@docs
 save_checkpoint
 load_checkpoint!

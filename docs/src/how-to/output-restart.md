@@ -58,6 +58,19 @@ run!(solver, Q; tfinal = 1.0, callback = output)
 Because `EveryTime` lands steps exactly, the collection has a uniform physical
 time axis.
 
+## Write a refined run
+
+A refined (or patch-partitioned) solver holds its state as the vector
+[`allocate_state`](@ref) returns. `save_vtk` and [`FieldWriter`](@ref) take
+that vector and write one `.vtr` piece per patch under a `.vtm` multiblock
+index; open the `.vtm`. Coarse nodes a finer level covers are blanked, so
+the composite shows the finest data everywhere. `slice` names a plane of the
+root lattice, which each patch maps to its own coincident node:
+
+```julia
+save_vtk(solver, states, "output/amr"; fields = (:rho, :schlieren), slice = (3, 64))
+```
+
 ## Restart with the same decomposition
 
 The dependency-free checkpoint path writes one file per rank:
@@ -67,7 +80,36 @@ save_checkpoint(solver, Q, "restart/state")
 load_checkpoint!(solver, Q, "restart/state")
 ```
 
-The restarting solver must have the same global grid and process grid.
+The restarting solver must have the same global grid and process grid. The
+checkpoint carries the artificial coefficient arrays beside the state, so
+the restarted run takes the same first step as the uninterrupted one and
+continues it bit for bit.
+
+## Restart a refined run
+
+Both checkpoint forms take the state vector and record the hierarchy: the
+tile layout and stored ownership of every level, the tag history a
+regridding run needs, and every tile's state.
+
+```julia
+save_checkpoint_hdf5(solver, states, "restart/amr")
+
+# Later, in a fresh process at any rank count: build the solver as before
+# (any initial `refine` region, the same `tile`), then load.
+solver = Solver(; refine = initial, tile = 8, regrid_interval = 5, kwargs...)
+states = allocate_state(solver)
+load_checkpoint_hdf5!(solver, states, "restart/amr")
+run!(solver, states; tfinal = 2.0)
+```
+
+The load rebuilds the recorded tile layout in place of the initial one and
+resizes `states` with it, so build any [`Workspace`](@ref) after the load.
+On the rank count that wrote the file the stored ownership is restored and
+the run continues bit for bit, later regrids included; on another rank
+count the level is partitioned afresh and the continuation agrees to
+round-off. A hierarchy deeper than two levels is static and must be built
+with the recorded `refine` regions. The per-rank `save_checkpoint` form
+restores onto the rank count that wrote it only.
 
 ## Restart on another rank count
 

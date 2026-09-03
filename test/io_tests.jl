@@ -292,6 +292,60 @@ end
     rm(dir; recursive=true)
 end
 
+@testset "multiblock VTK: one piece per patch, covered nodes blanked" begin
+    # Four 37-node tiles of a 2-D level under a 48 x 48 root: five pieces
+    # under one index, the root carrying the ghost array that blanks the
+    # nodes the tiles cover entirely and the tiles carrying none.
+    solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
+                    bcs=(io_per, io_per, io_per), tile=12,
+                    refine=BlockRegion((12, 12, 0), (24, 24, 1)),
+                    art=ArtParams(enabled=false))
+    states = allocate_state(solver)
+    initialize!(solver, states, (x, y, z) ->
+        Prim(u=(0.4, 0.3, 0), p=1.0, rho=1 + 0.1 * sin(x) * sin(y)))
+    dir = mktempdir()
+    save_vtk(solver, states, joinpath(dir, "amr"); fields=(:rho, :velocity))
+    vtm = read(joinpath(dir, "amr.vtm"), String)
+    @test count("<DataSet", vtm) == 5
+    @test count("<Block", vtm) == 2
+    @test length(filter(endswith(".vtr"), readdir(dir))) == 5
+    root_piece = read(joinpath(dir, "amr.L0.T0001.r0000.vtr"), String)
+    @test occursin("Name=\"vtkGhostType\"", root_piece)
+    @test occursin("Name=\"rho\"", root_piece) && occursin("Name=\"velocity\"", root_piece)
+    tile_piece = read(joinpath(dir, "amr.L1.T0001.r0000.vtr"), String)
+    @test !occursin("vtkGhostType", tile_piece)
+    @test occursin("WholeExtent=\"0 36 0 36 0 0\"", tile_piece)
+    # The ghost array hides exactly the fully covered root nodes: the
+    # interior of the 24 x 24 region, 23 x 23 nodes, and not its faces.
+    root = PatchSolver(solver, solver.patches[1])
+    ranges = CL._output_ranges(root, (1, 1, 1), nothing)
+    ghost = CL._vtk_ghost_points(root, ranges)
+    @test count(==(CL.VTK_HIDDENPOINT), ghost) == 23 * 23
+    @test count(==(0xff), root.covered) == 23 * 23
+    @test container_extension(solver) == ".vtm"
+
+    # A FieldWriter on the state vector numbers .vtm frames into its .pvd.
+    writer = FieldWriter(joinpath(dir, "series"); fields=(:rho,))
+    writer(solver, states)
+    @test isfile(joinpath(dir, "series_0000.vtm"))
+    @test occursin("series_0000.vtm", read(joinpath(dir, "series.pvd"), String))
+
+    # A slice names a root plane: through the refined region it reaches the
+    # tiles the plane meets (root node 20 is inside the first tile column
+    # only), outside it the root alone, and beyond the domain it is refused.
+    save_vtk(solver, states, joinpath(dir, "cut"); fields=(:rho,), slice=(1, 20))
+    @test count("<DataSet", read(joinpath(dir, "cut.vtm"), String)) == 3
+    save_vtk(solver, states, joinpath(dir, "edge"); fields=(:rho,), slice=(1, 5))
+    @test count("<DataSet", read(joinpath(dir, "edge.vtm"), String)) == 1
+    @test_throws ArgumentError save_vtk(solver, states, joinpath(dir, "bad");
+                                        fields=(:rho,), slice=(1, 49))
+    # A stride acts in each patch's own node space.
+    save_vtk(solver, states, joinpath(dir, "coarse"); fields=(:rho,), stride=2)
+    @test occursin("WholeExtent=\"0 18 0 18 0 0\"",
+                   read(joinpath(dir, "coarse.L1.T0001.r0000.vtr"), String))
+    rm(dir; recursive=true)
+end
+
 @testset "VTK headers declare the byte order actually written" begin
     # The appended blocks go out in native order, so the declaration follows
     # ENDIAN_BOM rather than asserting little-endian.

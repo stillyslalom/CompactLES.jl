@@ -208,7 +208,19 @@ Names are spelled out in full. Current vocabulary:
 - `trigger` (an `AtTime` / `EveryTime` / `EveryStep` / `WhenState`), `effect!`,
   `fired!`, `next_time`, `rewind!`, `landing_steps`,
   `switch!`/`switched` (a `SwitchableBC`)
-- `writer` (a `FieldWriter`), `frame_prefix`, `collection`, `wall_io`
+- `writer` (a `FieldWriter`), `frame_prefix`, `collection`, `wall_io`,
+  `piece` (one patch's block of one rank in a VTK dump; the multiblock
+  writer names it `_patch_piece_name` and lists it in the `.vtm` through
+  `_write_multiblock`), `_patch_slice` (a root plane in a patch's node
+  space), `_vtk_ghost_points` / `VTK_HIDDENPOINT` (the blanking array)
+- `n_art_fields`, `art_block`, `set_art_block!` (the artificial coefficient
+  record a checkpoint carries beside `Q`; `max_rate` sizes the next step
+  from it), `HierarchyRecord` / `LevelRecord` (what a checkpoint carries of
+  the hierarchy), `hierarchy_record` (rank 0 assembles and broadcasts it),
+  `restore_hierarchy!` (brings a solver to the recorded hierarchy),
+  `_replace_level!` (rebuilds level 1 from a region list and owner ranges,
+  every tile fresh), `_held_tiles` (this rank's `(level, tile, patch
+  index)` triples)
 - `region` (a `BlockRegion`: global offset plus extent, the patch-layout and
   HDF5 hyperslab unit and not a `Decomp`), `owned_region`,
   `hdf5_parallel`

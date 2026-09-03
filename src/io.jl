@@ -627,14 +627,19 @@ const VTK_BYTE_ORDER = Base.ENDIAN_BOM == 0x04030201 ? "LittleEndian" : "BigEndi
 
 # A resolved angular dimension makes the grid curvilinear; a collapsed angular
 # dimension leaves a tensor-product grid.
-_curvilinear(solver::Solver) = _curvilinear(solver, solver.metric)
-_curvilinear(solver::Solver, ::CartesianMetric) = false
-_curvilinear(solver::Solver, ::CylindricalMetric) = solver.decomp.active[2]
-_curvilinear(solver::Solver, ::SphericalMetric) =
+_curvilinear(solver::SolverLike) = _curvilinear(solver, solver.metric)
+_curvilinear(solver::SolverLike, ::CartesianMetric) = false
+_curvilinear(solver::SolverLike, ::CylindricalMetric) = solver.decomp.active[2]
+_curvilinear(solver::SolverLike, ::SphericalMetric) =
     solver.decomp.active[2] || solver.decomp.active[3]
 
-"Extension of the parallel container `save_vtk` will write for this solver."
-container_extension(solver::Solver) = _curvilinear(solver) ? ".pvts" : ".pvtr"
+"""
+Extension of the container `save_vtk` will write for this solver: the
+multiblock `.vtm` index for a patch layout, and otherwise the parallel
+container of the grid type the metric selects, `.pvts` or `.pvtr`.
+"""
+container_extension(solver::Solver) =
+    _multipatch(solver) ? ".vtm" : (_curvilinear(solver) ? ".pvts" : ".pvtr")
 
 # Coordinate surface → Cartesian position. Conventions are metric.jl's:
 # cylindrical (r, θ, z), spherical (r, θ_polar, φ).
@@ -674,7 +679,7 @@ _wants_gradients(name::Symbol) =
 _wants_artificial(name::Symbol) =
     name in (:mu_art, :beta_art, :kappa_art, :D_art, :sensor, :strain_mag)
 
-function _prepare_fields!(solver::Solver, Q, fields)
+function _prepare_fields!(solver::SolverLike, Q, fields)
     if any(_wants_gradients, fields) || any(_wants_artificial, fields)
         # This exchanges halos, so ρ and the velocities are valid into the halo
         # and the derivative passes remain accurate at a rank boundary. It also
@@ -743,7 +748,7 @@ Local interior indices this rank writes along each dimension, given `stride` and
 an optional `slice`. Empty along the sliced dimension on a rank whose block does
 not span the requested plane.
 """
-function _output_ranges(solver::Solver, stride::NTuple{3,Int}, slice)
+function _output_ranges(solver::SolverLike, stride::NTuple{3,Int}, slice)
     decomp = solver.decomp
     sd = _slice_dim(slice)
     sg = slice === nothing ? 0 : Int(slice[2])
@@ -766,7 +771,7 @@ _has_output(ranges) = all(!isempty, ranges)
 # Extent of this rank's piece in the output grid's own index space, and the
 # extent of that whole grid. The sliced dimension contributes a single point at
 # index 0 on the ranks that hold it.
-_output_piece_extent(solver::Solver, stride, slice, ranges) = begin
+_output_piece_extent(solver::SolverLike, stride, slice, ranges) = begin
     off = solver.decomp.offset
     sd = _slice_dim(slice)
     lo = ntuple(d -> d == sd ? 0 :
@@ -775,12 +780,12 @@ _output_piece_extent(solver::Solver, stride, slice, ranges) = begin
     lo, hi
 end
 
-_output_whole_extent(solver::Solver, stride, slice) = begin
+_output_whole_extent(solver::SolverLike, stride, slice) = begin
     n = _output_global(solver, stride, slice)
     ntuple(d -> 0, 3), ntuple(d -> n[d] - 1, 3)
 end
 
-_output_global(solver::Solver, stride, slice) = begin
+_output_global(solver::SolverLike, stride, slice) = begin
     n = solver.decomp.n_global
     sd = _slice_dim(slice)
     ntuple(d -> d == sd ? 1 : length(1:stride[d]:n[d]), 3)
@@ -790,7 +795,7 @@ end
 # that rank no valid piece to write. The test is collective, making every rank
 # throw; a single rank throwing would leave the others blocked in the Allgather
 # below. The sliced dimension is exempt because it is empty off the plane.
-function _check_output(solver::Solver, stride::NTuple{3,Int}, slice, ranges)
+function _check_output(solver::SolverLike, stride::NTuple{3,Int}, slice, ranges)
     sd = _slice_dim(slice)
     if slice !== nothing
         n = solver.decomp.n_global
@@ -811,7 +816,7 @@ function _check_output(solver::Solver, stride::NTuple{3,Int}, slice, ranges)
                         "that dimension"))
 end
 
-_interior(solver::Solver, a, ranges) = begin
+_interior(solver::SolverLike, a, ranges) = begin
     o1, o2, o3 = solver.decomp.n_halo_d
     Float32[a[i+o1, j+o2, k+o3]
             for i in ranges[1], j in ranges[2], k in ranges[3]][:]
@@ -819,7 +824,7 @@ end
 
 # Interleaved 3-component payload, rotated into the Cartesian frame when the
 # grid being written is curvilinear.
-function _interior_vector(solver::Solver, a1, a2, a3, rotate::Bool, ranges)
+function _interior_vector(solver::SolverLike, a1, a2, a3, rotate::Bool, ranges)
     npts = prod(length.(ranges))
     out = Vector{Float32}(undef, 3 * npts)
     o1, o2, o3 = solver.decomp.n_halo_d
@@ -841,7 +846,7 @@ end
 # its own derivative pass because `grad_u` carries velocity gradients only.
 # `deriv_scaled_along!` is a distributed solve. Every rank traverses the same
 # `fields` tuple in the same order, preserving its collective call order.
-function _schlieren(solver::Solver)
+function _schlieren(solver::SolverLike)
     g = similar(solver.rho)
     acc = zeros(eltype(solver.rho), size(solver.rho))
     for d in 1:3
@@ -859,7 +864,7 @@ function _schlieren(solver::Solver)
 end
 
 # grad_u[d, j] is ∂u_j/∂x_d, so the curl reads the off-diagonal pairs.
-_vorticity_arrays(solver::Solver) = begin
+_vorticity_arrays(solver::SolverLike) = begin
     g = solver.grad_u
     w1 = similar(solver.rho); w2 = similar(solver.rho); w3 = similar(solver.rho)
     @inbounds for idx in eachindex(w1)
@@ -870,7 +875,7 @@ _vorticity_arrays(solver::Solver) = begin
     (w1, w2, w3)
 end
 
-function _scalar_from(solver::Solver, f)
+function _scalar_from(solver::SolverLike, f)
     out = similar(solver.rho)
     @inbounds for idx in eachindex(out)
         out[idx] = f(idx)
@@ -914,7 +919,7 @@ directional sub-communicators must reach this call in the same order.
 
 The result is valid only over the interior unless halos have been refreshed.
 """
-function scalar_field(solver::Solver, name::Symbol; species::Int=1)
+function scalar_field(solver::SolverLike, name::Symbol; species::Int=1)
     g = solver.grad_u
     if name === :rho
         return solver.rho
@@ -990,7 +995,7 @@ produce one entry per species, and `:velocity` and `:vorticity` produce one
 three-component entry. `Q` is taken for uniformity with the rest of the write
 path and is not read.
 """
-function vtk_field_entries(solver::Solver, Q, name::Symbol, rotate::Bool, ranges)
+function vtk_field_entries(solver::SolverLike, Q, name::Symbol, rotate::Bool, ranges)
     E = Tuple{String,Int,Vector{Float32}}
     if name === :velocity
         return E[("velocity", 3, _interior_vector(solver, solver.u, solver.v,
@@ -1089,7 +1094,7 @@ Every rank in `solver.comm` must call this function with the same `fields`,
 `stride`, and `slice`, since the derived fields run distributed solves in tuple
 order.
 """
-function save_vtk(solver::Solver, Q, prefix::AbstractString;
+function save_vtk(solver::SolverLike, Q, prefix::AbstractString;
                   fields=DEFAULT_VTK_FIELDS, stride=1, slice=nothing)
     st = _normalize_stride(stride)
     ranges = _output_ranges(solver, st, slice)
@@ -1109,20 +1114,30 @@ end
 
 # --- Rectilinear: three coordinate vectors, no per-point geometry.
 
-function _save_vtr(solver::Solver, entries, prefix::AbstractString, stride,
+function _save_vtr(solver::SolverLike, entries, prefix::AbstractString, stride,
                    slice, ranges)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
     lo, hi = _output_piece_extent(solver, stride, slice, ranges)
     _has_output(ranges) || return _write_parallel_container(
         solver, entries, prefix, lo, hi, false, stride, slice)
-    coords = ntuple(d -> Float64[xcoord(solver, d, i) for i in ranges[d]], 3)
+    _write_vtr_piece(_piece_name(prefix, rank, ".vtr"), solver, entries, lo, hi,
+                     ranges, nothing)
+    _write_parallel_container(solver, entries, prefix, lo, hi, false, stride, slice)
+    return prefix
+end
 
+# One rectilinear piece at `path`, with the physical coordinates of `ranges`
+# and, when `ghost` is given, the `vtkGhostType` point array that blanks the
+# nodes a child level covers (the multiblock writer below).
+function _write_vtr_piece(path::AbstractString, solver::SolverLike, entries, lo, hi,
+                          ranges, ghost::Union{Nothing,Vector{UInt8}})
+    coords = ntuple(d -> Float64[xcoord(solver, d, i) for i in ranges[d]], 3)
     blocks = Any[coords[1], coords[2], coords[3]]
     append!(blocks, (data for (_, _, data) in entries))
+    ghost === nothing || push!(blocks, ghost)
     offs = _appended_offsets(sizeof.(blocks))
-
-    open(_piece_name(prefix, rank, ".vtr"), "w") do io
+    open(path, "w") do io
         write(io, "<?xml version=\"1.0\"?>\n")
         write(io, "<VTKFile type=\"RectilinearGrid\" version=\"1.0\" ",
                   "byte_order=\"", VTK_BYTE_ORDER, "\" header_type=\"UInt64\">\n")
@@ -1138,16 +1153,19 @@ function _save_vtr(solver::Solver, entries, prefix::AbstractString, stride,
                   "\" NumberOfComponents=\"", string(nc),
                   "\" format=\"appended\" offset=\"", string(offs[3+fi]), "\"/>\n")
         end
+        ghost === nothing ||
+            write(io, "<DataArray type=\"UInt8\" Name=\"vtkGhostType\" ",
+                      "NumberOfComponents=\"1\" format=\"appended\" offset=\"",
+                      string(offs[end]), "\"/>\n")
         write(io, "</PointData>\n</Piece>\n</RectilinearGrid>\n")
         _write_appended(io, blocks)
     end
-    _write_parallel_container(solver, entries, prefix, lo, hi, false, stride, slice)
-    return prefix
+    return path
 end
 
 # --- Structured: an explicit Cartesian position per point.
 
-function _save_vts(solver::Solver, entries, prefix::AbstractString, stride,
+function _save_vts(solver::SolverLike, entries, prefix::AbstractString, stride,
                    slice, ranges)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
@@ -1191,7 +1209,7 @@ end
 
 # --- The container, identical in shape for both grid types.
 
-function _write_parallel_container(solver::Solver, entries, prefix, lo, hi,
+function _write_parallel_container(solver::SolverLike, entries, prefix, lo, hi,
                                    curvilinear::Bool, stride, slice)
     decomp = solver.decomp
     rank = MPI.Comm_rank(decomp.comm)
@@ -1240,6 +1258,152 @@ function _write_parallel_container(solver::Solver, entries, prefix, lo, hi,
     end
     return prefix
 end
+# --- Patch layouts and the refinement hierarchy: one piece per patch per
+# rank under a multiblock index.
+#
+# A refined run's patches have different node spacings, so no single
+# rectilinear grid holds them: each held patch writes this rank's piece as its
+# own `.vtr` in the patch's node index space, and rank 0 lists every piece
+# under a `.vtm` multiblock index, one block per level. The pieces are the
+# files the single-patch writer produces, physical coordinates included, so a
+# reader composes them by position. A coarse node a child level covers
+# entirely (`Patch.covered`, all eight orthant bits) is blanked through the
+# VTK ghost-point convention (`vtkGhostType` = HIDDENPOINT), so the composite
+# shows the finest data at every point; a node on the coarse-fine face is
+# half covered, stays visible, and the face is drawn once. `stride` acts in
+# each patch's own node space; `slice` names a root node plane, mapped to the
+# coincident node of each patch, and a patch the plane misses writes no
+# piece. Refinement takes the Cartesian metric, so every piece is
+# rectilinear.
+
+const VTK_HIDDENPOINT = UInt8(2)
+
+"The `.vtr` piece of one patch: `prefix.L<level>.T<tile>.r<rank>.vtr`."
+_patch_piece_name(prefix, level::Int, tile::Int, rank::Int) =
+    string(prefix, ".L", level, ".T", lpad(tile, 4, '0'), ".r", lpad(rank, 4, '0'),
+           ".vtr")
+
+# `slice = (d, g)` on the root's node lattice, in the node space of the patch
+# `ps` holds: root node g is level-ℓ node 3^ℓ (g − 1) + 1, less the patch's
+# offset on that level. `nothing` stays `nothing`.
+function _patch_slice(ps::PatchSolver, slice)
+    slice === nothing && return nothing
+    d, g = Int(slice[1]), Int(slice[2])
+    return (d, 3^ps.patch.level * (g - 1) + 1 - ps.patch.region.offset[d])
+end
+
+"""
+The `vtkGhostType` point array of a patch over the output `ranges`: the
+hidden-point flag where a child level covers a node's whole quadrature cell
+(`Patch.covered` at every orthant bit), zero elsewhere.
+"""
+function _vtk_ghost_points(ps::PatchSolver, ranges)
+    o1, o2, o3 = ps.decomp.n_halo_d
+    covered = ps.covered
+    return UInt8[covered[i+o1, j+o2, k+o3] == 0xff ? VTK_HIDDENPOINT : 0x00
+                 for i in ranges[1], j in ranges[2], k in ranges[3]][:]
+end
+
+"""
+    save_vtk(solver, states::Vector, prefix; fields, stride, slice)
+
+The patch-layout form, for the state vector [`allocate_state`](@ref)
+returns from a refined (or patch-partitioned) solver: one `.vtr` piece per
+patch this rank holds, `prefix.L<level>.T<tile>.r<rank>.vtr`, listed by
+rank 0 under the multiblock index `prefix.vtm`, one block per level. Open
+the `.vtm`. A coarse node a child level covers entirely is blanked through
+the `vtkGhostType` point array, so the composite renders the finest data at
+every point and the coarse-fine faces once. `fields` and `stride` mean what
+they do above, the stride acting in each patch's own node space; `slice`
+names a plane of the **root** lattice, which each patch maps to its own
+coincident node, and a patch the plane misses writes no piece. Collective:
+every rank walks its patches in patch order, each patch's derived fields run
+on that patch's communicator, and the index gathers the piece list.
+"""
+function save_vtk(solver::Solver, states::Vector{<:ConservedState},
+                  prefix::AbstractString; fields=DEFAULT_VTK_FIELDS, stride=1,
+                  slice=nothing)
+    st = _normalize_stride(stride)
+    if slice !== nothing
+        sd, sg = Int(slice[1]), Int(slice[2])
+        1 <= sd <= 3 ||
+            throw(ArgumentError("save_vtk: slice dimension must be 1, 2 or 3, " *
+                                "got $sd"))
+        1 <= sg <= solver.n_global[sd] ||
+            throw(ArgumentError("save_vtk: slice index $sg is outside " *
+                                "1:$(solver.n_global[sd]) along dimension $sd"))
+    end
+    comm = solver.comm
+    rank = MPI.Comm_rank(comm)
+    levels = getfield(solver, :levels)
+    patches = getfield(solver, :patches)
+    # (level, tile) of each held patch; the root level's tiles are its patch
+    # ids, which a slab layout numbers globally.
+    tile_of = Dict{Int,Tuple{Int,Int}}()
+    for (ℓ, lev) in enumerate(levels), (li, ti) in zip(lev.patches, lev.tiles)
+        tile_of[li] = (ℓ - 1, ℓ == 1 ? patches[li].id : ti)
+    end
+    ensure_output_dir(prefix, comm)
+    pieces = Int64[]
+    for (li, p) in enumerate(patches)
+        ps = PatchSolver(solver, p)
+        ℓ, ti = tile_of[li]
+        pslice = _patch_slice(ps, slice)
+        # A patch the plane misses is skipped by every rank holding it, the
+        # test being on the patch geometry alone, so its collectives below
+        # are skipped together.
+        pslice === nothing ||
+            1 <= pslice[2] <= ps.decomp.n_global[pslice[1]] || continue
+        ranges = _output_ranges(ps, st, pslice)
+        _check_output(ps, st, pslice, ranges)
+        _prepare_fields!(ps, states[li], fields)
+        entries = Tuple{String,Int,Vector{Float32}}[]
+        for name in fields
+            append!(entries, vtk_field_entries(ps, states[li], name, false, ranges))
+        end
+        _has_output(ranges) || continue
+        lo, hi = _output_piece_extent(ps, st, pslice, ranges)
+        ghost = ℓ < length(levels) - 1 ? _vtk_ghost_points(ps, ranges) : nothing
+        _write_vtr_piece(_patch_piece_name(prefix, ℓ, ti, rank), ps, entries, lo,
+                         hi, ranges, ghost)
+        push!(pieces, ℓ, ti)
+    end
+    _write_multiblock(solver, pieces, prefix)
+    return prefix
+end
+
+# The `.vtm` index: every rank's `(level, tile)` piece list gathered to rank
+# 0, which lists the pieces of each level under one block.
+function _write_multiblock(solver::Solver, pieces::Vector{Int64},
+                           prefix::AbstractString)
+    comm = solver.comm
+    all_pieces = MPI.gather(pieces, comm; root=0)
+    MPI.Comm_rank(comm) == 0 || return prefix
+    open(string(prefix, ".vtm"), "w") do io
+        write(io, "<?xml version=\"1.0\"?>\n")
+        write(io, "<VTKFile type=\"vtkMultiBlockDataSet\" version=\"1.0\" ",
+                  "byte_order=\"", VTK_BYTE_ORDER, "\" header_type=\"UInt64\">\n")
+        write(io, "<vtkMultiBlockDataSet>\n")
+        for ℓ in 0:nlevels(solver)-1
+            write(io, "<Block index=\"", string(ℓ), "\" name=\"level ", string(ℓ),
+                      "\">\n")
+            k = 0
+            for (r, v) in enumerate(all_pieces), m in 1:2:length(v)
+                v[m] == ℓ || continue
+                ti = Int(v[m+1])
+                write(io, "<DataSet index=\"", string(k), "\" name=\"tile ",
+                          string(ti), " rank ", string(r - 1), "\" file=\"",
+                          basename(_patch_piece_name(prefix, ℓ, ti, r - 1)),
+                          "\"/>\n")
+                k += 1
+            end
+            write(io, "</Block>\n")
+        end
+        write(io, "</vtkMultiBlockDataSet>\n</VTKFile>\n")
+    end
+    return prefix
+end
+
 # ---------------------------------------------------------------------------
 # Output as a callback effect.
 #

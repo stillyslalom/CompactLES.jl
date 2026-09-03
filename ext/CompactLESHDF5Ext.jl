@@ -501,6 +501,11 @@ function _coarse_axis(solver::Solver, d, stride, slice)
     return Float64[CompactLES.global_xcoord(solver, d, g) for g in 1:stride[d]:n]
 end
 
+CompactLES.save_hdf5(solver::Solver, states::Vector{<:ConservedState},
+                     prefix::AbstractString; kwargs...) =
+    error("save_hdf5: a patch layout has no shared-file field dump; save_vtk " *
+          "writes it as one piece per patch under a multiblock index")
+
 function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
                               fields=CompactLES.DEFAULT_VTK_FIELDS, stride=1,
                               slice=nothing)

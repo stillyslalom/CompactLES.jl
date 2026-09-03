@@ -29,18 +29,19 @@ Part I: the delivered system
 5. [Patches and same-level interfaces](#patches-and-same-level-interfaces)
 6. [Refinement](#refinement)
 7. [Ownership and load balance](#ownership-and-load-balance)
-8. [The device backend](#the-device-backend)
-9. [Verification](#verification)
-10. [Performance summary](#performance-summary)
-11. [Lessons](#lessons)
-12. [Scope boundaries today](#scope-boundaries-today)
+8. [I/O and restart](#io-and-restart)
+9. [The device backend](#the-device-backend)
+10. [Verification](#verification)
+11. [Performance summary](#performance-summary)
+12. [Lessons](#lessons)
+13. [Scope boundaries today](#scope-boundaries-today)
 
 Part II: the production AMR
 
-13. [What remains](#what-remains)
-14. [Design of the remaining work](#design-of-the-remaining-work)
-15. [Open measurements](#open-measurements)
-16. [Sequencing](#sequencing)
+14. [What remains](#what-remains)
+15. [Design of the remaining work](#design-of-the-remaining-work)
+16. [Open measurements](#open-measurements)
+17. [Sequencing](#sequencing)
 
 ---
 
@@ -69,6 +70,13 @@ One solver runs on four axes of configuration, combinable except where
   for a set number of checks, and a tile whose range moves migrates block
   to block. The level coupling gathers replicated region data and
   distributes its interpolation chains by conserved component.
+- **Checkpoint and output**: a checkpoint carries the hierarchy (the tile
+  layout and stored ownership of every level, the tag history) and every
+  tile's state, in the shared HDF5 file or in per-rank files, and a restart
+  rebuilds the level on whatever rank count it is given, continuing bit
+  for bit on the writing one; field output is one piece per patch under a
+  multiblock index with the covered coarse nodes blanked
+  (`src/io_levels.jl`, `src/io.jl`).
 - **Storage backend**: `CPUBackend` (`Array`s, `@threaded` loops) or
   `DeviceBackend(ka)` wrapping any KernelAbstractions backend. A
   device-resident solver (decomposed, refined, regridding, Float64 or
@@ -493,7 +501,8 @@ before `tile_lifetime` regrid checks (default 1) since its creation. The
 history the two rules need is on the `RegridSpec`: `checks` counts the
 regrid checks and `created` records, per current tile region, the check it
 was created at. Both are derived from the reduced flags, so every rank
-holds the same record, and both are state the checkpoint will carry. On
+holds the same record, and both are state the checkpoint carries
+([I/O and restart](#io-and-restart)). On
 the Sod cases the band holds the marginal tile ahead of the shock one check
 longer and stops its re-creation, and it keeps the rarefaction head's tiles,
 a marginal feature that the threshold alone admits and drops.
@@ -840,6 +849,92 @@ the suite pins; the smallest such case refines a region of four coarse
 nodes, which `_amr_dims` cannot split over two ranks and which runs with
 the level owned by one.
 
+## I/O and restart
+
+A checkpoint of a refined run carries, beside the root's state, a record of
+the hierarchy and every tile's state, and a restart rebuilds the level from
+the record on whatever rank count it is given (`src/io_levels.jl`).
+
+### What the checkpoint carries
+
+Per refined level, the tile layout as the regrid derives it, the tile
+regions in the parent level's node space, and the stored owner ranges
+(`Level.owners`, the authority across regrids); then the regrid state: the
+step of the last check, the check count and the per-tile creation record
+the lifetime and the hold band read, and the rebalance streak. The tag
+thresholds, the buffer and the interval are constructor configuration,
+recorded for provenance and not restored; the tile edge is recorded and
+checked, since a layout on one lattice cannot be placed on another. Rank 0
+assembles the record, the level subsets being prefixes so that it holds
+every level's layout, and broadcasts it.
+
+Every patch's state is its interior block of Q and, when the artificial
+properties are enabled, its μ*, β*, κ* and D* arrays. The coefficients are
+state because `max_rate` sizes the next step from the ones the last
+right-hand side left behind: a restart from Q alone measures its first rate
+with zero coefficients and takes a first step the uninterrupted run would
+not have, after which the nonlinear sensors amplify the difference. With
+them a restart continues bit for bit. The primitives of the evaluation that
+wrote the coefficients, which the sensor tag criterion reads beside them,
+are not carried; a restart refreshes the primitives from the restored state,
+so with `tag_sensor_threshold > 0` a marginal node may tag differently at
+the first check after a restart. Every other criterion reads Q.
+
+Both formats carry the same record. The shared HDF5 file
+(`save_checkpoint_hdf5` on a state vector) holds it as readable tables
+(`hierarchy/level<ℓ>/regions`, `.../owners`, `hierarchy/regrid/...`) and
+each tile's state as a dataset over the tile's node space written in
+per-rank hyperslabs (`levels/<ℓ>/tiles/<t>/Q`, `.../art`); the per-rank file
+(`save_checkpoint`) holds the record as a flat image and this rank's blocks
+of the tiles it holds, and restores onto the rank count that wrote it only.
+The single-patch checkpoint carries the coefficient arrays and the level
+count as well (format 4), so an unrefined restart continues bit for bit
+too.
+
+### Restart on any rank count
+
+`restore_hierarchy!` compares the recorded level-1 layout with the
+solver's, which the constructor built from whatever `refine` region it was
+given. When the regions differ, or the rank count is the writing one and
+the ownership differs, `_replace_level!` rebuilds the level: the shape of
+`_regrid_tiles!` without the tag decision, the carry and the migration,
+every tile fresh (its state comes from the file afterwards), the level and
+tile communicators split afresh, the covered mask and the geometry
+following. On the writing rank count the stored ownership is restored, and
+the same tiles on the same rank ranges are the same decompositions, so the
+run continues bit for bit, later regrids included. On another rank count
+`_tile_owners` partitions the level afresh, a different decomposition of
+the same tiles, and the continuation agrees to round-off, the tier a
+subset-owned tile already holds ([Reproducibility tier](#reproducibility-tier)).
+A level below the first is static, since regridding is two-level, so its
+layout must be the solver's own and the constructor's `refine` supplies it;
+rebuilding needs a `RegridSpec`, where the schemes a fresh tile is planned
+with live. Every decision derives from the record, identical on every rank,
+so the communicator splits are reached together.
+
+Measured: the tiled and box Sod regrid cases checkpointed at step 23 and
+continued to step 130 through the regrids in between agree with the
+uninterrupted run at every slot, tag history included, serially and (the
+tiled case at 400 nodes, checkpointed at step 21 and continued to 41) at
+np = 2, 4 and 8; a twelve-tile wave written on half the ranks and restored
+on all of them, rebuilt from a six-tile initial region, continues to 1e-12
+in the wave error.
+
+### Field output
+
+`save_vtk` on a state vector writes one `.vtr` piece per patch per rank, in
+the patch's own node space with physical coordinates, and rank 0 lists them
+under a `.vtm` multiblock index, one block per level, from a gather of the
+piece lists. A coarse node a child level covers entirely (`Patch.covered`
+at every orthant bit) carries the `vtkGhostType` hidden-point flag, so the
+composite renders the finest data at every point and the coarse-fine face,
+whose coarse nodes are half covered, once. `stride` acts in each patch's
+node space; `slice` names a root plane, mapped to each patch's coincident
+node, and a patch the plane misses writes no piece. `FieldWriter` on a
+state vector numbers `.vtm` frames into its `.pvd`. Not covered: a
+shared-file (`save_hdf5`) dump of a hierarchy, which needs an XDMF tree of
+grids, and the checkpoint of a same-level slab layout.
+
 ## The device backend
 
 Architecture: KernelAbstractions.jl, one codebase, CPU and GPU backends. KA
@@ -944,8 +1039,10 @@ The oracle hierarchy, strongest first:
    single-patch and level paths are held bit-identical where the
    configuration admits it (`test/convergence.jl`, `test/level_tests.jl`),
    and the migration is held bitwise against the replicated carry it
-   replaced. A decomposed patch reproduces the serial answer to round-off
-   (1e-15 to 6e-15), which is the tier for anything a subset owns.
+   replaced; a restart on the writing rank count continues the run bitwise
+   through its later regrids. A decomposed patch reproduces the serial
+   answer to round-off (1e-15 to 6e-15), which is the tier for anything a
+   subset owns, a restart on another rank count included.
 3. **CPU-side pins without a GPU.** `FORCE_KA`, `FORCE_DEVICE_EXCHANGE`, and
    `DEVICE_SYNC` route ordinary arrays through the device paths, held
    bitwise by the serial and MPI suites. They cannot catch what only actual
@@ -1063,7 +1160,7 @@ Configurations rejected at setup, and the reason:
   banded schemes (no interface closures), the `:d8` detector, stretching
   along the patched dimension, and an explicit `dims`. The layout tiles
   slabs along one dimension, so corner-coupled adjacency does not arise.
-  Checkpoint/VTK output is single-patch.
+  Field output takes the multiblock form; a slab layout has no checkpoint.
 - **Refined runs** require Cartesian metric, no stretching, no folds,
   tridiagonal schemes, `:delta4`, one region per level, and no same-level
   `patch_grid` alongside. `level_restriction = :filter` is serial-only.
@@ -1093,7 +1190,6 @@ sequencing item that delivers it.
 
 | assumption | replaced by | item |
 |---|---|---|
-| I/O and restart are single-patch | [I/O and restart](#io-and-restart) | 5 |
 | the banded (C10) schemes have no interface closures | [Banded schemes](#banded-schemes) | 6 |
 | tiled levels are host-only; the transfer chain and tagging run on the host | [Device](#device) | 7 |
 | no rate check per substep; measured weights carry the root's work | [Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check) | as needed |
@@ -1107,16 +1203,6 @@ configurations that need no rank-partitioned carry.
 
 Each subsection is the design as it stands; the order is the dependency
 order, which [Sequencing](#sequencing) turns into deliverables with gates.
-
-### I/O and restart
-
-A tile writes its `region` as a hyperslab the way a rank block does, so the
-HDF5 checkpoint gains one group per level, each holding the level's fields
-and a layout table of tile regions; restart reads the layout, rebuilds the
-hierarchy on whatever rank count it is given, and reads hyperslabs. The
-layout, the regrid spec, the stored ownership, and the tag history are
-state and go in the checkpoint. VTK output is one `.vtr` per tile under a
-`.vtm` multiblock index, with covered coarse nodes blanked.
 
 ### Banded schemes
 
@@ -1249,7 +1335,7 @@ a structure.
 ## Sequencing
 
 Each item names its gate. Nothing is built ahead of the item before it.
-Items 1–4 are delivered and described in Part I: the level hierarchy with
+Items 1–5 are delivered and described in Part I: the level hierarchy with
 its recursive driver ([Refinement](#refinement)), the tiled fine level with
 full adjacency and the set-difference regrid
 ([Tiles and adjacency](#tiles-and-adjacency)), ownership
@@ -1258,18 +1344,19 @@ pulled ahead of tagging and I/O because a flat globally ordered
 `solver.patches`, an equal patch count per rank, and full-communicator
 gather tables on every `LevelTransfer` are structural, and diagnostics or
 I/O built on them would have been rebuilt once ranks held different tile
-subsets, and the tag criteria with their hysteresis and the covered masks
+subsets, the tag criteria with their hysteresis and the covered masks
 ([Tagging and regridding](#tagging-and-regridding),
-[Diagnostics on the composite grid](#diagnostics-on-the-composite-grid)).
-Their gates hold in the serial and MPI suites; the per-substep
-rate check deferred from item 1 is under
+[Diagnostics on the composite grid](#diagnostics-on-the-composite-grid)),
+and the checkpoint of the hierarchy with its restart on any rank count and
+the multiblock field output ([I/O and restart](#io-and-restart)), whose
+gate was a restart continuing the regridding cases bit for bit on the
+writing rank count and to round-off on another. Their gates hold in the
+serial and MPI suites; the per-substep rate check deferred from item 1 is
+under
 [Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check),
 and the cluster measurements the items leave open are under
 [Open measurements](#open-measurements).
 
-5. **Multi-level HDF5 and VTK, restart of the hierarchy.** Gate: restart on
-   a different rank count continues bit-identically for the delivered
-   serial-restart cases and to round-off under MPI.
 6. **Banded interface closures and remeasured buffers.** Gate: the
    two-conforming-patch orders and reflection amplitude reproduced at C10;
    the localization study at C10 setting the buffers.
@@ -1282,8 +1369,9 @@ and the cluster measurements the items leave open are under
    shock, filter rows at the shell. Each is a measurement first and a
    change only if the measurement demands one.
 
-Items 1–4 make a run possible and its diagnostics count each node once, 5
-and 7 make it fast, 6 is independent and lands whenever a case wants C10.
+Items 1–5 make a run possible, restartable, and its diagnostics count each
+node once; 7 makes it fast, and 6 is independent and lands whenever a case
+wants C10.
 The conservation drift and the boundary numerics of item 8 remain open
 debts on the target problems, so a production acceptance still needs a
 conservation budget tied to the reported mixing and energy quantities. The

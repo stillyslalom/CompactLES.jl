@@ -195,6 +195,11 @@ time stepping) are not yet implemented.
   artificial-property internals), `stride` subsampling, and `slice`.
 - **Time series.** `Callback(EveryTime(Δt), FieldWriter("out/field"))` dumps on
   a time schedule and writes a `.pvd` collection to animate against time.
+- **Refined runs.** Every writer and checkpoint above also takes the state
+  vector a refined solver holds: `save_vtk` then writes one piece per patch
+  under a `.vtm` multiblock index with the covered coarse nodes blanked, and a
+  checkpoint records the tile layout, ownership and tag history, so a restart
+  rebuilds the hierarchy on any rank count (bit for bit on the writing one).
 
 ## Testing
 
