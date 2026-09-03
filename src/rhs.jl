@@ -502,7 +502,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
             (crd[pdim] = mod(crd[pdim] + decomp.dims[pdim] ÷ 2, decomp.dims[pdim]))
         rev_needed && !rev_local &&
             (crd[revdim] = decomp.dims[revdim] - 1 - crd[revdim])
-        partner = Int(MPI.Cart_rank(decomp.comm, Cint.(crd)))
+        partner = cart_rank(decomp, crd)
         loc = shift_local && rev_local
         keep_e = if shift_needed && !shift_local
             decomp.coords[pdim] < decomp.dims[pdim] ÷ 2

@@ -877,7 +877,10 @@ function _refine_chain(::Type{T}, ext0::NTuple{3,Int}, active::NTuple{3,Bool},
 end
 
 # Free the chain decompositions a discarded transfer owns. Both chains are
-# built by `_refine_chain` on `COMM_SELF`, so these frees are rank-local.
+# built by `_refine_chain` on `COMM_SELF`, so these frees are rank-local, and
+# no-ops today: a one-rank `COMM_SELF` decomposition borrows the communicator
+# and owns nothing. The call stays so that the ownership rule lives in
+# `Decomp` alone.
 # The parent and fine patch decompositions are not stored on the transfer
 # (only their `_owned_blocks` tables are) and are owned by their patches.
 function free_transfer_decomps!(lt::LevelTransfer)

@@ -165,6 +165,15 @@ Key derived quantities on `Decomp`:
   open (non-periodic) global edges.
 - `sub[d]`: a sub-communicator containing exactly the ranks along dimension
   `d`, used by the distributed line solves and line-wise reductions.
+- `owns_communicators`: whether the constructor built the Cartesian
+  communicator and its three sub-communicators. On one rank of `COMM_WORLD`
+  or `COMM_SELF` it builds none: `comm` and every `sub[d]` are that
+  communicator, and `free_communicators!` has nothing to do. The general
+  path's four handles are freed only from MPI.jl's finalizer, so a process
+  that builds and drops decompositions faster than the collector runs (a
+  serial test suite, a sweep script) exhausts MPICH's 2048 context ids; the
+  borrowed case covers every serial run and every level transfer's
+  refinement chains, and creates nothing.
 
 Fields are allocated by `field(decomp)` (a scalar with halos) and `allocate_state`
 (the 4-D conserved array `Q[x, y, z, 1:n_cons]`). Two index helpers recur

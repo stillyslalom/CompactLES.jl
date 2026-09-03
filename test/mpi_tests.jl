@@ -1351,6 +1351,8 @@ function test_refined_decomposed()
     # times over: every regrid is a replicated tag-and-rebuild over the same
     # collectives, and on an oversubscribed runner the phase cost is linear in
     # steps (see the callback phase). The full crossing costs 1001 steps.
+    lt0 = getfield(solver, :levels)[2].transfers[1]
+    decomp0 = lt0.fine_index == 0 ? nothing : solver.patches[lt0.fine_index].decomp
     run!(solver, states; tfinal=0.03, nmax=61)
     region = CL.refined_region(solver)
     fin = all(all(isfinite, parent(Q)) for Q in states)
@@ -1366,6 +1368,14 @@ function test_refined_decomposed()
     # Allreduce round-off tier.
     check("regridded Sod: time reached matches serial",
           abs(gmax(solver.t) - 0.005484081097503982), 1e-14)
+    # The regrids dropped the setup-time fine patch. Decomposed over more
+    # than one rank, or over a split communicator, its decomposition owns
+    # Cartesian communicators, which must be freed at the drop and not left
+    # to the garbage collector (the serial suite's decompositions borrow
+    # COMM_WORLD and own none, so only this suite can see the free happen).
+    freed = decomp0 === nothing || !decomp0.owns_communicators ||
+            decomp0.comm == MPI.COMM_NULL
+    check("regridded Sod: dropped fine decomposition freed", freed ? 0.0 : 1.0, 0.5)
 end
 
 # ---------------------------------------------------------------------------

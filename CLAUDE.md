@@ -79,7 +79,7 @@ julia --project=. test/runtests.jl        # 128 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 185/185 each
+  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 186/186 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
@@ -182,7 +182,10 @@ Names are spelled out in full. Current vocabulary:
 - `solver`, `decomp`, `n_global`, `n_local`, `n_halo`, `n_halo_d`, `offset`,
   `neighbors`, `send_buf`/`recv_buf`, `sub_rank`/`sub_size`, `pad` (the
   per-dimension halo pad, as a local), `free_communicators!` (called when a
-  `Decomp` is permanently dropped; MPI frees nothing until GC otherwise)
+  `Decomp` is permanently dropped; MPI frees nothing until GC otherwise),
+  `owns_communicators` (false on one rank of `COMM_WORLD`/`COMM_SELF`, which
+  a `Decomp` borrows instead of building a topology; `cart_rank` covers that
+  case)
 - `n_species`, `n_cons`, `i_mom`, `i_energy`, `Y`, `cp_mix`
 - `mu_art`, `beta_art`, `kappa_art`, `D_art`, `C_mu`/`C_beta`/`C_kappa`/`C_D`,
   `mu_sensor` (`:strain` or `:velocity`), `beta_sensor` (`:strain`,

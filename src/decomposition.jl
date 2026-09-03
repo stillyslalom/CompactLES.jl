@@ -20,7 +20,11 @@ The constructor is collective over `comm` (default `MPI.COMM_WORLD`), and
 initializes MPI at thread level `:funneled` if it is not yet initialized. It
 builds a Cartesian communicator with reordering permitted, so a rank's Cartesian
 coordinates need not follow its rank in `comm`, along with one sub-communicator
-per dimension for the distributed line solves. A patch-decomposed solver passes
+per dimension for the distributed line solves. On one rank of `MPI.COMM_WORLD`
+or `MPI.COMM_SELF` it builds nothing: a single rank has no topology to arrange,
+and those two communicators outlive any decomposition, so `comm` and every
+`sub[d]` are that communicator itself, `owns_communicators` is false, and
+`free_communicators!` has nothing to free. A patch-decomposed solver passes
 the patch communicator produced by `MPI.Comm_split`; `n_global` is then the
 patch extent, not the whole grid's.
 
@@ -47,6 +51,8 @@ struct Decomp{T}
     sub::NTuple{3,MPI.Comm}             # sub-communicator along each dim
     sub_rank::NTuple{3,Int}
     sub_size::NTuple{3,Int}
+    owns_communicators::Bool            # false on one rank of COMM_WORLD/COMM_SELF:
+                                        # comm and sub are then that communicator
     send_buf::Vector{Vector{T}}         # per-dim halo send buffers
     recv_buf::Vector{Vector{T}}         # per-dim halo recv buffers
 end
@@ -126,22 +132,46 @@ function Decomp{T}(n_global::NTuple{3,Int}, periodic::NTuple{3,Bool};
     end
     prod(pdims) == np ||
         error("process grid $pdims does not match communicator size $np")
-    cart = MPI.Cart_create(comm, collect(Int, pdims);
-                           periodic=collect(periodic), reorder=true)
-    coords = Tuple(Int.(MPI.Cart_coords(cart)))
-    neighbors = ntuple(d -> Tuple(Int.(MPI.Cart_shift(cart, d - 1, 1))), 3)  # (src=lo, dst=hi)
+    # One rank of a session-lifetime communicator borrows it. A Cartesian
+    # topology over a single rank arranges nothing, and the four handles the
+    # general path creates (the Cartesian communicator and its three
+    # sub-communicators) are freed only from MPI.jl's finalizer, so a process
+    # that builds and drops decompositions faster than the collector runs
+    # exhausts MPICH's 2048 context ids: the serial test suite did, and a
+    # level's refinement chains (eight `COMM_SELF` decompositions per tile,
+    # held on every rank of the parent's subset) would at a few dozen tiles.
+    # A split communicator of one rank is not borrowed, because its owner
+    # frees it on its own schedule: a regrid drops a tile group and keeps the
+    # tiles built on it.
+    borrowed = np == 1 && (comm == MPI.COMM_WORLD || comm == MPI.COMM_SELF)
+    if borrowed
+        cart = comm
+        coords = (0, 0, 0)
+        # What MPI_Cart_shift returns on a one-rank dimension: the rank
+        # itself where periodic, MPI_PROC_NULL where open.
+        pnull = Int(MPI.PROC_NULL)
+        neighbors = ntuple(d -> periodic[d] ? (0, 0) : (pnull, pnull), 3)
+        sub = (comm, comm, comm)
+    else
+        cart = MPI.Cart_create(comm, collect(Int, pdims);
+                               periodic=collect(periodic), reorder=true)
+        coords = Tuple(Int.(MPI.Cart_coords(cart)))
+        # (src=lo, dst=hi)
+        neighbors = ntuple(d -> Tuple(Int.(MPI.Cart_shift(cart, d - 1, 1))), 3)
+        # `sub_rank[d] == coords[d]` throughout the package: `at_lo_edge` and
+        # `at_hi_edge` below, the fold pairing, the NSCBC wall tests and the
+        # profile gathers in diagnostics.jl all read one where the other would
+        # do. MPI_Cart_sub guarantees it: the sub-communicator along `d` is
+        # ordered by the Cartesian coordinate in `d`, so a rank's position in
+        # it is its own `coords[d]`. Nothing here re-derives the identity, so
+        # a decomposition built by some route other than Cart_create/Cart_sub
+        # would have to supply it (the borrowed branch does: one rank, at
+        # coordinate 0 of every sub-communicator).
+        sub = ntuple(d -> MPI.Cart_sub(cart, [k == d for k in 1:3]), 3)
+    end
     nl_off = ntuple(d -> local_range(n_global[d], pdims[d], coords[d]), 3)
     n_local = ntuple(d -> nl_off[d][1], 3)
     offset  = ntuple(d -> nl_off[d][2], 3)
-    # `sub_rank[d] == coords[d]` throughout the package: `at_lo_edge` and
-    # `at_hi_edge` below, the fold pairing, the NSCBC wall tests and the
-    # profile gathers in diagnostics.jl all read one where the other would do.
-    # MPI_Cart_sub guarantees it: the sub-communicator along `d` is ordered by
-    # the Cartesian coordinate in `d`, so a rank's position in it is its own
-    # `coords[d]`. Nothing here re-derives the identity, so a decomposition
-    # built by some route other than Cart_create/Cart_sub would have to supply
-    # it.
-    sub = ntuple(d -> MPI.Cart_sub(cart, [k == d for k in 1:3]), 3)
     sub_rank = ntuple(d -> MPI.Comm_rank(sub[d]), 3)
     sub_size = ntuple(d -> MPI.Comm_size(sub[d]), 3)
     n_halo_d = ntuple(d -> active[d] ? n_halo : 0, 3)
@@ -150,14 +180,17 @@ function Decomp{T}(n_global::NTuple{3,Int}, periodic::NTuple{3,Bool};
     send_buf = [zeros(T, cnt(d)) for d in 1:3]
     recv_buf = [zeros(T, cnt(d)) for d in 1:3]
     Decomp{T}(cart, pdims, coords, periodic, n_global, n_local, offset, n_halo, active,
-              n_halo_d, neighbors, sub, sub_rank, sub_size, send_buf, recv_buf)
+              n_halo_d, neighbors, sub, sub_rank, sub_size, !borrowed, send_buf,
+              recv_buf)
 end
 
 """
     free_communicators!(decomp)
 
 Free the four communicators the constructor created: the Cartesian
-communicator and its three sub-communicators. MPI.jl frees a communicator
+communicator and its three sub-communicators. A no-op on a decomposition
+that borrowed a one-rank `COMM_WORLD` or `COMM_SELF` and so created none
+(`owns_communicators` is false). MPI.jl frees a communicator
 only when garbage collection finalizes it, so a path that discards
 decompositions in a loop (regridding rebuilds every level transfer's
 refinement chains) exhausts MPICH's 2048-context-id budget whenever
@@ -166,16 +199,27 @@ communicators" failure. Call this when a `Decomp` is permanently dropped;
 the `Decomp` must not be used afterward. `MPI_Comm_free` is collective, so
 every rank of the communicator must make the same call; the regrid paths
 satisfy this because the tagged sets are reduced before any rank rebuilds,
-and the chain decompositions are on `COMM_SELF`. Freeing sets each handle
-to `MPI_COMM_NULL` in place, which MPI.jl's finalizer guard then skips.
+and the chain decompositions, on `COMM_SELF`, own nothing. Freeing sets each
+handle to `MPI_COMM_NULL` in place, which MPI.jl's finalizer guard then skips.
 """
 function free_communicators!(decomp::Decomp)
+    decomp.owns_communicators || return nothing
     for d in 1:3
         MPI.free(decomp.sub[d])
     end
     MPI.free(decomp.comm)
     return nothing
 end
+
+"""
+    cart_rank(decomp, coords) -> Int
+
+The rank in `decomp.comm` at the 0-based Cartesian coordinates `coords`:
+`MPI.Cart_rank` where the constructor built a topology, and 0 on a borrowed
+one-rank communicator, which carries none.
+"""
+cart_rank(decomp::Decomp, coords) =
+    decomp.owns_communicators ? Int(MPI.Cart_rank(decomp.comm, Cint.(coords))) : 0
 
 "CartesianIndices of the interior (halo-offset) block."
 interior(decomp::Decomp) = CartesianIndices(

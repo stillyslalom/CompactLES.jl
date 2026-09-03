@@ -472,7 +472,8 @@ The returned `solver` owns the operator plans and runtime state; `Q` contains
 the conserved variables and is ready to pass to [`run!`](@ref).
 
 Collective over `num.comm` (`MPI.COMM_WORLD` by default): the decomposition
-is built with `MPI.Cart_create` and its sub-communicators, so every rank of
+is built with `MPI.Cart_create` and its sub-communicators (on more than one
+rank; a single rank borrows `num.comm` itself), so every rank of
 that communicator must call `setup` with the same `prob` and `num`. A split
 communicator lets two independent solvers share one job.
 """

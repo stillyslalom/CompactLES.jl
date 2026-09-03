@@ -9,6 +9,13 @@
 # invertible filter pair is not the default are documented at the top of
 # src/levels.jl.
 
+# A dropped decomposition's communicators are freed at the drop, or were never
+# created: at np = 1 every decomposition borrows `COMM_WORLD` or `COMM_SELF`
+# and owns none, so this suite sees only the second case. The MPI suite checks
+# the first on the regridded Sod case.
+released_communicators(decomp) =
+    !decomp.owns_communicators || decomp.comm == CL.MPI.COMM_NULL
+
 @testset "refined solver rejects unsupported configurations" begin
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     mk(; kw...) = Solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
@@ -463,8 +470,8 @@ end
     # communicators must be freed at the drop, not left to the garbage
     # collector: at the regrid cadence the finalizer backlog exhausts
     # MPICH's 2048-context-id budget whenever collection lags.
-    @test lt0.pdecomps[1].comm == CL.MPI.COMM_NULL
-    @test decomp0.comm == CL.MPI.COMM_NULL
+    @test released_communicators(lt0.pdecomps[1])
+    @test released_communicators(decomp0)
     padc = sa.patches[1].decomp.n_halo_d[1]
     padf = sa.patches[2].decomp.n_halo_d[1]
     e_amr = 0.0
@@ -687,7 +694,7 @@ end
     @test regs != initial
     # The tile set changed, so every setup-time transfer was replaced and
     # its chain communicators were freed at the drop.
-    @test all(lt.pdecomps[1].comm == CL.MPI.COMM_NULL for lt in transfers0)
+    @test all(released_communicators(lt.pdecomps[1]) for lt in transfers0)
     # Every tile is a lattice cell, the set is in lattice order and holds
     # the shock. It need not be contiguous: under the default hold band the
     # rarefaction head, a marginal feature, keeps its tiles at the far end.

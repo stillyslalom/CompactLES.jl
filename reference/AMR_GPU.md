@@ -764,7 +764,10 @@ tile's Cartesian communicator is independent of the group it was split from
 and of the level communicator a resize replaces, so it survives both. The
 communicators a regrid discards are freed at the regrid, for the reason
 `free_communicators!` records (left to garbage collection they exhaust
-MPI's context-id budget at the regrid cadence).
+MPI's context-id budget at the regrid cadence). A transfer's refinement
+chains, eight decompositions per tile held on every rank of the parent's
+subset, are built on `COMM_SELF` and own no communicators, so the budget
+is spent on the tiles' own decompositions alone.
 
 ### Rebalancing on measured load
 
