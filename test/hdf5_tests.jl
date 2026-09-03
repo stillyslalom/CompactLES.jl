@@ -275,6 +275,61 @@ end
     MPI.Barrier(comm)
 end
 
+# The coefficient record: with the artificial properties on, a restart from
+# the shared file continues the uninterrupted run bit for bit on the same
+# rank count, because the arrays the next step is sized from are restored
+# with the state. The per-rank path is pinned the same way in io_tests.jl.
+@testset "HDF5 extension: restart continues the run bit for bit" begin
+    comm = MPI.COMM_WORLD
+    np = MPI.Comm_size(comm)
+    rank = MPI.Comm_rank(comm)
+    per3h = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    wall = (SlipWallBC(), SlipWallBC())
+    mk(; kw...) = Solver(n_global=(144, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=(wall, per3h[2], per3h[3]), cfl=0.4,
+                         dims=(np, 1, 1); kw...)
+    ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    dir = rank == 0 ? mktempdir() : ""
+    dir = MPI.bcast(dir, comm; root=0)
+    stem = joinpath(dir, "sod")
+
+    s = mk()
+    Q = allocate_state(s)
+    initialize!(s, Q, ic)
+    run!(s, Q; tfinal=1.0, nmax=20)
+    save_checkpoint_hdf5(s, Q, stem)
+    MPI.Barrier(comm)
+    run!(s, Q; tfinal=1.0, nmax=40)
+    if rank == 0
+        h5open(stem * ".h5", "r") do file
+            @test size(file["state/art"]) == (144, 1, 1, 4)
+            @test read(file["meta/n_art"]) == 4
+            @test read(file["meta/n_levels"]) == 1
+        end
+    end
+    MPI.Barrier(comm)
+
+    r = mk()
+    Qr = allocate_state(r)
+    load_checkpoint_hdf5!(r, Qr, stem)
+    @test r.step == 20
+    run!(r, Qr; tfinal=1.0, nmax=40)
+    @test r.t == s.t
+    inner = CL.interior(s.decomp)
+    d = maximum(abs.(parent(Qr)[inner, :] .- parent(Q)[inner, :]))
+    d = max(d, maximum(abs.(r.beta_art[inner] .- s.beta_art[inner])))
+    @test MPI.Allreduce(d, max, comm) == 0.0
+
+    off = mk(art=ArtParams(enabled=false))
+    @test_throws "artificial-property mismatch" load_checkpoint_hdf5!(
+        off, allocate_state(off), stem)
+
+    MPI.Barrier(comm)
+    rank == 0 && rm(dir; recursive=true)
+    MPI.Barrier(comm)
+end
+
 @testset "HDF5 extension: field dump and XDMF3 sidecar" begin
     comm = MPI.COMM_WORLD
     np = MPI.Comm_size(comm)

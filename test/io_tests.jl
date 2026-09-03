@@ -90,6 +90,56 @@ end
     rm(dir; recursive=true)
 end
 
+@testset "restart continues the run bit for bit" begin
+    # A Sod tube with the artificial properties on: the coefficients the last
+    # right-hand side left on the patch size the first step after the
+    # restart, so a checkpoint without them would take a different one.
+    wall = (SlipWallBC(), SlipWallBC())
+    mk(; kw...) = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=(wall, io_per, io_per), cfl=0.4; kw...)
+    ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    dir = mktempdir()
+    stem = joinpath(dir, "sod")
+    s = mk()
+    Q = allocate_state(s)
+    initialize!(s, Q, ic)
+    run!(s, Q; tfinal=1.0, nmax=20)
+    save_checkpoint(s, Q, stem)
+    @test maximum(s.beta_art) > 0          # the record is not trivially zero
+    run!(s, Q; tfinal=1.0, nmax=40)
+
+    r = mk()
+    Qr = allocate_state(r)
+    load_checkpoint!(r, Qr, stem)
+    @test r.step == 20
+    run!(r, Qr; tfinal=1.0, nmax=40)
+    @test r.step == 40
+    @test r.t == s.t
+    @test r.dt_prev == s.dt_prev
+    inner = CL.interior(s.decomp)
+    @test parent(Qr)[inner, :] == parent(Q)[inner, :]
+    @test r.mu_art[inner] == s.mu_art[inner]
+    @test r.beta_art[inner] == s.beta_art[inner]
+
+    # The primitives are current on return, so a callback may read them.
+    r2 = mk()
+    Q2 = allocate_state(r2)
+    load_checkpoint!(r2, Q2, stem)
+    @test all(r2.rho[I] == mixture_density(r2, Q2, I) for I in inner)
+
+    # A solver that does not compute the coefficients is refused: it would
+    # ignore a record the writer's next step depended on, and the reverse
+    # would start from zeros the writer did not have.
+    off = mk(art=ArtParams(enabled=false))
+    @test_throws "artificial-property mismatch" load_checkpoint!(
+        off, allocate_state(off), stem)
+    save_checkpoint(off, allocate_state(off), joinpath(dir, "off"))
+    @test_throws "artificial-property mismatch" load_checkpoint!(
+        mk(), allocate_state(s), joinpath(dir, "off"))
+    rm(dir; recursive=true)
+end
+
 @testset "checkpoint round trip in Float32" begin
     T = Float32
     dir = mktempdir()

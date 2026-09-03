@@ -71,9 +71,11 @@ end
     save_checkpoint_hdf5(solver, Q, prefix)
 
 Write the interior of `Q` to `prefix.h5` as one global array, with the run
-state a restart needs (`t`, `step`, `cfl`, `dt_prev`, `rate_prev` and the
-per-face `switched` flag of every `SwitchableBC`), and return `prefix`. An
-existing file of that name is truncated. Collective.
+state a restart needs (`t`, `step`, `cfl`, `dt_prev`, `rate_prev`, the
+per-face `switched` flag of every `SwitchableBC`, and the artificial
+coefficient arrays when the artificial properties are enabled, from which
+[`max_rate`](@ref) sizes the next step), and return `prefix`. An existing
+file of that name is truncated. Collective.
 
 Callback schedules and a `FieldWriter`'s frame index are not recorded and
 remain the caller's to restore; give a restarted writer a `start_index`.
@@ -86,10 +88,11 @@ resumed at a different scale.
 
 The header describes the state well enough for the reader to reject a solver it
 does not belong to: the format version, the global extent, the conserved count,
-the species count, the conserved component names, the element type, the metric
-and EOS type names, and the global coordinate vector along each dimension. The
-coordinates carry the domain extent, the origin and any [`Stretch`](@ref)
-mapping, none of which the extent alone constrains.
+the species count, the level count, the coefficient field count, the conserved
+component names, the element type, the metric and EOS type names, and the
+global coordinate vector along each dimension. The coordinates carry the domain
+extent, the origin and any [`Stretch`](@ref) mapping, none of which the extent
+alone constrains.
 
 Requires `using HDF5`.
 """
@@ -127,21 +130,23 @@ save_hdf5(args...; kwargs...) = _hdf5_required("save_hdf5")
     load_checkpoint_hdf5!(solver, Q, prefix)
 
 Restore the interior of `Q` and the run state (`t`, `step`, `cfl`, `dt_prev`,
-`rate_prev`, and each `SwitchableBC`'s `switched` flag through `switch!`) from
+`rate_prev`, each `SwitchableBC`'s `switched` flag through `switch!`, and the
+artificial coefficient arrays when the artificial properties are enabled) from
 the file written by [`save_checkpoint_hdf5`](@ref), onto whatever decomposition
-`solver` has, and return `Q`. Halos are left untouched. Every rank must call it,
-since each reads its own block, but the read is independent and involves no
-communication. Callback schedules and a `FieldWriter`'s frame index are the
-caller's to restore.
+`solver` has, and return `Q`. Halos are left untouched, and the primitive
+fields are refreshed from the restored state. Every rank must call it, since
+each reads its own block; the read itself involves no communication, and the
+primitive refresh is the one collective. Callback schedules and a
+`FieldWriter`'s frame index are the caller's to restore.
 
 The rank count and process grid need not match the ones that wrote the file, and
 nothing else may differ. Every field of the header
 [`save_checkpoint_hdf5`](@ref) records is compared against `solver` and any
 mismatch throws: format version, global extent, conserved count, species count,
-conserved component names, element type, metric and EOS type names, the
-switchable-face layout, and the coordinates along each dimension. Coordinates
-are compared to a relative tolerance of 1e-10, which separates a rebuilt
-identical grid from any different one.
+level count, coefficient field count, conserved component names, element type,
+metric and EOS type names, the switchable-face layout, and the coordinates
+along each dimension. Coordinates are compared to a relative tolerance of
+1e-10, which separates a rebuilt identical grid from any different one.
 
 Two limits apply. Species are identified by name, so two species sets that share
 names while differing in their thermodynamic constants are not distinguished.

@@ -8,6 +8,8 @@ using CompactLES
 using CompactLES: BlockRegion, Decomp, Solver, owned_region, region_ranges
 using CompactLES: axis_matches, global_axis, type_name
 using CompactLES: ensure_output_dir, restore_switches!, switch_codes
+using CompactLES: n_art_fields, art_block, set_art_block!, nlevels
+using CompactLES: _check_level_count, _check_art_count, refresh_primitives!
 using MPI
 using HDF5
 
@@ -16,10 +18,11 @@ has_parallel() = HDF5.has_parallel()
 # Format 2 added the species set, the metric and the grid coordinates to the
 # checkpoint header, which format 1 has no record of. Format 3 added the element
 # type of the state and the mutable run state (`cfl`, `dt_prev`, `rate_prev`,
-# and the `switched` flag of each boundary face); the reasoning is at the top of
+# and the `switched` flag of each boundary face); format 4 the level count and
+# the artificial coefficient arrays; the reasoning is at the top of
 # `src/io.jl`. The reader requires an exact match and does not accept an older
 # file, since a restart those fields do not cover cannot be validated at all.
-const CKPT_FORMAT = 3
+const CKPT_FORMAT = 4
 
 # --- Opening a shared file --------------------------------------------------
 #
@@ -190,6 +193,7 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver, Q, prefix::AbstractStri
     comm = decomp.comm
     rank = MPI.Comm_rank(comm)
     n_cons = solver.equations.n_cons
+    n_art = n_art_fields(solver)
     region = owned_region(decomp)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -206,6 +210,8 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver, Q, prefix::AbstractStri
             write_meta!(g, "n_global", Int64[decomp.n_global...], rank)
             write_meta!(g, "n_cons", Int64(n_cons), rank)
             write_meta!(g, "n_species", Int64(solver.equations.n_species), rank)
+            write_meta!(g, "n_levels", Int64(nlevels(solver)), rank)
+            write_meta!(g, "n_art", Int64(n_art), rank)
             write_strings!(g, "component_names",
                            solver.equations.component_names, rank)
             write_strings!(g, "metric", [type_name(solver.metric)], rank)
@@ -232,6 +238,18 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver, Q, prefix::AbstractStri
             write_region4!(dset, region, block, n_cons)
         finally
             close(dset)
+        end
+        # The artificial coefficients beside the state, for the reason
+        # src/io.jl gives: the next step is sized from them. Absent when the
+        # artificial properties are off, and `n_art` above says so.
+        if n_art > 0
+            dset = shared_dataset(file, "state/art", eltype(Q),
+                                  (decomp.n_global..., n_art), comm)
+            try
+                write_region4!(dset, region, art_block(solver), n_art)
+            finally
+                close(dset)
+            end
         end
     end
     return prefix
@@ -268,6 +286,8 @@ function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractStr
         nsp == solver.equations.n_species ||
             error("species count mismatch: file has $nsp, solver has " *
                   "$(solver.equations.n_species)")
+        _check_level_count(Int(read(file["meta/n_levels"])), solver, path)
+        n_art = _check_art_count(Int(read(file["meta/n_art"])), solver, path)
         names = String.(read(file["meta/component_names"]))
         names == solver.equations.component_names ||
             error("conserved component mismatch: file has $names, solver has " *
@@ -301,7 +321,10 @@ function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractStr
         restore_switches!(solver, read(file["meta/switched"]), path)
         block = read_region4(file["state/Q"], region, n_cons)
         Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :] .= block
+        n_art > 0 &&
+            set_art_block!(solver, read_region4(file["state/art"], region, n_art))
     end
+    refresh_primitives!(solver, Q)
     return Q
 end
 

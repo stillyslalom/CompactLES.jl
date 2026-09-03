@@ -48,6 +48,21 @@
 # run. If the switch changes the collective pattern (`NSCBCOutflowBC`), rank
 # disagreement also deadlocks.
 #
+# The artificial coefficient arrays are state as well. `max_rate` sizes a
+# step from the μ*, β*, κ* and D* the previous step's last right-hand side
+# left on the patch (`_diffusive_rate`), so a restart from the conserved
+# state alone measures its first rate with zero coefficients and takes a first
+# step the uninterrupted run would not have; the trajectories then differ by
+# one step size, which the nonlinear sensors amplify over the run. The
+# checkpoint carries the four arrays beside Q, written only when the
+# artificial properties are enabled (they are zero from allocation
+# otherwise), with the field count recorded and checked. What the sensor tag
+# criterion reads beside them, the primitives of the evaluation that wrote
+# them, is not carried: a restart refreshes the primitives from the restored
+# state instead, so with `tag_sensor_threshold > 0` a marginal node may tag
+# differently at the first regrid check after a restart. Every other criterion
+# reads Q.
+#
 # The checkpoint does not carry the caller's own bookkeeping. Callback schedules
 # and a `FieldWriter`'s frame index live outside the solver, and both docstrings
 # below say that restoring them is the caller's part.
@@ -62,7 +77,7 @@
 
 const CKPT_MAGIC_V1 = 0x434c4553_434b5054   # "CLESCKPT", the unversioned format
 const CKPT_MAGIC = 0x434c4553_52434b50      # "CLESRCKP"
-const CKPT_VERSION = 3
+const CKPT_VERSION = 4
 
 _ckpt_name(prefix::AbstractString, rank::Int) =
     string(prefix, ".r", lpad(rank, 4, '0'), ".ckpt")
@@ -116,6 +131,52 @@ function axis_matches(stored, mine)
     length(stored) == length(mine) || return false
     scale = max(1.0, maximum(abs, mine; init=0.0))
     return maximum(abs.(stored .- mine); init=0.0) <= 1e-10 * scale
+end
+
+"""
+Number of artificial-coefficient fields a checkpoint of `solver` carries: μ*,
+β*, κ* and one D* per species when the artificial properties are enabled,
+none otherwise. Shared between the per-rank and shared-file checkpoint paths.
+"""
+n_art_fields(solver::SolverLike) =
+    solver.art.enabled ? 3 + solver.equations.n_species : 0
+
+# The arrays behind those fields, in the order the checkpoint stores them.
+art_arrays(solver::SolverLike) =
+    n_art_fields(solver) == 0 ? () :
+    (solver.mu_art, solver.beta_art, solver.kappa_art, solver.D_art...)
+
+"""
+The interior of the artificial coefficient arrays of one patch, stacked along
+a trailing index in the order μ*, β*, κ*, D*_1 .. D*_n (see
+`n_art_fields`); empty along that index when the artificial properties are
+disabled. The block a checkpoint writes beside the state.
+"""
+function art_block(solver::SolverLike)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    arrays = art_arrays(solver)
+    block = Array{eltype(solver.rho)}(undef, nx, ny, nz, length(arrays))
+    for (c, a) in enumerate(arrays)
+        block[:, :, :, c] .= view(a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
+    end
+    return block
+end
+
+"""
+Write `block`, as `art_block` produced it, onto the interior of the
+patch's artificial coefficient arrays. Halos are left untouched; nothing reads
+them before the next evaluation rewrites the arrays.
+"""
+function set_art_block!(solver::SolverLike, block)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    for (c, a) in enumerate(art_arrays(solver))
+        view(a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz) .= view(block, :, :, :, c)
+    end
+    return solver
 end
 
 """
@@ -200,16 +261,21 @@ communication.
 
 The header describes the state well enough for [`load_checkpoint!`](@ref) to
 reject a solver it does not belong to: the format version, the conserved and
-species counts, the global and local extents, this rank's Cartesian coordinates,
-the conserved component names, the metric and EOS type names, the element type
-of `Q`, and the global coordinate vector along each dimension. The coordinates
-carry the domain extent, the origin and any [`Stretch`](@ref) mapping, none of
-which the extent alone constrains.
+species counts, the level count, the global and local extents, this rank's
+Cartesian coordinates, the conserved component names, the metric and EOS type
+names, the element type of `Q`, and the global coordinate vector along each
+dimension. The coordinates carry the domain extent, the origin and any
+[`Stretch`](@ref) mapping, none of which the extent alone constrains.
 
-The run state is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`, and the `switched`
-flag of every [`SwitchableBC`](@ref) face. `cfl` is recorded because a
-[`StepControl`](@ref) retry lowers it, and `dt_prev` / `rate_prev` because the
-growth cap, the rate predictor and [`filter_weight`](@ref) read them.
+The run state is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`, the `switched`
+flag of every [`SwitchableBC`](@ref) face, and the artificial coefficient
+arrays μ*, β*, κ* and D* when the artificial properties are enabled. `cfl` is
+recorded because a [`StepControl`](@ref) retry lowers it, `dt_prev` /
+`rate_prev` because the growth cap, the rate predictor and
+[`filter_weight`](@ref) read them, and the coefficients because
+[`max_rate`](@ref) sizes the next step from the ones the last right-hand side
+left behind: with them a restarted run continues the uninterrupted one bit for
+bit, and without them its first step differs.
 
 Callback schedules and a [`FieldWriter`](@ref)'s frame index are the caller's
 responsibility: both live outside the solver, and nothing here records or
@@ -227,6 +293,7 @@ function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
         write(io, Int64(CKPT_VERSION))
         write(io, Int64(solver.equations.n_cons))
         write(io, Int64(solver.equations.n_species))
+        write(io, Int64(nlevels(solver)))
         for d in 1:3
             write(io, Int64(decomp.n_global[d]))
         end
@@ -250,6 +317,8 @@ function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
         write(io, Float64(solver.rate_prev))
         write(io, switch_codes(solver))
         write(io, Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :])
+        write(io, Int64(n_art_fields(solver)))
+        write(io, art_block(solver))
     end
     return prefix
 end
@@ -266,12 +335,16 @@ coordinates are the ones it was written from. Coordinates are compared to a
 relative tolerance of 1e-10, which separates a rebuilt identical grid from any
 different one.
 
-The run state restored is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`, and the
-`switched` flag of every [`SwitchableBC`](@ref) face. A face the checkpoint
-records as switched is switched here through [`switch!`](@ref); a face recorded
-as unswitched on a solver that has switched is rejected, `switch!` being
-one-way. Callback schedules and a [`FieldWriter`](@ref)'s frame index are not
-recorded and remain the caller's to restore.
+The run state restored is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`, the
+`switched` flag of every [`SwitchableBC`](@ref) face, and the artificial
+coefficient arrays when the artificial properties are enabled; a file whose
+coefficient record disagrees with the solver's `art.enabled` is rejected. A
+face the checkpoint records as switched is switched here through
+[`switch!`](@ref); a face recorded as unswitched on a solver that has switched
+is rejected, `switch!` being one-way. The primitive fields are refreshed from
+the restored state before returning, so a callback may read them. Callback
+schedules and a [`FieldWriter`](@ref)'s frame index are not recorded and
+remain the caller's to restore.
 
 A file written in the original unversioned format is rejected outright: it
 carries no record of the species set, the metric or the grid, so a partial
@@ -308,6 +381,7 @@ function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
         n_species == solver.equations.n_species ||
             error("species count mismatch: file has $n_species, solver has " *
                   "$(solver.equations.n_species)")
+        _check_level_count(Int(read(io, Int64)), solver, path)
         for d in 1:3
             Int(read(io, Int64)) == decomp.n_global[d] || error("global grid mismatch")
         end
@@ -355,8 +429,29 @@ function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
         buf = Array{eltype(Q)}(undef, nx, ny, nz, n_cons)
         read!(io, buf)
         Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :] .= buf
+        n_art = _check_art_count(Int(read(io, Int64)), solver, path)
+        set_art_block!(solver, read!(io, Array{eltype(Q)}(undef, nx, ny, nz, n_art)))
     end
+    refresh_primitives!(solver, Q)
     return Q
+end
+
+# The two header checks the per-rank and shared-file readers share beyond the
+# ones `type_name`, `global_axis` and `axis_matches` already cover.
+function _check_level_count(stored::Int, solver::Solver, source::AbstractString)
+    stored == nlevels(solver) ||
+        error("refinement mismatch: $source was written from a run with " *
+              "$stored level(s) and this solver has $(nlevels(solver))")
+    return stored
+end
+
+function _check_art_count(stored::Int, solver::SolverLike, source::AbstractString)
+    stored == n_art_fields(solver) ||
+        error("artificial-property mismatch: $source carries $stored " *
+              "coefficient field(s) and this solver expects " *
+              "$(n_art_fields(solver)) (μ*, β*, κ* and one D* per species " *
+              "when art.enabled, none otherwise)")
+    return stored
 end
 
 # ---------------------------------------------------------------------------
