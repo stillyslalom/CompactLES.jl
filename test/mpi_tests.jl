@@ -1500,7 +1500,13 @@ function test_tiled_level()
     # every five steps, a tile entering ahead of a survivor on the curve
     # shifts the survivor's owner range, and the survivor is rebuilt there
     # with its solution carried across. The tracked tile set and the time
-    # reached are the serial ones.
+    # reached are the serial ones. Measured serially with the default
+    # hysteresis: the set goes 176/184 → 168..192 at step 6 → 168..184 at
+    # step 26, the tile ahead of the shock held one check longer than
+    # without the band (dropped at step 21, re-created at 41) and then not
+    # re-created on the slightly different trajectory. The tag history
+    # (`RegridSpec.created`, `checks`) is derived from the reduced flags and
+    # must agree across ranks.
     let
         wall2 = (SlipWallBC(), SlipWallBC())
         solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
@@ -1517,14 +1523,26 @@ function test_tiled_level()
         fin = all(all(isfinite, parent(Q)) for Q in states)
         check("tiled regrid under ownership: finite composite state",
               fin ? 0.0 : 1.0, 0.5)
-        check("tiled regrid under ownership: tile count tracks as serial (4)",
-              abs(gmax(length(regs)) - 4), 0.5)
+        check("tiled regrid under ownership: tile count tracks as serial (3)",
+              abs(gmax(length(regs)) - 3), 0.5)
         check("tiled regrid under ownership: first tile tracks as serial (168)",
               abs(gmax(first(offs)) - 168), 0.5)
-        check("tiled regrid under ownership: last tile tracks as serial (192)",
-              abs(gmax(last(offs)) - 192), 0.5)
+        check("tiled regrid under ownership: last tile tracks as serial (184)",
+              abs(gmax(last(offs)) - 184), 0.5)
         check("tiled regrid under ownership: time reached matches serial",
-              abs(gmax(solver.t) - 0.0033221635376072057), 1e-13)
+              abs(gmax(solver.t) - 0.003322163739827316), 1e-13)
+        spec = getfield(solver, :regrid)
+        record = sort([(r.offset[1], c) for (r, c) in spec.created])
+        flat = Int[spec.checks; length(record);
+                   [v for pair in record for v in pair]]
+        # Identical on every rank, length included, when the elementwise
+        # maximum and minimum over the ranks coincide.
+        len = MPI.Allreduce(length(flat), max, comm)
+        padded = [flat; fill(-1, len - length(flat))]
+        spread = MPI.Allreduce(padded, max, comm) .- MPI.Allreduce(padded, min, comm)
+        check("tag history: checks and creation record agree across ranks",
+              maximum(abs.(spread)), 0.5)
+        check("tag history: eight checks over forty steps", abs(spec.checks - 8), 0.5)
     end
 
     # Stored ownership and rebalancing on the same regrids. A callback at
@@ -1534,7 +1552,10 @@ function test_tiled_level()
     # with it on at a threshold of one, which any measured spread of busy
     # time exceeds, the level is repartitioned on the measured weights, a
     # survivor moves, and the tracked tile set and time are still the
-    # serial ones to round-off.
+    # serial ones to round-off. The hold band is off here: the block tests
+    # ownership, and a survivor moving at every rank count rests on the
+    # tile ahead of the shock entering and leaving the set, which the band
+    # damps.
     function regrid_track(; rebalance, persist)
         moved = Ref(0)
         prev = Dict{BlockRegion,UnitRange{Int}}()
@@ -1554,6 +1575,7 @@ function test_tiled_level()
                         bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
                         regrid_interval=5, tag_buffer=2, tile=8,
                         refine=BlockRegion((176, 0, 0), (16, 1, 1)),
+                        untag_ratio=1,
                         rebalance=rebalance, rebalance_persist=persist)
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) -> x < 0.45 ?
@@ -1707,7 +1729,7 @@ function test_level_subset()
           abs(firesL - 2), 0.5)
 
     # Regridding under subset ownership: the region grows from 8 coarse nodes
-    # (22 fine, two ranks) to 24 (70 fine, seven), so the subset is resized
+    # (22 fine, two ranks) to 25 (73 fine, eight), so the subset is resized
     # and the communicator it replaces is freed rather than left to the
     # garbage collector, as a dropped `Decomp` is.
     wall2 = (SlipWallBC(), SlipWallBC())
@@ -1728,14 +1750,16 @@ function test_level_subset()
     fin = all(all(isfinite, parent(Q)) for Q in states)
     check("regrid: setup subset is two ranks", abs(owners0 - min(np, 2)), 0.5)
     check("regrid: subset recomputed for the grown region",
-          abs(owners1 - min(np, 7)), 0.5)
+          abs(owners1 - min(np, 8)), 0.5)
     check("regrid: the replaced level communicator was freed",
           (!lc0.scoped || lc0.comm == MPI.COMM_NULL) ? 0.0 : 1.0, 0.5)
     check("regrid under subsets: finite composite state", fin ? 0.0 : 1.0, 0.5)
-    check("regrid under subsets: region offset tracks as serial (171)",
-          abs(gmax(region.offset[1]) - 171), 0.5)
-    check("regrid under subsets: region extent tracks as serial (24)",
-          abs(gmax(region.extent[1]) - 24), 0.5)
+    # Serial values under the default hold band (171/24 without it, at the
+    # same time reached).
+    check("regrid under subsets: region offset tracks as serial (170)",
+          abs(gmax(region.offset[1]) - 170), 0.5)
+    check("regrid under subsets: region extent tracks as serial (25)",
+          abs(gmax(region.extent[1]) - 25), 0.5)
     check("regrid under subsets: time reached matches serial",
           abs(gmax(solver.t) - 0.0055480541568169563), 1e-13)
 end

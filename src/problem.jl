@@ -405,6 +405,14 @@ increase `n_global` if setup reports a smaller local block.
   the host, serially, at the regrid cadence, on every rank that holds a
   piece of the parent, and its coordinates come from
   [`xcoord`](@ref) through `interior_index`.
+- `untag_ratio` (default `2`) and `tile_lifetime` (default `1`): the
+  derefinement hysteresis. A node above a criterion's threshold divided by
+  `untag_ratio` holds an existing tile (the current box, with `tile = 0`)
+  without calling for a new one, so a tile at the edge of a feature does
+  not flicker as the feature crosses the threshold; `1` disables the hold
+  band. A tile is not dropped before `tile_lifetime` regrid checks have
+  passed since its creation. The tag history both need is kept on the
+  solver and is identical on every rank.
 - `tile`: `0` (default) covers each refined region with one patch; a
   positive edge (in parent nodes, at least 3) covers it with the tiles of a
   global lattice of that edge instead, abutting tiles sharing their
@@ -444,6 +452,8 @@ Base.@kwdef struct Numerics
     tag_gradient_threshold::Float64 = 0.0
     tag_vorticity_threshold::Float64 = 0.0
     tag_predicate::Union{Nothing,Function} = nothing
+    untag_ratio::Float64 = 2.0
+    tile_lifetime::Int = 1
     tile::Int = 0
     rebalance::Float64 = 0.0
     rebalance_persist::Int = 2
@@ -498,6 +508,7 @@ function setup(prob::Problem, num::Numerics)
                tag_gradient_threshold=num.tag_gradient_threshold,
                tag_vorticity_threshold=num.tag_vorticity_threshold,
                tag_predicate=num.tag_predicate,
+               untag_ratio=num.untag_ratio, tile_lifetime=num.tile_lifetime,
                tile=num.tile, rebalance=num.rebalance,
                rebalance_persist=num.rebalance_persist)
     Q = allocate_state(solver)

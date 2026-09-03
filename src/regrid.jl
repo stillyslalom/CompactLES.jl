@@ -50,13 +50,29 @@
 # the edge node itself at a closed edge, where the difference becomes
 # one-sided. `active`, `o` (the halo pad) and the clamps are tuples so a body
 # takes plain arrays and isbits scalars, the pointwise contract.
+#
+# A body writes one of two levels: 2 where its quantity exceeds the
+# criterion's threshold (the node tags), 1 where it exceeds the threshold
+# over `RegridSpec.untag_ratio` (the node holds: it keeps an existing tile
+# but calls for no new one). The union over criteria is the maximum, so a
+# body never lowers a level another body wrote.
+
+const TAG_HOLD = Int8(1)
+const TAG_MARK = Int8(2)
 
 @inline _tag_unit(d::Int) = CartesianIndex(d == 1 ? 1 : 0, d == 2 ? 1 : 0, d == 3 ? 1 : 0)
 
-# Σ_d |δ⁴_d ρ| / ρ > threshold, the zeroth-order closed-edge clamp of
-# `delta4_sum!`.
-@inline function _tag_delta4_point!(tags, rho, thr, lomin, himax, active, o,
-                                    i, j, k)
+@inline _tag_level(q, hi, lo) = q > hi ? TAG_MARK : q > lo ? TAG_HOLD : zero(Int8)
+
+@inline function _raise_tag!(tags, I, level::Int8)
+    @inbounds level > tags[I] && (tags[I] = level)
+    return nothing
+end
+
+# Σ_d |δ⁴_d ρ| / ρ against the threshold pair, the zeroth-order closed-edge
+# clamp of `delta4_sum!`.
+@inline function _tag_delta4_point!(tags, rho, thr, thr_lo, lomin, himax,
+                                    active, o, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
         s = zero(eltype(rho))
@@ -71,7 +87,7 @@
             end
             s += abs(acc)
         end
-        s > thr * rho[I] && (tags[I] = one(Int8))
+        _raise_tag!(tags, I, _tag_level(s, thr * rho[I], thr_lo * rho[I]))
     end
     return nothing
 end
@@ -79,10 +95,11 @@ end
 # max_k |δY_k| > threshold: the mass-fraction change per cell, the centered
 # difference (Y⁺ − Y⁻)/(i⁺ − i⁻) along each active dimension in cell units,
 # so the quantity is dimensionless and one-sided at a closed edge.
-@inline function _tag_gradient_point!(tags, Q, rho, thr, n_species, lomin,
-                                      himax, active, o, i, j, k)
+@inline function _tag_gradient_point!(tags, Q, rho, thr, thr_lo, n_species,
+                                      lomin, himax, active, o, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
+        q = zero(eltype(rho))
         for sp in 1:n_species
             s2 = zero(eltype(rho))
             for d in 1:3
@@ -96,19 +113,17 @@ end
                 dY = (Q[Ip, sp] / rho[Ip] - Q[Im, sp] / rho[Im]) / (ip - im)
                 s2 += dY * dY
             end
-            if s2 > thr * thr
-                tags[I] = one(Int8)
-                break
-            end
+            q = max(q, s2)
         end
+        _raise_tag!(tags, I, _tag_level(q, thr * thr, thr_lo * thr_lo))
     end
     return nothing
 end
 
 # |∇ × u| > threshold from centered differences of the velocity
 # components, u_c = Q[I, i_mom[c]] / ρ.
-@inline function _tag_vorticity_point!(tags, Q, rho, thr, i_mom, h, lomin,
-                                       himax, active, o, i, j, k)
+@inline function _tag_vorticity_point!(tags, Q, rho, thr, thr_lo, i_mom, h,
+                                       lomin, himax, active, o, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
         w1 = w2 = w3 = zero(eltype(rho))
@@ -135,7 +150,8 @@ end
                 w2 += du1
             end
         end
-        w1 * w1 + w2 * w2 + w3 * w3 > thr * thr && (tags[I] = one(Int8))
+        _raise_tag!(tags, I, _tag_level(w1 * w1 + w2 * w2 + w3 * w3,
+                                        thr * thr, thr_lo * thr_lo))
     end
     return nothing
 end
@@ -146,7 +162,7 @@ end
 # evaluation's, so the ratio is consistent; a node the positivity
 # placeholder wrote (c = 0) never tags.
 @inline function _tag_sensor_point!(tags, mu, beta, kappa, D, rho, c, cp, thr,
-                                    hmin, n_species, o, i, j, k)
+                                    thr_lo, hmin, n_species, o, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
         ci = c[I]
@@ -158,7 +174,8 @@ end
         for sp in 1:n_species
             Dmax = max(Dmax, D[sp][I])
         end
-        nu + Dmax > thr * ci * hmin && (tags[I] = one(Int8))
+        _raise_tag!(tags, I, _tag_level(nu + Dmax, thr * ci * hmin,
+                                        thr_lo * ci * hmin))
     end
     return nothing
 end
@@ -170,7 +187,7 @@ function _tag_predicate!(tags, predicate::F, ps, n::NTuple{3,Int},
                          o::NTuple{3,Int}) where {F}
     @inbounds for k in 1:n[3], j in 1:n[2], i in 1:n[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
-        predicate(ps, I) && (tags[I] = one(Int8))
+        predicate(ps, I) && (tags[I] = TAG_MARK)
     end
     return nothing
 end
@@ -180,9 +197,10 @@ end
 _tag_host(x) = _cpu_storage(x) ? x : Array(x)
 
 # Tag sweep over this rank's interior of the parent (root) patch: every
-# enabled criterion writes its flags into `spec.tags`, and `mark!(g1, g2,
-# g3)` is then called for every flagged node, in global node indices.
-# Rank-local apart from the halo exchange.
+# enabled criterion writes its levels into `spec.tags`, and `mark!(g1, g2,
+# g3, level)` is then called for every flagged node, in global node indices
+# with its level (`TAG_MARK` or `TAG_HOLD`). Rank-local apart from the halo
+# exchange.
 function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     patches = getfield(solver, :patches)
     coarse = patches[1]
@@ -215,46 +233,64 @@ function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     himax = ntuple(d -> at_hi_edge(dcp, d) ? n[d] : n[d] + 2, 3)
     tags = spec.tags
     fill!(tags, zero(Int8))
+    ratio = spec.untag_ratio
     pointwise!(_tag_delta4_point!, tags, n[1], n[2], n[3],
-               tags, rho, spec.threshold, lomin, himax, active, o)
+               tags, rho, spec.threshold, spec.threshold / ratio,
+               lomin, himax, active, o)
     if spec.gradient_threshold > 0
+        thr = spec.gradient_threshold
         pointwise!(_tag_gradient_point!, tags, n[1], n[2], n[3],
-                   tags, Qc, rho, spec.gradient_threshold, n_species,
+                   tags, Qc, rho, thr, thr / ratio, n_species,
                    lomin, himax, active, o)
     end
     if spec.vorticity_threshold > 0
+        thr = spec.vorticity_threshold
         pointwise!(_tag_vorticity_point!, tags, n[1], n[2], n[3],
-                   tags, Qc, rho, spec.vorticity_threshold,
+                   tags, Qc, rho, thr, thr / ratio,
                    solver.equations.i_mom, coarse.h, lomin, himax, active, o)
     end
     if spec.sensor_threshold > 0
+        thr = spec.sensor_threshold
         hmin = minimum(coarse.h[d] for d in 1:3 if active[d])
         D_host = FieldVector([_tag_host(a) for a in coarse.D_art])
         pointwise!(_tag_sensor_point!, tags, n[1], n[2], n[3],
                    tags, _tag_host(coarse.mu_art), _tag_host(coarse.beta_art),
                    _tag_host(coarse.kappa_art), D_host, _tag_host(coarse.rho),
                    _tag_host(coarse.c), _tag_host(coarse.cp_mix),
-                   spec.sensor_threshold, hmin, n_species, o)
+                   thr, thr / ratio, hmin, n_species, o)
     end
     spec.predicate === nothing ||
         _tag_predicate!(tags, spec.predicate, PatchSolver(solver, coarse), n, o)
     off = dcp.offset
     @inbounds for k in 1:n[3], j in 1:n[2], i in 1:n[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
-        tags[I] == 0 || mark!(i + off[1], j + off[2], k + off[3])
+        tags[I] == 0 || mark!(i + off[1], j + off[2], k + off[3], tags[I])
     end
     return nothing
 end
 
-# Global bounding box of the tagged set, or `nothing`. Collective (one
-# Allreduce), so every rank derives the identical box.
+# Is global node `g` inside one of the current refined regions (parent
+# node space)? The hold level of the hysteresis counts there only.
+function _in_regions(regions::Vector{BlockRegion}, g::NTuple{3,Int})
+    for r in regions
+        all(d -> r.offset[d] < g[d] <= r.offset[d] + r.extent[d], 1:3) && return true
+    end
+    return false
+end
+
+# Global bounding box of the tagged set, or `nothing`: every node at the
+# tag level, plus the held nodes inside the current refined regions.
+# Collective (one Allreduce), so every rank derives the identical box.
 function _tag_bounds(solver::Solver, Qc)
     dcp = getfield(solver, :patches)[1].decomp
+    current = [lt.region for lt in getfield(solver, :levels)[2].transfers]
     lo = Ref((typemax(Int), typemax(Int), typemax(Int)))
     hi = Ref((0, 0, 0))
-    _tag_sweep!(solver, Qc) do g1, g2, g3
+    _tag_sweep!(solver, Qc) do g1, g2, g3, level
+        level == TAG_MARK || _in_regions(current, (g1, g2, g3)) || return nothing
         lo[] = min.(lo[], (g1, g2, g3))
         hi[] = max.(hi[], (g1, g2, g3))
+        return nothing
     end
     # A rank with no tagged cell contributes typemax/0 sentinels that lose
     # every min/max.
@@ -271,12 +307,13 @@ end
     tagged_region(solver, Qc) -> Union{Nothing, BlockRegion}
 
 The refined region the current coarse state calls for: the bounding box of
-the tagged cells, buffered by `RegridSpec.buffer` coarse cells per side,
-clamped to the nesting margin, and widened where necessary to the four-node
-minimum extent. Returns `nothing` when no cell exceeds the threshold.
-Collapsed dimensions keep offset 0 and extent 1. Collective over the coarse
-communicator (one Allreduce of the tag bounds), so every rank returns the
-identical region.
+the tagged cells (those at a criterion's threshold, and those inside the
+current refined regions at the hold threshold, `untag_ratio` below it),
+buffered by `RegridSpec.buffer` coarse cells per side, clamped to the
+nesting margin, and widened where necessary to the four-node minimum
+extent. Returns `nothing` when no cell qualifies. Collapsed dimensions keep
+offset 0 and extent 1. Collective over the coarse communicator (one
+Allreduce of the tag bounds), so every rank returns the identical region.
 """
 function tagged_region(solver::Solver, Qc)
     spec = getfield(solver, :regrid)
@@ -404,9 +441,15 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
     # A two-level hierarchy, enforced at setup: the root and one refined
     # patch, the sole transfer of level 1.
     lt = levels[2].transfers[1]
+    # The box is a tile of one: it is not rebuilt before its lifetime.
+    # `checks` and `created` are derived from reduced data on every rank, so
+    # this return, ahead of the collective sweep, is uniform.
+    spec.checks - get(spec.created, lt.region, 0) >= spec.lifetime || return false
     newregion = tagged_region(solver, states[1])
     newregion === nothing && return false
     newregion == lt.region && return false
+    delete!(spec.created, lt.region)
+    spec.created[newregion] = spec.checks
     patches = getfield(solver, :patches)
     old_lc = levels[2].level_comm
     root_lc = levels[1].level_comm
@@ -535,7 +578,9 @@ end
 # from the old owners' blocks (`_migrate_tile!`), one tile at a time at the
 # regrid cadence, with no replica of the tile on any rank.
 
-# Flags over the lattice cells, reduced so every rank derives the same set.
+# Levels over the lattice cells (the maximum over the buffered nodes meeting
+# each cell: `TAG_MARK`, `TAG_HOLD` or 0), reduced so every rank derives the
+# same set.
 function _tag_tiles(solver::Solver, Qc, spec::RegridSpec)
     n_global = solver.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
@@ -543,13 +588,13 @@ function _tag_tiles(solver::Solver, Qc, spec::RegridSpec)
     K = ntuple(d -> active[d] ? (n_global[d] - 1) ÷ a + 1 : 1, 3)
     flags = zeros(Int8, K)
     b = spec.buffer
-    _tag_sweep!(solver, Qc) do g1, g2, g3
+    _tag_sweep!(solver, Qc) do g1, g2, g3, level
         g = (g1, g2, g3)
         spans = ntuple(d -> active[d] ?
                        intersect(_tile_span(g[d] - b, g[d] + b, a), 0:K[d]-1) :
                        (0:0), 3)
         for k3 in spans[3], k2 in spans[2], k1 in spans[1]
-            flags[k1 + 1, k2 + 1, k3 + 1] = one(Int8)
+            flags[k1 + 1, k2 + 1, k3 + 1] = max(flags[k1 + 1, k2 + 1, k3 + 1], level)
         end
     end
     return MPI.Allreduce(flags, max, getfield(solver, :comm)), K
@@ -719,15 +764,27 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     any(!=(0), flags) || return false
     lo = ntuple(d -> 1 + spec.margin, 3)
     hi = ntuple(d -> n_global[d] - spec.margin, 3)
+    old_regions = [lt.region for lt in lev.transfers]
+    # A cell at the tag level is wanted; one at the hold level, or younger
+    # than the lifetime, is wanted where its tile exists (the hysteresis).
+    # `created` is derived from the reduced flags, so every rank holds it.
     wanted = BlockRegion[]
     for k3 in 0:K[3]-1, k2 in 0:K[2]-1, k1 in 0:K[1]-1
-        flags[k1 + 1, k2 + 1, k3 + 1] == 0 && continue
+        f = flags[k1 + 1, k2 + 1, k3 + 1]
         t = _lattice_tile((k1, k2, k3), active, spec.tile, lo, hi)
-        t === nothing || push!(wanted, t)
+        t === nothing && continue
+        exists = t in old_regions
+        young = exists && spec.checks - get(spec.created, t, 0) < spec.lifetime
+        (f == TAG_MARK || (exists && (f == TAG_HOLD || young))) && push!(wanted, t)
     end
     isempty(wanted) && return false
-    old_regions = [lt.region for lt in lev.transfers]
     wanted != old_regions || busy !== nothing || return false
+    for r in old_regions
+        r in wanted || delete!(spec.created, r)
+    end
+    for r in wanted
+        haskey(spec.created, r) || (spec.created[r] = spec.checks)
+    end
     old_lc = lev.level_comm
     root_lc = levels[1].level_comm
     # Old and new tile of a region: the transfers are held by every rank of
@@ -930,6 +987,7 @@ function _maybe_regrid!(solver::Solver, states::Vector{<:ConservedState},
     spec === nothing && return nothing
     solver.step - spec.last_step >= spec.interval || return nothing
     spec.last_step = solver.step
+    spec.checks += 1
     # The regrid's own work is excluded from the busy time the next check
     # measures: its gathers and frees are charged to the waiting account as
     # they run, and the rest is charged here.

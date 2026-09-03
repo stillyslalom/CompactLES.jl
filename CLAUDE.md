@@ -75,11 +75,11 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 124 testsets, 0 failures
+julia --project=. test/runtests.jl        # 125 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 168/168 each
+  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 170/170 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
@@ -98,13 +98,13 @@ binding and that every exported name with a docstring is rendered somewhere
 it is listed in a `@docs` block on some page; otherwise write it in plain
 backticks. `runtests.jl` includes the same check as its last testset.
 
-The `124 testsets` and the `168/168` are counted by different mechanisms and are
+The `125 testsets` and the `170/170` are counted by different mechanisms and are
 not comparable. `runtests.jl` runs everything inside one top-level
 `@testset` and prints one summary tree at the end: the top row totals the
 `@test`s, and each row beneath it is one `@testset` of the suite, the ones
 its includes contribute too (`float32_validation.jl`, `device_tests.jl`,
 `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, `docrefs_tests.jl`, and
-the device/adapt testsets); the `124` counts those rows. A failure is
+the device/adapt testsets); the `125` counts those rows. A failure is
 recorded and the suite runs on, so one run reports every failure, and the
 outer testset raises at the end. `mpi_tests.jl` uses `Test` not
 at all and counts individual `check(name, val, tol)` assertions, printing
@@ -287,7 +287,15 @@ Names are spelled out in full. Current vocabulary:
   coefficient arrays, never from the pooled workspace's `sensor`),
   `_tag_gradient_point!` (`tag_gradient_threshold`, mass-fraction change
   per cell), `_tag_vorticity_point!` (`tag_vorticity_threshold`), and
-  `_tag_predicate!` (`tag_predicate`, a user `(patch, I) -> Bool` closure)
+  `_tag_predicate!` (`tag_predicate`, a user `(patch, I) -> Bool` closure).
+  A body writes a level, `TAG_MARK` above the threshold or `TAG_HOLD` above
+  the threshold over `untag_ratio` (keyword; `RegridSpec.untag_ratio`),
+  and `_tag_level`/`_raise_tag!` combine them; the hold level keeps an
+  existing tile (or the current box) and calls for no new one.
+  `tile_lifetime` (keyword; `RegridSpec.lifetime`) is the minimum age of a
+  tile in regrid checks, `checks` counts the checks and `created` (per
+  current tile region, the check it was created at) is the tag history,
+  derived from the reduced flags on every rank
 - `pointwise!` (the shared launcher of every per-point loop: `Array` storage
   takes `@threaded`, device storage a KernelAbstractions kernel),
   `pointwise_ka!`, `FORCE_KA` (test/bench toggle), and the `_point!` suffix

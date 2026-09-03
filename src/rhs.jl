@@ -198,6 +198,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 tag_gradient_threshold::Real=0,
                 tag_vorticity_threshold::Real=0,
                 tag_predicate=nothing,
+                untag_ratio::Real=2,
+                tile_lifetime::Int=1,
                 tile::Int=0,
                 rebalance::Real=0,
                 rebalance_persist::Int=2) where {T}
@@ -339,6 +341,10 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
               "regrid_interval > 0")
     tag_predicate === nothing || tag_predicate isa Function ||
         error("tag_predicate must be a function (patch, I) -> Bool or nothing")
+    # A ratio of one holds nothing below the tag threshold, which is the
+    # hysteresis-free rule; below one the hold band would sit above the tag.
+    untag_ratio >= 1 || error("untag_ratio must be at least 1 (1 disables the hold band)")
+    tile_lifetime >= 1 || error("tile_lifetime must be at least 1 regrid check")
     # A lattice cell of `tile` parent nodes is a patch of tile + 1 nodes,
     # 3·tile + 1 fine nodes; the four-node minimum gives tile ≥ 3.
     tile == 0 || tile >= 3 ||
@@ -728,7 +734,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                            T(tag_sensor_threshold), T(tag_gradient_threshold),
                            T(tag_vorticity_threshold), tag_predicate,
                            zeros(Int8, ntuple(d -> decomp.n_local[d] +
-                                                   2 * decomp.n_halo_d[d], 3)))
+                                                   2 * decomp.n_halo_d[d], 3)),
+                           T(untag_ratio), tile_lifetime, 0,
+                           Dict(lt.region => 0 for lt in levels[2].transfers))
     solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,

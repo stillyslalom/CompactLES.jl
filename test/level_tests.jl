@@ -688,11 +688,13 @@ end
     # The tile set changed, so every setup-time transfer was replaced and
     # its chain communicators were freed at the drop.
     @test all(lt.pdecomps[1].comm == CL.MPI.COMM_NULL for lt in transfers0)
-    # Every tile is a lattice cell, the set is contiguous, and it holds the
-    # shock.
+    # Every tile is a lattice cell, the set is in lattice order and holds
+    # the shock. It need not be contiguous: under the default hold band the
+    # rarefaction head, a marginal feature, keeps its tiles at the far end.
     @test all(r -> r.offset[1] % 8 == 0 && r.extent[1] == 9, regs)
-    @test all(i -> regs[i+1].offset[1] == regs[i].offset[1] + 8, 1:length(regs)-1)
+    @test all(i -> regs[i+1].offset[1] > regs[i].offset[1], 1:length(regs)-1)
     @test regs[1].offset[1] < shock_node <= regs[end].offset[1] + 9
+    @test Set(keys(getfield(sa, :regrid).created)) == Set(regs)
     @test all(all(isfinite, parent(Q)) for Q in states)
     for (psq, Q) in CL.eachpatch(sa, states)
         n = psq.decomp.n_local[1]
@@ -931,4 +933,127 @@ end
     initialize!(sp, states, icS)
     r = CL.tagged_region(sp, states[1])
     @test r.offset[1] < node(0.5) && r.offset[1] + r.extent[1] == N - margin
+end
+
+@testset "tag hysteresis: hold band, lifetime and the creation record" begin
+    # A synthetic tag sequence, no time stepping: a quiescent field with two
+    # Gaussian density bumps of width 2h, an anchor at x = 0.3 that always
+    # tags and a feature at x = 0.7 whose amplitude each check sets, so the
+    # feature's tag quantity max Σ|δ⁴ρ|/ρ lands above the threshold, in
+    # the hold band, or below it. The quantity is evaluated here on the
+    # same lattice with the same stencil, so the bands are asserted, not
+    # assumed.
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    N = 201
+    h = 1 / (N - 1)
+    thr = 0.02
+    bump(x, x0, a) = a * exp(-((x - x0) / (2h))^2)
+    function quantity(a)
+        ρ = [1 + bump((g - 1) * h, 0.7, a) for g in 1:N]
+        return maximum(abs(sum(CL.D4[m + 3] * ρ[g + m] for m in -2:2)) / ρ[g]
+                       for g in 3:N-2)
+    end
+    a_of(target) = target / quantity(1e-3) * 1e-3   # linear at small a
+    a_hi, a_mid, a_lo = a_of(1.5thr), a_of(0.75thr), a_of(0.25thr)
+    @test quantity(a_hi) > thr
+    @test thr / 2 < quantity(a_mid) < thr
+    @test quantity(a_lo) < thr / 2
+    amp = Ref(a_hi)
+    ic(x, y, z) = Prim(u=(0, 0, 0), p=1.0,
+                       rho=1.0 + bump(x, 0.3, a_hi) + bump(x, 0.7, amp[]))
+    anchor, feature = round(Int, 0.3 * (N - 1)) + 1, round(Int, 0.7 * (N - 1)) + 1
+    has(regs, g) = any(r -> r.offset[1] < g <= r.offset[1] + r.extent[1], regs)
+    mk(; kw...) = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=(wall2, per, per), tag_threshold=thr,
+                         regrid_interval=1, tag_buffer=1,
+                         refine=BlockRegion((50, 0, 0), (20, 1, 1)); kw...)
+    # One regrid check with the feature at amplitude `a`: the state is
+    # re-initialized and the cadence hook runs, which is what counts checks.
+    function check!(solver, states, workspace, a)
+        amp[] = a
+        initialize!(solver, states, ic)
+        solver.step += 1
+        CL._maybe_regrid!(solver, states, workspace, nothing)
+        return level_regions(solver, 1)
+    end
+    @test_throws ErrorException mk(untag_ratio=0.5)
+    @test_throws ErrorException mk(tile_lifetime=0)
+
+    # Tiled, default hysteresis (ratio 2, lifetime 1).
+    let
+        sa = mk(tile=8)
+        states = allocate_state(sa)
+        ws = CL.Workspace(states)
+        spec = getfield(sa, :regrid)
+        @test spec.checks == 0 && all(==(0), values(spec.created))
+        @test Set(keys(spec.created)) == Set(level_regions(sa, 1))
+        r1 = check!(sa, states, ws, a_hi)
+        @test has(r1, anchor) && has(r1, feature)
+        @test spec.checks == 1
+        @test all(r -> spec.created[r] == (has([r], feature) ? 1 : 0), r1)
+        @test Set(keys(spec.created)) == Set(r1)
+        # The hold band keeps the feature's tile; below it the tile goes.
+        r2 = check!(sa, states, ws, a_mid)
+        @test r2 == r1
+        r3 = check!(sa, states, ws, a_lo)
+        @test has(r3, anchor) && !has(r3, feature)
+        @test Set(keys(spec.created)) == Set(r3)
+        # Fading back into the hold band creates nothing.
+        r4 = check!(sa, states, ws, a_mid)
+        @test r4 == r3
+    end
+    # Tiled, no hold band: the feature's tile is dropped as soon as it
+    # falls below the threshold.
+    let
+        sa = mk(tile=8, untag_ratio=1)
+        states = allocate_state(sa)
+        ws = CL.Workspace(states)
+        r1 = check!(sa, states, ws, a_hi)
+        @test has(r1, feature)
+        r2 = check!(sa, states, ws, a_mid)
+        @test has(r2, anchor) && !has(r2, feature)
+    end
+    # Tiled, lifetime 3: the setup-time tiles beyond the anchor's tags and
+    # the feature's tile each survive until their third check.
+    let
+        sa = mk(tile=8, tile_lifetime=3)
+        states = allocate_state(sa)
+        ws = CL.Workspace(states)
+        spec = getfield(sa, :regrid)
+        initial = level_regions(sa, 1)
+        r1 = check!(sa, states, ws, a_hi)
+        @test all(r -> r in r1, initial) && has(r1, feature)
+        r2 = check!(sa, states, ws, a_lo)
+        @test r2 == r1
+        r3 = check!(sa, states, ws, a_lo)
+        @test has(r3, feature) && !all(r -> r in r3, initial) && has(r3, anchor)
+        r4 = check!(sa, states, ws, a_lo)
+        @test !has(r4, feature) && has(r4, anchor)
+        @test spec.checks == 4 && Set(keys(spec.created)) == Set(r4)
+    end
+    # The box (tile = 0): spans both features, holds through the band,
+    # then shrinks to the anchor; with a lifetime of 2 it cannot move at
+    # its first check.
+    let
+        sa = mk()
+        states = allocate_state(sa)
+        ws = CL.Workspace(states)
+        spec = getfield(sa, :regrid)
+        r1 = check!(sa, states, ws, a_hi)
+        @test has(r1, anchor) && has(r1, feature) && length(r1) == 1
+        @test spec.created == Dict(r1[1] => 1)
+        r2 = check!(sa, states, ws, a_mid)
+        @test r2 == r1
+        r3 = check!(sa, states, ws, a_lo)
+        @test has(r3, anchor) && !has(r3, feature)
+        @test spec.created == Dict(r3[1] => 3)
+        sb = mk(tile_lifetime=2)
+        states = allocate_state(sb)
+        ws = CL.Workspace(states)
+        initial = level_regions(sb, 1)
+        @test check!(sb, states, ws, a_hi) == initial
+        r2 = check!(sb, states, ws, a_hi)
+        @test r2 != initial && has(r2, feature)
+    end
 end

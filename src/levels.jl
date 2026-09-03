@@ -1785,6 +1785,15 @@ magnitude; and `predicate`, a user closure over the parent patch. A zero
 threshold or a `nothing` predicate leaves that criterion off. `tags` is the
 sweep's host scratch over the root's padded extent.
 
+Derefinement carries hysteresis. A node above a criterion's threshold tags;
+one above the threshold divided by `untag_ratio` holds, which keeps an
+existing tile (or the current box) but calls for no new one. A tile is not
+dropped before `lifetime` regrid checks have passed since it was created,
+whatever the tags say. `checks` counts the regrid checks so far and
+`created` records, per current tile region, the check at which the tile was
+created (0 at setup): the tag history, derived from the reduced tag flags
+so that every rank holds the same record, and state that survives a regrid.
+
 The rebalance fields drive the repartition of a tiled level on measured
 load: `rebalance` is the threshold on the ratio of the largest to the mean
 per-rank busy time over the last interval (0 leaves ownership stored as it
@@ -1820,6 +1829,11 @@ mutable struct RegridSpec{T}
     vorticity_threshold::T           # vorticity magnitude; 0 = off
     predicate::Union{Nothing,Function} # (patch, I) -> Bool over the parent
     tags::Array{Int8,3}              # sweep scratch, root padded extent
+    untag_ratio::T                   # hold above threshold / untag_ratio
+    lifetime::Int                    # minimum tile age in regrid checks
+    checks::Int                      # regrid checks so far
+    created::Dict{BlockRegion,Int}   # per current tile: the check it was
+                                     # created at (0 at setup)
 end
 
 RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
@@ -1828,7 +1842,8 @@ RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
     RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
                   deriv, filt, smoo, backend, tile, last_step,
                   rebalance, persist, 0, 1.0, 0.0, 0.0, 0.0,
-                  zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0))
+                  zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
+                  T(2), 1, 0, Dict{BlockRegion,Int}())
 
 """
     hermite_level_shell!(solver, states, lt, θ, dt)
