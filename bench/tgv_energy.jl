@@ -185,40 +185,63 @@ Volume-averaged resolved dissipation split into molecular, artificial-shear and
 artificial-bulk contributions. Same tensor contraction as `dissipation_rate` in
 `diagnostics.jl`, which sums them; here they are kept apart.
 
-Accumulates scalars rather than filling fields: TGV is a uniform periodic
-Cartesian box, so `volume_integral`'s quadrature weights are all equal and a
-plain sum is the same number without borrowing scratch arrays.
+Accumulates scalars rather than filling fields. On the single periodic grid
+every quadrature weight is the cell volume; on a refined run the sum runs
+over every held patch with that patch's cell volume, its own edge weights,
+and the covered mask (`uncovered_fraction`), so a coarse node under the
+refined level is counted once.
 """
-function diss_split(solver, Q)
-    CL.compute_primitives_and_gradients!(solver, Q)
-    CL.compute_artificial!(solver, Q)
-    o1, o2, o3 = solver.decomp.n_halo_d
-    nx, ny, nz = solver.decomp.n_local
-    # `_host` aliases host arrays and downloads device ones, so the same
-    # scalar accumulation serves a device-resident solver (sampled, so the
-    # transfer runs every `sample=` steps, not every step).
-    g = [_host(solver.grad_u[a, b]) for a in 1:3, b in 1:3]
-    mu_art = _host(solver.mu_art)
-    beta_art = _host(solver.beta_art)
-    rho = _host(solver.rho)
-    mu0 = solver.transport.mu0
+function diss_split(solver, states)
     s_mol, s_shear, s_bulk, s_rho = 0.0, 0.0, 0.0, 0.0
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        I = CartesianIndex(i + o1, j + o2, k + o3)
-        divu = g[1, 1][I] + g[2, 2][I] + g[3, 3][I]
-        mu_a = mu_art[I]
-        beta_a = beta_art[I]
-        for b in 1:3, a in 1:3
-            S2 = g[a, b][I] + g[b, a][I]
-            trace = a == b ? divu : 0.0
-            s_mol += (mu0 * S2 - 2mu0 / 3 * trace) * g[a, b][I]
-            s_shear += (mu_a * S2 - 2mu_a / 3 * trace) * g[a, b][I]
-            s_bulk += beta_a * trace * g[a, b][I]
+    for (ps, Q) in CL.eachpatch(solver, _as_vector(states))
+        CL.compute_primitives_and_gradients!(ps, Q)
+        CL.compute_artificial!(ps, Q)
+        o1, o2, o3 = ps.decomp.n_halo_d
+        nx, ny, nz = ps.decomp.n_local
+        # `_host` aliases host arrays and downloads device ones, so the same
+        # scalar accumulation serves a device-resident solver (sampled, so the
+        # transfer runs every `sample=` steps, not every step).
+        g = [_host(ps.grad_u[a, b]) for a in 1:3, b in 1:3]
+        mu_art = _host(ps.mu_art)
+        beta_art = _host(ps.beta_art)
+        rho = _host(ps.rho)
+        mu0 = solver.transport.mu0
+        dv = prod(ps.h)
+        @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
+            I = CartesianIndex(i + o1, j + o2, k + o3)
+            w = _node_weight(ps, i, j, k, I) * dv
+            divu = g[1, 1][I] + g[2, 2][I] + g[3, 3][I]
+            mu_a = mu_art[I]
+            beta_a = beta_art[I]
+            for b in 1:3, a in 1:3
+                S2 = g[a, b][I] + g[b, a][I]
+                trace = a == b ? divu : 0.0
+                s_mol += w * (mu0 * S2 - 2mu0 / 3 * trace) * g[a, b][I]
+                s_shear += w * (mu_a * S2 - 2mu_a / 3 * trace) * g[a, b][I]
+                s_bulk += w * beta_a * trace * g[a, b][I]
+            end
+            s_rho += w * rho[I]
         end
-        s_rho += rho[I]
     end
-    v = MPI.Allreduce([s_mol, s_shear, s_bulk, s_rho], +, solver.decomp.comm)
+    v = MPI.Allreduce([s_mol, s_shear, s_bulk, s_rho], +, solver.comm)
     return (v[1] / v[4], v[2] / v[4], v[3] / v[4])
+end
+
+# The state vector a refined run carries, or the one-element vector of a
+# single-patch run's state, so one patch loop serves both.
+_as_vector(states::Vector) = states
+_as_vector(Q) = [Q]
+
+# One node's composite quadrature weight relative to the patch cell volume:
+# the edge weights of the patch's own quadrature (one everywhere on the
+# periodic root, a half on a refined patch's boundary planes) times the
+# fraction of the node's cell no child level covers.
+@inline function _node_weight(ps, i, j, k, I)
+    w = CL.quad_weight(ps, 1, i) * CL.quad_weight(ps, 2, j) *
+        CL.quad_weight(ps, 3, k)
+    m = ps.covered[I]
+    m == 0 || (w *= CL.uncovered_fraction(m))
+    return w
 end
 
 """
@@ -251,30 +274,43 @@ function windowed_rate(ts, kes, i, w)
     return -(kes[hi] - kes[lo]) / (ts[hi] - ts[lo])
 end
 
-"Kinetic energy per unit volume, globally reduced."
-function kinetic_energy(solver, Q, cellvol)
+"Kinetic energy per unit volume, globally reduced. `hosts` holds one host
+array per held patch, aligned with `solver.patches`; on a refined run the
+sum is the composite quadrature under the covered masks."
+function kinetic_energy(solver, hosts::Vector)
     ke = 0.0
     m1, m2, m3 = solver.equations.i_mom
-    for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
-        i in 1:solver.decomp.n_local[1]
-        I = gidx(solver, i, j, k)
-        ke += 0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / Q[I, 1]
+    for (n, p) in enumerate(solver.patches)
+        ps = PatchSolver(solver, p)
+        Q = hosts[n]
+        dv = prod(ps.h)
+        for k in 1:ps.decomp.n_local[3], j in 1:ps.decomp.n_local[2],
+            i in 1:ps.decomp.n_local[1]
+            I = gidx(ps, i, j, k)
+            ke += _node_weight(ps, i, j, k, I) * dv *
+                  0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / Q[I, 1]
+        end
     end
-    return MPI.Allreduce(ke * cellvol, +, solver.decomp.comm) / (2π)^3
+    return MPI.Allreduce(ke, +, solver.comm) / (2π)^3
 end
 
 "Volume-averaged mixture density, accumulated and reduced in Float64."
-function mean_density(solver, Q, cellvol)
+function mean_density(solver, hosts::Vector)
     mass = 0.0
-    for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
-        i in 1:solver.decomp.n_local[1]
-        I = gidx(solver, i, j, k)
-        for sp in 1:solver.equations.n_species
-            mass += Float64(Q[I, sp])
+    for (n, p) in enumerate(solver.patches)
+        ps = PatchSolver(solver, p)
+        Q = hosts[n]
+        dv = Float64(prod(ps.h))
+        for k in 1:ps.decomp.n_local[3], j in 1:ps.decomp.n_local[2],
+            i in 1:ps.decomp.n_local[1]
+            I = gidx(ps, i, j, k)
+            w = _node_weight(ps, i, j, k, I) * dv
+            for sp in 1:solver.equations.n_species
+                mass += w * Float64(Q[I, sp])
+            end
         end
     end
-    return MPI.Allreduce(mass * Float64(cellvol), +, solver.decomp.comm) /
-           (2π)^3
+    return MPI.Allreduce(mass, +, solver.comm) / (2π)^3
 end
 
 function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
@@ -283,7 +319,16 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                       cfl=0.6, filter_cfl=0.0,
                       mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
                       T::Type{<:AbstractFloat}=Float64,
-                      backend::AbstractBackend=CPUBackend())
+                      backend::AbstractBackend=CPUBackend(),
+                      refine::Int=0, tile::Int=0, subcycle::Bool=false)
+    # A refined run carries a centered cube of `refine` root nodes on one
+    # level below the root, host-only: its energy history is the composite
+    # quadrature and is the covered-mask check against the single-level
+    # history (reference/AMR_GPU.md, diagnostics).
+    refine == 0 || backend isa CPUBackend ||
+        error("a refined run takes the host backend")
+    region = refine == 0 ? nothing :
+             BlockRegion(ntuple(_ -> (N - refine) ÷ 2, 3), ntuple(_ -> refine, 3))
     γ = T(1.4)
     c0 = T(10)                     # Ma ≈ 0.1 at |u|max = 1
     p0 = c0^2 / γ
@@ -310,28 +355,30 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                                       mu_sensor=mu_sensor,
                                       beta_sensor=beta_sensor,
                                       reduction=reduction),
-                     backend=backend))
+                     backend=backend, refine=region, tile=tile,
+                     subcycle=subcycle))
     end
-    cellvol = prod(solver.h)
     workspace = Workspace(Q)
     footprint = (solver=Base.summarysize(solver), state=Base.summarysize(Q),
                  workspace=Base.summarysize(workspace))
     # Device-resident state reads through one reused host buffer: the scalar
     # energy/mass loops index this, not Q. On the CPU it aliases Q and
-    # the download is a no-op.
-    devres = !(parent(Q) isa Array)
-    Qhost = devres ? Array(parent(Q)) : parent(Q)
-    sync_host!(Q) = (devres && copyto!(Qhost, parent(Q)); Qhost)
-    mass0 = mean_density(solver, sync_host!(Q), cellvol)
+    # the download is a no-op. A refined run is host-only and hands the
+    # loops its patches' arrays directly.
+    devres = refine == 0 && !(parent(Q) isa Array)
+    Qhost = devres ? Array(parent(Q)) : nothing
+    sync_host!(Q) = devres ? (copyto!(Qhost, parent(Q)); [Qhost]) :
+                    [parent(q) for q in _as_vector(Q)]
+    mass0 = mean_density(solver, sync_host!(Q))
 
     # Compile the precision-specific hot path before timing. The warm state is
     # disposable; the measured state and solver time remain at t = 0.
-    Qwarm = copy(Q)
+    Qwarm = refine == 0 ? copy(Q) : [copy(q) for q in Q]
     warmspace = Workspace(Qwarm)
     dtwarm = compute_dt(solver, Qwarm)
     step!(solver, Qwarm, warmspace, dtwarm)
     filter_interval > 0 && CL.filter_state!(solver, Qwarm)
-    kinetic_energy(solver, sync_host!(Qwarm), cellvol)
+    kinetic_energy(solver, sync_host!(Qwarm))
     Qwarm = warmspace = nothing
     GC.gc()
 
@@ -340,7 +387,7 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
     samples = Tuple{Float64,Float64,Float64,Float64,Int}[]
     record = Callback(EveryStep(1), (s, Q) -> begin
         push!(ts, s.t)
-        push!(kes, kinetic_energy(s, sync_host!(Q), cellvol))
+        push!(kes, kinetic_energy(s, sync_host!(Q)))
         nothing
     end)
     # diss_split costs an extra gradient pass, so it is sampled, not stepwise.
@@ -363,7 +410,7 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
         run!(solver, Q, workspace; tfinal=T(tfinal), nmax=nmax,
              callback=callbacks)
     end
-    mass1 = mean_density(solver, sync_host!(Q), cellvol)
+    mass1 = mean_density(solver, sync_host!(Q))
     return (; solver, Q, workspace, ts, kes, samples, setup_elapsed,
             run_elapsed, footprint, mass0, mass1)
 end
@@ -373,7 +420,8 @@ const DEFAULTS = (N = 32, tfinal = 10.0, configs = "off:1,on:1",
                   window = 250, smoother = :compact,
                   cfl = 0.6, filter_cfl = 0.0,
                   mu_sensor = :strain, beta_sensor = :strain, reduction = :sum,
-                  precision = "float64", backend = "cpu")
+                  precision = "float64", backend = "cpu",
+                  refine = 0, tile = 0, subcycle = false)
 
 function parse_configs(spec)
     configs = NamedTuple{(:art, :filt, :C_mu),Tuple{Bool,Int,Float64}}[]
@@ -429,7 +477,8 @@ function main(opt, backend)
                                       mu_sensor=opt.mu_sensor,
                                       beta_sensor=opt.beta_sensor,
                                       reduction=opt.reduction, T=T,
-                                      backend=backend)
+                                      backend=backend, refine=opt.refine,
+                                      tile=opt.tile, subcycle=opt.subcycle)
             catch err
                 # Collective by construction, so every rank lands here together
                 # and the sweep stays in step. See the header note.
@@ -441,6 +490,9 @@ function main(opt, backend)
         label = @sprintf("%s, art %s, filter_interval %d, C_mu %.4g, %s/%s/%s/%s",
                          T, cfg.art ? "ON " : "OFF", cfg.filt, cfg.C_mu,
                          opt.smoother, opt.mu_sensor, opt.beta_sensor, opt.reduction)
+        opt.refine == 0 ||
+            (label *= @sprintf(", refined %d^3 (tile %d, %s)", opt.refine, opt.tile,
+                               opt.subcycle ? "subcycled" : "unsubcycled"))
         if failure !== nothing
             @printf("\n--- %s   (FAILED after %.1f s)\n", label, elapsed)
             @printf("    SolverFailure(:%s) at step %d, t = %.4f, dt = %.3e\n",

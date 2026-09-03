@@ -1057,3 +1057,207 @@ end
         @test r2 != initial && has(r2, feature)
     end
 end
+
+@testset "covered masks: composite quadrature counts every node once" begin
+    # Node-centered trapezoid quadrature is exact for a linear field on a
+    # wall-bounded box, so the composite integral, volume and plane
+    # profiles of x + 2y + 3z are known to round-off on every layout: one
+    # refined patch, a 3×3×3 tile nest sharing planes (the lattice reaches
+    # past the requested box), and a three-level nest. The same sums
+    # without the masks carry the covered volume twice, which is what the
+    # masks exist to remove.
+    wall = (SlipWallBC(), SlipWallBC())
+    walls3 = (wall, wall, wall)
+    N = 24
+    two = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 1.0, 1.4)])
+    lin(x, y, z) = x + 2y + 3z
+    function fields(s, states, f)
+        map(CL.eachpatch(s, states)) do (ps, Q)
+            a = similar(ps.rho)
+            d = ps.decomp
+            for k in 1:d.n_local[3], j in 1:d.n_local[2], i in 1:d.n_local[1]
+                a[gidx(ps, i, j, k)] = f(xcoord(ps, 1, i), xcoord(ps, 2, j),
+                                         xcoord(ps, 3, k))
+            end
+            a
+        end
+    end
+    mk(; kw...) = Solver(n_global=(N, N, N), L_domain=(1.0, 1.0, 1.0),
+                         bcs=walls3, eos=two, transport=Transport(mu0=0.01); kw...)
+    # A composition linear in x and a shear u = y: the plane averages the
+    # mixing measures need are exact at every station, and the shear's
+    # gradient is exact for every compact derivative.
+    ic(x, y, z) = Prim(Y=(x, 1 - x), u=(y, 0, 0), p=1.0, rho=1.0)
+    s0 = mk()
+    Q0 = allocate_state(s0)
+    initialize!(s0, Q0, ic)
+    W0 = mix_width(s0, Q0; dim=1)
+    θ0 = molecular_mixing(s0, Q0; dim=1)
+    tke0 = tke_profile(s0, Q0; dim=1)
+    k0 = turbulent_kinetic_energy(s0, Q0; dim=1)
+    diss0 = dissipation_rate(s0, Q0)
+    refresh_primitives!(s0, Q0)
+    pdf0 = species_pdf(s0, 1; nbins=4)[2]
+    @test abs(W0 - 2 / 3) < 2e-3 && abs(θ0 - 1) < 1e-12
+    r1 = BlockRegion((6, 6, 6), (8, 8, 8))
+    layouts = ((tile=0, refine=r1), (tile=4, refine=r1),
+               (tile=0, refine=[r1, BlockRegion((24, 24, 24), (8, 8, 8))]))
+    for lay in layouts
+        s = mk(tile=lay.tile, refine=lay.refine)
+        states = allocate_state(s)
+        initialize!(s, states, ic)
+        # The state as `run!` leaves it: shells imposed and shared planes
+        # exchanged, which the gradient diagnostic reads.
+        CL._presync!(s, states)
+        fs = fields(s, states, lin)
+        # The level-1 cover in root nodes: the box itself, or the lattice
+        # tiles meeting it, which reach past it.
+        regs = level_regions(s, 1)
+        lo = minimum(r.offset[1] for r in regs) + 1
+        hi = maximum(r.offset[1] + r.extent[1] for r in regs)
+        outside = vcat(1:lo-1, hi+1:N)
+        @test abs(domain_volume(s) - 1) < 1e-13
+        @test abs(volume_integral(s, fs) - 3) < 1e-13
+        @test abs(volume_average(s, fs) - 3) < 1e-13
+        unmasked = sum(CL._local_volume_integral(PatchSolver(s, p), fs[i], false)
+                       for (i, p) in enumerate(s.patches))
+        @test unmasked - 3 > 0.05
+        c = (1, 2, 3)
+        for d in 1:3
+            prof = plane_profile(s, fs, d)
+            xs = profile_coordinate(s, d)
+            rest = sum(c[t] * 0.5 for t in 1:3 if t != d)
+            @test length(prof) == N
+            @test maximum(abs.(prof .- (c[d] .* xs .+ rest))) < 1e-12
+            @test abs(sum(profile_spacing(s, d)) - 1) < 1e-13
+        end
+        # The root's mask: an interior node of the region is fully covered,
+        # a face node keeps half its cell, an edge node three quarters, a
+        # corner seven eighths, and a node outside all of it. In the plane
+        # normal to x a face node at x = x_lo is fully covered, in the
+        # plane normal to y it is half covered.
+        root = PatchSolver(s, s.patches[1])
+        m(g1, g2, g3) = root.covered[gidx(root, g1, g2, g3)]
+        @test CL.uncovered_fraction(m(10, 10, 10)) == 0
+        @test CL.uncovered_fraction(m(lo, 10, 10)) == 0.5
+        @test CL.uncovered_fraction(m(hi, 10, 10)) == 0.5
+        @test CL.uncovered_fraction(m(lo, lo, 10)) == 0.75
+        @test CL.uncovered_fraction(m(lo, lo, lo)) == 0.875
+        @test m(lo - 1, 10, 10) == 0 && m(hi + 1, 10, 10) == 0
+        @test CL.uncovered_plane_fraction(m(lo, 10, 10), 1) == 0
+        @test CL.uncovered_plane_fraction(m(lo, 10, 10), 2) == 0.5
+        @test CL.uncovered_plane_fraction(m(10, 10, 10), 3) == 0
+        # The mixing measures agree with the single level to round-off;
+        # the turbulence profile agrees exactly on planes the region does
+        # not meet and to trapezoid accuracy on those it does.
+        @test abs(mix_width(s, states; dim=1) - W0) < 1e-12
+        @test abs(molecular_mixing(s, states; dim=1) - θ0) < 1e-12
+        tke = tke_profile(s, states; dim=1)
+        @test maximum(abs.(tke[outside] .- tke0[outside])) < 1e-14
+        @test maximum(abs.(tke .- tke0)) < 1e-2 * maximum(tke0)
+        @test abs(turbulent_kinetic_energy(s, states; dim=1) - k0) < 1e-2 * k0
+        @test abs(dissipation_rate(s, states) - diss0) < 1e-2 * diss0
+        refresh_primitives!(s, states)
+        pdf = species_pdf(s, 1; nbins=4)[2]
+        @test abs(sum(pdf) * 0.25 - 1) < 1e-12
+        @test maximum(abs.(pdf .- pdf0)) < 0.1
+    end
+    # A regrid rewrites the root's mask from the new tile set, and the
+    # composite quadrature stays exact across it.
+    per = (PeriodicBC(), PeriodicBC())
+    sa = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                bcs=(wall, per, per), cfl=0.2, subcycle=true,
+                regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
+                tile=8)
+    states = allocate_state(sa)
+    initialize!(sa, states, (x, y, z) -> x < 0.5 ?
+        Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+    mask0 = copy(sa.patches[1].covered)
+    run!(sa, states; tfinal=1.0, nmax=20)
+    root = sa.patches[1]
+    @test root.covered != mask0
+    kept = copy(root.covered)
+    CL._fill_covered!(root, level_regions(sa, 1))
+    @test root.covered == kept
+    @test abs(domain_volume(sa) - 1) < 1e-13
+    @test abs(volume_integral(sa, fields(sa, states, (x, y, z) -> x)) - 0.5) < 1e-13
+end
+
+@testset "covered masks: refined TGV energy history matches the single level" begin
+    # Taylor–Green at 24³ with an 8³ region refined off-center, where the
+    # kinetic energy density is well above its mean, so a coarse node under
+    # the level counted twice moves the composite energy by several percent
+    # while the refinement itself moves it by parts in ten thousand over the
+    # smooth early history. The refined run's history is compared with the
+    # single-level one at the refined run's own instants, the single-level
+    # history interpolated linearly between its steps.
+    N = 24
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    c0 = 10.0
+    p0 = c0^2 / 1.4
+    tgv(x, y, z) = Prim(u=(sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), 0.0),
+                        p=p0 + (cos(2x) + cos(2y)) * (cos(2z) + 2) / 16, rho=1.0)
+    mk(; kw...) = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3l,
+                         transport=Transport(mu0=1 / 1600), cfl=0.6; kw...)
+    # Kinetic energy per unit volume: the composite quadrature of ½ρ|u|²
+    # over the held patches, and the same sums without the masks.
+    function energies(s, states)
+        fs = map(CL.eachpatch(s, states isa Vector ? states : [states])) do (ps, Q)
+            f = zeros(size(ps.rho))
+            m = s.equations.i_mom
+            d = ps.decomp
+            for k in 1:d.n_local[3], j in 1:d.n_local[2], i in 1:d.n_local[1]
+                I = gidx(ps, i, j, k)
+                f[I] = 0.5 * (Q[I, m[1]]^2 + Q[I, m[2]]^2 + Q[I, m[3]]^2) / Q[I, 1]
+            end
+            f
+        end
+        masked = volume_integral(s, fs) / (2π)^3
+        unmasked = sum(CL._local_volume_integral(PatchSolver(s, p), fs[i], false)
+                       for (i, p) in enumerate(s.patches)) / (2π)^3
+        return masked, unmasked
+    end
+    function history(s, states, tfinal)
+        ts = Float64[]
+        kes = Float64[]
+        raw = Float64[]
+        record = Callback(EveryStep(1), (sv, Q) -> begin
+            e, u = energies(sv, Q)
+            push!(ts, sv.t)
+            push!(kes, e)
+            push!(raw, u)
+            nothing
+        end)
+        run!(s, states; tfinal=tfinal, nmax=400, callback=record)
+        return ts, kes, raw
+    end
+    tfinal = 0.3
+    s0 = mk()
+    Q0 = allocate_state(s0)
+    initialize!(s0, Q0, tgv)
+    e0, u0 = energies(s0, Q0)
+    @test e0 == u0
+    ts0, kes0, _ = history(s0, Q0, tfinal)
+    s1 = mk(refine=BlockRegion((4, 4, 4), (8, 8, 8)), subcycle=true)
+    states = allocate_state(s1)
+    initialize!(s1, states, tgv)
+    e1, u1 = energies(s1, states)
+    # At t = 0 both grids sample the same field; the fine sampling moves
+    # the quadrature by its own truncation (measured 2.5e-4 relative), the
+    # double count by the covered energy (measured 1.4e-2).
+    @test abs(e1 - e0) < 5e-4 * e0
+    @test u1 - e1 > 1e-2 * e0
+    ts1, kes1, raw1 = history(s1, states, tfinal)
+    interp(t) = (i = searchsortedlast(ts0, t); i == length(ts0) ? kes0[end] :
+                 kes0[i] + (kes0[i+1] - kes0[i]) * (t - ts0[i]) / (ts0[i+1] - ts0[i]))
+    ref = [t <= ts0[1] ? kes0[1] : interp(t) for t in ts1]
+    drift = maximum(abs.(kes1 .- ref) ./ ref)
+    double = minimum((raw1 .- kes1) ./ kes1)
+    # Measured: the two histories take the same 61 steps to t = 0.3 and
+    # stay within 2.5e-4 of each other, the sampling difference above;
+    # the unmasked sum sits 1.4e-2 above throughout.
+    @info "refined TGV energy history" steps=(length(ts0), length(ts1)) drift double
+    @test drift < 1e-3
+    @test double > 1e-2
+end

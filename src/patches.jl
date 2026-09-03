@@ -193,6 +193,14 @@ struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,W,TF}
     # of the same padded extent. Its names reach callers through the property
     # forwarding below, so `solver.grad_u` and `solver.tmp_a` read as before.
     rhs_workspace::W
+    # Which orthants of each node's quadrature cell a child level covers
+    # (`_fill_covered!`): bit (s1 > 0) + 2(s2 > 0) + 4(s3 > 0) for the
+    # orthant of signs s_d, so 0 is uncovered, 0xFF fully covered, and a
+    # node on a child's face carries half its bits. Host storage over the
+    # padded extent; only the interior is written. Filled at setup and at
+    # every regrid from the child regions every rank of this level's subset
+    # holds, so a diagnostic on this level's ranks alone reads it.
+    covered::Array{UInt8,3}
     # The same collections as isbits-adaptable tuples (FieldVector /
     # FieldMatrix, pointwise.jl): what the pointwise per-point bodies index,
     # since a Vector or Matrix kernel argument hangs a device launch. Same
@@ -210,7 +218,7 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                pairbuf, pairout, rho, u, v, w, p, T_ion, c, cp_mix, Y,
                mu_art, beta_art, kappa_art, D_art,
                inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
-               rhs_workspace)
+               rhs_workspace, covered)
     field_tuples = (Y=FieldVector(Y), D_art=FieldVector(D_art),
                     grad_u=FieldMatrix(rhs_workspace.grad_u),
                     grad_Y=FieldMatrix(rhs_workspace.grad_Y),
@@ -220,7 +228,97 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                  ring_plans, pairbuf, pairout, rho, u, v, w, p, T_ion, c,
                  cp_mix, Y, mu_art, beta_art, kappa_art, D_art,
                  inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
-                 rhs_workspace, field_tuples)
+                 rhs_workspace, covered, field_tuples)
+end
+
+# --- Covered masks ----------------------------------------------------------
+#
+# A diagnostic over a refined run integrates the composite grid: the coarse
+# nodes a child level covers must be excluded, and excluded exactly once.
+# With node-centered quadrature a node's cell is the box of half-cells
+# around it, and a child tile, whose region spans parent nodes lo .. hi
+# along each dimension, covers the orthant of signs s_d exactly when the
+# half-cell on each side s_d lies inside [lo, hi]: the + side for
+# lo ≤ g ≤ hi − 1, the − side for lo + 1 ≤ g ≤ hi. The mask records the
+# covered orthants as bits, one per orthant, so a node on a child's face
+# keeps the half of its cell outside the child, a corner a quarter, and a
+# node shared by two abutting tiles is covered by both halves. The fine
+# patch's own quadrature gives its boundary planes half weights, so the
+# two sides of a coarse-fine face sum to one and the plane is counted
+# once, which is the same rule `volume_integral` applies to a same-level
+# interface plane. A union of lattice tiles is covered by the union of
+# their bits, which is why the mask is per orthant and not a per-dimension
+# factor.
+
+"The covered mask of a patch decomposed as `decomp`: uncovered everywhere."
+_covered_mask(decomp::Decomp) =
+    zeros(UInt8, ntuple(d -> decomp.n_local[d] + 2 * decomp.n_halo_d[d], 3))
+
+"""
+    _fill_covered!(patch, regions)
+
+Rewrite `patch.covered` from the child regions `regions`, given in this
+patch's level node space (a `LevelTransfer.region` of the level below).
+Rank-local: it reads the regions and the patch's own block placement, both
+of which every rank of the patch's level holds.
+"""
+function _fill_covered!(patch::Patch, regions::Vector{BlockRegion})
+    covered = patch.covered
+    fill!(covered, zero(UInt8))
+    decomp = patch.decomp
+    o = decomp.n_halo_d
+    n = decomp.n_local
+    base = ntuple(d -> patch.region.offset[d] + decomp.offset[d], 3)
+    for r in regions
+        lo = ntuple(d -> r.offset[d] + 1, 3)
+        hi = ntuple(d -> r.offset[d] + r.extent[d], 3)
+        # Local interior indices of the nodes the region meets.
+        rng = ntuple(d -> decomp.active[d] ?
+                     (max(lo[d] - base[d], 1):min(hi[d] - base[d], n[d])) :
+                     (1:1), 3)
+        any(isempty, rng) && continue
+        @inbounds for k in rng[3], j in rng[2], i in rng[1]
+            g = (base[1] + i, base[2] + j, base[3] + k)
+            # Per dimension, whether the − and + half-cells are covered; a
+            # collapsed dimension is spanned by every region.
+            minus = ntuple(d -> !decomp.active[d] || lo[d] + 1 <= g[d] <= hi[d], 3)
+            plus = ntuple(d -> !decomp.active[d] || lo[d] <= g[d] <= hi[d] - 1, 3)
+            bits = zero(UInt8)
+            for b in 0:7
+                s1, s2, s3 = b & 1, (b >> 1) & 1, (b >> 2) & 1
+                (s1 == 1 ? plus[1] : minus[1]) &&
+                    (s2 == 1 ? plus[2] : minus[2]) &&
+                    (s3 == 1 ? plus[3] : minus[3]) || continue
+                bits |= UInt8(1) << b
+            end
+            I = CartesianIndex(i + o[1], j + o[2], k + o[3])
+            covered[I] |= bits
+        end
+    end
+    return patch
+end
+
+"Fraction of a node's quadrature cell no child covers, from its mask byte."
+@inline uncovered_fraction(m::UInt8) = (8 - count_ones(m)) / 8
+
+"""
+    uncovered_plane_fraction(m, d)
+
+Fraction of a node's cell within the plane normal to `d` that no child
+covers: the plane's sub-cells pair the orthants across `d`, and a sub-cell
+is covered when either orthant of its pair is (a child covering a half-cell
+on one side of the plane covers the plane itself).
+"""
+@inline function uncovered_plane_fraction(m::UInt8, d::Int)
+    bit = UInt8(1) << (d - 1)
+    free = 0
+    for b in 0:7
+        (b & Int(bit)) == 0 || continue
+        lo = (m >> b) & 0x01
+        hi = (m >> (b | Int(bit))) & 0x01
+        (lo | hi) == 0 && (free += 1)
+    end
+    return free / 4
 end
 
 # Property names owned by the patch's shared [`RHSWorkspace`](@ref) rather than
@@ -245,7 +343,7 @@ end
     n === :p || n === :T_ion || n === :c || n === :cp_mix || n === :Y ||
     n === :mu_art || n === :beta_art || n === :kappa_art || n === :D_art ||
     n === :inv_J || n === :area_d || n === :inv_h || n === :inv_r ||
-    n === :cot_over_r || n === :cot_over_r_gcl ||
+    n === :cot_over_r || n === :cot_over_r_gcl || n === :covered ||
     n === :field_tuples || _is_workspace_prop(n)
 
 # The read behind both forwards: a workspace name takes one further hop.

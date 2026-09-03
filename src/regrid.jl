@@ -506,6 +506,7 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
     end
     levels[2] = Level{T}(1, new_lc, owners, group, held ? [1] : Int[],
                          held ? [fi] : Int[], [newlt])
+    _fill_covered!(patches[1], [newregion])
     held && init_geometry!(PatchSolver(solver, newfine))
     _fill_fine_from_coarse!(solver, states, newlt)
     held && _carry_over!(states[fi], newfine.decomp, newregion, old_gather,
@@ -924,6 +925,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     else
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers)
     end
+    _fill_covered!(root, wanted)
     fresh = [ti for ti in eachindex(wanted) if !kept[ti]]
     for ti in fresh
         li = local_of[ti]

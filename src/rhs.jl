@@ -583,7 +583,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   f(), f(), f(),
                   [f() for _ in 1:n_species],
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(), f(),
-                  ws_root)
+                  ws_root, _covered_mask(decomp))
     if isempty(refines)
         patches = [patch]
         solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
@@ -749,6 +749,14 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
+    # Each held patch's covered mask from the regions of the level below,
+    # which every rank of the patch's level holds (`_fill_covered!`).
+    for ℓ in 1:length(levels)-1
+        child_regions = [lt.region for lt in levels[ℓ + 1].transfers]
+        for li in levels[ℓ].patches
+            _fill_covered!(patches[li], child_regions)
+        end
+    end
     return solver
 end
 
@@ -814,7 +822,7 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                  g(), g(), g(),
                  [g() for _ in 1:n_species],
                  g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
-                 ws)
+                 ws, _covered_mask(decomp_f))
 end
 
 _fine_bcs(active_g::NTuple{3,Bool}, faces::NTuple{3,NTuple{2,Int}}) =
@@ -904,7 +912,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
               g(), g(), g(),
               [g() for _ in 1:n_species],
               g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
-              ws)
+              ws, _covered_mask(dcp))
     end
     ghost_sends, ghost_recvs, plane_pairs = build_interface_records(
         T, world, regions, faces_all, my_pids, [p.decomp for p in patches], n_cons)
@@ -1420,6 +1428,20 @@ conserved layout.
 """
 refresh_primitives!(solver::SolverLike, Q) =
     (exchange_state!(Q, solver.decomp); primitives!(solver, Q); solver)
+
+"""
+    refresh_primitives!(solver, states::Vector)
+
+The multi-patch form: every patch this rank holds, in patch order, from
+the state vector aligned with `solver.patches`. Each patch's exchange is
+collective over that patch's own communicator, whose ranks all hold it.
+"""
+function refresh_primitives!(solver::Solver, states::Vector{<:ConservedState})
+    for (ps, Q) in eachpatch(solver, states)
+        refresh_primitives!(ps, Q)
+    end
+    return solver
+end
 
 """
     compute_primitives_and_gradients!(solver, Q, primitives_current=false)

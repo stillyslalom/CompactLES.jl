@@ -1543,6 +1543,16 @@ function test_tiled_level()
         check("tag history: checks and creation record agree across ranks",
               maximum(abs.(spread)), 0.5)
         check("tag history: eight checks over forty steps", abs(spec.checks - 8), 0.5)
+        # The root's covered mask follows the regrids: it equals a fresh
+        # fill from the current tile set on every rank, and the composite
+        # volume stays exact across them.
+        root = solver.patches[1]
+        kept = copy(root.covered)
+        CL._fill_covered!(root, level_regions(solver, 1))
+        check("covered mask: rewritten by the regrids on every rank",
+              gsum(count(kept .!= root.covered)), 0.5)
+        check("covered mask: composite volume exact after the regrids",
+              gmax(abs(domain_volume(solver) - 1)), 1e-13)
     end
 
     # Stored ownership and rebalancing on the same regrids. A callback at
@@ -1600,10 +1610,15 @@ function test_tiled_level()
         CL.MIGRATION_AUDIT[] = false
         audit = CL.MIGRATION_AUDIT_RESULT[]
         spec = getfield(solver, :regrid)
+        # At np = 2 the level is two runs of the curve cut by cumulative
+        # measured weight, and whether that cut moves a survivor depends on
+        # the busy-time spread the run happened to measure (observed both
+        # ways on the workstation); from np = 4 a fresh tile entering ahead
+        # of the survivors shifts them under any weights.
         check("rebalance on: a measured spread repartitioned the level",
-              np > 1 && gmax(moved) == 0 ? 1.0 : 0.0, 0.5)
+              np >= 4 && gmax(moved) == 0 ? 1.0 : 0.0, 0.5)
         check("migration: a moved tile was audited against the gather",
-              np > 1 && gsum(audit.tiles) == 0 ? 1.0 : 0.0, 0.5)
+              np >= 4 && gsum(audit.tiles) == 0 ? 1.0 : 0.0, 0.5)
         check("migration: migrated state equals the gathered carry bitwise",
               gsum(audit.mismatches), 0.5)
         check("rebalance on: tile count tracks as serial (4)",
@@ -1764,6 +1779,57 @@ function test_level_subset()
           abs(gmax(solver.t) - 0.0055480541568169563), 1e-13)
 end
 
+# ---------------------------------------------------------------------------
+# Covered masks under decomposition. The composite quadrature of a linear
+# field on a wall-bounded box is exact, so the masked volume, integral and
+# plane profile are known to round-off on every layout, and every rank
+# returns the same number: the reduction runs over the root communicator,
+# which a rank holding no piece of the refined level enters with its root
+# block alone. The small region admits one rank, so at np > 1 some ranks
+# are outside the child's subset. No stepping: setup and the reductions.
+# ---------------------------------------------------------------------------
+function test_covered_masks()
+    section("covered masks: composite quadrature under decomposition")
+    wall = (SlipWallBC(), SlipWallBC())
+    N = 24
+    lin(x, y, z) = x + 2y + 3z
+    spread(x) = MPI.Allreduce(Float64(x), max, comm) -
+                MPI.Allreduce(Float64(x), min, comm)
+    small = BlockRegion((8, 8, 8), (4, 4, 4))
+    wide = BlockRegion((6, 6, 6), (8, 8, 8))
+    for (label, tile, refine) in (("small box", 0, small),
+                                  ("tile nest", 4, wide),
+                                  ("three levels", 0, [wide, BlockRegion((24, 24, 24), (8, 8, 8))]))
+        solver = Solver(n_global=(N, N, N), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(wall, wall, wall), refine=refine, tile=tile)
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
+        fs = map(CL.eachpatch(solver, states)) do (ps, Q)
+            a = similar(ps.rho)
+            d = ps.decomp
+            for k in 1:d.n_local[3], j in 1:d.n_local[2], i in 1:d.n_local[1]
+                a[gidx(ps, i, j, k)] = lin(xcoord(ps, 1, i), xcoord(ps, 2, j),
+                                           xcoord(ps, 3, k))
+            end
+            a
+        end
+        V = domain_volume(solver)
+        I = volume_integral(solver, fs)
+        prof = plane_profile(solver, fs, 1)
+        xs = profile_coordinate(solver, 1)
+        outside = MPI.Allreduce(Int(!solver.levels[2].level_comm.owned), +, comm)
+        check("$label: composite volume exact", gmax(abs(V - 1)), 1e-13)
+        check("$label: composite linear integral exact", gmax(abs(I - 3)), 1e-13)
+        check("$label: composite profile exact",
+              gmax(maximum(abs.(prof .- (xs .+ 2.5)))), 1e-12)
+        check("$label: every rank returns the same numbers",
+              spread(V) + spread(I) + spread(sum(prof)), 1e-15)
+        label == "small box" &&
+            check("small box: ranks outside the child's subset at np > 1",
+                  abs(outside - (np - 1)), 0.5)
+    end
+end
+
 const SUITE = (
     ("periodic C6", test_periodic_c6),
     ("pentadiagonal C10", test_pentadiagonal_c10),
@@ -1773,6 +1839,7 @@ const SUITE = (
     ("distributed refinement", test_refined_decomposed),
     ("level rank subsets", test_level_subset),
     ("tiled refinement", test_tiled_level),
+    ("covered masks", test_covered_masks),
     ("AMR transfer pair", test_transfer_pair),
     ("halo consistency", test_halo_consistency),
     ("off-rank folds", test_offrank_folds),

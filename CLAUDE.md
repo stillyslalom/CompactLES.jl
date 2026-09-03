@@ -75,11 +75,11 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 125 testsets, 0 failures
+julia --project=. test/runtests.jl        # 127 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 170/170 each
+  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 185/185 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
@@ -98,13 +98,13 @@ binding and that every exported name with a docstring is rendered somewhere
 it is listed in a `@docs` block on some page; otherwise write it in plain
 backticks. `runtests.jl` includes the same check as its last testset.
 
-The `125 testsets` and the `170/170` are counted by different mechanisms and are
+The `127 testsets` and the `185/185` are counted by different mechanisms and are
 not comparable. `runtests.jl` runs everything inside one top-level
 `@testset` and prints one summary tree at the end: the top row totals the
 `@test`s, and each row beneath it is one `@testset` of the suite, the ones
 its includes contribute too (`float32_validation.jl`, `device_tests.jl`,
 `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, `docrefs_tests.jl`, and
-the device/adapt testsets); the `125` counts those rows. A failure is
+the device/adapt testsets); the `127` counts those rows. A failure is
 recorded and the suite runs on, so one run reports every failure, and the
 outer testset raises at the end. `mpi_tests.jl` uses `Test` not
 at all and counts individual `check(name, val, tol)` assertions, printing
@@ -296,6 +296,16 @@ Names are spelled out in full. Current vocabulary:
   tile in regrid checks, `checks` counts the checks and `created` (per
   current tile region, the check it was created at) is the tag history,
   derived from the reduced flags on every rank
+- `covered` (a `Patch` field: per node, the orthants of its quadrature
+  cell a child level covers, as bits; host `UInt8` over the padded
+  extent, written by `_fill_covered!` at setup and at every regrid from
+  the child regions every rank of the parent's level holds),
+  `uncovered_fraction` / `uncovered_plane_fraction` (the volume and
+  in-plane weights a mask byte gives), `_composite` (whether a solver's
+  diagnostics take the multi-patch forms), `_composite_profile` /
+  `_plane_accumulate!` (the composite plane average at the root's
+  stations). A diagnostic's `Vector` form is the composite, masked one; the
+  single-array form is the one-patch quadrature and applies no mask
 - `pointwise!` (the shared launcher of every per-point loop: `Array` storage
   takes `@threaded`, device storage a KernelAbstractions kernel),
   `pointwise_ka!`, `FORCE_KA` (test/bench toggle), and the `_point!` suffix

@@ -451,14 +451,53 @@ of the bounding box at tile 6 and 47% at tile 12.
 ### Tagging and regridding
 
 `regrid_interval = K` retags the parent level every K steps at the head of
-the step loop. The tag is the relative undivided fourth difference of the
-mixture density, Σ_d |δ⁴_d ρ|/ρ > `tag_threshold`, read from Q directly so
-that tagging needs no primitives pass; the tagged set is buffered by
-`tag_buffer` (default 4, the pollution-decay figure of constraint 7) and
-clamped to the nesting margin, and its bounds are reduced globally so every
-rank derives the same region. The retry savepoint refreshes at a regrid,
-since restoring across a layout change is not meaningful. Regridding is
-two-level: the root and one refined level.
+the step loop. The tag is a union of criteria, each a per-point body over
+the parent level's state run through `pointwise!` on the host
+(`_tag_sweep!`, `src/regrid.jl`), writing into a host scratch on the
+`RegridSpec`:
+
+- the relative undivided fourth difference of the mixture density,
+  Σ_d |δ⁴_d ρ|/ρ > `tag_threshold`, read from Q directly so that tagging
+  needs no primitives pass; always on;
+- the artificial diffusivity number
+  ((μ\* + β\*)/ρ + κ\*/(ρ c_p) + max_k D\*_k)/(c h) > `tag_sensor_threshold`,
+  the scheme's own statement that a feature is under-resolved. It is read
+  from the per-patch coefficient arrays, which are C·ρ·max(sensor, 0) of
+  the evaluation that wrote them and outlive it, never from the pooled
+  workspace's `sensor`, which at the head of the step holds whichever
+  patch of that padded extent evaluated last. A captured Sod shock reads
+  about 2 under the default C_β;
+- the mass-fraction change per cell, max_k |δY_k| over the centered
+  difference of one cell, > `tag_gradient_threshold`, for mixing layers;
+- the vorticity magnitude from centered differences > `tag_vorticity_threshold`;
+- a user closure `tag_predicate(patch, I) -> Bool` over the parent
+  `PatchSolver` and a padded index, run serially on the host.
+
+Every criterion but the first is off by default. The tagged set is buffered
+by `tag_buffer` (default 4, the pollution-decay figure of constraint 7) and
+clamped to the nesting margin, and its bounds (or its lattice flags) are
+reduced globally so every rank derives the same region; a rank-local
+decision here would be a deadlock, since the ranks would then split
+different communicators.
+
+Derefinement carries hysteresis. A body writes one of two levels: the node
+tags above its criterion's threshold and holds above the threshold over
+`untag_ratio` (default 2). A held node keeps an existing tile, or the
+current box, and calls for no new one, so a tile at the edge of a feature
+does not flicker as the feature crosses the threshold; `untag_ratio = 1`
+reproduces the rule without the band bit for bit. A tile is not dropped
+before `tile_lifetime` regrid checks (default 1) since its creation. The
+history the two rules need is on the `RegridSpec`: `checks` counts the
+regrid checks and `created` records, per current tile region, the check it
+was created at. Both are derived from the reduced flags, so every rank
+holds the same record, and both are state the checkpoint will carry. On
+the Sod cases the band holds the marginal tile ahead of the shock one check
+longer and stops its re-creation, and it keeps the rarefaction head's tiles,
+a marginal feature that the threshold alone admits and drops.
+
+The retry savepoint refreshes at a regrid, since restoring across a layout
+change is not meaningful. Regridding is two-level: the root and one refined
+level.
 
 **The box regrid** (`tile = 0`) rebuilds the level's one patch over the
 bounding box of the tagged set when that box moved. The new patch and
@@ -476,7 +515,9 @@ last was instead of collapsing it.
 
 **The tiled regrid** is a set difference over the lattice (`_tag_tiles`,
 one flag per lattice cell reduced over the communicator, then
-`_regrid_tiles!`): a cell is wanted when any buffered tagged node meets it;
+`_regrid_tiles!`): a cell is wanted when any buffered node at the tag level
+meets it, and an existing cell also when a held node meets it or its tile
+is younger than the lifetime;
 a wanted tile that exists keeps its region, and when its owner range
 survives too it keeps its arrays and its state, taking only a new id,
 faces and transfer; a newly wanted tile is built and initialized by
@@ -495,6 +536,56 @@ gives 7.3e-2 (26×), with fine resolution over a third of the domain;
 Shu–Osher 10× better in L∞ over the wave train, 6.7× in L1, at 2497 coarse
 steps against the reference's 4662. The tiled regrid reproduces the Sod
 moving-region gate.
+
+### Diagnostics on the composite grid
+
+Every reduction that reports a physical quantity over a refined run must
+exclude the coarse nodes a child level covers, and exclude them exactly
+once; a double-counted covered node is the single most likely source of a
+silently wrong number in a multi-level run. The data model is a per-patch
+mask, `Patch.covered`: one host byte per node of the padded extent, each
+bit the orthant of the node's quadrature cell (signs s_d along the three
+dimensions, bit (s1 > 0) + 2(s2 > 0) + 4(s3 > 0)) that a child tile covers.
+With node-centered quadrature a tile spanning parent nodes lo .. hi covers
+the + side of a node for lo ≤ g ≤ hi − 1 and the − side for lo + 1 ≤ g ≤ hi,
+so a node on a child's face keeps half its cell, an edge node three
+quarters, a corner seven eighths, and a node shared by two abutting tiles
+is covered by both halves; a union of lattice tiles is the union of their
+bits, which is why the mask is per orthant and not a per-dimension factor.
+`_fill_covered!` writes it at setup and at every regrid from the child
+regions, which every rank of the parent's level holds (`Level.transfers`),
+so it follows the tiles a rank holds and is readable on the parent's ranks
+alone, where the covered nodes lie; it is rank-local and runs no
+collective.
+
+The diagnostics route through it in their `Vector` forms, one full padded
+array (or one state) per held patch aligned with `solver.patches`:
+`volume_integral`, `domain_volume`, `volume_average`, `plane_profile`,
+`species_pdf`, `mix_width`, `molecular_mixing`, `tke_profile`,
+`turbulent_kinetic_energy` and `dissipation_rate`. A coarse node's weight
+is its quadrature weight times the fraction of its cell no child covers
+(`uncovered_fraction`); a plane average uses the in-plane fraction
+(`uncovered_plane_fraction`, the orthant pairs across the profile
+direction), samples the root's stations only, and takes each finer patch's
+coincident planes with that patch's own transverse cell measure, a plane
+two abutting tiles share counting half from each. The fine patch's own
+quadrature gives its boundary planes half weights, so the two sides of a
+coarse-fine face sum to one, the same rule the same-level interface plane
+follows. Every composite form accumulates the rank's patches and reduces
+once over the root communicator, so a rank holding no piece of a refined
+level enters the reduction with its root block and returns the same
+number. The single-array forms are the one-patch quadrature as it always
+was and apply no mask.
+
+The composite quadrature is exact for a linear field on a wall-bounded
+box, which pins it to round-off on one refined patch, a 3×3×3 tile nest
+and a three-level nest, where the same sums without the masks carry the
+covered volume twice (serial and MPI suites). On Taylor–Green at 24³ with an
+8³ region refined off-center, the composite energy history over 61 steps
+stays within 2.5e-4 of the single-level history, the fine sampling's own
+quadrature difference, where the unmasked sum sits 1.4e-2 above it; the
+same check runs in `bench/tgv_energy.jl` with `refine=`. The mixing-layer
+cost case's ∫Y(1−Y)dV (`bench/amr_cost.jl`) is this quadrature.
 
 ### Startup and rollback traps
 
@@ -603,6 +694,7 @@ Each collective is scoped to the rank set that owns the data it moves:
 | `_rebalance_due!` busy-time Allgather | the root communicator | every rank, when `rebalance > 0` |
 | `_migrate_tile!` (point-to-point, no collective) | the root communicator | the moved tile's old and new owners |
 | `max_rate`, `positivity_floors`, `WhenState` | the root communicator | every rank |
+| the composite diagnostics (the `Vector` forms of `volume_integral` and the rest) | the root communicator | every rank, its own patches accumulated first |
 
 The first two rows follow from the construction rather than from a separate
 scoping decision. The records are built on the level's communicator, over a
@@ -982,9 +1074,7 @@ sequencing item that delivers it.
 
 | assumption | replaced by | item |
 |---|---|---|
-| one tag criterion, no hysteresis | [Tag criteria and hysteresis](#tag-criteria-and-hysteresis) | 4 |
-| diagnostics do not mask covered coarse nodes | [Covered masks, I/O and restart](#covered-masks-io-and-restart) | 4 |
-| I/O and restart are single-patch | [Covered masks, I/O and restart](#covered-masks-io-and-restart) | 5 |
+| I/O and restart are single-patch | [I/O and restart](#io-and-restart) | 5 |
 | the banded (C10) schemes have no interface closures | [Banded schemes](#banded-schemes) | 6 |
 | tiled levels are host-only; the transfer chain and tagging run on the host | [Device](#device) | 7 |
 | no rate check per substep; measured weights carry the root's work | [Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check) | as needed |
@@ -999,39 +1089,7 @@ configurations that need no rank-partitioned carry.
 Each subsection is the design as it stands; the order is the dependency
 order, which [Sequencing](#sequencing) turns into deliverables with gates.
 
-### Tag criteria and hysteresis
-
-The tag becomes a union of criteria, each a per-point body over the parent
-level's state:
-
-- the relative δ⁴ρ tag that exists;
-- the artificial-property `sensor` field, which is already computed,
-  already smoothed, and is the scheme's own statement that a feature is
-  under-resolved (a nonzero β* means the scheme has admitted it);
-- `|∇Y|` for mixing layers, and vorticity magnitude for turbulence;
-- a user closure `(patch, I) -> Bool` for problem-specific regions.
-
-Derefinement uses hysteresis: a tag threshold and a lower untag threshold
-(default ratio 2), and a minimum tile lifetime in regrid intervals, so a
-tile at the edge of a feature does not flicker. Clustering stays the set of
-lattice tiles meeting any buffered tagged node, clamped to nesting, as
-delivered; `tag_buffer` stays the pollution-decay figure and is remeasured
-for C10. The tag history that hysteresis needs is state and goes in the
-checkpoint. On the device the tag becomes a `pointwise!` body and an exact
-bounds reduction, so the regrid cadence stops being a download
-([Device](#device)).
-
-### Covered masks, I/O and restart
-
-Every reduction that reports a physical quantity (`plane_profile`,
-`mix_width`, the TGV energy history, the mixedness metric) must exclude
-covered coarse nodes or it double-counts, and that is the single most
-likely source of a silently wrong number in a multi-level run. Each patch
-carries a `covered` mask, and every `quad_weight`/`cell_measure` reduction
-routes through it. The mask's data model is still to be defined: it must
-survive a regrid, follow the tiles a rank holds, and be readable by a
-diagnostic that runs on the parent's ranks alone, since the covered nodes
-of a child lie on parent ranks outside the child's subset.
+### I/O and restart
 
 A tile writes its `region` as a hyperslab the way a rank block does, so the
 HDF5 checkpoint gains one group per level, each holding the level's fields
@@ -1172,25 +1230,24 @@ a structure.
 ## Sequencing
 
 Each item names its gate. Nothing is built ahead of the item before it.
-Items 1–3 are delivered and described in Part I: the level hierarchy with
+Items 1–4 are delivered and described in Part I: the level hierarchy with
 its recursive driver ([Refinement](#refinement)), the tiled fine level with
 full adjacency and the set-difference regrid
-([Tiles and adjacency](#tiles-and-adjacency)), and ownership
+([Tiles and adjacency](#tiles-and-adjacency)), ownership
 ([Ownership and load balance](#ownership-and-load-balance)), which was
 pulled ahead of tagging and I/O because a flat globally ordered
 `solver.patches`, an equal patch count per rank, and full-communicator
 gather tables on every `LevelTransfer` are structural, and diagnostics or
 I/O built on them would have been rebuilt once ranks held different tile
-subsets. Their gates hold in the serial and MPI suites; the per-substep
+subsets, and the tag criteria with their hysteresis and the covered masks
+([Tagging and regridding](#tagging-and-regridding),
+[Diagnostics on the composite grid](#diagnostics-on-the-composite-grid)).
+Their gates hold in the serial and MPI suites; the per-substep
 rate check deferred from item 1 is under
 [Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check),
-and the cluster measurements the three items leave open are under
+and the cluster measurements the items leave open are under
 [Open measurements](#open-measurements).
 
-4. **Tag criteria and hysteresis; covered masks in every diagnostic.** Gate:
-   the mixing-layer cost case reproduced through the sensor-based tag; the
-   TGV energy history on a refined run equal to the single-level history
-   where the refined region is inactive.
 5. **Multi-level HDF5 and VTK, restart of the hierarchy.** Gate: restart on
    a different rank count continues bit-identically for the delivered
    serial-restart cases and to round-off under MPI.
@@ -1206,6 +1263,6 @@ and the cluster measurements the three items leave open are under
    shock, filter rows at the shell. Each is a measurement first and a
    change only if the measurement demands one.
 
-Items 1–3 make a run possible, 4 makes it usable, 5 and 7 make it fast, 6
-is independent and lands whenever a case wants C10. The rate check and the
-root-work correction land inside whichever item first needs them.
+Items 1–4 make a run possible and its numbers trustworthy, 5 and 7 make it
+fast, 6 is independent and lands whenever a case wants C10. The rate check
+and the root-work correction land inside whichever item first needs them.

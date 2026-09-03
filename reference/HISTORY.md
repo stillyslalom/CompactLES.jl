@@ -972,3 +972,26 @@ patch/workspace split ahead of tagging and I/O) and recorded why a
 per-substep rate check is not yet built; both are in `AMR_GPU.md`. The
 tile=0 paths stay bit-identical; the 2×2 tile nest moved at the 1e-15
 level. Serial suite 118 testsets; MPI 121 checks.
+
+## Tag criteria, hysteresis and covered masks (September 2026)
+
+The regrid tag became a union of per-point criteria over the parent
+level's state, each a `pointwise!` body: the relative δ⁴ρ that existed,
+the artificial diffusivity number of the last right-hand side read from
+the per-patch coefficient arrays, the mass-fraction change per cell, the
+vorticity magnitude, and a user closure; every new criterion is off by
+default and the δ⁴ path reproduces the Sod regrid cases bit for bit.
+Derefinement gained a hold band (`untag_ratio`, default 2) and a tile
+lifetime, with the tag history (`checks`, `created`) derived from the
+reduced flags on every rank; the band holds the marginal tile ahead of
+the Sod shock one check longer and stops its re-creation, which moved the
+MPI suite's pinned tile sets, and `untag_ratio = 1` reproduces the old
+trajectory exactly. Every patch carries a per-orthant covered mask
+written at setup and every regrid from the child regions, and the
+diagnostics gained composite forms routed through it: exact for a linear
+field on one refined patch, a tile nest and a three-level nest, with the
+unmasked sums off by the covered volume. Measured: the refined
+Taylor–Green energy history at 24³ with an 8³ region stays within 2.5e-4
+of the single-level one over 61 steps where the unmasked sum sits 1.4e-2
+above; the mixing-layer cost case's mixedness is now the masked quadrature.
+Serial suite 127 testsets; MPI 185 checks.
