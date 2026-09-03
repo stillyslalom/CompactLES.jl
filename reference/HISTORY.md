@@ -993,5 +993,7 @@ field on one refined patch, a tile nest and a three-level nest, with the
 unmasked sums off by the covered volume. Measured: the refined
 Taylor–Green energy history at 24³ with an 8³ region stays within 2.5e-4
 of the single-level one over 61 steps where the unmasked sum sits 1.4e-2
-above; the mixing-layer cost case's mixedness is now the masked quadrature.
-Serial suite 127 testsets; MPI 185 checks.
+above; the mixing-layer cost case at np = 8, its mixedness now the masked
+quadrature, lands 4.6× closer to the fine answer than the coarse run under
+the δ⁴ρ tag and 4.1× under the sensor tag alone, at 43% and 35% of the
+fine wall. Serial suite 127 testsets; MPI 185 checks.

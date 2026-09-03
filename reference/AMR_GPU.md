@@ -612,6 +612,15 @@ run at 49% of the fine wall and 24% of its memory (342 s / 655 MiB vs
 696 s / 2737 MiB; coarse 45 s / 179 MiB). Pointwise in-region error is the
 wrong metric: coarse and composite both sit at max ≈ 0.19 against fine
 there, the sub-cell displacement of a near-discontinuous interface.
+Rerun with the masked quadrature and the tag criteria: under the δ⁴ρ tag
+the composite's mixedness error is 1.5e-3 against the coarse run's
+6.9e-3 (4.6× closer) at 43% of the fine wall (204 s against 471 s; the
+coarse run 18 s), and under the sensor tag alone (`tag=sensor
+sensor=0.02`, the δ⁴ criterion parked; the artificial diffusivity number
+is confined to the interface shell, nothing above 0.02 farther than 0.6
+from it on the coarse grid) 1.7e-3 at 35% of the fine wall, tracking the
+blob to the same final region. The two wall figures are single runs at
+np = 8 with the run-to-run spread `CLAUDE.md` records.
 
 **Per-tile costs.** Setup costs 0.06–0.12 s per tile in plan construction,
 which argues for tile edges of 12 or more in 3-D. The shared RHS scratch,
