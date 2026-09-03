@@ -482,10 +482,13 @@ different communicators.
 
 Derefinement carries hysteresis. A body writes one of two levels: the node
 tags above its criterion's threshold and holds above the threshold over
-`untag_ratio` (default 2). A held node keeps an existing tile, or the
-current box, and calls for no new one, so a tile at the edge of a feature
-does not flicker as the feature crosses the threshold; `untag_ratio = 1`
-reproduces the rule without the band bit for bit. A tile is not dropped
+`untag_ratio` (default 2). A held node keeps an existing tile and calls
+for no new one, so a tile at the edge of a feature does not flicker as the
+feature crosses the threshold; `untag_ratio = 1` reproduces the rule
+without the band bit for bit. For the box, held nodes inside the current
+box extend a box that some tagged node is rebuilding to reach them, and a
+signal with no tagged node anywhere keeps the box whole, so the band
+never shrinks the box onto its held nodes. A tile is not dropped
 before `tile_lifetime` regrid checks (default 1) since its creation. The
 history the two rules need is on the `RegridSpec`: `checks` counts the
 regrid checks and `created` records, per current tile region, the check it
@@ -525,7 +528,11 @@ interpolation of the parent; an unwanted one is dropped, its last
 restriction already on the parent. Between distinct lattice cells no
 carry-over arises: they overlap in a shared plane at most, and that plane
 takes the neighbor's values at the first averaging after the regrid, a
-one-node perturbation of interpolation order. A surviving tile whose owner
+one-node perturbation of interpolation order. A refined level is never
+empty: as for the box, a check at which no cell reaches the hold level
+keeps the tile set as it is, whatever the lifetimes say, so a feature that
+fades entirely leaves its last tiles in place rather than emptying the
+level, which the hierarchy does not represent. A surviving tile whose owner
 range moved is rebuilt on its new owners and takes its evolved interior back
 by point-to-point migration
 ([Ownership and load balance](#ownership-and-load-balance)).
@@ -1272,6 +1279,10 @@ and the cluster measurements the items leave open are under
    shock, filter rows at the shell. Each is a measurement first and a
    change only if the measurement demands one.
 
-Items 1–4 make a run possible and its numbers trustworthy, 5 and 7 make it
-fast, 6 is independent and lands whenever a case wants C10. The rate check
-and the root-work correction land inside whichever item first needs them.
+Items 1–4 make a run possible and its diagnostics count each node once, 5
+and 7 make it fast, 6 is independent and lands whenever a case wants C10.
+The conservation drift and the boundary numerics of item 8 remain open
+debts on the target problems, so a production acceptance still needs a
+conservation budget tied to the reported mixing and energy quantities. The
+rate check and the root-work correction land inside whichever item first
+needs them.

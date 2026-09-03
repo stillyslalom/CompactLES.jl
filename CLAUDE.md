@@ -75,7 +75,7 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 127 testsets, 0 failures
+julia --project=. test/runtests.jl        # 128 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
@@ -98,13 +98,13 @@ binding and that every exported name with a docstring is rendered somewhere
 it is listed in a `@docs` block on some page; otherwise write it in plain
 backticks. `runtests.jl` includes the same check as its last testset.
 
-The `127 testsets` and the `185/185` are counted by different mechanisms and are
+The `128 testsets` and the `185/185` are counted by different mechanisms and are
 not comparable. `runtests.jl` runs everything inside one top-level
 `@testset` and prints one summary tree at the end: the top row totals the
 `@test`s, and each row beneath it is one `@testset` of the suite, the ones
 its includes contribute too (`float32_validation.jl`, `device_tests.jl`,
 `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, `docrefs_tests.jl`, and
-the device/adapt testsets); the `127` counts those rows. A failure is
+the device/adapt testsets); the `128` counts those rows. A failure is
 recorded and the suite runs on, so one run reports every failure, and the
 outer testset raises at the end. `mpi_tests.jl` uses `Test` not
 at all and counts individual `check(name, val, tol)` assertions, printing

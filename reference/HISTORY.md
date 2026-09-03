@@ -997,3 +997,17 @@ above; the mixing-layer cost case at np = 8, its mixedness now the masked
 quadrature, lands 4.6× closer to the fine answer than the coarse run under
 the δ⁴ρ tag and 4.1× under the sensor tag alone, at 43% and 35% of the
 fine wall. Serial suite 127 testsets; MPI 185 checks.
+
+A review of the item found three defects, all fixed. A box regrid whose
+tagged set lay inside the upper margin band kept the tagged end and
+widened outward, so the box reached parent samples the gather never
+fills and interpolated zeros into the fine state (a constant density came
+out between −0.085 and 1.085); both ends now clamp into the feasible
+interval, the widening runs inward, and the regrid re-asserts the nesting
+rule. A hold-only tag signal rebuilt the box around the held nodes, a
+41-node box shrinking to four, where the band's contract is to keep it;
+a signal with no tagged node now keeps the box whole. The recursive
+driver passed the root's 0-based step count into a 1-based recursion, so
+level 2 saw substep counts 4–12 in place of 1–9 and `filter_interval > 1`
+applied the wrong number and phase of passes at depth two; two-level runs
+were unaffected. Serial suite 128 testsets.

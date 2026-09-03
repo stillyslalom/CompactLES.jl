@@ -279,27 +279,33 @@ function _in_regions(regions::Vector{BlockRegion}, g::NTuple{3,Int})
 end
 
 # Global bounding box of the tagged set, or `nothing`: every node at the
-# tag level, plus the held nodes inside the current refined regions.
-# Collective (one Allreduce), so every rank derives the identical box.
+# tag level, plus the held nodes inside the current refined regions. A
+# signal with no node at the tag level anywhere returns `nothing`, so the
+# current box is kept whole: the held nodes can only extend a box that a
+# tagged node is rebuilding, never shrink one onto themselves, which is
+# the box's form of a held tile surviving. Collective (one Allreduce), so
+# every rank derives the identical box.
 function _tag_bounds(solver::Solver, Qc)
     dcp = getfield(solver, :patches)[1].decomp
     current = [lt.region for lt in getfield(solver, :levels)[2].transfers]
     lo = Ref((typemax(Int), typemax(Int), typemax(Int)))
     hi = Ref((0, 0, 0))
+    marked = Ref(0)
     _tag_sweep!(solver, Qc) do g1, g2, g3, level
+        level == TAG_MARK && (marked[] = 1)
         level == TAG_MARK || _in_regions(current, (g1, g2, g3)) || return nothing
         lo[] = min.(lo[], (g1, g2, g3))
         hi[] = max.(hi[], (g1, g2, g3))
         return nothing
     end
     # A rank with no tagged cell contributes typemax/0 sentinels that lose
-    # every min/max.
+    # every min/max; the mark flag rides along as a negated maximum.
     lo_g = ntuple(d -> hi[][d] == 0 ? typemax(Int) ÷ 2 : lo[][d], 3)
     hi_g = hi[]
-    red = MPI.Allreduce(Int64[lo_g..., (-).(hi_g)...], min, dcp.comm)
+    red = MPI.Allreduce(Int64[lo_g..., (-).(hi_g)..., -marked[]], min, dcp.comm)
+    red[7] == 0 && return nothing
     glo = ntuple(d -> Int(red[d]), 3)
     ghi = ntuple(d -> -Int(red[3 + d]), 3)
-    ghi[1] == 0 && ghi[2] == 0 && ghi[3] == 0 && return nothing
     return (glo, ghi)
 end
 
@@ -324,12 +330,13 @@ function tagged_region(solver::Solver, Qc)
     n_global = solver.n_global
     offext = ntuple(3) do d
         n_global[d] > 1 || return (0, 1)
-        lo = max(tlo[d] - spec.buffer, margin + 1)
-        hi = min(thi[d] + spec.buffer, n_global[d] - margin)
-        # The clamps can invert the interval when every tagged cell sits
-        # inside the margin band; the widening below reopens it from
-        # whichever end has room.
-        hi < lo && (hi = lo)
+        # Both ends clamp into the feasible interval, so a tagged set inside
+        # the margin band collapses onto its inner edge rather than keeping
+        # an end past it, and the widening below to the four-node minimum
+        # then reopens the interval inward. Setup guarantees the feasible
+        # interval holds at least four nodes.
+        lo = clamp(tlo[d] - spec.buffer, margin + 1, n_global[d] - margin)
+        hi = clamp(thi[d] + spec.buffer, margin + 1, n_global[d] - margin)
         while hi - lo + 1 < 4
             hi < n_global[d] - margin ? (hi += 1) : (lo -= 1)
         end
@@ -456,6 +463,12 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
     oldregion = lt.region
     active_g = ntuple(d -> solver.n_global[d] > 1, 3)
     n_cons = solver.equations.n_cons
+    # The setup-time nesting rule, re-asserted here: a box reaching into
+    # the margin band would read parent samples the gather never fills and
+    # interpolate zeros into the fine state without any other symptom.
+    _covered_by(_buffered(newregion, active_g, spec.margin), [patches[1].region]) ||
+        error("regrid: the tagged region $newregion is not nested $(spec.margin) " *
+              "root nodes inside the domain")
     # getfield: `h` is also a patch property name, and the property forwarding
     # refuses it on a multi-patch solver; the root spacing lives on the config.
     # Gather the surviving fine state BEFORE the patch swap, while the old

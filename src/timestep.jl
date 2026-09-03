@@ -205,11 +205,21 @@ function subcycled_step!(solver::Solver, states::Vector{<:ConservedState},
                          dus::Vector{<:ConservedState}, dt,
                          prepared::Bool=false)
     t0 = solver.t
+    # `solver.step` counts completed steps; the level counts below are
+    # one-based indices of the step in progress.
     _advance_level!(solver, 1, states, dQs, dus, t0, dt, prepared,
-                    solver.step, dt, 1)
+                    solver.step + 1, dt, 1)
     solver.tstage = t0 + dt
     return states
 end
+
+# The one-based global index of substep `mc` of a child level under its
+# parent's step `count`: the parent's previous steps contributed three each.
+# Level 1 therefore counts 3s + mc under root step s + 1, as it always did,
+# and level 2 counts 1 .. 9 under the first root step; the earlier
+# `3 count + mc` on a 0-based root count gave level 2 the counts 4 .. 12,
+# the wrong number and phase of filter passes at depth two and below.
+_child_count(count::Int, mc::Int) = 3 * (count - 1) + mc
 
 # One step of size `dt` from `t0` on level `ℓ` (1-based index into
 # `solver.levels`), followed by three substeps of each child and their
@@ -300,8 +310,8 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     if child.level_comm.owned
         for mc in 1:3
             _advance_level!(solver, ℓ + 1, states, dQs, dus,
-                            t0 + (mc - 1) * dtf, dtf, false, 3 * count + mc,
-                            dt, mc)
+                            t0 + (mc - 1) * dtf, dtf, false,
+                            _child_count(count, mc), dt, mc)
         end
     end
     # The root's restriction is `run!`'s, after its filter pass; every deeper

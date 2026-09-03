@@ -1056,6 +1056,63 @@ end
         r2 = check!(sb, states, ws, a_hi)
         @test r2 != initial && has(r2, feature)
     end
+    # A hold-only signal keeps the box whole. With no anchor, a feature at
+    # the hold level inside the initial box leaves it as it is, where the
+    # bounds of the held nodes alone would have shrunk it onto them; the
+    # same feature at the tag level moves the box onto itself.
+    let
+        icf(x, y, z) = Prim(u=(0, 0, 0), p=1.0, rho=1.0 + bump(x, 0.3, amp[]))
+        sc = mk()
+        states = allocate_state(sc)
+        ws = CL.Workspace(states)
+        initial = level_regions(sc, 1)
+        @test has(initial, anchor)
+        amp[] = a_mid
+        initialize!(sc, states, icf)
+        @test CL.tagged_region(sc, states[1]) === nothing
+        sc.step += 1
+        CL._maybe_regrid!(sc, states, ws, nothing)
+        @test level_regions(sc, 1) == initial
+        amp[] = a_hi
+        initialize!(sc, states, icf)
+        sc.step += 1
+        CL._maybe_regrid!(sc, states, ws, nothing)
+        r = level_regions(sc, 1)
+        @test r != initial && has(r, anchor) && r[1].extent[1] < 12
+    end
+end
+
+@testset "box regrid clamps into the nesting margin" begin
+    # A tagged set inside the upper margin band: both ends clamp onto the
+    # feasible interval and the four-node minimum widens it inward, so the
+    # box never reaches nodes the parent gather does not fill. The old
+    # clamp kept the tagged end and widened outward, and interpolating a
+    # constant state into the box then read zeros.
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    N = 40
+    edge = (p, I) -> interior_index(p, I)[1] == N
+    s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(wall2, per, per),
+               regrid_interval=1, tag_buffer=0, tag_predicate=edge,
+               refine=BlockRegion((10, 0, 0), (8, 1, 1)))
+    states = allocate_state(s)
+    initialize!(s, states, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
+    margin = getfield(s, :regrid).margin
+    r = CL.tagged_region(s, states[1])
+    @test r == BlockRegion((N - margin - 4, 0, 0), (4, 1, 1))
+    ws = CL.Workspace(states)
+    s.step += 1
+    CL._maybe_regrid!(s, states, ws, nothing)
+    @test level_regions(s, 1) == [r]
+    @test all(Q -> all(isfinite, parent(Q)), states)
+    ps = PatchSolver(s, s.patches[2])
+    @test all(abs(states[2][gidx(ps, i, 1, 1), 1] - 1) < 1e-12
+              for i in 1:ps.decomp.n_local[1])
+    # The substep counts of the recursive driver: one-based at every
+    # level, level 2 taking 1 .. 9 under the first root step.
+    counts2 = [CL._child_count(CL._child_count(1, m1), m2) for m1 in 1:3, m2 in 1:3]
+    @test sort(vec(counts2)) == 1:9
+    @test [CL._child_count(s0 + 1, m) for s0 in 0:1 for m in 1:3] == 1:6
 end
 
 @testset "covered masks: composite quadrature counts every node once" begin
