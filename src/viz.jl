@@ -35,12 +35,13 @@ primitives (`:rho`, `:p`, `:T_ion`, `:c`, `:u`, `:v`, `:w`), the per-species
 `species` selects the array for `:Y` and `:D_art` and is ignored by every other
 name.
 
-Collective: it calls [`refresh_primitives!`](@ref), and a derived name runs the
-gradient pass (and `compute_artificial!` for an artificial coefficient) that the
-name needs. The gradient pass overwrites `solver.grad_u`, and the artificial
-pass additionally overwrites the artificial coefficient and sensor fields and the
-`tmp_a`/`tmp_b` scratch; `compute_rhs!` rebuilds all of them at every stage. The
-returned array is a fresh copy, safe to keep past the next step.
+Every rank must call this function because it calls
+[`refresh_primitives!`](@ref), and a derived name runs the gradient pass and,
+for an artificial coefficient, `compute_artificial!`. The gradient pass
+overwrites `solver.grad_u`. The artificial pass also overwrites the artificial
+coefficient, sensor fields, and `tmp_a`/`tmp_b` scratch; `compute_rhs!` rebuilds
+all of them at every stage. The returned array is a fresh copy that remains
+valid past the next step.
 """
 function field_array(solver::Solver, Q, name::Symbol; species::Int=1)
     if _wants_gradients(name) || _wants_artificial(name)
@@ -68,16 +69,16 @@ every rank. This is the replacement for the tutorials' old `density_line`:
 axis.
 
 The coordinate comes from [`profile_coordinate`](@ref) and the value from
-[`plane_profile`](@ref), so the semantics are that file's: `value` is the
-area-weighted average over the two dimensions transverse to `dim`. When those
+[`plane_profile`](@ref). Thus, `value` is the area-weighted average over the two
+dimensions transverse to `dim`. When those
 dimensions are collapsed, as in the common tutorial case of `n_global = (N, 1, 1)`,
 the average is over a single point and the profile is exactly the line through
 `(i, 1, 1)`. With a transverse dimension resolved it is the correct area mean,
-which is usually what a radial or axial profile of a multidimensional field
-should show. For a line integral in place of an average, weight by
+which gives the radial or axial mean of a multidimensional field. For a line
+integral in place of an average, weight by
 [`profile_spacing`](@ref).
 
-Collective (see [`field_array`](@ref)).
+Every rank must call this function; see [`field_array`](@ref).
 """
 function line_profile(solver::Solver, Q, name::Symbol; dim::Int=1, species::Int=1)
     1 <= dim <= 3 || throw(ArgumentError("line_profile: dim must be 1, 2, or 3"))
@@ -108,8 +109,8 @@ onto a Cartesian grid for a heatmap.
 `index` is a global index and must lie in `1:n_global[normal]`; an index outside
 that range throws `ArgumentError`, as does a `normal` outside `1:3`.
 
-Collective (see [`field_array`](@ref)); every rank must call it, including a rank
-whose block holds no part of the requested plane.
+Every rank must call this function, including a rank whose block holds no part
+of the requested plane; see [`field_array`](@ref).
 """
 function field_slice(solver::Solver, Q, name::Symbol; normal::Int=3, index::Int=1,
                      species::Int=1)
@@ -343,9 +344,9 @@ _makie_extension() = Base.get_extension(@__MODULE__, :CompactLESMakieExt)
 """
     makie_available() -> Bool
 
-Whether the Makie extension is loaded. It loads once the caller has a Makie
-backend available and writes `using CairoMakie` (or `using GLMakie`) alongside
-`using CompactLES`.
+Whether the Makie extension is loaded. Importing a supported Makie backend,
+such as CairoMakie or GLMakie, alongside CompactLES activates the package
+extension.
 """
 makie_available() = _makie_extension() !== nothing
 
@@ -367,10 +368,10 @@ cylindrical, `r`/`θ`/`φ` for spherical, `x`/`y`/`z` for Cartesian);
 are keyword collections forwarded to Makie's `Figure` and `Axis`. Extra keyword
 arguments pass through to Makie's `lines!`.
 
-Requires a Makie backend (see [`makie_available`](@ref)). Collective, because it
-extracts through [`field_array`](@ref), so every rank must call it. A profile is
-replicated across ranks, so both forms return a plot on every rank; drawing on
-rank 0 is the convention.
+Requires a Makie backend (see [`makie_available`](@ref)). Extraction through
+[`field_array`](@ref) requires every rank to call this function. The profile is
+replicated, so both forms return a plot on every rank; callers normally draw it
+only on rank 0.
 """
 profileplot(args...; kwargs...) = _makie_required("profileplot")
 profileplot!(args...; kwargs...) = _makie_required("profileplot!")
@@ -390,9 +391,9 @@ axes are used directly. On `fieldheatmap`, `figure` and `axis` are keyword
 collections forwarded to Makie's `Figure` and `Axis`, and `colorbar = false`
 omits the colorbar. Extra keyword arguments pass through to Makie's `heatmap!`.
 
-Requires a Makie backend (see [`makie_available`](@ref)). Collective, so every
-rank must call it; the plot is produced on rank 0 and both forms return
-`nothing` on other ranks.
+Requires a Makie backend (see [`makie_available`](@ref)). Every rank must call
+this function. The plot is produced on rank 0, and both forms return `nothing`
+on other ranks.
 """
 fieldheatmap(args...; kwargs...) = _makie_required("fieldheatmap")
 fieldheatmap!(args...; kwargs...) = _makie_required("fieldheatmap!")

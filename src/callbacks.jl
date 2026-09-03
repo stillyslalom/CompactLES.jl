@@ -12,18 +12,15 @@
 #     decision, or a boundary routine that only some ranks think is active
 #     deadlocks on its collectives (see the collective note in `nscbc.jl`).
 #
-# Firing only between completed steps satisfies both at little cost: the physical
-# events these exist to catch, a wave nearing a boundary or an interaction
-# finishing, are not resolved to better than a timestep anyway.
+# Firing only between completed steps preserves both invariants. The trigger
+# time is resolved to one timestep, consistent with the available RK state.
 #
-# Rank disagreement is designed out; the caller need not guard against it. `t`
-# and `step` advance identically on every rank (`dt` comes out of an Allreduce),
-# so `AtTime`, `EveryTime` and `EveryStep` are globally consistent without a
-# reduction. `WhenState` is the only one that reads the field, and it reduces
-# its own condition across the communicator before answering, so a user
-# predicate that
-# happens to be true on one rank alone still fires everywhere, and cannot wedge
-# the run.
+# `t` and `step` advance identically on every rank because `dt` comes from an
+# `Allreduce`. `AtTime`, `EveryTime`, and `EveryStep` are therefore globally
+# consistent without another reduction. `WhenState` is the only trigger that
+# reads the field. It reduces its condition across the communicator, so a
+# predicate that is true on one rank fires on every rank and preserves
+# collective ordering.
 
 """
     Trigger
@@ -180,9 +177,9 @@ Fire when `condition(solver, Q)` first returns `true`, or on every step it does
 when `once = false`. The condition must return a `Bool`.
 
 The condition is evaluated on each rank and reduced across the communicator, so
-it may be true only on the rank that owns a boundary plane. It need not perform
-this reduction itself, since the framework supplies the collective: a
-condition may read a local field plane and return a local verdict.
+it may be true only on the rank that owns a boundary plane. The callback
+performs this reduction, so the condition may read a local field plane and
+return a rank-local result.
 """
 mutable struct WhenState{F} <: Trigger
     condition::F

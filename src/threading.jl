@@ -1,8 +1,8 @@
 # Threading policy.
 #
-# `Threads.@threads` spawns one Task per thread per region. That is free when
-# the loop body is large and ruinous when it is not, and this solver is full of
-# small regions: one compute_rhs! evaluation runs ~120 of them (one per
+# `Threads.@threads` spawns one task per thread per region. Region entry is
+# amortized for large loop bodies but dominates small regions. One
+# `compute_rhs!` evaluation runs about 120 regions (one per
 # direction per velocity component, per species, per flux, plus the remaining
 # pointwise passes; the fused scatters in operators.jl removed ~30), so at 24
 # threads a single RHS call spawns ~2900 tasks and allocates ~110 kB *per
@@ -11,14 +11,14 @@
 # Measured before this policy existed (24 logical cores, compute_rhs!):
 #
 #     grid          -t 1        -t 24
-#     1-D, 512      0.14 ms     1.16 ms     8.3x SLOWER
-#     24^3          7.2  ms    11.8  ms     1.6x SLOWER
+#     1-D, 512      0.14 ms     1.16 ms     8.3x slower
+#     24^3          7.2  ms    11.8  ms     1.6x slower
 #     48^3         45.6  ms    21.3  ms     2.1x faster
 #     96^3        340.7  ms    87.5  ms     3.9x faster
 #
-# So the axisymmetric and 1-D radial runs (converging_shock.jl, the Sod tube,
-# anything with a collapsed dimension) were paying a large penalty for asking
-# for threads, which the README tells users to do.
+# Axisymmetric and one-dimensional radial runs, including
+# `converging_shock.jl` and the Sod tube, therefore ran more slowly when started
+# with the thread counts recommended by the README.
 #
 # `@threaded work for ... end` runs the loop inline, with no task spawn and no
 # allocation, when `work` is below THREAD_MIN_WORK, and defers to

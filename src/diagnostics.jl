@@ -1,16 +1,15 @@
 # Volume-integrated and plane-averaged reductions, and the mixing diagnostics
 # built on them.
 #
-# For variable-density mixing the answer is not the flow field: it is the mix
-# width, the molecular mixing fraction, the composition PDF, and where the
-# kinetic energy went. Those were previously the user's problem to write inside
-# a `callback`, so every user rewrote the same three MPI reductions and
-# got the metric weighting wrong in curvilinear coordinates.
+# Variable-density mixing is commonly characterized by mix width, molecular
+# mixing fraction, composition PDF, and kinetic-energy evolution. Providing
+# these diagnostics here centralizes the required MPI reductions and applies
+# the metric weights consistently in curvilinear coordinates.
 #
 # Everything here reduces over the `Decomp` communicators: the transverse
 # sub-communicators for a plane average, the full Cartesian communicator for a
-# volume integral. Every routine is collective (every rank must call it) and
-# every routine returns the same value on every rank.
+# volume integral. Every rank in the applicable communicator must call each
+# routine, and each rank receives the same result.
 #
 # Quadrature. The computational grid is uniform, so the integrals are midpoint
 # sums with the metric Jacobian as the weight, times a half weight at a
@@ -80,9 +79,10 @@ _composite(::PatchSolver) = false
     volume_integral(solver, f) -> Float64
 
 ∫ f dV over the global domain, with `f` a full padded scalar array. Only the
-interior is read, so halo values do not enter the result. Collective. See the
-quadrature note at the top of this file for the edge treatment. The
-single-patch quadrature: on a refined run use the `Vector` form below.
+interior is read, so halo values do not enter the result. Every rank in
+`solver.comm` must call this function. See the quadrature note at the top of
+this file for the edge treatment. This is the single-patch quadrature; use the
+`Vector` form below on a refined run.
 """
 function volume_integral(solver::SolverLike, f::AbstractArray{<:Real,3})
     return MPI.Allreduce(_local_volume_integral(solver, f, false), +, solver.comm)
@@ -143,9 +143,10 @@ end
 """
     domain_volume(solver) -> Float64
 
-∫ dV, i.e. `volume_integral` of unity. Collective. On a multi-patch or
-refined solver this is the composite quadrature with the covered masks
-applied, so it is the physical volume exactly once.
+∫ dV, i.e. `volume_integral` of unity. Every rank in `solver.comm` must call
+this function. On a multi-patch or refined solver this is the composite
+quadrature with the covered masks applied, so it is the physical volume
+exactly once.
 """
 function domain_volume(solver::SolverLike)
     if _composite(solver)
@@ -181,7 +182,8 @@ end
     volume_average(solver, f) -> Float64
     volume_average(solver, fs::Vector) -> Float64
 
-∫ f dV / ∫ dV. Collective. The `Vector` form is the composite one.
+∫ f dV / ∫ dV. Every rank in `solver.comm` must call this function. The
+`Vector` form is the composite one.
 """
 volume_average(solver::SolverLike, f) = volume_integral(solver, f) / domain_volume(solver)
 
@@ -192,9 +194,9 @@ Area-weighted average of `f` over the two dimensions transverse to `d`, as a
 freshly allocated profile of length `n_global[d]` returned on every rank. `f` is
 a full padded scalar array, of which only the interior is read. The weight is the
 transverse area element `area_d[d]`, so this is the plain arithmetic mean on a
-Cartesian grid and the correct area average on a curvilinear one. Collective.
-The single-patch form; see the `Vector` form for a multi-patch or refined
-solver.
+Cartesian grid and the correct area average on a curvilinear one. Every rank
+in the relevant decomposition communicators must call this function. This is
+the single-patch form; see the `Vector` form for a multi-patch or refined solver.
 """
 function plane_profile(solver::SolverLike, f::AbstractArray{<:Real,3}, d::Int)
     decomp = solver.decomp
@@ -319,7 +321,7 @@ The composite form: `fs` holds one full padded array per held patch,
 aligned with `solver.patches`, and the profile is sampled at the root's
 `n_global[d]` stations, each plane average combining the uncovered root
 nodes with the nodes of every finer patch whose planes coincide with it.
-Collective over `solver.comm`, which every rank must enter.
+Every rank in `solver.comm` must enter the reduction.
 """
 plane_profile(solver::Solver, fs::Vector{<:AbstractArray{<:Real,3}}, d::Int) =
     _composite_profile((ps, i) -> fs[i], solver, d)
@@ -329,8 +331,9 @@ plane_profile(solver::Solver, fs::Vector{<:AbstractArray{<:Real,3}}, d::Int) =
 
 Physical coordinate of each station of a `plane_profile` along `d`, as a vector
 of length `n_global[d]`. The companion length element is `profile_spacing`.
-Collective, and returns the same vector on every rank. On a refined solver
-the stations are the root's, so this is the root patch's coordinate vector.
+Every rank in the dimension's sub-communicator must call this function, and
+each receives the same vector. On a refined solver the stations are the root's,
+so this is the root patch's coordinate vector.
 """
 function profile_coordinate(solver::SolverLike, d::Int)
     _composite(solver) &&
@@ -354,12 +357,11 @@ plane. The returned spacing is therefore its area-weighted plane average, using
 the same weights as `plane_profile`, so the two quantities compose into a line
 integral.
 
-On an active dimension this is collective, since the plane average is. For a
-collapsed dimension the result is `[1.0]` instead, the factor-of-one convention
-described at the top of this file, and no communication takes place; every rank
-takes that branch together. On a refined solver the stations are the root's
-and this is the root patch's spacing, unmasked: the length element along the
-profile is geometry, not a quadrature over the plane.
+For an active dimension, every rank that participates in the plane average must
+call this function. A collapsed dimension instead returns `[1.0]` without
+communication; every rank takes that branch together. On a refined solver the
+stations are the root's, and this is the unmasked root-patch spacing because
+the profile length element describes geometry rather than plane quadrature.
 """
 function profile_spacing(solver::SolverLike, d::Int)
     _composite(solver) &&
@@ -389,9 +391,8 @@ end
 # Conventions follow the variable-density turbulent-mixing literature (Youngs;
 # Cook & Dimotakis). `dim` is the inhomogeneous direction, the one the
 # interface moves along, and everything is an integral of plane averages along
-# it. Mass fractions are used, not volume fractions: they are what the
-# conserved layout carries directly and what an Atwood-number-independent
-# statement of θ supports.
+# it. Mass fractions are used because the conserved layout carries them
+# directly and they support an Atwood-number-independent definition of θ.
 
 """
     mix_width(solver, Q; dim=1, species=(1, 2)) -> Float64
@@ -402,7 +403,8 @@ bulk measure describes the extent of a Rayleigh–Taylor or Richtmyer–Meshkov
 layer but does not distinguish stirring from molecular mixing: two unmixed
 fluids interleaved at the grid scale give the same W as a molecularly mixed
 layer. [`molecular_mixing`](@ref) provides that distinction. `species` names the
-pair `(a, b)` of species indices. Collective.
+pair `(a, b)` of species indices. Every rank in `solver.comm` must call this
+function.
 
 Calls [`refresh_primitives!`](@ref) before evaluating the diagnostic, including
 when invoked from a `run!` callback.
@@ -421,7 +423,7 @@ end
 
 The composite form for a multi-patch or refined solver, `states` aligned
 with `solver.patches`: the plane averages are the composite ones at the
-root's stations. Collective over `solver.comm`.
+root's stations. Every rank in `solver.comm` must call this function.
 """
 function mix_width(solver::Solver, states::Vector{<:ConservedState};
                    dim::Int=1, species=(1, 2))
@@ -440,7 +442,7 @@ Youngs' molecular mixing fraction θ = ∫⟨Y_a Y_b⟩ dx / ∫⟨Y_a⟩⟨Y_b�
 `dim`. A value of 0 denotes interleaved but unmixed fluids, and a value of 1
 denotes uniform composition across the layer. The result is 0 when the
 denominator is not positive, which is the case where the two species overlap
-nowhere. Collective.
+nowhere. Every rank in `solver.comm` must call this function.
 
 Calls [`refresh_primitives!`](@ref) before evaluating the diagnostic, including
 when invoked from a `run!` callback, and overwrites `solver.tmp_a` as scratch.
@@ -465,8 +467,8 @@ end
 
 The composite form, `states` aligned with `solver.patches`. The product
 Y_a Y_b is formed in each patch's `tmp_a` and consumed before the next
-patch's, since equal-extent tiles share that scratch. Collective over
-`solver.comm`.
+patch's, since equal-extent tiles share that scratch. Every rank in
+`solver.comm` must call this function.
 """
 function molecular_mixing(solver::Solver, states::Vector{<:ConservedState};
                           dim::Int=1, species=(1, 2))
@@ -494,7 +496,8 @@ end
 Volume-weighted probability density of mass fraction Y_sp over the whole domain,
 on `nbins` uniform bins of [0, 1]. Its normalization gives
 `sum(pdf) * binwidth == 1`. Peaks at 0 and 1 indicate separated fluids, whereas
-an interior distribution indicates mixed compositions. Collective.
+an interior distribution indicates mixed compositions. Every rank in
+`solver.comm` must call this function.
 
 This method reads `solver.Y` directly and does not accept `Q`; call
 [`refresh_primitives!`](@ref) first when current primitive fields are not
@@ -548,7 +551,8 @@ Favre-averaged turbulent kinetic energy ⟨ρ|u − ũ|²⟩ / (2⟨ρ⟩) as a 
 `dim`, where ũ is the Favre (density-weighted) plane mean. Subtracting the plane
 mean removes the bulk translation of the interface and retains velocity
 fluctuations associated with the instability. The profile has length
-`n_global[dim]` and is the same on every rank. Collective.
+`n_global[dim]` and is the same on every rank. Every rank in the plane-average
+communicators must call this function.
 
 Calls [`refresh_primitives!`](@ref) before evaluating the diagnostic, and
 overwrites `solver.tmp_a` as scratch.
@@ -589,7 +593,8 @@ end
 The composite form, `states` aligned with `solver.patches`: the Favre
 means are the composite plane averages at the root's stations, and a finer
 patch's node reads the mean of the root station its plane coincides with.
-Each patch fills its `tmp_a` in turn. Collective over `solver.comm`.
+Each patch fills its `tmp_a` in turn. Every rank in `solver.comm` must call this
+function.
 """
 function tke_profile(solver::Solver, states::Vector{<:ConservedState}; dim::Int=1)
     refresh_primitives!(solver, states)
@@ -637,9 +642,9 @@ end
     turbulent_kinetic_energy(solver, Q; dim=1) -> Float64
 
 Average of [`tke_profile`](@ref) along `dim` weighted by `profile_spacing`, so
-one number for the whole layer. Collective, and it inherits `tke_profile`'s
-refresh of the primitives and its use of `solver.tmp_a` as scratch. With a
-state vector it is the composite form.
+one number for the whole layer. Every rank participating in `tke_profile` must
+call this function. It inherits that function's primitive refresh and use of
+`solver.tmp_a` as scratch. With a state vector it is the composite form.
 """
 function turbulent_kinetic_energy(solver::Solver, Q; dim::Int=1)
     k = tke_profile(solver, Q; dim=dim)
@@ -661,7 +666,7 @@ gradient pass, so the diagnostic is intended for periodic, not per-step,
 evaluation. Those two passes overwrite `solver.grad_u` and the artificial
 coefficient, sensor and scratch fields, and the integrand is then accumulated
 into `solver.tmp_b`; `compute_rhs!` rebuilds all of them at the next stage.
-Collective.
+Every rank in `solver.comm` must call this function.
 """
 function dissipation_rate(solver::Solver, Q)
     compute_primitives_and_gradients!(solver, Q)

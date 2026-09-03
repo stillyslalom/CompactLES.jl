@@ -5,12 +5,11 @@
 # (x₁, x₂, x₃, t) → Prim evaluated at the RK stage time. A `Problem` bundles
 # physics, domain, boundary conditions, and the IC, with no reference to
 # grids, ranks, halos, or conserved layouts, while `Numerics` bundles
-# resolution and scheme choices. `setup(problem, numerics)` marries the two
-# and returns (solver, Q). The same Problem can therefore be re-run at
-# different resolutions, orders, or (eventually) against a different backend
-# without touching the physics description; primitive→conserved conversion is
-# EOS business and flows through the same contract future cubic/tabular
-# models implement.
+# resolution and scheme choices. `setup(problem, numerics)` combines them and
+# returns `(solver, Q)`. The same `Problem` can therefore be run at different
+# resolutions, orders, or eventually on a different backend without changing
+# the physics description. Primitive-to-conserved conversion follows the EOS
+# contract that future cubic or tabular models can also implement.
 
 """
     Prim(; u=(0,0,0), p=NaN, T_ion=NaN, rho=NaN, Y=(1.0,))
@@ -411,8 +410,8 @@ increase `n_global` if setup reports a smaller local block.
   without calling for a new one, so a tile at the edge of a feature does
   not flicker as the feature crosses the threshold; `1` disables the hold
   band. A tile is not dropped before `tile_lifetime` regrid checks have
-  passed since its creation. The tag history both need is kept on the
-  solver and is identical on every rank.
+  passed since its creation. The solver stores the tag history required by
+  both forms of hysteresis, with identical values on every rank.
 - `tile`: `0` (default) covers each refined region with one patch; a
   positive edge (in parent nodes, at least 3) covers it with the tiles of a
   global lattice of that edge instead, abutting tiles sharing their

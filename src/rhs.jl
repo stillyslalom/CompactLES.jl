@@ -1105,14 +1105,17 @@ _state_like(rho::AbstractArray{T,3}, n_cons::Int) where {T} =
 
 # --- Operator routing through folds ----------------------------------------
 
-# A plans tuple is heterogeneous whenever a dimension is collapsed or folded
-# (`nothing` in that slot), so indexing it with a runtime `d` yields a union
-# that the call below it must split: measured ~330 B per operator application
-# and 11.9 kB per RHS on a planar (32, 16, 1) run against 336 B in 3-D.
-# Branching on `d` cuts that to 160 B per application and 3.8 kB per RHS; the
-# remainder is the union itself, and removing it would take a sentinel plan of
-# the concrete type in the empty slot, which needs a `LineSolver` and a
-# communicator to construct for a dimension that is never swept.
+# The plans tuple is heterogeneous when a collapsed or folded dimension puts
+# `nothing` in one of its slots. Indexing that tuple with a runtime `d` yields a
+# union that the caller must split.
+#
+# The measured allocation was about 330 B per operator application and 11.9 kB
+# per RHS on a planar (32, 16, 1) run, compared with 336 B per RHS in 3-D.
+# Branching on `d` reduces this to 160 B per application and 3.8 kB per RHS.
+#
+# A concrete sentinel plan would remove the remaining union, but constructing
+# one requires a `LineSolver` and communicator for a dimension that is never
+# swept. The explicit branch avoids that unused state.
 @inline _plan_at(plans::Tuple, d::Int) = d == 1 ? plans[1] : d == 2 ? plans[2] : plans[3]
 
 """
@@ -1220,8 +1223,11 @@ function div_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int,
     return dQ
 end
 
-"""Compact filter of `f` along dimension `d` with antipodal sign `σf`. Collective,
-with the same halo and fold contract as `deriv_along!`."""
+"""Compact filter of `f` along dimension `d` with antipodal sign `σf`.
+
+Every rank in the directional sub-communicator must call this function. Its
+halo and fold contract matches `deriv_along!`.
+"""
 function filt_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
     if fold === nothing
@@ -1243,7 +1249,8 @@ planning an operator of its own; the default `:gaussian` plans the explicit
 nine-point stencil of [`gaussian_filter`](@ref). Only the artificial-property
 sensors go through here, by way of `smooth!`.
 
-Collective, as `deriv_along!` is.
+Every rank in the directional sub-communicator must call this function, as for
+`deriv_along!`.
 """
 function smooth_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
@@ -1264,7 +1271,8 @@ calls this, and only under that setting: `solver.ring_plans` is `nothing`
 otherwise, which keeps this function off the default configuration's inference
 path. Indexing that field under `:delta4` would throw. See `detect_sum!`.
 
-Collective, with the same halo and fold contract as `deriv_along!`.
+Every rank in the directional sub-communicator must call this function. Its
+halo and fold contract matches `deriv_along!`.
 """
 function ring_along!(out, f, solver::SolverLike, d::Int, σf::Int)
     fold = solver.folds[d]
@@ -1453,8 +1461,8 @@ current state.
 
 `solver.grad_u[d, j]` is overwritten with the physical component (∇u)_{dj},
 zeroed on a collapsed dimension, and the metric curvature terms are added on
-top. Collective: every rank must call it, since each active dimension is a
-distributed line solve.
+top. Every rank must call this function because each active dimension requires
+a distributed line solve.
 
 Pass `primitives_current = true` when [`refresh_primitives!`](@ref) has
 run on this exact `Q` and only the gradients are wanted; the caller is then

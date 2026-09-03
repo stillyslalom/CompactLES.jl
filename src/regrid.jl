@@ -278,13 +278,13 @@ function _in_regions(regions::Vector{BlockRegion}, g::NTuple{3,Int})
     return false
 end
 
-# Global bounding box of the tagged set, or `nothing`: every node at the
-# tag level, plus the held nodes inside the current refined regions. A
-# signal with no node at the tag level anywhere returns `nothing`, so the
-# current box is kept whole: the held nodes can only extend a box that a
-# tagged node is rebuilding, never shrink one onto themselves, which is
-# the box's form of a held tile surviving. Collective (one Allreduce), so
-# every rank derives the identical box.
+# Global bounding box of the tagged set, or `nothing`. The globally reduced
+# results are whether any rank has a `TAG_MARK` and the extrema of all marked
+# nodes plus `TAG_HOLD` nodes inside current refined regions. They share one
+# packed `Allreduce` on the root communicator. Without a global mark, the
+# function returns `nothing` and retains the current box. Otherwise, held nodes
+# may enlarge the box initiated by marked nodes, but cannot define or shrink a
+# box by themselves. Every rank derives the same result.
 function _tag_bounds(solver::Solver, Qc)
     dcp = getfield(solver, :patches)[1].decomp
     current = [lt.region for lt in getfield(solver, :levels)[2].transfers]

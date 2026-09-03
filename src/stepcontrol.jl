@@ -4,60 +4,54 @@
 # and therefore has to see the type first. The logic that needs a Solver,
 # `predicted_dt` and `run!`, stays with the integrator.
 
-# The failure mode this exists for is not a crash. When the artificial
-# properties lose control of a strong shock the state goes unphysical, the
-# diffusive term in the CFL rate climbs, `dt` collapses, and the run grinds
-# forever making no progress, burning hours to produce nothing, with no signal
-# beyond a step counter that keeps incrementing.
+# When the artificial properties do not stabilize a strong shock, the state
+# loses positivity, the diffusive term in the CFL rate rises, and `dt`
+# collapses. Without these checks, the step counter can continue increasing
+# while simulated time advances negligibly.
 #
-# --- What the collapse is ----------------------------------------------------
+# --- Observed collapse -------------------------------------------------------
 #
-# It is tempting to read that as a timestep problem: `compute_dt` builds its
-# diffusive rate from the *previous* step's artificial coefficients, so at a
-# forming shock the step is chosen from coefficients one step stale, and
-# the obvious fix is to extrapolate the rate forward. That fix was built
-# (`predict` below) and measured, and it does not work. Noh at nu=1, N=400,
-# cfl=0.3 fails at step 175 with no lookahead and at step 179 with three steps
-# of it; thirty steps of lookahead buys 25 steps. The trace shows why:
+# `compute_dt` uses the previous step's artificial coefficients, so a forming
+# shock is initially measured with coefficients one step out of date. Linear
+# rate extrapolation (`predict` below) was implemented to test whether this lag
+# causes the collapse. It does not. For Noh at nu=1, N=400, and cfl=0.3, failure
+# occurs at step 175 without lookahead and step 179 with three-step lookahead;
+# thirty-step lookahead postpones failure by 25 steps. The measured trace is:
 #
 #     step   25  dt=2.1e-4  rate=1418   rho_min=0.951
 #     step   75  dt=1.8e-4  rate=1633   rho_min=0.798
 #     step  125  dt=1.8e-4  rate=1718   rho_min=0.398
 #     step  175  dt=4.8e-5  rate=1.5e4  rho_min=0.252   <- and then negative
 #
-# The pre-shock density is exactly 1 in the exact solution. It is 5%
-# low by step 25 and 60% low by step 125, while `dt` and the rate sit flat. The
-# state is being eaten by a dispersive undershoot at the shock that the
-# artificial viscosity is not damping; positivity goes at ~175, and only then
-# does the rate explode. The dt collapse is the symptom, arriving about 150
-# steps after the disease.
+# The exact pre-shock density is 1. The computed density is 5% low by step 25
+# and 60% low by step 125 while `dt` and the rate remain nearly constant. A
+# dispersive undershoot at the shock is not sufficiently damped by the
+# artificial viscosity. Positivity fails near step 175, after which the rate
+# rises sharply. The timestep collapse therefore follows the first measurable
+# state error by about 150 steps.
 #
-# So the four mechanisms here are not equals:
+# The four mechanisms address different parts of this sequence:
 #
-#   1. The floors and the positivity check turn the silent grind into an
-#      exception with a reason attached, and catch it ~150 steps earlier than
-#      a dt-based test alone would. On by default.
+#   1. The floors and positivity check raise a diagnosed exception about 150
+#      steps earlier than a `dt`-only test. They are enabled by default.
 #   2. The predictor is retained, off by default, with the measurement above
-#      recorded so the next person does not rebuild it. It perturbs the step
-#      sequence of healthy runs for no demonstrated benefit.
-#   3. Retry is the mechanism that helps, and it helps more than the
-#      guidance it replaces. Rolling back and halving the CFL recovers Noh nu=1
-#      from cfl 0.9 to 0.45 in 1433 steps with the correct plateau (0.9989),
-#      against 4485 steps at a globally fixed cfl 0.15 for the same answer. The
-#      CFL restriction is a startup restriction: once the shock has formed
-#      cleanly the large step is fine. A global CFL cannot express that and a
-#      rollback can.
+#      recorded to prevent duplicate work. It changes the step sequence of
+#      stable runs without a measured benefit.
+#   3. Retry restores a savepoint and lowers the CFL. In Noh at nu=1, rollback
+#      from cfl 0.9 to 0.45 completes in 1433 steps with plateau 0.9989. A run
+#      fixed globally at cfl 0.15 requires 4485 steps for the same result. The
+#      lower CFL is required during shock formation but not after the shock has
+#      formed, which a rollback can represent without reducing every step.
 #   4. The state floor repairs the state, where the first three detect failure,
-#      and is off by default. The
-#      first three all read a reduced scalar, and `bench/nohprobe.jl` measured
-#      what that misses: six to eight interior cells carry negative internal
-#      energy, travelling with the front, for the whole duration of Noh runs
-#      that complete and pass their guards. Nothing reports it, because
-#      `primitives!` floors T_ion at 1e-300 wherever e <= 0 and the positivity
-#      check above reads rho, which stays positive throughout. `floor_ratio`
-#      makes those cells visible and repairable. See `apply_positivity_floor!`.
+#      and is disabled by default. The first three mechanisms read reduced
+#      scalars. `bench/nohprobe.jl` measured six to eight interior cells with
+#      negative internal energy moving with the front throughout Noh runs that
+#      otherwise complete and pass their guards. `primitives!` floors `T_ion`
+#      at 1e-300 where `e <= 0`, while the positivity check reads density, which
+#      remains positive. `floor_ratio` counts and optionally repairs those
+#      cells. See `apply_positivity_floor!`.
 #
-# --- What the floor may not repair -------------------------------------------
+# --- Repair scope ------------------------------------------------------------
 #
 # Those negative-e cells are not a rounding artifact, and repairing them is not
 # cheap. Over the complete Noh nu=1 validation case at cfl 0.15, which takes 3724
@@ -67,7 +61,7 @@
 # step. The wall region runs as a pressureless layer, and the scheme remains
 # stable there for the whole run.
 #
-# Forcing e back above zero costs a 5% velocity damping on the worst cell after
+# Raising e above zero requires 5% velocity damping on the worst cell after
 # a single step (-337 e0; the next four need 0.7%, 0.08%, 0.05%, 0.02%). Applied
 # every step it removes 1.5e-4 of the total momentum on step 1, produces cells
 # of negative *total* energy by step 4 that the unrepaired trajectory never
@@ -76,15 +70,16 @@
 # of that cell's energy, so the cost belongs to the case, not to the choice of
 # repair.
 #
-# `floor_scope` follows from that measurement. The default repairs only what is
-# unrepresentable, which on that case is nothing at all, and counts the negative
-# internal energy for reporting. `:internal_energy` opts into the
-# repair above, for sweeps and development runs where the goal is a bounded
-# run, not a faithful trajectory.
+# These measurements determine `floor_scope`. The default repairs only states
+# whose total energy is below `ρ * e_floor`; no such state occurs in this
+# case. It still counts negative internal energy for reporting.
+# `:internal_energy` additionally repairs those cells when a bounded trajectory
+# is required despite the measured change to the solution.
 #
 # These checks do not detect a run that completes with a wrong answer. Noh
 # nu=1 at cfl=0.5 reaches t_final without tripping anything and returns a
-# plateau 2% of the exact value. Floors detect non-computation, not error.
+# plateau 2% of the exact value. Floors detect the specified invalid states,
+# not general solution error.
 
 """
 Planck time in seconds, the unconditional failsafe floor on `dt`. `check_step`
@@ -189,8 +184,8 @@ Under either scope, every firing is counted in `solver.floor_tally`
 ([`FloorTally`](@ref)) and reported. Enabling the failsafe removes
 `:negative_density` as a route to [`SolverFailure`](@ref), since the density
 that check reads can no longer reach zero; `:dt_collapse` and `:nonfinite` still
-terminate a diverging run, so a sweep does not grind. The repair is a recovery
-from states the scheme has left, not a change to the scheme.
+terminate a diverging run after the corresponding threshold is crossed. The
+repair changes states produced by the scheme but does not change the scheme.
 """
 Base.@kwdef struct StepControl
     predict::Float64 = 0.0
@@ -282,11 +277,10 @@ function Base.showerror(io::IO, e::SolverFailure)
     print(io, "SolverFailure(:", e.reason, ") at step ", e.step,
           ", t = ", e.t, ", dt = ", e.dt, ", cfl = ", e.cfl, "\n  ", e.detail)
     if e.reason in (:dt_collapse, :dt_min, :planck, :negative_density)
-        print(io, "\n  Most likely the artificial properties have lost a strong ",
-                  "shock. Run with\n  `StepControl(retries = 4)` to have run! roll ",
-                  "back and lower the CFL by itself —\n  usually better than ",
-                  "guessing a lower cfl up front, since the restriction is\n  ",
-                  "normally a startup transient. See reference/CALIBRATION.md.")
+        print(io, "\n  One possible cause is loss of positivity near a strong shock. ",
+                  "`StepControl(retries = 4)`\n  restores a savepoint and lowers ",
+                  "the CFL after this failure, while retaining the initial CFL ",
+                  "after\n  a successful startup. See reference/CALIBRATION.md.")
     end
 end
 

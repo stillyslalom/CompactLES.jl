@@ -57,8 +57,8 @@ NoSlipWallBC(; Twall::Real=NaN) = NoSlipWallBC(float(Twall))
     ExtrapolationBC()
 
 Copy the adjacent interior state onto the physical boundary plane. This simple
-zero-normal-gradient approximation is not a characteristic non-reflecting
-condition and should be justified for the intended flow.
+zeroth-order extrapolation imposes a zero normal difference. It is not a
+characteristic non-reflecting condition and may reflect outgoing disturbances.
 """
 struct ExtrapolationBC <: BoundaryCondition end
 
@@ -396,9 +396,9 @@ end
 end
 
 function enforce!(::ExtrapolationBC, Q, solver, d, side)
-    # Zeroth-order extrapolation: copy the adjacent interior plane onto the
-    # edge plane. Crude outflow; NSCBCOutflowBC is the characteristic
-    # alternative when reflections affect the solution.
+    # Copying the adjacent interior plane gives zeroth-order extrapolation at
+    # the edge. `NSCBCOutflowBC` instead applies a characteristic correction
+    # when reflected disturbances affect the solution.
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
     sgn = side == 1 ? 1 : -1

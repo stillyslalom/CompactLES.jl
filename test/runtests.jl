@@ -1660,6 +1660,8 @@ end
 end
 
 @testset "NASA-9 mixture reduces exactly to the ideal mixture" begin
+    @test_throws ArgumentError IdealMixture(IdealSpecies{Float64}[])
+    @test_throws ArgumentError Nasa9Mixture(Nasa9Species{Float64}[])
     # The strongest available check on the polynomial machinery: with only the
     # constant term a3 populated, cp is temperature-independent and every
     # quantity — including the Newton inversion of e(T) — must reproduce the

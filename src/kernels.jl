@@ -223,10 +223,11 @@ Right-hand side of the one-sided compact filter row at point `i` (counted from
 the edge node at 1) of Gaitonde & Visbal (2000), over the points `1:2M+1` with
 the interior left-hand side `(af, 1, af)`. The `2M + 1` weights are fixed by
 exactness on polynomials of degree `0:2M-1` and a zero response at the Nyquist
-wavenumber, which is the interior filter's own construction: at `i = M + 1`
-the system returns the centered stencil to round-off, and at `i = 2` it
-reproduces the published `(1 + 254αf)/256, (31 + 2αf)/32, ...` row. The rows
-are solved here, not tabulated, so they follow `af` exactly.
+wavenumber, which is the interior filter's own construction. At `i = M + 1`,
+solving the system reproduces the centered stencil to round-off. At `i = 2`,
+it reproduces the published `(1 + 254αf)/256, (31 + 2αf)/32, ...` row. Solving
+the rows here instead of tabulating them preserves their exact dependence on
+`af`.
 """
 function onesided_filter_row(af::T, i::Int, M::Int) where {T}
     K = 2M + 1
@@ -253,8 +254,8 @@ left unfiltered; `closures` selects rows 2–4:
 - `:cascade` (default): centered compact filters of order 2, 4 and 6 with the
   same αf, the standard reduced-order boundary cascade. One filter pass of a
   smooth field is then second order in the maximum norm along the whole line,
-  not only at the wall, because the compact solve carries the row-2 error
-  inward.
+  not only at the wall, because solving the coupled compact system propagates
+  the row-2 truncation error into interior solution entries.
 - `:onesided`: the one-sided eighth-order rows of Gaitonde & Visbal (2000),
   derived at construction by `onesided_filter_row`. One pass is
   eighth order everywhere, and under repeated application the closed

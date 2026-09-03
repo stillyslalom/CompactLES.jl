@@ -17,11 +17,10 @@ using MPI
 using LinearAlgebra
 using Printf
 
-# Re-exported as a module and not used here: nothing in the solver pins or
-# queries threads, but `clusterprobe.jl` needs the topology queries and is run
-# from a driver environment that lists only CompactLES. `import`, not
-# `using`, so none of ThreadPinning's exported names (`ncores`, `nsockets`, ...)
-# enter this namespace.
+# `clusterprobe.jl` accesses `ThreadPinning` through CompactLES because its
+# driver environment lists only this package. The solver itself does not use
+# thread-pinning queries. `import` keeps exported names such as `ncores` and
+# `nsockets` out of this namespace.
 import ThreadPinning
 
 include("threading.jl")
@@ -65,7 +64,8 @@ export Decomp, ConservedState, exchange_halos!, interior, field, allocate_state
 export CompactScheme, ClosureRow, lele_d1_6, lele_d1_8, pade_d1_4, compact_filter
 export gaussian_filter
 export BandedCompactScheme, BandedClosureRow, lele_d1_10, compact_d8
-export BoundaryCondition, PeriodicBC, SlipWallBC, NoSlipWallBC, ExtrapolationBC, AxisBC, OriginBC, PoleBC
+export BoundaryCondition, PeriodicBC, SlipWallBC, NoSlipWallBC
+export ExtrapolationBC, AxisBC, OriginBC, PoleBC
 export NSCBCOutflowBC, NSCBCInflowBC, DirichletBC, save_checkpoint, load_checkpoint!, save_vtk
 export FieldWriter, DEFAULT_VTK_FIELDS, container_extension
 export BlockRegion, hdf5_available, hdf5_parallel
@@ -119,11 +119,10 @@ __init__() = __init_threading__()
 # BoundaryCondition x scheme, and a fixed subset of them as bare statements
 # bloats the image for configurations a run never builds.
 #
-# The trees above the floor, keyed on the `Solver` type, are what the
-# workload compiles: it runs the configurations the test suites build, and
-# so is a curated subset rather than a combinatorial one. Its cost, its
-# measured effect, and the reason it is skipped under a system MPI are in
-# precompile.jl.
+# The workload compiles call trees keyed on the `Solver` type. It runs the
+# configurations built by the test suites, producing a curated subset instead
+# of a combinatorial one. Its cost, measured effect, and system-MPI exclusion
+# are documented in precompile.jl.
 let A3 = Array{Float64,3}, D = Decomp{Float64}
     for P in (DirPlan{Float64}, BandPlan{Float64})
         precompile(apply_along!, (A3, P, A3, D))

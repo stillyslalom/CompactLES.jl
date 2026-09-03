@@ -4,10 +4,12 @@
 # preserving the package's dependency-free core. HDF5.jl requires a
 # libhdf5 binary, and a *parallel* libhdf5 must additionally be built against
 # the same MPI implementation the run uses. That is the same coupling
-# `reference/CLUSTER.md` documents for MPI.jl itself, with the same failure
-# mode: a mismatched build works until it does not. A cluster that cannot
-# supply one must still be able to run the solver, so nothing here is loadable
-# unless the caller writes `using HDF5`.
+# `reference/CLUSTER.md` documents for MPI.jl itself. With a mismatched MPI ABI,
+# failure is not confined to one HDF5 call: it may occur at shared-file open,
+# collective group or dataset creation, data transfer, or close. A failure after
+# file creation can leave an incomplete file. A cluster that cannot supply a
+# compatible build must still be able to run the solver, so nothing here is
+# loadable unless the caller writes `using HDF5`.
 #
 # --- Why a shared file -------------------------------------------------------
 #
@@ -61,7 +63,7 @@ function _hdf5_required(name)
     error("$name requires the HDF5 extension. Add HDF5.jl to your environment " *
           "and write `using HDF5` alongside `using CompactLES`; the extension " *
           "loads itself. For MPI-parallel writes the libhdf5 binary must also " *
-          "be built against the MPI this run uses — see the note at the top of " *
+          "be built against the MPI this run uses; see the note at the top of " *
           "src/hdf5.jl.")
 end
 

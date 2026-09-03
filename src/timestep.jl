@@ -77,7 +77,8 @@ low-storage accumulator; both are overwritten during the step, as is `Q`. A
 `solver.t + dt`, and boundary conditions are enforced on `Q` at that time before
 returning; `solver.t` itself is not advanced, which [`run!`](@ref) does.
 
-Collective, since every stage evaluates [`compute_rhs!`](@ref).
+Every rank must call this function because each stage evaluates
+[`compute_rhs!`](@ref).
 
 `prepared = true` asserts that boundary conditions are enforced on `Q` at
 `solver.t` and that the primitive fields are current for it, which lets the first
@@ -134,8 +135,8 @@ Multi-patch form of [`step!`](@ref): `states`, `dQs` and `dus` are vectors
 aligned with `solver.patches`. Each stage evaluates every local patch's RHS and
 update in the global patch order, then makes the interfaces consistent with
 [`sync_patches!`](@ref), the shared-plane averaging and ghost refill after
-every stage. Collective over `solver.comm`. A solver built with
-`subcycle = true` delegates to `subcycled_step!` instead.
+every stage. Every rank in `solver.comm` must call this function. A solver built
+with `subcycle = true` delegates to `subcycled_step!` instead.
 """
 function step!(solver::Solver, states::Vector{<:ConservedState},
                dQs::Vector{<:ConservedState}, dus::Vector{<:ConservedState},
@@ -194,11 +195,10 @@ or more below the root are restricted onto their parent inside the driver,
 after each parent substep, so that the parent's next substep starts from
 the composite.
 
-Selected by `step!` when the solver was built with `subcycle = true`.
-Collective, like the level coupling itself: the Hermite box saves gather
-over the parent communicator and every shell imposition carries the
-component-distributed chain's ring Allgatherv, so every rank must take the
-same substep sequence.
+Selected by `step!` when the solver was built with `subcycle = true`. Every
+rank must take the same substep sequence because the Hermite box saves gather
+over the parent communicator and each shell imposition performs the
+component-distributed chain's ring `Allgatherv`.
 """
 function subcycled_step!(solver::Solver, states::Vector{<:ConservedState},
                          dQs::Vector{<:ConservedState},
@@ -237,14 +237,19 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     lev = levels[ℓ]
     child = ℓ < length(levels) ? levels[ℓ+1] : nothing
     T = typeof(dt)
-    # Every collective this function runs is on level ℓ's own communicator
-    # or on a tile's within it: its patches' line solves, halo exchanges and
-    # shell impositions on the tile's, its records point-to-point on the
-    # level's, and its children's box gathers and restriction, which read
-    # the parent state and write back onto it, on the level's. This function
-    # is therefore entered by exactly the ranks owning level ℓ, and the
-    # recursion below guards on the child's ownership for the same reason. A
-    # tile's imposition is entered by the ranks holding it.
+    # Communication ownership follows the data at each level:
+    #
+    # - Patch line solves, halo exchanges, and shell impositions use the
+    #   owning tile's communicator.
+    # - Same-level records use point-to-point operations on level ℓ's
+    #   communicator.
+    # - Child box gathers and restriction use level ℓ's communicator because
+    #   they read and update parent data.
+    # - Recursive child stepping uses level ℓ + 1's communicator and is
+    #   entered only by its owners.
+    #
+    # Every owner of level ℓ enters this function. A tile shell imposition is
+    # entered only by the ranks that own that tile.
     shell!(θ) = for lt in lev.transfers
         lt.fine_index == 0 ||
             hermite_level_shell!(solver, states, lt, θ, parent_dt)
@@ -594,8 +599,9 @@ directions that the selecting rate and `dt` are built from.
 Only `dt` and `rank` are global. The remaining four describe the calling rank's
 own local maximum, so read them from the rank named by `rank`.
 
-Collective: two `Allreduce`s, plus the halo exchange and primitives refresh that
-[`max_rate`](@ref) also performs. Periodic evaluation distinguishes a physical
+Every rank in `solver.comm` must enter the two `Allreduce`s, halo exchange, and
+primitive refresh that [`max_rate`](@ref) also performs. Periodic evaluation
+distinguishes a physical
 timestep restriction from one imposed by azimuthal spacing near a coordinate
 singularity; see the CFL discussion in the README.
 """
@@ -655,9 +661,9 @@ and also when either reference is not itself positive: a state that has left
 the physical space supplies no scale to floor against, so [`run!`](@ref) warns
 and invents none.
 
-Collective, one `Allreduce`. `run!` calls it once before its loop, not once per
-step, so a second `run!` on the same solver re-derives the floors from
-the state that call starts with.
+Every rank in `solver.comm` must enter the single `Allreduce`. `run!` calls this
+function once before its loop, not once per step, so a second `run!` on the same
+solver re-derives the floors from that call's initial state.
 """
 function positivity_floors(solver::Solver, Q, control::StepControl)
     control.floor_ratio > 0 || return (0.0, 0.0)
@@ -741,8 +747,8 @@ the previous one leaves:
 3. **Energy**, at a point whose internal energy `E/ρ − ½|u|²` is below
    `e_floor`. The point is counted as `low_energy` whatever the scope. It is
    repaired when `scope === :internal_energy`, and under `:representable` only
-   when the *total* energy density `E` is itself below the floor, which is the
-   state no frame can represent. The repair damps the velocity, scaling the
+   when the *total* energy density satisfies `E < ρ * e_floor`. The repair
+   damps the velocity, scaling the
    momentum by `sqrt((E/ρ − e_floor) / (½|u|²))` with `E` untouched, so it moves
    kinetic energy into internal energy and creates none: total energy is
    conserved exactly and the momentum removed is tallied. Where there is no
@@ -750,12 +756,13 @@ the previous one leaves:
    fallback raises `E` instead and conserves the momentum exactly. Each branch
    conserves one of the two exactly and tallies what it did to the other.
 
-`:representable` repairs only when `E` is below the floor, which is also the
-condition selecting the fallback. That scope therefore always raises the energy
-and never damps a velocity.
+`:representable` repairs only when `E < ρ * e_floor`, which also selects the
+fallback. That scope therefore always raises the energy and never damps a
+velocity.
 
-Collective, one `Allreduce` of the five-element tally, so every rank sees the
-same totals and rank 0 reports on the whole domain, not on its own block.
+Every rank in `solver.comm` enters one `Allreduce` of the five-element tally.
+Each rank receives the same totals, and rank 0 reports the whole domain rather
+than its own block.
 
 The repair writes the interior only. Halos are left as the step left them, and
 nothing downstream depends on that: [`max_rate`](@ref) exchanges before reading
@@ -1032,11 +1039,11 @@ function run!(solver::Solver, Q, workspace::Workspace;
     ft0 = solver.floor_tally
     floor_0 = (steps=ft0.steps, cells=ft0.cells, low_energy=ft0.low_energy,
                mass=ft0.mass, energy=ft0.energy, momentum=ft0.momentum)
-    # `save.guard` suppresses re-banking at or below the failing step after a
-    # rollback. Without it a retry re-saves its way forward to the state that
-    # failed and then "rolls back" onto it, so every further retry starts from
-    # the corrupt state and only the CFL moves. Observed as: rolled back to
-    # step 180, failed at step 180, four times. `regrid!` honours it too.
+    # `save.guard` suppresses a new savepoint at or below the failing step after
+    # rollback. Without the guard, the retry replaces the valid savepoint with
+    # the state that failed. Each subsequent retry then restores that state and
+    # changes only the CFL. The observed sequence rolled back to step 180 and
+    # failed again at step 180 four times. `regrid!` observes the same guard.
     while solver.t < tfinal && solver.step < nmax
         # Timed from here, not around step! alone: max_rate carries the
         # per-step Allreduce and the filter is a full set of line solves, so both
@@ -1120,14 +1127,14 @@ function run!(solver::Solver, Q, workspace::Workspace;
         dt = min(dt, tfinal - solver.t)
         # An instant beyond `tfinal` is not reachable in this run, and aiming at
         # one makes the soft landing below halve the step against a target it
-        # never arrives at. The case is not exotic: `EveryTime(0.003)` run to
+        # never reaches. For example, `EveryTime(0.003)` run to
         # `tfinal = 0.009` schedules its third instant at `0.006 + 0.003`, which
         # is one ULP ABOVE the 0.009 literal, so every step from there on had
         # `gap` a shade over `tfinal - solver.t` and the division by
-        # `ceil(gap/dt) == 2` halved dt forever: 1.9e-13, 9.7e-14, 4.9e-14 and so
-        # on for forty steps until `solver.t + dt` rounded onto `tfinal`. The run
-        # did reach the endpoint and the trigger did fire; the whole cost was in
-        # steps, so no check detected it.
+        # `ceil(gap/dt) == 2` repeatedly halved dt: 1.9e-13, 9.7e-14, 4.9e-14,
+        # and so on for forty steps until `solver.t + dt` rounded to `tfinal`.
+        # The run reached the endpoint and fired the trigger, but the existing
+        # checks did not detect the additional steps.
         #
         # The instant is discarded, not clamped to `tfinal`, which keeps the
         # endpoint out of the soft landing, per the note below. `tfinal` is
@@ -1254,9 +1261,10 @@ component takes the antipodal sign of its own velocity component, and partial
 densities and energy are even. At the cylindrical axis this makes ρu_r and ρu_θ
 odd and everything else even.
 
-Collective, since each directional pass is a distributed line solve.
-`solver.tmp_a` is scratch here. The filtered result lands in the interior of `Q`
-only; each pass writes the halos from the exchange, so they are left
+Every rank must call this function because each directional pass is a
+distributed line solve. `solver.tmp_a` is scratch here. The filtered result
+lands in the interior of `Q` only; each pass writes the halos from the exchange,
+so they are left
 inconsistent with the filtered interior until the next step exchanges again.
 
 Under a positive `filter_cfl` the result is relaxed toward the filtered state
@@ -1288,17 +1296,16 @@ end
 
 # --- Top-level error reporting under many ranks.
 #
-# An uncaught exception is reported by *every* rank, so a SolverFailure at 448
-# ranks produces 448 stacktraces, several thousand lines burying the one fact
-# needed. Because the failures handled here arise from collective
+# An uncaught exception is reported by every rank. A `SolverFailure` at 448
+# ranks therefore produces 448 stacktraces and several thousand lines of
+# repeated output. Because the failures handled here arise from collective
 # quantities (`max_rate` reduces, `check_step` reads the reduced result), they
-# are usually identical on every rank, so 447 of those copies carry nothing.
+# are usually identical on every rank, 447 of those copies are redundant.
 #
 # One backtrace, from rank 0, plus a one-line identification from anywhere else
-# that failed; the latter handles rank-local errors, like `plan_direction`
-# rejecting one rank's block. Then MPI_Abort, so the ranks still blocked in a
-# collective are killed outright and do not each unwind through Julia's signal
-# handler and print a dump of their own.
+# that failed; the latter identifies rank-local errors such as `plan_direction`
+# rejecting one rank's block. `MPI_Abort` then terminates ranks still blocked in
+# a collective before each prints a separate signal-handler dump.
 
 """
     mpi_main(body; comm = MPI.COMM_WORLD, exitcode = 1, grace = 0.5)
@@ -1347,11 +1354,10 @@ function mpi_main(body; comm::MPI.Comm=MPI.COMM_WORLD, exitcode::Int=1,
                           sprint(showerror, err) * "\n")
         end
         flush(stderr)
-        # MPI_Abort kills the whole job, so whoever calls it first silences
-        # everyone else, including rank 0 mid-backtrace, whose output is the one
-        # to preserve. Non-zero ranks therefore yield briefly. If rank 0
-        # did not fail it is blocked in a collective and gets killed regardless,
-        # so the only cost is `grace` seconds on the way down.
+        # The first `MPI_Abort` terminates every rank and may truncate rank 0's
+        # backtrace. Nonzero ranks therefore wait briefly before aborting. If
+        # rank 0 did not fail, it remains blocked in a collective; the delay then
+        # adds only `grace` seconds before termination.
         rank == 0 || sleep(grace)
         MPI.Abort(comm, exitcode)
     end

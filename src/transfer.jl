@@ -17,7 +17,8 @@
 # amplifies the fine Nyquist by ≈ 20 (`bench/amr_transfer.jl`).
 #
 # Sampling convention (pinned numerically by the bench and the test gate,
-# since the source kernels do not fully specify it): the grid is node-centered with refinement ratio 3,
+# since the source kernels do not fully specify it): the grid is node-centered
+# with refinement ratio 3,
 # so coarse node m coincides with fine node 3m − 2 and a closed line has
 # n_fine = 3 n_coarse − 2 (a periodic one n_fine = 3 n_coarse). Restriction is
 # filter-then-subsample: apply the compact filter along the fine line, then
@@ -45,9 +46,11 @@
 # or periodic. The source's row 3 per end is the interior stencil, so each
 # scheme carries two closure rows, not three.
 
-# Interior coefficients of the transfer pair. The zero-wavenumber gains agree
-# to the last bit: a + 2b + 2c == 1 + 2α == 0.9356346489741322, so the pair
-# preserves the mean exactly (conservation by unit DC gain, not refluxing).
+# Interior coefficients of the transfer pair. Its two zero-wavenumber symbols
+# agree to the last bit: a + 2b + 2c == 1 + 2α == 0.9356346489741322. This
+# equality preserves constants, and therefore the represented mean, through
+# the transfer operator. It does not establish global AMR conservation;
+# conservation across level interfaces requires a separate refluxing scheme.
 const AMR_ALPHA = -0.0321826755129339
 const AMR_A = 0.4451523642186118
 const AMR_B = 0.2207614172195584

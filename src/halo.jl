@@ -163,8 +163,8 @@ selfwrap(decomp::Decomp, d::Int) = decomp.sub_size[d] == 1 && decomp.periodic[d]
 
 # One slab-onto-slab assignment inside a field: `copyto!` on host storage, a
 # broadcast on device storage, since the generic `copyto!` fallback between two
-# device views iterates scalar indices, which errors (or crawls) there. Both
-# forms are element copies, so the result is identical.
+# device views uses scalar indexing, which fails or incurs scalar-indexing
+# overhead. Both forms are element copies, so the result is identical.
 @inline function _assign_slab!(f, d::Int, rdst::UnitRange{Int}, rsrc::UnitRange{Int})
     if _cpu_storage(f)
         copyto!(_slab(f, d, rdst), _slab(f, d, rsrc))

@@ -3,7 +3,7 @@
 # parent, and the machinery that distributes that coupling. Design rationale
 # and measurements: reference/AMR_GPU.md.
 #
-# Each refined region is given in its PARENT level's node space and is
+# Each refined region is given in its parent level's node space and is
 # covered by one patch at refinement ratio 3, node-centered: a region of m
 # parent nodes per refined dimension carries 3m − 2 fine nodes, parent node
 # a + k − 1 coinciding with fine node 3k − 2. By default every level advances
@@ -16,7 +16,7 @@
 # also move under `regrid_interval` (src/regrid.jl).
 #
 # A patch and its parent are coupled on two schedules, both by default
-# through the POINT-SAMPLE halves of the transfer machinery (transfer.jl):
+# through the point-sample halves of the transfer machinery (transfer.jl):
 #
 #   - After every RK stage update, `prolong_level_ghosts!` interpolates the
 #     coarse state (order 6) over a box extending `LEVEL_BUFFER` coarse nodes
@@ -34,7 +34,7 @@
 # The invertible filter pair itself (`prolong!`/`restrict!`, deconvolution
 # against Gaussian filtering) is not the default coupling, on a
 # measurement: the pair's contract is that prolongation input is samples of
-# the FILTERED field, while the live coarse solution is point samples of the
+# the filtered field, while the live coarse solution is point samples of the
 # field itself. Deconvolving point samples "sharpens" data that was never
 # smoothed and filtering on the way down attenuates resolved content, both
 # O(h²) against the solution: the entropy-wave gate measured order 1.3–1.7
@@ -43,7 +43,7 @@
 # at a same-level patch interface). `level_restriction = :filter` keeps the
 # filtered path selectable; its anti-alias smoothing is the tool to reach
 # for if injection restriction proves positivity-limited on captured shocks.
-# Regridding likewise initializes NEW fine regions by interpolation, since
+# Regridding likewise initializes new fine regions by interpolation, since
 # freshly covered coarse data are point samples too (regrid.jl).
 #
 # Multi-dimensional transfer is a tensor product realized as a chain: each
@@ -76,17 +76,17 @@
 # level's. The rate reduction is a single Allreduce over the whole run at the
 # step boundary: each rank reduces the maximum over the patches it holds, and
 # the maximum is exact and order-independent, so the grouping is immaterial.
-# Cross-level coupling runs on the PARENT level's communicator, which
+# Cross-level coupling runs on the parent level's communicator, which
 # contains the child's: the buffered-box gathers read parent state that a
 # child's owner need not hold, and the covered nodes of the restriction
 # write-back lie on parent ranks outside the child's subset, so every rank
 # owning the parent level enters both, contributing nothing for a parent
 # tile it does not hold.
 #
-# The coupling DATA is replicated: every rank gathers the buffered coarse box
+# The coupling data are replicated: every rank gathers the buffered coarse box
 # (and, for restriction, the coincident-node samples of the fine patch) with
 # one Allgatherv and writes only the shell or covered nodes it owns. The
-# interpolation CHAINS distribute by conserved component, each rank
+# interpolation chains distribute by conserved component, with each rank
 # running the serial chain (COMM_SELF Decomps) for its own components and
 # sharing only the thin shell ring; see the section comment above
 # `_impose_shell!` for the measurement that forced that split. No halo
@@ -478,7 +478,7 @@ held on the patch's [`Level`](@ref); consumed by `prolong_level_ghosts!`
 and `restrict_level!`.
 """
 struct LevelTransfer{T}
-    region::BlockRegion              # refined region, parent LEVEL node space
+    region::BlockRegion              # refined region, parent-level node space
     active::NTuple{3,Bool}           # resolved dimensions of the refined patch;
                                      # held here rather than read off the fine
                                      # decomposition, which a parent-only rank
@@ -518,7 +518,7 @@ struct LevelTransfer{T}
     # chain, and writes only what it owns, so no consistency question arises
     # and the chain needs no halo exchanges of its own. These tables record
     # every rank's owned block of each patch, in that patch's node space and
-    # in the rank order of the PARENT level's communicator, on which both
+    # in the rank order of the parent level's communicator, on which both
     # gathers run: a child's owner need not hold the parent tiles under its
     # box, and the covered nodes of the restriction lie on parent ranks
     # outside the child's subset, so each gather is collective over the
@@ -553,7 +553,7 @@ interface plane as root slabs do.
 
 `patches`, `tiles` and the records are this rank's own and are empty on a
 rank holding no tile of the level; `owners` and `transfers` are held by every
-rank of the PARENT level's subset, since the box gathers and the restriction
+rank of the parent level's subset, since the box gathers and the restriction
 write-back built on them run there, and are indexed by tile. `owners` is the
 authority across regrids: a surviving tile keeps its range there until a
 rebalance moves it (`_place_tiles`, `src/regrid.jl`).
@@ -724,7 +724,7 @@ end
 # level) and shifted onto solver patch indices, one record set per dimension
 # for the phased sync. `tiles` are the tiles this rank holds, `patch_indices`
 # their solver indices and `decomps` their decompositions, all aligned.
-# Collective over `comm`, the LEVEL's own communicator (one Allgatherv per
+# Collective over `comm`, the level's own communicator (one Allgatherv per
 # dimension of every rank's blocks of the tiles it holds; a rank outside the
 # subset must not call). Each record's `partner` is therefore a rank number
 # in that communicator, the one `_sync_level_records!` exchanges over, and a
@@ -1269,7 +1269,7 @@ end
 function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
                             df::Decomp, boxf::Decomp, shell_only::Bool=true)
     # Fine patch node g ↔ fine box node g + 3·LEVEL_BUFFER (active dims). The
-    # shell is every padded slot whose PATCH-GLOBAL index lies outside the
+    # shell is every padded slot whose patch-global index lies outside the
     # strict interior [2, N−1] along an active dimension whose face on that
     # side is parent-fed (`lt.imposed`): the ghost ring plus the boundary
     # planes, both imposed from the prolonged parent state; a face shared
@@ -1335,7 +1335,7 @@ end
 # interpolation over the whole buffered box per conserved component, and a
 # replicated chain repeats all of it on every rank. Measured on the 3-D cost
 # case at np = 8, that put the composite at 85% of the uniform-fine wall.
-# The chains therefore distribute BY COMPONENT: rank r runs the chain only
+# The chains therefore distribute by component: rank r runs the chain only
 # for components c with (c − 1) mod np == r, packs the thin shell ring of its
 # results (2 slabs of thickness pad+1 per active dimension, full transverse
 # extent, in patch-padded node space), and one Allgatherv replicates the
@@ -1618,7 +1618,7 @@ which is a whole-patch line solve and therefore still serial-only (guarded at
 setup). Either way the write-back stops `RESTRICT_MARGIN` coarse nodes short
 of the coarse-fine boundary. Runs once per completed step, after the state
 filter; a solver without refinement returns immediately. Collective under
-`:inject`, over the PARENT level's communicator: the covered nodes are spread
+`:inject`, over the parent level's communicator: the covered nodes are spread
 over every rank owning the parent, including those outside the refined level's
 own subset, so all of them enter the gather and none of them may skip it.
 """
@@ -1664,7 +1664,7 @@ function _restrict_patch!(solver, states, lt::LevelTransfer, parent::LevelComm)
         _write_covered_region!(lt.restricted, lt, states, patches)
         return states
     end
-    # The gather runs on the PARENT's communicator, not the refined level's:
+    # The gather runs on the parent's communicator, not the refined level's:
     # the covered coarse nodes are spread over every rank owning the parent,
     # and one outside the refined subset holds no fine block but does hold
     # covered nodes. `fine_blocks` is in the parent communicator's rank order
@@ -1707,7 +1707,7 @@ end
 #
 # Under subcycling (three fine steps of dt/3 per parent step, Berger–Oliger
 # order: parent first, children after), a refined patch's shell needs parent
-# values at its stage times BETWEEN the parent's t^n and t^{n+1}. The parent
+# values at stage times between the parent's t^n and t^{n+1}. The parent
 # solution over its step is reconstructed on the buffered box by cubic
 # Hermite interpolation from its endpoint values and endpoint RHS rates,
 # O(dt⁴), matching the integrator's order; LSRK54 has no free dense output

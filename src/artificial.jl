@@ -273,7 +273,8 @@ The [`compact_d8`](@ref) counterpart of [`delta4_sum!`](@ref): reduces
 h_d^wpow |d⁸_d f| over the active directions into `out`, one distributed
 pentadiagonal line solve per direction. When `accumulate`, it combines with the
 existing contents of `out` using the same rule as `delta4_sum!`. Requires current
-rank-boundary halos of `f` to depth 4. Collective: every rank must call it.
+rank-boundary halos of `f` to depth 4. Its distributed line solves require
+every rank in the directional sub-communicators to call it in the same order.
 
 `parity[d]` is the field's antipodal sign across a fold on dimension `d`, and
 is `+1` for every even scalar the sensors are built from: the strain magnitude,
@@ -357,9 +358,10 @@ with even parity, which is correct for every field smoothed here: each is a
 detector output, and each detector ends in an absolute value. Which operator
 runs is `ArtParams.smoother`; see [`smooth_along!`](@ref).
 
-`solver.tmp_a` is scratch and is overwritten. Collective: the halos of `f` are
-exchanged along each active dimension, and under `smoother = :compact` the pass
-is itself a distributed line solve, so every rank must call this.
+`solver.tmp_a` is scratch and is overwritten. The halo exchanges along each
+active dimension require all ranks to participate. Under
+`smoother = :compact`, every rank in each directional sub-communicator must also
+enter the distributed line solve.
 """
 function smooth!(f, solver)
     for d in 1:3
@@ -417,9 +419,9 @@ fewer than |S|, and the two agree at the grid scale: a grid-to-grid oscillation
 of amplitude A gives 16Ah either way, so `C_mu` transfers between the settings
 as a starting point.
 
-The motivation is the absolute value in |S| = sqrt(S_ij S_ij), which places a
-cusp wherever the strain passes through zero, and a cusp is grid-scale
-structure at any resolution. Applied to |S|, the two detectors stay within a
+The absolute value in |S| = sqrt(S_ij S_ij) places a cusp wherever the strain
+passes through zero. Such a cusp is grid-scale structure at any resolution.
+Applied to |S|, the two detectors stay within a
 factor of 1.8 of each other at every wavelength; applied to the velocity, they
 reproduce their designed separation of 569× at eight points per wavelength.
 `reference/CALIBRATION.md` has the response table.
@@ -543,8 +545,8 @@ implementation uses. The gated form multiplies it by `compression_switch`
 (Mani, Larsson & Moin, JCP 228, 2009; Kawai, Shankar &
 Lele, JCP 229, 2010), which restricts β\\* to compression, where bulk viscosity
 has a physical interpretation; `gate_beta!` applies that same switch to the
-unchanged strain sensor, which is the other half of the same refinement and a
-great deal cheaper.
+unchanged strain sensor, which is the other half of the same refinement and
+avoids the additional detector and smoothing passes described below.
 
 Either form applies the same detector, weights and smoothing as the strain
 sensor and differs only in the field underneath: Δ, the signed sum of the three
@@ -564,8 +566,8 @@ whenever μ\\* still needs the strain sensor. The smoothing is one pass per
 active dimension, and a line solve only under `smoother = :compact`. `grad_u`
 supplies both Δ and ω, so the switch itself adds no derivatives.
 
-Collective: the dilatation is halo-exchanged and both `detect_sum!` and
-`smooth!` run over every active dimension, so every rank must call this.
+The dilatation halo exchange and the distributed solves in `detect_sum!` and
+`smooth!` require every rank to call this function in the same order.
 
 Unlike the strain form, the gated one does not reproduce bit-for-bit under a
 changed decomposition. H(−Δ) is discontinuous at Δ = 0 and, with ε at the
@@ -647,21 +649,24 @@ No-op if disabled.
 
 The caller supplies the primitives and the velocity gradients: `compute_rhs!`
 runs `compute_primitives_and_gradients!` on the same `Q` immediately before
-this. Collective, since `smooth!` exchanges halos along every active dimension
-and both it and `detect_sum!` may run a distributed line solve; every rank must
-call it. The `enabled` early return sits above all of that and is safe only
+this. Every rank must call this function because `smooth!` exchanges halos
+along every active dimension, and both it and `detect_sum!` may run distributed
+line solves. The `enabled` early return precedes those operations and is safe
 because `ArtParams` is a setup-time constant identical on every rank.
 
-`solver.sensor`, `solver.sensor_sp`, `solver.tmp_a` and `solver.tmp_b` are
-scratch here, as is `solver.ring_buf` under `detector = :d8`, and their
-contents are dead once this function returns: every value read out of them has
-been folded into the coefficient arrays above.
-Later phases of the same `compute_rhs!` may therefore reuse them, and
-`NSCBCOutflowBC` does, for transverse pressure derivatives. A diagnostic, source
-term, or boundary condition that adds a reader of a sensor after this point
-invalidates the invariant and must take its own storage. One reader exists
-outside the RHS: `scalar_field(solver, :sensor)` returns `solver.sensor`,
-so the NSCBC correction borrows `tmp_b` and `sensor_sp` instead.
+`solver.sensor`, `solver.sensor_sp`, `solver.tmp_a`, and `solver.tmp_b` are
+scratch for the RHS computation, as is `solver.ring_buf` under
+`detector = :d8`. After the coefficient arrays have been assembled, later RHS
+phases may overwrite `sensor_sp`, `tmp_a`, `tmp_b`, and `ring_buf`.
+`NSCBCOutflowBC` uses `tmp_b` and `sensor_sp` for transverse pressure
+derivatives under this contract.
+
+For a single-patch solver, `solver.sensor` is deliberately retained after the
+RHS so `scalar_field(solver, :sensor)` can expose the most recently computed
+sensor. Later RHS phases, boundary conditions, and source terms must not
+overwrite it. Any additional post-artificial reader of the other scratch fields
+must provide its own storage. Multi-patch output cannot use the shared sensor
+workspace and must likewise provide persistent per-patch storage.
 """
 function compute_artificial!(solver, Q)
     art = solver.art

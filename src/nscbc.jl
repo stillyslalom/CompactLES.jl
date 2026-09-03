@@ -65,9 +65,9 @@ end
 enforce!(::NSCBCOutflowBC, Q, solver, d, side) = nothing
 
 function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
-    # COLLECTIVES FIRST. deriv_along! runs the distributed compact solve, which
-    # is collective over the sub-communicator of its dimension: EVERY rank must
-    # reach it, including the ones that own no part of this boundary plane.
+    # Run distributed solves before the boundary-plane ownership check.
+    # `deriv_along!` is collective over the dimension's sub-communicator, so
+    # every rank must reach it, including ranks that own none of this plane.
     # Testing `wallplane === nothing` before these calls deadlocks as soon as
     # the boundary-normal dimension is decomposed, i.e. the normal way to run
     # an NSCBC problem, splitting along the flow direction.
@@ -80,8 +80,8 @@ function correct_rhs!(bc::NSCBCOutflowBC, solver, Q, dQ, d::Int, side::Int)
     # active transverse dimensions (they vanish in 1-D and collapsed dims).
     # `active` is a global property, so every rank agrees on these branches.
     #
-    # SCRATCH ALIASING. `tmp_b` and `sensor_sp` are borrowed here, and this is
-    # safe only because of where compute_rhs! calls the boundary corrections:
+    # `tmp_b` and `sensor_sp` are borrowed here. This is safe because
+    # `compute_rhs!` calls the boundary corrections
     # after add_metric_sources!, by which point compute_artificial! has
     # consumed both sensors into mu_art/beta_art/kappa_art/D_art and the flux
     # divergence has finished with tmp_a/tmp_b. See the invariant recorded in
@@ -261,9 +261,9 @@ end
 enforce!(::NSCBCInflowBC, Q, solver, d, side) = nothing
 
 function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
-    # COLLECTIVES FIRST; see the note in the outflow method above: these are
-    # distributed solves along d, so every rank must call them before any rank
-    # is allowed to return early.
+    # Run these distributed solves along `d` before the boundary-plane ownership
+    # check. Every rank must call them before any rank returns early; see the
+    # outflow method above.
     # One-sided coordinate derivatives of p and ρ along d.
     deriv_along!(solver.tmp_a, solver.p, solver, d, 1)
     deriv_along!(solver.tmp_b, solver.rho, solver, d, 1)

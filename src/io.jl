@@ -3,7 +3,7 @@
 # global grid, decomposition, and conserved layout. Parallel-aware
 # postprocessing formats are a separate concern.
 #
-# --- What the header has to pin down -----------------------------------------
+# --- Header validation -------------------------------------------------------
 #
 # The payload is a block of conserved components, and nothing in it records what
 # those components mean or where the points are, so a restart onto a solver that
@@ -40,14 +40,13 @@
 #
 # --- Mutable run state -------------------------------------------------------
 #
-# (t, step) are not the whole of what a restart has to carry. `run!` also reads
-# `solver.cfl`, which a `StepControl` retry lowers and which then has to persist
-# across the rollback, and `dt_prev` / `rate_prev`, which the growth cap, the
-# rate predictor and `filter_weight` all read. A `SwitchableBC` carries a
-# `switched` flag per face; resuming with it cleared would run the whole
-# remainder of the calculation under the pre-switch boundary condition, and on a
-# switch that changes the collective pattern (`NSCBCOutflowBC`) a rank set
-# disagreeing about it deadlocks.
+# A restart requires more mutable state than `(t, step)`. `run!` also reads
+# `solver.cfl`, which a `StepControl` retry lowers and which must persist across
+# rollback. The growth cap, rate predictor, and `filter_weight` read `dt_prev`
+# and `rate_prev`. A `SwitchableBC` carries a `switched` flag per face. Clearing
+# it on resume would apply the pre-switch boundary condition for the rest of the
+# run. If the switch changes the collective pattern (`NSCBCOutflowBC`), rank
+# disagreement also deadlocks.
 #
 # The checkpoint does not carry the caller's own bookkeeping. Callback schedules
 # and a `FieldWriter`'s frame index live outside the solver, and both docstrings
@@ -178,8 +177,9 @@ end
 Create `dirname(prefix)` if it does not exist and return `prefix`. Rank 0 makes
 the directory and the others wait for it: concurrent `mkpath` of one path is not
 reliably idempotent across filesystems, and a rank writing into a directory that
-does not yet exist fails at `open` without indicating the cause. Collective over
-`comm`, and used by every writer here that names a path the caller chose.
+does not yet exist fails at `open` without indicating the cause. Every rank in
+`comm` must call this function. Every writer that accepts a caller-selected path
+uses it.
 """
 function ensure_output_dir(prefix::AbstractString, comm::MPI.Comm)
     dir = dirname(String(prefix))
@@ -194,8 +194,9 @@ end
 Write the interior of `Q` plus the solver's mutable run state to
 `prefix.rNNNN.ckpt`, one file per rank, and return `prefix`. `NNNN` is the rank
 zero-padded to four digits, and an existing file of that name is truncated.
-Collective: rank 0 creates `dirname(prefix)` and the others wait for it, after
-which every rank writes its own file with no further communication.
+Rank 0 creates `dirname(prefix)`, and every rank in `solver.comm` waits at the
+following barrier. Each rank then writes its own file without further
+communication.
 
 The header describes the state well enough for [`load_checkpoint!`](@ref) to
 reject a solver it does not belong to: the format version, the conserved and
@@ -456,13 +457,13 @@ end
 # --- Subsampling -------------------------------------------------------------
 #
 # A stride writes every s-th point. Every rank must select the same s-th point,
-# so the retained set is defined on the GLOBAL index as {1, 1+s, 1+2s, ...} and
+# so the retained set is defined on the global index as {1, 1+s, 1+2s, ...} and
 # each rank writes its own intersection with that set. Striding a rank's block
 # from its own first local point would give the pieces offset lattices that
 # neither tile nor align. The result is a doubled or missing plane at a rank
 # boundary, not an error.
 #
-# Extents are then expressed in the COARSE index space, where global index g
+# Extents are then expressed in the coarse index space, where global index g
 # sits at (g − 1) ÷ s. The resulting per-rank ranges are contiguous, disjoint,
 # and cover the coarse grid, as the parallel container requires.
 #
@@ -490,10 +491,10 @@ end
 # of the data. It reuses the stride machinery, since a slice is the degenerate
 # retained set {g} along one dimension and the strided set along the other two.
 #
-# One semantic difference, and it is the whole of the difference. Under a stride
-# an empty range is an error, because every rank must contribute a piece. Under
-# a slice an empty range is the normal case: only the ranks whose block spans
-# `g` hold any of the plane, and the rest write nothing at all. The parallel
+# Empty ranges have different meanings for strides and slices. Under a stride,
+# an empty range is an error because every rank must contribute a piece. Under
+# a slice, an empty range is expected: only the ranks whose block spans `g` hold
+# any of the plane, and the rest write nothing. The parallel
 # container therefore lists fewer pieces than there are ranks, and the writers
 # omit ranks with no points, avoiding degenerate extents.
 #
@@ -604,8 +605,8 @@ end
 
 # |∇ρ|, the numerical schlieren used to visualize shock structure. It requires
 # its own derivative pass because `grad_u` carries velocity gradients only.
-# Collective: `deriv_scaled_along!` is a distributed solve, and is safe here
-# only because every rank traverses the same `fields` tuple in the same order.
+# `deriv_scaled_along!` is a distributed solve. Every rank traverses the same
+# `fields` tuple in the same order, preserving its collective call order.
 function _schlieren(solver::Solver)
     g = similar(solver.rho)
     acc = zeros(eltype(solver.rho), size(solver.rho))
@@ -674,8 +675,8 @@ by `species`), and `:strain_mag`, `:sensor`, `:mu_art`, `:beta_art`,
 gradient and artificial passes have run; `save_vtk` and `field_array`
 arrange that, and `field_array` also copies in every case.
 
-`:schlieren` takes a derivative pass of its own, which is a distributed solve.
-That name therefore makes this call collective, and every rank must reach it.
+`:schlieren` takes a distributed derivative pass, so every rank in the
+directional sub-communicators must reach this call in the same order.
 
 The result is valid only over the interior unless halos have been refreshed.
 """
@@ -850,8 +851,9 @@ none of the plane, which must still reach the distributed solves behind the
 derived fields. A stride large enough to leave a rank with no points throws, and
 does so collectively, so no rank is left blocked while another raises.
 
-Collective: every rank must call it with the same `fields`, `stride` and
-`slice`, since the derived fields run distributed solves in tuple order.
+Every rank in `solver.comm` must call this function with the same `fields`,
+`stride`, and `slice`, since the derived fields run distributed solves in tuple
+order.
 """
 function save_vtk(solver::Solver, Q, prefix::AbstractString;
                   fields=DEFAULT_VTK_FIELDS, stride=1, slice=nothing)

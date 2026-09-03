@@ -204,7 +204,7 @@ end
 # cancel; discretely D_ξ2(sinθ) ≠ cosθ, so the analytically sampled cotθ/r
 # leaves an O(h⁴) freestream residual (a GCL truncation error, not a bug).
 #
-# We restore exact discrete freestream preservation by REDEFINING cotθ/r as
+# Exact discrete freestream preservation uses cotθ/r defined as
 # inv_J·D_ξ2(A₂): the identical operator (same compact scheme, same pole/antipodal
 # fold, same antipodal sign σ as the m2 pressure flux) applied to the identical
 # area factor. By linearity the source then cancels the divergence node-by-node
@@ -246,7 +246,7 @@ end
 # ---------------------------------------------------------------------------
 # Physical-component velocity gradients. compute_rhs! first scales the raw
 # coordinate derivatives by 1/h_d (which now also carries any stretching
-# Jacobian); these functions then ADD the curvature corrections only, so the
+# Jacobian); these functions then add only the curvature corrections, so the
 # same corrections serve stretched and unstretched grids. Convention matches rhs.jl:
 # grad_u[d, j] is the d-direction derivative of the j-th velocity component.
 

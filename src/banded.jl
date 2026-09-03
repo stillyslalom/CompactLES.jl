@@ -64,9 +64,9 @@ end
 function solve_col!(x::AbstractVector{T}, F::BandFactor{T}) where {T}
     n, q = F.n, F.q
     L, U = F.L, F.U
-    # Skip a zero multiplier, as the transposed sweep does: identical on
-    # finite data, and it keeps the x sweep from spreading a NaN or Inf
-    # through 0 * x where the y/z sweeps leave the row untouched.
+    # `solve_cols!` also skips zero multipliers. For finite data this does not
+    # change the result. For non-finite data it prevents `0 * NaN` and
+    # `0 * Inf` from contaminating rows that the y/z sweeps leave untouched.
     @inbounds for k in 1:(n-1)
         xk = x[k]
         for m in 1:min(q, n - k)
@@ -75,11 +75,11 @@ function solve_col!(x::AbstractVector{T}, F::BandFactor{T}) where {T}
             x[k+m] -= lm * xk
         end
     end
-    # Multiply by the reciprocal pivot on every banded
-    # path: the transposed y/z sweep hoists `inv(U[1, i])` out of its line
-    # loop, and dividing here made the x sweep a different-rounding operator
-    # from the y and z sweeps (8.9e-16 on a q = 2, n = 40 line), which cost an
-    # exactly symmetric problem its exact directional symmetry under C10.
+    # Multiply by the reciprocal pivot on every banded path. The transposed y/z
+    # sweep hoists `inv(U[1, i])` out of its line loop. Direct division here
+    # therefore used a different rounding path for the x sweep. The measured
+    # difference was 8.9e-16 on a q = 2, n = 40 line and broke exact directional
+    # symmetry under C10.
     @inbounds for i in n:-1:1
         acc = x[i]
         for t in 1:min(q, n - i)

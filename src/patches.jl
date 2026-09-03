@@ -58,12 +58,12 @@ and geometry on [`Patch`](@ref) are per patch. A tiled level's lattice cells
 carry equal extents by construction, so its tiles hold one set between them,
 a cell clipped at the domain edge excepted.
 
-The split follows the lifetimes, not the naming: `mu_art`/`beta_art`/
-`kappa_art`/`D_art` survive into the next step's [`max_rate`](@ref), the
-primitives must be current on every patch for a `prepared` first stage, and
-the geometry never changes, so all three groups stay on the patch. What
-remains is written and read inside one patch's own RHS: the gradients, the
-sensor fields and their scratch, and the assembled fluxes.
+Storage placement follows field lifetime. `mu_art`, `beta_art`, `kappa_art`,
+and `D_art` survive into the next step's [`max_rate`](@ref). The primitives
+must be current on every patch for a `prepared` first stage, and the geometry
+never changes. Those groups therefore stay on the patch. Gradients, sensor
+fields, sensor scratch, and assembled fluxes are written and consumed within
+one patch's RHS and remain in the shared workspace.
 
 Two fields with a reader outside the RHS are here nonetheless.
 `scalar_field(solver, :strain_mag)` and `:sensor` expose the smoothed sensors
@@ -436,8 +436,9 @@ function patch_rank_counts(regions::Vector{BlockRegion}, np::Int)
     total = sum(vol)
     share = [np * v / total for v in vol]
     counts = max.(floor.(Int, share), 1)
-    # Largest-remainder distribution of what floor+min left over, negative
-    # corrections coming off the largest counts first.
+    # Largest-remainder distribution after flooring shares and enforcing one
+    # rank per patch. If the minimum constraint over-allocates ranks, remove
+    # them from the largest counts first.
     while sum(counts) < np
         i = argmax(share .- counts)
         counts[i] += 1

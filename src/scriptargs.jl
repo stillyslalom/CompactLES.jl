@@ -1,13 +1,12 @@
 # Argument parsing for the scripts in `bench/` and at the repo root.
 #
-# Not solver code. It lives here because three scripts had grown three copies of
-# it, and because the alternative each of them started from, `get(ENV, ...)`
-# scattered through the body, has a failure mode this does not: a mistyped
-# environment variable runs the default for the length of the job and reports
-# nothing. `CL_TGV_PROGERSS` is a silent hour; `progerss=200` is a message.
+# This parser is shared by three scripts that previously carried separate
+# implementations. Centralized `ARGS` parsing rejects unknown option names
+# immediately. The former `get(ENV, ...)` calls silently used defaults when an
+# environment-variable name was mistyped.
 #
-# ARGS also puts the whole invocation in the batch script and in the job log,
-# where an `export` three lines up does not. Two library-level knobs remain in
+# `ARGS` also records the complete invocation in the batch script and job log.
+# Two library-level options remain in
 # the environment (`CL_THREAD_MIN_WORK`, `CL_ERROR_BACKTRACE`): those are read
 # from inside the package, where there is no ARGS to consult.
 

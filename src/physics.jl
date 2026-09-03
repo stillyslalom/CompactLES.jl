@@ -116,6 +116,7 @@ struct IdealMixture{T} <: EOS
 end
 
 function IdealMixture(sp::Vector{IdealSpecies{T}}) where {T}
+    isempty(sp) && throw(ArgumentError("IdealMixture requires at least one species"))
     Rk  = [x.R for x in sp]
     cvk = [x.R / (x.gamma - 1) for x in sp]
     IdealMixture{T}(sp, Rk, cvk, Rk .+ cvk)
@@ -525,8 +526,10 @@ struct Nasa9Mixture{T} <: EOS
     T_guess::T
 end
 
-Nasa9Mixture(sp::Vector{Nasa9Species{T}}; T_guess=300.0) where {T} =
-    Nasa9Mixture{T}(sp, [x.R for x in sp], T(T_guess))
+function Nasa9Mixture(sp::Vector{Nasa9Species{T}}; T_guess=300.0) where {T}
+    isempty(sp) && throw(ArgumentError("Nasa9Mixture requires at least one species"))
+    return Nasa9Mixture{T}(sp, [x.R for x in sp], T(T_guess))
+end
 
 nspecies(eos::Nasa9Mixture) = length(eos.sp)
 species_names(eos::Nasa9Mixture) = [x.name for x in eos.sp]

@@ -355,9 +355,10 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:der
         # Mixed parities per pdim half: run both plans and select. The line
         # continued through the singular point reads f(−r,θ) = σ f(Mx), so
         # e(−r,θ) = ½[σ f(Mx) + σ² f(x)] = e(x) and o(−r,θ) = −o(x): the even
-        # combo is even and the odd combo odd across the mirror WHATEVER σ is
-        # (the header of this file derives it). σ enters only through the
-        # combination and the reconstruction. Folding e with σ instead, as an
+        # even combination has mirror parity +1, and the odd combination has
+        # mirror parity -1 (the header of this file derives this invariant).
+        # The field parity σ affects only the butterfly and reconstruction.
+        # Folding e with σ instead, as an
         # earlier version did, is correct only where e vanishes, which every
         # axisymmetric field and the odd-pairing scalar of the test suite
         # satisfy; a uniform Cartesian velocity through the axis has e = f and
