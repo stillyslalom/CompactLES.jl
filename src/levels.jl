@@ -1767,14 +1767,23 @@ end
     RegridSpec
 
 Configuration and rebuild inputs for tagging-driven regridding
-(`src/regrid.jl`): the regrid cadence in coarse steps, the tagging threshold on
-the relative undivided fourth difference of the mixture density, the buffer of
-coarse cells added around tagged cells, the nesting margin, and everything a
-fine-patch rebuild needs that the `Solver` does not itself retain: the
-schemes, halo width, interface treatment, and backend. `last_step` records the
-step of the most recent regrid check so a run resumed on the same solver keeps
-the cadence. Constructed by the [`Solver`](@ref) constructor's
-`regrid_interval` keyword; consumed by `regrid!`.
+(`src/regrid.jl`): the regrid cadence in coarse steps, the tag criteria, the
+buffer of coarse cells added around tagged cells, the nesting margin, and
+everything a fine-patch rebuild needs that the `Solver` does not itself
+retain: the schemes, halo width, interface treatment, and backend.
+`last_step` records the step of the most recent regrid check so a run
+resumed on the same solver keeps the cadence. Constructed by the
+[`Solver`](@ref) constructor's `regrid_interval` keyword; consumed by
+`regrid!`.
+
+The tag is the union of the criteria `_tag_sweep!` evaluates over the
+parent level's state: `threshold` on the relative undivided fourth
+difference of the mixture density, always on; `sensor_threshold` on the
+artificial diffusivity number of the last right-hand side; `gradient_threshold`
+on the mass-fraction change per cell; `vorticity_threshold` on the vorticity
+magnitude; and `predicate`, a user closure over the parent patch. A zero
+threshold or a `nothing` predicate leaves that criterion off. `tags` is the
+sweep's host scratch over the root's padded extent.
 
 The rebalance fields drive the repartition of a tiled level on measured
 load: `rebalance` is the threshold on the ratio of the largest to the mean
@@ -1806,13 +1815,20 @@ mutable struct RegridSpec{T}
     wall_mark::Float64               # solver.wall_total at the last check
     wait_mark::Float64               # solver.wait_total at the last check
     wall_regrid::Float64             # this rank's regrid work since, excluded
+    sensor_threshold::T              # artificial diffusivity number; 0 = off
+    gradient_threshold::T            # mass-fraction change per cell; 0 = off
+    vorticity_threshold::T           # vorticity magnitude; 0 = off
+    predicate::Union{Nothing,Function} # (patch, I) -> Bool over the parent
+    tags::Array{Int8,3}              # sweep scratch, root padded extent
 end
 
 RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
-              deriv, filt, smoo, backend, tile, last_step) where {T} =
+              deriv, filt, smoo, backend, tile, last_step,
+              rebalance=0.0, persist=1) where {T} =
     RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
                   deriv, filt, smoo, backend, tile, last_step,
-                  0.0, 1, 0, 1.0, 0.0, 0.0, 0.0)
+                  rebalance, persist, 0, 1.0, 0.0, 0.0, 0.0,
+                  zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0))
 
 """
     hermite_level_shell!(solver, states, lt, θ, dt)

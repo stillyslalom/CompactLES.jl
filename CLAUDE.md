@@ -75,7 +75,7 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 123 testsets, 0 failures
+julia --project=. test/runtests.jl        # 124 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
@@ -98,13 +98,13 @@ binding and that every exported name with a docstring is rendered somewhere
 it is listed in a `@docs` block on some page; otherwise write it in plain
 backticks. `runtests.jl` includes the same check as its last testset.
 
-The `123 testsets` and the `168/168` are counted by different mechanisms and are
+The `124 testsets` and the `168/168` are counted by different mechanisms and are
 not comparable. `runtests.jl` runs everything inside one top-level
 `@testset` and prints one summary tree at the end: the top row totals the
 `@test`s, and each row beneath it is one `@testset` of the suite, the ones
 its includes contribute too (`float32_validation.jl`, `device_tests.jl`,
 `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, `docrefs_tests.jl`, and
-the device/adapt testsets); the `123` counts those rows. A failure is
+the device/adapt testsets); the `124` counts those rows. A failure is
 recorded and the suite runs on, so one run reports every failure, and the
 outer testset raises at the end. `mpi_tests.jl` uses `Test` not
 at all and counts individual `check(name, val, tol)` assertions, printing
@@ -279,6 +279,15 @@ Names are spelled out in full. Current vocabulary:
   `hermite_level_shell!` (the Hermite box, `box_Q0` .. `box_dQ1`),
   `regrid` (a `RegridSpec`), `regrid_interval`, `tag_threshold`/
   `tag_buffer`, `tagged_region`, `regrid!`
+- The tag criteria, a union evaluated by `_tag_sweep!` over the parent
+  level's state, each a `pointwise!` body writing into `RegridSpec.tags`:
+  `_tag_delta4_point!` (always on, `tag_threshold`), `_tag_sensor_point!`
+  (`tag_sensor_threshold`, on the artificial diffusivity number
+  `((μ* + β*)/ρ + κ*/(ρ c_p) + max D*)/(c h)` read from the persistent
+  coefficient arrays, never from the pooled workspace's `sensor`),
+  `_tag_gradient_point!` (`tag_gradient_threshold`, mass-fraction change
+  per cell), `_tag_vorticity_point!` (`tag_vorticity_threshold`), and
+  `_tag_predicate!` (`tag_predicate`, a user `(patch, I) -> Bool` closure)
 - `pointwise!` (the shared launcher of every per-point loop: `Array` storage
   takes `@threaded`, device storage a KernelAbstractions kernel),
   `pointwise_ka!`, `FORCE_KA` (test/bench toggle), and the `_point!` suffix

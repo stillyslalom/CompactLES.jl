@@ -194,6 +194,10 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 regrid_interval::Int=0,
                 tag_threshold::Real=0.02,
                 tag_buffer::Int=4,
+                tag_sensor_threshold::Real=0,
+                tag_gradient_threshold::Real=0,
+                tag_vorticity_threshold::Real=0,
+                tag_predicate=nothing,
                 tile::Int=0,
                 rebalance::Real=0,
                 rebalance_persist::Int=2) where {T}
@@ -323,6 +327,18 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     regrid_interval >= 0 || error("regrid_interval must be non-negative")
     tag_buffer >= 0 || error("tag_buffer must be non-negative")
     tag_threshold > 0 || error("tag_threshold must be positive")
+    for (name, value) in ((:tag_sensor_threshold, tag_sensor_threshold),
+                          (:tag_gradient_threshold, tag_gradient_threshold),
+                          (:tag_vorticity_threshold, tag_vorticity_threshold))
+        value >= 0 || error("$name must be non-negative (0 leaves it off)")
+        value == 0 || regrid_interval > 0 ||
+            error("$name is a regrid tag criterion; it requires regrid_interval > 0")
+    end
+    tag_predicate === nothing || regrid_interval > 0 ||
+        error("tag_predicate is a regrid tag criterion; it requires " *
+              "regrid_interval > 0")
+    tag_predicate === nothing || tag_predicate isa Function ||
+        error("tag_predicate must be a function (patch, I) -> Bool or nothing")
     # A lattice cell of `tile` parent nodes is a patch of tile + 1 nodes,
     # 3·tile + 1 fine nodes; the four-node minimum gives tile ≥ 3.
     tile == 0 || tile >= 3 ||
@@ -700,12 +716,19 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     # element type wide, because it is fixed for the life of the solver and
     # a regrid that hands this rank a tile later pushes it into this vector.
     patches = isempty(fines) ? Patch[patch] : [patch, fines...]
+    # The tag sweep's scratch spans the root's padded block, whose extent
+    # is fixed for the life of the solver (a regrid moves the refined level
+    # only).
     regrid = regrid_interval == 0 ? nothing :
              RegridSpec{T}(regrid_interval, T(tag_threshold), tag_buffer,
                            margin, n_halo, interface_rhs,
                            deriv, filt, smoo, backend, tile, 0,
                            Float64(rebalance), rebalance_persist, 0, 1.0,
-                           0.0, 0.0, 0.0)
+                           0.0, 0.0, 0.0,
+                           T(tag_sensor_threshold), T(tag_gradient_threshold),
+                           T(tag_vorticity_threshold), tag_predicate,
+                           zeros(Int8, ntuple(d -> decomp.n_local[d] +
+                                                   2 * decomp.n_halo_d[d], 3)))
     solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,

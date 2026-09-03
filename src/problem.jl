@@ -382,6 +382,29 @@ increase `n_global` if setup reports a smaller local block.
 - `tag_threshold` (default `0.02`) and `tag_buffer` (default `4`): the
   tagging threshold on the relative undivided fourth difference of the
   mixture density, and the coarse-cell buffer added around tagged cells.
+  The tag is the union of this criterion with the three below and the
+  predicate, each evaluated per point over the parent level's state; every
+  one of those is off by default.
+- `tag_sensor_threshold` (default `0`, off): a threshold on the artificial
+  diffusivity number ((μ\\* + β\\*)/ρ + κ\\*/(ρ c_p) + max_k D\\*_k) / (c h),
+  the artificial diffusivity of the last right-hand-side evaluation in units
+  of the acoustic cell diffusivity, read from the coefficient arrays the
+  scheme itself wrote. It is the scheme's own statement that a feature is
+  under-resolved; a captured Sod shock reads about 2 under the default
+  `C_beta`. Zero wherever `art.enabled` is false.
+- `tag_gradient_threshold` (default `0`, off): a threshold on the
+  mass-fraction change per cell, max_k |δY_k| over the centered difference
+  of one cell, for mixing layers. Dimensionless; 0.05 tags an interface
+  resolved over about ten cells.
+- `tag_vorticity_threshold` (default `0`, off): a threshold on the vorticity
+  magnitude |∇ × u| from centered differences, in the run's units of
+  inverse time.
+- `tag_predicate` (default `nothing`): a function `(patch, I) -> Bool` over
+  the parent patch (a [`PatchSolver`](@ref)) and the padded
+  `CartesianIndex` of one interior node; `true` tags the node. It runs on
+  the host, serially, at the regrid cadence, on every rank that holds a
+  piece of the parent, and its coordinates come from
+  [`xcoord`](@ref) through `interior_index`.
 - `tile`: `0` (default) covers each refined region with one patch; a
   positive edge (in parent nodes, at least 3) covers it with the tiles of a
   global lattice of that edge instead, abutting tiles sharing their
@@ -417,6 +440,10 @@ Base.@kwdef struct Numerics
     regrid_interval::Int = 0
     tag_threshold::Float64 = 0.02
     tag_buffer::Int = 4
+    tag_sensor_threshold::Float64 = 0.0
+    tag_gradient_threshold::Float64 = 0.0
+    tag_vorticity_threshold::Float64 = 0.0
+    tag_predicate::Union{Nothing,Function} = nothing
     tile::Int = 0
     rebalance::Float64 = 0.0
     rebalance_persist::Int = 2
@@ -467,6 +494,10 @@ function setup(prob::Problem, num::Numerics)
                level_restriction=num.level_restriction, subcycle=num.subcycle,
                regrid_interval=num.regrid_interval,
                tag_threshold=num.tag_threshold, tag_buffer=num.tag_buffer,
+               tag_sensor_threshold=num.tag_sensor_threshold,
+               tag_gradient_threshold=num.tag_gradient_threshold,
+               tag_vorticity_threshold=num.tag_vorticity_threshold,
+               tag_predicate=num.tag_predicate,
                tile=num.tile, rebalance=num.rebalance,
                rebalance_persist=num.rebalance_persist)
     Q = allocate_state(solver)

@@ -801,3 +801,134 @@ end
         @test states[i + 1][gidx(ps, nr, 1, 1), 1] == states[j + 1][gidx(qs, 1, 1, 1), 1]
     end
 end
+
+@testset "tag criteria: gradient, vorticity, sensor and predicate" begin
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    per3l = ntuple(_ -> per, 3)
+    N = 201
+    two = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 1.0, 1.4)])
+    r0 = BlockRegion((20, 0, 0), (31, 1, 1))
+    mk(; kw...) = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=(wall2, per, per), eos=two, cfl=0.2,
+                         refine=r0; kw...)
+    # Configuration guards: a criterion is a regrid setting, and a
+    # threshold is non-negative.
+    @test_throws ErrorException mk(regrid_interval=5, tag_gradient_threshold=-1)
+    @test_throws ErrorException mk(tag_gradient_threshold=0.05)
+    @test_throws ErrorException mk(tag_sensor_threshold=0.1)
+    @test_throws ErrorException mk(tag_vorticity_threshold=1.0)
+    @test_throws ErrorException mk(tag_predicate=(p, I) -> true)
+    @test_throws ErrorException mk(regrid_interval=5, tag_predicate=1)
+    # Numerics carries the four settings to the solver.
+    pred0 = (p, I) -> false
+    num = Numerics(n_global=(N, 1, 1), refine=r0, regrid_interval=5,
+                   tag_gradient_threshold=0.05, tag_sensor_threshold=0.1,
+                   tag_vorticity_threshold=2.0, tag_predicate=pred0)
+    prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=(wall2, per, per), eos=two,
+                   ic=(x, y, z) -> Prim(Y=(1.0, 0.0), rho=1.0, p=1.0, u=(0, 0, 0)))
+    sn, _ = setup(prob, num)
+    specn = getfield(sn, :regrid)
+    @test specn.gradient_threshold == 0.05 && specn.sensor_threshold == 0.1
+    @test specn.vorticity_threshold == 2.0 && specn.predicate === pred0
+    @test size(specn.tags) == size(sn.patches[1].rho)
+
+    # Gradient: a mass-fraction interface at x = 0.75 in a uniform-density,
+    # uniform-pressure field, which the δ⁴ρ criterion cannot see. The
+    # per-cell change peaks at h/(2w) = 0.125, so 0.05 tags the interface
+    # core and 0.5 tags nothing.
+    node(x) = round(Int, x * (N - 1)) + 1
+    icY(x, y, z) = (θ = 0.5 * (1 + tanh((x - 0.75) / 0.02));
+                    Prim(Y=(1 - θ, θ), rho=1.0, p=1.0, u=(0, 0, 0)))
+    for (thr, hit) in ((0.0, false), (0.05, true), (0.5, false))
+        sg = mk(regrid_interval=5, tag_gradient_threshold=thr)
+        states = allocate_state(sg)
+        initialize!(sg, states, icY)
+        r = CL.tagged_region(sg, states[1])
+        if hit
+            @test r !== nothing
+            @test r.offset[1] < node(0.75) <= r.offset[1] + r.extent[1]
+            @test r.extent[1] < 40
+        else
+            @test r === nothing
+        end
+    end
+
+    # Vorticity: a Gaussian vortex (|ω| = 2A at its center, A = 1) in a
+    # uniform-density 2-D field; a threshold of 1 tags its core, 10 nothing.
+    xc = 4.5
+    icω(x, y, z) = (g = exp(-((x - xc)^2 + (y - xc)^2) / 0.25);
+                    Prim(u=(-(y - xc) * g, (x - xc) * g, 0.0), rho=1.0, p=1.0))
+    N2 = 48
+    gc = round(Int, xc * N2 / (2π)) + 1
+    for (thr, hit) in ((0.0, false), (1.0, true), (10.0, false))
+        sv = Solver(n_global=(N2, N2, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
+                    refine=BlockRegion((8, 8, 0), (12, 12, 1)),
+                    regrid_interval=5, tag_vorticity_threshold=thr)
+        states = allocate_state(sv)
+        initialize!(sv, states, icω)
+        r = CL.tagged_region(sv, states[1])
+        if hit
+            @test r !== nothing
+            for d in 1:2
+                @test r.offset[d] < gc - 1 && gc + 1 <= r.offset[d] + r.extent[d]
+                @test r.extent[d] < N2 ÷ 2
+            end
+        else
+            @test r === nothing
+        end
+    end
+
+    # Sensor: the artificial diffusivity number of the last RHS. The Sod
+    # shock runs ten steps with the δ⁴ criterion parked at a threshold
+    # nothing reaches; the number is then measured over the root, and half
+    # of its maximum tags the shock where twice its maximum tags nothing.
+    icS(x, y, z) = x < 0.5 ? Prim(Y=(1.0, 0.0), u=(0, 0, 0), p=1.0, rho=1.0) :
+                             Prim(Y=(1.0, 0.0), u=(0, 0, 0), p=0.1, rho=0.125)
+    ss = mk(regrid_interval=1000, tag_threshold=1e6,
+            refine=BlockRegion((85, 0, 0), (31, 1, 1)))
+    states = allocate_state(ss)
+    initialize!(ss, states, icS)
+    run!(ss, states; tfinal=1.0, nmax=10)
+    root = PatchSolver(ss, ss.patches[1])
+    qmax = 0.0
+    for i in 1:root.decomp.n_local[1]
+        I = gidx(root, i, 1, 1)
+        ν = (root.mu_art[I] + root.beta_art[I]) / root.rho[I] +
+            root.kappa_art[I] / (root.rho[I] * root.cp_mix[I]) +
+            maximum(D[I] for D in root.D_art)
+        qmax = max(qmax, ν / (root.c[I] * root.h[1]))
+    end
+    @info "artificial diffusivity number at the Sod shock" qmax
+    @test qmax > 0
+    spec = getfield(ss, :regrid)
+    @test CL.tagged_region(ss, states[1]) === nothing
+    spec.sensor_threshold = 2 * qmax
+    @test CL.tagged_region(ss, states[1]) === nothing
+    spec.sensor_threshold = qmax / 2
+    r = CL.tagged_region(ss, states[1])
+    @test r !== nothing
+    shock = node(0.5 + 1.75 * ss.t)
+    @test r.offset[1] < shock <= r.offset[1] + r.extent[1]
+    @test r.extent[1] < 60
+
+    # Predicate: a closure over the parent patch and a padded index, here
+    # x > 0.8, whose tagged set is that interval buffered and clamped to
+    # the margin; in union with the δ⁴ tag at the initial discontinuity
+    # the box spans both.
+    predx = (p, I) -> xcoord(p, 1, interior_index(p, I)[1]) > 0.8
+    sp = mk(regrid_interval=5, tag_predicate=predx)
+    states = allocate_state(sp)
+    initialize!(sp, states, (x, y, z) -> Prim(Y=(1.0, 0.0), rho=1.0, p=1.0,
+                                             u=(0, 0, 0)))
+    r = CL.tagged_region(sp, states[1])
+    margin = getfield(sp, :regrid).margin
+    # The first node past x = 0.8, in the solver's own arithmetic.
+    g1 = findfirst(g -> (g - 1) * (1.0 / (N - 1)) > 0.8, 1:N)
+    @test r == BlockRegion((g1 - 1 - 4, 0, 0), (N - margin - (g1 - 1 - 4), 1, 1))
+    initialize!(sp, states, icS)
+    r = CL.tagged_region(sp, states[1])
+    @test r.offset[1] < node(0.5) && r.offset[1] + r.extent[1] == N - margin
+end

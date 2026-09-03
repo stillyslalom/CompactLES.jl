@@ -328,7 +328,8 @@ const POINTWISE_BODIES = (
     :_rho_sensor_point!, :_ring_accum_point!, :_rk_point!,
     :_scale_grad_point!, :_shell_ring_point!, :_slip_wall_point!,
     :_species_diffusivity_point!, :_strain_mag_point!, :_subtract_div_point!,
-    :_subtract_jac_div_point!, :_zero_component_point!)
+    :_subtract_jac_div_point!, :_tag_delta4_point!, :_tag_gradient_point!,
+    :_tag_sensor_point!, :_tag_vorticity_point!, :_zero_component_point!)
 
 @testset "pointwise bodies stay inside the splat budget" begin
     # `_point_kernel!` calls `body!(args..., i, j, k)`. Julia expands a

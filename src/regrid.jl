@@ -1,7 +1,8 @@
 # Tagging and regridding for the two-level refinement.
 #
 # Every `RegridSpec.interval` coarse steps, `run!` retags the coarse level and
-# rebuilds the level-1 patch when the tagged region moved. The tag is the
+# rebuilds the level-1 patch when the tagged region moved. The tag is a union
+# of criteria (the "Tag criteria" section below); the one always on is the
 # undivided fourth difference of the mixture density, summed over the active
 # dimensions and normalized by the local density, the same quantity the Cook
 # δ⁴ sensors are built from. It is read from the conserved state directly, so
@@ -29,10 +30,159 @@
 # of collapsing it, the conservative choice for a machinery whose purpose is
 # robustness at captured features.
 
-# One coarse cell's tag quantity: Σ_d |δ⁴_d ρ| / ρ, using the zeroth-order
-# closed-edge clamp from `delta4_sum!`, with halos read across periodic
-# wraps. `mark!(g1, g2, g3)` is called for every tagged cell of this rank's
-# interior, in global node indices. Rank-local apart from the halo exchange.
+# --- Tag criteria -------------------------------------------------------------
+#
+# The tag is a union of criteria, each a per-point body over the parent
+# level's state run through `pointwise!` on the host and writing a flag into
+# the sweep scratch `RegridSpec.tags`. A body reads the conserved state and
+# the persistent per-patch arrays only: the RHS scratch (`sensor` among it)
+# lives on the pooled workspace and, at the head of the step loop, holds
+# whichever patch of that padded extent last evaluated a right-hand side,
+# so nothing here reads it. The artificial coefficients are per patch and
+# outlive their evaluation (they feed the next step's `max_rate`), which is
+# how the scheme's own sensor reaches the tag: μ*, β*, κ* and D* are
+# C·ρ·max(sensor, 0) of the last evaluation, and their sum in units of the
+# acoustic cell diffusivity c·h is the artificial diffusivity number the
+# sensor criterion thresholds.
+#
+# Every body indexes its neighbors through the clamp `[lomin, himax]`: one
+# halo layer (two for the δ⁴ taps) across a rank or periodic boundary, and
+# the edge node itself at a closed edge, where the difference becomes
+# one-sided. `active`, `o` (the halo pad) and the clamps are tuples so a body
+# takes plain arrays and isbits scalars, the pointwise contract.
+
+@inline _tag_unit(d::Int) = CartesianIndex(d == 1 ? 1 : 0, d == 2 ? 1 : 0, d == 3 ? 1 : 0)
+
+# Σ_d |δ⁴_d ρ| / ρ > threshold, the zeroth-order closed-edge clamp of
+# `delta4_sum!`.
+@inline function _tag_delta4_point!(tags, rho, thr, lomin, himax, active, o,
+                                    i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o[1], j + o[2], k + o[3])
+        s = zero(eltype(rho))
+        for d in 1:3
+            active[d] || continue
+            il = (d == 1 ? i : d == 2 ? j : k)
+            e = _tag_unit(d)
+            acc = zero(eltype(rho))
+            for m in -2:2
+                ilm = clamp(il + m, lomin[d], himax[d])
+                acc += D4[m + 3] * rho[I + (ilm - il) * e]
+            end
+            s += abs(acc)
+        end
+        s > thr * rho[I] && (tags[I] = one(Int8))
+    end
+    return nothing
+end
+
+# max_k |δY_k| > threshold: the mass-fraction change per cell, the centered
+# difference (Y⁺ − Y⁻)/(i⁺ − i⁻) along each active dimension in cell units,
+# so the quantity is dimensionless and one-sided at a closed edge.
+@inline function _tag_gradient_point!(tags, Q, rho, thr, n_species, lomin,
+                                      himax, active, o, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o[1], j + o[2], k + o[3])
+        for sp in 1:n_species
+            s2 = zero(eltype(rho))
+            for d in 1:3
+                active[d] || continue
+                il = (d == 1 ? i : d == 2 ? j : k)
+                ip = min(il + 1, himax[d])
+                im = max(il - 1, lomin[d])
+                e = _tag_unit(d)
+                Ip = I + (ip - il) * e
+                Im = I + (im - il) * e
+                dY = (Q[Ip, sp] / rho[Ip] - Q[Im, sp] / rho[Im]) / (ip - im)
+                s2 += dY * dY
+            end
+            if s2 > thr * thr
+                tags[I] = one(Int8)
+                break
+            end
+        end
+    end
+    return nothing
+end
+
+# |∇ × u| > threshold from centered differences of the velocity
+# components, u_c = Q[I, i_mom[c]] / ρ.
+@inline function _tag_vorticity_point!(tags, Q, rho, thr, i_mom, h, lomin,
+                                       himax, active, o, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o[1], j + o[2], k + o[3])
+        w1 = w2 = w3 = zero(eltype(rho))
+        for d in 1:3
+            active[d] || continue
+            il = (d == 1 ? i : d == 2 ? j : k)
+            ip = min(il + 1, himax[d])
+            im = max(il - 1, lomin[d])
+            e = _tag_unit(d)
+            Ip = I + (ip - il) * e
+            Im = I + (im - il) * e
+            inv = one(eltype(rho)) / ((ip - im) * h[d])
+            du1 = (Q[Ip, i_mom[1]] / rho[Ip] - Q[Im, i_mom[1]] / rho[Im]) * inv
+            du2 = (Q[Ip, i_mom[2]] / rho[Ip] - Q[Im, i_mom[2]] / rho[Im]) * inv
+            du3 = (Q[Ip, i_mom[3]] / rho[Ip] - Q[Im, i_mom[3]] / rho[Im]) * inv
+            if d == 1
+                w2 -= du3
+                w3 += du2
+            elseif d == 2
+                w3 -= du1
+                w1 += du3
+            else
+                w1 -= du2
+                w2 += du1
+            end
+        end
+        w1 * w1 + w2 * w2 + w3 * w3 > thr * thr && (tags[I] = one(Int8))
+    end
+    return nothing
+end
+
+# ((μ* + β*)/ρ + κ*/(ρ c_p) + max_k D*_k) / (c h_min) > threshold: the
+# artificial diffusivity of the last right-hand side in units of the
+# acoustic cell diffusivity. The primitives ρ, c and c_p are the same
+# evaluation's, so the ratio is consistent; a node the positivity
+# placeholder wrote (c = 0) never tags.
+@inline function _tag_sensor_point!(tags, mu, beta, kappa, D, rho, c, cp, thr,
+                                    hmin, n_species, o, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o[1], j + o[2], k + o[3])
+        ci = c[I]
+        ri = rho[I]
+        cpi = cp[I]
+        (ci > 0 && ri > 0 && cpi > 0) || return nothing
+        nu = (mu[I] + beta[I]) / ri + kappa[I] / (ri * cpi)
+        Dmax = zero(nu)
+        for sp in 1:n_species
+            Dmax = max(Dmax, D[sp][I])
+        end
+        nu + Dmax > thr * ci * hmin && (tags[I] = one(Int8))
+    end
+    return nothing
+end
+
+# The user closure, a serial host loop behind a function barrier: the
+# closure's type is the barrier's parameter, so the loop specializes on it
+# and the call inside is direct.
+function _tag_predicate!(tags, predicate::F, ps, n::NTuple{3,Int},
+                         o::NTuple{3,Int}) where {F}
+    @inbounds for k in 1:n[3], j in 1:n[2], i in 1:n[1]
+        I = CartesianIndex(i + o[1], j + o[2], k + o[3])
+        predicate(ps, I) && (tags[I] = one(Int8))
+    end
+    return nothing
+end
+
+# Host alias of a patch array: the array itself on the CPU backend, a
+# download of a device one (a backend copy at the regrid cadence only).
+_tag_host(x) = _cpu_storage(x) ? x : Array(x)
+
+# Tag sweep over this rank's interior of the parent (root) patch: every
+# enabled criterion writes its flags into `spec.tags`, and `mark!(g1, g2,
+# g3)` is then called for every flagged node, in global node indices.
+# Rank-local apart from the halo exchange.
 function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     patches = getfield(solver, :patches)
     coarse = patches[1]
@@ -41,6 +191,7 @@ function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     exchange_state!(Qc, dcp)
     o = dcp.n_halo_d
     n = dcp.n_local
+    active = dcp.active
     n_species = solver.equations.n_species
     # A device-resident coarse patch downloads its block for the tag sweep (a
     # backend copy at the regrid cadence, not per step) and takes a host
@@ -51,7 +202,7 @@ function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     # clamped indexing below never reads it.
     tmp_a = coarse.rhs_workspace.tmp_a
     rho = _cpu_storage(tmp_a) ? tmp_a : zeros(eltype(Qc), size(tmp_a))
-    ext = ntuple(d -> dcp.active[d] ? (-1:n[d]+2) : (1:1), 3)
+    ext = ntuple(d -> active[d] ? (-1:n[d]+2) : (1:1), 3)
     @inbounds for k in ext[3], j in ext[2], i in ext[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
         acc = zero(eltype(Qc))
@@ -62,23 +213,35 @@ function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     end
     lomin = ntuple(d -> at_lo_edge(dcp, d) ? 1 : -1, 3)
     himax = ntuple(d -> at_hi_edge(dcp, d) ? n[d] : n[d] + 2, 3)
-    thr = spec.threshold
+    tags = spec.tags
+    fill!(tags, zero(Int8))
+    pointwise!(_tag_delta4_point!, tags, n[1], n[2], n[3],
+               tags, rho, spec.threshold, lomin, himax, active, o)
+    if spec.gradient_threshold > 0
+        pointwise!(_tag_gradient_point!, tags, n[1], n[2], n[3],
+                   tags, Qc, rho, spec.gradient_threshold, n_species,
+                   lomin, himax, active, o)
+    end
+    if spec.vorticity_threshold > 0
+        pointwise!(_tag_vorticity_point!, tags, n[1], n[2], n[3],
+                   tags, Qc, rho, spec.vorticity_threshold,
+                   solver.equations.i_mom, coarse.h, lomin, himax, active, o)
+    end
+    if spec.sensor_threshold > 0
+        hmin = minimum(coarse.h[d] for d in 1:3 if active[d])
+        D_host = FieldVector([_tag_host(a) for a in coarse.D_art])
+        pointwise!(_tag_sensor_point!, tags, n[1], n[2], n[3],
+                   tags, _tag_host(coarse.mu_art), _tag_host(coarse.beta_art),
+                   _tag_host(coarse.kappa_art), D_host, _tag_host(coarse.rho),
+                   _tag_host(coarse.c), _tag_host(coarse.cp_mix),
+                   spec.sensor_threshold, hmin, n_species, o)
+    end
+    spec.predicate === nothing ||
+        _tag_predicate!(tags, spec.predicate, PatchSolver(solver, coarse), n, o)
     off = dcp.offset
     @inbounds for k in 1:n[3], j in 1:n[2], i in 1:n[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
-        s = zero(eltype(Qc))
-        for d in 1:3
-            dcp.active[d] || continue
-            il = (d == 1 ? i : d == 2 ? j : k)
-            e = CartesianIndex(ntuple(q -> q == d ? 1 : 0, 3))
-            acc = zero(eltype(Qc))
-            for m in -2:2
-                ilm = clamp(il + m, lomin[d], himax[d])
-                acc += D4[m + 3] * rho[I + (ilm - il) * e]
-            end
-            s += abs(acc)
-        end
-        s > thr * rho[I] && mark!(i + off[1], j + off[2], k + off[3])
+        tags[I] == 0 || mark!(i + off[1], j + off[2], k + off[3])
     end
     return nothing
 end
