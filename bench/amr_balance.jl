@@ -23,7 +23,14 @@
 # persist 1, every check repartitions, one tile per rank where the count
 # allows, and the partition then follows the timing noise from check to
 # check (1.0–1.7), which is what the threshold and `rebalance_persist`
-# exist to damp.
+# exist to damp. The last column is the transient memory of the tiles a
+# check moved: the replica the gather would have held on every rank
+# against the largest block a rank received through `_migrate_tile!`.
+# Here a tile is 25 fine nodes of five components, so a moved tile is
+# 1.0 KiB replicated against 0.9 KiB migrated (its 23-node interior on
+# one rank), a figure that says only that the migration moves the interior
+# and nothing else; the case where the replica is the regrid's cost is the
+# implosion shell at a cluster rank count (reference/AMR_GPU.md).
 
 using MPI
 MPI.Init(threadlevel=:funneled)
@@ -51,8 +58,11 @@ function track(args, rebalance; quiet=false)
     mark_wall = Ref(0.0)
     mark_wait = Ref(0.0)
     total = Ref(0.0)
-    rank == 0 && !quiet && @printf("%6s %11s %9s %6s  %s\n",
-                                   "step", "t", "max/mean", "tiles", "owner ranges")
+    n_cons = solver.equations.n_cons
+    prev = Dict{BlockRegion,UnitRange{Int}}()
+    rank == 0 && !quiet && @printf("%6s %11s %9s %6s  %-24s %s\n",
+                                   "step", "t", "max/mean", "tiles", "owner ranges",
+                                   "moved: replica / migrated KiB per rank")
     function report(s, _)
         busy = (s.wall_total - mark_wall[]) - (s.wait_total - mark_wait[])
         mark_wall[] = s.wall_total
@@ -62,9 +72,31 @@ function track(args, rebalance; quiet=false)
         ratio = maximum(walls) / (sum(walls) / np)
         lev = getfield(s, :levels)[2]
         ranges = join(("$(first(o))-$(last(o))" for o in lev.owners), " ")
+        # Transient memory of the tiles a regrid moved since the last
+        # report: the replica the gather would have held on every rank
+        # against the block this rank received, at most over ranks.
+        replica = 0
+        migrated = 0
+        for (lt, o) in zip(lev.transfers, lev.owners)
+            (haskey(prev, lt.region) && prev[lt.region] != o) || continue
+            Nf = CL.fine_extent(lt.region, lt.active)
+            replica += prod(Nf) * n_cons * sizeof(Float64)
+            b = lt.fine_blocks[rank + 1]
+            got = ntuple(d -> lt.active[d] ?
+                         length(intersect(b.offset[d]+1:b.offset[d]+b.extent[d],
+                                          2:Nf[d]-1)) : 1, 3)
+            migrated += prod(got) * n_cons * sizeof(Float64)
+        end
+        empty!(prev)
+        for (lt, o) in zip(lev.transfers, lev.owners)
+            prev[lt.region] = o
+        end
+        migrated = MPI.Allreduce(migrated, max, comm)
         if rank == 0 && !quiet
-            @printf("%6d %11.4e %9.3f %6d  %s\n", s.step, s.t, ratio,
-                    length(lev.owners), ranges)
+            moved = replica == 0 ? "" :
+                    @sprintf("%.1f / %.1f", replica / 1024, migrated / 1024)
+            @printf("%6d %11.4e %9.3f %6d  %-24s %s\n", s.step, s.t, ratio,
+                    length(lev.owners), ranges, moved)
         end
         return false
     end

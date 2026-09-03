@@ -1569,10 +1569,21 @@ function test_tiled_level()
               gmax(moved), 0.5)
         check("stored ownership: tile set tracks as serial",
               abs(gmax(first(offs)) - 168) + abs(gmax(last(offs)) - 192), 0.5)
+        # The same run with the migration audit on: every moved tile is also
+        # carried through the replicated gather, and the migrated state
+        # must equal that reference at every slot.
+        CL.MIGRATION_AUDIT[] = true
+        CL.MIGRATION_AUDIT_RESULT[] = (tiles=0, mismatches=0)
         solver, offs, moved = regrid_track(rebalance=1.0, persist=1)
+        CL.MIGRATION_AUDIT[] = false
+        audit = CL.MIGRATION_AUDIT_RESULT[]
         spec = getfield(solver, :regrid)
         check("rebalance on: a measured spread repartitioned the level",
               np > 1 && gmax(moved) == 0 ? 1.0 : 0.0, 0.5)
+        check("migration: a moved tile was audited against the gather",
+              np > 1 && gsum(audit.tiles) == 0 ? 1.0 : 0.0, 0.5)
+        check("migration: migrated state equals the gathered carry bitwise",
+              gsum(audit.mismatches), 0.5)
         check("rebalance on: tile count tracks as serial (4)",
               abs(gmax(length(offs)) - 4), 0.5)
         check("rebalance on: first tile tracks as serial (168)",

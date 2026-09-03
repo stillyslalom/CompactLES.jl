@@ -368,9 +368,9 @@ end
 # weights are then the measured per-tile costs (`_measured_weights`), so
 # the interface factor is measured inside the job rather than calibrated. A
 # surviving tile whose owner range a rebalance moved is rebuilt on its new
-# owners and takes its evolved solution back through a replicated gather,
-# one tile at a time at the regrid cadence; point-to-point migration is the
-# recorded follow-up (reference/AMR_GPU.md, ownership and load balance).
+# owners and takes its evolved solution back by point-to-point migration
+# from the old owners' blocks (`_migrate_tile!`), one tile at a time at the
+# regrid cadence, with no replica of the tile on any rank.
 
 # Flags over the lattice cells, reduced so every rank derives the same set.
 function _tag_tiles(solver::Solver, Qc, spec::RegridSpec)
@@ -393,10 +393,12 @@ function _tag_tiles(solver::Solver, Qc, spec::RegridSpec)
 end
 
 # One tile's whole state, replicated on every rank of the parent level's
-# communicator. Used where a regrid moves a tile's solution onto a different
-# decomposition: the box regrid's new region, and a surviving lattice tile
-# whose owner range changed. Collective over that communicator; a rank with
-# no block of the tile contributes nothing.
+# communicator. The box regrid carries its moved region through this (one
+# region, whose old and new decompositions differ in offset as well as in
+# rank set); a tiled level migrates a moved tile block to block instead
+# (`_migrate_tile!`), and this gather is its audit reference under
+# `MIGRATION_AUDIT`. Collective over that communicator; a rank with no block
+# of the tile contributes nothing.
 function _gather_tile(::Type{T}, region::BlockRegion, active::NTuple{3,Bool},
                       n_cons::Int, lt::LevelTransfer, solver, states) where {T}
     Nf = fine_extent(region, active)
@@ -408,6 +410,111 @@ function _gather_tile(::Type{T}, region::BlockRegion, active::NTuple{3,Bool},
                    lt.fine_blocks, dp === nothing ? (0, 0, 0) : dp.offset,
                    dp === nothing ? (0, 0, 0) : dp.n_halo_d)
     return dst
+end
+
+# Tag of the migration messages. They run on the root communicator, on
+# which nothing else is in flight during a regrid, and one tile's messages
+# complete before the next tile's are posted, so one tag serves every tile.
+const _MIGRATE_TAG = 1500
+
+# Test hook. With the flag on, `_regrid_tiles!` also carries each moved tile
+# through the replicated gather and `_carry_over!`, and adds to the result
+# the tiles it audited on this rank and the slots at which the migrated
+# state differs from that reference; the MPI suite holds the count at zero.
+const MIGRATION_AUDIT = Ref(false)
+const MIGRATION_AUDIT_RESULT = Ref((tiles=0, mismatches=0))
+
+# Padded local ranges of the patch-node ranges `r` on the block of `decomp`.
+_padded3(r::NTuple{3,UnitRange{Int}}, decomp::Decomp) =
+    ntuple(d -> _padded(r[d], decomp.offset[d], decomp.n_halo_d[d]), 3)
+
+# One message of the migration: the padded ranges `lr` of `Q`, packed into
+# a fresh host buffer. Device storage packs by broadcast into a device stage
+# and copies once, as `gather_region!` does.
+function _pack_message(::Type{T}, Q, lr::NTuple{3,UnitRange{Int}}) where {T}
+    n = size(Q, 4) * prod(length.(lr))
+    buf = Vector{T}(undef, n)
+    if _cpu_storage(Q)
+        _pack!(buf, Q, lr)
+    else
+        v = view(parent(Q), lr[1], lr[2], lr[3], 1:size(Q, 4))
+        dsend = _device_send_stage(parent(Q), n)
+        reshape(view(dsend, 1:n), size(v)) .= v
+        _tracked_copy!(buf, 1, dsend, 1, n)
+    end
+    return buf
+end
+
+function _unpack_message!(Q, buf::Vector, lr::NTuple{3,UnitRange{Int}})
+    _cpu_storage(Q) && return _unpack!(Q, buf, lr)
+    v = view(parent(Q), lr[1], lr[2], lr[3], 1:size(Q, 4))
+    dev = similar(parent(Q), size(v))
+    copyto!(dev, reshape(buf, size(v)))
+    v .= dev
+    return Q
+end
+
+# Point-to-point migration of one surviving tile's solution from its old
+# owners' blocks to its new owners'. `old_blocks` and `new_blocks` are the
+# tile's block tables in the rank order of `comm` (the old and the new
+# transfer's `fine_blocks`), so every rank derives the identical message
+# list, old block ∩ new block ∩ interior per rank pair, and posts only the
+# sends and receives of its own; a rank with neither posts nothing, and no
+# collective runs. The interior holds one node off both boundary planes
+# along every active dimension, the rule `_carry_over!` applies: the old
+# planes were imposed data and the new ones are re-imposed by the next
+# shell fill. `Q_old`/`d_old` are this rank's old block of the tile and
+# `Q_new`/`d_new` its new one, `nothing` where it holds none. The sends
+# complete before this returns, so the caller may free the old
+# decomposition afterwards.
+function _migrate_tile!(::Type{T}, Q_new, d_new, Q_old, d_old, Nf::NTuple{3,Int},
+                        active::NTuple{3,Bool}, old_blocks::Vector{BlockRegion},
+                        new_blocks::Vector{BlockRegion}, comm::MPI.Comm) where {T}
+    me = MPI.Comm_rank(comm)
+    np = MPI.Comm_size(comm)
+    interior = ntuple(d -> active[d] ? (2:Nf[d]-1) : (1:1), 3)
+    nodes(b::BlockRegion) = ntuple(d -> (b.offset[d] + 1):(b.offset[d] + b.extent[d]), 3)
+    piece(a::BlockRegion, b::BlockRegion) =
+        ntuple(d -> _isect(_isect(nodes(a)[d], nodes(b)[d]), interior[d]), 3)
+    wanted(r) = !any(isempty, r)
+    reqs = MPI.Request[]
+    recvs = Tuple{NTuple{3,UnitRange{Int}},Vector{T}}[]
+    if d_new !== nothing
+        for a in 0:np-1
+            a == me && continue
+            r = piece(old_blocks[a+1], new_blocks[me+1])
+            wanted(r) || continue
+            buf = Vector{T}(undef, size(Q_new, 4) * prod(length.(r)))
+            push!(reqs, MPI.Irecv!(buf, comm; source=a, tag=_MIGRATE_TAG))
+            push!(recvs, (r, buf))
+        end
+    end
+    sends = Vector{T}[]
+    if d_old !== nothing
+        for b in 0:np-1
+            r = piece(old_blocks[me+1], new_blocks[b+1])
+            wanted(r) || continue
+            if b == me
+                # A node this rank keeps moves between its own two blocks.
+                lo, ln = _padded3(r, d_old), _padded3(r, d_new)
+                if _cpu_storage(Q_new)
+                    _copy_block!(Q_new, ln, Q_old, lo)
+                else
+                    view(parent(Q_new), ln[1], ln[2], ln[3], :) .=
+                        view(parent(Q_old), lo[1], lo[2], lo[3], :)
+                end
+            else
+                buf = _pack_message(T, Q_old, _padded3(r, d_old))
+                push!(sends, buf)
+                push!(reqs, MPI.Isend(buf, comm; dest=b, tag=_MIGRATE_TAG))
+            end
+        end
+    end
+    MPI.Waitall(reqs)
+    for (r, buf) in recvs
+        _unpack_message!(Q_new, buf, _padded3(r, d_new))
+    end
+    return Q_new
 end
 
 # Whether this regrid check repartitions the level on measured load, and
@@ -495,23 +602,30 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     for (i, r) in enumerate(old_regions)
         haskey(new_of, r) || _restrict_patch!(solver, states, lev.transfers[i], root_lc)
     end
+    # The audit reference for each moved tile, gathered replicated over the
+    # root communicator while the old decompositions are still live; empty
+    # unless the test hook is on.
     carried = Dict{BlockRegion,Array{T,4}}()
-    for (ti, r) in enumerate(wanted)
-        (kept[ti] || !haskey(old_of, r)) && continue
-        # Gathered replicated over the root communicator while the old
-        # decompositions are still live.
-        carried[r] = _gather_tile(T, r, active, n_cons, lev.transfers[old_of[r]],
-                                  solver, states)
+    if MIGRATION_AUDIT[]
+        for (ti, r) in enumerate(wanted)
+            (kept[ti] || !haskey(old_of, r)) && continue
+            carried[r] = _gather_tile(T, r, active, n_cons,
+                                      lev.transfers[old_of[r]], solver, states)
+        end
     end
     # Decompositions of the old tiles this rank holds that do not stay in
     # place, collected before the patch vector is overwritten and freed at
-    # the end, after the carry-over has read them; a surviving tile keeps its
-    # decomposition through `_repatch` and must not appear here.
+    # the end, after the migration has read them; a surviving tile keeps its
+    # decomposition through `_repatch` and must not appear here. A moved
+    # tile's old state and decomposition on this rank are held past the swap
+    # by tile, for the sends the migration posts from them.
     dropped_decomps = Decomp{T}[]
+    old_piece = Dict{Int,Tuple{eltype(states),Decomp{T}}}()
     for (li, ti_old) in zip(lev.patches, lev.tiles)
         r = old_regions[ti_old]
         haskey(new_of, r) && kept[new_of[r]] && continue
         push!(dropped_decomps, patches[li].decomp)
+        haskey(new_of, r) && (old_piece[new_of[r]] = (states[li], patches[li].decomp))
     end
     # Every owner of the old level drops its tile group here, and the level
     # communicator goes with it where the rank count changed; both are
@@ -595,12 +709,28 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         li = local_of[ti]
         li == 0 || init_geometry!(PatchSolver(solver, patches[li]))
         _fill_fine_from_coarse!(solver, states, transfers[ti])
-        # A rebuilt tile whose region survived takes its evolved interior
-        # back over the interpolated initialization.
         r = wanted[ti]
-        if li != 0 && haskey(carried, r)
-            _carry_over!(states[li], patches[li].decomp, r, carried[r],
-                         fine_extent(r, active), r, active, n_cons)
+        haskey(old_of, r) || continue
+        # A rebuilt tile whose region survived takes its evolved interior
+        # back over the interpolated initialization, block to block from
+        # its old owners. Both block tables are in the root communicator's
+        # rank order, so every rank posts from the same message list; the
+        # gather above is collective, so every rank reaches this together.
+        Nf = fine_extent(r, active)
+        Q_old, d_old = get(old_piece, ti, (nothing, nothing))
+        Q_new = li == 0 ? nothing : states[li]
+        d_new = li == 0 ? nothing : patches[li].decomp
+        audit = li != 0 && haskey(carried, r)
+        Qref = audit ? ConservedState(copy(parent(states[li]))) : nothing
+        _migrate_tile!(T, Q_new, d_new, Q_old, d_old, Nf, active,
+                       lev.transfers[old_of[r]].fine_blocks,
+                       transfers[ti].fine_blocks, root_lc.comm)
+        if audit
+            _carry_over!(Qref, d_new, r, carried[r], Nf, r, active, n_cons)
+            differ = count(Array(parent(Qref)) .!= Array(parent(states[li])))
+            res = MIGRATION_AUDIT_RESULT[]
+            MIGRATION_AUDIT_RESULT[] = (tiles=res.tiles + 1,
+                                        mismatches=res.mismatches + differ)
         end
     end
     # A fresh tile's plane shared with a survivor takes the survivor's
@@ -612,7 +742,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     end
     _rebank!(solver, states, save)
     # Every old transfer was replaced above, surviving tiles included, and a
-    # departing or rebuilt tile's decomposition has no further reader. Free
+    # departing or rebuilt tile's decomposition has no further reader, the
+    # migration's sends having completed inside `_migrate_tile!`. Free
     # their communicators now: left to garbage collection they accumulate at
     # the regrid cadence and exhaust MPI's context-id budget (2048 per process
     # under MPICH). The tile flags are Allreduced, so every rank frees the

@@ -331,6 +331,43 @@ end
     @test sa.wait_total >= 0 && sa.wait_total <= sa.wall_total
 end
 
+@testset "tile migration: interior rule and the rank's own copy" begin
+    # `_migrate_tile!` moves a tile's solution between two decompositions
+    # of it from their block tables alone. On one rank both blocks are the
+    # whole tile, so the one message is the rank's copy between its own
+    # blocks: the interior, one node off every boundary plane, arrives and
+    # the shell keeps the destination's values, as `_carry_over!` of the
+    # replicated gather leaves it.
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    solver = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
+                    refine=BlockRegion((80, 0, 0), (32, 1, 1)), tile=8,
+                    regrid_interval=5)
+    states = allocate_state(solver)
+    initialize!(solver, states,
+                (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0 + 0.1sin(x)))
+    lev = getfield(solver, :levels)[2]
+    li = lev.patches[1]
+    lt = lev.transfers[lev.tiles[1]]
+    dp = getfield(solver, :patches)[li].decomp
+    n_cons = solver.equations.n_cons
+    Q_old = states[li]
+    Q_new = ConservedState(fill(-1.0, size(parent(Q_old))))
+    Nf = CL.fine_extent(lt.region, lt.active)
+    CL._migrate_tile!(Float64, Q_new, dp, Q_old, dp, Nf, lt.active,
+                      lt.fine_blocks, lt.fine_blocks, dp.comm)
+    pad = dp.n_halo_d
+    inner = ntuple(d -> lt.active[d] ? ((2 + pad[d]):(Nf[d] - 1 + pad[d])) : (1:1), 3)
+    @test view(parent(Q_new), inner..., :) == view(parent(Q_old), inner..., :)
+    untouched = trues(size(parent(Q_new)))
+    untouched[inner..., :] .= false
+    @test all(parent(Q_new)[untouched] .== -1.0)
+    Qref = ConservedState(fill(-1.0, size(parent(Q_old))))
+    gathered = CL._gather_tile(Float64, lt.region, lt.active, n_cons, lt, solver,
+                               states)
+    CL._carry_over!(Qref, dp, lt.region, gathered, Nf, lt.region, lt.active, n_cons)
+    @test parent(Qref) == parent(Q_new)
+end
+
 @testset "subcycled two levels: manufactured solution across the boundary" begin
     errs = [_level_wave_error(N; subcycle=true) for N in (48, 96, 192)]
     orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
