@@ -116,7 +116,7 @@ Global coordinate vector along dimension `d`, covering the whole domain, not
 this rank's block. It is identical on every rank, so building it needs no
 communication.
 """
-global_axis(solver::Solver, d::Int) =
+global_axis(solver::SolverLike, d::Int) =
     Float64[global_xcoord(solver, d, i) for i in 1:solver.decomp.n_global[d]]
 
 """
@@ -188,7 +188,7 @@ switchable one was written is rejected by [`restore_switches!`](@ref); resuming
 it would run under a boundary the checkpoint never described. Shared between the
 per-rank and shared-file checkpoint paths.
 """
-switch_codes(solver::Solver) =
+switch_codes(solver::SolverLike) =
     Int64[bc isa SwitchableBC ? Int64(switched(bc)) : Int64(-1)
           for d in 1:3 for bc in solver.bcs[d]]
 
@@ -202,7 +202,7 @@ reverse is refused because `switch!` is one-way, so a solver whose face has
 switched cannot be returned to the state a checkpoint written before the switch
 describes.
 """
-function restore_switches!(solver::Solver, codes, source::AbstractString)
+function restore_switches!(solver::SolverLike, codes, source::AbstractString)
     length(codes) == 6 ||
         error("$source records $(length(codes)) boundary faces, not 6")
     i = 0
@@ -283,44 +283,105 @@ restores them. Give a restarted writer a `start_index` to continue the frame
 sequence without overwriting it.
 """
 function save_checkpoint(solver::Solver, Q, prefix::AbstractString)
-    decomp = solver.decomp
-    rank = MPI.Comm_rank(decomp.comm)
-    o1, o2, o3 = decomp.n_halo_d
-    nx, ny, nz = decomp.n_local
-    ensure_output_dir(prefix, decomp.comm)
+    _multipatch(solver) &&
+        error("save_checkpoint: this solver holds a patch layout; pass the state " *
+              "vector allocate_state returned")
+    rank = MPI.Comm_rank(solver.comm)
+    ensure_output_dir(prefix, solver.comm)
     open(_ckpt_name(prefix, rank), "w") do io
-        write(io, UInt64(CKPT_MAGIC))
-        write(io, Int64(CKPT_VERSION))
-        write(io, Int64(solver.equations.n_cons))
-        write(io, Int64(solver.equations.n_species))
-        write(io, Int64(nlevels(solver)))
-        for d in 1:3
-            write(io, Int64(decomp.n_global[d]))
-        end
-        for d in 1:3
-            write(io, Int64(decomp.n_local[d]))
-        end
-        for d in 1:3
-            write(io, Int64(decomp.coords[d]))
-        end
-        _write_strings(io, solver.equations.component_names)
-        _write_string(io, type_name(solver.metric))
-        _write_string(io, type_name(solver.eos))
-        _write_string(io, string(eltype(Q)))
-        for d in 1:3
-            write(io, global_axis(solver, d))
-        end
-        write(io, Float64(solver.t))
-        write(io, Int64(solver.step))
-        write(io, Float64(solver.cfl))
-        write(io, Float64(solver.dt_prev))
-        write(io, Float64(solver.rate_prev))
-        write(io, switch_codes(solver))
-        write(io, Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :])
-        write(io, Int64(n_art_fields(solver)))
-        write(io, art_block(solver))
+        _write_ckpt_header(io, solver, solver, Q)
+        _write_ckpt_block(io, solver, Q)
     end
     return prefix
+end
+
+"""
+    save_checkpoint(solver, states::Vector, prefix)
+
+The refined-hierarchy form: the root's block as above, then the hierarchy
+record (the tile layout and stored ownership of every refined level, and
+the regrid state: the last check's step, the check count, each tile's
+creation check and the rebalance streak), then this rank's block of every
+tile it holds, each with the tile's level and index. The file is per rank,
+so [`load_checkpoint!`](@ref) restores it onto the rank count that wrote it
+and, with the stored ownership, onto the same decompositions;
+[`save_checkpoint_hdf5`](@ref) is the rank-count-independent form. A
+same-level `patch_grid` layout has no checkpoint.
+"""
+function save_checkpoint(solver::Solver, states::Vector{<:ConservedState},
+                         prefix::AbstractString)
+    _check_hierarchy_layout(solver, "save_checkpoint")
+    patches = getfield(solver, :patches)
+    root = PatchSolver(solver, patches[1])
+    rec = hierarchy_record(solver)
+    rank = MPI.Comm_rank(solver.comm)
+    ensure_output_dir(prefix, solver.comm)
+    open(_ckpt_name(prefix, rank), "w") do io
+        _write_ckpt_header(io, solver, root, states[1])
+        _write_ckpt_block(io, root, states[1])
+        ints, floats = _record_image(rec)
+        write(io, Int64(length(ints)))
+        write(io, ints)
+        write(io, Int64(length(floats)))
+        write(io, floats)
+        held = _held_tiles(solver)
+        write(io, Int64(length(held)))
+        for (ℓ, ti, li) in held
+            ps = PatchSolver(solver, patches[li])
+            block = owned_region(ps.decomp)
+            write(io, Int64(ℓ), Int64(ti))
+            write(io, Int64[block.offset..., block.extent...])
+            _write_ckpt_block(io, ps, states[li])
+        end
+    end
+    return prefix
+end
+
+# The header, describing the state of the root patch `root` (the solver
+# itself when it holds one patch) well enough for the reader to reject a
+# solver it does not belong to, and the mutable run state.
+function _write_ckpt_header(io, solver::Solver, root::SolverLike, Q)
+    decomp = root.decomp
+    write(io, UInt64(CKPT_MAGIC))
+    write(io, Int64(CKPT_VERSION))
+    write(io, Int64(solver.equations.n_cons))
+    write(io, Int64(solver.equations.n_species))
+    write(io, Int64(nlevels(solver)))
+    for d in 1:3
+        write(io, Int64(decomp.n_global[d]))
+    end
+    for d in 1:3
+        write(io, Int64(decomp.n_local[d]))
+    end
+    for d in 1:3
+        write(io, Int64(decomp.coords[d]))
+    end
+    _write_strings(io, solver.equations.component_names)
+    _write_string(io, type_name(solver.metric))
+    _write_string(io, type_name(solver.eos))
+    _write_string(io, string(eltype(Q)))
+    for d in 1:3
+        write(io, global_axis(root, d))
+    end
+    write(io, Float64(solver.t))
+    write(io, Int64(solver.step))
+    write(io, Float64(solver.cfl))
+    write(io, Float64(solver.dt_prev))
+    write(io, Float64(solver.rate_prev))
+    write(io, switch_codes(root))
+    return io
+end
+
+# One patch's interior block of `Q`, then its artificial coefficient block
+# behind the field count.
+function _write_ckpt_block(io, ps::SolverLike, Q)
+    decomp = ps.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    write(io, Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :])
+    write(io, Int64(n_art_fields(ps)))
+    write(io, art_block(ps))
+    return io
 end
 
 """
@@ -354,85 +415,163 @@ validation would accept exactly the restart the header was extended to refuse.
 and checks the same fields.
 """
 function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
-    decomp = solver.decomp
-    rank = MPI.Comm_rank(decomp.comm)
-    o1, o2, o3 = decomp.n_halo_d
-    nx, ny, nz = decomp.n_local
-    n_cons = solver.equations.n_cons
-    path = _ckpt_name(prefix, rank)
+    _multipatch(solver) &&
+        error("load_checkpoint!: this solver holds a patch layout; pass the state " *
+              "vector allocate_state returned")
+    path = _ckpt_name(prefix, MPI.Comm_rank(solver.comm))
     open(path, "r") do io
-        magic = read(io, UInt64)
-        magic == CKPT_MAGIC_V1 &&
-            error("$path is a checkpoint in the original unversioned format, " *
-                  "which carries no record of the species set, the metric or " *
-                  "the grid and cannot be validated; rerun to regenerate it")
-        magic == CKPT_MAGIC || error("$path is not a CompactLES checkpoint")
-        version = Int(read(io, Int64))
-        version == CKPT_VERSION ||
-            error("checkpoint version mismatch in $path: the file is version " *
-                  "$version; this build writes and reads version $CKPT_VERSION")
-        file_n_cons = Int(read(io, Int64))
-        file_n_cons == n_cons ||
-            error("conserved layout mismatch: file has $file_n_cons, solver " *
-                  "has $n_cons")
-        # `n_cons` alone does not identify the conserved layout: two species
-        # sets of the same size agree on it and mean different things.
-        n_species = Int(read(io, Int64))
-        n_species == solver.equations.n_species ||
-            error("species count mismatch: file has $n_species, solver has " *
-                  "$(solver.equations.n_species)")
-        _check_level_count(Int(read(io, Int64)), solver, path)
-        for d in 1:3
-            Int(read(io, Int64)) == decomp.n_global[d] || error("global grid mismatch")
-        end
-        for d in 1:3
-            Int(read(io, Int64)) == decomp.n_local[d] || error("decomposition mismatch")
-        end
-        for d in 1:3
-            Int(read(io, Int64)) == decomp.coords[d] || error("rank layout mismatch")
-        end
-        names = _read_strings(io)
-        names == solver.equations.component_names ||
-            error("conserved component mismatch: file has $names, solver has " *
-                  "$(solver.equations.component_names)")
-        stored_metric = _read_string(io)
-        stored_metric == type_name(solver.metric) ||
-            error("metric mismatch: file has $stored_metric, solver has " *
-                  "$(type_name(solver.metric))")
-        stored_eos = _read_string(io)
-        stored_eos == type_name(solver.eos) ||
-            error("equation of state mismatch: file has $stored_eos, solver " *
-                  "has $(type_name(solver.eos))")
-        # The payload is raw binary, so its element type fixes both the length
-        # of the block and the decoding of its bytes; a Float32 file read as
-        # Float64 runs off the end, a read error, not wrong numbers.
-        stored_eltype = _read_string(io)
-        stored_eltype == string(eltype(Q)) ||
-            error("element type mismatch: file holds $stored_eltype, this " *
-                  "state array holds $(eltype(Q))")
-        # The coordinates carry the domain extent, the origin and any `Stretch`,
-        # none of which the extents above constrain.
-        for d in 1:3
-            stored = read!(io, Vector{Float64}(undef, decomp.n_global[d]))
-            axis_matches(stored, global_axis(solver, d)) ||
-                error("grid coordinate mismatch on dimension $d: the stored " *
-                      "coordinates differ from this solver's, so the domain " *
-                      "extent, the origin or a Stretch mapping is not the one " *
-                      "the checkpoint was written on")
-        end
-        solver.t = read(io, Float64)
-        solver.step = Int(read(io, Int64))
-        solver.cfl = read(io, Float64)
-        solver.dt_prev = read(io, Float64)
-        solver.rate_prev = read(io, Float64)
-        restore_switches!(solver, read!(io, Vector{Int64}(undef, 6)), path)
-        buf = Array{eltype(Q)}(undef, nx, ny, nz, n_cons)
-        read!(io, buf)
-        Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :] .= buf
-        n_art = _check_art_count(Int(read(io, Int64)), solver, path)
-        set_art_block!(solver, read!(io, Array{eltype(Q)}(undef, nx, ny, nz, n_art)))
+        _read_ckpt_header!(io, solver, solver, Q, path)
+        _read_ckpt_block!(io, solver, Q, path)
     end
     refresh_primitives!(solver, Q)
+    return Q
+end
+
+"""
+    load_checkpoint!(solver, states::Vector, prefix)
+
+The refined-hierarchy form of the restore, for a file
+[`save_checkpoint`](@ref) wrote from a state vector. The file is per rank
+and records the rank count that wrote it, which must be this run's. After
+the root's block and header checks, the hierarchy is brought to the
+recorded one through `restore_hierarchy!`: level 1 is rebuilt from the
+recorded tile layout with the recorded ownership when it differs from the
+solver's, so the solver may be built with any initial `refine` region, and
+`states` is resized in place to match `solver.patches` (build a
+[`Workspace`](@ref) after this call, not before). The `RegridSpec` takes the
+recorded regrid state. Every tile block is then read into the patch that
+holds it, and the primitives of every patch are refreshed. Collective.
+
+The tile edge must be the recorded one, and a hierarchy of more than two
+levels must have been built with the recorded regions, since only a
+two-level hierarchy regrids.
+"""
+function load_checkpoint!(solver::Solver, states::Vector{<:ConservedState},
+                          prefix::AbstractString)
+    _check_hierarchy_layout(solver, "load_checkpoint!")
+    patches = getfield(solver, :patches)
+    levels = getfield(solver, :levels)
+    np = MPI.Comm_size(solver.comm)
+    path = _ckpt_name(prefix, MPI.Comm_rank(solver.comm))
+    open(path, "r") do io
+        root = PatchSolver(solver, patches[1])
+        _read_ckpt_header!(io, solver, root, states[1], path)
+        _read_ckpt_block!(io, root, states[1], path)
+        ints = read!(io, Vector{Int64}(undef, Int(read(io, Int64))))
+        floats = read!(io, Vector{Float64}(undef, Int(read(io, Int64))))
+        rec = _record_from_image(ints, floats)
+        rec.np == np ||
+            error("rank count mismatch: $path was written by $(rec.np) rank(s) " *
+                  "and this run has $np; the per-rank checkpoint restores onto " *
+                  "the rank count that wrote it, and load_checkpoint_hdf5! " *
+                  "restores onto any")
+        restore_hierarchy!(solver, states, rec, path)
+        n_blocks = Int(read(io, Int64))
+        held = _held_tiles(solver)
+        n_blocks == length(held) ||
+            error("decomposition mismatch: $path holds $n_blocks tile block(s) " *
+                  "and this rank holds $(length(held)) tile(s) after the rebuild")
+        for (ℓ, ti, li) in held
+            ps = PatchSolver(solver, patches[li])
+            (Int(read(io, Int64)), Int(read(io, Int64))) == (ℓ, ti) ||
+                error("decomposition mismatch: the tile blocks of $path are not " *
+                      "the tiles this rank holds")
+            stored = read!(io, Vector{Int64}(undef, 6))
+            block = owned_region(ps.decomp)
+            stored == Int64[block.offset..., block.extent...] ||
+                error("decomposition mismatch: level $ℓ tile $ti's block in " *
+                      "$path is not this rank's")
+            _read_ckpt_block!(io, ps, states[li], path)
+        end
+    end
+    refresh_primitives!(solver, states)
+    return states
+end
+
+# The header checks, each against the root patch `root`, then the mutable run
+# state onto `solver`.
+function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
+                            path::AbstractString)
+    decomp = root.decomp
+    n_cons = solver.equations.n_cons
+    magic = read(io, UInt64)
+    magic == CKPT_MAGIC_V1 &&
+        error("$path is a checkpoint in the original unversioned format, " *
+              "which carries no record of the species set, the metric or " *
+              "the grid and cannot be validated; rerun to regenerate it")
+    magic == CKPT_MAGIC || error("$path is not a CompactLES checkpoint")
+    version = Int(read(io, Int64))
+    version == CKPT_VERSION ||
+        error("checkpoint version mismatch in $path: the file is version " *
+              "$version; this build writes and reads version $CKPT_VERSION")
+    file_n_cons = Int(read(io, Int64))
+    file_n_cons == n_cons ||
+        error("conserved layout mismatch: file has $file_n_cons, solver " *
+              "has $n_cons")
+    # `n_cons` alone does not identify the conserved layout: two species
+    # sets of the same size agree on it and mean different things.
+    n_species = Int(read(io, Int64))
+    n_species == solver.equations.n_species ||
+        error("species count mismatch: file has $n_species, solver has " *
+              "$(solver.equations.n_species)")
+    _check_level_count(Int(read(io, Int64)), solver, path)
+    for d in 1:3
+        Int(read(io, Int64)) == decomp.n_global[d] || error("global grid mismatch")
+    end
+    for d in 1:3
+        Int(read(io, Int64)) == decomp.n_local[d] || error("decomposition mismatch")
+    end
+    for d in 1:3
+        Int(read(io, Int64)) == decomp.coords[d] || error("rank layout mismatch")
+    end
+    names = _read_strings(io)
+    names == solver.equations.component_names ||
+        error("conserved component mismatch: file has $names, solver has " *
+              "$(solver.equations.component_names)")
+    stored_metric = _read_string(io)
+    stored_metric == type_name(solver.metric) ||
+        error("metric mismatch: file has $stored_metric, solver has " *
+              "$(type_name(solver.metric))")
+    stored_eos = _read_string(io)
+    stored_eos == type_name(solver.eos) ||
+        error("equation of state mismatch: file has $stored_eos, solver " *
+              "has $(type_name(solver.eos))")
+    # The payload is raw binary, so its element type fixes both the length
+    # of the block and the decoding of its bytes; a Float32 file read as
+    # Float64 runs off the end, a read error, not wrong numbers.
+    stored_eltype = _read_string(io)
+    stored_eltype == string(eltype(Q)) ||
+        error("element type mismatch: file holds $stored_eltype, this " *
+              "state array holds $(eltype(Q))")
+    # The coordinates carry the domain extent, the origin and any `Stretch`,
+    # none of which the extents above constrain.
+    for d in 1:3
+        stored = read!(io, Vector{Float64}(undef, decomp.n_global[d]))
+        axis_matches(stored, global_axis(root, d)) ||
+            error("grid coordinate mismatch on dimension $d: the stored " *
+                  "coordinates differ from this solver's, so the domain " *
+                  "extent, the origin or a Stretch mapping is not the one " *
+                  "the checkpoint was written on")
+    end
+    solver.t = read(io, Float64)
+    solver.step = Int(read(io, Int64))
+    solver.cfl = read(io, Float64)
+    solver.dt_prev = read(io, Float64)
+    solver.rate_prev = read(io, Float64)
+    restore_switches!(root, read!(io, Vector{Int64}(undef, 6)), path)
+    return io
+end
+
+# One patch's blocks, as `_write_ckpt_block` laid them out.
+function _read_ckpt_block!(io, ps::SolverLike, Q, path::AbstractString)
+    decomp = ps.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    buf = Array{eltype(Q)}(undef, nx, ny, nz, ps.equations.n_cons)
+    read!(io, buf)
+    Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :] .= buf
+    n_art = _check_art_count(Int(read(io, Int64)), ps, path)
+    set_art_block!(ps, read!(io, Array{eltype(Q)}(undef, nx, ny, nz, n_art)))
     return Q
 end
 

@@ -140,6 +140,99 @@ end
     rm(dir; recursive=true)
 end
 
+@testset "hierarchy checkpoint: layout, tag history and bitwise continuation" begin
+    # A regridded Sod run checkpointed between checks and continued from a
+    # solver built with the initial region: the restart rebuilds the recorded
+    # tile set, restores the tag history, and the continued states agree bit
+    # for bit with the uninterrupted run, the regrids after the restart
+    # included.
+    wall = (SlipWallBC(), SlipWallBC())
+    ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    initial = BlockRegion((85, 0, 0), (31, 1, 1))
+    mk(; kw...) = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=(wall, io_per, io_per), cfl=0.2, subcycle=true,
+                         regrid_interval=5, refine=initial; kw...)
+    same(a, b, decomp) = (inner = CL.interior(decomp);
+                          parent(a)[inner, :] == parent(b)[inner, :])
+    dir = mktempdir()
+    for (label, tile) in (("tiled", 8), ("box", 0))
+        stem = joinpath(dir, label)
+        s = mk(tile=tile)
+        states = allocate_state(s)
+        initialize!(s, states, ic)
+        run!(s, states; tfinal=1.0, nmax=23)
+        spec = getfield(s, :regrid)
+        regs = level_regions(s, 1)
+        created = copy(spec.created)
+        checks, last_step, t_save = spec.checks, spec.last_step, s.t
+        @test regs != level_regions(mk(tile=tile), 1)   # the layout has moved
+        save_checkpoint(s, states, stem)
+        run!(s, states; tfinal=1.0, nmax=130)
+        @test level_regions(s, 1) != regs                 # ...and moves again
+
+        r = mk(tile=tile)
+        sr = allocate_state(r)
+        load_checkpoint!(r, sr, stem)
+        rspec = getfield(r, :regrid)
+        @test r.step == 23 && r.t == t_save
+        @test level_regions(r, 1) == regs
+        @test length(sr) == length(r.patches) == length(regs) + 1
+        @test rspec.created == created
+        @test rspec.checks == checks && rspec.last_step == last_step
+        run!(r, sr; tfinal=1.0, nmax=130)
+        @test r.t == s.t && r.step == s.step == 130
+        @test level_regions(r, 1) == level_regions(s, 1)
+        @test getfield(r, :regrid).created == spec.created
+        @test all(same(sr[i], states[i], s.patches[i].decomp)
+                  for i in eachindex(states))
+        @test all(r.patches[i].beta_art == s.patches[i].beta_art
+                  for i in eachindex(states))
+    end
+
+    # A file of one hierarchy refused by a solver of another: unrefined, a
+    # different lattice, and a static tiled level with no RegridSpec to
+    # rebuild through.
+    stem = joinpath(dir, "tiled")
+    plain = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(wall, io_per, io_per))
+    @test_throws "refinement mismatch" load_checkpoint!(plain, allocate_state(plain),
+                                                        stem)
+    other = mk(tile=4)
+    @test_throws "tile mismatch" load_checkpoint!(other, allocate_state(other), stem)
+    static = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                    bcs=(wall, io_per, io_per), refine=initial, tile=8)
+    @test_throws "cannot rebuild" load_checkpoint!(static, allocate_state(static),
+                                                   stem)
+
+    # A static three-level hierarchy round-trips onto the layout it was
+    # built with and continues bit for bit; another level-2 region is refused.
+    per3 = ntuple(_ -> io_per, 3)
+    r1 = BlockRegion((40, 0, 0), (16, 1, 1))
+    e1 = 3 * 16 - 2
+    r2 = BlockRegion((3 * 40 + e1 ÷ 4, 0, 0), (e1 ÷ 2, 1, 1))
+    mk3(regions) = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                          refine=regions, art=ArtParams(enabled=false))
+    wave(x, y, z) = Prim(u=(0.5, 0, 0), p=1.0, rho=1 + 0.2sin(x))
+    s3 = mk3([r1, r2])
+    st3 = allocate_state(s3)
+    initialize!(s3, st3, wave)
+    run!(s3, st3; tfinal=1.0, nmax=5)
+    save_checkpoint(s3, st3, joinpath(dir, "three"))
+    run!(s3, st3; tfinal=1.0, nmax=10)
+    q3 = mk3([r1, r2])
+    sq3 = allocate_state(q3)
+    load_checkpoint!(q3, sq3, joinpath(dir, "three"))
+    @test nlevels(q3) == 3 && q3.step == 5
+    run!(q3, sq3; tfinal=1.0, nmax=10)
+    @test q3.t == s3.t
+    @test all(same(sq3[i], st3[i], s3.patches[i].decomp) for i in eachindex(st3))
+    wrong = mk3([r1, BlockRegion((3 * 40 + e1 ÷ 4 + 2, 0, 0), (e1 ÷ 2 - 4, 1, 1))])
+    @test_throws "level 2 layout mismatch" load_checkpoint!(
+        wrong, allocate_state(wrong), joinpath(dir, "three"))
+    rm(dir; recursive=true)
+end
+
 @testset "checkpoint round trip in Float32" begin
     T = Float32
     dir = mktempdir()

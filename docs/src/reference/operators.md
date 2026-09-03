@@ -102,4 +102,8 @@ prolong_level_ghosts!
 restrict_level!
 CompactLES.gather_region!
 CompactLES.GatherBuffers
+CompactLES.HierarchyRecord
+CompactLES.LevelRecord
+CompactLES.hierarchy_record
+CompactLES.restore_hierarchy!
 ```

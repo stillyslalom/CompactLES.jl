@@ -330,6 +330,143 @@ end
     MPI.Barrier(comm)
 end
 
+# The hierarchy checkpoint. On the rank count that wrote the file the stored
+# ownership is restored and the regridded run continues bit for bit; the
+# layout tables are the readable form of what the per-rank checkpoint stores.
+@testset "HDF5 extension: hierarchy checkpoint on the same rank count" begin
+    comm = MPI.COMM_WORLD
+    np = MPI.Comm_size(comm)
+    rank = MPI.Comm_rank(comm)
+    per3h = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    wall = (SlipWallBC(), SlipWallBC())
+    ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    # 201 root nodes keep 25 per rank at np = 8; a tile of 8 is 25 fine nodes.
+    mk() = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                  bcs=(wall, per3h[2], per3h[3]), cfl=0.2, subcycle=true,
+                  regrid_interval=5, tile=8, dims=(np, 1, 1),
+                  refine=BlockRegion((85, 0, 0), (31, 1, 1)))
+    dir = rank == 0 ? mktempdir() : ""
+    dir = MPI.bcast(dir, comm; root=0)
+    stem = joinpath(dir, "tiled")
+
+    s = mk()
+    states = allocate_state(s)
+    initialize!(s, states, ic)
+    run!(s, states; tfinal=1.0, nmax=23)
+    spec = getfield(s, :regrid)
+    regs = level_regions(s, 1)
+    created = copy(spec.created)
+    owners = copy(s.levels[2].owners)
+    checks = spec.checks
+    save_checkpoint_hdf5(s, states, stem)
+    MPI.Barrier(comm)
+    run!(s, states; tfinal=1.0, nmax=46)
+    if rank == 0
+        h5open(stem * ".h5", "r") do file
+            @test read(file["hierarchy/np"]) == np
+            @test read(file["hierarchy/n_levels"]) == 1
+            R = read(file["hierarchy/level1/regions"])
+            @test size(R) == (6, length(regs))
+            @test [BlockRegion(Tuple(Int.(R[1:3, k])), Tuple(Int.(R[4:6, k])))
+                   for k in axes(R, 2)] == regs
+            @test read(file["hierarchy/regrid/tile"]) == 8
+            @test read(file["hierarchy/regrid/checks"]) == checks
+            @test size(file["levels/1/tiles/1/Q"]) == (25, 1, 1, 5)
+            @test size(file["levels/1/tiles/1/art"]) == (25, 1, 1, 4)
+        end
+    end
+    MPI.Barrier(comm)
+
+    r = mk()
+    sr = allocate_state(r)
+    load_checkpoint_hdf5!(r, sr, stem)
+    @test r.step == 23
+    @test level_regions(r, 1) == regs
+    @test r.levels[2].owners == owners
+    @test getfield(r, :regrid).created == created
+    run!(r, sr; tfinal=1.0, nmax=46)
+    @test r.t == s.t
+    @test level_regions(r, 1) == level_regions(s, 1)
+    d = 0.0
+    for i in eachindex(states)
+        inner = CL.interior(s.patches[i].decomp)
+        d = max(d, maximum(abs.(parent(sr[i])[inner, :] .- parent(states[i])[inner, :])))
+    end
+    @test MPI.Allreduce(d, max, comm) == 0.0
+
+    MPI.Barrier(comm)
+    rank == 0 && rm(dir; recursive=true)
+    MPI.Barrier(comm)
+end
+
+# The property the hierarchy checkpoint exists for: a file written on one
+# rank count restored onto another, the level's tiles partitioned afresh. The
+# writer runs on the first half of the ranks and the reader on all of them,
+# built with a different initial region so that the restart rebuilds the
+# level from the recorded twelve tiles; the continued wave error agrees with
+# the writer's continuation to round-off, the tier a different decomposition
+# of the same tiles holds.
+@testset "HDF5 extension: hierarchy restart across a different rank count" begin
+    comm = MPI.COMM_WORLD
+    np = MPI.Comm_size(comm)
+    rank = MPI.Comm_rank(comm)
+    per3h = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    u0 = 0.5
+    wave(x, y, z) = Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x))
+    mk(refine, sub) = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0),
+                             bcs=per3h, art=ArtParams(enabled=false),
+                             filter_interval=0, subcycle=true, tile=8,
+                             regrid_interval=5, refine=refine, comm=sub)
+    function wave_error(solver, states)
+        e = 0.0
+        for (ps, Q) in CL.eachpatch(solver, states)
+            for i in 1:ps.decomp.n_local[1]
+                I = gidx(ps, i, 1, 1)
+                e = max(e, abs(Q[I, 1] - (1.0 + 0.2 * sin(xcoord(ps, 1, i) -
+                                                          u0 * solver.t))))
+            end
+        end
+        return MPI.Allreduce(e, max, solver.comm)
+    end
+    dir = rank == 0 ? mktempdir() : ""
+    dir = MPI.bcast(dir, comm; root=0)
+    stem = joinpath(dir, "twelve")
+
+    half = max(1, np ÷ 2)
+    inside = rank < half
+    sub = MPI.Comm_split(comm, inside ? 0 : nothing, rank)
+    e_sub, t_sub = 0.0, 0.0
+    if inside
+        sw = mk(BlockRegion((40, 0, 0), (96, 1, 1)), sub)
+        states = allocate_state(sw)
+        initialize!(sw, states, wave)
+        run!(sw, states; tfinal=1.0, nmax=10)
+        @test length(level_regions(sw, 1)) == 12
+        save_checkpoint_hdf5(sw, states, stem)
+        run!(sw, states; tfinal=1.0, nmax=20)
+        e_sub, t_sub = wave_error(sw, states), sw.t
+    end
+    MPI.Barrier(comm)
+    e_sub = MPI.bcast(e_sub, comm; root=0)
+    t_sub = MPI.bcast(t_sub, comm; root=0)
+
+    sr = mk(BlockRegion((56, 0, 0), (48, 1, 1)), comm)
+    @test length(level_regions(sr, 1)) == 6
+    sr_states = allocate_state(sr)
+    load_checkpoint_hdf5!(sr, sr_states, stem)
+    @test sr.step == 10
+    @test length(level_regions(sr, 1)) == 12
+    @test length(sr_states) == length(sr.patches)
+    run!(sr, sr_states; tfinal=1.0, nmax=20)
+    @test abs(sr.t - t_sub) < 1e-14
+    @test abs(wave_error(sr, sr_states) - e_sub) < 1e-12
+
+    MPI.Barrier(comm)
+    rank == 0 && rm(dir; recursive=true)
+    MPI.Barrier(comm)
+end
+
 @testset "HDF5 extension: field dump and XDMF3 sidecar" begin
     comm = MPI.COMM_WORLD
     np = MPI.Comm_size(comm)

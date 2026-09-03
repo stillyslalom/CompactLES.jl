@@ -885,6 +885,71 @@ function test_checkpoint()
 end
 
 # ---------------------------------------------------------------------------
+# 7b. The hierarchy checkpoint, decomposed: a tiled regridding run written
+#     between checks and restored on the same rank count rebuilds the recorded
+#     tile set on the stored owner ranges, so every rank reads back its own
+#     blocks and the continuation is bitwise, regrids and all. The case is the
+#     tiled Sod of the ownership phase (three tiles at 168..184 by step 41).
+# ---------------------------------------------------------------------------
+function test_hierarchy_checkpoint()
+    section("hierarchy checkpoint: same rank count, bitwise continuation")
+    wall2 = (SlipWallBC(), SlipWallBC())
+    ic = (x, y, z) -> x < 0.45 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                                 Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    mk() = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                  bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
+                  regrid_interval=5, tag_buffer=2, tile=8,
+                  refine=BlockRegion((176, 0, 0), (16, 1, 1)))
+    solver = mk()
+    states = allocate_state(solver)
+    initialize!(solver, states, ic)
+    run!(solver, states; tfinal=0.03, nmax=21)
+    regs = level_regions(solver, 1)
+    owners = copy(solver.levels[2].owners)
+    save_checkpoint(solver, states, "mpi_hier")
+    MPI.Barrier(comm)
+    run!(solver, states; tfinal=0.03, nmax=41)
+
+    restarted = mk()
+    rstates = allocate_state(restarted)
+    load_checkpoint!(restarted, rstates, "mpi_hier")
+    check("restart: recorded tile set rebuilt",
+          level_regions(restarted, 1) == regs ? 0.0 : 1.0, 0.5)
+    check("restart: stored ownership restored",
+          restarted.levels[2].owners == owners ? 0.0 : 1.0, 0.5)
+    check("restart: state vector aligned with the patches",
+          abs(length(rstates) - length(restarted.patches)), 0.5)
+    run!(restarted, rstates; tfinal=0.03, nmax=41)
+    check("restart: time reached matches the uninterrupted run",
+          gmax(abs(restarted.t - solver.t)), 1e-300)
+    check("restart: tile set tracks the uninterrupted run",
+          level_regions(restarted, 1) == level_regions(solver, 1) ? 0.0 : 1.0, 0.5)
+    spec, rspec = getfield(solver, :regrid), getfield(restarted, :regrid)
+    check("restart: tag history tracks the uninterrupted run",
+          rspec.created == spec.created && rspec.checks == spec.checks ? 0.0 : 1.0,
+          0.5)
+    d = 0.0
+    for i in eachindex(states)
+        inner = CL.interior(solver.patches[i].decomp)
+        d = max(d, maximum(abs.(parent(rstates[i])[inner, :] .-
+                                parent(states[i])[inner, :])))
+    end
+    check("restart: every block continues bitwise", gmax(d), 1e-300)
+    # A different initial region is rebuilt to the recorded one too.
+    moved = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
+                   regrid_interval=5, tag_buffer=2, tile=8,
+                   refine=BlockRegion((200, 0, 0), (24, 1, 1)))
+    mstates = allocate_state(moved)
+    load_checkpoint!(moved, mstates, "mpi_hier")
+    check("restart from another initial region: recorded tile set rebuilt",
+          level_regions(moved, 1) == regs ? 0.0 : 1.0, 0.5)
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith("mpi_hier"), readdir()))
+    MPI.Barrier(comm)
+end
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 rank == 0 && println("=== CompactLES multi-rank test suite (np = $np) ===")
@@ -1864,6 +1929,7 @@ const SUITE = (
     ("field writer", test_field_writer),
     ("slicing", test_slicing),
     ("checkpoint", test_checkpoint),
+    ("hierarchy checkpoint", test_hierarchy_checkpoint),
     ("two-patch layout", test_two_patch_layout),
 )
 

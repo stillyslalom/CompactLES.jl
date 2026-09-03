@@ -86,6 +86,19 @@ global index space. [`load_checkpoint_hdf5!`](@ref) therefore restores it onto
 **any** rank count and process grid, so a run may be moved between machines or
 resumed at a different scale.
 
+    save_checkpoint_hdf5(solver, states::Vector, prefix)
+
+The refined-hierarchy form, for the state vector [`allocate_state`](@ref)
+returns from a refined solver. Beside the root's state under `state`, the
+file carries the hierarchy record under `hierarchy` (per refined level a
+table of tile regions in the parent level's node space and a table of the
+stored owner ranges; the regrid state: the tile edge, the interval, the
+threshold and the buffer for provenance, and the last check's step, the
+check count, each tile's creation check and the rebalance streak) and every
+tile's state under `levels/<level>/tiles/<tile>`, each dataset spanning the
+tile's own node space and written in per-rank hyperslabs. A same-level
+`patch_grid` layout has no checkpoint.
+
 The header describes the state well enough for the reader to reject a solver it
 does not belong to: the format version, the global extent, the conserved count,
 the species count, the level count, the coefficient field count, the conserved
@@ -151,6 +164,22 @@ along each dimension. Coordinates are compared to a relative tolerance of
 Two limits apply. Species are identified by name, so two species sets that share
 names while differing in their thermodynamic constants are not distinguished.
 A checkpoint written in an earlier format is rejected outright.
+
+    load_checkpoint_hdf5!(solver, states::Vector, prefix)
+
+The refined-hierarchy form, for a file written from a state vector. After
+the header checks and the root's block, the hierarchy is brought to the
+recorded one: level 1 is rebuilt from the recorded tile layout when it
+differs from the solver's, so the solver may be built with any initial
+`refine` region, and `states` is resized in place to match `solver.patches`
+(build a [`Workspace`](@ref) after this call, not before). On the rank count
+that wrote the file the stored ownership is restored as well, and the run
+continues bit for bit; on another rank count the level is partitioned afresh
+and the continuation agrees to round-off. The `RegridSpec` takes the recorded
+regrid state, every tile this rank then holds reads its block, and the
+primitives of every patch are refreshed. The tile edge must be the recorded
+one, and a hierarchy of more than two levels must have been built with the
+recorded regions, since only a two-level hierarchy regrids. Collective.
 
 Requires `using HDF5`.
 """
