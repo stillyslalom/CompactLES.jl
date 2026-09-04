@@ -31,13 +31,15 @@ end
 # Entropy-wave advection: ρ(x, t) = 1 + a sin(x − u₀t), constant u and p, is an
 # exact Euler solution, so the max-norm error against it measures the full
 # spatial discretization including the interface treatment.
-function _entropy_wave_error(N::Int, patch_grid; tfinal=0.5, interface_rhs=:extended)
+function _entropy_wave_error(N::Int, patch_grid; tfinal=0.5, interface_rhs=:extended,
+                             deriv=lele_d1_6(), n_halo=4)
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     u0 = 0.5
     ic(x, y, z) = Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x))
     solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
                     art=ArtParams(enabled=false), filter_interval=0,
-                    patch_grid=patch_grid, interface_rhs=interface_rhs)
+                    patch_grid=patch_grid, interface_rhs=interface_rhs,
+                    deriv=deriv, n_halo=n_halo)
     Q = allocate_state(solver)
     initialize!(solver, Q, ic)
     run!(solver, Q; tfinal=tfinal)
@@ -64,6 +66,64 @@ end
     # And it must stay a small perturbation on the single-patch answer.
     ref = _entropy_wave_error(192, (1, 1, 1))
     @test errs[3] < max(10 * ref, 1e-8)
+    # The pentadiagonal C10 closes its interfaces with two rows per end and
+    # reads five ghost layers. Measured 8.2e-7 / 9.8e-8 / 8.5e-9, orders
+    # 3.06 / 3.52: the same one-sided divergence rows bind.
+    errs10 = [_entropy_wave_error(N, (2, 1, 1); deriv=lele_d1_10(), n_halo=5)
+              for N in (48, 96, 192)]
+    orders10 = [log2(errs10[i] / errs10[i+1]) for i in 1:2]
+    @info "two-patch entropy wave, C10" errs10 orders10
+    @test all(>(2.5), orders10)
+    @test errs10[3] < 2e-8
+end
+
+# The inviscid gates above run the flux divergence alone, whose plans keep
+# the one-sided rows at an interface, so they cannot tell `:extended` from
+# `:onesided`. The interface rows serve the gradients, so a viscous wave
+# exercises them: against the single-patch answer at the same N, the
+# extended-data rows converge at order ≈ 4 and the one-sided ones at ≈ 2.
+function _viscous_wave(N::Int, patch_grid; deriv, n_halo, interface_rhs=:extended)
+    per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    ic(x, y, z) = Prim(u=(0.5 + 0.1 * sin(2x), 0, 0), p=1.0 + 0.05 * cos(x),
+                       rho=1.0 + 0.2 * sin(x))
+    solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                    art=ArtParams(enabled=false), filter_interval=0,
+                    transport=Transport(mu0=2e-2), patch_grid=patch_grid,
+                    deriv=deriv, n_halo=n_halo, interface_rhs=interface_rhs)
+    Q = allocate_state(solver)
+    initialize!(solver, Q, ic)
+    run!(solver, Q; tfinal=0.5)
+    states = Q isa Vector ? Q : [Q]
+    rho = Dict{Int,Float64}()          # by root node
+    for (ps, Qp) in CL.eachpatch(solver, states)
+        for i in 1:ps.decomp.n_local[1]
+            rho[ps.patch.region.offset[1] + i] = Qp[gidx(ps, i, 1, 1), 1]
+        end
+    end
+    return rho
+end
+
+@testset "two patches: viscous wave through the interface rows" begin
+    for (label, deriv, n_halo) in (("C6", lele_d1_6(), 4), ("C10", lele_d1_10(), 5))
+        errs = Dict{Symbol,Vector{Float64}}()
+        for rhs in (:extended, :onesided)
+            errs[rhs] = map([48, 96, 192]) do N
+                single = _viscous_wave(N, (1, 1, 1); deriv=deriv, n_halo=n_halo)
+                two = _viscous_wave(N, (2, 1, 1); deriv=deriv, n_halo=n_halo,
+                                    interface_rhs=rhs)
+                maximum(abs(two[g] - single[g]) for g in keys(single))
+            end
+        end
+        ext, osd = errs[:extended], errs[:onesided]
+        orders = [log2(ext[i] / ext[i+1]) for i in 1:2]
+        @info "two-patch viscous wave, $label" ext osd orders
+        # Measured C6 6.1e-5 / 3.0e-6 / 1.9e-7 (orders 4.34 / 4.00) against
+        # one-sided 8.4e-5 / 2.0e-5 / 5.9e-6 (2.09 / 1.73); C10 5.2e-5 /
+        # 3.3e-6 / 2.3e-7 (3.95 / 3.85) against 7.5e-5 / 1.9e-5 / 5.9e-6.
+        @test all(>(3.0), orders)
+        @test ext[3] < 1e-6
+        @test osd[3] > 10 * ext[3]
+    end
 end
 
 @testset "two patches: acoustic pulse reflection at the interface" begin
@@ -96,6 +156,23 @@ end
     # Measured 2.34e-3 at N = 192, converging at ≈ 5th order (6.5e-2 at 96,
     # 4.9e-5 at 384); the single-patch wake in the same window is 2.4e-10.
     @test reflected / amp < 5e-3
+    # C10: 4.1e-3 at 192 (7.5e-2 at 96, 7.7e-5 at 384), the larger mismatch
+    # between the interior rows and the divergence's C6 closure cascade.
+    solver10 = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                      art=ArtParams(enabled=false), filter_interval=0,
+                      patch_grid=(2, 1, 1), deriv=lele_d1_10(), n_halo=5)
+    states10 = allocate_state(solver10)
+    initialize!(solver10, states10, ic)
+    run!(solver10, states10; tfinal=π / sqrt(1.4))
+    reflected10 = 0.0
+    ps10 = PatchSolver(solver10, solver10.patches[1])
+    CL.refresh_primitives!(ps10, states10[1])
+    for i in 1:ps10.decomp.n_local[1]
+        xcoord(ps10, 1, i) < π - 1.0 || continue
+        reflected10 = max(reflected10, abs(ps10.p[gidx(ps10, i, 1, 1)] - 1.0))
+    end
+    @info "two-patch pulse reflection, C10" reflected10 reflected10 / amp
+    @test reflected10 / amp < 1e-2
 end
 
 @testset "two patches: conservation drift vs single patch" begin
@@ -121,9 +198,18 @@ end
 
 @testset "patched solver rejects unsupported configurations" begin
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
-    @test_throws ErrorException Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=per3, patch_grid=(2, 1, 1),
-                                       deriv=lele_d1_10())
+    # C10's interface rows read five ghost layers: the default halo of four
+    # is refused with the width to construct with, and five builds.
+    @test_throws "n_halo ≥ 5" Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                     bcs=per3, patch_grid=(2, 1, 1),
+                                     deriv=lele_d1_10())
+    @test npatches(Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+                          patch_grid=(2, 1, 1), deriv=lele_d1_10(), n_halo=5)) == 2
+    # Under one-sided interface rows the scheme's own closures serve, and
+    # the default halo suffices.
+    @test npatches(Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+                          patch_grid=(2, 1, 1), deriv=lele_d1_10(),
+                          interface_rhs=:onesided)) == 2
     @test_throws ErrorException Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
                                        bcs=per3, patch_grid=(2, 1, 1),
                                        art=ArtParams(detector=:d8))

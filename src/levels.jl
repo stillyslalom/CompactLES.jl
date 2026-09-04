@@ -51,11 +51,12 @@
 # dimensions) `TransferPlan`s connects the coarse box to the fully fine box
 # through K − 1 intermediate grids, each stage carrying its own scratch array.
 #
-# Scope, enforced by `Solver`: Cartesian metric, no stretching, no folds,
-# tridiagonal schemes, the `:delta4` detector, and no same-level patch
+# Scope, enforced by `Solver`: Cartesian metric, no stretching, no folds, a
+# tridiagonal filter, the `:delta4` detector, and no same-level patch
 # decomposition alongside refinement. The fine patch's line solves close at
 # the coarse–fine boundary with the same-level interface rows (extended-data
-# gradients and filters, one-sided divergence).
+# gradients and filters, one-sided divergence); the pentadiagonal C10 takes
+# two such rows per end and a halo of five (kernels_banded.jl).
 #
 # Distribution: each level is owned by a rank subset of its parent's, a
 # contiguous prefix of the parent level's communicator (`LevelComm`), and
@@ -1814,7 +1815,7 @@ mutable struct RegridSpec{T}
     margin::Int
     n_halo::Int
     interface_rhs::Symbol
-    deriv::CompactScheme{T}
+    deriv::Union{CompactScheme{T},BandedCompactScheme{T}}
     filt::CompactScheme{T}
     smoo::CompactScheme{T}
     backend::AbstractBackend

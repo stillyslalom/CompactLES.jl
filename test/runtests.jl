@@ -383,6 +383,49 @@ end
     @test ferr(sc, dfc, (x, y, z) -> 2 + 6x - 3x^2) < 1e-10
 end
 
+@testset "C10 interface closures: two rows per end, exact to degree 9" begin
+    # The pentadiagonal scheme's patch-interface rows: the two edge rows
+    # whose left-hand side would couple a ghost unknown become explicit
+    # central differences of order 10, row 1 reading five ghost layers. A
+    # closed line whose ghosts carry the analytic function must therefore
+    # differentiate a degree-9 polynomial to round-off through both ends,
+    # where the scheme's own C6 cascade would leave a third-order error.
+    rows = CL.interface_closures(lele_d1_10())
+    @test length(rows) == 2
+    @test [r.first for r in rows] == [-4, -3]
+    @test all(r -> r.lhs == [0, 0, 1, 0, 0], rows)
+    @test all(r -> abs(sum(r.rhs)) < 1e-15, rows)
+    ring = CL.interface_closures(compact_d8())
+    @test [(r.first, r.rhs) for r in ring] == [(1, [1.0]), (2, [1.0])]
+    n = 40
+    h = 0.1
+    d = Decomp((n, 4, 4), (false, true, true); dims=(1, 1, 1), n_halo=5)
+    plan = CL.plan_direction(d, lele_d1_10(), 1, h; lo_closures=rows, hi_closures=rows)
+    p9(x) = 1 + x - 0.5x^2 + 0.3x^3 - 0.2x^4 + 0.1x^5 - 0.05x^6 + 0.02x^7 -
+            0.01x^8 + 0.004x^9
+    dp9(x) = 1 - x + 0.9x^2 - 0.8x^3 + 0.5x^4 - 0.3x^5 + 0.14x^6 - 0.08x^7 +
+             0.036x^8
+    f = CL.field(d); df = CL.field(d)
+    pad = d.n_halo_d
+    for k in axes(f, 3), j in axes(f, 2), i in axes(f, 1)
+        f[i, j, k] = p9((i - pad[1] - 1) * h)
+    end
+    CL.apply_along!(df, plan, f, d)
+    e = maximum(abs(df[i+pad[1], pad[2]+1, pad[3]+1] - dp9((i - 1) * h)) for i in 1:n)
+    @test e < 1e-10                     # measured 3.0e-12
+    # The same line under the scheme's own closures is third order at the
+    # edge rows, so the interface rows are what carry the exactness.
+    own = CL.plan_direction(d, lele_d1_10(), 1, h)
+    CL.apply_along!(df, own, f, d)
+    eo = maximum(abs(df[i+pad[1], pad[2]+1, pad[3]+1] - dp9((i - 1) * h)) for i in 1:n)
+    @test eo > 1e-4
+    # Four ghost layers are too few for the rows, and the error names the
+    # width to construct with.
+    d4 = Decomp((n, 4, 4), (false, true, true); dims=(1, 1, 1), n_halo=4)
+    @test_throws "n_halo ≥ 5" CL.plan_direction(d4, lele_d1_10(), 1, h;
+                                                lo_closures=rows, hi_closures=rows)
+end
+
 @testset "pade_d1_4: fourth-order interior convergence" begin
     # The only coverage of the 4th-order tridiagonal scheme; a wrong
     # coefficient shows as a wrong slope, not a wrong level.

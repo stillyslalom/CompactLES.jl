@@ -294,9 +294,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         (axis || orig1 || poles) &&
             error("patch decomposition across a coordinate fold is not " *
                   "supported; a folded run takes a single patch")
-        (deriv isa CompactScheme && filt isa CompactScheme) ||
-            error("patch interfaces carry closure variants for tridiagonal " *
-                  "schemes only; banded schemes (C10) take a single patch")
+        filt isa CompactScheme ||
+            error("patch interfaces carry closure variants for a tridiagonal " *
+                  "filter only")
         art.detector === :delta4 ||
             error("patch interfaces support the :delta4 detector only; the " *
                   ":d8 detector's banded scheme takes a single patch")
@@ -377,9 +377,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         (axis || orig1 || poles) &&
             error("refinement across a coordinate fold is forbidden " *
                   "(constraint 4 of reference/AMR_GPU.md)")
-        (deriv isa CompactScheme && filt isa CompactScheme) ||
-            error("the coarse-fine boundary carries closure variants for " *
-                  "tridiagonal schemes only")
+        filt isa CompactScheme ||
+            error("the coarse-fine boundary carries closure variants for a " *
+                  "tridiagonal filter only")
         art.detector === :delta4 ||
             error("refinement supports the :delta4 detector only")
         level_restriction in (:inject, :filter) ||
@@ -843,7 +843,7 @@ end
 # Multi-patch construction: the rank set is partitioned over the patch slabs,
 # each patch builds its own decomposition, plans and arrays over its own
 # communicator, and the interface exchange records are derived from one
-# world Allgather. Folds, banded schemes, the :d8 detector, and an explicit
+# world Allgather. Folds, a banded filter, the :d8 detector, and an explicit
 # process grid are rejected by the caller before this runs.
 function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all,
                                patch_grid, bcs, eos, equations, transport, art,

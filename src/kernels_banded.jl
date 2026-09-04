@@ -14,17 +14,24 @@
 # automatically (LHS reversed; RHS reversed and negated for derivatives).
 
 """
-    BandedClosureRow(lhs, rhs)
+    BandedClosureRow(lhs, rhs, first=1)
 
 One low-edge closure row for a [`BandedCompactScheme`](@ref). `lhs` is the full
 centered band, of length `2q + 1` with the diagonal at index `q + 1` and entries
-reaching outside the domain set to zero; `rhs` holds weights on `f[1]`, `f[2]`,
-... counted inward from the edge. High-edge rows are mirrored automatically.
+reaching outside the domain set to zero; `rhs` holds weights on `f[first]`,
+`f[first+1]`, ..., where `first = 1` is the edge node and `first ≤ 0` a ghost
+layer the row reads across a patch interface. High-edge rows are mirrored
+automatically.
 """
 struct BandedClosureRow{T}
     lhs::Vector{T}    # length 2q+1, centered on the diagonal
-    rhs::Vector{T}    # coefficients on f[1], f[2], ..., from the edge
+    rhs::Vector{T}    # coefficients on f[first], f[first+1], ...
+    first::Int        # index of the first rhs point (1 = the edge node)
 end
+
+BandedClosureRow{T}(lhs::Vector{T}, rhs::Vector{T}) where {T} =
+    BandedClosureRow{T}(lhs, rhs, 1)
+BandedClosureRow(lhs, rhs) = BandedClosureRow(lhs, rhs, 1)
 
 """
     BandedCompactScheme(name, q, lhs, a0, coeffs, symmetric, closures)
@@ -55,7 +62,9 @@ Three closure rows are needed at a closed edge, since the interior RHS reaches
 ±3: the C6 third-order one-sided row 1, the C6 fourth-order centered Padé row 2,
 and the C6 tridiagonal interior row on row 3. This is the usual boundary
 cascade, with local order reduction near walls. Requires halo width n_halo ≥ 3
-(the default n_halo = 4 is sufficient).
+(the default n_halo = 4 is sufficient); at a patch interface under
+`interface_rhs = :extended` the two [`interface_closures`](@ref) rows read
+five ghost layers, so a patched or refined run takes `n_halo ≥ 5`.
 """
 function lele_d1_10(::Type{T}=Float64) where {T}
     BandedCompactScheme{T}("Lele C10 first derivative", 2,
@@ -125,4 +134,30 @@ function compact_d8(::Type{T}=Float64) where {T}
          BandedClosureRow{T}(T[3//58, 14//29, 1, 14//29, 3//58],
                              T[-7//116, 7//29, -14//29, 35//58, -14//29, 7//29,
                                -2//29, 1//116])])
+end
+
+"""
+    interface_closures(scheme::BandedCompactScheme) -> Vector{BandedClosureRow}
+
+The patch-interface closure rows of a banded scheme, per the extended-data
+convention of the [`CompactScheme`](@ref) method: the first `q` rows from the
+edge are the ones whose left-hand side would couple a ghost unknown, so each
+is replaced by an identity row. For a derivative the right-hand side is the
+explicit central difference of order `2(M + q)`, the interior formal order,
+centered on the row; row 1 reads `M + q` ghost layers (five for
+[`lele_d1_10`](@ref)), and `plan_direction` checks that reach against the
+halo width. For a symmetric operator each row is the identity on its own
+node. Rows `q + 1` onward keep the interior stencil, their right-hand sides
+reading the exchanged ghosts.
+"""
+function interface_closures(scheme::BandedCompactScheme{T}) where {T}
+    q = scheme.q
+    lhs = zeros(T, 2q + 1)
+    lhs[q+1] = one(T)
+    if !scheme.symmetric
+        m = halfwidth(scheme) + q
+        w = _central_d1_weights(T, m)
+        return [BandedClosureRow{T}(copy(lhs), copy(w), j - m) for j in 1:q]
+    end
+    return [BandedClosureRow{T}(copy(lhs), T[1], j) for j in 1:q]
 end

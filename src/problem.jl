@@ -366,7 +366,8 @@ increase `n_global` if setup reports a smaller local block.
   hierarchy, region ℓ given in level ℓ−1's node space (level-(ℓ−1) node
   `g` is level-ℓ node `3(g − 1) + 1`). Default `nothing`. The
   [`Solver`](@ref) constructor enforces the scope (Cartesian, unstretched,
-  unfolded, tridiagonal schemes, nesting).
+  unfolded, a tridiagonal filter, nesting; the pentadiagonal C10 needs
+  `n_halo ≥ 5`).
 - `level_restriction`: `:inject` (default) writes the fine coincident-node
   values onto the covered region of the parent; `:filter` applies the
   invertible transfer pair's anti-alias filter first.

@@ -21,7 +21,10 @@ released_communicators(decomp) =
     mk(; kw...) = Solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
                          bcs=per3l, refine=BlockRegion((40, 0, 0), (16, 1, 1)),
                          kw...)
-    @test_throws ErrorException mk(deriv=lele_d1_10())
+    # C10 closes the coarse-fine boundary with rows reading five ghost
+    # layers, so the default halo is refused and five builds.
+    @test_throws "n_halo ≥ 5" mk(deriv=lele_d1_10())
+    @test npatches(mk(deriv=lele_d1_10(), n_halo=5)) == 2
     @test_throws ErrorException mk(art=ArtParams(detector=:d8))
     @test_throws ErrorException mk(metric=CylindricalMetric())
     @test_throws ErrorException mk(patch_grid=(2, 1, 1))
@@ -43,7 +46,7 @@ released_communicators(decomp) =
 end
 
 function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false,
-                           levels=2, tile=0)
+                           levels=2, tile=0, deriv=lele_d1_6(), n_halo=4)
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     u0 = 0.5
     r1 = BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1))
@@ -54,7 +57,8 @@ function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false,
     solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
                     art=ArtParams(enabled=false), filter_interval=0,
                     level_restriction=mode, subcycle=subcycle, tile=tile,
-                    refine=levels == 3 ? [r1, r2] : r1)
+                    refine=levels == 3 ? [r1, r2] : r1, deriv=deriv,
+                    n_halo=n_halo)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
@@ -82,6 +86,15 @@ end
     # src/levels.jl header); pin that it stays selectable and stable.
     ef = _level_wave_error(96; mode=:filter)
     @test 1e-5 < ef < 1e-4
+    # C10 with its two-row interface closures: measured 8.2e-8 / 5.7e-9 /
+    # 4.9e-10, orders 3.84 / 3.54 (subcycled 3.88 / 3.53); the divergence's
+    # one-sided rows bind here as well.
+    errs10 = [_level_wave_error(N; deriv=lele_d1_10(), n_halo=5)
+              for N in (48, 96, 192)]
+    orders10 = [log2(errs10[i] / errs10[i+1]) for i in 1:2]
+    @info "two-level entropy wave, C10" errs10 orders10
+    @test all(>(3.0), orders10)
+    @test errs10[2] < 3e-8
 end
 
 # Trapezoid mass over the two-level composite: the coarse level outside the
@@ -394,32 +407,38 @@ end
                             Prim(u=(0, 0, 0), p=0.1, rho=0.125)
     N = 201
     # The static gate's configuration with subcycling on: the same region,
-    # CFL, and crossing schedule, so the guards compare directly.
-    solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=(wall2, per, per), cfl=0.4, subcycle=true,
-                    refine=BlockRegion((120, 0, 0), (41, 1, 1)))
-    states = allocate_state(solver)
-    initialize!(solver, states, ic)
-    m0 = _two_level_mass(solver, states, N)
-    run!(solver, states; tfinal=0.1, nmax=20000)
-    ps = PatchSolver(solver, solver.patches[1])
-    pad = ps.decomp.n_halo_d[1]
-    m1 = solver.equations.i_mom[1]
-    noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
-    @info "subcycled Sod through refinement boundary" noise
-    # Measured 1.3e-10 against the global-dt gate's 6.4e-10 (5.7e-11 under the
-    # former κ/(ρ cp) diffusive limit; the cv form takes different steps).
-    @test noise < 1e-8
-    for (psq, Q) in CL.eachpatch(solver, states)
-        n = psq.decomp.n_local[1]
-        padq = psq.decomp.n_halo_d[1]
-        @test minimum(Q[i + padq, 1, 1, 1] for i in 1:n) > 0.05
+    # CFL, and crossing schedule, so the guards compare directly. C10 runs
+    # the same crossing with the sensors and gradients through its own
+    # interface rows.
+    for (label, deriv, n_halo) in (("C6", lele_d1_6(), 4), ("C10", lele_d1_10(), 5))
+        solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(wall2, per, per), cfl=0.4, subcycle=true,
+                        refine=BlockRegion((120, 0, 0), (41, 1, 1)),
+                        deriv=deriv, n_halo=n_halo)
+        states = allocate_state(solver)
+        initialize!(solver, states, ic)
+        m0 = _two_level_mass(solver, states, N)
+        run!(solver, states; tfinal=0.1, nmax=20000)
+        ps = PatchSolver(solver, solver.patches[1])
+        pad = ps.decomp.n_halo_d[1]
+        m1 = solver.equations.i_mom[1]
+        noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
+        @info "subcycled Sod through refinement boundary, $label" noise
+        # Measured 1.3e-10 against the global-dt gate's 6.4e-10 (5.7e-11
+        # under the former κ/(ρ cp) diffusive limit; the cv form takes
+        # different steps); C10 4.1e-10.
+        @test noise < 1e-8
+        for (psq, Q) in CL.eachpatch(solver, states)
+            n = psq.decomp.n_local[1]
+            padq = psq.decomp.n_halo_d[1]
+            @test minimum(Q[i + padq, 1, 1, 1] for i in 1:n) > 0.05
+        end
+        run!(solver, states; tfinal=0.2, nmax=40000)
+        drift = abs(_two_level_mass(solver, states, N) - m0) / m0
+        @info "subcycled two-level Sod mass drift, $label" drift
+        # Measured 9.9e-5 at both schemes against the global-dt gate's 1.36e-4.
+        @test drift < 5e-4
     end
-    run!(solver, states; tfinal=0.2, nmax=40000)
-    drift = abs(_two_level_mass(solver, states, N) - m0) / m0
-    @info "subcycled two-level Sod mass drift" drift
-    # Measured 9.8e-5 against the global-dt gate's 1.36e-4.
-    @test drift < 5e-4
 end
 
 @testset "tagging and regridding track a Sod shock" begin

@@ -173,8 +173,15 @@ numbering.
    patch. Measured in situ at ≈ 3.4× per point (shock round-trip pollution,
    `bench/amr_transfer.jl`); the default 4-coarse-cell tagging buffer drops
    interface pollution two orders of magnitude and is sized from this
-   number. The number is a C6 number; C10's inverse decays more slowly and
-   the buffer must be remeasured for it.
+   number. The rate is the root of the LHS symbol, 0.382 per point for C6,
+   0.451 for C8 and 0.556 for C10 (1.8× per point), and the derivative's
+   response to a unit error in the first ghost layer, through the interface
+   closure rows and the interior solve, decays at exactly those rates
+   (`closure_localization`, same bench). At C10 that response is 5e-3 of
+   the ghost error eight fine points in and 5e-4 at twelve, the default
+   buffer's width, so the buffer holds two orders at C10 where it holds
+   five at C6; the level buffers were remeasured at C10 with the same
+   outcome ([Banded schemes at interfaces](#banded-schemes-at-interfaces)).
 
 ## Transfer operators
 
@@ -264,9 +271,9 @@ default) or stays one-sided (`:onesided`). The flux divergence always keeps
 the scheme's own one-sided closures (`Patch.div_plans`): ghost *fluxes*
 would require a second communication phase inside the RHS, which the
 sequential-patch order forbids. `gcl_cotr!` routes through the same
-divergence plans so the discrete GCL cancellation is preserved.
-`interface_closures` is defined for `CompactScheme` only; the banded
-schemes have none.
+divergence plans so the discrete GCL cancellation is preserved. A banded
+scheme takes `q` such rows per end
+([Banded schemes at interfaces](#banded-schemes-at-interfaces)).
 
 Measured at the two-conforming-patch gates: entropy-wave order 3.1–3.5
 across the interface (the divergence's one-sided rows binding); acoustic
@@ -275,7 +282,67 @@ pulse reflected amplitude 2.3e-3 of incident at 192 points, converging at
 against 4.5e-15 single-patch. Rank partitioning reproduces the serial
 two-patch answer bitwise at one rank per patch; once a patch itself
 decomposes, agreement is round-off (3.1e-15 at np = 4 against a 9.5e-8
-signal) with identical step counts.
+signal) with identical step counts. The inviscid gates run the divergence
+alone, whose plans keep the one-sided rows, so they cannot tell
+`:extended` from `:onesided`; the viscous-wave gate reaches the interface
+rows through the gradients, and there the extended-data rows converge at
+4.3 / 4.0 against the single-patch answer at the same N (6.1e-5, 3.0e-6,
+1.9e-7 at 48 / 96 / 192 points) where the one-sided rows give 2.1 / 1.7
+(8.4e-5, 2.0e-5, 5.9e-6).
+
+### Banded schemes at interfaces
+
+The pentadiagonal C10 (`lele_d1_10`) closes a patch interface with two
+rows per end, one per left-hand-side band that would couple a ghost
+unknown (`interface_closures(::BandedCompactScheme)`,
+`src/kernels_banded.jl`). Each is an identity row whose right-hand side is
+the explicit central difference of order 2(M + q) = 10, the interior formal
+order, centered on its own node, so row 1 reads M + q = 5 ghost layers and
+a patched or refined C10 run takes `n_halo ≥ 5`; the constructor refuses
+the default four with the width to use. Rows 3 onward keep the interior
+stencil, reading the exchanged ghosts. `plan_direction` for a `BandPlan`
+takes the `lo_closures` / `hi_closures` hook of the tridiagonal plan with
+the same reach checks, and the device mirror carries each row's first-point
+offset as it does for a `DirPlan`, so the device line solve stays bitwise
+against the host under decomposition. The flux divergence keeps the
+scheme's own closure cascade (the C6 rows) as at every interface, and the
+filter stays C8, so the minimum extent does not move. The `:d8` ring
+detector, the other banded scheme, is the sensor's operator and keeps its
+closed-edge rows at an interface as the sensor smoother does; patched runs
+still reject it pending the sensor gate of item 8.
+
+Measured at the gates: the two-patch entropy wave at C10 converges at
+3.06 / 3.52 (8.2e-7, 9.8e-8, 8.5e-9 at 48 / 96 / 192; C6 3.09 / 3.53),
+the divergence's one-sided rows binding as before; the pulse reflection is
+4.1e-3 of the incident amplitude at 192 (7.5e-2 at 96, 7.7e-5 at 384),
+above C6's 2.3e-3 by the larger mismatch between the interior rows and the
+closure cascade; the viscous wave converges through the interface rows at
+3.95 / 3.85 against the single-patch answer (5.2e-5, 3.3e-6, 2.3e-7)
+where the one-sided rows give 2.00 / 1.67; and a degree-9 polynomial
+differentiates to 3e-12 through both ends of a closed line whose ghosts
+carry it, where the scheme's own cascade leaves 1e-4. Across the
+coarse-fine boundary the two-level wave measures 3.84 / 3.54 (8.2e-8,
+5.7e-9, 4.9e-10; subcycled 3.88 / 3.53), the Sod crossing leaves 3.5e-10
+of momentum noise ahead of the shock (subcycled 4.1e-10; C6 6.4e-10 and
+1.3e-10), and the tiled regrid tracks the shock with positivity intact.
+Rank-partitioned, the viscous two-patch C10 run reproduces the serial
+answer bitwise at one rank per patch and to round-off once a patch
+decomposes, as C6 does.
+
+The level buffers were remeasured at C10 with the two-level entropy wave
+and the subcycled Sod crossing over `RESTRICT_MARGIN` 0–3 and
+`LEVEL_BUFFER` 4 and 6, in a scratch copy of the tree with the constants
+edited, the two testsets being the instrument. C10 tracks C6 at every
+setting: the wave error at 96 nodes is 5.1e-9 / 5.1e-9 / 5.7e-9 / 5.4e-9
+over margins 0–3 against C6's 5.0e-9 / 5.0e-9 / 7.7e-9 / 5.8e-9, the
+growth of that error from t = 0.5 to t = 2 is 2.2 / 2.2 / 3.3 / 1.9
+against 1.7 / 1.7 / 2.5 / 1.6, the Sod noise stays between 3.5e-10 and
+8.8e-10, and `LEVEL_BUFFER = 6` reproduces the buffer-4 numbers to the
+last digit at both schemes. Nothing at C10 calls for wider buffers, and the
+constants stay where they are. The amplifying loop `RESTRICT_MARGIN` was
+introduced against did not appear at margin 0 in this configuration for
+either scheme, which is an observation about the current coupling, not a
+reason to move a C6 constant.
 
 ## Refinement
 
@@ -1157,13 +1224,14 @@ guarded somewhere; none should be re-derived.
 Configurations rejected at setup, and the reason:
 
 - **Patched runs** (same-level `patch_grid`) reject folds (constraint 4),
-  banded schemes (no interface closures), the `:d8` detector, stretching
-  along the patched dimension, and an explicit `dims`. The layout tiles
-  slabs along one dimension, so corner-coupled adjacency does not arise.
-  Field output takes the multiblock form; a slab layout has no checkpoint.
-- **Refined runs** require Cartesian metric, no stretching, no folds,
-  tridiagonal schemes, `:delta4`, one region per level, and no same-level
-  `patch_grid` alongside. `level_restriction = :filter` is serial-only.
+  the `:d8` detector, stretching along the patched dimension, and an
+  explicit `dims`; C10 takes `n_halo ≥ 5`. The layout tiles slabs along
+  one dimension, so corner-coupled adjacency does not arise. Field output
+  takes the multiblock form; a slab layout has no checkpoint.
+- **Refined runs** require Cartesian metric, no stretching, no folds, a
+  tridiagonal filter, `:delta4`, one region per level, and no same-level
+  `patch_grid` alongside; C10 takes `n_halo ≥ 5`.
+  `level_restriction = :filter` is serial-only.
   Each region must nest by `max(n_halo, LEVEL_BUFFER)` parent nodes inside
   the patches of the level above and span ≥ 4 parent nodes per active
   dimension; a tiled level's tiles are clipped to that margin at the
@@ -1190,7 +1258,6 @@ sequencing item that delivers it.
 
 | assumption | replaced by | item |
 |---|---|---|
-| the banded (C10) schemes have no interface closures | [Banded schemes](#banded-schemes) | 6 |
 | tiled levels are host-only; the transfer chain and tagging run on the host | [Device](#device) | 7 |
 | no rate check per substep; measured weights carry the root's work | [Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check) | as needed |
 | regridding is two-level | not sequenced; see [Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check) | — |
@@ -1203,20 +1270,6 @@ configurations that need no rank-partitioned carry.
 
 Each subsection is the design as it stands; the order is the dependency
 order, which [Sequencing](#sequencing) turns into deliverables with gates.
-
-### Banded schemes
-
-Two blockers, one tabulation and one remeasurement. `interface_closures`
-needs a `BandedCompactScheme` method: for q = 2, two closure rows per end
-whose LHS is restricted to the patch and whose RHS reads up to
-`halfwidth + 2` ghosts, derived by Taylor matching as the tabulated wall
-closures were, and gated by the same manufactured-solution interface study.
-The pentadiagonal reduced solve then carries 2q interface unknowns per line,
-which the device `DevicePlan` already mirrors. Separately, C10's LHS inverse
-decays more slowly than C6's, so `LEVEL_BUFFER`, `RESTRICT_MARGIN`, and
-`tag_buffer` must be remeasured with the `bench/amr_transfer.jl`
-localization study before C10 runs refined. The filter stays C8, so the
-minimum-extent constraint does not move.
 
 ### Device
 
@@ -1335,7 +1388,7 @@ a structure.
 ## Sequencing
 
 Each item names its gate. Nothing is built ahead of the item before it.
-Items 1–5 are delivered and described in Part I: the level hierarchy with
+Items 1–6 are delivered and described in Part I: the level hierarchy with
 its recursive driver ([Refinement](#refinement)), the tiled fine level with
 full adjacency and the set-difference regrid
 ([Tiles and adjacency](#tiles-and-adjacency)), ownership
@@ -1347,19 +1400,20 @@ I/O built on them would have been rebuilt once ranks held different tile
 subsets, the tag criteria with their hysteresis and the covered masks
 ([Tagging and regridding](#tagging-and-regridding),
 [Diagnostics on the composite grid](#diagnostics-on-the-composite-grid)),
-and the checkpoint of the hierarchy with its restart on any rank count and
+the checkpoint of the hierarchy with its restart on any rank count and
 the multiblock field output ([I/O and restart](#io-and-restart)), whose
 gate was a restart continuing the regridding cases bit for bit on the
-writing rank count and to round-off on another. Their gates hold in the
-serial and MPI suites; the per-substep rate check deferred from item 1 is
-under
+writing rank count and to round-off on another, and the banded interface
+closures with the buffers remeasured at C10
+([Banded schemes at interfaces](#banded-schemes-at-interfaces)), whose
+gate was the two-conforming-patch orders and reflection amplitude
+reproduced at C10 and the localization study at C10 setting the buffers.
+Their gates hold in the serial and MPI suites; the per-substep rate check
+deferred from item 1 is under
 [Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check),
 and the cluster measurements the items leave open are under
 [Open measurements](#open-measurements).
 
-6. **Banded interface closures and remeasured buffers.** Gate: the
-   two-conforming-patch orders and reflection amplitude reproduced at C10;
-   the localization study at C10 setting the buffers.
 7. **Device: staged interface records, device transfer chain and tagging,
    batched cross-tile launches.** Gate: bitwise equality against the CPU
    hierarchy over full refined runs; the implosion case's device step
@@ -1369,9 +1423,8 @@ and the cluster measurements the items leave open are under
    shock, filter rows at the shell. Each is a measurement first and a
    change only if the measurement demands one.
 
-Items 1–5 make a run possible, restartable, and its diagnostics count each
-node once; 7 makes it fast, and 6 is independent and lands whenever a case
-wants C10.
+Items 1–6 make a run possible, restartable, its diagnostics counting each
+node once, and C10 available on it; 7 makes it fast.
 The conservation drift and the boundary numerics of item 8 remain open
 debts on the target problems, so a production acceptance still needs a
 conservation budget tied to the reported mixing and energy quantities. The

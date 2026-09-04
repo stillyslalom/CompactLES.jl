@@ -15,6 +15,14 @@
 # edge/interior error split at closed ends, and the sensor-injection
 # amplification sweep that sizes the coarse-fine interface buffers
 # (reference/AMR_GPU.md, transfer operators).
+#
+# Part 3 (closure localization) measures constraint 7 of reference/AMR_GPU.md
+# per derivative scheme: how fast the response of the compact solve to an
+# error in the first ghost layer decays into the patch, through the
+# interface closure rows and the interior left-hand side, against the root
+# of the LHS symbol that sets the asymptotic rate. C10's inverse decays more
+# slowly than C6's, and this is the number the interface-adjacent buffers
+# are sized from.
 
 using MPI
 MPI.Init(threadlevel=:funneled)
@@ -342,9 +350,61 @@ function pollution_decay()
     end
 end
 
+# --- Part 3: closure localization per derivative scheme --------------------
+
+# The asymptotic decay rate of a compact scheme's LHS inverse: the root of
+# smallest modulus below one of the symbol 1 + Σ_s 2 lhs[s] cos(s k) read as a
+# polynomial in z = e^{ik}, so that (A⁻¹)_{ij} ~ r^{|i−j|}.
+function lhs_decay_rate(scheme)
+    lhs = scheme isa CL.BandedCompactScheme ? scheme.lhs : [scheme.alpha]
+    q = length(lhs)
+    # Coefficients of z^{2q} · symbol(z): lhs[q], …, lhs[1], 1, lhs[1], …, lhs[q].
+    c = vcat(reverse(lhs), 1.0, lhs)
+    # Companion-matrix roots of the monic polynomial.
+    c = c ./ c[end]
+    m = length(c) - 1
+    C = zeros(m, m)
+    for i in 2:m
+        C[i, i-1] = 1.0
+    end
+    C[:, m] .= -c[1:m]
+    roots = eigvals(C)
+    return maximum(abs(z) for z in roots if abs(z) < 1 - 1e-9)
+end
+
+# Response of the derivative to a unit error in the first ghost layer of a
+# closed line under the interface closure rows: the RHS is nonzero only where
+# a stencil reaches that ghost, and the solve spreads it at the LHS inverse's
+# rate. The table gives |response| per point and the measured per-point ratio
+# over points 8–20, where the stencil footprint has ended.
+function closure_localization()
+    println()
+    println("closure localization: derivative response to a unit error in ghost layer 1")
+    println("  scheme   rate(theory)   |r| at 1      4         8         12        16",
+            "        20     ratio/pt")
+    n = 64
+    for (label, scheme) in (("C6", lele_d1_6()), ("C8", lele_d1_8()),
+                            ("C10", lele_d1_10()))
+        n_halo = 1 - minimum(r.first for r in CL.interface_closures(scheme))
+        d = Decomp((n, 4, 4), (false, true, true); dims=(1, 1, 1), n_halo=n_halo)
+        rows = CL.interface_closures(scheme)
+        plan = CL.plan_direction(d, scheme, 1, 1.0; lo_closures=rows, hi_closures=rows)
+        f = field(d); df = field(d)
+        pad = d.n_halo_d
+        f[pad[1], pad[2]+1, pad[3]+1] = 1.0          # ghost layer 1, index 0
+        apply_along!(df, plan, f, d)
+        r = [abs(df[i+pad[1], pad[2]+1, pad[3]+1]) for i in 1:n]
+        ratio = (r[8] / r[20])^(1 / 12)
+        @printf("  %-6s   %.4f         %.2e  %.2e  %.2e  %.2e  %.2e  %.2e   %.3f\n",
+                label, lhs_decay_rate(scheme), r[1], r[4], r[8], r[12], r[16], r[20],
+                1 / ratio)
+    end
+end
+
 convention_checks()
 roundtrip_orders()
 edge_split()
 sensor_injection()
 prefilter_comparison()
 pollution_decay()
+closure_localization()

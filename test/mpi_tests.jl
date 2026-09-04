@@ -1228,6 +1228,29 @@ function test_two_patch_layout()
     tol = np <= 2 ? 1e-20 : 1e-13
     check("two-patch entropy wave: max error matches serial", abs(gerr - ref), tol)
     check("two-patch run: step count matches serial", abs(solver.step - 28), 0.5)
+    # The pentadiagonal C10 under the same partitioning, viscous so that the
+    # gradients run through its two-row interface closures (five ghost
+    # layers), each patch's closed-end ranks carrying those rows beside the
+    # banded reduced stage. The max of rho over the domain is
+    # order-independent; the reference is the serial value of this run.
+    ic10(x, y, z) = Prim(u=(u0 + 0.1 * sin(2x), 0, 0), p=1.0 + 0.05 * cos(x),
+                         rho=1.0 + 0.2 * sin(x))
+    solver10 = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                      art=ArtParams(enabled=false), filter_interval=0,
+                      transport=Transport(mu0=2e-2), patch_grid=(2, 1, 1),
+                      deriv=lele_d1_10(), n_halo=5)
+    states10 = allocate_state(solver10)
+    initialize!(solver10, states10, ic10)
+    run!(solver10, states10; tfinal=0.5)
+    m = 0.0
+    for (ps, Q) in CL.eachpatch(solver10, states10)
+        for i in 1:ps.decomp.n_local[1]
+            m = max(m, Q[gidx(ps, i, 1, 1), 1])
+        end
+    end
+    check("two-patch C10 viscous wave: max rho matches serial",
+          abs(gmax(m) - 1.3014436520699713), tol)
+    check("two-patch C10 run: step count matches serial", abs(solver10.step - 78), 0.5)
 end
 
 # ---------------------------------------------------------------------------
@@ -1243,18 +1266,26 @@ end
 function test_device_lines()
     section("device line solves: DevicePlan bitwise vs host under decomposition")
     cpu = KernelAbstractions.CPU()
-    for (label, scheme, periodic) in (("C6 periodic", CL.lele_d1_6(Float64), true),
-                                      ("C10 closed", CL.lele_d1_10(Float64), false))
+    # The third case closes the C10 line with its interface rows, which read
+    # five ghost layers: the padded field carries the function into its
+    # edge halos so the rows have data to read on the edge ranks.
+    for (label, scheme, periodic, interface) in
+            (("C6 periodic", CL.lele_d1_6(Float64), true, false),
+             ("C10 closed", CL.lele_d1_10(Float64), false, false),
+             ("C10 interface rows", CL.lele_d1_10(Float64), false, true))
         for ax in 1:3
             n_global = ntuple(d -> d == ax ? SPLITN : 12, 3)
             decomp = Decomp(n_global, (periodic, periodic, periodic);
-                            dims=splitdims(ax))
-            plan = CL.plan_direction(decomp, scheme, ax, 0.05)
+                            dims=splitdims(ax), n_halo=interface ? 5 : 4)
+            rows = interface ? CL.interface_closures(scheme) : nothing
+            plan = CL.plan_direction(decomp, scheme, ax, 0.05;
+                                     lo_closures=rows, hi_closures=rows)
             dplan = device_plan(plan, cpu)
             f = CL.field(decomp)
             pad = decomp.n_halo_d; off = decomp.offset
-            for k in 1:decomp.n_local[3], j in 1:decomp.n_local[2],
-                    i in 1:decomp.n_local[1]
+            fill_range(d) = interface ? ((1 - pad[d]):(decomp.n_local[d] + pad[d])) :
+                                        (1:decomp.n_local[d])
+            for k in fill_range(3), j in fill_range(2), i in fill_range(1)
                 gx, gy, gz = i + off[1], j + off[2], k + off[3]
                 f[i+pad[1], j+pad[2], k+pad[3]] =
                     sin(0.31gx) + cos(0.17gy) + 0.5sin(0.23gz + 0.4gx)
