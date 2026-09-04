@@ -1312,7 +1312,19 @@ per dimension, which `DevicePlan` already supports by layout, and the
 pointwise bodies launch over a level's tiles as one index space. This
 amortizes both the launch submission and the per-apply reduced-solve fence
 over the tile count, which is the measured floor of the device step, and
-it is why the tiles are fixed-size. Streams remain unbuilt unless a
+it is why the tiles are fixed-size. The mechanism that keeps every body
+and plan unchanged is stacked storage: a device level allocates each field
+of its tiles as one array with the tiles laid along the third padded
+dimension at a fixed stride, each tile's `Patch` holding a view; a
+`pointwise!` launch over such storage takes a fourth index-space dimension
+and hands the body `k + (t − 1)·stride`, so the body's own padded
+indexing lands in tile `t`; a batched `DevicePlan` gives its fill and
+scatter kernels the same tile dimension and its line solver `lines ×
+tiles` columns, so the reduced stage solves every tile's interface values
+in one host `ldiv!` behind one fence; and the right-hand side runs once
+per level on a patch spanning the stack, the per-tile impositions,
+records and gathers staying as they are on the views. A regrid reallocates
+the stack. Streams remain unbuilt unless a
 measurement shows the batched launches still leave the device idle; if the
 fence itself still binds after batching, the routes are an on-device
 reduced solve (redundant per-rank solves on gathered ends) or GPU-aware MPI
