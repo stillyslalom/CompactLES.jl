@@ -62,9 +62,8 @@ Three closure rows are needed at a closed edge, since the interior RHS reaches
 ±3: the C6 third-order one-sided row 1, the C6 fourth-order centered Padé row 2,
 and the C6 tridiagonal interior row on row 3. This is the usual boundary
 cascade, with local order reduction near walls. Requires halo width n_halo ≥ 3
-(the default n_halo = 4 is sufficient); at a patch interface under
-`interface_rhs = :extended` the two [`interface_closures`](@ref) rows read
-five ghost layers, so a patched or refined run takes `n_halo ≥ 5`.
+(the default n_halo = 4 is sufficient); the two [`interface_closures`](@ref)
+rows of a patch interface read four, so the default serves there too.
 """
 function lele_d1_10(::Type{T}=Float64) where {T}
     BandedCompactScheme{T}("Lele C10 first derivative", 2,
@@ -142,22 +141,74 @@ end
 The patch-interface closure rows of a banded scheme, per the extended-data
 convention of the [`CompactScheme`](@ref) method: the first `q` rows from the
 edge are the ones whose left-hand side would couple a ghost unknown, so each
-is replaced by an identity row. For a derivative the right-hand side is the
-explicit central difference of order `2(M + q)`, the interior formal order,
-centered on the row; row 1 reads `M + q` ghost layers (five for
-[`lele_d1_10`](@ref)), and `plan_direction` checks that reach against the
-halo width. For a symmetric operator each row is the identity on its own
-node. Rows `q + 1` onward keep the interior stencil, their right-hand sides
-reading the exchanged ghosts.
+is replaced by a row whose left-hand side couples interior unknowns only.
+For a derivative the rows are compact and Taylor-matched to order
+`2(M + q)`, the interior formal order, on a right-hand side of half-width
+`M + q − 1` centered on the row, so row 1 reads `M + q − 1` ghost layers
+(four for [`lele_d1_10`](@ref), the default halo): row 1 couples the
+`q` unknowns inward of it, and row `j > 1` its `j − 1` neighbors on each
+side plus the `q − j + 1` beyond on the interior side, symmetrically
+where it can. An explicit central row of the same order would read one
+more layer. `plan_direction` checks the reach against the halo width. For
+a symmetric operator each row is the identity on its own node. Rows
+`q + 1` onward keep the interior stencil, their right-hand sides reading
+the exchanged ghosts.
 """
 function interface_closures(scheme::BandedCompactScheme{T}) where {T}
     q = scheme.q
-    lhs = zeros(T, 2q + 1)
-    lhs[q+1] = one(T)
-    if !scheme.symmetric
-        m = halfwidth(scheme) + q
-        w = _central_d1_weights(T, m)
-        return [BandedClosureRow{T}(copy(lhs), copy(w), j - m) for j in 1:q]
+    if scheme.symmetric
+        lhs = zeros(T, 2q + 1)
+        lhs[q+1] = one(T)
+        return [BandedClosureRow{T}(copy(lhs), T[1], j) for j in 1:q]
     end
-    return [BandedClosureRow{T}(copy(lhs), T[1], j) for j in 1:q]
+    m = halfwidth(scheme) + q - 1
+    rows = BandedClosureRow{T}[]
+    for j in 1:q
+        # Free left-hand-side coefficients: symmetric pairs at ±s for
+        # s < j (both sides interior), single entries at +s for s ≥ j.
+        pairs = collect(1:j-1)
+        singles = collect(j:q)
+        c_pairs, c_singles, w = _taylor_d1_row(pairs, singles, m)
+        lhs = zeros(T, 2q + 1)
+        lhs[q+1] = one(T)
+        for (s, c) in zip(pairs, c_pairs)
+            lhs[q+1+s] = T(c)
+            lhs[q+1-s] = T(c)
+        end
+        for (s, c) in zip(singles, c_singles)
+            lhs[q+1+s] = T(c)
+        end
+        push!(rows, BandedClosureRow{T}(lhs, T.(w), j - m))
+    end
+    return rows
+end
+
+# One compact first-derivative row by Taylor matching, in exact rationals:
+# g'_0 + Σ_{s∈pairs} c_s (g'_{-s} + g'_{s}) + Σ_{s∈singles} c_s g'_{s}
+#     = (1/h) Σ_{k=-m}^{m} w_k f_k,
+# matched through order `length(pairs) + length(singles) + 2m`, the count of
+# unknowns less one. The left-hand side of a node at offset s contributes
+# s^(n−1)/(n−1)! to the coefficient of f^{(n)} h^{n−1}, the diagonal only at
+# n = 1; the right-hand side Σ_k w_k k^n / n!.
+function _taylor_d1_row(pairs::Vector{Int}, singles::Vector{Int}, m::Int)
+    np_, ns = length(pairs), length(singles)
+    nunk = np_ + ns + 2m + 1
+    p = nunk - 1
+    A = zeros(Rational{BigInt}, p + 1, nunk)
+    b = zeros(Rational{BigInt}, p + 1)
+    for n in 0:p
+        for (i, k) in enumerate(-m:m)
+            A[n+1, np_+ns+i] = big(k)^n // factorial(big(n))
+        end
+        n == 0 && continue
+        for (i, s) in enumerate(pairs)
+            A[n+1, i] = -(big(-s)^(n - 1) + big(s)^(n - 1)) // factorial(big(n - 1))
+        end
+        for (i, s) in enumerate(singles)
+            A[n+1, np_+i] = -(big(s)^(n - 1)) // factorial(big(n - 1))
+        end
+        b[n+1] = n == 1 ? 1 // 1 : 0 // 1
+    end
+    x = A \ b
+    return x[1:np_], x[np_+1:np_+ns], x[np_+ns+1:end]
 end

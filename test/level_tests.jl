@@ -21,10 +21,11 @@ released_communicators(decomp) =
     mk(; kw...) = Solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
                          bcs=per3l, refine=BlockRegion((40, 0, 0), (16, 1, 1)),
                          kw...)
-    # C10 closes the coarse-fine boundary with rows reading five ghost
-    # layers, so the default halo is refused and five builds.
-    @test_throws "n_halo ≥ 5" mk(deriv=lele_d1_10())
-    @test npatches(mk(deriv=lele_d1_10(), n_halo=5)) == 2
+    # C10 closes the coarse-fine boundary with two compact rows reading
+    # four ghost layers, the default halo; a narrower one is refused (the
+    # root's C8 filter trips first at three).
+    @test_throws ErrorException mk(deriv=lele_d1_10(), n_halo=3)
+    @test npatches(mk(deriv=lele_d1_10())) == 2
     @test_throws ErrorException mk(art=ArtParams(detector=:d8))
     @test_throws ErrorException mk(metric=CylindricalMetric())
     @test_throws ErrorException mk(patch_grid=(2, 1, 1))
@@ -89,7 +90,7 @@ end
     # C10 with its two-row interface closures: measured 8.2e-8 / 5.7e-9 /
     # 4.9e-10, orders 3.84 / 3.54 (subcycled 3.88 / 3.53); the divergence's
     # one-sided rows bind here as well.
-    errs10 = [_level_wave_error(N; deriv=lele_d1_10(), n_halo=5)
+    errs10 = [_level_wave_error(N; deriv=lele_d1_10())
               for N in (48, 96, 192)]
     orders10 = [log2(errs10[i] / errs10[i+1]) for i in 1:2]
     @info "two-level entropy wave, C10" errs10 orders10
@@ -410,7 +411,7 @@ end
     # CFL, and crossing schedule, so the guards compare directly. C10 runs
     # the same crossing with the sensors and gradients through its own
     # interface rows.
-    for (label, deriv, n_halo) in (("C6", lele_d1_6(), 4), ("C10", lele_d1_10(), 5))
+    for (label, deriv, n_halo) in (("C6", lele_d1_6(), 4), ("C10", lele_d1_10(), 4))
         solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
                         bcs=(wall2, per, per), cfl=0.4, subcycle=true,
                         refine=BlockRegion((120, 0, 0), (41, 1, 1)),
@@ -426,7 +427,7 @@ end
         @info "subcycled Sod through refinement boundary, $label" noise
         # Measured 1.3e-10 against the global-dt gate's 6.4e-10 (5.7e-11
         # under the former κ/(ρ cp) diffusive limit; the cv form takes
-        # different steps); C10 4.1e-10.
+        # different steps); C10 4.0e-10.
         @test noise < 1e-8
         for (psq, Q) in CL.eachpatch(solver, states)
             n = psq.decomp.n_local[1]

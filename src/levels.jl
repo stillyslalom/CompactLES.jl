@@ -56,7 +56,7 @@
 # decomposition alongside refinement. The fine patch's line solves close at
 # the coarse–fine boundary with the same-level interface rows (extended-data
 # gradients and filters, one-sided divergence); the pentadiagonal C10 takes
-# two such rows per end and a halo of five (kernels_banded.jl).
+# two such rows per end (kernels_banded.jl).
 #
 # Distribution: each level is owned by a rank subset of its parent's, a
 # contiguous prefix of the parent level's communicator (`LevelComm`), and

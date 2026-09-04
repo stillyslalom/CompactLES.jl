@@ -352,9 +352,7 @@ function _central_d1_weights(::Type{T}, m::Int) where {T}
     m == 3 && return T[-1//60, 9//60, -45//60, 0, 45//60, -9//60, 1//60]
     m == 4 && return T[3//840, -32//840, 168//840, -672//840, 0,
                        672//840, -168//840, 32//840, -3//840]
-    m == 5 && return T[-1//1260, 5//504, -5//84, 5//21, -5//6, 0,
-                       5//6, -5//21, 5//84, -5//504, 1//1260]
-    error("central first-derivative weights tabulated for half-widths 1-5, got $m")
+    error("central first-derivative weights tabulated for half-widths 1-4, got $m")
 end
 
 """
@@ -367,9 +365,9 @@ reads `M+1` ghost points; for a filter it is the identity, leaving the shared
 interface-plane node to the post-stage averaging; and a scheme that is explicit
 throughout (`gaussian_filter`) needs no closure at all, since the interior
 stencil reads the exchanged ghosts. `plan_direction` verifies the ghost reach
-against the halo width. A [`BandedCompactScheme`](@ref) takes `q` such rows
-per end, one per left-hand-side band that would reach a ghost unknown; see
-the method in `kernels_banded.jl`.
+against the halo width. A [`BandedCompactScheme`](@ref) takes `q` compact
+rows per end, one per left-hand-side band that would reach a ghost unknown;
+see the method in `kernels_banded.jl`.
 """
 function interface_closures(scheme::CompactScheme{T}) where {T}
     lhs = (zero(T), one(T), zero(T))

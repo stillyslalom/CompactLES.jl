@@ -60,7 +60,7 @@ end
         run!(s, states; tfinal=0.3)
         return s, states
     end
-    for kw in ((;), (deriv=lele_d1_10(), n_halo=5))
+    for kw in ((;), (deriv=lele_d1_10(),))
         s1, q1 = slabs(CPUBackend(); kw...)
         CL.FORCE_KA[] = true
         CL.FORCE_DEVICE_EXCHANGE[] = true

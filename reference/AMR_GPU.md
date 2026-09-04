@@ -295,12 +295,16 @@ rows through the gradients, and there the extended-data rows converge at
 The pentadiagonal C10 (`lele_d1_10`) closes a patch interface with two
 rows per end, one per left-hand-side band that would couple a ghost
 unknown (`interface_closures(::BandedCompactScheme)`,
-`src/kernels_banded.jl`). Each is an identity row whose right-hand side is
-the explicit central difference of order 2(M + q) = 10, the interior formal
-order, centered on its own node, so row 1 reads M + q = 5 ghost layers and
-a patched or refined C10 run takes `n_halo ≥ 5`; the constructor refuses
-the default four with the width to use. Rows 3 onward keep the interior
-stencil, reading the exchanged ghosts. `plan_direction` for a `BandPlan`
+`src/kernels_banded.jl`). Each is a compact row whose left-hand side
+couples interior unknowns only, Taylor-matched at construction (exact
+rationals) to order 2(M + q) = 10, the interior formal order, on a 9-point
+right-hand side of half-width M + q − 1 = 4 centered on its own node: row
+1 couples nodes 1, 2, 3 with weights 1, 8/5, 2/5 and reads four ghost
+layers, the default halo, and row 2 is a centered tridiagonal row with
+2/5 on both neighbors. An explicit central row of the same order would
+read five layers and force a wider halo, which is why the rows are
+compact. Rows 3 onward keep the interior stencil, reading the exchanged
+ghosts. `plan_direction` for a `BandPlan`
 takes the `lo_closures` / `hi_closures` hook of the tridiagonal plan with
 the same reach checks, and the device mirror carries each row's first-point
 offset as it does for a `DirPlan`, so the device line solve stays bitwise
@@ -317,13 +321,13 @@ the divergence's one-sided rows binding as before; the pulse reflection is
 4.1e-3 of the incident amplitude at 192 (7.5e-2 at 96, 7.7e-5 at 384),
 above C6's 2.3e-3 by the larger mismatch between the interior rows and the
 closure cascade; the viscous wave converges through the interface rows at
-3.95 / 3.85 against the single-patch answer (5.2e-5, 3.3e-6, 2.3e-7)
+3.93 / 3.92 against the single-patch answer (6.0e-5, 4.0e-6, 2.6e-7)
 where the one-sided rows give 2.00 / 1.67; and a degree-9 polynomial
-differentiates to 3e-12 through both ends of a closed line whose ghosts
+differentiates to 2e-12 through both ends of a closed line whose ghosts
 carry it, where the scheme's own cascade leaves 1e-4. Across the
 coarse-fine boundary the two-level wave measures 3.84 / 3.54 (8.2e-8,
-5.7e-9, 4.9e-10; subcycled 3.88 / 3.53), the Sod crossing leaves 3.5e-10
-of momentum noise ahead of the shock (subcycled 4.1e-10; C6 6.4e-10 and
+5.7e-9, 4.9e-10; subcycled 3.88 / 3.53), the Sod crossing leaves 5.4e-10
+of momentum noise ahead of the shock (subcycled 4.0e-10; C6 6.4e-10 and
 1.3e-10), and the tiled regrid tracks the shock with positivity intact.
 Rank-partitioned, the viscous two-patch C10 run reproduces the serial
 answer bitwise at one rank per patch and to round-off once a patch
@@ -1251,13 +1255,12 @@ Configurations rejected at setup, and the reason:
 
 - **Patched runs** (same-level `patch_grid`) reject folds (constraint 4),
   the `:d8` detector, stretching along the patched dimension, and an
-  explicit `dims`; C10 takes `n_halo ≥ 5`. The layout tiles slabs along
+  explicit `dims`. The layout tiles slabs along
   one dimension, so corner-coupled adjacency does not arise. Field output
   takes the multiblock form; a slab layout has no checkpoint.
 - **Refined runs** require Cartesian metric, no stretching, no folds, a
   tridiagonal filter, `:delta4`, one region per level, and no same-level
-  `patch_grid` alongside; C10 takes `n_halo ≥ 5`.
-  `level_restriction = :filter` is serial-only.
+  `patch_grid` alongside. `level_restriction = :filter` is serial-only.
   Each region must nest by `max(n_halo, LEVEL_BUFFER)` parent nodes inside
   the patches of the level above and span ≥ 4 parent nodes per active
   dimension; a tiled level's tiles are clipped to that margin at the
