@@ -24,9 +24,8 @@ compact_d8
 
 Field allocation is routed through a storage backend, so the same setup code
 can place arrays in device memory. [`CPUBackend`](@ref) is the default;
-[`DeviceBackend`](@ref) allocates on a KernelAbstractions backend and is
-operator-level machinery today, not yet a supported whole-solver
-configuration.
+[`DeviceBackend`](@ref) allocates on a KernelAbstractions backend, and a
+whole solver built on one runs resident there (`reference/AMR_GPU.md`).
 
 ```@docs
 Decomp

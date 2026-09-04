@@ -180,14 +180,22 @@ function main(opt)
 
     # --- Patch layout and tiled level on device ---------------------------
     # The interface records stage through the backend, the transfer chain
-    # runs on the fine patches' device scratch, and the tag sweep evaluates
-    # on the device. Each case prints the device step against the CPU step;
-    # on a tiled level with one small tile per patch the device step is
-    # launch-bound, which is the batched-launch question of
-    # reference/AMR_GPU.md Part II.
+    # runs on the fine patches' device scratch, the tag sweep evaluates on
+    # the device, and a tiled level's tiles take stacked storage: the
+    # right-hand side, the stage update and the filter launch once per level
+    # and the compact solves batch every tile's lines behind one interface
+    # fence (reference/AMR_GPU.md, launch policy). Each case prints the
+    # device step against the CPU step and the stacks the device level
+    # holds; the per-tile launch floor this batching amortizes is what the
+    # 1-D tiled case measured before it (0.11 s against 1.1 ms per step).
     function states_diff(q1, q2)
         return maximum(maximum(abs.(Array(parent(q2[i])) .- parent(q1[i])))
                        for i in eachindex(q1))
+    end
+    function stack_note(s)
+        levs = getfield(s, :levels)
+        length(levs) > 1 || return ""
+        return "  stacks " * join([string(length(st.members)) for st in levs[2].stacks], "+")
     end
     function two_slabs(backend)
         s = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
@@ -213,14 +221,33 @@ function main(opt)
         run!(s, states; tfinal=0.06, nmax=400)
         return s, states
     end
+    # A 3-D tiled level: twelve 16^3 tiles in one stack along an active
+    # dimension, the configuration whose per-tile launch floor the stacked
+    # storage is meant to amortize. Static refinement, so the timing is the
+    # step's alone.
+    function tiled_box(backend)
+        N = 30
+        s = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=(per, per, per),
+                   transport=Transport(mu0=1e-2), subcycle=true,
+                   refine=BlockRegion((11, 11, 11), (7, 7, 13)), tile=6,
+                   backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) ->
+            Prim(u=(0.3 + 0.1 * sin(x) * cos(y) * cos(z),
+                    -0.1 * cos(x) * sin(y) * cos(z), 0.05 * sin(z)),
+                 p=1.0 + 0.02 * cos(2x) * cos(z), rho=1.0 + 0.1 * sin(x + y + z)))
+        run!(s, states; tfinal=1e6, nmax=6)
+        return s, states
+    end
     for (label, build) in (("two viscous slabs", two_slabs),
-                           ("tiled subcycled regridding Sod", tiled_sod))
+                           ("tiled subcycled regridding Sod", tiled_sod),
+                           ("tiled 3-D box, 12 tiles", tiled_box))
         s1, q1 = build(CPUBackend())
         s2, q2 = build(DeviceBackend(ka_backend))
         dmax = states_diff(q1, q2)
-        @printf("%-34s steps %3d/%3d  tiles %d/%d  max|dev-cpu| = %g%s\n", label,
+        @printf("%-34s steps %3d/%3d  tiles %d/%d  max|dev-cpu| = %g%s%s\n", label,
                 s1.step, s2.step, length(q1), length(q2), dmax,
-                dmax == 0 ? "  (bitwise)" : "")
+                dmax == 0 ? "  (bitwise)" : "", stack_note(s2))
         # Warm timing: fresh solvers, the first pass having compiled.
         sc, _ = build(CPUBackend())
         sd, _ = build(DeviceBackend(ka_backend))

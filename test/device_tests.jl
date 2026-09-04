@@ -279,7 +279,78 @@ end
         @test length(level_regions(s1, 1)) > 1
         @test getfield(s1, :regrid).created == getfield(s2, :regrid).created
         @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
+        # The device level's tiles take stacked storage: one stack (every
+        # tile of this case has the lattice extent), the spanning patch's
+        # arrays StackedArrays over the tiles' views, the states views of one
+        # stacked array in slot order, and the spanning plans batched.
+        lev = getfield(s2, :levels)[2]
+        @test length(lev.stacks) == 1
+        st = lev.stacks[1]
+        @test st.members == lev.patches
+        @test st.patch.rho isa CL.StackedArray
+        @test st.patch.rho.ntiles == length(st.members)
+        @test st.patch.deriv_plans[1].ntiles == length(st.members)
+        @test st.patch.deriv_plans[1].lines == length(st.members)
+        for (slot, li) in enumerate(st.members)
+            tile = getfield(s2, :patches)[li]
+            @test parent(tile.rho) === parent(st.patch.rho)
+            @test parent(tile.rhs_workspace.tmp_a) === parent(st.patch.rhs_workspace.tmp_a)
+            @test parent(parent(q2[li])) === parent(parent(q2[st.members[1]]))
+            @test parentindices(parent(q2[li]))[3] ==
+                  ((slot - 1) * st.patch.rho.stride + 1):(slot * st.patch.rho.stride)
+        end
+        @test parent(CL._stack_state(st, q2)) isa CL.StackedArray
+        # A state vector assembled from separate arrays is refused.
+        loose = [i == 1 ? q2[1] : ConservedState(copy(parent(q2[i]))) for i in eachindex(q2)]
+        @test_throws ErrorException CL._stack_state(st, loose)
+        # The host backend stacks nothing.
+        @test all(isempty(lev.stacks) for lev in getfield(s1, :levels))
     end
+end
+
+@testset "device-resident tiled level: stacks along an active dimension" begin
+    # The 1-D and 2-D tiled cases stack their tiles along the collapsed third
+    # dimension (stride 1, no halo). A 3-D level stacks along an active one:
+    # the stacked launches shift `k` by whole padded tile extents, the
+    # sensor's edge clamp reduces it modulo the stride, and the halo exchange
+    # along the stacking dimension runs per tile. Two tiles abutting along
+    # z in one stack (the refined box sits inside one lattice cell in x and
+    # y), subcycled so the filter and the Hermite shell batch too, one step,
+    # bitwise against the CPU hierarchy. The cost of this testset is
+    # compilation: every distinct face pattern of a tile is a distinct
+    # boundary-condition type on its `Patch`, so the right-hand side compiles
+    # once per pattern per backend (about 2.5 s each), and a 2×2×2 nest with
+    # corners has eight; `bench/device_solver.jl` runs the twelve-tile case.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    per = (PeriodicBC(), PeriodicBC())
+    function box3d(backend)
+        N = 30
+        s = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=(per, per, per),
+                   transport=Transport(mu0=1e-2), subcycle=true,
+                   refine=BlockRegion((12, 12, 12), (7, 7, 13)), tile=6,
+                   backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) ->
+            Prim(u=(0.3 + 0.1 * sin(x) * cos(y) * cos(z),
+                    -0.1 * cos(x) * sin(y) * cos(z), 0.05 * sin(z)),
+                 p=1.0 + 0.02 * cos(2x) * cos(z), rho=1.0 + 0.1 * sin(x + y + z)))
+        run!(s, states; tfinal=0.2, nmax=1)
+        return s, states
+    end
+    s1, q1 = box3d(CPUBackend())
+    CL.FORCE_KA[] = true
+    CL.FORCE_DEVICE_EXCHANGE[] = true
+    s2, q2 = try
+        box3d(DeviceBackend(cpu_ka))
+    finally
+        CL.FORCE_KA[] = false
+        CL.FORCE_DEVICE_EXCHANGE[] = false
+    end
+    lev = getfield(s2, :levels)[2]
+    @test length(lev.stacks) == 1 && length(lev.stacks[1].members) == 2
+    @test lev.stacks[1].patch.rho.stride > 1
+    @test s1.step == s2.step
+    @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
 end
 
 @testset "launch policy toggle" begin

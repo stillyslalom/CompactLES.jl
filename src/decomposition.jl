@@ -244,11 +244,16 @@ Host-memory backend: `field(CPUBackend(), decomp)` allocates a zero-filled
 """
 struct CPUBackend <: AbstractBackend end
 
+"The padded extent of one rank-local field, `n_local .+ 2 .* n_halo_d`: the
+size [`field`](@ref) allocates, and the box a full-array pointwise launch
+iterates (a stacked level's arrays span several such boxes)."
+padded_extent(decomp::Decomp) =
+    ntuple(d -> decomp.n_local[d] + 2 * decomp.n_halo_d[d], 3)
+
 "Allocate a zero-filled `Array{T,3}` of extent `n_local .+ 2 .* n_halo_d`:
 one rank-local scalar field with its halos, collapsed dimensions carrying no
 padding. The one-argument form allocates on the CPU."
-field(decomp::Decomp{T}) where {T} =
-    zeros(T, ntuple(d -> decomp.n_local[d] + 2*decomp.n_halo_d[d], 3))
+field(decomp::Decomp{T}) where {T} = zeros(T, padded_extent(decomp))
 field(::CPUBackend, decomp::Decomp) = field(decomp)
 
 "Zero-extent placeholder array on the backend's storage, for `Patch` fields a

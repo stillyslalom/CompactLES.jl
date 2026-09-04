@@ -114,6 +114,60 @@ Adapt.adapt_structure(to, w::FieldMatrix) =
         map(x -> adapt(to, x), (w.m...,)))
 
 """
+    StackedArray(data, ntiles, stride)
+
+The stacked storage of a device level's tiles (reference/AMR_GPU.md, launch
+policy): one array holding every tile's padded block along the third
+dimension at a fixed `stride`, the padded extent of one tile. A tile's
+`Patch` holds a plain view of `data` over its own block, so the per-tile
+paths (the impositions, the interface records, the gathers, `max_rate`) see
+ordinary storage; the level's spanning patch holds this wrapper, and a
+[`pointwise!`](@ref) launch routed on it, or a `DevicePlan` built for it,
+runs every tile in one index space. The wrapper forwards indexing to `data`
+and adapts to `data` itself at a device launch, so a body indexes the
+stacked array with its own padded arithmetic and lands in tile `t` through
+the `(t − 1)·stride` the launcher adds to `k`. `view` unwraps to a view of
+`data`, except the component view `(:, :, :, c)` of a 4-D stack, which keeps
+the wrapper so the filter's per-component launches stay batched.
+"""
+struct StackedArray{T,N,A<:AbstractArray{T,N}} <: AbstractArray{T,N}
+    data::A
+    ntiles::Int
+    stride::Int
+end
+
+Base.parent(s::StackedArray) = s.data
+Base.size(s::StackedArray) = size(s.data)
+Base.axes(s::StackedArray) = axes(s.data)
+Base.IndexStyle(::Type{StackedArray{T,N,A}}) where {T,N,A} = IndexStyle(A)
+Base.@propagate_inbounds Base.getindex(s::StackedArray, I...) = getindex(s.data, I...)
+Base.@propagate_inbounds Base.setindex!(s::StackedArray, v, I...) =
+    setindex!(s.data, v, I...)
+Base.view(s::StackedArray, I...) = view(s.data, I...)
+Base.view(s::StackedArray{T,4}, ::Colon, ::Colon, ::Colon, c::Int) where {T} =
+    StackedArray(view(s.data, :, :, :, c), s.ntiles, s.stride)
+# Forwarded past the AbstractArray fallbacks, which index element by element.
+Base.fill!(s::StackedArray, x) = (fill!(s.data, x); s)
+Base.similar(s::StackedArray, ::Type{S}, dims::Dims) where {S} = similar(s.data, S, dims)
+Base.show(io::IO, s::StackedArray) =
+    print(io, "StackedArray(", size(s), ", ", s.ntiles, " tiles, stride ", s.stride, ")")
+Base.show(io::IO, ::MIME"text/plain", s::StackedArray) = show(io, s)
+KernelAbstractions.get_backend(s::StackedArray) = get_backend(s.data)
+Adapt.adapt_structure(to, s::StackedArray) = adapt(to, s.data)
+@inline _cpu_storage(s::StackedArray) = _cpu_storage(s.data)
+
+# The stacking of an array, `nothing` for ordinary storage. A tile's view of a
+# stack is ordinary storage: the per-tile paths launch flat over it.
+@inline _stack_of(::AbstractArray) = nothing
+@inline _stack_of(s::StackedArray) = (s.ntiles, s.stride)
+@inline _stack_of(Q::ConservedState) = _stack_of(parent(Q))
+
+"The third-dimension range of each tile's block in a stack, in slot order."
+_tile_ranges(ntiles::Int, stride::Int) =
+    [((t - 1) * stride + 1):(t * stride) for t in 1:ntiles]
+_tile_ranges(s::StackedArray) = _tile_ranges(s.ntiles, s.stride)
+
+"""
 Test and benchmark toggle: `true` routes every [`pointwise!`](@ref) launch
 through the KernelAbstractions path even on `Array` storage, where
 `get_backend` supplies the KA CPU backend. The default `false` keeps `Array`
@@ -154,7 +208,9 @@ KernelAbstractions kernel on `get_backend(route)`. The branch resolves
 statically for a concrete storage type. The body owns its own `@inbounds`
 and any halo offsets, so the index box is the body's iteration count, not
 necessarily a padded extent, and every body must be safe to run at any point
-of the box in any order; this is the pointwise contract.
+of the box in any order; this is the pointwise contract. A route that is a
+`StackedArray` (or a conserved state over one) runs the box once per tile in
+one launch; see the stacked launches below.
 """
 @inline function pointwise!(body!::F, route::AbstractArray, n1::Int, n2::Int,
                             n3::Int, args...) where {F}
@@ -185,7 +241,71 @@ same path.
 """
 function pointwise_ka!(body!::F, backend, n1::Int, n2::Int, n3::Int,
                        args...) where {F}
-    _point_kernel!(backend)(body!, args; ndrange=(n1, n2, n3))
+    _point_kernel!(backend)(body!, map(_kernel_arg, args); ndrange=(n1, n2, n3))
+    _maybe_sync(backend)
+    return nothing
+end
+
+# The form of a body argument inside a kernel: a conserved state or a
+# stacked array hands over the array it wraps, since the bodies index both
+# exactly as they index the array. A device launch would adapt the wrappers
+# to isbits forms anyway; on the KernelAbstractions CPU backend, which adapts
+# nothing, a wrapper's forwarding `getindex` is not inlined into the kernel
+# and its Vararg dispatch allocates once per point (measured at one
+# allocation per point for either wrapper), so the unwrapping here is what
+# keeps the forced-KA test path at the speed of the device path. The
+# `@threaded` path passes the wrappers through, inlined, as it always has.
+@inline _kernel_arg(x) = x
+@inline _kernel_arg(s::StackedArray) = s.data
+@inline _kernel_arg(Q::ConservedState) = _kernel_arg(parent(Q))
+
+# --- Stacked launches -------------------------------------------------------
+#
+# A launch routed on a `StackedArray` runs the same `(1:n1) × (1:n2) × (1:n3)`
+# box once per tile, as one index space with a fourth dimension over the
+# tiles, and hands the body `k + (t − 1)·stride`: the body's own padded
+# offset along the third dimension then lands in tile t's block. The
+# per-point arithmetic is the flat launch's, so a stacked level reproduces
+# its tiles' separate launches bitwise; what changes is one launch per phase
+# per level in place of one per tile. `n3` is a per-tile count and may not
+# exceed the stride; a body that reads its `k` as a logical coordinate
+# rather than an array offset (`_delta4_point!`'s edge clamp) must reduce it
+# modulo the stride, as that body does.
+
+@kernel function _point_kernel_stacked!(body!, args, stride)
+    i, j, k, t = @index(Global, NTuple)
+    body!(args..., i, j, k + (t - 1) * stride)
+end
+
+@inline pointwise!(body!::F, route::StackedArray, n1::Int, n2::Int, n3::Int,
+                   args...) where {F} =
+    _pointwise_stacked!(body!, route.data, n1, n2, n3, route.ntiles, route.stride,
+                        args...)
+@inline pointwise!(body!::F, route::ConservedState{T,<:StackedArray}, n1::Int,
+                   n2::Int, n3::Int, args...) where {F,T} =
+    pointwise!(body!, parent(route), n1, n2, n3, args...)
+
+@noinline _stack_extent_error(n3::Int, stride::Int) =
+    error("stacked launch over $n3 points along the stacking dimension exceeds " *
+          "the tile stride $stride; launch over the tile's own extent")
+
+@inline function _pointwise_stacked!(body!::F, data::AbstractArray, n1::Int, n2::Int,
+                                     n3::Int, ntiles::Int, stride::Int,
+                                     args...) where {F}
+    n3 <= stride || _stack_extent_error(n3, stride)
+    raw = map(_kernel_arg, args)
+    if _cpu_storage(data) && !FORCE_KA[]
+        @threaded n1 * n2 * n3 * ntiles for jkt in CartesianIndices((n2, n3, ntiles))
+            j, k, t = Tuple(jkt)
+            ks = k + (t - 1) * stride
+            for i in 1:n1
+                body!(raw..., i, j, ks)
+            end
+        end
+        return nothing
+    end
+    backend = get_backend(data)
+    _point_kernel_stacked!(backend)(body!, raw, stride; ndrange=(n1, n2, n3, ntiles))
     _maybe_sync(backend)
     return nothing
 end

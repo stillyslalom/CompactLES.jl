@@ -150,18 +150,18 @@ function init_geometry!(solver)
         inv_r = zeros(T, sz)
         cot_over_r = zeros(T, sz)
         _fill_geometry!(solver, inv_J, area_d, inv_h, inv_r, cot_over_r)
-        copyto!(solver.inv_J, inv_J)
+        _upload!(solver.inv_J, inv_J)
         for d in 1:3
-            copyto!(solver.area_d[d], area_d[d])
-            copyto!(solver.inv_h[d], inv_h[d])
+            _upload!(solver.area_d[d], area_d[d])
+            _upload!(solver.inv_h[d], inv_h[d])
         end
-        copyto!(solver.inv_r, inv_r)
-        copyto!(solver.cot_over_r, cot_over_r)
+        _upload!(solver.inv_r, inv_r)
+        _upload!(solver.cot_over_r, cot_over_r)
     end
     # The momentum sources read the discrete-GCL cotθ/r; everything else
     # (the velocity-gradient correction, the rate estimate) keeps the
     # analytic value. Without a resolved θ the two coincide.
-    copyto!(solver.cot_over_r_gcl, solver.cot_over_r)
+    _assign!(solver.cot_over_r_gcl, solver.cot_over_r)
     solver.metric isa SphericalMetric && solver.decomp.active[2] && gcl_cotr!(solver)
     return solver
 end

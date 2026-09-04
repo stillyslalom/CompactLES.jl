@@ -342,7 +342,7 @@ function _primitives!(solver, eos::StiffenedGas, Q)
     R = gas_constant(eos)
     ρa, ua, va, wa = solver.rho, solver.u, solver.v, solver.w
     pa, T_iona, ca, cpa = solver.p, solver.T_ion, solver.c, solver.cp_mix
-    nxf, nyf, nzf = size(ρa)
+    nxf, nyf, nzf = padded_extent(solver.decomp)
     pointwise!(_primitives_stiffened_point!, ρa, nxf, nyf, nzf,
                Q, ρa, ua, va, wa, pa, T_iona, ca, cpa, solver.Y[1],
                γ, p_inf, cv, R, m1, m2, m3, i_energy)
@@ -776,7 +776,7 @@ function _primitives!(solver, eos::IdealMixture, Q)
     i_energy = solver.equations.i_energy
     ρa, ua, va, wa = solver.rho, solver.u, solver.v, solver.w
     pa, T_iona, ca, cpa = solver.p, solver.T_ion, solver.c, solver.cp_mix
-    nxf, nyf, nzf = size(ρa)
+    nxf, nyf, nzf = padded_extent(solver.decomp)
     pointwise!(_primitives_ideal_point!, ρa, nxf, nyf, nzf,
                Q, ρa, ua, va, wa, pa, T_iona, ca, cpa,
                solver.field_tuples.Y, eos,

@@ -196,7 +196,22 @@ values each line needs, the previous rank's last unknown and the next rank's
 first, in `line_solver.zbp` and `line_solver.zbn`. The gather is collective
 when `P > 1`, so every rank of the sub-communicator must call this.
 """
-function _reduced_solve!(line_solver::LineSolver{T}, L::Int) where {T}
+# The factorized solve of the reduced system for `L` right-hand-side
+# columns, in blocks of `Lb` columns. A batched device plan gathers the ends
+# of every tile's lines into one `z` (lines_device.jl), and LAPACK's
+# triangular solves are not bitwise invariant to the number of right-hand
+# sides they are handed, so each tile's block is solved with the column
+# count the tile's own host plan would pass; `Lb == L` is the one call every
+# unbatched plan has always made.
+function _reduced_ldiv!(red, z::AbstractMatrix, L::Int, Lb::Int)
+    Lb == L && return ldiv!(red, z)
+    for c0 in 1:Lb:L
+        ldiv!(red, view(z, :, c0:(c0 + Lb - 1)))
+    end
+    return z
+end
+
+function _reduced_solve!(line_solver::LineSolver{T}, L::Int, Lb::Int=L) where {T}
     if line_solver.P > 1
         MPI.Allgather!(line_solver.ends,
                        MPI.UBuffer(vec(line_solver.gath), 2L), line_solver.comm)
@@ -213,7 +228,7 @@ function _reduced_solve!(line_solver::LineSolver{T}, L::Int) where {T}
     # `ldiv!` call, which JET otherwise reports at every solver entry point.
     red = line_solver.red
     red === nothing && error("reduced solve without a reduced factorization")
-    ldiv!(red, line_solver.z)
+    _reduced_ldiv!(red, line_solver.z, L, Lb)
     cprev = 2 * mod(line_solver.p - 1, line_solver.P) + 2
     cnext = 2 * mod(line_solver.p + 1, line_solver.P) + 1
     @inbounds for l in 1:L

@@ -83,9 +83,10 @@ stores `DevicePlan`s and every `apply_along!` below the step drivers runs the
 device kernels without a per-call conversion. Every plan-construction site of
 the `Solver` constructor goes through here, fold parity plans included.
 """
-backend_plan(::CPUBackend, plan::AbstractDirPlan) = plan
-backend_plan(backend::DeviceBackend, plan::AbstractDirPlan) =
-    device_plan(plan, backend.ka)
+backend_plan(::CPUBackend, plan::AbstractDirPlan; ntiles::Int=1, stride::Int=0) = plan
+backend_plan(backend::DeviceBackend, plan::AbstractDirPlan; ntiles::Int=1,
+             stride::Int=0) =
+    device_plan(plan, backend.ka; ntiles, stride)
 
 # Device mirrors of the Thomas factorization and its spike vectors, plus the
 # interface staging buffers: `ends` packs (y₁, yₙ) per line in the layout of
@@ -127,6 +128,13 @@ point as the host plans, on fields living on the same backend. The reduced
 interface stage runs on the host through the wrapped plan's `line_solver`, so
 its collectives keep the ordering of the host path and every rank of the
 sub-communicator must call `apply_along!`.
+
+A plan built with `ntiles > 1` is the batched plan of a stacked level
+(`StackedArray`): its fill and scatter kernels take a fourth index dimension
+over the tiles, each tile's block sitting `stride` padded slots further along
+the third array dimension, its line buffer holds every tile's lines (the
+wrapped host plan was planned with `lines_factor = ntiles`), and the reduced
+stage solves all of them behind one fence.
 """
 struct DevicePlan{T,P<:AbstractDirPlan,KB,S,MB<:AbstractMatrix{T},
                   VT<:AbstractVector{T},MC<:AbstractMatrix{T},
@@ -143,7 +151,9 @@ struct DevicePlan{T,P<:AbstractDirPlan,KB,S,MB<:AbstractMatrix{T},
     a0::T
     nclo::Int
     nchi::Int
-    B::MB              # (lines × n) packed-line buffer
+    ntiles::Int        # tiles of a stacked level this plan covers (1 otherwise)
+    stride::Int        # padded slots between consecutive tiles' blocks (dim 3)
+    B::MB              # (lines × n) packed-line buffer, every tile's lines
     ci::VT
     clo::MC            # closure stencils padded to a rectangle, one column per row
     clo_first::VI
@@ -176,7 +186,7 @@ buffers are allocated on it. With the KernelAbstractions CPU backend the
 mirrors alias the host arrays, which is how the test suite compares the two
 paths bitwise on one machine.
 """
-function device_plan(plan::DirPlan{T}, backend) where {T}
+function device_plan(plan::DirPlan{T}, backend; ntiles::Int=1, stride::Int=0) where {T}
     ls = plan.line_solver
     sweep = DeviceThomas(adapt(backend, ls.F.l), adapt(backend, ls.F.dinv),
                          adapt(backend, ls.F.c), adapt(backend, ls.v),
@@ -184,10 +194,10 @@ function device_plan(plan::DirPlan{T}, backend) where {T}
                          KernelAbstractions.zeros(backend, T, 2, plan.lines),
                          KernelAbstractions.zeros(backend, T, plan.lines),
                          KernelAbstractions.zeros(backend, T, plan.lines))
-    return _device_plan(plan, backend, sweep)
+    return _device_plan(plan, backend, sweep, ntiles, stride)
 end
 
-function device_plan(plan::BandPlan{T}, backend) where {T}
+function device_plan(plan::BandPlan{T}, backend; ntiles::Int=1, stride::Int=0) where {T}
     ls = plan.line_solver
     q = ls.q
     sweep = DeviceBanded(q, adapt(backend, ls.F.L), adapt(backend, ls.F.U),
@@ -195,16 +205,19 @@ function device_plan(plan::BandPlan{T}, backend) where {T}
                          KernelAbstractions.zeros(backend, T, 2q, plan.lines),
                          KernelAbstractions.zeros(backend, T, plan.lines, q),
                          KernelAbstractions.zeros(backend, T, plan.lines, q))
-    return _device_plan(plan, backend, sweep)
+    return _device_plan(plan, backend, sweep, ntiles, stride)
 end
 
-function _device_plan(plan::AbstractDirPlan, backend, sweep)
+function _device_plan(plan::AbstractDirPlan, backend, sweep, ntiles::Int, stride::Int)
     T = eltype(plan.ci)
     clo_pad, clo_len = _pad_stencils(plan.clo)
     chi_pad, chi_len = _pad_stencils(plan.chi)
+    # `plan.lines` already counts every tile (`lines_factor` at planning), so
+    # the buffer below and the sweep's staging above hold the whole stack.
     return DevicePlan(plan, backend, plan.dim, plan.n, plan.lines,
                       plan.scheme.symmetric, plan.lo_closed, plan.hi_closed,
                       plan.dim == 1, plan.a0, length(plan.clo), length(plan.chi),
+                      ntiles, stride,
                       KernelAbstractions.zeros(backend, T, plan.lines, plan.n),
                       adapt(backend, plan.ci),
                       adapt(backend, clo_pad), adapt(backend, plan.clo_first),
@@ -215,26 +228,34 @@ function _device_plan(plan::AbstractDirPlan, backend, sweep)
 end
 
 # --- Kernels ----------------------------------------------------------------
-# The fill and scatter iterate (a, b, i): the two orthogonal coordinates in
-# ascending dimension order, then the sweep coordinate, so the line index is
-# l = (b−1)·n_o1 + a, the same line ordering as both host layouts. `a` is
-# the first ndrange dimension, so for the y and z sweeps consecutive threads
-# run along x: field reads and B writes coalesce.
+# The fill and scatter iterate (a, b, i, t): the two orthogonal coordinates in
+# ascending dimension order, then the sweep coordinate, then the tile of a
+# stacked level, so the line index is l = ((t−1)·n_o2 + (b−1))·n_o1 + a, the
+# same line ordering as both host layouts within a tile and the tiles in
+# stack order. `a` is the first ndrange dimension, so for the y and z sweeps
+# consecutive threads run along x: field reads and B writes coalesce. Tile t's
+# block sits (t−1)·stride slots along the third array dimension, whichever
+# kernel coordinate that dimension is; an unstacked plan has one tile and a
+# zero shift.
+
+@inline _gidx(::Val{D}, i, a, b, pad, kshift) where {D} =
+    _gidx(Val(D), i, a, b, pad) + CartesianIndex(0, 0, kshift)
 
 @kernel function _dev_fill_kernel!(B, @Const(f), @Const(ci), @Const(clo),
                                    @Const(clo_first), @Const(clo_len),
                                    @Const(chi), @Const(chi_first),
                                    @Const(chi_len), n, nclo, nchi, a0, sym,
-                                   lo_closed, hi_closed, n_o1, pad,
+                                   lo_closed, hi_closed, n_o1, n_o2, stride, pad,
                                    ::Val{D}) where {D}
-    a, b, i = @index(Global, NTuple)
+    a, b, i, t = @index(Global, NTuple)
     @inbounds begin
-        l = (b - 1) * n_o1 + a
+        l = ((t - 1) * n_o2 + (b - 1)) * n_o1 + a
+        ks = (t - 1) * stride
         if lo_closed && i <= nclo
             i0 = clo_first[i] - 1
             acc = zero(eltype(B))
             for κ in 1:clo_len[i]
-                acc += clo[κ, i] * f[_gidx(Val(D), i0 + κ, a, b, pad)]
+                acc += clo[κ, i] * f[_gidx(Val(D), i0 + κ, a, b, pad, ks)]
             end
             B[l, i] = acc
         elseif hi_closed && i > n - nchi
@@ -242,30 +263,32 @@ end
             i0 = n + 2 - chi_first[jr]
             acc = zero(eltype(B))
             for κ in 1:chi_len[jr]
-                acc += chi[κ, jr] * f[_gidx(Val(D), i0 - κ, a, b, pad)]
+                acc += chi[κ, jr] * f[_gidx(Val(D), i0 - κ, a, b, pad, ks)]
             end
             B[l, i] = acc
         elseif sym
-            acc = a0 * f[_gidx(Val(D), i, a, b, pad)]
+            acc = a0 * f[_gidx(Val(D), i, a, b, pad, ks)]
             for m in eachindex(ci)
-                acc += ci[m] * (f[_gidx(Val(D), i + m, a, b, pad)] +
-                                f[_gidx(Val(D), i - m, a, b, pad)])
+                acc += ci[m] * (f[_gidx(Val(D), i + m, a, b, pad, ks)] +
+                                f[_gidx(Val(D), i - m, a, b, pad, ks)])
             end
             B[l, i] = acc
         else
             acc = zero(eltype(B))
             for m in eachindex(ci)
-                acc += ci[m] * (f[_gidx(Val(D), i + m, a, b, pad)] -
-                                f[_gidx(Val(D), i - m, a, b, pad)])
+                acc += ci[m] * (f[_gidx(Val(D), i + m, a, b, pad, ks)] -
+                                f[_gidx(Val(D), i - m, a, b, pad, ks)])
             end
             B[l, i] = acc
         end
     end
 end
 
-@kernel function _dev_scatter_kernel!(out, @Const(B), n_o1, pad, ::Val{D}) where {D}
-    a, b, i = @index(Global, NTuple)
-    @inbounds out[_gidx(Val(D), i, a, b, pad)] = B[(b - 1) * n_o1 + a, i]
+@kernel function _dev_scatter_kernel!(out, @Const(B), n_o1, n_o2, stride, pad,
+                                      ::Val{D}) where {D}
+    a, b, i, t = @index(Global, NTuple)
+    @inbounds out[_gidx(Val(D), i, a, b, pad, (t - 1) * stride)] =
+        B[((t - 1) * n_o2 + (b - 1)) * n_o1 + a, i]
 end
 
 # One thread per line, the sweep loop inside the thread. Consecutive threads
@@ -362,11 +385,13 @@ function _dev_fill!(plan::DevicePlan, f, decomp::Decomp, ::Val{D}) where {D}
     o1, o2 = _odims(Val(D))
     n_o1 = decomp.n_local[o1]
     n_o2 = decomp.n_local[o2]
+    # A stacked field hands the kernel its own array (pointwise.jl,
+    # `_kernel_arg`); the batched plan carries the stacking itself.
     _dev_fill_kernel!(plan.backend)(
-        plan.B, f, plan.ci, plan.clo, plan.clo_first, plan.clo_len,
+        plan.B, _kernel_arg(f), plan.ci, plan.clo, plan.clo_first, plan.clo_len,
         plan.chi, plan.chi_first, plan.chi_len, plan.n, plan.nclo, plan.nchi,
-        plan.a0, plan.sym, plan.lo_closed, plan.hi_closed, n_o1,
-        decomp.n_halo_d, Val(D); ndrange=(n_o1, n_o2, plan.n))
+        plan.a0, plan.sym, plan.lo_closed, plan.hi_closed, n_o1, n_o2, plan.stride,
+        decomp.n_halo_d, Val(D); ndrange=(n_o1, n_o2, plan.n, plan.ntiles))
     _maybe_sync(plan.backend)
     return nothing
 end
@@ -376,8 +401,8 @@ function _dev_scatter!(out, plan::DevicePlan, decomp::Decomp, ::Val{D}) where {D
     n_o1 = decomp.n_local[o1]
     n_o2 = decomp.n_local[o2]
     _dev_scatter_kernel!(plan.backend)(
-        out, plan.B, n_o1, decomp.n_halo_d, Val(D);
-        ndrange=(n_o1, n_o2, plan.n))
+        _kernel_arg(out), plan.B, n_o1, n_o2, plan.stride, decomp.n_halo_d, Val(D);
+        ndrange=(n_o1, n_o2, plan.n, plan.ntiles))
     _maybe_sync(plan.backend)
     return nothing
 end
@@ -399,7 +424,7 @@ function _dev_solve!(plan::DevicePlan, sweep::DeviceThomas)
     # fence is needed on the way back down.
     synchronize(plan.backend)
     _reduced_copy!(ls.ends, sweep.ends)
-    _reduced_solve!(ls, L)
+    _reduced_solve!(ls, L, L ÷ plan.ntiles)
     _reduced_copy!(sweep.zp, ls.zbp)
     _reduced_copy!(sweep.zn, ls.zbn)
     _dev_correct2_kernel!(plan.backend)(plan.B, sweep.v, sweep.w, sweep.zp,
@@ -422,7 +447,7 @@ function _dev_solve!(plan::DevicePlan, sweep::DeviceBanded)
     _dev_pack_endsq_kernel!(plan.backend)(sweep.ends, plan.B, n, q; ndrange=L)
     synchronize(plan.backend)   # the reduced-solve fence; see the tridiagonal method
     _reduced_copy!(ls.ends, sweep.ends)
-    _reduced_solve!(ls, L)
+    _reduced_solve!(ls, L, L ÷ plan.ntiles)
     _reduced_copy!(sweep.zbp, ls.zbp)
     _reduced_copy!(sweep.zbn, ls.zbn)
     _dev_correctq_kernel!(plan.backend)(plan.B, sweep.V, sweep.W, sweep.zbp,

@@ -63,8 +63,27 @@ end
 
 Workspace(Q::AbstractArray) = Workspace(zero(Q), zero(Q))
 Workspace(states::Vector{<:ConservedState}) =
-    Workspace([zero(Q) for Q in states], [zero(Q) for Q in states])
+    Workspace(_zero_states(states), _zero_states(states))
 Workspace(solver::Solver) = Workspace(allocate_state(solver), allocate_state(solver))
+
+# Zero states shaped like `states`, the stacking included: the tiles of a
+# stacked level (levels.jl) are views of one array, and their stage arrays
+# must be views of one array too, so a stack's members take views of one
+# fresh zero over the same parent.
+function _zero_states(states::Vector{<:ConservedState})
+    out = similar(states)
+    zeros_of = IdDict{Any,Any}()
+    for (i, Q) in enumerate(states)
+        data = parent(Q)
+        if data isa SubArray
+            z = get!(() -> zero(parent(data)), zeros_of, parent(data))
+            out[i] = ConservedState(view(z, parentindices(data)...))
+        else
+            out[i] = zero(Q)
+        end
+    end
+    return out
+end
 """
     step!(solver, Q, dQ, du, dt, prepared=false)
     step!(solver, Q, workspace, dt, prepared=false)
@@ -143,18 +162,19 @@ function step!(solver::Solver, states::Vector{<:ConservedState},
                dt, prepared::Bool=false)
     getfield(solver, :subcycle) &&
         return subcycled_step!(solver, states, dQs, dus, dt, prepared)
+    levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
     for stage in 1:5
         solver.tstage = solver.t + oftype(solver.t, RKC[stage]) * dt
         first_prepared = prepared && stage == 1
-        for (i, p) in enumerate(patches)
-            ps = PatchSolver(solver, p)
-            first_prepared || apply_bcs!(ps, states[i])
-            compute_rhs!(ps, states[i], dQs[i], first_prepared)
+        # Level by level, which is the global patch order (the root's
+        # patches, then each level's tiles), so a stacked level's tiles
+        # evaluate together.
+        for lev in levels
+            _level_rhs!(solver, lev, states, dQs, first_prepared)
         end
-        for (i, p) in enumerate(patches)
-            _rk_update!(p.decomp, solver.equations.n_cons, states[i], dQs[i],
-                        dus[i], RKA[stage], RKB[stage], dt)
+        for lev in levels
+            _level_update!(solver, lev, states, dQs, dus, RKA[stage], RKB[stage], dt)
         end
         sync_patches!(solver, states)
         prolong_level_ghosts!(solver, states)
@@ -162,6 +182,74 @@ function step!(solver::Solver, states::Vector{<:ConservedState},
     solver.tstage = solver.t + dt
     for (i, p) in enumerate(patches)
         apply_bcs!(PatchSolver(solver, p), states[i])
+    end
+    return states
+end
+
+# --- Per-level phases -------------------------------------------------------
+#
+# The three phases a level's tiles take between synchronizations: boundary
+# enforcement and the right-hand side, the stage update, and the state
+# filter. On a level without stacked storage each runs patch by patch. On a
+# device level with stacks (levels.jl) each runs once per stack, on the
+# spanning patch and the stacked state the members' views share, so the
+# launches and the compact solves' interface fences are paid per level, not
+# per tile; the per-point arithmetic is the per-tile one, so both forms give
+# the same state bit for bit. The boundary conditions are still enforced per
+# tile: they read each tile's own faces, and every refined face enforces
+# nothing, so the loop is cheap and stays general.
+
+# `prepared` is `compute_rhs!`'s trailing flag; `enforce` applies the boundary
+# conditions first, which a prepared state never needs and the Hermite
+# endpoint's extra evaluation skips too, its state being enforced already.
+function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
+                     enforce::Bool=!prepared)
+    patches = getfield(solver, :patches)
+    if isempty(lev.stacks)
+        for pi in lev.patches
+            ps = PatchSolver(solver, patches[pi])
+            enforce && apply_bcs!(ps, states[pi])
+            compute_rhs!(ps, states[pi], dQs[pi], prepared)
+        end
+        return states
+    end
+    enforce && for pi in lev.patches
+        apply_bcs!(PatchSolver(solver, patches[pi]), states[pi])
+    end
+    for st in lev.stacks
+        compute_rhs!(PatchSolver(solver, st.patch), _stack_state(st, states),
+                     _stack_state(st, dQs), prepared)
+    end
+    return states
+end
+
+function _level_update!(solver::Solver, lev::Level, states, dQs, dus, A, B, dt)
+    patches = getfield(solver, :patches)
+    n_cons = solver.equations.n_cons
+    if isempty(lev.stacks)
+        for pi in lev.patches
+            _rk_update!(patches[pi].decomp, n_cons, states[pi], dQs[pi], dus[pi],
+                        A, B, dt)
+        end
+        return states
+    end
+    for st in lev.stacks
+        _rk_update!(st.patch.decomp, n_cons, _stack_state(st, states),
+                    _stack_state(st, dQs), _stack_state(st, dus), A, B, dt)
+    end
+    return states
+end
+
+function _level_filter!(solver::Solver, lev::Level, states)
+    patches = getfield(solver, :patches)
+    if isempty(lev.stacks)
+        for pi in lev.patches
+            filter_state!(PatchSolver(solver, patches[pi]), states[pi])
+        end
+        return states
+    end
+    for st in lev.stacks
+        filter_state!(PatchSolver(solver, st.patch), _stack_state(st, states))
     end
     return states
 end
@@ -233,7 +321,6 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
                          prepared::Bool, count::Int, parent_dt, m::Int)
     levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
-    n_cons = solver.equations.n_cons
     lev = levels[ℓ]
     child = ℓ < length(levels) ? levels[ℓ+1] : nothing
     T = typeof(dt)
@@ -274,16 +361,9 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         solver.tstage = t0 + oftype(t0, RKC[stage]) * dt
         first_prepared = prepared && stage == 1
         ℓ > 1 && shell!((T(m - 1) + T(RKC[stage])) / T(3))
-        for pi in lev.patches
-            ps = PatchSolver(solver, patches[pi])
-            first_prepared || apply_bcs!(ps, states[pi])
-            compute_rhs!(ps, states[pi], dQs[pi], first_prepared)
-        end
+        _level_rhs!(solver, lev, states, dQs, first_prepared)
         stage == 1 && save_boxes!(false)
-        for pi in lev.patches
-            _rk_update!(patches[pi].decomp, n_cons, states[pi], dQs[pi],
-                        dus[pi], RKA[stage], RKB[stage], dt)
-        end
+        _level_update!(solver, lev, states, dQs, dus, RKA[stage], RKB[stage], dt)
         # Same-level consistency before the next stage's shell imposition,
         # which leaves the shared faces to these records.
         _sync_level!(solver, states, lev)
@@ -295,18 +375,16 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         apply_bcs!(PatchSolver(solver, patches[pi]), states[pi])
     end
     if ℓ > 1 && solver.filter_interval > 0 && count % solver.filter_interval == 0
-        for pi in lev.patches
-            filter_state!(PatchSolver(solver, patches[pi]), states[pi])
-        end
+        _level_filter!(solver, lev, states)
         _sync_level!(solver, states, lev)
         # The filter is not shell-preserving; re-impose the forcing so the
         # next substep (or the restriction) reads a consistent boundary.
         shell!(θ_end)
     end
     child === nothing && return states
-    for pi in lev.patches
-        compute_rhs!(PatchSolver(solver, patches[pi]), states[pi], dQs[pi], false)
-    end
+    # The t^{n+1} Hermite endpoint: the conditions are already enforced on
+    # this state, so the right-hand side alone, with its primitives refreshed.
+    _level_rhs!(solver, lev, states, dQs, false, false)
     save_boxes!(true)
     dtf = dt / T(3)
     # A rank owning level ℓ but not level ℓ+1 skips the substeps: they carry
@@ -919,9 +997,11 @@ apply_bcs!(solver::Solver, states::Vector{<:ConservedState}) =
 # its own step cadence, so the per-coarse-step pass here covers level 0 only.
 function filter_state!(solver::Solver, states::Vector{<:ConservedState})
     subcycle = getfield(solver, :subcycle)
-    for (ps, Q) in eachpatch(solver, states)
-        subcycle && ps.patch.level > 0 && continue
-        filter_state!(ps, Q)
+    for lev in getfield(solver, :levels)
+        # A subcycled refined level filters at its own cadence inside the
+        # driver (`_advance_level!`).
+        subcycle && lev.index > 0 && continue
+        _level_filter!(solver, lev, states)
     end
     return sync_patches!(solver, states)
 end
@@ -948,13 +1028,20 @@ _zero_state!(states::Vector{<:ConservedState}) =
     (foreach(Q -> fill!(Q, 0), states); states)
 _reset_workspace!(w::Workspace) = (_zero_state!(w.dQ); _zero_state!(w.du); w)
 
-# Savepoint copies for either state representation.
+# Savepoint copies for either state representation. A stacked tile's state
+# is a view; its copy is a dense array of the same storage, and the restore
+# assigns back into the view by broadcast, the form every backend runs as a
+# kernel (a `copyto!` between a device view and a dense device array is not
+# a contract every backend keeps). Dense host states keep `copyto!`.
 _snapshot(Q) = copy(Q)
-_snapshot(states::Vector{<:ConservedState}) = [copy(Q) for Q in states]
+_snapshot(states::Vector{<:ConservedState}) = [_dense_copy(Q) for Q in states]
+_dense_copy(Q::ConservedState) = ConservedState(_dense_copy(parent(Q)))
+_dense_copy(a::AbstractArray) = copy(a)
+_dense_copy(v::SubArray) = (d = similar(parent(v), size(v)); d .= v; d)
 _restore_state!(dst, src) = copyto!(dst, src)
 function _restore_state!(dst::Vector{<:ConservedState}, src::Vector{<:ConservedState})
     for i in eachindex(dst)
-        copyto!(dst[i], src[i])
+        _assign!(parent(dst[i]), parent(src[i]))
     end
     return dst
 end

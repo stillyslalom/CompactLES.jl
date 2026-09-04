@@ -237,7 +237,7 @@ rank's head in `line_solver.zbp` and `line_solver.zbn` (lines × q). The gather
 is collective when `P > 1`, so every rank of the sub-communicator must call
 this.
 """
-function _reduced_solve!(line_solver::BandLineSolver{T}, L::Int) where {T}
+function _reduced_solve!(line_solver::BandLineSolver{T}, L::Int, Lb::Int=L) where {T}
     q = line_solver.q
     if line_solver.P > 1
         MPI.Allgather!(line_solver.ends,
@@ -255,7 +255,7 @@ function _reduced_solve!(line_solver::BandLineSolver{T}, L::Int) where {T}
     # `ldiv!` call, which JET otherwise reports at every solver entry point.
     red = line_solver.red
     red === nothing && error("reduced solve without a reduced factorization")
-    ldiv!(red, line_solver.z)
+    _reduced_ldiv!(red, line_solver.z, L, Lb)   # per tile block; see tridiag.jl
     cprev = m2 * mod(line_solver.p - 1, line_solver.P) + q
     cnext = m2 * mod(line_solver.p + 1, line_solver.P)
     @inbounds for l in 1:L, t in 1:q

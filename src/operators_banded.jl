@@ -48,8 +48,8 @@ function plan_direction(decomp::Decomp, scheme::BandedCompactScheme{T}, dim::Int
                         h::Real; lo_fold::Union{Nothing,Int}=nothing,
                         hi_fold::Union{Nothing,Int}=nothing,
                         lo_closures::Union{Nothing,Vector{BandedClosureRow{T}}}=nothing,
-                        hi_closures::Union{Nothing,Vector{BandedClosureRow{T}}}=nothing
-                        ) where {T}
+                        hi_closures::Union{Nothing,Vector{BandedClosureRow{T}}}=nothing,
+                        lines_factor::Int=1) where {T}
     n = decomp.n_local[dim]
     q = scheme.q
     M = halfwidth(scheme)
@@ -174,7 +174,9 @@ function plan_direction(decomp::Decomp, scheme::BandedCompactScheme{T}, dim::Int
     clo_first = [row.first for row in lo_rows]
     chi_first = [row.first for row in hi_rows]
 
-    lines = prod(decomp.n_local[k] for k in 1:3 if k != dim)
+    # `lines_factor` as in the tridiagonal plan: the batched device solve of a
+    # stacked level sizes the interface stage for every tile's lines at once.
+    lines = prod(decomp.n_local[k] for k in 1:3 if k != dim) * lines_factor
     line_solver = BandLineSolver(Ab, AL, CR, decomp.sub[dim], decomp.sub_size[dim],
                         decomp.sub_rank[dim], lines; periodic=decomp.periodic[dim])
     tr = dim > 1

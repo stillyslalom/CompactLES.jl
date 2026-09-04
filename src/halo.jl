@@ -96,6 +96,24 @@ const TRACK_DEVICE_TRANSFERS = Ref(false)
 const DEVICE_TRANSFER_BYTES = Ref(0)
 const DEVICE_TRANSFER_TIME = Ref(0.0)
 
+# Whole-array copies onto storage that may be a tile's view into a stacked
+# level array (pointwise.jl). A dense host-to-device `copyto!` covers the
+# dense case; a view takes a contiguous upload and a broadcast assignment,
+# the form every backend runs as a kernel. Host storage keeps `copyto!`
+# throughout, so nothing on the CPU path changes.
+function _upload!(dst, src::Array)
+    if dst isa SubArray && !_cpu_storage(dst)
+        d = similar(parent(dst), size(src))
+        copyto!(d, src)
+        dst .= d
+    else
+        copyto!(dst, src)
+    end
+    return dst
+end
+
+_assign!(dst, src) = (_cpu_storage(dst) ? copyto!(dst, src) : (dst .= src); dst)
+
 @inline function _tracked_copy!(dest, doffs::Int, src, soffs::Int, n::Int)
     if TRACK_DEVICE_TRANSFERS[]
         t0 = time_ns()
@@ -217,6 +235,17 @@ rejects that pairing instead.
 function exchange_dim!(f::AbstractArray{T,3}, decomp::Decomp{T},
                        d::Int) where {T<:Real}
     decomp.active[d] || return f
+    if d == 3 && _stack_of(f) !== nothing
+        # A stacked level's array along the stacking dimension: each tile's
+        # block exchanges its own two slabs (the stack's ends are only the
+        # first and last tile's). Along the other two dimensions the slabs of
+        # the whole stack are the tiles' slabs laid end to end, so the plain
+        # path below moves every tile's halos in one message.
+        for kr in _tile_ranges(f)
+            exchange_dim!(view(f, :, :, kr), decomp, d)
+        end
+        return f
+    end
     selfwrap(decomp, d) && return wrap_dim!(f, decomp, d)
     _staged_exchange(f) && return _exchange_dim_staged!(f, decomp, d)
     let n_halo = decomp.n_halo
@@ -404,6 +433,13 @@ function exchange_dim_batch!(fields::AbstractVector, decomp::Decomp{T},
         error("exchange_dim_batch!: fields carry $(eltype(eltype(fields))) " *
               "but the decomposition's exchange buffers are Vector{$T}")
     decomp.active[d] || return fields
+    if d == 3 && _stack_of(fields[1]) !== nothing
+        # Per tile along the stacking dimension; see `exchange_dim!`.
+        for kr in _tile_ranges(fields[1])
+            exchange_dim_batch!([view(f, :, :, kr) for f in fields], decomp, d)
+        end
+        return fields
+    end
     if selfwrap(decomp, d)
         for f in fields
             wrap_dim!(f, decomp, d)

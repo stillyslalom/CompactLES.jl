@@ -301,20 +301,20 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     held = [ti for ti in eachindex(regions) if owners[ti] == group.ranks]
     faces = _tile_faces(regions)
     ws_pool = [p.rhs_workspace for p in patches]
-    new_patches = Any[]
     local_of = zeros(Int, length(regions))
-    indices = Int[]
+    indices = [k + 1 for k in eachindex(held)]
     for (k, ti) in enumerate(held)
-        idx = k + 1
-        local_of[ti] = idx
-        push!(indices, idx)
-        push!(new_patches,
-              _build_fine_patch(T, regions[ti], active, root.h, spec.n_halo,
-                                group.comm, spec.deriv, spec.filt, spec.smoo,
-                                solver.art.smoother, spec.interface_rhs,
-                                spec.backend, ws_pool, solver.equations.n_species,
-                                n_cons, idx, 1, faces[ti]))
+        local_of[ti] = k + 1
     end
+    # Every tile is fresh: on the host through `_build_fine_patch`, on a
+    # device backend as stacked storage (rhs.jl).
+    new_patches, stacks = _build_level_patches(T, regions, held, faces, active,
+                                               root.h, spec.n_halo, group.comm,
+                                               spec.deriv, spec.filt, spec.smoo,
+                                               solver.art.smoother,
+                                               spec.interface_rhs, spec.backend,
+                                               ws_pool, solver.equations.n_species,
+                                               n_cons, 1, 1, spec.tile)
     restriction = lev.transfers[1].restriction
     transfers = [build_level_transfer(
         T, tr, active, spec.n_halo, [root.region], [1],
@@ -325,9 +325,13 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         for (ti, tr) in enumerate(regions)]
     resize!(patches, 1 + length(held))
     resize!(states, 1 + length(held))
+    stacked = Set(li for st in stacks for li in st.members)
     for (k, p) in enumerate(new_patches)
         patches[k + 1] = p
-        states[k + 1] = _state_like(p.rho, n_cons)
+        k + 1 in stacked || (states[k + 1] = _state_like(p.rho, n_cons))
+    end
+    for st in stacks
+        _stacked_states!(states, st, n_cons)
     end
     if new_lc.owned
         fine_regions = [BlockRegion(ntuple(d -> active[d] ? 3 * tr.offset[d] : 0, 3),
@@ -335,9 +339,10 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         records = _level_records(T, new_lc.comm, fine_regions, held, indices,
                                  [p.decomp for p in new_patches], n_cons)
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers,
-                             records)
+                             records; stacks)
     else
-        levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers)
+        levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers;
+                             stacks)
     end
     _fill_covered!(root, regions)
     for li in indices

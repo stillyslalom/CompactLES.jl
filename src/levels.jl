@@ -538,6 +538,55 @@ struct LevelTransfer{T}
 end
 
 """
+    TileStack
+
+The stacked storage of some of a device level's tiles held on this rank
+(reference/AMR_GPU.md, launch policy): `patch` is the spanning patch, whose
+arrays are `StackedArray`s over the tiles' blocks and whose plans are the
+batched device plans, and `members` are the `solver.patches` indices of the
+tiles in slot order, each holding views of the same arrays. The step drivers
+evaluate the right-hand side, the stage update and the filter once per stack
+through `PatchSolver(solver, stack.patch)` on the state the members' views
+share (`_stack_state`); everything else on the level stays per tile.
+A level's tiles group into one stack per padded extent (a lattice cell
+clipped at the domain edge differs from the rest), and a regrid rebuilds the
+stacks with the tiles.
+"""
+struct TileStack
+    patch::Patch
+    members::Vector{Int}
+end
+
+"""
+    _stack_state(stack, states) -> ConservedState
+
+The conserved state of a whole `TileStack`: the array every member's state in
+`states` is a view of, wrapped as a `StackedArray` so a launch on it runs
+every tile. The members are checked to be the views `allocate_state` hands
+out, in slot order; a state vector assembled any other way is refused rather
+than advanced tile by tile.
+"""
+function _stack_state(stack::TileStack, states)
+    field = stack.patch.rho
+    ntiles, stride = field.ntiles, field.stride
+    first_view = parent(states[stack.members[1]])
+    first_view isa SubArray || _unstacked_state_error()
+    raw = parent(first_view)
+    for (slot, li) in enumerate(stack.members)
+        v = parent(states[li])
+        (v isa SubArray && parent(v) === raw &&
+         parentindices(v)[3] == ((slot - 1) * stride + 1):(slot * stride)) ||
+            _unstacked_state_error()
+    end
+    return ConservedState(StackedArray(raw, ntiles, stride))
+end
+
+@noinline _unstacked_state_error() =
+    error("the states of a stacked level's tiles must be the views of one " *
+          "stacked array that allocate_state returns; a state vector assembled " *
+          "from separate arrays cannot be advanced on this level")
+
+"""
     Level
 
 One level of the refinement hierarchy: its index (0 is the root), the rank
@@ -578,6 +627,10 @@ struct Level{T}
     ghost_recvs::NTuple{3,Vector{GhostRecord{T}}}
     plane_pairs::NTuple{3,Vector{PlaneRecord{T}}}
     phases::NTuple{3,Bool}           # some tile has a neighbor along d
+    # The stacked storage of this rank's tiles on a device backend
+    # (`TileStack`), one per padded extent; empty on the host backend, at the
+    # root and on a rank holding no tile.
+    stacks::Vector{TileStack}
 end
 
 # The root level, or one this rank holds no tile of: the whole subset is one
@@ -592,16 +645,19 @@ Level{T}(index::Int, lc::LevelComm, patches::Vector{Int},
 # A level with no records (a rank outside it, or one tile).
 Level{T}(index::Int, lc::LevelComm, owners::Vector{UnitRange{Int}},
          group::TileGroup, tiles::Vector{Int}, patches::Vector{Int},
-         transfers::Vector{LevelTransfer{T}}) where {T} =
+         transfers::Vector{LevelTransfer{T}};
+         stacks::Vector{TileStack}=TileStack[]) where {T} =
     Level{T}(index, lc, owners, group, tiles, patches, transfers,
              ntuple(_ -> GhostRecord{T}[], 3), ntuple(_ -> GhostRecord{T}[], 3),
-             ntuple(_ -> PlaneRecord{T}[], 3), (false, false, false))
+             ntuple(_ -> PlaneRecord{T}[], 3), (false, false, false), stacks)
 
 # A level with the records `_level_records` returns.
 Level{T}(index::Int, lc::LevelComm, owners::Vector{UnitRange{Int}},
          group::TileGroup, tiles::Vector{Int}, patches::Vector{Int},
-         transfers::Vector{LevelTransfer{T}}, records::Tuple) where {T} =
-    Level{T}(index, lc, owners, group, tiles, patches, transfers, records...)
+         transfers::Vector{LevelTransfer{T}}, records::Tuple;
+         stacks::Vector{TileStack}=TileStack[]) where {T} =
+    Level{T}(index, lc, owners, group, tiles, patches, transfers, records...,
+             stacks)
 
 "Number of levels in the hierarchy, the root included."
 nlevels(solver) = length(getfield(solver, :levels))

@@ -196,7 +196,7 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
         else
             pointwise!(_delta4_point!, out, nx, ny, nz,
                        out, f, wd, d, n_d, lomin, himax, mirror_lo, mirror_hi,
-                       maxred, o1, o2, o3)
+                       maxred, nz + 2 * o3, o1, o2, o3)
         end
     end
     return out
@@ -223,11 +223,19 @@ end
 end
 
 @inline function _delta4_point!(out, f, wd, d, n_d, lomin, himax,
-                                mirror_lo, mirror_hi, maxred, o1, o2, o3, i, j, k)
+                                mirror_lo, mirror_hi, maxred, n3p, o1, o2, o3,
+                                i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         e = CartesianIndex(ntuple(q -> q == d ? 1 : 0, 3))
-        il = (d == 1 ? i : d == 2 ? j : k)
+        # The line coordinate along d, which the clamp below compares with
+        # the block's edges. On a stacked level (pointwise.jl) `k` arrives
+        # shifted by whole tile strides `n3p`, the padded extent along the
+        # third dimension, so it is reduced modulo the stride; on an ordinary
+        # patch k < n3p and the reduction is the identity. The taps are read
+        # relative to `I`, which carries the shift. `_delta4_signed_point!`
+        # keeps the bare `k`: it serves the folds, which no refined run has.
+        il = (d == 1 ? i : d == 2 ? j : rem(k - 1, n3p) + 1)
         # The parity test sits outside the stencil loop, not on each
         # tap: both flags are invariant over the whole sweep, and the clamped
         # branch is the one every sensor but a velocity component across a
@@ -730,7 +738,7 @@ function compute_artificial!(solver, Q)
     # abstractions and what it is still singular in).
     i_energy = solver.equations.i_energy
     m1, m2, m3 = solver.equations.i_mom
-    nxf, nyf, nzf = size(solver.tmp_a)
+    nxf, nyf, nzf = padded_extent(decomp)
     pointwise!(_internal_energy_point!, solver.tmp_a, nxf, nyf, nzf,
                solver.tmp_a, Q, solver.rho, m1, m2, m3, i_energy)
     exchange_halos!(solver.tmp_a, decomp)

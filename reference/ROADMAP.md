@@ -621,10 +621,12 @@ reference-implementation pass that headed this list are done
    the FP64 rate, unified APU memory, and MPI stack all differ (see the
    framing in `AMR_GPU.md`'s performance summary). What remains on the
    GPU track: an rzadams measurement campaign to re-base the numbers and
-   settle the fence-floor routes, G4b policy selection there, the
-   `Nasa9Mixture` device mirror, and the device items of `AMR_GPU.md`'s
-   production-AMR design and sequencing (staged interface records, the
-   device transfer chain, batched cross-tile launches).
+   settle the fence-floor routes, G4b policy selection there, and the
+   `Nasa9Mixture` device mirror. The device items of `AMR_GPU.md`'s
+   production-AMR sequencing (staged interface records, the device
+   transfer chain, device tagging, batched cross-tile launches through
+   stacked tile storage) are delivered and gated bitwise; their rzadams
+   measurement is part of the campaign.
 
 The open items from the source comparison
 ([above](#open-work-from-the-source-comparison)) sit alongside these and

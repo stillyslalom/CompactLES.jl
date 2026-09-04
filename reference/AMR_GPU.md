@@ -80,7 +80,9 @@ One solver runs on four axes of configuration, combinable except where
 - **Storage backend**: `CPUBackend` (`Array`s, `@threaded` loops) or
   `DeviceBackend(ka)` wrapping any KernelAbstractions backend. A
   device-resident solver (decomposed, refined, regridding, Float64 or
-  Float32) reproduces the CPU solver bitwise over full runs.
+  Float32) reproduces the CPU solver bitwise over full runs; a tiled
+  level's tiles take stacked storage there, so its phases launch once per
+  level rather than once per tile.
 
 The pointwise physics is written once as per-point bodies launched through
 `pointwise!` (`src/pointwise.jl`); the compact line solves run through host
@@ -517,7 +519,11 @@ despite a reader outside the RHS: `scalar_field(solver, :strain_mag)` and
 forwarding, so they are reachable only where the pool is one patch's own
 set, and a multi-patch output path will have to take storage of its own.
 The sharing is guarded directly in `test/level_tests.jl`, since no other
-figure in the gate moves if the pooling silently stops.
+figure in the gate moves if the pooling silently stops. On a device
+backend the pool does not reach a tiled level: its tiles' workspaces are
+views of the spanning patch's stacked set ([Launch policy](#launch-policy)),
+one set per stack, since the batched evaluation writes every tile's
+scratch in one launch.
 
 Measured: a tiled level costs nothing visible against the one-patch level
 (1-D entropy wave, tile 8: 6.0e-10 against 6.2e-10 at N = 192, orders
@@ -710,7 +716,16 @@ blob to the same final region. The two wall figures are single runs at
 np = 8 with the run-to-run spread `CLAUDE.md` records.
 
 **Per-tile costs.** Setup costs 0.06–0.12 s per tile in plan construction,
-which argues for tile edges of 12 or more in 3-D. The shared RHS scratch,
+which argues for tile edges of 12 or more in 3-D. A second setup cost is
+compilation: a tile's face pattern (parent-fed or same-level per face) is
+part of its `Patch` type through the boundary-condition tuple, so the
+right-hand side and the stage drivers compile once per distinct pattern
+per backend, about 2.5 s each on the workstation, and a 3-D nest with
+corners has up to 64 patterns (`test/device_tests.jl` keeps its 3-D
+stacked case to two tiles for that reason). Collapsing the two refined
+face conditions into one type would leave one pattern per level; it is
+recorded here as an open change, not made, since it touches the type
+every tile carries. The shared RHS scratch,
 measured on the annular case (N = 192, tile 6, 208 tiles of 19² plus the
 root): 103.0 MB over the patch set before the pooling, 60.3 MB after, a
 factor of 1.71, with 0.207 MB of each tile's 0.398 MB shared. The warm
@@ -1098,15 +1113,47 @@ synchronize-per-launch and is the correctness fallback. Removing the
 per-launch synchronize took 28–32% off the device step. Per-patch streams
 are not implemented: a rank's patches advance in sequence, and the
 remaining gap to CPU is bound by the per-apply reduced-solve fence, which
-a second stream cannot remove. Batched cross-tile launches
-([Device](#device) in Part II) are the planned replacement for streams,
-and a tiled level of small tiles is where they are due. On the workstation
-GPU (`bench/device_solver.jl`, an RX 6800 XT, an indicator of structure and
-not a target number) the one-dimensional tiled regridding Sod, eight tiles
-of 25 fine nodes subcycled, takes 0.11 s per step against 1.1 ms on the
-CPU, and the two-slab viscous wave 9 ms against 0.1 ms, while the 48³ TGV
-step runs at 0.5× the CPU's: a per-launch floor paid once per tiny patch
-per phase, which is the cost batching amortizes over the tile count.
+a second stream cannot remove. A tiled level of small tiles instead
+batches its launches across the tiles through stacked storage.
+
+**Stacked storage.** On a device backend a tiled level's tiles of equal
+padded extent share one allocation per field, the tiles' padded blocks
+laid along the third array dimension at a fixed stride, the padded extent
+of one tile (`StackedArray`, `src/pointwise.jl`; `TileStack` on the
+`Level`, `src/levels.jl`; the construction in `src/rhs.jl`). A spanning
+`Patch` holds the stacked arrays, the first tile's decomposition and
+communicator, a stacked `RHSWorkspace`, and batched device plans; each
+tile's `Patch` holds plain views of the same arrays, workspace included,
+and its own unbatched plans, so every per-tile path (the shell
+impositions, the interface records, the box and restriction gathers,
+`max_rate`, the diagnostics) sees ordinary storage and is unchanged. The
+step drivers evaluate the right-hand side, the stage update and the state
+filter once per stack, on the spanning patch and the stacked state the
+tiles' state views share (`_stack_state`; `allocate_state` and
+`Workspace` hand out the views). A `pointwise!` launch routed on a stacked
+array runs its per-tile box once per tile as one index space with a fourth
+dimension over the tiles, handing the body `k + (t − 1)·stride`, so the
+body's own padded arithmetic lands in tile `t`; the one body that reads
+`k` as a coordinate rather than an offset, the δ⁴ sensor's edge clamp,
+reduces it modulo the stride. Full-array launches iterate the tile's
+padded extent (`padded_extent`), never `size` of the array. A batched
+`DevicePlan` gives its fill and scatter kernels the same tile dimension,
+its line buffer every tile's lines (`plan_direction(...; lines_factor)`),
+and its reduced stage solves all of them behind one fence; the halo
+exchange of a stacked array moves every tile's slabs in one message along
+the two unstacked dimensions and runs per tile along the stacking one.
+The per-point arithmetic and the per-line solve are the per-tile ones,
+so a stacked level reproduces its tiles' separate evaluation bitwise, which
+the serial and MPI suites pin against the CPU hierarchy in 1-D, 2-D and
+3-D (`test/device_tests.jl`, twelve 3-D tiles stacked along an active
+dimension included). A regrid rebuilds the stacks with the tiles: a kept
+tile copies its state and persistent fields into its new slots, since the
+new stack is a new allocation. Tiles clipped at the domain edge, whose
+extent differs from the lattice cell's, form stacks of their own.
+
+The measurements on the workstation GPU (`bench/device_solver.jl`, an
+RX 6800 XT, an indicator of structure and not a target number) are under
+[Performance summary](#performance-summary).
 
 ### Precision
 
@@ -1179,6 +1226,27 @@ CPU where launches amortize (flux assembly 9.9× at 64³ two-species);
 staged halo/pair copies 0.6–6.6% of device wall, reduced-interface copies
 2–5%; first-launch kernel compilation ~9 s per body.
 
+Workstation, tiled levels (`bench/device_solver.jl`, warm steps, one run
+each, the 8-thread CPU as reference). Before stacked storage the
+one-dimensional tiled regridding Sod, eight tiles of 25 fine nodes
+subcycled, took 0.11 s per device step against 1.1 ms on the CPU, and the
+two-slab viscous wave 9 ms against 0.1 ms: a per-launch floor paid once per
+tiny patch per phase. With the tiles stacked the Sod's device step is
+0.049 s (seven tiles in one stack, one clipped tile beside it at some
+regrids), the two-slab case is unchanged at 9.8 ms (the root level is not
+stacked), and a three-dimensional level of twelve 16³ tiles in one stack,
+subcycled, runs at 0.354 s per device step against 0.576 s on the CPU,
+the first tiled configuration on which the device leads. The residual
+floor is the per-tile work that stays per tile: the shell impositions
+(the gathers, the chain and the ring per tile), the interface records, and
+`max_rate`'s two reductions per tile. The 64³ TGV measured 0.164 and
+0.176 s per device step in the two runs of the same session against the
+0.146 s recorded above, at the edge of the run-to-run spread, with the
+fill and scatter kernels now carrying a fourth index dimension of extent
+one and the kernels receiving the conserved state's array rather than its
+wrapper; whether the unstacked step paid for the batching is a question
+for a repeated-process measurement, not one run.
+
 rzadams (2026-08-19/20, `bench/logs/rzadams_20260819*.txt`): kernel
 submission 10 µs, launch+sync 25 µs, line solves 0.14–0.40 ms/apply, the
 64³ TGV over 4 APUs at 0.074–0.088 s/step with an F64/F32 ratio near 1.2,
@@ -1248,6 +1316,15 @@ guarded somewhere; none should be re-derived.
     need to move.** Ownership is stored and moves only on a measured
     imbalance held over several checks; the workstation's timing noise
     alone repartitions a threshold-one run at every check.
+15. **Batching across tiles is a storage layout, not a launch API.**
+    Stacking equal tiles along one array dimension let every body, every
+    plan kernel and the exchange run unchanged over the stack, with the
+    tile index folded into the index space; the two things a body may not
+    do are read `k` as a coordinate (one body did; it reduces modulo the
+    stride) and size a launch from an array that may be a stack. The
+    information a launch needs rides on the array (`StackedArray`), never
+    on a global or a per-call argument, so a tile's view launches flat and
+    the spanning patch's arrays launch batched with no site knowing which.
 
 ## Scope boundaries today
 
@@ -1300,38 +1377,28 @@ order, which [Sequencing](#sequencing) turns into deliverables with gates.
 
 ### Device
 
-Of item 7's four pieces the first three are delivered and described under
-[Residency](#residency) and [Communication](#communication): the
-interface records stage through the backend, the transfer chain runs on
-the fine patch's device scratch, and tagging evaluates on the device. Each
-is pinned bitwise against the CPU solver in the serial and MPI suites under
-`FORCE_KA` and `FORCE_DEVICE_EXCHANGE`, the second toggle taking every
-device-storage branch on host arrays, and on the workstation GPU through
-`bench/device_solver.jl`.
+Item 7's four pieces are delivered and described under
+[Residency](#residency), [Communication](#communication) and
+[Launch policy](#launch-policy): the interface records stage through the
+backend, the transfer chain runs on the fine patch's device scratch,
+tagging evaluates on the device, and a tiled level's tiles take stacked
+storage, so the right-hand side, the stage update and the filter launch
+once per level and the compact solves batch every tile's lines behind one
+interface fence. Each is pinned bitwise against the CPU solver in the
+serial and MPI suites under `FORCE_KA` and `FORCE_DEVICE_EXCHANGE`, the
+second toggle taking every device-storage branch on host arrays, and on
+the workstation GPU through `bench/device_solver.jl`. Stacking is why the
+tiles are fixed-size: equal extents are what let one launch and one line
+buffer cover a level.
 
-The last piece replaces per-patch streams. With many equal-extent tiles per
-rank, line solves batch across a level's tiles into one (lines × n) launch
-per dimension, which `DevicePlan` already supports by layout, and the
-pointwise bodies launch over a level's tiles as one index space. This
-amortizes both the launch submission and the per-apply reduced-solve fence
-over the tile count, which is the measured floor of the device step, and
-it is why the tiles are fixed-size. The mechanism that keeps every body
-and plan unchanged is stacked storage: a device level allocates each field
-of its tiles as one array with the tiles laid along the third padded
-dimension at a fixed stride, each tile's `Patch` holding a view; a
-`pointwise!` launch over such storage takes a fourth index-space dimension
-and hands the body `k + (t − 1)·stride`, so the body's own padded
-indexing lands in tile `t`; a batched `DevicePlan` gives its fill and
-scatter kernels the same tile dimension and its line solver `lines ×
-tiles` columns, so the reduced stage solves every tile's interface values
-in one host `ldiv!` behind one fence; and the right-hand side runs once
-per level on a patch spanning the stack, the per-tile impositions,
-records and gathers staying as they are on the views. A regrid reallocates
-the stack. Streams remain unbuilt unless a
-measurement shows the batched launches still leave the device idle; if the
-fence itself still binds after batching, the routes are an on-device
-reduced solve (redundant per-rank solves on gathered ends) or GPU-aware MPI
-through `device_mpi_direct`, both rzadams measurements.
+What remains of the device item is measurement, not mechanism. Streams
+remain unbuilt unless a measurement shows the batched launches still leave
+the device idle; if the reduced-solve fence itself still binds after
+batching, the routes are an on-device reduced solve (redundant per-rank
+solves on gathered ends) or GPU-aware MPI through `device_mpi_direct`,
+both rzadams measurements. `max_rate` still reduces per tile (two device
+reductions per tile per step); a stacked reduction over the tiles'
+interiors is the next launch count to cut if a profile shows it.
 
 `Nasa9Mixture` is the last EOS off the device: a flattened, fixed-width
 interval table with `Adapt.adapt_structure` plus the Newton inversion in
@@ -1456,9 +1523,11 @@ and the cluster measurements the items leave open are under
 7. **Device: staged interface records, device transfer chain and tagging,
    batched cross-tile launches.** Gate: bitwise equality against the CPU
    hierarchy over full refined runs; the implosion case's device step
-   measured against its CPU step on the workstation and on rzadams. The
-   first three pieces are delivered ([Device](#device)); the batched
-   launches and the measurements remain.
+   measured against its CPU step on the workstation and on rzadams. All
+   four pieces are delivered ([Device](#device)), the bitwise gate holds
+   in both suites, and the workstation measurement is under
+   [Performance summary](#performance-summary); the rzadams measurement
+   remains.
 8. **Numerics debts on the target problems**: conservation drift on the
    long mixing-layer run, the sensor at a level boundary under a crossing
    shock, filter rows at the shell. Each is a measurement first and a

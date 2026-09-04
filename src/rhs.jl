@@ -653,17 +653,16 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
             lc = split_level_comm(parent_lc, np_level)
             group = lc.owned ? split_tile_comm(lc, owners) : absent_tile_group()
             held = [ti for ti in eachindex(tregions) if owners[ti] == group.ranks]
-            indices = Int[]
-            for ti in held
-                idx = 2 + length(fines)
-                fine = _build_fine_patch(T, tregions[ti], active_g, parent_h,
-                                         n_halo, group.comm, deriv, filt, smoo,
-                                         art.smoother, interface_rhs, backend,
-                                         ws_pool, n_species, n_cons, idx, ℓ,
-                                         faces[ti])
-                push!(fines, fine)
-                local_of[ti] = idx
-                push!(indices, idx)
+            id0 = 1 + length(fines)
+            built, stacks = _build_level_patches(T, tregions, held, faces, active_g,
+                                                 parent_h, n_halo, group.comm, deriv,
+                                                 filt, smoo, art.smoother,
+                                                 interface_rhs, backend, ws_pool,
+                                                 n_species, n_cons, id0, ℓ, tile)
+            append!(fines, built)
+            indices = [id0 + k for k in eachindex(held)]
+            for (k, ti) in enumerate(held)
+                local_of[ti] = id0 + k
             end
             decomp_at(li) = li == 0 ? nothing : li == 1 ? decomp :
                             fines[li - 1].decomp
@@ -688,12 +687,12 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                          [fines[li - 1].decomp for li in indices],
                                          n_cons)
                 push!(levels, Level{T}(ℓ, lc, owners, group, held, indices,
-                                       transfers, records))
+                                       transfers, records; stacks))
             else
                 # The level's transfers are still held: their box gathers and
                 # restriction write-back run on the parent's communicator.
                 push!(levels, Level{T}(ℓ, lc, owners, group, held, indices,
-                                       transfers))
+                                       transfers; stacks))
             end
             parent_lc = lc
         else
@@ -770,8 +769,26 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            n_species::Int, n_cons::Int, id::Int, level::Int,
                            faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3)
                            ) where {T}
+    region_f, decomp_f, hf = _fine_decomp(T, refine, active_g, h, n_halo, comm)
+    plans = _fine_plans(decomp_f, hf, deriv, filt, smoo, interface_rhs, backend)
+    g() = field(backend, decomp_f)
+    empty3 = empty_field(backend, T)
+    # Refinement takes the `:delta4` detector (rejected otherwise at setup),
+    # so no refined patch carries the `:d8` ringing buffer.
+    ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons, false)
+    scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
+                             MPI.Comm_size(comm), MPI.Comm_rank(comm))
+    return _assemble_patch(id, level, region_f, comm, decomp_f, hf, faces,
+                           _fine_bcs(active_g, faces), plans, empty3,
+                           _patch_arrays(g, n_species), ws, _covered_mask(decomp_f),
+                           scratch)
+end
+
+# The refined region's node space, decomposition and spacing: parent-level
+# node g is refined-level node 3(g − 1) + 1.
+function _fine_decomp(::Type{T}, refine::BlockRegion, active_g::NTuple{3,Bool},
+                      h::NTuple{3,T}, n_halo::Int, comm::MPI.Comm) where {T}
     hf = ntuple(d -> active_g[d] ? h[d] / 3 : h[d], 3)
-    # Parent-level node g is refined-level node 3(g − 1) + 1.
     region_f = BlockRegion(ntuple(d -> active_g[d] ? 3 * refine.offset[d] : 0, 3),
                            fine_extent(refine, active_g))
     pper_f = ntuple(d -> !active_g[d], 3)
@@ -782,14 +799,23 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                                         ntuple(d -> region_f.extent[d] > 1, 3),
                                         np_f),
                          n_halo=n_halo, comm=comm)
-    # Every face of a refined patch closes with the interface rows and reads
-    # ghosts; the boundary condition only records where they come from.
-    bcs_f = _fine_bcs(active_g, faces)
+    return region_f, decomp_f, hf
+end
+
+# A refined patch's plans on `backend`: gradient, divergence, filter and
+# smoother. `ntiles` and `stride` plan the batched device solve of a stacked
+# level's spanning patch (lines_device.jl); the default is one patch's plans.
+function _fine_plans(decomp_f::Decomp, hf, deriv, filt, smoo, interface_rhs::Symbol,
+                     backend::AbstractBackend; ntiles::Int=1, stride::Int=0)
     mkf(sch, d; kw...) =
-        backend_plan(backend, plan_direction(decomp_f, sch, d, hf[d]; kw...))
+        backend_plan(backend, plan_direction(decomp_f, sch, d, hf[d]; kw...,
+                                             lines_factor=ntiles); ntiles, stride)
     ext_f = interface_rhs === :extended
     icd = ext_f ? interface_closures(deriv) : nothing
     icf = ext_f ? interface_closures(filt) : nothing
+    # Every face of a refined patch closes with the interface rows and reads
+    # ghosts; the boundary condition (`_fine_bcs`) only records where they
+    # come from.
     dplans_f = ntuple(d -> decomp_f.active[d] ?
         mkf(deriv, d; lo_closures=icd, hi_closures=icd) : nothing, 3)
     vplans_f = ntuple(d -> !decomp_f.active[d] ? nothing :
@@ -803,23 +829,151 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     # zeros at every coarse-fine face through the C8 interior rows the
     # interface closures leave in place.
     splans_f = ntuple(d -> decomp_f.active[d] ? mkf(smoo, d) : nothing, 3)
-    g() = field(backend, decomp_f)
-    empty3 = empty_field(backend, T)
-    # Refinement takes the `:delta4` detector (rejected otherwise at setup),
-    # so no refined patch carries the `:d8` ringing buffer.
-    ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons, false)
-    scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
-                             MPI.Comm_size(comm), MPI.Comm_rank(comm))
-    return Patch(id, level, region_f, comm, decomp_f, hf,
-                 faces, bcs_f, (nothing, nothing, nothing),
-                 dplans_f, vplans_f, fplans_f, splans_f, nothing,
-                 empty3, empty3,
-                 g(), g(), g(), g(), g(), g(), g(), g(),
-                 [g() for _ in 1:n_species],
-                 g(), g(), g(),
-                 [g() for _ in 1:n_species],
-                 g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
-                 ws, _covered_mask(decomp_f), scratch)
+    return (deriv=dplans_f, div=vplans_f, filter=fplans_f, smooth=splans_f)
+end
+
+# The persistent arrays of a patch from an allocator `g()`, by name, in the
+# order the `Patch` constructor takes them.
+_patch_arrays(g::F, n_species::Int) where {F} =
+    (rho=g(), u=g(), v=g(), w=g(), p=g(), T_ion=g(), c=g(), cp_mix=g(),
+     Y=[g() for _ in 1:n_species], mu_art=g(), beta_art=g(), kappa_art=g(),
+     D_art=[g() for _ in 1:n_species], inv_J=g(), area_d=(g(), g(), g()),
+     inv_h=(g(), g(), g()), inv_r=g(), cot_over_r=g(), cot_over_r_gcl=g())
+
+# The refined `Patch` from its parts; fold-free, with no ring plans and no
+# pair buffers (`empty` stands in for both).
+_assemble_patch(id::Int, level::Int, region, comm, decomp, hf, faces, bcs, plans,
+                empty, a, ws, covered, scratch) =
+    Patch(id, level, region, comm, decomp, hf, faces, bcs,
+          (nothing, nothing, nothing), plans.deriv, plans.div, plans.filter,
+          plans.smooth, nothing, empty, empty,
+          a.rho, a.u, a.v, a.w, a.p, a.T_ion, a.c, a.cp_mix, a.Y,
+          a.mu_art, a.beta_art, a.kappa_art, a.D_art,
+          a.inv_J, a.area_d, a.inv_h, a.inv_r, a.cot_over_r, a.cot_over_r_gcl,
+          ws, covered, scratch)
+
+# --- Stacked tiles of a device level ------------------------------------------
+#
+# On a device backend a tiled level's tiles of equal padded extent share one
+# allocation per field, the tiles' blocks laid along the third padded
+# dimension at a fixed stride (`StackedArray`, pointwise.jl), so that the
+# right-hand side, the stage update and the filter launch once per level and
+# the compact solves batch every tile's lines behind one interface fence
+# (reference/AMR_GPU.md, launch policy). A spanning `Patch` holds the stacked
+# arrays, the first tile's decomposition and communicator (every tile of the
+# stack has the same extent, process grid and rank range, which the
+# construction checks) and the batched device plans; each tile's `Patch`
+# holds views of the same arrays and its own unbatched plans, so a tile
+# evaluated alone (a diagnostic's gradients) reads and writes the slots the
+# batched evaluation does. The stacked storage is rebuilt with the tiles at
+# every regrid.
+
+"Whether a tiled level's tiles take stacked storage on `backend`."
+_stacked_level(backend::AbstractBackend, tile::Int) =
+    backend isa DeviceBackend && tile > 0
+
+# Build this rank's tiles `held` (indices into `tregions`) of one level, ids
+# `id0 + 1, id0 + 2, ...` in `held` order: through `_build_fine_patch` on the
+# host backend, and as stacked storage on a device backend, one stack per
+# padded extent. Returns the patches in `held` order and the stacks, whose
+# members are the patches' solver indices.
+function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
+                              held::Vector{Int}, faces, active_g::NTuple{3,Bool},
+                              h::NTuple{3,T}, n_halo::Int, comm::MPI.Comm,
+                              deriv, filt, smoo, smoother::Symbol,
+                              interface_rhs::Symbol, backend::AbstractBackend,
+                              ws_pool::AbstractVector, n_species::Int, n_cons::Int,
+                              id0::Int, level::Int, tile::Int) where {T}
+    patches = Patch[]
+    stacks = TileStack[]
+    if !_stacked_level(backend, tile)
+        for (k, ti) in enumerate(held)
+            push!(patches, _build_fine_patch(T, tregions[ti], active_g, h, n_halo,
+                                             comm, deriv, filt, smoo, smoother,
+                                             interface_rhs, backend, ws_pool,
+                                             n_species, n_cons, id0 + k, level,
+                                             faces[ti]))
+        end
+        return patches, stacks
+    end
+    resize!(patches, length(held))
+    # One stack per padded extent, the tiles of each in `held` order.
+    extents = [fine_extent(tregions[ti], active_g) for ti in held]
+    for ext in unique(extents)
+        ks = [k for k in eachindex(held) if extents[k] == ext]
+        members = [id0 + k for k in ks]
+        span, tiles = _build_tile_stack(T, [tregions[held[k]] for k in ks],
+                                        [faces[held[k]] for k in ks], members,
+                                        active_g, h, n_halo, comm, deriv, filt, smoo,
+                                        interface_rhs, backend, n_species, n_cons,
+                                        level)
+        for (slot, k) in enumerate(ks)
+            patches[k] = tiles[slot]
+        end
+        push!(stacks, TileStack(span, members))
+    end
+    return patches, stacks
+end
+
+# One stack: the spanning patch and its member tiles, in slot order.
+function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
+                           ids::Vector{Int}, active_g::NTuple{3,Bool},
+                           h::NTuple{3,T}, n_halo::Int, comm::MPI.Comm,
+                           deriv, filt, smoo, interface_rhs::Symbol,
+                           backend::DeviceBackend, n_species::Int, n_cons::Int,
+                           level::Int) where {T}
+    ntiles = length(tregions)
+    region1, decomp1, hf = _fine_decomp(T, tregions[1], active_g, h, n_halo, comm)
+    npad = padded_extent(decomp1)
+    stride = npad[3]
+    span_plans = _fine_plans(decomp1, hf, deriv, filt, smoo, interface_rhs, backend;
+                             ntiles, stride)
+    empty_raw = empty_field(backend, T)
+    stacked() = StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
+                                                      ntiles * stride),
+                             ntiles, stride)
+    empty_s = StackedArray(empty_raw, ntiles, stride)
+    arrays = _patch_arrays(stacked, n_species)
+    ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons, false)
+    # The spanning patch: id 0 (it is not in `solver.patches`), the first
+    # tile's region, faces and boundary conditions (nothing in the batched
+    # phases reads them: every refined face closes with the interface rows,
+    # and the conditions enforce nothing), no covered mask, no scratch.
+    span = _assemble_patch(0, level, region1, comm, decomp1, hf, faces[1],
+                           _fine_bcs(active_g, faces[1]), span_plans, empty_s,
+                           arrays, ws_span, zeros(UInt8, 0, 0, 0),
+                           _empty_level_scratch(empty_raw))
+    tiles = Patch[]
+    for (slot, refine) in enumerate(tregions)
+        region_t, decomp_t, _ = slot == 1 ? (region1, decomp1, hf) :
+                                _fine_decomp(T, refine, active_g, h, n_halo, comm)
+        # Every member sits in the span's slots the way the first tile does:
+        # same extent, same process grid, same block of it on this rank.
+        (padded_extent(decomp_t) == npad && decomp_t.dims == decomp1.dims &&
+         decomp_t.coords == decomp1.coords && decomp_t.offset == decomp1.offset) ||
+            error("tile $refine cannot join the stack of $(tregions[1]): the " *
+                  "two tiles decompose differently on this rank")
+        kr = ((slot - 1) * stride + 1):(slot * stride)
+        v(a) = view(a, :, :, kr)
+        tile_arrays = (rho=v(arrays.rho), u=v(arrays.u), v=v(arrays.v),
+                       w=v(arrays.w), p=v(arrays.p), T_ion=v(arrays.T_ion),
+                       c=v(arrays.c), cp_mix=v(arrays.cp_mix), Y=map(v, arrays.Y),
+                       mu_art=v(arrays.mu_art), beta_art=v(arrays.beta_art),
+                       kappa_art=v(arrays.kappa_art), D_art=map(v, arrays.D_art),
+                       inv_J=v(arrays.inv_J), area_d=map(v, arrays.area_d),
+                       inv_h=map(v, arrays.inv_h), inv_r=v(arrays.inv_r),
+                       cot_over_r=v(arrays.cot_over_r),
+                       cot_over_r_gcl=v(arrays.cot_over_r_gcl))
+        plans_t = _fine_plans(decomp_t, hf, deriv, filt, smoo, interface_rhs, backend)
+        scratch = _level_scratch(empty_raw, refine, active_g, n_halo, n_cons,
+                                 MPI.Comm_size(comm), MPI.Comm_rank(comm))
+        push!(tiles, _assemble_patch(ids[slot], level, region_t, comm, decomp_t, hf,
+                                     faces[slot], _fine_bcs(active_g, faces[slot]),
+                                     plans_t, view(empty_raw, :, :, 1:0),
+                                     tile_arrays, _view_workspace(ws_span, kr),
+                                     _covered_mask(decomp_t), scratch))
+    end
+    return span, tiles
 end
 
 _fine_bcs(active_g::NTuple{3,Bool}, faces::NTuple{3,NTuple{2,Int}}) =
@@ -1081,11 +1235,49 @@ patch, and a rank outside a refined level's rank subset holds only the root,
 but the multi-patch drivers dispatch on the vector form, and a single-array
 state on such a rank silently skips the interface and level synchronization.
 """
-allocate_state(solver::Solver) =
-    _multipatch(solver) ?
-        [_state_like(p.rho, solver.equations.n_cons)
-         for p in getfield(solver, :patches)] :
-        _state_like(solver.rho, solver.equations.n_cons)
+function allocate_state(solver::Solver)
+    n_cons = solver.equations.n_cons
+    _multipatch(solver) || return _state_like(solver.rho, n_cons)
+    patches = getfield(solver, :patches)
+    levels = getfield(solver, :levels)
+    spec = getfield(solver, :regrid)
+    # A stacked level's tiles share one stacked state, each tile holding the
+    # view over its own block, as its fields are; the step drivers advance
+    # the stack through `_stack_state`. The vector's element type then covers
+    # the root's dense state and the tiles' views, and is widened as soon as
+    # a regrid could stack a tile on this rank, so a rank joining the level
+    # later can take one.
+    stackable = any(lev -> !isempty(lev.stacks), levels) ||
+                (spec !== nothing && _stacked_level(spec.backend, spec.tile))
+    stackable || return [_state_like(p.rho, n_cons) for p in patches]
+    states = Vector{ConservedState{typeof(solver.cfl)}}(undef, length(patches))
+    for lev in levels
+        for st in lev.stacks
+            _stacked_states!(states, st, n_cons)
+        end
+        stacked = Set(li for st in lev.stacks for li in st.members)
+        for li in lev.patches
+            li in stacked && continue
+            states[li] = _state_like(patches[li].rho, n_cons)
+        end
+    end
+    return states
+end
+
+# Fill the members' slots of `states` with views of one fresh zero state over
+# the stack's storage; `shift` moves the slot index (a regrid assembles the
+# level's vectors without the root, at index − 1).
+function _stacked_states!(states, st::TileStack, n_cons::Int, shift::Int=0)
+    raw = _state_like(parent(st.patch.rho), n_cons)
+    for (slot, li) in enumerate(st.members)
+        states[li + shift] = _tile_state(raw, slot, st.patch.rho.stride)
+    end
+    return states
+end
+
+# Tile `slot`'s view of a stacked state.
+_tile_state(raw::ConservedState, slot::Int, stride::Int) =
+    ConservedState(view(parent(raw), :, :, ((slot - 1) * stride + 1):(slot * stride), :))
 
 # Whether the solver's layout is a multi-patch one, asked of the layout rather
 # than of `npatches`: both a slab partition and a refined level's rank subset
@@ -1290,7 +1482,9 @@ end
 
 function _scale_grad!(g, solver, d)
     ih = solver.inv_h[d]
-    n1, n2, n3 = size(g)
+    # The patch's padded extent, not `size(g)`: on a stacked level `g` spans
+    # every tile and the launch runs the one-tile box per tile.
+    n1, n2, n3 = padded_extent(solver.decomp)
     pointwise!(_scale_grad_point!, g, n1, n2, n3, g, ih)
     return g
 end
@@ -1553,7 +1747,7 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
                 # tmp_b = A_d F_d over the full array; A_d is odd in r for the
                 # cylindrical axis (A₁ = r), flipping the flux parity.
                 Ad = solver.area_d[d]
-                n1f, n2f, n3f = size(solver.tmp_b)
+                n1f, n2f, n3f = padded_extent(decomp)
                 pointwise!(_area_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                            solver.tmp_b, Ad, Fdc)
                 div_subtract_along!(dQ, c, solver.tmp_b, solver, d, σ,

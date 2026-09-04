@@ -99,12 +99,32 @@ placeholder under the default `:delta4`.
 function RHSWorkspace(backend::AbstractBackend, decomp::Decomp{T},
                       n_species::Int, n_cons::Int, ring::Bool) where {T}
     f() = field(backend, decomp)
+    return _rhs_workspace(f, empty_field(backend, T), n_species, n_cons, ring)
+end
+
+# The set from an allocator `f()` and the zero-extent placeholder `empty` of
+# the same storage type: `field` on a backend above, or the stacked arrays
+# of a device level's spanning patch (rhs.jl).
+function _rhs_workspace(f::F, empty, n_species::Int, n_cons::Int,
+                        ring::Bool) where {F}
     return RHSWorkspace([f() for _ in 1:3, _ in 1:3],
                         (f(), f(), f()),
                         [f() for _ in 1:3, _ in 1:n_species],
                         f(), f(), f(), f(), f(),
-                        ring ? f() : empty_field(backend, T),
+                        ring ? f() : empty,
                         [f() for _ in 1:3, _ in 1:n_cons])
+end
+
+# A tile's workspace on a stacked level: views of the spanning patch's set
+# over the tile's block `kr` along the third dimension, so a tile evaluated on
+# its own (a diagnostic's gradients, say) writes the slots the batched
+# evaluation writes. The placeholder keeps the view type at zero extent.
+function _view_workspace(ws::RHSWorkspace, kr::UnitRange{Int})
+    v(a) = view(a, :, :, kr)
+    return RHSWorkspace(map(v, ws.grad_u), map(v, ws.grad_T_ion), map(v, ws.grad_Y),
+                        v(ws.strain_mag), v(ws.sensor), v(ws.sensor_sp),
+                        v(ws.tmp_a), v(ws.tmp_b), view(ws.ring_buf, :, :, 1:0),
+                        map(v, ws.flux))
 end
 
 "An empty, concretely typed pool of [`RHSWorkspace`](@ref) sets for `backend`."

@@ -346,6 +346,21 @@ Names are spelled out in full. Current vocabulary:
   KA-CPU comparison stays bitwise per dimension), `FORCE_DEVICE_EXCHANGE`
   (test toggle routing host arrays through every device-storage branch,
   which `_device_path` tests; `_cpu_storage` alone routes `pointwise!`)
+- `StackedArray` (the stacked storage of a device level's tiles: one array,
+  the tiles' padded blocks along the third dimension at a fixed `stride`,
+  `ntiles` of them; tiles hold plain views, the level's spanning patch the
+  wrapper, and a `pointwise!` routed on it launches every tile), `TileStack`
+  / `Level.stacks` (the spanning `patch` and its `members`, one stack per
+  padded extent), `_stack_state` (the members' shared state as one stacked
+  `ConservedState`), `_stacked_level`, `_build_level_patches` /
+  `_build_tile_stack` (the shared tile construction of the constructor, the
+  tiled regrid and the restart), `_fine_decomp` / `_fine_plans` /
+  `_patch_arrays` / `_assemble_patch`, `_view_workspace`, `_copy_tile!`,
+  `_level_rhs!` / `_level_update!` / `_level_filter!` (the per-level phases
+  the drivers run per patch or per stack), `padded_extent` (the box a
+  full-array launch iterates; never `size` of an array that may be a stack),
+  `lines_factor` (`plan_direction`'s line multiplier for a batched plan),
+  `DevicePlan.ntiles` / `.stride`, `_tile_ranges`, `_upload!` / `_assign!`
 - `LevelScratch` (a fine `Patch`'s device storage of its level transfer:
   the Hermite boxes and the chain `stages` over the rank's components;
   empty on the host backend), `BoxFill`/`HermiteFill` (the stage-0

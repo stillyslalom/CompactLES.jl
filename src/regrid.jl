@@ -803,6 +803,26 @@ function _rebalance_due!(solver::Solver, spec::RegridSpec)
     return walls
 end
 
+# A kept tile's arrays, old storage to new: its state and every persistent
+# field a `Patch` carries (the primitives, the artificial coefficients the
+# next `max_rate` reads, the geometry). Element copies, so the tile continues
+# bit for bit; the stacked device level takes this in place of `_repatch`'s
+# sharing, since its new stack is a new allocation.
+function _copy_tile!(pnew::Patch, Qnew, pold::Patch, Qold)
+    _assign!(parent(Qnew), parent(Qold))
+    for name in (:rho, :u, :v, :w, :p, :T_ion, :c, :cp_mix, :mu_art, :beta_art,
+                 :kappa_art, :inv_J, :inv_r, :cot_over_r, :cot_over_r_gcl)
+        _assign!(getfield(pnew, name), getfield(pold, name))
+    end
+    for name in (:Y, :D_art, :area_d, :inv_h)
+        for (a, b) in zip(getfield(pnew, name), getfield(pold, name))
+            _assign!(a, b)
+        end
+    end
+    copyto!(pnew.covered, pold.covered)
+    return pnew
+end
+
 function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                         workspace::Workspace, save) where {T}
     spec = getfield(solver, :regrid)
@@ -891,13 +911,19 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     # decomposition through `_repatch` and must not appear here. A moved
     # tile's old state and decomposition on this rank are held past the swap
     # by tile, for the sends the migration posts from them.
+    # On a stacked device level (rhs.jl, stacked tiles) every tile is rebuilt
+    # into the new stacks, a kept tile included, which then copies its arrays
+    # across below and drops its old decomposition like the rest.
+    stacked = _stacked_level(spec.backend, spec.tile)
     dropped_decomps = Decomp{T}[]
     old_piece = Dict{Int,Tuple{eltype(states),Decomp{T}}}()
     for (li, ti_old) in zip(lev.patches, lev.tiles)
         r = old_regions[ti_old]
-        haskey(new_of, r) && kept[new_of[r]] && continue
+        keeps = haskey(new_of, r) && kept[new_of[r]]
+        keeps && !stacked && continue
         push!(dropped_decomps, patches[li].decomp)
-        haskey(new_of, r) && (old_piece[new_of[r]] = (states[li], patches[li].decomp))
+        haskey(new_of, r) && !keeps &&
+            (old_piece[new_of[r]] = (states[li], patches[li].decomp))
     end
     # Every owner of the old level drops its tile group here, and the level
     # communicator goes with it where the rank count changed; both are
@@ -923,32 +949,63 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     new_dQ = similar(workspace.dQ, 0)
     new_du = similar(workspace.du, 0)
     local_of = zeros(Int, length(wanted))
-    indices = Int[]
+    indices = [k + 1 for k in eachindex(held)]
     for (k, ti) in enumerate(held)
-        tr = wanted[ti]
-        idx = k + 1
-        local_of[ti] = idx
-        push!(indices, idx)
-        bcs = _fine_bcs(active, faces[ti])
-        if kept[ti]
-            oi = old_local[old_of[tr]]
-            p = _repatch(patches[oi], idx, faces[ti], bcs)
-            push!(new_states, states[oi])
-            push!(new_dQ, workspace.dQ[oi])
-            push!(new_du, workspace.du[oi])
-        else
-            p = _build_fine_patch(T, tr, active, root.h, spec.n_halo,
-                                  group.comm, spec.deriv, spec.filt,
-                                  spec.smoo, solver.art.smoother,
-                                  spec.interface_rhs, spec.backend, ws_pool,
-                                  solver.equations.n_species,
-                                  n_cons, idx, 1, faces[ti])
-            Q = _state_like(p.rho, n_cons)
-            push!(new_states, Q)
-            push!(new_dQ, zero(Q))
-            push!(new_du, zero(Q))
+        local_of[ti] = k + 1
+    end
+    stacks = TileStack[]
+    if stacked
+        built, stacks = _build_level_patches(T, wanted, held, faces, active, root.h,
+                                             spec.n_halo, group.comm, spec.deriv,
+                                             spec.filt, spec.smoo,
+                                             solver.art.smoother, spec.interface_rhs,
+                                             spec.backend, ws_pool,
+                                             solver.equations.n_species, n_cons,
+                                             1, 1, spec.tile)
+        append!(new_patches, built)
+        resize!(new_states, length(held))
+        resize!(new_dQ, length(held))
+        resize!(new_du, length(held))
+        for st in stacks
+            _stacked_states!(new_states, st, n_cons, -1)
+            _stacked_states!(new_dQ, st, n_cons, -1)
+            _stacked_states!(new_du, st, n_cons, -1)
         end
-        push!(new_patches, p)
+        # A kept tile takes its evolved arrays into its new slots: the state,
+        # and the persistent fields the next step reads before its first
+        # right-hand side (the artificial coefficients through `max_rate`,
+        # the geometry). The stage arrays start from zero, as a fresh tile's
+        # do; the first stage reads neither.
+        for (k, ti) in enumerate(held)
+            kept[ti] || continue
+            oi = old_local[old_of[wanted[ti]]]
+            _copy_tile!(new_patches[k], new_states[k], patches[oi], states[oi])
+        end
+    else
+        for (k, ti) in enumerate(held)
+            tr = wanted[ti]
+            idx = k + 1
+            bcs = _fine_bcs(active, faces[ti])
+            if kept[ti]
+                oi = old_local[old_of[tr]]
+                p = _repatch(patches[oi], idx, faces[ti], bcs)
+                push!(new_states, states[oi])
+                push!(new_dQ, workspace.dQ[oi])
+                push!(new_du, workspace.du[oi])
+            else
+                p = _build_fine_patch(T, tr, active, root.h, spec.n_halo,
+                                      group.comm, spec.deriv, spec.filt,
+                                      spec.smoo, solver.art.smoother,
+                                      spec.interface_rhs, spec.backend, ws_pool,
+                                      solver.equations.n_species,
+                                      n_cons, idx, 1, faces[ti])
+                Q = _state_like(p.rho, n_cons)
+                push!(new_states, Q)
+                push!(new_dQ, zero(Q))
+                push!(new_du, zero(Q))
+            end
+            push!(new_patches, p)
+        end
     end
     transfers = [build_level_transfer(
         T, tr, active, spec.n_halo, [root.region], [1],
@@ -972,9 +1029,10 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         records = _level_records(T, new_lc.comm, fine_regions, held, indices,
                                  [p.decomp for p in new_patches], n_cons)
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers,
-                             records)
+                             records; stacks)
     else
-        levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers)
+        levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers;
+                             stacks)
     end
     _fill_covered!(root, wanted)
     fresh = [ti for ti in eachindex(wanted) if !kept[ti]]

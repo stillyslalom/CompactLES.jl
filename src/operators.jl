@@ -73,12 +73,18 @@ patch-interface hook: [`interface_closures`](@ref) supplies rows whose
 right-hand sides read the exchanged ghost data (`ClosureRow.first ≤ 0`), which
 `plan_direction` verifies fit inside the halo width. Like the fold keywords,
 either may be passed on every rank and acts only on the rank owning that edge.
+
+`lines_factor` multiplies the line count: the plan a stacked device level's
+spanning patch takes (`StackedArray`, `device_plan`) covers the lines of that
+many equal tiles at once, so its line solver's interface stage is sized for
+all of them. The default 1 is every host plan.
 """
 function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
                         h::Real; lo_fold::Union{Nothing,Int}=nothing,
                         hi_fold::Union{Nothing,Int}=nothing,
                         lo_closures::Union{Nothing,Vector{ClosureRow{T}}}=nothing,
-                        hi_closures::Union{Nothing,Vector{ClosureRow{T}}}=nothing) where {T}
+                        hi_closures::Union{Nothing,Vector{ClosureRow{T}}}=nothing,
+                        lines_factor::Int=1) where {T}
     n = decomp.n_local[dim]
     M = halfwidth(scheme)
     M <= decomp.n_halo || error("stencil half-width $M exceeds halo width $(decomp.n_halo)")
@@ -173,7 +179,10 @@ function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
     explicit = iszero(α) && all(identity_lhs, scheme.closures) &&
                all(identity_lhs, lo_rows) && all(identity_lhs, hi_rows)
 
-    lines = prod(decomp.n_local[k] for k in 1:3 if k != dim)
+    # `lines_factor` > 1 plans the batched device solve of a stacked level
+    # (lines_device.jl): the same lines of `lines_factor` equal tiles, so the
+    # line solver's interface stage is sized for all of them at once.
+    lines = prod(decomp.n_local[k] for k in 1:3 if k != dim) * lines_factor
     line_solver = LineSolver(a, b, c, aL, cR, decomp.sub[dim], decomp.sub_size[dim],
                     decomp.sub_rank[dim], lines; periodic=decomp.periodic[dim],
                     explicit=explicit)
