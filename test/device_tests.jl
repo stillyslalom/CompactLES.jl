@@ -316,11 +316,10 @@ end
     # along the stacking dimension runs per tile. Two tiles abutting along
     # z in one stack (the refined box sits inside one lattice cell in x and
     # y), subcycled so the filter and the Hermite shell batch too, one step,
-    # bitwise against the CPU hierarchy. The cost of this testset is
-    # compilation: every distinct face pattern of a tile is a distinct
-    # boundary-condition type on its `Patch`, so the right-hand side compiles
-    # once per pattern per backend (about 2.5 s each), and a 2×2×2 nest with
-    # corners has eight; `bench/device_solver.jl` runs the twelve-tile case.
+    # bitwise against the CPU hierarchy. The cost of this testset is the
+    # compilation of the 3-D refined drivers on both backends, so it is kept
+    # to two tiles and a step; `bench/device_solver.jl` runs the twelve-tile
+    # case.
     cpu_ka = CL.KernelAbstractions.CPU()
     per = (PeriodicBC(), PeriodicBC())
     function box3d(backend)

@@ -716,16 +716,18 @@ blob to the same final region. The two wall figures are single runs at
 np = 8 with the run-to-run spread `CLAUDE.md` records.
 
 **Per-tile costs.** Setup costs 0.06–0.12 s per tile in plan construction,
-which argues for tile edges of 12 or more in 3-D. A second setup cost is
-compilation: a tile's face pattern (parent-fed or same-level per face) is
-part of its `Patch` type through the boundary-condition tuple, so the
-right-hand side and the stage drivers compile once per distinct pattern
-per backend, about 2.5 s each on the workstation, and a 3-D nest with
-corners has up to 64 patterns (`test/device_tests.jl` keeps its 3-D
-stacked case to two tiles for that reason). Collapsing the two refined
-face conditions into one type would leave one pattern per level; it is
-recorded here as an open change, not made, since it touches the type
-every tile carries. The shared RHS scratch,
+which argues for tile edges of 12 or more in 3-D. The other setup cost is
+compilation, which is why every tile of a level carries one `Patch` type:
+the boundary-condition tuple is a type parameter, the right-hand side and
+the stage drivers compile once per distinct patch type (native code, not
+inference: 1.8 s per type on the CPU backend and 3.9 s on the device
+backend on the workstation), and a 3-D nest with corners has up to 64 face
+patterns. Every refined face therefore carries `InterfaceBC`, a parent-fed
+face with neighbor 0 (`CoarseFineBC()` constructs that), and
+`solver.patches` is a typed `Vector{Patch}` rather than a splat, whose
+`promote_typeof` specialization cost 0.5–1.7 s per distinct patch count.
+Warm construction of plans, scratch, transfers and communicators is 0.03 s
+for eight tiles. The shared RHS scratch,
 measured on the annular case (N = 192, tile 6, 208 tiles of 19² plus the
 root): 103.0 MB over the patch set before the pooling, 60.3 MB after, a
 factor of 1.71, with 0.207 MB of each tile's 0.398 MB shared. The warm
@@ -1239,13 +1241,11 @@ subcycled, runs at 0.354 s per device step against 0.576 s on the CPU,
 the first tiled configuration on which the device leads. The residual
 floor is the per-tile work that stays per tile: the shell impositions
 (the gathers, the chain and the ring per tile), the interface records, and
-`max_rate`'s two reductions per tile. The 64³ TGV measured 0.164 and
-0.176 s per device step in the two runs of the same session against the
-0.146 s recorded above, at the edge of the run-to-run spread, with the
-fill and scatter kernels now carrying a fourth index dimension of extent
-one and the kernels receiving the conserved state's array rather than its
-wrapper; whether the unstacked step paid for the batching is a question
-for a repeated-process measurement, not one run.
+`max_rate`'s two reductions per tile. The unstacked 64³ TGV measures
+0.164–0.176 s per device step against the 0.146 s recorded above, at the
+edge of the run-to-run spread; whether the fill and scatter kernels' fourth
+index dimension of extent one costs anything there is a question for a
+repeated-process measurement.
 
 rzadams (2026-08-19/20, `bench/logs/rzadams_20260819*.txt`): kernel
 submission 10 µs, launch+sync 25 µs, line solves 0.14–0.40 ms/apply, the

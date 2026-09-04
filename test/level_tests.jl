@@ -631,7 +631,13 @@ end
     @test solver.patches[2].faces[1] == (0, 2)
     @test solver.patches[3].faces[1] == (1, 3)
     @test solver.patches[2].bcs[1][2] isa InterfaceBC
-    @test solver.patches[2].bcs[1][1] isa CoarseFineBC
+    @test !CL.parent_fed(solver.patches[2].bcs[1][2])
+    @test solver.patches[2].bcs[1][1] == CoarseFineBC()
+    @test CL.parent_fed(solver.patches[2].bcs[1][1])
+    # One face-condition type on every tile, so every tile of a level has the
+    # one Patch type and the drivers compile once per level, not per face
+    # pattern (see `InterfaceBC`).
+    @test allequal(typeof(solver.patches[i]) for i in 2:length(solver.patches))
     # A box node on a lattice plane pulls in the cell on its inner side only.
     @test CL._tile_span(81, 112, 8) == 10:13
     @test CL._tile_span(82, 113, 8) == 10:13

@@ -707,15 +707,14 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                         for (r, imp) in zip(fine_regions, imposed_all)]
         parent_h = next_h
     end
-    # `[patch, fines...]` gives the vector the narrowest element type
-    # covering both kinds of patch (the root's boundary-condition tuple
-    # differs from a refined patch's), the same type the two-patch
-    # construction has always produced. A rank holding no tile of any
-    # refined level holds only the root, and `[patch]` alone would infer
-    # that one patch's concrete type; the annotated `Patch[patch]` keeps the
-    # element type wide, because it is fixed for the life of the solver and
-    # a regrid that hands this rank a tile later pushes it into this vector.
-    patches = isempty(fines) ? Patch[patch] : [patch, fines...]
+    # A `Vector{Patch}`: the element type is fixed for the life of the solver
+    # and a regrid may hand this rank tiles later, whose types differ from the
+    # root's (the boundary-condition tuple, and on a device backend the view
+    # storage). A typed vector, not a splat: `[patch, fines...]` compiles a
+    # `promote_typeof` specialization per distinct patch count, 0.5 s on the
+    # CPU backend and 1.7 s on the device backend each.
+    patches = Patch[patch]
+    append!(patches, fines)
     # The tag sweep's scratch spans the root's padded block, whose extent
     # is fixed for the life of the solver (a regrid moves the refined level
     # only).
