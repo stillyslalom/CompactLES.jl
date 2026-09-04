@@ -1048,16 +1048,36 @@ convention keeps the device output bitwise per dimension.
 every plan converts through `backend_plan`, every field and state allocates
 on the backend, and every phase between the step drivers and the arrays is
 a launchable body, a `DevicePlan` solve, or an exact storage-level
-reduction. Three operations are host-staged: geometry (setup-time upload),
-`initialize!` and `DirichletBC` host closures (staging blocks), and tagging
-(a coarse-block download at the regrid cadence).
+reduction, on a single patch, a slab layout, a refined box or a tiled
+level. Three operations are host-staged: geometry (setup-time upload),
+`initialize!` and `DirichletBC` host closures (staging blocks), and a tag
+sweep with a `tag_predicate` (a user closure over the patch, so the coarse
+block downloads at the regrid cadence); without a predicate the criteria
+evaluate on the device and only the tag bytes download.
+
+A refined patch builds its shell on the device (`LevelScratch`, held on the
+fine `Patch` and typed by its array type, so `LevelTransfer`, `Level` and
+`Solver` keep their types; empty on the host backend). The gathered coarse
+box uploads once per imposition, this rank's components of it under the
+component-distributed chain; under subcycling the four Hermite boxes upload
+once per parent step in `save_level_box!` and the blend runs as a kernel
+per fine stage; each stage of the tensor-product Lagrange chain is one
+kernel over the rank's components, the same arithmetic as the host chain
+per fine node; and the shell ring packs on the device before its
+Allgatherv, so a subcycled step's impositions cost no host arithmetic. A
+fresh tile's whole-patch fill at a regrid runs the same chain in slices of
+the scratch's component width. On a one-rank tile the packed ring stays on
+the device and the shell writes from it directly.
 
 ### Communication
 
 A distributed device patch stages every message through the backend: a pack
 kernel, one contiguous device↔host copy per message, then the unchanged MPI
-path over the host halo buffers; the fold-pair Sendrecv and the regrid
-gathers and migration stage the same way. `device_mpi_direct(backend)` is
+path over the host halo buffers; the fold-pair Sendrecv, the interface
+records of a patch layout and of a tiled level (ghost strips and
+shared-plane means, a local pairing being a broadcast between the two
+patches' views), and the regrid gathers and migration stage the same way.
+`device_mpi_direct(backend)` is
 the hook for direct device-pointer MPI and defaults to host staging. Staging
 buffers allocate per exchange through `similar` (device allocators pool); a
 keyed cache was reverted after its `Any`-typed lookup put 33 dispatch sites
@@ -1072,11 +1092,17 @@ algorithm requires, before the host reads the packed interface values of
 the reduced solve, once per `apply_along!`. `DEVICE_SYNC[] = true` restores
 synchronize-per-launch and is the correctness fallback. Removing the
 per-launch synchronize took 28–32% off the device step. Per-patch streams
-are not implemented: supported device configurations hold one patch per
-rank or a sequentially coupled coarse/fine pair, and the remaining gap to
-CPU is bound by the per-apply reduced-solve fence, which a second stream
-cannot remove. Batched cross-tile launches ([Device](#device) in Part II)
-are the planned replacement for streams.
+are not implemented: a rank's patches advance in sequence, and the
+remaining gap to CPU is bound by the per-apply reduced-solve fence, which
+a second stream cannot remove. Batched cross-tile launches
+([Device](#device) in Part II) are the planned replacement for streams,
+and a tiled level of small tiles is where they are due. On the workstation
+GPU (`bench/device_solver.jl`, an RX 6800 XT, an indicator of structure and
+not a target number) the one-dimensional tiled regridding Sod, eight tiles
+of 25 fine nodes subcycled, takes 0.11 s per step against 1.1 ms on the
+CPU, and the two-slab viscous wave 9 ms against 0.1 ms, while the 48³ TGV
+step runs at 0.5× the CPU's: a per-launch floor paid once per tiny patch
+per phase, which is the cost batching amortizes over the tile count.
 
 ### Precision
 
@@ -1236,13 +1262,11 @@ Configurations rejected at setup, and the reason:
   the patches of the level above and span ≥ 4 parent nodes per active
   dimension; a tiled level's tiles are clipped to that margin at the
   domain edge and must still lie inside the parent tiles. Regridding is
-  two-level. Tiled levels take the host backend. Rebalancing requires a
-  tiled, regridding level.
-- **Device runs** take a single patch per solver (the interface-record
-  copies are host loops), reject `Nasa9Mixture` (no fixed-width device
-  mirror), a pointwise NSCBC inflow `target` (host closure),
+  two-level. Rebalancing requires a tiled, regridding level.
+- **Device runs** reject `Nasa9Mixture` (no fixed-width device mirror), a
+  pointwise NSCBC inflow `target` (host closure),
   `StepControl.floor_ratio > 0` and `dt_report` (host sweeps), and `:filter`
-  restriction.
+  restriction; a `tag_predicate` downloads the coarse block at each check.
 - The artificial-property sensors are built per patch with closed-edge
   clamping at interfaces; no gate has measured the effect.
 
@@ -1258,7 +1282,7 @@ sequencing item that delivers it.
 
 | assumption | replaced by | item |
 |---|---|---|
-| tiled levels are host-only; the transfer chain and tagging run on the host | [Device](#device) | 7 |
+| a device rank launches per patch; a tiled level of small tiles is launch-bound | [Device](#device) | 7 |
 | no rate check per substep; measured weights carry the root's work | [Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check) | as needed |
 | regridding is two-level | not sequenced; see [Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check) | — |
 
@@ -1273,14 +1297,14 @@ order, which [Sequencing](#sequencing) turns into deliverables with gates.
 
 ### Device
 
-Four pieces, in order of dependence. The same-level interface-record
-pack/copy loops stage through the backend as the halo path was staged
-(mechanical). The level-transfer chain runs on the device: the gathered box
-is uploaded once, the tensor-product Lagrange interpolation and the Hermite
-blend are pointwise bodies, and the shell ring is packed on the device
-before its Allgatherv, so a subcycled step's ~20 impositions cost no
-host-side arithmetic and, on a unified-memory APU, no copies. Tagging
-evaluates on the device as above.
+Of item 7's four pieces the first three are delivered and described under
+[Residency](#residency) and [Communication](#communication): the
+interface records stage through the backend, the transfer chain runs on
+the fine patch's device scratch, and tagging evaluates on the device. Each
+is pinned bitwise against the CPU solver in the serial and MPI suites under
+`FORCE_KA` and `FORCE_DEVICE_EXCHANGE`, the second toggle taking every
+device-storage branch on host arrays, and on the workstation GPU through
+`bench/device_solver.jl`.
 
 The last piece replaces per-patch streams. With many equal-extent tiles per
 rank, line solves batch across a level's tiles into one (lines × n) launch
@@ -1417,7 +1441,9 @@ and the cluster measurements the items leave open are under
 7. **Device: staged interface records, device transfer chain and tagging,
    batched cross-tile launches.** Gate: bitwise equality against the CPU
    hierarchy over full refined runs; the implosion case's device step
-   measured against its CPU step on the workstation and on rzadams.
+   measured against its CPU step on the workstation and on rzadams. The
+   first three pieces are delivered ([Device](#device)); the batched
+   launches and the measurements remain.
 8. **Numerics debts on the target problems**: conservation drift on the
    long mixing-layer run, the sensor at a level boundary under a crossing
    shock, filter rows at the shell. Each is a measurement first and a

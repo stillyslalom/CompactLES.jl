@@ -1372,6 +1372,55 @@ function test_staged_exchange()
     end
     check("staged axis fold pair, split θ: bitwise",
           gmax(maximum(abs.(parent(Q3) .- parent(Q4)))), 1e-300)
+
+    # The interface records of a patch layout and of a tiled level stage
+    # through the backend the same way, the level transfer's chain runs on
+    # the fine patches' device scratch, and the tag sweep evaluates on the
+    # device; each is the host arithmetic element for element under the
+    # toggles, so a rank-partitioned two-slab run and a decomposed tiled
+    # regridding run are bitwise against the CPUBackend ones.
+    function slabs(backend)
+        s = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                   art=ArtParams(enabled=false), transport=Transport(mu0=2e-2),
+                   patch_grid=(2, 1, 1), backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) ->
+            Prim(u=(0.5 + 0.1 * sin(2x), 0, 0), p=1.0 + 0.05 * cos(x),
+                 rho=1.0 + 0.2 * sin(x)))
+        run!(s, states; tfinal=0.3)
+        return s, states
+    end
+    function tiled(backend)
+        wall2 = (SlipWallBC(), SlipWallBC())
+        s = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
+                   regrid_interval=5, tag_buffer=2, tile=8,
+                   refine=BlockRegion((176, 0, 0), (16, 1, 1)), backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) -> x < 0.45 ?
+            Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+        run!(s, states; tfinal=0.03, nmax=41)
+        return s, states
+    end
+    for (label, build) in (("two viscous slabs", slabs),
+                           ("tiled regridding Sod", tiled))
+        s5, q5 = build(CPUBackend())
+        CL.FORCE_KA[] = true
+        CL.FORCE_DEVICE_EXCHANGE[] = true
+        s6, q6 = try
+            build(DeviceBackend(cpu))
+        finally
+            CL.FORCE_KA[] = false
+            CL.FORCE_DEVICE_EXCHANGE[] = false
+        end
+        d = 0.0
+        for i in eachindex(q5)
+            d = max(d, maximum(abs.(parent(q5[i]) .- parent(q6[i]))))
+        end
+        check("staged $label: patch count matches", abs(length(q5) - length(q6)), 0.5)
+        check("staged $label: step count matches", abs(s5.step - s6.step), 0.5)
+        check("staged $label: bitwise", gmax(d), 1e-300)
+    end
 end
 
 # ---------------------------------------------------------------------------

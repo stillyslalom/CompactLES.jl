@@ -196,6 +196,20 @@ end
 # download of a device one (a backend copy at the regrid cadence only).
 _tag_host(x) = _cpu_storage(x) ? x : Array(x)
 
+# Mixture density at one node of the tag sweep's extended block: the point
+# `(i, j, k)` of the iteration box maps to the padded slot `base + (i, j, k)`.
+@inline function _tag_rho_point!(rho, Qc, n_species, base, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + base[1], j + base[2], k + base[3])
+        acc = zero(eltype(rho))
+        for sp in 1:n_species
+            acc += Qc[I, sp]
+        end
+        rho[I] = acc
+    end
+    return nothing
+end
+
 # Tag sweep over this rank's interior of the parent (root) patch: every
 # enabled criterion writes its levels into `spec.tags`, and `mark!(g1, g2,
 # g3, level)` is then called for every flagged node, in global node indices
@@ -211,27 +225,25 @@ function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     n = dcp.n_local
     active = dcp.active
     n_species = solver.equations.n_species
-    # A device-resident coarse patch downloads its block for the tag sweep (a
-    # backend copy at the regrid cadence, not per step) and takes a host
-    # scratch in place of tmp_a.
-    Qc = _cpu_storage(Qc) ? Qc : Array(parent(Qc))
+    # A device-resident coarse patch evaluates the criteria on the device
+    # and downloads the tag bytes alone; the predicate criterion is a user
+    # closure over the patch, so with one set the block downloads and the
+    # sweep runs on the host as a whole (a backend copy at the regrid
+    # cadence, not per step).
+    on_device = _device_path(Qc) && spec.predicate === nothing
+    Qc = _cpu_storage(Qc) || on_device ? Qc : Array(parent(Qc))
     # Mixture density over the interior extended two layers along each active
     # dimension: the δ⁴ taps reach that far, and beyond a closed edge the
     # clamped indexing below never reads it.
     tmp_a = coarse.rhs_workspace.tmp_a
-    rho = _cpu_storage(tmp_a) ? tmp_a : zeros(eltype(Qc), size(tmp_a))
+    rho = _cpu_storage(tmp_a) == _cpu_storage(Qc) ? tmp_a :
+          zeros(eltype(Qc), size(tmp_a))
     ext = ntuple(d -> active[d] ? (-1:n[d]+2) : (1:1), 3)
-    @inbounds for k in ext[3], j in ext[2], i in ext[1]
-        I = CartesianIndex(i + o[1], j + o[2], k + o[3])
-        acc = zero(eltype(Qc))
-        for sp in 1:n_species
-            acc += Qc[I, sp]
-        end
-        rho[I] = acc
-    end
+    pointwise!(_tag_rho_point!, rho, length(ext[1]), length(ext[2]), length(ext[3]),
+               rho, Qc, n_species, ntuple(d -> first(ext[d]) - 1 + o[d], 3))
     lomin = ntuple(d -> at_lo_edge(dcp, d) ? 1 : -1, 3)
     himax = ntuple(d -> at_hi_edge(dcp, d) ? n[d] : n[d] + 2, 3)
-    tags = spec.tags
+    tags = on_device ? similar(parent(Qc), Int8, size(spec.tags)) : spec.tags
     fill!(tags, zero(Int8))
     ratio = spec.untag_ratio
     pointwise!(_tag_delta4_point!, tags, n[1], n[2], n[3],
@@ -252,15 +264,20 @@ function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     if spec.sensor_threshold > 0
         thr = spec.sensor_threshold
         hmin = minimum(coarse.h[d] for d in 1:3 if active[d])
-        D_host = FieldVector([_tag_host(a) for a in coarse.D_art])
+        host(a) = on_device ? a : _tag_host(a)
+        D_host = FieldVector([host(a) for a in coarse.D_art])
         pointwise!(_tag_sensor_point!, tags, n[1], n[2], n[3],
-                   tags, _tag_host(coarse.mu_art), _tag_host(coarse.beta_art),
-                   _tag_host(coarse.kappa_art), D_host, _tag_host(coarse.rho),
-                   _tag_host(coarse.c), _tag_host(coarse.cp_mix),
+                   tags, host(coarse.mu_art), host(coarse.beta_art),
+                   host(coarse.kappa_art), D_host, host(coarse.rho),
+                   host(coarse.c), host(coarse.cp_mix),
                    thr, thr / ratio, hmin, n_species, o)
     end
     spec.predicate === nothing ||
         _tag_predicate!(tags, spec.predicate, PatchSolver(solver, coarse), n, o)
+    if on_device
+        copyto!(spec.tags, tags)
+        tags = spec.tags
+    end
     off = dcp.offset
     @inbounds for k in 1:n[3], j in 1:n[2], i in 1:n[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
@@ -358,13 +375,34 @@ function _fill_fine_from_coarse!(solver::Solver, states, lt::LevelTransfer)
     fine = patches[lt.fine_index]
     Qf = states[lt.fine_index]
     K = length(lt.pplans)
-    for c in 1:solver.equations.n_cons
-        lt.pstage[1] .= view(lt.box_gather, :, :, :, c)
-        for k in 1:K
-            interpolate!(lt.pstage[k+1], lt.pplans[k], lt.pstage[k])
+    n_cons = solver.equations.n_cons
+    if !_device_path(Qf)
+        for c in 1:n_cons
+            lt.pstage[1] .= view(lt.box_gather, :, :, :, c)
+            for k in 1:K
+                interpolate!(lt.pstage[k+1], lt.pplans[k], lt.pstage[k])
+            end
+            _write_fine_shell!(Qf, c, lt.pstage[K+1], lt, fine.decomp,
+                               lt.pdecomps[K+1], false)
         end
-        _write_fine_shell!(Qf, c, lt.pstage[K+1], lt, fine.decomp,
-                           lt.pdecomps[K+1], false)
+        return states
+    end
+    # Device patch: every component runs through the scratch's chain, whose
+    # stages hold this rank's share of the components, in slices of that
+    # width (the whole set at once on a one-rank tile).
+    stages = fine.level_scratch.stages
+    width = size(stages[1], 4)
+    for lo in 1:width:n_cons
+        comps = lo:min(lo + width - 1, n_cons)
+        _fill_stage0_dev!(BoxFill(), view(stages[1], :, :, :, 1:length(comps)),
+                          fine.level_scratch, lt, comps)
+        for k in 1:K
+            _interpolate_dev!(stages[k+1], lt.pplans[k], stages[k], length(comps))
+        end
+        for (b, c) in enumerate(comps)
+            _write_fine_shell!(Qf, c, view(stages[K+1], :, :, :, b), lt,
+                               fine.decomp, lt.pdecomps[K+1], false)
+        end
     end
     return states
 end
@@ -396,7 +434,7 @@ function _carry_over!(Qf_new, dnew::Decomp, rnew::BlockRegion,
     any(isempty, rng) && return Qf_new
     pn = dnew.n_halo_d
     off = dnew.offset
-    if _cpu_storage(Qf_new)
+    if !_device_path(Qf_new)
         @inbounds for c in 1:n_cons, k in rng[3], j in rng[2], i in rng[1]
             Qf_new[i - off[1] + pn[1], j - off[2] + pn[2],
                    k - off[3] + pn[3], c] =

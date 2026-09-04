@@ -178,6 +178,57 @@ function main(opt)
                 s1.step, s2.step, dmax, dmax == 0 ? "  (bitwise)" : "")
     end
 
+    # --- Patch layout and tiled level on device ---------------------------
+    # The interface records stage through the backend, the transfer chain
+    # runs on the fine patches' device scratch, and the tag sweep evaluates
+    # on the device. Each case prints the device step against the CPU step;
+    # on a tiled level with one small tile per patch the device step is
+    # launch-bound, which is the batched-launch question of
+    # reference/AMR_GPU.md Part II.
+    function states_diff(q1, q2)
+        return maximum(maximum(abs.(Array(parent(q2[i])) .- parent(q1[i])))
+                       for i in eachindex(q1))
+    end
+    function two_slabs(backend)
+        s = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
+                   bcs=(per, per, per), art=ArtParams(enabled=false),
+                   transport=Transport(mu0=2e-2), patch_grid=(2, 1, 1),
+                   backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) ->
+            Prim(u=(0.5 + 0.1 * sin(2x), 0, 0), p=1.0 + 0.05 * cos(x),
+                 rho=1.0 + 0.2 * sin(x)))
+        run!(s, states; tfinal=0.3)
+        return s, states
+    end
+    function tiled_sod(backend)
+        wall2 = (SlipWallBC(), SlipWallBC())
+        s = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(wall2, per, per), cfl=0.2, subcycle=true,
+                   regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
+                   tile=8, backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) -> x < 0.5 ?
+            Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+        run!(s, states; tfinal=0.06, nmax=400)
+        return s, states
+    end
+    for (label, build) in (("two viscous slabs", two_slabs),
+                           ("tiled subcycled regridding Sod", tiled_sod))
+        s1, q1 = build(CPUBackend())
+        s2, q2 = build(DeviceBackend(ka_backend))
+        dmax = states_diff(q1, q2)
+        @printf("%-34s steps %3d/%3d  tiles %d/%d  max|dev-cpu| = %g%s\n", label,
+                s1.step, s2.step, length(q1), length(q2), dmax,
+                dmax == 0 ? "  (bitwise)" : "")
+        # Warm timing: fresh solvers, the first pass having compiled.
+        sc, _ = build(CPUBackend())
+        sd, _ = build(DeviceBackend(ka_backend))
+        @printf("  timing (warm): cpu %.4f s/step   device %.4f s/step   ratio %.2fx\n",
+                sc.wall_total / sc.step, sd.wall_total / sd.step,
+                (sc.wall_total / sc.step) / (sd.wall_total / sd.step))
+    end
+
     # --- Float32 TGV short history + step timing at n^3 -------------------
     for Tp in (Float64, Float32)
         n = opt.n

@@ -151,7 +151,7 @@ before. Constructed by `Solver`; user code normally reaches these fields
 through the solver (which forwards them for a single-patch run) without
 holding a `Patch` directly.
 """
-struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,W,TF}
+struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,W,LS,TF}
     id::Int
     level::Int
     region::BlockRegion                     # offset + extent, in this LEVEL's node
@@ -201,6 +201,13 @@ struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,W,TF}
     # every regrid from the child regions every rank of this level's subset
     # holds, so a diagnostic on this level's ranks alone reads it.
     covered::Array{UInt8,3}
+    # The device scratch of this patch's level transfer (`LevelScratch`,
+    # levels.jl): the Hermite boxes and the interpolation chain's stages on
+    # the backend, so a device-resident refined patch's shell is built
+    # without host arithmetic. Empty on the host backend, whose chain runs
+    # on the transfer's own host stages, and on a patch that is nobody's
+    # child.
+    level_scratch::LS
     # The same collections as isbits-adaptable tuples (FieldVector /
     # FieldMatrix, pointwise.jl): what the pointwise per-point bodies index,
     # since a Vector or Matrix kernel argument hangs a device launch. Same
@@ -218,7 +225,7 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                pairbuf, pairout, rho, u, v, w, p, T_ion, c, cp_mix, Y,
                mu_art, beta_art, kappa_art, D_art,
                inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
-               rhs_workspace, covered)
+               rhs_workspace, covered, level_scratch)
     field_tuples = (Y=FieldVector(Y), D_art=FieldVector(D_art),
                     grad_u=FieldMatrix(rhs_workspace.grad_u),
                     grad_Y=FieldMatrix(rhs_workspace.grad_Y),
@@ -228,7 +235,7 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                  ring_plans, pairbuf, pairout, rho, u, v, w, p, T_ion, c,
                  cp_mix, Y, mu_art, beta_art, kappa_art, D_art,
                  inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
-                 rhs_workspace, covered, field_tuples)
+                 rhs_workspace, covered, level_scratch, field_tuples)
 end
 
 # --- Covered masks ----------------------------------------------------------
@@ -506,21 +513,49 @@ _isect(a::UnitRange{Int}, b::UnitRange{Int}) =
 # `off` with pad `pad`: node g ↦ padded index g - off + pad.
 _padded(r::UnitRange{Int}, off::Int, pad::Int) = (first(r)-off+pad):(last(r)-off+pad)
 
+# The record copies below take two forms. Host storage runs the scalar loops
+# the root path was measured under. Device storage stages every message the
+# way the halo exchange does (halo.jl): a strided block packs by broadcast
+# into a contiguous device stage, one copy crosses to the host MPI buffer,
+# and the receive side reverses it; a local copy or combination between two
+# device patches is a broadcast between the two views. Each form applies the
+# same arithmetic per element, so the two are bitwise.
+
+# The block of `Q` over the padded ranges `r`, every component.
+@inline _block_view(Q, r::NTuple{3,UnitRange{Int}}) =
+    view(parent(Q), r[1], r[2], r[3], 1:size(Q, 4))
+
 function _pack!(buf::AbstractVector, Q, r::NTuple{3,UnitRange{Int}})
-    idx = 1
-    @inbounds for c in 1:size(Q, 4), k in r[3], j in r[2], i in r[1]
-        buf[idx] = Q[i, j, k, c]
-        idx += 1
+    if !_device_path(Q)
+        idx = 1
+        @inbounds for c in 1:size(Q, 4), k in r[3], j in r[2], i in r[1]
+            buf[idx] = Q[i, j, k, c]
+            idx += 1
+        end
+        return buf
     end
+    v = _block_view(Q, r)
+    n = length(v)
+    dsend = _device_send_stage(parent(Q), n)
+    reshape(view(dsend, 1:n), size(v)) .= v
+    _tracked_copy!(buf, 1, dsend, 1, n)
     return buf
 end
 
 function _unpack!(Q, buf::AbstractVector, r::NTuple{3,UnitRange{Int}})
-    idx = 1
-    @inbounds for c in 1:size(Q, 4), k in r[3], j in r[2], i in r[1]
-        Q[i, j, k, c] = buf[idx]
-        idx += 1
+    if !_device_path(Q)
+        idx = 1
+        @inbounds for c in 1:size(Q, 4), k in r[3], j in r[2], i in r[1]
+            Q[i, j, k, c] = buf[idx]
+            idx += 1
+        end
+        return Q
     end
+    v = _block_view(Q, r)
+    n = length(v)
+    drecv = _device_send_stage(parent(Q), n)
+    _tracked_copy!(drecv, 1, buf, 1, n)
+    v .= reshape(view(drecv, 1:n), size(v))
     return Q
 end
 
@@ -530,33 +565,50 @@ end
 # for the multiply, which rounds back to the same value (0.5 scales exactly)
 # but emits a double-precision instruction per point.
 function _combine_from!(Q, buf::AbstractVector, r::NTuple{3,UnitRange{Int}}, w)
-    idx = 1
+    half = eltype(Q)(0.5)
+    wT = eltype(Q)(w)
+    vT = one(wT) - wT
+    if !_device_path(Q)
+        idx = 1
+        if w == 0.5
+            @inbounds for c in 1:size(Q, 4), k in r[3], j in r[2], i in r[1]
+                Q[i, j, k, c] = half * (Q[i, j, k, c] + buf[idx])
+                idx += 1
+            end
+        else
+            @inbounds for c in 1:size(Q, 4), k in r[3], j in r[2], i in r[1]
+                Q[i, j, k, c] = wT * Q[i, j, k, c] + vT * buf[idx]
+                idx += 1
+            end
+        end
+        return Q
+    end
+    v = _block_view(Q, r)
+    n = length(v)
+    drecv = _device_send_stage(parent(Q), n)
+    _tracked_copy!(drecv, 1, buf, 1, n)
+    b = reshape(view(drecv, 1:n), size(v))
     if w == 0.5
-        half = eltype(Q)(0.5)
-        @inbounds for c in 1:size(Q, 4), k in r[3], j in r[2], i in r[1]
-            Q[i, j, k, c] = half * (Q[i, j, k, c] + buf[idx])
-            idx += 1
-        end
+        v .= half .* (v .+ b)
     else
-        wT = eltype(Q)(w)
-        vT = one(wT) - wT
-        @inbounds for c in 1:size(Q, 4), k in r[3], j in r[2], i in r[1]
-            Q[i, j, k, c] = wT * Q[i, j, k, c] + vT * buf[idx]
-            idx += 1
-        end
+        v .= wT .* v .+ vT .* b
     end
     return Q
 end
 
 function _copy_block!(Qdst, rdst::NTuple{3,UnitRange{Int}},
                       Qsrc, rsrc::NTuple{3,UnitRange{Int}})
-    @inbounds for c in 1:size(Qdst, 4)
-        for (kd, ks) in zip(rdst[3], rsrc[3]), (jd, js) in zip(rdst[2], rsrc[2])
-            for (id, is) in zip(rdst[1], rsrc[1])
-                Qdst[id, jd, kd, c] = Qsrc[is, js, ks, c]
+    if !_device_path(Qdst)
+        @inbounds for c in 1:size(Qdst, 4)
+            for (kd, ks) in zip(rdst[3], rsrc[3]), (jd, js) in zip(rdst[2], rsrc[2])
+                for (id, is) in zip(rdst[1], rsrc[1])
+                    Qdst[id, jd, kd, c] = Qsrc[is, js, ks, c]
+                end
             end
         end
+        return Qdst
     end
+    _block_view(Qdst, rdst) .= _block_view(Qsrc, rsrc)
     return Qdst
 end
 
@@ -567,16 +619,29 @@ function _combine_blocks!(Qa, ra::NTuple{3,UnitRange{Int}},
     wT = eltype(Qa)(wa)
     vT = one(wT) - wT
     half = eltype(Qa)(0.5)     # in the state's type; see `_combine_from!`
-    @inbounds for c in 1:size(Qa, 4)
-        for (ka, kb) in zip(ra[3], rb[3]), (ja, jb) in zip(ra[2], rb[2])
-            for (ia, ib) in zip(ra[1], rb[1])
-                m = wa == 0.5 ? half * (Qa[ia, ja, ka, c] + Qb[ib, jb, kb, c]) :
-                                wT * Qa[ia, ja, ka, c] + vT * Qb[ib, jb, kb, c]
-                Qa[ia, ja, ka, c] = m
-                Qb[ib, jb, kb, c] = m
+    if !_device_path(Qa)
+        @inbounds for c in 1:size(Qa, 4)
+            for (ka, kb) in zip(ra[3], rb[3]), (ja, jb) in zip(ra[2], rb[2])
+                for (ia, ib) in zip(ra[1], rb[1])
+                    m = wa == 0.5 ? half * (Qa[ia, ja, ka, c] + Qb[ib, jb, kb, c]) :
+                                    wT * Qa[ia, ja, ka, c] + vT * Qb[ib, jb, kb, c]
+                    Qa[ia, ja, ka, c] = m
+                    Qb[ib, jb, kb, c] = m
+                end
             end
         end
+        return Qa
     end
+    # The a-side takes the combination first, from both old values, and the
+    # b-side then copies it: the same value in both, as the scalar form.
+    va = _block_view(Qa, ra)
+    vb = _block_view(Qb, rb)
+    if wa == 0.5
+        va .= half .* (va .+ vb)
+    else
+        va .= wT .* va .+ vT .* vb
+    end
+    vb .= va
     return Qa
 end
 

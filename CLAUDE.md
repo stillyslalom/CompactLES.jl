@@ -343,7 +343,15 @@ Names are spelled out in full. Current vocabulary:
   stays host-side through the wrapped plan's `line_solver`, so the device
   method of `apply_along!` is collective, as the host one is), and
   `colwise` (dim 1 mirrors the `solve_col!` banded arithmetic so the
-  KA-CPU comparison stays bitwise per dimension)
+  KA-CPU comparison stays bitwise per dimension), `FORCE_DEVICE_EXCHANGE`
+  (test toggle routing host arrays through every device-storage branch,
+  which `_device_path` tests; `_cpu_storage` alone routes `pointwise!`)
+- `LevelScratch` (a fine `Patch`'s device storage of its level transfer:
+  the Hermite boxes and the chain `stages` over the rank's components;
+  empty on the host backend), `BoxFill`/`HermiteFill` (the stage-0
+  source of an imposition, `_fill_stage0!` host and `_fill_stage0_dev!`
+  device), `_interpolate_dev!`/`_interp_point!`, `_ring_pack_point!`,
+  `_upload_hermite!`, `_tag_rho_point!`
 - `refresh_primitives!`, `mixture_density`, `boundary_plane` (the in-flight
   state-query API; primitives are stale inside a callback, see the
   `refresh_primitives!` docstring)

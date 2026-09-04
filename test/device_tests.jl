@@ -33,10 +33,46 @@
     @test CL.fold_dplan(sax.folds[1], 1) isa DevicePlan
     @test CL.fold_fplan(sax.folds[1], -1) isa DevicePlan
 
-    # Unsupported combinations fail at setup, not mid-run.
-    @test_throws ErrorException Solver(n_global=(32, 12, 12),
-        L_domain=(1.0, 1.0, 1.0), bcs=(per, per, per), backend=bk,
-        patch_grid=(2, 1, 1))
+    # A patch layout builds on the backend too: every slab's plans are
+    # device plans.
+    sp = Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                bcs=(per, per, per), backend=bk, patch_grid=(2, 1, 1))
+    @test all(p.deriv_plans[1] isa DevicePlan for p in sp.patches)
+    @test all(p.filter_plans[1] isa DevicePlan for p in sp.patches)
+end
+
+@testset "device-resident patch layout: two slabs reproduce the CPU solver" begin
+    # The same-level interface records (ghost strips, shared-plane means)
+    # stage through the backend on device storage; under FORCE_KA on the KA
+    # CPU backend the staged copies are the host copies element for
+    # element, so the two-patch run is bitwise against the CPUBackend one.
+    # The viscous case keeps the interface rows live through the gradients.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    per = (PeriodicBC(), PeriodicBC())
+    function slabs(backend; deriv=lele_d1_6(), n_halo=4)
+        s = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=(per, per, per),
+                   art=ArtParams(enabled=false), transport=Transport(mu0=2e-2),
+                   patch_grid=(2, 1, 1), backend=backend, deriv=deriv, n_halo=n_halo)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) ->
+            Prim(u=(0.5 + 0.1 * sin(2x), 0, 0), p=1.0 + 0.05 * cos(x),
+                 rho=1.0 + 0.2 * sin(x)))
+        run!(s, states; tfinal=0.3)
+        return s, states
+    end
+    for kw in ((;), (deriv=lele_d1_10(), n_halo=5))
+        s1, q1 = slabs(CPUBackend(); kw...)
+        CL.FORCE_KA[] = true
+        CL.FORCE_DEVICE_EXCHANGE[] = true
+        s2, q2 = try
+            slabs(DeviceBackend(cpu_ka); kw...)
+        finally
+            CL.FORCE_KA[] = false
+            CL.FORCE_DEVICE_EXCHANGE[] = false
+        end
+        @test s1.step == s2.step
+        @test all(parent(q1[i]) == parent(q2[i]) for i in 1:2)
+    end
 end
 
 @testset "device-resident patch: full runs reproduce the CPU solver" begin
@@ -162,10 +198,12 @@ end
     # A refined solver on the DeviceBackend construction path: DevicePlans on
     # both levels, the level transfer's gathers and writes routed through the
     # backend interface, in all three coupling modes. Bitwise against the
-    # CPUBackend runs under FORCE_KA, as every device gate is. The
-    # device-only write branches (`_fine_shell_point!`, the covered-region
-    # and carry-over broadcasts, the staged gather pack) run on the real GPU
-    # through bench/device_solver.jl.
+    # CPUBackend runs under FORCE_KA and FORCE_DEVICE_EXCHANGE, as every
+    # device gate is: the second toggle takes the device-storage branches
+    # (the device chain on the LevelScratch, the shell and covered-region
+    # writes, the staged gather pack, the tag sweep) on host arrays, where
+    # they are the host arithmetic element for element; the same branches
+    # run on the real GPU through bench/device_solver.jl.
     cpu_ka = CL.KernelAbstractions.CPU()
     per = (PeriodicBC(), PeriodicBC())
     function wave(backend; kw...)
@@ -186,10 +224,12 @@ end
                (subcycle=true, regrid_interval=20, tag_buffer=8))
         s1, q1 = wave(CPUBackend(); kw...)
         CL.FORCE_KA[] = true
+        CL.FORCE_DEVICE_EXCHANGE[] = true
         s2, q2 = try
             wave(DeviceBackend(cpu_ka); kw...)
         finally
             CL.FORCE_KA[] = false
+            CL.FORCE_DEVICE_EXCHANGE[] = false
         end
         @test s1.step == s2.step
         @test all(parent(q1[i]) == parent(q2[i]) for i in 1:2)
@@ -199,6 +239,47 @@ end
         L_domain=(2π, 1.0, 1.0), bcs=(per, per, per),
         refine=BlockRegion((40, 0, 0), (16, 1, 1)),
         level_restriction=:filter, backend=DeviceBackend(cpu_ka))
+end
+
+@testset "device-resident tiled level: regridding Sod reproduces the CPU solver" begin
+    # A tiled, subcycled, regridding level on the device backend: the
+    # tile records stage through the backend, the transfer chain runs on
+    # the device scratch (the Hermite blend, the interpolation stages and
+    # the ring pack as kernels), a fresh tile fills from the device chain,
+    # and the tag sweep evaluates on the device and downloads the tag bytes.
+    # Bitwise against the CPUBackend under FORCE_KA, tiles and tag history
+    # included, with the artificial properties live.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    function tiled(backend; kw...)
+        s = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(wall2, per, per), cfl=0.2, subcycle=true,
+                   regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
+                   tile=8, backend=backend; kw...)
+        states = allocate_state(s)
+        initialize!(s, states, ic)
+        run!(s, states; tfinal=0.06, nmax=400)
+        return s, states
+    end
+    for kw in ((;), (tag_sensor_threshold=0.05,))
+        s1, q1 = tiled(CPUBackend(); kw...)
+        CL.FORCE_KA[] = true
+        CL.FORCE_DEVICE_EXCHANGE[] = true
+        s2, q2 = try
+            tiled(DeviceBackend(cpu_ka); kw...)
+        finally
+            CL.FORCE_KA[] = false
+            CL.FORCE_DEVICE_EXCHANGE[] = false
+        end
+        @test s1.step == s2.step
+        @test level_regions(s1, 1) == level_regions(s2, 1)
+        @test length(level_regions(s1, 1)) > 1
+        @test getfield(s1, :regrid).created == getfield(s2, :regrid).created
+        @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
+    end
 end
 
 @testset "launch policy toggle" begin
@@ -318,18 +399,20 @@ const POINTWISE_BODIES = (
     :_dilatation_point!, :_dilatation_switch_point!, :_extrapolation_point!,
     :_fine_shell_point!, :_fluxes_point!, :_fold_fill_point!,
     :_gate_beta_point!, :_gated_beta_point!, :_gcl_cotr_point!,
-    :_grad_corr_cyl_point!, :_grad_corr_sph_point!, :_internal_energy_point!,
+    :_grad_corr_cyl_point!, :_grad_corr_sph_point!, :_hermite_point!,
+    :_internal_energy_point!, :_interp_point!,
     :_kappa_point!, :_metric_src_cyl_point!, :_metric_src_sph_point!,
     :_mu_beta_point!, :_no_slip_wall_point!, :_nscbc_inflow_point!,
     :_nscbc_outflow_point!, :_pair_backward_local_point!,
     :_pair_backward_remote_point!, :_pair_forward_local_point!,
     :_pair_forward_remote_point!, :_pair_select_point!,
     :_primitives_ideal_point!, :_primitives_stiffened_point!, :_rate_point!,
-    :_rho_sensor_point!, :_ring_accum_point!, :_rk_point!,
+    :_rho_sensor_point!, :_ring_accum_point!, :_ring_pack_point!, :_rk_point!,
     :_scale_grad_point!, :_shell_ring_point!, :_slip_wall_point!,
     :_species_diffusivity_point!, :_strain_mag_point!, :_subtract_div_point!,
     :_subtract_jac_div_point!, :_tag_delta4_point!, :_tag_gradient_point!,
-    :_tag_sensor_point!, :_tag_vorticity_point!, :_zero_component_point!)
+    :_tag_rho_point!, :_tag_sensor_point!, :_tag_vorticity_point!,
+    :_zero_component_point!)
 
 @testset "pointwise bodies stay inside the splat budget" begin
     # `_point_kernel!` calls `body!(args..., i, j, k)`. Julia expands a

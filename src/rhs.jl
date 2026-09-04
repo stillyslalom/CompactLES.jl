@@ -349,9 +349,6 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     # 3·tile + 1 fine nodes; the four-node minimum gives tile ≥ 3.
     tile == 0 || tile >= 3 ||
         error("tile must be 0 (one patch per level) or at least 3 parent nodes")
-    tile == 0 || !(backend isa DeviceBackend) ||
-        error("tiled levels take the host backend; the same-level " *
-              "interface records are host loops")
     # max/mean is at least one, so a threshold below one is not a setting.
     rebalance == 0 || rebalance >= 1 ||
         error("rebalance must be 0 (off) or a max/mean threshold of at least 1")
@@ -420,15 +417,12 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         end
     end
     # --- Device residency -------------------------------------------------
-    # A DeviceBackend supports a decomposed patch, refined or not: halos,
-    # fold pairs, and the level transfer's gathers and writes stage through
-    # the backend. The same-level interface records are still host loops, so
-    # a patch_grid on device stays barred, as does the `:filter` restriction
-    # (a whole-patch host line solve).
+    # A DeviceBackend supports a decomposed patch, patched, refined or
+    # tiled: halos, fold pairs, the interface records and the level
+    # transfer's gathers and writes stage through the backend, and the
+    # transfer chain runs on it. The `:filter` restriction (a whole-patch
+    # host line solve) stays barred.
     if backend isa DeviceBackend
-        npatch == 1 ||
-            error("a DeviceBackend takes a single patch today; the " *
-                  "interface-record staging has not been converted")
         refine === nothing || level_restriction === :inject ||
             error("level_restriction = :filter is host-only; use :inject " *
                   "on a DeviceBackend")
@@ -583,7 +577,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   f(), f(), f(),
                   [f() for _ in 1:n_species],
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(), f(),
-                  ws_root, _covered_mask(decomp))
+                  ws_root, _covered_mask(decomp),
+                  _empty_level_scratch(empty_field(backend, T)))
     if isempty(refines)
         patches = [patch]
         solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
@@ -813,6 +808,8 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     # Refinement takes the `:delta4` detector (rejected otherwise at setup),
     # so no refined patch carries the `:d8` ringing buffer.
     ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons, false)
+    scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
+                             MPI.Comm_size(comm), MPI.Comm_rank(comm))
     return Patch(id, level, region_f, comm, decomp_f, hf,
                  faces, bcs_f, (nothing, nothing, nothing),
                  dplans_f, vplans_f, fplans_f, splans_f, nothing,
@@ -822,7 +819,7 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                  g(), g(), g(),
                  [g() for _ in 1:n_species],
                  g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
-                 ws, _covered_mask(decomp_f))
+                 ws, _covered_mask(decomp_f), scratch)
 end
 
 _fine_bcs(active_g::NTuple{3,Bool}, faces::NTuple{3,NTuple{2,Int}}) =
@@ -880,7 +877,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
         dcp = Decomp{T}(region.extent, pper; n_halo=n_halo, comm=pcomm)
         pbcs = ntuple(d -> (faces[d][1] == 0 ? bcs[d][1] : InterfaceBC(faces[d][1]),
                             faces[d][2] == 0 ? bcs[d][2] : InterfaceBC(faces[d][2])), 3)
-        mk(sch, d; kw...) = plan_direction(dcp, sch, d, h[d]; kw...)
+        mk(sch, d; kw...) =
+            backend_plan(backend, plan_direction(dcp, sch, d, h[d]; kw...))
         locl(rows, d) = faces[d][1] == 0 ? nothing : rows
         hicl(rows, d) = faces[d][2] == 0 ? nothing : rows
         dplans = ntuple(d -> dcp.active[d] ?
@@ -900,7 +898,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
         # under `smoother = :compact`.
         splans = ntuple(d -> dcp.active[d] ? mk(smoo, d) : nothing, 3)
         g() = field(backend, dcp)
-        empty3 = zeros(T, 0, 0, 0)
+        empty3 = empty_field(backend, T)
         # A patched run takes the `:delta4` detector, rejected otherwise at
         # setup, so no patch carries the `:d8` ringing buffer.
         ws = rhs_workspace!(ws_pool, backend, dcp, n_species, n_cons, false)
@@ -912,7 +910,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
               g(), g(), g(),
               [g() for _ in 1:n_species],
               g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
-              ws, _covered_mask(dcp))
+              ws, _covered_mask(dcp), _empty_level_scratch(empty3))
     end
     ghost_sends, ghost_recvs, plane_pairs = build_interface_records(
         T, world, regions, faces_all, my_pids, [p.decomp for p in patches], n_cons)

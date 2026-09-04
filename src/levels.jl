@@ -862,19 +862,236 @@ function _refine_chain(::Type{T}, ext0::NTuple{3,Int}, active::NTuple{3,Bool},
                        dims_to_refine::Vector{Int}, n_halo::Int,
                        interp_order::Int) where {T}
     pper = ntuple(d -> !active[d], 3)
-    exts = [ext0]
-    for dk in dims_to_refine
-        prev = exts[end]
-        push!(exts, ntuple(d -> d == dk ? 3 * prev[d] - 2 : prev[d], 3))
-    end
+    exts = _chain_extents(ext0, dims_to_refine)
     decomps = [Decomp{T}(e, pper; dims=(1, 1, 1), n_halo=n_halo,
                          comm=MPI.COMM_SELF) for e in exts]
     plans = [plan_transfer(decomps[k+1], decomps[k], dims_to_refine[k], T;
                            interp_order=interp_order)
              for k in eachindex(dims_to_refine)]
-    stages = [zeros(T, ntuple(d -> e[d] + 2 * (active[d] ? n_halo : 0), 3))
-              for e in exts]
+    stages = [zeros(T, _padded_extent(e, active, n_halo)) for e in exts]
     return decomps, plans, stages
+end
+
+# The unpadded extents of a chain's stages 0 .. K from the stage-0 extent,
+# refining one dimension per stage, and a stage's padded array size.
+function _chain_extents(ext0::NTuple{3,Int}, dims_to_refine::Vector{Int})
+    exts = [ext0]
+    for dk in dims_to_refine
+        prev = exts[end]
+        push!(exts, ntuple(d -> d == dk ? 3 * prev[d] - 2 : prev[d], 3))
+    end
+    return exts
+end
+
+_padded_extent(e::NTuple{3,Int}, active::NTuple{3,Bool}, n_halo::Int) =
+    ntuple(d -> e[d] + 2 * (active[d] ? n_halo : 0), 3)
+
+# --- Device scratch of a level transfer ---------------------------------------
+#
+# A device-resident refined patch builds its shell on the backend: the
+# gathered coarse box uploads once per imposition (or, under subcycling, the
+# four Hermite boxes once per parent step and the blend runs as a kernel),
+# the tensor-product Lagrange chain runs as one kernel per stage over this
+# rank's components, and the shell ring packs on the device ahead of its
+# Allgatherv. The scratch below is the storage that takes: it lives on the
+# fine `Patch` (typed by the patch's array type, so `LevelTransfer`, `Level`
+# and `Solver` keep their types) and is empty on the host backend, whose
+# chain runs on the transfer's own host stages.
+
+"""
+    LevelScratch
+
+Device storage of one refined patch's level transfer: the four Hermite
+boxes (all components, uploaded by `save_level_box!`) and the interpolation
+chain's stages 0 .. K over this rank's own components (the
+component-distributed chain of `_impose_shell!`). Empty on the host
+backend and on a patch without a parent.
+"""
+struct LevelScratch{A4<:AbstractArray}
+    Q0::A4
+    dQ0::A4
+    Q1::A4
+    dQ1::A4
+    stages::Vector{A4}
+end
+
+# The empty scratch of a host patch or a root patch, typed by the backend's
+# array type through a field of it.
+function _empty_level_scratch(f::AbstractArray{T,3}) where {T}
+    e() = similar(f, T, 0, 0, 0, 0)
+    return LevelScratch(e(), e(), e(), e(), typeof(e())[])
+end
+
+# The scratch of a refined patch over `region` (parent node space) on the
+# backend `f` belongs to: empty on host storage. `np` and `me` are the
+# tile's communicator size and this rank's position, which fix the
+# components this rank's chain runs (`(me+1):np:n_cons`).
+function _level_scratch(f::AbstractArray{T,3}, region::BlockRegion,
+                        active::NTuple{3,Bool}, n_halo::Int, n_cons::Int,
+                        np::Int, me::Int) where {T}
+    _device_path(f) || return _empty_level_scratch(f)
+    dims = [d for d in 1:3 if active[d]]
+    boxext = ntuple(d -> active[d] ? region.extent[d] + 2 * LEVEL_BUFFER :
+                                     region.extent[d], 3)
+    exts = _chain_extents(boxext, dims)
+    n_owned = length((me+1):np:n_cons)
+    box = _padded_extent(exts[1], active, n_halo)
+    stages = [similar(f, T, _padded_extent(e, active, n_halo)..., n_owned)
+              for e in exts]
+    return LevelScratch(similar(f, T, box..., n_cons), similar(f, T, box..., n_cons),
+                        similar(f, T, box..., n_cons), similar(f, T, box..., n_cons),
+                        stages)
+end
+
+# Stage-0 sources of an imposition: the gathered box as it is, or the cubic
+# Hermite blend of the stored boxes at fraction `θ` of a parent step `dt`.
+struct BoxFill end
+struct HermiteFill{T}
+    θ::T
+    dt::T
+end
+
+_fill_stage0!(::BoxFill, dst, lt::LevelTransfer, c::Int) =
+    (dst .= view(lt.box_gather, :, :, :, c); dst)
+_fill_stage0!(hf::HermiteFill, dst, lt::LevelTransfer, c::Int) =
+    _hermite_box!(dst, lt, c, hf.θ, hf.dt)
+
+# Device forms over this rank's components `owned`: the box's components
+# upload in one contiguous copy; the Hermite blend reads the uploaded boxes.
+function _fill_stage0_dev!(::BoxFill, stage0, scratch::LevelScratch,
+                           lt::LevelTransfer, owned)
+    h = Array(view(lt.box_gather, :, :, :, owned))
+    if stage0 isa SubArray
+        # A partial slice of the stage (the regrid fill's last chunk):
+        # upload contiguously, then assign into the view.
+        d = similar(parent(stage0), size(h))
+        copyto!(d, h)
+        stage0 .= d
+    else
+        copyto!(stage0, h)
+    end
+    return stage0
+end
+
+function _fill_stage0_dev!(hf::HermiteFill, stage0, scratch::LevelScratch,
+                           lt::LevelTransfer, owned)
+    T = eltype(stage0)
+    θT = T(hf.θ)
+    dtT = T(hf.dt)
+    oneT = one(θT)
+    h = ((oneT + T(2) * θT) * (oneT - θT)^2, θT * (oneT - θT)^2,
+         θT^2 * (T(3) - T(2) * θT), θT^2 * (θT - oneT))
+    box = lt.pdecomps[1]
+    pad = box.n_halo_d
+    nb = box.n_local
+    n_owned = length(owned)
+    pointwise!(_hermite_point!, stage0, nb[1], nb[2], nb[3] * n_owned,
+               stage0, scratch.Q0, scratch.dQ0, scratch.Q1, scratch.dQ1,
+               h, dtT, pad, nb[3], first(owned), step(owned))
+    return stage0
+end
+
+# One node of one owned component of the Hermite blend; `kb` folds the
+# third index and the component slot. The arithmetic is `_hermite_box!`'s.
+@inline function _hermite_point!(dst, Q0, dQ0, Q1, dQ1, h, dtT, pad, n3,
+                                 c1, cstep, i, j, kb)
+    b, kk = divrem(kb - 1, n3)
+    c = c1 + b * cstep
+    @inbounds begin
+        I = CartesianIndex(i + pad[1], j + pad[2], kk + 1 + pad[3])
+        dst[I, b + 1] = h[1] * Q0[I, c] + h[3] * Q1[I, c] +
+                        dtT * (h[2] * dQ0[I, c] + h[4] * dQ1[I, c])
+    end
+    return nothing
+end
+
+# The device interpolation of one chain stage over `n_owned` components:
+# the `_inject_interpolate!` arithmetic of transfer.jl as a per-point body,
+# one point per coarse node, its injection and its interval's two sub-nodes.
+function _interpolate_dev!(tmp, plan::TransferPlan{T}, coarse, n_owned::Int) where {T}
+    D = plan.dim
+    padf = plan.fine.n_halo_d
+    padc = plan.coarse.n_halo_d
+    nc = plan.coarse.n_local[D]
+    periodic = plan.coarse.periodic[D]
+    p = plan.interp_order
+    nintervals = periodic ? nc : nc - 1
+    o1, o2 = D == 1 ? (2, 3) : D == 2 ? (1, 3) : (1, 2)
+    n1 = plan.coarse.n_local[o1]
+    n2 = plan.coarse.n_local[o2]
+    W = (plan.weights...,)
+    pointwise!(_interp_point!, tmp, nc, n1, n2 * n_owned,
+               tmp, coarse, W, p, nc, periodic, nintervals, padf, padc, n2, D)
+    return tmp
+end
+
+# Line coordinate `i` and orthogonal coordinates `j < k` along dimension
+# `D`, as `_gidx` (operators.jl) maps them, with `D` a plain integer: a
+# `Val` would be a type argument through the launcher's Vararg.
+@inline function _gidx_dim(D::Int, i, j, k, pad)
+    D == 1 && return CartesianIndex(i + pad[1], j + pad[2], k + pad[3])
+    D == 2 && return CartesianIndex(j + pad[1], i + pad[2], k + pad[3])
+    return CartesianIndex(j + pad[1], k + pad[2], i + pad[3])
+end
+
+@inline function _interp_point!(tmp, coarse, W, p, nc, periodic, nintervals,
+                                padf, padc, n2, D, m, j, kb)
+    b, kk = divrem(kb - 1, n2)
+    k = kk + 1
+    b += 1
+    half = p ÷ 2
+    @inbounds begin
+        tmp[_gidx_dim(D, 3m - 2, j, k, padf), b] = coarse[_gidx_dim(D, m, j, k, padc), b]
+        if m <= nintervals
+            js = periodic ? m - (half - 1) : clamp(m - (half - 1), 1, nc - p + 1)
+            r = m - js
+            for sub in 1:2
+                acc = zero(eltype(tmp))
+                for jj in 1:p
+                    # W[jj, sub, r + 1] of the (p, 2, p − 1) table, column-major.
+                    acc += W[jj + p * ((sub - 1) + 2r)] *
+                           coarse[_gidx_dim(D, js + jj - 1, j, k, padc), b]
+                end
+                tmp[_gidx_dim(D, 3m - 2 + sub, j, k, padf), b] = acc
+            end
+        end
+    end
+    return nothing
+end
+
+# One ring entry of one owned component: the slab holding ring offset `at`
+# (the slabs' offset ranges partition the ring, so exactly one matches)
+# gives the shell node, read from the chain's final stage.
+@inline function _ring_pack_point!(send, stage, table, shift, padb, ringlen,
+                                   at, b, _k)
+    @inbounds for (lo, hi, base) in table
+        n1 = hi[1] - lo[1] + 1
+        n2 = hi[2] - lo[2] + 1
+        n3 = hi[3] - lo[3] + 1
+        if base < at <= base + n1 * n2 * n3
+            r = at - base - 1
+            g1 = lo[1] + r % n1
+            r ÷= n1
+            g2 = lo[2] + r % n2
+            g3 = lo[3] + r ÷ n2
+            send[(b - 1) * ringlen + at] =
+                stage[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
+                      g3 + shift[3] + padb[3], b]
+        end
+    end
+    return nothing
+end
+
+# Upload the just-gathered Hermite endpoint boxes to the fine patch's
+# scratch; a host patch, or a rank holding no piece of the fine patch, has
+# nothing to upload.
+function _upload_hermite!(lt::LevelTransfer, patches, at_end::Bool)
+    lt.fine_index == 0 && return nothing
+    scratch = patches[lt.fine_index].level_scratch
+    isempty(scratch.stages) && return nothing
+    copyto!(at_end ? scratch.Q1 : scratch.Q0, at_end ? lt.box_Q1 : lt.box_Q0)
+    copyto!(at_end ? scratch.dQ1 : scratch.dQ0, at_end ? lt.box_dQ1 : lt.box_dQ0)
+    return nothing
 end
 
 # Free the chain decompositions a discarded transfer owns. Both chains are
@@ -1075,7 +1292,7 @@ function gather_region!(dst::AbstractArray{T,4},
         # Nothing of this rank's own is wanted, `Q` may be absent, and the
         # packs below would read it: the Allgatherv still runs, with an empty
         # contribution.
-    elseif _cpu_storage(Q)
+    elseif !_device_path(Q)
         idx = 1
         @inbounds for c in 1:n_cons, k in mine[3], j in mine[2], i in mine[1]
             sendbuf[idx] = Q[i - src_off[1] + pad[1],
@@ -1291,7 +1508,7 @@ function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
     shift = ntuple(d -> df.active[d] ? 3 * LEVEL_BUFFER : 0, 3)
     active = (df.active[1], df.active[2], df.active[3])
     imposed = lt.imposed
-    if _cpu_storage(fine_Q)
+    if !_device_path(fine_Q)
         r = ntuple(d -> (1 - padf[d]):(nf[d] + padf[d]), 3)
         @inbounds for k in r[3], j in r[2], i in r[1]
             g1, g2, g3 = i + off[1], j + off[2], k + off[3]
@@ -1302,12 +1519,15 @@ function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
         end
         return fine_Q
     end
-    # Device patch: the interpolated box (a host chain product) uploads once
-    # per component and a kernel imposes the shell. Batching the components
-    # into one upload per stage would cut that traffic; this is the
-    # correctness form.
-    dev_box = similar(parent(fine_Q), size(box_field))
-    copyto!(dev_box, box_field)
+    # Device patch: a host box (the chain product of a host-only path)
+    # uploads once; the device chain's stage is read in place.
+    dev_box = if _cpu_storage(box_field)
+        d = similar(parent(fine_Q), size(box_field))
+        copyto!(d, box_field)
+        d
+    else
+        box_field
+    end
     pointwise!(_fine_shell_point!, fine_Q,
                nf[1] + 2 * padf[1], nf[2] + 2 * padf[2], nf[3] + 2 * padf[3],
                fine_Q, dev_box, c, off, padf, padb, shift, Nf,
@@ -1400,10 +1620,12 @@ end
     error("fine shell node ($g1, $g2, $g3) lies in no ring slab; the slab " *
           "set and the shell test disagree")
 
-# Shared driver: run the chain for this rank's components with `fill0!(dst, c)`
-# supplying stage 0, replicate the shell rings, and impose each rank's own
-# shell slots. Collective over the fine communicator.
-function _impose_shell!(solver, states, lt::LevelTransfer, fill0!::F) where {F}
+# Shared driver: run the chain for this rank's components with `fill`
+# (a `BoxFill` or a `HermiteFill`) supplying stage 0, replicate the shell
+# rings, and impose each rank's own shell slots. Collective over the fine
+# communicator. A device patch runs the chain on its `LevelScratch`; the
+# host patch on the transfer's host stages.
+function _impose_shell!(solver, states, lt::LevelTransfer, fill)
     patches = getfield(solver, :patches)
     fine = patches[lt.fine_index]
     Qf = states[lt.fine_index]
@@ -1423,29 +1645,51 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill0!::F) where {F}
     # This rank's components, as a range, not a filtered vector: the
     # ascending order is the one the ring unpack below assumes.
     owned = (me+1):np:n_cons
-    sendbuf = _fit!(shell.buffers.send, ringlen * length(owned))
-    pos = 0
-    for c in owned
-        fill0!(lt.pstage[1], c)
+    n_owned = length(owned)
+    sendbuf = _fit!(shell.buffers.send, ringlen * n_owned)
+    if !_device_path(Qf)
+        pos = 0
+        for c in owned
+            _fill_stage0!(fill, lt.pstage[1], lt, c)
+            for k in 1:K
+                # Interpolation, not deconvolution: the coarse solution is
+                # point samples, and `prolong!`'s deconvolution is exact only
+                # on data a `restrict!` produced (see the `interpolate!`
+                # docstring).
+                interpolate!(lt.pstage[k+1], lt.pplans[k], lt.pstage[k])
+            end
+            bf = lt.pstage[K+1]
+            @inbounds for s in slabs, g3 in s[3], g2 in s[2], g1 in s[1]
+                pos += 1
+                sendbuf[pos] = bf[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
+                                  g3 + shift[3] + padb[3]]
+            end
+        end
+        if np == 1
+            # Every component is this rank's, in order, so the send buffer
+            # holds the ring column by column.
+            copyto!(ring, 1, sendbuf, 1, ringlen * n_cons)
+            _write_shell_from_ring!(Qf, ring, table, lt, fdcp, n_cons)
+            return states
+        end
+    else
+        scratch = fine.level_scratch
+        stages = scratch.stages
+        _fill_stage0_dev!(fill, stages[1], scratch, lt, owned)
         for k in 1:K
-            # Interpolation, not deconvolution: the coarse solution is point
-            # samples, and `prolong!`'s deconvolution is exact only on data a
-            # `restrict!` produced (see the `interpolate!` docstring).
-            interpolate!(lt.pstage[k+1], lt.pplans[k], lt.pstage[k])
+            _interpolate_dev!(stages[k+1], lt.pplans[k], stages[k], n_owned)
         end
-        bf = lt.pstage[K+1]
-        @inbounds for s in slabs, g3 in s[3], g2 in s[2], g1 in s[1]
-            pos += 1
-            sendbuf[pos] = bf[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
-                              g3 + shift[3] + padb[3]]
+        dsend = _device_send_stage(parent(Qf), ringlen * n_owned)
+        pointwise!(_ring_pack_point!, parent(Qf), ringlen, n_owned, 1,
+                   dsend, stages[K+1], (table...,), shift, padb, ringlen)
+        if np == 1
+            # The packed stage is the ring itself, column by column, and
+            # stays on the device for the shell write.
+            _write_shell_from_ring!(Qf, reshape(dsend, ringlen, n_cons), table,
+                                    lt, fdcp, n_cons)
+            return states
         end
-    end
-    if np == 1
-        # Every component is this rank's, in order, so the send buffer
-        # holds the ring column by column.
-        copyto!(ring, 1, sendbuf, 1, ringlen * n_cons)
-        _write_shell_from_ring!(Qf, ring, table, lt, fdcp, n_cons)
-        return states
+        _tracked_copy!(sendbuf, 1, dsend, 1, ringlen * n_owned)
     end
     counts = shell.counts
     recv = _fit!(shell.buffers.recv, sum(counts))
@@ -1467,7 +1711,7 @@ function _write_shell_from_ring!(Qf, ring, table, lt::LevelTransfer,
     Nf = fine_extent(lt.region, ntuple(d -> df.active[d], 3))
     active = (df.active[1], df.active[2], df.active[3])
     imposed = lt.imposed
-    if _cpu_storage(Qf)
+    if !_device_path(Qf)
         r = ntuple(d -> (1 - padf[d]):(nf[d] + padf[d]), 3)
         @inbounds for k in r[3], j in r[2], i in r[1]
             g1, g2, g3 = i + off[1], j + off[2], k + off[3]
@@ -1480,10 +1724,16 @@ function _write_shell_from_ring!(Qf, ring, table, lt::LevelTransfer,
         end
         return Qf
     end
-    # Device patch: the ring (thin) uploads and one kernel writes every
-    # component of every shell slot, far less traffic than the whole box.
-    dev_ring = similar(parent(Qf), size(ring))
-    copyto!(dev_ring, ring)
+    # Device patch: the ring (thin) uploads, unless the chain packed it on
+    # the device already, and one kernel writes every component of every
+    # shell slot, far less traffic than the whole box.
+    dev_ring = if _cpu_storage(ring)
+        r = similar(parent(Qf), size(ring))
+        copyto!(r, ring)
+        r
+    else
+        ring
+    end
     pointwise!(_shell_ring_point!, Qf,
                nf[1] + 2 * padf[1], nf[2] + 2 * padf[2], nf[3] + 2 * padf[3],
                Qf, dev_ring, (table...,), off, padf, Nf, active, imposed, n_cons)
@@ -1537,8 +1787,7 @@ function prolong_level_ghosts!(solver, states)
             _wait!(solver, t0)
             # The imposition is collective over the tile's own communicator,
             # which its holders alone enter.
-            lt.fine_index == 0 || _impose_shell!(solver, states, lt,
-                (dst, c) -> dst .= view(lt.box_gather, :, :, :, c))
+            lt.fine_index == 0 || _impose_shell!(solver, states, lt, BoxFill())
             # The imposed shell replaces the halo values the previous exchange
             # left wherever the two overlap (the edge-owning ranks' outer
             # halos); interior rank-boundary halos keep their exchanged values,
@@ -1593,7 +1842,7 @@ function _write_covered_patch!(coarse_Q, src4, win, off, parent_patch::Patch)
     end
     any(isempty, r) && return coarse_Q
     sh = ntuple(d -> off[d] - poff[d] - dp.offset[d] + padc[d], 3)
-    if _cpu_storage(coarse_Q)
+    if !_device_path(coarse_Q)
         @inbounds for c in 1:size(src4, 4), k in r[3], j in r[2], i in r[1]
             coarse_Q[i + sh[1], j + sh[2], k + sh[3], c] = src4[i, j, k, c]
         end
@@ -1740,6 +1989,7 @@ function save_level_box!(lt::LevelTransfer, patches, states, dQs, at_end::Bool)
     boxdQ = at_end ? lt.box_dQ1 : lt.box_dQ0
     _gather_box!(boxQ, lt, states, patches)
     _gather_box!(boxdQ, lt, dQs, patches)
+    _upload_hermite!(lt, patches, at_end)
     return lt
 end
 
@@ -1861,7 +2111,6 @@ exactly the parent's `t^n` state and the imposition reduces to the
 unsubcycled one.
 """
 function hermite_level_shell!(solver, states, lt::LevelTransfer, θ, dt)
-    _impose_shell!(solver, states, lt,
-                   (dst, c) -> _hermite_box!(dst, lt, c, θ, dt))
+    _impose_shell!(solver, states, lt, HermiteFill(θ, dt))
     return states
 end

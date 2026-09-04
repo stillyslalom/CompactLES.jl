@@ -48,16 +48,23 @@ end
 # --- Device staging ---------------------------------------------------------
 
 """
-Test toggle: `true` routes the halo and fold-pair exchanges of ordinary
-`Array` fields through the device staging path (pack buffers, offset copies,
-and all), which on host storage performs the identical element copies. The
-MPI suite flips this to pin the staging path bitwise on machines without a
-GPU; `FORCE_KA` likewise pins the kernel path. The default `false` keeps
-host fields on the direct slab copies.
+Test toggle: `true` routes ordinary `Array` fields through every
+device-storage path: the halo and fold-pair exchange staging (pack buffers,
+offset copies, and all), the interface-record staging of a patch layout,
+the level transfer's device chain on the fine patch's `LevelScratch`, the
+regrid's block copies and the device tag sweep. On host storage each of
+those performs the identical element copies and the identical per-point
+arithmetic, so the suites flip this, with `FORCE_KA` for the kernel path,
+to pin the device paths bitwise on machines without a GPU. The default
+`false` keeps host fields on the direct forms.
 """
 const FORCE_DEVICE_EXCHANGE = Ref(false)
 
 @inline _staged_exchange(f) = !_cpu_storage(f) || FORCE_DEVICE_EXCHANGE[]
+
+# The branch test of every device-storage path outside the halo exchange:
+# device storage, or host storage under the toggle.
+@inline _device_path(f) = !_cpu_storage(f) || FORCE_DEVICE_EXCHANGE[]
 
 """
     device_mpi_direct(backend) -> Bool
