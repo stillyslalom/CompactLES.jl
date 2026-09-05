@@ -106,13 +106,18 @@ end
         @test [species.name for species in mix.sp] == ["He", "CO2"]
         @test mix.Rk ≈ explicit.Rk
         @test mix.cpk ≈ explicit.cpk
-        @test IdealMixture(Float32, ("He", "CO2")).Rk isa Vector{Float32}
+        tuple_names = ("He", SubString("CO2", 1, 3))
+        @test [species.name for species in IdealMixture(tuple_names).sp] ==
+              ["He", "CO2"]
+        @test IdealMixture(Float32, tuple_names).Rk isa Vector{Float32}
 
         nasa = Nasa9Mixture(["He", "CO2"])
         nasa_explicit = Nasa9Mixture(read_nasa9(["He", "CO2"]))
         @test [species.name for species in nasa.sp] == ["He", "CO2"]
         @test nasa.Rk ≈ nasa_explicit.Rk
-        @test Nasa9Mixture(Float32, ("He", "CO2")).Rk isa Vector{Float32}
+        @test [species.name for species in Nasa9Mixture(tuple_names).sp] ==
+              ["He", "CO2"]
+        @test Nasa9Mixture(Float32, tuple_names).Rk isa Vector{Float32}
     end
 end
 

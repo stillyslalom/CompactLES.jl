@@ -278,9 +278,9 @@ function IdealMixture(names::AbstractVector{<:AbstractString}; T_ref=298.15,
                          for sp in nasa_species])
 end
 
-IdealMixture(names::Tuple{Vararg{<:AbstractString}}; kwargs...) =
+IdealMixture(names::Tuple{Vararg{AbstractString}}; kwargs...) =
     IdealMixture(collect(names); kwargs...)
-IdealMixture(::Type{T}, names::Tuple{Vararg{<:AbstractString}}; kwargs...) where
+IdealMixture(::Type{T}, names::Tuple{Vararg{AbstractString}}; kwargs...) where
     {T<:AbstractFloat} = IdealMixture(T, collect(names); kwargs...)
 function IdealMixture(::Type{T}, names::AbstractVector{<:AbstractString};
                       T_ref=298.15, path=nothing) where {T<:AbstractFloat}
@@ -746,9 +746,9 @@ function Nasa9Mixture(names::AbstractVector{<:AbstractString}; path=nothing,
     return _nasa9_mixture(Float64, species; T_guess=T_guess)
 end
 
-Nasa9Mixture(names::Tuple{Vararg{<:AbstractString}}; kwargs...) =
+Nasa9Mixture(names::Tuple{Vararg{AbstractString}}; kwargs...) =
     Nasa9Mixture(collect(names); kwargs...)
-Nasa9Mixture(::Type{T}, names::Tuple{Vararg{<:AbstractString}}; kwargs...) where
+Nasa9Mixture(::Type{T}, names::Tuple{Vararg{AbstractString}}; kwargs...) where
     {T<:AbstractFloat} = Nasa9Mixture(T, collect(names); kwargs...)
 function Nasa9Mixture(::Type{T}, names::AbstractVector{<:AbstractString};
                       path=nothing, reference=:sensible, T_ref=298.15,
