@@ -19,6 +19,7 @@ ArtParams(C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.01)
 4. [C_mu — the shear viscosity](#c_mu--the-shear-viscosity)
 5. [C_D — the species diffusivity](#c_d--the-species-diffusivity)
 5a. [C_Y — the mass-fraction bound](#c_y--the-mass-fraction-bound)
+5b. [Miranda's set as a package](#mirandas-set-as-a-package)
 6. [The filter dissipates per application, not per unit time](#the-filter-dissipates-per-application-not-per-unit-time)
 7. [The β\* sensor — strain, gated, or dilatation](#the-beta-sensor--strain-or-dilatation)
 8. [CFL, which dominates all four](#cfl-which-dominates-all-four)
@@ -564,6 +565,48 @@ velocity already gives what Brill et al. obtain from a shared diffusivity,
 and the per-species form stays.
 
 **Recommendation:** `C_Y = 100`, the default.
+
+## Miranda's set as a package
+
+Miranda's current artificial-property set (Brill, Olson & Bokman 2025,
+eqs. 22–27) is the eighth-derivative detector, the max over directions,
+μ\* from the velocity components and β\* from the switched dilatation, at
+constants an order of magnitude below Cook 2007's in a Δ²/Δt scaling that
+differs from the cΔ one here by about 1/CFL. Each choice exists as an
+`ArtParams` option and each has been measured alone above; `bench/artcal.jl
+miranda` runs the combination through the battery. `sensors` is
+`detector = :d8, reduction = :max, mu_sensor = :velocity, beta_sensor =
+:dilatation`; `x1` is C_mu = 2.5e-4, C_beta = 0.175, C_kappa = 2.5e-3,
+C_D = 5e-4, their values in this scaling; `x4` is four times that;
+C_Y = 100 throughout.
+
+```
+config             | Noh1 plat   def | Noh2 plat   def | Noh3 plat   def | Lax L1  | Shu tr | WC peak | mix wid | SI minY  wid
+default            |    0.9993   +64% |    0.9367   +56% |    0.9751   +27% | 5.0e-03 | 1.6180 |  6.6050 | 0.01820 | -0.0135    4
+sensors only       |    0.9997   +51% |    0.9477   +56% |    0.9929   +36% | 4.7e-03 | 1.6289 |  6.4269 | 0.01787 | -0.0176    4
+sensors, x1        |    0.9996   +22% |    0.9650   +39% |       NaN  +NaN% | 5.1e-03 | 1.6490 |  6.3467 | 0.01787 | -0.0203    4
+sensors, x4        |    0.9997   +48% |    0.9518   +52% |    1.0006   +37% | 4.7e-03 | 1.6321 |  6.3836 | 0.01787 | -0.0184    4
+sensors, x1, Cb=1  |    0.9997   +52% |    0.9472   +57% |    0.9923   +36% | 4.7e-03 | 1.6312 |  6.4693 | 0.01787 | -0.0178    4
+```
+
+The combination survives both converging geometries at the default CFL,
+which `:dilatation` alone did not; whether `:d8`'s own fold closure or the
+max reduction is responsible is not separated here, and the CFL ladder was
+not run. The one loss, spherical Noh at `x1`, is C_beta = 0.175 and not
+the dilatation switch: C_beta = 1.0 with the other three constants at `x1`
+is indistinguishable from `sensors only` in every column, so cutting
+C_mu, C_kappa and C_D to an eighth of their defaults moves nothing at this
+battery and C_beta alone governs it, consistent with the 1.0–4.0 window
+recorded for `:d8` above. Against the default, the sensors buy the Noh
+plateaus (ν = 3 from 0.9751 to 0.9929) and Lax, and cost 2.7% of the
+Woodward peak, 0.7% of the Shu–Osher train, and 30% on the shocked
+interface's excursion (−0.0135 to −0.0176), which worsens on every Miranda
+row. Mix width is 0.01787 on all four rows across a 20× range of C_D. The
+strongest refit candidate is `x4`: the only row with ν = 3 within 0.06%,
+at the second-best wall heating, for 3.4% of the Woodward peak; a C_beta
+ladder in 0.2–0.7 under these sensors, with the Noh CFL ladder, would
+locate the spherical bound. None of it is the default; the package's four
+constants are calibrated for Cook's sensors and stay.
 
 ## The filter dissipates per application, not per unit time
 

@@ -4,7 +4,7 @@
 #   julia --project=. -t auto bench/artcal.jl beta cfl   # named sweeps only
 #
 # Sweeps available: mu beta kappa D Y cfl resolution sensor smoother detector
-# field response
+# field response miranda
 #
 # Scratch tooling, like everything else in bench/: it prints tables, asserts
 # nothing, and is not part of the gate. The conclusions drawn from a run of it
@@ -42,7 +42,7 @@ include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
 const DEFAULTS = ArtParams()
 const ALL = ["mu", "beta", "kappa", "D", "Y", "cfl", "resolution", "sensor",
-             "smoother", "detector", "field", "response"]
+             "smoother", "detector", "field", "response", "miranda"]
 # Sweep names are bare words; `key=value` sets the background configuration that
 # every sweep then runs against. Refitting a constant under a changed smoother
 # is exactly `artcal.jl kappa smoother=gaussian`, and keeping the two forms in
@@ -449,6 +449,44 @@ if want("response")
     end
     println("  (k/pi = 1 is the two-point wave; a centered derivative annihilates it,")
     println("   so every sensor built from |S| or from div u reports exactly zero there)")
+end
+
+# The reference implementation's current set (Brill, Olson & Bokman 2025, eqs.
+# 22–27): the eighth-derivative detector, the directional maximum, μ* from the
+# velocity components, β* from the dilatation with the compression switch, and
+# constants an order of magnitude or more below Cook 2007's (C_mu = 1e-4,
+# C_beta = 7e-2, C_kappa = 1e-3, C_D = 2e-4). Theirs scale with Δ²/Δt where this
+# package scales with cΔ, a ratio of roughly 1/CFL ≈ 2.5, so the comparable
+# values here are 2.5× theirs. Each option is measured alone in the sweeps
+# above; this is the combination, at the package's constants, at the rescaled
+# ones, at a midpoint, and at the rescaled ones with C_beta held at 1.0, the
+# lower edge of the `:d8` window, since `:dilatation` loses the converging Noh
+# geometries at the fold and the question is whether the constant alone
+# recovers them.
+if want("miranda")
+    println("\n=== Miranda's set (sensors, reduction, and rescaled constants) ===")
+    println("config             | Noh1 plat   def | Noh2 plat   def | Noh3 plat   def" *
+            " | Lax L1  | Shu tr | WC peak | mix wid | SI minY  wid")
+    hr()
+    sensors = (detector=:d8, reduction=:max, mu_sensor=:velocity,
+               beta_sensor=:dilatation)
+    scaled = (C_mu=2.5e-4, C_beta=0.175, C_kappa=2.5e-3, C_D=5e-4)
+    rows = (("default", art()),
+            ("sensors only", art(; sensors...)),
+            ("sensors, x1", art(; sensors..., scaled...)),
+            ("sensors, x4", art(; sensors..., C_mu=1e-3, C_beta=0.7,
+                                C_kappa=1e-2, C_D=2e-3)),
+            ("sensors, x1, Cb=1", art(; sensors..., scaled..., C_beta=1.0)))
+    for (name, a) in rows
+        n1 = m_noh(1; art=a); n2 = m_noh(2; art=a); n3 = m_noh(3; art=a)
+        lx = m_lax(art=a);    sh = m_shu(art=a);    wc = m_wc(art=a)
+        mx = m_mix(art=a);    si = m_si(art=a, delta=2)
+        @printf("%-18s | %9.4f %+5.0f%% | %9.4f %+5.0f%% | %9.4f %+5.0f%%",
+                name, n1[1], 100n1[2], n2[1], 100n2[2], n3[1], 100n3[2])
+        @printf(" | %7.1e | %6.4f | %7.4f | %7.5f | %+7.4f %4g\n",
+                lx[1], sh[1], wc[1], mx, si[1], si[3])
+    end
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end
 
 println("\nartcal complete")
