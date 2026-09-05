@@ -290,6 +290,99 @@ function species_advection(; N=MIX_N, tfin=MIX_T, art=ArtParams(enabled=true),
     return xs, Y1, ρ, p, completed(solver, tfin)
 end
 
+# --- shock / species interface ----------------------------------------------
+#
+# A Mach 1.5 shock in air runs into a tanh interface with a heavy gas of SF6's
+# density ratio and γ. Crossing the density and γ jump drives the mass
+# fractions out of [0, 1] wherever the artificial species diffusivity does not
+# hold them, so the excursion history over the run and the interface width at
+# the end measure what C_D does at a shocked interface. species_advection
+# cannot: its interface moves at uniform pressure and nothing excites it.
+
+const SI_N = 400
+const SI_T = 0.25
+const SI_MACH = 1.5
+const SI_X_SHOCK = 0.15
+const SI_X_IFACE = 0.35
+const SI_RHO_HEAVY = 5.04          # SF6 at the pre-shock p and T, air = 1
+const SI_GAMMA_HEAVY = 1.09
+
+"""
+    shock_interface(; N, tfin, art, cfl, delta, nmax) -> NamedTuple
+
+Mach `SI_MACH` shock in air (γ = 1.4, R = 1, ρ = 1 and p = 1 ahead of it) at
+`SI_X_SHOCK` running into a tanh interface at `SI_X_IFACE` with a heavy gas
+(γ = `SI_GAMMA_HEAVY`, R = 1 / `SI_RHO_HEAVY`, so ρ = `SI_RHO_HEAVY` at the
+pre-shock p and T). The post-shock state follows from the Rankine–Hugoniot
+relations, and both ends hold their initial state through a `DirichletBC`.
+`delta` is the smearing width of the shock and the interface in cells, not a
+length as in `tube`, so the sweep in bench/artcal.jl reads directly in cells.
+
+Returns `(x, Y_air, rho, p, worst_min_Y, worst_max_Y, width_cells, steps,
+completed)`. The two `worst` values are the extreme mass fractions over both
+species and every step, read from `Q` in a callback because the excursions
+are transient and the final profile need not show them; `width_cells` counts
+the interior points with 0.05 < Y_air < 0.95 at the end.
+"""
+function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
+                         cfl=0.4, delta=2.0, nmax=NMAX)
+    γa = 1.4
+    eos = IdealMixture([IdealSpecies{Float64}("air", 1.0, γa),
+                        IdealSpecies{Float64}("sf6", 1 / SI_RHO_HEAVY,
+                                              SI_GAMMA_HEAVY)])
+    M = SI_MACH
+    p2 = 1 + 2γa / (γa + 1) * (M^2 - 1)
+    r2 = (γa + 1) * M^2 / ((γa - 1) * M^2 + 2)
+    u2 = M * sqrt(γa) * (1 - 1 / r2)
+    h = 1.0 / (N - 1)
+    δ = delta * h
+    bcs = (DirichletBC((x, y, z, t) -> Prim(Y=(1.0, 0.0), rho=r2,
+                                            u=(u2, 0.0, 0.0), p=p2)),
+           DirichletBC((x, y, z, t) -> Prim(Y=(0.0, 1.0), rho=SI_RHO_HEAVY,
+                                            u=(0.0, 0.0, 0.0), p=1.0)))
+    prob = Problem(eos=eos, transport=Transport(mu0=0.0),
+                   domain=((0.0, 1.0), (0.0, h), (0.0, h)),
+                   bcs=(bcs, per3[2], per3[3]),
+                   ic=(x, y, z) -> begin
+                       s = tanh_blend(x, SI_X_SHOCK, δ)   # 0 post-shock, 1 ahead
+                       θ = tanh_blend(x, SI_X_IFACE, δ)   # 0 air, 1 heavy
+                       ρ = (1 - s) * r2 + s * ((1 - θ) + θ * SI_RHO_HEAVY)
+                       Prim(Y=(1 - θ, θ), rho=ρ, u=((1 - s) * u2, 0.0, 0.0),
+                            p=(1 - s) * p2 + s)
+                   end)
+    solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
+                                     filter_interval=1,
+                                     control=StepControl(retries=4)))
+    nx = solver.decomp.n_local[1]
+    worst_min = Ref(Inf)
+    worst_max = Ref(-Inf)
+    function excursion(s, Q)
+        for i in 1:nx
+            I = gidx(s, i, 1, 1)
+            y = Q[I, 1] / (Q[I, 1] + Q[I, 2])
+            worst_min[] = min(worst_min[], y, 1 - y)
+            worst_max[] = max(worst_max[], y, 1 - y)
+        end
+    end
+    run!(solver, Q; tfinal=tfin, nmax=nmax, callback=excursion)
+    CL.exchange_state!(Q, solver.decomp)
+    CL.primitives!(solver, Q)
+    xs = Float64[xcoord(solver, 1, i) for i in 1:nx]
+    Y1 = [solver.Y[1][gidx(solver, i, 1, 1)] for i in 1:nx]
+    ρ = [solver.rho[gidx(solver, i, 1, 1)] for i in 1:nx]
+    p = [solver.p[gidx(solver, i, 1, 1)] for i in 1:nx]
+    width = count(y -> 0.05 < y < 0.95, Y1)
+    comm = solver.decomp.sub[1]
+    if MPI.Comm_size(comm) > 1
+        worst_min[] = MPI.Allreduce(worst_min[], min, comm)
+        worst_max[] = MPI.Allreduce(worst_max[], max, comm)
+        width = MPI.Allreduce(width, +, comm)
+    end
+    return (x=xs, Y_air=Y1, rho=ρ, p=p, worst_min_Y=worst_min[],
+            worst_max_Y=worst_max[], width_cells=width, steps=solver.step,
+            completed=completed(solver, tfin))
+end
+
 # --- shared measurements ----------------------------------------------------
 #
 # validation.jl guards these and artcal.jl sweeps them, so both report the

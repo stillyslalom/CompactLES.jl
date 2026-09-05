@@ -18,6 +18,7 @@ ArtParams(C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.01)
 3. [C_kappa — the conductivity](#c_kappa--the-conductivity)
 4. [C_mu — the shear viscosity](#c_mu--the-shear-viscosity)
 5. [C_D — the species diffusivity](#c_d--the-species-diffusivity)
+5a. [C_Y — the mass-fraction bound](#c_y--the-mass-fraction-bound)
 6. [The filter dissipates per application, not per unit time](#the-filter-dissipates-per-application-not-per-unit-time)
 7. [The β\* sensor — strain, gated, or dilatation](#the-beta-sensor--strain-or-dilatation)
 8. [CFL, which dominates all four](#cfl-which-dominates-all-four)
@@ -79,6 +80,7 @@ turn on a single study link to it. The open items these settings leave are under
 | `C_beta` | 1.0 | yes | Accuracy optimum near 0.4; use 0.5 for interface-dominated work and avoid zero. The constant trades the planar and cylindrical CFL ceilings against the spherical one, and 1.0 is the value that maximizes the spherical one. Refit under `:d8`, where the viable window moves from 0.25–1.0 up to 1.0–4.0 and intersects the `:delta4` window only at the default value. [Measurements](#the-c_beta-refit-under-d8). |
 | `C_kappa` | 0.01 | yes | 0.02–0.04 measurably reduces wall heating; avoid zero. |
 | `C_D` | 0.01 | yes | The compact filter dominates interface broadening, so sensitivity to `C_D` is weak. |
+| `C_Y` | 100 | yes | The mass-fraction bound: a diffusivity active only where Y leaves [0, 1]. A shocked 2h interface rings to ±0.2 without it and ±0.013 with it; 50–200 are equivalent, 1000 is worse. [Measurements](#c_y--the-mass-fraction-bound). |
 | `mu_sensor` | `:strain` | yes | `:velocity` is the reference field and recovers the detector's full designed selectivity, which `:strain` destroys through the cusps of \|S\|; it then moves no column of the battery past the fourth digit, because no case there gives the shear channel anything to do. On Taylor–Green it raises the μ\* share of the sink 4.5% → 6.0% for +46% on the sensor phase. [Measurements](#the-sensors-read-s-not-the-velocity-and-the-dilatation). |
 | `beta_sensor` | `:strain` | yes | `:gated_strain` raises the cylindrical Noh CFL ceiling from 0.15 to 0.2 for one pointwise pass and is otherwise a wash; `:dilatation` buys 0.25% of the Shu–Osher wave train and loses both converging Noh geometries at the fold; `:ungated_dilatation`, the reference form, keeps the origin and still loses the axis, improves the ν = 3 plateau and the Lax contact, and costs 0.5% of the Shu–Osher train and 1.5% of the Woodward peak. |
 | `reduction` | `:sum` | yes | `:max` is the reference's directional reduction. Identical in one dimension, so the whole battery is blind to it; on Taylor–Green it cuts the μ\* share 4.5% → 2.7% and moves the dissipation peak from t = 8.49 to 8.97 against a reference peak at t = 9. |
@@ -457,6 +459,111 @@ measurable no-op at `n_species == 2`: not only do `D*_1` and `D*_2` agree to
 **Recommendation:** retain 0.01. Consider larger values only for mixtures with
 at least three species, where the correction velocity can alter the species
 fluxes.
+
+## C_Y — the mass-fraction bound
+
+A shocked species interface rings. Measured on a Mach 1.5 shock in air
+(γ = 1.4, R = 1) running into a tanh interface with SF6 (γ = 1.09, density
+5.04) on 400 points, Dirichlet ends, `cfl = 0.4`, default `ArtParams`:
+the worst mass-fraction excursion over the run, the final range, and the
+0.05–0.95 width of the interface in cells.
+
+```
+initial interface | worst Y          | final Y range     | width (cells)
+2h                | -0.204 / +1.204  | -0.009 / +1.098   | 6 → 3
+4h                | -0.023 / +1.023  | -0.0004 / +1.021  | 12 → 4
+8h                | clean            | clean             | 14
+```
+
+The shock compresses the interface by the density ratio across it and the
+ringing is a two-cell odd-even train on the light side, set by the cells the
+interface spans after compression and by nothing else that was varied: N = 800
+and 1600 at a fixed 2h interface, `closures = :onesided`, `beta_sensor =
+:dilatation`, `detector = :d8`, `cfl = 0.2` and `compact_filter(0.3)` all leave
+the worst excursion between -0.18 and -0.29. `C_D = 1` (100 × Cook) reaches
+-0.008, and disabling the artificial properties gives -0.43. Cook's
+D\* = C_D c h |δ⁴Y| peaks near 2e-5 in the train, a diffusive time across a
+cell of order one against a shock crossing of 0.005, so it cannot hold an
+interface the shock has thinned.
+
+The species diffusivity therefore carries a second term, the bound of
+Shankar, Kawai & Lele (Phys. Fluids 23, 024102, 2011, eq. A4), which is zero
+wherever 0 ≤ Y ≤ 1:
+
+    D\*_k = c · G[ max( C_D h |δ⁴Y_k| , C_Y h max(0, −Y_k, Y_k − 1) ) ]
+
+with G the sensor smoother. Cook (Phys. Fluids 21, 055109, 2009, eq. 42)
+writes the same bound as (|Y| − 1 + |1 − Y|), twice the max, scaled by
+Δ²/Δt with C_Y = 50, and Miranda today (Brill, Olson & Bokman,
+arXiv:2503.12680, 2025, eq. 24) combines its ringing and bound terms by max
+at C_O,Y = 100 in the same scaling; the two scalings differ by 1/CFL, so
+every published value sits near 100 in the form above. Measured on the 2h
+case, `C_D = 0.01`:
+
+```
+C_Y    combine  smoothing   | worst Y          | final Y range      | steps
+0      –        –           | -0.204 / +1.204  | -0.0087 / +1.098   |  640
+50     sum      separate    | -0.018 / +1.018  | -0.0012 / +1.001   |  644
+100    sum      separate    | -0.013 / +1.013  | -0.0007 / +1.001   |  647
+200    sum      separate    | -0.010 / +1.010  | -0.0004 / +1.001   |  655
+100    max      separate    | -0.014 / +1.014  | -0.0007 / +1.001   |  647
+100    max      one pass    | -0.013 / +1.013  | -0.0007 / +1.001   |  647
+1000   sum      separate    | -0.072 / +1.072  | -0.0001 / +1.000   |  669
+100    sum      none        | -0.147 / +1.147  | -0.0038 / +1.019   | 1955
+```
+
+Sum and max are indistinguishable, as are smoothing the two terms separately
+and smoothing their max once, which is Cook's single filter of the bracket and
+costs no line solve beyond the one the ringing sensor already pays. The
+unsmoothed term is a grid-scale diffusivity and both helps less and, through
+`compute_dt`, triples the step count. C_Y = 1000 is worse than 100. The
+residual 1% at C_Y = 100 is the compact scheme's dispersion at a
+three-cell contact; at a 4h initial interface it is 0.25%, and at Mach 3 the
+term takes the worst excursion from -0.94 to -0.043.
+
+The bound enters the diffusive rate in `compute_dt` like the rest of D\*.
+Excluding it is stable up to C_Y = 500 on this case and saves 1% of the
+steps at C_Y = 100 (638 against 647); at C_Y = 1000 it takes a square root of a
+negative pressure. Cook's Δ²/Δt scaling fixes the bound's diffusion number
+by construction and so never enters the timestep, which is the same design
+choice made explicitly. It stays in.
+
+On the species-advection case above, which turns out to ring as well
+(-0.064 / +1.041 at C_Y = 0 on 256 points, -0.054 / +1.037 on 512), C_Y =
+100 brings the range to ±6e-4 and moves the 10–90% width from 0.018187 to
+0.018199, the fourth digit. With two species the bound is identical for
+both, so a shared diffusivity is bit-identical to the per-species one here;
+its case is three or more species, where per-species diffusivities can move
+bulk density at an equal-density interface (Brill et al., §4.3).
+
+The term as written is not inert on a smooth profile that touches a bound.
+Uniform advection of Y = (1 + cos 2πx)/2 for one period measures order 4.9
+in L2 with `C_Y = 0` and 3.6 with `C_Y = 100`, although the completed
+steps never leave [0, 1]: the excursion appears only at Runge–Kutta stages
+2–5, at 6e-6 on 64 points and falling 4× per doubling, and the bound turns
+it into diffusivity. A dead band `Y_tolerance = 1e-4`, and equally
+evaluating the excursion at stage 1 only, restore the `C_Y = 0` errors to
+the last digit and leave the shock case unchanged (worst −0.0135 against
+−0.0134). The dead band stores nothing and is the form landed.
+
+Three properties of the surrounding formulation were measured on a
+stationary two-gas interface at uniform p, T and u = 0 for t = 0.25 while
+the term was designed, since the bound must not paper over an error that
+belongs elsewhere. The compact filter alone leaves p, u and T at 1e-14 and
+is the whole source of the ±1e-3 mass-fraction overshoot of a resting 2h
+interface: the uniform-(p, T) state is a linear subspace of the conserved
+variables for ideal gases of constant c_v, which a componentwise linear
+filter preserves. The artificial species flux with its enthalpy energy
+flux generates the interdiffusion velocity u ≈ −D\* ∇ln ρ (1.4e-4 at
+D\* ≈ 1e-6) and holds T uniform to 1e-6 by the end; the same flux with
+species internal energy in the energy equation, which Brill et al. argue
+for an artificial flux, leaves a secular temperature drift 50× larger, so
+the enthalpy form stays. And three species at equal density under the
+per-species diffusivities hold bulk density to 4e-14, so the correction
+velocity already gives what Brill et al. obtain from a shared diffusivity,
+and the per-species form stays.
+
+**Recommendation:** `C_Y = 100`, the default.
 
 ## The filter dissipates per application, not per unit time
 

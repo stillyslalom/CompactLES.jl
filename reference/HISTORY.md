@@ -1039,3 +1039,26 @@ marginal node may tag differently at the first check after a restart
 under that criterion; not covered: a shared-file field dump of a
 hierarchy and the checkpoint of a same-level slab layout. Serial suite
 131 testsets; MPI 195 checks.
+
+The mass-fraction bound (`ArtParams.C_Y`, `Y_tolerance`;
+`reference/CALIBRATION.md`, C_Y). A vortex ring driven into an air/SF6
+interface produced negative mass fractions; a 1-D Mach 1.5 shock into a
+2h air/SF6 interface reproduces it at Y = −0.20, set by the cells the
+interface spans after the shock compresses it and by nothing else that
+was varied, and Cook's D\* is three orders of magnitude too weak on the
+crossing timescale. The species diffusivity now carries the bound of
+Shankar, Kawai & Lele, a diffusivity active only where Y leaves [0, 1],
+folded into the ringing sensor before its one smoothing pass, at the
+published C_Y = 100: the excursion falls to −0.013 (−0.043 at Mach 3
+from −0.94), the species-advection case's own ±0.06 overshoot to
+±7e-4, the interface width moves in the fourth digit and the step count
+by 1%. A dead band of 1e-4 keeps the term inert on a smooth profile
+touching a bound, where the Runge–Kutta stages overshoot by O(h²) and the
+bare term cost 1.5 orders of accuracy. Measured and left as they were:
+the compact filter causes the resting interface's overshoot but no
+pressure or velocity drift, the enthalpy form of the species energy
+flux is the consistent one (species internal energy in its place leaves
+a temperature drift 50× larger), and three species at equal density
+hold bulk density to 4e-14 under the per-species diffusivities. The
+shocked interface is a guarded validation case and an `artcal.jl` sweep.
+Serial suite 142 testsets; MPI 213 checks.

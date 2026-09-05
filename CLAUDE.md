@@ -188,6 +188,7 @@ Names are spelled out in full. Current vocabulary:
   case)
 - `n_species`, `n_cons`, `i_mom`, `i_energy`, `Y`, `cp_mix`
 - `mu_art`, `beta_art`, `kappa_art`, `D_art`, `C_mu`/`C_beta`/`C_kappa`/`C_D`,
+  `C_Y`/`Y_tolerance` (the mass-fraction bound and its dead band),
   `mu_sensor` (`:strain` or `:velocity`), `beta_sensor` (`:strain`,
   `:gated_strain`, `:dilatation` or `:ungated_dilatation`), `reduction` (`:sum`
   or `:max`), `smoother` (`:gaussian` or `:compact`), `detector` (`:delta4` or

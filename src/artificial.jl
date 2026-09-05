@@ -30,6 +30,7 @@
 
 """
     ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01, C_D=0.01,
+              C_Y=100.0, Y_tolerance=1e-4,
               mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
               smoother=:gaussian, detector=:delta4)
 
@@ -48,6 +49,23 @@ Cook-style artificial-property controls.
   internal-energy sensor.
 - `C_D`: coefficient for per-species artificial diffusivity generated from
   mass-fraction sensors.
+- `C_Y`: coefficient of the mass-fraction bound, a second contribution to the
+  species diffusivity that is zero wherever `0 ≤ Y_k ≤ 1` and grows with the
+  excursion outside: `D*_k = c · G[max(C_D h |δ⁴Y_k|, C_Y h max(0, −Y_k,
+  Y_k − 1))]`, with `G` the smoother and `h` the geometric mean of the active
+  spacings. It is the term of Shankar, Kawai & Lele (Phys. Fluids 23, 024102,
+  2011, eq. A4), where it carries the same value; Cook's Δ²/Δt-scaled form
+  (Phys. Fluids 21, 055109, 2009, eq. 42) is equivalent at C_Y = 50. The
+  ringing sensor alone cannot hold a species interface that a shock or a
+  strain field has thinned to a few cells: a 2h interface hit by a Mach 1.5
+  shock reaches Y = −0.2 with `C_Y = 0` and −0.013 at the default.
+  Set `C_Y = 0` to disable it.
+- `Y_tolerance`: dead band of the bound; an excursion smaller than this is
+  ignored. The stages of the Runge–Kutta step overshoot a smooth profile
+  that touches 0 or 1 by O(h²) even where the completed step does not, and
+  without the dead band the bound turns those transients into diffusivity and
+  costs 1.5 orders of accuracy on such a profile. `1e-4` is 16× the
+  transient at N = 64 and removes the loss entirely.
 - `mu_sensor`: how the μ\\* sensor is built. `:strain` is the Cook original,
   h_d²|D_d S| from the strain magnitude reduced over directions, for the
   detector D and the reduction the two fields below name. `:velocity` is the
@@ -103,6 +121,8 @@ Base.@kwdef struct ArtParams{T}
     C_beta::T  = 1.0
     C_kappa::T = 0.01
     C_D::T     = 0.01
+    C_Y::T     = 100.0
+    Y_tolerance::T = 1e-4
     mu_sensor::Symbol = :strain
     beta_sensor::Symbol = :strain
     reduction::Symbol = :sum
@@ -695,6 +715,7 @@ function compute_artificial!(solver, Q)
     # avoid: keep the test at a function barrier, as `beta_sensor` is below.
     C_mu, C_beta = art.C_mu, art.C_beta
     C_kappa, C_D = art.C_kappa, art.C_D
+    C_Y, Y_tolerance = art.C_Y, art.Y_tolerance
 
     # Strain-rate magnitude |S| = sqrt(S_ij S_ij) in the interior (physical
     # components; the metric corrections are in grad_u).
@@ -749,17 +770,31 @@ function compute_artificial!(solver, Q)
                solver.T_ion, solver.cp_mix, solver.sensor, C_kappa,
                o1, o2, o3)
 
-    # Per-species D*_k sensors: Σ_d h_d |D_d Y_k|, each smoothed;
-    # D*_k = C_D c · sensor_k. Costs n_species filter sweeps per RHS; the flux
-    # assembly's correction velocity keeps Σ_k J_k = 0 despite unequal D_k.
-    # Only meaningful with more than one species.
+    # Per-species D*_k = c · G[max(C_D Σ_d h_d |D_d Y_k|, C_Y h (Y_k's excursion
+    # outside [0, 1] beyond Y_tolerance))]. The bound is folded into the ringing
+    # sensor before the one smoothing pass, Cook's single filter of the whole
+    # bracket, so it costs one pointwise pass and no line solve; smoothing the
+    # two separately measures the same to three digits. Costs n_species filter
+    # sweeps per RHS; the flux assembly's correction velocity keeps Σ_k J_k = 0
+    # despite unequal D_k. Only meaningful with more than one species.
     if solver.equations.n_species > 1
+        h_bound = one(C_D)
+        n_active = 0
+        for d in 1:3
+            decomp.active[d] || continue
+            h_bound *= solver.h[d]
+            n_active += 1
+        end
+        C_Y_h = C_Y * h_bound^(one(C_D) / n_active)
         for sp in 1:solver.equations.n_species
             detect_sum!(solver.sensor_sp, solver.Y[sp], solver, 1)
+            pointwise!(_species_bound_point!, solver.sensor_sp, nx, ny, nz,
+                       solver.sensor_sp, solver.Y[sp], C_D, C_Y_h, Y_tolerance,
+                       o1, o2, o3)
             smooth!(solver.sensor_sp, solver)
             pointwise!(_species_diffusivity_point!, solver.sensor_sp,
                        nx, ny, nz, solver.D_art[sp], solver.c,
-                       solver.sensor_sp, C_D, o1, o2, o3)
+                       solver.sensor_sp, o1, o2, o3)
         end
     end
     return solver
@@ -811,11 +846,29 @@ end
     return nothing
 end
 
-@inline function _species_diffusivity_point!(D_sp, c, sensor_sp, C_D,
+# The dead band is not a tuning: the five RK stages overshoot a smooth
+# profile that touches a bound by O(h²) where the completed step does not
+# (6e-6 at N = 64, falling 4× per doubling), and a bound that acts on those
+# transients costs 1.5 orders of accuracy on such a profile. Evaluating the
+# excursion at stage 1 only measures the same as the dead band on every case
+# tried, at the price of a stored field per species; the dead band stores
+# nothing.
+@inline function _species_bound_point!(sensor_sp, Y_sp, C_D, C_Y_h, Y_tolerance,
+                                       o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        y = Y_sp[I]
+        excursion = max(zero(y), -y - Y_tolerance, y - one(y) - Y_tolerance)
+        sensor_sp[I] = max(C_D * sensor_sp[I], C_Y_h * excursion)
+    end
+    return nothing
+end
+
+@inline function _species_diffusivity_point!(D_sp, c, sensor_sp,
                                              o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        D_sp[I] = C_D * c[I] * max(sensor_sp[I], zero(sensor_sp[I]))
+        D_sp[I] = c[I] * max(sensor_sp[I], zero(sensor_sp[I]))
     end
     return nothing
 end

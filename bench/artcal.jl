@@ -3,7 +3,8 @@
 #   julia --project=. -t auto bench/artcal.jl            # everything (~6 min)
 #   julia --project=. -t auto bench/artcal.jl beta cfl   # named sweeps only
 #
-# Sweeps available: mu beta kappa D cfl resolution sensor smoother detector
+# Sweeps available: mu beta kappa D Y cfl resolution sensor smoother detector
+# field response
 #
 # Scratch tooling, like everything else in bench/: it prints tables, asserts
 # nothing, and is not part of the gate. The conclusions drawn from a run of it
@@ -26,6 +27,9 @@
 #         the other way from Noh.
 #   WC    survival at a 10^5 pressure ratio — a pass/fail robustness floor.
 #   Mix   interface width — the only case that isolates C_D.
+#   SI    mass-fraction excursion and interface width at a shocked air/SF6
+#         interface — what C_D does where the interface is forced, which Mix
+#         never is; the width it costs against the excursion it removes.
 
 using MPI
 MPI.Init(threadlevel=:funneled)
@@ -37,8 +41,8 @@ include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
 const DEFAULTS = ArtParams()
-const ALL = ["mu", "beta", "kappa", "D", "cfl", "resolution", "sensor", "smoother",
-             "detector", "field", "response"]
+const ALL = ["mu", "beta", "kappa", "D", "Y", "cfl", "resolution", "sensor",
+             "smoother", "detector", "field", "response"]
 # Sweep names are bare words; `key=value` sets the background configuration that
 # every sweep then runs against. Refitting a constant under a changed smoother
 # is exactly `artcal.jl kappa smoother=gaussian`, and keeping the two forms in
@@ -137,6 +141,14 @@ m_mix(; kw...) = attempt(NaN) do
     contact_width(xs, Y, 0.0, 1.0)
 end
 
+# Width and steps come back as floats so a failed row prints as NaN or Inf
+# through the same format as a healthy one.
+m_si(; kw...) = attempt((NaN, NaN, NaN, NaN)) do
+    r = shock_interface(; nmax=CAP, kw...)
+    r.completed || return (Inf, Inf, Inf, Inf)
+    (r.worst_min_Y, r.worst_max_Y, Float64(r.width_cells), Float64(r.steps))
+end
+
 hr() = println(repeat("-", 96))
 
 # ===========================================================================
@@ -207,6 +219,29 @@ if want("D")
     hr()
     for c in (0.0, 0.0025, 0.01, 0.04, 0.16)
         @printf("%-8.4g%s | %.5f\n", c, mark(c, DEFAULTS.C_D), m_mix(art=art(C_D=c)))
+    end
+end
+
+# ===========================================================================
+if want("Y")
+    println("\n=== C_D at a shocked air/SF6 interface (mass-fraction excursion) ===")
+    println("C_D       delta/h | worst min Y   max Y | width cells | steps")
+    hr()
+    for c in (0.01, 0.1, 1.0), d in (2, 4, 8)
+        si = m_si(art=art(C_D=c), delta=d)
+        @printf("%-8.4g%s %-7.3g | %+11.4f %7.4f | %11g | %5g\n",
+                c, mark(c, DEFAULTS.C_D), d, si[1], si[2], si[3], si[4])
+    end
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
+    println("
+=== C_Y at the same interface, delta = 2h (the mass-fraction bound) ===")
+    println("C_Y               | worst min Y   max Y | width cells | steps")
+    hr()
+    for c in (0.0, 50.0, 100.0, 200.0, 1000.0)
+        si = m_si(art=art(C_Y=c), delta=2)
+        @printf("%-8.4g%s         | %+11.4f %7.4f | %11g | %5g
+",
+                c, mark(c, DEFAULTS.C_Y), si[1], si[2], si[3], si[4])
     end
 end
 

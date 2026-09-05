@@ -31,6 +31,17 @@
 #     Woodward–Colella — blast-wave collision; strong-shock robustness plus the
 #                        collided contact position after two reflections.
 #
+#   Measured — no reference at all; the guard holds this code to its own
+#   current behaviour so a later change is measured against it.
+#     Shock/interface — a Mach 1.5 shock in air into an air/SF6 interface.
+#                       The mass fractions leave [0, 1] as the shock crosses
+#                       the density and γ jump; the guard bounds the worst
+#                       excursion over the run and the interface width at the
+#                       end. Both are to be tightened when a term that holds
+#                       the mass fractions lands, and until then the case
+#                       records what the artificial species diffusivity does
+#                       under a shock.
+#
 # Guards are set from measured behaviour, as in test/convergence.jl, at roughly
 # 1.5–2x the measured value. The measured numbers print every run; a moved digit
 # after a change not intended to touch numerics indicates a numerical effect.
@@ -45,6 +56,7 @@
 #   Noh nu=1   plateau 3.9971/4    shock 0.2044/0.2   wall deficit 64%
 #   Noh nu=2   plateau 14.988/16   shock 0.2093/0.2   wall deficit 56%
 #   Noh nu=3   plateau 62.406/64   shock 0.2091/0.2   wall deficit 27%
+#   Shock/SF6  worst Y -0.0135 / 1.0135, width 4 cells, 646 steps (Sept 2026)
 #
 # These were re-measured in August 2026 when ArtParams.smoother moved to
 # :gaussian; reference/CALIBRATION.md carries why, and the previous set under
@@ -237,6 +249,24 @@ for (ν, ptol) in ((1, 0.01), (2, 0.10), (3, 0.15))
     @test 0 < deficit < 0.7                   # wall heating budget
     @test abs(Rnum - (NOH_G - 1) / 2 * NOH_T) < 0.025
     @test epre < 5e-2
+end
+
+# ===========================================================================
+say("\n=== Mach 1.5 shock into an air/SF6 interface (measured, no reference) ===")
+
+# The bounds are "no worse than" guards set just outside the measured values,
+# not the 1.5–2x of the cases above: the excursion is the residual the
+# mass-fraction bound `C_Y` leaves at a three-cell contact, which the guard
+# exists to see move in either direction. The same case reaches -0.204 with
+# `C_Y = 0`.
+let r = shock_interface()
+    @test r.completed
+    sayf("  N=%d  worst Y: min %+.4f  max %.4f   width %d cells   steps %d\n",
+         SI_N, r.worst_min_Y, r.worst_max_Y, r.width_cells, r.steps)
+    @test all(isfinite, r.rho) && minimum(r.rho) > 0
+    @test r.worst_min_Y > -0.02
+    @test r.worst_max_Y < 1.02
+    @test r.width_cells <= 6
 end
 
 say("\nvalidation battery complete")
