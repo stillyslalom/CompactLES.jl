@@ -663,39 +663,43 @@ the energy sink at a shock; they are therefore included in the reported rate.
 Calls `compute_primitives_and_gradients!` and `compute_artificial!`, so
 the result is independent of the current RK stage. This requires one additional
 gradient pass, so the diagnostic is intended for periodic, not per-step,
-evaluation. Those two passes overwrite `solver.grad_u` and the artificial
-coefficient, sensor and scratch fields, and the integrand is then accumulated
-into `solver.tmp_b`; `compute_rhs!` rebuilds all of them at the next stage.
+evaluation. Those two passes overwrite `solver.grad_u` and the sensor and
+scratch fields, and the integrand is then accumulated into `solver.tmp_b`;
+`compute_rhs!` rebuilds all of them at the next stage. The artificial
+coefficient arrays are restored to the values the integrator left, so calling
+this between steps does not change the next timestep or a regrid decision.
 Every rank in `solver.comm` must call this function.
 """
 function dissipation_rate(solver::Solver, Q)
-    compute_primitives_and_gradients!(solver, Q)
-    compute_artificial!(solver, Q)
-    decomp = solver.decomp
-    o1, o2, o3 = decomp.n_halo_d
-    nx, ny, nz = decomp.n_local
-    grad_u = solver.grad_u
-    mu0 = solver.transport.mu0
-    diss = solver.tmp_b
-    fill!(diss, 0)
-    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        I = CartesianIndex(i + o1, j + o2, k + o3)
-        μ = mu0 + solver.mu_art[I]
-        β = solver.beta_art[I]
-        divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
-        acc = 0.0
-        for b in 1:3, a in 1:3
-            τ = μ * (grad_u[a, b][I] + grad_u[b, a][I]) +
-                (a == b ? (β - 2μ / 3) * divu : 0.0)
-            acc += τ * grad_u[a, b][I]
+    red = preserving_artificial(solver) do
+        compute_primitives_and_gradients!(solver, Q)
+        compute_artificial!(solver, Q)
+        decomp = solver.decomp
+        o1, o2, o3 = decomp.n_halo_d
+        nx, ny, nz = decomp.n_local
+        grad_u = solver.grad_u
+        mu0 = solver.transport.mu0
+        diss = solver.tmp_b
+        fill!(diss, 0)
+        @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
+            I = CartesianIndex(i + o1, j + o2, k + o3)
+            μ = mu0 + solver.mu_art[I]
+            β = solver.beta_art[I]
+            divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
+            acc = 0.0
+            for b in 1:3, a in 1:3
+                τ = μ * (grad_u[a, b][I] + grad_u[b, a][I]) +
+                    (a == b ? (β - 2μ / 3) * divu : 0.0)
+                acc += τ * grad_u[a, b][I]
+            end
+            diss[I] = acc
         end
-        diss[I] = acc
+        # One collective, not two: both integrals are sums over the same rank
+        # set, and this is called once per diagnostic output on every rank.
+        MPI.Allreduce([_local_volume_integral(solver, diss, false),
+                       _local_volume_integral(solver, solver.rho, false)], +,
+                      solver.comm)
     end
-    # One collective, not two: both integrals are sums over the same rank set,
-    # and this is called once per diagnostic output on every rank.
-    red = MPI.Allreduce([_local_volume_integral(solver, diss, false),
-                         _local_volume_integral(solver, solver.rho, false)], +,
-                        solver.comm)
     return red[1] / red[2]
 end
 
@@ -709,35 +713,38 @@ covered masks, and both integrals reduce once over `solver.comm`. The
 gradients read each patch's ghost and shell nodes, so the state must be as
 `run!` leaves it after a step, shells imposed and shared planes exchanged
 ([`sync_patches!`](@ref), [`sync_levels!`](@ref)); a state that has only been
-initialized needs those first.
+initialized needs those first. Every patch's artificial coefficient arrays are
+restored to the values the integrator left.
 """
 function dissipation_rate(solver::Solver, states::Vector{<:ConservedState})
     acc = zeros(2)
-    for (ps, Q) in eachpatch(solver, states)
-        compute_primitives_and_gradients!(ps, Q)
-        compute_artificial!(ps, Q)
-        decomp = ps.decomp
-        o1, o2, o3 = decomp.n_halo_d
-        nx, ny, nz = decomp.n_local
-        grad_u = ps.grad_u
-        mu0 = solver.transport.mu0
-        diss = ps.tmp_b
-        fill!(diss, 0)
-        @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-            I = CartesianIndex(i + o1, j + o2, k + o3)
-            μ = mu0 + ps.mu_art[I]
-            β = ps.beta_art[I]
-            divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
-            s = 0.0
-            for b in 1:3, a in 1:3
-                τ = μ * (grad_u[a, b][I] + grad_u[b, a][I]) +
-                    (a == b ? (β - 2μ / 3) * divu : 0.0)
-                s += τ * grad_u[a, b][I]
+    preserving_artificial(solver) do
+        for (ps, Q) in eachpatch(solver, states)
+            compute_primitives_and_gradients!(ps, Q)
+            compute_artificial!(ps, Q)
+            decomp = ps.decomp
+            o1, o2, o3 = decomp.n_halo_d
+            nx, ny, nz = decomp.n_local
+            grad_u = ps.grad_u
+            mu0 = solver.transport.mu0
+            diss = ps.tmp_b
+            fill!(diss, 0)
+            @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
+                I = CartesianIndex(i + o1, j + o2, k + o3)
+                μ = mu0 + ps.mu_art[I]
+                β = ps.beta_art[I]
+                divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
+                s = 0.0
+                for b in 1:3, a in 1:3
+                    τ = μ * (grad_u[a, b][I] + grad_u[b, a][I]) +
+                        (a == b ? (β - 2μ / 3) * divu : 0.0)
+                    s += τ * grad_u[a, b][I]
+                end
+                diss[I] = s
             end
-            diss[I] = s
+            acc[1] += _local_volume_integral(ps, diss, true)
+            acc[2] += _local_volume_integral(ps, ps.rho, true)
         end
-        acc[1] += _local_volume_integral(ps, diss, true)
-        acc[2] += _local_volume_integral(ps, ps.rho, true)
     end
     red = MPI.Allreduce(acc, +, solver.comm)
     return red[1] / red[2]

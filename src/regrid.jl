@@ -221,6 +221,14 @@ function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     dcp = coarse.decomp
     spec = getfield(solver, :regrid)
     exchange_state!(Qc, dcp)
+    # The sensor criterion is the one that reads primitive fields (ρ, c and
+    # c_p), and those arrays otherwise hold whatever the last Runge–Kutta stage
+    # of the previous step left in them. Refreshing them from the state under
+    # test makes the tag a function of that state alone, so a restart, and an
+    # observational call between steps, leave the decision unchanged. The
+    # artificial coefficients the same criterion reads are the previous step's
+    # by design, as they are in `max_rate`.
+    spec.sensor_threshold > 0 && primitives!(PatchSolver(solver, coarse), Qc)
     o = dcp.n_halo_d
     n = dcp.n_local
     active = dcp.active

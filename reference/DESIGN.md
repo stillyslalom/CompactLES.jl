@@ -415,6 +415,58 @@ component along every active dimension (with batched halo exchange and the
 correct axis parity per component). An optional `callback(solver, Q)` runs after each
 step for diagnostics or output.
 
+### The clock
+
+`solver.t` carries the solver's element type. `run!` converts `tfinal`, and
+every scheduled callback instant, to that type before comparing anything
+against it, and the time triggers measure their landing tolerance in the same
+precision. The endpoint of a run is therefore the value of the clock's type
+nearest `tfinal`, reached to within half the floating-point spacing there:
+exactly `tfinal` in a Float64 solver given a Float64 endpoint, and within 6e-8
+relative in a Float32 one. Without the conversion the comparison is made
+against a value no sequence of steps can reach, and the remainder is taken
+again on every step: a Float32 run given `tfinal = 0.7` stops advancing at
+0.699999988079071 and then repeats a 1.1920929e-8 step, which the clock cannot
+add, until `nmax` ends the run.
+
+Progress is checked on the stored result of `solver.t + dt`, once the
+`StepControl` floors, the endpoint clip and the landing on a scheduled instant
+have all been applied. A step that leaves the clock where it was raises
+`SolverFailure(:no_progress)`: the calculation has reached a timestep its own
+clock cannot resolve, which no retry improves, and the alternative is a run
+that exhausts `nmax` at no advance. A *landing* step that fails the same test
+is discarded in favour of the unshortened step, since the instant it aims at is
+inside the trigger's tolerance already.
+
+### Observation and the integrator's state
+
+The artificial coefficient arrays are the per-point state that outlives the
+step that filled them: `max_rate` reads them for the diffusive part of the next
+CFL rate, and the sensor tag criterion reads them at a regrid check.
+`compute_artificial!` rebuilds them from whatever state it is handed, so an
+observational call at a step boundary would otherwise replace the coefficients
+the last Runge–Kutta stage left and change the next timestep with no change to
+the conserved state. Measured on a 64-point Sod at cfl = 0.15, one
+`field_array(solver, Q, :beta_art)` after the first step moved the next dt from
+1.8692671e-3 to 1.8683252e-3.
+
+Every path that reaches `compute_artificial!` from outside the RHS therefore
+runs inside `preserving_artificial`, which restores those arrays afterwards:
+`field_array` and the profile and slice helpers built on it, `save_vtk` and
+`save_hdf5` when an artificial field is requested, and `dissipation_rate`. A
+diagnostic call leaves the step sequence, the state, and the regrid decisions
+bit for bit as they would have been. The scratch a diagnostic also overwrites
+(`grad_u`, the sensors, `tmp_a`/`tmp_b`) belongs to one RHS evaluation and is
+rebuilt at the next stage.
+
+The primitive fields are the other observable state, and the tag sweep is their
+one consumer that does not refresh them first. `_tag_sweep!` therefore
+refreshes the parent level's primitives from the state under test whenever the
+sensor criterion is enabled, which makes that criterion a function of the state
+rather than of the stage the previous step happened to end in. The artificial
+coefficients it reads alongside are the previous step's, as they are in
+`max_rate`.
+
 ## The RHS: a walkthrough
 
 `compute_rhs!` (in `rhs.jl`) evaluates dQ/dt into the interior of `dQ`,

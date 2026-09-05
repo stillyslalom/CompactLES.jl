@@ -515,13 +515,19 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
     st = CompactLES._normalize_stride(stride)
     ranges = CompactLES._output_ranges(solver, st, slice)
     CompactLES._check_output(solver, st, slice, ranges)
-    CompactLES._prepare_fields!(solver, Q, fields)
     curvilinear = CompactLES._curvilinear(solver)
 
-    entries = Tuple{String,Int,Vector{Float32}}[]
-    for name in fields
-        append!(entries, CompactLES.vtk_field_entries(solver, Q, name,
-                                                      curvilinear, ranges))
+    # The artificial coefficients are restored after the extraction, so a dump
+    # requesting them leaves the integrator's next timestep unchanged.
+    entries = CompactLES.preserving_artificial(solver,
+            any(CompactLES._wants_artificial, fields)) do
+        es = Tuple{String,Int,Vector{Float32}}[]
+        CompactLES._prepare_fields!(solver, Q, fields)
+        for name in fields
+            append!(es, CompactLES.vtk_field_entries(solver, Q, name,
+                                                     curvilinear, ranges))
+        end
+        return es
     end
 
     nglobal = CompactLES._output_global(solver, st, slice)

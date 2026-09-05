@@ -38,23 +38,26 @@ name.
 Every rank must call this function because it calls
 [`refresh_primitives!`](@ref), and a derived name runs the gradient pass and,
 for an artificial coefficient, `compute_artificial!`. The gradient pass
-overwrites `solver.grad_u`. The artificial pass also overwrites the artificial
-coefficient, sensor fields, and `tmp_a`/`tmp_b` scratch; `compute_rhs!` rebuilds
-all of them at every stage. The returned array is a fresh copy that remains
-valid past the next step.
+overwrites `solver.grad_u` and the sensor and `tmp_a`/`tmp_b` scratch, which
+`compute_rhs!` rebuilds at every stage. The artificial coefficient arrays are
+restored to the values the integrator left, so calling this between steps does
+not change the next timestep or a regrid decision. The returned array is a
+fresh copy that remains valid past the next step.
 """
 function field_array(solver::Solver, Q, name::Symbol; species::Int=1)
-    if _wants_gradients(name) || _wants_artificial(name)
-        # This refreshes primitives into the halos as part of the gradient pass,
-        # so it subsumes `refresh_primitives!`.
-        compute_primitives_and_gradients!(solver, Q)
-        _wants_artificial(name) && compute_artificial!(solver, Q)
-    else
-        refresh_primitives!(solver, Q)
+    return preserving_artificial(solver, _wants_artificial(name)) do
+        if _wants_gradients(name) || _wants_artificial(name)
+            # This refreshes primitives into the halos as part of the gradient
+            # pass, so it subsumes `refresh_primitives!`.
+            compute_primitives_and_gradients!(solver, Q)
+            _wants_artificial(name) && compute_artificial!(solver, Q)
+        else
+            refresh_primitives!(solver, Q)
+        end
+        # An eltype-preserving copy: extraction must not hardcode Float64, since
+        # the storage type is a backend decision.
+        return Array(scalar_field(solver, name; species=species))
     end
-    # An eltype-preserving copy: extraction must not hardcode Float64, since
-    # the storage type is a backend decision.
-    return Array(scalar_field(solver, name; species=species))
 end
 
 # --- Line profiles ----------------------------------------------------------

@@ -595,6 +595,78 @@ function test_callback_consistency()
 end
 
 # ---------------------------------------------------------------------------
+# 7c. Observation and the clock, under a real decomposition.
+#
+#     Both are collective properties. The artificial coefficients an
+#     observational call rebuilds feed the reduced diffusive rate, so a rank
+#     that observes while the others do not would propose a different dt for
+#     the whole run; and the endpoint conversion decides how many steps every
+#     rank takes. Serial coverage is test/runloop_tests.jl; what is added here
+#     is the reduction path and the agreement between ranks.
+# ---------------------------------------------------------------------------
+function test_observation_clock()
+    section("observation and endpoints under decomposition")
+    # A shock tube split along x. SPLITN / 8 = 9 keeps the C8 filter closure
+    # inside every rank's block at the largest rank count run.
+    h = 1.0 / (SPLITN - 1)
+    tube_ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                                 Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    function build()
+        s = Solver(n_global=(SPLITN, 1, 1), L_domain=(1.0, h, h),
+                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                   cfl=0.15, dims=splitdims(1), filter_interval=1)
+        Q = allocate_state(s)
+        initialize!(s, Q, tube_ic)
+        return s, Q
+    end
+    function history(observe!)
+        s, Q = build()
+        dts = Float64[]
+        cb = Callback(EveryStep(1), function (sv, q)
+            push!(dts, sv.dt_prev)
+            observe!(sv, q)
+            return false
+        end)
+        run!(s, Q; tfinal=1e9, nmax=6, callback=cb)
+        return s, Q, dts
+    end
+    s0, Q0, dt0 = history((s, q) -> nothing)
+    s1, Q1, dt1 = history((s, q) -> (field_array(s, q, :beta_art);
+                                     dissipation_rate(s, q); nothing))
+    check("dt sequence unchanged by observation", gmax(dt0 == dt1 ? 0.0 : 1.0), 0.5)
+    err = 0.0
+    for c in 1:s0.equations.n_cons, i in 1:s0.decomp.n_local[1]
+        I = gidx(s0, i, 1, 1)
+        err = max(err, abs(Q0[I, c] - Q1[I, c]))
+    end
+    check("state unchanged by observation", gmax(err), 1e-300)
+    check("clock unchanged by observation", gmax(abs(s0.t - s1.t)), 1e-300)
+
+    # A Float32 clock and an endpoint it cannot represent: 0.03 rounds down to
+    # 0.0299999993294477, and comparing against the unconverted value leaves a
+    # remainder no step can add to the clock. The run then turns over its
+    # remaining steps at no advance, identically on every rank, which is a
+    # stalled run rather than a hang.
+    T = Float32
+    sf = Solver(n_global=(SPLITN, 1, 1), L_domain=(one(T), T(h), T(h)),
+                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
+                transport=Transport{T}(), art=ArtParams{T}(enabled=false),
+                deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
+                cfl=T(0.4), filter_interval=0, dims=splitdims(1))
+    Qf = allocate_state(sf)
+    initialize!(sf, Qf, tube_ic)
+    run!(sf, Qf; tfinal=0.03, nmax=60)
+    check("Float32 endpoint reached inside the step bound",
+          gmax(sf.step >= 60 ? 1.0 : 0.0), 0.5)
+    check("Float32 endpoint identical on every rank",
+          MPI.Allreduce(Float64(sf.t), max, comm) -
+          MPI.Allreduce(Float64(sf.t), min, comm), 1e-300)
+    check("Float32 endpoint is the clock's own nearest value",
+          gmax(abs(Float64(sf.t) - Float64(T(0.03)))), 1e-300)
+end
+
+# ---------------------------------------------------------------------------
 # 8. State queries under decomposition. `boundary_plane` is rank-local by
 #    design, returning `nothing` on every rank that does not hold the face, and
 #    that branch does not arise in serial where one rank holds every edge. A
@@ -2182,6 +2254,7 @@ const SUITE = (
     ("d8 detector decomposition", test_ring_detector_decomposition),
     ("positivity floor", test_positivity_floor),
     ("callback consistency", test_callback_consistency),
+    ("observation and clock", test_observation_clock),
     ("state queries", test_state_queries),
     ("field writer", test_field_writer),
     ("slicing", test_slicing),

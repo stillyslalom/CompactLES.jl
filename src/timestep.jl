@@ -49,6 +49,14 @@ function predicted_dt(solver::Solver, control::StepControl, rate)
     return dt
 end
 
+# The clock advance `solver.t += dt` performs. The sum is formed in the wider
+# of the two types and stored in the clock's own, so a step below the spacing
+# of the floating-point grid at `t` leaves the clock where it was. Every
+# endpoint, clip and landing decision in `run!` is tested through this function
+# rather than on `dt` alone, since only the stored result decides whether the
+# run advances.
+_advances(t, dt) = oftype(t, t + dt) > t
+
 """
     Workspace(Q)
     Workspace(solver)
@@ -1099,6 +1107,28 @@ allows, against floors `positivity_floors` derives once from the state this call
 starts with. The first firing warns, the totals warn again when the run ends,
 and `solver.floor_tally` carries them either way.
 
+## The endpoint and the clock
+
+The clock `solver.t` has the solver's element type, and `tfinal` is converted
+to it before anything is compared against it. The run therefore ends at the
+value of that type nearest `tfinal`, within half the floating-point spacing
+there: exactly `tfinal` in a Float64 solver given a Float64 endpoint, and
+within 6e-8 relative in a Float32 one. Comparing against an unconverted
+endpoint instead leaves a remainder no step can close, since adding it to the
+clock returns the clock. The same conversion applies to a scheduled callback
+instant, and [`AtTime`](@ref) and [`EveryTime`](@ref) measure their landing
+tolerance in the clock's precision, so a scheduled instant is landed on in
+either precision.
+
+The step is tested for progress once every clip has been applied, on the stored
+result of `solver.t + dt`. A step that leaves the clock where it was, having
+been shortened by neither the endpoint nor a scheduled instant, raises
+[`SolverFailure`](@ref) with reason `:no_progress`: the calculation has reached
+a timestep its own clock cannot resolve, which no retry can improve, and the
+run stops there rather than exhausting `nmax` at no advance. A landing step
+that fails the same test is discarded in favour of the full step, the instant
+being inside the trigger's tolerance already.
+
 Each step updates `solver.t`, `solver.step`, `solver.dt_prev`,
 `solver.rate_prev`, `solver.tstage`, `solver.wall_step` and
 `solver.wall_total`; a rolled-back iteration records no wall time. The loop is
@@ -1110,6 +1140,13 @@ function run!(solver::Solver, Q, workspace::Workspace;
               tfinal, nmax::Int=typemax(Int), callback=nothing,
               control::StepControl=solver.control)
     rank = MPI.Comm_rank(solver.comm)
+    # The endpoint is carried in the solver's own time type from here on. A
+    # `tfinal` the clock cannot represent is not reachable by any sequence of
+    # steps, and comparing against the unconverted value leaves a remainder
+    # that no step can close: a Float32 run given `tfinal = 0.7` stopped
+    # advancing at 0.699999988079071 and took a 1.1920929e-8 remainder for
+    # every remaining step of its `nmax`.
+    tfin = oftype(solver.t, tfinal)
     save = control.retries > 0 ?
            Savepoint(_snapshot(Q), solver.t, solver.step, -1) : nothing
     attempts = 0
@@ -1131,7 +1168,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
     # the state that failed. Each subsequent retry then restores that state and
     # changes only the CFL. The observed sequence rolled back to step 180 and
     # failed again at step 180 four times. `regrid!` observes the same guard.
-    while solver.t < tfinal && solver.step < nmax
+    while solver.t < tfin && solver.step < nmax
         # Timed from here, not around step! alone: max_rate carries the
         # per-step Allreduce and the filter is a full set of line solves, so both
         # are step cost a user is trying to see. Callbacks are outside it, since
@@ -1211,7 +1248,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # The gap is only applied when it is positive: a requested time behind
         # solver.t would otherwise drive dt to zero or negative, which stalls
         # the run and fires nothing.
-        dt = min(dt, tfinal - solver.t)
+        dt = min(dt, tfin - solver.t)
         # An instant beyond `tfinal` is not reachable in this run, and aiming at
         # one makes the soft landing below halve the step against a target it
         # never reaches. For example, `EveryTime(0.003)` run to
@@ -1226,7 +1263,12 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # The instant is discarded, not clamped to `tfinal`, which keeps the
         # endpoint out of the soft landing, per the note below. `tfinal` is
         # still clipped to, one line up; it is never subdivided toward.
-        next_instant = callback_next_time(callback, solver)
+        #
+        # The schedule is kept in Float64 and the clock may be narrower, so the
+        # instant is converted before the arithmetic below, exactly as `tfinal`
+        # is. The trigger's landing tolerance is measured in the clock's
+        # precision for the same reason (`_land_tol` in callbacks.jl).
+        next_instant = oftype(solver.t, callback_next_time(callback, solver))
         gap = next_instant - solver.t
         # Soft landing. Clipping directly to the gap lands exactly but leaves an
         # arbitrarily small step before a scheduled instant: a dump every 1e-4
@@ -1240,8 +1282,26 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # change here leaves a run without scheduled callbacks stepping as it did
         # before, which is the condition the validation guards were measured
         # under.
-        if next_instant <= tfinal && gap > 0 && gap < dt * control.landing_steps
-            dt = gap / ceil(gap / dt)
+        if next_instant <= tfin && gap > 0 && gap < dt * control.landing_steps
+            landing = gap / ceil(gap / dt)
+            # A landing step below the resolution of the clock would stall the
+            # run against an instant it cannot separate from `solver.t`. The
+            # instant is inside the trigger's landing tolerance there, so the
+            # trigger fires on the full step instead.
+            _advances(solver.t, landing) && (dt = landing)
+        end
+        # Progress, after every clip: the floors, the endpoint and the landing
+        # are all applied above, so `dt` here is the step the clock is asked to
+        # take.
+        if !_advances(solver.t, dt)
+            # The endpoint clip is the binding one, so `solver.t` is the closest
+            # the clock comes to `tfin` and the run has arrived.
+            dt >= tfin - solver.t && break
+            throw(SolverFailure(:no_progress, solver.step, solver.t, dt,
+                                solver.cfl,
+                                "the step does not advance the clock: t + dt " *
+                                "is t in $(typeof(solver.t)) arithmetic, " *
+                                "whose spacing at this t is $(eps(solver.t))"))
         end
         prepared = true         # see the apply_bcs!/max_rate note above
         step!(solver, Q, workspace, dt, prepared)

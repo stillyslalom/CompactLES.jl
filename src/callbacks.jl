@@ -101,7 +101,7 @@ function fired!(trigger::AtTime, solver, Q)
     # dt was clipped to land on `target`, so equality is the expected case; the
     # tolerance only absorbs the rounding in `solver.t += dt`. It is orders of
     # magnitude below any dt, so this cannot fire a step early.
-    solver.t >= target - _land_tol(target) || return false
+    solver.t >= target - _land_tol(target, solver.t) || return false
     trigger.next += 1
     return true
 end
@@ -115,6 +115,14 @@ end
 # The landing tolerance is shared by both time triggers, preventing disagreement
 # between the schedule restored by `rewind!` and the one `fired!` reads.
 _land_tol(t) = 8eps(max(abs(t), one(t)))
+
+# The tolerance a trigger compares the clock against. The schedule is held in
+# Float64 and the clock is the solver's element type, which may be narrower: a
+# step landed on `target` reaches the nearest value that clock can represent,
+# up to half its own spacing below the instant. The tolerance is therefore
+# measured in the clock's precision. With a Float64 clock this is the
+# single-argument form above, unchanged.
+_land_tol(target, t) = _land_tol(oftype(t, max(abs(target), one(target))))
 
 """
     EveryTime(interval; start = 0.0)
@@ -161,7 +169,7 @@ end
 
 function fired!(trigger::EveryTime, solver, Q)
     target = next_time(trigger, solver)
-    solver.t >= target - _land_tol(target) || return false
+    solver.t >= target - _land_tol(target, solver.t) || return false
     trigger.next = _instant_after(trigger, solver.t)
     return true
 end

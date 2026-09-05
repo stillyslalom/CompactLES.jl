@@ -683,14 +683,61 @@ function _prepare_fields!(solver::SolverLike, Q, fields)
     if any(_wants_gradients, fields) || any(_wants_artificial, fields)
         # This exchanges halos, so ρ and the velocities are valid into the halo
         # and the derivative passes remain accurate at a rank boundary. It also
-        # overwrites `grad_u` and the artificial coefficients. That is harmless
-        # between steps, since `compute_rhs!` rebuilds both at every stage.
+        # overwrites `grad_u` and the artificial coefficients. `compute_rhs!`
+        # rebuilds the gradients at every stage; the coefficients outlive the
+        # step, so a caller wanting them holds the request inside
+        # `preserving_artificial`.
         compute_primitives_and_gradients!(solver, Q)
         any(_wants_artificial, fields) && compute_artificial!(solver, Q)
     else
         primitives!(solver, Q)   # halos may be stale but the interior is what we write
     end
     return solver
+end
+
+# --- Observation without perturbation ---------------------------------------
+#
+# The artificial coefficient arrays are the one piece of per-point state the
+# integrator carries between steps. `max_rate` reads them for its diffusive
+# rate at the top of the next step, and the sensor tag criterion reads them at
+# a regrid check. `compute_artificial!` rebuilds them from whatever state it is
+# handed, so an observational call that asks for a coefficient field at a step
+# boundary replaces the coefficients the last Runge–Kutta stage left, and the
+# next timestep changes although the conserved state did not. Measured on a
+# 64-point Sod at cfl = 0.15: one `field_array(solver, Q, :beta_art)` after the
+# first step moved the next dt from 1.8692671e-3 to 1.8683252e-3.
+#
+# The diagnostic still computes in place, and the coefficients are restored
+# afterwards, so a run that observes nothing pays nothing. The copies hold one
+# padded array per coefficient (three plus one per species) for the duration of
+# the call, and none at all where the artificial properties are disabled and
+# `art_arrays` is empty.
+
+_artificial_targets(solver::Solver) =
+    [art_arrays(PatchSolver(solver, p)) for p in getfield(solver, :patches)]
+_artificial_targets(ps::PatchSolver) = [art_arrays(ps)]
+
+"""
+    preserving_artificial(f, solver, active = true)
+
+Run `f()` and restore the artificial coefficient arrays of every patch
+`solver` holds to the values they carried on entry, so that an observational
+call leaves the integrator's next timestep and regrid decision unchanged.
+`active = false` runs `f()` with no copies, for a request that does not reach
+`compute_artificial!`. The return value is that of `f`.
+"""
+function preserving_artificial(f, solver::SolverLike, active::Bool=true)
+    active || return f()
+    targets = _artificial_targets(solver)
+    saved = [map(_dense_copy, arrays) for arrays in targets]
+    try
+        return f()
+    finally
+        for (arrays, copies) in zip(targets, saved),
+            (dst, src) in zip(arrays, copies)
+            _assign!(dst, src)
+        end
+    end
 end
 
 # --- Subsampling -------------------------------------------------------------
@@ -1068,7 +1115,10 @@ Preparation cost depends on the request. The default set requires one
 full gradient pass, an artificial coefficient additionally requires
 `compute_artificial!`, and `:schlieren` adds a further derivative pass. The
 artificial fields report the local action of the regularization directly, which
-no integrated diagnostic provides.
+no integrated diagnostic provides. Their arrays are restored to the values the
+integrator left, at the cost of one copy of each for the duration of the call,
+so a dump between steps does not change the next timestep or a regrid
+decision.
 
 `stride` writes every `stride`-th point, given either as one `Int` for all three
 dimensions or as a 3-tuple. Points are selected on the **global** index, so every
@@ -1099,17 +1149,19 @@ function save_vtk(solver::SolverLike, Q, prefix::AbstractString;
     st = _normalize_stride(stride)
     ranges = _output_ranges(solver, st, slice)
     _check_output(solver, st, slice, ranges)
-    _prepare_fields!(solver, Q, fields)
-    curvilinear = _curvilinear(solver)
-    entries = Tuple{String,Int,Vector{Float32}}[]
-    # Field extraction still runs on a rank holding no part of the plane: the
-    # derived fields perform distributed solves, so every rank must reach them
-    # in the same order. Only the write below is skipped.
-    for name in fields
-        append!(entries, vtk_field_entries(solver, Q, name, curvilinear, ranges))
+    return preserving_artificial(solver, any(_wants_artificial, fields)) do
+        _prepare_fields!(solver, Q, fields)
+        curvilinear = _curvilinear(solver)
+        entries = Tuple{String,Int,Vector{Float32}}[]
+        # Field extraction still runs on a rank holding no part of the plane: the
+        # derived fields perform distributed solves, so every rank must reach them
+        # in the same order. Only the write below is skipped.
+        for name in fields
+            append!(entries, vtk_field_entries(solver, Q, name, curvilinear, ranges))
+        end
+        return curvilinear ? _save_vts(solver, entries, prefix, st, slice, ranges) :
+                             _save_vtr(solver, entries, prefix, st, slice, ranges)
     end
-    return curvilinear ? _save_vts(solver, entries, prefix, st, slice, ranges) :
-                         _save_vtr(solver, entries, prefix, st, slice, ranges)
 end
 
 # --- Rectilinear: three coordinate vectors, no per-point geometry.
@@ -1345,6 +1397,18 @@ function save_vtk(solver::Solver, states::Vector{<:ConservedState},
     end
     ensure_output_dir(prefix, comm)
     pieces = Int64[]
+    return preserving_artificial(solver, any(_wants_artificial, fields)) do
+        _save_patch_pieces!(pieces, solver, states, prefix, fields, st, slice,
+                            tile_of, levels, patches, rank)
+        _write_multiblock(solver, pieces, prefix)
+        return prefix
+    end
+end
+
+# One `.vtr` piece per held patch, in patch order, appending each written
+# piece's `(level, tile)` to `pieces` for the index below.
+function _save_patch_pieces!(pieces, solver::Solver, states, prefix, fields, st,
+                             slice, tile_of, levels, patches, rank)
     for (li, p) in enumerate(patches)
         ps = PatchSolver(solver, p)
         ℓ, ti = tile_of[li]
@@ -1368,8 +1432,7 @@ function save_vtk(solver::Solver, states::Vector{<:ConservedState},
                          hi, ranges, ghost)
         push!(pieces, ℓ, ti)
     end
-    _write_multiblock(solver, pieces, prefix)
-    return prefix
+    return pieces
 end
 
 # The `.vtm` index: every rank's `(level, tile)` piece list gathered to rank

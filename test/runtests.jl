@@ -3508,6 +3508,7 @@ include("patch_tests.jl")
 include("level_tests.jl")
 include("seam_tests.jl")
 include("io_tests.jl")
+include("runloop_tests.jl")
 include("docrefs_tests.jl")
 include("api_surface_tests.jl")
 
