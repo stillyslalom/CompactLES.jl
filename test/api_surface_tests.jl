@@ -59,6 +59,13 @@ const EXTENSION_API = (
     :fired!, :next_time, :rewind!,
 )
 
+# `Base.Docs.doc` of a plain object is a REPL method from Julia 1.11 on, so a
+# test process that never loads REPL raises a MethodError. The module's own doc
+# table is the portable lookup, and it answers the narrower question this file
+# asks: is a docstring attached to this binding at all.
+has_docstring(name::Symbol) =
+    haskey(Base.Docs.meta(CompactLES), Base.Docs.Binding(CompactLES, name))
+
 @testset "public API manifest" begin
     actual = Set(filter(!=(:CompactLES), names(CompactLES)))
     @test actual == EXPECTED_EXPORTS
@@ -71,7 +78,7 @@ const EXTENSION_API = (
 
     for name in EXTENSION_API
         @test name ∈ actual
-        @test Base.Docs.doc(getproperty(CompactLES, name)) !== nothing
+        @test has_docstring(name)
     end
 end
 
@@ -147,6 +154,6 @@ end
 end
 
 @testset "mutating plotting bindings carry documentation" begin
-    @test Base.Docs.doc(CompactLES.profileplot!) !== nothing
-    @test Base.Docs.doc(CompactLES.fieldheatmap!) !== nothing
+    @test has_docstring(:profileplot!)
+    @test has_docstring(:fieldheatmap!)
 end
