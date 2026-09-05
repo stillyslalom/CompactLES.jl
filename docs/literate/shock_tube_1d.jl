@@ -31,7 +31,7 @@ hx = 1 / (nx - 1)
 
 problem = Problem(
     name = "Sod shock tube",
-    eos = single_species(gamma = 1.4),
+    eos = IdealSpecies("gas"; R = 1.0, gamma = 1.4),
     domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
     bcs = ((SlipWallBC(), SlipWallBC()),
            (PeriodicBC(), PeriodicBC()),

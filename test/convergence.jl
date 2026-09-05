@@ -295,7 +295,7 @@ study("spherical origin, radial Gaussian", (24, 48, 96),
 
 function taylor_green_ke(N; tfinal=10.0, Re=1600.0)
     γ = 1.4; c0 = 10.0; p0 = c0^2 / γ
-    prob = Problem(eos=single_species(gamma=γ),
+    prob = Problem(eos=IdealSpecies("gas"; R=1.0, gamma=γ),
                    transport=Transport(mu0=1 / Re),
                    domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3,
                    ic=(x, y, z) -> Prim(

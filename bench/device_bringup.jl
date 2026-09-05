@@ -19,12 +19,13 @@
 # runs the full flux-assembly body through them, Adapt-mirrored EOS included.
 
 using CompactLES
+import CompactLES: Decomp, device_plan
 using Printf
 const CL = CompactLES
 using KernelAbstractions
 const KA = KernelAbstractions
 
-opt = script_args(ARGS, (backend = "amdgpu", n = 64, reps = 100))
+opt = CompactLES.script_args(ARGS, (backend = "amdgpu", n = 64, reps = 100))
 
 device_array = if opt.backend == "amdgpu"
     @eval using AMDGPU

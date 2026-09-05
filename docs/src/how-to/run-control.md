@@ -74,8 +74,8 @@ otherwise reduce `dt` repeatedly while making negligible progress.
 ```julia
 control = StepControl(
     retries = 4,
-    retry_factor = 0.5,
-    rho_floor = 1e-12,
+    cfl_backoff = 0.5,
+    floor_ratio = 1e-8,
 )
 
 numerics = Numerics(n_global = (256, 1, 1), control = control)

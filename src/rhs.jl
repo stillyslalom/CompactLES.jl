@@ -171,7 +171,7 @@ them.
   or resolved over 2π with an even point count, as θ may be at the axis.
 """
 function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
-                eos::EOS=single_species(),
+                eos=_default_ideal_mixture(),
                 equations=nothing,
                 transport::Transport{T}=Transport(),
                 art::ArtParams=ArtParams(),
@@ -203,6 +203,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 tile::Int=0,
                 rebalance::Real=0,
                 rebalance_persist::Int=2) where {T}
+    eos = _as_eos(eos)
     for d in 1:3
         isperiodic(bcs[d][1]) == isperiodic(bcs[d][2]) ||
             error("dimension $d mixes periodic and non-periodic conditions")
@@ -1762,5 +1763,4 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
     add_sources!(solver, dQ, Q, solver.tstage)
     return dQ
 end
-
 

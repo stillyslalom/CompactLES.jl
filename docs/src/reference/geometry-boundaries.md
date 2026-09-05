@@ -49,12 +49,12 @@ switch!
 switched
 ```
 
-## Patch-interface markers
+## Developer internals: patch-interface markers
 
 `Solver` places these on internal patch faces itself; they are not
-user-supplied conditions.
+user-supplied conditions and are shown only to explain cross-references.
 
 ```@docs
-InterfaceBC
-CoarseFineBC
+CompactLES.InterfaceBC
+CompactLES.CoarseFineBC
 ```

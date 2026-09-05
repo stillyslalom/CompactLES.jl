@@ -35,7 +35,7 @@ end
 
     # A 1-D acoustic-style setup: density varies along x, other dims collapsed.
     gamma = 1.4
-    prob = Problem(name="viz", eos=single_species(gamma=gamma),
+    prob = Problem(name="viz", eos=IdealSpecies("gas"; R=1.0, gamma=gamma),
                    domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                    bcs=ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
                    ic=(x, y, z) -> begin
@@ -76,7 +76,7 @@ end
     # A 2-D Cartesian field, decomposed along x when ranks allow it. 48 along x
     # keeps ≥ 9 points per rank up to np = 4, which the C8 filter closure needs.
     dims = np == 1 ? (1, 1, 1) : (np, 1, 1)
-    prob = Problem(name="slice", eos=single_species(gamma=1.4),
+    prob = Problem(name="slice", eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
                    domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                    bcs=ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
                    ic=(x, y, z) -> Prim(p=1.0,
@@ -115,7 +115,7 @@ end
 # only in serial.
 if MPI.Comm_size(MPI.COMM_WORLD) == 1
     @testset "Makie extension: plot objects" begin
-        prob = Problem(name="plot", eos=single_species(gamma=1.4),
+        prob = Problem(name="plot", eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
                        metric=CylindricalMetric(),
                        domain=((0.0, 1.0), (0.0, 2pi), (0.0, 1.0)),
                        bcs=((AxisBC(), SlipWallBC()),
@@ -138,7 +138,7 @@ if MPI.Comm_size(MPI.COMM_WORLD) == 1
         # the pole vertical, not x–y. Slicing the 3-D position by (a, b) collapsed
         # the plane onto Y = 0 and rastered to all-NaN; guard that the meridian
         # fills a physical half-disk (≈ π/4 of the bounding box).
-        sph = Problem(name="meridian", eos=single_species(gamma=1.4),
+        sph = Problem(name="meridian", eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
                       metric=SphericalMetric(),
                       domain=((0.0, 1.0), (0.0, pi), (0.0, 2pi)),
                       bcs=((OriginBC(), SlipWallBC()),

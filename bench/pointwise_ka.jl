@@ -17,7 +17,7 @@ using CompactLES
 using Printf
 const CL = CompactLES
 
-opt = script_args(ARGS, (n = 64, reps = 20))
+opt = CompactLES.script_args(ARGS, (n = 64, reps = 20))
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 best(f; reps=opt.reps) = (f(); f(); minimum(@elapsed(f()) for _ in 1:reps))

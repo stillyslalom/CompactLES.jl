@@ -11,7 +11,6 @@ Solver
 StepControl
 SolverFailure
 FloorTally
-PLANCK_TIME
 Workspace
 ConservedState
 compute_rhs!
@@ -48,7 +47,6 @@ EveryStep
 WhenState
 Callback
 ProgressLog
-rewind!
 ```
 
 ## Reading the state between steps
@@ -108,18 +106,20 @@ hdf5_parallel
 BlockRegion
 save_vtk
 DEFAULT_VTK_FIELDS
-container_extension
+CompactLES.container_extension
 FieldWriter
 ```
 
 ## Field extraction and plotting
 
-[`field_array`](@ref) resolves a named report variable to a padded array through
-[`scalar_field`](@ref), the same catalog `save_vtk` uses, and refreshes it from
-`Q`. [`line_profile`](@ref) and [`field_slice`](@ref) build on it: a profile is
-a collective, area-weighted reduction along one axis (the general replacement
-for a hand-written sampling loop), and a slice is a rank-0 gather of a
-transverse plane. [`cartesian_slice`](@ref) resamples a curvilinear slice onto a
+[`field_array`](@ref) resolves a named report variable to a padded array through the
+internal [`scalar_field`](@ref) catalog, the same catalog `save_vtk` uses, and refreshes it from
+`Q`. [`line_profile`](@ref), [`line_sample`](@ref), and [`field_slice`](@ref)
+build on it: a profile is a collective, area-weighted average over the planes
+transverse to one axis, a sample is the field on one grid line of that axis
+(the general replacement for a hand-written sampling loop), and a slice is a
+rank-0 gather of a transverse plane. [`cartesian_slice`](@ref) resamples a
+curvilinear slice onto a
 Cartesian raster, and [`revolve_profile`](@ref) revolves a collapsed radial
 profile into a disk. See the tutorials for worked cylindrical and spherical
 initializations.
@@ -132,22 +132,26 @@ aspect for a curvilinear plane.
 
 ```@docs
 field_array
-scalar_field
+CompactLES.scalar_field
 line_profile
+line_sample
 field_slice
 cartesian_slice
 revolve_profile
 makie_available
 profileplot
+profileplot!
 fieldheatmap
+fieldheatmap!
 ```
 
-## Script argument helpers
+## Developer internals: script argument helpers
 
-Repository examples and benchmark drivers use a defaults `NamedTuple` as their
-command-line schema.
+Repository examples and benchmark drivers use `script_args` and `script_grid`
+to build a defaults `NamedTuple` command-line schema. They are not part of the
+input-deck or runtime API and are documented only for source cross-references.
 
 ```@docs
-script_args
-script_grid
+CompactLES.script_args
+CompactLES.script_grid
 ```

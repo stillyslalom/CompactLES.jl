@@ -27,7 +27,7 @@ const p0 = c0^2 / γ                # ρ0 = 1
 
 prob = Problem(
     name = "taylor-green",
-    eos = single_species(gamma=γ),
+    eos = IdealSpecies("gas"; R=1.0, gamma=γ),
     transport = Transport(mu0=1.0 / Re),
     domain = ((0.0, 2π), (0.0, 2π), (0.0, 2π)),
     bcs = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
@@ -46,7 +46,7 @@ solver, Q = setup(prob, num)
 # Preallocated so the diagnostic does not allocate a field per report. Filled
 # from Q rather than from solver.rho/u/v/w: the primitives hold the last RK
 # stage, not the completed step.
-const ke_field = field(solver.decomp)
+const ke_field = CompactLES.field(solver.decomp)
 
 function kinetic_energy(solver, Q)
     nx, ny, nz = solver.decomp.n_local

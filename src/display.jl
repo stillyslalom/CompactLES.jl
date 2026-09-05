@@ -100,3 +100,66 @@ function Base.show(io::IO, ::MIME"text/plain", num::Numerics)
     num.dims === nothing ? print(io, "automatic") : _show_dimensions(io, num.dims)
     print(io, "\n  halo width: ", num.n_halo)
 end
+
+# --- Equation-of-state objects ----------------------------------------------
+# A NASA-9 record carries every polynomial coefficient of every fit interval,
+# so the default display of a two-species mixture is a dozen lines of numbers
+# no one reads at the REPL. These methods print the data that identifies the
+# model instead: species names, gas constants, fit ranges, and the
+# temperature guess. The two-argument forms stay short because a `Vector` of
+# species or a `Problem` prints its elements through them.
+
+_sig(x) = round(x; sigdigits=7)
+
+function _species_table(io::IO, names, rows)
+    w = maximum(length, names)
+    for (k, (name, row)) in enumerate(zip(names, rows))
+        k > 1 && println(io)
+        print(io, "  ", rpad(name, w), "  ", row)
+    end
+end
+
+Base.show(io::IO, sp::IdealSpecies) =
+    print(io, "IdealSpecies(", repr(sp.name), "; R=", _sig(sp.R),
+          ", gamma=", _sig(sp.gamma), ')')
+
+Base.show(io::IO, eos::IdealMixture{T}) where {T} =
+    print(io, "IdealMixture{", T, "}(", join((sp.name for sp in eos.sp), ", "), ')')
+
+function Base.show(io::IO, ::MIME"text/plain", eos::IdealMixture{T}) where {T}
+    n = length(eos.sp)
+    println(io, "IdealMixture{", T, "} with ", n, n == 1 ? " species" : " species")
+    _species_table(io, [sp.name for sp in eos.sp],
+                   ["R = $(_sig(sp.R))  gamma = $(_sig(sp.gamma))" for sp in eos.sp])
+end
+
+_interval_range(sp::Nasa9Species) =
+    string(_sig(sp.intervals[1].Tmin), "–", _sig(sp.intervals[end].Tmax), " K")
+
+Base.show(io::IO, iv::Nasa9Interval{T}) where {T} =
+    print(io, "Nasa9Interval{", T, "}(", _sig(iv.Tmin), "–", _sig(iv.Tmax), " K)")
+
+function Base.show(io::IO, sp::Nasa9Species)
+    n = length(sp.intervals)
+    print(io, "Nasa9Species(", repr(sp.name), "; R=", _sig(sp.R), ", ",
+          _interval_range(sp), ", ", n, n == 1 ? " interval)" : " intervals)")
+end
+
+Base.show(io::IO, eos::Nasa9Mixture{T}) where {T} =
+    print(io, "Nasa9Mixture{", T, "}(", join((sp.name for sp in eos.sp), ", "),
+          "; T_guess=", _sig(eos.T_guess), ')')
+
+function Base.show(io::IO, ::MIME"text/plain", eos::Nasa9Mixture{T}) where {T}
+    n = length(eos.sp)
+    println(io, "Nasa9Mixture{", T, "} with ", n, n == 1 ? " species" : " species",
+            " (T_guess = ", _sig(eos.T_guess), ")")
+    _species_table(io, [sp.name for sp in eos.sp],
+                   [string("R = ", _sig(sp.R), "  ", _interval_range(sp), " (",
+                           length(sp.intervals),
+                           length(sp.intervals) == 1 ? " interval)" : " intervals)")
+                    for sp in eos.sp])
+end
+
+Base.show(io::IO, eos::StiffenedGas) =
+    print(io, "StiffenedGas(gamma=", _sig(eos.gamma), ", p_inf=", _sig(eos.p_inf),
+          ", cv=", _sig(eos.cv), ", name=", repr(eos.name), ')')

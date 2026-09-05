@@ -61,49 +61,50 @@ include("problem.jl")
 include("scriptargs.jl")
 include("display.jl")
 
-export Decomp, ConservedState, exchange_halos!, interior, field, allocate_state
+# Common input-deck and runtime surface. Lower-level decomposition, directional
+# plan, transfer, and hierarchy records remain supported through qualified
+# `CompactLES.name` access and are documented as the advanced API.
+export ConservedState, allocate_state
 export CompactScheme, ClosureRow, lele_d1_6, lele_d1_8, pade_d1_4, compact_filter
 export gaussian_filter
 export BandedCompactScheme, BandedClosureRow, lele_d1_10, compact_d8
 export BoundaryCondition, PeriodicBC, SlipWallBC, NoSlipWallBC
 export ExtrapolationBC, AxisBC, OriginBC, PoleBC
+export enforce!, correct_rhs!, validate_bc, isperiodic
 export NSCBCOutflowBC, NSCBCInflowBC, DirichletBC, save_checkpoint, load_checkpoint!, save_vtk
-export FieldWriter, DEFAULT_VTK_FIELDS, container_extension
+export FieldWriter, DEFAULT_VTK_FIELDS
 export BlockRegion, hdf5_available, hdf5_parallel
 export save_checkpoint_hdf5, load_checkpoint_hdf5!, save_hdf5
 export SwitchableBC, switch!, switched
 export Prim, Problem, Numerics, setup, initialize!, conserved_from_prim, tanh_blend
-export DirPlan, BandPlan, DevicePlan, device_plan, apply_along!, filter_field!
-export amr_transfer_schemes, amr_restriction_scheme, amr_prolongation_scheme
-export TransferPlan, plan_transfer, restrict!, prolong!
-export EOS, IdealSpecies, IdealMixture, single_species, nspecies, Transport
+export EOS, IdealSpecies, IdealMixture, nspecies, Transport
 export StiffenedGas, Nasa9Interval, Nasa9Species, Nasa9Mixture
 export nasa9_constant_cp, read_nasa9
+export recover_primitives!, species_names, species_enthalpy
+export eos_phi, eos_dphi_dY, artificial_conductivity_scale, wall_internal_energy
 export EquationSet, NavierStokes1T
+export conserved_parity
 export Metric, CartesianMetric, CylindricalMetric, SphericalMetric
 export Stretch, sine_cluster
 export ArtParams, Solver
-export AbstractBackend, CPUBackend, DeviceBackend
-export Patch, PatchSolver, InterfaceBC, CoarseFineBC, npatches, eachpatch
-export exchange_patch_ghosts!, average_shared_planes!, sync_patches!
-export LevelTransfer, Level, LevelComm, nlevels, refined_region, level_regions,
-       prolong_level_ghosts!, restrict_level!, sync_levels!
-export ConstantBodyForce, add_source!, add_sources!
+export CPUBackend, DeviceBackend
+export npatches, eachpatch, sync_patches!
+export nlevels, refined_region, level_regions, sync_levels!
+export ConstantBodyForce, add_source!
 export Workspace, compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!, mpi_main
-export StepControl, SolverFailure, PLANCK_TIME, max_rate, FloorTally
-export Trigger, AtTime, EveryStep, EveryTime, WhenState, Callback, ProgressLog, rewind!
+export StepControl, SolverFailure, max_rate, FloorTally
+export Trigger, AtTime, EveryStep, EveryTime, WhenState, Callback, ProgressLog
+export fired!, next_time, rewind!
 export refresh_primitives!, mixture_density, velocity, total_energy, mass_fraction
 export boundary_plane
 export volume_integral, volume_average, domain_volume, plane_profile
 export profile_coordinate, profile_spacing
-export field_array, scalar_field, line_profile, field_slice, cartesian_slice
+export field_array, line_profile, line_sample, field_slice, cartesian_slice
 export revolve_profile
 export profileplot, profileplot!, fieldheatmap, fieldheatmap!, makie_available
 export mix_width, molecular_mixing, species_pdf
 export tke_profile, turbulent_kinetic_energy, dissipation_rate
 export xcoord, global_xcoord, gidx, interior_index, filter_state!
-export THREAD_MIN_WORK
-export script_args, script_grid
 
 __init__() = __init_threading__()
 

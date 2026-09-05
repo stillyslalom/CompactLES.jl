@@ -49,7 +49,7 @@ const ALL = ["mu", "beta", "kappa", "D", "cfl", "resolution", "sensor", "smoothe
 # default moves. Spelled-out values became stale when the smoother default
 # changed: every sweep then silently measured on top of
 # `:compact` while the solver defaulted to `:gaussian`.
-const OPTS = script_args(filter(a -> occursin('=', a), ARGS),
+const OPTS = CompactLES.script_args(filter(a -> occursin('=', a), ARGS),
                          (smoother = DEFAULTS.smoother,
                           detector = DEFAULTS.detector))
 const NAMES = filter(a -> !occursin('=', a), ARGS)
@@ -380,7 +380,7 @@ end
 if want("response")
     N = 64
     function sine_solver(k, a)
-        prob = Problem(eos=single_species(gamma=1.4, R=1.0),
+        prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
                        transport=Transport(mu0=0.0),
                        domain=((0.0, 2π), (0.0, 0.1), (0.0, 0.1)), bcs=per3,
                        ic=(x, y, z) -> Prim(rho=1.0, p=1.0,

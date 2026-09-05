@@ -22,7 +22,7 @@ driver(x, y, z, t) = Prim(u=(A * sin(2π * f * t), 0.0, 0.0), p=p0, rho=ρ0)
 
 prob = Problem(
     name = "oscillating driver",
-    eos = single_species(gamma=γ),
+    eos = IdealSpecies("gas"; R=1.0, gamma=γ),
     domain = ((0.0, 2.0), (0.0, 0.1), (0.0, 0.1)),
     bcs = ((DirichletBC(driver), NSCBCOutflowBC(pinf=p0)),
            (PeriodicBC(), PeriodicBC()),

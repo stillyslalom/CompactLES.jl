@@ -62,21 +62,19 @@ end
 """
     line_profile(solver, Q, name; dim = 1, species = 1) -> (coord, value)
 
-A one-dimensional profile of the named scalar along `dim`, returned as the pair
-of vectors `(coord, value)`, both of length `n_global[dim]` and identical on
-every rank. This is the replacement for the tutorials' old `density_line`:
-`line_profile(solver, Q, :rho)` is the mixture-density profile along the first
-axis.
+The transverse-plane average of the named scalar as a function of position
+along `dim`, returned as the pair of vectors `(coord, value)`, both of length
+`n_global[dim]` and identical on every rank. `value[i]` is the area-weighted
+mean of the field over the plane through station `i`, so
+`line_profile(solver, Q, :rho)` is the mean density profile along the first
+axis: the radial or axial mean of a multidimensional field. It is not the
+field on one grid line; [`line_sample`](@ref) is.
 
 The coordinate comes from [`profile_coordinate`](@ref) and the value from
-[`plane_profile`](@ref). Thus, `value` is the area-weighted average over the two
-dimensions transverse to `dim`. When those
-dimensions are collapsed, as in the common tutorial case of `n_global = (N, 1, 1)`,
-the average is over a single point and the profile is exactly the line through
-`(i, 1, 1)`. With a transverse dimension resolved it is the correct area mean,
-which gives the radial or axial mean of a multidimensional field. For a line
-integral in place of an average, weight by
-[`profile_spacing`](@ref).
+[`plane_profile`](@ref). When both transverse dimensions are collapsed, as in
+the common tutorial case of `n_global = (N, 1, 1)`, the average is over a single
+point and the profile coincides with `line_sample` through `(i, 1, 1)`. For a
+line integral in place of an average, weight by [`profile_spacing`](@ref).
 
 Every rank must call this function; see [`field_array`](@ref).
 """
@@ -86,6 +84,80 @@ function line_profile(solver::Solver, Q, name::Symbol; dim::Int=1, species::Int=
     coord = profile_coordinate(solver, dim)
     value = plane_profile(solver, f, dim)
     return coord, value
+end
+
+"""
+    line_sample(solver, Q, name; dim = 1, index = (1, 1), at = nothing,
+                species = 1) -> (coord, value)
+
+The named scalar on one grid line in direction `dim`: the nodes whose global
+index along `dim` runs over `1:n_global[dim]` while the two transverse global
+indices are fixed. Returned as the pair of vectors `(coord, value)`, both of
+length `n_global[dim]` and identical on every rank. This is a point sample,
+not a reduction; [`line_profile`](@ref) is the transverse-plane average, and
+the two agree only when both transverse dimensions are collapsed.
+
+`index` fixes the transverse global indices, given for the two dimensions
+other than `dim` in increasing order: `(j, k)` for `dim = 1`, `(i, k)` for
+`dim = 2`, and `(i, j)` for `dim = 3`. An index outside `1:n_global` in its
+dimension throws `ArgumentError`. `at` gives the transverse position in the
+metric's own coordinates instead, in the same order, and each entry is
+snapped to the nearest node of that dimension; passing both throws.
+
+The value is the field at the node, in the solver's element type, and the
+coordinate comes from [`global_xcoord`](@ref). Every rank must call this
+function, including one whose block holds no part of the line; see
+[`field_array`](@ref).
+"""
+function line_sample(solver::Solver, Q, name::Symbol; dim::Int=1,
+                     index::Union{Nothing,NTuple{2,Int}}=nothing,
+                     at::Union{Nothing,NTuple{2,Real}}=nothing, species::Int=1)
+    1 <= dim <= 3 || throw(ArgumentError("line_sample: dim must be 1, 2, or 3"))
+    index === nothing || at === nothing ||
+        throw(ArgumentError("line_sample: give index or at, not both"))
+    decomp = solver.decomp
+    a, b = _plane_dims(dim)
+    if at !== nothing
+        ga, gb = _nearest_global_index(solver, a, at[1]),
+                 _nearest_global_index(solver, b, at[2])
+    else
+        ga, gb = index === nothing ? (1, 1) : index
+    end
+    for (d, g) in ((a, ga), (b, gb))
+        1 <= g <= decomp.n_global[d] ||
+            throw(ArgumentError("line_sample: index $g out of range " *
+                                "1:$(decomp.n_global[d]) along dimension $d"))
+    end
+    f = field_array(solver, Q, name; species=species)
+
+    # Each node of the line has exactly one owner, so the sum of the zeroed
+    # global vectors reproduces every owner's value bitwise, and Allreduce
+    # replicates the line without per-dimension gather logic.
+    n = decomp.n_global[dim]
+    line = zeros(eltype(f), n)
+    la, lb = ga - decomp.offset[a], gb - decomp.offset[b]
+    if 1 <= la <= decomp.n_local[a] && 1 <= lb <= decomp.n_local[b]
+        oa, ob, od = decomp.n_halo_d[a], decomp.n_halo_d[b], decomp.n_halo_d[dim]
+        for li in 1:decomp.n_local[dim]
+            I = _plane_index(dim, la + oa, lb + ob, li + od)
+            line[decomp.offset[dim] + li] = f[I]
+        end
+    end
+    line = MPI.Allreduce(line, +, decomp.comm)
+    coord = [global_xcoord(solver, dim, g) for g in 1:n]
+    return coord, line
+end
+
+# The global index along `d` whose coordinate is nearest `x`; the first of a
+# tie. Coordinates are monotone in the index, stretched or not, so a linear
+# scan of n_global[d] values is exact and cheap.
+function _nearest_global_index(solver::Solver, d::Int, x::Real)
+    best, dist = 1, Inf
+    for g in 1:solver.decomp.n_global[d]
+        e = abs(global_xcoord(solver, d, g) - x)
+        e < dist && ((best, dist) = (g, e))
+    end
+    return best
 end
 
 # --- Two-dimensional slices -------------------------------------------------
@@ -375,6 +447,7 @@ only on rank 0.
 """
 profileplot(args...; kwargs...) = _makie_required("profileplot")
 profileplot!(args...; kwargs...) = _makie_required("profileplot!")
+@doc (@doc profileplot) profileplot!
 
 """
     fieldheatmap(solver, Q, name; normal = 3, index = 1, species = 1,
@@ -397,6 +470,7 @@ on other ranks.
 """
 fieldheatmap(args...; kwargs...) = _makie_required("fieldheatmap")
 fieldheatmap!(args...; kwargs...) = _makie_required("fieldheatmap!")
+@doc (@doc fieldheatmap) fieldheatmap!
 
 # Axis labels for a coordinate direction, by metric. Used by the extension.
 coordinate_label(::CartesianMetric, d::Int) = ("x", "y", "z")[d]

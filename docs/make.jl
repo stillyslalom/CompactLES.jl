@@ -100,6 +100,7 @@ DocMeta.setdocmeta!(
     ),
     pages=[
         "Home" => "index.md",
+        "Input deck cheat sheet" => "reference/input-deck-cheat-sheet.md",
         "Tutorials" => [
             "Your first simulation" => "tutorials/acoustic_pulse.md",
             "Regularizing a shock" => "tutorials/shock_tube_1d.md",
@@ -136,13 +137,18 @@ DocMeta.setdocmeta!(
                 "case-studies/switchable-boundary.md",
         ],
         "Reference" => [
-            "Problem setup" => "reference/frontend.md",
-            "Physics models" => "reference/physics.md",
-            "Geometry and boundaries" => "reference/geometry-boundaries.md",
-            "Operators and decomposition" => "reference/operators.md",
-            "Runtime and output" => "reference/runtime.md",
-            "Diagnostics" => "reference/diagnostics.md",
-            "Public index" => "reference/index.md",
+            "Input and runtime API" => [
+                "Problem setup" => "reference/frontend.md",
+                "Physics models" => "reference/physics.md",
+                "Geometry and boundaries" => "reference/geometry-boundaries.md",
+                "Runtime and output" => "reference/runtime.md",
+                "Diagnostics" => "reference/diagnostics.md",
+            ],
+            "Advanced and extension API" => [
+                "Operators and decomposition" => "reference/operators.md",
+                "Extending CompactLES" => "reference/extensions.md",
+            ],
+            "Public API index" => "reference/index.md",
         ],
     ],
 )

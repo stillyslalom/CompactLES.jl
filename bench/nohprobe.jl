@@ -100,7 +100,7 @@ include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 # Sensor-shape defaults track `ArtParams()`, so a bare run probes the current
 # defaults rather than whatever they were when this line was written.
 const ART_DEFAULTS = ArtParams()
-opt = script_args(ARGS, (nu = 1, cfl = 0.3, N = 0, nmax = 400, every = 25,
+opt = CompactLES.script_args(ARGS, (nu = 1, cfl = 0.3, N = 0, nmax = 400, every = 25,
                          sensor = string(ART_DEFAULTS.beta_sensor),
                          smoother = string(ART_DEFAULTS.smoother),
                          detector = string(ART_DEFAULTS.detector),
@@ -191,7 +191,7 @@ function main()
         Prim(rho = (1 - θ) * ρin + θ * ρout, u = (-θ, 0.0, 0.0),
              p = (1 - θ) * pin + θ * NOH_P0)
     end
-    prob = Problem(eos = single_species(gamma = NOH_G, R = 1.0),
+    prob = Problem(eos = IdealSpecies("gas"; gamma = NOH_G, R = 1.0),
                    transport = Transport(mu0 = 0.0), metric = metric,
                    domain = ((0.0, 1.0), dom2, dom3),
                    bcs = ((lobc, inflow), per3[2], per3[3]), ic = ic)

@@ -156,6 +156,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+import CompactLES: AbstractBackend, PatchSolver
 using Printf
 
 const CL = CompactLES
@@ -332,7 +333,7 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
     γ = T(1.4)
     c0 = T(10)                     # Ma ≈ 0.1 at |u|max = 1
     p0 = c0^2 / γ
-    prob = Problem(eos=single_species(T; gamma=γ),
+    prob = Problem(eos=IdealSpecies("gas"; R=one(T), gamma=γ),
                    transport=Transport{T}(mu0=one(T) / T(Re)),
                    domain=((zero(T), T(2π)), (zero(T), T(2π)),
                            (zero(T), T(2π))), bcs=per3,
@@ -589,6 +590,6 @@ end
 # Argument parsing and the backend load run at top level: a device package
 # loaded inside `main` would define its methods in a newer world than the one
 # `main` executes in, and every launch would raise a world-age error.
-const _opt = script_args(ARGS, DEFAULTS; positional = (:N, :tfinal))
+const _opt = CompactLES.script_args(ARGS, DEFAULTS; positional = (:N, :tfinal))
 const _backend = make_backend(_opt.backend)
 mpi_main(() -> main(_opt, _backend))

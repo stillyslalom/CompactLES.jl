@@ -18,7 +18,7 @@ per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 # --- a representative solver: 3-D periodic, artificial properties live ------
 function build(; N=48, n_species=1, art=true, deriv=lele_d1_6())
-    eos = n_species == 1 ? single_species() :
+    eos = n_species == 1 ? IdealSpecies("gas"; R=1.0, gamma=1.4) :
           IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.2, 1.09)])
     solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3, eos=eos,
@@ -105,7 +105,7 @@ println("\n=== inference: non-concrete SSA values (lower is better) ===")
 # without it would report a count of 1 and hide every regression.
 probes = [
     ("primitives!",        CL.primitives!,  Tuple{typeof(solver), typeof(Q)}),
-    ("_primitives!",       CL._primitives!, Tuple{typeof(solver), typeof(solver.eos), typeof(Q)}),
+    ("recover_primitives!", CL.recover_primitives!, Tuple{typeof(solver), typeof(solver.eos), typeof(Q)}),
     ("compute_rhs!",       compute_rhs!,    Tuple{typeof(solver), typeof(Q), typeof(dQ), Bool}),
     ("compute_dt",         compute_dt,      Tuple{typeof(solver), typeof(Q)}),
     ("step!",              step!,           Tuple{typeof(solver), typeof(Q), typeof(dQ), typeof(du), Float64, Bool}),

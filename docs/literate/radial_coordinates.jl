@@ -41,7 +41,7 @@ nr = 192
 
 problem = Problem(
     name = "radial acoustic ring",
-    eos = single_species(gamma = gamma),
+    eos = IdealSpecies("gas"; R = 1.0, gamma = gamma),
     metric = CylindricalMetric(),
     domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
     bcs = ((AxisBC(), SlipWallBC()),

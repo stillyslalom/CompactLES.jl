@@ -124,9 +124,9 @@ function cgroup_mem_limit()
     return -1
 end
 
-const grid = script_grid(script_args(ARGS, (grid = "64",);
-                                     positional = (:grid,)).grid)
-decomp = Decomp(grid, (true, true, true))
+const grid = CL.script_grid(CL.script_args(ARGS, (grid = "64",);
+                                           positional = (:grid,)).grid)
+decomp = CL.Decomp(grid, (true, true, true))
 
 # Gather over the Cartesian communicator, not COMM_WORLD: Cart_create is free to
 # reorder, and decomp.neighbors names ranks in the reordered space. Indexing the

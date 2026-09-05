@@ -45,7 +45,8 @@ _f32_numerics(; art=false) =
     residuals = T[]
     for cs in cases
         kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain,
-                     metric=cs.metric, bcs=cs.bcs, eos=single_species(T),
+                     metric=cs.metric, bcs=cs.bcs,
+                     eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
                      filter_interval=0, typed...), cs.extra)
         solver = Solver(; kw...)
         Q = allocate_state(solver)
@@ -80,12 +81,12 @@ function _f32_closed_derivative_error(N; spherical=false, T=Float32,
                L_domain=(one(T), T(π), T(2π)),
                metric=SphericalMetric(),
                bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
-               eos=single_species(T), numerics...)
+               eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)), numerics...)
     else
         Solver(; n_global=(N, 12, 12),
                L_domain=(one(T), one(T), one(T)),
                bcs=((SlipWallBC(), SlipWallBC()), per, per),
-               eos=single_species(T), numerics...)
+               eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)), numerics...)
     end
     f = CL.field(solver.decomp)
     df = similar(f)
@@ -154,7 +155,7 @@ end
     solver = Solver(; n_global=(N, 1, 1),
                     L_domain=(one(T), hx, hx),
                     bcs=((SlipWallBC(), SlipWallBC()), per, per),
-                    eos=single_species(T; gamma=T(1.4), R=one(T)),
+                    eos=IdealSpecies(T, "gas"; gamma=T(1.4), R=one(T)),
                     cfl=T(0.4), filter_interval=1,
                     _f32_numerics(art=true)...)
     Q = allocate_state(solver)
@@ -201,7 +202,7 @@ function _tgv_short_history(::Type{T}) where {T<:AbstractFloat}
     solver = Solver(; n_global=(N, N, N),
                     L_domain=(T(2π), T(2π), T(2π)),
                     bcs=(per, per, per),
-                    eos=single_species(T; gamma=T(1.4), R=one(T)),
+                    eos=IdealSpecies(T, "gas"; gamma=T(1.4), R=one(T)),
                     transport=Transport{T}(mu0=one(T) / T(1600)),
                     art=ArtParams{T}(enabled=false),
                     deriv=lele_d1_6(T),

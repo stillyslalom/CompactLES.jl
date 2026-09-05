@@ -405,7 +405,7 @@ the Phase 2.1 solver. Depends on items 1 and 3.
 FLASH's HEDP demos use), SESAME later if licensing permits. The EOS contract
 is ready (`reference/HISTORY.md`); this is data plumbing and a table
 interpolator, not solver surgery. The κ\* scale for a tabular model comes
-through the existing `art_conductivity_scale` dispatch point.
+through the existing `artificial_conductivity_scale` dispatch point.
 
 **6. Multigroup radiation diffusion.** Flux-limited, gray first, then
 multigroup with a group structure and an opacity interface mirroring the EOS

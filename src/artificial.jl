@@ -805,7 +805,7 @@ end
                                C_kappa, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        scale = art_conductivity_scale(eos, rho[I], c[I], T_ion[I], cp_mix[I])
+        scale = artificial_conductivity_scale(eos, rho[I], c[I], T_ion[I], cp_mix[I])
         kappa_art[I] = C_kappa * scale * max(sensor[I], zero(sensor[I]))
     end
     return nothing

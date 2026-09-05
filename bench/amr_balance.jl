@@ -108,7 +108,7 @@ function track(args, rebalance; quiet=false)
 end
 
 function main()
-    args = script_args(ARGS, (N=800, interval=10, steps=200, persist=1);
+    args = CompactLES.script_args(ARGS, (N=800, interval=10, steps=200, persist=1);
                        positional=(:N, :interval, :steps, :persist))
     rank = MPI.Comm_rank(MPI.COMM_WORLD)
     rank == 0 && println("np = $(MPI.Comm_size(MPI.COMM_WORLD)), N = $(args.N), ",

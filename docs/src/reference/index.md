@@ -1,7 +1,10 @@
-# Public index
+# Public API index
 
-This index contains every documented public binding. The preceding reference
-pages group the same bindings by task and abstraction.
+This index contains the exported input-deck and runtime bindings. The reference
+pages also document two narrower supported surfaces: advanced numerical
+operations and extension hooks. Developer internals may be rendered on those
+pages to support cross-references, but are not exported and are not part of the
+public input-deck API.
 
 ```@meta
 CurrentModule = CompactLES

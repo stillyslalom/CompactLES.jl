@@ -19,7 +19,7 @@ np = MPI.Comm_size(MPI.COMM_WORLD)
 
 prob = Problem(
     name = "converging shock",
-    eos = single_species(gamma=1.4),
+    eos = IdealSpecies("gas"; R=1.0, gamma=1.4),
     metric = CylindricalMetric(),
     domain = ((0.0, R), (0.0, 1.0), (0.0, 1.0)),   # θ, z collapsed below
     bcs = ((AxisBC(), SlipWallBC()),

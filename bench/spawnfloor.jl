@@ -46,7 +46,7 @@ function measure(trips::Int, reps::Int)
 end
 
 function main(args)
-    opt = script_args(args, (trips = 0, reps = 10_000, regions = 120))
+    opt = CompactLES.script_args(args, (trips = 0, reps = 10_000, regions = 120))
     trips = opt.trips > 0 ? opt.trips : Threads.nthreads()
     threaded, serial, bytes = measure(trips, opt.reps)
     @printf("-t %-3d trips=%-4d  spawn floor %7.2f µs (median %7.2f)",

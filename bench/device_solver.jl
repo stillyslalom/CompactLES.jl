@@ -19,7 +19,7 @@ using CompactLES
 using Printf
 const CL = CompactLES
 
-opt = script_args(ARGS, (backend = "amdgpu", n = 64, steps = 20, sync = false))
+opt = CompactLES.script_args(ARGS, (backend = "amdgpu", n = 64, steps = 20, sync = false))
 
 # `sync=true` restores the synchronize-per-launch conservative mode, so
 # the launch-policy delta is one flag apart on identical cases. Either mode
@@ -265,7 +265,7 @@ function main(opt)
             p0 = c0^2 / γ
             s = Solver(n_global=(n, n, n),
                        L_domain=(Tp(2π), Tp(2π), Tp(2π)),
-                       bcs=(per, per, per), eos=single_species(Tp),
+                       bcs=(per, per, per), eos=IdealSpecies("gas"; R=one(Tp), gamma=Tp(1.4)),
                        transport=Transport{Tp}(mu0=Tp(1 / 1600)),
                        art=ArtParams{Tp}(enabled=false),
                        deriv=lele_d1_6(Tp), filt=compact_filter(Tp(0.45), Tp),

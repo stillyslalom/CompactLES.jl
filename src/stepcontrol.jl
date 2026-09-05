@@ -129,7 +129,7 @@ this file.
 ## Floors
 
 - `dt_min = 0.0`: absolute floor on `dt`; 0 disables it. The unconditional
-  [`PLANCK_TIME`](@ref) floor and the relative floor below apply either way.
+  internal `PLANCK_TIME` floor and the relative floor below apply either way.
 - `dt_min_ratio = 1e-8`: floor relative to the largest `dt` taken so far in
   the current `run!` call; 0 disables it. This detects collapse without prior
   knowledge of the problem's units or scales. Physical variation in `dt` is

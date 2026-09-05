@@ -38,7 +38,7 @@ first-stage transient.
 ```julia
 problem = Problem(
     name = "example",
-    eos = single_species(gamma = 1.4),
+    eos = IdealSpecies("gas"; R = 1.0, gamma = 1.4),
     transport = Transport(mu0 = 1 / 1600, Pr = 0.7, Sc = 0.7),
     metric = CartesianMetric(),
     sources = (),

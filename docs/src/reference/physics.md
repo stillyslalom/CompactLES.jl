@@ -18,7 +18,6 @@ EOS
 nspecies
 IdealSpecies
 IdealMixture
-single_species
 Transport
 ```
 
@@ -47,11 +46,12 @@ ArtParams
 ## Explicit sources
 
 Source collections are concrete tuples stored on `Problem`. Custom source
-types extend `add_source!`; `add_sources!` applies the complete tuple during an
-RHS evaluation.
+types extend `add_source!`; see [Extending CompactLES](@ref). The internal
+`CompactLES.add_sources!` applies the complete tuple during an RHS evaluation
+and is rendered only for cross-references.
 
 ```@docs
 ConstantBodyForce
 add_source!
-add_sources!
+CompactLES.add_sources!
 ```

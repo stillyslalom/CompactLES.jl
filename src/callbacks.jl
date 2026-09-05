@@ -36,10 +36,26 @@ identical on every rank; see the implementation note at the top of this file.
 """
 abstract type Trigger end
 
-# A caller cannot arrange exact landing on a requested time from outside: `dt`
-# must be clipped before the step, which only `run!` can do.
-# Everything else reports Inf and lets the timestep alone.
+"""
+    next_time(trigger, solver) -> Real
+
+Next physical time at which `trigger` wants [`run!`](@ref) to end a completed
+step exactly. The default is `Inf`, so a custom [`Trigger`](@ref) that is not
+scheduled in physical time need not implement it. The result must be identical
+on every rank.
+"""
 next_time(::Trigger, solver) = Inf
+
+"""
+    fired!(trigger, solver, Q) -> Bool
+
+Return whether a [`Callback`](@ref) should run after the current completed
+step. A custom [`Trigger`](@ref) must implement this method. The verdict must be
+identical on every rank; a state-dependent trigger must perform any necessary
+collective reduction itself.
+"""
+fired!(trigger::Trigger, solver, Q) =
+    throw(ArgumentError("$(typeof(trigger)) must implement fired!(trigger, solver, Q)"))
 
 """
     rewind!(trigger, t, step)

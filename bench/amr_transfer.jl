@@ -27,6 +27,8 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+import CompactLES: Decomp, field, apply_along!, amr_transfer_schemes,
+                   plan_transfer, prolong!, restrict!
 using LinearAlgebra
 using Printf
 

@@ -93,7 +93,7 @@ function tube(left, right; N, L=1.0, x0=0.5, tfin, γ=1.4,
     ρat(x) = rhofun === nothing ? ρR : rhofun(x)
     bcs = (DirichletBC((x, y, z, t) -> Prim(rho=ρL, u=(uL, 0.0, 0.0), p=pL)),
            DirichletBC((x, y, z, t) -> Prim(rho=ρat(x), u=(uR, 0.0, 0.0), p=pR)))
-    prob = Problem(eos=single_species(gamma=γ, R=1.0),
+    prob = Problem(eos=IdealSpecies("gas"; gamma=γ, R=1.0),
                    transport=Transport(mu0=0.0),
                    domain=((xlo, xlo + L), (0.0, h), (0.0, h)),
                    bcs=(bcs, per3[2], per3[3]),
@@ -140,7 +140,7 @@ function woodward(; N=WC_N, art=ArtParams(enabled=true), cfl=0.3, nmax=NMAX,
                   delta=nothing, deriv=lele_d1_6(), filt=compact_filter(0.45))
     h = 1.0 / (N - 1)
     δ = delta === nothing ? 2h : delta
-    prob = Problem(eos=single_species(gamma=1.4, R=1.0),
+    prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
                    transport=Transport(mu0=0.0),
                    domain=((0.0, 1.0), (0.0, h), (0.0, h)),
                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
@@ -174,7 +174,7 @@ function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtParams(enabled=true), cfl=
     # E = ∫ p/(γ−1) dV over the full sphere for p = p_in exp(−r²/σ²), using
     # ∫₀^∞ r² e^{−r²/σ²} dr = σ³√π/4, so E = π^{3/2} p_in σ³ / (γ−1).
     pin = SEDOV_E * (γ - 1) / (π^1.5 * σ^3)
-    prob = Problem(eos=single_species(gamma=γ, R=1.0),
+    prob = Problem(eos=IdealSpecies("gas"; gamma=γ, R=1.0),
                    transport=Transport(mu0=0.0),
                    metric=SphericalMetric(),
                    domain=((0.0, R), (π / 2, π / 2 + 1), (0.0, 1.0)),
@@ -238,7 +238,7 @@ function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
         Prim(rho=(1 - θ) * ρin + θ * ρout, u=(-θ, 0.0, 0.0),
              p=(1 - θ) * pin + θ * NOH_P0)
     end
-    prob = Problem(eos=single_species(gamma=NOH_G, R=1.0),
+    prob = Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
                    transport=Transport(mu0=0.0), metric=metric,
                    domain=((0.0, R), dom2, dom3),
                    bcs=((lobc, inflow), per3[2], per3[3]), ic=ic)

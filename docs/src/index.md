@@ -18,14 +18,17 @@ therefore be studied at several resolutions without rewriting its physics.
 - **Learn by running a calculation.** Begin with
   [Your first CompactLES simulation](@ref), a one-dimensional acoustic pulse
   that builds an `x`--`t` diagram.
+- **Build an input deck quickly.** Use the [Input deck cheat sheet](@ref) for
+  the complete constructor vocabulary, defaults, and common recipes.
 - **Complete a specific task.** Use the how-to guides to
   [Define a problem](@ref), [Choose boundary conditions](@ref),
   [Control and diagnose a run](@ref), or [Write output and restart](@ref).
 - **Understand the model.** Start with [Governing equations](@ref), then read
   the explanation of discretization, regularization, thermodynamics, geometry,
   open boundaries, and parallel algorithms.
-- **Look up exact behavior.** The reference section documents constructors,
-  keywords, return values, and every exported binding.
+- **Look up exact behavior.** The reference section separates the exported
+  input/runtime API, supported advanced numerical and extension APIs, and
+  developer internals rendered only for cross-references.
 
 ## How the tutorials build
 

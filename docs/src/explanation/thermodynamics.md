@@ -23,8 +23,13 @@ c_{v,k}=\frac{R_k}{\gamma_k-1},\qquad
 c_{p,k}=c_{v,k}+R_k.
 ```
 
-Use [`single_species`](@ref) for one gas or construct an `IdealMixture` from a
-vector of species. This model is appropriate when the relevant temperature
+Use `IdealSpecies("gas"; R=1.0, gamma=1.4)` for an explicit one-species gas;
+`Problem` promotes it internally to the one-species [`IdealMixture`](@ref)
+required by the solver. `IdealSpecies("CO2")` and other named species can be
+sampled from the bundled NASA-9 database at the reference temperature
+(298.15 K), producing a calorically perfect reference-state approximation.
+`IdealMixture(["He", "CO2"])` is the concise named-species constructor for a
+constant-cp mixture. This model is appropriate when the relevant temperature
 range is narrow enough that heat-capacity variation is negligible.
 
 ## NASA-9 mixtures
@@ -32,6 +37,8 @@ range is narrow enough that heat-capacity variation is negligible.
 [`Nasa9Mixture`](@ref) remains thermally ideal but evaluates piecewise
 polynomials for each species heat capacity and enthalpy. Recovering temperature
 from internal energy requires a bounded Newton iteration at each point.
+Use `Nasa9Mixture(["He", "CO2"])` for a database-backed mixture, or construct
+it from explicit [`Nasa9Species`](@ref) records when supplying a custom table.
 
 [`read_nasa9`](@ref) reads the bundled NASA CEA database and derives specific
 gas constants from molar mass. Its default `reference=:sensible` shifts the
@@ -84,18 +91,14 @@ enthalpy transport `sum(h_k J_k)`.
 
 ## Extension contract
 
-A new EOS must define the complete closure used by the solver, including:
-
-- species count and names;
-- bulk conserved-to-primitive recovery;
-- primitive-to-conserved conversion;
-- species enthalpy;
-- the pressure-to-energy derivative used by NSCBC;
-- composition derivatives needed by NSCBC inflow;
-- an artificial-conductivity scale; and
-- internal energy at an isothermal wall.
+A new EOS must define the complete closure used by the solver: the species
+count and names, the bulk conserved-to-primitive recovery, the
+primitive-to-conserved conversion, the species enthalpy, the pressure-to-energy
+derivative and its composition derivatives used by NSCBC, the
+artificial-conductivity scale, and the internal energy at an isothermal wall.
+[Extending CompactLES](@ref) lists the hook for each of these with its
+signature; the comment at the top of `src/physics.jl` records the mathematical
+contracts.
 
 These calls occur behind array-level function barriers. Dynamic dispatch is
-therefore paid once per pass, not at every grid point. The detailed
-method names and mathematical contracts are recorded at the top of
-`src/physics.jl` for extension authors.
+therefore paid once per pass, not at every grid point.

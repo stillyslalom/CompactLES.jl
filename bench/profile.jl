@@ -18,7 +18,7 @@ per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 function tgv(N=64)
     γ = 1.4; c0 = 10.0; p0 = c0^2 / γ
-    solver, Q = setup(Problem(eos=single_species(gamma=γ), transport=Transport(mu0=1 / 1600),
+    solver, Q = setup(Problem(eos=IdealSpecies("gas"; R=1.0, gamma=γ), transport=Transport(mu0=1 / 1600),
                          domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3,
                          ic=(x, y, z) -> Prim(
                              u=(sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), 0.0),

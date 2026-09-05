@@ -25,6 +25,21 @@ declared during solver setup.
 """
 abstract type BoundaryCondition end
 
+"""
+    enforce!(bc, Q, solver, dim, side)
+
+Hard-state boundary hook. It is called once for each face of every active
+dimension at the beginning of a Runge--Kutta stage and may modify the boundary
+plane of the conserved state `Q`. The default is a no-op, which is appropriate
+for conditions implemented entirely through [`correct_rhs!`](@ref).
+
+Extend this method for a custom [`BoundaryCondition`](@ref). `dim` is 1, 2, or
+3 and `side` is 1 (low) or 2 (high); only the rank owning the physical face
+receives a nonempty plane. Return `nothing` or `Q` consistently from custom
+methods; the solver uses the mutation, not the return value.
+"""
+enforce!(::BoundaryCondition, Q, solver, dim, side) = nothing
+
 """Periodic continuation through the opposite face of one dimension."""
 struct PeriodicBC <: BoundaryCondition end
 
@@ -141,6 +156,14 @@ CoarseFineBC() = InterfaceBC(0)
 parent_fed(bc::InterfaceBC) = bc.neighbor == 0
 parent_fed(::BoundaryCondition) = false
 
+"""
+    isperiodic(bc) -> Bool
+
+Whether `bc` joins a dimension periodically. The default for a
+[`BoundaryCondition`](@ref) is `false`; custom periodic conditions must extend
+this method because setup uses the answer when constructing MPI topology and
+directional plans.
+"""
 isperiodic(::BoundaryCondition) = false
 isperiodic(::PeriodicBC) = true
 
@@ -283,7 +306,18 @@ validate_bc(bc::SwitchableBC, metric, eos, d::Int, side::Int) =
     (validate_bc(bc.before, metric, eos, d, side);
      validate_bc(bc.after, metric, eos, d, side))
 
-"ρe at a wall held at temperature Twall, one method per EOS."
+"""
+    wall_internal_energy(eos, Q, I, n_species, T_wall)
+
+Return the internal-energy density `ρe` imposed at padded state index `I` by
+an isothermal [`NoSlipWallBC`](@ref). A custom [`EOS`](@ref) must implement this
+hook if it supports isothermal walls. `Q` supplies the local partial densities,
+`n_species` is the equation set's species count, and `T_wall` is expressed in
+the temperature units of the EOS.
+
+The method is evaluated inside a specialized wall-plane loop and must not
+perform communication or mutate `Q`.
+"""
 wall_internal_energy(eos::IdealMixture, Q, I, n_species::Int, Twall) = begin
     ρe = zero(eltype(Q))
     @inbounds for k in 1:n_species

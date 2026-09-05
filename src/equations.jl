@@ -52,8 +52,15 @@ function NavierStokes1T(eos::EOS)
     return NavierStokes1T(n_species, n_cons, i_mom, i_energy, names)
 end
 
-"""Parity of conserved component `c` under the basis change `sigvel`: `+1` for a
-partial density or the energy, and `sigvel[j]` for momentum component `j`."""
+"""
+    conserved_parity(equations, sigvel, component) -> Int
+
+Parity of a conserved component under the velocity-basis sign change `sigvel`.
+A custom [`EquationSet`](@ref) must implement this hook for coordinate folds,
+returning `+1` or `-1` for every component in its conserved layout. The
+[`NavierStokes1T`](@ref) method returns `+1` for partial densities and energy
+and `sigvel[j]` for momentum component `j`.
+"""
 @inline function conserved_parity(equations::NavierStokes1T, sigvel, c::Int)
     c <= equations.n_species && return 1
     c == equations.i_energy && return 1

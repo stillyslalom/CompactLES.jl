@@ -10,13 +10,14 @@
 #
 # --- The contract ----------------------------------------------------------
 #
-# A new EOS supplies these. `eos_phi`, `eos_dphi_dY` and `art_conductivity_scale`
+# A new EOS supplies these. `eos_phi`, `eos_dphi_dY` and
+# `artificial_conductivity_scale`
 # existed as ideal-gas algebra inlined at their call sites, which left the rest of
 # the solver quietly ideal-gas even though this file was not; the others have been
 # dispatch points throughout.
 #
 #   nspecies(eos)                        number of species Ns
-#   _primitives!(solver, eos, Q)         ρ, u, v, w, p, T_ion, c, cp_mix, Y over
+#   recover_primitives!(solver, eos, Q)  ρ, u, v, w, p, T_ion, c, cp_mix, Y over
 #                                        the padded arrays (the bulk conversion)
 #   species_enthalpy(eos, k, T_ion)      partial specific enthalpy h_k(T_ion)
 #   conserved_from_prim(eqns, eos, pr)   primitive → conserved (problem.jl)
@@ -27,7 +28,8 @@
 #                                        both faces.
 #   eos_dphi_dY(eos, k, ρ, p, T, cp)     ∂φ/∂Y_k, for the species terms of the
 #                                        characteristic inflow.
-#   art_conductivity_scale(eos, ρ, c,    κ* per unit sensor in compute_artificial!
+#   artificial_conductivity_scale(eos,   κ* per unit sensor in
+#                          ρ, c,         compute_artificial!
 #                          T_ion, cp)
 #   wall_internal_energy(eos, Q, I,      ρe at a wall held at Twall (boundary.jl)
 #                        n_species, Twall)
@@ -37,7 +39,7 @@
 # and so on for an EOS that does not define it.
 #
 # Several of these are evaluated per point: `species_enthalpy` in
-# `_assemble_fluxes!`, `art_conductivity_scale` in `compute_artificial!`, and
+# `_assemble_fluxes!`, `artificial_conductivity_scale` in `compute_artificial!`, and
 # `wall_internal_energy` over an isothermal wall plane. Each such loop sits inside
 # a routine specialized on the concrete solver or EOS type, so the dispatch on
 # `eos` is paid once per array pass or once per boundary plane, not per point.
@@ -77,7 +79,72 @@ scale. Built-in choices are [`IdealMixture`](@ref), [`Nasa9Mixture`](@ref), and
 abstract type EOS end
 
 """
+    recover_primitives!(solver, eos, Q) -> solver
+
+Recover the padded primitive fields (`rho`, velocity, pressure, temperature,
+sound speed, mixture heat capacity, and mass fractions) from the conserved
+state `Q`. Custom [`EOS`](@ref) implementations must provide this bulk method.
+It is called only after the state halos are current; [`refresh_primitives!`](@ref)
+is the public collective wrapper for ordinary solver use.
+"""
+function recover_primitives! end
+
+"""
+    species_names(eos) -> Vector{String}
+
+Labels for the partial-density components of an [`EOS`](@ref), in the same
+order as its mass fractions. Defining this hook is optional; the equation-set
+fallback names components `species_1`, `species_2`, and so on.
+"""
+function species_names end
+
+"""
+    species_enthalpy(eos, k, T_ion)
+
+Specific enthalpy of species `k` at temperature `T_ion`. Custom [`EOS`](@ref)
+implementations provide this hook for diffusive enthalpy fluxes.
+"""
+function species_enthalpy end
+
+"""
+    eos_phi(eos, rho, p, T_ion, cp_mix)
+
+Return the thermodynamic NSCBC coefficient
+`∂(rho*e)/∂p |_(rho,Y)` for an [`EOS`](@ref).
+"""
+function eos_phi end
+
+"""
+    eos_dphi_dY(eos, k, rho, p, T_ion, cp_mix)
+
+Return the mass-fraction derivative of [`eos_phi`](@ref) for species `k`, at
+fixed temperature. Custom [`EOS`](@ref) implementations provide this hook for
+the composition terms of characteristic inflow.
+"""
+function eos_dphi_dY end
+
+"""
+    artificial_conductivity_scale(eos, rho, c, T_ion, cp_mix)
+
+Return the EOS-dependent factor multiplying the artificial-conductivity sensor.
+Custom [`EOS`](@ref) implementations provide this hook.
+"""
+function artificial_conductivity_scale end
+
+"""
+    wall_internal_energy(eos, Q, I, n_species, Twall)
+
+Return the thermal conserved-energy density at padded index `I` when an
+isothermal wall holds the state at `Twall`. Custom [`EOS`](@ref)
+implementations provide this hook when they support [`NoSlipWallBC`](@ref)
+with an isothermal condition.
+"""
+function wall_internal_energy end
+
+"""
     IdealSpecies(name, R, gamma)
+    IdealSpecies(name; R, gamma)
+    IdealSpecies(name; T_ref=298.15, path=nothing)
 
 One calorically perfect species.
 
@@ -86,21 +153,84 @@ One calorically perfect species.
 - `gamma` is the constant heat-capacity ratio.
 
 The implied heat capacities are `cv = R / (gamma - 1)` and `cp = cv + R`.
-The constructor does not validate the parameters; physical use requires
-`R > 0` and `gamma > 1`. Use a consistent unit system for `R`, pressure,
-density, and temperature.
+The explicit constructors require `R > 0` and `gamma > 1`. With no `R` and
+`gamma`, the name is looked up in the bundled NASA-9 database, `cp` is sampled
+at `T_ref`, and `gamma = cp / (cp - R)` forms a calorically perfect
+reference-temperature approximation. Use a consistent unit system for `R`,
+pressure, density, and temperature.
 """
 struct IdealSpecies{T}
     name::String
     R::T          # specific gas constant
     gamma::T
+
+    function IdealSpecies{T}(name::AbstractString, R::Real,
+                             gamma::Real) where {T<:AbstractFloat}
+        RT, gammaT = T(R), T(gamma)
+        isfinite(RT) && RT > zero(T) ||
+            throw(ArgumentError("IdealSpecies requires a finite R > 0"))
+        isfinite(gammaT) && gammaT > one(T) ||
+            throw(ArgumentError("IdealSpecies requires a finite gamma > 1"))
+        new{T}(String(name), RT, gammaT)
+    end
+end
+
+function IdealSpecies(name::AbstractString, R::Real, gamma::Real)
+    T = promote_type(typeof(float(R)), typeof(float(gamma)))
+    T <: AbstractFloat || (T = Float64)
+    return IdealSpecies{T}(name, R, gamma)
+end
+
+IdealSpecies(::Type{T}, name::AbstractString, R::Real, gamma::Real) where
+    {T<:AbstractFloat} = IdealSpecies{T}(name, R, gamma)
+
+function _ideal_species_from_nasa9_record(::Type{T}, species;
+                                          T_ref=298.15) where {T<:AbstractFloat}
+    T_ref > 0 || throw(ArgumentError("T_ref must be positive"))
+    temperature = T(T_ref)
+    cp = species.R * _nasa9_cp_over_R(_nasa9_interval(species, temperature),
+                                      temperature)
+    cp > species.R || throw(ArgumentError(
+        "NASA-9 species $(species.name) has cp <= R at T_ref = $T_ref"))
+    return IdealSpecies{T}(species.name, species.R, cp / (cp - species.R))
+end
+
+function _ideal_species_from_nasa9(::Type{T}, name::AbstractString;
+                                   T_ref=298.15, path=nothing) where
+                                   {T<:AbstractFloat}
+    database_path = path === nothing ? NASA9_THERMO_PATH : path
+    species = read_nasa9(name; path=database_path, reference=:formation,
+                         T_ref=T_ref)
+    return _ideal_species_from_nasa9_record(T, species; T_ref=T_ref)
+end
+
+function IdealSpecies(name::AbstractString; R=nothing, gamma=nothing,
+                      T_ref=298.15, path=nothing)
+    if R === nothing && gamma === nothing
+        return _ideal_species_from_nasa9(Float64, name; T_ref=T_ref, path=path)
+    elseif R === nothing || gamma === nothing
+        throw(ArgumentError("IdealSpecies requires both R and gamma, or neither"))
+    end
+    return IdealSpecies(name, R, gamma)
+end
+
+function IdealSpecies(::Type{T}, name::AbstractString; R=nothing, gamma=nothing,
+                      T_ref=298.15, path=nothing) where {T<:AbstractFloat}
+    if R === nothing && gamma === nothing
+        return _ideal_species_from_nasa9(T, name; T_ref=T_ref, path=path)
+    elseif R === nothing || gamma === nothing
+        throw(ArgumentError("IdealSpecies requires both R and gamma, or neither"))
+    end
+    return IdealSpecies{T}(name, R, gamma)
 end
 
 """
     IdealMixture(species)
 
-Thermally and calorically ideal mixture assembled from a nonempty vector of
-[`IdealSpecies`](@ref) values with a common numeric type. Mixture gas constant
+Thermally and calorically ideal mixture assembled from nonempty
+[`IdealSpecies`](@ref) values. Element types are promoted to a common floating
+type. Passing a vector (or tuple) of NASA-9 species names reads them in one
+batch and samples each constant heat capacity at `T_ref`. Mixture gas constant
 and heat capacities are mass-fraction averages, so each species keeps constant
 `R`, `cp`, and `cv` while mixture properties vary with composition.
 
@@ -115,24 +245,58 @@ struct IdealMixture{T} <: EOS
     cpk::Vector{T}
 end
 
-function IdealMixture(sp::Vector{IdealSpecies{T}}) where {T}
-    isempty(sp) && throw(ArgumentError("IdealMixture requires at least one species"))
+function _ideal_mixture(::Type{T}, species) where {T<:AbstractFloat}
+    isempty(species) && throw(ArgumentError("IdealMixture requires at least one species"))
+    sp = IdealSpecies{T}[IdealSpecies{T}(x.name, x.R, x.gamma) for x in species]
     Rk  = [x.R for x in sp]
     cvk = [x.R / (x.gamma - 1) for x in sp]
     IdealMixture{T}(sp, Rk, cvk, Rk .+ cvk)
 end
 
-"""
-    single_species([T=Float64]; gamma=1.4, R=1.0, name="gas") -> IdealMixture
+function IdealMixture(species::AbstractVector{<:IdealSpecies})
+    isempty(species) && throw(ArgumentError("IdealMixture requires at least one species"))
+    T = promote_type((typeof(x.R) for x in species)...)
+    return _ideal_mixture(T, species)
+end
 
-Construct a one-species calorically perfect [`IdealMixture`](@ref). `gamma` is
-the heat-capacity ratio, `R` the specific gas constant, and `name` the label
-used for the partial-density component and output. This is the default EOS for
-[`Problem`](@ref).
-"""
-single_species(::Type{T}=Float64; gamma::Real=1.4, R::Real=1.0,
-               name::String="gas") where {T<:AbstractFloat} =
-    IdealMixture([IdealSpecies{T}(name, T(R), T(gamma))])
+IdealMixture(species::Tuple{Vararg{IdealSpecies}}) = IdealMixture(collect(species))
+IdealMixture(species::IdealSpecies) = IdealMixture([species])
+IdealMixture(::Type{T}, species::AbstractVector{<:IdealSpecies}) where
+    {T<:AbstractFloat} = _ideal_mixture(T, species)
+IdealMixture(::Type{T}, species::IdealSpecies) where {T<:AbstractFloat} =
+    _ideal_mixture(T, (species,))
+IdealMixture(::Type{T}, species::Tuple{Vararg{IdealSpecies}}) where
+    {T<:AbstractFloat} = _ideal_mixture(T, species)
+
+function IdealMixture(names::AbstractVector{<:AbstractString}; T_ref=298.15,
+                      path=nothing)
+    database_path = path === nothing ? NASA9_THERMO_PATH : path
+    nasa_species = read_nasa9(names; path=database_path, reference=:formation,
+                              T_ref=T_ref)
+    return IdealMixture([_ideal_species_from_nasa9_record(Float64, sp;
+                                                            T_ref=T_ref)
+                         for sp in nasa_species])
+end
+
+IdealMixture(names::Tuple{Vararg{<:AbstractString}}; kwargs...) =
+    IdealMixture(collect(names); kwargs...)
+IdealMixture(::Type{T}, names::Tuple{Vararg{<:AbstractString}}; kwargs...) where
+    {T<:AbstractFloat} = IdealMixture(T, collect(names); kwargs...)
+function IdealMixture(::Type{T}, names::AbstractVector{<:AbstractString};
+                      T_ref=298.15, path=nothing) where {T<:AbstractFloat}
+    database_path = path === nothing ? NASA9_THERMO_PATH : path
+    nasa_species = read_nasa9(names; path=database_path, reference=:formation,
+                              T_ref=T_ref)
+    species = [_ideal_species_from_nasa9_record(T, sp; T_ref=T_ref)
+               for sp in nasa_species]
+    return IdealMixture(T, species)
+end
+
+_default_ideal_mixture() = IdealMixture(IdealSpecies("gas"; R=1.0, gamma=1.4))
+_as_eos(eos::EOS) = eos
+_as_eos(species::IdealSpecies) = IdealMixture(species)
+_as_eos(eos) = throw(ArgumentError(
+    "eos must be an EOS or IdealSpecies, got $(typeof(eos))"))
 
 # A literal 1e-300 is a useful nonzero division guard in Float64 but rounds
 # to zero in Float32. Preserve the established Float64 value and choose the
@@ -178,7 +342,7 @@ end
 @inline temperature_floor(::Type{T}) where {T<:AbstractFloat} = eps(T)
 
 "Cook's ρc/T_ion. See the note on the singularity at the top of this file."
-@inline art_conductivity_scale(::IdealMixture, ρ, c, T_ion, cp_mix) =
+@inline artificial_conductivity_scale(::IdealMixture, ρ, c, T_ion, cp_mix) =
     ρ * c / max(T_ion, temperature_floor(typeof(T_ion)))
 
 """
@@ -214,7 +378,7 @@ Adapt.adapt_structure(to, eos::IdealMixture{T}) where {T} =
 
 Base.@propagate_inbounds species_enthalpy(eos::IdealMixtureCoeffs, k::Int, T_ion) =
     eos.cpk[k] * T_ion
-@inline art_conductivity_scale(::IdealMixtureCoeffs, ρ, c, T_ion, cp_mix) =
+@inline artificial_conductivity_scale(::IdealMixtureCoeffs, ρ, c, T_ion, cp_mix) =
     ρ * c / max(T_ion, temperature_floor(typeof(T_ion)))
 @inline function eos_phi(::IdealMixtureCoeffs, ρ, p, T_ion, cp_mix)
     Rm = p / (ρ * T_ion)
@@ -265,7 +429,8 @@ The thermal relation is `p + p_inf = rho * R * T_ion`, with
 `R = (gamma - 1) * cv`. Parameters must use a consistent unit system and be
 fitted over the intended material and state range. The defaults are a
 water-like starting point in SI units, not a general liquid model. Setting
-`p_inf = 0` recovers the perfect-gas algebra of [`single_species`](@ref).
+`p_inf = 0` recovers the perfect-gas algebra of a one-species
+[`IdealMixture`](@ref).
 """
 Base.@kwdef struct StiffenedGas{T} <: EOS
     gamma::T = 4.4
@@ -282,7 +447,7 @@ species_enthalpy(eos::StiffenedGas, ::Int, T_ion) = eos.gamma * eos.cv * T_ion
 # Exact and state-independent: ρe = (p + γp∞)/(γ−1).
 @inline eos_phi(eos::StiffenedGas, ρ, p, T_ion, cp_mix) = 1 / (eos.gamma - 1)
 @inline eos_dphi_dY(::StiffenedGas, ::Int, ρ, p, T_ion, cp_mix) = 0.0
-@inline art_conductivity_scale(::StiffenedGas, ρ, c, T_ion, cp_mix) =
+@inline artificial_conductivity_scale(::StiffenedGas, ρ, c, T_ion, cp_mix) =
     ρ * c / max(T_ion, temperature_floor(typeof(T_ion)))
 
 # `StiffenedGas` carries a name string, so it takes the same launch-time
@@ -298,7 +463,7 @@ Adapt.adapt_structure(to, eos::StiffenedGas) =
 
 @inline species_enthalpy(eos::StiffenedGasCoeffs, ::Int, T_ion) =
     eos.gamma * eos.cv * T_ion
-@inline art_conductivity_scale(::StiffenedGasCoeffs, ρ, c, T_ion, cp_mix) =
+@inline artificial_conductivity_scale(::StiffenedGasCoeffs, ρ, c, T_ion, cp_mix) =
     ρ * c / max(T_ion, temperature_floor(typeof(T_ion)))
 @inline eos_phi(eos::StiffenedGasCoeffs, ρ, p, T_ion, cp_mix) =
     1 / (eos.gamma - 1)
@@ -335,7 +500,7 @@ Adapt.adapt_structure(to, eos::StiffenedGas) =
     return nothing
 end
 
-function _primitives!(solver, eos::StiffenedGas, Q)
+function recover_primitives!(solver, eos::StiffenedGas, Q)
     m1, m2, m3 = solver.equations.i_mom
     i_energy = solver.equations.i_energy
     γ = eos.gamma; p_inf = eos.p_inf; cv = eos.cv
@@ -367,7 +532,8 @@ end
 # keeping coefficients and gas constants coupled. `nasa9_constant_cp` builds the
 # degenerate constant-cp case used to pin the machinery against `IdealMixture`.
 #
-# The cost of a caloric EOS is that T is no longer explicit in e: `_primitives!`
+# The cost of a caloric EOS is that T is no longer explicit in e:
+# `recover_primitives!`
 # runs a Newton iteration per point, converging on de/dT = cv. That is inherent
 # to the model, not to this implementation.
 
@@ -485,6 +651,30 @@ end
 Nasa9Species(; kwargs...) = Nasa9Species{Float64}(; kwargs...)
 
 """
+    Nasa9Species(name; path=nothing, reference=:sensible, T_ref=298.15)
+
+Read one gaseous NASA-9 species from the bundled CEA database. This is the
+single-species convenience form of [`read_nasa9`](@ref); pass `Float32` (or
+another floating type) first to convert the fitted coefficients.
+"""
+function _convert_nasa9_species(::Type{T}, species) where {T<:AbstractFloat}
+    intervals = [Nasa9Interval{T}(T(item.Tmin), T(item.Tmax),
+                                  ntuple(i -> T(item.a[i]), 7), T(item.b1))
+                 for item in species.intervals]
+    return Nasa9Species{T}(species.name, T(species.R), intervals)
+end
+
+function Nasa9Species(::Type{T}, name::AbstractString; path=nothing,
+                      reference=:sensible, T_ref=298.15) where {T<:AbstractFloat}
+    database_path = path === nothing ? NASA9_THERMO_PATH : path
+    return _convert_nasa9_species(T, read_nasa9(name; path=database_path,
+                                                 reference=reference,
+                                                 T_ref=T_ref))
+end
+
+Nasa9Species(name::AbstractString; kwargs...) = Nasa9Species(Float64, name; kwargs...)
+
+"""
     nasa9_constant_cp([T=Float64], name, R, cp) -> Nasa9Species
 
 Construct a [`Nasa9Species`](@ref) whose specific heat `cp` is temperature
@@ -526,9 +716,47 @@ struct Nasa9Mixture{T} <: EOS
     T_guess::T
 end
 
-function Nasa9Mixture(sp::Vector{Nasa9Species{T}}; T_guess=300.0) where {T}
-    isempty(sp) && throw(ArgumentError("Nasa9Mixture requires at least one species"))
+function _nasa9_mixture(::Type{T}, species; T_guess=300.0) where {T<:AbstractFloat}
+    isempty(species) && throw(ArgumentError("Nasa9Mixture requires at least one species"))
+    sp = Nasa9Species{T}[_convert_nasa9_species(T, item) for item in species]
     return Nasa9Mixture{T}(sp, [x.R for x in sp], T(T_guess))
+end
+
+function Nasa9Mixture(species::AbstractVector{<:Nasa9Species}; T_guess=300.0)
+    isempty(species) && throw(ArgumentError("Nasa9Mixture requires at least one species"))
+    T = promote_type((typeof(item.R) for item in species)...)
+    return _nasa9_mixture(T, species; T_guess=T_guess)
+end
+
+Nasa9Mixture(species::Nasa9Species; kwargs...) = Nasa9Mixture([species]; kwargs...)
+Nasa9Mixture(species::Tuple{Vararg{Nasa9Species}}; kwargs...) =
+    Nasa9Mixture(collect(species); kwargs...)
+Nasa9Mixture(::Type{T}, species::AbstractVector{<:Nasa9Species}; kwargs...) where
+    {T<:AbstractFloat} = _nasa9_mixture(T, species; kwargs...)
+Nasa9Mixture(::Type{T}, species::Nasa9Species; kwargs...) where
+    {T<:AbstractFloat} = _nasa9_mixture(T, (species,); kwargs...)
+Nasa9Mixture(::Type{T}, species::Tuple{Vararg{Nasa9Species}}; kwargs...) where
+    {T<:AbstractFloat} = _nasa9_mixture(T, species; kwargs...)
+
+function Nasa9Mixture(names::AbstractVector{<:AbstractString}; path=nothing,
+                      reference=:sensible, T_ref=298.15, T_guess=300.0)
+    database_path = path === nothing ? NASA9_THERMO_PATH : path
+    species = read_nasa9(names; path=database_path, reference=reference,
+                         T_ref=T_ref)
+    return _nasa9_mixture(Float64, species; T_guess=T_guess)
+end
+
+Nasa9Mixture(names::Tuple{Vararg{<:AbstractString}}; kwargs...) =
+    Nasa9Mixture(collect(names); kwargs...)
+Nasa9Mixture(::Type{T}, names::Tuple{Vararg{<:AbstractString}}; kwargs...) where
+    {T<:AbstractFloat} = Nasa9Mixture(T, collect(names); kwargs...)
+function Nasa9Mixture(::Type{T}, names::AbstractVector{<:AbstractString};
+                      path=nothing, reference=:sensible, T_ref=298.15,
+                      T_guess=300.0) where {T<:AbstractFloat}
+    database_path = path === nothing ? NASA9_THERMO_PATH : path
+    species = read_nasa9(names; path=database_path, reference=reference,
+                         T_ref=T_ref)
+    return _nasa9_mixture(T, species; T_guess=T_guess)
 end
 
 nspecies(eos::Nasa9Mixture) = length(eos.sp)
@@ -623,10 +851,10 @@ end
     return (cvk * Rm - eos.Rk[k] * cvm) / (Rm * Rm)
 end
 
-@inline art_conductivity_scale(::Nasa9Mixture, ρ, c, T_ion, cp_mix) =
+@inline artificial_conductivity_scale(::Nasa9Mixture, ρ, c, T_ion, cp_mix) =
     ρ * c / max(T_ion, temperature_floor(typeof(T_ion)))
 
-function _primitives!(solver, eos::Nasa9Mixture, Q)
+function recover_primitives!(solver, eos::Nasa9Mixture, Q)
     n_species = solver.equations.n_species
     m1, m2, m3 = solver.equations.i_mom
     i_energy = solver.equations.i_energy
@@ -723,7 +951,7 @@ compact operator reads those halos either: at a closed edge the closure rows
 reference interior points only, and at a fold `fold_fill!` overwrites them from
 the interior before the sweep.
 """
-primitives!(solver, Q) = _primitives!(solver, solver.eos, Q)
+primitives!(solver, Q) = recover_primitives!(solver, solver.eos, Q)
 
 @inline function _primitives_ideal_point!(Q, ρa, ua, va, wa, pa, T_iona, ca,
                                           cpa, Y, eos, n_species,
@@ -770,7 +998,7 @@ primitives!(solver, Q) = _primitives!(solver, solver.eos, Q)
     return nothing
 end
 
-function _primitives!(solver, eos::IdealMixture, Q)
+function recover_primitives!(solver, eos::IdealMixture, Q)
     n_species = solver.equations.n_species
     m1, m2, m3 = solver.equations.i_mom
     i_energy = solver.equations.i_energy

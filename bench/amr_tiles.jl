@@ -23,7 +23,7 @@ using MPI
 using Printf
 
 function main()
-    args = script_args(ARGS, (N=192, tile=6, steps=3); positional=(:N, :tile, :steps))
+    args = CompactLES.script_args(ARGS, (N=192, tile=6, steps=3); positional=(:N, :tile, :steps))
     N = args.N
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     r0, w = 0.75, 0.02

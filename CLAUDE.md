@@ -199,8 +199,9 @@ Names are spelled out in full. Current vocabulary:
 - `deriv_plans`, `filter_plans`, `line_solver`, `plan` (a DirPlan) vs `plane`
   (a wall plane), `fold`, `pair`
 - `plane_profile`, `profile_spacing`, `mix_width`, `molecular_mixing`,
-  `quad_weight`, `cell_measure`
-- `eos_phi`, `eos_dphi_dY`, `art_conductivity_scale`, `species_energy`,
+  `quad_weight`, `cell_measure`, `line_profile` (a transverse-plane average
+  along an axis) vs `line_sample` (the field on one grid line)
+- `eos_phi`, `eos_dphi_dY`, `artificial_conductivity_scale`, `species_energy`,
   `mixture_temperature` (the EOS contract; the whole list is at the top of
   `physics.jl`)
 - `control` (a `StepControl`), `max_rate`, `predicted_dt`, `check_step`,
@@ -522,7 +523,7 @@ them.
   here previously is the retired `:compact` smoother's.
   → `reference/CALIBRATION.md`
 - **κ\* is singular as `T_ion` → 0**, so a cold ambient below p ≈ 1e-3 collapses
-  the diffusive timestep. `art_conductivity_scale` is an EOS dispatch point, so a
+  the diffusive timestep. `artificial_conductivity_scale` is an EOS dispatch point, so a
   tabular model can supply its own; the gas models still divide by `T_ion`.
 - **The spherical origin fold is much less forgiving than the cylindrical axis.**
   It needs initial data resolved over ≳3 cells and will not take Noh's singular

@@ -30,12 +30,12 @@ const CL = CompactLES
 
 MPI.Initialized() || MPI.Init()
 
-const opt = script_args(ARGS, (grid = "64", nodes = 1,
-                               cores_per_node = Sys.CPU_THREADS ÷ 2,
-                               ranks = "", scheme = "c6", filter = true);
-                        positional = (:grid,))
+const opt = CL.script_args(ARGS, (grid = "64", nodes = 1,
+                                  cores_per_node = Sys.CPU_THREADS ÷ 2,
+                                  ranks = "", scheme = "c6", filter = true);
+                           positional = (:grid,))
 
-const grid = script_grid(opt.grid)
+const grid = CL.script_grid(opt.grid)
 const nodes = opt.nodes
 const cores_per_node = opt.cores_per_node
 const total_cores = nodes * cores_per_node

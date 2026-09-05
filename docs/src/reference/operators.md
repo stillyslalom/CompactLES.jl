@@ -4,6 +4,12 @@
 CurrentModule = CompactLES
 ```
 
+The compact-scheme definitions and the built-in scheme factories in the first
+section are supported configuration API. The directional plans, decomposition
+records, patch records, and AMR transfer machinery in the sections after it
+are implementation-level building blocks: they remain documented for advanced
+users and cross-references, but are not exported as input-deck vocabulary.
+
 ## Scheme definitions
 
 ```@docs
@@ -28,16 +34,16 @@ can place arrays in device memory. [`CPUBackend`](@ref) is the default;
 whole solver built on one runs resident there (`reference/AMR_GPU.md`).
 
 ```@docs
-Decomp
-interior
-field
+CompactLES.Decomp
+CompactLES.interior
+CompactLES.field
 allocate_state
-exchange_halos!
+CompactLES.exchange_halos!
 CompactLES.exchange_state!
 CompactLES.exchange_dim!
 CompactLES.exchange_dim_batch!
 CompactLES.selfwrap
-AbstractBackend
+CompactLES.AbstractBackend
 CPUBackend
 DeviceBackend
 ```
@@ -45,16 +51,16 @@ DeviceBackend
 ## Directional plans
 
 ```@docs
-DirPlan
-BandPlan
-plan_direction
+CompactLES.DirPlan
+CompactLES.BandPlan
+CompactLES.plan_direction
 CompactLES.interface_closures
-apply_along!
-filter_field!
-THREAD_MIN_WORK
+CompactLES.apply_along!
+CompactLES.filter_field!
+CompactLES.THREAD_MIN_WORK
 CompactLES.THREAD_MIN_WORK_PER_THREAD
-DevicePlan
-device_plan
+CompactLES.DevicePlan
+CompactLES.device_plan
 CompactLES.backend_plan
 ```
 
@@ -66,39 +72,39 @@ against the property surface that [`PatchSolver`](@ref) and a single-patch
 `Solver` present identically, so they run unchanged in either configuration.
 
 ```@docs
-Patch
-PatchSolver
-RHSWorkspace
-rhs_workspace!
+CompactLES.Patch
+CompactLES.PatchSolver
+CompactLES.RHSWorkspace
+CompactLES.rhs_workspace!
 npatches
 eachpatch
 sync_patches!
-exchange_patch_ghosts!
-average_shared_planes!
+CompactLES.exchange_patch_ghosts!
+CompactLES.average_shared_planes!
 ```
 
 ## AMR level transfer
 
 ```@docs
-amr_transfer_schemes
-amr_restriction_scheme
-amr_prolongation_scheme
-amr_interpolation_weights
-TransferPlan
-plan_transfer
-restrict!
-prolong!
-LevelTransfer
-Level
-LevelComm
-TileGroup
+CompactLES.amr_transfer_schemes
+CompactLES.amr_restriction_scheme
+CompactLES.amr_prolongation_scheme
+CompactLES.amr_interpolation_weights
+CompactLES.TransferPlan
+CompactLES.plan_transfer
+CompactLES.restrict!
+CompactLES.prolong!
+CompactLES.LevelTransfer
+CompactLES.Level
+CompactLES.LevelComm
+CompactLES.TileGroup
 CompactLES._tile_owners
 nlevels
 refined_region
 level_regions
 sync_levels!
-prolong_level_ghosts!
-restrict_level!
+CompactLES.prolong_level_ghosts!
+CompactLES.restrict_level!
 CompactLES.gather_region!
 CompactLES.GatherBuffers
 CompactLES.HierarchyRecord

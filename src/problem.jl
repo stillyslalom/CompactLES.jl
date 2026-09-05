@@ -127,6 +127,8 @@ end
 
 conserved_from_prim(eos::EOS, pr::Prim) =
     conserved_from_prim(NavierStokes1T(eos), eos, pr)
+conserved_from_prim(species::IdealSpecies, pr::Prim) =
+    conserved_from_prim(IdealMixture(species), pr)
 
 @inline function write_conserved!(Q, I, solver, pr::Prim)
     q = conserved_from_prim(solver.equations, solver.eos, pr)
@@ -263,7 +265,7 @@ end
 # Backend-decoupled problem and numerics bundles.
 
 """
-    Problem(; domain, bcs, ic, name="problem", eos=single_species(),
+    Problem(; domain, bcs, ic, name="problem", eos=IdealSpecies("gas"; R=1, gamma=1.4),
             transport=Transport(), metric=CartesianMetric(), sources=())
 
 Physical specification independent of grid resolution and process count. A
@@ -282,8 +284,9 @@ Physical specification independent of grid resolution and process count. A
 # Optional keywords
 
 - `name`: human-readable problem label, used in displays. Default: `"problem"`.
-- `eos`: equation of state and species definition. Default:
-  [`single_species()`](@ref).
+- `eos`: equation of state and species definition. An [`IdealSpecies`](@ref)
+  is promoted to a one-species [`IdealMixture`](@ref). Default: a
+  nondimensional gas with `R = 1` and `gamma = 1.4`.
 - `transport`: constant molecular transport properties. Default:
   [`Transport()`](@ref), which has zero molecular viscosity.
 - `metric`: coordinate metric. Default: [`CartesianMetric()`](@ref).
@@ -293,15 +296,22 @@ Physical specification independent of grid resolution and process count. A
 Coordinates passed to `ic` and to boundary callbacks follow `metric`. Species
 mass fractions in every returned `Prim` must follow the order defined by `eos`.
 """
-Base.@kwdef struct Problem
-    name::String = "problem"
-    eos::EOS = single_species()
-    transport::Transport = Transport()
-    metric::Metric = CartesianMetric()
-    sources::Tuple = ()
+struct Problem
+    name::String
+    eos::EOS
+    transport::Transport
+    metric::Metric
+    sources::Tuple
     domain::NTuple{3,Tuple{Float64,Float64}}
     bcs::NTuple{3,Tuple{BoundaryCondition,BoundaryCondition}}
     ic::Function
+end
+
+function Problem(; name="problem", eos=_default_ideal_mixture(),
+                 transport=Transport(), metric=CartesianMetric(), sources=(),
+                 domain, bcs, ic)
+    return Problem(String(name), _as_eos(eos), transport, metric, sources,
+                   domain, bcs, ic)
 end
 
 """

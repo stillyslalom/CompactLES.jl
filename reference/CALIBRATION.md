@@ -208,7 +208,7 @@ cold ambient (p₀ ≲ 10⁻³ at ρ₀ = 1) the 1/T factor drives the diffusive
 `dt` collapses, and internal energy can become negative. The subsequent T_ion
 clamp then produces an extremely large κ\*. Each case therefore uses a finite
 ambient pressure. The scale is an EOS dispatch point
-(`art_conductivity_scale`), so a tabular or condensed-matter model can supply
+(`artificial_conductivity_scale`), so a tabular or condensed-matter model can supply
 one that is finite at its own cold limit; the gas models still divide by the
 temperature.
 

@@ -49,6 +49,16 @@ include("timing.jl")
     using MPI
     MPI.Init(threadlevel=:funneled)
     using CompactLES
+    import CompactLES: Decomp, exchange_halos!, interior, field, DirPlan, BandPlan,
+                       DevicePlan, device_plan, apply_along!, filter_field!,
+                       amr_transfer_schemes, amr_restriction_scheme,
+                       amr_prolongation_scheme, amr_interpolation_weights,
+                       TransferPlan, plan_transfer, restrict!, prolong!,
+                       plan_direction, Patch, PatchSolver, InterfaceBC, CoarseFineBC,
+                       LevelTransfer, Level, LevelComm, exchange_patch_ghosts!,
+                       average_shared_planes!, prolong_level_ghosts!, restrict_level!,
+                       scalar_field, container_extension, PLANCK_TIME,
+                       THREAD_MIN_WORK, script_args, script_grid
     using LinearAlgebra
     import KernelAbstractions
 end
@@ -839,6 +849,58 @@ function test_slicing()
     MPI.Barrier(comm)
     rank == 0 && foreach(rm, filter(startswith("mpi_slice_bad"), readdir()))
     MPI.Barrier(comm)
+end
+
+# ---------------------------------------------------------------------------
+# 11b. Line samples under decomposition. A line along the split dimension is
+#      assembled from every rank; a line transverse to it lives on one rank
+#      and the others contribute nothing. Both must come back identical on
+#      every rank, and both must equal the initial condition at the nodes.
+# ---------------------------------------------------------------------------
+function test_line_sample()
+    section("line samples under decomposition")
+    rho_fn(x, y, z) = 1 + 0.1x + 0.2y + 0.3z
+    solver, Q = setup(Problem(domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
+                              bcs=(per3[1], per3[2], per3[3]),
+                              ic=(x, y, z) -> Prim(p=1.0, rho=rho_fn(x, y, z))),
+                      Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+    gx(d, g) = global_xcoord(solver, d, g)
+    same_everywhere(v) = gmax(maximum(abs, v .- MPI.bcast(v, comm; root=0)))
+
+    # (a) Along the split dimension at (j, k) = (5, 9): every rank owns a piece.
+    coord, value = line_sample(solver, Q, :rho; dim=1, index=(5, 9))
+    check("split-dimension line matches the initial condition",
+          gmax(maximum(abs, value .- [rho_fn(gx(1, g), gx(2, 5), gx(3, 9))
+                                      for g in 1:SPLITN])), 1e-14)
+    check("split-dimension line is identical on every rank",
+          same_everywhere(value), 0.0 + eps())
+    check("split-dimension coordinate is identical on every rank",
+          same_everywhere(coord), 0.0 + eps())
+
+    # (b) Transverse to the split at (i, k) = (SPLITN ÷ 2, 3): one rank owns
+    #     the whole line, the rest contribute zeros.
+    coord, value = line_sample(solver, Q, :rho; dim=2, index=(SPLITN ÷ 2, 3))
+    check("transverse line matches the initial condition",
+          gmax(maximum(abs, value .- [rho_fn(gx(1, SPLITN ÷ 2), gx(2, g), gx(3, 3))
+                                      for g in 1:16])), 1e-14)
+    check("transverse line is identical on every rank",
+          same_everywhere(value), 0.0 + eps())
+
+    # (c) `at` snaps to the nearest node on every rank alike.
+    _, snapped = line_sample(solver, Q, :rho; dim=2,
+                             at=(gx(1, SPLITN ÷ 2) + solver.h[1] / 3, gx(3, 3)))
+    check("coordinate lookup snaps to the indexed line",
+          gmax(maximum(abs, snapped .- value)), 0.0 + eps())
+
+    # An out-of-range index throws on every rank, not only the owner.
+    threw = try
+        line_sample(solver, Q, :rho; dim=1, index=(17, 1))
+        0
+    catch e
+        e isa ArgumentError ? 1 : 0
+    end
+    check("an out-of-range line index throws on every rank",
+          abs(gsum(threw) - np), 0.5)
 end
 
 # ---------------------------------------------------------------------------
@@ -2014,6 +2076,7 @@ const SUITE = (
     ("state queries", test_state_queries),
     ("field writer", test_field_writer),
     ("slicing", test_slicing),
+    ("line sample", test_line_sample),
     ("checkpoint", test_checkpoint),
     ("hierarchy checkpoint", test_hierarchy_checkpoint),
     ("two-patch layout", test_two_patch_layout),

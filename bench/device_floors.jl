@@ -63,6 +63,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+import CompactLES: Decomp, device_plan
 using Printf
 const CL = CompactLES
 # KernelAbstractions through CompactLES's own import, so the script runs from
@@ -72,7 +73,7 @@ const KA = CL.KernelAbstractions
 # `only` restricts to a comma-separated subset of sections (sanity, floors,
 # watch, lines, tgv); empty runs everything. Incidence statistics on the
 # stall mode need many short watch-only runs, not one long full survey.
-opt = script_args(ARGS, (backend = "amdgpu", sizes = "32,64,96", n = 64,
+opt = CompactLES.script_args(ARGS, (backend = "amdgpu", sizes = "32,64,96", n = 64,
                          steps = 10, reps = 50, watch = 30, only = ""))
 
 # select_device! takes the node-local rank and is a no-op when the launcher
@@ -281,7 +282,7 @@ function tgv_build(T, deriv, n, ka_backend)
     c0 = T(10)
     p0 = c0^2 / γ
     s = Solver(n_global=(n, n, n), L_domain=(T(2π), T(2π), T(2π)),
-               bcs=(per, per, per), eos=single_species(T),
+               bcs=(per, per, per), eos=IdealSpecies("gas"; R=one(T), gamma=T(1.4)),
                transport=Transport{T}(mu0=T(1 / 1600)),
                art=ArtParams{T}(enabled=false),
                deriv=deriv, filt=compact_filter(T(0.45), T),

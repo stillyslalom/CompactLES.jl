@@ -5,6 +5,16 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+import CompactLES: Decomp, exchange_halos!, interior, field, DirPlan, BandPlan,
+                   DevicePlan, device_plan, apply_along!, filter_field!,
+                   amr_transfer_schemes, amr_restriction_scheme,
+                   amr_prolongation_scheme, amr_interpolation_weights,
+                   TransferPlan, plan_transfer, restrict!, prolong!,
+                   plan_direction, Patch, PatchSolver, InterfaceBC, CoarseFineBC,
+                   LevelTransfer, Level, LevelComm, exchange_patch_ghosts!,
+                   average_shared_planes!, prolong_level_ghosts!, restrict_level!,
+                   scalar_field, container_extension, PLANCK_TIME,
+                   THREAD_MIN_WORK, script_args, script_grid
 using Test, LinearAlgebra, Random
 
 const CL = CompactLES
@@ -74,11 +84,28 @@ include("references.jl")
     @test !occursin("#", problem_display)       # do not dump the IC closure type
     @test occursin("artificial properties: disabled", numerics_display)
     @test all(length.((solver_display, problem_display, numerics_display)) .< 500)
+
+    # EOS objects: the NASA-9 records must not dump their fit coefficients.
+    nasa = Nasa9Mixture(["He", "CO2"])
+    nasa_display = sprint(show, MIME("text/plain"), nasa)
+    @test occursin("He", nasa_display) && occursin("CO2", nasa_display)
+    @test occursin("T_guess = 300.0", nasa_display)
+    @test !occursin("Nasa9Interval", nasa_display)
+    @test length(nasa_display) < 200
+    @test length(sprint(show, nasa)) < 80
+    @test length(sprint(show, MIME("text/plain"), nasa.sp)) < 300
+    @test length(sprint(show, MIME("text/plain"), nasa.sp[1].intervals)) < 300
+    @test sprint(show, IdealSpecies("gas"; R=1.0, gamma=1.4)) ==
+          "IdealSpecies(\"gas\"; R=1.0, gamma=1.4)"
+    ideal_display = sprint(show, MIME("text/plain"), IdealMixture(["He", "CO2"]))
+    @test occursin("gamma", ideal_display) && length(ideal_display) < 200
+    @test sprint(show, StiffenedGas()) ==
+          "StiffenedGas(gamma=4.4, p_inf=6.0e8, cv=1816.0, name=\"liquid\")"
 end
 
 @testset "Float32 frontend and full step" begin
     T = Float32
-    prob = Problem(name="Float32 smoke", eos=single_species(T),
+    prob = Problem(name="Float32 smoke", eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
                    transport=Transport{T}(),
                    domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
                    ic=(x, y, z) -> Prim(rho=1 + 0.01sin(2π * x), T_ion=1,
@@ -239,7 +266,7 @@ end
                 L_domain=(one(T), one(T), one(T)),
                 bcs=((NSCBCInflowBC(u=uin, T_ion=one(T), Y=T[1]),
                       NSCBCOutflowBC(pinf=one(T))), per, per),
-                eos=single_species(T), filter_interval=0, typed...)
+                eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)), filter_interval=0, typed...)
     BQ = allocate_state(sb)
     initialize!(sb, BQ, (x, y, z) -> Prim(u=uin, p=1, T_ion=1))
     apply_bcs!(sb, BQ)
@@ -258,7 +285,7 @@ end
                 L_domain=(one(T), one(T), one(T)),
                 bcs=((NoSlipWallBC(Twall=Twall),
                       NoSlipWallBC(Twall=Twall)), per, per),
-                eos=single_species(T), filter_interval=0, typed...)
+                eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)), filter_interval=0, typed...)
     WQ = allocate_state(sw)
     initialize!(sw, WQ, (x, y, z) ->
         Prim(u=(0.3, -0.2, 0.1), p=1, T_ion=1))
@@ -592,7 +619,7 @@ end
     # that path.
     ic = (x, y, z) -> Prim(rho=1.0 + 0.2sin(x) * cos(2y), p=1.0 + 0.1sin(3z),
                            u=(0.3sin(2x), 0.2cos(y), 0.1sin(z) * cos(x)))
-    build(fc) = setup(Problem(eos=single_species(gamma=1.4, R=1.0),
+    build(fc) = setup(Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
                               transport=Transport(mu0=0.0),
                               domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)),
                               bcs=per3, ic=ic),
@@ -1118,7 +1145,7 @@ end
     solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 0.4, 0.4),
                bcs=((NSCBCInflowBC(u=uin, T_ion=1.0), NSCBCOutflowBC(pinf=1.0)),
                     per3[2], per3[3]),
-               eos=single_species(gamma=1.4, R=1.0),
+               eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
                art=ArtParams(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=uin, p=1.0, T_ion=1.0))
@@ -1671,7 +1698,7 @@ end
             ρ, u, _ = noh_exact(x, isfinite(t) ? t : 0.0, 1, γ)
             Prim(rho=ρ, u=(u, 0.0, 0.0), p=p0)
         end)
-        prob = Problem(eos=single_species(gamma=γ, R=1.0), transport=Transport(mu0=0.0),
+        prob = Problem(eos=IdealSpecies("gas"; gamma=γ, R=1.0), transport=Transport(mu0=0.0),
                        domain=((0.0, 1.0), (0.0, 1 / N), (0.0, 1 / N)),
                        bcs=((SlipWallBC(), inflow), per3[2], per3[3]),
                        ic=(x, y, z) -> Prim(rho=1.0, u=(-1.0, 0.0, 0.0), p=p0))
@@ -1715,7 +1742,7 @@ end
     # enthalpy integral, the cv, or the sound speed shows up here.
     γ, R = 1.4, 1.0
     cp = γ * R / (γ - 1)
-    ideal = single_species(gamma=γ, R=R)
+    ideal = IdealSpecies("gas"; gamma=γ, R=R)
     poly = Nasa9Mixture([nasa9_constant_cp("gas", R, cp)])
     @test nspecies(poly) == 1
     for T in (0.3, 1.0, 7.5, 300.0)
@@ -1858,7 +1885,7 @@ end
     sg = StiffenedGas(gamma=γ, p_inf=0.0, cv=cv, name="gas")
     @test nspecies(sg) == 1
     pr = Prim(u=(0.3, -0.1, 0.2), p=0.8, T_ion=1.7)
-    @test all(conserved_from_prim(single_species(gamma=γ, R=R), pr) .≈
+    @test all(conserved_from_prim(IdealSpecies("gas"; gamma=γ, R=R), pr) .≈
               conserved_from_prim(sg, pr))
     solver = mkslv(n_global=(12, 12, 12), eos=sg)
     Q = allocate_state(solver)
@@ -1896,6 +1923,56 @@ end
     CL.primitives!(s2, Q2)
     @test all(isfinite, Q2)
     @test minimum(s2.rho[gidx(s2, i, j, k)] for i in 1:12, j in 1:12, k in 1:12) > 0
+end
+
+@testset "line_sample: one grid line, distinct from the plane average" begin
+    # A density linear in all three coordinates separates the two extractions:
+    # a sample along x at (j, k) carries 0.2 y_j + 0.3 z_k, the plane average
+    # carries the transverse means instead, and every value is definitional.
+    ic(x, y, z) = Prim(p=1.0, rho=1 + 0.1x + 0.2y + 0.3z)
+    rho_fn(x, y, z) = 1 + 0.1x + 0.2y + 0.3z
+    solver = Solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5), bcs=per3,
+                    art=ArtParams(enabled=false))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, ic)
+    gx(d, g) = global_xcoord(solver, d, g)
+
+    coord, value = line_sample(solver, Q, :rho; dim=1, index=(7, 4))
+    @test coord == [gx(1, g) for g in 1:24]
+    @test maximum(abs, value .- [rho_fn(gx(1, g), gx(2, 7), gx(3, 4)) for g in 1:24]) < 1e-14
+    coord, value = line_sample(solver, Q, :rho; dim=2, index=(3, 11))
+    @test coord == [gx(2, g) for g in 1:16]
+    @test maximum(abs, value .- [rho_fn(gx(1, 3), gx(2, g), gx(3, 11)) for g in 1:16]) < 1e-14
+    coord, value = line_sample(solver, Q, :rho; dim=3, index=(24, 16))
+    @test coord == [gx(3, g) for g in 1:12]
+    @test maximum(abs, value .- [rho_fn(gx(1, 24), gx(2, 16), gx(3, g)) for g in 1:12]) < 1e-14
+
+    # The default line is (i, 1, 1); `at` snaps each transverse coordinate to
+    # its nearest node, here (7, 4) again from positions a third of a cell off.
+    _, default_line = line_sample(solver, Q, :rho)
+    _, first_line = line_sample(solver, Q, :rho; index=(1, 1))
+    @test default_line == first_line
+    _, snapped = line_sample(solver, Q, :rho;
+                             at=(gx(2, 7) + solver.h[2] / 3, gx(3, 4) - solver.h[3] / 3))
+    _, indexed = line_sample(solver, Q, :rho; index=(7, 4))
+    @test snapped == indexed
+
+    # The plane average is a different quantity when a transverse dimension is
+    # resolved, and the same one when both are collapsed.
+    _, mean_line = line_profile(solver, Q, :rho; dim=1)
+    @test maximum(abs, mean_line .- first_line) > 0.1
+    solver1 = Solver(n_global=(32, 1, 1), L_domain=(2.0, 1.0, 1.0), bcs=per3,
+                     art=ArtParams(enabled=false))
+    Q1 = allocate_state(solver1)
+    initialize!(solver1, Q1, ic)
+    _, sample1 = line_sample(solver1, Q1, :rho)
+    _, mean1 = line_profile(solver1, Q1, :rho)
+    @test maximum(abs, sample1 .- mean1) < 1e-14
+
+    @test_throws ArgumentError line_sample(solver, Q, :rho; dim=4)
+    @test_throws ArgumentError line_sample(solver, Q, :rho; index=(0, 1))
+    @test_throws ArgumentError line_sample(solver, Q, :rho; dim=1, index=(1, 13))
+    @test_throws ArgumentError line_sample(solver, Q, :rho; index=(1, 1), at=(0.0, 0.0))
 end
 
 @testset "diagnostics: quadrature, plane averages, mixing measures" begin
@@ -2299,7 +2376,7 @@ end
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.2, 1.09)])
     @test nspecies(eos) == 2
-    @test nspecies(single_species()) == 1
+    @test nspecies(IdealMixture(IdealSpecies("gas"; gamma=1.4, R=1.0))) == 1
     pr = Prim(u=(0.3, -0.1, 0.2), p=0.8, T_ion=1.7, Y=(0.35, 0.65))
     q = conserved_from_prim(eos, pr)
     ρ = q[1] + q[2]
@@ -2321,7 +2398,7 @@ end
     # relation supplies the pressure that (rho, T_ion) implies.
     liquid = StiffenedGas(gamma=4.4, p_inf=6.0e8, cv=1816.0)
     p_liquid = 1000.0 * CL.gas_constant(liquid) * 300.0 - liquid.p_inf
-    ideal = single_species(gamma=1.4, R=287.0)
+    ideal = IdealSpecies("gas"; gamma=1.4, R=287.0)
     for (E, p_of) in ((liquid, p_liquid), (ideal, 1000.0 * 287.0 * 300.0))
         @test all(isapprox.(conserved_from_prim(E, Prim(rho=1000.0, T_ion=300.0)),
                             conserved_from_prim(E, Prim(p=p_of, T_ion=300.0));
@@ -2930,7 +3007,7 @@ end
     ρR, uR, pR = 0.125, 0.0, 0.1
     x0 = 0.5; tfin = 0.2
     Nx = 400; Lx = 1.0; hx = Lx / (Nx - 1); δ = 2hx
-    prob = Problem(name="Sod", eos=single_species(gamma=γ, R=1.0),
+    prob = Problem(name="Sod", eos=IdealSpecies("gas"; gamma=γ, R=1.0),
                    transport=Transport(mu0=0.0),
                    domain=((0.0, Lx), (0.0, hx), (0.0, hx)),
                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
@@ -3122,6 +3199,7 @@ include("level_tests.jl")
 include("seam_tests.jl")
 include("io_tests.jl")
 include("docrefs_tests.jl")
+include("api_surface_tests.jl")
 
 # HDF5 is a weak dependency and is not loadable from the package environment
 # alone, so the extension tests run only where it is present. The skip is

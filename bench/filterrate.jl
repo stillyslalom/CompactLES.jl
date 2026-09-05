@@ -53,7 +53,7 @@ const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 const DEFAULTS = (N = 32, tfinal = 0.5, k = 4, amplitude = 0.1,
                   cfls = "0.4,0.2,0.1", filter_cfl = 0.4)
-const opt = script_args(ARGS, DEFAULTS; positional = (:N, :tfinal))
+const opt = CompactLES.script_args(ARGS, DEFAULTS; positional = (:N, :tfinal))
 const CFLS = [parse(Float64, strip(s)) for s in split(opt.cfls, ',')]
 
 "Kinetic energy over the interior, reduced across the communicator."
@@ -71,7 +71,7 @@ end
 
 function run_one(cfl, filter_cfl)
     N = opt.N
-    prob = Problem(eos = single_species(gamma = 1.4, R = 1.0),
+    prob = Problem(eos = IdealSpecies("gas"; gamma = 1.4, R = 1.0),
                    transport = Transport(mu0 = 0.0),
                    domain = ((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs = per3,
                    ic = (x, y, z) -> Prim(rho = 1.0, p = 10.0,

@@ -12,8 +12,9 @@
 #   1. every `@ref` in a rendered docstring or a page resolves to a `@docs`
 #      entry or to a page header;
 #   2. every `@docs` entry names a documented binding of CompactLES;
-#   3. every exported name with a docstring is rendered by some `@docs`
-#      block (`checkdocs = :exports` in docs/make.jl).
+#   3. every exported name has a docstring and is rendered by some `@docs`
+#      block. Documenter's `checkdocs = :exports` misses an exported binding
+#      that has no docstring at all, so this is deliberately stricter.
 #
 # Standalone: julia --project=. test/docrefs_tests.jl
 # The serial suite includes it as one testset.
@@ -210,7 +211,10 @@ function check()
     end
     undocumented_exports = String[]
     for name in exported_names()
-        haskey(texts, name) || continue
+        if !haskey(texts, name)
+            push!(undocumented_exports, "exported `$name` has no docstring")
+            continue
+        end
         name in rendered ||
             push!(undocumented_exports, "exported `$name` has a docstring no @docs block renders")
     end

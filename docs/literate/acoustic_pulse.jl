@@ -32,7 +32,7 @@ pressure(x) = 1 + amplitude * exp(-((x - center) / width)^2)
 
 problem = Problem(
     name = "periodic acoustic pulse",
-    eos = single_species(gamma = gamma),
+    eos = IdealSpecies("gas"; R = 1.0, gamma = gamma),
     domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
     bcs = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
     ic = (x, y, z) -> begin

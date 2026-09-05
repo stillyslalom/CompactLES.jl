@@ -27,7 +27,7 @@ function taylor_green_data(; n=64, tfinal=12.0)
     c0 = 10.0
     problem = Problem(
         name="Taylor–Green showcase",
-        eos=single_species(gamma=gamma),
+        eos=IdealSpecies("gas"; R=1.0, gamma=gamma),
         transport=Transport(mu0=1 / 1600),
         domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)),
         bcs=ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
@@ -168,7 +168,7 @@ function converging_shock_data(; nr=640, tfinal=0.30)
     println("Running cylindrical shock showcase: $nr radial points to t=$tfinal")
     problem = Problem(
         name="converging shock showcase",
-        eos=single_species(gamma=1.4),
+        eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
         metric=CylindricalMetric(),
         domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
         bcs=((AxisBC(), SlipWallBC()),

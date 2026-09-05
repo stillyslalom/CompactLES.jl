@@ -19,6 +19,9 @@ conditions, initial state) evaluated by a **`Numerics`** (the discretization:
 resolution, scheme, CFL, process grid), so the same problem can be run at any
 resolution or scheme order unchanged.
 
+For a compact constructor reference, defaults, and common recipes, see the
+[Input deck cheat sheet](https://stillyslalom.github.io/CompactLES.jl/dev/reference/input-deck-cheat-sheet/).
+
 ```julia
 using MPI; MPI.Init(threadlevel=:funneled)
 using CompactLES
@@ -105,7 +108,7 @@ Prim(; u=(0,0,0), p, T_ion=NaN, rho=NaN, Y=(1.0,))
 
 ```julia
 prob = Problem(
-    eos       = single_species(gamma=1.4),              # or IdealMixture([...])
+    eos       = IdealSpecies("gas"; R=1.0, gamma=1.4),  # or IdealMixture(["He", "CO2"])
     transport = Transport(mu0=1/1600, Pr=0.7, Sc=0.7),  # viscosity, Prandtl, Schmidt
     metric    = CartesianMetric(),                      # or Cylindrical / Spherical
     sources   = (ConstantBodyForce((0.0, -9.81, 0.0)),),
@@ -121,6 +124,16 @@ num = Numerics(
     cfl      = 0.5,
     control  = StepControl(retries=4),       # roll back and lower cfl on failure
     dims     = nothing)                      # process grid; nothing → auto
+```
+
+The thermodynamic constructors accept either an explicit `R` and `gamma` or
+names from the bundled NASA-9 database, which supplies SI properties:
+
+```julia
+IdealSpecies("CO2")                         # reference-temperature ideal gas
+IdealSpecies("gas"; R=1.0, gamma=1.4)       # explicit one-species gas
+IdealMixture(["He", "CO2"])                 # constant-cp mixture
+Nasa9Mixture(["He", "CO2"])                 # temperature-dependent mixture
 ```
 
 `setup` returns the solver and its initialized conserved state; `run!` advances

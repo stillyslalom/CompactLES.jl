@@ -115,7 +115,7 @@ end
 # is free under `:delta4` and three line solves per dimension under `:d8`.
 # Defaults track `ArtParams()` so a bare run profiles the default configuration.
 const ART_DEFAULTS = ArtParams()
-opt = script_args(ARGS, (smoother = ART_DEFAULTS.smoother,
+opt = CompactLES.script_args(ARGS, (smoother = ART_DEFAULTS.smoother,
                          detector = ART_DEFAULTS.detector,
                          mu_sensor = ART_DEFAULTS.mu_sensor,
                          beta_sensor = ART_DEFAULTS.beta_sensor,

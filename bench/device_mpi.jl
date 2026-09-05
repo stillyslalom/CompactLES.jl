@@ -18,7 +18,7 @@ using CompactLES
 using Printf
 const CL = CompactLES
 
-const opt = script_args(ARGS, (backend = "amdgpu", steps = 10))
+const opt = CompactLES.script_args(ARGS, (backend = "amdgpu", steps = 10))
 
 const ka_backend = if opt.backend == "amdgpu"
     @eval using AMDGPU

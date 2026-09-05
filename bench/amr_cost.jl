@@ -34,7 +34,7 @@ const CL = CompactLES
 
 const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
-const opt = script_args(ARGS, (N = 48, tfinal = 1.0, nmax = typemax(Int),
+const opt = CompactLES.script_args(ARGS, (N = 48, tfinal = 1.0, nmax = typemax(Int),
                                progress = 0, cache = "", tag = "delta4",
                                sensor = 0.1);
                         positional = (:N, :tfinal))
