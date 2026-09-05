@@ -464,16 +464,31 @@ fourth difference δ⁴ = (1, −4, 6, −4, 1), or the compact eighth derivativ
 `compact_d8()` under `ArtParams.detector = :d8`, which is the reference
 implementation's operator and is normalized to the same response at two points
 per wavelength, allowing the four constants to carry over. Being undivided,
-the formal grid-spacing powers reduce to per-dimension weights: h_d² for the
-shear/bulk viscosities (from Cook's |∇⁴S|·Δ⁶) and h_d for conductivity and
+the formal grid-spacing powers reduce to per-dimension weights: Δ_d² for the
+shear/bulk viscosities (from Cook's |∇⁴S|·Δ⁶) and Δ_d for conductivity and
 species diffusivity (from |∇⁴e|·Δ⁵ and |∇⁴Y|·Δ⁵), where Δ is the local grid
-spacing in Cook's continuous form, h_d the spacing along dimension d, S the
-strain-rate tensor, e the specific internal energy, and Y a mass fraction.
+spacing in Cook's continuous form, S the strain-rate tensor, e the specific
+internal energy, and Y a mass fraction.
 In this paragraph only, Δ denotes the grid spacing; in the sensor
-discussion below it is the dilatation ∇·u. The Gaussian test filter of the
-original model is `smooth!`, by default the explicit nine-point stencil the
-reference applies and optionally a compact-filter pass
-(`ArtParams.smoother`).
+discussion below it is the dilatation ∇·u.
+
+Δ_d is the **local physical spacing** along dimension d, `solver.h[d]` divided
+by `solver.inv_h[d]` at the point: the computational spacing multiplied by the
+metric scale factor and by a `Stretch`'s mapping Jacobian. It is the arclength
+of one computational cell, the same quantity `max_rate` inverts for the
+advective rate, and it is evaluated per point, not once per direction. On a
+Cartesian grid with no `Stretch` it is the constant `solver.h[d]`, so an
+unstretched Cartesian run is unaffected by the distinction. Where the two
+differ the weighting follows the mesh: half the physical spacing carries half
+the weight on the Δ_d channels and a quarter on the Δ_d² ones, and a resolved
+angular direction is weighted by the arclength of its cell, r dθ under either
+angular metric and r sinθ dφ for spherical φ, rather than by the angle
+increment. Shankar, Kawai & Lele (Phys.
+Fluids 23, 024102, 2011, eq. A5) weight the same way.
+
+The Gaussian test filter of the original model is `smooth!`, by default the
+explicit nine-point stencil the reference applies and optionally a
+compact-filter pass (`ArtParams.smoother`).
 
 Concretely, `compute_artificial!`:
 
@@ -492,8 +507,8 @@ the first two channels reads. Cook takes both from |S|, as above; the reference
 implementation takes μ\* from the velocity components and β\* from the
 dilatation Δ = ∇·u, and the difference is the absolute value in
 |S| = sqrt(S_ij S_ij), which puts a cusp wherever the strain passes through
-zero. `mu_sensor = :velocity` reduces h_d|D_d u_j| over the nine (direction,
-component) pairs. The weight is h_d, not h_d², because u carries one
+zero. `mu_sensor = :velocity` reduces Δ_d|D_d u_j| over the nine (direction,
+component) pairs. The weight is Δ_d, not Δ_d², because u carries one
 velocity derivative fewer, and the two coincide at the grid scale. This sensor
 also requires the fold parity of each component, a velocity component being odd
 across the fold that reverses its axis.
@@ -512,9 +527,10 @@ effects are in [CALIBRATION.md](CALIBRATION.md).
 
 Constants live in `ArtParams` (defaults C_μ = 0.002, C_β = 1.0, C_κ = 0.01,
 C_D = 0.01) and should be revisited per configuration. `enabled=false` skips the
-whole computation and leaves the coefficient arrays zero. On curvilinear grids
-the sensors act in computational index space, a grid-based regularization
-consistent with resolving power following the mesh.
+whole computation and leaves the coefficient arrays zero. The high-pass itself
+acts in computational index space on every grid, a grid-based regularization
+consistent with resolving power following the mesh; only the length weighting
+Δ_d is physical.
 
 ## Curvilinear metrics and the discrete GCL
 

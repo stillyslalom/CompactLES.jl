@@ -308,7 +308,7 @@ const SI_RHO_HEAVY = 5.04          # SF6 at the pre-shock p and T, air = 1
 const SI_GAMMA_HEAVY = 1.09
 
 """
-    shock_interface(; N, tfin, art, cfl, delta, nmax) -> NamedTuple
+    shock_interface(; N, tfin, art, cfl, delta, nmax, stretch1) -> NamedTuple
 
 Mach `SI_MACH` shock in air (γ = 1.4, R = 1, ρ = 1 and p = 1 ahead of it) at
 `SI_X_SHOCK` running into a tanh interface at `SI_X_IFACE` with a heavy gas
@@ -316,7 +316,15 @@ Mach `SI_MACH` shock in air (γ = 1.4, R = 1, ρ = 1 and p = 1 ahead of it) at
 pre-shock p and T). The post-shock state follows from the Rankine–Hugoniot
 relations, and both ends hold their initial state through a `DirichletBC`.
 `delta` is the smearing width of the shock and the interface in cells, not a
-length as in `tube`, so the sweep in bench/artcal.jl reads directly in cells.
+length as in `tube`, so the sweep in bench/artcal.jl reads directly in cells;
+under a `stretch1` it is a length, `delta / (N − 1)`, since the cell width
+then varies along the domain.
+
+`stretch1` is an optional `Stretch` on dimension 1, which is the case that
+exercises the artificial-property sensors where the physical spacing differs
+from the computational one. Dimension 1 is non-periodic and unfolded here, so
+it accepts one; `sine_cluster` over the domain `(0, 1)` satisfies the endpoint
+check in `setup`.
 
 Returns `(x, Y_air, rho, p, worst_min_Y, worst_max_Y, width_cells, steps,
 completed)`. The two `worst` values are the extreme mass fractions over both
@@ -325,7 +333,7 @@ are transient and the final profile need not show them; `width_cells` counts
 the interior points with 0.05 < Y_air < 0.95 at the end.
 """
 function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
-                         cfl=0.4, delta=2.0, nmax=NMAX)
+                         cfl=0.4, delta=2.0, nmax=NMAX, stretch1=nothing)
     γa = 1.4
     eos = IdealMixture([IdealSpecies{Float64}("air", 1.0, γa),
                         IdealSpecies{Float64}("sf6", 1 / SI_RHO_HEAVY,
@@ -352,6 +360,7 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
                    end)
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filter_interval=1,
+                                     stretch=(stretch1, nothing, nothing),
                                      control=StepControl(retries=4)))
     nx = solver.decomp.n_local[1]
     worst_min = Ref(Inf)

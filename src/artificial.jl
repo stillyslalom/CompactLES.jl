@@ -5,10 +5,13 @@
 # explicit fourth difference δ⁴ (1, −4, 6, −4, 1) by default, or the reference
 # implementation's compact eighth derivative under
 # `ArtParams.detector = :d8`. The formal grid-spacing powers therefore reduce to
-# per-dimension weights: h² for a field carrying one velocity derivative (|S|,
-# ∇·u) and h for a field carrying none (the velocity components themselves, the
+# per-dimension weights: Δ² for a field carrying one velocity derivative (|S|,
+# ∇·u) and Δ for a field carrying none (the velocity components themselves, the
 # internal energy, a mass fraction). The two weights coincide at the grid scale,
-# so one set of constants covers both.
+# so one set of constants covers both. Δ is the local physical spacing along
+# the direction, `h[d] / inv_h[d][I]` (`_sensor_weight`), which is the
+# computational spacing scaled by the metric scale factor and by a `Stretch`'s
+# Jacobian.
 #
 # `ArtParams.mu_sensor` and `ArtParams.beta_sensor` select the field each of the
 # two viscosities is built from. Cook takes both from the strain magnitude |S|;
@@ -23,10 +26,9 @@
 # giving every species the same diffusivity. Under `:delta4`, indices are
 # clamped at closed physical edges, except for an odd field across a fold, which
 # takes the half-offset mirror; `:d8` uses the scheme's own closure rows there
-# instead. Halos cover rank boundaries. On
-# curvilinear grids the sensors are computed in computational space, a
-# grid-based regularization in place of a strictly physical-space one; this is
-# standard practice and consistent with resolving power following the mesh.
+# instead. Halos cover rank boundaries. The high-pass itself acts in
+# computational index space on every grid, a grid-based regularization in place
+# of a strictly physical-space one; only the length weighting is physical.
 
 """
     ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01, C_D=0.01,
@@ -51,9 +53,10 @@ Cook-style artificial-property controls.
   mass-fraction sensors.
 - `C_Y`: coefficient of the mass-fraction bound, a second contribution to the
   species diffusivity that is zero wherever `0 ≤ Y_k ≤ 1` and grows with the
-  excursion outside: `D*_k = c · G[max(C_D h |δ⁴Y_k|, C_Y h max(0, −Y_k,
-  Y_k − 1))]`, with `G` the smoother and `h` the geometric mean of the active
-  spacings. It is the term of Shankar, Kawai & Lele (Phys. Fluids 23, 024102,
+  excursion outside: `D*_k = c · G[max(C_D Δ_d |δ⁴Y_k|, C_Y Δ_g max(0, −Y_k,
+  Y_k − 1))]`, with `G` the smoother, `Δ_d` the local physical spacing along
+  each direction and `Δ_g` the geometric mean of the active ones at that point.
+  It is the term of Shankar, Kawai & Lele (Phys. Fluids 23, 024102,
   2011, eq. A4), where it carries the same value; Cook's Δ²/Δt-scaled form
   (Phys. Fluids 21, 055109, 2009, eq. 42) is equivalent at C_Y = 50. The
   ringing sensor alone cannot hold a species interface that a shock or a
@@ -67,7 +70,7 @@ Cook-style artificial-property controls.
   costs 1.5 orders of accuracy on such a profile. `1e-4` is 16× the
   transient at N = 64 and removes the loss entirely.
 - `mu_sensor`: how the μ\\* sensor is built. `:strain` is the Cook original,
-  h_d²|D_d S| from the strain magnitude reduced over directions, for the
+  Δ_d²|D_d S| from the strain magnitude reduced over directions, for the
   detector D and the reduction the two fields below name. `:velocity` is the
   reference implementation's, built from the velocity components themselves. It
   costs three detector applications per direction, versus one for `:strain`
@@ -105,9 +108,9 @@ Cook-style artificial-property controls.
   compact eighth derivative ([`compact_d8`](@ref)), which is two to three
   orders of magnitude more selective below the Nyquist and costs a
   pentadiagonal line solve per direction per sensor, where `:delta4` costs
-  none. Both carry the same per-dimension `h` weights and are normalized to
-  the same grid-oscillation response, so the four constants transfer between
-  them as starting points.
+  none. Both carry the same per-direction physical-spacing weights and are
+  normalized to the same grid-oscillation response, so the four constants
+  transfer between them as starting points.
 
 The coefficients are dimensionless numerical regularization parameters, not
 material properties. Their useful values depend on resolution, flow regime,
@@ -134,12 +137,35 @@ end
 # arithmetic type under multiplication, without forcing Float64 on FP32.
 const D4 = (1, -4, 6, -4, 1)   # offsets −2:2
 
+# The length that scales a detector output at one point: the local physical
+# spacing along direction `d`, `h[d] / inv_h[d][I]`, raised to the power the
+# sensor's field carries. `inv_h[d]` is one over the metric scale factor times
+# the mapping Jacobian (metric.jl), so the quotient is the arclength of one
+# computational cell, the same quantity `max_rate` inverts for the advective
+# rate. On a Cartesian grid with no `Stretch` the quotient is `h[d]` exactly,
+# which is what it was before this was per point.
+#
+# `wpow` is 1 or 2 at every call site. The repeated multiplication keeps the
+# kernel free of a runtime `^`, which not every device backend supports at an
+# integer exponent.
+@inline function _sensor_weight(h_d, ih, wpow::Int)
+    hp = h_d / ih
+    w = one(hp)
+    for _ in 1:wpow
+        w *= hp
+    end
+    return w
+end
+
 """
     delta4_sum!(out, f, solver, wpow; accumulate=false, parity=(1, 1, 1))
 
-Interior reduction of h_d^wpow |δ⁴_d f| over the active directions into `out`,
+Interior reduction of Δ_d^wpow |δ⁴_d f| over the active directions into `out`,
 combined by Σ_d or by MAX according to `ArtParams.reduction` and combined with
-the existing contents when `accumulate`. Requires current rank-boundary halos
+the existing contents when `accumulate`. Δ_d is the local physical spacing
+along `d`, `solver.h[d] / solver.inv_h[d][I]`, so the weight follows a
+`Stretch`'s Jacobian and an angular direction's scale factor rather than the
+computational spacing. Requires current rank-boundary halos
 of `f` to depth 2. The kernel itself communicates nothing except across a
 paired fold with `parity[d] == -1`, described below, so every rank must call
 it whenever one may take that path; the parity is a property of the field,
@@ -179,9 +205,11 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
     nx, ny, nz = decomp.n_local
     maxred = solver.art.reduction === :max
     accumulate || fill!(out, 0)
+    invh = solver.inv_h
     for d in 1:3
         decomp.active[d] || continue
-        wd = solver.h[d]^wpow
+        h_d = solver.h[d]
+        ih_d = invh[d]
         n_d = decomp.n_local[d]
         lomin = at_lo_edge(decomp, d) ? 1 : -1
         himax = at_hi_edge(decomp, d) ? n_d : n_d + 2
@@ -212,11 +240,11 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
                        sd, half, sgn_a, sgn_b, o1, o2, o3)
             pair_backward!(signed, solver, fold, σ)
             pointwise!(_ring_accum_point!, out, nx, ny, nz,
-                       out, signed, wd, maxred, o1, o2, o3)
+                       out, signed, h_d, ih_d, wpow, maxred, o1, o2, o3)
         else
             pointwise!(_delta4_point!, out, nx, ny, nz,
-                       out, f, wd, d, n_d, lomin, himax, mirror_lo, mirror_hi,
-                       maxred, nz + 2 * o3, o1, o2, o3)
+                       out, f, h_d, ih_d, wpow, d, n_d, lomin, himax,
+                       mirror_lo, mirror_hi, maxred, nz + 2 * o3, o1, o2, o3)
         end
     end
     return out
@@ -242,7 +270,7 @@ end
     return acc
 end
 
-@inline function _delta4_point!(out, f, wd, d, n_d, lomin, himax,
+@inline function _delta4_point!(out, f, h_d, ih_d, wpow, d, n_d, lomin, himax,
                                 mirror_lo, mirror_hi, maxred, n3p, o1, o2, o3,
                                 i, j, k)
     @inbounds begin
@@ -270,7 +298,9 @@ end
             acc = _delta4_line(f, I, e, il, n_d, lomin, himax,
                                mirror_lo, mirror_hi, -1)
         end
-        v = wd * abs(acc)
+        # `ih_d` is read at `I`, the same index the field is, so a stacked
+        # level picks up the tile's own geometry through the shift in `k`.
+        v = _sensor_weight(h_d, ih_d[I], wpow) * abs(acc)
         out[I] = maxred ? max(out[I], v) : out[I] + v
     end
     return nothing
@@ -298,8 +328,9 @@ end
     ring_sum!(out, f, solver, wpow; accumulate=false, parity=(1, 1, 1))
 
 The [`compact_d8`](@ref) counterpart of [`delta4_sum!`](@ref): reduces
-h_d^wpow |d⁸_d f| over the active directions into `out`, one distributed
-pentadiagonal line solve per direction. When `accumulate`, it combines with the
+Δ_d^wpow |d⁸_d f| over the active directions into `out`, one distributed
+pentadiagonal line solve per direction, with the same local physical spacing
+Δ_d as the weight. When `accumulate`, it combines with the
 existing contents of `out` using the same rule as `delta4_sum!`. Requires current
 rank-boundary halos of `f` to depth 4. Its distributed line solves require
 every rank in the directional sub-communicators to call it in the same order.
@@ -330,21 +361,21 @@ function ring_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
     # a closure capturing `solver` allocates once per region in proportion to
     # its size, as recorded on `compute_artificial!`.
     ring_buf = solver.ring_buf
+    hh, invh = solver.h, solver.inv_h
     for d in 1:3
         decomp.active[d] || continue
-        wd = solver.h[d]^wpow
         ring_along!(ring_buf, f, solver, d, parity[d])
         pointwise!(_ring_accum_point!, out, nx, ny, nz,
-                   out, ring_buf, wd, maxred, o1, o2, o3)
+                   out, ring_buf, hh[d], invh[d], wpow, maxred, o1, o2, o3)
     end
     return out
 end
 
-@inline function _ring_accum_point!(out, ring_buf, wd, maxred, o1, o2, o3,
-                                    i, j, k)
+@inline function _ring_accum_point!(out, ring_buf, h_d, ih_d, wpow, maxred,
+                                    o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
-        v = wd * abs(ring_buf[I])
+        v = _sensor_weight(h_d, ih_d[I], wpow) * abs(ring_buf[I])
         out[I] = maxred ? max(out[I], v) : out[I] + v
     end
     return nothing
@@ -438,14 +469,15 @@ end
 Rebuild `solver.mu_art` from the velocity components, replacing the strain
 form. Selected by `ArtParams(mu_sensor = :velocity)`.
 
-The sensor is the reduction of h_d |D_d u_j| over the (direction, component)
+The sensor is the reduction of Δ_d |D_d u_j| over the (direction, component)
 pairs, three velocity components by each active direction and so nine pairs in
 a three-dimensional run, smoothed as the strain sensor is; this is Miranda's
 `ringV`, and `ArtParams.reduction` chooses between its MAX and Cook's Σ. The
-weight is h, against the strain form's h², because u carries one derivative
+weight is Δ, against the strain form's Δ², because u carries one derivative
 fewer than |S|, and the two agree at the grid scale: a grid-to-grid oscillation
-of amplitude A gives 16Ah either way, so `C_mu` transfers between the settings
-as a starting point.
+of amplitude A gives 16AΔ either way, so `C_mu` transfers between the settings
+as a starting point. Δ_d is the local physical spacing along `d`; see
+[`delta4_sum!`](@ref).
 
 The absolute value in |S| = sqrt(S_ij S_ij) places a cusp wherever the strain
 passes through zero. Such a cusp is grid-scale structure at any resolution.
@@ -566,8 +598,10 @@ Rebuild `solver.beta_art` from a sensor built on the dilatation, replacing the
 strain form. Selected by `ArtParams(beta_sensor = :ungated_dilatation)` for
 `gated = false` and `= :dilatation` for `gated = true`.
 
-The sensor is the reduction of h_d² |D_d Δ| over the active directions, for the
-detector D named by `ArtParams.detector`, built from the dilatation Δ = ∇·u and
+The sensor is the reduction of |D_d Δ| over the active directions, weighted by
+the squared local physical spacing along `d` as the strain sensor is
+([`delta4_sum!`](@ref)), for the detector D named by `ArtParams.detector`,
+built from the dilatation Δ = ∇·u and
 smoothed as the strain sensor is. The ungated form is the one the reference
 implementation uses. The gated form multiplies it by `compression_switch`
 (Mani, Larsson & Moin, JCP 228, 2009; Kawai, Shankar &
@@ -675,6 +709,11 @@ since `scalar_field(solver, :strain_mag)` exposes it. `Q` is the padded
 conserved array, read only for the internal energy behind the κ\\* sensor.
 No-op if disabled.
 
+Every sensor weight is the local physical spacing, `solver.h[d]` divided by
+`solver.inv_h[d]` at the point ([`delta4_sum!`](@ref)), and the mass-fraction
+bound takes the geometric mean of the active ones at the same point. On a
+Cartesian grid with no `Stretch` those are the constant `solver.h`.
+
 The caller supplies the primitives and the velocity gradients: `compute_rhs!`
 runs `compute_primitives_and_gradients!` on the same `Q` immediately before
 this. Every rank must call this function because `smooth!` exchanges halos
@@ -722,7 +761,7 @@ function compute_artificial!(solver, Q)
     pointwise!(_strain_mag_point!, solver.strain_mag, nx, ny, nz,
                solver.strain_mag, solver.field_tuples.grad_u, o1, o2, o3)
 
-    # Strain sensor: h_d² |D_d S| reduced over directions for the selected
+    # Strain sensor: Δ_d² |D_d S| reduced over directions for the selected
     # detector D, smoothed. One pass serves μ* and β* where both are built from
     # it, which is the default configuration; a setting that rebuilds either
     # channel from its own field skips the corresponding write here, avoiding
@@ -752,7 +791,7 @@ function compute_artificial!(solver, Q)
     art.beta_sensor === :dilatation && dilatation_beta!(solver, C_beta, true)
     art.beta_sensor === :ungated_dilatation && dilatation_beta!(solver, C_beta, false)
 
-    # κ* sensor: Σ_d h_d |D_d e|, smoothed; κ* = C_κ · scale(EOS) · sensor,
+    # κ* sensor: Σ_d Δ_d |D_d e|, smoothed; κ* = C_κ · scale(EOS) · sensor,
     # with the scale ρc/T_ion for the gas models. Internal energy comes straight
     # from Q, so the sensor itself is EOS-agnostic; the scale is an EOS query
     # (see the note in physics.jl on why it is the weaker of the two
@@ -770,7 +809,7 @@ function compute_artificial!(solver, Q)
                solver.T_ion, solver.cp_mix, solver.sensor, C_kappa,
                o1, o2, o3)
 
-    # Per-species D*_k = c · G[max(C_D Σ_d h_d |D_d Y_k|, C_Y h (Y_k's excursion
+    # Per-species D*_k = c · G[max(C_D Σ_d Δ_d |D_d Y_k|, C_Y Δ_g (Y_k's excursion
     # outside [0, 1] beyond Y_tolerance))]. The bound is folded into the ringing
     # sensor before the one smoothing pass, Cook's single filter of the whole
     # bracket, so it costs one pointwise pass and no line solve; smoothing the
@@ -778,6 +817,10 @@ function compute_artificial!(solver, Q)
     # sweeps per RHS; the flux assembly's correction velocity keeps Σ_k J_k = 0
     # despite unequal D_k. Only meaningful with more than one species.
     if solver.equations.n_species > 1
+        # The bound's length is the geometric mean of the local physical
+        # spacings over the active directions. The product of the
+        # computational ones and the exponent are the same at every point;
+        # the point supplies the product of the `inv_h` that divide them.
         h_bound = one(C_D)
         n_active = 0
         for d in 1:3
@@ -785,12 +828,14 @@ function compute_artificial!(solver, Q)
             h_bound *= solver.h[d]
             n_active += 1
         end
-        C_Y_h = C_Y * h_bound^(one(C_D) / n_active)
+        inv_n = one(C_D) / n_active
+        a1, a2, a3 = decomp.active
+        ih1, ih2, ih3 = solver.inv_h
         for sp in 1:solver.equations.n_species
             detect_sum!(solver.sensor_sp, solver.Y[sp], solver, 1)
             pointwise!(_species_bound_point!, solver.sensor_sp, nx, ny, nz,
-                       solver.sensor_sp, solver.Y[sp], C_D, C_Y_h, Y_tolerance,
-                       o1, o2, o3)
+                       solver.sensor_sp, solver.Y[sp], C_D, C_Y, h_bound, inv_n,
+                       ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)
             smooth!(solver.sensor_sp, solver)
             pointwise!(_species_diffusivity_point!, solver.sensor_sp,
                        nx, ny, nz, solver.D_art[sp], solver.c,
@@ -853,13 +898,26 @@ end
 # excursion at stage 1 only measures the same as the dead band on every case
 # tried, at the price of a stored field per species; the dead band stores
 # nothing.
-@inline function _species_bound_point!(sensor_sp, Y_sp, C_D, C_Y_h, Y_tolerance,
+@inline function _species_bound_point!(sensor_sp, Y_sp, C_D, C_Y, h_bound, inv_n,
+                                       ih1, ih2, ih3, a1, a2, a3, Y_tolerance,
                                        o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         y = Y_sp[I]
         excursion = max(zero(y), -y - Y_tolerance, y - one(y) - Y_tolerance)
-        sensor_sp[I] = max(C_D * sensor_sp[I], C_Y_h * excursion)
+        s = C_D * sensor_sp[I]
+        # The geometric mean costs a `pow` and is wanted only where the bound
+        # is active, which is nowhere on a profile that stays inside [0, 1].
+        # The ringing sensor is a sum of absolute values, so `s` is
+        # nonnegative and the skipped `max` would return it unchanged.
+        if excursion > zero(excursion)
+            ihp = one(h_bound)
+            a1 && (ihp *= ih1[I])
+            a2 && (ihp *= ih2[I])
+            a3 && (ihp *= ih3[I])
+            s = max(s, C_Y * (h_bound / ihp)^inv_n * excursion)
+        end
+        sensor_sp[I] = s
     end
     return nothing
 end

@@ -4,6 +4,12 @@ This study measures the effects and failure limits of the four `ArtParams`
 constants. `bench/artcal.jl` reproduces the results using the cases defined in
 `test/cases.jl` and guarded by `test/validation.jl`.
 
+Throughout, `h_d` in a sensor expression is the local physical spacing along
+direction d, `solver.h[d] / solver.inv_h[d]` at the point. Every grid in this
+study is uniform and Cartesian, or has its angular directions collapsed, so
+the physical and the computational spacing coincide on every number recorded
+here.
+
 The results support the current defaults. For strong shocks, however, the CFL
 number determines stability more strongly than any of the four constants.
 

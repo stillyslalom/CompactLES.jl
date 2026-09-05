@@ -370,29 +370,7 @@ mixing, converging shocks, implosions) are wall-free or slip-walled;
 LES is out of scope until a target problem requires it. Recorded here so the
 gap stands as a decision, not an oversight.
 
-**8. Sensor length scaling on stretched grids.** Every artificial-property
-sensor weights a direction's fourth difference by `solver.h[d]`, and the
-mass-fraction bound by the geometric mean of the active `solver.h`; under a
-`Stretch` that is the computational spacing, fixed along the line, while the
-physical spacing is `h[d]·dx/dξ`. Measured (September 2026) on the shocked
-air/SF6 interface placed by a `sine_cluster` stretch at half and at 1.8×
-the reference spacing: the weighting error is the ratio of the two
-spacings, 2× too much diffusivity in the refined region and 0.55× in the
-coarsened one, and the measured D\* peaks differ from a uniform grid of the
-same local spacing by more than that because |δ⁴Y| responds to the
-interface's history through the coarse cells. The mass-fraction excursion
-moved from −0.0025 to −0.0016 in the refined region and from −0.021 to
-−0.030 in the coarsened one. Shankar, Kawai & Lele (2011, eq. A5) weight by
-the physical spacing projected on the local gradient direction. The change
-is per point rather than per direction in `delta4_sum!`, bit-identical
-where `dx/dξ = 1`, and touches the same question in the cylindrical θ
-direction, where `h` is in radians and the physical spacing is `r h`; the
-axis closures are calibrated with the present weighting, so the two must
-move together. No test combines `Numerics.stretch` with an enabled
-multi-species sensor; the stretched copy of `shock_interface` in the
-measurement is the case to add.
-
-**9. A consistent bulk regularizer for large density ratios.** Brill,
+**8. A consistent bulk regularizer for large density ratios.** Brill,
 Olson & Bokman (arXiv:2503.12680, 2025) diffuse the partial densities,
 J_i = −D∇ρ_i, with momentum and energy consistency fluxes; the form moves
 bulk mass and is stable at very large density ratios, but is not entropy

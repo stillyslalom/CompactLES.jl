@@ -20,7 +20,6 @@ using Test, LinearAlgebra, Random
 const CL = CompactLES
 Random.seed!(7)
 
-per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 mkslv(; kw...) = Solver(; bcs=per3, L_domain=(2π, 2π, 2π), art=ArtParams(enabled=false), kw...)
 
 "Max interior error of a scalar field against an analytic function."
@@ -41,6 +40,12 @@ end; f)
 # Analytic references (exact Riemann solver, Noh, Sedov) live in one place so
 # the serial suite and test/validation.jl measure against the same solution.
 include("references.jl")
+
+# The shock-capturing case setups, shared with test/validation.jl and
+# bench/artcal.jl. This suite runs only the cheap ones; the battery in
+# validation.jl runs them at their reference resolutions. `per3`, used
+# throughout below, is defined there.
+include("cases.jl")
 
 # One top-level testset holds the whole suite, the included files' testsets
 # too (nesting is dynamic, so a testset created inside an `include` call
@@ -1218,6 +1223,87 @@ end
     sharp_max = max(maximum(solver.D_art[1]), maximum(solver.D_art[2]))
     @test sharp_max > 100 * max(smooth_max, 1e-14)
     @test all(isfinite, solver.D_art[1]) && all(isfinite, solver.D_art[2])
+end
+
+@testset "artificial-property weights are the local physical spacing" begin
+    # Every sensor weight is h[d] / inv_h[d][I], the arclength of one
+    # computational cell, and the mass-fraction bound is the geometric mean of
+    # the active ones. Two grids carrying the same physical spacing must
+    # therefore produce the same coefficients whatever computational spacing
+    # they are written in. N − 1 is a power of two so that the coordinates,
+    # the spacings and the Jacobian are all exact and nothing below turns on
+    # a last-bit difference in the grid itself.
+    Nx = 33
+    eos2 = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                         IdealSpecies{Float64}("b", 0.2, 1.09)])
+    # One closure type for both mappings below, so the two stretched runs share
+    # a single `Solver` specialization instead of compiling one each.
+    linmap(a) = Stretch(ξ -> a * ξ, ξ -> a)
+    function art_coefficients(L, st)
+        s = Solver(n_global=(Nx, 12, 12), L_domain=(L, 0.2, 0.2), eos=eos2,
+                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                   art=ArtParams(enabled=true), stretch=(st, nothing, nothing))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> begin
+            θ = tanh_blend(x, 0.5L, 0.03L)
+            Prim(Y=(1 - θ, θ), rho=1 + θ, p=1.0,
+                 u=(0.4sin(2π * x / L), 0.0, 0.0))
+        end)
+        # Drive one plane's mass fractions out of [0, 1] so the bound term,
+        # the only consumer of the geometric mean, is exercised as well.
+        for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2]
+            I = gidx(s, Nx ÷ 4, j, k)
+            ρ = Q[I, 1] + Q[I, 2]
+            Q[I, 1] -= 0.05ρ
+            Q[I, 2] += 0.05ρ
+        end
+        apply_bcs!(s, Q)
+        compute_rhs!(s, Q, zero(Q))
+        (copy(s.mu_art), copy(s.beta_art), copy(s.kappa_art),
+         copy(s.D_art[1]), copy(s.D_art[2]))
+    end
+    names = ("mu_art", "beta_art", "kappa_art", "D_art[1]", "D_art[2]")
+
+    # An identity mapping leaves inv_h at exactly one, so the per-point weight
+    # is the scalar it replaced and every coefficient reproduces bitwise.
+    plain = art_coefficients(1.0, nothing)
+    ident = art_coefficients(1.0, linmap(1.0))
+    for (nm, a, b) in zip(names, ident, plain)
+        a == b || println("identity stretch moved $nm")
+        @test a == b
+    end
+    @test maximum(plain[1]) > 0 && maximum(plain[4]) > 0
+
+    # A mapping of constant Jacobian 2 over (0, 2) is the uniform grid of the
+    # same physical spacing written in half the computational spacing. The
+    # coefficients agree to round-off; weighting by the computational spacing
+    # instead makes them differ by 2^wpow, a factor of four on mu*/beta* and
+    # two on kappa*/D*.
+    uniform = art_coefficients(2.0, nothing)
+    linear = art_coefficients(2.0, linmap(2.0))
+    for (nm, a, b) in zip(names, linear, uniform)
+        scale = maximum(abs, b)
+        rel = maximum(abs, a - b) / scale
+        rel < 1e-12 || println("linear stretch moved $nm by $rel relative")
+        @test scale > 0
+        @test rel < 1e-12
+    end
+end
+
+@testset "stretched shocked interface: the species bound holds" begin
+    # The only case combining Numerics.stretch with the multi-species sensors.
+    # The cluster point sits just short of the interface, so the shock crosses
+    # it where the physical spacing is about half the computational one and the
+    # two weightings differ most. Cheap by construction: 121 points, and the
+    # run stops once the transmitted shock has cleared the interface.
+    st = sine_cluster(0.0, 1.0, SI_X_IFACE, 0.5)
+    r = shock_interface(N=121, tfin=0.15, delta=2.0, nmax=4000, stretch1=st)
+    @test r.completed
+    @test all(isfinite, r.Y_air)
+    # Measured -0.0076 / 1.0076 over 196 steps; the guard is roughly 4x that,
+    # the same run on a uniform grid of the same point count reaching 0.0137.
+    @test -0.03 < r.worst_min_Y && r.worst_max_Y < 1.03
+    @test 0 < r.width_cells < 30
 end
 
 @testset "compression-keyed beta sensors: gated_strain and dilatation" begin

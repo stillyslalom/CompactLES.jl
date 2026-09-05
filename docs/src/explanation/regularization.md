@@ -19,6 +19,14 @@ fourth difference is small on a well-resolved smooth field and large where
 variation approaches the grid scale. Because it is undivided, its response
 contracts under refinement for a fixed smooth physical field.
 
+Each direction's contribution carries a length weight: the local physical
+spacing along that direction, which is the computational spacing multiplied
+by the metric scale factor and by any [`Stretch`](@ref) mapping's Jacobian,
+raised to the power the sensor's field requires. On a uniform Cartesian grid
+that weight is the constant grid spacing. Under a stretch, or along a
+resolved angular direction, it varies from point to point, and the sensor
+follows the mesh rather than the computational index.
+
 ## Sensor construction
 
 Every sensor is assembled in the same three stages. A field is selected, a

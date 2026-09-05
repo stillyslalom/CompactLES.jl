@@ -26,6 +26,8 @@ points at them and does not restate them.
 16. [AMR/GPU Stage 4 — subcycling, tagging, and regridding (August 2026)](#amrgpu-stage-4--subcycling-tagging-and-regridding-august-2026)
 17. [GPU Stage G1 — pointwise kernels via KernelAbstractions (August 2026)](#gpu-stage-g1--pointwise-kernels-via-kernelabstractions-august-2026)
 18. [Hierarchy checkpoint, restart and multiblock output (September 2026)](#hierarchy-checkpoint-restart-and-multiblock-output-september-2026)
+19. [The mass-fraction bound (September 2026)](#the-mass-fraction-bound-september-2026)
+20. [Sensor length scaling on stretched and curvilinear grids (September 2026)](#sensor-length-scaling-on-stretched-and-curvilinear-grids-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -1040,6 +1042,8 @@ under that criterion; not covered: a shared-file field dump of a
 hierarchy and the checkpoint of a same-level slab layout. Serial suite
 131 testsets; MPI 195 checks.
 
+## The mass-fraction bound (September 2026)
+
 The mass-fraction bound (`ArtParams.C_Y`, `Y_tolerance`;
 `reference/CALIBRATION.md`, C_Y). A vortex ring driven into an air/SF6
 interface produced negative mass fractions; a 1-D Mach 1.5 shock into a
@@ -1062,3 +1066,56 @@ a temperature drift 50× larger), and three species at equal density
 hold bulk density to 4e-14 under the per-species diffusivities. The
 shocked interface is a guarded validation case and an `artcal.jl` sweep.
 Serial suite 142 testsets; MPI 213 checks.
+
+## Sensor length scaling on stretched and curvilinear grids (September 2026)
+
+The model debt on sensor length scaling, closed. Every artificial-property
+sensor weighted a direction's undivided high-pass by `solver.h[d]`, and the
+mass-fraction bound by the geometric mean of the active `solver.h`. Those are
+the computational spacings. The weight is now the local physical spacing,
+`solver.h[d]` divided by `solver.inv_h[d]` at the point, which carries a
+`Stretch`'s mapping Jacobian and an angular direction's metric scale factor
+and is the quotient `max_rate` already inverts for the advective rate.
+Shankar, Kawai & Lele (Phys. Fluids 23, 024102, 2011, eq. A5) weight the same
+way. `delta4_sum!`, `ring_sum!` and the bound in `compute_artificial!` read
+the geometry array per point through `_sensor_weight`, at the index the field
+itself is read at, so a device patch and a stacked level need no separate
+path.
+
+Where `inv_h` is one the change is bitwise, which covers every unstretched
+Cartesian run: the serial suite, the convergence orders and their error
+magnitudes, and the whole validation battery reproduce unchanged, the
+battery's cylindrical and spherical cases included, since each of those runs
+with its angular directions collapsed. A mapping of constant Jacobian 2 over
+(0, 2) is the uniform grid of the same physical spacing written in half the
+computational spacing; before the change its coefficients were 0.25× the
+uniform grid's on μ\* and β\* and 0.5× on κ\* and D\*, and they are now
+bitwise equal, which is what pins the weight to dx/dξ. On the Mach 1.5 air/SF6
+interface at 121 points, under a `sine_cluster` whose finest cells sit just
+short of the interface, the worst mass-fraction excursion moved from −0.0063
+to −0.0076 and the step count from 213 to 196. `bench/audit.jl` reports 2.3 kB
+more per right-hand side, a fixed cost of the wider argument lists and
+independent of the grid; the inference counts and `bench/jetcheck.jl`'s zero
+dispatch sites are unchanged.
+
+A resolved angular direction is weighted by the arclength of its cell, r dθ or
+r sinθ dφ, rather than by the angle increment. That is a numerics change for
+any run that both resolves an angle and enables the artificial properties, and
+nothing was retuned against it. On a cylindrical run at 24 × 32 in (r, θ) the
+peak μ\* and β\* fall 0.7%, the peak κ\* 0.4%, and the μ\* volume sum
+1.7%; the spherical counterpart at 16 × 24 moves 0.4% on peak κ\* and below
+0.1% elsewhere. The δ⁴ detector on a uniform Cartesian velocity through a
+resolved axis, the case `test/seam_tests.jl` guards, falls by a factor of 16
+on the two cells beside the axis, where the θ arclength vanishes: its
+axis-to-interior ratio goes from 1.00 to 0.20, further inside the guard rather
+than nearer it. The axis and origin closures were calibrated under the old
+weighting and were not refitted; no guarded number moves.
+
+`shock_interface` in `test/cases.jl` takes a `stretch1` keyword, and
+`test/runtests.jl` includes that file rather than keeping its own copy of
+`per3`. Two testsets were added. The first compares coefficient arrays across
+grids: the identity mapping reproduces the unstretched arrays bitwise, and the
+constant-Jacobian mapping reproduces the uniform grid of the same physical
+spacing. The second runs the stretched shocked interface to completion under a
+guard on the mass-fraction excursion. Serial suite 144 testsets; MPI 213
+checks.

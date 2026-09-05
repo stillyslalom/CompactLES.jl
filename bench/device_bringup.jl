@@ -63,16 +63,23 @@ function main(opt, device_array)
     d = maximum(abs.(Array(Qg) .- Qc))
     println("rk update      max |gpu - cpu| = ", d, d == 0 ? "  (bitwise)" : "")
 
-    # δ⁴ detector body, clamped edges, all three directions.
+    # δ⁴ detector body, clamped edges, all three directions. The sensor weight
+    # is the local physical spacing h/inv_h, so the body takes the geometry
+    # array; a flat one stands in for an unstretched Cartesian grid.
     f0 = randn(dims[1:3]...)
     outc = zeros(dims[1:3]...)
+    ih1 = ones(dims[1:3]...)
+    n3p = dims[3]
     fg = device_array(f0)
+    ihg1 = device_array(ih1)
     outg = device_array(zeros(dims[1:3]...))
     for dd in 1:3
-        CL.pointwise_ka!(CL._delta4_point!, KA.CPU(), n..., outc, f0, 1.0,
-                         dd, n[dd], 1, n[dd], false, false, false, pad, pad, pad)
-        CL.pointwise_ka!(CL._delta4_point!, gpu, n..., outg, fg, 1.0,
-                         dd, n[dd], 1, n[dd], false, false, false, pad, pad, pad)
+        CL.pointwise_ka!(CL._delta4_point!, KA.CPU(), n..., outc, f0, 1.0, ih1,
+                         1, dd, n[dd], 1, n[dd], false, false, false, n3p,
+                         pad, pad, pad)
+        CL.pointwise_ka!(CL._delta4_point!, gpu, n..., outg, fg, 1.0, ihg1,
+                         1, dd, n[dd], 1, n[dd], false, false, false, n3p,
+                         pad, pad, pad)
     end
     d = maximum(abs.(Array(outg) .- outc))
     println("delta4 sensor  max |gpu - cpu| = ", d, d == 0 ? "  (bitwise)" : "")
@@ -89,11 +96,11 @@ function main(opt, device_array)
     # Timing: one stencil-shaped single launch, and the launch-bound RK
     # update (five launches, each synchronized — the G3 batching case).
     t_gpu = best(() -> CL.pointwise_ka!(CL._delta4_point!, gpu, n...,
-                 outg, fg, 1.0, 1, n[1], 1, n[1], false, false, false,
-                 pad, pad, pad))
+                 outg, fg, 1.0, ihg1, 1, 1, n[1], 1, n[1], false, false, false,
+                 n3p, pad, pad, pad))
     t_thr = best(() -> CL.pointwise!(CL._delta4_point!, outc, n...,
-                 outc, f0, 1.0, 1, n[1], 1, n[1], false, false, false,
-                 pad, pad, pad))
+                 outc, f0, 1.0, ih1, 1, 1, n[1], 1, n[1], false, false, false,
+                 n3p, pad, pad, pad))
     @printf("delta4 (one dir) %d^3:  device %.3f ms   @threaded(%d) %.3f ms\n",
             opt.n, 1e3t_gpu, Threads.nthreads(), 1e3t_thr)
     t_gpu = best(() -> for c in 1:nc
