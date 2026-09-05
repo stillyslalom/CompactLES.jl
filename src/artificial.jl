@@ -23,7 +23,10 @@
 # and `ArtParams.smoother` selects the operator it applies. With more than one
 # species, each carries its own sensor and its own D*_k; Σ_k J_k = 0 is then
 # restored by the correction velocity in the flux assembly (rhs.jl), not by
-# giving every species the same diffusivity. Under `:delta4`, indices are
+# giving every species the same diffusivity. `ArtParams.species_flux = :bulk`
+# replaces that Fickian channel by one diffusivity D_b on every conserved
+# variable (`bulk_diffusivity!`; the flux is assembled in rhs.jl), sensed on
+# the mass and the mole fraction of every species. Under `:delta4`, indices are
 # clamped at closed physical edges, except for an odd field across a fold, which
 # takes the half-offset mirror; `:d8` uses the scheme's own closure rows there
 # instead. Halos cover rank boundaries. The high-pass itself acts in
@@ -102,6 +105,28 @@ Cook-style artificial-property controls.
   the cylindrical from 0.15 to 0.2, and makes the sensor phase 29% cheaper, at
   the cost of about seven points of planar wall heating. The four constants
   above are calibrated per setting. All of it is in `reference/CALIBRATION.md`.
+- `species_flux`: the form of the artificial species regularization.
+  `:fickian` (default) is the per-species Fickian flux J_k = −ρ D\\*_k ∇Y_k
+  with the correction velocity that keeps Σ_k J_k = 0 and the enthalpy flux
+  Σ_k h_k J_k in the energy equation. `:bulk` replaces it by one diffusive
+  flux −D_b ∇q on every conserved variable q, the classical parabolic
+  regularization of the system, with D_b = c · G[max over species and over
+  the mass and mole fraction f ∈ {Y_k, X_k} of max(C_D Δ_d|D_d f|, C_Y Δ_g ·
+  excursion(f))]: the same bracket, constants and smoothing as the Fickian
+  D\\*_k, sensed on both fields. It is conservative, holds a uniform (u, p, T)
+  state invariant to round-off whatever the composition, and satisfies every
+  entropy inequality; the Fickian channel's enthalpy flux moves ρE across a
+  uniform-pressure interface of unequal gas constants, and this is the term
+  that removes the pressure error of an advected large-density-ratio
+  interface (7 to 8 orders on the Brill, Olson & Bokman advection test) and
+  carries a Mach 1.5 shock through a 2h interface at density ratio 100,
+  which the Fickian channel does not. The one D_b is stored in every
+  `D_art[k]`, enters the diffusive timestep as they do, and costs n_cons
+  gradient line solves per direction in place of the Fickian channel's
+  n_species, plus one detector and smoother pass per species. Not the
+  default: its constants are inherited from the Fickian channel and it has
+  not been run on a three-dimensional case. Single-patch runs only.
+  `reference/CALIBRATION.md`, "The bulk species channel".
 - `detector`: the high-pass that builds every sensor, in
   `detect_sum!`. `:delta4` (default) is Cook's undivided fourth
   difference, computed explicitly. `:d8` is the reference implementation's
@@ -131,6 +156,7 @@ Base.@kwdef struct ArtParams{T}
     reduction::Symbol = :sum
     smoother::Symbol = :gaussian
     detector::Symbol = :delta4
+    species_flux::Symbol = :fickian
 end
 
 # Integer coefficients keep the exact stencil while adopting the field's
@@ -704,7 +730,9 @@ Fill `solver.mu_art`, `solver.beta_art` and `solver.kappa_art`, and
 `solver.D_art` when the equation set carries more than one species, from the
 current primitives and (metric-corrected) velocity gradients. A single-species
 run never enters the per-species sweep, so its `D_art` keeps the zeros it was
-allocated with. `solver.strain_mag` is written whichever sensors are selected,
+allocated with. Under `ArtParams.species_flux = :bulk` the species sweep is
+[`bulk_diffusivity!`](@ref), which writes one diffusivity into every
+`D_art[k]`. `solver.strain_mag` is written whichever sensors are selected,
 since `scalar_field(solver, :strain_mag)` exposes it. `Q` is the padded
 conserved array, read only for the internal energy behind the κ\\* sensor.
 No-op if disabled.
@@ -831,6 +859,11 @@ function compute_artificial!(solver, Q)
         inv_n = one(C_D) / n_active
         a1, a2, a3 = decomp.active
         ih1, ih2, ih3 = solver.inv_h
+        if art.species_flux === :bulk
+            bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
+                              a1, a2, a3, Y_tolerance)
+            return solver
+        end
         for sp in 1:solver.equations.n_species
             detect_sum!(solver.sensor_sp, solver.Y[sp], solver, 1)
             pointwise!(_species_bound_point!, solver.sensor_sp, nx, ny, nz,
@@ -843,6 +876,85 @@ function compute_artificial!(solver, Q)
         end
     end
     return solver
+end
+
+"""
+    bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
+                      a1, a2, a3, Y_tolerance)
+
+The species sweep of [`compute_artificial!`](@ref) under
+`ArtParams.species_flux = :bulk`: one diffusivity
+D_b = c · G[max_k max_{f ∈ {Y_k, X_k}} max(C_D Δ_d|D_d f|, C_Y Δ_g excursion(f))],
+written into every `solver.D_art[k]`, so that the checkpoint's coefficient
+block and `max_rate`'s diffusive rate see it where they saw the Fickian
+D\\*_k. The arguments after `solver` are the unpacked constants and geometry
+of the caller (see the note on closures there).
+
+Each species contributes two fields to the maximum, its mass fraction and its
+mole fraction from [`mole_fraction`](@ref), and the two do different work. On
+a two-gas interface of density ratio R the mole fraction is the volume
+fraction and sits where the density jumps; a sensor on it carries a shock
+through the interface at R = 100, which the mass-fraction sensor loses. The
+mass fraction on the light side amplifies a volume-fraction ringing by up to
+R (Y_l = (1 − V)/(1 + (R − 1)V) at equal γ), so a sensor on it is what bounds
+Y, and the mole-fraction sensor is blind to that ringing at the 1e-3 level.
+The maximum over both is the reference implementation's combination of
+mass- and volume-fraction detectors (Brill, Olson & Bokman 2025, eqs.
+33–37). The measurements are in `reference/CALIBRATION.md`.
+
+Scratch: `solver.sensor_sp` accumulates the maximum, `solver.tmp_b` holds one
+field's detector output and `solver.tmp_a` the mole fraction over the padded
+extent, computed from the padded `Y` that `primitives!` fills, so no exchange
+is needed before the detector reads it; `smooth!` overwrites `tmp_a` only
+after the last field is in. Every rank must call this: the detector and the
+smoother carry the collectives recorded on `compute_artificial!`.
+"""
+function bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
+                           a1, a2, a3, Y_tolerance)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    nxf, nyf, nzf = padded_extent(decomp)
+    n_species = solver.equations.n_species
+    acc = solver.sensor_sp
+    fill!(acc, 0)
+    for sp in 1:n_species
+        detect_sum!(solver.tmp_b, solver.Y[sp], solver, 1)
+        pointwise!(_species_bound_point!, solver.tmp_b, nx, ny, nz,
+                   solver.tmp_b, solver.Y[sp], C_D, C_Y, h_bound, inv_n,
+                   ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)
+        pointwise!(_max_into_point!, acc, nx, ny, nz, acc, solver.tmp_b,
+                   o1, o2, o3)
+        pointwise!(_mole_fraction_point!, solver.tmp_a, nxf, nyf, nzf,
+                   solver.tmp_a, solver.eos, solver.field_tuples.Y, sp,
+                   n_species)
+        detect_sum!(solver.tmp_b, solver.tmp_a, solver, 1)
+        pointwise!(_species_bound_point!, solver.tmp_b, nx, ny, nz,
+                   solver.tmp_b, solver.tmp_a, C_D, C_Y, h_bound, inv_n,
+                   ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)
+        pointwise!(_max_into_point!, acc, nx, ny, nz, acc, solver.tmp_b,
+                   o1, o2, o3)
+    end
+    smooth!(acc, solver)
+    for sp in 1:n_species
+        pointwise!(_species_diffusivity_point!, acc, nx, ny, nz,
+                   solver.D_art[sp], solver.c, acc, o1, o2, o3)
+    end
+    return solver
+end
+
+@inline function _mole_fraction_point!(X, eos, Y, sp, n_species, i, j, k)
+    @inbounds X[i, j, k] = mole_fraction(eos, sp, Y, CartesianIndex(i, j, k),
+                                         n_species)
+    return nothing
+end
+
+@inline function _max_into_point!(acc, src, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        acc[I] = max(acc[I], src[I])
+    end
+    return nothing
 end
 
 # Per-point bodies of the sensor-to-coefficient loops above, in order of use.

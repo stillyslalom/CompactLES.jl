@@ -31,6 +31,16 @@ sf = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMet
 Qf = allocate_state(sf); dQf = zero(Qf)
 initialize!(sf, Qf, (r, θ, z) -> Prim(u=(0, 0, 0), p=1 + exp(-40(r - 0.4)^2), rho=1.0))
 
+# two-species solver under the bulk species channel: the mole-fraction and
+# bulk-flux bodies, and the conserved gradients, which the default skips
+eos2 = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                     IdealSpecies{Float64}("b", 0.2, 1.09)])
+sb = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3, eos=eos2,
+            art=ArtParams(enabled=true, species_flux=:bulk))
+Qb = allocate_state(sb); dQb = zero(Qb)
+initialize!(sb, Qb, (x, y, z) -> Prim(Y=(0.5 + 0.4tanh(4sin(x)), 0.5 - 0.4tanh(4sin(x))),
+                                       u=(0.1sin(x), 0, 0), p=1.0, rho=1 + 0.5cos(x)))
+
 function summarize(name, res)
     reports = JET.get_reports(res)
     buf = IOBuffer()
@@ -57,5 +67,7 @@ summarize("compute_dt",    @report_opt target_modules=(CL,) compute_dt(solver, Q
 summarize("filter_state!", @report_opt target_modules=(CL,) filter_state!(solver, Q))
 summarize("step!",         @report_opt target_modules=(CL,) step!(solver, Q, dQ, du, 1e-4))
 summarize("compute_rhs! (axis fold)", @report_opt target_modules=(CL,) compute_rhs!(sf, Qf, dQf))
+summarize("compute_rhs! (bulk species)", @report_opt target_modules=(CL,) compute_rhs!(sb, Qb, dQb))
+summarize("compute_dt (bulk species)", @report_opt target_modules=(CL,) compute_dt(sb, Qb))
 
 println("\njet check complete")

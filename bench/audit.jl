@@ -17,13 +17,14 @@ const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 # --- a representative solver: 3-D periodic, artificial properties live ------
-function build(; N=48, n_species=1, art=true, deriv=lele_d1_6())
+function build(; N=48, n_species=1, art=true, deriv=lele_d1_6(),
+               species_flux=:fickian)
     eos = n_species == 1 ? IdealSpecies("gas"; R=1.0, gamma=1.4) :
           IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.2, 1.09)])
     solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3, eos=eos,
                transport=Transport(mu0=1e-3), deriv=deriv,
-               art=ArtParams(enabled=art))
+               art=ArtParams(enabled=art, species_flux=species_flux))
     Q = allocate_state(solver)
     if n_species == 1
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1sin(x) * cos(y), -0.1cos(x) * sin(y), 0.05sin(z)),
@@ -69,6 +70,12 @@ dQ2 = zero(Q2); du2 = zero(Q2)
 alloc("compute_rhs! (2 species, C10)", () -> compute_rhs!(s2, Q2, dQ2); scale=npt)
 alloc("step!        (2 species, C10)", () -> step!(s2, Q2, dQ2, du2, 1e-4); scale=npt)
 
+println("\n=== allocation per call (48^3, two species, bulk species channel) ===")
+sb, Qb = build(n_species=2, species_flux=:bulk)
+dQb = zero(Qb); dub = zero(Qb)
+alloc("compute_rhs! (2 species, bulk)", () -> compute_rhs!(sb, Qb, dQb); scale=npt)
+alloc("step!        (2 species, bulk)", () -> step!(sb, Qb, dQb, dub, 1e-4); scale=npt)
+
 println("\n=== allocation per call (cylindrical axis fold, 1-D radial) ===")
 sf = Solver(n_global=(128, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
             bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
@@ -112,6 +119,7 @@ probes = [
     ("deriv_along!",       CL.deriv_along!, Tuple{typeof(solver.tmp_a), typeof(solver.rho), typeof(solver), Int, Int}),
     ("filter_state!",      filter_state!,   Tuple{typeof(solver), typeof(Q)}),
     ("apply_bcs!",         apply_bcs!,      Tuple{typeof(solver), typeof(Q)}),
+    ("compute_rhs! (bulk)", compute_rhs!,   Tuple{typeof(sb), typeof(Qb), typeof(dQb), Bool}),
 ]
 for (name, f, T) in probes
     n, bad = badtypes(f, T)

@@ -308,13 +308,15 @@ const SI_RHO_HEAVY = 5.04          # SF6 at the pre-shock p and T, air = 1
 const SI_GAMMA_HEAVY = 1.09
 
 """
-    shock_interface(; N, tfin, art, cfl, delta, nmax, stretch1) -> NamedTuple
+    shock_interface(; N, tfin, art, cfl, delta, nmax, stretch1,
+                    rho_heavy) -> NamedTuple
 
 Mach `SI_MACH` shock in air (γ = 1.4, R = 1, ρ = 1 and p = 1 ahead of it) at
 `SI_X_SHOCK` running into a tanh interface at `SI_X_IFACE` with a heavy gas
-(γ = `SI_GAMMA_HEAVY`, R = 1 / `SI_RHO_HEAVY`, so ρ = `SI_RHO_HEAVY` at the
-pre-shock p and T). The post-shock state follows from the Rankine–Hugoniot
-relations, and both ends hold their initial state through a `DirichletBC`.
+(γ = `SI_GAMMA_HEAVY`, R = 1 / `rho_heavy`, so ρ = `rho_heavy` at the
+pre-shock p and T; `SI_RHO_HEAVY` by default, SF6's ratio to air, and 100 in
+the bulk species channel's guard, where the default channel fails). The
+post-shock state follows from the Rankine–Hugoniot relations, and both ends hold their initial state through a `DirichletBC`.
 `delta` is the smearing width of the shock and the interface in cells, not a
 length as in `tube`, so the sweep in bench/artcal.jl reads directly in cells;
 under a `stretch1` it is a length, `delta / (N − 1)`, since the cell width
@@ -333,10 +335,11 @@ are transient and the final profile need not show them; `width_cells` counts
 the interior points with 0.05 < Y_air < 0.95 at the end.
 """
 function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
-                         cfl=0.4, delta=2.0, nmax=NMAX, stretch1=nothing)
+                         cfl=0.4, delta=2.0, nmax=NMAX, stretch1=nothing,
+                         rho_heavy=SI_RHO_HEAVY)
     γa = 1.4
     eos = IdealMixture([IdealSpecies{Float64}("air", 1.0, γa),
-                        IdealSpecies{Float64}("sf6", 1 / SI_RHO_HEAVY,
+                        IdealSpecies{Float64}("sf6", 1 / rho_heavy,
                                               SI_GAMMA_HEAVY)])
     M = SI_MACH
     p2 = 1 + 2γa / (γa + 1) * (M^2 - 1)
@@ -346,7 +349,7 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
     δ = delta * h
     bcs = (DirichletBC((x, y, z, t) -> Prim(Y=(1.0, 0.0), rho=r2,
                                             u=(u2, 0.0, 0.0), p=p2)),
-           DirichletBC((x, y, z, t) -> Prim(Y=(0.0, 1.0), rho=SI_RHO_HEAVY,
+           DirichletBC((x, y, z, t) -> Prim(Y=(0.0, 1.0), rho=rho_heavy,
                                             u=(0.0, 0.0, 0.0), p=1.0)))
     prob = Problem(eos=eos, transport=Transport(mu0=0.0),
                    domain=((0.0, 1.0), (0.0, h), (0.0, h)),
@@ -354,7 +357,7 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
                    ic=(x, y, z) -> begin
                        s = tanh_blend(x, SI_X_SHOCK, δ)   # 0 post-shock, 1 ahead
                        θ = tanh_blend(x, SI_X_IFACE, δ)   # 0 air, 1 heavy
-                       ρ = (1 - s) * r2 + s * ((1 - θ) + θ * SI_RHO_HEAVY)
+                       ρ = (1 - s) * r2 + s * ((1 - θ) + θ * rho_heavy)
                        Prim(Y=(1 - θ, θ), rho=ρ, u=((1 - s) * u2, 0.0, 0.0),
                             p=(1 - s) * p2 + s)
                    end)
@@ -390,6 +393,91 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
     return (x=xs, Y_air=Y1, rho=ρ, p=p, worst_min_Y=worst_min[],
             worst_max_Y=worst_max[], width_cells=width, steps=solver.step,
             completed=completed(solver, tfin))
+end
+
+# --- advected slab at a large density ratio ---------------------------------
+#
+# The one-dimensional analogue of the bubble advection test of Brill, Olson &
+# Bokman (arXiv:2503.12680, 2025, Sec. 3.1): a slab of gas of density R in gas
+# of density 1 at uniform p = 1, T = 1 and u = 10, advected for ten periods
+# through a periodic unit domain. At uniform (u, p, T) every linear operator of
+# the scheme preserves the uniform state to round-off, so the pressure error
+# at the end isolates the one term that does not, the Fickian species
+# channel's enthalpy flux at unequal gas constants; it is 1e-2 under the
+# default channel and round-off under `species_flux = :bulk`. Both gases have
+# γ = 1.4 and c_v,i = 1/(ρ_i(γ − 1)), the paper's choice, so the gas constants
+# are 1 and 1/R. The interface is the paper's tanh with 99% of its width in
+# `Np` cells and the grid has 20 Np points, so the interface's physical
+# thickness is 0.05 at every Np. The paper's third material, filling the two
+# halves of its two-dimensional domain, has no counterpart here.
+
+const BR_R = 100.0
+const BR_NP = 7
+const BR_U = 10.0
+const BR_PERIODS = 10.0
+
+"""
+    brill_slab(; R, Np, art, cfl, periods, nmax) -> NamedTuple
+
+Slab of density `R` in gas of density 1, `Np` cells across each interface on
+20 `Np` points, advected at u = `BR_U` for `periods` periods at uniform
+pressure and temperature. Returns `(x, Y_light, rho, p, u, worst_min_Y,
+worst_max_Y, p_error, u_error, steps, completed)`: the mass-fraction extremes
+over the run as in `shock_interface`, and the pressure and velocity errors at
+the end, max |p − 1| and max |u − BR_U| / BR_U, which are the stability metric
+of the paper. On a rank-split dimension 1 the extremes are reduced over the
+directional communicator.
+"""
+function brill_slab(; R=BR_R, Np=BR_NP, art=ArtParams(enabled=true), cfl=0.4,
+                    periods=BR_PERIODS, nmax=NMAX)
+    N = 20 * Np
+    h = 1.0 / N
+    w = 3 * Np * h / 16
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 1 / R, 1.4)])
+    prob = Problem(eos=eos, transport=Transport(mu0=0.0),
+                   domain=((0.0, 1.0), (0.0, h), (0.0, h)), bcs=per3,
+                   ic=(x, y, z) -> begin
+                       V = (1 - tanh((abs(x - 0.5) - 0.25) / w)) / 2
+                       ρ = V * R + (1 - V)
+                       Yh = V * R / ρ
+                       Prim(Y=(1 - Yh, Yh), rho=ρ, u=(BR_U, 0.0, 0.0), p=1.0)
+                   end)
+    solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
+                                     filter_interval=1,
+                                     control=StepControl(retries=4)))
+    nx = solver.decomp.n_local[1]
+    worst_min = Ref(Inf)
+    worst_max = Ref(-Inf)
+    function excursion(s, Q)
+        for i in 1:nx
+            I = gidx(s, i, 1, 1)
+            y = Q[I, 1] / (Q[I, 1] + Q[I, 2])
+            worst_min[] = min(worst_min[], y, 1 - y)
+            worst_max[] = max(worst_max[], y, 1 - y)
+        end
+    end
+    tfin = periods / BR_U
+    run!(solver, Q; tfinal=tfin, nmax=nmax, callback=excursion)
+    CL.exchange_state!(Q, solver.decomp)
+    CL.primitives!(solver, Q)
+    xs = Float64[xcoord(solver, 1, i) for i in 1:nx]
+    Y1 = [solver.Y[1][gidx(solver, i, 1, 1)] for i in 1:nx]
+    ρ = [solver.rho[gidx(solver, i, 1, 1)] for i in 1:nx]
+    p = [solver.p[gidx(solver, i, 1, 1)] for i in 1:nx]
+    u = [solver.u[gidx(solver, i, 1, 1)] for i in 1:nx]
+    p_error = maximum(abs, p .- 1)
+    u_error = maximum(abs, u .- BR_U) / BR_U
+    comm = solver.decomp.sub[1]
+    if MPI.Comm_size(comm) > 1
+        worst_min[] = MPI.Allreduce(worst_min[], min, comm)
+        worst_max[] = MPI.Allreduce(worst_max[], max, comm)
+        p_error = MPI.Allreduce(p_error, max, comm)
+        u_error = MPI.Allreduce(u_error, max, comm)
+    end
+    return (x=xs, Y_light=Y1, rho=ρ, p=p, u=u, worst_min_Y=worst_min[],
+            worst_max_Y=worst_max[], p_error=p_error, u_error=u_error,
+            steps=solver.step, completed=completed(solver, tfin))
 end
 
 # --- shared measurements ----------------------------------------------------

@@ -75,11 +75,11 @@ Run all of it before calling a change safe.
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 128 testsets, 0 failures
+julia --project=. test/runtests.jl        # 145 testsets, 0 failures
 julia --project=. test/convergence.jl     # measured orders, see below
 julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
 for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 186/186 each
+  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 216/216 each
 done
 julia --project=. bench/jetcheck.jl       # inference
 julia --project=. bench/audit.jl          # allocation + non-concrete SSA
@@ -98,13 +98,13 @@ binding and that every exported name with a docstring is rendered somewhere
 it is listed in a `@docs` block on some page; otherwise write it in plain
 backticks. `runtests.jl` includes the same check as its last testset.
 
-The `128 testsets` and the `185/185` are counted by different mechanisms and are
+The `145 testsets` and the `216/216` are counted by different mechanisms and are
 not comparable. `runtests.jl` runs everything inside one top-level
 `@testset` and prints one summary tree at the end: the top row totals the
 `@test`s, and each row beneath it is one `@testset` of the suite, the ones
 its includes contribute too (`float32_validation.jl`, `device_tests.jl`,
 `patch_tests.jl`, `level_tests.jl`, `io_tests.jl`, `docrefs_tests.jl`, and
-the device/adapt testsets); the `128` counts those rows. A failure is
+the device/adapt testsets); the `145` counts those rows. A failure is
 recorded and the suite runs on, so one run reports every failure, and the
 outer testset raises at the end. `mpi_tests.jl` uses `Test` not
 at all and counts individual `check(name, val, tol)` assertions, printing
@@ -192,7 +192,10 @@ Names are spelled out in full. Current vocabulary:
   `mu_sensor` (`:strain` or `:velocity`), `beta_sensor` (`:strain`,
   `:gated_strain`, `:dilatation` or `:ungated_dilatation`), `reduction` (`:sum`
   or `:max`), `smoother` (`:gaussian` or `:compact`), `detector` (`:delta4` or
-  `:d8`)
+  `:d8`), `species_flux` (`:fickian`, the per-species flux with the correction
+  velocity, or `:bulk`, one `D_b` on every conserved variable built by
+  `bulk_diffusivity!` from `mole_fraction` and the mass fractions, stored in
+  every `D_art[k]`, with the conserved gradients in the workspace's `grad_Q`)
 - `grad_u`, `grad_T_ion`, `grad_Y`, `strain_mag`, `sensor`, `sensor_sp`
 - `inv_J`, `area_d`, `inv_h`, `inv_r`, `cot_over_r`, `coord_shift`, `flux`
 - `filter_interval` (cadence in steps) vs `filter_cfl` (the reference CFL at

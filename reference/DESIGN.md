@@ -500,7 +500,8 @@ Concretely, `compute_artificial!`:
 - Computes the internal energy directly from `Q` (EOS-agnostic), takes its δ⁴
   sensor, smooths, and sets κ\* = C_κ·(ρc/T_ion)·sensor.
 - For each species, takes the δ⁴ sensor of Y_k, smooths, and sets
-  D\*_k = C_D·c·sensor_k.
+  D\*_k = C_D·c·sensor_k; or, under `ArtParams.species_flux = :bulk`, one
+  diffusivity D_b for the whole system (the species channel, below).
 
 `ArtParams.mu_sensor` and `ArtParams.beta_sensor` select which field each of
 the first two channels reads. Cook takes both from |S|, as above; the reference
@@ -531,6 +532,95 @@ whole computation and leaves the coefficient arrays zero. The high-pass itself
 acts in computational index space on every grid, a grid-based regularization
 consistent with resolving power following the mesh; only the length weighting
 Δ_d is physical.
+
+### The species channel
+
+`ArtParams.species_flux` selects how the artificial species diffusivity enters
+the equations. The default `:fickian` is Cook's form: a per-species flux
+J_k = −ρ D\*_k ∇Y_k + ρ Y_k Σ_j D\*_j ∇Y_j, whose correction velocity keeps
+Σ_k J_k = 0, with the enthalpy flux Σ_k h_k J_k in the energy equation
+(`_fluxes_point!`). It moves no bulk mass and no momentum. It does move
+energy: at uniform u, p and T with unequal gas constants the h_k differ, so
+Σ_k h_k J_k ≠ 0 while ρ and ρu are fixed, and the pressure changes. Every
+other operator in the scheme preserves a uniform (u, p, T) state to round-off,
+because at that state each conserved variable is a fixed linear combination
+of the partial densities and the convective fluxes reduce to u q plus a
+constant, so a linear derivative or filter applied componentwise keeps the
+combination. The Fickian flux is the one operator that does not, and on an
+advected interface of density ratio 100 it leaves a pressure error of 1e-2
+after ten periods where everything else leaves 1e-10
+([CALIBRATION.md](CALIBRATION.md), "The bulk species channel").
+
+`:bulk` replaces it by the classical parabolic regularization of the system,
+one flux F_q = −D_b ∇q on every conserved variable q with one nonnegative
+D_b(x, t), assembled in `_bulk_flux_point!` after the physical fluxes. Four
+properties follow from the form alone.
+
+1. It is conservative: each added term is the divergence of a flux, added
+   to `flux[d, c]` before the same compact divergence that differences the
+   physical fluxes, so the discrete conservation of the scheme is unchanged.
+2. It holds the uniform (u, p, T) state invariant whatever the composition.
+   At that state q = L ρ⃗ with L constant, and the regularized system reads
+   ∂_t q + u·∇q = ∇·(D_b ∇q) componentwise, so ρu stays u ρ, ρe stays
+   T Σ_k c_v,k ρ_k with the same T, and p/T = Σ_k R_k ρ_k obeys the same
+   equation as the ρ_k: the partial densities interdiffuse and nothing else
+   moves. The argument uses only the linearity of the operators, so it holds
+   discretely provided the gradients are of the conserved components
+   themselves. `compute_rhs!` therefore differences each Q_c through the
+   scaled compact derivative into the workspace's `grad_Q`, n_cons line
+   solves per direction, and not by a product rule from the stored
+   gradients, which would hold only to the truncation error of the discrete
+   product rule, grid scale at a two-cell interface. Measured on a resting
+   air/SF6 interface with the filter and the artificial properties on: u, p
+   and T stay below 4e-14 over 298 steps while ρ relaxes by 2e-2, where the
+   Fickian channel drifts u to 2e-4.
+3. It satisfies every entropy inequality. For any convex entropy pair (η, ψ)
+   of the hyperbolic system, multiplying by η'(q) gives
+   ∂_t η + ∇·(ψ − D_b ∇η) = −D_b ∇qᵀ η''(q) ∇q ≤ 0 pointwise for D_b ≥ 0, and
+   the inequality survives D_b → 0. For the Euler system with η = −ρs this is
+   thermodynamic consistency. A spatially varying D_b factors out of the
+   quadratic form, so the argument needs no smoothness of the coefficient.
+4. It differs from the diffused-density form of Brill, Olson & Bokman
+   (arXiv:2503.12680, 2025), J_i = −D∇ρ_i with the consistency fluxes
+   F = (Σ_i J_i) ⊗ u and H = (Σ_i J_i)(½|u|²) + Σ_i J_i e_i, by exactly a
+   viscous stress and a conduction: expanding the bulk fluxes with the
+   product rule at constant c_v,k, bulk − Brill = (0, −μ_b ∇u,
+   −κ_b ∇T − u·(μ_b ∇u)) with μ_b = ρD_b and κ_b = ρD_b c_v. The species
+   fluxes coincide, both forms move bulk mass, and both preserve the
+   equilibrium state; but Brill's diffusion matrix, written on q, is the
+   rank-N_s projection onto the equilibrium manifold, neither symmetric nor
+   positive semidefinite, so the entropy argument above does not apply to it.
+
+D_b is built by `bulk_diffusivity!` from the same bracket as the Fickian
+D\*_k, max(C_D Δ_d|D_d f|, C_Y Δ_g excursion(f)), taken over every species
+and over two fields per species, the mass fraction Y_k and the mole fraction
+X_k from the EOS contract's `mole_fraction`; the maximum is smoothed once and
+multiplied by c. The two fields do different work. On a two-gas interface of
+density ratio R the mole fraction is the volume fraction and sits on the
+density jump, and a sensor on it is what carries a shock through the
+interface; the mass fraction on the light side amplifies a volume-fraction
+excursion by up to R, Y_l = (1 − V)/(1 + (R − 1)V) at equal γ, so a sensor on
+it is what bounds Y, and the mole-fraction sensor is blind to that excursion
+at the 1e-3 level. The maximum over both is the reference implementation's
+combination of mass- and volume-fraction detectors. The mole fraction's
+denominator Σ_j Y_j R_j passes through zero at a light-gas undershoot of
+−1/R inside the heavy gas, so it is floored and the result clamped to
+[−1, 2]; the excursion then saturates instead of diverging.
+
+The one D_b is written into every `D_art[k]`, so the checkpoint's coefficient
+block and `max_rate`'s diffusive rate see it where they saw the Fickian
+coefficients; `_fluxes_point!` skips the Fickian channel under `:bulk` rather
+than reading `D_art` as a Fickian coefficient. The workspace carries
+`grad_Q`, a 3 × n_cons matrix of arrays under `:bulk` and a 0 × 0 matrix of
+the same type otherwise, so the default path's types do not depend on the
+option. `grad_Y` is still computed: the characteristic boundary conditions
+read it. The channel costs n_cons gradient line solves per direction, four
+more than the n_species the Fickian flux needs, and one further detector and
+smoother pass per species. It is rejected on patched and refined runs, which
+take the Fickian channel only. At equal molecular weights X_k ≡ Y_k and the
+bulk flux of ρY_k at uniform ρ is the Fickian flux, so the two channels agree
+to round-off on `species_advection`, and the single-species cases are
+untouched by the option.
 
 ## Curvilinear metrics and the discrete GCL
 
@@ -624,6 +714,8 @@ origin-plus-poles combination has received the least testing.
 - `nspecies(eos)` → number of species Ns
 - a `(ρ, e, Y) → (p, T_ion, c, cₚ_mix)` state evaluation (via `primitives!`)
 - `species_enthalpy(eos, k, T_ion)` → partial specific enthalpy h_k(T_ion)
+- `mole_fraction(eos, k, Y, I, n_species)` → mole fraction X_k at a padded
+  index, for the bulk species channel's sensor
 
 Three implementations exercise the contract: `IdealMixture` (per-species γ_k
 and R_k), `Nasa9Mixture` (piecewise temperature-dependent cp), and
@@ -645,7 +737,9 @@ assembly:
     J_k = −ρ D_k ∇Y_k + ρ Y_k Σ_j D_j ∇Y_j
 
 which enforces Σ_k J_k = 0 exactly. Enthalpy diffusion Σ h_k J_k enters the
-energy flux.
+energy flux. `ArtParams.species_flux = :bulk` replaces the artificial part
+of this flux by one diffusive flux on every conserved variable (the species
+channel, above); the molecular part stays Fickian.
 
 ## Characteristic boundary conditions
 

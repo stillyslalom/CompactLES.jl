@@ -26,6 +26,7 @@ ArtParams(C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.01)
 5. [C_D — the species diffusivity](#c_d--the-species-diffusivity)
 5a. [C_Y — the mass-fraction bound](#c_y--the-mass-fraction-bound)
 5b. [Miranda's set as a package](#mirandas-set-as-a-package)
+5c. [The bulk species channel](#the-bulk-species-channel)
 6. [The filter dissipates per application, not per unit time](#the-filter-dissipates-per-application-not-per-unit-time)
 7. [The β\* sensor — strain, gated, or dilatation](#the-beta-sensor--strain-or-dilatation)
 8. [CFL, which dominates all four](#cfl-which-dominates-all-four)
@@ -570,6 +571,19 @@ per-species diffusivities hold bulk density to 4e-14, so the correction
 velocity already gives what Brill et al. obtain from a shared diffusivity,
 and the per-species form stays.
 
+The species channel has a cost on a smooth profile that the shocked cases do
+not show. On the order study's two-species advection at uniform ρ, p and u,
+Y₁ = (1 + cos 2πx)/2 over one period, the L2 error under the default D\* with
+its bound is 3.12e-6 at N = 32 and 1.15e-10 at N = 256 (order 4.84 → 4.97);
+with the species channel off altogether (C_D = C_Y = 0) it is 7.85e-8 and
+3.23e-12 (order 5.50 → 4.29), 40× smaller at N = 32 and 35× at N = 256. The
+profile touches 0 and 1 and the dead band keeps the bound inert there, so
+the factor is the ringing sensor's, C_D Δ|δ⁴Y| responding to a resolved
+cosine, and it is the price of a regularization that cannot tell a smooth
+extremum from an incipient overshoot. The bulk channel at equal molecular
+weights reproduces the default's errors to seven digits, so this is a
+property of the bracket and not of the flux form.
+
 **Recommendation:** `C_Y = 100`, the default.
 
 ## Miranda's set as a package
@@ -613,6 +627,129 @@ at the second-best wall heating, for 3.4% of the Woodward peak; a C_beta
 ladder in 0.2–0.7 under these sensors, with the Noh CFL ladder, would
 locate the spherical bound. None of it is the default; the package's four
 constants are calibrated for Cook's sensors and stay.
+
+## The bulk species channel
+
+`ArtParams.species_flux = :bulk` replaces the Fickian artificial species flux
+by one diffusive flux F_q = −D_b ∇q on every conserved variable, with D_b
+built from the Fickian channel's own bracket sensed on both the mass and the
+mole fraction of every species (`reference/DESIGN.md`, "The species
+channel"). Everything below was measured in September 2026 on the
+one-dimensional cases of `test/cases.jl` at the package's constants, C_D =
+0.01, C_Y = 100, tolerance 1e-4, the Gaussian smoother, D_b in the timestep,
+at CFL 0.4; `bench/artcal.jl bulk` reruns the rows that carry two species.
+
+### What the Brill slab measures
+
+Section 3.1 of Brill, Olson & Bokman (arXiv:2503.12680, 2025) advects a
+bubble of density R in gas of density 1 at p = 1, T = 1 and u = 10 for ten
+periods through a periodic unit square, with N_p points across the interface
+and the grid chosen so that N_p Δ = 0.05, all gases γ = 1.4, and reports
+completion and the pressure oscillation at the end: for their traditional
+Fickian formulation "at best around 1% of the pressure and at worst greater
+than 25%", stable at N_p = 7 for small R and needing more points above
+R = 1000; for their diffused-density formulation O(1e-6 to 1e-12) and stable
+at N_p = 7 for R ≥ 100. `brill_slab` in `test/cases.jl` is the
+one-dimensional slab analogue with N = 20 N_p and reports max |p − 1| at ten
+periods. Under the default channel it reproduces the paper's picture,
+somewhat better than the paper reports it: R ≤ 100 completes at N_p = 7,
+R = 1000 needs N_p = 14, and the pressure error is 1e-4 to 3e-2.
+
+```
+default channel; max|p-1| at ten periods, worst Y over the run, final rho_min, steps
+R    | Np | N   | max|p-1| | worst Y | rho min | steps
+10   |  7 | 140 | 7.30e-03 | -0.0180 | 0.9974  | 4041
+10   | 14 | 280 | 1.44e-04 | -0.0022 | 0.9990  | 7911
+100  |  7 | 140 | 1.67e-02 | -0.0821 | 0.9954  | 4207
+100  | 14 | 280 | 7.95e-04 | -0.0052 | 0.9982  | 8005
+1000 |  7 | 140 | FAIL at step 11 (rho 0.026, Y -0.33)
+1000 | 14 | 280 | 7.97e-03 | -0.0141 | 0.9990  | 8350
+```
+
+The error is the Fickian channel's alone. At uniform u, p, T every linear
+operator of the scheme preserves the uniform state to round-off, the Fickian
+enthalpy flux Σ_k h_k J_k is the one operator that does not at unequal gas
+constants, and switching that channel off (C_D = C_Y = 0) with nothing in its
+place takes every completing row to 1e-12 to 1e-10 while losing two rows to
+instability (R = 100 at N_p = 7 fails at step 150, R = 1000 at N_p = 14 at
+step 1256). Adding the bulk flux beside the Fickian one moves nothing, which
+was the form the prototype took and the reason the restricted forms of the
+earlier roadmap item were dropped: no term added beside the Fickian flux
+can remove its pressure error.
+
+### The sensor field
+
+With the bulk flux in place of the Fickian channel, the field D_b is sensed
+on decides what it does. X is the mole fraction, Y the mass fraction, XY the
+maximum over both.
+
+```
+shock_interface at 2h (N = 400): worst Y / width cells / steps
+channel           | 5.04              | 100               | 1000
+Fickian (default) | -0.0135 / 4 / 646 | FAIL step 427     | FAIL step 454
+none              | -0.2496 / 4 / 640 | FAIL step 415     | FAIL step 369
+bulk, X           | -0.0304 / 3 / 640 | -0.5653 / 5 / 679 | FAIL step 361
+bulk, Y           | -0.0123 / 3 / 644 | FAIL step 393     | FAIL step 484
+bulk, XY          | -0.0122 / 3 / 644 | -0.0222 / 7 / 684 | FAIL step 486
+
+brill_slab, ten periods: max|p-1| / worst Y / final rho_min / steps
+channel           | R=100 Np=7                          | R=100 Np=14                         | R=1000 Np=14
+Fickian (default) | 1.67e-02 / -0.0821 / 0.9954 / 4207  | 7.95e-04 / -0.0052 / 0.9982 / 8005  | 7.97e-03 / -0.0141 / 0.9990 / 8350
+none              | FAIL step 150                       | 1.85e-10 / -1.0626 / 0.5192 / 8009  | FAIL step 1256
+bulk, X           | 6.52e-11 / -1.1390 / 0.8573 / 4083  | 1.74e-10 / -0.1042 / 0.9268 / 7911  | 1.60e-09 / -70.597 / 0.2805 / 9699
+bulk, Y           | 4.98e-11 / -0.0674 / 0.9940 / 4181  | 1.74e-10 / -0.0052 / 0.9985 / 7986  | 1.78e-09 / -0.0128 / 0.9988 / 8349
+bulk, XY          | 5.38e-11 / -0.0674 / 0.9940 / 4201  | 1.94e-10 / -0.0052 / 0.9985 / 7986  | 1.45e-09 / -0.0128 / 0.9988 / 8348
+```
+
+R = 1000 at N_p = 7 fails on every row, at step 11 to 120, with the density
+undershooting beside a jump of 1000 over seven cells before any diffusivity
+has acted; R = 10 completes on every row and is not shown. The two sensors
+do different jobs. The mole fraction is the volume fraction and sits on the
+density jump; a sensor on it carries the ratio-100 shocked interface (X and
+XY complete it, Y and the Fickian channel do not). The mass fraction on the
+light side of a ratio-R interface amplifies a volume-fraction excursion by up
+to R (Y_l = (1 − V)/(1 + (R − 1)V) at equal γ; the −70.6 on the X row is
+V = −1.0e-3), so a sensor on it is what bounds Y, and the mole-fraction
+sensor is blind to that excursion. The maximum over both is the reference
+implementation's own combination of mass- and volume-fraction detectors
+(their eqs. 33–37), and it is at least as good as either and as the default
+in every column: the default's Y bounds and ρ_min on the slab, the
+ratio-100 shocked interface which the default fails, and pressure at
+round-off on advection. On the shock case it does so with a 7-cell width at
+ratio 100 against the default's 4 at ratio 5.04. The channel is sensed on
+XY; the single-field forms exist only in the prototype.
+
+### Costs and invariances
+
+At equal molecular weights X ≡ Y, the bulk flux of ρY_k at uniform ρ is the
+Fickian flux, and both channels' energy fluxes vanish, so
+`species_advection` reproduces the default's 10–90% width (0.01819762) to
+eight digits, with the two mass-fraction profiles agreeing to 5e-14, and the
+smooth bounded profile of the order study reproduces the default's L2 errors
+to seven digits (3.121191e-06 at N = 32, 1.145817e-10 against 1.145815e-10 at
+N = 256, order 4.84 → 4.97). The doubled error constant recorded for the
+prototype was the duplication of the Fickian term by a bulk term beside it
+and nothing else. The resting air/SF6 interface at uniform p and T, with the
+filter and the artificial properties on, holds max |u| at 1.2e-14, |δp/p| at
+3.8e-14 and |δT/T| at 4.0e-14 over 298 steps while ρ relaxes by 2.0e-2; the
+default channel's enthalpy flux drives u to 2.2e-4 and p to 1.3e-4 on the
+same case. The channel costs n_cons gradient line solves per direction in
+place of the Fickian flux's n_species, four more, plus one further detector
+and smoother pass per species.
+
+### Open
+
+Not the default. The four constants are calibrated on the Fickian channel,
+and the single-species battery is untouched by the option either way. The
+vortex-ring/SF6 run that motivated the mass-fraction bound is the case that
+should decide it, in three dimensions and with the artificial viscosities
+active, and it has not been run under the bulk channel. Two further
+questions: whether the unequal-γ contact drift of 5e-3 with no shock (C_Y
+section) is also the Fickian enthalpy flux, which the slab test cannot see
+at equal γ and the resting-interface figures above suggest; and the
+ratio-1000 failures, which are the transmitted shock's foot on the shock
+case and the seven-cell density jump on the slab, neither a species-channel
+failure and both untouched by every row above.
 
 ## The filter dissipates per application, not per unit time
 

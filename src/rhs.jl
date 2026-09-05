@@ -221,6 +221,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         error("art.smoother must be :compact or :gaussian, got :$(art.smoother)")
     art.detector in (:delta4, :d8) ||
         error("art.detector must be :delta4 or :d8, got :$(art.detector)")
+    art.species_flux in (:fickian, :bulk) ||
+        error("art.species_flux must be :fickian or :bulk, got :$(art.species_flux)")
     # Per-condition restrictions on geometry and EOS agreement (boundary.jl).
     for d in 1:3, side in 1:2
         validate_bc(bcs[d][side], metric, eos, d, side)
@@ -301,6 +303,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         art.detector === :delta4 ||
             error("patch interfaces support the :delta4 detector only; the " *
                   ":d8 detector's banded scheme takes a single patch")
+        art.species_flux === :fickian ||
+            error("patch interfaces support the :fickian species flux only")
         dims === nothing ||
             error("an explicit process grid cannot combine with patch_grid; " *
                   "each patch derives its own")
@@ -380,6 +384,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   "tridiagonal filter only")
         art.detector === :delta4 ||
             error("refinement supports the :delta4 detector only")
+        art.species_flux === :fickian ||
+            error("refinement supports the :fickian species flux only")
         level_restriction in (:inject, :filter) ||
             error("level_restriction must be :inject or :filter, " *
                   "got :$level_restriction")
@@ -567,7 +573,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     # handed to every refined patch below (patches.jl).
     ws_pool = rhs_workspace_pool(backend, T)
     ws_root = rhs_workspace!(ws_pool, backend, decomp, n_species, n_cons,
-                             art.detector !== :delta4)
+                             art.detector !== :delta4,
+                             art.species_flux === :bulk)
     patch = Patch(1, 0, regions[1], comm, decomp, h,
                   ntuple(d -> (0, 0), 3), bcs_t, folds,
                   deriv_plans, deriv_plans, filter_plans, smooth_plans, ring_plans,
@@ -773,9 +780,11 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     plans = _fine_plans(decomp_f, hf, deriv, filt, smoo, interface_rhs, backend)
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
-    # Refinement takes the `:delta4` detector (rejected otherwise at setup),
-    # so no refined patch carries the `:d8` ringing buffer.
-    ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons, false)
+    # Refinement takes the `:delta4` detector and the `:fickian` species flux
+    # (rejected otherwise at setup), so no refined patch carries the `:d8`
+    # ringing buffer or the bulk channel's gradients.
+    ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons, false,
+                        false)
     scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
                              MPI.Comm_size(comm), MPI.Comm_rank(comm))
     return _assemble_patch(id, level, region_f, comm, decomp_f, hf, faces,
@@ -934,7 +943,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                              ntiles, stride)
     empty_s = StackedArray(empty_raw, ntiles, stride)
     arrays = _patch_arrays(stacked, n_species)
-    ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons, false)
+    ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons, false, false)
     # The spanning patch: id 0 (it is not in `solver.patches`), the first
     # tile's region, faces and boundary conditions (nothing in the batched
     # phases reads them: every refined face closes with the interface rows,
@@ -1053,9 +1062,11 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
         splans = ntuple(d -> dcp.active[d] ? mk(smoo, d) : nothing, 3)
         g() = field(backend, dcp)
         empty3 = empty_field(backend, T)
-        # A patched run takes the `:delta4` detector, rejected otherwise at
-        # setup, so no patch carries the `:d8` ringing buffer.
-        ws = rhs_workspace!(ws_pool, backend, dcp, n_species, n_cons, false)
+        # A patched run takes the `:delta4` detector and the `:fickian`
+        # species flux, rejected otherwise at setup, so no patch carries the
+        # `:d8` ringing buffer or the bulk channel's gradients.
+        ws = rhs_workspace!(ws_pool, backend, dcp, n_species, n_cons, false,
+                            false)
         Patch(pid, 0, region, pcomm, dcp, h, faces, pbcs, nofold,
               dplans, vplans, fplans, splans, nothing,
               empty3, empty3,
@@ -1532,7 +1543,8 @@ assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, 
 @inline function _fluxes_point!(Q, eos, rho, u, v, w, p, T_ion,
                                 cp_mix, mu_art, beta_art, kappa_art, D_art, Y,
                                 grad_u, gT, gY, flux, mu0, Pr, Sc, n_species,
-                                m1, m2, m3, i_energy, act, o1, o2, o3, i, j, k)
+                                m1, m2, m3, i_energy, act, bulk, o1, o2, o3,
+                                i, j, k)
     T = eltype(rho)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -1566,14 +1578,20 @@ assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, 
             τd = τ[d]
             # Per-species diffusion with a correction velocity:
             # J_k = −ρ D_k ∇Y_k + ρ Y_k V_c, V_c = Σ_j D_j ∇Y_j,
-            # which enforces Σ_k J_k = 0 exactly since ΣY_k = 1.
+            # which enforces Σ_k J_k = 0 exactly since ΣY_k = 1. Under the
+            # bulk species channel (`species_flux = :bulk`) the artificial
+            # part of this flux is the −D_b ∂_d Q_c that `_bulk_flux_point!`
+            # adds to every component afterwards, so only the molecular
+            # diffusivity D0 enters here; `D_art` then holds D_b, which must
+            # not be read as a Fickian coefficient.
             Vc = zero(T)
             for sp in 1:n_species
-                Vc += (D0 + D_art[sp][I]) * gY[d, sp][I]
+                Dk = bulk ? D0 : D0 + D_art[sp][I]
+                Vc += Dk * gY[d, sp][I]
             end
             hdiff = zero(T)              # Σ_k h_k J_{k,d}
             for sp in 1:n_species
-                Dk = D0 + D_art[sp][I]
+                Dk = bulk ? D0 : D0 + D_art[sp][I]
                 Jkd = ρ * (-Dk * gY[d, sp][I] + Y[sp][I] * Vc)
                 flux[d, sp][I] = ρ * Y[sp][I] * ud + Jkd
                 hdiff += species_enthalpy(eos, sp, Tp) * Jkd
@@ -1595,16 +1613,74 @@ function _assemble_fluxes!(solver::SolverLike{T}, eos, Q) where {T}
     nx, ny, nz = decomp.n_local
     tr = solver.transport
     n_species = solver.equations.n_species
+    n_cons = solver.equations.n_cons
     i_energy = solver.equations.i_energy
     m1, m2, m3 = solver.equations.i_mom
     ft = solver.field_tuples
+    bulk = solver.art.species_flux === :bulk
     pointwise!(_fluxes_point!, solver.rho, nx, ny, nz,
                Q, eos, solver.rho, solver.u, solver.v, solver.w, solver.p,
                solver.T_ion, solver.cp_mix, solver.mu_art, solver.beta_art,
                solver.kappa_art, ft.D_art, ft.Y, ft.grad_u,
                solver.grad_T_ion, ft.grad_Y, ft.flux,
                tr.mu0, tr.Pr, tr.Sc, n_species, m1, m2, m3, i_energy,
-               decomp.active, o1, o2, o3)
+               decomp.active, bulk, o1, o2, o3)
+    # The bulk species channel: −D_b ∂_d Q_c on every component, D_b read
+    # from `D_art[1]` (every `D_art[k]` holds it) and ∂_d Q_c from the
+    # gradients `compute_rhs!` filled into `grad_Q`. A separate pass rather
+    # than a branch inside the body above, which is at the argument count
+    # the launcher accepts. `species_flux` is a setup constant identical on
+    # every rank, so the branch is safe with no collective below it.
+    if bulk
+        pointwise!(_bulk_flux_point!, solver.rho, nx, ny, nz,
+                   ft.flux, solver.D_art[1], FieldMatrix(solver.grad_Q),
+                   n_cons, decomp.active, o1, o2, o3)
+    end
+    return solver
+end
+
+@inline function _bulk_flux_point!(flux, D_b, gQ, n_cons, act, o1, o2, o3,
+                                   i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        Db = D_b[I]
+        for d in 1:3
+            act[d] || continue
+            for c in 1:n_cons
+                flux[d, c][I] -= Db * gQ[d, c][I]
+            end
+        end
+    end
+    return nothing
+end
+
+@inline function _copy_component_point!(dest, Q, c, i, j, k)
+    @inbounds dest[i, j, k] = Q[i, j, k, c]
+    return nothing
+end
+
+# The bulk species channel differences the conserved components themselves,
+# ∂_d Q_c through the same scaled compact derivative, not a product-rule
+# reconstruction from the stored gradients: the derivative is linear, and at
+# uniform (u, p, T) every component is a fixed linear combination of the
+# partial densities, so the fluxes of ρu and ρE are the same combinations of
+# the species fluxes to round-off, which is what makes that state an exact
+# discrete invariant of the term (reference/DESIGN.md, "The species
+# channel"). n_cons line solves per active direction, on top of the
+# n_species + 1 of `compute_rhs!`; `grad_Y` stays, since the characteristic
+# boundary conditions read it. Every rank enters the solves. `tmp_a` is free
+# at this point of the evaluation and holds the component being differenced.
+function _bulk_gradients!(solver::SolverLike, Q)
+    decomp = solver.decomp
+    n1f, n2f, n3f = padded_extent(decomp)
+    for c in 1:solver.equations.n_cons
+        pointwise!(_copy_component_point!, solver.tmp_a, n1f, n2f, n3f,
+                   solver.tmp_a, Q, c)
+        for d in 1:3
+            decomp.active[d] || continue
+            deriv_scaled_along!(solver.grad_Q[d, c], solver.tmp_a, solver, d, 1)
+        end
+    end
     return solver
 end
 
@@ -1722,6 +1798,11 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
             deriv_scaled_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
         end
     end
+    # The bulk species channel's gradients of the conserved components; a
+    # setup-constant branch identical on every rank, so no collective sits
+    # below it unreached. Behind a function barrier so that the default
+    # path's inferred body (bench/audit.jl) does not carry the branch.
+    solver.art.species_flux === :bulk && _bulk_gradients!(solver, Q)
     assemble_fluxes!(solver, Q)
     for d in 1:3
         exchange_dim_batch!(view(solver.flux, d, :), decomp, d)

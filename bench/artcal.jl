@@ -4,7 +4,7 @@
 #   julia --project=. -t auto bench/artcal.jl beta cfl   # named sweeps only
 #
 # Sweeps available: mu beta kappa D Y cfl resolution sensor smoother detector
-# field response miranda
+# field response miranda bulk
 #
 # Scratch tooling, like everything else in bench/: it prints tables, asserts
 # nothing, and is not part of the gate. The conclusions drawn from a run of it
@@ -42,7 +42,7 @@ include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
 const DEFAULTS = ArtParams()
 const ALL = ["mu", "beta", "kappa", "D", "Y", "cfl", "resolution", "sensor",
-             "smoother", "detector", "field", "response", "miranda"]
+             "smoother", "detector", "field", "response", "miranda", "bulk"]
 # Sweep names are bare words; `key=value` sets the background configuration that
 # every sweep then runs against. Refitting a constant under a changed smoother
 # is exactly `artcal.jl kappa smoother=gaussian`, and keeping the two forms in
@@ -147,6 +147,22 @@ m_si(; kw...) = attempt((NaN, NaN, NaN, NaN)) do
     r = shock_interface(; nmax=CAP, kw...)
     r.completed || return (Inf, Inf, Inf, Inf)
     (r.worst_min_Y, r.worst_max_Y, Float64(r.width_cells), Float64(r.steps))
+end
+
+# The shocked interface fails at density ratio 100 under the default channel
+# with a DomainError out of the sound speed rather than a SolverFailure, so
+# this form also reports that as a failed row instead of ending the sweep.
+m_si_ratio(; kw...) = try
+    m_si(; kw...)
+catch err
+    err isa DomainError || rethrow()
+    (NaN, NaN, NaN, NaN)
+end
+
+m_slab(; kw...) = attempt((NaN, NaN, NaN, NaN)) do
+    r = brill_slab(; nmax=CAP, kw...)
+    r.completed || return (Inf, Inf, Inf, Inf)
+    (r.p_error, r.worst_min_Y, minimum(r.rho), Float64(r.steps))
 end
 
 hr() = println(repeat("-", 96))
@@ -485,6 +501,33 @@ if want("miranda")
                 name, n1[1], 100n1[2], n2[1], 100n2[2], n3[1], 100n3[2])
         @printf(" | %7.1e | %6.4f | %7.4f | %7.5f | %+7.4f %4g\n",
                 lx[1], sh[1], wc[1], mx, si[1], si[3])
+    end
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
+end
+
+# The bulk species channel (`species_flux = :bulk`) against the default Fickian
+# one on the battery rows that carry more than one species, which are the only
+# rows the option touches: the advected interface (width), the shocked
+# air/SF6 interface at SF6's density ratio and at 100, and the Brill slab at
+# density ratio 100 with 7 cells per interface (pressure error at ten
+# periods, the paper's stability metric). The single-species rows are
+# bit-identical between the two and are not repeated here. The measurements
+# behind the option are in reference/CALIBRATION.md, "The bulk species
+# channel".
+if want("bulk")
+    println("\n=== The bulk species channel against the Fickian one ===")
+    println("channel  | mix wid | SI 5.04: minY  wid steps | " *
+            "SI 100: minY  wid steps | slab 100/7: max|p-1|  minY  min rho  steps")
+    hr()
+    for flux in (:fickian, :bulk)
+        a = art(species_flux=flux)
+        mx = m_mix(art=a)
+        s1 = m_si_ratio(art=a, delta=2)
+        s2 = m_si_ratio(art=a, delta=2, rho_heavy=100.0)
+        sl = m_slab(art=a)
+        @printf("%-8s | %7.5f | %+7.4f %4g %5g | %+7.4f %4g %5g | %9.2e %+8.4f %7.4f %5g\n",
+                flux, mx, s1[1], s1[3], s1[4], s2[1], s2[3], s2[4],
+                sl[1], sl[2], sl[3], sl[4])
     end
     println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end

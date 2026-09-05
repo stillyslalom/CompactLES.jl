@@ -1119,3 +1119,42 @@ constant-Jacobian mapping reproduces the uniform grid of the same physical
 spacing. The second runs the stretched shocked interface to completion under a
 guard on the mass-fraction excursion. Serial suite 144 testsets; MPI 213
 checks.
+
+## The bulk species channel (September 2026)
+
+`ArtParams.species_flux = :bulk` (`reference/DESIGN.md`, "The species
+channel"; `reference/CALIBRATION.md`, "The bulk species channel"). The
+roadmap item asked for a bulk regularizer restricted to where the
+mole-fraction and mass-fraction interfaces separate, to be measured on the
+advection test of Brill, Olson & Bokman (2025). The one-dimensional analogue
+of that test, a slab of density ratio R advected at uniform p, T and u = 10
+for ten periods, showed that the pressure error the paper attributes to the
+traditional formulation is the Fickian channel's enthalpy flux alone: every
+linear operator of the scheme preserves the uniform state to round-off, the
+enthalpy flux at unequal gas constants does not, and no term added beside
+it can remove the error. The restricted forms were dropped and the bulk flux
+F_q = −D_b∇q on every conserved variable landed in place of the Fickian
+channel instead, as an option. D_b is the Fickian bracket sensed on both the
+mass and the mole fraction of every species, the maximum smoothed once: the
+mole fraction sits on the density jump and carries a Mach 1.5 shock through
+a two-cell interface at density ratio 100, which the default channel fails
+at step 427; the mass fraction amplifies a light-side volume-fraction
+excursion by up to R and is what bounds Y. Against the default the channel
+takes the slab's pressure error at R = 100 and seven cells per interface
+from 1.7e-2 to 5.4e-11, holds a resting air/SF6 interface's u, p and T
+below 4e-14 while ρ relaxes by 2e-2 (the default drifts u to 2e-4), and
+reproduces the default's advected width to eight digits and its
+smooth-profile errors to seven at equal molecular weights, where the two
+forms coincide. The one D_b is stored in every
+`D_art[k]`; the conserved gradients live in the workspace's `grad_Q`, n_cons
+line solves per direction; `mole_fraction` joined the EOS contract; patched
+and refined runs take the Fickian channel only. Not the default: the
+constants are the Fickian channel's, and the three-dimensional
+vortex-ring/SF6 run that motivated the mass-fraction bound is the case to
+decide it. Open beside it: whether the unequal-γ contact drift of 5e-3 is
+also the enthalpy flux, and the ratio-1000 failures, which are the
+transmitted shock's foot and a seven-cell density jump, not the species
+channel. Also recorded: with the species channel off altogether the
+order study's smooth bounded profile is 40× more accurate than under the
+default D\*, a cost of the ringing sensor on a resolved extremum. Serial
+suite 145 testsets; MPI 216 checks.

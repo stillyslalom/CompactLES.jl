@@ -370,35 +370,6 @@ mixing, converging shocks, implosions) are wall-free or slip-walled;
 LES is out of scope until a target problem requires it. Recorded here so the
 gap stands as a decision, not an oversight.
 
-**8. A consistent bulk regularizer for large density ratios.** Brill,
-Olson & Bokman (arXiv:2503.12680, 2025) diffuse the partial densities,
-J_i = −D∇ρ_i, with momentum and energy consistency fluxes; the form moves
-bulk mass and is stable at very large density ratios, but is not entropy
-consistent. The conservative form that is, measured in September 2026 as
-a prototype beside the Fickian D\* and the mass-fraction bound: F_q =
-−D_b∇q on every conserved variable with one D_b, the classical parabolic
-regularization, for which every convex entropy satisfies the entropy
-inequality and which differs from Brill's form by a viscous stress
-μ_b = ρD_b, its work, and a conduction κ_b = ρD_b c_v, all zero at
-equilibrium. With D_b built as the species term is but on the mole
-fraction, it holds a resting interface's u, p, T at 1e-14 while relaxing
-ρ by 1e-2, conserves mass to 1e-15, and carries the Mach 1.5 shock through
-a 2h interface at density ratio 100, which fails without it; ratio 1000
-at 2h fails either way with negative pressure at the transmitted shock's
-foot in the acoustically soft gas, a shock-capturing failure, and
-completes at 4h either way. Its costs, all from the parts of D_b that
-duplicate Cook's D\* where mole and mass fraction coincide: the
-smooth-profile error constant doubles at unchanged order, the advected
-interface widens 1.6%, and the doubled overshoot diffusivity blows up the
-first step of `species_advection` (healed in 20 steps at collapsed dt),
-since `max_rate` has no coefficients before the first step. Not landed.
-The form to pursue acts only where the Fickian term is misaligned with
-the volume-fraction interface, D_b = max(D_b^X − D\*_k, 0) or a
-density-contrast weighting, measured with Brill's large-ratio advection
-test, which was not run. The prototype patches `compute_rhs!` with
-n_cons extra line solves per direction; scripts are in the session
-scratchpad's `bulk/` directory with the derivation in `NOTE.md`.
-
 ## Phase 2 — HED physics
 
 HED is high-energy-density: the pressure and temperature regime of inertial

@@ -1124,6 +1124,55 @@ function test_artificial_decomposition()
 end
 
 # ---------------------------------------------------------------------------
+# 7c'. The bulk species channel under decomposition. `species_flux = :bulk`
+#     adds n_cons distributed line solves per direction (the conserved
+#     gradients), a mole-fraction pass over the padded extent that relies on
+#     the exchanged mass fractions, and a second detector pass per species,
+#     all below no early return. One planar two-species step split along each
+#     in-plane axis must integrate to the same state; a forgotten exchange or
+#     a rank-local sensor moves the sums near a rank boundary. The channel has
+#     no discontinuous switch, so it reproduces to round-off like the strain
+#     sensor. The channel must also differ from the Fickian one, or the checks
+#     would pass with the option ignored.
+# ---------------------------------------------------------------------------
+function test_bulk_decomposition()
+    section("bulk species channel: one planar step independent of the split axis")
+    N = SPLITN
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.2, 1.09)])
+    function planar_step(flux, ax)
+        solver = Solver(n_global=(N, N, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+                        eos=eos, art=ArtParams(enabled=true, species_flux=flux),
+                        dims=splitdims(ax))
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> begin
+            θ = 0.5 * (1 + tanh((sqrt((x - 0.5)^2 + (y - 0.5)^2) - 0.25) / 0.03))
+            Prim(Y=(θ, 1 - θ), rho=(1 - θ) * 5 + θ, p=1.0,
+                 u=(0.3 + 0.1sin(2π * y), 0.1cos(2π * x), 0.0))
+        end)
+        run!(solver, Q; tfinal=1.0, nmax=1)
+        sums = zeros(solver.equations.n_cons + 1)
+        for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
+            i in 1:solver.decomp.n_local[1]
+            I = gidx(solver, i, j, k)
+            for c in 1:solver.equations.n_cons
+                sums[c] += Q[I, c]
+            end
+            sums[end] += solver.D_art[1][I]
+        end
+        return [gsum(v) for v in sums]
+    end
+    bulk = (planar_step(:bulk, 1), planar_step(:bulk, 2))
+    scale = maximum(abs, bulk[1])
+    check("bulk: Σ Q and Σ D_b spread over the two split axes",
+          maximum(abs, bulk[1] - bulk[2]), 1e-10 * scale)
+    check("bulk: D_b is nonzero", 1e-30 / max(bulk[1][end], 1e-300), 1.0)
+    fick = planar_step(:fickian, 1)
+    rel = abs(fick[end] - bulk[1][end]) / max(abs(fick[end]), 1e-300)
+    check("bulk: Σ D differs from the Fickian channel", 1e-3 / max(rel, 1e-300), 1.0)
+end
+
+# ---------------------------------------------------------------------------
 # 7d. The d8 ringing detector under decomposition. `detector = :d8` puts a
 #     pentadiagonal distributed line solve inside `compute_artificial!`, which
 #     is the first time the banded reduced-interface stage — and its
@@ -2070,6 +2119,7 @@ const SUITE = (
     ("conservation", test_conservation),
     ("sync", test_sync),
     ("artificial decomposition", test_artificial_decomposition),
+    ("bulk species channel", test_bulk_decomposition),
     ("d8 detector decomposition", test_ring_detector_decomposition),
     ("positivity floor", test_positivity_floor),
     ("callback consistency", test_callback_consistency),

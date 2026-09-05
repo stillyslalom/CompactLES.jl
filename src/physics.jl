@@ -33,6 +33,10 @@
 #                          T_ion, cp)
 #   wall_internal_energy(eos, Q, I,      ρe at a wall held at Twall (boundary.jl)
 #                        n_species, Twall)
+#   mole_fraction(eos, k, Y, I,          mole fraction X_k at index I from the
+#                 n_species)             padded mass fractions Y (a FieldVector),
+#                                        for the bulk species channel of
+#                                        compute_artificial!
 #
 # One further method is optional: `species_names(eos)` labels the partial-density
 # components, and the fallback in equations.jl returns "species_1", "species_2"
@@ -1011,3 +1015,47 @@ function recover_primitives!(solver, eos::IdealMixture, Q)
                n_species, m1, m2, m3, i_energy)
     return solver
 end
+
+# ---------------------------------------------------------------------------
+# Mole fractions, the field the bulk species channel senses beside the mass
+# fraction (artificial.jl, `bulk_diffusivity!`). For an ideal mixture at one
+# pressure and temperature the mole fraction is also the volume fraction, so
+# it sits on the density interface where the mass fraction, weighted by the
+# molecular masses, does not.
+#
+# Σ_j Y_j R_j is the mixture gas constant and passes through zero when a
+# light-gas undershoot sits inside a much heavier gas (Y_light = −1/R at density
+# ratio R is enough), so the denominator is floored and the result clamped to
+# [−1, 2]: the excursion the bound term reads then saturates instead of
+# diverging. Both bounds lie outside anything a mass fraction reaches under the
+# bound, so the clamp is inert where the state is healthy.
+@inline function _mole_fraction_from_R(Rk, k::Int, Y, I, n_species::Int)
+    @inbounds begin
+        y = Y[k][I]
+        s = zero(y)
+        for j in 1:n_species
+            s += Y[j][I] * Rk[j]
+        end
+        s = positive_floor(s)
+        return clamp(y * Rk[k] / s, -one(y), 2 * one(y))
+    end
+end
+
+"""
+    mole_fraction(eos, k, Y, I, n_species)
+
+Mole fraction of species `k` at padded index `I`, from the mass fractions `Y`
+(a `FieldVector` of the padded arrays). For the gas mixtures it is
+Y_k R_k / Σ_j Y_j R_j with the denominator floored at `positive_floor` and the
+result clamped to [−1, 2]; a single-material EOS returns the mass fraction.
+Part of the EOS contract (see the header); consumed by the bulk species
+channel of `compute_artificial!`.
+"""
+@inline mole_fraction(eos::IdealMixture, k::Int, Y, I, n_species::Int) =
+    _mole_fraction_from_R(eos.Rk, k, Y, I, n_species)
+@inline mole_fraction(eos::IdealMixtureCoeffs, k::Int, Y, I, n_species::Int) =
+    _mole_fraction_from_R(eos.Rk, k, Y, I, n_species)
+@inline mole_fraction(eos::Nasa9Mixture, k::Int, Y, I, n_species::Int) =
+    _mole_fraction_from_R(eos.Rk, k, Y, I, n_species)
+Base.@propagate_inbounds mole_fraction(::StiffenedGas, k::Int, Y, I, ::Int) =
+    Y[k][I]

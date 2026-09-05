@@ -87,32 +87,41 @@ struct RHSWorkspace{T,A<:AbstractArray{T,3}}
     tmp_b::A
     ring_buf::A                    # detector = :d8 only; empty otherwise
     flux::Matrix{A}                # flux[d, c]
+    grad_Q::Matrix{A}              # species_flux = :bulk only; 0 × 0 otherwise
 end
 
 """
-    RHSWorkspace(backend, decomp, n_species, n_cons, ring)
+    RHSWorkspace(backend, decomp, n_species, n_cons, ring, bulk)
 
 Allocate one scratch set on `backend` for a patch decomposed as `decomp`.
 `ring` selects the `detector = :d8` ringing buffer, which is a zero-extent
-placeholder under the default `:delta4`.
+placeholder under the default `:delta4`; `bulk` selects the `grad_Q`
+gradients of the conserved components, `grad_Q[d, c]`, which the bulk species
+channel (`species_flux = :bulk`) differences into its flux and which is a
+0 × 0 matrix of the same array type otherwise, so the default path's types
+do not depend on the option.
 """
 function RHSWorkspace(backend::AbstractBackend, decomp::Decomp{T},
-                      n_species::Int, n_cons::Int, ring::Bool) where {T}
+                      n_species::Int, n_cons::Int, ring::Bool,
+                      bulk::Bool) where {T}
     f() = field(backend, decomp)
-    return _rhs_workspace(f, empty_field(backend, T), n_species, n_cons, ring)
+    return _rhs_workspace(f, empty_field(backend, T), n_species, n_cons, ring,
+                          bulk)
 end
 
 # The set from an allocator `f()` and the zero-extent placeholder `empty` of
 # the same storage type: `field` on a backend above, or the stacked arrays
 # of a device level's spanning patch (rhs.jl).
 function _rhs_workspace(f::F, empty, n_species::Int, n_cons::Int,
-                        ring::Bool) where {F}
+                        ring::Bool, bulk::Bool) where {F}
     return RHSWorkspace([f() for _ in 1:3, _ in 1:3],
                         (f(), f(), f()),
                         [f() for _ in 1:3, _ in 1:n_species],
                         f(), f(), f(), f(), f(),
                         ring ? f() : empty,
-                        [f() for _ in 1:3, _ in 1:n_cons])
+                        [f() for _ in 1:3, _ in 1:n_cons],
+                        bulk ? [f() for _ in 1:3, _ in 1:n_cons] :
+                               Matrix{typeof(empty)}(undef, 0, 0))
 end
 
 # A tile's workspace on a stacked level: views of the spanning patch's set
@@ -124,7 +133,7 @@ function _view_workspace(ws::RHSWorkspace, kr::UnitRange{Int})
     return RHSWorkspace(map(v, ws.grad_u), map(v, ws.grad_T_ion), map(v, ws.grad_Y),
                         v(ws.strain_mag), v(ws.sensor), v(ws.sensor_sp),
                         v(ws.tmp_a), v(ws.tmp_b), view(ws.ring_buf, :, :, 1:0),
-                        map(v, ws.flux))
+                        map(v, ws.flux), map(v, ws.grad_Q))
 end
 
 "An empty, concretely typed pool of [`RHSWorkspace`](@ref) sets for `backend`."
@@ -132,7 +141,7 @@ rhs_workspace_pool(backend::AbstractBackend, ::Type{T}) where {T} =
     RHSWorkspace{T,typeof(empty_field(backend, T))}[]
 
 """
-    rhs_workspace!(pool, backend, decomp, n_species, n_cons, ring)
+    rhs_workspace!(pool, backend, decomp, n_species, n_cons, ring, bulk)
 
 The [`RHSWorkspace`](@ref) serving a patch decomposed as `decomp`: an existing
 set of `pool` whose arrays already carry the padded extent this patch needs,
@@ -147,12 +156,13 @@ size.
 """
 function rhs_workspace!(pool::AbstractVector, backend::AbstractBackend,
                         decomp::Decomp{T}, n_species::Int, n_cons::Int,
-                        ring::Bool) where {T}
+                        ring::Bool, bulk::Bool) where {T}
     n = ntuple(d -> decomp.n_local[d] + 2 * decomp.n_halo_d[d], 3)
     for w in pool
-        size(w.tmp_a) == n && (!isempty(w.ring_buf) == ring) && return w
+        size(w.tmp_a) == n && (!isempty(w.ring_buf) == ring) &&
+            (!isempty(w.grad_Q) == bulk) && return w
     end
-    w = RHSWorkspace(backend, decomp, n_species, n_cons, ring)
+    w = RHSWorkspace(backend, decomp, n_species, n_cons, ring, bulk)
     push!(pool, w)
     return w
 end
@@ -354,7 +364,8 @@ end
 @inline _is_workspace_prop(n::Symbol) =
     n === :grad_u || n === :grad_T_ion || n === :grad_Y ||
     n === :strain_mag || n === :sensor || n === :sensor_sp ||
-    n === :tmp_a || n === :tmp_b || n === :ring_buf || n === :flux
+    n === :tmp_a || n === :tmp_b || n === :ring_buf || n === :flux ||
+    n === :grad_Q
 
 # Property names owned by the patch or its workspace, not by the solver
 # configuration. `Base.getproperty(::Solver, name)` forwards these to the sole
