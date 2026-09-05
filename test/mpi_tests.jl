@@ -1364,6 +1364,65 @@ function test_two_patch_layout()
 end
 
 # ---------------------------------------------------------------------------
+# The bulk species channel on a two-patch layout. `species_flux = :bulk` puts
+# n_cons distributed line solves per direction and a second detector pass per
+# species inside each patch's RHS, through the interface plans `grad_Y`
+# takes. A slab of density ratio 20 advected at uniform (u, p, T) is invariant
+# under every operator of the channel to round-off, the interface rows
+# included, so the drift of u, p and T is the check that no rank skipped an
+# exchange or a solve; the maximum density is compared against the serial
+# value of the same run.
+# ---------------------------------------------------------------------------
+function test_bulk_patched()
+    section("bulk species channel: two-patch layout matches the serial answer")
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 1 / 20, 1.4)])
+    Rk, cvk = eos.Rk, eos.cvk
+    N = 96
+    h = 1.0 / N
+    solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, eos=eos,
+                    art=ArtParams(enabled=true, species_flux=:bulk),
+                    transport=Transport(mu0=0.0), filter_interval=1,
+                    patch_grid=(2, 1, 1))
+    states = allocate_state(solver)
+    initialize!(solver, states, (x, y, z) -> begin
+        V = (1 - tanh((abs(x - 0.5) - 0.25) / 3h)) / 2
+        ρ = V * 20 + (1 - V)
+        Prim(Y=(1 - V * 20 / ρ, V * 20 / ρ), rho=ρ, u=(1.0, 0.0, 0.0), p=1.0)
+    end)
+    run!(solver, states; tfinal=1.0, nmax=40)
+    drift = 0.0
+    m = 0.0
+    Dmax = 0.0
+    for (ps, Q) in CL.eachpatch(solver, states)
+        eq = ps.equations
+        for i in 1:ps.decomp.n_local[1]
+            I = gidx(ps, i, 1, 1)
+            ρ = Q[I, 1] + Q[I, 2]
+            y = Q[I, 1] / ρ
+            u = Q[I, eq.i_mom[1]] / ρ
+            e = Q[I, eq.i_energy] / ρ - 0.5u^2
+            T = e / (y * cvk[1] + (1 - y) * cvk[2])
+            p = ρ * (y * Rk[1] + (1 - y) * Rk[2]) * T
+            drift = max(drift, abs(u - 1), abs(p - 1), abs(T - 1))
+            m = max(m, ρ)
+            Dmax = max(Dmax, ps.D_art[1][I])
+        end
+    end
+    check("bulk two-patch slab: u, p, T drift at round-off", gmax(drift), 1e-12)
+    check("bulk two-patch slab: D_b is nonzero", 1e-30 / max(gmax(Dmax), 1e-300), 1.0)
+    check("bulk two-patch slab: step count matches serial", abs(solver.step - 40), 0.5)
+    # Serial (np = 1) value of the identical run; at np = 2 each patch sits on
+    # one rank and the arithmetic is the serial patch-sequential one, at
+    # np ≥ 4 the patch itself is decomposed and agrees to round-off
+    # accumulation (as in `test_two_patch_layout`).
+    ref = BULK_PATCHED_MAX_RHO
+    tol = np <= 2 ? 1e-14 : 1e-12
+    check("bulk two-patch slab: max rho matches serial", abs(gmax(m) - ref), tol)
+end
+const BULK_PATCHED_MAX_RHO = 19.999997372940499
+
+# ---------------------------------------------------------------------------
 # Device line solves (reference/AMR_GPU.md). A DevicePlan runs the fill,
 # sweep, spike correction and scatter as KernelAbstractions kernels and keeps
 # the reduced interface stage on the host, mirroring the host arithmetic per
@@ -2130,6 +2189,7 @@ const SUITE = (
     ("checkpoint", test_checkpoint),
     ("hierarchy checkpoint", test_hierarchy_checkpoint),
     ("two-patch layout", test_two_patch_layout),
+    ("bulk patched layout", test_bulk_patched),
 )
 
 # `phases=` selects phases by name from SUITE, comma-separated and in SUITE's

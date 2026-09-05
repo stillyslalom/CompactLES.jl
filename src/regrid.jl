@@ -539,7 +539,8 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
                           spec.deriv, spec.filt, spec.smoo,
                           solver.art.smoother, spec.interface_rhs,
                           spec.backend, ws_pool,
-                          solver.equations.n_species, n_cons, fi, 1) : nothing
+                          solver.equations.n_species, n_cons,
+                          solver.art.species_flux === :bulk, fi, 1) : nothing
     newlt = build_level_transfer(T, newregion, active_g, spec.n_halo,
                                  [patches[1].region], [1],
                                  Union{Nothing,Decomp{T}}[patches[1].decomp],
@@ -961,6 +962,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                              solver.art.smoother, spec.interface_rhs,
                                              spec.backend, ws_pool,
                                              solver.equations.n_species, n_cons,
+                                             solver.art.species_flux === :bulk,
                                              1, 1, spec.tile)
         append!(new_patches, built)
         resize!(new_states, length(held))
@@ -997,8 +999,9 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                       group.comm, spec.deriv, spec.filt,
                                       spec.smoo, solver.art.smoother,
                                       spec.interface_rhs, spec.backend, ws_pool,
-                                      solver.equations.n_species,
-                                      n_cons, idx, 1, faces[ti])
+                                      solver.equations.n_species, n_cons,
+                                      solver.art.species_flux === :bulk,
+                                      idx, 1, faces[ti])
                 Q = _state_like(p.rho, n_cons)
                 push!(new_states, Q)
                 push!(new_dQ, zero(Q))

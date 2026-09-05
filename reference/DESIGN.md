@@ -616,11 +616,14 @@ the same type otherwise, so the default path's types do not depend on the
 option. `grad_Y` is still computed: the characteristic boundary conditions
 read it. The channel costs n_cons gradient line solves per direction, four
 more than the n_species the Fickian flux needs, and one further detector and
-smoother pass per species. It is rejected on patched and refined runs, which
-take the Fickian channel only. At equal molecular weights X_k ≡ Y_k and the
-bulk flux of ρY_k at uniform ρ is the Fickian flux, so the two channels agree
-to round-off on `species_advection`, and the single-species cases are
-untouched by the option.
+smoother pass per species. A patched or refined run takes it as a single
+patch does: the conserved gradients go through the same interface plans as
+`grad_Y`, and on a stacked device level the component copy, the gradients
+and the sensor passes run once per stack over the spanning patch's arrays,
+as every other full-extent pass does. At equal molecular weights X_k ≡ Y_k
+and the bulk flux of ρY_k at uniform ρ is the Fickian flux, so the two
+channels agree to round-off on `species_advection`, and the single-species
+cases are untouched by the option.
 
 ## Curvilinear metrics and the discrete GCL
 

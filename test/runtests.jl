@@ -1408,10 +1408,94 @@ end
         @test abs(wb - wf) < 1e-6 * wf
     end
 
-    # The option is validated at setup, and rejected where the channel is not
-    # built: patch interfaces and refinement.
+    # The option is validated at setup.
     @test_throws ErrorException Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
                                        bcs=per3, art=ArtParams(species_flux=:brill))
+end
+
+@testset "bulk species channel on patched, refined and tiled layouts" begin
+    # A slab of density ratio 20 advected at uniform (u, p, T) through a
+    # periodic domain, under `species_flux = :bulk`. Every operator the bulk
+    # channel meets on these layouts is linear on the conserved variables,
+    # the interface rows and the level transfers included, so u, p and T
+    # must stay at round-off on every layout while the partial densities
+    # interdiffuse (reference/DESIGN.md, "The species channel"). The Fickian
+    # channel's enthalpy flux moves p to 1e-4 on the same case. Measured
+    # drifts are 1e-14 on each layout below; D_b is small on the smooth
+    # slab but must be nonzero on every patch, which is what shows the
+    # channel is built and running there.
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 1 / 20, 1.4)])
+    Rk, cvk = eos.Rk, eos.cvk
+    function slab(; kw...)
+        N = 96
+        h = 1.0 / N
+        s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, eos=eos,
+                   art=ArtParams(enabled=true, species_flux=:bulk),
+                   transport=Transport(mu0=0.0), filter_interval=1; kw...)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) -> begin
+            V = (1 - tanh((abs(x - 0.5) - 0.25) / 3h)) / 2
+            ρ = V * 20 + (1 - V)
+            Prim(Y=(1 - V * 20 / ρ, V * 20 / ρ), rho=ρ, u=(1.0, 0.0, 0.0), p=1.0)
+        end)
+        drift = Ref(0.0)
+        function watch(sol, Qs)
+            for (ps, Q) in CL.eachpatch(sol, Qs isa Vector ? Qs : [Qs])
+                eq = ps.equations
+                for i in 1:ps.decomp.n_local[1]
+                    I = gidx(ps, i, 1, 1)
+                    ρ = Q[I, 1] + Q[I, 2]
+                    y = Q[I, 1] / ρ
+                    u = Q[I, eq.i_mom[1]] / ρ
+                    e = Q[I, eq.i_energy] / ρ - 0.5u^2
+                    T = e / (y * cvk[1] + (1 - y) * cvk[2])
+                    p = ρ * (y * Rk[1] + (1 - y) * Rk[2]) * T
+                    drift[] = max(drift[], abs(u - 1), abs(p - 1), abs(T - 1))
+                end
+            end
+        end
+        run!(s, states; tfinal=1.0, nmax=40, callback=watch)
+        sv = states isa Vector ? states : [states]
+        Dmax = [maximum(ps.D_art[1]) for (ps, _) in CL.eachpatch(s, sv)]
+        rho = Dict{Int,Float64}()          # root nodes, by global index
+        for (ps, Q) in CL.eachpatch(s, sv)
+            ps.patch.level == 0 || continue
+            for i in 1:ps.decomp.n_local[1]
+                I = gidx(ps, i, 1, 1)
+                rho[ps.patch.region.offset[1] + i] = Q[I, 1] + Q[I, 2]
+            end
+        end
+        return (s=s, states=sv, drift=drift[], Dmax=Dmax, rho=rho)
+    end
+    single = slab()
+    @test single.s.step == 40
+    @test single.drift < 1e-12
+    @test single.Dmax[1] > 0
+    # Two patches under both interface forms: the conserved gradients take
+    # the interface plans `grad_Y` takes. The patched root differs from the
+    # single patch by the interface rows' own error (measured 2e-5 with the
+    # extended rows and 5e-4 with the one-sided ones on a wider slab), not
+    # by the channel.
+    for irhs in (:extended, :onesided)
+        r = slab(patch_grid=(2, 1, 1), interface_rhs=irhs)
+        @test npatches(r.s) == 2
+        @test r.s.step == 40
+        @test r.drift < 1e-12
+        @test all(>(0), r.Dmax)
+        d = maximum(abs(r.rho[k] - single.rho[k]) for k in keys(single.rho))
+        @test d < 1e-2
+    end
+    # One refined level over the slab's left edge, as a box and as a lattice
+    # of tiles; the fine patches carry their own D_b.
+    for tile in (0, 8)
+        r = slab(refine=BlockRegion((16, 0, 0), (24, 1, 1)), tile=tile)
+        @test npatches(r.s) == (tile == 0 ? 2 : 4)
+        @test r.s.step == 40
+        @test all(Q -> all(isfinite, parent(Q)), r.states)
+        @test r.drift < 1e-12
+        @test all(>(0), r.Dmax)
+    end
 end
 
 @testset "compression-keyed beta sensors: gated_strain and dilatation" begin

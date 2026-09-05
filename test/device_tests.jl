@@ -352,6 +352,51 @@ end
     @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
 end
 
+@testset "device-resident tiled level: the bulk species channel" begin
+    # A two-species planar slab under `species_flux = :bulk` on a tiled level:
+    # the component copy, the conserved gradients through the batched plans,
+    # the mole-fraction and maximum passes and the bulk flux all run once per
+    # stack over the spanning patch's arrays, bitwise against the CPU
+    # hierarchy after two steps.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    per = (PeriodicBC(), PeriodicBC())
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 1 / 20, 1.4)])
+    function slab2d(backend)
+        N = 48
+        h = 1.0 / N
+        s = Solver(n_global=(N, N ÷ 2, 1), L_domain=(1.0, 0.5, 1.0),
+                   bcs=(per, per, per), eos=eos,
+                   art=ArtParams(enabled=true, species_flux=:bulk),
+                   transport=Transport(mu0=0.0), filter_interval=1,
+                   refine=BlockRegion((18, 8, 0), (12, 8, 1)), tile=6,
+                   backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) -> begin
+            V = (1 - tanh((abs(x - 0.5) - 0.25) / 4h)) / 2
+            ρ = V * 20 + (1 - V)
+            Prim(Y=(1 - V * 20 / ρ, V * 20 / ρ), rho=ρ, u=(1.0, 0.3, 0.0), p=1.0)
+        end)
+        run!(s, states; tfinal=1.0, nmax=2)
+        return s, states
+    end
+    s1, q1 = slab2d(CPUBackend())
+    CL.FORCE_KA[] = true
+    CL.FORCE_DEVICE_EXCHANGE[] = true
+    s2, q2 = try
+        slab2d(DeviceBackend(cpu_ka))
+    finally
+        CL.FORCE_KA[] = false
+        CL.FORCE_DEVICE_EXCHANGE[] = false
+    end
+    lev = getfield(s2, :levels)[2]
+    @test length(lev.stacks) == 1 && length(lev.stacks[1].members) == 4
+    @test !isempty(lev.stacks[1].patch.rhs_workspace.grad_Q)
+    @test s1.step == s2.step
+    @test all(parent(q1[i]) == parent(q2[i]) for i in eachindex(q1))
+    @test all(maximum(Array(p.D_art[1])) > 0 for p in getfield(s2, :patches))
+end
+
 @testset "launch policy toggle" begin
     # DEVICE_SYNC[] switches between the deferred default and the
     # synchronize-per-launch fallback; both must produce identical states.

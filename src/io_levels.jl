@@ -314,7 +314,9 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                solver.art.smoother,
                                                spec.interface_rhs, spec.backend,
                                                ws_pool, solver.equations.n_species,
-                                               n_cons, 1, 1, spec.tile)
+                                               n_cons,
+                                               solver.art.species_flux === :bulk,
+                                               1, 1, spec.tile)
     restriction = lev.transfers[1].restriction
     transfers = [build_level_transfer(
         T, tr, active, spec.n_halo, [root.region], [1],

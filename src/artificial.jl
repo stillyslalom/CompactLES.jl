@@ -125,7 +125,8 @@ Cook-style artificial-property controls.
   gradient line solves per direction in place of the Fickian channel's
   n_species, plus one detector and smoother pass per species. Not the
   default: its constants are inherited from the Fickian channel and it has
-  not been run on a three-dimensional case. Single-patch runs only.
+  not been run on a three-dimensional case. Patched and refined runs take it
+  as the root does.
   `reference/CALIBRATION.md`, "The bulk species channel".
 - `detector`: the high-pass that builds every sensor, in
   `detect_sum!`. `:delta4` (default) is Cook's undivided fourth

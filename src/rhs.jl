@@ -303,8 +303,6 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         art.detector === :delta4 ||
             error("patch interfaces support the :delta4 detector only; the " *
                   ":d8 detector's banded scheme takes a single patch")
-        art.species_flux === :fickian ||
-            error("patch interfaces support the :fickian species flux only")
         dims === nothing ||
             error("an explicit process grid cannot combine with patch_grid; " *
                   "each patch derives its own")
@@ -384,8 +382,6 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   "tridiagonal filter only")
         art.detector === :delta4 ||
             error("refinement supports the :delta4 detector only")
-        art.species_flux === :fickian ||
-            error("refinement supports the :fickian species flux only")
         level_restriction in (:inject, :filter) ||
             error("level_restriction must be :inject or :filter, " *
                   "got :$level_restriction")
@@ -666,7 +662,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                                  parent_h, n_halo, group.comm, deriv,
                                                  filt, smoo, art.smoother,
                                                  interface_rhs, backend, ws_pool,
-                                                 n_species, n_cons, id0, ℓ, tile)
+                                                 n_species, n_cons,
+                                                 art.species_flux === :bulk,
+                                                 id0, ℓ, tile)
             append!(fines, built)
             indices = [id0 + k for k in eachindex(held)]
             for (k, ti) in enumerate(held)
@@ -773,18 +771,20 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            smoother::Symbol,
                            interface_rhs::Symbol, backend::AbstractBackend,
                            ws_pool::AbstractVector,
-                           n_species::Int, n_cons::Int, id::Int, level::Int,
+                           n_species::Int, n_cons::Int, bulk::Bool, id::Int,
+                           level::Int,
                            faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3)
                            ) where {T}
     region_f, decomp_f, hf = _fine_decomp(T, refine, active_g, h, n_halo, comm)
     plans = _fine_plans(decomp_f, hf, deriv, filt, smoo, interface_rhs, backend)
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
-    # Refinement takes the `:delta4` detector and the `:fickian` species flux
-    # (rejected otherwise at setup), so no refined patch carries the `:d8`
-    # ringing buffer or the bulk channel's gradients.
+    # Refinement takes the `:delta4` detector (rejected otherwise at setup), so
+    # no refined patch carries the `:d8` ringing buffer; `bulk` is
+    # `species_flux === :bulk`, whose conserved gradients a refined patch
+    # differences as the root does.
     ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons, false,
-                        false)
+                        bulk)
     scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
                              MPI.Comm_size(comm), MPI.Comm_rank(comm))
     return _assemble_patch(id, level, region_f, comm, decomp_f, hf, faces,
@@ -892,7 +892,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               deriv, filt, smoo, smoother::Symbol,
                               interface_rhs::Symbol, backend::AbstractBackend,
                               ws_pool::AbstractVector, n_species::Int, n_cons::Int,
-                              id0::Int, level::Int, tile::Int) where {T}
+                              bulk::Bool, id0::Int, level::Int, tile::Int) where {T}
     patches = Patch[]
     stacks = TileStack[]
     if !_stacked_level(backend, tile)
@@ -900,8 +900,8 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
             push!(patches, _build_fine_patch(T, tregions[ti], active_g, h, n_halo,
                                              comm, deriv, filt, smoo, smoother,
                                              interface_rhs, backend, ws_pool,
-                                             n_species, n_cons, id0 + k, level,
-                                             faces[ti]))
+                                             n_species, n_cons, bulk, id0 + k,
+                                             level, faces[ti]))
         end
         return patches, stacks
     end
@@ -915,7 +915,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         [faces[held[k]] for k in ks], members,
                                         active_g, h, n_halo, comm, deriv, filt, smoo,
                                         interface_rhs, backend, n_species, n_cons,
-                                        level)
+                                        bulk, level)
         for (slot, k) in enumerate(ks)
             patches[k] = tiles[slot]
         end
@@ -930,7 +930,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            h::NTuple{3,T}, n_halo::Int, comm::MPI.Comm,
                            deriv, filt, smoo, interface_rhs::Symbol,
                            backend::DeviceBackend, n_species::Int, n_cons::Int,
-                           level::Int) where {T}
+                           bulk::Bool, level::Int) where {T}
     ntiles = length(tregions)
     region1, decomp1, hf = _fine_decomp(T, tregions[1], active_g, h, n_halo, comm)
     npad = padded_extent(decomp1)
@@ -943,7 +943,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                              ntiles, stride)
     empty_s = StackedArray(empty_raw, ntiles, stride)
     arrays = _patch_arrays(stacked, n_species)
-    ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons, false, false)
+    ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons, false, bulk)
     # The spanning patch: id 0 (it is not in `solver.patches`), the first
     # tile's region, faces and boundary conditions (nothing in the batched
     # phases reads them: every refined face closes with the interface rows,
@@ -1062,11 +1062,12 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
         splans = ntuple(d -> dcp.active[d] ? mk(smoo, d) : nothing, 3)
         g() = field(backend, dcp)
         empty3 = empty_field(backend, T)
-        # A patched run takes the `:delta4` detector and the `:fickian`
-        # species flux, rejected otherwise at setup, so no patch carries the
-        # `:d8` ringing buffer or the bulk channel's gradients.
+        # A patched run takes the `:delta4` detector, rejected otherwise at
+        # setup, so no patch carries the `:d8` ringing buffer; the bulk
+        # channel's conserved gradients go through the same interface plans
+        # as `grad_Y`.
         ws = rhs_workspace!(ws_pool, backend, dcp, n_species, n_cons, false,
-                            false)
+                            art.species_flux === :bulk)
         Patch(pid, 0, region, pcomm, dcp, h, faces, pbcs, nofold,
               dplans, vplans, fplans, splans, nothing,
               empty3, empty3,

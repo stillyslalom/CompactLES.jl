@@ -1148,8 +1148,9 @@ smooth-profile errors to seven at equal molecular weights, where the two
 forms coincide. The one D_b is stored in every
 `D_art[k]`; the conserved gradients live in the workspace's `grad_Q`, n_cons
 line solves per direction; `mole_fraction` joined the EOS contract; patched
-and refined runs take the Fickian channel only. Not the default: the
-constants are the Fickian channel's, and the three-dimensional
+and refined runs take the channel as the root does, the conserved gradients
+through the interface plans and once per stack on a device level. Not the
+default: the constants are the Fickian channel's, and the three-dimensional
 vortex-ring/SF6 run that motivated the mass-fraction bound is the case to
 decide it. Open beside it: whether the unequal-γ contact drift of 5e-3 is
 also the enthalpy flux, and the ratio-1000 failures, which are the
