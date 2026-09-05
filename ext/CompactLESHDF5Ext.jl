@@ -5,7 +5,7 @@ module CompactLESHDF5Ext
 # and why there are two write backends.
 
 using CompactLES
-using CompactLES: BlockRegion, Decomp, Solver, owned_region, region_ranges
+using CompactLES: BlockRegion, Decomp, PatchSolver, Solver, owned_region, region_ranges
 using CompactLES: axis_matches, global_axis, type_name
 using CompactLES: ensure_output_dir, restore_switches!, switch_codes
 using CompactLES: n_art_fields, art_block, set_art_block!, nlevels
