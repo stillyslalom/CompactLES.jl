@@ -28,6 +28,26 @@ CompactLES.filter_weight
 mpi_main
 ```
 
+## State validity
+
+`StepControl(validity = ...)` decides what happens to a state the validation
+rejects. [`setup`](@ref) validates the initial state; a [`StateGuard`](@ref)
+validates each accepted state during a run, including the one the run returns.
+Whether a given internal energy is admissible is asked of the equation of state
+through [`state_admissibility`](@ref), because the gauge and the domain belong
+to the model.
+
+```@docs
+StateReport
+state_report
+state_valid
+validate_state!
+StateGuard
+state_guard
+CompactLES.check_validity
+CompactLES.check_step
+```
+
 ## Step callbacks
 
 Triggers fire only between completed steps and produce the same verdict on every

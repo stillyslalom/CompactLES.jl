@@ -1958,6 +1958,156 @@ end
     end
 end
 
+@testset "state validity: the report and what each policy mode does" begin
+    @test StepControl().validity === :strict
+    @test_throws ArgumentError StepControl(validity=:lenient)
+    # :repair has nothing to repair with unless the failsafe floors exist.
+    @test_throws ArgumentError StepControl(validity=:repair)
+    @test StepControl(validity=:repair, floor_ratio=1e-6).validity === :repair
+
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 2.0, 1.6)])
+    solver = mkslv(n_global=(12, 12, 12), eos=eos)
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(rho=2.0, u=(0.5, 0.0, 0.0), p=1.0,
+                                             Y=(0.25, 0.75)))
+    m1 = solver.equations.i_mom[1]
+    ie = solver.equations.i_energy
+    I = gidx(solver, 3, 3, 3)
+
+    clean = state_report(solver, Q)
+    @test state_valid(clean)
+    @test clean.points == 12^3
+    @test clean.rho_min ≈ 2.0 rtol = 1e-14
+    @test clean.nonfinite == 0 && clean.negative_density == 0
+    @test occursin("StateReport(1728 points;", sprint(show, clean))
+
+    # Each rejected kind is counted on its own, and a point that cannot carry a
+    # density or an energy is not put to the EOS.
+    poison(f) = (Qx = copy(Q); f(Qx); state_report(solver, Qx))
+    r = poison(Qx -> Qx[I, ie] = NaN)
+    @test (r.nonfinite, r.negative_density, r.inadmissible) == (1, 0, 0)
+    @test isfinite(r.rho_min)                   # the NaN point is skipped whole
+    r = poison(Qx -> (Qx[I, 1] = -3.0; Qx[I, 2] = 0.0))
+    @test (r.nonfinite, r.negative_density, r.negative_species) == (0, 1, 0)
+    r = poison(Qx -> (Qx[I, 1] = -0.1; Qx[I, 2] = 2.1))
+    @test (r.negative_density, r.negative_species) == (0, 1)
+    @test state_valid(r) == false
+    # Internal energy below zero is inadmissible for a calorically perfect gas,
+    # where e = cv T, and is reported as such rather than by a hardcoded test.
+    r = poison(Qx -> Qx[I, ie] = 0.5 * Qx[I, m1]^2 / 2.0 - 1.0)
+    @test (r.inadmissible, r.negative_density) == (1, 0)
+    @test r.e_min < 0
+
+    # The verdict is the policy, and it is taken from the reduced counts.
+    bad = poison(Qx -> Qx[I, 1] = -3.0)
+    for mode in (:strict, :repair)
+        control = mode === :strict ? StepControl() :
+                  StepControl(validity=:repair, floor_ratio=1e-6)
+        f = CL.check_validity(control, bad, "the probe state", 7, 0.5, 1e-3, 0.4)
+        @test f isa SolverFailure
+        @test f.reason === :invalid_state
+        @test (f.step, f.t) == (7, 0.5)
+        @test occursin("negative density", sprint(showerror, f))
+        @test occursin("validity = :permissive", sprint(showerror, f))
+    end
+    @test CL.check_validity(StepControl(validity=:permissive), bad, "s",
+                            1, 0.0, 1e-3, 0.4) === nothing
+    @test CL.check_validity(StepControl(), clean, "s", 1, 0.0, 1e-3, 0.4) ===
+          nothing
+
+    # validate_state! applies it. Permissive accepts and reports; strict raises.
+    Qbad = copy(Q)
+    Qbad[I, 1] = -3.0
+    @test_throws SolverFailure validate_state!(solver, Qbad)
+    permissive = StepControl(validity=:permissive)
+    @test (@test_logs (:warn,) match_mode=:any validate_state!(solver, Qbad;
+              control=permissive)).negative_density == 1
+    @test Qbad[I, 1] == -3.0                    # accepted, never touched
+    @test state_valid(validate_state!(solver, Q))
+
+    # Repair mode substitutes, reports what it substituted, and then rejects
+    # what the substitution did not fix. Raising a density to the floor without
+    # rescaling the momentum leaves |u| enormous, so the point comes back with
+    # a large negative internal energy that the default scope counts and does
+    # not repair. The residual rejection is the contract, not a surprise.
+    repair = StepControl(validity=:repair, floor_ratio=1e-6)
+    floors = CL.positivity_floors(solver, Q, repair)
+    @test floors[1] > 0
+    Qrep = copy(Q)
+    Qrep[I, 1] = -3.0
+    Qrep[I, 2] = 0.0
+    tally_before = solver.floor_tally.cells
+    @test_throws SolverFailure validate_state!(solver, Qrep; control=repair,
+                                               floors=floors, warn=false)
+    @test solver.floor_tally.cells == tally_before + 1
+    @test mixture_density(solver, Qrep, I) ≈ floors[1] rtol = 1e-12
+
+    # The scope that converts kinetic energy back into internal energy does
+    # fix it, and the state is then accepted.
+    deep = StepControl(validity=:repair, floor_ratio=1e-6,
+                       floor_scope=:internal_energy)
+    Qdeep = copy(Q)
+    Qdeep[I, 1] = -3.0
+    Qdeep[I, 2] = 0.0
+    rep = @test_logs (:warn,) match_mode=:any validate_state!(solver, Qdeep;
+              control=deep, floors=floors)
+    @test state_valid(rep)
+    @test mixture_density(solver, Qdeep, I) ≈ floors[1] rtol = 1e-12
+    @test solver.floor_tally.momentum > 0
+end
+
+@testset "state validity: initial and returned states are checked" begin
+    # An initial condition outside the EOS domain is rejected by setup, where
+    # the previous behaviour was to integrate it.
+    build(p, control) = begin
+        prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
+                       ic=(x, y, z) -> Prim(rho=1.0, p=p))
+        setup(prob, Numerics(n_global=(12, 12, 12), control=control))
+    end
+    @test_throws SolverFailure build(0.0, StepControl())
+    solver, Q = build(0.0, StepControl(validity=:permissive))
+    @test state_report(solver, Q).inadmissible == 12^3
+    solver, Q = build(1.0, StepControl())
+    @test state_valid(state_report(solver, Q))
+
+    # The state a run RETURNS is checked by nothing inside `run!`: the checks
+    # run on the state entering a step, and an nmax, tfinal or callback exit
+    # leaves the last result uninspected. A guard closes that, and the mode
+    # decides what it does about it.
+    sink!(s, Qs) = (Qs[gidx(s, 2, 2, 2), 1] = -1.0; false)
+    fresh() = begin
+        s = mkslv(n_global=(16, 12, 12))
+        Qs = allocate_state(s)
+        initialize!(s, Qs, (x, y, z) -> Prim(rho=1.0, p=1.0))
+        (s, Qs)
+    end
+    s, Qs = fresh()
+    run!(s, Qs; tfinal=1.0, nmax=1, callback=sink!)
+    @test s.step == 1
+    @test mixture_density(s, Qs, gidx(s, 2, 2, 2)) < 0
+    @test state_valid(state_report(s, Qs)) == false
+
+    s, Qs = fresh()
+    @test_throws SolverFailure run!(s, Qs; tfinal=1.0, nmax=1,
+                                    callback=(sink!, state_guard(s, Qs)))
+
+    s, Qs = fresh()
+    guard = CL.StateGuard(s, Qs; control=StepControl(validity=:permissive))
+    @test_logs (:warn,) match_mode=:any run!(s, Qs; tfinal=1.0, nmax=1,
+        callback=(sink!, Callback(EveryStep(), guard)))
+    @test (guard.checks, guard.rejected) == (1, 1)
+    @test mixture_density(s, Qs, gidx(s, 2, 2, 2)) < 0   # accepted, not repaired
+
+    s, Qs = fresh()
+    repair = StepControl(validity=:repair, floor_ratio=1e-6)
+    guard = CL.StateGuard(s, Qs; control=repair)
+    run!(s, Qs; tfinal=1.0, nmax=1, callback=(sink!, Callback(EveryStep(), guard)))
+    @test guard.rejected == 0                   # the repair left nothing to reject
+    @test s.floor_tally.cells == 1
+    @test mixture_density(s, Qs, gidx(s, 2, 2, 2)) ≈ 1e-6 rtol = 1e-12
+end
+
 @testset "run!: failure is raised, and recoverable with retries" begin
     # Noh at nu=1. Two distinct behaviours, and the distinction is the whole
     # point of the rollback:
@@ -2089,6 +2239,100 @@ end
     # A step must stay finite: the Newton solve runs inside every RK stage.
     run!(solver, Q; tfinal=1e9, nmax=3)
     @test all(isfinite, Q)
+end
+
+@testset "NASA-9: what the temperature recovery reports about itself" begin
+    # Every check runs in both precisions, since the criterion is written from
+    # eps of the coefficient type and a Float32 mechanism must behave the same
+    # way rather than merely not crash.
+    for T in (Float64, Float32)
+        # A recovery inside the fitted range succeeds and says so.
+        mix = Nasa9Mixture(T, read_nasa9(["He", "CO2"]))
+        Y = (T(0.3), T(0.7))
+        for Tref in T.((500.0, 2000.0, 4000.0, 8000.0))
+            e = sum(Y[k] * CL.species_energy(mix, k, Tref) for k in 1:2)
+            Trec, status = CL.mixture_temperature_status(mix, e, k -> Y[k])
+            @test status == CL.TEMPERATURE_OK
+            @test Trec ≈ Tref rtol = 256eps(T)
+            @test CL.mixture_temperature(mix, e, k -> Y[k]) === Trec
+        end
+        # An interval join is approached from both sides. The fits are only
+        # continuous at a join to the tolerance the reader enforces, so the
+        # inversion is accurate there to that continuity and not to eps.
+        for Tjoin in T.((1000.0, 6000.0)), δ in T.((-1e-3, 1e-3))
+            Tref = Tjoin * (1 + δ)
+            e = sum(Y[k] * CL.species_energy(mix, k, Tref) for k in 1:2)
+            Trec, status = CL.mixture_temperature_status(mix, e, k -> Y[k])
+            @test status == CL.TEMPERATURE_OK
+            @test Trec ≈ Tref rtol = 1e-4
+        end
+        # He is fitted from 300 K up, so an ambient state below that is an
+        # extrapolation. It recovers accurately and is reported as extrapolated.
+        e_cold = sum(Y[k] * CL.species_energy(mix, k, T(250)) for k in 1:2)
+        Tcold, status = CL.mixture_temperature_status(mix, e_cold, k -> Y[k])
+        @test status & CL.TEMPERATURE_OUT_OF_RANGE != 0
+        @test status & CL.TEMPERATURE_NOT_CONVERGED == 0
+        @test Tcold ≈ 250 rtol = 1e-5
+        # Temperature extremes: no root in the search range, diagnosed, finite,
+        # and returned rather than raised, because this runs per point.
+        for e_extreme in T.((-1e12, 1e30))
+            Text, status = CL.mixture_temperature_status(mix, e_extreme, k -> Y[k])
+            @test status & CL.TEMPERATURE_NOT_CONVERGED != 0
+            @test isfinite(Text) && Text > 0
+        end
+        # An invalid composition leaves the mixture cv nonpositive, so there is
+        # no bracket and no unique root to converge to.
+        _, status = CL.mixture_temperature_status(mix, T(1e5), _ -> zero(T))
+        @test status & CL.TEMPERATURE_NO_BRACKET != 0
+        @test status & CL.TEMPERATURE_NOT_CONVERGED != 0
+        # The failure reaches the state validation as the EOS's own verdict.
+        @test state_admissibility(mix, T(1), T(1e5), _ -> zero(T), 2) &
+              CL.STATE_UNRECOVERABLE != 0
+        @test state_admissibility(mix, T(1), e_cold, k -> Y[k], 2) &
+              CL.STATE_EXTRAPOLATED != 0
+        @test state_admissibility(mix, T(1),
+                                  sum(Y[k] * CL.species_energy(mix, k, T(1000))
+                                      for k in 1:2), k -> Y[k], 2) == CL.STATE_OK
+    end
+
+    # The extrapolation policy is a choice, and it is inert inside the range.
+    poly = Nasa9Mixture(["CO2"])
+    lin = Nasa9Mixture(["CO2"]; extrapolate=:linear)
+    @test_throws ArgumentError Nasa9Mixture(["CO2"]; extrapolate=:constant)
+    @test poly.extrapolate === :polynomial
+    for Tq in (250.0, 1000.0, 6000.0, 20000.0)
+        @test CL.species_cp(poly, 1, Tq) === CL.species_cp(lin, 1, Tq)
+        @test CL.species_enthalpy(poly, 1, Tq) === CL.species_enthalpy(lin, 1, Tq)
+    end
+    # Outside it, the degree-four fit is not a model of anything: run past
+    # 20000 K it inverts an energy to a temperature half again too large, while
+    # the tangent extension recovers the temperature it was built from. Both
+    # report that the answer came from outside the data.
+    e_hot = CL.species_energy(poly, 1, 30000.0)
+    Tpoly, spoly = CL.mixture_temperature_status(poly, e_hot, _ -> 1.0)
+    Tlin, slin = CL.mixture_temperature_status(lin, CL.species_energy(lin, 1,
+                                                                     30000.0),
+                                               _ -> 1.0)
+    @test spoly & CL.TEMPERATURE_OUT_OF_RANGE != 0
+    @test slin & CL.TEMPERATURE_OUT_OF_RANGE != 0
+    @test Tpoly > 1.5 * 30000.0
+    @test Tlin ≈ 30000.0 rtol = 1e-12
+    @test CL.species_cp(lin, 1, 40000.0) === CL.species_cp(lin, 1, 20000.0)
+
+    # The inversion and its status run per point inside the primitives pass, so
+    # neither the status nor the bracket may allocate. Measured on the pass
+    # itself rather than on a loop over the routine, since that is the path and
+    # a hand-written loop measures its own closure instead.
+    # The transverse directions are collapsed so the pass runs serially at any
+    # thread count: a threaded region allocates per region per thread, which
+    # would measure the launcher rather than the inversion.
+    mix = Nasa9Mixture(["He", "CO2"])
+    solver = mkslv(n_global=(12, 1, 1), eos=mix)
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), p=1e5, T_ion=1000.0))
+    CL.primitives!(solver, Q)
+    @test (@allocated CL.primitives!(solver, Q)) == 0
+    @test solver.T_ion[gidx(solver, 3, 1, 1)] ≈ 1000.0 rtol = 1e-10
 end
 
 @testset "NASA CEA reader: intervals, molar mass, and energy reference" begin

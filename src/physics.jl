@@ -37,6 +37,11 @@
 #                 n_species)             padded mass fractions Y (a FieldVector),
 #                                        for the bulk species channel of
 #                                        compute_artificial!
+#   state_admissibility(eos, ρ, e, Yat,  whether a point is in the model's
+#                       n_species)       thermodynamic domain, as STATE_ flags.
+#                                        The state validation applies no
+#                                        universal e > 0 test because the
+#                                        internal-energy gauge is the EOS's.
 #
 # One further method is optional: `species_names(eos)` labels the partial-density
 # components, and the fallback in equations.jl returns "species_1", "species_2"
@@ -698,7 +703,7 @@ nasa9_constant_cp(name::String, R::Real, cp::Real) =
     nasa9_constant_cp(Float64, name, R, cp)
 
 """
-    Nasa9Mixture(species; T_guess=300.0)
+    Nasa9Mixture(species; T_guess=300.0, extrapolate=:polynomial)
 
 Multicomponent mixture with piecewise NASA-9 heat capacities. `species` is a
 nonempty vector of [`Nasa9Species`](@ref) values; vector order defines every
@@ -706,30 +711,49 @@ nonempty vector of [`Nasa9Species`](@ref) values; vector order defines every
 
 The mixture is thermally ideal (`p = rho * R_mix * T_ion`) but not calorically:
 `cp`, `cv`, and `gamma` vary with temperature. Recovering temperature from
-internal energy therefore uses a bounded Newton iteration. `T_guess` is the
+internal energy therefore uses a safeguarded Newton iteration; `mixture_temperature`
+documents its convergence criterion and the status it reports. `T_guess` is the
 fixed reference temperature used to form a state-based initial estimate; its
 default is `300.0` K. It should lie in the representative range of the fits.
 
-Temperatures outside a species' tabulated range use its first or last
-polynomial interval, so successful evaluation is not evidence that such an
-extrapolated state is physically valid.
+`extrapolate` selects what happens outside the union of a species' tabulated
+intervals, where nothing in the data constrains the fit:
+
+- `:polynomial` (default) evaluates the nearest interval's fit at the requested
+  temperature. This is the conventional treatment and reproduces earlier
+  releases exactly, but a degree-four fit run beyond its range can turn `cp`
+  negative, which destroys the monotonicity the temperature inversion relies on.
+- `:linear` freezes `cp` at the value it takes at the nearest interval endpoint
+  and continues `h` linearly from there. The extension is monotone in `T` and
+  keeps the inversion bracketed at any temperature, at the cost of a first
+  derivative that is discontinuous at the edge of the fitted range.
+
+Either way an extrapolated state is reported as such rather than being treated
+as a valid recovery: successful evaluation of the polynomial is not evidence
+that the state lies in the model's domain.
 """
 struct Nasa9Mixture{T} <: EOS
     sp::Vector{Nasa9Species{T}}
     Rk::Vector{T}
     T_guess::T
+    extrapolate::Symbol
 end
 
-function _nasa9_mixture(::Type{T}, species; T_guess=300.0) where {T<:AbstractFloat}
+function _nasa9_mixture(::Type{T}, species; T_guess=300.0,
+                        extrapolate::Symbol=:polynomial) where {T<:AbstractFloat}
     isempty(species) && throw(ArgumentError("Nasa9Mixture requires at least one species"))
+    extrapolate in (:polynomial, :linear) ||
+        throw(ArgumentError("Nasa9Mixture: extrapolate must be :polynomial or " *
+                            ":linear, got :$extrapolate"))
     sp = Nasa9Species{T}[_convert_nasa9_species(T, item) for item in species]
-    return Nasa9Mixture{T}(sp, [x.R for x in sp], T(T_guess))
+    return Nasa9Mixture{T}(sp, [x.R for x in sp], T(T_guess), extrapolate)
 end
 
-function Nasa9Mixture(species::AbstractVector{<:Nasa9Species}; T_guess=300.0)
+function Nasa9Mixture(species::AbstractVector{<:Nasa9Species}; T_guess=300.0,
+                      extrapolate::Symbol=:polynomial)
     isempty(species) && throw(ArgumentError("Nasa9Mixture requires at least one species"))
     T = promote_type((typeof(item.R) for item in species)...)
-    return _nasa9_mixture(T, species; T_guess=T_guess)
+    return _nasa9_mixture(T, species; T_guess=T_guess, extrapolate=extrapolate)
 end
 
 Nasa9Mixture(species::Nasa9Species; kwargs...) = Nasa9Mixture([species]; kwargs...)
@@ -743,11 +767,13 @@ Nasa9Mixture(::Type{T}, species::Tuple{Vararg{Nasa9Species}}; kwargs...) where
     {T<:AbstractFloat} = _nasa9_mixture(T, species; kwargs...)
 
 function Nasa9Mixture(names::AbstractVector{<:AbstractString}; path=nothing,
-                      reference=:sensible, T_ref=298.15, T_guess=300.0)
+                      reference=:sensible, T_ref=298.15, T_guess=300.0,
+                      extrapolate::Symbol=:polynomial)
     database_path = path === nothing ? NASA9_THERMO_PATH : path
     species = read_nasa9(names; path=database_path, reference=reference,
                          T_ref=T_ref)
-    return _nasa9_mixture(Float64, species; T_guess=T_guess)
+    return _nasa9_mixture(Float64, species; T_guess=T_guess,
+                          extrapolate=extrapolate)
 end
 
 Nasa9Mixture(names::Tuple{Vararg{AbstractString}}; kwargs...) =
@@ -756,11 +782,12 @@ Nasa9Mixture(::Type{T}, names::Tuple{Vararg{AbstractString}}; kwargs...) where
     {T<:AbstractFloat} = Nasa9Mixture(T, collect(names); kwargs...)
 function Nasa9Mixture(::Type{T}, names::AbstractVector{<:AbstractString};
                       path=nothing, reference=:sensible, T_ref=298.15,
-                      T_guess=300.0) where {T<:AbstractFloat}
+                      T_guess=300.0,
+                      extrapolate::Symbol=:polynomial) where {T<:AbstractFloat}
     database_path = path === nothing ? NASA9_THERMO_PATH : path
     species = read_nasa9(names; path=database_path, reference=reference,
                          T_ref=T_ref)
-    return _nasa9_mixture(T, species; T_guess=T_guess)
+    return _nasa9_mixture(T, species; T_guess=T_guess, extrapolate=extrapolate)
 end
 
 nspecies(eos::Nasa9Mixture) = length(eos.sp)
@@ -774,46 +801,143 @@ species_names(eos::Nasa9Mixture) = [x.name for x in eos.sp]
     return intervals[end]
 end
 
+# Outside the union of a species' intervals the fit carries no information, so
+# the two extrapolation policies of `Nasa9Mixture` differ only there. Both
+# select the nearest interval; `:linear` additionally evaluates the polynomial
+# at the interval endpoint and continues h with that constant cp, which is the
+# tangent extension of the fit and is monotone in T at any temperature.
+@inline _nasa9_linear(eos::Nasa9Mixture) = eos.extrapolate === :linear
+
+@inline function _nasa9_cp_over_R_at(species::Nasa9Species, T_ion, linear::Bool)
+    interval = _nasa9_interval(species, T_ion)
+    T_fit = linear ? clamp(T_ion, interval.Tmin, interval.Tmax) : T_ion
+    return _nasa9_cp_over_R(interval, T_fit)
+end
+
+@inline function _nasa9_h_over_R_at(species::Nasa9Species, T_ion, linear::Bool)
+    interval = _nasa9_interval(species, T_ion)
+    linear || return _nasa9_h_over_R(interval, T_ion)
+    T_fit = clamp(T_ion, interval.Tmin, interval.Tmax)
+    return _nasa9_h_over_R(interval, T_fit) +
+           _nasa9_cp_over_R(interval, T_fit) * (T_ion - T_fit)
+end
+
+# Relative tolerance of the temperature inversion, and of the range test that
+# reads its result. A state initialized at exactly the lowest fitted temperature
+# recovers an ulp or two below it, and calling that extrapolated would report
+# every point of such a state.
+@inline _nasa9_rtol(::Type{T}) where {T<:AbstractFloat} =
+    max(T(1e-14), T(32) * eps(T))
+
+"Whether `T_ion` lies outside the union of a species' fitted intervals."
+@inline function _nasa9_out_of_range(species::Nasa9Species, T_ion)
+    margin = _nasa9_rtol(typeof(float(T_ion)))
+    @inbounds return T_ion < species.intervals[1].Tmin * (1 - margin) ||
+                     T_ion > species.intervals[end].Tmax * (1 + margin)
+end
+
 "cp_k(T_ion) from the applicable NASA-9 interval."
 @inline function species_cp(eos::Nasa9Mixture, k::Int, T_ion)
     species = eos.sp[k]
-    return species.R * _nasa9_cp_over_R(_nasa9_interval(species, T_ion), T_ion)
+    return species.R * _nasa9_cp_over_R_at(species, T_ion, _nasa9_linear(eos))
 end
 
 "h_k(T_ion), the exact interval-wise integral of `species_cp`."
 @inline function species_enthalpy(eos::Nasa9Mixture, k::Int, T_ion)
     species = eos.sp[k]
-    return species.R * _nasa9_h_over_R(_nasa9_interval(species, T_ion), T_ion)
+    return species.R * _nasa9_h_over_R_at(species, T_ion, _nasa9_linear(eos))
 end
 
 "e_k(T_ion) = h_k − R_k T_ion."
 @inline species_energy(eos::Nasa9Mixture, k::Int, T_ion) =
     species_enthalpy(eos, k, T_ion) - eos.Rk[k] * T_ion
 
+# Search bounds and iteration cap of the NASA-9 temperature inversion. The
+# bounds bracket every temperature the fitted intervals cover, with margin on
+# both sides, and give the bisection safeguard a starting interval that needs no
+# expansion search. The cap is reached only when the root lies outside those
+# bounds or the residual is not monotone; a converging Newton iteration from the
+# linearized seed uses a handful.
+const NASA9_TEMPERATURE_BOUNDS = (1e-3, 1e9)
+const NASA9_TEMPERATURE_ITERATIONS = 40
+
+"""
+Status flags returned beside a recovered temperature by
+`mixture_temperature_status`. `TEMPERATURE_OK` is the zero value; the others are
+independent bits, so a single recovery can report more than one.
+
+- `TEMPERATURE_NOT_CONVERGED`: the residual criterion was not met, either
+  because the iteration cap was reached or because it stopped early.
+- `TEMPERATURE_NO_BRACKET`: the mixture cv was not positive at some iterate, so
+  the residual is not monotone in T and the inversion has no bracket. A
+  composition with negative mass fractions produces this.
+- `TEMPERATURE_OUT_OF_RANGE`: the result lies outside the fitted intervals of a
+  species carrying nonzero mass, by more than the tolerance the inversion
+  itself converges to, so the value comes from the extrapolation policy rather
+  than from the data.
+- `TEMPERATURE_AT_BOUND`: the result sits on a search bound, which means the
+  root, if there is one, lies outside `NASA9_TEMPERATURE_BOUNDS`.
+"""
+const TEMPERATURE_OK = 0x00
+const TEMPERATURE_NOT_CONVERGED = 0x01
+const TEMPERATURE_NO_BRACKET = 0x02
+const TEMPERATURE_OUT_OF_RANGE = 0x04
+const TEMPERATURE_AT_BOUND = 0x08
+
 """
     mixture_temperature(eos, e, Yat) -> T_ion
 
 Invert Σ_k Y_k e_k(T) = e for the temperature. `Yat` is a function of the
 species index, so the caller can supply mass fractions from a tuple, a vector,
-or straight out of the conserved array without materializing anything.
+or straight out of the conserved array without materializing anything. This is
+the value-only form of `mixture_temperature_status`, which documents the
+iteration and reports whether it succeeded.
+"""
+@inline mixture_temperature(eos::Nasa9Mixture, e, Yat::F) where {F} =
+    mixture_temperature_status(eos, e, Yat)[1]
 
-Newton on f(T) = Σ Y_k e_k(T) − e, whose derivative is the mixture cv and is
-positive for any physical coefficient set, so the iteration is monotone. The
-step is clamped to remain in T > 0 even when a stale halo contains a nonphysical
-state, the initial estimate is clamped to [1e-3, 1e9], and the iteration count is
-capped at 30. The iteration also stops early if the mixture cv is not positive,
-which returns the current estimate without raising.
+"""
+    mixture_temperature_status(eos, e, Yat) -> (T_ion, status)
+
+Invert Σ_k Y_k e_k(T) = e and report what the inversion did, as a combination of
+the `TEMPERATURE_OK` flags. The return value is a plain tuple of the temperature
+and a `UInt8`, so this may be called from a per-point loop without allocating.
+
+Safeguarded Newton on f(T) = Σ Y_k e_k(T) − e. The derivative is the mixture cv,
+which is positive for any physical coefficient set and composition, so f is
+increasing and the sign of the residual at each iterate places the root on one
+side of it. The iteration maintains that bracket, starting from
+`NASA9_TEMPERATURE_BOUNDS`, and replaces any Newton step leaving it with the
+geometric mean of the bracket, which halves the exponent range rather than the
+interval and so is the appropriate bisection over twelve decades.
+
+Success is the residual criterion |f| ≤ rtol·T·cv, equivalently a Newton step
+of at most rtol·T. Writing it through the derivative the iteration already has
+avoids inventing an energy scale, which a formation-enthalpy gauge would make
+meaningless: there e is dominated by a constant of formation and its magnitude
+says nothing about the accuracy of T. `rtol` is 32 eps of the coefficient type,
+floored at 1e-14, so the criterion carries to Float32 unchanged in form.
+
+The iteration stops immediately when the mixture cv is not positive. There is
+then no bracket and no unique root, so continuing would report convergence to a
+meaningless value; the current estimate is returned with
+`TEMPERATURE_NO_BRACKET` set instead. Reaching a search bound or leaving the
+fitted range is reported the same way and is not by itself a failure: an
+extrapolated recovery is a statement about the model's domain, and
+[`Nasa9Mixture`](@ref) documents which extension the fit takes there.
 
 The starting point is a pure function of the state. Seeding from the previous
 value at the same point generally saves one iteration but makes the result
 depend on call history. A state-based seed preserves the bit-for-bit agreement
 between serial and decomposed calculations tested by the MPI suite.
 """
-@inline function mixture_temperature(eos::Nasa9Mixture, e, Yat::F) where {F}
+@inline function mixture_temperature_status(eos::Nasa9Mixture, e, Yat::F) where {F}
     n = length(eos.sp)
     # First-order inversion about a fixed reference state. This handles any
     # enthalpy gauge; when e_k = cv_k*T it reduces algebraically to e/cv.
     Tnum = typeof(eos.T_guess)
+    lo = Tnum(NASA9_TEMPERATURE_BOUNDS[1])
+    hi = Tnum(NASA9_TEMPERATURE_BOUNDS[2])
     e0 = zero(Tnum)
     cv0 = zero(Tnum)
     for k in 1:n
@@ -821,23 +945,60 @@ between serial and decomposed calculations tested by the MPI suite.
         e0 += Yk * species_energy(eos, k, eos.T_guess)
         cv0 += Yk * (species_cp(eos, k, eos.T_guess) - eos.Rk[k])
     end
-    T_ion = cv0 > 0 ? clamp(eos.T_guess + (e - e0) / cv0,
-                            Tnum(1e-3), Tnum(1e9)) :
-            eos.T_guess
-    rtol = max(Tnum(1e-14), Tnum(32) * eps(Tnum))
-    for _ in 1:30
+    T_ion = cv0 > 0 ? clamp(eos.T_guess + (e - e0) / cv0, lo, hi) : eos.T_guess
+    rtol = _nasa9_rtol(Tnum)
+    converged = false
+    bracketed = true
+    for _ in 1:NASA9_TEMPERATURE_ITERATIONS
         f = -e; cvm = zero(Tnum)
         for k in 1:n
             Yk = Yat(k)
             f += Yk * species_energy(eos, k, T_ion)
             cvm += Yk * (species_cp(eos, k, T_ion) - eos.Rk[k])
         end
-        cvm > 0 || break
+        if !(cvm > 0)
+            bracketed = false
+            break
+        end
         δ = f / cvm
-        T_ion = max(T_ion - δ, Tnum(0.25) * T_ion) # never overshoot into T ≤ 0
-        abs(δ) <= rtol * T_ion && break
+        T_prev = T_ion
+        T_ion = T_ion - δ
+        # Tested before the safeguard below, so a converging iteration takes the
+        # plain Newton sequence and the bracket costs it nothing. A step of at
+        # most rtol·T can be smaller than one ulp, which the strict containment
+        # test would otherwise reject and replace with a bisection.
+        if abs(δ) <= rtol * T_ion
+            converged = true
+            break
+        end
+        # Narrow the bracket on the sign of the residual, which places the root
+        # because f increases with T wherever the mixture cv is positive.
+        f < 0 ? (lo = T_prev) : (hi = T_prev)
+        # Outside the bracket the Newton step is not a correction to anything;
+        # bisect instead. This also keeps T positive without a separate limiter.
+        # A bracket that has collapsed is no longer informative, so the search
+        # falls back to the full range rather than to a degenerate midpoint.
+        lo < hi || (lo = Tnum(NASA9_TEMPERATURE_BOUNDS[1]);
+                    hi = Tnum(NASA9_TEMPERATURE_BOUNDS[2]))
+        (lo < T_ion < hi) || (T_ion = sqrt(lo) * sqrt(hi))
+        # A step below one ulp of the estimate cannot make further progress,
+        # which happens once the bracket has collapsed onto a search bound.
+        T_ion == T_prev && break
     end
-    return T_ion
+    status = TEMPERATURE_OK
+    converged || (status |= TEMPERATURE_NOT_CONVERGED)
+    bracketed || (status |= TEMPERATURE_NO_BRACKET)
+    if T_ion <= Tnum(NASA9_TEMPERATURE_BOUNDS[1]) ||
+       T_ion >= Tnum(NASA9_TEMPERATURE_BOUNDS[2])
+        status |= TEMPERATURE_AT_BOUND
+    end
+    for k in 1:n
+        if Yat(k) != 0 && _nasa9_out_of_range(eos.sp[k], T_ion)
+            status |= TEMPERATURE_OUT_OF_RANGE
+            break
+        end
+    end
+    return (T_ion, status)
 end
 
 @inline function eos_phi(::Nasa9Mixture, ρ, p, T_ion, cp_mix)
@@ -1059,3 +1220,94 @@ channel of `compute_artificial!`.
     _mole_fraction_from_R(eos.Rk, k, Y, I, n_species)
 Base.@propagate_inbounds mole_fraction(::StiffenedGas, k::Int, Y, I, ::Int) =
     Y[k][I]
+
+# ---------------------------------------------------------------------------
+# Admissibility: whether a point lies in the thermodynamic domain of its EOS.
+#
+# The flags below describe one point of a conserved state. The first three are
+# properties of the numbers themselves and are the same for every model; the
+# last three are the EOS's own statement about the state and are produced by
+# `state_admissibility`.
+#
+# There is deliberately no universal e > 0 test. Internal energy is defined only
+# up to the gauge its enthalpy reference fixes, so e < 0 is a failure for a
+# calorically perfect gas, where e = cv T, and the ordinary case for a NASA-9
+# mixture in the formation gauge, where the heats of formation of the species
+# set the zero. Asking the EOS keeps that distinction with the model that owns
+# it.
+
+"""
+Per-point validity flags of a conserved state. `STATE_OK` is the zero value and
+the rest are independent bits, so one point can carry several.
+
+- `STATE_NONFINITE`: a conserved component is not finite.
+- `STATE_NEGATIVE_DENSITY`: the partial densities do not sum to a positive
+  mixture density, which is the state `primitives!` replaces with placeholders.
+- `STATE_NEGATIVE_SPECIES`: a partial density is negative while the mixture
+  density is positive, by more than the dead band `ArtParams.Y_tolerance`
+  places on the artificial mass-fraction bound. A filtered interface carries
+  mass fractions a rounding step below zero over much of a domain, which that
+  band exists to ignore.
+- `STATE_INADMISSIBLE`: the EOS places the point outside its thermodynamic
+  domain.
+- `STATE_UNRECOVERABLE`: the EOS could not recover the temperature at this
+  point. Only a model that inverts a caloric relation can report it.
+- `STATE_EXTRAPOLATED`: the EOS evaluated outside the range its data covers, so
+  the recovered state rests on the extrapolation policy rather than on the fit.
+"""
+const STATE_OK = 0x00
+const STATE_NONFINITE = 0x01
+const STATE_NEGATIVE_DENSITY = 0x02
+const STATE_NEGATIVE_SPECIES = 0x04
+const STATE_INADMISSIBLE = 0x08
+const STATE_UNRECOVERABLE = 0x10
+const STATE_EXTRAPOLATED = 0x20
+
+"""
+    state_admissibility(eos, rho, e, Yat, n_species) -> UInt8
+
+Flags describing whether the point `(rho, e, Y)` lies in the thermodynamic
+domain of `eos`, where `e` is specific internal energy and `Yat` is a function
+of the species index returning a mass fraction, as `mixture_temperature` takes.
+`STATE_OK` means admissible; the value is otherwise a combination of
+`STATE_INADMISSIBLE`, `STATE_UNRECOVERABLE`, and `STATE_EXTRAPOLATED`.
+
+Part of the [`EOS`](@ref) contract. A model that cannot decide should return
+`STATE_OK`, which leaves the finiteness and density tests of the state
+validation as the only checks applied to it. Implementations must be free of
+allocation, since this runs per point.
+"""
+function state_admissibility end
+
+# A calorically perfect mixture puts zero internal energy at zero temperature,
+# so T = e/cv_m is positive exactly when e and the mixture cv are. The pressure
+# and sound speed follow from T and are then positive as well.
+@inline function state_admissibility(eos::IdealMixture, ρ, e, Yat::F,
+                                     n_species::Int) where {F}
+    cvm = zero(e)
+    for k in 1:n_species
+        cvm += Yat(k) * eos.cvk[k]
+    end
+    return (cvm > 0 && e > 0) ? STATE_OK : STATE_INADMISSIBLE
+end
+
+# ρe = ρ c_v T + p∞, so the thermal part of the internal energy is e − p∞/ρ and
+# it, not e, carries the sign of the temperature.
+@inline state_admissibility(eos::StiffenedGas, ρ, e, Yat::F, n_species::Int) where {F} =
+    (ρ > 0 && e - eos.p_inf / ρ > 0) ? STATE_OK : STATE_INADMISSIBLE
+
+# The caloric inversion is the admissibility test: a state it cannot invert is
+# one this model does not describe, and one it inverts outside the fitted range
+# is described by the extrapolation policy rather than by the data.
+@inline function state_admissibility(eos::Nasa9Mixture, ρ, e, Yat::F,
+                                     n_species::Int) where {F}
+    _, status = mixture_temperature_status(eos, e, Yat)
+    flags = STATE_OK
+    if (status & (TEMPERATURE_NOT_CONVERGED | TEMPERATURE_NO_BRACKET)) != 0
+        flags |= STATE_UNRECOVERABLE
+    end
+    if (status & TEMPERATURE_OUT_OF_RANGE) != 0
+        flags |= STATE_EXTRAPOLATED
+    end
+    return flags
+end

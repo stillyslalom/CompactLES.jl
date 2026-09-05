@@ -1195,40 +1195,67 @@ also bounds the artificial conductivity.
 ### The negative internal energy is not a rounding artifact
 
 That conditioning argument implies the affected cells sit a rounding step below
-zero. They do not, and the positivity failsafe measured how far below. Over the
-complete ν = 1 validation case, which takes 3724 steps at cfl 0.15 and returns a
-plateau of 3.99708 against the exact 4:
+zero. They do not, and the positivity failsafe measured how far below. The
+measurement is one line of `bench/nohprobe.jl`, which reports the floor tally of
+whatever run it made:
 
 ```
-cell-steps with e < 0        24991   (peak 8 cells at once, worst -718 e0)
+julia --project=. -t 1 bench/nohprobe.jl 1 cfl=0.15 nmax=5000 every=2000 \
+      floor=1e-8 scope=representable
+```
+
+Over the complete ν = 1 validation case, which takes 3756 steps at cfl 0.15 and
+returns a plateau of 3.9971 against the exact 4:
+
+```
+cell-steps with e < 0        25179
 cell-steps with E <= 0           0
 cell-steps with rho <= 0         0
 ```
 
-The worst cell reaches −1.08e-1, which is −718 ambient internal energies, not
-a rounding step. The total energy density and the mixture density stay
+The worst cell reaches several hundred ambient internal energies below zero,
+not a rounding step: the sampled line at step 2000 carries seven such cells and
+a minimum of −428 e₀. The total energy density and the mixture density stay
 positive at every cell of every step, so the state never leaves the set any
 frame can represent. The wall region runs as a pressureless layer, `primitives!`
 maps the whole of it to T_ion = 1e-300, and the calculation still reaches the
 plateau to within 0.07%.
 
 **Repairing those cells is a percent-level intervention, and it terminates the
-run.** After a single step the worst cell needs a 5% velocity damping to return
-its internal energy to a floor at 1e-8 of the initial minimum; the next four
-need 0.7%, 0.08%, 0.05% and 0.02%. Applied every step under
-`StepControl(floor_ratio = 1e-8, floor_scope = :internal_energy)` this removes
-1.5e-4 of the total momentum on step 1 and produces cells of negative *total*
-energy by step 4 that the unrepaired trajectory never produces; the run then
-fails at step 18 with `:dt_collapse`. The alternative repair raises the total
-energy while leaving velocity unchanged. Its intervention is of the same order,
-about 11% of that cell's energy, so the cost belongs to the case and not to the
-choice of repair.
+run.** Under `StepControl(floor_ratio = 1e-8, floor_scope = :internal_energy)`
+the failsafe repairs five cells on step 1 and 256 cell-steps in all, adding
+1.4007 of mass and 9.3e29 of energy and removing 1.7e10 of momentum before the
+run fails at step 19 with `:dt_collapse`. The repair damps the velocity at a
+cell whose total energy is still positive and raises the total energy where
+there is no kinetic energy left to convert; both are the same order of
+intervention, so the cost belongs to the case and not to the choice of repair.
 
 The default `floor_scope = :representable` follows from that. It repairs only
 what no frame can represent and counts the rest, so on this case it repairs
-nothing and reproduces the unfloored run bit for bit while reporting all 24991
-cell-steps. The condition was invisible, and making it visible is the part of
-model debt 2 the evidence supports.
+nothing and reproduces the unfloored run exactly — 3756 steps, plateau 3.9971,
+shock 0.2044, pre-shock L1 5.99e-07, all identical to the run with the failsafe
+off — while reporting all 25179 cell-steps. The condition was invisible, and
+making it visible is the part of model debt 2 the evidence supports.
+
+The counts above were re-measured in September 2026 and supersede the 3724
+steps, 24991 cell-steps and step-18 failure recorded here when the failsafe
+landed. The trajectory moved with the artificial-property changes made in
+between, not with the failsafe, which under `:representable` repaired no cell
+and therefore wrote nothing to the state.
+
+The same measurement fixes the distinction `StepControl.validity` draws between
+rejecting a state and reporting it. The
+[state validation](DESIGN.md#state-validity-and-its-policy) puts admissibility
+to the EOS, and a calorically perfect gas answers that a cell with e < 0 is
+outside its domain, which is correct and is a property of 25179 cell-steps of a
+run that reaches the right answer. The state this case *ends* on carries six
+such cells of four hundred, at e = −0.051, so a strict check applied to the
+returned state rejects a completed and correct Noh run. The shock/SF6 case ends
+with six of four hundred points whose mass fraction is below −`Y_tolerance`,
+having first crossed that band at step 32 of 646. Any per-step or returned-state
+check on these two cases therefore has to run under `validity = :permissive`,
+which reports what they integrated through instead of either rejecting them or
+saying nothing.
 
 ### Recovery strategy
 

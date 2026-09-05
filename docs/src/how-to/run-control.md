@@ -86,6 +86,38 @@ On a recoverable failure, `run!` restores its savepoint, reduces the CFL, and
 retries. An exhausted retry budget or timestep floor raises
 [`SolverFailure`](@ref) with the step, time, timestep, CFL, and reason.
 
+## Choose what an invalid state does
+
+`run!` sizes and checks each step from the state that enters it, so the state it
+*returns* is inspected by nothing: an `nmax`, `tfinal`, or callback exit leaves
+the last result unchecked. [`state_guard`](@ref) closes that by validating every
+accepted state, including the final one.
+
+```julia
+control = StepControl(validity = :permissive)
+run!(solver, Q; tfinal = 0.5, nmax = 100_000,
+     callback = state_guard(solver, Q; control = control))
+```
+
+`StepControl(validity = ...)` decides what a rejected state means.
+
+| Mode | Effect |
+|---|---|
+| `:strict` (default) | raise [`SolverFailure`](@ref)`(:invalid_state)` |
+| `:permissive` | accept the state and report what it contains |
+| `:repair` | repair through the positivity failsafe, report the substitutions, reject the rest |
+
+`:repair` also needs a positive `floor_ratio`, which is where its floors come
+from. A guard raises from inside a callback, so a strict rejection is not
+rolled back; the retryable checks remain the ones `run!` applies before a step.
+
+Whether a given internal energy is admissible is asked of the equation of state,
+not fixed by the integrator, because the gauge that places its zero belongs to
+the model. Converging-shock runs integrate through cells an ideal gas calls
+inadmissible and still reach the correct answer, so a guard on such a run wants
+`:permissive`; `reference/CALIBRATION.md` records the budget. [`setup`](@ref)
+applies the same policy to the initial state.
+
 ## Read the completed state
 
 Between steps, `Q` is current. Cached primitive arrays on `solver` still

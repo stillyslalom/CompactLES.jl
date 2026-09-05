@@ -210,6 +210,16 @@ Names are spelled out in full. Current vocabulary:
   `physics.jl`)
 - `control` (a `StepControl`), `max_rate`, `predicted_dt`, `check_step`,
   `dt_prev`, `rate_prev`, `savepoint`
+- `validity` (the `StepControl` policy: `:strict`, `:permissive` or `:repair`),
+  `state_report` (the collective sweep) and its `StateReport`, `state_valid`,
+  `check_validity` (the pure verdict, as `check_step` is), `validate_state!`
+  (sweep, apply the policy, report), `StateGuard`/`state_guard` (the same per
+  accepted step, as a callback), `state_admissibility` (the EOS dispatch point
+  deciding whether a point is in the model's domain; there is no universal
+  e > 0 test) and the `STATE_` flags it returns,
+  `mixture_temperature_status` and the `TEMPERATURE_` flags (whether the
+  NASA-9 inversion converged and whether it was extrapolated),
+  `extrapolate` (`Nasa9Mixture`: `:polynomial` or `:linear`)
 - `trigger` (an `AtTime` / `EveryTime` / `EveryStep` / `WhenState`), `effect!`,
   `fired!`, `next_time`, `rewind!`, `landing_steps`,
   `switch!`/`switched` (a `SwitchableBC`)

@@ -82,6 +82,7 @@ export StiffenedGas, Nasa9Interval, Nasa9Species, Nasa9Mixture
 export nasa9_constant_cp, read_nasa9
 export recover_primitives!, species_names, species_enthalpy
 export eos_phi, eos_dphi_dY, artificial_conductivity_scale, wall_internal_energy
+export state_admissibility
 export EquationSet, NavierStokes1T
 export conserved_parity
 export Metric, CartesianMetric, CylindricalMetric, SphericalMetric
@@ -93,6 +94,8 @@ export nlevels, refined_region, level_regions, sync_levels!
 export ConstantBodyForce, add_source!
 export Workspace, compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!, mpi_main
 export StepControl, SolverFailure, max_rate, FloorTally
+export StateReport, state_report, state_valid, validate_state!
+export StateGuard, state_guard
 export Trigger, AtTime, EveryStep, EveryTime, WhenState, Callback, ProgressLog
 export fired!, next_time, rewind!
 export refresh_primitives!, mixture_density, velocity, total_energy, mass_fraction

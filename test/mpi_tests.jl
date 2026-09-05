@@ -1292,6 +1292,61 @@ function test_ring_detector_decomposition()
     check("κ* differs between delta4 and d8", 1e-3 / max(rel, 1e-300), 1.0)
 end
 
+function test_state_validity()
+    section("state validation: one reduced verdict on every rank")
+    # A single point is damaged on one rank only. Both halves of the contract
+    # then have to hold: the report is the same on every rank, and the strict
+    # policy raises on every rank rather than on the one that saw the damage.
+    # A rank-local verdict here would be a hang under any collective that
+    # followed it, which is the failure mode the whole file is arranged against.
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 2.0, 1.6)])
+    reports = Float64[]
+    for ax in 1:3
+        n_global = ntuple(d -> d == ax ? SPLITN : 16, 3)
+        solver = Solver(n_global=n_global, L_domain=(2π, 2π, 2π), bcs=per3,
+                        eos=eos, art=ArtParams(enabled=false), dims=splitdims(ax))
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> Prim(rho=1.5, u=(0.4, 0.0, 0.0),
+                                                 p=1.0, Y=(0.5, 0.5)))
+        clean = state_report(solver, Q)
+        check("split axis $ax: a healthy state is valid",
+              state_valid(clean) ? 0.0 : 1.0, 0.5)
+        check("split axis $ax: every rank sees the whole domain",
+              abs(clean.points - prod(n_global)), 0.5)
+        # Rank 0 owns global index 1 along the split axis under every layout.
+        # The mixture density is left where it was, so the point is rejected on
+        # its composition alone and the density check cannot mask it.
+        if rank == 0
+            I = gidx(solver, 1, 2, 2)
+            ρ = mixture_density(solver, Q, I)
+            Q[I, 1] = -0.5
+            Q[I, 2] = ρ + 0.5
+        end
+        poisoned = state_report(solver, Q)
+        push!(reports, poisoned.negative_species)
+        check("split axis $ax: the count reaches every rank",
+              abs(poisoned.negative_species - 1), 0.5)
+        raised = 0.0
+        try
+            validate_state!(solver, Q; warn=false)
+        catch err
+            err isa SolverFailure && err.reason === :invalid_state || rethrow()
+            raised = 1.0
+        end
+        check("split axis $ax: ranks that raise (expect all $np)",
+              abs(gsum(raised) - np), 0.5)
+        # Permissive accepts the same state without raising anywhere.
+        accepted = validate_state!(solver, Q;
+                                   control=StepControl(validity=:permissive),
+                                   warn=false)
+        check("split axis $ax: permissive returns the same count",
+              abs(accepted.negative_species - 1), 0.5)
+    end
+    check("the count does not depend on the split",
+          maximum(reports) - minimum(reports), 0.5)
+end
+
 function test_positivity_floor()
     section("positivity failsafe: same tally and same repair under any split")
     # Six cells are damaged by hand at known global indices. Regardless of which
@@ -2253,6 +2308,7 @@ const SUITE = (
     ("bulk species channel", test_bulk_decomposition),
     ("d8 detector decomposition", test_ring_detector_decomposition),
     ("positivity floor", test_positivity_floor),
+    ("state validity", test_state_validity),
     ("callback consistency", test_callback_consistency),
     ("observation and clock", test_observation_clock),
     ("state queries", test_state_queries),

@@ -193,6 +193,267 @@ function _initialize_interior!(solver::SolverLike, Q, ic)
     return Q
 end
 
+# ---------------------------------------------------------------------------
+# State validation.
+#
+# Three questions are asked of every interior point: are its conserved values
+# finite, are its partial densities positive, and does the EOS accept the point
+# as one of its own. The first two are properties of the numbers; the third is
+# `state_admissibility`, because the internal-energy gauge and the domain of
+# validity belong to the model and not to the integrator (physics.jl carries the
+# argument). What is done about a rejected point is `StepControl.validity`, and
+# nothing here decides it.
+#
+# The sweep is serial and reduces once, on the pattern of `positivity_floors`.
+# It is not a per-step cost unless a run installs a `StateGuard`; `setup` runs
+# it once on the initial state.
+
+"""
+    state_report(solver, Q) -> StateReport
+
+Inspect the interior of the conserved state and return the reduced
+[`StateReport`](@ref) of what it contains. `Q` may be a single conserved array or
+the vector of patch states of a multi-patch solver, in which case every patch
+this rank holds is inspected.
+
+Every rank in `solver.comm` must call this, since it ends in two `Allreduce`s;
+each receives the totals over the whole domain rather than its own block. The
+state is read and never written, and the halos are not inspected: a physical-edge
+halo is never assigned by a boundary condition and holds whatever the last
+exchange left there.
+
+A state on device storage is not inspected and comes back as an empty report.
+The sweep is a host loop, as the positivity failsafe is, and the storage choice
+is solver-wide, so this returns early on every rank at once and cannot deadlock.
+"""
+function state_report(solver::Solver, Q)
+    _cpu_storage(Q) || return StateReport()
+    return _reduce_state_report(solver, _local_state_report(solver, Q))
+end
+
+function state_report(solver::Solver, states::Vector{<:ConservedState})
+    isempty(states) || _cpu_storage(states[1]) || return StateReport()
+    acc = _empty_local_report()
+    for (ps, Q) in eachpatch(solver, states)
+        acc = _merge_local_report(acc, _local_state_report(ps, Q))
+    end
+    return _reduce_state_report(solver, acc)
+end
+
+_empty_local_report() = (0, 0, 0, 0, 0, 0, 0, Inf, Inf)
+
+_merge_local_report(a, b) =
+    (a[1] + b[1], a[2] + b[2], a[3] + b[3], a[4] + b[4], a[5] + b[5],
+     a[6] + b[6], a[7] + b[7], min(a[8], b[8]), min(a[9], b[9]))
+
+# Two reductions rather than one: the counts add and the extrema do not. Both
+# are small and this runs once per validation, not once per step of a run that
+# has not asked for one.
+function _reduce_state_report(solver::Solver, local_report)
+    t0 = time_ns()
+    counts = MPI.Allreduce(collect(Float64.(local_report[1:7])), +, solver.comm)
+    extrema_reduced = MPI.Allreduce([local_report[8], local_report[9]], min,
+                                    solver.comm)
+    _wait!(solver, t0)
+    return StateReport(round(Int, counts[1]), round(Int, counts[2]),
+                       round(Int, counts[3]), round(Int, counts[4]),
+                       round(Int, counts[5]), round(Int, counts[6]),
+                       round(Int, counts[7]), extrema_reduced[1],
+                       extrema_reduced[2])
+end
+
+function _local_state_report(solver::SolverLike, Q)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    eos = solver.eos
+    n_species = solver.equations.n_species
+    n_cons = solver.equations.n_cons
+    m1, m2, m3 = solver.equations.i_mom
+    i_energy = solver.equations.i_energy
+    # The dead band of the artificial mass-fraction bound, reused here so the
+    # validation and the regularization agree on what counts as an excursion.
+    # Without it a mass fraction of −1e-17, which a filtered interface produces
+    # over most of the domain, would be reported as an invalid state.
+    Y_tolerance = solver.art.Y_tolerance
+    # Arithmetic in the state's own type, so the validation reads the same
+    # numbers the solver does under Float32; the reduced extrema are Float64.
+    T = eltype(Q)
+    points = 0; nonfinite = 0; negative_density = 0; negative_species = 0
+    inadmissible = 0; unrecoverable = 0; extrapolated = 0
+    ρ_min = Inf; e_min = Inf
+    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        points += 1
+        finite = true
+        for c in 1:n_cons
+            finite &= isfinite(Q[I, c])
+        end
+        # Nothing below this is meaningful at a point carrying NaN or Inf, and
+        # the density and energy extrema would be poisoned by one.
+        if !finite
+            nonfinite += 1
+            continue
+        end
+        ρ = zero(T)
+        q_min = T(Inf)
+        for sp in 1:n_species
+            q = Q[I, sp]
+            ρ += q
+            q_min = min(q_min, q)
+        end
+        ρ_min = min(ρ_min, ρ)
+        # The internal energy is not recoverable where the density is not
+        # positive, and neither is the composition the EOS would be asked about.
+        if !(ρ > 0)
+            negative_density += 1
+            continue
+        end
+        q_min < -T(Y_tolerance) * ρ && (negative_species += 1)
+        ri = one(T) / ρ
+        ke = (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / (2ρ)
+        e = (Q[I, i_energy] - ke) / ρ
+        e_min = min(e_min, e)
+        flags = state_admissibility(eos, ρ, e, sp -> Q[I, sp] * ri, n_species)
+        (flags & STATE_INADMISSIBLE) != 0 && (inadmissible += 1)
+        (flags & STATE_UNRECOVERABLE) != 0 && (unrecoverable += 1)
+        (flags & STATE_EXTRAPOLATED) != 0 && (extrapolated += 1)
+    end
+    return (points, nonfinite, negative_density, negative_species, inadmissible,
+            unrecoverable, extrapolated, ρ_min, e_min)
+end
+
+"""
+    validate_state!(solver, Q; control, stage, floors, warn) -> StateReport
+
+Sweep the state with [`state_report`](@ref), apply `control.validity` to what it
+finds, and return the report. Under `:strict` a rejected state raises
+[`SolverFailure`](@ref)`(:invalid_state)`. Under `:permissive` the state is
+accepted and, when `warn` is true, a rank-0 warning names what it contains.
+Under `:repair` the positivity failsafe repairs the state first, against
+`floors = (rho_floor, e_floor)` from `positivity_floors`, reports the
+substitutions it made, and then rejects whatever remains.
+
+`floors` defaults to `(0, 0)`, which leaves nothing to repair with, so a caller
+in `:repair` mode must supply floors derived from a state that was still valid.
+Deriving them from the state under validation is not that: `positivity_floors`
+returns zeros for a state whose minima are not positive, which is exactly the
+case a repair is wanted for. [`setup`](@ref) therefore validates the initial
+state without repairing it.
+
+`stage` names what is being validated in the failure message and the warning.
+Collective: every rank must call this with the same arguments, and the verdict
+comes from reduced counts, so a rejection is raised on every rank at once.
+"""
+function validate_state!(solver::Solver, Q; control::StepControl=solver.control,
+                         stage::AbstractString="state",
+                         floors::Tuple{Float64,Float64}=(0.0, 0.0),
+                         warn::Bool=true)
+    report = state_report(solver, Q)
+    rank = MPI.Comm_rank(solver.comm)
+    if control.validity === :repair && !state_valid(report) && floors[1] > 0
+        tally = apply_positivity_floor!(solver, Q, floors[1], floors[2],
+                                        control.floor_scope)
+        if tally.cells > 0 || tally.low_energy > 0
+            record_floor!(solver, tally)
+            warn && rank == 0 &&
+                @warn "validate_state!: repaired $(tally.cells) cell(s) of " *
+                      "$stage and saw $(tally.low_energy) below the " *
+                      "internal-energy floor. Mass added $(tally.mass), energy " *
+                      "added $(tally.energy), momentum removed $(tally.momentum)."
+        end
+        report = state_report(solver, Q)
+    end
+    failure = check_validity(control, report, stage, solver.step, solver.t,
+                             solver.dt_prev, solver.cfl)
+    failure === nothing || throw(failure)
+    if warn && rank == 0 && !state_valid(report)
+        @warn "validate_state!: $stage accepted under validity = " *
+              ":$(control.validity). $report"
+    end
+    return report
+end
+
+"""
+    StateGuard(solver, Q; control = solver.control)
+
+A per-step state validation, to be paired with a [`Trigger`](@ref) and passed to
+[`run!`](@ref) as a callback. [`state_guard`](@ref) is the one-line form.
+
+`run!` checks the state entering each step through [`check_step`](@ref) and the
+reduced quantities [`max_rate`](@ref) produces, which covers the mixture density
+and the timestep but not the composition, the finiteness of every component, or
+the thermodynamic domain of the EOS. Nor is any check applied to the state a run
+returns: the last step's result is inspected only by the iteration that follows
+it, and there is none after an `nmax`, `tfinal`, or callback exit. A guard runs
+after every completed step, including that last one, and so covers both.
+
+The floors the `:repair` mode needs are derived from `Q` at construction, which
+is collective, on the same reasoning as [`run!`](@ref): they scale with the state
+the run starts from, which is the last state known to be valid.
+
+A guard counts its own work in `checks` and `rejected` and warns once per run
+rather than once per step, since a front carrying a handful of rejected points
+would otherwise produce thousands of identical warnings. Under
+`StepControl(validity = :strict)` it raises [`SolverFailure`](@ref) from inside
+the callback. That failure is collective, since the report behind it is reduced,
+but it is not the retryable path: `run!` rolls back on what `check_step`
+rejects, and an exception from a callback is not caught. A run that wants
+rollback should keep its state checks in `check_step` and use the guard to
+diagnose what the state contains.
+"""
+mutable struct StateGuard
+    control::StepControl
+    rho_floor::Float64
+    e_floor::Float64
+    checks::Int
+    rejected::Int
+    reported::Bool
+end
+
+function StateGuard(solver::Solver, Q; control::StepControl=solver.control)
+    rho_floor, e_floor = control.validity === :repair ?
+                         positivity_floors(solver, Q, control) : (0.0, 0.0)
+    return StateGuard(control, rho_floor, e_floor, 0, 0, false)
+end
+
+function (guard::StateGuard)(solver::Solver, Q)
+    guard.checks += 1
+    report = state_report(solver, Q)
+    if guard.control.validity === :repair && !state_valid(report) &&
+       guard.rho_floor > 0
+        tally = apply_positivity_floor!(solver, Q, guard.rho_floor,
+                                        guard.e_floor, guard.control.floor_scope)
+        (tally.cells > 0 || tally.low_energy > 0) && record_floor!(solver, tally)
+        report = state_report(solver, Q)
+    end
+    state_valid(report) && return false
+    guard.rejected += 1
+    failure = check_validity(guard.control, report, "the state after step " *
+                             string(solver.step), solver.step, solver.t,
+                             solver.dt_prev, solver.cfl)
+    failure === nothing || throw(failure)
+    if !guard.reported && MPI.Comm_rank(solver.comm) == 0
+        guard.reported = true
+        @warn "StateGuard: the state after step $(solver.step), t = " *
+              "$(solver.t), was accepted under validity = " *
+              ":$(guard.control.validity). $report. Later steps are counted in " *
+              "the guard's `rejected` field and not warned about again."
+    end
+    return false
+end
+
+"""
+    state_guard(solver, Q; control = solver.control, interval = 1) -> Callback
+
+A [`StateGuard`](@ref) paired with `EveryStep(interval)`, ready to pass to
+[`run!`](@ref) as `callback`. Construct the guard directly when the counts it
+accumulates are wanted after the run.
+"""
+state_guard(solver::Solver, Q; control::StepControl=solver.control,
+            interval::Int=1) =
+    Callback(EveryStep(interval), StateGuard(solver, Q; control=control))
+
 """
     tanh_blend(x, x0, delta)
 
@@ -481,6 +742,15 @@ width, and scheme-specific local grid minima. MPI is initialized if necessary.
 The returned `solver` owns the operator plans and runtime state; `Q` contains
 the conserved variables and is ready to pass to [`run!`](@ref).
 
+The initialized state is then validated with [`validate_state!`](@ref) under
+`num.control`, so an initial condition that is not finite, has a nonpositive
+density, or lies outside the thermodynamic domain of the EOS is rejected here
+rather than integrated. `StepControl(validity = :permissive)` accepts it with a
+report instead. No repair is applied at this point, whatever the mode, because
+the floors a repair needs would have to come from the state being validated.
+[`initialize!`](@ref) applies no validation of its own: it is rank-local and
+non-collective, and this check is neither.
+
 Collective over `num.comm` (`MPI.COMM_WORLD` by default): the decomposition
 is built with `MPI.Cart_create` and its sub-communicators (on more than one
 rank; a single rank borrows `num.comm` itself), so every rank of
@@ -523,5 +793,6 @@ function setup(prob::Problem, num::Numerics)
                rebalance_persist=num.rebalance_persist)
     Q = allocate_state(solver)
     initialize!(solver, Q, prob.ic)
+    validate_state!(solver, Q; control=num.control, stage="the initial state")
     return solver, Q
 end

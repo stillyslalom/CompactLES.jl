@@ -19,9 +19,10 @@ is intended to support modification and extension of the solver. For usage, see
 11. [Curvilinear metrics and the discrete GCL](#curvilinear-metrics-and-the-discrete-gcl)
 12. [Coordinate-singularity folds](#coordinate-singularity-folds)
 13. [Multicomponent thermodynamics](#multicomponent-thermodynamics)
-14. [Characteristic boundary conditions](#characteristic-boundary-conditions)
-15. [Threading and MPI discipline](#threading-and-mpi-discipline)
-16. [Extension points](#extension-points)
+14. [State validity and its policy](#state-validity-and-its-policy)
+15. [Characteristic boundary conditions](#characteristic-boundary-conditions)
+16. [Threading and MPI discipline](#threading-and-mpi-discipline)
+17. [Extension points](#extension-points)
 
 ## Overview
 
@@ -771,6 +772,8 @@ origin-plus-poles combination has received the least testing.
 - `species_enthalpy(eos, k, T_ion)` → partial specific enthalpy h_k(T_ion)
 - `mole_fraction(eos, k, Y, I, n_species)` → mole fraction X_k at a padded
   index, for the bulk species channel's sensor
+- `state_admissibility(eos, ρ, e, Yat, n_species)` → whether a point lies in the
+  model's thermodynamic domain, as flags (see below)
 
 Three implementations exercise the contract: `IdealMixture` (per-species γ_k
 and R_k), `Nasa9Mixture` (piecewise temperature-dependent cp), and
@@ -795,6 +798,62 @@ which enforces Σ_k J_k = 0 exactly. Enthalpy diffusion Σ h_k J_k enters the
 energy flux. `ArtParams.species_flux = :bulk` replaces the artificial part
 of this flux by one diffusive flux on every conserved variable (the species
 channel, above); the molecular part stays Fickian.
+
+A caloric model has no closed form for T(e), so `Nasa9Mixture` inverts
+Σ_k Y_k e_k(T) = e per point. `mixture_temperature_status` is a safeguarded
+Newton: it maintains a bracket from the sign of the residual, which is valid
+because the derivative of the residual is the mixture cv, and replaces a Newton
+step that leaves the bracket with the geometric mean of the bracket rather than
+its midpoint, since the search range spans twelve decades. Success is the
+residual criterion |f| ≤ rtol·T·cv, which is the same statement as a Newton step
+of at most rtol·T and needs no separate energy scale; in a formation-enthalpy
+gauge no such scale exists, because e is dominated by a constant that says
+nothing about the accuracy of T. The routine returns the temperature and a
+status rather than raising, because it runs inside a per-point loop.
+
+Outside the union of a species' fitted intervals nothing in the data constrains
+the polynomial, and `Nasa9Mixture(extrapolate = ...)` names which extension is
+taken. `:polynomial` (default) evaluates the nearest interval's fit, which is
+conventional and can turn cp negative far outside the range; `:linear` freezes
+cp at the interval endpoint and continues h linearly, which stays monotone and
+therefore invertible at any temperature. Either way the recovery reports that it
+was extrapolated. Run past 20000 K, the bundled CO₂ fit inverts an energy built
+at 30000 K to about 62000 K under `:polynomial` and to 30000 K under `:linear`.
+
+## State validity and its policy
+
+Three properties are asked of every interior point of a conserved state: that
+its components are finite, that its partial densities are positive, and that the
+EOS accepts the point as one of its own. `state_report` performs that sweep and
+reduces it, so every rank holds the same `StateReport` and any verdict taken
+from it is collective. `StepControl.validity` is what happens to a state the
+report rejects:
+
+| mode | effect |
+|---|---|
+| `:strict` (default) | raise `SolverFailure(:invalid_state)` |
+| `:permissive` | accept the state and report what it contains |
+| `:repair` | apply the positivity failsafe, report the substitutions, then reject what remains |
+
+`setup` validates the initial state. `StateGuard`, paired with a trigger and
+passed to `run!` as a callback, validates each accepted state, including the one
+the run returns: `run!`'s own checks read the state *entering* a step, so an
+`nmax`, `tfinal`, or callback exit leaves the final result uninspected. A guard
+raises from inside a callback, which is collective but is not the retryable
+path; `check_step` remains the check `run!` rolls back on.
+
+The validation applies no universal internal-energy positivity test. Internal
+energy is defined only up to the gauge its enthalpy reference fixes, so e < 0 is
+a failure for a calorically perfect gas, where e = cv T, and the ordinary case
+for a NASA-9 mixture in the formation gauge. The question therefore goes to the
+EOS through `state_admissibility`, which is the same reason `primitives!` can
+floor T_ion where e ≤ 0 without any model-independent statement about it.
+
+The distinction between rejecting and reporting rests on measurement rather than
+taste. Converging-shock runs carry cells of negative internal energy for their
+whole duration while reaching the correct plateau, and repairing those cells
+terminates the run. `reference/CALIBRATION.md` records the budget; `:permissive`
+is the mode that makes such a run observable without changing it.
 
 ## Characteristic boundary conditions
 

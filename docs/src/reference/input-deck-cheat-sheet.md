@@ -179,7 +179,8 @@ conductivity, and species diffusion. The sensor symbols select the fields;
 ```julia
 StepControl(; predict=0.0, max_growth=0.0, landing_steps=2,
     dt_min=0.0, dt_min_ratio=1e-8, retries=0, cfl_backoff=0.5,
-    savepoint_interval=25, floor_ratio=0.0, floor_scope=:representable)
+    savepoint_interval=25, floor_ratio=0.0, floor_scope=:representable,
+    validity=:strict)
 ```
 
 | Keyword | Meaning |
@@ -192,9 +193,21 @@ StepControl(; predict=0.0, max_growth=0.0, landing_steps=2,
 | `savepoint_interval` | Steps between rollback savepoints |
 | `floor_ratio` | Positivity failsafe strength; `0` disables |
 | `floor_scope` | `:representable` or `:internal_energy` repair policy |
+| `validity` | `:strict`, `:permissive`, or `:repair` state-validation policy |
 
 For production runs set `nmax` in `run!`; use `retries=2–4` for difficult startup
 transients and lower `cfl` for converging shocks.
+
+`setup` validates the initial state under `validity`. To validate each accepted
+state during a run, including the one it returns, pass a guard as a callback:
+
+```julia
+run!(solver, Q; tfinal=1.0, callback=state_guard(solver, Q))
+```
+
+A converging-shock run integrates through cells the equation of state calls
+inadmissible and needs `validity=:permissive`, which reports them instead of
+rejecting them.
 
 ## Run control, callbacks, and output
 

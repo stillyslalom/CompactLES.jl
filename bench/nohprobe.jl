@@ -215,10 +215,27 @@ function main()
     try
         run!(solver, Q; tfinal = NOH_T - T0, nmax = opt.nmax, callback = cb)
         @printf("  reached t = %.5f after %d steps\n", solver.t + T0, solver.step)
+        ρ = case_line_profile(solver, Q)[2]
+        plateau, deficit, shock, l1pre = noh_metrics(xs, ρ, ν)
+        @printf("  plateau %.4f  wall deficit %+.0f%%", plateau, 100deficit)
+        @printf("  shock %.4f  L1 pre-shock %.2e\n", shock, l1pre)
     catch err
         err isa SolverFailure || rethrow()
         println("  FAILED: $(err.reason) at step $(solver.step)")
     end
+    # The repair budget of the run, whether or not it completed. Under
+    # scope=representable these count the condition without changing the
+    # trajectory; under scope=internal_energy they are what the repair cost.
+    # What a state validation would make of the state the run ends on. Under
+    # the default `validity = :strict` an ideal gas rejects every cell of the
+    # pressureless wall layer, which is the reason this case selects a policy
+    # rather than inheriting one.
+    println("  ", state_report(solver, Q))
+    ft = solver.floor_tally
+    @printf("  floor tally: %d step(s), %d cell(s) repaired,", ft.steps, ft.cells)
+    @printf(" %d below the internal-energy floor\n", ft.low_energy)
+    @printf("    mass added %.6e, energy added %.6e,", ft.mass, ft.energy)
+    @printf(" momentum removed %.6e\n", ft.momentum)
 end
 
 main()

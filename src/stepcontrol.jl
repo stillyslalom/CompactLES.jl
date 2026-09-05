@@ -186,6 +186,34 @@ Under either scope, every firing is counted in `solver.floor_tally`
 that check reads can no longer reach zero; `:dt_collapse` and `:nonfinite` still
 terminate a diverging run after the corresponding threshold is crossed. The
 repair changes states produced by the scheme but does not change the scheme.
+
+## State validity
+
+- `validity = :strict`: what a state validation does about a state it rejects.
+  The validation itself is [`state_report`](@ref), a collective sweep of the
+  conserved state applied by [`setup`](@ref) to the initial state and by
+  [`state_guard`](@ref) to accepted states during a run. The three modes differ
+  only in the response, not in what the sweep inspects.
+
+  - `:strict` raises [`SolverFailure`](@ref)`(:invalid_state)` for any point the
+    sweep rejects: a non-finite conserved value, a nonpositive mixture density,
+    a partial density below the dead band of the artificial mass-fraction
+    bound, or a point the EOS places outside its thermodynamic domain.
+  - `:permissive` accepts the state and reports what it contains. Converging
+    shocks integrate through inadmissible states for the length of a run that
+    reaches the correct answer, and `reference/CALIBRATION.md` records that
+    budget; such a run selects this mode explicitly.
+  - `:repair` applies the positivity failsafe above to the state first, reports
+    the substitutions it made, and then rejects whatever the repair could not
+    fix. It requires `floor_ratio > 0`, since that is where the repair and its
+    floors live, and the construction fails without it.
+
+  The verdict rests on reduced counts, so it is identical on every rank and a
+  rejection is raised everywhere at once rather than on the rank that saw it.
+
+The validation applies no universal internal-energy positivity test. Whether
+`e < 0` is a failure depends on the enthalpy gauge and the domain of the model,
+so the question is put to the EOS through `state_admissibility`.
 """
 Base.@kwdef struct StepControl
     predict::Float64 = 0.0
@@ -198,12 +226,13 @@ Base.@kwdef struct StepControl
     savepoint_interval::Int = 25
     floor_ratio::Float64 = 0.0
     floor_scope::Symbol = :representable
+    validity::Symbol = :strict
     # `landing_steps = 0` does not disable the shortening. The gap clip
     # is the same expression, so a scheduled instant would be overshot and its
     # trigger would fire late.
     function StepControl(predict, max_growth, landing_steps, dt_min, dt_min_ratio,
                          retries, cfl_backoff, savepoint_interval, floor_ratio,
-                         floor_scope)
+                         floor_scope, validity)
         landing_steps >= 1 ||
             throw(ArgumentError("StepControl: landing_steps must be >= 1 " *
                                 "(1 is a hard clip onto the scheduled time)"))
@@ -216,8 +245,17 @@ Base.@kwdef struct StepControl
         floor_scope in (:representable, :internal_energy) ||
             throw(ArgumentError("StepControl: floor_scope must be :representable " *
                                 "or :internal_energy, got :$floor_scope"))
+        validity in (:strict, :permissive, :repair) ||
+            throw(ArgumentError("StepControl: validity must be :strict, " *
+                                ":permissive or :repair, got :$validity"))
+        # The repair mode has nothing to repair with otherwise: the floors are
+        # derived from `floor_ratio`, and a zero ratio disables them.
+        validity === :repair && floor_ratio <= 0 &&
+            throw(ArgumentError("StepControl: validity = :repair requires a " *
+                                "positive floor_ratio"))
         new(predict, max_growth, landing_steps, dt_min, dt_min_ratio,
-            retries, cfl_backoff, savepoint_interval, floor_ratio, floor_scope)
+            retries, cfl_backoff, savepoint_interval, floor_ratio, floor_scope,
+            validity)
     end
 end
 
@@ -255,11 +293,71 @@ end
 FloorTally() = FloorTally(0, 0, 0, 0.0, 0.0, 0.0)
 
 """
+What one sweep of [`state_report`](@ref) found in a conserved state. All counts
+are points, summed over patches and reduced across the communicator, so every
+rank holds the same report and a verdict taken from it is collective.
+
+- `points`: interior points inspected.
+- `nonfinite`, `negative_density`, `negative_species`: points carrying
+  `STATE_NONFINITE`, `STATE_NEGATIVE_DENSITY`, and `STATE_NEGATIVE_SPECIES`.
+  The last counts a mass fraction below `-ArtParams.Y_tolerance`, the dead band
+  of the artificial bound, not every excursion a filtered interface leaves.
+- `inadmissible`, `unrecoverable`, `extrapolated`: points the EOS flagged
+  through `state_admissibility`. A point with a nonpositive mixture density is
+  not put to the EOS, since its internal energy cannot be formed.
+- `rho_min`, `e_min`: the smallest mixture density and specific internal energy
+  found, the two scales the positivity failsafe floors against. `e_min` is
+  `Inf` when no point had a positive density.
+
+A report with every count at zero describes a valid state; [`state_valid`](@ref)
+is that test. Counts are independent, so one point can raise several of them.
+"""
+struct StateReport
+    points::Int
+    nonfinite::Int
+    negative_density::Int
+    negative_species::Int
+    inadmissible::Int
+    unrecoverable::Int
+    extrapolated::Int
+    rho_min::Float64
+    e_min::Float64
+end
+
+StateReport() = StateReport(0, 0, 0, 0, 0, 0, 0, Inf, Inf)
+
+"""
+    state_valid(report) -> Bool
+
+Whether [`state_report`](@ref) found nothing to reject. Extrapolated points
+count as a rejection: the EOS evaluated outside the range its data covers, and
+whether that is acceptable is a decision for the run, not for the model.
+"""
+state_valid(r::StateReport) =
+    r.nonfinite == 0 && r.negative_density == 0 && r.negative_species == 0 &&
+    r.inadmissible == 0 && r.unrecoverable == 0 && r.extrapolated == 0
+
+function Base.show(io::IO, r::StateReport)
+    print(io, "StateReport(", r.points, " points")
+    for (name, count) in (("nonfinite", r.nonfinite),
+                          ("negative density", r.negative_density),
+                          ("negative species", r.negative_species),
+                          ("inadmissible", r.inadmissible),
+                          ("unrecoverable", r.unrecoverable),
+                          ("extrapolated", r.extrapolated))
+        count > 0 && print(io, ", ", count, " ", name)
+    end
+    print(io, "; rho_min = ", r.rho_min, ", e_min = ", r.e_min, ")")
+end
+
+"""
     SolverFailure
 
 Thrown by [`run!`](@ref) when the timestep or the state fails a
 [`StepControl`](@ref) check and no retries remain. `reason` is one of
-`:nonfinite`, `:planck`, `:dt_min`, `:dt_collapse`, or `:negative_density`. The
+`:nonfinite`, `:planck`, `:dt_min`, `:dt_collapse`, `:negative_density`, or
+`:invalid_state`, the last being a state the validation rejected under
+`StepControl.validity`. The
 remaining fields record the state the check rejected: `step`, `t`, `dt`, `cfl`,
 and a `detail` string describing the failure, which `showerror` prints below the
 summary line.
@@ -281,6 +379,12 @@ function Base.showerror(io::IO, e::SolverFailure)
                   "`StepControl(retries = 4)`\n  restores a savepoint and lowers ",
                   "the CFL after this failure, while retaining the initial CFL ",
                   "after\n  a successful startup. See reference/CALIBRATION.md.")
+    elseif e.reason === :invalid_state
+        print(io, "\n  `StepControl(validity = :permissive)` accepts and reports ",
+                  "such a state instead,\n  which converging-shock cases require; ",
+                  "`validity = :repair` with a positive floor_ratio\n  repairs ",
+                  "what the positivity failsafe covers first. Both are documented ",
+                  "under\n  StepControl and in reference/CALIBRATION.md.")
     end
 end
 
@@ -336,5 +440,32 @@ function check_step(control::StepControl, dt, rho_min, dt_seen, step, t, cfl)
                         "seen this run ($dt_seen)")
     end
     return nothing
+end
+
+"""
+    check_validity(control, report, stage, step, t, dt, cfl)
+        -> Union{Nothing,SolverFailure}
+
+Apply `control.validity` to a [`StateReport`](@ref) and return the failure it
+calls for, or `nothing`. `stage` names what was inspected, for the message
+only; `step`, `t`, `dt` and `cfl` are recorded on the failure and are not
+tested.
+
+`:permissive` never fails. `:strict` and `:repair` fail on any rejected point,
+the difference between them being that a caller in `:repair` mode has already
+applied the positivity failsafe, so what reaches here is what the repair could
+not fix.
+
+Pure, and not collective, but every count in `report` is already reduced, so the
+verdict agrees across the communicator and a caller may raise on it without
+deadlocking. This is the same property [`check_step`](@ref) relies on.
+"""
+function check_validity(control::StepControl, report::StateReport, stage,
+                        step, t, dt, cfl)
+    control.validity === :permissive && return nothing
+    state_valid(report) && return nothing
+    return SolverFailure(:invalid_state, step, t, dt, cfl,
+                         "$stage rejected under validity = :$(control.validity): " *
+                         "$report")
 end
 

@@ -23,7 +23,8 @@ DeviceBackend DirichletBC EOS EquationSet EveryStep EveryTime ExtrapolationBC
 FieldWriter FloorTally IdealMixture IdealSpecies Metric NSCBCInflowBC
 NSCBCOutflowBC Nasa9Interval Nasa9Mixture Nasa9Species NavierStokes1T
 NoSlipWallBC Numerics OriginBC PeriodicBC PoleBC Prim Problem ProgressLog
-SlipWallBC Solver SolverFailure SphericalMetric StepControl StiffenedGas Stretch
+SlipWallBC Solver SolverFailure SphericalMetric StateGuard StateReport
+StepControl StiffenedGas Stretch
 SwitchableBC Transport Trigger WhenState Workspace add_source! allocate_state
 apply_bcs! artificial_conductivity_scale boundary_plane cartesian_slice
 compact_d8 compact_filter compute_dt compute_rhs! conserved_from_prim
@@ -38,10 +39,11 @@ mpi_main nasa9_constant_cp next_time nlevels npatches nspecies pade_d1_4
 plane_profile profile_coordinate profile_spacing profileplot profileplot!
 read_nasa9 recover_primitives! refined_region refresh_primitives! revolve_profile
 rewind! run! save_checkpoint save_checkpoint_hdf5 save_hdf5 save_vtk setup
-sine_cluster species_enthalpy species_names species_pdf step! switch! switched
+sine_cluster species_enthalpy species_names species_pdf state_admissibility
+state_guard state_report state_valid step! switch! switched
 sync_levels! sync_patches! tanh_blend tke_profile total_energy
-turbulent_kinetic_energy validate_bc velocity volume_average volume_integral
-wall_internal_energy xcoord
+turbulent_kinetic_energy validate_bc validate_state! velocity volume_average
+volume_integral wall_internal_energy xcoord
 """)))
 
 const ADVANCED_QUALIFIED_API = (
@@ -55,6 +57,7 @@ const ADVANCED_QUALIFIED_API = (
 const EXTENSION_API = (
     :recover_primitives!, :species_names, :species_enthalpy, :eos_phi,
     :eos_dphi_dY, :artificial_conductivity_scale, :wall_internal_energy,
+    :state_admissibility,
     :conserved_parity, :enforce!, :correct_rhs!, :validate_bc, :isperiodic,
     :fired!, :next_time, :rewind!,
 )
