@@ -28,6 +28,8 @@ points at them and does not restate them.
 18. [Hierarchy checkpoint, restart and multiblock output (September 2026)](#hierarchy-checkpoint-restart-and-multiblock-output-september-2026)
 19. [The mass-fraction bound (September 2026)](#the-mass-fraction-bound-september-2026)
 20. [Sensor length scaling on stretched and curvilinear grids (September 2026)](#sensor-length-scaling-on-stretched-and-curvilinear-grids-september-2026)
+21. [The bulk species channel (September 2026)](#the-bulk-species-channel-september-2026)
+22. [P0 runtime correctness — R1 to R4 (September 2026)](#p0-runtime-correctness--r1-to-r4-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -1159,3 +1161,77 @@ channel. Also recorded: with the species channel off altogether the
 order study's smooth bounded profile is 40× more accurate than under the
 default D\*, a cost of the ringing sensor on a resolved extremum. Serial
 suite 145 testsets; MPI 216 checks.
+
+## P0 runtime correctness — R1 to R4 (September 2026)
+
+Four corrections from the September source review, delivered together because
+R3 and R4 meet in the EOS and R1 and R2 meet in `run!`.
+
+**Diagnostics no longer move the trajectory (R1).** The artificial coefficient
+arrays are the only per-point state outliving the step that filled them:
+`max_rate` sizes the next step from them and `_tag_sensor_point!` reads them at
+a regrid check. Every path reaching `compute_artificial!` from outside the
+right-hand side now runs inside `preserving_artificial`, which snapshots and
+restores them, so `field_array`, `save_vtk`, `save_hdf5` and `dissipation_rate`
+leave the trajectory alone. The audit of the second consumer found a separate
+defect: `_tag_sweep!` read the primitives without refreshing them, so a
+sensor-tagged regrid depended on which Runge-Kutta stage the previous step
+ended in.
+
+**The clock is guaranteed to advance (R2).** `tfinal` and each scheduled
+instant convert to the clock's type once, the landing tolerance is measured in
+that precision, and progress is tested after every clip on the stored result of
+`t + dt`. A landing step the clock cannot take is discarded for the full step;
+one that cannot advance it at all raises `SolverFailure(:no_progress)`. A
+Float32 run given a Float64 `tfinal = 0.7` previously took a 1.19e-8 remainder
+for every one of its 400 steps and stopped at `nmax`; it now ends in 80.
+
+**State validity is a policy, and its verdict is collective (R3).**
+`state_admissibility` is an EOS dispatch point, so admissibility is asked of
+the model rather than imposed as a universal `e > 0`: an ideal mixture answers
+on `cv_mix > 0 && e > 0`, a stiffened gas on `e - p_inf/rho`, a NASA-9 mixture
+on the outcome of its inversion. `StepControl.validity` selects strict
+rejection, an explicitly permissive run, or repair-then-reject, and
+`validity_interval` adds a per-step sweep. `run!` validates the state entering
+the call, the state it returns, and the state entering a step on that cadence.
+The endpoint check sits inside the step loop and hands a rejection to the same
+rollback the step checks use, so an invalid result is retryable rather than
+raised past recovery; the three ways a run ends are checked alike. Verdicts
+rest on reduced counts, and the multi-rank suite confirms every rank raises the
+identical failure instead of hanging. `reference/CALIBRATION.md` carries the
+re-measured Noh repair tradeoff and the budget the permissive cases run under.
+
+The positivity failsafe's two scopes were documented rather than changed, after
+a claim that `:representable` left a repaired point worse than it found it was
+measured and withdrawn. Raising a density toward the floor at fixed momentum
+and total energy increases the internal energy density monotonically, so the
+repair cannot deepen the deficit it leaves; on a test point it moved rho\*e from
+-833331.3 to -249998.0. Where each scope acts it reaches `e_floor` exactly:
+`:representable` with the momentum untouched, `:internal_energy` with the total
+energy conserved bitwise and the momentum change tallied. `:representable` does
+not promise strict admissibility, and strict validation rejects what it leaves.
+
+**NASA-9 recovery reports on itself (R4).** `mixture_temperature_status`
+replaces a bare 30-iteration loop with a safeguarded Newton iteration, a
+bracket maintained from the residual's sign, geometric-mean bisection over a
+range spanning twelve decades, and a residual criterion written through the
+derivative because a formation-enthalpy gauge admits no absolute energy scale.
+Converging inversions are bit-identical to the previous routine; an earlier
+draft that tested the bracket before convergence broke three of sixteen cases,
+which is why the convergence test precedes the safeguard. `extrapolate` gained
+`:missing` and became the control over whether leaving the fitted range ends a
+run: `:polynomial` and `:linear` report an extrapolated point and carry it,
+`:missing` marks it inadmissible as well. At 30000 K the CO2 fit inverts to
+62485 K under the first and 30000 K under the second.
+
+Ten shipped cases now declare `validity = :permissive`, each bounded by its
+caller on affected-cell count and worst defect so a violation cannot grow
+unseen. Whether that many opt-outs means the default or the species threshold
+is wrong is N13. Two Float32 tests that appeared to need the same opt-out were
+putting nondimensional temperatures to fits declared in kelvin, one of them
+mixing a 0.1-to-10 range and the CEA 200-to-6000 range in a single mixture;
+they now run at 300 K and assert validity positively.
+
+Convergence orders and error magnitudes came through bit-identical, and the
+validation battery reproduced every recorded figure. Serial suite 159 testsets,
+2254 assertions; MPI 242 checks.

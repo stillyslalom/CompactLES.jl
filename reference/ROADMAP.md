@@ -26,7 +26,7 @@ below exposed behavior outside those passing checks.
 
 ## P0: runtime correctness
 
-- [ ] **R1 — Make diagnostics independent of integrator state.**
+- [x] **R1 — Make diagnostics independent of integrator state.**
   In a 64-point Sod case at CFL 0.15, after one step, requesting
   `field_array(..., :beta_art)` changed the next dt from 0.000587255 to
   0.000961137 without changing Q. Artificial-field output and `dissipation_rate`
@@ -39,7 +39,7 @@ below exposed behavior outside those passing checks.
   **Code:** [viz.jl](../src/viz.jl), [io.jl](../src/io.jl),
   [diagnostics.jl](../src/diagnostics.jl), [timestep.jl](../src/timestep.jl).
 
-- [ ] **R2 — Guarantee clock progress and reachable endpoints.**
+- [x] **R2 — Guarantee clock progress and reachable endpoints.**
   A Float32 run with Float64 `tfinal=0.7` stalls at 0.699999988079071,
   repeatedly taking a 1.1920929e-8 remainder that cannot advance its clock.
   Define endpoint conversion/tolerance semantics and check progress after all
@@ -50,7 +50,7 @@ below exposed behavior outside those passing checks.
   documented time accuracy. Avoid an endless test by bounding steps.
   **Code:** [timestep.jl](../src/timestep.jl), [callbacks.jl](../src/callbacks.jl).
 
-- [ ] **R3 — Validate accepted and returned states under an explicit policy.**
+- [x] **R3 — Validate accepted and returned states under an explicit policy.**
   The current guard checks mixture density and dt before stepping. Probes completed
   with ideal-gas specific internal energy -1 or species densities (-0.1, 1.1).
   A uniform density sink took rho from 1 to -1 at `tfinal=0.02` and returned
@@ -66,7 +66,7 @@ below exposed behavior outside those passing checks.
   **Code:** [stepcontrol.jl](../src/stepcontrol.jl),
   [physics.jl](../src/physics.jl), [problem.jl](../src/problem.jl).
 
-- [ ] **R4 — Make NASA-9 recovery failure observable.**
+- [x] **R4 — Make NASA-9 recovery failure observable.**
   `mixture_temperature` currently returns its estimate after 30 iterations or
   nonpositive mixture cv without a final residual/status check. Outside-range
   polynomial evaluation also proceeds silently.
@@ -182,6 +182,25 @@ The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
   at three or more levels. Add a refreshed-coefficient substep check where needed.
   **Gate:** route a violation to the collective rollback/acceptance path from R3;
   an exception inside recursive stepping must not bypass retry handling.
+
+- [ ] **N13 — Settle the default state-validity policy and its species band.**
+  Ten shipped cases select `validity = :permissive`, in three groups: the
+  mass-fraction band at a filtered species interface, including one at uniform
+  p, u and rho where nothing but the filter acts; negative internal energy at
+  the Noh wall and behind the Sedov blast; and the near-vacuum a strong shock
+  leaves. A default that most shock-capturing runs must opt out of is either
+  the wrong default or the wrong threshold, and the two are separable. The
+  species test currently borrows `ArtParams.Y_tolerance`, which was calibrated
+  as the dead band of a regularization term and not as a validity bound.
+  Measure what excursion a converged interface actually carries as a function
+  of resolution, decide the threshold from that, and then decide whether
+  `:strict` or `:permissive` is the better default.
+  **Gate:** the shipped cases pass under the chosen default without per-case
+  opt-outs beyond those the physics genuinely requires, and each remaining
+  opt-out keeps a bound on affected-cell count and worst defect. Record the
+  threshold and its basis in [CALIBRATION.md](CALIBRATION.md).
+  **Code:** [problem.jl](../src/problem.jl), [stepcontrol.jl](../src/stepcontrol.jl),
+  [cases.jl](../test/cases.jl).
 
 ### Independent validation and regression coverage
 
