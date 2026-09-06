@@ -26,6 +26,8 @@
 #                 C8 filter's per-rank floor at any rank count (default 16)
 #   steps=<N>     steps to time per rank; the first carries its compilation
 #                 and the rest give the steady-state cost (default 4)
+#   sweep=<N>     time steps at N grid sizes (g, 2g, ...) to separate a cost
+#                 paid per point from one paid per call; 1 disables (default 2)
 #   flags=<bool>  run the launch-flag matrix (default true)
 #   io=<bool>     time a 64 MiB write and read on each node-local candidate
 #   sizes=<bool>  measure depot directory sizes with du (default true)
@@ -43,7 +45,8 @@ const t_load = time()
 
 const CL = CompactLES
 const OPT = CL.script_args(ARGS, (stage = "", grid = 16, flags = true, io = true,
-                                  sizes = true, steps = 4, timeout = 120.0,
+                                  sizes = true, steps = 4, sweep = 2,
+                                  timeout = 120.0,
                                   maxstage = 25.0);
                            positional = (:stage,))
 
@@ -368,9 +371,15 @@ function probe_grid()
     return max(OPT.grid, 9 * maximum(dims))
 end
 
-function report_ranks()
-    g = probe_grid()
-    nsteps = max(2, OPT.steps)
+"""
+    step_costs(g, nsteps) -> NamedTuple
+
+Build a solver at cube edge `g` and time `nsteps` steps, one per `run!` call, so
+the first carries its compilation and the rest give the steady-state cost.
+`waits` is this rank's time inside the run-wide collectives, as `Solver` charges
+it; it does not include the compact solves' own exchanges.
+"""
+function step_costs(g, nsteps)
     s, t_build, c_build = timed() do
         Solver(n_global = (g, g, g), L_domain = (2π, 2π, 2π), bcs = per3,
                art = ArtParams(enabled = false))
@@ -380,17 +389,68 @@ function report_ranks()
         initialize!(s, Q, (x, y, z) -> Prim(u = (0.1sin(x), 0, 0), p = 1.0,
                                             rho = 1.0))
     end
-    # One step per call, so the first carries its compilation and the rest give
-    # the steady-state cost of a step on this node.
-    walls, comps = Float64[], Float64[]
+    walls, comps, waits = Float64[], Float64[], Float64[]
     for k in 1:nsteps
         _, w, c = timed() do
             run!(s, Q; tfinal = 1e9, nmax = k)
         end
         push!(walls, w)
         push!(comps, c)
+        push!(waits, s.wall_wait)
     end
-    rest = sort(walls[2:end])[max(1, cld(length(walls) - 1, 2))]
+    return (walls = walls, comps = comps, waits = waits,
+            points = prod(s.decomp.n_local), t_build = t_build,
+            c_build = c_build, t_init = t_init, c_init = c_init)
+end
+
+median_of(v) = isempty(v) ? 0.0 : sort(v)[max(1, cld(length(v), 2))]
+
+# Whether a step costs per point or per call. Doubling the edge multiplies the
+# points by eight; a step time that does not follow is dominated by something
+# paid once per call rather than per point, which on a shared node is usually
+# the MPI library's wait behaviour and not the arithmetic.
+function report_sweep(base, nsteps)
+    OPT.sweep <= 1 && return
+    rows = NTuple{4,Float64}[]
+    for m in 1:OPT.sweep
+        g = base * m
+        k = m == 1 ? nsteps : 2
+        r = step_costs(g, k)
+        steady = median_of(r.walls[2:end])
+        push!(rows, (Float64(g), Float64(r.points), steady,
+                     median_of(r.waits[2:end])))
+    end
+    hi = MPI.Allreduce([r[3] for r in rows], max, comm)
+    hw = MPI.Allreduce([r[4] for r in rows], max, comm)
+    rank == 0 || return
+    println()
+    println("  step cost against grid size, max over ranks:")
+    println("    ", rpad("grid", 8), rpad("points/rank", 14), rpad("s/step", 10),
+            rpad("ns/point", 12), "wait/step")
+    for (i, r) in enumerate(rows)
+        println("    ", rpad(Int(r[1]), 8), rpad(Int(r[2]), 14),
+                rpad(round(hi[i]; digits = 3), 10),
+                rpad(round(Int, 1e9 * hi[i] / r[2]), 12),
+                round(hw[i]; digits = 3))
+    end
+    if length(rows) >= 2
+        grew = rows[end][2] / rows[1][2]
+        slowed = hi[1] > 0 ? hi[end] / hi[1] : 0.0
+        println("    points x", round(grew; digits = 1), ", step time x",
+                round(slowed; digits = 1),
+                slowed < 0.25 * grew ?
+                "  -- paid per call, not per point" :
+                "  -- paid per point; the node is doing the arithmetic")
+    end
+end
+
+function report_ranks()
+    g = probe_grid()
+    nsteps = max(2, OPT.steps)
+    r = step_costs(g, nsteps)
+    t_build, c_build, t_init, c_init = r.t_build, r.c_build, r.t_init, r.c_init
+    walls, comps = r.walls, r.comps
+    rest = median_of(walls[2:end])
     names = ("MPI.Init", "package load", "Solver", "initialize!", "step 1",
              "steps 2..$nsteps")
     mine = [t_mpi - t_start, t_load - t_mpi, t_build, t_init, walls[1], rest]
@@ -400,7 +460,9 @@ function report_ranks()
     tot = MPI.Allreduce(mine, +, comm)
     chi = MPI.Allreduce(comp, max, comm)
     ctot = MPI.Allreduce(comp, +, comm)
-    rank == 0 || return
+    if rank != 0
+        return g, nsteps
+    end
     println(HEAD)
     println("per-rank startup at ", np, " rank(s), grid ", g, "^3, seconds:")
     println("  ", rpad("phase", 16), rpad("min", 9), rpad("mean", 9),
@@ -418,6 +480,7 @@ function report_ranks()
             round(sum(ctot[3:end]); digits = 1), " s of allocation")
     println("  package load, summed over ranks:                       ",
             round(tot[2]; digits = 1), " s of allocation")
+    return g, nsteps
 end
 
 CL.mpi_main() do
@@ -439,6 +502,7 @@ CL.mpi_main() do
         flush(stdout)
     end
     MPI.Barrier(comm)
-    report_ranks()
+    g, nsteps = report_ranks()
+    report_sweep(g, nsteps)
     rank == 0 && println(HEAD)
 end
