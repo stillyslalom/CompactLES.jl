@@ -24,6 +24,8 @@
 #   grid=<N>      minimum cube edge for the per-rank step timing; raised to
 #                 9 x the largest decomposition dimension so it survives the
 #                 C8 filter's per-rank floor at any rank count (default 16)
+#   steps=<N>     steps to time per rank; the first carries its compilation
+#                 and the rest give the steady-state cost (default 4)
 #   flags=<bool>  run the launch-flag matrix (default true)
 #   io=<bool>     time a 64 MiB write and read on each node-local candidate
 #   sizes=<bool>  measure depot directory sizes with du (default true)
@@ -41,7 +43,7 @@ const t_load = time()
 
 const CL = CompactLES
 const OPT = CL.script_args(ARGS, (stage = "", grid = 16, flags = true, io = true,
-                                  sizes = true, timeout = 120.0,
+                                  sizes = true, steps = 4, timeout = 120.0,
                                   maxstage = 25.0);
                            positional = (:stage,))
 
@@ -91,6 +93,29 @@ function probe(cmd::Cmd; timeout::Float64 = OPT.timeout)
 end
 
 firstline(s) = isempty(s) ? "" : first(split(s, '\n'; limit = 2))
+
+# Compile time is measured, not inferred from a first-minus-second difference:
+# on a slow node a step costs more than the compilation inside it and the
+# difference is noise, which is what the counter avoids. Same accounting as
+# test/timing.jl, including its caveat that the counter sums compiler work over
+# threads and can exceed wall time when there is more than one.
+if isdefined(Base, :cumulative_compile_timing)
+    Base.cumulative_compile_timing(true)
+end
+
+function compile_ns()
+    isdefined(Base, :cumulative_compile_time_ns) || return UInt64(0)
+    t = Base.cumulative_compile_time_ns()
+    return t isa Tuple ? t[1] : t
+end
+
+"Evaluate `f()`, returning `(value, wall_seconds, compile_seconds)`."
+function timed(f)
+    c0 = compile_ns()
+    t0 = time()
+    v = f()
+    return (v, time() - t0, (compile_ns() - c0) / 1e9)
+end
 
 # stat -f names the filesystem behind a path, which is the whole question for a
 # depot: "nfs" or "lustre" answers differently from "tmpfs" or "xfs". Linux only;
@@ -157,8 +182,22 @@ function report_environment()
     println("                  a cache is keyed on the first two; see the flag",
             " matrix below")
     binary = try string(MPI.MPIPreferences.binary) catch; "unknown" end
-    println("MPI binary      : ", binary)
+    println("MPI binary      : ", binary,
+            endswith(binary, "_jll") ?
+            "   <-- BUNDLED JLL; see reference/CLUSTER.md" : "")
     println("MPI library     : ", MPI.MPI_LIBRARY, " ", MPI.MPI_LIBRARY_VERSION)
+    # The preference is per-project, so `--project=.` in the package directory
+    # reports the package's own environment and not the one a production launch
+    # uses. Probing the wrong project reports the wrong MPI and, because the
+    # workload below is gated on it, the wrong precompile answer too.
+    if endswith(binary, "_jll")
+        println("                  this project is not configured against the",
+                " system MPI, so it is")
+        println("                  not what production runs; re-probe with the",
+                " --project the launch")
+        println("                  line uses. Selecting the system binary also",
+                " closes the gate below.")
+    end
     # The workload in src/precompile.jl is gated on this. Under a system binary it
     # does not run, so every rank compiles the solver tree itself at startup,
     # which is the cost the rest of this report is about.
@@ -331,31 +370,54 @@ end
 
 function report_ranks()
     g = probe_grid()
-    t_build = @elapsed s = Solver(n_global = (g, g, g), L_domain = (2π, 2π, 2π),
-                                  bcs = per3, art = ArtParams(enabled = false))
+    nsteps = max(2, OPT.steps)
+    s, t_build, c_build = timed() do
+        Solver(n_global = (g, g, g), L_domain = (2π, 2π, 2π), bcs = per3,
+               art = ArtParams(enabled = false))
+    end
     Q = allocate_state(s)
-    t_init = @elapsed initialize!(s, Q, (x, y, z) ->
-        Prim(u = (0.1sin(x), 0, 0), p = 1.0, rho = 1.0))
-    t_step1 = @elapsed run!(s, Q; tfinal = 1e9, nmax = 1)
-    t_step2 = @elapsed run!(s, Q; tfinal = 1e9, nmax = 2)
-    mine = [t_mpi - t_start, t_load - t_mpi, t_build, t_init, t_step1, t_step2]
+    _, t_init, c_init = timed() do
+        initialize!(s, Q, (x, y, z) -> Prim(u = (0.1sin(x), 0, 0), p = 1.0,
+                                            rho = 1.0))
+    end
+    # One step per call, so the first carries its compilation and the rest give
+    # the steady-state cost of a step on this node.
+    walls, comps = Float64[], Float64[]
+    for k in 1:nsteps
+        _, w, c = timed() do
+            run!(s, Q; tfinal = 1e9, nmax = k)
+        end
+        push!(walls, w)
+        push!(comps, c)
+    end
+    rest = sort(walls[2:end])[max(1, cld(length(walls) - 1, 2))]
+    names = ("MPI.Init", "package load", "Solver", "initialize!", "step 1",
+             "steps 2..$nsteps")
+    mine = [t_mpi - t_start, t_load - t_mpi, t_build, t_init, walls[1], rest]
+    comp = [0.0, 0.0, c_build, c_init, comps[1], sum(comps[2:end])]
     lo = MPI.Allreduce(mine, min, comm)
     hi = MPI.Allreduce(mine, max, comm)
     tot = MPI.Allreduce(mine, +, comm)
+    chi = MPI.Allreduce(comp, max, comm)
+    ctot = MPI.Allreduce(comp, +, comm)
     rank == 0 || return
     println(HEAD)
-    println("per-rank startup at ", np, " rank(s), grid ", g, "^3 (seconds):")
-    println("  ", rpad("phase", 16), rpad("min", 10), rpad("mean", 10), "max")
-    for (i, name) in enumerate(("MPI.Init", "package load", "Solver",
-                                "initialize!", "first step", "second step"))
-        println("  ", rpad(name, 16), rpad(round(lo[i]; digits = 2), 10),
-                rpad(round(tot[i] / np; digits = 2), 10),
-                round(hi[i]; digits = 2))
+    println("per-rank startup at ", np, " rank(s), grid ", g, "^3, seconds:")
+    println("  ", rpad("phase", 16), rpad("min", 9), rpad("mean", 9),
+            rpad("max", 9), "compiling (max)")
+    for (i, name) in enumerate(names)
+        println("  ", rpad(name, 16), rpad(round(lo[i]; digits = 2), 9),
+                rpad(round(tot[i] / np; digits = 2), 9),
+                rpad(round(hi[i]; digits = 2), 9),
+                i <= 2 ? "n/a" : string(round(chi[i]; digits = 2)))
     end
-    println("  compile inside the first step (max): ",
-            round(hi[5] - lo[6]; digits = 2), " s, paid on each of ", np, " ranks")
-    println("  summed over ranks, load + first step: ",
-            round(tot[2] + tot[5]; digits = 1), " s of allocation")
+    println("  the last column is compiler work, from the same counter",
+            " test/timing.jl uses;")
+    println("  it sums over threads, so it can exceed the wall time beside it.")
+    println("  compiling after the package loaded, summed over ranks: ",
+            round(sum(ctot[3:end]); digits = 1), " s of allocation")
+    println("  package load, summed over ranks:                       ",
+            round(tot[2]; digits = 1), " s of allocation")
 end
 
 CL.mpi_main() do
