@@ -27,6 +27,10 @@ using CompactLES
 using CompactLES.ThreadPinning
 const t_load = time()
 
+# `script_args`, `script_grid` and `Decomp` are not exported; the alias is
+# how the rest of the repository's scripts reach them.
+const CL = CompactLES
+
 # Linux exposes the affinity mask the scheduler handed this process. This is the
 # number that matters, not Sys.CPU_THREADS: the whole node is visible to every
 # rank regardless of what it was actually given.
