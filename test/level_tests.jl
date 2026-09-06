@@ -1322,7 +1322,11 @@ end
         run!(s, states; tfinal=tfinal, nmax=400, callback=record)
         return ts, kes, raw
     end
-    tfinal = 0.3
+    # Both extrema are reached inside the first thirty steps: at t = 0.3
+    # the drift maximum and the double-count minimum come out the same
+    # numbers to every digit, so the second half of that run measured
+    # nothing and cost half the testset.
+    tfinal = 0.15
     s0 = mk()
     Q0 = allocate_state(s0)
     initialize!(s0, Q0, tgv)
@@ -1344,7 +1348,7 @@ end
     ref = [t <= ts0[1] ? kes0[1] : interp(t) for t in ts1]
     drift = maximum(abs.(kes1 .- ref) ./ ref)
     double = minimum((raw1 .- kes1) ./ kes1)
-    # Measured: the two histories take the same 61 steps to t = 0.3 and
+    # Measured: the two histories take the same 31 steps to t = 0.15 and
     # stay within 2.5e-4 of each other, the sampling difference above;
     # the unmasked sum sits 1.4e-2 above throughout.
     @info "refined TGV energy history" steps=(length(ts0), length(ts1)) drift double
