@@ -9,6 +9,20 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+# JET is not a dependency of this package. It resolves from the default
+# environment, which stays on the load path under `--project=.`, so it is
+# installed once per Julia version rather than added to Project.toml. Say that
+# rather than failing with "Package JET not found in current path".
+if Base.find_package("JET") === nothing
+    println("""
+    bench/jetcheck.jl needs JET, which is not a dependency of this package.
+    Install it in your default environment, which stays on the load path
+    under --project=. :
+
+        julia -e 'import Pkg; Pkg.add("JET")'
+    """)
+    exit(1)
+end
 using JET, Printf
 const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)

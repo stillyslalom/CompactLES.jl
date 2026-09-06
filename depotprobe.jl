@@ -102,7 +102,9 @@ firstline(s) = isempty(s) ? "" : first(split(s, '\n'; limit = 2))
 # difference is noise, which is what the counter avoids. Same accounting as
 # test/timing.jl, including its caveat that the counter sums compiler work over
 # threads and can exceed wall time when there is more than one.
-if isdefined(Base, :cumulative_compile_timing)
+const COMPILE_TIMING = isdefined(Base, :cumulative_compile_timing) &&
+                       isdefined(Base, :cumulative_compile_time_ns)
+if COMPILE_TIMING
     Base.cumulative_compile_timing(true)
 end
 
@@ -603,9 +605,19 @@ function report_ranks()
                 rpad(round(hi[i]; digits = 2), 9),
                 i <= 2 ? "n/a" : string(round(chi[i]; digits = 2)))
     end
-    println("  the last column is compiler work, from the same counter",
-            " test/timing.jl uses;")
-    println("  it sums over threads, so it can exceed the wall time beside it.")
+    if COMPILE_TIMING
+        println("  the last column is compiler work, from the same counter",
+                " test/timing.jl uses;")
+        println("  it sums over threads, so it can exceed the wall time",
+                " beside it.")
+    else
+        println("  this Julia has no compile-time counter, so the last column",
+                " reads zero and")
+        println("  means nothing. Compare step 1 against the later steps",
+                " instead: they carry")
+        println("  no compilation, so a step as slow as the first is slow",
+                " for another reason.")
+    end
     println("  compiling after the package loaded, summed over ranks: ",
             round(sum(ctot[3:end]); digits = 1), " s of allocation")
     println("  package load, summed over ranks:                       ",
