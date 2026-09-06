@@ -816,9 +816,22 @@ the polynomial, and `Nasa9Mixture(extrapolate = ...)` names which extension is
 taken. `:polynomial` (default) evaluates the nearest interval's fit, which is
 conventional and can turn cp negative far outside the range; `:linear` freezes
 cp at the interval endpoint and continues h linearly, which stays monotone and
-therefore invertible at any temperature. Either way the recovery reports that it
-was extrapolated. Run past 20000 K, the bundled CO₂ fit inverts an energy built
-at 30000 K to about 62000 K under `:polynomial` and to 30000 K under `:linear`.
+therefore invertible at any temperature. Run past 20000 K, the bundled CO₂ fit
+inverts an energy built at 30000 K to about 62000 K under `:polynomial` and to
+30000 K under `:linear`.
+
+That setting also decides whether leaving the range ends a run. `:polynomial`
+and `:linear` are statements that the extension is acceptable for the
+calculation at hand, so a point outside the data is reported as extrapolated
+and carried. `:missing` is the statement that the fit is undefined there: it
+evaluates as `:linear` does, so the step completes and the state can be read
+back, but the point is reported inadmissible as well as extrapolated and a run
+under `validity = :strict` fails on it. The strictness therefore sits with the
+model, which knows what its data covers, rather than with the state validation,
+which does not. A temperature outside a fit's declared interval is frequently a
+units error rather than a physical excursion, since NASA-9 intervals are in
+kelvin; a nondimensional state put to a dimensional fit is outside it at every
+point.
 
 ## State validity and its policy
 

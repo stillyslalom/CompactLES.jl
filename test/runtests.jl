@@ -176,28 +176,30 @@ end
 
 @testset "Float32 built-in EOS and closed boundary matrix" begin
     T = Float32
-    # The constant-cp NASA-9 fit below carries a declared temperature range
-    # that a nondimensional state sits outside at every point, which the
-    # validation reports as extrapolation rather than an unusable state.
     typed_num(; enabled=false) =
         (transport=Transport{T}(), art=ArtParams{T}(enabled=enabled),
-         deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
-         control=StepControl(validity=:permissive))
+         deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
 
-    nasa = Nasa9Mixture([CL.nasa9_constant_cp(T, "gas", T(1), T(3.5))];
-                        T_guess=T(1))
+    # A NASA-9 fit is tabulated in kelvin over a declared interval, so the
+    # states here are physical: `nasa9_constant_cp` carries the CEA default
+    # range of 200 K to 6000 K, and a nondimensional temperature would be an
+    # argument outside it rather than a state the solver cannot carry.
+    nasa = Nasa9Mixture([CL.nasa9_constant_cp(T, "gas", T(1), T(3.5))])
     tn = typed_num()
     ns = Solver(n_global=(12, 12, 12),
                 L_domain=(T(2π), T(2π), T(2π)), bcs=per3, eos=nasa,
                 filter_interval=0, transport=tn.transport, art=tn.art,
-                deriv=tn.deriv, filt=tn.filt, control=tn.control)
+                deriv=tn.deriv, filt=tn.filt)
     NQ = allocate_state(ns)
-    initialize!(ns, NQ, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1, T_ion=1.7))
+    initialize!(ns, NQ, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1, T_ion=300))
     CL.exchange_state!(NQ, ns.decomp)
     CL.primitives!(ns, NQ)
     I = gidx(ns, 3, 4, 5)
     @test ns.p[I] ≈ T(1) rtol=T(2e-6)
-    @test ns.T_ion[I] ≈ T(1.7) rtol=T(2e-6)
+    # The inversion's own criterion is 32 eps(Float32) relative, so the
+    # recovered temperature is checked at that scale and not tighter.
+    @test ns.T_ion[I] ≈ T(300) rtol=T(1e-5)
+    @test state_valid(state_report(ns, NQ))
     run!(ns, NQ; tfinal=T(1e-4), nmax=1)
     @test all(isfinite, parent(NQ))
 
@@ -207,7 +209,7 @@ end
     ss = Solver(n_global=(24, 1, 1), L_domain=(one(T), one(T), one(T)),
                 bcs=(wall, per3[2], per3[3]), eos=sg,
                 filter_interval=0, transport=tn.transport, art=tn.art,
-                deriv=tn.deriv, filt=tn.filt, control=tn.control)
+                deriv=tn.deriv, filt=tn.filt)
     SQ = allocate_state(ss)
     initialize!(ss, SQ, (x, y, z) ->
         Prim(u=(0.1sin(T(π) * x), 0, 0), p=1, rho=1))
@@ -242,35 +244,32 @@ end
 
 @testset "Float32 varying-cp mixture and open/viscous boundaries" begin
     T = Float32
-    # The synthetic fits below carry a narrow declared temperature range and
-    # the states are nondimensional, so every point evaluates outside it. That
-    # is extrapolation, which the validation reports rather than a state the
-    # solver cannot carry, so these runs accept it explicitly.
     typed = (transport=Transport{T}(), art=ArtParams{T}(enabled=false),
-             deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
-             control=StepControl(validity=:permissive))
+             deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
 
-    # The first species has cp/R = 3.5 + 0.05T, so this exercises the
-    # iterative NASA-9 temperature recovery rather than its constant-cp limit.
+    # Both fits are tabulated over the CEA default range of 200 K to 6000 K and
+    # the states below are physical, so the mixture is evaluated where its data
+    # is defined. The first species has cp/R = 3.5 + 1e-3 T, which exercises the
+    # iterative temperature recovery rather than its constant-cp limit.
     varying = Nasa9Species{T}(
         name="varying", R=one(T),
-        a=(zero(T), zero(T), T(3.5), T(0.05), zero(T), zero(T), zero(T)),
-        Tmin=T(0.1), Tmax=T(10))
+        a=(zero(T), zero(T), T(3.5), T(1e-3), zero(T), zero(T), zero(T)))
     inert = CL.nasa9_constant_cp(T, "inert", T(0.7), T(2.8))
-    eos = Nasa9Mixture([varying, inert]; T_guess=one(T))
-    @test CL.species_cp(eos, 1, T(2)) > CL.species_cp(eos, 1, T(1))
+    eos = Nasa9Mixture([varying, inert])
+    @test CL.species_cp(eos, 1, T(600)) > CL.species_cp(eos, 1, T(300))
     ns = Solver(; n_global=(12, 12, 12),
                 L_domain=(T(2π), T(2π), T(2π)), bcs=per3, eos=eos,
                 filter_interval=0, typed...)
     NQ = allocate_state(ns)
     initialize!(ns, NQ, (x, y, z) ->
-        Prim(u=(0.1, 0, 0), p=1, T_ion=1.7, Y=(0.3, 0.7)))
+        Prim(u=(0.1, 0, 0), p=1, T_ion=300, Y=(0.3, 0.7)))
     CL.exchange_state!(NQ, ns.decomp)
     CL.primitives!(ns, NQ)
     I = gidx(ns, 3, 4, 5)
     @test ns.p[I] ≈ T(1) rtol=T(2e-6)
-    @test ns.T_ion[I] ≈ T(1.7) rtol=T(2e-6)
+    @test ns.T_ion[I] ≈ T(300) rtol=T(1e-5)
     @test ns.Y[1][I] ≈ T(0.3) rtol=T(2e-6)
+    @test state_valid(state_report(ns, NQ))
     run!(ns, NQ; tfinal=T(1e-4), nmax=1)
     @test all(isfinite, parent(NQ))
 
@@ -317,13 +316,8 @@ end
 @testset "Float32 resolved fold and moving subcycled level" begin
     T = Float32
     per = (PeriodicBC(), PeriodicBC())
-    # The synthetic fits below carry a narrow declared temperature range and
-    # the states are nondimensional, so every point evaluates outside it. That
-    # is extrapolation, which the validation reports rather than a state the
-    # solver cannot carry, so these runs accept it explicitly.
     typed = (transport=Transport{T}(), art=ArtParams{T}(enabled=false),
-             deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
-             control=StepControl(validity=:permissive))
+             deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
 
     sf = Solver(; n_global=(32, 16, 1),
                 L_domain=(one(T), T(2π), one(T)),
@@ -2386,6 +2380,24 @@ end
               CL.STATE_UNRECOVERABLE != 0
         @test state_admissibility(mix, T(1), e_cold, k -> Y[k], 2) &
               CL.STATE_EXTRAPOLATED != 0
+        # Extrapolating is not by itself a rejection: the polynomial and
+        # tangent policies say the extension is acceptable, so the point is
+        # reported and carried. `:missing` says the fit is undefined there and
+        # marks the same point inadmissible, which is what strict validation
+        # rejects.
+        for policy in (:polynomial, :linear)
+            m = Nasa9Mixture(["He", "CO2"]; extrapolate=policy)
+            f = state_admissibility(m, T(1), e_cold, k -> Y[k], 2)
+            @test f & CL.STATE_EXTRAPOLATED != 0
+            @test f & CL.STATE_INADMISSIBLE == 0
+        end
+        gone = Nasa9Mixture(["He", "CO2"]; extrapolate=:missing)
+        f = state_admissibility(gone, T(1), e_cold, k -> Y[k], 2)
+        @test f & CL.STATE_EXTRAPOLATED != 0
+        @test f & CL.STATE_INADMISSIBLE != 0
+        # Inside the range the setting changes nothing.
+        e_in = sum(Y[k] * CL.species_energy(gone, k, T(1000)) for k in 1:2)
+        @test state_admissibility(gone, T(1), e_in, k -> Y[k], 2) == CL.STATE_OK
         @test state_admissibility(mix, T(1),
                                   sum(Y[k] * CL.species_energy(mix, k, T(1000))
                                       for k in 1:2), k -> Y[k], 2) == CL.STATE_OK
@@ -2396,6 +2408,13 @@ end
     lin = Nasa9Mixture(["CO2"]; extrapolate=:linear)
     @test_throws ArgumentError Nasa9Mixture(["CO2"]; extrapolate=:constant)
     @test poly.extrapolate === :polynomial
+    # `:missing` evaluates as the tangent extension does, so a step in progress
+    # completes and the offending state can be read back; the difference is the
+    # verdict it carries, not the number it returns.
+    gone1 = Nasa9Mixture(["CO2"]; extrapolate=:missing)
+    for Tq in (250.0, 1000.0, 6000.0, 20000.0)
+        @test CL.species_cp(gone1, 1, Tq) === CL.species_cp(lin, 1, Tq)
+    end
     for Tq in (250.0, 1000.0, 6000.0, 20000.0)
         @test CL.species_cp(poly, 1, Tq) === CL.species_cp(lin, 1, Tq)
         @test CL.species_enthalpy(poly, 1, Tq) === CL.species_enthalpy(lin, 1, Tq)

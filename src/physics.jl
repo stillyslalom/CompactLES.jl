@@ -727,9 +727,18 @@ intervals, where nothing in the data constrains the fit:
   and continues `h` linearly from there. The extension is monotone in `T` and
   keeps the inversion bracketed at any temperature, at the cost of a first
   derivative that is discontinuous at the edge of the fitted range.
+- `:missing` treats the fit as undefined outside its intervals. The evaluation
+  still returns the `:linear` extension, so a step in progress completes and the
+  offending state can be inspected, but the point is reported as inadmissible
+  and not merely extrapolated, so a run under `StepControl(validity = :strict)`
+  fails on it.
 
-Either way an extrapolated state is reported as such rather than being treated
-as a valid recovery: successful evaluation of the polynomial is not evidence
+This setting, not the state validation, decides whether leaving the fitted range
+ends a run. `:polynomial` and `:linear` are both statements that extrapolation
+is acceptable for this calculation, and a run using them is not rejected for
+extrapolating; the points are still counted and reported. `:missing` is the
+statement that it is not acceptable. An extrapolated state is reported under
+every setting, since successful evaluation of the polynomial is not evidence
 that the state lies in the model's domain.
 """
 struct Nasa9Mixture{T} <: EOS
@@ -742,9 +751,9 @@ end
 function _nasa9_mixture(::Type{T}, species; T_guess=300.0,
                         extrapolate::Symbol=:polynomial) where {T<:AbstractFloat}
     isempty(species) && throw(ArgumentError("Nasa9Mixture requires at least one species"))
-    extrapolate in (:polynomial, :linear) ||
-        throw(ArgumentError("Nasa9Mixture: extrapolate must be :polynomial or " *
-                            ":linear, got :$extrapolate"))
+    extrapolate in (:polynomial, :linear, :missing) ||
+        throw(ArgumentError("Nasa9Mixture: extrapolate must be :polynomial, " *
+                            ":linear or :missing, got :$extrapolate"))
     sp = Nasa9Species{T}[_convert_nasa9_species(T, item) for item in species]
     return Nasa9Mixture{T}(sp, [x.R for x in sp], T(T_guess), extrapolate)
 end
@@ -806,7 +815,8 @@ end
 # select the nearest interval; `:linear` additionally evaluates the polynomial
 # at the interval endpoint and continues h with that constant cp, which is the
 # tangent extension of the fit and is monotone in T at any temperature.
-@inline _nasa9_linear(eos::Nasa9Mixture) = eos.extrapolate === :linear
+@inline _nasa9_linear(eos::Nasa9Mixture) =
+    eos.extrapolate === :linear || eos.extrapolate === :missing
 
 @inline function _nasa9_cp_over_R_at(species::Nasa9Species, T_ion, linear::Bool)
     interval = _nasa9_interval(species, T_ion)
@@ -1254,6 +1264,8 @@ the rest are independent bits, so one point can carry several.
   point. Only a model that inverts a caloric relation can report it.
 - `STATE_EXTRAPOLATED`: the EOS evaluated outside the range its data covers, so
   the recovered state rests on the extrapolation policy rather than on the fit.
+  Informational on its own: whether it is also a failure is the model's to say,
+  and a model that says so sets `STATE_INADMISSIBLE` beside it.
 """
 const STATE_OK = 0x00
 const STATE_NONFINITE = 0x01
@@ -1298,7 +1310,10 @@ end
 
 # The caloric inversion is the admissibility test: a state it cannot invert is
 # one this model does not describe, and one it inverts outside the fitted range
-# is described by the extrapolation policy rather than by the data.
+# is described by the extrapolation policy rather than by the data. Whether that
+# policy makes the state a failure is the mixture's `extrapolate` setting, not
+# the validation's: `:polynomial` and `:linear` accept the extension and report
+# the point, `:missing` declares the fit undefined there.
 @inline function state_admissibility(eos::Nasa9Mixture, ρ, e, Yat::F,
                                      n_species::Int) where {F}
     _, status = mixture_temperature_status(eos, e, Yat)
@@ -1308,6 +1323,7 @@ end
     end
     if (status & TEMPERATURE_OUT_OF_RANGE) != 0
         flags |= STATE_EXTRAPOLATED
+        eos.extrapolate === :missing && (flags |= STATE_INADMISSIBLE)
     end
     return flags
 end

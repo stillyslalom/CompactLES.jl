@@ -343,7 +343,10 @@ rank holds the same report and a verdict taken from it is collective.
   of the artificial bound, not every excursion a filtered interface leaves.
 - `inadmissible`, `unrecoverable`, `extrapolated`: points the EOS flagged
   through `state_admissibility`. A point with a nonpositive mixture density is
-  not put to the EOS, since its internal energy cannot be formed.
+  not put to the EOS, since its internal energy cannot be formed. Extrapolated
+  is informational on its own; a model that treats leaving its data as a
+  failure, as `Nasa9Mixture(extrapolate = :missing)` does, marks the point
+  inadmissible as well.
 - `rho_min`, `e_min`: the smallest mixture density and specific internal energy
   found, the two scales the positivity failsafe floors against. `e_min` is
   `Inf` when no point had a positive density.
@@ -368,13 +371,16 @@ StateReport() = StateReport(0, 0, 0, 0, 0, 0, 0, Inf, Inf)
 """
     state_valid(report) -> Bool
 
-Whether [`state_report`](@ref) found nothing to reject. Extrapolated points
-count as a rejection: the EOS evaluated outside the range its data covers, and
-whether that is acceptable is a decision for the run, not for the model.
+Whether [`state_report`](@ref) found nothing to reject. Extrapolation is not by
+itself a rejection: evaluating outside the range the data covers is what an
+extrapolation policy is for, and whether it is acceptable is the model's to
+declare. `Nasa9Mixture(extrapolate = :missing)` declares that it is not, and
+reports such a point as inadmissible as well as extrapolated, which this
+rejects. The extrapolated count is carried either way.
 """
 state_valid(r::StateReport) =
     r.nonfinite == 0 && r.negative_density == 0 && r.negative_species == 0 &&
-    r.inadmissible == 0 && r.unrecoverable == 0 && r.extrapolated == 0
+    r.inadmissible == 0 && r.unrecoverable == 0
 
 function Base.show(io::IO, r::StateReport)
     print(io, "StateReport(", r.points, " points")
