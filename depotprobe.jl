@@ -174,6 +174,117 @@ function io_rate(path)
     end
 end
 
+# How many CPUs this process was actually given, and whether a cgroup caps the
+# share it may use of them. A login node hands out a fraction of a core to a
+# heavy process, which slows arithmetic and MPI polling alike and is the first
+# thing to rule out before believing any per-step number. The mount layout is
+# not portable, so resolve from /proc/self/cgroup and walk upward, as
+# clusterprobe.jl does for the memory limit.
+function cgroup_cpu_quota()
+    leaves = String[]
+    try
+        for line in eachline("/proc/self/cgroup")
+            f = split(line, ':'; limit = 3)
+            length(f) == 3 || continue
+            if f[2] == ""
+                push!(leaves, "/sys/fs/cgroup" * f[3] * "/cpu.max")
+            elseif occursin("cpu,", f[2]) || f[2] == "cpu"
+                push!(leaves, "/sys/fs/cgroup/cpu" * f[3] * "/cpu.cfs_quota_us")
+            end
+        end
+    catch
+    end
+    for leaf in leaves
+        dir, base = dirname(leaf), basename(leaf)
+        while startswith(dir, "/sys/fs/cgroup")
+            try
+                s = strip(read(joinpath(dir, base), String))
+                if base == "cpu.max"
+                    parts = split(s)
+                    parts[1] == "max" && return Inf
+                    return parse(Float64, parts[1]) / parse(Float64, parts[2])
+                else
+                    q = parse(Float64, s)
+                    q < 0 && return Inf
+                    p = parse(Float64,
+                              strip(read(joinpath(dir, "cpu.cfs_period_us"),
+                                         String)))
+                    return q / p
+                end
+            catch
+            end
+            dir = dirname(dir)
+        end
+    end
+    return -1.0
+end
+
+function cpus_allowed()
+    try
+        for line in eachline("/proc/self/status")
+            startswith(line, "Cpus_allowed_list:") || continue
+            spec = strip(split(line, ':')[2])
+            n = 0
+            for part in split(spec, ',')
+                lo_hi = split(part, '-')
+                n += length(lo_hi) == 1 ? 1 :
+                     parse(Int, lo_hi[2]) - parse(Int, lo_hi[1]) + 1
+            end
+            return n
+        end
+    catch
+    end
+    return -1
+end
+
+triad!(c, a, b, s) = (@inbounds @simd for i in eachindex(c)
+    c[i] = a[i] + s * b[i]
+end; c)
+
+function dotp(a, b)
+    s = zero(eltype(a))
+    @inbounds @simd for i in eachindex(a)
+        s += a[i] * b[i]
+    end
+    return s
+end
+
+# A floating-point and a memory-bandwidth baseline with no MPI, no allocation
+# and no solver in them. If these are as slow as the solver, the machine is
+# throttled and nothing about the package is implicated; if they are normal
+# while a step is not, the problem is in the code or the Julia version.
+function report_cpu()
+    n = 1 << 20
+    a, b, c = rand(n), rand(n), zeros(n)
+    triad!(c, a, b, 1.0001)
+    dotp(a, b)
+    reps = 20
+    t1 = @elapsed for _ in 1:reps
+        triad!(c, a, b, 1.0001)
+    end
+    acc = 0.0
+    t2 = @elapsed for _ in 1:reps
+        acc += dotp(a, b)
+    end
+    quota = cgroup_cpu_quota()
+    println(HEAD)
+    println("this process's CPU:")
+    println("  CPUs allowed  : ", cpus_allowed(), " of ", Sys.CPU_THREADS,
+            " on the node")
+    println("  cgroup quota  : ",
+            quota < 0 ? "unreadable" : isinf(quota) ? "unlimited" :
+            string(round(quota; digits = 3), " CPUs"))
+    println("  triad         : ", round(24e-9 * n * reps / t1; digits = 2),
+            " GB/s")
+    isfinite(acc) || println("  (dot produced a non-finite sum)")
+    println("  dot           : ", round(2e-9 * n * reps / t2; digits = 2),
+            " GFLOP/s")
+    println("  these carry no MPI and no solver. A step that is slow while",
+            " these are normal")
+    println("  is the code; slow together is the machine, and a login node",
+            " throttles both.")
+end
+
 function report_environment()
     println(HEAD)
     println("julia           : ", VERSION, "  (", JULIA, ")")
@@ -487,6 +598,7 @@ CL.mpi_main() do
     if rank == 0
         println("\n=== depotprobe: depot cost and staging, ", np, " rank(s) ===")
         report_environment()
+        report_cpu()
         report_depot()
         if np == 1
             report_nodelocal()
