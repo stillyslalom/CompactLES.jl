@@ -1054,6 +1054,54 @@ function _restore_state!(dst::Vector{<:ConservedState}, src::Vector{<:ConservedS
     return dst
 end
 
+# Abandon the current trajectory, restore the savepoint and lower the CFL,
+# returning the new attempt count. Raises `failure` instead when there is no
+# savepoint or the retries are spent. Every failure `run!` can recover from
+# arrives here, so the state checks, the step checks and the endpoint check
+# share one recovery rather than one bypassing it.
+function _rollback!(solver, Q, workspace, callback, control, save, failure,
+                    attempts, rank)
+    (save === nothing || attempts >= control.retries) && throw(failure)
+    _restore_state!(Q, save.Q)
+    solver.t = save.t
+    solver.step = save.step
+    # Compounding: the CFL is reduced from its current value and never
+    # restored from the savepoint, so three retries give backoff^3.
+    solver.cfl *= control.cfl_backoff
+    save.guard = failure.step
+    # The rate history belongs to the abandoned trajectory; keeping it
+    # would have the predictor extrapolate from states that no longer
+    # exist. The caller drops dt_seen for the same reason, or the relative
+    # floor would immediately fire again against a dt from before the rollback.
+    solver.dt_prev = zero(solver.dt_prev)
+    solver.rate_prev = zero(solver.rate_prev)
+    # A trajectory that failed NON-FINITE also leaves NaN in two
+    # places a restore does not touch, either of which re-fails every
+    # retry at the savepoint: the artificial coefficient arrays, which
+    # max_rate reads before the retry's first RHS recomputes them, and
+    # the low-storage accumulator, whose usual amnesia via RKA[1] = 0
+    # cannot forget NaN (0.0 · NaN is NaN). Both were observed on a
+    # subcycled Sod whose plain restart at the same lowered CFL
+    # succeeded. The reset is gated on :nonfinite: after
+    # a finite failure the stale coefficients are large where the
+    # trouble is, and the small first dt they induce is a measured
+    # part of the recovery the retry test pins.
+    if failure.reason === :nonfinite
+        _reset_artificial!(solver)
+        _reset_workspace!(workspace)
+    end
+    # Instants between the savepoint and the failure were visited on a
+    # trajectory that no longer exists. Re-arm them so the replacement
+    # trajectory visits them too; see `rewind!` for what is and is not
+    # rolled back.
+    rewind_callbacks!(callback, save.t, save.step)
+    attempts += 1
+    rank == 0 && @warn "run!: $(failure.reason) at step $(failure.step); " *
+                       "rolled back to step $(save.step) and lowered cfl to " *
+                       "$(solver.cfl) (retry $attempts of $(control.retries))"
+    return attempts
+end
+
 # Interface and level consistency before the pre-step reads. The single-patch
 # path has neither and skips this entirely.
 _presync!(solver, Q) = Q
@@ -1096,6 +1144,27 @@ with. On an unrecoverable failure this throws [`SolverFailure`](@ref) and does
 not continue with a collapsed timestep; the note at the top of
 `stepcontrol.jl` records what that failure mode looks like and which of the
 three mechanisms was measured to help.
+
+## State validity
+
+The state entering this call and the state it returns are both validated under
+`control.validity`, and `control.validity_interval` adds the state entering
+every nth step. The returned state is checked at each of the three ways a run
+can end: reaching `tfinal`, reaching `nmax`, and a callback effect returning
+`true`. A rejection is a `SolverFailure(:invalid_state)` handed to the same
+rollback the step checks use, so `control.retries` recovers from it by
+restoring the savepoint and lowering the CFL rather than raising past that
+recovery. A run whose physics legitimately visits inadmissible states selects
+`validity = :permissive`, which accepts and reports them; `reference/CALIBRATION.md`
+records the budget for the cases in `test/cases.jl` that do.
+
+Recovery from a rejected endpoint costs the trajectory. The rollback restores
+the last savepoint, so the run repeats every step from there, and it does so
+once per retry. A state that is inadmissible because the run's physics ends
+that way is inadmissible at any CFL, so such a run spends its whole retry
+budget re-integrating before failing. That is a reason to select
+`:permissive` for a case known to end that way rather than to rely on the
+retries absorbing it.
 
 When `control.retries > 0`, the CFL is lowered in place on each retry.
 Consequently, `solver.cfl` after a completed run records the value used to
@@ -1152,6 +1221,10 @@ function run!(solver::Solver, Q, workspace::Workspace;
     attempts = 0
     dt_seen = 0.0
     rho_floor, e_floor = positivity_floors(solver, Q, control)
+    # The floors come from the state entering the run, so they are derived
+    # before it is validated: a repair mode needs scales from a state that was
+    # still valid, and this is the last point at which that is known.
+    validate_state!(solver, Q; control=control, stage="the state entering run!")
     if control.floor_ratio > 0 && rho_floor <= 0
         rank == 0 && @warn "run!: the positivity failsafe is inactive. The global " *
                            "minimum density or internal energy of the state " *
@@ -1168,7 +1241,26 @@ function run!(solver::Solver, Q, workspace::Workspace;
     # the state that failed. Each subsequent retry then restores that state and
     # changes only the CFL. The observed sequence rolled back to step 180 and
     # failed again at step 180 four times. `regrid!` observes the same guard.
-    while solver.t < tfin && solver.step < nmax
+    # `stopped` carries a callback's request to end the run to the endpoint
+    # check below rather than out of the loop, so that a callback exit is
+    # validated on the same terms as reaching `tfinal` or `nmax`.
+    stopped = false
+    while true
+        if stopped || !(solver.t < tfin && solver.step < nmax)
+            # The state this run is about to return. Checking it here rather
+            # than after the loop keeps it on the retry path: a rejection rolls
+            # back to the savepoint and lowers the CFL like any other failure,
+            # so the endpoint cannot deliver a state that bypassed recovery.
+            _, failure = _apply_validity!(solver, Q; control=control,
+                                          stage="the state run! returns",
+                                          floors=(rho_floor, e_floor))
+            failure === nothing && break
+            attempts = _rollback!(solver, Q, workspace, callback, control, save,
+                                  failure, attempts, rank)
+            dt_seen = 0.0
+            stopped = false
+            continue
+        end
         # Timed from here, not around step! alone: max_rate carries the
         # per-step Allreduce and the filter is a full set of line solves, so both
         # are step cost a user is trying to see. Callbacks are outside it, since
@@ -1190,46 +1282,19 @@ function run!(solver::Solver, Q, workspace::Workspace;
         dt = predicted_dt(solver, control, rate)
         failure = check_step(control, dt, rho_min, dt_seen, solver.step,
                              solver.t, solver.cfl)
+        # The state entering this step, on the requested cadence. The sweep
+        # calls the EOS at every interior point, so it is off unless asked for;
+        # `check_step`'s reduced scalars are the cheap check that always runs.
+        if failure === nothing && control.validity_interval > 0 &&
+           solver.step % control.validity_interval == 0
+            _, failure = _apply_validity!(solver, Q; control=control,
+                                          stage="the state entering the step",
+                                          floors=(rho_floor, e_floor))
+        end
         if failure !== nothing
-            (save === nothing || attempts >= control.retries) && throw(failure)
-            attempts += 1
-            _restore_state!(Q, save.Q)
-            solver.t = save.t
-            solver.step = save.step
-            # Compounding: the CFL is reduced from its current value and never
-            # restored from the savepoint, so three retries give backoff^3.
-            solver.cfl *= control.cfl_backoff
-            save.guard = failure.step
-            # The rate history belongs to the abandoned trajectory; keeping it
-            # would have the predictor extrapolate from states that no longer
-            # exist. dt_seen goes too, or the relative floor would immediately
-            # fire again against a dt from before the rollback.
-            solver.dt_prev = zero(solver.dt_prev)
-            solver.rate_prev = zero(solver.rate_prev)
+            attempts = _rollback!(solver, Q, workspace, callback, control, save,
+                                  failure, attempts, rank)
             dt_seen = 0.0
-            # A trajectory that failed NON-FINITE also leaves NaN in two
-            # places a restore does not touch, either of which re-fails every
-            # retry at the savepoint: the artificial coefficient arrays, which
-            # max_rate reads before the retry's first RHS recomputes them, and
-            # the low-storage accumulator, whose usual amnesia via RKA[1] = 0
-            # cannot forget NaN (0.0 · NaN is NaN). Both were observed on a
-            # subcycled Sod whose plain restart at the same lowered CFL
-            # succeeded. The reset is gated on :nonfinite: after
-            # a finite failure the stale coefficients are large where the
-            # trouble is, and the small first dt they induce is a measured
-            # part of the recovery the retry test pins.
-            if failure.reason === :nonfinite
-                _reset_artificial!(solver)
-                _reset_workspace!(workspace)
-            end
-            # Instants between the savepoint and the failure were visited on a
-            # trajectory that no longer exists. Re-arm them so the replacement
-            # trajectory visits them too; see `rewind!` for what is and is not
-            # rolled back.
-            rewind_callbacks!(callback, save.t, save.step)
-            rank == 0 && @warn "run!: $(failure.reason) at step $(failure.step); " *
-                               "rolled back to step $(save.step) and lowered cfl to " *
-                               "$(solver.cfl) (retry $attempts of $(control.retries))"
             continue
         end
         # Q has passed its health check, the only point at which it is
@@ -1335,7 +1400,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         solver.wall_step = (time_ns() - wall_0) / 1e9
         solver.wall_total += solver.wall_step
         solver.wait_total += solver.wall_wait
-        run_callbacks!(callback, solver, Q) && break
+        run_callbacks!(callback, solver, Q) && (stopped = true)
     end
     ft = solver.floor_tally
     if ft.steps > floor_0.steps && rank == 0

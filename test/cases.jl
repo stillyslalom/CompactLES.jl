@@ -181,10 +181,16 @@ function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtParams(enabled=true), cfl=
                    bcs=((OriginBC(), SlipWallBC()), per3[2], per3[3]),
                    ic=(r, θ, φ) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                         p=1e-5 + pin * exp(-(r / σ)^2)))
+    # The blast leaves a near-vacuum behind the shock, and six of 256 cells
+    # there carry a negative internal energy at the end of the run, which the
+    # ideal-gas EOS reports as outside its domain. The case states that rather
+    # than rejecting on it, and its caller bounds the count and the defect.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filter_interval=1))
+                                     filter_interval=1,
+                                     control=StepControl(validity=:permissive)))
     run!(solver, Q; tfinal=SEDOV_T, nmax=nmax)
-    return case_line_profile(solver, Q)..., completed(solver, SEDOV_T)
+    return case_line_profile(solver, Q)..., completed(solver, SEDOV_T),
+           state_report(solver, Q)
 end
 
 # --- Noh --------------------------------------------------------------------
@@ -205,12 +211,16 @@ const NOH_N = (1 => 400, 2 => 256, 3 => 256)
 const NOH_T0 = (1 => 0.0, 2 => 0.0, 3 => 0.3)
 
 """
-    noh_case(ν; N, t0, art, cfl) -> (x, rho, u, p, completed)
+    noh_case(ν; N, t0, art, cfl) -> (x, rho, u, p, completed, report)
 
 Noh in ν dimensions, integrated from `t0` to `NOH_T`. `t0 > 0` initializes from
 the exact solution, bypassing the uniform cold inflow. The outer boundary
 carries the exact time-dependent inflow, which for ν > 1 is compressing as it
 converges and is therefore not a constant state.
+
+The case runs under `validity = :permissive` and returns the closing
+[`StateReport`](@ref) as `report`, so a caller can bound the violation it ends
+on rather than accepting whatever it produces.
 """
 function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
                   art=ArtParams(enabled=true), cfl=NOH_CFL, R=1.0, nmax=NMAX,
@@ -242,10 +252,19 @@ function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
                    transport=Transport(mu0=0.0), metric=metric,
                    domain=((0.0, R), dom2, dom3),
                    bcs=((lobc, inflow), per3[2], per3[3]), ic=ic)
+    # The wall region of a Noh implosion runs as a pressureless layer: six to
+    # eight interior cells carry a negative internal energy that moves with the
+    # front, for the whole of a run that reaches the correct plateau. Reaching
+    # the expected plateau does not make those cells physical, so the case
+    # states the violation rather than rejecting on it, and its caller bounds
+    # the count and the worst defect. reference/CALIBRATION.md carries the
+    # measured budget.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     deriv=deriv, filt=filt, filter_interval=1))
+                                     deriv=deriv, filt=filt, filter_interval=1,
+                                     control=StepControl(validity=:permissive)))
     run!(solver, Q; tfinal=NOH_T - t0, nmax=nmax)
-    return case_line_profile(solver, Q)..., completed(solver, NOH_T - t0)
+    return case_line_profile(solver, Q)..., completed(solver, NOH_T - t0),
+           state_report(solver, Q)
 end
 
 # --- species interface ------------------------------------------------------
@@ -277,8 +296,12 @@ function species_advection(; N=MIX_N, tfin=MIX_T, art=ArtParams(enabled=true),
                        θ = tanh_blend(x, 0.25, 2h)
                        Prim(Y=(1 - θ, θ), u=(MIX_U, 0.0, 0.0), p=1.0, rho=1.0)
                    end)
+    # A filtered species interface ends a few points outside the mass-fraction
+    # band, which is the residual this case exists to measure rather than a
+    # state to reject.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filter_interval=1))
+                                     filter_interval=1,
+                                     control=StepControl(validity=:permissive)))
     run!(solver, Q; tfinal=tfin, nmax=nmax)
     CL.exchange_state!(Q, solver.decomp)
     CL.primitives!(solver, Q)
@@ -361,10 +384,16 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
                        Prim(Y=(1 - θ, θ), rho=ρ, u=((1 - s) * u2, 0.0, 0.0),
                             p=(1 - s) * p2 + s)
                    end)
+    # The shocked interface overshoots the mass-fraction bound by more than
+    # its dead band for the length of the run, which is the excursion this case
+    # exists to measure. Rejecting on it would remove the measurement, so the
+    # case states the violation and its caller bounds the excursion, the
+    # affected-cell count and the solution error together.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filter_interval=1,
                                      stretch=(stretch1, nothing, nothing),
-                                     control=StepControl(retries=4)))
+                                     control=StepControl(retries=4,
+                                                         validity=:permissive)))
     nx = solver.decomp.n_local[1]
     worst_min = Ref(Inf)
     worst_max = Ref(-Inf)
@@ -392,7 +421,7 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
     end
     return (x=xs, Y_air=Y1, rho=ρ, p=p, worst_min_Y=worst_min[],
             worst_max_Y=worst_max[], width_cells=width, steps=solver.step,
-            completed=completed(solver, tfin))
+            completed=completed(solver, tfin), report=state_report(solver, Q))
 end
 
 # --- advected slab at a large density ratio ---------------------------------
@@ -443,9 +472,14 @@ function brill_slab(; R=BR_R, Np=BR_NP, art=ArtParams(enabled=true), cfl=0.4,
                        Yh = V * R / ρ
                        Prim(Y=(1 - Yh, Yh), rho=ρ, u=(BR_U, 0.0, 0.0), p=1.0)
                    end)
+    # Two species across a slab interface, so the run ends a few points beyond
+    # the mass-fraction band as the shocked-interface case does. Under a strict
+    # exit check the rollback cannot repair an endpoint that is inadmissible at
+    # any CFL, and the run would spend all four retries re-integrating.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filter_interval=1,
-                                     control=StepControl(retries=4)))
+                                     control=StepControl(retries=4,
+                                                         validity=:permissive)))
     nx = solver.decomp.n_local[1]
     worst_min = Ref(Inf)
     worst_max = Ref(-Inf)

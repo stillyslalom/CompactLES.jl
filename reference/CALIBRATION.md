@@ -1232,10 +1232,11 @@ intervention, so the cost belongs to the case and not to the choice of repair.
 
 The default `floor_scope = :representable` follows from that. It repairs only
 what no frame can represent and counts the rest, so on this case it repairs
-nothing and reproduces the unfloored run exactly — 3756 steps, plateau 3.9971,
-shock 0.2044, pre-shock L1 5.99e-07, all identical to the run with the failsafe
-off — while reporting all 25179 cell-steps. The condition was invisible, and
-making it visible is the part of model debt 2 the evidence supports.
+nothing and reproduces the unfloored run exactly, while reporting all 25179
+cell-steps. The run with the failsafe off returns 3756 steps, plateau 3.9971,
+shock 0.2044 and pre-shock L1 5.99e-07, and the floored run returns the same
+four figures. The condition was previously invisible, and making it visible is
+the part of model debt 2 the evidence supports.
 
 The counts above were re-measured in September 2026 and supersede the 3724
 steps, 24991 cell-steps and step-18 failure recorded here when the failsafe
@@ -1256,6 +1257,24 @@ having first crossed that band at step 32 of 646. Any per-step or returned-state
 check on these two cases therefore has to run under `validity = :permissive`,
 which reports what they integrated through instead of either rejecting them or
 saying nothing.
+
+Reporting is not the same as accepting whatever appears. Both cases are guarded
+on the state they end with as well as on their solution error: `test/validation.jl`
+bounds the Noh cases at twelve inadmissible cells with `e_min > −1`, and the
+shock/SF6 case at twelve points outside the mass-fraction band, alongside the
+existing plateau, wall-deficit, shock-position and excursion guards. A
+permissive mode without those bounds would let the violation grow without any
+test noticing.
+
+The threshold is not confined to converging shocks. A binary interface spanning
+about one cell overshoots the mass-fraction bound by 1.5e-2 within two steps,
+which is 150 times `Y_tolerance` and the same order as the shock/SF6 case's
+−0.0135, with the artificial bound then pulling it back over the following
+steps. Any under-resolved multi-species run therefore ends on a state a strict
+check rejects, and the small configurations in `src/precompile.jl` select
+`:permissive` for that reason. This is the practical cost of the strict
+default: it is correct about the state, and it obliges an under-resolved run to
+say so.
 
 ### Recovery strategy
 

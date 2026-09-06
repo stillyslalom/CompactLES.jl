@@ -211,9 +211,44 @@ repair changes states produced by the scheme but does not change the scheme.
   The verdict rests on reduced counts, so it is identical on every rank and a
   rejection is raised everywhere at once rather than on the rank that saw it.
 
+- `validity_interval = 0`: how often [`run!`](@ref) validates the state entering
+  a step, in steps, with 0 checking none of them. The state entering `run!` and
+  the state it returns are validated whatever this is set to. A rejection at any
+  of the three points is a [`SolverFailure`](@ref) delivered to the same
+  rollback the step checks use, so `retries` recovers from it and the endpoint
+  check cannot bypass that recovery. The sweep is serial over the interior and
+  calls the EOS at every point, which is why the per-step check is off by
+  default rather than merely cheap.
+
 The validation applies no universal internal-energy positivity test. Whether
 `e < 0` is a failure depends on the enthalpy gauge and the domain of the model,
 so the question is put to the EOS through `state_admissibility`.
+
+## What a repair promises
+
+The two mechanisms have different postconditions, and the difference is the
+reason `:representable` cannot stand in for validation:
+
+- `:representable` repair does not guarantee strict admissibility. It restores a
+  state the solver can represent: partial densities nonnegative, mixture density
+  at or above `rho_floor`, and total energy at or above `ρ * e_floor`. Where it
+  acts on the energy it leaves the internal energy exactly at `e_floor` with the
+  momentum untouched, but it does not act on a point whose total energy already
+  clears that bound, so such a point can return with an internal energy still
+  below the floor. Raising a density toward the floor at fixed momentum and
+  total energy strictly increases the internal energy density `E − |m|²/(2ρ)`,
+  so the repair never deepens the deficit it leaves; a point whose density was
+  nonpositive carries no internal energy to preserve, and what it receives is a
+  substitution rather than a repair.
+- Strict validation must therefore reject whatever the repair leaves. `:repair`
+  runs the failsafe and then puts the resulting state back through the same
+  verdict, so a residual violation is a rejection and not a silent pass.
+- `:internal_energy` carries the stronger postcondition: every point it touches
+  returns with an internal energy at or above `e_floor`. It reaches that by
+  damping the velocity at fixed total energy, or by raising the total energy
+  where there is no kinetic energy left to convert. Each branch conserves one of
+  momentum and energy exactly and tallies its change to the other, so the cost
+  of the stronger guarantee is reported rather than absorbed.
 """
 Base.@kwdef struct StepControl
     predict::Float64 = 0.0
@@ -227,12 +262,13 @@ Base.@kwdef struct StepControl
     floor_ratio::Float64 = 0.0
     floor_scope::Symbol = :representable
     validity::Symbol = :strict
+    validity_interval::Int = 0
     # `landing_steps = 0` does not disable the shortening. The gap clip
     # is the same expression, so a scheduled instant would be overshot and its
     # trigger would fire late.
     function StepControl(predict, max_growth, landing_steps, dt_min, dt_min_ratio,
                          retries, cfl_backoff, savepoint_interval, floor_ratio,
-                         floor_scope, validity)
+                         floor_scope, validity, validity_interval)
         landing_steps >= 1 ||
             throw(ArgumentError("StepControl: landing_steps must be >= 1 " *
                                 "(1 is a hard clip onto the scheduled time)"))
@@ -253,9 +289,12 @@ Base.@kwdef struct StepControl
         validity === :repair && floor_ratio <= 0 &&
             throw(ArgumentError("StepControl: validity = :repair requires a " *
                                 "positive floor_ratio"))
+        validity_interval >= 0 ||
+            throw(ArgumentError("StepControl: validity_interval must be >= 0, " *
+                                "got $validity_interval"))
         new(predict, max_growth, landing_steps, dt_min, dt_min_ratio,
             retries, cfl_backoff, savepoint_interval, floor_ratio, floor_scope,
-            validity)
+            validity, validity_interval)
     end
 end
 
@@ -355,9 +394,10 @@ end
 
 Thrown by [`run!`](@ref) when the timestep or the state fails a
 [`StepControl`](@ref) check and no retries remain. `reason` is one of
-`:nonfinite`, `:planck`, `:dt_min`, `:dt_collapse`, `:negative_density`, or
-`:invalid_state`, the last being a state the validation rejected under
-`StepControl.validity`. The
+`:nonfinite`, `:planck`, `:dt_min`, `:dt_collapse`, `:negative_density`,
+`:invalid_state` (a state the validation rejected under `StepControl.validity`)
+or `:no_progress` (a step the solver's clock cannot represent as an advance;
+a retry cannot help, so the CFL hint below does not fire for it). The
 remaining fields record the state the check rejected: `step`, `t`, `dt`, `cfl`,
 and a `detail` string describing the failure, which `showerror` prints below the
 summary line.

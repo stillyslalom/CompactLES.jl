@@ -108,7 +108,14 @@ if MPIPreferences.binary != "system"
                 Prim(Y=(1 - θ, θ), rho=(1 - θ) + 0.625θ, p=(1 - θ) + 0.1θ,
                      u=(0.1 * sin(2π * y / 0.6), 0.0, 0.05 * cos(2π * z / 0.3)))
             end)
-            run!(s, Q; tfinal=0.02, nmax=2)
+            # The interface spans about one cell at 16 points across the unit
+            # length, so the filtered profile overshoots the mass-fraction
+            # bound by 1.5e-2 within two steps, far outside its dead band. The
+            # configurations here exist to compile the code paths, not to
+            # resolve an interface, so they state the violation rather than
+            # rejecting on it.
+            run!(s, Q; tfinal=0.02, nmax=2,
+                 control=StepControl(validity=:permissive))
             positivity_floors(s, Q, StepControl(floor_ratio=1e-6))
             s = Solver(n_global=(12, 16, 12), L_domain=(1.0, 2π, 0.5),
                        bcs=((AxisBC(), SlipWallBC()), per, per),

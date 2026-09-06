@@ -835,12 +835,41 @@ report rejects:
 | `:permissive` | accept the state and report what it contains |
 | `:repair` | apply the positivity failsafe, report the substitutions, then reject what remains |
 
-`setup` validates the initial state. `StateGuard`, paired with a trigger and
-passed to `run!` as a callback, validates each accepted state, including the one
-the run returns: `run!`'s own checks read the state *entering* a step, so an
-`nmax`, `tfinal`, or callback exit leaves the final result uninspected. A guard
-raises from inside a callback, which is collective but is not the retryable
-path; `check_step` remains the check `run!` rolls back on.
+`setup` validates the initial state. `run!` validates the state entering the
+call, the state it returns, and, on the cadence `StepControl.validity_interval`
+sets, the state entering a step. The returned state is checked at each of the
+three ways a run ends: reaching `tfinal`, reaching `nmax`, and a callback effect
+returning `true`. All of these produce a `SolverFailure(:invalid_state)` that is
+handed to the same rollback `check_step` uses, so `retries` recovers from an
+invalid state by restoring the savepoint and lowering the CFL. The endpoint
+check is inside the step loop for that reason: a check placed after the loop
+would raise past the recovery rather than into it. `StateGuard` remains
+available as a callback for a caller that wants the sweep on its own schedule,
+and raises from inside the callback rather than through the rollback.
+
+### What a repair promises
+
+The positivity failsafe and the validation are separate mechanisms, and the
+failsafe is not a substitute for the check:
+
+- `:representable` repair does not guarantee strict admissibility. It restores a
+  state the solver can represent: nonnegative partial densities, a mixture
+  density at or above `rho_floor`, and a total energy at or above `ρ·e_floor`.
+  Where it acts on the energy the internal energy lands exactly on `e_floor`
+  with the momentum untouched. It does not act on a point whose total energy
+  already clears that bound, so such a point can return with an internal energy
+  still below the floor. Raising a density toward the floor at fixed momentum
+  and total energy increases `E − |m|²/(2ρ)` monotonically, so the repair never
+  deepens the deficit it leaves; a point whose density was nonpositive carried
+  no recoverable internal energy, and what it receives is a substitution.
+- Strict validation rejects whatever the repair leaves. `:repair` runs the
+  failsafe and puts the result back through the same verdict, so a residual
+  violation is a rejection rather than a silent pass.
+- `:internal_energy` carries the stronger postcondition: every point it touches
+  returns at or above `e_floor`, reached by damping the velocity at fixed total
+  energy, or by raising the total energy where there is no kinetic energy left
+  to convert. Each branch conserves one of momentum and energy exactly and
+  tallies its change to the other, so the cost of the guarantee is reported.
 
 The validation applies no universal internal-energy positivity test. Internal
 energy is defined only up to the gauge its enthalpy reference fixes, so e < 0 is

@@ -349,6 +349,20 @@ function validate_state!(solver::Solver, Q; control::StepControl=solver.control,
                          stage::AbstractString="state",
                          floors::Tuple{Float64,Float64}=(0.0, 0.0),
                          warn::Bool=true)
+    report, failure = _apply_validity!(solver, Q; control=control, stage=stage,
+                                       floors=floors, warn=warn)
+    failure === nothing || throw(failure)
+    return report
+end
+
+# The same sweep, repair and verdict, returning the failure instead of raising
+# it. `run!` needs the verdict as a value so that a rejection can take the
+# rollback path its other failures take; every caller that has no trajectory to
+# roll back to goes through `validate_state!` and raises.
+function _apply_validity!(solver::Solver, Q; control::StepControl=solver.control,
+                          stage::AbstractString="state",
+                          floors::Tuple{Float64,Float64}=(0.0, 0.0),
+                          warn::Bool=true)
     report = state_report(solver, Q)
     rank = MPI.Comm_rank(solver.comm)
     if control.validity === :repair && !state_valid(report) && floors[1] > 0
@@ -366,12 +380,11 @@ function validate_state!(solver::Solver, Q; control::StepControl=solver.control,
     end
     failure = check_validity(control, report, stage, solver.step, solver.t,
                              solver.dt_prev, solver.cfl)
-    failure === nothing || throw(failure)
-    if warn && rank == 0 && !state_valid(report)
+    if failure === nothing && warn && rank == 0 && !state_valid(report)
         @warn "validate_state!: $stage accepted under validity = " *
               ":$(control.validity). $report"
     end
-    return report
+    return report, failure
 end
 
 """

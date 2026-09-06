@@ -107,7 +107,7 @@ end
 # --- per-case measurements, one line each -----------------------------------
 
 m_noh(ν; kw...) = attempt((NaN, NaN, NaN)) do
-    xs, ρ, _, _, ok = noh_case(ν; nmax=CAP, kw...)
+    xs, ρ, _, _, ok, _ = noh_case(ν; nmax=CAP, kw...)
     ok || return (Inf, Inf, Inf)
     plat, deficit, Rs, _ = noh_metrics(xs, ρ, ν)
     (plat / 4.0^ν, deficit, Rs)

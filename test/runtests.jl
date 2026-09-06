@@ -176,9 +176,13 @@ end
 
 @testset "Float32 built-in EOS and closed boundary matrix" begin
     T = Float32
+    # The constant-cp NASA-9 fit below carries a declared temperature range
+    # that a nondimensional state sits outside at every point, which the
+    # validation reports as extrapolation rather than an unusable state.
     typed_num(; enabled=false) =
         (transport=Transport{T}(), art=ArtParams{T}(enabled=enabled),
-         deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
+         deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
+         control=StepControl(validity=:permissive))
 
     nasa = Nasa9Mixture([CL.nasa9_constant_cp(T, "gas", T(1), T(3.5))];
                         T_guess=T(1))
@@ -186,7 +190,7 @@ end
     ns = Solver(n_global=(12, 12, 12),
                 L_domain=(T(2π), T(2π), T(2π)), bcs=per3, eos=nasa,
                 filter_interval=0, transport=tn.transport, art=tn.art,
-                deriv=tn.deriv, filt=tn.filt)
+                deriv=tn.deriv, filt=tn.filt, control=tn.control)
     NQ = allocate_state(ns)
     initialize!(ns, NQ, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1, T_ion=1.7))
     CL.exchange_state!(NQ, ns.decomp)
@@ -203,7 +207,7 @@ end
     ss = Solver(n_global=(24, 1, 1), L_domain=(one(T), one(T), one(T)),
                 bcs=(wall, per3[2], per3[3]), eos=sg,
                 filter_interval=0, transport=tn.transport, art=tn.art,
-                deriv=tn.deriv, filt=tn.filt)
+                deriv=tn.deriv, filt=tn.filt, control=tn.control)
     SQ = allocate_state(ss)
     initialize!(ss, SQ, (x, y, z) ->
         Prim(u=(0.1sin(T(π) * x), 0, 0), p=1, rho=1))
@@ -238,8 +242,13 @@ end
 
 @testset "Float32 varying-cp mixture and open/viscous boundaries" begin
     T = Float32
+    # The synthetic fits below carry a narrow declared temperature range and
+    # the states are nondimensional, so every point evaluates outside it. That
+    # is extrapolation, which the validation reports rather than a state the
+    # solver cannot carry, so these runs accept it explicitly.
     typed = (transport=Transport{T}(), art=ArtParams{T}(enabled=false),
-             deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
+             deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
+             control=StepControl(validity=:permissive))
 
     # The first species has cp/R = 3.5 + 0.05T, so this exercises the
     # iterative NASA-9 temperature recovery rather than its constant-cp limit.
@@ -308,8 +317,13 @@ end
 @testset "Float32 resolved fold and moving subcycled level" begin
     T = Float32
     per = (PeriodicBC(), PeriodicBC())
+    # The synthetic fits below carry a narrow declared temperature range and
+    # the states are nondimensional, so every point evaluates outside it. That
+    # is extrapolation, which the validation reports rather than a state the
+    # solver cannot carry, so these runs accept it explicitly.
     typed = (transport=Transport{T}(), art=ArtParams{T}(enabled=false),
-             deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
+             deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
+             control=StepControl(validity=:permissive))
 
     sf = Solver(; n_global=(32, 16, 1),
                 L_domain=(one(T), T(2π), one(T)),
@@ -1331,7 +1345,8 @@ end
                                 u=(0.0, 0.0, 0.0), p=1.0)
                        end)
         solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=bulk, cfl=0.4,
-                                         filter_interval=1))
+                                         filter_interval=1,
+                                         control=StepControl(validity=:permissive)))
         nx = solver.decomp.n_local[1]
         eqs = solver.equations
         rho0 = [Q[gidx(solver, i, 1, 1), 1] + Q[gidx(solver, i, 1, 1), 2] for i in 1:nx]
@@ -1971,7 +1986,7 @@ end
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(rho=2.0, u=(0.5, 0.0, 0.0), p=1.0,
                                              Y=(0.25, 0.75)))
-    m1 = solver.equations.i_mom[1]
+    m1, m2, m3 = solver.equations.i_mom
     ie = solver.equations.i_energy
     I = gidx(solver, 3, 3, 3)
 
@@ -2026,11 +2041,62 @@ end
     @test Qbad[I, 1] == -3.0                    # accepted, never touched
     @test state_valid(validate_state!(solver, Q))
 
+    # Each scope keeps its own postcondition where it acts, which is what makes
+    # the residual rejection below a contract rather than a defect.
+    rho_floor, e_floor = CL.positivity_floors(solver, Q,
+                                              StepControl(floor_ratio=1e-6))
+    floor!(Qx, scope) = CL.apply_positivity_floor!(solver, Qx, rho_floor,
+                                                   e_floor, scope)
+    dens(Qx, J) = sum(Qx[J, sp] for sp in 1:2)
+    kin(Qx, J) = (Qx[J, m1]^2 + Qx[J, m2]^2 + Qx[J, m3]^2) / (2 * dens(Qx, J))
+    spec(Qx, J) = (Qx[J, ie] - kin(Qx, J)) / dens(Qx, J)
+
+    # Raising a density toward the floor at fixed momentum and total energy
+    # increases the internal energy DENSITY, so the substitution never deepens
+    # the deficit it leaves behind.
+    Qm = copy(Q)
+    Qm[I, 1] = rho_floor * 0.3
+    Qm[I, 2] = 0.0
+    rhoe_before = Qm[I, ie] - kin(Qm, I)
+    mom_before = (Qm[I, m1], Qm[I, m2], Qm[I, m3])
+    E_before = Qm[I, ie]
+    floor!(Qm, :representable)
+    @test Qm[I, ie] - kin(Qm, I) > rhoe_before
+    @test (Qm[I, m1], Qm[I, m2], Qm[I, m3]) == mom_before
+    @test Qm[I, ie] == E_before
+
+    # Where :representable does act on the energy, it lands exactly on the
+    # floor and leaves the momentum alone.
+    Qr = copy(Q)
+    Qr[I, ie] = dens(Qr, I) * e_floor * 0.1     # E < rho * e_floor
+    mom_before = (Qr[I, m1], Qr[I, m2], Qr[I, m3])
+    floor!(Qr, :representable)
+    @test spec(Qr, I) >= e_floor * (1 - 1e-12)
+    @test (Qr[I, m1], Qr[I, m2], Qr[I, m3]) == mom_before
+
+    # :internal_energy carries the stronger postcondition on a point
+    # :representable declines: the internal energy reaches the floor, the total
+    # energy is conserved exactly, and the momentum it removed is tallied.
+    Qd = copy(Q)
+    Qd[I, ie] = kin(Qd, I) + dens(Qd, I) * e_floor * 0.1
+    E_before = Qd[I, ie]
+    t_shallow = floor!(copy(Qd), :representable)
+    @test t_shallow.low_energy == 1 && t_shallow.cells == 0   # counted, not fixed
+    t_deep = floor!(Qd, :internal_energy)
+    @test spec(Qd, I) >= e_floor * (1 - 1e-12)
+    @test Qd[I, ie] == E_before
+    @test t_deep.momentum > 0
+
     # Repair mode substitutes, reports what it substituted, and then rejects
-    # what the substitution did not fix. Raising a density to the floor without
-    # rescaling the momentum leaves |u| enormous, so the point comes back with
-    # a large negative internal energy that the default scope counts and does
-    # not repair. The residual rejection is the contract, not a surprise.
+    # what the substitution did not fix. The two scopes differ in what they
+    # promise, and this pins the difference. A nonpositive density carries no
+    # recoverable internal energy, so the floor substitutes one; the original
+    # momentum at that minimal density leaves a large specific kinetic energy,
+    # and the point's total energy still clears rho*e_floor, which is the
+    # bound :representable acts on. It therefore counts the point and leaves
+    # it, exactly as documented, and strict validation rejects what remains.
+    # The repair does not deepen the deficit: raising rho at fixed momentum and
+    # total energy increases E - |m|^2/(2rho) monotonically.
     repair = StepControl(validity=:repair, floor_ratio=1e-6)
     floors = CL.positivity_floors(solver, Q, repair)
     @test floors[1] > 0
@@ -2071,28 +2137,52 @@ end
     solver, Q = build(1.0, StepControl())
     @test state_valid(state_report(solver, Q))
 
-    # The state a run RETURNS is checked by nothing inside `run!`: the checks
-    # run on the state entering a step, and an nmax, tfinal or callback exit
-    # leaves the last result uninspected. A guard closes that, and the mode
-    # decides what it does about it.
+    # The state a run returns is validated on the way out, at each of the three
+    # ways a run ends. The step checks read the state ENTERING a step, so
+    # without this an nmax, tfinal or callback exit returned its last result
+    # uninspected.
     sink!(s, Qs) = (Qs[gidx(s, 2, 2, 2), 1] = -1.0; false)
-    fresh() = begin
-        s = mkslv(n_global=(16, 12, 12))
+    fresh(; control=StepControl()) = begin
+        s = mkslv(n_global=(16, 12, 12), control=control)
         Qs = allocate_state(s)
         initialize!(s, Qs, (x, y, z) -> Prim(rho=1.0, p=1.0))
         (s, Qs)
     end
     s, Qs = fresh()
-    run!(s, Qs; tfinal=1.0, nmax=1, callback=sink!)
+    @test_throws SolverFailure run!(s, Qs; tfinal=1.0, nmax=1, callback=sink!)
+    # A callback that ends the run is the third exit, and is checked too.
+    stop!(s, Qs) = (Qs[gidx(s, 2, 2, 2), 1] = -1.0; true)
+    s, Qs = fresh()
+    @test_throws SolverFailure run!(s, Qs; tfinal=1.0, nmax=99, callback=stop!)
+    # Permissive returns it and says so.
+    s, Qs = fresh(control=StepControl(validity=:permissive))
+    @test_logs (:warn,) match_mode=:any run!(s, Qs; tfinal=1.0, nmax=1,
+                                             callback=sink!)
     @test s.step == 1
     @test mixture_density(s, Qs, gidx(s, 2, 2, 2)) < 0
     @test state_valid(state_report(s, Qs)) == false
+
+    # The rejection reaches the retry path rather than raising past it: with a
+    # savepoint and retries available the run rolls back and lowers the CFL,
+    # exactly as a step check does. The sink fires only on the first attempt,
+    # so the replacement trajectory returns a valid state.
+    s, Qs = fresh(control=StepControl(retries=2, savepoint_interval=1))
+    fired = Ref(0)
+    once!(sv, Qv) = (fired[] += 1; fired[] == 1 &&
+                     (Qv[gidx(sv, 2, 2, 2), 1] = -1.0); false)
+    cfl0 = s.cfl
+    @test_logs (:warn,) match_mode=:any run!(s, Qs; tfinal=1.0, nmax=2,
+                                             callback=once!)
+    @test s.cfl < cfl0                          # rolled back, not raised past
+    @test state_valid(state_report(s, Qs))
 
     s, Qs = fresh()
     @test_throws SolverFailure run!(s, Qs; tfinal=1.0, nmax=1,
                                     callback=(sink!, state_guard(s, Qs)))
 
-    s, Qs = fresh()
+    # The guard reports under its own control; the solver's has to agree that
+    # the state may be returned, since run! validates the result as well.
+    s, Qs = fresh(control=StepControl(validity=:permissive))
     guard = CL.StateGuard(s, Qs; control=StepControl(validity=:permissive))
     @test_logs (:warn,) match_mode=:any run!(s, Qs; tfinal=1.0, nmax=1,
         callback=(sink!, Callback(EveryStep(), guard)))
@@ -2144,7 +2234,13 @@ end
     @test err.reason in (:negative_density, :dt_collapse)
     @test s1.step < 20_000                     # it stopped early, it did not grind
 
-    s2, Q2 = build(0.9, StepControl(retries=5, savepoint_interval=20))
+    # Permissive on the returned state: a Noh run ends with a handful of
+    # negative-internal-energy cells in the wall layer at any CFL, so a strict
+    # exit check would reject the recovered trajectory and spend all five
+    # retries re-running it before failing. The retry behaviour under test is
+    # the rollback from :negative_density during startup, which is unaffected.
+    s2, Q2 = build(0.9, StepControl(retries=5, savepoint_interval=20,
+                                    validity=:permissive))
     run!(s2, Q2; tfinal=tfin, nmax=20_000)
     @test s2.t ≈ tfin rtol = 1e-9
     @test s2.cfl < 0.9                         # it backed off, and says by how much
@@ -3282,7 +3378,13 @@ end
                                T_ion=(1 - s) * T2 + s * T1)
                       end),
               Numerics(n_global=(n, 1, 1), art=ArtParams(enabled=true),
-                       cfl=0.4, filter_interval=1))
+                       cfl=0.4, filter_interval=1,
+                       # A shocked binary interface ends beyond the
+                       # mass-fraction band, five of 160 points here, as the
+                       # shock/SF6 validation case does. The boundary condition
+                       # is what this tests, so the state is reported rather
+                       # than rejected.
+                       control=StepControl(validity=:permissive)))
     end
 
     inflow() = NSCBCInflowBC(u=(u2 + U, 0.0, 0.0), T_ion=T2, Y=[1.0, 0.0])

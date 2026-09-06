@@ -222,7 +222,7 @@ end
 # ===========================================================================
 say("\n=== Sedov–Taylor blast through the spherical origin (analytic) ===")
 
-let (rs, ρ, u, p, ok) = sedov()
+let (rs, ρ, u, p, ok, report) = sedov()
     @test ok
     Rex = sedov_shock_radius(SEDOV_E, SEDOV_T, 3, 1.4)
     Rnum = front_position(rs, ρ, 2.0)          # outermost crossing of 2·ρ₀
@@ -231,13 +231,27 @@ let (rs, ρ, u, p, ok) = sedov()
     @test abs(Rnum / Rex - 1) < 0.03
     @test maximum(ρ) > 4.5                     # jump is 6; capture smears it
     @test minimum(ρ) > 0
+    # The near-vacuum behind the shock, bounded. The case runs permissive, so
+    # nothing else would notice this count growing.
+    sayf("        closing state: %d inadmissible cell(s), e_min %+.5f
+",
+         report.inadmissible, report.e_min)
+    @test report.inadmissible <= 12
+    @test report.e_min > -0.5
+    @test report.nonfinite == 0 && report.negative_density == 0
 end
 
 # ===========================================================================
 say("\n=== Noh implosion, three geometries (analytic at all times) ===")
 
-for (ν, ptol) in ((1, 0.01), (2, 0.10), (3, 0.15))
-    xs, ρ, u, p, ok = noh_case(ν)
+# The case runs under `validity = :permissive`, so the state it ends on is
+# reported rather than rejected. The guards below bound that state as well as
+# the solution: the number of cells the EOS calls inadmissible, and the worst
+# internal energy among them. Reaching the plateau is not by itself evidence
+# that the trajectory stayed physical, and a permissive mode that reported a
+# growing violation without failing would otherwise hide it.
+for (ν, ptol, ncell) in ((1, 0.01, 12), (2, 0.10, 12), (3, 0.15, 12))
+    xs, ρ, u, p, ok, report = noh_case(ν)
     @test ok
     plat, deficit, Rnum, epre = noh_metrics(xs, ρ, ν)
     exact = 4.0^ν
@@ -245,10 +259,18 @@ for (ν, ptol) in ((1, 0.01), (2, 0.10), (3, 0.15))
          "shock %.4f/%.4f  L1 pre-shock rho %.2e\n",
          ν, Dict(NOH_N)[ν], plat, exact, 100deficit, Rnum,
          (NOH_G - 1) / 2 * NOH_T, epre)
+    sayf("        closing state: %d inadmissible cell(s), e_min %+.4f
+",
+         report.inadmissible, report.e_min)
     @test abs(plat / exact - 1) < ptol
     @test 0 < deficit < 0.7                   # wall heating budget
     @test abs(Rnum - (NOH_G - 1) / 2 * NOH_T) < 0.025
     @test epre < 5e-2
+    # The wall layer, bounded. Both are "no worse than" guards on the measured
+    # values in reference/CALIBRATION.md, not targets.
+    @test report.inadmissible <= ncell
+    @test report.e_min > -1.0
+    @test report.nonfinite == 0 && report.negative_density == 0
 end
 
 # ===========================================================================
@@ -267,6 +289,16 @@ let r = shock_interface()
     @test r.worst_min_Y > -0.02
     @test r.worst_max_Y < 1.02
     @test r.width_cells <= 6
+    # The same bound from the validation sweep's side: the excursion above is
+    # the worst over the run, this is the state the run ends on. A permissive
+    # mode reports its violations, and the report is guarded so that it cannot
+    # grow unnoticed.
+    sayf("  closing state: %d cell(s) beyond the mass-fraction band
+",
+         r.report.negative_species)
+    @test r.report.negative_species <= 12
+    @test r.report.nonfinite == 0 && r.report.negative_density == 0
+    @test r.report.rho_min > 0
 end
 
 say("\nvalidation battery complete")
