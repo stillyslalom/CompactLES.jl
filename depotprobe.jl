@@ -43,6 +43,8 @@ const t_mpi = time()
 using CompactLES
 const t_load = time()
 
+using LinearAlgebra: BLAS
+
 const CL = CompactLES
 const OPT = CL.script_args(ARGS, (stage = "", grid = 16, flags = true, io = true,
                                   sizes = true, steps = 4, sweep = 2,
@@ -288,6 +290,15 @@ function report_cpu()
     println("  cgroup quota  : ",
             quota < 0 ? "unreadable" : isinf(quota) ? "unlimited" :
             string(round(quota; digits = 3), " CPUs"))
+    nb = BLAS.get_num_threads()
+    # Every BLAS call this solver makes is the reduced interface stage of a
+    # compact solve: a 2P x 2P system, 2x2 on one rank, with one right-hand
+    # side per line. Threaded BLAS forks its pool for each of those and waits,
+    # hundreds of times per step, so the cost grows with the core count and
+    # never buys anything. Measured on a 24-thread desktop: 12 threads cost
+    # 12-17%. On a 112-core node it dominates the step.
+    println("  BLAS threads  : ", nb,
+            nb > 1 ? "   <-- set OPENBLAS_NUM_THREADS=1; see reference/CLUSTER.md" : "")
     println("  triad         : ", round(24e-9 * n * reps / t1; digits = 2),
             " GB/s")
     isfinite(acc) || println("  (dot produced a non-finite sum)")

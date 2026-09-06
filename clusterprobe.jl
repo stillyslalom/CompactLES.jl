@@ -27,6 +27,8 @@ using CompactLES
 using CompactLES.ThreadPinning
 const t_load = time()
 
+using LinearAlgebra: BLAS
+
 # `script_args`, `script_grid` and `Decomp` are not exported; the alias is
 # how the rest of the repository's scripts reach them.
 const CL = CompactLES
@@ -191,6 +193,14 @@ if rank == 0
             endswith(binary, "_jll") && length(hosts) > 1 ?
             "   <-- BUNDLED JLL ON A MULTI-NODE RUN; see reference/CLUSTER.md" : "")
     println("threadlevel     : ", MPI.Query_thread())
+    # Every BLAS call this solver makes is a compact solve's reduced
+    # interface stage: 2P x 2P, with one right-hand side per line.
+    # Threaded BLAS forks its pool for each and waits, hundreds of times
+    # per step, so it costs more the more cores a node has and never
+    # buys anything here.
+    println("BLAS threads    : ", BLAS.get_num_threads(),
+            BLAS.get_num_threads() > 1 ?
+            "   <-- set OPENBLAS_NUM_THREADS=1" : "")
     println("node topology   : ", nsockets(), " sockets, ", nnuma(), " NUMA domains, ",
             ncores(), " cores, ", nsmt(), " threads/core")
     println()
