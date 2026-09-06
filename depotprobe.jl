@@ -112,12 +112,24 @@ function compile_ns()
     return t isa Tuple ? t[1] : t
 end
 
-"Evaluate `f()`, returning `(value, wall_seconds, compile_seconds)`."
+"""
+Evaluate `f()`, returning `(value, wall, compile, bytes, gc)`.
+
+Allocation is measured beside the clock because the failure mode that looks
+like this one — a step far slower than the machine's own arithmetic, with no
+compilation in it — is usually inference giving up and putting a runtime
+dispatch, and an allocation, on a path that should have neither. A solver step
+on a fixed grid allocates a bounded amount; bytes proportional to the point
+count are the diagnosis.
+"""
 function timed(f)
     c0 = compile_ns()
+    b0 = Base.gc_bytes()
+    g0 = Base.gc_time_ns()
     t0 = time()
     v = f()
-    return (v, time() - t0, (compile_ns() - c0) / 1e9)
+    return (v, time() - t0, (compile_ns() - c0) / 1e9, Base.gc_bytes() - b0,
+            (Base.gc_time_ns() - g0) / 1e9)
 end
 
 # stat -f names the filesystem behind a path, which is the whole question for a
@@ -491,26 +503,29 @@ the first carries its compilation and the rest give the steady-state cost.
 it; it does not include the compact solves' own exchanges.
 """
 function step_costs(g, nsteps)
-    s, t_build, c_build = timed() do
+    s, t_build, c_build, _, _ = timed() do
         Solver(n_global = (g, g, g), L_domain = (2π, 2π, 2π), bcs = per3,
                art = ArtParams(enabled = false))
     end
     Q = allocate_state(s)
-    _, t_init, c_init = timed() do
+    _, t_init, c_init, _, _ = timed() do
         initialize!(s, Q, (x, y, z) -> Prim(u = (0.1sin(x), 0, 0), p = 1.0,
                                             rho = 1.0))
     end
     walls, comps, waits = Float64[], Float64[], Float64[]
+    bytes, gcs = Float64[], Float64[]
     for k in 1:nsteps
-        _, w, c = timed() do
+        _, w, c, b, gc = timed() do
             run!(s, Q; tfinal = 1e9, nmax = k)
         end
         push!(walls, w)
         push!(comps, c)
         push!(waits, s.wall_wait)
+        push!(bytes, Float64(b))
+        push!(gcs, gc)
     end
-    return (walls = walls, comps = comps, waits = waits,
-            points = prod(s.decomp.n_local), t_build = t_build,
+    return (walls = walls, comps = comps, waits = waits, bytes = bytes,
+            gcs = gcs, points = prod(s.decomp.n_local), t_build = t_build,
             c_build = c_build, t_init = t_init, c_init = c_init)
 end
 
@@ -522,27 +537,31 @@ median_of(v) = isempty(v) ? 0.0 : sort(v)[max(1, cld(length(v), 2))]
 # the MPI library's wait behaviour and not the arithmetic.
 function report_sweep(base, nsteps)
     OPT.sweep <= 1 && return
-    rows = NTuple{4,Float64}[]
+    rows = NTuple{5,Float64}[]
     for m in 1:OPT.sweep
         g = base * m
         k = m == 1 ? nsteps : 2
         r = step_costs(g, k)
         steady = median_of(r.walls[2:end])
         push!(rows, (Float64(g), Float64(r.points), steady,
-                     median_of(r.waits[2:end])))
+                     median_of(r.bytes[2:end]), median_of(r.gcs[2:end])))
     end
     hi = MPI.Allreduce([r[3] for r in rows], max, comm)
-    hw = MPI.Allreduce([r[4] for r in rows], max, comm)
+    hb = MPI.Allreduce([r[4] for r in rows], max, comm)
+    hg = MPI.Allreduce([r[5] for r in rows], max, comm)
     rank == 0 || return
     println()
     println("  step cost against grid size, max over ranks:")
-    println("    ", rpad("grid", 8), rpad("points/rank", 14), rpad("s/step", 10),
-            rpad("ns/point", 12), "wait/step")
+    println("    ", rpad("grid", 7), rpad("points", 10), rpad("s/step", 10),
+            rpad("ns/point", 11), rpad("MiB/step", 11), rpad("B/point", 10),
+            "gc s")
     for (i, r) in enumerate(rows)
-        println("    ", rpad(Int(r[1]), 8), rpad(Int(r[2]), 14),
+        println("    ", rpad(Int(r[1]), 7), rpad(Int(r[2]), 10),
                 rpad(round(hi[i]; digits = 3), 10),
-                rpad(round(Int, 1e9 * hi[i] / r[2]), 12),
-                round(hw[i]; digits = 3))
+                rpad(round(Int, 1e9 * hi[i] / r[2]), 11),
+                rpad(round(hb[i] / 2^20; digits = 1), 11),
+                rpad(round(Int, hb[i] / r[2]), 10),
+                round(hg[i]; digits = 3))
     end
     if length(rows) >= 2
         grew = rows[end][2] / rows[1][2]
