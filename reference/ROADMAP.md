@@ -1,644 +1,428 @@
-# CompactLES — Roadmap
-
-This roadmap compares CompactLES with related solvers and identifies the work
-required to progress from shock-tube calculations to multiphysics relevant to
-the National Ignition Facility (NIF). `README.md` covers usage, `DESIGN.md`
-describes the numerics, and `CLAUDE.md` defines development procedures.
-Completed phases are recorded in `reference/HISTORY.md`; the patch-AMR and GPU
-design, its measured lessons, and its remaining roadmap are
-`reference/AMR_GPU.md`.
-
-## Contents
-
-1. [Positioning](#positioning)
-2. [Comparison](#comparison)
-3. [Remaining blockers](#remaining-blockers)
-4. [Model debts — regularization and validation](#model-debts--regularization-and-validation)
-5. [Phase 2 — high-energy-density physics](#phase-2--hed-physics)
-6. [Phase 3 — scale, portability, and adaptivity](#phase-3--scale-portability-and-adaptivity)
-7. [Non-goals](#non-goals)
-8. [Suggested ordering](#suggested-ordering)
-
-## Positioning
-
-The existing numerical method determines which comparisons are informative.
-
-CompactLES offers tenth/sixth-order compact Padé derivatives, a
-Gaitonde–Visbal compact filter, Cook artificial fluid properties in place of
-Riemann solvers, five-stage low-storage RK45, structured curvilinear grids,
-and MPI. These elements match the Miranda/Pyranda method except for
-patch-based adaptivity and a GPU backend. They are appropriate for
-variable-density turbulent mixing and shock–interface interaction, the primary
-shock-tube and RM/RT use cases (Richtmyer–Meshkov and Rayleigh–Taylor, the two
-instabilities this solver is aimed at throughout). Comparisons with Pyranda
-therefore concern scope and interface, whereas comparisons with FLASH concern
-the physics catalogue.
-
-Three current capabilities distinguish CompactLES and constrain subsequent
-design decisions:
-
-- **The regularized coordinate-singularity treatment.** The half-offset grid
-  plus parity/antipodal folds for the cylindrical axis, spherical origin, and
-  spherical poles, with a discrete geometric conservation law (GCL) that
-  preserves freestream to machine zero, is more than Pyranda or Miranda
-  expose, and nothing in the Julia ecosystem has it. Converging-shock and
-  spherical-implosion geometry is directly NIF-relevant, and this is the piece
-  that is hard to rebuild.
-- **The distributed compact solve.** The spike/reduced-interface banded solve
-  reproduces the single-domain answer to round-off at any rank count (measured
-  3.1e-15 at np = 4, and bitwise wherever a line stays on one rank), with the
-  reduced system factorized once at plan time. It is also, as argued below,
-  the seed of the implicit infrastructure the HED physics needs.
-- **The `Problem`/`Numerics` split.** The physics specification does not refer
-  to ranks, halos, or the conserved layout. This separation is difficult to
-  add after a multiphysics implementation has matured.
-
-## Comparison
-
-### Pyranda (LLNL)
-
-The closest relative: the Miranda mini-app, Python-driven with a Fortran
-kernel, 10th-order compact plus RK45, MPI, aimed at arbitrary hyperbolic
-systems.
-
-| | Pyranda | CompactLES |
-|---|---|---|
-| Spatial scheme | C10 compact | C6 default, C10, custom `CompactScheme` |
-| Regularization | artificial bulk viscosity | Cook μ\*, β\*, κ\*, per-species D\* |
-| Problem specification | Python domain-specific language (DSL) over symbolic PDE strings | typed `Problem` / `Numerics` |
-| Geometry | Cartesian, curvilinear, immersed boundaries | Cartesian, cylindrical, spherical with regularized singularities; stretch maps |
-| Lineage | Miranda validation heritage | validated against analytic references only (see model debt 3) |
-
-Pyranda also provides a reference implementation, because it carries Miranda's
-Fortran kernels in `pyranda/parcop/`, including operators Pyranda itself does
-not expose. The readings of those sources are recorded elsewhere: level
-transfer in `reference/AMR_GPU.md`, the artificial-property and filter path in
-`reference/CALIBRATION.md`, the immersed-boundary method in
-`reference/IMMERSED.md`, and what the August 2026 pass changed in
-`reference/HISTORY.md`.
-
-Three structural comparisons came out of that reading and need no action. The
-distributed compact solve is the same algorithm as Miranda's, down to the
-factorized interface system and the single `Allgather` per application;
-Miranda's additional gather-solve-scatter mode (`directcom = 2`) is the shape
-to reach for if the interface solve ever appears in a scaling curve. Symmetry
-is handled equivalently, Miranda folding parity into the coefficient
-tables at setup where the fold plans plus `sigflux` carry the same algebra. And
-the freestream claim above holds against the source: Miranda's spherical metric
-sources use analytic `1/tan θ` and `1/sin θ`, so the discrete redefinition of
-`cot_over_r` lies beyond the reference, whose r = 0 is an ordinary
-reflective symmetry plane, not a half-offset antipodal fold.
-
-#### Open work from the source comparison
-
-In rough order of expected value. The sensor fields stood at the head of this
-list and are now measured and closed (`reference/HISTORY.md`): μ\* from the
-velocity components, β\* from the dilatation, and MAX against Σ_d over
-directions. All three are `ArtParams` settings and none of them is a default.
-
-1. **Conservative filtering on non-Cartesian metrics.** The reference filters
-   the volume-weighted field and divides by a cell volume passed through the
-   same filter once at setup, which reproduces constants exactly on a
-   non-uniform metric; `filter_state!` filters the conserved components
-   unweighted. Uniform Cartesian results are unaffected by construction, so the
-   measurement is the converging cases plus a conservation-defect probe.
-2. **A `C_mu` refit under the adopted smoother and detector.** Taylor–Green at
-   64³ shows the μ\* channel moving 4.0% → 4.5% of the sink under the Gaussian,
-   which does not demand a refit but does not rule one out. **Blocked** on the
-   same 3-D campaign as the filter calibration, since no case in the
-   one-dimensional battery gives the shear channel anything to do. The `C_beta`
-   half is done and retained 1.0 under both detectors
-   (`reference/CALIBRATION.md`); it also established that no `C_beta` in
-   0.25–4 recovers the spherical-origin ceiling under `:d8`. The origin cell
-   has since been accounted for as well, retiring the fold closure, so the
-   detector default now rests on which configuration survives the startup
-   excursion, not on any unmeasured numerics.
-3. **Directional artificial bulk viscosity**, with the per-direction diffusive
-   timestep limit that goes with it. **Blocked**: no anisotropic or strongly
-   stretched case exists in the validation battery, so measuring it against the
-   present cases would produce an uninformative null result. Build the case
-   first.
-4. **Anchored-difference closure rows.** The reference writes boundary rows as
-   differences from the anchor point so a constant is annihilated exactly in
-   floating point, not through cancellation. **Gated** on measuring the
-   present residual first; if it is 1e-16 times the field scale the change is
-   cosmetic and should be recorded as such, not made.
-
-**Capabilities absent from CompactLES:** a DSL for defining a new PDE system
-in ten lines without touching the solver; immersed boundaries, which provide
-non-coordinate-surface geometry without unstructured meshes; and the
-credibility of being the mini-app for a production code.
-
-**Equation specification.** Pyranda's string-based equation interpreter
-provides generality at the cost of type safety and of any physics that is not
-a flux divergence plus a source. Julia multiple dispatch on an equation-set
-type, as used by Trixi and adopted in Phase 0, provides the alternative while
-retaining inference and allocation discipline (`bench/audit.jl`,
-`bench/jetcheck.jl`). If a symbolic frontend is later wanted for ergonomics,
-the route is a macro that *emits* an equation set at parse time; runtime
-evaluation of equation strings is excluded (see Non-goals).
-
-Immersed boundaries are designed in `reference/IMMERSED.md`: a sharp IB cut
-cell is fundamentally at odds with a line-global compact operator, so the
-design commits to the diffuse family (a graded post-stage state blend that
-unifies smeared Brinkman penalization with Pyranda's level-set reset), staged
-with validation gates.
-
-### FLASH
-
-FLASH uses second-order unsplit PPM (the piecewise parabolic method), so the
-relevant comparison concerns its physics catalogue and adaptive mesh refinement
-(AMR), not numerical order.
-
-FLASH's high-energy-density physics (HEDP) capability is a set of units: 3T
-hydrodynamics (separate ion, electron and radiation temperatures) with
-electron–ion equilibration, multigroup radiation diffusion, tabulated
-multi-species EOS and opacities (IONMIX), electron thermal conduction through
-an implicit diffusion solver, laser energy deposition by geometric-optics ray
-tracing, MHD, and anisotropic magnetized transport coefficients, all on a
-block-structured AMR mesh, validated against HYDRA. This capability set defines
-the long-term target for NIF applications and represents approximately a decade
-of physics implementation.
-
-Two structural patterns are relevant:
-
-- **Physics-unit decomposition.** FLASH's physics units are separately
-  configurable, each owning its own state and contributing to the update
-  through a defined interface. That separation is how FLASH grew 3T and
-  multigroup diffusion (MGD) without rewriting hydro. CompactLES's equivalent is the
-  Phase 0 hooks (`reference/HISTORY.md`).
-- **Patch-based adaptivity.** FLASH's PARAMESH/AMReX refinement is oct-tree
-  block AMR built around a second-order finite-volume update. The version
-  that belongs here is *patch-based* (logically rectangular blocks of uniform
-  resolution, SAMRAI-style), the form Miranda uses and the one compatible
-  with a compact scheme. `reference/AMR_GPU.md` carries
-  the constraint analysis and the delivered design.
-
-### Trixi.jl
-
-The Julia reference for high-order conservation laws: nodal discontinuous
-Galerkin spectral element (DG-SEM) on a quad/octree with AMR, `p4est` for
-unstructured curved meshes, entropy-stable and kinetic-energy-preserving split
-forms, shock capturing with positivity limiting, a large equation-set
-catalogue, and OrdinaryDiffEq.jl integration.
-
-**Relevant design pattern:** the `equations` type parameter. Trixi's solvers
-are generic over an equation set that owns the variable count, names, flux
-functions, and conversions; adding MHD to Trixi did not require rewriting
-Euler. Phase 0 adopted this interface.
-
-**CompactLES advantages for the target problems:** compact finite differences
-require less work per degree of freedom than DG at comparable resolving power
-for smooth, volume-filling turbulence and have lower memory traffic. Trixi
-has nothing resembling Cook artificial fluid properties, which is the right
-regularization for material interfaces at high Atwood number, and no
-regularized polar/spherical singularity treatment.
-
-**Applicable external component:** Trixi uses OrdinaryDiffEq.jl for time
-integration. A CompactLES IMEX scheme in Phase 2 could use the tested
-IMEX-ARK tableaus in the SciML ecosystem.
-
-### XCALibre.jl
-
-Second-order unstructured finite volume, incompressible and compressible,
-RANS and LES, OpenFOAM/unv mesh import, CPU threads or GPU through
-KernelAbstractions.jl. Different accuracy class and problem domain
-(engineering CFD on complex geometry), so it is not a competitor. It provides
-the GPU architecture adopted in `reference/AMR_GPU.md`: a single
-KernelAbstractions.jl codebase targeting NVIDIA, AMD, and Intel while
-retaining a CPU path. Oceananigans.jl is a second example of a Julia
-structured-grid solver designed this way.
-
-## Remaining blockers
-
-**Implicit and elliptic solvers are absent.** Radiation diffusion and electron
-conduction are parabolic and stiff; explicit treatment is not an option at HED
-conditions, where the conduction timestep can be orders of magnitude below the
-acoustic one. This is the largest remaining architectural gap. `tridiag.jl`
-and `banded.jl` implement a distributed banded line solve with cross-rank
-coupling and a pre-factorized reduced interface system, which is the kernel an
-alternating-direction implicit (ADI) or line-relaxation diffusion solver needs
-and the smoother a geometric multigrid requires. The implicit implementation
-should be built on that machinery, not on a separate linear-algebra
-dependency.
-
-**The regularization model carries one structural debt.** The July 2026
-calibration study established that the compact filter, not the Cook
-properties, is the primary stabilizer at every measured resolution, while the
-filter itself has never been calibrated and its dissipation is applied per
-filter pass, not per unit time (`reference/CALIBRATION.md`). Every mixing
-result this solver produces is currently conditional on it, so it is listed as
-a work item below and not as a known limitation. The second debt in this
-class, β\* keyed on the strain magnitude, not the dilatation, has been
-measured and closed (`reference/HISTORY.md`).
-
-The converging-shock `cfl ≤ 0.15` ceiling remains open, although measurements
-have ruled out every discretization-order candidate. The timestep predictor,
-the dilatation sensor and the sensor reach
-went first. The fold closure, which stood last and longest, is not third order:
-it is sixth to seventh order at the fold, and the third-order figure attributed
-to it belongs to the outer wall through a global max norm. The companion
-reading, that a selective detector is blind at the fold, fails on the same
-measurement, since β\* at the origin reaches the line maximum during the
-excursion that fails.
-
-The origin cell instead evacuates during a startup transient that lands at a
-fixed physical time regardless of resolution and that every configuration
-passes through. The ceiling is therefore a robustness problem at a symmetry
-cell, not a numerics problem. Model debt 2 below has since supplied an
-instrument for that question: `StepControl.floor_ratio` counts sub-floor cells
-and can repair them. The converging geometries have not been measured through
-it, only the planar case. Two
-mechanisms are live and neither is yet demonstrated: β\* is proportional to the
-density, so it collapses in the same cell that is thinning, and the compact
-filter is applied per step, not per unit time, which is model debt 1 and
-which the `C_beta` ladder implicates independently: under `:d8` at reduced β\*
-the cylindrical axis fails *below* a CFL, not above one
-(`reference/CALIBRATION.md`).
-
-**One EOS assumption survives the Phase 1 generalization.** The artificial
-conductivity is still built as (ρc/T_ion)·sensor for every gas model, which is
-singular at a cold ambient. The scale is an EOS dispatch point, so a tabular
-or condensed-matter model can supply its own; making the gas-model form
-non-singular is a numerics decision, tracked in `reference/CALIBRATION.md`.
-
-## Model debts — regularization and validation
-
-These items carry the physics credibility of the solver for its primary
-mission. They are ordered by information gained per unit effort. Items 1 and 3
-change guarded numbers, so each concludes by re-baselining `test/validation.jl`
-and updating `reference/CALIBRATION.md`. Item 2 was expected to change them and
-does not, its default scope being measured bit-identical to the unfloored
-solver.
-
-**1. Filter calibration and dt-consistency.** Two coupled problems, and the
-second is now done. `compact_filter(0.45)` applied every step has never been
-fitted to anything, while supplying 37–87% of the measured energy sink and
-being necessary and sufficient for stability (`reference/CALIBRATION.md`).
-
-The dt-consistency half is delivered. The filter removed energy per
-*application*, not per unit time, measured at a factor of 3.93 across a
-4× CFL change on a case where the filter is the only sink, so the subgrid
-dissipation did not converge as dt → 0 at fixed resolution. `Numerics.filter_cfl`
-supplies the per-unit-time formulation, `Q ← (1−w)Q + w·F(Q)` with `w ∝ dt`,
-which holds the loss constant to six significant figures over the same range
-and also removes the truncated-final-step artifact, since a shortened step now
-filters proportionally less. It is off by default. The measurement bearing on
-the rest of the debt: with `C_mu` held fixed, halving the CFL
-moves the μ\* share of the Taylor–Green sink by 29% relative, so a constant
-fitted under the unrelaxed formulation is only reproducible at the CFL it was
-fitted at. It should also resolve the cross-level cadence question raised in
-`reference/AMR_GPU.md`, which has not been checked.
-
-Calibration remains: fit α and cadence against the digitized
-van Rees −dKE/dt(t) history and spectra at 128³ (the digitization is listed
-in the calibration remainders), and measure the validation battery's
-sensitivity to cadence. Deliverable: the
-filter section of `reference/CALIBRATION.md` brought to the same standing as
-the four-constant tables; it exists now and carries the dt-consistency half.
-Cluster time is required; budget runs per the usual discipline.
-
-Whether `filter_cfl` becomes the default is part of that fit, not a separate
-decision. It changes the meaning of α, since under the relaxation α and
-the reference CFL set the dissipation jointly, so fitting α first under the
-old formulation and switching afterwards would waste the fit.
-
-**2. A positivity failsafe, delivered** (`reference/HISTORY.md`).
-`StepControl.floor_ratio` enables it and `floor_scope` sets how much of the
-state space is repaired; both are off by default, and the repair narrows the
-Riemann-solver non-goal below without violating it, since the scheme is
-unchanged and the failsafe recovers from states the scheme has left.
-
-The delivery changed the scope of the repair, because building the floor made
-the condition measurable and the measurement did not support repairing all of
-it. The negative internal energy that motivated the debt is neither a rounding
-artifact nor a state the scheme cannot handle: the Noh ν = 1 validation case
-carries 24991 cell-steps of it, reaching −718 ambient units, while density and
-total energy stay positive throughout and the run still reaches its plateau to
-within 0.07%. Forcing it positive costs a 5% velocity damping on the worst cell,
-and the run fails at step 18. The default scope therefore repairs only what no
-frame can represent and *counts* the rest, which closes the part of the debt the
-evidence supports: the condition was invisible, floored silently by
-`primitives!`. → `reference/CALIBRATION.md`
-
-The measurement leaves one question open. A calculation
-whose wall region runs as a pressureless layer for its whole duration reaches
-the right plateau through an unverified mechanism, and the `:internal_energy`
-scope provides the measurement of its cost. The question belongs with
-the filter calibration below, not with the failsafe.
-
-**3. External validation.** Everything to date compares against analytic
-references or this code's own high-resolution profiles, as the comparison
-table above records. Two campaigns close the gap. First, a direct
-CompactLES-vs-Pyranda comparison (Pyranda is runnable): TGV at Re = 1600 and
-one RM shock-tube case, comparing dissipation histories and mix widths, which
-converts "matches the Miranda method" from a design claim into a measured
-one. Second, one published RM experiment as a data target: community
-benchmark cases with published initial-condition specifications are
-accessible, and asking the originating groups for specifications beats
-reverse-engineering them from figures. Deliverable: a validation section in
-the docs comparing against something this code did not produce.
-
-**4. Turbulent inflow generation.** RM/RT comparisons with experiments need a
-perturbed or turbulent inflow. The digital-filter method (Klein et al., 2003)
-or a synthetic-eddy variant fits the existing frontend with no solver surgery:
-a generator utility producing an `(x, y, z, t) -> Prim` closure consumed by
-`DirichletBC` or the `NSCBCInflowBC` target. Modest scope; pairs naturally
-with item 3's experiment campaign.
-
-**5. NSCBC completion.** Add the Yoo–Im transverse terms to the inflow
-correction, mirroring the outflow implementation (the README documents the
-asymmetry). This is the only piece outstanding; the setup-time validation of
-the face and of the target composition landed with the near-term corrections
-(`reference/HISTORY.md`).
-
-**6. Temperature-dependent transport.** The NASA CEA transport table is bundled in
-`data/` but is not connected; `Transport` is constant-coefficient with one
-Schmidt number for all species. Implement the coefficient reader, per-species
-μ_k(T) and λ_k(T) evaluations, a Wilke-type mixture rule, and
-mixture-averaged diffusivities (unity-Lewis fallback retained). Structure it
-the way the EOS contract is structured, as a dispatchable transport model
-consumed behind the existing function barrier, so a plasma transport model
-(Phase 2) is a new instance, not a rewrite. Until this lands,
-"multicomponent" accurately describes the thermodynamics and the species
-transport equations, not the transport coefficients; the README should say
-so.
-
-**7. Wall treatment, deferred.** The target problems (RM/RT
-mixing, converging shocks, implosions) are wall-free or slip-walled;
-`NoSlipWallBC` exists for verification cases. Wall-resolved or wall-modeled
-LES is out of scope until a target problem requires it. Recorded here so the
-gap stands as a decision, not an oversight.
-
-## Phase 2 — HED physics
-
-HED is high-energy-density: the pressure and temperature regime of inertial
-confinement fusion, where radiation transport and electron conduction are
-comparable to hydrodynamics in importance.
-
-This phase supplies the NIF-oriented physics. Its items are ordered to produce
-an independently usable capability at each step.
-
-**1. Implicit diffusion infrastructure.** Everything else here depends on it.
-Build it on the existing distributed banded solve: ADI or line-Jacobi sweeps
-as the smoother, wrapped in either a geometric multigrid or a Krylov method
-(Krylov.jl is the mature, dependency-light Julia option). Validate against a
-manufactured heat-conduction solution in every metric and against the
-existing freestream tests. Implicit treatment of the θ direction also
-addresses the azimuthal CFL restriction documented in the README.
-
-**2. IMEX time integration.** With the implicit solver in hand, an IMEX-ARK
-scheme pairing the existing explicit RK45 on hydro with implicit diffusion.
-The caller-owned `Workspace` (Phase 0) is the prerequisite. Existing tableaus
-from the SciML ecosystem should be evaluated before implementing new ones.
-
-**3. Three-temperature hydrodynamics.** T_ele and T_rad alongside T_ion. The
-naming convention has reserved this from the start, so it costs an equation
-set, not an API break. Separate electron and ion energy
-equations, an electron–ion equilibration source (through the source
-interface), and the electron pressure contribution to the momentum flux.
-
-**4. Electron thermal conduction.** Spitzer–Härm with a flux limiter, through
-the Phase 2.1 solver. Depends on items 1 and 3.
-
-**5. Tabulated EOS.** An IONMIX reader first (the simpler format, and what
-FLASH's HEDP demos use), SESAME later if licensing permits. The EOS contract
-is ready (`reference/HISTORY.md`); this is data plumbing and a table
-interpolator, not solver surgery. The κ\* scale for a tabular model comes
-through the existing `artificial_conductivity_scale` dispatch point.
-
-**6. Multigroup radiation diffusion.** Flux-limited, gray first, then
-multigroup with a group structure and an opacity interface mirroring the EOS
-contract. Radiation groups become additional conserved components, supported
-by the equation-set interface.
-
-**7. Laser energy deposition.** Geometric-optics ray tracing with inverse
-bremsstrahlung absorption. Architecturally independent of everything above:
-a source term plus a ray tracer that hands rays between ranks. This item can
-precede the others if required by a specific experiment.
-
-**8. MHD, if magnetized targets are relevant.** The ∇·B constraint with finite
-differences requires hyperbolic (GLM) divergence cleaning, which adds a
-conserved component and a source term. Constrained transport is not natural
-in this discretization.
-
-## Phase 3 — scale, portability, and adaptivity
-
-**Patch-based AMR and the GPU port are delivered**; `reference/AMR_GPU.md`
-describes the design, the compact-scheme constraints, the Miranda
-transfer-operator evidence, the SBP–SAT fallback, the measured lessons, and
-the remaining device-track roadmap. The capability: conforming same-level
-patches, a two-level refined region (static or regridding, subcycled),
-both distributed over the rank set, and a device backend on which the whole
-solver (decomposed, refined, either precision) reproduces the CPU answer
-bitwise. Conforming multiblock is independently useful geometry even where
-refinement is not used.
-
-**Float32 and mixed precision.** The storage blocker is cleared: AMR Stage 2 /
-GPU Stage G0 (`reference/AMR_GPU.md`) delivered `Decomp{T}` with `T`-typed halo
-and pair buffers, backend-routed allocation (`field(backend, decomp)`), and
-eltype-preserving `viz.jl` extraction. That was necessary but did not by itself
-define either a public Float32 mode or mixed precision. G4a now lets
-`Problem`/`Numerics` carry typed transport and artificial controls, adds a
-typed single-species EOS constructor, removes Float64 promotion from the
-pointwise/RK/rate paths audited so far, and guards an end-to-end serial
-Float32 step. Its matrix covers C6 down to the Float32 roundoff floor,
-constant- and varying-cp multicomponent NASA-9 recovery, ideal and
-stiffened-gas states, slip/no-slip/NSCBC/fold boundaries, static refinement,
-and a moving subcycled/regridded shock smoke test. The test-scale CPU
-validation matrix now also covers all metric/stretch freestream cases,
-closed/spherical smooth convergence, exact-Riemann Sod errors and mass drift,
-and a short TGV history against Float64. The published-reference 64³ TGV
-measurement is now also complete: Float32 matches the Float64 peak and time,
-halves the measured 219.5 MiB footprint, and improves CPU solver wall time by
-1.10×, while increasing mean-density drift from 7.5e-13 to 1.4e-4. This
-supports opt-in CPU Float32, not a new CPU default.
-The device gate is measured too, closing G4a: on the RX 6800 XT the same
-64³ histories on a resident device patch reproduce the CPU numbers to every
-printed digit in both precisions (the G3a step is bitwise), and Float32 runs
-1.12× the Float64 device rate in the synchronized launch mode. G4b policy
-selection waits on the G3d launch-floor profile, with the CPU matrix and the
-device histories as its accepted inputs.
-`Solver{T}` still gives storage, geometry and runtime scalars one common type,
-so mixed precision proper remains a later, measured choice of explicit state
-and accumulation types, not the mixture that Float64 literals happen to induce.
-
-**Parallel HDF5/XDMF time series.** Single dumps and shared-file checkpoints
-are delivered (`reference/HISTORY.md`). Two pieces remain, the first
-specified below; the second is validating the collective write on a machine
-with a parallel libhdf5 built against the run's MPI; only the serialized
-token-relay fallback has been exercised.
-
-### `FieldWriter` over HDF5
-
-`FieldWriter` gains `format = :vtk` or `:hdf5`. `_write_dump!` exists
-as the dispatch point and dispatches on it, calling `save_hdf5` for the latter; the
-core stub in `src/hdf5.jl` supplies the error when the extension is absent,
-so no availability check is needed at the call site. `fields`, `stride` and
-`slice` flow through unchanged. The extension point is the same one `save_hdf5`
-uses: a core stub `_write_xdmf_collection!` routed through `_hdf5_required`,
-with the real method in `ext/CompactLESHDF5Ext.jl`.
-
-The collection file is where the work is. `.pvd` has no XDMF equivalent that
-only lists frames: a temporal collection is `<Grid GridType="Collection"
-CollectionType="Temporal">` with one full `<Grid>` inlined per frame, each
-carrying its own `<Time>`, topology, geometry and one `<Attribute>` per
-field. Write it in full on every dump, as `_write_pvd` does: a run killed by
-the scheduler then still leaves a collection naming
-every completed frame, where an appended file would lack its closing tags and
-not open at all. XInclude of the per-frame `.xmf` files was considered and
-rejected: reader support for it is inconsistent, and the per-frame files
-should stay openable on their own.
-
-#### The fork
-
-Inlining an `<Attribute>` per frame requires each field's name and component
-count, and `:Y` and `:D_art` expand to one entry per species while the vector
-fields carry three components. Recomputing that in the collection
-writer would duplicate the naming in `vtk_field_entries` and drift from it.
-Resolve it by having `save_hdf5` hand back the `(name, ncomponents)`
-descriptors it wrote and caching them on the writer at the first dump. The
-descriptors are identical across frames, since `fields`, `stride` and `slice`
-are fixed for the life of a writer.
-
-Testing should assert that the frames land on the [`EveryTime`](@ref)
-instants, that the collection holds one `<Grid>` per frame with the matching
-`<Time>` value, and that each references `prefix_NNNN.h5` by a path relative
-to the collection's own directory. Run it decomposed as well: the per-frame
-writes are collective and only rank 0 writes the collection.
-
-Slicing interacts with the second of those. A rank holding no part of the
-requested plane currently skips its write, which is correct under the
-serialized backend. A collective write instead requires every rank to call
-`H5Dwrite` even with nothing selected, so enabling the parallel backend with
-slicing needs an empty selection (`H5S_SELECT_NONE`), not a skipped call. The
-VTK path has no such constraint, since each rank writes its own file.
-
-**Multiblock geometry** follows from the patch abstraction (AMR Stage 2):
-same-level patches with separate line solves and interface exchange provide
-the required structure without an unstructured mesh.
-
-**Immersed boundaries** are specified in `reference/IMMERSED.md`: level-set
-bodies imposed by a graded post-stage state blend (exact Brinkman relaxation,
-degenerating to Pyranda-style hard reset at η = 0), with force and heat-flux
-diagnostics from the imposition bookkeeping. The design is
-ordering-independent of the patch refactor, since the imposition is pointwise
-and mask-driven, so it can be implemented on today's arrays and ported
-mechanically. Multiblock and IB are complements, not alternatives: multiblock
-handles geometry that must be accurate (coordinate-aligned blocks at full
-closure order), IB handles geometry that need only exist (first-order at
-the interface, any shape, no meshing).
-
-**ThreadPinning wiring**, listed as open in `reference/CLUSTER.md` and only
-validatable on the target cluster.
-
-## Non-goals
-
-The following capabilities are explicitly outside the project scope.
-
-- **Oct-tree / cell-by-cell AMR.** Patch-based refinement is in long-term
-  scope; tree refinement down to individual cells is not, because it is the
-  variant that is incompatible with a line-coupled solve.
-- **Unstructured meshes.** A line-coupled solve instead uses multiblock
-  patches for geometric complexity.
-- **Riemann solvers and flux limiters as the scheme.** The
-  artificial-fluid-property approach is the design commitment; adding a
-  Godunov path would double the maintenance surface for a capability other
-  codes do better. This exclusion does not cover the instrumented positivity
-  failsafe of model debt 2, which recovers from states the scheme has left
-  and does not alter the scheme.
-- **A string-based PDE interpreter**, in the Pyranda style. This is narrower
-  than "no symbolic frontend": a macro that *lowers* to the equation-set
-  dispatch remains possible and can provide Pyranda's concise problem
-  specification while the generated code stays concretely typed and visible
-  to `bench/audit.jl` and `bench/jetcheck.jl`. The exclusion is on runtime
-  string evaluation. The sequence is constrained: hand-written equation sets
-  define the interface before any macro emits it.
-- **Being a general-purpose CFD library.** XCALibre and Trixi occupy that
-  ground. CompactLES is scoped to compressible, variable-density,
-  shock-driven mixing and implosion.
-
-Wall-modeled LES is deferred, not excluded; see model debt 7.
-
-## Suggested ordering
-
-The near-term corrections, the dilatation-gated β\* experiment, and the
-reference-implementation pass that headed this list are done
-(`reference/HISTORY.md`). That leaves:
-
-1. **Filter calibration** (model debt 1), which every other physics number is
-   conditional on. Requires cluster time; run it alongside the Pyranda
-   comparison, which needs the same machines and cases. The dt-consistency half
-   is done and `filter_cfl` exists; what is left is the α and cadence fit, and
-   the decision on whether to adopt the relaxation belongs to that fit.
-2. **External validation** (model debt 3), promoted early because it changes
-   how much the remaining calibration work can be trusted.
-3. **Phase 2.1, the implicit diffusion solver**, the principal architectural
-   gap, which also addresses the polar CFL restriction.
-4. **AMR/GPU Stages 1–4 are delivered** (`reference/HISTORY.md`;
-   `reference/AMR_GPU.md` carries the design and measurements): the
-   transfer operators, the
-   patch abstraction at a single level carrying the G0 storage
-   generalization, static two-level refinement at a global timestep, and
-   Berger–Oliger subcycling with tagging-driven regridding of a single
-   moving region (all serial first cuts). Stages 2–4 were originally
-   sequenced after the model debts above; they were executed early by
-   explicit decision, kept behavior-preserving (the unrefined single-patch
-   path is bit-identical), so physics changes rebase onto them cleanly.
-   G1 (the KernelAbstractions pointwise kernels, including device-argument
-   adaptation) and G2 (operator-level device line solves plus backend-routed
-   allocation) are also delivered and measured bitwise-correct on the
-   workstation's RX 6800 XT through AMDGPU.jl (`bench/device_bringup.jl`).
-   G3a is delivered as well: a whole single-patch solver runs resident on
-   that GPU (`Solver(backend = DeviceBackend(ka))`), reproducing the CPU
-   solver bitwise over full runs (periodic/closed smooth cases, NSCBC, the
-   axis fold, freestream/GCL, a 578-step Sod validation, and short TGV
-   histories in both precisions; `bench/device_solver.jl`,
-   `test/device_tests.jl`). At 64³ the synchronized launch mode runs at
-   0.4–0.5× the 8-thread CPU, the launch-latency floor G3d exists to remove.
-   G3b is delivered too: a device-resident patch runs decomposed, its halo
-   and fold-pair messages staged through contiguous device buffers around
-   the unchanged MPI path, bitwise against the CPU solver at np = 2/4/8 on
-   the shared workstation GPU, with the staged and reduced-interface
-   transfer shares recorded (`bench/device_mpi.jl`). G3c followed: the
-   level transfer is distributed (both levels decompose over all ranks;
-   the coupling gathers replicated data and distributes the interpolation
-   chains by component), a refined solver runs on a DeviceBackend bitwise
-   against CPU, and the deferred Stage 4 cost demonstration is measured:
-   on a 3-D mixing blob at np = 8 the subcycled, regridding composite
-   lands 5× closer to the uniform-fine mixing answer than the coarse run
-   at 49% of the fine wall and 24% of its memory (`bench/amr_cost.jl`).
-   G3d closed the track's four gates by removing the per-launch
-   synchronization: kernels defer on one in-order stream with a single
-   reduced-solve fence per apply, cutting the device step 28–32% (64³ TGV
-   0.203 → 0.146 s/step Float64, both modes bitwise; DEVICE_SYNC restores
-   the conservative mode). Per-patch streams were measured against and set
-   aside: the remaining gap to CPU is fence-bound, which a second stream
-   cannot remove; the reasoning is in `AMR_GPU.md`'s launch-policy
-   section. Every device timing above is from the workstation's RX 6800
-   XT and reads as pitfall clearance only; the performance target is
-   rzadams / El Capitan-class hardware (MI300A, GPU-aware MPI), where
-   the FP64 rate, unified APU memory, and MPI stack all differ (see the
-   framing in `AMR_GPU.md`'s performance summary). What remains on the
-   GPU track: an rzadams measurement campaign to re-base the numbers and
-   settle the fence-floor routes, G4b policy selection there, and the
-   `Nasa9Mixture` device mirror. The device items of `AMR_GPU.md`'s
-   production-AMR sequencing (staged interface records, the device
-   transfer chain, device tagging, batched cross-tile launches through
-   stacked tile storage) are delivered and gated bitwise; their rzadams
-   measurement is part of the campaign.
-
-The open items from the source comparison
-([above](#open-work-from-the-source-comparison)) sit alongside these and
-outside the ordering. Everything remaining there is now either blocked on a
-missing case or gated on a measurement that has not been taken. The one
-exception, the `C_beta` refit under `:d8`, is closed: the constant holds at 1.0
-and the detector default rests on the spherical origin, not on the fit.
-
-Two items sit outside the ordering because they are independent of everything
-above and pullable on demand: laser ray tracing (Phase 2.7), if a specific
-experiment needs it before the rest of the HED stack exists, and immersed
-boundaries (`reference/IMMERSED.md`) Stage 1, when a target problem first
-needs non-coordinate-surface geometry; its main sequencing constraint is
-that the Stage 2 calibration sweep requires the same measurement discipline
-as `bench/artcal.jl`, not that it depends on other work.
+# CompactLES task roadmap
+
+Prioritized open work for compressible, variable-density mixing and implosion.
+The September 2026 source review adds runtime and API corrections to the existing
+numerics, validation, AMR/GPU, and high-energy-density (HED) backlog.
+Completed implementation and benchmark history belong in [HISTORY.md](HISTORY.md);
+method details belong in [DESIGN.md](DESIGN.md).
+
+## How to use this plan
+
+- Unchecked boxes are open deliverables. Stable IDs identify dependencies.
+- Start with P0 correctness, then P1 numerical credibility and API contracts.
+  P2 work can proceed independently when its stated prerequisites are met.
+- A measurement task is complete when its result and resulting decision are
+  recorded, including a decision to retain the current method.
+- Close implementation tasks with the stated regression checks and the applicable
+  repository validation gate. Numerical changes require explained baseline updates
+  in [CALIBRATION.md](CALIBRATION.md), not merely relaxed test tolerances.
+- Historical references to model debts 1/2/3 correspond to N1 / R3+N3 / V1 below;
+  former Phase 2 items correspond to H1–H8.
+
+The review baseline is Julia 1.11.4 on Windows: 2,025 serial assertions and the
+spatial convergence suite passed. HDF5 and Makie tests were skipped locally;
+multi-rank and hardware-GPU tests were not run in that review. The R1–R3 probes
+below exposed behavior outside those passing checks.
+
+## P0: runtime correctness
+
+- [ ] **R1 — Make diagnostics independent of integrator state.**
+  In a 64-point Sod case at CFL 0.15, after one step, requesting
+  `field_array(..., :beta_art)` changed the next dt from 0.000587255 to
+  0.000961137 without changing Q. Artificial-field output and `dissipation_rate`
+  also overwrite coefficients consumed by the next CFL check.
+  Separate diagnostic storage or preserve the integrator coefficients; audit
+  primitive refreshes used by sensor-based regridding as well.
+  **Gate:** identical dt histories, states, and regrid decisions with and without
+  observational calls at the same step boundaries, on single and multiple patches,
+  CPU/device paths, and MPI. Test output scheduling separately.
+  **Code:** [viz.jl](../src/viz.jl), [io.jl](../src/io.jl),
+  [diagnostics.jl](../src/diagnostics.jl), [timestep.jl](../src/timestep.jl).
+
+- [ ] **R2 — Guarantee clock progress and reachable endpoints.**
+  A Float32 run with Float64 `tfinal=0.7` stalls at 0.699999988079071,
+  repeatedly taking a 1.1920929e-8 remainder that cannot advance its clock.
+  Define endpoint conversion/tolerance semantics and check progress after all
+  clipping, including callback landing. Return a diagnosed failure for an
+  unrepresentable advancing step instead of running to `nmax`.
+  **Gate:** Float32/Float64 endpoints on both sides of representable values,
+  large restart times, scheduled callbacks, and subcycling all terminate with
+  documented time accuracy. Avoid an endless test by bounding steps.
+  **Code:** [timestep.jl](../src/timestep.jl), [callbacks.jl](../src/callbacks.jl).
+
+- [ ] **R3 — Validate accepted and returned states under an explicit policy.**
+  The current guard checks mixture density and dt before stepping. Probes completed
+  with ideal-gas specific internal energy -1 or species densities (-0.1, 1.1).
+  A uniform density sink took rho from 1 to -1 at `tfinal=0.02` and returned
+  normally because no next iteration checked the result.
+  Add EOS-aware checks of finite conserved values, partial densities, and
+  thermodynamic admissibility at initialization and before accepting/returning a
+  step, including `nmax` and callback exits. Distinguish strict rejection,
+  explicitly permissive research runs, and optional repair; report substitutions.
+  Do not impose e > 0 universally: formation-energy gauges and EOS domains differ.
+  **Gate:** invalid final states trigger the selected policy, failures remain
+  collective and retryable, and permissive/repair modes report their interventions.
+  Preserve and quantify the known Noh repair tradeoff under N3.
+  **Code:** [stepcontrol.jl](../src/stepcontrol.jl),
+  [physics.jl](../src/physics.jl), [problem.jl](../src/problem.jl).
+
+- [ ] **R4 — Make NASA-9 recovery failure observable.**
+  `mixture_temperature` currently returns its estimate after 30 iterations or
+  nonpositive mixture cv without a final residual/status check. Outside-range
+  polynomial evaluation also proceeds silently.
+  Add residual-based success criteria, diagnosed failure, and an explicit
+  extrapolation policy; use a safeguarded inversion where the EOS admits a bracket.
+  **Gate:** interval joins, temperature extremes, invalid compositions, and
+  nonconvergence behave consistently in both precisions; connect failure to R3.
+  **Code:** [physics.jl](../src/physics.jl).
+
+## P1: numerical credibility
+
+### Filtering, regularization, and boundaries
+
+- [ ] **N1 — Calibrate filtering and settle its time-scaling policy.**
+  The rate-scaled `filter_cfl` mechanism is delivered but opt-in; the default still
+  dissipates per application. Complete the van Rees dissipation-history
+  digitization and fit alpha, cadence, and reference CFL jointly against 128³ TGV
+  histories and spectra. Measure shock-battery sensitivity and smooth-turbulence
+  budgets under subcycling, variable dt, retries, and shortened output steps.
+  **Depends on:** R1–R3; cluster time and independent reference data.
+  **Deliver:** a reproducible fit and explicit default decision in
+  [CALIBRATION.md](CALIBRATION.md). Do not fit under one formulation and then
+  silently switch to the other.
+
+- [ ] **N2 — Measure and implement conservative filtering on nonuniform metrics.**
+  Compare current unweighted component filtering with the reference's
+  volume-weighted field divided by a volume passed through the same filter.
+  Establish the actual discrete conservation property rather than assuming that
+  constant preservation proves it.
+  **Gate:** constants, volume-integrated mass/momentum/energy defects, folds,
+  stretching, and converging-shock behavior; unchanged uniform Cartesian results.
+
+- [ ] **N3 — Resolve symmetry-cell startup robustness and the cold-state limit.**
+  Instrument planar, cylindrical, and spherical Noh with the existing floor tally;
+  compare permissive, representable-repair, and internal-energy-repair trajectories.
+  Measure the pressureless wall layer and repair budgets as well as plateau and
+  shock position. Test density-proportional beta feedback and filter-rate dependence.
+  Separately evaluate a nonsingular gas-model artificial-conductivity scale near
+  cold ambient states, retaining the EOS dispatch hook.
+  **Gate:** configuration-specific CFL envelopes, conservation/error budgets, and
+  a justified treatment of the spherical singular start and initial smoothing.
+  Consult [CALIBRATION.md](CALIBRATION.md) before reopening rejected predictor,
+  sensor-reach, or fold-order explanations; the old universal CFL 0.15 description
+  is obsolete.
+
+- [ ] **N4 — Refit artificial shear viscosity after the filter policy is fixed.**
+  Fit `C_mu` under the adopted smoother/detector on 3-D TGV and mixing cases.
+  One-dimensional shocks cannot determine the shear channel.
+  **Depends on:** N1 and the 3-D campaign. Retain `C_beta=1` unless new evidence
+  overturns its completed refit; record error and dissipation attribution.
+
+- [ ] **N5 — Establish an anisotropic case before directional bulk viscosity.**
+  Add a strongly stretched or anisotropic validation case, then compare scalar and
+  directional beta with the matching directional diffusive timestep constraint.
+  **Gate:** a measurable accuracy/stability benefit on that case; a null result on
+  isotropic cases is not justification for implementation.
+
+- [ ] **N6 — Quantify boundary-order and constant-annihilation errors.**
+  The review measured C6/C8/C10 periodic orders 6.01/8.00/10.04, default C6 wall
+  order 3.17, and default filter one-pass wall order 1.88.
+  Add complete evolution studies separating derivative closures, filter closures,
+  temporal error, and fold versus outer-wall error; document useful closure choices
+  and Float32 conditioning limits.
+  Measure residuals on scaled constants before adopting anchored-difference rows.
+  **Gate:** demonstrated practical benefit for a closure change; record a
+  roundoff-only result without unnecessary rewrites.
+  **Code:** [kernels.jl](../src/kernels.jl), [convergence.jl](../test/convergence.jl).
+
+- [ ] **N7 — Complete NSCBC inflow transverse coupling.**
+  Add the Yoo–Im transverse terms that exist for outflow but not inflow.
+  **Gate:** oblique/acoustic and vortical inflow tests, reflection measurements,
+  geometry restrictions, time-dependent targets, and MPI collective consistency.
+
+- [ ] **N8 — Introduce a dispatchable temperature-dependent transport model.**
+  Connect the bundled NASA CEA transport data: reader, per-species viscosity and
+  conductivity, mixture rule, and mixture-averaged diffusivities, retaining a
+  unity-Lewis fallback. Keep a function barrier suitable for later plasma transport.
+  **Gate:** independent coefficient checks, mixture limits, thermal/species
+  diffusion solutions, and consistent timestep limits. Document the current
+  constant-coefficient/single-Schmidt limitation until delivery.
+
+- [ ] **N9 — Validate the bulk species channel beyond its existing cases.**
+  Measure `species_flux=:bulk` in 3-D shock/mixing runs and calibrate its inherited
+  constants. Compare pressure equilibrium, species bounds, energy budgets, and cost
+  with the Fickian channel. Distinguish continuous-model entropy properties from
+  any verified property of the complete discrete update.
+  **Depends on:** N1 and V1; keep default selection evidence-based.
+
+### AMR numerics
+
+Current node-centered coupling is interpolation/injection with compact interface
+closures, not a conservative flux reconciliation. In the review, two-level Sod
+mass drift was 1.36e-4; smooth two-level C6 orders were 3.46–3.64.
+The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
+
+- [ ] **N10 — Bound and reduce interface conservation drift.**
+  Measure mass, momentum, energy, and mixing diagnostics over long mixing-layer and
+  moving-interface runs, separating same-level, coarse–fine, and regrid defects.
+  Set application error budgets; implement the designed surface-flux correction
+  when drift exceeds them. Retain SBP–SAT as the documented fallback.
+  **Gate:** composite budgets across rank counts, refinement depths, and subcycling,
+  with smooth accuracy and reflection checks. Transfer invertibility is not a
+  conservation proof.
+
+- [ ] **N11 — Validate sensors and filters at imposed fine shells.**
+  Add targeted crossing-shock reflection gates for closed-edge-clamped sensors;
+  measure filter changes to imposed shell nodes and compare one-sided filter rows.
+  **Gate:** localized errors/reflections and positivity excursions across interface
+  locations, C6/C10, and tiled layouts. Coordinate cadence studies with N1.
+
+- [ ] **N12 — Check fine-level rates during startup and regrid transients.**
+  Measure rate growth over the substeps covered by one root CFL estimate, especially
+  at three or more levels. Add a refreshed-coefficient substep check where needed.
+  **Gate:** route a violation to the collective rollback/acceptance path from R3;
+  an exception inside recursive stepping must not bypass retry handling.
+
+### Independent validation and regression coverage
+
+- [ ] **V1 — Complete independent solver and experiment comparisons.**
+  Run CompactLES versus Pyranda for Re=1600 TGV and one RM shock tube, comparing
+  dissipation histories, spectra, and mix widths. Select one published RM experiment
+  with documented initial/boundary conditions and obtain missing specifications.
+  **Depends on:** R1–R4; coordinate compute with N1.
+  **Deliver:** reproducible inputs, reference provenance, uncertainty/error measures,
+  and a docs validation section. Keep analytic validation, external data, and
+  self-generated regression profiles explicitly distinguished.
+
+- [ ] **V2 — Add reproducible turbulent inflow generation.**
+  Implement a digital-filter or synthetic-eddy utility producing a
+  `(x, y, z, t) -> Prim` target for Dirichlet or NSCBC inflow.
+  **Gate:** prescribed statistics/correlations, reproducible seeds across
+  decomposition and restart, and a V1 experiment use case.
+
+- [ ] **V3 — Close gaps in automated verification.**
+  Add dedicated temporal-order studies for the full RK update and subcycled
+  boundary forcing, with spatial and filter errors controlled. Turn R1–R4 probes
+  into durable regressions.
+  Add a scheduled full shock-validation battery and explicit Makie extension
+  checks; retain HDF5 tests in the package test target and add parallel-HDF5
+  execution where the required stack exists.
+  **Gate:** CI distinguishes skipped/unavailable coverage from passing coverage.
+  KA-on-CPU equality does not substitute for hardware-GPU tests under S1.
+
+## P1: API, state ownership, and reproducibility
+
+- [ ] **A1 — Give precision one coherent public entry point.**
+  Normalize EOS, transport, artificial controls, schemes, geometry, and runtime
+  types from an explicit precision choice, or reject conflicts at setup with a
+  useful message. Storage currently follows `Transport{T}`; Float32 transport
+  plus default Float64 `ArtParams` produces a conversion MethodError.
+  **Gate:** concise Float32/Float64 input decks, early mixed-type diagnostics,
+  and no accidental promotion in audited CPU/device kernels. Coordinate with R2.
+
+- [ ] **A2 — Make cache ownership and freshness explicit.**
+  Inventory persistent integrator state, per-patch primitives/geometry, shared RHS
+  scratch, and diagnostic storage. Define invalidation after initialization,
+  stepping, filtering, regridding, and restart; audit property forwarding and
+  `prepared`/`primitives_current` assumptions.
+  **Gate:** multi-patch consumers cannot silently read another patch's scratch;
+  R1 remains fixed without duplicating every patch workspace.
+
+- [ ] **A3 — Separate solver construction from RHS execution.**
+  Move configuration validation, plan/hierarchy construction, and device setup out
+  of `rhs.jl` behind explicit construction boundaries. Preserve specialized
+  runtime types and per-patch function barriers; setup-only abstract fields do not
+  by themselves justify a type-system rewrite.
+  **Gate:** unchanged numerical results plus inference/allocation comparisons for
+  the existing hot paths; preserve compatibility of supported accessors.
+
+- [ ] **A4 — Tighten and document public runtime contracts.**
+  Validate physical/numerical parameter ranges and finite inputs, including
+  transport coefficients, CFL/backoff, grid sizes, and primitive composition.
+  Document or simplify `step!` clock ownership, absolute `nmax`, initialization
+  without reset, cached fields, and scalar versus state-vector APIs.
+  Audit rollback across callback effects: schedule rewind does not restore a
+  switched boundary or arbitrary user state.
+  **Gate:** early actionable errors and explicit continuation/rollback semantics.
+
+- [ ] **A5 — Strengthen restart configuration compatibility.**
+  Add versioned EOS parameter/data fingerprints and numerical/transport/boundary
+  provenance. Current type names and component names admit identically named
+  species with different thermodynamic constants.
+  Define exact continuation versus an intentional configuration change; record
+  supported overrides and caller-owned callback/writer state.
+  **Gate:** incompatible thermodynamics are rejected, equivalent configurations
+  round-trip, and existing same-rank/changed-rank continuation tiers remain tested.
+  **Code:** [io.jl](../src/io.jl), [io_levels.jl](../src/io_levels.jl).
+
+- [ ] **A6 — Publish a capability and extension matrix tied to setup checks.**
+  Cover EOS × backend × precision × metric × patch/refinement mode, including
+  static nested levels versus two-level regridding and checkpoint restrictions.
+  Correct stale README/reference claims against current code and tested hardware.
+  Clarify that `EquationSet` currently owns layout/parity while flux assembly
+  remains Navier–Stokes-specific; define the additional hooks needed by H3/H6/H8.
+  **Gate:** accepted/rejected combinations and extension examples are tested;
+  avoid promising unsupported feature combinations.
+
+## P2: scale, devices, I/O, and geometry
+
+Detailed mechanisms and measurements remain in [AMR_GPU.md](AMR_GPU.md) and
+[CLUSTER.md](CLUSTER.md). Patch AMR, device execution, stacked tile launches, and
+opt-in Float32 already exist; the tasks below extend or validate them.
+
+- [ ] **S1 — Complete target-machine GPU measurements and resolve the wait stall.**
+  Continue the rzadams/MI300A campaign using the existing measurements as a baseline,
+  not as an unmeasured port. Characterize/resolve the intermittent ROCm wait stall
+  in [rocm_wait_stall_report.md](rocm_wait_stall_report.md) before interpreting
+  performance changes. Record hardware, MPI stack, precision, synchronization
+  policy, repeat variability, and correctness with every result.
+  **Gate:** full single/refined/tiled runs on target hardware, including real device
+  communication paths; report measured reproducibility rather than universal
+  bitwise claims. Validate other advertised backends on their own hardware.
+
+- [ ] **S2 — Measure and address compact-solve and transfer scaling limits.**
+  Profile replicated dense interface solves, host/device fences and transfers,
+  parent-box gathers, and replicated AMR memory as line-rank count and region size
+  grow. Compare gather-solve-scatter, on-device reduced solves, GPU-aware MPI, and
+  partitioned transfers only where profiles justify them.
+  Measure stacked `max_rate` reductions before adding another launch optimization;
+  revisit extra streams only if batching still leaves useful concurrency.
+  **Depends on:** reliable S1 timing. **Gate:** crossover data and preserved
+  distributed accuracy, not a workstation-only speedup claim.
+
+- [ ] **S3 — Complete production tile/ownership cost studies.**
+  Build the 3-D implosion-shell benchmark at realistic tile sizes; measure
+  per-imposition latency and repeat the previously cold tiled-overhead case warm.
+  Quantify rebalance and migration benefits, including root-work bias in measured
+  tile weights; subtract that baseline only when its impact is established.
+  **Gate:** repeated-process timings, memory, imbalance, migration cost, and accuracy
+  against coarse and uniform-fine references on the target clusters.
+
+- [ ] **S4 — Choose mixed-precision policy (former G4b).**
+  Separate state, geometry, clock, solve, and accumulation precision explicitly.
+  Use existing Float32 CPU/device histories and S1/S2 profiles to compare policies.
+  **Gate:** conservation drift, thermodynamic recovery, closure conditioning,
+  timestep progress, memory, and throughput; no CPU-default change from speed alone.
+
+- [ ] **S5 — Add the NASA-9 device coefficient mirror.**
+  Flatten interval tables into a fixed-width adapted representation and port
+  inversion/recovery with R4's status and domain policy.
+  **Gate:** CPU/device recovery and full-run comparisons over interval joins and
+  difficult states in both precisions, followed by actual-device profiling.
+
+- [ ] **S6 — Deliver HDF5 time-series output and verify collective writes.**
+  Add `FieldWriter(format=:vtk/:hdf5)` routing through `_write_dump!`; current
+  routing is VTK-only. Implement the extension-backed XDMF temporal collection,
+  reusing the field descriptors emitted by the frame writer, including species
+  expansion and vector component counts.
+  Rewrite a complete collection after each completed frame, inline each frame's
+  Grid/Time/topology/geometry/attributes, use relative paths, and keep individual
+  frames independently readable; do not depend on XInclude reader support.
+  **Gate:** scheduled times, restart frame indices, fields/stride/slice, rank-0
+  collection ownership, and continued readability after interruption.
+  Separately test with parallel libhdf5 built against the run's MPI: ranks owning
+  no selected slice must participate with empty selections, not skip H5Dwrite.
+
+- [ ] **S7 — Validate thread pinning and cluster placement.**
+  Wire pinning only after controlled target-cluster trials: fixed-rank comparisons
+  on identical masks, repeated-process medians, and one rank per NUMA domain with
+  pinned threads on the suitable Julia runtime.
+  Preserve the SMT-sibling collapse reproducer and prepare evidence for site
+  support. **Gate:** measured benefit over scheduler binding and repeatable launch
+  guidance in [CLUSTER.md](CLUSTER.md).
+
+- [ ] **S8 — Extend refinement and multiblock geometry when a target needs them.**
+  For a nested implosion, implement regridding below level 1 with descendant
+  re-nesting, ownership, transfer, and restart updates. For geometric multiblock
+  use, extend beyond the current slab layout with explicit adjacency and compatible
+  geometry; add same-level patch checkpoint support.
+  **Depends on:** a concrete case, N10–N12, and relevant A5 contracts.
+  **Gate:** interface accuracy, conservation budgets, restart, and distributed
+  consistency. Fold-adjacent refinement stays forbidden pending a separate design.
+
+- [ ] **S9 — Implement azimuthal mode truncation in staged form.**
+  Follow [MODE_TRUNCATION.md](MODE_TRUNCATION.md): serial cylindrical,
+  decomposed angle, calibration/defaults, then spherical azimuth.
+  **Gate:** conservation and mode errors, pole/axis behavior, and achieved CFL/cost
+  benefit. Keep this acoustic/geometric restriction distinct from the diffusive
+  restriction addressed by H1.
+
+- [ ] **S10 — Add immersed boundaries on demand.**
+  Follow [IMMERSED.md](IMMERSED.md): level-set geometry and graded post-stage
+  Brinkman/reset blend; validation/calibration; normal extrapolation refinements;
+  then moving bodies. Include force and heat-flux accounting.
+  **Depends on:** a target needing non-coordinate-surface geometry; the first stage
+  need not wait for HED or multiblock extensions.
+  **Gate:** the design's stage-specific accuracy, stability, and force/energy
+  budgets, followed by backend/AMR compatibility checks.
+
+## P2/P3: high-energy-density physics
+
+H1 is the principal infrastructure dependency for stiff diffusion. These are
+separate capabilities with independent verification gates, not a claim that new
+equation layouts alone make the current RHS a general multiphysics solver.
+
+- [ ] **H1 — Build implicit diffusion infrastructure.**
+  Reuse the distributed banded kernels for ADI or line-relaxation smoothing;
+  compare geometric multigrid and Krylov outer solves.
+  **Gate:** manufactured constant/variable-coefficient heat conduction in every
+  supported metric, distributed residual/convergence studies, and freestream
+  preservation. Variable coefficients require a factorization-update policy.
+
+- [ ] **H2 — Add compatible IMEX time integration.**
+  Evaluate established IMEX-ARK tableaus before implementing new ones; define a
+  compatible explicit/implicit pair and workspace contract.
+  **Depends on:** H1. **Gate:** temporal order, stiff stability, source/diffusion
+  splitting error, and recovery from a failed implicit solve.
+
+- [ ] **H3 — Add separate ion/electron/radiation energy evolution.**
+  Extend the equation/flux/recovery interfaces for `T_ion`, `T_ele`, and `T_rad`,
+  electron pressure, and electron–ion equilibration.
+  **Depends on:** A6, R3/R4, and H2 for stiff coupling.
+  **Gate:** total-energy conservation, equilibrium limits, and independent
+  relaxation problems before coupled implosion runs.
+
+- [ ] **H4 — Add electron thermal conduction.**
+  Implement flux-limited Spitzer–Härm transport through the implicit solver.
+  **Depends on:** H1–H3 and the dispatchable transport interface.
+  **Gate:** analytic/manufactured transport limits, limiter behavior, and coupled
+  energy budgets.
+
+- [ ] **H5 — Add tabulated EOS support.**
+  Implement IONMIX reading and thermodynamically consistent interpolation/inversion;
+  consider SESAME later subject to data access/licensing.
+  **Depends on:** R3/R4 and A5.
+  **Gate:** table-node/interpolation checks, inverse consistency, derivatives,
+  phase/domain handling, and an EOS-specific artificial-conductivity scale.
+
+- [ ] **H6 — Add flux-limited radiation diffusion, gray before multigroup.**
+  Define opacity and group interfaces plus radiation-energy components.
+  **Depends on:** H1–H3 and suitable EOS/opacity data.
+  **Gate:** independent diffusion/equilibration references, group convergence,
+  positivity policy, and matter–radiation energy conservation.
+
+- [ ] **H7 — Add laser deposition for a specified experiment.**
+  Implement geometric-optics rays, inverse-bremsstrahlung absorption, rank-to-rank
+  ray transfer, and deposition through the source interface.
+  **Gate:** ray trajectories and absorbed/deposited energy budgets.
+  This can precede the full HED stack when suitable material data are available.
+
+- [ ] **H8 — Add MHD only for a magnetized target.**
+  Extend the equation and flux interfaces and evaluate GLM divergence cleaning
+  for the finite-difference scheme.
+  **Gate:** standard wave/shock problems, divergence-error control, and energy
+  budgets. Plan magnetized transport separately if the target requires it.
+
+## Deferred scope and non-goals
+
+- **Wall-resolved/wall-modeled LES:** deferred until a target requires it;
+  current no-slip support serves verification and does not establish wall-model fidelity.
+- **Symbolic frontend:** optional only after hand-written equation sets define a
+  usable interface; a macro may emit typed code, but runtime PDE-string evaluation
+  remains excluded.
+- **Excluded:** cell-by-cell/oct-tree AMR, unstructured meshes, a parallel Godunov
+  solver path based on Riemann solvers/flux limiters, and general-purpose CFD scope.
+  Instrumented state repair remains allowed and must retain intervention budgets.
+- **Design commitments:** compact structured operators, patch-based refinement,
+  explicit geometry/collective contracts, and measurable accuracy for mixing and
+  implosion. Revisit a restriction through a concrete case and a documented design.
