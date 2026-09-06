@@ -67,6 +67,60 @@ measurement.
 """
 const THREAD_MIN_WORK_PER_THREAD = 1024
 
+"""
+Turn threaded BLAS off unless the caller has chosen a value, and say so once.
+
+The only BLAS this solver calls is the reduced interface stage of the compact
+solve (`_reduced_solve!` in tridiag.jl): a `2P x 2P` system, 2x2 on one rank,
+with one right-hand side per line, solved once per dimension per field per
+Runge-Kutta stage. OpenBLAS forks its thread pool for each of those and waits
+on the join, so the cost is paid per call and grows with the core count of the
+node. Measured: a 32^3 step cost 7.0 s on a 112-core node at the default thread
+count and 0.079 s at one thread, and the reduced solve alone is 3x slower
+threaded at `P == 1`.
+
+Threading does pay on the solve itself once the system is large (measured 1.6x
+at `2P == 16`, 3.3x at `2P == 112`), but it cannot be taken: the solve is
+replicated on every rank behind a collective gather, so all ranks run it at the
+same instant, and a rank at that `P` owns one core under the launch rules in
+reference/CLUSTER.md. Those threads would come out of its neighbours.
+
+Setting `OPENBLAS_NUM_THREADS`, to one or to anything else, is respected and
+silences this.
+"""
+function __init_blas__()
+    haskey(ENV, "OPENBLAS_NUM_THREADS") && return nothing
+    n = try
+        BLAS.get_num_threads()
+    catch
+        return nothing          # a BLAS that will not answer is left alone
+    end
+    (n isa Integer && n > 1) || return nothing
+    try
+        BLAS.set_num_threads(1)
+    catch
+        return nothing
+    end
+    # One line, not one per rank. `__init__` usually runs before `MPI.Init`, so
+    # the communicator cannot say which rank this is; every launcher publishes
+    # it in the environment before the process starts.
+    _launcher_rank() == 0 || return nothing
+    @info "CompactLES set BLAS threads $n -> 1: its only BLAS call is a tiny " *
+          "reduced interface solve, which threading slows down. Set " *
+          "OPENBLAS_NUM_THREADS to keep your own value; see " *
+          "reference/CLUSTER.md."
+    return nothing
+end
+
+function _launcher_rank()
+    for k in ("SLURM_PROCID", "PMI_RANK", "OMPI_COMM_WORLD_RANK",
+              "FLUX_TASK_RANK", "MV2_COMM_WORLD_RANK")
+        v = get(ENV, k, nothing)
+        v === nothing || return something(tryparse(Int, v), 0)
+    end
+    return 0
+end
+
 function __init_threading__()
     THREAD_MIN_WORK[] = THREAD_MIN_WORK_PER_THREAD * Threads.nthreads()
     v = get(ENV, "CL_THREAD_MIN_WORK", nothing)

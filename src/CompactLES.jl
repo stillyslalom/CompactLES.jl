@@ -109,7 +109,7 @@ export mix_width, molecular_mixing, species_pdf
 export tke_profile, turbulent_kinetic_energy, dissipation_rate
 export xcoord, global_xcoord, gidx, interior_index, filter_state!
 
-__init__() = __init_threading__()
+__init__() = (__init_threading__(); __init_blas__())
 
 # Precompilation. Two mechanisms: the signature-directed statements below, and
 # the executed workload in precompile.jl.
