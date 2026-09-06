@@ -27,6 +27,31 @@
 
 using PrecompileTools
 using MPIPreferences: MPIPreferences
+using Preferences: @load_preference
+
+"""
+Whether the workload covers the KernelAbstractions device path, which it
+reaches on this machine by running a `DeviceBackend(KernelAbstractions.CPU())`
+solver under `FORCE_KA` and `FORCE_DEVICE_EXCHANGE`. Off by default:
+a run on ordinary host storage never enters that path, and a run on a real
+device needs its own backend's kernels rather than the CPU backend's, so what
+the block bakes in serves the suites that pin the two against each other and
+nobody else. Measured on the workstation, leaving it out takes the package
+precompile from 96 s to 78 s and the image from 141 MB to 121 MB.
+
+Turn it on where `test/device_tests.jl` or the MPI suite's device phases run,
+which is what CI does, since they otherwise compile that tree themselves and
+every rank of an MPI leg pays for it separately:
+
+```julia
+using Preferences, CompactLES
+Preferences.set_preferences!(CompactLES, "precompile_device" => true)
+```
+
+The preference is read at precompile time, so setting it rebuilds the package
+image; nothing needs to be forced by hand.
+"""
+const PRECOMPILE_DEVICE = @load_preference("precompile_device", false)
 
 if MPIPreferences.binary != "system"
 @setup_workload begin
@@ -175,17 +200,18 @@ if MPIPreferences.binary != "system"
         refined_region(s)
         # Float32 throughout. A second element type recompiles the whole tree
         # beneath step!, and the suite reaches it on a plain grid, on a refined
-        # hierarchy and on the device backend. Measured September 2026: this
-        # block and the device hierarchy below it cost 36.5 s of precompile and
-        # 47.4 MB of image, and take 38 s off the serial suite's compilation.
-        # The saving lands only on the Solver type tuples named here; one that
-        # is not compiles in full wherever it is first built, which is why the
-        # 3-D refined device case is left to the suite rather than spending a
-        # third dimension of image on it.
+        # hierarchy and, under `PRECOMPILE_DEVICE`, on the device backend.
+        # Measured September 2026: this block and the device hierarchy below it
+        # cost 36.5 s of precompile and 47.4 MB of image, and take 38 s off the
+        # serial suite's compilation. The saving lands only on the Solver type
+        # tuples named here; one that is not compiles in full wherever it is
+        # first built, which is why the 3-D refined device case is left to the
+        # suite rather than spending a third dimension of image on it.
         T = Float32
         f32 = (transport=Transport{T}(), art=ArtParams{T}(enabled=false),
                deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
-        for extra in ((;), (; backend=DeviceBackend(cpu)))
+        for extra in (PRECOMPILE_DEVICE ? ((;), (; backend=DeviceBackend(cpu))) :
+                      ((;),))
             s = Solver(; n_global=(16, 12, 12),
                        L_domain=(one(T), one(T), one(T)), bcs=per3,
                        cfl=T(0.2), f32..., extra...)
@@ -208,28 +234,31 @@ if MPIPreferences.binary != "system"
         # the device-storage branches and the KA bodies both selected. On a real
         # device those are the only path; the suite reaches them through the two
         # toggles, which is why they are set here rather than left at default.
-        FORCE_KA[] = true
-        FORCE_DEVICE_EXCHANGE[] = true
-        try
-            s = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                       bcs=(walls, per, per), cfl=0.2, subcycle=true,
-                       regrid_interval=5, tile=8,
-                       refine=BlockRegion((85, 0, 0), (31, 1, 1)),
-                       backend=DeviceBackend(cpu))
-            Q = allocate_state(s)
-            initialize!(s, Q, (x, y, z) -> x < 0.5 ?
-                Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
-                Prim(u=(0, 0, 0), p=0.1, rho=0.125))
-            run!(s, Q; tfinal=0.06, nmax=3)
-            # The same bodies on host storage, the form FORCE_KA selects.
-            s = Solver(n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0), bcs=per3)
-            Q = allocate_state(s)
-            initialize!(s, Q, (x, y, z) ->
-                Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
-            run!(s, Q; tfinal=0.02, nmax=2)
-        finally
-            FORCE_KA[] = false
-            FORCE_DEVICE_EXCHANGE[] = false
+        # Behind `PRECOMPILE_DEVICE`, and so off unless a checkout asks for it.
+        if PRECOMPILE_DEVICE
+            FORCE_KA[] = true
+            FORCE_DEVICE_EXCHANGE[] = true
+            try
+                s = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                           bcs=(walls, per, per), cfl=0.2, subcycle=true,
+                           regrid_interval=5, tile=8,
+                           refine=BlockRegion((85, 0, 0), (31, 1, 1)),
+                           backend=DeviceBackend(cpu))
+                Q = allocate_state(s)
+                initialize!(s, Q, (x, y, z) -> x < 0.5 ?
+                    Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                    Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+                run!(s, Q; tfinal=0.06, nmax=3)
+                # The same bodies on host storage, the form FORCE_KA selects.
+                s = Solver(n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0), bcs=per3)
+                Q = allocate_state(s)
+                initialize!(s, Q, (x, y, z) ->
+                    Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
+                run!(s, Q; tfinal=0.02, nmax=2)
+            finally
+                FORCE_KA[] = false
+                FORCE_DEVICE_EXCHANGE[] = false
+            end
         end
     end
 end

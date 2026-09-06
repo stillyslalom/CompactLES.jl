@@ -14,12 +14,15 @@
 # diagonal (per solution parity σg: derivatives flip field parity, filters
 # preserve it). No node sits at r = 0 and no scale factor vanishes.
 
-# The patch parameter `P` is unconstrained, not `P <: Patch{T}`: a
-# refined solver stores its root and level-1 patches in one vector, and the
-# two differ in their boundary-condition type, so `P` is their typejoin. The
-# per-patch loops then cost one dynamic dispatch per patch per call, behind
-# the PatchSolver function barrier so the bodies stay concrete, while the
-# single-patch and same-level multi-patch cases keep a concrete `P`.
+# The patch parameter `P` is unconstrained, not `P <: Patch{T}`: a refined
+# solver stores its root and level-1 patches in one vector, and where the two
+# differ in a `Patch` parameter `P` is their typejoin. The per-patch loops
+# then cost one dynamic dispatch per patch per call, behind the PatchSolver
+# function barrier so the bodies stay concrete, while the single-patch and
+# same-level multi-patch cases keep a concrete `P`. Boundary conditions were
+# one such difference and no longer are: they left the `Patch` type
+# (patches.jl), which is why a level-1 patch under an interface now often
+# shares its parent's type outright.
 mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P}
     equations::Eq
     eos::E
@@ -1318,6 +1321,19 @@ _state_like(rho::AbstractArray{T,3}, n_cons::Int) where {T} =
 # A concrete sentinel plan would remove the remaining union, but constructing
 # one requires a `LineSolver` and communicator for a dimension that is never
 # swept. The explicit branch avoids that unused state.
+#
+# The tuple's shape stays in the `Patch` type for the same reason, and this is
+# the one place where taking configuration out of that type does not pay. Two
+# shape-independent storages were tried and both were rejected on
+# `bench/audit.jl`, against a baseline of 16 B per `compute_rhs!` at 48³:
+# `NTuple{3,Union{Nothing,AbstractDirPlan}}`, which makes every `apply_along!`
+# a dynamic dispatch, measured 18.3 kB, and `NTuple{3,Union{Nothing,PL}}` at a
+# concrete plan kind `PL`, which keeps the call static and still measured
+# 5968 B — the union reaches the tuple field, not just the call. Either
+# collapses the workload's `Patch` types from 16 to 11 and neither is worth
+# that on the flagship path. Tuple covariance also defeats the second one at
+# construction: converting a tuple to a wider tuple type returns the narrow
+# value, so an all-`nothing` tuple leaves `PL` unconstrained.
 @inline _plan_at(plans::Tuple, d::Int) = d == 1 ? plans[1] : d == 2 ? plans[2] : plans[3]
 
 """

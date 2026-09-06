@@ -19,6 +19,7 @@ sine_cluster
 
 ```@docs
 BoundaryCondition
+CompactLES.FaceConditions
 PeriodicBC
 SlipWallBC
 NoSlipWallBC

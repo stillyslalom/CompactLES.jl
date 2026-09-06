@@ -26,6 +26,14 @@ declared during solver setup.
 abstract type BoundaryCondition end
 
 """
+Storage type of a patch's six face conditions, `bcs[dim][side]`. The element
+type is abstract on purpose: see the note on [`Patch`](@ref) for why the
+conditions are kept out of that type's parameters, and what the resulting
+dispatch in `apply_bcs!` and `correct_rhs!` costs.
+"""
+const FaceConditions = NTuple{3,Tuple{BoundaryCondition,BoundaryCondition}}
+
+"""
     enforce!(bc, Q, solver, dim, side)
 
 Hard-state boundary hook. It is called once for each face of every active
@@ -174,8 +182,9 @@ One face that behaves as `before` until [`switch!`](@ref) is called on it, then
 as `after`. This supports calculations that require one boundary condition
 during an interaction and another to transmit the resulting outgoing waves.
 
-The wrapper preserves the concrete type of `solver.bcs`; reassigning that field
-to a different boundary-condition type would fail conversion.
+The wrapper carries both conditions because `bcs` sits on an immutable
+[`Patch`](@ref) as an immutable tuple; a switch mutates the wrapper, not the
+solver's face list.
 
 Every rank must switch on the same step. `after` may perform collectives that
 `before` does not; `NSCBCOutflowBC` is one example. Rank disagreement therefore

@@ -180,8 +180,26 @@ same extent, and the property forwarding below reaches it by the same names as
 before. Constructed by `Solver`; user code normally reaches these fields
 through the solver (which forwards them for a single-patch run) without
 holding a `Patch` directly.
+
+The face conditions are deliberately not in the type. They are stored under
+the abstract [`FaceConditions`](@ref), because they are configuration the
+compute path below `step!` never reads: with `bcs` as a type parameter, every
+combination of boundary conditions recompiled the whole right-hand-side tree,
+and combinations are what a user varies. Measured on the precompile workload,
+erasing them takes the number of distinct `Patch` types from 24 to 16, the
+package precompile from 108 s to 97 s, and the compile of one previously
+unseen boundary-condition combination from 1.85 s to 0.58 s. The cost is one
+dynamic dispatch per face in `apply_bcs!` and `correct_rhs!`, six per stage,
+each in front of a whole-plane sweep: `apply_bcs!` measured 66.4 µs to
+71.8 µs at 64³, against an 87 ms step.
+
+The plan tuples are the case where this does not pay, and the comment above
+`_plan_at` in rhs.jl carries the measurement. `folds` and `ring_plans` keep
+parameters of their own for a third reason: `nothing` in either holds a whole
+operator path (the fold closures, the `:d8` detector) off the default
+configuration's inference path entirely.
 """
-struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,W,LS,TF}
+struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,TF}
     id::Int
     level::Int
     region::BlockRegion                     # offset + extent, in this LEVEL's node
@@ -193,7 +211,7 @@ struct Patch{T,A<:AbstractArray{T,3},Fo,BC,DP,VP,FP,SP,RP,W,LS,TF}
     h::NTuple{3,T}                          # this level's grid spacing (h/3 per
                                             # refinement level below the root)
     faces::NTuple{3,NTuple{2,Int}}          # 0 = physical/periodic; else neighbor patch id
-    bcs::BC                                 # per-face conditions (InterfaceBC at interfaces)
+    bcs::FaceConditions                     # per-face conditions (InterfaceBC at interfaces)
     folds::Fo
     deriv_plans::DP
     div_plans::VP                           # divergence plans: deriv_plans unless an

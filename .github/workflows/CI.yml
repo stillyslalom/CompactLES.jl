@@ -34,6 +34,19 @@ jobs:
           version: ${{ matrix.version }}
           arch: x64
       - uses: julia-actions/cache@v3
+      # The device testsets and the MPI device phases run here, so the
+      # workload's device block earns its precompile cost in this job and
+      # nowhere else; see PRECOMPILE_DEVICE in src/precompile.jl. Set before
+      # buildpkg, which is what builds the image the preference keys.
+      - name: Precompile the device path
+        shell: julia --project=. --color=yes {0}
+        run: |
+          using Pkg
+          Pkg.instantiate()
+          using Preferences
+          Preferences.set_preferences!(
+              Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
+              "precompile_device" => true; force=true)
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         with:
@@ -53,6 +66,19 @@ jobs:
           version: '1'
           arch: x64
       - uses: julia-actions/cache@v3
+      # The device testsets and the MPI device phases run here, so the
+      # workload's device block earns its precompile cost in this job and
+      # nowhere else; see PRECOMPILE_DEVICE in src/precompile.jl. Set before
+      # buildpkg, which is what builds the image the preference keys.
+      - name: Precompile the device path
+        shell: julia --project=. --color=yes {0}
+        run: |
+          using Pkg
+          Pkg.instantiate()
+          using Preferences
+          Preferences.set_preferences!(
+              Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
+              "precompile_device" => true; force=true)
       - uses: julia-actions/julia-buildpkg@v1
       # Neither step below runs with `--check-bounds=yes`. That option gives
       # every package in the tree a second precompile cache, which this job

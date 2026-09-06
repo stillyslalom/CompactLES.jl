@@ -56,13 +56,18 @@ implementation. `reference/CLUSTER.md` also holds the launch-line rules
 a core), the sizing tools, and the measured scaling.
 
 `Manifest.toml` is gitignored, so a fresh checkout needs `Pkg.instantiate()`
-before anything runs. Precompiling the package takes about a minute, most
-of it the workload in `src/precompile.jl`, which runs the test suites'
-solver configurations at np = 1 under a singleton `MPI.Init` so that a
-test rank compiles a quarter of what it otherwise would; it is skipped
-under a system MPI. Julia 1.11+ keys the cache on content, so `touch`
+before anything runs. Precompiling the package takes about a minute and a
+half, most of it the workload in `src/precompile.jl`, which runs the test
+suites' solver configurations at np = 1 under a singleton `MPI.Init` so that
+a test rank compiles a quarter of what it otherwise would; it is skipped
+under a system MPI. Its device block is behind the `precompile_device`
+preference and off by default, since only `test/device_tests.jl` and the MPI
+suite's device phases execute that path; turn it on before running either
+locally, as CI does, or they compile it themselves (`PRECOMPILE_DEVICE` in
+that file has the call). Julia 1.11+ keys the cache on content, so `touch`
 does not rebuild it; force one with
-`Base.compilecache(Base.identify_package("CompactLES"))`. `bench/tgv_energy.jl` is the intended first production workload
+`Base.compilecache(Base.identify_package("CompactLES"))`, though a changed
+preference rebuilds on its own. `bench/tgv_energy.jl` is the intended first production workload
 on a cluster: the one bench script whose reductions are all collective. Those
 reductions are order-dependent `Allreduce(+)`, so it reproduces serial numbers
 to round-off (of order 1e-14 relative), not bit-for-bit; `test/mpi_tests.jl`
@@ -200,8 +205,13 @@ add a case there, not in either consumer.
 
 `bench/jetcheck.jl` and `bench/audit.jl` print counts, not pass/fail. Record
 them before a change and compare after, and read the delta, not the absolute
-count. `jetcheck.jl` reports zero dispatch sites at every probed entry point,
-so *any* report is a regression. The counts overlap between entry points
+count. `jetcheck.jl` reports zero dispatch sites at every probed entry point
+but the boundary ones, so *any* report elsewhere is a regression. The
+boundary baseline is one site each in `apply_bcs!` (`enforce!`) and
+`compute_rhs!` (`correct_rhs!`), hence two in `step!`, which contains both:
+face conditions are stored abstractly on the `Patch` so that a combination of
+them does not recompile the right-hand-side tree, and the docstring there has
+the measurement. The counts overlap between entry points
 (`step!` contains `compute_rhs!`), so compare like with like and never sum them.
 
 `audit.jl`'s inference probe reads `code_typed` at a spelled-out signature. A
