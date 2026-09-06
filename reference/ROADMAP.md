@@ -3,6 +3,8 @@
 Prioritized open work for compressible, variable-density mixing and implosion.
 The September 2026 source review adds runtime and API corrections to the existing
 numerics, validation, AMR/GPU, and high-energy-density (HED) backlog.
+The wall/interface follow-up adds R5, expands N6, and sequences N14–N16 from
+the experiments in [BOUNDARY_ACCURACY.md](BOUNDARY_ACCURACY.md).
 Completed implementation and benchmark history belong in [HISTORY.md](HISTORY.md);
 method details belong in [DESIGN.md](DESIGN.md).
 
@@ -24,7 +26,7 @@ spatial convergence suite passed. HDF5 and Makie tests were skipped locally;
 multi-rank and hardware-GPU tests were not run in that review. The R1–R3 probes
 below exposed behavior outside those passing checks.
 
-## P0: runtime correctness
+## P0: runtime and boundary correctness
 
 - [x] **R1 — Make diagnostics independent of integrator state.**
   In a 64-point Sod case at CFL 0.15, after one step, requesting
@@ -76,6 +78,30 @@ below exposed behavior outside those passing checks.
   nonconvergence behave consistently in both precisions; connect failure to R3.
   **Code:** [physics.jl](../src/physics.jl).
 
+- [ ] **R5 — Enforce the adiabatic, impermeable no-slip wall flux contract.**
+  `NoSlipWallBC()` zeros velocity but leaves the normal conductive energy flux
+  unconstrained. With rho=1, u=0, p=1+0.1x and mu0=0.01, the audit obtains
+  energy flux -0.005 at both endpoints after enforcement and RHS evaluation.
+  This incompatible-state probe demonstrates missing flux imposition; it is not
+  a convergence study. Define the noncatalytic species and thermal wall contract,
+  including molecular/artificial transport and the `:bulk` species channel.
+  Implement it in the flux/derivative boundary treatment before divergence, or
+  with an equivalent correction to every affected RHS row; changing only the
+  endpoint energy update does not correct the compact divergence nearby.
+  The first implementation candidate is a wall-flux hook after complete flux
+  assembly (including `:bulk`) and before flux exchange/divergence, so corrected
+  boundary fluxes enter every affected compact row.
+  Retain prescribed temperature and account for heat exchange at isothermal walls.
+  **Gate:** zero normal energy/species leakage at an adiabatic impermeable wall;
+  compatible manufactured insulated conduction and species-diffusion evolution;
+  isothermal heat-flux/energy balance; both faces in x/y/z, corners, supported
+  metrics/EOS, Float32/Float64, and ranks that do not own a wall. Exercise filter
+  and artificial-transport paths separately and preserve collective ordering.
+  Track whole-domain budget defects separately from pointwise wall enforcement.
+  **Code:** [boundary.jl](../src/boundary.jl), [rhs.jl](../src/rhs.jl),
+  [runtests.jl](../test/runtests.jl),
+  [boundaryorder.jl](../bench/boundaryorder.jl).
+
 ## P1: numerical credibility
 
 ### Filtering, regularization, and boundaries
@@ -124,16 +150,69 @@ below exposed behavior outside those passing checks.
   **Gate:** a measurable accuracy/stability benefit on that case; a null result on
   isotropic cases is not justification for implementation.
 
-- [ ] **N6 — Quantify boundary-order and constant-annihilation errors.**
-  The review measured C6/C8/C10 periodic orders 6.01/8.00/10.04, default C6 wall
-  order 3.17, and default filter one-pass wall order 1.88.
-  Add complete evolution studies separating derivative closures, filter closures,
-  temporal error, and fold versus outer-wall error; document useful closure choices
-  and Float32 conditioning limits.
-  Measure residuals on scaled constants before adopting anchored-difference rows.
-  **Gate:** demonstrated practical benefit for a closure change; record a
-  roundoff-only result without unnecessary rewrites.
-  **Code:** [kernels.jl](../src/kernels.jl), [convergence.jl](../test/convergence.jl).
+- [ ] **N6 — Establish spatial boundary/interface accuracy acceptance studies.**
+  Promote the audit's polynomial and phase-varied evolution probes into durable
+  studies of operator truncation, one filter pass, instantaneous RHS error, and
+  final-time solution error. The default wall numbers are derivative order 3.17
+  and one-pass filter order 1.88; neither is a measured evolution order.
+  C6/C8 Brady–Livescu rows have pointwise orders 5/7, despite the existing
+  field-specific 5.88/7.91 fits. Use actual h, fixed physical refinement endpoints,
+  several fields/phases, at least three resolutions above roundoff, separate fold,
+  outer-wall, interface and interior norms, and composite volume-weighted norms
+  excluding covered parents. Retain fold studies as controls for wall pollution.
+  **Deliver:** a reproducible accuracy matrix and regression gates for smooth
+  inviscid and viscous walls, same-level interfaces, and two-/three-level AMR;
+  compare unfiltered and filtered evolution. Sweep dt until temporal differences
+  are below 10% of the spatial error used for a slope; V3 owns pure temporal-order
+  certification. Report repeated-filter accumulation and cadence explicitly.
+  **Depends on:** R5 for claims about adiabatic viscous walls; inviscid/interface
+  studies can proceed immediately. Preserve or explain changes to historical
+  regression guards in [CALIBRATION.md](CALIBRATION.md).
+  **Code:** [convergence.jl](../test/convergence.jl),
+  [patch_tests.jl](../test/patch_tests.jl), [level_tests.jl](../test/level_tests.jl),
+  [boundaryorder.jl](../bench/boundaryorder.jl).
+
+- [ ] **N6a — Qualify the one-sided wall filter and decide its default.**
+  Compare `compact_filter(closures=:onesided)` against `:cascade`, initially with
+  C6 `:cascade3` derivatives. The one-pass wall slope rises from 1.88 to 8.07;
+  earlier planar Noh runs reduced wall heating from 64% to 27% at N=400.
+  Reproduce those outcomes under the current solver, then compare smooth evolution,
+  wall energy/species budgets, acoustic pulses, Woodward–Colella, and cold/warm Noh.
+  **Depends on:** relevant N6 studies; R5 for thermal-wall cases. Coordinate
+  time-scaling with N1, but the wall comparison need not wait for cluster TGV data.
+  Hold alpha, cadence and rate parameters fixed within each comparison and
+  stratify results by time-scaling formulation; N1 owns their fit and time-policy
+  decision. Select only the wall-row default here. N11 owns imposed AMR shells.
+  **Gate:** improved smooth errors with bounded positivity/repair and conservation
+  budgets in both precisions; a documented closure-compatibility table and default
+  decision, updated wall calibration, and the repository numerical gate. Do not
+  combine cascade4 with the one-sided filter as an assumed safe upgrade: that pair
+  has recorded instability even on a smooth pulse.
+
+- [ ] **N6b — Qualify a high-order physical-wall configuration.**
+  Evaluate C6 Brady–Livescu with the N6a filter first; evaluate C8 separately.
+  Establish solution order, the stable CFL range, and conditioning/error floors
+  for the complete derivative/filter/variable-diffusion update, including
+  `D(beta D)`. Test smooth compatible walls before shock-loaded and cold-start
+  walls. The recorded cold-Noh failures and Float32 wall errors near 1e-3 prevent
+  treating these rows as a universal default.
+  **Depends on:** N6/N6a and R5 for viscous thermal walls; coordinate startup
+  measurements with N3 and any mixed-precision remedy with S4.
+  **Gate:** an explicitly bounded supported configuration with measured solution
+  order, precision and minimum-extent limits; retain the robust alternative when
+  a target fails. A C10 wall closure requires a separate derivation and validation,
+  not reuse of a favorable C6/C8 slope.
+
+- [ ] **N6c — Decide whether constant-annihilation roundoff needs a change.**
+  Measure derivative residuals on scaled constants and small perturbations over
+  large offsets, separating coefficient cancellation, solve conditioning, and
+  summation roundoff in both precisions. Compare anchored-difference rows only
+  if the defect affects an evolution error or useful precision range.
+  **Gate:** record a no-change decision for a roundoff-only result; otherwise
+  demonstrate a practical reduction without degrading polynomial accuracy,
+  decomposition agreement, inference, or allocations. This is independent of
+  the truncation-order fixes in N6a/N14.
+  **Code:** [kernels.jl](../src/kernels.jl), [kernels_banded.jl](../src/kernels_banded.jl).
 
 - [ ] **N7 — Complete NSCBC inflow transverse coupling.**
   Add the Yoo–Im transverse terms that exist for outflow but not inflow.
@@ -160,6 +239,10 @@ below exposed behavior outside those passing checks.
 Current node-centered coupling is interpolation/injection with compact interface
 closures, not a conservative flux reconciliation. In the review, two-level Sod
 mass drift was 1.36e-4; smooth two-level C6 orders were 3.46–3.64.
+The follow-up isolates the default divergence closures: fourfold CFL reduction
+barely changes those errors, while C6 Brady–Livescu reaches 5.99/5.75 on a
+phase-shifted smooth wave at CFL 0.125, with about 1,000 times less error at N=192.
+These are serial Float64, unfiltered inviscid results, not production qualification.
 The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
 
 - [ ] **N10 — Bound and reduce interface conservation drift.**
@@ -170,12 +253,15 @@ The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
   **Gate:** composite budgets across rank counts, refinement depths, and subcycling,
   with smooth accuracy and reflection checks. Transfer invertibility is not a
   conservation proof.
+  Establish comparison budgets before promoting N14–N16 candidates; this task
+  owns the conservation correction, while those tasks own spatial accuracy.
 
 - [ ] **N11 — Validate sensors and filters at imposed fine shells.**
   Add targeted crossing-shock reflection gates for closed-edge-clamped sensors;
   measure filter changes to imposed shell nodes and compare one-sided filter rows.
   **Gate:** localized errors/reflections and positivity excursions across interface
   locations, C6/C10, and tiled layouts. Coordinate cadence studies with N1.
+  Include N14 closure candidates; physical-wall filter selection remains N6a.
 
 - [ ] **N12 — Check fine-level rates during startup and regrid transients.**
   Measure rate growth over the substeps covered by one root CFL estimate, especially
@@ -202,6 +288,96 @@ The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
   **Code:** [problem.jl](../src/problem.jl), [stepcontrol.jl](../src/stepcontrol.jl),
   [cases.jl](../test/cases.jl).
 
+- [ ] **N14 — Select interface divergence closures independently of wall closures.**
+  Add an opt-in policy applied only to same-level and coarse–fine interface ends
+  of `div_plans`, independently of gradient `interface_rhs` and physical-wall rows.
+  Prototype an optional `interface_divergence` closure-source scheme, defaulting
+  to `nothing`: require its interior coefficients to match `deriv` and use only
+  its closure rows at interface ends. This admits custom schemes without silently
+  applying C6 rows to a different interior; reject mismatches during setup.
+  Compare C6 cascade3, cascade4, and Brady–Livescu first; C8 is a separately
+  qualified extension. Preserve the current default and reject unsupported
+  scheme/extent/halo combinations, including an unimplemented C10 closure choice.
+  Carry the policy through fine/same-level plan construction, tiled device plans,
+  `RegridSpec`, regrid/rebalance rebuilds, and supported restart continuation.
+  A5 owns configuration provenance and incompatible-restart rejection.
+  **Depends on:** N6's inviscid/interface studies. Obtain N10 conservation budgets
+  and N11 reflection/positivity gates before promotion; physical-wall work and R5
+  do not block this experiment.
+  **Gate:** target at least 5.5 observed solution order for C6 Float64 on multiple
+  resolved smooth inviscid fields at both same-level and coarse–fine interfaces,
+  with temporal error controlled; document viscous order and the usable Float32
+  error floor separately. Compare error magnitudes, acoustic reflection, drift,
+  both directions of shock crossing, moving/tiled refinement, and subcycling.
+  Test mixed physical/interface ends, both `interface_rhs` settings, both precisions,
+  MPI np=2/4/8, and host/device plans; state hardware coverage explicitly.
+  Initial opt-in implementation must retain default regression behavior. Deliver
+  a recorded selection decision: retain the default, promote a qualified candidate
+  for a bounded tier, or keep it experimental. A candidate failing stability or
+  N10/N11 checks is not promoted; smooth-only results may justify a documented
+  Float64 opt-in, not general sixth-order AMR.
+  **Code:** [problem.jl](../src/problem.jl), [rhs.jl](../src/rhs.jl),
+  [patches.jl](../src/patches.jl),
+  [levels.jl](../src/levels.jl), [regrid.jl](../src/regrid.jl),
+  [kernels.jl](../src/kernels.jl), [io_levels.jl](../src/io_levels.jl).
+
+- [ ] **N15 — Design and trial divergence with valid current-stage ghost fluxes.**
+  Start only if N14 misses a stated accuracy/stability target or a case requires
+  higher-order viscous/C8/C10 interfaces. Compare local inviscid ghost-flux
+  evaluation from exchanged state with a phased assemble/exchange/diverge RHS.
+  For viscous/artificial fluxes, specify the required gradient/coefficient data,
+  coarse–fine representation and interpolation, and subcycled stage-time source.
+  A same-level exchange alone does not supply nonconforming or Hermite-time fluxes.
+  **Deliver:** a dependency/storage/collective schedule and bounded prototype,
+  first at same-level inviscid interfaces, then viscous and coarse–fine interfaces.
+  Account for the shared RHS workspace: retain only justified interface data or
+  quantify the memory cost of persistent per-patch fluxes. Keep GCL divergence
+  and diagnostic freshness consistent; no cross-patch collective may be inserted
+  into a sequential per-patch RHS without changing its schedule.
+  **Depends on:** the N14 decision and N6 tests for design/prototyping; N10 budgets
+  before promotion. Coordinate ownership with A2 and ghost-value accuracy with
+  N16. N10 owns flux reconciliation.
+  **Gate:** polynomial/RHS consistency at both interface ends, full inviscid and
+  viscous evolution orders, reflection and conservation budgets, nested-subcycle
+  timing, and no stale data/deadlocks under MPI or device execution. Compare
+  memory, allocations, inference and step cost with N14. Reusing gradient plans
+  without populating valid flux ghosts is not an implementation of this item.
+
+- [ ] **N16 — Make live transfer order explicit and qualify spatial accuracy tiers.**
+  Measure interpolation and restriction separately from divergence, first on
+  point samples and then through first/second derivatives and regrids. Live
+  prolongation currently hardcodes order 6; the standalone weights support even
+  orders through 8. Expose a validated live interpolation-order choice and thread
+  it through initial creation, regridding, Hermite shells, and CPU/device chains,
+  with sufficient buffer/halo/stencil extents and early configuration checks.
+  Retain point-sample semantics; the filtered/deconvolving pair is not an upgrade
+  for unfiltered coarse data.
+  **Depends on:** N6 for measurement; qualify evolution with the selected N14 or
+  N15 coupling and N10's composite budgets. Begin with a C6 target; derive wider
+  transfer/closure support for C8/C10 only as a separately measured extension.
+  **Gate:** polynomial/value-transfer exactness, derivative consistency, repeated
+  regrid error, positivity and composite mass/momentum/energy budgets, followed
+  by smooth inviscid and viscous solution orders at fixed physical interfaces.
+  An O(h^r) value error can enter first/second derivatives as O(h^(r-1))/O(h^(r-2));
+  interpolation order alone is not the acceptance test. Publish separate spatial,
+  filter, temporal and subcycled-boundary orders: LSRK and cubic Hermite remain
+  fourth order in time, and the C8 filter must be included in any C10 claim.
+  Escalate to a compatible conservative/SBP–SAT design only with an explicit
+  decision under N10/N15; energy-compatible interpolation is not a drop-in table
+  for the current compact operators.
+  **Code:** [problem.jl](../src/problem.jl), [transfer.jl](../src/transfer.jl),
+  [levels.jl](../src/levels.jl),
+  [regrid.jl](../src/regrid.jl), [timestep.jl](../src/timestep.jl).
+
+Boundary/interface sequence: begin R5 and N6 together. N6's inviscid/interface
+subset unlocks N14 without waiting for R5; run N6a wall-filter trials alongside
+it, adding thermal-wall cases once R5 passes. N6b follows the wall-filter
+decision; N6c is an independent roundoff audit. Use N10/N11 to qualify interface
+candidates before promotion; invoke N15 only when the smaller closure change
+misses a target. N16 transfer measurements may begin with N6, while final accuracy
+qualification follows the selected interface treatment. Coordinate temporal
+certification with V3 and default filter time-scaling with N1.
+
 ### Independent validation and regression coverage
 
 - [ ] **V1 — Complete independent solver and experiment comparisons.**
@@ -223,6 +399,8 @@ The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
   Add dedicated temporal-order studies for the full RK update and subcycled
   boundary forcing, with spatial and filter errors controlled. Turn R1–R4 probes
   into durable regressions.
+  Separate pure temporal certification here from N6's dt-sensitivity checks;
+  qualify the improved N14–N16 coupling, where Hermite error can become visible.
   Add a scheduled full shock-validation battery and explicit Makie extension
   checks; retain HDF5 tests in the package test target and add parallel-HDF5
   execution where the required stack exists.

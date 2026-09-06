@@ -70,24 +70,70 @@ measures 3.1e-15 at np = 4 for the decomposed compact solve it rests on.
 
 ## The gate
 
-Run all of it before calling a change safe.
+Before committing, run the checks required by the affected behavior below.
+For mixed changes, take the union of the requirements. If the impact is
+unclear, run the full gate. Report what ran, any baseline changes, and any
+required coverage that remains unavailable.
+
+- **Prose, comments, and docstrings only:** run `test/docrefs_tests.jl`.
+  Build the documentation when changing Documenter configuration, page
+  generation, or executable documentation examples.
+- **Benchmarks, examples, and standalone tooling:** run the affected scripts
+  with a small representative workload. Changes to shared package code also
+  require the checks below.
+- **Tests only:** run the affected suite, including its enclosing runner when
+  the file is not standalone. Changes to numerical guards or stored references
+  require the corresponding numerical suite and an explanation of the new
+  baseline.
+- **Solver behavior or shared package infrastructure:** run the core gate
+  below. This includes changes to operators, boundaries, thermodynamics,
+  transport, filtering, timestepping, state/storage, AMR, and precompilation.
+  An isolated change to output, plotting, or a utility requires its affected
+  tests and the serial suite; add numerical or MPI checks when its effects
+  reach those paths.
+- **Distributed algorithms:** run the core gate and the full MPI suite at
+  2, 4, and 8 ranks for changes to decomposition, communication, ownership,
+  distributed solves, folds, or AMR synchronization.
+- **Performance-sensitive code:** also run `bench/jetcheck.jl` and
+  `bench/audit.jl`, comparing before and after in the same environment.
+  This applies to hot-path arithmetic, dispatch, types, storage, threading,
+  and changes to the audit probes themselves.
+- **Extensions and device paths:** also run the affected feature checks.
+  HDF5 changes require `test/hdf5_tests.jl` in an environment carrying HDF5;
+  Makie changes require `test/makie_tests.jl` from the docs environment.
+  Run these serially and under MPI when restart, collective output, or
+  distributed extraction is affected. Changes to the parallel-HDF5 backend
+  require that backend; device-path changes require relevant hardware-GPU
+  checks. A skipped check is unavailable coverage, not a pass.
+
+The core gate is:
 
 ```bash
 MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 
-julia --project=. test/runtests.jl        # 159 testsets, 0 failures
-julia --project=. test/convergence.jl     # measured orders, see below
-julia --project=. test/validation.jl      # shock-capturing battery, ~25 s
-for np in 2 4 8; do
-  "$MPIEXEC" -n $np julia --project=. -t 1 test/mpi_tests.jl   # 242/242 each
-done
-julia --project=. bench/jetcheck.jl       # inference
-julia --project=. bench/audit.jl          # allocation + non-concrete SSA
-julia --project=. test/docrefs_tests.jl   # every docs @ref resolves; also in runtests
+julia --project=. test/runtests.jl
+julia --project=. test/convergence.jl
+julia --project=. test/validation.jl
+"$MPIEXEC" -n 2 julia --project=. -t 1 test/mpi_tests.jl
+"$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl \
+  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,AMR transfer pair,halo consistency,off-rank folds,freestream,positivity floor,slicing"
 ```
 
-**Run `test/docrefs_tests.jl` before every push, and after any docstring or
-`docs/` edit.** The documentation job is the slowest leg of CI and the last
+The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.
+It exercises rank-dependent block sizes and process-grid shapes.
+
+For the full gate, replace the two MPI commands with full-suite runs at
+2, 4, and 8 ranks, and add both performance audits. Use the full gate for
+broad numerical refactors, release validation, or uncertain impact.
+Affected extension and hardware checks remain additional requirements.
+
+A passing `runtests.jl` already satisfies the documentation-reference check;
+do not run it separately unless documentation inputs changed afterward.
+
+**Run `test/docrefs_tests.jl` before every push unless it already passed,
+standalone or through `runtests.jl`, for the current documentation inputs.
+Rerun it after any subsequent docstring or `docs/` edit.**
+The documentation job is the slowest leg of CI and the last
 to report, and it has failed repeatedly on a `[`Name`](@ref)` whose target no
 `@docs` block renders: Documenter cannot resolve the link and fails the
 build. The file resolves every `@ref` in the rendered docstrings and pages
@@ -173,7 +219,8 @@ Julia's `.cov` output omits methods that were never compiled, so the percentage
 overstates coverage; watch the executable-line count too.
 
 **The test suite does not import `bench/` or `examples/`.** They stay green
-while broken. Run them after any cross-cutting change.
+while broken. After a cross-cutting API change, identify and run the affected
+consumers with small representative workloads.
 
 ## Naming
 
@@ -519,7 +566,8 @@ be revisited.
   Prefer `git add <paths>` over `git add -A` after running examples.
 - **Commit to `main`.** This is a single-maintainer repository and the default
   agent habit of opening a branch per change is noise here; do not create one
-  unless asked. Commit only when asked, and run the gate above first.
+  unless asked. Commit only when asked, and first complete the applicable checks
+  under "The gate."
 
 ## Known limitations
 
