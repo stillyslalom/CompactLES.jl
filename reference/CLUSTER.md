@@ -92,6 +92,7 @@ file:
 if ($?SYS_TYPE) then
     setenv JULIA_PROJECT "@$SYS_TYPE"
     setenv JULIA_DEPOT_PATH "$HOME/.julia/$SYS_TYPE"":$HOME/.julia:"
+    setenv OPENBLAS_NUM_THREADS 1
     switch ($SYS_TYPE)
         case toss_4_x86_64_ib_cray:     module load cray-mpich rocm ; breaksw
         case toss_4_x86_64_ib:          module load mvapich2 ; breaksw
@@ -109,6 +110,10 @@ resolves anywhere as `--project=@<name>`, and the first `Pkg.add` creates it. Se
 each up once on its own cluster (`Pkg.develop` the checkout, add `MPIPreferences`
 and any device package, then configure MPI as above); a preference block is inert
 without its package present.
+
+`OPENBLAS_NUM_THREADS` sits in the same block because it is a property of the
+machine rather than of a run, and a rank that inherits the default thread count
+pays for it on every compact solve; see the BLAS rule under Launch rules.
 
 Sharing the depot's `compiled/` cache between clusters fails in practice, so the
 per-architecture depot is standing configuration. The slots should coexist
@@ -154,6 +159,22 @@ julia --project=. clusterlaunch.jl 256 nodes=36 cores_per_node=112
 ```
 
 ## Launch rules
+
+**Threaded BLAS costs a factor of ninety and buys nothing.** The only BLAS this
+solver calls is the reduced interface stage of the compact solve
+(`_reduced_solve!` in `src/tridiag.jl`): a 2P x 2P system, 2x2 on a single rank,
+with one right-hand side per line, solved once per dimension per field per
+Runge-Kutta stage. OpenBLAS forks its thread pool for each of those and waits on
+the join, so the cost is paid per call and grows with the node's core count while
+the arithmetic it parallelizes stays trivial. On rzhound (112 logical CPUs,
+Sapphire Rapids) a 32³ step measured 7.0 s at the default thread count and
+0.079 s under `OPENBLAS_NUM_THREADS=1`, with nothing else changed; the profile
+put 123 of the working thread's 191 samples in OpenBLAS's `exec_blas_async_wait`
+before and one in a BLAS kernel after. The same setting is worth 12-17% on a
+24-thread desktop, so this is not a cluster-only rule, it is a large-node rule
+that a cluster makes unmissable. Set `OPENBLAS_NUM_THREADS=1` in the launch
+environment; `clusterprobe.jl` and `depotprobe.jl` both report the count and
+flag anything above 1.
 
 **Scheduler flags do not necessarily correspond to the CPU mask, and the mapping
 differs between machines.** On one, `-c` counted logical CPUs with SMT on, so
