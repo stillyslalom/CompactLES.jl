@@ -10,18 +10,18 @@
 # Spatial closure near boundaries is handled by the scheme's ClosureRows (see
 # kernels.jl). The BC objects here declare periodicity to the decomposition
 # through `isperiodic`, enforce state values on wall planes through `enforce!`,
-# and correct the right-hand side through `correct_rhs!`. A new condition is a
-# subtype of BoundaryCondition defining whichever of `enforce!(bc, Q, solver,
-# dim, side)` and `correct_rhs!(bc, solver, Q, dQ, dim, side)` it needs, plus
+# impose assembled fluxes through `correct_flux!`, and correct the right-hand
+# side through `correct_rhs!`. A new condition is a subtype of BoundaryCondition
+# defining whichever of the state, flux, and RHS hooks it needs, plus
 # `validate_bc` when its derivation restricts the geometry or the EOS.
 
 """
     BoundaryCondition
 
 Abstract supertype for physical-face conditions. A new condition implements
-hard state enforcement with `enforce!`, an RHS characteristic correction with
-`correct_rhs!`, or both. Periodic and coordinate-fold behavior must also be
-declared during solver setup.
+hard state enforcement with `enforce!`, a pre-divergence flux condition with
+`correct_flux!`, and/or an RHS characteristic correction with `correct_rhs!`.
+Periodic and coordinate-fold behavior must also be declared during solver setup.
 """
 abstract type BoundaryCondition end
 
@@ -29,7 +29,7 @@ abstract type BoundaryCondition end
 Storage type of a patch's six face conditions, `bcs[dim][side]`. The element
 type is abstract on purpose: see the note on [`Patch`](@ref) for why the
 conditions are kept out of that type's parameters, and what the resulting
-dispatch in `apply_bcs!` and `correct_rhs!` costs.
+dispatch in the boundary hooks costs.
 """
 const FaceConditions = NTuple{3,Tuple{BoundaryCondition,BoundaryCondition}}
 
@@ -64,11 +64,20 @@ struct SlipWallBC <: BoundaryCondition end
 """
     NoSlipWallBC(; Twall=NaN)
 
-Impermeable viscous wall with zero velocity. All three momentum components on
-the wall plane are set to zero and the total energy is reduced by the kinetic
-energy they carried. The default non-finite `Twall` selects an adiabatic wall,
-which stops there; a finite value selects an isothermal wall and overwrites the
-total energy with the internal energy the EOS gives at `Twall`.
+Stationary, impermeable, noncatalytic viscous wall. All three momentum components
+on the wall plane are set to zero. With the default `Twall=NaN`, the kinetic
+energy they carried is removed and the total normal energy flux is set to zero
+before divergence (adiabatic). A finite `Twall` instead sets the internal energy
+from the EOS at that temperature and permits the conductive energy flux
+`-(mu0 * cp_mix / Pr + kappa_art) * grad_T_ion[dim]` (isothermal).
+
+Every species has zero total normal flux, including molecular and artificial
+diffusion. The artificial `:bulk` channel's normal species and energy transport
+is suppressed at the wall; isothermal heat exchange uses the conductivity above.
+Pressure and viscous momentum fluxes remain, providing wall traction. The flux
+condition is applied after complete assembly and before exchange/divergence,
+including at corners. Filtering and hard state enforcement are separate
+operations; neither guarantees a whole-domain discrete conservation identity.
 """
 struct NoSlipWallBC{T<:AbstractFloat} <: BoundaryCondition
     Twall::T   # NaN → adiabatic; finite → isothermal wall
@@ -298,6 +307,28 @@ correct_rhs!(bc::SwitchableBC, solver, Q, dQ, d, side) =
                   correct_rhs!(bc.before, solver, Q, dQ, d, side)
 
 """
+    correct_flux!(bc, solver, Q, dim, side)
+
+Physical flux boundary hook. `compute_rhs!` calls it after complete flux assembly
+(including the artificial `:bulk` channel), before flux halo exchange and compact
+divergence. Mutate the physical normal flux `solver.flux[dim, component]` on the
+owned wall plane. Metric area factors are applied afterwards. The default is a
+no-op. `Q` has already had its hard boundary conditions enforced by the caller.
+
+Every rank calls the hook for both faces of each active dimension, even when
+`wallplane` returns `nothing`. CompactLES' implementations perform no collective
+operations and return immediately on nonowners. A custom hook that communicates
+must preserve the same collective order on every rank, including nonowners.
+Correcting the flux here lets the compact solve carry it into all affected RHS
+rows; overwriting only the endpoint RHS does not impose this condition.
+"""
+correct_flux!(::BoundaryCondition, solver, Q, dim, side) = nothing
+
+correct_flux!(bc::SwitchableBC, solver, Q, dim, side) =
+    bc.switched ? correct_flux!(bc.after, solver, Q, dim, side) :
+                  correct_flux!(bc.before, solver, Q, dim, side)
+
+"""
     validate_bc(bc, metric, eos, d, side)
 
 Setup-time hook, called by the [`Solver`](@ref) constructor once per face. The
@@ -436,6 +467,36 @@ function enforce!(bc::NoSlipWallBC, Q, solver, d, side)
                      !isnan(bc.Twall), m1, m2, m3, solver.equations.i_energy,
                      solver.equations.n_species)
     nothing
+end
+
+@inline function _no_slip_flux_point!(flux, cp_mix, kappa_art, grad_T,
+                                      mu0, Pr, iso, d, n_species, i_energy,
+                                      o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        for sp in 1:n_species
+            flux[d, sp][I] = 0
+        end
+        # At a stationary noncatalytic wall neither enthalpy diffusion nor
+        # convective/viscous work transports energy. Rebuild the allowed heat
+        # flux rather than subtracting terms: this also removes the complete
+        # bulk component flux, and is independent of the EOS energy gauge.
+        flux[d, i_energy][I] = iso ?
+            -(mu0 * cp_mix[I] / Pr + kappa_art[I]) * grad_T[I] :
+            zero(eltype(cp_mix))
+    end
+    return nothing
+end
+
+function correct_flux!(bc::NoSlipWallBC, solver, Q, d, side)
+    plane = wallplane(solver.decomp, d, side)
+    plane === nothing && return nothing
+    plane_pointwise!(_no_slip_flux_point!, solver.rho, plane,
+                     solver.field_tuples.flux, solver.cp_mix, solver.kappa_art,
+                     solver.grad_T_ion[d], solver.transport.mu0, solver.transport.Pr,
+                     !isnan(bc.Twall), d, solver.equations.n_species,
+                     solver.equations.i_energy)
+    return nothing
 end
 
 @inline function _extrapolation_point!(Q, s1, s2, s3, n_cons, o1, o2, o3,

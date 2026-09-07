@@ -78,7 +78,7 @@ below exposed behavior outside those passing checks.
   nonconvergence behave consistently in both precisions; connect failure to R3.
   **Code:** [physics.jl](../src/physics.jl).
 
-- [ ] **R5 — Enforce the adiabatic, impermeable no-slip wall flux contract.**
+- [x] **R5 — Enforce the adiabatic, impermeable no-slip wall flux contract.**
   `NoSlipWallBC()` zeros velocity but leaves the normal conductive energy flux
   unconstrained. With rho=1, u=0, p=1+0.1x and mu0=0.01, the audit obtains
   energy flux -0.005 at both endpoints after enforcement and RHS evaluation.
@@ -101,6 +101,9 @@ below exposed behavior outside those passing checks.
   **Code:** [boundary.jl](../src/boundary.jl), [rhs.jl](../src/rhs.jl),
   [runtests.jl](../test/runtests.jl),
   [boundaryorder.jl](../bench/boundaryorder.jl).
+  **Delivered:** `correct_flux!` with serial/MPI and hardware regressions;
+  [measured errors and budgets](CALIBRATION.md#no-slip-wall-flux-contract-r5-september-2026),
+  [completion record](HISTORY.md#no-slip-wall-flux-contract-september-2026).
 
 ## P1: numerical credibility
 

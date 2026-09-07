@@ -2300,3 +2300,81 @@ approximate priority order:
    every converging case fails and the size of it has not been measured. The
    odd path uses the mirror, for the reason recorded under
    [the fourth-difference clamp at a fold](#the-fourth-difference-clamp-at-a-fold).
+
+
+## No-slip wall flux contract (R5, September 2026)
+
+The wall correction now sets the assembled normal flux before halo exchange and
+compact divergence. Each species flux is zero at an impermeable noncatalytic
+wall. Adiabatic total-energy flux is zero; isothermal energy flux is
+`-(mu0 * cp_mix / Pr + kappa_art) * grad_T_ion[d]`. This removes species enthalpy
+transport and the normal `:bulk` species/energy component flux while retaining
+pressure and viscous traction. It does not change the derivative closure or
+filter coefficients.
+
+`julia --project=. bench/boundaryorder.jl wall_only=true` repeats the original
+incompatible linear-temperature probe. Its two energy fluxes change from
+`[-0.005, -0.005]` to exactly `[0.0, 0.0]`. The regression also compares the
+second compact RHS row with the uncorrected slip-wall case, so an endpoint-only
+RHS patch cannot satisfy the test.
+
+`test/wall_flux_tests.jl` separates compatible evolution from that imposition
+probe. Measurements below use Julia 1.11.4, Float64, the default C6 closure,
+unit length and density, ideal gas R=1 and gamma=1.4, and no filtering or
+artificial transport unless stated otherwise. Integrations have bounded step
+counts and assert the requested final time.
+
+| Check | Measurement | Regression guard |
+|---|---|---|
+| Insulated conduction, N=33 / 65, temperature max error | 1.3972e-6 / 3.0304e-7 | fine error <5e-7 and reduction >4 |
+| Same, absolute trapezoidal domain-energy drift | 4.0894e-8 / 4.3029e-9 | fine drift <1e-8 |
+| Species cosine diffusion, N=65, mass-fraction max error | 2.4444e-7 | <3e-7 |
+| Isothermal, initial integrated RHS minus boundary heat rate | 2.7576e-6 | absolute defect <4e-6 |
+| Isothermal, evolved energy rate minus time-averaged boundary heat rate | 1.8716e-6 | absolute defect <3e-6 |
+
+The insulated temperature is `1 + 0.08 exp(-alpha*4pi^2*t) cos(2pi*x)`, with
+`mu0=0.015`, `Pr=0.8`, `alpha=mu0*cp/(Pr*cv)` and final time 0.002. An analytic
+momentum source balances its pressure gradient, leaving conduction to evolve
+through the computed energy RHS. The species case uses identical species
+thermodynamics, `Y1=0.5+0.1 cos(2pi*x)`, `mu0=0.012`, `Sc=0.75` and final time
+0.002; pressure and temperature stay uniform to roundoff. At N=65, the separate
+instantaneous mixed temperature/composition probe measures interior RHS max
+errors 3.6932e-6 (species) and 7.7558e-6 (energy), both guarded at 1e-5.
+
+The isothermal case starts at `T=1+0.05 sin(pi*x)`, with `Twall=1`, `mu0=0.01`,
+`Pr=0.8`, N=65 and final time 2e-5. Its initial boundary heat rate is
+-0.0137444830 and the integrated energy RHS is -0.0137417254. The measured
+energy-change rate is -0.0137425903, versus -0.0137444619 from a trapezoidal
+time integral of the two endpoint heat rates. The residual includes spatial
+quadrature and hard temperature enforcement; it is not a residual normal
+species flux or an assertion of exact discrete conservation.
+
+A separate N=33 filter-only probe with alpha=0.35 and high-frequency cosine
+fields changes the trapezoidal species-1 mass by +4.5253e-4 and total energy
+by +1.1230e-3. Subsequent adiabatic wall energy/species fluxes are still exactly
+zero. No global filter-conservation claim follows from this wall fix.
+Artificial conductivity and species diffusivity are seeded independently of
+the detector in the direct face tests, including both `:fickian` and `:bulk`.
+Both precisions, all six physical faces and their corners, ideal/NASA-9 and
+stiffened-gas EOS, nonsingular cylindrical/spherical metrics, SwitchableBC, and
+KernelAbstractions CPU execution are covered. The 24-case `bench/wallflux.jl`
+matrix also passes on the Radeon RX 6800 XT
+(AMDGPU on Windows), with zero maximum CPU/GPU evolved-state difference for
+every precision, normal, thermal condition and species channel. The hardware
+probe uses nonzero seeded artificial transport and physical corners. Run it
+from an environment carrying AMDGPU with `backend=amdgpu`; `backend=cpu` runs
+the same assertions on KA CPU. The GPU environment's stale manifest was
+resolved in a temporary copy against this checkout.
+
+The before/after allocation and JET audits used Julia 1.11.4, one thread,
+`OPENBLAS_NUM_THREADS=1`, and `--compiled-modules=no` in both runs. The new
+abstract face dispatch costs 16 B per active face: the 48^3 RHS changes from
+208 to 304 B, and the five-stage step from 1552 to 2032 B, for single-species,
+two-species C10, and bulk configurations. The 1-D axis RHS changes from 720 to
+752 B and its step from 3728 to 3888 B. A direct warmed isothermal wall-hook
+probe allocates 0 B on 256, 1024 and 4096 wall points. There is no allocation
+proportional to the wall area. JET gains the expected `correct_flux!` dispatch:
+RHS 1 to 2 reports, step 2 to 3, with every other probe unchanged. The raw RHS
+non-concrete SSA count changes from 92 to 110; other inference probes are
+unchanged. These are fixed boundary-dispatch costs, not timings or claims of a
+speedup. Existing convergence and shock-validation guards were not changed.

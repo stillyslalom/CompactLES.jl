@@ -1821,6 +1821,13 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
     # path's inferred body (bench/audit.jl) does not carry the branch.
     solver.art.species_flux === :bulk && _bulk_gradients!(solver, Q)
     assemble_fluxes!(solver, Q)
+    # Physical wall fluxes must enter the compact divergence, including its
+    # near-wall rows. All ranks visit the hooks in the same order; the no-slip
+    # hook only writes locally owned planes and adds no collectives.
+    for d in 1:3, side in 1:2
+        decomp.active[d] || continue
+        correct_flux!(solver.bcs[d][side], solver, Q, d, side)
+    end
     for d in 1:3
         exchange_dim_batch!(view(solver.flux, d, :), decomp, d)
     end

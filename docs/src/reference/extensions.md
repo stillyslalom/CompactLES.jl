@@ -61,6 +61,8 @@ condition needs:
 
 - `isperiodic(bc)` declares periodicity during setup;
 - `enforce!(bc, Q, solver, dim, side)` writes a physical boundary state;
+- `correct_flux!(bc, solver, Q, dim, side)` imposes the normal assembled flux
+  before exchange and compact divergence;
 - `correct_rhs!(bc, solver, Q, dQ, dim, side)` changes the boundary RHS;
 - `validate_bc(bc, metric, eos, dim, side)` rejects incompatible geometry or EOS.
 
@@ -72,6 +74,7 @@ boundaries](@ref).
 
 ```@docs
 enforce!
+correct_flux!
 correct_rhs!
 validate_bc
 isperiodic

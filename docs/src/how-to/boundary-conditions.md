@@ -27,6 +27,21 @@ NoSlipWallBC(Twall = 300.0)
 
 The thermodynamic wall state is computed through the selected EOS.
 
+Both no-slip variants are impermeable and noncatalytic: every species has zero
+normal flux, including molecular diffusion, artificial diffusion, and the
+artificial `:bulk` species channel. The default adiabatic wall also has exactly
+zero normal total-energy flux. An isothermal wall permits conductive heat
+exchange with conductivity `mu0 * cp_mix / Pr + kappa_art`; its normal energy
+flux contains no species enthalpy diffusion or bulk component diffusion.
+Pressure and viscous wall stresses remain in the momentum flux.
+
+These conditions are imposed on the assembled flux before compact divergence,
+so they affect the nearby rows as well as the wall node. They do not establish a
+global discrete conservation identity: compact differentiation, domain
+quadrature, state enforcement at an isothermal wall, and filtering each have
+their own budget contribution. Measure those separately when auditing heat or
+species conservation.
+
 ## Imposed full-state forcing
 
 Use a [`DirichletBC`](@ref) when the complete state is physically prescribed,

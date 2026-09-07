@@ -91,17 +91,23 @@ accuracy; the time integrator is also fourth order. Neither prevents high
 spatial accuracy at sufficiently small dt, but both must be separated in
 an order study.
 
-**Wall correctness also needs attention.** `NoSlipWallBC()` documents an
-adiabatic wall, but its implementation sets momentum to zero and removes
+**Wall correctness probe (before R5).** `NoSlipWallBC()` documented an
+adiabatic wall, but its implementation set momentum to zero and removed
 kinetic energy without imposing zero normal heat flux. `compute_rhs!`
-differentiates temperature normally and assembles `-kappa*grad(T)` at the
-wall; there is no specialized no-slip RHS correction. A diagnostic state
-with rho=1, u=0, p=1+0.1x and mu0=0.01 gives energy flux -0.005 at both
+differentiated temperature normally and assembled `-kappa*grad(T)` at the
+wall; there was no specialized no-slip flux correction. A diagnostic state
+with rho=1, u=0, p=1+0.1x and mu0=0.01 gave energy flux -0.005 at both
 wall endpoints after boundary enforcement and RHS evaluation. The linear
 temperature deliberately violates adiabatic compatibility: this is a test
 of missing flux imposition, not a manufactured convergence solution. A
 physically correct thermal boundary treatment and its compatibility tests
 are prerequisites for claiming high-order adiabatic viscous walls.
+R5 now imposes the total normal species and thermal flux through `correct_flux!`
+after complete assembly and before divergence. The diagnostic's two energy
+fluxes are zero after this change. This fixes the physical flux contract; it
+does not promote a wall accuracy order or make the compact operator/filter
+globally conservative. The compatible evolution and budget checks are in
+`test/wall_flux_tests.jl`, with measurements recorded in `CALIBRATION.md`.
 
 **Recommended sequence.**
 

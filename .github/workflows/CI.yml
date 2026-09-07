@@ -127,8 +127,8 @@ jobs:
           eight = join(("periodic C6", "pentadiagonal C10", "closed C6",
                         "device line solves", "tiled refinement",
                         "AMR transfer pair", "halo consistency",
-                        "off-rank folds", "freestream", "positivity floor",
-                        "slicing"), ',')
+                        "off-rank folds", "freestream", "no-slip wall flux",
+                        "positivity floor", "slicing"), ',')
           MPI.mpiexec() do mpiexec
               julia = Base.julia_cmd()
               for (np, args) in ((2, String[]), (8, ["phases=" * eight]))

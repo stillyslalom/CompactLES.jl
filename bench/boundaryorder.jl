@@ -1,5 +1,6 @@
 # Diagnostic experiments for the wall / AMR accuracy audit.
 # Run serially: julia --project=. -t 1 bench/boundaryorder.jl
+# Flux-contract probe only: append wall_only=true.
 # No production operators are changed. Slopes use actual grid spacing.
 using MPI
 MPI.Init(threadlevel=:funneled)
@@ -66,7 +67,11 @@ function thermal_wall_flux()
 end
 
 function main()
-    println("Adiabatic no-slip wall energy flux, incompatible linear T: ", thermal_wall_flux())
+    opts = CL.script_args(ARGS, (wall_only=false,))
+    wall_flux = thermal_wall_flux()
+    println("Adiabatic no-slip wall energy flux, incompatible linear T: ", wall_flux)
+    all(iszero, wall_flux) || error("adiabatic wall leaks energy")
+    opts.wall_only && return nothing
     for (label, deriv, degree) in (("C6 BL", lele_d1_6(closures=:brady_livescu), 6),
                                    ("C8 BL", lele_d1_8(closures=:brady_livescu), 8))
         ns = (17, 33, 65, 129)

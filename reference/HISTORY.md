@@ -30,6 +30,7 @@ points at them and does not restate them.
 20. [Sensor length scaling on stretched and curvilinear grids (September 2026)](#sensor-length-scaling-on-stretched-and-curvilinear-grids-september-2026)
 21. [The bulk species channel (September 2026)](#the-bulk-species-channel-september-2026)
 22. [P0 runtime correctness — R1 to R4 (September 2026)](#p0-runtime-correctness--r1-to-r4-september-2026)
+23. [No-slip wall flux contract (September 2026)](#no-slip-wall-flux-contract-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -1235,3 +1236,36 @@ they now run at 300 K and assert validity positively.
 Convergence orders and error magnitudes came through bit-identical, and the
 validation battery reproduced every recorded figure. Serial suite 159 testsets,
 2254 assertions; MPI 242 checks.
+
+
+## No-slip wall flux contract (September 2026)
+
+R5 adds the `correct_flux!` boundary extension hook after complete flux assembly
+and before exchange and compact divergence. `NoSlipWallBC` imposes zero total
+normal species flux and either zero adiabatic energy flux or the prescribed
+isothermal conductive heat flux. The correction covers molecular/artificial
+transport and the bulk species channel, retaining pressure and viscous traction.
+Switchable conditions forward the hook. Nonowner ranks enter the same hook
+sequence and return locally without adding collectives.
+
+The regressions distinguish exact wall flux, nearby compact RHS response,
+manufactured final-time errors, domain-energy budgets, and filtering. They cover
+Float32/Float64, all six physical faces and corners, supported EOS and curved
+metrics, both species channels, and CPU/device execution. The dedicated MPI
+phase is included in both the full suite and the eight-rank CI selection.
+`bench/wallflux.jl` supplies a reproducible hardware acceptance matrix.
+[CALIBRATION.md](CALIBRATION.md#no-slip-wall-flux-contract-r5-september-2026)
+records the measurements and fixed per-face dispatch cost. The broader issue of
+whole-domain discrete conservation remains separate from pointwise imposition.
+
+Validation on Julia 1.11.4: 2,428 serial assertions, the unchanged spatial
+convergence and shock-validation batteries, all 290 full-suite checks at two
+MPI ranks, and all 136 selected checks at eight ranks pass. The new wall phase
+also passes independently at eight ranks, including six nonowners per wall
+pair. The 24-case hardware wall matrix passes on the Radeon RX 6800 XT with
+bitwise CPU/GPU evolved states, and also on KA CPU. The existing
+`bench/device_solver.jl backend=amdgpu n=12 steps=3` battery also completes with
+bitwise state comparisons throughout, including the no-slip NSCBC duct, Sod,
+refinement/regridding and both-precision TGV. Both before/after performance
+audits completed. HDF5 and Makie extension tests were skipped by the package
+environment; neither extension was changed.

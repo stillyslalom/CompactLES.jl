@@ -121,7 +121,7 @@ julia --project=. test/convergence.jl
 julia --project=. test/validation.jl
 "$MPIEXEC" -n 2 julia --project=. -t 1 test/mpi_tests.jl
 "$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl \
-  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,AMR transfer pair,halo consistency,off-rank folds,freestream,positivity floor,slicing"
+  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,AMR transfer pair,halo consistency,off-rank folds,freestream,no-slip wall flux,positivity floor,slicing"
 ```
 
 The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.
@@ -207,8 +207,8 @@ add a case there, not in either consumer.
 them before a change and compare after, and read the delta, not the absolute
 count. `jetcheck.jl` reports zero dispatch sites at every probed entry point
 but the boundary ones, so *any* report elsewhere is a regression. The
-boundary baseline is one site each in `apply_bcs!` (`enforce!`) and
-`compute_rhs!` (`correct_rhs!`), hence two in `step!`, which contains both:
+boundary baseline is one site in `apply_bcs!` (`enforce!`) and two in
+`compute_rhs!` (`correct_flux!`, `correct_rhs!`), hence three in `step!`:
 face conditions are stored abstractly on the `Patch` so that a combination of
 them does not recompile the right-hand-side tree, and the docstring there has
 the measurement. The counts overlap between entry points

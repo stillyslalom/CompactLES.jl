@@ -492,8 +492,18 @@ assuming boundary conditions have been enforced on `Q`. Step by step:
    velocity, momentum convection plus pressure and the full viscous stress
    (including the artificial bulk term), and the energy flux (enthalpy
    convection, viscous work, Fourier heat flux, and enthalpy diffusion
-   Σ h_k J_k). This is *the single place fluxes are built.*
-7. **Flux halo exchange**, per dimension, batched over conserved components.
+   Σ h_k J_k). This assembles the complete interior flux before physical-face
+   corrections.
+7. **Physical flux conditions and halo exchange.** `correct_flux!` runs on
+   every active face after complete assembly, including the `:bulk` species
+   channel, and before exchange. A stationary noncatalytic no-slip wall sets
+   every normal species flux to zero. An adiabatic wall also zeros normal
+   total-energy flux; an isothermal wall retains only
+   `-(mu0 * cp_mix / Pr + kappa_art) * grad_T_ion[d]`. This removes both species
+   enthalpy transport and bulk component diffusion at the wall while retaining
+   momentum traction. Each hook writes only its owned plane without
+   communicating. The corrected flux is then exchanged per dimension, batched
+   over conserved components, so every affected compact divergence row sees it.
 8. **Metric divergence.** For each component `c` and direction `d`, form the
    area-weighted flux `A_d F_d`, take its compact derivative, and accumulate
    `dQ[c] −= inv_J · ∂(A_d F_d)`. `J = h₁h₂h₃` and `A_d = J/h_d`, so the compact
@@ -957,8 +967,11 @@ whose RHS reaches ±m needs `n_halo ≥ m`.
 
 **New boundary conditions.** Subtype `BoundaryCondition` and implement
 `enforce!(bc, Q, solver, dim, side)` for hard state enforcement on the wall plane
-(index sets come from `wallplane`), and/or `correct_rhs!(bc, solver, Q, dQ, dim,
-side)` for a characteristic RHS correction. Declare periodicity via `isperiodic`.
+(index sets come from `wallplane`), `correct_flux!(bc, solver, Q, dim, side)`
+for a physical flux condition before divergence, and/or
+`correct_rhs!(bc, solver, Q, dQ, dim, side)` for a characteristic RHS correction.
+Declare periodicity via `isperiodic`. All ranks visit these hooks; any custom
+collectives must also be reached on ranks that do not own the face.
 
 **New physics.** Extend flux assembly or regularization, or define
 `add_source!(source, solver, dQ, Q, t)` and place concrete sources in the

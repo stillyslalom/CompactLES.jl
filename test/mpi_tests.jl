@@ -2294,10 +2294,13 @@ function test_covered_masks()
     end
 end
 
+include("wall_flux_mpi.jl")
+
 const SUITE = (
     ("periodic C6", test_periodic_c6),
     ("pentadiagonal C10", test_pentadiagonal_c10),
     ("closed C6", test_closed_c6),
+    ("no-slip wall flux", test_no_slip_wall_flux),
     ("device line solves", test_device_lines),
     ("staged device exchange", test_staged_exchange),
     ("distributed refinement", test_refined_decomposed),

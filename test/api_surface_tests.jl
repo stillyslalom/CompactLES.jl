@@ -28,7 +28,7 @@ StepControl StiffenedGas Stretch
 SwitchableBC Transport Trigger WhenState Workspace add_source! allocate_state
 apply_bcs! artificial_conductivity_scale boundary_plane cartesian_slice
 compact_d8 compact_filter compute_dt compute_rhs! conserved_from_prim
-conserved_parity correct_rhs! dissipation_rate domain_volume dt_report eachpatch
+conserved_parity correct_flux! correct_rhs! dissipation_rate domain_volume dt_report eachpatch
 enforce! eos_dphi_dY eos_phi field_array field_slice fieldheatmap fieldheatmap!
 filter_state! fired! gaussian_filter gidx global_xcoord hdf5_available
 hdf5_parallel initialize! interior_index isperiodic lele_d1_10 lele_d1_6
@@ -58,7 +58,7 @@ const EXTENSION_API = (
     :recover_primitives!, :species_names, :species_enthalpy, :eos_phi,
     :eos_dphi_dY, :artificial_conductivity_scale, :wall_internal_energy,
     :state_admissibility,
-    :conserved_parity, :enforce!, :correct_rhs!, :validate_bc, :isperiodic,
+    :conserved_parity, :enforce!, :correct_flux!, :correct_rhs!, :validate_bc, :isperiodic,
     :fired!, :next_time, :rewind!,
 )
 

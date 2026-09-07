@@ -3868,6 +3868,7 @@ end
     @test size(Q) == (size(CL.field(d))..., 7)
 end
 
+include("wall_flux_tests.jl")
 include("device_tests.jl")
 include("patch_tests.jl")
 include("level_tests.jl")

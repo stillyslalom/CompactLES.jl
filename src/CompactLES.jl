@@ -70,7 +70,7 @@ export gaussian_filter
 export BandedCompactScheme, BandedClosureRow, lele_d1_10, compact_d8
 export BoundaryCondition, PeriodicBC, SlipWallBC, NoSlipWallBC
 export ExtrapolationBC, AxisBC, OriginBC, PoleBC
-export enforce!, correct_rhs!, validate_bc, isperiodic
+export enforce!, correct_flux!, correct_rhs!, validate_bc, isperiodic
 export NSCBCOutflowBC, NSCBCInflowBC, DirichletBC, save_checkpoint, load_checkpoint!, save_vtk
 export FieldWriter, DEFAULT_VTK_FIELDS
 export BlockRegion, hdf5_available, hdf5_parallel
