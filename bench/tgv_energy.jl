@@ -116,15 +116,24 @@
 #             solver default, because the 128³ numbers above were measured under it. Pass
 #             `smoother=gaussian` for a comparison against the default
 #             configuration.
-#   cfl       timestep multiplier (default 0.6). Exposed because the filter's
+#   alphaf    comma-separated list of compact-filter alpha values (default
+#             "0.45"), the filter strength itself; larger filters more weakly.
+#             One of the three axes of the joint filter fit, the other two being
+#             `filter_interval` inside `configs` and `filter_cfl` below. The
+#             three cross with `configs`, `cfl` and `precision`, so one
+#             invocation runs the whole grid and prints one block per point.
+#
+#   cfl       comma-separated list of timestep multipliers (default "0.6").
+#             Exposed because the filter's
 #             share of the sink depends on it: unrelaxed, the filter removes
 #             energy per APPLICATION, so halving the CFL doubles the number of
 #             applications covering the same interval and doubles what the
 #             filter takes. Sweep it to measure that, not to tune anything.
-#   filter_cfl  reference CFL for a full-strength filter pass, 0 (default) for
-#             the unrelaxed formulation. Positive makes the filter dissipation
-#             a rate rather than a per-application amount, so the sweep above
-#             flattens. See `filter_weight`.
+#   filter_cfl  comma-separated list of reference CFLs at which one filter pass
+#             is applied at full strength, 0 (default) for the unrelaxed
+#             formulation. Positive makes the filter dissipation a rate rather
+#             than a per-application amount, so the `cfl` sweep flattens. See
+#             `filter_weight`.
 #   precision Float storage and arithmetic to measure: float64 (default),
 #             float32, or both. Diagnostics intentionally accumulate in
 #             Float64 in either mode; this option changes the solver state,
@@ -136,10 +145,34 @@
 #             of the state, downloaded per callback — the
 #             documented I/O-gathers-to-host path, excluded from solver wall
 #             time by the same accounting that excludes callbacks on the CPU.
+#   snapshots comma-separated times at which to write an HDF5 checkpoint of the
+#             state, empty (default) for none. The spectra N1 asks for are taken
+#             offline from these by `bench/tgv_spectrum.jl`, so nothing here
+#             computes a transform and no distributed FFT exists. Requires HDF5
+#             to be loadable, which the package environment cannot do (it is a
+#             weakdep); run from a project carrying both. Files land in
+#             `snapshot_dir` under a stem naming the configuration, so a sweep
+#             writes one set per point without collision.
+#
+#             `run!` shortens a step to land exactly on each instant, which is
+#             what makes snapshots comparable across a sweep. Under
+#             `filter_cfl = 0` a shortened step still pays a full filter pass,
+#             so requesting snapshots perturbs the energy budget slightly at
+#             each one; under a positive `filter_cfl` it does not. Use the same
+#             snapshot times for every configuration being compared.
+#
+#   snapshot_dir  directory for those files (default "tgv_snapshots").
+#
 #   window    steps either side for every -dKE/dt reported (default 250, i.e. a
 #             501-step window, clamped to length(ts)/8). Do not lower it towards
 #             1 to "see more detail" — the one-step rate is contaminated by dt
 #             jitter at several times the effect size. See `windowed_rate`.
+#
+# Every configuration is compared against the 512^3 spectral reference vendored
+# at `data/spectral_Re1600_512.gdiag`: the peak seen through the run's own
+# window, and the relative-L2 misfits of the kinetic-energy and dissipation
+# histories. The misfits are the quantity the joint alpha/cadence/filter_cfl fit
+# minimizes; the peak alone is one scalar and one parameter always fits it.
 #
 # Parsed by `script_args` (src/scriptargs.jl), shared with the cluster scripts;
 # the reasoning for ARGS over environment variables is there. An unknown key is
@@ -275,6 +308,132 @@ function windowed_rate(ts, kes, i, w)
     return -(kes[hi] - kes[lo]) / (ts[hi] - ts[lo])
 end
 
+# --- The spectral reference history ------------------------------------------
+#
+# `data/spectral_Re1600_512.gdiag` is the 512^3 dealiased pseudo-spectral
+# Taylor-Green solution at Re = 1600 distributed with the International
+# Workshops on High-Order CFD Methods, vendored verbatim under its upstream
+# name; `data/README.md` carries the provenance. Its columns are time, kinetic
+# energy, -dE/dt and enstrophy, from t = 0 to t = 19.99 at dt = 0.01.
+#
+# It replaces the single digitized scalar this script used to print. The
+# tabulated peak is 1.28575e-2 at t = 8.97 against the 1.289e-2 at t = 8.86 read
+# off van Rees et al., JCP 230 (2011), Fig. 8: the values agree to 0.3% and the
+# times to 0.11, which is figure-reading error, so the table and the figure are
+# the same solution. The rounded 1.2e-2 at t = 9 that this script printed for a
+# year is 6.7% below the tabulated peak, and comparisons against it read
+# correspondingly over-dissipative.
+#
+# The reference is incompressible and this case is compressible at Ma 0.1, so
+# the kinetic energies differ by the pressure-dilatation exchange, which is
+# O(Ma^2) and shows up early while the flow is still smooth.
+
+struct SpectralReference
+    t::Vector{Float64}
+    ke::Vector{Float64}
+    eps::Vector{Float64}
+end
+
+reference_path() = joinpath(pkgdir(CompactLES), "data", "spectral_Re1600_512.gdiag")
+
+function load_reference(path::AbstractString = reference_path())
+    t, ke, eps = Float64[], Float64[], Float64[]
+    for line in eachline(path)
+        s = strip(line)
+        (isempty(s) || startswith(s, '#')) && continue
+        f = split(s)
+        length(f) >= 3 || error("short row '$s' in $path")
+        push!(t, parse(Float64, f[1]))
+        push!(ke, parse(Float64, f[2]))
+        push!(eps, parse(Float64, f[3]))
+    end
+    length(t) > 1 || error("no data rows in $path")
+    issorted(t) || error("reference times are not sorted in $path")
+    return SpectralReference(t, ke, eps)
+end
+
+# Linear interpolation, clamped at both ends. The table is uniform at dt = 0.01
+# and a run samples every step, so the interpolation error sits far below the
+# differences being ranked.
+function _interp(xs, ys, x)
+    x <= xs[1] && return ys[1]
+    x >= xs[end] && return ys[end]
+    i = searchsortedlast(xs, x)
+    theta = (x - xs[i]) / (xs[i+1] - xs[i])
+    return ys[i] + theta * (ys[i+1] - ys[i])
+end
+
+reference_ke(ref::SpectralReference, t) = _interp(ref.t, ref.ke, t)
+
+"""
+The reference rate over the same interval `windowed_rate` differences, taken
+from the reference's energy column rather than its own -dE/dt column so that
+both curves carry the identical estimator: the ~0.2% a boxcar reads low over a
+curved peak is then common-mode and cancels. `NaN` outside the table.
+"""
+function reference_rate(ref::SpectralReference, tlo, thi)
+    (thi > tlo && tlo >= ref.t[1] && thi <= ref.t[end]) || return NaN
+    return -(reference_ke(ref, thi) - reference_ke(ref, tlo)) / (thi - tlo)
+end
+
+"The tabulated maximum of the reference dissipation column, and its time."
+function raw_reference_peak(ref::SpectralReference)
+    v, i = findmax(ref.eps)
+    return v, ref.t[i]
+end
+
+"""
+The reference peak seen through a boxcar of half-width `halfwidth`, which is the
+run's own window converted to time. Reported beside the raw peak because a run
+compared at the default 501-step window is not being compared with the raw
+tabulated maximum.
+"""
+function windowed_reference_peak(ref::SpectralReference, halfwidth)
+    halfwidth > 0 || return raw_reference_peak(ref)
+    best, best_t = -Inf, NaN
+    for t in ref.t
+        r = reference_rate(ref, t - halfwidth, t + halfwidth)
+        isfinite(r) && r > best && ((best, best_t) = (r, t))
+    end
+    return best, best_t
+end
+
+"""
+Relative L2 misfit of a run's history against the spectral reference, which is
+the history fit `C_mu` and the filter constants are ranked on once one scalar
+peak stops separating them.
+
+Both quantities are normalized by the reference's own RMS over exactly the steps
+compared, so each is a dimensionless number that falls as the fit improves.
+Kinetic energy is compared at every step through `last`; the rate only where the
+full window fits inside the run, since a clamped window is a different estimator
+on one side. `last` excludes the truncated final step for the reason
+`windowed_rate` documents.
+"""
+function reference_misfit(ref::SpectralReference, ts, kes, w, last)
+    ske = nke = sdiss = ndiss = 0.0
+    n_ke = n_diss = 0
+    tmax = 0.0
+    for i in 1:min(last, length(ts))
+        t = ts[i]
+        t > ref.t[end] && break
+        r = reference_ke(ref, t)
+        ske += (kes[i] - r)^2
+        nke += r^2
+        n_ke += 1
+        tmax = t
+        (i - w >= 1 && i + w <= last) || continue
+        rr = reference_rate(ref, ts[i-w], ts[i+w])
+        isfinite(rr) || continue
+        sdiss += (windowed_rate(ts, kes, i, w) - rr)^2
+        ndiss += rr^2
+        n_diss += 1
+    end
+    rel(a, b) = b > 0 ? sqrt(a / b) : NaN
+    return (ke = rel(ske, nke), diss = rel(sdiss, ndiss),
+            n_ke = n_ke, n_diss = n_diss, tmax = tmax)
+end
+
 "Kinetic energy per unit volume, globally reduced. `hosts` holds one host
 array per held patch, aligned with `solver.patches`; on a refined run the
 sum is the composite quadrature under the covered masks."
@@ -317,11 +476,13 @@ end
 function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                       filter_interval=1, sample=100, progress=0,
                       nmax=typemax(Int), smoother=:compact,
-                      cfl=0.6, filter_cfl=0.0,
+                      cfl=0.6, filter_cfl=0.0, alphaf=0.45,
                       mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
                       T::Type{<:AbstractFloat}=Float64,
                       backend::AbstractBackend=CPUBackend(),
-                      refine::Int=0, tile::Int=0, subcycle::Bool=false)
+                      refine::Int=0, tile::Int=0, subcycle::Bool=false,
+                      snapshots::Vector{Float64}=Float64[],
+                      snapshot_stem::AbstractString="")
     # A refined run carries a centered cube of `refine` root nodes on one
     # level below the root, host-only: its energy history is the composite
     # quadrature and is the covered-mask check against the single-level
@@ -350,7 +511,7 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
             prob,
             Numerics(n_global=(N, N, N), cfl=cfl,
                      filter_interval=filter_interval, filter_cfl=filter_cfl,
-                     deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
+                     deriv=lele_d1_6(T), filt=compact_filter(T(alphaf), T),
                      art=ArtParams{T}(enabled=art_on, C_mu=T(C_mu),
                                       smoother=smoother,
                                       mu_sensor=mu_sensor,
@@ -398,6 +559,20 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
         nothing
     end)
     callbacks = (record, split)
+    if !isempty(snapshots)
+        # One checkpoint per listed instant. `save_checkpoint_hdf5` reads the
+        # coefficient arrays rather than recomputing them, so a snapshot leaves
+        # the next timestep alone; the step shortened to land here does not, see
+        # the header note.
+        refine == 0 ||
+            error("snapshots take the single-patch state; a refined run has no " *
+                  "shared-file checkpoint")
+        snap = Callback(AtTime(snapshots), (s, Q) -> begin
+            save_checkpoint_hdf5(s, Q, @sprintf("%s_t%08.4f", snapshot_stem, s.t))
+            nothing
+        end)
+        callbacks = (callbacks..., snap)
+    end
     if progress > 0
         # `record` runs first in this tuple, so `kes[end]` is already this step's
         # energy and the progress line costs no second Allreduce. The value came
@@ -419,10 +594,11 @@ end
 const DEFAULTS = (N = 32, tfinal = 10.0, configs = "off:1,on:1",
                   progress = 0, sample = 100, nmax = typemax(Int),
                   window = 250, smoother = :compact,
-                  cfl = 0.6, filter_cfl = 0.0,
+                  cfl = "0.6", filter_cfl = "0.0", alphaf = "0.45",
                   mu_sensor = :strain, beta_sensor = :strain, reduction = :sum,
                   precision = "float64", backend = "cpu",
-                  refine = 0, tile = 0, subcycle = false)
+                  refine = 0, tile = 0, subcycle = false,
+                  snapshots = "", snapshot_dir = "tgv_snapshots")
 
 function parse_configs(spec)
     configs = NamedTuple{(:art, :filt, :C_mu),Tuple{Bool,Int,Float64}}[]
@@ -438,6 +614,48 @@ function parse_configs(spec)
         push!(configs, (art=art, filt=parse(Int, parts[2]), C_mu=C_mu))
     end
     return configs
+end
+
+"""
+Load HDF5 if any snapshot was asked for. Done at top level for the reason
+`make_backend` gives: a package loaded inside `main` defines its methods in a
+newer world than the one `main` runs in.
+"""
+function load_hdf5(snapshots)
+    isempty(snapshots) && return nothing
+    @eval using HDF5
+    hdf5_available() ||
+        error("snapshots= needs HDF5; run from a project carrying it")
+    return nothing
+end
+
+"""
+The stem naming one configuration's snapshot files. Every sweep axis appears,
+so a sweep writes one set per point and `bench/tgv_spectrum.jl` can label a
+curve from the filename alone.
+"""
+function snapshot_stem(dir, N, T, cfg, alphaf, cfl, filter_cfl, smoother)
+    return joinpath(dir,
+        @sprintf("tgv_N%d_%s_art%s_fi%d_cmu%g_a%g_cfl%g_fcfl%g_%s",
+                 N, T === Float32 ? "f32" : "f64", cfg.art ? "on" : "off",
+                 cfg.filt, cfg.C_mu, alphaf, cfl, filter_cfl, smoother))
+end
+
+"""
+A comma-separated list of floats: the sweep axes `alphaf`, `filter_cfl` and
+`cfl`, which the joint filter fit varies together. A single value is a
+one-element list, so every existing invocation reads unchanged.
+"""
+function parse_floats(spec, key)
+    out = Float64[]
+    isempty(strip(String(spec))) && return out
+    for item in split(String(spec), ',')
+        v = tryparse(Float64, strip(item))
+        v === nothing && error("bad $key entry '$item', want a float")
+        push!(out, v)
+    end
+    isempty(out) && error("$key list must not be empty")
+    return out
 end
 
 function parse_precisions(spec)
@@ -459,14 +677,23 @@ function main(opt, backend)
         opt.N, opt.tfinal, opt.sample, opt.progress, opt.nmax, opt.window
     configs = parse_configs(opt.configs)
     precisions = parse_precisions(opt.precision)
+    alphafs = parse_floats(opt.alphaf, :alphaf)
+    filter_cfls = parse_floats(opt.filter_cfl, :filter_cfl)
+    cfls = parse_floats(opt.cfl, :cfl)
+    snapshots = parse_floats(opt.snapshots, :snapshots)
+    ref = load_reference()
     summaries = NamedTuple[]
     if rank == 0
         @printf("=== Taylor-Green %d^3, Re=1600, tfinal=%.1f, %d rank(s), ",
                 N, tfinal, MPI.Comm_size(MPI.COMM_WORLD))
         @printf("%d thread(s), backend %s\n", Threads.nthreads(), opt.backend)
-        println("    reference peak -dKE/dt = 1.2e-2 at t = 9 (van Rees et al. 2011)")
+        rpk, rpt = raw_reference_peak(ref)
+        @printf("    reference: 512^3 spectral, peak -dKE/dt %.4e at t = %.2f, ",
+                rpk, rpt)
+        @printf("history to t = %.2f\n", ref.t[end])
     end
-    for T in precisions, cfg in configs
+    for T in precisions, cfg in configs, alphaf in alphafs,
+        filter_cfl in filter_cfls, cfl in cfls
         result, failure = nothing, nothing
         elapsed = @elapsed begin
             try
@@ -474,12 +701,17 @@ function main(opt, backend)
                                       filter_interval=cfg.filt, sample=sample,
                                       progress=progress, nmax=nmax,
                                       smoother=opt.smoother,
-                                      cfl=opt.cfl, filter_cfl=opt.filter_cfl,
+                                      cfl=cfl, filter_cfl=filter_cfl,
+                                      alphaf=alphaf,
                                       mu_sensor=opt.mu_sensor,
                                       beta_sensor=opt.beta_sensor,
                                       reduction=opt.reduction, T=T,
                                       backend=backend, refine=opt.refine,
-                                      tile=opt.tile, subcycle=opt.subcycle)
+                                      tile=opt.tile, subcycle=opt.subcycle,
+                                      snapshots=snapshots,
+                                      snapshot_stem=snapshot_stem(
+                                          opt.snapshot_dir, N, T, cfg, alphaf,
+                                          cfl, filter_cfl, opt.smoother))
             catch err
                 # Collective by construction, so every rank lands here together
                 # and the sweep stays in step. See the header note.
@@ -491,6 +723,8 @@ function main(opt, backend)
         label = @sprintf("%s, art %s, filter_interval %d, C_mu %.4g, %s/%s/%s/%s",
                          T, cfg.art ? "ON " : "OFF", cfg.filt, cfg.C_mu,
                          opt.smoother, opt.mu_sensor, opt.beta_sensor, opt.reduction)
+        label *= @sprintf(", alphaf %.3g, cfl %.3g, filter_cfl %.3g",
+                          alphaf, cfl, filter_cfl)
         opt.refine == 0 ||
             (label *= @sprintf(", refined %d^3 (tile %d, %s)", opt.refine, opt.tile,
                                opt.subcycle ? "subcycled" : "unsubcycled"))
@@ -531,12 +765,27 @@ function main(opt, backend)
                 abs(result.mass1 - result.mass0) /
                 max(abs(result.mass0), eps(Float64)))
         push!(summaries,
-              (; T, cfg, peak=rates[imax-1], peak_t=ts[imax],
+              (; T, cfg, alphaf, cfl, filter_cfl,
+               peak=rates[imax-1], peak_t=ts[imax],
                wall=solver.wall_total, memory=total_mem,
                drift=abs(result.mass1 - result.mass0) /
                      max(abs(result.mass0), eps(Float64))))
         @printf("peak -dKE/dt = %.4e at t = %5.2f   (%d-step window)\n",
                 rates[imax-1], ts[imax], 2w + 1)
+        # Against the spectral reference: the peak seen through the same boxcar,
+        # then the two history misfits. One scalar peak fitted with one parameter
+        # always succeeds, so the misfits are what separates a filter setting
+        # that reproduces the dissipation history from one that lands on its
+        # maximum by cancellation.
+        halfwidth = (ts[min(imax + w, last_full)] - ts[max(imax - w, 1)]) / 2
+        wpk, wpt = windowed_reference_peak(ref, halfwidth)
+        mis = reference_misfit(ref, ts, kes, w, last_full)
+        @printf("reference through this window: %.4e at t = %5.2f", wpk, wpt)
+        @printf("   peak %+.2f%%, peak time %+.2f\n",
+                100 * (rates[imax-1] - wpk) / wpk, ts[imax] - wpt)
+        @printf("history misfit (rel L2 to t = %5.2f): KE %.4e over %d steps, ",
+                mis.tmax, mis.ke, mis.n_ke)
+        @printf("-dKE/dt %.4e over %d\n", mis.diss, mis.n_diss)
         # Peak at the last usable step, whatever ended the run. Testing `t`
         # against `tfinal` missed the case `nmax=` creates, where the run
         # stops early and every t is below tfinal.
@@ -572,13 +821,17 @@ function main(opt, backend)
     end
     if Float64 in precisions && Float32 in precisions && rank == 0
         println("\n=== precision comparison ===")
-        for cfg in configs
-            i64 = findfirst(s -> s.T === Float64 && s.cfg == cfg, summaries)
-            i32 = findfirst(s -> s.T === Float32 && s.cfg == cfg, summaries)
+        for cfg in configs, alphaf in alphafs, filter_cfl in filter_cfls,
+            cfl in cfls
+            same(s) = s.cfg == cfg && s.alphaf == alphaf &&
+                      s.filter_cfl == filter_cfl && s.cfl == cfl
+            i64 = findfirst(s -> s.T === Float64 && same(s), summaries)
+            i32 = findfirst(s -> s.T === Float32 && same(s), summaries)
             (i64 === nothing || i32 === nothing) && continue
             a, b = summaries[i64], summaries[i32]
-            @printf("art %s, filter %d: Float32 speedup %.3fx, memory %.3fx smaller; ",
-                    cfg.art ? "ON " : "OFF", cfg.filt,
+            @printf("art %s, filter %d, alphaf %.3g, cfl %.3g, filter_cfl %.3g: ",
+                    cfg.art ? "ON " : "OFF", cfg.filt, alphaf, cfl, filter_cfl)
+            @printf("Float32 speedup %.3fx, memory %.3fx smaller; ",
                     a.wall / b.wall, a.memory / b.memory)
             @printf("peak Δ %.3e (Δt %.3e), density drift %.3e vs %.3e\n",
                     b.peak - a.peak, b.peak_t - a.peak_t,
@@ -592,4 +845,5 @@ end
 # `main` executes in, and every launch would raise a world-age error.
 const _opt = CompactLES.script_args(ARGS, DEFAULTS; positional = (:N, :tfinal))
 const _backend = make_backend(_opt.backend)
+load_hdf5(strip(_opt.snapshots))
 mpi_main(() -> main(_opt, _backend))

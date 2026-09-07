@@ -49,7 +49,7 @@ constant in that list.
 
 | Setting | Default | Keep? | Basis |
 |---|---|---|---|
-| `C_mu` | 0.002 | yes | [TGV at 128³](#c_mu-the-shear-viscosity) gives 0.004 ± 0.003, which contains the default; above 0.008 spherical Noh fails. |
+| `C_mu` | 0.002 | yes | [TGV at 128³](#c_mu-the-shear-viscosity) is consistent with it but does not select it: the peak carries a 6% residual the coefficient does not control. Above 0.008 spherical Noh fails. |
 | `C_beta` | 1.0 | yes | [Accuracy optimum near 0.4](#c_beta-the-shock-constant); 1.0 maximizes the spherical-origin CFL ceiling and is the only value viable under both detectors. |
 | `C_kappa` | 0.01 | yes | [0.02–0.04 lowers wall heating under `:compact`](#c_kappa-the-conductivity) but not under the default smoother; zero loses spherical Noh. |
 | `C_D` | 0.01 | yes | [The compact filter dominates interface broadening](#c_d-the-species-diffusivity); a 64× sweep moves the width 22%. |
@@ -64,7 +64,7 @@ constant in that list.
 | `cfl` | 0.5 | **no** | [Use 0.3 with shocks](#cfl-and-the-symmetry-cell-restriction) and `StepControl(retries = 4)`. Converging geometry tolerates 0.4 (ν = 3) and 0.2 (ν = 2). |
 | `filter_cfl` | 0.0 | provisionally | [The unrelaxed formulation](#the-compact-filter) dissipates per application. A positive value makes it a rate; held at 0 pending the α and cadence fit. |
 | `filter_interval` | 1 | unfitted | Never calibrated. Every constant above is conditional on `compact_filter(0.45)` applied every step. |
-| `compact_filter` α | 0.45 | unfitted | As above. |
+| `compact_filter` α | 0.45 | unfitted | As above. The reference history and the [fit instrument](#the-fit-instrument) are in place; the fit itself needs the 3-D campaign. |
 
 ## The battery
 
@@ -234,20 +234,35 @@ dissipation peak, artificial properties on, `filter_interval = 1`, Gaussian
 smoother:
 
 ```
-resolution   peak -dKE/dt        molecular   mu*    beta*   filter
-32³          1.4216e-2 @ 6.58      12.6%     5.1%    ~0%     82.2%
-64³          1.2459e-2 @ 8.49      33.8%     4.5%    0.0%    61.6%
-128³         1.2044e-2 @ 9.06      60.4%     2.3%    0.0%    37.3%
-256³         1.3043e-2 @ 8.84      86.4%     0.8%    0.0%    12.8%
+resolution   peak -dKE/dt        vs reference   molecular   mu*    beta*   filter
+32³          1.4216e-2 @ 6.58      +16.4%        12.6%     5.1%    ~0%     82.2%
+64³          1.2459e-2 @ 8.49        —           33.8%     4.5%    0.0%    61.6%
+128³         1.2044e-2 @ 9.06       −6.0%        60.4%     2.3%    0.0%    37.3%
+256³         1.3043e-2 @ 8.84       +1.6%        86.4%     0.8%    0.0%    12.8%
 ```
 
-The reference peak is 1.2e-2 at t = 9. At 32³ the run overpredicts dissipation by
-18% and peaks 2.4 time units early; at 128³ it is within 1% of the reference
-magnitude and within one sample interval of its time; at 256³ it is about 4%
-above the rounded reference and inside the well-resolved DNS range of roughly
-1.25–1.28e-2 near t = 9. β\* is negligible at every resolution because dilatation
-is negligible at Ma 0.1, which agrees with the role of `C_beta` as a shock
-parameter.
+The reference peak is 1.28575e-2 at t = 8.97, read from the tabulated 512³
+pseudo-spectral solution now vendored at `data/spectral_Re1600_512.gdiag`
+([provenance](../data/README.md#taylor-green-reference-solution)). Each
+percentage above is against that solution seen through the same boxcar the run
+was measured with, since the two estimators have to match
+([the window](#read-the-rate-over-a-window)): 1.2210e-2 at 32³, 1.2809e-2 at
+128³, 1.2844e-2 at 256³, the widths falling with the step count. The 64³ row's
+step count was not recorded, so its window cannot be reconstructed. Against the
+raw tabulated peak it is 3.1% low, and since the window always lowers the
+reference, its windowed figure is above that: −3.1% is the most negative value
+the row can take. β\* is negligible at every resolution because
+dilatation is negligible at Ma 0.1, which agrees with the role of `C_beta` as a
+shock parameter.
+
+These comparisons were previously taken against the rounded `1.2e-2 at t = 9`
+quoted from the figure, which is 6.7% below the tabulated peak. That rounding is
+larger than most of the differences it was used to judge, and the readings it
+produced invert against the real value: 128³, described as "within 1% of the
+reference", is the worst of the resolved rows, and 256³ is the best. The trend
+with resolution is not monotone, since 64³ is no worse than −3.1% and 128³ is
+−6.0%, and the three rows differ in smoother, backend and machine, so nothing
+here separates a resolution effect from a configuration one.
 
 The 128³ runs used 224 ranks over two rzhound nodes at 20–25 minutes each. The
 256³ run was the first production-scale run on the GPU target: 4 MI300A APUs,
@@ -267,21 +282,27 @@ across the refinement. The 32³ point below is the earlier `:compact` run
 The calibration therefore holds the filter fixed and sweeps `C_mu` at 128³:
 
 ```
-C_mu = 0       (art off)   1.2153e-2 @ t ≈ 9.00    +1.28% vs reference
-C_mu = 0.0005              1.2108e-2 @ t ≈ 9.05    +0.90%
-C_mu = 0.002   (default)   1.2044e-2 @ t ≈ 9.06    +0.37%
-C_mu = 0.008               1.1950e-2 @ t ≈ 8.77    −0.42%
+C_mu = 0       (art off)   1.2153e-2 @ t ≈ 9.00    −5.0% vs reference
+C_mu = 0.0005              1.2108e-2 @ t ≈ 9.05    −5.5%
+C_mu = 0.002   (default)   1.2044e-2 @ t ≈ 9.06    −6.0%
+C_mu = 0.008               1.1950e-2 @ t ≈ 8.77    −6.7%
 ```
 
-Across the 16-fold range the peak varies monotonically and crosses the reference
-value. Interpolating the last interval gives 0.0048 linearly and 0.0038 in log,
-so the optimum is `C_mu ≈ 0.004`. The slope near the crossing is −1.57e-2 per
-unit `C_mu`, and the peak estimate carries about 0.4% uncertainty, since at
-`C_mu = 0.002` the top two windowed values are 0.011966 and 0.012044, 0.65%
-apart. That is ±0.002–0.003 in `C_mu`, a band of roughly 0.002 to 0.007
-containing the default. Its upper end is excluded by the one-dimensional result
-that Noh ν = 3 does not complete at 0.008. The intermediate value 0.004 has not
-been run through `bench/artcal.jl`, which a change of default would require.
+**The 128³ peak does not determine `C_mu`.** Every value underpredicts the
+reference peak and raising the constant moves further away, so the sweep has no
+crossing. The whole 16-fold range spans 1.7% in the peak while the 128³ residual
+is 6% and of one sign, three and a half times larger. The earlier reading of this
+table located `C_mu ≈ 0.004` by interpolating a crossing that exists only against
+the rounded `1.2e-2`, which happened to fall inside the swept band; the direction
+of that fit was an artifact of the rounding, and `C_mu ≈ 0.004` should not be
+carried forward as a candidate default on this evidence.
+
+The table still establishes that the peak is monotone in `C_mu` and weakly
+dependent on it, and that the residual it sits in belongs to the resolution and
+configuration rather than to the coefficient, since the 256³ row overshoots by
+1.6% on the same estimator. **Retain 0.002**, as a value the case is consistent
+with rather than one it selects. The upper end of the band remains excluded by
+the one-dimensional result that Noh ν = 3 does not complete at 0.008.
 
 The μ\* calculation costs 43% of wall time at 128³, 21% per step from
 `compute_artificial!` plus 18% more steps. Channel shares scale as expected: μ\*
@@ -323,23 +344,33 @@ column. With them off, `dt` and the rate vary by under one percent.
 `C_mu` is ranked on differences well under 1%, which the one-step rate cannot
 resolve. The 501-step windowed rate reduces within-run scatter to about 0.3%.
 `bench/tgv_energy.jl` reports every rate windowed (`window=`), and every number
-here is windowed. A boxcar over a curved peak reads about 0.2% low at this window
-width, common-mode across configurations, so it cancels in the `C_mu` comparison
-and biases only the absolute value against the external reference.
+here is windowed. A boxcar over a curved peak reads low: 0.10% at the 128³
+half-width of 0.196 time units, 0.39% at 0.2, and 3.0% at 0.5. That is
+common-mode across configurations run at the same window, so it cancels in a
+`C_mu` comparison, but it does not cancel against the external reference, and at
+32³ the same 501 steps span 0.8 time units and cost 5.2%. The script therefore
+compares against the reference passed through the run's own window rather than
+against the tabulated maximum, and prints both.
 
 `run!` truncates the final step to land on `tfinal`, and a short step still pays a
 full filter pass, so −dKE/dt inflates there. At 128³ that produced 1.4226e-2 at
 t = 10.00 against the true 1.2065e-2 at t = 8.77. `bench/tgv_energy.jl` excludes
 that step.
 
-**Recommendation: retain 0.002.** The resolved three-dimensional shear case
-constrains the coefficient to within a factor of two and is consistent with the
-default. Do not raise it past 0.008. Two qualifications bound the strength of the
-fit. One scalar fitted with one parameter always succeeds, so this shows the
-default is consistent with TGV rather than derived from it, and the stronger test
-against the whole −dKE/dt(t) curve needs the van Rees reference digitized. And
-the fit is conditional on `compact_filter(0.45)` applied every step and, under
-`filter_cfl = 0`, on the CFL as well.
+**Recommendation: retain 0.002.** Do not raise it past 0.008. The resolved
+three-dimensional shear case is consistent with the default and does not select
+it, for the reason above: at 128³ the peak carries a 6% one-signed residual that
+the coefficient does not control, so the 1.7% it does control cannot be read off
+against an external value. The peak is spent as an estimator here.
+
+The replacement is the history misfit. `bench/tgv_energy.jl` now reports the
+relative L2 distance between a run's kinetic-energy and −dKE/dt histories and the
+vendored reference's, over every step of the run, which is a curve fit rather
+than one scalar fitted with one parameter. Ranking `C_mu` on it needs a
+resolution whose own history error is below the effect size, and it needs the
+filter settled first, since the fit stays conditional on `compact_filter(0.45)`
+applied every step and, under `filter_cfl = 0`, on the CFL as well. Both belong
+to N1.
 
 ## C_D, the species diffusivity
 
@@ -992,10 +1023,12 @@ sensor raises the μ\* share by a third at the expense of the filter's, and the
 directional maximum cuts it by 40% because the maximum over three directions is
 smaller than their sum. Both are moves of one to two points in a 4.5% channel
 within a sink the filter dominates, so neither is distinguishable from a rescaling
-of `C_mu`. Two further results are not rescalings: the peak falls 0.3% under
-`:velocity`, toward the van Rees reference of 1.2e-2, and the peak time under
-`:max` moves 8.49 to 8.97 against a reference peak at t = 9, the other two
-settings being half a time unit early.
+of `C_mu`. One further result is not a rescaling: the peak time under `:max`
+moves 8.49 to 8.97, landing on the reference peak time exactly, the other two
+settings being half a time unit early. The 0.3% fall in the peak under
+`:velocity` was read as a move toward the reference and is not one: all three
+64³ peaks are below the tabulated 1.28575e-2, so the smallest of them is the
+furthest away. Its direction was an artifact of the rounded reference.
 
 ### Sensor-field cost
 
@@ -1056,8 +1089,9 @@ The compact filter supplies most of the energy sink at every resolution measured
 here and it has never been calibrated. Two halves separate. The formulation half
 is measured and delivered: the filter removes energy per application, so its
 dissipation is not a rate and does not converge as `dt → 0` at fixed resolution,
-and `filter_cfl` makes it a rate. The constant half, fitting α and the cadence
-against a reference dissipation history, is open and requires the 3-D campaign.
+and `filter_cfl` makes it a rate. The constant half, fitting α, the cadence and
+the reference CFL against a reference dissipation history, is open and requires
+the 3-D campaign. Its reference and its estimator are now in place.
 
 ### Dissipation per application
 
@@ -1143,6 +1177,85 @@ moves.
 **Recommendation:** hold `filter_cfl = 0` until α and the cadence are fitted. The
 two are coupled, since a fit taken under the unrelaxed formulation is only
 reproducible at the CFL it was taken at, so they should be settled together.
+
+### The fit instrument
+
+`bench/tgv_energy.jl` crosses `alphaf`, `filter_cfl` and `cfl` as comma-separated
+lists against `configs`, whose `filter_interval` field is the cadence, so one
+invocation covers a grid of the three coupled filter settings. Each point is
+scored by the relative L2 distance of its kinetic-energy and −dKE/dt histories
+from the vendored reference, over every step of the run, alongside the peak seen
+through the run's own window.
+
+The score is a curve fit rather than a scalar. `C_mu` was fitted on one scalar
+with one parameter, which always succeeds, and the correction above shows what
+that costs ([Taylor–Green](#taylorgreen)). Both misfits are normalized by the reference's
+own RMS over exactly the steps compared, so each is dimensionless and falls as
+the fit improves. The rate is compared only where the full window fits inside
+the run, and the truncated final step is excluded from both, for the reasons in
+[the estimator note](#read-the-rate-over-a-window).
+
+A 32³ shakeout on the default configuration, Gaussian smoother, `cfl = 0.6`,
+`filter_interval = 1`, artificial properties on:
+
+```
+alphaf   steps   peak -dKE/dt        vs window   KE misfit   -dKE/dt misfit   filter
+0.40      3009   1.4039e-2 @ 6.62     +15.2%      1.532e-1     7.216e-1       85.1%
+0.45      3078   1.4217e-2 @ 6.61     +16.4%      1.435e-1     7.408e-1       82.2%
+0.49      3386   1.3797e-2 @ 6.71     +12.3%      1.245e-1     6.665e-1       74.7%
+```
+
+The α = 0.45 row is the check on the instrument: it returns 1.4217e-2 against the
+recorded 1.4216e-2 and the recorded channel shares exactly, with the peak time
+0.03 away, one sample interval. All three estimators then rank α = 0.49 first,
+but they disagree below it — the peak and the dissipation misfit put 0.40 second,
+the kinetic-energy misfit puts 0.45 second — so a three-point sweep is already
+enough to separate them.
+
+These are 32³ numbers and nothing follows from them about the default. The best
+misfits are 0.12 and 0.67, so the run does not resemble the reference history at
+this resolution at all, and the weakest filter wins because 82% of the sink is
+filter. The fit belongs at 128³ or above, where the filter's share is 37% or
+less. The table shows only that the axes move the score, that the score is
+reproducible, and that the instrument reproduces the archive.
+
+### Spectra
+
+`bench/tgv_energy.jl snapshots=<times>` writes an HDF5 checkpoint at each listed
+instant and `bench/tgv_spectrum.jl` takes the shell-averaged kinetic-energy
+spectrum from it offline. Nothing in the solver transforms anything: there is no
+distributed FFT and no new package dependency, and the postprocessor runs from
+any project carrying HDF5 and FFTW. `run!` shortens a step to land exactly on
+each instant, so snapshots are comparable across a sweep.
+
+The two α runs above, at t = 9, with `E(k)` normalized so that its sum is the
+volume-averaged kinetic energy:
+
+```
+alphaf   sum E(k)    E(k=8)     E(k=12)    E(k=16)    share above k = 8
+0.40     5.930e-2    5.58e-4    1.18e-6    4.76e-10       0.39%
+0.49     6.569e-2    2.88e-3    1.36e-4    1.21e-6        4.03%
+```
+
+The spectra separate the two settings by a factor of ten in the grid-scale band
+and by three and a half decades at k = 16, where the histories separated them by
+13% and the peak by 3%. At α = 0.40 the compensated spectrum `k^(5/3) E(k)` is
+flat only to k ≈ 7 and then collapses; at 0.49 it holds to k ≈ 10. The stronger
+filter empties the band above half the Nyquist wavenumber and takes the top of
+the inertial range with it, and it has removed 11% more total energy by t = 9.
+
+This is why N1 asks for spectra and not histories alone. −dKE/dt is one number
+per instant, and the sinks compete for a supply fixed at the large scales
+([the timestep](#the-timestep-moves-the-attribution-not-the-total)), so two
+filter settings can reach nearly the same total while distributing it very
+differently in wavenumber. The high-wavenumber share is the scalar that
+distinguishes them, and it is the one to fit α and the cadence against alongside
+the history misfit.
+
+The sum of the spectrum reproduces the solver's own kinetic energy to 4e-4
+relative at both settings, which is the Parseval check on the normalization; the
+residual is the density fluctuation, since the spectrum is taken on velocity and
+the solver's energy is density-weighted.
 
 <a id="the-filters-wall-cascade"></a>
 
@@ -1977,11 +2090,14 @@ In approximate priority order.
    which suppresses regularization as the cell thins, and the per-step compact
    filter, supported by the `:d8` ladder cells where the cylindrical axis fails
    [below a CFL rather than above one](#a-failure-that-gets-worse-as-the-timestep-falls).
-3. **Narrow the `C_mu` band below ±0.003** by fitting a parabola to the windowed
-   maximum and sampling the peak more densely, since `kes` is recorded every step.
-   A subsequent comparison should digitize the van Rees −dKE/dt curve and fit the
-   complete history rather than one scalar. Verify `C_mu = 0.004` against
-   spherical Noh before moving the default.
+3. **Refit `C_mu` against the history, not the peak.** The reference is
+   digitized and vendored, and the peak is spent: at 128³ it carries a 6%
+   one-signed residual the coefficient does not control
+   ([Taylor–Green](#taylorgreen)). `bench/tgv_energy.jl` reports the relative
+   L2 misfit of the kinetic-energy and −dKE/dt histories against the reference;
+   rank `C_mu` on that, at a resolution whose own history error is below the
+   effect size, and with the filter settled first. `C_mu = 0.004` is withdrawn
+   as a candidate.
 4. **Decide the detector.** `:d8` improves six of seven battery columns and the
    `C_beta` refit under it [retains 1.0](#the-c_beta-refit-under-d8), with no
    value in 0.25–4 recovering the spherical origin. The decision waits only on

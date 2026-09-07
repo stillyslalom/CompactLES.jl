@@ -21,6 +21,20 @@ const ASSET_DIR = normpath(joinpath(FIGURE_DIR, "..", "src", "assets"))
 const CACHE_PATH = joinpath(FIGURE_DIR, ".readme_header_cache.jls")
 const OUTPUT_PATH = joinpath(ASSET_DIR, "readme_header.png")
 
+"Peak of the vendored spectral Taylor-Green reference, as (time, -dE/dt)."
+function reference_dissipation_peak()
+    path = joinpath(pkgdir(CompactLES), "data", "spectral_Re1600_512.gdiag")
+    best_t, best = NaN, -Inf
+    for line in eachline(path)
+        row = strip(line)
+        (isempty(row) || startswith(row, '#')) && continue
+        f = split(row)
+        eps = parse(Float64, f[3])
+        eps > best && ((best, best_t) = (eps, parse(Float64, f[1])))
+    end
+    return best_t, best
+end
+
 function taylor_green_data(; n=64, tfinal=12.0)
     println("Running Taylor–Green showcase: $(n)^3 to t=$tfinal")
     gamma = 1.4
@@ -451,9 +465,10 @@ function render_hero(data)
         color=accent,
         markersize=11,
     )
-    # Peak digitized from Fig. 8 of van Rees et al., JCP 230 (2011),
-    # doi:10.1016/j.jcp.2010.11.031 (Re=1600 pseudo-spectral DNS).
-    reference_time, reference_peak = 8.86, 0.01289
+    # Peak of the tabulated 512^3 pseudo-spectral reference vendored at
+    # data/spectral_Re1600_512.gdiag; see data/README.md for its provenance and
+    # for the agreement with Fig. 8 of van Rees et al., JCP 230 (2011).
+    reference_time, reference_peak = reference_dissipation_peak()
     scatter!(
         axeps, [reference_time], [reference_peak];
         color=reference,

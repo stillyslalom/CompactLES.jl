@@ -111,14 +111,33 @@ below exposed behavior outside those passing checks.
 
 - [ ] **N1 — Calibrate filtering and settle its time-scaling policy.**
   The rate-scaled `filter_cfl` mechanism is delivered but opt-in; the default still
-  dissipates per application. Complete the van Rees dissipation-history
-  digitization and fit alpha, cadence, and reference CFL jointly against 128³ TGV
-  histories and spectra. Measure shock-battery sensitivity and smooth-turbulence
-  budgets under subcycling, variable dt, retries, and shortened output steps.
-  **Depends on:** R1–R3; cluster time and independent reference data.
+  dissipates per application. Fit alpha, cadence, and reference CFL jointly
+  against 128³ TGV histories and spectra. Measure shock-battery sensitivity and
+  smooth-turbulence budgets under subcycling, variable dt, retries, and shortened
+  output steps.
+  **Depends on:** R1–R3; cluster time.
   **Deliver:** a reproducible fit and explicit default decision in
   [CALIBRATION.md](CALIBRATION.md). Do not fit under one formulation and then
   silently switch to the other.
+  **Delivered so far:** the reference history, vendored as
+  [`data/spectral_Re1600_512.gdiag`](../data/README.md#taylor-green-reference-solution),
+  which supersedes the planned figure digitization; the fit instrument in
+  [tgv_energy.jl](../bench/tgv_energy.jl), which crosses `alphaf`, `filter_cfl`
+  and `cfl` against `configs` and scores each point by the relative-L2 misfit of
+  its kinetic-energy and −dKE/dt histories, validated at 32³ against the recorded
+  archive ([the fit instrument](CALIBRATION.md#the-fit-instrument)); and the
+  spectra, as `snapshots=` HDF5 dumps postprocessed offline by
+  [tgv_spectrum.jl](../bench/tgv_spectrum.jl), which at 32³ separate two α values
+  by a factor of ten in the grid-scale band where the histories separate them by
+  13% ([spectra](CALIBRATION.md#spectra)). No distributed FFT exists or is
+  needed.
+  **Consequence already recorded:** the rounded `1.2e-2 at t = 9` used throughout
+  the earlier work is 6.7% below the tabulated peak, which withdraws the
+  `C_mu ≈ 0.004` candidate and voids the peak as an estimator at 128³
+  ([Taylor–Green](CALIBRATION.md#taylorgreen)). N4 inherits the history misfit in
+  its place.
+  **Remaining:** the 128³ sweep itself, and the shock-battery and variable-dt
+  robustness legs.
 
 - [ ] **N2 — Measure and implement conservative filtering on nonuniform metrics.**
   Compare current unweighted component filtering with the reference's
