@@ -41,8 +41,9 @@ include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
 const DEFAULTS = ArtParams()
-const ALL = ["mu", "beta", "kappa", "D", "Y", "cfl", "resolution", "sensor",
-             "smoother", "detector", "field", "response", "miranda", "bulk"]
+const ALL = ["mu", "beta", "kappa", "D", "Y", "cfl", "filter", "resolution",
+             "sensor", "smoother", "detector", "field", "response",
+             "miranda", "bulk"]
 # Sweep names are bare words; `key=value` sets the background configuration that
 # every sweep then runs against. Refitting a constant under a changed smoother
 # is exactly `artcal.jl kappa smoother=gaussian`, and keeping the two forms in
@@ -271,6 +272,52 @@ if want("cfl")
         wc = m_wc(cfl=c)
         @printf("%-9.3g | %14.4f  %+6.0f%% | %15.4f | %15.4f | %.4f\n",
                 c, n1[1], 100n1[2], n2[1], n3[1], wc[1])
+    end
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
+end
+
+# ===========================================================================
+# The filter supplies most of the energy sink and is the one setting whose
+# removal ends a run outright, so the battery's question about it is not
+# accuracy but survival: how weak the filter can be before a shocked case
+# stops completing. TGV fitted alpha at 128^3 without an upper bound of its
+# own (reference/CALIBRATION.md, "The alpha sweep at 128 cubed"), which is
+# what these rows are asked to supply.
+if want("filter")
+    println("
+=== compact-filter alpha (larger filters more weakly) ===")
+    println("alphaf    | Noh1 plat  deficit | Noh2 plat | Noh3 plat | " *
+            "Lax L1  | Shu amp | WC peak")
+    hr()
+    for a in (0.40, 0.45, 0.486, 0.49, 0.499)
+        f = compact_filter(a)
+        n1 = m_noh(1; filt=f); n2 = m_noh(2; filt=f); n3 = m_noh(3; filt=f)
+        lx = m_lax(filt=f); sh = m_shu(filt=f); wc = m_wc(filt=f)
+        @printf("%-9.4g%s| %9.4f  %+6.0f%% | %9.4f | %9.4f | %7.1e | %7.4f | %.4f
+",
+                a, mark(a, 0.45), n1[1], 100n1[2], n2[1], n3[1],
+                lx[1], sh[1], wc[1])
+    end
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
+
+    # Completing each case at its own CFL is the weaker question. The filter is
+    # what holds a converging shock together at the symmetry cell, so the
+    # binding test of a weaker one is whether the CFL ceiling moves: under the
+    # Gaussian smoother it sits at 0.4 for the spherical origin and 0.2 for the
+    # cylindrical axis and the planar wall.
+    println("
+--- the same, against the CFL ceiling ---")
+    println("cfl    alphaf | Noh1 plat  deficit | Noh2 plat | Noh3 plat | WC peak")
+    hr()
+    for c in (0.4, 0.3, 0.2), a in (0.45, 0.486, 0.49)
+        f = compact_filter(a)
+        n1 = m_noh(1; cfl=c, filt=f)
+        n2 = m_noh(2; cfl=c, filt=f)
+        n3 = m_noh(3; cfl=c, filt=f)
+        wc = m_wc(cfl=c, filt=f)
+        @printf("%-6.3g %-6.4g%s| %9.4f  %+6.0f%% | %9.4f | %9.4f | %.4f
+",
+                c, a, mark(a, 0.45), n1[1], 100n1[2], n2[1], n3[1], wc[1])
     end
     println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end

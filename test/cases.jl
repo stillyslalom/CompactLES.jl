@@ -85,7 +85,7 @@ therefore generated at the test resolution's delta, not their own.
 """
 function tube(left, right; N, L=1.0, x0=0.5, tfin, γ=1.4,
               art=ArtParams(enabled=true), cfl=0.4, xlo=0.0, rhofun=nothing,
-              nmax=NMAX, delta=nothing)
+              nmax=NMAX, delta=nothing, filt=compact_filter(0.45))
     h = L / (N - 1)
     δ = delta === nothing ? 2h : delta
     ρL, uL, pL = left
@@ -104,7 +104,7 @@ function tube(left, right; N, L=1.0, x0=0.5, tfin, γ=1.4,
                             p=(1 - θ) * pL + θ * pR)
                    end)
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filter_interval=1))
+                                     filt=filt, filter_interval=1))
     run!(solver, Q; tfinal=tfin, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, tfin)
 end

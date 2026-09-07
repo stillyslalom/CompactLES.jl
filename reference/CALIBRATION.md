@@ -1431,6 +1431,84 @@ footprint sits in a band holding under 1.5% of the energy. Use the share as the
 bounding check it is, an emptied band below and a pile-up above, and fit on the
 history misfit at any resolution where the history is meaningful.
 
+<a id="the-battery-under-alpha"></a>
+
+### The shock battery under α
+
+`bench/artcal.jl filter` runs the one-dimensional battery at five filter
+strengths, each case at its production settings: Noh at `cfl = 0.15`,
+Lax and Shu–Osher at 0.4, Woodward–Colella at 0.3. The 0.486 row is the
+peak-crossing value from the sweep above.
+
+```
+alphaf   Noh1 plat  deficit | Noh2 plat | Noh3 plat | Lax L1  | Shu amp | WC peak
+0.40      0.9997     +61%   |  0.9365   |  0.9748   | 5.1e-3  | 1.6146  | 6.5846
+0.45      0.9993     +64%   |  0.9367   |  0.9751   | 5.0e-3  | 1.6180  | 6.6050
+0.486     0.9990     +61%   |  0.9376   |  0.9766   | 4.9e-3  | 1.6192  | 6.6093
+0.49      0.9989     +59%   |  0.9377   |  0.9769   | 5.0e-3  | 1.6192  | 6.6251
+0.499     0.9987     +49%   |  0.9372   |  0.9763   | 5.7e-3  | 1.6223  | 6.6887
+```
+
+Nothing fails. Every case completes at every strength, the Woodward–Colella
+collision at a 10⁵ pressure ratio included, which is the battery's pass-or-fail
+robustness floor.
+
+The columns whose answer comes from outside the code agree with the
+Taylor–Green fit. The Noh plateaus are exact at 4, 16 and 64, and both curved
+geometries are closest at α = 0.49 and fall back at 0.499. The Lax L1 error
+against the exact Riemann solution is flat from 0.45 to 0.49 and 14% worse at
+0.499. Alongside them the planar wall deficit falls from 64% to 49% as the
+filter weakens, which is the error the one-sided rows attack from the other side
+([the wall cascade](#the-filters-wall-cascade)), and the Shu–Osher train
+amplitude rises monotonically, since a weaker filter smears the train less.
+Three one-dimensional cases place the same bound the 128³ history does, and none
+of them was used to fit it.
+
+The two candidate values inside the band are not separable here. α = 0.486
+matches 0.49 on the Shu–Osher amplitude to four digits and on the Noh plateaus
+to the fourth, trailing it by 0.0003 on the spherical plateau and leading it by
+2 points on the planar wall deficit. It is the best row in the table on Lax,
+4.9e-3 against 5.0e-3 at both neighbours, which is the only column besides Noh
+with an answer independent of the code. The choice within 0.485 to 0.49
+therefore falls back to the Taylor–Green misfit, which has never been evaluated
+at 0.486.
+
+At the CFL ceiling the reading is less clean:
+
+```
+cfl   alphaf | Noh1 plat  deficit | Noh2 plat | Noh3 plat | WC peak
+0.4   0.45   |    NaN      NaN    |   NaN     |   NaN     | 6.6106
+0.4   0.486  |    NaN      NaN    |   NaN     |   NaN     | 6.6221
+0.4   0.49   |    NaN      NaN    |   NaN     |   NaN     | 6.6368
+0.3   0.45   |    NaN      NaN    |   NaN     |  0.9761   | 6.6050
+0.3   0.486  |  1.0004    −208%   |   NaN     |  0.9774   | 6.6093
+0.3   0.49   |  1.0000    −147%   |   NaN     |  0.9775   | 6.6251
+0.2   0.45   |  0.9995     +59%   |  0.9375   |  0.9756   | 6.5947
+0.2   0.486  |  0.9992     +54%   |  0.9381   |  0.9770   | 6.6094
+0.2   0.49   |  0.9992     +52%   |  0.9382   |  0.9773   | 6.6065
+```
+
+Under the Gaussian smoother the planar wall and the cylindrical axis work at
+`cfl = 0.2` and fail at 0.3, which is the pair of ceilings recorded above, and
+the spherical origin works at 0.3 and fails at 0.4, where 0.4 is recorded. That
+last disagreement is a granularity or policy difference and is not resolved
+here; it does not reach the α comparison, which varies one setting inside one
+table.
+
+α moves no ceiling. The one exception is not a raised one: the planar case at
+`cfl = 0.3` keeps positivity at α = 0.486 and 0.49 where α = 0.45 loses it, and
+returns a plateau of 1.0004 and 1.0000 with wall deficits of −208% and −147%, an
+excess where every healthy row carries a deficit, and larger at the weaker of
+the two failures. That is a changed failure mode rather than a working
+configuration, and it sets in somewhere between 0.45 and 0.486.
+
+**The battery does not veto α = 0.49, and it does not license moving the default
+either.** Every constant in this file was fitted under `compact_filter(0.45)`
+applied every step, so a change to the filter puts `C_beta`, `C_kappa`, `C_D`
+and `C_Y` back in question. `bench/artcal.jl` sweeps each of them against these
+same cases, and those sweeps have to be re-run at the new value before the
+default moves.
+
 <a id="the-filters-wall-cascade"></a>
 
 ### The filter's wall cascade
