@@ -12,6 +12,18 @@
 #   srun -n 56 --cpu-bind=threads julia --project=. clusterprobe.jl 128
 #   srun -n 56 --cpu-bind=threads julia --project=. clusterprobe.jl 256,256,512
 #
+# From a driver project that `dev`s the package, name this file by an absolute
+# path and keep `--project=.` on the driver, whose LocalPreferences.toml selects
+# the MPI (reference/CLUSTER.md):
+#
+#   srun -n 224 --cpu-bind=threads julia --project=. -t 1 #       $CLES/clusterprobe.jl 128            # CLES = the package directory
+#
+# Do NOT reach it the way the bench scripts are reached, through
+# `-e 'using CompactLES; include(joinpath(pkgdir(CompactLES), ...))'`. That
+# loads the package before `t_start`, so the MPI.Init and package-load times
+# below both report near zero, which are two of the numbers this script exists
+# to measure.
+#
 # The one argument is the grid you actually intend to run, as N or NX,NY,NZ
 # (default 64, i.e. 64^3). It decides the decomposition, so the scheme-floor and
 # points-per-rank checks below describe a different run if it is left at the

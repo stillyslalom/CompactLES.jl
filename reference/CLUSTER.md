@@ -41,8 +41,16 @@ resolved, the one whose scheduler integration the site tests; a bare `find` for
 live. `libmpi` is C, so the path's compiler does not affect the ABI, but if
 `dlopen` then wants a missing Intel runtime (`libimf`, `libsvml`), switch to a gcc
 build of the same version. Prefer an MPICH-ABI implementation (MVAPICH2, MPICH)
-over OpenMPI. On csh, `module` exists only in csh and `2>/dev/null` does not parse
-there ("Ambiguous output redirect"); use `>&` or a bash subshell.
+over OpenMPI.
+
+Three csh traps, since LC logins default to tcsh and every command in this file
+is a `julia -e` one-liner. `module` exists only in csh, and `2>/dev/null` does
+not parse there ("Ambiguous output redirect") -- use `>&`. A single-quoted string
+may not span a newline, so a multi-line `-e '...'` ends the quote at the first
+line break and reports "Unmatched '." And `!` still triggers history expansion
+inside single quotes, so `set_preferences!` and `set_libraries!` must be written
+`set_preferences\!`. Running the setup commands from a `bash` subshell avoids
+all three; `setenv` variables and loaded modules are inherited.
 
 If `MPI.Init` then hangs, or every rank reports itself as rank 0 of a 1-rank
 world (plausible output at ~1/N speed, not an error), the launcher needs a
@@ -74,6 +82,44 @@ environments). Run from the driver and locate scripts through `pkgdir` so
 srun -n 448 --cpu-bind=threads julia --project=. -t 1 \
     -e 'using CompactLES; include(joinpath(pkgdir(CompactLES), "examples", "taylor_green.jl"))'
 ```
+
+### HDF5 against a system MPI
+
+Setting `binary = "system"` makes HDF5_jll select its MPI-enabled variant, which
+pulls in `MPICH_jll`, whose `__init__` `dlopen`s an artifact `libmpifort.so`
+needing `MPIR_fortran_false` -- a symbol MPICH's `libmpi` exports and MVAPICH2's
+does not. `using HDF5` then fails to precompile. The MPICH *ABI* is compatible;
+the JLL's Fortran layer is not.
+
+The fix is a system parallel HDF5 built against the same MPI, which removes
+HDF5_jll and MPICH_jll from the picture. `HDF5.API.set_libraries!` cannot install
+it, since it needs `using HDF5` to work first, so write the preference directly:
+
+```bash
+julia --project=. -e 'using Preferences; set_preferences!(
+    Base.UUID("f67ccb44-e63f-5c2f-98bd-6dc0ccc4ba2f"),
+    "libhdf5" => "<prefix>/lib/libhdf5.so",
+    "libhdf5_hl" => "<prefix>/lib/libhdf5_hl.so"; force = true)'
+```
+
+Check that `ldd <prefix>/lib/libhdf5.so | grep -i mpi` resolves to the same
+`libmpi` given to MPIPreferences before trusting it, load the HDF5 module in the
+launch environment as well as at setup (`dlopen` has no RPATH), and verify with
+`HDF5.API.libhdf5`, `HDF5.API.h5_get_libversion()` and `hdf5_parallel()`. A
+leftover failure to precompile HDF5_jll is benign once the preference is set:
+the JLL remains a dependency but is never loaded.
+
+On rzhound this is `hdf5-parallel/1.14.0` under the
+`MPI/intel-classic/2021.6.0-magic/mvapich2/2.3.7` hierarchy. It gives
+`hdf5_parallel() == true` and the collective-open path in `with_shared_file`,
+which is otherwise unexercised: a 64 cubed snapshot written that way at 16 ranks
+reproduces a serial single-process write to five or six digits per spectral
+shell, diverging only where the two grids differ.
+
+Writing is fast enough to ignore. Two 151 MB checkpoints from a 128 cubed run
+over 224 ranks cost under 1.5% of an 1176 s run, together with the per-step
+reductions of the same callback list. The transfer-mode note at the top of
+`ext/CompactLESHDF5Ext.jl` carries the measurement and the decision it settles.
 
 ### One home directory, several clusters
 

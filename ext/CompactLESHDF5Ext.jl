@@ -66,6 +66,16 @@ const CKPT_FORMAT = 4
 # machine with a parallel libhdf5 built against the run's MPI, which is the only
 # place it can be exercised: `hdf5_parallel()` is false on a workstation, where
 # the serialized relay above runs instead and no transfer property applies.
+#
+# Measured on that machine, September 2026, and the answer is that it is not
+# worth doing. A 128^3 Taylor-Green run over 224 ranks on two rzhound nodes
+# (system MVAPICH2 2.3.7, hdf5-parallel 1.14.0, Lustre at stripe count 8) wrote
+# two 151 MB checkpoints during 11,504 steps. Everything outside the solver came
+# to 17.75 s of a 1176.34 s run, 1.5%, and that budget also carries a per-step
+# globally reduced kinetic energy from the caller's own callback. So both
+# independent-mode writes together cost at most 1.5% of the run and in practice
+# far less. The aggregation a collective transfer buys has no room to pay for
+# the empty-selection restructuring above at this rank count and file size.
 
 # The relay token's tag. Nothing else uses 0 on these communicators; the halo
 # families start at 10 (see the tag note in src/halo.jl).
