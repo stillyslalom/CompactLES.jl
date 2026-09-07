@@ -305,8 +305,8 @@ disables it.
 Reading Miranda's kernels, carried by Pyranda in `pyranda/parcop/`, against
 `artificial.jl` identified four differences in the Cook artificial-property
 path. Two of the four are now implemented and measured. The measurements are in
-`reference/CALIBRATION.md` under "Measured against the reference
-implementation"; the decisions are recorded here.
+`reference/CALIBRATION.md` under "The ringing detector" and "The sensor
+fields and the compression switch"; the decisions are recorded here.
 
 **The sensor smoother** is an explicit nine-point Gaussian in the reference, not
 a compact-filter pass. `ArtParams.smoother` offers both and `:gaussian` became
@@ -393,8 +393,8 @@ and β\* from the dilatation, neither of which carries an absolute value.
 `:max`, the directional combination) and a fourth `beta_sensor` setting,
 `:ungated_dilatation`, which is the reference's own β\*; the variant tested
 previously was that sensor together with a Ducros switch. Every default is
-unchanged. Measurements are in `reference/CALIBRATION.md` under "The sensors
-read |S|".
+unchanged. Measurements are in `reference/CALIBRATION.md` under "The sensor
+fields and the compression switch".
 
 **The sensor field determines how much of the detector's selectivity is
 usable.** On a velocity sine with no time integration (`bench/artcal.jl
@@ -515,8 +515,8 @@ Two instruments supplied it:
 `bench/foldorder.jl`, new, which splits the convergence studies' error norm by
 region of the line; and three columns added to `bench/nohprobe.jl` reporting the
 symmetry cell on every line, not only when it is the worst cell.
-Measurements are in `reference/CALIBRATION.md` under "The fold closure is not
-third order" and "The origin cell is a startup transient". No default changed
+Measurements are in `reference/CALIBRATION.md` under "Fold order and geometry
+limits" and "The origin cell is a startup transient". No default changed
 and no solver source was touched.
 
 **The fold closure is not third order, and the number behind that claim
@@ -561,8 +561,7 @@ The second half of model debt 1, taken up because the `C_beta` ladder pointed at
 it: a failure that got worse as the timestep fell is the signature of a
 per-step operation, and the filter is applied once per step.
 `Numerics` gains `filter_cfl`, off by default. Measurements are in
-`reference/CALIBRATION.md` under "The filter dissipates per application, not per
-unit time"; the instrument is `bench/filterrate.jl`, new, and `bench/tgv_energy.jl`
+`reference/CALIBRATION.md` under "The compact filter"; the instrument is `bench/filterrate.jl`, new, and `bench/tgv_energy.jl`
 gains `cfl` and `filter_cfl` options.
 
 **The filter dissipated per application, by a factor of 3.93 across a 4× CFL
@@ -606,8 +605,8 @@ set the dissipation jointly.
 
 Model debt 2, delivered as `StepControl.floor_ratio` and `floor_scope` with the
 repair in `apply_positivity_floor!`. Both are off by default. Measurements are
-in `reference/CALIBRATION.md` under "The negative internal energy is not a
-rounding artifact".
+in `reference/CALIBRATION.md` under "Negative internal energy in
+completed runs".
 
 The debt asked for a conservation-aware local floor covering internal energy and
 not only density, applied on detection, counted, and reported loudly. The work
