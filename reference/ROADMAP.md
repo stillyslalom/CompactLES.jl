@@ -136,8 +136,33 @@ below exposed behavior outside those passing checks.
   `C_mu ≈ 0.004` candidate and voids the peak as an estimator at 128³
   ([Taylor–Green](CALIBRATION.md#taylorgreen)). N4 inherits the history misfit in
   its place.
-  **Remaining:** the 128³ sweep itself, and the shock-battery and variable-dt
-  robustness legs.
+  **Measured at 128³:** the α leg, three values under the Gaussian smoother at
+  `cfl = 0.6` and `filter_interval = 1`. Both history misfits are monotone in α
+  and fall 46% and 72% from α = 0.40 to 0.49, against 19% and 8% at 32³, so the
+  signal grew under refinement and the history fit is usable at this resolution.
+  Monotone is a boundary fit: the histories rank the weakest filter first and
+  cannot select α on their own. The peak crosses the reference between 0.45 and
+  0.49, which brackets the total-dissipation match at α ≈ 0.486 but does not
+  restore the peak as a criterion
+  A fourth point at α = 0.499 then turns: the dissipation misfit is 15% worse
+  there than at 0.49 and the kinetic-energy misfit has flattened onto a floor,
+  so **α = 0.49 is a minimum and the first interior optimum in this
+  calibration**. The peak crossing puts the total-dissipation match at α ≈ 0.486,
+  so the two estimators agree on a band of roughly 0.485 to 0.49
+  ([the α sweep](CALIBRATION.md#the-alpha-sweep-at-128)). The minimum is joint
+  with `C_mu`, whose channel grows from 1.7% of the sink at α = 0.40 to 8.4% at
+  0.499 as the filter gives way. The energy at t = 9 is closest to the reference at
+  α = 0.49 as well, a third estimator on the same point. The spectra bound α from
+  below only: the settings differ just above k ≈ 18, in a band carrying under
+  1.5% of the energy, and every tail steepens smoothly through Nyquist with no
+  grid-scale pile-up, including at α = 0.499, where the history has already
+  turned ([the spectra](CALIBRATION.md#the-spectra-at-128)). The high-wavenumber
+  share ranks filter strength without locating the optimum at this resolution,
+  which reverses its role at 32³.
+  **Remaining:** whether the band transfers to 256³, where `k_max η` reaches 1.5
+  and the dissipation range is resolved; the cadence and relaxation legs; and
+  the shock battery, which has to confirm that a weaker filter still stabilizes
+  the shocked cases before any default moves.
 
 - [ ] **N2 — Measure and implement conservative filtering on nonuniform metrics.**
   Compare current unweighted component filtering with the reference's

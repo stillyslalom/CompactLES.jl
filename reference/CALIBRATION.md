@@ -230,8 +230,9 @@ spherical origin, and no accuracy lower bound.
 `bench/tgv_energy.jl` runs TGV at Re = 1600 and splits −dKE/dt by mechanism:
 molecular stress, artificial shear μ\*, artificial bulk β\*, and the residual,
 which is the compact filter plus numerical loss. Channel shares at the
-dissipation peak, artificial properties on, `filter_interval = 1`, Gaussian
-smoother:
+dissipation peak, artificial properties on, `filter_interval = 1`. Every row but
+128³ uses the Gaussian smoother; that campaign predates its adoption and ran
+under `:compact`:
 
 ```
 resolution   peak -dKE/dt        vs reference   molecular   mu*    beta*   filter
@@ -261,7 +262,8 @@ larger than most of the differences it was used to judge, and the readings it
 produced invert against the real value: 128³, described as "within 1% of the
 reference", is the worst of the resolved rows, and 256³ is the best. The trend
 with resolution is not monotone, since 64³ is no worse than −3.1% and 128³ is
-−6.0%, and the three rows differ in smoother, backend and machine, so nothing
+−6.0%, and the rows differ in smoother, backend and machine, since 128³ ran
+under `:compact` on rzhound and 256³ under the Gaussian on MI300A, so nothing
 here separates a resolution effect from a configuration one.
 
 The 128³ runs used 224 ranks over two rzhound nodes at 20–25 minutes each. The
@@ -287,6 +289,13 @@ C_mu = 0.0005              1.2108e-2 @ t ≈ 9.05    −5.5%
 C_mu = 0.002   (default)   1.2044e-2 @ t ≈ 9.06    −6.0%
 C_mu = 0.008               1.1950e-2 @ t ≈ 8.77    −6.7%
 ```
+
+The sweep is a `:compact` campaign, taken before the Gaussian smoother became
+the default. The smoother sets how the sensor feeding μ\* is smoothed, so these
+shares are not the shipped configuration's. The same point under the Gaussian
+gives 1.2120e-2 at t = 8.89 with 61.1 / 2.4 / 36.4 against 60.4 / 2.3 / 37.3
+([the α sweep](#the-alpha-sweep-at-128)), 0.63% apart in the peak, so nothing
+below changes.
 
 **The 128³ peak does not determine `C_mu`.** Every value underpredicts the
 reference peak and raising the constant moves further away, so the sweep has no
@@ -1219,6 +1228,92 @@ filter. The fit belongs at 128³ or above, where the filter's share is 37% or
 less. The table shows only that the axes move the score, that the score is
 reproducible, and that the instrument reproduces the archive.
 
+<a id="the-alpha-sweep-at-128"></a>
+
+### The α sweep at 128³
+
+Four values at 128³, 224 ranks over two rzhound nodes, `cfl = 0.6`,
+`filter_interval = 1`, `filter_cfl = 0`, Gaussian smoother, `C_mu = 0.002`, about
+twenty minutes each:
+
+```
+alphaf   steps   peak -dKE/dt        vs window   KE misfit   -dKE/dt misfit   filter
+0.40     11504   1.1814e-2 @ 8.38      −7.76%     8.986e-3     8.903e-2        38.7%
+0.45     11737   1.2120e-2 @ 8.89      −5.40%     7.019e-3     5.666e-2        36.4%
+0.49     12267   1.3004e-2 @ 8.85      +1.46%     4.887e-3     2.526e-2        27.4%
+0.499    13240   1.3258e-2 @ 8.88      +3.37%     4.750e-3     2.910e-2        15.7%
+```
+
+Both misfits fall steeply from α = 0.40 to 0.49, by 46% and 72%, against 19% and
+8% across the same three values at 32³, where the dissipation misfit was not even
+monotone. The α signal grew under refinement rather than shrinking with the
+filter's share of the sink, which is the opposite of what those shares predicted.
+The 32³ misfit is dominated by a resolution error common to every α, at 0.12 to
+0.15, while at 128³ that floor is fifteen times smaller and α accounts for most
+of what remains. The history fit is usable at this resolution and was not usable
+at 32³.
+
+**The dissipation misfit has a minimum at α = 0.49**, and it is the first
+interior optimum in this calibration. The axis to read is `1 − 2α`, which sets
+the per-pass strength and takes the values 0.20, 0.10, 0.02 and 0.002, so the
+four points are uniform in its logarithm. On that axis the kinetic-energy misfit
+falls 6.5e-3 per decade, then 3.0e-3, then 0.14e-3: it has reached a floor that α
+cannot lower. The dissipation misfit turns instead, 15% worse at α = 0.499 than
+at 0.49 against 55% better over the preceding decade. The 32³ sweep produced no
+such point. It ranked the weakest filter first on every estimator, which is a
+boundary fit selecting the least filtering the run survives rather than an
+optimum.
+
+**The peak crosses the reference between α = 0.45 and 0.49.** At 32³ α moved the
+peak 3% and not monotonically; here it moves 12% over the four points,
+monotonically, and changes sign. Interpolating in log(1 − 2α) places the
+total-dissipation match at 1 − 2α ≈ 0.028, α ≈ 0.486, just below the misfit
+minimum, so the two estimators agree on a band of roughly 0.485 to 0.49. The peak
+overshoots by 3.37% at α = 0.499, and its response is flattening too, 1.9 points
+per decade over the last interval against 9.8 over the one before. This does not
+restore the peak as a fit criterion on its own. The
+filter is a grid-scale sink and its dissipation is numerical, so a setting that
+reproduces the total says nothing about where the energy sits in wavenumber,
+which is the question the spectra answer. The peak time carries even less: it
+sits on a 1.6% plateau from t = 8.15 to 8.79 at α = 0.40, so the argmax location
+is noise at this resolution.
+
+The channel split gives the mechanism. Molecular, μ\* and filter shares at the
+peak are 59.6 / 1.7 / 38.7 at α = 0.40, 61.1 / 2.4 / 36.4 at 0.45,
+68.0 / 4.6 / 27.4 at 0.49 and 75.9 / 8.4 / 15.7 at 0.499. Across the first
+tenfold reduction in `1 − 2α` the filter's dissipation falls only 22%, from
+4.57e-3 to 3.56e-3, while molecular dissipation rises 25% and μ\* triples. A
+weaker filter leaves more energy at the grid scale and acts on that larger
+amplitude, so its dissipation responds far less than its coefficient does. The
+compensation is incomplete, which is why the total rises 10% here rather than
+holding as it does at 32³ under a timestep change
+([the timestep](#the-timestep-moves-the-attribution-not-the-total)).
+
+Over the last decade the filter's dissipation finally falls 41%, and the
+resolved and μ\* channels more than replace it: molecular rises 14% and μ\*
+by 86%, for a further 2% on the total. **The minimum is therefore a joint one.**
+μ\* grows from 1.7% of the sink at α = 0.40 to 8.4% at 0.499, and from 2.8% to
+10.2% of the molecular viscosity, so as the filter weakens the Cook viscosity
+takes over the grid-scale sink and the overshoot at 0.499 is partly its. The
+turnover locates a best α at `C_mu = 0.002` and not a property of the filter
+alone. A `C_mu` fit is equally conditional on α as well as on the CFL, so the two
+have to be closed together, which is the order N1 and N4 already assume.
+
+**The α = 0.45 row does not reproduce the archive 128³ configuration**, although
+it matches it in resolution, rank count, CFL, cadence and `C_mu`: 1.2120e-2 at
+t = 8.89 against 1.2044e-2 at t = 9.06, 11,737 steps against 12,739, and 17% less
+wall time per step. The archive campaign predates the adoption of the Gaussian
+smoother by two weeks, so its 128³ rows are `:compact` runs. A 32³ A/B at the
+current code, otherwise identical, gives 3516 steps under `:compact` against 3078
+under the Gaussian, 14% more, the same sign and order as the 8.5% at 128³, and
+the per-step difference is consistent with `plan_direction` skipping the
+Gaussian's line solve and its collective interface stage, which is worth more at
+224 ranks than the 3.8% it is worth serially, though six weeks of package
+changes also separate the two runs. The same 32³ run reproduces the recorded
+shakeout row exactly, 3078 steps and 1.4217e-2 at t = 6.61 with 12.6 / 5.1 /
+82.2, so the instrument is not the difference. The two 128³ configurations
+agree to 0.63% in the peak and 0.7 points in every channel share regardless.
+
 ### Spectra
 
 `bench/tgv_energy.jl snapshots=<times>` writes an HDF5 checkpoint at each listed
@@ -1249,13 +1344,92 @@ per instant, and the sinks compete for a supply fixed at the large scales
 ([the timestep](#the-timestep-moves-the-attribution-not-the-total)), so two
 filter settings can reach nearly the same total while distributing it very
 differently in wavenumber. The high-wavenumber share is the scalar that
-distinguishes them, and it is the one to fit α and the cadence against alongside
-the history misfit.
+distinguishes them at 32³, where the history misfits do not. The two exchange
+roles at 128³ ([the spectra at 128³](#the-spectra-at-128)).
 
 The sum of the spectrum reproduces the solver's own kinetic energy to 4e-4
 relative at both settings, which is the Parseval check on the normalization; the
 residual is the density fluctuation, since the spectrum is taken on velocity and
 the solver's energy is density-weighted.
+
+
+<a id="the-spectra-at-128"></a>
+
+### The spectra at 128³
+
+The snapshots of the sweep above at t = 9, against the reference's energy at that
+instant, 8.6404e-2:
+
+```
+alphaf   sum E(k)     vs reference   share above k = 32
+0.40     8.4654e-2       −2.02%            0.110%
+0.45     8.5096e-2       −1.51%            0.267%
+0.49     8.5428e-2       −1.13%            0.681%
+0.499    8.5361e-2       −1.21%            1.326%
+```
+
+Every setting has lost too much energy by t = 9, and the deficit is smallest at
+α = 0.49, a third estimator agreeing with the dissipation misfit's minimum and
+with the peak crossing at α ≈ 0.486. The band above half the Nyquist wavenumber,
+by contrast, grows monotonically by a factor of about 2.4 per step in α while
+`1 − 2α` falls by factors of two, five and ten, so its content responds far less
+than proportionally to the filter's strength, as the filter's dissipation does,
+and it carries no feature at the optimum.
+
+Below k ≈ 15 the three spectra agree to a few percent and are not consistently
+ordered, which is realization scatter and not an α effect. They separate
+monotonically only from k ≈ 18 upward, by 15% at k = 18 and 40% at k = 23. At 32³
+the same comparison separated two settings by a factor of ten at k = 8 and three
+and a half decades at k = 16, which was the Nyquist wavenumber there. The filter
+leaves the resolved spectrum unchanged at 128³ and sets the content of the top
+quarter of wavenumbers, a band holding under 1% of the kinetic energy.
+
+**The excess dissipation is concentrated in transition rather than at the peak.**
+Against the reference at the same instants, −dKE/dt is 11.8%, 9.7% and 6.5% high
+at t ≈ 4.4 for α = 0.40, 0.45 and 0.49; 6.8%, 5.3% and 3.5% high at t ≈ 5.95; and
+11.1%, 6.9% and 2.6% high at t ≈ 8. The run's own peak then arrives early and
+turns over below the reference's. The peak deficit recorded above is a shape
+difference and not a shortage of dissipation: the run dissipates too much and too
+early through transition, where a grid-scale sink has the least to model, and
+reaches the reference's peak time with less energy left to dissipate. The run
+figures are windowed and the reference ones are instantaneous, which biases the
+comparison by well under half a percent
+([the window](#read-the-rate-over-a-window)).
+
+At Re = 1600 and ε ≈ 1.28e-2 the Kolmogorov scale is η ≈ 1.18e-2, so `k_max η` is
+0.75 at 128³ and 1.5 at 256³. The dissipation range is not resolved at the
+screening resolution and the numerical sink supplies part of it, so an α fitted
+here is a subgrid tuning at this resolution rather than a constant. Whether the
+fitted value moves is what the 256³ confirmation tests.
+
+**The tails carry no pile-up at any α, including the one the histories reject.**
+Every tail steepens toward Nyquist rather than flattening: the decay per
+wavenumber across k = 32 to 48 and then 48 to 64 is 0.69 then 0.61 at α = 0.40,
+0.75 then 0.63 at 0.45, 0.83 then 0.75 at 0.49, and 0.91 then 0.87 at 0.499. At
+Nyquist the four sit at 3.3e-11, 3.3e-10, 5.9e-8 and 2.5e-6, so α = 0.499 holds
+43 times the grid-scale energy of the fitted value and 75,000 times that of the
+strongest filter, and is still three and a half orders below the spectral peak.
+The criterion the postprocessor was built around answers in one direction only
+here: the emptied band is present at α = 0.40, and the pile-up is absent even at
+α = 0.499, where the dissipation history has already turned. The history notices
+first at this resolution.
+
+The share of the reference's dissipation that the resolved field carries by
+itself rises with α as well: molecular dissipation at the peak is 55%, 58%, 69%
+and 78% of the reference total at α = 0.40, 0.45, 0.49 and 0.499. Even at the
+weakest filter a fifth of the physical dissipation is not on the grid, which is
+what `k_max η` = 0.75 implies. That link runs the other way too, since molecular
+dissipation is weighted by k²: the fit selects a grid-scale energy content of
+about 0.7% above half Nyquist, between the 0.11% the strongest filter leaves and
+the 1.33% at α = 0.499.
+
+**The high-wavenumber share ranks filter strength; it does not locate the
+optimum.** At 32³ it was the discriminating instrument because the histories were
+unusable there. At 128³ the position reverses: the histories carry the minimum
+and the share is monotone in α with no feature at it, since the filter's spectral
+footprint sits in a band holding under 1.5% of the energy. Use the share as the
+bounding check it is, an emptied band below and a pile-up above, and fit on the
+history misfit at any resolution where the history is meaningful.
 
 <a id="the-filters-wall-cascade"></a>
 
