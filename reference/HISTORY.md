@@ -3,7 +3,7 @@
 This file records completed roadmap phases: what was done, when, and what was
 measured, so `ROADMAP.md` carries only open work. It is scoped to roadmap-level
 phases; the git history records individual changes. Durable numerical findings
-remain in `reference/CALIBRATION.md` and `reference/CLUSTER.md`; this file
+remain in `reference/CALIBRATION_APPENDIX.md` and `reference/CLUSTER.md`; this file
 points at them and does not restate them.
 
 ## Contents
@@ -14,7 +14,7 @@ points at them and does not restate them.
 4. [Adaptivity groundwork (July 2026)](#adaptivity-groundwork-july-2026)
 5. [Near-term corrections (July 2026)](#near-term-corrections-july-2026)
 6. [The compression-keyed β\* sensors (July 2026)](#compression-keyed-beta-sensors-july-2026)
-7. [The reference-implementation pass (August 2026)](#the-reference-implementation-pass-august-2026)
+7. [The public Pyranda implementation pass (August 2026)](#the-public-pyranda-implementation-pass-august-2026)
 8. [The sensor fields (August 2026)](#the-sensor-fields-august-2026)
 9. [The C_beta refit (August 2026)](#the-c_beta-refit-august-2026)
 10. [The origin cell (August 2026)](#the-origin-cell-august-2026)
@@ -69,7 +69,7 @@ test absolute accuracy; Shu–Osher and Woodward–Colella compare against store
 `test/cases.jl`, shared with the calibration sweep so the two cannot drift.
 
 Construction of the battery identified two operating limits, documented with
-their measurements in `reference/CALIBRATION.md`: converging strong shocks
+their measurements in `reference/CALIBRATION_APPENDIX.md`: converging strong shocks
 require `cfl ≤ 0.15`, and the spherical-origin fold does not accept initial data
 resolved over fewer than about three cells, nor the singular t = 0 start of
 spherical Noh. The cylindrical axis accepts both; the difference between folds
@@ -83,7 +83,7 @@ sensors](#compression-keyed-beta-sensors-july-2026):
 the failure begins at the symmetry plane, not ahead of the front.
 
 **Artificial-property calibration.** `bench/artcal.jl` swept each constant over
-the battery; results and recommendations are in `reference/CALIBRATION.md`.
+the battery; results and recommendations are in `reference/CALIBRATION_APPENDIX.md`.
 The existing defaults were retained, with one substantive correction to the CFL
 guidance and three findings: the `C_beta` upper bound is a stability bound,
 not an accuracy bound; `C_kappa = 0` does not support a converging strong
@@ -142,8 +142,9 @@ serialized token-relay fallback has been exercised).
 Research inputs gathered ahead of any AMR implementation; the resulting plan is
 `reference/AMR_GPU.md`.
 
-- Miranda's level-transfer operators were read directly from the Fortran
-  kernels Pyranda carries (`pyranda/parcop/stencils.f90`): an invertible
+- Pyranda's level-transfer operators were read directly from its
+  [public Fortran kernels](https://github.com/LLNL/pyranda/tree/b4e0afc/pyranda/parcop):
+  an invertible
   compact filter pair matching a Gaussian of width 3Δx, refinement ratio 3,
   conservation by unit DC gain, with four boundary-closure variants per end.
   The surrounding patch management, subcycling, and tagging are not in the
@@ -218,9 +219,9 @@ with an ndrange over all three dimensions.
 
 The first of the model debts, closed. The two halves of the literature
 refinement are separable and behave differently, and that separation is the
-result. Full measurements are in `reference/CALIBRATION.md`.
+result. Full measurements are in `reference/CALIBRATION_APPENDIX.md`.
 
-`ArtParams.beta_sensor` now takes three values. `:strain` is the Cook original
+`ArtParams.beta_sensor` now takes three values. `:strain` is the Cook (2007) form
 and remains the default, bit-identical to before the change. `:gated_strain`
 multiplies that sensor by the Ducros-style compression switch
 H(−Δ)·Δ²/(Δ² + |ω|² + ε), with Δ = ∇·u the dilatation, ω the vorticity, H the
@@ -276,7 +277,7 @@ against an inflow of −1 one step after a density minimum of 1.92 over the whol
 line. The restriction is a symmetry-plane startup problem, consistent with
 `:gated_strain` moving the one ceiling it moves by relieving the axis cell, not
 the shock. Measurements are in
-[CALIBRATION.md](CALIBRATION.md#where-the-restriction-originates).
+[CALIBRATION.md](CALIBRATION_APPENDIX.md#where-the-restriction-originates).
 
 The probe also surfaced a defect outside the item's scope. Runs that
 **complete**, including the ν = 1 validation case, carry six to eight
@@ -300,12 +301,13 @@ is safe under `mpiexec`. And `test/mpi_tests.jl` gained the first multi-rank
 coverage of the artificial-property path at all: every other test in that file
 disables it.
 
-## The reference-implementation pass (August 2026)
+## The public Pyranda implementation pass (August 2026)
 
-Reading Miranda's kernels, carried by Pyranda in `pyranda/parcop/`, against
+Reading [Pyranda's public kernels](https://github.com/LLNL/pyranda/tree/master/pyranda/parcop)
+against
 `artificial.jl` identified four differences in the Cook artificial-property
 path. Two of the four are now implemented and measured. The measurements are in
-`reference/CALIBRATION.md` under "The ringing detector" and "The sensor
+`reference/CALIBRATION_APPENDIX.md` under "The ringing detector" and "The sensor
 fields and the compression switch"; the decisions are recorded here.
 
 **The sensor smoother** is an explicit nine-point Gaussian in the reference, not
@@ -347,8 +349,8 @@ Measurements:
   1.8 on β\*, whose input is |S|, which carries a cusp wherever the strain
   passes through zero. This is the same geometry that defeats the Ducros switch
   on a solenoidal field, seen from the other side, and it accounts for the
-  reference building μ\* and β\* from velocity components and the dilatation. The
-  detector result is therefore a lower bound on what the reference method gains,
+  Pyranda building μ\* and β\* from velocity components and the dilatation. The
+  detector result is therefore a lower bound on what Pyranda's method gains,
   which promoted the sensor-field change to the head of the open list.
 - **Cost** is eight pentadiagonal line solves per right-hand side, one per
   active dimension per sensor: +80% on the sensor phase and +19% on the whole
@@ -360,9 +362,9 @@ spherical case alone. On that case, `:d8` costs 40% of its timestep, while the
 four constants are still the δ⁴ fit. A `C_beta` refit and an account of the
 origin cell would settle it.
 
-Two findings from the same reading needed no code change. The reference counts
+Two findings from the same reading needed no code change. Pyranda counts
 the sound speed once against the minimum spacing where `max_rate` counts it per
-active dimension; the difference is recorded in `reference/CALIBRATION.md` and
+active dimension; the difference is recorded in `reference/CALIBRATION_APPENDIX.md` and
 not adopted, because it would silently rescale `cfl` for every
 existing script. And `reference/IMMERSED.md`, written from Pyranda's
 documentation, was corrected against `pyrandaIBM.py`. Of the differences left
@@ -386,14 +388,16 @@ derivative, smoother and detector solves separately.
 ## The sensor fields (August 2026)
 
 The third difference identified by the same reading, taken up next because the
-detector measurement placed it at the head of the list. Cook builds μ\* and β\*
-from the strain magnitude |S|; Miranda builds μ\* from the velocity components
-and β\* from the dilatation, neither of which carries an absolute value.
+detector measurement placed it at the head of the list. Cook's
+[2007 model](https://doi.org/10.1063/1.2728937) builds μ\* and β\* from the strain
+magnitude |S|; his [2009 model](https://doi.org/10.1063/1.3139305) changes β\*
+to the dilatation. Pyranda builds μ\* from the velocity components and β\* from
+the dilatation, neither of which carries an absolute value.
 `ArtParams` gained `mu_sensor` (`:strain`, `:velocity`), `reduction` (`:sum`,
 `:max`, the directional combination) and a fourth `beta_sensor` setting,
-`:ungated_dilatation`, which is the reference's own β\*; the variant tested
+`:ungated_dilatation`, which is Pyranda's own β\*; the variant tested
 previously was that sensor together with a Ducros switch. Every default is
-unchanged. Measurements are in `reference/CALIBRATION.md` under "The sensor
+unchanged. Measurements are in `reference/CALIBRATION_APPENDIX.md` under "The sensor
 fields and the compression switch".
 
 **The sensor field determines how much of the detector's selectivity is
@@ -407,7 +411,7 @@ across the spectrum.
 
 **A two-point wave produces no response in any sensor built through a
 derivative.** A centered scheme annihilates the Nyquist mode, so |S| and ∇·u
-are identically zero there and both Cook's μ\* sensor and the reference's β\*
+are identically zero there and both Cook's μ\* sensor and Pyranda's β\*
 sensor return zero on the shortest wave the grid carries. Only the
 velocity-component sensor responds to it. The property was not recorded here
 before and is a second view of the earlier finding that grid-scale dissipation
@@ -461,13 +465,13 @@ geometry. `reduction = :max` is a third setting acting on an unfitted constant.
 
 ## The C_beta refit (August 2026)
 
-The last open item of the reference-implementation comparison that was neither
+The last open item of the public Pyranda comparison that was neither
 blocked on a missing case nor gated on an unmeasured residual. `:d8` changes the
 sensor's spatial support enough that the default constants, fitted under δ⁴,
 had no claim on it, and the detector's default was held pending the refit.
 `bench/artcal.jl beta` and `bench/artcal.jl beta detector=d8`, with a fresh
 `:delta4` control that reproduces the detector comparison in every column.
-Measurements are in `reference/CALIBRATION.md` under "The C_beta refit under
+Measurements are in `reference/CALIBRATION_APPENDIX.md` under "The C_beta refit under
 `:d8`". No default changed.
 
 **`C_beta = 1.0` survives the refit, and does so for a different reason than it
@@ -515,7 +519,7 @@ Two instruments supplied it:
 `bench/foldorder.jl`, new, which splits the convergence studies' error norm by
 region of the line; and three columns added to `bench/nohprobe.jl` reporting the
 symmetry cell on every line, not only when it is the worst cell.
-Measurements are in `reference/CALIBRATION.md` under "Fold order and geometry
+Measurements are in `reference/CALIBRATION_APPENDIX.md` under "Fold order and geometry
 limits" and "The origin cell is a startup transient". No default changed
 and no solver source was touched.
 
@@ -561,7 +565,7 @@ The second half of model debt 1, taken up because the `C_beta` ladder pointed at
 it: a failure that got worse as the timestep fell is the signature of a
 per-step operation, and the filter is applied once per step.
 `Numerics` gains `filter_cfl`, off by default. Measurements are in
-`reference/CALIBRATION.md` under "The compact filter"; the instrument is `bench/filterrate.jl`, new, and `bench/tgv_energy.jl`
+`reference/CALIBRATION_APPENDIX.md` under "The compact filter"; the instrument is `bench/filterrate.jl`, new, and `bench/tgv_energy.jl`
 gains `cfl` and `filter_cfl` options.
 
 **The filter dissipated per application, by a factor of 3.93 across a 4× CFL
@@ -605,7 +609,7 @@ set the dissipation jointly.
 
 Model debt 2, delivered as `StepControl.floor_ratio` and `floor_scope` with the
 repair in `apply_positivity_floor!`. Both are off by default. Measurements are
-in `reference/CALIBRATION.md` under "Negative internal energy in
+in `reference/CALIBRATION_APPENDIX.md` under "Negative internal energy in
 completed runs".
 
 The debt asked for a conservation-aware local floor covering internal energy and
@@ -661,7 +665,7 @@ and its tally.
 ## AMR/GPU Stage 1 — level-transfer operators (August 2026)
 
 Stage 1 of `reference/AMR_GPU.md` is delivered: `src/transfer.jl` implements
-the Miranda 3:1 invertible transfer pair as ordinary compact schemes:
+the public Pyranda 3:1 invertible transfer pair as ordinary compact schemes:
 restriction is a `CompactScheme` (tridiagonal left-hand side against the
 pentadiagonal Gaussian) and prolongation a `BandedCompactScheme` with q = 2 and
 its interior rows normalized to a unit diagonal, so `plan_direction` supplies
@@ -1047,7 +1051,7 @@ hierarchy and the checkpoint of a same-level slab layout. Serial suite
 ## The mass-fraction bound (September 2026)
 
 The mass-fraction bound (`ArtParams.C_Y`, `Y_tolerance`;
-`reference/CALIBRATION.md`, C_Y). A vortex ring driven into an air/SF6
+`reference/CALIBRATION_APPENDIX.md`, C_Y). A vortex ring driven into an air/SF6
 interface produced negative mass fractions; a 1-D Mach 1.5 shock into a
 2h air/SF6 interface reproduces it at Y = −0.20, set by the cells the
 interface spans after the shock compresses it and by nothing else that
@@ -1125,7 +1129,7 @@ checks.
 ## The bulk species channel (September 2026)
 
 `ArtParams.species_flux = :bulk` (`reference/DESIGN.md`, "The species
-channel"; `reference/CALIBRATION.md`, "The bulk species channel"). The
+channel"; `reference/CALIBRATION_APPENDIX.md`, "The bulk species channel"). The
 roadmap item asked for a bulk regularizer restricted to where the
 mole-fraction and mass-fraction interfaces separate, to be measured on the
 advection test of Brill, Olson & Bokman (2025). The one-dimensional analogue
@@ -1198,7 +1202,7 @@ The endpoint check sits inside the step loop and hands a rejection to the same
 rollback the step checks use, so an invalid result is retryable rather than
 raised past recovery; the three ways a run ends are checked alike. Verdicts
 rest on reduced counts, and the multi-rank suite confirms every rank raises the
-identical failure instead of hanging. `reference/CALIBRATION.md` carries the
+identical failure instead of hanging. `reference/CALIBRATION_APPENDIX.md` carries the
 re-measured Noh repair tradeoff and the budget the permissive cases run under.
 
 The positivity failsafe's two scopes were documented rather than changed, after
@@ -1253,7 +1257,7 @@ Float32/Float64, all six physical faces and corners, supported EOS and curved
 metrics, both species channels, and CPU/device execution. The dedicated MPI
 phase is included in both the full suite and the eight-rank CI selection.
 `bench/wallflux.jl` supplies a reproducible hardware acceptance matrix.
-[CALIBRATION.md](CALIBRATION.md#no-slip-wall-flux-contract-r5-september-2026)
+[CALIBRATION.md](CALIBRATION_APPENDIX.md#no-slip-wall-flux-contract-r5-september-2026)
 records the measurements and fixed per-face dispatch cost. The broader issue of
 whole-domain discrete conservation remains separate from pointwise imposition.
 

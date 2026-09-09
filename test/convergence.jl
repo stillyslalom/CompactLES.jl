@@ -46,7 +46,7 @@
 # and splitting the norm by region shows the fold's own error converging at
 # 6.05-7.01 and sitting three to five orders of magnitude below the interior.
 # `bench/foldorder.jl` does that split and carries the numbers; the write-up is
-# in reference/CALIBRATION.md under "The fold closure is not third order".
+# in reference/CALIBRATION_APPENDIX.md under "The fold closure is not third order".
 #
 # So a fold study here guards two things at once, and only the weaker of them is
 # about the fold. The slope confirms the outer wall's closure cascade, a known

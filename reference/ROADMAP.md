@@ -102,7 +102,7 @@ below exposed behavior outside those passing checks.
   [runtests.jl](../test/runtests.jl),
   [boundaryorder.jl](../bench/boundaryorder.jl).
   **Delivered:** `correct_flux!` with serial/MPI and hardware regressions;
-  [measured errors and budgets](CALIBRATION.md#no-slip-wall-flux-contract-r5-september-2026),
+  [measured errors and budgets](CALIBRATION_APPENDIX.md#no-slip-wall-flux-contract-r5-september-2026),
   [completion record](HISTORY.md#no-slip-wall-flux-contract-september-2026).
 
 ## P1: numerical credibility
@@ -111,17 +111,20 @@ below exposed behavior outside those passing checks.
 
 - [ ] **N1 — Calibrate filtering and settle its time-scaling policy.**
   The rate-scaled `filter_cfl` mechanism is delivered but opt-in; the default
-  still dissipates per application, and the fitted α is resolution-dependent,
-  so neither default has moved. Bound α from above. Confirm at 128³ that
-  `C_mu` cannot be fitted on Taylor–Green. Run `bench/artcal.jl filter` under
-  the relaxed formulation, a prerequisite for switching `filter_cfl` on, since
-  that is a fourfold cut in the battery's filtering at its production CFL
-  numbers. Then recalibrate `C_beta`, `C_kappa`, `C_D` and `C_Y` at whatever α
-  and time-scaling policy the default moves to, all four having been fitted
-  under `compact_filter(0.45)` applied every step. Spectra are postprocessed
-  offline; no distributed FFT exists or is needed.
-  **Depends on:** R1–R3; cluster time.
-  **Deliver:** a reproducible fit and explicit default decision in
+  still dissipates per application. The fit is complete: α is bounded from
+  above by the shock battery at a per-pass strength near 0.0025 in either
+  formulation, the battery clears `filter_cfl = 0.35` at its production CFL
+  numbers, and `C_beta`, `C_kappa`, `C_D` and `C_Y` do not move under either
+  candidate default. The recorded recommendation is `filter_cfl = 0.35` at
+  α = 0.45, with α = 0.49 as the fitted per-run value for resolved smooth
+  turbulence. Remaining: apply the decision to `Numerics` and to the pins in
+  `test/cases.jl` together, or record a decision to retain the unrelaxed
+  default; confirm at 128³ that `C_mu` cannot be fitted on Taylor–Green; and
+  measure the two relaxation invariances not yet measured, retries and
+  subcycling. Spectra are postprocessed offline; no distributed FFT exists or
+  is needed.
+  **Depends on:** R1–R3; cluster time for the `C_mu` confirmation only.
+  **Deliver:** the default applied or its retention recorded, in
   [CALIBRATION.md](CALIBRATION.md). Do not fit under one formulation and then
   silently switch to the other.
   **Code:** [kernels.jl](../src/kernels.jl), [timestep.jl](../src/timestep.jl),
@@ -130,19 +133,27 @@ below exposed behavior outside those passing checks.
   **Delivered:** the vendored 512³ reference history
   ([provenance](../data/README.md#taylor-green-reference-solution)); the fit
   instrument and its measured energy budget
-  ([instrument](CALIBRATION.md#the-fit-instrument),
-  [budget](CALIBRATION.md#the-measured-budget)); the α, cadence and relaxation
+  ([instrument](CALIBRATION_APPENDIX.md#the-fit-instrument),
+  [budget](CALIBRATION_APPENDIX.md#the-measured-budget)); the α, cadence and relaxation
   legs at 128³ with the 256³ transfer check
-  ([α](CALIBRATION.md#the-alpha-sweep-at-128),
-  [cadence](CALIBRATION.md#cadence-and-alpha-are-one-axis),
-  [relaxation](CALIBRATION.md#the-relaxation-leg),
-  [256³](CALIBRATION.md#the-256-confirmation)); the spectra
-  ([spectra](CALIBRATION.md#the-spectra-at-128)); the shock battery under α
-  ([battery](CALIBRATION.md#the-battery-under-alpha)); and the `C_mu` controls
-  at 64³ ([controls](CALIBRATION.md#the-mu-controls-at-64)).
+  ([α](CALIBRATION_APPENDIX.md#the-alpha-sweep-at-128),
+  [cadence](CALIBRATION_APPENDIX.md#cadence-and-alpha-are-one-axis),
+  [relaxation](CALIBRATION_APPENDIX.md#the-relaxation-leg),
+  [256³](CALIBRATION_APPENDIX.md#the-256-confirmation)); the spectra
+  ([spectra](CALIBRATION_APPENDIX.md#the-spectra-at-128)); the shock battery under α
+  ([battery](CALIBRATION_APPENDIX.md#the-battery-under-alpha)); the `C_mu` controls
+  at 64³ ([controls](CALIBRATION_APPENDIX.md#the-mu-controls-at-64)); the battery under
+  the relaxed formulation, the stability edge, the constants under both
+  candidates and the recommendation
+  ([relaxed battery](CALIBRATION_APPENDIX.md#the-battery-under-relaxation),
+  [edge](CALIBRATION_APPENDIX.md#the-stability-edge),
+  [constants](CALIBRATION_APPENDIX.md#the-constants-under-a-weaker-filter),
+  [decision](CALIBRATION_APPENDIX.md#the-default-decision)); and the landing-step
+  invariance ([per application](CALIBRATION_APPENDIX.md#dissipation-per-application)).
 
 - [ ] **N2 — Measure and implement conservative filtering on nonuniform metrics.**
-  Compare current unweighted component filtering with the reference's
+  Compare current unweighted component filtering with
+  [Pyranda's public implementation](https://github.com/LLNL/pyranda)
   volume-weighted field divided by a volume passed through the same filter.
   Establish the actual discrete conservation property rather than assuming that
   constant preservation proves it.
@@ -158,17 +169,17 @@ below exposed behavior outside those passing checks.
   cold ambient states, retaining the EOS dispatch hook.
   **Gate:** configuration-specific CFL envelopes, conservation/error budgets, and
   a justified treatment of the spherical singular start and initial smoothing.
-  Consult [CALIBRATION.md](CALIBRATION.md) before reopening rejected predictor,
+  Consult [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md) before reopening rejected predictor,
   sensor-reach, or fold-order explanations; the old universal CFL 0.15 description
   is obsolete.
 
 - [ ] **N4 — Refit artificial shear viscosity after the filter policy is fixed.**
   Fit `C_mu` under the adopted smoother/detector on a 3-D case with an
   unresolved cascade, scored on the history misfit and not the peak, which is
-  void as an estimator at 128³ ([Taylor–Green](CALIBRATION.md#taylorgreen)).
+  void as an estimator at 128³ ([Taylor–Green](CALIBRATION_APPENDIX.md#taylorgreen)).
   One-dimensional shocks cannot determine the shear channel, and on
   Taylor–Green at 64³ the best-fitting `C_mu` is zero under both the production
-  and the near-off filter ([the controls](CALIBRATION.md#the-mu-controls-at-64)),
+  and the near-off filter ([the controls](CALIBRATION_APPENDIX.md#the-mu-controls-at-64)),
   so confirm that at 128³ and choose the case accordingly.
   **Depends on:** N1 and the 3-D campaign. Retain `C_beta=1` unless new evidence
   overturns its completed refit; record error and dissipation attribution.

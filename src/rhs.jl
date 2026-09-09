@@ -447,7 +447,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     # The sensor smoother stands in for Cook's Gaussian test filter. `:compact`
     # reuses `filt`, which was the smoother before the option existed and keeps
     # every plan identical; `:gaussian` is the explicit nine-point stencil the
-    # reference implementation uses, and carries no line solve.
+    # public Pyranda implementation uses, and carries no line solve.
     smoo = art.smoother === :gaussian ? gaussian_filter(T) : filt
     # The sensor detector. `:delta4` is the explicit undivided fourth
     # difference applied inside `delta4_sum!`, which needs no plan at all;

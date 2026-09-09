@@ -81,8 +81,9 @@ end
     compact_d8()
 
 Pentadiagonal compact eighth derivative, undivided, used as the ringing
-detector of [`ArtParams`](@ref) under `detector = :d8`. It is Miranda's `ring`
-operator (`pyranda/parcop/stencils.f90`, `c10d8`), whose interior rows are
+detector of [`ArtParams`](@ref) under `detector = :d8`. It is Pyranda's
+[public `ring` operator](https://github.com/LLNL/pyranda)
+(`pyranda/parcop/stencils.f90`, `c10d8`), whose interior rows are
 
     1.5 g_{i-2} + 14 g_{i-1} + 29 g_i + 14 g_{i+1} + 1.5 g_{i+2} = 60 δ⁸f_i,
 
@@ -100,7 +101,7 @@ value the undivided δ⁴ detector it replaces produces there. The two detectors
 therefore agree at the wavelength both are built to catch, and the `C_mu`,
 `C_beta`, `C_kappa` and `C_D` calibrations carry over as starting points and are
 not off by two orders of magnitude. The two responses differ below
-the Nyquist; `reference/CALIBRATION.md` records them at 8, 4 and 2.7 points per
+the Nyquist; `reference/CALIBRATION_APPENDIX.md` records them at 8, 4 and 2.7 points per
 wavelength.
 
 # Closure rows
@@ -108,7 +109,7 @@ wavelength.
 Four rows are needed at a closed edge, since the interior right-hand side
 reaches ±4. They are the interior stencil with its overhanging weights folded
 back onto the half-offset mirror (ghost j ↔ interior j), which is the
-reference's own `-1:2` boundary variant 0 and the same construction
+Pyranda's own `-1:2` boundary variant 0 and the same construction
 [`gaussian_filter`](@ref) uses. Every row's weights sum to zero, so a constant
 is annihilated exactly, without cancellation. Minimum local extent is 9
 points per rank, matching [`compact_filter`](@ref).
@@ -116,7 +117,7 @@ points per rank, matching [`compact_filter`](@ref).
 function compact_d8(::Type{T}=Float64) where {T}
     # Reference weights: ζ = 29, α = 14, β = 3/2; a = 4200, b = −3360,
     # c = 1680, d = −480, e = 60. Divided here by ζ (left) and by 240ζ = 6960
-    # (right). Boundary rows carry the reference's own folded combinations,
+    # (right). Boundary rows carry Pyranda's own folded combinations,
     # e.g. row 1 has ζ + α on its diagonal and a + b on f₁.
     BandedCompactScheme{T}("compact eighth-derivative ring detector", 2,
         T[14//29, 3//58],                            # α/ζ, β/ζ

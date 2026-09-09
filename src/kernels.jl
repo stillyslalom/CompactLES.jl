@@ -172,7 +172,7 @@ b = 1/9. `closures` selects the rows applied at a closed edge:
   `compact_filter(closures = :onesided)` they survive a captured shock at a
   wall but not a singular start there. In Float32 the closed line's
   conditioning floors the wall error near 1e-3, above the default
-  cascade's, from N = 48 up. The runs are in `reference/CALIBRATION.md`.
+  cascade's, from N = 48 up. The runs are in `reference/CALIBRATION_APPENDIX.md`.
 """
 function lele_d1_6(::Type{T}=Float64; closures::Symbol=:cascade3) where {T}
     CompactScheme{T}("Lele C6 first derivative", T(1//3), zero(T),
@@ -263,7 +263,7 @@ left unfiltered; `closures` selects rows 2–4:
   at αf = 0.45, N = 64). Its rows 2 and 3 do exceed unit gain at some
   wavenumbers taken alone (1.10 and 1.03 at αf = 0.45, worse at smaller αf),
   which the paper also notes; the measurements are in
-  `reference/CALIBRATION.md`.
+  `reference/CALIBRATION_APPENDIX.md`.
 """
 function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64;
                         closures::Symbol=:cascade) where {T}
@@ -303,7 +303,8 @@ end
     gaussian_filter()
 
 Explicit nine-point Gaussian test filter, the smoother Cook's artificial
-properties assume and the one Miranda applies as `gbar`
+properties assume and the one [Pyranda](https://github.com/LLNL/pyranda)
+applies as `gbar`
 (`pyranda/parcop/stencils.f90`, `cgfs4`). The left-hand side is the identity,
 so this is a `CompactScheme` only in the sense that it reuses the same fill,
 fold and closure machinery; `plan_direction` detects the zero α and
@@ -319,7 +320,7 @@ the two edge treatments agree.
 Contrast [`compact_filter`](@ref), a dealiasing filter for the conserved
 state and not a test filter: at αf = 0.45 it retains 99% of the
 amplitude at four points per wavelength where this filter retains 19%. The
-measurement is in `reference/CALIBRATION.md`.
+measurement is in `reference/CALIBRATION_APPENDIX.md`.
 """
 function gaussian_filter(::Type{T}=Float64) where {T}
     a = T(3565//10368); b = T(3091//12960); c = T(1997//25920)
@@ -336,7 +337,7 @@ end
 #
 # At a patch interface the ghost layers carry the abutting patch's data, but the
 # ghost unknowns belong to that patch's solve, so a row's left-hand side must
-# couple interior unknowns only (Miranda tabulates the extended-data transfer
+# couple interior unknowns only (Pyranda tabulates the extended-data transfer
 # closures identically to the one-sided ones for this reason: "same as
 # one-sided to maintain invertibility"). The right-hand side is free to read the
 # copied ghost data. The rows below exploit that: only the edge row's LHS

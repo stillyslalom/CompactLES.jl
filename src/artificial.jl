@@ -1,9 +1,11 @@
-# Cook-style artificial fluid properties (Cook, Phys. Fluids 2007), extended
-# with the artificial species diffusivity for multicomponent mixing.
+# Cook-style artificial fluid properties (Cook, Phys. Fluids 2007,
+# https://doi.org/10.1063/1.2728937), including artificial species diffusivity
+# for multicomponent mixing and the later Cook (2009) dilatation sensor and
+# enthalpy flux (https://doi.org/10.1063/1.3139305).
 #
 # Sensors use an undivided high-pass in the computational indices: Cook's
-# explicit fourth difference δ⁴ (1, −4, 6, −4, 1) by default, or the reference
-# implementation's compact eighth derivative under
+# explicit fourth difference δ⁴ (1, −4, 6, −4, 1) by default, or Pyranda's
+# compact eighth derivative under
 # `ArtParams.detector = :d8`. The formal grid-spacing powers therefore reduce to
 # per-dimension weights: Δ² for a field carrying one velocity derivative (|S|,
 # ∇·u) and Δ for a field carrying none (the velocity components themselves, the
@@ -14,11 +16,12 @@
 # Jacobian.
 #
 # `ArtParams.mu_sensor` and `ArtParams.beta_sensor` select the field each of the
-# two viscosities is built from. Cook takes both from the strain magnitude |S|;
-# the reference implementation takes μ* from the velocity components and β* from
-# the dilatation, neither of which carries an absolute value (see `velocity_mu!`
-# and `dilatation_beta!`). β* may also key on compression through a Ducros
-# switch (`gate_beta!`). Directions combine by Σ_d or by MAX, under
+# two viscosities is built from. Cook (2007) takes both from the strain magnitude
+# |S|; Cook (2009, appendix A) changes β* to a dilatation sensor. Pyranda's
+# public kernels build μ* from the velocity components and β* from the
+# dilatation (see `velocity_mu!` and `dilatation_beta!`). β* may also key on
+# compression through a Ducros switch (`gate_beta!`). Directions combine by Σ_d
+# or by MAX, under
 # `ArtParams.reduction`. `smooth!` stands in for Cook's Gaussian test filter,
 # and `ArtParams.smoother` selects the operator it applies. With more than one
 # species, each carries its own sensor and its own D*_k; Σ_k J_k = 0 is then
@@ -59,10 +62,15 @@ Cook-style artificial-property controls.
   excursion outside: `D*_k = c · G[max(C_D Δ_d |δ⁴Y_k|, C_Y Δ_g max(0, −Y_k,
   Y_k − 1))]`, with `G` the smoother, `Δ_d` the local physical spacing along
   each direction and `Δ_g` the geometric mean of the active ones at that point.
-  It is the term of Shankar, Kawai & Lele (Phys. Fluids 23, 024102,
-  2011, eq. A4), where it carries the same value; Cook's Δ²/Δt-scaled form
-  (Phys. Fluids 21, 055109, 2009, eq. 42) is equivalent at C_Y = 50. The
-  ringing sensor alone cannot hold a species interface that a shock or a
+  Cook introduced this term with `C_Y = 100`
+  [(2007, eq. 18)](https://doi.org/10.1063/1.2728937). His later, algebraically
+  equivalent expression uses twice the excursion and `C_Y = 50`
+  [(2009, appendix A, eq. A8)](https://doi.org/10.1063/1.3139305). The `cΔ`
+  scaling used here follows
+  [Shankar, Kawai & Lele (2011, eq. A4)](https://doi.org/10.1063/1.3553282),
+  while the maximum in place of their additive combination follows
+  [Brill, Olson & Bokman (2025, eq. 24)](https://arxiv.org/abs/2503.12680).
+  The ringing sensor alone cannot hold a species interface that a shock or a
   strain field has thinned to a few cells: a 2h interface hit by a Mach 1.5
   shock reaches Y = −0.2 with `C_Y = 0` and −0.013 at the default.
   Set `C_Y = 0` to disable it.
@@ -74,25 +82,25 @@ Cook-style artificial-property controls.
   transient at N = 64 and removes the loss entirely.
 - `mu_sensor`: how the μ\\* sensor is built. `:strain` is the Cook original,
   Δ_d²|D_d S| from the strain magnitude reduced over directions, for the
-  detector D and the reduction the two fields below name. `:velocity` is the
-  reference implementation's, built from the velocity components themselves. It
+  detector D and the reduction the two fields below name. `:velocity` is
+  Pyranda's construction, built from the velocity components themselves. It
   costs three detector applications per direction, versus one for `:strain`
   (`velocity_mu!`).
   The two differ in the absolute value taken by |S|, which places a cusp
   wherever the strain passes through zero; a cusp is grid-scale structure at
   any resolution, so a sensor built from |S| responds to smooth flow.
-- `beta_sensor`: how the β\\* sensor is built. `:strain` is the Cook original
+- `beta_sensor`: how the β\\* sensor is built. `:strain` is the Cook (2007) form
   and shares its sensor with `mu_sensor = :strain` when both are selected.
   `:gated_strain` keeps that sensor and multiplies it by a Ducros-style
   compression switch, for one pointwise pass (`gate_beta!`).
-  `:ungated_dilatation` rebuilds the sensor from ∇·u, which is the reference
-  implementation's form, and `:dilatation` applies the compression switch to
-  that as well; both cost one further smoothing pass per RHS evaluation
+  `:ungated_dilatation` rebuilds the sensor from ∇·u, the Cook (2009, appendix A)
+  form also exposed by Pyranda, and `:dilatation` applies the compression switch
+  to that as well; both cost one further smoothing pass per RHS evaluation
   (`dilatation_beta!`). The measured differences are in
-  `reference/CALIBRATION.md`.
+  `reference/CALIBRATION_APPENDIX.md`.
 - `reduction`: how the per-direction detector outputs combine into one sensor.
   `:sum` is Σ_d, which is Cook's form and grows with the number of active
-  dimensions; `:max` is the reference implementation's MAX, which does not. The
+  dimensions; `:max` is Pyranda's MAX, which does not. The
   two are identical in a one-dimensional calculation.
 - `smoother`: which operator stands in for Cook's Gaussian test filter in
   `smooth!`. `:gaussian` (default) is [`gaussian_filter`](@ref), the
@@ -104,7 +112,7 @@ Cook-style artificial-property controls.
   measurement: it raises the spherical-origin CFL ceiling from 0.15 to 0.4 and
   the cylindrical from 0.15 to 0.2, and makes the sensor phase 29% cheaper, at
   the cost of about seven points of planar wall heating. The four constants
-  above are calibrated per setting. All of it is in `reference/CALIBRATION.md`.
+  above are calibrated per setting. All of it is in `reference/CALIBRATION_APPENDIX.md`.
 - `species_flux`: the form of the artificial species regularization.
   `:fickian` (default) is the per-species Fickian flux J_k = −ρ D\\*_k ∇Y_k
   with the correction velocity that keeps Σ_k J_k = 0 and the enthalpy flux
@@ -127,10 +135,10 @@ Cook-style artificial-property controls.
   default: its constants are inherited from the Fickian channel and it has
   not been run on a three-dimensional case. Patched and refined runs take it
   as the root does.
-  `reference/CALIBRATION.md`, "The bulk species channel".
+  `reference/CALIBRATION_APPENDIX.md`, "The bulk species channel".
 - `detector`: the high-pass that builds every sensor, in
   `detect_sum!`. `:delta4` (default) is Cook's undivided fourth
-  difference, computed explicitly. `:d8` is the reference implementation's
+  difference, computed explicitly. `:d8` is Pyranda's
   compact eighth derivative ([`compact_d8`](@ref)), which is two to three
   orders of magnitude more selective below the Nyquist and costs a
   pentadiagonal line solve per direction per sensor, where `:delta4` costs
@@ -367,7 +375,7 @@ is `+1` for every even scalar the sensors are built from: the strain magnitude,
 the internal energy, a mass fraction, the dilatation. Only
 `velocity_mu!` passes anything else. A closed physical edge that is not
 a fold takes the scheme's own closure rows, which mirror symmetrically whatever
-the parity of the field; the reference implementation instead carries a second,
+the parity of the field; Pyranda instead carries a second,
 antisymmetric closure for that case, and this is the one part of its sensor
 construction not reproduced here.
 
@@ -498,8 +506,9 @@ form. Selected by `ArtParams(mu_sensor = :velocity)`.
 
 The sensor is the reduction of Δ_d |D_d u_j| over the (direction, component)
 pairs, three velocity components by each active direction and so nine pairs in
-a three-dimensional run, smoothed as the strain sensor is; this is Miranda's
-`ringV`, and `ArtParams.reduction` chooses between its MAX and Cook's Σ. The
+a three-dimensional run, smoothed as the strain sensor is; this is Pyranda's
+[public `ringV` construction](https://github.com/LLNL/pyranda), and
+`ArtParams.reduction` chooses between its MAX and Cook's Σ. The
 weight is Δ, against the strain form's Δ², because u carries one derivative
 fewer than |S|, and the two agree at the grid scale: a grid-to-grid oscillation
 of amplitude A gives 16AΔ either way, so `C_mu` transfers between the settings
@@ -511,7 +520,7 @@ passes through zero. Such a cusp is grid-scale structure at any resolution.
 Applied to |S|, the two detectors stay within a
 factor of 1.8 of each other at every wavelength; applied to the velocity, they
 reproduce their designed separation of 569× at eight points per wavelength.
-`reference/CALIBRATION.md` has the response table.
+`reference/CALIBRATION_APPENDIX.md` has the response table.
 
 Cost is one detector application per component per active direction, three
 times the strain form's, which under `detector = :d8` is three pentadiagonal
@@ -523,7 +532,7 @@ Each call carries a parity, which distinguishes this from three further
 that reverses its axis, and `vel_parity` supplies the sign for it. At a closed
 edge that is not a fold, such as a slip wall, neither detector applies a parity
 at all, so a wall-normal velocity is differenced as though it were even. That
-is a gap against the reference implementation, which carries an antisymmetric
+is a gap against Pyranda, which carries an antisymmetric
 closure for the case, and it bounds what this sensor can do at the planar Noh
 wall.
 """
@@ -599,7 +608,7 @@ The switch cannot suppress β\\* at a cusp of |S|. The strain sensor is a
 high-pass, so it peaks where |S| passes through zero with a kink, and the
 vorticity generally vanishes there too, leaving only ε in the denominator. On a
 solenoidal Taylor–Green field this leaves 71 of 32768 points carrying β\\*:
-0.6% of the summed total, but the full maximum. `reference/CALIBRATION.md` has the
+0.6% of the summed total, but the full maximum. `reference/CALIBRATION_APPENDIX.md` has the
 measurement and why a relative ε does not help.
 """
 function gate_beta!(solver)
@@ -899,9 +908,10 @@ through the interface at R = 100, which the mass-fraction sensor loses. The
 mass fraction on the light side amplifies a volume-fraction ringing by up to
 R (Y_l = (1 − V)/(1 + (R − 1)V) at equal γ), so a sensor on it is what bounds
 Y, and the mole-fraction sensor is blind to that ringing at the 1e-3 level.
-The maximum over both is the reference implementation's combination of
-mass- and volume-fraction detectors (Brill, Olson & Bokman 2025, eqs.
-33–37). The measurements are in `reference/CALIBRATION.md`.
+The maximum over both is Pyranda's combination of mass- and volume-fraction
+detectors, as reported by
+[Brill, Olson & Bokman (2025, eqs. 33–37)](https://arxiv.org/abs/2503.12680).
+The measurements are in `reference/CALIBRATION_APPENDIX.md`.
 
 Scratch: `solver.sensor_sp` accumulates the maximum, `solver.tmp_b` holds one
 field's detector output and `solver.tmp_a` the mole fraction over the padded

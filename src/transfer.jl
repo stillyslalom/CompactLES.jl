@@ -2,8 +2,8 @@
 # design rationale: reference/AMR_GPU.md (transfer operators).
 #
 # The 3:1 level transfer is an invertible compact filter pair transcribed from
-# Miranda (LLNL/pyranda@b4e0afc, pyranda/parcop/stencils.f90, cfamrcf/cfamrfc,
-# inside an `#if 0` block):
+# public Pyranda source (https://github.com/LLNL/pyranda/tree/b4e0afc,
+# pyranda/parcop/stencils.f90, cfamrcf/cfamrfc, inside an `#if 0` block):
 #
 #   α f̄_{i-1} + f̄_i + α f̄_{i+1} = c f_{i-2} + b f_{i-1} + a f_i + b f_{i+1} + c f_{i+2}
 #
@@ -68,7 +68,7 @@ const AMR_EDGE_ROW2 = (0.3186803178523657, 0.2982740132694008, 0.318680317852365
 """
     amr_restriction_scheme(T=Float64)
 
-Fine-to-coarse AMR transfer filter (Miranda's `cfamrfc`) as a
+Fine-to-coarse AMR transfer filter (Pyranda's public `cfamrfc`) as a
 [`CompactScheme`](@ref): the tridiagonal `[α, 1, α]` left-hand side against
 the pentadiagonal Gaussian right-hand side, with the tabulated one-sided
 closure rows. Applying it along a fine line and taking every third node is
@@ -85,7 +85,7 @@ end
 """
     amr_prolongation_scheme(T=Float64)
 
-Coarse-to-fine AMR deconvolution (Miranda's `cfamrcf`) as a
+Coarse-to-fine AMR deconvolution (Pyranda's public `cfamrcf`) as a
 [`BandedCompactScheme`](@ref) with `q = 2`: the pentadiagonal Gaussian
 left-hand side against the tridiagonal `[α, 1, α]` right-hand side: the
 same coefficients as [`amr_restriction_scheme`](@ref) with the two sides

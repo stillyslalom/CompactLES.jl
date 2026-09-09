@@ -2,13 +2,22 @@
 #
 #   julia --project=. -t auto bench/artcal.jl            # everything (~6 min)
 #   julia --project=. -t auto bench/artcal.jl beta cfl   # named sweeps only
+#   julia --project=. -t auto bench/artcal.jl beta kappa D Y alphaf=0.49
+#   julia --project=. -t auto bench/artcal.jl filter filter_cfl=0.6
 #
 # Sweeps available: mu beta kappa D Y cfl resolution sensor smoother detector
-# field response miranda bulk
+# field response brill2025 bulk
+#
+# Background settings (`key=value`): smoother, detector, alphaf (the compact
+# filter's alpha, 0.45 = the solver default) and filter_cfl (0 = unrelaxed).
+# The filter background reaches every case, so a constant re-swept at a
+# candidate alpha or under the relaxed formulation is measured on the same
+# battery its default was fitted on.
 #
 # Scratch tooling, like everything else in bench/: it prints tables, asserts
 # nothing, and is not part of the gate. The conclusions drawn from a run of it
-# are written up in reference/CALIBRATION.md; update that file when this one
+# are written up in reference/CALIBRATION_APPENDIX.md, with the resulting
+# recommendations in reference/CALIBRATION.md; update those when this one
 # is re-run with different cases, or the write-up silently goes stale.
 #
 # The cases come from test/cases.jl, the same file test/validation.jl guards,
@@ -43,7 +52,7 @@ include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 const DEFAULTS = ArtParams()
 const ALL = ["mu", "beta", "kappa", "D", "Y", "cfl", "filter", "resolution",
              "sensor", "smoother", "detector", "field", "response",
-             "miranda", "bulk"]
+             "brill2025", "bulk"]
 # Sweep names are bare words; `key=value` sets the background configuration that
 # every sweep then runs against. Refitting a constant under a changed smoother
 # is exactly `artcal.jl kappa smoother=gaussian`, and keeping the two forms in
@@ -56,7 +65,14 @@ const ALL = ["mu", "beta", "kappa", "D", "Y", "cfl", "filter", "resolution",
 # `:compact` while the solver defaulted to `:gaussian`.
 const OPTS = CompactLES.script_args(filter(a -> occursin('=', a), ARGS),
                          (smoother = DEFAULTS.smoother,
-                          detector = DEFAULTS.detector))
+                          detector = DEFAULTS.detector,
+                          alphaf = 0.45, filter_cfl = 0.0))
+# The filter background every case runs under. The two values above are the
+# `Numerics` defaults, spelled out because `Numerics` holds them only inside a
+# built filter; the `filter` sweep marks 0.45 as the default for the same
+# reason. A sweep that varies the filter itself passes `filt=` after these and
+# the later keyword wins.
+const BG = (filt = compact_filter(OPTS.alphaf), filter_cfl = OPTS.filter_cfl)
 const NAMES = filter(a -> !occursin('=', a), ARGS)
 const WHICH = isempty(NAMES) ? ALL : NAMES
 want(name) = name in WHICH
@@ -108,14 +124,14 @@ end
 # --- per-case measurements, one line each -----------------------------------
 
 m_noh(ν; kw...) = attempt((NaN, NaN, NaN)) do
-    xs, ρ, _, _, ok, _ = noh_case(ν; nmax=CAP, kw...)
+    xs, ρ, _, _, ok, _ = noh_case(ν; nmax=CAP, BG..., kw...)
     ok || return (Inf, Inf, Inf)
     plat, deficit, Rs, _ = noh_metrics(xs, ρ, ν)
     (plat / 4.0^ν, deficit, Rs)
 end
 
 m_lax(; kw...) = attempt((NaN, NaN)) do
-    xs, ρ, u, p, ok = lax(; nmax=CAP, kw...)
+    xs, ρ, u, p, ok = lax(; nmax=CAP, BG..., kw...)
     ok || return (Inf, Inf)
     ex = [riemann_profile(x, LAX_T, 0.5, LAX_L, LAX_R, 1.4) for x in xs]
     # Contact width across the star-region density jump, which is where an
@@ -124,20 +140,20 @@ m_lax(; kw...) = attempt((NaN, NaN)) do
 end
 
 m_shu(; kw...) = attempt((NaN, NaN)) do
-    xs, ρ, _, _, ok = shu_osher(; N=400, nmax=CAP, kw...)
+    xs, ρ, _, _, ok = shu_osher(; N=400, nmax=CAP, BG..., kw...)
     ok || return (Inf, Inf)
     band = so_band(xs)
     (maximum(ρ[band]) - minimum(ρ[band]), maximum(ρ[band]))
 end
 
 m_wc(; kw...) = attempt((NaN, NaN)) do
-    xs, ρ, _, _, ok = woodward(; N=400, nmax=CAP, kw...)
+    xs, ρ, _, _, ok = woodward(; N=400, nmax=CAP, BG..., kw...)
     ok || return (Inf, Inf)
     (maximum(ρ), xs[argmax(ρ)])
 end
 
 m_mix(; kw...) = attempt(NaN) do
-    xs, Y, _, _, ok = species_advection(; nmax=CAP, kw...)
+    xs, Y, _, _, ok = species_advection(; nmax=CAP, BG..., kw...)
     ok || return Inf
     contact_width(xs, Y, 0.0, 1.0)
 end
@@ -145,7 +161,7 @@ end
 # Width and steps come back as floats so a failed row prints as NaN or Inf
 # through the same format as a healthy one.
 m_si(; kw...) = attempt((NaN, NaN, NaN, NaN)) do
-    r = shock_interface(; nmax=CAP, kw...)
+    r = shock_interface(; nmax=CAP, BG..., kw...)
     r.completed || return (Inf, Inf, Inf, Inf)
     (r.worst_min_Y, r.worst_max_Y, Float64(r.width_cells), Float64(r.steps))
 end
@@ -161,7 +177,7 @@ catch err
 end
 
 m_slab(; kw...) = attempt((NaN, NaN, NaN, NaN)) do
-    r = brill_slab(; nmax=CAP, kw...)
+    r = brill_slab(; nmax=CAP, BG..., kw...)
     r.completed || return (Inf, Inf, Inf, Inf)
     (r.p_error, r.worst_min_Y, minimum(r.rho), Float64(r.steps))
 end
@@ -278,9 +294,10 @@ end
 # The filter supplies most of the energy sink and is the one setting whose
 # removal ends a run outright, so for the shocked cases the relevant question
 # is survival rather than accuracy: how weak the filter can be before a case
-# stops completing. The Taylor-Green fit of alpha at 128^3 gave no upper bound
-# (reference/CALIBRATION.md, "The alpha sweep at 128 cubed"); these rows
-# measure one.
+# stops completing. The Taylor-Green fits at 128^3 and 256^3 gave no upper
+# bound (reference/CALIBRATION_APPENDIX.md, "The alpha sweep at 128 cubed"); the third
+# table here measures one. Under `filter_cfl=0.6` the first two tables are the
+# battery's check on the relaxed formulation at its production CFL numbers.
 if want("filter")
     println("\n=== compact-filter alpha (larger filters more weakly) ===")
     println("alphaf    | Noh1 plat  deficit | Noh2 plat | Noh3 plat | " *
@@ -314,6 +331,28 @@ if want("filter")
                 c, a, mark(a, 0.45), n1[1], 100n1[2], n2[1], n3[1], wc[1])
     end
     println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
+
+    # The upper bound. The per-pass strength in force is
+    # eps = (1 - 2 alpha) * w with w = min(1, cfl / filter_cfl), and the rows
+    # interleave the two formulations on eps so the table tests whether the
+    # converging cases fail on that axis rather than on alpha. They do
+    # (reference/CALIBRATION_APPENDIX.md, "The stability edge"): the spherical origin
+    # loses positivity between eps = 0.00125 and 0.0025 either way. Each row
+    # sets its own filter_cfl, overriding the background.
+    println("\n--- the stability edge on eps = (1 - 2 alpha) * w, Noh at " *
+            "cfl $(NOH_CFL) ---")
+    println("alphaf    filter_cfl   w      eps      | Noh2 plat | Noh3 plat  deficit")
+    hr()
+    for (a, fc) in ((0.49, 0.0), (0.4975, 0.0), (0.4925, 0.6), (0.49875, 0.0),
+                    (0.495, 0.6), (0.4995, 0.0), (0.4975, 0.6), (0.499, 0.6))
+        w = fc > 0 ? min(1.0, NOH_CFL / fc) : 1.0
+        f = compact_filter(a)
+        n2 = m_noh(2; filt=f, filter_cfl=fc)
+        n3 = m_noh(3; filt=f, filter_cfl=fc)
+        @printf("%-9.5g %-10.3g   %-5.3g  %-8.5f | %9.4f | %9.4f  %+6.0f%%\n",
+                a, fc, w, (1 - 2a) * w, n2[1], n3[1], 100n3[2])
+    end
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end
 
 # ===========================================================================
@@ -344,7 +383,7 @@ if want("sensor")
     end
     # The question the sensor exists to answer: keying β* on compression is the
     # literature's response to a front that is not damped early enough, which is
-    # the diagnosis reference/CALIBRATION.md gives for the cfl ≤ 0.15 ceiling.
+    # the diagnosis reference/CALIBRATION_APPENDIX.md gives for the cfl ≤ 0.15 ceiling.
     # The ladder therefore runs per sensor, not only for the default CFL.
     println("\n--- the Noh CFL ceiling, per sensor ---")
     println("sensor      cfl  | Noh1 plat/exact | Noh2 plat/exact | Noh3 plat/exact")
@@ -361,11 +400,11 @@ end
 # The sensor smoother stands in for Cook's Gaussian test filter. `:compact`
 # reuses the conserved-state filter, which at alphaf = 0.45 retains 99% of the
 # amplitude at four points per wavelength; `:gaussian` is the explicit
-# nine-point stencil the reference implementation applies, which retains 19%
+# nine-point stencil Pyranda applies, which retains 19%
 # and carries no line solve. The two therefore differ in cost and in answer,
 # and the four constants above are calibrated per setting, so a row that
 # improves here is not yet an improvement until those are refitted.
-# reference/CALIBRATION.md carries the transfer functions.
+# reference/CALIBRATION_APPENDIX.md carries the transfer functions.
 if want("smoother")
     println("\n=== smoother (the Cook test filter) ===")
     println("smoother   | Noh1 plat/exact  deficit | Noh3 plat/exact | Lax L1  contact | Shu train amp | WC peak")
@@ -391,7 +430,7 @@ if want("smoother")
 end
 
 # The detector is the high-pass every sensor is built from: Cook's undivided
-# δ⁴, or the reference implementation's compact eighth derivative. The two are
+# δ⁴, or Pyranda's compact eighth derivative. The two are
 # normalized to the same response at two points per wavelength and diverge
 # below it, by 26x at four points and 569x at eight, so this sweep measures the
 # solver response to a sensor that stops responding to resolved structure. As with
@@ -421,9 +460,10 @@ if want("detector")
     println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end
 
-# The field each channel's detector reads. Cook takes μ* and β* from the strain
-# magnitude |S|; the reference implementation takes μ* from the velocity
-# components and β* from the dilatation, and neither of those carries an
+# The field each channel's detector reads. Cook (2007) takes μ* and β* from the
+# strain magnitude |S|; Cook (2009) changes β* to the dilatation. Pyranda takes
+# μ* from the velocity components and β* from the dilatation, and neither of
+# those carries an
 # absolute value. |S| has a cusp wherever the strain passes through zero, and a
 # cusp is grid-scale structure at any resolution, so a selective detector and an
 # unselective one return the same magnitude through that field. The `response`
@@ -467,7 +507,7 @@ end
 # integration: what each (field, detector) pair reports before any case is run.
 # The comparison is against the detector's own designed response, a factor of
 # 569 at eight points per wavelength, 26 at four and 1 at the Nyquist
-# (reference/CALIBRATION.md). A pair applied to a smooth field recovers that
+# (reference/CALIBRATION_APPENDIX.md). A pair applied to a smooth field recovers that
 # separation; applied to |S| it recovers almost none of it.
 if want("response")
     N = 64
@@ -508,20 +548,25 @@ if want("response")
     println("   so every sensor built from |S| or from div u reports exactly zero there)")
 end
 
-# The reference implementation's current set (Brill, Olson & Bokman 2025, eqs.
-# 22–27): the eighth-derivative detector, the directional maximum, μ* from the
-# velocity components, β* from the dilatation with the compression switch, and
-# constants an order of magnitude or more below Cook 2007's (C_mu = 1e-4,
-# C_beta = 7e-2, C_kappa = 1e-3, C_D = 2e-4). Theirs scale with Δ²/Δt where this
-# package scales with cΔ, a ratio of roughly 1/CFL ≈ 2.5, so the comparable
-# values here are 2.5× theirs. Each option is measured alone in the sweeps
-# above; this is the combination, at the package's constants, at the rescaled
-# ones, at a midpoint, and at the rescaled ones with C_beta held at 1.0, the
+# Cook (2007, eqs. 15–18; https://doi.org/10.1063/1.2728937) introduced these
+# coefficient families and recommended C_mu = 0.002, C_beta = 1, C_kappa = 0.01,
+# C_D = 0.003 and C_Y = 100. Cook (2009, appendix A;
+# https://doi.org/10.1063/1.3139305) changed β* to the dilatation sensor and used
+# the same values except for the algebraically equivalent C_Y = 50 form. Brill,
+# Olson & Bokman (2025, eqs. 22–29; https://arxiv.org/abs/2503.12680) document a
+# later set with the eighth-derivative detector, directional maximum, μ* from the
+# velocity components, β* from the dilatation, and smaller values C_mu = 1e-4,
+# C_beta = 7e-2, C_kappa = 1e-3 and C_D = 2e-4. Those values scale with Δ²/Δt
+# where this package scales with cΔ, a ratio of roughly 1/CFL ≈ 2.5, so the
+# comparable values here are 2.5× theirs. Each option is measured alone in the
+# sweeps above; this is the combination, at the package's constants, at the
+# rescaled ones, at a midpoint, and at the rescaled ones with C_beta held at 1.0,
+# the
 # lower edge of the `:d8` window, since `:dilatation` loses the converging Noh
 # geometries at the fold and the question is whether the constant alone
 # recovers them.
-if want("miranda")
-    println("\n=== Miranda's set (sensors, reduction, and rescaled constants) ===")
+if want("brill2025")
+    println("\n=== Brill–Olson–Bokman 2025 set (rescaled constants) ===")
     println("config             | Noh1 plat   def | Noh2 plat   def | Noh3 plat   def" *
             " | Lax L1  | Shu tr | WC peak | mix wid | SI minY  wid")
     hr()
@@ -553,7 +598,7 @@ end
 # density ratio 100 with 7 cells per interface (pressure error at ten
 # periods, the paper's stability metric). The single-species rows are
 # bit-identical between the two and are not repeated here. The measurements
-# behind the option are in reference/CALIBRATION.md, "The bulk species
+# behind the option are in reference/CALIBRATION_APPENDIX.md, "The bulk species
 # channel".
 if want("bulk")
     println("\n=== The bulk species channel against the Fickian one ===")

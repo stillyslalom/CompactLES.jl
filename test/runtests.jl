@@ -813,7 +813,7 @@ end
 end
 
 @testset "AMR transfer through a fold: symmetric closure variants" begin
-    # Miranda tabulates ±1 symmetric closure variants via ghost folding —
+    # Pyranda tabulates ±1 symmetric closure variants via ghost folding —
     # the same algebra `plan_direction`'s lo_fold performs. Pin the mapping:
     # a half line under a parity fold with mirror-filled halos must reproduce
     # the closed full line on parity-extended data, row for row.
@@ -1634,7 +1634,7 @@ end
     # strain passes through zero, and a cusp is a grid-scale feature no
     # detector can decline to see. On a resolved sine the two detectors
     # therefore differ by 2.6e6 on κ\* and by a factor of 1.8 on β\*. See
-    # `reference/CALIBRATION.md`.
+    # `reference/CALIBRATION_APPENDIX.md`.
     sensors(detector, fn) = begin
         s = Solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3,
                    art=ArtParams(enabled=true, detector=detector))
@@ -1685,9 +1685,10 @@ end
 end
 
 @testset "sensor fields: mu* from the velocity, beta* from the dilatation" begin
-    # Cook builds both sensors from |S|; the reference implementation builds
-    # them from the velocity components and from ∇·u. The difference between
-    # the two is the absolute value, and these tests pin its two consequences.
+    # Cook (2007) builds both sensors from |S|; Cook (2009) changes beta* to
+    # ∇·u. Pyranda builds them from the velocity components and from ∇·u. The
+    # difference between the two is the absolute value, and these tests pin its
+    # two consequences.
     oned(art, fn; N=64) = begin
         s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, art=art)
         Q = allocate_state(s)
@@ -3113,8 +3114,10 @@ end
     wall3 = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
              (PeriodicBC(), PeriodicBC()))
     mkrun() = begin
+        # cfl 0.244 keeps the step this test was written at (0.4 under the
+        # summed acoustic rate): the sliver below needs dt below the 0.01 interval.
         solver = Solver(bcs=wall3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                        art=ArtParams(enabled=false), cfl=0.4)
+                        art=ArtParams(enabled=false), cfl=0.244)
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
                                                  p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))

@@ -186,6 +186,16 @@ Q)` locates the CFL-limiting cell and whether the limit is acoustic, diffusive, 
 curvature-driven. The standard remedies (azimuthal mode truncation, IMEX, local
 time stepping) are not yet implemented.
 
+The rate `cfl` divides is `Σ_d |u_d|/h_d + c·sqrt(Σ_d 1/h_d²)` plus the
+diffusive and curvature rates: advection and diffusion sum over dimensions
+and the acoustic part combines in the Euclidean norm, which is the bound the
+scheme actually has. On an isotropic three-dimensional grid a smooth flow is
+stable to about `cfl = 1.7` (Taylor–Green at 32³, measured); `cfl = 0.5`
+is the default and converging strong shocks need 0.3 or `StepControl(retries
+= 4)`, see `reference/CALIBRATION.md`. Pyranda's
+[public implementation](https://github.com/LLNL/pyranda) counts the sound speed
+once, so its CFL numbers are not comparable one to one.
+
 ## Examples
 
 | File | Demonstrates |

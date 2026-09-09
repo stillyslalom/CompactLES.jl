@@ -85,7 +85,8 @@ therefore generated at the test resolution's delta, not their own.
 """
 function tube(left, right; N, L=1.0, x0=0.5, tfin, γ=1.4,
               art=ArtParams(enabled=true), cfl=0.4, xlo=0.0, rhofun=nothing,
-              nmax=NMAX, delta=nothing, filt=compact_filter(0.45))
+              nmax=NMAX, delta=nothing, filt=compact_filter(0.45),
+              filter_cfl=0.0)
     h = L / (N - 1)
     δ = delta === nothing ? 2h : delta
     ρL, uL, pL = left
@@ -104,7 +105,8 @@ function tube(left, right; N, L=1.0, x0=0.5, tfin, γ=1.4,
                             p=(1 - θ) * pL + θ * pR)
                    end)
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filt=filt, filter_interval=1))
+                                     filt=filt, filter_interval=1,
+                                     filter_cfl=filter_cfl))
     run!(solver, Q; tfinal=tfin, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, tfin)
 end
@@ -137,7 +139,8 @@ const WC_T = 0.038
 const WC_N = 800
 
 function woodward(; N=WC_N, art=ArtParams(enabled=true), cfl=0.3, nmax=NMAX,
-                  delta=nothing, deriv=lele_d1_6(), filt=compact_filter(0.45))
+                  delta=nothing, deriv=lele_d1_6(), filt=compact_filter(0.45),
+                  filter_cfl=0.0)
     h = 1.0 / (N - 1)
     δ = delta === nothing ? 2h : delta
     prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
@@ -149,7 +152,8 @@ function woodward(; N=WC_N, art=ArtParams(enabled=true), cfl=0.3, nmax=NMAX,
                             0.01 * (tanh_blend(x, 0.1, δ) - tanh_blend(x, 0.9, δ)) +
                             100 * tanh_blend(x, 0.9, δ)))
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     deriv=deriv, filt=filt, filter_interval=1))
+                                     deriv=deriv, filt=filt, filter_interval=1,
+                                     filter_cfl=filter_cfl))
     run!(solver, Q; tfinal=WC_T, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, WC_T)
 end
@@ -169,7 +173,7 @@ const SEDOV_S = 0.06               # deposit width, ≈ 13 cells at N = 256
 const SEDOV_N = 256
 
 function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtParams(enabled=true), cfl=0.3,
-               nmax=NMAX)
+               nmax=NMAX, filt=compact_filter(0.45), filter_cfl=0.0)
     γ = 1.4
     # E = ∫ p/(γ−1) dV over the full sphere for p = p_in exp(−r²/σ²), using
     # ∫₀^∞ r² e^{−r²/σ²} dr = σ³√π/4, so E = π^{3/2} p_in σ³ / (γ−1).
@@ -186,7 +190,8 @@ function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtParams(enabled=true), cfl=
     # ideal-gas EOS reports as outside its domain. The case states that rather
     # than rejecting on it, and its caller bounds the count and the defect.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filter_interval=1,
+                                     filt=filt, filter_interval=1,
+                                     filter_cfl=filter_cfl,
                                      control=StepControl(validity=:permissive)))
     run!(solver, Q; tfinal=SEDOV_T, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, SEDOV_T),
@@ -211,7 +216,7 @@ const NOH_N = (1 => 400, 2 => 256, 3 => 256)
 const NOH_T0 = (1 => 0.0, 2 => 0.0, 3 => 0.3)
 
 """
-    noh_case(ν; N, t0, art, cfl) -> (x, rho, u, p, completed, report)
+    noh_case(ν; N, t0, art, cfl, filt, filter_cfl) -> (x, rho, u, p, completed, report)
 
 Noh in ν dimensions, integrated from `t0` to `NOH_T`. `t0 > 0` initializes from
 the exact solution, bypassing the uniform cold inflow. The outer boundary
@@ -224,7 +229,7 @@ on rather than accepting whatever it produces.
 """
 function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
                   art=ArtParams(enabled=true), cfl=NOH_CFL, R=1.0, nmax=NMAX,
-                  deriv=lele_d1_6(), filt=compact_filter(0.45))
+                  deriv=lele_d1_6(), filt=compact_filter(0.45), filter_cfl=0.0)
     metric = ν == 1 ? CartesianMetric() :
              ν == 2 ? CylindricalMetric() : SphericalMetric()
     lobc = ν == 1 ? SlipWallBC() : ν == 2 ? AxisBC() : OriginBC()
@@ -257,10 +262,11 @@ function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
     # front, for the whole of a run that reaches the correct plateau. Reaching
     # the expected plateau does not make those cells physical, so the case
     # states the violation rather than rejecting on it, and its caller bounds
-    # the count and the worst defect. reference/CALIBRATION.md carries the
+    # the count and the worst defect. reference/CALIBRATION_APPENDIX.md carries the
     # measured budget.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      deriv=deriv, filt=filt, filter_interval=1,
+                                     filter_cfl=filter_cfl,
                                      control=StepControl(validity=:permissive)))
     run!(solver, Q; tfinal=NOH_T - t0, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, NOH_T - t0),
@@ -279,14 +285,15 @@ const MIX_T = 0.5
 const MIX_U = 1.0
 
 """
-    species_advection(; N, tfin, art, cfl) -> (x, Y1, rho, p, completed)
+    species_advection(; N, tfin, art, cfl, filt, filter_cfl) -> (x, Y1, rho, p, completed)
 
 Uniform advection of a tanh species interface. Returns the FIRST mass fraction
 in the slot the shock-tube cases use for velocity, since ρ, u and p are uniform
 by construction and carry no information here.
 """
 function species_advection(; N=MIX_N, tfin=MIX_T, art=ArtParams(enabled=true),
-                           cfl=0.4, nmax=NMAX)
+                           cfl=0.4, nmax=NMAX, filt=compact_filter(0.45),
+                           filter_cfl=0.0)
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 1.0, 1.4)])
     h = 1.0 / N
@@ -300,7 +307,8 @@ function species_advection(; N=MIX_N, tfin=MIX_T, art=ArtParams(enabled=true),
     # band, which is the residual this case exists to measure rather than a
     # state to reject.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filter_interval=1,
+                                     filt=filt, filter_interval=1,
+                                     filter_cfl=filter_cfl,
                                      control=StepControl(validity=:permissive)))
     run!(solver, Q; tfinal=tfin, nmax=nmax)
     CL.exchange_state!(Q, solver.decomp)
@@ -332,7 +340,7 @@ const SI_GAMMA_HEAVY = 1.09
 
 """
     shock_interface(; N, tfin, art, cfl, delta, nmax, stretch1,
-                    rho_heavy) -> NamedTuple
+                    rho_heavy, filt, filter_cfl) -> NamedTuple
 
 Mach `SI_MACH` shock in air (γ = 1.4, R = 1, ρ = 1 and p = 1 ahead of it) at
 `SI_X_SHOCK` running into a tanh interface at `SI_X_IFACE` with a heavy gas
@@ -359,7 +367,8 @@ the interior points with 0.05 < Y_air < 0.95 at the end.
 """
 function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
                          cfl=0.4, delta=2.0, nmax=NMAX, stretch1=nothing,
-                         rho_heavy=SI_RHO_HEAVY)
+                         rho_heavy=SI_RHO_HEAVY, filt=compact_filter(0.45),
+                         filter_cfl=0.0)
     γa = 1.4
     eos = IdealMixture([IdealSpecies{Float64}("air", 1.0, γa),
                         IdealSpecies{Float64}("sf6", 1 / rho_heavy,
@@ -390,7 +399,8 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
     # case states the violation and its caller bounds the excursion, the
     # affected-cell count and the solution error together.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filter_interval=1,
+                                     filt=filt, filter_interval=1,
+                                     filter_cfl=filter_cfl,
                                      stretch=(stretch1, nothing, nothing),
                                      control=StepControl(retries=4,
                                                          validity=:permissive)))
@@ -446,7 +456,7 @@ const BR_U = 10.0
 const BR_PERIODS = 10.0
 
 """
-    brill_slab(; R, Np, art, cfl, periods, nmax) -> NamedTuple
+    brill_slab(; R, Np, art, cfl, periods, nmax, filt, filter_cfl) -> NamedTuple
 
 Slab of density `R` in gas of density 1, `Np` cells across each interface on
 20 `Np` points, advected at u = `BR_U` for `periods` periods at uniform
@@ -458,7 +468,8 @@ of the paper. On a rank-split dimension 1 the extremes are reduced over the
 directional communicator.
 """
 function brill_slab(; R=BR_R, Np=BR_NP, art=ArtParams(enabled=true), cfl=0.4,
-                    periods=BR_PERIODS, nmax=NMAX)
+                    periods=BR_PERIODS, nmax=NMAX, filt=compact_filter(0.45),
+                    filter_cfl=0.0)
     N = 20 * Np
     h = 1.0 / N
     w = 3 * Np * h / 16
@@ -477,7 +488,8 @@ function brill_slab(; R=BR_R, Np=BR_NP, art=ArtParams(enabled=true), cfl=0.4,
     # exit check the rollback cannot repair an endpoint that is inadmissible at
     # any CFL, and the run would spend all four retries re-integrating.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filter_interval=1,
+                                     filt=filt, filter_interval=1,
+                                     filter_cfl=filter_cfl,
                                      control=StepControl(retries=4,
                                                          validity=:permissive)))
     nx = solver.decomp.n_local[1]

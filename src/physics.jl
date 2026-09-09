@@ -65,7 +65,7 @@
 # conductivity is κ* = C_κ (ρc/T_ion)·sensor, which is
 # an ideal-gas construction twice over: it assumes e ∝ T, and it is singular as
 # T_ion → 0. The singularity is reachable: a cold ambient at p ≲ 1e-3
-# drives the diffusive timestep to collapse (reference/CALIBRATION.md has the
+# drives the diffusive timestep to collapse (reference/CALIBRATION_APPENDIX.md has the
 # measurement). Making it a dispatch point does not fix that; it makes the
 # assumption visible and lets a condensed-matter or tabular EOS supply a scale
 # that is finite at its own cold limit, which is the prerequisite the roadmap

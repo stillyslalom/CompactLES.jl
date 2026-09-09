@@ -1,8 +1,9 @@
-# Conditioning audit for Miranda's disabled 3:1 AMR transfer pair, and the
+# Conditioning audit for Pyranda's disabled 3:1 AMR transfer pair, and the
 # measurement battery for the live implementation in src/transfer.jl.
 #
 # Part 1 (audit): coefficients and one-sided closure rows are transcribed from
-# LLNL/pyranda@b4e0afc, pyranda/parcop/stencils.f90, cfamrcf/cfamrfc.
+# https://github.com/LLNL/pyranda/tree/b4e0afc,
+# pyranda/parcop/stencils.f90, cfamrcf/cfamrfc.
 # The coarse-to-fine operator is B \ A (deconvolution); fine-to-coarse is
 # A \ B (filtering), where A is the compact tridiagonal side and B is the
 # five-diagonal Gaussian side. The source constructs the two operations by
@@ -94,7 +95,7 @@ function audit(n=96)
     edge_supported_gain = opnorm(prolong[:, 1:6])
     interior_supported_gain = opnorm(prolong[:, mid-2:mid+3])
 
-    @printf("Miranda 3:1 compact AMR transfer conditioning (n = %d)\n", n)
+    @printf("Pyranda 3:1 compact AMR transfer conditioning (n = %d)\n", n)
     @printf("  DC gain                                  %.16f\n",
             prolongation_symbol(0.0))
     @printf("  gain at coarse Nyquist (k = pi/3)       %.8f\n",

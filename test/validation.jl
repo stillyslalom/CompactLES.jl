@@ -59,7 +59,7 @@
 #   Shock/SF6  worst Y -0.0135 / 1.0135, width 4 cells, 646 steps (Sept 2026)
 #
 # These were re-measured in August 2026 when ArtParams.smoother moved to
-# :gaussian; reference/CALIBRATION.md carries why, and the previous set under
+# :gaussian; reference/CALIBRATION_APPENDIX.md carries why, and the previous set under
 # :compact for comparison. Every plateau and every pre-shock L1 improved, wall
 # heating worsened at nu = 1 and nu = 2 and improved at nu = 3, and the two
 # STORED cases drifted by about 1% and 3% of their L1. None of that is a bug:
@@ -72,14 +72,14 @@
 # are the place to look when a change is supposed to be numerics-neutral.
 #
 # Two operating limits found while building this, both real; the numbers behind
-# them are in reference/CALIBRATION.md.
+# them are in reference/CALIBRATION_APPENDIX.md.
 #
 #   * Strong shocks need cfl <= 0.15, not the 0.5 default: above ~0.2 the Noh
 #     cases lose positivity within a few hundred steps. The cause is a dispersive
 #     undershoot at the shock that the artificial viscosity does not damp, not
 #     the one-step lag in compute_dt — that hypothesis was tested with a rate
 #     predictor and rejected. StepControl(retries = 4) is the practical answer;
-#     reference/CALIBRATION.md has the trace.
+#     reference/CALIBRATION_APPENDIX.md has the trace.
 #   * The spherical origin will not take a discontinuity that is not resolved
 #     over at least ~3 cells, nor the singular t = 0 start of spherical Noh.
 #     The cylindrical axis takes both.
@@ -267,7 +267,7 @@ for (ν, ptol, ncell) in ((1, 0.01, 12), (2, 0.10, 12), (3, 0.15, 12))
     @test abs(Rnum - (NOH_G - 1) / 2 * NOH_T) < 0.025
     @test epre < 5e-2
     # The wall layer, bounded. Both are "no worse than" guards on the measured
-    # values in reference/CALIBRATION.md, not targets.
+    # values in reference/CALIBRATION_APPENDIX.md, not targets.
     @test report.inadmissible <= ncell
     @test report.e_min > -1.0
     @test report.nonfinite == 0 && report.negative_density == 0

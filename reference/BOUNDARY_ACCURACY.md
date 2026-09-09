@@ -9,7 +9,7 @@ a wholesale interface rewrite is not the first experiment to undertake.
 Reproduction: `julia --project=. -t 1 test/convergence.jl` and
 `julia --project=. -t 1 bench/boundaryorder.jl`. Measurements below are serial
 CPU Float64. The diagnostic changes no production operator or default. Shock
-and Float32 outcomes cited below are prior measurements in CALIBRATION.md,
+and Float32 outcomes cited below are prior measurements in CALIBRATION_APPENDIX.md,
 not new runs of those batteries.
 
 **What the wall measurements mean.** The existing convergence suite passed
@@ -107,12 +107,12 @@ after complete assembly and before divergence. The diagnostic's two energy
 fluxes are zero after this change. This fixes the physical flux contract; it
 does not promote a wall accuracy order or make the compact operator/filter
 globally conservative. The compatible evolution and budget checks are in
-`test/wall_flux_tests.jl`, with measurements recorded in `CALIBRATION.md`.
+`test/wall_flux_tests.jl`, with measurements recorded in `CALIBRATION_APPENDIX.md`.
 
 **Recommended sequence.**
 
 1. Recalibrate the wall filter with the existing `:onesided` option and
-   C6 `:cascade3` as the first default candidate. CALIBRATION.md already
+   C6 `:cascade3` as the first default candidate. CALIBRATION_APPENDIX.md already
    records substantially improved planar Noh wall heating (64% to 27% at
    N=400) and a comparable Woodward-Colella profile. This removes the
    largest filter defect while retaining the more robust derivative.

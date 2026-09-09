@@ -9,7 +9,8 @@ the place to record a result.
 | `README.md` | usage |
 | `reference/DESIGN.md` | the numerics — source map, compact solve, folds, GCL, NSCBC |
 | `reference/CLUSTER.md` | MPI configuration, launch rules, sizing, measured scaling |
-| `reference/CALIBRATION.md` | the artificial-property constants, the CFL restriction, TGV |
+| `reference/CALIBRATION.md` | the calibrated defaults and which setting to change for an instability or an over-dissipated solution |
+| `reference/CALIBRATION_APPENDIX.md` | the measurements behind them: every sweep, dead end and null result, the CFL restriction, TGV |
 | `reference/ROADMAP.md` | positioning, comparisons, open work items |
 | `reference/HISTORY.md` | completed phases and their measured outcomes |
 | `reference/AMR_GPU.md` | the patch-AMR + GPU design as delivered, measured lessons, roadmap |
@@ -597,7 +598,7 @@ them.
   globally lowered CFL. Every discretization-order explanation has been measured
   and ruled out, the fold closure included. The `cfl ≤ 0.15` figure recorded
   here previously is the retired `:compact` smoother's.
-  → `reference/CALIBRATION.md`
+  → `reference/CALIBRATION_APPENDIX.md`
 - **κ\* is singular as `T_ion` → 0**, so a cold ambient below p ≈ 1e-3 collapses
   the diffusive timestep. `artificial_conductivity_scale` is an EOS dispatch point, so a
   tabular model can supply its own; the gas models still divide by `T_ion`.
@@ -609,7 +610,7 @@ them.
   supplies 37% of the energy sink yet removing it kills the run, while removing
   the artificial properties entirely does not. So every `C_mu` number is
   conditional on `compact_filter(0.45)` applied every step, and `C_mu` itself is
-  active but not yet fitted. → `reference/CALIBRATION.md`
+  active but not yet fitted. → `reference/CALIBRATION_APPENDIX.md`
 - **`compute_artificial!` is 24.8–26.0% of the multicomponent RHS** under the
   default `:gaussian` smoother (the 31.8% figure is the retired `:compact` one),
   in the filter line-solves that smooth the sensors, one sweep per species. At

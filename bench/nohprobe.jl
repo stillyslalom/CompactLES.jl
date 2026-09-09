@@ -5,7 +5,7 @@
 # --- What this measured, so it is not rediscovered ---------------------------
 #
 # The hypothesis is wrong on three independent readings, and the write-up is
-# in reference/CALIBRATION.md under "Where the restriction originates".
+# in reference/CALIBRATION_APPENDIX.md under "Where the restriction originates".
 #
 #   1. Reach is not short. beta* carries above a thousandth of its own maximum
 #      out to 14.2-14.8 cells ahead of the front, held steady over a complete
@@ -19,7 +19,7 @@
 #   3. Above the ceiling the run does not fail ahead of the front at all. At
 #      nu = 1, cfl = 0.3 the first cell to degrade is the SYMMETRY cell i = 1,
 #      within five steps, while the pre-shock field is still within 1% of unity.
-#      The density hole that CALIBRATION.md recorded as a pre-shock undershoot
+#      The density hole that CALIBRATION_APPENDIX.md recorded as a pre-shock undershoot
 #      is at i = 3, between the wall and the front rather than ahead of it.
 #
 #   4. The symmetry cell fails through a STARTUP EXCURSION, not a gradual
@@ -47,7 +47,7 @@
 # failsafe is the instrument. `floor=1e-8` counts it over a whole run without
 # changing the trajectory, while `floor=1e-8 scope=internal_energy` repairs it,
 # which on nu=1 at cfl 0.15 costs a 5% velocity damping on the worst cell and
-# fails at step 18. The write-up is in reference/CALIBRATION.md under "The
+# fails at step 18. The write-up is in reference/CALIBRATION_APPENDIX.md under "The
 # negative internal energy is not a rounding artifact". The converging
 # geometries have not been measured through it; only the planar case has.
 #

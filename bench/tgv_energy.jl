@@ -75,12 +75,12 @@
 #   is resolved far below the effect size. Every denominator above is the old
 #   residual column rather than a measured filter dissipation, so the ratio
 #   itself awaits remeasurement. Numbers and the open C_mu sweep are in
-#   reference/CALIBRATION.md.
+#   reference/CALIBRATION_APPENDIX.md.
 #
 #   256³, art ON, filter 1, 4 MI300A APUs on rzadams (backend=amdgpu), t = 10:
 #   peak -dKE/dt 1.3043e-2 @ 8.84, mol 86.4%, mu* 0.8%, beta* 0.0%, filter 12.8%.
 #   The peak is 1.6% above the reference seen through the same window
-#   (reference/CALIBRATION.md, "Taylor-Green"), with its time converged toward
+#   (reference/CALIBRATION_APPENDIX.md, "Taylor-Green"), with its time converged toward
 #   9; the coarse-grid early overprediction is gone. Only the art-ON leg was
 #   run, so the filter necessary-and-sufficient test (art OFF completes,
 #   filter 0 fails) is measured at 128³ but not yet at 256³.
@@ -153,7 +153,7 @@
 #             three cross with `configs`, `cfl` and `precision`, so one
 #             invocation runs the whole grid and prints one block per point.
 #
-#   cfl       comma-separated list of timestep multipliers (default "0.6").
+#   cfl       comma-separated list of timestep multipliers (default "0.35").
 #             Exposed because the filter's
 #             share of the sink depends on it: unrelaxed, the filter removes
 #             energy per APPLICATION, so halving the CFL doubles the number of
@@ -694,7 +694,7 @@ end
 const DEFAULTS = (N = 32, tfinal = 10.0, configs = "off:1,on:1",
                   progress = 0, sample = 100, nmax = typemax(Int),
                   window = 250, smoother = :compact,
-                  cfl = "0.6", filter_cfl = "0.0", alphaf = "0.45",
+                  cfl = "0.35", filter_cfl = "0.0", alphaf = "0.45",
                   mu_sensor = :strain, beta_sensor = :strain, reduction = :sum,
                   precision = "float64", backend = "cpu",
                   refine = 0, tile = 0, subcycle = false,

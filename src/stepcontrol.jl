@@ -201,7 +201,7 @@ repair changes states produced by the scheme but does not change the scheme.
     bound, or a point the EOS places outside its thermodynamic domain.
   - `:permissive` accepts the state and reports what it contains. Converging
     shocks integrate through inadmissible states for the length of a run that
-    reaches the correct answer, and `reference/CALIBRATION.md` records that
+    reaches the correct answer, and `reference/CALIBRATION_APPENDIX.md` records that
     budget; such a run selects this mode explicitly.
   - `:repair` applies the positivity failsafe above to the state first, reports
     the substitutions it made, and then rejects whatever the repair could not

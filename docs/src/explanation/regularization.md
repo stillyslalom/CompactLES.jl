@@ -32,9 +32,12 @@ follows the mesh rather than the computational index.
 Every sensor is assembled in the same three stages. A field is selected, a
 high-pass operator is applied to it along each active direction, and the
 directional results are combined and smoothed. [`ArtParams`](@ref) carries one
-setting per stage. Each default is the construction of Cook (2007) and each
-alternative the corresponding construction in the Miranda kernels distributed
-with Pyranda.
+setting per stage. The default sensor construction follows
+[Cook (2007, eqs. 15--21)](https://doi.org/10.1063/1.2728937). The alternatives
+are exposed in
+[Pyranda's public kernels](https://github.com/LLNL/pyranda/tree/master/pyranda/parcop);
+the dilatation sensor also appears in
+[Cook (2009, appendix A)](https://doi.org/10.1063/1.3139305).
 
 | Setting | Default | Alternative |
 |---|---|---|
@@ -68,7 +71,7 @@ velocity oscillation, and the sensors built from them return zero there. Only
 `mu_sensor = :velocity` responds to that mode. Grid-scale content of the
 conserved state is removed by the compact filter, not by the artificial
 properties, consistent with the Taylor--Green dissipation budgets recorded in
-[`reference/CALIBRATION.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION.md).
+[`reference/CALIBRATION_APPENDIX.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION_APPENDIX.md).
 
 The defaults are unchanged because the alternatives were measured and did not
 improve the validation battery. The velocity field for artificial shear
@@ -152,7 +155,7 @@ The defaults are a starting point, not a material model. For a new regime:
 4. repeat across resolution and CFL; and
 5. record the filter strength and cadence with every coefficient result.
 
-[`reference/CALIBRATION.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION.md)
+[`reference/CALIBRATION_APPENDIX.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION_APPENDIX.md)
 records the current parameter sweeps, rejected
 hypotheses, and identified operating limits. Those measurements should not be
 generalized beyond the documented configurations without new evidence.

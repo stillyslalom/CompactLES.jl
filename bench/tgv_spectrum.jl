@@ -53,7 +53,7 @@
 # reaching the same total dissipation can distribute it very differently in
 # wavenumber, and the -dKE/dt history cannot tell them apart: it is one number
 # per instant, and the sinks compete for a supply fixed at the large scales
-# (reference/CALIBRATION.md, "The timestep moves the attribution, not the
+# (reference/CALIBRATION_APPENDIX.md, "The timestep moves the attribution, not the
 # total"). The share of energy above half the Nyquist wavenumber separates them
 # directly. A filter that is too weak leaves a pile-up there; one that is too
 # strong empties the band and takes part of the inertial range with it.

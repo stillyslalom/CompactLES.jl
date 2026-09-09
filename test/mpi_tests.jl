@@ -1125,7 +1125,7 @@ function test_artificial_decomposition()
     # worse of the two because the sensor it gates is O(1) at the points that
     # toggle. Each tolerance leaves one to two orders on top of the measured
     # value and stays two or more below the ~1e-2 an unexchanged halo would
-    # produce. See reference/CALIBRATION.md.
+    # produce. See reference/CALIBRATION_APPENDIX.md.
     # `:ungated_dilatation` is the same sensor field with no switch on it, so it
     # goes back into the round-off class the strain sensor is in: the field
     # itself always reproduced, and only the discontinuity spoiled it.

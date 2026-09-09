@@ -220,7 +220,7 @@ Deliverables:
   the four-digit comparison level, and the resolved-θ 3.71 convergence guard
   with the order preserved (error magnitudes at the innermost rings may
   move; record them).
-- A chosen default κ, documented with the measurements in `CALIBRATION.md`.
+- A chosen default κ, documented with the measurements in `CALIBRATION_APPENDIX.md`.
 - README: replace "None is implemented here" in the CFL section with the
   implemented status and the measured factor.
 

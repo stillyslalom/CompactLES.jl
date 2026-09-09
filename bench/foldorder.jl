@@ -10,7 +10,7 @@
 # therefore consistent with two different worlds: the fold is third order, or
 # the fold is accurate and the outer wall dominates the norm. Splitting the norm
 # by region separates them, and the answer is the second one — see
-# reference/CALIBRATION.md under "The fold closure is not third order".
+# reference/CALIBRATION_APPENDIX.md under "The fold closure is not third order".
 #
 # The first study is the control: both ends are walls, so the fold window is a
 # wall window and must report the wall order. It does, at 3.23.

@@ -108,6 +108,6 @@ end
     tr = solver.transport
     dsum = sum(d -> (1 / solver.h[d])^2, 1:3)
     ν = tr.mu0 / ρ + (tr.mu0 * cp / tr.Pr) / (ρ * cv) + tr.mu0 / (tr.Sc * ρ)
-    expected = c * sum(d -> 1 / solver.h[d], 1:3) + 2ν * dsum
+    expected = c * sqrt(dsum) + 2ν * dsum
     @test rate ≈ expected rtol = 1e-12
 end

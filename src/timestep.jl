@@ -421,10 +421,9 @@ end
 """
     compute_dt(solver, Q)
 
-CFL-limited timestep from the acoustic (|u_d| + c) / (h_d · scalefactor_d)
-rate and a diffusive rate built from the current (possibly artificial)
-transport coefficients, reduced over all ranks. This is `solver.cfl` divided by
-the rate [`max_rate`](@ref) returns, discarding the density it returns
+CFL-limited timestep from the advective, acoustic and diffusive rates of
+[`max_rate`](@ref), reduced over all ranks. This is `solver.cfl` divided by
+the rate that function returns, discarding the density it returns
 alongside, so it carries that function's collective and its side effects on
 `Q`'s halos and on the primitive fields.
 
@@ -443,6 +442,25 @@ compute_dt(solver::Solver, states::Vector{<:ConservedState}) =
 Global maximum of the CFL rate, and the global minimum mixture density taken
 directly from `Q`. Both quantities are evaluated in the same loop and reduced by
 one `Allreduce`, so every rank must call this and all receive the same pair.
+
+The rate at a point is
+
+    Σ_d |u_d| / h_d  +  c · sqrt(Σ_d 1 / h_d²)  +  curvature  +  2ν Σ_d 1 / h_d²
+
+over the active dimensions, with `h_d` the local physical spacing, `ν` the
+largest kinematic diffusivity of `_diffusive_rate` and the curvature
+term of `curvature_rate` covering collapsed angular dimensions. The
+advective and diffusive parts sum over dimensions because their symbols do,
+`u · k` and `ν |k|²`. The acoustic part does not: its symbol is `c |k′|` with
+`k′` the modified-wavenumber vector, so its bound on a tensor-product grid is
+the Euclidean combination, `√3` times the one-dimensional rate on an isotropic
+three-dimensional grid and not three times. The sum form that preceded this
+one was measured on Taylor–Green at 32³ to sit a factor `√3` below the
+observed acoustic ceiling, and this form reproduces that ceiling (the RK
+imaginary-axis limit 3.34 over the C6 modified-wavenumber peak 1.99, times
+`√3`); `reference/CALIBRATION_APPENDIX.md`, "The CFL rate is normalized
+differently", carries the ladder. In one dimension `sqrt(x²) == x` exactly in
+both precisions, so this form is bit-identical to the sum there.
 
 Before the loop it exchanges `Q`'s halos and refreshes the primitive fields from
 `Q`, which [`run!`](@ref) relies on when it passes `prepared = true` to
@@ -558,9 +576,10 @@ end
         for d in 1:3
             act[d] || continue
             idx = ih[d][I] / hh[d]
-            acc += (abs(uv[d]) + c) * idx
+            acc += abs(uv[d]) * idx
             dsum += idx * idx
         end
+        acc += c * sqrt(dsum)                 # the acoustic symbol is c |k'|
         acc += _curvature_rate_point(metric, act[2], act[3], inv_r, cot_over_r,
                                      I, uv)
         ν = _diffusive_rate(eos, ρ, parr[I], Tarr[I], cp, mu0, Pr, Sc,
@@ -615,9 +634,10 @@ function _local_max_rate_loop(solver::SolverLike, Q)
         for d in 1:3
             decomp.active[d] || continue      # no resolved variation
             idx = solver.inv_h[d][I] / solver.h[d]      # inverse physical spacing
-            acc += (abs(uv[d]) + c) * idx
+            acc += abs(uv[d]) * idx
             dsum += idx * idx
         end
+        acc += c * sqrt(dsum)                 # the acoustic symbol is c |k'|
         # Curvature-source stiffness. When an angular dimension is RESOLVED,
         # its source rate (|u_ang|/r) is smaller than its advective rate
         # (|u_ang|/(r Δang)) and is covered above. When it is COLLAPSED
@@ -709,10 +729,13 @@ function dt_report(solver::Solver, Q)
         for d in 1:3
             decomp.active[d] || continue
             idx = solver.inv_h[d][I] / solver.h[d]
+            # The per-direction figure is the diagnostic; the selecting total
+            # below combines the acoustic part as `max_rate` does.
             rd = (abs(uv[d]) + c) * idx
-            acc += rd; dsum += idx * idx
+            acc += abs(uv[d]) * idx; dsum += idx * idx
             rd > wrate && (wrate = rd; wdim = d)
         end
+        acc += c * sqrt(dsum)
         crate = curvature_rate(solver, solver.metric, I, uv)
         ν = _diffusive_rate(solver.eos, ρ, solver.p[I], solver.T_ion[I], cp,
                             tr.mu0, tr.Pr, tr.Sc, solver.mu_art, solver.beta_art,
@@ -1155,7 +1178,7 @@ can end: reaching `tfinal`, reaching `nmax`, and a callback effect returning
 rollback the step checks use, so `control.retries` recovers from it by
 restoring the savepoint and lowering the CFL rather than raising past that
 recovery. A run whose physics legitimately visits inadmissible states selects
-`validity = :permissive`, which accepts and reports them; `reference/CALIBRATION.md`
+`validity = :permissive`, which accepts and reports them; `reference/CALIBRATION_APPENDIX.md`
 records the budget for the cases in `test/cases.jl` that do.
 
 Recovery from a rejected endpoint costs the trajectory. The rollback restores

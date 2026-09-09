@@ -190,9 +190,11 @@ numbering.
 `src/transfer.jl`; measurements in `bench/amr_transfer.jl`, guarded by
 serial testsets and a multi-rank section.
 
-**Source.** Miranda's level transfer (`pyranda/parcop/stencils.f90`,
-`cfamrcf`/`cfamrfc`, inside an `#if 0` block) is an invertible compact
-filter pair whose transfer function is a Gaussian of width 3Δx:
+**Source.** Pyranda's
+[public level-transfer implementation](https://github.com/LLNL/pyranda/tree/b4e0afc),
+in `pyranda/parcop/stencils.f90` (`cfamrcf`/`cfamrfc`, inside an `#if 0`
+block), is an invertible compact filter pair whose transfer function is a
+Gaussian of width 3Δx:
 
 ```
 alpha*fbar(i-1) + fbar(i) + alpha*fbar(i+1) = c*f(i-2) + b*f(i-1) + a*f(i) + b*f(i+1) + c*f(i+2)
@@ -235,7 +237,7 @@ at the fine Nyquist, closure condition number 33), benign while the coarse
 field carries no content above its Nyquist. Measured in situ: the smoothed
 δ⁴ sensor of a 2h shock round-trips at 1.03–1.13, the state undershoots
 ≤ 3% of ambient at the shock, and pollution decays ≈ 3.4× per point outside
-it. An explicit Gaussian pass ahead of restriction (Miranda's `c4ff3` role)
+it. An explicit Gaussian pass ahead of restriction (the `c4ff3` role in Pyranda)
 cuts the undershoot 2.8× but raises total round-trip error; it is the tool
 if regridding onto captured shocks proves positivity-limited, not a default.
 
@@ -266,7 +268,7 @@ sequence. Coupling is three mechanisms between RK stages
 own halo exchange. Because a rank advances several patches sequentially, no
 cross-patch communication may sit inside `compute_rhs!`.
 
-The interface closure rows follow the Miranda precedent: gradient and filter
+The interface closure rows follow the public Pyranda precedent: gradient and filter
 plans take `interface_closures` rows whose LHS couples no ghost unknown
 while the RHS reads exchanged ghost layers (`interface_rhs = :extended`, the
 default) or stays one-sided (`:onesided`). The flux divergence always keeps
@@ -1251,7 +1253,7 @@ rzadams (2026-08-19/20, `bench/logs/rzadams_20260819*.txt`): kernel
 submission 10 µs, launch+sync 25 µs, line solves 0.14–0.40 ms/apply, the
 64³ TGV over 4 APUs at 0.074–0.088 s/step with an F64/F32 ratio near 1.2,
 and a 256³ single-species TGV over 4 APUs at 0.35 s/step baseline
-(24,490 steps to t = 10 in 3.69 h; `CALIBRATION.md`). The open issue is an
+(24,490 steps to t = 10 in 3.69 h; `CALIBRATION_APPENDIX.md`). The open issue is an
 intermittent stall mode in which every device wait costs an integer number
 of milliseconds (13.000 ms medians) for seconds to beyond 30 s; it sits
 below the Julia layer, and inflated the 256³ run's solver average to
@@ -1451,7 +1453,7 @@ mechanism.
   trusted.
 - **The filter at the shell.** The fine patch filters its imposed shell
   nodes before they are overwritten. The `:onesided` filter rows that fixed
-  the Brady–Livescu wall case (`CALIBRATION.md`) may matter here too;
+  the Brady–Livescu wall case (`CALIBRATION_APPENDIX.md`) may matter here too;
   untested.
 - **Filter cadence under subcycling** is measured on Sod gates only; the
   smooth-turbulence dissipation budget under subcycling ties into the

@@ -253,7 +253,7 @@ Presets:
   Colella and the warm-started planar Noh, while `:cascade4` then loses the
   F2 filter row it depends on and fails even a smooth pulse. In Float32 the
   Brady–Livescu wall error floors near 1e-3, above the cascade's, from
-  N = 48 up. The runs are in `reference/CALIBRATION.md` under "Wall
+  N = 48 up. The runs are in `reference/CALIBRATION_APPENDIX.md` under "Wall
   closures under the artificial properties".
 - `pade_d1_4()`: fourth-order Padé first derivative.
 - `compact_filter(alphaf; closures)`: the eighth-order Gaitonde–Visbal
@@ -273,7 +273,7 @@ Presets:
   the plateau and shock position unchanged, and they are what lets the C8
   Brady–Livescu rows run at all. They stay optional because `:cascade4`
   needs the F2 row and because the default constants were calibrated under
-  the cascade; `reference/CALIBRATION.md` has the measurements.
+  the cascade; `reference/CALIBRATION_APPENDIX.md` has the measurements.
 
 `kernels_banded.jl` generalizes this to a **banded LHS** of half-bandwidth `q`
 via `BandedCompactScheme` (q = 1 is tridiagonal, q = 2 is pentadiagonal, which
@@ -392,7 +392,7 @@ factors) plus a diffusive rate built from the current molecular and artificial
 transport coefficients, reduced across all ranks with `MPI.Allreduce`. The
 artificial coefficients lag by one step because they were computed in the
 previous RHS evaluation. The stability implications are quantified in
-`reference/CALIBRATION.md`.
+`reference/CALIBRATION_APPENDIX.md`.
 
 `curvature_rate` supplies the term omitted by the per-dimension loop. A
 *resolved* angular dimension bounds its own geometric source, because
@@ -521,12 +521,14 @@ call sits in a serial section between threaded regions.
 
 ## Artificial fluid properties
 
-`artificial.jl` implements the Cook (2007) model. The sensors are built from an
+`artificial.jl` implements the
+[Cook (2007) model](https://doi.org/10.1063/1.2728937). The sensors are built from an
 **undivided** high-pass in the computational indices: by default the explicit
 fourth difference δ⁴ = (1, −4, 6, −4, 1), or the compact eighth derivative of
-`compact_d8()` under `ArtParams.detector = :d8`, which is the reference
-implementation's operator and is normalized to the same response at two points
-per wavelength, allowing the four constants to carry over. Being undivided,
+`compact_d8()` under `ArtParams.detector = :d8`, which reproduces the operator in
+[Pyranda's public kernels](https://github.com/LLNL/pyranda/tree/master/pyranda/parcop)
+and is normalized to the same response at two points per wavelength, allowing
+the four constants to carry over. Being undivided,
 the formal grid-spacing powers reduce to per-dimension weights: Δ_d² for the
 shear/bulk viscosities (from Cook's |∇⁴S|·Δ⁶) and Δ_d for conductivity and
 species diffusivity (from |∇⁴e|·Δ⁵ and |∇⁴Y|·Δ⁵), where Δ is the local grid
@@ -550,7 +552,8 @@ increment. Shankar, Kawai & Lele (Phys.
 Fluids 23, 024102, 2011, eq. A5) weight the same way.
 
 The Gaussian test filter of the original model is `smooth!`, by default the
-explicit nine-point stencil the reference applies and optionally a
+explicit nine-point stencil [Pyranda](https://github.com/LLNL/pyranda) applies
+and optionally a
 compact-filter pass (`ArtParams.smoother`).
 
 Concretely, `compute_artificial!`:
@@ -558,7 +561,7 @@ Concretely, `compute_artificial!`:
 - Builds the strain-rate magnitude |S| from the metric-corrected `grad_u`, computes
   its δ⁴ sensor summed over directions, smooths it, and sets
   μ\* = C_μ·ρ·sensor and β\* = C_β·ρ·sensor. Directions combine by Σ_d or,
-  under `ArtParams.reduction = :max`, by the reference implementation's MAX;
+  under `ArtParams.reduction = :max`, by Pyranda's MAX;
   the two are the same operation in one dimension.
 - Computes the internal energy directly from `Q` (EOS-agnostic), takes its δ⁴
   sensor, smooths, and sets κ\* = C_κ·(ρc/T_ion)·sensor.
@@ -567,9 +570,10 @@ Concretely, `compute_artificial!`:
   diffusivity D_b for the whole system (the species channel, below).
 
 `ArtParams.mu_sensor` and `ArtParams.beta_sensor` select which field each of
-the first two channels reads. Cook takes both from |S|, as above; the reference
-implementation takes μ\* from the velocity components and β\* from the
-dilatation Δ = ∇·u, and the difference is the absolute value in
+the first two channels reads. Cook (2007) takes both from |S|, as above;
+[Cook (2009, appendix A)](https://doi.org/10.1063/1.3139305) changes β\* to the
+dilatation Δ = ∇·u. Pyranda takes μ\* from the velocity components and β\* from
+the dilatation, and the difference is the absolute value in
 |S| = sqrt(S_ij S_ij), which puts a cusp wherever the strain passes through
 zero. `mu_sensor = :velocity` reduces Δ_d|D_d u_j| over the nine (direction,
 component) pairs. The weight is Δ_d, not Δ_d², because u carries one
@@ -584,10 +588,10 @@ the literature value 1e-32. `:gated_strain` multiplies the strain-sensor β\*
 above by the switch H(−Δ)·Δ²/(Δ² + |ω|² + ε), which is zero in expansion and
 small where vorticity dominates; that is one pointwise pass, since `grad_u`
 supplies both Δ and ω. `:ungated_dilatation` instead takes the δ⁴
-sensor of Δ, which is the reference's own β\*, and `:dilatation` applies the
+sensor of Δ, which is Pyranda's own β\*, and `:dilatation` applies the
 switch to that as well; either costs one more sensor smoothing pass per RHS
 evaluation. The settings behave very differently at a coordinate fold; measured
-effects are in [CALIBRATION.md](CALIBRATION.md).
+effects are in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md).
 
 Constants live in `ArtParams` (defaults C_μ = 0.002, C_β = 1.0, C_κ = 0.01,
 C_D = 0.01) and should be revisited per configuration. `enabled=false` skips the
@@ -612,7 +616,7 @@ constant, so a linear derivative or filter applied componentwise keeps the
 combination. The Fickian flux is the one operator that does not, and on an
 advected interface of density ratio 100 it leaves a pressure error of 1e-2
 after ten periods where everything else leaves 1e-10
-([CALIBRATION.md](CALIBRATION.md), "The bulk species channel").
+([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), "The bulk species channel").
 
 `:bulk` replaces it by the classical parabolic regularization of the system,
 one flux F_q = −D_b ∇q on every conserved variable q with one nonnegative
@@ -664,7 +668,7 @@ density jump, and a sensor on it is what carries a shock through the
 interface; the mass fraction on the light side amplifies a volume-fraction
 excursion by up to R, Y_l = (1 − V)/(1 + (R − 1)V) at equal γ, so a sensor on
 it is what bounds Y, and the mole-fraction sensor is blind to that excursion
-at the 1e-3 level. The maximum over both is the reference implementation's
+at the 1e-3 level. The maximum over both is Pyranda's
 combination of mass- and volume-fraction detectors. The mole fraction's
 denominator Σ_j Y_j R_j passes through zero at a light-gas undershoot of
 −1/R inside the heavy gas, so it is floored and the result clamped to
@@ -904,7 +908,7 @@ floor T_ion where e ≤ 0 without any model-independent statement about it.
 The distinction between rejecting and reporting rests on measurement rather than
 taste. Converging-shock runs carry cells of negative internal energy for their
 whole duration while reaching the correct plateau, and repairing those cells
-terminates the run. `reference/CALIBRATION.md` records the budget; `:permissive`
+terminates the run. `reference/CALIBRATION_APPENDIX.md` records the budget; `:permissive`
 is the mode that makes such a run observable without changing it.
 
 ## Characteristic boundary conditions

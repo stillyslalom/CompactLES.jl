@@ -2,6 +2,12 @@
 #
 #   julia --project=. -t auto bench/filterrate.jl
 #   julia --project=. -t auto bench/filterrate.jl 64 filter_cfl=0.4
+#   julia --project=. -t auto bench/filterrate.jl landing=0.037
+#
+# `landing=` schedules an `EveryTime` callback at that interval, chosen not to
+# divide the step, so that `run!` shortens a step to land on every instant;
+# it measures whether shortened steps move the loss, which they do unrelaxed
+# (a shortened step pays a full pass) and should not relaxed.
 #
 # --- What this measured, so it is not rediscovered ---------------------------
 #
@@ -17,6 +23,19 @@
 # reference/ROADMAP.md, measured directly rather than inferred: a calculation at
 # half the CFL applies twice the subgrid dissipation over the same interval.
 # `filter_cfl` makes it a rate, constant to six figures across a 4x CFL change.
+#
+# The same with `landing=0.037`, an EveryTime callback whose instants do not
+# divide the step, so the run shortens steps to land on each of thirteen:
+#
+#   cfl    steps   unrelaxed          relaxed (filter_cfl = 0.4)
+#   0.4      81    4.539e-3  1.000    4.042e-3  1.000
+#   0.2     149    8.330e-3  1.835    4.042e-3  1.000
+#   0.1     297    1.652e-2  3.640    4.042e-3  1.000
+#
+# Unrelaxed, the landing adds eight steps at cfl 0.4, each a full pass, and the
+# loss rises 10.9%, so a run's numerical dissipation depends on its output
+# schedule. Relaxed, every entry agrees with the unlanded table in every digit
+# printed, because a shortened step filters in proportion to dt * rate.
 #
 # --- Choosing the case -------------------------------------------------------
 #
@@ -52,7 +71,7 @@ const CL = CompactLES
 const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 const DEFAULTS = (N = 32, tfinal = 0.5, k = 4, amplitude = 0.1,
-                  cfls = "0.4,0.2,0.1", filter_cfl = 0.4)
+                  cfls = "0.4,0.2,0.1", filter_cfl = 0.4, landing = 0.0)
 const opt = CompactLES.script_args(ARGS, DEFAULTS; positional = (:N, :tfinal))
 const CFLS = [parse(Float64, strip(s)) for s in split(opt.cfls, ',')]
 
@@ -69,7 +88,7 @@ function kinetic(solver, Q)
     return MPI.Allreduce(0.5 * ke * prod(solver.h), +, solver.decomp.comm)
 end
 
-function run_one(cfl, filter_cfl)
+function run_one(cfl, filter_cfl, landing)
     N = opt.N
     prob = Problem(eos = IdealSpecies("gas"; gamma = 1.4, R = 1.0),
                    transport = Transport(mu0 = 0.0),
@@ -82,7 +101,11 @@ function run_one(cfl, filter_cfl)
                                      filter_interval = 1,
                                      filter_cfl = filter_cfl))
     ke0 = kinetic(solver, Q)
-    run!(solver, Q; tfinal = opt.tfinal)
+    # The effect does nothing; the trigger's scheduled instants are what
+    # shorten the steps.
+    callback = landing > 0 ? Callback(EveryTime(landing), (s, Q) -> nothing) :
+                             nothing
+    run!(solver, Q; tfinal = opt.tfinal, callback = callback)
     return (loss = 1 - kinetic(solver, Q) / ke0, steps = solver.step)
 end
 
@@ -90,13 +113,15 @@ function main()
     @printf("N = %d, t_final = %.3g, u_x = %.3g sin(%d y), mu0 = 0, art off\n",
             opt.N, opt.tfinal, opt.amplitude, opt.k)
     println("Steady shear layer: the filter is the only sink of kinetic energy.\n")
-    for fc in (0.0, opt.filter_cfl)
-        println(fc == 0 ? "--- unrelaxed (filter_cfl = 0, default) ---" :
-                          "--- relaxed (filter_cfl = $fc) ---")
+    landings = opt.landing > 0 ? (0.0, opt.landing) : (0.0,)
+    for fc in (0.0, opt.filter_cfl), landing in landings
+        println(fc == 0 ? "--- unrelaxed (filter_cfl = 0, default)" :
+                          "--- relaxed (filter_cfl = $fc)",
+                landing > 0 ? ", landing every $landing ---" : " ---")
         @printf("  %6s %7s %13s %12s\n", "cfl", "steps", "KE loss", "vs first")
         ref = NaN
         for cfl in CFLS
-            r = run_one(cfl, fc)
+            r = run_one(cfl, fc, landing)
             isnan(ref) && (ref = r.loss)
             @printf("  %6.3g %7d %13.5e %12.3f\n", cfl, r.steps, r.loss,
                     r.loss / ref)
