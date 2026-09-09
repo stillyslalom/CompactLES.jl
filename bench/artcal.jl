@@ -8,7 +8,7 @@
 #
 # Scratch tooling, like everything else in bench/: it prints tables, asserts
 # nothing, and is not part of the gate. The conclusions drawn from a run of it
-# are written up in reference/CALIBRATION.md — update that file when this one
+# are written up in reference/CALIBRATION.md; update that file when this one
 # is re-run with different cases, or the write-up silently goes stale.
 #
 # The cases come from test/cases.jl, the same file test/validation.jl guards,
@@ -17,19 +17,19 @@
 #
 # What each column responds to, and why these cases:
 #
-#   Noh   plateau, wall deficit, robustness — the shock-thickness constants
+#   Noh   plateau, wall deficit, robustness: the shock-thickness constants
 #         (C_mu, C_beta) and the entropy error at the symmetry point. The only
 #         case where the right answer is a fixed number in three geometries.
-#   Lax   contact and star-state error — what an over-damping constant costs on
+#   Lax   contact and star-state error: the cost of an over-damping constant on
 #         an ordinary shock tube.
-#   Shu   wave-train amplitude — what over-damping costs on the smooth structure
-#         the high-order scheme is actually for. This is the constraint pulling
-#         the other way from Noh.
-#   WC    survival at a 10^5 pressure ratio — a pass/fail robustness floor.
-#   Mix   interface width — the only case that isolates C_D.
+#   Shu   wave-train amplitude: the cost of over-damping on the smooth
+#         structure the high-order scheme exists for. This is the constraint
+#         pulling the other way from Noh.
+#   WC    survival at a 10^5 pressure ratio, a pass/fail robustness floor.
+#   Mix   interface width, the only case that isolates C_D.
 #   SI    mass-fraction excursion and interface width at a shocked air/SF6
-#         interface — what C_D does where the interface is forced, which Mix
-#         never is; the width it costs against the excursion it removes.
+#         interface: the effect of C_D where the interface is forced, which
+#         Mix never is; the width it costs against the excursion it removes.
 
 using MPI
 MPI.Init(threadlevel=:funneled)
@@ -66,8 +66,8 @@ want(name) = name in WHICH
 # case here is capped at a few times the healthy step count.
 #
 # The two ways of not working print differently, and the distinction is not
-# cosmetic. **NaN is positivity loss** — a `SolverFailure`, which is a real limit
-# of the configuration. **Inf is the step cap** — the run was still healthy and
+# cosmetic. **NaN is positivity loss**, a `SolverFailure`, which is a real limit
+# of the configuration. **Inf is the step cap**: the run was still healthy and
 # had not reached the target time, which is an artifact of CAP and of the
 # timestep, not a result. Reporting both as NaN reads as a ceiling that moves
 # with the CFL, since
@@ -184,7 +184,7 @@ end
 
 # ===========================================================================
 if want("beta")
-    println("\n=== C_beta sweep (bulk artificial viscosity — the shock constant) ===")
+    println("\n=== C_beta sweep (bulk artificial viscosity, the shock constant) ===")
     println("C_beta    | Noh1 plat/exact  deficit | Noh3 plat/exact | Lax L1  contact | Shu train amp | WC peak")
     hr()
     for c in (0.0, 0.25, 0.5, 1.0, 2.0, 4.0)
@@ -250,14 +250,12 @@ if want("Y")
                 c, mark(c, DEFAULTS.C_D), d, si[1], si[2], si[3], si[4])
     end
     println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
-    println("
-=== C_Y at the same interface, delta = 2h (the mass-fraction bound) ===")
+    println("\n=== C_Y at the same interface, delta = 2h (the mass-fraction bound) ===")
     println("C_Y               | worst min Y   max Y | width cells | steps")
     hr()
     for c in (0.0, 50.0, 100.0, 200.0, 1000.0)
         si = m_si(art=art(C_Y=c), delta=2)
-        @printf("%-8.4g%s         | %+11.4f %7.4f | %11g | %5g
-",
+        @printf("%-8.4g%s         | %+11.4f %7.4f | %11g | %5g\n",
                 c, mark(c, DEFAULTS.C_Y), si[1], si[2], si[3], si[4])
     end
 end
@@ -278,14 +276,13 @@ end
 
 # ===========================================================================
 # The filter supplies most of the energy sink and is the one setting whose
-# removal ends a run outright, so the battery's question about it is not
-# accuracy but survival: how weak the filter can be before a shocked case
-# stops completing. TGV fitted alpha at 128^3 without an upper bound of its
-# own (reference/CALIBRATION.md, "The alpha sweep at 128 cubed"), which is
-# what these rows are asked to supply.
+# removal ends a run outright, so for the shocked cases the relevant question
+# is survival rather than accuracy: how weak the filter can be before a case
+# stops completing. The Taylor-Green fit of alpha at 128^3 gave no upper bound
+# (reference/CALIBRATION.md, "The alpha sweep at 128 cubed"); these rows
+# measure one.
 if want("filter")
-    println("
-=== compact-filter alpha (larger filters more weakly) ===")
+    println("\n=== compact-filter alpha (larger filters more weakly) ===")
     println("alphaf    | Noh1 plat  deficit | Noh2 plat | Noh3 plat | " *
             "Lax L1  | Shu amp | WC peak")
     hr()
@@ -293,8 +290,7 @@ if want("filter")
         f = compact_filter(a)
         n1 = m_noh(1; filt=f); n2 = m_noh(2; filt=f); n3 = m_noh(3; filt=f)
         lx = m_lax(filt=f); sh = m_shu(filt=f); wc = m_wc(filt=f)
-        @printf("%-9.4g%s| %9.4f  %+6.0f%% | %9.4f | %9.4f | %7.1e | %7.4f | %.4f
-",
+        @printf("%-9.4g%s| %9.4f  %+6.0f%% | %9.4f | %9.4f | %7.1e | %7.4f | %.4f\n",
                 a, mark(a, 0.45), n1[1], 100n1[2], n2[1], n3[1],
                 lx[1], sh[1], wc[1])
     end
@@ -305,8 +301,7 @@ if want("filter")
     # binding test of a weaker one is whether the CFL ceiling moves: under the
     # Gaussian smoother it sits at 0.4 for the spherical origin and 0.2 for the
     # cylindrical axis and the planar wall.
-    println("
---- the same, against the CFL ceiling ---")
+    println("\n--- the same, against the CFL ceiling ---")
     println("cfl    alphaf | Noh1 plat  deficit | Noh2 plat | Noh3 plat | WC peak")
     hr()
     for c in (0.4, 0.3, 0.2), a in (0.45, 0.486, 0.49)
@@ -315,8 +310,7 @@ if want("filter")
         n2 = m_noh(2; cfl=c, filt=f)
         n3 = m_noh(3; cfl=c, filt=f)
         wc = m_wc(cfl=c, filt=f)
-        @printf("%-6.3g %-6.4g%s| %9.4f  %+6.0f%% | %9.4f | %9.4f | %.4f
-",
+        @printf("%-6.3g %-6.4g%s| %9.4f  %+6.0f%% | %9.4f | %9.4f | %.4f\n",
                 c, a, mark(a, 0.45), n1[1], 100n1[2], n2[1], n3[1], wc[1])
     end
     println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
@@ -369,7 +363,7 @@ end
 # amplitude at four points per wavelength; `:gaussian` is the explicit
 # nine-point stencil the reference implementation applies, which retains 19%
 # and carries no line solve. The two therefore differ in cost and in answer,
-# and the four constants above are calibrated per setting — so a row that
+# and the four constants above are calibrated per setting, so a row that
 # improves here is not yet an improvement until those are refitted.
 # reference/CALIBRATION.md carries the transfer functions.
 if want("smoother")
@@ -399,7 +393,7 @@ end
 # The detector is the high-pass every sensor is built from: Cook's undivided
 # δ⁴, or the reference implementation's compact eighth derivative. The two are
 # normalized to the same response at two points per wavelength and diverge
-# below it — by 26x at four points and 569x at eight — so this sweep measures the
+# below it, by 26x at four points and 569x at eight, so this sweep measures the
 # solver response to a sensor that stops responding to resolved structure. As with
 # the smoother, the four constants are calibrated per setting, so a row that
 # improves is not yet an improvement.

@@ -3,30 +3,50 @@
 # runs TGV, but with `art=ArtParams(enabled=false)`, so it tests the physical
 # viscous term and says nothing about the artificial one.
 #
-# The split is the point. -dKE/dt is TOTAL energy loss; the viscous stress
-# accounts for only part of it, and the residual is the compact filter (plus
-# numerical loss and, early on, a small pressure-dilatation exchange with
-# internal energy that shows up as a slightly negative residual while the flow
-# is still smooth). Three channels, and only two of them have a coefficient.
+# The split is the purpose of the script. -dKE/dt is the total energy loss, and
+# the viscous stress accounts for only part of it. Five channels are measured:
+# molecular, artificial shear, artificial bulk, the compact filter, and the
+# reversible pressure work that moves energy between kinetic and internal. What
+# remains after those is printed as `unattr`: numerical error, aliasing and
+# time integration.
+#
+# The filter column is `filter_loss`, a measured pass. Tables recorded under
+# the earlier residual definition, -dKE/dt - (mol + mu* + beta*), print no
+# `unattr` column beside it and are not comparable, since that residual
+# carried the pressure work and every numerical error along with the filter.
 #
 # --- What this measured, so it is not rediscovered ---------------------------
 #
+#   The residual definition is an adequate proxy where the filter dominates
+#   and degrades as its share falls. At 32³ to t = 10, smoother :compact, at
+#   the peak: mol 12.1%, mu* 4.7%, beta* 0.0%, filter 84.1%, pressure work
+#   0.4%, unattributed -1.3%, against a residual of 83.1% for the same pass.
+#   That is one point low at an 84% share; if the absorbed error is roughly
+#   fixed in absolute terms, it is about 8% of a 12.8% channel at 256³.
+#
+#   Bracketing the artificial coefficients costs nothing at production times:
+#   32³ to t = 10 agrees on the peak to five digits and on the KE misfit to
+#   0.013% either way, 3515 steps against 3514, and the difference reaches
+#   1.9% only at 16³ to t = 1, where the peak is still rising.
+#
 #   32³, Re=1600, filter_interval=1, C_mu=0.002 default, at the dissipation peak
 #   (t ≈ 6.3): molecular 12%, artificial shear 5%, artificial bulk ~0%,
-#   FILTER ≈ 83%. Peak -dKE/dt 1.46e-2 at t = 6.5 against the reference 1.2e-2
-#   at t = 9 — over-dissipating, too early, and the excess is mostly filter.
+#   filter ≈ 83%. Peak -dKE/dt 1.46e-2 at t = 6.5 against the reference
+#   1.286e-2 at t = 8.97: over-dissipating, too early, and the excess is
+#   mostly filter.
 #
 #   β* is four orders below μ* despite C_beta = 1.0: at Ma 0.1 there is almost
-#   no dilatation for it to act on. This is not a bug, it is the case.
+#   no dilatation for it to act on. That is the physics of the case, not a
+#   defect.
 #
 #   Filter sweep at 32³, art on: interval 1 gives the above; interval 4 diverges
 #   (9.5e-2 still rising at t = 10); interval 0 fails outright with
 #   SolverFailure(:negative_density) at t = 5.32. The compact filter is the
-#   primary stabilizer here, beyond its smoothing role — the Cook properties do
-#   not hold this case together at this resolution.
+#   primary stabilizer here, beyond its smoothing role; the Cook properties
+#   alone do not keep this case stable at this resolution.
 #
-#   At resolution — 128³, 224 ranks over 2 rzhound nodes, t = 10. The 32³ trends
-#   above change in three ways:
+#   At 128³, 224 ranks over 2 rzhound nodes, t = 10, the 32³ trends above
+#   change in three ways:
 #
 #     config              peak -dKE/dt      mol    mu*   filter    wall
 #     art ON,  filter 1   1.2065e-2 @ 8.77  60.4%  2.3%   37.3%   1520 s
@@ -34,37 +54,41 @@
 #     art ON,  filter 0   SolverFailure(:negative_density) at t = 4.66
 #
 #   Filter dominance does not survive resolution: 87% → 83% → 37% → 12.8% at
-#   16³, 32³, 128³, 256³. Two coarse points were not a trend, and the fall
-#   continues at 256³.
+#   16³, 32³, 128³, 256³. The two coarse points alone did not establish a
+#   trend; the fall continues at 256³.
 #
 #   The filter is still required, and its stabilizing role is decoupled from its
-#   energy share. At 37% of the sink, removing it kills the run *earlier* than at
-#   32³ (t = 4.66 vs 5.32) through a clean energy blow-up — KE turns upward at
-#   t ≈ 4.4 and triples before positivity goes, dt collapsing to 2e-60. TGV is
-#   unforced, so that is unambiguously numerical: the filter contributes ~100% of
-#   grid-scale sink whatever its share of the total. Art-off/filter-on runs to
-#   completion. The filter is necessary and sufficient here; the Cook properties
-#   are neither.
+#   energy share. At 37% of the sink, removing it kills the run earlier than at
+#   32³ (t = 4.66 vs 5.32) through a clean energy blow-up: KE turns upward at
+#   t ≈ 4.4 and triples before positivity is lost, with dt collapsing to 2e-60.
+#   TGV is unforced, so the rise is unambiguously numerical, and the filter
+#   supplies essentially all of the grid-scale sink whatever its share of the
+#   total. Art-off/filter-on runs to completion. The filter is necessary and
+#   sufficient here; the Cook properties are neither.
 #
-#   Refinement does not disentangle mu* from the filter — their ratio is
+#   Refinement does not disentangle mu* from the filter: their ratio is
 #   invariant across an 8× refinement in linear resolution (5.0/83 = 0.060 at
 #   32³, 2.3/37.3 = 0.062 at 128³, 0.8/12.8 = 0.0625 at 256³), both shrinking
-#   together as the molecular term takes over. So "refine until the filter lets
-#   go, then fit C_mu" does not work. Holding the filter FIXED and fitting
-#   against the peak does, because the peak is resolved far below the effect
-#   size. Numbers and the open C_mu sweep are in reference/CALIBRATION.md.
+#   together as the molecular term takes over. Refining until the filter's
+#   share is negligible and then fitting C_mu is therefore not a workable plan.
+#   Holding the filter fixed and fitting against the peak is, because the peak
+#   is resolved far below the effect size. Every denominator above is the old
+#   residual column rather than a measured filter dissipation, so the ratio
+#   itself awaits remeasurement. Numbers and the open C_mu sweep are in
+#   reference/CALIBRATION.md.
 #
 #   256³, art ON, filter 1, 4 MI300A APUs on rzadams (backend=amdgpu), t = 10:
 #   peak -dKE/dt 1.3043e-2 @ 8.84, mol 86.4%, mu* 0.8%, beta* 0.0%, filter 12.8%.
-#   The peak sits ~4% above the rounded 1.2e-2 banner, within the well-resolved
-#   DNS range (~1.25-1.28e-2 near t = 9), with its time converged toward 9; the
-#   coarse-grid early overprediction is gone. Only the art-ON leg was run, so the
-#   filter necessary-and-sufficient test (art OFF completes, filter 0 fails) is
-#   measured at 128³ but not yet at 256³.
+#   The peak is 1.6% above the reference seen through the same window
+#   (reference/CALIBRATION.md, "Taylor-Green"), with its time converged toward
+#   9; the coarse-grid early overprediction is gone. Only the art-ON leg was
+#   run, so the filter necessary-and-sufficient test (art OFF completes,
+#   filter 0 fails) is measured at 128³ but not yet at 256³.
 #
 # Cost: 32³ to t = 10 is ~3.3 min per configuration on a 24-thread desktop, 64³
 # ~13 min. On a cluster, 128³ is ~20–25 min per configuration at 224 ranks over
-# two nodes (0.10–0.12 s/step, ~11k–13k steps) — the reason this lives in bench/.
+# two nodes (0.10–0.12 s/step, ~11k–13k steps), which is why this script lives
+# in bench/ rather than test/.
 # 256³ art on over 4 MI300A APUs on rzadams at -t 1 is ~3.7 h (24.5k steps,
 # 0.35 s/step baseline inflated ~1.5× by device stall episodes; AMR_GPU.md).
 #
@@ -76,12 +100,13 @@
 #     64  Float64    1.2471e-2 @ 8.93      621.41 s     219.5 MiB   7.49e-13
 #     64  Float32    1.2472e-2 @ 8.93      563.52 s     109.8 MiB   1.39e-4
 #
-# At 64³ the published reference is 1.2e-2 near t=9: both precisions are about
-# 4% high and land at the same time. Float32 halves resident solver/state/RK
-# memory but buys only 1.10x CPU throughput here; its conservation drift is a
-# real 1e-4 tradeoff, not hidden by the Float64 diagnostic reductions.
+# Against the tabulated reference peak of 1.286e-2 at t = 8.97, both 64³
+# precisions are about 3% low and land at the same time. Float32 halves
+# resident solver/state/RK memory but buys only 1.10x CPU throughput here; its
+# conservation drift is a real 1e-4 tradeoff, not hidden by the Float64
+# diagnostic reductions.
 #
-# Usage — positional grid and end time, then `key=value` options:
+# Usage: positional grid and end time, then `key=value` options:
 #
 #   julia --project=. bench/tgv_energy.jl [N] [tfinal] [key=value ...]
 #   julia --project=. bench/tgv_energy.jl 64 configs=on:1,on:4,off:1
@@ -92,23 +117,28 @@
 # Options, all optional:
 #   configs   comma-separated <art>:<filter_interval>[:<C_mu>], where <art> is
 #             on|off, filter_interval 0 disables filtering, and C_mu defaults to
-#             0.002. Both knobs in one entry because they are the pair that has
-#             to be calibrated together — see the filter-dominance note above.
-#             Default "off:1,on:1", the pair that answers the first-order
-#             question: art off and art on, both filtered every step.
+#             0.002. Both settings sit in one entry because they have to be
+#             calibrated together (the filter-dominance note above). Default
+#             "off:1,on:1": art off and art on, both filtered every step, which
+#             is the first-order comparison.
 #   progress  ProgressLog interval in steps, 0 (default) to disable. Set it for
-#             anything long enough to look hung — at 256³ a configuration is
-#             ~21,500 steps and the sample table below is the only other output
-#             for hours.
-#   sample    steps between diss_split samples (default 100). Scale it with the
+#             any run long enough to look hung: at 256³ a configuration is
+#             ~21,500 steps, and the sample table below is otherwise the only
+#             output for hours.
+#   sample    steps between budget samples (default 100). Scale it with the
 #             step count or a long run prints hundreds of rows.
+#   filter_probe
+#             measure the filter's own dissipation (default true). Each budget
+#             sample then costs one trial step and two extra reductions on top
+#             of the gradient pass, and the warm-up state and workspace are
+#             held for the run instead of freed. Set false to recover both.
 #   nmax      step cap per configuration (default none). A sweep that may visit
-#             bad configurations should set one: a run that loses positivity does
-#             crash, it grinds — CLAUDE.md, Conventions.
+#             bad configurations should set one: a run that loses positivity
+#             does not crash but grinds (CLAUDE.md, Conventions).
 #   smoother, mu_sensor, beta_sensor, reduction
 #             `ArtParams` settings applied to every configuration in the sweep,
 #             so a comparison across them is one invocation each rather than one
-#             entry each. `mu_sensor` is the setting this case answers: TGV is
+#             entry each. `mu_sensor` is the setting this case is suited to: TGV is
 #             the only case in the repository where the μ* channel carries a
 #             measurable share of the sink, and no case in the 1-D battery of
 #             bench/artcal.jl exercises a shear sensor at all. Note that
@@ -142,11 +172,11 @@
 #             backend needs an environment carrying the device package (see
 #             bench/device_bringup.jl); the solver and state are
 #             device-resident and the energy diagnostics read a host copy
-#             of the state, downloaded per callback — the
-#             documented I/O-gathers-to-host path, excluded from solver wall
-#             time by the same accounting that excludes callbacks on the CPU.
+#             of the state, downloaded per callback on the documented
+#             I/O-gathers-to-host path and excluded from solver wall time by
+#             the same accounting that excludes callbacks on the CPU.
 #   snapshots comma-separated times at which to write an HDF5 checkpoint of the
-#             state, empty (default) for none. The spectra N1 asks for are taken
+#             state, empty (default) for none. The spectra under N1 are taken
 #             offline from these by `bench/tgv_spectrum.jl`, so nothing here
 #             computes a transform and no distributed FFT exists. Requires HDF5
 #             to be loadable, which the package environment cannot do (it is a
@@ -154,8 +184,8 @@
 #             `snapshot_dir` under a stem naming the configuration, so a sweep
 #             writes one set per point without collision.
 #
-#             `run!` shortens a step to land exactly on each instant, which is
-#             what makes snapshots comparable across a sweep. Under
+#             `run!` shortens a step to land exactly on each instant, so
+#             snapshots are comparable across a sweep. Under
 #             `filter_cfl = 0` a shortened step still pays a full filter pass,
 #             so requesting snapshots perturbs the energy budget slightly at
 #             each one; under a positive `filter_cfl` it does not. Use the same
@@ -165,8 +195,8 @@
 #
 #   window    steps either side for every -dKE/dt reported (default 250, i.e. a
 #             501-step window, clamped to length(ts)/8). Do not lower it towards
-#             1 to "see more detail" — the one-step rate is contaminated by dt
-#             jitter at several times the effect size. See `windowed_rate`.
+#             1 for more detail: the one-step rate is contaminated by dt jitter
+#             at several times the effect size. See `windowed_rate`.
 #
 # Every configuration is compared against the 512^3 spectral reference vendored
 # at `data/spectral_Re1600_512.gdiag`: the peak seen through the run's own
@@ -176,7 +206,8 @@
 #
 # Parsed by `script_args` (src/scriptargs.jl), shared with the cluster scripts;
 # the reasoning for ARGS over environment variables is there. An unknown key is
-# an error, so a typo costs a message rather than an hour at the default.
+# an error, so a typo produces a message rather than an hour-long run at the
+# default.
 #
 # Runs under mpiexec unchanged; every reduction here is collective.
 #
@@ -184,7 +215,7 @@
 # to the next one. That is safe only because the failure is raised off a reduced
 # quantity (`max_rate` reduces, `check_step` reads the result), so every rank
 # throws at the same step and every rank moves on together. Anything else
-# escapes to `mpi_main`, which aborts the job — do not widen that catch.
+# escapes to `mpi_main`, which aborts the job; do not widen that catch.
 
 using MPI
 MPI.Init(threadlevel=:funneled)
@@ -226,7 +257,7 @@ and the covered mask (`uncovered_fraction`), so a coarse node under the
 refined level is counted once.
 """
 function diss_split(solver, states)
-    s_mol, s_shear, s_bulk, s_rho = 0.0, 0.0, 0.0, 0.0
+    s_mol, s_shear, s_bulk, s_pdil, s_rho = 0.0, 0.0, 0.0, 0.0, 0.0
     for (ps, Q) in CL.eachpatch(solver, _as_vector(states))
         CL.compute_primitives_and_gradients!(ps, Q)
         CL.compute_artificial!(ps, Q)
@@ -239,6 +270,7 @@ function diss_split(solver, states)
         mu_art = _host(ps.mu_art)
         beta_art = _host(ps.beta_art)
         rho = _host(ps.rho)
+        pres = _host(ps.p)
         mu0 = solver.transport.mu0
         dv = prod(ps.h)
         @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
@@ -254,17 +286,66 @@ function diss_split(solver, states)
                 s_shear += w * (mu_a * S2 - 2mu_a / 3 * trace) * g[a, b][I]
                 s_bulk += w * beta_a * trace * g[a, b][I]
             end
+            # Pressure work, the reversible exchange with internal energy:
+            # dKE/dt = ∫p∇·u − ∫τ:∇u over a periodic domain, so this enters
+            # −dKE/dt with the opposite sign to the three dissipations. It was
+            # previously inside the residual that the table labelled "filter".
+            s_pdil += w * pres[I] * divu
             s_rho += w * rho[I]
         end
     end
-    v = MPI.Allreduce([s_mol, s_shear, s_bulk, s_rho], +, solver.comm)
-    return (v[1] / v[4], v[2] / v[4], v[3] / v[4])
+    v = MPI.Allreduce([s_mol, s_shear, s_bulk, s_pdil, s_rho], +, solver.comm)
+    return (v[1] / v[5], v[2] / v[5], v[3] / v[5], v[4] / v[5])
 end
 
 # The state vector a refined run carries, or the one-element vector of a
 # single-patch run's state, so one patch loop serves both.
 _as_vector(states::Vector) = states
 _as_vector(Q) = [Q]
+
+_copy_state!(dst::Vector, src::Vector) =
+    (for (a, b) in zip(dst, src); copyto!(parent(a), parent(b)); end; dst)
+_copy_state!(dst, src) = (copyto!(parent(dst), parent(src)); dst)
+
+# `diss_split` and the filter probe both recompute the artificial coefficients
+# into the solver's own arrays, and `max_rate` sizes the next step from those
+# arrays without recomputing them. Snapshotting them around a diagnostic keeps
+# the instrument from perturbing the run it is measuring, which it otherwise
+# does once every `sample=` steps.
+_art_snapshot(solver, states) =
+    [CL.art_block(ps) for (ps, _) in CL.eachpatch(solver, _as_vector(states))]
+
+function _art_restore!(solver, states, blocks)
+    for (n, (ps, _)) in enumerate(CL.eachpatch(solver, _as_vector(states)))
+        CL.set_art_block!(ps, blocks[n])
+    end
+    return solver
+end
+
+"""
+The compact filter's own energy removal, measured directly.
+
+The residual this replaces, total loss minus the three viscous channels,
+carries the pressure work and every numerical error alongside the filter, so it
+was never a filter dissipation.
+
+A callback sees a state the filter has already acted on this step, so filtering
+it again would measure a second pass: at each wavenumber the first pass's loss
+scaled by the square of the transfer function, a severe underestimate exactly
+where the filter does its work. The copy is therefore advanced one step first,
+and the pass measured on it is the one the run takes next.
+
+Returned on `diss_split`'s normalization, energy per unit mass per unit time.
+"""
+function filter_loss(solver, Q, probe, dt, sync_host!, mass)
+    Qp, wsp = probe
+    _copy_state!(Qp, Q)
+    step!(solver, Qp, wsp, dt)
+    ke_pre = kinetic_energy(solver, sync_host!(Qp))
+    CL.filter_state!(solver, Qp)
+    ke_post = kinetic_energy(solver, sync_host!(Qp))
+    return (ke_pre - ke_post) / (dt * mass)
+end
 
 # One node's composite quadrature weight relative to the patch cell volume:
 # the edge weights of the patch's own quadrature (one everywhere on the
@@ -295,8 +376,8 @@ This is the same mechanism as the truncated-final-step artifact below; widening
 the window fixes both, but that step is still excluded because one clipped `dt`
 inside a window is a bias rather than noise.
 
-A boxcar over a curved peak reads slightly low — ~0.2% at 128³ with the default
-501-step window, growing as the window widens. That is common-mode across
+A boxcar over a curved peak reads slightly low, about 0.2% at 128³ with the
+default 501-step window, growing as the window widens. That is common-mode across
 configurations run at the same `window=`, so it cancels in a `C_mu` comparison
 and affects only comparisons with an external peak reference. The window
 is clamped to `length(ts) ÷ 8`, so hold step counts within ~8x of each other or
@@ -481,6 +562,7 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                       T::Type{<:AbstractFloat}=Float64,
                       backend::AbstractBackend=CPUBackend(),
                       refine::Int=0, tile::Int=0, subcycle::Bool=false,
+                      filter_probe::Bool=true,
                       snapshots::Vector{Float64}=Float64[],
                       snapshot_stem::AbstractString="")
     # A refined run carries a centered cube of `refine` root nodes on one
@@ -533,29 +615,47 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                     [parent(q) for q in _as_vector(Q)]
     mass0 = mean_density(solver, sync_host!(Q))
 
-    # Compile the precision-specific hot path before timing. The warm state is
-    # disposable; the measured state and solver time remain at t = 0.
+    # Compile the precision-specific hot path before timing. The measured state
+    # and solver time remain at t = 0, and the artificial coefficients the warm
+    # step leaves behind are put back: `max_rate` sizes the run's first step
+    # from those arrays.
+    probe = filter_interval > 0 && filter_probe
+    art_warm = _art_snapshot(solver, Q)
+    tstage_warm = solver.tstage
     Qwarm = refine == 0 ? copy(Q) : [copy(q) for q in Q]
     warmspace = Workspace(Qwarm)
     dtwarm = compute_dt(solver, Qwarm)
     step!(solver, Qwarm, warmspace, dtwarm)
     filter_interval > 0 && CL.filter_state!(solver, Qwarm)
     kinetic_energy(solver, sync_host!(Qwarm))
-    Qwarm = warmspace = nothing
+    _art_restore!(solver, Q, art_warm)
+    solver.tstage = tstage_warm
+    # The warm pair is exactly the state and workspace `filter_loss` requires,
+    # so the probe reuses it rather than allocating a second pair.
+    probe || (Qwarm = warmspace = nothing)
     GC.gc()
 
     ts = Float64[]
     kes = Float64[]
-    samples = Tuple{Float64,Float64,Float64,Float64,Int}[]
+    samples = Tuple{Float64,Float64,Float64,Float64,Float64,Float64,Int}[]
     record = Callback(EveryStep(1), (s, Q) -> begin
         push!(ts, s.t)
         push!(kes, kinetic_energy(s, sync_host!(Q)))
         nothing
     end)
-    # diss_split costs an extra gradient pass, so it is sampled, not stepwise.
+    # diss_split costs an extra gradient pass and the filter probe a trial step,
+    # so the budget is sampled, not stepwise. Both write solver-owned arrays the
+    # next iteration reads, so the pass brackets itself with a snapshot.
     split = Callback(EveryStep(sample), (s, Q) -> begin
-        mol, shear, bulk = diss_split(s, Q)
-        push!(samples, (s.t, mol, shear, bulk, length(ts)))
+        art_saved = _art_snapshot(s, Q)
+        tstage_saved = s.tstage
+        mol, shear, bulk, pdil = diss_split(s, Q)
+        filt = probe && s.dt_prev > 0 ?
+               filter_loss(s, Q, (Qwarm, warmspace), s.dt_prev, sync_host!,
+                           mass0) : 0.0
+        push!(samples, (s.t, mol, shear, bulk, pdil, filt, length(ts)))
+        _art_restore!(s, Q, art_saved)
+        s.tstage = tstage_saved
         nothing
     end)
     callbacks = (record, split)
@@ -598,6 +698,7 @@ const DEFAULTS = (N = 32, tfinal = 10.0, configs = "off:1,on:1",
                   mu_sensor = :strain, beta_sensor = :strain, reduction = :sum,
                   precision = "float64", backend = "cpu",
                   refine = 0, tile = 0, subcycle = false,
+                  filter_probe = true,
                   snapshots = "", snapshot_dir = "tgv_snapshots")
 
 function parse_configs(spec)
@@ -708,6 +809,7 @@ function main(opt, backend)
                                       reduction=opt.reduction, T=T,
                                       backend=backend, refine=opt.refine,
                                       tile=opt.tile, subcycle=opt.subcycle,
+                                      filter_probe=opt.filter_probe,
                                       snapshots=snapshots,
                                       snapshot_stem=snapshot_stem(
                                           opt.snapshot_dir, N, T, cfg, alphaf,
@@ -736,7 +838,7 @@ function main(opt, backend)
         end
         solver, ts, kes, samples =
             result.solver, result.ts, result.kes, result.samples
-        # Window for every rate reported below — see `windowed_rate`. Clamped so
+        # Window for every rate reported below (see `windowed_rate`). Clamped so
         # a short run (a low `nmax`, or a smoke test) still gets a window it can
         # fit rather than one spanning the whole history.
         w = max(min(window, length(ts) ÷ 8), 1)
@@ -774,9 +876,9 @@ function main(opt, backend)
                 rates[imax-1], ts[imax], 2w + 1)
         # Against the spectral reference: the peak seen through the same boxcar,
         # then the two history misfits. One scalar peak fitted with one parameter
-        # always succeeds, so the misfits are what separates a filter setting
-        # that reproduces the dissipation history from one that lands on its
-        # maximum by cancellation.
+        # always succeeds, so the misfits, not the peak, separate a filter
+        # setting that reproduces the dissipation history from one that lands
+        # on its maximum by cancellation.
         halfwidth = (ts[min(imax + w, last_full)] - ts[max(imax - w, 1)]) / 2
         wpk, wpt = windowed_reference_peak(ref, halfwidth)
         mis = reference_misfit(ref, ts, kes, w, last_full)
@@ -791,33 +893,39 @@ function main(opt, backend)
         # stops early and every t is below tfinal.
         imax >= last_full &&
             println("    NOTE: still rising at the last step, so this is not a " *
-                    "resolved peak — either the run was cut short of t = 9 " *
+                    "resolved peak: either the run was cut short of t = 9 " *
                     "(check nmax=) or the configuration is diverging.")
-        println("     t     eps_mol     eps_mu*    eps_beta*    -dKE/dt   " *
-                "mu*/visc  filter")
-        for (t, mol, shear, bulk, idx) in samples
+        println("     t      eps_mol      eps_mu*    eps_beta*     eps_filt" *
+                "       p*divu      -dKE/dt   unattr")
+        for (t, mol, shear, bulk, pdil, filt, idx) in samples
             (idx < 2 || idx >= length(ts)) && continue
             total = windowed_rate(ts, kes, idx, w)
-            visc = mol + shear + bulk
-            @printf("  %5.2f  %.4e  %.4e  %.4e  %.4e  %6.1f%%  %6.1f%%\n",
-                    t, mol, shear, bulk, total,
-                    100 * shear / max(visc, 1e-300),
-                    100 * (total - visc) / max(abs(total), 1e-300))
+            # What no measured channel accounts for. Pressure work enters with
+            # the opposite sign, since it moves energy between kinetic and
+            # internal rather than removing it. This column used to be
+            # labelled "filter" and carried the filter, the pressure work and
+            # every numerical error together.
+            unattr = total - (mol + shear + bulk + filt - pdil)
+            @printf("  %5.2f %11.4e %11.4e %11.4e %11.4e %11.4e %11.4e %6.1f%%\n",
+                    t, mol, shear, bulk, filt, pdil, total,
+                    100 * unattr / max(abs(total), 1e-300))
         end
-        # The calibration readout, one line per configuration. Comparing filter
-        # share across a sweep by eye over several hundred table rows is not
-        # something anyone does reliably, and filter share is the whole question.
-        usable = filter(s -> 2 <= s[5] < length(ts), samples)
+        # The calibration readout, one line per configuration, so that the
+        # filter share can be compared across a sweep without reading several
+        # hundred table rows.
+        usable = filter(s -> 2 <= s[7] < length(ts), samples)
         isempty(usable) && continue
-        t, mol, shear, bulk, idx =
-            usable[argmin(abs.(getindex.(usable, 5) .- imax))]
+        t, mol, shear, bulk, pdil, filt, idx =
+            usable[argmin(abs.(getindex.(usable, 7) .- imax))]
         total = windowed_rate(ts, kes, idx, w)
         share(x) = 100 * x / max(abs(total), 1e-300)
-        # Nearest sample to the peak, not the peak step itself — diss_split only
-        # runs every `sample=` steps.
-        @printf("at peak t=%5.2f:  mol %5.1f%%  mu* %5.1f%%  beta* %5.1f%%  FILTER %5.1f%%\n",
-                t, share(mol), share(shear), share(bulk),
-                share(total - (mol + shear + bulk)))
+        # Nearest sample to the peak, not the peak step itself, since the budget
+        # pass only runs every `sample=` steps.
+        @printf("at peak t=%5.2f:  mol %5.1f%%  mu* %5.1f%%  beta* %5.1f%%",
+                t, share(mol), share(shear), share(bulk))
+        @printf("  filter %5.1f%%  pdil %5.1f%%  unattr %5.1f%%\n",
+                share(filt), share(-pdil),
+                share(total - (mol + shear + bulk + filt - pdil)))
     end
     if Float64 in precisions && Float32 in precisions && rank == 0
         println("\n=== precision comparison ===")

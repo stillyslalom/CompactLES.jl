@@ -43,14 +43,15 @@ live. `libmpi` is C, so the path's compiler does not affect the ABI, but if
 build of the same version. Prefer an MPICH-ABI implementation (MVAPICH2, MPICH)
 over OpenMPI.
 
-Three csh traps, since LC logins default to tcsh and every command in this file
-is a `julia -e` one-liner. `module` exists only in csh, and `2>/dev/null` does
-not parse there ("Ambiguous output redirect") -- use `>&`. A single-quoted string
-may not span a newline, so a multi-line `-e '...'` ends the quote at the first
-line break and reports "Unmatched '." And `!` still triggers history expansion
-inside single quotes, so `set_preferences!` and `set_libraries!` must be written
-`set_preferences\!`. Running the setup commands from a `bash` subshell avoids
-all three; `setenv` variables and loaded modules are inherited.
+Three csh traps apply, since LC logins default to tcsh and every command in
+this file is a `julia -e` one-liner. `module` exists only in csh, and
+`2>/dev/null` does not parse there ("Ambiguous output redirect"); use `>&`
+instead. A single-quoted string may not span a newline, so a multi-line
+`-e '...'` ends the quote at the first line break and reports "Unmatched '".
+And `!` triggers history expansion even inside single quotes, so
+`set_preferences!` and `set_libraries!` must be written `set_preferences\!`.
+Running the setup commands from a `bash` subshell avoids all three; `setenv`
+variables and loaded modules are inherited.
 
 If `MPI.Init` then hangs, or every rank reports itself as rank 0 of a 1-rank
 world (plausible output at ~1/N speed, not an error), the launcher needs a
@@ -85,15 +86,16 @@ srun -n 448 --cpu-bind=threads julia --project=. -t 1 \
 
 ### HDF5 against a system MPI
 
-Setting `binary = "system"` makes HDF5_jll select its MPI-enabled variant, which
-pulls in `MPICH_jll`, whose `__init__` `dlopen`s an artifact `libmpifort.so`
-needing `MPIR_fortran_false` -- a symbol MPICH's `libmpi` exports and MVAPICH2's
-does not. `using HDF5` then fails to precompile. The MPICH *ABI* is compatible;
-the JLL's Fortran layer is not.
+Setting `binary = "system"` makes HDF5_jll select its MPI-enabled variant,
+which pulls in `MPICH_jll`. That package's `__init__` `dlopen`s an artifact
+`libmpifort.so` that needs the symbol `MPIR_fortran_false`, which MPICH's
+`libmpi` exports and MVAPICH2's does not, so `using HDF5` fails to precompile.
+The MPICH ABI is compatible; the JLL's Fortran layer is not.
 
 The fix is a system parallel HDF5 built against the same MPI, which removes
-HDF5_jll and MPICH_jll from the picture. `HDF5.API.set_libraries!` cannot install
-it, since it needs `using HDF5` to work first, so write the preference directly:
+HDF5_jll and MPICH_jll from the load path. `HDF5.API.set_libraries!` cannot
+install it, since it requires `using HDF5` to succeed first, so write the
+preference directly:
 
 ```bash
 julia --project=. -e 'using Preferences; set_preferences!(
@@ -102,24 +104,25 @@ julia --project=. -e 'using Preferences; set_preferences!(
     "libhdf5_hl" => "<prefix>/lib/libhdf5_hl.so"; force = true)'
 ```
 
-Check that `ldd <prefix>/lib/libhdf5.so | grep -i mpi` resolves to the same
-`libmpi` given to MPIPreferences before trusting it, load the HDF5 module in the
-launch environment as well as at setup (`dlopen` has no RPATH), and verify with
-`HDF5.API.libhdf5`, `HDF5.API.h5_get_libversion()` and `hdf5_parallel()`. A
-leftover failure to precompile HDF5_jll is benign once the preference is set:
-the JLL remains a dependency but is never loaded.
+Before relying on it, check that `ldd <prefix>/lib/libhdf5.so | grep -i mpi`
+resolves to the same `libmpi` given to MPIPreferences. Load the HDF5 module in
+the launch environment as well as at setup, since `dlopen` has no RPATH, and
+verify with `HDF5.API.libhdf5`, `HDF5.API.h5_get_libversion()` and
+`hdf5_parallel()`. A leftover failure to precompile HDF5_jll is benign once the
+preference is set: the JLL remains a dependency but is never loaded.
 
 On rzhound this is `hdf5-parallel/1.14.0` under the
 `MPI/intel-classic/2021.6.0-magic/mvapich2/2.3.7` hierarchy. It gives
-`hdf5_parallel() == true` and the collective-open path in `with_shared_file`,
-which is otherwise unexercised: a 64 cubed snapshot written that way at 16 ranks
-reproduces a serial single-process write to five or six digits per spectral
-shell, diverging only where the two grids differ.
+`hdf5_parallel() == true` and exercises the collective-open path in
+`with_shared_file`, which no workstation reaches: a 64 cubed snapshot written
+that way at 16 ranks reproduces a serial single-process write to five or six
+digits per spectral shell, diverging only where the two grids differ.
 
-Writing is fast enough to ignore. Two 151 MB checkpoints from a 128 cubed run
-over 224 ranks cost under 1.5% of an 1176 s run, together with the per-step
-reductions of the same callback list. The transfer-mode note at the top of
-`ext/CompactLESHDF5Ext.jl` carries the measurement and the decision it settles.
+Write cost is negligible. Two 151 MB checkpoints from a 128 cubed run over 224
+ranks cost under 1.5% of an 1176 s run, and that figure also includes the
+per-step reductions of the same callback list. The transfer-mode note at the
+top of `ext/CompactLESHDF5Ext.jl` records the measurement and the resulting
+decision.
 
 ### One home directory, several clusters
 
@@ -292,6 +295,34 @@ measurement.
 A `JULIA_NUM_THREADS` in a login file overrides the default when a launch omits
 `-t`; a command-line `-t` wins, so the setting can still affect probes. The probe
 reports `nthreads` for this reason.
+
+### Batch scripts
+
+`bench/slurm/` holds the scripts submitted for the N1 filter campaign,
+`n1_legs23.sbatch` and `n1_closure128.sbatch` at 224 ranks and
+`n1_confirm256.sbatch` at 896, kept as worked examples rather than as tooling.
+Four practices in them are not implied by the launch rules above and belong in
+any new script:
+
+- **Precompile serially, in the same environment, inside the job.** One `julia
+  --project=. -e 'using CompactLES, HDF5; println(hdf5_parallel())'` before the
+  first `srun`. Every checkout shares one depot pidfile, so several hundred
+  ranks racing for it is the documented way to hang a job with no output, and
+  selecting a system MPI turns off the workload in `src/precompile.jl`, so the
+  ranks would otherwise compile it themselves.
+- **Guard the environment variables the script reads, and exit if one is
+  unset.** A login shell that did not export `$CLES` or `$LFILES` otherwise
+  spends the allocation running from the wrong directory or writing nowhere.
+- **Run `lfs setstripe` on the output directory before the run**, with a count
+  matching the writer's parallelism. HDF5 snapshots at 256³ are 1.2 GB each.
+- **Run `clusterprobe.jl` at any new node or rank count**, in the same
+  allocation, before the long `srun`. It records the CPU mask, the node
+  distribution and the decomposition against which the timings are then read.
+
+The login shell on rzhound is tcsh, and the csh traps under
+[Configuring MPI](#configuring-mpi) apply inside a batch script as well, so
+keep inline `julia -e` expressions to one line. Pass `--handle-signals=no` to
+a sweep; Ctrl-C has no code fix.
 
 ## Scaling, measured
 

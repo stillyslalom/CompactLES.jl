@@ -18,7 +18,7 @@ redistribution requires them.
 
 `NOTICE.txt` is reproduced unchanged, as Apache 2.0 §4(d) requires. It therefore
 lists upstream paths that are **not** vendored here (`data/thermo.lib`,
-`data/trans.lib`, `samples/*`, `source/bind/python/cea/samples/*`) — those belong
+`data/trans.lib`, `samples/*`, `source/bind/python/cea/samples/*`); those belong
 to the full CEA distribution, not to this checkout. The four files above are
 everything that was taken.
 

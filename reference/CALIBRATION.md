@@ -62,9 +62,9 @@ constant in that list.
 | `detector` | `:delta4` | provisionally | [`:d8` improves six of seven battery columns](#the-ringing-detector) and removes the ν = 1 and ν = 2 restrictions, at 40% of the ν = 3 timestep and +19% on the RHS. |
 | `species_flux` | `:fickian` | provisionally | [The bulk channel](#the-bulk-species-channel) is at least as good on every measured column, but the four constants are fitted on the Fickian one. |
 | `cfl` | 0.5 | **no** | [Use 0.3 with shocks](#cfl-and-the-symmetry-cell-restriction) and `StepControl(retries = 4)`. Converging geometry tolerates 0.4 (ν = 3) and 0.2 (ν = 2). |
-| `filter_cfl` | 0.0 | provisionally | [The unrelaxed formulation](#the-compact-filter) dissipates per application. A positive value makes it a rate; held at 0 pending the α and cadence fit. |
-| `filter_interval` | 1 | unfitted | Never calibrated. Every constant above is conditional on `compact_filter(0.45)` applied every step. |
-| `compact_filter` α | 0.45 | unfitted | As above. The reference history and the [fit instrument](#the-fit-instrument) are in place; the fit itself needs the 3-D campaign. |
+| `filter_cfl` | 0.0 | provisionally | [The unrelaxed formulation](#the-compact-filter) dissipates per application. A positive value makes it a rate and [removes the CFL dependence](#the-relaxation-leg); held at 0 until the relaxed formulation has been run through the shock battery at its production CFL numbers. |
+| `filter_interval` | 1 | yes | [Redundant with α](#cadence-and-alpha-are-one-axis): diluting the filter in time is equivalent to weakening the pass. Every constant above is conditional on `compact_filter(0.45)` applied every step. |
+| `compact_filter` α | 0.45 | **no** | Too strong at 128³ and 256³. The [128³ fit](#the-alpha-sweep-at-128) gives 0.49, which [does not transfer to 256³](#the-256-confirmation); 0.49 completes the [shock battery](#the-battery-under-alpha). Not moved because every constant above was fitted under 0.45. |
 
 ## The battery
 
@@ -227,12 +227,17 @@ spherical origin, and no accuracy lower bound.
 
 ### Taylor–Green
 
-`bench/tgv_energy.jl` runs TGV at Re = 1600 and splits −dKE/dt by mechanism:
-molecular stress, artificial shear μ\*, artificial bulk β\*, and the residual,
-which is the compact filter plus numerical loss. Channel shares at the
-dissipation peak, artificial properties on, `filter_interval = 1`. Every row but
-128³ uses the Gaussian smoother; that campaign predates its adoption and ran
-under `:compact`:
+`bench/tgv_energy.jl` runs TGV at Re = 1600 and splits −dKE/dt by mechanism.
+The table below is the split the script printed before September 2026:
+molecular stress, artificial shear μ\*, artificial bulk β\*, and a residual,
+−dKE/dt − (mol + μ\* + β\*), labelled `filter`. That residual contains the
+pressure work and the numerical error as well as the filter's dissipation. The
+script now measures the filter pass directly and prints the pressure work as a
+separate channel ([the measured budget](#the-measured-budget)); the tables in
+this file that predate the change are on the residual definition. Channel
+shares at the dissipation peak, artificial properties on, `filter_interval = 1`.
+Every row but 128³ uses the Gaussian smoother; that campaign predates its
+adoption and ran under `:compact`:
 
 ```
 resolution   peak -dKE/dt        vs reference   molecular   mu*    beta*   filter
@@ -256,20 +261,82 @@ the row can take. β\* is negligible at every resolution because
 dilatation is negligible at Ma 0.1, which agrees with the role of `C_beta` as a
 shock parameter.
 
-These comparisons were previously taken against the rounded `1.2e-2 at t = 9`
-quoted from the figure, which is 6.7% below the tabulated peak. That rounding is
-larger than most of the differences it was used to judge, and the readings it
-produced invert against the real value: 128³, described as "within 1% of the
-reference", is the worst of the resolved rows, and 256³ is the best. The trend
-with resolution is not monotone, since 64³ is no worse than −3.1% and 128³ is
-−6.0%, and the rows differ in smoother, backend and machine, since 128³ ran
-under `:compact` on rzhound and 256³ under the Gaussian on MI300A, so nothing
-here separates a resolution effect from a configuration one.
+These comparisons were previously made against the rounded `1.2e-2 at t = 9`
+quoted from the figure, which is 6.7% below the tabulated peak. The rounding
+error is larger than most of the differences it was used to judge, and
+correcting it reverses two of the earlier readings: 128³, previously described
+as within 1% of the reference, is the worst of the resolved rows, and 256³ is
+the best. The trend with resolution is not monotone, since 64³ is no worse than
+−3.1% and 128³ is −6.0%. The rows also differ in smoother, backend and machine,
+128³ having run under `:compact` on rzhound and 256³ under the Gaussian
+smoother on MI300A, so a resolution effect cannot be separated from a
+configuration effect here.
 
 The 128³ runs used 224 ranks over two rzhound nodes at 20–25 minutes each. The
 256³ run was the first production-scale run on the GPU target: 4 MI300A APUs,
 `backend=amdgpu`, `flux run -N1 -n4` at `-t 1`, 24,490 steps in 3.69 h, carrying
 the device stall cost documented in `reference/AMR_GPU.md`.
+
+<a id="the-measured-budget"></a>
+
+### The measured budget
+
+`bench/tgv_energy.jl` measures five channels of −dKE/dt: molecular
+dissipation, μ\*, β\*, the compact filter, and the reversible pressure work
+∫p∇·u. The remainder is printed as `unattr`.
+
+The filter column of every table above this section is a different quantity:
+the residual −dKE/dt − (mol + μ\* + β\*), which contains the pressure work,
+the aliasing and dispersion error and the time-integration error together with
+the filter's dissipation. The two definitions are not comparable. A table that
+reports μ\*/filter ratios or filter shares without an `unattr` column beside
+them is on the residual definition.
+
+The filter's dissipation cannot be measured on the state a callback sees,
+because that state has already been filtered in the current step. A second pass
+removes, at each wavenumber, the first pass's loss scaled by the square of the
+transfer function, and so understates the loss most where the filter acts.
+`filter_loss` therefore advances a copy of the state by one step and measures
+the kinetic energy removed by a `filter_state!` pass on that copy, which is the
+loss the run incurs at its next step.
+
+At 32³ to t = 10 under `:compact`, at the peak:
+
+```
+             mol     mu*    beta*   filter   p*divu   unattr
+measured    12.1%    4.7%    0.0%    84.1%     0.4%    -1.3%
+residual    12.1%    4.7%    0.0%    83.1%       -        -
+```
+
+The residual was one point low here, so at 32³ it was an adequate proxy.
+Whether it remains one at higher resolution depends on how the absorbed error
+scales, which has not been measured. If the error stays near one point of
+−dKE/dt while the filter's share falls to 12.8% at 256³, the correction is
+about 1% of the channel at 32³ and about 8% at 256³. The 128³ and 256³ rows
+have not been remeasured.
+
+The −1.3% `unattr` means that the measured channels slightly over-account for
+the loss. Two candidate causes are the trial step, which reads the filter's
+loss on the next step's state rather than the current one, and the windowed
+estimate of −dKE/dt itself. Neither has been isolated.
+
+Two checks were made on the instrument. With the filter off at 16³ the budget
+closes to 0.0%, with molecular dissipation at 100.8% and pressure work at
+−0.8%. This fixes the sign convention: pressure work enters −dKE/dt with the
+opposite sign to a dissipation, since it exchanges energy between the kinetic
+and internal forms rather than removing it. The early negative residual that
+the script's header had attributed to pressure-dilatation is now measured to be
+exactly that.
+
+A diagnostic on this case must restore the artificial coefficient arrays it
+writes. `diss_split` and the filter probe both recompute the coefficients into
+the solver's own storage, and `max_rate` sizes the next step from that storage
+without recomputing, so an unbracketed sample perturbs the trajectory it is
+measuring. The budget pass therefore brackets itself with `art_block` and
+`set_art_block!`. The perturbation is below the reading at production times:
+32³ to t = 10 agrees on the peak to five digits and on the kinetic-energy
+misfit to 0.013% with and without the bracket, and the difference reaches 1.9%
+only at 16³ to t = 1, where the peak is still rising.
 
 **Refinement does not separate μ\* from the filter.** Their ratio is invariant
 across the refinement. The 32³ point below is the earlier `:compact` run
@@ -294,8 +361,8 @@ The sweep is a `:compact` campaign, taken before the Gaussian smoother became
 the default. The smoother sets how the sensor feeding μ\* is smoothed, so these
 shares are not the shipped configuration's. The same point under the Gaussian
 gives 1.2120e-2 at t = 8.89 with 61.1 / 2.4 / 36.4 against 60.4 / 2.3 / 37.3
-([the α sweep](#the-alpha-sweep-at-128)), 0.63% apart in the peak, so nothing
-below changes.
+([the α sweep](#the-alpha-sweep-at-128)), 0.63% apart in the peak, so the
+conclusions below are unaffected.
 
 **The 128³ peak does not determine `C_mu`.** Every value underpredicts the
 reference peak and raising the constant moves further away, so the sweep has no
@@ -309,14 +376,67 @@ carried forward as a candidate default on this evidence.
 The table still establishes that the peak is monotone in `C_mu` and weakly
 dependent on it, and that the residual it sits in belongs to the resolution and
 configuration rather than to the coefficient, since the 256³ row overshoots by
-1.6% on the same estimator. **Retain 0.002**, as a value the case is consistent
-with rather than one it selects. The upper end of the band remains excluded by
+1.6% on the same estimator. **Retain 0.002**, as a value consistent with the
+case rather than one determined by it. The upper end of the band remains excluded by
 the one-dimensional result that Noh ν = 3 does not complete at 0.008.
 
 The μ\* calculation costs 43% of wall time at 128³, 21% per step from
 `compute_artificial!` plus 18% more steps. Channel shares scale as expected: μ\*
 is 2.3% of the sink at `C_mu = 0.002` and 8.2% at 0.008, while the filter share
 moves 37.2% to 33.1%.
+
+<a id="the-mu-controls-at-64"></a>
+
+### Removing μ\* improves the fit at 64³
+
+If μ\* acted as a subgrid closure on this case, removing it would degrade the
+histories. Instead it improves them, at both filter strengths and on every
+estimator. Three controls were run at 64³ with the Gaussian smoother,
+`cfl = 0.6` and `filter_interval = 1`: the shipped configuration, `C_mu = 0`
+with β\* and κ\* retained, and every artificial property off.
+
+```
+alpha = 0.499        peak vs ref   peak time   KE misfit   -dKE/dt misfit
+full (C_mu 0.002)      +6.97%        -0.50      2.532e-2       1.366e-1
+C_mu = 0               +6.39%        -0.50      1.412e-2       9.936e-2
+art off                +5.32%        -0.42      1.176e-2       8.241e-2
+
+alpha = 0.45
+full (C_mu 0.002)      -1.57%        -0.45      4.137e-2       1.777e-1
+C_mu = 0               -1.32%        +0.09      3.831e-2       1.646e-1
+art off                -0.40%        -0.02      3.446e-2       1.593e-1
+```
+
+The ordering is monotone in all four columns and holds under the production
+filter as well as the near-off one, so it is not an artifact of weak filtering.
+μ\* carries 17.6% of the sink at α = 0.499 and 4.7% at α = 0.45, and the
+histories are worse for it in both cases. On this case the best-fitting value
+of `C_mu` is zero.
+
+This does not show that 0.002 is wrong; it shows that the value cannot be
+chosen on Taylor–Green. The case is close to resolved at 64³ and closer at
+128³ and 256³, so what is measured is the excess dissipation a setting adds
+rather than the subgrid dissipation it contributes. `C_mu` has to be fitted on
+a case with an unresolved cascade, and the upper bound continues to come from
+the one-dimensional battery of `bench/artcal.jl`.
+
+The art-off row at α = 0.45 matches the windowed reference peak to −0.40% and
+its time to −0.02, the closest agreement recorded on this case. The same row
+carries the worst kinetic-energy misfit of its arm, 3.446e-2 against 1.176e-2
+at α = 0.499. The two estimators disagree sharply at this resolution, and the
+history is the more reliable of the two ([the estimator
+note](#read-the-rate-over-a-window)).
+
+The budget closes to between −3.0% and +1.1% across the α = 0.45 arm. Under the
+near-off filter the deficit grows to −3.8%, −6.1% and −12.8% as the damping is
+removed. Two explanations remain and the data does not separate them. A central
+compact scheme without dealiasing produces energy at the grid scale, which the
+filter then removes on top of the physical cascade, so the measured
+dissipations exceed the observed loss. Alternatively, the windowed −dKE/dt is
+compared against instantaneous channel values at a sample that may sit on the
+curved flank of the peak rather than at it. A proportional bias in the filter
+probe is excluded, since the deficit is largest where the filter's share is
+smallest.
 
 ### The filter is the stabilizer
 
@@ -336,8 +456,8 @@ properties disabled and the filter on reaches t = 10. The 128³ failure is a cle
 energy blow-up rather than the dispersive-undershoot signature of the shock
 cases: KE tracks the filtered run to within 0.1% until t ≈ 4.4, turns upward, and
 triples before positivity goes, with `dt` collapsing to 2e-60. TGV is unforced,
-so rising KE is unambiguously numerical. The filter owns essentially all of the
-grid-scale sink whatever its share of the total, and is therefore necessary and
+so rising KE is unambiguously numerical. The filter supplies essentially all of
+the grid-scale sink whatever its share of the total, and is therefore necessary and
 sufficient for stability at this resolution while the Cook properties are
 neither. Only the art-on leg was run at 256³, so this statement rests on 128³.
 
@@ -367,19 +487,22 @@ t = 10.00 against the true 1.2065e-2 at t = 8.77. `bench/tgv_energy.jl` excludes
 that step.
 
 **Recommendation: retain 0.002.** Do not raise it past 0.008. The resolved
-three-dimensional shear case is consistent with the default and does not select
-it, for the reason above: at 128³ the peak carries a 6% one-signed residual that
-the coefficient does not control, so the 1.7% it does control cannot be read off
-against an external value. The peak is spent as an estimator here.
+three-dimensional shear case is consistent with the default but does not
+determine it, for the reason above: at 128³ the peak carries a 6% one-signed
+residual that the coefficient does not control, so the 1.7% it does control
+cannot be read off against an external value. The peak is therefore not usable
+as an estimator at this resolution.
 
-The replacement is the history misfit. `bench/tgv_energy.jl` now reports the
-relative L2 distance between a run's kinetic-energy and −dKE/dt histories and the
-vendored reference's, over every step of the run, which is a curve fit rather
-than one scalar fitted with one parameter. Ranking `C_mu` on it needs a
-resolution whose own history error is below the effect size, and it needs the
-filter settled first, since the fit stays conditional on `compact_filter(0.45)`
-applied every step and, under `filter_cfl = 0`, on the CFL as well. Both belong
-to N1.
+The history misfit is the replacement. `bench/tgv_energy.jl` reports the
+relative L2 distance between a run's kinetic-energy and −dKE/dt histories and
+the vendored reference's, over every step of the run, which is a curve fit
+rather than one scalar fitted with one parameter. Ranking `C_mu` on it requires
+a resolution whose own history error is below the effect size, and requires the
+filter to be settled first, since the fit stays conditional on
+`compact_filter(0.45)` applied every step and, under `filter_cfl = 0`, on the
+CFL as well. Both belong to N1. The 64³ controls below show a further
+difficulty: on this case the best-fitting `C_mu` on the history misfit is zero
+([removing μ\*](#the-mu-controls-at-64)).
 
 ## C_D, the species diffusivity
 
@@ -1099,8 +1222,11 @@ here and it has never been calibrated. Two halves separate. The formulation half
 is measured and delivered: the filter removes energy per application, so its
 dissipation is not a rate and does not converge as `dt → 0` at fixed resolution,
 and `filter_cfl` makes it a rate. The constant half, fitting α, the cadence and
-the reference CFL against a reference dissipation history, is open and requires
-the 3-D campaign. Its reference and its estimator are now in place.
+the reference CFL against a reference dissipation history, was run at 128³ and
+checked at 256³ ([the fit instrument](#the-fit-instrument) and the sections
+following it). The cadence is redundant with α, the relaxed formulation removes
+the CFL dependence, and the α that fits at 128³ does not transfer to 256³, so
+the default has not moved.
 
 ### Dissipation per application
 
@@ -1189,20 +1315,20 @@ reproducible at the CFL it was taken at, so they should be settled together.
 
 ### The fit instrument
 
-`bench/tgv_energy.jl` crosses `alphaf`, `filter_cfl` and `cfl` as comma-separated
-lists against `configs`, whose `filter_interval` field is the cadence, so one
-invocation covers a grid of the three coupled filter settings. Each point is
-scored by the relative L2 distance of its kinetic-energy and −dKE/dt histories
-from the vendored reference, over every step of the run, alongside the peak seen
-through the run's own window.
+`bench/tgv_energy.jl` takes `alphaf`, `filter_cfl` and `cfl` as comma-separated
+lists and crosses them with `configs`, whose `filter_interval` field is the
+cadence, so one invocation covers a grid of the three coupled filter settings.
+Each point is scored by the relative L2 distance of its kinetic-energy and
+−dKE/dt histories from the vendored reference over every step of the run, and
+by the peak seen through the run's own window.
 
 The score is a curve fit rather than a scalar. `C_mu` was fitted on one scalar
-with one parameter, which always succeeds, and the correction above shows what
-that costs ([Taylor–Green](#taylorgreen)). Both misfits are normalized by the reference's
-own RMS over exactly the steps compared, so each is dimensionless and falls as
-the fit improves. The rate is compared only where the full window fits inside
-the run, and the truncated final step is excluded from both, for the reasons in
-[the estimator note](#read-the-rate-over-a-window).
+with one parameter, which always succeeds, and the correction above shows the
+consequence ([Taylor–Green](#taylorgreen)). Both misfits are normalized by the
+reference's own RMS over the steps compared, so each is dimensionless and falls
+as the fit improves. The rate is compared only where the full window fits
+inside the run, and the truncated final step is excluded from both, for the
+reasons in [the estimator note](#read-the-rate-over-a-window).
 
 A 32³ shakeout on the default configuration, Gaussian smoother, `cfl = 0.6`,
 `filter_interval = 1`, artificial properties on:
@@ -1214,16 +1340,16 @@ alphaf   steps   peak -dKE/dt        vs window   KE misfit   -dKE/dt misfit   fi
 0.49      3386   1.3797e-2 @ 6.71     +12.3%      1.245e-1     6.665e-1       74.7%
 ```
 
-The α = 0.45 row is the check on the instrument: it returns 1.4217e-2 against the
-recorded 1.4216e-2 and the recorded channel shares exactly, with the peak time
-0.03 away, one sample interval. All three estimators then rank α = 0.49 first,
-but they disagree below it — the peak and the dissipation misfit put 0.40 second,
-the kinetic-energy misfit puts 0.45 second — so a three-point sweep is already
-enough to separate them.
+The α = 0.45 row is the check on the instrument: it returns 1.4217e-2 against
+the recorded 1.4216e-2 with the recorded channel shares reproduced exactly, and
+the peak time 0.03 away, one sample interval. α = 0.49 is first on all three
+estimators; below it the orderings differ, with 0.40 second on the peak and
+the dissipation misfit and 0.45 second on the kinetic-energy misfit. A
+three-point sweep is therefore already enough to separate the estimators.
 
 These are 32³ numbers and nothing follows from them about the default. The best
-misfits are 0.12 and 0.67, so the run does not resemble the reference history at
-this resolution at all, and the weakest filter wins because 82% of the sink is
+misfits are 0.12 and 0.67, so the run does not resemble the reference history
+at this resolution, and the weakest filter wins because 82% of the sink is
 filter. The fit belongs at 128³ or above, where the filter's share is 37% or
 less. The table shows only that the axes move the score, that the score is
 reproducible, and that the instrument reproduces the archive.
@@ -1232,14 +1358,16 @@ reproducible, and that the instrument reproduces the archive.
 
 ### The α sweep at 128³
 
-Four values at 128³, 224 ranks over two rzhound nodes, `cfl = 0.6`,
+Five values at 128³, 224 ranks over two rzhound nodes, `cfl = 0.6`,
 `filter_interval = 1`, `filter_cfl = 0`, Gaussian smoother, `C_mu = 0.002`, about
-twenty minutes each:
+twenty minutes each. The α = 0.486 row was measured afterwards, at the value
+where the other four interpolate the peak crossing:
 
 ```
 alphaf   steps   peak -dKE/dt        vs window   KE misfit   -dKE/dt misfit   filter
 0.40     11504   1.1814e-2 @ 8.38      −7.76%     8.986e-3     8.903e-2        38.7%
 0.45     11737   1.2120e-2 @ 8.89      −5.40%     7.019e-3     5.666e-2        36.4%
+0.486    12145   1.2865e-2 @ 8.85      +0.39%     4.919e-3     2.723e-2        29.7%
 0.49     12267   1.3004e-2 @ 8.85      +1.46%     4.887e-3     2.526e-2        27.4%
 0.499    13240   1.3258e-2 @ 8.88      +3.37%     4.750e-3     2.910e-2        15.7%
 ```
@@ -1249,76 +1377,83 @@ Both misfits fall steeply from α = 0.40 to 0.49, by 46% and 72%, against 19% an
 monotone. The α signal grew under refinement rather than shrinking with the
 filter's share of the sink, which is the opposite of what those shares predicted.
 The 32³ misfit is dominated by a resolution error common to every α, at 0.12 to
-0.15, while at 128³ that floor is fifteen times smaller and α accounts for most
-of what remains. The history fit is usable at this resolution and was not usable
+0.15; at 128³ that floor is fifteen times smaller and α accounts for most of
+what remains. The history fit is usable at this resolution and was not usable
 at 32³.
 
-**The dissipation misfit has a minimum at α = 0.49**, and it is the first
-interior optimum in this calibration. The axis to read is `1 − 2α`, which sets
-the per-pass strength and takes the values 0.20, 0.10, 0.02 and 0.002, so the
-four points are uniform in its logarithm. On that axis the kinetic-energy misfit
-falls 6.5e-3 per decade, then 3.0e-3, then 0.14e-3: it has reached a floor that α
-cannot lower. The dissipation misfit turns instead, 15% worse at α = 0.499 than
-at 0.49 against 55% better over the preceding decade. The 32³ sweep produced no
-such point. It ranked the weakest filter first on every estimator, which is a
-boundary fit selecting the least filtering the run survives rather than an
-optimum.
+**The dissipation misfit has a minimum at α = 0.49**, the first interior
+optimum in this calibration. It is a property of this resolution rather than a
+constant, and is absent at 256³
+([the 256³ confirmation](#the-256-confirmation)). The natural axis is
+`1 − 2α`, which sets the per-pass strength and takes the values 0.20, 0.10,
+0.02 and 0.002 at the four original points. On that axis the kinetic-energy
+misfit falls by 6.5e-3 per decade over the first interval, then 3.0e-3, then
+0.14e-3: it has reached a floor that α cannot lower. The dissipation misfit
+turns instead, 15% worse at α = 0.499 than at 0.49 after improving 55% over the
+preceding interval. The 32³ sweep produced no such point: the weakest filter
+scored best on every estimator there, a boundary fit at the least filtering the
+run survives rather than an optimum.
 
-**The peak crosses the reference between α = 0.45 and 0.49.** At 32³ α moved the
-peak 3% and not monotonically; here it moves 12% over the four points,
+**The peak crosses the reference between α = 0.45 and 0.49.** At 32³ α moved
+the peak 3% and not monotonically; here it moves 12% over the four points,
 monotonically, and changes sign. Interpolating in log(1 − 2α) places the
 total-dissipation match at 1 − 2α ≈ 0.028, α ≈ 0.486, just below the misfit
-minimum, so the two estimators agree on a band of roughly 0.485 to 0.49. The peak
-overshoots by 3.37% at α = 0.499, and its response is flattening too, 1.9 points
-per decade over the last interval against 9.8 over the one before. This does not
-restore the peak as a fit criterion on its own. The
-filter is a grid-scale sink and its dissipation is numerical, so a setting that
-reproduces the total says nothing about where the energy sits in wavenumber,
-which is the question the spectra answer. The peak time carries even less: it
-sits on a 1.6% plateau from t = 8.15 to 8.79 at α = 0.40, so the argmax location
-is noise at this resolution.
+minimum, so the two estimators agree on a band of roughly 0.485 to 0.49. The
+peak overshoots by 3.37% at α = 0.499, and its response is flattening as well,
+1.9 points per decade over the last interval against 9.8 over the one before.
+Running α = 0.486 confirms the interpolation and separates the two estimators:
+its peak is 0.39% high, the closest match in the sweep, but its misfits are
+0.7% and 7.8% worse than those at α = 0.49, so the misfit minimum stays at 0.49
+and the peak match sits at 0.486. None of this restores the peak as a fit
+criterion on its own. The filter is a grid-scale sink whose dissipation is
+numerical, so a setting that reproduces the total says nothing about where the
+energy sits in wavenumber, which only the spectra show. The peak time carries
+even less information: at α = 0.40 it sits on a 1.6% plateau from t = 8.15 to
+8.79, so the location of the maximum is noise at this resolution.
 
-The channel split gives the mechanism. Molecular, μ\* and filter shares at the
-peak are 59.6 / 1.7 / 38.7 at α = 0.40, 61.1 / 2.4 / 36.4 at 0.45,
+The mechanism is visible in the channel split. Molecular, μ\* and filter shares at
+the peak are 59.6 / 1.7 / 38.7 at α = 0.40, 61.1 / 2.4 / 36.4 at 0.45,
 68.0 / 4.6 / 27.4 at 0.49 and 75.9 / 8.4 / 15.7 at 0.499. Across the first
 tenfold reduction in `1 − 2α` the filter's dissipation falls only 22%, from
 4.57e-3 to 3.56e-3, while molecular dissipation rises 25% and μ\* triples. A
 weaker filter leaves more energy at the grid scale and acts on that larger
-amplitude, so its dissipation responds far less than its coefficient does. The
-compensation is incomplete, which is why the total rises 10% here rather than
-holding as it does at 32³ under a timestep change
+amplitude, so its dissipation responds far less than its coefficient. The
+compensation is incomplete, and the total rises 10% here rather than holding as
+it does at 32³ under a timestep change
 ([the timestep](#the-timestep-moves-the-attribution-not-the-total)).
 
-Over the last decade the filter's dissipation finally falls 41%, and the
-resolved and μ\* channels more than replace it: molecular rises 14% and μ\*
-by 86%, for a further 2% on the total. **The minimum is therefore a joint one.**
+Over the last decade the filter's dissipation falls 41%, and the resolved and
+μ\* channels more than replace it: molecular dissipation rises 14% and μ\* by
+86%, for a further 2% on the total. **The minimum is therefore a joint one.**
 μ\* grows from 1.7% of the sink at α = 0.40 to 8.4% at 0.499, and from 2.8% to
-10.2% of the molecular viscosity, so as the filter weakens the Cook viscosity
+11% of the molecular dissipation, so as the filter weakens the Cook viscosity
 takes over the grid-scale sink and the overshoot at 0.499 is partly its. The
-turnover locates a best α at `C_mu = 0.002` and not a property of the filter
-alone. A `C_mu` fit is equally conditional on α as well as on the CFL, so the two
-have to be closed together, which is the order N1 and N4 already assume.
+turnover is therefore the best α at `C_mu = 0.002` and not a property of the
+filter alone. A `C_mu` fit is conditional on α in the same way as on the CFL,
+so the two have to be closed together, which is the order N1 and N4 already
+assume.
 
-**The α = 0.45 row does not reproduce the archive 128³ configuration**, although
-it matches it in resolution, rank count, CFL, cadence and `C_mu`: 1.2120e-2 at
-t = 8.89 against 1.2044e-2 at t = 9.06, 11,737 steps against 12,739, and 17% less
-wall time per step. The archive campaign predates the adoption of the Gaussian
-smoother by two weeks, so its 128³ rows are `:compact` runs. A 32³ A/B at the
-current code, otherwise identical, gives 3516 steps under `:compact` against 3078
-under the Gaussian, 14% more, the same sign and order as the 8.5% at 128³, and
-the per-step difference is consistent with `plan_direction` skipping the
-Gaussian's line solve and its collective interface stage, which is worth more at
-224 ranks than the 3.8% it is worth serially, though six weeks of package
-changes also separate the two runs. The same 32³ run reproduces the recorded
-shakeout row exactly, 3078 steps and 1.4217e-2 at t = 6.61 with 12.6 / 5.1 /
-82.2, so the instrument is not the difference. The two 128³ configurations
-agree to 0.63% in the peak and 0.7 points in every channel share regardless.
+**The α = 0.45 row does not reproduce the archive 128³ configuration**,
+although it matches it in resolution, rank count, CFL, cadence and `C_mu`:
+1.2120e-2 at t = 8.89 against 1.2044e-2 at t = 9.06, 11,737 steps against
+12,739, and less wall time per step. The archive campaign predates the adoption
+of the Gaussian smoother by two weeks, so its 128³ rows are `:compact` runs. A
+32³ A/B on the current code, otherwise identical, gives 3516 steps under
+`:compact` against 3078 under the Gaussian, 14% more, the same sign and order
+as the 8.5% at 128³. The per-step difference is consistent with
+`plan_direction` skipping the Gaussian's line solve and its collective
+interface stage, which costs more at 224 ranks than the 3.8% it costs serially,
+although six weeks of package changes also separate the two runs. The same 32³
+run reproduces the recorded shakeout row exactly, 3078 steps and 1.4217e-2 at
+t = 6.61 with 12.6 / 5.1 / 82.2, so the instrument is not the difference. The
+two 128³ configurations agree to 0.63% in the peak and 0.7 points in every
+channel share.
 
 ### Spectra
 
 `bench/tgv_energy.jl snapshots=<times>` writes an HDF5 checkpoint at each listed
 instant and `bench/tgv_spectrum.jl` takes the shell-averaged kinetic-energy
-spectrum from it offline. Nothing in the solver transforms anything: there is no
+spectrum from it offline. The solver computes no transform: there is no
 distributed FFT and no new package dependency, and the postprocessor runs from
 any project carrying HDF5 and FFTW. `run!` shortens a step to land exactly on
 each instant, so snapshots are comparable across a sweep.
@@ -1339,13 +1474,13 @@ flat only to k ≈ 7 and then collapses; at 0.49 it holds to k ≈ 10. The stron
 filter empties the band above half the Nyquist wavenumber and takes the top of
 the inertial range with it, and it has removed 11% more total energy by t = 9.
 
-This is why N1 asks for spectra and not histories alone. −dKE/dt is one number
+For this reason N1 includes spectra as well as histories. −dKE/dt is one number
 per instant, and the sinks compete for a supply fixed at the large scales
 ([the timestep](#the-timestep-moves-the-attribution-not-the-total)), so two
 filter settings can reach nearly the same total while distributing it very
-differently in wavenumber. The high-wavenumber share is the scalar that
-distinguishes them at 32³, where the history misfits do not. The two exchange
-roles at 128³ ([the spectra at 128³](#the-spectra-at-128)).
+differently in wavenumber. At 32³ the high-wavenumber share is the scalar that
+distinguishes them and the history misfits do not. The two exchange roles at
+128³ ([the spectra at 128³](#the-spectra-at-128)).
 
 The sum of the spectrum reproduces the solver's own kinetic energy to 4e-4
 relative at both settings, which is the Parseval check on the normalization; the
@@ -1370,66 +1505,69 @@ alphaf   sum E(k)     vs reference   share above k = 32
 
 Every setting has lost too much energy by t = 9, and the deficit is smallest at
 α = 0.49, a third estimator agreeing with the dissipation misfit's minimum and
-with the peak crossing at α ≈ 0.486. The band above half the Nyquist wavenumber,
-by contrast, grows monotonically by a factor of about 2.4 per step in α while
-`1 − 2α` falls by factors of two, five and ten, so its content responds far less
-than proportionally to the filter's strength, as the filter's dissipation does,
-and it carries no feature at the optimum.
+with the peak crossing at α ≈ 0.486. The band above half the Nyquist
+wavenumber, by contrast, grows monotonically by a factor of about 2.4 per step
+in α while `1 − 2α` falls by factors of two, five and ten. Its content responds
+far less than proportionally to the filter's strength, as the filter's
+dissipation does, and shows no feature at the optimum.
 
-Below k ≈ 15 the three spectra agree to a few percent and are not consistently
-ordered, which is realization scatter and not an α effect. They separate
-monotonically only from k ≈ 18 upward, by 15% at k = 18 and 40% at k = 23. At 32³
-the same comparison separated two settings by a factor of ten at k = 8 and three
-and a half decades at k = 16, which was the Nyquist wavenumber there. The filter
-leaves the resolved spectrum unchanged at 128³ and sets the content of the top
-quarter of wavenumbers, a band holding under 1% of the kinetic energy.
+Below k ≈ 15 the spectra agree to a few percent and are not consistently
+ordered, which is realization scatter rather than an α effect. They separate
+monotonically only from k ≈ 18 upward, by 15% at k = 18 and 40% at k = 23. At
+32³ the same comparison separated two settings by a factor of ten at k = 8 and
+by three and a half decades at k = 16, the Nyquist wavenumber there. At 128³
+the filter leaves the resolved spectrum unchanged and sets the content of the
+top quarter of the wavenumbers, a band holding under 1% of the kinetic energy.
 
-**The excess dissipation is concentrated in transition rather than at the peak.**
-Against the reference at the same instants, −dKE/dt is 11.8%, 9.7% and 6.5% high
-at t ≈ 4.4 for α = 0.40, 0.45 and 0.49; 6.8%, 5.3% and 3.5% high at t ≈ 5.95; and
-11.1%, 6.9% and 2.6% high at t ≈ 8. The run's own peak then arrives early and
-turns over below the reference's. The peak deficit recorded above is a shape
-difference and not a shortage of dissipation: the run dissipates too much and too
-early through transition, where a grid-scale sink has the least to model, and
-reaches the reference's peak time with less energy left to dissipate. The run
-figures are windowed and the reference ones are instantaneous, which biases the
-comparison by well under half a percent
+**The excess dissipation is concentrated in transition rather than at the
+peak.** Against the reference at the same instants, −dKE/dt is 11.8%, 9.7% and
+6.5% high at t ≈ 4.4 for α = 0.40, 0.45 and 0.49; 6.8%, 5.3% and 3.5% high at
+t ≈ 5.95; and 11.1%, 6.9% and 2.6% high at t ≈ 8. The run's own peak then
+arrives early and turns over below the reference's. The peak deficit recorded
+above is a shape difference rather than a shortage of dissipation: the run
+dissipates too much and too early through transition, where a grid-scale sink
+has the least to model, and reaches the reference's peak time with less energy
+left to dissipate. The run figures are windowed and the reference ones
+instantaneous, which biases the comparison by well under half a percent
 ([the window](#read-the-rate-over-a-window)).
 
-At Re = 1600 and ε ≈ 1.28e-2 the Kolmogorov scale is η ≈ 1.18e-2, so `k_max η` is
-0.75 at 128³ and 1.5 at 256³. The dissipation range is not resolved at the
+At Re = 1600 and ε ≈ 1.28e-2 the Kolmogorov scale is η ≈ 1.18e-2, so `k_max η`
+is 0.75 at 128³ and 1.5 at 256³. The dissipation range is not resolved at the
 screening resolution and the numerical sink supplies part of it, so an α fitted
-here is a subgrid tuning at this resolution rather than a constant. Whether the
-fitted value moves is what the 256³ confirmation tests.
+here is a subgrid tuning for this resolution rather than a constant. The 256³
+confirmation shows that the fitted value does move
+([the 256³ confirmation](#the-256-confirmation)).
 
-**The tails carry no pile-up at any α, including the one the histories reject.**
-Every tail steepens toward Nyquist rather than flattening: the decay per
-wavenumber across k = 32 to 48 and then 48 to 64 is 0.69 then 0.61 at α = 0.40,
-0.75 then 0.63 at 0.45, 0.83 then 0.75 at 0.49, and 0.91 then 0.87 at 0.499. At
-Nyquist the four sit at 3.3e-11, 3.3e-10, 5.9e-8 and 2.5e-6, so α = 0.499 holds
-43 times the grid-scale energy of the fitted value and 75,000 times that of the
-strongest filter, and is still three and a half orders below the spectral peak.
-The criterion the postprocessor was built around answers in one direction only
-here: the emptied band is present at α = 0.40, and the pile-up is absent even at
-α = 0.499, where the dissipation history has already turned. The history notices
-first at this resolution.
+**The tails carry no pile-up at any α, including the one the histories
+reject.** Every tail steepens toward Nyquist rather than flattening: the decay
+per wavenumber across k = 32 to 48 and then 48 to 64 is 0.69 then 0.61 at
+α = 0.40, 0.75 then 0.63 at 0.45, 0.83 then 0.75 at 0.49, and 0.91 then 0.87
+at 0.499. At Nyquist the four settings sit at 3.3e-11, 3.3e-10, 5.9e-8 and
+2.5e-6, so α = 0.499 holds 43 times the grid-scale energy of the fitted value
+and 75,000 times that of the strongest filter, and is still three and a half
+orders below the spectral peak. The criterion the postprocessor was built
+around is therefore one-sided at this resolution: the emptied band is present
+at α = 0.40, and the pile-up is absent even at α = 0.499, where the
+dissipation history has already turned. The history is the more sensitive
+indicator here.
 
 The share of the reference's dissipation that the resolved field carries by
-itself rises with α as well: molecular dissipation at the peak is 55%, 58%, 69%
+itself also rises with α: molecular dissipation at the peak is 55%, 58%, 69%
 and 78% of the reference total at α = 0.40, 0.45, 0.49 and 0.499. Even at the
-weakest filter a fifth of the physical dissipation is not on the grid, which is
-what `k_max η` = 0.75 implies. That link runs the other way too, since molecular
-dissipation is weighted by k²: the fit selects a grid-scale energy content of
-about 0.7% above half Nyquist, between the 0.11% the strongest filter leaves and
-the 1.33% at α = 0.499.
+weakest filter a fifth of the physical dissipation is not on the grid, as
+`k_max η` = 0.75 implies. The link runs the other way as well, since molecular
+dissipation is weighted by k²: the fitted α corresponds to a grid-scale energy
+content of about 0.7% above half Nyquist, between the 0.11% the strongest
+filter leaves and the 1.33% at α = 0.499.
 
-**The high-wavenumber share ranks filter strength; it does not locate the
-optimum.** At 32³ it was the discriminating instrument because the histories were
-unusable there. At 128³ the position reverses: the histories carry the minimum
-and the share is monotone in α with no feature at it, since the filter's spectral
-footprint sits in a band holding under 1.5% of the energy. Use the share as the
-bounding check it is, an emptied band below and a pile-up above, and fit on the
-history misfit at any resolution where the history is meaningful.
+**The high-wavenumber share is monotone in filter strength and has no feature
+at the optimum.** At 32³ it was the discriminating instrument because the histories
+were unusable there. At 128³ the roles reverse: the histories carry the
+minimum, and the share is monotone in α with no feature at it, because the
+filter's spectral footprint sits in a band holding under 1.5% of the energy.
+The share is a bounding check, an emptied band below and a pile-up above; the
+fit belongs to the history misfit at any resolution where the history is
+meaningful.
 
 <a id="the-battery-under-alpha"></a>
 
@@ -1449,29 +1587,29 @@ alphaf   Noh1 plat  deficit | Noh2 plat | Noh3 plat | Lax L1  | Shu amp | WC pea
 0.499     0.9987     +49%   |  0.9372   |  0.9763   | 5.7e-3  | 1.6223  | 6.6887
 ```
 
-Nothing fails. Every case completes at every strength, the Woodward–Colella
-collision at a 10⁵ pressure ratio included, which is the battery's pass-or-fail
-robustness floor.
+Every case completes at every strength, the Woodward–Colella collision at a
+10⁵ pressure ratio included, so the battery's robustness floor is met
+throughout.
 
-The columns whose answer comes from outside the code agree with the
+The columns whose reference value comes from outside the code agree with the
 Taylor–Green fit. The Noh plateaus are exact at 4, 16 and 64, and both curved
 geometries are closest at α = 0.49 and fall back at 0.499. The Lax L1 error
 against the exact Riemann solution is flat from 0.45 to 0.49 and 14% worse at
-0.499. Alongside them the planar wall deficit falls from 64% to 49% as the
-filter weakens, which is the error the one-sided rows attack from the other side
+0.499. The planar wall deficit falls from 64% to 49% as the filter weakens, the
+same error that the one-sided closures reduce from the other side
 ([the wall cascade](#the-filters-wall-cascade)), and the Shu–Osher train
-amplitude rises monotonically, since a weaker filter smears the train less.
-Three one-dimensional cases place the same bound the 128³ history does, and none
-of them was used to fit it.
+amplitude rises monotonically, since a weaker filter smears the train less. The
+same bound as the 128³ history therefore follows from three one-dimensional
+cases, none of which was used to fit it.
 
 The two candidate values inside the band are not separable here. α = 0.486
 matches 0.49 on the Shu–Osher amplitude to four digits and on the Noh plateaus
 to the fourth, trailing it by 0.0003 on the spherical plateau and leading it by
 2 points on the planar wall deficit. It is the best row in the table on Lax,
-4.9e-3 against 5.0e-3 at both neighbours, which is the only column besides Noh
-with an answer independent of the code. The choice within 0.485 to 0.49
-therefore falls back to the Taylor–Green misfit, which has never been evaluated
-at 0.486.
+4.9e-3 against 5.0e-3 at both neighbours, the only column besides Noh with a
+reference value independent of the code. The choice within 0.485 to 0.49
+therefore rests on the Taylor–Green misfit, now measured at 0.486 in the sweep
+above.
 
 At the CFL ceiling the reading is less clean:
 
@@ -1488,26 +1626,158 @@ cfl   alphaf | Noh1 plat  deficit | Noh2 plat | Noh3 plat | WC peak
 0.2   0.49   |  0.9992     +52%   |  0.9382   |  0.9773   | 6.6065
 ```
 
-Under the Gaussian smoother the planar wall and the cylindrical axis work at
-`cfl = 0.2` and fail at 0.3, which is the pair of ceilings recorded above, and
-the spherical origin works at 0.3 and fails at 0.4, where 0.4 is recorded. That
-last disagreement is a granularity or policy difference and is not resolved
-here; it does not reach the α comparison, which varies one setting inside one
-table.
+Under the Gaussian smoother the planar wall and the cylindrical axis complete
+at `cfl = 0.2` and fail at 0.3, matching the pair of ceilings recorded above,
+while the spherical origin completes at 0.3 and fails at 0.4, where the
+recorded ceiling is 0.4. That disagreement is a granularity or policy
+difference and is not resolved here; it does not affect the α comparison,
+which varies one setting inside one table.
 
-α moves no ceiling. The one exception is not a raised one: the planar case at
-`cfl = 0.3` keeps positivity at α = 0.486 and 0.49 where α = 0.45 loses it, and
-returns a plateau of 1.0004 and 1.0000 with wall deficits of −208% and −147%, an
-excess where every healthy row carries a deficit, and larger at the weaker of
-the two failures. That is a changed failure mode rather than a working
-configuration, and it sets in somewhere between 0.45 and 0.486.
+α moves no ceiling. The single apparent exception is not a raised one: the
+planar case at `cfl = 0.3` keeps positivity at α = 0.486 and 0.49 where
+α = 0.45 loses it, but returns plateaus of 1.0004 and 1.0000 with wall deficits
+of −208% and −147%, an excess where every healthy row carries a deficit, and
+larger at the weaker of the two failures. That is a changed failure mode rather
+than a working configuration, and it sets in somewhere between α = 0.45 and
+0.486.
 
-**The battery does not veto α = 0.49, and it does not license moving the default
-either.** Every constant in this file was fitted under `compact_filter(0.45)`
-applied every step, so a change to the filter puts `C_beta`, `C_kappa`, `C_D`
-and `C_Y` back in question. `bench/artcal.jl` sweeps each of them against these
-same cases, and those sweeps have to be re-run at the new value before the
-default moves.
+**α = 0.49 is not excluded by the battery, and the battery results do not
+justify moving the default either.** Every constant in this file was fitted
+under `compact_filter(0.45)` applied every step, so a change to the filter puts
+`C_beta`, `C_kappa`, `C_D` and `C_Y` back in question. `bench/artcal.jl` sweeps
+each of them against these same cases, and those sweeps have to be re-run at
+the new value before the default moves.
+
+<a id="cadence-and-alpha-are-one-axis"></a>
+
+### Cadence and α are one axis
+
+`filter_interval` dilutes the filter in time and α weakens each pass. Whether
+the two have to be fitted jointly is one of the questions under N1. Six points
+at 128³, the two α values crossed with `filter_interval` 1, 2 and 4, with the
+other settings those of the sweep above:
+
+```
+interval  alphaf   steps   peak vs window   KE misfit   -dKE/dt misfit   filter
+1         0.45     11737       −5.40%        7.019e-3     5.666e-2         36.4%
+2         0.45     11938       −1.50%        5.447e-3     3.881e-2         33.2%
+4         0.45     12191       +0.65%        4.913e-3     2.627e-2         29.0%
+1         0.49     12267       +1.47%        4.887e-3     2.526e-2         27.4%
+2         0.49     12521       +3.07%        4.911e-3     2.682e-2         24.4%
+4         0.49     12821       +3.12%        4.825e-3     2.800e-2         20.2%
+```
+
+The rows are ordered by `(1 − 2α)/interval`, the per-pass strength divided by the
+cadence, which takes the values 0.10, 0.05, 0.025, 0.02, 0.01 and 0.005 down the
+table. On that axis the dissipation misfit is single-valued with its minimum
+at 0.02, and the α sweep's own points, at 0.20, 0.10, 0.028, 0.02 and 0.002,
+lie on the same curve with the same minimum. **Cadence and α are not
+independent settings.** The two settings closest on the combined axis, α = 0.45 at
+`interval = 4` and α = 0.49 at `interval = 1`, are 25% apart on it and agree to
+0.5% in the kinetic-energy misfit, 4% in the dissipation misfit and 1.6 points
+in the filter's share of the sink, which is the resolving power of the
+instrument here ([the fit instrument](#the-fit-instrument)).
+
+Diluting the filter in time is equivalent to weakening the pass, so
+`filter_interval` is redundant with α for this fit. Fit α at `interval = 1`
+and leave the cadence at 1. The equivalence is established on smooth turbulence
+only. A strong pass applied every fourth step leaves grid-scale energy
+unchecked for three steps, and whether that matters is a question for a
+shocked case; the Taylor–Green histories do not resolve it.
+
+<a id="the-relaxation-leg"></a>
+
+### The relaxation leg
+
+`filter_cfl` is the reference CFL at which one pass is full strength; below it
+each pass is scaled by the running CFL, so that the filter's dissipation per unit
+time stops depending on the timestep ([the relaxed
+formulation](#the-relaxed-formulation)). Four points at 128³ and α = 0.45, `cfl`
+0.3 and 0.6 crossed with `filter_cfl` 0 and 0.6, and deliberately without
+snapshots: `run!` shortens a step to land on a snapshot instant, and a shortened
+step pays a full pass under `filter_cfl = 0` and a scaled one otherwise, which
+would bias this comparison in particular.
+
+```
+cfl   filter_cfl   steps   peak vs window   peak time   KE misfit   -dKE/dt misfit
+0.3   0            23021       −8.04%          −0.68     8.867e-3      8.896e-2
+0.6   0            11737       −5.41%          −0.05     7.019e-3      5.666e-2
+0.3   0.6          23472       −5.20%          −0.08     7.013e-3      5.827e-2
+0.6   0.6          11737       −5.41%          −0.05     7.019e-3      5.666e-2
+```
+
+The relaxed formulation removes the CFL dependence, as intended. Unrelaxed,
+halving the CFL doubles the number of passes and costs 26% in the
+kinetic-energy misfit, 57% in the dissipation misfit and 0.63 in the peak time,
+which is 7% of the run. Relaxed, the two CFL numbers agree to 0.1% in the
+kinetic-energy misfit and 2.8% in the dissipation misfit, and their peak times
+agree to 0.03. The fourth row reproduces the second in every digit, step count
+included, because `filter_cfl = 0.6` at `cfl = 0.6` is a weight of one; this
+is the instrument's own check on the scaling.
+
+**A lower CFL is currently a stronger filter.** Under the default
+`filter_cfl = 0`, halving the timestep, the usual safe response to a marginal
+configuration, doubles the numerical dissipation per unit time and moves the
+answer further from the reference rather than closer, and nothing in the
+output indicates it. Retries, subcycled levels and shortened output steps do
+the same thing locally and intermittently. Relaxation removes the dependence,
+and it is the property that would let an α fitted at one CFL be used at
+another.
+
+Switching it on is not free. The reference CFL fixes the absolute strength, so
+`filter_cfl = 0.6` gives a case running at `cfl = 0.15` a quarter of the
+filtering per unit time it receives today. The one-dimensional battery runs at
+0.15 to 0.4 precisely because those cases are hard to stabilize, so
+`bench/artcal.jl filter` has to clear the policy change at the production CFL
+numbers before it can become a default. That sweep has not been run.
+
+<a id="the-256-confirmation"></a>
+
+### The 256³ confirmation
+
+Three values at 256³, 896 ranks over eight rzhound nodes, otherwise at the
+settings of the α sweep, 1.7 hours each at 65 Mpoint-steps/s:
+
+```
+alphaf   steps   peak -dKE/dt        vs window   KE misfit   -dKE/dt misfit   filter
+0.45     23178   1.3019e-2 @ 8.86      +1.36%     1.191e-3     1.226e-2         11.8%
+0.49     23923   1.2916e-2 @ 8.86      +0.55%     8.122e-4     8.618e-3          6.7%
+0.499    24783   1.2838e-2 @ 8.88      −0.07%     5.161e-4     7.457e-3          2.3%
+```
+
+**The minimum does not transfer.** Both misfits fall monotonically through
+α = 0.499, and the turn the 128³ sweep found there is absent: the dissipation
+misfit is 13% better at 0.499 than at 0.49, where at 128³ it was 15% worse. The
+peak reverses as well. At 128³ the strongest filter undershot the reference
+peak by 7.76% and the weakest overshot by 3.37%; at 256³ every setting
+overshoots, and the overshoot falls as the filter weakens, reaching −0.07% at
+α = 0.499. The weakest filter is now first on all three estimators, the
+boundary fit seen at 32³ and not at 128³.
+
+The reason is visible in the channel split. At fixed α, refinement takes the filter's
+share of the sink at the peak from 36.4% to 11.8% at α = 0.45, from 27.4% to
+6.7% at 0.49 and from 15.7% to 2.3% at 0.499, and the μ\* share falls with it,
+from 2.4% to 0.8% at α = 0.45. Molecular dissipation carries 87% to 96% of the
+sink at 256³ against 61% to 76% at 128³. `k_max η` is 1.5 here and 0.75 there,
+so the dissipation range is resolved and there is nothing left for a numerical
+sink to supply. The best-scoring strength at 128³ is the one that best
+replaces the missing dissipation range at that resolution, and at 256³ no
+replacement is needed.
+
+**α = 0.45 is too strong at both resolutions, and that conclusion transfers**:
+0.49 beats it on every estimator at 128³ and at 256³, and the same ordering
+holds independently on the one-dimensional battery ([the shock battery under
+α](#the-battery-under-alpha)). The interior optimum does not transfer, so
+**α = 0.49 is a 128³ subgrid tuning and not a fitted constant.** The 256³ rows
+place no upper bound on α inside the range that was run. The strength below
+which a resolved run stops being stabilized is open, and the 256³ leg says only
+that it lies above 0.499.
+
+The misfits fall by factors of six to nine and three to five under the
+refinement at fixed α, so the resolution error common to every setting is still
+falling and the 256³ numbers are not at a floor either. The peak still arrives
+early by 0.10 at every α, unchanged from 128³, which is the shape difference
+recorded above and not a filter effect.
 
 <a id="the-filters-wall-cascade"></a>
 
@@ -2320,15 +2590,24 @@ every other probe unchanged. These are fixed boundary-dispatch costs, not timing
 In approximate priority order.
 
 1. **Fit the compact filter.** It is necessary and sufficient for stability at
-   128³ while `filter_interval` and α have never been fitted to anything, which
-   makes every `C_mu` number conditional on `compact_filter(0.45)` every step. The
-   dt-consistency half is [done](#the-compact-filter): the filter dissipates per
-   application, the effect is a factor of 3.93 across a 4× CFL change, and
-   `filter_cfl` makes it a rate. The other half, fitting α and the cadence against
-   a reference dissipation history, requires the 3-D campaign. The two are
-   coupled: a fit taken under the unrelaxed formulation is only reproducible at
-   the CFL it was taken at, so do not fit under one formulation and adopt the
-   other.
+   128³, and `filter_interval` and α had never been fitted to anything, so
+   every `C_mu` number is conditional on `compact_filter(0.45)` every step. The
+   dt-consistency half is [done](#the-compact-filter): the filter dissipates
+   per application, the effect is a factor of 3.93 across a 4× CFL change,
+   `filter_cfl` makes it a rate, and the relaxed formulation is measured to
+   remove the CFL dependence of the answer where the unrelaxed one costs 26% of
+   the kinetic-energy misfit across a 2× CFL change
+   ([the relaxation leg](#the-relaxation-leg)). The cadence is settled as
+   redundant with α ([cadence and α are one axis](#cadence-and-alpha-are-one-axis)).
+   α is not settled: the 128³ histories have an interior minimum at 0.49, and
+   at 256³ it is absent, with the weakest filter tested scoring best
+   ([the 256³ confirmation](#the-256-confirmation)), so the fitted value is a
+   subgrid tuning at the screening resolution. Setting a default requires the
+   strength below which a run stops being stabilized, which none of the legs
+   measured. α = 0.45 is too strong at both resolutions. The default has not moved
+   because every other constant here was fitted under it, and turning
+   `filter_cfl` on would cut the one-dimensional battery's filtering fourfold
+   at its production CFL numbers.
 2. **Raise the CFL ceiling at the symmetry cell.** Every explanation proposed so
    far is measured and closed: the timestep predictor, the sensor reach,
    the sensor magnitude, sensor blindness at the fold, and the fold closure
@@ -2343,7 +2622,7 @@ In approximate priority order.
    filter, supported by the `:d8` ladder cells where the cylindrical axis fails
    [below a CFL rather than above one](#a-failure-that-gets-worse-as-the-timestep-falls).
 3. **Refit `C_mu` against the history, not the peak.** The reference is
-   digitized and vendored, and the peak is spent: at 128³ it carries a 6%
+   vendored, and the peak is unusable as an estimator: at 128³ it carries a 6%
    one-signed residual the coefficient does not control
    ([Taylor–Green](#taylorgreen)). `bench/tgv_energy.jl` reports the relative
    L2 misfit of the kinetic-energy and −dKE/dt histories against the reference;

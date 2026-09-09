@@ -1,15 +1,15 @@
 # Three-dimensional kinetic-energy spectra of Taylor-Green snapshots, computed
 # offline from the HDF5 checkpoints `bench/tgv_energy.jl snapshots=...` writes.
 #
-# Nothing in the solver transforms anything. The run dumps state and this reads
-# it back serially, so the spectra N1 asks for cost no distributed FFT and no
-# new dependency inside the package. Both dependencies live in the calling
+# The solver computes no transform. The run dumps state and this script reads
+# it back serially, so the spectra under N1 cost no distributed FFT and no new
+# dependency inside the package. Both dependencies live in the calling
 # project, which needs CompactLES only to have produced the files:
 #
 #   julia --project=<a project carrying HDF5 and FFTW> \
 #       ~/.julia/dev/CompactLES/bench/tgv_spectrum.jl 'tgv_snapshots/*.h5'
 #
-# Usage — one or more paths or globs, then `key=value` options:
+# Usage: one or more paths or globs, then `key=value` options:
 #
 #   tgv_spectrum.jl <path|glob> [<path|glob> ...] [key=value ...]
 #
@@ -228,9 +228,8 @@ function main(args)
     isempty(paths) && error("give at least one snapshot path or glob")
     summaries = [report(f, opt) for f in expand_paths(paths)]
     length(summaries) > 1 || return nothing
-    # One row per snapshot. Comparing a sweep by reading several hundred
-    # spectrum rows by eye is not something anyone does reliably, and the
-    # high-k share is the scalar the comparison turns on.
+    # One row per snapshot, so that a sweep can be compared on the high-k
+    # share without reading several hundred spectrum rows.
     println("\n=== summary ===")
     w = max(maximum(s -> length(basename(s.path)), summaries), 8)
     @printf("%-*s %7s %13s %9s\n", w, "snapshot", "t", "sum E", "high-k %")
