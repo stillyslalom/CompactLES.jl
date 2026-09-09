@@ -172,7 +172,7 @@ b = 1/9. `closures` selects the rows applied at a closed edge:
   `compact_filter(closures = :onesided)` they survive a captured shock at a
   wall but not a singular start there. In Float32 the closed line's
   conditioning floors the wall error near 1e-3, above the default
-  cascade's, from N = 48 up. The runs are in `reference/CALIBRATION_APPENDIX.md`.
+  cascade's, from N = 48 up.
 """
 function lele_d1_6(::Type{T}=Float64; closures::Symbol=:cascade3) where {T}
     CompactScheme{T}("Lele C6 first derivative", T(1//3), zero(T),
@@ -262,8 +262,7 @@ left unfiltered; `closures` selects rows 2–4:
   operator amplifies less than the cascade does (‖F¹⁰⁰‖₂ 1.05 against 1.14
   at αf = 0.45, N = 64). Its rows 2 and 3 do exceed unit gain at some
   wavenumbers taken alone (1.10 and 1.03 at αf = 0.45, worse at smaller αf),
-  which the paper also notes; the measurements are in
-  `reference/CALIBRATION_APPENDIX.md`.
+  which the paper also notes.
 """
 function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64;
                         closures::Symbol=:cascade) where {T}
@@ -319,8 +318,7 @@ the two edge treatments agree.
 
 Contrast [`compact_filter`](@ref), a dealiasing filter for the conserved
 state and not a test filter: at αf = 0.45 it retains 99% of the
-amplitude at four points per wavelength where this filter retains 19%. The
-measurement is in `reference/CALIBRATION_APPENDIX.md`.
+amplitude at four points per wavelength where this filter retains 19%.
 """
 function gaussian_filter(::Type{T}=Float64) where {T}
     a = T(3565//10368); b = T(3091//12960); c = T(1997//25920)

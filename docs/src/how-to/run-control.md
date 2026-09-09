@@ -115,8 +115,9 @@ Whether a given internal energy is admissible is asked of the equation of state,
 not fixed by the integrator, because the gauge that places its zero belongs to
 the model. Converging-shock runs integrate through cells an ideal gas calls
 inadmissible and still reach the correct answer, so a guard on such a run wants
-`:permissive`; `reference/CALIBRATION_APPENDIX.md` records the budget. [`setup`](@ref)
-applies the same policy to the initial state.
+`:permissive`. A converged Noh run ends with six of four hundred cells at
+negative internal energy, and the validation suite bounds such runs at twelve.
+[`setup`](@ref) applies the same policy to the initial state.
 
 ## Read the completed state
 

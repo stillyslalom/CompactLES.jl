@@ -540,11 +540,11 @@ end
 """
     TileStack
 
-The stacked storage of some of a device level's tiles held on this rank
-(reference/AMR_GPU.md, launch policy): `patch` is the spanning patch, whose
-arrays are `StackedArray`s over the tiles' blocks and whose plans are the
-batched device plans, and `members` are the `solver.patches` indices of the
-tiles in slot order, each holding views of the same arrays. The step drivers
+The stacked storage of some of a device level's tiles held on this rank:
+`patch` is the spanning patch, whose arrays are `StackedArray`s over the
+tiles' blocks and whose plans are the batched device plans, and `members`
+are the `solver.patches` indices of the tiles in slot order, each holding
+views of the same arrays. The step drivers
 evaluate the right-hand side, the stage update and the filter once per stack
 through `PatchSolver(solver, stack.patch)` on the state the members' views
 share (`_stack_state`); everything else on the level stays per tile.

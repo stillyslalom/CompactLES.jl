@@ -63,11 +63,48 @@ are threaded. They iterate their two outer indices as a single flattened space,
 so a planar `(nx, ny, 1)` or axisymmetric `(nr, 1, nz)` run divides over
 whichever of the two is resolved.
 
-On a cluster, use physical cores and verify binding. A rank must not receive
-both simultaneous-multithreading siblings of one core while another physical
-core is idle. The repository's
-[`reference/CLUSTER.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CLUSTER.md)
-records machine-specific configuration and measured launch rules.
+## Launch on a cluster
+
+MPI.jl defaults to a bundled MPI binary. On one node it satisfies the
+scheduler's launcher over shared memory and reproduces the physics
+bit-for-bit, so a single-node timing cannot detect a misconfiguration. Off one
+node it may never reach the interconnect, and the only symptom is speed: a
+256³ Taylor--Green run measured 27 times slower at 224 ranks over two nodes
+and 66 times slower at 448 ranks over four, on the same launch line.
+Configure the system MPI once per checkout, with the site module loaded so
+its `libmpi` can be found, and name the launcher explicitly:
+
+```julia
+using MPIPreferences
+MPIPreferences.use_system_binary(
+    library_names = ["<the module's library directory>/libmpi.so"],
+    mpiexec = "srun")
+```
+
+The preference is stored per project in `LocalPreferences.toml`, so the
+`--project` a launch names selects the MPI implementation.
+
+The measured launch rules are:
+
+- Set `OPENBLAS_NUM_THREADS=1` in the launch environment. The only BLAS call
+  is the small reduced interface stage of each compact solve, and a threaded
+  OpenBLAS forks and joins its pool on every one: a 32³ step measured 7.0 s at
+  the default thread count of a 112-core node and 0.079 s at one thread. The
+  package sets one thread itself when the variable is unset.
+- Run one thread per rank (`-t 1`). The solver is memory-bandwidth-bound, and
+  at a fixed core count ranks beat threads: 256³ Taylor--Green on two full
+  nodes took 0.64 s per step at 224 single-threaded ranks and 1.2 s at 112
+  ranks of two threads each.
+- Bind one thread per core (`--cpu-bind=threads`) and never give a rank both
+  simultaneous-multithreading siblings of one core. One machine ran about
+  4300 times slower with both siblings in a rank's mask at the same core
+  count, and the cause was not found.
+- Pass `--ntasks-per-node` below full packing. `-N` alone lets the scheduler
+  block-pack one node, and the result is a plausible timing with no error.
+- Read the allocated CPU mask rather than the scheduler flags, since `-c`
+  counts logical CPUs on some machines and physical cores on others.
+  `probes/clusterprobe.jl` prints the mask, the node distribution and the MPI
+  binary in use, and `probes/clusterlaunch.jl` sizes a launch for a grid.
 
 ## Respect collective ordering
 

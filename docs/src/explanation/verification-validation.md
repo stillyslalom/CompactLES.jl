@@ -83,8 +83,7 @@ figures; movement in an earlier digit warrants investigation.
 
 ## Artificial-property calibration
 
-[`reference/CALIBRATION_APPENDIX.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION_APPENDIX.md)
-records sweeps over Cook coefficients, CFL, and
+The defaults were set by sweeps over Cook coefficients, CFL, and
 Taylor--Green dissipation. Every reported coefficient is conditional on filter
 strength, filter cadence, grid, EOS, and the reference cases used to select it.
 Changing any of those invalidates a claim of unchanged calibration.

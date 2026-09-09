@@ -204,7 +204,7 @@ if rank == 0
     binary = try string(MPI.MPIPreferences.binary) catch; "unknown" end
     println("MPI binary      : ", binary,
             endswith(binary, "_jll") && length(hosts) > 1 ?
-            "   <-- BUNDLED JLL ON A MULTI-NODE RUN; see reference/CLUSTER.md" : "")
+            "   <-- BUNDLED JLL ON A MULTI-NODE RUN; configure the system MPI" : "")
     println("threadlevel     : ", MPI.Query_thread())
     # Every BLAS call this solver makes is a compact solve's reduced
     # interface stage: 2P x 2P, with one right-hand side per line.

@@ -187,7 +187,7 @@ println("Verify the launch before trusting a timing from it:")
 # same grid this just sized.
 println("  srun -n ", best.np, " --cpu-bind=threads julia --project=. \\")
 println("      ", reach, "\"probes\", \"clusterprobe.jl\"))' ", opt.grid)
-println("Check `SMT sibling in a rank's own mask: false` -- see")
-println("reference/CLUSTER.md for why that one matters more than it looks.")
+println("Check `SMT sibling in a rank's own mask: false`: a rank holding both")
+println("siblings of a core measured ~4300x slower at the same core count.")
 
 MPI.Finalize()

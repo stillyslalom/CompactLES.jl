@@ -116,9 +116,9 @@ Adapt.adapt_structure(to, w::FieldMatrix) =
 """
     StackedArray(data, ntiles, stride)
 
-The stacked storage of a device level's tiles (reference/AMR_GPU.md, launch
-policy): one array holding every tile's padded block along the third
-dimension at a fixed `stride`, the padded extent of one tile. A tile's
+The stacked storage of a device level's tiles: one array holding every
+tile's padded block along the third dimension at a fixed `stride`, the
+padded extent of one tile. A tile's
 `Patch` holds a plain view of `data` over its own block, so the per-tile
 paths (the impositions, the interface records, the gathers, `max_rate`) see
 ordinary storage; the level's spanning patch holds this wrapper, and a
@@ -182,10 +182,10 @@ Launch synchronization policy: `false` (the default) defers. Kernels queue
 on the backend's one in-order stream and the host synchronizes only at its
 interaction points (the reduced-solve staging fence, the synchronous
 device↔host copies of the halo/ring staging and the reductions); this
-removes the per-launch round trip measured at 28–32% of a device step
-(reference/AMR_GPU.md, launch policy). `true` restores the conservative
-mode, a host synchronize after every pointwise launch and between every
-line-solve subkernel, and is the correctness fallback: flip it when
+removes the per-launch round trip measured at 28–32% of a device step.
+`true` restores the conservative mode, a host synchronize after every
+pointwise launch and between every line-solve subkernel, and is the
+correctness fallback: flip it when
 bisecting a device discrepancy, so ordering bugs separate from arithmetic
 ones.
 """

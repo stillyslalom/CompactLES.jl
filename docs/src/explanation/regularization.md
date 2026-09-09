@@ -70,8 +70,10 @@ strain-rate magnitude and the dilatation vanish identically for a grid-to-grid
 velocity oscillation, and the sensors built from them return zero there. Only
 `mu_sensor = :velocity` responds to that mode. Grid-scale content of the
 conserved state is removed by the compact filter, not by the artificial
-properties, consistent with the Taylor--Green dissipation budgets recorded in
-[`reference/CALIBRATION_APPENDIX.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION_APPENDIX.md).
+properties, consistent with the measured Taylor--Green dissipation budget: at
+128³ the filter supplies 37% of the energy sink and the artificial shear
+viscosity 2%, and removing the filter ends the run while removing the
+artificial properties does not.
 
 The defaults are unchanged because the alternatives were measured and did not
 improve the validation battery. The velocity field for artificial shear
@@ -155,7 +157,6 @@ The defaults are a starting point, not a material model. For a new regime:
 4. repeat across resolution and CFL; and
 5. record the filter strength and cadence with every coefficient result.
 
-[`reference/CALIBRATION_APPENDIX.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION_APPENDIX.md)
-records the current parameter sweeps, rejected
-hypotheses, and identified operating limits. Those measurements should not be
-generalized beyond the documented configurations without new evidence.
+The parameter sweeps behind the defaults ran on the cases of `test/cases.jl`
+and on Taylor--Green at 32³ to 128³. Those measurements should not be
+generalized beyond those configurations without new evidence.

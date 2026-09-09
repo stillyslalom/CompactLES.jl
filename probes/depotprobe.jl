@@ -298,7 +298,7 @@ function report_cpu()
     # never buys anything. Measured on a 24-thread desktop: 12 threads cost
     # 12-17%. On a 112-core node it dominates the step.
     println("  BLAS threads  : ", nb,
-            nb > 1 ? "   <-- set OPENBLAS_NUM_THREADS=1; see reference/CLUSTER.md" : "")
+            nb > 1 ? "   <-- set OPENBLAS_NUM_THREADS=1" : "")
     println("  triad         : ", round(24e-9 * n * reps / t1; digits = 2),
             " GB/s")
     isfinite(acc) || println("  (dot produced a non-finite sum)")
@@ -323,7 +323,7 @@ function report_environment()
     binary = try string(MPI.MPIPreferences.binary) catch; "unknown" end
     println("MPI binary      : ", binary,
             endswith(binary, "_jll") ?
-            "   <-- BUNDLED JLL; see reference/CLUSTER.md" : "")
+            "   <-- BUNDLED JLL; configure the system MPI for a multi-node run" : "")
     println("MPI library     : ", MPI.MPI_LIBRARY, " ", MPI.MPI_LIBRARY_VERSION)
     # The preference is per-project, so `--project=.` in the package directory
     # reports the package's own environment and not the one a production launch

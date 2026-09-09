@@ -82,8 +82,8 @@ threaded at `P == 1`.
 Threading does pay on the solve itself once the system is large (measured 1.6x
 at `2P == 16`, 3.3x at `2P == 112`), but it cannot be taken: the solve is
 replicated on every rank behind a collective gather, so all ranks run it at the
-same instant, and a rank at that `P` owns one core under the launch rules in
-reference/CLUSTER.md. Those threads would come out of its neighbours.
+same instant, and a rank at that `P` owns one core under the launch rule of
+one thread per rank. Those threads would come out of its neighbours.
 
 Setting `OPENBLAS_NUM_THREADS`, to one or to anything else, is respected and
 silences this.
@@ -107,8 +107,7 @@ function __init_blas__()
     _launcher_rank() == 0 || return nothing
     @info "CompactLES set BLAS threads $n -> 1: its only BLAS call is a tiny " *
           "reduced interface solve, which threading slows down. Set " *
-          "OPENBLAS_NUM_THREADS to keep your own value; see " *
-          "reference/CLUSTER.md."
+          "OPENBLAS_NUM_THREADS to keep your own value."
     return nothing
 end
 

@@ -454,13 +454,9 @@ advective and diffusive parts sum over dimensions because their symbols do,
 `u · k` and `ν |k|²`. The acoustic part does not: its symbol is `c |k′|` with
 `k′` the modified-wavenumber vector, so its bound on a tensor-product grid is
 the Euclidean combination, `√3` times the one-dimensional rate on an isotropic
-three-dimensional grid and not three times. The sum form that preceded this
-one was measured on Taylor–Green at 32³ to sit a factor `√3` below the
-observed acoustic ceiling, and this form reproduces that ceiling (the RK
-imaginary-axis limit 3.34 over the C6 modified-wavenumber peak 1.99, times
-`√3`); `reference/CALIBRATION_APPENDIX.md`, "The CFL rate is normalized
-differently", carries the ladder. In one dimension `sqrt(x²) == x` exactly in
-both precisions, so this form is bit-identical to the sum there.
+three-dimensional grid. That rate reproduces the acoustic ceiling measured on
+Taylor–Green at 32³, the RK imaginary-axis limit 3.34 over the C6
+modified-wavenumber peak 1.99, times `√3`.
 
 Before the loop it exchanges `Q`'s halos and refreshes the primitive fields from
 `Q`, which [`run!`](@ref) relies on when it passes `prepared = true` to
@@ -1178,8 +1174,8 @@ can end: reaching `tfinal`, reaching `nmax`, and a callback effect returning
 rollback the step checks use, so `control.retries` recovers from it by
 restoring the savepoint and lowering the CFL rather than raising past that
 recovery. A run whose physics legitimately visits inadmissible states selects
-`validity = :permissive`, which accepts and reports them; `reference/CALIBRATION_APPENDIX.md`
-records the budget for the cases in `test/cases.jl` that do.
+`validity = :permissive`, which accepts and reports them, as the
+converging-shock cases in `test/cases.jl` do.
 
 Recovery from a rejected endpoint costs the trajectory. The rollback restores
 the last savepoint, so the run repeats every step from there, and it does so

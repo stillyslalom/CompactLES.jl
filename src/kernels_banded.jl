@@ -100,9 +100,9 @@ further 240, which sets the response to a grid-to-grid oscillation to 16, the
 value the undivided δ⁴ detector it replaces produces there. The two detectors
 therefore agree at the wavelength both are built to catch, and the `C_mu`,
 `C_beta`, `C_kappa` and `C_D` calibrations carry over as starting points and are
-not off by two orders of magnitude. The two responses differ below
-the Nyquist; `reference/CALIBRATION_APPENDIX.md` records them at 8, 4 and 2.7 points per
-wavelength.
+not off by two orders of magnitude. Below the Nyquist the two responses
+diverge: the ratio of the δ⁴ response to this one is 569 at eight points per
+wavelength, 26 at four and 3.2 at 2.7.
 
 # Closure rows
 

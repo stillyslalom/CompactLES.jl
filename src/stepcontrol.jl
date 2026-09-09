@@ -201,8 +201,7 @@ repair changes states produced by the scheme but does not change the scheme.
     bound, or a point the EOS places outside its thermodynamic domain.
   - `:permissive` accepts the state and reports what it contains. Converging
     shocks integrate through inadmissible states for the length of a run that
-    reaches the correct answer, and `reference/CALIBRATION_APPENDIX.md` records that
-    budget; such a run selects this mode explicitly.
+    reaches the correct answer; such a run selects this mode explicitly.
   - `:repair` applies the positivity failsafe above to the state first, reports
     the substitutions it made, and then rejects whatever the repair could not
     fix. It requires `floor_ratio > 0`, since that is where the repair and its
@@ -424,13 +423,13 @@ function Base.showerror(io::IO, e::SolverFailure)
         print(io, "\n  One possible cause is loss of positivity near a strong shock. ",
                   "`StepControl(retries = 4)`\n  restores a savepoint and lowers ",
                   "the CFL after this failure, while retaining the initial CFL ",
-                  "after\n  a successful startup. See reference/CALIBRATION.md.")
+                  "after\n  a successful startup.")
     elseif e.reason === :invalid_state
         print(io, "\n  `StepControl(validity = :permissive)` accepts and reports ",
                   "such a state instead,\n  which converging-shock cases require; ",
                   "`validity = :repair` with a positive floor_ratio\n  repairs ",
                   "what the positivity failsafe covers first. Both are documented ",
-                  "under\n  StepControl and in reference/CALIBRATION.md.")
+                  "under\n  StepControl.")
     end
 end
 

@@ -230,9 +230,8 @@ interior(decomp::Decomp) = CartesianIndices(
 
 Storage backend selecting where field arrays live. [`CPUBackend`](@ref) is the
 default and allocates ordinary `Array`s; a GPU backend supplies device arrays
-through the same [`field`](@ref) and [`allocate_state`](@ref) methods
-(`reference/AMR_GPU.md`). Every solver array is typed
-`A <: AbstractArray{T,3}` against this interface.
+through the same [`field`](@ref) and [`allocate_state`](@ref) methods. Every
+solver array is typed `A <: AbstractArray{T,3}` against this interface.
 """
 abstract type AbstractBackend end
 

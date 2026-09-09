@@ -77,8 +77,8 @@ julia --project=. -e 'using Pkg; Pkg.instantiate()'
 binaries. On a cluster, configure `MPI.jl` against the
 [system's MPI binary](https://juliaparallel.org/MPI.jl/stable/configuration/#using_system_mpi)
 before running: the bundled binary satisfies a single-node run but may fail to
-use the interconnect off it, and the launch rules and measured penalties are in
-[`reference/CLUSTER.md`](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CLUSTER.md).
+use the interconnect off it. The launch rules and the measured penalties are in
+[Run in parallel](https://stillyslalom.github.io/CompactLES.jl/dev/how-to/parallel-runs/).
 
 ## Running
 
@@ -192,7 +192,9 @@ and the acoustic part combines in the Euclidean norm, which is the bound the
 scheme actually has. On an isotropic three-dimensional grid a smooth flow is
 stable to about `cfl = 1.7` (Taylor–Green at 32³, measured); `cfl = 0.5`
 is the default and converging strong shocks need 0.3 or `StepControl(retries
-= 4)`, see `reference/CALIBRATION.md`. Pyranda's
+= 4)`, see
+[Regularization](https://stillyslalom.github.io/CompactLES.jl/dev/explanation/regularization/).
+Pyranda's
 [public implementation](https://github.com/LLNL/pyranda) counts the sound speed
 once, so its CFL numbers are not comparable one to one.
 

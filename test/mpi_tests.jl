@@ -1466,9 +1466,9 @@ function test_two_patch_layout()
     # order, and the reproduction is bitwise. At np ≥ 4 the patch itself is
     # decomposed and its closed lines take the spike/reduced path where the
     # serial patch ran a plain Thomas sweep, so the answer agrees to round-off
-    # accumulation instead (measured 3.1e-15 at np = 4, 6.7e-16 at np = 8,
+    # accumulation instead (measured 1.1e-15 at np = 4 and 0 at np = 8,
     # against a 9.5e-8 signal).
-    ref = 9.5442217462604617e-8
+    ref = 9.544222012713988e-8
     tol = np <= 2 ? 1e-20 : 1e-13
     check("two-patch entropy wave: max error matches serial", abs(gerr - ref), tol)
     check("two-patch run: step count matches serial", abs(solver.step - 28), 0.5)
@@ -1492,7 +1492,7 @@ function test_two_patch_layout()
         end
     end
     check("two-patch C10 viscous wave: max rho matches serial",
-          abs(gmax(m) - 1.3014436321154799), tol)
+          abs(gmax(m) - 1.3014436321154803), tol)
     check("two-patch C10 run: step count matches serial", abs(solver10.step - 78), 0.5)
 end
 
@@ -1553,7 +1553,7 @@ function test_bulk_patched()
     tol = np <= 2 ? 1e-14 : 1e-12
     check("bulk two-patch slab: max rho matches serial", abs(gmax(m) - ref), tol)
 end
-const BULK_PATCHED_MAX_RHO = 19.999997372940499
+const BULK_PATCHED_MAX_RHO = 19.99999737294066
 
 # ---------------------------------------------------------------------------
 # Device line solves (reference/AMR_GPU.md). A DevicePlan runs the fill,
@@ -1880,11 +1880,11 @@ function test_tiled_level()
     check("tiled 2-D level: a rank holds its group's tiles only",
           all(lev.owners[t] == lev.group.ranks for t in lev.tiles) ? 0.0 : 1.0, 0.5)
     check("tiled 2-D wave error matches serial",
-          abs(et - 2.4153780309177364e-8), 1e-12)
+          abs(et - 3.2172027042420837e-8), 1e-12)
     check("tiled 2-D step count matches serial", abs(nt - 10), 0.5)
     ets, nts, _ = tiled_error(subcycle=true)
     check("subcycled tiled 2-D wave error matches serial",
-          abs(ets - 6.663296114872708e-8), 1e-12)
+          abs(ets - 7.64822569720991e-8), 1e-12)
     check("subcycled tiled 2-D step count matches serial", abs(nts - 10), 0.5)
 
     # Multi-tile corner consensus and diagonal ghosts, decomposed: the

@@ -378,8 +378,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         all(isnothing, stretch) ||
             error("refinement requires an unstretched grid")
         (axis || orig1 || poles) &&
-            error("refinement across a coordinate fold is forbidden " *
-                  "(constraint 4 of reference/AMR_GPU.md)")
+            error("refinement across a coordinate fold is forbidden")
         filt isa CompactScheme ||
             error("the coarse-fine boundary carries closure variants for a " *
                   "tridiagonal filter only")

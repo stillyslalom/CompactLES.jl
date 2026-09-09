@@ -198,7 +198,7 @@ function plan_transfer(fine::Decomp, coarse::Decomp, dim::Int,
         error("fine and coarse decompositions disagree on periodicity")
     fine.sub_size[dim] == 1 && coarse.sub_size[dim] == 1 ||
         error("the transfer dimension must not be decomposed; distributed " *
-              "transfer arrives with the patch stages (reference/AMR_GPU.md)")
+              "transfer arrives with the patch stages")
     for d in 1:3
         d == dim && continue
         fine.n_global[d] == coarse.n_global[d] &&

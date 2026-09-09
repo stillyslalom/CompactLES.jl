@@ -96,8 +96,7 @@ Cook-style artificial-property controls.
   `:ungated_dilatation` rebuilds the sensor from ∇·u, the Cook (2009, appendix A)
   form also exposed by Pyranda, and `:dilatation` applies the compression switch
   to that as well; both cost one further smoothing pass per RHS evaluation
-  (`dilatation_beta!`). The measured differences are in
-  `reference/CALIBRATION_APPENDIX.md`.
+  (`dilatation_beta!`).
 - `reduction`: how the per-direction detector outputs combine into one sensor.
   `:sum` is Σ_d, which is Cook's form and grows with the number of active
   dimensions; `:max` is Pyranda's MAX, which does not. The
@@ -112,7 +111,7 @@ Cook-style artificial-property controls.
   measurement: it raises the spherical-origin CFL ceiling from 0.15 to 0.4 and
   the cylindrical from 0.15 to 0.2, and makes the sensor phase 29% cheaper, at
   the cost of about seven points of planar wall heating. The four constants
-  above are calibrated per setting. All of it is in `reference/CALIBRATION_APPENDIX.md`.
+  above are calibrated per setting.
 - `species_flux`: the form of the artificial species regularization.
   `:fickian` (default) is the per-species Fickian flux J_k = −ρ D\\*_k ∇Y_k
   with the correction velocity that keeps Σ_k J_k = 0 and the enthalpy flux
@@ -135,7 +134,6 @@ Cook-style artificial-property controls.
   default: its constants are inherited from the Fickian channel and it has
   not been run on a three-dimensional case. Patched and refined runs take it
   as the root does.
-  `reference/CALIBRATION_APPENDIX.md`, "The bulk species channel".
 - `detector`: the high-pass that builds every sensor, in
   `detect_sum!`. `:delta4` (default) is Cook's undivided fourth
   difference, computed explicitly. `:d8` is Pyranda's
@@ -220,7 +218,7 @@ derivative is the largest quantity there, the same tap is wrong at O(h), and
 the result is a nonzero sensor on a field as regular as u_r = r, which the
 mirror annihilates exactly. Putting the even path on the mirror as well would
 move guarded numbers for an effect expected to be small. The effect has not been
-measured; `reference/CALIBRATION.md` carries it as an open item.
+measured.
 
 At a self-paired fold the mirror is the negated line itself. At a paired fold
 the line continues into its antipodal partner, `f(−r, θ) = σ f(r, θ+π)`, and a
@@ -520,7 +518,6 @@ passes through zero. Such a cusp is grid-scale structure at any resolution.
 Applied to |S|, the two detectors stay within a
 factor of 1.8 of each other at every wavelength; applied to the velocity, they
 reproduce their designed separation of 569× at eight points per wavelength.
-`reference/CALIBRATION_APPENDIX.md` has the response table.
 
 Cost is one detector application per component per active direction, three
 times the strain form's, which under `detector = :d8` is three pentadiagonal
@@ -608,8 +605,8 @@ The switch cannot suppress β\\* at a cusp of |S|. The strain sensor is a
 high-pass, so it peaks where |S| passes through zero with a kink, and the
 vorticity generally vanishes there too, leaving only ε in the denominator. On a
 solenoidal Taylor–Green field this leaves 71 of 32768 points carrying β\\*:
-0.6% of the summed total, but the full maximum. `reference/CALIBRATION_APPENDIX.md` has the
-measurement and why a relative ε does not help.
+0.6% of the summed total, but the full maximum. A relative ε was measured not
+to remove them.
 """
 function gate_beta!(solver)
     o1, o2, o3 = solver.decomp.n_halo_d
@@ -911,7 +908,6 @@ Y, and the mole-fraction sensor is blind to that ringing at the 1e-3 level.
 The maximum over both is Pyranda's combination of mass- and volume-fraction
 detectors, as reported by
 [Brill, Olson & Bokman (2025, eqs. 33–37)](https://arxiv.org/abs/2503.12680).
-The measurements are in `reference/CALIBRATION_APPENDIX.md`.
 
 Scratch: `solver.sensor_sp` accumulates the maximum, `solver.tmp_b` holds one
 field's detector output and `solver.tmp_a` the mole fraction over the padded
