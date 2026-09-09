@@ -820,7 +820,7 @@ runs 4× faster than 8-thread CPU in a single launch, and a collection-typed
 kernel argument was found to hang in adaptation without raising an error, so
 the isbits argument adaptation (with the `max_rate` mapreduce and the Nasa9
 mirror) is the open G-track work, and
-`bench/device_bringup.jl` is the script that reproduces the measurements.
+`probes/device_bringup.jl` is the script that reproduces the measurements.
 
 The device-argument adaptation followed in the same push: the field
 collections reach the per-point bodies as `FieldVector`/`FieldMatrix`
@@ -832,7 +832,7 @@ path through runtime tuple indexing, so the tuples materialize only at
 launch. With the adaptation in place the full flux-assembly body, every
 collection plus the mirrored `IdealMixture`, runs on the RX 6800 XT
 bitwise against the CPU and 9.9× faster than 8-thread `@threaded` at 64³
-with two species; `bench/device_bringup.jl` carries the measurement. The
+with two species; `probes/device_bringup.jl` carries the measurement. The
 default path stayed bit-identical on every guard, and jetcheck/audit held
 probe for probe.
 

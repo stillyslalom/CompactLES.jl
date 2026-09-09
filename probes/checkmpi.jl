@@ -6,7 +6,7 @@
 # requested" for others — which is easy to misread as an MS-MPI limitation.
 # The zeros form is the correct call and works at every rank count.
 #
-#   mpiexec -n 4 julia --project=. checkmpi.jl
+#   mpiexec -n 4 julia --project=. probes/checkmpi.jl
 
 using MPI
 MPI.Init()

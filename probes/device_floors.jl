@@ -33,7 +33,7 @@
 #       and host apply walls. A per-apply cost flat across sizes is a
 #       latency/serialization floor; one that scales with n is throughput
 #       (occupancy, register spill). Methodology matches
-#       bench/device_bringup.jl so rows compare with existing logs.
+#       probes/device_bringup.jl so rows compare with existing logs.
 #   TGV steps — warm device s/step at scheme x precision, single species,
 #       artificial properties off. If a Float64 step anomaly collapses when
 #       C6 is swapped for C10, the line solve causes it; if it persists, it is
@@ -53,9 +53,9 @@
 # Device packages are not CompactLES dependencies, so run from an environment
 # carrying CompactLES and the device package:
 #
-#   julia --project=<env-with-AMDGPU> -t 8 bench/device_floors.jl backend=amdgpu
+#   julia --project=<env-with-AMDGPU> -t 8 probes/device_floors.jl backend=amdgpu
 #   flux run -N1 -n4 --exclusive julia --project -t 8 \
-#       bench/device_floors.jl backend=amdgpu
+#       probes/device_floors.jl backend=amdgpu
 #
 # First-launch kernel compilation dominates the wall time of a fresh process;
 # every printed number is a minimum over reps after warm-up.

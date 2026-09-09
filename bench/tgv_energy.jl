@@ -170,7 +170,7 @@
 #             schemes, EOS, transport, artificial controls, and RK workspace.
 #   backend   cpu (default), amdgpu, or cuda: where the solver lives. A device
 #             backend needs an environment carrying the device package (see
-#             bench/device_bringup.jl); the solver and state are
+#             probes/device_bringup.jl); the solver and state are
 #             device-resident and the energy diagnostics read a host copy
 #             of the state, downloaded per callback on the documented
 #             I/O-gathers-to-host path and excluded from solver wall time by

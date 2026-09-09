@@ -549,7 +549,11 @@ be revisited.
   Most prose in this repository is model output. When an edit exposes poor style
   in the surrounding prose, follow these guidelines and flag it for correction.
 - `bench/` is scratch tooling, not tests. Each script's header comment says
-  what it measures and how to run it; read that before running one.
+  what it measures and how to run it; read that before running one. `probes/`
+  holds the environment diagnostics (MPI configuration, depot cost, launch
+  sizing, device bring-up and floors, thread spawn floor, step profiling on a
+  slow machine); they measure the machine, not the solver, and run from the
+  checkout root with `--project=.`.
 - Scripts take their settings from `ARGS`, not the environment: positional
   values first, then `key=value`, parsed by `script_args` (`src/scriptargs.jl`)
   against a defaults `NamedTuple` that doubles as the schema. Give a new script

@@ -3,10 +3,10 @@
 # alone — no CompactLES, no KernelAbstractions, no MPI — so the file can be
 # attached to a ticket as-is. Run from any environment carrying AMDGPU:
 #
-#   julia --project=<env-with-AMDGPU> -t 8 stall_mwe.jl watch=120
-#   julia --project=<env-with-AMDGPU> -t 1 stall_mwe.jl watch=120
+#   julia --project=<env-with-AMDGPU> -t 8 probes/stall_mwe.jl watch=120
+#   julia --project=<env-with-AMDGPU> -t 1 probes/stall_mwe.jl watch=120
 #
-# The full survey (bench/device_floors.jl) measures the stall at every
+# The full survey (probes/device_floors.jl) measures the stall at every
 # thread count above 1: episodes of seconds to minutes in which every
 # device wait costs ~13 or ~26 ms — ROCR's polling-wait sleep cadence,
 # reproduced deterministically by HSA_ENABLE_INTERRUPT=0 — while the interrupt

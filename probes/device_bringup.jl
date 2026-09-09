@@ -8,8 +8,8 @@
 # Device packages are not CompactLES dependencies, so this script must run
 # from an environment carrying CompactLES and the device package:
 #
-#   julia --project=<env-with-AMDGPU> -t 8 bench/device_bringup.jl backend=amdgpu
-#   julia --project=<env-with-CUDA>   -t 8 bench/device_bringup.jl backend=cuda
+#   julia --project=<env-with-AMDGPU> -t 8 probes/device_bringup.jl backend=amdgpu
+#   julia --project=<env-with-CUDA>   -t 8 probes/device_bringup.jl backend=cuda
 #
 # Do not pass a bare `Vector{<:AbstractArray}` or `Matrix{<:AbstractArray}`
 # kernel argument to a device launch: it does not raise an error, it hangs

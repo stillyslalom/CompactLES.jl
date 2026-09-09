@@ -42,7 +42,7 @@ endif
 # before spending eight hours on it. Pass the target grid: the probe sets the
 # decomposition from it.
 srun -N 8 --ntasks-per-node=112 -n 896 --cpu-bind=threads \
-    julia --project=. -t 1 $CLES/clusterprobe.jl 256
+    julia --project=. -t 1 $CLES/probes/clusterprobe.jl 256
 
 srun -N 8 --ntasks-per-node=112 -n 896 --cpu-bind=threads \
     julia --project=. -t 1 --handle-signals=no $CLES/bench/tgv_energy.jl \

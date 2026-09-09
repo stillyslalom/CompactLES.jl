@@ -15,3 +15,6 @@ src/*.cov
 *.pvtr
 *.pvd
 *.ckpt
+# cluster job logs; the conclusions are extracted into reference/ and the data
+# is regenerable in hours
+bench/logs/*.out

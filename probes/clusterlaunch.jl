@@ -9,9 +9,9 @@
 #
 # Runs serially and launches nothing; it is a planning tool.
 #
-#   julia --project=. clusterlaunch.jl 128
-#   julia --project=. clusterlaunch.jl 256,256,512
-#   julia --project=. clusterlaunch.jl 256 nodes=36 cores_per_node=112
+#   julia --project=. probes/clusterlaunch.jl 128
+#   julia --project=. probes/clusterlaunch.jl 256,256,512
+#   julia --project=. probes/clusterlaunch.jl 256 nodes=36 cores_per_node=112
 #
 # Positional grid, written as N or NX,NY,NZ, then `key=value` options — parsed by
 # `script_args` (src/scriptargs.jl), which explains why these are arguments and
@@ -186,7 +186,7 @@ println("Verify the launch before trusting a timing from it:")
 # scheme-floor check is only about the run you are planning if it is given the
 # same grid this just sized.
 println("  srun -n ", best.np, " --cpu-bind=threads julia --project=. \\")
-println("      ", reach, "\"clusterprobe.jl\"))' ", opt.grid)
+println("      ", reach, "\"probes\", \"clusterprobe.jl\"))' ", opt.grid)
 println("Check `SMT sibling in a rank's own mask: false` -- see")
 println("reference/CLUSTER.md for why that one matters more than it looks.")
 

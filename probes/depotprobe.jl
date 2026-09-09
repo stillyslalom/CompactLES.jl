@@ -8,9 +8,9 @@
 # is not an error today, it is every rank rebuilding it. This script measures
 # both, and the staging path that avoids them.
 #
-#   julia --project=. depotprobe.jl                      # login node, all phases
-#   julia --project=. depotprobe.jl /l/ssd/$USER/stage   # also stage and reload
-#   srun -n 448 --cpu-bind=threads julia --project=. -t 1 depotprobe.jl
+#   julia --project=. probes/depotprobe.jl                      # login node, all phases
+#   julia --project=. probes/depotprobe.jl /l/ssd/$USER/stage   # also stage and reload
+#   srun -n 448 --cpu-bind=threads julia --project=. -t 1 probes/depotprobe.jl
 #
 # Serial runs do the filesystem survey, the MPI.Init probe, the flag matrix and
 # the staging round trip. Those spawn subprocesses, so they are skipped when the

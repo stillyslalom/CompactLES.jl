@@ -1203,9 +1203,9 @@ Bench scripts: `bench/amr_transfer.jl` (operator conditioning),
 `bench/amr_tiles.jl` (tiled cover and per-step wall), `bench/amr_cost.jl`
 (the cost case), `bench/amr_balance.jl` (rebalance and migration
 mechanics), `bench/pointwise_ka.jl` (launcher acceptance),
-`bench/device_bringup.jl` (kernel-level bring-up), `bench/device_solver.jl`
+`probes/device_bringup.jl` (kernel-level bring-up), `bench/device_solver.jl`
 (whole-solver device battery), `bench/device_mpi.jl` (distributed device
-runs with transfer accounting), `bench/device_floors.jl` (the cross-machine
+runs with transfer accounting), `probes/device_floors.jl` (the cross-machine
 instrument: launch floors, stall watch, line-solve matrix, TGV step table).
 The device scripts need an environment carrying the device package; the
 workstation keeps one at `~/.julia/dev/CompactLES_gpu_env`.

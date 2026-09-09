@@ -182,9 +182,9 @@ any CPU is double-booked, the cgroup memory limit against `Sys.total_memory()`,
 and the share of neighbour links that stay intra-NUMA / cross-socket / off-node.
 
 ```bash
-srun -n 56 --cpu-bind=threads julia --project=. clusterprobe.jl 128     # from the checkout
+srun -n 56 --cpu-bind=threads julia --project=. probes/clusterprobe.jl 128     # from the checkout
 srun -n 56 --cpu-bind=threads julia --project=. \
-    -e 'using CompactLES; include(joinpath(pkgdir(CompactLES), "clusterprobe.jl"))' 128
+    -e 'using CompactLES; include(joinpath(pkgdir(CompactLES), "probes", "clusterprobe.jl"))' 128
 ```
 
 The second form is for a driver environment, whose MPI configuration differs from
@@ -204,7 +204,7 @@ reports the largest rank count within the halo-overhead limit and the largest
 legal one; the gap measures the cost of using the whole allocation.
 
 ```bash
-julia --project=. clusterlaunch.jl 256 nodes=36 cores_per_node=112
+julia --project=. probes/clusterlaunch.jl 256 nodes=36 cores_per_node=112
 ```
 
 ## Launch rules
@@ -270,7 +270,7 @@ In the 112 × 2 row, every rank had a verified two-core mask and `@threaded`
 was fully engaged. It was ~1.9x slower than 224 single-threaded ranks at the
 same core count. Condensation does benefit the communication side, but the
 thread-side losses consume it. These measurements support `-t 1` under MPI.
-Spawn cost was ruled out directly (`bench/spawnfloor.jl`: ~0.6–0.8 µs per thread,
+Spawn cost was ruled out directly (`probes/spawnfloor.jl`: ~0.6–0.8 µs per thread,
 orders of magnitude under the step time), so the losses are bandwidth and
 per-region barriers. Trixi.jl, the nearest comparable solver and one that offers a
 hybrid mode, likewise published its large-scale TGV scaling as pure MPI.

@@ -3,7 +3,7 @@
 **Status:** characterization for an LC ticket and/or upstream report
 (AMDGPU.jl, ROCR). Raw session transcripts:
 `bench/logs/rzadams_20260819.txt`, `bench/logs/rzadams_20260819_floors.txt`.
-Reproducer: `bench/device_floors.jl only=watch watch=60` (times a fixed
+Reproducer: `probes/device_floors.jl only=watch watch=60` (times a fixed
 small compact-solve apply, consisting of several kernel launches, a
 device→host and a host→device copy, and one stream synchronize,
 continuously and reports per-call statistics and episode structure).
@@ -117,7 +117,7 @@ workaround.
 Isolate to the smallest reproducer before filing (a research code will
 not get driver-team priority on a whole-application report).
 
-1. **`bench/stall_mwe.jl`** (AMDGPU.jl alone, no CompactLES, no
+1. **`probes/stall_mwe.jl`** (AMDGPU.jl alone, no CompactLES, no
    KernelAbstractions, no MPI): one trivial kernel plus one stream
    synchronize per call (`mode=kernel`), with rungs adding a second
    launch, a device-to-host copy, and a round trip (`kernel2`, `copy`,
@@ -164,7 +164,7 @@ not get driver-team priority on a whole-application report).
    if clean, the bisection moves top-down inside the apply (a
    CompactLES-dependent rung is fine for bisection even though filing the
    eventual ticket requires the bottom-up MWE).
-2. **`bench/stall_mwe.cpp`**, the Julia-free rung: the same loop in
+2. **`probes/stall_mwe.cpp`**, the Julia-free rung: the same loop in
    plain HIP with N extra dormant (or busy) host threads
    (`hipcc -O2 -o stall_mwe stall_mwe.cpp`; `./stall_mwe 120 20000 7`).
    This is the decisive fork: if it stalls with extra threads, the

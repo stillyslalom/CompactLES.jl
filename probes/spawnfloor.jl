@@ -6,8 +6,8 @@
 # 24-thread desktop — so the curve comes from running this script at several
 # `-t` values, one process each, not from one process varying anything:
 #
-#     for t in 1 2 4 8 16; do julia --project=. -t $t bench/spawnfloor.jl; done
-#     srun -N 1 -n 1 --cpu-bind=threads julia --project=. -t 8 bench/spawnfloor.jl
+#     for t in 1 2 4 8 16; do julia --project=. -t $t probes/spawnfloor.jl; done
+#     srun -N 1 -n 1 --cpu-bind=threads julia --project=. -t 8 probes/spawnfloor.jl
 #
 # Run-to-run spread applies here as everywhere (10–20%); the minimum within a
 # process is stable, but compare processes by repeating them.
