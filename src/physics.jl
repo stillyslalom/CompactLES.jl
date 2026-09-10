@@ -746,6 +746,11 @@ struct Nasa9Mixture{T} <: EOS
     Rk::Vector{T}
     T_guess::T
     extrapolate::Symbol
+    # e_k and cv_k at the fixed T_guess. The temperature inversion's seed is a
+    # mass-fraction average of these, so it depends on the state alone and the
+    # per-species fits behind it need evaluating only once per mixture.
+    e_guess::Vector{T}
+    cv_guess::Vector{T}
 end
 
 function _nasa9_mixture(::Type{T}, species; T_guess=300.0,
@@ -755,7 +760,13 @@ function _nasa9_mixture(::Type{T}, species; T_guess=300.0,
         throw(ArgumentError("Nasa9Mixture: extrapolate must be :polynomial, " *
                             ":linear or :missing, got :$extrapolate"))
     sp = Nasa9Species{T}[_convert_nasa9_species(T, item) for item in species]
-    return Nasa9Mixture{T}(sp, [x.R for x in sp], T(T_guess), extrapolate)
+    Tg = T(T_guess)
+    linear = extrapolate === :linear || extrapolate === :missing
+    seed = [_nasa9_h_cp_over_R_at(x, Tg, linear) for x in sp]
+    e_guess = T[x.R * h - x.R * Tg for (x, (h, _)) in zip(sp, seed)]
+    cv_guess = T[x.R * cp - x.R for (x, (_, cp)) in zip(sp, seed)]
+    return Nasa9Mixture{T}(sp, [x.R for x in sp], Tg, extrapolate,
+                           e_guess, cv_guess)
 end
 
 function Nasa9Mixture(species::AbstractVector{<:Nasa9Species}; T_guess=300.0,
@@ -830,6 +841,27 @@ end
     T_fit = clamp(T_ion, interval.Tmin, interval.Tmax)
     return _nasa9_h_over_R(interval, T_fit) +
            _nasa9_cp_over_R(interval, T_fit) * (T_ion - T_fit)
+end
+
+# h/R and cp/R together, from one interval search and one set of powers of T.
+# The temperature inversion needs both at every iterate, and the search costs
+# more there than either polynomial. The powers are written as literal powers,
+# not built up by repeated multiplication, so the values are those the two
+# single-quantity forms above return, bit for bit.
+@inline function _nasa9_h_cp_over_R_at(species::Nasa9Species, T_ion, linear::Bool)
+    interval = _nasa9_interval(species, T_ion)
+    T_fit = linear ? clamp(T_ion, interval.Tmin, interval.Tmax) : T_ion
+    a = interval.a
+    T2 = T_fit^2
+    T3 = T_fit^3
+    T4 = T_fit^4
+    cp_over_R = a[1] / T2 + a[2] / T_fit + a[3] + a[4] * T_fit +
+                a[5] * T2 + a[6] * T3 + a[7] * T4
+    h_over_R = -a[1] / T_fit + a[2] * log(T_fit) + a[3] * T_fit +
+               a[4] * T2 / 2 + a[5] * T3 / 3 +
+               a[6] * T4 / 4 + a[7] * T_fit^5 / 5 + interval.b1
+    linear && (h_over_R += cp_over_R * (T_ion - T_fit))
+    return (h_over_R, cp_over_R)
 end
 
 # Relative tolerance of the temperature inversion, and of the range test that
@@ -950,21 +982,24 @@ between serial and decomposed calculations tested by the MPI suite.
     hi = Tnum(NASA9_TEMPERATURE_BOUNDS[2])
     e0 = zero(Tnum)
     cv0 = zero(Tnum)
-    for k in 1:n
+    @inbounds for k in 1:n
         Yk = Yat(k)
-        e0 += Yk * species_energy(eos, k, eos.T_guess)
-        cv0 += Yk * (species_cp(eos, k, eos.T_guess) - eos.Rk[k])
+        e0 += Yk * eos.e_guess[k]
+        cv0 += Yk * eos.cv_guess[k]
     end
     T_ion = cv0 > 0 ? clamp(eos.T_guess + (e - e0) / cv0, lo, hi) : eos.T_guess
     rtol = _nasa9_rtol(Tnum)
+    linear = _nasa9_linear(eos)
     converged = false
     bracketed = true
     for _ in 1:NASA9_TEMPERATURE_ITERATIONS
         f = -e; cvm = zero(Tnum)
-        for k in 1:n
+        @inbounds for k in 1:n
             Yk = Yat(k)
-            f += Yk * species_energy(eos, k, T_ion)
-            cvm += Yk * (species_cp(eos, k, T_ion) - eos.Rk[k])
+            species = eos.sp[k]
+            h_over_R, cp_over_R = _nasa9_h_cp_over_R_at(species, T_ion, linear)
+            f += Yk * (species.R * h_over_R - eos.Rk[k] * T_ion)
+            cvm += Yk * (species.R * cp_over_R - eos.Rk[k])
         end
         if !(cvm > 0)
             bracketed = false

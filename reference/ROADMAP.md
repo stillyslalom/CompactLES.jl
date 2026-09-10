@@ -652,6 +652,36 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   energy histories to round-off, and the node-scaling table re-measured at
   the largest rank count available with the probe's breakdown beside it.
 
+- [ ] **S13 — Cut the remaining cost of the NASA-9 temperature inversion.**
+  `recover_primitives!` under `Nasa9Mixture` runs a safeguarded Newton solve
+  per point and per Runge–Kutta stage, and that solve is the ~6× step cost of
+  the NASA-9 model over `IdealMixture`. Measured on the workstation at four
+  species over 300–3000 K: 362 ns per point before the fused per-species
+  evaluation and the precomputed `T_guess` seed (`e_guess` / `cv_guess`),
+  274 ns after, with temperatures bitwise unchanged. What remains, in order
+  of payoff per risk:
+  1. Flatten the interval storage to an isbits form. The lookup through
+     `Vector{Nasa9Species}` into each species' `Vector{Nasa9Interval}` costs
+     5 ns against 2–3 ns for each polynomial, and is the bulk of one
+     residual evaluation even after the fusion. S5 needs the same
+     fixed-width representation for the device mirror; do it once.
+  2. Relax the convergence criterion from 32 eps toward 1e-10 relative,
+     which saves about one of the four or five iterations. Newton's last
+     iteration exists to certify the previous one. A numerics decision: it
+     moves recovered temperatures at the 1e-10 level and so the serial and
+     MPI baselines.
+  3. Warm-start from the stored `T_ion` field, one or two iterations instead
+     of four or five. It trades away the state-only seed that
+     `mixture_temperature_status` documents for bit-for-bit agreement between
+     serial and decomposed runs and for restart independence; only worth it
+     if 1 and 2 leave the model still far from the ideal-gas step cost.
+  Keep the polynomial powers literal (`T^4`): a repeated product is not
+  bit-identical to the library power and moves every baseline for nothing.
+  **Depends on:** nothing for stage 1; a baseline decision for 2 and 3.
+  **Gate:** the core gate with bit-identical convergence orders for stage 1,
+  and explained baseline updates for 2 or 3; time the inversion before and
+  after at four species in the same session.
+
 ## P2/P3: high-energy-density physics
 
 H1 is the principal infrastructure dependency for stiff diffusion. These are
