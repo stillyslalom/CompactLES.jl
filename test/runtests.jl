@@ -1622,6 +1622,52 @@ end
                                        bcs=per3, art=ArtParams(detector=:bogus))
 end
 
+@testset "pyranda_filter: symbol, Nyquist zero, 9/10 integral, closures" begin
+    # Pyranda's c8ff8 transcribed as a symmetric banded scheme, pinned against
+    # its analytic symbol the way the d8 detector is; the same filter-side
+    # sign conventions of BandPlan carry it.
+    N = 64
+    s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), filt=pyranda_filter(),
+               bcs=per3)
+    f = CL.field(s.decomp)
+    pad = s.decomp.n_halo_d[1]
+    β, α = 1.6688e-1, 6.6624e-1
+    a, b, c, d, e = 9.9965e-1, 6.6652e-1, 1.6674e-1, 4.0e-5, -5.0e-6
+    symbol(k) = (a + 2b * cos(k) + 2c * cos(2k) + 2d * cos(3k) + 2e * cos(4k)) /
+                (1 + 2α * cos(k) + 2β * cos(2k))
+    for kf in (0.25, 0.5, 0.75)
+        k = kf * π
+        for i in 1:N
+            f[i+pad, 1, 1] = cos(k * i)
+        end
+        filter_field!(f, s)
+        i0 = N ÷ 2
+        @test f[i0+pad, 1, 1] / cos(k * i0) ≈ symbol(k) rtol = 1e-10
+    end
+    @test symbol(0.0) ≈ 1.0 rtol = 1e-14
+    @test abs(symbol(π)) < 1e-12
+    @test symbol(0.5π) > 0.99
+    ks = range(0, π; length=20001)
+    @test sum(symbol.(ks)) * step(ks) / π ≈ 0.9 atol = 2e-3
+    # Grid-to-grid oscillation on a constant is removed to round-off.
+    for i in 1:N
+        f[i+pad, 1, 1] = 1.0 + 0.5 * (-1)^i
+    end
+    filter_field!(f, s)
+    @test maximum(abs(f[i+pad, 1, 1] - 1.0) for i in 1:N) < 1e-12
+    # Closed edges: the telescoping rows pass a constant exactly, and each
+    # row's two sides sum equally by construction.
+    for row in pyranda_filter().closures
+        @test sum(row.lhs) ≈ sum(row.rhs) rtol = 1e-14
+    end
+    sw = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), filt=pyranda_filter(),
+                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]))
+    fw = CL.field(sw.decomp)
+    fill!(fw, 1.0)
+    filter_field!(fw, sw)
+    @test maximum(abs(fw[i+pad, 1, 1] - 1.0) for i in 1:N) < 1e-13
+end
+
 @testset "detector = :d8 through compute_artificial!" begin
     # End to end on all three dimensions and both sensor weights, against the
     # δ⁴ default on identical data. A near-grid-scale ramp must still fire; a

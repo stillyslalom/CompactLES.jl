@@ -36,7 +36,7 @@ lele_d1_8 level_regions line_profile line_sample load_checkpoint!
 load_checkpoint_hdf5!
 makie_available mass_fraction max_rate mix_width mixture_density molecular_mixing
 mpi_main nasa9_constant_cp next_time nlevels npatches nspecies pade_d1_4
-plane_profile profile_coordinate profile_spacing profileplot profileplot!
+plane_profile profile_coordinate profile_spacing profileplot profileplot! pyranda_filter
 read_nasa9 recover_primitives! refined_region refresh_primitives! revolve_profile
 rewind! run! save_checkpoint save_checkpoint_hdf5 save_hdf5 save_vtk setup
 sine_cluster species_enthalpy species_names species_pdf state_admissibility

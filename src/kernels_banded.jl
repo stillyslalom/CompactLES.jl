@@ -137,6 +137,52 @@ function compact_d8(::Type{T}=Float64) where {T}
 end
 
 """
+    pyranda_filter()
+
+Pyranda's compact eighth-order dealiasing filter, the `c8ff8` stencil of
+`pyranda/parcop/stencils.f90` ([LLNL/pyranda](https://github.com/LLNL/pyranda))
+transcribed verbatim as a symmetric pentadiagonal [`BandedCompactScheme`](@ref):
+
+    β F_{i±2} + α F_{i±1} + F_i = a f_i + b f_{i±1} + c f_{i±2} + d f_{i±3} + e f_{i±4}
+
+with β = 0.16688, α = 0.66624, a = 0.99965, b = 0.66652, c = 0.16674,
+d = 4·10⁻⁵ and e = −5·10⁻⁶, each `±` term standing for the sum of the two
+neighbours. Pyranda names it the 9/10 filter: the transfer function
+T(k) = (a + 2b cos k + 2c cos 2k + 2d cos 3k + 2e cos 4k) /
+(1 + 2α cos k + 2β cos 2k) integrates to 9/10 of π over 0 ≤ k ≤ π. It is one
+at k = 0 (the right-hand side sums to 1 + 2α + 2β) and zero at the Nyquist
+wavenumber (a − 2b + 2c − 2d + 2e = 0), and it is still 0.988 at
+k = 0.75π, where [`compact_filter`](@ref) at αf = 0.45 has fallen to 0.854.
+
+At a closed edge the rows are Pyranda's "telescoping" set: row 1 the
+identity, row 2 the tridiagonal filter α₂ = 0.4997 with right-hand side
+(0.49985, 0.9997, 0.49985), and rows 3 and 4 the interior left-hand side
+over right-hand sides (0.1668, 0.66656, 0.99952, ...) and
+(4·10⁻⁵, 0.16672, 0.66652, 0.99968, ...). Each row's two sides sum equally,
+so a constant passes exactly. Pyranda applies these rows where a boundary is
+neither periodic nor symmetric; at a symmetric boundary it folds the interior
+stencil across the mirror instead, which is not transcribed.
+
+Pass it as `Numerics.filt` for a like-for-like comparison with Pyranda,
+beside [`lele_d1_10`](@ref) for the derivative and `detector = :d8` for the
+sensor.
+"""
+function pyranda_filter(::Type{T}=Float64) where {T}
+    β, α = T(1.6688e-1), T(6.6624e-1)
+    a, b, c, d, e = T(9.9965e-1), T(6.6652e-1), T(1.6674e-1), T(4.0e-5), T(-5.0e-6)
+    interior = T[β, α, 1, α, β]
+    BandedCompactScheme{T}("Pyranda c8ff8 filter", 2, T[α, β], a, T[b, c, d, e], true,
+        [BandedClosureRow{T}(T[0, 0, 1, 0, 0], T[1]),
+         BandedClosureRow{T}(T[0, 4.997e-1, 1, 4.997e-1, 0],
+                             T[4.9985e-1, 9.997e-1, 4.9985e-1]),
+         BandedClosureRow{T}(interior,
+                             T[1.668e-1, 6.6656e-1, 9.9952e-1, 6.6656e-1, 1.668e-1]),
+         BandedClosureRow{T}(interior,
+                             T[4.0e-5, 1.6672e-1, 6.6652e-1, 9.9968e-1, 6.6652e-1,
+                               1.6672e-1, 4.0e-5])])
+end
+
+"""
     interface_closures(scheme::BandedCompactScheme) -> Vector{BandedClosureRow}
 
 The patch-interface closure rows of a banded scheme, per the extended-data

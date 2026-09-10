@@ -24,6 +24,7 @@ lele_d1_10
 compact_filter
 gaussian_filter
 compact_d8
+pyranda_filter
 ```
 
 ## Decomposition and storage

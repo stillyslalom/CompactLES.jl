@@ -156,7 +156,7 @@ the same `Problem` and `Numerics`.
 | Choice | Constructors/values |
 |---|---|
 | Derivative | `pade_d1_4()`, `lele_d1_6()`, `lele_d1_8()`, `lele_d1_10()` |
-| State filter | `compact_filter(0.45)`, `gaussian_filter()`, `compact_d8()` |
+| State filter | `compact_filter(0.45)`, `pyranda_filter()`, `gaussian_filter()`, `compact_d8()` |
 | Artificial sensors | `mu_sensor`: `:strain` or `:velocity`; `beta_sensor`: `:strain`, `:gated_strain`, `:ungated_dilatation`, or `:dilatation` |
 | Sensor combination | `reduction=:sum` or `:max`; `smoother=:gaussian` or `:compact` |
 | Detector | `detector=:delta4` (default) or `:d8` |

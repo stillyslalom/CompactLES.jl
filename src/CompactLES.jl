@@ -67,7 +67,7 @@ include("display.jl")
 export ConservedState, allocate_state
 export CompactScheme, ClosureRow, lele_d1_6, lele_d1_8, pade_d1_4, compact_filter
 export gaussian_filter
-export BandedCompactScheme, BandedClosureRow, lele_d1_10, compact_d8
+export BandedCompactScheme, BandedClosureRow, lele_d1_10, compact_d8, pyranda_filter
 export BoundaryCondition, PeriodicBC, SlipWallBC, NoSlipWallBC
 export ExtrapolationBC, AxisBC, OriginBC, PoleBC
 export enforce!, correct_flux!, correct_rhs!, validate_bc, isperiodic
