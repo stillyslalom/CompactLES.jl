@@ -132,12 +132,15 @@ effect. The appendix link carries the sweep.
 - **Float32 or device runs.** Keep the default closures. The Brady–Livescu
   rows floor at 1e-3 in Float32, above the cascade's 1e-4.
 - **A three-dimensional CFL number looks small next to the literature.**
-  `max_rate` sums the acoustic rate over dimensions, conservative by √3 on
-  an isotropic grid; [Pyranda](https://github.com/LLNL/pyranda) counts the
-  sound speed once, optimistic by √3.
-  Taylor–Green at 32³ is stable to nominal `cfl` 3.0 to 3.3, where the sum
-  form predicts 1.85, so every three-dimensional fit here ran at a fifth of
-  the stable step. The battery is one-dimensional and unaffected. Open item 1
+  `max_rate` takes the acoustic rate as the Euclidean bound
+  `c · sqrt(Σ 1/h_d²)`, the linear limit on an isotropic grid;
+  [Pyranda](https://github.com/LLNL/pyranda) counts the sound speed once,
+  optimistic by √3, so its CFL reads as √3 times this one on such a grid.
+  Taylor–Green at 32³ is stable to nominal `cfl` 1.75 to 1.9, where the bound
+  predicts 1.68 to 1.85. Until September 2026 the rate was summed over
+  dimensions, conservative by √3, and a three-dimensional number recorded
+  before then reads as `cfl_old / √3`; the battery is one-dimensional and
+  unaffected
   ([the rate convention](CALIBRATION_APPENDIX.md#the-cfl-rate-is-normalized-differently)).
 
 ## The battery and how to read it
@@ -371,9 +374,9 @@ from it.
 **Recommendation.** Set `filter_cfl = 0.35`; hold α = 0.45 as the default
 and select `compact_filter(0.49)` for resolved smooth turbulence. At the
 reference CFL nothing changes; below it the strength falls with the CFL to
-the value the battery ranks first, with a margin of ten times the edge at
-`cfl = 0.15` and five after one retry, where α = 0.49 relaxed would reach
-the edge on the first retry. `C_beta`, `C_kappa`, `C_D` and `C_Y` do not
+a value the battery reads as its α = 0.486 row, with a margin of seventeen
+times the edge at `cfl = 0.15` and eight after one retry, where α = 0.49
+relaxed would reach the edge on the second. `C_beta`, `C_kappa`, `C_D` and `C_Y` do not
 move under either candidate
 ([constants](CALIBRATION_APPENDIX.md#the-constants-under-a-weaker-filter),
 [decision](CALIBRATION_APPENDIX.md#the-default-decision)). The code default
@@ -475,34 +478,28 @@ vortex-ring/SF6 case has not been run under it
 
 In approximate priority order; each links to the measurements it rests on.
 
-1. **Put the Euclidean acoustic bound in `max_rate`.** The sum over
-   dimensions is conservative by √3 on an isotropic three-dimensional grid
-   and the measured Taylor–Green ceiling confirms it; every 3-D fit ran at
-   one fifth of the stable step, and the filter reference CFL of the next
-   item is stated in the present convention
-   ([the rate convention](CALIBRATION_APPENDIX.md#the-cfl-rate-is-normalized-differently)).
-2. **Apply the filter decision or record its retention**: `filter_cfl = 0.35`
+1. **Apply the filter decision or record its retention**: `filter_cfl = 0.35`
    at α = 0.45, with the `test/cases.jl` pins moved together with `Numerics`
    ([decision](CALIBRATION_APPENDIX.md#the-default-decision)). Retries and
    subcycling invariance under relaxation are argued, not measured.
-3. **Raise the CFL ceiling at the symmetry cell.** Two live leads: the
+2. **Raise the CFL ceiling at the symmetry cell.** Two live leads: the
    density proportionality of β\*, and the per-step filter
    ([origin cell](CALIBRATION_APPENDIX.md#the-origin-cell-is-a-startup-transient)).
-4. **Refit `C_mu` on the history misfit** on a case with an unresolved
+3. **Refit `C_mu` on the history misfit** on a case with an unresolved
    cascade; the peak is unusable and 0.004 is withdrawn
    ([Taylor–Green](CALIBRATION_APPENDIX.md#taylorgreen)).
-5. **Decide the detector**; waits on item 3
+4. **Decide the detector**; waits on item 2
    ([recommendation](CALIBRATION_APPENDIX.md#recommendation)).
-6. **Refit `C_mu` under `:gaussian`** and then evaluate
+5. **Refit `C_mu` under `:gaussian`** and then evaluate
    `mu_sensor = :velocity`.
-7. **Make κ\* non-singular as T_ion → 0**
+6. **Make κ\* non-singular as T_ion → 0**
    ([cold-state limit](CALIBRATION_APPENDIX.md#the-cold-state-limit)).
-8. **Explain the spherical fold's intolerance of sharp data**
+7. **Explain the spherical fold's intolerance of sharp data**
    ([geometry limits](CALIBRATION_APPENDIX.md#geometry-limits)).
-9. **Make `filter_state!` conservative on non-Cartesian metrics.**
-10. **Decide the filter wall rows**, a recalibration of the wall cases
+8. **Make `filter_state!` conservative on non-Cartesian metrics.**
+9. **Decide the filter wall rows**, a recalibration of the wall cases
    ([wall cascade](CALIBRATION_APPENDIX.md#the-filters-wall-cascade)).
-11. **Put `delta4_sum!`'s even path on the half-offset mirror**; unmeasured
-    ([the clamp](CALIBRATION_APPENDIX.md#the-fourth-difference-clamp-at-a-fold)).
-12. **Decide `species_flux`** on the vortex-ring/SF6 case
-    ([open](CALIBRATION_APPENDIX.md#open)).
+10. **Put `delta4_sum!`'s even path on the half-offset mirror**; unmeasured
+   ([the clamp](CALIBRATION_APPENDIX.md#the-fourth-difference-clamp-at-a-fold)).
+11. **Decide `species_flux`** on the vortex-ring/SF6 case
+   ([open](CALIBRATION_APPENDIX.md#open)).

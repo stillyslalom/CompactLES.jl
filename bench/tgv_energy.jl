@@ -557,7 +557,7 @@ end
 function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                       filter_interval=1, sample=100, progress=0,
                       nmax=typemax(Int), smoother=:compact,
-                      cfl=0.6, filter_cfl=0.0, alphaf=0.45,
+                      cfl=0.35, filter_cfl=0.0, alphaf=0.45,
                       mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
                       T::Type{<:AbstractFloat}=Float64,
                       backend::AbstractBackend=CPUBackend(),

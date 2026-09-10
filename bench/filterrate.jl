@@ -11,31 +11,33 @@
 #
 # --- What this measured, so it is not rediscovered ---------------------------
 #
-# At N = 32 to t = 0.5, kinetic energy removed by the filter alone:
+# At N = 32 to t = 0.5, kinetic energy removed by the filter alone (CFL in the
+# Euclidean acoustic-rate convention of `max_rate`, see the README):
 #
 #   cfl    steps   unrelaxed          relaxed (filter_cfl = 0.4)
-#   0.4      73    4.092e-3  1.000    4.042e-3  1.000
-#   0.2     145    8.107e-3  1.981    4.042e-3  1.000
-#   0.1     289    1.608e-2  3.930    4.042e-3  1.000
+#   0.4      42    2.357e-3  1.000    2.351e-3  1.000
+#   0.2      84    4.707e-3  1.997    2.351e-3  1.000
+#   0.1     168    9.386e-3  3.982    2.351e-3  1.000
 #
-# Unrelaxed, the loss tracks the STEP COUNT (73 : 145 : 289 = 1 : 1.99 : 3.96),
+# Unrelaxed, the loss tracks the STEP COUNT (42 : 84 : 168 = 1 : 2.00 : 4.00),
 # not the elapsed time. That is the dt-inconsistency recorded as model debt 1 in
 # reference/ROADMAP.md, measured directly rather than inferred: a calculation at
 # half the CFL applies twice the subgrid dissipation over the same interval.
-# `filter_cfl` makes it a rate, constant to six figures across a 4x CFL change.
+# `filter_cfl` makes it a rate, constant to five figures across a 4x CFL change.
 #
 # The same with `landing=0.037`, an EveryTime callback whose instants do not
 # divide the step, so the run shortens steps to land on each of thirteen:
 #
 #   cfl    steps   unrelaxed          relaxed (filter_cfl = 0.4)
-#   0.4      81    4.539e-3  1.000    4.042e-3  1.000
-#   0.2     149    8.330e-3  1.835    4.042e-3  1.000
-#   0.1     297    1.652e-2  3.640    4.042e-3  1.000
+#   0.4      54    3.029e-3  1.000    2.351e-3  1.000
+#   0.2      95    5.321e-3  1.757    2.351e-3  1.000
+#   0.1     176    9.830e-3  3.245    2.351e-3  1.000
 #
-# Unrelaxed, the landing adds eight steps at cfl 0.4, each a full pass, and the
-# loss rises 10.9%, so a run's numerical dissipation depends on its output
-# schedule. Relaxed, every entry agrees with the unlanded table in every digit
-# printed, because a shortened step filters in proportion to dt * rate.
+# Unrelaxed, the landing adds twelve steps at cfl 0.4, each a full pass, and the
+# loss rises 28.5%, so a run's numerical dissipation depends on its output
+# schedule. Relaxed, every entry agrees with the unlanded table to six
+# significant figures, because a shortened step filters in proportion to
+# dt * rate.
 #
 # --- Choosing the case -------------------------------------------------------
 #

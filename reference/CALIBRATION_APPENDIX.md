@@ -1224,18 +1224,19 @@ A parallel shear layer, `u_x = 0.1 sin(4y)` at uniform ρ and p, is an exact ste
 solution of the Euler equations and stays one discretely, since every x-derivative
 of the field vanishes. Kinetic energy is then constant in time and the filter is
 the only mechanism that can change it. `bench/filterrate.jl`, N = 32 to t = 0.5,
-zero viscosity and artificial properties off:
+zero viscosity and artificial properties off, CFL in the Euclidean
+acoustic-rate convention ([below](#the-cfl-rate-is-normalized-differently)):
 
 ```
 cfl    steps   unrelaxed          relaxed (filter_cfl = 0.4)
-0.4      73    4.092e-3  1.000    4.042e-3  1.000
-0.2     145    8.107e-3  1.981    4.042e-3  1.000
-0.1     289    1.608e-2  3.930    4.042e-3  1.000
+0.4      42    2.357e-3  1.000    2.351e-3  1.000
+0.2      84    4.707e-3  1.997    2.351e-3  1.000
+0.1     168    9.386e-3  3.982    2.351e-3  1.000
 ```
 
-Unrelaxed, the loss tracks the step count (73 : 145 : 289 = 1 : 1.99 : 3.96) and
+Unrelaxed, the loss tracks the step count (42 : 84 : 168 = 1 : 2.00 : 4.00) and
 not the elapsed time, so a calculation at half the CFL applies twice the subgrid
-dissipation over the same physical interval. Relaxed, the loss is constant to six
+dissipation over the same physical interval. Relaxed, the loss is constant to five
 significant figures across a fourfold change in timestep.
 
 Shortened steps are the same dependence in another form. `landing=0.037`
@@ -1244,16 +1245,16 @@ so `run!` shortens steps to land on thirteen instants:
 
 ```
 cfl    steps   unrelaxed          relaxed (filter_cfl = 0.4)
-0.4      81    4.539e-3  1.000    4.042e-3  1.000
-0.2     149    8.330e-3  1.835    4.042e-3  1.000
-0.1     297    1.652e-2  3.640    4.042e-3  1.000
+0.4      54    3.029e-3  1.000    2.351e-3  1.000
+0.2      95    5.321e-3  1.757    2.351e-3  1.000
+0.1     176    9.830e-3  3.245    2.351e-3  1.000
 ```
 
-Unrelaxed, the landing adds eight steps at `cfl = 0.4`, each paying a full
-pass, and the loss rises by 10.9%, so the numerical dissipation of a run
+Unrelaxed, the landing adds twelve steps at `cfl = 0.4`, each paying a full
+pass, and the loss rises by 28.5%, so the numerical dissipation of a run
 depends on its output schedule. Relaxed, every entry agrees with the unlanded
-table in every printed digit, since a shortened step filters in proportion to
-`dt · rate`. `StepControl` retries are not inducible on a steady case and have
+table to six significant figures, since a shortened step filters in proportion
+to `dt · rate`. `StepControl` retries are not inducible on a steady case and have
 not been measured directly; they lower the CFL by `cfl_backoff`, which the
 first table covers. Under subcycling a refined pass reads the root `dt · rate`,
 which equals the fine level's own product when the fine rate is three times
@@ -1735,12 +1736,18 @@ the same thing locally and intermittently. Relaxation removes the dependence,
 and it is the property that would let an α fitted at one CFL be used at
 another.
 
-Switching it on is not free. The reference CFL fixes the absolute strength, so
-`filter_cfl = 0.35` gives a case running at `cfl = 0.15` a quarter of the
+Switching it on is not free. The reference CFL fixes the absolute strength,
+and it is one number for every dimensionality while the CFL rate is not: under
+the Euclidean acoustic bound a three-dimensional isotropic run at the
+Taylor–Green step reads `cfl = 0.35`, and the one-dimensional battery's
+`cfl = 0.15` means what it always did ([the rate
+convention](#the-cfl-rate-is-normalized-differently)). Under
+`filter_cfl = 0.35` a case running at `cfl = 0.15` receives 0.43 of the
 filtering per unit time it receives today. The one-dimensional battery runs at
 0.15 to 0.4 precisely because those cases are hard to stabilize, so
 `bench/artcal.jl filter` has to clear the policy change at the production CFL
-numbers before it can become a default. That sweep has not been run.
+numbers before it can become a default ([the battery under the relaxed
+formulation](#the-battery-under-relaxation)).
 
 <a id="the-256-confirmation"></a>
 
@@ -1795,10 +1802,14 @@ recorded above and not a filter effect.
 ### The battery under the relaxed formulation
 
 `bench/artcal.jl filter filter_cfl=0.6` runs the same five strengths with
-each pass scaled by the running CFL against a reference of 0.6, the CFL of
-the Taylor–Green fits. Noh at `cfl = 0.15` then receives a quarter of a pass
-per step, Woodward–Colella at 0.3 a half, and Lax and Shu–Osher at 0.4 two
-thirds. The test suite is unaffected: `test/cases.jl` pins
+each pass scaled by the running CFL against a reference of 0.6, the nominal
+CFL of the Taylor–Green fits under the summed rate convention in force when
+this sweep was taken. Those fits read `cfl = 0.35` under the present
+Euclidean rate, while the one-dimensional battery's CFL numbers mean the same
+under both ([the rate convention](#the-cfl-rate-is-normalized-differently)),
+so the sweep is repeated at `filter_cfl = 0.35` below. Against 0.6, Noh at
+`cfl = 0.15` receives a quarter of a pass per step, Woodward–Colella at 0.3 a
+half, and Lax and Shu–Osher at 0.4 two thirds. The test suite is unaffected: `test/cases.jl` pins
 `compact_filter(0.45)` and `filter_cfl = 0` in every case, so the guards in
 `test/validation.jl` measure the unrelaxed configuration until those pins are
 moved together with the solver default.
@@ -1849,6 +1860,47 @@ plateau above one with a wall excess in place of a deficit, now appears at
 pass at 0.45 is a weaker filter than a full pass at 0.486, so this is the shift
 the unrelaxed table already shows and not a new one.
 
+**The same sweep at `filter_cfl = 0.35`**, the reference under the present
+rate convention, is a stronger filter on the battery than 0.6 was: Noh at
+`cfl = 0.15` receives 0.43 of a pass per step and Woodward–Colella at 0.3
+receives 0.86, while Lax and Shu–Osher at 0.4 run above the reference and
+receive a full pass, so their columns are [the unrelaxed
+table](#the-battery-under-alpha) to every digit.
+
+```
+alphaf   Noh1 plat  deficit | Noh2 plat | Noh3 plat | Lax L1  | Shu amp | WC peak
+0.40      0.9992     +64%   |  0.9374   |  0.9762   | 5.1e-3  | 1.6146  | 6.5900
+0.45      0.9990     +63%   |  0.9376   |  0.9766   | 5.0e-3  | 1.6180  | 6.6075
+0.486     0.9989     +56%   |  0.9380   |  0.9776   | 4.9e-3  | 1.6192  | 6.6163
+0.49      0.9989     +55%   |  0.9380   |  0.9775   | 5.0e-3  | 1.6192  | 6.6312
+0.499     0.9984     +48%   |  0.9358   |    NaN    | 5.7e-3  | 1.6223  | 6.6917
+```
+
+Every case completes through α = 0.49 and the spherical Noh loses positivity
+at 0.499, as under 0.6. The relaxed α = 0.45 row reads as the unrelaxed
+α = 0.486 row on the curved Noh columns, 0.9376 and 0.9766 in both, with the
+planar deficit at 63% against 61%; the per-pass strength at the Noh CFL is
+ε = 0.043, the α = 0.479 equivalent.
+
+```
+cfl   alphaf | Noh1 plat  deficit | Noh2 plat | Noh3 plat | WC peak
+0.4   0.45   |    NaN      NaN    |   NaN     |   NaN     | 6.6105
+0.4   0.486  |    NaN      NaN    |   NaN     |   NaN     | 6.6221
+0.4   0.49   |    NaN      NaN    |   NaN     |   NaN     | 6.6368
+0.3   0.45   |  1.0017    −387%   |   NaN     |  0.9764   | 6.6075
+0.3   0.486  |  1.0004    −207%   |   NaN     |  0.9776   | 6.6163
+0.3   0.49   |  1.0000    −139%   |   NaN     |  0.9775   | 6.6312
+0.2   0.45   |  0.9993     +58%   |  0.9380   |  0.9766   | 6.6077
+0.2   0.486  |  0.9992     +50%   |  0.9383   |  0.9776   | 6.6160
+0.2   0.49   |  0.9992     +49%   |  0.9382   |  0.9775   | 6.6310
+```
+
+The cylindrical axis holds at 0.2 and the planar wall at 0.2 with the
+wall-excess mode at 0.3, as before. The spherical origin holds at 0.3, and the
+single 0.4 completion at α = 0.486 seen under 0.6 and in the unrelaxed table
+does not recur; that point was marginal in both earlier tables, and no
+ceiling moves.
+
 <a id="the-stability-edge"></a>
 
 ### The stability edge
@@ -1894,7 +1946,10 @@ the relaxed formulation each halving halves ε with it, so retries walk a case
 toward the edge. Unrelaxed they walk it away, since a halved timestep doubles
 the filtering per unit time. From `cfl = 0.15` under `filter_cfl = 0.6`,
 α = 0.45 has ε = 0.025, ten times the edge, and reaches 0.003 on the third
-retry; α = 0.49 has ε = 0.005 and reaches the edge on the first. The ceiling
+retry; α = 0.49 has ε = 0.005 and reaches the edge on the first. Under
+`filter_cfl = 0.35`, the same reference in the present rate convention,
+α = 0.45 has ε = 0.043, seventeen times the edge, and reaches 0.0027 on the
+fourth retry; α = 0.49 has 0.0086 and reaches the edge on the second. The ceiling
 tables above show the ceilings unchanged under relaxation, so the extra
 filtering a retry used to bring is not load-bearing at the recorded points,
 but the margin separates the two candidate defaults.
@@ -1906,7 +1961,8 @@ but the margin separates the two candidate defaults.
 Every constant in this file was fitted under `compact_filter(0.45)` applied at
 full strength every step. `bench/artcal.jl beta kappa D Y` was re-run at
 α = 0.49 unrelaxed and at α = 0.45 under `filter_cfl = 0.6`, the two candidate
-defaults, beside a baseline at the fitted configuration in the same
+defaults, and again under `filter_cfl = 0.35` once the rate convention had
+changed, beside a baseline at the fitted configuration in the same
 environment; the baseline reproduces every table above to the fourth digit.
 The default rows and the features each fit rests on:
 
@@ -1915,6 +1971,7 @@ background                  | Noh3 at C_beta=1 | Noh1 deficit at C_kappa=0.01 | 
 α = 0.45 unrelaxed (fitted) |     0.9751       |     +64%, the trough         |   0.01820             |   −0.0135
 α = 0.49 unrelaxed          |     0.9769       |     +59%, the trough         |   0.01800             |   −0.0136
 α = 0.45, filter_cfl = 0.6 |     0.9775       |     +60%, the trough         |   0.01812             |   −0.0114
+α = 0.45, filter_cfl = 0.35 |     0.9766       |     +63%, the trough         |   0.01820             |   −0.0135
 ```
 
 None of the four constants moves. `C_beta = 0` loses positivity on every
@@ -1936,7 +1993,11 @@ passive interface less at every value. `C_Y = 100` and 200 hold the excursion
 at 1.1 to 1.4% and 0.9 to 1.0%, and 50 at 1.6 to 1.8%, under all three; the one visible change
 is the 1000 row, whose excursion falls from −0.10 under the fitted background
 ([above](#c_y-the-mass-fraction-bound)) to −0.012 and −0.009 under the weaker
-filters, a filter interaction at a value no default is near.
+filters, a filter interaction at a value no default is near. The
+`filter_cfl = 0.35` background repeats every reading above. Its Lax,
+Shu–Osher and shocked-interface columns are the fitted configuration to every
+digit, since those cases run at `cfl = 0.4`, above the reference, and its
+`C_Y = 1000` excursion is the fitted −0.10 for the same reason.
 
 The four constants are insensitive to the filter over the range between the
 fitted configuration and both candidates, so the recalibration that [the
@@ -1958,26 +2019,29 @@ The evidence, in the order it was taken:
    met at the same ε by both formulations.
 4. Relaxation makes the filter's dissipation a rate, removing its dependence
    on the CFL, on landing steps and on retries, and the battery clears it at
-   the production CFL numbers through α = 0.49 with no ceiling moved.
+   the production CFL numbers through α = 0.49 with no ceiling moved, under
+   both references at which it was run.
 5. None of the four constants fitted under the present filter moves under
    either candidate.
 
 **Recommendation: move the default to `filter_cfl = 0.35` and hold α = 0.45.**
 At `cfl = 0.35` the weight is one and every result above that CFL, the
 Taylor–Green fits included, is unchanged bit for bit. Below it the strength
-falls with the CFL, which at the battery's production numbers is the
-0.4875-equivalent that the battery ranks first, with a margin of ten times the
-edge at `cfl = 0.15` and five times after one retry. A run at a low CFL then
-receives the same dissipation per unit time as one at 0.6 rather than several
-times more, and lowering the CFL, retrying, or writing output more often no
-longer moves the answer away from the reference. The reference CFL 0.35 is the
-CFL of every Taylor–Green fit and above the whole battery, so no measured run
-changes above it.
+falls with the CFL, which at the Noh CFL is the α = 0.479 equivalent and reads
+as the unrelaxed 0.486 row, with a margin of seventeen times the edge at
+`cfl = 0.15` and eight times after one retry. A run at a low CFL then receives
+the same dissipation per unit time as one at 0.35 rather than several times
+more, and lowering the CFL, retrying, or writing output more often no longer
+moves the answer away from the reference. The reference CFL 0.35 is the CFL of
+every Taylor–Green fit, so none of those changes. The battery's Lax, Shu–Osher
+and interface cases run at 0.4 and are unchanged as well; its Noh and
+Woodward–Colella cases run below the reference and were measured under the
+candidate ([the battery under relaxation](#the-battery-under-relaxation)).
 
 α = 0.49 is the fitted value for smooth turbulence at 128³ and 256³ and stays
 a per-run selection. It improves the 256³ kinetic-energy misfit by a third at
-the cost of a margin of twice the edge at the Noh CFL and none on the first
-retry; a resolved case that is not shock-dominated can take it, and a
+the cost of a margin of three times the edge at the Noh CFL, which the second
+retry spends; a resolved case that is not shock-dominated can take it, and a
 converging strong shock should not.
 
 The code default is unchanged as of this revision. Moving it changes every run
@@ -2704,60 +2768,71 @@ conservative, and the filter supplies 37% of the energy sink at 128³.
 
 Pyranda forms `Σ_d |u_d|/Δ_d` for advection and adds `|c|/min_d(Δ_d)` once for the
 acoustic part, then takes the diffusive limits as separate minima with their own
-coefficients (0.1 and 0.2). `max_rate` sums `(|u_d| + c)/h_d` over active
-dimensions and folds the diffusive rate into the same sum.
+coefficients (0.1 and 0.2). Until September 2026 `max_rate` summed
+`(|u_d| + c)/h_d` over active dimensions and folded the diffusive rate into the
+same sum; the sum form was in the initial commit with no recorded reason.
 
-The sound speed is therefore counted once there and once per active dimension
-here. On an isotropic three-dimensional grid the rate computed here is up to three
-times larger for the same state, so `cfl = 0.15` corresponds to a step comparable
-to `cfl ≈ 0.4` under the reference convention. It does not explain
-away [the ceiling](#cfl-and-the-symmetry-cell-restriction), because the cases that
+The sound speed was therefore counted once there and once per active dimension
+here, so on an isotropic three-dimensional grid the rate computed here was up
+to three times larger for the same state, and the `cfl = 0.15` of the
+one-dimensional battery corresponded to a step comparable to `cfl ≈ 0.4` under
+the reference convention. It does not explain away [the
+ceiling](#cfl-and-the-symmetry-cell-restriction), because the cases that
 establish it are one- and two-dimensional converging geometries, where the two
 conventions largely agree.
 
-The sum form is in the initial commit with no recorded reason. Neither
-convention is the linear bound. The acoustic operator's eigenvalue at
+Neither convention is the linear bound. The acoustic operator's eigenvalue at
 wavevector k is i c |k′| with k′ the modified-wavenumber vector, so on an
 isotropic grid the three-dimensional limit on dt is 1/√3 of the one-dimensional
 limit at the same cell: the sum is conservative by √3 and the single count is
 optimistic by √3. The five-stage Carpenter–Kennedy scheme is stable on the
 imaginary axis to 3.34 and the C6 modified wavenumber peaks at 1.99 (computed
 from the coefficients in `timestep.jl` and `kernels.jl`), which predicts a
-one-dimensional acoustic ceiling of nominal `cfl = 1.68`, and on an isotropic
-three-dimensional grid a nominal ceiling of 2.91 under the sum convention,
-times (1 + Ma) for the advective part, 3.2 at Ma 0.1.
+one-dimensional acoustic ceiling of nominal `cfl = 1.68` and, on an isotropic
+three-dimensional grid, a nominal ceiling of 2.91 under the sum convention,
+times (1 + Ma) for the advective part, 3.2 at Ma 0.1. Measured on Taylor–Green
+at 32³ under the sum form, the art-off ceiling lay between nominal 3.0 and
+3.3, where the Euclidean bound puts it and the sum form (1.85) does not, and
+every Taylor–Green fit in this file had been taken at nominal `cfl = 0.6`, one
+fifth of the stable step.
 
-Measured on Taylor–Green at 32³, Re = 1600, to t = 10, Gaussian smoother,
-`compact_filter(0.45)` every step, `bench/tgv_energy.jl 32 10
+`max_rate` now takes the acoustic part as the Euclidean bound,
+`Σ_d |u_d|/h_d + c · sqrt(Σ_d 1/h_d²)` plus the diffusive term, which is
+Pyranda's structure with the Euclidean norm in place of the minimum spacing. In
+one dimension it is the previous rate exactly, so the battery and every
+one-dimensional guard are bit-identical; on an isotropic three-dimensional grid
+the acoustic part is √3 smaller, and a nominal CFL quoted for such a run before
+the change reads as `cfl_old / √3` after it. The Taylor–Green fits therefore
+read `cfl = 0.35` throughout this file, and the ceiling is the one-dimensional
+figure, 1.68 times (1 + Ma). Measured at 32³, Re = 1600, to t = 10, Gaussian
+smoother, `compact_filter(0.45)` every step, `bench/tgv_energy.jl 32 10
 configs=off:1,on:1 smoother=gaussian cfl=...`:
 
 ```
                  art off (acoustic + molecular)        art on
 cfl    steps   peak -dKE/dt   KE misfit  rate misfit   steps   KE misfit  rate misfit
-0.6    2652    1.4197e-2      1.321e-1   7.015e-1      3078    1.435e-1   7.408e-1
-0.9    1769    1.3515e-2      1.249e-1   6.890e-1      2096    1.385e-1   7.457e-1
-1.2    1328    1.3287e-2      1.197e-1   6.659e-1      1601    1.352e-1   7.307e-1
-1.5    1062    1.3115e-2      1.158e-1   6.489e-1      1300    1.327e-1   7.174e-1
-1.8     886    1.2965e-2      1.127e-1   6.334e-1      1097    1.307e-1   7.071e-1
-2.1     759    1.2850e-2      1.101e-1   6.226e-1       949    1.289e-1   7.000e-1
-2.4     664    1.2728e-2      1.079e-1   6.132e-1       837    1.274e-1   6.940e-1
-2.7     591    1.2663e-2      1.060e-1   6.022e-1       749    1.261e-1   6.887e-1
-3.0     532    1.2576e-2      1.043e-1   5.941e-1       677    1.248e-1   6.857e-1
-3.3     508    unstable                                 622    1.234e-1   6.799e-1
-3.6     514    unstable                                 583    1.212e-1   6.740e-1
+0.35   2700    1.4205e-2      1.323e-1   7.025e-1      3401    1.474e-1   7.499e-1
+0.7    1353    1.3302e-2      1.200e-1   6.685e-1      1794    1.394e-1   7.514e-1
+1.05    902    1.2982e-2      1.130e-1   6.374e-1      1243    1.353e-1   7.261e-1
+1.4     677    1.2759e-2      1.082e-1   6.153e-1       958    1.324e-1   7.113e-1
+1.6     593    1.2646e-2      1.061e-1   6.044e-1       848    1.310e-1   7.061e-1
+1.75    542    1.2601e-2      1.046e-1   5.978e-1       781    1.300e-1   7.026e-1
+1.9     510    unstable                                 724    1.291e-1   6.996e-1
+2.1     506    unstable                                 669    1.269e-1   6.964e-1
 ```
 
-The acoustic ceiling lies between nominal 3.0 and 3.3, where the Euclidean
-bound puts it and the sum form does not (1.85). With the artificial properties
-on the diffusive rate adds to the denominator, so nominal 3.6 is the art-off
-step at 3.05 and completes. Every estimator improves monotonically up to the
-edge in both arms, because under `filter_cfl = 0` each step is one filter
-pass and a longer step is less dissipation per unit time. The Taylor–Green
-fits in this file were taken at nominal `cfl = 0.6`, one fifth of the stable
-step. The bound that reduces to the present one in one dimension and to the
-measured limit in three is `Σ_d |u_d|/h_d + c · sqrt(Σ_d 1/h_d²)` plus the
-diffusive term, which is Pyranda's structure with the Euclidean norm in
-place of the minimum spacing.
+The acoustic ceiling lies between nominal 1.75 and 1.9, where the bound puts
+it: 1.68 at Ma 0 and 1.85 at Ma 0.1. An unstable row is one whose step count
+stops falling with the CFL and whose energy budget breaks, the filter share at
+the peak reaching 1327% at 1.9 and the peak itself 1.10e-1 at 2.1; neither
+raises `SolverFailure` within t = 10. With the artificial properties on the
+diffusive rate adds to the denominator, so nominal 2.1 is the art-off step at
+about 1.7 and completes. Every estimator improves monotonically up to the edge
+in both arms, because under `filter_cfl = 0` each step is one filter pass and
+a longer step is less dissipation per unit time. The rows reproduce the table
+taken under the sum form at `cfl_old / √3` to the step count within 3% and to
+the misfits within 1%; the residual is the advective part of the rate, which
+the change did not scale.
 
 <a id="no-slip-wall-flux-contract-r5-september-2026"></a>
 
