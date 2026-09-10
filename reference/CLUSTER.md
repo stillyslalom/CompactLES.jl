@@ -275,6 +275,43 @@ orders of magnitude under the step time), so the losses are bandwidth and
 per-region barriers. Trixi.jl, the nearest comparable solver and one that offers a
 hybrid mode, likewise published its large-scale TGV scaling as pure MPI.
 
+**On a hybrid desktop, two further effects sit on top of that.** Measured on
+the development workstation (i9-12900K, 8 performance and 8 efficiency cores,
+Windows, Julia 1.11.4) on the 768×48 two-species tube of
+`bench/he_co2_shock_tube.jl` under C10, `detector = :d8` and
+`mu_sensor = :velocity`, 2026-09-09:
+
+- *Thread placement.* Nothing pins threads on Windows, and the scheduler places
+  some of eight threads on efficiency cores or on SMT siblings for part of a
+  run. At `-t 8` the median `step!` over fifteen calls was 30–37 ms while the
+  minimum was 19–27 ms; confining the process to one SMT thread per performance
+  core (affinity mask `0x5555`, through `SetProcessAffinityMask` in-process or
+  `start /affinity` at launch) gave a median of 21.7 ms against a minimum of
+  18.6. End to end the pinned run reproduces to 3% (12.8 and 13.2 s for 412
+  steps) where unpinned runs spread from 12.3 to 14.7 s. The comparison across
+  thread counts in the `@threaded` note of `src/threading.jl` and the `-t 16`
+  guidance elsewhere were taken unpinned, so their spread includes this.
+- *Compilation inside the timed wall.* The deck's callback is a closure, so
+  `run!` is compiled afresh inside the wall the script prints: 3.2 s at `-t 8`,
+  or a quarter of that 412-step run and 40% of the 8-rank one. The script now
+  prints a steady-state ms/step beside the total; compare runs on that.
+
+Net of both, the 768×48 case at eight P-cores costs 24 ms/step pinned at `-t 8`
+and 12 ms/step at `-n 8 -t 1`, so ranks beat threads 2x on a 37k-point planar
+grid, with every phase of the RHS scaling about 3x at eight threads (pointwise
+passes 4x, line solves 2.5x). The loss is region granularity rather than
+bandwidth at this size: that configuration enters 195 threaded regions per RHS
+evaluation of about 54 µs serial work each, against a 3–5 µs spawn/join floor
+at eight threads (`probes/spawnfloor.jl`, 1 ms per RHS of a 3.5 ms total) and a
+join barrier per region, and the line-solve path pays three regions per solve
+(fill, solve, scatter) with the solved block crossing cores in between. A
+prototype that fills, solves and scatters each thread's own lines in one region
+ran the x-direction filter solve 1.86x faster at `-t 8` (36.9 to 19.8 µs), at
+parity serially once the 16-wide column blocking was kept inside each chunk,
+and bitwise identical; the work item is in `ROADMAP.md`. Static scheduling for
+`Threads.@threads` and a narrower column block for the 48-line x solve were
+both measured inside the 10–20% spread and not adopted.
+
 **`--cpu-bind=threads` distributes CPUs non-uniformly below full packing** (3–5
 cores per rank at half, 7–14 at a quarter), and an explicit `-c` does not repair
 it. With collectives every step the slowest rank sets the pace, so these ragged

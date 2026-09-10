@@ -524,6 +524,7 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   partitioned transfers only where profiles justify them.
   Measure stacked `max_rate` reductions before adding another launch optimization;
   revisit extra streams only if batching still leaves useful concurrency.
+  The replicated interface solve has a cost model and a planned fix in S12.
   **Depends on:** reliable S1 timing. **Gate:** crossover data and preserved
   distributed accuracy, not a workstation-only speedup claim.
 
@@ -592,6 +593,64 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   need not wait for HED or multiblock extensions.
   **Gate:** the design's stage-specific accuracy, stability, and force/energy
   budgets, followed by backend/AMR compatibility checks.
+
+- [ ] **S11 — Fuse each compact line solve into one threaded region.** Low
+  priority: on the 2-D case that motivated it, `mpiexec -n 8 -t 1` at 12 ms/step
+  already beats the fused-threads target of about 15, so this waits for a
+  setting in which threads are the only parallelism, such as the host-side
+  interface stage of a device plan.
+  A line solve is three regions today (fill, solve, scatter) and each carries
+  a spawn/join floor and a barrier, with the solved block crossing cores
+  between them. On a 37k-point planar case at eight threads that granularity,
+  not bandwidth, is the loss against ranks: 195 regions per RHS at about 54 µs
+  serial work each, ranks 2x faster per step than pinned threads
+  ([CLUSTER.md](CLUSTER.md), hybrid-desktop paragraph). A prototype in which
+  each thread fills, solves and scatters its own chunk of lines in one region
+  measured 1.86x on the x-direction filter solve at `-t 8`, parity serially
+  and bitwise identical, provided the 16-wide column blocking of `solve_cols!`
+  is kept inside each chunk. The transposed y/z path fuses the same way over
+  chunks of x-columns, since a chunk's fill, row-sweep solve and scatter are
+  all contiguous in it. Where the dimension is decomposed the reduced
+  interface stage is a collective between the local solve and the spike
+  correction, so the fusion there is two regions, not one, and the collective
+  stays outside both. The `@threaded` docstring names this reorganization as
+  the condition for re-measuring the threading backend; do that after, not
+  before. **Gate:** the core gate, `bench/jetcheck.jl` and `bench/audit.jl`
+  before and after, bitwise agreement of the serial suite, the MPI suite at
+  2, 4 and 8 ranks, and the 768×48 thread table re-measured pinned.
+
+- [ ] **S12 — Remove the O(P²) replicated interface solve for many-rank scaling.**
+  The reduced interface matrix is dense of order 2qP and every rank applies
+  its LU to its own lines, about 8q²P² operations per line against 9qn for
+  the local sweep. Per rank on a uniform 3-D grid that is a fixed 8q²N² per
+  solve while the local work shrinks as N³/P³: an Amdahl term whose
+  operation-count crossover is P ≈ 6.6 (q = 1) or 5.2 (q = 2) per direction
+  at N = 256 and 10.4 / 8.3 at N = 1024, a few hundred to a thousand ranks.
+  The 224-rank rzhound run with dims (8,7,4) was at that crossover along x.
+  Per-step collective latency is not the limit: Allgathers span one direction's
+  P ranks and the measured node scaling was 93% per doubling at four nodes.
+  Stages, in order:
+  1. Instrument first: a probe that times the local sweep, the Allgather and
+     `_reduced_solve!` separately at the target P and N, for both `LineSolver`
+     and `BandLineSolver`, so the table becomes a measurement and the
+     wall-clock crossover (later than the count, since the dense solve runs
+     cache-resident while the sweep streams memory) is known.
+  2. Banded factorization of the reduced matrix, which is block-tridiagonal in
+     P because a rank's interface unknowns couple only to its neighbors:
+     per-line cost O(q²P), per-rank cost back to N²/P. Covers the
+     tridiagonal and pentadiagonal paths alike; the Allgather is unchanged.
+     Round-off, not bitwise, agreement with the dense solve; the MPI suite's
+     3e-15 expectation for the decomposed solve is the bar.
+  3. Only if the Allgather volume (2qP lines' worth per rank) then shows in
+     the probe: a distributed reduced solve in which only neighbors exchange,
+     the SPIKE recursion, which also removes the replicated factorization.
+  Process-grid guidance follows from the same count: for a fixed rank count
+  the per-rank reduced cost is proportional to the sum of the cubes of the
+  per-direction rank counts, so near-uniform grids minimize it and slabs
+  maximize it. **Depends on:** system-MPI cluster time for stage 1. **Gate:**
+  the MPI suite at 2, 4 and 8 ranks, `bench/tgv_energy.jl` reproducing serial
+  energy histories to round-off, and the node-scaling table re-measured at
+  the largest rank count available with the probe's breakdown beside it.
 
 ## P2/P3: high-energy-density physics
 

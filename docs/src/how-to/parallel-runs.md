@@ -63,6 +63,16 @@ are threaded. They iterate their two outer indices as a single flattened space,
 so a planar `(nx, ny, 1)` or axisymmetric `(nr, 1, nz)` run divides over
 whichever of the two is resolved.
 
+Threading a block does not make it as fast as splitting it into ranks. At a
+fixed core count, one-thread ranks have beaten multithreaded ranks by about
+2x on every machine measured, from a two-species 768×48 tube on an eight-core
+workstation to 256³ Taylor--Green on two 112-core nodes. On a workstation,
+launch anything above 1-D as `mpiexec -n 8 julia -t 1` rather than
+`julia -t 8`; on a hybrid performance/efficiency-core desktop, also confine
+the process to the performance cores when timing. The mechanism, the
+measurements and the two configurations in which threads do have an opening
+are in [Threads and ranks](@ref).
+
 ## Launch on a cluster
 
 MPI.jl defaults to a bundled MPI binary. On one node it satisfies the

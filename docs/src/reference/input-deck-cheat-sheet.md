@@ -251,7 +251,12 @@ Numerics(n_global=(256,64,64), backend=DeviceBackend(CUDABackend()))
 ```
 
 Initialize MPI once (`MPI.Init(threadlevel=:funneled)`), and launch with
-`mpiexec -n N julia -t T --project=. deck.jl`. `CPUBackend()` is the default; wrap a
+`mpiexec -n N julia -t T --project=. deck.jl`. Prefer ranks to threads: at a
+fixed core count, single-threaded ranks have beaten multithreaded ranks by
+about 2x on every machine measured, a 2-D workstation case included, so use
+`-t 1` under `mpiexec` and `mpiexec -n 8 -t 1` rather than `-t 8` for anything
+above 1-D. The reasons and the exceptions are in [Threads and ranks](@ref).
+`CPUBackend()` is the default; wrap a
 `CUDABackend()` or `ROCBackend()` in `DeviceBackend` after loading the matching
 GPU package. A device solver may be decomposed, patched, refined, or tiled; it
 excludes `level_restriction=:filter` and `Nasa9Mixture`.

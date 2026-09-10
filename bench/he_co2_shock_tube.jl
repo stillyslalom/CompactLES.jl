@@ -39,6 +39,15 @@
 # run. The history file records the undershoot; it is one of the quantities
 # the comparison is for.
 #
+# The wall the closing line prints spans `run!` and so includes compiling it
+# for this deck's callback closure, 3.2 s at -t 8 on the development
+# workstation, a quarter of a 412-step run and 40% of the same run on eight
+# ranks. The steady-state ms/step printed beside it averages `solver.wall_step`
+# over the steps after the twentieth, which is the figure to compare across
+# thread and rank counts; on a hybrid desktop, compare it pinned to the
+# performance cores (reference: the hybrid-desktop paragraph of the cluster
+# notes).
+#
 # Scratch tooling, like everything else in bench/: it prints and writes, and
 # asserts nothing.
 
@@ -112,7 +121,13 @@ function main()
     rank == 0 && println(history, "# step t rho_min rho_max umax Y_He_min Y_He_max " *
                                   "Y_CO2_min Y_CO2_max")
 
+    steady_wall = 0.0
+    steady_steps = 0
     function diag(solver, Q)
+        if solver.step > 20
+            steady_wall += solver.wall_step
+            steady_steps += 1
+        end
         solver.step % opt.every == 0 || return
         n1, n2, n3 = solver.decomp.n_local
         m1 = solver.equations.i_mom[1]
@@ -181,8 +196,9 @@ function main()
     run!(solver, Q; tfinal=opt.tfinal, nmax=1_000_000, callback=callbacks)
     if rank == 0
         close(history)
-        @printf("done: %d steps to t = %.3f ms in %.1f s\n",
-                solver.step, 1e3 * solver.t, time() - t0)
+        @printf("done: %d steps to t = %.3f ms in %.1f s; steady %.2f ms/step over the last %d\n",
+                solver.step, 1e3 * solver.t, time() - t0,
+                1e3 * steady_wall / max(steady_steps, 1), steady_steps)
     end
 end
 

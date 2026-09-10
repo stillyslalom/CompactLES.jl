@@ -6,7 +6,11 @@
 # direction per velocity component, per species, per flux, plus the remaining
 # pointwise passes; the fused scatters in operators.jl removed ~30), so at 24
 # threads a single RHS call spawns ~2900 tasks and allocates ~110 kB *per
-# thread*, independent of grid size.
+# thread*, independent of grid size. The count depends on the artificial
+# property configuration: `detector = :d8` with `mu_sensor = :velocity` adds a
+# pentadiagonal solve per detected field per direction, and a two-species
+# planar run under it measured 195 regions per RHS, 19 of them the x-direction
+# column solves with three trips each (`cld(48, COL_BLOCK)` lines).
 #
 # Measured before this policy existed (24 logical cores, compute_rhs!):
 #
