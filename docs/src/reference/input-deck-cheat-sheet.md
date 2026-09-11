@@ -122,7 +122,7 @@ a globally consistent callback. Fold conditions cannot be switched.
 ```julia
 Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
     art=ArtParams(), cfl=0.5, control=StepControl(), filter_interval=1,
-    filter_cfl=0.0, dims=nothing, n_halo=4, comm=MPI.COMM_WORLD,
+    filter_cfl=0.35, dims=nothing, n_halo=4, comm=MPI.COMM_WORLD,
     stretch=(nothing,nothing,nothing), patch_grid=(1,1,1),
     backend=CPUBackend(), interface_rhs=:extended,
     refine=nothing)                          # plus the AMR keywords below
@@ -137,7 +137,7 @@ Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
 | `cfl` | CFL multiplier | `0.5` |
 | `control` | Timestep landing, recovery, and floors | `StepControl()` |
 | `filter_interval` | Apply filter every `k` completed steps | `1`; `0` disables |
-| `filter_cfl` | Rate-normalized filter reference CFL | `0.0` (unrelaxed) |
+| `filter_cfl` | Reference CFL of a full-strength filter pass; `0` unrelaxed | `0.35` |
 | `dims` | MPI process grid | `nothing` (automatic) |
 | `n_halo` | Halo layers per side | `4` |
 | `comm` | MPI communicator | `MPI.COMM_WORLD` |

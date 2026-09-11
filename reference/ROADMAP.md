@@ -109,28 +109,28 @@ below exposed behavior outside those passing checks.
 
 ### Filtering, regularization, and boundaries
 
-- [ ] **N1 — Calibrate filtering and settle its time-scaling policy.**
-  The rate-scaled `filter_cfl` mechanism is delivered but opt-in; the default
-  still dissipates per application. The fit is complete: α is bounded from
-  above by the shock battery at a per-pass strength near 0.0025 in either
-  formulation, the battery clears `filter_cfl = 0.35` at its production CFL
-  numbers, and `C_beta`, `C_kappa`, `C_D` and `C_Y` do not move under either
-  candidate default. The recorded recommendation is `filter_cfl = 0.35` at
-  α = 0.45, with α = 0.49 as the fitted per-run value for resolved smooth
-  turbulence. Remaining: apply the decision to `Numerics` and to the pins in
-  `test/cases.jl` together, or record a decision to retain the unrelaxed
-  default; confirm at 128³ that `C_mu` cannot be fitted on Taylor–Green; and
-  measure the two relaxation invariances not yet measured, retries and
-  subcycling. Spectra are postprocessed offline; no distributed FFT exists or
-  is needed.
-  **Depends on:** R1–R3; cluster time for the `C_mu` confirmation only.
-  **Deliver:** the default applied or its retention recorded, in
-  [CALIBRATION.md](CALIBRATION.md). Do not fit under one formulation and then
-  silently switch to the other.
+- [x] **N1 — Calibrate filtering and settle its time-scaling policy.**
+  Complete, September 2026. α is bounded from above by the shock battery at
+  a per-pass strength near 0.0025 in either formulation, the battery clears
+  `filter_cfl = 0.35` at its production CFL numbers, `C_beta`, `C_kappa`,
+  `C_D` and `C_Y` do not move under either candidate default, and the
+  relaxed formulation is measured invariant to the CFL, to landing steps, to
+  retries and to subcycling. The default is `filter_cfl = 0.35` at α = 0.45,
+  applied to `Numerics` and to the pins in `test/cases.jl` together, with
+  α = 0.49 the per-run value for resolved smooth turbulence. The 128³
+  confirmation that `C_mu` cannot be fitted on Taylor–Green is N4's. Spectra
+  are postprocessed offline; no distributed FFT exists or is needed.
+  **Depends on:** R1–R3.
   **Code:** [kernels.jl](../src/kernels.jl), [timestep.jl](../src/timestep.jl),
   [tgv_energy.jl](../bench/tgv_energy.jl),
-  [tgv_spectrum.jl](../bench/tgv_spectrum.jl), [artcal.jl](../bench/artcal.jl).
-  **Delivered:** the vendored 512³ reference history
+  [tgv_spectrum.jl](../bench/tgv_spectrum.jl), [artcal.jl](../bench/artcal.jl),
+  [filterrate.jl](../bench/filterrate.jl).
+  **Delivered:** the default and its record
+  ([the compact filter](CALIBRATION.md#the-compact-filter),
+  [completion record](HISTORY.md#the-filter-default-september-2026));
+  the retry and subcycling invariances
+  ([invariances](CALIBRATION_APPENDIX.md#retries-and-subcycling-under-relaxation));
+  the vendored 512³ reference history
   ([provenance](../data/README.md#taylor-green-reference-solution)); the fit
   instrument and its measured energy budget
   ([instrument](CALIBRATION_APPENDIX.md#the-fit-instrument),
@@ -180,7 +180,9 @@ below exposed behavior outside those passing checks.
   One-dimensional shocks cannot determine the shear channel, and on
   Taylor–Green at 64³ the best-fitting `C_mu` is zero under both the production
   and the near-off filter ([the controls](CALIBRATION_APPENDIX.md#the-mu-controls-at-64)),
-  so confirm that at 128³ and choose the case accordingly.
+  so confirm that at 128³ and choose the case accordingly; that confirmation
+  is the one item N1 left open, and it needs cluster time
+  ([n1_recal128.sbatch](../bench/slurm/n1_recal128.sbatch) holds the leg).
   **Depends on:** N1 and the 3-D campaign. Retain `C_beta=1` unless new evidence
   overturns its completed refit; record error and dissipation attribution.
 

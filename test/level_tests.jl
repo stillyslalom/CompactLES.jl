@@ -813,8 +813,12 @@ end
     ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
                             Prim(u=(0, 0, 0), p=0.1, rho=0.125)
     N = 201
+    # The unrelaxed filter (filter_cfl = 0): the regrid below has to create a
+    # fresh tile beside a survivor at exactly this step, which the tag state
+    # at step 20 does under it and not under the relaxed default, where the
+    # fourth tile appears between steps 25 and 40 instead.
     sa = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                bcs=(wall2, per, per), cfl=0.2, subcycle=true,
+                bcs=(wall2, per, per), cfl=0.2, subcycle=true, filter_cfl=0.0,
                 regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
                 tile=8)
     states = allocate_state(sa)

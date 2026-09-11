@@ -32,7 +32,7 @@ ArtParams(C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.01, C_Y = 100,
           Y_tolerance = 1e-4, mu_sensor = :strain, beta_sensor = :strain,
           reduction = :sum, smoother = :gaussian, detector = :delta4,
           species_flux = :fickian)
-Numerics(filt = compact_filter(0.45), filter_interval = 1, filter_cfl = 0.0,
+Numerics(filt = compact_filter(0.45), filter_interval = 1, filter_cfl = 0.35,
          cfl = 0.5, control = StepControl())
 ```
 
@@ -50,7 +50,7 @@ Numerics(filt = compact_filter(0.45), filter_interval = 1, filter_cfl = 0.0,
 | `species_flux` | `:fickian` | provisional | `:bulk` is at least as good on every measured column; the constants are fitted on the Fickian channel ([appendix](CALIBRATION_APPENDIX.md#the-bulk-species-channel)). |
 | `cfl` | 0.5 | not for shocks | Use 0.3 with shocks and `StepControl(retries = 4)` ([appendix](CALIBRATION_APPENDIX.md#cfl-and-the-symmetry-cell-restriction)). |
 | `compact_filter` α | 0.45 | too strong | 0.49 fits at 128³ and 256³ and clears the battery; the stability edge is at 0.49875 ([appendix](CALIBRATION_APPENDIX.md#the-default-decision)). |
-| `filter_cfl` | 0.0 | candidate 0.35 | Makes the filter's dissipation a rate; clears the battery at its production CFL numbers ([appendix](CALIBRATION_APPENDIX.md#the-battery-under-relaxation)). |
+| `filter_cfl` | 0.35 | keep | Makes the filter's dissipation a rate, invariant to the CFL, landing steps, retries and subcycling; clears the battery at its production CFL numbers ([appendix](CALIBRATION_APPENDIX.md#the-battery-under-relaxation), [invariances](CALIBRATION_APPENDIX.md#retries-and-subcycling-under-relaxation)). |
 | `filter_interval` | 1 | keep | Redundant with α ([appendix](CALIBRATION_APPENDIX.md#cadence-and-alpha-are-one-axis)). |
 
 Two facts frame the table. Every constant was fitted under
@@ -80,11 +80,12 @@ effect. The appendix link carries the sweep.
 - **A resolved or smooth solution is over-dissipated.** The compact filter is
   the sink, 37% of the Taylor–Green dissipation at 128³ and 12% at 256³,
   and the artificial properties are nearly inert there. Weaken the filter
-  with `compact_filter(0.49)`, which fits at both resolutions. Do not lower
-  the CFL or write output more often under `filter_cfl = 0`: each pass
-  dissipates a fixed amount, so more steps mean more dissipation. Set
-  `filter_cfl = 0.35` to make the dissipation a rate; the answer is then
-  invariant to the CFL and to shortened steps to the digits printed
+  with `compact_filter(0.49)`, which fits at both resolutions. Under the
+  default `filter_cfl = 0.35` the dissipation is a rate, invariant to the
+  CFL, to shortened steps, to retries and to subcycling to the digits
+  printed, so lowering the CFL or writing output more often does not change
+  it. Under `filter_cfl = 0` each pass dissipates a fixed amount, so more
+  steps mean more dissipation
   ([the compact filter](#the-compact-filter)). `filter_interval` is
   redundant with α. Raising `C_mu` does not help: on Taylor–Green at 64³
   removing μ\* improves every estimator
@@ -357,32 +358,35 @@ alphaf 0.49              2.53e-2            0.86e-2            completes
 alphaf 0.499             2.91e-2            0.75e-2            completes (ε = 0.002)
 ```
 
-**Per application or per unit time.** Under the default `filter_cfl = 0`
-each pass replaces the state by its filtered image, so the dissipation is
-per application: halving the CFL doubles it, retries and shortened output
+**Per application or per unit time.** Under `filter_cfl = 0` each pass
+replaces the state by its filtered image, so the dissipation is per
+application: halving the CFL doubles it, retries and shortened output
 steps add it, and a run at a low CFL is a more filtered run. A positive
 `filter_cfl` relaxes each pass by w = `filter_interval` · dt · rate /
 `filter_cfl`, capped at one, and the dissipation per unit time is then
 constant to six figures across a fourfold CFL change and invariant to
-landing steps. At `cfl = 0.35` and `filter_cfl = 0.35` the run is bit-identical
-to the unrelaxed one
+landing steps, to induced retries and to a subcycled refined level. At
+`cfl = 0.35` and `filter_cfl = 0.35` the run is bit-identical to the
+unrelaxed one
 ([per application](CALIBRATION_APPENDIX.md#dissipation-per-application),
-[relaxation](CALIBRATION_APPENDIX.md#the-relaxation-leg)). Under relaxation
-a retry halves ε, so retries walk a case toward the edge rather than away
-from it.
+[relaxation](CALIBRATION_APPENDIX.md#the-relaxation-leg),
+[invariances](CALIBRATION_APPENDIX.md#retries-and-subcycling-under-relaxation)).
+Under relaxation a retry halves ε, so retries walk a case toward the edge
+rather than away from it.
 
-**Recommendation.** Set `filter_cfl = 0.35`; hold α = 0.45 as the default
-and select `compact_filter(0.49)` for resolved smooth turbulence. At the
-reference CFL nothing changes; below it the strength falls with the CFL to
-a value the battery reads as its α = 0.486 row, with a margin of seventeen
-times the edge at `cfl = 0.15` and eight after one retry, where α = 0.49
-relaxed would reach the edge on the second. `C_beta`, `C_kappa`, `C_D` and `C_Y` do not
-move under either candidate
+**The default.** `filter_cfl = 0.35` at α = 0.45 is the default since
+September 2026, with `compact_filter(0.49)` the per-run selection for
+resolved smooth turbulence. At the reference CFL nothing changed; below it
+the strength falls with the CFL to a value the battery reads as its
+α = 0.486 row, with a margin of seventeen times the edge at `cfl = 0.15` and
+eight after one retry, where α = 0.49 relaxed would reach the edge on the
+second. `C_beta`, `C_kappa`, `C_D` and `C_Y` do not move under it
 ([constants](CALIBRATION_APPENDIX.md#the-constants-under-a-weaker-filter),
-[decision](CALIBRATION_APPENDIX.md#the-default-decision)). The code default
-has not moved. Moving it means changing `Numerics` together with the pins in
-`test/cases.jl`, which hold `compact_filter(0.45)` and `filter_cfl = 0` so
-that the validation guards measure the fitted configuration.
+[decision](CALIBRATION_APPENDIX.md#the-default-decision)). The pins in
+`test/cases.jl` moved with `Numerics`, so the validation guards measure the
+default configuration: the Woodward–Colella and Noh rows moved, and Lax,
+Shu–Osher, Sedov and the interface case did not to the digits printed
+([the battery under relaxation](CALIBRATION_APPENDIX.md#the-battery-under-relaxation)).
 
 The filter is also the wall-order cap of every filtered run, second order
 through its row-2 closure, and it is not conservative on cylindrical,
@@ -478,28 +482,24 @@ vortex-ring/SF6 case has not been run under it
 
 In approximate priority order; each links to the measurements it rests on.
 
-1. **Apply the filter decision or record its retention**: `filter_cfl = 0.35`
-   at α = 0.45, with the `test/cases.jl` pins moved together with `Numerics`
-   ([decision](CALIBRATION_APPENDIX.md#the-default-decision)). Retries and
-   subcycling invariance under relaxation are argued, not measured.
-2. **Raise the CFL ceiling at the symmetry cell.** Two live leads: the
+1. **Raise the CFL ceiling at the symmetry cell.** Two live leads: the
    density proportionality of β\*, and the per-step filter
    ([origin cell](CALIBRATION_APPENDIX.md#the-origin-cell-is-a-startup-transient)).
-3. **Refit `C_mu` on the history misfit** on a case with an unresolved
+2. **Refit `C_mu` on the history misfit** on a case with an unresolved
    cascade; the peak is unusable and 0.004 is withdrawn
    ([Taylor–Green](CALIBRATION_APPENDIX.md#taylorgreen)).
-4. **Decide the detector**; waits on item 2
+3. **Decide the detector**; waits on item 1
    ([recommendation](CALIBRATION_APPENDIX.md#recommendation)).
-5. **Refit `C_mu` under `:gaussian`** and then evaluate
+4. **Refit `C_mu` under `:gaussian`** and then evaluate
    `mu_sensor = :velocity`.
-6. **Make κ\* non-singular as T_ion → 0**
+5. **Make κ\* non-singular as T_ion → 0**
    ([cold-state limit](CALIBRATION_APPENDIX.md#the-cold-state-limit)).
-7. **Explain the spherical fold's intolerance of sharp data**
+6. **Explain the spherical fold's intolerance of sharp data**
    ([geometry limits](CALIBRATION_APPENDIX.md#geometry-limits)).
-8. **Make `filter_state!` conservative on non-Cartesian metrics.**
-9. **Decide the filter wall rows**, a recalibration of the wall cases
+7. **Make `filter_state!` conservative on non-Cartesian metrics.**
+8. **Decide the filter wall rows**, a recalibration of the wall cases
    ([wall cascade](CALIBRATION_APPENDIX.md#the-filters-wall-cascade)).
-10. **Put `delta4_sum!`'s even path on the half-offset mirror**; unmeasured
+9. **Put `delta4_sum!`'s even path on the half-offset mirror**; unmeasured
    ([the clamp](CALIBRATION_APPENDIX.md#the-fourth-difference-clamp-at-a-fold)).
-11. **Decide `species_flux`** on the vortex-ring/SF6 case
+10. **Decide `species_flux`** on the vortex-ring/SF6 case
    ([open](CALIBRATION_APPENDIX.md#open)).

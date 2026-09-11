@@ -46,19 +46,25 @@
 # 1.5–2x the measured value. The measured numbers print every run; a moved digit
 # after a change not intended to touch numerics indicates a numerical effect.
 #
-# Measured on this code (serial, C6, ArtParams defaults; each case's CFL is in
-# test/cases.jl):
+# Measured on this code (serial, C6, ArtParams defaults, filter_cfl = 0.35; each
+# case's CFL is in test/cases.jl):
 #
 #   Lax        L1 rho 4.99e-3, u 7.47e-3, p 7.56e-3
 #   Shu-Osher  L1 rho 6.91e-3, wave train 2.09e-2, train peak 4.680
-#   Woodward   L1 rho 3.25e-2, peak rho 6.608 at x = 0.7785
+#   Woodward   L1 rho 3.22e-2, peak rho 6.616 at x = 0.7785
 #   Sedov      R_s 0.8086 vs 0.8000 analytic (+1.07%), peak rho 5.12 (jump 6)
-#   Noh nu=1   plateau 3.9971/4    shock 0.2044/0.2   wall deficit 64%
-#   Noh nu=2   plateau 14.988/16   shock 0.2093/0.2   wall deficit 56%
-#   Noh nu=3   plateau 62.406/64   shock 0.2091/0.2   wall deficit 27%
+#   Noh nu=1   plateau 3.9959/4    shock 0.2046/0.2   wall deficit 63%
+#   Noh nu=2   plateau 15.002/16   shock 0.2092/0.2   wall deficit 55%
+#   Noh nu=3   plateau 62.501/64   shock 0.2090/0.2   wall deficit 28%
 #   Shock/SF6  worst Y -0.0135 / 1.0135, width 4 cells, 646 steps (Sept 2026)
 #
-# These were re-measured in August 2026 when ArtParams.smoother moved to
+# The Woodward and Noh rows moved in September 2026 when the filter_cfl default
+# went from 0 to 0.35: those cases run below the reference CFL, so their filter
+# passes are relaxed, while Lax, Shu-Osher, Sedov and the interface case did not
+# move to the digits printed. Unrelaxed, the rows read Woodward 3.25e-2 / 6.608
+# and Noh 3.9971 / 64%, 14.988 / 56%, 62.406 / 27%.
+#
+# All rows were re-measured in August 2026 when ArtParams.smoother moved to
 # :gaussian; reference/CALIBRATION_APPENDIX.md carries why, and the previous set under
 # :compact for comparison. Every plateau and every pre-shock L1 improved, wall
 # heating worsened at nu = 1 and nu = 2 and improved at nu = 3, and the two

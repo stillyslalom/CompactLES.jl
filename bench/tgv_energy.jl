@@ -160,10 +160,10 @@
 #             applications covering the same interval and doubles what the
 #             filter takes. Sweep it to measure that, not to tune anything.
 #   filter_cfl  comma-separated list of reference CFLs at which one filter pass
-#             is applied at full strength, 0 (default) for the unrelaxed
-#             formulation. Positive makes the filter dissipation a rate rather
-#             than a per-application amount, so the `cfl` sweep flattens. See
-#             `filter_weight`.
+#             is applied at full strength (default "0.35", the solver's), 0 for
+#             the unrelaxed formulation. Positive makes the filter dissipation a
+#             rate rather than a per-application amount, so the `cfl` sweep
+#             flattens. See `filter_weight`.
 #   precision Float storage and arithmetic to measure: float64 (default),
 #             float32, or both. Diagnostics intentionally accumulate in
 #             Float64 in either mode; this option changes the solver state,
@@ -557,7 +557,7 @@ end
 function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
                       filter_interval=1, sample=100, progress=0,
                       nmax=typemax(Int), smoother=:compact,
-                      cfl=0.35, filter_cfl=0.0, alphaf=0.45,
+                      cfl=0.35, filter_cfl=0.35, alphaf=0.45,
                       mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
                       T::Type{<:AbstractFloat}=Float64,
                       backend::AbstractBackend=CPUBackend(),
@@ -694,7 +694,7 @@ end
 const DEFAULTS = (N = 32, tfinal = 10.0, configs = "off:1,on:1",
                   progress = 0, sample = 100, nmax = typemax(Int),
                   window = 250, smoother = :compact,
-                  cfl = "0.35", filter_cfl = "0.0", alphaf = "0.45",
+                  cfl = "0.35", filter_cfl = "0.35", alphaf = "0.45",
                   mu_sensor = :strain, beta_sensor = :strain, reduction = :sum,
                   precision = "float64", backend = "cpu",
                   refine = 0, tile = 0, subcycle = false,

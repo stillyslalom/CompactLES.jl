@@ -3,13 +3,14 @@
 #   julia --project=. -t auto bench/artcal.jl            # everything (~6 min)
 #   julia --project=. -t auto bench/artcal.jl beta cfl   # named sweeps only
 #   julia --project=. -t auto bench/artcal.jl beta kappa D Y alphaf=0.49
-#   julia --project=. -t auto bench/artcal.jl filter filter_cfl=0.6
+#   julia --project=. -t auto bench/artcal.jl filter filter_cfl=0
 #
 # Sweeps available: mu beta kappa D Y cfl resolution sensor smoother detector
 # field response brill2025 bulk
 #
 # Background settings (`key=value`): smoother, detector, alphaf (the compact
-# filter's alpha, 0.45 = the solver default) and filter_cfl (0 = unrelaxed).
+# filter's alpha, 0.45 = the solver default) and filter_cfl (0.35 = the solver
+# default, 0 = unrelaxed).
 # The filter background reaches every case, so a constant re-swept at a
 # candidate alpha or under the relaxed formulation is measured on the same
 # battery its default was fitted on.
@@ -66,7 +67,7 @@ const ALL = ["mu", "beta", "kappa", "D", "Y", "cfl", "filter", "resolution",
 const OPTS = CompactLES.script_args(filter(a -> occursin('=', a), ARGS),
                          (smoother = DEFAULTS.smoother,
                           detector = DEFAULTS.detector,
-                          alphaf = 0.45, filter_cfl = 0.0))
+                          alphaf = 0.45, filter_cfl = 0.35))
 # The filter background every case runs under. The two values above are the
 # `Numerics` defaults, spelled out because `Numerics` holds them only inside a
 # built filter; the `filter` sweep marks 0.45 as the default for the same
@@ -296,8 +297,9 @@ end
 # is survival rather than accuracy: how weak the filter can be before a case
 # stops completing. The Taylor-Green fits at 128^3 and 256^3 gave no upper
 # bound (reference/CALIBRATION_APPENDIX.md, "The alpha sweep at 128 cubed"); the third
-# table here measures one. Under `filter_cfl=0.6` the first two tables are the
-# battery's check on the relaxed formulation at its production CFL numbers.
+# table here measures one. Under the default `filter_cfl` the first two tables are the
+# battery's check on the relaxed formulation at its production CFL numbers;
+# `filter_cfl=0` measures the unrelaxed one.
 if want("filter")
     println("\n=== compact-filter alpha (larger filters more weakly) ===")
     println("alphaf    | Noh1 plat  deficit | Noh2 plat | Noh3 plat | " *

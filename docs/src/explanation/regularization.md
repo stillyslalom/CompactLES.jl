@@ -117,6 +117,14 @@ Near a closed edge, the first point is unchanged and the next rows use a
 reduced-order cascade. `filter_interval=1` filters every conserved component
 after every completed step. Zero disables state filtering.
 
+`filter_cfl=0.35`, the default, makes the filter's dissipation a rate rather
+than a per-application amount. Below that CFL each pass relaxes the state
+toward its filtered image with weight `filter_interval · dt · rate /
+filter_cfl`, so a run at a lower CFL, a shortened step, a retry or a
+subcycled level receives the same dissipation per unit time; at or above it a
+pass is applied at full strength. `filter_cfl=0` restores the unrelaxed pass,
+whose dissipation grows with the number of steps taken over an interval.
+
 Filtering and artificial transport are not interchangeable. The filter acts on
 the grid-scale content of the conserved state whether or not a shock sensor is
 active. Current Taylor--Green measurements show that it supplies a substantial

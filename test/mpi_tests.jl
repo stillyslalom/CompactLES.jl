@@ -1787,10 +1787,14 @@ function test_refined_decomposed()
     check("subcycled three-level step count matches serial",
           abs(n3s - 20), 0.5)
 
-    # Tagging-driven regridding tracks a Sod shock to the same region.
+    # Tagging-driven regridding tracks a Sod shock to the same region. The
+    # four Sod regrid cases in this file run the unrelaxed filter
+    # (filter_cfl = 0): their tile histories, regions and times reached were
+    # measured serially under it, and the relaxed default, a weaker filter at
+    # cfl = 0.2, walks the tags differently.
     wall2 = (SlipWallBC(), SlipWallBC())
     solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=(wall2, per3[2], per3[3]), cfl=0.2,
+                    bcs=(wall2, per3[2], per3[3]), cfl=0.2, filter_cfl=0.0,
                     refine=BlockRegion((160, 0, 0), (60, 1, 1)),
                     subcycle=true, regrid_interval=20, tag_buffer=16)
     states = allocate_state(solver)
@@ -1976,6 +1980,7 @@ function test_tiled_level()
         solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
                         bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
                         regrid_interval=5, tag_buffer=2, tile=8,
+                        filter_cfl=0.0,   # see the regridded Sod case
                         refine=BlockRegion((176, 0, 0), (16, 1, 1)))
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) -> x < 0.45 ?
@@ -2048,6 +2053,7 @@ function test_tiled_level()
         solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
                         bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
                         regrid_interval=5, tag_buffer=2, tile=8,
+                        filter_cfl=0.0,   # see the regridded Sod case
                         refine=BlockRegion((176, 0, 0), (16, 1, 1)),
                         untag_ratio=1,
                         rebalance=rebalance, rebalance_persist=persist)
@@ -2213,7 +2219,7 @@ function test_level_subset()
     # garbage collector, as a dropped `Decomp` is.
     wall2 = (SlipWallBC(), SlipWallBC())
     solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=(wall2, per3[2], per3[3]), cfl=0.2,
+                    bcs=(wall2, per3[2], per3[3]), cfl=0.2, filter_cfl=0.0,
                     refine=BlockRegion((180, 0, 0), (8, 1, 1)),
                     subcycle=true, regrid_interval=20, tag_buffer=2)
     lc0 = solver.levels[2].level_comm

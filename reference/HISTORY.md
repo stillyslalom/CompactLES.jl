@@ -31,6 +31,7 @@ points at them and does not restate them.
 21. [The bulk species channel (September 2026)](#the-bulk-species-channel-september-2026)
 22. [P0 runtime correctness — R1 to R4 (September 2026)](#p0-runtime-correctness--r1-to-r4-september-2026)
 23. [No-slip wall flux contract (September 2026)](#no-slip-wall-flux-contract-september-2026)
+24. [The filter default (September 2026)](#the-filter-default-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -1272,3 +1273,51 @@ bitwise state comparisons throughout, including the no-slip NSCBC duct, Sod,
 refinement/regridding and both-precision TGV. Both before/after performance
 audits completed. HDF5 and Makie extension tests were skipped by the package
 environment; neither extension was changed.
+
+## The filter default (September 2026)
+
+N1 closes with the default moved: `Numerics` and `Solver` take
+`filter_cfl = 0.35` at `compact_filter(0.45)`, and the pins in
+`test/cases.jl` moved with them so that the validation battery measures the
+configuration the solver runs. At or above the reference CFL a pass is at
+full strength and the run is the unrelaxed solver bit for bit, which covers
+every Taylor–Green fit; below it the filter's dissipation is a rate. The
+battery's Woodward–Colella and Noh cases run below the reference and were
+re-baselined in the header of `test/validation.jl`; Lax, Shu–Osher, Sedov and
+the shock/interface case did not move to the digits printed. α = 0.49 stays
+the per-run selection for resolved smooth turbulence.
+
+The two relaxation invariances that had been argued from the weight and not
+measured were measured with `bench/filterrate.jl`, which gained `retry_at`,
+`refine`, `planar` and `component` options. Retries are induced through the
+solver's own rollback by a callback that sets one cell's density negative,
+so the positivity check raises and `run!` restores the savepoint and halves
+the CFL; relaxed, the kinetic-energy loss after one or two rollbacks agrees
+with the unretried table to six significant figures, and unrelaxed it
+follows the added steps. Subcycling is measured on a planar passive shear
+`u_z(y)`, exactly steady with a refined box in the domain; relaxed, the
+composite loss is constant to five significant figures across a fourfold CFL
+change, with and without a retry, and unrelaxed it doubles with the step
+count as the unrefined run does. The measurements are in
+[CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#retries-and-subcycling-under-relaxation);
+the applied default and the settings to change are in
+[CALIBRATION.md](CALIBRATION.md#the-compact-filter). The one item of the
+program still open, confirming at 128³ that `C_mu` cannot be fitted on
+Taylor–Green, moved to N4 with its cluster leg.
+
+Six tests pin `filter_cfl = 0` explicitly because what they assert was
+measured under the unrelaxed filter and is a trajectory, not a tolerance:
+the serial retry test, whose planar Noh at `cfl = 0.3` completes in the
+wall-excess mode under the relaxed default and is rejected at the endpoint
+instead of failing by positivity; the serial tiled-regrid seeding test and
+the four MPI Sod regrid cases, whose recorded tile histories, regions and
+times reached the weaker relaxed filter at `cfl = 0.2` walks differently.
+Every other test runs the default.
+
+Validation on Julia 1.11.4: 2,441 serial assertions, the convergence orders
+and error magnitudes unchanged to every printed digit, the validation battery
+on its re-baselined header, all 290 full-suite checks at two MPI ranks and
+all 136 selected checks at eight. The docs reference check passed after the
+last documentation edit. HDF5 and Makie extension tests were skipped by the
+package environment; neither extension was changed, and no performance audit
+was run because no hot-path code changed.

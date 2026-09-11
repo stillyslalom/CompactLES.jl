@@ -86,7 +86,7 @@ therefore generated at the test resolution's delta, not their own.
 function tube(left, right; N, L=1.0, x0=0.5, tfin, γ=1.4,
               art=ArtParams(enabled=true), cfl=0.4, xlo=0.0, rhofun=nothing,
               nmax=NMAX, delta=nothing, filt=compact_filter(0.45),
-              filter_cfl=0.0)
+              filter_cfl=0.35)
     h = L / (N - 1)
     δ = delta === nothing ? 2h : delta
     ρL, uL, pL = left
@@ -140,7 +140,7 @@ const WC_N = 800
 
 function woodward(; N=WC_N, art=ArtParams(enabled=true), cfl=0.3, nmax=NMAX,
                   delta=nothing, deriv=lele_d1_6(), filt=compact_filter(0.45),
-                  filter_cfl=0.0)
+                  filter_cfl=0.35)
     h = 1.0 / (N - 1)
     δ = delta === nothing ? 2h : delta
     prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
@@ -173,7 +173,7 @@ const SEDOV_S = 0.06               # deposit width, ≈ 13 cells at N = 256
 const SEDOV_N = 256
 
 function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtParams(enabled=true), cfl=0.3,
-               nmax=NMAX, filt=compact_filter(0.45), filter_cfl=0.0)
+               nmax=NMAX, filt=compact_filter(0.45), filter_cfl=0.35)
     γ = 1.4
     # E = ∫ p/(γ−1) dV over the full sphere for p = p_in exp(−r²/σ²), using
     # ∫₀^∞ r² e^{−r²/σ²} dr = σ³√π/4, so E = π^{3/2} p_in σ³ / (γ−1).
@@ -229,7 +229,7 @@ on rather than accepting whatever it produces.
 """
 function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
                   art=ArtParams(enabled=true), cfl=NOH_CFL, R=1.0, nmax=NMAX,
-                  deriv=lele_d1_6(), filt=compact_filter(0.45), filter_cfl=0.0)
+                  deriv=lele_d1_6(), filt=compact_filter(0.45), filter_cfl=0.35)
     metric = ν == 1 ? CartesianMetric() :
              ν == 2 ? CylindricalMetric() : SphericalMetric()
     lobc = ν == 1 ? SlipWallBC() : ν == 2 ? AxisBC() : OriginBC()
@@ -293,7 +293,7 @@ by construction and carry no information here.
 """
 function species_advection(; N=MIX_N, tfin=MIX_T, art=ArtParams(enabled=true),
                            cfl=0.4, nmax=NMAX, filt=compact_filter(0.45),
-                           filter_cfl=0.0)
+                           filter_cfl=0.35)
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 1.0, 1.4)])
     h = 1.0 / N
@@ -368,7 +368,7 @@ the interior points with 0.05 < Y_air < 0.95 at the end.
 function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
                          cfl=0.4, delta=2.0, nmax=NMAX, stretch1=nothing,
                          rho_heavy=SI_RHO_HEAVY, filt=compact_filter(0.45),
-                         filter_cfl=0.0)
+                         filter_cfl=0.35)
     γa = 1.4
     eos = IdealMixture([IdealSpecies{Float64}("air", 1.0, γa),
                         IdealSpecies{Float64}("sf6", 1 / rho_heavy,
@@ -469,7 +469,7 @@ directional communicator.
 """
 function brill_slab(; R=BR_R, Np=BR_NP, art=ArtParams(enabled=true), cfl=0.4,
                     periods=BR_PERIODS, nmax=NMAX, filt=compact_filter(0.45),
-                    filter_cfl=0.0)
+                    filter_cfl=0.35)
     N = 20 * Np
     h = 1.0 / N
     w = 3 * Np * h / 16

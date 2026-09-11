@@ -591,7 +591,7 @@ end
 """
     Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
              art=ArtParams(), cfl=0.5, control=StepControl(),
-             filter_interval=1, filter_cfl=0.0, dims=nothing, n_halo=4,
+             filter_interval=1, filter_cfl=0.35, dims=nothing, n_halo=4,
              stretch=(nothing, nothing, nothing))
 
 Grid, scheme, timestep, and decomposition choices used to realize a
@@ -619,14 +619,16 @@ Grid, scheme, timestep, and decomposition choices used to realize a
   The default `1` filters every step; `0` disables state filtering, which leaves
   `filt` unused altogether unless `ArtParams(smoother = :compact)` also selects
   it as the sensor smoother.
-- `filter_cfl`: reference CFL for a full-strength filter pass, making the
-  filter's dissipation a rate, not a per-application amount. The default
-  `0.0` disables the relaxation and reproduces the unrelaxed solver bit for bit:
-  each pass replaces the state with its filtered image, so halving the CFL
-  doubles the number of passes over an interval and doubles the dissipation. A
-  positive value instead relaxes toward the filtered state by
-  `filter_interval · dt · rate / filter_cfl`, capped at one, which holds the
-  dissipation per unit time fixed below that CFL. See
+- `filter_cfl`: reference CFL of a full-strength filter pass, making the
+  filter's dissipation a rate, not a per-application amount. A pass relaxes
+  toward the filtered state by `filter_interval · dt · rate / filter_cfl`,
+  capped at one, which holds the dissipation per unit time fixed below that
+  CFL. The default `0.35` is the reference CFL of the Taylor–Green fits: at or
+  above it every pass is at full strength, the unrelaxed formulation bit for
+  bit, and below it the run receives the dissipation per unit time of one at
+  the reference. `0.0` disables the relaxation: each pass then replaces the
+  state with its filtered image, so halving the CFL doubles the number of
+  passes over an interval and doubles the dissipation. See
   [`filter_weight`](@ref).
 - `dims`: MPI process-grid dimensions. `nothing` lets MPI distribute ranks over
   resolved directions. An explicit tuple must have product equal to the
@@ -717,7 +719,7 @@ Base.@kwdef struct Numerics
     cfl::Float64 = 0.5
     control::StepControl = StepControl()
     filter_interval::Int = 1
-    filter_cfl::Float64 = 0.0
+    filter_cfl::Float64 = 0.35
     dims::Union{Nothing,NTuple{3,Int}} = nothing
     n_halo::Int = 4
     comm::MPI.Comm = MPI.COMM_WORLD

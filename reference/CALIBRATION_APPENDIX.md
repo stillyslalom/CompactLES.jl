@@ -1215,8 +1215,10 @@ the relaxed formulation at its production CFL numbers ([the battery under
 relaxation](#the-battery-under-relaxation)), and none of the four constants
 fitted under the present filter moves under either candidate default ([the
 constants under a weaker filter](#the-constants-under-a-weaker-filter)). The
-resulting recommendation is in [the default decision](#the-default-decision);
-the code default is unchanged as of this revision.
+resulting decision, applied in September 2026, is in [the default
+decision](#the-default-decision); the two invariances argued and not
+measured when the formulation landed, retries and subcycling, are in
+[retries and subcycling under relaxation](#retries-and-subcycling-under-relaxation).
 
 ### Dissipation per application
 
@@ -1254,11 +1256,8 @@ Unrelaxed, the landing adds twelve steps at `cfl = 0.4`, each paying a full
 pass, and the loss rises by 28.5%, so the numerical dissipation of a run
 depends on its output schedule. Relaxed, every entry agrees with the unlanded
 table to six significant figures, since a shortened step filters in proportion
-to `dt · rate`. `StepControl` retries are not inducible on a steady case and have
-not been measured directly; they lower the CFL by `cfl_backoff`, which the
-first table covers. Under subcycling a refined pass reads the root `dt · rate`,
-which equals the fine level's own product when the fine rate is three times
-the root's; that has not been measured either.
+to `dt · rate`. Retries and subcycling are measured
+[below](#retries-and-subcycling-under-relaxation).
 
 Two obvious alternatives do not isolate the dependence and were rejected. A
 broadband field loses 64% of its kinetic energy within tens of steps and then
@@ -1268,6 +1267,73 @@ energy hundreds of times faster than the filter acts. Total energy shows nothing
 either: a symmetric filter on a periodic grid conserves the discrete sum of every
 conserved variable exactly, so the filter moves energy between the two reservoirs
 and removes none.
+
+### Retries and subcycling under relaxation
+
+Two of the relaxation's invariances were argued from the weight and not
+measured when the formulation landed. Both are measured here on the same
+shear layer with `bench/filterrate.jl`, at `filter_cfl = 0.4` as above so
+that the entries read against the 2.351e-3 of the unlanded table; the
+solver's reference of 0.35 changes nothing in what follows.
+
+**Retries.** The physics of a steady case cannot provoke a retry, so
+`retry_at=25` has a callback set one cell's density negative after step 25.
+The next step's positivity check raises `:negative_density` and `run!` takes
+its ordinary recovery: `_rollback!` restores the savepoint at step 20,
+halves the CFL through `cfl_backoff`, and discards the poisoned state with
+the abandoned trajectory, so the replayed one passes the step cleanly.
+`StepControl(retries = 1, savepoint_interval = 10)`; `retry_at=25,45` induces
+a second rollback, to step 40 at a quarter of the CFL.
+
+```
+       one retry after step 25                 two retries, after steps 25 and 45
+cfl   steps  final  unrelaxed         relaxed  | steps  final  unrelaxed         relaxed
+0.4     64   0.2    3.589e-3  1.000   2.351e-3 |   88   0.1    4.930e-3  1.000   2.351e-3
+0.2    148   0.1    8.274e-3  2.306   2.351e-3 |  256   0.05   1.426e-2  2.893   2.351e-3
+0.1    316   0.05   1.757e-2  4.896   2.351e-3 |  591   0.025  3.259e-2  6.611   2.351e-3
+```
+
+Unrelaxed, a retry adds the steps of the lowered CFL and the loss follows
+them: the run at `cfl = 0.4` that retried once loses 52% more than the one
+that did not, and the run at 0.1 that retried twice 3.5 times as much.
+Relaxed, every entry is the 2.351e-3 of the unretried table to six
+significant figures (2.35116e-3, 2.35115e-3, 2.35114e-3 in both columns),
+since the first pass after the rollback already reads the halved `dt · rate`
+of the step as taken. The dissipation per unit time is invariant to the CFL
+a retry leaves the run at.
+
+**Subcycling.** A refined level filters its own state at its own cadence,
+and its pass reads the root `dt · rate`, an upper bound on the level's own
+product; the two agree when the fine rate is three times the root's. The
+measured question is whether the composite loss is a rate under
+subcycling. A level must nest four root nodes inside the root on every
+side, so the refined region is a box and not a slab, which costs `u_x(y)`
+its exactness: once the two levels have filtered at their own spacings,
+`u_x` differs between the fine and coarse regions, and the difference
+across the box's x-faces is a compression. The passive variant
+`u_z = 0.1 sin(4y)` with `u_x = u_y = 0` in a planar `(32, 32, 1)` run is
+transported by nothing and stays exactly steady whatever the box does, so
+`planar=true component=3` is the case, with `refine=16` a subcycled level-1
+box of 16 root nodes about the centre. The planar run takes 34 steps at
+`cfl = 0.4` in place of 42 because the Euclidean acoustic bound is √2 wide
+and not √3; the loss per pass is the same.
+
+```
+       no refinement                          refined box, subcycled
+cfl   steps  unrelaxed         relaxed        | unrelaxed         relaxed
+0.4     34   1.909e-3  1.000   1.891e-3 1.000 | 1.508e-3  1.000   1.4946e-3  1.000
+0.2     68   3.813e-3  1.997   1.891e-3 1.000 | 3.010e-3  1.996   1.4947e-3  1.000
+0.1    135   7.551e-3  3.956   1.891e-3 1.000 | 5.956e-3  3.949   1.4946e-3  1.000
+```
+
+Unrelaxed, the composite loss tracks the step count as the unrefined one
+does. Relaxed, it is constant to five significant figures across the
+fourfold CFL change (1.49460e-3, 1.49466e-3, 1.49463e-3), and so with a
+retry induced after step 25 on top (1.49470e-3, 1.49467e-3, 1.49468e-3 at
+final CFLs of 0.2, 0.1 and 0.05). The refined run loses about a fifth less
+in total because the level filters at a third of the spacing, where a pass
+at 24 points per wavelength removes far less than one at 8, and the
+post-step restriction rebuilds the covered root region from that state.
 
 ### The timestep moves the attribution, not the total
 
@@ -1317,13 +1383,14 @@ callback instant. Reading the product rather than `solver.cfl` makes a shortened
 step filter proportionally less and removes the truncated-final-step artifact
 recorded against `bench/tgv_energy.jl`.
 
-The default `filter_cfl = 0` takes the original code path exactly, not a blend at
-`w = 1`. Every guarded number in the suite was measured there and none of them
-moves.
-
-**Recommendation:** hold `filter_cfl = 0` until α and the cadence are fitted. The
-two are coupled, since a fit taken under the unrelaxed formulation is only
-reproducible at the CFL it was taken at, so they should be settled together.
+`filter_cfl = 0`, the default when the formulation landed, takes the original
+code path exactly, not a blend at `w = 1`, and so does any pass at or above
+the reference CFL, so the fits taken at the reference and every guarded
+number measured there were unchanged by the default's later move. The
+recommendation at the time was to hold `filter_cfl = 0` until α and the
+cadence were fitted, since a fit taken under the unrelaxed formulation is
+reproducible only at its CFL; the fit followed, and [the default
+decision](#the-default-decision) records the outcome.
 
 ### The fit instrument
 
@@ -1809,10 +1876,10 @@ Euclidean rate, while the one-dimensional battery's CFL numbers mean the same
 under both ([the rate convention](#the-cfl-rate-is-normalized-differently)),
 so the sweep is repeated at `filter_cfl = 0.35` below. Against 0.6, Noh at
 `cfl = 0.15` receives a quarter of a pass per step, Woodward–Colella at 0.3 a
-half, and Lax and Shu–Osher at 0.4 two thirds. The test suite is unaffected: `test/cases.jl` pins
+half, and Lax and Shu–Osher at 0.4 two thirds. When this sweep was taken `test/cases.jl` pinned
 `compact_filter(0.45)` and `filter_cfl = 0` in every case, so the guards in
-`test/validation.jl` measure the unrelaxed configuration until those pins are
-moved together with the solver default.
+`test/validation.jl` measured the unrelaxed configuration; the pins moved
+with the solver default in September 2026.
 
 ```
 alphaf   Noh1 plat  deficit | Noh2 plat | Noh3 plat | Lax L1  | Shu amp | WC peak
@@ -1865,7 +1932,8 @@ rate convention, is a stronger filter on the battery than 0.6 was: Noh at
 `cfl = 0.15` receives 0.43 of a pass per step and Woodward–Colella at 0.3
 receives 0.86, while Lax and Shu–Osher at 0.4 run above the reference and
 receive a full pass, so their columns are [the unrelaxed
-table](#the-battery-under-alpha) to every digit.
+table](#the-battery-under-alpha) to every digit. This is the battery's
+configuration since the default moved in September 2026.
 
 ```
 alphaf   Noh1 plat  deficit | Noh2 plat | Noh3 plat | Lax L1  | Shu amp | WC peak
@@ -2024,7 +2092,8 @@ The evidence, in the order it was taken:
 5. None of the four constants fitted under the present filter moves under
    either candidate.
 
-**Recommendation: move the default to `filter_cfl = 0.35` and hold α = 0.45.**
+**Decision: the default is `filter_cfl = 0.35` at α = 0.45, applied in
+September 2026.**
 At `cfl = 0.35` the weight is one and every result above that CFL, the
 Taylor–Green fits included, is unchanged bit for bit. Below it the strength
 falls with the CFL, which at the Noh CFL is the α = 0.479 equivalent and reads
@@ -2044,12 +2113,22 @@ the cost of a margin of three times the edge at the Noh CFL, which the second
 retry spends; a resolved case that is not shock-dominated can take it, and a
 converging strong shock should not.
 
-The code default is unchanged as of this revision. Moving it changes every run
-that does not set `filter_cfl`, and `test/cases.jl` pins `compact_filter(0.45)`
-and `filter_cfl = 0` explicitly so that the `test/validation.jl` guards keep
-measuring the fitted configuration. A default move has to move those pins with
-`Numerics`, or the battery measures a configuration the solver no longer runs,
-as happened when the smoother default moved.
+The default moved in September 2026, together with the pins in
+`test/cases.jl`, which had held `compact_filter(0.45)` and `filter_cfl = 0`
+so that the `test/validation.jl` guards measured the fitted configuration.
+Both now hold the default, and the battery header's measured table was
+re-baselined on its Woodward–Colella and Noh rows, which run below the
+reference; Lax, Shu–Osher, Sedov and the interface case did not move to
+the digits printed. A default move has to move those pins with `Numerics`, or the
+battery measures a configuration the solver no longer runs, as happened when
+the smoother default moved. Six tests whose assertions are recorded
+trajectories measured under the unrelaxed filter, a failure mode and five
+regrid tile histories, pin `filter_cfl = 0` explicitly and say so; every
+other test runs the default. The two invariances argued above and not
+measured at the time, retries and subcycling, are in [retries and
+subcycling under relaxation](#retries-and-subcycling-under-relaxation). The
+`C_mu` confirmation at 128³ is the one item of the program still open and
+belongs to its refit.
 
 <a id="the-filters-wall-cascade"></a>
 

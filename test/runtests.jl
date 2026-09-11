@@ -625,7 +625,7 @@ end
     @test dev < 0.35                                      # sawtooth strongly damped
 end
 
-@testset "filter relaxation: weight, exact blend, unrelaxed default" begin
+@testset "filter relaxation: weight, exact blend, full strength at the reference" begin
     # The relaxed filter must be an exact linear interpolation between the state
     # and its filtered image, and must reduce to the unrelaxed pass at w = 1 —
     # bit-identically, since every guarded number in the suite was measured on
@@ -681,7 +681,8 @@ end
     filter_state!(solverS, QS)
     @test dev(interior(solverS, QS), ref) < 0.01 * full
 
-    # w == 1 must take the copy path, not the blend, so the default is exact.
+    # w == 1 must take the copy path, not the blend, so a run at or above the
+    # reference CFL is the unrelaxed solver exactly.
     solverE, QE = build(0.4)
     solverE.dt_prev = 0.4; solverE.rate_prev = 1.0   # dt*rate = 0.4 = filter_cfl
     @test CL.filter_weight(solverE) == 1.0
@@ -2251,6 +2252,12 @@ end
     #   cfl = 0.9 fails abruptly in the startup transient, representative of a
     #   guessed CFL. Rolling back past it with a halved CFL recovers the correct
     #   answer.
+    #
+    # Both arms run the unrelaxed filter (filter_cfl = 0), the configuration
+    # they were characterized under. Under the relaxed default the planar Noh
+    # at cfl = 0.3 completes in the wall-excess mode instead and is rejected
+    # by the endpoint check as :invalid_state, and at 0.4 it fails abruptly at
+    # step 53, so neither CFL exercises the gradual failure the first arm pins.
     γ = 5 / 3; p0 = 1e-4; tfin = 0.6; N = 400
     build(cfl, control) = begin
         inflow = DirichletBC((x, y, z, t) -> begin
@@ -2262,7 +2269,8 @@ end
                        bcs=((SlipWallBC(), inflow), per3[2], per3[3]),
                        ic=(x, y, z) -> Prim(rho=1.0, u=(-1.0, 0.0, 0.0), p=p0))
         setup(prob, Numerics(n_global=(N, 1, 1), art=ArtParams(enabled=true),
-                             cfl=cfl, control=control, filter_interval=1))
+                             cfl=cfl, control=control, filter_interval=1,
+                             filter_cfl=0.0))
     end
     s1, Q1 = build(0.3, StepControl())
     err = nothing

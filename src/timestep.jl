@@ -1513,8 +1513,8 @@ function filter_state!(solver::SolverLike, Q)
         exchange_dim_batch!(comps, decomp, d)
         for c in 1:solver.equations.n_cons
             filt_along!(solver.tmp_a, comps[c], solver, d, cons_parity(solver, d, c))
-            # w == 1 takes the original path exactly, so the default configuration
-            # stays bit-identical to the unrelaxed solver.
+            # w == 1 takes the original path exactly, so a pass at or above the reference
+            # CFL stays bit-identical to the unrelaxed solver.
             if w == 1
                 copy_interior!(comps[c], solver.tmp_a, decomp)
             else
