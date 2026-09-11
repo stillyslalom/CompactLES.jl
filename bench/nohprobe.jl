@@ -4,6 +4,16 @@
 #
 # --- What this measured, so it is not rediscovered ---------------------------
 #
+# The wall and axis ceilings this probe was built against no longer exist:
+# they were the first step of the run, sized before any artificial
+# coefficient had been computed, and run! now evaluates the right-hand side
+# once before that step. Under the priming planar and cylindrical Noh
+# complete from cfl 0.9 and the spherical origin keeps a ceiling of 0.3 from
+# the excursion described in item 4 below. The write-up is in
+# reference/CALIBRATION_APPENDIX.md under "The first step of a run"; what
+# follows is the record of the readings that led there, all taken before
+# the priming.
+#
 # The hypothesis is wrong on three independent readings, and the write-up is
 # in reference/CALIBRATION_APPENDIX.md under "Where the restriction originates".
 #
@@ -41,15 +51,20 @@
 # front, for their whole duration. `primitives!` floors T_ion at 1e-300 wherever
 # e <= 0, so p goes to rho*R*1e-300 and the run continues, while the positivity
 # check in `max_rate` guards rho, which stays positive throughout. See the
-# `n_e<0` column.
+# `n_e<0` column. The cells sit AHEAD of the front, not at the wall: an
+# odd-even oscillation of the internal energy over about fifteen cells of
+# the precursor, alternating in sign cell by cell, where the ambient internal
+# energy is a 0.03% difference of the total and kinetic energies. The wall
+# cell itself is hot. Because T_ion is floored there and the sound speed
+# vanishes with it, kappa* on those cells is zero rather than singular.
 #
-# That condition is now measured rather than merely visible, and the positivity
+# That condition is measured rather than merely visible, and the positivity
 # failsafe is the instrument. `floor=1e-8` counts it over a whole run without
 # changing the trajectory, while `floor=1e-8 scope=internal_energy` repairs it,
-# which on nu=1 at cfl 0.15 costs a 5% velocity damping on the worst cell and
-# fails at step 18. The write-up is in reference/CALIBRATION_APPENDIX.md under "The
-# negative internal energy is not a rounding artifact". The converging
-# geometries have not been measured through it; only the planar case has.
+# which costs a percent-level velocity damping on the worst cell and ends the
+# run within 15, 17 and 102 steps at nu = 1, 2 and 3. The write-up is in
+# reference/CALIBRATION_APPENDIX.md under "Negative internal energy in
+# completed runs" and "The policies on the three geometries".
 #
 # Columns, one line per sampled step:
 #

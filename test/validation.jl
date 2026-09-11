@@ -53,16 +53,19 @@
 #   Shu-Osher  L1 rho 6.91e-3, wave train 2.09e-2, train peak 4.680
 #   Woodward   L1 rho 3.22e-2, peak rho 6.616 at x = 0.7785
 #   Sedov      R_s 0.8086 vs 0.8000 analytic (+1.07%), peak rho 5.12 (jump 6)
-#   Noh nu=1   plateau 3.9959/4    shock 0.2046/0.2   wall deficit 63%
-#   Noh nu=2   plateau 15.002/16   shock 0.2092/0.2   wall deficit 55%
-#   Noh nu=3   plateau 62.501/64   shock 0.2090/0.2   wall deficit 28%
+#   Noh nu=1   plateau 3.9957/4    shock 0.2047/0.2   wall deficit 63%
+#   Noh nu=2   plateau 15.002/16   shock 0.2092/0.2   wall deficit 56%
+#   Noh nu=3   plateau 62.502/64   shock 0.2090/0.2   wall deficit 28%
 #   Shock/SF6  worst Y -0.0135 / 1.0135, width 4 cells, 646 steps (Sept 2026)
 #
 # The Woodward and Noh rows moved in September 2026 when the filter_cfl default
 # went from 0 to 0.35: those cases run below the reference CFL, so their filter
 # passes are relaxed, while Lax, Shu-Osher, Sedov and the interface case did not
 # move to the digits printed. Unrelaxed, the rows read Woodward 3.25e-2 / 6.608
-# and Noh 3.9971 / 64%, 14.988 / 56%, 62.406 / 27%.
+# and Noh 3.9971 / 64%, 14.988 / 56%, 62.406 / 27%. The Noh plateaus moved
+# again in the fifth digit (3.9959, 15.0020, 62.5012 before) when run! began
+# sizing the first step from the initial data's artificial coefficients; no
+# other row moved to the digits printed.
 #
 # All rows were re-measured in August 2026 when ArtParams.smoother moved to
 # :gaussian; reference/CALIBRATION_APPENDIX.md carries why, and the previous set under
@@ -80,15 +83,16 @@
 # Two operating limits found while building this, both real; the numbers behind
 # them are in reference/CALIBRATION_APPENDIX.md.
 #
-#   * Strong shocks need cfl <= 0.15, not the 0.5 default: above ~0.2 the Noh
-#     cases lose positivity within a few hundred steps. The cause is a dispersive
-#     undershoot at the shock that the artificial viscosity does not damp, not
-#     the one-step lag in compute_dt — that hypothesis was tested with a rate
-#     predictor and rejected. StepControl(retries = 4) is the practical answer;
-#     reference/CALIBRATION_APPENDIX.md has the trace.
+#   * The Noh cases run at cfl 0.15, the value they were calibrated at. The
+#     planar wall and the cylindrical axis complete from cfl 0.9 now that
+#     run! sizes the first step from the initial data's artificial
+#     coefficients; the spherical origin is limited to 0.3 by an excursion
+#     of the origin cell near t = 0.39, which StepControl(retries = 4)
+#     recovers. reference/CALIBRATION_APPENDIX.md has the ladders.
 #   * The spherical origin will not take a discontinuity that is not resolved
-#     over at least ~3 cells, nor the singular t = 0 start of spherical Noh.
-#     The cylindrical axis takes both.
+#     over at least ~3 cells, and the singular t = 0 start of spherical Noh
+#     completes only below cfl 0.075 and returns a plateau 18% low. The
+#     cylindrical axis takes both.
 #
 # --- What has been checked against something other than this code ------------
 #

@@ -1375,3 +1375,71 @@ checks at two MPI ranks and all 144 selected checks at eight, and the
 dispatch audit unchanged, `filter_state!` at zero reports. HDF5 and Makie
 extension tests were skipped by the package environment; neither extension
 was changed.
+
+## The first step and the symmetry cell (September 2026)
+
+N3 closes with one change to `run!` and one to the rollback, and the rest
+recorded as measurement. The planar-wall and cylindrical-axis CFL ceilings
+on Noh (0.25 and 0.2) were the first step of the run: `max_rate` builds its
+diffusive rate from the artificial coefficient arrays the previous
+evaluation left, a fresh solver had none, and the first step from u = −1
+against a wall or axis was sized on the acoustic rate alone. `run!` now
+evaluates the right-hand side of the initial state once before its first
+step, into the workspace scratch the low-storage accumulator forgets, and
+both geometries complete from `cfl = 0.9` with the plateau of the `cfl = 0.15`
+run. The spherical origin keeps its ceiling of 0.3 (0.25 under `:d8`) from
+the origin cell's excursion near t = 0.39; a β\* scaled by the smoothed
+density in place of the local one, and the per-step filter strength from
+unrelaxed to twice relaxed, both leave it in place, which closes the two
+leads the calibration held for it.
+
+The rollback recovery had rested on the same effect from the other side:
+the savepoint restored the state and left the failed trajectory's
+coefficient arrays in place, enormous where the failure was, and they
+throttled the retry's first step. On spherical Noh they were of order 1e57
+and the retry ended in `:no_progress`. The savepoint now banks the
+coefficient arrays beside the state and the rollback restores both, so a
+retry's first step is sized as a checkpoint restart of the same instant
+would be; the `:nonfinite` reset of those arrays is gone, and the workspace
+reset stays. Spherical Noh from `cfl = 0.9` rolls back twice through the
+excursion and completes at 0.225 in 635 steps.
+
+Measured and recorded: the negative-internal-energy cells of a completing
+Noh run are the pre-shock precursor, an odd-even oscillation over about
+fifteen cells ahead of the front, and not a wall layer; the wall cell is hot.
+κ\* is not singular in practice, since the sound speed vanishes with the
+floored temperature, and on planar Noh its rate is an order below β\*'s with
+the step count unchanged from p₀ = 1e-2 to 1e-8, which retires the recorded
+cold-ambient timestep collapse. The representable floor reproduces the
+permissive trajectory in all three geometries and counts 24250, 13032 and
+7756 low-energy cell-steps; the internal-energy repair ends the three within
+15, 17 and 102 steps. The singular spherical start runs under the priming
+only below cfl 0.075 and returns a plateau 18% low, the error being made
+while the shock is within a few cells of the origin, so the warm start at
+t₀ = 0.3 with the 4h blend stays. `bench/nohprobe.jl` and the appendix carry
+the tables ([the first step of a
+run](CALIBRATION_APPENDIX.md#the-first-step-of-a-run)).
+
+The retry testset now pins the planar case completing from 0.9 without a
+retry, the spherical case failing loudly at 0.5, and the spherical case
+recovering from 0.9 with a compounding backoff.
+
+The priming changes the first step of every run whose initial data
+carries artificial coefficients, so the stored trajectories moved: the
+Noh plateaus of the validation battery in the fifth digit (3.9957,
+15.0017, 62.5017 against 3.9959, 15.0020, 62.5012), no other row to the
+digits printed; the four "time reached" references of the Sod regrid
+cases in the MPI suite by 3.2e-6 to 3.5e-6 with their tile sets and
+regions unchanged, and the bulk two-patch slab's maximum density by 2e-14,
+all regenerated serially; and the tiled-regrid seeding test's fresh tile
+now appears at step 30 rather than 20. The convergence orders are
+bit-identical, since smooth data leaves the diffusive rate below the
+acoustic one at t = 0.
+
+Validation on Julia 1.11.4: 2,466 serial assertions, the convergence
+orders and error magnitudes bit-identical to the recorded ones, the
+validation battery at its header rows, all 298 full-suite checks at two
+MPI ranks and all 144 selected checks at eight. HDF5 and Makie extension
+tests were skipped by the package environment; neither extension was
+changed. The dispatch and inference audits were not re-run: `run!`'s
+preamble is not a probed entry point and no hot-path arithmetic changed.

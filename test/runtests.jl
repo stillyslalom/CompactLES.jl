@@ -2359,68 +2359,88 @@ end
 end
 
 @testset "run!: failure is raised, and recoverable with retries" begin
-    # Noh at nu=1. Two distinct behaviours, and the distinction is the whole
-    # point of the rollback:
+    # Noh, three behaviours:
     #
-    #   cfl = 0.3 degrades gradually — the density undershoot grows for ~150
-    #   steps before positivity goes — so the run must fail loudly, not grind.
-    #   Rollback cannot save it because the savepoint is already
-    #   damaged by the time anything notices.
+    #   Planar Noh from cfl = 0.9 completes without a retry. Its first step
+    #   is sized from the coefficients the initial data produces, because
+    #   run! evaluates the right-hand side once before that step; sized on
+    #   the acoustic rate alone the same run lost positivity above cfl 0.25,
+    #   and the rollback that appeared to recover it rested on the failed
+    #   trajectory's coefficients throttling the retry's first step.
     #
-    #   cfl = 0.9 fails abruptly in the startup transient, representative of a
-    #   guessed CFL. Rolling back past it with a halved CFL recovers the correct
-    #   answer.
+    #   Spherical Noh from the warm start at cfl = 0.5 fails abruptly in the
+    #   origin's excursion near t = 0.39, representative of a guessed CFL,
+    #   and must fail loudly rather than grind.
     #
-    # Both arms run the unrelaxed filter (filter_cfl = 0), the configuration
-    # they were characterized under. Under the relaxed default the planar Noh
-    # at cfl = 0.3 completes in the wall-excess mode instead and is rejected
-    # by the endpoint check as :invalid_state, and at 0.4 it fails abruptly at
-    # step 53, so neither CFL exercises the gradual failure the first arm pins.
-    γ = 5 / 3; p0 = 1e-4; tfin = 0.6; N = 400
-    build(cfl, control) = begin
+    #   The same run from cfl = 0.9 with retries rolls back past the
+    #   excursion with a halved CFL, twice, and recovers the correct plateau.
+    #
+    # All arms run the unrelaxed filter (filter_cfl = 0), the configuration
+    # they were characterized under.
+    γ = 5 / 3; p0 = 1e-4; tfin = 0.6
+    build(ν, cfl, control; N, t0) = begin
+        metric = ν == 1 ? CartesianMetric() : SphericalMetric()
+        lobc = ν == 1 ? SlipWallBC() : OriginBC()
+        dom2 = ν == 1 ? (0.0, 1 / N) : (π / 2, π / 2 + 1)
+        dom3 = ν == 1 ? (0.0, 1 / N) : (0.0, 1.0)
         inflow = DirichletBC((x, y, z, t) -> begin
-            ρ, u, _ = noh_exact(x, isfinite(t) ? t : 0.0, 1, γ)
+            ρ, u, _ = noh_exact(x, isfinite(t) ? t + t0 : t0, ν, γ)
             Prim(rho=ρ, u=(u, 0.0, 0.0), p=p0)
         end)
+        w = 4 / N
+        ic = (x, y, z) -> begin
+            t0 <= 0 && return Prim(rho=1.0, u=(-1.0, 0.0, 0.0), p=p0)
+            ρin, _, pin = noh_exact(0.0, t0, ν, γ)
+            ρout, _, _ = noh_exact(x, t0, ν, γ)
+            θ = tanh_blend(x, (γ - 1) / 2 * t0, w)
+            Prim(rho=(1 - θ) * ρin + θ * ρout, u=(-θ, 0.0, 0.0),
+                 p=(1 - θ) * pin + θ * p0)
+        end
         prob = Problem(eos=IdealSpecies("gas"; gamma=γ, R=1.0), transport=Transport(mu0=0.0),
-                       domain=((0.0, 1.0), (0.0, 1 / N), (0.0, 1 / N)),
-                       bcs=((SlipWallBC(), inflow), per3[2], per3[3]),
-                       ic=(x, y, z) -> Prim(rho=1.0, u=(-1.0, 0.0, 0.0), p=p0))
+                       metric=metric, domain=((0.0, 1.0), dom2, dom3),
+                       bcs=((lobc, inflow), per3[2], per3[3]), ic=ic)
         setup(prob, Numerics(n_global=(N, 1, 1), art=ArtParams(enabled=true),
                              cfl=cfl, control=control, filter_interval=1,
                              filter_cfl=0.0))
     end
-    s1, Q1 = build(0.3, StepControl())
+    # Post-shock plateau, sampled between the wall-heating layer and the shock
+    # at x = (γ−1)t/2 = 0.2 — a window that straddles the shock would average
+    # the answer with the undisturbed inflow and pass for the wrong reason.
+    plateau(s, Q, N) = begin
+        CL.exchange_state!(Q, s.decomp); CL.primitives!(s, Q)
+        core = [i for i in 1:N if 0.06 <= xcoord(s, 1, i) <= 0.14]
+        sum(s.rho[gidx(s, i, 1, 1)] for i in core) / length(core)
+    end
+
+    # Permissive on the returned state: a Noh run ends with a handful of
+    # negative-internal-energy cells ahead of the front at any CFL, so a
+    # strict exit check would reject a correct trajectory.
+    s1, Q1 = build(1, 0.9, StepControl(validity=:permissive); N=400, t0=0.0)
+    run!(s1, Q1; tfinal=tfin, nmax=20_000)
+    @test s1.t ≈ tfin rtol = 1e-9
+    @test s1.cfl == 0.9                        # no retry was needed
+    @test plateau(s1, Q1, 400) ≈ 4.0 rtol = 0.05  # exact Noh plateau for nu = 1
+
+    s2, Q2 = build(3, 0.5, StepControl(); N=256, t0=0.3)
     err = nothing
     try
-        run!(s1, Q1; tfinal=tfin, nmax=20_000)
+        run!(s2, Q2; tfinal=tfin - 0.3, nmax=20_000)
     catch e
         err = e
     end
     @test err isa SolverFailure
     @test err.reason in (:negative_density, :dt_collapse)
-    @test s1.step < 20_000                     # it stopped early, it did not grind
+    @test s2.step < 20_000                     # it stopped early, it did not grind
 
-    # Permissive on the returned state: a Noh run ends with a handful of
-    # negative-internal-energy cells in the wall layer at any CFL, so a strict
-    # exit check would reject the recovered trajectory and spend all five
-    # retries re-running it before failing. The retry behaviour under test is
-    # the rollback from :negative_density during startup, which is unaffected.
-    s2, Q2 = build(0.9, StepControl(retries=5, savepoint_interval=20,
-                                    validity=:permissive))
-    run!(s2, Q2; tfinal=tfin, nmax=20_000)
-    @test s2.t ≈ tfin rtol = 1e-9
-    @test s2.cfl < 0.9                         # it backed off, and says by how much
-    CL.exchange_state!(Q2, s2.decomp); CL.primitives!(s2, Q2)
-    # Post-shock plateau, sampled between the wall-heating layer and the shock
-    # at x = (γ−1)t/2 = 0.2 — a window that straddles the shock would average
-    # the answer with the undisturbed inflow and pass for the wrong reason.
-    core = [i for i in 1:N if 0.06 <= xcoord(s2, 1, i) <= 0.14]
-    plateau = sum(s2.rho[gidx(s2, i, 1, 1)] for i in core) / length(core)
-    @test plateau ≈ 4.0 rtol = 0.05            # exact Noh plateau for nu = 1
+    s3, Q3 = build(3, 0.9, StepControl(retries=5, savepoint_interval=20,
+                                       validity=:permissive); N=256, t0=0.3)
+    run!(s3, Q3; tfinal=tfin - 0.3, nmax=20_000)
+    @test s3.t ≈ tfin - 0.3 rtol = 1e-9
+    @test s3.cfl < 0.9                         # it backed off, and says by how much
+    @test plateau(s3, Q3, 256) ≈ 64.0 rtol = 0.05  # exact Noh plateau for nu = 3
     # The backoff compounds: successive retries must keep halving, not keep
     # re-applying one factor to the same starting CFL.
-    @test s2.cfl <= 0.9 * 0.5 + 1e-12
+    @test s3.cfl <= 0.9 * 0.5 + 1e-12
 end
 
 @testset "NASA-9 mixture reduces exactly to the ideal mixture" begin

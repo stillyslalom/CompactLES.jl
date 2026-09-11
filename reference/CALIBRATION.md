@@ -44,11 +44,11 @@ Numerics(filt = compact_filter(0.45), filter_interval = 1, filter_cfl = 0.35,
 | `C_D` | 0.01 | keep | The filter dominates interface broadening; a 64× sweep moves the width 22% ([appendix](CALIBRATION_APPENDIX.md#c_d-the-species-diffusivity)). |
 | `C_Y` | 100 | keep | A shocked 2h interface rings to ±0.2 without the bound and ±0.013 with it ([appendix](CALIBRATION_APPENDIX.md#c_y-the-mass-fraction-bound)). |
 | `Y_tolerance` | 1e-4 | keep | A dead band restoring the unbounded order on smooth profiles touching 0 or 1 ([appendix](CALIBRATION_APPENDIX.md#the-dead-band)). |
-| `smoother` | `:gaussian` | keep | Raises the origin ceiling 0.15 → 0.4 and the axis 0.15 → 0.2, 29% cheaper, costs seven points of wall heating ([appendix](CALIBRATION_APPENDIX.md#the-sensor-smoother)). |
-| `detector` | `:delta4` | provisional | `:d8` improves six of seven columns and removes the wall and axis ceilings, but lowers the origin's 0.4 → 0.25 ([appendix](CALIBRATION_APPENDIX.md#the-ringing-detector)). |
+| `smoother` | `:gaussian` | keep | Raised the origin ceiling 0.15 → 0.4 in its sweep (0.3 under the current defaults), 29% cheaper, costs seven points of wall heating ([appendix](CALIBRATION_APPENDIX.md#the-sensor-smoother)). |
+| `detector` | `:delta4` | provisional | `:d8` improves six of seven columns and halves the wall deficit at high CFL, but lowers the origin's ceiling 0.3 → 0.25 ([appendix](CALIBRATION_APPENDIX.md#the-ringing-detector)). |
 | `mu_sensor`, `beta_sensor`, `reduction` | `:strain`, `:strain`, `:sum` | keep | The alternatives move no column past the fourth digit or cost a converging geometry ([appendix](CALIBRATION_APPENDIX.md#the-sensor-fields-and-the-compression-switch)). |
 | `species_flux` | `:fickian` | provisional | `:bulk` is at least as good on every measured column; the constants are fitted on the Fickian channel ([appendix](CALIBRATION_APPENDIX.md#the-bulk-species-channel)). |
-| `cfl` | 0.5 | not for shocks | Use 0.3 with shocks and `StepControl(retries = 4)` ([appendix](CALIBRATION_APPENDIX.md#cfl-and-the-symmetry-cell-restriction)). |
+| `cfl` | 0.5 | keep | Use 0.3 or `StepControl(retries = 4)` for a converging shock at a spherical origin, whose ceiling is 0.3; walls and axes carry none ([appendix](CALIBRATION_APPENDIX.md#cfl-and-the-symmetry-cell-restriction)). |
 | `compact_filter` α | 0.45 | too strong | 0.49 fits at 128³ and 256³ and clears the battery; the stability edge is at 0.49875 ([appendix](CALIBRATION_APPENDIX.md#the-default-decision)). |
 | `filter_cfl` | 0.35 | keep | Makes the filter's dissipation a rate, invariant to the CFL, landing steps, retries and subcycling; clears the battery at its production CFL numbers ([appendix](CALIBRATION_APPENDIX.md#the-battery-under-relaxation), [invariances](CALIBRATION_APPENDIX.md#retries-and-subcycling-under-relaxation)). |
 | `filter_interval` | 1 | keep | Redundant with α ([appendix](CALIBRATION_APPENDIX.md#cadence-and-alpha-are-one-axis)). |
@@ -65,19 +65,22 @@ decides stability more than any constant in the list.
 Each entry is a symptom, the setting that addresses it, and the measured
 effect. The appendix link carries the sweep.
 
-- **A converging shock loses positivity at the wall, axis or origin early in
-  the run.** Lower `cfl` to 0.3 and set `StepControl(retries = 4)`. The
-  failure is a startup transient at the symmetry cell, landing at t ≈ 0.394
-  for Noh at every resolution, and rollback recovers it about three times
-  faster than a fixed low CFL. The ceilings under the defaults are 0.4 at the
-  spherical origin, 0.25 at the planar wall and 0.2 at the cylindrical axis.
-  `detector = :d8` removes the wall and axis ceilings outright and lowers the
-  origin's to 0.25; `beta_sensor = :gated_strain` raises the axis ceiling by
-  a third for one pointwise pass. Do not lower `C_beta` below 0.5 for the
-  origin, and do not weaken the filter past α = 0.49. The timestep predictor,
-  the sensor's reach and magnitude, sensor blindness at the fold and the fold
-  closure have each been measured and are not the cause
-  ([where the restriction originates](CALIBRATION_APPENDIX.md#where-the-restriction-originates)).
+- **A converging shock loses positivity at the spherical origin early in
+  the run.** Lower `cfl` to 0.3 or set `StepControl(retries = 4)`. The
+  failure is an excursion of the origin cell landing at t ≈ 0.39 for Noh at
+  every resolution, and rollback recovers it in about half the steps of a
+  fixed `cfl = 0.15`. The ceiling under the defaults is 0.3; `detector = :d8`
+  lowers it to 0.25. The planar wall and the cylindrical axis carry no
+  ceiling: Noh completes from `cfl = 0.9` in both, their former ceilings of
+  0.25 and 0.2 having been the first step of the run, sized before any
+  artificial coefficient existed, which `run!` now primes. Do not lower
+  `C_beta` below 0.5 for the origin, and do not weaken the filter past
+  α = 0.49. The timestep predictor, the sensor's reach and magnitude, sensor
+  blindness at the fold, the fold closure, the density proportionality of β\*
+  and the per-step filter strength have each been measured and are not the
+  cause ([where the restriction
+  originates](CALIBRATION_APPENDIX.md#where-the-restriction-originates),
+  [the first step](CALIBRATION_APPENDIX.md#the-first-step-of-a-run)).
 - **A resolved or smooth solution is over-dissipated.** The compact filter is
   the sink, 37% of the Taylor–Green dissipation at 128³ and 12% at 256³,
   and the artificial properties are nearly inert there. Weaken the filter
@@ -119,10 +122,14 @@ effect. The appendix link carries the sweep.
   within twenty steps. Use `validity = :permissive` and the default
   `floor_scope = :representable`, and bound the count in a guard
   ([the budget](CALIBRATION_APPENDIX.md#negative-internal-energy-in-completed-runs)).
-- **The timestep collapses in a cold ambient.** κ\* is proportional to
-  1/T_ion, so an ambient below p ≈ 1e-3 at ρ = 1 drives the diffusive rate
-  up. Keep a finite ambient pressure, or supply a finite
-  `artificial_conductivity_scale` from the EOS.
+- **The ambient is cold.** κ\* is written as ρc/T_ion and is not singular in
+  practice: the sound speed vanishes with the temperature at a floored cell,
+  and on planar Noh the κ\* rate stays an order of magnitude below the β\*
+  rate, with the step count unchanged, from p₀ = 1e-2 down to 1e-8. What a
+  cold ambient does change is the count of cells the EOS calls inadmissible,
+  since the precursor's negative internal energy is a fixed absolute
+  amplitude
+  ([the cold ambient](CALIBRATION_APPENDIX.md#the-cold-state-limit)).
 - **A spherical-origin run fails within tens of steps of a sharp start.**
   The origin fold needs initial data resolved over three cells or more and
   cannot take the singular t = 0 start of Noh; warm-start from a resolved
@@ -212,8 +219,9 @@ raising the constant makes it worse: +64% at 0.01, +68% at 0.04, +91% at
 nearly isothermal. Zero completes under `:gaussian` and fails spherical Noh
 under `:compact`. Retain 0.01
 ([sweep](CALIBRATION_APPENDIX.md#c_kappa-the-conductivity)). The
-construction is singular as T_ion → 0
-([the cold-state limit](CALIBRATION_APPENDIX.md#the-cold-state-limit)).
+construction is written as ρc/T_ion; measured on Noh, it neither limits the
+step nor grows as the ambient cools
+([the cold ambient](CALIBRATION_APPENDIX.md#the-cold-state-limit)).
 
 ### `C_mu`, the shear viscosity
 
@@ -398,39 +406,51 @@ reference implementation does not change that and is not the default
 
 ## CFL, step control and the symmetry cell
 
-No setting of the constants stabilizes a converging strong shock at the
-default `cfl = 0.5`. The restriction is a startup transient at the symmetry
-cell, not the shock front: the origin cell is quiescent until t ≈ 0.394 on
-Noh at every resolution, then passes through an excursion in which β\* at
-the origin reaches the line maximum, and the ceiling is whether the cell
-survives it. Because β\* is proportional to density, the regularization is
-suppressed by the evacuation it should arrest; that mechanism is consistent
-with the traces and not demonstrated
+A converging strong shock at the spherical origin does not survive the
+default `cfl = 0.5`. The restriction is an excursion of the origin cell, not
+the shock front: the cell is quiescent until t ≈ 0.39 on Noh at every
+resolution, then passes through an excursion in which β\* at the origin
+reaches the line maximum, and the ceiling is whether the cell survives it
 ([the origin cell](CALIBRATION_APPENDIX.md#the-origin-cell-is-a-startup-transient)).
+Scaling β\* by the smoothed density in place of the local one, so that the
+evacuating cell does not suppress its own regularization, and the per-step
+filter strength from unrelaxed to twice relaxed both leave the ceiling where
+it is ([the first step](CALIBRATION_APPENDIX.md#the-first-step-of-a-run)).
 
-Ceilings, the highest CFL reaching the end with a correct plateau:
+The planar wall and the cylindrical axis have no ceiling. Their recorded
+ones were the first step of the run: `max_rate` reads the artificial
+coefficient arrays the previous evaluation left, and a fresh solver had
+none, so the first step from Noh's u = −1 against the wall or axis was sized
+on the acoustic rate alone. `run!` now evaluates the right-hand side once
+before its first step, and both geometries complete from `cfl = 0.9` with
+the plateau of the `cfl = 0.15` run.
+
+Ceilings, the highest CFL reaching the end with a correct plateau, under
+the priming:
 
 ```
                      nu = 1 wall   nu = 2 axis   nu = 3 origin
-default              0.25          0.2           0.4
-detector = :d8       1.0+          1.0+          0.25
-smoother = :compact  0.2           0.15          0.15
+default              none to 0.9   none to 0.9   0.3
+detector = :d8       none to 1.0   none to 1.0   0.25
 ```
 
-The ladders sample 0.15, 0.2, 0.25, 0.3 and 0.4, and a table that skipped
-0.25 reads 0.2 for the wall; the appendix records which sweep read which.
+The `:d8` row was measured without the priming and reproduces its earlier
+record; under it the planar wall deficit falls from 51% at 0.2 to 23% at
+1.0. The origin ladder samples 0.15, 0.2, 0.25, 0.3, 0.4 and 0.5 and reads
+the same under the unrelaxed filter, the default and `filter_cfl = 0.7`; the
+warm-started axis (t₀ = 0.3) completes through 0.5 with an exact shock
+position.
 
-`StepControl(retries = 4)` recovers Noh from an initial `cfl = 0.9` in
-about a third of the steps of a fixed `cfl = 0.15` and leaves the accepted
-value in `solver.cfl`. Rollback recovers the abrupt failures and not the
-gradual degradation at 0.3 on the planar wall, whose last savepoint is
-already nonphysical
-([recovery](CALIBRATION_APPENDIX.md#recovery-strategy)).
+`StepControl(retries = 4)` recovers spherical Noh from an initial
+`cfl = 0.9` in about half the steps of a fixed `cfl = 0.15`, rolling back
+twice through the excursion to 0.225, and leaves the accepted value in
+`solver.cfl` ([recovery](CALIBRATION_APPENDIX.md#recovery-strategy)).
 
-Recommendation: `cfl = 0.5` for smooth and moderately compressible flow,
-0.3 with shocks, and `StepControl(retries = 4)`. Converging shocks under the
-`:d8` ladder show cells where the axis fails below a CFL rather than above
-one; that is the per-application filter and not a CFL restriction
+Recommendation: the default `cfl = 0.5` with `StepControl(retries = 4)`,
+or `cfl = 0.3` for a converging shock at a spherical origin. Converging
+shocks under the `:d8` ladder show cells where the axis fails below a CFL
+rather than above one; that is the per-application filter and not a CFL
+restriction
 ([a failure that gets worse](CALIBRATION_APPENDIX.md#a-failure-that-gets-worse-as-the-timestep-falls)).
 
 ## Walls, folds and metrics
@@ -498,9 +518,11 @@ vortex-ring/SF6 case has not been run under it
 
 In approximate priority order; each links to the measurements it rests on.
 
-1. **Raise the CFL ceiling at the symmetry cell.** Two live leads: the
-   density proportionality of β\*, and the per-step filter
-   ([origin cell](CALIBRATION_APPENDIX.md#the-origin-cell-is-a-startup-transient)).
+1. **Raise the CFL ceiling at the spherical origin.** The density
+   proportionality of β\* and the per-step filter strength are measured
+   and closed; the excursion itself is the remaining object
+   ([origin cell](CALIBRATION_APPENDIX.md#the-origin-cell-is-a-startup-transient),
+   [the first step](CALIBRATION_APPENDIX.md#the-first-step-of-a-run)).
 2. **Refit `C_mu` on the history misfit** on a case with an unresolved
    cascade; the peak is unusable and 0.004 is withdrawn
    ([Taylor–Green](CALIBRATION_APPENDIX.md#taylorgreen)).
@@ -508,14 +530,12 @@ In approximate priority order; each links to the measurements it rests on.
    ([recommendation](CALIBRATION_APPENDIX.md#recommendation)).
 4. **Refit `C_mu` under `:gaussian`** and then evaluate
    `mu_sensor = :velocity`.
-5. **Make κ\* non-singular as T_ion → 0**
-   ([cold-state limit](CALIBRATION_APPENDIX.md#the-cold-state-limit)).
-6. **Explain the spherical fold's intolerance of sharp data**
+5. **Explain the spherical fold's intolerance of sharp data**
    ([geometry limits](CALIBRATION_APPENDIX.md#geometry-limits)).
-7. **Make `filter_state!` conservative on non-Cartesian metrics.**
-8. **Decide the filter wall rows**, a recalibration of the wall cases
+6. **Make `filter_state!` conservative on non-Cartesian metrics.**
+7. **Decide the filter wall rows**, a recalibration of the wall cases
    ([wall cascade](CALIBRATION_APPENDIX.md#the-filters-wall-cascade)).
-9. **Put `delta4_sum!`'s even path on the half-offset mirror**; unmeasured
+8. **Put `delta4_sum!`'s even path on the half-offset mirror**; unmeasured
    ([the clamp](CALIBRATION_APPENDIX.md#the-fourth-difference-clamp-at-a-fold)).
-10. **Decide `species_flux`** on the vortex-ring/SF6 case
+9. **Decide `species_flux`** on the vortex-ring/SF6 case
    ([open](CALIBRATION_APPENDIX.md#open)).

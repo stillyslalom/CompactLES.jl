@@ -218,8 +218,10 @@ end
 # plateau and avoid depositing spurious entropy at the point of symmetry.
 #
 # ν = 1 planar (slip wall), ν = 2 cylindrical axis fold, ν = 3 spherical origin
-# fold. Only ν = 3 is warm-started, because the spherical origin will not take
-# the singular t = 0 start; see reference/CALIBRATION.md.
+# fold. Only ν = 3 is warm-started: from the singular t = 0 start the origin
+# completes only below cfl 0.075 and returns a plateau 18% low, the error
+# being made while the shock is within a few cells of the origin; see
+# reference/CALIBRATION.md.
 
 const NOH_G = 5 / 3
 const NOH_T = 0.6

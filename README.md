@@ -253,11 +253,10 @@ and validated against analytic references.
 
 - Float64 by default; a uniform Float32 mode (CPU and GPU) halves the memory
   footprint but carries a mean-density drift of order 1e-4.
-- A converging strong shock is CFL-limited at the symmetry cell, where the state
-  loses positivity as the shock forms: 0.4 at the spherical origin, 0.2 at the
-  cylindrical axis and the planar wall. `StepControl(retries=4)` handles it
-  automatically, and `ArtParams(detector=:d8)` lifts the restriction at the
-  planar wall and cylindrical axis at the cost of the origin (0.4 → 0.25).
+- A converging strong shock at a spherical origin is CFL-limited to 0.3 by an
+  excursion of the origin cell as the shock forms; `StepControl(retries=4)`
+  recovers it automatically. The planar wall and the cylindrical axis carry
+  no such limit and complete Noh from cfl 0.9.
 - Converging-shock runs carry cells of negative internal energy at the front,
   while density, total energy, and the Noh plateau stay sound (within 0.07%); an
   optional floor repairs negative-energy cells.

@@ -690,12 +690,13 @@ needs cfl ≤ 0.2 or `StepControl(retries)`. Depth widens the number of fine
 substeps one root rate measurement covers, so a startup or regrid transient
 at three or more levels is an unguarded case; the three-level Sod gate runs
 at cfl 0.4 without a per-substep rate check, so it is not yet a compounding
-ceiling. A non-finite trajectory leaves NaN in two places a state restore
-does not touch: the artificial coefficient arrays (read by `max_rate`
-before the retry's first RHS) and the low-storage `du` accumulator
-(0.0·NaN = NaN, so `RKA[1] = 0` cannot forget it). Both resets are gated on
-`:nonfinite` failures only; after a *finite* failure the stale coefficients
-are a measured part of the recovery.
+ceiling. A non-finite trajectory leaves NaN in the low-storage `du`
+accumulator, which a state restore does not touch (0.0·NaN = NaN, so
+`RKA[1] = 0` cannot forget it); that reset is gated on `:nonfinite`
+failures. The artificial coefficient arrays, which `max_rate` reads before
+the retry's first RHS, are banked with the savepoint and restored beside
+the state, since a finite failure can leave them large enough to size the
+retry's first step at zero.
 
 ### Measured costs
 

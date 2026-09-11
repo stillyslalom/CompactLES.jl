@@ -24,11 +24,13 @@
 #     step  175  dt=4.8e-5  rate=1.5e4  rho_min=0.252   <- and then negative
 #
 # The exact pre-shock density is 1. The computed density is 5% low by step 25
-# and 60% low by step 125 while `dt` and the rate remain nearly constant. A
-# dispersive undershoot at the shock is not sufficiently damped by the
-# artificial viscosity. Positivity fails near step 175, after which the rate
-# rises sharply. The timestep collapse therefore follows the first measurable
-# state error by about 150 steps.
+# and 60% low by step 125 while `dt` and the rate remain nearly constant.
+# Positivity fails near step 175, after which the rate rises sharply. The
+# timestep collapse therefore follows the first measurable state error by
+# about 150 steps. The damage was done on the first step: the trace is a run
+# whose first step was sized before any artificial coefficient existed, and
+# with `run!` evaluating the right-hand side once before that step (the
+# priming in timestep.jl) the same configuration completes at cfl 0.9.
 #
 # The four mechanisms address different parts of this sequence:
 #
@@ -37,11 +39,13 @@
 #   2. The predictor is retained, off by default, with the measurement above
 #      recorded to prevent duplicate work. It changes the step sequence of
 #      stable runs without a measured benefit.
-#   3. Retry restores a savepoint and lowers the CFL. In Noh at nu=1, rollback
-#      from cfl 0.9 to 0.45 completes in 1433 steps with plateau 0.9989. A run
-#      fixed globally at cfl 0.15 requires 4485 steps for the same result. The
-#      lower CFL is required during shock formation but not after the shock has
-#      formed, which a rollback can represent without reducing every step.
+#   3. Retry restores a savepoint, with the coefficient arrays banked beside
+#      it, and lowers the CFL. Spherical Noh from cfl 0.9 rolls back twice
+#      through the origin's excursion near t = 0.39 and completes at 0.225 in
+#      635 steps with plateau 0.9768 of exact, where the fixed cfl 0.15 run
+#      takes 1113 steps for 0.9766. The lower CFL is required through the
+#      excursion and not after it, which a rollback can represent without
+#      reducing every step.
 #   4. The state floor repairs the state, where the first three detect failure,
 #      and is disabled by default. The first three mechanisms read reduced
 #      scalars. `bench/nohprobe.jl` measured six to eight interior cells with
@@ -140,9 +144,10 @@ this file.
 ## Recovery
 
 - `retries = 0`: number of times to roll back to the last savepoint and retry
-  with a reduced CFL; 0 disables recovery. In the validation cases,
-  `retries = 4` recovers every Noh geometry from `cfl = 0.9` in fewer steps than
-  running the complete calculation at the lower stable CFL.
+  with a reduced CFL; 0 disables recovery. Spherical Noh from `cfl = 0.9`
+  recovers through the origin's excursion in about half the steps of the
+  complete calculation at the fixed stable CFL; the planar and cylindrical
+  cases complete from 0.9 without a retry.
 - `cfl_backoff = 0.5`: multiplier applied to the solver's current CFL on each
   retry, so successive retries compound.
 - `savepoint_interval = 25`: steps between savepoints, counted on the solver's
@@ -434,16 +439,21 @@ function Base.showerror(io::IO, e::SolverFailure)
 end
 
 """
-In-memory rollback point: the conserved state plus the clock that goes with it.
-`Q` is a private copy of the conserved array, which [`run!`](@ref) allocates
-when `StepControl.retries > 0` and refreshes in place at each savepoint; `t`
-and `step` are the solver clock at the moment of that copy.
+In-memory rollback point: the conserved state, the artificial coefficient
+arrays and the clock that go with it. `Q` is a private copy of the conserved
+array, which [`run!`](@ref) allocates when `StepControl.retries > 0` and
+refreshes in place at each savepoint; `art` holds copies of μ\\*, β\\*, κ\\* and
+the D\\* of every patch as the last right-hand-side evaluation left them, the
+arrays `max_rate` sizes the next step from, so that a retry's first step is
+sized as a restart from a checkpoint of the same instant would be; `t` and
+`step` are the solver clock at the moment of that copy.
 
 The CFL is excluded because reductions to it must persist across rollbacks and
 compound across retries; it remains on the solver when this state is restored.
 """
 mutable struct Savepoint{A}
     Q::A
+    art::Vector{Vector{Any}}
     t::Float64
     step::Int
     guard::Int   # step at or below which re-banking is suppressed after a

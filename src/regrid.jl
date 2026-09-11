@@ -607,6 +607,7 @@ end
 function _rebank!(solver, states, save)
     if save !== nothing && solver.step > save.guard
         save.Q = _snapshot(states)
+        save.art = _art_snapshot(solver)
         save.t = solver.t
         save.step = solver.step
     end

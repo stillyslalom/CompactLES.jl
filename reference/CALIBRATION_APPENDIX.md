@@ -173,13 +173,41 @@ section](#the-sensor-smoother).
 
 ### The cold-state limit
 
-κ\* is built as `C_kappa · (ρc/T_ion) · sensor`, which is singular as T_ion → 0.
-In an ambient below p ≈ 1e-3 at ρ₀ = 1 the 1/T factor drives the diffusive rate
-up, `dt` collapses, and internal energy can go negative; the subsequent T_ion
-clamp then produces an extremely large κ\*. Every case therefore uses a finite
-ambient pressure. `artificial_conductivity_scale` is an EOS dispatch point, so a
-tabular or condensed-matter model can supply a scale that is finite at its own
-cold limit. The gas models still divide by the temperature.
+κ\* is built as `C_kappa · (ρc/T_ion) · sensor`, and an earlier reading of
+this section held that the 1/T factor collapses `dt` in an ambient below
+p ≈ 1e-3 at ρ₀ = 1. Measured on planar Noh at cfl 0.15, N = 400, with the
+timestep's limiting rate sampled every 100 steps, that does not occur:
+
+```
+p0      steps   plateau   deficit  shock    inadmissible  e_min/e0    dt median  dt min
+1e-2    3718    3.8900    +63%     0.2119    2            -0.66       1.64e-4    1.51e-4
+1e-3    3655    3.9858    +63%     0.2052    4            -28         1.65e-4    1.48e-4
+1e-4    3650    3.9959    +63%     0.2046    7            -255        1.65e-4    1.55e-4
+1e-5    3652    3.9969    +63%     0.2045   10            -2.4e3      1.66e-4    1.12e-4
+1e-6    3650    3.9970    +63%     0.2045   11            -2.3e4      1.65e-4    1.55e-4
+1e-8    3652    3.9971    +63%     0.2045   17            -2.2e6      1.65e-4    1.55e-4
+```
+
+The step count and the median step are unchanged over six decades of ambient
+pressure. The limiter is the diffusive rate on about 85% of the samples at
+every p₀, and on the line it is the bulk viscosity, not the conductivity: at
+step 2000 the largest `(μ* + β*)/(ρh²)` is 262 against a largest
+`κ*/(ρ c_v h²)` of 14.6 and an acoustic rate of 488, at p₀ = 1e-4 and 1e-8
+alike. Setting `C_kappa = 0` leaves the step count at 3580 at both pressures;
+`C_kappa = 0.1` makes κ\* the limiter and lengthens the run to 4330 steps, again
+at both. The singular factor is not reached where it would matter: at a cell
+whose internal energy is negative, `primitives!` floors T_ion at 1e-300, the
+sound speed vanishes with it, and ρc/T_ion evaluates to about 1e-140, so κ\* is
+zero on those cells rather than large; the largest κ\* on the line sits at a
+cell whose temperature is 1e-3 to 3e-2.
+
+What a cold ambient changes is the count of cells the EOS calls inadmissible,
+2 to 17 across the table, because the precursor's negative internal energy is
+a fixed absolute amplitude of about −0.035 (7% of the kinetic energy) and the
+ambient internal energy falls beneath it. No nonsingular replacement for the
+gas-model scale is called for by this measurement; `artificial_conductivity_scale`
+remains the EOS dispatch point through which a tabular or condensed-matter
+model supplies its own.
 
 ## C_mu, the shear viscosity
 
@@ -2280,11 +2308,76 @@ cfl       | Noh1 plat  deficit | Noh2 plat | Noh3 plat | WC peak
 ```
 
 Measured under `smoother = :compact` and retained as the record of that setting.
-No setting of the four constants stabilizes a converging strong shock at the
+No setting of the four constants stabilized a converging strong shock at the
 default `cfl = 0.5`, whereas every sampled setting works at 0.15, and accuracy at
 0.15 and 0.1 is identical to three digits. Under the default `:gaussian` smoother
-the ceilings are 0.4 at the spherical origin, 0.2 at the cylindrical axis and 0.2
-at the planar wall.
+the ceilings read 0.4 at the spherical origin, 0.2 at the cylindrical axis and
+0.2 at the planar wall when that smoother was adopted. The wall and axis
+ceilings have since been traced to the first step of the run and removed,
+and the origin's stands at 0.3 under the current defaults; the section
+directly below carries that measurement, and the sections after it the
+readings that led to it, all taken before the first step was primed.
+
+<a id="the-first-step-of-a-run"></a>
+
+### The first step of a run
+
+`max_rate` builds its diffusive rate from the artificial coefficient arrays
+as the last right-hand-side evaluation left them. A freshly built solver has
+had none, so the first step of every run was sized on the acoustic and
+advective rates alone, whatever the initial data did to the artificial
+properties. Planar and cylindrical Noh start with u = −1 against the wall or
+the axis, where the strain sensor is at its largest on the first evaluation.
+`run!` now evaluates the right-hand side of the initial state once before
+its first step, into the workspace scratch the low-storage accumulator
+forgets, and sizes that step from the coefficients it produces. Ladders under
+the current defaults (`filter_cfl = 0.35`, N = 400/256/256, the ν = 3 warm
+start), the highest CFL reaching t = 0.6 with a correct plateau:
+
+```
+                    nu = 1 wall          nu = 2 axis          nu = 3 origin
+unprimed            0.25 (0.3 wrong)     0.2  (0.25 fails)    0.3 (0.4 fails @106)
+primed              none to 0.9          none to 0.9          0.3 (0.4 fails @106)
+primed, first dt    1.04e-3 at 0.9       1.77e-3 at 0.9       unchanged
+```
+
+Primed, the wall completes at every sampled CFL from 0.25 to 0.9 with the
+plateau at 0.9989–0.9990 of exact, the shock position within 0.5% and the wall
+deficit falling from 63% to 57%; the axis completes from 0.25 to 0.9 with the
+plateau at 0.9375–0.9381 and the deficit 54–56%. The unprimed wall at 0.3
+completed in a wrong state, a cold density spike of 4.9 times the plateau on
+the wall cell; the unprimed axis at 0.25 failed at step 110 with the axis
+cell over-dense and cold from step 25 and the density hole at cell 3. Under
+`detector = :d8` the wall and the axis complete through cfl 1.0 even
+unprimed, the wall deficit falling from 51% at 0.2 to 23% at 1.0 and the
+axis plateau holding 0.9493–0.9500, which reproduces the earlier `:d8` row;
+the origin fails at 0.3 under it.
+
+The origin does not move. Its excursion lands at t ≈ 0.39 from the warm start
+at t₀ = 0.3, well after the first step, and 0.4 fails at step 106 primed or
+not. Two leads recorded for it were run and closed here:
+
+- **The density proportionality of β\*.** β\* was rebuilt as
+  `C_beta · ρ̃ · sensor` with ρ̃ the Gaussian-smoothed density, so that an
+  evacuating cell does not suppress its own regularization. It raised β\* at
+  the origin during the excursion (0.61 against 0.43 of the line maximum at
+  step 100 of the cfl 0.4 run, and 0.91 against 0.48 at the axis at step 50
+  of the cfl 0.25 run) and moved no ceiling: the wall's 0.3 failure became
+  explicit at step 659 instead of a wrong answer, the axis's 0.25 failure
+  moved from step 110 to 386, and the origin failed at step 109 against 106.
+  The experiment is not retained in the code.
+- **The per-step filter strength.** The ladders read the same under
+  `filter_cfl = 0` (unrelaxed), 0.35 and 0.7 in all three geometries: wall
+  0.25, axis 0.2, origin 0.3 unprimed.
+
+The rollback recovery recorded below under [recovery
+strategy](#recovery-strategy) rested on the same first-step effect from the
+other side: the savepoint restored the state and left the failed trajectory's
+coefficients in place, enormous where the failure was, and the retry's first
+step was throttled by them. Restoring the coefficient arrays with the state
+(they are now banked beside it) removed that accident; without the priming,
+the planar recovery from cfl 0.9 then failed through four retries, which is
+how the effect was found.
 
 <a id="where-the-restriction-originates"></a>
 
@@ -2452,8 +2545,10 @@ while the cell is the worst in the domain; the step-126 profile puts ρ = 38.1 a
 the origin against 136.7 and 162.1 at the next two cells, with the velocity at the
 origin reversed to +1.19 against −0.51 in its neighbour. This is the specified
 behaviour of Cook's formulation and not a defect in it. The mechanism is
-consistent with the numbers but not demonstrated; establishing it requires a
-β\* that does not vanish with the density, which has not been run.
+consistent with the numbers but not demonstrated. A β\* that does not vanish
+with the density has since been run and the ceiling did not move
+([the first step of a run](#the-first-step-of-a-run)), so the evacuation is
+not sustained by the loss of β\* alone.
 
 ### Negative internal energy in completed runs
 
@@ -2483,8 +2578,14 @@ cell-steps with rho <= 0         0
 The worst cell reaches several hundred ambient internal energies below zero: the
 sampled line at step 2000 carries seven such cells and a minimum of −428 e₀. Total
 energy density and mixture density stay positive at every cell of every step, so
-the state never leaves the set any frame can represent. The wall region runs as a
-pressureless layer, `primitives!` maps the whole of it to T_ion = 1e-300, and the
+the state never leaves the set any frame can represent. The cells are not a
+wall layer. The step-500 profile of the ν = 1 case, front at cell 11.8, puts
+them at cells 14 to 28, ahead of the front, as an odd-even oscillation of the
+internal energy: −297, +323, −176, +57, +9, −30, +33, −22, +15, −6, +3, +1,
+−0.3 e₀ cell by cell, with the pressure alternating between 1e-300 and its
+positive value and `primitives!` mapping the negative cells to T_ion = 1e-300.
+The wall cell is hot, at 9200 e₀. The oscillation is the compact scheme's
+precursor on a quantity that is a 0.03% difference of two O(1) terms, and the
 calculation still reaches the plateau to within 0.07%.
 
 **Repairing those cells is a percent-level intervention and terminates the run.**
@@ -2534,28 +2635,107 @@ configurations in `src/precompile.jl` select `:permissive`.
 
 ### Recovery strategy
 
-Rollback retains a larger CFL after startup because the restriction occurs while
-the shock forms. `StepControl(retries = 4)` recovers Noh from an initial
-`cfl = 0.9`:
+Rollback retains a larger CFL after the excursion because the restriction is
+confined to it. `StepControl(retries = 4)` from an initial `cfl = 0.9` under
+the current defaults, with the first step primed and the coefficient arrays
+banked beside the savepoint:
 
 ```
-nu   start cfl   recovered cfl   steps   plateau/exact
-1    0.9         0.45            1433    0.9989
-2    0.9         0.45             915    0.9369
-3    0.9         0.1125          1636    0.9729
+nu   start cfl   recovered cfl   retries   steps   plateau/exact
+1    0.9         0.9             0          582    0.9990
+2    0.9         0.9             0          364    0.9381
+3    0.9         0.225           2          635    0.9768
 ```
 
-The corresponding ν = 1 calculation requires 4485 steps at a fixed `cfl = 0.15`, so
-recovery is approximately three times faster, and `solver.cfl` records the
-accepted value for subsequent calculations. Rollback recovers abrupt failures but
-not the gradual degradation at cfl = 0.3, because the most recent savepoint is
-nonphysical by the time the check fires; that case requires a lower initial CFL.
+The planar and cylindrical cases no longer need a retry. The spherical case
+fails at step 45 in the excursion, rolls back to step 25 at 0.45, fails again
+at step 68 and completes from step 50 at 0.225; the fixed `cfl = 0.15` run
+takes 1113 steps for a plateau of 0.9766, so recovery is about twice as fast
+and `solver.cfl` records the accepted value. The earlier record of this table
+(ν = 1 recovered to 0.45 in 1433 steps, ν = 2 to 0.45 in 915, ν = 3 to 0.1125
+in 1636) was taken with the failed trajectory's coefficient arrays left in
+place by the restore, which throttled each retry's first step; under the
+same restore the ν = 3 case later ended in `:no_progress`, its restored state
+sized by coefficients of order 1e57.
 
-**Recommendation:** `cfl = 0.5` for smooth and moderately compressible flow, 0.3
-with shocks, and `StepControl(retries = 4)` for automatic recovery. For converging
-geometry with rollback disabled the ceiling is set by `ArtParams.smoother`: under
-the default `:gaussian` it is 0.4 at the spherical origin and 0.2 at the
-cylindrical axis and the planar wall.
+**Recommendation:** the default `cfl = 0.5` with `StepControl(retries = 4)`
+for automatic recovery, or `cfl = 0.3` for a converging shock at a spherical
+origin. Under `detector = :d8` the origin's ceiling is 0.25.
+
+<a id="the-policies-on-the-three-geometries"></a>
+
+### The policies on the three geometries
+
+The three geometries at their production CFL of 0.15 under each state policy,
+`floor_ratio = 1e-8` where a floor is on. The representable floor reproduces
+the permissive trajectory exactly in every geometry and counts the condition;
+the internal-energy repair ends every geometry within about a hundred steps;
+`validity = :repair` runs the permissive trajectory and then rejects the
+state it ends on, since the representable repair leaves the negative internal
+energy in place:
+
+```
+nu  policy                  end                 steps   plateau   deficit  shock    cells e<0 (max, span)  low-e cell-steps  repairs   mass added  energy added  momentum removed
+1   permissive              completed           3650    3.9959    +63%     0.2046   8, 15                  0                 0         0           0             0
+1   representable           completed           3650    3.9959    +63%     0.2046   8, 15                  24250             0         0           0             0
+1   internal_energy         dt_collapse @15       15    -         -        -        -                      289               289       1.0e1       2.8e35        6.8e11
+1   validity = :repair      invalid_state @end  3650    -         -        -        8, 15                  24257             0         0           0             0
+2   permissive              completed           2245    15.002    +55%     0.2092   7, 13                  0                 0         0           0             0
+2   representable           completed           2245    15.002    +55%     0.2092   7, 13                  13032             0         0           0             0
+2   internal_energy         dt_collapse @17       17    -         -        -        -                      293               296       2.7e-3      6.3e29        3.3e8
+3   permissive              completed           1113    62.501    +28%     0.2090   9, 17                  0                 0         0           0             0
+3   representable           completed           1113    62.501    +28%     0.2090   9, 17                  7756              0         0           0             0
+3   internal_energy         dt_collapse @102     102    -         -        -        -                      360               360       1.6e-3      6.1e16        7.2e7
+```
+
+The closing states carry 7, 6 and 8 inadmissible cells with e_min at −0.038,
+−0.018 and −0.020, the same in the permissive and representable runs. In the
+warm-started ν = 3 case the first negative cell appears at step 63, once the
+front has moved off the blended initial profile. The internal-energy repair's
+budgets are the cost of holding the precursor positive and not of the choice
+of repair: mass is added because the damped cells' total energy is then
+raised, and the energy tallied is the cumulative substitution on cells whose
+state has already diverged.
+
+<a id="the-singular-start-and-the-warm-start"></a>
+
+### The singular start and the warm start
+
+The spherical case is warm-started at t₀ = 0.3 from the exact solution with a
+tanh blend of width 4h at the shock. Under the priming the singular t = 0
+start no longer fails on the first step, but it fails at step 40 at cfl 0.15
+and completes only at cfl 0.05, or through `retries = 4` down to 0.075, in
+either case with a plateau 18% low and a wall deficit of 77%. The start time
+and the blend at N = 256, cfl 0.15:
+
+```
+nu  t0    blend   N      steps   plateau/exact   deficit   shock
+3   0     4h      256    4400*   0.8207          77%       0.2152
+3   0.1   4h      256    1851    0.7573          11%       0.2183
+3   0.1   4h      512    3786    0.8803          13%       0.2086
+3   0.1   4h     1024    7675    0.9404          25%       0.2043
+3   0.2   4h      256    1493    0.8759          21%       0.2177
+3   0.3   2h      256    1134    0.9478          22%       0.2094
+3   0.3   4h      256    1113    0.9766          28%       0.2090
+3   0.3   8h      256    1066    0.9805          32%       0.2133
+3   0.3   4h      512    2279    0.9911          30%       0.2039
+3   0.3   4h     1024    4615    0.9961          36%       0.2018
+2   0.1   4h      256    1882    0.8704           2%       0.2132
+2   0.2   4h      256    1514    0.9749           6%       0.2127
+2   0.3   4h      256    1114    1.0412           2%       0.2001
+```
+
+`*` through retries, at cfl 0.075. The plateau error is made while the shock
+is within a few cells of the origin: from t₀ = 0.1, where the shock starts at
+8.5 cells, the plateau converges under refinement at first order (24%, 12%,
+6% low), and from t₀ = 0.3, where it starts at 26 cells, at 2.3%, 0.9% and
+0.4%. The blend width moves the plateau by 3% either way at 4h and the wider
+blend costs the shock position; 4h is retained. The cylindrical case is
+started singular at t = 0 in the battery because the axis takes it, and its
+plateau of 0.938 is a startup error of the same kind, since the warm start
+returns 1.041 with the shock position exact; that case is not changed here.
+Warm-started at t₀ = 0.3 the axis completes through cfl 0.5 unprimed, which
+is a second reading that its ceiling was the singular first step.
 
 ## Wall closures under the artificial properties
 

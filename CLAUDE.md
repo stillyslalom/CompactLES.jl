@@ -590,18 +590,19 @@ Each of these took time to establish. The measurements and the
 rejected hypotheses are in the file named; read it before re-deriving any of
 them.
 
-- **A converging strong shock is CFL-limited at the symmetry cell**, not ahead
-  of the front. Under the default `smoother = :gaussian` the ceilings are 0.4 at
-  the spherical origin and 0.2 at both the cylindrical axis and the planar wall;
-  `detector = :d8` lifts the latter two past 1.0 and costs the origin 0.4 →
-  0.25. The restriction is a startup one, so `StepControl(retries = 4)` beats a
-  globally lowered CFL. Every discretization-order explanation has been measured
-  and ruled out, the fold closure included. The `cfl ≤ 0.15` figure recorded
-  here previously is the retired `:compact` smoother's.
-  → `reference/CALIBRATION_APPENDIX.md`
-- **κ\* is singular as `T_ion` → 0**, so a cold ambient below p ≈ 1e-3 collapses
-  the diffusive timestep. `artificial_conductivity_scale` is an EOS dispatch point, so a
-  tabular model can supply its own; the gas models still divide by `T_ion`.
+- **A converging strong shock at the spherical origin is CFL-limited to 0.3**
+  by an excursion of the origin cell near t = 0.39 on Noh, at every
+  resolution; `StepControl(retries = 4)` recovers it, and `detector = :d8`
+  lowers the ceiling to 0.25. The planar wall and the cylindrical axis carry no
+  ceiling: their recorded ones (0.25 and 0.2) were the first step of the run,
+  sized before any artificial coefficient existed, and `run!` now primes the
+  coefficients. Every discretization-order explanation, the density
+  proportionality of β\* and the per-step filter strength have been measured
+  and ruled out for the origin. → `reference/CALIBRATION_APPENDIX.md`
+- **κ\* is written as `ρc/T_ion`** and is not singular in practice: the sound
+  speed vanishes with the temperature at a floored cell, and on Noh the κ\*
+  rate is an order below the β\* rate at every ambient pressure from 1e-2 to
+  1e-8. `artificial_conductivity_scale` remains an EOS dispatch point.
 - **The spherical origin fold is much less forgiving than the cylindrical axis.**
   It needs initial data resolved over ≳3 cells and will not take Noh's singular
   t = 0 start, both of which the axis handles. The cause remains unknown.

@@ -176,7 +176,7 @@ below exposed behavior outside those passing checks.
   [walls, folds and metrics](CALIBRATION.md#walls-folds-and-metrics),
   [completion record](HISTORY.md#filtering-on-non-uniform-volumes-september-2026)).
 
-- [ ] **N3 — Resolve symmetry-cell startup robustness and the cold-state limit.**
+- [x] **N3 — Resolve symmetry-cell startup robustness and the cold-state limit.**
   Instrument planar, cylindrical, and spherical Noh with the existing floor tally;
   compare permissive, representable-repair, and internal-energy-repair trajectories.
   Measure the pressureless wall layer and repair budgets as well as plateau and
@@ -188,6 +188,19 @@ below exposed behavior outside those passing checks.
   Consult [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md) before reopening rejected predictor,
   sensor-reach, or fold-order explanations; the old universal CFL 0.15 description
   is obsolete.
+  **Done (September 2026).** The wall and axis ceilings were the first step of
+  the run, sized before any artificial coefficient existed; `run!` now primes
+  the coefficients and both geometries complete from `cfl = 0.9`. The origin
+  keeps a ceiling of 0.3 from its excursion; smoothed-density β\* and the
+  filter rate leave it in place. κ\* is not singular in practice (its rate is
+  an order below β\*'s from p₀ = 1e-2 to 1e-8). The negative-energy cells are
+  the pre-shock precursor, not a wall layer; the representable floor
+  reproduces the permissive trajectory and the internal-energy repair ends
+  every geometry within 102 steps. The rollback now banks the coefficient
+  arrays with the savepoint. The warm start stays the spherical treatment:
+  the singular start completes only below cfl 0.075 with a plateau 18% low
+  ([the first step](CALIBRATION_APPENDIX.md#the-first-step-of-a-run),
+  [completion record](HISTORY.md#the-first-step-and-the-symmetry-cell-september-2026)).
 
 - [ ] **N4 — Refit artificial shear viscosity after the filter policy is fixed.**
   Fit `C_mu` under the adopted smoother/detector on a 3-D case with an
