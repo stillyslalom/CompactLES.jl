@@ -110,6 +110,26 @@ unit_scalefactor(::CartesianMetric,   d::Int) = true
 unit_scalefactor(::CylindricalMetric, d::Int) = d != 2          # θ carries r
 unit_scalefactor(::SphericalMetric,   d::Int) = d == 1          # θ, φ carry r
 
+
+"""
+    volume_parity(metric, d) -> ±1
+
+Sign of the cell volume J = h₁h₂h₃ under the analytic continuation of
+coordinate `d` through the coordinate singularity a fold on `d` regularizes,
+with the fold's pairing map applied to the other coordinates: `−1` where J is
+odd and `+1` where it is even. The cylindrical J = r is odd in r; the
+spherical J = r² sinθ is even in r and odd in θ. A `Stretch` never sits on a
+folded dimension, and a mapping Jacobian on another dimension carries no
+dependence on the folded coordinate, so stretching does not enter.
+
+[`filter_state!`](@ref) reads this: the volume-weighted filter folds the
+product J·q with the product of the two parities, the same algebra `sigflux`
+encodes for the area-weighted flux products.
+"""
+volume_parity(::CartesianMetric,   d::Int) = 1
+volume_parity(::CylindricalMetric, d::Int) = d == 1 ? -1 : 1
+volume_parity(::SphericalMetric,   d::Int) = d == 2 ? -1 : 1
+
 # Computational coordinate of full-array index `if_` along d, and the
 # corresponding physical coordinate plus mapping Jacobian. ξ is clamped into
 # the map's domain for halo layers beyond a closed physical edge, whose geometry

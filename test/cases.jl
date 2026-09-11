@@ -172,8 +172,13 @@ const SEDOV_T = 1.0
 const SEDOV_S = 0.06               # deposit width, ≈ 13 cells at N = 256
 const SEDOV_N = 256
 
-function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtParams(enabled=true), cfl=0.3,
-               nmax=NMAX, filt=compact_filter(0.45), filter_cfl=0.35)
+"""
+    sedov_problem(; R, σ) -> Problem
+
+The [`sedov`](@ref) configuration without its numerics: the deposit, the
+spherical domain through the origin fold and the outer slip wall.
+"""
+function sedov_problem(; R=1.2, σ=SEDOV_S)
     γ = 1.4
     # E = ∫ p/(γ−1) dV over the full sphere for p = p_in exp(−r²/σ²), using
     # ∫₀^∞ r² e^{−r²/σ²} dr = σ³√π/4, so E = π^{3/2} p_in σ³ / (γ−1).
@@ -185,6 +190,13 @@ function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtParams(enabled=true), cfl=
                    bcs=((OriginBC(), SlipWallBC()), per3[2], per3[3]),
                    ic=(r, θ, φ) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                                         p=1e-5 + pin * exp(-(r / σ)^2)))
+    return prob
+end
+
+function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtParams(enabled=true), cfl=0.3,
+               nmax=NMAX, filt=compact_filter(0.45), filter_cfl=0.35,
+               filter_weighting=:none)
+    prob = sedov_problem(; R, σ)
     # The blast leaves a near-vacuum behind the shock, and six of 256 cells
     # there carry a negative internal energy at the end of the run, which the
     # ideal-gas EOS reports as outside its domain. The case states that rather
@@ -192,6 +204,7 @@ function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtParams(enabled=true), cfl=
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filt=filt, filter_interval=1,
                                      filter_cfl=filter_cfl,
+                                     filter_weighting=filter_weighting,
                                      control=StepControl(validity=:permissive)))
     run!(solver, Q; tfinal=SEDOV_T, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, SEDOV_T),
@@ -216,20 +229,14 @@ const NOH_N = (1 => 400, 2 => 256, 3 => 256)
 const NOH_T0 = (1 => 0.0, 2 => 0.0, 3 => 0.3)
 
 """
-    noh_case(ν; N, t0, art, cfl, filt, filter_cfl) -> (x, rho, u, p, completed, report)
+    noh_problem(ν; N, t0, R) -> Problem
 
-Noh in ν dimensions, integrated from `t0` to `NOH_T`. `t0 > 0` initializes from
-the exact solution, bypassing the uniform cold inflow. The outer boundary
-carries the exact time-dependent inflow, which for ν > 1 is compressing as it
-converges and is therefore not a constant state.
-
-The case runs under `validity = :permissive` and returns the closing
-[`StateReport`](@ref) as `report`, so a caller can bound the violation it ends
-on rather than accepting whatever it produces.
+The [`noh_case`](@ref) configuration without its numerics: the geometry of
+the ν-dimensional implosion, its symmetry condition, the exact inflow at the
+outer boundary and the initial state at `t0`. `N` enters only through the
+width of the warm start's blend.
 """
-function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
-                  art=ArtParams(enabled=true), cfl=NOH_CFL, R=1.0, nmax=NMAX,
-                  deriv=lele_d1_6(), filt=compact_filter(0.45), filter_cfl=0.35)
+function noh_problem(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν], R=1.0)
     metric = ν == 1 ? CartesianMetric() :
              ν == 2 ? CylindricalMetric() : SphericalMetric()
     lobc = ν == 1 ? SlipWallBC() : ν == 2 ? AxisBC() : OriginBC()
@@ -253,10 +260,30 @@ function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
         Prim(rho=(1 - θ) * ρin + θ * ρout, u=(-θ, 0.0, 0.0),
              p=(1 - θ) * pin + θ * NOH_P0)
     end
-    prob = Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
+    return Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
                    transport=Transport(mu0=0.0), metric=metric,
                    domain=((0.0, R), dom2, dom3),
                    bcs=((lobc, inflow), per3[2], per3[3]), ic=ic)
+end
+
+"""
+    noh_case(ν; N, t0, art, cfl, filt, filter_cfl, filter_weighting)
+        -> (x, rho, u, p, completed, report)
+
+Noh in ν dimensions, integrated from `t0` to `NOH_T`. `t0 > 0` initializes from
+the exact solution, bypassing the uniform cold inflow. The outer boundary
+carries the exact time-dependent inflow, which for ν > 1 is compressing as it
+converges and is therefore not a constant state.
+
+The case runs under `validity = :permissive` and returns the closing
+[`StateReport`](@ref) as `report`, so a caller can bound the violation it ends
+on rather than accepting whatever it produces.
+"""
+function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
+                  art=ArtParams(enabled=true), cfl=NOH_CFL, R=1.0, nmax=NMAX,
+                  deriv=lele_d1_6(), filt=compact_filter(0.45), filter_cfl=0.35,
+                  filter_weighting=:none)
+    prob = noh_problem(ν; N, t0, R)
     # The wall region of a Noh implosion runs as a pressureless layer: six to
     # eight interior cells carry a negative internal energy that moves with the
     # front, for the whole of a run that reaches the correct plateau. Reaching
@@ -267,6 +294,7 @@ function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      deriv=deriv, filt=filt, filter_interval=1,
                                      filter_cfl=filter_cfl,
+                                     filter_weighting=filter_weighting,
                                      control=StepControl(validity=:permissive)))
     run!(solver, Q; tfinal=NOH_T - t0, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, NOH_T - t0),
@@ -340,7 +368,7 @@ const SI_GAMMA_HEAVY = 1.09
 
 """
     shock_interface(; N, tfin, art, cfl, delta, nmax, stretch1,
-                    rho_heavy, filt, filter_cfl) -> NamedTuple
+                    rho_heavy, filt, filter_cfl, filter_weighting) -> NamedTuple
 
 Mach `SI_MACH` shock in air (γ = 1.4, R = 1, ρ = 1 and p = 1 ahead of it) at
 `SI_X_SHOCK` running into a tanh interface at `SI_X_IFACE` with a heavy gas
@@ -368,7 +396,7 @@ the interior points with 0.05 < Y_air < 0.95 at the end.
 function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
                          cfl=0.4, delta=2.0, nmax=NMAX, stretch1=nothing,
                          rho_heavy=SI_RHO_HEAVY, filt=compact_filter(0.45),
-                         filter_cfl=0.35)
+                         filter_cfl=0.35, filter_weighting=:none)
     γa = 1.4
     eos = IdealMixture([IdealSpecies{Float64}("air", 1.0, γa),
                         IdealSpecies{Float64}("sf6", 1 / rho_heavy,
@@ -401,6 +429,7 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filt=filt, filter_interval=1,
                                      filter_cfl=filter_cfl,
+                                     filter_weighting=filter_weighting,
                                      stretch=(stretch1, nothing, nothing),
                                      control=StepControl(retries=4,
                                                          validity=:permissive)))

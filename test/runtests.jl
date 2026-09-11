@@ -690,6 +690,124 @@ end
     @test QE == Q0                                   # bit-identical, not approx
 end
 
+@testset "volume-weighted filter: identity, constants, and the measured defects" begin
+    # `filter_weighting = :volume` is the form of the public Pyranda
+    # implementation, F(J q) / F(J). bench/filter_conservation.jl measures it
+    # against the unweighted operator on every geometry; the facts pinned here
+    # are the ones the default rests on (reference/CALIBRATION_APPENDIX.md, the
+    # filter on non-uniform volumes). One directional pass on a line is the
+    # matrix M assembled from unit impulses, and Mᵀ V − V is its conservation
+    # defect on the quadrature volumes V: the mass a pass creates on q is that
+    # row vector applied to q.
+    # 64 nodes, as the bench measures: on a shorter line the wall rows' leak
+    # reaches the fold rows and the origin figures below are not round-off.
+    N = 64
+    walls = ((SlipWallBC(), SlipWallBC()), per3[2], per3[3])
+    line(wt; kw...) = Solver(; n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                             art=ArtParams(enabled=false), filter_weighting=wt,
+                             kw...)
+    function line_operator(s)
+        Q = allocate_state(s)
+        M = zeros(N, N)
+        for n in 1:N
+            fill!(parent(Q), 0.0)
+            Q[gidx(s, n, 1, 1), 1] = 1.0
+            filter_state!(s, Q)
+            for k in 1:N
+                M[k, n] = Q[gidx(s, k, 1, 1), 1]
+            end
+        end
+        V = [CL.quad_weight(s, 1, n) / s.inv_J[gidx(s, n, 1, 1)] for n in 1:N]
+        return M, V
+    end
+    defect(s) = ((M, V) = line_operator(s); (M' * V .- V) ./ V)
+
+    # A periodic line has unit column sums, so it conserves; a wall line does
+    # not: the cascade closure rows carry a defect of a few percent of a
+    # node's content that decays into the interior at the tridiagonal root,
+    # 0.627 per row at α = 0.45, and is still above 1e-4 twelve rows in. On a
+    # uniform volume the weighting is skipped and the operator is the same
+    # matrix bit for bit.
+    Mp, _ = line_operator(line(:none; bcs=per3))
+    @test maximum(abs, sum(Mp; dims=1) .- 1) < 1e-13
+    Mw, _ = line_operator(line(:none; bcs=walls))
+    Mv, _ = line_operator(line(:volume; bcs=walls))
+    @test Mw == Mv
+    cs = vec(sum(Mw; dims=1)) .- 1
+    @test 0.01 < abs(cs[2]) < 0.08                  # measured -4.0e-2
+    @test 1e-4 < abs(cs[12]) < 1e-2                 # measured -3.8e-4
+
+    # On a clustered wall line the closure leak dominates either way; the
+    # weighting moves the interior defect by less than a tenth of it.
+    st = (sine_cluster(0.0, 1.0, 0.5, 0.5), nothing, nothing)
+    dn = defect(line(:none; bcs=walls, stretch=st))
+    dv = defect(line(:volume; bcs=walls, stretch=st))
+    @test maximum(abs, dn[9:N-8]) < 5e-3            # measured 1.7e-3
+    @test maximum(abs, dv[9:N-8]) < 5e-3            # measured 1.6e-3
+    @test abs(maximum(abs, dn[9:N-8]) - maximum(abs, dv[9:N-8])) < 5e-4
+
+    # At the cylindrical axis the odd-parity fold the weighted form needs
+    # (J = r) does not have unit column sums: its first-row defect is 0.149
+    # against 8.6e-3 unweighted. At the spherical origin (J = r² even) both
+    # conserve to round-off.
+    axis = ((AxisBC(), SlipWallBC()), per3[2], per3[3])
+    dn = defect(line(:none; bcs=axis, metric=CylindricalMetric()))
+    dv = defect(line(:volume; bcs=axis, metric=CylindricalMetric()))
+    @test abs(dn[1]) < 2e-2
+    @test abs(dv[1]) > 0.1
+    @test abs(dv[1]) > 10 * abs(dn[1])
+    orig = ((OriginBC(), SlipWallBC()), per3[2], per3[3])
+    sph = (; metric=SphericalMetric(), origin=(0.0, π / 2 - 0.5, 0.0))
+    dn = defect(line(:none; bcs=orig, sph...))
+    dv = defect(line(:volume; bcs=orig, sph...))
+    @test maximum(abs, dn[1:4]) < 1e-9                # measured 6.5e-11
+    @test maximum(abs, dv[1:4]) < 1e-9                # measured 2e-14
+
+    # Constants: the unweighted operator never reads the volume, and the
+    # weighted one divides F(J) by itself, so both hold a uniform state on
+    # every metric, folds and stretching included.
+    function interior_change(s, Q, Q0)
+        nx, ny, nz = s.decomp.n_local
+        maximum(abs(Q[gidx(s, i, j, k), c] - Q0[gidx(s, i, j, k), c])
+                for c in 1:s.equations.n_cons, i in 1:nx, j in 1:ny, k in 1:nz)
+    end
+    metrics = [
+        (; n_global=(24, 12, 12), L_domain=(1.0, 1.0, 1.0), metric=CartesianMetric(),
+           bcs=walls, stretch=(sine_cluster(0.0, 1.0, 0.5, 0.4), nothing, nothing)),
+        (; n_global=(32, 1, 12), L_domain=(1.0, 1.0, 0.5), metric=CylindricalMetric(),
+           bcs=axis),
+        (; n_global=(24, 16, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
+           bcs=axis),
+        (; n_global=(24, 12, 12), L_domain=(1.0, π, 2π), metric=SphericalMetric(),
+           bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3])),
+    ]
+    for cs in metrics, wt in (:none, :volume)
+        s = Solver(; cs..., art=ArtParams(enabled=false), filter_weighting=wt)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
+        apply_bcs!(s, Q)
+        Q0 = copy(Q)
+        filter_state!(s, Q)
+        @test interior_change(s, Q, Q0) < 1e-12
+    end
+
+    # Uniform Cartesian in three dimensions: the weighting is skipped, so a
+    # pass on a non-uniform state is the unweighted pass bit for bit.
+    ic = (x, y, z) -> Prim(u=(0.3sin(x)cos(y), -0.3cos(x)sin(y), 0.1sin(z)),
+                            p=1 + 0.1cos(x)cos(z), rho=1 + 0.2sin(y))
+    states = map((:none, :volume)) do wt
+        s = Solver(n_global=(16, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
+                   art=ArtParams(enabled=false), filter_weighting=wt)
+        Q = allocate_state(s)
+        initialize!(s, Q, ic)
+        filter_state!(s, Q)
+        Q
+    end
+    @test states[1] == states[2]
+    @test_throws ErrorException Solver(n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                       bcs=per3, filter_weighting=:mass)
+end
+
 # --- AMR level-transfer operators (reference/AMR_GPU.md) -------------------
 
 "Fill the interior of a padded field with fn(x), x = (i-1)h along `dim`."

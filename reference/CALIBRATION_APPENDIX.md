@@ -2167,6 +2167,107 @@ the cascade, the `test/validation.jl` guards are set from it, and no periodic ca
 can tell the two apart, so switching the default is a recalibration of the wall
 cases rather than a code change.
 
+### The filter on non-uniform volumes
+
+`bench/filter_conservation.jl`, September 2026. The question was whether
+the unweighted component filter should give way, on cylindrical, spherical
+and stretched grids, to the volume-weighted form of the
+[public Pyranda implementation](https://github.com/LLNL/pyranda/tree/master/pyranda/parcop),
+which filters J·q and divides by the cell volume passed through the same
+filter (`filter` in `parcop/operators.f90`, `CellVolS` in `parcop/mesh.f90`),
+flipping the radial parity because the cylindrical volume is odd across the
+axis. That form is implemented behind `filter_weighting = :volume`, one
+line solve per dimension beside the components' and no stored field, and
+measured against the unweighted `:none`.
+
+**What conservation is, discretely.** A directional pass is a matrix M on
+each component along a line, and `volume_integral` weights node i by
+V_i = w_i J_i h with w the trapezoidal weight. The pass conserves Σ V_i q_i
+for every q exactly when Mᵀ V = V, so d = Mᵀ V − V is the defect of one
+pass: d·q is the mass it creates on q and d_i / V_i the fraction of node
+i's content it creates or destroys. Constant preservation, M 1 = 1, is a
+different property, and the two coincide only for a symmetric M on a
+uniform V. The unweighted operator preserves constants on any volume because
+it never reads the volume; the weighted form does so through F(J)/F(J).
+Both hold to 1e-15 on every line below, so constant preservation separates
+nothing. The operators were assembled from unit impulses on lines of 64
+nodes at α = 0.45 through `filter_state!` itself.
+
+```
+                                        max |d_i|/V_i (row)   rows 9..56   Σ|d|/ΣV
+cartesian periodic         none, volume     4e-16                4e-16       2e-16
+cartesian walls, cascade   none, volume     4.1e-2 (1)           1.6e-3      3.6e-3
+cartesian walls, onesided  none, volume     2.9e-2 (5)           2.0e-3      3.6e-3
+stretched a = 0.5          none             4.1e-2 (wall)        1.7e-3      5.5e-3
+                           volume           4.1e-2 (wall)        1.6e-3      5.4e-3
+cylindrical axis           none             4.0e-2 (wall)        1.8e-3      3.6e-3   axis row 8.6e-3
+                           volume           1.5e-1 (axis)        5.2e-3      4.1e-3
+spherical origin           none             4.1e-2 (wall)        2.0e-3      5.4e-3   origin rows 6e-11
+                           volume           4.1e-2 (wall)        1.6e-3      5.1e-3   origin rows 2e-14
+spherical poles, θ line    none             8.6e-3 (pole)        7.3e-5      9.5e-5
+                           volume           1.5e-1 (pole)        5.2e-3      2.9e-3
+```
+
+Three things follow. The defect of a closed line is the closure rows': the
+column sums of the cascade filter are +2.0e-2, −4.0e-2, +2.2e-2 at rows 1–3
+and then alternate at −0.627 per row, the root of α r² + r + α at α = 0.45,
+so the twelfth row still carries 3.8e-4 (at α = 0.49 the root is −0.817 and
+the twelfth row 1.1e-3). The one-sided rows move the peak to rows 3–7
+without reducing the total. The stretched and the curvilinear lines carry
+the same wall defect as the uniform one; the metric adds nothing visible
+above it in the interior, and the weighting changes the interior figure by
+under 1e-4. At the folds the two forms part: the spherical origin, whose
+J = r² is even, conserves to round-off under both, whereas the cylindrical
+axis and the spherical poles, whose J is odd, cost the weighted form a
+first-row defect of 0.15 against 8.6e-3, because the odd-parity folded
+operator of the product does not have unit column sums. The premise of the
+question, that the unweighted filter is not conservative on a non-uniform
+volume, is true and minor: the non-conservation that exists is the wall
+closure's and is there on a uniform Cartesian grid too.
+
+**The runs.** The battery's curvilinear cases, with the filter's own change
+of the total mass, momentum and energy accumulated over the run relative to
+the largest total seen. The runs filter through a callback with the
+solver's own pass disabled, and the `:none` rows reproduce the
+`test/validation.jl` header to four digits, so the tally costs the
+trajectory nothing.
+
+```
+                    plateau    wall deficit   shock     filter mass   filter energy   steps
+Noh nu=1  none      3.9959      62.9%        0.2046     -1.14e-3      +3.41e-4       3650
+          volume    3.9959      62.9%        0.2046     -1.14e-3      +3.41e-4       3650
+Noh nu=2  none     15.0020      55.2%        0.2092     -4.33e-6      +7.86e-7       2245
+          volume   15.0109      44.7%        0.2091     +1.44e-5      +1.84e-6       2227
+Noh nu=3  none     62.5012      27.8%        0.2090     +8.38e-7      +8.38e-7       1113
+          volume   62.5671      45.9%        0.2089     -5.96e-7      -5.98e-7       1105
+
+Sedov     none     R_s 0.8086 (+1.07%)   peak rho 5.124   filter mass -1.1e-13   3527
+          volume   R_s 0.8084 (+1.05%)   peak rho 5.144   filter mass -1.4e-14   3184
+
+shock/interface, 121 points, t = 0.15        worst Y            width   steps
+  uniform          none, volume              -0.0137 / 1.0137   3       125
+  clustered a=0.5  none                      -0.0076 / 1.0076   3       196
+                   volume                    -0.0083 / 1.0083   3       196
+```
+
+The planar case and the uniform interface are the same run to every digit,
+since the weighting is skipped on a uniform volume. The filter's mass
+defect over a whole run is 1e-3 on the planar wall and below 2e-5 on the
+curved metrics under either form; the momentum and energy figures are of
+the same size. The weighting moves the wall deficit, in opposite
+directions: down from 55% to 45% at the axis, where it also triples the
+filter's mass tally, and up from 28% to 46% at the origin, where both
+forms conserve to round-off, so the change there is in the shape of the
+filtered image at the singular cell and not in what it conserves. Sedov does
+not move and the clustered interface rings slightly more.
+
+**Decision.** `filter_weighting = :none` stays the default, and `:volume`
+stays available as the measured alternative. A filter that conserved on a
+closed line would have to change the closure rows, which is the wall
+closure question of N6, not a metric one. Where the artificial properties
+and the filter interact at the symmetry cell (the Noh deficits) the
+weighting is one more per-case adjustment, not a correction.
+
 ## CFL and the symmetry-cell restriction
 
 ```
@@ -2820,28 +2921,26 @@ both untouched by every row above.
 
 The [public Pyranda kernels](https://github.com/LLNL/pyranda/tree/master/pyranda/parcop)
 implement the same Cook artificial-property method. Reading them against `artificial.jl`
-identifies four differences that bear on the constants calibrated here. Two are
-measured and have their own sections, [the detector](#the-ringing-detector) and
+identifies four differences that bear on the constants calibrated here. Three are
+measured and have their own sections, [the detector](#the-ringing-detector),
 [the sensor fields](#the-sensor-fields-and-the-compression-switch), along with
-[the smoother](#the-sensor-smoother). The two below are recorded as read, with
-what is analytically established about the gap, to keep a future investigation
-from repeating the source archaeology.
+[the smoother](#the-sensor-smoother), and
+[the filter on non-uniform volumes](#the-filter-on-non-uniform-volumes). The one
+below is recorded as read, with what is analytically established about the gap,
+to keep a future investigation from repeating the source archaeology.
 
 ### The conservative filter is normalized by a filtered cell volume
 
 `filter` in `parcop/operators.f90` treats non-Cartesian coordinates by filtering
 the volume-weighted field and dividing by a cell volume that has been passed
 through the same filter once at setup (`CellVolG`, `CellVolS` in
-`parcop/mesh.f90`). The filtered field then reproduces a constant exactly on any
-non-uniform metric, and the integrated quantity is preserved. The radial parity
-flips in the process, because the cylindrical cell volume is proportional to r and
-therefore odd across the axis, the same algebra `sigflux` encodes for the flux
-products in `rhs.jl`.
-
-`filter_state!` filters the conserved components unweighted. On a uniform
-Cartesian grid the two agree identically, so nothing in the Taylor–Green numbers
-here would show it. On cylindrical, spherical or stretched grids the filter is not
-conservative, and the filter supplies 37% of the energy sink at 128³.
+`parcop/mesh.f90`), flipping the radial parity because the cylindrical cell
+volume is proportional to r. The form is implemented behind
+`filter_weighting = :volume` and measured in
+[the filter on non-uniform volumes](#the-filter-on-non-uniform-volumes): it
+preserves constants no better than the unweighted operator, which does so
+without reading the volume, conserves no better on a closed line, and is
+less conservative at an odd fold. It is not the default.
 
 ### The CFL rate is normalized differently
 

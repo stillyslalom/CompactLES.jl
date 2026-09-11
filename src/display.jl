@@ -93,7 +93,8 @@ function Base.show(io::IO, ::MIME"text/plain", num::Numerics)
     println(io, "  derivative: ", _type_name(num.deriv))
     println(io, "  filter: ", _type_name(num.filt), " (every ",
             num.filter_interval, num.filter_interval == 1 ? " step" : " steps",
-            num.filter_cfl > 0 ? ", relaxed to cfl $(num.filter_cfl))" : ")")
+            num.filter_cfl > 0 ? ", relaxed to cfl $(num.filter_cfl)" : "",
+            num.filter_weighting === :volume ? ", volume-weighted)" : ")")
     println(io, "  artificial properties: ", num.art.enabled ? "enabled" : "disabled")
     println(io, "  CFL: ", num.cfl)
     print(io, "  process grid: ")

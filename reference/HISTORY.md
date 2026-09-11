@@ -32,6 +32,7 @@ points at them and does not restate them.
 22. [P0 runtime correctness — R1 to R4 (September 2026)](#p0-runtime-correctness--r1-to-r4-september-2026)
 23. [No-slip wall flux contract (September 2026)](#no-slip-wall-flux-contract-september-2026)
 24. [The filter default (September 2026)](#the-filter-default-september-2026)
+25. [Filtering on non-uniform volumes (September 2026)](#filtering-on-non-uniform-volumes-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -1321,3 +1322,56 @@ all 136 selected checks at eight. The docs reference check passed after the
 last documentation edit. HDF5 and Makie extension tests were skipped by the
 package environment; neither extension was changed, and no performance audit
 was run because no hot-path code changed.
+
+## Filtering on non-uniform volumes (September 2026)
+
+N2 closes with the current method retained. `filter_state!` gained the
+volume-weighted form of the public Pyranda implementation behind
+`filter_weighting = :volume`: each directional pass filters J·q and divides
+by J passed through the same pass, the product folding with the component's
+parity times `volume_parity` (odd at the cylindrical axis and the spherical
+poles, even at the origin), with F(J) rebuilt per pass into the workspace
+scratch and no stored field, and skipped on a uniform volume so that
+Cartesian runs are unchanged bit for bit. `Numerics` and `Solver` take the
+keyword; the default is `:none`.
+
+`bench/filter_conservation.jl` assembles each line's pass from unit impulses
+and reports the defect Mᵀ V − V on the quadrature volumes, which is the
+discrete conservation property; constant preservation, M 1 = 1, is a
+different one, and both forms have it to 1e-15 on every metric, the
+unweighted operator because it never reads the volume. The defect of a
+closed line is the closure rows': 2–4% of the first three rows' content per
+pass, decaying inward at 0.627 per row (the tridiagonal root at α = 0.45),
+the same on a uniform, a clustered, a cylindrical and a spherical line, and
+the one-sided rows move it to rows 3–7. The weighting leaves that alone,
+conserves to round-off at the spherical origin as the unweighted form does,
+and is 17× less
+conservative at the cylindrical axis and the poles, where the odd-parity
+fold of the product does not have unit column sums. On the battery, with the
+filter's own mass and energy change tallied through a callback that
+reproduces the validation trajectory, the planar case is identical, the
+axis Noh's wall deficit falls from 55% to 45% while the filter's mass tally
+triples, the origin's rises from 28% to 46%, Sedov does not move, and the
+clustered shock/interface rings slightly more; the filter's whole-run mass
+defect is 1e-3 on the planar wall and below 2e-5 on the curved metrics under
+either form. The measurements are in
+[CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-filter-on-non-uniform-volumes)
+and the decision in
+[CALIBRATION.md](CALIBRATION.md#walls-folds-and-metrics).
+
+Tests: a serial testset pins the periodic column sums, the wall-row defect
+and its leak, the ordering of the two forms at the axis and the origin,
+constants on every metric, and the Cartesian identity; the MPI freestream
+cases filter a uniform state under `:volume` across split folds, and the
+off-rank fold test filters a smooth density through the axis and origin
+butterflies. `noh_problem` and `sedov_problem` were factored out of their
+drivers in `test/cases.jl`, whose metric cases pin `filter_weighting = :none`
+beside `filter_cfl`.
+
+Validation on Julia 1.11.4: 2,463 serial assertions, the convergence orders
+bit-identical to the recorded ones, every row of the validation battery
+identical to its header (the default is unchanged), all 298 full-suite
+checks at two MPI ranks and all 144 selected checks at eight, and the
+dispatch audit unchanged, `filter_state!` at zero reports. HDF5 and Makie
+extension tests were skipped by the package environment; neither extension
+was changed.

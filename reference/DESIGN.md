@@ -413,7 +413,11 @@ schemes own stage storage.
 `run!` is the outer loop: step, advance time, and every `filter_interval` steps
 call `filter_state!`, which applies the compact filter to every conserved
 component along every active dimension (with batched halo exchange and the
-correct axis parity per component). An optional `callback(solver, Q)` runs after each
+correct axis parity per component). `filter_weighting = :volume` selects the
+volume-weighted form of the reference implementation instead, F(Jq)/F(J) per
+pass with the fold parity of the product; the unweighted default is the better
+of the two by measurement (`reference/CALIBRATION.md`, walls, folds and
+metrics). An optional `callback(solver, Q)` runs after each
 step for diagnostics or output.
 
 ### The clock

@@ -38,6 +38,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P}
     cfl::T
     filter_interval::Int
     filter_cfl::T                           # 0 = unrelaxed; see filter_weight
+    filter_weighting::Symbol                # :none or :volume; see filter_state!
     control::StepControl                    # timestep floors, prediction, retry
     n_global::NTuple{3,Int}                 # whole-grid extents (all patches)
     # Per-patch state: everything from the decomposition and the operator plans
@@ -144,7 +145,8 @@ test and benchmark suites do. It allocates no conserved state, so pair it with
 
 `eos`, `transport`, `metric`, and `sources` take their defaults and meaning from
 [`Problem`](@ref); `art`, `deriv`, `filt`, `cfl`, `control`, `filter_interval`,
-`filter_cfl`, `dims`, `n_halo`, and `stretch` from [`Numerics`](@ref). The two with no
+`filter_cfl`, `filter_weighting`, `dims`, `n_halo`, and `stretch` from
+[`Numerics`](@ref). The two with no
 `Problem`/`Numerics` counterpart are:
 
 - `origin`: low corner of the domain, one value per direction. Default
@@ -185,6 +187,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 deriv::AbstractCompactScheme=lele_d1_6(),
                 filt::AbstractCompactScheme=compact_filter(0.45),
                 cfl::Real=0.5, filter_interval::Int=1, filter_cfl::Real=0.35,
+                filter_weighting::Symbol=:none,
                 control::StepControl=StepControl(),
                 dims=nothing, n_halo::Int=4,
                 comm::MPI.Comm=MPI.COMM_WORLD,
@@ -293,6 +296,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         periodic[d] ? Lt[d] / n_global[d] : Lt[d] / (n_global[d] - 1)
     end
     coord_shift = ntuple(d -> fold_lo_dim[d] ? h[d] / 2 : zero(T), 3)
+    filter_weighting in (:none, :volume) ||
+        error("filter_weighting must be :none or :volume, got :$filter_weighting")
     # --- Patch layout ----------------------------------------------------
     npatch = prod(patch_grid)
     regions = patch_slabs(n_global, periodic, patch_grid)
@@ -465,9 +470,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                      patch_grid, bcs, eos, equations, transport,
                                      art, metric, stretch, sources, origin, Lt,
                                      coord_shift, h, deriv, filt, smoo, cfl,
-                                     filter_interval, filter_cfl, control,
-                                     n_halo, comm, backend, interface_rhs, n_cons,
-                                     n_species)
+                                     filter_interval, filter_cfl, filter_weighting,
+                                     control, n_halo, comm, backend, interface_rhs,
+                                     n_cons, n_species)
     end
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
     mkd(sch, d; kw...) =
@@ -591,7 +596,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                         typeof(stretch),typeof(sources),typeof(patch)}(
                       equations, eos, transport, art, metric, stretch, sources,
                       Lt, orig, coord_shift, h,
-                      T(cfl), filter_interval, T(filter_cfl), control,
+                      T(cfl), filter_interval, T(filter_cfl), filter_weighting, control,
                       n_global, patches, regions, decomp.comm,
                       GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
                       [Level{T}(0, root_level_comm(comm), [1],
@@ -742,7 +747,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,
                   Lt, orig, coord_shift, h,
-                  T(cfl), filter_interval, T(filter_cfl), control,
+                  T(cfl), filter_interval, T(filter_cfl), filter_weighting, control,
                   n_global, patches, regions, decomp.comm,
                   GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
                   levels, subcycle, regrid,
@@ -1011,7 +1016,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                                patch_grid, bcs, eos, equations, transport, art,
                                metric, stretch, sources, origin, Lt, coord_shift,
                                h, deriv, filt, smoo, cfl, filter_interval,
-                               filter_cfl, control, n_halo, comm, backend,
+                               filter_cfl, filter_weighting, control, n_halo,
+                               comm, backend,
                                interface_rhs, n_cons, n_species) where {T}
     MPI.Initialized() || MPI.Init(threadlevel=:funneled)
     world = comm
@@ -1087,7 +1093,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,
                   Lt, orig, coord_shift, h,
-                  T(cfl), filter_interval, T(filter_cfl), control,
+                  T(cfl), filter_interval, T(filter_cfl), filter_weighting, control,
                   n_global, patches, regions, world,
                   ghost_sends, ghost_recvs, plane_pairs,
                   [Level{T}(0, root_level_comm(world),

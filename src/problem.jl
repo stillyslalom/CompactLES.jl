@@ -591,8 +591,8 @@ end
 """
     Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
              art=ArtParams(), cfl=0.5, control=StepControl(),
-             filter_interval=1, filter_cfl=0.35, dims=nothing, n_halo=4,
-             stretch=(nothing, nothing, nothing))
+             filter_interval=1, filter_cfl=0.35, filter_weighting=:none,
+             dims=nothing, n_halo=4, stretch=(nothing, nothing, nothing))
 
 Grid, scheme, timestep, and decomposition choices used to realize a
 [`Problem`](@ref).
@@ -630,6 +630,18 @@ Grid, scheme, timestep, and decomposition choices used to realize a
   state with its filtered image, so halving the CFL doubles the number of
   passes over an interval and doubles the dissipation. See
   [`filter_weight`](@ref).
+- `filter_weighting`: how the state filter treats a non-uniform cell volume.
+  `:none`, the default, filters each conserved component unweighted.
+  `:volume` filters the component weighted by the cell volume and divides by
+  the volume passed through the same filter, the form of the public Pyranda
+  implementation. Both preserve a uniform state exactly on every metric. The
+  conservation defect of a pass sits in the wall closure rows under either
+  form and is the same on uniform and clustered grids; at a cylindrical axis
+  or a spherical pole the weighted form is the less conservative of the two,
+  and on the Noh implosions it moves the wall deficit in opposite directions
+  at the axis and at the origin, which is why it is not the default. On a
+  uniform Cartesian grid the two are one operator bit for bit. See
+  [`filter_state!`](@ref).
 - `dims`: MPI process-grid dimensions. `nothing` lets MPI distribute ranks over
   resolved directions. An explicit tuple must have product equal to the
   communicator size and must contain `1` in every collapsed direction.
@@ -720,6 +732,7 @@ Base.@kwdef struct Numerics
     control::StepControl = StepControl()
     filter_interval::Int = 1
     filter_cfl::Float64 = 0.35
+    filter_weighting::Symbol = :none
     dims::Union{Nothing,NTuple{3,Int}} = nothing
     n_halo::Int = 4
     comm::MPI.Comm = MPI.COMM_WORLD
@@ -793,6 +806,7 @@ function setup(prob::Problem, num::Numerics)
                cfl=num.cfl, control=num.control,
                filter_interval=num.filter_interval,
                filter_cfl=num.filter_cfl,
+               filter_weighting=num.filter_weighting,
                dims=num.dims, n_halo=num.n_halo, comm=num.comm,
                patch_grid=num.patch_grid, backend=num.backend,
                interface_rhs=num.interface_rhs, refine=num.refine,

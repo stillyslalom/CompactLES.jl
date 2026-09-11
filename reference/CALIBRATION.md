@@ -33,7 +33,7 @@ ArtParams(C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.01, C_Y = 100,
           reduction = :sum, smoother = :gaussian, detector = :delta4,
           species_flux = :fickian)
 Numerics(filt = compact_filter(0.45), filter_interval = 1, filter_cfl = 0.35,
-         cfl = 0.5, control = StepControl())
+         filter_weighting = :none, cfl = 0.5, control = StepControl())
 ```
 
 | Setting | Default | Status | Basis |
@@ -52,6 +52,7 @@ Numerics(filt = compact_filter(0.45), filter_interval = 1, filter_cfl = 0.35,
 | `compact_filter` α | 0.45 | too strong | 0.49 fits at 128³ and 256³ and clears the battery; the stability edge is at 0.49875 ([appendix](CALIBRATION_APPENDIX.md#the-default-decision)). |
 | `filter_cfl` | 0.35 | keep | Makes the filter's dissipation a rate, invariant to the CFL, landing steps, retries and subcycling; clears the battery at its production CFL numbers ([appendix](CALIBRATION_APPENDIX.md#the-battery-under-relaxation), [invariances](CALIBRATION_APPENDIX.md#retries-and-subcycling-under-relaxation)). |
 | `filter_interval` | 1 | keep | Redundant with α ([appendix](CALIBRATION_APPENDIX.md#cadence-and-alpha-are-one-axis)). |
+| `filter_weighting` | `:none` | keep | The volume-weighted form conserves no better on a closed line, is 17× less conservative at an axis or a pole, and moves the Noh wall deficit in opposite directions at the axis and the origin ([appendix](CALIBRATION_APPENDIX.md#the-filter-on-non-uniform-volumes)). |
 
 Two facts frame the table. Every constant was fitted under
 `compact_filter(0.45)` applied at full strength every step, and the four
@@ -389,9 +390,11 @@ Shu–Osher, Sedov and the interface case did not to the digits printed
 ([the battery under relaxation](CALIBRATION_APPENDIX.md#the-battery-under-relaxation)).
 
 The filter is also the wall-order cap of every filtered run, second order
-through its row-2 closure, and it is not conservative on cylindrical,
-spherical or stretched grids, where the reference normalizes by a filtered
-cell volume ([walls](#walls-folds-and-metrics)).
+through its row-2 closure, and the closure rows are where it fails to
+conserve: a few percent of the first rows' content per pass on any grid,
+decaying inward at the tridiagonal root. The volume weighting of the
+reference implementation does not change that and is not the default
+([walls](#walls-folds-and-metrics)).
 
 ## CFL, step control and the symmetry cell
 
@@ -460,10 +463,23 @@ which is the character of the Noh problem
 ([grid convergence](CALIBRATION_APPENDIX.md#grid-convergence)).
 
 **Non-Cartesian metrics.** `filter_state!` filters the conserved components
-unweighted, so on cylindrical, spherical or stretched grids it is not
-conservative; the reference filters the volume-weighted field and divides by
-a filtered cell volume
-([remaining differences](CALIBRATION_APPENDIX.md#remaining-differences-from-public-pyranda)).
+unweighted, and that is the better of the two forms measured. A pass
+conserves the volume integral of a component exactly when the transpose of
+its line operator fixes the quadrature volumes, which a periodic line does
+to round-off and a closed line does not: the cascade rows create or destroy
+2–4% of the first three rows' content, the defect decays inward at 0.627 per
+row at α = 0.45, the same on a uniform, a clustered, a cylindrical and a
+spherical line, and the one-sided rows move it to rows 3–7. The
+volume-weighted form of the reference, F(Jq)/F(J), behind
+`filter_weighting = :volume`, leaves the wall rows as they are, conserves at
+the spherical origin as the unweighted form does, and is 17× less
+conservative at the cylindrical axis and the spherical poles, where the odd-parity
+fold of the product does not have unit column sums. Both hold a uniform state
+exactly on every metric. On Noh it lowers the axis wall deficit from 55% to
+45% and raises the origin's from 28% to 46%; the filter's mass defect over a
+whole run is 1e-3 on the planar case and below 2e-5 on the curved ones under
+either form
+([non-uniform volumes](CALIBRATION_APPENDIX.md#the-filter-on-non-uniform-volumes)).
 
 ## The species channel
 

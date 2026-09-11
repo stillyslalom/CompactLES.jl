@@ -1503,16 +1503,50 @@ and not replaced by it, with the weight [`filter_weight`](@ref) supplies.
 The weight is a reduced quantity by construction, since `rate_prev` comes from
 the collective in `max_rate`, so every rank blends by the same amount without a
 further reduction here.
+
+Under `filter_weighting = :volume` on a non-uniform cell volume, which is any
+cylindrical, spherical or stretched grid, each directional pass filters the
+volume-weighted component and divides by the volume passed through the same
+pass,
+
+    q̄ = F_d(J q) / F_d(J),
+
+with J = 1 / `inv_J`, the form of the public Pyranda implementation. Under
+the fold on the swept dimension the product J·q folds with the component's
+sign times `volume_parity`, since the cylindrical J = r is odd across
+the axis. F_d(J) is rebuilt at every pass into `solver.tmp_b`, one line solve
+per dimension beside the `n_cons` of the components; the weighted component
+goes through `solver.tmp_a`, and its filtered image lands in the interior of
+`Q` before the division and the relaxation. A uniform Cartesian grid skips
+the weighting, so there the pass is the unweighted operator bit for bit, as
+it is under the default `:none` everywhere.
+
+Neither form conserves the volume integrals of the state on a closed line:
+the defect of a pass is the closure rows' and is the same on a uniform and
+on a clustered grid, and the unweighted operator preserves a uniform state
+on any metric because it never reads the volume. The weighted form is the
+less conservative at a cylindrical axis or a spherical pole, where the odd-parity
+fold of the product does not have unit column sums, and it moves the Noh wall
+deficit in opposite directions at the axis and at the origin; the
+measurements are `bench/filter_conservation.jl`'s and the default rests on
+them.
 """
 function filter_state!(solver::SolverLike, Q)
     decomp = solver.decomp
     comps = [view(Q, :, :, :, c) for c in 1:solver.equations.n_cons]
     w = filter_weight(solver)
+    weighted = _weighted_filter(solver)
     for d in 1:3
         decomp.active[d] || continue
         exchange_dim_batch!(comps, decomp, d)
+        weighted && _filter_volume!(solver, d)
         for c in 1:solver.equations.n_cons
-            filt_along!(solver.tmp_a, comps[c], solver, d, cons_parity(solver, d, c))
+            σ = cons_parity(solver, d, c)
+            if weighted
+                _filter_weighted!(comps[c], solver, d, σ, w)
+                continue
+            end
+            filt_along!(solver.tmp_a, comps[c], solver, d, σ)
             # w == 1 takes the original path exactly, so a pass at or above the reference
             # CFL stays bit-identical to the unrelaxed solver.
             if w == 1
@@ -1523,6 +1557,89 @@ function filter_state!(solver::SolverLike, Q)
         end
     end
     return Q
+end
+
+# Whether this solver's state filter weights by the cell volume: the option is
+# on and the volume is not uniform. A refined level is Cartesian and
+# unstretched by construction, so it never takes the weighted path.
+_weighted_filter(solver::SolverLike) =
+    solver.filter_weighting === :volume &&
+    !(solver.metric isa CartesianMetric && all(isnothing, solver.stretch))
+
+# 1 / F_d(J) over the interior of `solver.tmp_b`. J is filled over the padded
+# extent of `solver.tmp_a` from `inv_J`, which is analytic there, so the pass
+# reads current halos along `d` without an exchange; a fold on `d` folds J
+# with its own parity.
+function _filter_volume!(solver::SolverLike, d::Int)
+    decomp = solver.decomp
+    n1, n2, n3 = padded_extent(decomp)
+    pointwise!(_reciprocal_point!, solver.tmp_a, n1, n2, n3, solver.tmp_a,
+               solver.inv_J)
+    filt_along!(solver.tmp_b, solver.tmp_a, solver, d,
+                volume_parity(solver.metric, d))
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    pointwise!(_reciprocal_interior_point!, solver.tmp_b, nx, ny, nz,
+               solver.tmp_b, o1, o2, o3)
+    return solver.tmp_b
+end
+
+# One component's volume-weighted pass along `d`: J·q over the padded extent
+# into `solver.tmp_a` (its halos along `d` were exchanged with `q`; no other
+# halo is read), the filter of that into the interior of `q` itself, then the
+# division by F_d(J) from `_filter_volume!`, blended with the unfiltered
+# component read back as (J q) / J where the pass is relaxed.
+function _filter_weighted!(q, solver::SolverLike, d::Int, σ::Int, w)
+    decomp = solver.decomp
+    n1, n2, n3 = padded_extent(decomp)
+    pointwise!(_volume_weight_point!, solver.tmp_a, n1, n2, n3, solver.tmp_a, q,
+               solver.inv_J)
+    filt_along!(q, solver.tmp_a, solver, d, σ * volume_parity(solver.metric, d))
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    if w == 1
+        pointwise!(_scale_interior_point!, q, nx, ny, nz, q, solver.tmp_b,
+                   o1, o2, o3)
+    else
+        pointwise!(_weighted_blend_point!, q, nx, ny, nz, q, solver.tmp_a,
+                   solver.inv_J, solver.tmp_b, one(w) - w, w, o1, o2, o3)
+    end
+    return q
+end
+
+@inline function _reciprocal_point!(out, a, i, j, k)
+    @inbounds out[i, j, k] = 1 / a[i, j, k]
+    return nothing
+end
+
+@inline function _reciprocal_interior_point!(a, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        a[I] = 1 / a[I]
+    end
+    return nothing
+end
+
+@inline function _volume_weight_point!(out, q, inv_J, i, j, k)
+    @inbounds out[i, j, k] = q[i, j, k] / inv_J[i, j, k]
+    return nothing
+end
+
+@inline function _scale_interior_point!(q, s, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        q[I] *= s[I]
+    end
+    return nothing
+end
+
+@inline function _weighted_blend_point!(q, jq, inv_J, inv_FJ, w1, w, o1, o2, o3,
+                                        i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        q[I] = w1 * (jq[I] * inv_J[I]) + w * (q[I] * inv_FJ[I])
+    end
+    return nothing
 end
 
 # --- Top-level error reporting under many ranks.

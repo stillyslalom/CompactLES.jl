@@ -307,6 +307,43 @@ function test_offrank_folds()
     CL.deriv_along!(df, f, ssθ, 2, 1); CL._scale_grad!(df, ssθ, 2)
     check("sph poles (1/r)∂/∂θ = 0, θ split", gmax(ferr(ssθ, df,
           (r, θ, φ) -> 0.0)), 1e-8)
+
+    # (c) The volume-weighted state filter through both off-rank folds. It
+    # filters J·ρ with the parity of the product, odd at the axis (J = r) and
+    # even at the origin (J = r²), and divides by the filtered J; a wrong
+    # parity leaves an O(1) kink at the singular point, where a right one
+    # changes the smooth density below by the filter's own truncation. The
+    # wall closure rows at r = 1 are excluded from the measure.
+    for (label, mk) in (
+        ("cyl axis, θ split",
+         () -> Solver(n_global=(40, SPLITN, 1), L_domain=(1.0, 2π, 1.0),
+                      metric=CylindricalMetric(),
+                      bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                      art=ArtParams(enabled=false), dims=splitdims(2),
+                      filter_weighting=:volume)),
+        ("sph origin+poles, θ split",
+         () -> Solver(n_global=(40, SPLITN, 12), L_domain=(1.0, π, 2π),
+                      metric=SphericalMetric(),
+                      bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()),
+                           per3[3]),
+                      art=ArtParams(enabled=false), dims=splitdims(2),
+                      filter_weighting=:volume)))
+        sv = mk()
+        Q = allocate_state(sv)
+        initialize!(sv, Q, (r, θ, φ) -> Prim(u=(0, 0, 0), p=1.0,
+                                             rho=1 + 0.5 * exp(-4r^2)))
+        apply_bcs!(sv, Q)
+        Q0 = copy(Q)
+        filter_state!(sv, Q)
+        m = 0.0
+        for k in 1:sv.decomp.n_local[3], j in 1:sv.decomp.n_local[2],
+            i in 1:sv.decomp.n_local[1]
+            xcoord(sv, 1, i) < 0.5 || continue
+            I = gidx(sv, i, j, k)
+            m = max(m, abs(Q[I, 1] - Q0[I, 1]))
+        end
+        check("volume-weighted filter through the fold: " * label, gmax(m), 1e-6)
+    end
 end
 
 # ---------------------------------------------------------------------------
@@ -394,7 +431,8 @@ function test_freestream()
     ]
     for cs in cases
         kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain, metric=cs.metric,
-                    bcs=cs.bcs, dims=cs.dims, art=ArtParams(enabled=false)), cs.kw)
+                    bcs=cs.bcs, dims=cs.dims, art=ArtParams(enabled=false),
+                    filter_weighting=:volume), cs.kw)
         solver = Solver(; kw...)
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
@@ -407,6 +445,19 @@ function test_freestream()
             m = max(m, abs(dQ[gidx(solver, i, j, k), c]))
         end
         check(cs.name, gmax(m), 1e-8)
+        # The volume-weighted filter divides F(J) by itself, so a uniform
+        # state survives a pass on every metric; across a fold split over
+        # ranks that also exercises the parity the product J·q folds with.
+        Q0 = copy(Q)
+        filter_state!(solver, Q)
+        m = 0.0
+        for c in 1:solver.equations.n_cons, k in 1:solver.decomp.n_local[3],
+            j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
+            I = gidx(solver, i, j, k)
+            m = max(m, abs(Q[I, c] - Q0[I, c]))
+        end
+        check(cs.name * ": volume-weighted filter holds a uniform state",
+              gmax(m), 1e-12)
     end
 end
 

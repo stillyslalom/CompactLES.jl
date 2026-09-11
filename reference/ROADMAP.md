@@ -151,14 +151,30 @@ below exposed behavior outside those passing checks.
   [decision](CALIBRATION_APPENDIX.md#the-default-decision)); and the landing-step
   invariance ([per application](CALIBRATION_APPENDIX.md#dissipation-per-application)).
 
-- [ ] **N2 — Measure and implement conservative filtering on nonuniform metrics.**
-  Compare current unweighted component filtering with
-  [Pyranda's public implementation](https://github.com/LLNL/pyranda)
-  volume-weighted field divided by a volume passed through the same filter.
-  Establish the actual discrete conservation property rather than assuming that
-  constant preservation proves it.
+- [x] **N2 — Measure and implement conservative filtering on nonuniform metrics.**
+  Complete, September 2026, with the current method retained. The
+  volume-weighted form of
+  [Pyranda's public implementation](https://github.com/LLNL/pyranda) is
+  implemented behind `filter_weighting = :volume` and measured against the
+  unweighted default on the assembled line operators and on the battery. The
+  discrete property is Mᵀ V = V on the quadrature volumes, not constant
+  preservation, which both forms have to 1e-15 on every metric. A closed
+  line fails it in the closure rows on any grid, 2–4% of the first rows'
+  content per pass decaying at the tridiagonal root, identically on uniform,
+  clustered and curvilinear lines; the weighted form leaves that alone,
+  conserves to round-off at the spherical origin as the default does, and is
+  17× worse at the cylindrical axis and the
+  poles. Noh's wall deficit moves down at the axis and up at the origin
+  under it; uniform Cartesian runs are the same bit for bit.
   **Gate:** constants, volume-integrated mass/momentum/energy defects, folds,
   stretching, and converging-shock behavior; unchanged uniform Cartesian results.
+  **Code:** [timestep.jl](../src/timestep.jl) (`filter_state!`),
+  [metric.jl](../src/metric.jl) (`volume_parity`),
+  [filter_conservation.jl](../bench/filter_conservation.jl).
+  **Delivered:** the measurement and the decision
+  ([non-uniform volumes](CALIBRATION_APPENDIX.md#the-filter-on-non-uniform-volumes),
+  [walls, folds and metrics](CALIBRATION.md#walls-folds-and-metrics),
+  [completion record](HISTORY.md#filtering-on-non-uniform-volumes-september-2026)).
 
 - [ ] **N3 — Resolve symmetry-cell startup robustness and the cold-state limit.**
   Instrument planar, cylindrical, and spherical Noh with the existing floor tally;
