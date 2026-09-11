@@ -4,13 +4,19 @@ CompactLES combines MPI domain decomposition with shared-memory threading.
 MPI calls occur outside threaded regions and require the `:funneled` thread
 level.
 
+CompactLES re-exports the `MPI` module, so a project that depends on CompactLES
+alone can call `MPI.Init`, `MPI.COMM_WORLD`, and the rest of the qualified MPI
+API after `using CompactLES`. Adding MPI.jl to the environment as well is still
+useful when a script wants MPI.jl's own exported names (`mpiexec`, `UBuffer`,
+`VBuffer`) unqualified, or when MPIPreferences selects a system MPI.
+
 ## Obtain the configured launcher
 
 Do not assume that `mpiexec` on `PATH` belongs to the MPI library used by
 MPI.jl:
 
 ```julia
-using MPI
+using CompactLES
 
 MPI.mpiexec() do mpiexec
     julia = Base.julia_cmd()
@@ -21,9 +27,8 @@ end
 Initialize MPI in the case script before setup:
 
 ```julia
-using MPI
-MPI.Init(threadlevel = :funneled)
 using CompactLES
+MPI.Init(threadlevel = :funneled)
 ```
 
 Wrap a driver in [`mpi_main`](@ref) so an exception is reported once and all

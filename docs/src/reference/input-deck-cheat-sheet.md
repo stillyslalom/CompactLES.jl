@@ -8,9 +8,8 @@ tables or start with [Define a problem](@ref).
 ## Smallest complete deck
 
 ```julia
-using MPI
+using CompactLES   # re-exports MPI
 MPI.Init(threadlevel=:funneled)
-using CompactLES
 
 gas = IdealSpecies("gas"; R=1.0, gamma=1.4)
 problem = Problem(

@@ -8,10 +8,9 @@
 # place an off-axis feature, which additional constraints a resolved angle
 # imposes, and how to view a coordinate slice as a physical disk.
 
-using MPI
+using CompactLES   # re-exports MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
-using CompactLES
 using CairoMakie
 CairoMakie.activate!(type = "png")
 

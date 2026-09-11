@@ -11,10 +11,9 @@
 # the conserved state after a completed timestep. This tutorial shows their
 # combined action in a small Sod shock tube.
 
-using MPI
+using CompactLES   # re-exports MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
-using CompactLES
 using CairoMakie
 CairoMakie.activate!(type = "png")
 

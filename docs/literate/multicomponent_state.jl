@@ -7,10 +7,9 @@
 # temperature using the bundled NASA-9 data. No hydrodynamic evolution is
 # needed: the figure is produced directly from the initialized conserved state.
 
-using MPI
+using CompactLES   # re-exports MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
-using CompactLES
 using CairoMakie
 CairoMakie.activate!(type = "png")
 

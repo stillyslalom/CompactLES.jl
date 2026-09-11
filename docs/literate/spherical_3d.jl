@@ -7,10 +7,9 @@
 # origin fold and two pole folds. This tutorial initializes a resolved spherical
 # domain, advances a smooth blast a short way, and views a meridional slice.
 
-using MPI
+using CompactLES   # re-exports MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
-using CompactLES
 using CairoMakie
 CairoMakie.activate!(type = "png")
 

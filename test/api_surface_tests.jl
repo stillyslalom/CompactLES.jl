@@ -20,7 +20,7 @@ ArtParams AtTime AxisBC BandedClosureRow BandedCompactScheme BlockRegion
 BoundaryCondition CPUBackend Callback CartesianMetric ClosureRow CompactScheme
 ConservedState ConstantBodyForce CylindricalMetric DEFAULT_VTK_FIELDS
 DeviceBackend DirichletBC EOS EquationSet EveryStep EveryTime ExtrapolationBC
-FieldWriter FloorTally IdealMixture IdealSpecies Metric NSCBCInflowBC
+FieldWriter FloorTally IdealMixture IdealSpecies MPI Metric NSCBCInflowBC
 NSCBCOutflowBC Nasa9Interval Nasa9Mixture Nasa9Species NavierStokes1T
 NoSlipWallBC Numerics OriginBC PeriodicBC PoleBC Prim Problem ProgressLog
 SlipWallBC Solver SolverFailure SphericalMetric StateGuard StateReport

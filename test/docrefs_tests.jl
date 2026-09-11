@@ -12,9 +12,10 @@
 #   1. every `@ref` in a rendered docstring or a page resolves to a `@docs`
 #      entry or to a page header;
 #   2. every `@docs` entry names a documented binding of CompactLES;
-#   3. every exported name has a docstring and is rendered by some `@docs`
-#      block. Documenter's `checkdocs = :exports` misses an exported binding
-#      that has no docstring at all, so this is deliberately stricter.
+#   3. every exported name CompactLES owns has a docstring and is rendered by
+#      some `@docs` block. Documenter's `checkdocs = :exports` misses an
+#      exported binding that has no docstring at all, so this is deliberately
+#      stricter.
 #
 # Standalone: julia --project=. test/docrefs_tests.jl
 # The serial suite includes it as one testset.
@@ -160,10 +161,15 @@ function docstrings()
     return texts
 end
 
+# Exported names owned by CompactLES. A re-exported binding from a dependency,
+# such as the `MPI` module, has its documentation in that package and is
+# invisible to Documenter's `checkdocs`, which reads only this module's own
+# docstring table; skip it here for the same reason.
 function exported_names()
     out = String[]
     for n in names(CompactLES)
         n === :CompactLES && continue
+        Base.which(CompactLES, n) === CompactLES || continue
         push!(out, String(n))
     end
     return out

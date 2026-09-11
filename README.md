@@ -23,8 +23,8 @@ For a compact constructor reference, defaults, and common recipes, see the
 [Input deck cheat sheet](https://stillyslalom.github.io/CompactLES.jl/dev/reference/input-deck-cheat-sheet/).
 
 ```julia
-using MPI; MPI.Init(threadlevel=:funneled)
 using CompactLES
+MPI.Init(threadlevel=:funneled)     # CompactLES re-exports MPI
 
 prob = Problem(
     domain = ((0.0, 2π), (0.0, 2π), (0.0, 2π)),

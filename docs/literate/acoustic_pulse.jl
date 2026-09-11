@@ -7,10 +7,9 @@
 # resolved; the other two dimensions contain one point and therefore carry no
 # spatial derivatives.
 
-using MPI
+using CompactLES   # re-exports MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
-using CompactLES
 using CairoMakie
 CairoMakie.activate!(type = "png")
 

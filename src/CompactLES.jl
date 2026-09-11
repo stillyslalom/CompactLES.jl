@@ -10,6 +10,10 @@ decomposed dimensions.
 The public frontend separates a pointwise [`Problem`](@ref) from its
 [`Numerics`](@ref); [`setup`](@ref) returns the distributed solver and the
 initialized conserved state.
+
+The `MPI` module is re-exported, so an input deck needs only CompactLES in its
+environment: `using CompactLES` is enough to call `MPI.Init` and to pass
+`MPI.COMM_WORLD` to [`Numerics`](@ref).
 """
 module CompactLES
 
@@ -60,6 +64,13 @@ include("viz.jl")
 include("problem.jl")
 include("scriptargs.jl")
 include("display.jl")
+
+# MPI is re-exported so that an input deck needs one package in its environment
+# and one `using` line: `using CompactLES` binds `MPI` for `MPI.Init`,
+# `MPI.COMM_WORLD`, and the rest of the qualified MPI API. Only the module name
+# is re-exported; MPI.jl's own exports (`mpiexec`, `UBuffer`, `VBuffer`) still
+# need `using MPI` or an `MPI.` prefix.
+export MPI
 
 # Common input-deck and runtime surface. Lower-level decomposition, directional
 # plan, transfer, and hierarchy records remain supported through qualified
