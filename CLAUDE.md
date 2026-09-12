@@ -517,8 +517,8 @@ argument makes KernelAbstractions wrap the body in `@aliasscope`, which Julia
 1.13.0 miscompiles for a loop that stores an element the next iteration loads
 (the Thomas sweep) once bounds checks are elided; 1.11 and 1.12 have a related
 form (KernelAbstractions.jl#652). `--check-bounds=yes` hides it, so the serial
-CI job passes while the MPI leg fails. `reference/julia_aliasscope_bug_report.md`
-has the reproducer.
+CI job passes while the MPI leg fails. Filed as JuliaLang/julia#63129;
+`reference/julia_aliasscope_bug_report.md` has the reproducer.
 
 **A run that fails does not stop.** Losing positivity drives the diffusive rate
 in `compute_dt` up until `dt` collapses, and the run then grinds forever at no

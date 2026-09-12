@@ -135,6 +135,12 @@ still carries it. No issue or pull request in JuliaLang/julia mentions
 `aliasscope` after #60029, and the KernelAbstractions thread (#652) has no
 1.13 report.
 
+## Upstream issue
+
+Filed 2026-09-12 as JuliaLang/julia#63129, "Bad `@aliasscope` behavior on
+non-`Const` loop-carried recurrence". The text below is the draft it was
+written from; the issue is the record from here on.
+
 ## Draft issue for JuliaLang/julia
 
 **Title:** `@aliasscope` miscompiles a loop-carried recurrence under
