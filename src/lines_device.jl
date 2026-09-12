@@ -27,6 +27,17 @@
 # elimination sweep and the back-substitution pivot were once such places too
 # and are no longer: every host path now skips a zero multiplier and
 # multiplies by `inv(U[1, i])`, so the device kernel does both unconditionally.
+#
+# No kernel below declares a `@Const` argument. On the CPU backend a `@Const`
+# argument makes KernelAbstractions wrap the body in `@aliasscope`, and Julia
+# 1.13.0 miscompiles a recurrence inside that scope once bounds checks are
+# elided: the Thomas sweep, which stores `B[l, i]` and loads it as
+# `B[l, i-1]` on the next iteration, came out wrong in every element and
+# failed the bitwise gate at np = 2 while passing under `--check-bounds=yes`.
+# The banded sweep carries the same dependency and compiled correctly by
+# chance. On a GPU backend `@Const` only marks loads read-only, a hint
+# these kernels can do without. reference/julia_aliasscope_bug_report.md
+# has the reproducer.
 
 """
     DeviceBackend(ka)
@@ -241,10 +252,10 @@ end
 @inline _gidx(::Val{D}, i, a, b, pad, kshift) where {D} =
     _gidx(Val(D), i, a, b, pad) + CartesianIndex(0, 0, kshift)
 
-@kernel function _dev_fill_kernel!(B, @Const(f), @Const(ci), @Const(clo),
-                                   @Const(clo_first), @Const(clo_len),
-                                   @Const(chi), @Const(chi_first),
-                                   @Const(chi_len), n, nclo, nchi, a0, sym,
+@kernel function _dev_fill_kernel!(B, f, ci, clo,
+                                   clo_first, clo_len,
+                                   chi, chi_first,
+                                   chi_len, n, nclo, nchi, a0, sym,
                                    lo_closed, hi_closed, n_o1, n_o2, stride, pad,
                                    ::Val{D}) where {D}
     a, b, i, t = @index(Global, NTuple)
@@ -284,7 +295,7 @@ end
     end
 end
 
-@kernel function _dev_scatter_kernel!(out, @Const(B), n_o1, n_o2, stride, pad,
+@kernel function _dev_scatter_kernel!(out, B, n_o1, n_o2, stride, pad,
                                       ::Val{D}) where {D}
     a, b, i, t = @index(Global, NTuple)
     @inbounds out[_gidx(Val(D), i, a, b, pad, (t - 1) * stride)] =
@@ -293,7 +304,7 @@ end
 
 # One thread per line, the sweep loop inside the thread. Consecutive threads
 # read and write consecutive rows of B at every sweep position.
-@kernel function _dev_thomas_kernel!(B, @Const(lmul), @Const(dinv), @Const(c), n)
+@kernel function _dev_thomas_kernel!(B, lmul, dinv, c, n)
     l = @index(Global, Linear)
     @inbounds begin
         for i in 2:n
@@ -306,7 +317,7 @@ end
     end
 end
 
-@kernel function _dev_banded_kernel!(B, @Const(Lm), @Const(U), n, q)
+@kernel function _dev_banded_kernel!(B, Lm, U, n, q)
     l = @index(Global, Linear)
     @inbounds begin
         for k in 1:(n-1)
@@ -334,7 +345,7 @@ end
     end
 end
 
-@kernel function _dev_pack_ends2_kernel!(ends, @Const(B), n)
+@kernel function _dev_pack_ends2_kernel!(ends, B, n)
     l = @index(Global, Linear)
     @inbounds begin
         ends[1, l] = B[l, 1]
@@ -342,7 +353,7 @@ end
     end
 end
 
-@kernel function _dev_pack_endsq_kernel!(ends, @Const(B), n, q)
+@kernel function _dev_pack_endsq_kernel!(ends, B, n, q)
     l = @index(Global, Linear)
     @inbounds for r in 1:q
         ends[r, l] = B[l, r]
@@ -350,14 +361,14 @@ end
     end
 end
 
-@kernel function _dev_correct2_kernel!(B, @Const(v), @Const(w), @Const(zp),
-                                       @Const(zn))
+@kernel function _dev_correct2_kernel!(B, v, w, zp,
+                                       zn)
     l, i = @index(Global, NTuple)
     @inbounds B[l, i] -= v[i] * zp[l] + w[i] * zn[l]
 end
 
-@kernel function _dev_correctq_kernel!(B, @Const(V), @Const(W), @Const(zbp),
-                                       @Const(zbn), q, colwise)
+@kernel function _dev_correctq_kernel!(B, V, W, zbp,
+                                       zbn, q, colwise)
     l, i = @index(Global, NTuple)
     @inbounds if colwise
         acc = zero(eltype(B))
