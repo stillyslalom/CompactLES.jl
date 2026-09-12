@@ -57,6 +57,8 @@
 #   Noh nu=2   plateau 15.002/16   shock 0.2092/0.2   wall deficit 56%
 #   Noh nu=3   plateau 62.502/64   shock 0.2090/0.2   wall deficit 28%
 #   Shock/SF6  worst Y -0.0135 / 1.0135, width 4 cells, 646 steps (Sept 2026)
+#   Noh aligned N=100 AR=4    plateau 3.9161/4   deficit 50%   shock 0.2116   5149 steps
+#   Noh plane   N=24  AR=2    plateau 11.766/16  front 0.236/0.2  L1 rho 0.898  752 steps
 #
 # The Woodward and Noh rows moved in September 2026 when the filter_cfl default
 # went from 0 to 0.35: those cases run below the reference CFL, so their filter
@@ -309,6 +311,45 @@ let r = shock_interface()
     @test r.report.negative_species <= 12
     @test r.report.nonfinite == 0 && r.report.negative_density == 0
     @test r.report.rho_min > 0
+end
+
+# ===========================================================================
+say("
+=== Noh on anisotropic Cartesian grids (analytic; measured guards) ===")
+
+# The two cases the directional-bulk-viscosity measurement was made on
+# (reference/CALIBRATION_APPENDIX.md), kept under the scalar form as guards on
+# the solver's behaviour on grids of aspect ratio 4 and 2. Both are held to
+# the measured values, 1.5–2x out: the step counts are the aspect-ratio
+# penalty of the scalar form and the relaxed filter's pass count with it,
+# and a change to either moves them first.
+let r = noh_aligned(; N=100, AR=4)
+    @test r.completed
+    plat, deficit, Rnum, epre = noh_metrics(r.y, r.rho, 1)
+    sayf("  aligned N=100 AR=4   plateau %.4f (exact 4)  wall deficit %+.0f%%  " *
+         "shock %.4f/0.2  steps %d  transverse %.1e
+",
+         plat, 100deficit, Rnum, r.steps, r.uniformity)
+    @test abs(plat / 4 - 1) < 0.03
+    @test 0 < deficit < 0.7
+    @test abs(Rnum - 0.2) < 0.025
+    @test r.uniformity < 1e-8
+    @test r.steps < 8000
+end
+let r = noh_cartesian(; N=24, AR=2)
+    @test r.completed
+    sayf("  cartesian N=24 AR=2  plateau %.3f (exact 16)  center deficit %+.0f%%  " *
+         "front x %.4f y %.4f diag %.4f /0.2  L1 rho %.3f  steps %d
+",
+         r.plateau, 100r.deficit, r.cut_x.front, r.cut_y.front, r.cut_diag.front,
+         r.l1, r.steps)
+    @test r.plateau > 10.5
+    # The half-plateau crossing sits outside 0.2 while the plateau is 12 of
+    # 16: measured 0.236, 0.235 and 0.234 on the three cuts.
+    @test all(f -> abs(f - 0.2) < 0.06, (r.cut_x.front, r.cut_y.front, r.cut_diag.front))
+    @test r.l1 < 1.2
+    @test r.steps < 1200
+    @test r.report.nonfinite == 0 && r.report.negative_density == 0
 end
 
 say("\nvalidation battery complete")

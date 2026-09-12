@@ -38,6 +38,7 @@ record of that setting.
 16. [The bulk species channel](#the-bulk-species-channel)
 17. [Remaining differences from public Pyranda](#remaining-differences-from-public-pyranda)
 18. [The no-slip wall flux contract](#the-no-slip-wall-flux-contract)
+19. [Directional bulk viscosity on anisotropic grids](#directional-bulk-viscosity-on-anisotropic-grids)
 
 ## The battery
 
@@ -3281,3 +3282,185 @@ every other probe unchanged. These are fixed boundary-dispatch costs, not timing
 
 The open items are kept in [CALIBRATION.md](CALIBRATION.md#open-items), one
 line each with a link to the measurement here that each rests on.
+
+## Directional bulk viscosity on anisotropic grids
+
+`bench/anisotropic.jl`, September 2026, roadmap item N5. The question was
+whether a directional artificial bulk viscosity, one coefficient per grid
+direction with the matching per-direction diffusive step limit, is
+justified on a strongly anisotropic grid, where the scalar form loses a
+factor of the aspect ratio in the step (Olson & Lele, Comput. Sci. Disc. 5,
+014008, 2012; J. Comput. Phys. 246, 207, 2013). No case in the battery
+could see the difference, since every one of them is one-dimensional, so
+two were built first.
+
+### The cases
+
+Both are Noh implosions with the exact solution of `noh_exact`, on
+Cartesian grids whose spacing along dimension 1 is 1/AR of the spacing
+along dimension 2, in `test/cases.jl`.
+
+- `noh_aligned`: the planar (ν = 1) implosion along dimension 2, the coarse
+  one, with `nx = 12` periodic points across it. The initial data carry no
+  variation along dimension 1, so the solution is the one-dimensional
+  profile at every station, the sensor's fine-direction term is zero
+  exactly, and the forms can differ only in the step they take; the largest
+  transverse variation of the density at the end (`uniformity`) is the
+  round-off the run has amplified.
+- `noh_cartesian`: the cylindrical (ν = 2) implosion on the plane
+  [−L, L]² converging on its central node, with the exact time-dependent
+  inflow on all four faces. A curved front oblique to the grid at every
+  angle, the exact plateau, front position and pre-shock compression along
+  any cut, and an irrotational pre-shock flow, which is the property the
+  comparison turned on. The full plane rather than a walled quadrant: the
+  planar wall deficit of this solver is 63%, and on a quadrant the two walls
+  and their corner dominated every measure (a plateau of 12.5 against 16
+  and a corner deficit of 79% at AR 1; at AR 4 the wall cut never reached
+  half the plateau). The warm start of the spherical case rings here (a
+  plateau of 17.1 with oscillations of ±2 at N = 64), so the case takes the
+  singular start, which the scalar form completes at `cfl = 0.3`. At N = 24
+  per half-side, the resolution of the sweep, the plateau is 11.4–12.9 at
+  every AR under the scalar form, 12% low at N = 64, and the 10–90% width
+  measure reads NaN because the profile never reaches 14.8; the comparison
+  is between forms at equal resolution, not against the exact plateau.
+
+### The forms
+
+Cook's scalar coefficient is β\* = C_β ρ G[Σ_d Δ_d² |δ⁴_d S|], with G the
+smoother, entering every normal stress as β\* ∇·u and the step through
+2β\*/ρ · Σ_d 1/Δ_d². Two directional forms were implemented behind an
+`ArtParams` option for the measurement and removed after it. Each stored
+β\*_d in three arrays, entered direction d's normal stress as β\*_d ∇·u
+(the reference's eq. 5), and was charged in the step as
+2 Σ_d β\*_d/(ρ Δ_d²):
+
+- the sensor split, β\*_d = C_β ρ G[Δ_d² |δ⁴_d S|]: each direction's own
+  ringing weighted by its own spacing and smoothed on its own. Under Σ_d the
+  three sum to the scalar coefficient to round-off, and in one dimension
+  the arrays are bitwise the scalar ones; on an isotropic grid the
+  coefficients still differ by direction, as the AR 1 rows below show;
+- the spacing-scaled split, β\*_d = β\* (Δ_d/Δ_max)² from the scalar
+  coefficient as built, whichever sensor built it: the coarsest direction
+  keeps β\* exactly, a finer one takes the coefficient the same ringing
+  would have produced on a grid of its own spacing, every β\*_d ≤ β\*, and
+  on an isotropic grid every one is β\* bitwise. These are the two
+  properties the reference states for its coefficient, each bounded by the
+  scalar and the scalar recovered when the grid is isotropic, which the
+  sensor split does not have. The reference's own construction could not be
+  read in full (the article text was not reachable), so which of the two it
+  is was not settled; both were measured.
+
+Both remove the aspect-ratio penalty from the step exactly: on the aligned
+case the fine direction's coefficient is zero under the first and
+Δ_x²/Δ_y² of β\* under the second, so Σ_d β\*_d/Δ_d² is the coarse
+direction's alone.
+
+<a id="the-aligned-case"></a>
+
+### The aligned case
+
+N = 100, `cfl = 0.3`, `filter_cfl = 0.35`:
+
+```
+AR   form          steps   limit      plateau   deficit   shock    transverse
+ 1   scalar          761   diffusive  3.9855     64%      0.2126   3.1e-9
+ 1   scaled          761   diffusive  3.9855     64%      0.2126   2.3e-9
+ 1   directional     491   diffusive  3.9846     64%      0.2128   7.2e-11
+ 4   scalar         5149   diffusive  3.9161     50%      0.2116   1.2e-10
+ 4   scaled         1139   diffusive  3.9848     62%      0.2120   1.0e-7
+ 4   directional    1107   diffusive  3.9849     63%      0.2120   4.6e-8
+16   scalar        67994   diffusive  1.0288   −501%      0.0465   1.0e-9
+16   scaled           step collapse at t = 0.56
+16   directional    4471   acoustic   3.9305     53%      0.2137   1.3e-6
+```
+
+The step gain is the predicted one, 4.5× at AR 4 and 15× at AR 16. Even the
+one-dimensional battery is diffusion-limited at the front under C_β = 1, so
+the aspect ratio enters the scalar form's step as AR² through 1/Δ_x² and
+the directional forms' as AR through the acoustic rate.
+
+The scalar form's run at AR 16 is wrong although it completes: the wall
+density is 24 against the exact 4 and the front has reached 0.047 in place
+of 0.2. That is not the bulk viscosity, whose flux along the fine direction
+is zero on this flow, but the relaxed filter. `filter_weight` scales a pass
+by `dt · rate / filter_cfl` with `rate` the maximum that sized the step, so
+the weight is `cfl / filter_cfl` whatever limits the step and the number of
+passes per unit time follows the rate: the AR 16 run makes 68k weighted
+passes where the directional run beside it makes 3.8k. Invariance to the
+CFL number, which N1 measured on acoustic-limited runs, is not invariance
+to the step. `filter_cfl = 0`, `0.035` and `cfl = 0.1` (75k, 75k and 59k
+effective passes) return the same wrong profile, and `filter_cfl = 5`,
+which cuts the weight to the acoustic-limited level, returns the AR 4
+profile (plateau 3.9171, deficit 50%, front 0.2114, wall density 1.99).
+The AR 4 plateaus already show the same effect at a smaller scale, 3.916
+against 3.985. The filter is not changed here; the decision is roadmap
+item N5a.
+
+### The curved case
+
+N = 24 per half-side, `cfl = 0.3`, p₀ = 1e-4, to t = 0.6. |ω| and |∇·u| are
+the largest values over the pre-shock region r > 1.2 R_s at the end, from
+centered differences of the primitive velocity:
+
+```
+AR   form          outcome                          steps   plateau  center   L1 rho   |omega|  |div u|
+ 1   scalar        completes                          339   11.443    64%     1.055     1.27    21.0
+ 1   scaled        completes (= scalar, bitwise)      338   11.443    64%     1.055     1.27    21.0
+ 1   directional   completes                          320   12.332    57%     0.834     5.77    22.8
+ 2   scalar        completes                          752   11.766    41%     0.898     2.48    36.3
+ 2   scaled        completes                          531   11.896    29%     0.848    13.6     30.8
+ 2   directional   completes                          556   12.218    28%     0.760    16.4     28.2
+ 3   directional   negative density at t = 0.274
+ 4   scalar        completes                         2992   12.554    40%     0.904    24.0     60.5
+ 4   scaled        negative density at t = 0.100
+ 4   directional   negative density at t = 0.101
+ 8   scalar        completes                        13561   12.942    35%     0.919    24.0     60.5
+ 8   scaled        step collapse at t = 0.020
+ 8   directional   negative density at t = 0.021
+```
+
+At N = 48 both forms fail at AR 4 at t = 0.048, earlier than at N = 24. The
+failure moves neither with the CFL (0.3, 0.15 and 0.075 fail at
+t = 0.095–0.10) nor with the reduction (`:max` fails at 0.095) nor with the
+ambient pressure (p₀ = 1e-2 and 1e-1 fail at 0.09–0.12 under both forms
+while the scalar form completes both). The sensor field moves it and does
+not remove it: under the spacing-scaled split, `:ungated_dilatation` fails
+at t = 0.52, `:gated_strain` at 0.087, and `:dilatation`, the switched
+dilatation, completes AR 4 at N = 24 (1243 steps against the scalar
+strain form's 2992, plateau 12.28, L1 0.85, worst internal energy −2.2
+against −0.16) and fails at N = 48 (t = 0.28) and at AR 8 (t = 0.15),
+where the scalar dilatation form completes (10614 steps, plateau 12.73).
+
+The mechanism is the stress form. A scalar bulk viscosity exerts the force
+∇(β\* ∇·u), the gradient of a scalar, which cannot create vorticity; with
+unequal coefficients the force is (∂_x(β\*_x ∇·u), ∂_y(β\*_y ∇·u)), which
+is not a gradient, and in Noh's pre-shock gas, cold, converging and
+irrotational with no pressure to resist it, it does. At t = 0.06 on the
+AR 4 grid, before anything has failed, the largest pre-shock vorticity is
+19.9 under the scalar form and 428 and 414 under the two directional ones,
+against a largest dilatation of 59–86, and the worst internal energy is
+−0.095 against −6.2 (under the switched dilatation sensor, 43.7 against
+the scalar's 11.3). The run then cavitates just outside the front, at
+70–76° from the fine axis, where the density reaches 0.47 in gas that
+should be at 3.2 and the y-strain has turned to expansion, and the step
+collapses. The same want of fine-direction damping shows in the aligned
+case's `uniformity`, the transverse round-off a directional run amplifies to
+1e-6 where the scalar form holds it at 1e-10, and it is what ends the
+spacing-scaled run at AR 16 there. The compression switch confines β\* to
+compression and so removes the rotational force where the flow has begun
+to expand, which is why it postpones the failure; it does not act before
+the vorticity exists.
+
+### Decision
+
+Neither directional form is adopted, and the implementation was not
+retained. The gate was a measurable benefit on the anisotropic case; the
+benefit is real on the aligned control and the form fails on the curved
+case, which is what a stretched grid is used for, by a mechanism intrinsic to a
+bulk stress with unequal diagonal coefficients rather than to a constant
+or a sensor. The reference's success on a blast wave and a nozzle boundary
+layer is neither reproduced nor contradicted here: both carry pressure
+everywhere, and neither converges cold gas onto a point. What remains is
+the two cases, guarded in `test/validation.jl` under the scalar form,
+`bench/anisotropic.jl` as the instrument for the scalar form's
+aspect-ratio penalty, and the finding on the filter above.

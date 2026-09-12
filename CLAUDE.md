@@ -625,5 +625,14 @@ them.
 - Cluster-side open questions (whether `ThreadPinning`'s pinning API would buy
   anything, and the unexplained ~4300x SMT-sibling collapse) are in
   `reference/CLUSTER.md`.
+- **The relaxed filter's passes per unit time follow whichever rate limits
+  the step.** `filter_weight` reads the same maximum that sized `dt`, so
+  its dissipation is invariant to the CFL number and not to the step; under
+  a diffusion-limited step, as under the scalar β\* on a grid of aspect
+  ratio 16, the planar Noh run completes with a wrong solution and
+  `filter_cfl = 5` restores it. A directional β\* removes the aspect-ratio
+  penalty and fails on a curved front by making vorticity in cold gas; it
+  was measured and not adopted. → `reference/CALIBRATION_APPENDIX.md`,
+  roadmap N5a
 - Wanted: a `bench/` runner taking medians over repeated *processes*, to get
   under the 10–20% run-to-run spread.

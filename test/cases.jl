@@ -557,6 +557,171 @@ function brill_slab(; R=BR_R, Np=BR_NP, art=ArtParams(enabled=true), cfl=0.4,
             steps=solver.step, completed=completed(solver, tfin))
 end
 
+# --- Noh on an anisotropic Cartesian grid -----------------------------------
+#
+# The ν = 2 implosion of `noh_case` with the axis fold replaced by Cartesian
+# coordinates: the full plane converging on its central node, so a curved
+# front that crosses the two grid directions at every angle, on a grid whose
+# spacing along dimension 1 is 1/AR of the spacing along dimension 2. The
+# exact solution is `noh_exact` as before, so the plateau, the front position
+# and the pre-shock compression are known numbers along any cut. This is the
+# case the directional artificial bulk viscosity is measured on against the
+# scalar one (Olson & Lele, J. Comput. Phys. 246, 2013): wherever the front
+# is oblique to the grid a scalar β* takes the coarse direction's weight, and
+# the diffusive rate then charges that coefficient against the fine spacing.
+# The full plane rather than a walled quadrant: the planar wall deficit of
+# this solver (reference/CALIBRATION.md) is 63%, and on a quadrant the two
+# walls and their corner dominate every measure the comparison reads.
+# `noh_aligned` is the planar control on the same grid: the ν = 1 implosion
+# along the coarse dimension, on which the front sees one direction only, so
+# the two forms must produce the same profile and can differ only in the step.
+
+const NC_L = 0.5          # half-side of the plane; the front ends at r = 0.2
+const NC_N = 64           # points per half-side along dimension 2, the coarse one
+const NC_CFL = 0.3
+
+"""
+    noh_cartesian(; N, AR, L, t0, tfinal, p0, art, cfl, nmax, filt, filter_cfl)
+        -> NamedTuple
+
+Cylindrical Noh on the Cartesian plane `[−L, L]²` with the exact
+time-dependent inflow on all four faces, integrated from `t0` to `tfinal`
+(`NOH_T` by default).
+Dimension 2 carries `2N − 1` points, `N` per half-side with a node at the
+center, and dimension 1 `AR` times as many cells, so its spacing is the
+coarse spacing over `AR` exactly. `t0 > 0` starts from the exact solution
+blended over four coarse cells at the front, as the spherical case does.
+`p0` is the ambient pressure, `NOH_P0` by default; the exact solution holds
+in the cold limit only, so a warmer value is a diagnostic of the pressureless
+precursor and not a validation run.
+
+Returns the density along the two axis cuts and the diagonal through the
+center, outward (`x`, `rho_x`, `y`, `rho_y`, `r_diag`, `rho_diag`), the
+plateau sampled over 0.3–0.7 of the front radius, the central deficit, the
+front position and 10–90% width along each cut, the L1 density error over
+the plane and over the pre-shock region, the step count, the wall time of
+the integration, the limiting rate of the last step (the `kind` of
+`dt_report`), the closing [`StateReport`](@ref), and the `solver`, its
+state `Q`, the `problem` and the `numerics` it ran under, so a caller can
+rebuild the run on the same state under another setting. Serial only: the
+cuts are read from one rank.
+"""
+function noh_cartesian(; N=NC_N, AR=4, L=NC_L, t0=0.0, tfinal=NOH_T, p0=NOH_P0,
+                       art=ArtParams(enabled=true), cfl=NC_CFL, nmax=NMAX,
+                       filt=compact_filter(0.45), filter_cfl=0.35)
+    MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("noh_cartesian runs serially")
+    n2 = 2N - 1
+    n1 = 2AR * (N - 1) + 1
+    h2 = L / (N - 1)
+    S = (NOH_G - 1) / 2
+    radial(x, y) = (r = hypot(x, y); r > 0 ? (x / r, y / r) : (0.0, 0.0))
+    inflow = DirichletBC((x, y, z, t) -> begin
+        tt = isfinite(t) ? t + t0 : t0
+        ρ, uu, _ = noh_exact(hypot(x, y), tt, 2, NOH_G)
+        ex, ey = radial(x, y)
+        Prim(rho=ρ, u=(uu * ex, uu * ey, 0.0), p=p0)
+    end)
+    w = 4h2
+    ic = (x, y, z) -> begin
+        ex, ey = radial(x, y)
+        t0 <= 0 && return Prim(rho=1.0, u=(-ex, -ey, 0.0), p=p0)
+        r = hypot(x, y)
+        ρin, _, pin = noh_exact(0.0, t0, 2, NOH_G)
+        ρout, _, _ = noh_exact(r, t0, 2, NOH_G)
+        θ = tanh_blend(r, S * t0, w)
+        Prim(rho=(1 - θ) * ρin + θ * ρout, u=(-θ * ex, -θ * ey, 0.0),
+             p=(1 - θ) * pin + θ * p0)
+    end
+    prob = Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
+                   transport=Transport(mu0=0.0),
+                   domain=((-L, L), (-L, L), (0.0, h2)),
+                   bcs=((inflow, inflow), (inflow, inflow), per3[3]), ic=ic)
+    num = Numerics(n_global=(n1, n2, 1), art=art, cfl=cfl, filt=filt,
+                   filter_interval=1, filter_cfl=filter_cfl,
+                   control=StepControl(validity=:permissive))
+    solver, Q = setup(prob, num)
+    wall = @elapsed run!(solver, Q; tfinal=tfinal - t0, nmax=nmax)
+    ok = completed(solver, tfinal - t0)
+    kind = dt_report(solver, Q).kind
+    CL.exchange_state!(Q, solver.decomp)
+    CL.primitives!(solver, Q)
+    ρ = (i, j) -> solver.rho[gidx(solver, i, j, 1)]
+    xs = Float64[xcoord(solver, 1, i) for i in 1:n1]
+    ys = Float64[xcoord(solver, 2, j) for j in 1:n2]
+    i0, j0 = AR * (N - 1) + 1, N                  # the central node
+    ρx = [ρ(i, j0) for i in i0:n1]
+    ρy = [ρ(i0, j) for j in j0:n2]
+    # The diagonal through nodes: x_i = y_j at i = i0 + AR (j − j0).
+    rd = [sqrt(2) * ys[j] for j in j0:n2]
+    ρd = [ρ(i0 + AR * (j - j0), j) for j in j0:n2]
+    Rs = S * tfinal
+    exact = 16.0
+    plat_sum = 0.0; plat_n = 0
+    l1_sum = 0.0; pre_sum = 0.0; pre_n = 0
+    for j in 1:n2, i in 1:n1
+        r = hypot(xs[i], ys[j])
+        v = ρ(i, j)
+        l1_sum += abs(v - noh_exact(r, tfinal, 2, NOH_G)[1])
+        if 0.3Rs <= r <= 0.7Rs
+            plat_sum += v; plat_n += 1
+        end
+        if r > Rs + 0.05
+            pre_sum += abs(v - noh_exact(r, tfinal, 2, NOH_G)[1]); pre_n += 1
+        end
+    end
+    cut(x, f) = (front=front_position(x, f, 0.5exact),
+                 width=contact_width(x, f, exact, 1 + tfinal / Rs))
+    return (x=xs[i0:n1], rho_x=ρx, y=ys[j0:n2], rho_y=ρy, r_diag=rd, rho_diag=ρd,
+            plateau=plat_sum / plat_n, deficit=1 - ρ(i0, j0) / exact,
+            cut_x=cut(xs[i0:n1], ρx), cut_y=cut(ys[j0:n2], ρy), cut_diag=cut(rd, ρd),
+            l1=l1_sum / (n1 * n2), l1_preshock=pre_sum / pre_n,
+            steps=solver.step, wall=wall, kind=kind, completed=ok,
+            report=state_report(solver, Q), solver=solver, Q=Q,
+            problem=prob, numerics=num)
+end
+
+"""
+    noh_aligned(; N, AR, nx, art, cfl, nmax, filt, filter_cfl) -> NamedTuple
+
+Planar Noh along dimension 2 of an anisotropic grid: `N` points over the unit
+interval with the slip wall at the low end and the exact inflow at the high
+end, and `nx` periodic points along dimension 1 at 1/AR of that spacing. The
+initial data carry no variation along dimension 1, so the solution is the
+one-dimensional one at every station and `uniformity` (the largest
+transverse variation of the density) measures round-off. Returns the profile
+along dimension 2 at the first station, the step count, the wall time, the
+limiting rate of the last step and the closing report.
+"""
+function noh_aligned(; N=Dict(NOH_N)[1], AR=4, nx=12, art=ArtParams(enabled=true),
+                     cfl=NC_CFL, nmax=NMAX, filt=compact_filter(0.45),
+                     filter_cfl=0.35)
+    MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("noh_aligned runs serially")
+    h2 = 1.0 / (N - 1)
+    h1 = h2 / AR
+    inflow = DirichletBC((x, y, z, t) -> Prim(rho=1.0, u=(0.0, -1.0, 0.0),
+                                              p=NOH_P0))
+    prob = Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
+                   transport=Transport(mu0=0.0),
+                   domain=((0.0, nx * h1), (0.0, 1.0), (0.0, h2)),
+                   bcs=(per3[1], (SlipWallBC(), inflow), per3[3]),
+                   ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, -1.0, 0.0), p=NOH_P0))
+    solver, Q = setup(prob, Numerics(n_global=(nx, N, 1), art=art, cfl=cfl,
+                                     filt=filt, filter_interval=1,
+                                     filter_cfl=filter_cfl,
+                                     control=StepControl(validity=:permissive)))
+    wall = @elapsed run!(solver, Q; tfinal=NOH_T, nmax=nmax)
+    ok = completed(solver, NOH_T)
+    kind = dt_report(solver, Q).kind
+    CL.exchange_state!(Q, solver.decomp)
+    CL.primitives!(solver, Q)
+    ρ = (i, j) -> solver.rho[gidx(solver, i, j, 1)]
+    ys = Float64[xcoord(solver, 2, j) for j in 1:N]
+    ρy = [ρ(1, j) for j in 1:N]
+    uniformity = maximum(abs(ρ(i, j) - ρy[j]) for j in 1:N, i in 1:nx)
+    return (y=ys, rho=ρy, uniformity=uniformity, steps=solver.step, wall=wall,
+            kind=kind, completed=ok, report=state_report(solver, Q))
+end
+
 # --- shared measurements ----------------------------------------------------
 #
 # validation.jl guards these and artcal.jl sweeps them, so both report the

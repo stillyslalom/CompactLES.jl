@@ -604,6 +604,13 @@ acts in computational index space on every grid, a grid-based regularization
 consistent with resolving power following the mesh; only the length weighting
 Δ_d is physical.
 
+β\* is one scalar entering every normal stress. A directional form, one
+coefficient per grid direction in that direction's normal stress with a
+per-direction diffusive step limit, was measured in September 2026 on an
+anisotropic Noh case and not adopted: the bulk force then ceases to be the
+gradient of a scalar and generates vorticity in a cold pre-shock flow
+([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#directional-bulk-viscosity-on-anisotropic-grids)).
+
 ### The species channel
 
 `ArtParams.species_flux` selects how the artificial species diffusivity enters

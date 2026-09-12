@@ -215,11 +215,50 @@ below exposed behavior outside those passing checks.
   **Depends on:** N1 and the 3-D campaign. Retain `C_beta=1` unless new evidence
   overturns its completed refit; record error and dissipation attribution.
 
-- [ ] **N5 — Establish an anisotropic case before directional bulk viscosity.**
+- [x] **N5 — Establish an anisotropic case before directional bulk viscosity.**
   Add a strongly stretched or anisotropic validation case, then compare scalar and
   directional beta with the matching directional diffusive timestep constraint.
   **Gate:** a measurable accuracy/stability benefit on that case; a null result on
   isotropic cases is not justification for implementation.
+  **Done (September 2026), the scalar form retained.** Two Noh cases on
+  Cartesian grids of aspect ratio AR were added, the planar implosion along
+  the coarse direction (`noh_aligned`) and the cylindrical implosion on the
+  full plane (`noh_cartesian`), and two directional forms were implemented
+  for the measurement: the per-direction sensor split and the spacing-scaled
+  split β\*_d = β\*(Δ_d/Δ_max)², each in direction d's normal stress with
+  the per-direction step limit. On the aligned control both take 4.5× fewer
+  steps at AR 4 and 15× at AR 16 for the same profile. On the curved case
+  both fail from AR 3 on, at every CFL, ambient pressure and sensor field,
+  earlier under refinement: with unequal coefficients the bulk force is no
+  longer the gradient of a scalar, and in the cold irrotational pre-shock
+  gas it makes vorticity (20× the scalar form's at t = 0.06) until the flow
+  cavitates ahead of the front. The gated dilatation sensor postpones this
+  and does not remove it. The implementation was not retained; the cases
+  and the sweep are. The scalar form's AR 16 aligned run exposed a filter
+  finding, N5a below
+  ([the measurement](CALIBRATION_APPENDIX.md#directional-bulk-viscosity-on-anisotropic-grids),
+  [completion record](HISTORY.md#directional-bulk-viscosity-september-2026)).
+  **Code:** [cases.jl](../test/cases.jl), [validation.jl](../test/validation.jl),
+  [anisotropic.jl](../bench/anisotropic.jl).
+
+- [ ] **N5a — Relax the filter against the acoustic rate.**
+  `filter_weight` scales a pass by `dt · rate / filter_cfl` with `rate` the
+  maximum that sized the step, so the weight is `cfl / filter_cfl` whatever
+  limits the step and the number of passes per unit time follows the rate.
+  N1 measured the invariance on acoustic-limited runs; where the diffusive
+  rate governs, as it does under a scalar β\* on a grid of aspect ratio 16,
+  the filter runs 15× the passes per unit time and the aligned Noh run
+  completes with a wrong solution (wall density 24 against 4, front at
+  0.047 against 0.2), which `filter_cfl = 5` restores to the AR 4 profile
+  ([the aligned case](CALIBRATION_APPENDIX.md#the-aligned-case)). Decide
+  whether the weight should read the acoustic rate alone, or the acoustic
+  and molecular rates without the artificial ones, and re-measure the
+  invariances N1 recorded under the chosen form; the battery is
+  diffusion-limited at the front on every Noh case, so its rows move.
+  **Gate:** the aligned case at AR 16 at the AR 1 profile under the default
+  `filter_cfl`; the N1 invariances; explained battery baseline changes.
+  **Code:** [timestep.jl](../src/timestep.jl) (`filter_weight`),
+  [anisotropic.jl](../bench/anisotropic.jl).
 
 - [ ] **N6 — Establish spatial boundary/interface accuracy acceptance studies.**
   Promote the audit's polynomial and phase-varied evolution probes into durable

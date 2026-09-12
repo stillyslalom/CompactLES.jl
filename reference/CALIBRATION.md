@@ -324,6 +324,20 @@ elsewhere. `reduction = :max` cuts the μ\* share 4.5% → 2.7% on Taylor–Gree
 and lands the peak time on the reference's. Retain `:strain`, `:strain`,
 `:sum`
 ([fields](CALIBRATION_APPENDIX.md#the-sensor-fields-and-the-compression-switch)).
+
+### Directional bulk viscosity
+
+Measured and not adopted. One β\* per grid direction, in that direction's
+normal stress with its own step limit, removes the aspect-ratio penalty
+from the step (4.5× fewer steps at AR 4 and 15× at AR 16 on a planar Noh
+run along the coarse direction) and fails on a curved front from AR 3 on:
+with unequal coefficients the bulk force is not a gradient, and in a cold
+irrotational pre-shock flow it makes vorticity until the flow cavitates.
+Neither the sensor field nor the compression switch nor the ambient
+pressure changes the outcome
+([measurement](CALIBRATION_APPENDIX.md#directional-bulk-viscosity-on-anisotropic-grids)).
+The scalar form's cost on such a grid is the step, and through the relaxed
+filter the dissipation as well (open item 10).
 The coefficient definitions and the package's starting values come from
 [Cook (2007)](https://doi.org/10.1063/1.2728937), while Cook's later
 [2009 formulation](https://doi.org/10.1063/1.3139305) supplies the dilatation
@@ -539,3 +553,9 @@ In approximate priority order; each links to the measurements it rests on.
    ([the clamp](CALIBRATION_APPENDIX.md#the-fourth-difference-clamp-at-a-fold)).
 9. **Decide `species_flux`** on the vortex-ring/SF6 case
    ([open](CALIBRATION_APPENDIX.md#open)).
+10. **Relax the filter against the acoustic rate.** `filter_weight` reads
+    the rate that sized the step, so under a diffusion-limited step the
+    passes per unit time follow the diffusive rate; on a grid of aspect
+    ratio 16 the planar Noh run completes with a wrong solution and
+    `filter_cfl = 5` restores it (roadmap N5a,
+    [the aligned case](CALIBRATION_APPENDIX.md#the-aligned-case)).

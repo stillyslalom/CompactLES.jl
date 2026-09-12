@@ -1443,3 +1443,43 @@ MPI ranks and all 144 selected checks at eight. HDF5 and Makie extension
 tests were skipped by the package environment; neither extension was
 changed. The dispatch and inference audits were not re-run: `run!`'s
 preamble is not a probed entry point and no hot-path arithmetic changed.
+
+## Directional bulk viscosity (September 2026)
+
+N5 closes as a measurement with the scalar form retained. The battery had
+no case on which a directional artificial bulk viscosity could differ from
+the scalar one, every case being one-dimensional, so two were built in
+`test/cases.jl`: `noh_aligned`, the planar Noh implosion along the coarse
+dimension of a Cartesian grid of aspect ratio AR, on which the forms can
+differ only in the step, and `noh_cartesian`, the cylindrical implosion on
+the full Cartesian plane, a curved front oblique to the grid at every angle
+with the exact solution along every cut and an irrotational pre-shock flow.
+Both are guarded in `test/validation.jl` under the scalar form, and
+`bench/anisotropic.jl` sweeps them over AR.
+
+Two directional forms of Olson & Lele's construction (Comput. Sci. Disc.
+5, 014008, 2012; JCP 246, 207, 2013) were implemented for the measurement
+and removed after it: one coefficient per grid direction in that
+direction's normal stress, β\*_d ∇·u, with the diffusive step limit
+Σ_d β\*_d/(ρΔ_d²), the coefficients either the per-direction sensor
+terms or the scalar coefficient scaled by (Δ_d/Δ_max)². Each removes the
+aspect-ratio penalty from the step exactly, and on the aligned control
+takes 4.5× fewer steps at AR 4 and 15× at AR 16 for the same profile. On
+the curved case both fail from AR 3 on, at every CFL, ambient pressure to
+p₀ = 0.1 and sensor field, and earlier under refinement. The mechanism is
+the stress form: a scalar bulk force ∇(β\*∇·u) is a gradient and makes no
+vorticity, a directional one is not, and in Noh's cold converging
+pre-shock gas it does, 20× the scalar form's at t = 0.06, until the flow
+cavitates just outside the front. The compression switch postpones the
+failure to AR 4 at the coarse resolution and no further. Records under
+[the measurement](CALIBRATION_APPENDIX.md#directional-bulk-viscosity-on-anisotropic-grids).
+
+The scalar form's aligned run at AR 16 completes with a wrong solution,
+and the cause is the relaxed filter, not the bulk viscosity: the weight
+reads the same rate that sized the step, so under a diffusion-limited step
+the passes per unit time follow the diffusive rate, 15× the acoustic-limited
+run's there; `filter_cfl = 5` restores the profile. That is opened as N5a.
+
+No package source changed. Serial and validation numbers are those of the
+previous record; the two new validation guards are recorded in the file's
+header.
