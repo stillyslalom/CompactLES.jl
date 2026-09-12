@@ -269,7 +269,7 @@ below exposed behavior outside those passing checks.
   **Code:** [timestep.jl](../src/timestep.jl) (`filter_weight`, `max_rate`),
   [anisotropic.jl](../bench/anisotropic.jl).
 
-- [ ] **N6 — Establish spatial boundary/interface accuracy acceptance studies.**
+- [x] **N6 — Establish spatial boundary/interface accuracy acceptance studies.**
   Promote the audit's polynomial and phase-varied evolution probes into durable
   studies of operator truncation, one filter pass, instantaneous RHS error, and
   final-time solution error. The default wall numbers are derivative order 3.17
@@ -290,6 +290,22 @@ below exposed behavior outside those passing checks.
   **Code:** [convergence.jl](../test/convergence.jl),
   [patch_tests.jl](../test/patch_tests.jl), [level_tests.jl](../test/level_tests.jl),
   [boundaryorder.jl](../bench/boundaryorder.jl).
+  **Delivered:** [smooth_cases.jl](../test/smooth_cases.jl) (the cases, the
+  periodic-mirror and nested-reference constructions, the regional norms and
+  the exact right-hand side), fifteen gated rows in
+  [convergence.jl](../test/convergence.jl) (closure rows on polynomials, wall,
+  shear, patch-interface and level evolution orders, filtered and unfiltered)
+  and the full matrix in [boundaryorder.jl](../bench/boundaryorder.jl)
+  (every closure under no filter, the cascade and the one-sided rows, the
+  instantaneous right-hand-side error, the other components, filter cadence
+  and relaxation, the timestep floor). The cascade filter's F2 row caps every
+  filtered wall row near 1.8 whatever the derivative closure; `:cascade4`
+  carries an undamped mode at an inviscid wall; C8 `:brady_livescu` fails on
+  smooth data under the cascade filter in every configuration; a level
+  interface reads the C6 closure cascade at the fine spacing (3.6) and C6
+  `:brady_livescu` 6.0
+  ([the measurements](CALIBRATION_APPENDIX.md#the-smooth-evolution-accuracy-matrix),
+  [completion record](HISTORY.md#the-smooth-evolution-accuracy-matrix-september-2026)).
 
 - [ ] **N6a — Qualify the one-sided wall filter and decide its default.**
   Compare `compact_filter(closures=:onesided)` against `:cascade`, initially with
@@ -488,10 +504,11 @@ The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
   [levels.jl](../src/levels.jl),
   [regrid.jl](../src/regrid.jl), [timestep.jl](../src/timestep.jl).
 
-Boundary/interface sequence: begin R5 and N6 together. N6's inviscid/interface
-subset unlocks N14 without waiting for R5; run N6a wall-filter trials alongside
-it, adding thermal-wall cases once R5 passes. N6b follows the wall-filter
-decision; N6c is an independent roundoff audit. Use N10/N11 to qualify interface
+Boundary/interface sequence: R5 and N6 are complete, and N6's matrix
+(`bench/boundaryorder.jl`, gated in `test/convergence.jl`) is the instrument
+for N6a, N6b, N14 and N16. Run the N6a wall-filter trials on its wall rows,
+adding thermal-wall cases; N6b follows the wall-filter decision; N6c is an
+independent roundoff audit. Use N10/N11 to qualify interface
 candidates before promotion; invoke N15 only when the smaller closure change
 misses a target. N16 transfer measurements may begin with N6, while final accuracy
 qualification follows the selected interface treatment. Coordinate temporal

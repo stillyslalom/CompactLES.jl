@@ -241,7 +241,11 @@ Presets:
   seventh-order rows for C8, discretely conservative and stable on their
   long-time Euler tests without a filter). Measured maximum-norm wall orders
   in `test/convergence.jl` are 3.17 / 4.02 / 5.88 for C6 and 7.91 for C8 under
-  `:brady_livescu`. The Brady–Livescu rows are far from diagonally dominant,
+  `:brady_livescu` on a smooth field, 3 / 4 / 5 and 7 on a polynomial of the
+  rows' degree plus one (the rows' formal order), and in a wall-bounded
+  evolution without a filter the window next to the wall converges at 3.9
+  under `:cascade3` and 5.7 under C6 `:brady_livescu` (the smooth-evolution
+  rows of the same file). The Brady–Livescu rows are far from diagonally dominant,
   and a closed line's condition number rises from 16 to about 1e3 (C6) and
   4e3 (C8); the cascade stays the default for that reason. The T8 set needs
   13 points along a dimension closed at both ends (`plan_direction` counts
@@ -268,7 +272,9 @@ Presets:
   derivation reproduces at the centered point). One filter pass of a smooth
   field is second order along the whole closed line under the cascade and
   eighth under the one-sided rows, measured in `test/convergence.jl` at
-  1.88 and 8.07. On the planar Noh case the one-sided rows cut the wall
+  1.88 and 8.07; in evolution the cascade caps the wall window of a filtered
+  run at 1.8 whatever the derivative closure, and the one-sided rows return
+  it to the closure's own order. On the planar Noh case the one-sided rows cut the wall
   density deficit from 64% to 27% at N = 400 (65% to 38% at N = 800), with
   the plateau and shock position unchanged, and they are what lets the C8
   Brady–Livescu rows run at all. They stay optional because `:cascade4`

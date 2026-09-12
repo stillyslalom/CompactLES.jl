@@ -47,6 +47,25 @@ approximately:
 | cylindrical-axis odd/even folds | 3.71 / 3.00 |
 | resolved-angle cylindrical fold | 3.71 |
 | spherical origin | 2.99 |
+| closure rows on a polynomial, C6 `:cascade3` / `:cascade4` / `:brady_livescu`, C8 `:brady_livescu` | 3.00 / 4.00 / 5.00 / 7.00 |
+| wall evolution, C6 unfiltered / cascade filter / one-sided filter / `:brady_livescu` | 3.93 / 1.81 / 3.84 / 5.73 |
+| viscous no-slip wall evolution / shear mode | 3.92 / 4.71 |
+| same-level patch interface / two levels / three levels subcycled | 3.31 / 3.62 / 3.72 |
+| two levels, `:brady_livescu` / filtered | 6.01 / 4.12 |
+
+The closed-domain rows above the polynomial rows are the slope of one
+derivative of a smooth field over the whole line, which sits above the
+closure rows' formal order by the field's favorable phase; the polynomial
+rows are that formal order. The evolution rows integrate a smooth case to a
+fixed time and fit the maximum-norm error of the nodes next to the wall or
+interface against a reference with no closure error of its own: the exact
+solution, or the periodic image of a wall problem whose data are symmetric
+about both walls, run at the same spacing and step. They are the orders a
+run sees. The filter's wall rows, not the derivative closure, set the
+accuracy of a filtered wall; a level interface reads the C6 closure cascade
+at the fine spacing. `bench/boundaryorder.jl` runs the full matrix, with
+every closure and filter option, the instantaneous right-hand-side error, the
+momentum and energy components, the filter cadence and the timestep floor.
 
 For a change not intended to alter numerics, compare the error magnitudes as
 well as fitted slopes. A changed magnitude with an unchanged order can still

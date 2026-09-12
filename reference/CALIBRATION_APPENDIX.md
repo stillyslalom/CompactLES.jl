@@ -13,7 +13,7 @@ provenance.
 produces the Taylor–Green results, `bench/filterrate.jl` the filter-rate
 results, `bench/nohprobe.jl` the per-step Noh diagnostics, `bench/phases.jl` the
 phase costs, `bench/foldorder.jl` the region-split convergence orders, and
-`bench/boundaryorder.jl` the wall-flux probe. Each table names the sweep and
+`bench/boundaryorder.jl` the smooth-evolution accuracy matrix. Each table names the sweep and
 the background it ran under; a table whose background is not the current
 default is labelled with the setting it was taken under and kept as the
 record of that setting.
@@ -39,6 +39,7 @@ record of that setting.
 17. [Remaining differences from public Pyranda](#remaining-differences-from-public-pyranda)
 18. [The no-slip wall flux contract](#the-no-slip-wall-flux-contract)
 19. [Directional bulk viscosity on anisotropic grids](#directional-bulk-viscosity-on-anisotropic-grids)
+20. [The smooth-evolution accuracy matrix](#the-smooth-evolution-accuracy-matrix)
 
 ## The battery
 
@@ -3610,3 +3611,383 @@ nonzero, so Shu–Osher, whose L1 fell by 0.7%, is diffusion-limited at its
 shock for part of the run, and Lax and Woodward, which did not move to the
 digits printed, are acoustic-limited throughout; Sedov moved in its last
 digit. Every guard holds unchanged.
+
+## The smooth-evolution accuracy matrix
+
+Roadmap N6, September 2026. The wall and AMR audit of
+`reference/BOUNDARY_ACCURACY.md` measured one derivative, one filter pass
+and one entropy wave and asked what a run sees: the order of the solution
+at a wall or an interface after a smooth evolution, separated from the
+interior, with the time error controlled, unfiltered and filtered. The
+instrument is `bench/boundaryorder.jl` over the cases of
+`test/smooth_cases.jl`; fifteen of its rows are guarded in
+`test/convergence.jl`. Serial Float64 on Julia 1.11.4, every evolution at
+`cfl = 0.25` with the artificial properties off.
+
+**The cases and their references.** Every case is one-dimensional along x.
+The standing wave `rho = 1 + 0.05 cos(πx)`, `u = 0.05 sin(πx)`, `p = rho^γ`
+on [0, 1] between slip walls, or between adiabatic no-slip walls with
+`mu0 = 0.005` (u vanishes and T is even at each wall, so the data satisfy
+both conditions), integrated to t = 0.4, a third of an acoustic transit;
+its density and pressure are even and its velocity odd about both walls,
+so it is the restriction of a periodic problem on [0, 2), and a periodic
+run on 2(N − 1) nodes at the same spacing is the wall run without its
+closure rows. The difference between the two, at the same step, is the
+closure defect alone, derivative and filter rows together; the difference
+from a periodic run at four times the resolution (nodes nested, cfl
+0.125) is the total error. Both are tabulated and agree wherever the
+closure defect is above the interior error, which is every row but the C8
+ones. The decaying shear mode `v = 0.1 sin(πx) exp(−μπ²t)` at uniform
+rho and p between no-slip walls is exact once a source removes the
+viscous heating `μ v_x²`; its tangential stress `μ v_x` is nonzero at the
+wall, so the wall rows differentiate a nontrivial flux. The entropy wave
+`rho = 1 + 0.2 sin(k(x − u₀t) + φ)` on the periodic [0, 2π), the wave of
+the patch and level tests, is exact; the viscous standing wave on the
+periodic [0, 2) has the fine reference on 1728 nodes, which nests every
+level's nodes. Refinement regions are fixed in physical space, 5L/12 to
+7L/12 and 11L/24 to 13L/24 for the third level, at every N; the region
+of the level tests, N/6 nodes wide, has its right end drift inward by a
+coarse cell per halving of h.
+
+Errors are maximum norms over regions: the wall window (the first and
+last four nodes of a physical boundary), the interface window (the same
+at a patch or level end), the covered parent nodes under a child level,
+and the interior; `l2` is the composite volume-weighted root-mean-square
+through the package's own masked quadrature, covered parents excluded.
+Orders are between successive resolutions against the actual spacing. The
+`dt` column of the script is the relative change of the windowed error
+when the step is halved; it is below 0.01 on every row cited as an order
+below unless said otherwise, and the timestep floor is measured
+separately at the end.
+
+### Closure truncation and the instantaneous right-hand side
+
+One derivative of x^(q+1), q the closure rows' exactness degree, on 17 to
+129 nodes against 1/(N − 1), wall window:
+
+```
+                     N=17       33         65         129        orders
+C6 cascade3, x^4     1.092e-3   1.365e-4   1.706e-5   2.132e-6   3.00 / 3.00 / 3.00
+C6 cascade4, x^5     2.397e-4   1.498e-5   9.363e-7   5.852e-8   4.00 / 4.00 / 4.00
+C6 BL, x^6           1.540e-4   4.812e-6   1.504e-7   4.700e-9   5.00 / 5.00 / 5.00
+C8 BL, x^8           2.872e-4   2.252e-6   1.759e-8   1.382e-10  6.99 / 7.00 / 6.99
+```
+
+The rows' formal orders are 3, 4, 5 and 7, and the interior converges at
+the same rate in every case, the wall defect carried inward by the compact
+solve. The `exp(sin(3x))` slopes of the convergence suite, 3.17 / 4.02 /
+5.88 / 7.91, sit above these by the field's phase (on the actual spacing
+they read 3.12 / 3.88 / 5.78 and 9.40 then 6.04 for C8 as it reaches
+roundoff), and are regression guards, not the rows' order.
+
+The instantaneous error of the assembled Navier–Stokes right-hand side on
+the exact initial data, density component, wall window / interior, with
+the wall orders:
+
+```
+                          N=49                    97                      193                     wall orders
+inviscid wall, cascade3   9.848e-7 / 1.779e-8     6.166e-8 / 1.116e-9     3.856e-9 / 6.978e-11    4.00 / 4.00
+inviscid wall, cascade4   6.724e-7 / 7.731e-9     4.234e-8 / 4.863e-10    2.651e-9 / 3.044e-11    3.99 / 4.00
+inviscid wall, C6 BL      3.588e-8 / 3.878e-10    5.702e-10 / 6.134e-12   8.954e-12 / 9.606e-14   5.98 / 5.99
+inviscid wall, C8 BL      5.441e-9 / 3.199e-10    2.211e-11 / 1.299e-12   1.356e-13 / 5.829e-15   7.94 / 7.35
+shear mode (rho v), cascade3   6.217e-7 / 3.165e-8   7.775e-8 / 3.961e-9   9.719e-9 / 4.953e-10  3.00 / 3.00
+shear mode (rho v), cascade4   6.383e-7 / 1.081e-8   7.996e-8 / 1.357e-9   1.000e-8 / 1.699e-10  3.00 / 3.00
+shear mode (rho v), C6 BL      2.896e-9 / 5.562e-11  9.098e-11 / 1.743e-12 2.964e-12 / 5.344e-14 4.99 / 4.94
+shear mode (rho v), C8 BL      8.903e-10 / 1.889e-11 7.597e-12 / 1.624e-13 2.286e-12 / 5.300e-14 6.87 / roundoff
+```
+
+The viscous wall reads the same density rows as the inviscid one (the
+mass flux has no viscous term) and its energy rows two orders lower at
+the wall, 2.6 / 2.0 under `:cascade3` against the inviscid 4.0 / 4.0: the
+conductive flux is a second derivative of an even temperature, so the
+rows' third-order defect in `T_x` is second order once differentiated
+again. Two things are visible here that the polynomial rows do not show.
+The standing wave's mass flux is odd about the wall, so the leading error
+term of every closure, proportional to a derivative of the flux that
+vanishes there, drops out and the rows read one order above their formal
+one (4, 4, 6, 8); the shear mode's tangential stress is even and reads
+the formal 3 and 5. And the viscous term is two derivatives: `:cascade4`'s
+fourth-order defect in `v_x` becomes third order once differentiated
+again, so on the shear mode it is no better than `:cascade3`, while the
+Brady–Livescu rows' leading term again vanishes on the odd `v` and they
+read 5 after the second derivative rather than 4. This is the
+`O(h^r) → O(h^(r−1))` mechanism the roadmap's interface items describe,
+measured at a wall.
+
+### Walls
+
+The standing wave's wall window at t = 0.4, density, against the fine
+reference; the row against the mirror agrees to three digits everywhere
+the closure defect is above 1e-12:
+
+```
+                                     N=49        97          193         orders          l2 orders
+inviscid, C6 cascade3, unfiltered    2.843e-7    1.949e-8    1.217e-9    3.87 / 4.00     4.25 / 4.62
+inviscid, C6 cascade3, cascade filter 2.891e-5   8.736e-6    2.359e-6    1.73 / 1.89     2.16 / 2.11
+inviscid, C6 cascade3, onesided      2.580e-7    1.353e-8    1.254e-9    4.25 / 3.43     4.70 / 4.12
+inviscid, C6 cascade4, unfiltered    3.137e-8    6.000e-9    2.110e-9    2.39 / 1.51     3.16 / 0.64
+inviscid, C6 cascade4, cascade filter 4.858e-5   1.285e-5    3.306e-6    1.92 / 1.96     2.27 / 2.15
+inviscid, C6 cascade4, onesided      4.168e-8    6.826e-8    7.814e-7    −0.71 / −3.52   0.49 / −3.78
+inviscid, C6 BL, unfiltered          2.537e-9    4.503e-11   8.802e-13   5.82 / 5.68     6.44 / 5.53
+inviscid, C6 BL, cascade filter      4.039e-5    1.415e-5    4.028e-6    1.51 / 1.81     2.25 / 2.19
+inviscid, C6 BL, onesided            2.517e-9    4.485e-11   8.737e-13   5.81 / 5.68     6.32 / 5.53
+inviscid, C8 BL, unfiltered          1.818e-10   4.603e-12   4.134e-13   5.30 / 3.48     time-limited
+inviscid, C8 BL, cascade filter      negative density at step 15 / 17 / 19
+inviscid, C8 BL, onesided            1.519e-10   4.527e-12   2.855e-13   5.07 / 3.99     time-limited
+viscous, C6 cascade3, unfiltered     2.336e-7    1.583e-8    1.019e-9    3.88 / 3.96     4.56 / 4.53
+viscous, C6 cascade3, cascade filter 2.712e-5    7.371e-6    2.132e-6    1.88 / 1.79     2.11 / 2.09
+viscous, C6 cascade3, onesided       1.538e-7    1.247e-8    8.703e-10   3.62 / 3.84     4.28 / 4.39
+viscous, C6 cascade4, unfiltered     3.387e-8    1.065e-9    3.421e-11   4.99 / 4.96     5.37 / 5.22
+viscous, C6 cascade4, cascade filter 2.919e-5    8.370e-6    2.091e-6    1.80 / 2.00     2.14 / 2.11
+viscous, C6 cascade4, onesided       3.707e-8    1.306e-9    5.270e-11   4.83 / 4.63     5.21 / 5.07
+viscous, C6 BL, unfiltered           1.941e-9    4.784e-11   8.411e-13   5.34 / 5.83     6.26 / 6.41
+viscous, C6 BL, cascade filter       3.232e-5    7.120e-6    1.468e-6    2.18 / 2.28     2.29 / 2.16
+viscous, C6 BL, onesided             1.976e-9    4.376e-11   7.807e-13   5.50 / 5.81     6.16 / 6.32
+viscous, C8 BL, unfiltered           1.112e-10   9.266e-13   2.853e-14   6.91 / roundoff
+viscous, C8 BL, cascade filter       negative density at step 63 / 190 / 1055
+viscous, C8 BL, onesided             2.126e-10   1.019e-12   3.864e-14   7.71 / roundoff
+```
+
+The shear mode's tangential momentum, exact:
+
+```
+                              N=49        97          193         orders
+C6 cascade3, unfiltered       7.924e-9    3.293e-10   1.164e-11   4.59 / 4.82
+C6 cascade3, cascade filter   6.452e-6    5.969e-7    4.976e-8    3.43 / 3.58
+C6 cascade3, onesided         1.586e-9    7.802e-11   3.574e-12   4.35 / 4.45
+C6 cascade4, unfiltered       9.437e-10   5.930e-11   2.358e-12   3.99 / 4.65
+C6 cascade4, cascade filter   7.257e-6    7.169e-7    6.377e-8    3.34 / 3.49
+C6 cascade4, onesided         2.114e-9    7.152e-11   2.172e-12   4.89 / 5.04
+C6 BL, unfiltered             1.692e-10   1.359e-12   1.052e-14   6.96 / 7.01
+C6 BL, cascade filter         7.507e-6    1.128e-6    1.427e-7    2.73 / 2.98
+C6 BL, onesided               1.943e-10   1.692e-12   1.334e-14   6.84 / 6.99
+C8 BL, unfiltered             8.431e-13   2.160e-15   roundoff    8.61
+C8 BL, cascade filter         negative density at step 86 / 270, dt collapse at 5309
+C8 BL, onesided               1.063e-12   4.356e-15   roundoff    7.93
+```
+
+Five results.
+
+1. **The cascade filter is the accuracy of every filtered wall.** Under
+   the default filter every derivative closure reads 1.5–2.3 in the wall
+   window and a hundred to a thousand times the unfiltered error at
+   N = 193, C6 Brady–Livescu's 8.8e-13 becoming 4.0e-6. The one-sided rows
+   return each closure to within a few percent of its unfiltered error,
+   and the filtered rows' `dt` column is 0.01–0.05 where the unfiltered
+   ones read 0.001: the filter's defect is the one thing in these runs
+   that depends on the step. The F2 row's defect is `O(h²) f''` at the
+   wall, and the shear mode shows it: its filtered field is odd about the
+   wall, `f''` vanishes there, and the cap is 3.5 instead of 1.8.
+
+2. **The unfiltered default wall is fourth order in evolution**, 3.9 on
+   the standing wave with and without viscosity, 4.6–4.8 on the shear
+   mode whose right-hand side is third order at the wall: the solution
+   norm gains at least an order over the pointwise truncation, as
+   Gustafsson's theorem allows, and the `l2` order is half an order above
+   the windowed one because the defect occupies a window of fixed node
+   count.
+
+3. **C6 Brady–Livescu reads 5.7–5.8 at a wall**, unfiltered or under the
+   one-sided rows, inviscid and viscous, and 7.0 on the shear mode; C8
+   Brady–Livescu reaches 7–8 before the time error or roundoff floors it
+   near 1e-13 at N = 97, and fails on smooth data under the cascade filter
+   in every configuration measured, at step 15 of the inviscid wave, so
+   the recorded shock failures of that pair are not shock failures.
+
+4. **`:cascade4` carries an undamped mode at an inviscid wall.** Without
+   a filter its error stops converging by N = 193 (2.1e-9 at node 3
+   against cascade3's 1.2e-9, with the interior at 1.9e-9); under the
+   one-sided filter it grows with N, 4e-8 to 8e-7; under the cascade
+   filter it is capped at 1.9 as every closure is. Viscosity damps the
+   mode, and the viscous wall reads 5.0 unfiltered and 4.7 under the
+   one-sided rows. This is the coupling rule of the
+   [wall-closure section](#under-the-one-sided-filter-rows) measured on a
+   smooth field: `:cascade4` needs the F2 row.
+
+5. **The mirror and the fine reference agree**, so the closure defect
+   is the whole of the wall error at every C6 row, and the interior error
+   (the periodic mirror against the fine reference, 8.1e-11, 4.3e-12,
+   2.6e-13 at N = 49, 97, 193) is two to three orders below it; that
+   interior number converges at 4.0–4.2 at `cfl = 0.25`, the time
+   integrator's order, and is what the timestep floor below measures.
+
+### Patch interfaces and refinement levels
+
+The entropy wave through a same-level interface (two root patches,
+periodic, so both patch ends are interfaces), interface window, t = 0.5:
+
+```
+                                   N=48        96          192         orders          l2 orders
+k=3, C6, unfiltered                5.682e-4    1.653e-5    6.315e-7    5.10 / 4.71     5.21 / 4.61
+k=3, C6, cascade filter            2.997e-4    1.330e-5    3.698e-7    4.49 / 5.17     5.02 / 4.80
+k=3, C6 BL, unfiltered             1.381e-4    1.394e-6    1.119e-8    6.63 / 6.96     6.92 / 7.34
+k=3, C6 BL, cascade filter         1.771e-4    2.534e-6    2.334e-8    6.13 / 6.76     6.52 / 7.24
+k=3, C10, unfiltered               5.800e-4    1.639e-5    5.941e-7    5.14 / 4.79     5.13 / 4.65
+k=1, C6, unfiltered                8.105e-7    9.544e-8    8.262e-9    3.09 / 3.53     4.00 / 4.32
+k=1, C6, cascade filter            1.077e-6    4.235e-8    3.553e-9    4.67 / 3.58     4.73 / 4.58
+k=1, C6 BL, unfiltered             7.105e-8    7.909e-10   8.611e-12   6.49 / 6.52     6.95 / 7.03
+k=1, C6 BL, cascade filter         1.141e-7    1.744e-9    1.700e-11   6.03 / 6.68     6.59 / 7.11
+k=1, C10, unfiltered               8.173e-7    9.800e-8    8.523e-9    3.06 / 3.52     4.04 / 4.35
+```
+
+The k = 3 wave is pre-asymptotic at the root spacing (kh = 0.39 at
+N = 48) and its 5.1 / 4.7 is the approach to the asymptotic 3.1 / 3.5 the
+k = 1 wave reads over the same three grids, which is why
+`test/convergence.jl` gates this row on k = 1. The same-level interface's
+right-hand-side error (2.3e-3 at N = 48, k = 3, order 3.4 / 3.3) is 27
+times the two-level one's at the same root spacing, 3³ for the fine
+level's spacing; the C10 rows are the C6 rows to three digits at every
+interface, since the divergence's closure rows there are the C6 cascade
+whichever interior is chosen. The instantaneous error of the C6
+Brady–Livescu rows at a same-level interface is 5.3 / 5.4 and their
+solution 6.5–7.0.
+
+The entropy wave, k = 3, through the nests, interface window; the C10
+rows are the C6 rows to two digits and are omitted:
+
+```
+                                                 N=48        96          192         orders          l2 orders
+2 levels, C6, unfiltered                         1.420e-5    1.335e-6    9.408e-8    3.41 / 3.83     3.62 / 3.53
+2 levels, C6, cascade filter                     4.766e-6    2.433e-7    1.577e-8    4.29 / 3.95     4.59 / 4.08
+2 levels, C6 BL, unfiltered                      2.667e-7    4.111e-9    6.401e-11   6.02 / 6.01     6.02 / 5.99
+2 levels, C6 BL, cascade filter                  1.567e-6    4.131e-8    7.378e-10   5.25 / 5.81     6.82 / 6.57
+2 levels subcycled, C6, unfiltered               1.420e-5    1.321e-6    9.198e-8    3.43 / 3.84     3.64 / 3.56
+2 levels subcycled, C6 BL, unfiltered            2.670e-7    4.128e-9    6.480e-11   6.02 / 5.99     6.02 / 5.98
+3 levels, C6, unfiltered                         1.244e-5    1.101e-6    7.407e-8    3.50 / 3.89     3.58 / 3.52
+3 levels, C6, cascade filter                     4.998e-6    1.579e-7    1.097e-8    4.98 / 3.85     5.99 / 4.27
+3 levels, C6 BL, unfiltered                      2.667e-7    4.111e-9    6.391e-11   6.02 / 6.01     6.02 / 5.99
+3 levels subcycled, C6, unfiltered               1.244e-5    1.086e-6    7.192e-8    3.52 / 3.92     3.61 / 3.55
+3 levels subcycled, C6 BL, unfiltered            2.670e-7    4.127e-9    6.491e-11   6.02 / 5.99     6.01 / 5.98
+viscous standing wave, 2 levels, C6              1.318e-7    1.079e-8    8.597e-10   3.61 / 3.65     3.69 / 3.79
+viscous standing wave, 2 levels, C6 BL           6.755e-10   1.418e-11   3.511e-13   5.57 / 5.34     6.09 / 5.63
+viscous standing wave, 3 levels, C6              9.841e-8    9.216e-9    8.284e-10   3.42 / 3.48     3.38 / 3.57
+```
+
+A level interface reads the C6 closure cascade at the fine spacing, 3.4–3.9,
+and C6 Brady–Livescu 6.0, on every nest, subcycled or not, inviscid or
+viscous (the viscous rows 3.5–3.6 and 5.3–5.6, the latter reaching the
+reference's own 1e-13 at N = 192); the covered parent nodes and the
+interior sit at or below the interface window throughout, and the
+composite `l2`, covered parents excluded, follows the window. The
+subcycled rows differ from the global-step ones in the third digit and
+their `dt` column reads 0.01–0.02 at N = 192 against 0.001–0.006, the
+Hermite shell's time error beginning to show under the sixth-order
+closure, as the audit predicted. The filter lowers the interface error
+of the default closure (4.8e-6 against 1.4e-5 at N = 48) and raises
+Brady–Livescu's sixfold; at a level interface the filter's closed rows
+act at the fine spacing, and the 1.8 cap of the wall rows does not
+appear within these grids.
+
+### The other components
+
+The momentum and energy of the inviscid wall and the two-level entropy
+wave, unfiltered, wall or interface window:
+
+```
+                                     N=49/48     97/96       193/192     orders
+inviscid wall, cascade3, rho u       4.801e-8    2.282e-9    9.429e-11   4.39 / 4.60
+inviscid wall, cascade3, E           1.043e-6    7.114e-8    4.436e-9    3.87 / 4.00
+inviscid wall, C6 BL, rho u          6.084e-10   3.863e-12   5.091e-14   7.30 / 6.25 (time-limited at 193)
+inviscid wall, C6 BL, E              8.409e-9    1.427e-10   3.051e-12   5.88 / 5.55
+2 levels, cascade3, rho u            7.099e-6    6.675e-7    4.704e-8    3.41 / 3.83
+2 levels, cascade3, E                1.775e-6    1.669e-7    1.176e-8    3.41 / 3.83
+2 levels, C6 BL, rho u               1.334e-7    2.056e-9    3.201e-11   6.02 / 6.01
+2 levels, C6 BL, E                   3.334e-8    5.140e-10   8.022e-12   6.02 / 6.00
+```
+
+The energy reads the density's order at the wall and the momentum half
+an order more (its maximum sits in the interior, not in the wall window,
+at every N); at a level interface the three components read one order to
+two digits. The density rows the guards are set from are representative.
+
+### Repeated filtering
+
+The inviscid wall under `:cascade3`, the closure defect against the mirror
+filtered the same way, and the total against the fine reference; the two
+agree to three digits in every row, so only the total is shown, wall
+window / interior; `passes` is the number of filter applications:
+
+```
+N = 49                              passes   wall        interior     l2
+unfiltered                             0     2.843e-7    5.135e-8     3.571e-8
+cascade, every step, relaxed          97     2.891e-5    1.860e-5     8.905e-6
+cascade, every 2nd step, relaxed      48     2.734e-5    1.488e-5     7.293e-6
+cascade, every 4th step, relaxed      24     2.005e-5    1.071e-5     4.876e-6
+cascade, every step, unrelaxed        97     3.565e-5    2.247e-5     1.120e-5
+onesided, every step, relaxed         97     2.580e-7    4.400e-8     3.297e-8
+onesided, every step, unrelaxed       97     2.865e-7    5.202e-8     3.651e-8
+periodic mirror, cascade, every step  97     –           8.798e-11    4.030e-11  (unfiltered 8.131e-11)
+
+N = 193
+unfiltered                             0     1.217e-9    1.342e-10    7.650e-11
+cascade, every step, relaxed         386     2.359e-6    1.137e-6     4.616e-7
+cascade, every 2nd step, relaxed     193     2.189e-6    9.290e-7     3.611e-7
+cascade, every 4th step, relaxed      96     1.592e-6    6.091e-7     2.245e-7
+cascade, every step, unrelaxed       386     2.687e-6    1.378e-6     5.841e-7
+onesided, every step, relaxed        386     1.254e-9    1.272e-10    7.277e-11
+onesided, every step, unrelaxed      386     1.575e-9    2.924e-10    1.162e-10
+periodic mirror, cascade, every step 386     –           2.827e-13    1.112e-13  (unfiltered 2.642e-13)
+```
+
+The cascade filter's wall error is not proportional to the number of
+passes: halving the cadence at fixed spacing removes 4–7% of it and
+quartering it 30%, and the relaxation (`filter_cfl = 0.35` against the
+unrelaxed weight, which at `cfl = 0.25` makes each pass 0.71 of full
+strength) removes 12–19%. The defect is the deposit of an `O(h²)`
+disturbance two cells from the wall on every pass, and what the solution
+carries is set by how the wall rows and the interior operator propagate
+and damp it, not by the deposit rate alone; the error at 386 passes is
+1900 times the unfiltered one at N = 193, and every reduction of the
+cadence at a fixed spacing buys under a factor of two. The one-sided rows
+under the same 386 passes are within 3% of the unfiltered error relaxed
+and within 30% unrelaxed, and on the periodic mirror the eighth-order
+interior pass moves the interior error by under 10% at every N, so the
+whole of the filter's wall defect is the F2 row.
+
+### The timestep floor
+
+The finest grid of each family under the sixth-order closure, whose
+spatial error is small enough for the time error to show, against the
+fine reference:
+
+```
+inviscid wall N=193, C6 BL     cfl 0.5      0.25        0.125       0.0625
+  wall                          4.641e-12   8.802e-13   9.137e-13   8.751e-13
+  interior                      3.976e-12   2.420e-13   4.396e-14   6.217e-14
+periodic mirror N=193, C6
+  interior                      4.018e-12   2.642e-13   3.564e-14   3.397e-14
+entropy wave N=192, 3 levels, C6 BL, global step
+  interface                     6.396e-11   6.391e-11   6.384e-11   6.394e-11
+entropy wave N=192, 3 levels, C6 BL, subcycled
+  interface                     8.007e-11   6.491e-11   6.397e-11   6.402e-11
+```
+
+The interior's time error is fourth order in the step (a factor of 15
+from `cfl = 0.5` to 0.25, the fourth-order integrator's 16) and floors at
+3e-14 against the reference's own error; the wall window's is the same
+4.6e-12 at `cfl = 0.5` and its closure defect of 9e-13 is reached by
+`cfl = 0.25`, which is why the walls run there and why the C8 rows, whose
+closure defect is below 1e-12 at N = 97, are measured and not gated. At a
+level interface the global-step run is spatially limited at every step
+tested, and the subcycled run's Hermite shell adds 25% at `cfl = 0.5`
+and 1.5% at 0.25, which is the subcycled rows' `dt` column above.
+
+### What the matrix settles
+
+The wall order a run sees is the filter's, 1.8 under the cascade rows
+for any derivative closure and the closure's own under the one-sided
+rows; a filtered wall calculation with the default configuration is
+second order at the wall whatever `deriv` is set to, and the decision on
+the filter's wall rows (roadmap N6a) is the one that moves it. The
+unfiltered default wall is fourth order in the solution, `:brady_livescu`
+sixth (C6) to eighth (C8), and `:cascade4` is usable only where something
+damps its inviscid wall mode. Every interface, same-level or coarse-fine,
+reads the C6 cascade's 3.5 at its own spacing whatever the interior
+scheme, and C6 Brady–Livescu rows there read 6.0 with the same
+magnitudes subcycled or not, which is the case for roadmap N14. The
+guards in `test/convergence.jl` are set from these runs and are
+bit-reproducible on this workstation at one thread; the fine references
+the matrix uses are not needed by the guards, which measure the walls
+against the mirror. Two-dimensional walls with a tangential inviscid
+flow, isothermal walls, moving refinement and Float32 are not in the
+matrix.

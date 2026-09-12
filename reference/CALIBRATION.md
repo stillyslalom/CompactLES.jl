@@ -500,6 +500,21 @@ guard is set under the cascade
 ([wall cascade](CALIBRATION_APPENDIX.md#the-filters-wall-cascade),
 [wall closures](CALIBRATION_APPENDIX.md#wall-closures-under-the-artificial-properties)).
 
+**Wall accuracy in evolution.** On a smooth standing wave between walls
+the window of nodes next to the wall converges at 3.9 under the default
+closures without a filter, 1.8 under the cascade filter and 3.8 under the
+one-sided rows, whatever the derivative closure: the filter's F2 row is the
+accuracy of every filtered wall, and its defect is `O(h²) f''` at the wall,
+so a field odd about the wall (the tangential velocity of a shear mode) is
+capped at 3.5 rather than 1.8. C6 `:brady_livescu` reads 5.7 unfiltered
+and under the one-sided rows; `:cascade4` carries an undamped mode at an
+inviscid wall, which the cascade filter's F2 row or viscosity damps; C8
+`:brady_livescu` fails on smooth data under the cascade filter in every
+configuration measured. A level interface reads the C6 closure cascade at
+the fine spacing, 3.6, and C6 `:brady_livescu` 6.0, in every nest,
+subcycled or not
+([the matrix](CALIBRATION_APPENDIX.md#the-smooth-evolution-accuracy-matrix)).
+
 **Folds.** The axis and origin folds converge at sixth to seventh order and
 are the most accurate region of the line; every global error in
 `test/convergence.jl` is the outer wall's. The origin needs initial data

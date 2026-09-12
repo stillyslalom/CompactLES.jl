@@ -1541,3 +1541,54 @@ workstation's RX 6800 XT reproduces the host bitwise on every case,
 were skipped by the package environment; the HDF5 extension's format
 change is covered by `test/hdf5_tests.jl` in an environment carrying HDF5,
 which was not run.
+
+## The smooth-evolution accuracy matrix (September 2026)
+
+N6 closes with the wall and AMR audit's probes promoted into durable
+studies. `test/smooth_cases.jl` holds the cases: the nonlinear standing
+wave between slip or adiabatic no-slip walls, whose periodic image on the
+doubled domain at the same spacing and step is the wall run without its
+closure rows, so the difference between the two is the closure defect
+alone; the decaying shear mode between no-slip walls, exact once a
+source removes the viscous heating; the entropy wave through a same-level
+interface and two- and three-level nests with fixed physical endpoints;
+the viscous standing wave through the same on a nested fine reference;
+and a nested dual number that gives the exact Navier–Stokes right-hand
+side of any profile for the instantaneous truncation error. Errors are
+split by region, the wall window, the interface window, the covered
+parents and the interior, with the composite masked `l2` beside them,
+and orders are fitted against the actual spacing. `bench/boundaryorder.jl`
+runs the matrix, every closure under no filter, the cascade and the
+one-sided rows, with every row at two steps and a timestep-floor study;
+`test/convergence.jl` gates fifteen of its rows, four polynomial
+truncation orders and eleven evolution orders, to the same ±0.02 as the
+existing thirteen.
+
+The rows' formal orders on a polynomial are 3 / 4 / 5 / 7 for
+`:cascade3`, `:cascade4`, C6 and C8 `:brady_livescu`; the smooth-field
+slopes the suite had guarded sit above them by the field's phase. In
+evolution the unfiltered default wall is fourth order, 3.9 on the
+standing wave and 4.7 on the shear mode; the cascade filter caps every
+derivative closure at 1.8 in the wall window, a hundred to a thousand
+times the unfiltered error at N = 193, and the one-sided rows return each
+closure to its unfiltered error; the defect is the F2 row's `O(h²) f''`,
+and a field odd about the wall is capped at 3.5 instead. Reducing the
+cadence buys under a factor of two, so the wall rows are the decision
+(N6a). C6 Brady–Livescu reads 5.7–5.8 at a wall and 6.0 at every level
+interface, subcycled or not; `:cascade4` carries an undamped mode at an
+inviscid wall that the F2 row or viscosity damps; C8 Brady–Livescu fails
+on smooth data under the cascade filter in every configuration. Every
+interface reads the C6 cascade at its own spacing whatever the interior
+scheme, 3.1–3.5 same-level and 3.4–3.9 coarse-fine, and the k = 3 wave is
+pre-asymptotic at the root spacing, so the same-level gate is on k = 1.
+The measurements are under [the
+matrix](CALIBRATION_APPENDIX.md#the-smooth-evolution-accuracy-matrix);
+the applied form is in [CALIBRATION.md](CALIBRATION.md#walls-folds-and-metrics).
+
+Validation on Julia 1.11.4: the serial suite, the convergence orders and
+error magnitudes of the thirteen existing studies bit-identical to the
+previous checkout's and the fifteen new rows bit-reproducible across
+three runs, the docs reference check through `runtests.jl`. No package
+code changed, so the validation battery, the MPI suite and the
+performance audits were not run. HDF5 and Makie extension tests were
+skipped by the package environment.

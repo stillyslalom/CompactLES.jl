@@ -19,7 +19,19 @@
 #   3. Axis/origin/pole order — the sharpest scalar diagnostic of the fold
 #      signs: a sign error usually gives O(1) error at the first node, so the
 #      slope collapses to ~0 rather than degrading gracefully.
-#   4. Taylor–Green kinetic-energy decay — an end-to-end physics check
+#   4. Closure truncation on a polynomial — one derivative of x^(q+1), q the
+#      closure rows' exactness degree, against the actual spacing: the rows'
+#      own pointwise order, 3/4/5/7 for :cascade3/:cascade4/C6 and C8
+#      :brady_livescu, which the smooth-field slopes of item 2 sit above by
+#      the favorable phase of exp(sin(3x)).
+#   5. Smooth evolution — the final-time solution error of the wall window,
+#      or of the patch/level interface window, on cases with a reference
+#      free of closure error (test/smooth_cases.jl). These are the orders a
+#      run sees: the closure's, plus what the solution norm gains over the
+#      pointwise truncation; the cascade filter caps every wall row near 1.8
+#      and the one-sided rows lift the cap; a level interface reads the C6
+#      closure cascade at the fine spacing, 3.6, and :brady_livescu 6.0.
+#   6. Taylor–Green kinetic-energy decay — an end-to-end physics check
 #      against published Re = 1600 data.
 #
 # The `expect` values below are REGRESSION GUARDS set from measured behaviour,
@@ -31,14 +43,22 @@
 #   filter pass :cascade 1.88 | filter pass :onesided 8.07
 #   cyl axis odd 3.71 | cyl axis even 3.00 | resolved-θ axis 3.71
 #   spherical origin 2.99
+#   polynomial rows: C6 :cascade3 3.00 | :cascade4 4.00 | C6 :brady_livescu 5.00
+#   C8 :brady_livescu 7.00
+#   wall evolution (window max norm, t = 0.4): inviscid C6 3.93 | cascade
+#   filter 1.81 | onesided filter 3.84 | C6 :brady_livescu 5.73 | viscous
+#   no-slip C6 3.92 | shear mode 4.71
+#   interface evolution (entropy wave, t = 0.5): two patches C6 (k = 1) 3.31 |
+#   two levels C6 (k = 3) 3.62 | two levels :brady_livescu 6.01 | three levels
+#   subcycled 3.72 | two levels, cascade filter 4.12
 #
-# Those thirteen numbers are also passed to each study as `recorded` and guarded to
-# ±0.02, separately from the wide `expect`/`tol` pair. See the comment on
-# `study` for which failure each guard reports. Each study also prints the
-# order of the L2 norm over the interior, unguarded: the max norm is set by
-# the wall rows alone, and Gustafsson's theorem allows the solution norm one
-# order more than a boundary closure delivers pointwise, so the two together
-# say what a closure set buys in a solution rather than at the wall.
+# Those twenty-eight numbers are also passed to each study as `recorded` and
+# guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
+# comment on `study` for which failure each guard reports. Each study also
+# prints the order of the L2 norm over the interior, unguarded: the max norm
+# is set by the wall rows alone, and Gustafsson's theorem allows the solution
+# norm one order more than a boundary closure delivers pointwise, so the two
+# together say what a closure set buys in a solution rather than at the wall.
 #
 # These are GLOBAL max norms, and every fold study closes its outer end with a
 # SlipWallBC. The orders near 3 therefore belong to the WALL, not to the fold:
@@ -66,7 +86,9 @@ include("timing.jl")
 end
 
 const CL = CompactLES
-per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+# The smooth-evolution cases, their references and regional norms; shared
+# with bench/boundaryorder.jl, which runs the full matrix. Defines `per3`.
+include("smooth_cases.jl")
 
 fillf!(solver, f, fn) = (for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
                         i in 1:solver.decomp.n_local[1]
@@ -285,6 +307,156 @@ study("spherical origin, radial Gaussian", (24, 48, 96),
       (r, θ, φ) -> exp(-4r^2),
       (fn=(r, θ, φ) -> -8r * exp(-4r^2), parity=1);
       expect=3.0, tol=0.8, recorded=2.99)
+
+# ---------------------------------------------------------------------------
+# Closure truncation and smooth evolution, the accuracy matrix's gated rows.
+#
+# The polynomial rows measure the closure rows' own pointwise order: one
+# derivative of x^(q+1), q the closure's exactness degree, on 17 to 129
+# nodes against the actual spacing 1/(N − 1). The evolution rows integrate
+# a smooth case to a fixed time and read the error of the region the row
+# names, in the maximum norm, against a reference that carries no closure
+# error of its own: the exact solution, or the periodic mirror of a wall
+# problem at the same spacing and step (`test/smooth_cases.jl` explains
+# both). The fitted order is over the three spacings; the l2 order printed
+# beside it is the composite volume-weighted norm's, covered parents
+# excluded, half an order above the windowed maximum for a defect
+# confined to a window of fixed node count. Every row runs at cfl = 0.25,
+# where bench/boundaryorder.jl measured the halved step to move the
+# windowed error by under 1% on the rows gated here (the C6 BL wall rows
+# are within 3%); the C8 BL rows and every unfiltered interior are time-
+# or roundoff-limited at the finest grid and are measured, not gated.
+
+function truncation_study(name, Ns, deriv, degree; expect, tol, recorded)
+    t0 = time(); c0 = compile_ns()
+    hs = Float64[]; errs = Float64[]; errs_in = Float64[]
+    for N in Ns
+        e = closed_derivative_errors(N, deriv, x -> x^degree,
+                                     x -> degree * x^(degree - 1))
+        push!(hs, 1 / (N - 1)); push!(errs, e.wall); push!(errs_in, e.interior)
+    end
+    p = observed_order(hs, errs)
+    @printf("%-38s  ", name)
+    for (N, e) in zip(Ns, errs)
+        @printf("N=%-4d %.3e  ", N, e)
+    end
+    @printf("order ≈ %.2f  (interior %.2f)\n", p, observed_order(hs, errs_in))
+    push!(PHASE_LOG, (name, time() - t0, (compile_ns() - c0) / 1e9))
+    _guard(name, p, expect, tol, recorded)
+    p
+end
+
+function _guard(name, p, expect, tol, recorded)
+    abs(p - expect) < tol || println(
+        "  ORDER REGRESSED: $(round(p, digits=2)) is outside $expect ± $tol. " *
+        "That is a wrong coefficient, closure row or interface rule, not a drift.")
+    @test abs(p - expect) < tol
+    if recorded !== nothing
+        abs(p - recorded) < DRIFT_TOL || println(
+            "  ORDER DRIFTED: $(round(p, digits=2)) against the recorded $recorded. " *
+            "The scheme is intact and something reached the numerics. Find the " *
+            "cause before updating the recorded value here and in the header.")
+        @test abs(p - recorded) < DRIFT_TOL
+    end
+end
+
+function evolution_study(name, Ns, build, reference; primary, comp=1, tfinal,
+                         expect, tol, recorded)
+    t0 = time(); c0 = compile_ns()
+    hs = Float64[]; errs = Float64[]; errs2 = Float64[]
+    for N in Ns
+        solver, states = build(N)
+        run!(solver, states; tfinal=tfinal)
+        e = regional_errors(solver, states, reference(solver); comp=comp)
+        push!(hs, root_spacing(solver))
+        push!(errs, getfield(e, primary)); push!(errs2, e.l2)
+    end
+    p = observed_order(hs, errs)
+    @printf("%-38s  ", name)
+    for (N, e) in zip(Ns, errs)
+        @printf("N=%-4d %.3e  ", N, e)
+    end
+    @printf("order ≈ %.2f  (l2 %.2f)\n", p, observed_order(hs, errs2))
+    push!(PHASE_LOG, (name, time() - t0, (compile_ns() - c0) / 1e9))
+    _guard(name, p, expect, tol, recorded)
+    p
+end
+
+const EVOLUTION_CFL = 0.25
+const WALL_NS = (49, 97, 193)          # closed lines, h = 1/(N − 1)
+const PERIODIC_NS = (48, 96, 192)      # periodic roots, multiples of 24 for the nest
+
+# The periodic mirror of the wall run that has just finished, at the same
+# spacing and step: the wall problem without its closure rows.
+function mirror_reference(solver; viscous=false, opts...)
+    mirror, states = mirror_case(solver.n_global[1]; viscous=viscous,
+                                 cfl=EVOLUTION_CFL, opts...)
+    run!(mirror, states; tfinal=0.4)
+    NodeReference(mirror, states)
+end
+
+println("\n=== closure truncation on a polynomial (actual spacing) ===")
+truncation_study("C6 :cascade3 rows, d/dx x^4", (17, 33, 65, 129), lele_d1_6(), 4;
+                 expect=3.0, tol=0.5, recorded=3.00)
+truncation_study("C6 :cascade4 rows, d/dx x^5", (17, 33, 65, 129),
+                 lele_d1_6(closures=:cascade4), 5; expect=4.0, tol=0.5, recorded=4.00)
+truncation_study("C6 :brady_livescu rows, d/dx x^6", (17, 33, 65, 129),
+                 lele_d1_6(closures=:brady_livescu), 6; expect=5.0, tol=0.5, recorded=5.00)
+truncation_study("C8 :brady_livescu rows, d/dx x^8", (17, 33, 65, 129),
+                 lele_d1_8(closures=:brady_livescu), 8; expect=7.0, tol=0.5, recorded=7.00)
+
+println("\n=== smooth evolution: wall window, t = 0.4 ===")
+evolution_study("inviscid wall, C6, unfiltered", WALL_NS,
+                N -> wall_case(N; cfl=EVOLUTION_CFL), mirror_reference;
+                primary=:wall, tfinal=0.4, expect=3.9, tol=0.8, recorded=3.93)
+evolution_study("inviscid wall, C6, cascade filter", WALL_NS,
+                N -> wall_case(N; cfl=EVOLUTION_CFL, filter_interval=1),
+                s -> mirror_reference(s; filter_interval=1);
+                primary=:wall, tfinal=0.4, expect=1.8, tol=0.6, recorded=1.81)
+evolution_study("inviscid wall, C6, onesided filter", WALL_NS,
+                N -> wall_case(N; cfl=EVOLUTION_CFL, filter_interval=1,
+                               filt=compact_filter(0.45; closures=:onesided)),
+                s -> mirror_reference(s; filter_interval=1,
+                                      filt=compact_filter(0.45; closures=:onesided));
+                primary=:wall, tfinal=0.4, expect=3.8, tol=0.8, recorded=3.84)
+evolution_study("inviscid wall, C6 :brady_livescu, unfiltered", WALL_NS,
+                N -> wall_case(N; cfl=EVOLUTION_CFL, deriv=lele_d1_6(closures=:brady_livescu)),
+                s -> mirror_reference(s; deriv=lele_d1_6(closures=:brady_livescu));
+                primary=:wall, tfinal=0.4, expect=5.7, tol=0.8, recorded=5.73)
+evolution_study("viscous no-slip wall, C6, unfiltered", WALL_NS,
+                N -> wall_case(N; cfl=EVOLUTION_CFL, viscous=true),
+                s -> mirror_reference(s; viscous=true);
+                primary=:wall, tfinal=0.4, expect=3.9, tol=0.8, recorded=3.92)
+evolution_study("shear mode, no-slip wall, C6, unfiltered", WALL_NS,
+                N -> shear_case(N; cfl=EVOLUTION_CFL),
+                s -> analytic_reference(s.equations, shear_profile(0.1, 0.005; t=s.t));
+                primary=:wall, comp=3, tfinal=0.4, expect=4.7, tol=0.8,
+                recorded=4.71)
+
+println("\n=== smooth evolution: interface window, entropy wave, t = 0.5 ===")
+entropy_ref(s) = analytic_reference(s.equations, entropy_profile(3, 0.37; t=s.t))
+# The same-level interface is measured on the k = 1 wave: at the root
+# spacing the k = 3 wave is pre-asymptotic below N = 192 (bench/boundaryorder.jl
+# reads 5.1 / 4.7 there against 3.1 / 3.5 at k = 1), while a level interface
+# sits at the fine spacing and reads its asymptotic order on either wave.
+evolution_study("two patches, C6, k = 1", PERIODIC_NS,
+                N -> entropy_case(N; cfl=EVOLUTION_CFL, patch_grid=(2, 1, 1), k=1, phase=0.0),
+                s -> analytic_reference(s.equations, entropy_profile(1, 0.0; t=s.t));
+                primary=:interface, tfinal=0.5, expect=3.3, tol=0.8, recorded=3.31)
+evolution_study("two levels, C6", PERIODIC_NS,
+                N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2), entropy_ref;
+                primary=:interface, tfinal=0.5, expect=3.6, tol=0.8, recorded=3.62)
+evolution_study("two levels, C6 :brady_livescu", PERIODIC_NS,
+                N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2,
+                                  deriv=lele_d1_6(closures=:brady_livescu)), entropy_ref;
+                primary=:interface, tfinal=0.5, expect=6.0, tol=0.8, recorded=6.01)
+evolution_study("three levels, C6, subcycled", PERIODIC_NS,
+                N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=3, subcycle=true), entropy_ref;
+                primary=:interface, tfinal=0.5, expect=3.7, tol=0.8, recorded=3.72)
+evolution_study("two levels, C6, cascade filter", PERIODIC_NS,
+                N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2, filter_interval=1),
+                entropy_ref;
+                primary=:interface, tfinal=0.5, expect=4.1, tol=0.8, recorded=4.12)
 
 # ---------------------------------------------------------------------------
 # Taylor–Green vortex: dissipation-rate history at Re = 1600. Reference peak

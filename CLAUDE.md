@@ -187,7 +187,15 @@ decomposition-independent profile.
 into the file: C6 6.01, C8 8.00, C10 10.04, C6 wall closures 3.17 (`:cascade4`
 4.02, `:brady_livescu` 5.88), C8 wall closures `:brady_livescu` 7.91, filter
 pass `:cascade` 1.88 / `:onesided` 8.07, cylindrical axis odd 3.71 / even
-3.00, resolved-θ 3.71, spherical origin 2.99. **For a change not
+3.00, resolved-θ 3.71, spherical origin 2.99, closure rows on a polynomial
+3.00 / 4.00 / 5.00 / 7.00 (`:cascade3`, `:cascade4`, C6 and C8
+`:brady_livescu`), wall evolution 3.93 (cascade filter 1.81, one-sided
+filter 3.84, `:brady_livescu` 5.73, viscous no-slip 3.92, shear mode 4.71),
+interface evolution 3.31 (two patches), 3.62 / 6.01 (two levels, `:cascade3`
+/ `:brady_livescu`), 3.72 (three levels subcycled), 4.12 (two levels
+filtered). The evolution rows share `test/smooth_cases.jl` with
+`bench/boundaryorder.jl`; add a smooth case there, not in either consumer.
+**For a change not
 expected to affect numerics these should come out bit-identical, down to the error
 magnitudes.** A moved digit indicates a real change; chase it before moving
 on. Each study now asserts both a wide guard, which fails when the order

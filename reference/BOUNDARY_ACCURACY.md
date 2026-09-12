@@ -1,5 +1,14 @@
 Wall and AMR accuracy investigation, 2026-09-05
 
+Roadmap N6 (September 2026) promoted the probes below into durable studies:
+the cases, references and regional norms are `test/smooth_cases.jl`, the
+gated rows are the closure-truncation and smooth-evolution sections of
+`test/convergence.jl`, and `bench/boundaryorder.jl` is now the full accuracy
+matrix rather than the probe script this file's reproduction line names.
+The measurements are in CALIBRATION_APPENDIX.md under "The smooth-evolution
+accuracy matrix"; this file is kept as the record of the audit that
+motivated them, and its numbers are the audit's.
+
 The present default boundary treatments do limit global accuracy on smooth
 problems. The immediate targets are the wall filter and the interface flux
 divergence. Raising the interior derivative order does not remove either
