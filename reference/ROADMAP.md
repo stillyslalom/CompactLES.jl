@@ -241,23 +241,32 @@ below exposed behavior outside those passing checks.
   **Code:** [cases.jl](../test/cases.jl), [validation.jl](../test/validation.jl),
   [anisotropic.jl](../bench/anisotropic.jl).
 
-- [ ] **N5a — Relax the filter against the acoustic rate.**
-  `filter_weight` scales a pass by `dt · rate / filter_cfl` with `rate` the
-  maximum that sized the step, so the weight is `cfl / filter_cfl` whatever
-  limits the step and the number of passes per unit time follows the rate.
+- [x] **N5a — Relax the filter against the acoustic rate.**
+  `filter_weight` scaled a pass by `dt · rate / filter_cfl` with `rate` the
+  maximum that sized the step, so the weight was `cfl / filter_cfl` whatever
+  limited the step and the number of passes per unit time followed the rate.
   N1 measured the invariance on acoustic-limited runs; where the diffusive
-  rate governs, as it does under a scalar β\* on a grid of aspect ratio 16,
-  the filter runs 15× the passes per unit time and the aligned Noh run
-  completes with a wrong solution (wall density 24 against 4, front at
-  0.047 against 0.2), which `filter_cfl = 5` restores to the AR 4 profile
-  ([the aligned case](CALIBRATION_APPENDIX.md#the-aligned-case)). Decide
-  whether the weight should read the acoustic rate alone, or the acoustic
-  and molecular rates without the artificial ones, and re-measure the
-  invariances N1 recorded under the chosen form; the battery is
-  diffusion-limited at the front on every Noh case, so its rows move.
-  **Gate:** the aligned case at AR 16 at the AR 1 profile under the default
-  `filter_cfl`; the N1 invariances; explained battery baseline changes.
-  **Code:** [timestep.jl](../src/timestep.jl) (`filter_weight`),
+  rate governed, as it does under a scalar β\* on a grid of aspect ratio 16,
+  the filter ran 15× the passes per unit time and the aligned Noh run
+  completed with a wrong solution (wall density 24 against 4, front at
+  0.047 against 0.2).
+  **Done (September 2026), the weight directional and hyperbolic.** Each
+  directional pass now reads its own direction's one-dimensional hyperbolic
+  rate `(|u_d| + c) / h_d`, which `max_rate` reduces beside the rate that
+  sizes the step, scaled by `√n` over the active dimensions so that
+  `filter_cfl` keeps the convention of `cfl`. The acoustic rate alone was
+  chosen over the acoustic and molecular rates because a molecular
+  diffusive rate carries the same `1/h²` aspect-ratio penalty on a stretched
+  wall-normal grid, and a scalar acoustic rate over the Euclidean sum was
+  rejected because the fine direction raises it by the aspect ratio: only
+  a directional weight leaves the coarse direction's passes unchanged. The
+  aligned case at N = 100 reads the same profile at AR 1, 4 and 16 (plateau
+  3.984, front 0.212) where it read 3.986, 3.916 and 1.029; the N1
+  invariances hold to six figures under the new weight; the battery's Noh
+  rows moved and are explained in `test/validation.jl`'s header
+  ([the measurement](CALIBRATION_APPENDIX.md#the-filter-relaxed-against-the-directional-acoustic-rate),
+  [completion record](HISTORY.md#relaxing-the-filter-against-the-acoustic-rate-september-2026)).
+  **Code:** [timestep.jl](../src/timestep.jl) (`filter_weight`, `max_rate`),
   [anisotropic.jl](../bench/anisotropic.jl).
 
 - [ ] **N6 — Establish spatial boundary/interface accuracy acceptance studies.**

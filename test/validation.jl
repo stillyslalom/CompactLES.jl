@@ -50,15 +50,28 @@
 # case's CFL is in test/cases.jl):
 #
 #   Lax        L1 rho 4.99e-3, u 7.47e-3, p 7.56e-3
-#   Shu-Osher  L1 rho 6.91e-3, wave train 2.09e-2, train peak 4.680
+#   Shu-Osher  L1 rho 6.86e-3, wave train 2.09e-2, train peak 4.680
 #   Woodward   L1 rho 3.22e-2, peak rho 6.616 at x = 0.7785
-#   Sedov      R_s 0.8086 vs 0.8000 analytic (+1.07%), peak rho 5.12 (jump 6)
-#   Noh nu=1   plateau 3.9957/4    shock 0.2047/0.2   wall deficit 63%
-#   Noh nu=2   plateau 15.002/16   shock 0.2092/0.2   wall deficit 56%
-#   Noh nu=3   plateau 62.502/64   shock 0.2090/0.2   wall deficit 28%
-#   Shock/SF6  worst Y -0.0135 / 1.0135, width 4 cells, 646 steps (Sept 2026)
-#   Noh aligned N=100 AR=4    plateau 3.9161/4   deficit 50%   shock 0.2116   5149 steps
-#   Noh plane   N=24  AR=2    plateau 11.766/16  front 0.236/0.2  L1 rho 0.898  752 steps
+#   Sedov      R_s 0.8085 vs 0.8000 analytic (+1.06%), peak rho 5.13 (jump 6)
+#   Noh nu=1   plateau 3.9957/4    shock 0.2044/0.2   wall deficit 60%
+#   Noh nu=2   plateau 15.009/16   shock 0.2091/0.2   wall deficit 54%
+#   Noh nu=3   plateau 62.555/64   shock 0.2089/0.2   wall deficit 29%
+#   Shock/SF6  worst Y -0.0129 / 1.0129, width 4 cells, 647 steps (Sept 2026)
+#   Noh aligned N=100 AR=4    plateau 3.9837/4   deficit 63%   shock 0.2121   4968 steps
+#   Noh plane   N=24  AR=2    plateau 11.854/16  front 0.236/0.2  L1 rho 0.890  750 steps
+#
+# The Noh, Shu-Osher, Sedov and interface rows moved in September 2026 when
+# filter_weight began reading each direction's own hyperbolic rate
+# (|u_d| + c)/h_d in place of the maximum that sized the step (roadmap N5a).
+# Every Noh case is diffusion-limited at the front under C_beta = 1, so its
+# passes there were at cfl/filter_cfl strength before and are relaxed by the
+# diffusive share now: the plateaus rose at nu = 2 and 3, the wall deficits
+# fell at nu = 1 and 2, and the aligned AR = 4 row came up to the AR = 1
+# profile, which is the change's purpose. Before it the rows read Shu-Osher
+# 6.91e-3, Sedov 0.8086 (+1.07%) / 5.12, Noh 3.9957 / 0.2047 / 63%,
+# 15.002 / 0.2092 / 56%, 62.502 / 0.2090 / 28%, SF6 -0.0135 / 1.0135 / 646,
+# aligned 3.9161 / 50% / 0.2116 / 5149, plane 11.766 / 0.898 / 752. Lax and
+# Woodward are acoustic-limited and did not move to the digits printed.
 #
 # The Woodward and Noh rows moved in September 2026 when the filter_cfl default
 # went from 0 to 0.35: those cases run below the reference CFL, so their filter

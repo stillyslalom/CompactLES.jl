@@ -33,6 +33,8 @@ points at them and does not restate them.
 23. [No-slip wall flux contract (September 2026)](#no-slip-wall-flux-contract-september-2026)
 24. [The filter default (September 2026)](#the-filter-default-september-2026)
 25. [Filtering on non-uniform volumes (September 2026)](#filtering-on-non-uniform-volumes-september-2026)
+26. [Directional bulk viscosity (September 2026)](#directional-bulk-viscosity-september-2026)
+27. [Relaxing the filter against the acoustic rate (September 2026)](#relaxing-the-filter-against-the-acoustic-rate-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -1483,3 +1485,59 @@ run's there; `filter_cfl = 5` restores the profile. That is opened as N5a.
 No package source changed. Serial and validation numbers are those of the
 previous record; the two new validation guards are recorded in the file's
 header.
+
+## Relaxing the filter against the acoustic rate (September 2026)
+
+N5a closes with the relaxation weight directional and hyperbolic. The
+weight had read the maximum that sized the step, so it was `cfl /
+filter_cfl` whatever limited the step and the passes per unit time
+followed the limiting rate; under the scalar β\* on the aligned Noh grid of
+aspect ratio 16 that was fifteen times the acoustic-limited count and a
+wrong solution. Each directional pass now reads its own direction's
+one-dimensional hyperbolic rate, `w_d = filter_interval · dt · (|u_d| +
+c)/h_d · √n / filter_cfl`, with the maximum over the domain and `n` the
+number of active dimensions. The two forms the roadmap item weighed, the
+acoustic rate alone or with the molecular rates, were both rejected as
+scalars: the Euclidean acoustic rate grows with the aspect ratio through
+the fine direction, so a scalar weight reading it reaches the AR 4 profile
+at AR 16 and not the AR 1 one, and a molecular diffusive rate carries the
+same `1/h²` penalty on a stretched wall-normal grid. `max_rate` evaluates
+the per-direction rates in the loop that evaluates the selecting rate and
+reduces all five scalars in the one `Allreduce`; `run!` records them in
+`Solver.filter_rate_prev`, which both checkpoint formats carry, version 5
+of each.
+
+The aligned case at N = 100 reads one profile at AR 1, 4 and 16, plateau
+3.984, deficit 62–63%, front 0.212, where it read 3.986, 3.916 and 1.029.
+The four N1 invariances, CFL, landing steps, retries and a subcycled level,
+hold to six significant figures under the new weight, the shear layer's
+loss 1.5% smaller because its one acting pass no longer carries the
+advective term of the sum. On Taylor–Green at 32³ with the artificial
+properties off the run at the reference CFL moved by 0.08% at the peak and
+0.06% in the history misfit, and at 64³ by 0.5%; with them on, where the
+step is artificial-diffusion-limited for part of the run at both
+resolutions, the filter's share of the sink fell, 83.7% to 81.2% at 32³ and
+67.2% to 62.2% at 64³, and the history misfit improved, 0.157 to 0.147 and
+0.0492 to 0.0435, which the 128³ fits, taken at `filter_cfl = 0`, do not
+see. Every Noh row of the battery moved toward a weaker filter at the
+front, where the step is diffusion-limited under C_β = 1; Shu–Osher's L1
+fell by 0.7%; Lax and Woodward did not move to the digits printed; every
+guard holds unchanged. The measurements are under [the directional
+rate](CALIBRATION_APPENDIX.md#the-filter-relaxed-against-the-directional-acoustic-rate);
+the applied form is in [CALIBRATION.md](CALIBRATION.md#the-compact-filter),
+and open item 10 there is closed.
+
+Validation on Julia 1.11.4: 2,470 serial assertions, the convergence orders
+and error magnitudes bit-identical to the previous checkout's, the
+validation battery on its re-baselined header, all 298 full-suite checks
+at two MPI ranks and all 144 selected checks at eight, the docs reference
+check through `runtests.jl` after the last documentation edit. The
+JET audit reports the same dispatch sites as before at every probe;
+the allocation audit's `compute_dt` grew by 32 bytes per call for the
+five-scalar reduction and `filter_state!` reads one more non-concrete SSA
+value with no runtime dispatch. `bench/device_solver.jl` on the
+workstation's RX 6800 XT reproduces the host bitwise on every case,
+`max_rate`'s per-direction rates included. HDF5 and Makie extension tests
+were skipped by the package environment; the HDF5 extension's format
+change is covered by `test/hdf5_tests.jl` in an environment carrying HDF5,
+which was not run.

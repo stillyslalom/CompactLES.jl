@@ -42,8 +42,9 @@
 #
 # A restart requires more mutable state than `(t, step)`. `run!` also reads
 # `solver.cfl`, which a `StepControl` retry lowers and which must persist across
-# rollback. The growth cap, rate predictor, and `filter_weight` read `dt_prev`
-# and `rate_prev`. A `SwitchableBC` carries a `switched` flag per face. Clearing
+# rollback. The growth cap, rate predictor, and `filter_weight` read `dt_prev`,
+# `rate_prev` and `filter_rate_prev`. A `SwitchableBC` carries a `switched`
+# flag per face. Clearing
 # it on resume would apply the pre-switch boundary condition for the rest of the
 # run. If the switch changes the collective pattern (`NSCBCOutflowBC`), rank
 # disagreement also deadlocks.
@@ -77,7 +78,7 @@
 
 const CKPT_MAGIC_V1 = 0x434c4553_434b5054   # "CLESCKPT", the unversioned format
 const CKPT_MAGIC = 0x434c4553_52434b50      # "CLESRCKP"
-const CKPT_VERSION = 4
+const CKPT_VERSION = 5
 
 _ckpt_name(prefix::AbstractString, rank::Int) =
     string(prefix, ".r", lpad(rank, 4, '0'), ".ckpt")
@@ -267,11 +268,12 @@ names, the element type of `Q`, and the global coordinate vector along each
 dimension. The coordinates carry the domain extent, the origin and any
 [`Stretch`](@ref) mapping, none of which the extent alone constrains.
 
-The run state is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`, the `switched`
-flag of every [`SwitchableBC`](@ref) face, and the artificial coefficient
-arrays μ*, β*, κ* and D* when the artificial properties are enabled. `cfl` is
-recorded because a [`StepControl`](@ref) retry lowers it, `dt_prev` /
-`rate_prev` because the growth cap, the rate predictor and
+The run state is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`,
+`filter_rate_prev`, the `switched` flag of every [`SwitchableBC`](@ref)
+face, and the artificial coefficient arrays μ*, β*, κ* and D* when the
+artificial properties are enabled. `cfl` is recorded because a
+[`StepControl`](@ref) retry lowers it, `dt_prev` / `rate_prev` /
+`filter_rate_prev` because the growth cap, the rate predictor and
 [`filter_weight`](@ref) read them, and the coefficients because
 [`max_rate`](@ref) sizes the next step from the ones the last right-hand side
 left behind: with them a restarted run continues the uninterrupted one bit for
@@ -368,6 +370,9 @@ function _write_ckpt_header(io, solver::Solver, root::SolverLike, Q)
     write(io, Float64(solver.cfl))
     write(io, Float64(solver.dt_prev))
     write(io, Float64(solver.rate_prev))
+    for d in 1:3
+        write(io, Float64(solver.filter_rate_prev[d]))
+    end
     write(io, switch_codes(root))
     return io
 end
@@ -396,8 +401,9 @@ coordinates are the ones it was written from. Coordinates are compared to a
 relative tolerance of 1e-10, which separates a rebuilt identical grid from any
 different one.
 
-The run state restored is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`, the
-`switched` flag of every [`SwitchableBC`](@ref) face, and the artificial
+The run state restored is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`,
+`filter_rate_prev`, the `switched` flag of every [`SwitchableBC`](@ref)
+face, and the artificial
 coefficient arrays when the artificial properties are enabled; a file whose
 coefficient record disagrees with the solver's `art.enabled` is rejected. A
 face the checkpoint records as switched is switched here through
@@ -558,6 +564,8 @@ function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
     solver.cfl = read(io, Float64)
     solver.dt_prev = read(io, Float64)
     solver.rate_prev = read(io, Float64)
+    solver.filter_rate_prev =
+        ntuple(_ -> oftype(solver.dt_prev, read(io, Float64)), 3)
     restore_switches!(root, read!(io, Vector{Int64}(undef, 6)), path)
     return io
 end

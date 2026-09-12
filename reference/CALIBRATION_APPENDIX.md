@@ -1421,6 +1421,14 @@ cadence were fitted, since a fit taken under the unrelaxed formulation is
 reproducible only at its CFL; the fit followed, and [the default
 decision](#the-default-decision) records the outcome.
 
+The `rate` in the weight above was the maximum that sized the step, which
+the tables of this section and the next never distinguished from the
+acoustic rate because every case in them is acoustic-limited. The aligned
+Noh case on an anisotropic grid separated the two, and the weight now reads
+each direction's own hyperbolic rate; the change and its re-measurement of
+these tables are under [the filter relaxed against the directional acoustic
+rate](#the-filter-relaxed-against-the-directional-acoustic-rate).
+
 ### The fit instrument
 
 `bench/tgv_energy.jl` takes `alphaf`, `filter_cfl` and `cfl` as comma-separated
@@ -3393,8 +3401,9 @@ effective passes) return the same wrong profile, and `filter_cfl = 5`,
 which cuts the weight to the acoustic-limited level, returns the AR 4
 profile (plateau 3.9171, deficit 50%, front 0.2114, wall density 1.99).
 The AR 4 plateaus already show the same effect at a smaller scale, 3.916
-against 3.985. The filter is not changed here; the decision is roadmap
-item N5a.
+against 3.985. The decision and the re-measurement are under [the filter
+relaxed against the directional acoustic
+rate](#the-filter-relaxed-against-the-directional-acoustic-rate) below.
 
 ### The curved case
 
@@ -3464,3 +3473,140 @@ everywhere, and neither converges cold gas onto a point. What remains is
 the two cases, guarded in `test/validation.jl` under the scalar form,
 `bench/anisotropic.jl` as the instrument for the scalar form's
 aspect-ratio penalty, and the finding on the filter above.
+
+### The filter relaxed against the directional acoustic rate
+
+Roadmap N5a, September 2026. The aligned case above showed that the relaxed
+filter's passes per unit time followed whichever rate sized the step. The
+question left open was which rate the weight should read instead: the
+acoustic rate alone, or the acoustic and molecular rates without the
+artificial ones. Neither, as a single scalar, meets the gate. The acoustic
+rate `max_rate` combines is the Euclidean one, `c √(Σ_d 1/h_d²)`, which the
+fine direction of an aspect-ratio-AR grid raises by a factor of AR, so a
+weight reading it would still make the coarse direction's passes per unit
+time grow with the aspect ratio, by `√(1 + AR²)`: at AR 16 the 3.8k passes
+of the acoustic-limited directional run in the table above, against a few
+hundred at AR 1, and the AR 4 profile in place of the AR 1 one, as
+`filter_cfl = 5` gave. And
+a molecular diffusive rate carries the same `1/h²` penalty that the
+artificial one does, on a wall-resolved stretched grid in place of a
+stretched shock grid; a weight reading it would run the wall-normal
+direction's passes at the viscous rate in the near-wall cells.
+
+The weight is therefore directional, as the filter is. Each pass along `d`
+reads
+
+    w_d = filter_interval · dt · r_d · √n / filter_cfl,    r_d = max (|u_d| + c) / h_d
+
+capped at one, with the maximum over the domain and `n` the number of
+active dimensions. `max_rate` evaluates the three `r_d` in the loop that
+evaluates the selecting rate and reduces them in the same `Allreduce`, five
+scalars in place of two; `run!` records them beside `dt_prev` and
+`rate_prev` in `filter_rate_prev`, which the checkpoint formats carry
+(version 5 of both). The `√n` is the ratio of the Euclidean acoustic rate
+to the one-dimensional one on an isotropic grid, and keeps `filter_cfl` in
+the convention of `cfl`: in one dimension the weight is the old one less
+the diffusive share, on an isotropic grid it is the old one less the
+diffusive share and up to the advective share of the sum, since
+`√n (|u_d| + c)` equals `Σ_d |u_d| + √n c` only where the velocity lies
+along one axis. Reading the direction's own rate makes the passes along
+the coarse direction independent of the fine spacing; the step, the
+artificial coefficients and the physical diffusivities are all outside the
+weight.
+
+**The aligned case**, N = 100, `cfl = 0.3`, `filter_cfl = 0.35`, scalar
+β\*, under the new weight (the previous rows are in the table above):
+
+```
+AR   steps   limit      plateau   deficit   shock    transverse   before
+ 1     741   diffusive  3.9841    62%       0.2120   5.4e-12      3.9855  64%  0.2126
+ 4    4968   diffusive  3.9837    63%       0.2121   9.5e-11      3.9161  50%  0.2116
+16   70453   diffusive  3.9837    63%       0.2121   6.8e-8       1.0288  −501%  0.0465
+```
+
+The three rows read the same profile to the third digit of the plateau and
+the fourth of the front, the gate. The AR 1 row itself moved, 3.9855 to
+3.9841, because it too was diffusion-limited at the front and its passes
+were relaxed by the diffusive share; at N = 400, AR 1 and AR 4 read 3.9957
+and 3.9956, 62%, 0.2046, the battery's `nu = 1` row. The step counts are
+the same to within the trajectory's change, since the step is sized as
+before.
+
+**The N1 invariances**, re-measured with `bench/filterrate.jl` at
+`filter_cfl = 0.4`, as [the tables above](#retries-and-subcycling-under-relaxation)
+were:
+
+```
+                                cfl 0.4       cfl 0.2       cfl 0.1
+plain                           2.31554e-3    2.31552e-3    2.31552e-3
+landing every 0.037             2.31553e-3    2.31552e-3    2.31552e-3
+one retry after step 25         2.31553e-3    2.31552e-3    2.31551e-3
+subcycled box, planar u_z(y)    1.49460e-3    1.49467e-3    1.49463e-3
+```
+
+Every invariance holds to six significant figures, as before. The
+unrelaxed columns are unchanged. The relaxed loss of the shear layer moved
+from 2.351e-3 to 2.3155e-3, 1.5% less: `u_x(y)` is filtered only by the
+`y` pass, whose weight now reads `√3 c / h` in place of a total that
+carried the advective `|u_x| / h` of the same point, so its weight is a few
+percent smaller. The subcycled case, `u_z(y)` with `u_x = u_y = 0`, has no
+advective term and its entries are unchanged to the digits printed.
+
+**Taylor–Green at 32³ and 64³**, `bench/tgv_energy.jl 32` and `64` at
+`cfl = 0.35`, `filter_cfl = 0.35`, `smoother = :compact`, the script's
+defaults, before and after (the reference peak is 1.2858e-2 at t = 8.97):
+
+```
+                         steps   peak −dKE/dt         KE misfit    rate misfit   mol / mu* / filter at the peak
+32³  art off, before      2700   1.4205e-2 @ 6.74     1.3232e-1    7.0250e-1     13.5 / 0 / 89.2
+32³  art off, after       2700   1.4216e-2 @ 6.74     1.3224e-1    7.0269e-1     13.5 / 0 / 89.2
+32³  art on,  before      4120   1.4423e-2 @ 6.37     1.5702e-1    7.5710e-1     11.7 / 4.1 / 83.7
+32³  art on,  after       4372   1.4596e-2 @ 6.76     1.4721e-1    7.5235e-1     12.7 / 6.0 / 81.2
+64³  art off, before      5497   1.2481e-2 @ 8.96     3.4926e-2    1.6098e-1     34.6 / 0 / 65.5
+64³  art off, after       5497   1.2479e-2 @ 8.94     3.4747e-2    1.6014e-1     34.7 / 0 / 65.5
+64³  art on,  before      7379   1.2744e-2 @ 8.35     4.9161e-2    1.9387e-1     31.2 / 3.5 / 67.2
+64³  art on,  after       7716   1.2554e-2 @ 9.05     4.3454e-2    1.5875e-1     33.3 / 4.6 / 62.2
+```
+
+With the artificial properties off, the run at the reference CFL is no
+longer bit-identical to the unrelaxed one, since the weight dips below one
+wherever the velocity at the point of the largest rate is spread over two
+or three axes; at 32³ the peak moved by 0.08% and the misfits by 0.06% and
+0.03%, at 64³ the misfits by 0.5%, the fit unchanged to two or three
+figures. With them on, the run is artificial-diffusion-limited for part of
+its length at both resolutions, 4120 steps against 2700 and 7379 against
+5497, and under the old weight every pass of those steps was at full
+strength; under the new one they are relaxed by the diffusive share, so
+the filter's share of the sink falls, 83.7% to 81.2% and 67.2% to 62.2%,
+μ\*'s rises, and the history misfits improve, 0.157 to 0.147 at 32³ and
+0.0492 to 0.0435 at 64³, with the 64³ peak moving from t = 8.35 to 9.05
+against the reference 8.97. The 128³ fits of [the alpha
+sweep](#the-alpha-sweep-at-128) were taken at `filter_cfl = 0`, where the
+weight is one, and are not touched by it; the `C_mu` question (roadmap
+N4) is to be re-taken under this weight, where the artificial rate's share
+of the step at 128³ is the first thing to read.
+
+**The battery** under the new weight, before → after where a row moved:
+
+```
+Lax                 4.99e-3 / 7.47e-3 / 7.56e-3              unchanged
+Shu–Osher L1 rho    6.91e-3 → 6.86e-3; train 2.09e-2 and peak 4.680 unchanged
+Woodward            3.22e-2, 6.616 at 0.7785                 unchanged
+Sedov               R_s 0.8086 (+1.07%), peak 5.12 → 0.8085 (+1.06%), 5.13
+Noh nu=1            3.9957 / 0.2047 / 63% → 3.9957 / 0.2044 / 60%
+Noh nu=2            15.002 / 0.2092 / 56% → 15.009 / 0.2091 / 54%
+Noh nu=3            62.502 / 0.2090 / 28% → 62.555 / 0.2089 / 29%
+Shock/SF6           −0.0135 / 1.0135, 646 steps → −0.0129 / 1.0129, 647 steps
+Noh aligned AR 4    3.9161 / 50% / 0.2116 / 5149 → 3.9837 / 63% / 0.2121 / 4968
+Noh plane AR 2      11.766 / 0.236 / 0.898 / 752 → 11.854 / 0.236 / 0.890 / 750
+```
+
+Every Noh row is diffusion-limited at the front under C_β = 1 and every
+one moved in the direction of a weaker filter there: a higher plateau at
+ν = 2 and 3, a lower wall deficit at ν = 1 and 2, the aligned AR 4 row up
+to the AR 1 profile and the plane's plateau up by 0.09. In one dimension
+the weight changes only where the diffusive share of the selecting rate is
+nonzero, so Shu–Osher, whose L1 fell by 0.7%, is diffusion-limited at its
+shock for part of the run, and Lax and Woodward, which did not move to the
+digits printed, are acoustic-limited throughout; Sedov moved in its last
+digit. Every guard holds unchanged.

@@ -20,10 +20,11 @@ has_parallel() = HDF5.has_parallel()
 # checkpoint header, which format 1 has no record of. Format 3 added the element
 # type of the state and the mutable run state (`cfl`, `dt_prev`, `rate_prev`,
 # and the `switched` flag of each boundary face); format 4 the level count and
-# the artificial coefficient arrays; the reasoning is at the top of
-# `src/io.jl`. The reader requires an exact match and does not accept an older
+# the artificial coefficient arrays; format 5 the per-direction rates
+# `filter_weight` reads; the reasoning is at the top of `src/io.jl`. The
+# reader requires an exact match and does not accept an older
 # file, since a restart those fields do not cover cannot be validated at all.
-const CKPT_FORMAT = 4
+const CKPT_FORMAT = 5
 
 # --- Opening a shared file --------------------------------------------------
 #
@@ -282,6 +283,8 @@ function _write_ckpt_meta!(file, solver::Solver, root, Q, rank::Int)
     write_meta!(g, "cfl", Float64(solver.cfl), rank)
     write_meta!(g, "dt_prev", Float64(solver.dt_prev), rank)
     write_meta!(g, "rate_prev", Float64(solver.rate_prev), rank)
+    write_meta!(g, "filter_rate_prev", collect(Float64, solver.filter_rate_prev),
+                rank)
     write_meta!(g, "switched", switch_codes(root), rank)
     cg = create_group(file, "grid")
     for d in 1:3
@@ -466,6 +469,8 @@ function _read_ckpt_meta!(file, solver::Solver, root, Q, path::AbstractString)
     solver.cfl = read(file["meta/cfl"])
     solver.dt_prev = read(file["meta/dt_prev"])
     solver.rate_prev = read(file["meta/rate_prev"])
+    fr = read(file["meta/filter_rate_prev"])
+    solver.filter_rate_prev = ntuple(d -> oftype(solver.dt_prev, fr[d]), 3)
     restore_switches!(root, read(file["meta/switched"]), path)
     return n_art
 end

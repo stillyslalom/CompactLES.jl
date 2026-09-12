@@ -1,6 +1,6 @@
 # The artificial bulk viscosity on anisotropic grids: the aspect-ratio
-# penalty of the scalar β* in the step, and the relaxed filter's pass count
-# that follows it.
+# penalty of the scalar β* in the step, and the relaxed filter's pass count,
+# which followed it until the weight became directional (roadmap N5a).
 #
 #   julia --project=. -t 16 bench/anisotropic.jl                      # both cases
 #   julia --project=. -t 16 bench/anisotropic.jl aligned ar=1,4,16
@@ -33,8 +33,9 @@
 # The directional forms this script was written to compare against were
 # implemented for the measurement and not retained; the record and the two
 # forms' definitions are in reference/CALIBRATION_APPENDIX.md, "Directional
-# bulk viscosity on anisotropic grids". Update that section when this is
-# re-run under different settings.
+# bulk viscosity on anisotropic grids"; the aligned sweep under the
+# directional filter weight is recorded in its last subsection. Update that
+# section when this is re-run under different settings.
 
 using MPI
 MPI.Init(threadlevel=:funneled)

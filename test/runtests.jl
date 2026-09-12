@@ -640,16 +640,24 @@ end
                                cfl=0.4, filter_cfl=fc))
 
     solver0, Q0 = build(0.0)
-    @test CL.filter_weight(solver0) == 1.0          # disabled: full strength
+    @test CL.filter_weight(solver0, 1) == 1.0       # disabled: full strength
 
     # dt_prev = 0 before any step, where the unrelaxed meaning is the only one
     # available, so the weight must be 1 even with the relaxation configured.
     solverW, _ = build(0.4)
-    @test CL.filter_weight(solverW) == 1.0
-    solverW.dt_prev = 0.2; solverW.rate_prev = 1.0  # dt*rate = 0.2, filter_cfl 0.4
-    @test CL.filter_weight(solverW) ≈ 0.5
-    solverW.dt_prev = 2.0                            # dt*rate = 2.0, well over
-    @test CL.filter_weight(solverW) == 1.0           # capped, never over-filters
+    @test CL.filter_weight(solverW, 1) == 1.0
+    # The weight of a pass along d is dt · r_d · √n / filter_cfl on n active
+    # dimensions, three here: r_d = 1/√3 makes dt · r_d · √3 the plain dt.
+    r3 = 1 / sqrt(3.0)
+    solverW.dt_prev = 0.2; solverW.filter_rate_prev = (r3, r3, r3)  # 0.2 / 0.4
+    @test CL.filter_weight(solverW, 1) ≈ 0.5
+    @test CL.filter_weight(solverW, 3) ≈ 0.5
+    # Each direction reads its own rate: a slower direction filters less.
+    solverW.filter_rate_prev = (r3, r3 / 2, r3 / 4)
+    @test CL.filter_weight(solverW, 2) ≈ 0.25
+    @test CL.filter_weight(solverW, 3) ≈ 0.125
+    solverW.dt_prev = 2.0                            # dt · r_1 · √3 = 2, well over
+    @test CL.filter_weight(solverW, 1) == 1.0        # capped, never over-filters
 
     # Interior only. `filter_state!` exchanges halos, so comparing whole padded
     # arrays measures halo initialization rather than the filter — a difference
@@ -666,9 +674,9 @@ end
     full = dev(interior(solver0, Q0), ref)           # fully filtered image
     @test full > 0
 
-    solverB, QB = build(0.8)                         # w = dt*rate/0.8
-    solverB.dt_prev = 0.4; solverB.rate_prev = 1.0   # w = 0.5
-    @test CL.filter_weight(solverB) ≈ 0.5
+    solverB, QB = build(0.8)                         # w = dt · r_d · √3 / 0.8
+    solverB.dt_prev = 0.4; solverB.filter_rate_prev = (r3, r3, r3)   # w = 0.5
+    @test CL.filter_weight(solverB, 1) ≈ 0.5
     filter_state!(solverB, QB)
     # Filtering is applied dimension by dimension, so the composite is not
     # (1-w)Q + w·F(Q) exactly; it is that per direction. Check the property that
@@ -677,15 +685,16 @@ end
     @test 0 < dev(interior(solverB, QB), ref) < full
 
     solverS, QS = build(1000.0)                      # w = 4e-4, nearly no filter
-    solverS.dt_prev = 0.4; solverS.rate_prev = 1.0
+    solverS.dt_prev = 0.4; solverS.filter_rate_prev = (r3, r3, r3)
     filter_state!(solverS, QS)
     @test dev(interior(solverS, QS), ref) < 0.01 * full
 
     # w == 1 must take the copy path, not the blend, so a run at or above the
     # reference CFL is the unrelaxed solver exactly.
     solverE, QE = build(0.4)
-    solverE.dt_prev = 0.4; solverE.rate_prev = 1.0   # dt*rate = 0.4 = filter_cfl
-    @test CL.filter_weight(solverE) == 1.0
+    solverE.dt_prev = 0.4                            # dt · r_d · √3 = 0.69 ≥ 0.4
+    solverE.filter_rate_prev = (1.0, 1.0, 1.0)
+    @test all(d -> CL.filter_weight(solverE, d) == 1.0, 1:3)
     filter_state!(solverE, QE)
     @test QE == Q0                                   # bit-identical, not approx
 end

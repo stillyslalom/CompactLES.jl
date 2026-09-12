@@ -65,6 +65,8 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P}
     step::Int
     dt_prev::T                              # last accepted step, for growth capping
     rate_prev::T                            # last CFL rate, for the predictor
+    filter_rate_prev::NTuple{3,T}           # its per-direction hyperbolic rates,
+                                            # for filter_weight
     # Wall-clock accounting, filled in by `run!`. Rank-local: a reduction here
     # would be a collective on every step, paid by every run whether or not
     # anything reads it. Callers wanting load imbalance reduce these
@@ -601,7 +603,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                       GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
                       [Level{T}(0, root_level_comm(comm), [1],
                                 LevelTransfer{T}[])], false, nothing,
-                      zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, 0.0, 0.0, FloorTally())
+                      zero(T), zero(T), 0, zero(T), zero(T),
+                  ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally())
         init_geometry!(solver)
         return solver
     end
@@ -751,7 +754,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   n_global, patches, regions, decomp.comm,
                   GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
                   levels, subcycle, regrid,
-                  zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, 0.0, 0.0, FloorTally())
+                  zero(T), zero(T), 0, zero(T), zero(T),
+                  ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally())
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
@@ -1099,7 +1103,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                   [Level{T}(0, root_level_comm(world),
                             collect(eachindex(patches)), LevelTransfer{T}[])],
                   false, nothing,
-                  zero(T), zero(T), 0, zero(T), zero(T), 0.0, 0.0, 0.0, 0.0, FloorTally())
+                  zero(T), zero(T), 0, zero(T), zero(T),
+                  ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally())
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end

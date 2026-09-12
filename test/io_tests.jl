@@ -46,6 +46,7 @@ end
     s.cfl = 0.125            # what a StepControl retry leaves behind
     s.dt_prev = 1.5e-4
     s.rate_prev = 987.5
+    s.filter_rate_prev = (12.5, 250.0, 0.0)
     switch!(written)
     save_checkpoint(s, Q, stem)
     @test isfile(stem * ".r0000.ckpt")
@@ -59,6 +60,7 @@ end
     @test s2.cfl == 0.125
     @test s2.dt_prev == 1.5e-4
     @test s2.rate_prev == 987.5
+    @test s2.filter_rate_prev == (12.5, 250.0, 0.0)
     # Resuming with this cleared would run the remainder of the calculation
     # under the pre-switch boundary condition, silently.
     @test switched(read_back)

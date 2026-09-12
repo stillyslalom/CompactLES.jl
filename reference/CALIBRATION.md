@@ -385,15 +385,26 @@ alphaf 0.499             2.91e-2            0.75e-2            completes (ε = 0
 replaces the state by its filtered image, so the dissipation is per
 application: halving the CFL doubles it, retries and shortened output
 steps add it, and a run at a low CFL is a more filtered run. A positive
-`filter_cfl` relaxes each pass by w = `filter_interval` · dt · rate /
-`filter_cfl`, capped at one, and the dissipation per unit time is then
-constant to six figures across a fourfold CFL change and invariant to
-landing steps, to induced retries and to a subcycled refined level. At
-`cfl = 0.35` and `filter_cfl = 0.35` the run is bit-identical to the
-unrelaxed one
+`filter_cfl` relaxes each pass along direction d by
+w_d = `filter_interval` · dt · r_d · √n / `filter_cfl`, capped at one, with
+r_d the largest one-dimensional hyperbolic rate (|u_d| + c)/h_d of that
+direction and n the number of active dimensions, and the dissipation per
+unit time is then constant to six figures across a fourfold CFL change and
+invariant to landing steps, to induced retries and to a subcycled refined
+level. The rate is the hyperbolic one, not the maximum that sized the
+step, so a diffusion-limited step, physical or artificial, filters no more
+per unit time than an acoustic-limited one, and it is the direction's own,
+so a fine spacing in one direction leaves the passes along the others
+unchanged. On an isotropic grid at `cfl = 0.35` and `filter_cfl = 0.35`
+a pass is at full strength up to the advective share of the rate; the
+Taylor–Green fits at 32³ and 64³ with the artificial properties off moved
+by 0.06% and 0.5% under the change, and with them on, where the step is
+artificial-diffusion-limited for part of the run, they improved by 6% and
+12%
 ([per application](CALIBRATION_APPENDIX.md#dissipation-per-application),
 [relaxation](CALIBRATION_APPENDIX.md#the-relaxation-leg),
-[invariances](CALIBRATION_APPENDIX.md#retries-and-subcycling-under-relaxation)).
+[invariances](CALIBRATION_APPENDIX.md#retries-and-subcycling-under-relaxation),
+[the directional rate](CALIBRATION_APPENDIX.md#the-filter-relaxed-against-the-directional-acoustic-rate)).
 Under relaxation a retry halves ε, so retries walk a case toward the edge
 rather than away from it.
 
@@ -410,6 +421,11 @@ second. `C_beta`, `C_kappa`, `C_D` and `C_Y` do not move under it
 default configuration: the Woodward–Colella and Noh rows moved, and Lax,
 Shu–Osher, Sedov and the interface case did not to the digits printed
 ([the battery under relaxation](CALIBRATION_APPENDIX.md#the-battery-under-relaxation)).
+When the weight began reading the directional hyperbolic rate, every Noh
+row moved again toward a weaker filter at the front, where the step is
+diffusion-limited under C_β = 1, and the aligned case reads one profile at
+every aspect ratio
+([the directional rate](CALIBRATION_APPENDIX.md#the-filter-relaxed-against-the-directional-acoustic-rate)).
 
 The filter is also the wall-order cap of every filtered run, second order
 through its row-2 closure, and the closure rows are where it fails to
@@ -553,9 +569,3 @@ In approximate priority order; each links to the measurements it rests on.
    ([the clamp](CALIBRATION_APPENDIX.md#the-fourth-difference-clamp-at-a-fold)).
 9. **Decide `species_flux`** on the vortex-ring/SF6 case
    ([open](CALIBRATION_APPENDIX.md#open)).
-10. **Relax the filter against the acoustic rate.** `filter_weight` reads
-    the rate that sized the step, so under a diffusion-limited step the
-    passes per unit time follow the diffusive rate; on a grid of aspect
-    ratio 16 the planar Noh run completes with a wrong solution and
-    `filter_cfl = 5` restores it (roadmap N5a,
-    [the aligned case](CALIBRATION_APPENDIX.md#the-aligned-case)).

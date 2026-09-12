@@ -282,10 +282,12 @@ Each level below the root filters its own state at its own step cadence:
 the substep of level ℓ with global index `3·(parent index) + m` filters when
 `filter_interval` divides it, the root's index being `solver.step`, giving
 every level the same one-pass-per-step cadence as an unrefined run. Under a
-positive `filter_cfl` a refined pass's relaxation weight reads the root
-`dt · rate` product, an upper bound on that level's own CFL, so the filter
-is never weaker than the convention intends. `run!`'s own per-step filter
-pass covers the root level only in this mode, and the post-step restriction
+positive `filter_cfl` a refined pass's relaxation weight reads the root's
+`dt` and the per-direction rates of [`max_rate`](@ref), which that function
+scales by the level's substep ratio, an upper bound on the level's own
+directional CFL, so the filter is never weaker than the convention intends.
+`run!`'s own per-step filter pass covers the root level only in this mode,
+and the post-step restriction
 then rebuilds every covered region from the filtered finer state. Levels two
 or more below the root are restricted onto their parent inside the driver,
 after each parent substep, so that the parent's next substep starts from
@@ -423,9 +425,9 @@ end
 
 CFL-limited timestep from the advective, acoustic and diffusive rates of
 [`max_rate`](@ref), reduced over all ranks. This is `solver.cfl` divided by
-the rate that function returns, discarding the density it returns
-alongside, so it carries that function's collective and its side effects on
-`Q`'s halos and on the primitive fields.
+the rate that function returns, discarding the density and the per-direction
+rates it returns alongside, so it carries that function's collective and its
+side effects on `Q`'s halos and on the primitive fields.
 
 The artificial coefficients are those left by the previous step, so the
 diffusive rate lags by one. `StepControl.predict` extrapolates against that lag
@@ -440,11 +442,13 @@ compute_dt(solver::Solver, states::Vector{<:ConservedState}) =
     solver.cfl / max_rate(solver, states)[1]
 
 """
-    max_rate(solver, Q) -> (rate, rho_min)
+    max_rate(solver, Q) -> (rate, rho_min, direction_rates)
 
-Global maximum of the CFL rate, and the global minimum mixture density taken
-directly from `Q`. Both quantities are evaluated in the same loop and reduced by
-one `Allreduce`, so every rank must call this and all receive the same pair.
+Global maximum of the CFL rate, the global minimum mixture density taken
+directly from `Q`, and the global maximum of each direction's one-dimensional
+hyperbolic rate `(|u_d| + c) / h_d`, as a 3-tuple with zeros on collapsed
+dimensions. All are evaluated in the same loop and reduced by one `Allreduce`,
+so every rank must call this and all receive the same values.
 
 The rate at a point is
 
@@ -461,6 +465,11 @@ three-dimensional grid. That rate reproduces the acoustic ceiling measured on
 Taylor–Green at 32³, the RK imaginary-axis limit 3.34 over the C6
 modified-wavenumber peak 1.99, times `√3`.
 
+The per-direction rates size nothing; [`filter_weight`](@ref) reads them,
+recorded by [`run!`](@ref) beside the step taken, so that a directional filter
+pass is relaxed against the rate of its own direction and not against the
+maximum that sized the step.
+
 Before the loop it exchanges `Q`'s halos and refreshes the primitive fields from
 `Q`, which [`run!`](@ref) relies on when it passes `prepared = true` to
 [`step!`](@ref).
@@ -473,42 +482,50 @@ the diffusive term subsequently drives `dt` toward zero.
 function max_rate(solver::Solver, Q)
     exchange_state!(Q, solver.decomp)   # keep halos consistent for primitives!
     primitives!(solver, Q)
-    rate, ρ_min = _local_max_rate(solver, Q)
-    # One collective, not two: both quantities are reduced with `max` by
+    rate, ρ_min, dir = _local_max_rate(solver, Q)
+    # One collective, not five: every quantity is reduced with `max` by
     # negating the density, and this runs every step of every run.
     t0 = time_ns()
-    red = MPI.Allreduce([rate, -ρ_min], max, solver.comm)
+    red = MPI.Allreduce([rate, -ρ_min, dir[1], dir[2], dir[3]], max, solver.comm)
     _wait!(solver, t0)
-    return (red[1], -red[2])
+    return (red[1], -red[2], (red[3], red[4], red[5]))
 end
 
 """
-    max_rate(solver, states::Vector) -> (rate, rho_min)
+    max_rate(solver, states::Vector) -> (rate, rho_min, direction_rates)
 
 Multi-patch form: the per-patch exchange, primitives pass and interior sweep
-run patch by patch, and the two quantities reduce over `solver.comm`, the
-whole rank set, exactly once, hoisted outside the patch loop as the
-collective discipline requires.
+run patch by patch, and the quantities reduce over `solver.comm`, the whole
+rank set, exactly once, hoisted outside the patch loop as the collective
+discipline requires.
 """
 function max_rate(solver::Solver, states::Vector{<:ConservedState})
     T = typeof(solver.cfl)
     rate = zero(T)
     ρ_min = T(Inf)
+    dir = ntuple(_ -> zero(T), 3)
     subcycle = getfield(solver, :subcycle)
     for (ps, Q) in eachpatch(solver, states)
         exchange_state!(Q, ps.decomp)
         primitives!(ps, Q)
-        r, m = _local_max_rate(ps, Q)
+        r, m, rd = _local_max_rate(ps, Q)
         # A subcycled level ℓ advances at dt / 3^ℓ, so its rate constrains the
-        # coarse step three times more weakly per level.
-        subcycle && (r /= oftype(r, 3)^ps.patch.level)
+        # coarse step three times more weakly per level. The per-direction
+        # rates are scaled the same way, so that a level's filter pass, which
+        # reads the root's `dt`, sees the level's own directional CFL.
+        if subcycle
+            scale = oftype(r, 3)^ps.patch.level
+            r /= scale
+            rd = rd ./ scale
+        end
         rate = max(rate, r)
         ρ_min = min(ρ_min, m)
+        dir = max.(dir, rd)
     end
     t0 = time_ns()
-    red = MPI.Allreduce([rate, -ρ_min], max, solver.comm)
+    red = MPI.Allreduce([rate, -ρ_min, dir[1], dir[2], dir[3]], max, solver.comm)
     _wait!(solver, t0)
-    return (red[1], -red[2])
+    return (red[1], -red[2], (red[3], red[4], red[5]))
 end
 
 # Charge the time since `t0` (a `time_ns` reading) to the rank's waiting
@@ -520,8 +537,9 @@ _wait!(solver::Solver, t0::UInt64) =
 # collectives. `Array` storage keeps the fused serial loop; device storage
 # (and FORCE_KA, which is how the test suite pins the launch path on one
 # machine) evaluates the rate through a pointwise body into `tmp_a`/`tmp_b`
-# and reduces each with the storage's own `maximum`/`minimum`. Both scratch
-# fields are free here: max_rate runs before the step's first RHS evaluation.
+# and the per-direction rates into `grad_T_ion`, and reduces each with the
+# storage's own `maximum`/`minimum`. All of that scratch is free here:
+# max_rate runs before the step's first RHS evaluation, which refills it.
 # Maximum and minimum are exact and order-independent, so the two paths agree
 # bitwise.
 function _local_max_rate(solver::SolverLike, Q)
@@ -552,11 +570,11 @@ end
     return (mu0 + mu_art[I] + beta_art[I]) * ri + thermal + Dmax
 end
 
-@inline function _rate_point!(rate_out, rhoq_out, Q, rho, u, v, w, parr, Tarr,
-                              carr, cparr, eos, mu_art, beta_art, kappa_art,
-                              D_art, inv_h1, inv_h2, inv_h3, inv_r, cot_over_r,
-                              metric, act, hh, mu0, Pr, Sc, n_species,
-                              o1, o2, o3, i, j, k)
+@inline function _rate_point!(rate_out, rhoq_out, dir_out, Q, rho, u, v, w,
+                              parr, Tarr, carr, cparr, eos, mu_art, beta_art,
+                              kappa_art, D_art, inv_h1, inv_h2, inv_h3, inv_r,
+                              cot_over_r, metric, act, hh, mu0, Pr, Sc,
+                              n_species, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         T = eltype(rho)
@@ -577,6 +595,7 @@ end
             idx = ih[d][I] / hh[d]
             acc += abs(uv[d]) * idx
             dsum += idx * idx
+            dir_out[d][I] = (abs(uv[d]) + c) * idx
         end
         acc += c * sqrt(dsum)                 # the acoustic symbol is c |k'|
         acc += _curvature_rate_point(metric, act[2], act[3], inv_r, cot_over_r,
@@ -594,17 +613,22 @@ function _local_max_rate_launch(solver::SolverLike, Q)
     nx, ny, nz = decomp.n_local
     tr = solver.transport
     ft = solver.field_tuples
+    dir_out = solver.grad_T_ion
     pointwise!(_rate_point!, solver.tmp_a, nx, ny, nz,
-               solver.tmp_a, solver.tmp_b, Q, solver.rho, solver.u, solver.v,
-               solver.w, solver.p, solver.T_ion, solver.c, solver.cp_mix,
-               solver.eos, solver.mu_art, solver.beta_art, solver.kappa_art,
-               ft.D_art, solver.inv_h[1], solver.inv_h[2], solver.inv_h[3],
-               solver.inv_r, solver.cot_over_r, solver.metric,
+               solver.tmp_a, solver.tmp_b, dir_out, Q, solver.rho, solver.u,
+               solver.v, solver.w, solver.p, solver.T_ion, solver.c,
+               solver.cp_mix, solver.eos, solver.mu_art, solver.beta_art,
+               solver.kappa_art, ft.D_art, solver.inv_h[1], solver.inv_h[2],
+               solver.inv_h[3], solver.inv_r, solver.cot_over_r, solver.metric,
                decomp.active, solver.h,
                tr.mu0, tr.Pr, tr.Sc, solver.equations.n_species, o1, o2, o3)
-    rates = view(solver.tmp_a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
-    rhos = view(solver.tmp_b, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
-    return (maximum(rates), minimum(rhos))
+    interior = (o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
+    rates = view(solver.tmp_a, interior...)
+    rhos = view(solver.tmp_b, interior...)
+    dir = ntuple(3) do d
+        decomp.active[d] ? maximum(view(dir_out[d], interior...)) : zero(eltype(Q))
+    end
+    return (maximum(rates), minimum(rhos), dir)
 end
 
 function _local_max_rate_loop(solver::SolverLike, Q)
@@ -616,6 +640,7 @@ function _local_max_rate_loop(solver::SolverLike, Q)
     T = eltype(Q)
     rate = zero(T)
     ρ_min = T(Inf)
+    r1 = zero(T); r2 = zero(T); r3 = zero(T)
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
         I = CartesianIndex(i + o1, j + o2, k + o3)
         ρQ = zero(T)
@@ -635,6 +660,16 @@ function _local_max_rate_loop(solver::SolverLike, Q)
             idx = solver.inv_h[d][I] / solver.h[d]      # inverse physical spacing
             acc += abs(uv[d]) * idx
             dsum += idx * idx
+            # The direction's own hyperbolic rate, the same expression as the
+            # launch path's so the two agree bitwise.
+            rd = (abs(uv[d]) + c) * idx
+            if d == 1
+                r1 = max(r1, rd)
+            elseif d == 2
+                r2 = max(r2, rd)
+            else
+                r3 = max(r3, rd)
+            end
         end
         acc += c * sqrt(dsum)                 # the acoustic symbol is c |k'|
         # Curvature-source stiffness. When an angular dimension is RESOLVED,
@@ -651,7 +686,7 @@ function _local_max_rate_loop(solver::SolverLike, Q)
         acc += 2 * ν * dsum
         rate = max(rate, acc)
     end
-    return (rate, ρ_min)
+    return (rate, ρ_min, (r1, r2, r3))
 end
 
 """
@@ -1146,6 +1181,7 @@ function _rollback!(solver, Q, workspace, callback, control, save, failure,
     # floor would immediately fire again against a dt from before the rollback.
     solver.dt_prev = zero(solver.dt_prev)
     solver.rate_prev = zero(solver.rate_prev)
+    solver.filter_rate_prev = map(zero, solver.filter_rate_prev)
     # A trajectory that failed NON-FINITE also leaves NaN in the
     # low-storage accumulator, which the restore does not touch and whose
     # usual amnesia via RKA[1] = 0 cannot forget NaN (0.0 · NaN is NaN);
@@ -1262,7 +1298,8 @@ that fails the same test is discarded in favour of the full step, the instant
 being inside the trigger's tolerance already.
 
 Each step updates `solver.t`, `solver.step`, `solver.dt_prev`,
-`solver.rate_prev`, `solver.tstage`, `solver.wall_step` and
+`solver.rate_prev`, `solver.filter_rate_prev`, `solver.tstage`,
+`solver.wall_step` and
 `solver.wall_total`; a rolled-back iteration records no wall time. The loop is
 collective through [`max_rate`](@ref) and the line solves beneath
 [`step!`](@ref), so every rank must call it with the same `tfinal`, `nmax` and
@@ -1343,7 +1380,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # asserts; that removes one sixth of both from the per-step cost.
         solver.tstage = solver.t
         apply_bcs!(solver, Q)
-        rate, rho_min = max_rate(solver, Q)
+        rate, rho_min, filter_rate = max_rate(solver, Q)
         dt = predicted_dt(solver, control, rate)
         failure = check_step(control, dt, rho_min, dt_seen, solver.step,
                              solver.t, solver.cfl)
@@ -1440,6 +1477,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         solver.step += 1
         solver.dt_prev = dt
         solver.rate_prev = rate
+        solver.filter_rate_prev = filter_rate
         if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
             filter_state!(solver, Q)
         end
@@ -1490,9 +1528,10 @@ function run!(solver::Solver, Q; workspace=nothing, kwargs...)
 end
 
 """
-    filter_weight(solver) -> w
+    filter_weight(solver, d) -> w
 
-Relaxation weight for one [`filter_state!`](@ref) pass, in `(0, 1]`.
+Relaxation weight for one [`filter_state!`](@ref) pass along dimension `d`, in
+`(0, 1]`.
 
 `solver.filter_cfl == 0` returns `1`, which is the unrelaxed formulation: the
 filter is applied at full strength on every pass, so it removes energy per
@@ -1502,17 +1541,36 @@ same interval and doubles the dissipation, so the subgrid dissipation does not
 converge as `dt → 0` at fixed resolution.
 
 A positive `filter_cfl` restores that convergence by scaling the weight with the
-step taken,
+step taken and the rate of the direction swept,
 
-    w = filter_interval · dt · rate / filter_cfl
+    w_d = filter_interval · dt · r_d · √n / filter_cfl
 
-capped at 1. Since `compute_dt` sets `dt = cfl / rate`, the product `dt · rate`
-recovers the CFL in force, including `StepControl` backoff and the
-shortening applied to land on a callback instant. So `w` is `cfl / filter_cfl`
-in normal running, `filter_cfl` is the CFL at which one pass is applied at full
-strength, and dissipation per unit time is invariant below it.
+capped at 1, with `r_d` the global maximum of the one-dimensional hyperbolic
+rate `(|u_d| + c) / h_d` that [`max_rate`](@ref) returns beside the rate that
+sized the step, and `n` the number of active dimensions. `dt · r_d` is the
+directional CFL of the step taken, including `StepControl` backoff and the
+shortening applied to land on a callback instant. `√n` is the ratio of the
+Euclidean acoustic rate `c √(Σ 1/h_d²)` to the one-dimensional one on an
+isotropic grid, so `filter_cfl` keeps the convention of `cfl`: in one
+dimension exactly, and on an isotropic grid up to the advective share of the
+rate, a pass is at full strength at or above `cfl = filter_cfl` whenever the
+step is acoustic-limited, and the dissipation per unit time is invariant
+below it.
 
-Because `dt · rate` is read and not `solver.cfl`, a shortened step filters
+The rate read is the hyperbolic one and not the maximum that sized the step,
+for two reasons. Where the diffusive rate governs, the passes per unit time
+would otherwise follow it: under a scalar β* on a grid of aspect ratio 16
+the planar Noh run made fifteen times the passes of the same run on a
+square grid and completed with a wrong solution, wall density 24 against 4.
+And the rate is directional because the filter is: the coarse direction's
+pass is relaxed against the coarse direction's rate, so a fine transverse
+spacing, which raises the Euclidean rate by the aspect ratio, changes
+nothing along the coarse direction. The step, the artificial coefficients
+and the physical diffusivities are all outside the weight; the filter's
+dissipation per unit time is set by the resolved advection and acoustics
+alone.
+
+Because `dt · r_d` is read and not `solver.cfl`, a shortened step filters
 proportionally less, which removes the truncated-final-step artifact in
 `bench/tgv_energy.jl`.
 
@@ -1521,11 +1579,12 @@ against. That holds on a freshly built solver and after a rollback; inside
 `run!` the step is recorded before the filter runs, so the relaxed weight is in
 force from the first pass.
 """
-function filter_weight(solver::SolverLike{T}) where {T}
+function filter_weight(solver::SolverLike{T}, d::Int) where {T}
     solver.filter_cfl > 0 || return one(T)
     solver.dt_prev > 0 || return one(T)
-    w = solver.filter_interval * solver.dt_prev * solver.rate_prev /
-        solver.filter_cfl
+    n_active = count(solver.decomp.active)
+    w = solver.filter_interval * solver.dt_prev * solver.filter_rate_prev[d] *
+        sqrt(T(n_active)) / solver.filter_cfl
     return min(one(T), w)
 end
 
@@ -1546,10 +1605,10 @@ so they are left
 inconsistent with the filtered interior until the next step exchanges again.
 
 Under a positive `filter_cfl` the result is relaxed toward the filtered state
-and not replaced by it, with the weight [`filter_weight`](@ref) supplies.
-The weight is a reduced quantity by construction, since `rate_prev` comes from
-the collective in `max_rate`, so every rank blends by the same amount without a
-further reduction here.
+and not replaced by it, with the weight [`filter_weight`](@ref) supplies for
+the dimension swept. The weight is a reduced quantity by construction, since
+`filter_rate_prev` comes from the collective in `max_rate`, so every rank
+blends by the same amount without a further reduction here.
 
 Under `filter_weighting = :volume` on a non-uniform cell volume, which is any
 cylindrical, spherical or stretched grid, each directional pass filters the
@@ -1581,10 +1640,10 @@ them.
 function filter_state!(solver::SolverLike, Q)
     decomp = solver.decomp
     comps = [view(Q, :, :, :, c) for c in 1:solver.equations.n_cons]
-    w = filter_weight(solver)
     weighted = _weighted_filter(solver)
     for d in 1:3
         decomp.active[d] || continue
+        w = filter_weight(solver, d)
         exchange_dim_batch!(comps, decomp, d)
         weighted && _filter_volume!(solver, d)
         for c in 1:solver.equations.n_cons

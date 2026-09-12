@@ -190,6 +190,7 @@ using HDF5
     sst.cfl = 0.125
     sst.dt_prev = 1.5e-4
     sst.rate_prev = 987.5
+    sst.filter_rate_prev = (12.5, 250.0, 0.0)
     switch!(written_face)
     state_stem = joinpath(dir, "runstate")
     save_checkpoint_hdf5(sst, Qst, state_stem)
@@ -201,6 +202,7 @@ using HDF5
     @test sback.cfl == 0.125
     @test sback.dt_prev == 1.5e-4
     @test sback.rate_prev == 987.5
+    @test sback.filter_rate_prev == (12.5, 250.0, 0.0)
     @test switched(read_face)
 
     # A face the file describes as switchable where this solver has a plain

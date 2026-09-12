@@ -620,13 +620,17 @@ Grid, scheme, timestep, and decomposition choices used to realize a
   `filt` unused altogether unless `ArtParams(smoother = :compact)` also selects
   it as the sensor smoother.
 - `filter_cfl`: reference CFL of a full-strength filter pass, making the
-  filter's dissipation a rate, not a per-application amount. A pass relaxes
-  toward the filtered state by `filter_interval · dt · rate / filter_cfl`,
-  capped at one, which holds the dissipation per unit time fixed below that
-  CFL. The default `0.35` is the reference CFL of the Taylor–Green fits: at or
-  above it every pass is at full strength, the unrelaxed formulation bit for
-  bit, and below it the run receives the dissipation per unit time of one at
-  the reference. `0.0` disables the relaxation: each pass then replaces the
+  filter's dissipation a rate, not a per-application amount. A pass along a
+  direction relaxes toward the filtered state by `filter_interval · dt ·
+  r_d · √n / filter_cfl`, capped at one, with `r_d` that direction's
+  one-dimensional hyperbolic rate `(|u_d| + c) / h_d` and `n` the number of
+  active dimensions, which holds the dissipation per unit time fixed below
+  that CFL and independent of the diffusive rates, physical or artificial,
+  and of the spacing of the other directions. The default `0.35` is the
+  reference CFL of the Taylor–Green fits: at or above it, on an isotropic
+  grid under an acoustic-limited step, every pass is at full strength, and
+  below it the run receives the dissipation per unit time of one at the
+  reference. `0.0` disables the relaxation: each pass then replaces the
   state with its filtered image, so halving the CFL doubles the number of
   passes over an interval and doubles the dissipation. See
   [`filter_weight`](@ref).

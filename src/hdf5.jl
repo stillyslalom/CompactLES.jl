@@ -71,8 +71,9 @@ end
     save_checkpoint_hdf5(solver, Q, prefix)
 
 Write the interior of `Q` to `prefix.h5` as one global array, with the run
-state a restart needs (`t`, `step`, `cfl`, `dt_prev`, `rate_prev`, the
-per-face `switched` flag of every `SwitchableBC`, and the artificial
+state a restart needs (`t`, `step`, `cfl`, `dt_prev`, `rate_prev`,
+`filter_rate_prev`, the per-face `switched` flag of every `SwitchableBC`, and
+the artificial
 coefficient arrays when the artificial properties are enabled, from which
 [`max_rate`](@ref) sizes the next step), and return `prefix`. An existing
 file of that name is truncated. Collective.
@@ -143,7 +144,8 @@ save_hdf5(args...; kwargs...) = _hdf5_required("save_hdf5")
     load_checkpoint_hdf5!(solver, Q, prefix)
 
 Restore the interior of `Q` and the run state (`t`, `step`, `cfl`, `dt_prev`,
-`rate_prev`, each `SwitchableBC`'s `switched` flag through `switch!`, and the
+`rate_prev`, `filter_rate_prev`, each `SwitchableBC`'s `switched` flag through
+`switch!`, and the
 artificial coefficient arrays when the artificial properties are enabled) from
 the file written by [`save_checkpoint_hdf5`](@ref), onto whatever decomposition
 `solver` has, and return `Q`. Halos are left untouched, and the primitive
