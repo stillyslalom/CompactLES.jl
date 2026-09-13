@@ -35,6 +35,9 @@ points at them and does not restate them.
 25. [Filtering on non-uniform volumes (September 2026)](#filtering-on-non-uniform-volumes-september-2026)
 26. [Directional bulk viscosity (September 2026)](#directional-bulk-viscosity-september-2026)
 27. [Relaxing the filter against the acoustic rate (September 2026)](#relaxing-the-filter-against-the-acoustic-rate-september-2026)
+28. [The smooth-evolution accuracy matrix (September 2026)](#the-smooth-evolution-accuracy-matrix-september-2026)
+29. [The filter's wall rows (September 2026)](#the-filters-wall-rows-september-2026)
+30. [The Brady–Livescu rows as a wall configuration (September 2026)](#the-bradylivescu-rows-as-a-wall-configuration-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -1659,3 +1662,57 @@ docs reference check standalone after the last documentation edit.
 small workloads after the change. No hot-path code changed, so the
 performance audits were not run; HDF5 and Makie extension tests were
 skipped by the package environment.
+
+## The Brady–Livescu rows as a wall configuration (September 2026)
+
+N6b closes with a bounded statement and no change of default: C6
+`:brady_livescu` under the default one-sided filter rows is a supported
+wall configuration within measured limits, `:cascade3` remains the
+default, and C8 `:brady_livescu` is not supported at a wall.
+`bench/wallclosure.jl` is the qualification: the smooth wall cases with
+the artificial properties on, so the update at the wall is the complete
+one with `D(β* D)`; the artificial channels one at a time; CFL ladders on
+a smooth wall against its mirror, the steepening pulse, Woodward–Colella
+and the warm-started Noh wall; the warm-start ladder down to the singular
+start, with and without retries; the Float64 floor of one derivative to
+N = 3073 and the Float32 pulse; the minimum block extents read from
+`plan_direction` on one and two ranks; and the Cartesian Noh plane. The
+smooth cases gained an isothermal shear wall (`Twall = 1`, compatible
+with the mode) and a shear mirror, and the reflected pulse moved from the
+filter bench into `test/cases.jl` so both wall benches run one
+definition.
+
+The finding the item did not anticipate is that a run with the
+artificial properties on has a fourth-order wall under every derivative
+closure: the artificial diffusion carries a closure defect of its own at
+a wall, in proportion to its coefficient, so β\* carries it, and it is
+fourth order because the detector's fourth difference is O(h⁴) on a
+smooth field and `delta4_sum!` clamps a closed edge where the mirror
+sees the exact even extension. The Brady–Livescu rows' gain on such a
+run is fifteen times in the error, not two orders in the slope, and the
+velocity sensor adds a second-order defect of its own under any closure.
+The mirror fix is item 7 of the calibration file's open list. Within
+that, the C6 rows track the cascade to `cfl = 1.75` on a smooth wall,
+1.5 on the steepening pulse and 1.2 on the shocked walls, reproduce
+Woodward–Colella to 0.1% in `L1` at every CFL number, hold a resolved
+warm Noh wall within 0.2% where the cascade reads 1%, read the plane to
+three digits on both starts, and take no start whose singular data sit
+on a closure row; their Float64 floor of 1e-11 sits four orders below
+the cascade's error where it is reached, and a Float32 evolution floors
+at 3e-5 under either closure, so the recorded 1e-3 one-derivative floor
+does not reach a solution. The extents are the filter's nine points. The
+C8 rows fail a smooth wall from `cfl = 1.25` with the mirror completing,
+the warm Noh wall from 0.9, the plane on both starts, and every planar
+start but the 40-cell one. The measurements are under [the Brady–Livescu
+rows as a wall
+configuration](CALIBRATION_APPENDIX.md#the-bradylivescu-rows-as-a-wall-configuration);
+the applied form is in [CALIBRATION.md](CALIBRATION.md#walls-folds-and-metrics).
+
+`test/validation.jl` guards the configuration on Woodward–Colella and on
+the warm Noh wall, and `test/mpi_tests.jl` checks both Brady–Livescu
+sets' polynomial exactness across the eight-way split beside the
+cascade's. The stale open item on the filter's wall rows was removed
+from the calibration file and the clamp item now carries the
+measurement. The docstrings of `lele_d1_6` and `lele_d1_8`, the design
+file and the discretization page state the supported configuration and
+its limits.

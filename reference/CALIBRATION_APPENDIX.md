@@ -41,6 +41,7 @@ record of that setting.
 19. [Directional bulk viscosity on anisotropic grids](#directional-bulk-viscosity-on-anisotropic-grids)
 20. [The smooth-evolution accuracy matrix](#the-smooth-evolution-accuracy-matrix)
 21. [The filter's wall rows on the current solver](#the-filters-wall-rows-on-the-current-solver)
+22. [The Brady–Livescu rows as a wall configuration](#the-bradylivescu-rows-as-a-wall-configuration)
 
 ## The battery
 
@@ -4241,3 +4242,364 @@ Float32 follows Float64. The validation guards were re-baselined under
 the new default and the stored references regenerated; the regression
 rows that assert a cascade measurement pin it, as they pin
 `filter_cfl = 0`.
+
+<a id="the-bradylivescu-rows-as-a-wall-configuration"></a>
+
+## The Brady–Livescu rows as a wall configuration
+
+`bench/wallclosure.jl`, September 2026, roadmap N6b. [The smooth-evolution
+matrix](#the-smooth-evolution-accuracy-matrix) measured the Brady–Livescu
+rows with the artificial properties off, and [the closure-compatibility
+table](#the-closure-compatibility-table) ran them at one CFL number on two
+shocked walls. The question here is whether C6 `:brady_livescu` under the
+default one-sided filter rows can be stated as a supported wall
+configuration with its limits measured: the solution order of the complete
+update, the artificial diffusion `D(β* D)` included, the CFL range, how
+resolved a start must be, the round-off floor in both precisions, the
+minimum block extent, a two-dimensional case, and the decomposed line
+solve. C8 `:brady_livescu` runs in every table beside it, and the default
+`:cascade3` is the control. Every row is under `compact_filter(0.45)` with
+its one-sided rows every step, `filter_cfl = 0.35`, serial Float64 on
+Julia 1.12.7 unless it says otherwise, and every evolution is measured
+against its periodic mirror at the same spacing, options and step, so the
+number is the closure defect alone.
+
+### Smooth walls with the artificial properties on
+
+The standing wave of `test/smooth_cases.jl` between slip walls and between
+adiabatic no-slip walls, and the shear mode between adiabatic and between
+isothermal no-slip walls (`Twall = 1`, compatible with the mode's uniform
+temperature), `cfl = 0.25`, t = 0.4, wall window against the mirror, with
+the artificial properties off and on:
+
+```
+                                 art   N=49        97          193         orders
+inviscid, C6 cascade3            off   2.579e-7    1.353e-8    1.254e-9    4.25 / 3.43
+                                 on    2.640e-7    1.379e-8    1.254e-9    4.26 / 3.46
+inviscid, C6 BL                  off   2.430e-9    4.919e-11   7.976e-13   5.63 / 5.95
+                                 on    2.728e-8    1.134e-9    8.490e-11   4.59 / 3.74
+inviscid, C8 BL                  off   8.397e-11   6.954e-13   1.691e-13   6.92 / roundoff
+                                 on    4.364e-8    1.354e-9    1.193e-10   5.01 / 3.50
+viscous, C6 cascade3             off   1.537e-7    1.247e-8    8.703e-10   3.62 / 3.84
+                                 on    1.687e-7    1.335e-8    9.222e-10   3.66 / 3.86
+viscous, C6 BL                   off   1.952e-9    4.409e-11   8.082e-13   5.47 / 5.77
+                                 on    1.822e-8    1.015e-9    5.961e-11   4.17 / 4.09
+viscous, C8 BL                   off   2.054e-10   9.575e-13   2.198e-14   7.75 / 5.44
+                                 on    1.650e-8    1.010e-9    6.127e-11   4.03 / 4.04
+shear, adiabatic, C6 cascade3    off   1.586e-9    7.802e-11   3.575e-12   4.35 / 4.45
+                                 on    1.666e-9    8.191e-11   3.723e-12   4.35 / 4.46
+shear, adiabatic, C6 BL          off   1.942e-10   1.692e-12   1.351e-14   6.84 / 6.97
+                                 on    2.467e-10   7.867e-12   2.977e-13   4.97 / 4.72
+shear, adiabatic, C8 BL          off   1.101e-12   4.403e-15   roundoff    7.97
+                                 on    1.486e-10   8.055e-12   3.322e-13   4.21 / 4.60
+shear, isothermal, C6 BL         off   1.942e-10   1.692e-12   1.361e-14   6.84 / 6.96
+                                 on    2.466e-10   7.866e-12   2.979e-13   4.97 / 4.72
+```
+
+The isothermal rows read the adiabatic ones to three digits under every
+closure, so the isothermal flux path adds no closure defect of its own on
+a compatible case. With the artificial properties off the matrix's orders
+reproduce. With them on, the cascade rows read the same error to three
+digits, and the Brady–Livescu rows lose their order: C6 reads 3.7–4.7 at
+an error a hundred times its own at N = 193 (8.5e-11 against 8.0e-13) and
+C8 4.0–4.6 at 1.2e-10, on a case where the properties are nominally
+inactive. The wall of a run with the artificial properties on is fourth
+order under any of the three closure sets, and the Brady–Livescu rows'
+gain there is fifteen times in the error (8.5e-11 against 1.25e-9), not
+two orders in the slope.
+
+### Which channel carries it
+
+The inviscid wall under C6 Brady–Livescu with one constant at a time, the
+constants zeroed with the machinery enabled, and the other smoother,
+detector and sensor fields, wall window against the mirror:
+
+```
+                                    N=49        97          193         orders
+off                                 2.430e-9    4.919e-11   7.976e-13   5.63 / 5.95
+all on                              2.728e-8    1.134e-9    8.490e-11   4.59 / 3.74
+C_mu only                           2.497e-9    4.704e-11   7.410e-13   5.73 / 5.99
+C_beta only                         2.719e-8    1.129e-9    8.503e-11   4.59 / 3.73
+C_kappa only                        2.453e-9    5.200e-11   1.216e-12   5.56 / 5.42
+all zero, enabled                   2.430e-9    4.919e-11   7.976e-13   5.63 / 5.95
+all on, smoother = :compact         5.868e-8    2.796e-9    1.646e-10   4.39 / 4.09
+all on, detector = :d8              1.160e-8    5.244e-10   3.469e-11   4.47 / 3.92
+all on, mu_sensor = :velocity       7.144e-8    1.463e-8    3.444e-9    2.29 / 2.09
+all on, beta_sensor = :dilatation   1.615e-8    7.992e-10   4.471e-11   4.34 / 4.16
+```
+
+The constants zeroed reproduce the properties off exactly, so the
+coefficient arithmetic adds nothing; the β\* channel alone reproduces the
+whole defect, and the μ\* and κ\* channels sit where their constants put
+them (`C_mu` is 0.002 and `C_kappa` 0.01 against `C_beta = 1`; the κ\*
+row's 4e-13 above the unfiltered error is the same defect at a hundredth
+the coefficient). The defect is the artificial diffusion's, in
+proportion to its coefficient, and it is fourth order because the
+sensors that build the coefficient are: on a smooth field the fourth
+difference the detector reads is O(h⁴), and at a closed edge
+`delta4_sum!` clamps the field (a zeroth-order extension, described in
+its docstring as an effect not yet measured) where the mirror run sees
+the exact even extension, so the coefficient near the wall is wrong by
+an O(1) fraction of an O(h⁴) quantity. The eighth-difference detector
+halves it and the compact smoother doubles it, both of which move the
+clamp's reach, and the dilatation sensor halves it. Under the default
+closure the same runs read 1.254e-9 in every row but one: the velocity
+sensor, whose wall-normal component is differenced as though it were
+even (the docstring's noted gap against Pyranda), reads 4.6e-9 at
+N = 193 and 3.5 / 2.7, a second-order wall defect that the strain sensor
+does not have. Putting the detector's closed-edge path on the
+node-centred mirror would remove the fourth-order term; it changes the
+default path's coefficients at every wall and is left as the follow-up,
+under item 8 of the calibration file's open list.
+
+### The reflected pulse under each closure
+
+[The pulse of the filter's qualification](#the-reflected-pulse), density
+against its mirror at t = 0.7, `cfl = 0.4`, artificial properties on,
+under each derivative closure:
+
+```
+amp 0.01                 N=49        97          193         385         interior orders
+C6 cascade3  wall        2.087e-4    7.791e-6    2.070e-7    8.060e-9
+             interior    3.186e-4    2.116e-5    8.929e-7    3.083e-8    3.91 / 4.57 / 4.86
+             l2          1.149e-4    5.252e-6    1.762e-7    6.090e-9
+C6 BL        wall        1.953e-4    4.389e-6    4.569e-8    1.532e-10
+             interior    2.343e-4    1.402e-5    3.137e-7    1.586e-8    4.06 / 5.48 / 4.31
+             l2          1.037e-4    3.542e-6    7.785e-8    3.207e-9
+C8 BL        wall        1.418e-4    5.951e-7    1.493e-9    2.293e-11
+             interior    3.347e-4    1.927e-5    4.248e-7    2.894e-8    4.12 / 5.50 / 3.88
+             l2          1.345e-4    4.486e-6    8.424e-8    4.254e-9
+
+amp 0.1 (shocked after the reflection)
+                         N=97        193         385         769
+C6 cascade3  wall        3.323e-3    7.459e-4    6.037e-5    1.424e-7
+             interior    1.987e-3    7.143e-4    7.711e-5    5.980e-7    1.48 / 3.21 / 7.01
+             l2          7.962e-4    2.278e-4    1.809e-5    1.162e-7
+C6 BL        wall        4.538e-4    2.702e-5    2.957e-7    1.281e-8
+             interior    1.247e-3    5.425e-4    6.126e-5    6.435e-7    1.20 / 3.15 / 6.57
+             l2          3.768e-4    1.056e-4    9.560e-6    7.646e-8
+C8 BL        wall        3.415e-3    4.148e-4    1.700e-6    2.100e-8
+             interior    2.547e-3    7.812e-4    1.162e-4    2.470e-6    1.71 / 2.75 / 5.56
+             l2          6.389e-4    1.286e-4    1.373e-5    2.201e-7
+```
+
+At the wall window the Brady–Livescu rows are fifty times more accurate
+than the cascade by N = 385 on the smooth pulse and two hundred times on
+the steepening one; in the interior, where the reflected pulse sits at
+t = 0.7, the three closures agree within a factor of two at every N
+above 49, since the interior error there is the filter's and the time
+integrator's, not the closure's. The steepening pulse's `l2` under C6
+Brady–Livescu is half the cascade's at every N. On the coarsest grid,
+where the pulse is 2.4 cells wide, every closure reads the same 1e-4.
+
+### The stable CFL range
+
+The inviscid wall at N = 97 with the artificial properties on, t = 0.4,
+against the mirror at the same CFL number, which carries the interior
+scheme and the filter but no closure row:
+
+```
+cfl     C6 cascade3   C6 BL         C8 BL                        mirror
+0.25    1.379e-8      1.134e-9      1.354e-9                     completes
+0.50    1.542e-8      1.135e-9      1.330e-9                     completes
+0.75    1.672e-8      1.565e-9      2.608e-9                     completes
+1.00    1.742e-8      1.435e-9      2.342e-9                     completes
+1.25    1.782e-8      1.097e-9      negative density, step 30    completes
+1.50    1.805e-8      8.453e-10     negative density, step 12    completes
+1.75    1.809e-8      1.224e-9      negative density, step 8     completes
+2.00    8.542e-5      5.458e-3      negative density, step 8     completes
+```
+
+C6 Brady–Livescu holds its wall error flat to `cfl = 1.75`, as the
+cascade does; at 2.0 both wall runs still complete but their difference
+from the mirror jumps four orders, the cascade's to 1e-4 and the rows'
+to 5e-3, so the update is at its edge there under either closure. C8
+Brady–Livescu fails from 1.25 with its mirror completing, so the T8 rows
+carry a stability limit of their own at a smooth wall.
+
+The steepening pulse at N = 385 (interior / `l2` against the mirror, the
+ladder 0.2 to 1.5), Woodward–Colella at N = 800 (`L1 rho` against the
+stored reference, the ladder 0.15 to 1.2) and the planar Noh wall
+warm-started from the exact solution at t0 = 0.3 (`rho[1:4]`, the ladder
+0.15 to 1.2):
+
+```
+steepening pulse    C6 cascade3         C6 BL               C8 BL
+0.2                 7.54e-5 / 2.04e-5   5.81e-5 / 9.28e-6   1.11e-4 / 1.31e-5
+0.4                 7.71e-5 / 1.81e-5   6.13e-5 / 9.56e-6   1.16e-4 / 1.37e-5
+0.6                 6.34e-5 / 1.05e-5   6.47e-5 / 1.00e-5   1.33e-4 / 1.61e-5
+0.8                 4.48e-5 / 6.80e-6   5.62e-5 / 8.32e-6   1.32e-4 / 1.66e-5
+1.0                 2.56e-5 / 2.91e-6   2.55e-5 / 4.68e-6   1.06e-4 / 1.31e-5
+1.2                 2.25e-5 / 2.16e-6   1.27e-5 / 1.97e-6   negative density, step 113
+1.5                 1.74e-5 / 1.79e-6   7.11e-6 / 8.71e-7   negative density, step 19
+
+Woodward–Colella    C6 cascade3         C6 BL               C8 BL
+0.15                3.219e-2            3.216e-2            3.227e-2
+0.3                 3.220e-2            3.217e-2            3.227e-2
+0.45                3.185e-2            3.183e-2            3.192e-2
+0.6                 3.137e-2            3.134e-2            3.136e-2
+0.9                 3.063e-2            3.063e-2            3.050e-2
+1.2                 3.026e-2            3.026e-2            3.000e-2
+
+Noh warm t0 = 0.3   C6 cascade3                C6 BL                      C8 BL
+0.15                4.025 3.988 3.993 4.007    3.992 3.996 3.996 4.000    3.895 3.995 4.001 3.997
+0.3                 4.027 3.988 3.993 4.007    3.993 3.996 3.997 4.000    3.969 3.993 3.997 3.999
+0.6                 4.032 3.986 3.993 4.009    3.994 3.996 3.997 3.999    4.146 3.994 3.988 4.003
+0.9                 4.019 3.992 3.994 4.004    3.996 3.995 3.996 4.000    4.342 4.048 3.994 3.997
+1.2                 4.012 3.997 3.996 4.000    4.001 3.995 3.996 4.001    negative density, step 75
+```
+
+C6 Brady–Livescu completes every case at every CFL number the cascade
+completes it at, reads Woodward–Colella's `L1` within 0.1% of the
+cascade's with the collided contact at the same node at each of the six,
+and holds the warm Noh wall within 0.2% of 4 to `cfl = 1.2` where the
+cascade's first node reads 4.01–4.03. C8 Brady–Livescu completes
+Woodward–Colella to 1.2 within 1% but departs from the Noh wall from
+`cfl = 0.6` (4.15, then 4.34 at 0.9) and fails it at 1.2, and fails the
+steepening pulse from 1.2.
+
+### How resolved a start must be
+
+Planar Noh at N = 400 from the exact solution at t0, `cfl = 0.15`. The
+front is at t0/3, the cell is 0.0025, and the warm start blends the
+plateau into the inflow over four cells about the front, so below
+t0 ≈ 0.03 the plateau is narrower than the blend and the initial state
+is not the exact one under any closure:
+
+```
+t0      front (cells)   C6 cascade3                C6 BL                       C8 BL
+0.3     40              4.025 3.988 3.993 4.007    3.992 3.996 3.996 4.000     3.895 3.995 4.001 3.997
+0.1     13              4.057 3.968 4.021 4.010    3.985 3.976 4.029 4.005     negative density, t = 0.075
+0.03    4               4.365 4.662 4.788 4.360    12.446 6.769 4.785 4.210    negative density, step 3
+0.01    1.3             11.403 4.930 3.655 3.756   4.931 4.989 4.167 4.030     negative density, step 20
+0.003   0.4             90.740 4.308 2.892 3.764   negative density, t = 0.18  negative density, step 21
+0.0     singular        1.990 2.560 3.288 3.743    negative density, t = 0.006 negative density, step 21
+```
+
+`StepControl(retries = 4)` changes no row: a failing Brady–Livescu run
+fails later (step 2233 in place of 1065 at t0 = 0.003) or ends in a
+timestep collapse, so this is not the startup restriction of the CFL
+section. C6 Brady–Livescu holds the wall wherever the cascade does
+(t0 = 0.3 and 0.1, the front 13 cells out) and loses it where the cascade
+also does not hold it; the difference between the two sets is the
+singular start, which the cascade completes with its 50% deficit and the
+rows do not complete at all. C8 Brady–Livescu takes only the 40-cell
+start.
+
+### The round-off floor
+
+One derivative of `exp(sin(3x))` on the closed line, Float64, wall window
+against the actual spacing:
+
+```
+N        C6 cascade3   C6 BL        C8 BL
+193      9.075e-6      7.219e-9     2.872e-10
+385      1.118e-6      1.689e-10    6.901e-12
+769      1.387e-7      7.837e-12    1.063e-11
+1537     1.728e-8      5.329e-11    2.491e-11
+3073     2.155e-9      6.106e-11    7.566e-11
+orders   3.0 throughout  5.4 / 4.4 / floor  5.4 / floor, rising
+```
+
+The cascade converges at 3.0 to the last grid with no floor in sight; the
+Brady–Livescu rows floor near 1e-11 on a derivative of magnitude 8, C6
+from N ≈ 800 and C8 from N ≈ 400, and the C8 floor rises with N as the
+condition number does. The floor is four orders below the cascade's
+error at those resolutions, and the cascade would reach it near
+N = 10⁴, so on a closed line in Float64 the rows are the more accurate
+set at any resolution a run uses. The interior sits a factor of 20–100
+below the wall in every column.
+
+The reflected pulse against its mirror in Float32, artificial properties
+on, wall / interior:
+
+```
+amp 0.01                 N=49                97                  193                 385
+C6 cascade3              2.09e-4 / 3.20e-4   2.40e-5 / 2.23e-5   3.34e-5 / 1.62e-5   7.51e-5 / 3.17e-5
+C6 BL                    2.04e-4 / 2.37e-4   2.54e-5 / 2.87e-5   3.42e-5 / 1.73e-5   4.33e-5 / 3.16e-5
+C8 BL                    1.65e-4 / 3.77e-4   5.81e-5 / 6.49e-5   1.05e-4 / 7.61e-5   5.47e-5 / 8.37e-5
+amp 0.1                                      97                  193                 385
+C6 cascade3                                  3.33e-3 / 1.99e-3   7.32e-4 / 7.15e-4   7.07e-5 / 7.42e-5
+C6 BL                                        4.32e-4 / 1.24e-3   3.46e-5 / 5.48e-4   3.25e-5 / 5.89e-5
+C8 BL                                        3.30e-3 / 2.53e-3   3.03e-4 / 7.98e-4   4.10e-5 / 1.15e-4
+```
+
+A Float32 evolution floors near 3e-5 from N = 97 under every closure,
+where Float64 reads 8e-9 (cascade) and 1.5e-10 (C6 Brady–Livescu) at
+N = 385. The one-derivative floor of 1e-3 that `test/float32_validation.jl`
+pins for the Brady–Livescu rows does not reach the solution: on both
+pulses the C6 rows read the cascade's floor or below it, and on the
+steepening pulse their wall window is half the cascade's. Float32 is
+therefore not a reason to avoid the rows and not a reason to prefer
+them.
+
+### The minimum extent
+
+`plan_direction` raises when a block is too short for its rows, so the
+minimum is read by construction, on one rank (both ends of the dimension
+closed) and on two ranks split along it (one closed end per block, the
+case a wall rank sees under decomposition):
+
+```
+scheme            both ends closed   one end closed
+C6 cascade3       5                  5
+C6 cascade4       5                  5
+C6 BL             9                  5
+C8 cascade3       7                  7
+C8 BL             13                 7
+C10               7                  7
+filter, either    9                  9
+```
+
+The filter's nine points bind every configuration but C8 Brady–Livescu
+with both ends closed, which needs thirteen; C6 Brady–Livescu changes
+the minimum extent of nothing. The decomposed solve reproduces the rows'
+polynomial exactness across an eight-way split, degree 5 under C6 and 7
+under C8 to 1e-9, which `test/mpi_tests.jl` now checks beside the
+cascade's degree 3.
+
+### The plane
+
+The Cartesian Noh plane at N = 24, AR = 2 (`noh_cartesian`, the exact
+inflow on four faces, so the closure rows see an oblique inflow and four
+corners), cold and warm-started:
+
+```
+                   plateau   center deficit   front x / y / diag        L1 rho   steps
+C6 cascade3 cold   11.862    44%              0.2357 0.2328 0.2343      0.907    759
+C6 BL cold         11.883    44%              0.2357 0.2314 0.2344      0.940    817
+C6 cascade3 warm   16.574    13%              0.2213 0.2244 0.2252      0.462    281
+C6 BL warm         16.574    13%              0.2214 0.2244 0.2252      0.482    279
+C8 BL cold         timestep collapse at t = 0.25
+C8 BL warm         negative density at t = 0.20
+```
+
+C6 Brady–Livescu reads the cascade's plateau, deficit and fronts to three
+digits on both starts, the cold one included, since the singular start of
+this case is at the centre of the plane and no closure row sees it; the
+rows fail only where the singular data sit on the row itself. C8
+Brady–Livescu fails both.
+
+### The decision
+
+C6 `:brady_livescu` with the default `compact_filter` is a supported wall
+configuration within these limits: a wall whose initial state is resolved
+(the front thirteen cells out on the warm Noh ladder; no singular start on
+a closure row), any CFL number the default closure completes the case at
+(1.75 on a smooth wall, 1.5 on the steepening pulse, 1.2 on
+Woodward–Colella and the warm Noh wall), Float64 or Float32, block extents
+no smaller than the filter already requires, serial or decomposed. Its
+wall solution is sixth order (5.5–7.0) with the artificial properties off
+and fourth order with them on, at an error fifteen times below the
+cascade's; at a shocked wall it reproduces the default's profile to 0.1%
+in `L1` and holds the warm Noh wall within 0.2% where the default reads
+1%; the rows' Float64 floor sits four orders below the cascade's error
+at the resolutions that reach it. `:cascade3` remains the default, for
+the singular start it completes and the rows do not, and because the
+fourth-order wall of a run with the artificial properties on is the
+artificial diffusion's, which the rows cannot raise; `test/validation.jl`
+guards the configuration on Woodward–Colella and the warm Noh wall. C8
+`:brady_livescu` is not supported at a wall: the T8 rows fail a smooth
+wall from `cfl = 1.25` with the mirror completing, the warm Noh wall from
+0.9, the plane on both starts, and every start of the planar case but the
+40-cell one; they remain available for a periodic or interior block.

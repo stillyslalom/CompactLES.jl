@@ -170,10 +170,18 @@ b = 1/9. `closures` selects the rows applied at a closed edge:
   with a closed-line condition number near 1e3 (see the source comment).
   Under the filter's cascade rows these rows grow a wall mode wherever the
   artificial bulk viscosity is active at a slip wall, which ends
-  Woodward–Colella; under the default one-sided rows they survive a
-  captured shock at a wall but not a singular start there (cold planar
-  Noh). In Float32 the closed line's conditioning floors the wall error
-  near 1e-3, above the default cascade's, from N = 48 up.
+  Woodward–Colella; under the default one-sided rows they are the
+  supported high-order wall configuration, within measured limits: a
+  wall whose initial state is resolved (not the singular start of cold
+  planar Noh), the CFL numbers the default closure completes a case at,
+  either precision, the block extents the filter already requires,
+  serial or decomposed. The wall solution is then sixth order with the
+  artificial properties off and fourth order with them on, at an error
+  fifteen times below the cascade's, since the artificial diffusion
+  carries a fourth-order closure defect of its own at a wall. In Float32
+  the closed line's conditioning floors one derivative's wall error near
+  1e-3, above the default cascade's, from N = 48 up, while a wall
+  evolution floors near 3e-5 under either closure.
 """
 function lele_d1_6(::Type{T}=Float64; closures::Symbol=:cascade3) where {T}
     CompactScheme{T}("Lele C6 first derivative", T(1//3), zero(T),
@@ -193,10 +201,13 @@ that the pentadiagonal [`lele_d1_10`](@ref) does not have, at two more
 multiply-adds per point. The interior reaches ±3, so a closed edge takes three
 rows under `:cascade3`/`:cascade4` (the C6 cascade plus the C6 interior row)
 and the six seventh-order rows of Brady & Livescu's scheme T8 under
-`:brady_livescu`. Requires `n_halo ≥ 3`. The T8 rows carry the slip-wall and
-Float32 restrictions of the T6 ones (see `lele_d1_6`), fail under the filter's
-cascade rows even on smooth data, and need 13 points along a dimension
-closed at both ends.
+`:brady_livescu`. Requires `n_halo ≥ 3`. The T8 rows are not a supported
+wall configuration: they fail under the filter's cascade rows even on
+smooth data, and under the default one-sided rows they fail a smooth wall
+from `cfl = 1.25` where the periodic interior completes, the warm-started
+planar Noh wall from 0.9, and every start of that case but a well-resolved
+one; they need 13 points along a dimension closed at both ends (7 with one
+end closed). They remain usable on a periodic or interior block.
 """
 function lele_d1_8(::Type{T}=Float64; closures::Symbol=:cascade3) where {T}
     CompactScheme{T}("Lele C8 first derivative", T(3//8), zero(T),

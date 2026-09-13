@@ -204,6 +204,24 @@ function test_closed_c6()
     CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
     check("C6 closed-domain deg-3 exact, x split", gmax(ferr(solver, df,
           (x, y, z) -> 2 + 6x - 3x^2)), 1e-9)
+    # The Brady–Livescu rows on the edge ranks of the same split: their
+    # polynomial exactness must survive the distributed solve, whose reduced
+    # interface stage the rows' 1e3 closed-line condition number passes
+    # through, at the same tolerance as the cascade above. Every rank builds
+    # the plan, so the check is collective, as the one above is.
+    for (label, deriv, deg) in
+        (("C6 :brady_livescu", lele_d1_6(closures=:brady_livescu), 5),
+         ("C8 :brady_livescu", lele_d1_8(closures=:brady_livescu), 7))
+        solver = Solver(n_global=(SPLITN, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                   deriv=deriv, art=ArtParams(enabled=false), dims=splitdims(1))
+        f = CL.field(solver.decomp); df = CL.field(solver.decomp)
+        fillf!(solver, f, (x, y, z) -> sum(x^m for m in 0:deg))
+        CL.exchange_halos!(f, solver.decomp)
+        CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
+        check("$label closed-domain deg-$deg exact, x split", gmax(ferr(solver, df,
+              (x, y, z) -> sum(m * x^(m - 1) for m in 1:deg))), 1e-9)
+    end
 end
 
 # ---------------------------------------------------------------------------

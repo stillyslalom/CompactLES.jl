@@ -581,8 +581,8 @@ const NC_N = 64           # points per half-side along dimension 2, the coarse o
 const NC_CFL = 0.3
 
 """
-    noh_cartesian(; N, AR, L, t0, tfinal, p0, art, cfl, nmax, filt, filter_cfl)
-        -> NamedTuple
+    noh_cartesian(; N, AR, L, t0, tfinal, p0, art, cfl, nmax, deriv, filt,
+                  filter_cfl) -> NamedTuple
 
 Cylindrical Noh on the Cartesian plane `[−L, L]²` with the exact
 time-dependent inflow on all four faces, integrated from `t0` to `tfinal`
@@ -608,7 +608,7 @@ cuts are read from one rank.
 """
 function noh_cartesian(; N=NC_N, AR=4, L=NC_L, t0=0.0, tfinal=NOH_T, p0=NOH_P0,
                        art=ArtParams(enabled=true), cfl=NC_CFL, nmax=NMAX,
-                       filt=compact_filter(0.45), filter_cfl=0.35)
+                       deriv=lele_d1_6(), filt=compact_filter(0.45), filter_cfl=0.35)
     MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("noh_cartesian runs serially")
     n2 = 2N - 1
     n1 = 2AR * (N - 1) + 1
@@ -636,7 +636,7 @@ function noh_cartesian(; N=NC_N, AR=4, L=NC_L, t0=0.0, tfinal=NOH_T, p0=NOH_P0,
                    transport=Transport(mu0=0.0),
                    domain=((-L, L), (-L, L), (0.0, h2)),
                    bcs=((inflow, inflow), (inflow, inflow), per3[3]), ic=ic)
-    num = Numerics(n_global=(n1, n2, 1), art=art, cfl=cfl, filt=filt,
+    num = Numerics(n_global=(n1, n2, 1), art=art, cfl=cfl, deriv=deriv, filt=filt,
                    filter_interval=1, filter_cfl=filter_cfl,
                    control=StepControl(validity=:permissive))
     solver, Q = setup(prob, num)
@@ -720,6 +720,91 @@ function noh_aligned(; N=Dict(NOH_N)[1], AR=4, nx=12, art=ArtParams(enabled=true
     uniformity = maximum(abs(ρ(i, j) - ρy[j]) for j in 1:N, i in 1:nx)
     return (y=ys, rho=ρy, uniformity=uniformity, steps=solver.step, wall=wall,
             kind=kind, completed=ok, report=state_report(solver, Q))
+end
+
+# --- the reflected acoustic pulse -------------------------------------------
+#
+# A left-moving simple wave of the ideal gas, p = 1 + amp exp(-((x - x0)/σ)²)
+# with ρ = p^(1/γ) and u = -2 (c - c0)/(γ - 1), between slip walls on [0, 1].
+# The periodic mirror on [0, 2) carries the pulse and its image about x = 1
+# moving right, so its solution restricted to [0, 1] is the wall problem's
+# at every time, reflections and steepening included, and it never evaluates
+# a closure row: the difference between the two runs is the closure defect,
+# derivative and filter rows together. The pulse leaves x0 = 0.5 leftward at
+# c0 = 1.18, reaches the wall near t = 0.42 and is back at x0 near t = 0.85.
+# At amp = 0.01 the simple wave steepens over a distance of about seven
+# domain lengths and stays smooth; at amp = 0.1 it shocks about 0.7 into its
+# path, after the reflection. bench/wallfilter.jl measures the filter's
+# wall rows on it and bench/wallclosure.jl the derivative closures.
+
+const PULSE_G = 1.4
+const PULSE_X0 = 0.5
+const PULSE_S = 0.05
+
+function pulse_prim(::Type{T}, x, amp, sgn) where {T}
+    γ = PULSE_G
+    p = 1 + amp * exp(-((x - PULSE_X0) / PULSE_S)^2)
+    ρ = p^(1 / γ)
+    c0 = sqrt(γ)
+    c = sqrt(γ * p / ρ)
+    u = -sgn * 2 * (c - c0) / (γ - 1)
+    return Prim(rho=T(ρ), u=(T(u), zero(T), zero(T)), p=T(p))
+end
+
+"""
+    pulse_case(T, N; amp, art, mirror=false, deriv, filt, cfl=0.4,
+               filter_cfl=0.35, filter_interval=1, control) -> (solver, Q)
+
+The reflected pulse on N nodes over [0, 1] between slip walls, or its
+periodic mirror on 2(N − 1) nodes over [0, 2) when `mirror`, in precision
+`T`, with the artificial properties on or off (`art`), at t = 0. `deriv`
+and `filt` default to the solver's defaults in `T`.
+"""
+function pulse_case(::Type{T}, N; amp, art, mirror=false, deriv=lele_d1_6(T),
+                    filt=compact_filter(T(0.45), T), cfl=0.4, filter_cfl=0.35,
+                    filter_interval=1,
+                    control=StepControl(validity=:permissive)) where {T}
+    per = (PeriodicBC(), PeriodicBC())
+    h = one(T) / T(N - 1)
+    n = mirror ? 2(N - 1) : N
+    L = mirror ? T(2) : one(T)
+    bcs = mirror ? per : (SlipWallBC(), SlipWallBC())
+    solver = Solver(; n_global=(n, 1, 1), L_domain=(L, h, h),
+                    bcs=(bcs, per, per),
+                    eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(PULSE_G)),
+                    transport=Transport{T}(mu0=zero(T)),
+                    art=ArtParams{T}(enabled=art), deriv=deriv, filt=filt,
+                    cfl=T(cfl), filter_interval=filter_interval,
+                    filter_cfl=filter_cfl, control=control)
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) ->
+        x <= 1 ? pulse_prim(T, x, amp, 1) : pulse_prim(T, 2 - x, amp, -1))
+    return solver, Q
+end
+
+"Conserved component `comp` along the interior of dimension 1, in Float64."
+function case_line_component(solver, Q, comp)
+    CL.exchange_state!(Q, solver.decomp)
+    CL.primitives!(solver, Q)
+    nx = solver.decomp.n_local[1]
+    return [Float64(Q[gidx(solver, i, 1, 1), comp]) for i in 1:nx]
+end
+
+"""
+    mirror_line_errors(a, b; W=4) -> (wall, interior, l2)
+
+Node-by-node difference between a wall run's line `a` and the first
+`length(a)` nodes of its mirror `b`: the maximum over the wall windows (`W`
+nodes at each end), the maximum over the interior, and the root-mean-square
+over the line.
+"""
+function mirror_line_errors(a, b; W=4)
+    N = length(a)
+    e = abs.(a .- b[1:N])
+    wall = maximum(e[[1:W; N-W+1:N]])
+    interior = maximum(e[W+1:N-W])
+    l2 = sqrt(sum(abs2, e) / N)
+    return wall, interior, l2
 end
 
 # --- shared measurements ----------------------------------------------------

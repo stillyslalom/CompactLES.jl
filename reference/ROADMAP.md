@@ -345,7 +345,7 @@ below exposed behavior outside those passing checks.
   [the applied form](CALIBRATION.md#walls-folds-and-metrics),
   [completion record](HISTORY.md#the-filters-wall-rows-september-2026)).
 
-- [ ] **N6b — Qualify a high-order physical-wall configuration.**
+- [x] **N6b — Qualify a high-order physical-wall configuration.**
   Evaluate C6 Brady–Livescu under the default one-sided filter rows first;
   evaluate C8 separately.
   Establish solution order, the stable CFL range, and conditioning/error floors
@@ -359,6 +359,34 @@ below exposed behavior outside those passing checks.
   order, precision and minimum-extent limits; retain the robust alternative when
   a target fails. A C10 wall closure requires a separate derivation and validation,
   not reuse of a favorable C6/C8 slope.
+  **Delivered:** C6 `:brady_livescu` under the default filter rows is a
+  supported wall configuration within measured limits, the default is
+  unchanged, and C8 `:brady_livescu` is not supported at a wall.
+  [wallclosure.jl](../bench/wallclosure.jl) runs the qualification: the
+  smooth wall cases with the artificial properties on (an isothermal
+  shear wall and a shear mirror added to
+  [smooth_cases.jl](../test/smooth_cases.jl)), the artificial channels
+  one at a time, CFL ladders on a smooth wall, the steepening pulse,
+  Woodward–Colella and the warm Noh wall, the warm-start ladder, the
+  Float64 and Float32 floors, the minimum extents by construction on one
+  and two ranks, and the Cartesian Noh plane. With the properties on the
+  rows' wall is fourth order at an error fifteen times below the
+  cascade's, because the artificial diffusion carries a fourth-order
+  closure defect of its own at a wall (the detector's clamped edge,
+  through β\*; the mirror fix is the calibration file's open item); the
+  rows track the cascade to `cfl = 1.75` on a smooth wall and 1.2 on the
+  shocked ones, reproduce Woodward–Colella to 0.1%, hold a resolved warm
+  Noh wall within 0.2%, and take no singular start; in Float32 an
+  evolution floors at 3e-5 under either closure; the extents are the
+  filter's. C8 fails a smooth wall from `cfl = 1.25` with its mirror
+  completing, the warm wall from 0.9 and the plane on both starts.
+  [validation.jl](../test/validation.jl) guards the configuration on
+  Woodward–Colella and the warm Noh wall; [mpi_tests.jl](../test/mpi_tests.jl)
+  checks both sets' polynomial exactness across the split; the reflected
+  pulse moved into [cases.jl](../test/cases.jl) for both wall benches
+  ([the measurements](CALIBRATION_APPENDIX.md#the-bradylivescu-rows-as-a-wall-configuration),
+  [the applied form](CALIBRATION.md#walls-folds-and-metrics),
+  [completion record](HISTORY.md#the-bradylivescu-rows-as-a-wall-configuration-september-2026)).
 
 - [ ] **N6c — Decide whether constant-annihilation roundoff needs a change.**
   Measure derivative residuals on scaled constants and small perturbations over
@@ -526,11 +554,14 @@ The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
   [levels.jl](../src/levels.jl),
   [regrid.jl](../src/regrid.jl), [timestep.jl](../src/timestep.jl).
 
-Boundary/interface sequence: R5, N6 and N6a are complete, and N6's matrix
-(`bench/boundaryorder.jl`, gated in `test/convergence.jl`) with N6a's
-trial battery (`bench/wallfilter.jl`) is the instrument for N6b, N14 and
-N16. N6b starts from the one-sided filter rows now in force; N6c is an
-independent roundoff audit. Use N10/N11 to qualify interface
+Boundary/interface sequence: R5, N6, N6a and N6b are complete, and N6's
+matrix (`bench/boundaryorder.jl`, gated in `test/convergence.jl`) with
+N6a's trial battery (`bench/wallfilter.jl`) and N6b's qualification
+(`bench/wallclosure.jl`) is the instrument for N14 and N16. N6b found the
+artificial diffusion's own fourth-order wall defect, which caps any
+closure with the properties on; its removal (the detector's mirror at a
+wall) is a calibration item, not a closure one. N6c is an independent
+roundoff audit. Use N10/N11 to qualify interface
 candidates before promotion; invoke N15 only when the smaller closure change
 misses a target. N16 transfer measurements may begin with N6, while final accuracy
 qualification follows the selected interface treatment. Coordinate temporal

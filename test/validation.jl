@@ -60,6 +60,14 @@
 #   Shock/SF6  worst Y -0.0129 / 1.0129, width 4 cells, 647 steps (Sept 2026)
 #   Noh aligned N=100 AR=4    plateau 3.9952/4   deficit 52%   shock 0.2109   4926 steps
 #   Noh plane   N=24  AR=2    plateau 11.862/16  front 0.236/0.2  L1 rho 0.907  759 steps
+#   Woodward, C6 :brady_livescu   L1 rho 3.217e-2, peak rho 6.617 at x = 0.7785
+#   Noh nu=1 warm t0=0.3, C6 :brady_livescu   rho[1:4] 3.992 3.996 3.996 4.000
+#
+# The two Brady–Livescu rows guard the supported high-order wall
+# configuration (roadmap N6b, September 2026): the rows under the default
+# filter reproduce the default closure's Woodward profile and hold the
+# resolved warm Noh wall; they take no singular start, so the cold Noh
+# rows above stay on the default closure.
 #
 # The wall rows moved in September 2026 when compact_filter's closure rows
 # went from the reduced-order cascade to the one-sided eighth-order rows
@@ -258,6 +266,25 @@ let (xs, ρ, u, p, ok) = woodward()
     @test 0.75 < xs[imax] < 0.80      # collided contact position
 end
 
+# The supported high-order wall configuration: C6 `:brady_livescu` under the
+# default one-sided filter rows completes the shock-bounded wall to the
+# default closure's profile (measured L1 3.217e-2 against 3.220e-2, the
+# contact at the same node). The rows fail this case under the filter's
+# cascade rows and fail the singular start of cold Noh under either, so the
+# guard is this case and the warm-started wall below, not the battery;
+# reference/CALIBRATION_APPENDIX.md has the qualification.
+let (xs, ρ, u, p, ok) = woodward(; deriv=lele_d1_6(closures=:brady_livescu))
+    @test ok
+    xr, ρr, _, _ = read_ref("woodward_colella.csv")
+    eρ = l1(ρ, [interp1(xr, ρr, x) for x in xs])
+    imax = argmax(ρ)
+    sayf("  N=%d   C6 :brady_livescu   L1 rho %.3e   peak rho %.4f at x = %.4f\n",
+         WC_N, eρ, ρ[imax], xs[imax])
+    @test all(isfinite, ρ) && minimum(ρ) > 0
+    @test eρ < 6e-2
+    @test 0.75 < xs[imax] < 0.80
+end
+
 # ===========================================================================
 say("\n=== Sedov–Taylor blast through the spherical origin (analytic) ===")
 
@@ -309,6 +336,22 @@ for (ν, ptol, ncell) in ((1, 0.01, 12), (2, 0.10, 12), (3, 0.15, 12))
     # values in reference/CALIBRATION_APPENDIX.md, not targets.
     @test report.inadmissible <= ncell
     @test report.e_min > -1.0
+    @test report.nonfinite == 0 && report.negative_density == 0
+end
+
+# The supported high-order wall configuration at a stagnation wall: the
+# planar case warm-started from the exact solution at t0 = 0.3, so the wall
+# carries the rho = 4 plateau and no singular start, under C6
+# `:brady_livescu` and the default filter rows. Measured rho[1:4] 3.992
+# 3.996 3.996 4.000 against the default closure's 4.025 3.988 3.993 4.007;
+# the cold start of the case above fails under these rows and is not
+# supported.
+let (xs, ρ, u, p, ok, report) = noh_case(1; t0=0.3,
+                                          deriv=lele_d1_6(closures=:brady_livescu))
+    @test ok
+    sayf("  nu=1 N=%d warm t0=0.3, C6 :brady_livescu   rho[1:4] %.3f %.3f %.3f %.3f\n",
+         Dict(NOH_N)[1], ρ[1], ρ[2], ρ[3], ρ[4])
+    @test all(r -> abs(r / 4 - 1) < 0.03, ρ[1:4])
     @test report.nonfinite == 0 && report.negative_density == 0
 end
 

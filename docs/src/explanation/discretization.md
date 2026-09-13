@@ -119,8 +119,21 @@ closure rows of Brady and Livescu (2019), one order below the interior on
 every row, constructed to be discretely conservative and selected by
 optimization on the Euler equations for stability without a filter. Their
 rows are far from diagonally dominant, and the closed-line condition number
-rises from about 16 to about 1e3, which costs three digits at the wall and is
-the reason the cascade remains the default.
+rises from about 16 to about 1e3, which costs three digits at the wall.
+
+C6 `:brady_livescu` under the default filter rows is the supported
+high-order wall configuration, within measured limits: a wall whose
+initial state is resolved (no singular start on a closure row), the CFL
+numbers the default closure completes a case at, Float64 or Float32, the
+block extents the filter already requires, serial or decomposed. Its wall
+solution converges at sixth order with the artificial properties off and
+at fourth order with them on, at an error fifteen times below the
+cascade's, because the artificial diffusion carries a fourth-order closure
+defect of its own at a wall that no derivative closure raises. At a
+shocked wall it reproduces the default's profile to 0.1%. The cascade
+remains the default for the singular start it completes and the rows do
+not. C8 `:brady_livescu` is not supported at a wall: it fails a smooth
+wall from CFL 1.25 where the periodic interior completes.
 
 The state filter [`compact_filter`](@ref) has closure rows of its own, and
 they set the wall order of a filtered run. Its `:cascade` rows, centered

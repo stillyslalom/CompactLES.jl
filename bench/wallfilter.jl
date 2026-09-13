@@ -219,65 +219,11 @@ end
 
 # --- the reflected pulse ------------------------------------------------------
 #
-# A left-moving simple wave of the ideal gas, p = 1 + amp exp(-((x - x0)/σ)²)
-# with ρ = p^(1/γ) and u = -2 (c - c0)/(γ - 1), between slip walls on [0, 1].
-# The periodic mirror on [0, 2) carries the pulse and its image about x = 1
-# moving right, so its solution restricted to [0, 1] is the wall problem's
-# at every time, reflections and steepening included, and it never evaluates
-# a closure row.
+# The case is `pulse_case` of test/cases.jl, the wall run against its
+# periodic mirror at the same spacing and step; `cl` selects the filter rows.
 
-const PULSE_G = 1.4
-const PULSE_X0 = 0.5
-const PULSE_S = 0.05
-
-function pulse_prim(::Type{T}, x, amp, sgn) where {T}
-    γ = PULSE_G
-    p = 1 + amp * exp(-((x - PULSE_X0) / PULSE_S)^2)
-    ρ = p^(1 / γ)
-    c0 = sqrt(γ)
-    c = sqrt(γ * p / ρ)
-    u = -sgn * 2 * (c - c0) / (γ - 1)
-    return Prim(rho=T(ρ), u=(T(u), zero(T), zero(T)), p=T(p))
-end
-
-function pulse_solver(::Type{T}, N; amp, art, mirror, cl, deriv=lele_d1_6(T),
-                      cfl=0.4, filter_cfl=OPTS.filter_cfl, filter_interval=1,
-                      control=StepControl(validity=:permissive)) where {T}
-    per = (PeriodicBC(), PeriodicBC())
-    h = one(T) / T(N - 1)
-    n = mirror ? 2(N - 1) : N
-    L = mirror ? T(2) : one(T)
-    bcs = mirror ? per : (SlipWallBC(), SlipWallBC())
-    solver = Solver(; n_global=(n, 1, 1), L_domain=(L, h, h),
-                    bcs=(bcs, per, per),
-                    eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(PULSE_G)),
-                    transport=Transport{T}(mu0=zero(T)),
-                    art=ArtParams{T}(enabled=art), deriv=deriv,
-                    filt=filt_of(cl, T), cfl=T(cfl), filter_interval=filter_interval,
-                    filter_cfl=filter_cfl, control=control)
-    Q = allocate_state(solver)
-    initialize!(solver, Q, (x, y, z) ->
-        x <= 1 ? pulse_prim(T, x, amp, 1) : pulse_prim(T, 2 - x, amp, -1))
-    return solver, Q
-end
-
-function interior_line(solver, Q, comp)
-    CL.exchange_state!(Q, solver.decomp)
-    CL.primitives!(solver, Q)
-    nx = solver.decomp.n_local[1]
-    return [Float64(Q[gidx(solver, i, 1, 1), comp]) for i in 1:nx]
-end
-
-# Wall window (four nodes at each end), interior maximum and the root-mean-
-# square over the line, of the wall run against its mirror, node by node.
-function line_errors(a, b; W=4)
-    N = length(a)
-    e = abs.(a .- b[1:N])
-    wall = maximum(e[[1:W; N-W+1:N]])
-    interior = maximum(e[W+1:N-W])
-    l2 = sqrt(sum(abs2, e) / N)
-    return wall, interior, l2
-end
+pulse_solver(::Type{T}, N; cl, filter_cfl=OPTS.filter_cfl, kw...) where {T} =
+    pulse_case(T, N; filt=filt_of(cl, T), filter_cfl=filter_cfl, kw...)
 
 function pulse_row(::Type{T}, N; amp, art, cl, tfinal, comp=1, kw...) where {T}
     attempt() do
@@ -287,9 +233,9 @@ function pulse_row(::Type{T}, N; amp, art, cl, tfinal, comp=1, kw...) where {T}
         run!(mirror, Qm; tfinal=T(tfinal), nmax=CAP)
         # The mirror lands on its own last step; compare at the same clock.
         abs(solver.t - mirror.t) < 1e-6 || return sprintf("clocks differ %.3e", solver.t - mirror.t)
-        a = interior_line(solver, Q, comp)
-        b = interior_line(mirror, Qm, comp)
-        wall, interior, l2 = line_errors(a, b)
+        a = case_line_component(solver, Q, comp)
+        b = case_line_component(mirror, Qm, comp)
+        wall, interior, l2 = mirror_line_errors(a, b)
         rep = state_report(solver, Q)
         (wall=wall, interior=interior, l2=l2, steps=solver.step,
          inadmissible=rep.inadmissible, rho_min=rep.rho_min)

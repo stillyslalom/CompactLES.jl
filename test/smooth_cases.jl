@@ -191,12 +191,13 @@ const SMOOTH_DEFAULTS = (deriv=lele_d1_6(), filt=compact_filter(0.45),
                          filter_interval=0, filter_cfl=0.35, cfl=0.5)
 
 function _smooth_solver(n_global, L, bcs, prof; deriv, filt, filter_interval,
-                        filter_cfl, cfl, mu=0.0, Pr=0.7, sources=(), kwargs...)
+                        filter_cfl, cfl, mu=0.0, Pr=0.7, sources=(),
+                        art=ArtParams(enabled=false), kwargs...)
     solver = Solver(n_global=n_global, L_domain=(L, 1.0, 1.0), bcs=bcs,
                     deriv=deriv, filt=filt, filter_interval=filter_interval,
                     filter_cfl=filter_cfl, cfl=cfl,
                     transport=Transport(mu0=mu, Pr=Pr), sources=sources,
-                    art=ArtParams(enabled=false); kwargs...)
+                    art=art; kwargs...)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> begin
         rho, u, v, p = prof(x)
@@ -236,14 +237,32 @@ function mirror_case(N; viscous=false, a=0.05, b=0.05, mu=0.005, Pr=0.7, opts...
 end
 
 """
-    shear_case(N; V=0.1, mu=0.005, opts...)
+    shear_case(N; V=0.1, mu=0.005, Twall=NaN, opts...)
 
 The decaying shear mode between adiabatic no-slip walls on [0, 1], exact.
+A finite `Twall` makes the walls isothermal; the mode's temperature is the
+uniform 1 (rho = p = 1, R = 1), so `Twall = 1` is compatible with it and
+exercises the isothermal flux path on the same exact solution.
 """
-function shear_case(N; V=0.1, mu=0.005, Pr=0.7, opts...)
-    bc = NoSlipWallBC()
+function shear_case(N; V=0.1, mu=0.005, Pr=0.7, Twall=NaN, opts...)
+    bc = NoSlipWallBC(Twall=Twall)
     _smooth_solver((N, 1, 1), 1.0, ((bc, bc), per3[2], per3[3]),
                    shear_profile(V, mu); mu=mu, Pr=Pr,
+                   sources=(ShearHeatingBalance(V, mu),),
+                   merge(SMOOTH_DEFAULTS, opts)...)
+end
+
+"""
+    shear_mirror_case(N; V=0.1, mu=0.005, opts...)
+
+The periodic image of `shear_case(N)` on [0, 2), as `mirror_case` is of
+`wall_case`: v is odd and rho, p even about both walls, and the heating
+balance is periodic, so the difference between the two runs is the
+closure defect alone, which the exact solution cannot separate from the
+artificial properties once they are on.
+"""
+function shear_mirror_case(N; V=0.1, mu=0.005, Pr=0.7, opts...)
+    _smooth_solver((2(N - 1), 1, 1), 2.0, per3, shear_profile(V, mu); mu=mu, Pr=Pr,
                    sources=(ShearHeatingBalance(V, mu),),
                    merge(SMOOTH_DEFAULTS, opts)...)
 end

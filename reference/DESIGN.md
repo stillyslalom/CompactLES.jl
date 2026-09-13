@@ -258,10 +258,19 @@ Presets:
   takes the singular cold start, while `:cascade4` loses the F2 filter row
   it depends on and fails even a smooth pulse, so it is paired with
   `compact_filter(closures = :cascade)`. In Float32 the Brady–Livescu wall
-  error floors near 1e-3, above the cascade's, from N = 48 up. The runs
-  are in `reference/CALIBRATION_APPENDIX.md` under "Wall closures under
-  the artificial properties" and "The filter's wall rows on the current
-  solver".
+  error of one derivative floors near 1e-3, above the cascade's, from
+  N = 48 up, while a wall evolution floors near 3e-5 under either. C6
+  `:brady_livescu` under the default filter rows is the supported
+  high-order wall configuration, within the limits measured in September
+  2026: a resolved start, the CFL numbers the default closure takes,
+  either precision, the filter's block extents, serial or decomposed;
+  with the artificial properties on its wall is fourth order at an error
+  fifteen times below the cascade's, the artificial diffusion carrying a
+  closure defect of its own at a wall. C8 `:brady_livescu` is not
+  supported at a wall. The runs are in `reference/CALIBRATION_APPENDIX.md`
+  under "Wall closures under the artificial properties", "The filter's
+  wall rows on the current solver" and "The Brady–Livescu rows as a wall
+  configuration".
 - `pade_d1_4()`: fourth-order Padé first derivative.
 - `compact_filter(alphaf; closures)`: the eighth-order Gaitonde–Visbal
   filter, whose strength parameter α is spelled `alphaf` in the code.

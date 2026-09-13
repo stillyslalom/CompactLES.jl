@@ -141,7 +141,9 @@ effect. The appendix link carries the sweep.
   The switched forms carry a discontinuous compression switch and reproduce
   to 2e-6 relative across decompositions against 1e-14 for the strain sensor.
 - **Float32 or device runs.** Keep the default closures. The Brady–Livescu
-  rows floor at 1e-3 in Float32, above the cascade's 1e-4.
+  rows' one derivative floors at 1e-3 in Float32, above the cascade's
+  1e-4, though a wall evolution floors near 3e-5 under either closure
+  ([the qualification](CALIBRATION_APPENDIX.md#the-round-off-floor)).
 - **A three-dimensional CFL number looks small next to the literature.**
   `max_rate` takes the acoustic rate as the Euclidean bound
   `c · sqrt(Σ 1/h_d²)`, the linear limit on an isotropic grid;
@@ -506,11 +508,33 @@ Woodward–Colella under the cascade rows through a β\*-driven wall mode;
 under the one-sided rows both complete it and neither takes the singular
 cold start of Noh, and `:cascade4` needs the F2 row the one-sided rows
 remove. The coupling rule: `:cascade4` with `closures = :cascade`,
-`:cascade3` or `:brady_livescu` with the default. In Float32 the
-Brady–Livescu rows floor at 1e-3 and the one-sided rows follow Float64
+`:cascade3` or `:brady_livescu` with the default
 ([wall cascade](CALIBRATION_APPENDIX.md#the-filters-wall-cascade),
 [wall closures](CALIBRATION_APPENDIX.md#wall-closures-under-the-artificial-properties),
 [the current solver](CALIBRATION_APPENDIX.md#the-filters-wall-rows-on-the-current-solver)).
+
+**The supported high-order wall configuration.** C6 `:brady_livescu`
+under the default filter rows is supported within measured limits: a
+wall whose initial state is resolved (the front thirteen cells out on
+the warm-started Noh ladder, no singular start on a closure row), any
+CFL number the default closure completes the case at (1.75 on a smooth
+wall, 1.5 on the steepening pulse, 1.2 on Woodward–Colella and the
+warm Noh wall), Float64 or Float32, the block extents the filter already
+requires, serial or decomposed. Its wall solution is sixth order with
+the artificial properties off and fourth order with them on, at an
+error fifteen times below the cascade's, because the artificial
+diffusion carries a fourth-order closure defect of its own at a wall
+(the detector's clamped edge, through β\*) that no derivative closure
+raises; at a shocked wall it reproduces the default's Woodward–Colella
+profile to 0.1% in `L1` at every CFL number and holds the warm Noh wall
+within 0.2% where the default reads 1%. In Float32 a wall evolution
+floors near 3e-5 under either closure, so the rows' 1e-3 one-derivative
+floor does not reach the solution. `:cascade3` remains the default for
+the singular start it completes and the rows do not. C8 `:brady_livescu`
+is not supported at a wall: it fails a smooth wall from `cfl = 1.25`
+with its mirror completing, the warm Noh wall from 0.9, the Cartesian
+Noh plane on both starts, and every planar start but the 40-cell one
+([the qualification](CALIBRATION_APPENDIX.md#the-bradylivescu-rows-as-a-wall-configuration)).
 
 **Wall accuracy in evolution.** On a smooth standing wave between walls
 the window of nodes next to the wall converges at 3.9 under the default
@@ -591,9 +615,11 @@ In approximate priority order; each links to the measurements it rests on.
 5. **Explain the spherical fold's intolerance of sharp data**
    ([geometry limits](CALIBRATION_APPENDIX.md#geometry-limits)).
 6. **Make `filter_state!` conservative on non-Cartesian metrics.**
-7. **Decide the filter wall rows**, a recalibration of the wall cases
-   ([wall cascade](CALIBRATION_APPENDIX.md#the-filters-wall-cascade)).
-8. **Put `delta4_sum!`'s even path on the half-offset mirror**; unmeasured
-   ([the clamp](CALIBRATION_APPENDIX.md#the-fourth-difference-clamp-at-a-fold)).
-9. **Decide `species_flux`** on the vortex-ring/SF6 case
+7. **Put `delta4_sum!`'s closed-edge path on a mirror**, half-offset at
+   a fold and node-centred at a wall. At a wall the clamp is now
+   measured: through β\* it caps a Brady–Livescu wall at fourth order,
+   at C_beta × 1e-10 at N = 193, fifteen times below the cascade's own
+   defect ([the clamp](CALIBRATION_APPENDIX.md#the-fourth-difference-clamp-at-a-fold),
+   [which channel carries it](CALIBRATION_APPENDIX.md#which-channel-carries-it)).
+8. **Decide `species_flux`** on the vortex-ring/SF6 case
    ([open](CALIBRATION_APPENDIX.md#open)).
