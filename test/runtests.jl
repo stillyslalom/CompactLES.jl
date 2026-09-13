@@ -585,7 +585,7 @@ end
     # The derivation reproduces the interior stencil at the centered point
     # and Gaitonde–Visbal's tabulated row 2 (their (1 + 254αf)/256 and
     # (31 + 2αf)/32 leading entries), and follows the element type.
-    base = compact_filter(af)
+    base = compact_filter(af; closures=:cascade)
     r5 = CL.onesided_filter_row(af, 5, 4)
     @test maximum(abs.(r5 .- [reverse(base.coeffs); base.a0; base.coeffs])) < 1e-14
     os = compact_filter(af; closures=:onesided)
@@ -710,11 +710,14 @@ end
     # row vector applied to q.
     # 64 nodes, as the bench measures: on a shorter line the wall rows' leak
     # reaches the fold rows and the origin figures below are not round-off.
+    # The figures were measured under the filter's cascade rows, so the lines
+    # pin them; the one-sided rows, the default since September 2026, move
+    # the wall leak inward and are checked separately below.
     N = 64
     walls = ((SlipWallBC(), SlipWallBC()), per3[2], per3[3])
-    line(wt; kw...) = Solver(; n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                             art=ArtParams(enabled=false), filter_weighting=wt,
-                             kw...)
+    line(wt; filt=compact_filter(0.45; closures=:cascade), kw...) =
+        Solver(; n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), filt=filt,
+               art=ArtParams(enabled=false), filter_weighting=wt, kw...)
     function line_operator(s)
         Q = allocate_state(s)
         M = zeros(N, N)
@@ -745,6 +748,13 @@ end
     cs = vec(sum(Mw; dims=1)) .- 1
     @test 0.01 < abs(cs[2]) < 0.08                  # measured -4.0e-2
     @test 1e-4 < abs(cs[12]) < 1e-2                 # measured -3.8e-4
+    # The one-sided rows leave row 2 nearly conservative and move the peak
+    # of the leak to rows 3–7 (2.9e-2 at row 5) without reducing its total.
+    Mo, _ = line_operator(line(:none; bcs=walls, filt=compact_filter(0.45)))
+    co = vec(sum(Mo; dims=1)) .- 1
+    @test abs(co[2]) < 0.01                         # measured 2.6e-3
+    @test 0.01 < maximum(abs, co[3:7]) < 0.08
+    @test 0.5 < sum(abs, co) / sum(abs, cs) < 2
 
     # On a clustered wall line the closure leak dominates either way; the
     # weighting moves the interior defect by less than a tenth of it.

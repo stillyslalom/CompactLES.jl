@@ -162,17 +162,18 @@ b = 1/9. `closures` selects the rows applied at a closed edge:
 - `:cascade3` (default): a third-order one-sided row 1 and a fourth-order
   centered Padé row 2, the usual reduced-order cascade.
 - `:cascade4`: Lele's fourth-order one-sided row 1 (α = 3) over the same
-  Padé row 2.
+  Padé row 2. It carries an undamped mode at an inviscid wall that only the
+  F2 row of `compact_filter(closures = :cascade)` damps; under the default
+  one-sided filter rows it fails even a smooth pulse.
 - `:brady_livescu`: the four fifth-order rows of Brady & Livescu (2019),
   scheme T6, conservative and stable without a filter on their tests but
   with a closed-line condition number near 1e3 (see the source comment).
-  Under the default filter wall cascade these rows grow a wall mode
-  wherever the artificial bulk viscosity is active at a slip wall, which
-  ends every wall-bounded shock case; with
-  `compact_filter(closures = :onesided)` they survive a captured shock at a
-  wall but not a singular start there. In Float32 the closed line's
-  conditioning floors the wall error near 1e-3, above the default
-  cascade's, from N = 48 up.
+  Under the filter's cascade rows these rows grow a wall mode wherever the
+  artificial bulk viscosity is active at a slip wall, which ends
+  Woodward–Colella; under the default one-sided rows they survive a
+  captured shock at a wall but not a singular start there (cold planar
+  Noh). In Float32 the closed line's conditioning floors the wall error
+  near 1e-3, above the default cascade's, from N = 48 up.
 """
 function lele_d1_6(::Type{T}=Float64; closures::Symbol=:cascade3) where {T}
     CompactScheme{T}("Lele C6 first derivative", T(1//3), zero(T),
@@ -193,8 +194,8 @@ multiply-adds per point. The interior reaches ±3, so a closed edge takes three
 rows under `:cascade3`/`:cascade4` (the C6 cascade plus the C6 interior row)
 and the six seventh-order rows of Brady & Livescu's scheme T8 under
 `:brady_livescu`. Requires `n_halo ≥ 3`. The T8 rows carry the slip-wall and
-Float32 restrictions of the T6 ones (see `lele_d1_6`), fail under the default
-filter wall cascade even on smooth data, and need 13 points along a dimension
+Float32 restrictions of the T6 ones (see `lele_d1_6`), fail under the filter's
+cascade rows even on smooth data, and need 13 points along a dimension
 closed at both ends.
 """
 function lele_d1_8(::Type{T}=Float64; closures::Symbol=:cascade3) where {T}
@@ -245,36 +246,46 @@ function onesided_filter_row(af::T, i::Int, M::Int) where {T}
 end
 
 """
-    compact_filter(alphaf=0.45; closures=:cascade)
+    compact_filter(alphaf=0.45; closures=:onesided)
 
 Eighth-order Gaitonde–Visbal compact filter. `alphaf ∈ (−0.5, 0.5)` sets the
 strength (larger → weaker filtering). At a closed edge the first row is always
 left unfiltered; `closures` selects rows 2–4:
 
-- `:cascade` (default): centered compact filters of order 2, 4 and 6 with the
-  same αf, the standard reduced-order boundary cascade. One filter pass of a
-  smooth field is then second order in the maximum norm along the whole line,
-  not only at the wall, because solving the coupled compact system propagates
-  the row-2 truncation error into interior solution entries.
-- `:onesided`: the one-sided eighth-order rows of Gaitonde & Visbal (2000),
-  derived at construction by `onesided_filter_row`. One pass is
+- `:onesided` (default): the one-sided eighth-order rows of Gaitonde & Visbal
+  (2000), derived at construction by `onesided_filter_row`. One pass is
   eighth order everywhere, and under repeated application the closed
   operator amplifies less than the cascade does (‖F¹⁰⁰‖₂ 1.05 against 1.14
   at αf = 0.45, N = 64). Its rows 2 and 3 do exceed unit gain at some
   wavenumbers taken alone (1.10 and 1.03 at αf = 0.45, worse at smaller αf),
-  which the paper also notes.
+  which the paper also notes: on a reflection resolved over fewer than about
+  ten cells the rows read two to three times the cascade's error, and above
+  that resolution ten to a thousand times less. In a wall-bounded evolution
+  the wall window converges at the derivative closure's own order, the
+  planar Noh wall deficit is 10–18 points smaller, and the mass and energy a
+  closed line's filter creates fall by two orders.
+- `:cascade`: centered compact filters of order 2, 4 and 6 with the same αf,
+  the standard reduced-order boundary cascade, the default before September
+  2026. One filter pass of a smooth field is then second order in the
+  maximum norm along the whole line, not only at the wall, because solving
+  the coupled compact system propagates the row-2 truncation error into
+  interior solution entries, and a filtered wall calculation is second order
+  at the wall whatever the derivative closure. `lele_d1_6(closures =
+  :cascade4)` needs this row set: without the F2 row its inviscid wall mode
+  is undamped and it fails even a smooth pulse.
 """
 function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64;
-                        closures::Symbol=:cascade) where {T}
+                        closures::Symbol=:onesided) where {T}
     af = T(alphaf)
     a0 = (93 + 70af) / 128
     a1 = (7 + 18af) / 16
     a2 = (-7 + 14af) / 32
     a3 = (1 - 2af) / 16
     a4 = (-1 + 2af) / 128
-    # Boundary closures: row 1 identity; rows 2–4 host centered compact
-    # filters of order 2, 4, 6 (same αf), the standard reduced-order cascade.
-    # Consistency: the RHS coefficients of each of these rows sum to 1 + 2αf.
+    # Boundary closures: row 1 identity; under `:cascade` rows 2–4 host
+    # centered compact filters of order 2, 4, 6 (same αf), the standard
+    # reduced-order cascade. Consistency: the RHS coefficients of each of
+    # these rows sum to 1 + 2αf.
     b2 = (T((1 + 2af) / 2), T((1 + 2af) / 2))                        # F2: a0, a1
     b4 = (T((5 + 6af) / 8), T((1 + 2af) / 2), T((-1 + 2af) / 8))     # F4
     b6 = (T((11 + 10af) / 16), T((15 + 34af) / 32),

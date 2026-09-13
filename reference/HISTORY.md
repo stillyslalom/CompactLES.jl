@@ -1592,3 +1592,70 @@ three runs, the docs reference check through `runtests.jl`. No package
 code changed, so the validation battery, the MPI suite and the
 performance audits were not run. HDF5 and Makie extension tests were
 skipped by the package environment.
+
+## The filter's wall rows (September 2026)
+
+N6a closes with the default moved: `compact_filter` takes
+`closures = :onesided`, the one-sided eighth-order rows of Gaitonde and
+Visbal on rows 2–4 of every closed end, in place of the reduced-order
+cascade it had applied since the filter was written. The August
+measurement that motivated the option, 64% to 27% on the planar Noh wall
+deficit, was taken under the unrelaxed filter before the first-step
+priming, the relaxed weight and its directional rate, so the decision
+rested on a re-measurement of the current solver. `bench/wallfilter.jl`
+runs it: the whole `test/cases.jl` battery under both row sets at the
+relaxed and the unrelaxed weight, every derivative closure under both
+on the wall-bounded shock cases, a simple-wave pulse reflected at a slip
+wall against its periodic mirror (exact by symmetry, so the difference is
+the closure defect alone), the mass and energy a run creates between two
+walls split into the filter's own tally and the rest, the positivity
+floor's firings, a species layer against the wall, and Float32.
+
+The August result reproduces unrelaxed, 64% to 29% at N = 400 and 66%
+to 30% at N = 800. Under the relaxed default the gain is smaller, 60% to
+50% and 61% to 43%, with the plateau 0.15% lower, because the relaxation
+already weakens the passes at the diffusion-limited front. Every other
+battery row, the folds, the tubes, Sedov and the shocked interface, is
+unchanged to the digits printed: the rows differ only where a closed end
+carries a gradient. On the reflected pulse the one-sided rows are a
+hundred times more accurate by N = 385 and converge at 4.5–4.9 where the
+cascade caps at 2.2; on a reflection resolved over fewer than about ten
+cells they read two to three times the cascade's error, with the
+artificial properties off as well as on, which is the pre-asymptotic
+behaviour of rows whose gain exceeds unity at high wavenumber and the one
+cost of the change. Between two walls the run's mass and energy drift
+falls twenty to a hundred times and the filter's share of it two orders;
+the floor fires on the same steps and cells under both; the species
+layer reads the same excursion, width and masses; Float32 planar Noh
+reads Float64 to every digit under both, while Float32 Woodward–Colella
+loses positivity in the first blast under either and is unavailable as
+a comparison. The closure-compatibility table changed in one row since
+August: the warm-started wall no longer grows the C6 Brady–Livescu mode
+under the cascade rows, so only Woodward–Colella and the cold start
+separate the sets. `:cascade4` needs the cascade's F2 row and is now
+paired with `compact_filter(closures = :cascade)` explicitly wherever it
+is used. The measurements are under [the filter's wall rows on the
+current
+solver](CALIBRATION_APPENDIX.md#the-filters-wall-rows-on-the-current-solver);
+the applied form is in [CALIBRATION.md](CALIBRATION.md#walls-folds-and-metrics).
+
+The rows that assert a cascade measurement pin it: the `C8 filter pass,
+:cascade` and `inviscid wall, C6, cascade filter` studies of
+`test/convergence.jl`, the column-sum defects of the volume-weighted
+filter test, and the cascade rows of `bench/boundaryorder.jl`. The
+filter-closure unit test gained the one-sided rows' own leak (row 2
+below 1e-2, the peak at rows 3–7, the total unchanged). The validation
+battery was re-baselined in the header of `test/validation.jl` and both
+stored references regenerated under the new rows; the aligned Noh case's
+transverse round-off guard widened from 1e-8 to 1e-7 for the wider rows.
+
+Validation on Julia 1.12.7: 2,473 serial assertions, the twenty-eight
+convergence orders at their recorded values with the periodic and the
+cascade-pinned error magnitudes unchanged to every printed digit, the
+validation battery on its re-baselined header, all 298 full-suite
+checks at two MPI ranks and all 144 selected checks at eight, the
+docs reference check standalone after the last documentation edit.
+`bench/boundaryorder.jl` and `bench/filter_conservation.jl` ran on
+small workloads after the change. No hot-path code changed, so the
+performance audits were not run; HDF5 and Makie extension tests were
+skipped by the package environment.

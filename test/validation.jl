@@ -46,19 +46,33 @@
 # 1.5–2x the measured value. The measured numbers print every run; a moved digit
 # after a change not intended to touch numerics indicates a numerical effect.
 #
-# Measured on this code (serial, C6, ArtParams defaults, filter_cfl = 0.35; each
-# case's CFL is in test/cases.jl):
+# Measured on this code (serial, C6, ArtParams defaults, filter_cfl = 0.35,
+# compact_filter(0.45) with its one-sided wall rows; each case's CFL is in
+# test/cases.jl):
 #
 #   Lax        L1 rho 4.99e-3, u 7.47e-3, p 7.56e-3
-#   Shu-Osher  L1 rho 6.86e-3, wave train 2.09e-2, train peak 4.680
-#   Woodward   L1 rho 3.22e-2, peak rho 6.616 at x = 0.7785
+#   Shu-Osher  L1 rho 6.80e-3, wave train 2.09e-2, train peak 4.680
+#   Woodward   L1 rho 3.22e-2, peak rho 6.617 at x = 0.7785
 #   Sedov      R_s 0.8085 vs 0.8000 analytic (+1.06%), peak rho 5.13 (jump 6)
-#   Noh nu=1   plateau 3.9957/4    shock 0.2044/0.2   wall deficit 60%
+#   Noh nu=1   plateau 3.9899/4    shock 0.2043/0.2   wall deficit 50%
 #   Noh nu=2   plateau 15.009/16   shock 0.2091/0.2   wall deficit 54%
 #   Noh nu=3   plateau 62.555/64   shock 0.2089/0.2   wall deficit 29%
 #   Shock/SF6  worst Y -0.0129 / 1.0129, width 4 cells, 647 steps (Sept 2026)
-#   Noh aligned N=100 AR=4    plateau 3.9837/4   deficit 63%   shock 0.2121   4968 steps
-#   Noh plane   N=24  AR=2    plateau 11.854/16  front 0.236/0.2  L1 rho 0.890  750 steps
+#   Noh aligned N=100 AR=4    plateau 3.9952/4   deficit 52%   shock 0.2109   4926 steps
+#   Noh plane   N=24  AR=2    plateau 11.862/16  front 0.236/0.2  L1 rho 0.907  759 steps
+#
+# The wall rows moved in September 2026 when compact_filter's closure rows
+# went from the reduced-order cascade to the one-sided eighth-order rows
+# (roadmap N6a). Every case has closed ends, so every row was re-taken;
+# only the ones with a gradient at a closed end moved: planar Noh (plateau
+# 3.9957 and deficit 60% before, the wall deficit the change exists for,
+# at a plateau 0.15% lower), the aligned and plane Noh cases, and the two
+# STORED cases, whose 4x references were regenerated under the new rows
+# (Shu-Osher read 6.86e-3 against the old reference, Woodward 6.616). Lax,
+# Sedov, the folds and the interface case did not move to the digits
+# printed. The transverse round-off guard of the aligned case widened from
+# 1e-8 to 1e-7 for the wider rows (measured 1.4e-8). The comparison behind
+# the change is in reference/CALIBRATION_APPENDIX.md.
 #
 # The Noh, Shu-Osher, Sedov and interface rows moved in September 2026 when
 # filter_weight began reading each direction's own hyperbolic rate
@@ -346,7 +360,9 @@ let r = noh_aligned(; N=100, AR=4)
     @test abs(plat / 4 - 1) < 0.03
     @test 0 < deficit < 0.7
     @test abs(Rnum - 0.2) < 0.025
-    @test r.uniformity < 1e-8
+    # Round-off: the initial data carry no transverse variation. The wider
+    # one-sided filter rows raised it from below 1e-8 to 1.4e-8.
+    @test r.uniformity < 1e-7
     @test r.steps < 8000
 end
 let r = noh_cartesian(; N=24, AR=2)

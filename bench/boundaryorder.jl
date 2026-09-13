@@ -57,7 +57,8 @@ const DERIVS = (("C6 cascade3", lele_d1_6()),
                 ("C6 BL", lele_d1_6(closures=:brady_livescu)),
                 ("C8 BL", lele_d1_8(closures=:brady_livescu)))
 const FILTERS = ((" unfiltered", (filter_interval=0,)),
-                 (" cascade filter", (filter_interval=1,)),
+                 (" cascade filter", (filter_interval=1,
+                                      filt=compact_filter(0.45; closures=:cascade))),
                  (" onesided filter", (filter_interval=1,
                                        filt=compact_filter(0.45; closures=:onesided))))
 const INTERIOR_DERIVS = (("C6", lele_d1_6()), ("C6 BL", lele_d1_6(closures=:brady_livescu)),
@@ -341,11 +342,13 @@ function filter_study()
     println("closure defect against the mirror under the same filter, and the")
     println("total against the fine reference; passes = steps / filter_interval")
     fine = fine_mirror(false)
+    CASCADE = compact_filter(0.45; closures=:cascade)
     rows = (("unfiltered", (filter_interval=0,)),
-            ("cascade, every step, relaxed", (filter_interval=1,)),
-            ("cascade, every 2nd step, relaxed", (filter_interval=2,)),
-            ("cascade, every 4th step, relaxed", (filter_interval=4,)),
-            ("cascade, every step, unrelaxed", (filter_interval=1, filter_cfl=0.0)),
+            ("cascade, every step, relaxed", (filter_interval=1, filt=CASCADE)),
+            ("cascade, every 2nd step, relaxed", (filter_interval=2, filt=CASCADE)),
+            ("cascade, every 4th step, relaxed", (filter_interval=4, filt=CASCADE)),
+            ("cascade, every step, unrelaxed",
+             (filter_interval=1, filter_cfl=0.0, filt=CASCADE)),
             ("onesided, every step, relaxed",
              (filter_interval=1, filt=compact_filter(0.45; closures=:onesided))),
             ("onesided, every step, unrelaxed",

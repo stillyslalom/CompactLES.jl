@@ -40,6 +40,7 @@ record of that setting.
 18. [The no-slip wall flux contract](#the-no-slip-wall-flux-contract)
 19. [Directional bulk viscosity on anisotropic grids](#directional-bulk-viscosity-on-anisotropic-grids)
 20. [The smooth-evolution accuracy matrix](#the-smooth-evolution-accuracy-matrix)
+21. [The filter's wall rows on the current solver](#the-filters-wall-rows-on-the-current-solver)
 
 ## The battery
 
@@ -2200,10 +2201,11 @@ unchanged to three digits. The [wall-closure
 section](#wall-closures-under-the-artificial-properties) carries the full table
 and the coupling to the derivative closures.
 
-The one-sided rows stay optional. Every constant in this file was calibrated under
-the cascade, the `test/validation.jl` guards are set from it, and no periodic case
-can tell the two apart, so switching the default is a recalibration of the wall
-cases rather than a code change.
+The one-sided rows stayed optional until September 2026, because every
+constant in this file was calibrated under the cascade and the
+`test/validation.jl` guards were set from it. [The re-measurement on the
+current solver](#the-filters-wall-rows-on-the-current-solver) made them
+the default: the wall cases were re-baselined, and no constant moved.
 
 ### The filter on non-uniform volumes
 
@@ -2842,7 +2844,12 @@ eigenvalues are no longer damped (−8.9e-3 at N = 32 under inflow injection, wh
 even the smooth pulse at t = 0.915.
 
 **The two knobs are coupled:** `:cascade4` with the cascade filter, or `:cascade3`
-or C6 `:brady_livescu` with the one-sided filter.
+or C6 `:brady_livescu` with the one-sided filter. The table above is the
+August measurement under the unrelaxed filter; [the current
+table](#the-closure-compatibility-table), taken after the first-step
+priming and under the relaxed default, keeps the rule with one change,
+the warm-started wall no longer growing the C6 Brady–Livescu mode under
+the cascade rows.
 
 ### Float32
 
@@ -3976,9 +3983,10 @@ and 1.5% at 0.25, which is the subcycled rows' `dt` column above.
 
 The wall order a run sees is the filter's, 1.8 under the cascade rows
 for any derivative closure and the closure's own under the one-sided
-rows; a filtered wall calculation with the default configuration is
-second order at the wall whatever `deriv` is set to, and the decision on
-the filter's wall rows (roadmap N6a) is the one that moves it. The
+rows; a filtered wall calculation under the cascade rows is second
+order at the wall whatever `deriv` is set to, which is why [the decision
+on the filter's wall rows](#the-filters-wall-rows-on-the-current-solver)
+moved the default to the one-sided ones. The
 unfiltered default wall is fourth order in the solution, `:brady_livescu`
 sixth (C6) to eighth (C8), and `:cascade4` is usable only where something
 damps its inviscid wall mode. Every interface, same-level or coarse-fine,
@@ -3991,3 +3999,245 @@ the matrix uses are not needed by the guards, which measure the walls
 against the mirror. Two-dimensional walls with a tangential inviscid
 flow, isothermal walls, moving refinement and Float32 are not in the
 matrix.
+
+<a id="the-filters-wall-rows-on-the-current-solver"></a>
+
+## The filter's wall rows on the current solver
+
+`bench/wallfilter.jl`, September 2026, roadmap N6a. The one-sided rows
+of [the filter's wall cascade](#the-filters-wall-cascade) were measured
+in August under the unrelaxed filter, before the first step was primed
+and before the relaxed weight and its directional rate became the
+default. The question here is whether that measurement holds on the
+solver as it now runs, and what the rows do to everything the earlier
+runs did not read: the whole battery, the closure-compatibility table, a
+reflected pulse, the conservation and floor budgets, a species layer at
+a wall, and Float32. Every row below is C6 `:cascade3` at `alphaf = 0.45`
+unless it says otherwise, and every case is the one `test/cases.jl`
+defines.
+
+### The battery under both row sets
+
+Every case of the battery has closed ends: the Dirichlet inflows of the
+tubes and the outer boundaries of the folded Noh cases take the closure
+rows exactly as a wall does. At the relaxed default, `filter_cfl = 0.35`:
+
+```
+case               rows       plateau   deficit   shock    inadmissible  e_min
+Noh nu=1 N=400     cascade    0.9989    60%       0.2044   8             -0.0218
+                   onesided   0.9975    50%       0.2043   7             -0.0176
+Noh nu=1 N=800     cascade    0.9992    61%       0.2027   6             -0.0271
+                   onesided   0.9977    43%       0.2026   6             -0.0356
+Noh nu=2           both       0.9380    54%       0.2091   6             -0.0262
+Noh nu=3           both       0.9774    29%       0.2089   7             -0.0285
+
+Lax                both       L1 rho 4.987e-3  u 7.467e-3  p 7.556e-3  contact 0.0053
+Shu-Osher          both       L1 rho 6.859e-3  train L1 2.090e-2  train peak 4.6800
+Woodward N=800     cascade    L1 rho 3.217e-2  peak 6.6162 at 0.7785  rho_min 0.1479
+                   onesided   L1 rho 3.222e-2  peak 6.6166 at 0.7785  rho_min 0.1478
+Sedov              both       R_s 0.8085 (+1.06%)  peak 5.128  inadmissible 7
+shock/SF6          both       worst Y -0.0129 / 1.0129  width 4 cells  647 steps
+```
+
+Unrelaxed, `filter_cfl = 0`, the August configuration:
+
+```
+case               rows       plateau   deficit   shock    inadmissible  e_min
+Noh nu=1 N=400     cascade    0.9992    64%       0.2045   8             -0.0562
+                   onesided   0.9995    29%       0.2026   7             -0.0668
+Noh nu=1 N=800     cascade    0.9993    66%       0.2030   7             -0.0235
+                   onesided   0.9995    30%       0.2016   7             -0.0316
+Noh nu=2           both       0.9367    57%       0.2093
+Noh nu=3           both       0.9751    27%       0.2091
+
+Lax                both       L1 rho 4.988e-3
+Shu-Osher          both       L1 rho 6.913e-3  train L1 2.094e-2  train peak 4.6801
+Woodward N=800     cascade    L1 rho 3.252e-2  peak 6.6074 at 0.7785
+                   onesided   L1 rho 3.259e-2  peak 6.6077 at 0.7785
+Sedov              both       R_s 0.8086 (+1.07%)  peak 5.121
+shock/SF6          both       worst Y -0.0135 / 1.0135  width 4 cells  646 steps
+```
+
+The August result reproduces under the unrelaxed weight: 64% to 29% at
+N = 400 and 66% to 30% at N = 800, the plateau 0.03% nearer the exact
+value and the front 0.002 nearer. Under the relaxed default the gain is
+smaller, 60% to 50% and 61% to 43%, and the plateau reads 0.15% lower
+rather than higher. The relaxation weakens every pass near the front,
+where the step is diffusion-limited under `C_beta = 1`, so the deposit
+the cascade's F2 row makes there is smaller to begin with, and so is the
+difference the rows make. The nine other rows agree under both row sets
+to every digit printed at the folds, the tubes, the blast and the shocked
+interface: the rows differ only where a wall carries a gradient, and at
+the Dirichlet ends of these cases nothing arrives.
+
+### The closure-compatibility table
+
+Every derivative closure under both row sets on the wall-bounded shock
+cases, relaxed default:
+
+```
+case               derivative      cascade rows                            one-sided rows
+Woodward N=800     C6 :cascade3    L1 3.217e-2, peak 6.6162                L1 3.222e-2, peak 6.6166
+                   C6 :cascade4    L1 3.217e-2, peak 6.6161                negative density, step 2470, t = 0.019
+                   C6 BL           negative density, step 851, t = 0.006   L1 3.218e-2, peak 6.6166
+                   C8 BL           negative density, step 56               L1 3.229e-2, peak 6.6248
+Noh cold N=400     C6 :cascade3    plateau 0.9989, deficit 60%             plateau 0.9975, deficit 50%
+                   C6 :cascade4    plateau 0.9989, deficit 66%             plateau 0.9973, wall density 5.04 (overshoot 26%)
+                   C6 BL           negative density, step 65               negative density, step 201
+                   C8 BL           negative density, step 41               negative density, step 21
+Noh warm t0=0.3    C6 :cascade3    rho[1:4] 3.990 3.994 3.998 4.001       4.025 3.988 3.993 4.007
+                   C6 :cascade4    rho[1:4] 3.983 3.990 3.997 4.001       4.086 4.075 3.916 3.928
+                   C6 BL           rho[1:4] 3.937 3.964 3.990 4.006       3.992 3.996 3.996 4.000
+                   C8 BL           negative density, step 143, t = 0.024  3.895 3.995 4.001 3.997
+```
+
+Three things changed since August. The warm-started wall no longer grows
+the C6 Brady–Livescu wall mode under the cascade rows (3.94 at the wall
+where August read 20.3): the relaxed weight and the primed first step
+removed that failure, and only Woodward–Colella and the cold start now
+separate the sets. `:cascade4` under the cascade rows reads 66% at the
+cold wall against `:cascade3`'s 60%, where August read 58% against 64%,
+so it is no longer an improvement under the cascade filter either. And
+the coupling rule itself is unchanged: `:cascade4` needs the F2 row and
+fails Woodward–Colella and overshoots the cold wall without it; C6
+Brady–Livescu needs the one-sided rows at a shock-bounded wall and takes
+no singular start under either; C8 Brady–Livescu fails the cold start
+under both.
+
+### The reflected pulse
+
+A left-moving simple wave of the ideal gas, `p = 1 + amp exp(-((x -
+0.5)/0.05)^2)` with `rho = p^(1/γ)` and `u = -2(c - c0)/(γ - 1)`, between
+slip walls on [0, 1] at `cfl = 0.4`, against its periodic mirror on
+[0, 2) at the same spacing and step. The mirror carries the pulse and its
+image about x = 1, so its solution restricted to [0, 1] is the wall
+problem's at every time, reflections and steepening included, and it
+never evaluates a closure row: the difference is the closure defect,
+derivative and filter rows together. The pulse reaches the wall near
+t = 0.42 and is back at its origin near t = 0.85; the density is read at
+t = 0.7, when the reflected pulse is in the interior, so the defect the
+wall rows made during the reflection has travelled away from the wall
+window and the interior and `l2` columns are the ones to read. At
+amp = 0.01 the simple wave steepens over about seven domain lengths and
+stays smooth; at amp = 0.1 it shocks about 0.7 into its path, after the
+reflection.
+
+```
+amp 0.01, artificial properties on         N=49        97          193         385         orders (interior)
+cascade    wall                            4.5e-6      1.2e-6      2.1e-7      2.9e-8
+           interior                        2.70e-4     9.13e-5     2.00e-5     4.28e-6     1.56 / 2.19 / 2.22
+           l2                              6.83e-5     1.90e-5     3.98e-6     8.77e-7
+onesided   wall                            2.1e-4      7.8e-6      2.1e-7      8.1e-9
+           interior                        3.19e-4     2.12e-5     8.93e-7     3.08e-8     3.91 / 4.57 / 4.86
+           l2                              1.15e-4     5.25e-6     1.76e-7     6.09e-9
+
+amp 0.1, artificial properties on, t = 0.7 (shocked after the reflection)
+                                           N=97        193         385         769
+cascade    interior                        9.81e-4     5.86e-4     2.20e-4     8.07e-5     0.74 / 1.41 / 1.45
+           l2                              1.63e-4     5.64e-5     1.68e-5     4.17e-6
+onesided   interior                        1.99e-3     7.14e-4     7.71e-5     5.98e-7     1.48 / 3.21 / 7.01
+           l2                              7.96e-4     2.28e-4     1.81e-5     1.16e-7
+```
+
+The artificial properties move nothing here: the amp = 0.01 rows with
+them off agree with the rows above to two digits, and the unrelaxed
+amp = 0.1 rows agree with the relaxed ones to three. On the resolved
+pulse the one-sided rows are a hundred times more accurate by N = 385
+and converge at 4.5–4.9 where the cascade rows cap at 2.2; at N = 49,
+where σ is 2.4 cells, they are worse, and on the steepening pulse they
+are worse up to N = 193 (two to three times the cascade's `l2`), equal
+at 385 and a hundred times better at 769. The rows below separate the
+steepening case: an amplitude that steepens but does not shock, and the
+shocking one read at t = 0.5, reflected but not yet shocked, with the
+artificial properties on and off.
+
+```
+                                           N=97        193         385         769
+amp 0.03, t = 0.7, art on
+cascade    interior                        3.33e-4     8.78e-5     1.82e-5     3.98e-6
+onesided   interior                        1.68e-4     9.10e-6     4.12e-7     1.35e-8
+amp 0.1, t = 0.5, art on
+cascade    l2                              2.60e-4     1.03e-4     3.32e-5     8.31e-6
+onesided   l2                              7.52e-4     2.85e-4     2.77e-5     6.57e-7
+amp 0.1, t = 0.5, art off
+cascade    l2                              3.47e-4     1.27e-4     3.63e-5     8.49e-6
+onesided   l2                              1.48e-3     3.86e-4     2.95e-5     6.89e-7
+```
+
+The mid-resolution penalty is present with the artificial properties off
+and is larger there, so it is not a coupling with the sensors or with the
+bulk viscosity's wall mode: it is the pre-asymptotic behaviour of rows 2
+and 3, whose gain exceeds unity at high wavenumber, on a reflection whose
+front is resolved over fewer than about ten cells. Above that resolution
+the rows are ten to a hundred times better on the same case, and the
+crossover moves to coarser grids as the amplitude falls (N = 193 at
+amp = 0.03).
+
+### Conservation and floor budgets
+
+The runs filter through a callback with the solver's own pass off, as
+`bench/filter_conservation.jl` does, so the change of the totals across
+each pass is the filter's alone; `drift` is the change of the total over
+the run relative to the largest total seen and `filter` the part of it the
+passes made. The remainder is the derivative closure's, which is not
+summation-by-parts, and the floor's.
+
+```
+                                     mass drift (filter)        energy drift (filter)      floor
+Woodward N=800, cascade              -3.81e-6 (-3.21e-6)        -1.93e-5 (-1.57e-5)        off
+Woodward N=800, onesided             -1.77e-7 (+5.71e-8)        -1.32e-7 (+3.74e-8)        off
+Woodward N=800, cascade, floor 1e-6  -3.80e-6 (-3.20e-6)        +2.35e-2 (-1.53e-5)        3257 steps, 15186 cells, energy +6.6
+Woodward N=800, onesided, floor 1e-6 +5.61e-7 (+2.11e-8)        +2.35e-2 (+2.61e-8)        3254 steps, 15169 cells, energy +6.6
+steepening pulse N=385, cascade      -2.85e-7 (-2.27e-7)        -4.68e-7 (-3.66e-7)        off
+steepening pulse N=385, onesided     -2.91e-8 (+5.11e-10)       -4.26e-8 (+1.01e-9)        off
+planar Noh N=400, cascade            filter -1.09e-3            filter +1.61e-4            0 cells under floor 1e-6
+planar Noh N=400, onesided           filter -3.31e-5            filter -1.12e-5            0 cells under floor 1e-6
+```
+
+Between two walls the one-sided rows cut the run's mass and energy
+drift by twenty to a hundred times, and the filter's own share of it by
+two orders, from a few 1e-6 to a few 1e-8; on the Noh wall the filter's
+mass defect over the run falls from 1.1e-3 to 3.3e-5. The floor, where
+it is on, fires on the same steps and repairs the same cells to a tenth
+of a percent under both row sets, and the state each run ends on
+(inadmissible cells, `e_min`, `rho_min`) is the battery's under both.
+A species layer against the wall (`light` on [0, 0.15], `heavy` beyond,
+crossed inward and outward by the amp = 0.1 pulse) reads the same
+mass-fraction range (−0.0002 to 1.0002 at equal gases, −0.0004 to 1.0006
+at air/SF6), the same interface width and the same species masses to six
+digits under both.
+
+### Float32
+
+Planar Noh at N = 400 in Float32 reads the Float64 rows to every digit
+printed under both row sets (plateau 0.9989 / 0.9975, deficit 60% /
+50%, front 0.2045 / 0.2043). The smooth pulse against its mirror floors
+near 1e-5 in Float32 from N = 97 under both, the one-sided rows' wall
+window three times the cascade's at N = 193 (3.3e-5 against 1.0e-5) and
+their interior and `l2` below it; a wider one-sided row carries more
+round-off but no floor of the Brady–Livescu kind.
+Woodward–Colella at N = 800 does not complete in Float32 under either
+row set: the state loses positivity in the first blast (twelve cells,
+`e_min` −8.5 by t = 0.007) and the run stalls at the step cap. That is a
+Float32 limitation of the 10⁵ pressure ratio, the same under both, and
+the Float32 comparison at a shocked wall rests on Noh alone.
+
+### The decision
+
+`compact_filter` takes `closures = :onesided` by default from this
+change. Under the one-sided rows the wall window of a filtered run
+converges at the derivative closure's own order instead of 1.8, a
+resolved wall-bounded evolution carries a hundred to a thousand times
+less error, the filter creates two orders less mass and energy on any
+closed line, the planar Noh wall deficit is 10–18 points smaller under
+the relaxed default and 35 under the unrelaxed one, and the C6 and C8
+Brady–Livescu rows run at a shocked wall. The change costs a two- to
+threefold penalty on a reflection resolved over fewer than about ten
+cells, a plateau 0.15% lower on the relaxed Noh wall, and the pairing of
+`:cascade4`, which needs the F2 row, with `compact_filter(closures =
+:cascade)` wherever it is used. Nothing else in the battery moves to the
+digits printed, the floor and the species channel are unchanged, and
+Float32 follows Float64. The validation guards were re-baselined under
+the new default and the stored references regenerated; the regression
+rows that assert a cascade measurement pin it, as they pin
+`filter_cfl = 0`.

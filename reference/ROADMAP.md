@@ -307,7 +307,7 @@ below exposed behavior outside those passing checks.
   ([the measurements](CALIBRATION_APPENDIX.md#the-smooth-evolution-accuracy-matrix),
   [completion record](HISTORY.md#the-smooth-evolution-accuracy-matrix-september-2026)).
 
-- [ ] **N6a — Qualify the one-sided wall filter and decide its default.**
+- [x] **N6a — Qualify the one-sided wall filter and decide its default.**
   Compare `compact_filter(closures=:onesided)` against `:cascade`, initially with
   C6 `:cascade3` derivatives. The one-pass wall slope rises from 1.88 to 8.07;
   earlier planar Noh runs reduced wall heating from 64% to 27% at N=400.
@@ -323,9 +323,31 @@ below exposed behavior outside those passing checks.
   decision, updated wall calibration, and the repository numerical gate. Do not
   combine cascade4 with the one-sided filter as an assumed safe upgrade: that pair
   has recorded instability even on a smooth pulse.
+  **Delivered:** `compact_filter` defaults to `closures = :onesided`.
+  [wallfilter.jl](../bench/wallfilter.jl) runs the trial battery: the
+  `test/cases.jl` battery under both row sets at the relaxed and the
+  unrelaxed weight, the closure-compatibility table, a simple-wave pulse
+  reflected at a slip wall against its periodic mirror, the conservation
+  and floor budgets between two walls, a species layer at the wall, and
+  Float32. The August result reproduces unrelaxed (64% to 29%); under the
+  relaxed default the planar Noh deficit reads 60% to 50% at N = 400 and
+  61% to 43% at N = 800 with the plateau 0.15% lower, every other battery
+  row is unchanged to the digits printed, the filter's mass and energy
+  defect between two walls falls two orders, the floor and species
+  budgets are identical, and Float32 follows Float64. The one cost is a
+  reflection resolved over fewer than about ten cells, two to three times
+  the cascade's error, pre-asymptotic and independent of the artificial
+  properties. `:cascade4` is paired with `closures = :cascade`; the
+  Brady–Livescu sets run Woodward–Colella under the default and fail the
+  cold Noh start under either. Validation guards re-baselined, stored
+  references regenerated
+  ([the measurements](CALIBRATION_APPENDIX.md#the-filters-wall-rows-on-the-current-solver),
+  [the applied form](CALIBRATION.md#walls-folds-and-metrics),
+  [completion record](HISTORY.md#the-filters-wall-rows-september-2026)).
 
 - [ ] **N6b — Qualify a high-order physical-wall configuration.**
-  Evaluate C6 Brady–Livescu with the N6a filter first; evaluate C8 separately.
+  Evaluate C6 Brady–Livescu under the default one-sided filter rows first;
+  evaluate C8 separately.
   Establish solution order, the stable CFL range, and conditioning/error floors
   for the complete derivative/filter/variable-diffusion update, including
   `D(beta D)`. Test smooth compatible walls before shock-loaded and cold-start
@@ -504,10 +526,10 @@ The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
   [levels.jl](../src/levels.jl),
   [regrid.jl](../src/regrid.jl), [timestep.jl](../src/timestep.jl).
 
-Boundary/interface sequence: R5 and N6 are complete, and N6's matrix
-(`bench/boundaryorder.jl`, gated in `test/convergence.jl`) is the instrument
-for N6a, N6b, N14 and N16. Run the N6a wall-filter trials on its wall rows,
-adding thermal-wall cases; N6b follows the wall-filter decision; N6c is an
+Boundary/interface sequence: R5, N6 and N6a are complete, and N6's matrix
+(`bench/boundaryorder.jl`, gated in `test/convergence.jl`) with N6a's
+trial battery (`bench/wallfilter.jl`) is the instrument for N6b, N14 and
+N16. N6b starts from the one-sided filter rows now in force; N6c is an
 independent roundoff audit. Use N10/N11 to qualify interface
 candidates before promotion; invoke N15 only when the smaller closure change
 misses a target. N16 transfer measurements may begin with N6, while final accuracy

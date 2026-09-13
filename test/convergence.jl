@@ -248,14 +248,15 @@ study("C8 wall closures, :brady_livescu", (24, 48, 96),
       expect=8.0, tol=1.2, recorded=7.91)
 
 # One pass of the state filter on a closed line, measured as |F f − f|. The
-# default wall cascade (identity, F2, F4, F6) is second order along the whole
+# wall cascade (identity, F2, F4, F6) is second order along the whole
 # line, not only at the wall, because the compact solve carries the row-2
-# error inward; the one-sided Gaitonde–Visbal rows restore the interior
-# order. Resolutions are lower because the eighth-order pass reaches
-# round-off by N = 48 on this field.
+# error inward; the one-sided Gaitonde–Visbal rows, the default since
+# September 2026, restore the interior order. Resolutions are lower because
+# the eighth-order pass reaches round-off by N = 48 on this field.
 study("C8 filter pass, :cascade", (12, 16, 24, 32),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                  filt=compact_filter(0.45; closures=:cascade),
                   art=ArtParams(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> exp(sin(3x)), parity=1);
@@ -410,8 +411,10 @@ evolution_study("inviscid wall, C6, unfiltered", WALL_NS,
                 N -> wall_case(N; cfl=EVOLUTION_CFL), mirror_reference;
                 primary=:wall, tfinal=0.4, expect=3.9, tol=0.8, recorded=3.93)
 evolution_study("inviscid wall, C6, cascade filter", WALL_NS,
-                N -> wall_case(N; cfl=EVOLUTION_CFL, filter_interval=1),
-                s -> mirror_reference(s; filter_interval=1);
+                N -> wall_case(N; cfl=EVOLUTION_CFL, filter_interval=1,
+                               filt=compact_filter(0.45; closures=:cascade)),
+                s -> mirror_reference(s; filter_interval=1,
+                                      filt=compact_filter(0.45; closures=:cascade));
                 primary=:wall, tfinal=0.4, expect=1.8, tol=0.6, recorded=1.81)
 evolution_study("inviscid wall, C6, onesided filter", WALL_NS,
                 N -> wall_case(N; cfl=EVOLUTION_CFL, filter_interval=1,

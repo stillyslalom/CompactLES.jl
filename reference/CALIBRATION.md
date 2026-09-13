@@ -32,8 +32,9 @@ ArtParams(C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.01, C_Y = 100,
           Y_tolerance = 1e-4, mu_sensor = :strain, beta_sensor = :strain,
           reduction = :sum, smoother = :gaussian, detector = :delta4,
           species_flux = :fickian)
-Numerics(filt = compact_filter(0.45), filter_interval = 1, filter_cfl = 0.35,
-         filter_weighting = :none, cfl = 0.5, control = StepControl())
+Numerics(filt = compact_filter(0.45, closures = :onesided), filter_interval = 1,
+         filter_cfl = 0.35, filter_weighting = :none, cfl = 0.5,
+         control = StepControl())
 ```
 
 | Setting | Default | Status | Basis |
@@ -50,6 +51,7 @@ Numerics(filt = compact_filter(0.45), filter_interval = 1, filter_cfl = 0.35,
 | `species_flux` | `:fickian` | provisional | `:bulk` is at least as good on every measured column; the constants are fitted on the Fickian channel ([appendix](CALIBRATION_APPENDIX.md#the-bulk-species-channel)). |
 | `cfl` | 0.5 | keep | Use 0.3 or `StepControl(retries = 4)` for a converging shock at a spherical origin, whose ceiling is 0.3; walls and axes carry none ([appendix](CALIBRATION_APPENDIX.md#cfl-and-the-symmetry-cell-restriction)). |
 | `compact_filter` α | 0.45 | too strong | 0.49 fits at 128³ and 256³ and clears the battery; the stability edge is at 0.49875 ([appendix](CALIBRATION_APPENDIX.md#the-default-decision)). |
+| `compact_filter` closures | `:onesided` | keep | The cascade's F2 row caps every filtered wall at second order and creates a few 1e-6 of the mass between two walls per run; the one-sided rows return the wall to the derivative closure's order, cut that by two orders and take 10–18 points off the planar Noh wall deficit, at a two- to threefold cost on a reflection resolved over fewer than ten cells. `:cascade4` needs `closures = :cascade` ([appendix](CALIBRATION_APPENDIX.md#the-filters-wall-rows-on-the-current-solver)). |
 | `filter_cfl` | 0.35 | keep | Makes the filter's dissipation a rate, invariant to the CFL, landing steps, retries and subcycling; clears the battery at its production CFL numbers ([appendix](CALIBRATION_APPENDIX.md#the-battery-under-relaxation), [invariances](CALIBRATION_APPENDIX.md#retries-and-subcycling-under-relaxation)). |
 | `filter_interval` | 1 | keep | Redundant with α ([appendix](CALIBRATION_APPENDIX.md#cadence-and-alpha-are-one-axis)). |
 | `filter_weighting` | `:none` | keep | The volume-weighted form conserves no better on a closed line, is 17× less conservative at an axis or a pole, and moves the Noh wall deficit in opposite directions at the axis and the origin ([appendix](CALIBRATION_APPENDIX.md#the-filter-on-non-uniform-volumes)). |
@@ -103,15 +105,15 @@ effect. The appendix link carries the sweep.
   ratio of 100 the Fickian channel fails and `species_flux = :bulk` completes
   ([the bulk channel](CALIBRATION_APPENDIX.md#the-bulk-species-channel)).
   Run under `validity = :permissive` and bound the excursion in the guard.
-- **Wall heating at a stagnation wall.** Planar Noh carries a 64% density
-  deficit at the wall under the defaults, and most of it is the filter's
-  second row. `compact_filter(closures = :onesided)` takes it to 27%;
-  `lele_d1_6(closures = :cascade4)` takes it to 58% under the default
-  filter; `detector = :d8` to 53%. The two closure choices are coupled:
-  `:cascade4` with the cascade filter, `:cascade3` or C6 `:brady_livescu`
-  with the one-sided filter. `C_kappa` does not help under the default
-  smoother, and the deficit does not converge away with resolution
-  ([walls](#walls-folds-and-metrics)).
+- **Wall heating at a stagnation wall.** Planar Noh carries a 50% density
+  deficit at the wall under the defaults (43% at N = 800), down from 60%
+  under the filter's cascade rows, which the one-sided rows replaced in
+  September 2026; under the unrelaxed filter the same change reads 64% to
+  29%. `detector = :d8` took the cascade's 64% to 53%. The two closure
+  choices are coupled: `:cascade4` needs `compact_filter(closures =
+  :cascade)`, and `:cascade3` or C6 `:brady_livescu` the default one-sided
+  rows. `C_kappa` does not help under the default smoother, and the deficit
+  does not converge away with resolution ([walls](#walls-folds-and-metrics)).
 - **A smooth wave train or a contact is over-damped.** `C_beta = 0.5` keeps
   0.7% more Shu–Osher amplitude and an 18% narrower contact than 1.0, at
   the cost of half the spherical origin's timestep. `detector = :d8` keeps
@@ -427,12 +429,15 @@ diffusion-limited under C_β = 1, and the aligned case reads one profile at
 every aspect ratio
 ([the directional rate](CALIBRATION_APPENDIX.md#the-filter-relaxed-against-the-directional-acoustic-rate)).
 
-The filter is also the wall-order cap of every filtered run, second order
-through its row-2 closure, and the closure rows are where it fails to
-conserve: a few percent of the first rows' content per pass on any grid,
-decaying inward at the tridiagonal root. The volume weighting of the
-reference implementation does not change that and is not the default
-([walls](#walls-folds-and-metrics)).
+The filter's closure rows set the wall order of every filtered run and
+are where it fails to conserve: under the cascade rows a filtered wall
+is second order through the F2 row and a pass creates or destroys a few
+percent of the first rows' content on any grid, decaying inward at the
+tridiagonal root. The one-sided rows, the default since September 2026,
+return the wall to the derivative closure's order and cut the mass and
+energy a run's passes create between two walls by two orders. The volume
+weighting of the reference implementation changes neither and is not the
+default ([walls](#walls-folds-and-metrics)).
 
 ## CFL, step control and the symmetry cell
 
@@ -487,24 +492,31 @@ restriction
 
 **Wall closures.** The filter's cascade rows 2–4 leave a second-order error
 along the whole line and deposit an O(h²) disturbance two cells from the
-wall on every step; `compact_filter(closures = :onesided)` makes one pass
-eighth order everywhere and takes the planar Noh wall deficit from 64% to
-27%. The derivative closures `:brady_livescu` raise the smooth wall order
-from 3.17 to 5.88 (C6) and 7.91 (C8) but fail at a shock-bounded wall under
-the cascade filter through a β\*-driven wall mode; with the one-sided filter
-C6 completes and C8 does not, and `:cascade4` needs the F2 row it removes.
-The coupling rule: `:cascade4` with the cascade filter, `:cascade3` or C6
-`:brady_livescu` with the one-sided filter. In Float32 the Brady–Livescu
-rows floor at 1e-3. All of it stays optional because every constant and
-guard is set under the cascade
+wall on every step; the one-sided rows, `compact_filter(closures =
+:onesided)` and the default since September 2026, make one pass eighth
+order everywhere, take the planar Noh wall deficit from 60% to 50% at
+N = 400 and 61% to 43% at N = 800 under the relaxed filter (64% to 29%
+unrelaxed) at a plateau 0.15% lower, cut the mass and energy a run's
+passes create between two walls by two orders, and leave every other
+battery row unchanged to the digits printed. Their cost is a reflection
+resolved over fewer than about ten cells, where they read two to three
+times the cascade's error. The derivative closures `:brady_livescu` raise
+the smooth wall order from 3.17 to 5.88 (C6) and 7.91 (C8) but fail
+Woodward–Colella under the cascade rows through a β\*-driven wall mode;
+under the one-sided rows both complete it and neither takes the singular
+cold start of Noh, and `:cascade4` needs the F2 row the one-sided rows
+remove. The coupling rule: `:cascade4` with `closures = :cascade`,
+`:cascade3` or `:brady_livescu` with the default. In Float32 the
+Brady–Livescu rows floor at 1e-3 and the one-sided rows follow Float64
 ([wall cascade](CALIBRATION_APPENDIX.md#the-filters-wall-cascade),
-[wall closures](CALIBRATION_APPENDIX.md#wall-closures-under-the-artificial-properties)).
+[wall closures](CALIBRATION_APPENDIX.md#wall-closures-under-the-artificial-properties),
+[the current solver](CALIBRATION_APPENDIX.md#the-filters-wall-rows-on-the-current-solver)).
 
 **Wall accuracy in evolution.** On a smooth standing wave between walls
 the window of nodes next to the wall converges at 3.9 under the default
-closures without a filter, 1.8 under the cascade filter and 3.8 under the
-one-sided rows, whatever the derivative closure: the filter's F2 row is the
-accuracy of every filtered wall, and its defect is `O(h²) f''` at the wall,
+closures without a filter, 1.8 under the cascade filter rows and 3.8 under
+the default one-sided rows, whatever the derivative closure: the cascade's
+F2 row is the accuracy of every wall filtered with it, and its defect is `O(h²) f''` at the wall,
 so a field odd about the wall (the tangential velocity of a shear mode) is
 capped at 3.5 rather than 1.8. C6 `:brady_livescu` reads 5.7 unfiltered
 and under the one-sided rows; `:cascade4` carries an undamped mode at an
@@ -523,8 +535,9 @@ less forgiving than the axis is open
 ([fold order](CALIBRATION_APPENDIX.md#fold-order-and-geometry-limits)).
 
 **Grid convergence.** Lax L1 halves per doubling, interface width halves
-per doubling, and wall heating does not converge away (60% → 56% over 8×),
-which is the character of the Noh problem
+per doubling, and wall heating does not converge away (60% → 56% over 8×
+under the cascade filter rows; 50% → 43% from N = 400 to 800 under the
+one-sided ones), which is the character of the Noh problem
 ([grid convergence](CALIBRATION_APPENDIX.md#grid-convergence)).
 
 **Non-Cartesian metrics.** `filter_state!` filters the conserved components

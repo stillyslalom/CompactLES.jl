@@ -122,6 +122,18 @@ rows are far from diagonally dominant, and the closed-line condition number
 rises from about 16 to about 1e3, which costs three digits at the wall and is
 the reason the cascade remains the default.
 
+The state filter [`compact_filter`](@ref) has closure rows of its own, and
+they set the wall order of a filtered run. Its `:cascade` rows, centered
+filters of order two, four and six on rows two to four, leave one pass second
+order along the whole closed line and cap the wall window of any filtered
+evolution near second order whatever the derivative closure. The default
+`:onesided` rows, the one-sided eighth-order rows of Gaitonde and Visbal,
+leave one pass eighth order everywhere and return the wall to the derivative
+closure's order; they also reduce the mass and energy a pass creates on a
+closed line by two orders. The `:cascade4` derivative closure carries an
+inviscid wall mode that only the cascade's second-order filter row damps, so
+it is used with `compact_filter(closures = :cascade)`.
+
 Formal interior order should not be quoted as the accuracy of a wall-bounded
 calculation. If the error is dominated by closure points, refinement exposes
 the lower closure order. The validation suite therefore reports interior and

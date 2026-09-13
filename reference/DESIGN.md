@@ -250,36 +250,43 @@ Presets:
   4e3 (C8); the cascade stays the default for that reason. The T8 set needs
   13 points along a dimension closed at both ends (`plan_direction` counts
   closure rows only at closed ends, so a periodic or interior block needs
-  the interior stencil's 7). Under the default filter wall cascade neither
+  the interior stencil's 7). Under the filter's cascade rows neither
   Brady–Livescu set survives a captured shock at a slip wall: the bulk
-  viscosity term assembled from their rows grows a wall mode. Under
-  `compact_filter(closures = :onesided)` the C6 set does survive Woodward–
-  Colella and the warm-started planar Noh, while `:cascade4` then loses the
-  F2 filter row it depends on and fails even a smooth pulse. In Float32 the
-  Brady–Livescu wall error floors near 1e-3, above the cascade's, from
-  N = 48 up. The runs are in `reference/CALIBRATION_APPENDIX.md` under "Wall
-  closures under the artificial properties".
+  viscosity term assembled from their rows grows a wall mode. Under the
+  filter's one-sided rows, the default since September 2026, both sets
+  complete Woodward–Colella and the warm-started planar Noh and neither
+  takes the singular cold start, while `:cascade4` loses the F2 filter row
+  it depends on and fails even a smooth pulse, so it is paired with
+  `compact_filter(closures = :cascade)`. In Float32 the Brady–Livescu wall
+  error floors near 1e-3, above the cascade's, from N = 48 up. The runs
+  are in `reference/CALIBRATION_APPENDIX.md` under "Wall closures under
+  the artificial properties" and "The filter's wall rows on the current
+  solver".
 - `pade_d1_4()`: fourth-order Padé first derivative.
 - `compact_filter(alphaf; closures)`: the eighth-order Gaitonde–Visbal
   filter, whose strength parameter α is spelled `alphaf` in the code.
   `alphaf ∈ (−½, ½)` sets the strength (larger → weaker). Near closed edges
-  the first row is left unfiltered; `closures = :cascade` (default) applies
-  centered compact filters of order 2/4/6 at the same α on rows 2–4, the
-  standard reduced-order boundary cascade, and `:onesided` applies the
-  paper's one-sided eighth-order rows, derived at construction by
-  `onesided_filter_row` from polynomial exactness through degree 7 plus a
-  Nyquist zero (the interior stencil's own construction, which the
-  derivation reproduces at the centered point). One filter pass of a smooth
-  field is second order along the whole closed line under the cascade and
-  eighth under the one-sided rows, measured in `test/convergence.jl` at
-  1.88 and 8.07; in evolution the cascade caps the wall window of a filtered
-  run at 1.8 whatever the derivative closure, and the one-sided rows return
-  it to the closure's own order. On the planar Noh case the one-sided rows cut the wall
-  density deficit from 64% to 27% at N = 400 (65% to 38% at N = 800), with
-  the plateau and shock position unchanged, and they are what lets the C8
-  Brady–Livescu rows run at all. They stay optional because `:cascade4`
-  needs the F2 row and because the default constants were calibrated under
-  the cascade; `reference/CALIBRATION_APPENDIX.md` has the measurements.
+  the first row is left unfiltered; `closures = :onesided` (default since
+  September 2026) applies the paper's one-sided eighth-order rows on rows
+  2–4, derived at construction by `onesided_filter_row` from polynomial
+  exactness through degree 7 plus a Nyquist zero (the interior stencil's
+  own construction, which the derivation reproduces at the centered
+  point), and `:cascade` applies centered compact filters of order 2/4/6
+  at the same α, the standard reduced-order boundary cascade. One filter
+  pass of a smooth field is eighth order along the whole closed line under
+  the one-sided rows and second under the cascade, measured in
+  `test/convergence.jl` at 8.07 and 1.88; in evolution the cascade caps
+  the wall window of a filtered run at 1.8 whatever the derivative
+  closure, and the one-sided rows return it to the closure's own order. On
+  the planar Noh case the one-sided rows cut the wall density deficit from
+  60% to 50% at N = 400 and 61% to 43% at N = 800 under the relaxed filter
+  (64% to 29% unrelaxed), with the shock position unchanged and the
+  plateau 0.15% lower, cut the mass and energy the passes create between
+  two walls by two orders, and are what lets the Brady–Livescu rows run at
+  a shocked wall. Their cost is a reflection resolved over fewer than
+  about ten cells, where they read two to three times the cascade's error.
+  `:cascade4` needs the F2 row and takes `closures = :cascade`;
+  `reference/CALIBRATION_APPENDIX.md` has the measurements.
 
 `kernels_banded.jl` generalizes this to a **banded LHS** of half-bandwidth `q`
 via `BandedCompactScheme` (q = 1 is tridiagonal, q = 2 is pentadiagonal, which

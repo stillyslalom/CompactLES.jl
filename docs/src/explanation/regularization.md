@@ -113,9 +113,14 @@ relation. Its parameter `alphaf` lies between `-0.5` and `0.5`; values closer to
 compact_filter(0.45)
 ```
 
-Near a closed edge, the first point is unchanged and the next rows use a
-reduced-order cascade. `filter_interval=1` filters every conserved component
-after every completed step. Zero disables state filtering.
+Near a closed edge, the first point is unchanged and rows two to four use
+the one-sided eighth-order rows of the same paper (`closures=:onesided`,
+the default), which keep one pass eighth order along the whole line;
+`closures=:cascade` substitutes the reduced-order cascade of centered
+second-, fourth- and sixth-order filters, which caps a filtered wall at
+second order and is the row set the `:cascade4` derivative closure needs.
+`filter_interval=1` filters every conserved component after every
+completed step. Zero disables state filtering.
 
 `filter_cfl=0.35`, the default, makes the filter's dissipation a rate rather
 than a per-application amount. Each directional pass relaxes the state
