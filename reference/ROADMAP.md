@@ -388,7 +388,7 @@ below exposed behavior outside those passing checks.
   [the applied form](CALIBRATION.md#walls-folds-and-metrics),
   [completion record](HISTORY.md#the-bradylivescu-rows-as-a-wall-configuration-september-2026)).
 
-- [ ] **N6c — Decide whether constant-annihilation roundoff needs a change.**
+- [x] **N6c — Decide whether constant-annihilation roundoff needs a change.**
   Measure derivative residuals on scaled constants and small perturbations over
   large offsets, separating coefficient cancellation, solve conditioning, and
   summation roundoff in both precisions. Compare anchored-difference rows only
@@ -398,6 +398,55 @@ below exposed behavior outside those passing checks.
   decomposition agreement, inference, or allocations. This is independent of
   the truncation-order fixes in N6a/N14.
   **Code:** [kernels.jl](../src/kernels.jl), [kernels_banded.jl](../src/kernels_banded.jl).
+  **Delivered:** a no-change decision. [constantfloor.jl](../bench/constantfloor.jl)
+  measures every derivative and filter preset in both precisions: the
+  weights' sums, the fill residual before the solve and the solved
+  residual after it, an anchored form beside the plain one, a
+  perturbation over an offset to 1e9, and a uniform state between slip
+  walls against a periodic control. The residual is 2–40 eps relative to
+  c/h at the wall, the solve amplifying the cascade's by 2 and the
+  Brady–Livescu sets' by up to 40; anchoring would recover a factor of
+  two to thirty only where the stored field's quantization already floors
+  the interior at the same level, and a filtered Float32 run drifts at the
+  filter's own constant-passing round-off anyway. The instrument found
+  the slip-wall mode of N6d, which sets the practical consequence of any
+  seed
+  ([the measurements](CALIBRATION_APPENDIX.md#constant-annihilation-and-the-slip-wall-mode),
+  [completion record](HISTORY.md#constant-annihilation-and-the-slip-wall-mode-september-2026)).
+
+- [ ] **N6d — Remove the inviscid slip-wall instability of the cascade closures.**
+  Under the default C6 `:cascade3` rows a uniform inviscid state between
+  slip walls grows a wall-normal velocity from round-off at 2.3 per unit
+  time (c = 1.31 on a unit domain), an eigenmode of the linearized step
+  with half its norm within four nodes of the walls, at the same rate at
+  N = 51, 101 and 201 and at half the step; the C8 cascade grows at 1.4,
+  the C10 cascade rows at 2.6 and `:cascade4` at 7. The cascade filter's
+  F2 row damped it exactly (|λ| = 1.00000004), which is how it went
+  unseen before N6a; the default one-sided rows only halve it (1.2
+  unrelaxed, 1.0 relaxed at cfl 0.5) and a stronger one-sided filter
+  worsens it (1.4 at αf = 0.40, 1.8 at 0.30). Dirichlet ends are neutral,
+  a viscous no-slip wall is neutral, a viscous slip wall reads 0.04, C6
+  `:brady_livescu` is neutral unfiltered and 0.6 under the one-sided
+  filter (the filter rows' own gain), and the artificial properties
+  saturate the mode near |u| = 1e-2. A Float64 seed reaches that in about
+  30 time units under the defaults and a Float32 seed in about 15, so the
+  battery's wall cases do not see it and a long inviscid run between
+  slip walls or symmetry planes does.
+  **Deliver:** a closed-end treatment neutral or damped on the linearized
+  step (`bench/constantfloor.jl jacobian`, both wall types and Dirichlet
+  ends, N = 51 and 101) without the F2 row's second-order wall defect.
+  Candidates, in order: a wall-only damping row applied with the filter
+  pass; a filter row set whose closed rows do not exceed unit gain; C6
+  `:brady_livescu` with such a set; an SBP-like closure under N15.
+  **Depends on:** N6, N6a and N6b for the instruments and the accuracy
+  matrix; coordinate any filter-row change with N1's time policy.
+  **Gate:** |λ|max ≤ 1 + 1e-8 on the Jacobian for slip, no-slip and
+  Dirichlet ends at both resolutions, the N6 evolution orders and the
+  N6a reflection tables unchanged, the battery unchanged to four digits,
+  MPI and device parity, and a 40-time-unit uniform-state run holding
+  its seed.
+  **Code:** [kernels.jl](../src/kernels.jl), [boundary.jl](../src/boundary.jl),
+  [constantfloor.jl](../bench/constantfloor.jl).
 
 - [ ] **N7 — Complete NSCBC inflow transverse coupling.**
   Add the Yoo–Im transverse terms that exist for outflow but not inflow.
@@ -560,8 +609,11 @@ N6a's trial battery (`bench/wallfilter.jl`) and N6b's qualification
 (`bench/wallclosure.jl`) is the instrument for N14 and N16. N6b found the
 artificial diffusion's own fourth-order wall defect, which caps any
 closure with the properties on; its removal (the detector's mirror at a
-wall) is a calibration item, not a closure one. N6c is an independent
-roundoff audit. Use N10/N11 to qualify interface
+wall) is a calibration item, not a closure one. N6c, the roundoff audit,
+closed with no change and found the slip-wall mode that N6d now carries:
+the cascade closures are linearly unstable at an inviscid slip wall, and
+the F2 filter row that N6a retired was what damped it. N6d precedes any
+long inviscid wall-bounded production run. Use N10/N11 to qualify interface
 candidates before promotion; invoke N15 only when the smaller closure change
 misses a target. N16 transfer measurements may begin with N6, while final accuracy
 qualification follows the selected interface treatment. Coordinate temporal

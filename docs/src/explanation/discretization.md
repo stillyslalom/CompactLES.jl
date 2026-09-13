@@ -135,6 +135,20 @@ remains the default for the singular start it completes and the rows do
 not. C8 `:brady_livescu` is not supported at a wall: it fails a smooth
 wall from CFL 1.25 where the periodic interior completes.
 
+The cascade closures carry a linear instability at an inviscid slip wall.
+A uniform state between slip walls grows a wall-normal velocity from
+round-off at about 2.3 per unit time under the default rows, at the same
+rate at every resolution measured, with half of the growing eigenvector
+within four nodes of the walls. The cascade filter's second-order row
+damped it exactly; the default one-sided rows halve it, and a stronger
+one-sided filter makes it worse. Dirichlet ends, viscous no-slip walls
+and the unfiltered `:brady_livescu` rows are neutral, and the artificial
+properties saturate the mode near a wall-normal velocity of 1e-2, which a
+Float64 seed reaches after roughly thirty time units. A long inviscid run
+between slip walls or symmetry planes should therefore carry
+`compact_filter(closures = :cascade)`, physical viscosity, or the
+Brady–Livescu rows unfiltered until the closure is revised.
+
 The state filter [`compact_filter`](@ref) has closure rows of its own, and
 they set the wall order of a filtered run. Its `:cascade` rows, centered
 filters of order two, four and six on rows two to four, leave one pass second

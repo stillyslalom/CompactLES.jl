@@ -114,6 +114,13 @@ effect. The appendix link carries the sweep.
   :cascade)`, and `:cascade3` or C6 `:brady_livescu` the default one-sided
   rows. `C_kappa` does not help under the default smoother, and the deficit
   does not converge away with resolution ([walls](#walls-folds-and-metrics)).
+- **A long inviscid run between slip walls or symmetry planes grows a
+  wall-normal velocity from nothing.** The cascade closures' slip-wall
+  mode, at 1.0 per unit time under the defaults, visible after about
+  30 time units in Float64 and 15 in Float32. `compact_filter(closures =
+  :cascade)` damps it exactly at the cascade's wall accuracy, physical
+  viscosity at a no-slip wall removes it, and C6 `:brady_livescu`
+  unfiltered is neutral ([the mode](#walls-folds-and-metrics)).
 - **A smooth wave train or a contact is over-damped.** `C_beta = 0.5` keeps
   0.7% more Shu–Osher amplitude and an 18% narrower contact than 1.0, at
   the cost of half the spherical origin's timestep. `detector = :d8` keeps
@@ -536,6 +543,33 @@ with its mirror completing, the warm Noh wall from 0.9, the Cartesian
 Noh plane on both starts, and every planar start but the 40-cell one
 ([the qualification](CALIBRATION_APPENDIX.md#the-bradylivescu-rows-as-a-wall-configuration)).
 
+**The slip-wall mode.** The cascade closures are linearly unstable at an
+inviscid slip wall: a uniform state between slip walls under the default
+C6 `:cascade3` rows grows a wall-normal velocity from its round-off seed
+at 2.3 per unit time (c = 1.31 on a unit domain), an O(c/L) eigenmode of
+the discrete step with half its norm within four nodes of the walls; the
+C8 cascade grows at 1.4, the C10 rows at 2.6, `:cascade4` at 7. The
+cascade filter's F2 row damped it exactly, and the default one-sided
+rows only halve it (1.0 relaxed at cfl 0.5), a stronger one-sided filter
+making it worse. Dirichlet ends are neutral, a viscous no-slip wall is
+neutral, a viscous slip wall reads 0.04, C6 `:brady_livescu` is neutral
+unfiltered and 0.6 under the one-sided filter, and the artificial
+properties saturate the mode near |u| = 1e-2, which a Float64 seed
+reaches in about 30 time units and a Float32 seed in about 15. The
+battery's wall cases end by t = 0.6 and do not see it; a long inviscid
+run between slip walls or symmetry planes does, and until roadmap N6d
+removes it such a run should carry `compact_filter(closures = :cascade)`,
+physical viscosity, or C6 `:brady_livescu` unfiltered
+([the mode](CALIBRATION_APPENDIX.md#the-slip-wall-mode)).
+
+**Constant annihilation.** A closure row leaves 2–40 eps of c/h on a
+constant c at the wall, the solve amplifying the products' rounding by 2
+for the cascade and up to 40 for the Brady–Livescu sets; an anchored row
+would zero a uniform state's residual but buys nothing where the stored
+field's quantization already floors the interior, and a filtered Float32
+run drifts at the filter's own constant-passing round-off. No change
+([constant annihilation](CALIBRATION_APPENDIX.md#constant-annihilation-and-the-slip-wall-mode)).
+
 **Wall accuracy in evolution.** On a smooth standing wave between walls
 the window of nodes next to the wall converges at 3.9 under the default
 closures without a filter, 1.8 under the cascade filter rows and 3.8 under
@@ -623,3 +657,6 @@ In approximate priority order; each links to the measurements it rests on.
    [which channel carries it](CALIBRATION_APPENDIX.md#which-channel-carries-it)).
 8. **Decide `species_flux`** on the vortex-ring/SF6 case
    ([open](CALIBRATION_APPENDIX.md#open)).
+9. **Remove the slip-wall mode** (roadmap N6d): the cascade closures'
+   inviscid slip-wall instability, which the retired F2 filter row was
+   damping ([the mode](CALIBRATION_APPENDIX.md#the-slip-wall-mode)).

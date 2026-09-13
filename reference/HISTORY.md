@@ -38,6 +38,7 @@ points at them and does not restate them.
 28. [The smooth-evolution accuracy matrix (September 2026)](#the-smooth-evolution-accuracy-matrix-september-2026)
 29. [The filter's wall rows (September 2026)](#the-filters-wall-rows-september-2026)
 30. [The Brady–Livescu rows as a wall configuration (September 2026)](#the-bradylivescu-rows-as-a-wall-configuration-september-2026)
+31. [Constant annihilation and the slip-wall mode (September 2026)](#constant-annihilation-and-the-slip-wall-mode-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -1716,3 +1717,45 @@ from the calibration file and the clamp item now carries the
 measurement. The docstrings of `lele_d1_6` and `lele_d1_8`, the design
 file and the discretization page state the supported configuration and
 its limits.
+
+## Constant annihilation and the slip-wall mode (September 2026)
+
+N6c closes with a no-change decision and a new item. `bench/constantfloor.jl`
+measures what a closure row leaves on a constant, in both precisions, for
+every derivative and filter preset: the weights' own sums, the fill
+residual before the solve and the solved residual after it, an anchored
+form beside the plain one, a perturbation over an offset up to 1e9, and
+the consequence in a run, a uniform state between slip walls with a
+periodic line as the control. The residual is round-off, 2–40 eps
+relative to c/h at the wall from the products and their accumulation,
+the solve amplifying it by 2 for the cascade and up to 40 for the
+Brady–Livescu sets; anchoring would zero a uniform state's residual and
+recover a factor of two to thirty on a perturbation over an offset, but
+only where the stored field's quantization already floors the interior
+at the same level, and in a filtered Float32 run the filter's own
+constant-passing round-off drifts the interior at the same 1e-5 per 2000
+passes. No row changed.
+
+The instrument found a linear instability of the default closures at an
+inviscid slip wall. A uniform state between slip walls under C6
+`:cascade3` grows a wall-normal velocity from its round-off seed at 2.3
+per unit time (c = 1.31 on a unit domain), the same rate at N = 51, 101
+and 201 and at half the step, an eigenmode of the linearized step with
+half its norm within four nodes of the walls; the C8 cascade grows at
+1.4, the C10 cascade rows at 2.6 and `:cascade4` at 7. The cascade
+filter's F2 row damped it exactly, which is why it went unseen before
+N6a moved the filter's wall rows; the one-sided rows halve it (1.2
+unrelaxed, 1.0 relaxed at cfl 0.5) and a stronger one-sided filter
+worsens it. Dirichlet ends are neutral, a viscous no-slip wall is
+neutral, a viscous slip wall reads 0.04, C6 `:brady_livescu` is neutral
+unfiltered and 0.6 under the one-sided filter, and the artificial
+properties saturate the mode near |u| = 1e-2. A Float64 seed reaches
+that in about 30 time units under the defaults, a Float32 seed in
+about 15; the battery's wall cases end at t = 0.6 and do not see it.
+Removing it is roadmap N6d. The measurements are under [constant
+annihilation and the slip-wall
+mode](CALIBRATION_APPENDIX.md#constant-annihilation-and-the-slip-wall-mode);
+the applied form is in [CALIBRATION.md](CALIBRATION.md#walls-folds-and-metrics).
+
+Validation: no package code changed; the bench ran every part on Julia
+1.12.7, and the docs reference check passed after the docstring edits.

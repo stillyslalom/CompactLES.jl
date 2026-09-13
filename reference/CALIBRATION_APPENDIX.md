@@ -42,6 +42,7 @@ record of that setting.
 20. [The smooth-evolution accuracy matrix](#the-smooth-evolution-accuracy-matrix)
 21. [The filter's wall rows on the current solver](#the-filters-wall-rows-on-the-current-solver)
 22. [The Brady–Livescu rows as a wall configuration](#the-bradylivescu-rows-as-a-wall-configuration)
+23. [Constant annihilation and the slip-wall mode](#constant-annihilation-and-the-slip-wall-mode)
 
 ## The battery
 
@@ -4603,3 +4604,229 @@ guards the configuration on Woodward–Colella and the warm Noh wall. C8
 wall from `cfl = 1.25` with the mirror completing, the warm Noh wall from
 0.9, the plane on both starts, and every start of the planar case but the
 40-cell one; they remain available for a periodic or interior block.
+
+## Constant annihilation and the slip-wall mode
+
+`bench/constantfloor.jl`, September 2026, roadmap N6c. A periodic or
+interior row differences its taps before it multiplies, so a constant is
+annihilated exactly whatever its size. A closure row is a plain weighted
+sum over the first points of the line, so a constant c leaves
+(Σ w_j) c from the weights' own rounding plus the rounding of the
+products and their accumulation, of order eps · c · Σ|w_j| / h before the
+line solve amplifies it. The question is whether that residual affects an
+evolution or a useful precision range, and whether an anchored form
+Σ w_j (f_j − f_1), which annihilates a constant exactly, would buy
+anything. Every derivative preset and every filter preset are measured,
+in both precisions, with the plan's own prescaled coefficients and
+factorization, at N = 33, 129 and 513 (the normalized residuals do not
+depend on N and one resolution is quoted).
+
+### The weight sums
+
+The cascade rows' weights are dyadic rationals and sum to zero exactly
+in both precisions, stored and prescaled by 1/h when L = 1 makes 1/h an
+integer; at L = 2π the prescaled row 1 sums to −1.8e-15 (Float64) and
+−9.5e-7 (Float32). The Brady–Livescu rows sum to 1e-16 to 4e-15 stored
+in Float64 and 1e-7 to 2e-6 in Float32, and the prescaled sums scale
+with 1/h (6.8e-14 and 3.4e-5 on row 1 of C6 at N = 129, 5.3e-13 and
+2.5e-4 on row 2 of C8). The filter rows' right-hand sides sum to their
+left-hand sides exactly in Float64 (4e-16 at worst) and to 1e-7 to 4e-7
+in Float32; the Gaussian and the Pyranda filter's rows likewise.
+
+### A constant on the closed line
+
+The closure rows' fill residual before the solve and the solved residual
+at the wall window and in the interior, normalized to eps-scale
+(× h / c for a derivative, / c for a filter), N = 129, the generic
+constant 12345.678, L = 2π (L = 1 reads exactly zero for the cascade rows
+in Float64 and a factor of two either way elsewhere); the anchored fill
+reads exactly zero on every derivative row and 2.5e-8 at most on a
+filter row (the rounding of the anchor's own product):
+
+```
+                     Float64: fill      solved wall   interior  |  Float32: fill    solved wall   interior
+C6 cascade3          1.7e-16   3.9e-16       6.0e-18  |  3.1e-8   7.0e-8        1.1e-9
+C6 cascade4          4.3e-16   2.5e-15       3.9e-17  |  1.1e-7   6.4e-7        9.8e-9
+C6 BL                5.2e-16   1.4e-14       4.3e-16  |  3.6e-7   2.3e-6        4.7e-8
+C8 cascade3          3.2e-17   4.7e-17       9.6e-18  |  (as C10)
+C8 BL                9.6e-15   1.6e-14       9.8e-16  |  2.3e-6   1.1e-5        5.7e-7
+C10                  1.7e-16   3.8e-16       7.5e-18  |  3.1e-8   1.1e-7        1.6e-8
+filter onesided      5.9e-16   1.2e-15       1.0e-15  |  5.0e-7   8.7e-7        4.8e-7
+filter cascade       3.0e-16   4.4e-16       1.0e-15  |  1.8e-7   4.0e-7        2.4e-7
+gaussian             1.5e-16   1.5e-16       0        |  1.0e-7   7.9e-8        7.9e-8
+pyranda filter       0         9.0e-15       1.5e-14  |  9.4e-8   6.9e-6        2.9e-5
+```
+
+The three sources are separated: the weights' own sums are at most a
+tenth of the fill residual (row 2 of C8 Brady–Livescu is the exception,
+at half); the products and their accumulation are the rest of the fill,
+2–40 eps; and the solve amplifies the cascade's fill by 2 and the
+Brady–Livescu fill by 5–40, their closed-line condition numbers showing.
+The interior carries a tenth to a hundredth of the wall residual, the
+solve carrying it inward. In absolute terms the derivative of a constant
+c reads eps · c / h × (2–40) at the wall: with c = 1e5 and h = 0.01 that
+is 1e-9 in Float64 and 1–20 in Float32.
+
+### A perturbation over a constant
+
+f = c + sin(3x) against 3 cos(3x), N = 129, errors relative to 3, the
+wall window under the plain and the anchored rows against the interior,
+which is the floor the stored field itself sets:
+
+```
+                  Float64: c=0      1e3       1e6       1e9     |  Float32: c=0      1         1e3       1e6
+C6 cascade3 plain      3.9e-7    3.9e-7    4.2e-7    2.4e-5   |  2.3e-6    1.2e-5    8.8e-3    1.9e+1
+            anchored   3.9e-7    3.9e-7    4.0e-7    1.2e-5   |  5.8e-7    1.2e-5    2.4e-3    4.6e+0
+            interior   6.2e-9    6.2e-9    7.7e-9    4.0e-6   |  2.4e-6    6.8e-6    2.5e-3    2.4e+0
+C6 BL       plain      3.4e-10   2.1e-9    5.9e-7    4.6e-4   |  4.7e-5    4.4e-4    3.8e-1    3.6e+2
+            anchored   3.4e-10   3.4e-10   7.2e-8    3.3e-5   |  3.5e-5    1.0e-4    1.5e-2    1.4e+1
+            interior   3.9e-12   4.8e-11   1.5e-8    1.4e-5   |  2.4e-6    1.3e-5    1.2e-2    1.1e+1
+```
+
+The anchored rows recover a factor of two to four for the cascade and
+ten to thirty for Brady–Livescu at the wall, to within a factor of two
+of the interior's floor. That floor is the stored field's quantization,
+eps · c, differentiated, which no row can remove, and the regime where
+the difference is visible is the one where the interior is already at
+1e-3 relative in Float32 (c = 1e3 over a unit perturbation) or 1e-6 in
+Float64 (c = 1e9). In Float64 an offset below 1e6 moves nothing.
+
+### The consequence in a run
+
+A uniform state on 101 nodes between slip walls, with a tangential
+velocity so the x-momentum flux is the constant pressure through the wall
+rows and every other x flux is zero, the artificial properties on, and a
+periodic line as the control. The right-hand side of the initial state,
+x-momentum, wall window / interior:
+
+```
+                       Float64 cascade3    Float64 BL         Float32 cascade3   Float32 BL
+p = 1 (exact)          0 / 0               3.5e-12 / 9.4e-14  0 / 0              4.6e-4 / 1.1e-5
+p = 1.1, rho = 0.9     3.2e-14 / 4.9e-16   5.3e-12 / 1.4e-13  2.6e-5 / 3.9e-7    2.9e-4 / 1.3e-5
+p = 1e5, rho = 1.2     0 / 0               3.0e-7 / 8.2e-9    1.1 / 1.7e-2       17 / 0.25
+periodic               0 / 0               0 / 0              0 / 0              0 / 0
+```
+
+The wall-normal velocity |u| and the pressure's relative drift after
+500 / 1000 / 2000 steps at cfl 0.5, wall window (the interior reads the
+same to a factor of two):
+
+```
+                                   Float64                              Float32
+p = 1.1, cascade3, filter off      1.3e-14 / 9.2e-13 / 9.5e-9          1.0e-5 / 7.2e-4 / 6.2e-3
+p = 1.1, cascade3, filter on       4.8e-14 / 2.9e-13 / 1.2e-11         2.5e-5 / 1.4e-4 / 1.2e-3
+p = 1.1, BL, filter off            1.4e-14 / 3.8e-14 / 3.5e-14         1.0e-5 / 2.9e-5 / 1.1e-5
+p = 1.1, BL, filter on             2.8e-14 / 4.5e-14 / 3.9e-13         1.5e-5 / 5.7e-5 / 1.5e-4
+p = 1.1, periodic, filter on       7.4e-15 / 5.6e-15 / 3.1e-15         2.7e-6 / 4.3e-6 / 1.5e-5
+p = 1e5, cascade3, filter off      0 / 0 / 0                           1.6e-3 / 1.3e-1 / 1.9
+p = 1e5, cascade3, filter on       4.9e-12 / 2.3e-11 / 8.0e-10         3.0e-3 / 1.5e-2 / 2.6e-1
+p = 1e5, BL, filter off            1.8e-12 / 7.4e-12 / 4.5e-12         1.1e-3 / 6.5e-3 / 1.1e-2
+p = 1e5, periodic, filter on       8.2e-13 / 1.4e-12 / 1.3e-12         3.5e-3 / 6.4e-3 / 1.1e-2
+```
+
+Two things are in this table. The periodic control with the filter on
+drifts at 1e-5 relative in Float32 over 2000 passes, interior rows
+included: that is the filter's own constant-passing round-off (its
+rows' sums above), the same order as the closure rows' residual, and
+anchoring the derivative rows would not touch it. And under the cascade
+rows with a nonzero seed the velocity does not accumulate linearly,
+which a constant residual would give, nor as √steps, which a random
+walk would: it multiplies by 70 per thousand steps in Float64 and
+Float32 alike, from 1e-14 to 1e-8 by t = 7.6, while the Brady–Livescu
+rows hold their seed and the periodic control holds its own. In SI-like
+Float32 units the same growth reaches 1.9 m/s by t = 0.03 s. That growth
+is a mode of the closed line, and the round-off seed only sets when it
+becomes visible.
+
+### The slip-wall mode
+
+The wall-normal velocity from the round-off seed at 1000 / 2000 / 4000
+steps in Float64, the generic uniform state, and the growth rate per
+unit time fitted between the last two readings (c = 1.31 on a unit
+domain, so a unit of time is 0.76 acoustic transits):
+
+```
+                                              1000        2000        4000       rate
+N=101 C6 cascade3, filter off                 1.1e-12     9.5e-9      6.4e-3     +1.79
+N=101 C6 cascade3, filter on (relaxed)        3.1e-13     1.2e-11     1.8e-8     +0.96
+N=101 C6 cascade4, filter off                 2.2e-2      negative density at step 1680
+N=101 C6 cascade4, filter on                  2.1e-2      negative density at step 1362
+N=101 C6 BL, filter off                       4.4e-14     5.1e-14     1.0e-13    +0.09
+N=101 C6 BL, filter on                        7.0e-14     3.9e-13     6.3e-12    +0.36
+N=101 C6 cascade3, filter off, art off        1.1e-12     9.5e-9      8.4e-2     +2.12
+N=101 C6 cascade3, filter off, v = 0          3.5e-13     2.2e-9      6.6e-3     +1.98
+N=101 C6 cascade3, filter off, v = 0.5        2.2e-12     2.2e-8      6.6e-3     +1.69
+N=51  C6 cascade3, filter off                 1.7e-9      9.6e-3      1.1e-2     saturated
+N=201 C6 cascade3, filter off                 4.0e-14     1.7e-12     3.3e-9     +1.99
+N=101 C6 cascade3, filter off, cfl 0.25       2.2e-14     1.3e-12     1.3e-8     +2.41
+```
+
+One step linearized about the uniform state by finite differences at
+N = 51, cfl 0.5, artificial properties off (their sensors are not
+differentiable there; the rows above show they do not set the rate, only
+the saturation near |u| = 1e-2): the largest eigenvalue modulus of the
+amplification matrix as a rate per unit time, the number of eigenvalues
+outside the unit circle, and the share of the leading eigenvector's norm
+within four nodes of a wall. A filtered row applies the unrelaxed pass
+after the step.
+
+```
+                                              |λ|max        rate      growing   wall share
+C6 cascade3, unfiltered                       1.01757437    +2.28     54 / 255  0.48
+C6 cascade3, onesided filter                  1.00946695    +1.23     56 / 255  0.43
+C6 cascade3, cascade filter                   1.00000004    +0.00      6 / 255  0.03
+C6 cascade3, onesided filter, αf = 0.40       1.01075467    +1.40     59 / 255  0.42
+C6 cascade3, onesided filter, αf = 0.30       1.01397722    +1.82     56 / 255  0.54
+C6 cascade4, unfiltered                       1.05524354    +7.03     55 / 255  0.80
+C6 BL, unfiltered                             1.00000002    +0.00     48 / 255  0.98
+C6 BL, onesided filter                        1.00443450    +0.58     14 / 255  0.13
+C8 cascade3, unfiltered                       1.01046971    +1.36     60 / 255  0.33
+C8 BL, unfiltered                             1.00100131    +0.13     53 / 255  0.14
+C10 (cascade rows), unfiltered                1.01980580    +2.57     51 / 255  0.47
+C6 cascade3, no-slip, μ = 0.005               1.00000031    +0.00      1 / 255  0.59
+C6 cascade3, slip, μ = 0.005                  1.00028758    +0.04     10 / 255  0.16
+C6 cascade3, Dirichlet ends, unfiltered       1.00000001    +0.00     49 / 255  0.01
+C6 cascade3, Dirichlet ends, onesided filter  1.00000004    +0.00      8 / 255  0.01
+C6 cascade3, unfiltered, N = 101              1.00906264    +2.36    110 / 505  0.27
+```
+
+The finite-difference step resolves |λ| to about 1e-8, so a row reading
+1.0000000x is neutral and its "growing" count is round-off. The
+linearized rates reproduce the time-domain ones (2.28 against 1.79–2.41
+unfiltered, 1.23 unrelaxed against 0.96 relaxed), so the growth is a
+linear instability of the discrete step at an inviscid slip wall under
+the cascade closures: the same rate at N = 51, 101 and 201 and at half
+the step, so an O(c/L) mode and not a grid mode, with half of its
+eigenvector within four nodes of the walls. The cascade filter's F2 row
+damps it exactly (1.00000004), which is why it went unseen before the
+filter's wall rows changed; the one-sided rows halve it, and making them
+stronger makes it worse, since rows 2 and 3 of that set exceed unit gain
+at high wavenumber and more so at smaller αf. Physical viscosity at a
+no-slip wall removes it and at a slip wall leaves 0.04; Dirichlet ends
+are neutral, so the shock tubes and the Noh inflows are outside it; C6
+Brady–Livescu is neutral unfiltered and grows at 0.58 under the
+unrelaxed one-sided filter (0.36 relaxed), the filter rows' own gain;
+C8 Brady–Livescu reads 0.13. Under the defaults a Float64 seed reaches
+|u| = 1e-2 in about 30 time units and a Float32 seed in about 15, and
+the artificial properties then hold it there; the battery's wall cases
+end at t = 0.6 or earlier and do not see it, and a long inviscid run
+between slip walls or symmetry planes does. Removing it is roadmap N6d.
+
+### The decision
+
+No change to the closure rows for constant annihilation. The residual a
+closure row leaves on a constant is round-off in every precision:
+2–40 eps relative to c/h at the wall, a tenth to a hundredth of that in
+the interior, from the products and their accumulation, with the weights'
+own sums below that and the solve's amplification above it for the
+Brady–Livescu sets. Anchoring the rows would make a uniform state's
+residual exactly zero and buy a factor of two to thirty on a perturbation
+over an offset, but only in the regime where the stored field's
+quantization already floors the interior at the same level, which is
+c/f' above 1e6 in Float64 and above 1e3 in Float32; in a filtered Float32
+run the filter's own constant-passing round-off drifts the interior at
+the same 1e-5 per 2000 passes. The practical consequence of the seed is
+set by the slip-wall mode, whose growth no anchoring changes. The
+Float32 SI-unit case (a 1 Pa/m spurious gradient at a wall under p = 1e5
+Pa, and 1.9 m/s by t = 0.03 s through the mode) is a precision-policy
+matter for roadmap S4 and not a closure one.

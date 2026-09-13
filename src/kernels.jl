@@ -160,7 +160,14 @@ Sixth-order tridiagonal first derivative (Lele 1992): α = 1/3, a = 14/9,
 b = 1/9. `closures` selects the rows applied at a closed edge:
 
 - `:cascade3` (default): a third-order one-sided row 1 and a fourth-order
-  centered Padé row 2, the usual reduced-order cascade.
+  centered Padé row 2, the usual reduced-order cascade. At an inviscid slip
+  wall these rows carry a linear instability: a uniform state grows a
+  wall-normal velocity from round-off at 2.3 per unit time (c = 1.31 on a
+  unit domain), the same at every resolution, which the F2 row of
+  `compact_filter(closures = :cascade)` damps exactly and the default
+  one-sided filter rows only halve. Dirichlet ends, viscous no-slip walls
+  and the unfiltered `:brady_livescu` rows are neutral; a Float64 seed
+  becomes visible after about thirty time units.
 - `:cascade4`: Lele's fourth-order one-sided row 1 (α = 3) over the same
   Padé row 2. It carries an undamped mode at an inviscid wall that only the
   F2 row of `compact_filter(closures = :cascade)` damps; under the default
@@ -274,7 +281,10 @@ left unfiltered; `closures` selects rows 2–4:
   that resolution ten to a thousand times less. In a wall-bounded evolution
   the wall window converges at the derivative closure's own order, the
   planar Noh wall deficit is 10–18 points smaller, and the mass and energy a
-  closed line's filter creates fall by two orders.
+  closed line's filter creates fall by two orders. These rows do not damp
+  the cascade closures' inviscid slip-wall mode, which the `:cascade` set's
+  F2 row removed exactly: under them it grows at half its unfiltered rate,
+  and faster at a smaller `alphaf` (see `lele_d1_6`).
 - `:cascade`: centered compact filters of order 2, 4 and 6 with the same αf,
   the standard reduced-order boundary cascade, the default before September
   2026. One filter pass of a smooth field is then second order in the

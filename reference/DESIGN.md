@@ -267,10 +267,17 @@ Presets:
   with the artificial properties on its wall is fourth order at an error
   fifteen times below the cascade's, the artificial diffusion carrying a
   closure defect of its own at a wall. C8 `:brady_livescu` is not
-  supported at a wall. The runs are in `reference/CALIBRATION_APPENDIX.md`
-  under "Wall closures under the artificial properties", "The filter's
-  wall rows on the current solver" and "The Brady–Livescu rows as a wall
-  configuration".
+  supported at a wall. The cascade closures are linearly unstable at an
+  inviscid slip wall: a uniform state grows a wall-normal velocity from
+  round-off at 2.3 per unit time under C6 `:cascade3` (an O(c/L)
+  eigenmode of the step, half of it within four nodes of the walls),
+  which the cascade filter's F2 row damped exactly and the one-sided
+  rows only halve; Dirichlet ends, viscous no-slip walls and unfiltered
+  C6 `:brady_livescu` are neutral. Removing it is roadmap N6d. The runs
+  are in `reference/CALIBRATION_APPENDIX.md` under "Wall closures under
+  the artificial properties", "The filter's wall rows on the current
+  solver", "The Brady–Livescu rows as a wall configuration" and
+  "Constant annihilation and the slip-wall mode".
 - `pade_d1_4()`: fourth-order Padé first derivative.
 - `compact_filter(alphaf; closures)`: the eighth-order Gaitonde–Visbal
   filter, whose strength parameter α is spelled `alphaf` in the code.
