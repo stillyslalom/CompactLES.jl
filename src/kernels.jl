@@ -43,6 +43,8 @@ end
 ClosureRow{T}(lhs::NTuple{3,T}, rhs::Vector{T}) where {T} =
     ClosureRow{T}(lhs, rhs, 1)
 ClosureRow(lhs, rhs) = ClosureRow(lhs, rhs, 1)
+Base.:(==)(a::ClosureRow, b::ClosureRow) =
+    a.lhs == b.lhs && a.rhs == b.rhs && a.first == b.first
 
 """
     CompactScheme(name, alpha, a0, coeffs, symmetric, closures)
@@ -67,13 +69,18 @@ end
 nclosure(scheme::CompactScheme) = length(scheme.closures)
 halfwidth(scheme::CompactScheme) = length(scheme.coeffs)
 
-# Closure rows for the tridiagonal derivative presets. Three sets are offered,
+# Closure rows for the tridiagonal derivative presets. Four sets are offered,
 # selected by the `closures` keyword of `lele_d1_6` and `lele_d1_8`:
 #
+#   :neutral3      The C6 default. The explicit third-order one-sided row 1
+#                  on four points and a fourth-order compact row 2 on five
+#                  points with left-hand side (3/5, 1, 3/10), then the C6
+#                  interior row; see the comment on NEUTRAL3_ROWS.
 #   :cascade3      Lele's one-sided row 1 at α = 2 (third order), the centered
 #                  Padé row 2 (fourth), then the C6 interior row (sixth) for a
 #                  scheme reaching ±3. This is the reduced-order cascade of
-#                  Carpenter, Gottlieb & Abarbanel (1993) and the default.
+#                  Carpenter, Gottlieb & Abarbanel (1993), the C8 default, and
+#                  the C6 default before September 2026.
 #   :cascade4      The same with row 1 at α = 3, Lele's fourth-order one-sided
 #                  row. Gaitonde & Visbal run it under the compact filter.
 #   :brady_livescu Brady & Livescu (Computers & Fluids 2019), scheme T6 or
@@ -144,30 +151,59 @@ const BRADY_LIVESCU_T8 = (
       0.6319138819385538, -1.1442347131478185, 0.0, 0.678311555099823,
       0.005414306071706973, 0.00012293582123288293]))
 
+# The neutral rows in exact rationals. Row 1 is the explicit third-order
+# one-sided difference (left-hand side (0, 1, 0)); row 2 is the fourth-order
+# five-point row that the left-hand side (3/5, 1, 3/10) determines uniquely.
+# Both belong to the families
+#   g_1 + a g_2 = Σ_{k=1}^{4} w_k f_k         (third order, free a)
+#   b g_1 + g_2 + c g_3 = Σ_{k=1}^{5} w_k f_k  (fourth order, free b, c)
+# at (a, b, c) = (0, 3/5, 3/10). With the wall's normal velocity injected,
+# the Euler equations linearized about a uniform state between slip walls
+# have a purely imaginary spectrum on a two-parameter subset of (a, b, c); a
+# member can be neutral at one line length and not at another, so this one
+# was selected by a sweep over every N from 12 to 1200 (the neutral subset
+# and the sweep are in reference/CALIBRATION_APPENDIX.md). No energy norm
+# has been identified for it; the property is measured, not proved.
+const NEUTRAL3_ROWS = (
+    ((0//1, 1//1, 0//1), [-11//6, 3//1, -3//2, 1//3]),
+    ((3//5, 1//1, 3//10), [-59//40, 41//30, -3//10, 1//2, -11//120]))
+
+function neutral_closures(::Type{T}, nrows::Int) where {T}
+    nrows == 2 || error("the :neutral3 closure rows are derived for the C6 interior; " *
+                        "lele_d1_8 takes :cascade3, :cascade4 or :brady_livescu")
+    [ClosureRow{T}(T.(lhs), T.(rhs)) for (lhs, rhs) in NEUTRAL3_ROWS]
+end
+
 function derivative_closures(::Type{T}, closures::Symbol, nrows::Int, table) where {T}
+    closures === :neutral3 && return neutral_closures(T, nrows)
     closures === :cascade3 && return cascade_closures(T, nrows, 3)
     closures === :cascade4 && return cascade_closures(T, nrows, 4)
     closures === :brady_livescu && return [
         ClosureRow{T}(T.(lhs), T.(rhs)) for (lhs, rhs) in table]
     error("unknown closure set $(repr(closures)); " *
-          "use :cascade3, :cascade4 or :brady_livescu")
+          "use :neutral3, :cascade3, :cascade4 or :brady_livescu")
 end
 
 """
-    lele_d1_6(T=Float64; closures=:cascade3)
+    lele_d1_6(T=Float64; closures=:neutral3)
 
 Sixth-order tridiagonal first derivative (Lele 1992): α = 1/3, a = 14/9,
 b = 1/9. `closures` selects the rows applied at a closed edge:
 
-- `:cascade3` (default): a third-order one-sided row 1 and a fourth-order
-  centered Padé row 2, the usual reduced-order cascade. At an inviscid slip
-  wall these rows carry a linear instability: a uniform state grows a
-  wall-normal velocity from round-off at 2.3 per unit time (c = 1.31 on a
-  unit domain), the same at every resolution, which the F2 row of
-  `compact_filter(closures = :cascade)` damps exactly and the default
-  one-sided filter rows only halve. Dirichlet ends, viscous no-slip walls
-  and the unfiltered `:brady_livescu` rows are neutral; a Float64 seed
-  becomes visible after about thirty time units.
+- `:neutral3` (default): an explicit third-order row 1 on four points and a
+  fourth-order compact row 2 on five points, with coefficients chosen so
+  that the Euler step linearized about a uniform state between slip walls
+  is neutral. A long inviscid run between slip walls or symmetry planes
+  holds its round-off seed. Same orders as `:cascade3` with about 2.5 times
+  its wall error constant and a better-conditioned closed line.
+- `:cascade3`: the reduced-order cascade of Carpenter, Gottlieb & Abarbanel
+  (a third-order one-sided row 1, the fourth-order Padé row 2), the default
+  before September 2026 and the C8 default. Linearly unstable at an
+  inviscid slip wall: a uniform state grows a wall-normal velocity from
+  round-off at 2.3 per unit time on a unit domain, visible after about
+  thirty time units in Float64, which the F2 row of
+  `compact_filter(closures = :cascade)` damps and the default one-sided
+  filter rows do not. Select it to reproduce earlier results.
 - `:cascade4`: Lele's fourth-order one-sided row 1 (α = 3) over the same
   Padé row 2. It carries an undamped mode at an inviscid wall that only the
   F2 row of `compact_filter(closures = :cascade)` damps; under the default
@@ -190,7 +226,7 @@ b = 1/9. `closures` selects the rows applied at a closed edge:
   1e-3, above the default cascade's, from N = 48 up, while a wall
   evolution floors near 3e-5 under either closure.
 """
-function lele_d1_6(::Type{T}=Float64; closures::Symbol=:cascade3) where {T}
+function lele_d1_6(::Type{T}=Float64; closures::Symbol=:neutral3) where {T}
     CompactScheme{T}("Lele C6 first derivative", T(1//3), zero(T),
         T[7//9, 1//36],   # a/2, b/4  (multiply (f_{i+1}−f_{i-1}), (f_{i+2}−f_{i-2}))
         false,
@@ -206,9 +242,12 @@ seven-point right-hand side): α = 3/8, a = 25/16, b = 1/5, c = −1/80
 [`lele_d1_6`](@ref), and with it the multi-patch, device and decomposed paths
 that the pentadiagonal [`lele_d1_10`](@ref) does not have, at two more
 multiply-adds per point. The interior reaches ±3, so a closed edge takes three
-rows under `:cascade3`/`:cascade4` (the C6 cascade plus the C6 interior row)
-and the six seventh-order rows of Brady & Livescu's scheme T8 under
-`:brady_livescu`. Requires `n_halo ≥ 3`. The T8 rows are not a supported
+rows under `:cascade3` (the default here)/`:cascade4` (the C6 cascade plus the
+C6 interior row) and the six seventh-order rows of Brady & Livescu's scheme T8
+under `:brady_livescu`; the C6 default `:neutral3` is derived for the C6
+interior and is not available, and the C8 cascade rows carry the inviscid
+slip-wall mode of `lele_d1_6(closures = :cascade3)` at 1.4 per unit time.
+Requires `n_halo ≥ 3`. The T8 rows are not a supported
 wall configuration: they fail under the filter's cascade rows even on
 smooth data, and under the default one-sided rows they fail a smooth wall
 from `cfl = 1.25` where the periodic interior completes, the warm-started
@@ -410,4 +449,22 @@ function interface_closures(scheme::CompactScheme{T}) where {T}
     # an RHS that reads ghosts directly.
     iszero(scheme.alpha) && return ClosureRow{T}[]
     return [ClosureRow{T}(lhs, T[1], 1)]
+end
+
+"""
+    interface_divergence_closures(scheme) -> closure rows
+
+Closure rows for the flux divergence at a patch-interface end under
+`interface_rhs = :extended`, where a flux array carries no ghost data and the
+divergence keeps one-sided rows (`div_along!`). A scheme's own rows are kept,
+except the `:neutral3` set of [`lele_d1_6`](@ref), which the `:cascade3` rows
+replace: the neutral rows are selected for the wall's injected condition,
+which an interface does not impose, and the cascade rows' truncation
+constants are 2.5 times smaller, so the interface studies keep the accuracy
+they had before the neutral rows became the default.
+"""
+interface_divergence_closures(scheme::AbstractCompactScheme) = scheme.closures
+function interface_divergence_closures(scheme::CompactScheme{T}) where {T}
+    scheme.closures == neutral_closures(T, 2) ?
+        cascade_closures(T, 2, 3) : scheme.closures
 end

@@ -833,13 +833,15 @@ function _fine_plans(decomp_f::Decomp, hf, deriv, filt, smoo, interface_rhs::Sym
     ext_f = interface_rhs === :extended
     icd = ext_f ? interface_closures(deriv) : nothing
     icf = ext_f ? interface_closures(filt) : nothing
+    ivd = ext_f ? interface_divergence_closures(deriv) : nothing
     # Every face of a refined patch closes with the interface rows and reads
     # ghosts; the boundary condition (`_fine_bcs`) only records where they
-    # come from.
+    # come from. The divergence takes the one-sided interface rows instead
+    # (`interface_divergence_closures`), since a flux array has no ghosts.
     dplans_f = ntuple(d -> decomp_f.active[d] ?
         mkf(deriv, d; lo_closures=icd, hi_closures=icd) : nothing, 3)
     vplans_f = ntuple(d -> !decomp_f.active[d] ? nothing :
-        (ext_f ? mkf(deriv, d) : dplans_f[d]), 3)
+        (ext_f ? mkf(deriv, d; lo_closures=ivd, hi_closures=ivd) : dplans_f[d]), 3)
     fplans_f = ntuple(d -> decomp_f.active[d] ?
         mkf(filt, d; lo_closures=icf, hi_closures=icf) : nothing, 3)
     # The sensor smoother's input is built per patch and its coarse-fine
@@ -1040,6 +1042,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
     ext = interface_rhs === :extended
     icd = ext ? interface_closures(deriv) : nothing
     icf = ext ? interface_closures(filt) : nothing
+    ivd = ext ? interface_divergence_closures(deriv) : nothing
     nofold = (nothing, nothing, nothing)
     # One RHS scratch pool for the rank's patches. A partitioned run gives each
     # rank one patch; a serial one holds every slab, and equal-extent slabs
@@ -1059,11 +1062,14 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
         dplans = ntuple(d -> dcp.active[d] ?
             mk(deriv, d; lo_closures=locl(icd, d), hi_closures=hicl(icd, d)) :
             nothing, 3)
-        # The flux divergence keeps the scheme's own one-sided closures at an
-        # interface (ghost fluxes are unavailable; see patches.jl), so it takes
-        # separate plans exactly where the gradient plans read ghosts.
+        # The flux divergence keeps one-sided closures at an interface (ghost
+        # fluxes are unavailable; see patches.jl), the scheme's own rows or
+        # the cascade's for the neutral set (`interface_divergence_closures`),
+        # so it takes separate plans exactly where the gradient plans read
+        # ghosts; a physical end keeps the scheme's rows on both.
         vplans = ntuple(d -> !dcp.active[d] ? nothing :
-            (ext && (faces[d][1] != 0 || faces[d][2] != 0) ? mk(deriv, d) :
+            (ext && (faces[d][1] != 0 || faces[d][2] != 0) ?
+             mk(deriv, d; lo_closures=locl(ivd, d), hi_closures=hicl(ivd, d)) :
              dplans[d]), 3)
         fplans = ntuple(d -> dcp.active[d] ?
             mk(filt, d; lo_closures=locl(icf, d), hi_closures=hicl(icf, d)) :
@@ -1377,8 +1383,9 @@ end
 Compact derivative of `f` along `d` through the divergence plans. These are
 `solver.deriv_plans` except at a patch-interface end under
 `interface_rhs = :extended`, where the gradient plans read exchanged ghost
-data that a flux array does not carry, so the divergence keeps the scheme's
-one-sided closure rows (`solver.div_plans`). A folded dimension draws on the
+data that a flux array does not carry, so the divergence keeps one-sided
+closure rows there, the scheme's own or the cascade's for the neutral set
+(`interface_divergence_closures`, `solver.div_plans`). A folded dimension draws on the
 fold's own derivative plans instead, which is the same operator because folds
 and patch interfaces never share a dimension. The flux-divergence loop and the
 discrete-GCL construction `gcl_cotr!` go through here so the two apply the

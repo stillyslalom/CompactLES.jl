@@ -52,14 +52,19 @@
 #
 #   Lax        L1 rho 4.99e-3, u 7.47e-3, p 7.56e-3
 #   Shu-Osher  L1 rho 6.80e-3, wave train 2.09e-2, train peak 4.680
-#   Woodward   L1 rho 3.22e-2, peak rho 6.617 at x = 0.7785
+#   Woodward   L1 rho 3.217e-2, peak rho 6.616 at x = 0.7785
 #   Sedov      R_s 0.8085 vs 0.8000 analytic (+1.06%), peak rho 5.13 (jump 6)
-#   Noh nu=1   plateau 3.9899/4    shock 0.2043/0.2   wall deficit 50%
+#   Noh nu=1   plateau 3.9901/4    shock 0.2045/0.2   wall deficit 53%
 #   Noh nu=2   plateau 15.009/16   shock 0.2091/0.2   wall deficit 54%
 #   Noh nu=3   plateau 62.555/64   shock 0.2089/0.2   wall deficit 29%
 #   Shock/SF6  worst Y -0.0129 / 1.0129, width 4 cells, 647 steps (Sept 2026)
-#   Noh aligned N=100 AR=4    plateau 3.9952/4   deficit 52%   shock 0.2109   4926 steps
-#   Noh plane   N=24  AR=2    plateau 11.862/16  front 0.236/0.2  L1 rho 0.907  759 steps
+#   Noh aligned N=100 AR=4    plateau 3.9960/4   deficit 53%   shock 0.2115   4918 steps
+#   Noh plane   N=24  AR=2    plateau 11.858/16  front 0.236/0.2  L1 rho 0.893  745 steps
+#
+# The C6 default closure became `:neutral3` in September 2026 (roadmap N6d);
+# under `:cascade3` the rows above read Woodward 3.22e-2 / 6.617, Noh nu=1
+# 3.9899 / 0.2043 / 50%, Noh aligned 3.9952 / 52% / 0.2109 / 4926 steps and
+# Noh plane 11.862 / 0.907 / 759 steps, the other cases unchanged.
 #   Woodward, C6 :brady_livescu   L1 rho 3.217e-2, peak rho 6.617 at x = 0.7785
 #   Noh nu=1 warm t0=0.3, C6 :brady_livescu   rho[1:4] 3.992 3.996 3.996 4.000
 #

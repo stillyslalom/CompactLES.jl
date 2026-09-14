@@ -39,6 +39,7 @@ points at them and does not restate them.
 29. [The filter's wall rows (September 2026)](#the-filters-wall-rows-september-2026)
 30. [The Brady–Livescu rows as a wall configuration (September 2026)](#the-bradylivescu-rows-as-a-wall-configuration-september-2026)
 31. [Constant annihilation and the slip-wall mode (September 2026)](#constant-annihilation-and-the-slip-wall-mode-september-2026)
+32. [The neutral closure rows (September 2026)](#the-neutral-closure-rows-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -1759,3 +1760,64 @@ the applied form is in [CALIBRATION.md](CALIBRATION.md#walls-folds-and-metrics).
 
 Validation: no package code changed; the bench ran every part on Julia
 1.12.7, and the docs reference check passed after the docstring edits.
+
+## The neutral closure rows (September 2026)
+
+N6d closes with a new C6 default closure set. `lele_d1_6(closures =
+:neutral3)` takes an explicit third-order row 1 on four points and a
+fourth-order compact row 2 on five points with left-hand side (3/5, 1,
+3/10); `:cascade3` stays available and stays the C8 default. The set came
+out of an exact linear model of the production step at an injected slip
+wall, which reproduces the production Jacobian to 8e-11 and evaluates a
+candidate closure in milliseconds: the three free coefficients of the
+widened cascade rows contain a two-parameter set on which the linearized
+Euler step has a purely imaginary spectrum, mapped as a curved band in
+the row-2 left-hand-side plane, and a sweep over every line length from
+12 to 1200 separated members that are neutral everywhere from members
+that resonate with particular line lengths. The adopted member is the
+neutral one with the smallest truncation constants. In production the
+step reads 1 + O(1e-9) at N = 51 and 101 for slip walls, Dirichlet ends
+and viscous no-slip walls, unfiltered and under the one-sided filter, and
+in a two-dimensional corner box, and a uniform state between slip walls
+holds its round-off seed at 3e-14 through forty time units where the
+cascade fails at t = 30. The two treatments the handoff proposed were
+measured and rejected: a filter mirroring only the normal acoustic pair is
+neutral but drops the wall evolution to third order through an O(h⁴)
+per-step interaction with the closure's truncation content, and
+Brady–Livescu rows on the flux divergence alone inherit and accelerate
+that set's cold-Noh failure, which the converse swap shows the divergence
+rows cause.
+
+The cost is in the constants. The wall window of a smooth evolution
+converges at the same third and fourth orders with 2.5 times the cascade's
+error; the reflected pulse's interior error is 1.5 times the cascade's
+from N = 97 and its wall-window error eight times smaller; cold planar Noh
+reads plateau 3.9901, front 0.2045 and wall deficit 53% against 3.9899,
+0.2043 and 50%, the other battery cases unchanged to their printed digits;
+and a Float32 freestream at a wall is round-off (2e-6) rather than exact,
+since the rows' thirds do not annihilate a constant in floating point.
+The flux divergence at a patch or level interface end keeps the cascade
+rows (`interface_divergence_closures`): an interface imposes no injected
+condition, and with the neutral rows there the interface-window errors
+were two to five times larger, so the interface baselines did not move.
+The fold studies close their outer end with a wall and moved with the
+default, as did the wall-flux and fold guards of the serial suite, each
+re-set to its measured value with the cascade's beside it.
+`bench/constantfloor.jl`'s Jacobian part now differences centrally with an
+epsilon ladder, the correction the handoff required, and carries the new
+rows. The C8 and C10 cascade rows still carry the mode; no energy norm has
+been identified for the new rows, so their neutrality is measured over the
+swept line lengths and not proved. The measurements are under [the neutral
+closure rows](CALIBRATION_APPENDIX.md#the-neutral-closure-rows); the
+applied form is in [CALIBRATION.md](CALIBRATION.md#walls-folds-and-metrics).
+
+Validation: `test/runtests.jl` 2477 of 2477 (three closure-set tests
+added; the wall-flux, fold and Float32 freestream guards re-set as noted in
+place), `test/convergence.jl` with the thirty-one guards re-recorded as its
+header lists and the interface studies unchanged, `test/validation.jl` with
+the planar and aligned Noh header numbers re-recorded, and `test/mpi_tests.jl`
+at 2 ranks (300 of 300) and at 8 ranks with the CI phases (146 of 146), all
+on Julia 1.12.7. Device parity rests on the serial suite's KernelAbstractions
+CPU comparison; no hardware GPU run was made. `bench/constantfloor.jl
+parts=jacobian` reproduces every recorded unstable value to eight digits and
+reads the new default at 1.0000000000 to 1.0000000011 across its ladder.

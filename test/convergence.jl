@@ -38,21 +38,27 @@
 # not from the formal interior order. Measured on this code (max norm):
 #
 #   C6 interior 6.01 | C8 interior 8.00 | C10 interior 10.04
-#   C6 wall closures 3.17 | C6 wall closures :cascade4 4.02
+#   C6 wall closures 3.18 | C6 wall closures :cascade3 3.17 | :cascade4 4.02
 #   C6 wall closures :brady_livescu 5.88 | C8 wall closures :brady_livescu 7.91
 #   filter pass :cascade 1.88 | filter pass :onesided 8.07
-#   cyl axis odd 3.71 | cyl axis even 3.00 | resolved-θ axis 3.71
-#   spherical origin 2.99
-#   polynomial rows: C6 :cascade3 3.00 | :cascade4 4.00 | C6 :brady_livescu 5.00
-#   C8 :brady_livescu 7.00
-#   wall evolution (window max norm, t = 0.4): inviscid C6 3.93 | cascade
-#   filter 1.81 | onesided filter 3.84 | C6 :brady_livescu 5.73 | viscous
-#   no-slip C6 3.92 | shear mode 4.71
+#   cyl axis odd 3.76 | cyl axis even 2.99 | resolved-θ axis 3.76
+#   spherical origin 2.97
+#   polynomial rows: C6 :neutral3 3.00 | :cascade3 3.00 | :cascade4 4.00 |
+#   C6 :brady_livescu 5.00 | C8 :brady_livescu 7.00
+#   wall evolution (window max norm, t = 0.4): inviscid C6 4.01 | inviscid C6
+#   :cascade3 3.93 | cascade filter 1.94 | onesided filter 3.90 |
+#   C6 :brady_livescu 5.73 | viscous no-slip C6 4.00 | shear mode 4.67
 #   interface evolution (entropy wave, t = 0.5): two patches C6 (k = 1) 3.31 |
 #   two levels C6 (k = 3) 3.62 | two levels :brady_livescu 6.01 | three levels
 #   subcycled 3.72 | two levels, cascade filter 4.12
 #
-# Those twenty-eight numbers are also passed to each study as `recorded` and
+# The C6 default is `:neutral3` (September 2026); the `:cascade3` rows are
+# measured beside it wherever the default's number moved when it changed.
+# The fold studies close their outer end with a wall, so they moved with
+# the default; the interface studies did not, because the flux divergence
+# at an interface end keeps the cascade rows (`interface_divergence_closures`).
+#
+# Those thirty-one numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -218,6 +224,15 @@ study("C6 with wall closures", (24, 48, 96),
                   art=ArtParams(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
+      expect=3.2, tol=0.8, recorded=3.18)
+
+study("C6 wall closures, :cascade3", (24, 48, 96),
+      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                  deriv=lele_d1_6(closures=:cascade3),
+                  art=ArtParams(enabled=false)),
+      (x, y, z) -> exp(sin(3x)),
+      (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=3.2, tol=0.8, recorded=3.17)
 
 study("C6 wall closures, :cascade4", (24, 48, 96),
@@ -279,7 +294,7 @@ study("cylindrical axis, odd field (u_r-like)", (32, 64, 128),
                   art=ArtParams(enabled=false)),
       (r, θ, z) -> r * exp(-4r^2),
       (fn=(r, θ, z) -> (1 - 8r^2) * exp(-4r^2), parity=-1);
-      expect=3.7, tol=0.8, recorded=3.71)
+      expect=3.7, tol=0.8, recorded=3.76)
 
 study("cylindrical axis, even field (scalar)", (32, 64, 128),
       N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
@@ -288,7 +303,7 @@ study("cylindrical axis, even field (scalar)", (32, 64, 128),
                   art=ArtParams(enabled=false)),
       (r, θ, z) -> exp(-4r^2),
       (fn=(r, θ, z) -> -8r * exp(-4r^2), parity=1);
-      expect=3.0, tol=0.8, recorded=3.00)
+      expect=3.0, tol=0.8, recorded=2.99)
 
 study("resolved-θ axis, x-like field", (32, 64, 128),
       N -> Solver(n_global=(N, 16, 1), L_domain=(1.0, 2π, 1.0),
@@ -297,7 +312,7 @@ study("resolved-θ axis, x-like field", (32, 64, 128),
                   art=ArtParams(enabled=false)),
       (r, θ, z) -> r * cos(θ) * exp(-4r^2),
       (fn=(r, θ, z) -> cos(θ) * (1 - 8r^2) * exp(-4r^2), parity=1);
-      expect=3.7, tol=0.8, recorded=3.71)
+      expect=3.7, tol=0.8, recorded=3.76)
 
 study("spherical origin, radial Gaussian", (24, 48, 96),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, π, 2π),
@@ -307,7 +322,7 @@ study("spherical origin, radial Gaussian", (24, 48, 96),
                   art=ArtParams(enabled=false)),
       (r, θ, φ) -> exp(-4r^2),
       (fn=(r, θ, φ) -> -8r * exp(-4r^2), parity=1);
-      expect=3.0, tol=0.8, recorded=2.99)
+      expect=3.0, tol=0.8, recorded=2.97)
 
 # ---------------------------------------------------------------------------
 # Closure truncation and smooth evolution, the accuracy matrix's gated rows.
@@ -397,8 +412,10 @@ function mirror_reference(solver; viscous=false, opts...)
 end
 
 println("\n=== closure truncation on a polynomial (actual spacing) ===")
-truncation_study("C6 :cascade3 rows, d/dx x^4", (17, 33, 65, 129), lele_d1_6(), 4;
+truncation_study("C6 :neutral3 rows, d/dx x^4", (17, 33, 65, 129), lele_d1_6(), 4;
                  expect=3.0, tol=0.5, recorded=3.00)
+truncation_study("C6 :cascade3 rows, d/dx x^4", (17, 33, 65, 129),
+                 lele_d1_6(closures=:cascade3), 4; expect=3.0, tol=0.5, recorded=3.00)
 truncation_study("C6 :cascade4 rows, d/dx x^5", (17, 33, 65, 129),
                  lele_d1_6(closures=:cascade4), 5; expect=4.0, tol=0.5, recorded=4.00)
 truncation_study("C6 :brady_livescu rows, d/dx x^6", (17, 33, 65, 129),
@@ -409,19 +426,23 @@ truncation_study("C8 :brady_livescu rows, d/dx x^8", (17, 33, 65, 129),
 println("\n=== smooth evolution: wall window, t = 0.4 ===")
 evolution_study("inviscid wall, C6, unfiltered", WALL_NS,
                 N -> wall_case(N; cfl=EVOLUTION_CFL), mirror_reference;
+                primary=:wall, tfinal=0.4, expect=3.9, tol=0.8, recorded=4.01)
+evolution_study("inviscid wall, C6 :cascade3, unfiltered", WALL_NS,
+                N -> wall_case(N; cfl=EVOLUTION_CFL, deriv=lele_d1_6(closures=:cascade3)),
+                s -> mirror_reference(s; deriv=lele_d1_6(closures=:cascade3));
                 primary=:wall, tfinal=0.4, expect=3.9, tol=0.8, recorded=3.93)
 evolution_study("inviscid wall, C6, cascade filter", WALL_NS,
                 N -> wall_case(N; cfl=EVOLUTION_CFL, filter_interval=1,
                                filt=compact_filter(0.45; closures=:cascade)),
                 s -> mirror_reference(s; filter_interval=1,
                                       filt=compact_filter(0.45; closures=:cascade));
-                primary=:wall, tfinal=0.4, expect=1.8, tol=0.6, recorded=1.81)
+                primary=:wall, tfinal=0.4, expect=1.8, tol=0.6, recorded=1.94)
 evolution_study("inviscid wall, C6, onesided filter", WALL_NS,
                 N -> wall_case(N; cfl=EVOLUTION_CFL, filter_interval=1,
                                filt=compact_filter(0.45; closures=:onesided)),
                 s -> mirror_reference(s; filter_interval=1,
                                       filt=compact_filter(0.45; closures=:onesided));
-                primary=:wall, tfinal=0.4, expect=3.8, tol=0.8, recorded=3.84)
+                primary=:wall, tfinal=0.4, expect=3.8, tol=0.8, recorded=3.90)
 evolution_study("inviscid wall, C6 :brady_livescu, unfiltered", WALL_NS,
                 N -> wall_case(N; cfl=EVOLUTION_CFL, deriv=lele_d1_6(closures=:brady_livescu)),
                 s -> mirror_reference(s; deriv=lele_d1_6(closures=:brady_livescu));
@@ -429,12 +450,12 @@ evolution_study("inviscid wall, C6 :brady_livescu, unfiltered", WALL_NS,
 evolution_study("viscous no-slip wall, C6, unfiltered", WALL_NS,
                 N -> wall_case(N; cfl=EVOLUTION_CFL, viscous=true),
                 s -> mirror_reference(s; viscous=true);
-                primary=:wall, tfinal=0.4, expect=3.9, tol=0.8, recorded=3.92)
+                primary=:wall, tfinal=0.4, expect=3.9, tol=0.8, recorded=4.00)
 evolution_study("shear mode, no-slip wall, C6, unfiltered", WALL_NS,
                 N -> shear_case(N; cfl=EVOLUTION_CFL),
                 s -> analytic_reference(s.equations, shear_profile(0.1, 0.005; t=s.t));
                 primary=:wall, comp=3, tfinal=0.4, expect=4.7, tol=0.8,
-                recorded=4.71)
+                recorded=4.67)
 
 println("\n=== smooth evolution: interface window, entropy wave, t = 0.5 ===")
 entropy_ref(s) = analytic_reference(s.equations, entropy_profile(3, 0.37; t=s.t))

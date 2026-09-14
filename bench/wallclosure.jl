@@ -68,7 +68,8 @@ const NS = (49, 97, 193)
 const TFINAL = 0.4
 const CFL = 0.25
 
-const CLOSURES = (("C6 cascade3", T -> lele_d1_6(T)),
+const CLOSURES = (("C6 neutral3", T -> lele_d1_6(T)),
+                  ("C6 cascade3", T -> lele_d1_6(T; closures=:cascade3)),
                   ("C6 BL", T -> lele_d1_6(T; closures=:brady_livescu)),
                   ("C8 BL", T -> lele_d1_8(T; closures=:brady_livescu)))
 const FILTERED = (filter_interval=1, filt=compact_filter(0.45), filter_cfl=0.35)
@@ -400,7 +401,8 @@ end
 # closed end, which is the decomposed case a wall rank sees.
 
 function extent_part()
-    schemes = (("C6 cascade3", lele_d1_6()),
+    schemes = (("C6 neutral3", lele_d1_6()),
+               ("C6 cascade3", lele_d1_6(closures=:cascade3)),
                ("C6 cascade4", lele_d1_6(closures=:cascade4)),
                ("C6 BL", lele_d1_6(closures=:brady_livescu)),
                ("C8 cascade3", lele_d1_8()),

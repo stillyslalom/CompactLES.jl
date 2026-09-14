@@ -43,6 +43,7 @@ record of that setting.
 21. [The filter's wall rows on the current solver](#the-filters-wall-rows-on-the-current-solver)
 22. [The Brady–Livescu rows as a wall configuration](#the-bradylivescu-rows-as-a-wall-configuration)
 23. [Constant annihilation and the slip-wall mode](#constant-annihilation-and-the-slip-wall-mode)
+24. [The neutral closure rows](#the-neutral-closure-rows)
 
 ## The battery
 
@@ -4830,3 +4831,224 @@ set by the slip-wall mode, whose growth no anchoring changes. The
 Float32 SI-unit case (a 1 Pa/m spurious gradient at a wall under p = 1e5
 Pa, and 1.9 m/s by t = 0.03 s through the mode) is a precision-policy
 matter for roadmap S4 and not a closure one.
+
+## The neutral closure rows
+
+`bench/constantfloor.jl` (jacobian part, centered differences), an exact
+linear model of the injected slip-wall step, and the accuracy and battery
+instruments of the preceding sections, September 2026, roadmap N6d. The
+outcome is the `:neutral3` closure set of `lele_d1_6`, the C6 default from
+this date; `:cascade3` remains selectable and remains the C8 default.
+
+### The instrument
+
+The Jacobian part now differences the production step map centrally with
+`delta = 1e-5 · max(|Q|, 1)`. A neutral row reads 1 + O(1e-9) against
+1 + O(1e-7) for the one-sided 1e-7 difference it used before, so the
+1 + 1e-8 gate is resolved; the unstable readings are unchanged to eight
+digits (1.0175743678 and 1.0094669437 at N = 51 for the cascade rows
+unfiltered and under the one-sided filter, 1.0090626412 at N = 101). The
+`ladder` keyword repeats a row at 3e-6 and 3e-5; the neutral readings below
+move by ±1e-9 across the ladder and the unstable ones by 1e-10.
+
+Beside it, a linear model of the same step: the closed-line derivative
+matrix D read off the production operator (or assembled from the closure
+rows; the two agree to 6e-14), the Euler flux Jacobian at the uniform state,
+the five-stage low-storage Runge–Kutta tableau, and the wall's normal
+momentum zeroed at each stage as `enforce!` does, whose energy correction is
+quadratic and drops out of the linearization. Its amplification matrix
+agrees with the production Jacobian to 8e-11 in every entry at N = 51, and
+the instability is already in the semi-discrete operator: the injected
+operator's largest real part is 2.31 per unit time against the measured
+2.28. The entropy and tangential components are driven by the acoustic pair
+and do not drive it, so the reduced acoustic system (p, u) on 2N unknowns
+carries the whole spectrum, and one candidate closure evaluates in a few
+milliseconds at N = 51. The unstable eigenvalue has imaginary part 89 at
+N = 51, a wave of 4.6 points per wavelength: a near-grid-scale mode with an
+O(1) growth rate, which is why the second-order F2 row removed it exactly
+and why the one-sided filter rows, whose gain exceeds one at high
+wavenumber, do not.
+
+### The two experiments the N6d handoff proposed
+
+Both were run to completion and both are closed negative.
+
+**A filter mirroring only the normal acoustic pair.** At a planar slip wall
+the contract supplies u_n = 0 and ∂p/∂n = 0, so p is even and u_n odd about
+the wall node while density, species and tangential momentum have arbitrary
+profiles and must not be mirrored. A prototype pass applied the production
+one-sided filter to every component and then replaced p and u_n on rows 2–4
+of each wall by their node-centered parity-mirror filtered values (interior
+C8 row, boundary αf strengthened to 0.40 as the earlier full-mirror
+diagnostic needed; αf = 0.45 reads 1.0137 and is worse than the default).
+It is neutral, 1.0000000021 at N = 51 and 1.0000000019 at N = 101 across
+the ladder, holds a uniform state at 2e-14 to t = 40, and leaves an exact
+asymmetric entropy layer at the wall untouched to round-off. It fails the
+accuracy gate: the standing wave's wall order falls from 3.84 to 3.40 and
+its interior order from 4.22 to 3.03, with ten times the interior error at
+N = 193, and the reflected pulse's wall order from 5.9 to 3.1. One pass of
+either filter on the smooth solution agrees with the exact mirror pass to
+1e-14, so the operator is consistent; the loss comes from the two row sets'
+different response to the wall truncation content the cascade rows inject
+every step, an O(h⁴) difference per step that accumulates to O(h³). Not
+adopted.
+
+**Brady–Livescu rows on the flux divergence only.** The root patch's
+`div_plans` were rebuilt from `lele_d1_6(closures = :brady_livescu)` with
+the gradient, sensor and filter plans left on the cascade, paired with a
+filter whose rows 1–4 are the identity. Its Jacobian equals full
+Brady–Livescu's row for row (1.000000000813 and 1.000000000662; with the
+artificial properties off nothing but the divergence enters). It fails the
+singular cold planar Noh start at step 61 with a negative density, earlier
+than full Brady–Livescu's step 201, and cfl 0.05 moves the failure to step
+216 without removing it; the wall node itself is depressed below the
+shocked value within fifty steps. The converse swap, Brady–Livescu on the
+gradients and cascade on the divergence, completes the case under either
+filter row set. The divergence rows are therefore necessary and sufficient
+for the failure, and the hybrid also forfeits the rows' accuracy at every
+gradient-bearing wall (a viscous no-slip wall reads the cascade's error,
+sixty times full Brady–Livescu's). Not adopted. The identity filter rows on
+the cascade derivative alone read 1.0031.
+
+### The closure family
+
+The cascade's rows are the unique third-order three-point row 1 and the
+unique fourth-order three-point Padé row 2; widening each by one point
+frees three coefficients while keeping the orders:
+
+```
+g_1 + a g_2 = Σ_{k=1}^{4} w_k f_k          third order, a free
+b g_1 + g_2 + c g_3 = Σ_{k=1}^{5} w_k f_k   fourth order, b and c free
+```
+
+with (a, b, c) = (2, 1/4, 1/4) the cascade and a = 3 (with w_4 fixed by
+fourth order) the `:cascade4` row 1. A scan of 16,900 grid points over
+a ∈ [0, 6], b, c ∈ [−1, 1.5] at N = 51 found 98 at which every eigenvalue of
+the injected acoustic operator lies on the imaginary axis to 1e-14, none
+with a growth rate between 1e-6 and 1e-2, and the rest unstable; the
+fourth-order five-point row-1 family with the same row 2 has no neutral
+member. Neutrality at one line length is not neutrality at all of them:
+only 4 of the 98 stayed neutral over twelve line lengths between 51 and
+296, the others growing at 0.05–0.4 at some of them. Mapped in the (b, c)
+plane at fixed a over eight line lengths, the neutral set is a curved band
+about 0.1 wide in c, running from (b, c) ≈ (0.56, 0.45) to (0.8, −0.1) at
+a = 0 and from (0.54, 0.4) to (0.72, 0.15) at a = 1/4, with a hole near
+b = 0.68 at a = 0. A sweep over every N from 301 to 600 and every tenth to
+1200 then separated two rational members of the band: (1/4, 3/5, 1/5) grows
+at up to 0.042 per unit time at N = 371 and every 44th node count after it,
+a resonance of a wall mode with the line length, while (0, 3/5, 3/10) reads
+below 3e-12 at every N from 12 to 1200. Within the a = 0 band the error
+constants fall with b, so the member at the band's low-b edge that passes
+the sweep is the one adopted:
+
+```
+row 1  (0, 1, 0)        [-11/6, 3, -3/2, 1/3]                 explicit, third order
+row 2  (3/5, 1, 3/10)   [-59/40, 41/30, -3/10, 1/2, -11/120]  compact, fourth order
+```
+
+The closed line's condition number is 5.0 against the cascade's 16.
+
+No structural reason for the neutrality has been found. The rows are not
+summation-by-parts in a diagonal norm, nor in the compact form Tᵀ W T with
+a diagonal or corner-block W (least-squares residuals 0.1, the same as the
+cascade's). A positive-definite symmetric H with (H D + Dᵀ H) supported on
+the wall columns, which makes the injected step exactly conservative, does
+exist numerically at N = 51 and 101 for the adopted rows (normalized
+minimum eigenvalue +0.023 and +0.017; +0.002 for Brady–Livescu, −0.013 for
+the cascade, where none exists), but it is found by optimization at each N
+and has no recognized structure, so the property is measured over the
+swept line lengths and not proved. An SBP-like closure under roadmap N15
+would supersede it.
+
+### Production measurements
+
+Centered Jacobians, N = 51 unless stated, artificial properties off, the
+one-sided filter unrelaxed where on:
+
+```
+                                      :neutral3       :cascade3
+slip, unfiltered                      1.0000000000    1.0175743678
+slip, one-sided filter                1.0000000011    1.0094669437
+Dirichlet ends, unfiltered            1.0000000000    1.0000000000
+Dirichlet ends, one-sided filter      1.0000000018    1.0000000006
+no-slip μ = 0.005, one-sided filter   1.0000000186    1.0000000070
+slip, unfiltered, N = 101             1.0000000001    1.0090626412
+slip, one-sided filter, N = 101       1.0000000010    1.0040111557
+2-D slip box 13 × 13, unfiltered      1.0000000001    1.0369419374
+```
+
+The 2-D row is the full production Jacobian of a square between four slip
+walls, so the corners are included. An unfiltered viscous no-slip wall
+reads 1 + 1e-7 to 2e-7 for every closure set, the cascade included, and is
+not a closure effect.
+
+The uniform state (ρ = 0.9, tangential 0.1, p = 1.1) under the default
+relaxed filter every step, cfl 0.5, Float64, max |u_n| at t = 10 / 20 /
+30 / 40:
+
+```
+N = 51   :neutral3  2.2e-14  3.9e-14  3.1e-14  3.4e-14
+         :cascade3  4.0e-10  7.0e-05  negative density at t = 29.75
+N = 101  :neutral3  2.5e-14  2.9e-14  4.9e-14  8.0e-14
+         :cascade3  9.2e-11  2.9e-06  9.1e-02  negative density at t = 36.09
+```
+
+Accuracy (`test/smooth_cases.jl` and `test/cases.jl` instruments), the
+neutral rows against the cascade, N = 49 / 97 / 193:
+
+```
+one derivative of exp(sin 3x), wall window     8.57e-4  1.01e-4  1.22e-5   vs  6.29e-4  7.46e-5  9.07e-6
+standing wave, slip walls, t = 0.4, wall       7.22e-7  4.57e-8  2.78e-9   vs  2.84e-7  1.95e-8  1.22e-9
+  orders                                       3.98  4.04                  vs  3.87  4.00
+standing wave, no-slip μ = 0.005, wall         5.76e-7  3.60e-8  2.24e-9   vs  2.34e-7  1.58e-8  1.02e-9
+reflected pulse, art off, t = 0.7, wall        3.04e-5  7.58e-7  3.49e-8   vs  2.63e-4  4.26e-6  1.08e-8
+  interior                                     2.97e-4  2.78e-5  1.47e-6   vs  3.79e-4  2.14e-5  9.17e-7
+  l2                                           8.32e-5  5.27e-6  2.31e-7   vs  1.39e-4  4.59e-6  1.42e-7
+```
+
+The wall-window error is 2.5 times the cascade's at the same order; the
+pulse's wall-window error is eight times smaller and its interior error 1.5
+times larger from N = 97. The battery:
+
+```
+Noh ν=1 N=400 cold   plateau 3.9901  deficit 52.8%  shock 0.20454  e_min -0.0276  6 inadmissible
+          cascade    plateau 3.9899  deficit 50.3%  shock 0.20435  e_min -0.0176  7 inadmissible
+Noh ν=2, ν=3         identical to the cascade in every printed digit (15.0088 / 54.0% / 0.20908; 62.5549 / 29.2% / 0.20890)
+Woodward–Colella     peak 6.6166 at x = 0.7785, min ρ 0.1479 (cascade 0.1478)
+```
+
+The other a = 0 band members, (16/25, 9/50), (33/50, 7/50), (7/10, 1/25)
+and (19/25, −3/50), pass the same production Jacobians and complete cold
+Noh at deficits 52.9–53.1%, with wall errors rising with b; (1/4, 3/5, 1/5)
+and (0, 4/5, 0) and (1/2, 1/2, 1/2) are neutral at N = 51 and 101 but fail
+the N sweep, Dirichlet ends (1.038) or the filtered step (1.00009)
+respectively, which is why the gate's two resolutions alone do not select
+a member.
+
+### The decision
+
+`:neutral3` is the C6 default. Every long inviscid run between slip walls
+or symmetry planes grew the cascade's mode, and the alternatives were a
+knob (`compact_filter(closures = :cascade)` with its second-order wall
+defect, viscosity, or Brady–Livescu with its cold-start failure); the cost
+is a factor 2.5 in the wall error constant at unchanged orders and a
+fourth-digit move of the planar Noh battery. `:cascade3` stays available
+for comparison with earlier results. The C8 cascade rows keep the mode at
+1.4 per unit time and the C10 rows at 2.6; a neutral C8 set would need its
+own three-row family and sweep.
+
+Two consequences follow from the rows' weights rather than from their
+stability. A Float32 freestream at a wall is no longer exact: the cascade's
+dyadic weights annihilated a constant in floating point, the neutral rows'
+thirds leave the round-off of their products, 2.2e-6 on the walled
+Cartesian case of `test/float32_validation.jl`, the constant annihilation
+residual of the preceding section, which an anchored fill would remove.
+And the flux divergence at a patch or level interface end, which keeps
+one-sided rows because a flux array carries no ghosts, took the scheme's
+closure rows: under the neutral rows the interface-window errors of the
+entropy-wave studies were two to five times larger (two patches 4.1e-6
+against 8.1e-7 at N = 48, three levels subcycled 3.6e-7 against 7.2e-8 at
+N = 192, its order 3.72 to 3.14). An interface imposes no injected
+condition, so `interface_divergence_closures` keeps the cascade rows there
+for the neutral set, and the interface baselines are unchanged to every
+printed digit.

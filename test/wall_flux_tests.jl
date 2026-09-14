@@ -194,11 +194,12 @@ end
         push!(errsY, abs(dQ[I, 1] - (mu/Sc) * (-T(0.4)*T(pi)^2*cospi(T(2)*x))))
         push!(errsE, abs(dQ[I, ie] - kcond * (-T(0.32)*T(pi)^2*cospi(T(2)*x))))
     end
-    # Measured 3.69e-6 (species) and 7.76e-6 (energy) at N=65. The
-    # deliberately wider 1e-5 guard detects a changed closure without claiming
+    # Measured 1.32e-5 (species) and 2.77e-5 (energy) at N=65 under the
+    # `:neutral3` rows (3.69e-6 and 7.76e-6 under `:cascade3`). The
+    # deliberately wider 4e-5 guard detects a changed closure without claiming
     # that this instantaneous check establishes an evolution order.
-    @test maximum(errsY) < 1e-5
-    @test maximum(errsE) < 1e-5
+    @test maximum(errsY) < 4e-5
+    @test maximum(errsE) < 4e-5
 
     # A node-centered trapezoid is not the compact operator's conservation
     # norm. Keep this whole-domain defect visible, but distinct from exact
@@ -258,9 +259,11 @@ end
                                CL.wallplane(s.decomp, 1, side)), 1:2)
     end
     @info "Insulated conduction evolution" errors defects
-    @test errors[2] < 5e-7
+    # 8.0e-7 and 1.85e-8 at the finer resolution under the `:neutral3` rows
+    # (below 5e-7 and 1e-8 under `:cascade3`).
+    @test errors[2] < 1.2e-6
     @test errors[2] < errors[1] / 4
-    @test defects[2] < 1e-8
+    @test defects[2] < 3e-8
 end
 
 @testset "no-slip wall flux: compatible species-diffusion evolution" begin
@@ -288,8 +291,9 @@ end
     err = maximum(abs(Q[gidx(s, i, 1, 1), 1] -
                       (T(0.5) + amp*decay*cospi(T(2)*xcoord(s, 1, i))))
                   for i in 1:65)
-    # N=65 measures 2.445e-7 in the full-domain max norm (including walls).
-    @test err < 3e-7
+    # N=65 measures 6.51e-7 in the full-domain max norm (including walls)
+    # under the `:neutral3` rows, 2.445e-7 under `:cascade3`.
+    @test err < 1e-6
     CL.refresh_primitives!(s, Q)
     @test maximum(abs(s.p[gidx(s, i, 1, 1)] - one(T)) for i in 1:65) < 2e-12
     @test maximum(abs(s.T_ion[gidx(s, i, 1, 1)] - one(T)) for i in 1:65) < 2e-12

@@ -115,12 +115,14 @@ effect. The appendix link carries the sweep.
   rows. `C_kappa` does not help under the default smoother, and the deficit
   does not converge away with resolution ([walls](#walls-folds-and-metrics)).
 - **A long inviscid run between slip walls or symmetry planes grows a
-  wall-normal velocity from nothing.** The cascade closures' slip-wall
-  mode, at 1.0 per unit time under the defaults, visible after about
-  30 time units in Float64 and 15 in Float32. `compact_filter(closures =
-  :cascade)` damps it exactly at the cascade's wall accuracy, physical
-  viscosity at a no-slip wall removes it, and C6 `:brady_livescu`
-  unfiltered is neutral ([the mode](#walls-folds-and-metrics)).
+  wall-normal velocity from nothing.** The run is on `lele_d1_6(closures =
+  :cascade3)`, or on C8 or C10, whose closure rows carry the slip-wall
+  mode: 1.0 per unit time under the default filter, visible after about
+  30 time units in Float64 and 15 in Float32. The C6 default `:neutral3`
+  is neutral there; on C8 and C10 the choices are `compact_filter(closures
+  = :cascade)`, which damps the mode at a second-order wall defect,
+  physical viscosity at a no-slip wall, or C6 with its default rows
+  ([the mode](#walls-folds-and-metrics)).
 - **A smooth wave train or a contact is over-damped.** `C_beta = 0.5` keeps
   0.7% more Shu–Osher amplitude and an 18% narrower contact than 1.0, at
   the cost of half the spherical origin's timestep. `detector = :d8` keeps
@@ -544,23 +546,42 @@ Noh plane on both starts, and every planar start but the 40-cell one
 ([the qualification](CALIBRATION_APPENDIX.md#the-bradylivescu-rows-as-a-wall-configuration)).
 
 **The slip-wall mode.** The cascade closures are linearly unstable at an
-inviscid slip wall: a uniform state between slip walls under the default
-C6 `:cascade3` rows grows a wall-normal velocity from its round-off seed
-at 2.3 per unit time (c = 1.31 on a unit domain), an O(c/L) eigenmode of
-the discrete step with half its norm within four nodes of the walls; the
-C8 cascade grows at 1.4, the C10 rows at 2.6, `:cascade4` at 7. The
-cascade filter's F2 row damped it exactly, and the default one-sided
-rows only halve it (1.0 relaxed at cfl 0.5), a stronger one-sided filter
-making it worse. Dirichlet ends are neutral, a viscous no-slip wall is
-neutral, a viscous slip wall reads 0.04, C6 `:brady_livescu` is neutral
-unfiltered and 0.6 under the one-sided filter, and the artificial
-properties saturate the mode near |u| = 1e-2, which a Float64 seed
-reaches in about 30 time units and a Float32 seed in about 15. The
-battery's wall cases end by t = 0.6 and do not see it; a long inviscid
-run between slip walls or symmetry planes does, and until roadmap N6d
-removes it such a run should carry `compact_filter(closures = :cascade)`,
-physical viscosity, or C6 `:brady_livescu` unfiltered
-([the mode](CALIBRATION_APPENDIX.md#the-slip-wall-mode)).
+inviscid slip wall: a uniform state between slip walls under the C6
+`:cascade3` rows grows a wall-normal velocity from its round-off seed
+at 2.3 per unit time (c = 1.31 on a unit domain), a near-grid-scale
+eigenmode of the discrete step (4.6 points per wavelength at N = 51) with
+half its norm within four nodes of the walls; the C8 cascade grows at
+1.4, the C10 rows at 2.6, `:cascade4` at 7. The cascade filter's F2 row
+damped it exactly, and the one-sided rows only halve it (1.0 relaxed at
+cfl 0.5), a stronger one-sided filter making it worse. Dirichlet ends are
+neutral, a viscous no-slip wall is neutral, a viscous slip wall reads
+0.04, C6 `:brady_livescu` is neutral unfiltered and 0.6 under the
+one-sided filter, and the artificial properties saturate the mode near
+|u| = 1e-2, which a Float64 seed reaches in about 30 time units and a
+Float32 seed in about 15. The battery's wall cases end by t = 0.6 and do
+not see it; a long inviscid run between slip walls or symmetry planes
+does ([the mode](CALIBRATION_APPENDIX.md#the-slip-wall-mode)).
+
+**The neutral rows.** Roadmap N6d replaced the C6 default with
+`:neutral3`: the explicit third-order one-sided row 1 on four points and a
+fourth-order compact row 2 on five points with left-hand side (3/5, 1,
+3/10), a member of the two-parameter set of such rows on which the Euler
+step linearized about a uniform state between injected slip walls has a
+purely imaginary spectrum. It is neutral in the production Jacobian to
+1e-9 at N = 51 and 101 for slip walls, Dirichlet ends and no-slip walls,
+filtered and unfiltered, and in a two-dimensional corner, and in the
+exact linear model at every line length from 12 to 1200, where other
+members of the set resonate with particular line lengths; a uniform state
+holds its round-off seed at 3e-14 through forty time units. The cost is
+2.5 times the cascade's wall error constant at the same third and fourth
+orders, a reflected pulse's interior error 1.5 times larger (its wall
+window eight times smaller), and a cold planar Noh wall deficit of 52.8%
+against 50.3%. Two other routes were measured and rejected: a filter
+mirroring only the normal acoustic pair is neutral but drops the wall
+evolution to third order, and Brady–Livescu rows on the divergence alone
+inherit that set's cold-start failure, which the divergence rows are shown
+to cause. The C8 and C10 cascade rows still carry the mode
+([the neutral rows](CALIBRATION_APPENDIX.md#the-neutral-closure-rows)).
 
 **Constant annihilation.** A closure row leaves 2–40 eps of c/h on a
 constant c at the wall, the solve amplifying the products' rounding by 2
@@ -657,6 +678,8 @@ In approximate priority order; each links to the measurements it rests on.
    [which channel carries it](CALIBRATION_APPENDIX.md#which-channel-carries-it)).
 8. **Decide `species_flux`** on the vortex-ring/SF6 case
    ([open](CALIBRATION_APPENDIX.md#open)).
-9. **Remove the slip-wall mode** (roadmap N6d): the cascade closures'
-   inviscid slip-wall instability, which the retired F2 filter row was
-   damping ([the mode](CALIBRATION_APPENDIX.md#the-slip-wall-mode)).
+9. **A neutral closure set for C8**, whose cascade rows carry the
+   slip-wall mode at 1.4 per unit time; the C6 `:neutral3` rows are
+   derived for the C6 interior and need a three-row family and their own
+   line-length sweep for C8
+   ([the neutral rows](CALIBRATION_APPENDIX.md#the-neutral-closure-rows)).

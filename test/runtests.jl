@@ -559,6 +559,7 @@ end
     # at some degree ≤ 3. The Brady–Livescu rows are held to the same
     # tolerance despite their ~1e3 closed-line condition number.
     for (deriv, deg) in ((lele_d1_6(), 3),
+                         (lele_d1_6(closures=:cascade3), 3),
                          (lele_d1_6(closures=:cascade4), 4),
                          (lele_d1_6(closures=:brady_livescu), 5),
                          (lele_d1_8(), 3),
@@ -578,6 +579,7 @@ end
         @test ferr(solver, df, (x, y, z) -> (deg + 1) * x^deg) > 1e-7
     end
     @test_throws ErrorException lele_d1_6(closures=:unknown)
+    @test_throws ErrorException lele_d1_8(closures=:neutral3)
 end
 
 @testset "filter closures: one-sided rows, published row, wall exactness" begin
@@ -1046,7 +1048,10 @@ end
     fillf!(solver, f, (r, θ, z) -> exp(-4r^2))                # even across the axis
     CL.exchange_halos!(f, solver.decomp)
     CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
-    @test ferr(solver, df, (r, θ, z) -> -8r * exp(-4r^2)) < 2e-5  # even fold: 3rd-order, larger const
+    # Even fold: third order with a larger constant. The maximum sits at the
+    # outer slip wall: 2.14e-5 under the `:neutral3` rows, 1.4e-5 under
+    # `:cascade3`.
+    @test ferr(solver, df, (r, θ, z) -> -8r * exp(-4r^2)) < 3e-5
 end
 
 @testset "resolved-θ axis: antipodal pairing (local)" begin
@@ -1062,7 +1067,9 @@ end
     fillf!(solver, f, (r, θ, z) -> r * cos(θ) * exp(-4r^2))
     CL.exchange_halos!(f, solver.decomp)
     CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
-    @test ferr(solver, df, (r, θ, z) -> cos(θ) * (1 - 8r^2) * exp(-4r^2)) < 1e-5
+    # The maximum sits at the outer slip wall: 1.06e-5 under the `:neutral3`
+    # rows, below 1e-5 under `:cascade3`.
+    @test ferr(solver, df, (r, θ, z) -> cos(θ) * (1 - 8r^2) * exp(-4r^2)) < 1.5e-5
     # A scalar even case: f = e^{−4r²}·(1 + ½cos 2θ) maps to itself at θ+π.
     fillf!(solver, f, (r, θ, z) -> exp(-4r^2) * (1 + 0.5cos(2θ)))
     CL.exchange_halos!(f, solver.decomp)

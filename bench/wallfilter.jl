@@ -58,7 +58,8 @@ const REFDIR = joinpath(@__DIR__, "..", "test", "refs")
 
 const FILTERS = (("cascade", :cascade), ("onesided", :onesided))
 filt_of(cl, ::Type{T}=Float64) where {T} = compact_filter(T(OPTS.alphaf), T; closures=cl)
-const DERIVS = (("C6 cascade3", T -> lele_d1_6(T)),
+const DERIVS = (("C6 cascade3", T -> lele_d1_6(T; closures=:cascade3)),
+                ("C6 neutral3", T -> lele_d1_6(T)),
                 ("C6 cascade4", T -> lele_d1_6(T; closures=:cascade4)),
                 ("C6 BL", T -> lele_d1_6(T; closures=:brady_livescu)),
                 ("C8 BL", T -> lele_d1_8(T; closures=:brady_livescu)))
@@ -471,7 +472,7 @@ function noh_planar_T(::Type{T}, N; cl, cfl=NOH_CFL, filter_cfl=OPTS.filter_cfl)
                     bcs=((SlipWallBC(), inflow), per, per),
                     eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(γ)),
                     transport=Transport{T}(mu0=zero(T)), art=ArtParams{T}(enabled=true),
-                    deriv=lele_d1_6(T), filt=filt_of(cl, T), cfl=T(cfl),
+                    deriv=lele_d1_6(T; closures=:cascade3), filt=filt_of(cl, T), cfl=T(cfl),
                     filter_interval=1, filter_cfl=filter_cfl,
                     control=StepControl(validity=:permissive))
     Q = allocate_state(solver)
@@ -488,7 +489,7 @@ function woodward_T(::Type{T}, N; cl, cfl=0.3, filter_cfl=OPTS.filter_cfl) where
                     bcs=((SlipWallBC(), SlipWallBC()), per, per),
                     eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
                     transport=Transport{T}(mu0=zero(T)), art=ArtParams{T}(enabled=true),
-                    deriv=lele_d1_6(T), filt=filt_of(cl, T), cfl=T(cfl),
+                    deriv=lele_d1_6(T; closures=:cascade3), filt=filt_of(cl, T), cfl=T(cfl),
                     filter_interval=1, filter_cfl=filter_cfl,
                     control=StepControl(validity=:permissive))
     Q = allocate_state(solver)

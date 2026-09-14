@@ -67,12 +67,13 @@ sprintf(fmt::String, args...) = Printf.format(Printf.Format(fmt), args...)
 printf(fmt::String, args...) = print(sprintf(fmt, args...))
 pad(s, n) = rpad(s, n)
 
-const DERIVS = (("C6 cascade3", T -> lele_d1_6(T)),
+const DERIVS = (("C6 cascade3", T -> lele_d1_6(T; closures=:cascade3)),
                 ("C6 cascade4", T -> lele_d1_6(T; closures=:cascade4)),
                 ("C6 BL", T -> lele_d1_6(T; closures=:brady_livescu)),
                 ("C8 cascade3", T -> lele_d1_8(T)),
                 ("C8 BL", T -> lele_d1_8(T; closures=:brady_livescu)),
-                ("C10", T -> lele_d1_10(T)))
+                ("C10", T -> lele_d1_10(T)),
+                ("C6 neutral3", T -> lele_d1_6(T)))
 const FILTERS = (("filter onesided", T -> compact_filter(T(0.45), T)),
                  ("filter cascade", T -> compact_filter(T(0.45), T; closures=:cascade)),
                  ("gaussian", T -> gaussian_filter(T)),
@@ -363,7 +364,8 @@ function mode_part()
             "4000 steps            rate per unit time")
     base = (rho=0.9, v=0.1, p=1.1, R=1.0, gamma=1.4)
     rows = []
-    for (dlabel, mk) in (DERIVS[1], DERIVS[2], DERIVS[3]), filter_on in (false, true)
+    for (dlabel, mk) in (DERIVS[1], DERIVS[2], DERIVS[3], DERIVS[7]),
+        filter_on in (false, true)
         push!(rows, ("N=101 $dlabel filter $(filter_on ? "on" : "off")", mk, 101,
                      filter_on, true, base))
     end
@@ -432,8 +434,13 @@ function step_map(solver, Q0, dt, filter_on)
     return Q
 end
 
+# The step map is differenced centrally with delta = 1e-5 · max(|Q|, 1); a
+# neutral row then reads 1 + O(1e-9), against 1 + O(1e-7) for the one-sided
+# 1e-7 difference this part used before September 2026, so the 1 + 1e-8 gate
+# of roadmap N6d is resolved. `ladder` repeats the row at 3e-6 and 3e-5 so a
+# reading can be told from its perturbation dependence.
 function jacobian_row(label, deriv; N=51, filter_on=false, cl=:onesided, mu=0.0,
-                      wall=:slip, alphaf=0.45)
+                      wall=:slip, alphaf=0.45, delta=1e-5, ladder=false)
     st = (rho=0.9, v=0.1, p=1.1, R=1.0, gamma=1.4)
     per = (PeriodicBC(), PeriodicBC())
     h = 1.0 / (N - 1)
@@ -455,17 +462,27 @@ function jacobian_row(label, deriv; N=51, filter_on=false, cl=:onesided, mu=0.0,
     base = step_map(solver, Q0, dt, filter_on)
     idx = [(gidx(solver, i, 1, 1), comp) for comp in 1:ncons for i in 1:N]
     m = length(idx)
-    G = zeros(m, m)
-    for (j, (I, comp)) in enumerate(idx)
-        Qp = copy(Q0)
-        eps = 1e-7 * max(abs(Q0[I, comp]), 1.0)
-        Qp[I, comp] += eps
-        Qs = step_map(solver, Qp, dt, filter_on)
-        for (i, (J, cc)) in enumerate(idx)
-            G[i, j] = (Qs[J, cc] - base[J, cc]) / eps
+    function amplification(delta)
+        G = zeros(m, m)
+        for (j, (I, comp)) in enumerate(idx)
+            Qp = copy(Q0); Qm = copy(Q0)
+            eps = delta * max(abs(Q0[I, comp]), 1.0)
+            Qp[I, comp] += eps; Qm[I, comp] -= eps
+            Sp = step_map(solver, Qp, dt, filter_on)
+            Sm = step_map(solver, Qm, dt, filter_on)
+            for (i, (J, cc)) in enumerate(idx)
+                G[i, j] = (Sp[J, cc] - Sm[J, cc]) / (2eps)
+            end
+        end
+        G
+    end
+    if ladder
+        for d in (3e-6, 3e-5)
+            printf("  %-44s |λ|max %.10f   (delta %.0e)\n", label,
+                   maximum(abs, eigvals(amplification(d))), d)
         end
     end
-    vals, vecs = eigen(G)
+    vals, vecs = eigen(amplification(delta))
     k = argmax(abs.(vals))
     λ = vals[k]
     v = vecs[:, k]
@@ -476,7 +493,7 @@ function jacobian_row(label, deriv; N=51, filter_on=false, cl=:onesided, mu=0.0,
     end
     rate = log(abs(λ)) / dt
     ngrow = count(x -> abs(x) > 1 + 1e-12, vals)
-    printf("  %-44s |λ|max %.8f  rate %+.3f  growing %3d of %d  wall share %.2f\n",
+    printf("  %-44s |λ|max %.10f  rate %+.3f  growing %3d of %d  wall share %.2f\n",
            label, abs(λ), rate, ngrow, m, wallnorm / sum(abs2, v))
     flush(stdout)
 end
@@ -486,9 +503,18 @@ function jacobian_part()
             "artificial properties off ===")
     println("rate = ln|λ|max / dt per unit time (the mode part's units); growing = " *
             "eigenvalues outside the unit circle")
-    jacobian_row("C6 cascade3, unfiltered", lele_d1_6())
-    jacobian_row("C6 cascade3, onesided filter (unrelaxed)", lele_d1_6(); filter_on=true)
-    jacobian_row("C6 cascade3, cascade filter (unrelaxed)", lele_d1_6(); filter_on=true,
+    c3 = lele_d1_6(closures=:cascade3)
+    jacobian_row("C6 neutral3, unfiltered", lele_d1_6(); ladder=true)
+    jacobian_row("C6 neutral3, onesided filter (unrelaxed)", lele_d1_6(); filter_on=true,
+                 ladder=true)
+    jacobian_row("C6 neutral3, no-slip, mu = 0.005, onesided", lele_d1_6(); mu=0.005,
+                 wall=:noslip, filter_on=true)
+    jacobian_row("C6 neutral3, Dirichlet ends, unfiltered", lele_d1_6(); wall=:dirichlet)
+    jacobian_row("C6 neutral3, unfiltered, N = 101", lele_d1_6(); N=101)
+    jacobian_row("C6 neutral3, onesided filter, N = 101", lele_d1_6(); N=101, filter_on=true)
+    jacobian_row("C6 cascade3, unfiltered", c3)
+    jacobian_row("C6 cascade3, onesided filter (unrelaxed)", c3; filter_on=true)
+    jacobian_row("C6 cascade3, cascade filter (unrelaxed)", c3; filter_on=true,
                  cl=:cascade)
     jacobian_row("C6 cascade4, unfiltered", lele_d1_6(closures=:cascade4))
     jacobian_row("C6 BL, unfiltered", lele_d1_6(closures=:brady_livescu))
@@ -497,17 +523,17 @@ function jacobian_part()
     jacobian_row("C8 cascade3, unfiltered", lele_d1_8())
     jacobian_row("C8 BL, unfiltered", lele_d1_8(closures=:brady_livescu))
     jacobian_row("C10 (cascade), unfiltered", lele_d1_10())
-    jacobian_row("C6 cascade3, no-slip, mu = 0.005, unfiltered", lele_d1_6(); mu=0.005,
+    jacobian_row("C6 cascade3, no-slip, mu = 0.005, unfiltered", c3; mu=0.005,
                  wall=:noslip)
-    jacobian_row("C6 cascade3, slip, mu = 0.005, unfiltered", lele_d1_6(); mu=0.005)
-    jacobian_row("C6 cascade3, Dirichlet ends, unfiltered", lele_d1_6(); wall=:dirichlet)
-    jacobian_row("C6 cascade3, Dirichlet ends, onesided filter", lele_d1_6();
+    jacobian_row("C6 cascade3, slip, mu = 0.005, unfiltered", c3; mu=0.005)
+    jacobian_row("C6 cascade3, Dirichlet ends, unfiltered", c3; wall=:dirichlet)
+    jacobian_row("C6 cascade3, Dirichlet ends, onesided filter", c3;
                  wall=:dirichlet, filter_on=true)
-    jacobian_row("C6 cascade3, onesided filter alphaf 0.40", lele_d1_6(); filter_on=true,
+    jacobian_row("C6 cascade3, onesided filter alphaf 0.40", c3; filter_on=true,
                  alphaf=0.40)
-    jacobian_row("C6 cascade3, onesided filter alphaf 0.30", lele_d1_6(); filter_on=true,
+    jacobian_row("C6 cascade3, onesided filter alphaf 0.30", c3; filter_on=true,
                  alphaf=0.30)
-    jacobian_row("C6 cascade3, unfiltered, N = 101", lele_d1_6(); N=101)
+    jacobian_row("C6 cascade3, unfiltered, N = 101", c3; N=101)
 end
 
 for part in PARTS

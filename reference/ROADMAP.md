@@ -414,7 +414,7 @@ below exposed behavior outside those passing checks.
   ([the measurements](CALIBRATION_APPENDIX.md#constant-annihilation-and-the-slip-wall-mode),
   [completion record](HISTORY.md#constant-annihilation-and-the-slip-wall-mode-september-2026)).
 
-- [ ] **N6d — Remove the inviscid slip-wall instability of the cascade closures.**
+- [x] **N6d — Remove the inviscid slip-wall instability of the cascade closures.**
   Under the default C6 `:cascade3` rows a uniform inviscid state between
   slip walls grows a wall-normal velocity from round-off at 2.3 per unit
   time (c = 1.31 on a unit domain), an eigenmode of the linearized step
@@ -447,6 +447,36 @@ below exposed behavior outside those passing checks.
   its seed.
   **Code:** [kernels.jl](../src/kernels.jl), [boundary.jl](../src/boundary.jl),
   [constantfloor.jl](../bench/constantfloor.jl).
+  **Delivered:** the `:neutral3` closure set of `lele_d1_6`, now the C6
+  default, with `:cascade3` kept for comparison. The two treatments the
+  handoff proposed were measured and rejected: a filter mirroring only the
+  normal acoustic pair is neutral but drops the wall evolution to third
+  order, and Brady–Livescu rows on the divergence alone fail cold Noh
+  sooner than the full set, whose failure the divergence rows are shown to
+  cause. The fix came from the closure rows themselves: widening the
+  cascade's two rows by one point each frees three coefficients at fixed
+  order, and an exact linear model of the injected step (the production
+  Jacobian to 8e-11) found the two-parameter set on which the linearized
+  Euler step between slip walls has a purely imaginary spectrum. Members
+  neutral at one line length resonate at others, so the adopted member is
+  the one with the smallest truncation constants among those neutral at
+  every N from 12 to 1200. In production it reads 1 + O(1e-9) at N = 51
+  and 101 for slip, Dirichlet and no-slip ends, filtered and unfiltered,
+  and in a two-dimensional corner, and a uniform state holds 3e-14 through
+  forty time units where the cascade fails at t = 30. The gate's
+  "unchanged" orders and battery could not survive a closure change and
+  were re-recorded: 2.5 times the cascade's wall error constant at the same
+  orders, planar Noh wall deficit 50% to 53% at the same plateau and front,
+  and a Float32 freestream at a wall that is round-off (2e-6) rather than
+  exact, since the rows' thirds do not annihilate a constant in floating
+  point. The flux divergence at a patch or level interface keeps the
+  cascade rows (`interface_divergence_closures`): an interface imposes no
+  injected condition, and with the neutral rows there the interface errors
+  were two to five times larger, so the interface baselines are unchanged.
+  The C8 and C10 cascade rows still carry the mode, and no energy norm has
+  been proved for the new rows
+  ([the measurements](CALIBRATION_APPENDIX.md#the-neutral-closure-rows),
+  [completion record](HISTORY.md#the-neutral-closure-rows-september-2026)).
 
 - [ ] **N7 — Complete NSCBC inflow transverse coupling.**
   Add the Yoo–Im transverse terms that exist for outflow but not inflow.
@@ -610,10 +640,12 @@ N6a's trial battery (`bench/wallfilter.jl`) and N6b's qualification
 artificial diffusion's own fourth-order wall defect, which caps any
 closure with the properties on; its removal (the detector's mirror at a
 wall) is a calibration item, not a closure one. N6c, the roundoff audit,
-closed with no change and found the slip-wall mode that N6d now carries:
-the cascade closures are linearly unstable at an inviscid slip wall, and
-the F2 filter row that N6a retired was what damped it. N6d precedes any
-long inviscid wall-bounded production run. Use N10/N11 to qualify interface
+closed with no change and found the slip-wall mode that N6d then removed:
+the cascade closures are linearly unstable at an inviscid slip wall, the
+F2 filter row that N6a retired was what damped it, and the C6 default is
+now the neutral `:neutral3` set; the flux divergence at an interface end
+keeps the cascade rows, so the interface baselines did not move. Use
+N10/N11 to qualify interface
 candidates before promotion; invoke N15 only when the smaller closure change
 misses a target. N16 transfer measurements may begin with N6, while final accuracy
 qualification follows the selected interface treatment. Coordinate temporal

@@ -62,9 +62,15 @@ _f32_numerics(; art=false) =
                           j in 1:solver.decomp.n_local[2],
                           k in 1:solver.decomp.n_local[3]))
     end
-    # The Cartesian cases are exact. Curvilinear metric/source cancellation
-    # reaches the Float32 roundoff floor; spherical is the largest at 1.22e-4.
-    @test residuals[1] == residuals[2] == zero(T)
+    # The periodic Cartesian case is exact. The walled Cartesian case was
+    # exact under the `:cascade3` rows, whose dyadic weights annihilate a
+    # constant in floating point; the `:neutral3` rows carry thirds and
+    # leave the round-off of their products, 2.2e-6 here, the constant
+    # annihilation residual of reference/CALIBRATION_APPENDIX.md. Curvilinear
+    # metric/source cancellation reaches the Float32 roundoff floor;
+    # spherical is the largest at 1.22e-4.
+    @test residuals[1] == zero(T)
+    @test residuals[2] < T(1e-5)
     @test maximum(residuals) < T(2e-4)
 end
 

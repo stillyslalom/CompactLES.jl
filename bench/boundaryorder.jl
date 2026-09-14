@@ -52,7 +52,8 @@ const MU = 0.005
 
 selected(name) = OPTS.study == "all" || name in split(OPTS.study, ',')
 
-const DERIVS = (("C6 cascade3", lele_d1_6()),
+const DERIVS = (("C6 neutral3", lele_d1_6()),
+                ("C6 cascade3", lele_d1_6(closures=:cascade3)),
                 ("C6 cascade4", lele_d1_6(closures=:cascade4)),
                 ("C6 BL", lele_d1_6(closures=:brady_livescu)),
                 ("C8 BL", lele_d1_8(closures=:brady_livescu)))
@@ -178,7 +179,8 @@ shear_reference(V) =
 
 function truncation_study()
     println("\n=== truncation: one derivative on the closed line, actual spacing ===")
-    for (label, deriv, degree) in (("C6 cascade3", lele_d1_6(), 4),
+    for (label, deriv, degree) in (("C6 neutral3", lele_d1_6(), 4),
+                                   ("C6 cascade3", lele_d1_6(closures=:cascade3), 4),
                                    ("C6 cascade4", lele_d1_6(closures=:cascade4), 5),
                                    ("C6 BL", lele_d1_6(closures=:brady_livescu), 6),
                                    ("C8 BL", lele_d1_8(closures=:brady_livescu), 8))
