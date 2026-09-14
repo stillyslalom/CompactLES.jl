@@ -5,8 +5,8 @@
 
 ![Taylor–Green vorticity, a multicomponent shock-interface interaction, and a cylindrical converging shock](docs/src/assets/readme_header.png)
 
-*Taylor–Green vorticity, a He/CO₂ shock–interface interaction, and a cylindrical
-converging shock. Reproduce the figure with [`docs/figures/readme_header.jl`](docs/figures/readme_header.jl).*
+*He/CO₂ shock–interface interaction, Taylor–Green vorticity, and a cylindrical
+converging shock. Produced by [`docs/figures/readme_header.jl`](docs/figures/readme_header.jl).*
 
 CompactLES is a compressible large-eddy / direct-simulation solver for the
 multicomponent Navier–Stokes equations, written in pure Julia and inspired by
@@ -64,28 +64,30 @@ run!(solver, Q; tfinal=1.0)
 
 ## Installation
 
-Targets Julia ≥ 1.10 and `MPI.jl` v0.20. Its dependencies are `MPI.jl`,
-`ThreadPinning.jl`, and `KernelAbstractions.jl` / `Adapt.jl`; HDF5 and Makie are
-weak dependencies, loaded only when imported. A GPU run additionally needs a
-device package (`AMDGPU.jl` or `CUDA.jl`) in the active environment.
+Targets Julia ≥ 1.10 and `MPI.jl` v0.20 with minimal dependencies. Additional HDF5 and Makie
+functionality is implemented as package extensions, loaded only when HDF5 and/or Makie
+are already loaded. A GPU run additionally needs a device package (`AMDGPU.jl` or `CUDA.jl`)
+in the active environment.
 
+Not yet registered, so install by adding the GitHub URL using Pkg:
 ```
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
+julia --project=. -e 'using Pkg; Pkg.add("https://github.com/stillyslalom/CompactLES.jl"); Pkg.instantiate()'
 ```
 
 `MPI.jl` includes an MPI binary, so desktop use requires no user-managed
-binaries. On a cluster, configure `MPI.jl` against the
+binaries. On a cluster, configure `MPI.jl` (and HDF5.jl if present) against the
 [system's MPI binary](https://juliaparallel.org/MPI.jl/stable/configuration/#using_system_mpi)
-before running: the bundled binary satisfies a single-node run but may fail to
-use the interconnect off it. The launch rules and the measured penalties are in
+before running. If the cluster system binary is not used, MPI communications will fail to 
+use the cluster's high-speed interconnect, severely degrading performance.
+The launch rules and the measured penalties are in
 [Run in parallel](https://stillyslalom.github.io/CompactLES.jl/dev/how-to/parallel-runs/).
 
 ## Running
 
 ```
 julia --project=. -t auto examples/taylor_green.jl              # threaded
-mpiexec -n 8 julia --project=. -t 2 examples/taylor_green.jl    # MPI × threads
-srun -N 2 -n 64 julia --project=. -t 2 examples/taylor_green.jl # Slurm, Flux, etc.
+mpiexec -n 8 julia --project=. -t 1 examples/taylor_green.jl    # MPI × threads
+srun -N 2 -n 64 julia --project=. -t 1 examples/taylor_green.jl # Slurm, Flux, etc.
 ```
 
 If `mpiexec` is not on `PATH`, get the launcher `MPI.jl` is configured against
@@ -175,28 +177,6 @@ num = Numerics(n_global = (64, 64, 64), backend = DeviceBackend(ROCBackend()))
 
 Refinement is currently Cartesian-only and single-region; a device run takes a single
 patch per solver.
-
-## Timestep near coordinate singularities
-
-`compute_dt` uses physical spacings, so the estimate stays conservative near a
-singularity. A collapsed angular dimension (1-D radial, axisymmetric) keeps a
-Cartesian-like step, but a resolved polar angle pays roughly N_θ/π, a ~20×
-penalty at N_θ = 64, like any resolved-singularity polar grid. `dt_report(solver,
-Q)` locates the CFL-limiting cell and whether the limit is acoustic, diffusive, or
-curvature-driven. The standard remedies (azimuthal mode truncation, IMEX, local
-time stepping) are not yet implemented.
-
-The rate `cfl` divides is `Σ_d |u_d|/h_d + c·sqrt(Σ_d 1/h_d²)` plus the
-diffusive and curvature rates: advection and diffusion sum over dimensions
-and the acoustic part combines in the Euclidean norm, which is the bound the
-scheme actually has. On an isotropic three-dimensional grid a smooth flow is
-stable to about `cfl = 1.7` (Taylor–Green at 32³, measured); `cfl = 0.5`
-is the default and converging strong shocks need 0.3 or `StepControl(retries
-= 4)`, see
-[Regularization](https://stillyslalom.github.io/CompactLES.jl/dev/explanation/regularization/).
-Pyranda's
-[public implementation](https://github.com/LLNL/pyranda) counts the sound speed
-once, so its CFL numbers are not comparable one to one.
 
 ## Examples
 
