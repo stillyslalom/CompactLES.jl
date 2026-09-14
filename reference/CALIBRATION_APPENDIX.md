@@ -4960,6 +4960,44 @@ and has no recognized structure, so the property is measured over the
 swept line lengths and not proved. An SBP-like closure under roadmap N15
 would supersede it.
 
+### Prior art
+
+The recipe is published; the result is not. Carpenter, Gottlieb and
+Abarbanel (ICASE 91-71, J. Comput. Phys. 108, 1993, §7) widened the
+closure rows of compact schemes into three- and four-parameter families
+and searched the parameter space for a left-half-plane spectrum, on scalar
+advection with a Dirichlet inflow; Zingg and Lederle widened the two
+boundary rows of explicit schemes by one point each and fixed the
+two-parameter family by the spectrum; Brady and Livescu (Computers &
+Fluids 183, 2019) fixed free boundary coefficients by the stability of
+the injected nonlinear Euler problem, with conservation constraints, at
+one order below the interior. Row 1 of the neutral set is Lele's (1992,
+eq. 4.1.3) third-order one-sided family at α = 0, the explicit
+difference. Sharan, Brady and Livescu (SIAM J. Numer. Anal. 60, 2022)
+treat strongly imposed boundary conditions by the energy method: their
+test system U_t + U_x = 0, V_t − V_x = 0 with U(0) = τ₁ V(0), V(1) = τ₂
+U(1) is the slip-wall acoustic pair in characteristic variables, and at
+τ = 1 their Figure 2 shows the CGA fourth- and sixth-order closures,
+Strand's SBP stencils and the Cook–Riley C6 compact scheme with
+eigenvalues in the right half-plane, the mode of the preceding section.
+Their remedy is a nonsquare operator with full-norm corner blocks and a
+skew Q = HD outside them, dissipative at the boundary rows and
+conservative to O(Δx), for explicit interiors up to 3-6-3; their Theorem
+1 is the Lyapunov certificate under which the norm found above at N = 51
+and 101 is time stability at those N, and a corner-block certificate of
+their form, which would hold at every N, is the Tᵀ W T ansatz that failed
+here. Not found in any of these: a compact interior with exactly neutral
+closures, the reflecting two-wall injected operator as the selection
+problem, a two-parameter neutral set, or an instability appearing at
+particular line lengths only (the literature expects the
+boundary-dependent spectrum to be independent of N, Beam and Warming
+1993; the nearest frameworks are CGA's N-parity-dependent neutral example,
+eq. 78–80, and Bonnet-Eymard, Coulombel and Faye, arXiv:2504.00667, on
+wave packets coupling two boundaries). Every source agrees that a neutral
+spectrum of a non-normal operator is necessary and not sufficient; a
+pseudospectral or eigenvector-conditioning check against N is the open
+instrument, and the one likely to explain the resonance.
+
 ### Production measurements
 
 Centered Jacobians, N = 51 unless stated, artificial properties off, the
