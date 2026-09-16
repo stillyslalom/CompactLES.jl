@@ -660,6 +660,7 @@ vortex-ring/SF6 case has not been run under it
 ## Open items
 
 In approximate priority order; each links to the measurements it rests on.
+Item 7 is closed and kept in place so that the numbering stays stable.
 
 1. **Raise the CFL ceiling at the spherical origin.** The density
    proportionality of β\* and the per-step filter strength are measured
@@ -676,16 +677,17 @@ In approximate priority order; each links to the measurements it rests on.
 5. **Explain the spherical fold's intolerance of sharp data**
    ([geometry limits](CALIBRATION_APPENDIX.md#geometry-limits)).
 6. **Make `filter_state!` conservative on non-Cartesian metrics.**
-7. **Put `delta4_sum!`'s even path at a fold on the half-offset mirror.**
-   The wall half is done: a reflecting wall reads the node-centred
-   mirror on both parities, which returns a viscous or shear
-   Brady–Livescu wall to its properties-off error within about 1% and
-   removes the velocity sensor's second-order wall defect. A fold keeps
-   the clamp for an even field, where the vanishing edge derivative makes
-   its error O(h²), and changing it would move every guarded number in
-   `test/validation.jl`
+7. **The detector's closed-edge extension: closed, September 2026.**
+   `delta4_sum!` reads a closed edge from the node-centred mirror at a
+   reflecting wall and from the half-offset mirror at a fold, on both
+   parities, so the clamp remains only at a closed edge that is neither.
+   The wall half returns a viscous or shear Brady–Livescu wall to its
+   properties-off error within about 1%; the fold half moves the Sedov and
+   curved Noh rows of the battery in the fourth or fifth digit and changes
+   no CFL ladder verdict
    ([the clamp](CALIBRATION_APPENDIX.md#the-fourth-difference-clamp-at-a-fold),
-   [the wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror)).
+   [the wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror),
+   [the fold](CALIBRATION_APPENDIX.md#the-fold)).
 8. **Decide `species_flux`** on the vortex-ring/SF6 case
    ([open](CALIBRATION_APPENDIX.md#open)).
 9. **A neutral closure set for C8**, whose cascade rows carry the

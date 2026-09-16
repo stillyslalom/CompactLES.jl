@@ -55,7 +55,7 @@
 #   Woodward   L1 rho 3.215e-2, peak rho 6.616 at x = 0.7785
 #   Sedov      R_s 0.8085 vs 0.8000 analytic (+1.06%), peak rho 5.13 (jump 6)
 #   Noh nu=1   plateau 3.9851/4    shock 0.2054/0.2   wall deficit 54%
-#   Noh nu=2   plateau 15.009/16   shock 0.2091/0.2   wall deficit 54%
+#   Noh nu=2   plateau 15.009/16   shock 0.2091/0.2   wall deficit 55%
 #   Noh nu=3   plateau 62.555/64   shock 0.2089/0.2   wall deficit 29%
 #   Shock/SF6  worst Y -0.0129 / 1.0129, width 4 cells, 647 steps (Sept 2026)
 #   Noh aligned N=100 AR=4    plateau 3.9747/4   deficit 57%   shock 0.2161   5059 steps
@@ -74,6 +74,20 @@
 # filter reproduce the default closure's Woodward profile and hold the
 # resolved warm Noh wall; they take no singular start, so the cold Noh
 # rows above stay on the default closure.
+#
+# The fold rows moved in September 2026 when the same detector took the
+# half-offset mirror at a coordinate fold on every field rather than on an
+# odd one alone (roadmap N6f). On a half-offset grid the mirror and the clamp
+# differ on one tap, the outermost of the first interior cell's stencil, so
+# only the cell beside the fold changes and the three rows moved in their
+# fourth or fifth digit: Sedov (peak rho 5.128 and closing e_min -0.00415
+# before), Noh nu=2 (plateau 15.0088, wall deficit 54%, L1 pre-shock
+# 3.61e-04) and Noh nu=3 (plateau 62.5549, L1 pre-shock 6.62e-04). R_s and
+# both shock positions held to the digits printed, as did every row with no
+# fold in it: Lax, Shu-Osher, both Woodward rows, planar Noh, the warm
+# Brady-Livescu wall, the interface case and the two anisotropic Cartesian
+# rows. No guard moved; the deficit percentage above is the one printed
+# number that rounds differently.
 #
 # The wall rows moved again in September 2026 when the fourth-difference
 # detector stopped clamping the field at a reflecting wall and took the

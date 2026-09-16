@@ -31,8 +31,9 @@
 # variable (`bulk_diffusivity!`; the flux is assembled in rhs.jl), sensed on
 # the mass and the mole fraction of every species. Under `:delta4`, indices past
 # a closed physical edge come from a mirror where the edge has one, node-centred
-# at a wall (`sensor_mirror`) and half-offset for an odd field across a fold,
-# and are clamped elsewhere; `:d8` uses the scheme's own closure rows instead.
+# at a wall (`sensor_mirror`) and half-offset across a fold, carrying the
+# field's sign in either case, and are clamped elsewhere; `:d8` uses the
+# scheme's own closure rows instead.
 # Halos cover rank boundaries. The high-pass itself acts in
 # computational index space on every grid, a grid-based regularization in place
 # of a strictly physical-space one; only the length weighting is physical.
@@ -202,9 +203,9 @@ along `d`, `solver.h[d] / solver.inv_h[d][I]`, so the weight follows a
 `Stretch`'s Jacobian and an angular direction's scale factor rather than the
 computational spacing. Requires current rank-boundary halos
 of `f` to depth 2. The kernel itself communicates nothing except across a
-paired fold with `parity[d] == -1`, described below, so every rank must call
-it whenever one may take that path; the parity is a property of the field,
-identical everywhere, so no rank can disagree.
+paired fold, described below, so every rank must call it whenever one may take
+that path; whether a dimension carries a paired fold is a property of the
+setup, identical everywhere, so no rank can disagree.
 
 `parity[d]` is the field's sign across a coordinate fold on dimension `d`, and
 `wall_parity[d]` its sign across a reflecting wall on that dimension: +1 for
@@ -216,21 +217,23 @@ need not agree there; each is applied at its own kind of edge and nowhere else.
 Indices past a closed edge are read from a mirror where the edge has one and
 clamped where it does not. A wall face, which `sensor_mirror` names, mirrors
 about the boundary node, a node of the grid, with the sign `wall_parity[d]`
-gives. A folded edge with `parity[d] == -1` mirrors about the half-offset
-singular point (ghost j ↔ interior j, with the fold's sign). The clamp that
-remains at every other closed edge, a fold crossed by an even field included,
-is a zeroth-order extension, and its error differs in order with the field: for
-an even field it misplaces one δ⁴ tap by a term that the vanishing edge
-derivative makes O(h²), and for an odd field the edge derivative is the largest
-quantity there, the same tap is wrong at O(h), and the result is a nonzero
-sensor on a field as regular as u_r = r that the mirror annihilates exactly.
-At a wall the clamp is an O(1) error in an O(h⁴) quantity, which the β\\*
-coefficient carries into the solution: it caps the wall of a run with the
-artificial properties on at fourth order under every derivative closure, an
-inviscid Brady–Livescu wall reading 8.5e-11 at N = 193 against the 8.0e-13 of
-the same run with the properties off.
+gives. A folded edge mirrors about the half-offset singular point (ghost j ↔
+interior j) with the sign `parity[d]` gives; on a half-offset grid that differs
+from the clamp on one tap only, the outermost of the first interior cell's
+stencil, since every other out-of-range tap has the same source under both.
+Only a closed edge that is neither a wall nor a fold keeps the clamp, a
+zeroth-order extension whose error differs in order with the field: for an even
+field it misplaces one δ⁴ tap by a term
+that the vanishing edge derivative makes O(h²), and for an odd field the edge
+derivative is the largest quantity there, the same tap is wrong at O(h), and
+the result is a nonzero sensor on a field as regular as u_r = r that the mirror
+annihilates exactly. At a wall the clamp is an O(1) error in an O(h⁴)
+quantity, which the β\\* coefficient carries into the solution: it caps the wall
+of a run with the artificial properties on at fourth order under every
+derivative closure, an inviscid Brady–Livescu wall reading 8.5e-11 at N = 193
+against the 8.0e-13 of the same run with the properties off.
 
-At a self-paired fold the mirror is the negated line itself. At a paired fold
+At a self-paired fold the mirror is the line itself, signed. At a paired fold
 the line continues into its antipodal partner, `f(−r, θ) = σ f(r, θ+π)`, and a
 self-mirror there is wrong by the full θ-variation of the field: on a uniform
 Cartesian velocity through a resolved cylindrical axis it produced a sensor
@@ -239,7 +242,9 @@ takes the even/odd butterfly of `folds.jl`, also used by `fold_apply!`: the even
 combination mirrors as even and the odd one as odd, the
 signed δ⁴ of each is taken through `solver.pairout`, and `pair_backward!`
 reassembles the line before the absolute value is accumulated. Both scratch
-arrays of the pairing are overwritten.
+arrays of the pairing are overwritten. Every field crosses a paired fold this
+way, so the communication the butterfly carries is not confined to the velocity
+sensor.
 """
 # The detector's face query. Face conditions are stored abstractly on the
 # `Patch` (patches.jl), so the hook is a dynamic dispatch, as the state and flux
@@ -268,9 +273,10 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
         lomin = at_lo_edge(decomp, d) ? 1 : -1
         himax = at_hi_edge(decomp, d) ? n_d : n_d + 2
         fold = solver.folds[d]
-        mirror = parity[d] == -1 && fold !== nothing
+        mirror = fold !== nothing
         mirror_lo = mirror && at_lo_edge(decomp, d) && fold.lo
         mirror_hi = mirror && at_hi_edge(decomp, d) && fold.hi
+        fsgn = parity[d]
         wall_lo = at_lo_edge(decomp, d) && _face_mirror(bcs[d][1])
         wall_hi = at_hi_edge(decomp, d) && _face_mirror(bcs[d][2])
         wsgn = wall_parity[d]
@@ -294,14 +300,15 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
             signed = solver.pairout
             pointwise!(_delta4_signed_point!, signed, nx, ny, nz,
                        signed, w, d, n_d, lomin, himax, mirror_lo, mirror_hi,
-                       sd, half, sgn_a, sgn_b, o1, o2, o3)
+                       sd, half, sgn_a, sgn_b, wall_lo, wall_hi, wsgn,
+                       o1, o2, o3)
             pair_backward!(signed, solver, fold, σ)
             pointwise!(_ring_accum_point!, out, nx, ny, nz,
                        out, signed, h_d, ih_d, wpow, maxred, o1, o2, o3)
         else
             pointwise!(_delta4_point!, out, nx, ny, nz,
                        out, f, h_d, ih_d, wpow, d, n_d, lomin, himax,
-                       mirror_lo, mirror_hi, wall_lo, wall_hi, wsgn,
+                       mirror_lo, mirror_hi, fsgn, wall_lo, wall_hi, wsgn,
                        maxred, nz + 2 * o3, o1, o2, o3)
         end
     end
@@ -335,8 +342,8 @@ end
 end
 
 @inline function _delta4_point!(out, f, h_d, ih_d, wpow, d, n_d, lomin, himax,
-                                mirror_lo, mirror_hi, wall_lo, wall_hi, wsgn,
-                                maxred, n3p, o1, o2, o3,
+                                mirror_lo, mirror_hi, fsgn, wall_lo, wall_hi,
+                                wsgn, maxred, n3p, o1, o2, o3,
                                 i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -351,7 +358,7 @@ end
         il = (d == 1 ? i : d == 2 ? j : rem(k - 1, n3p) + 1)
         # The edge tests sit outside the stencil loop, not on each tap: every
         # flag is invariant over the whole sweep, and the clamped branch is the
-        # one a line with neither a wall nor a folded odd end takes.
+        # one a line with neither a wall nor a folded end takes.
         if !(mirror_lo | mirror_hi | wall_lo | wall_hi)
             acc = zero(eltype(out))
             for m in -2:2
@@ -360,7 +367,7 @@ end
             end
         else
             acc = _delta4_line(f, I, e, il, n_d, lomin, himax,
-                               mirror_lo, mirror_hi, -1,
+                               mirror_lo, mirror_hi, fsgn,
                                wall_lo, wall_hi, wsgn)
         end
         # `ih_d` is read at `I`, the same index the field is, so a stacked
@@ -374,11 +381,13 @@ end
 # The paired-fold form: the signed δ⁴ of the even/odd combination `w`, with
 # the mirror sign chosen per half of the pairing dimension `sd` (`sgn_a` below
 # `half`, `sgn_b` above; `sd == 0` selects `sgn_a` everywhere). A wall at the
-# far end of a paired line keeps the clamp; only a velocity component through a
-# resolved fold reaches this path.
+# far end of a paired line keeps its own mirror: the pairing map acts on the
+# angular coordinates alone, so it commutes with the reflection about the wall
+# node and the combination carries the field's wall sign unchanged.
 @inline function _delta4_signed_point!(signed, w, d, n_d, lomin, himax,
                                        mirror_lo, mirror_hi, sd, half,
-                                       sgn_a, sgn_b, o1, o2, o3, i, j, k)
+                                       sgn_a, sgn_b, wall_lo, wall_hi, wsgn,
+                                       o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
         e = CartesianIndex(ntuple(q -> q == d ? 1 : 0, 3))
@@ -386,7 +395,8 @@ end
         v = sd == 1 ? i : sd == 2 ? j : k
         sgn = (sd == 0 || v <= half) ? sgn_a : sgn_b
         signed[I] = _delta4_line(w, I, e, il, n_d, lomin, himax,
-                                 mirror_lo, mirror_hi, sgn, false, false, 1)
+                                 mirror_lo, mirror_hi, sgn,
+                                 wall_lo, wall_hi, wsgn)
     end
     return nothing
 end

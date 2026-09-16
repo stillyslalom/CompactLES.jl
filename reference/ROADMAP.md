@@ -497,10 +497,11 @@ below exposed behavior outside those passing checks.
   wall-normal one, which `velocity_mu!` selects through `wall_parity`. The
   exported hook `sensor_mirror(bc)` names the reflecting faces, true for
   `SlipWallBC` and `NoSlipWallBC`, so Dirichlet, extrapolation and NSCBC
-  faces and interface ends keep the clamp; folds are untouched. A viscous
-  no-slip wall and an adiabatic shear wall under C6 Brady–Livescu with the
-  properties on read 8.002e-13 and 1.346e-14 at N = 193 against 8.082e-13
-  and 1.351e-14 with them off, about 1% where the clamp cost two orders of
+  faces and interface ends keep the clamp; folds kept both of their
+  extensions until N6f. A viscous no-slip wall and an adiabatic shear wall
+  under C6 Brady–Livescu with the properties on read 8.002e-13 and
+  1.346e-14 at N = 193 against 8.082e-13 and 1.351e-14 with them off,
+  about 1% where the clamp cost two orders of
   magnitude, and the velocity sensor's second-order wall defect is gone. The
   inviscid slip wall fell only from 8.490e-11 to 5.448e-11; the remainder is
   the strain sensor's cusp rather than a closure row, and
@@ -514,7 +515,7 @@ below exposed behavior outside those passing checks.
   ([the measurements](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror),
   [completion record](HISTORY.md#the-detectors-wall-mirror-september-2026)).
 
-- [ ] **N6f — Put the fold's even path on the half-offset mirror.**
+- [x] **N6f — Put the fold's even path on the half-offset mirror.**
   The other half of [CALIBRATION.md](CALIBRATION.md#open-items) item 7: at a
   fold an even field still takes the clamp, which is wrong by a term the
   vanishing edge derivative makes O(h²), and a paired fold needs the
@@ -524,6 +525,36 @@ below exposed behavior outside those passing checks.
   re-recorded with an explanation, the fold studies of
   `test/convergence.jl` unchanged, since they run with the artificial
   properties off, and the MPI off-rank fold phase.
+  **Code:** [artificial.jl](../src/artificial.jl),
+  [validation.jl](../test/validation.jl).
+  **Delivered:** `delta4_sum!` takes the half-offset mirror at a fold for
+  every field, with the field's sign `parity[d]`. A self-paired fold mirrors
+  onto the line itself, signed; a paired fold goes through the even/odd
+  butterfly of `folds.jl`, whose per-half mirror signs are independent of σ
+  and so were already correct at σ = +1. The wall mirror of N6e was added to
+  the paired path, since the pairing map acts on the angular coordinates
+  alone and commutes with the reflection about the outer wall node. The
+  clamp remains only at a closed edge that is neither a wall nor a fold, and
+  the `:d8` detector is unchanged. At the first interior cell on exp(−4r²),
+  identically in all three geometries, the clamp reads 42.62 times the
+  analytic δ⁴ at N = 32 and 169.29 times it at N = 64, growing as h⁻², where
+  the mirror reads 1.0000; on ρ = 1 + r² the mirror reproduces the analytic
+  2.237789e-19 at N = 32 where the clamp reads 2.031364e-06, and cells 2, 3,
+  4 and 8 read 1.0000 under both. Three battery rows move in the fourth or
+  fifth digit, Sedov to peak 5.127 and e_min −0.00427, Noh ν = 2 to plateau
+  15.0086 and deficit 55%, Noh ν = 3 to plateau 62.5547, and no guard
+  failed or was re-set. The CFL
+  ladders keep every verdict: spherical Noh completes at 0.30 and 0.35 and
+  fails at 0.40 within one step of before, cylindrical Noh completes at 0.15
+  and 0.20, and the origin ceiling stays at 0.3. The gate ran serial 2479 of
+  2479, MPI 300 of 300 at 2 ranks and 146 of 146 at 8 ranks,
+  `test/convergence.jl` bit-identical, `bench/jetcheck.jl` unchanged and
+  `bench/audit.jl` +1536 B per call constant, on Julia 1.11.4. Two
+  observations are left open: the cost of the butterfly's exchange, now
+  carried by every scalar sensor at a paired fold, was not timed, and the
+  MPI suite has no phase that runs the detector across a paired fold (V3)
+  ([the measurements](CALIBRATION_APPENDIX.md#the-fold),
+  [completion record](HISTORY.md#the-folds-even-path-september-2026)).
 
 - [ ] **N6g — Give the sensor smoother and the `:d8` detector wall
   closures of their own.** Two wall defects the `:delta4` mirror does not
@@ -750,7 +781,7 @@ The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
   [levels.jl](../src/levels.jl),
   [regrid.jl](../src/regrid.jl), [timestep.jl](../src/timestep.jl).
 
-Boundary/interface sequence: R5, N6, N6a, N6b and N6e are complete, and
+Boundary/interface sequence: R5, N6, N6a, N6b, N6e and N6f are complete, and
 N6's matrix (`bench/boundaryorder.jl`, gated in `test/convergence.jl`) with
 N6a's trial battery (`bench/wallfilter.jl`) and N6b's qualification
 (`bench/wallclosure.jl`) is the instrument for N14 and N16. N6b found the
@@ -758,14 +789,16 @@ artificial diffusion's own fourth-order wall defect, which capped any
 closure with the properties on; N6e put the detector's closed edge on the
 node-centred mirror at a wall, which was a calibration item rather than a
 closure one, and an inviscid wall there is now limited by the strain
-sensor's cusp. N6c, the roundoff audit, closed with no change and found
+sensor's cusp. N6f completed that change at a coordinate fold, so the
+detector's clamp remains only at a closed edge that is neither a wall nor a
+fold. N6c, the roundoff audit, closed with no change and found
 the slip-wall mode that N6d then removed:
 the cascade closures are linearly unstable at an inviscid slip wall, the
 F2 filter row that N6a retired was what damped it, and the C6 default is
 now the neutral `:neutral3` set; the flux divergence at an interface end
 keeps the cascade rows, so the interface baselines did not move. The open
-wall items are N6f to N6k: the fold's even path, wall closures for the
-sensor smoother and the `:d8` detector, a slip-wall flux correction under
+wall items are N6g to N6k: wall closures for the sensor smoother and the
+`:d8` detector, a slip-wall flux correction under
 physical viscosity, the transverse mode of the aligned Noh case, a
 re-measurement of the fifth-order closure candidates under
 `beta_sensor = :dilatation`, and a stability certificate for the neutral
@@ -801,6 +834,9 @@ certification with V3 and default filter time-scaling with N1.
   Add a scheduled full shock-validation battery and explicit Makie extension
   checks; retain HDF5 tests in the package test target and add parallel-HDF5
   execution where the required stack exists.
+  Add an MPI phase that runs the `:delta4` detector across a paired fold: the
+  suite's off-rank fold phase covers derivatives and filters only, and since
+  N6f every scalar sensor carries the butterfly's exchange there.
   **Gate:** CI distinguishes skipped/unavailable coverage from passing coverage.
   KA-on-CPU equality does not substitute for hardware-GPU tests under S1.
 

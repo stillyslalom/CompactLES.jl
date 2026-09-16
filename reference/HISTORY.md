@@ -41,6 +41,7 @@ points at them and does not restate them.
 31. [Constant annihilation and the slip-wall mode (September 2026)](#constant-annihilation-and-the-slip-wall-mode-september-2026)
 32. [The neutral closure rows (September 2026)](#the-neutral-closure-rows-september-2026)
 33. [The detector's wall mirror (September 2026)](#the-detectors-wall-mirror-september-2026)
+34. [The fold's even path (September 2026)](#the-folds-even-path-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -461,9 +462,10 @@ first such field. On u_r = r at the cylindrical axis, the regular behaviour of
 a radial velocity, the clamp produced C_mu·ρ·h² of viscosity on the axis cell
 where every converging case fails. The odd path now uses the half-offset
 mirror, which annihilates that field exactly and agrees with the result `:d8`
-obtains through its fold plans. The even path is left on the clamp, since
-changing it would move guarded numbers for a second-order effect that has not
-been measured; it is item 8 of the calibration remainders.
+obtains through its fold plans. The even path was left on the clamp at the
+time, since changing it would move guarded numbers for a second-order effect
+that had not been measured; it took the same mirror later ([the fold's even
+path](#the-folds-even-path-september-2026)).
 
 No default changed, and the item is closed on the measurement.
 `mu_sensor = :velocity` has a mechanism behind it, no case in the battery that
@@ -1835,8 +1837,10 @@ wall: +1 for every scalar sensed and for the tangential velocity components,
 reflecting faces: `true` for `SlipWallBC` and `NoSlipWallBC` and `false` by
 default, so Dirichlet, extrapolation and NSCBC faces and interface ends keep
 the clamp, and a `SwitchableBC` answers for its active condition.
-Folds are untouched, an odd field there keeping the half-offset mirror and an
-even field the clamp, and `ring_sum!`, the `:d8` detector, is untouched.
+Folds were untouched by this change, an odd field there keeping the
+half-offset mirror and an even field the clamp until [the fold's even
+path](#the-folds-even-path-september-2026), and `ring_sum!`, the `:d8`
+detector, is untouched.
 
 The change removes the fourth-order wall defect that N6b attributed to the
 clamp through β\*. A viscous no-slip wall under C6 Brady–Livescu with the
@@ -1884,4 +1888,71 @@ header and guards re-recorded as above, and `test/mpi_tests.jl` at 2 ranks
 comparison; no hardware GPU run was made. The measurements are under [the
 detector's wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror);
 the applied form and the remaining wall items are in
+[CALIBRATION.md](CALIBRATION.md#open-items).
+
+## The fold's even path (September 2026)
+
+`delta4_sum!` now takes the half-offset mirror at a coordinate fold for every
+field, with the field's sign `parity[d]`, where before only an odd field did
+and an even field clamped the index. At a self-paired fold the mirror is the
+line itself, signed. At a paired fold every field goes through the even/odd
+butterfly of `folds.jl`, which needed no change, since the per-half mirror
+signs derive from e(−r, θ) = ½[σ f(Mx) + σ² f(x)] and are independent of σ.
+The wall mirror of the preceding section was added to the paired path, because
+putting every field on the butterfly would otherwise have taken that mirror
+away from every scalar at the outer wall of a paired radial line; the pairing
+map acts on the angular coordinates alone and commutes with the reflection
+about the wall node. The clamp remains only at a closed edge that is neither a
+wall nor a fold, `_delta4_point!` carries one more isbits argument for the
+sign, and the `:d8` detector is unchanged, its fold plans already mirroring.
+
+The two extensions differ on one tap only, the outermost of the first interior
+cell's stencil, so the change reaches one cell per folded end. A scratch
+operator probe measures it. Against the analytic δ⁴ of the smooth even
+extension through r < 0, `detect_sum!` under `:delta4` on exp(−4r²) reads
+42.62 times the exact value at that cell under the clamp for N = 32 and
+169.29 times it for N = 64, growing as h⁻², where the mirror reads 1.0000 to
+every printed digit; on ρ = 1 + r² the mirror reproduces the exact
+2.237789e-19 and 5.506717e-20 while the clamp reads 2.031364e-06 and
+1.230085e-07. Cells 2, 3, 4 and 8 read 1.0000
+under both extensions, and the axisymmetric cylinder, the resolved-θ cylinder
+and the spherical origin with poles give identical numbers.
+
+Three battery rows move, in the fourth or fifth digit, and no guard failed or
+was re-set. Sedov reads peak 5.127 and e_min −0.00427 against 5.128 and
+−0.00415 at an unchanged shock radius, Noh ν = 2 plateau 15.0086 and wall
+deficit 55% against 15.0088 and 54%, and Noh ν = 3 plateau 62.5547 against
+62.5549; the ν = 2 deficit is the one printed number that rounds differently.
+Every other case is unchanged to its printed digits, and no stored reference
+has a fold, so none was regenerated. The CFL ladders of `test/cases.jl` at
+N = 256 keep every verdict: spherical Noh completed 544 steps at 0.30 before
+and 543 after, 465 at 0.35 under both, and failed on negative density at 0.40
+at step 105 before and step 106 after; cylindrical Noh completed 2207 and 1655
+steps at 0.15 and 0.20 before, 2204 and 1652 after. The spherical origin
+ceiling stays at 0.3.
+
+A scratch MPI check on the cylindrical axis with θ split over two ranks gives
+np = 1 and np = 2 agreeing to 1.2e-15 relative on Σμ\*, 6e-16 on Σβ\* and
+5e-16 on Σκ\*, with no deadlock. Between the clamp and the mirror on that case
+Σκ\* falls from 2.792e-3 to 4.726e-4, so the internal-energy sensor at the
+axis carried most of the clamp's spurious contribution. Two items are left
+open. The MPI suite has no phase that runs the detector across a paired fold;
+its off-rank fold phase covers derivatives and filters, which are identical
+before and after. That gap predates this change and is now more exposed, since
+every scalar sensor carries the butterfly's exchange at a paired fold. The
+cost of that exchange, per sensor and per folded dimension, has not been
+timed.
+
+Validation: `test/runtests.jl` 2479 of 2479, including the paired-fold
+detector guard of `test/seam_tests.jl`, which holds the axis sensor to at most
+twice the interior floor and was not re-set, `test/convergence.jl`
+bit-identical since every study runs with the artificial properties off,
+`test/validation.jl` with its header re-recorded as above, and
+`test/mpi_tests.jl` at 2 ranks (300 of 300) and at 8 ranks with the CI phases
+(146 of 146), all on Julia 1.11.4. `bench/jetcheck.jl` is unchanged and
+`bench/audit.jl` reads +1536 B per call at 48³, constant rather than per
+point, with every inference row unchanged. Device parity rests on the serial
+suite's KernelAbstractions CPU comparison; no hardware GPU run was made. The
+measurements are under [the fold](CALIBRATION_APPENDIX.md#the-fold); the
+applied form and the remaining wall items are in
 [CALIBRATION.md](CALIBRATION.md#open-items).

@@ -1214,10 +1214,12 @@ uses the mirror wherever the parity is −1 at a folded edge, and the two detect
 then agree there, `:d8` reaching its own half-offset closure through the fold
 plans and giving 7e-16 on the same field.
 
-The even path at a fold is left on the clamp, so no recorded fold number moves.
-Its error there is two orders smaller in h, and changing it would move every
-guarded number in `test/validation.jl`. At a wall the clamp has since been
-replaced by the node-centred mirror on both parities
+The even path at a fold took the same mirror in September 2026, so a folded
+end now reads one extension for every field ([the fold](#the-fold)). The
+measurements above were taken while the even path was still clamped; at a
+fold the clamp misplaces the same tap by a term the vanishing edge derivative
+makes O(h²), two orders smaller in h than the odd case. At a wall the clamp
+has since been replaced by the node-centred mirror on both parities as well
 ([the detector's wall mirror](#the-detectors-wall-mirror)).
 
 ### Recommendations
@@ -5487,9 +5489,10 @@ keyword. The reflecting faces come from a boundary-condition hook,
 `sensor_mirror(bc)`, `true` for `SlipWallBC` and `NoSlipWallBC` and `false`
 by default, so Dirichlet, extrapolation and NSCBC faces and interface ends
 keep the clamp, and a `SwitchableBC` answers for its active condition. The
-scope is walls. A fold keeps both of its extensions (the half-offset mirror
-for an odd field, the clamp for an even one, and the clamp in the
-paired-fold butterfly), and `ring_sum!`, the `:d8` detector, is unchanged.
+scope of this change is walls. A fold kept both of its extensions, the
+half-offset mirror for an odd field and the clamp for an even one, until
+[the fold](#the-fold) put every field on the mirror; `ring_sum!`, the `:d8`
+detector, is unchanged.
 
 ### Smooth walls
 
@@ -5714,20 +5717,116 @@ Julia 1.11.4. Device parity rests on
 the serial suite's KernelAbstractions CPU comparison; no hardware GPU run
 was made.
 
+### The fold
+
+September 2026, the fold half of the same item. `delta4_sum!` now takes the
+half-offset mirror at a coordinate fold for every field, with the field's sign
+`parity[d]`, where before only an odd field did and an even field clamped the
+index. At a self-paired fold the mirror is the line itself, signed. At a
+paired fold every field goes through the even/odd butterfly of `folds.jl`,
+which needed no change: the per-half mirror signs derive from
+e(−r, θ) = ½[σ f(Mx) + σ² f(x)] and are independent of σ, so they were already
+correct at σ = +1. The wall mirror above was added to the paired path, since
+putting every field on the butterfly would otherwise have taken that mirror
+away from every scalar at the outer wall of a paired radial line; the pairing
+map acts on the angular coordinates alone and commutes with the reflection
+about the wall node. The clamp remains at closed edges that are neither a wall
+nor a fold. On a half-offset grid the mirror and the clamp differ on one tap
+only, the outermost of the first interior cell's stencil, so the change
+reaches one cell per folded end. `_delta4_point!` carries one more isbits
+argument for the sign, 23 in total. The `:d8` detector is unchanged, its fold
+plans already mirroring.
+
+A scratch operator probe, not kept in the repository, applies `detect_sum!`
+under `:delta4` at weight power 2 to ρ = 1 + r² and to exp(−4r²) and compares
+the first interior cell against the analytic δ⁴ of the smooth even extension
+through r < 0. The three geometries give identical numbers: the axisymmetric
+cylinder, whose fold is self-paired, the resolved-θ cylinder and the spherical
+origin with poles, whose folds are paired.
+
+```
+N    field        cell 1 clamp   cell 1 mirror   exact
+32   1 + r²       2.031364e-06   2.237789e-19    2.237789e-19
+32   exp(−4r²)    8.278876e-06   1.942393e-07    1.942393e-07
+64   1 + r²       1.230085e-07   5.506717e-20    5.506717e-20
+64   exp(−4r²)    4.943444e-07   2.920133e-09    2.920133e-09
+```
+
+On exp(−4r²) the clamp reads 42.62 times the exact value at cell 1 for
+N = 32 and 169.29 times it for N = 64, growing as h⁻² as an O(h²) relative
+error predicts; the mirror reads a ratio of 1.0000 to every printed digit.
+Cells 2, 3, 4 and 8 read 1.0000 under both extensions.
+
+The CFL ladders of `test/cases.jl` at N = 256 keep every verdict. Spherical
+Noh ν = 3 completed 544 steps at CFL 0.30 before the change and 543 after,
+465 steps at 0.35 under both, and failed on negative density at 0.40 at step
+105, t = 0.08634, before and step 106, t = 0.08647, after. Cylindrical Noh
+ν = 2 completed 2207 steps at 0.15 and 1655 at 0.20 before, 2204 and 1652
+after. The origin ceiling stays at 0.3.
+
+The battery moves in its three fold rows and nowhere else, in the fourth or
+fifth digit, and the header of `test/validation.jl` was re-recorded:
+
+```
+row               edge     reading
+Sedov             clamp    R_s 0.8085 (+1.06%), peak 5.128, e_min −0.00415
+                  mirror   R_s 0.8085 (+1.06%), peak 5.127, e_min −0.00427
+Noh ν = 2         clamp    plateau 15.0088, deficit 54%, shock 0.2091,
+                           L1 pre-shock 3.61e-04
+                  mirror   plateau 15.0086, deficit 55%, shock 0.2091,
+                           L1 pre-shock 3.62e-04
+Noh ν = 3         clamp    plateau 62.5549, deficit 29%, shock 0.2089,
+                           L1 pre-shock 6.62e-04
+                  mirror   plateau 62.5547, deficit 29%, shock 0.2089,
+                           L1 pre-shock 6.60e-04
+```
+
+No guard failed and none was re-set; the fold rows are held by the wide
+analytic guards. The ν = 2 deficit is the one printed number that rounds
+differently. Lax, Shu–Osher, both Woodward–Colella rows, the planar, aligned
+and plane Noh cases, the warm Brady–Livescu wall and the shocked SF6
+interface are unchanged, and no stored reference has a fold, so none was
+regenerated.
+
+A scratch MPI check on the cylindrical axis with θ split over two ranks,
+`compute_rhs!` with the artificial properties on, gives np = 1 and np = 2
+agreeing to 1.2e-15 relative on Σμ\*, 6e-16 on Σβ\* and 5e-16 on Σκ\*, with
+no deadlock. Between the clamp and the mirror on that case Σμ\* and Σβ\* move
+in the eleventh digit while Σκ\* falls from 2.792e-3 to 4.726e-4, a factor
+5.9: the internal-energy sensor at the axis carried most of the clamp's
+spurious contribution.
+
+The MPI suite has no phase that runs the detector across a paired fold. Its
+"off-rank folds" phase exercises derivatives and filters, reading 2.160e-05
+for ∂/∂r on the θ-split cylindrical axis, 8.689e-05 at the spherical origin,
+0 at the poles and 6.662e-11 and 4.597e-08 for the volume-weighted filter,
+all identical before and after. That gap predates this change and is now more
+exposed, since every scalar sensor carries the butterfly's exchange at a
+paired fold. The cost of that exchange, per sensor and per folded dimension
+on a resolved-θ or three-dimensional spherical run, has not been timed.
+
+`test/convergence.jl` is bit-identical, every study there running with the
+artificial properties off, and `test/runtests.jl` reads 2479 of 2479,
+including the paired-fold detector guard of `test/seam_tests.jl`, which holds
+the axis sensor to at most twice the interior floor and was not re-set.
+`test/mpi_tests.jl` reads 300 of 300 at 2 ranks and 146 of 146 at 8 ranks
+with the CI phase list. `bench/jetcheck.jl` is unchanged, `compute_rhs!` 3
+and `step!` 4 with every other entry point 0, and `bench/audit.jl` reads
++1536 B per call at 48³, constant rather than per point, in
+`compute_artificial!` (329984 to 331520), `compute_rhs!` (1798512 to
+1800048) and `step!` (9279472 to 9287152), with every inference row
+unchanged. All on Julia 1.11.4; device parity rests on the serial suite's
+KernelAbstractions CPU comparison and no hardware GPU run was made.
+
 ### What remains
 
-1. The fold's even path is still on the clamp ([the fourth-difference clamp
-   at a fold](#the-fourth-difference-clamp-at-a-fold)). At a fold the clamp
-   misplaces one δ⁴ tap by a term the vanishing edge derivative makes
-   O(h²) for an even field, and changing it would move every guarded number
-   in `test/validation.jl`.
-2. The `:gaussian` smoother's closure rows are half a cell out at a
+1. The `:gaussian` smoother's closure rows are half a cell out at a
    node-centred wall, a relative 4.72e-4 at node 1 for N = 193 falling as
    h², where `:compact` reads 8.8e-10.
-3. `ring_sum!` reads 2.34e-8 at N = 97 on a field exactly even about the
+2. `ring_sum!` reads 2.34e-8 at N = 97 on a field exactly even about the
    wall, against a periodic 6.58e-16, over at least six nodes, so the `:d8`
    detector has a wall artifact the `:delta4` mirror does not address.
-4. A slip wall with a physical shear viscosity and the artificial
+3. A slip wall with a physical shear viscosity and the artificial
    properties off does not reproduce its mirror at the closure's order:
    μ = 5e-3 reads 2.167e-7 / 1.103e-7 / 9.489e-8 (0.97 / 0.22) and
    μ = 5e-4 reads 9.183e-9 / 8.248e-10 / 2.395e-10 (3.48 / 1.78). There is
