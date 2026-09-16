@@ -322,7 +322,10 @@ converging shocks rests on the spherical case; a user who does not know which
 geometry is ahead is better off under `:d8`. The selectivity is available to
 κ\* and D\* and largely unavailable to μ\* and β\*, whose input |S| has cusps
 at every resolution
-([detector](CALIBRATION_APPENDIX.md#the-ringing-detector)).
+([detector](CALIBRATION_APPENDIX.md#the-ringing-detector)). Those cusps also
+set the error of an inviscid wall with the artificial properties on, which
+recovers its closure order under `beta_sensor = :dilatation`
+([the wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror)).
 
 ### The sensor fields and the reduction
 
@@ -530,15 +533,18 @@ CFL number the default closure completes the case at (1.75 on a smooth
 wall, 1.5 on the steepening pulse, 1.2 on Woodward–Colella and the
 warm Noh wall), Float64 or Float32, the block extents the filter already
 requires, serial or decomposed. Its wall solution is sixth order with
-the artificial properties off and fourth order with them on, at an
-error fifteen times below the cascade's, because the artificial
-diffusion carries a fourth-order closure defect of its own at a wall
-(the detector's clamped edge, through β\*) that no derivative closure
-raises; at a shocked wall it reproduces the default's Woodward–Colella
+the artificial properties off. With them on, a viscous or shear wall
+keeps that order, since the detector reads its closed edge from the
+node-centred mirror of the interior (8.0e-13 at N = 193 against 8.1e-13
+with the properties off), while an inviscid slip wall reads 5.4e-11
+under `beta_sensor = :strain`, held there by that sensor's cusp rather
+than by a closure, and 6.8e-13 under `:dilatation`
+([the wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror));
+at a shocked wall it reproduces the default's Woodward–Colella
 profile to 0.1% in `L1` at every CFL number and holds the warm Noh wall
 within 0.2% where the default reads 1%. In Float32 a wall evolution
 floors near 3e-5 under either closure, so the rows' 1e-3 one-derivative
-floor does not reach the solution. `:cascade3` remains the default for
+floor does not reach the solution. `:neutral3` remains the default for
 the singular start it completes and the rows do not. C8 `:brady_livescu`
 is not supported at a wall: it fails a smooth wall from `cfl = 1.25`
 with its mirror completing, the warm Noh wall from 0.9, the Cartesian
@@ -670,12 +676,16 @@ In approximate priority order; each links to the measurements it rests on.
 5. **Explain the spherical fold's intolerance of sharp data**
    ([geometry limits](CALIBRATION_APPENDIX.md#geometry-limits)).
 6. **Make `filter_state!` conservative on non-Cartesian metrics.**
-7. **Put `delta4_sum!`'s closed-edge path on a mirror**, half-offset at
-   a fold and node-centred at a wall. At a wall the clamp is now
-   measured: through β\* it caps a Brady–Livescu wall at fourth order,
-   at C_beta × 1e-10 at N = 193, fifteen times below the cascade's own
-   defect ([the clamp](CALIBRATION_APPENDIX.md#the-fourth-difference-clamp-at-a-fold),
-   [which channel carries it](CALIBRATION_APPENDIX.md#which-channel-carries-it)).
+7. **Put `delta4_sum!`'s even path at a fold on the half-offset mirror.**
+   The wall half is done: a reflecting wall reads the node-centred
+   mirror on both parities, which returns a viscous or shear
+   Brady–Livescu wall to its properties-off error within about 1% and
+   removes the velocity sensor's second-order wall defect. A fold keeps
+   the clamp for an even field, where the vanishing edge derivative makes
+   its error O(h²), and changing it would move every guarded number in
+   `test/validation.jl`
+   ([the clamp](CALIBRATION_APPENDIX.md#the-fourth-difference-clamp-at-a-fold),
+   [the wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror)).
 8. **Decide `species_flux`** on the vortex-ring/SF6 case
    ([open](CALIBRATION_APPENDIX.md#open)).
 9. **A neutral closure set for C8**, whose cascade rows carry the
@@ -683,3 +693,20 @@ In approximate priority order; each links to the measurements it rests on.
    derived for the C6 interior and need a three-row family and their own
    line-length sweep for C8
    ([the neutral rows](CALIBRATION_APPENDIX.md#the-neutral-closure-rows)).
+10. **Give the `:gaussian` smoother node-centred wall rows.** Its closure
+    rows fold the overhanging weights onto the half-offset mirror, half a
+    cell out at a wall, which leaves a relative 4.72e-4 at the first node
+    for N = 193 falling as h² where `:compact` reads 8.8e-10. It does not
+    carry the residual measured at an inviscid wall
+    ([the wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror)).
+11. **Mirror `ring_sum!`'s wall rows.** On a field exactly even about the
+    wall the `:d8` detector returns 2.34e-8 at N = 97 against a periodic
+    6.58e-16, over at least six nodes, so `detector = :d8` keeps a wall
+    defect that the `:delta4` mirror removes
+    ([the wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror)).
+12. **Add a `correct_flux!` method for `SlipWallBC`.** With the
+    artificial properties off and a physical shear viscosity, a slip wall
+    does not reproduce its mirror at the closure's order: μ = 5e-3 reads
+    9.489e-8 at N = 193 with orders 0.97 / 0.22, and μ = 5e-4 reads
+    2.395e-10 with 3.48 / 1.78
+    ([the wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror)).

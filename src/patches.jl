@@ -192,7 +192,9 @@ unseen boundary-condition combination from 1.85 s to 0.58 s. The cost is one
 dynamic dispatch per face in each of `apply_bcs!`, `correct_flux!`, and
 `correct_rhs!`, up to six calls to each hook per stage,
 each in front of a whole-plane sweep: `apply_bcs!` measured 66.4 µs to
-71.8 µs at 64³, against an 87 ms step.
+71.8 µs at 64³, against an 87 ms step. The artificial-property detector pays a
+fourth, `sensor_mirror` through `_face_mirror` (artificial.jl), once per closed
+face per sensor field in front of a whole-array sweep.
 
 The plan tuples are the case where this does not pay, and the comment above
 `_plan_at` in rhs.jl carries the measurement. `folds` and `ring_plans` keep

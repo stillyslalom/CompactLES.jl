@@ -219,8 +219,9 @@ add a case there, not in either consumer.
 them before a change and compare after, and read the delta, not the absolute
 count. `jetcheck.jl` reports zero dispatch sites at every probed entry point
 but the boundary ones, so *any* report elsewhere is a regression. The
-boundary baseline is one site in `apply_bcs!` (`enforce!`) and two in
-`compute_rhs!` (`correct_flux!`, `correct_rhs!`), hence three in `step!`:
+boundary baseline is one site in `apply_bcs!` (`enforce!`) and three in
+`compute_rhs!` (`correct_flux!`, `correct_rhs!`, and `sensor_mirror` through
+the detector's `_face_mirror`), hence four in `step!`:
 face conditions are stored abstractly on the `Patch` so that a combination of
 them does not recompile the right-hand-side tree, and the docstring there has
 the measurement. The counts overlap between entry points

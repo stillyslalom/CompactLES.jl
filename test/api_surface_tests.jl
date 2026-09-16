@@ -38,7 +38,7 @@ makie_available mass_fraction max_rate mix_width mixture_density molecular_mixin
 mpi_main nasa9_constant_cp next_time nlevels npatches nspecies pade_d1_4
 plane_profile profile_coordinate profile_spacing profileplot profileplot! pyranda_filter
 read_nasa9 recover_primitives! refined_region refresh_primitives! revolve_profile
-rewind! run! save_checkpoint save_checkpoint_hdf5 save_hdf5 save_vtk setup
+rewind! run! save_checkpoint save_checkpoint_hdf5 save_hdf5 save_vtk sensor_mirror setup
 sine_cluster species_enthalpy species_names species_pdf state_admissibility
 state_guard state_report state_valid step! switch! switched
 sync_levels! sync_patches! tanh_blend tke_profile total_energy
@@ -58,7 +58,8 @@ const EXTENSION_API = (
     :recover_primitives!, :species_names, :species_enthalpy, :eos_phi,
     :eos_dphi_dY, :artificial_conductivity_scale, :wall_internal_energy,
     :state_admissibility,
-    :conserved_parity, :enforce!, :correct_flux!, :correct_rhs!, :validate_bc, :isperiodic,
+    :conserved_parity, :enforce!, :correct_flux!, :correct_rhs!, :validate_bc, :sensor_mirror,
+    :isperiodic,
     :fired!, :next_time, :rewind!,
 )
 

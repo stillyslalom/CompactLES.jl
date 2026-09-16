@@ -65,6 +65,8 @@ condition needs:
   before exchange and compact divergence;
 - `correct_rhs!(bc, solver, Q, dQ, dim, side)` changes the boundary RHS;
 - `validate_bc(bc, metric, eos, dim, side)` rejects incompatible geometry or EOS.
+- `sensor_mirror(bc)` declares a reflecting wall, so that the artificial-property
+  detector reads past the face from the node-centred mirror instead of clamping.
 
 Periodic and fold behavior is collective setup state. If a boundary method
 enters a collective derivative or reduction, every rank must reach it in the
@@ -77,6 +79,7 @@ enforce!
 correct_flux!
 correct_rhs!
 validate_bc
+sensor_mirror
 isperiodic
 ```
 

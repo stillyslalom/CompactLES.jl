@@ -370,11 +370,13 @@ below exposed behavior outside those passing checks.
   Woodward–Colella and the warm Noh wall, the warm-start ladder, the
   Float64 and Float32 floors, the minimum extents by construction on one
   and two ranks, and the Cartesian Noh plane. With the properties on the
-  rows' wall is fourth order at an error fifteen times below the
-  cascade's, because the artificial diffusion carries a fourth-order
+  rows' wall was fourth order at an error fifteen times below the
+  cascade's, because the artificial diffusion carried a fourth-order
   closure defect of its own at a wall (the detector's clamped edge,
-  through β\*; the mirror fix is the calibration file's open item); the
-  rows track the cascade to `cfl = 1.75` on a smooth wall and 1.2 on the
+  through β\*); that edge now reads the node-centred mirror, which returns
+  a viscous or shear wall to its properties-off error and leaves an
+  inviscid wall on the strain sensor's cusp; the rows track the cascade
+  to `cfl = 1.75` on a smooth wall and 1.2 on the
   shocked ones, reproduce Woodward–Colella to 0.1%, hold a resolved warm
   Noh wall within 0.2%, and take no singular start; in Float32 an
   evolution floors at 3e-5 under either closure; the extents are the
@@ -477,6 +479,121 @@ below exposed behavior outside those passing checks.
   been proved for the new rows
   ([the measurements](CALIBRATION_APPENDIX.md#the-neutral-closure-rows),
   [completion record](HISTORY.md#the-neutral-closure-rows-september-2026)).
+
+- [x] **N6e — Put the detector's closed edge on the node-centred mirror
+  at a wall.** N6b traced the fourth-order wall defect of a run with the
+  artificial properties on to `delta4_sum!`'s clamped edge, through β\*.
+  **Deliver:** an extension at reflecting faces that returns a wall with the
+  properties on to its properties-off error.
+  **Depends on:** N6b for the smooth-wall matrix and the channel attribution.
+  **Gate:** the smooth-wall matrix with the properties on and off, the
+  battery re-recorded with an explanation, the dispatch and allocation
+  audits, and the serial and MPI suites.
+  **Code:** [artificial.jl](../src/artificial.jl),
+  [boundary.jl](../src/boundary.jl), [wallclosure.jl](../bench/wallclosure.jl).
+  **Delivered:** `delta4_sum!` reads past a reflecting wall from the
+  node-centred mirror of the interior with the field's sign, +1 for every
+  scalar sensed and for the tangential velocity components, −1 for the
+  wall-normal one, which `velocity_mu!` selects through `wall_parity`. The
+  exported hook `sensor_mirror(bc)` names the reflecting faces, true for
+  `SlipWallBC` and `NoSlipWallBC`, so Dirichlet, extrapolation and NSCBC
+  faces and interface ends keep the clamp; folds are untouched. A viscous
+  no-slip wall and an adiabatic shear wall under C6 Brady–Livescu with the
+  properties on read 8.002e-13 and 1.346e-14 at N = 193 against 8.082e-13
+  and 1.351e-14 with them off, about 1% where the clamp cost two orders of
+  magnitude, and the velocity sensor's second-order wall defect is gone. The
+  inviscid slip wall fell only from 8.490e-11 to 5.448e-11; the remainder is
+  the strain sensor's cusp rather than a closure row, and
+  `beta_sensor = :dilatation` reads 6.777e-13 there. The cost is in the
+  battery: the cold planar Noh wall deficit moved from 53% to 54% and the
+  aligned Noh case's transverse round-off from 1.4e-8 to 2.8e-6, its guard
+  from 1e-7 to 5e-6 (N6i). The audits read one new dispatch site and 1536 B
+  per call, constant rather than per point. The gate ran serial 2479 of
+  2479, MPI 300 of 300 at 2 ranks and 146 of 146 at 8 ranks, and
+  `test/convergence.jl` bit-identical, on Julia 1.11.4
+  ([the measurements](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror),
+  [completion record](HISTORY.md#the-detectors-wall-mirror-september-2026)).
+
+- [ ] **N6f — Put the fold's even path on the half-offset mirror.**
+  The other half of [CALIBRATION.md](CALIBRATION.md#open-items) item 7: at a
+  fold an even field still takes the clamp, which is wrong by a term the
+  vanishing edge derivative makes O(h²), and a paired fold needs the
+  butterfly with even parity.
+  **Depends on:** N6e for the wall half and its mirror construction.
+  **Gate:** the cylindrical and spherical Noh rows and the Sedov row
+  re-recorded with an explanation, the fold studies of
+  `test/convergence.jl` unchanged, since they run with the artificial
+  properties off, and the MPI off-rank fold phase.
+
+- [ ] **N6g — Give the sensor smoother and the `:d8` detector wall
+  closures of their own.** Two wall defects the `:delta4` mirror does not
+  reach. `gaussian_filter`'s closure rows fold their overhanging weights onto
+  the half-offset mirror, half a cell out at a node-centred wall: relative
+  4.72e-4 at the first node for N = 193, falling as h², where the
+  `:compact` smoother reads 8.8e-10. `ring_sum!` returns 2.34e-8 at N = 97 on
+  a field exactly even about the wall against a periodic 6.58e-16, over at
+  least six nodes, so `detector = :d8` keeps a wall defect. Neither carries
+  the inviscid wall residual.
+  **Depends on:** N6e.
+  **Gate:** the appendix's operator probe, the detector and then the
+  smoother on an even field against the periodic mirror, at the closure's
+  order for both; the smooth-wall table and the battery re-recorded.
+
+- [ ] **N6h — Add a `correct_flux!` method for `SlipWallBC` under
+  physical viscosity.** With the artificial properties off and a physical
+  shear viscosity a slip wall does not reproduce its mirror at the closure's
+  order: μ = 5e-3 reads 2.167e-7 / 1.103e-7 / 9.489e-8 at
+  N = 49 / 97 / 193, orders 0.97 / 0.22, and μ = 5e-4 reads 9.183e-9 /
+  8.248e-10 / 2.395e-10, orders 3.48 / 1.78. R5 delivered the same contract
+  for the no-slip wall; `SlipWallBC` has no `correct_flux!` method.
+  **Depends on:** R5 for the wall-flux hook.
+  **Gate:** the viscous slip wall at the closure's order in the smooth
+  matrix, both faces and corners, and ranks that do not own a wall.
+
+- [ ] **N6i — Explain the transverse mode of the aligned Noh case.**
+  The aligned N = 100, AR = 4 case starts with no transverse variation and
+  grows one from round-off: 4.4e-16 after 20 steps, 3.1e-14 after 200,
+  1.9e-11 after 2000 and 2.84e-6 at the end of the 5059-step run, all of the
+  growth in the last third. The clamp's spurious wall β\* was damping it,
+  and the planar Noh wall deficit moved from 53% to 54% for the same reason.
+  **Deliver:** what the mode is, a linear wall mode of the `:neutral3` rows
+  in two dimensions, a nonlinear shock-wall interaction or a filter effect;
+  whether it saturates; and the guard that follows.
+  **Depends on:** N6d's instrument, the `bench/constantfloor.jl` Jacobian,
+  extended to the two-dimensional shocked state if needed.
+  **Gate:** a measured growth rate with its mechanism and a guard set from it.
+
+- [ ] **N6j — Re-measure the fifth-order closure candidates under
+  `beta_sensor = :dilatation`.** The search recorded in
+  [the appendix](CALIBRATION_APPENDIX.md#fifth-order-c6-closure-search) found
+  no fifth-order six- or seven-point family that is a production candidate:
+  Brady–Livescu, the searched rows, the joint derivative/filter treatment and
+  the differential-evolution rows fail cold planar Noh at steps 36, 316, 34
+  and 32, where `:neutral3` completes it, and `de_scheme()` also grows at a
+  Dirichlet end, filtered radius 1.0746. The instruments are retained:
+  `bench/closuresearch.jl`, `closurequalify.jl`, `closureenergy.jl` and
+  `closuredamping.jl`. Start only if a resolved-start, properties-off or
+  `:dilatation` workload needs a fifth-order wall.
+  **Gate:** the smooth wall matrix under `:dilatation`, where the inviscid
+  wall is no longer capped, before any derivative row is searched again.
+
+- [ ] **N6k — Certify the neutral rows and extend them to C8 and C10.**
+  The neutrality of `:neutral3` is measured over line lengths 12 to 1200
+  and not proved, and a neutral spectrum of a non-normal operator is
+  necessary, not sufficient. Deliver a pseudospectral or eigenvector
+  condition-number check of the injected acoustic operator against N on the
+  exact 2N linear model (the fast N×N form has a 1e-5 noise floor), which is
+  also the instrument most likely to explain why the neighbouring member
+  (1/4, 3/5, 1/5) grows at N = 371 + 44k while the adopted (0, 3/5, 3/10)
+  stays neutral; the corner-block norm of Sharan, Brady and Livescu (SIAM
+  J. Numer. Anal. 60, 2022) is the certificate that would hold for every N,
+  which the TᵀWT ansatz did not find. The C8 and C10 cascade rows still
+  carry the slip-wall mode, at 1.4 and 2.6 per unit time, and need
+  three-row families and their own line-length sweeps
+  ([CALIBRATION.md](CALIBRATION.md#open-items) item 9).
+  **Depends on:** N6d's instrument and linear model.
+  **Gate:** a certificate or a measured pseudospectral abscissa for the
+  adopted rows, and C8 and C10 sets passing N6d's gate.
 
 - [ ] **N7 — Complete NSCBC inflow transverse coupling.**
   Add the Yoo–Im transverse terms that exist for outflow but not inflow.
@@ -633,19 +750,26 @@ The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
   [levels.jl](../src/levels.jl),
   [regrid.jl](../src/regrid.jl), [timestep.jl](../src/timestep.jl).
 
-Boundary/interface sequence: R5, N6, N6a and N6b are complete, and N6's
-matrix (`bench/boundaryorder.jl`, gated in `test/convergence.jl`) with
+Boundary/interface sequence: R5, N6, N6a, N6b and N6e are complete, and
+N6's matrix (`bench/boundaryorder.jl`, gated in `test/convergence.jl`) with
 N6a's trial battery (`bench/wallfilter.jl`) and N6b's qualification
 (`bench/wallclosure.jl`) is the instrument for N14 and N16. N6b found the
-artificial diffusion's own fourth-order wall defect, which caps any
-closure with the properties on; its removal (the detector's mirror at a
-wall) is a calibration item, not a closure one. N6c, the roundoff audit,
-closed with no change and found the slip-wall mode that N6d then removed:
+artificial diffusion's own fourth-order wall defect, which capped any
+closure with the properties on; N6e put the detector's closed edge on the
+node-centred mirror at a wall, which was a calibration item rather than a
+closure one, and an inviscid wall there is now limited by the strain
+sensor's cusp. N6c, the roundoff audit, closed with no change and found
+the slip-wall mode that N6d then removed:
 the cascade closures are linearly unstable at an inviscid slip wall, the
 F2 filter row that N6a retired was what damped it, and the C6 default is
 now the neutral `:neutral3` set; the flux divergence at an interface end
-keeps the cascade rows, so the interface baselines did not move. Use
-N10/N11 to qualify interface
+keeps the cascade rows, so the interface baselines did not move. The open
+wall items are N6f to N6k: the fold's even path, wall closures for the
+sensor smoother and the `:d8` detector, a slip-wall flux correction under
+physical viscosity, the transverse mode of the aligned Noh case, a
+re-measurement of the fifth-order closure candidates under
+`beta_sensor = :dilatation`, and a stability certificate for the neutral
+rows with their C8 and C10 counterparts. Use N10/N11 to qualify interface
 candidates before promotion; invoke N15 only when the smaller closure change
 misses a target. N16 transfer measurements may begin with N6, while final accuracy
 qualification follows the selected interface treatment. Coordinate temporal

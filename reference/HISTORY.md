@@ -40,6 +40,7 @@ points at them and does not restate them.
 30. [The Brady–Livescu rows as a wall configuration (September 2026)](#the-bradylivescu-rows-as-a-wall-configuration-september-2026)
 31. [Constant annihilation and the slip-wall mode (September 2026)](#constant-annihilation-and-the-slip-wall-mode-september-2026)
 32. [The neutral closure rows (September 2026)](#the-neutral-closure-rows-september-2026)
+33. [The detector's wall mirror (September 2026)](#the-detectors-wall-mirror-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -1821,3 +1822,66 @@ on Julia 1.12.7. Device parity rests on the serial suite's KernelAbstractions
 CPU comparison; no hardware GPU run was made. `bench/constantfloor.jl
 parts=jacobian` reproduces every recorded unstable value to eight digits and
 reads the new default at 1.0000000000 to 1.0000000011 across its ladder.
+
+## The detector's wall mirror (September 2026)
+
+`delta4_sum!`, the `:delta4` detector behind the artificial properties, read
+its taps past a closed edge by clamping the index. At a reflecting wall it
+now reads them from the node-centred mirror of the interior, ghost `2-q` at
+the low wall and `2n-q` at the high one, with the field's sign across the
+wall: +1 for every scalar sensed and for the tangential velocity components,
+−1 for the wall-normal component, which `velocity_mu!` selects through a
+`wall_parity` keyword. A new exported hook, `sensor_mirror(bc)`, names the
+reflecting faces: `true` for `SlipWallBC` and `NoSlipWallBC` and `false` by
+default, so Dirichlet, extrapolation and NSCBC faces and interface ends keep
+the clamp, and a `SwitchableBC` answers for its active condition.
+Folds are untouched, an odd field there keeping the half-offset mirror and an
+even field the clamp, and `ring_sum!`, the `:d8` detector, is untouched.
+
+The change removes the fourth-order wall defect that N6b attributed to the
+clamp through β\*. A viscous no-slip wall under C6 Brady–Livescu with the
+artificial properties on reads 8.002e-13 at N = 193 against 8.082e-13 with
+them off, and the adiabatic shear wall 1.346e-14 against 1.351e-14, so the
+properties now cost about 1% on those walls where they cost two orders of
+magnitude before. The velocity sensor's second-order wall defect is gone:
+`mu_sensor = :velocity` reads the all-on row under every closure. The
+inviscid slip wall falls by a factor 1.6, from 8.490e-11 to 5.448e-11 at
+N = 193, and the remainder is attributed: `detect_sum!` on a field exactly
+even about both walls now reproduces the periodic mirror bitwise, the β\*
+channel alone carries what is left, and it traces to the strain sensor's
+cusp rather than to any closure row, since `beta_sensor = :dilatation` reads
+6.777e-13 at the properties-off level while `:strain` stays at 5.4e-11. The
+strain and dilatation runs agree to 2.5e-13 in the wall error at step 143 of
+386 and separate over the steps after it, with a difference profile confined
+to the last few nodes.
+
+The cost is in the battery and in one dispatch site. Woodward–Colella reads
+L1 3.215e-2 and peak 6.6165 against 3.217e-2 and 6.616, cold planar Noh
+plateau 3.9851, shock 0.2054 and wall deficit 54% against 3.9901, 0.2045 and
+53%, and the aligned Noh case at N = 100 and aspect ratio 4 plateau 3.9747,
+deficit 57%, front 0.2161 over 5059 steps against 3.9960, 53%, 0.2115 and
+4918. That case starts with no transverse variation and grows one: 4.4e-16
+after 20 steps, 3.1e-14 after 200, 1.9e-11 after 2000 and 2.84e-6 at the
+end, all of the growth in the last third, so its guard widened from 1e-7 to
+5e-6. The clamp's spurious wall β\* was damping that mode, and the planar
+Noh wall deficit moved for the same reason; what the mode is and whether
+5e-6 is the right guard are open. The Woodward–Colella and Shu–Osher 4x
+references were regenerated, the Shu–Osher one differing by at most 1.8e-7
+in ρ at the far edge and reproducing its L1, and the other battery cases are
+unchanged to their printed digits. `bench/jetcheck.jl` reports one new
+dispatch site, `sensor_mirror` through `_face_mirror`, so `compute_rhs!`
+reads 3 and `step!` 4; `bench/audit.jl` reads +1536 B per call at 48³ in
+`compute_artificial!`, `compute_rhs!` and `step!`, constant rather than per
+point and 0 B at `-t 1`, with every inference row unchanged.
+
+Validation: `test/runtests.jl` 2479 of 2479 over 171 testset rows, two
+assertions above the previous count for the exported hook's API-surface
+entries, `test/convergence.jl` bit-identical study by study since every study
+runs with the artificial properties off, `test/validation.jl` with its
+header and guards re-recorded as above, and `test/mpi_tests.jl` at 2 ranks
+(300 of 300) and at 8 ranks with the CI phases (146 of 146), all on Julia
+1.11.4. Device parity rests on the serial suite's KernelAbstractions CPU
+comparison; no hardware GPU run was made. The measurements are under [the
+detector's wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror);
+the applied form and the remaining wall items are in
+[CALIBRATION.md](CALIBRATION.md#open-items).

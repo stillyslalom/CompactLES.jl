@@ -1,0 +1,226 @@
+# Independent production checks for the fifth-order closure search.
+#
+#   julia --project=. -t 1 bench/closurequalify.jl parts=polynomial,smooth
+#   julia --project=. -t 1 bench/closurequalify.jl schemes=candidate parts=jacobian
+#   julia --project=. -t 1 bench/closurequalify.jl schemes=candidate parts=stress
+#   julia --project=. -t 1 bench/closurequalify.jl schemes=de parts=jacobian
+#
+# The candidate is supplied by the include-safe ClosureSearch module. Controls
+# are the current neutral3 default and the published Brady-Livescu T6 rows.
+# Polynomial errors use the production derivative; evolution errors use the
+# shared smooth cases against a periodic mirror, isolating the wall defect.
+# These are research measurements, not acceptance tests or default selection.
+
+module ClosureQualification
+
+using MPI, CompactLES, LinearAlgebra, Printf
+const CL = CompactLES
+include(joinpath(@__DIR__, "..", "test", "references.jl"))
+include(joinpath(@__DIR__, "..", "test", "cases.jl"))
+include(joinpath(@__DIR__, "..", "test", "smooth_cases.jl"))
+
+function scheme_named(name)
+    name == "neutral3" && return lele_d1_6()
+    name == "brady_livescu" && return lele_d1_6(closures=:brady_livescu)
+    name in ("candidate", "unfiltered", "de") || error("unknown scheme $name")
+    isdefined(@__MODULE__, :ClosureSearch) ||
+        error("candidate requires bench/closuresearch.jl")
+    return name == "unfiltered" ? ClosureSearch.unfiltered_scheme() :
+           name == "de" ? ClosureSearch.de_scheme() :
+           ClosureSearch.candidate_scheme()
+end
+
+function polynomial_check(name, deriv, ns)
+    # Normalize moments by their absolute term sum: large monomials near the
+    # far end otherwise obscure floating-point cancellation in exact rows.
+    defect = 0.0
+    for (j, row) in enumerate(deriv.closures), degree in 0:5
+        rhs_terms = [w * Float64(k - 1)^degree for (k, w) in enumerate(row.rhs)]
+        lhs_terms = degree == 0 ? zeros(3) :
+            [row.lhs[k] * degree * Float64(j + k - 3)^(degree - 1) for k in 1:3]
+        scale = max(1.0, sum(abs, rhs_terms) + sum(abs, lhs_terms))
+        defect = max(defect, abs(sum(rhs_terms) - sum(lhs_terms)) / scale)
+    end
+    @printf("moments %-15s normalized degree 0:5 defect %.3e\n", name, defect)
+    errors = Float64[]
+    for n in ns
+        e = closed_derivative_errors(n, deriv, x -> x^6, x -> 6x^5)
+        push!(errors, e.wall)
+        @printf("polynomial %-15s N=%4d wall %.6e interior %.6e\n",
+                name, n, e.wall, e.interior)
+    end
+    println("polynomial ", name, " orders ", successive_orders(1.0 ./ (ns .- 1), errors))
+end
+
+function smooth_check(name, deriv, opts)
+    ns = parse.(Int, split(opts.ns, ','))
+    for viscous in (false, true), art_on in (false, true), filtered in (false, true)
+        for cfl in (opts.cfl, opts.cfl / 2)
+            errors = Float64[]
+            for n in ns
+                settings = (deriv=deriv, viscous=viscous,
+                            art=ArtParams(enabled=art_on), cfl=cfl,
+                            filter_interval=filtered ? 1 : 0)
+                solver, state = wall_case(n; settings...)
+                mirror, mirrored = mirror_case(n; settings...)
+                try
+                    run!(solver, state; tfinal=opts.tfinal, nmax=opts.nmax)
+                    run!(mirror, mirrored; tfinal=opts.tfinal, nmax=opts.nmax)
+                    e = regional_errors(solver, state, NodeReference(mirror, mirrored))
+                    push!(errors, e.wall)
+                    Printf.format(stdout, Printf.Format(
+                            "smooth %-15s viscous=%s art=%s filter=%s cfl=%.3f " *
+                            "N=%4d wall %.6e interior %.6e l2 %.6e\n"),
+                            name, viscous, art_on, filtered, cfl, n,
+                            e.wall, e.interior, e.l2)
+                catch err
+                    err isa SolverFailure || rethrow()
+                    println("smooth ", name, " FAILED N=", n, " ", err)
+                    break
+                end
+                flush(stdout)
+            end
+            if length(errors) == length(ns)
+                println("smooth ", name, " orders ",
+                        successive_orders(1.0 ./ (ns .- 1), errors))
+            end
+            flush(stdout)
+        end
+    end
+end
+
+function uniform_solver(deriv, n; filtered=false, wall=:slip)
+    rho, pressure = 0.9, 1.1
+    transverse = wall == :noslip ? 0.0 : 0.1
+    profile = (x, y, z, t) -> Prim(rho=rho, u=(0.0, transverse, 0.0), p=pressure)
+    bc = wall == :dirichlet ? DirichletBC(profile) :
+         wall == :noslip ? NoSlipWallBC() : SlipWallBC()
+    solver = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                    bcs=((bc, bc), per3[2], per3[3]), deriv=deriv,
+                    eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
+                    art=ArtParams(enabled=false),
+                    transport=Transport(mu0=wall == :noslip ? 0.005 : 0.0),
+                    filter_interval=filtered ? 1 : 0, filter_cfl=0.0, cfl=0.5)
+    state = allocate_state(solver)
+    initialize!(solver, state, (x, y, z) -> profile(x, y, z, 0.0))
+    apply_bcs!(solver, state)
+    return solver, state, sqrt(1.4 * pressure / rho)
+end
+
+function production_jacobian(deriv, n; filtered=false, delta=1e-5, wall=:slip,
+                             poststep=nothing)
+    solver, initial, sound = uniform_solver(deriv, n; filtered=filtered, wall=wall)
+    dt = 0.5 / ((n - 1) * sound)
+    indices = [(gidx(solver, i, 1, 1), c)
+               for c in 1:solver.equations.n_cons for i in 1:n]
+    function step_map(state)
+        CL.step!(solver, state, zero(state), zero(state), dt)
+        filtered && filter_state!(solver, state)
+        poststep === nothing || poststep(solver,state)
+        return state
+    end
+    matrix = zeros(length(indices), length(indices))
+    for (j, (index, component)) in enumerate(indices)
+        positive, negative = copy(initial), copy(initial)
+        epsilon = delta * max(abs(initial[index, component]), 1.0)
+        positive[index, component] += epsilon
+        negative[index, component] -= epsilon
+        step_map(positive)
+        step_map(negative)
+        for (i, (target, c)) in enumerate(indices)
+            matrix[i, j] = (positive[target, c] - negative[target, c]) / (2epsilon)
+        end
+    end
+    return matrix, dt
+end
+
+function jacobian_check(name, deriv, opts)
+    walls = Symbol.(split(opts.jwalls, ','))
+    all(w -> w in (:slip,:dirichlet,:noslip),walls) || error("unknown Jacobian wall")
+    for n in parse.(Int, split(opts.jns, ',')), wall in walls
+        for filtered in (false, true), delta in parse.(Float64,split(opts.deltas,','))
+            matrix, dt = production_jacobian(deriv, n; filtered, delta, wall)
+            radius = maximum(abs, eigvals(matrix))
+            Printf.format(stdout, Printf.Format(
+                    "jacobian %-15s N=%4d wall=%s filter=%s delta=%.0e " *
+                    "radius %.12f rate %+.6e\n"),
+                    name, n, wall, filtered, delta, radius, log(radius) / dt)
+            flush(stdout)
+        end
+    end
+end
+
+function uniform_check(name, deriv, opts)
+    for n in parse.(Int, split(opts.jns, ',')), filtered in (false, true)
+        solver, state, _ = uniform_solver(deriv, n; filtered=filtered)
+        initial = copy(state)
+        try
+            run!(solver, state; tfinal=opts.longtime, nmax=opts.nmax)
+            velocity = maximum(abs(state[gidx(solver, i, 1, 1), 2] /
+                                   state[gidx(solver, i, 1, 1), 1]) for i in 1:n)
+            drift = maximum(abs(state[gidx(solver, i, 1, 1), c] -
+                                initial[gidx(solver, i, 1, 1), c])
+                            for i in 1:n for c in 1:solver.equations.n_cons)
+            @printf("uniform %-15s N=%4d filter=%s t=%.1f |u| %.6e drift %.6e\n",
+                    name, n, filtered, solver.t, velocity, drift)
+        catch err
+            err isa SolverFailure || rethrow()
+            println("uniform ", name, " FAILED N=", n, " ", err)
+        end
+        flush(stdout)
+    end
+end
+
+function stress_check(name, deriv, opts)
+    for start in (0.0, 0.1)
+        try
+            result = noh_case(1; N=opts.stressn, t0=start, deriv=deriv,
+                              cfl=0.3, nmax=opts.nmax)
+            println("stress ", name, " planar Noh start=", start,
+                    " completed=", result[5], " ", result[6])
+        catch err
+            err isa SolverFailure || rethrow()
+            println("stress ", name, " planar Noh start=", start, " FAILED ", err)
+        end
+        flush(stdout)
+    end
+    try
+        result = woodward(; N=opts.stressn, deriv=deriv, cfl=0.3, nmax=opts.nmax)
+        println("stress ", name, " Woodward-Colella completed=", result[5])
+    catch err
+        err isa SolverFailure || rethrow()
+        println("stress ", name, " Woodward-Colella FAILED ", err)
+    end
+end
+
+function main(args=ARGS)
+    MPI.Initialized() || MPI.Init(threadlevel=:funneled)
+    MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("run qualification on one rank")
+    BLAS.set_num_threads(1)
+    candidate_file = joinpath(@__DIR__, "closuresearch.jl")
+    isfile(candidate_file) && include(candidate_file)
+    opts = CL.script_args(args, (parts="polynomial,smooth", schemes="neutral3,brady_livescu",
+        ns="49,97,193", pns="17,33,65,129", jns="51,101", cfl=0.25, tfinal=0.4,
+        longtime=40.0, nmax=30000, stressn=200,
+        jwalls="slip,dirichlet,noslip", deltas="3e-6,1e-5,3e-5"))
+    for name in split(opts.schemes, ',')
+        deriv = Base.invokelatest(scheme_named, name)
+        println("scheme ", name, " = ", deriv.name)
+        for (j, row) in enumerate(deriv.closures)
+            println("row ", j, " lhs=", row.lhs, " rhs=", row.rhs)
+        end
+        for part in split(opts.parts, ',')
+            part == "polynomial" ? polynomial_check(name, deriv,
+                parse.(Int, split(opts.pns, ','))) :
+            part == "smooth" ? smooth_check(name, deriv, opts) :
+            part == "jacobian" ? jacobian_check(name, deriv, opts) :
+            part == "uniform" ? uniform_check(name, deriv, opts) :
+            part == "stress" ? stress_check(name, deriv, opts) :
+            error("unknown qualification part $part")
+        end
+    end
+end
+
+end # module
+
+abspath(PROGRAM_FILE) == abspath(@__FILE__) && ClosureQualification.main()

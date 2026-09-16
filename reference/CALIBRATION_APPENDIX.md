@@ -44,6 +44,8 @@ record of that setting.
 22. [The Brady–Livescu rows as a wall configuration](#the-bradylivescu-rows-as-a-wall-configuration)
 23. [Constant annihilation and the slip-wall mode](#constant-annihilation-and-the-slip-wall-mode)
 24. [The neutral closure rows](#the-neutral-closure-rows)
+25. [Fifth-order C6 closure search](#fifth-order-c6-closure-search)
+26. [The detector's wall mirror](#the-detectors-wall-mirror)
 
 ## The battery
 
@@ -1212,9 +1214,11 @@ uses the mirror wherever the parity is −1 at a folded edge, and the two detect
 then agree there, `:d8` reaching its own half-offset closure through the fold
 plans and giving 7e-16 on the same field.
 
-The even path is left on the clamp, so no recorded number moves. Its error is two
-orders smaller in h, and changing it would move every guarded number in
-`test/validation.jl`.
+The even path at a fold is left on the clamp, so no recorded fold number moves.
+Its error there is two orders smaller in h, and changing it would move every
+guarded number in `test/validation.jl`. At a wall the clamp has since been
+replaced by the node-centred mirror on both parities
+([the detector's wall mirror](#the-detectors-wall-mirror)).
 
 ### Recommendations
 
@@ -4349,10 +4353,12 @@ closure the same runs read 1.254e-9 in every row but one: the velocity
 sensor, whose wall-normal component is differenced as though it were
 even (the docstring's noted gap against Pyranda), reads 4.6e-9 at
 N = 193 and 3.5 / 2.7, a second-order wall defect that the strain sensor
-does not have. Putting the detector's closed-edge path on the
-node-centred mirror would remove the fourth-order term; it changes the
-default path's coefficients at every wall and is left as the follow-up,
-under item 8 of the calibration file's open list.
+does not have. The detector's closed-edge path has since been put on the
+node-centred mirror at a wall, which removes the fourth-order term and the
+velocity sensor's second-order defect with it, and leaves an inviscid slip
+wall under the strain sensor limited by that sensor's cusp
+([the detector's wall mirror](#the-detectors-wall-mirror)). The numbers in
+this section are the clamp's and are kept as the record of it.
 
 ### The reflected pulse under each closure
 
@@ -5090,3 +5096,641 @@ N = 192, its order 3.72 to 3.14). An interface imposes no injected
 condition, so `interface_divergence_closures` keeps the cascade rows there
 for the neutral set, and the interface baselines are unchanged to every
 printed digit.
+
+## Fifth-order C6 closure search
+
+September 2026, following N6d. `bench/closuresearch.jl` constructs four
+fifth-order boundary rows while retaining the C6 interior and tridiagonal
+implicit solve. `bench/closurequalify.jl` independently measures those rows
+through the production derivative and timestep. This is an experimental
+search; the production presets and their regression baselines are unchanged.
+
+### Family and qualification
+
+Each row reads the first six field values. With a unit diagonal on the
+implicit side, row 1 has one free superdiagonal and rows 2–4 have two free
+off-diagonals each. The seven parameters determine the explicit weights by
+exactness on monomials of degrees zero through five. The affine weight bases
+are derived in rational arithmetic. Brady–Livescu T6 belongs to this family;
+its additional conservation constraints are not imposed on the search.
+
+The acoustic screening operator evolves pressure on all N points and normal
+velocity on the N-2 interior points, with the prescribed endpoint velocities
+eliminated. Rates use a unit domain and sound speed one. The search minimizes
+the implicit matrix condition number subject to a penalty for acoustic growth.
+Finite-grid spectral neutrality is not an energy estimate uniform in N;
+eigenvector conditioning and sampled resolvents are diagnostics, not proofs.
+
+Production qualification uses the shared cases in `test/smooth_cases.jl` and
+`test/cases.jl`. Degree-six polynomial differentiation isolates the formal
+fifth-order error. Standing-wave runs at N = 49, 97 and 193 compare with the
+periodic mirror at the same spacing, with CFL 0.25 and 0.125. These measure
+the closure defect, not total sixth-order convergence with the fourth-order
+time integrator. The matrix includes inviscid slip and viscous no-slip walls,
+artificial properties on/off, and the default one-sided filter on/off.
+
+The production timestep Jacobian uses centered perturbations at 3e-6, 1e-5
+and 3e-5, CFL 0.5, sound speed sqrt(1.4*1.1/0.9), and an unrelaxed filter
+where enabled. No-slip tests use zero tangential velocity throughout, so the
+base state is uniform and satisfies the wall condition. Shock checks use
+N = 200, CFL 0.3, and a 30,000-step ceiling. The Noh case retains its existing
+permissive validity policy; completing it does not establish admissibility.
+
+### Candidate selected without the filter
+
+The seven LHS parameters, ordered as row-1 superdiagonal then the three
+(subdiagonal, superdiagonal) pairs, are:
+
+```
+[6.151263016311877,
+ 0.5195089207724447, 2.750826276249132,
+ -0.052963961495487745, -1.8799327335582026,
+ -1.3133286079021156, -0.9951264983380909]
+```
+
+The implicit matrix condition number falls from Brady–Livescu's approximately
+1192 to 141. The normalized degree-zero-through-five moment residual is
+7.0e-17. Production differentiation of x^6 at N = 17, 33, 65 and 129 gives
+orders 4.99993, 5.00000 and 5.00000. The inviscid, unfiltered standing wave
+gives wall orders 5.86/5.79 with artificial properties off, against the
+Brady–Livescu control's 5.72/5.75. With the default filter and artificial
+properties on, its orders fall to 4.55/3.84, consistent with the separate
+artificial-property wall defect.
+
+The production Jacobians reject the candidate as a filtered wall treatment:
+
+| configuration | N | spectral radius at perturbation 1e-5 |
+|---|---:|---:|
+| neutral3, slip, unfiltered | 51 | 1.000000000045 |
+| neutral3, slip, one-sided filter | 51 | 1.000000001130 |
+| Brady–Livescu, slip, unfiltered | 51 | 1.000000000050 |
+| Brady–Livescu, slip, one-sided filter | 51 | 1.004434509705 |
+| searched rows, slip, unfiltered | 51 | 1.000000000069 |
+| searched rows, slip, one-sided filter | 51 | 1.006528254723 |
+| searched rows, slip, unfiltered | 101 | 1.000000000062 |
+| searched rows, slip, one-sided filter | 101 | 1.002725689670 |
+
+The filtered growth rates are 0.85118 and 0.71212 per unit time at N = 51
+and 101; they persist across the perturbation ladder. Dirichlet and viscous
+no-slip endpoints are neutral to the Jacobian's differencing floor at both
+resolutions. The candidate completes Woodward–Colella and planar Noh started
+at t0 = 0.1, but cold planar Noh fails with negative density at step 316,
+t = 0.181119. Brady–Livescu fails the same cold case at step 36,
+t = 0.011776. A later failure is not a successful cold-start treatment.
+
+The unfiltered candidate also fails the line-length sweep: although neutral
+at its training sizes N = 17, 31, 51, 79 and 101, it has growth
+0.6623355 c/L at N = 171 in the sweep over every N from 12 through 200.
+It is retained as `ClosureSearch.unfiltered_scheme()`, a rejected control.
+
+### Candidate selected with the filter
+
+A second search penalized both unfiltered acoustic growth and the spectral
+radius of the RK step followed by the unrelaxed one-sided filter. Its
+reduced filtered model reproduces the production radii above. The selected
+parameters were:
+
+```
+[6.44549783494442,
+ 0.5895659645871965, 3.0445191662818054,
+ -0.29695415441823525, -1.3290740341334466,
+ -0.6671659659185682, -0.3155538974259181]
+```
+
+The filtered radii improve to 1.0000148042 at N = 51 and 1.0000058667 at
+N = 101, but exceed the model gate of 1 + 1e-10. The held-out unfiltered
+sweep finds growth 1.041406 c/L at N = 415. This candidate was rejected
+before further nonlinear qualification. `ClosureSearch.candidate_scheme()`
+returns these experimental, rejected rows for reproducibility only.
+
+### First checkpoint
+
+No candidate from these finite searches meets both the line-length and
+filtered stability requirements. No production closure was added or promoted.
+The improvement in conditioning and preservation of fifth-order moments do
+not resolve the instability, and these searches do not establish that a
+robust fifth-order closure is impossible.
+
+The archived vectors and search provenance are in
+`bench/closuresearch_results.md`. Reproduce the first candidate's production
+measurements with:
+
+```
+julia --project=. -t 1 bench/closurequalify.jl schemes=unfiltered parts=polynomial
+julia --project=. -t 1 bench/closurequalify.jl schemes=unfiltered parts=jacobian
+julia --project=. -t 1 bench/closurequalify.jl schemes=unfiltered parts=smooth,stress
+```
+
+Resume with the offending line lengths included in selection and with hard
+unfiltered/filtered stability gates distinct from the optimization penalty.
+The next design question is whether additional support or conservation and
+energy constraints can control the boundary resonances. A finite-grid
+eigenvalue search alone has not done so. No uniform energy bound, nonlinear
+stability guarantee, Float32 qualification, MPI qualification or hardware-GPU
+qualification has been established for these rows. The artificial detector's
+separate fourth-order wall defect remains even if the derivative closure is
+eventually improved.
+
+### Seven-point and feasibility-first searches
+
+The search was extended to seven explicit points per row by adding a multiple
+of `[1,-6,15,-20,15,-6,1]`, which annihilates degrees zero through five.
+This yields eleven free parameters. Adaptive random searches and then
+differential evolution optimized stability before conditioning. The exact
+vectors, seeds, populations, generation counts, training grids and complete
+failure sets are in `bench/closuresearch_results.md`.
+
+The final differential-evolution vector is archived as
+`ClosureSearch.de_scheme()`. It still fails the derivative-only target.
+For a configuration requiring filtering, the broad model sweep tested every
+N from 17 through 200 and N = 257, 371, 415, 459 and 601, at CFL 0.5,
+0.25 and 0.125 with the production relaxation weight `min(cfl/0.35,1)`.
+Failures extend through N = 70 at CFL 0.25; none of the tested extents above
+70 fails. This is a measured filtered-only range, not an all-N result or a
+production-qualified configuration. The production qualification of these
+rows is below; no Float32 or MPI qualification of `de_scheme()` was run.
+
+### Brady–Livescu also has a line-length resonance
+
+The published T6 control is not unconditionally neutral without filtering.
+At N = 171 the production Jacobian has unfiltered radius 1.000751042731,
+corresponding to growth 0.3339025 per unit time at the uniform state used
+above. With the unrelaxed default filter its radius is 1.000238920108,
+growth 0.1062475. Both persist across the three perturbation sizes. Earlier
+neutral readings at N = 51 and 101 therefore do not generalize to every
+line length. Reproduce with:
+
+```
+julia --project=. -t 1 bench/closurequalify.jl schemes=brady_livescu parts=jacobian jns=171 jwalls=slip
+```
+
+### An exact energy-norm feasibility probe
+
+`bench/closureenergy.jl` tests a restricted construction: symmetric implicit
+A, `B+B' = (5/3) diag(-1,0,...,1)`, fifth-order boundary moments, and the
+unchanged C6 interior. Positive A would give an SBP norm `H=(3/5)A`;
+decoupling its endpoint would also make strong injection orthogonal in that
+norm. Exact rational elimination finds inconsistent moment systems for
+tridiagonal boundary blocks with 4–12 closure rows. Allowing full boundary
+blocks also fails in the tested widths, including 4, 7 and 12 rows. Each
+rejection carries a checked exact left-null certificate `y'M=0, y'b=1`.
+The standard explicit sixth-order control admits the expected fifth-order
+restricted-full-norm moment families at 7 and 8 rows (4 and 12 free
+parameters), verifying a positive control for the construction machinery.
+This rules out the tested simple norm ansatz, not other compact SBP norms.
+
+### Fifth-order-compatible boundary damping
+
+`bench/closuredamping.jl` tests a joint derivative/filter treatment using the
+six-point filtered-objective candidate above, the default one-sided filter,
+and an extra rank-one pass at each wall:
+
+```
+v = [1,-6,15,-20,15,-6,1]
+Fwall = I - sigma * v*v'/(v'v),  sigma = 0.1
+```
+
+The added pass preserves degree-five polynomials. Its O(h^6) per-step change
+is an O(h^5) boundary RHS perturbation at fixed hyperbolic CFL. It uses the
+production filter relaxation weight and seven nodes per wall.
+
+Applying it to every conserved component is rejected. The acoustic block
+alone appears neutral, but the full production Jacobian has radius
+1.00087011309 at N = 51 and 101. The missing modes are the scalar entropy
+and tangential branches, governed by the composite scalar filter. The added
+rank-one pass is Euclidean-contractive, but the original filter has no such
+contractivity guarantee in that norm; separate spectral-radius checks do
+not establish stability of their product. The instrument now includes these
+scalar branches, and uniform runs monitor all conserved-state drift rather
+than only normal velocity.
+
+Applying the extra pass only to pressure and normal velocity avoids that
+scalar-mode failure. Density and tangential momentum are retained, and total
+energy is adjusted for both the pressure and kinetic-energy changes. This
+prototype is limited to a serial one-dimensional calorically perfect gas.
+For `components=acoustic`, the completed production checks are:
+
+| measurement | result |
+|---|---|
+| full Jacobian, N = 51/101, three perturbation sizes | radius at most 1 + 3.4e-9 |
+| uniform state to t = 40, N = 51/101 | max normal velocity below 2.5e-13; conserved drift below 2.2e-12 |
+| smooth wall, artificial properties off, CFL 0.25 | orders 5.94 / 6.06 |
+| same, CFL 0.125 | orders 5.99 / 6.13 |
+| artificial properties on, CFL 0.25 | orders 4.55 / 3.71 |
+| cold planar Noh, N = 200 | negative density at step 34, t = 0.009484 |
+| planar Noh started at t0 = 0.1 | completes under the existing permissive validity policy |
+
+The warm Noh completion still includes seven inadmissible cells; it is not
+an admissibility result. The acoustic model underlying this pass was swept
+over N = 14–200 and five larger probes through 601. At CFL 0.5 only N = 14
+failed; at CFL 0.25 the sweep starting at N = 15 failed only at 15. These
+were acoustic-block sweeps, before the scalar-branch correction. For the
+acoustic-only pass the scalar branch is the unchanged default filter. The
+corrected sweeps carry that branch and start at N = 14, the shortest line
+the seven-node wall pass admits. Over every N from 14 through 200 plus
+N = 257, 371, 415, 459 and 601, 192 extents at each CFL:
+
+| CFL | failures | failing N (radius) |
+|---|---:|---|
+| 0.5 | 1 | 14 (1.000798320701) |
+| 0.25 | 2 | 14 (1.000305699970), 15 (1.000038823300) |
+| 0.125 | 1 | 14 (1.000139037562) |
+
+The maximum radius occurs at N = 14 in each of the three sweeps, and no
+extent above 15 exceeds the gate 1 + 1e-10 at any of them.
+
+### The filtered-only rows through the production solver
+
+`ClosureSearch.de_scheme()` was measured through the production derivative
+and timestep. `bench/closurequalify.jl` and `bench/closuredamping.jl` now
+accept the name `de` for these rows. They retain fifth-order accuracy: the
+normalized degree-zero-through-five moment defect is 9.995e-17, and
+production differentiation of x^6 at N = 17, 33, 65 and 129 gives orders
+4.99964, 5.00000 and 4.99992.
+
+The production Jacobian at CFL 0.5 confirms the filtered-only character at
+a slip wall and exposes a further failure absent from the reduced acoustic
+model. Radii at perturbation 1e-5:
+
+| N | wall | unfiltered | one-sided filter |
+|---:|---|---:|---:|
+| 79 | slip | 1.000000000168 | 1.000000001794 |
+| 101 | slip | 1.000000000168 | 1.000000001977 |
+| 171 | slip | 1.001061474880 | 1.000000002368 |
+| 79 | no-slip | 1.000000000127 | 1.000000000098 |
+| 101 | no-slip | 1.000000000074 | 1.000000000208 |
+| 171 | no-slip | 1.000000000108 | 0.999999999915 |
+| 79 | Dirichlet | 1.121213271953 | 1.074557089012 |
+| 101 | Dirichlet | 1.121213271988 | 1.074557088965 |
+| 171 | Dirichlet | 1.121213271979 | 1.074557089007 |
+
+The slip and no-slip radii sit at the Jacobian's differencing floor, at the
+level of the `:neutral3` figures near 1.0000000011 recorded above. The one
+exception is the unfiltered slip resonance at N = 171, whose growth is
+0.4718428 per unit time, identical across the three perturbation sizes, and
+which the filter removes. The Dirichlet radii are also identical across the
+perturbation ladder and nearly independent of resolution; their filtered
+growth rates are +14.67, +18.81 and +31.98 per unit time at N = 79, 101 and
+171. The `:neutral3` control at N = 79 and perturbation 1e-5 gives Dirichlet
+radii 1.000000000058 unfiltered and 1.000000001380 filtered, so the growth
+belongs to these rows rather than to the measurement, and the one-sided
+filter does not remove it.
+
+Smooth wall evolution at N = 97, 193 and 385 completes in all sixteen
+combinations, the unfiltered ones included. With the filter on, the
+successive wall orders are:
+
+| configuration | CFL 0.25 | CFL 0.125 |
+|---|---|---|
+| inviscid, artificial properties off | 5.968 / 5.320 | 5.965 / 5.000 |
+| inviscid, artificial properties on | 3.763 / 6.027 | 3.793 / 6.027 |
+| viscous, artificial properties off | 5.824 / 5.291 | 5.820 / 5.182 |
+| viscous, artificial properties on | 4.148 / 4.061 | 4.149 / 4.060 |
+
+These are comparable with the acoustic-only joint treatment's 5.94 / 6.06
+with the artificial properties off and 4.55 / 3.71 with them on. The fine
+pair with the artificial properties off is measured at wall errors near
+4e-14, where the mirror comparison no longer resolves the order.
+
+Shock stress at N = 200 and CFL 0.3 separates the cold and warm starts.
+Woodward–Colella completes, and planar Noh started at t0 = 0.1 completes
+with eight inadmissible cells under the permissive validity policy. Cold
+planar Noh fails with negative density at step 32, t = 0.008525, minimum
+mixture density -0.028935. That is earlier than Brady–Livescu's step 36 and
+much earlier than the unfiltered-only six-point rows' step 316.
+
+### Verdict
+
+A fifth-order closure is useful only where the artificial properties are
+off. With them on, the detector's own fourth-order wall defect
+([CALIBRATION.md](CALIBRATION.md#open-items) item 7) capped a wall at fourth
+order under any closure when these rows were measured, as N6b measured for
+Brady–Livescu and as the viscous row of the table above reads for
+`de_scheme()`, 4.148 / 4.061. The
+inviscid row with the properties on reads 3.76 and then 6.03, so the cap is
+not uniform on a resolved smooth case, but the production workloads of this
+solver are shocked and cold-started, and there the artificial properties
+are active.
+
+On those workloads `:neutral3` completes cold planar Noh. Every fifth-order
+family measured here fails it: Brady–Livescu at step 36, the unfiltered-only
+six-point rows at step 316, the acoustic-only joint treatment at step 34, and
+the seven-point differential-evolution rows at step 32. `de_scheme()` also
+fails a linear production check that `:neutral3` and the unfiltered-only
+six-point rows pass, with a Dirichlet Jacobian radius of 1.0746 filtered at
+every tested resolution.
+
+No fifth-order route is a production candidate on those workloads, so this
+thread closes here. The detector's wall defect has since been removed at a
+wall ([the detector's wall mirror](#the-detectors-wall-mirror)): under the
+mirror an inviscid wall with the artificial properties on is limited by the
+strain sensor's cusp, and under `beta_sensor = :dilatation` it recovers the
+closure's order. The cold-start failure of every fifth-order family above is
+untouched by that change, so the verdict stands. No production source,
+default or regression baseline was changed here, and nothing was committed.
+The instruments are retained: `bench/closuresearch.jl` holds the family, the
+reduced models and the searches, `bench/closurequalify.jl` the production
+polynomial, Jacobian, evolution and shock checks, `bench/closureenergy.jl`
+the exact energy-norm feasibility probe, and `bench/closuredamping.jl` the
+joint derivative/filter trial. A resumption would measure the closures under
+`beta_sensor = :dilatation`, where the wall is no longer capped, rather than
+begin at the derivative rows. Nothing established here is an energy bound or
+an impossibility result.
+
+Reproduce the measurements above with:
+
+```
+julia --project=. -t 1 bench/closuresearch.jl mode=report
+julia --project=. -t 1 bench/closuresearch.jl mode=filtervalidate
+julia --project=. -t 1 bench/closuredamping.jl parts=jacobian,uniform schemes=candidate strength=0.1 components=acoustic
+julia --project=. -t 1 bench/closuredamping.jl parts=smooth,stress schemes=candidate strength=0.1 components=acoustic
+julia --project=. -t 1 bench/closuredamping.jl parts=sweep schemes=candidate strength=0.1 components=acoustic firstn=14 lastn=200 cfl=0.5 ns=257,371,415,459,601
+julia --project=. -t 1 bench/closuredamping.jl parts=sweep schemes=candidate strength=0.1 components=acoustic firstn=14 lastn=200 cfl=0.25 ns=257,371,415,459,601
+julia --project=. -t 1 bench/closuredamping.jl parts=sweep schemes=candidate strength=0.1 components=acoustic firstn=14 lastn=200 cfl=0.125 ns=257,371,415,459,601
+julia --project=. -t 1 bench/closurequalify.jl schemes=de parts=polynomial
+julia --project=. -t 1 bench/closurequalify.jl schemes=de parts=jacobian jns=79,101,171 jwalls=slip,dirichlet,noslip
+julia --project=. -t 1 bench/closurequalify.jl schemes=de parts=smooth ns=97,193,385
+julia --project=. -t 1 bench/closurequalify.jl schemes=de parts=stress
+```
+
+The research tools were exercised on their reported workloads, including
+polynomial and evolution controls. Search assembly agrees with production
+basis-vector applications to 1.066e-14 for the derivative and exactly for
+the filter. The documentation-reference check passed. Full solver, MPI and
+hardware-GPU gates were not run because no production implementation was
+changed or promoted.
+
+## The detector's wall mirror
+
+September 2026, the wall half of
+[CALIBRATION.md](CALIBRATION.md#open-items) item 7. [Which channel carries
+it](#which-channel-carries-it) attributed the fourth-order wall defect of a
+run with the artificial properties on to `delta4_sum!`'s clamped edge,
+through β\*. This section records the mirror that replaces the clamp at a
+wall and the numbers it moves. The smooth-wall and channel tables below are
+`bench/wallclosure.jl` at `cfl = 0.25`, t = 0.4, N = 49 / 97 / 193, the wall
+window measured against the periodic mirror at the same spacing, under
+`compact_filter(0.45)` with `filter_cfl = 0.35`; the reflected pulse runs at
+its own settings and the battery is `test/validation.jl`. In every table
+"clamp" is the previous path, "mirror" the current one, and "art off" the
+same case with the artificial properties off.
+
+### The change
+
+`delta4_sum!` read its taps past a closed edge by clamping the index, a
+zeroth-order extension. At a reflecting wall it now reads them from the
+node-centred mirror of the interior, ghost `2-q` at the low wall and `2n-q`
+at the high one, carrying the field's sign across the wall: +1 for every
+scalar sensed and for the tangential velocity components, −1 for the
+wall-normal component, which `velocity_mu!` selects through a `wall_parity`
+keyword. The reflecting faces come from a boundary-condition hook,
+`sensor_mirror(bc)`, `true` for `SlipWallBC` and `NoSlipWallBC` and `false`
+by default, so Dirichlet, extrapolation and NSCBC faces and interface ends
+keep the clamp, and a `SwitchableBC` answers for its active condition. The
+scope is walls. A fold keeps both of its extensions (the half-offset mirror
+for an odd field, the clamp for an even one, and the clamp in the
+paired-fold butterfly), and `ring_sum!`, the `:d8` detector, is unchanged.
+
+### Smooth walls
+
+The standing wave of `test/smooth_cases.jl` between slip walls and between
+adiabatic no-slip walls, and the shear mode between adiabatic no-slip walls,
+with the artificial properties on, against the same cases with them off:
+
+```
+case / closure             edge      N=49        97          193         orders
+inviscid slip, C6 BL       clamp     2.728e-8    1.134e-9    8.490e-11   4.59 / 3.74
+                           mirror    2.196e-8    4.862e-10   5.448e-11   5.50 / 3.16
+                           art off                           7.976e-13   5.63 / 5.95
+inviscid slip, C8 BL       clamp     4.364e-8    1.354e-9    1.193e-10   5.01 / 3.50
+                           mirror    4.490e-8    1.032e-9    1.306e-10   5.44 / 2.98
+                           art off                           1.691e-13
+inviscid slip, neutral3    clamp                             2.623e-9    3.85 / 3.93
+                           mirror                            2.582e-9    3.85 / 3.93
+                           art off                           2.588e-9
+inviscid slip, cascade3    clamp                             1.254e-9    4.26 / 3.46
+                           mirror                            1.217e-9    4.26 / 3.43
+                           art off                           1.254e-9
+viscous no-slip, C6 BL     clamp     1.822e-8    1.015e-9    5.961e-11   4.17 / 4.09
+                           mirror    1.980e-9    4.412e-11   8.002e-13   5.49 / 5.78
+                           art off                           8.082e-13   5.47 / 5.77
+viscous no-slip, C8 BL     clamp     1.650e-8    1.010e-9    6.127e-11   4.03 / 4.04
+                           mirror    2.776e-10   1.051e-12   4.285e-14   8.05 / 4.62
+                           art off                           2.198e-14   7.75 / 5.44
+viscous no-slip, neutral3  clamp                             2.060e-9
+                           mirror                            2.006e-9
+                           art off                           2.005e-9
+viscous no-slip, cascade3  clamp                             9.222e-10
+                           mirror                            8.706e-10
+                           art off                           8.703e-10
+shear, adiabatic, C6 BL    clamp                             2.977e-13   4.97 / 4.72
+                           mirror                            1.346e-14   6.84 / 6.97
+                           art off                           1.351e-14   6.84 / 6.97
+shear, adiabatic, C8 BL    clamp                             3.322e-13   4.21 / 4.60
+                           mirror                            9.903e-16   8.04 / 2.07
+                           art off                           1.071e-15
+```
+
+The isothermal shear wall reads the adiabatic one under both extensions:
+2.979e-13 (C6) and 3.323e-13 (C8) under the clamp, 1.358e-14 and 8.622e-16
+under the mirror, against 1.361e-14 and 9.439e-16 with the properties off.
+Every row with the properties off is bit-identical before and after the
+change, at both closures and every resolution.
+
+The viscous and shear walls recover the order and the constant of their
+properties-off rows. C6 Brady–Livescu reads 8.002e-13 against 8.082e-13 at
+N = 193 on the viscous wall and 1.346e-14 against 1.351e-14 on the shear
+wall, within about 1% of the properties-off error where the clamp cost two
+orders of magnitude. The C8 rows recover the same way at errors near the
+floor of the mirror comparison, 4.285e-14 against 2.198e-14 on the viscous
+wall and 9.903e-16 against 1.071e-15 on the shear wall, where a factor two
+is no longer resolved. The inviscid slip wall falls by a
+factor 1.6 at N = 193 (8.490e-11 to 5.448e-11) and stays two orders above
+its properties-off row; [which channel carries the
+residual](#which-channel-carries-the-residual) attributes what is left. The
+two default closures move in the third digit, since their own closure error
+is a thousand times the residual.
+
+The reflected pulse of [the filter's
+qualification](#the-reflected-pulse-under-each-closure), density against its
+mirror at the wall:
+
+```
+                                       clamp       mirror
+amplitude 0.01, N = 385   neutral3     1.199e-9    1.192e-9
+                          cascade3     8.060e-9    8.047e-9
+                          C6 BL        1.532e-10   1.426e-10
+                          C8 BL        2.293e-11   1.850e-11
+amplitude 0.1, N = 769    neutral3     1.951e-7    1.874e-7
+                          cascade3     1.424e-7    1.438e-7
+                          C6 BL        1.281e-8    9.767e-9
+                          C8 BL        2.100e-8    5.784e-8
+```
+
+Seven of the eight rows fall or move by about 1%. The exception is C8
+Brady–Livescu at amplitude 0.1, which rises by a factor 2.8, from 2.100e-8
+to 5.784e-8, and is then six times the C6 row where it was below it. C8
+Brady–Livescu is not a supported wall configuration
+([the qualification](#the-bradylivescu-rows-as-a-wall-configuration)).
+
+### Which channel carries the residual
+
+The inviscid slip wall under C6 Brady–Livescu with one constant at a time,
+and under the other smoother, detector and sensor fields:
+
+```
+variant                       edge      N=49        97          193         orders
+off                           both      2.430e-9    4.919e-11   7.976e-13   5.63 / 5.95
+all on                        clamp     2.728e-8    1.134e-9    8.490e-11   4.59 / 3.74
+                              mirror    2.196e-8    4.862e-10   5.448e-11   5.50 / 3.16
+C_mu only                     clamp     2.497e-9    4.704e-11   7.410e-13   5.73 / 5.99
+                              mirror    2.461e-9    4.852e-11   6.661e-13   5.66 / 6.19
+C_beta only                   clamp     2.719e-8    1.129e-9    8.503e-11   4.59 / 3.73
+                              mirror    2.191e-8    4.849e-10   5.429e-11   5.50 / 3.16
+C_kappa only                  clamp     2.453e-9    5.200e-11   1.216e-12   5.56 / 5.42
+                              mirror    2.430e-9    4.916e-11   8.193e-13   5.63 / 5.91
+smoother = :compact           clamp     5.868e-8    2.796e-9    1.646e-10   4.39 / 4.09
+                              mirror    3.088e-8    3.969e-10   5.033e-11   6.28 / 2.98
+detector = :d8                both      1.160e-8    5.244e-10   3.469e-11   4.47 / 3.92
+mu_sensor = :velocity         clamp     7.144e-8    1.463e-8    3.444e-9    2.29 / 2.09
+                              mirror    2.191e-8    4.849e-10   5.428e-11   5.50 / 3.16
+beta_sensor = :dilatation     clamp     1.615e-8    7.992e-10   4.471e-11   4.34 / 4.16
+                              mirror    2.453e-9    4.851e-11   6.777e-13   5.66 / 6.16
+:ungated_dilatation, C_beta   mirror    2.425e-9    4.917e-11   8.218e-13   5.62 / 5.90
+```
+
+The constants zeroed with the machinery enabled reproduce the properties-off
+row under both extensions. The μ\* and κ\* channels sit at the
+properties-off level under the mirror, the velocity sensor's second-order
+defect is gone and its row is the all-on row to three digits, and β\* still
+carries the whole residual: the `C_beta` row equals the all-on row to three
+digits. Under the default closures the same runs read their own closure
+error in every row. `:cascade3` all on reads 2.640e-7 / 1.379e-8 / 1.254e-9
+(4.26 / 3.46) under the clamp and 2.521e-7 / 1.314e-8 / 1.217e-9 (4.26 /
+3.43) under the mirror, `:neutral3` 5.792e-7 / 4.009e-8 / 2.623e-9 and
+5.669e-7 / 3.939e-8 / 2.582e-9; under each, the velocity sensor's row, which
+read 3.251e-7 / 2.938e-8 / 4.567e-9 (3.47 / 2.69) and 6.415e-7 / 5.466e-8 /
+6.133e-9 (3.55 / 3.16) under the clamp, is the all-on row under the mirror.
+
+Four one-off scratch probes at C6 Brady–Livescu locate the β\* channel's
+residual and clear two other candidates.
+
+- The operator is now exact on an even field. `detect_sum!` under
+  `:delta4`, applied to a field exactly even about both walls, reproduces
+  the periodic mirror bitwise (relative difference 0.0) at the first six
+  nodes of both walls at N = 97 and N = 193.
+- The residual is the strain sensor's cusp, not the wall closure of any
+  operator. In this one-dimensional case |S| = |∇·u| pointwise, and the
+  dilatation crosses zero in the interior, at node 98, x = 0.5052, t = 0.4,
+  N = 193, where β\* reads 5.505e-8 against a 3e-13 wall-region background,
+  identically in the wall run and the mirror run. The wall-region β\* of
+  the strain run is noisy node to node (1.54, 1.60, 1.22, 0.74, 0.94,
+  1.85 ×1e-13 at nodes 1 to 6, against the mirror's 1.46, 1.34, 1.01, 0.70,
+  0.92, 1.81) where the dilatation run's is smooth (1.200, 1.205, 1.209,
+  1.213, 1.219, 1.226 ×1e-13) and matches its own mirror to between 1e-5
+  and 1e-2. The two runs are indistinguishable at step 1 and still at
+  2.5e-13 wall error at step 143, separating late to 5.4e-11 (strain) and
+  8.2e-13 (dilatation) at step 386, t = 0.4. The difference profile at
+  t = 0.4 is wall-localized: 5.429e-11 at node 193, 1.448e-12 at node 185,
+  1e-14 to 1e-15 through the interior, and 4.101e-12 at node 1. The wall
+  closure responds to the grid-scale content the cusp supplies at far lower
+  order than to smooth content.
+- The `:gaussian` smoother is not the carrier. Its closure rows fold the
+  overhanging weights onto the half-offset mirror, which is a half-cell
+  shift at a node-centred wall: the detector followed by `:gaussian` on the
+  even field differs from the periodic mirror by relative 1.89e-3 /
+  4.13e-4 / 5.17e-5 / 3.66e-6 at nodes 1 to 4 for N = 97 and 4.72e-4 /
+  1.03e-4 / 1.29e-5 / 9.13e-7 for N = 193, second order in h, at both
+  walls, where `:compact` reads 7.6e-7 and 8.8e-10 there. The `:compact`
+  row of the table above keeps 5.033e-11 while `:ungated_dilatation` under
+  `:gaussian` restores 8.218e-13, so the half-cell shift is not what the
+  β\* residual rests on.
+- `ring_sum!` has a wall artifact of its own. On the same even field it
+  returns 2.34e-8 at N = 97 where the periodic value is 6.58e-16, and
+  3.10e-10 against 3.01e-20 at the high wall for N = 193, over at least six
+  nodes: seven to ten orders too large. Its docstring's statement that the
+  closure rows mirror symmetrically does not hold near a wall, and this is
+  why the `detector = :d8` row above does not move.
+
+The dilatation sensor restores the closure's order at the inviscid wall:
+`beta_sensor = :dilatation` reads 6.777e-13 at N = 193 and 5.66 / 6.16, and
+its ungated form 8.218e-13 and 5.62 / 5.90, both at the properties-off row's
+7.976e-13 and 5.63 / 5.95. An inviscid wall with the artificial properties on
+is now limited by the strain sensor's cusp rather than by the detector's edge.
+
+### The battery
+
+`test/validation.jl`, before and after, with its header and guards
+re-recorded:
+
+```
+case                          edge     reading
+Woodward–Colella              clamp    L1 3.217e-2, peak 6.616 at 0.7785
+                              mirror   L1 3.215e-2, peak 6.6165 at 0.7785
+Woodward–Colella, C6 BL       clamp    L1 3.217e-2, peak 6.617
+                              mirror   L1 3.216e-2, peak 6.6166
+Noh ν = 1 cold                clamp    plateau 3.9901, shock 0.2045, deficit 53%
+                              mirror   plateau 3.9851, shock 0.2054, deficit 54%
+Noh ν = 1 warm t0 = 0.3,      clamp    3.992  3.996  3.996  4.000
+  C6 BL, rho[1:4]             mirror   3.988  3.993  3.995  4.000
+Noh aligned N = 100, AR = 4   clamp    3.9960, 53%, 0.2115, 4918 steps, transverse 1.4e-8
+                              mirror   3.9747, 57%, 0.2161, 5059 steps, transverse 2.8e-6
+```
+
+Lax, Shu–Osher, Sedov, Noh ν = 2, Noh ν = 3, the shocked SF6 interface and
+the Noh plane at AR = 2 are unchanged to the printed digits. The
+Woodward–Colella and Shu–Osher 4x references were regenerated; the
+Shu–Osher reference differs from its predecessor by at most 1.8e-7 in ρ at
+the far edge and reproduces its L1.
+
+The aligned Noh case moved furthest. Its initial data has no transverse
+variation, and the variation it grows reads 4.4e-16 after 20 steps, 3.1e-14
+after 200, 1.9e-11 after 2000 and 2.84e-6 at the end of the 5059-step run,
+all of the growth in the last third; the guard widened from 1e-7 to 5e-6.
+The clamp's spurious wall β\* was damping this mode, and the planar Noh wall
+deficit moved from 53% to 54% for the same reason. Both readings are
+observations left open, not a resolved item: what the mode is and whether
+5e-6 is the right guard have not been measured.
+
+### The audits and the gate
+
+`bench/jetcheck.jl` reports one new dispatch site, `sensor_mirror` through
+`_face_mirror`, so `compute_rhs!` reads 3 where it read 2 and `step!` 4
+where it read 3, every other entry point 0 as before. Two rejected
+spellings measured five sites (a bare call whose `Any` return destroyed the
+pointwise body's specialization) and one extra `convert` site (a `::Bool`
+annotation); the adopted `@noinline` `@nospecialize` form compared with
+`=== true` holds it to one. `bench/audit.jl` reads +1536 B per call at 48³
+in `compute_artificial!` (328448 to 329984), `compute_rhs!` (1796976 to
+1798512) and `step!` (9271792 to 9279472), constant rather than per point
+(0 B at `-t 1` before and after; three extra scalars captured per threaded
+region), with every inference row unchanged. `test/convergence.jl` is
+bit-identical study by study, since every study there runs with the
+artificial properties off. `test/runtests.jl` reads 2479 of 2479 over 171
+testset rows, the two assertions above the gate's 2477 being the exported
+hook's entries in the API-surface manifest, and `test/mpi_tests.jl` 300 of
+300 at 2 ranks and 146 of 146 at 8 ranks with the CI phase list, all on
+Julia 1.11.4. Device parity rests on
+the serial suite's KernelAbstractions CPU comparison; no hardware GPU run
+was made.
+
+### What remains
+
+1. The fold's even path is still on the clamp ([the fourth-difference clamp
+   at a fold](#the-fourth-difference-clamp-at-a-fold)). At a fold the clamp
+   misplaces one δ⁴ tap by a term the vanishing edge derivative makes
+   O(h²) for an even field, and changing it would move every guarded number
+   in `test/validation.jl`.
+2. The `:gaussian` smoother's closure rows are half a cell out at a
+   node-centred wall, a relative 4.72e-4 at node 1 for N = 193 falling as
+   h², where `:compact` reads 8.8e-10.
+3. `ring_sum!` reads 2.34e-8 at N = 97 on a field exactly even about the
+   wall, against a periodic 6.58e-16, over at least six nodes, so the `:d8`
+   detector has a wall artifact the `:delta4` mirror does not address.
+4. A slip wall with a physical shear viscosity and the artificial
+   properties off does not reproduce its mirror at the closure's order:
+   μ = 5e-3 reads 2.167e-7 / 1.103e-7 / 9.489e-8 (0.97 / 0.22) and
+   μ = 5e-4 reads 9.183e-9 / 8.248e-10 / 2.395e-10 (3.48 / 1.78). There is
+   no `correct_flux!` method for `SlipWallBC`. Scaled to a β\* of order
+   1e-13 this channel is orders below the residual measured above, so it is
+   an independent finding and not the carrier here.

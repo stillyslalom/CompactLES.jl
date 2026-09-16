@@ -347,6 +347,35 @@ validate_bc(bc::SwitchableBC, metric, eos, d::Int, side::Int) =
      validate_bc(bc.after, metric, eos, d, side))
 
 """
+    sensor_mirror(bc) -> Bool
+
+Whether a closed face reflects the fields the artificial-property sensors are
+built from. The fourth-difference detector reads two taps past the boundary;
+where this answers `true` it takes them from the node-centred mirror of the
+interior, with the sign of the field across the wall, and where it answers
+`false` it clamps the index instead (`delta4_sum!`).
+
+The default is `false`. A mirror is the statement that the solution continues
+past the face as its own reflection, which holds at an impermeable wall and at
+no other condition here: an inflow, a Dirichlet face and a characteristic
+outflow admit an arbitrary continuation, an interface end is supplied by the
+neighboring patch, and a fold end takes its own half-offset mirror inside the
+same routine. The clamp makes no such statement. Extend this method for a
+custom reflecting wall.
+
+A [`SwitchableBC`](@ref) answers for whichever condition is active, so a face
+that leaves the wall state during a run leaves the mirror with it. Every rank
+switches on the same step, and the detector communicates nothing on this path,
+so the two ends of a line cannot disagree.
+"""
+sensor_mirror(::BoundaryCondition) = false
+sensor_mirror(::SlipWallBC) = true
+sensor_mirror(::NoSlipWallBC) = true
+
+sensor_mirror(bc::SwitchableBC) =
+    bc.switched ? sensor_mirror(bc.after) : sensor_mirror(bc.before)
+
+"""
     wall_internal_energy(eos, Q, I, n_species, T_wall)
 
 Return the internal-energy density `ρe` imposed at padded state index `I` by

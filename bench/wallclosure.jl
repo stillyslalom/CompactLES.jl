@@ -236,7 +236,7 @@ function channels_part()
                 ("all on, beta_sensor=:dilatation", ArtParams(beta_sensor=:dilatation)))
     println("\n=== the artificial-property channels at an inviscid wall, against the " *
             "mirror, cfl = $CFL, t = $TFINAL ===")
-    for (label, mk) in (CLOSURES[2], CLOSURES[1])
+    for (label, mk) in (CLOSURES[3], CLOSURES[1], CLOSURES[2])
         println("\n--- $label ---")
         println("  variant                          N     wall       interior   l2")
         for (vlabel, art) in variants
