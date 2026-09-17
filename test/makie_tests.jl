@@ -1,7 +1,6 @@
 # Makie extension tests. Included by runtests.jl when a Makie backend is
 # loadable, and runnable under mpiexec for the decomposition-independent
-# profile, which is the property `line_profile` has and the old rank-local
-# `density_line` did not.
+# profile `line_profile` produces.
 #
 #   julia --project=docs test/makie_tests.jl               # serial
 #   mpiexec -n 4 julia --project=docs test/makie_tests.jl  # decomposed
@@ -46,10 +45,10 @@ end
                    filter_interval=0, dims=(np, 1, 1))
     solver, Q = setup(prob, num)
 
-    # line_profile is the global, gathered replacement. Its value equals the
-    # concatenation of the per-rank local samples in rank order, so on one rank
-    # it is exactly the old density_line, and on many it is the whole line —
-    # which the rank-local helper could not produce.
+    # line_profile gathers globally. Its value equals the concatenation of the
+    # per-rank local samples in rank order, so on one rank it is that rank's
+    # samples and on many it is the whole line, which no rank-local sampler
+    # produces.
     coord, value = line_profile(solver, Q, :rho)
     @test length(coord) == 96
     @test length(value) == 96

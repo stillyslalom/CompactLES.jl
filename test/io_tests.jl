@@ -34,8 +34,7 @@ end
 
 @testset "checkpoint carries the mutable run state" begin
     dir = mktempdir()
-    # Under a directory that does not exist yet, which is the writer's job to
-    # create and was previously only FieldWriter's.
+    # Under a directory that does not exist yet, which the writer creates.
     stem = joinpath(dir, "frames", "state")
 
     written = SwitchableBC(SlipWallBC(), ExtrapolationBC())
@@ -369,9 +368,9 @@ end
 end
 
 @testset "halo exchange refuses a foreign element type" begin
-    # The staging buffers are Vector{T} for a Decomp{T}. A field of another type
-    # used to be converted into and back out of them element by element, losing
-    # precision on the way out and costing a pass over the slab each way.
+    # The staging buffers are Vector{T} for a Decomp{T}. Converting a field of
+    # another type into and back out of them element by element would lose
+    # precision on the way out and cost a pass over the slab each way.
     s = io_solver(SlipWallBC(), SlipWallBC())
     decomp = s.decomp
     wrong = zeros(Float32, size(CL.field(decomp)))

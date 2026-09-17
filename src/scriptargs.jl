@@ -1,9 +1,8 @@
 # Argument parsing for the scripts in `bench/` and at the repo root.
 #
-# This parser is shared by three scripts that previously carried separate
-# implementations. Centralized `ARGS` parsing rejects unknown option names
-# immediately. The former `get(ENV, ...)` calls silently used defaults when an
-# environment-variable name was mistyped.
+# Centralized `ARGS` parsing rejects an unknown option name immediately. A
+# parser that falls through to the default on a mistyped name runs the wrong
+# configuration for the length of the job and says nothing.
 #
 # `ARGS` also records the complete invocation in the batch script and job log.
 # Two library-level options remain in

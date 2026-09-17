@@ -1969,7 +1969,7 @@ function test_tiled_level()
     # Multi-tile corner consensus and diagonal ghosts, decomposed: the
     # dimension-phased sync must give every copy of the corner node the
     # mean of four tiles and fill a corner ghost from the diagonal tile,
-    # across ranks now that a tile's neighbor may sit on another rank.
+    # across ranks, where a tile's neighbor may sit on another rank.
     let
         solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3,
                         tile=12, refine=BlockRegion((12, 12, 0), (24, 24, 1)))
@@ -2382,6 +2382,7 @@ const SUITE = (
     ("pentadiagonal C10", test_pentadiagonal_c10),
     ("closed C6", test_closed_c6),
     ("no-slip wall flux", test_no_slip_wall_flux),
+    ("slip wall flux", test_slip_wall_flux),
     ("device line solves", test_device_lines),
     ("staged device exchange", test_staged_exchange),
     ("distributed refinement", test_refined_decomposed),

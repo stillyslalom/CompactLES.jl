@@ -20,9 +20,9 @@
 #   0.1     168    9.386e-3  3.982    2.351e-3  1.000
 #
 # Unrelaxed, the loss tracks the STEP COUNT (42 : 84 : 168 = 1 : 2.00 : 4.00),
-# not the elapsed time. That is the dt-inconsistency recorded as model debt 1 in
-# reference/ROADMAP.md, measured directly rather than inferred: a calculation at
-# half the CFL applies twice the subgrid dissipation over the same interval.
+# not the elapsed time. That is the dt-inconsistency of the unrelaxed filter,
+# measured directly rather than inferred: a calculation at half the CFL
+# applies twice the subgrid dissipation over the same interval.
 # `filter_cfl` makes it a rate, constant to five figures across a 4x CFL change.
 #
 # The same with `landing=0.037`, an EveryTime callback whose instants do not

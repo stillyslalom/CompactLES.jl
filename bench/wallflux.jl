@@ -1,5 +1,6 @@
-# Hardware acceptance for R5: all wall normals, both precisions, molecular /
-# artificial diffusion and both species channels, against the CPU solver.
+# Hardware acceptance for the wall flux contracts: both wall conditions, all
+# wall normals, both precisions, molecular / artificial diffusion and both
+# species channels, against the CPU solver.
 #
 # julia --project=<env-with-AMDGPU> -t 1 bench/wallflux.jl backend=amdgpu
 # julia --project=. -t 1 bench/wallflux.jl backend=cpu
@@ -28,8 +29,10 @@ else
     error("backend must be cpu, amdgpu, or cuda")
 end
 
-function wall_case(::Type{T}, d, iso, channel, backend) where T
-    wall = NoSlipWallBC(Twall=iso ? T(2) : T(NaN))
+function wall_case(::Type{T}, d, kind, channel, backend) where T
+    iso = kind === :isothermal
+    wall = kind === :slip ? SlipWallBC() :
+           NoSlipWallBC(Twall=iso ? T(2) : T(NaN))
     eos = IdealMixture((IdealSpecies(T, "a"; R=T(1), gamma=T(1.4)),
                         IdealSpecies(T, "b"; R=T(0.7), gamma=T(1.3))))
     s = Solver(n_global=(12, 12, 12), L_domain=(one(T), one(T), one(T)),
@@ -42,8 +45,11 @@ function wall_case(::Type{T}, d, iso, channel, backend) where T
     initialize!(s, Q, (x, y, z) -> begin
         r = (x, y, z)[d]
         y1 = T(0.4) + T(0.05)*cospi(r)
+        # A tangential velocity, so the tangential momentum flux at a slip
+        # wall is nonzero before the wall condition zeros it.
+        vel = ntuple(k -> k == d ? zero(T) : T(0.12)*cospi(r), 3)
         Prim(rho=one(T)+T(0.02)*r, Y=(y1, one(T)-y1),
-             T_ion=T(2)+T(0.1)*r)
+             T_ion=T(2)+T(0.1)*r, u=vel)
     end)
     apply_bcs!(s, Q)
     compute_rhs!(s, Q, zero(Q))
@@ -65,6 +71,15 @@ function wall_case(::Type{T}, d, iso, channel, backend) where T
             (c <= 2 || !iso) && @assert f[I] == zero(T)
         end
     end
+    # A slip wall carries no tangential traction and retains the normal one.
+    if kind === :slip
+        for t in 1:3
+            f = Array(s.flux[d, s.equations.i_mom[t]])
+            for side in 1:2, I in CL.wallplane(s.decomp, d, side)
+                t == d ? (@assert abs(f[I]) > eps(T)) : (@assert f[I] == zero(T))
+            end
+        end
+    end
     run!(s, Q; tfinal=T(1e-4), nmax=10)
     @assert s.t == T(1e-4)
     return Array(parent(Q))
@@ -72,13 +87,13 @@ end
 
 mpi_main() do
     @assert MPI.Comm_size(MPI.COMM_WORLD) == 1 "run this hardware probe on one rank"
-    for T in (Float64, Float32), d in 1:3, iso in (false, true),
-        channel in (:fickian, :bulk)
-        host = wall_case(T, d, iso, channel, CPUBackend())
-        device = wall_case(T, d, iso, channel, DeviceBackend(ka_backend))
+    for T in (Float64, Float32), d in 1:3,
+        kind in (:adiabatic, :isothermal, :slip), channel in (:fickian, :bulk)
+        host = wall_case(T, d, kind, channel, CPUBackend())
+        device = wall_case(T, d, kind, channel, DeviceBackend(ka_backend))
         err = maximum(abs.(device .- host))
         @assert err <= 64eps(T)*max(one(T), maximum(abs, host))
-        println("$T dim=$d iso=$iso $channel: max state difference $err")
+        println("$T dim=$d $kind $channel: max state difference $err")
         flush(stdout)
     end
     println("wall flux hardware/backend acceptance complete")

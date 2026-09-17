@@ -660,8 +660,8 @@ vortex-ring/SF6 case has not been run under it
 ## Open items
 
 In approximate priority order; each links to the measurements it rests on.
-Items 7, 10 and 11 are closed and kept in place so that the numbering stays
-stable.
+Items 7 and 10 to 12 are closed and kept in place so that the numbering
+stays stable.
 
 1. **Raise the CFL ceiling at the spherical origin.** The density
    proportionality of β\* and the per-step filter strength are measured
@@ -711,9 +711,13 @@ stable.
     to 1.305e-11 at N = 193, and under `beta_sensor = :dilatation` the two
     detectors are indistinguishable there
     ([the wall rows](CALIBRATION_APPENDIX.md#the-sensor-operators-wall-rows)).
-12. **Add a `correct_flux!` method for `SlipWallBC`.** With the
-    artificial properties off and a physical shear viscosity, a slip wall
-    does not reproduce its mirror at the closure's order: μ = 5e-3 reads
-    9.489e-8 at N = 193 with orders 0.97 / 0.22, and μ = 5e-4 reads
-    2.395e-10 with 3.48 / 1.78
-    ([the wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror)).
+12. **The slip wall's flux contract: closed, September 2026.** At a slip
+    wall the normal species and total-energy fluxes and the tangential
+    momentum fluxes are zero, and the normal momentum flux is left whole.
+    The defect came from the conductive term −κ ∂T/∂n: its closure
+    truncation is a heat flux across a plane that conducts none, and the
+    resulting temperature defect in the near-wall cells regenerates the
+    gradient. At μ = 5e-3 the wall window's order rises from 0.40 / 0.12 to
+    3.79 / 3.90, and a two-dimensional wall with a tangential shear from
+    1.36 / 0.42 to 3.95 / 3.94
+    ([the flux contract](CALIBRATION_APPENDIX.md#the-slip-walls-flux-contract)).

@@ -713,7 +713,7 @@ end
     # 64 nodes, as the bench measures: on a shorter line the wall rows' leak
     # reaches the fold rows and the origin figures below are not round-off.
     # The figures were measured under the filter's cascade rows, so the lines
-    # pin them; the one-sided rows, the default since September 2026, move
+    # pin them; the one-sided rows, which are the default, move
     # the wall leak inward and are checked separately below.
     N = 64
     walls = ((SlipWallBC(), SlipWallBC()), per3[2], per3[3])
@@ -1296,9 +1296,9 @@ end
 end
 
 @testset "NSCBC inflow: matched uniform stream ⇒ no correction" begin
-    # Mirrors the outflow test. This whole method was previously never
-    # compiled, so nothing in it — including the transverse terms — had ever
-    # been executed, let alone checked.
+    # Mirrors the outflow test. Nothing else in the suite compiles this
+    # method, so without it the inflow path, the transverse terms included,
+    # is never executed.
     uin = (0.3, 0.0, 0.0)
     solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 0.4, 0.4),
                bcs=((NSCBCInflowBC(u=uin, T_ion=1.0), NSCBCOutflowBC(pinf=1.0)),
@@ -1325,9 +1325,10 @@ end
 end
 
 @testset "validate_bc: NSCBC restrictions are setup errors" begin
-    # Both restrictions used to be documented and unenforced. On an angular face
-    # nothing failed: the wave analysis dropped the curvature terms carried by
-    # grad_u[d,d] and the run completed with a wrong answer.
+    # Both restrictions are setup errors rather than documented caveats: left
+    # unchecked, an angular face would fail nothing, since the wave analysis
+    # drops the curvature terms carried by grad_u[d,d], and the run would
+    # complete with a wrong answer.
     two = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 2.0, 1.6)])
     wall = (SlipWallBC(), SlipWallBC())
@@ -1343,7 +1344,7 @@ end
     @test_throws ErrorException cyl((SwitchableBC(SlipWallBC(),
                                                  NSCBCOutflowBC(pinf=1.0)),
                                      SlipWallBC()))
-    # Composition length, previously re-checked on every RHS call of the run.
+    # Composition length, checked once at setup rather than on every RHS call.
     cart(Y) = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
                      bcs=((NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0, Y=Y),
                            NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
@@ -1462,7 +1463,7 @@ end
 @testset "bulk species channel: invariance, shocked interface, slab, width" begin
     # `species_flux = :bulk` replaces the Fickian species flux by one diffusive
     # flux on every conserved variable (reference/DESIGN.md, "The species
-    # channel"). Four properties measured in September 2026 and guarded here.
+    # channel"). Four measured properties are guarded here.
     bulk = ArtParams(enabled=true, species_flux=:bulk)
     fick = ArtParams(enabled=true)
 
@@ -4042,8 +4043,8 @@ end
         @test !script_args(["quiet=$text"], defaults; positional=pos).quiet
     end
 
-    # The point of the exercise: every one of these was a silent default under
-    # the environment-variable form this replaced.
+    # The point of the exercise: every one of these would be a silent default
+    # in a parser that falls through on an unknown name.
     @test_throws ArgumentError script_args(["progerss=1"], defaults; positional=pos)
     @test_throws ArgumentError script_args(["progress=lots"], defaults; positional=pos)
     @test_throws ArgumentError script_args(["quiet=maybe"], defaults; positional=pos)

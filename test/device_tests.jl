@@ -527,7 +527,7 @@ const POINTWISE_BODIES = (
     :_reciprocal_interior_point!, :_reciprocal_point!,
     :_rho_sensor_point!, :_ring_accum_point!, :_ring_pack_point!, :_rk_point!,
     :_scale_grad_point!, :_scale_interior_point!, :_shell_ring_point!,
-    :_slip_wall_point!,
+    :_slip_flux_point!, :_slip_wall_point!,
     :_species_bound_point!, :_species_diffusivity_point!, :_strain_mag_point!,
     :_subtract_div_point!,
     :_subtract_jac_div_point!, :_tag_delta4_point!, :_tag_gradient_point!,

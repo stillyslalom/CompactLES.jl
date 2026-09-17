@@ -1,5 +1,7 @@
-# Serial regressions for the NoSlipWallBC flux contract (ROADMAP R5).
-# This file is both included by test/runtests.jl and directly runnable.
+# Serial regressions for the wall flux contracts: the no-slip wall's
+# impermeable, noncatalytic, adiabatic-or-isothermal contract and the slip
+# wall's symmetry plane. This file is both included by test/runtests.jl and
+# directly runnable.
 
 if !isdefined(@__MODULE__, :CL)
     using MPI
@@ -47,19 +49,26 @@ function _wf_max_plane(a, plane)
     maximum(abs(a[I]) for I in plane; init=zero(eltype(a)))
 end
 
-@testset "no-slip wall flux: incompatible state reaches compact boundary rows" begin
-    # This is deliberately not a compatible insulated solution. Before R5 its
-    # constant conductive flux survived at both walls and its divergence was
-    # zero. Imposing zero endpoint flux must also move coupled compact rows,
-    # rather than patching only the endpoint energy RHS.
+"""
+A wall that enforces no state and corrects no flux. On a state whose velocity
+already vanishes at the wall it leaves exactly the uncorrected divergence, so
+it is the reference the imposed contracts are measured against.
+"""
+struct UncorrectedWallBC <: CL.BoundaryCondition end
+
+@testset "wall flux: an imposed wall flux reaches compact boundary rows" begin
+    # This is deliberately not a compatible insulated solution. Its constant
+    # conductive flux survives at both walls under the uncorrected reference
+    # and its divergence there is zero. Imposing zero endpoint flux must also
+    # move coupled compact rows, rather than patching only the endpoint
+    # energy RHS.
     T = Float64
     eos = IdealMixture(IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)))
     transport = Transport{T}(mu0=T(0.01), Pr=T(0.8), Sc=T(0.7))
-    wall = (NoSlipWallBC(), NoSlipWallBC())
-    slip = (SlipWallBC(), SlipWallBC())
     function audit(bc)
         sol = Solver(n_global=(33, 1, 1), L_domain=(one(T), one(T), one(T)),
-                     bcs=(bc, _wf_per(), _wf_per()), eos=eos, transport=transport,
+                     bcs=((bc, bc), _wf_per(), _wf_per()), eos=eos,
+                     transport=transport,
                      art=ArtParams{T}(enabled=false), deriv=lele_d1_6(T),
                      filt=compact_filter(T(0.45), T))
         Q = allocate_state(sol)
@@ -70,19 +79,24 @@ end
         compute_rhs!(sol, Q, rhs)
         return sol, rhs
     end
-    s, dQ = audit(wall)
-    ss, dQs = audit(slip)
-    ie = s.equations.i_energy
-    for side in 1:2
-        plane = CL.wallplane(s.decomp, 1, side)
-        @test all(I -> all(s.flux[1, sp][I] == 0 for sp in 1:s.equations.n_species), plane)
-        @test all(I -> s.flux[1, ie][I] == 0, plane)
+    sr, dQr = audit(UncorrectedWallBC())
+    ie = sr.equations.i_energy
+    @test abs(sr.flux[1, ie][first(CL.wallplane(sr.decomp, 1, 1))]) > T(1e-3)
+    for bc in (NoSlipWallBC(), SlipWallBC())
+        s, dQ = audit(bc)
+        for side in 1:2
+            plane = CL.wallplane(s.decomp, 1, side)
+            @test all(I -> all(s.flux[1, sp][I] == 0
+                               for sp in 1:s.equations.n_species), plane)
+            @test all(I -> s.flux[1, ie][I] == 0, plane)
+        end
+        # i=2 is not a wall node. Its change proves the corrected boundary
+        # flux entered the compact divergence solve rather than an
+        # endpoint-only fix.
+        I2 = gidx(s, 2, 1, 1)
+        @test abs(dQ[I2, ie] - dQr[I2, ie]) > T(1e-5)
+        @test isfinite(dQ[I2, ie])
     end
-    # i=2 is not a wall node. Its change proves the corrected boundary flux
-    # entered the compact divergence solve rather than an endpoint-only fix.
-    I2 = gidx(s, 2, 1, 1)
-    @test abs(dQ[I2, ie] - dQs[I2, ie]) > T(1e-5)
-    @test isfinite(dQ[I2, ie])
 end
 
 @testset "no-slip wall flux: faces, corners, transport channels and EOS" begin
@@ -140,22 +154,122 @@ end
     end
 end
 
-@testset "no-slip wall flux: SwitchableBC forwards its active condition" begin
+@testset "slip wall flux: faces, corners, transport channels and EOS" begin
+    ideal(T) = IdealMixture((IdealSpecies(T, "a"; R=T(1), gamma=T(1.4)),
+                             IdealSpecies(T, "b"; R=T(0.7), gamma=T(1.3))))
+    nasa(T) = Nasa9Mixture((CL.nasa9_constant_cp(T, "a", T(1), T(3.5)),
+                            CL.nasa9_constant_cp(T, "b", T(0.7), T(3.2))))
+    cases = ((T, d, channel, d == 2 ? nasa : ideal)
+             for T in (Float32, Float64) for d in 1:3
+             for channel in (:fickian, :bulk))
+    for (T, d, channel, eosfn) in cases
+        walls = (SlipWallBC(), SlipWallBC())
+        # Every face is a slip wall, so their intersections are exercised too.
+        s = Solver(n_global=(12, 12, 12), L_domain=(one(T), one(T), one(T)),
+                   bcs=(walls, walls, walls), eos=eosfn(T),
+                   transport=Transport{T}(mu0=T(0.02), Pr=T(0.75), Sc=T(0.6)),
+                   art=ArtParams{T}(enabled=true, species_flux=channel),
+                   deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> begin
+            q = (x, y, z)[d]
+            Y1 = T(0.35) + T(0.08)*q
+            Prim(Y=(Y1, one(T)-Y1), rho=T(1.1) + T(0.05)*q,
+                 T_ion=T(300) + T(30)*q,
+                 u=(T(0.2)+T(0.03)*x, T(-0.1)+T(0.02)*y, T(0.15)-T(0.01)*z))
+        end)
+        _wf_prepare!(s, Q; kappa_art=T(0.007), D_art=T(0.011))
+        moms = s.equations.i_mom
+        normal = moms[d]
+        before = Dict((side, m) => copy(s.flux[d, m]) for side in 1:2 for m in moms)
+        _wf_correct!(s, Q)
+        ie = s.equations.i_energy
+        for side in 1:2
+            plane = CL.wallplane(s.decomp, d, side)
+            @test plane !== nothing
+            @test all(sp -> all(I -> s.flux[d, sp][I] == zero(T), plane),
+                      1:s.equations.n_species)
+            @test all(I -> s.flux[d, ie][I] == zero(T), plane)
+            for m in moms
+                if m == normal
+                    # Wall traction: present before the hook and unchanged.
+                    @test _wf_max_plane(before[(side, m)], plane) > zero(T)
+                    @test all(I -> s.flux[d, m][I] == before[(side, m)][I], plane)
+                else
+                    @test all(I -> s.flux[d, m][I] == zero(T), plane)
+                end
+            end
+        end
+        @test all(isfinite, s.flux[d, ie])
+    end
+end
+
+@testset "slip wall flux: the symmetry plane reproduces its periodic mirror" begin
+    # A wall run whose data are even in rho, p and the tangential velocity
+    # and odd in the normal velocity is the restriction of a periodic run on
+    # the doubled domain. Under physical viscosity an uncorrected wall leaves
+    # a conductive heat flux across the symmetry plane and a shear traction
+    # on it; the contract removes both, and the difference from the mirror
+    # falls at the closure's order. The evolution orders are measured in
+    # test/convergence.jl.
+    mu, tf = 0.005, 0.2
+    prof(x) = (1 + 0.05cospi(x), 0.05sinpi(x), 0.05cospi(x))
+    function line(N, bc, L, bcs)
+        s = Solver(n_global=(N, 1, 1), L_domain=(L, 1.0, 1.0), bcs=bcs,
+                   transport=Transport(mu0=mu, Pr=0.7), art=ArtParams(enabled=false),
+                   deriv=lele_d1_6(), filter_interval=0, cfl=0.25)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> begin
+            rho, u, v = prof(x)
+            Prim(rho=rho, u=(u, v, 0.0), p=rho^1.4)
+        end)
+        run!(s, Q; tfinal=tf, nmax=2000)
+        s, Q
+    end
+    errs = Float64[]
+    for N in (49, 97)
+        wall = (SlipWallBC(), SlipWallBC())
+        s, Q = line(N, wall, 1.0, (wall, _wf_per(), _wf_per()))
+        m, Qm = line(2(N - 1), PeriodicBC(), 2.0,
+                     (_wf_per(), _wf_per(), _wf_per()))
+        push!(errs, maximum(abs(Q[gidx(s, i, 1, 1), 1] - Qm[gidx(m, i, 1, 1), 1])
+                            for i in 1:N))
+        ie = s.equations.i_energy
+        for side in 1:2, I in CL.wallplane(s.decomp, 1, side)
+            @test s.flux[1, ie][I] == 0
+            @test s.flux[1, s.equations.i_mom[2]][I] == 0
+            @test s.flux[1, 1][I] == 0
+        end
+    end
+    @info "Viscous slip wall against its mirror" errs
+    # 4.75e-7 and 3.00e-8 measured, a factor of 15.8 for a halving of h.
+    # Without the flux contract the pair reads 2.43e-6 and 1.50e-6, a factor
+    # of 1.6.
+    @test errs[2] < errs[1] / 8
+    @test errs[2] < 5e-8
+end
+
+@testset "wall flux: SwitchableBC forwards its active condition" begin
+    # An isothermal no-slip wall keeps the conductive heat flux and a slip
+    # wall removes it, so the two contracts are distinguishable at the same
+    # wall node.
     T = Float64
-    bc = SwitchableBC(SlipWallBC(), NoSlipWallBC())
+    bc = SwitchableBC(NoSlipWallBC(Twall=1.0), SlipWallBC())
     s = Solver(n_global=(17, 1, 1), L_domain=(1.0, 1.0, 1.0),
                bcs=((bc, NoSlipWallBC()), _wf_per(), _wf_per()),
                transport=Transport(mu0=0.01), art=ArtParams(enabled=false))
     Q = allocate_state(s)
-    initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0 + 0.2x))
+    initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, T_ion=1.0 + 0.2x))
     _wf_prepare!(s, Q)
     I = first(CL.wallplane(s.decomp, 1, 1))
-    raw = s.flux[1, s.equations.i_energy][I]
+    ie = s.equations.i_energy
+    heat = -(s.transport.mu0 * s.cp_mix[I] / s.transport.Pr) * s.grad_T_ion[1][I]
+    @test abs(heat) > 1e-4
     CL.correct_flux!(bc, s, Q, 1, 1)
-    @test s.flux[1, s.equations.i_energy][I] == raw
+    @test s.flux[1, ie][I] ≈ heat rtol = 1e-12
     switch!(bc)
     CL.correct_flux!(bc, s, Q, 1, 1)
-    @test s.flux[1, s.equations.i_energy][I] == 0
+    @test s.flux[1, ie][I] == 0
 end
 
 @testset "no-slip wall flux: compatible insulated manufactured fields" begin
@@ -345,13 +459,13 @@ end
                            CL.wallplane(s.decomp, 1, side)), 1:2)
 end
 
-@testset "no-slip wall flux: nonsingular curved metrics and stiffened gas" begin
+@testset "wall flux: nonsingular curved metrics and stiffened gas" begin
     cases = ((CylindricalMetric(), (1.0, 2pi, 0.5), (0.2, 0.0, 0.0),
               IdealMixture(IdealSpecies("gas"; R=1.0, gamma=1.4))),
              (SphericalMetric(), (1.0, 1.0, 2pi), (0.3, 0.4, 0.0),
               StiffenedGas(gamma=1.4, p_inf=0.0, cv=2.5)))
-    for (metric, extent, origin, eos) in cases
-        walls = (NoSlipWallBC(), NoSlipWallBC())
+    for (metric, extent, origin, eos) in cases, bc in (NoSlipWallBC(), SlipWallBC())
+        walls = (bc, bc)
         s = Solver(n_global=(12, 12, 12), L_domain=extent,
                    bcs=(walls, _wf_per(), _wf_per()), metric=metric, origin=origin,
                    eos=eos, transport=Transport(mu0=0.01),
@@ -366,11 +480,12 @@ end
     end
 end
 
-@testset "no-slip wall flux: threaded and KA-CPU pointwise equality" begin
-    for backend in (CPUBackend(), DeviceBackend(KernelAbstractions.CPU()))
+@testset "wall flux: threaded and KA-CPU pointwise equality" begin
+    for backend in (CPUBackend(), DeviceBackend(KernelAbstractions.CPU())),
+        wall in (NoSlipWallBC(Twall=1.1), SlipWallBC())
         s = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), backend=backend,
-                   bcs=((NoSlipWallBC(Twall=1.1), NoSlipWallBC(Twall=1.1)),
-                        _wf_per(), _wf_per()), transport=Transport(mu0=0.01),
+                   bcs=((wall, wall), _wf_per(), _wf_per()),
+                   transport=Transport(mu0=0.01),
                    art=ArtParams(enabled=false))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, T_ion=0.9 + 0.3x,

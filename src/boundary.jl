@@ -54,10 +54,23 @@ struct PeriodicBC <: BoundaryCondition end
 """
     SlipWallBC()
 
-Impermeable inviscid wall: remove normal velocity while retaining tangential
-velocity. The grid is node-centered and includes the wall point. On the wall
-plane the normal momentum is set to zero and the total energy is reduced by the
-normal kinetic energy it carried, so the internal energy is unchanged.
+Impermeable adiabatic symmetry plane: remove normal velocity while retaining
+tangential velocity. The grid is node-centered and includes the wall point. On
+the wall plane the normal momentum is set to zero and the total energy is
+reduced by the normal kinetic energy it carried, so the internal energy is
+unchanged.
+
+Every species has zero total normal flux, including molecular and artificial
+diffusion, and so does the total energy: the wall is adiabatic, the vanishing
+normal velocity does no work, and no enthalpy or artificial `:bulk` flux
+crosses the plane. The tangential momentum fluxes are zero as well, since the
+tangential velocity's normal derivative vanishes at a symmetry plane and there
+is no shear traction. The normal momentum flux remains, carrying the pressure,
+the normal viscous stress and the dilatational term. The condition is applied
+to the fully assembled flux, before the exchange and the compact divergence,
+and at corners as well as faces. Filtering and the hard state enforcement
+above are separate operations; neither establishes a whole-domain discrete
+conservation identity.
 """
 struct SlipWallBC <: BoundaryCondition end
 
@@ -449,8 +462,8 @@ end
 # Wall-plane enforcement runs as pointwise bodies over the plane's index
 # box: one shared body per condition, launched by `plane_pointwise!`, so a
 # device-resident patch enforces its walls without a host round trip. The
-# per-point writes are independent, so the launch reproduces the former serial
-# plane loop bitwise on the host path too.
+# per-point writes are independent, so the launch reproduces a serial plane
+# loop bitwise on the host path too.
 
 """
     plane_pointwise!(body!, route, plane, args...)
@@ -485,6 +498,41 @@ function enforce!(::SlipWallBC, Q, solver, d, side)
     plane_pointwise!(_slip_wall_point!, Q, plane, Q, solver.equations.i_mom[d],
                      solver.equations.i_energy, solver.equations.n_species)
     nothing
+end
+
+@inline function _slip_flux_point!(flux, d, m1, m2, m3, n_species, i_energy,
+                                   o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        for sp in 1:n_species
+            flux[d, sp][I] = 0
+        end
+        # A slip wall is a symmetry plane: the tangential velocity, density,
+        # temperature and mass fractions are even about it and the normal
+        # velocity is odd. The even fields' normal derivatives therefore
+        # vanish, leaving no shear traction and no conduction, and the normal
+        # velocity itself vanishes, so no mass, tangential momentum or energy
+        # crosses the plane. Rebuild all three to zero rather than subtracting
+        # terms: this also removes the bulk component flux from them, and is
+        # independent of the EOS energy gauge. The normal momentum flux is
+        # untouched, since pressure, the normal viscous stress and the
+        # dilatational term are all even, and they carry the wall's traction.
+        d == 1 || (flux[d, m1][I] = 0)
+        d == 2 || (flux[d, m2][I] = 0)
+        d == 3 || (flux[d, m3][I] = 0)
+        flux[d, i_energy][I] = 0
+    end
+    return nothing
+end
+
+function correct_flux!(::SlipWallBC, solver, Q, d, side)
+    plane = wallplane(solver.decomp, d, side)
+    plane === nothing && return nothing
+    m1, m2, m3 = solver.equations.i_mom
+    plane_pointwise!(_slip_flux_point!, solver.rho, plane,
+                     solver.field_tuples.flux, d, m1, m2, m3,
+                     solver.equations.n_species, solver.equations.i_energy)
+    return nothing
 end
 
 @inline function _no_slip_wall_point!(Q, eos, Twall, iso, m1, m2, m3, i_energy,

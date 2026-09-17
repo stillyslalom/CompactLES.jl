@@ -79,8 +79,7 @@ halfwidth(scheme::CompactScheme) = length(scheme.coeffs)
 #   :cascade3      Lele's one-sided row 1 at α = 2 (third order), the centered
 #                  Padé row 2 (fourth), then the C6 interior row (sixth) for a
 #                  scheme reaching ±3. This is the reduced-order cascade of
-#                  Carpenter, Gottlieb & Abarbanel (1993), the C8 default, and
-#                  the C6 default before September 2026.
+#                  Carpenter, Gottlieb & Abarbanel (1993), and the C8 default.
 #   :cascade4      The same with row 1 at α = 3, Lele's fourth-order one-sided
 #                  row. Gaitonde & Visbal run it under the compact filter.
 #   :brady_livescu Brady & Livescu (Computers & Fluids 2019), scheme T6 or
@@ -197,8 +196,8 @@ b = 1/9. `closures` selects the rows applied at a closed edge:
   holds its round-off seed. Same orders as `:cascade3` with about 2.5 times
   its wall error constant and a better-conditioned closed line.
 - `:cascade3`: the reduced-order cascade of Carpenter, Gottlieb & Abarbanel
-  (a third-order one-sided row 1, the fourth-order Padé row 2), the default
-  before September 2026 and the C8 default. Linearly unstable at an
+  (a third-order one-sided row 1, the fourth-order Padé row 2), and the C8
+  default. Linearly unstable at an
   inviscid slip wall: a uniform state grows a wall-normal velocity from
   round-off at 2.3 per unit time on a unit domain, visible after about
   thirty time units in Float64, which the F2 row of
@@ -323,9 +322,9 @@ left unfiltered; `closures` selects rows 2–4:
   F2 row removed exactly: under them it grows at half its unfiltered rate,
   and faster at a smaller `alphaf` (see `lele_d1_6`).
 - `:cascade`: centered compact filters of order 2, 4 and 6 with the same αf,
-  the standard reduced-order boundary cascade, the default before September
-  2026. One filter pass of a smooth field is then second order in the
-  maximum norm along the whole line, not only at the wall, because solving
+  the standard reduced-order boundary cascade. One filter pass of a smooth
+  field is then second order in the maximum norm along the whole line, not
+  only at the wall, because solving
   the coupled compact system propagates the row-2 truncation error into
   interior solution entries, and a filtered wall calculation is second order
   at the wall whatever the derivative closure. `lele_d1_6(closures =
@@ -463,8 +462,7 @@ divergence keeps one-sided rows (`div_along!`). A scheme's own rows are kept,
 except the `:neutral3` set of [`lele_d1_6`](@ref), which the `:cascade3` rows
 replace: the neutral rows are selected for the wall's injected condition,
 which an interface does not impose, and the cascade rows' truncation
-constants are 2.5 times smaller, so the interface studies keep the accuracy
-they had before the neutral rows became the default.
+constants are 2.5 times smaller.
 """
 interface_divergence_closures(scheme::AbstractCompactScheme) = scheme.closures
 function interface_divergence_closures(scheme::CompactScheme{T}) where {T}

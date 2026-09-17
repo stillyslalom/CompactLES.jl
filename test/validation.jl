@@ -54,30 +54,30 @@
 #   Shu-Osher  L1 rho 6.80e-3, wave train 2.09e-2, train peak 4.680
 #   Woodward   L1 rho 3.215e-2, peak rho 6.616 at x = 0.7785
 #   Sedov      R_s 0.8085 vs 0.8000 analytic (+1.06%), peak rho 5.13 (jump 6)
-#   Noh nu=1   plateau 3.9883/4    shock 0.2049/0.2   wall deficit 50%
+#   Noh nu=1   plateau 3.9988/4    shock 0.2021/0.2   wall deficit 24%
 #   Noh nu=2   plateau 15.009/16   shock 0.2091/0.2   wall deficit 55%
 #   Noh nu=3   plateau 62.555/64   shock 0.2089/0.2   wall deficit 29%
-#   Shock/SF6  worst Y -0.0129 / 1.0129, width 4 cells, 647 steps (Sept 2026)
-#   Noh aligned N=100 AR=4    plateau 3.9792/4   deficit 54%   shock 0.2146   4997 steps
+#   Shock/SF6  worst Y -0.0129 / 1.0129, width 4 cells, 647 steps
+#   Noh aligned N=100 AR=4    plateau 4.0035/4   deficit 33%   shock 0.2084   4966 steps
 #   Noh plane   N=24  AR=2    plateau 11.858/16  front 0.236/0.2  L1 rho 0.893  745 steps
 #
-# The C6 default closure became `:neutral3` in September 2026 (roadmap N6d);
-# under `:cascade3` the rows above read Woodward 3.22e-2 / 6.617, Noh nu=1
-# 3.9899 / 0.2043 / 50%, Noh aligned 3.9952 / 52% / 0.2109 / 4926 steps and
-# Noh plane 11.862 / 0.907 / 759 steps, the other cases unchanged. Those four
-# were taken before the detector's wall mirror, below.
+# The C6 default closure is `:neutral3`. Under `:cascade3` the rows above
+# read Woodward 3.22e-2 / 6.617, Noh nu=1 3.9899 / 0.2043 / 50%, Noh aligned
+# 3.9952 / 52% / 0.2109 / 4926 steps and Noh plane 11.862 / 0.907 / 759 steps,
+# the other cases unchanged. Those four were taken before the detector's wall
+# mirror, below.
 #   Woodward, C6 :brady_livescu   L1 rho 3.216e-2, peak rho 6.617 at x = 0.7785
 #   Noh nu=1 warm t0=0.3, C6 :brady_livescu   rho[1:4] 3.989 3.993 3.995 4.000
 #
 # The two Brady–Livescu rows guard the supported high-order wall
-# configuration (roadmap N6b, September 2026): the rows under the default
+# configuration: the rows under the default
 # filter reproduce the default closure's Woodward profile and hold the
 # resolved warm Noh wall; they take no singular start, so the cold Noh
 # rows above stay on the default closure.
 #
-# The fold rows moved in September 2026 when the same detector took the
+# The fold rows moved when the same detector took the
 # half-offset mirror at a coordinate fold on every field rather than on an
-# odd one alone (roadmap N6f). On a half-offset grid the mirror and the clamp
+# odd one alone. On a half-offset grid the mirror and the clamp
 # differ on one tap, the outermost of the first interior cell's stencil, so
 # only the cell beside the fold changes and the three rows moved in their
 # fourth or fifth digit: Sedov (peak rho 5.128 and closing e_min -0.00415
@@ -89,7 +89,22 @@
 # rows. No guard moved; the deficit percentage above is the one printed
 # number that rounds differently.
 #
-# The wall rows moved again in September 2026 when the sensor smoother and
+# The slip-wall rows moved when `SlipWallBC` took the
+# symmetry plane's flux contract: zero normal species and total-energy flux
+# and zero tangential momentum flux at the wall plane. The wall no longer
+# conducts heat across itself, so the two cases that reflect a Noh implosion
+# off a slip wall show much less wall heating. Planar Noh reads plateau
+# 3.9988, shock 0.2021 and a wall deficit of 24%, against 3.9883 / 0.2049 /
+# 50% before, and the aligned AR = 4 case 4.0035 / 33% / 0.2084 in 4966 steps
+# against 3.9792 / 54% / 0.2146 in 4997. The other rows
+# hold to the digits printed: Lax, Shu-Osher, both Woodward rows, Sedov, the
+# cylindrical and spherical folds, the warm Brady-Livescu wall, the interface
+# case and the AR = 2 plane, whose four faces carry inflow rather than walls.
+# Neither stored reference was regenerated. The aligned case's transverse
+# round-off reads 2.1e-7 against 7.8e-9 before, so its guard widens from 1e-7
+# to 5e-7; the nature of that transverse mode remains open.
+#
+# The wall rows moved again when the sensor smoother and
 # the `:d8` ring detector took node-centred closure rows at a reflecting wall,
 # the rows the fourth-difference detector's mirror already reads. The
 # `:gaussian` smoother is the default, and its rows folded onto the
@@ -104,7 +119,7 @@
 # reads 7.8e-9 against 2.8e-6 before, below the 1.4e-8 it read under the
 # clamp, so its guard returns from 5e-6 to the 1e-7 it carried then.
 #
-# The wall rows moved in September 2026 when the fourth-difference
+# The wall rows moved when the fourth-difference
 # detector stopped clamping the field at a reflecting wall and took the
 # node-centred mirror there (`sensor_mirror`, artificial.jl). The artificial
 # coefficients beside a wall fall to what the interior sensor gives, so the
@@ -120,9 +135,9 @@
 # third of the run, and its guard widened from 1e-7 to 5e-6; the wall carries
 # the interior's artificial viscosity and no more.
 #
-# The wall rows moved in September 2026 when compact_filter's closure rows
-# went from the reduced-order cascade to the one-sided eighth-order rows
-# (roadmap N6a). Every case has closed ends, so every row was re-taken;
+# The wall rows moved when compact_filter's closure rows
+# went from the reduced-order cascade to the one-sided eighth-order rows.
+# Every case has closed ends, so every row was re-taken;
 # only the ones with a gradient at a closed end moved: planar Noh (plateau
 # 3.9957 and deficit 60% before, the wall deficit the change exists for,
 # at a plateau 0.15% lower), the aligned and plane Noh cases, and the two
@@ -133,9 +148,9 @@
 # 1e-8 to 1e-7 for the wider rows (measured 1.4e-8). The comparison behind
 # the change is in reference/CALIBRATION_APPENDIX.md.
 #
-# The Noh, Shu-Osher, Sedov and interface rows moved in September 2026 when
+# The Noh, Shu-Osher, Sedov and interface rows moved when
 # filter_weight began reading each direction's own hyperbolic rate
-# (|u_d| + c)/h_d in place of the maximum that sized the step (roadmap N5a).
+# (|u_d| + c)/h_d in place of the maximum that sized the step.
 # Every Noh case is diffusion-limited at the front under C_beta = 1, so its
 # passes there were at cfl/filter_cfl strength before and are relaxed by the
 # diffusive share now: the plateaus rose at nu = 2 and 3, the wall deficits
@@ -146,7 +161,7 @@
 # aligned 3.9161 / 50% / 0.2116 / 5149, plane 11.766 / 0.898 / 752. Lax and
 # Woodward are acoustic-limited and did not move to the digits printed.
 #
-# The Woodward and Noh rows moved in September 2026 when the filter_cfl default
+# The Woodward and Noh rows moved when the filter_cfl default
 # went from 0 to 0.35: those cases run below the reference CFL, so their filter
 # passes are relaxed, while Lax, Shu-Osher, Sedov and the interface case did not
 # move to the digits printed. Unrelaxed, the rows read Woodward 3.25e-2 / 6.608
@@ -155,7 +170,7 @@
 # sizing the first step from the initial data's artificial coefficients; no
 # other row moved to the digits printed.
 #
-# All rows were re-measured in August 2026 when ArtParams.smoother moved to
+# All rows were re-measured when ArtParams.smoother moved to
 # :gaussian; reference/CALIBRATION_APPENDIX.md carries why, and the previous set under
 # :compact for comparison. Every plateau and every pre-shock L1 improved, wall
 # heating worsened at nu = 1 and nu = 2 and improved at nu = 3, and the two
@@ -455,10 +470,11 @@ let r = noh_aligned(; N=100, AR=4)
     @test 0 < deficit < 0.7
     @test abs(Rnum - 0.2) < 0.025
     # The initial data carry no transverse variation, so this is round-off,
-    # amplified by whatever the wall supports. Measured 7.8e-9, against the
-    # 2.8e-6 it reached while the sensor smoother's rows were half a cell out
-    # at the wall.
-    @test r.uniformity < 1e-7
+    # amplified by whatever the wall supports. Measured 2.1e-7, against the
+    # 7.8e-9 it read while the slip wall still conducted heat across itself
+    # and the 2.8e-6 it reached while the sensor smoother's rows were half a
+    # cell out at the wall.
+    @test r.uniformity < 5e-7
     @test r.steps < 8000
 end
 let r = noh_cartesian(; N=24, AR=2)

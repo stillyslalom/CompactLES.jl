@@ -435,9 +435,9 @@ function step_map(solver, Q0, dt, filter_on)
 end
 
 # The step map is differenced centrally with delta = 1e-5 · max(|Q|, 1); a
-# neutral row then reads 1 + O(1e-9), against 1 + O(1e-7) for the one-sided
-# 1e-7 difference this part used before September 2026, so the 1 + 1e-8 gate
-# of roadmap N6d is resolved. `ladder` repeats the row at 3e-6 and 3e-5 so a
+# neutral row then reads 1 + O(1e-9), against 1 + O(1e-7) for a one-sided
+# 1e-7 difference, so a 1 + 1e-8 neutrality gate is resolved. `ladder`
+# repeats the row at 3e-6 and 3e-5 so a
 # reading can be told from its perturbation dependence.
 function jacobian_row(label, deriv; N=51, filter_on=false, cl=:onesided, mu=0.0,
                       wall=:slip, alphaf=0.45, delta=1e-5, ladder=false)

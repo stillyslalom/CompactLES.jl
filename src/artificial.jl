@@ -181,8 +181,7 @@ const D4 = (1, -4, 6, -4, 1)   # offsets −2:2
 # sensor's field carries. `inv_h[d]` is one over the metric scale factor times
 # the mapping Jacobian (metric.jl), so the quotient is the arclength of one
 # computational cell, the same quantity `max_rate` inverts for the advective
-# rate. On a Cartesian grid with no `Stretch` the quotient is `h[d]` exactly,
-# which is what it was before this was per point.
+# rate. On a Cartesian grid with no `Stretch` the quotient is `h[d]` exactly.
 #
 # `wpow` is 1 or 2 at every call site. The repeated multiplication keeps the
 # kernel free of a runtime `^`, which not every device backend supports at an
@@ -522,10 +521,10 @@ function smooth!(f, solver)
     for d in 1:3
         solver.decomp.active[d] || continue
         # Only dimension d: the filter about to run is a 1-D stencil along d,
-        # so the other two dimensions' halos are dead. This used to call
-        # exchange_halos!, refreshing all three every time round the loop --
-        # three times the traffic it needs in a 3-D run, on a routine that
-        # runs once per sensor per species per RHS.
+        # so the other two dimensions' halos are dead. `exchange_halos!`
+        # would refresh all three every time round the loop, three times the
+        # traffic needed in a 3-D run, on a routine that runs once per sensor
+        # per species per RHS.
         exchange_dim!(f, solver.decomp, d)
         smooth_along!(solver.tmp_a, f, solver, d, 1)
         copy_interior!(f, solver.tmp_a, solver.decomp)

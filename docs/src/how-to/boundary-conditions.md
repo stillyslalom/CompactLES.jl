@@ -27,13 +27,22 @@ NoSlipWallBC(Twall = 300.0)
 
 The thermodynamic wall state is computed through the selected EOS.
 
-Both no-slip variants are impermeable and noncatalytic: every species has zero
-normal flux, including molecular diffusion, artificial diffusion, and the
-artificial `:bulk` species channel. The default adiabatic wall also has exactly
-zero normal total-energy flux. An isothermal wall permits conductive heat
-exchange with conductivity `mu0 * cp_mix / Pr + kappa_art`; its normal energy
-flux contains no species enthalpy diffusion or bulk component diffusion.
+All three wall conditions are impermeable and noncatalytic: every species has
+zero normal flux, including molecular diffusion, artificial diffusion, and the
+artificial `:bulk` species channel. The default adiabatic no-slip wall also has
+exactly zero normal total-energy flux. An isothermal wall permits conductive
+heat exchange with conductivity `mu0 * cp_mix / Pr + kappa_art`; its normal
+energy flux contains no species enthalpy diffusion or bulk component diffusion.
 Pressure and viscous wall stresses remain in the momentum flux.
+
+The slip wall is a symmetry plane, so it is adiabatic and its normal
+total-energy flux is exactly zero as well. Its tangential momentum fluxes are
+zero too: the tangential velocity's normal derivative vanishes at a symmetry
+plane, so there is no shear traction. The normal momentum flux remains and
+carries the pressure, the normal viscous stress and the dilatational term.
+Without the correction, a conductive heat flux and a shear traction remain at
+the closure's truncation level, and under physical viscosity the near-wall
+solution error stops converging.
 
 These conditions are imposed on the assembled flux before compact divergence,
 so they affect the nearby rows as well as the wall node. They do not establish a

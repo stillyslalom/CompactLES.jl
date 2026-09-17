@@ -71,13 +71,11 @@ function budget(name, solver, Q)
 
     whole = best(() -> compute_rhs!(solver, Q, dQ))
     npt = prod(decomp.n_local)
-    # Velocity + scalar + flux solves, then the sensor path, which used to be
-    # left out of this count altogether — so the number reported the derivative
-    # traffic while being labelled as all of it. Both sensor-path settings can
-    # remove their solves or add them: `gaussian_filter` has an identity
-    # left-hand side and runs none, `compact_filter` runs one per active
-    # dimension per sensor, and `detector = :d8` adds one pentadiagonal solve
-    # on the same footing.
+    # Velocity + scalar + flux solves, then the sensor path, which this count
+    # includes. Both sensor-path settings can remove their solves or add them:
+    # `gaussian_filter` has an identity left-hand side and runs none,
+    # `compact_filter` runs one per active dimension per sensor, and
+    # `detector = :d8` adds one pentadiagonal solve on the same footing.
     # Detector applications and smoothing passes are counted separately, since
     # `mu_sensor = :velocity` is the one setting where they differ: it detects
     # three fields (one per velocity component) and smooths their reduction

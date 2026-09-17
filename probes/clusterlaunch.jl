@@ -40,9 +40,9 @@ const nodes = opt.nodes
 const cores_per_node = opt.cores_per_node
 const total_cores = nodes * cores_per_node
 const use_filter = opt.filter
-# Rejected rather than silently treated as c6: the old ENV form fell through to
-# the default on any typo, and a mis-sized C10 run is the kind of thing you find
-# out about from `plan_direction` an allocation later.
+# Rejected rather than silently treated as c6: a typo that falls through to
+# the default gives a mis-sized C10 run, which `plan_direction` reports an
+# allocation later.
 const deriv = opt.scheme == "c10" ? lele_d1_10() :
               opt.scheme == "c6" ? lele_d1_6() :
               error("scheme must be c6 or c10, got '$(opt.scheme)'")

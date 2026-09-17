@@ -46,6 +46,7 @@ record of that setting.
 24. [The neutral closure rows](#the-neutral-closure-rows)
 25. [Fifth-order C6 closure search](#fifth-order-c6-closure-search)
 26. [The detector's wall mirror](#the-detectors-wall-mirror)
+27. [The slip wall's flux contract](#the-slip-walls-flux-contract)
 
 ## The battery
 
@@ -6101,10 +6102,213 @@ axis: 8.7e-14 at the axis against a wall-node 5.5e-5.
    first six nodes of either wall at N = 49, 97 and 193, and the
    `detector = :d8` row of the channel table falls from 3.469e-11 to 1.305e-11
    at N = 193.
-3. A slip wall with a physical shear viscosity and the artificial
-   properties off does not reproduce its mirror at the closure's order:
-   μ = 5e-3 reads 2.167e-7 / 1.103e-7 / 9.489e-8 (0.97 / 0.22) and
-   μ = 5e-4 reads 9.183e-9 / 8.248e-10 / 2.395e-10 (3.48 / 1.78). There is
-   no `correct_flux!` method for `SlipWallBC`. Scaled to a β\* of order
-   1e-13 this channel is orders below the residual measured above, so it is
-   an independent finding and not the carrier here.
+3. Closed, September 2026, by [the slip wall's flux
+   contract](#the-slip-walls-flux-contract). A slip wall with a physical
+   shear viscosity and the artificial properties off did not reproduce its
+   mirror at the closure's order, the conductive wall flux being the
+   carrier; the wall window's order at μ = 5e-3 rises from 0.40 / 0.12 to
+   3.79 / 3.90. Scaled to a β\* of order 1e-13 that channel is orders below
+   the residual measured above, so it was an independent finding and not
+   the carrier here.
+
+## The slip wall's flux contract
+
+September 2026, [CALIBRATION.md](CALIBRATION.md#open-items) item 12 and
+[what remains](#what-remains) item 3 above. `SlipWallBC` had no
+`correct_flux!` method, so the fluxes assembled at a slip-wall node reached
+the compact divergence as the interior formulas produced them. Under a
+physical shear viscosity this leaves a conductive heat flux across an
+adiabatic symmetry plane and a shear traction on it, and the near-wall
+solution error stops converging. This section records the defect, the
+measurement that attributes it, the contract that replaces it and what that
+contract moved.
+
+Unless a table says otherwise the case is the standing wave of
+`test/smooth_cases.jl` between slip walls on [0, 1] at N = 49 / 97 / 193,
+`cfl = 0.25`, t = 0.4, C6 `:neutral3`, the artificial properties off, and
+the error is the density in the four-node wall window measured against the
+periodic run on [0, 2) at the same spacing, which carries no closure rows.
+"No hook" is the previous path and "contract" the current one.
+
+### The defect
+
+Under the wall-closure bench's settings, `compact_filter(0.45)` every step
+with `filter_cfl = 0.35`:
+
+| μ | path | N = 49 | N = 97 | N = 193 | orders |
+|---|---|---|---|---|---|
+| 5e-3 | no hook | 5.733e-6 | 4.336e-6 | 3.991e-6 | 0.40 / 0.12 |
+| 5e-3 | contract | 4.140e-7 | 2.996e-8 | 2.005e-9 | 3.79 / 3.90 |
+| 5e-4 | no hook | 6.567e-7 | 9.289e-8 | 5.167e-8 | 2.82 / 0.85 |
+| 5e-4 | contract | 5.309e-7 | 3.549e-8 | 2.304e-9 | 3.90 / 3.95 |
+
+Unfiltered, which is what `test/convergence.jl` runs:
+
+| μ | closure | N = 49 | N = 97 | N = 193 | orders |
+|---|---|---|---|---|---|
+| 5e-3 | `:neutral3` | 4.638e-6 | 2.470e-6 | 2.088e-6 | 0.91 / 0.24 |
+| 5e-3 | `:cascade3` | 3.376e-6 | 2.249e-6 | 2.071e-6 | 0.59 / 0.12 |
+| 5e-4 | `:neutral3` | 6.863e-7 | 8.207e-8 | 3.443e-8 | 3.06 / 1.25 |
+| 5e-4 | `:cascade3` | 3.040e-7 | 5.440e-8 | 2.701e-8 | 2.48 / 1.01 |
+
+The rows recorded when the item was opened are 2.167e-7 / 1.103e-7 /
+9.489e-8 (0.97 / 0.22) at μ = 5e-3 and 9.183e-9 / 8.248e-10 / 2.395e-10
+(3.48 / 1.78) at μ = 5e-4. Their orders match the unfiltered `:neutral3`
+rows above, their successive ratios agreeing with those to within 5%, but
+their level is about 22 times lower at every resolution. The settings they were
+taken under are not recorded and the offset is unexplained; the tables here
+are the reproducible ones.
+
+### Which flux carries it
+
+A slip-wall node in a one-dimensional standing wave carries an exactly zero
+species flux, because ΣY = 1 makes the correction velocity cancel the single
+species' diffusive flux, and an exactly zero tangential momentum flux,
+because the transverse dimensions are collapsed. Imposing either alone
+therefore reproduces the uncorrected row digit for digit, while imposing the
+energy flux alone reproduces the full contract:
+
+| imposed at the wall node | N = 49 | N = 97 | N = 193 | orders |
+|---|---|---|---|---|
+| nothing | 5.733e-6 | 4.336e-6 | 3.991e-6 | 0.40 / 0.12 |
+| species flux | 5.733e-6 | 4.336e-6 | 3.991e-6 | 0.40 / 0.12 |
+| tangential momentum | 5.733e-6 | 4.336e-6 | 3.991e-6 | 0.40 / 0.12 |
+| energy flux | 4.140e-7 | 2.996e-8 | 2.005e-9 | 3.79 / 3.90 |
+| all three | 4.140e-7 | 2.996e-8 | 2.005e-9 | 3.79 / 3.90 |
+
+The energy flux at the wall node is the conductive term alone. At N = 97
+and μ = 5e-3 the four components read, at t = 0.4, species 0, normal
+momentum 1.070, tangential momentum 0, and energy −2.1378e-6, which equals
+−(μ c_p/Pr) ∂T/∂n to every digit with ∂T/∂n = 8.551e-5; the mirror run's
+coincident node reads −7.2e-15 for the same flux. The convective, viscous
+work, enthalpy and `:bulk` terms all vanish because u_n is enforced to zero
+on the plane.
+
+### Why the order collapses
+
+The closure rows themselves are not at fault. On the exactly even initial
+data they return ∂T/∂n at their own order, third for `:neutral3`. What
+follows is that value against time, the filtered case at μ = 5e-3:
+
+| path | N | t = 0 | t = 0.01 | t = 0.05 | t = 0.1 | t = 0.2 | t = 0.4 |
+|---|---|---|---|---|---|---|---|
+| no hook | 49 | 3.901e-6 | 1.353e-5 | 4.258e-5 | 6.050e-5 | 8.973e-5 | 1.133e-4 |
+| no hook | 97 | 4.885e-7 | 4.237e-6 | 1.624e-5 | 3.134e-5 | 5.704e-5 | 8.551e-5 |
+| no hook | 193 | 6.109e-8 | 1.833e-6 | 1.038e-5 | 2.290e-5 | 4.608e-5 | 7.429e-5 |
+| contract | 49 | 3.901e-6 | 1.050e-5 | 1.628e-5 | 1.060e-5 | 3.822e-6 | 1.404e-6 |
+| contract | 97 | 4.885e-7 | 1.970e-6 | 1.663e-6 | 1.139e-6 | 4.298e-7 | 1.225e-7 |
+| contract | 193 | 6.109e-8 | 2.608e-7 | 1.957e-7 | 1.353e-7 | 5.210e-8 | 1.313e-8 |
+
+The t = 0 column converges at 3.00 / 3.00. Without the contract the t = 0.4
+column converges at 0.41 / 0.20; with it, at 3.52 / 3.22. The truncation
+error of the closure rows is a heat flux across a plane that conducts none;
+the resulting temperature defect in the first few cells regenerates the
+gradient, and flux and gradient settle at a level that no longer follows h.
+The wall solution error inherits that level, which is the 0.40 / 0.12 row
+above. Removing the flux removes the feedback, and both the gradient and the
+solution error return to the closure's order.
+
+### The tangential traction
+
+The one-dimensional case cannot separate the tangential momentum flux,
+whose value there is zero. A two-dimensional case can: slip walls on both
+ends of x, periodic in y over 16 nodes, ρ = 1 + 0.05 cos(πx)(1 + 0.3 cos y),
+u = 0.05 sin(πx) cos y, v = 0.05 cos(πx) sin y, p = ρ^1.4, μ = 5e-3,
+t = 0.2, against the periodic run on the doubled x domain. The error is the
+maximum density difference over the whole plane:
+
+| imposed at the wall node | N = 25 | N = 49 | N = 97 | orders |
+|---|---|---|---|---|
+| nothing | 1.066e-5 | 4.155e-6 | 3.109e-6 | 1.36 / 0.42 |
+| energy flux | 1.017e-5 | 7.699e-7 | 1.080e-7 | 3.72 / 2.83 |
+| the contract | 1.035e-5 | 6.701e-7 | 4.355e-8 | 3.95 / 3.94 |
+
+The energy flux carries most of the defect here too, and the tangential
+traction carries the rest: without it the finest pair reads 2.83 rather than
+3.94. A one-dimensional case with a tangential velocity (`c = 0.05` in
+`standing_profile`) reproduces the contract's 3.79 / 3.90 with the
+artificial properties either on or off, and its uncorrected row reads
+5.846e-6 / 4.385e-6 / 4.024e-6 against the 5.733e-6 / 4.336e-6 / 3.991e-6
+of the same case without a tangential component, so the traction contributes
+little where the wall-parallel variation is absent.
+
+### The contract
+
+`correct_flux!(::SlipWallBC, ...)` writes, on the owned wall plane, zero for
+every species flux, zero for every tangential momentum flux and zero for the
+total normal energy flux, and leaves the normal momentum flux untouched.
+Rebuilding these rather than subtracting the individual terms also removes the
+`:bulk` component flux and is independent of the EOS energy gauge, as in the
+no-slip hook. The wall stays adiabatic: `SlipWallBC` carries no wall
+temperature, and a symmetry plane admits no conductive exchange. The
+retained normal momentum flux carries the pressure, the normal viscous
+stress and the β\* dilatational term, all even about the plane.
+
+With the artificial properties on, the same three components lose their
+κ\* ∂T/∂n, D\* ∂Y/∂n and tangential μ\* contributions at every slip wall.
+On a smooth single-species field at `mu0 = 0` the only one of those that
+survives is κ\* ∂T/∂n, and κ\* is negligible there, so the inviscid rows of
+the smooth matrix do not move; the battery's shocked slip walls do.
+
+### What moved
+
+The battery (`test/validation.jl`) has two cases that reflect a Noh
+implosion off a slip wall, and the wall deficit of both falls:
+
+| case | quantity | before | after |
+|---|---|---|---|
+| Noh ν = 1, N = 400 | plateau (exact 4) | 3.9883 | 3.9988 |
+| | shock speed (exact 0.2) | 0.2049 | 0.2021 |
+| | wall deficit | 50% | 24% |
+| Noh aligned, N = 100, AR = 4 | plateau (exact 4) | 3.9792 | 4.0035 |
+| | wall deficit | 54% | 33% |
+| | shock speed | 0.2146 | 0.2084 |
+| | steps | 4997 | 4966 |
+| | transverse round-off | 7.8e-9 | 2.1e-7 |
+
+The Noh wall deficit measures wall heating, and the κ\* flux the wall was
+conducting is one of its sources, so the deficit falls when that flux is
+removed. The aligned case's transverse round-off grows by a factor of 27 and
+its guard widens from 1e-7 to 5e-7; that mode is the subject of its own open
+item and is not settled here.
+
+Every other row holds to the digits printed: Lax, Shu–Osher, both Woodward
+rows, Sedov, the cylindrical and spherical folds, the warm Brady–Livescu
+wall, the interface case and the AR = 2 Cartesian plane, whose four faces
+carry inflow rather than walls. Neither stored reference was regenerated.
+
+In `test/convergence.jl` no existing row moved. With `mu0 = 0` and the
+artificial properties off the wall-plane fluxes the contract writes are
+already exactly zero, measured after a full run at N = 193 with and without
+the filter and with a tangential velocity, so it is a no-op wherever those
+rows run. The file's new row is the viscous slip wall at 4.00, beside the
+viscous no-slip wall's 4.00.
+
+In `bench/wallclosure.jl` the inviscid slip-wall rows hold to the four
+digits measured, with the properties on as well as off, and so does the
+smooth reflected pulse: 1.192e-9 at N = 385 and amplitude 0.01 under
+`:neutral3`, before and after. The shocked pulse moves in the third digit,
+4.614e-6 against 4.624e-6 at N = 385 and amplitude 0.1, where the reflection
+leaves a nonzero κ\* at the wall. The matrix gains a viscous slip-wall table,
+which matches the viscous no-slip table to three digits at every closure:
+
+| closure | properties | N = 49 | N = 97 | N = 193 | orders |
+|---|---|---|---|---|---|
+| C6 `:neutral3` | off | 4.145e-7 | 3.000e-8 | 2.009e-9 | 3.79 / 3.90 |
+| | on | 4.165e-7 | 3.003e-8 | 2.010e-9 | 3.79 / 3.90 |
+| C6 `:cascade3` | off | 1.544e-7 | 1.251e-8 | 8.727e-10 | 3.63 / 3.84 |
+| | on | 1.554e-7 | 1.253e-8 | 8.730e-10 | 3.63 / 3.84 |
+| C6 Brady–Livescu | off | 1.972e-9 | 4.406e-11 | 8.094e-13 | 5.48 / 5.77 |
+| | on | 1.972e-9 | 4.407e-11 | 8.074e-13 | 5.48 / 5.77 |
+| C8 Brady–Livescu | off | 1.996e-10 | 9.719e-13 | 1.843e-14 | 7.68 / 5.72 |
+| | on | 2.052e-10 | 1.007e-12 | 1.554e-14 | 7.67 / 6.02 |
+
+The rows of [smooth walls](#smooth-walls) recorded for the previous change
+do not all reproduce on the current solver: the viscous no-slip C6
+Brady–Livescu row with the properties on reads 7.9337e-13 at N = 193 against
+the 8.002e-13 recorded there, and the C8 row 2.678e-10 / 1.079e-12 /
+5.151e-14 against 2.776e-10 / 1.051e-12 / 4.285e-14. Those cases carry no
+slip wall, and a worktree at the parent commit reproduces the new values
+bitwise, so the drift is not this change; the properties-off rows are
+bit-identical to the recorded ones throughout.
+

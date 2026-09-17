@@ -1,6 +1,6 @@
 # The artificial bulk viscosity on anisotropic grids: the aspect-ratio
 # penalty of the scalar β* in the step, and the relaxed filter's pass count,
-# which followed it until the weight became directional (roadmap N5a).
+# which followed it until the weight became directional.
 #
 #   julia --project=. -t 16 bench/anisotropic.jl                      # both cases
 #   julia --project=. -t 16 bench/anisotropic.jl aligned ar=1,4,16

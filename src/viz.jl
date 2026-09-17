@@ -1,13 +1,11 @@
 # Geometry- and variable-aware extraction of report fields for visualization,
 # and the Makie plotting interface layered on top of it.
 #
-# The tutorials used to each redefine a private `density_line(solver, Q)` that
-# sampled `mixture_density` along dimension 1 at `(i, 1, 1)`. That helper was
-# rank-local (correct only when the sampled line lived on one rank) and hard
-# wired to one variable and one geometry. The functions here replace it with a
-# collective, geometry-aware API that resolves any named scalar through the same
-# catalog `save_vtk` uses (`scalar_field` in io.jl), so a profile or a slice is
-# one call with the same meaning under MPI decomposition as in serial.
+# The functions here are a collective, geometry-aware API that resolves any
+# named scalar through the same catalog `save_vtk` uses (`scalar_field` in
+# io.jl), so a profile or a slice is one call with the same meaning under MPI
+# decomposition as in serial. A rank-local sampler wired to one variable and
+# one geometry is correct only where the sampled line lives on one rank.
 #
 # Nothing here depends on a plotting package. `profileplot`, `fieldheatmap`, and
 # their mutating forms are declared as stubs that error until a Makie backend is

@@ -10,10 +10,9 @@
 # Solver in rhs.jl keeps the physics configuration and the run clock,
 # plus the vector of this rank's patches in global order. In the common case of
 # one patch spanning all ranks, that patch's decomposition is built over
-# MPI.COMM_WORLD, matching the pre-patch solver, and `Base.getproperty`
-# on Solver forwards the patch-owned names to the sole patch, so the whole
-# existing surface (`solver.rho`, `solver.decomp`, ...) reads unchanged and the
-# single-patch code path is the old code path.
+# MPI.COMM_WORLD, and `Base.getproperty` on Solver forwards the patch-owned
+# names to the sole patch, so `solver.rho`, `solver.decomp` and the rest of
+# the solver surface resolve to that patch.
 #
 # With several patches, the rank set is partitioned: MPI.Comm_split assigns
 # each rank to exactly one patch's communicator, ranks in proportion to patch

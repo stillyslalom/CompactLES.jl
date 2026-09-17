@@ -82,8 +82,8 @@ Base.@propagate_inbounds Base.setindex!(Q::ConservedState, value, I...) =
     setindex!(parent(Q), value, I...)
 
 # Component views are the solver's common array-level operation. Returning a
-# view of the dense parent keeps MPI packing and compact line solves on the same
-# SubArray types they used before the display wrapper was introduced.
+# view of the dense parent keeps MPI packing and compact line solves on plain
+# `SubArray`s of the parent rather than views of the wrapper.
 Base.view(Q::ConservedState, I...) = view(parent(Q), I...)
 Base.copy(Q::ConservedState) = ConservedState(copy(parent(Q)))
 Base.zero(Q::ConservedState) = ConservedState(zero(parent(Q)))

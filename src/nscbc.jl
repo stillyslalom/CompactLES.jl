@@ -424,11 +424,12 @@ end
 # ---------------------------------------------------------------------------
 # Setup-time validation of both conditions.
 #
-# The angular-face restriction was documented in the header above and in both
-# docstrings, but nothing enforced it: an NSCBC on a cylindrical θ face or a
-# spherical θ/φ face ran to completion, on a wave analysis missing the metric
-# terms that the stored grad_u[d,d] carries there. Nothing failed and the answer
-# was wrong, so it is now a setup error, not a documented caveat.
+# The angular-face restriction is enforced here rather than left to the header
+# above and the two docstrings: without the check an NSCBC on a cylindrical θ
+# face or a spherical θ/φ face would run to completion on a wave analysis
+# missing the metric terms that the stored grad_u[d,d] carries there. Nothing
+# would fail and the answer would be wrong, so it is a setup error rather than
+# a documented caveat.
 
 function _validate_nscbc_face(metric, d::Int, what::String)
     unit_scalefactor(metric, d) && return nothing

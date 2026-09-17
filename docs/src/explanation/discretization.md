@@ -115,9 +115,9 @@ four closure sets through their `closures` keyword. The C6 default
 fourth-order compact second row on five points, with coefficients chosen so
 that the Euler step linearized about a uniform state between slip walls is
 neutral; it keeps the cascade's orders at about 2.5 times its wall error
-constant. `:cascade3`, the C8 default and the C6 default before September
-2026, is the reduced-order cascade of Carpenter, Gottlieb and Abarbanel
-(1993): a third-order one-sided first row, a fourth-order Padé second row,
+constant. `:cascade3`, the C8 default, is the reduced-order cascade of
+Carpenter, Gottlieb and Abarbanel (1993): a third-order one-sided first
+row, a fourth-order Padé second row,
 and the sixth-order interior row where a third is needed. `:cascade4` raises
 the first row to Lele's fourth-order one-sided relation. `:brady_livescu` applies the
 closure rows of Brady and Livescu (2019), one order below the interior on

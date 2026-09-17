@@ -1,4 +1,4 @@
-# Fifth-order closure-search results (2026-09-15)
+# Fifth-order closure-search results (60da34b)
 
 Instrument: `bench/closuresearch.jl`. All rows are exact on monomials of
 degree 0:5 by construction. Growth rates below are from the reduced injected

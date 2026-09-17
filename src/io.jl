@@ -1478,10 +1478,10 @@ end
 # ---------------------------------------------------------------------------
 # Output as a callback effect.
 #
-# A dump sequence requires two things that callers previously supplied by hand:
+# A dump sequence requires two things a caller otherwise supplies by hand:
 # uniquely named files, and a container recording the physical time of each one.
-# `save_vtk` given a bare prefix provides neither, so every example built its own
-# `lpad` and then animated against the frame index because no file recorded the
+# `save_vtk` given a bare prefix provides neither, so a caller builds its own
+# `lpad` and animates against the frame index, because no file records the
 # time. This supplies both, and a trigger supplies the schedule.
 #
 # `_write_dump!` is the extension point. Naming, sequencing, and the collection
@@ -1562,7 +1562,7 @@ function (writer::FieldWriter)(solver, Q)
     wall_0 = time_ns()
     comm = solver.comm
     # Once per writer, not once per frame, and keyed on the frame list because
-    # `start_index` no longer pins the index to zero.
+    # `start_index` need not be zero.
     isempty(writer.times) && ensure_output_dir(writer.prefix, comm)
     _write_dump!(writer, solver, Q, frame_prefix(writer, writer.index))
     push!(writer.times, Float64(solver.t))

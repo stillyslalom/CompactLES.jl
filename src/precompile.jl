@@ -201,9 +201,9 @@ if MPIPreferences.binary != "system"
         # Float32 throughout. A second element type recompiles the whole tree
         # beneath step!, and the suite reaches it on a plain grid, on a refined
         # hierarchy and, under `PRECOMPILE_DEVICE`, on the device backend.
-        # Measured September 2026: this block and the device hierarchy below it
-        # cost 36.5 s of precompile and 47.4 MB of image, and take 38 s off the
-        # serial suite's compilation. The saving lands only on the Solver type
+        # This block and the device hierarchy below it cost 36.5 s of
+        # precompile and 47.4 MB of image, and take 38 s off the serial
+        # suite's compilation. The saving lands only on the Solver type
         # tuples named here; one that is not compiles in full wherever it is
         # first built, which is why the 3-D refined device case is left to the
         # suite rather than spending a third dimension of image on it.

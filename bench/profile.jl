@@ -8,7 +8,7 @@
 #   tube   -- multicomponent shock tube, 2-D (z collapsed), art on. Exercises
 #             species transport and the artificial-property sensors.
 #   radial -- 1-D cylindrical converging shock on the axis fold. The case where
-#             per-call overhead, not bandwidth, used to dominate.
+#             per-call overhead, not bandwidth, can dominate.
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES

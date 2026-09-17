@@ -511,7 +511,7 @@ below exposed behavior outside those passing checks.
   ([the measurements](CALIBRATION_APPENDIX.md#the-sensor-operators-wall-rows),
   [completion record](HISTORY.md#the-sensor-operators-wall-rows-september-2026)).
 
-- [ ] **N6h — Add a `correct_flux!` method for `SlipWallBC` under
+- [x] **N6h — Add a `correct_flux!` method for `SlipWallBC` under
   physical viscosity.** With the artificial properties off and a physical
   shear viscosity a slip wall does not reproduce its mirror at the closure's
   order: μ = 5e-3 reads 2.167e-7 / 1.103e-7 / 9.489e-8 at
@@ -521,6 +521,26 @@ below exposed behavior outside those passing checks.
   **Depends on:** R5 for the wall-flux hook.
   **Gate:** the viscous slip wall at the closure's order in the smooth
   matrix, both faces and corners, and ranks that do not own a wall.
+  **Code:** [boundary.jl](../src/boundary.jl),
+  [wall_flux_tests.jl](../test/wall_flux_tests.jl),
+  [wall_flux_mpi.jl](../test/wall_flux_mpi.jl),
+  [wallclosure.jl](../bench/wallclosure.jl).
+  **Delivered:** `SlipWallBC` imposes the symmetry plane's flux contract on
+  the assembled wall-plane flux: zero normal species and total-energy
+  fluxes, zero tangential momentum fluxes, and the normal momentum flux left
+  whole. The defect came from the conductive term −κ ∂T/∂n, whose closure
+  truncation is a heat flux across a plane that conducts none; the resulting
+  temperature defect in the first cells regenerates the gradient, so flux and
+  gradient settle at a level that no longer follows h. The viscous
+  slip wall's window order rises from 0.40 / 0.12 to 3.79 / 3.90 at μ = 5e-3,
+  and a two-dimensional wall with a tangential shear from 1.36 / 0.42 to
+  3.95 / 3.94, of which the last order and a half is the tangential
+  traction. `test/convergence.jl` gains a viscous slip row at 4.00 and the
+  smooth matrix a viscous slip table. In the battery's two Noh implosions
+  against a slip wall the wall heating falls by about half, the planar deficit
+  from 50% to 24%, since the contract also removes the wall's
+  κ\* transport ([the measurements](CALIBRATION_APPENDIX.md#the-slip-walls-flux-contract),
+  [completion record](HISTORY.md#the-slip-walls-flux-contract-september-2026)).
 
 - [ ] **N6i — Explain the transverse mode of the aligned Noh case.**
   The aligned N = 100, AR = 4 case starts with no transverse variation and
@@ -747,16 +767,17 @@ and found the slip-wall mode that N6d then removed:
 the cascade closures are linearly unstable at an inviscid slip wall, the
 F2 filter row that N6a retired was what damped it, and the C6 default is
 now the neutral `:neutral3` set; the flux divergence at an interface end
-keeps the cascade rows, so the interface baselines did not move. The open
-wall items are N6h to N6k: a slip-wall flux correction under
-physical viscosity, the transverse mode of the aligned Noh case, a
-re-measurement of the fifth-order closure candidates under
-`beta_sensor = :dilatation`, and a stability certificate for the neutral
+keeps the cascade rows, so the interface baselines did not move. N6h gave
+`SlipWallBC` the symmetry plane's flux contract, removing a conductive heat
+flux and a shear traction that a viscous slip wall carried at the closure's
+truncation level. The open wall items are N6i to N6k: the transverse mode of
+the aligned Noh case, a re-measurement of the fifth-order closure candidates
+under `beta_sensor = :dilatation`, and a stability certificate for the neutral
 rows with their C8 and C10 counterparts. Use N10/N11 to qualify interface
 candidates before promotion; invoke N15 only when the smaller closure change
-misses a target. N16 transfer measurements may begin with N6, while final accuracy
-qualification follows the selected interface treatment. Coordinate temporal
-certification with V3 and default filter time-scaling with N1.
+misses a target. N16 transfer measurements may begin with N6, while final
+accuracy qualification follows the selected interface treatment. Coordinate
+temporal certification with V3 and default filter time-scaling with N1.
 
 ### Independent validation and regression coverage
 

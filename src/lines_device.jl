@@ -24,9 +24,9 @@
 # layouts still disagree: the x-sweep accumulates the spike correction before
 # one subtraction where the transposed sweeps subtract term by term, and
 # `colwise` selects the convention matching the plan's dimension. The
-# elimination sweep and the back-substitution pivot were once such places too
-# and are no longer: every host path now skips a zero multiplier and
-# multiplies by `inv(U[1, i])`, so the device kernel does both unconditionally.
+# elimination sweep and the back-substitution pivot agree: every host path
+# skips a zero multiplier and multiplies by `inv(U[1, i])`, so the device
+# kernel does both unconditionally.
 #
 # No kernel below declares a `@Const` argument. On the CPU backend a `@Const`
 # argument makes KernelAbstractions wrap the body in `@aliasscope`, and Julia
@@ -447,7 +447,7 @@ end
 function _dev_solve!(plan::DevicePlan, sweep::DeviceBanded)
     ls = plan.host.line_solver
     L, n, q = plan.lines, plan.n, sweep.q
-    # No `colwise`: the elimination sweep and the pivot are now the same
+    # No `colwise`: the elimination sweep and the pivot are the same
     # arithmetic on every dimension. Only the spike correction below still
     # follows the plan's dimension.
     _dev_banded_kernel!(plan.backend)(plan.B, sweep.L, sweep.U, n, q;

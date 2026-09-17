@@ -2000,3 +2000,56 @@ the interior. The measurements are under
 [the sensor operators' wall rows](CALIBRATION_APPENDIX.md#the-sensor-operators-wall-rows);
 the applied form and the remaining wall items are in
 [CALIBRATION.md](CALIBRATION.md#open-items).
+
+## The slip wall's flux contract (September 2026)
+
+`SlipWallBC` removed the normal velocity from the wall plane and left the
+assembled fluxes there as the interior formulas produced them. A slip wall is a
+symmetry plane, and those are not the fluxes a symmetry plane admits: the
+closure rows' truncation error in ∂T/∂n is a conductive heat flux across a
+plane that conducts none, and the same rows leave a shear traction on a plane
+that carries none. `correct_flux!(::SlipWallBC, ...)`, in `boundary.jl`, now
+rebuilds the wall plane's flux to the contract: zero for every species, zero
+for every tangential momentum component and zero for the total energy, with the
+normal momentum flux left whole so that the pressure, the normal viscous stress
+and the dilatational term still act on the wall. Rebuilding rather than
+subtracting also removes the artificial `:bulk` channel from the three and is
+independent of the EOS energy gauge, as the no-slip hook's rebuild is.
+
+The defect came from the conductive term. On exactly even initial data the
+`:neutral3` rows return ∂T/∂n at their own third order, but without the
+contract the heat that flux removes leaves a temperature defect in the first
+cells, which regenerates the gradient, so that by t = 0.4 flux and gradient
+have settled at a level that no longer follows h. Against its periodic mirror
+a viscous slip wall at μ = 5e-3 went from 0.40 / 0.12 to 3.79 / 3.90 over
+N = 49 / 97 / 193, and a two-dimensional wall carrying a tangential shear
+from 1.36 / 0.42 to 3.95 / 3.94; imposing only the energy flux there reaches
+3.72 / 2.83, so the last order and a half belongs to the tangential traction.
+`test/convergence.jl` gains a viscous slip row at 4.00 beside the viscous
+no-slip wall's 4.00, and `test/smooth_cases.jl` a tangential amplitude and a
+slip switch for it.
+
+With the artificial properties on the contract also removes the wall's
+κ\* and D\* transport, one source of the wall heating the Noh deficit
+measures. Planar Noh reads plateau 3.9988, shock 0.2021 and a wall deficit
+of 24%, against 3.9883 / 0.2049 / 50%, and the aligned AR = 4 case
+4.0035 / 33% / 0.2084 in 4966 steps against 3.9792 / 54% / 0.2146 in 4997.
+Its transverse round-off reads 2.1e-7 against 7.8e-9, so that guard widens
+from 1e-7 to 5e-7; the mode itself remains open. No other battery row moved
+to the digits printed, and no `test/convergence.jl` row moved at all, the
+contract being a no-op wherever `mu0 = 0` and the properties are off.
+
+Validation: `test/runtests.jl` 2705 of 2705 over 174 testset rows, two rows and
+206 assertions above the previous count for the slip-wall testsets;
+`test/convergence.jl` with its new row and every recorded order held;
+`test/validation.jl` with its header and the aligned Noh guard re-recorded; and
+`test/mpi_tests.jl` 332 of 332 at 2 and at 4 ranks and 176 of 176 at 8 ranks
+with the CI phases, all on Julia 1.11.4. `bench/jetcheck.jl` and
+`bench/audit.jl` are identical line for line, since the new method is reached
+through a face dispatch site that already existed and allocates nothing. Device
+parity rests on the serial suite's KernelAbstractions CPU comparison and on
+`bench/wallflux.jl`, extended to the slip wall and run on KA CPU; no hardware
+GPU run was made. The measurements are under
+[the slip wall's flux contract](CALIBRATION_APPENDIX.md#the-slip-walls-flux-contract);
+the applied form and the remaining wall items are in
+[CALIBRATION.md](CALIBRATION.md#open-items).

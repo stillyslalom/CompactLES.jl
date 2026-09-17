@@ -142,8 +142,8 @@
 #             the only case in the repository where the μ* channel carries a
 #             measurable share of the sink, and no case in the 1-D battery of
 #             bench/artcal.jl exercises a shear sensor at all. Note that
-#             `smoother` still defaults to `:compact`, which is no longer the
-#             solver default, because the 128³ numbers above were measured under it. Pass
+#             `smoother` defaults to `:compact` here rather than the solver's
+#             `:gaussian`, because the 128³ numbers above were measured under it. Pass
 #             `smoother=gaussian` for a comparison against the default
 #             configuration.
 #   alphaf    comma-separated list of compact-filter alpha values (default
@@ -288,8 +288,7 @@ function diss_split(solver, states)
             end
             # Pressure work, the reversible exchange with internal energy:
             # dKE/dt = ∫p∇·u − ∫τ:∇u over a periodic domain, so this enters
-            # −dKE/dt with the opposite sign to the three dissipations. It was
-            # previously inside the residual that the table labelled "filter".
+            # −dKE/dt with the opposite sign to the three dissipations.
             s_pdil += w * pres[I] * divu
             s_rho += w * rho[I]
         end
@@ -360,8 +359,8 @@ end
 end
 
 """
-−dKE/dt averaged over `w` steps either side of step `i`, rather than the
-one-step centred difference this used to print.
+−dKE/dt averaged over `w` steps either side of step `i`, rather than a
+one-step centred difference.
 
 The filter removes energy per *application*, not per unit time, so the
 instantaneous rate is `(filter loss)/dt + physical` and carries the full
@@ -397,12 +396,11 @@ end
 # name; `data/README.md` carries the provenance. Its columns are time, kinetic
 # energy, -dE/dt and enstrophy, from t = 0 to t = 19.99 at dt = 0.01.
 #
-# It replaces the single digitized scalar this script used to print. The
-# tabulated peak is 1.28575e-2 at t = 8.97 against the 1.289e-2 at t = 8.86 read
-# off van Rees et al., JCP 230 (2011), Fig. 8: the values agree to 0.3% and the
-# times to 0.11, which is figure-reading error, so the table and the figure are
-# the same solution. The rounded 1.2e-2 at t = 9 that this script printed for a
-# year is 6.7% below the tabulated peak, and comparisons against it read
+# The tabulated peak is 1.28575e-2 at t = 8.97 against the 1.289e-2 at t = 8.86
+# read off van Rees et al., JCP 230 (2011), Fig. 8: the values agree to 0.3% and
+# the times to 0.11, which is figure-reading error, so the table and the figure
+# are the same solution. The rounded 1.2e-2 at t = 9 carried in earlier
+# comparisons is 6.7% below the tabulated peak, and those comparisons read
 # correspondingly over-dissipative.
 #
 # The reference is incompressible and this case is compressible at Ma 0.1, so
@@ -844,7 +842,7 @@ function main(opt, backend)
         w = max(min(window, length(ts) ÷ 8), 1)
         # The last step is excluded even so: `run!` truncates it to land exactly
         # on `tfinal`, and one clipped dt inside a window biases rather than
-        # jitters. Before this was handled, 128³ reported a spurious 1.4226e-2 at
+        # jitters. With the last step included, 128³ reports a spurious 1.4226e-2 at
         # t = 10.00 against a true peak of 1.2065e-2, i.e. +18%, on both filtered
         # configurations. A StepControl retry could clip a step the same way and
         # is not handled here.
@@ -902,9 +900,7 @@ function main(opt, backend)
             total = windowed_rate(ts, kes, idx, w)
             # What no measured channel accounts for. Pressure work enters with
             # the opposite sign, since it moves energy between kinetic and
-            # internal rather than removing it. This column used to be
-            # labelled "filter" and carried the filter, the pressure work and
-            # every numerical error together.
+            # internal rather than removing it.
             unattr = total - (mol + shear + bulk + filt - pdil)
             @printf("  %5.2f %11.4e %11.4e %11.4e %11.4e %11.4e %11.4e %6.1f%%\n",
                     t, mol, shear, bulk, filt, pdil, total,

@@ -47,18 +47,19 @@
 #   C6 :brady_livescu 5.00 | C8 :brady_livescu 7.00
 #   wall evolution (window max norm, t = 0.4): inviscid C6 4.01 | inviscid C6
 #   :cascade3 3.93 | cascade filter 1.94 | onesided filter 3.90 |
-#   C6 :brady_livescu 5.73 | viscous no-slip C6 4.00 | shear mode 4.67
+#   C6 :brady_livescu 5.73 | viscous no-slip C6 4.00 | viscous slip C6 4.00 |
+#   shear mode 4.67
 #   interface evolution (entropy wave, t = 0.5): two patches C6 (k = 1) 3.31 |
 #   two levels C6 (k = 3) 3.62 | two levels :brady_livescu 6.01 | three levels
 #   subcycled 3.72 | two levels, cascade filter 4.12
 #
-# The C6 default is `:neutral3` (September 2026); the `:cascade3` rows are
-# measured beside it wherever the default's number moved when it changed.
-# The fold studies close their outer end with a wall, so they moved with
-# the default; the interface studies did not, because the flux divergence
-# at an interface end keeps the cascade rows (`interface_divergence_closures`).
+# The C6 default is `:neutral3`; the `:cascade3` rows are measured beside
+# it wherever the two closures differ. The fold studies close their outer
+# end with a wall and take the default rows; the interface studies keep the
+# cascade rows, because the flux divergence at an interface end selects
+# them (`interface_divergence_closures`).
 #
-# Those thirty-one numbers are also passed to each study as `recorded` and
+# Those thirty-two numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -265,9 +266,9 @@ study("C8 wall closures, :brady_livescu", (24, 48, 96),
 # One pass of the state filter on a closed line, measured as |F f − f|. The
 # wall cascade (identity, F2, F4, F6) is second order along the whole
 # line, not only at the wall, because the compact solve carries the row-2
-# error inward; the one-sided Gaitonde–Visbal rows, the default since
-# September 2026, restore the interior order. Resolutions are lower because
-# the eighth-order pass reaches round-off by N = 48 on this field.
+# error inward; the one-sided Gaitonde–Visbal rows, which are the default,
+# restore the interior order. Resolutions are lower because the
+# eighth-order pass reaches round-off by N = 48 on this field.
 study("C8 filter pass, :cascade", (12, 16, 24, 32),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
@@ -450,6 +451,12 @@ evolution_study("inviscid wall, C6 :brady_livescu, unfiltered", WALL_NS,
 evolution_study("viscous no-slip wall, C6, unfiltered", WALL_NS,
                 N -> wall_case(N; cfl=EVOLUTION_CFL, viscous=true),
                 s -> mirror_reference(s; viscous=true);
+                primary=:wall, tfinal=0.4, expect=3.9, tol=0.8, recorded=4.00)
+# The tangential amplitude puts a shear traction on the symmetry plane, which
+# the slip wall's flux contract removes along with the conductive heat flux.
+evolution_study("viscous slip wall, C6, unfiltered", WALL_NS,
+                N -> wall_case(N; cfl=EVOLUTION_CFL, viscous=true, slip=true, c=0.05),
+                s -> mirror_reference(s; viscous=true, c=0.05);
                 primary=:wall, tfinal=0.4, expect=3.9, tol=0.8, recorded=4.00)
 evolution_study("shear mode, no-slip wall, C6, unfiltered", WALL_NS,
                 N -> shear_case(N; cfl=EVOLUTION_CFL),

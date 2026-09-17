@@ -11,7 +11,8 @@
 #   smooth   the smooth wall cases of test/smooth_cases.jl with the
 #            artificial properties on, so the update at the wall is the
 #            complete one, D(β* D) included: the inviscid and the viscous
-#            adiabatic standing wave and the shear mode between adiabatic
+#            adiabatic standing wave, the same wave with a tangential shear
+#            between viscous slip walls, and the shear mode between adiabatic
 #            and between isothermal no-slip walls, every closure under the
 #            default filter every step, against the periodic mirror under
 #            the same settings (the closure defect alone), with the
@@ -114,12 +115,13 @@ end
 # sensors and smoothers are symmetric about the walls, so the mirror is
 # still the wall solution).
 
-function wall_vs_mirror(N, deriv; viscous, art, cfl=CFL, tfinal=TFINAL)
+function wall_vs_mirror(N, deriv; viscous, art, slip=!viscous, c=0.0, cfl=CFL,
+                        tfinal=TFINAL)
     attempt() do
         opts = (deriv=deriv, art=art, cfl=cfl, FILTERED...)
-        solver, Q = wall_case(N; viscous=viscous, opts...)
+        solver, Q = wall_case(N; viscous=viscous, slip=slip, c=c, opts...)
         run!(solver, Q; tfinal=tfinal, nmax=CAP)
-        mirror, Qm = mirror_case(N; viscous=viscous, opts...)
+        mirror, Qm = mirror_case(N; viscous=viscous, c=c, opts...)
         run!(mirror, Qm; tfinal=tfinal, nmax=CAP)
         regional_errors(solver, Q, NodeReference(mirror, Qm))
     end
@@ -202,6 +204,9 @@ function smooth_part()
                  (N, d, art) -> wall_vs_mirror(N, d; viscous=false, art=art))
     smooth_table("viscous adiabatic no-slip walls, density",
                  (N, d, art) -> wall_vs_mirror(N, d; viscous=true, art=art))
+    smooth_table("viscous adiabatic slip walls with a tangential shear, density",
+                 (N, d, art) -> wall_vs_mirror(N, d; viscous=true, slip=true,
+                                               c=0.05, art=art))
     smooth_table("shear mode, adiabatic no-slip walls, rho v",
                  (N, d, art) -> shear_vs_mirror(N, d; art=art))
     smooth_table("shear mode, isothermal no-slip walls (Twall = 1), rho v",

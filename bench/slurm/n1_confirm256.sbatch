@@ -8,7 +8,7 @@
 ##SBATCH --account=<bank>
 ##SBATCH --partition=pbatch
 
-# ROADMAP N1, the 256^3 transfer check. k_max*eta reaches 1.5 here against
+# The filter calibration's 256^3 transfer check. k_max*eta reaches 1.5 here against
 # 0.75 at 128^3, so the dissipation range is resolved and the question is
 # whether the alpha minimum stays where 128^3 put it or moves, which decides
 # whether the fitted value is a constant or a per-resolution tuning.

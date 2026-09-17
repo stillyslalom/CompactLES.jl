@@ -122,7 +122,7 @@ julia --project=. test/convergence.jl
 julia --project=. test/validation.jl
 "$MPIEXEC" -n 2 julia --project=. -t 1 test/mpi_tests.jl
 "$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl \
-  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,AMR transfer pair,halo consistency,off-rank folds,freestream,no-slip wall flux,positivity floor,slicing"
+  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,AMR transfer pair,halo consistency,off-rank folds,freestream,no-slip wall flux,slip wall flux,positivity floor,slicing"
 ```
 
 The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.
@@ -191,17 +191,20 @@ cylindrical axis odd 3.76 / even 2.99, resolved-θ 3.76, spherical origin
 2.97, closure rows on a polynomial 3.00 / 3.00 / 4.00 / 5.00 / 7.00
 (`:neutral3`, `:cascade3`, `:cascade4`, C6 and C8 `:brady_livescu`), wall
 evolution 4.01 (`:cascade3` 3.93, cascade filter 1.94, one-sided filter
-3.90, `:brady_livescu` 5.73, viscous no-slip 4.00, shear mode 4.67),
+3.90, `:brady_livescu` 5.73, viscous no-slip 4.00, viscous slip 4.00,
+shear mode 4.67),
 interface evolution 3.31 (two patches), 3.62 / 6.01 (two levels, C6 /
 `:brady_livescu`), 3.72 (three levels subcycled), 4.12 (two levels
 filtered). The C6 default closure is `:neutral3`; the fold studies close
-their outer end with a wall, so they moved with it, and the interface
-studies did not, since an interface divergence keeps the cascade rows. The evolution rows share `test/smooth_cases.jl` with
-`bench/boundaryorder.jl`; add a smooth case there, not in either consumer.
+their outer end with a wall and use the default rows, while the interface
+studies keep the cascade rows, since an interface divergence selects them.
+The evolution
+rows share `test/smooth_cases.jl` with `bench/boundaryorder.jl`; add a smooth
+case there, not in either consumer.
 **For a change not
 expected to affect numerics these should come out bit-identical, down to the error
 magnitudes.** A moved digit indicates a real change; chase it before moving
-on. Each study now asserts both a wide guard, which fails when the order
+on. Each study asserts both a wide guard, which fails when the order
 has regressed, and a ±0.02 guard against the number above, which fails when it
 has drifted; the two print different diagnostics. Update a `recorded` value only
 together with the list here and the table in the file's header.
@@ -527,7 +530,7 @@ CI job passes while the MPI leg fails. Filed as JuliaLang/julia#63129;
 **A run that fails does not stop.** Losing positivity drives the diffusive rate
 in `compute_dt` up until `dt` collapses, and the run then grinds forever at no
 progress. A sweep that visits bad configurations must pass a low `nmax`, and
-`run!` now applies `StepControl` floors so this raises `SolverFailure` instead.
+`run!` applies `StepControl` floors so this raises `SolverFailure` instead.
 `primitives!` substitutes benign placeholders wherever ρ ≤ 0, so the positivity
 check in `max_rate` reads ρ out of `Q` directly and not from `solver.rho`.
 
@@ -615,7 +618,7 @@ them.
   resolution; `StepControl(retries = 4)` recovers it, and `detector = :d8`
   lowers the ceiling to 0.25. The planar wall and the cylindrical axis carry no
   ceiling: their recorded ones (0.25 and 0.2) were the first step of the run,
-  sized before any artificial coefficient existed, and `run!` now primes the
+  sized before any artificial coefficient existed, and `run!` primes the
   coefficients. Every discretization-order explanation, the density
   proportionality of β\* and the per-step filter strength have been measured
   and ruled out for the origin. → `reference/CALIBRATION_APPENDIX.md`
@@ -633,7 +636,7 @@ them.
   conditional on `compact_filter(0.45)` applied every step, and `C_mu` itself is
   active but not yet fitted. → `reference/CALIBRATION_APPENDIX.md`
 - **`compute_artificial!` is 24.8–26.0% of the multicomponent RHS** under the
-  default `:gaussian` smoother (the 31.8% figure is the retired `:compact` one),
+  default `:gaussian` smoother (the 31.8% figure is the `:compact` one),
   in the filter line-solves that smooth the sensors, one sweep per species. At
   `n_species == 2` that machinery is measurably a no-op (`D*_1` and `D*_2` agree
   to 4.8e-16), and

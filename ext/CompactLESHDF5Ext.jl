@@ -68,7 +68,7 @@ const CKPT_FORMAT = 5
 # place it can be exercised: `hdf5_parallel()` is false on a workstation, where
 # the serialized relay above runs instead and no transfer property applies.
 #
-# Measured on that machine in September 2026: the change does not pay.
+# Measured on that machine: the change does not pay.
 # A 128^3 Taylor-Green run over 224 ranks on two rzhound nodes (system
 # MVAPICH2 2.3.7, hdf5-parallel 1.14.0, Lustre at stripe count 8) wrote two
 # 151 MB checkpoints during 11,504 steps. Everything outside the solver came to
@@ -118,7 +118,7 @@ function with_shared_file(body, path::AbstractString, mode::AbstractString,
     return path
 end
 
-# The reduction doubles as the barrier that used to close `with_shared_file`:
+# The reduction doubles as the barrier closing `with_shared_file`:
 # every rank has finished with the file by the time it returns.
 function _raise_shared_failure(failure, path::AbstractString, comm::MPI.Comm)
     anyfail = MPI.Allreduce(failure === nothing ? 0 : 1, max, comm)

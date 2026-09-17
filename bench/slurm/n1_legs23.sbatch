@@ -8,7 +8,7 @@
 ##SBATCH --account=<bank>
 ##SBATCH --partition=pbatch
 
-# ROADMAP N1, the cadence and relaxation legs at 128^3 on rzhound.
+# The filter calibration's cadence and relaxation legs at 128^3 on rzhound.
 # Same allocation shape and launch flags as leg 1, which fitted
 # alpha to 0.485-0.49 at cfl 0.6 and filter_interval 1.
 #

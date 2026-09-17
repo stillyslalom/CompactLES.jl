@@ -534,9 +534,15 @@ assuming boundary conditions have been enforced on `Q`. Step by step:
    total-energy flux; an isothermal wall retains only
    `-(mu0 * cp_mix / Pr + kappa_art) * grad_T_ion[d]`. This removes both species
    enthalpy transport and bulk component diffusion at the wall while retaining
-   momentum traction. Each hook writes only its owned plane without
-   communicating. The corrected flux is then exchanged per dimension, batched
-   over conserved components, so every affected compact divergence row sees it.
+   momentum traction. A slip wall is a symmetry plane: the normal species and
+   total-energy fluxes are zeroed on the same grounds, and the tangential
+   momentum fluxes with them, since the tangential velocity's normal
+   derivative vanishes there and no shear traction acts on the plane. Only the
+   normal momentum flux remains, carrying the pressure, the normal viscous
+   stress and the dilatational term. Each hook writes only its owned plane
+   without communicating. The corrected flux is then exchanged per dimension,
+   batched over conserved components, so every affected compact divergence row
+   sees it.
 8. **Metric divergence.** For each component `c` and direction `d`, form the
    area-weighted flux `A_d F_d`, take its compact derivative, and accumulate
    `dQ[c] −= inv_J · ∂(A_d F_d)`. `J = h₁h₂h₃` and `A_d = J/h_d`, so the compact

@@ -371,8 +371,7 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:der
         # even combination has mirror parity +1, and the odd combination has
         # mirror parity -1 (the header of this file derives this invariant).
         # The field parity σ affects only the butterfly and reconstruction.
-        # Folding e with σ instead, as an
-        # earlier version did, is correct only where e vanishes, which every
+        # Folding e with σ instead is correct only where e vanishes, which every
         # axisymmetric field and the odd-pairing scalar of the test suite
         # satisfy; a uniform Cartesian velocity through the axis has e = f and
         # its radial derivative came out O(1/h) at the axis.

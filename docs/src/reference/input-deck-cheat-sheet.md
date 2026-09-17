@@ -105,7 +105,7 @@ domain interval.
 | Condition | Constructor | Use |
 |---|---|---|
 | Periodic | `PeriodicBC()` | Both ends of a direction; required for collapsed dimensions |
-| Slip wall | `SlipWallBC()` | Impermeable inviscid wall |
+| Slip wall | `SlipWallBC()` | Impermeable adiabatic symmetry plane |
 | No-slip wall | `NoSlipWallBC()` / `NoSlipWallBC(Twall=...)` | Adiabatic / isothermal viscous wall |
 | Extrapolation | `ExtrapolationBC()` | Zeroth-order boundary extrapolation |
 | Full prescribed state | `DirichletBC((x,y,z,t) -> Prim(u=(1.0,0,0), p=1.0, rho=1.0))` | Forced or supersonic inflow |

@@ -19,10 +19,10 @@
 # differ in a `Patch` parameter `P` is their typejoin. The per-patch loops
 # then cost one dynamic dispatch per patch per call, behind the PatchSolver
 # function barrier so the bodies stay concrete, while the single-patch and
-# same-level multi-patch cases keep a concrete `P`. Boundary conditions were
-# one such difference and no longer are: they left the `Patch` type
-# (patches.jl), which is why a level-1 patch under an interface now often
-# shares its parent's type outright.
+# same-level multi-patch cases keep a concrete `P`. Boundary conditions are
+# not such a difference: they are stored abstractly on the `Patch`
+# (patches.jl), so a level-1 patch under an interface often shares its
+# parent's type outright.
 mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P}
     equations::Eq
     eos::E
@@ -1919,8 +1919,8 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
     solver.art.species_flux === :bulk && _bulk_gradients!(solver, Q)
     assemble_fluxes!(solver, Q)
     # Physical wall fluxes must enter the compact divergence, including its
-    # near-wall rows. All ranks visit the hooks in the same order; the no-slip
-    # hook only writes locally owned planes and adds no collectives.
+    # near-wall rows. All ranks visit the hooks in the same order; the wall
+    # hooks only write locally owned planes and add no collectives.
     for d in 1:3, side in 1:2
         decomp.active[d] || continue
         correct_flux!(solver.bcs[d][side], solver, Q, d, side)

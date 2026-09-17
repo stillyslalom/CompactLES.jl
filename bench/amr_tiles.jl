@@ -13,9 +13,9 @@
 # (0.40 MB each); tile 12 covers 47% with 80 tiles of 37² (1.1 MB each).
 # Setup costs 0.06–0.12 s per tile in plan construction (N = 96: 64 tiles
 # in 7.6 s, 196 in 11.4 s), which is why tile edges below about 12 are
-# impractical in 3-D. At tile 6 the patch set totals 60.3 MB against
-# 103.0 MB before the shared RHS workspace (0.207 MB of each tile's
-# 0.398 MB is now pooled), and the warm step is 0.55–0.56 s.
+# impractical in 3-D. At tile 6 the patch set totals 60.3 MB, against
+# 103.0 MB with a per-tile RHS workspace (the shared one pools 0.207 MB of
+# each tile's 0.398 MB), and the warm step is 0.55–0.56 s.
 
 using CompactLES
 const CL = CompactLES

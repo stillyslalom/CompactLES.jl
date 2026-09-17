@@ -68,20 +68,24 @@ derivative(f, x) = f(Dual(x, one(x))).d
 # --- profiles ---------------------------------------------------------------
 #
 # A profile maps x to the primitive tuple (rho, u, v, p); v is the
-# wall-tangential velocity, which only the shear mode uses.
+# wall-tangential velocity, which the shear mode and the viscous slip wall
+# use.
 
 """
-    standing_profile(a, b; gamma=1.4)
+    standing_profile(a, b, c=0; gamma=1.4)
 
-rho = 1 + a cos(πx), u = b sin(πx), isentropic p = rho^γ: even density and
-pressure and odd velocity about x = 0 and x = 1, so the wall problem on
-[0, 1] is the periodic problem on [0, 2) by symmetry (`mirror_case`). A
-nonlinear standing wave with no closed form; a = b = 0.05 stays smooth well
-past the t = 0.4 the cases run to (the steepening time is of order 2).
+rho = 1 + a cos(πx), u = b sin(πx), v = c cos(πx), isentropic p = rho^γ: even
+density, pressure and tangential velocity and odd normal velocity about x = 0
+and x = 1, so the wall problem on [0, 1] is the periodic problem on [0, 2) by
+symmetry (`mirror_case`). A nonlinear standing wave with no closed form;
+a = b = 0.05 stays smooth well past the t = 0.4 the cases run to (the
+steepening time is of order 2). The tangential amplitude `c` is zero unless a
+slip wall is being measured: a shear traction acts on that component, and a
+no-slip wall requires it to vanish at the wall.
 """
-standing_profile(a, b; gamma=1.4) = x -> begin
+standing_profile(a, b, c=0; gamma=1.4) = x -> begin
     rho = 1 + a * cos(pi * x)
-    (rho, b * sin(pi * x), zero(x), rho^gamma)
+    (rho, b * sin(pi * x), c * cos(pi * x), rho^gamma)
 end
 
 """
@@ -207,22 +211,27 @@ function _smooth_solver(n_global, L, bcs, prof; deriv, filt, filter_interval,
 end
 
 """
-    wall_case(N; viscous=false, a=0.05, b=0.05, mu=0.005, opts...)
+    wall_case(N; viscous=false, slip=!viscous, a=0.05, b=0.05, c=0.0,
+              mu=0.005, opts...)
 
-The standing wave on [0, 1] with N nodes between slip walls, or between
-adiabatic no-slip walls with viscosity `mu` when `viscous` (the profile's
-data satisfy both: u vanishes and T is even at each wall).
+The standing wave on [0, 1] with N nodes between adiabatic walls: slip walls
+under `slip` and no-slip walls otherwise, with viscosity `mu` when `viscous`
+and inviscid otherwise. At `c = 0` the profile's data satisfy both
+conditions, since u vanishes and rho, p and T are even at each wall. A nonzero
+tangential amplitude `c` adds the component a wall shear traction acts on and
+requires a slip wall; with `viscous = true` that is the case the slip wall's
+flux contract is measured on.
 """
-function wall_case(N; viscous=false, a=0.05, b=0.05, mu=0.005, Pr=0.7,
-                   opts...)
-    bc = viscous ? NoSlipWallBC() : SlipWallBC()
+function wall_case(N; viscous=false, slip=!viscous, a=0.05, b=0.05, c=0.0,
+                   mu=0.005, Pr=0.7, opts...)
+    bc = slip ? SlipWallBC() : NoSlipWallBC()
     _smooth_solver((N, 1, 1), 1.0, ((bc, bc), per3[2], per3[3]),
-                   standing_profile(a, b); mu=viscous ? mu : 0.0, Pr=Pr,
+                   standing_profile(a, b, c); mu=viscous ? mu : 0.0, Pr=Pr,
                    merge(SMOOTH_DEFAULTS, opts)...)
 end
 
 """
-    mirror_case(N; viscous=false, a=0.05, b=0.05, mu=0.005, opts...)
+    mirror_case(N; viscous=false, a=0.05, b=0.05, c=0.0, mu=0.005, opts...)
 
 The periodic image of `wall_case(N)`: [0, 2) on 2(N − 1) nodes at the same
 spacing, so every wall node has a coincident mirror node. Its solution is the
@@ -231,8 +240,9 @@ derivative and filter rows together, and nothing else. `N` may also be a
 fine reference count, nested over the study grids (N − 1 a multiple of each
 study's N − 1), for the total error.
 """
-function mirror_case(N; viscous=false, a=0.05, b=0.05, mu=0.005, Pr=0.7, opts...)
-    _smooth_solver((2(N - 1), 1, 1), 2.0, per3, standing_profile(a, b);
+function mirror_case(N; viscous=false, a=0.05, b=0.05, c=0.0, mu=0.005, Pr=0.7,
+                     opts...)
+    _smooth_solver((2(N - 1), 1, 1), 2.0, per3, standing_profile(a, b, c);
                    mu=viscous ? mu : 0.0, Pr=Pr, merge(SMOOTH_DEFAULTS, opts)...)
 end
 
