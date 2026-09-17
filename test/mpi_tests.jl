@@ -1332,10 +1332,16 @@ function test_ring_detector_decomposition()
     section("d8 detector: sensors independent of the split axis")
     N = SPLITN
     totals = Dict{Symbol,NTuple{2,Vector{Float64}}}()
-    for detector in (:delta4, :d8)
+    # The third case closes dimension 1 with slip walls, where the detector
+    # substitutes the node-centred `wall_closures` rows. Those rows belong to
+    # the rank owning the wall plane alone, so a split along dimension 1 is the
+    # case that would disagree if the substitution reached every block.
+    wallx = ((SlipWallBC(), SlipWallBC()), per3[2], per3[3])
+    for (case, detector, bcx) in ((:delta4, :delta4, per3), (:d8, :d8, per3),
+                                  (:d8_wall, :d8, wallx))
         bsums, ksums = Float64[], Float64[]
         for ax in 1:3
-            solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3,
+            solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=bcx,
                        art=ArtParams(enabled=true, detector=detector),
                        dims=splitdims(ax))
             Q = allocate_state(solver)
@@ -1352,9 +1358,9 @@ function test_ring_detector_decomposition()
             end
             push!(bsums, gsum(bloc)); push!(ksums, gsum(kloc))
         end
-        totals[detector] = (bsums, ksums)
+        totals[case] = (bsums, ksums)
         for (label, sums) in (("β*", bsums), ("κ*", ksums))
-            check("$detector: Σ $label spread over the three split axes",
+            check("$case: Σ $label spread over the three split axes",
                   maximum(sums) - minimum(sums), 1e-10 * max(maximum(sums), 1e-30))
         end
     end

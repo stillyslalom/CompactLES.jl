@@ -355,6 +355,14 @@ where this answers `true` it takes them from the node-centred mirror of the
 interior, with the sign of the field across the wall, and where it answers
 `false` it clamps the index instead (`delta4_sum!`).
 
+The compact sensor operators read the same face. Where this answers `true`,
+the `:gaussian` smoother and the `:d8` detector close the face with the
+node-centred rows of [`wall_closures`](@ref) in place of their own half-offset
+ones, the detector with one row set per sign of the field. Those rows are
+fixed when the solver is built, so a face whose condition can change mid-run
+takes them only when both of its conditions answer `true` here; see
+`ring_sum!`.
+
 The default is `false`. A mirror is the statement that the solution continues
 past the face as its own reflection, which holds at an impermeable wall and at
 no other condition here: an inflow, a Dirichlet face and a characteristic
@@ -374,6 +382,16 @@ sensor_mirror(::NoSlipWallBC) = true
 
 sensor_mirror(bc::SwitchableBC) =
     bc.switched ? sensor_mirror(bc.after) : sensor_mirror(bc.before)
+
+# Whether the closure rows planned at setup treat a face as a reflecting
+# mirror. A plan is fixed for the run while `sensor_mirror` follows a
+# `SwitchableBC`'s active condition, so a switchable face qualifies only when
+# both of its conditions are mirrors; otherwise it keeps the scheme's own rows
+# and the compact sensor operators fold onto the half-offset mirror there. The
+# `:delta4` detector queries `sensor_mirror` per call and is unaffected.
+planned_sensor_mirror(bc) = sensor_mirror(bc) === true
+planned_sensor_mirror(bc::SwitchableBC) =
+    planned_sensor_mirror(bc.before) && planned_sensor_mirror(bc.after)
 
 """
     wall_internal_energy(eos, Q, I, n_species, T_wall)

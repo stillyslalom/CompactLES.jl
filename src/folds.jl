@@ -66,15 +66,19 @@ mutable struct FoldSpec{P,D,F,S,R}
     sigflux::Vector{Int}                  # antipodal flux sign per conserved comp
     deriv_plans::D                         # derivative plans, σg = (+1, −1)
     filter_plans::F                        # filter plans,     σg = (+1, −1)
-    smooth_plans::S                        # sensor-smoother plans, σg = (+1, −1)
-    ring_plans::R                          # d8 detector plans, σg = (+1, −1);
-                                           # (nothing, nothing) unless :d8
+    smooth_plans::S                        # sensor-smoother plans, σg = (+1, −1);
+                                           # the far end's wall rows are built in
+    ring_plans::R                          # d8 detector plans, σg = (+1, −1) outer,
+                                           # wall sign σw = (+1, −1) inner (both
+                                           # slots one plan where the far end is no
+                                           # wall); nothings throughout unless :d8
 end
 
 fold_dplan(fold::FoldSpec, σg::Int) = fold.deriv_plans[σg > 0 ? 1 : 2]
 fold_fplan(fold::FoldSpec, σg::Int) = fold.filter_plans[σg > 0 ? 1 : 2]
 fold_splan(fold::FoldSpec, σg::Int) = fold.smooth_plans[σg > 0 ? 1 : 2]
-fold_rplan(fold::FoldSpec, σg::Int) = fold.ring_plans[σg > 0 ? 1 : 2]
+fold_rplan(fold::FoldSpec, σg::Int, σw::Int) =
+    fold.ring_plans[σg > 0 ? 1 : 2][σw > 0 ? 1 : 2]
 
 # --- Halo mirror fill -------------------------------------------------------
 
@@ -316,19 +320,27 @@ end
 # other's line scratch. The ring detector is an eighth derivative, which is an
 # even one and so preserves parity: it is planned with the symmetric roles,
 # not with `:deriv`.
-@inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:deriv})  = fold_dplan(fold, -σ)
-@inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:filter}) = fold_fplan(fold, σ)
-@inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:smooth}) = fold_splan(fold, σ)
-@inline _fold_plan(fold::FoldSpec, σ::Int, ::Val{:ring})   = fold_rplan(fold, σ)
+#
+# `σw` is the field's sign across a reflecting wall at the fold's far end,
+# which the detector's wall closure rows carry (`wall_closures`). Only the
+# ring role reads it; the other three are even at a wall wherever they run.
+@inline _fold_plan(f::FoldSpec, σ::Int, ::Val{:deriv}, σw::Int)  = fold_dplan(f, -σ)
+@inline _fold_plan(f::FoldSpec, σ::Int, ::Val{:filter}, σw::Int) = fold_fplan(f, σ)
+@inline _fold_plan(f::FoldSpec, σ::Int, ::Val{:smooth}, σw::Int) = fold_splan(f, σ)
+@inline _fold_plan(f::FoldSpec, σ::Int, ::Val{:ring}, σw::Int) = fold_rplan(f, σ, σw)
 
 """
-    fold_apply!(out, f, solver, fold, σ, role = Val(:deriv))
+    fold_apply!(out, f, solver, fold, σ, role = Val(:deriv), σw = 1)
 
 Apply the compact operator selected by `role`, one of `Val(:deriv)`,
 `Val(:filter)`, `Val(:smooth)` and `Val(:ring)`, along the folded dimension of
 `fold` to field `f` with antipodal sign `σ`. `f` must carry current
 rank-boundary halos. The result is written to the interior of `out`, which is
 returned.
+
+`σw` is the field's sign across a reflecting wall at the dimension's other
+end, selecting the detector's wall closure rows under `Val(:ring)`; the other
+roles ignore it.
 
 A self-paired (axisymmetric) fold reduces to a mirror fill plus one folded
 plan, and so writes the folded-end halos of `f` in place. A paired fold runs
@@ -339,12 +351,13 @@ on-rank, `solver.pairout` for the second parity result. Neither may alias `out`.
 The line solves are collective along the folded dimension and a paired fold
 adds pairwise exchanges, so every rank must reach this call.
 """
-function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:deriv))
+function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:deriv),
+                     σw::Int=1)
     decomp = solver.decomp
     d = fold.dim
     if fold.pair === nothing
         fold_fill!(f, decomp, d, fold.lo, fold.hi, σ)
-        apply_along!(out, _fold_plan(fold, σ, role), f, decomp)
+        apply_along!(out, _fold_plan(fold, σ, role, σw), f, decomp)
         return out
     end
     pair = fold.pair
@@ -364,9 +377,9 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:der
         # satisfy; a uniform Cartesian velocity through the axis has e = f and
         # its radial derivative came out O(1/h) at the axis.
         fold_fill!(w, decomp, d, fold.lo, fold.hi, 1)
-        apply_along!(out, _fold_plan(fold, 1, role), w, decomp)
+        apply_along!(out, _fold_plan(fold, 1, role, σw), w, decomp)
         fold_fill!(w, decomp, d, fold.lo, fold.hi, -1)
-        apply_along!(solver.pairout, _fold_plan(fold, -1, role), w, decomp)
+        apply_along!(solver.pairout, _fold_plan(fold, -1, role, σw), w, decomp)
         sd = pair.pdim != 0 ? pair.pdim : pair.revdim
         half = decomp.n_local[sd] ÷ 2
         o1, o2, o3 = decomp.n_halo_d
@@ -378,7 +391,7 @@ function fold_apply!(out, f, solver, fold::FoldSpec, σ::Int, role::Val=Val(:der
         # branch above; σ plays no part in the mirror.
         σc = pair.keep_e ? 1 : -1
         fold_fill!(w, decomp, d, fold.lo, fold.hi, σc)
-        apply_along!(out, _fold_plan(fold, σc, role), w, decomp)
+        apply_along!(out, _fold_plan(fold, σc, role, σw), w, decomp)
     end
     pair_backward!(out, solver, fold, σ)
     return out

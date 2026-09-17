@@ -66,7 +66,9 @@ condition needs:
 - `correct_rhs!(bc, solver, Q, dQ, dim, side)` changes the boundary RHS;
 - `validate_bc(bc, metric, eos, dim, side)` rejects incompatible geometry or EOS.
 - `sensor_mirror(bc)` declares a reflecting wall, so that the artificial-property
-  detector reads past the face from the node-centred mirror instead of clamping.
+  detector reads past the face from the node-centred mirror instead of clamping,
+  and the sensor smoother and the `:d8` detector close the face with the
+  node-centred rows of `wall_closures` in place of their half-offset ones.
 
 Periodic and fold behavior is collective setup state. If a boundary method
 enters a collective derivative or reduction, every rank must reach it in the

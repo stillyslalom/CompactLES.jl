@@ -556,7 +556,7 @@ below exposed behavior outside those passing checks.
   ([the measurements](CALIBRATION_APPENDIX.md#the-fold),
   [completion record](HISTORY.md#the-folds-even-path-september-2026)).
 
-- [ ] **N6g — Give the sensor smoother and the `:d8` detector wall
+- [x] **N6g — Give the sensor smoother and the `:d8` detector wall
   closures of their own.** Two wall defects the `:delta4` mirror does not
   reach. `gaussian_filter`'s closure rows fold their overhanging weights onto
   the half-offset mirror, half a cell out at a node-centred wall: relative
@@ -569,6 +569,48 @@ below exposed behavior outside those passing checks.
   **Gate:** the appendix's operator probe, the detector and then the
   smoother on an even field against the periodic mirror, at the closure's
   order for both; the smooth-wall table and the battery re-recorded.
+  **Code:** [kernels.jl](../src/kernels.jl),
+  [kernels_banded.jl](../src/kernels_banded.jl),
+  [boundary.jl](../src/boundary.jl), [sensorwall.jl](../bench/sensorwall.jl).
+  **Delivered:** `wall_closures(scheme, σ)` builds closure rows by folding a
+  symmetric scheme's interior stencil, taps and left-hand-side unknowns alike,
+  onto the node-centred mirror of a reflecting wall with the field's sign σ.
+  They are built from the interior weights, so a filter's unit row sum and the
+  eighth derivative's zero row sum are inherited. The `:gaussian` smoother is
+  planned with the σ = +1 rows at every face `sensor_mirror` names, its input
+  being a detector output past an absolute value and so even, and the `:d8`
+  detector with both signs, as a pair per dimension indexed by the wall sign;
+  `ring_sum!`'s `wall_parity` argument is now applied rather than ignored.
+  Where neither face of a dimension is a wall the pair aliases one plan, so the
+  default configuration's plans and memory are unchanged, and
+  `planned_sensor_mirror(bc)` gives a `SwitchableBC` face the wall rows only
+  when both of its conditions are mirrors. A fold's closed far end is given the
+  same rows, and the `:compact` smoother is unchanged. On the fields of the new
+  `bench/sensorwall.jl`, the six nodes nearest either wall read at most
+  1.994e-15 under `:d8` on an even field and 2.545e-15 on an odd one, where
+  they read 2.629e-4 and 3.527e-3 at the first node for N = 193 before, and the
+  smoother reads at most 2.776e-16 where it read 1.345e-3. The `detector = :d8`
+  row of the inviscid slip wall under C6 Brady–Livescu falls from 3.469e-11 to
+  1.305e-11 at N = 193, below the `:delta4` all-on row's 5.441e-11; under
+  `beta_sensor = :dilatation` the two detectors read 8.178e-13 and 6.630e-13
+  against a properties-off 7.976e-13, so an inviscid wall under `:d8` is
+  limited by the strain sensor's cusp as one under `:delta4` is. No smooth-wall
+  row changes order and every properties-off row is bit-identical. In the
+  battery the cold planar Noh wall deficit reads 50% against 54%, and the
+  aligned Noh case's transverse round-off reads 7.8e-9 at the end of a
+  4997-step run against 2.8e-6, its guard returning to 1e-7 (N6i). Two test
+  guards moved with traced reasons: the `:d8` fold window narrowed to the inner
+  half, i in 1:32, since exp(−4r²) has slope −0.147 at the outer slip wall and
+  is not the reflection the wall rows continue it as, and the `u_r = r` axis
+  check moved from 1e-14 to 1e-12, since the slip condition leaves a kink at
+  the outer wall whose decaying tail reaches the axis at 8.7e-14. The audits read no delta in
+  dispatch sites or allocation, and the extra plan costs one packed-line buffer
+  per walled dimension at no per-call time. The gate ran serial 2499 of 2499,
+  MPI 302 of 302 at 2 ranks and 146 of 146 at 8 ranks, `test/convergence.jl`
+  bit-identical, and a hardware GPU run on an RX 6800 XT bitwise against the
+  CPU solver at the wall nodes as in the interior, on Julia 1.11.4
+  ([the measurements](CALIBRATION_APPENDIX.md#the-sensor-operators-wall-rows),
+  [completion record](HISTORY.md#the-sensor-operators-wall-rows-september-2026)).
 
 - [ ] **N6h — Add a `correct_flux!` method for `SlipWallBC` under
   physical viscosity.** With the artificial properties off and a physical
@@ -583,10 +625,16 @@ below exposed behavior outside those passing checks.
 
 - [ ] **N6i — Explain the transverse mode of the aligned Noh case.**
   The aligned N = 100, AR = 4 case starts with no transverse variation and
-  grows one from round-off: 4.4e-16 after 20 steps, 3.1e-14 after 200,
-  1.9e-11 after 2000 and 2.84e-6 at the end of the 5059-step run, all of the
-  growth in the last third. The clamp's spurious wall β\* was damping it,
-  and the planar Noh wall deficit moved from 53% to 54% for the same reason.
+  grows one from round-off. Under the `:delta4` wall mirror alone it read
+  4.4e-16 after 20 steps, 3.1e-14 after 200, 1.9e-11 after 2000 and 2.84e-6
+  at the end of the 5059-step run, all of the growth in the last third, and
+  the guard was widened from 1e-7 to 5e-6; the clamp's spurious wall β\* had
+  been damping the mode, and the planar Noh wall deficit moved from 53% to 54%
+  for the same reason. Under N6g's node-centred smoother rows only the end
+  value was measured, 7.8e-9 at the end of a 4997-step run, below the 1.4e-8 of
+  the clamp, and the guard returned to 1e-7 while the planar deficit read 50%.
+  The item is therefore an explanation rather than a guard problem, and is
+  lower in priority.
   **Deliver:** what the mode is, a linear wall mode of the `:neutral3` rows
   in two dimensions, a nonlinear shock-wall interaction or a filter effect;
   whether it saturates; and the guard that follows.
@@ -781,7 +829,7 @@ The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
   [levels.jl](../src/levels.jl),
   [regrid.jl](../src/regrid.jl), [timestep.jl](../src/timestep.jl).
 
-Boundary/interface sequence: R5, N6, N6a, N6b, N6e and N6f are complete, and
+Boundary/interface sequence: R5, N6, N6a, N6b, N6e, N6f and N6g are complete, and
 N6's matrix (`bench/boundaryorder.jl`, gated in `test/convergence.jl`) with
 N6a's trial battery (`bench/wallfilter.jl`) and N6b's qualification
 (`bench/wallclosure.jl`) is the instrument for N14 and N16. N6b found the
@@ -791,14 +839,17 @@ node-centred mirror at a wall, which was a calibration item rather than a
 closure one, and an inviscid wall there is now limited by the strain
 sensor's cusp. N6f completed that change at a coordinate fold, so the
 detector's clamp remains only at a closed edge that is neither a wall nor a
-fold. N6c, the roundoff audit, closed with no change and found
-the slip-wall mode that N6d then removed:
+fold. N6g gave the `:gaussian` sensor smoother and the `:d8` detector
+node-centred wall rows of their own, built from their interior weights by
+`wall_closures`, so every sensor operator reproduces a reflecting wall to
+round-off and an inviscid wall under `:d8` is limited by the same strain-sensor
+cusp as one under `:delta4`. N6c, the roundoff audit, closed with no change
+and found the slip-wall mode that N6d then removed:
 the cascade closures are linearly unstable at an inviscid slip wall, the
 F2 filter row that N6a retired was what damped it, and the C6 default is
 now the neutral `:neutral3` set; the flux divergence at an interface end
 keeps the cascade rows, so the interface baselines did not move. The open
-wall items are N6g to N6k: wall closures for the sensor smoother and the
-`:d8` detector, a slip-wall flux correction under
+wall items are N6h to N6k: a slip-wall flux correction under
 physical viscosity, the transverse mode of the aligned Noh case, a
 re-measurement of the fifth-order closure candidates under
 `beta_sensor = :dilatation`, and a stability certificate for the neutral

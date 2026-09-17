@@ -113,6 +113,10 @@ Pyranda's own `-1:2` boundary variant 0 and the same construction
 [`gaussian_filter`](@ref) uses. Every row's weights sum to zero, so a constant
 is annihilated exactly, without cancellation. Minimum local extent is 9
 points per rank, matching [`compact_filter`](@ref).
+
+A reflecting wall takes the node-centred rows of [`wall_closures`](@ref)
+instead, one set per sign of the field across the wall. Pyranda carries the
+two signs as separate boundary variants for the same reason.
 """
 function compact_d8(::Type{T}=Float64) where {T}
     # Reference weights: ζ = 29, α = 14, β = 3/2; a = 4200, b = −3360,
@@ -258,4 +262,48 @@ function _taylor_d1_row(pairs::Vector{Int}, singles::Vector{Int}, m::Int)
     end
     x = A \ b
     return x[1:np_], x[np_+1:np_+ns], x[np_+ns+1:end]
+end
+
+"""
+    wall_closures(scheme::BandedCompactScheme, σ) -> Vector{BandedClosureRow}
+
+The reflecting-wall rows of a banded scheme, folded exactly as the
+[`CompactScheme`](@ref) method describes: every tap and every left-hand-side
+unknown at an index below the boundary node is added onto its node-centred
+image with the sign `σ`. The left-hand side folds because an even derivative,
+like a filter, preserves the parity of its argument. Row 1 then carries
+`(1 + σ)` times each left-hand-side band on the interior side, row `j ≤ q` the
+bands at distance `j` and beyond on the diagonal, and the rows past `q` the
+full interior band. At `σ = −1` row 1 reduces to `g₁ = a₀ f₁`, which is
+consistent, an odd field vanishing on the wall node, and leaves the
+factorization nonsingular.
+"""
+function wall_closures(scheme::BandedCompactScheme{T}, σ::Int) where {T}
+    scheme.symmetric || error("wall closures need a symmetric scheme; " *
+                              "'$(scheme.name)' is antisymmetric")
+    s = T(σ)
+    q = scheme.q
+    M = halfwidth(scheme)
+    rows = BandedClosureRow{T}[]
+    for j in 1:M
+        rhs = zeros(T, j + M)
+        rhs[j] += scheme.a0
+        for m in 1:M
+            rhs[j+m] += scheme.coeffs[m]
+            p = j - m
+            p >= 1 ? (rhs[p] += scheme.coeffs[m]) :
+                     (rhs[2-p] += s * scheme.coeffs[m])
+        end
+        lhs = zeros(T, 2q + 1)
+        lhs[q+1] = one(T)
+        for b in 1:q
+            lhs[q+1+b] += scheme.lhs[b]
+            p = j - b
+            # Column 2−p sits at offset 2−p−j from this row's diagonal.
+            p >= 1 ? (lhs[q+1-b] += scheme.lhs[b]) :
+                     (lhs[q+1+(2-p-j)] += s * scheme.lhs[b])
+        end
+        push!(rows, BandedClosureRow{T}(lhs, rhs))
+    end
+    return rows
 end

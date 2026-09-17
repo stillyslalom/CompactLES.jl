@@ -385,6 +385,11 @@ half-offset mirror (ghost j ↔ interior j), which preserves that unit sum at a
 closed edge; `fold_fill!` uses the same construction at a fold, so
 the two edge treatments agree.
 
+That mirror is half a cell out at a node-centred wall. Where this filter
+serves as the sensor smoother, a reflecting wall face therefore takes the
+node-centred rows of [`wall_closures`](@ref) instead, which fold the same
+stencil onto the boundary node.
+
 Contrast [`compact_filter`](@ref), a dealiasing filter for the conserved
 state and not a test filter: at αf = 0.45 it retains 99% of the
 amplitude at four points per wavelength where this filter retains 19%.
@@ -465,4 +470,59 @@ interface_divergence_closures(scheme::AbstractCompactScheme) = scheme.closures
 function interface_divergence_closures(scheme::CompactScheme{T}) where {T}
     scheme.closures == neutral_closures(T, 2) ?
         cascade_closures(T, 2, 3) : scheme.closures
+end
+
+# --- Reflecting-wall closures ------------------------------------------------
+#
+# At a reflecting wall the solution continues past the boundary node as its own
+# reflection about that node, f at 2−q scaled by the field's sign σ, which is
+# the continuation `delta4_sum!` reads for the explicit detector. A symmetric
+# operator needs no closure of its own there: a field of parity σ maps to a
+# result of parity σ, so both sides of the row fold onto the same mirror and
+# the interior stencil closes itself. The rows below are that fold.
+#
+# The mirror is node-centred, one node further out than the half-offset mirror
+# (ghost j ↔ interior j) a coordinate fold takes and the built-in rows of
+# `gaussian_filter` and `compact_d8` fold onto. Those rows are half a cell out
+# at a wall, which is what these replace.
+
+"""
+    wall_closures(scheme, σ) -> Vector{ClosureRow}
+
+Closure rows folding the interior stencil of a symmetric `scheme` onto the
+node-centred mirror of a reflecting wall, for a field of parity `σ` across it
+(`+1` even, `−1` odd). Row `j` carries the interior weights with every tap at
+an index `q < 1` added onto `2 − q` with the sign `σ`, and the left-hand-side
+unknown folded the same way, so `halfwidth(scheme)` rows close the edge.
+
+The rows are built from the interior weights rather than tabulated, so a
+filter's unit row sum and an even derivative's zero row sum are inherited
+from the interior stencil at `σ = +1`. This is the sensor operators' wall
+hook: the artificial-property smoother and the `:d8` detector take these rows
+at a face [`sensor_mirror`](@ref) names, matching the mirror the `:delta4`
+detector reads directly. An antisymmetric scheme has no such fold and raises
+an error.
+"""
+function wall_closures(scheme::CompactScheme{T}, σ::Int) where {T}
+    scheme.symmetric || error("wall closures need a symmetric scheme; " *
+                              "'$(scheme.name)' is antisymmetric")
+    s = T(σ)
+    M = halfwidth(scheme)
+    rows = ClosureRow{T}[]
+    for j in 1:M
+        rhs = zeros(T, j + M)
+        rhs[j] += scheme.a0
+        for m in 1:M
+            rhs[j+m] += scheme.coeffs[m]
+            q = j - m
+            q >= 1 ? (rhs[q] += scheme.coeffs[m]) :
+                     (rhs[2-q] += s * scheme.coeffs[m])
+        end
+        # Row 1's ghost unknown g₀ = σ g₂ moves onto the superdiagonal; every
+        # row below it couples interior unknowns already.
+        lhs = j == 1 ? (zero(T), one(T), (one(T) + s) * scheme.alpha) :
+              (scheme.alpha, one(T), scheme.alpha)
+        push!(rows, ClosureRow{T}(lhs, rhs))
+    end
+    return rows
 end

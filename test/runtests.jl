@@ -1735,7 +1735,9 @@ end
             f[i+pad, 1, 1] = cos(k * i)
         end
         CL.exchange_halos!(f, s.decomp)
-        CL.apply_along!(out, s.ring_plans[1], f, s.decomp)
+        # Each dimension's entry is a (wall sign +1, wall sign −1) pair; on a
+        # periodic dimension the two slots hold one plan.
+        CL.apply_along!(out, s.ring_plans[1][1], f, s.decomp)
         i0 = N ÷ 2
         # rtol is 1e-9, not machine epsilon: the detector is a high-pass, so a
         # well-resolved wave is the difference of coefficients of order 1
@@ -1754,17 +1756,114 @@ end
     @test symbol(0.5π) < d4(0.5π) / 25
 
     # Constants must be annihilated exactly through the four closure rows, not
-    # by cancellation: every row's weights sum to zero by construction.
-    sw = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), art=art8,
-                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]))
-    fw = CL.field(sw.decomp); ow = CL.field(sw.decomp)
-    fill!(fw, 1.0)
-    CL.exchange_halos!(fw, sw.decomp)
-    CL.apply_along!(ow, sw.ring_plans[1], fw, sw.decomp)
-    @test maximum(abs, ow[(pad+1):(pad+N), 1, 1]) < 1e-14
+    # by cancellation: every row's weights sum to zero by construction. A slip
+    # wall takes the node-centred rows, an extrapolation face the scheme's own.
+    for lo in (SlipWallBC(), ExtrapolationBC())
+        sw = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), art=art8,
+                    bcs=((lo, lo), per3[2], per3[3]))
+        fw = CL.field(sw.decomp); ow = CL.field(sw.decomp)
+        fill!(fw, 1.0)
+        CL.exchange_halos!(fw, sw.decomp)
+        CL.apply_along!(ow, sw.ring_plans[1][1], fw, sw.decomp)
+        @test maximum(abs, ow[(pad+1):(pad+N), 1, 1]) < 1e-14
+    end
 
     @test_throws ErrorException Solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
                                        bcs=per3, art=ArtParams(detector=:bogus))
+end
+
+@testset "sensor operators at a reflecting wall" begin
+    # The `:gaussian` smoother and the `:d8` detector carry closure rows that
+    # fold onto the half-offset mirror, half a cell out at a node-centred wall.
+    # A reflecting face takes `wall_closures` instead, so a field exactly even
+    # about both wall nodes, or exactly odd for a wall-normal velocity, must
+    # reproduce the periodic run on the same spacing: the extended domain of
+    # 2(N − 1) cells whose restriction is the wall run.
+    N = 49
+    wallbc = ((SlipWallBC(), SlipWallBC()), per3[2], per3[3])
+    even_field(x) = cospi(x) + 0.5cospi(5x) + 0.1cospi(13x)
+    odd_field(x) = sinpi(x) + 0.1sinpi(13x)
+    both(art) = (Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), art=art,
+                        bcs=wallbc),
+                 Solver(n_global=(2(N - 1), 1, 1), L_domain=(2.0, 1.0, 1.0),
+                        art=art, bcs=per3))
+    function load(s, fn)
+        f = CL.field(s.decomp)
+        pad = s.decomp.n_halo_d[1]
+        for i in 1:s.decomp.n_local[1]
+            f[i+pad, 1, 1] = fn(CL.xcoord(s, 1, i))
+        end
+        CL.exchange_halos!(f, s.decomp)
+        f
+    end
+    # The first and last six nodes of the wall run, and the same nodes of the
+    # periodic one.
+    win(s, a) = (pad = s.decomp.n_halo_d[1];
+                 [a[i+pad, 1, 1] for i in [1:6; (N-5):N]])
+
+    sw, sp = both(ArtParams())
+    fw, fp = load(sw, even_field), load(sp, even_field)
+    CL.smooth!(fw, sw)
+    CL.smooth!(fp, sp)
+    @test maximum(abs, win(sw, fw) .- win(sp, fp)) <
+          1e-14 * maximum(abs, win(sp, fp))
+
+    dw, dp = both(ArtParams(detector=:d8))
+    for (fn, σw) in ((even_field, 1), (odd_field, -1))
+        gw, gp = load(dw, fn), load(dp, fn)
+        ow, op = CL.field(dw.decomp), CL.field(dp.decomp)
+        CL.detect_sum!(ow, gw, dw, 1; wall_parity=(σw, 1, 1))
+        CL.detect_sum!(op, gp, dp, 1)
+        # The detector is a high-pass: on a resolved field it is the difference
+        # of order-one coefficients producing an answer four orders smaller, so
+        # 1e-8 relative is its round-off and not slack here.
+        @test maximum(abs, win(dw, ow) .- win(dp, op)) <
+              1e-8 * maximum(win(dp, op))
+    end
+    # An odd field vanishes on the wall node, and the odd row 1 returns that
+    # exactly rather than to round-off.
+    gw = load(dw, odd_field)
+    ow = CL.field(dw.decomp)
+    CL.detect_sum!(ow, gw, dw, 1; wall_parity=(-1, 1, 1))
+    @test ow[1+dw.decomp.n_halo_d[1], 1, 1] == 0.0
+
+    # The rows themselves: built from the interior weights, so the filter's
+    # unit row sum and the eighth derivative's zero row sum are inherited.
+    a, b = 3565 / 10368, 3091 / 12960
+    c, d, e = 1997 / 25920, 149 / 12960, 107 / 103680
+    grows = CL.wall_closures(gaussian_filter(), 1)
+    @test length(grows) == 4
+    @test all(row -> sum(row.rhs) ≈ 1.0, grows)
+    @test grows[1].rhs ≈ [a, 2b, 2c, 2d, 2e]
+    @test grows[2].rhs ≈ [b, a + c, b + d, c + e, d, e]
+    @test grows[3].rhs ≈ [c, b + d, a + e, b, c, d, e]
+    @test grows[4].rhs ≈ [d, c + e, b, a, b, c, d, e]
+    drows = CL.wall_closures(compact_d8(), 1)
+    @test all(row -> abs(sum(row.rhs)) < 1e-15, drows)
+    # Row 1 folds each left-hand-side band onto the interior side, doubling it
+    # for an even field; at σ = −1 the whole row collapses to g₁ = a₀ f₁.
+    @test drows[1].lhs ≈ [0, 0, 1, 2 * 14 / 29, 2 * 3 / 58]
+    @test drows[2].lhs ≈ [0, 14 / 29, 1 + 3 / 58, 14 / 29, 3 / 58]
+    orows = CL.wall_closures(compact_d8(), -1)
+    @test orows[1].lhs == [0, 0, 1, 0, 0]
+    @test orows[1].rhs ≈ [35 / 58, 0, 0, 0, 0]
+    # An antisymmetric scheme has no such fold.
+    @test_throws ErrorException CL.wall_closures(lele_d1_6(), 1)
+
+    # A fold's far end may be a wall. The outer end of a radial line takes the
+    # same rows, so the fold holds one detector plan per ghost parity and per
+    # wall sign.
+    sa = Solver(n_global=(32, 1, 12), L_domain=(1.0, 1.0, 0.5),
+                metric=CylindricalMetric(), art=ArtParams(detector=:d8),
+                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]))
+    rp = sa.folds[1].ring_plans
+    @test length(rp) == 2 && all(p -> length(p) == 2, rp)
+    @test rp[1][1] !== rp[1][2] && rp[2][1] !== rp[2][2]
+    # An outer end that reflects nothing keeps one plan in both slots.
+    sx = Solver(n_global=(32, 1, 12), L_domain=(1.0, 1.0, 0.5),
+                metric=CylindricalMetric(), art=ArtParams(detector=:d8),
+                bcs=((AxisBC(), ExtrapolationBC()), per3[2], per3[3]))
+    @test sx.folds[1].ring_plans[1][1] === sx.folds[1].ring_plans[1][2]
 end
 
 @testset "pyranda_filter: symbol, Nyquist zero, 9/10 integral, closures" begin
@@ -1867,7 +1966,11 @@ end
     CL.exchange_halos!(f, s.decomp)
     CL.ring_along!(out, f, s, 1, 1)
     @test all(isfinite, out)
-    @test maximum(abs, out[gidx(s, i, 1, k)] for i in 1:64, k in 1:12) < 1e-3
+    # The window stops at the domain's midpoint. This field has a slope at the
+    # outer slip wall, so it is not the reflection the wall closure rows
+    # continue it as, and the detector reads that mismatch over the last cells;
+    # the fold at the other end is what this case measures.
+    @test maximum(abs, out[gidx(s, i, 1, k)] for i in 1:32, k in 1:12) < 1e-3
     # And the full sensor path runs through the fold.
     Q = allocate_state(s)
     initialize!(s, Q, (r, θ, z) -> Prim(rho=1.0, p=1.0, u=(-1.0, 0.0, 0.0)))
@@ -1943,10 +2046,15 @@ end
     uni = (r, θ, z) -> Prim(rho=1.0, p=1.0, u=(-1.0, 0.0, 0.0))
     # δ⁴ across the fold reads the half-offset mirror for an odd field, so this
     # is exact; the d8 closure reaches it through a line solve, hence round-off.
+    # Its floor is the wider one, and not for the fold's sake: u_r = r is not
+    # odd about the outer wall either, the slip condition leaving a kink on the
+    # wall node, and the pentadiagonal inverse carries a decaying tail of that
+    # mismatch back across the 31 cells to the axis. Measured 8.7e-14 against a
+    # wall-node 5.5e-5 and the uniform case's 1.6e-4 at the axis below.
     sl = axial(ArtParams(mu_sensor=:velocity), lin)
     @test sl.mu_art[gidx(sl, 1, 1, 1)] == 0.0
     s8 = axial(ArtParams(mu_sensor=:velocity, detector=:d8), lin)
-    @test s8.mu_art[gidx(s8, 1, 1, 1)] < 1e-14
+    @test s8.mu_art[gidx(s8, 1, 1, 1)] < 1e-12
     su = axial(ArtParams(mu_sensor=:velocity), uni)
     @test su.mu_art[gidx(su, 1, 1, 1)] > 0
 

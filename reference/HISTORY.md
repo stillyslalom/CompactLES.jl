@@ -1956,3 +1956,114 @@ suite's KernelAbstractions CPU comparison; no hardware GPU run was made. The
 measurements are under [the fold](CALIBRATION_APPENDIX.md#the-fold); the
 applied form and the remaining wall items are in
 [CALIBRATION.md](CALIBRATION.md#open-items).
+
+## The sensor operators' wall rows (September 2026)
+
+Two operators around the artificial-property sensors kept closure rows that do
+not reproduce a reflecting wall once the detector's own mirror was in place: the
+`:gaussian` sensor smoother, whose rows fold onto the half-offset mirror and so
+sit half a cell out at a node-centred wall, and `ring_sum!`, the `:d8` detector.
+`wall_closures(scheme, σ)`, in `kernels.jl` for a `CompactScheme` and in
+`kernels_banded.jl` for a `BandedCompactScheme`, now builds rows for both by
+folding a symmetric scheme's interior stencil, taps and left-hand-side unknowns
+alike, onto the node-centred mirror of the wall, index q < 1 onto 2 − q, with
+the field's sign σ. The rows are built from the interior weights, so a filter's
+unit row sum and the eighth derivative's zero row sum are inherited. The
+smoother is planned with the σ = +1 rows at every face `sensor_mirror` names,
+its input being a detector output past an absolute value and so even, and the
+detector with both signs, as a pair per dimension indexed by the wall sign;
+`ring_sum!`'s `wall_parity` argument is now applied rather than ignored, with
+`velocity_mu!` passing −1 for the wall-normal component. Where neither face of a
+dimension is a wall the pair aliases one plan, so the default configuration's
+plans and memory are unchanged. A fold's closed far end, the outer wall of a
+radial line, is given the same rows, and `FoldSpec.ring_plans` became 2×2, ghost
+parity by wall sign. Same-level patched runs apply the smoother rows at physical
+wall faces, and a refined patch has no reflecting face. The `:compact` smoother
+is unchanged, sharing the state filter's plans and one-sided rows and carrying
+no half-cell shift. `planned_sensor_mirror(bc)` is the setup-time form of the
+hook: a plan is fixed for the run while `sensor_mirror` follows the active
+condition, so a `SwitchableBC` face is given the wall rows only when both of its
+conditions are mirrors, and the `:delta4` path still queries per call. Selection
+is a tuple index and adds no dispatch site.
+
+The operator probe of the change is the new `bench/sensorwall.jl`, which applies
+one operator on a slab between slip walls and the same operator on the periodic
+extension of that slab. On its even field, cos(πx) + 0.5cos(5πx) + 0.1cos(13πx),
+`:d8` read a relative 2.629e-4 at the first node for N = 193, second order in h,
+and on its odd field, sin(πx) + 0.1sin(13πx), 3.527e-3, first order. After the
+change the six nodes nearest either wall read at most 1.994e-15 on the even
+field and 2.545e-15 on the odd one, at N = 49, 97 and 193. The `:gaussian`
+smoother read 1.345e-3 at the first node for N = 193 and now reads at most
+2.776e-16 over the four nodes its rows reach; `:delta4` and `:compact` are
+unchanged in every digit.
+
+At the inviscid slip wall under C6 Brady–Livescu the `detector = :d8` row falls
+from 1.160e-8 / 5.244e-10 / 3.469e-11 to 3.698e-9 / 9.936e-11 / 1.305e-11 at
+N = 49 / 97 / 193, below the `:delta4` all-on row's 5.441e-11 where it was above
+it. With the strain sensor's cusp out of the comparison, `:d8` under
+`beta_sensor = :dilatation` reads 8.178e-13 at N = 193 against the
+properties-off 7.976e-13 and `:delta4` under the same sensor 6.630e-13, so an
+inviscid wall under `:d8` is limited by the cusp as one under `:delta4` is. No
+other smooth-wall row changes order, and every row with the artificial
+properties off is bit-identical. The rows that move past the third digit are the
+two inviscid Brady–Livescu rows at N = 49, by 2.9% at C6 and 1.8% at C8, and the
+C8 Brady–Livescu rows at 1e-14 to 1e-16, which is the floor of the mirror
+comparison.
+
+In the battery the cold planar Noh wall deficit reads 50% against 54%, at
+plateau 3.9883 and shock 0.2049 against 3.9851 and 0.2054, and the aligned Noh
+case at N = 100 and aspect ratio 4 reads plateau 3.9792, deficit 54% and front
+0.2146 over 4997 steps against 3.9747, 57% and 0.2161 over 5059. Its transverse
+round-off reads 7.8e-9 at the end of the run against 2.8e-6 before the change
+and 1.4e-8 under the clamp, so its guard returned from 5e-6 to the 1e-7 it
+carried before the detector's wall mirror widened it, now 13 times the
+measurement, and the header of `test/validation.jl` was re-recorded. What that
+mode is has not been measured and is still open. Every other case is unchanged
+to its printed digits, no guard failed and no stored reference was regenerated.
+
+The cost is two moved test guards and one plan. The `:d8 through a
+coordinate-singularity fold` window narrowed to the inner half, i in 1:32,
+because exp(−4r²) has slope −0.147 at the outer slip wall and is not the
+reflection the wall rows continue it as, which reads 3.6e-3 at the wall node.
+The `u_r = r` axis check under `:d8` moved from 1e-14 to 1e-12 because that
+field is not odd about the outer wall, the slip condition leaves a kink there,
+and the pentadiagonal inverse carries a decaying tail of that mismatch to the
+axis, 8.7e-14 at the axis against a wall-node 5.5e-5. In the default
+configuration the change costs nothing, the pair aliasing one plan; under `:d8`
+with a wall it adds one plan per walled dimension. At (96, 64, 64) with slip
+walls on dimension 1 at `-t 1` that is four distinct ring plans against three
+and 12.00 MiB of packed-line buffer against 9.00 MiB, one 96 × 4096 buffer of
+3145728 B, and a solver `Base.summarysize` of 289.01 MiB against 285.50 MiB,
+whose 3678072 B difference is the second plan entire. Construction does not
+move, 0.048 s against 0.049 s over five interleaved builds, and per call the
+walled configuration is the cheaper of the two, `compute_artificial!` at
+medians of 0.0303 s and 0.0284 s over two runs against 0.0317 s and 0.0309 s
+and `compute_rhs!` at 0.0986 s and 0.0924 s against 0.1020 s and 0.0979 s,
+inside the machine's 10 to 20% run-to-run spread.
+`bench/jetcheck.jl` reads no delta, `compute_rhs!` 3, `step!` 4,
+`apply_bcs!` 1 and every other entry point 0, and `bench/audit.jl` at `-t 1`
+reads every allocation figure byte-identical, `compute_rhs!` 304 B, `step!`
+2032 B and `compute_artificial!` 0 B, with every inference row identical.
+
+Validation: `test/runtests.jl` 2499 of 2499 over 172 testset rows against 2479
+of 2479 over 171, where the new "sensor operators at a reflecting wall" testset
+adds 19 assertions and the row, and a constant-annihilation check now looping
+over `SlipWallBC` and `ExtrapolationBC` adds one more assertion;
+`test/convergence.jl` bit-identical study by study, since every study there runs
+with the artificial properties off; `test/validation.jl` with its header and the
+aligned Noh guard re-recorded as above; and `test/mpi_tests.jl` 302 of 302 at 2
+ranks against 300, the two new checks being the `:d8` slip-wall split-axis
+spreads, 2.554e-14 against a 7.3e-11 tolerance on Σβ\* and 4.235e-21 against
+4.8e-17 on Σκ\*, and 146 of 146 at 8 ranks with the CI phases. All on Julia
+1.11.4. `_device_plan` copies the closure rows generically, and a hardware run
+on an AMD RX 6800 XT (gfx1030) through AMDGPU.jl reads as that implies: on a
+(48, 16, 16) slab with slip walls on dimension 1 the device solver's plans are
+`DevicePlan`s, `ring_plans[1]` holds two distinct plans and `ring_plans[2]` one
+aliased plan as on the host, and `mu_art`, `beta_art`, `kappa_art` and `dQ`
+agree bitwise with the `CPUBackend` solver over the whole interior and over the
+six nodes nearest each wall alike, as does the state after five steps, under
+`:d8`, under `mu_sensor = :velocity` and under the `:delta4` control. The
+measurements are under [the sensor operators' wall
+rows](CALIBRATION_APPENDIX.md#the-sensor-operators-wall-rows); the applied form
+and the remaining wall items are in
+[CALIBRATION.md](CALIBRATION.md#open-items).

@@ -54,11 +54,11 @@
 #   Shu-Osher  L1 rho 6.80e-3, wave train 2.09e-2, train peak 4.680
 #   Woodward   L1 rho 3.215e-2, peak rho 6.616 at x = 0.7785
 #   Sedov      R_s 0.8085 vs 0.8000 analytic (+1.06%), peak rho 5.13 (jump 6)
-#   Noh nu=1   plateau 3.9851/4    shock 0.2054/0.2   wall deficit 54%
+#   Noh nu=1   plateau 3.9883/4    shock 0.2049/0.2   wall deficit 50%
 #   Noh nu=2   plateau 15.009/16   shock 0.2091/0.2   wall deficit 55%
 #   Noh nu=3   plateau 62.555/64   shock 0.2089/0.2   wall deficit 29%
 #   Shock/SF6  worst Y -0.0129 / 1.0129, width 4 cells, 647 steps (Sept 2026)
-#   Noh aligned N=100 AR=4    plateau 3.9747/4   deficit 57%   shock 0.2161   5059 steps
+#   Noh aligned N=100 AR=4    plateau 3.9792/4   deficit 54%   shock 0.2146   4997 steps
 #   Noh plane   N=24  AR=2    plateau 11.858/16  front 0.236/0.2  L1 rho 0.893  745 steps
 #
 # The C6 default closure became `:neutral3` in September 2026 (roadmap N6d);
@@ -67,7 +67,7 @@
 # Noh plane 11.862 / 0.907 / 759 steps, the other cases unchanged. Those four
 # were taken before the detector's wall mirror, below.
 #   Woodward, C6 :brady_livescu   L1 rho 3.216e-2, peak rho 6.617 at x = 0.7785
-#   Noh nu=1 warm t0=0.3, C6 :brady_livescu   rho[1:4] 3.988 3.993 3.995 4.000
+#   Noh nu=1 warm t0=0.3, C6 :brady_livescu   rho[1:4] 3.989 3.993 3.995 4.000
 #
 # The two Brady–Livescu rows guard the supported high-order wall
 # configuration (roadmap N6b, September 2026): the rows under the default
@@ -89,7 +89,22 @@
 # rows. No guard moved; the deficit percentage above is the one printed
 # number that rounds differently.
 #
-# The wall rows moved again in September 2026 when the fourth-difference
+# The wall rows moved again in September 2026 when the sensor smoother and
+# the `:d8` ring detector took node-centred closure rows at a reflecting wall,
+# the rows the fourth-difference detector's mirror already reads. The
+# `:gaussian` smoother is the default, and its rows folded onto the
+# half-offset mirror, half a cell out at a wall node, so every case with a
+# gradient against a wall moved: planar Noh (plateau 3.9851, shock 0.2054,
+# wall deficit 54% before), the aligned AR = 4 case (3.9747 / 57% / 0.2161 /
+# 5059 steps before) and the warm Brady-Livescu wall in its last digit
+# (3.988 3.993 3.995 4.000 before). Lax, Shu-Osher, both Woodward rows,
+# Sedov, the cylindrical and spherical folds, the interface case and the
+# AR = 2 plane did not move to the digits printed, and neither stored
+# reference was regenerated. The transverse round-off of the aligned case
+# reads 7.8e-9 against 2.8e-6 before, below the 1.4e-8 it read under the
+# clamp, so its guard returns from 5e-6 to the 1e-7 it carried then.
+#
+# The wall rows moved in September 2026 when the fourth-difference
 # detector stopped clamping the field at a reflecting wall and took the
 # node-centred mirror there (`sensor_mirror`, artificial.jl). The artificial
 # coefficients beside a wall fall to what the interior sensor gives, so the
@@ -378,8 +393,8 @@ end
 # The supported high-order wall configuration at a stagnation wall: the
 # planar case warm-started from the exact solution at t0 = 0.3, so the wall
 # carries the rho = 4 plateau and no singular start, under C6
-# `:brady_livescu` and the default filter rows. Measured rho[1:4] 3.992
-# 3.996 3.996 4.000 against the default closure's 4.025 3.988 3.993 4.007;
+# `:brady_livescu` and the default filter rows. Measured rho[1:4] 3.989
+# 3.993 3.995 4.000 against the default closure's 4.025 3.988 3.993 4.007;
 # the cold start of the case above fails under these rows and is not
 # supported.
 let (xs, ρ, u, p, ok, report) = noh_case(1; t0=0.3,
@@ -440,11 +455,10 @@ let r = noh_aligned(; N=100, AR=4)
     @test 0 < deficit < 0.7
     @test abs(Rnum - 0.2) < 0.025
     # The initial data carry no transverse variation, so this is round-off,
-    # amplified by whatever the wall supports. It sits at 4.4e-16 after 20
-    # steps and 1.9e-11 after 2000, and grows to 2.8e-6 over the last third
-    # of the run, once the detector's wall mirror has taken the artificial
-    # viscosity at the wall down to the interior's.
-    @test r.uniformity < 5e-6
+    # amplified by whatever the wall supports. Measured 7.8e-9, against the
+    # 2.8e-6 it reached while the sensor smoother's rows were half a cell out
+    # at the wall.
+    @test r.uniformity < 1e-7
     @test r.steps < 8000
 end
 let r = noh_cartesian(; N=24, AR=2)

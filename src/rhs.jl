@@ -116,6 +116,21 @@ step drivers and the arrays is written against this type.
 """
 const SolverLike{T} = Union{Solver{T},PatchSolver{T}}
 
+# Which physical faces the sensor operators close on the node-centred mirror,
+# per dimension and side. `planned_sensor_mirror` (boundary.jl) is the
+# setup-time form of the detector's `sensor_mirror` hook.
+_sensor_wall_faces(bcs) = ntuple(d -> (planned_sensor_mirror(bcs[d][1]),
+                                       planned_sensor_mirror(bcs[d][2])), 3)
+
+# The wall rows one sensor operator takes at one face, or `nothing` where it
+# keeps the scheme's own. `use` gates the hook to the two operators whose rows
+# fold onto the half-offset mirror: the `:gaussian` smoother and the `:d8`
+# detector. The `:compact` smoother keeps the state filter's plans and its own
+# one-sided rows, which reference the boundary node itself and carry no
+# half-cell shift.
+_sensor_wall_rows(scheme, wall::Bool, σ::Int, use::Bool) =
+    (use && wall) ? wall_closures(scheme, σ) : nothing
+
 "Number of patches this rank's solver holds."
 npatches(s::Solver) = length(getfield(s, :patches))
 
@@ -460,6 +475,18 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     # `:d8` is the pentadiagonal compact eighth derivative and needs one per
     # dimension and one pair per fold, matching the smoother.
     ring = compact_d8(T)
+    # Reflecting-wall closure rows for the two sensor operators. Both schemes
+    # fold their overhanging weights onto the half-offset mirror, which is half
+    # a cell out at a wall node; at such a face they take the node-centred rows
+    # the `:delta4` detector's mirror already reads (`wall_closures`). The
+    # smoother's input is even at a wall, every detector output passing through
+    # an absolute value, so it needs one sign; the detector also runs on the
+    # velocity components and takes both.
+    wall_face = _sensor_wall_faces(bcs)
+    swrow(d, side) = _sensor_wall_rows(smoo, wall_face[d][side], 1,
+                                       art.smoother === :gaussian)
+    rwrow(d, side, σw) = _sensor_wall_rows(ring, wall_face[d][side], σw,
+                                           art.detector !== :delta4)
     equations = equations === nothing ? NavierStokes1T(eos) : equations
     equations isa EquationSet || error("equations must be an EquationSet")
     equations.n_species == nspecies(eos) ||
@@ -526,15 +553,32 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
               mkd(deriv, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing)))
         fp = (mkd(filt, d; lo_fold=(lo ? 1 : nothing), hi_fold=(hi ? 1 : nothing)),
               mkd(filt, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing)))
+        # A fold's far end may be a physical wall, as the outer end of a radial
+        # line is, and takes the same wall rows an unfolded end does. The
+        # folded end itself is open and takes none.
+        sw(side, folded) = folded ? nothing : swrow(d, side)
+        rw(side, folded, σw) = folded ? nothing : rwrow(d, side, σw)
         # `:compact` aliases the filter plans to avoid duplicating them.
         # This matches `smooth!` before it had an operator of its
         # own, so the default path keeps both its answer and its footprint.
         sp = art.smoother === :compact ? fp :
-             (mkd(smoo, d; lo_fold=(lo ? 1 : nothing), hi_fold=(hi ? 1 : nothing)),
-              mkd(smoo, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing)))
-        rp = art.detector === :delta4 ? (nothing, nothing) :
-             (mkd(ring, d; lo_fold=(lo ? 1 : nothing), hi_fold=(hi ? 1 : nothing)),
-              mkd(ring, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing)))
+             (mkd(smoo, d; lo_fold=(lo ? 1 : nothing), hi_fold=(hi ? 1 : nothing),
+                  lo_closures=sw(1, lo), hi_closures=sw(2, hi)),
+              mkd(smoo, d; lo_fold=(lo ? -1 : nothing), hi_fold=(hi ? -1 : nothing),
+                  lo_closures=sw(1, lo), hi_closures=sw(2, hi)))
+        ringfold(σg, σw) =
+            mkd(ring, d; lo_fold=(lo ? σg : nothing), hi_fold=(hi ? σg : nothing),
+                lo_closures=rw(1, lo, σw), hi_closures=rw(2, hi, σw))
+        # One plan per wall sign, the pair aliased to a single plan where the
+        # far end is no wall, so a fold without one carries one plan per ghost
+        # parity rather than two.
+        farwall = (!lo && wall_face[d][1]) || (!hi && wall_face[d][2])
+        function rpair(σg)
+            even = ringfold(σg, 1)
+            farwall ? (even, ringfold(σg, -1)) : (even, even)
+        end
+        rp = art.detector === :delta4 ? ((nothing, nothing), (nothing, nothing)) :
+             (rpair(1), rpair(-1))
         FoldSpec(d, lo, hi, pairspec(pdim, revdim), sigvel, sigflux, dp, fp, sp, rp)
     end
     folds = (nothing, nothing, nothing)
@@ -561,7 +605,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                          mkd(filt, d) : nothing, 3)
     smooth_plans = art.smoother === :compact ? filter_plans :
                    ntuple(d -> decomp.active[d] && folds[d] === nothing ?
-                          mkd(smoo, d) : nothing, 3)
+                          mkd(smoo, d; lo_closures=swrow(d, 1),
+                              hi_closures=swrow(d, 2)) : nothing, 3)
     # `nothing`, not a tuple of nothings: `detect_sum!` dispatches on this
     # field's type to decide which detector runs, so under `:delta4` the whole
     # d8 path (`ring_sum!`, `ring_along!`, and the `apply_along!` call taking a
@@ -569,9 +614,18 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     # default configuration nothing.
     # A tuple would not serve: a fully folded run carries no plans here even
     # under `:d8`, since those live on the FoldSpec.
-    ring_plans = art.detector === :delta4 ? nothing :
-                 ntuple(d -> decomp.active[d] && folds[d] === nothing ?
-                        mkd(ring, d) : nothing, 3)
+    #
+    # Each dimension's entry is a pair indexed by the sign of the field across
+    # a reflecting wall, aliased to one plan where neither face of the
+    # dimension is a wall, so a dimension without one carries a single plan.
+    function ringpair(d)
+        (decomp.active[d] && folds[d] === nothing) || return nothing
+        even = mkd(ring, d; lo_closures=rwrow(d, 1, 1), hi_closures=rwrow(d, 2, 1))
+        (wall_face[d][1] || wall_face[d][2]) || return (even, even)
+        (even, mkd(ring, d; lo_closures=rwrow(d, 1, -1),
+                   hi_closures=rwrow(d, 2, -1)))
+    end
+    ring_plans = art.detector === :delta4 ? nothing : ntuple(ringpair, 3)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
     bcs_t = ntuple(d -> (bcs[d][1], bcs[d][2]), 3)
     # One RHS scratch pool per rank, seeded with the root patch's set and
@@ -850,6 +904,9 @@ function _fine_plans(decomp_f::Decomp, hf, deriv, filt, smoo, interface_rhs::Sym
     # Aliasing `fplans_f` here would read four ghost layers of allocation
     # zeros at every coarse-fine face through the C8 interior rows the
     # interface closures leave in place.
+    #
+    # No wall rows either: every face of a refined patch is a coarse-fine or
+    # interface end (`_fine_bcs`), so none of them reflects.
     splans_f = ntuple(d -> decomp_f.active[d] ? mkf(smoo, d) : nothing, 3)
     return (deriv=dplans_f, div=vplans_f, filter=fplans_f, smooth=splans_f)
 end
@@ -1076,8 +1133,14 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
             nothing, 3)
         # The sensor smoother's input is built per patch, so its interface
         # ghosts carry no data and its plans keep the standard closures even
-        # under `smoother = :compact`.
-        splans = ntuple(d -> dcp.active[d] ? mk(smoo, d) : nothing, 3)
+        # under `smoother = :compact`. A face carrying a physical wall takes
+        # the node-centred rows, as the single-patch path does; a patched run
+        # is rejected under `detector = :d8`, so no ring plans arise here.
+        wface = _sensor_wall_faces(pbcs)
+        swp(d, side) = _sensor_wall_rows(smoo, wface[d][side], 1,
+                                         art.smoother === :gaussian)
+        splans = ntuple(d -> dcp.active[d] ?
+            mk(smoo, d; lo_closures=swp(d, 1), hi_closures=swp(d, 2)) : nothing, 3)
         g() = field(backend, dcp)
         empty3 = empty_field(backend, T)
         # A patched run takes the `:delta4` detector, rejected otherwise at
@@ -1484,6 +1547,10 @@ planning an operator of its own; the default `:gaussian` plans the explicit
 nine-point stencil of [`gaussian_filter`](@ref). Only the artificial-property
 sensors go through here, by way of `smooth!`.
 
+A reflecting wall face is closed by the even rows of [`wall_closures`](@ref)
+under `:gaussian`, since the fields smoothed here are even at a wall. The
+`:compact` smoother keeps the state filter's plans and its own rows.
+
 Every rank in the directional sub-communicator must call this function, as for
 `deriv_along!`.
 """
@@ -1498,7 +1565,7 @@ function smooth_along!(out, f, solver::SolverLike, d::Int, σf::Int)
 end
 
 """
-    ring_along!(out, f, solver, d, σf)
+    ring_along!(out, f, solver, d, σf, σw = 1)
 
 Compact eighth derivative of `f` along dimension `d` with antipodal sign `σf`,
 the ringing detector selected by `ArtParams(detector = :d8)`. Only `ring_sum!`
@@ -1506,18 +1573,31 @@ calls this, and only under that setting: `solver.ring_plans` is `nothing`
 otherwise, which keeps this function off the default configuration's inference
 path. Indexing that field under `:delta4` would throw. See `detect_sum!`.
 
+`σw` is the field's sign across a reflecting wall on this dimension, and picks
+the plan whose closure rows fold onto the node-centred mirror with that sign
+([`wall_closures`](@ref)). Each dimension carries the two plans as a pair, so
+the choice is a tuple index rather than a branch. Where neither face is such a
+wall the pair holds one plan twice and the index is immaterial.
+
 Every rank in the directional sub-communicator must call this function. Its
 halo and fold contract matches `deriv_along!`.
 """
-function ring_along!(out, f, solver::SolverLike, d::Int, σf::Int)
+function ring_along!(out, f, solver::SolverLike, d::Int, σf::Int, σw::Int=1)
     fold = solver.folds[d]
     if fold === nothing
-        apply_along!(out, _plan_at(solver.ring_plans, d), f, solver.decomp)
+        apply_along!(out, _wall_at(_plan_at(solver.ring_plans, d), σw), f,
+                     solver.decomp)
     else
-        fold_apply!(out, f, solver, fold, σf, Val(:ring))
+        fold_apply!(out, f, solver, fold, σf, Val(:ring), σw)
     end
     return out
 end
+
+# The wall-sign half of a ring plan pair. The two plans differ only in their
+# closure rows, so the selection is a tuple index and adds nothing to the hot
+# path; see the comment above `_plan_at` for why the dimension is indexed the
+# same way.
+@inline _wall_at(pair, σw::Int) = σw > 0 ? pair[1] : pair[2]
 
 # Scale a raw coordinate-derivative field by 1/h_d pointwise (full array).
 @inline function _scale_grad_point!(g, ih, i, j, k)

@@ -56,6 +56,7 @@ CompactLES.DirPlan
 CompactLES.BandPlan
 CompactLES.plan_direction
 CompactLES.interface_closures
+CompactLES.wall_closures
 CompactLES.apply_along!
 CompactLES.filter_field!
 CompactLES.THREAD_MIN_WORK

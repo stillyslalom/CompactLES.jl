@@ -660,7 +660,8 @@ vortex-ring/SF6 case has not been run under it
 ## Open items
 
 In approximate priority order; each links to the measurements it rests on.
-Item 7 is closed and kept in place so that the numbering stays stable.
+Items 7, 10 and 11 are closed and kept in place so that the numbering stays
+stable.
 
 1. **Raise the CFL ceiling at the spherical origin.** The density
    proportionality of β\* and the per-step filter strength are measured
@@ -695,17 +696,21 @@ Item 7 is closed and kept in place so that the numbering stays stable.
    derived for the C6 interior and need a three-row family and their own
    line-length sweep for C8
    ([the neutral rows](CALIBRATION_APPENDIX.md#the-neutral-closure-rows)).
-10. **Give the `:gaussian` smoother node-centred wall rows.** Its closure
-    rows fold the overhanging weights onto the half-offset mirror, half a
-    cell out at a wall, which leaves a relative 4.72e-4 at the first node
-    for N = 193 falling as h² where `:compact` reads 8.8e-10. It does not
-    carry the residual measured at an inviscid wall
-    ([the wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror)).
-11. **Mirror `ring_sum!`'s wall rows.** On a field exactly even about the
-    wall the `:d8` detector returns 2.34e-8 at N = 97 against a periodic
-    6.58e-16, over at least six nodes, so `detector = :d8` keeps a wall
-    defect that the `:delta4` mirror removes
-    ([the wall mirror](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror)).
+10. **The `:gaussian` smoother's wall rows: closed, September 2026.** Its
+    closure rows are folded onto the node-centred mirror of a reflecting
+    wall, built from the interior weights so the unit row sum is inherited.
+    Against the periodic mirror of the same field the smoother reads at most
+    2.776e-16 over the four nodes its rows reach, where the half-offset rows
+    read 1.345e-3 at the first node for N = 193
+    ([the wall rows](CALIBRATION_APPENDIX.md#the-sensor-operators-wall-rows)).
+11. **`ring_sum!`'s wall rows: closed, September 2026.** The `:d8` detector
+    is given the same rows on both parities, planned as a pair per dimension
+    indexed by the wall sign, and reads at most 2.545e-15 over the six nodes
+    nearest either wall at N = 49, 97 and 193. At the inviscid slip wall
+    under C6 Brady–Livescu the `detector = :d8` error falls from 3.469e-11
+    to 1.305e-11 at N = 193, and under `beta_sensor = :dilatation` the two
+    detectors are indistinguishable there
+    ([the wall rows](CALIBRATION_APPENDIX.md#the-sensor-operators-wall-rows)).
 12. **Add a `correct_flux!` method for `SlipWallBC`.** With the
     artificial properties off and a physical shear viscosity, a slip wall
     does not reproduce its mirror at the closure's order: μ = 5e-3 reads

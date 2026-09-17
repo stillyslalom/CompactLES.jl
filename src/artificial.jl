@@ -32,8 +32,12 @@
 # the mass and the mole fraction of every species. Under `:delta4`, indices past
 # a closed physical edge come from a mirror where the edge has one, node-centred
 # at a wall (`sensor_mirror`) and half-offset across a fold, carrying the
-# field's sign in either case, and are clamped elsewhere; `:d8` uses the
-# scheme's own closure rows instead.
+# field's sign in either case, and are clamped elsewhere. `:d8` reaches the
+# same continuations through closure rows: `wall_closures` at a wall, one set
+# per sign of the field and chosen at setup, and the scheme's own half-offset
+# rows at a fold or at a closed edge that reflects nothing. The smoother
+# follows the detector at a wall, `:gaussian` taking the even wall rows there
+# where its own are half a cell out.
 # Halos cover rank boundaries. The high-pass itself acts in
 # computational index space on every grid, a grid-based regularization in place
 # of a strictly physical-space one; only the length weighting is physical.
@@ -416,13 +420,17 @@ every rank in the directional sub-communicators to call it in the same order.
 `parity[d]` is the field's antipodal sign across a fold on dimension `d`, and
 is `+1` for every even scalar the sensors are built from: the strain magnitude,
 the internal energy, a mass fraction, the dilatation. Only
-`velocity_mu!` passes anything else. A closed physical edge that is not
-a fold takes the scheme's own closure rows, which mirror symmetrically whatever
-the parity of the field; Pyranda instead carries a second,
-antisymmetric closure for that case, and this is the one part of its sensor
-construction not reproduced here. `wall_parity` is accepted so that the two
-detectors share one call signature and is unused: the closure rows stand in
-for the wall mirror [`delta4_sum!`](@ref) takes.
+`velocity_mu!` passes anything else.
+
+`wall_parity[d]` is the field's sign across a reflecting wall on that
+dimension, as it is for [`delta4_sum!`](@ref). A wall face, which
+`sensor_mirror` names, is closed by the node-centred rows of
+[`wall_closures`](@ref) carrying that sign, so the two detectors read the same
+continuation there; `ring_along!` selects between the two planned sign
+variants. Every other closed physical edge keeps the scheme's own rows, which
+fold onto the half-offset mirror. The rows are fixed when the solver is built,
+so a `SwitchableBC` face takes them only where both of its conditions are
+mirrors, `planned_sensor_mirror` being the setup-time form of the hook.
 
 `solver.ring_buf` receives the directional result and is scratch belonging to
 this function alone. It cannot be `tmp_a` or `tmp_b`: both of
@@ -445,7 +453,7 @@ function ring_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
     hh, invh = solver.h, solver.inv_h
     for d in 1:3
         decomp.active[d] || continue
-        ring_along!(ring_buf, f, solver, d, parity[d])
+        ring_along!(ring_buf, f, solver, d, parity[d], wall_parity[d])
         pointwise!(_ring_accum_point!, out, nx, ny, nz,
                    out, ring_buf, hh[d], invh[d], wpow, maxred, o1, o2, o3)
     end
@@ -500,8 +508,10 @@ _detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, wpar, ::Tuple) =
 One directional smoother pass per active dimension, standing in for Cook's
 Gaussian test filter, applied to `f` in place and returned. A fold is crossed
 with even parity, which is correct for every field smoothed here: each is a
-detector output, and each detector ends in an absolute value. Which operator
-runs is `ArtParams.smoother`; see [`smooth_along!`](@ref).
+detector output, and each detector ends in an absolute value. The same holds
+at a reflecting wall, where the `:gaussian` smoother closes on the
+node-centred mirror with the even rows of [`wall_closures`](@ref). Which
+operator runs is `ArtParams.smoother`; see [`smooth_along!`](@ref).
 
 `solver.tmp_a` is scratch and is overwritten. The halo exchanges along each
 active dimension require all ranks to participate. Under
@@ -581,10 +591,9 @@ Each call carries two parities, which distinguish this from three further
 `detect_sum!` calls on scalars. A velocity component is odd across the fold
 that reverses its axis, and `vel_parity` supplies that sign; a component is
 also odd across a wall normal to its own axis, which is the `wall_parity`
-passed here. Under `detector = :d8` the wall sign has nowhere to act: the
-scheme's closure rows mirror symmetrically whatever the parity of the field,
-which is a gap against Pyranda's second, antisymmetric closure and bounds what
-that detector can do at a wall.
+passed here. Both detectors read it: `:delta4` mirrors its taps with that
+sign, and `:d8` selects the closure rows planned for it, one set per sign at
+every wall face; see [`ring_sum!`](@ref).
 """
 function velocity_mu!(solver, C_mu)
     vel = (solver.u, solver.v, solver.w)

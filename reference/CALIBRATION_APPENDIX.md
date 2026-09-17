@@ -5473,9 +5473,11 @@ wall and the numbers it moves. The smooth-wall and channel tables below are
 `bench/wallclosure.jl` at `cfl = 0.25`, t = 0.4, N = 49 / 97 / 193, the wall
 window measured against the periodic mirror at the same spacing, under
 `compact_filter(0.45)` with `filter_cfl = 0.35`; the reflected pulse runs at
-its own settings and the battery is `test/validation.jl`. In every table
-"clamp" is the previous path, "mirror" the current one, and "art off" the
-same case with the artificial properties off.
+its own settings and the battery is `test/validation.jl`. In the tables through
+[the fold](#the-fold), "clamp" is the previous path, "mirror" the current one,
+and "art off" the same case with the artificial properties off; the tables of
+[the sensor operators' wall rows](#the-sensor-operators-wall-rows) label their
+columns "before" and "after" instead.
 
 ### The change
 
@@ -5492,7 +5494,9 @@ keep the clamp, and a `SwitchableBC` answers for its active condition. The
 scope of this change is walls. A fold kept both of its extensions, the
 half-offset mirror for an odd field and the clamp for an even one, until
 [the fold](#the-fold) put every field on the mirror; `ring_sum!`, the `:d8`
-detector, is unchanged.
+detector, is unchanged here, and is given wall rows of its own in [the sensor
+operators' wall rows](#the-sensor-operators-wall-rows), along with the
+`:gaussian` smoother.
 
 ### Smooth walls
 
@@ -5818,14 +5822,285 @@ and `step!` 4 with every other entry point 0, and `bench/audit.jl` reads
 unchanged. All on Julia 1.11.4; device parity rests on the serial suite's
 KernelAbstractions CPU comparison and no hardware GPU run was made.
 
+### The sensor operators' wall rows
+
+September 2026, [CALIBRATION.md](CALIBRATION.md#open-items) items 10 and 11.
+After the `:delta4` mirror above, two operators around the sensors still carried
+closure rows that do not reproduce a reflecting wall: the `:gaussian` sensor
+smoother, whose rows fold onto the half-offset mirror and so sit half a cell out
+at a node-centred wall, and `ring_sum!`, the `:d8` detector. This subsection
+records the rows that replace them. The smooth-wall, channel and pulse tables are
+`bench/wallclosure.jl` at the settings above; the battery is
+`test/validation.jl`. "Before" is the state after
+[the fold](#the-fold), that is the `:delta4` mirror with the old smoother and
+detector rows, and "after" is the current one.
+
+`wall_closures(scheme, σ)`, in `kernels.jl` for a `CompactScheme` and in
+`kernels_banded.jl` for a `BandedCompactScheme`, builds closure rows by folding
+a symmetric scheme's interior stencil, taps and left-hand-side unknowns alike,
+onto the node-centred mirror of a reflecting wall, index q < 1 onto 2 − q, with
+the field's sign σ. The rows are built from the interior weights, so a filter's
+unit row sum and the eighth derivative's zero row sum are inherited. The
+`:gaussian` smoother is planned with the σ = +1 rows at every face
+`sensor_mirror` names, its input being a detector output past an absolute value
+and so even. The `:d8` detector is planned with both signs, as a pair per
+dimension indexed by the wall sign, and `ring_sum!`'s `wall_parity` argument is
+now applied rather than ignored, `velocity_mu!` passing −1 for the wall-normal
+component. Where neither face of a dimension is a wall the pair aliases one
+plan, so the plans and the memory of the default configuration are unchanged. A
+fold's closed far end, the outer wall of a radial line, is given the same rows,
+and `FoldSpec.ring_plans` became 2×2, ghost parity by wall sign. Same-level
+patched runs apply the smoother rows at physical wall faces; a refined patch has
+no reflecting face. The `:compact` smoother is unchanged, since it shares the
+state filter's plans and one-sided rows and carries no half-cell shift.
+
+`planned_sensor_mirror(bc)` is the setup-time form of the hook. A plan is fixed
+for the run while `sensor_mirror` follows the active condition, so a
+`SwitchableBC` face is given the wall rows only when both of its conditions are
+mirrors; the `:delta4` path still queries per call. Selection is a tuple index
+and adds no dispatch site.
+
+The operator probe is `bench/sensorwall.jl`, kept in the repository. It applies
+one operator on a slab between slip walls and the same operator on the periodic
+extension of that slab, and prints |wall − periodic| at a node over the
+amplitude of the input field. The even field is cos(πx) + 0.5cos(5πx) +
+0.1cos(13πx) and the odd one sin(πx) + 0.1sin(13πx), both of period 2 and both
+reflecting about the nodes at x = 0 and x = 1. Nodes 1, 2 and 6 of the low wall,
+N = 49 / 97 / 193, before the change:
+
+```
+operator / field        node   N=49        97          193         orders
+:d8, even                  1   4.637e-03   1.075e-03   2.629e-04   2.11 / 2.03
+                           2   1.014e-02   2.334e-03   5.725e-04
+                           6   1.290e-03   3.221e-04   7.967e-05
+:d8, odd                   1   1.535e-02   7.152e-03   3.527e-03   1.10 / 1.02
+                           2   3.260e-02   1.553e-02   7.680e-03
+                           6   4.180e-03   2.147e-03   1.069e-03
+:gaussian, even            1   1.871e-02   5.225e-03   1.345e-03   1.84 / 1.96
+                           2   4.315e-03   1.158e-03   2.949e-04
+                           3   5.554e-04   1.460e-04   3.696e-05
+                           4   4.047e-05   1.040e-05   2.619e-06
+:compact, even             1   3.310e-06   1.358e-08   5.375e-11   7.93 / 7.98
+```
+
+The high wall reads the low one in every `:d8`, `:gaussian` and `:compact` row
+above. `:gaussian` is exactly 0 at nodes 5 and 6, its rows reaching four nodes,
+and `:compact` reads between 1.3e-05 and 1.4e-10 at nodes 2 to 6. `:delta4` sits
+at the 1e-15 floor at nodes 1 and 2 and is exactly 0 at nodes 3 to 6, on both
+parities and at both walls.
+
+After the change `:d8` on the even field reads at most 1.994e-15 at any of the
+six nodes of either wall at any of the three resolutions, node 1 reading
+4.209e-16 / 9.192e-16 / 4.541e-16 at the low wall and 1.994e-15 / 3.634e-16 /
+1.131e-15 at the high one. `:d8` on the odd field reads at most 2.545e-15, node
+1 reading 2.071e-15 / 3.340e-16 / 1.490e-15 low and 8.610e-16 / 2.545e-15 /
+7.688e-16 high. `:gaussian` reads at most 2.776e-16 at nodes 1 to 4 and exactly
+0 at nodes 5 and 6. `:delta4` and `:compact` are unchanged in every digit. The
+earlier figures of this section, 4.72e-4 at node 1 for N = 193 under
+`:gaussian` and 2.34e-8 for `ring_sum!` at N = 97, were measured on a different
+test field; this probe's field carries more short-wave content, so its relative
+departures before the change are larger at the same orders.
+
+A direct one-dimensional cross-check at N = 49 reads the same way. The smoother
+reproduces the periodic run to between 1.5e-16 and 2.9e-16 relative at the first
+six nodes and `ring_along!` to between 1e-12 and 3e-11 relative, which is the
+high-pass's own cancellation floor, and the odd field's detector returns exactly
+0.0 on the wall node where the periodic run returns 2.3e-15.
+
+On the smooth walls of [the table above](#smooth-walls) every row with the
+artificial properties off is bit-identical before and after, at all closures,
+cases and resolutions. The properties-on rows:
+
+```
+case / closure             rows      N=49        97          193         orders
+inviscid slip, C6 BL       before    2.196e-8    4.862e-10   5.448e-11   5.50 / 3.16
+                           after     2.260e-8    4.866e-10   5.441e-11   5.54 / 3.16
+                           art off   2.430e-9    4.919e-11   7.976e-13   5.63 / 5.95
+inviscid slip, C8 BL       before    4.490e-8    1.032e-9    1.306e-10   5.44 / 2.98
+                           after     4.573e-8    1.035e-9    1.306e-10   5.47 / 2.99
+                           art off   8.397e-11   6.954e-13   1.691e-13   6.92 / 2.04
+inviscid slip, neutral3    before    5.669e-7    3.939e-8    2.582e-9
+                           after     5.666e-7    3.939e-8    2.582e-9
+inviscid slip, cascade3    before    2.521e-7    1.314e-8    1.217e-9
+                           after     2.522e-7    1.310e-8    1.217e-9
+viscous no-slip, C6 BL     before    1.980e-9    4.412e-11   8.002e-13   5.49 / 5.78
+                           after     1.981e-9    4.410e-11   7.934e-13   5.49 / 5.80
+                           art off   1.952e-9    4.409e-11   8.082e-13   5.47 / 5.77
+viscous no-slip, C8 BL     before    2.776e-10   1.051e-12   4.285e-14   8.05 / 4.62
+                           after     2.678e-10   1.079e-12   5.151e-14   7.96 / 4.39
+                           art off   2.054e-10   9.575e-13   2.198e-14   7.75 / 5.44
+```
+
+At N = 193 the viscous no-slip wall under `:neutral3` reads 2.006e-9 before and
+after and under `:cascade3` 8.706e-10 before and after. The adiabatic shear wall
+reads 1.346e-14 and 1.347e-14 under C6 Brady–Livescu and 9.903e-16 and 1.022e-15
+under C8, the isothermal shear wall 1.358e-14 and 1.357e-14 under C6 and
+8.622e-16 and 8.710e-16 under C8.
+
+The reflected pulse, density against its mirror at the wall:
+
+```
+                                       before      after
+amplitude 0.01, N = 385   neutral3     1.192e-9    1.192e-9
+                          cascade3     8.047e-9    8.048e-9
+                          C6 BL        1.426e-10   1.425e-10
+                          C8 BL        1.850e-11   1.846e-11
+amplitude 0.1, N = 769    neutral3     1.874e-7    1.906e-7
+                          cascade3     1.438e-7    1.395e-7
+                          C6 BL        9.767e-9    9.759e-9
+                          C8 BL        5.784e-8    5.491e-8
+```
+
+No case changes order. The rows that move past the third digit are the two
+inviscid Brady–Livescu rows at N = 49, by 2.9% at C6 and 1.8% at C8, and the C8
+Brady–Livescu rows at 1e-14 to 1e-16, which is the floor of the mirror
+comparison. The C8 Brady–Livescu anomaly the preceding change introduced at
+amplitude 0.1 remains; C8 Brady–Livescu is not a supported wall configuration
+([the qualification](#the-bradylivescu-rows-as-a-wall-configuration)).
+
+The channel variants of [which channel carries the
+residual](#which-channel-carries-the-residual), re-run at the inviscid slip wall
+under C6 Brady–Livescu:
+
+```
+variant                       rows      N=49        97          193         orders
+off                           both      2.430e-9    4.919e-11   7.976e-13   5.63 / 5.95
+all on                        before    2.196e-8    4.862e-10   5.448e-11   5.50 / 3.16
+                              after     2.260e-8    4.866e-10   5.441e-11   5.54 / 3.16
+C_mu only                     before    2.461e-9    4.852e-11   6.661e-13
+                              after     2.461e-9    4.854e-11   6.681e-13
+C_beta only                   before    2.191e-8    4.849e-10   5.429e-11
+                              after     2.255e-8    4.853e-10   5.425e-11
+C_kappa only                  before    2.430e-9    4.916e-11   8.193e-13
+                              after     2.430e-9    4.916e-11   8.524e-13
+smoother = :compact           both      3.088e-8    3.969e-10   5.033e-11   6.28 / 2.98
+detector = :d8                before    1.160e-8    5.244e-10   3.469e-11   4.47 / 3.92
+                              after     3.698e-9    9.936e-11   1.305e-11   5.22 / 2.93
+mu_sensor = :velocity         before    2.191e-8    4.849e-10   5.428e-11
+                              after     2.255e-8    4.853e-10   5.428e-11
+beta_sensor = :dilatation     before    2.453e-9    4.851e-11   6.777e-13   5.66 / 6.16
+                              after     2.459e-9    4.851e-11   6.630e-13   5.66 / 6.19
+```
+
+The zeroed constants with the machinery enabled reproduce the properties-off row
+bitwise, as before. The `smoother = :compact` row is identical in every digit,
+that path being untouched. The `detector = :d8` row falls by factors
+3.1, 5.3 and 2.7 at the three resolutions and sits below the `:delta4` all-on
+row's 5.441e-11 at N = 193 where it was above it. The attribution of the
+preceding subsections stands: β\* carries the whole residual, the `C_beta` row
+equalling the all-on row to three digits, and the carrier is the strain sensor's
+cusp.
+
+A one-off probe, not kept, drives the bench's `wall_vs_mirror` at the same
+settings with the cusp taken out of the comparison:
+
+```
+variant                        N=49        97          193         orders
+detector = :d8                 3.698e-9    9.936e-11   1.305e-11   5.22 / 2.93
+:d8, beta = :dilatation        2.442e-9    4.891e-11   8.178e-13   5.64 / 5.90
+:d8, :ungated_dilatation       2.442e-9    4.888e-11   7.836e-13   5.64 / 5.96
+properties off                 2.430e-9    4.919e-11   7.976e-13   5.63 / 5.95
+:delta4, beta = :dilatation    2.459e-9    4.851e-11   6.630e-13   5.66 / 6.19
+```
+
+Under `:dilatation` the two detectors are indistinguishable at the wall to
+within the spread of the comparison. An inviscid wall under `:d8` is limited by
+the strain sensor's cusp, as one under `:delta4` is.
+
+`test/validation.jl` at `-t 16`, with its header and the aligned Noh guard
+re-recorded:
+
+```
+case                          rows     reading
+Noh ν = 1 cold                before   plateau 3.9851, shock 0.2054, deficit 54%
+                              after    plateau 3.9883, shock 0.2049, deficit 50%
+Noh ν = 1 warm t0 = 0.3,      before   3.988  3.993  3.995  4.000
+  C6 BL, rho[1:4]             after    3.989  3.993  3.995  4.000
+Noh aligned N = 100, AR = 4   before   3.9747, 57%, 0.2161, 5059 steps,
+                                       transverse 2.8e-6
+                              after    3.9792, 54%, 0.2146, 4997 steps,
+                                       transverse 7.8e-9
+```
+
+Lax, Shu–Osher (6.804e-3, 2.087e-2, train peak 4.6800), both Woodward–Colella
+rows (3.215e-2 and peak 6.6165, 3.216e-2 and 6.6166), Sedov (R_s 0.8085, peak
+5.127, e_min −0.00427), Noh ν = 2 (15.0086, 0.2091, 55%), Noh ν = 3 (62.5547,
+0.2089, 29%), the shocked SF6 interface and the Noh plane at AR = 2 are
+unchanged to the printed digits. No guard failed and no stored reference was
+regenerated.
+
+The aligned Noh case's transverse round-off reads 7.8e-9 at the end of its
+4997-step run, against the 2.8e-6 of the row above and 1.4e-8 under the clamp
+before that. Its guard returned from 5e-6 to the 1e-7 it carried before the
+detector's wall mirror widened it, and is now 13 times the measurement. The mode
+that grew under the `:delta4` wall mirror reads below the clamp's level once the
+smoother's wall rows are node-centred. What the mode is has not been measured
+and is still open.
+
+`bench/jetcheck.jl` reads no delta: `compute_rhs!` 3, `step!` 4, `apply_bcs!` 1,
+every other entry point 0. `bench/audit.jl` at `-t 1` reads every allocation
+figure byte-identical, `compute_rhs!` 304 B, `step!` 2032 B and
+`compute_artificial!` 0 B, with every inference row identical.
+`test/convergence.jl` is bit-identical study by study, every study there running
+with the artificial properties off. `test/runtests.jl` reads 2499 of 2499 over
+172 testset rows against 2479 of 2479 over 171: 19 assertions from the new
+"sensor operators at a reflecting wall" testset, one from a constant-annihilation
+check now looping over `SlipWallBC` and `ExtrapolationBC`, and one row.
+`test/mpi_tests.jl` reads 302 of 302 at 2 ranks against 300, the two new checks
+being the `:d8` slip-wall split-axis spreads, 2.554e-14 against a 7.3e-11
+tolerance on Σβ\* and 4.235e-21 against 4.8e-17 on Σκ\*, and 146 of 146 at 8
+ranks with the CI phase list. All on Julia 1.11.4.
+
+`_device_plan` copies the closure rows generically, and a hardware run reads as
+that implies. On an AMD RX 6800 XT (gfx1030) through AMDGPU.jl, on a
+(48, 16, 16) slab with slip walls on dimension 1 and periodic faces elsewhere,
+the device solver's plans are `DevicePlan`s, `ring_plans[1]` holds two distinct
+plans and `ring_plans[2]` one aliased plan as on the host, and every field is a
+`ROCArray`. Against the `CPUBackend` solver from the same standing-wave data,
+`mu_art`, `beta_art`, `kappa_art` and `dQ` after one `compute_rhs!` agree
+bitwise, over the whole interior and over the six nodes nearest each wall alike,
+as does the state after five steps; the wall nodes read no differently from the
+interior. The comparison repeats bitwise under `mu_sensor = :velocity`, which
+exercises the odd wall sign, and under the `detector = :delta4` control.
+
+In the default configuration the change costs nothing, the pair aliasing one
+plan. Under `:d8` with a wall it adds one plan per walled dimension. At
+(96, 64, 64) with slip walls on dimension 1 at `-t 1`, the solver holds four
+distinct ring plans against three and 12.00 MiB of packed-line buffer against
+9.00 MiB, the difference being one 96 × 4096 buffer of 3145728 B.
+`Base.summarysize` of the solver reads 289.01 MiB against 285.50 MiB, and the
+3678072 B between them is the second plan entire, one dimension-1 ring plan
+reading 3679827 B. Construction does not move: 0.048 s against 0.049 s over
+five interleaved builds, medians 0.067 s and 0.063 s. Per call the walled
+configuration is the cheaper of the two, `compute_artificial!` at medians of
+0.0303 s and 0.0284 s over two runs against 0.0317 s and 0.0309 s and
+`compute_rhs!` at 0.0986 s and 0.0924 s against 0.1020 s and 0.0979 s, 4 to 8%
+below in both runs. That sits inside the machine's 10 to 20% run-to-run spread
+and carries no finding on the extra plan, whose selection is a tuple index; the
+periodic dimension's line solve also carries a correction the closed one does
+not.
+
+Two test guards moved with the change, for traced reasons. The `:d8 through a
+coordinate-singularity fold` window narrowed to the inner half, i in 1:32,
+because exp(−4r²) has slope −0.147 at the outer slip wall and is not the
+reflection the wall rows continue it as, which reads 3.6e-3 at the wall node.
+The `u_r = r` axis check under `:d8` moved from 1e-14 to 1e-12 because that
+field is not odd about the outer wall, the slip condition leaves a kink there,
+and the pentadiagonal inverse carries a decaying tail of that mismatch to the
+axis: 8.7e-14 at the axis against a wall-node 5.5e-5.
+
 ### What remains
 
-1. The `:gaussian` smoother's closure rows are half a cell out at a
-   node-centred wall, a relative 4.72e-4 at node 1 for N = 193 falling as
-   h², where `:compact` reads 8.8e-10.
-2. `ring_sum!` reads 2.34e-8 at N = 97 on a field exactly even about the
-   wall, against a periodic 6.58e-16, over at least six nodes, so the `:d8`
-   detector has a wall artifact the `:delta4` mirror does not address.
+1. Closed, September 2026, by [the sensor operators' wall
+   rows](#the-sensor-operators-wall-rows). The `:gaussian` smoother is given
+   node-centred closure rows at a reflecting wall, and its departure from the
+   periodic mirror reads at most 2.776e-16 over the first four nodes where the
+   half-offset rows read 1.345e-3 at node 1 for N = 193 on the probe's field.
+2. Closed, September 2026, by the same subsection. `ring_sum!` is given
+   node-centred rows on both parities, `:d8` reads at most 2.545e-15 over the
+   first six nodes of either wall at N = 49, 97 and 193, and the
+   `detector = :d8` row of the channel table falls from 3.469e-11 to 1.305e-11
+   at N = 193.
 3. A slip wall with a physical shear viscosity and the artificial
    properties off does not reproduce its mirror at the closure's order:
    μ = 5e-3 reads 2.167e-7 / 1.103e-7 / 9.489e-8 (0.97 / 0.22) and
