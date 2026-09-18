@@ -47,6 +47,7 @@ record of that setting.
 25. [Fifth-order C6 closure search](#fifth-order-c6-closure-search)
 26. [The detector's wall mirror](#the-detectors-wall-mirror)
 27. [The slip wall's flux contract](#the-slip-walls-flux-contract)
+28. [The aligned Noh transverse mode](#the-aligned-noh-transverse-mode)
 
 ## The battery
 
@@ -6312,3 +6313,232 @@ slip wall, and a worktree at the parent commit reproduces the new values
 bitwise, so the drift is not this change; the properties-off rows are
 bit-identical to the recorded ones throughout.
 
+## The aligned Noh transverse mode
+
+September 2026, roadmap N6i. The instrument is
+[noh_transverse.jl](../bench/noh_transverse.jl), run on Julia 1.11.4,
+Float64, one CPU thread and one MPI rank. It uses the current slip-wall flux
+contract, node-centred sensor rows and C6 `:neutral3` derivative closures.
+The baseline is the validation case: 12 periodic transverse nodes, 100
+wall-normal nodes, spacing ratio 4, and final time 0.6. A post-step observer
+reads only the conserved state during one continuous `run!`; it neither
+refreshes scratch fields nor requests extra time landings.
+
+Two amplitudes must be distinguished. The battery's `uniformity` is the
+largest absolute density difference from the first transverse station.
+The study also reports the largest transverse maximum-minus-minimum spread,
+and the Fourier amplitude at each wall-normal node, with the usual factor
+of two for a real mode except at the Nyquist frequency. These are different
+norms of the same state. The baseline completes in 4,966 steps with
+`uniformity = 2.052e-7`, spread `3.07e-7`, and dominant density amplitude
+`1.328e-7` in mode m = 2, a six-cell transverse wavelength. Its maximum is
+at y = 0.1919, near the moving shock at y = 0.2; the transverse velocity's
+m = 2 maximum is `3.86e-8` at y = 0.2121.
+
+The study is reproduced by the following one-threaded commands; the script
+defaults supply N = 100, AR = 4 and `nx = 12` unless a sweep changes them:
+
+```text
+julia --project=. -t 1 bench/noh_transverse.jl trace sample=100
+julia --project=. -t 1 bench/noh_transverse.jl seeds seed_mode=2 sample=100
+julia --project=. -t 1 bench/noh_transverse.jl uniform seed_mode=2 seed=1e-10 sample=50
+julia --project=. -t 1 bench/noh_transverse.jl warm t0=0.1 seed_mode=2 seed=1e-10
+julia --project=. -t 1 bench/noh_transverse.jl widths sample=100
+julia --project=. -t 1 bench/noh_transverse.jl seed_channels seed_mode=2 seed=1e-10 sample=100
+julia --project=. -t 1 bench/noh_transverse.jl extended tfinal=2.0 sample=200 nmax=20000
+```
+
+The observer subtracts transverse station 1 before projecting a line, so a
+transversely constant state has exactly zero modal content rather than the
+round-off of a separately computed mean. The `station` column below is the
+battery's `uniformity`; `range` is the full maximum-minus-minimum density
+spread; `A` is the maximum Fourier amplitude over wall-normal nodes. The
+script bounds every run by `nmax`, reports a bounded stop separately from a
+completion or solver failure, and validates the grid and seed mode before
+building the C8 filter plans.
+
+### The burst is not a measured eigenvalue
+
+The natural m = 2 component first becomes wall-local, then undergoes a short
+increase with its maximum ahead of the shock. Later samples put its maximum
+within the four-cell shock window:
+
+| step | time | m = 2 density A | location |
+|---:|---:|---:|---|
+| 1,500 | 0.16802 | 2.372e-11 | shock window |
+| 2,000 | 0.23038 | 4.435e-11 | wall |
+| 2,500 | 0.29273 | 3.648e-11 | wall |
+| 3,000 | 0.35513 | 1.345e-7 | bulk, ahead of shock |
+| 3,500 | 0.41748 | 1.985e-7 | shock window |
+| 4,000 | 0.47971 | 9.941e-8 | shock window |
+| 4,500 | 0.54194 | 2.939e-7 | shock window |
+| 4,966 | 0.60000 | 1.328e-7 | shock window |
+
+Across the named burst interval,
+
+```text
+log(1.345e-7 / 3.648e-11) / (0.35513 - 0.29273) = 131.6.
+```
+
+At step 3,000 the maximum is at y = 0.1919 while the analytic shock is at
+y = 0.1184, about 7.3 wall-normal cells apart and outside the four-cell
+shock window. By step 3,500 the maximum is at y = 0.1414 against a shock
+position of 0.1392. The burst rate therefore must not be described as growth
+of an amplitude continuously localized at the shock.
+
+This is a finite-window rate of a path-dependent transient. It is not an
+eigenvalue or a universal exponential growth rate: the amplitude falls again
+after the burst, and controlled perturbations below follow different paths.
+The final density spectrum is m1 `3.45e-8`, m2 `1.33e-7`, m3 `2.21e-9` and m4
+`6.25e-11`; the response is dominated by a low transverse mode rather than a
+single alternating grid mode.
+
+### The same wall without a shock
+
+The direct control for a linear wall mode uses the identical two-dimensional
+N = 100, AR = 4, `nx = 12` strip, default filter and artificial properties,
+and the same slip wall. It fills the domain with the exact planar-Noh
+post-shock state, rho = 4, u = 0 and p = 4/3, and holds that state at the far
+Dirichlet end. There is no shock in the strip.
+
+| initial state | steps to t = 0.6 | final station | final m = 2 A | gain | finite-horizon rate |
+|---|---:|---:|---:|---:|---:|
+| unseeded | 609 | 1.91e-13 | 7.96e-14 | -- | -- |
+| m = 2 relative density seed 1e-10 | 609 | 6.891e-10 | 3.446e-10 | 0.861 | -0.25 |
+
+The seeded amplitude begins at `4e-10` because the relative seed multiplies
+rho = 4; its transverse-velocity amplitude finishes at only `4.36e-15`.
+Thus the two-dimensional `:neutral3` wall does not autonomously amplify this
+mode: it holds round-off and slightly damps the controlled perturbation over
+the validation horizon. This agrees with the uniform-state Jacobians in
+[`constantfloor.jl`](../bench/constantfloor.jl), which place the leading
+`:neutral3` amplification modulus at 1 + O(1e-9), and with N6d's uniform
+wall runs. The observed Noh growth is absent for this perturbation of the
+uniform strip; the control is not a stability certificate for every
+perturbation of either a uniform or a shocked state.
+
+### Controlled amplitude
+
+The seed experiment multiplies the initial density by
+`1 + a cos(2 pi m x/Lx)` at fixed pressure and velocity. For m = 2:
+
+| initial A | final m = 2 A | gain | `log(gain)/0.6` | fitted rate over the second half |
+|---:|---:|---:|---:|---:|
+| 1e-12 | 6.868e-11 | 68.7 | 7.05 | -1.22 |
+| 1e-10 | 6.594e-9 | 65.9 | 6.98 | -0.10 |
+| 1e-8 | 1.443e-5 | 1,443 | 12.12 | -- |
+
+The two small seeds receive finite gains differing by about 4% and have no
+positive late-time fitted rate. The 1e-8 seed receives a much larger gain and
+generates an m = 4 harmonic of `7.96e-7`. The calculation therefore has a
+small-amplitude finite response followed by a nonlinear response at the
+larger amplitude; neither behavior is the constant exponential growth of an
+unstable wall eigenmode. Extrapolating those two small-seed gains does not
+predict the unseeded baseline: inserting even the 1e-12 seed changes its
+round-off history and suppresses the baseline's large burst. Endpoint changes
+under an unseeded ablation must therefore not be read as channel causality.
+
+The analytic warm start gives a second history control. Starting from the
+smoothed exact profile at physical t = 0.1 and evolving for 0.5 leaves the
+unseeded station variation at `1.389e-10`, against `2.052e-7` from the cold
+singular start. Its seeded m = 2 run finishes at A = `3.129e-8`, a gain of
+about 313, with its maximum at the shock. The singular startup selects the
+natural burst history, while a resolved shock can still amplify an imposed
+transverse disturbance.
+
+### Width and artificial-property controls
+
+Changing the transverse point count at fixed spacing changes both the
+available modes and the round-off trajectory:
+
+| nx | final station | dominant m | wavelength, cells | A | location |
+|---:|---:|---:|---:|---:|---|
+| 10 | 3.132e-9 | 2 | 5.0 | 2.066e-9 | shock |
+| 12 | 2.052e-7 | 2 | 6.0 | 1.328e-7 | shock |
+| 16 | 6.932e-7 | 2 | 8.0 | 3.397e-7 | shock |
+| 24 | 3.457e-10 | 5 | 4.8 | 1.515e-10 | bulk |
+
+There is neither a monotone width law nor one selected wavelength in these
+unseeded runs. The nx = 16 row also exceeds the nx = 12 validation guard,
+which is one reason that guard cannot be applied to another transverse
+extent.
+
+Artificial-property comparisons use the same m = 2, 1e-10 seed so that a
+different initial round-off realization is not the comparison:
+
+| active artificial channels | final m = 2 A | gain | `log(gain)/0.6` | location |
+|---|---:|---:|---:|---|
+| defaults | 6.594e-9 | 65.9 | 6.98 | bulk |
+| beta only | 2.221e-8 | 222 | 9.00 | wall |
+| beta + mu | 1.810e-8 | 181 | 8.66 | wall |
+| beta + kappa | 2.555e-9 | 25.6 | 5.40 | shock |
+| defaults with `C_D = 0` | 6.594e-9 | 65.9 | 6.98 | bulk |
+
+`C_D = 0` is bit-identical to the default in this single-species case.
+Adding conductivity to beta reduces the matched seeded gain and moves the
+maximum from the wall to the shock; adding both default mu and kappa gives
+the intermediate default response. This establishes damping and relocation
+for the controlled small mode, but does not identify one nonlinear feedback
+as the cause of the natural burst.
+
+For completeness, the unseeded endpoint variations are `9.78e-11` with beta
+only, `1.57e-10` with beta + mu, and `4.47e-10` with beta + kappa. They are
+associations with different numerical trajectories, not causal ablations.
+With the filter off the cold run fails with negative density at step 1,335,
+t about 0.146; with all artificial properties off or beta off it fails near
+t = 0.074. Those runs do not reach the comparison horizon and cannot decide
+whether the removed channel generates or damps the completed run's mode.
+In particular, these measurements do not justify naming a specific physical
+shock instability or claiming that every default artificial channel is
+necessary.
+
+### Later evolution and bounded-time saturation
+
+The baseline initial data were evolved in one continuous run to t = 2.0,
+without imposing a landing at t = 0.6. The shock remained inside the domain.
+The run completes in 16,219 steps and
+undergoes a second burst before settling into a bounded oscillatory range:
+
+| time | station variation |
+|---:|---:|
+| 0.604 | 2.13e-7 |
+| 0.853 | 9.29e-7 |
+| 1.102 | 1.71e-6 |
+| 1.227 | 5.57e-5 |
+| 1.351 | 3.20e-4 |
+| 1.475 | 4.24e-4 |
+| 1.600 | 2.76e-4 |
+| 1.724 | 3.02e-4 |
+| 1.848 | 2.67e-4 |
+| 2.000 | 2.87e-4 |
+
+At t = 2 the dominant density mode is again m = 2, A = `1.36e-4`, with its
+maximum in the shock window. The measured saturation level is therefore of
+order `3e-4` in the station metric over t = 1.35--2.0, about three orders of
+magnitude above the validation endpoint. This answers the finite-run
+question: the first t = 0.6 plateau is not saturation, but the later response
+remains bounded over the observed interval. It is not an infinite-time
+stability proof.
+
+### Conclusion and guard
+
+The evidence supports a path-sensitive transverse interaction with the
+captured Noh shock and the history produced where that shock leaves the wall:
+the natural disturbance moves from the wall into the bulk and later the
+shock window, disappears to
+round-off in the identical no-shock strip, depends strongly on cold versus
+warm startup and transverse extent, has approximately linear finite gain for
+small imposed modes, and develops harmonics and a higher bounded amplitude
+when driven farther. The uniform control does not amplify the tested mode
+under the same `:neutral3` rows. These measurements support the shock
+interaction interpretation, but do not isolate a unique nonlinear feedback
+among the filter, shock capture and artificial properties. A full
+linearization about the time-dependent shocked state was not needed to make
+the guard decision and would not by itself describe the measured bursts.
+
+The validation guard remains `uniformity < 5e-7` for exactly N = 100,
+AR = 4, `nx = 12` and t = 0.6. Its current measurement is `2.052e-7`, a
+factor 2.44 below the threshold. The limit is a deterministic regression
+envelope for that preset and horizon, not a stability bound for another
+width, an injected disturbance or later evolution. No calibrated default,
+stored reference or numerical threshold changes as a result of this study.

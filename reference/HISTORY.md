@@ -42,6 +42,9 @@ points at them and does not restate them.
 32. [The neutral closure rows (September 2026)](#the-neutral-closure-rows-september-2026)
 33. [The detector's wall mirror (September 2026)](#the-detectors-wall-mirror-september-2026)
 34. [The fold's even path (September 2026)](#the-folds-even-path-september-2026)
+35. [The sensor operators' wall rows (September 2026)](#the-sensor-operators-wall-rows-september-2026)
+36. [The slip wall's flux contract (September 2026)](#the-slip-walls-flux-contract-september-2026)
+37. [The aligned Noh transverse mode (September 2026)](#the-aligned-noh-transverse-mode-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -2053,3 +2056,27 @@ GPU run was made. The measurements are under
 [the slip wall's flux contract](CALIBRATION_APPENDIX.md#the-slip-walls-flux-contract);
 the applied form and the remaining wall items are in
 [CALIBRATION.md](CALIBRATION.md#open-items).
+
+## The aligned Noh transverse mode (September 2026)
+
+Roadmap N6i is complete as a measurement and guard decision.
+`bench/noh_transverse.jl` records the aligned Noh case's transverse Fourier
+amplitudes and locations without changing its timestep sequence. Seed,
+channel, width, warm-start, uniform-strip and extended-time controls support
+a shock interaction sensitive to its perturbation and startup history. The
+same seeded mode is slightly damped in the uniform two-dimensional strip;
+in the shocked case small seeds receive finite gain and a larger seed
+generates a harmonic. The natural trajectory has two bursts and then
+bounded oscillations through the measured endpoint t = 2.0. This is a
+finite-time observation, not a general stability certificate or an
+identification of a unique nonlinear transport feedback.
+
+The existing `uniformity < 5e-7` regression remains unchanged for
+N = 100, AR = 4, nx = 12, t = 0.6. Its measured value is 2.052e-7;
+other widths and later times exceed that bound. Solver behavior, defaults
+and stored references are unchanged. The complete numerical validation
+battery passed during the study; the final benchmark trace and uniform
+control and the documentation-reference check cover the integration.
+No new MPI or hardware-GPU coverage is claimed for this serial measurement.
+The commands, rates, saturation interval and limitations are recorded in
+[the calibration appendix](CALIBRATION_APPENDIX.md#the-aligned-noh-transverse-mode).

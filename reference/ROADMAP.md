@@ -542,24 +542,25 @@ below exposed behavior outside those passing checks.
   κ\* transport ([the measurements](CALIBRATION_APPENDIX.md#the-slip-walls-flux-contract),
   [completion record](HISTORY.md#the-slip-walls-flux-contract-september-2026)).
 
-- [ ] **N6i — Explain the transverse mode of the aligned Noh case.**
-  The aligned N = 100, AR = 4 case starts with no transverse variation and
-  grows one from round-off. Under the `:delta4` wall mirror alone it read
-  4.4e-16 after 20 steps, 3.1e-14 after 200, 1.9e-11 after 2000 and 2.84e-6
-  at the end of the 5059-step run, all of the growth in the last third, and
-  the guard was widened from 1e-7 to 5e-6; the clamp's spurious wall β\* had
-  been damping the mode, and the planar Noh wall deficit moved from 53% to 54%
-  for the same reason. Under N6g's node-centred smoother rows only the end
-  value was measured, 7.8e-9 at the end of a 4997-step run, below the 1.4e-8 of
-  the clamp, and the guard returned to 1e-7 while the planar deficit read 50%.
-  The item is therefore an explanation rather than a guard problem, and is
-  lower in priority.
-  **Deliver:** what the mode is, a linear wall mode of the `:neutral3` rows
-  in two dimensions, a nonlinear shock-wall interaction or a filter effect;
-  whether it saturates; and the guard that follows.
-  **Depends on:** N6d's instrument, the `bench/constantfloor.jl` Jacobian,
-  extended to the two-dimensional shocked state if needed.
-  **Gate:** a measured growth rate with its mechanism and a guard set from it.
+- [x] **N6i — Explain the transverse mode of the aligned Noh case.**
+  **Delivered:** [noh_transverse.jl](../bench/noh_transverse.jl) measures a
+  transverse shock interaction whose amplitude depends strongly on the
+  startup and perturbation history. The dominant m = 2 mode bursts from the
+  wall into the bulk ahead of the shock, then localizes near the captured
+  shock. Its finite-window burst rate is 131.6 per unit time. Controlled
+  small seeds receive 66–69 times finite gain; a larger
+  seed produces nonlinear amplification and a harmonic. On the same
+  two-dimensional strip with a uniform postshock state, the seeded mode is
+  slightly damped, supporting the shock-interaction interpretation rather
+  than an autonomous `:neutral3` wall mode. An extended run settles into
+  bounded oscillations near 3e-4 from t = 1.35 through 2.0; this is observed
+  finite-time saturation, not a stability certificate. The existing 5e-7
+  guard is retained against 2.052e-7 for the exact N = 100, AR = 4, nx = 12,
+  t = 0.6 regression. It does not bound other widths or later times. Channel
+  controls establish no unique nonlinear feedback mechanism; failed
+  filter-off runs do not isolate the filter's role
+  ([measurements](CALIBRATION_APPENDIX.md#the-aligned-noh-transverse-mode),
+  [completion record](HISTORY.md#the-aligned-noh-transverse-mode-september-2026)).
 
 - [ ] **N6j — Re-measure the fifth-order closure candidates under
   `beta_sensor = :dilatation`.** The search recorded in
@@ -770,11 +771,13 @@ now the neutral `:neutral3` set; the flux divergence at an interface end
 keeps the cascade rows, so the interface baselines did not move. N6h gave
 `SlipWallBC` the symmetry plane's flux contract, removing a conductive heat
 flux and a shear traction that a viscous slip wall carried at the closure's
-truncation level. The open wall items are N6i to N6k: the transverse mode of
-the aligned Noh case, a re-measurement of the fifth-order closure candidates
-under `beta_sensor = :dilatation`, and a stability certificate for the neutral
-rows with their C8 and C10 counterparts. Use N10/N11 to qualify interface
-candidates before promotion; invoke N15 only when the smaller closure change
+truncation level. N6i measured the aligned Noh case's transverse shock
+interaction and retained its guard for the exact regression preset and
+endpoint. The open wall items are N6j and N6k: a re-measurement of the
+fifth-order closure candidates under `beta_sensor = :dilatation`, and a
+stability certificate for the neutral rows with their C8 and C10 counterparts.
+Use N10/N11 to qualify interface candidates before promotion; invoke N15
+only when the smaller closure change
 misses a target. N16 transfer measurements may begin with N6, while final
 accuracy qualification follows the selected interface treatment. Coordinate
 temporal certification with V3 and default filter time-scaling with N1.

@@ -102,7 +102,11 @@
 # case and the AR = 2 plane, whose four faces carry inflow rather than walls.
 # Neither stored reference was regenerated. The aligned case's transverse
 # round-off reads 2.1e-7 against 7.8e-9 before, so its guard widens from 1e-7
-# to 5e-7; the nature of that transverse mode remains open.
+# to 5e-7. N6i finds a finite, path-sensitive interaction whose endpoint mode
+# localizes near the captured shock; a matched uniform-strip control damps the
+# same m = 2 perturbation. The envelope is specific to this preset,
+# not a stability certificate (CALIBRATION_APPENDIX.md, "The aligned Noh
+# transverse mode").
 #
 # The wall rows moved again when the sensor smoother and
 # the `:d8` ring detector took node-centred closure rows at a reflecting wall,
@@ -469,11 +473,11 @@ let r = noh_aligned(; N=100, AR=4)
     @test abs(plat / 4 - 1) < 0.03
     @test 0 < deficit < 0.7
     @test abs(Rnum - 0.2) < 0.025
-    # The initial data carry no transverse variation, so this is round-off,
-    # amplified by whatever the wall supports. Measured 2.1e-7, against the
-    # 7.8e-9 it read while the slip wall still conducted heat across itself
-    # and the 2.8e-6 it reached while the sensor smoother's rows were half a
-    # cell out at the wall.
+    # The endpoint mode localizes near the captured shock; the matched uniform
+    # strip damps the same m = 2 perturbation. This 5e-7 envelope applies only
+    # to N=100, AR=4, nx=12 at t=0.6; its 2.1e-7 baseline and controlled-mode
+    # evidence are in CALIBRATION_APPENDIX.md, "The aligned Noh transverse
+    # mode".
     @test r.uniformity < 5e-7
     @test r.steps < 8000
 end
