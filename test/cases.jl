@@ -140,13 +140,17 @@ const WC_N = 800
 
 function woodward(; N=WC_N, art=ArtParams(enabled=true), cfl=0.3, nmax=NMAX,
                   delta=nothing, deriv=lele_d1_6(), filt=compact_filter(0.45),
-                  filter_cfl=0.35)
-    h = 1.0 / (N - 1)
+                  filter_cfl=0.35, folded=false)
+    # Both walls move half a cell outside the line when they are folded, so the
+    # unit interval carries N cells rather than N − 1 and the blend width and
+    # the collapsed transverse extents follow the spacing the solver will build.
+    h = folded ? 1.0 / N : 1.0 / (N - 1)
     δ = delta === nothing ? 2h : delta
+    wall = folded ? SymmetryPlaneBC() : SlipWallBC()
     prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
                    transport=Transport(mu0=0.0),
                    domain=((0.0, 1.0), (0.0, h), (0.0, h)),
-                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                   bcs=((wall, wall), per3[2], per3[3]),
                    ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                         p = 1000 * (1 - tanh_blend(x, 0.1, δ)) +
                             0.01 * (tanh_blend(x, 0.1, δ) - tanh_blend(x, 0.9, δ)) +
@@ -231,17 +235,30 @@ const NOH_N = (1 => 400, 2 => 256, 3 => 256)
 const NOH_T0 = (1 => 0.0, 2 => 0.0, 3 => 0.3)
 
 """
-    noh_problem(ν; N, t0, R) -> Problem
+    noh_problem(ν; N, t0, R, folded) -> Problem
 
 The [`noh_case`](@ref) configuration without its numerics: the geometry of
 the ν-dimensional implosion, its symmetry condition, the exact inflow at the
 outer boundary and the initial state at `t0`. `N` enters only through the
 width of the warm start's blend.
+
+`folded` puts the planar case's stagnation wall on a face-centred symmetry
+plane half a cell below the first node instead of on the node itself. The
+cylindrical and spherical cases already fold their singular end, so they
+reject it.
 """
-function noh_problem(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν], R=1.0)
+function noh_problem(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν], R=1.0,
+                     folded=false)
+    folded && ν != 1 &&
+        error("a face-centred symmetry plane replaces the planar Noh wall " *
+              "only; nu = $ν folds its axis or origin already")
     metric = ν == 1 ? CartesianMetric() :
              ν == 2 ? CylindricalMetric() : SphericalMetric()
-    lobc = ν == 1 ? SlipWallBC() : ν == 2 ? AxisBC() : OriginBC()
+    lobc = ν == 1 ? (folded ? SymmetryPlaneBC() : SlipWallBC()) :
+           ν == 2 ? AxisBC() : OriginBC()
+    # The collapsed transverse extents and the warm start's blend width below
+    # are R/N on either grid, so a folded run differs from the node-centred one
+    # in the wall placement and in nothing else.
     dom2 = ν == 1 ? (0.0, R / N) : ν == 2 ? (0.0, 1.0) : (π / 2, π / 2 + 1)
     dom3 = ν == 1 ? (0.0, R / N) : (0.0, 1.0)
     inflow = DirichletBC((x, y, z, t) -> begin
@@ -269,13 +286,17 @@ function noh_problem(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν], R=1.0)
 end
 
 """
-    noh_case(ν; N, t0, art, cfl, filt, filter_cfl, filter_weighting)
+    noh_case(ν; N, t0, art, cfl, filt, filter_cfl, filter_weighting, folded)
         -> (x, rho, u, p, completed, report)
 
 Noh in ν dimensions, integrated from `t0` to `NOH_T`. `t0 > 0` initializes from
 the exact solution, bypassing the uniform cold inflow. The outer boundary
 carries the exact time-dependent inflow, which for ν > 1 is compressing as it
 converges and is therefore not a constant state.
+
+`folded` moves the planar wall onto a face-centred symmetry plane, which shifts
+the grid: the spacing becomes R/(N − ½) and node 1 sits half a cell out from
+the wall, with node N still on the outer boundary.
 
 The case runs under `validity = :permissive` and returns the closing
 [`StateReport`](@ref) as `report`, so a caller can bound the violation it ends
@@ -284,8 +305,8 @@ on rather than accepting whatever it produces.
 function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
                   art=ArtParams(enabled=true), cfl=NOH_CFL, R=1.0, nmax=NMAX,
                   deriv=lele_d1_6(), filt=compact_filter(0.45), filter_cfl=0.35,
-                  filter_weighting=:none)
-    prob = noh_problem(ν; N, t0, R)
+                  filter_weighting=:none, folded=false)
+    prob = noh_problem(ν; N, t0, R, folded)
     # The wall region of a Noh implosion runs as a pressureless layer: six to
     # eight interior cells carry a negative internal energy that moves with the
     # front, for the whole of a run that reaches the correct plateau. Reaching
@@ -681,7 +702,7 @@ function noh_cartesian(; N=NC_N, AR=4, L=NC_L, t0=0.0, tfinal=NOH_T, p0=NOH_P0,
 end
 
 """
-    noh_aligned(; N, AR, nx, art, cfl, nmax, filt, filter_cfl) -> NamedTuple
+    noh_aligned(; N, AR, nx, art, cfl, nmax, filt, filter_cfl, folded) -> NamedTuple
 
 Planar Noh along dimension 2 of an anisotropic grid: `N` points over the unit
 interval with the slip wall at the low end and the exact inflow at the high
@@ -691,19 +712,24 @@ one-dimensional one at every station and `uniformity` (the largest
 transverse variation of the density) measures round-off. Returns the profile
 along dimension 2 at the first station, the step count, the wall time, the
 limiting rate of the last step and the closing report.
+
+`folded` puts the wall on a face-centred symmetry plane half a cell below the
+first node, which makes the dimension-2 spacing 1/(N − ½); dimension 1 keeps
+1/AR of it, so the aspect ratio is the same on either grid.
 """
 function noh_aligned(; N=Dict(NOH_N)[1], AR=4, nx=12, art=ArtParams(enabled=true),
                      cfl=NC_CFL, nmax=NMAX, filt=compact_filter(0.45),
-                     filter_cfl=0.35)
+                     filter_cfl=0.35, folded=false)
     MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("noh_aligned runs serially")
-    h2 = 1.0 / (N - 1)
+    h2 = folded ? 1.0 / (N - 0.5) : 1.0 / (N - 1)
     h1 = h2 / AR
     inflow = DirichletBC((x, y, z, t) -> Prim(rho=1.0, u=(0.0, -1.0, 0.0),
                                               p=NOH_P0))
     prob = Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
                    transport=Transport(mu0=0.0),
                    domain=((0.0, nx * h1), (0.0, 1.0), (0.0, h2)),
-                   bcs=(per3[1], (SlipWallBC(), inflow), per3[3]),
+                   bcs=(per3[1], (folded ? SymmetryPlaneBC() : SlipWallBC(),
+                                  inflow), per3[3]),
                    ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, -1.0, 0.0), p=NOH_P0))
     solver, Q = setup(prob, Numerics(n_global=(nx, N, 1), art=art, cfl=cfl,
                                      filt=filt, filter_interval=1,
@@ -819,6 +845,12 @@ Post-shock plateau (sampled between the symmetry point and the shock, so it
 misses both the wall-heating layer and the captured front), the density deficit
 at the symmetry point — positive means too hot, hence too rarefied, i.e. wall
 heating — the captured shock radius, and the pre-shock L1 error.
+
+The deficit is the first node's, which on a node-centred wall lies on the wall
+and on a face-centred symmetry plane lies half a cell out from it. The two
+samples are at different distances from the wall, so a folded run is also
+worth reading through [`noh_plane_density`](@ref), which continues the profile
+onto the plane itself.
 """
 function noh_metrics(xs, ρ, ν::Int)
     exact = 4.0^ν
@@ -829,6 +861,20 @@ function noh_metrics(xs, ρ, ν::Int)
     epre = l1(ρ[pre], [noh_exact(xs[i], NOH_T, ν, NOH_G)[1] for i in pre])
     return (plat, 1 - ρ[1] / exact, front_position(xs, ρ, 0.5exact), epre)
 end
+
+"""
+    noh_plane_density(ρ) -> ρ_wall
+
+Density on a face-centred symmetry plane, from the even continuation of the
+first two nodes. A folded run puts node i at (i − ½)h, and the even quadratic
+a + b x² through ρ₁ and ρ₂ has a = (9ρ₁ − ρ₂)/8 on the plane.
+
+This is the wall value to compare against a node-centred run's ρ₁, which sits
+on its wall. The guards stay on `noh_metrics`, whose deficit reads node 1 in
+both cases, because that sample exists on either grid; this one is reported
+beside it so the half-cell offset is visible.
+"""
+noh_plane_density(ρ) = (9ρ[1] - ρ[2]) / 8
 
 "Shu–Osher wave-train window: between the trailing entropy waves and the shock."
 so_band(xs) = [i for i in eachindex(xs) if 0.5 <= xs[i] <= 2.2]

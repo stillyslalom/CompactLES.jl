@@ -61,6 +61,26 @@
 #   Noh aligned N=100 AR=4    plateau 4.0035/4   deficit 33%   shock 0.2084   4966 steps
 #   Noh plane   N=24  AR=2    plateau 11.858/16  front 0.236/0.2  L1 rho 0.893  745 steps
 #
+# Three cases run twice, once with the wall on a node and once on a
+# face-centred symmetry plane half a cell outside it. The folded grid has no
+# node on the wall, so it is shifted by half a cell and the wall value is the
+# even continuation of the first two nodes; the guarded deficit stays the first
+# node's, which both grids have, and the plane's prints beside it.
+#
+#   Woodward folded   L1 rho 3.033e-2, peak rho 6.6140 at x = 0.7781
+#   Noh nu=1 folded   plateau 3.9990/4  shock 0.2024  wall deficit 25%
+#                     (on the plane 26%)
+#   Noh aligned folded N=100 AR=4  plateau 3.9974/4  wall deficit 28%
+#                     (on the plane 29%)  shock 0.2093  4938 steps
+#
+# Against the node-centred rows: the folded Woodward L1 is 6% lower at the same
+# contact node, the planar Noh wall deficit is 1 point higher and the aligned
+# one 5 points lower, both shock positions sit 0.0003 and 0.0009 further out,
+# the pre-shock L1 is 18% lower planar and 40% higher aligned, and the aligned
+# step count falls from 4966 to 4938. The aligned transverse round-off falls
+# from 2.1e-7 to 5.1e-10 at a wall that carries no closure row, so its guard is
+# 5e-9 rather than the node-centred 5e-7.
+#
 # The C6 default closure is `:neutral3`. Under `:cascade3` the rows above
 # read Woodward 3.22e-2 / 6.617, Noh nu=1 3.9899 / 0.2043 / 50%, Noh aligned
 # 3.9952 / 52% / 0.2109 / 4926 steps and Noh plane 11.862 / 0.907 / 759 steps,
@@ -235,6 +255,10 @@ const REFDIR = joinpath(@__DIR__, "refs")
 const GENERATE = "--generate" in ARGS
 
 isroot() = MPI.Comm_rank(MPI.COMM_WORLD) == 0
+# Each case that has a folded twin below records its numbers here as it runs,
+# so the twin prints the node-centred wall beside the plane without running
+# the node-centred case a second time.
+const NODE_ROWS = Dict{Symbol,Any}()
 say(args...) = isroot() && println(args...)
 # Runtime format string: @printf demands a literal, and one call site below
 # builds its format by concatenation.
@@ -334,6 +358,25 @@ let (xs, ρ, u, p, ok) = woodward()
     @test all(isfinite, ρ) && minimum(ρ) > 0
     @test eρ < 6e-2
     @test 0.75 < xs[imax] < 0.80      # collided contact position
+    NODE_ROWS[:woodward] = (l1=eρ, peak=ρ[imax], x=xs[imax])
+end
+
+# Both walls on face-centred symmetry planes. The grid shifts by half a cell
+# and carries N cells over the unit interval rather than N − 1, so the L1 is
+# against the same stored reference interpolated to the shifted nodes and the
+# two rows are comparable but not identical by construction.
+let (xs, ρ, u, p, ok) = woodward(; folded=true)
+    @test ok
+    xr, ρr, _, _ = read_ref("woodward_colella.csv")
+    eρ = l1(ρ, [interp1(xr, ρr, x) for x in xs])
+    imax = argmax(ρ)
+    n = NODE_ROWS[:woodward]
+    sayf("  N=%d   symmetry planes   L1 rho %.3e   peak rho %.4f at x = %.4f" *
+         "   (walls %.3e / %.4f at %.4f)\n",
+         WC_N, eρ, ρ[imax], xs[imax], n.l1, n.peak, n.x)
+    @test all(isfinite, ρ) && minimum(ρ) > 0
+    @test eρ < 6e-2                   # measured 3.033e-2, as the node-centred
+    @test 0.75 < xs[imax] < 0.80      # guard is set from 3.215e-2
 end
 
 # The supported high-order wall configuration: C6 `:brady_livescu` under the
@@ -405,6 +448,38 @@ for (ν, ptol, ncell) in ((1, 0.01, 12), (2, 0.10, 12), (3, 0.15, 12))
     # The wall layer, bounded. Both are "no worse than" guards on the measured
     # values in reference/CALIBRATION_APPENDIX.md, not targets.
     @test report.inadmissible <= ncell
+    @test report.e_min > -1.0
+    @test report.nonfinite == 0 && report.negative_density == 0
+    ν == 1 && (NODE_ROWS[:noh1] = (plateau=plat, deficit=deficit, shock=Rnum,
+                                   epre=epre))
+end
+
+# The planar wall on a face-centred symmetry plane, from the same cold start at
+# the same N, CFL and permissive validity policy. The deficit guarded here is
+# the first node's, as it is above, and that node sits half a cell out from the
+# plane; the density continued onto the plane itself prints beside it.
+let (xs, ρ, u, p, ok, report) = noh_case(1; folded=true)
+    @test ok
+    plat, deficit, Rnum, epre = noh_metrics(xs, ρ, 1)
+    dplane = 1 - noh_plane_density(ρ) / 4
+    n = NODE_ROWS[:noh1]
+    sayf("  nu=1 N=%d symmetry plane  plateau %.4f (exact 4.0)  deficit " *
+         "node 1 %+.0f%% plane %+.0f%%  shock %.4f/%.4f  L1 pre-shock rho " *
+         "%.2e\n",
+         Dict(NOH_N)[1], plat, 100deficit, 100dplane, Rnum,
+         (NOH_G - 1) / 2 * NOH_T, epre)
+    sayf("        node-centred wall: plateau %.4f  deficit %+.0f%%  shock " *
+         "%.4f  L1 pre-shock rho %.2e\n",
+         n.plateau, 100n.deficit, n.shock, n.epre)
+    sayf("        closing state: %d inadmissible cell(s), e_min %+.4f\n",
+         report.inadmissible, report.e_min)
+    # The node-centred case's guards, measured 3.9990, 25%, 0.2024, 2.95e-6
+    # and 7 cells against its 3.9988, 24%, 0.2021, 3.60e-6 and 6.
+    @test abs(plat / 4 - 1) < 0.01
+    @test 0 < deficit < 0.7
+    @test abs(Rnum - (NOH_G - 1) / 2 * NOH_T) < 0.025
+    @test epre < 5e-2
+    @test report.inadmissible <= 12
     @test report.e_min > -1.0
     @test report.nonfinite == 0 && report.negative_density == 0
 end
@@ -480,6 +555,34 @@ let r = noh_aligned(; N=100, AR=4)
     # mode".
     @test r.uniformity < 5e-7
     @test r.steps < 8000
+    NODE_ROWS[:aligned] = (plateau=plat, deficit=deficit, shock=Rnum,
+                           steps=r.steps, uniformity=r.uniformity)
+end
+
+# The same anisotropic grid with the wall on a face-centred symmetry plane.
+# The transverse uniformity is the same round-off measurement as above, on a
+# wall that carries no closure row.
+let r = noh_aligned(; N=100, AR=4, folded=true)
+    @test r.completed
+    plat, deficit, Rnum, epre = noh_metrics(r.y, r.rho, 1)
+    dplane = 1 - noh_plane_density(r.rho) / 4
+    n = NODE_ROWS[:aligned]
+    sayf("  aligned N=100 AR=4 symmetry plane   plateau %.4f (exact 4)  " *
+         "deficit node 1 %+.0f%% plane %+.0f%%  shock %.4f/0.2  steps %d  " *
+         "transverse %.1e\n",
+         plat, 100deficit, 100dplane, Rnum, r.steps, r.uniformity)
+    sayf("        node-centred wall: plateau %.4f  deficit %+.0f%%  shock " *
+         "%.4f  steps %d  transverse %.1e\n",
+         n.plateau, 100n.deficit, n.shock, n.steps, n.uniformity)
+    @test abs(plat / 4 - 1) < 0.03
+    @test 0 < deficit < 0.7
+    @test abs(Rnum - 0.2) < 0.025
+    # Measured 5.1e-10, against 2.1e-7 on the node-centred wall, so the
+    # node-centred envelope would not see a regression here. The bound is ten
+    # times the measured value, which is a round-off quantity on a path the
+    # node-centred row's note describes as sensitive.
+    @test r.uniformity < 5e-9
+    @test r.steps < 8000              # measured 4938, against 4966
 end
 let r = noh_cartesian(; N=24, AR=2)
     @test r.completed

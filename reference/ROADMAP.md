@@ -627,7 +627,7 @@ below exposed behavior outside those passing checks.
   ([the measurements](CALIBRATION_APPENDIX.md#the-neutral-rows-certificate-and-the-c8-and-c10-sets),
   [completion record](HISTORY.md#the-neutral-rows-certificate-and-the-c8-and-c10-sets-september-2026)).
 
-- [ ] **N6l — Fold a slip wall on a face-centred mirror for full wall order.**
+- [x] **N6l — Fold a slip wall on a face-centred mirror for full wall order.**
   An inviscid slip wall is a symmetry plane: density, pressure, energy,
   species and the tangential velocity are even about it and the normal
   velocity odd. The closed-edge rows exist because the wall sits on a
@@ -660,6 +660,18 @@ below exposed behavior outside those passing checks.
   slip-wall cases (planar and aligned Noh, Woodward–Colella) at or better
   than the node-centred wall; MPI and device parity; no-slip and
   Dirichlet baselines unchanged.
+  **Code:** [boundary.jl](../src/boundary.jl), [rhs.jl](../src/rhs.jl),
+  [wallclosure.jl](../bench/wallclosure.jl),
+  [closurecertify.jl](../bench/closurecertify.jl).
+  **Delivered:** `SymmetryPlaneBC`, the slip wall as the self-paired fold
+  of the axis on any Cartesian dimension or cylindrical z, at either end
+  or both. Every gate leg passes: the plane reads the interior order,
+  its linearized step is antisymmetric to round-off, the battery holds,
+  and MPI and device parity are measured. Patched and refined runs keep
+  `SlipWallBC`; extending the fold to them is open, as is switching the
+  tutorials whose walls are true symmetry planes
+  ([the measurements](CALIBRATION_APPENDIX.md#the-face-centred-symmetry-plane),
+  [completion record](HISTORY.md#the-face-centred-symmetry-plane-september-2026)).
 
 - [ ] **N7 — Complete NSCBC inflow transverse coupling.**
   Add the Yoo–Im transverse terms that exist for outflow but not inflow.
@@ -845,9 +857,10 @@ endpoint. N6j remeasured the fifth-order candidates under
 N6k gave the neutral rows a measured pseudospectral certificate,
 explained the line-length resonance of their neighbours, and made the
 same rows the C8 and C10 defaults, which leaves every preset at third
-order on a wall-bounded line. The open wall item is N6l: a slip wall
-folded on a face-centred mirror, at the interior order and without a
-closure row.
+order on a wall-bounded line. N6l added the face-centred symmetry plane,
+a slip wall folded by parity at the interior order without a closure
+row, for a single unrefined patch; the node-centred `SlipWallBC` keeps
+the closure rows and remains the wall of patched and refined runs.
 Use N10/N11 to qualify interface candidates before promotion; invoke N15
 only when the smaller closure change
 misses a target. N16 transfer measurements may begin with N6, while final

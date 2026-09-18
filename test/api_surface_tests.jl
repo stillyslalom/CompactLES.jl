@@ -24,8 +24,8 @@ FieldWriter FloorTally IdealMixture IdealSpecies MPI Metric NSCBCInflowBC
 NSCBCOutflowBC Nasa9Interval Nasa9Mixture Nasa9Species NavierStokes1T
 NoSlipWallBC Numerics OriginBC PeriodicBC PoleBC Prim Problem ProgressLog
 SlipWallBC Solver SolverFailure SphericalMetric StateGuard StateReport
-StepControl StiffenedGas Stretch
-SwitchableBC Transport Trigger WhenState Workspace add_source! allocate_state
+StepControl StiffenedGas Stretch SwitchableBC SymmetryPlaneBC
+Transport Trigger WhenState Workspace add_source! allocate_state
 apply_bcs! artificial_conductivity_scale boundary_plane cartesian_slice
 compact_d8 compact_filter compute_dt compute_rhs! conserved_from_prim
 conserved_parity correct_flux! correct_rhs! dissipation_rate domain_volume dt_report eachpatch

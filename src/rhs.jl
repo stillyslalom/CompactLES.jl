@@ -289,9 +289,27 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         n_global[3] == 1 || iseven(n_global[3]) ||
             error("resolved-φ PoleBC requires an even φ point count over 2π")
     end
+    # ---- Face-centred symmetry planes -----------------------------------
+    # A reflecting plane half a cell outside an end, folded by the same
+    # machinery on any dimension and either end. The geometry restriction is
+    # `validate_bc`'s; what is left here is the interaction with the
+    # coordinate folds, the stretch and the grid spacing.
+    symplane = ntuple(d -> (bcs[d][1] isa SymmetryPlaneBC,
+                            bcs[d][2] isa SymmetryPlaneBC), 3)
+    for d in 1:3
+        (symplane[d][1] || symplane[d][2]) || continue
+        stretch[d] === nothing ||
+            error("folded dimensions cannot be stretched")
+        # One FoldSpec per dimension carries one sigvel, and a coordinate
+        # fold's is not the plane's.
+        ((d == 1 && (axis || orig1)) || (d == 2 && poles)) &&
+            error("dimension $d cannot carry both SymmetryPlaneBC and a " *
+                  "coordinate fold (AxisBC, OriginBC, PoleBC)")
+    end
     periodic = ntuple(d -> n_global[d] > 1 ? isperiodic(bcs[d][1]) : true, 3)
     (axis || orig1) && (periodic = (false, periodic[2], periodic[3]))
     poles && (periodic = (periodic[1], false, periodic[3]))
+    periodic = ntuple(d -> periodic[d] && !(symplane[d][1] || symplane[d][2]), 3)
     for d in 1:3
         stretch[d] === nothing || !periodic[d] ||
             error("dimension $d: stretched dimensions must be non-periodic")
@@ -300,16 +318,20 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     active_g = ntuple(d -> n_global[d] > 1, 3)
     # Grid spacing: computational ξ ∈ [0,1] for stretched dims; half-offset
     # r ∈ (0, R] for axis grids (h = R/(N − ½), r₁ = h/2); standard otherwise.
-    # Half-offset grids on folded dimensions: fold at the low end only
-    # (r: axis/origin) gives h = L/(N − ½); folds at both ends (θ poles)
-    # give h = L/N; either way the first node sits at h/2.
-    fold_lo_dim = ntuple(d -> (d == 1 && (axis || orig1)) || (d == 2 && poles), 3)
-    fold_hi_dim = ntuple(d -> d == 2 && poles, 3)
+    # Half-offset grids on folded dimensions: each folded end moves the
+    # physical edge half a cell past the last node, so the line carries half
+    # a cell less per folded end. Folding the low end alone (r: axis/origin,
+    # a symmetry plane there) gives h = L/(N − ½) with node 1 at h/2; both
+    # ends (θ poles, a plane at each end) give h = L/N; the high end alone
+    # gives h = L/(N − ½) with node 1 on the physical edge.
+    fold_lo_dim = ntuple(d -> (d == 1 && (axis || orig1)) || (d == 2 && poles) ||
+                              symplane[d][1], 3)
+    fold_hi_dim = ntuple(d -> (d == 2 && poles) || symplane[d][2], 3)
     h = ntuple(3) do d
         active_g[d] || return one(T)
         stretch[d] === nothing || return one(T) / (n_global[d] - 1)
         fold_lo_dim[d] && fold_hi_dim[d] && return Lt[d] / n_global[d]
-        fold_lo_dim[d] && return Lt[d] / (n_global[d] - T(0.5))
+        (fold_lo_dim[d] || fold_hi_dim[d]) && return Lt[d] / (n_global[d] - T(0.5))
         periodic[d] ? Lt[d] / n_global[d] : Lt[d] / (n_global[d] - 1)
     end
     coord_shift = ntuple(d -> fold_lo_dim[d] ? h[d] / 2 : zero(T), 3)
@@ -322,6 +344,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         (axis || orig1 || poles) &&
             error("patch decomposition across a coordinate fold is not " *
                   "supported; a folded run takes a single patch")
+        any(any, symplane) &&
+            error("patch decomposition across a SymmetryPlaneBC is not " *
+                  "supported; a patched run takes SlipWallBC at that face")
         filt isa CompactScheme ||
             error("patch interfaces carry closure variants for a tridiagonal " *
                   "filter only")
@@ -401,6 +426,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
             error("refinement requires an unstretched grid")
         (axis || orig1 || poles) &&
             error("refinement across a coordinate fold is forbidden")
+        any(any, symplane) &&
+            error("refinement across a SymmetryPlaneBC is forbidden; a " *
+                  "refined run takes SlipWallBC at that face")
         filt isa CompactScheme ||
             error("the coarse-fine boundary carries closure variants for a " *
                   "tridiagonal filter only")
@@ -599,6 +627,17 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         sf2 = flux_parities(equations, sv, 2, -1)
         folds = (folds[1], foldspec(2, true, true, 3, 0, sv, sf2), folds[3])
     end
+    # A symmetry plane is self-paired (each line continues into itself, so no
+    # pairing dimension), the normal velocity is the only odd component, and
+    # the area factor is independent of the folded coordinate, hence even.
+    for d in 1:3
+        (symplane[d][1] || symplane[d][2]) || continue
+        sv = ntuple(j -> j == d ? -1 : 1, 3)
+        fs = foldspec(d, symplane[d][1], symplane[d][2], 0, 0, sv,
+                      flux_parities(equations, sv, d, 1))
+        folds = (d == 1 ? fs : folds[1], d == 2 ? fs : folds[2],
+                 d == 3 ? fs : folds[3])
+    end
     deriv_plans = ntuple(d -> decomp.active[d] && folds[d] === nothing ?
                          mkd(deriv, d) : nothing, 3)
     filter_plans = ntuple(d -> decomp.active[d] && folds[d] === nothing ?
@@ -626,6 +665,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                    hi_closures=rwrow(d, 2, -1)))
     end
     ring_plans = art.detector === :delta4 ? nothing : ntuple(ringpair, 3)
+    paired_fold = any(fold -> fold !== nothing && fold.pair !== nothing, folds)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
     bcs_t = ntuple(d -> (bcs[d][1], bcs[d][2]), 3)
     # One RHS scratch pool per rank, seeded with the root patch's set and
@@ -637,8 +677,11 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     patch = Patch(1, 0, regions[1], comm, decomp, h,
                   ntuple(d -> (0, 0), 3), bcs_t, folds,
                   deriv_plans, deriv_plans, filter_plans, smooth_plans, ring_plans,
-                  any(fold -> fold !== nothing, folds) ? f() : empty_field(backend, T),
-                  any(fold -> fold !== nothing, folds) ? f() : empty_field(backend, T),
+                  # Only a paired fold's butterfly reads these; a self-paired
+                  # fold (the axisymmetric axis, a symmetry plane) needs
+                  # neither, so it carries no padded field of its own.
+                  paired_fold ? f() : empty_field(backend, T),
+                  paired_fold ? f() : empty_field(backend, T),
                   f(), f(), f(), f(), f(), f(), f(), f(),
                   [f() for _ in 1:n_species],
                   f(), f(), f(),

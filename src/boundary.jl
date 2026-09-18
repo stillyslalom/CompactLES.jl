@@ -145,6 +145,41 @@ with an even point count. Setup errors if it is applied at only one end of θ.
 struct PoleBC <: BoundaryCondition end
 
 """
+    SymmetryPlaneBC()
+
+Reflecting plane half a cell outside the first (side 1) or last (side 2) node
+of the dimension it sits on. The grid on that dimension is half-offset at the
+folded end, as a coordinate fold's is: a plane at the low end alone gives
+h = L/(N − ½) and puts node 1 at h/2, a plane at both ends gives h = L/N and
+puts node i at (i − ½)h, and no node lies on the plane itself.
+
+Density, pressure, energy, species and the tangential velocities are even
+across the plane and the normal velocity is odd. Every operator (the
+derivatives, the state filter, the sensor smoother and the detector) runs its
+interior stencil to the edge over the mirror halo and folds its ghost coupling
+onto the matrix diagonal, so the face carries no closure row and the
+discretization there is the interior one: the periodic operator on the doubled
+line restricted by parity. A run between symmetry planes reproduces the
+periodic run on the doubled line to round-off, and one derivative at the plane
+converges at the interior order.
+
+The parity fold carries the whole condition. `enforce!` does nothing, since no
+node sits on the plane, and there is no flux correction: the fold's flux
+parities already give zero normal mass, species and energy flux and zero
+tangential shear traction, which is the inviscid slip wall and, under physical
+viscosity, the symmetry plane's flux contract of [`SlipWallBC`](@ref).
+
+The fold reflects one coordinate, so the metric's scale factors must not depend
+on it: every dimension of `CartesianMetric` and z (dimension 3) of
+`CylindricalMetric` qualify and the rest are rejected by [`validate_bc`](@ref).
+The plane's dimension cannot be stretched, cannot also carry [`AxisBC`](@ref),
+[`OriginBC`](@ref) or [`PoleBC`](@ref), and cannot be wrapped in a
+[`SwitchableBC`](@ref). A patched or refined run does not take it;
+[`SlipWallBC`](@ref) is the condition there.
+"""
+struct SymmetryPlaneBC <: BoundaryCondition end
+
+"""
     InterfaceBC(neighbor)
 
 Marker condition on a patch face that another patch supplies: a face abutting
@@ -215,8 +250,9 @@ verdict is globally consistent, not a rank-local test.
 
 Both conditions must agree on periodicity because `setup` uses that property to
 construct the decomposition and line plans. Fold conditions (`AxisBC`,
-`OriginBC`, and `PoleBC`) cannot be wrapped because `setup` identifies them by
-the boundary-condition type itself.
+`OriginBC`, `PoleBC`, and `SymmetryPlaneBC`) cannot be wrapped because `setup`
+identifies them by the boundary-condition type itself and builds the grid
+spacing and the folded operators from the answer.
 """
 mutable struct SwitchableBC{B1<:BoundaryCondition,B2<:BoundaryCondition} <: BoundaryCondition
     before::B1
@@ -224,14 +260,16 @@ mutable struct SwitchableBC{B1<:BoundaryCondition,B2<:BoundaryCondition} <: Boun
     switched::Bool
 end
 
-_is_fold_bc(bc) = bc isa AxisBC || bc isa OriginBC || bc isa PoleBC
+_is_fold_bc(bc) = bc isa AxisBC || bc isa OriginBC || bc isa PoleBC ||
+                  bc isa SymmetryPlaneBC
 
 function SwitchableBC(before::BoundaryCondition, after::BoundaryCondition)
     isperiodic(before) == isperiodic(after) ||
         throw(ArgumentError("SwitchableBC: both conditions must agree on periodicity"))
     (_is_fold_bc(before) || _is_fold_bc(after)) &&
         throw(ArgumentError("SwitchableBC cannot wrap a fold condition " *
-                            "(AxisBC, OriginBC, PoleBC); setup detects those by type"))
+                            "(AxisBC, OriginBC, PoleBC, SymmetryPlaneBC); " *
+                            "setup detects those by type"))
     return SwitchableBC(before, after, false)
 end
 
@@ -297,6 +335,7 @@ enforce!(::PeriodicBC, Q, solver, d, side) = nothing
 enforce!(::AxisBC, Q, solver, d, side) = nothing
 enforce!(::OriginBC, Q, solver, d, side) = nothing
 enforce!(::PoleBC, Q, solver, d, side) = nothing
+enforce!(::SymmetryPlaneBC, Q, solver, d, side) = nothing
 
 """
     correct_rhs!(bc, solver, Q, dQ, d, side)
@@ -358,6 +397,19 @@ validate_bc(::BoundaryCondition, metric, eos, d::Int, side::Int) = nothing
 validate_bc(bc::SwitchableBC, metric, eos, d::Int, side::Int) =
     (validate_bc(bc.before, metric, eos, d, side);
      validate_bc(bc.after, metric, eos, d, side))
+
+# Geometry restriction of a symmetry plane: the fold reflects one coordinate
+# about the plane, so no scale factor may depend on that coordinate. Cartesian
+# scale factors depend on nothing, and the cylindrical (1, r, 1) do not depend
+# on z. The cylindrical radius and azimuth and every spherical dimension fail
+# the test, and their singular ends are already AxisBC, OriginBC and PoleBC.
+function validate_bc(::SymmetryPlaneBC, metric, eos, d::Int, side::Int)
+    (metric isa CartesianMetric || (metric isa CylindricalMetric && d == 3)) ||
+        error("SymmetryPlaneBC on dimension $d requires CartesianMetric or " *
+              "the z dimension of CylindricalMetric; on $(typeof(metric)) " *
+              "dimension $d the scale factors depend on the folded coordinate")
+    return nothing
+end
 
 """
     sensor_mirror(bc) -> Bool

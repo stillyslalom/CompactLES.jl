@@ -47,6 +47,7 @@ points at them and does not restate them.
 37. [The aligned Noh transverse mode (September 2026)](#the-aligned-noh-transverse-mode-september-2026)
 38. [Fifth-order closures under the dilatation sensor (September 2026)](#fifth-order-closures-under-the-dilatation-sensor-september-2026)
 39. [The neutral rows' certificate and the C8 and C10 sets (September 2026)](#the-neutral-rows-certificate-and-the-c8-and-c10-sets-september-2026)
+40. [The face-centred symmetry plane (September 2026)](#the-face-centred-symmetry-plane-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -2155,3 +2156,20 @@ level interface keeps the cascade rows for every neutral set.
 The instruments are `bench/closurecertify.jl`, `bench/neutralsearch8.jl`
 and `bench/neutralsearch10.jl`; the measurements are in
 [the calibration appendix](CALIBRATION_APPENDIX.md#the-neutral-rows-certificate-and-the-c8-and-c10-sets).
+
+## The face-centred symmetry plane (September 2026)
+
+Roadmap N6l is complete. `SymmetryPlaneBC` places an inviscid slip wall
+half a cell outside the end node and imposes it as the self-paired
+parity fold of the axisymmetric axis, on any dimension whose scale
+factors do not depend on the folded coordinate. The plane has no closure
+row, no injected value and no flux correction. A run between planes
+reproduces the periodic run on the doubled line to round-off, one
+derivative at the plane converges at the interior order, the linearized
+acoustic step there is antisymmetric to round-off, and the battery,
+MPI and device checks pass with every pre-existing row unchanged. The
+plane is rejected in a patched or refined run, with a `Stretch`, on a
+coordinate fold's dimension and inside a `SwitchableBC`, where
+`SlipWallBC` remains the condition. The measurements and the
+instruments are in
+[the calibration appendix](CALIBRATION_APPENDIX.md#the-face-centred-symmetry-plane).

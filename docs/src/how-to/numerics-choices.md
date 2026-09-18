@@ -121,6 +121,7 @@ Choose each face's condition from its physics, as described in
 |:--|:--|:--|:--|:--|
 | [`PeriodicBC`](@ref) | the interior operator's | unconditional | cheapest; cyclic solve | the only face that keeps the formal order |
 | [`SlipWallBC`](@ref) | closure rows: 3, evolution 4 | neutral under `:neutral3` | none beyond the rows | an inviscid slip wall with the artificial properties on is limited by the strain sensor's cusp; `beta_sensor = :dilatation` removes that cap |
+| [`SymmetryPlaneBC`](@ref) | the interior operator's | unconditional: the folded step is the periodic step restricted by parity | none; a single unrefined, unstretched patch | the slip wall half a cell outside the end node; nothing is injected and no closure row exists |
 | [`NoSlipWallBC`](@ref) | closure rows: 3, evolution 4 | neutral, viscosity damps every closure's wall mode | the wall flux contract | adiabatic by default; a wall temperature makes it isothermal |
 | [`DirichletBC`](@ref) | closure rows | neutral under every closure option | none | shock tubes and supersonic inflow |
 | [`NSCBCInflowBC`](@ref), [`NSCBCOutflowBC`](@ref) | closure rows | depends on the relaxation scale | one characteristic solve per face per stage | faces with a unit scale factor only; the outflow carries the transverse coupling of Yoo and Im and the inflow does not |
@@ -128,7 +129,10 @@ Choose each face's condition from its physics, as described in
 
 When the problem's symmetry permits a periodic or folded dimension, use it
 instead of adding a wall at the symmetry plane. This avoids the wall's
-closure rows and improves accuracy and cost.
+closure rows and improves accuracy and cost. A symmetry plane is itself a
+fold: [`SymmetryPlaneBC`](@ref) keeps the interior order at the plane where
+[`SlipWallBC`](@ref) pays the closure rows' third order, at the cost of a
+grid whose end node sits half a cell inside the plane.
 
 ## Filter and artificial properties
 

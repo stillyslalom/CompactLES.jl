@@ -4,6 +4,8 @@
 #   julia --project=. -t 1 bench/closurequalify.jl schemes=candidate parts=jacobian
 #   julia --project=. -t 1 bench/closurequalify.jl schemes=candidate parts=stress
 #   julia --project=. -t 1 bench/closurequalify.jl schemes=de parts=jacobian
+#   julia --project=. -t 1 bench/closurequalify.jl parts=jacobian \
+#       jns=51,101 jwalls=symmetry,slip
 #   julia --project=. -t 1 bench/closurequalify.jl parts=dilatation \
 #       schemes=neutral3,brady_livescu,unfiltered,candidate,de \
 #       beta_sensor=dilatation
@@ -236,8 +238,12 @@ function uniform_solver(deriv, n; filtered=false, wall=:slip)
     rho, pressure = 0.9, 1.1
     transverse = wall == :noslip ? 0.0 : 0.1
     profile = (x, y, z, t) -> Prim(rho=rho, u=(0.0, transverse, 0.0), p=pressure)
+    # :symmetry is the same reflecting condition as :slip, half a cell outside
+    # the end node and carried by the parity fold, so its line has no closure
+    # row and its spectrum is the interior operator's.
     bc = wall == :dirichlet ? DirichletBC(profile) :
-         wall == :noslip ? NoSlipWallBC() : SlipWallBC()
+         wall == :noslip ? NoSlipWallBC() :
+         wall == :symmetry ? SymmetryPlaneBC() : SlipWallBC()
     solver = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
                     bcs=((bc, bc), per3[2], per3[3]), deriv=deriv,
                     eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
@@ -279,7 +285,8 @@ end
 
 function jacobian_check(name, deriv, opts)
     walls = Symbol.(split(opts.jwalls, ','))
-    all(w -> w in (:slip,:dirichlet,:noslip),walls) || error("unknown Jacobian wall")
+    all(w -> w in (:slip,:dirichlet,:noslip,:symmetry),walls) ||
+        error("unknown Jacobian wall")
     for n in parse.(Int, split(opts.jns, ',')), wall in walls
         for filtered in (false, true), delta in parse.(Float64,split(opts.deltas,','))
             matrix, dt = production_jacobian(deriv, n; filtered, delta, wall)

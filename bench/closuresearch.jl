@@ -3,6 +3,11 @@ module ClosureSearch
 # Deterministic research instrument for fifth-order boundary closures of the
 # Lele C6 tridiagonal first derivative.  This file is intentionally independent
 # of the production presets: it may be included by qualification scripts.
+#
+# `derivative_matrix` and `acoustic_operator` place the wall on a node and
+# inject the endpoint velocities; `folded_derivative_matrix` and
+# `folded_acoustic_operator` place it half a cell outside the end node and
+# fold the interior stencil with the field's parity, so no closure row is used.
 
 using CompactLES
 using LinearAlgebra
@@ -12,7 +17,8 @@ using Random
 const CL = CompactLES
 
 export fifth_order_row, fifth_order_family, extended_fifth_order_family, candidate_parameters,
-       candidate_scheme, unfiltered_scheme, de_scheme, derivative_matrix, acoustic_operator, diagnostics,
+       candidate_scheme, unfiltered_scheme, de_scheme, derivative_matrix, acoustic_operator,
+       folded_derivative_matrix, folded_acoustic_operator, diagnostics,
        growth_sweep, filtered_radius, feasibility_violation, differential_evolution,
        assembly_mismatch, search, main
 
@@ -180,6 +186,72 @@ function acoustic_operator(scheme, N::Integer)
     Zpp = zeros(eltype(D), N, N)
     Zuu = zeros(eltype(D), N - 2, N - 2)
     L = [Zpp -D[:, 2:N-1]; -D[2:N-1, :] Zuu]
+    return L, A
+end
+
+"""Fold one stencil tap onto the line of a mirror half a cell outside each end.
+
+Ghost `1-k` mirrors node `k` at the low end and `2N+1-k` mirrors node `k` at
+the high end. The second return value says whether the parity sign applies.
+"""
+@inline function fold_tap(j::Integer, N::Integer)
+    j < 1 && return (1 - j, true)
+    j > N && return (2N + 1 - j, true)
+    (j, false)
+end
+
+"""Off-diagonal left-hand-side coefficients of either scheme flavour."""
+lhs_bands(scheme::CL.CompactScheme) = [scheme.alpha]
+lhs_bands(scheme::CL.BandedCompactScheme) = scheme.lhs
+
+"""The compact derivative on `N` nodes at `(i-1/2)h` between two mirrors.
+
+`sigma` is the parity of the differentiated field about both planes, +1 even
+and -1 odd. Every row carries the interior stencil: right-hand-side taps that
+fall outside are folded back with sign `sigma`, and the left-hand-side ghost
+coupling with the derivative's own parity `-sigma`, which is the algebra
+`plan_direction` performs for a coordinate fold. Spacing is unit, as in
+`derivative_matrix`; the caller scales. No closure row enters, so the result
+depends on the interior stencil alone.
+"""
+function folded_derivative_matrix(scheme, N::Integer, sigma::Integer)
+    lhs = lhs_bands(scheme)
+    coeffs = scheme.coeffs
+    M = length(coeffs)
+    N >= 2M + 1 || throw(ArgumentError("N must be at least $(2M + 1)"))
+    abs(sigma) == 1 || throw(ArgumentError("sigma must be +1 or -1"))
+    T = eltype(coeffs)
+    A = Matrix{T}(I, N, N)
+    B = zeros(T, N, N)
+    sg = T(-sigma)
+    sf = T(sigma)
+    for i in 1:N
+        for s in eachindex(lhs), j in (i - s, i + s)
+            col, folded = fold_tap(j, N)
+            A[i, col] += (folded ? sg : one(T)) * lhs[s]
+        end
+        for m in 1:M, (j, w) in ((i + m, coeffs[m]), (i - m, -coeffs[m]))
+            col, folded = fold_tap(j, N)
+            B[i, col] += (folded ? sf : one(T)) * w
+        end
+    end
+    return A \ B, A
+end
+
+"""Folded slip-wall acoustic operator on `(p,u)` on a unit domain.
+
+The mirror sits half a cell outside each end, so it carries no node and no
+endpoint velocity is eliminated: the full 2N state evolves. `p` is even and
+`u` odd about both planes, hence the two derivative matrices. The returned
+left-hand-side matrix is the even field's.
+"""
+function folded_acoustic_operator(scheme, N::Integer)
+    Deven, A = folded_derivative_matrix(scheme, N, 1)
+    Dodd, _ = folded_derivative_matrix(scheme, N, -1)
+    Deven = Deven .* N          # h = 1/N, rates are physical c/L units
+    Dodd = Dodd .* N
+    Z = zeros(eltype(Deven), N, N)
+    L = [Z -Dodd; -Deven Z]
     return L, A
 end
 

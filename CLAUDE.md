@@ -126,7 +126,7 @@ julia --project=. test/convergence.jl
 julia --project=. test/validation.jl
 "$MPIEXEC" -n 2 julia --project=. -t 1 test/mpi_tests.jl
 "$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl \
-  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,AMR transfer pair,halo consistency,off-rank folds,freestream,no-slip wall flux,slip wall flux,positivity floor,slicing"
+  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,AMR transfer pair,halo consistency,off-rank folds,freestream,no-slip wall flux,slip wall flux,symmetry plane,positivity floor,slicing"
 ```
 
 The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.
@@ -192,6 +192,8 @@ into the file: C6 6.01, C8 8.00, C10 10.04, C6 wall closures 3.18
 (`:cascade3` 3.17, `:cascade4` 4.02, `:brady_livescu` 5.88), C8 wall closures
 3.18 (`:brady_livescu` 7.91), C10 wall closures 3.18, filter pass
 `:cascade` 1.88 / `:onesided` 8.07,
+symmetry planes 6.00 / 6.00 (C6), 8.05 / 7.95 (C8) and 10.23 / 10.17 (C10)
+on an even and an odd field, with a filter pass between planes at 7.88,
 cylindrical axis odd 3.76 / even 2.99, resolved-θ 3.76, spherical origin
 2.97, closure rows on a polynomial 3.00 / 3.00 / 4.00 / 5.00 / 3.00 / 7.00 /
 3.00 (C6 `:neutral3`, `:cascade3`, `:cascade4`, `:brady_livescu`, then C8
@@ -199,12 +201,17 @@ cylindrical axis odd 3.76 / even 2.99, resolved-θ 3.76, spherical origin
 evolution 4.01 (`:cascade3` 3.93, cascade filter 1.94, one-sided filter
 3.90, `:brady_livescu` 5.73, viscous no-slip 4.00, viscous slip 4.00,
 shear mode 4.67),
+symmetry-plane evolution 4.14 (one-sided filter 4.45, C8 3.97, C10 3.96,
+viscous slip with a tangential shear 6.04),
 interface evolution 3.31 (two patches), 3.62 / 6.01 (two levels, C6 /
 `:brady_livescu`), 3.72 (three levels subcycled), 4.12 (two levels
 filtered). The default closure of all three derivative presets is
-`:neutral3`; the fold studies close
+`:neutral3`; the coordinate-singularity studies close
 their outer end with a wall and use the default rows, while the interface
 studies keep the cascade rows, since an interface divergence selects them.
+A symmetry plane plans no closure row; its evolution rows are measured
+against a five-times-finer folded mirror, since the mirror at the same
+spacing reproduces the run to round-off.
 The evolution
 rows share `test/smooth_cases.jl` with `bench/boundaryorder.jl`; add a smooth
 case there, not in either consumer.
@@ -281,7 +288,10 @@ Names are spelled out in full. Current vocabulary:
 - `filter_interval` (cadence in steps) vs `filter_cfl` (the reference CFL at
   which a filter pass is full strength; 0 disables the relaxation), `filter_weight`
 - `deriv_plans`, `filter_plans`, `line_solver`, `plan` (a DirPlan) vs `plane`
-  (a wall plane), `fold`, `pair`
+  (a wall plane), `fold`, `pair`, `symplane` (the per-dimension pair of
+  `SymmetryPlaneBC` flags the constructor folds on; a self-paired fold with
+  `pair === nothing`), `paired_fold` (whether any fold owns a butterfly, the
+  only case that allocates `pairbuf`/`pairout`)
 - `plane_profile`, `profile_spacing`, `mix_width`, `molecular_mixing`,
   `quad_weight`, `cell_measure`, `line_profile` (a transverse-plane average
   along an axis) vs `line_sample` (the field on one grid line)

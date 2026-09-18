@@ -5,6 +5,7 @@
 #   julia --project=. -t 1 bench/closurecertify.jl parts=pseudo pseudo_ns=25,51,101
 #   julia --project=. -t 1 bench/closurecertify.jl parts=resonance scan_lo=340 scan_hi=470
 #   julia --project=. -t 1 bench/closurecertify.jl parts=norm norm_ns=21,31,51
+#   julia --project=. -t 16 bench/closurecertify.jl wall=folded schemes=c6,c8,c10
 #
 # A neutral spectrum certifies nothing on its own. The injected slip-wall
 # acoustic operator L is non-normal, so a perturbation of size eps can move an
@@ -18,6 +19,13 @@
 # cascade (2, 1/4, 1/4) as the unstable control. The resonance part locates the
 # mechanism behind the neighbour's isolated node counts, and the norm part
 # looks for structure in a numerically found energy norm.
+#
+# `wall=node`, the default, places the wall on a node and injects the endpoint
+# velocities, which is what the closure rows above are for. `wall=folded` places
+# it half a cell outside the end node and folds the interior stencil with the
+# field's parity, so no closure row enters and `schemes` selects an interior
+# instead: `c6`, `c8` and `c10` name the production presets. The parts
+# `spectrum`, `pseudo`, `transient` and `resonance` follow the option.
 #
 # These are research measurements. The script prints tables and asserts nothing.
 
@@ -59,7 +67,25 @@ const MEMBERS = Dict(
     "neighbour" => (1//4, 3//5, 1//5),
     "cascade"   => (2//1, 1//4, 1//4))
 
-scheme_of(name) = member_scheme(MEMBERS[name]..., name)
+const PRESETS = Dict("c6" => lele_d1_6, "c8" => lele_d1_8, "c10" => lele_d1_10)
+
+function scheme_of(name)
+    haskey(MEMBERS, name) && return member_scheme(MEMBERS[name]..., name)
+    haskey(PRESETS, name) && return PRESETS[name]()
+    error("unknown scheme $name; use one of " *
+          join(sort([collect(keys(MEMBERS)); collect(keys(PRESETS))]), ", "))
+end
+
+"""The acoustic operator of the requested wall placement."""
+function wall_operator(scheme, N, wall)
+    wall === :folded && return CS.folded_acoustic_operator(scheme, N)
+    wall === :node || error("wall must be node or folded")
+    # The node-centred model injects closure rows, which only the tridiagonal
+    # assembly of `derivative_matrix` carries.
+    scheme isa CL.CompactScheme ||
+        error("the node-centred model is tridiagonal only; use wall=folded")
+    CS.acoustic_operator(scheme, N)
+end
 
 # ------------------------------------------------------------------- small tools
 
@@ -91,8 +117,8 @@ function two_norm(A; iters=200, tol=1e-10)
 end
 
 """Spectral data of the acoustic operator: values, vectors, inverse, norms."""
-function spectral(scheme, N)
-    L, A = CS.acoustic_operator(scheme, N)
+function spectral(scheme, N, wall=:node)
+    L, A = wall_operator(scheme, N, wall)
     E = eigen(L)
     V = E.vectors
     W = inv(V)
@@ -136,13 +162,13 @@ end
 
 # ---------------------------------------------------------------- part: spectrum
 
-function part_spectrum(io, names, ns)
+function part_spectrum(io, names, ns, wall)
     println(io, "\n== spectrum, eigenvector conditioning and the all-time bound ==")
     println(io, " units: rates per unit time (c = L = 1); ||L||_2 scales as N")
     println(io, " closure      N    ||L||_2   max Re lam     cond(V)   max kappa_j",
                 "   || |V| |V^-1| ||")
     for name in names, N in ns
-        s = spectral(scheme_of(name), N)
+        s = spectral(scheme_of(name), N, wall)
         bound = two_norm(abs.(s.V) * abs.(s.W))
         @printf(io, " %-10s %4d  %9.3e  %+.4e  %10.4f  %12.4f  %14.4f\n",
                 name, N, s.normL, s.abscissa, s.condV, maximum(s.kappa), bound)
@@ -211,7 +237,8 @@ function line_sigma_min(L, x, values; refine=8)
     best
 end
 
-function part_pseudo(io, names, ns, big_ns, epsilons, big_epsilons, bisect, rtol, validate)
+function part_pseudo(io, names, ns, big_ns, epsilons, big_epsilons, bisect, rtol,
+                     validate, wall)
     println(io, "\n== eps-pseudospectral abscissa and the Kreiss constant ==")
     println(io, " eps is absolute, in the units of L itself (rate per unit time);",
                 " divide by ||L||_2")
@@ -223,7 +250,7 @@ function part_pseudo(io, names, ns, big_ns, epsilons, big_epsilons, bisect, rtol
     for (nsel, esel) in ((ns, epsilons), (big_ns, big_epsilons))
         isempty(nsel) && continue
         for name in names, N in nsel
-            s = spectral(scheme_of(name), N)
+            s = spectral(scheme_of(name), N, wall)
             g = maximum(s.kappa)
             @printf(io, "\n %s  N=%d  ||L||_2 %.4e  max Re lam %+.3e  max kappa_j %.3f\n",
                     name, N, s.normL, s.abscissa, g)
@@ -238,8 +265,9 @@ function part_pseudo(io, names, ns, big_ns, epsilons, big_epsilons, bisect, rtol
         end
     end
     validate || return
-    println(io, "\n-- accuracy of the vertical-line test (N = 25, adopted) --")
-    s = spectral(scheme_of("adopted"), 25)
+    vname = first(names)
+    @printf(io, "\n-- accuracy of the vertical-line test (N = 25, %s) --\n", vname)
+    s = spectral(scheme_of(vname), 25, wall)
     e = 1e-3
     a, _, _ = pseudo_abscissa(s.L, e, s.abscissa, s.normL; bisect=20, rtol,
                               guess=maximum(s.kappa))
@@ -304,8 +332,15 @@ function transient_max(L, values, V, W, normL, tmax, coarse_dt; block=3)
     (best, tbest, bestfast, length(ts))
 end
 
-"""Diagonal trapezoid quadrature of the (p, u) state, as an energy norm."""
-function quadrature_scale(N)
+"""Diagonal quadrature of the (p, u) state, as an energy norm.
+
+The node-centred state carries N pressures and N-2 interior velocities on a
+grid of spacing 1/(N-1), whose end nodes take half a cell. A face-centred
+mirror holds no node, so every one of the 2N unknowns takes a full cell of
+1/N and the norm is the Euclidean one rescaled.
+"""
+function quadrature_scale(N, wall)
+    wall === :folded && return fill(1 / N, 2N)
     h = 1 / (N - 1)
     wp = fill(h, N)
     wp[1] = h / 2
@@ -313,19 +348,19 @@ function quadrature_scale(N)
     vcat(wp, fill(h, N - 2))
 end
 
-function part_transient(io, names, ns, tmax, coarse_dt, validate)
+function part_transient(io, names, ns, tmax, coarse_dt, validate, wall)
     println(io, "\n== transient amplification max_t ||exp(tL)|| ==")
     println(io, " Euclidean norm on (p, u); the energy column repeats it in the",
-                " trapezoid")
+                " cell-measure")
     println(io, " quadrature norm. cond(V) bounds every t when the spectrum is",
                 " on the axis.")
     println(io, " closure      N    max_2   at t      max fast   max energy",
                 "   cond(V)   || |V||V^-1| ||   samples")
     for name in names, N in ns
-        s = spectral(scheme_of(name), N)
+        s = spectral(scheme_of(name), N, wall)
         best, tbest, bestfast, nt = transient_max(s.L, s.values, s.V, s.W,
                                                   s.normL, tmax, coarse_dt)
-        w = quadrature_scale(N)
+        w = quadrature_scale(N, wall)
         Lw = Diagonal(sqrt.(w)) * s.L * Diagonal(1 ./ sqrt.(w))
         Ew = eigen(Lw)
         Ww = inv(Ew.vectors)
@@ -336,8 +371,10 @@ function part_transient(io, names, ns, tmax, coarse_dt, validate)
                 name, N, best, tbest, bestfast, be, s.condV, bound, nt)
     end
     validate || return
-    println(io, "\n-- subspace iteration against a dense 2-norm (N = 51, adopted) --")
-    s = spectral(scheme_of("adopted"), 51)
+    vname = first(names)
+    @printf(io, "\n-- subspace iteration against a dense 2-norm (N = 51, %s) --\n",
+            vname)
+    s = spectral(scheme_of(vname), 51, wall)
     n = size(s.V, 1)
     seed = ComplexF64[1 + (k - 1) / n for k in 1:n]
     seed ./= norm(seed)
@@ -402,24 +439,29 @@ function theta_peaks(p, grid; floor_ratio=0.15)
 end
 
 function part_resonance(io, names, scan_lo, scan_hi, bubble_lo, bubble_hi,
-                        detune_lo, detune_hi)
-    println(io, "\n== the neighbour's node-count resonance ==")
+                        detune_lo, detune_hi, wall, coarse_hi, coarse_step)
+    println(io, wall === :folded ?
+        "\n== node-count sweep of the folded wall ==" :
+        "\n== the neighbour's node-count resonance ==")
     println(io, "\n-- node counts at which the spectrum leaves the axis --")
+    scan = collect(scan_lo:scan_hi)
+    coarse_hi > scan_hi &&
+        append!(scan, (scan_hi + coarse_step):coarse_step:coarse_hi)
     for name in names
         name == "cascade" && continue
         bad = Tuple{Int,Float64}[]
         worst = 0.0
-        for N in scan_lo:scan_hi
-            L, _ = CS.acoustic_operator(scheme_of(name), N)
+        for N in scan
+            L, _ = wall_operator(scheme_of(name), N, wall)
             g = maximum(real, eigvals(L))
             worst = max(worst, g)
             g > 1e-8 && push!(bad, (N, g))
         end
         @printf(io, " %-10s scan %d:%d  max Re over all N %+.3e  unstable N: %s\n",
-                name, scan_lo, scan_hi, worst,
+                name, first(scan), last(scan), worst,
                 isempty(bad) ? "none" : join(string.(first.(bad)), ","))
         for (N, g) in bad
-            L, _ = CS.acoustic_operator(scheme_of(name), N)
+            L, _ = wall_operator(scheme_of(name), N, wall)
             ev = eigvals(L)
             k = argmax(real.(ev))
             M = N - 1
@@ -430,6 +472,11 @@ function part_resonance(io, names, scan_lo, scan_hi, bubble_lo, bubble_hi,
             @printf(io, "theta1 %.6f theta2 %.6f  theta1 M/pi %.4f  theta2 M/pi %.4f\n",
                     t1, t2, t1 * M / pi, t2 * M / pi)
         end
+    end
+    if wall === :folded
+        println(io, "\n (the collision sub-parts below dissect the node-centred",
+                    " neighbour and are skipped)")
+        return
     end
     println(io, "\n-- the colliding pair through the resonance (neighbour) --")
     println(io, " every mode within 0.4 percent of omega h = 1.3585, its effective")
@@ -741,9 +788,12 @@ function main(args=ARGS)
         eps="1e-2,1e-3,1e-4,1e-6,1e-8", big_eps="1e-3,1e-6",
         bisect=14, rtol=1e-10, validate=true,
         transient_ns="25,51,101,201", tmax=20.0, coarse_dt=0.01,
-        scan_lo=340, scan_hi=470, bubble_lo=366, bubble_hi=376,
+        scan_lo=340, scan_hi=470, scan_coarse_hi=0, scan_coarse_step=10,
+        bubble_lo=366, bubble_hi=376,
         detune_lo=360, detune_hi=420,
-        norm_ns="21,31,51", wall=4, ascent=200))
+        norm_ns="21,31,51", corner=4, ascent=200, wall="node"))
+    wall = Symbol(opts.wall)
+    wall in (:node, :folded) || error("wall must be node or folded")
     # The package pins BLAS to one thread for its tiny interface solve; this
     # script is dense LAPACK from end to end and wants the machine back.
     BLAS.set_num_threads(opts.blas)
@@ -752,26 +802,28 @@ function main(args=ARGS)
     io = stdout
     @printf(io, "closurecertify: threads %d, BLAS %d\n", Threads.nthreads(),
             BLAS.get_num_threads())
-    println(io, "parts = ", opts.parts, "; schemes = ", opts.schemes)
+    println(io, "parts = ", opts.parts, "; schemes = ", opts.schemes,
+            "; wall = ", opts.wall)
     for part in parts
         t = @elapsed begin
             if part == "verify"
                 part_verify(io)
             elseif part == "spectrum"
-                part_spectrum(io, names, parse_ints(opts.spectrum_ns))
+                part_spectrum(io, names, parse_ints(opts.spectrum_ns), wall)
             elseif part == "pseudo"
                 part_pseudo(io, names, parse_ints(opts.pseudo_ns),
                             parse_ints(opts.pseudo_big_ns), parse_floats(opts.eps),
                             parse_floats(opts.big_eps), opts.bisect, opts.rtol,
-                            opts.validate)
+                            opts.validate, wall)
             elseif part == "transient"
                 part_transient(io, names, parse_ints(opts.transient_ns), opts.tmax,
-                               opts.coarse_dt, opts.validate)
+                               opts.coarse_dt, opts.validate, wall)
             elseif part == "resonance"
                 part_resonance(io, names, opts.scan_lo, opts.scan_hi, opts.bubble_lo,
-                               opts.bubble_hi, opts.detune_lo, opts.detune_hi)
+                               opts.bubble_hi, opts.detune_lo, opts.detune_hi, wall,
+                               opts.scan_coarse_hi, opts.scan_coarse_step)
             elseif part == "norm"
-                part_norm(io, names, parse_ints(opts.norm_ns), opts.wall, opts.ascent)
+                part_norm(io, names, parse_ints(opts.norm_ns), opts.corner, opts.ascent)
             else
                 error("unknown part $part")
             end

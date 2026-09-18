@@ -141,6 +141,15 @@ the wall order: `:cascade4` by one, and C6 `:brady_livescu` to about six.
 The neutral rows cost about 1.35 times the cascade's wall error and 3.4
 times its interior error on one derivative, at unchanged orders.
 
+The closure rows exist because a wall on a node has no parity. A
+symmetry plane placed half a cell outside the end node has one:
+[`SymmetryPlaneBC`](@ref) continues the line across the plane with the
+slip wall's parities on the half-offset grid the coordinate folds use,
+and every operator runs its interior stencil to the end over the
+mirrored halo. There is no closure row and no injected value, so the
+plane is discretized at the interior order, and the discrete step is the
+periodic step on the doubled line restricted to data of that parity.
+
 C6 `:brady_livescu` under the default filter rows is the supported
 high-order wall configuration, within measured limits: a wall whose
 initial state is resolved (no singular start on a closure row), the CFL

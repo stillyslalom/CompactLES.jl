@@ -1142,6 +1142,205 @@ end
     @test ferr(solver, df, (r, θ, φ) -> 0.0) < 1e-8
 end
 
+@testset "symmetry plane: construction, spacing and the self-paired fold" begin
+    # The plane sits half a cell outside the end it is applied to, so each
+    # folded end takes half a cell off the line: one fold gives L/(N − ½) and
+    # two give L/N, with node 1 at h/2 wherever the low end is folded.
+    sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
+    wall = SlipWallBC()
+    cart(bcs1) = Solver(n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                        bcs=(bcs1, per3[2], per3[3]),
+                        art=ArtParams(enabled=false))
+    both = cart(sym)
+    @test both.h[1] ≈ 1 / 16
+    @test both.coord_shift[1] ≈ both.h[1] / 2
+    @test xcoord(both, 1, 1) ≈ 1 / 32
+    @test xcoord(both, 1, 16) ≈ 31 / 32
+    lo = cart((SymmetryPlaneBC(), wall))
+    @test lo.h[1] ≈ 1 / 15.5
+    @test xcoord(lo, 1, 1) ≈ lo.h[1] / 2
+    @test xcoord(lo, 1, 16) ≈ 1.0
+    hi = cart((wall, SymmetryPlaneBC()))
+    @test hi.h[1] ≈ 1 / 15.5
+    @test hi.coord_shift[1] == 0.0
+    @test xcoord(hi, 1, 1) ≈ 0.0
+    @test xcoord(hi, 1, 16) ≈ 1 - hi.h[1] / 2
+    @test (hi.folds[1].lo, hi.folds[1].hi) == (false, true)
+    # Self-paired: each line continues into itself, so there is no pairing
+    # dimension and no partner block to buffer.
+    @test both.folds[1].pair === nothing
+    @test both.folds[1].sigvel == (-1, 1, 1)
+    @test isempty(both.pairbuf) && isempty(both.pairout)
+    # Only the normal velocity is odd, so the mass, energy and tangential
+    # momentum fluxes are odd and the normal momentum flux is even.
+    eq = both.equations
+    @test both.folds[1].sigflux[1] == -1
+    @test both.folds[1].sigflux[eq.i_energy] == -1
+    @test both.folds[1].sigflux[eq.i_mom[1]] == 1
+    @test both.folds[1].sigflux[eq.i_mom[2]] == -1
+    # The sensor operators' node-centred wall rows must not be planned here:
+    # the fold takes its own half-offset mirror inside the same routines.
+    @test sensor_mirror(SymmetryPlaneBC()) === false
+    @test CL.planned_sensor_mirror(SymmetryPlaneBC()) === false
+    @test isperiodic(SymmetryPlaneBC()) === false
+    @test CL._is_fold_bc(SymmetryPlaneBC())
+    # A plane on dimension 3 beside a cylindrical axis on dimension 1: the
+    # pairing is per dimension, and the axis' resolved-θ fold still buffers.
+    cyl = Solver(n_global=(16, 16, 12), L_domain=(1.0, 2π, 0.5),
+                 metric=CylindricalMetric(), art=ArtParams(enabled=false),
+                 bcs=((AxisBC(), SlipWallBC()), per3[2], sym))
+    @test cyl.h[3] ≈ 0.5 / 12
+    @test cyl.coord_shift[3] ≈ cyl.h[3] / 2
+    @test cyl.folds[3].pair === nothing
+    @test cyl.folds[3].sigvel == (1, 1, -1)
+    @test cyl.folds[1] !== nothing && cyl.folds[1].pair !== nothing
+    @test !isempty(cyl.pairbuf)
+end
+
+@testset "symmetry plane: a uniform state is preserved" begin
+    # No node sits on a plane and nothing is enforced there, so a uniform
+    # state has to come out of the folded operators unchanged on its own: the
+    # mirror halo is the interior value and every flux divergence cancels.
+    sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.5, 1.3)])
+    solver = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), eos=eos,
+                    bcs=(sym, sym, sym), art=ArtParams(enabled=true))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) ->
+        Prim(Y=(0.3, 0.7), rho=1.2, p=0.8, u=(0.0, 0.0, 0.0)))
+    dQ = zero(Q)
+    apply_bcs!(solver, Q)
+    compute_rhs!(solver, Q, dQ)
+    @test maximum(abs, dQ) < 1e-14
+    Q0 = copy(Q)
+    run!(solver, Q; tfinal=1e9, nmax=5)
+    spread, drift = 0.0, 0.0
+    for c in 1:solver.equations.n_cons
+        v0 = Q0[gidx(solver, 1, 1, 1), c]
+        for k in 1:12, j in 1:12, i in 1:12
+            v = Q[gidx(solver, i, j, k), c]
+            spread = max(spread, abs(v - Q[gidx(solver, 1, 1, 1), c]))
+            drift = max(drift, abs(v - v0))
+        end
+    end
+    @test spread < 1e-12
+    @test drift < 1e-12
+end
+
+@testset "symmetry plane: the mirror of the periodic run on the doubled line" begin
+    # Data carrying the slip-wall parity about both ends (rho, p and the mass
+    # fractions even, the normal velocity odd, the tangential velocity even)
+    # make the run between symmetry planes on [0, 1] at N nodes the
+    # restriction of the periodic run on [0, 2) at 2N nodes, node for node.
+    # The two agree to round-off because the folded operator is the periodic
+    # operator restricted by parity: no closure row enters either, so there
+    # is no closure defect to separate them. The node-centred wall is the
+    # contrast — its defect is what test/convergence.jl measures.
+    sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
+    two = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.5, 1.3)])
+    a, b, N, nsteps = 0.05, 0.05, 32, 30
+    function mirror_error(; deriv=lele_d1_6(), art=ArtParams(enabled=true),
+                          mu=0.0, dim=1, eos=nothing, n=N)
+        h = 1 / n
+        nt = 12                                    # transverse extent, 2-D form
+        tang = dim == 2
+        ic = (x, y, z) -> begin
+            s = dim == 1 ? x : y
+            rho = 1 + a * cos(pi * s)
+            un = b * sin(pi * s)
+            ut = tang ? 0.07 * cos(pi * s) * sin(2pi * x) : 0.0
+            u = dim == 1 ? (un, ut, 0.0) : (ut, un, 0.0)
+            eos === nothing ? Prim(rho=rho, u=u, p=rho^1.4) :
+                Prim(Y=(0.5 + 0.2cos(pi * s), 0.5 - 0.2cos(pi * s)),
+                     rho=rho, u=u, p=rho^1.4)
+        end
+        common = (; deriv=deriv, art=art, filter_interval=1, filter_cfl=0.0,
+                  cfl=0.4, transport=Transport(mu0=mu, Pr=0.7))
+        eos === nothing || (common = merge(common, (; eos=eos)))
+        function advance(ng, L, bcs, origin)
+            s = Solver(; n_global=ng, L_domain=L, bcs=bcs, origin=origin,
+                       common...)
+            Q = allocate_state(s)
+            initialize!(s, Q, ic)
+            run!(s, Q; tfinal=1e9, nmax=nsteps)
+            (s, Q)
+        end
+        sf, Qf = dim == 1 ?
+            advance((n, 1, 1), (1.0, 1.0, 1.0), (sym, per3[2], per3[3]),
+                    (0.0, 0.0, 0.0)) :
+            advance((nt, n, 1), (1.0, 1.0, 1.0), (per3[1], sym, per3[3]),
+                    (0.0, 0.0, 0.0))
+        # The doubled periodic line samples the same nodes: its origin is
+        # shifted half a cell so that node j sits at (j − ½)h, as the folded
+        # grid's node i does.
+        sp, Qp = dim == 1 ?
+            advance((2n, 1, 1), (2.0, 1.0, 1.0), per3, (h / 2, 0.0, 0.0)) :
+            advance((nt, 2n, 1), (1.0, 2.0, 1.0), per3, (0.0, h / 2, 0.0))
+        err, scale = 0.0, 0.0
+        ni, nj = dim == 1 ? (n, 1) : (nt, n)
+        for c in 1:sf.equations.n_cons, j in 1:nj, i in 1:ni
+            vf = Qf[gidx(sf, i, j, 1), c]
+            vp = Qp[gidx(sp, i, j, 1), c]
+            err = max(err, abs(vf - vp))
+            scale = max(scale, abs(vp))
+        end
+        return err / scale
+    end
+    # Measured on the workstation: 2.4e-15 to 3.6e-15 over the twelve
+    # one-dimensional combinations below, 3.1e-15 viscous, and 4.3e-15 to
+    # 5.5e-15 for the two-dimensional plane on dimension 2.
+    for deriv in (lele_d1_6(), lele_d1_8(), lele_d1_10()),
+        detector in (:delta4, :d8), smoother in (:gaussian, :compact)
+        art = ArtParams(enabled=true, detector=detector, smoother=smoother)
+        @test mirror_error(deriv=deriv, art=art) < 2e-14
+    end
+    # Two species, the mass fractions even about both planes.
+    @test mirror_error(eos=two) < 2e-14
+    # Physical viscosity: the tangential shear traction and the normal heat
+    # flux at the plane come from the fold's parities and nothing else.
+    @test mirror_error(mu=0.005) < 2e-14
+    # The plane on dimension 2, with the transverse direction periodic and a
+    # tangential velocity, inviscid and viscous.
+    @test mirror_error(dim=2, n=24) < 2e-14
+    @test mirror_error(dim=2, n=24, mu=0.005) < 2e-14
+end
+
+@testset "symmetry plane: setup rejections" begin
+    sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
+    wall = (SlipWallBC(), SlipWallBC())
+    off = ArtParams(enabled=false)
+    cart(; kw...) = Solver(n_global=(48, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                           bcs=(sym, per3[2], per3[3]), art=off; kw...)
+    @test cart() isa Solver
+    # A stretched dimension has no mirror: the fold reflects the computational
+    # coordinate and the map does not commute with it.
+    @test_throws ErrorException cart(
+        stretch=(sine_cluster(0.0, 1.0, 0.5, 0.4), nothing, nothing))
+    # The scale factors of the plane's own dimension must not depend on its
+    # coordinate, which excludes the cylindrical radius and every spherical
+    # dimension (validate_bc). The same rule makes a shared dimension with a
+    # coordinate fold unreachable, since every dimension carrying one fails it.
+    @test_throws ErrorException Solver(n_global=(16, 16, 12),
+        L_domain=(1.0, π, 2π), metric=SphericalMetric(), art=off,
+        bcs=(sym, (PoleBC(), PoleBC()), per3[3]))
+    @test_throws ErrorException Solver(n_global=(16, 16, 12),
+        L_domain=(1.0, 2π, 0.5), metric=CylindricalMetric(), art=off,
+        origin=(0.2, 0.0, 0.0), bcs=(sym, per3[2], per3[3]))
+    @test_throws ErrorException Solver(n_global=(16, 16, 12),
+        L_domain=(1.0, 2π, 0.5), metric=CylindricalMetric(), art=off,
+        bcs=((AxisBC(), SymmetryPlaneBC()), per3[2], per3[3]))
+    # Setup detects the plane by type, so the wrapper cannot carry it.
+    @test_throws ArgumentError SwitchableBC(SymmetryPlaneBC(), SlipWallBC())
+    @test_throws ArgumentError SwitchableBC(SlipWallBC(), SymmetryPlaneBC())
+    # Patched and refined runs take SlipWallBC at that face instead.
+    @test_throws ErrorException cart(patch_grid=(2, 1, 1))
+    @test_throws ErrorException Solver(n_global=(48, 1, 1),
+        L_domain=(2π, 1.0, 1.0), bcs=(sym, per3[2], per3[3]), art=off,
+        filter_interval=0, refine=BlockRegion((20, 0, 0), (8, 1, 1)))
+end
+
 @testset "rigid rotation in cylindrical: zero strain" begin
     # u_θ = Ω r ⇒ S_ij = 0 identically; probes the curvature corrections.
     solver = Solver(n_global=(32, 16, 12), L_domain=(1.0, 2π, 0.5),

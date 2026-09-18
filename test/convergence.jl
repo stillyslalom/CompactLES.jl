@@ -19,7 +19,10 @@
 #      filter's order.
 #   3. Axis/origin/pole order — the sharpest scalar diagnostic of the fold
 #      signs: a sign error usually gives O(1) error at the first node, so the
-#      slope collapses to ~0 rather than degrading gracefully.
+#      slope collapses to ~0 rather than degrading gracefully. The symmetry
+#      plane is the same fold on a Cartesian dimension, and its rows read the
+#      interior order on both parities because no closure row is planned at a
+#      folded end.
 #   4. Closure truncation on a polynomial — one derivative of x^(q+1), q the
 #      closure rows' exactness degree, against the actual spacing: the rows'
 #      own pointwise order, 3/4/5/7 for :cascade3/:cascade4/C6 and C8
@@ -43,6 +46,8 @@
 #   C6 wall closures :brady_livescu 5.88 | C8 wall closures 3.18 |
 #   C8 wall closures :brady_livescu 7.91 | C10 wall closures 3.18
 #   filter pass :cascade 1.88 | filter pass :onesided 8.07
+#   symmetry planes C6 even 6.00 / odd 6.00 | C8 even 8.05 / odd 7.95 |
+#   C10 even 10.23 / odd 10.17 | filter pass between planes 7.88
 #   cyl axis odd 3.76 | cyl axis even 2.99 | resolved-θ axis 3.76
 #   spherical origin 2.97
 #   polynomial rows: C6 :neutral3 3.00 | :cascade3 3.00 | :cascade4 4.00 |
@@ -52,17 +57,21 @@
 #   :cascade3 3.93 | cascade filter 1.94 | onesided filter 3.90 |
 #   C6 :brady_livescu 5.73 | viscous no-slip C6 4.00 | viscous slip C6 4.00 |
 #   shear mode 4.67
+#   symmetry-plane evolution (window max norm, t = 0.4, against the fine
+#   folded mirror): inviscid C6 4.14 | C6 onesided filter 4.45 | C8 3.97 |
+#   C10 3.96 | viscous slip with shear C6 6.04
 #   interface evolution (entropy wave, t = 0.5): two patches C6 (k = 1) 3.31 |
 #   two levels C6 (k = 3) 3.62 | two levels :brady_livescu 6.01 | three levels
 #   subcycled 3.72 | two levels, cascade filter 4.12
 #
 # The default of all three derivative presets is `:neutral3`; the `:cascade3`
-# rows are measured beside it wherever the two closures differ. The fold
-# studies close their outer end with a wall and take the default rows; the
+# rows are measured beside it wherever the two closures differ. The
+# coordinate-singularity studies close their outer end with a wall and take
+# the default rows; a symmetry plane plans no closure row at all; the
 # interface studies keep the cascade rows, because the flux divergence at an
 # interface end selects them (`interface_divergence_closures`).
 #
-# Those thirty-six numbers are also passed to each study as `recorded` and
+# Those forty-eight numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -70,13 +79,15 @@
 # norm one order more than a boundary closure delivers pointwise, so the two
 # together say what a closure set buys in a solution rather than at the wall.
 #
-# These are GLOBAL max norms, and every fold study closes its outer end with a
-# SlipWallBC. The orders near 3 therefore belong to the WALL, not to the fold:
-# the global max is attained at the last interior cell in all four fold studies,
-# and splitting the norm by region shows the fold's own error converging at
-# 6.05-7.01 and sitting three to five orders of magnitude below the interior.
-# `bench/foldorder.jl` does that split and carries the numbers; the write-up is
-# in reference/CALIBRATION_APPENDIX.md under "The fold closure is not third order".
+# These are GLOBAL max norms, and every coordinate-singularity study closes
+# its outer end with a SlipWallBC. The orders near 3 therefore belong to the
+# WALL, not to the fold: the global max is attained at the last interior cell
+# in all four of them, and splitting the norm by region shows the fold's own
+# error converging at 6.05-7.01 and sitting three to five orders of magnitude
+# below the interior. `bench/foldorder.jl` does that split and carries the
+# numbers; the write-up is in reference/CALIBRATION_APPENDIX.md under "The fold
+# closure is not third order". The symmetry-plane studies close neither end
+# with a wall, which is why they report the fold's own order directly.
 #
 # So a fold study here guards two things at once, and only the weaker of them is
 # about the fold. The slope confirms the outer wall's closure cascade, a known
@@ -306,6 +317,50 @@ study("C8 filter pass, :onesided", (12, 16, 24, 32),
       (fn=(x, y, z) -> exp(sin(3x)), parity=1);
       expect=8.0, tol=1.5, recorded=8.07, op=:filter)
 
+# A symmetry plane sits half a cell outside the end node, so the folded
+# operator runs the interior stencil to the edge over the mirror halo and no
+# closure row exists to lose order at: these rows read the interior order,
+# unlike the wall rows above. The fields carry the plane's parity about
+# x = 0 and x = 1, which is what `ref.parity` tells the fold. The
+# resolutions fall with the order because the error reaches round-off
+# quickly on a field this smooth.
+const SYM = (SymmetryPlaneBC(), SymmetryPlaneBC())
+sym_solver(N, deriv) =
+    Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+           bcs=(SYM, per3[2], per3[3]), deriv=deriv,
+           art=ArtParams(enabled=false))
+sym_even(x, y, z) = exp(cospi(x))
+sym_deven(x, y, z) = -pi * sinpi(x) * exp(cospi(x))
+sym_odd(x, y, z) = sinpi(x) * exp(cospi(x))
+sym_dodd(x, y, z) = pi * exp(cospi(x)) * (cospi(x) - sinpi(x)^2)
+
+println("\n=== symmetry planes (folded operators, no closure row) ===")
+study("C6 symmetry planes, even field", (24, 48, 96),
+      N -> sym_solver(N, lele_d1_6()), sym_even, (fn=sym_deven, parity=1);
+      expect=6.0, tol=1.0, recorded=6.00)
+study("C6 symmetry planes, odd field", (24, 48, 96),
+      N -> sym_solver(N, lele_d1_6()), sym_odd, (fn=sym_dodd, parity=-1);
+      expect=6.0, tol=1.0, recorded=6.00)
+study("C8 symmetry planes, even field", (16, 24, 32),
+      N -> sym_solver(N, lele_d1_8()), sym_even, (fn=sym_deven, parity=1);
+      expect=8.0, tol=1.2, recorded=8.05)
+study("C8 symmetry planes, odd field", (16, 24, 32),
+      N -> sym_solver(N, lele_d1_8()), sym_odd, (fn=sym_dodd, parity=-1);
+      expect=8.0, tol=1.2, recorded=7.95)
+study("C10 symmetry planes, even field", (12, 16, 24),
+      N -> sym_solver(N, lele_d1_10()), sym_even, (fn=sym_deven, parity=1);
+      expect=10.0, tol=2.0, recorded=10.23)
+study("C10 symmetry planes, odd field", (12, 16, 24),
+      N -> sym_solver(N, lele_d1_10()), sym_odd, (fn=sym_dodd, parity=-1);
+      expect=10.0, tol=2.0, recorded=10.17)
+
+# One filter pass between the planes, as the closed-line pass above. The
+# eighth-order interior rows run to the edge here, so the pass keeps its own
+# order instead of the cap a wall closure puts on it.
+study("C8 filter pass, symmetry planes", (16, 24, 32, 48),
+      N -> sym_solver(N, lele_d1_6()), sym_even, (fn=sym_even, parity=1);
+      expect=8.0, tol=1.5, recorded=7.88, op=:filter)
+
 println("\n=== coordinate-singularity folds ===")
 study("cylindrical axis, odd field (u_r-like)", (32, 64, 128),
       N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
@@ -431,6 +486,22 @@ function mirror_reference(solver; viscous=false, opts...)
     NodeReference(mirror, states)
 end
 
+# A run between symmetry planes is the periodic run on the doubled line
+# restricted by parity, so its mirror at the same spacing reproduces it to
+# round-off (test/runtests.jl measures that) and would measure nothing here.
+# The reference is a five-times-finer folded mirror instead: an odd refinement
+# so that every node of the study grid is a node of the reference, and fine
+# enough that the reference carries 1/625 of the study's step error. What the
+# wall window reads against it is then the run's own total error, there being
+# no closure defect to separate out.
+const FOLD_REFINE = 5
+function folded_reference(solver; viscous=false, opts...)
+    mirror, states = mirror_case(FOLD_REFINE * solver.n_global[1]; folded=true,
+                                 viscous=viscous, cfl=EVOLUTION_CFL, opts...)
+    run!(mirror, states; tfinal=0.4)
+    NodeReference(mirror, states)
+end
+
 println("\n=== closure truncation on a polynomial (actual spacing) ===")
 truncation_study("C6 :neutral3 rows, d/dx x^4", (17, 33, 65, 129), lele_d1_6(), 4;
                  expect=3.0, tol=0.5, recorded=3.00)
@@ -486,6 +557,45 @@ evolution_study("shear mode, no-slip wall, C6, unfiltered", WALL_NS,
                 s -> analytic_reference(s.equations, shear_profile(0.1, 0.005; t=s.t));
                 primary=:wall, comp=3, tfinal=0.4, expect=4.7, tol=0.8,
                 recorded=4.67)
+
+# The same wave between symmetry planes, against the fine folded mirror. The
+# wall window has no closure row and reads what the interior reads: on the
+# inviscid rows at cfl = 0.25 that is the time integrator's own order, which
+# dominates the C6, C8 and C10 spatial errors alike and is why the three land
+# on one number and at one error level. Quartering the step leaves the C6
+# error at 1.5e-11 / 2.8e-13 / 2.1e-14 over the three grids, a sixth-order
+# sequence, so the spatial part is the interior order and nothing at the plane
+# caps it; the viscous row's smaller step shows the same thing directly.
+println("\n=== smooth evolution: symmetry plane, wall window, t = 0.4 ===")
+evolution_study("inviscid planes, C6, unfiltered", WALL_NS,
+                N -> wall_case(N; folded=true, cfl=EVOLUTION_CFL),
+                folded_reference;
+                primary=:wall, tfinal=0.4, expect=4.1, tol=0.8, recorded=4.14)
+evolution_study("inviscid planes, C6, onesided filter", WALL_NS,
+                N -> wall_case(N; folded=true, cfl=EVOLUTION_CFL,
+                               filter_interval=1),
+                s -> folded_reference(s; filter_interval=1);
+                primary=:wall, tfinal=0.4, expect=4.4, tol=0.8, recorded=4.45)
+evolution_study("inviscid planes, C8, unfiltered", WALL_NS,
+                N -> wall_case(N; folded=true, cfl=EVOLUTION_CFL,
+                               deriv=lele_d1_8()),
+                s -> folded_reference(s; deriv=lele_d1_8());
+                primary=:wall, tfinal=0.4, expect=4.0, tol=0.8, recorded=3.97)
+evolution_study("inviscid planes, C10, unfiltered", WALL_NS,
+                N -> wall_case(N; folded=true, cfl=EVOLUTION_CFL,
+                               deriv=lele_d1_10()),
+                s -> folded_reference(s; deriv=lele_d1_10());
+                primary=:wall, tfinal=0.4, expect=4.0, tol=0.8, recorded=3.96)
+# The viscous row runs one ladder coarser. Its step is diffusion-limited, so
+# the step error is far below the spatial one and the row reads the interior
+# order instead of the integrator's; on WALL_NS that puts the finest grid's
+# difference at round-off, and the reference, whose step falls with h², costs
+# the cube of its refinement there.
+evolution_study("viscous slip planes, C6, unfiltered", (25, 49, 97),
+                N -> wall_case(N; folded=true, cfl=EVOLUTION_CFL, viscous=true,
+                               slip=true, c=0.05),
+                s -> folded_reference(s; viscous=true, c=0.05);
+                primary=:wall, tfinal=0.4, expect=6.0, tol=1.0, recorded=6.04)
 
 println("\n=== smooth evolution: interface window, entropy wave, t = 0.5 ===")
 entropy_ref(s) = analytic_reference(s.equations, entropy_profile(3, 0.37; t=s.t))

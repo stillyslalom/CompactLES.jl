@@ -791,6 +791,16 @@ diagonal, per solution parity, since derivatives flip field parity and filters
 preserve it. `operators.jl` implements the diagonal fold (`b[1] += σg·α`); the
 scheme is planned in both parities and the RHS reads the mirror-filled halo.
 
+**The symmetry plane** (`SymmetryPlaneBC`) is the same self-paired fold on
+a dimension whose scale factors do not depend on the folded coordinate,
+with `sigvel` −1 on the normal component and +1 elsewhere; `flux_parities`
+then gives the slip wall's flux contract without a `correct_flux!` method,
+`enforce!` does nothing, and `sensor_mirror` stays false so the sensor
+operators take the fold branch. The spacing rule is
+`h = L/(N − 1 + ½·n_folded)`, so a plane at the high end alone is
+admitted. Patched, refined and stretched runs reject it, as they do every
+fold. Only a paired fold allocates `pairbuf`/`pairout`.
+
 **The resolved cases**, resolved-θ cylindrical axis, spherical origin and
 spherical poles, all reduce to one structure: a fold whose partner is
 the *antipodal* line, not the line itself:

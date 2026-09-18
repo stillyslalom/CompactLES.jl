@@ -50,6 +50,7 @@ record of that setting.
 28. [The aligned Noh transverse mode](#the-aligned-noh-transverse-mode)
 29. [The neutral rows' certificate and the C8 and C10 sets](#the-neutral-rows-certificate-and-the-c8-and-c10-sets)
 30. [Derivative operator cost](#derivative-operator-cost)
+31. [The face-centred symmetry plane](#the-face-centred-symmetry-plane)
 
 ## The battery
 
@@ -7326,3 +7327,282 @@ MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 julia --project=. -t 1  bench/derivcost.jl 64 20 cases=periodic
 julia --project=. -t 16 bench/derivcost.jl 64 30
 ```
+
+## The face-centred symmetry plane
+
+`SymmetryPlaneBC`, September 2026, roadmap N6l. An inviscid slip wall is
+a symmetry plane: density, pressure, energy, species and the tangential
+velocity are even about it and the normal velocity odd. The closure rows
+of the preceding sections exist because a wall on a node has no parity.
+This section measures the alternative: the plane placed half a cell
+outside the end node, on the half-offset grid the coordinate folds use,
+with every operator running its interior stencil over the mirrored halo
+and no closure row. The instruments are the mirror-equivalence testsets
+of `test/runtests.jl`, the symmetry-plane rows of `test/convergence.jl`,
+`bench/wallclosure.jl parts=smooth wall=folded`, `bench/sensorwall.jl
+wall=folded`, `bench/foldorder.jl`, `bench/closurequalify.jl
+jwalls=symmetry`, `bench/closurecertify.jl wall=folded`, the
+`symmetry plane` phase of `test/mpi_tests.jl`, the folded rows of
+`test/validation.jl` and two device runs in `test/device_tests.jl`.
+
+```text
+julia --project=. -t 16 test/runtests.jl
+julia --project=. -t 16 test/convergence.jl
+julia --project=. -t 1 bench/wallclosure.jl parts=smooth wall=folded
+julia --project=. -t 1 bench/sensorwall.jl wall=folded
+julia --project=. -t 1 bench/foldorder.jl
+julia --project=. -t 1 bench/closurequalify.jl parts=jacobian schemes=neutral3 jns=51,101 jwalls=symmetry,slip
+julia --project=. -t 16 bench/closurecertify.jl wall=folded schemes=c6,c8,c10 parts=spectrum,pseudo,transient
+julia --project=. -t 16 bench/closurecertify.jl wall=folded schemes=c6,c8,c10 parts=resonance scan_lo=12 scan_hi=600 scan_coarse_hi=1200
+mpiexec -n 4 julia --project=. -t 1 test/mpi_tests.jl "phases=symmetry plane"
+julia --project=. -t 16 test/validation.jl
+```
+
+### The construction
+
+The plane is the self-paired fold of the axisymmetric axis with the
+slip wall's parities and no closure row, on any dimension whose scale
+factors do not depend on the folded coordinate; `DESIGN.md` ("Coordinate-
+singularity folds") has the mechanism and the setup rules.
+
+### Mirror equivalence
+
+The claim is an identity: the folded operator is the periodic operator
+on the doubled line restricted by parity, so a run between symmetry
+planes on [0, 1] at N nodes and the periodic run on [0, 2) at 2N nodes
+with origin h/2 differ by round-off, for every operator in the step. The
+`symmetry plane: the mirror of the periodic run on the doubled line`
+testset measures it at N = 32 over thirty to forty steps with the compact
+filter every step at full strength and the artificial properties on,
+relative maximum norm over every conserved component on the coincident
+nodes:
+
+```text
+                  :delta4/:gaussian  :delta4/:compact  :d8/:gaussian  :d8/:compact
+lele_d1_6              2.52e-15          3.36e-15        3.36e-15       3.53e-15
+lele_d1_8              2.35e-15          3.02e-15        3.19e-15       3.53e-15
+lele_d1_10             3.19e-15          3.36e-15        3.02e-15       3.53e-15
+viscous, mu0 = 0.005   3.15e-15
+2-D, plane on dim 2, tangential velocity   5.54e-15    viscous 4.33e-15
+```
+
+Two species with mass fractions even about both planes pass the same
+guard, set at 2e-14. A uniform multispecies state between six planes
+gives a `compute_rhs!` output of exactly zero, and five steps leave a
+spread and a drift of 1.9e-14. The node-centred wall's residual against
+the same mirror is the closure defect the earlier sections measured,
+5.8e-7 at N = 49 under C6 (below).
+
+### One derivative and one filter pass
+
+`test/convergence.jl`, global maximum norm of one derivative between two
+planes on [0, 1], the field even (exp(cos πx)) or odd (sin(πx)
+exp(cos πx)) about both planes, `ref.parity` the field's:
+
+```text
+                                 Ns            errors                              order
+C6 symmetry planes, even       24/48/96    1.903e-6  2.980e-8  4.656e-10          6.00
+C6 symmetry planes, odd        24/48/96    7.732e-6  1.211e-7  1.893e-9           6.00
+C8 symmetry planes, even       16/24/32    1.562e-6  5.974e-8  5.914e-9           8.05
+C8 symmetry planes, odd        16/24/32    6.724e-6  2.686e-7  2.711e-8           7.95
+C10 symmetry planes, even      12/16/24    7.977e-7  4.414e-8  6.667e-10         10.23
+C10 symmetry planes, odd       12/16/24    3.919e-6  2.066e-7  3.400e-9          10.17
+C8 filter pass, planes         16/24/32/48 4.051e-7  1.711e-8  1.762e-9  7.016e-11  7.88
+```
+
+The resolutions fall with the order because a field this smooth reaches
+round-off quickly. `bench/foldorder.jl` with a plane at the low end and
+a node-centred `SlipWallBC` at the high end splits the norm: the fold
+window converges at 7.01 (even) and 6.05 (odd) with the maximum at the
+last node, where the wall window reads 2.99 and 3.76, and both rows are
+bitwise identical to the cylindrical-axis rows of the same file, the
+sharpest statement that the plane reuses the fold machinery unchanged.
+
+### The smooth wall matrix
+
+`bench/wallclosure.jl parts=smooth wall=folded`, the wall-window maximum
+norm at t = 0.4 against the mirror at the same spacing, the default
+filter every step, cfl 0.25, N = 49 / 97 / 193. The node-centred rows
+are the closure defect; the folded rows are round-off:
+
+```text
+                                        node-centred                          folded
+inviscid slip, C6, art off     5.783e-7  3.984e-8  2.588e-9 (3.86/3.94)   4.4e-15  4.2e-15  7.1e-15
+inviscid slip, C6, art on      5.666e-7  3.939e-8  2.582e-9 (3.85/3.93)   3.7e-15  3.8e-15  1.0e-14
+inviscid slip, C8, art on      5.669e-7  3.936e-8  2.585e-9 (3.85/3.93)   4.7e-15  6.7e-15  7.3e-15
+inviscid slip, C10, art on     5.661e-7  3.930e-8  2.584e-9 (3.85/3.93)   5.1e-15  8.9e-15  5.1e-15
+viscous slip + shear, C6, on   4.165e-7  3.003e-8  2.010e-9 (3.79/3.90)   3.3e-15  3.2e-15  7.3e-15
+viscous slip + shear, C8, on   4.152e-7  3.007e-8  2.016e-9 (3.79/3.90)   4.8e-15  4.4e-15  3.9e-15
+viscous slip + shear, C10, on  4.120e-7  2.998e-8  2.014e-9 (3.78/3.90)   3.6e-15  1.3e-15  2.0e-15
+```
+
+The largest folded entry over the thirty-six rows is 1.5e-14. The
+evolution rows of `test/convergence.jl` therefore take a five-times-finer
+folded mirror as their reference, an odd refinement so every study node
+is a reference node, carrying 1/625 of the study's step error; the wall
+window then reads the run's own total error and equals the interior
+column in every row:
+
+```text
+                                        Ns          errors                        order
+inviscid planes, C6, unfiltered        49/97/193  7.399e-11  4.084e-12  2.522e-13  4.14
+inviscid planes, C6, one-sided filter  49/97/193  7.970e-11  4.092e-12  1.796e-13  4.45
+inviscid planes, C8, unfiltered        49/97/193  5.900e-11  3.838e-12  2.542e-13  3.97
+inviscid planes, C10, unfiltered       49/97/193  5.901e-11  3.844e-12  2.580e-13  3.96
+viscous slip planes, C6, unfiltered    25/49/97   8.751e-10  1.528e-11  2.445e-13  6.04
+```
+
+The 4.1 of the inviscid rows is the time integrator. Halving the step
+at N = 49 takes 7.40e-11 to 1.87e-11 and quartering it to 1.53e-11: a
+fourth-order time error over a fixed spatial floor of 1.5e-11
+(1.5 + 5.9/16 = 1.87). The cfl/4 ladder 1.53e-11 / 2.78e-13 / 2.11e-14
+is sixth order between the first two grids and at round-off on the
+third, which is why C6, C8 and C10 land on one number at one error
+level. The viscous row's step is diffusion-limited and shows the
+spatial order directly.
+
+### The sensor operators
+
+`bench/sensorwall.jl wall=folded`: the `:delta4` and `:d8` detectors on
+an even and an odd field and the `:gaussian` and `:compact` smoothers on
+the even field, at a plane against the periodic mirror, N = 49 / 97 /
+193, both faces. The maximum relative departure over every combination
+and node is 9.1e-15 (`:delta4`, odd field, low face, N = 49), the
+typical entry 1e-16 to 3e-15, and many entries are exactly zero, where
+the node-centred wall rows of section "The sensor operators' wall rows"
+were built to reach 2.8e-16 (smoother) and 2.5e-15 (detector) over the
+nodes they cover.
+
+### The production Jacobian
+
+`bench/closurequalify.jl parts=jacobian jwalls=symmetry,slip`, the
+finite-differenced `step!` about a uniform state, radius and rate per
+unit time at the three differencing steps δ = 3e-6 / 1e-5 / 3e-5:
+
+```text
+ N   wall      filter   radius − 1                    rate
+ 51  symmetry  off      2.5e-10  7.6e-11  1.9e-11     +3.2e-8  +1.0e-8  +2.5e-9
+ 51  symmetry  on       1.3e-10  9.0e-11  5.0e-12     +1.6e-8  +1.2e-8  +6.5e-10
+ 51  slip      on       3.9e-9   1.1e-9   3.2e-10     +5.1e-7  +1.5e-7  +4.2e-8
+101  symmetry  on       1.3e-10  1.7e-10  3.2e-11     +3.4e-8  +4.4e-8  +8.4e-9
+101  slip      on       3.8e-9   9.7e-10  2.1e-10     +9.9e-7  +2.5e-7  +5.6e-8
+```
+
+The plane's radius is one to the finite-difference noise, and its
+filtered rate is six to thirty times below the node-centred slip wall's,
+the one configuration in which the neutral rows show a measurable
+positive rate. The `schemes` option of the script admits C6 only; C8
+and C10 measured through `production_jacobian` directly at δ = 1e-5
+read radius − 1 of 7.6e-11 / 1.0e-11 (C8, N = 51, unfiltered /
+filtered), 1.2e-10 / 1.7e-10 (N = 101), 8.1e-11 / 3.9e-11 and 1.1e-10 /
+1.6e-11 (C10), where their filtered slip-wall counterparts read 2.7e-9
+at both N (rate +3.6e-7).
+
+### The exact linear model
+
+`bench/closuresearch.jl` gains `folded_derivative_matrix` (the interior
+stencil on every row, the taps outside the line folded back with the
+field's sign, the ghost coupling of the result folded onto the diagonal
+with the opposite sign, tridiagonal and pentadiagonal) and
+`folded_acoustic_operator`, L = [0 −D_odd; −D_even 0] on the 2N
+unknowns (p even, u odd) with no endpoint elimination, and
+`bench/closurecertify.jl` a `wall=folded` option (the `norm` part's
+corner width is renamed `corner=`). The folded matrix reproduces the
+package's fold plan on unit vectors to 0.0 (C6, C8) and 7.8e-16 (C10)
+at N = 12 to 51, equals the periodic operator on 2N nodes restricted by
+parity to 1.3e-15, and differentiates cos(πx) and sin(πx) at 6.00
+(C6), 7.97 (C8) and the round-off floor from N = 20 (C10).
+
+The folded L is antisymmetric to round-off: ‖L + Lᵀ‖/‖L‖ is 3e-16 to
+8e-16 and the commutator ‖LᵀL − LLᵀ‖/‖L‖² 6e-16 to 1e-15 at N = 25 to
+801 for all three schemes, where the node-centred operator reads 0.84
+and 0.97. Every unknown has the same cell measure and the mirror holds
+no node, so the restriction argument gives skew-adjointness in the
+Euclidean inner product itself, not similarity to it. The consequences
+follow without a search:
+
+```text
+                    spectral abscissa    Kreiss ratio α_ε/ε      max_t ‖exp(tL)‖, t ≤ 20
+folded, N = 25      +3.2e-15             1.0000                  1
+folded, N = 51                           1.0000–1.0001           1
+folded, N = 101                          1.0000–1.0003           1
+folded, N = 201                          1.0000–1.0012           1
+folded, N = 801     +7.1e-13
+node :neutral3      +3.6e-15 … +6.3e-13  1.25 / 1.97 / 1.26 / 1.93   2.68 / 3.78 / 2.61 / 3.68
+```
+
+The Kreiss ratios hold over ε = 1e-2 to 1e-6 for C6, C8 and C10 alike;
+at ε = 1e-8 both operators rise (folded to 4.8, node to 7.4), which is
+the classification tolerance `rtol · ‖L‖` of about 4e-8 at N = 201
+sitting on top of ε, as section "The neutral rows' certificate" found.
+The folded semigroup is an isometry: the subspace iteration and the
+dense 2-norm agree to 3.8e-13 at every sampled time to t = 20, in the
+Euclidean and in the cell-measure norm. The eigenvector condition
+numbers of 1.1 to 7.1 are the general eigensolver's response to the
+doubly degenerate ± pairs of a normal operator, not non-normality. The
+node-count scan over every N from 12 to 600 and every tenth to 1200
+finds no unstable length: the largest real part is +1.137e-12 (C6),
++1.592e-12 (C8) and +1.577e-12 (C10). Wall times at `-t 16`: spectrum
+19 s, pseudo 118 s, transient 106 s, the scan 999 s for the three
+schemes.
+
+### MPI and device parity
+
+The `symmetry plane` phase builds every case twice, on the process grid
+and whole on `MPI.COMM_SELF`, and compares the rank's interior block
+against the serial rebuild, as the `slip wall flux` phase does, for the
+`compute_rhs!` output and for the state after filtered steps: planes at
+both ends of the split dimension on each axis in Float64 and Float32
+with two species, physical viscosity, `detector = :d8` on one axis and
+`species_flux = :bulk` on another; a corner with planes at both ends of
+two split dimensions; and the Noh layout, a `DirichletBC` at the low end
+and the plane at the high end. At np = 2 and np = 4 all 22 checks pass:
+the Float64 residuals are 7.1e-15 to 2.3e-14 against a tolerance of
+1e-8, the Float32 ones 2.4e-7 to 6.7e-6 against 5e-4, and at np = 4 two
+ranks own neither plane and still reach the folded solve. The device
+plans inherit the fold from the wrapped host plan's factorization, and
+the two device runs of `test/device_tests.jl` (a multispecies line
+between planes with the properties and filter on, a 2-D run with the
+plane on dimension 2 and a tangential velocity) are bitwise against the
+CPU solver.
+
+### The battery
+
+`test/cases.jl` gives `woodward`, `noh_case` (ν = 1) and `noh_aligned` a
+`folded` keyword that places `SymmetryPlaneBC()` where the `SlipWallBC`
+was, the spacing following the grid (h = L/N between two planes,
+L/(N − ½) from a plane to the Dirichlet inflow) and feeding the collapsed
+extents and the blend width, so the two runs differ in the wall placement
+alone. `test/validation.jl` runs each folded case beside its original and
+guards it to the same bounds. The wall deficit is sampled at node 1 on
+both grids, which is the wall itself node-centred and half a cell inside
+the plane folded; `noh_plane_density`, the even continuation
+(9ρ₁ − ρ₂)/8 onto the plane, prints beside it. Serial, `-t 16`:
+
+```text
+Woodward–Colella, N = 800, t = 0.038      L1 ρ        peak ρ   at x
+  slip walls                              3.2153e-2   6.6166   0.7785
+  symmetry planes                         3.0330e-2   6.6140   0.7781
+
+planar Noh, cold start, N = 400, cfl 0.15, :permissive
+                    plateau  deficit node 1  on the plane  shock   pre-shock L1  inadmissible  e_min
+  slip wall         3.9988   23.94%          24.96%        0.2021  3.603e-6      6             −0.0315
+  symmetry plane    3.9990   24.95%          26.08%        0.2024  2.953e-6      7             −0.0047
+
+aligned Noh, N = 100, AR = 4, nx = 12
+                    plateau  deficit node 1  on the plane  shock   pre-shock L1  steps  transverse  inadmissible
+  slip wall         4.0035   32.52%          34.70%        0.2084  2.219e-4      4966   2.052e-7    72
+  symmetry plane    3.9974   27.75%          29.31%        0.2093  3.103e-4      4938   5.135e-10   72
+```
+
+Woodward–Colella improves by 6% in L1 with the contact where it was. The
+planar Noh wall deficit is comparable, one point higher at the plane,
+with the minimum internal energy of the wall layer 6.7 times less
+negative and the pre-shock error smaller, at one more inadmissible cell.
+The aligned wall deficit falls by five points, and the transverse
+round-off of a wall carrying no closure row is four hundred times smaller,
+so that row's uniformity guard is 5e-9 where the node-centred row's is
+5e-7. Every pre-existing row of the battery reads its recorded value to
+four digits, and the file runs in 63 s. The planar deficit says what the
+earlier sections said: the wall heating of Noh is a property of the
+captured shock's start at the wall, not of the closure rows.

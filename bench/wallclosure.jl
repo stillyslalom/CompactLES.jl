@@ -4,6 +4,7 @@
 #
 #   julia --project=. -t 1 bench/wallclosure.jl [parts=all]
 #   julia --project=. -t 1 bench/wallclosure.jl parts=cfl,start
+#   julia --project=. -t 1 bench/wallclosure.jl parts=smooth wall=folded
 #   mpiexec -n 2 julia --project=. -t 1 bench/wallclosure.jl parts=extent
 #
 # Parts:
@@ -17,7 +18,11 @@
 #            default filter every step, against the periodic mirror under
 #            the same settings (the closure defect alone), with the
 #            artificial properties off beside them; then the reflected
-#            pulse of test/cases.jl, smooth and steepening, every closure
+#            pulse of test/cases.jl, smooth and steepening, every closure.
+#            `wall=folded` adds the inviscid and viscous-shear cases at a
+#            face-centred symmetry plane beside the node-centred wall under
+#            C6, C8 and C10; no closure row exists at that face, so those
+#            rows read round-off
 #   channels which artificial-property channel carries the wall defect the
 #            smooth part shows once the properties are on: the inviscid
 #            wall under C6 Brady–Livescu with one constant at a time, the
@@ -55,13 +60,19 @@ include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 include(joinpath(@__DIR__, "..", "test", "smooth_cases.jl"))
 
-const OPTS = CL.script_args(ARGS, (parts="all",))
+const OPTS = CL.script_args(ARGS, (parts="all", wall="node"))
 const PARTS = OPTS.parts == "all" ?
     ["smooth", "channels", "cfl", "start", "floor", "plane", "extent"] :
     split(OPTS.parts, ',')
 const NP = MPI.Comm_size(MPI.COMM_WORLD)
 const RANK = MPI.Comm_rank(MPI.COMM_WORLD)
 NP == 1 || PARTS == ["extent"] || error("only parts=extent runs on more than one rank")
+# `wall=folded` adds the smooth part's face-centred comparison; the default
+# leaves the node-centred tables exactly as they were.
+const WALLS = split(OPTS.wall, ',')
+all(w -> w in ("node", "folded"), WALLS) ||
+    error("wall must be node, folded, or node,folded")
+const FOLDED = "folded" in WALLS
 
 const CAP = 30_000
 const REFDIR = joinpath(@__DIR__, "..", "test", "refs")
@@ -116,12 +127,13 @@ end
 # still the wall solution).
 
 function wall_vs_mirror(N, deriv; viscous, art, slip=!viscous, c=0.0, cfl=CFL,
-                        tfinal=TFINAL)
+                        tfinal=TFINAL, folded=false)
     attempt() do
         opts = (deriv=deriv, art=art, cfl=cfl, FILTERED...)
-        solver, Q = wall_case(N; viscous=viscous, slip=slip, c=c, opts...)
+        solver, Q = wall_case(N; viscous=viscous, slip=slip || folded, c=c,
+                              folded=folded, opts...)
         run!(solver, Q; tfinal=tfinal, nmax=CAP)
-        mirror, Qm = mirror_case(N; viscous=viscous, c=c, opts...)
+        mirror, Qm = mirror_case(N; viscous=viscous, c=c, folded=folded, opts...)
         run!(mirror, Qm; tfinal=tfinal, nmax=CAP)
         regional_errors(solver, Q, NodeReference(mirror, Qm))
     end
@@ -156,6 +168,50 @@ function smooth_table(title, rowfn)
         length(es) >= 2 && printf("  %-24s      orders %s\n", "", orders_string(hs, es))
         flush(stdout)
     end
+end
+
+# The face-centred wall beside the node-centred one, same case and same
+# settings. A symmetry plane plans no closure row: its run is the periodic
+# mirror restricted by parity, so the defect this table measures is round-off
+# whatever the derivative operator is, while the node-centred rows beside it
+# carry the closure's. The two grids have different spacings, 1/(N − 1) and
+# 1/N, and each order column is fitted against its own.
+const FOLD_CLOSURES = (("C6 neutral3", T -> lele_d1_6(T)),
+                       ("C8 neutral3", T -> lele_d1_8(T)),
+                       ("C10 neutral3", T -> lele_d1_10(T)))
+
+function folded_table(title, rowfn)
+    println("\n--- $title ---")
+    println("  closure       art   wall    N     wall       interior   l2" *
+            "         orders (wall)")
+    for (label, mk) in FOLD_CLOSURES, (alab, art) in (("off", ART_OFF), ("on", ART_ON)),
+        (wlab, folded) in (("node", false), ("folded", true))
+        hs = Float64[]; es = Float64[]
+        for N in NS
+            r = rowfn(N, mk(Float64), art, folded)
+            if failed(r)
+                println("  ", pad(label, 14), pad(alab, 6), pad(wlab, 8),
+                        sprintf("%4d  ", N), r)
+                continue
+            end
+            printf("  %-14s%-6s%-8s%4d  %.3e  %.3e  %.3e\n", label, alab, wlab, N,
+                   r.wall, r.interior, r.l2)
+            push!(hs, folded ? 1 / N : 1 / (N - 1)); push!(es, r.wall)
+        end
+        length(es) >= 2 && printf("  %-32s      orders %s\n", "", orders_string(hs, es))
+        flush(stdout)
+    end
+end
+
+function folded_smooth_part()
+    println("\n=== face-centred against node-centred walls, default filter " *
+            "every step, cfl = $CFL, t = $TFINAL ===")
+    folded_table("inviscid slip walls, density",
+                 (N, d, art, folded) -> wall_vs_mirror(N, d; viscous=false, art=art,
+                                                       folded=folded))
+    folded_table("viscous adiabatic slip walls with a tangential shear, density",
+                 (N, d, art, folded) -> wall_vs_mirror(N, d; viscous=true, slip=true,
+                                                       c=0.05, art=art, folded=folded))
 end
 
 function pulse_vs_mirror(::Type{T}, N, deriv; amp, art, tfinal=0.7, cfl=0.4) where {T}
@@ -211,6 +267,7 @@ function smooth_part()
                  (N, d, art) -> shear_vs_mirror(N, d; art=art))
     smooth_table("shear mode, isothermal no-slip walls (Twall = 1), rho v",
                  (N, d, art) -> shear_vs_mirror(N, d; art=art, Twall=1.0))
+    FOLDED && folded_smooth_part()
     println("\n=== the reflected pulse against its mirror (density, t = 0.7, cfl = 0.4) ===")
     println("\n--- amp 0.01, artificial properties on ---")
     pulse_table(Float64, (49, 97, 193, 385); amp=0.01, art=true)

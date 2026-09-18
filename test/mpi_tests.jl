@@ -365,6 +365,120 @@ function test_offrank_folds()
 end
 
 # ---------------------------------------------------------------------------
+# 4a. Face-centred symmetry planes on a SPLIT dimension. The plane's fold is
+#     self-paired, so section 4's butterfly never runs here; the new path is a
+#     fold whose OWN dimension is decomposed. The mirror halo then exists on
+#     the two end ranks alone while every rank runs the folded line solve, the
+#     folded filter and the folded sensor operators, so a rank that skipped
+#     them for holding no plane would hang its peers rather than answer
+#     wrongly. Each case is measured against the same rank's serial rebuild
+#     on COMM_SELF.
+# ---------------------------------------------------------------------------
+function test_symmetry_plane()
+    section("symmetry plane: folded operators on a decomposed dimension")
+    sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
+    # Max |distributed − serial| over this rank's interior block, for a state
+    # or a right-hand side. The serial rebuild spans the global grid, so the
+    # local index reaches it through this rank's offset.
+    function blockdiff(s, a, ref, b)
+        e = 0.0
+        for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
+            loc = Tuple(I) .- s.decomp.n_halo_d
+            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            e = max(e, abs(Float64(a[I, c] - b[J, c])))
+        end
+        e
+    end
+    # The same case twice: over a real process grid on COMM_WORLD, and whole
+    # on COMM_SELF. Every rank builds both, so no rank can skip a distributed
+    # solve its peers are waiting in.
+    function build(T, ng, bcs, ic, detector, channel, comm_here, dims_here)
+        sol = Solver(n_global=ng, L_domain=(one(T), one(T), one(T)), bcs=bcs,
+                     eos=IdealMixture([IdealSpecies{T}("a", T(1), T(1.4)),
+                                       IdealSpecies{T}("b", T(0.7), T(1.3))]),
+                     comm=comm_here, dims=dims_here,
+                     transport=Transport{T}(mu0=T(0.01)),
+                     art=ArtParams{T}(enabled=true, detector=detector,
+                                      species_flux=channel),
+                     deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
+                     filter_interval=1, filter_cfl=zero(T), cfl=T(0.4))
+        Q = allocate_state(sol)
+        initialize!(sol, Q, ic)
+        apply_bcs!(sol, Q)
+        dQ = zero(Q)
+        compute_rhs!(sol, Q, dQ)
+        return sol, Q, dQ
+    end
+    # One right-hand side and then a few filtered steps, each against the
+    # serial rebuild: the divergence alone would not catch a fold that the
+    # update or the state filter reaches differently on a split dimension.
+    function compare(label, T, ng, bcs, ic, dims_here;
+                     detector=:delta4, channel=:fickian, nmax=4)
+        s, Q, dQ = build(T, ng, bcs, ic, detector, channel, comm, dims_here)
+        ref, Qref, dQref = build(T, ng, bcs, ic, detector, channel,
+                                 MPI.COMM_SELF, (1, 1, 1))
+        tol = T === Float32 ? 5e-4 : 1e-8
+        check("folded distributed RHS $label",
+              gmax(blockdiff(s, dQ, ref, dQref)), tol)
+        run!(s, Q; tfinal=1e9, nmax=nmax)
+        run!(ref, Qref; tfinal=1e9, nmax=nmax)
+        check("folded distributed run $label",
+              gmax(blockdiff(s, Q, ref, Qref)), tol)
+        return s
+    end
+
+    # A plane at both ends of the split dimension, one axis at a time. The
+    # data carries the parity the plane imposes: cos(πr) and cos(2πr) are even
+    # about r = 0 and r = 1, sin(πr) is odd about both, and the tangential
+    # velocity rides across the fold as an even component.
+    for T in (Float64, Float32), ax in 1:3
+        ic = (x, y, z) -> begin
+            r = (x, y, z)[ax]
+            a = T(0.4) + T(0.1) * cos(T(2pi) * r)
+            vel = ntuple(d -> d == ax ? T(0.1) * sin(T(pi) * r) :
+                                        T(0.08) * cos(T(pi) * r), 3)
+            Prim(rho=one(T) + T(0.05) * cos(T(pi) * r),
+                 T_ion=T(2) + T(0.1) * cos(T(pi) * r), Y=(a, 1 - a), u=vel)
+        end
+        ng = ntuple(d -> d == ax ? SPLITN : 1, 3)
+        bcs = ntuple(d -> d == ax ? sym : per3[d], 3)
+        s = compare("$T dim=$ax", T, ng, bcs, ic, splitdims(ax);
+                    detector=(ax == 3 ? :d8 : :delta4),
+                    channel=(ax == 2 ? :bulk : :fickian))
+        # At np > 2 the middle ranks of the split hold neither plane and reach
+        # the folded solve only because nothing on the path returns early.
+        owns_neither = all(sd -> CL.wallplane(s.decomp, ax, sd) === nothing, 1:2)
+        check("interior ranks participate $T dim=$ax",
+              abs(gsum(Int(owns_neither)) - max(np - 2, 0)), 0.5)
+    end
+
+    # A corner: planes at both ends of two dimensions with the process grid
+    # split along both, so each fold's own dimension is decomposed and the two
+    # mirror fills meet in the halo corner no message fills.
+    cdims = iseven(np) && np >= 4 ? (2, np ÷ 2, 1) : (np, 1, 1)
+    cic = (x, y, z) -> begin
+        a = 0.4 + 0.1 * cos(2pi * x) * cos(2pi * y)
+        Prim(rho=1.05 + 0.05 * cos(pi * x) * cos(pi * y),
+             T_ion=2.0 + 0.1 * cos(pi * x), Y=(a, 1 - a),
+             u=(0.1 * sin(pi * x) * cos(pi * y),
+                0.08 * cos(pi * x) * sin(pi * y), 0.0))
+    end
+    compare("corner dims=$cdims", Float64, (SPLITN, 40, 1),
+            (sym, sym, per3[3]), cic, cdims; nmax=3)
+
+    # The layout a planar Noh run takes: the plane at the high end alone, a
+    # Dirichlet end at the low end, and the split between the two. The folded
+    # end takes no closure row while the Dirichlet end keeps its own.
+    inflow = Prim(rho=1.0, T_ion=2.0, Y=(0.4, 0.6), u=(-0.2, 0.0, 0.0))
+    nbcs = ((DirichletBC((x, y, z, t) -> inflow), SymmetryPlaneBC()),
+            per3[2], per3[3])
+    nic = (x, y, z) -> Prim(rho=1.0 + 0.05 * x, T_ion=2.0, Y=(0.4, 0.6),
+                            u=(-0.2, 0.0, 0.0))
+    compare("Dirichlet-to-plane dim=1", Float64, (SPLITN, 1, 1), nbcs, nic,
+            splitdims(1))
+end
+
+# ---------------------------------------------------------------------------
 # 4b. Halo-exchange consistency across rank boundaries. exchange_dim_batch! and
 #     exchange_halos! share the per-dimension buffers (the batched path grows
 #     them), so the two must agree slab-for-slab; and because dimensions are
@@ -2392,6 +2506,7 @@ const SUITE = (
     ("AMR transfer pair", test_transfer_pair),
     ("halo consistency", test_halo_consistency),
     ("off-rank folds", test_offrank_folds),
+    ("symmetry plane", test_symmetry_plane),
     ("freestream", test_freestream),
     ("conservation", test_conservation),
     ("sync", test_sync),

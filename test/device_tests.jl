@@ -33,6 +33,15 @@
     @test CL.fold_dplan(sax.folds[1], 1) isa DevicePlan
     @test CL.fold_fplan(sax.folds[1], -1) isa DevicePlan
 
+    # A face-centred symmetry plane converts the same way on the dimension it
+    # sits on, here the high end of dimension 3 alone. It is self-paired, so
+    # its plans are the only device objects the fold carries.
+    ssym = Solver(n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                  bcs=(per, per, (SlipWallBC(), SymmetryPlaneBC())),
+                  backend=bk)
+    @test CL.fold_dplan(ssym.folds[3], 1) isa DevicePlan
+    @test CL.fold_fplan(ssym.folds[3], -1) isa DevicePlan
+
     # A patch layout builds on the backend too: every slab's plans are
     # device plans.
     sp = Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
@@ -149,6 +158,39 @@ end
                    backend=backend, cfl=0.4)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0, u=(0.2, 0.0, 0.0)))
+        return s, Q
+    end
+
+    # Between two face-centred symmetry planes: the self-paired fold's mirror
+    # fill and both parity plans, with two species, the artificial properties
+    # and a full-strength filter pass on every step.
+    @test compare(; nmax=6, tfinal=0.02) do backend
+        eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                            IdealSpecies{Float64}("heavy", 0.2, 1.09)])
+        sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
+        s = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), eos=eos,
+                   bcs=(sym, per, per), backend=backend,
+                   filter_interval=1, filter_cfl=0.0, cfl=0.4)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> begin
+            a = 0.5 + 0.2cos(π * x)
+            Prim(Y=(a, 1 - a), rho=1.0 + 0.05cos(π * x),
+                 p=1.0 + 0.02cos(2π * x), u=(0.1sin(π * x), 0.0, 0.0))
+        end)
+        return s, Q
+    end
+
+    # The plane on dimension 2, where the fold runs on the transposed path,
+    # with a tangential velocity that its even parity carries across.
+    @test compare(; nmax=6, tfinal=0.02) do backend
+        sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
+        s = Solver(n_global=(16, 24, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(per, sym, per), backend=backend,
+                   filter_interval=1, filter_cfl=0.0, cfl=0.4)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) ->
+            Prim(rho=1.0 + 0.05cos(π * y), p=1.0 + 0.02cos(π * y),
+                 u=(0.08cos(π * y) * sin(2π * x), 0.1sin(π * y), 0.0)))
         return s, Q
     end
 end

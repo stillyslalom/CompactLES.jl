@@ -6,7 +6,8 @@ face, not from the desired visual appearance of the solution.
 | Physical boundary | Condition | Required information |
 |:--|:--|:--|
 | Periodic continuation | [`PeriodicBC`](@ref) | matching opposite face |
-| Inviscid or symmetry wall | [`SlipWallBC`](@ref) | wall normal |
+| Inviscid or symmetry wall on a node | [`SlipWallBC`](@ref) | wall normal |
+| Symmetry plane half a cell outside the end node | [`SymmetryPlaneBC`](@ref) | wall normal; Cartesian or cylindrical z; a single unrefined patch |
 | Viscous solid wall | [`NoSlipWallBC`](@ref) | optional wall temperature |
 | Supersonic or fully prescribed state | [`DirichletBC`](@ref) | full state as a function of position and time |
 | Subsonic inflow | [`NSCBCInflowBC`](@ref) | velocity, temperature, composition |
@@ -50,6 +51,19 @@ global discrete conservation identity: compact differentiation, domain
 quadrature, state enforcement at an isothermal wall, and filtering each have
 their own budget contribution. Measure those separately when auditing heat or
 species conservation.
+
+### A symmetry plane without a node
+
+`SymmetryPlaneBC()` places the reflecting plane half a cell outside the first
+or last node instead of on it and continues the solution across it by parity,
+so every operator applies its interior stencil and no closure row exists. The
+slip wall's flux contract follows from the parities, with physical viscosity
+as without it. Use it in place of `SlipWallBC()` wherever the face is a true
+symmetry plane and the run is a single unrefined, unstretched patch. The grid
+moves with it: the end node sits at `h/2` from the plane, with `h = L/(N − ½)`
+for one plane and `L/N` for two, and a wall-normal profile station shifts by
+half a cell. The condition cannot be switched during a run and is available
+on every Cartesian dimension and on cylindrical z.
 
 ## Imposed full-state forcing
 

@@ -67,6 +67,11 @@ decides stability more than any constant in the list.
 Each entry is a symptom, the setting that addresses it, and the measured
 effect. The appendix link carries the sweep.
 
+- **A slip wall limits the accuracy of a smooth run.** Replace
+  `SlipWallBC()` with `SymmetryPlaneBC()` in a single unrefined,
+  unstretched patch; the wall then carries no closure row. The end node
+  moves half a cell inside the plane
+  ([the symmetry plane](CALIBRATION_APPENDIX.md#the-face-centred-symmetry-plane)).
 - **A converging shock loses positivity at the spherical origin early in
   the run.** Lower `cfl` to 0.3 or set `StepControl(retries = 4)`. The
   failure is an excursion of the origin cell landing at t ≈ 0.39 for Noh at
@@ -635,10 +640,21 @@ subcycled or not
 
 **Folds.** The axis and origin folds converge at sixth to seventh order and
 are the most accurate region of the line; every global error in
-`test/convergence.jl` is the outer wall's. The origin needs initial data
+`test/convergence.jl`'s coordinate-singularity studies is the outer
+wall's. The origin needs initial data
 over three cells or more and cannot take the singular Noh start; why it is
 less forgiving than the axis is open
 ([fold order](CALIBRATION_APPENDIX.md#fold-order-and-geometry-limits)).
+
+**The face-centred symmetry plane.** `SymmetryPlaneBC` is the slip wall
+as a fold, half a cell outside the end node, with no closure row and no
+injected value. A run between symmetry planes reproduces the periodic
+run on the doubled line to round-off, the wall reads the interior order,
+and the linearized step at the plane is exactly neutral. In the battery
+it improves Woodward–Colella and the aligned Noh wall and leaves the
+planar Noh deficit within a point. `SlipWallBC` remains the condition
+for patched and refined runs and for a face that switches
+([the symmetry plane](CALIBRATION_APPENDIX.md#the-face-centred-symmetry-plane)).
 
 **Grid convergence.** Lax L1 halves per doubling, interface width halves
 per doubling, and wall heating does not converge away (60% → 56% over 8×

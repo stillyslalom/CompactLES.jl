@@ -105,7 +105,8 @@ domain interval.
 | Condition | Constructor | Use |
 |---|---|---|
 | Periodic | `PeriodicBC()` | Both ends of a direction; required for collapsed dimensions |
-| Slip wall | `SlipWallBC()` | Impermeable adiabatic symmetry plane |
+| Slip wall | `SlipWallBC()` | Impermeable adiabatic symmetry plane on the end node |
+| Symmetry plane | `SymmetryPlaneBC()` | The same plane half a cell outside the end node, folded by parity at the interior order; Cartesian or cylindrical `z`, single unrefined patch |
 | No-slip wall | `NoSlipWallBC()` / `NoSlipWallBC(Twall=...)` | Adiabatic / isothermal viscous wall |
 | Extrapolation | `ExtrapolationBC()` | Zeroth-order boundary extrapolation |
 | Full prescribed state | `DirichletBC((x,y,z,t) -> Prim(u=(1.0,0,0), p=1.0, rho=1.0))` | Forced or supersonic inflow |
@@ -290,7 +291,9 @@ node space. The refinement ratio is three. Useful controls are `level_restrictio
 - Use `refresh_primitives!` after changing/advancing `Q` before reading cached
   `solver.p`, `solver.T_ion`, or related primitive arrays.
 - Fold conditions have geometry and parity restrictions; read the boundary
-  reference before placing `AxisBC`, `OriginBC`, or `PoleBC`.
+  reference before placing `AxisBC`, `OriginBC`, `PoleBC` or
+  `SymmetryPlaneBC`. A fold moves the grid: the first node of a folded end
+  sits half a cell inside the plane.
 - A resolved compact direction needs a sufficiently large rank-local block;
   reducing `dims` can fix a setup error about stencil width.
 - `using HDF5` and a Makie backend are required before their optional I/O/plot

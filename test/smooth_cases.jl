@@ -211,8 +211,8 @@ function _smooth_solver(n_global, L, bcs, prof; deriv, filt, filter_interval,
 end
 
 """
-    wall_case(N; viscous=false, slip=!viscous, a=0.05, b=0.05, c=0.0,
-              mu=0.005, opts...)
+    wall_case(N; viscous=false, slip=!viscous, folded=false, a=0.05, b=0.05,
+              c=0.0, mu=0.005, opts...)
 
 The standing wave on [0, 1] with N nodes between adiabatic walls: slip walls
 under `slip` and no-slip walls otherwise, with viscosity `mu` when `viscous`
@@ -221,17 +221,25 @@ conditions, since u vanishes and rho, p and T are even at each wall. A nonzero
 tangential amplitude `c` adds the component a wall shear traction acts on and
 requires a slip wall; with `viscous = true` that is the case the slip wall's
 flux contract is measured on.
+
+Under `folded` the walls are `SymmetryPlaneBC` instead: the same physical
+domain and the same profile, half a cell offset, so node i sits at (i − ½)/N
+and no node lies on either plane. A symmetry plane carries the slip wall's
+conditions and not the no-slip ones, so `slip` must hold.
 """
-function wall_case(N; viscous=false, slip=!viscous, a=0.05, b=0.05, c=0.0,
-                   mu=0.005, Pr=0.7, opts...)
-    bc = slip ? SlipWallBC() : NoSlipWallBC()
+function wall_case(N; viscous=false, slip=!viscous, folded=false, a=0.05, b=0.05,
+                   c=0.0, mu=0.005, Pr=0.7, opts...)
+    (!folded || slip) || error("a folded wall case is a symmetry plane, which is " *
+                               "the slip wall; pass slip = true")
+    bc = folded ? SymmetryPlaneBC() : slip ? SlipWallBC() : NoSlipWallBC()
     _smooth_solver((N, 1, 1), 1.0, ((bc, bc), per3[2], per3[3]),
                    standing_profile(a, b, c); mu=viscous ? mu : 0.0, Pr=Pr,
                    merge(SMOOTH_DEFAULTS, opts)...)
 end
 
 """
-    mirror_case(N; viscous=false, a=0.05, b=0.05, c=0.0, mu=0.005, opts...)
+    mirror_case(N; viscous=false, folded=false, a=0.05, b=0.05, c=0.0,
+                mu=0.005, opts...)
 
 The periodic image of `wall_case(N)`: [0, 2) on 2(N − 1) nodes at the same
 spacing, so every wall node has a coincident mirror node. Its solution is the
@@ -239,11 +247,20 @@ wall problem's, so the difference between the two runs is the closure defect,
 derivative and filter rows together, and nothing else. `N` may also be a
 fine reference count, nested over the study grids (N − 1 a multiple of each
 study's N − 1), for the total error.
+
+Under `folded` it is the image of `wall_case(N; folded = true)` instead: 2N
+nodes on [0, 2) at h = 1/N with the origin at h/2, so node j sits at
+(j − ½)h and node i of the folded run is node i of this one. A fine folded
+reference needs an odd multiple of the study's N, since an even one puts its
+nodes half a cell off the study's.
 """
-function mirror_case(N; viscous=false, a=0.05, b=0.05, c=0.0, mu=0.005, Pr=0.7,
-                     opts...)
-    _smooth_solver((2(N - 1), 1, 1), 2.0, per3, standing_profile(a, b, c);
-                   mu=viscous ? mu : 0.0, Pr=Pr, merge(SMOOTH_DEFAULTS, opts)...)
+function mirror_case(N; viscous=false, folded=false, a=0.05, b=0.05, c=0.0,
+                     mu=0.005, Pr=0.7, opts...)
+    n = folded ? 2N : 2(N - 1)
+    origin = folded ? (0.5 / N, 0.0, 0.0) : (0.0, 0.0, 0.0)
+    _smooth_solver((n, 1, 1), 2.0, per3, standing_profile(a, b, c);
+                   origin=origin, mu=viscous ? mu : 0.0, Pr=Pr,
+                   merge(SMOOTH_DEFAULTS, opts)...)
 end
 
 """
@@ -309,23 +326,32 @@ function viscous_periodic_case(N; a=0.05, b=0.05, mu=0.005, Pr=0.7,
 end
 
 """
-    closed_derivative_errors(N, deriv, f, df; W=SMOOTH_W) -> (wall, interior)
+    closed_derivative_errors(N, deriv, f, df; W=SMOOTH_W, folded=false,
+                             parity=1) -> (wall, interior, h)
 
 One derivative of `f` on the closed line [0, 1] with N nodes under `deriv`
 between slip walls, against `df`, split into the wall window and the
-interior; with a polynomial `f` of the closure's exactness degree plus one
-this measures the closure rows' own pointwise order against the actual
-spacing 1/(N − 1).
+interior, with the grid's own spacing `h` beside them; with a polynomial `f`
+of the closure's exactness degree plus one this measures the closure rows'
+own pointwise order against the actual spacing 1/(N − 1).
+
+Under `folded` the ends are `SymmetryPlaneBC` instead, no closure row enters,
+and `f` must carry `parity` about x = 0 and x = 1, the sign the folded
+operator continues it with. The spacing is then 1/N and the window is the
+first and last W nodes of a half-offset grid, so a study reads `h` from the
+result rather than assuming either convention.
 """
-function closed_derivative_errors(N, deriv, f, df; W=SMOOTH_W)
+function closed_derivative_errors(N, deriv, f, df; W=SMOOTH_W, folded=false,
+                                  parity=1)
+    bc = folded ? SymmetryPlaneBC() : SlipWallBC()
     solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                    bcs=((bc, bc), per3[2], per3[3]),
                     deriv=deriv, art=ArtParams(enabled=false), filter_interval=0)
     a = CompactLES.field(solver.decomp); da = similar(a)
     for i in 1:N
         a[gidx(solver, i, 1, 1)] = f(xcoord(solver, 1, i))
     end
-    CompactLES.deriv_along!(da, a, solver, 1, 1)
+    CompactLES.deriv_along!(da, a, solver, 1, parity)
     CompactLES._scale_grad!(da, solver, 1)
     wall = interior = 0.0
     for i in 1:N
@@ -336,7 +362,7 @@ function closed_derivative_errors(N, deriv, f, df; W=SMOOTH_W)
             interior = max(interior, e)
         end
     end
-    return (wall=wall, interior=interior)
+    return (wall=wall, interior=interior, h=solver.h[1])
 end
 
 # --- references -----------------------------------------------------------------

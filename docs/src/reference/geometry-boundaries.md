@@ -34,12 +34,13 @@ NSCBCInflowBC
 NSCBCOutflowBC
 ```
 
-## Coordinate folds
+## Folds
 
 ```@docs
 AxisBC
 OriginBC
 PoleBC
+SymmetryPlaneBC
 ```
 
 ## Time-dependent selection

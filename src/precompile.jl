@@ -121,6 +121,18 @@ if MPIPreferences.binary != "system"
             run!(s, Q; tfinal=1e9, nmax=2)
             compute_dt(s, Q)
         end
+        # A folded line between two face-centred symmetry planes, with the
+        # artificial properties and the state filter on.
+        sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
+        s, Q = setup(Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                             bcs=(sym, per, per),
+                             ic=(x, y, z) -> begin
+                                 rho = 1 + 0.05cos(pi * x)
+                                 Prim(u=(0.05sin(pi * x), 0, 0), p=rho^1.4,
+                                      rho=rho)
+                             end),
+                     Numerics(n_global=(16, 1, 1)))
+        run!(s, Q; tfinal=1e9, nmax=2)
         # Two species on the host and device backends, Cartesian and cylindrical.
         eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                             IdealSpecies{Float64}("heavy", 0.2, 1.09)])

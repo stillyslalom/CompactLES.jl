@@ -13,7 +13,10 @@
 # reference/CALIBRATION_APPENDIX.md under "The fold closure is not third order".
 #
 # The first study is the control: both ends are walls, so the fold window is a
-# wall window and must report the wall order. It does, at 3.23.
+# wall window and must report the wall order. It does, at 3.23. The two
+# Cartesian symmetry-plane studies after it put a fold and a node-centred wall
+# on one line, which separates the two treatments of a reflecting boundary
+# without changing anything else.
 #
 # Columns are max norms over disjoint index windows of the radial line:
 #
@@ -100,6 +103,24 @@ study("C6, both ends walls (control)", (24, 48, 96),
                   art=ArtParams(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1))
+
+# A Cartesian symmetry plane at the low end against a node-centred slip wall
+# at the high end: one line carrying both treatments of the same reflecting
+# condition, so the two windows are directly comparable. The plane sits half a
+# cell outside node 1 and plans no closure row, while the wall keeps its rows.
+study("symmetry plane / slip wall, even field", (32, 64, 128),
+      N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
+                  bcs=((SymmetryPlaneBC(), SlipWallBC()), per3[2], per3[3]),
+                  art=ArtParams(enabled=false)),
+      (x, y, z) -> exp(-4x^2),
+      (fn=(x, y, z) -> -8x * exp(-4x^2), parity=1))
+
+study("symmetry plane / slip wall, odd field", (32, 64, 128),
+      N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
+                  bcs=((SymmetryPlaneBC(), SlipWallBC()), per3[2], per3[3]),
+                  art=ArtParams(enabled=false)),
+      (x, y, z) -> x * exp(-4x^2),
+      (fn=(x, y, z) -> (1 - 8x^2) * exp(-4x^2), parity=-1))
 
 study("cylindrical axis, odd field (u_r-like)", (32, 64, 128),
       N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
