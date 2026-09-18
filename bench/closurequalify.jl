@@ -4,6 +4,9 @@
 #   julia --project=. -t 1 bench/closurequalify.jl schemes=candidate parts=jacobian
 #   julia --project=. -t 1 bench/closurequalify.jl schemes=candidate parts=stress
 #   julia --project=. -t 1 bench/closurequalify.jl schemes=de parts=jacobian
+#   julia --project=. -t 1 bench/closurequalify.jl parts=dilatation \
+#       schemes=neutral3,brady_livescu,unfiltered,candidate,de \
+#       beta_sensor=dilatation
 #
 # The candidate is supplied by the include-safe ClosureSearch module. Controls
 # are the current neutral3 default and the published Brady-Livescu T6 rows.
@@ -59,7 +62,9 @@ function smooth_check(name, deriv, opts)
             errors = Float64[]
             for n in ns
                 settings = (deriv=deriv, viscous=viscous,
-                            art=ArtParams(enabled=art_on), cfl=cfl,
+                            art=ArtParams(enabled=art_on,
+                                          beta_sensor=Symbol(opts.beta_sensor)),
+                            cfl=cfl,
                             filter_interval=filtered ? 1 : 0)
                 solver, state = wall_case(n; settings...)
                 mirror, mirrored = mirror_case(n; settings...)
@@ -86,6 +91,144 @@ function smooth_check(name, deriv, opts)
             end
             flush(stdout)
         end
+    end
+end
+
+# --- N6j: wall matrix with the dilatation beta sensor ----------------------
+#
+# Keep `smooth` above as the original compact sweep: it remains useful for
+# quickly comparing a new row to the legacy strain setup.  This part names all
+# of the physical wall contracts explicitly and reports the actual mesh width,
+# so a failed or capped run cannot be mistaken for an error measurement.
+
+const DILATATION_CASES = (
+    :inviscid_slip,
+    :viscous_noslip,
+    :viscous_slip_shear,
+    :shear_adiabatic,
+    :shear_isothermal,
+)
+
+function smooth_art(control::AbstractString, beta_sensor::AbstractString)
+    control == "off" && return ArtParams(enabled=false)
+    sensor = Symbol(control == "on" ? beta_sensor : control)
+    sensor in (:strain, :dilatation) ||
+        error("smooth control must be on, off, strain, or dilatation; got $control")
+    return ArtParams(enabled=true, beta_sensor=sensor)
+end
+
+function smooth_filter(control::AbstractString)
+    control == "on" && return 1
+    control == "off" && return 0
+    error("smooth filter must be on or off; got $control")
+end
+
+function smooth_pair(kind::Symbol, n, settings)
+    if kind === :inviscid_slip
+        solver, state = wall_case(n; viscous=false, slip=true, settings...)
+        mirror, mirrored = mirror_case(n; viscous=false, settings...)
+        return solver, state, mirror, mirrored, nothing
+    elseif kind === :viscous_noslip
+        solver, state = wall_case(n; viscous=true, slip=false, settings...)
+        mirror, mirrored = mirror_case(n; viscous=true, settings...)
+        return solver, state, mirror, mirrored, nothing
+    elseif kind === :viscous_slip_shear
+        solver, state = wall_case(n; viscous=true, slip=true, c=0.05, settings...)
+        mirror, mirrored = mirror_case(n; viscous=true, c=0.05, settings...)
+        return solver, state, mirror, mirrored, nothing
+    elseif kind === :shear_adiabatic
+        solver, state = shear_case(n; Twall=NaN, settings...)
+        mirror, mirrored = shear_mirror_case(n; settings...)
+        return solver, state, mirror, mirrored, 3
+    elseif kind === :shear_isothermal
+        solver, state = shear_case(n; Twall=1.0, settings...)
+        mirror, mirrored = shear_mirror_case(n; settings...)
+        return solver, state, mirror, mirrored, 3
+    end
+    error("unknown smooth wall case $kind")
+end
+
+function smooth_failure(name, kind, control, filter, cfl, n, h, stage, solver,
+                        target, detail)
+    Printf.format(stdout, Printf.Format(
+        "dilatation %-12s case=%-19s control=%-10s filter=%s cfl=%.3f " *
+        "N=%4d h=%.6e %s FAILED endpoint t=%.8f target=%.8f step=%d: %s\n"),
+        name, String(kind), control, filter, cfl, n, h, stage, solver.t,
+        target, solver.step, detail)
+end
+
+function run_smooth!(solver, state, target, nmax, callback)
+    callback === nothing ?
+        run!(solver, state; tfinal=target, nmax=nmax) :
+        run!(solver, state; tfinal=target, nmax=nmax, callback=callback)
+end
+
+function dilatation_check(name, deriv, opts; wall_callback=nothing,
+                          mirror_callback=nothing)
+    ns = parse.(Int, split(opts.ns, ','))
+    cases = Symbol.(split(opts.smooth_cases, ','))
+    all(in(DILATATION_CASES), cases) || error("unknown smooth wall case")
+    controls = split(opts.smooth_controls, ',')
+    filters = split(opts.smooth_filters, ',')
+    for kind in cases, control in controls, filter in filters,
+        cfl in (opts.cfl, opts.cfl / 2)
+        art = smooth_art(control, opts.beta_sensor)
+        interval = smooth_filter(filter)
+        errors = Float64[]
+        hs = Float64[]
+        for n in ns
+            settings = (deriv=deriv, art=art, cfl=cfl,
+                        filter_interval=interval)
+            solver, state, mirror, mirrored, component =
+                smooth_pair(kind, n, settings)
+            h = xcoord(solver, 1, 2) - xcoord(solver, 1, 1)
+            target = opts.tfinal
+            try
+                run_smooth!(solver, state, target, opts.nmax, wall_callback)
+            catch err
+                err isa SolverFailure || rethrow()
+                smooth_failure(name, kind, control, filter, cfl, n, h, "wall",
+                               solver, target, sprint(showerror, err))
+                break
+            end
+            if !completed(solver, target)
+                smooth_failure(name, kind, control, filter, cfl, n, h, "wall",
+                               solver, target, "step cap or non-finite clock")
+                break
+            end
+            try
+                run_smooth!(mirror, mirrored, target, opts.nmax,
+                            mirror_callback)
+            catch err
+                err isa SolverFailure || rethrow()
+                smooth_failure(name, kind, control, filter, cfl, n, h, "mirror",
+                               mirror, target, sprint(showerror, err))
+                break
+            end
+            if !completed(mirror, target)
+                smooth_failure(name, kind, control, filter, cfl, n, h, "mirror",
+                               mirror, target, "step cap or non-finite clock")
+                break
+            end
+            e = component === nothing ?
+                regional_errors(solver, state, NodeReference(mirror, mirrored)) :
+                regional_errors(solver, state, NodeReference(mirror, mirrored);
+                                comp=component)
+            push!(errors, e.wall)
+            push!(hs, h)
+            Printf.format(stdout, Printf.Format(
+                "dilatation %-12s case=%-19s control=%-10s filter=%s cfl=%.3f " *
+                "N=%4d h=%.6e wall %.6e interior %.6e l2 %.6e\n"),
+                name, String(kind), control, filter, cfl, n, h,
+                e.wall, e.interior, e.l2)
+            flush(stdout)
+        end
+        if length(errors) == length(ns)
+            println("dilatation ", name, " case=", kind, " control=", control,
+                    " filter=", filter, " cfl=", cfl, " orders ",
+                    successive_orders(hs, errors))
+        end
+        flush(stdout)
     end
 end
 
@@ -172,24 +315,33 @@ function uniform_check(name, deriv, opts)
 end
 
 function stress_check(name, deriv, opts)
+    sensor = Symbol(opts.beta_sensor)
+    sensor in (:strain, :dilatation) ||
+        error("beta_sensor must be strain or dilatation; got $(opts.beta_sensor)")
+    art = ArtParams(enabled=true, beta_sensor=sensor)
     for start in (0.0, 0.1)
         try
             result = noh_case(1; N=opts.stressn, t0=start, deriv=deriv,
-                              cfl=0.3, nmax=opts.nmax)
-            println("stress ", name, " planar Noh start=", start,
-                    " completed=", result[5], " ", result[6])
+                              art=art, cfl=0.3, nmax=opts.nmax)
+            println("stress ", name, " beta_sensor=", sensor,
+                    " planar Noh start=", start, " completed=", result[5],
+                    " ", result[6])
         catch err
             err isa SolverFailure || rethrow()
-            println("stress ", name, " planar Noh start=", start, " FAILED ", err)
+            println("stress ", name, " beta_sensor=", sensor,
+                    " planar Noh start=", start, " FAILED ", err)
         end
         flush(stdout)
     end
     try
-        result = woodward(; N=opts.stressn, deriv=deriv, cfl=0.3, nmax=opts.nmax)
-        println("stress ", name, " Woodward-Colella completed=", result[5])
+        result = woodward(; N=opts.stressn, deriv=deriv, art=art,
+                          cfl=0.3, nmax=opts.nmax)
+        println("stress ", name, " beta_sensor=", sensor,
+                " Woodward-Colella completed=", result[5])
     catch err
         err isa SolverFailure || rethrow()
-        println("stress ", name, " Woodward-Colella FAILED ", err)
+        println("stress ", name, " beta_sensor=", sensor,
+                " Woodward-Colella FAILED ", err)
     end
 end
 
@@ -202,7 +354,11 @@ function main(args=ARGS)
     opts = CL.script_args(args, (parts="polynomial,smooth", schemes="neutral3,brady_livescu",
         ns="49,97,193", pns="17,33,65,129", jns="51,101", cfl=0.25, tfinal=0.4,
         longtime=40.0, nmax=30000, stressn=200,
-        jwalls="slip,dirichlet,noslip", deltas="3e-6,1e-5,3e-5"))
+        jwalls="slip,dirichlet,noslip", deltas="3e-6,1e-5,3e-5",
+        smooth_cases=("inviscid_slip,viscous_noslip,viscous_slip_shear," *
+                      "shear_adiabatic,shear_isothermal"),
+        smooth_controls="dilatation,strain,off", smooth_filters="on",
+        beta_sensor="strain"))
     for name in split(opts.schemes, ',')
         deriv = Base.invokelatest(scheme_named, name)
         println("scheme ", name, " = ", deriv.name)
@@ -213,6 +369,7 @@ function main(args=ARGS)
             part == "polynomial" ? polynomial_check(name, deriv,
                 parse.(Int, split(opts.pns, ','))) :
             part == "smooth" ? smooth_check(name, deriv, opts) :
+            part == "dilatation" ? dilatation_check(name, deriv, opts) :
             part == "jacobian" ? jacobian_check(name, deriv, opts) :
             part == "uniform" ? uniform_check(name, deriv, opts) :
             part == "stress" ? stress_check(name, deriv, opts) :

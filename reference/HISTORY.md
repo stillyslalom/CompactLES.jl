@@ -45,6 +45,8 @@ points at them and does not restate them.
 35. [The sensor operators' wall rows (September 2026)](#the-sensor-operators-wall-rows-september-2026)
 36. [The slip wall's flux contract (September 2026)](#the-slip-walls-flux-contract-september-2026)
 37. [The aligned Noh transverse mode (September 2026)](#the-aligned-noh-transverse-mode-september-2026)
+38. [Fifth-order closures under the dilatation sensor (September 2026)](#fifth-order-closures-under-the-dilatation-sensor-september-2026)
+39. [The neutral rows' certificate and the C8 and C10 sets (September 2026)](#the-neutral-rows-certificate-and-the-c8-and-c10-sets-september-2026)
 
 ## Phase 0 — extensibility hooks (July 2026)
 
@@ -2080,3 +2082,76 @@ control and the documentation-reference check cover the integration.
 No new MPI or hardware-GPU coverage is claimed for this serial measurement.
 The commands, rates, saturation interval and limitations are recorded in
 [the calibration appendix](CALIBRATION_APPENDIX.md#the-aligned-noh-transverse-mode).
+
+## Fifth-order closures under the dilatation sensor (September 2026)
+
+Roadmap N6j is complete. The retained fifth-order C6 rows and joint acoustic
+boundary treatment were remeasured on five smooth wall contracts under
+`beta_sensor = :dilatation`, with strain and properties-off controls.
+The 630 paired wall/mirror comparisons include three resolutions, half-CFL
+checks, and a filter-off supplement. Dilatation removes the inviscid
+strain-sensor cap: Brady–Livescu's wall error at N = 193 falls from
+5.44e-11 to 6.63e-13, while the viscous and shear cases already track
+their properties-off controls. The fine shear errors reach roundoff.
+
+Fresh Noh controls supersede the archived pre-N6h failure claims:
+Brady–Livescu and the unfiltered-search rows now complete the N = 200,
+CFL 0.3 cold preset under both sensors, with seven inadmissible cells
+under the permissive policy. The other searched rows and joint treatment
+still fail that preset. Neither smooth accuracy nor bounded permissive
+completion removes the independent spectral and extent restrictions.
+The existing production choices and numerical baselines remain unchanged;
+no new closure search or promotion is justified.
+
+The benchmark instruments now expose the sensor controls, share the five
+wall/reference constructions, and suppress new matrix errors and orders
+when an endpoint is not reached. The full measured workloads and capped
+endpoint smoke checks cover the benchmark changes. Commands, raw error
+tables, shock outcomes and limits are in
+[the calibration appendix](CALIBRATION_APPENDIX.md#fifth-order-closures-under-the-dilatation-sensor).
+The documentation-reference check passed 3/3 and `git diff --check` passed.
+These benchmark/reference changes required no production core gate;
+no new MPI or hardware-GPU coverage is claimed.
+
+## The neutral rows' certificate and the C8 and C10 sets (September 2026)
+
+Roadmap N6k is complete. The C6 `:neutral3` rows now carry a measured
+stability certificate on the exact linear model of the injected slip-wall
+step: their ε-pseudospectral abscissa is the first-order eigenvalue
+perturbation at every ε from 1e-2 to 1e-8, the Kreiss constant stays
+between 1.25 and 2.41 over N = 25 to 415, the eigenvector condition number
+stays below 8.8 out to N = 801, and the transient amplification over
+twenty time units is at most 3.8 at every line length, with an initial
+fast transient of 2.610 independent of N. The growth of the neighbouring
+member (1/4, 3/5, 1/5) at N = 371 + 44k is explained: one mode from each
+of the two wavenumber branches of the C6 modified-wavenumber relation
+coincides in frequency at 4.6 points per wavelength and the pair leaves
+the axis as a quartet, the period 44 being the smallest node-count step at
+which both branches' quantization recurs, a property of the interior row;
+the closure sets the wall phases that decide whether the family lands on
+integer node counts. No N-independent structural certificate was found:
+the exact Lyapunov norm is dense in each block, and the corner-supported
+norm reported earlier does not discriminate when solved exactly, a
+correction now carried in the appendix.
+
+The same two rows, over the C6 interior row the cascade already used on
+row 3, are the neutral closure sets of `lele_d1_8` and `lele_d1_10` and
+their defaults from this date, with `:cascade3` kept for comparison and
+`lele_d1_10` gaining the `closures` keyword. In each three-row family they
+are the only members that hold every line length from 12 to 600 and every
+tenth to 1200; members neutral over twenty line lengths, including ones
+with a hundred times smaller interior error, grow at 0.03 to 0.8 per unit
+time at some line length. Under them the production Jacobian reads
+1.0000000001 at slip walls where the cascade rows read 1.0105 (C8) and
+1.0198 (C10), Dirichlet ends and viscous walls are unchanged, and a
+uniform state between slip walls holds its round-off seed through forty
+time units. The cost is the one C6 paid: 1.35 times the cascade's
+wall-window error and 3.4 times its interior-window error on one
+derivative at unchanged orders; the battery runs C6 and does not move,
+the new closed C8 and C10 convergence studies read the C6 study's errors
+to the printed digits, and one serial guard moves, the C10 fold test
+whose slip-walled end carries the closure's wall constant. A patch or
+level interface keeps the cascade rows for every neutral set.
+The instruments are `bench/closurecertify.jl`, `bench/neutralsearch8.jl`
+and `bench/neutralsearch10.jl`; the measurements are in
+[the calibration appendix](CALIBRATION_APPENDIX.md#the-neutral-rows-certificate-and-the-c8-and-c10-sets).

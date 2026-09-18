@@ -43,11 +43,13 @@ approximately:
 | closed C6 wall closure, `:neutral3` (default) / `:cascade3` | 3.18 / 3.17 |
 | closed C6 wall closure, `:cascade4` | 4.02 |
 | closed C6 wall closure, `:brady_livescu` | 5.88 |
+| closed C8 wall closure, `:neutral3` (default) | 3.18 |
 | closed C8 wall closure, `:brady_livescu` | 7.91 |
+| closed C10 wall closure, `:neutral3` (default) | 3.18 |
 | cylindrical-axis odd/even folds | 3.76 / 2.99 |
 | resolved-angle cylindrical fold | 3.76 |
 | spherical origin | 2.97 |
-| closure rows on a polynomial, C6 `:neutral3` / `:cascade3` / `:cascade4` / `:brady_livescu`, C8 `:brady_livescu` | 3.00 / 3.00 / 4.00 / 5.00 / 7.00 |
+| closure rows on a polynomial, C6 `:neutral3` / `:cascade3` / `:cascade4` / `:brady_livescu`, C8 `:neutral3` / `:brady_livescu`, C10 `:neutral3` | 3.00 / 3.00 / 4.00 / 5.00 / 3.00 / 7.00 / 3.00 |
 | wall evolution, C6 unfiltered / `:cascade3` unfiltered / cascade filter / one-sided filter / `:brady_livescu` | 4.01 / 3.93 / 1.94 / 3.90 / 5.73 |
 | viscous no-slip wall evolution / shear mode | 4.00 / 4.67 |
 | same-level patch interface / two levels / three levels subcycled | 3.31 / 3.62 / 3.72 |

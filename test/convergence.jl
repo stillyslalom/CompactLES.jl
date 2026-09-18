@@ -12,10 +12,11 @@
 #   2. Closed-domain order — the global max-norm order drops to the closure
 #      order near walls. A slope of 1 means the boundary rows are wrong; a
 #      slope of 6 means the closures are never being hit. The default
-#      `:cascade3` closures are measured alongside the `:cascade4` and
-#      `:brady_livescu` alternatives, whose whole purpose is this slope, and
-#      one pass of the state filter is measured the same way under its two
-#      wall closures, since a filtered run cannot exceed the filter's order.
+#      `:neutral3` closures are measured alongside the `:cascade3`,
+#      `:cascade4` and `:brady_livescu` alternatives, whose whole purpose is
+#      this slope, and one pass of the state filter is measured the same way
+#      under its two wall closures, since a filtered run cannot exceed the
+#      filter's order.
 #   3. Axis/origin/pole order — the sharpest scalar diagnostic of the fold
 #      signs: a sign error usually gives O(1) error at the first node, so the
 #      slope collapses to ~0 rather than degrading gracefully.
@@ -39,12 +40,14 @@
 #
 #   C6 interior 6.01 | C8 interior 8.00 | C10 interior 10.04
 #   C6 wall closures 3.18 | C6 wall closures :cascade3 3.17 | :cascade4 4.02
-#   C6 wall closures :brady_livescu 5.88 | C8 wall closures :brady_livescu 7.91
+#   C6 wall closures :brady_livescu 5.88 | C8 wall closures 3.18 |
+#   C8 wall closures :brady_livescu 7.91 | C10 wall closures 3.18
 #   filter pass :cascade 1.88 | filter pass :onesided 8.07
 #   cyl axis odd 3.76 | cyl axis even 2.99 | resolved-θ axis 3.76
 #   spherical origin 2.97
 #   polynomial rows: C6 :neutral3 3.00 | :cascade3 3.00 | :cascade4 4.00 |
-#   C6 :brady_livescu 5.00 | C8 :brady_livescu 7.00
+#   C6 :brady_livescu 5.00 | C8 :neutral3 3.00 | C8 :brady_livescu 7.00 |
+#   C10 :neutral3 3.00
 #   wall evolution (window max norm, t = 0.4): inviscid C6 4.01 | inviscid C6
 #   :cascade3 3.93 | cascade filter 1.94 | onesided filter 3.90 |
 #   C6 :brady_livescu 5.73 | viscous no-slip C6 4.00 | viscous slip C6 4.00 |
@@ -53,13 +56,13 @@
 #   two levels C6 (k = 3) 3.62 | two levels :brady_livescu 6.01 | three levels
 #   subcycled 3.72 | two levels, cascade filter 4.12
 #
-# The C6 default is `:neutral3`; the `:cascade3` rows are measured beside
-# it wherever the two closures differ. The fold studies close their outer
-# end with a wall and take the default rows; the interface studies keep the
-# cascade rows, because the flux divergence at an interface end selects
-# them (`interface_divergence_closures`).
+# The default of all three derivative presets is `:neutral3`; the `:cascade3`
+# rows are measured beside it wherever the two closures differ. The fold
+# studies close their outer end with a wall and take the default rows; the
+# interface studies keep the cascade rows, because the flux divergence at an
+# interface end selects them (`interface_divergence_closures`).
 #
-# Those thirty-two numbers are also passed to each study as `recorded` and
+# Those thirty-six numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -254,6 +257,14 @@ study("C6 wall closures, :brady_livescu", (24, 48, 96),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=6.0, tol=1.0, recorded=5.88)
 
+study("C8 with wall closures", (24, 48, 96),
+      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                  deriv=lele_d1_8(), art=ArtParams(enabled=false)),
+      (x, y, z) -> exp(sin(3x)),
+      (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
+      expect=3.2, tol=0.8, recorded=3.18)
+
 study("C8 wall closures, :brady_livescu", (24, 48, 96),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
@@ -262,6 +273,14 @@ study("C8 wall closures, :brady_livescu", (24, 48, 96),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=8.0, tol=1.2, recorded=7.91)
+
+study("C10 with wall closures", (24, 48, 96),
+      N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
+                  bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                  deriv=lele_d1_10(), art=ArtParams(enabled=false)),
+      (x, y, z) -> exp(sin(3x)),
+      (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
+      expect=3.2, tol=0.8, recorded=3.18)
 
 # One pass of the state filter on a closed line, measured as |F f − f|. The
 # wall cascade (identity, F2, F4, F6) is second order along the whole
@@ -421,8 +440,12 @@ truncation_study("C6 :cascade4 rows, d/dx x^5", (17, 33, 65, 129),
                  lele_d1_6(closures=:cascade4), 5; expect=4.0, tol=0.5, recorded=4.00)
 truncation_study("C6 :brady_livescu rows, d/dx x^6", (17, 33, 65, 129),
                  lele_d1_6(closures=:brady_livescu), 6; expect=5.0, tol=0.5, recorded=5.00)
+truncation_study("C8 :neutral3 rows, d/dx x^4", (17, 33, 65, 129), lele_d1_8(), 4;
+                 expect=3.0, tol=0.5, recorded=3.00)
 truncation_study("C8 :brady_livescu rows, d/dx x^8", (17, 33, 65, 129),
                  lele_d1_8(closures=:brady_livescu), 8; expect=7.0, tol=0.5, recorded=7.00)
+truncation_study("C10 :neutral3 rows, d/dx x^4", (17, 33, 65, 129), lele_d1_10(), 4;
+                 expect=3.0, tol=0.5, recorded=3.00)
 
 println("\n=== smooth evolution: wall window, t = 0.4 ===")
 evolution_study("inviscid wall, C6, unfiltered", WALL_NS,

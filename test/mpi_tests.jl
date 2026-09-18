@@ -176,7 +176,7 @@ function test_pentadiagonal_c10()
     end
     # Closed domain (SlipWallBC) with the derivative dimension split: closure
     # rows live on the two edge ranks, interior ranks carry V/W spikes. A deg-3
-    # polynomial is exact through the C10 closure cascade.
+    # polynomial is exact through the C10 closure rows, under either set.
     sc = Solver(n_global=(SPLITN, 12, 12), L_domain=(1.0, 1.0, 1.0),
                 bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                 deriv=lele_d1_10(), art=ArtParams(enabled=false),

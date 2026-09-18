@@ -53,28 +53,74 @@ end
 nclosure(scheme::BandedCompactScheme) = length(scheme.closures)
 halfwidth(scheme::BandedCompactScheme) = length(scheme.coeffs)
 
+Base.:(==)(a::BandedClosureRow, b::BandedClosureRow) =
+    a.lhs == b.lhs && a.rhs == b.rhs && a.first == b.first
+
+# A C10 closure row is a tridiagonal closure row with a zero outer band, so
+# the tables in `kernels.jl` serve the C6, C8 and C10 interiors alike and the
+# three presets cannot drift apart. The wider family, each cascade row widened
+# by one point with its band entries free at fixed order, was searched too:
+# the extra entries lower the truncation constants, and the only member
+# neutral at a slip wall at every line length from 12 to 600 and every tenth
+# to 1200 is the tridiagonal `:neutral3` set with those entries zero.
+_banded_closure_rows(rows::Vector{ClosureRow{T}}) where {T} =
+    [BandedClosureRow{T}(T[0, row.lhs[1], row.lhs[2], row.lhs[3], 0],
+                         copy(row.rhs), row.first) for row in rows]
+
 """
-    lele_d1_10()
+    lele_d1_10(T=Float64; closures=:neutral3)
 
 Tenth-order pentadiagonal first derivative (Lele 1992): β = 1/20, α = 1/2,
 a = 17/12, b = 101/150, c = 1/100 (consistency: a + b + c = 1 + 2α + 2β).
-Three closure rows are needed at a closed edge, since the interior RHS reaches
-±3: the C6 third-order one-sided row 1, the C6 fourth-order centered Padé row 2,
-and the C6 tridiagonal interior row on row 3. This is the usual boundary
-cascade, with local order reduction near walls. Requires halo width n_halo ≥ 3
-(the default n_halo = 4 is sufficient); the two [`interface_closures`](@ref)
-rows of a patch interface read four, so the default serves there too.
+The pentadiagonal solve costs about a sixth more per step than
+[`lele_d1_6`](@ref) in a decomposed run (16% at 64³ per rank and 20% at 32³
+per rank on eight single-threaded ranks, with the default filter and
+artificial properties) and 29% on one rank.
+The interior right-hand side reaches ±3, so a closed edge takes three rows:
+the closure rows of [`lele_d1_8`](@ref) with a zero at ±2 of the
+pentadiagonal band. Requires halo width n_halo ≥ 3 (the default n_halo = 4 is
+sufficient); the two [`interface_closures`](@ref) rows of a patch interface
+read four, so the default serves there too.
+
+The tenth order is the order of a periodic dimension and of the interior of
+a closed one. At a closed edge the first row is third order under either
+closure set, so one derivative on a wall-bounded line is third order in the
+maximum norm and a wall-bounded evolution is fourth order at the wall, as on
+C6 and C8. `closures` selects the rows at a closed edge:
+
+- `:neutral3` (default): the two rows of `lele_d1_6(closures = :neutral3)`
+  followed by the C6 interior row. The Euler step linearized about a uniform
+  state between slip walls is neutral, as at a Dirichlet end and a viscous
+  no-slip wall, and a long inviscid run between slip walls holds its
+  round-off seed where `:cascade3` grows. Same orders as `:cascade3` and a
+  larger error constant at the wall and in the interior.
+- `:cascade3`: the C6 cascade rows followed by the C6 interior row. Linearly
+  unstable at an inviscid slip wall, growing at 2.6 per unit time, which the
+  F2 row of `compact_filter(closures = :cascade)` damps and the default
+  one-sided filter rows do not. Select it to reproduce earlier results.
+
+`:cascade4` and `:brady_livescu` are tridiagonal sets and are not offered
+here.
 """
-function lele_d1_10(::Type{T}=Float64) where {T}
+function lele_d1_10(::Type{T}=Float64; closures::Symbol=:neutral3) where {T}
+    rows = closures === :neutral3 ? neutral_closures(T, 3) :
+           closures === :cascade3 ? cascade_closures(T, 3, 3) :
+           error("unknown closure set $(repr(closures)) for the C10 interior; " *
+                 "use :neutral3 or :cascade3")
     BandedCompactScheme{T}("Lele C10 first derivative", 2,
         T[1//2, 1//20],                 # α, β
         zero(T),
         T[17//24, 101//600, 1//600],    # a/2, b/4, c/6
         false,
-        [BandedClosureRow{T}(T[0, 0, 1, 2, 0],       T[-5//2, 2, 1//2]),
-         BandedClosureRow{T}(T[0, 1//4, 1, 1//4, 0], T[-3//4, 0, 3//4]),
-         BandedClosureRow{T}(T[0, 1//3, 1, 1//3, 0],
-                             T[-1//36, -7//9, 0, 7//9, 1//36])])
+        _banded_closure_rows(rows))
+end
+
+function interface_divergence_closures(scheme::BandedCompactScheme{T}) where {T}
+    # Only the three-row derivative edge has a neutral set to fall back from;
+    # the filter and detector rows are left alone.
+    nclosure(scheme) == 3 || return scheme.closures
+    scheme.closures == _banded_closure_rows(neutral_closures(T, 3)) ?
+        _banded_closure_rows(cascade_closures(T, 3, 3)) : scheme.closures
 end
 
 """

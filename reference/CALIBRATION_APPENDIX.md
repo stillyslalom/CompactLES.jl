@@ -48,6 +48,8 @@ record of that setting.
 26. [The detector's wall mirror](#the-detectors-wall-mirror)
 27. [The slip wall's flux contract](#the-slip-walls-flux-contract)
 28. [The aligned Noh transverse mode](#the-aligned-noh-transverse-mode)
+29. [The neutral rows' certificate and the C8 and C10 sets](#the-neutral-rows-certificate-and-the-c8-and-c10-sets)
+30. [Derivative operator cost](#derivative-operator-cost)
 
 ## The battery
 
@@ -4962,13 +4964,13 @@ No structural reason for the neutrality has been found. The rows are not
 summation-by-parts in a diagonal norm, nor in the compact form Tᵀ W T with
 a diagonal or corner-block W (least-squares residuals 0.1, the same as the
 cascade's). A positive-definite symmetric H with (H D + Dᵀ H) supported on
-the wall columns, which makes the injected step exactly conservative, does
-exist numerically at N = 51 and 101 for the adopted rows (normalized
-minimum eigenvalue +0.023 and +0.017; +0.002 for Brady–Livescu, −0.013 for
-the cascade, where none exists), but it is found by optimization at each N
-and has no recognized structure, so the property is measured over the
-swept line lengths and not proved. An SBP-like closure under roadmap N15
-would supersede it.
+the wall columns was first reported here as existing for the adopted rows
+at N = 51 and 101 and not for the cascade; that reading came from an
+optimization that had not converged, and solved exactly the condition
+admits such an H for the cascade as well, so it discriminates nothing
+([the certificate](#the-neutral-rows-certificate-and-the-c8-and-c10-sets)).
+The property is measured over the swept line lengths and not proved. An
+SBP-like closure under roadmap N15 would supersede it.
 
 ### Prior art
 
@@ -5004,9 +5006,10 @@ boundary-dependent spectrum to be independent of N, Beam and Warming
 1993; the nearest frameworks are CGA's N-parity-dependent neutral example,
 eq. 78–80, and Bonnet-Eymard, Coulombel and Faye, arXiv:2504.00667, on
 wave packets coupling two boundaries). Every source agrees that a neutral
-spectrum of a non-normal operator is necessary and not sufficient; a
-pseudospectral or eigenvector-conditioning check against N is the open
-instrument, and the one likely to explain the resonance.
+spectrum of a non-normal operator is necessary and not sufficient; the
+pseudospectral and eigenvector-conditioning check against N, and the
+explanation of the resonance, are in
+[the certificate](#the-neutral-rows-certificate-and-the-c8-and-c10-sets).
 
 ### Production measurements
 
@@ -5102,6 +5105,12 @@ for the neutral set, and the interface baselines are unchanged to every
 printed digit.
 
 ## Fifth-order C6 closure search
+
+The measurements in this section precede N6h's slip-wall flux contract.
+Their cold-Noh failure steps and artificial-property wall errors are historical;
+the [N6j remeasurement](#fifth-order-closures-under-the-dilatation-sensor)
+below supersedes them for the current solver. The archived linear spectra
+and exact moment/energy-feasibility results remain separate constraints.
 
 September 2026, following N6d. `bench/closuresearch.jl` constructs four
 fifth-order boundary rows while retaining the C6 interior and tridiagonal
@@ -5429,8 +5438,9 @@ thread closes here. The detector's wall defect has since been removed at a
 wall ([the detector's wall mirror](#the-detectors-wall-mirror)): under the
 mirror an inviscid wall with the artificial properties on is limited by the
 strain sensor's cusp, and under `beta_sensor = :dilatation` it recovers the
-closure's order. The cold-start failure of every fifth-order family above is
-untouched by that change, so the verdict stands. No production source,
+closure's order. That detector change alone did not requalify the cold starts.
+N6h later changed the wall flux, and N6j remeasures the shock outcomes rather
+than carrying these failure steps forward. No production source,
 default or regression baseline was changed here, and nothing was committed.
 The instruments are retained: `bench/closuresearch.jl` holds the family, the
 reduced models and the searches, `bench/closurequalify.jl` the production
@@ -6542,3 +6552,777 @@ factor 2.44 below the threshold. The limit is a deterministic regression
 envelope for that preset and horizon, not a stability bound for another
 width, an injected disturbance or later evolution. No calibrated default,
 stored reference or numerical threshold changes as a result of this study.
+
+## Fifth-order closures under the dilatation sensor
+
+September 2026, roadmap N6j. This remeasurement uses the current solver,
+including N6e/N6g's sensor mirrors and N6h's slip-wall flux contract.
+The archived fifth-order rows are used as written; no derivative search or
+production change is part of this study. The controls are C6 `:neutral3`
+and C6 `:brady_livescu`. The other names denote the archived six-point
+unfiltered-search rows (`unfiltered`), six-point filtered-objective rows
+(`candidate`), seven-point differential-evolution rows (`de`), and the
+joint `candidate` treatment with acoustic-only damping of strength 0.1.
+The name `unfiltered` identifies a coefficient set, independently of whether
+the run applies a filter.
+
+### Measurement contract
+
+`bench/closurequalify.jl parts=dilatation` measures five shared smooth cases:
+the inviscid slip standing wave, viscous adiabatic no-slip standing wave,
+viscous slip standing wave with tangential amplitude 0.05, and the adiabatic
+and isothermal (`Twall = 1`) no-slip shear modes. The standing-wave component
+is density; the shear component is tangential momentum. Each wall solution
+is compared with its periodic mirror at the same spacing and endpoint,
+using identical artificial-property, transport and filter settings. These
+are closure errors, not total solution errors against an exact reference.
+The wall norm is the maximum over the first and last four nodes; the
+instrument also prints the interior maximum and volume-weighted L2 norm.
+
+Runs use Float64 on one Julia 1.11.4 thread on the Windows Alder Lake
+workstation. N = 49, 97, 193 gives h = 1/48, 1/96, 1/192 on the fixed
+unit interval; t = 0.4, CFL = 0.25 and 0.125. The default one-sided
+filter runs every step with alpha = 0.45 and `filter_cfl = 0.35`.
+Artificial properties use all default constants, either with
+`beta_sensor = :dilatation`, with `:strain`, or disabled. Viscous cases
+use mu = 0.005 and Pr = 0.7. Both runs must reach t = 0.4 before an
+error or order is recorded; a deliberately capped smoke run confirms
+that an incomplete pair reports its endpoint and emits no order.
+
+`bench/closuredamping.jl parts=wallmatrix` reuses these same pairs for the
+joint treatment. Only its wall run receives the additional acoustic
+boundary pass, after the ordinary filter, as in the archived experiment.
+The periodic reference receives no boundary correction.
+
+### The filtered smooth-wall matrix
+
+All 450 derivative-only paired comparisons and 60 joint-treatment paired
+comparisons reach t = 0.4. The table gives wall errors under dilatation at
+CFL 0.25, then successive orders for CFL 0.25 and 0.125. The three errors
+correspond to N = 49 / 97 / 193. These are field-specific evolution orders;
+the derivative rows retain their formal fifth-order boundary moments.
+
+| rows / treatment | case | errors, N = 49 / 97 / 193 | orders, CFL 0.25 | orders, CFL 0.125 |
+|---|---|---|---|---|
+| neutral3 | inviscid slip | 5.802e-07 / 3.987e-08 / 2.588e-09 | 3.86 / 3.95 | 3.87 / 3.95 |
+| neutral3 | viscous no-slip | 4.159e-07 / 2.999e-08 / 2.006e-09 | 3.79 / 3.90 | 3.80 / 3.90 |
+| neutral3 | viscous slip + shear | 4.164e-07 / 3.003e-08 / 2.010e-09 | 3.79 / 3.90 | 3.80 / 3.90 |
+| neutral3 | adiabatic shear | 1.439e-08 / 6.176e-10 / 2.442e-11 | 4.54 / 4.66 | 4.55 / 4.66 |
+| neutral3 | isothermal shear | 1.437e-08 / 6.173e-10 / 2.441e-11 | 4.54 / 4.66 | 4.55 / 4.66 |
+| Brady–Livescu | inviscid slip | 2.459e-09 / 4.851e-11 / 6.630e-13 | 5.66 / 6.19 | 5.67 / 6.11 |
+| Brady–Livescu | viscous no-slip | 1.952e-09 / 4.409e-11 / 8.038e-13 | 5.47 / 5.78 | 5.47 / 5.77 |
+| Brady–Livescu | viscous slip + shear | 1.972e-09 / 4.407e-11 / 8.069e-13 | 5.48 / 5.77 | 5.48 / 5.77 |
+| Brady–Livescu | adiabatic shear | 1.942e-10 / 1.692e-12 / 1.342e-14 | 6.84 / 6.98 | 6.84 / 6.97 |
+| Brady–Livescu | isothermal shear | 1.942e-10 / 1.692e-12 / 1.354e-14 | 6.84 / 6.97 | 6.84 / 6.97 |
+| unfiltered-search | inviscid slip | 2.333e-09 / 5.191e-11 / 7.934e-13 | 5.49 / 6.03 | 5.49 / 6.04 |
+| unfiltered-search | viscous no-slip | 1.890e-09 / 4.503e-11 / 8.360e-13 | 5.39 / 5.75 | 5.39 / 5.75 |
+| unfiltered-search | viscous slip + shear | 1.901e-09 / 4.516e-11 / 8.373e-13 | 5.40 / 5.75 | 5.39 / 5.75 |
+| unfiltered-search | adiabatic shear | 1.803e-10 / 1.572e-12 / 1.245e-14 | 6.84 / 6.98 | 6.84 / 6.98 |
+| unfiltered-search | isothermal shear | 1.802e-10 / 1.572e-12 / 1.251e-14 | 6.84 / 6.97 | 6.84 / 6.97 |
+| filtered-objective | inviscid slip | 3.909e-09 / 8.135e-11 / 1.369e-12 | 5.59 / 5.89 | 5.55 / 5.86 |
+| filtered-objective | viscous no-slip | 2.878e-09 / 6.808e-11 / 1.332e-12 | 5.40 / 5.68 | 5.39 / 5.68 |
+| filtered-objective | viscous slip + shear | 2.886e-09 / 6.816e-11 / 1.320e-12 | 5.40 / 5.69 | 5.39 / 5.69 |
+| filtered-objective | adiabatic shear | 1.556e-10 / 1.120e-12 / 8.851e-15 | 7.12 / 6.98 | 7.12 / 6.94 |
+| filtered-objective | isothermal shear | 1.555e-10 / 1.120e-12 / 8.439e-15 | 7.12 / 7.05 | 7.12 / 7.01 |
+| DE | inviscid slip | 5.681e-09 / 9.469e-11 / 1.479e-12 | 5.91 / 6.00 | 5.88 / 5.98 |
+| DE | viscous no-slip | 4.598e-09 / 8.075e-11 / 1.434e-12 | 5.83 / 5.81 | 5.82 / 5.82 |
+| DE | viscous slip + shear | 4.600e-09 / 8.066e-11 / 1.437e-12 | 5.83 / 5.81 | 5.83 / 5.82 |
+| DE | adiabatic shear | 3.292e-10 / 2.771e-12 / 2.134e-14 | 6.89 / 7.02 | 6.89 / 7.02 |
+| DE | isothermal shear | 3.291e-10 / 2.771e-12 / 2.138e-14 | 6.89 / 7.02 | 6.89 / 7.02 |
+| joint acoustic | inviscid slip | 5.984e-09 / 9.476e-11 / 1.217e-12 | 5.98 / 6.28 | 6.03 / 6.31 |
+| joint acoustic | viscous no-slip | 2.040e-09 / 5.655e-11 / 1.235e-12 | 5.17 / 5.52 | 5.16 / 5.52 |
+| joint acoustic | viscous slip + shear | 2.050e-09 / 5.664e-11 / 1.249e-12 | 5.18 / 5.50 | 5.17 / 5.54 |
+| joint acoustic | adiabatic shear | 1.556e-10 / 1.120e-12 / 8.916e-15 | 7.12 / 6.97 | 7.12 / 6.93 |
+| joint acoustic | isothermal shear | 1.555e-10 / 1.120e-12 / 8.499e-15 | 7.12 / 7.04 | 7.12 / 7.01 |
+
+The inviscid slip control isolates the strain-sensor cusp. At N = 193 and
+CFL 0.25, the wall errors are:
+
+| rows | strain | dilatation | properties off |
+|---|---|---|---|
+| neutral3 | 2.582e-09 | 2.588e-09 | 2.588e-09 |
+| Brady–Livescu | 5.441e-11 | 6.630e-13 | 7.976e-13 |
+| unfiltered-search | 4.762e-11 | 7.934e-13 | 9.137e-13 |
+| filtered-objective | 7.462e-11 | 1.369e-12 | 1.403e-12 |
+| DE | 1.135e-10 | 1.479e-12 | 1.499e-12 |
+
+For Brady–Livescu the reduction is a factor of 82, from 5.44e-11 to
+6.63e-13. The same sensor change removes the inviscid cap for all four
+fifth-order coefficient sets. The neutral closure's larger truncation
+error hides that effect. The viscous standing waves and the two shear
+contracts already agree closely with their properties-off controls under
+both sensors; dilatation is not a general improvement of every wall case.
+
+The fine shear errors lie near 1e-14, so the last pair's near-seventh-order
+slopes touch the floating-point floor. They do not establish a seventh-order
+closure. Even the standing-wave errors near 1e-12 warrant reading the
+half-CFL result and both refinement pairs rather than selecting one slope.
+The joint pass recovers its properties-off behavior, but this finite-time
+accuracy result does not qualify the prototype for production.
+
+### Without the filter
+
+The inviscid slip and viscous no-slip waves also run without filtering,
+under dilatation and with properties off. All 120 wall/mirror pairs reach
+the endpoint. Successive wall orders under dilatation are:
+
+| rows | inviscid, CFL 0.25 | inviscid, CFL 0.125 | viscous, CFL 0.25 | viscous, CFL 0.125 |
+|---|---|---|---|---|
+| neutral3 | 3.99 / 4.04 | 3.99 / 4.04 | 4.01 / 4.01 | 4.01 / 4.01 |
+| Brady–Livescu | 5.86 / 5.77 | 5.86 / 5.81 | 5.32 / 5.91 | 5.32 / 5.81 |
+| unfiltered-search | 5.96 / 5.83 | 5.96 / 5.83 | 5.19 / 5.85 | 5.20 / 5.77 |
+| filtered-objective candidate | 4.54 / 5.01 | 4.54 / 4.98 | 5.38 / 4.96 | 5.39 / 4.91 |
+| DE | 4.89 / 5.30 | 4.89 / 5.31 | 5.65 / 5.05 | 5.65 / 4.98 |
+
+The lower coarse-pair slopes of the last two rows persist at half CFL.
+These finite-time completions do not supersede the archived line-length
+resonances: the study endpoint is short and its smooth initial condition
+does not deliberately seed the growing modes.
+
+### Current shock controls
+
+Cold planar Noh is re-run at N = 200, CFL = 0.3, t = 0.6, with the
+default filter and the case's explicit `validity = :permissive` policy.
+The table gives either the final inadmissible-cell count and minimum
+specific internal energy, or the negative-density failure step and time.
+
+| rows / treatment | strain sensor | dilatation sensor |
+|---|---|---|
+| neutral3 | completes; 7 cells, e_min = -0.03110 | completes; 7 cells, e_min = -0.03166 |
+| Brady–Livescu | completes; 7 cells, e_min = -0.004022 | completes; 7 cells, e_min = -0.01084 |
+| unfiltered-search | completes; 7 cells, e_min = -0.002158 | completes; 7 cells, e_min = -0.002829 |
+| filtered-objective candidate | step 30, t = 0.008702 | step 29, t = 0.008863 |
+| DE | step 28, t = 0.007804 | step 29, t = 0.008073 |
+| joint acoustic treatment | step 31, t = 0.008781 | step 29, t = 0.008700 |
+
+Brady–Livescu and the unfiltered-search rows now complete the exact cold
+preset that failed in the archived study. Those old failures cannot be
+used as current evidence against either set. The change is already present
+in the strain control; it is not a benefit attributable to changing the
+sensor to dilatation. This study does not isolate which intervening change
+caused the completion. The current runs include the slip-wall flux contract
+that N6h showed changes Noh's wall heating substantially.
+
+Completion under a permissive policy is not an admissibility result, and
+this single extent/CFL/end-time does not establish a cold-start envelope.
+Every row and the joint treatment completes the t0 = 0.1 warm start under
+both sensors, with seven inadmissible cells (eight for DE). All five
+derivative choices also complete Woodward–Colella at N = 200, CFL = 0.3
+under both sensors. The joint treatment's stress instrument measures Noh
+only. No shock regression guard is changed.
+
+### Decision and reproduction
+
+N6j is complete as a measurement and a decision to retain the current
+production choices. Dilatation removes the inviscid strain-sensor cap and
+makes the smooth-wall accuracy of the existing C6 Brady–Livescu option
+useful with artificial properties active. The searched rows and joint
+treatment do not establish a reason to replace it or the `:neutral3`
+default, and no new derivative-row search is started.
+
+The independent limitations still matter: Brady–Livescu has a filtered
+slip-wall resonance; the unfiltered-search set has the N = 171 resonance;
+the filtered-objective candidate has a held-out line-length failure;
+DE has a filtered Dirichlet radius of 1.0746. The joint pass remains a
+serial one-dimensional calorically perfect gas prototype, with failures
+at short extents in its archived sweep. Candidate, DE and joint treatments
+also retain current cold-Noh failures. A favorable smooth slope neither
+removes these limits nor proves stability, admissibility, or an energy norm.
+The neutral rows' own stability certificate remains N6k.
+
+Reproduce the paired comparisons and shock controls with:
+
+```text
+julia --project=. -t 1 bench/closurequalify.jl parts=dilatation schemes=neutral3,brady_livescu,unfiltered,candidate,de smooth_controls=dilatation,strain,off
+julia --project=. -t 1 bench/closurequalify.jl parts=dilatation schemes=neutral3,brady_livescu,unfiltered,candidate,de smooth_cases=inviscid_slip,viscous_noslip smooth_controls=dilatation,off smooth_filters=off
+julia --project=. -t 1 bench/closuredamping.jl parts=wallmatrix schemes=candidate strength=0.1 components=acoustic cfl=0.25
+julia --project=. -t 1 bench/closurequalify.jl parts=stress schemes=neutral3,brady_livescu,unfiltered,candidate,de beta_sensor=strain
+julia --project=. -t 1 bench/closurequalify.jl parts=stress schemes=neutral3,brady_livescu,unfiltered,candidate,de beta_sensor=dilatation
+julia --project=. -t 1 bench/closuredamping.jl parts=stress schemes=candidate strength=0.1 components=acoustic beta_sensor=strain
+julia --project=. -t 1 bench/closuredamping.jl parts=stress schemes=candidate strength=0.1 components=acoustic beta_sensor=dilatation
+```
+
+Validation: all 630 paired comparisons above completed, and the shock
+controls reported the outcomes tabulated above, including the expected
+candidate failures. Representative smooth/stress runs and a capped-endpoint
+check exercised the instrument changes. `test/docrefs_tests.jl` passed 3/3
+and `git diff --check` passed. Only benchmark tooling and reference prose
+changed, so the applicable gate is those workloads and the documentation
+check; no production solver or regression baseline changed. No new MPI or
+hardware-GPU qualification is claimed.
+
+## The neutral rows' certificate and the C8 and C10 sets
+
+`bench/closurecertify.jl`, `bench/neutralsearch8.jl` and
+`bench/neutralsearch10.jl` on the exact linear model of the injected
+slip-wall step (`bench/closuresearch.jl`'s `derivative_matrix` and
+`acoustic_operator`, and a banded counterpart for the pentadiagonal
+scheme), with the production Jacobian and uniform-state instruments of
+the preceding sections, September 2026, roadmap N6k. The outcome is a
+measured pseudospectral certificate for the C6 `:neutral3` rows, an
+explanation of the line-length resonance of their neighbours, and the
+`:neutral3` closure sets of `lele_d1_8` and `lele_d1_10`, the defaults
+from this date: the same two rows over the C6 interior row.
+
+### The instruments
+
+`closurecertify.jl` builds the closure rows from the exact rationals of
+the (a, b, c) family, checks them against `lele_d1_6()` and
+`lele_d1_6(closures = :cascade3)` on every run (zero residual in every
+coefficient), and measures the injected acoustic operator L on the
+2N − 2 unknowns (p on every node, u on the interior nodes) at c = L = 1,
+so that rates are per unit time and ‖L‖₂ grows in proportion to N. Its
+parts are `verify`, `spectrum`, `pseudo`, `transient`, `resonance` and
+`norm`; the default run takes about ten minutes on the workstation with
+`blas=12`, the package pinning BLAS to one thread otherwise. The
+pseudospectral abscissa is computed by Byers' test: ε is a singular value
+of L − (x + iy)I for some y exactly when the Hamiltonian
+[L − xI, −εI; εI, xI − Lᵀ] has an imaginary eigenvalue, so one
+eigensolve decides a vertical line and fourteen bisections locate α_ε
+without a grid in y; a dense minimum of σ_min((x + iy)I − L) over y at
+the returned x reproduces ε to 1e-6 relative. The eigenvalue
+classification threshold `rtol` floors α_ε at `rtol · ‖L‖₂`, which is
+7e-8 at N = 201 under the default 1e-10, so readings at ε ≤ 1e-7 are
+taken at `rtol = 1e-13`. The transient norm ‖exp(tL)‖₂ is evaluated
+from one eigendecomposition by warm-started subspace iteration on the
+matrix–vector products, verified against a dense operator norm at nine
+times to 2.3e-12 relative, over 646 times: 301 over the first
+50/‖L‖₂, 201 at Δt = 0.01 to t = 2, then 151 to t = 20, so the last
+window is a lower bound and the eigenvector condition number the
+rigorous one.
+
+`neutralsearch8.jl` and `neutralsearch10.jl` define the three-row
+families below, verify them against the production plans by
+differentiating unit vectors (agreement 4e-16 to 9e-16 at N = 41, 51
+and 101, the banded assembly included), scan for neutral members at
+N = 51 and 101, sweep the finalists over every N from 12 to 600 and
+every tenth to 1200, and run the production Jacobian and the
+forty-time-unit uniform state through the functions of
+`constantfloor.jl`. One growth evaluation at N = 51 is 2 to 5 ms; a
+649-length sweep is 220 to 300 s per member.
+
+```text
+julia --project=. -t 1 bench/closurecertify.jl
+julia --project=. -t 1 bench/closurecertify.jl parts=pseudo pseudo_ns=101,201 rtol=1e-13
+julia --project=. -t 1 bench/closurecertify.jl parts=resonance scan_lo=340 scan_hi=470
+julia --project=. -t 1 bench/neutralsearch8.jl parts=scan grid=81
+julia --project=. -t 1 bench/neutralsearch8.jl parts=sweep blas=12 members=reuse_c6,band7_10 Ns=12:600,610:10:1200
+julia --project=. -t 1 bench/neutralsearch10.jl parts=validate,scan,wide,errors
+julia --project=. -t 1 bench/neutralsearch10.jl parts=sweep Ns=long rows=1,7
+julia --project=. -t 1 bench/neutralsearch10.jl parts=jacobian,uniform
+```
+
+### The pseudospectral measurement
+
+The adopted rows (0, 3/5, 3/10), the neighbour (1/4, 3/5, 1/5) whose
+rows are (0, 1, 1/4) / [−23/12, 23/8, −5/4, 7/24] and (3/5, 1, 1/5) /
+[−89/60, 43/30, −3/10, 13/30, −1/12], and the cascade as the unstable
+control. ε is absolute, in the units of L's entries; `max κ` is the
+largest Bauer–Fike eigenvalue condition number ‖v‖‖w‖; K(L) is the Kreiss
+constant sup α_ε/ε over the six values ε = 1e-2 to 1e-8:
+
+```
+                 N    ‖L‖₂     max Re λ    cond(V)   max κ    α_ε/ε             K(L)
+adopted         25   8.55e1   +3.6e-15     3.08     1.2478   1.2477–1.2478     1.25
+adopted         51   1.78e2   +2.1e-14     5.24     1.9728   1.9661–1.9662     1.97
+adopted        101   3.56e2   +3.8e-14     3.42     1.2571   1.2571            1.26
+adopted        201   7.13e2   +1.1e-13     5.05     1.9281   1.9281–1.9283     1.93
+adopted        371   1.32e3   +3.4e-13     6.34     2.4085   2.4084–2.4122     2.41
+adopted        401   1.43e3   +2.4e-13     4.41     1.7149
+adopted        415   1.48e3   +2.7e-13     4.59     1.7904   1.7904–1.7965     1.79
+adopted        801   2.85e3   +6.3e-13     8.75     3.3020
+neighbour       25   8.23e1   +2.7e-15     3.22     1.3153   1.3152            1.32
+neighbour       51   1.72e2   +1.2e-14     4.24     1.7706   1.7706            1.77
+neighbour      201   6.86e2   +9.6e-14     9.40     3.8852   3.8850–3.8854     3.89
+neighbour      371   1.27e3   +2.011e-2    7.33     3.0771   22 … 2.0e4        ∞
+neighbour      415   1.42e3   +2.869e-2    5.28     2.2405   30 … 2.9e4        ∞
+neighbour      801   2.74e3   +1.1e-12     8.96     3.7703
+cascade         25   1.07e2   +1.344       18.4     4.8751   138 … 1.3e8       ∞
+cascade         51   2.22e2   +1.767       34.2     9.1372   180 … 1.8e8       ∞
+cascade        201   8.89e2   +1.775      150.5    37.133    181 … 1.8e8       ∞
+cascade        801   3.56e3   +2.073      124.6    29.277
+```
+
+For a neutral member α_ε equals max κ · ε to four or five digits at
+every ε over six decades: the ε-pseudospectrum is the first-order
+eigenvalue perturbation and nothing more, and there is no non-normal
+amplification of a perturbation of the operator. The Kreiss constant of
+the adopted rows is 1.25 to 2.41 over N = 25 to 415 and the eigenvector
+condition number 3.1 to 8.8 to N = 801, without a trend in N. For the
+cascade, and for the neighbour at its resonant node counts, α_ε tends to
+the positive spectral abscissa as ε → 0 and the Kreiss constant is
+unbounded; the cascade's α_ε above its abscissa is again κ · ε, so its
+instability is spectral and not pseudospectral. The bound ‖|V||V⁻¹|‖₂
+grows linearly with N (38.6 at N = 25 to 1236 at N = 801) and is of no
+use; cond(V) is the bound that works.
+
+### Transient growth
+
+The maximum of ‖exp(tL)‖₂ over t ∈ [0, 20], the time it occurs, the
+maximum over the fast window [0, 50/‖L‖₂], and the same maximum in the
+trapezoid quadrature norm of (p, u), applied as a diagonal similarity:
+
+```
+                 N    max ‖e^{tL}‖₂   at t     fast window   energy norm   cond(V)
+adopted         25       2.677        1.03       2.6108        2.020        3.08
+adopted         51       3.783       18.13       2.6102        3.756        5.24
+adopted        101       2.610        0.01       2.6102        2.160        3.42
+adopted        201       3.677        8.00       2.6102        3.617        5.05
+adopted        401       3.138       16.13       2.6102        3.110        4.41
+neighbour       25       2.844       15.07       2.5579        2.341        3.22
+neighbour       51       3.383        3.73       2.5578        3.375        4.24
+neighbour      101       2.902        3.20       2.5578        2.867        4.31
+neighbour      201       7.809       13.87       2.5578        7.788        9.40
+neighbour      401       5.163        7.33       2.5578        5.157        6.29
+cascade         25     2.1e12        20.00       9.8282       1.8e12       18.4
+cascade         51     8.1e15        20.00       8.2996       7.3e15       34.2
+cascade        101     6.3e16        20.00       8.2666       5.9e16       35.4
+cascade        401     5.3e17        20.00       8.2666       5.2e17       91.1
+```
+
+The adopted rows amplify by at most 3.8 over twenty time units at every
+N from 25 to 401, the Euclidean and quadrature-norm figures agree to
+three digits, and the initial fast transient is independent of N: 2.610
+for the adopted rows and 2.558 for the neighbour at every N, against
+8.3 to 9.8 for the cascade. Since the spectral abscissa is below 1e-12
+at every node count measured, cond(V) bounds ‖exp(tL)‖ for all time,
+and that bound is 8.75 out to N = 801.
+
+### The resonance
+
+Over N = 340 to 470 the adopted rows read at most 8.5e-13 and the
+neighbour leaves the axis at N = 371, 415 and 459 only. The C6 modified
+wavenumber k′(θ) = (2 · (7/9) sin θ + 2 · (1/36) sin 2θ)/(1 + (2/3) cos θ)
+is not monotone: it peaks at 1.9894 at θ = 2.2671, so below that
+frequency the interior carries two wavenumbers for one frequency, and
+each closed line holds two ladders of modes, one per branch. The
+colliding pair at N = 371 is one mode from each branch; the pressure
+component's discrete Fourier peaks and the pair's detuning (the branch-2
+frequency less the nearest branch-1 frequency):
+
+```
+   N     ω          Re λ        peaks θ (weight)              branch     detuning
+  370   500.0375   −1.2e-14    1.3600 (1.00)                  1
+  370   502.6665   −8.5e-14    2.7801 (1.00)                  2         −0.3746
+  371   503.0798   ±2.011e-2   1.3651 (1.00), 2.7801 (0.40)   merged     0
+  372   503.1503   +7.7e-14    1.3626 (1.00)                  1
+  372   503.4540   +3.9e-14    2.7827 (1.00)                  2         +0.3037
+```
+
+The two eigenvalues merge into a quartet ±0.0201 ± 503.08i at N = 371
+and separate again at N = 372: the bubble is narrower than one node
+count, which is why the unstable N are isolated points. The modes are
+propagating, with 0.27 to 0.38 of their norm within eight nodes of a
+wall against 0.21 for a uniform profile, not evanescent wall modes.
+Every resonance sits at the same frequency and the same wall phases
+(M = N − 1):
+
+```
+   N     rate        ωh        θ₁        θ₂        θ₁M/π      θ₂M/π
+  371   +2.011e-2   1.35968   1.36495   2.78161   160.7569   327.6032
+  415   +2.869e-2   1.35882   1.36407   2.78192   179.7581   366.6015
+  459   +3.182e-2   1.35813   1.36336   2.78216   198.7587   405.6001
+  503   +3.236e-2   1.35755                       217.7589   444.5988
+  547   +3.112e-2   1.35707                       236.7588   483.5976
+  591   +2.829e-2   1.35666                       255.7584   522.5964
+```
+
+ωh is fixed at 1.3585 ± 0.0015 (4.62 points per wavelength), the
+fractional parts of θ₁M/π and θ₂M/π are fixed at 0.758 and 0.600, and
+the integer parts advance by 19 and 39 per 44 nodes. The period follows
+from the interior dispersion alone: along k′(θ₁) = k′(θ₂) with
+r = dθ₂/dθ₁ = k″(θ₁)/k″(θ₂), a resonance recurs at a node-count step
+ΔM with Δm = round(θ₁ΔM/π) when Δq = r Δm + ((θ₂ − r θ₁)/π) ΔM is an
+integer; at the measured frequency r = −0.346815 and
+(θ₂ − r θ₁)/π = 1.036097:
+
+```
+  ΔM    Δm    Δq        |Δq − round Δq|
+  44    19    38.9988   0.0012
+  34    15    30.0251   0.0251
+  10     4     8.9737   0.0263
+  54    23    47.9725   0.0275
+   1     0     1.0361   0.0361
+```
+
+ΔM = 44 is twenty times closer to an integer than any other step under
+seventy and predicts 371, 415, 459, 503, 547 and 591, which the scans
+found and nothing else between N = 300 and 620. The period is therefore
+a property of the C6 interior row and not of the closure; the closure
+sets the two wall phases (branch 2: 0.494 for the adopted rows, 0.608
+for the neighbour, no branch-2 mode in the band for the cascade), and
+with them whether the coincidence family lands on integer node counts.
+Frequency coincidence alone is not sufficient: the branch-2 mode comes
+within 0.019 of a branch-1 partner at N = 379 for the adopted rows and
+within 0.008 at N = 394 for the neighbour, and both stay neutral there;
+only the simultaneous quantization of both branches, at N = 371 + 44k
+for the neighbour, couples them. The C8 and C10 sweeps below add
+instances of the same phenomenon for the other interiors, whose
+dispersion relations set other periods.
+
+### The structural attempt
+
+Two conditions were solved exactly, with a four-node wall depth. First,
+a symmetric H with H D + Dᵀ H supported on the two wall corners, the
+condition the earlier section reported as discriminating: the admissible
+set is the null space of the support constraint, taken by SVD in the
+symmetric-pair basis, and the minimum eigenvalue maximized over it at
+tr H = N:
+
+```
+                 N    kernel dim   λ_min/λ_max   constraint residual   interior H diagonal
+adopted         21        36        +0.884         3.5e-16              0.9898
+adopted         51        46        +0.848         3.7e-16              0.9922
+neighbour       51        46        +0.834         3.7e-16              0.9895
+cascade         21        36        +0.580         3.5e-16              0.9569
+cascade         51        46        +0.517         3.7e-16              0.9709
+```
+
+A well-conditioned positive-definite H within 15% of the identity exists
+for all three closures, the cascade included, so the support condition
+does not separate a neutral closure from an unstable one. The earlier
+verdict (+0.023 and +0.017 for the adopted rows, none for the cascade)
+came from a least-squares projection that had stopped at a relative
+residual of 1e-4; a version of this part with the same stall reproduced
+that kind of reading, and the exact null-space solve does not. The
+earlier figures are withdrawn in the preceding section. Second, the
+exact Lyapunov certificate: for a real L with imaginary spectrum,
+P = Re(V⁻ᴴ V⁻¹) is symmetric positive definite with P L + Lᵀ P = 0 to
+round-off, and ‖exp(tL)‖ ≤ √cond(P) for all time. It exists, and it has
+no structure:
+
+```
+                 N    cond(P)    ‖PL + LᵀP‖/(‖P‖‖L‖)   band width at 1e-6   interior diagonal
+adopted         21    1.05e1      1.0e-15                20                  0.27 to 1.83
+adopted         51    2.75e1      9.3e-16                50                  0.30 to 2.02
+neighbour       51    1.80e1      1.2e-15                50                  0.39 to 2.30
+cascade         51    1.17e3      7.1e-04                50                  0.06 to 1.67
+```
+
+P is block diagonal in (p, u) with dense blocks, and its interior
+diagonal varies by a factor of seven without settling. A corner of the
+N = 51 solution at depth 6, 8 or 10 padded with the identity interior
+leaves an off-corner residual of F D + Dᵀ F of 2.5e-4 to 2.7e-4 at N = 51
+to 401 for the adopted rows, falling like 1/N and never vanishing, with
+under 4% change from depth 6 to 10. No fixed-depth corner block of the
+Sharan, Brady and Livescu form emerges. The certificate of this section
+is therefore the measured one: the operator is close to normal at every
+line length examined, and neither a perturbation of the operator nor the
+non-normal transient produces growth of any consequence.
+
+### The C8 family
+
+The C8 interior reaches ±3, so a closed edge takes three rows. Widening
+each cascade row by one point at fixed order:
+
+```
+g_1 + a g_2 = Σ_{k=1}^{4} w_k f_k                third order,  a free
+b g_1 + g_2 + c g_3 = Σ_{k=1}^{5} w_k f_k         fourth order, b and c free
+d g_2 + g_3 + e g_4 = Σ_{k=1}^{6} w_k f_k         sixth order on 2d + e = 1
+```
+
+Six weights and two left-hand-side coordinates against seven conditions
+leave the sixth-order members of row 3 on a line, not a plane: the
+degree-6 residual is 12 − 24d − 12e, and the line passes through the
+cascade's (1/3, 1/3). Off the line the row is fifth order. The family
+reproduces the C8 cascade rows at (2, 1/4, 1/4; 1/3, 1/3) and the C6
+`:neutral3` rows at (0, 3/5, 3/10) exactly, and the assembled line agrees
+with the production plan to 4.4e-16. The neutral count on a 41 × 41 grid
+in (b, c) ∈ [−1, 1.5]² at N = 51 and 101, against a and against the
+position of row 3 on the sixth-order line:
+
+```
+  a \ d      0     1/5    1/4    1/3    9/20
+  0        132     73     76     60     71
+  1/2       50     22     22     28     40
+  1         12      6      7      7     17
+  3/2        3      0      1      4      1
+  2          1      0      0      0      1
+  5/2        0      0      0      0      0
+```
+
+The neutral set again sits at a = 0, an explicit third-order row 1, and
+is empty from a = 5/2, as for C6, but at a = 0 it is a two-dimensional
+region in (b, c) rather than a band 0.1 wide (at (d, e) = (1/3, 1/3):
+c ∈ [0.25, 0.75] at b = 0.5625, c ∈ [0, 0.625] at b = 0.625,
+c ∈ [−1, 0.06] at b = 0.75). Because the wall-window error at a = 0 is
+set by row 1 alone, every a = 0 member has the same wall error and the
+discriminators are the interior error and the sweep. On the fifth-order
+(d, e) plane at (0, 3/4, 1/4), 152 of 1681 points are neutral, none of
+which survives below. The unique seventh-order row 3 on the line,
+(d, e) = (1/4, 1/2) with weights [−1/60, −31/48, −1/3, 11/12, 1/12,
+−1/240], is neutral at N = 51 and 101, cuts the interior error by 20%,
+and fails the sweep from N = 18.
+
+The sweep over 649 line lengths, reject above 1e-10:
+
+```
+  (a, b, c) + (d, e)                max Re λ     at N    verdict
+  (0, 3/5, 3/10) + (1/3, 1/3)       +1.9e-12     1180    passes every N
+  (0, 7/10, 1/25) + (1/3, 1/3)      +2.5e-12      740    passes every N
+  (0, 3/5, 1/4) + (1/3, 1/3)        +9.8e-2      1040    fails from N = 104
+  (0, 3/4, 1/4) + (1/5, 3/5)        +2.2e-1       580    fails from N = 97
+  (0, 4/5, 1/10) + (1/5, 3/5)       +2.3e-1       780    fails from N = 118
+  (0, 3/4, 1/10) + (1/4, 1/2)       +1.3e-1       478    fails from N = 130
+  (0, 5/9, 1/10) + (2/5, 1/5)       +1.8e-1       436    fails from N = 142
+  (0, 16/25, 9/50) + (1/3, 1/3)     +2.9e-2        92    fails at N = 92 only (to 400)
+  (0, 33/50, 7/50) + (1/3, 1/3)     +2.8e-2       345    fails at N = 37 and 345 (to 400)
+  (0, 3/5, 3/10) + (1/4, 1/2)       +6.3e-1       384    fails from N = 18 (to 400)
+```
+
+The two survivors keep the C6 interior row on row 3 and carry C6-neutral
+rows 1 and 2. A prefilter of 750 rational members over twenty line
+lengths (N = 51 and 101, then six, then twelve more up to 601) keeps 79,
+all with the same wall error; the two of lowest interior error among
+them, (0, 3/4, 1/4; 1/5, 3/5) and (0, 3/4, 3/10; 1/5, 3/5), grow at 0.22
+per unit time from N = 97 on the full sweep. Twenty line lengths are a
+prefilter and not a verdict, and accuracy within a prefilter selects a
+wrong member. The adopted set is (0, 3/5, 3/10; 1/3, 1/3), the C6
+`:neutral3` rows over the C6 interior row, preferred over the runner-up
+(0, 7/10, 1/25; 1/3, 1/3) for its denominators, its interior error
+(5.65e-6 against 5.90e-6 at N = 97) and its viscous Jacobian reading.
+
+### The C10 family
+
+The pentadiagonal interior also reaches ±3 and takes three rows, whose
+left-hand sides carry the full band. The family widens the cascade rows
+by one point and frees the band entries as well:
+
+```
+g_1 + a g_2 + a₂ g_3 = Σ_{k=1}^{4} w_k f_k                    third order
+b g_1 + g_2 + c g_3 + c₂ g_4 = Σ_{k=1}^{5} w_k f_k             fourth order
+d₋₂ g_1 + d g_2 + g_3 + e g_4 + e₂ g_5 = Σ_{k=1}^{7} w_k f_k   sixth order
+```
+
+Row 3 takes seven points because a row with M right-hand-side points and
+a fixed left-hand side is exact through degree M − 1: the cascade's
+five-point row is sixth order only because (1/3, 1/3) makes it centred.
+At (1/3, 1/3) the seven-point row collapses to the cascade's with
+w₆ = w₇ = 0 exactly. The banded assembly agrees with the production
+`BandPlan` to 5.6e-16 to 8.9e-16 at N = 51 and 101, for the cascade
+rows, the family at the cascade point and the family at the selected
+point. With row 3 held at the C6 interior row, the scan over
+(b, c) ∈ [−1, 1.5]² at N = 51, then pruned over N = 31, 79, 101 and 151:
+
+```
+  a       neutral at N = 51   surviving five lengths   b range          c range
+  0            137 of 1681            24               [0.56, 0.88]     [−0.13, 0.63]
+  1/2           56 of 1681            18               [0.50, 0.63]     [0.13, 0.75]
+  1             16 of 1681             2               [0.50, 0.50]     [0.25, 0.31]
+  3/2            4 of 1681             1               [0.44, 0.44]     [0.25, 0.25]
+  2              2 of 1681             0
+  5/2 to 6     0 to 1 of 1681          0
+```
+
+a = 0 is forced as before, and at a = 0 the band runs from (b, c) ≈
+(0.56, 0.64) to (0.87, 0.02), 0.1 to 0.2 wide in c, the C6 band's shape
+slightly shifted; no growth rate between 1e-12 and 1e-8 occurs, so the
+threshold is not a knob. The sweep over 649 line lengths:
+
+```
+  (a, b, c [, d, e])                 max Re λ     at N    N above 1e-10
+  (0, 3/5, 3/10)                     +1.7e-12     1090        0
+  (0, 16/25, 9/50)                   +5.7e-2       516        6
+  (0, 7/10, 1/25)                    +3.5e-2       127        2
+  (0, 11/20, 1/2)                    +1.1e-1      1130       29
+  (0, 3/5, 0)                        +6.1e-1      1100      285
+  (0, 3/4, 3/4, 1/8, 1/4)            +8.2e-1      1120      475
+  (0, 9/10, 3/5, 1/8, 1/4)           +7.8e-2      1160        8
+  (0, 19/20, 2/5, 1/8, 1/4)          +6.9e-2       990        3
+```
+
+(0, 3/5, 3/10) with the cascade's row 3 is the only member that never
+exceeds 1e-10. Two rational members of the C6 band that are neutral for
+C6 at every N, (16/25, 9/50) and (7/10, 1/25), fail for C10 at N = 315
+and N = 127: the resonance is specific to the interior. Widening row 3
+buys accuracy and no neutrality: on a 12 × 11 × 15 × 13 grid over
+(b, c, d, e) the lowest interior error constants sit at (d, e) =
+(1/8, 1/4), where the interior error at N = 97 falls to 3.5e-8 against
+7.8e-6 for the selected rows and 2.3e-6 for the cascade, a clean third
+order on four test fields; every one of the ten lowest fails a staged
+sweep, most at N = 16 or 51, and the best member passing every stage,
+(0, 9/10, 3/5, 1/8, 1/4) at 7.0e-8, passes the production Jacobian and
+the uniform state and then fails the long sweep at N = 226, 402, 499,
+578, 596, 790, 930 and 1160. A seeded random search over all nine
+coordinates (40,000 draws, 1956 neutral at N = 51, 121 passing every
+stage) found nothing below 1.2e-7, so the band entries beyond the
+tridiagonal buy nothing. The adopted set is the C6 `:neutral3` rows
+padded with zeros at ±2 over the unchanged row 3, so the minimum extent
+and the halo reach do not move.
+
+### Error constants
+
+One derivative of exp(sin 3x) on the closed line, wall window of four
+nodes then the interior, N = 49 / 97 / 193, with the closed line's
+condition number:
+
+```
+                          wall                              interior                      cond
+C8 :neutral3     8.573e-4  1.011e-4  1.224e-5     4.878e-5  5.648e-6  6.751e-7     6.95
+C8 :cascade3     6.309e-4  7.492e-5  9.107e-6     1.422e-5  1.676e-6  2.029e-7    16.25
+C8 runner-up     8.573e-4  1.011e-4  1.224e-5     5.097e-5  5.903e-6  7.058e-7     6.94
+C8 :brady_livescu 2.150e-6 3.277e-8  2.872e-10    1.307e-7  1.951e-9  1.697e-11 4348.9
+C10 :neutral3    8.574e-4  1.011e-4  1.224e-5     6.710e-5  7.769e-6  9.287e-7    20.69
+C10 :cascade3    6.328e-4  7.514e-5  9.134e-6     1.961e-5  2.311e-6  2.797e-7    24.59
+C6 :neutral3     8.573e-4  1.011e-4  1.224e-5     3.387e-5  3.922e-6  4.689e-7     4.98
+C6 :cascade3     6.287e-4  7.465e-5  9.075e-6     9.841e-6  1.161e-6  1.405e-7    15.97
+```
+
+The wall-window error is set by row 1 and is the same for the neutral
+rows on every interior: 1.35 times the cascade's at unchanged third
+order on one derivative (the factor 2.5 of the preceding section is the
+standing wave's wall error after an evolution to t = 0.4, where the
+row-2 truncation enters as well). The interior-window error is 3.4 times the
+cascade's on every interior, at unchanged order. The C8 condition number
+falls from 16 to 7; the C10 one is set by the pentadiagonal interior and
+reads 20.7 for every band member against 24.6 for the cascade.
+
+### Production measurements
+
+Centered Jacobians of the production step, artificial properties off,
+cfl 0.5, the one-sided filter unrelaxed where on, N = 51 unless stated;
+the ladder at 3e-6 and 3e-5 moves the neutral readings by ±5e-9 and the
+cascade's by 1e-10:
+
+```
+                                      C8 :neutral3    C8 :cascade3    C10 :neutral3   C10 :cascade3
+slip, unfiltered                      1.0000000001    1.0104697113    1.0000000001    1.0198057979
+slip, one-sided filter                1.0000000033    1.0085087244    1.0000000035    1.0081446666
+slip, unfiltered, N = 101             1.0000000001    1.0082617272    1.0000000001    1.0119295843
+slip, one-sided filter, N = 101       1.0000000032                    1.0000000034    1.0029634131
+no-slip μ = 0.005, one-sided filter   1.0000000216    1.0000000079    1.0000000256    1.0000000093
+no-slip μ = 0.005, N = 101            1.0000000153
+Dirichlet ends, unfiltered            1.0000000001                    1.0000000001    1.0000000001
+Dirichlet ends, one-sided filter      1.0000000023                    1.0000000008    1.0000000027
+```
+
+The cascade readings reproduce the earlier section's 1.01046971 and
+1.01980580 (rates 1.36 and 2.57 per unit time). The viscous no-slip row
+reads 1 + 1e-8 to 3e-8 for every closure set, the C6 default's
+1.0000000186 included, and is not a closure effect. The uniform state
+(ρ = 0.9, tangential 0.1, p = 1.1) between slip walls under the default
+relaxed filter every step, cfl 0.5, Float64, max |u_n| at t = 10 / 20 /
+30 / 40:
+
+```
+N = 51    C8 :neutral3    2.7e-14  3.5e-14  4.1e-14  3.2e-14
+          C8 :cascade3    7.1e-11  3.9e-06  2.0e-03  3.7e-03
+          C10 :neutral3   1.9e-14  3.6e-14  3.7e-14  3.4e-14
+          C10 :cascade3   3.6e-11  1.2e-06  2.9e-03  1.8e-03 (saturated)
+N = 101   C8 :neutral3    2.2e-14  2.1e-14  5.1e-14  5.3e-14
+          C8 :cascade3    1.7e-11  8.4e-08  3.5e-04  1.2e-03
+          C10 :neutral3   2.8e-14  4.1e-14  6.7e-14  1.2e-13
+          C10 :cascade3   3.1e-12  4.5e-09  7.1e-06  8.0e-04
+```
+
+### The decision
+
+`:neutral3` is the default of `lele_d1_8` and `lele_d1_10` as it is of
+`lele_d1_6`, and the same two rows serve all three interiors: for C8 and
+C10 they are followed by the C6 interior row the cascade already used
+there, so `neutral_closures` builds the three-row set from the C6 table
+and that row, and `lele_d1_10` gains the `closures` keyword with
+`:cascade3` kept for comparison. The cost is the one C6 paid, a factor
+1.35 on the wall-window error and 3.4 on the interior-window error at
+unchanged orders; the battery runs C6 and does not move, the closed C8
+and C10 studies of `test/convergence.jl` read the C6 study's errors to
+the printed digits (8.583e-3 / 9.153e-4 / 1.044e-4, order 3.18), and one
+serial guard moves, the C10 fold test whose slip-walled end carries the
+closure's wall constant (even field 1.609e-5 to 2.137e-5, odd 2.380e-6
+to 3.556e-6, the 1.33 ratio of the wall window). A patch or level
+interface keeps the cascade rows for
+every neutral set, by the same rule and for the same reason as C6. For
+the adopted C6 rows the certificate is the measured one: a Kreiss
+constant below 2.5, an eigenvector condition number below 9 to N = 801,
+and a transient amplification below 4 over twenty time units, with no
+trend in N; no N-independent structural certificate has been found, and
+the corner-supported norm the preceding section reported does not
+discriminate when solved exactly. The line-length resonance of the
+neighbouring members is a collision of the two interior wavenumber
+branches of a compact scheme whose period the interior sets and whose
+occurrence the closure's wall phases decide, which is why the selection
+sweeps over every line length and not over a sample of them.
+
+## Derivative operator cost
+
+`bench/derivcost.jl`, September 2026. Wall-clock cost per grid point per
+step of `lele_d1_6`, `lele_d1_8` and `lele_d1_10` on a single-species
+ideal-gas box, the Taylor–Green field as the initial state (mirror-symmetric
+about the x faces, so admissible under both configurations), the default
+filter every step, `ArtParams()` defaults, cfl 0.5, Float64, on a 12th-gen
+Core i9-12900K (8 performance and 8 efficiency cores, 24 threads; the
+package pins BLAS to one thread) under Microsoft MPI 10.1 from the JLL.
+Each (configuration, operator) cell is built, warmed over three steps and
+timed over thirty through `solver.wall_total`, which spans `max_rate`,
+`apply_bcs!`, the stages and the filter pass, reduced as the maximum over
+ranks after a barrier; medians of three processes, ratios formed within a
+process so the 10–20% run-to-run drift cancels, and a fourth process with
+the operators in reverse order, which reproduces the forward ratios inside
+the spread. The production configuration, eight ranks at one thread each,
+is the primary measurement.
+
+```
+                                            C6        C8        C10      C8/C6          C10/C6
+128^3 on 8 ranks (2,2,2), periodic, -t 1   444.1     461.5     517.3    1.035–1.054    1.157–1.170
+128^3 on 8 ranks, slip walls in x          447.3     459.2     518.1    1.010–1.041    1.090–1.167
+64^3 on 8 ranks (32^3 per rank), periodic  503.3     520.7     604.8    0.979–1.087    1.202–1.231
+64^3 on 8 ranks, slip walls in x           500.4     531.3     608.5    1.042–1.065    1.203–1.239
+64^3 on 1 rank, -t 1, periodic            1353.5    1486.1    1748.8    1.072–1.106    1.266–1.308
+64^3 on 1 rank, -t 16, periodic            402.6     416.9     498.5    1.030–1.042    1.220–1.251
+64^3 on 1 rank, -t 16, slip walls in x     371.3     385.1     426.6    1.034–1.039    1.107–1.199
+```
+
+ns per point per step, global points over the slowest rank's wall; the
+ratio columns span the processes. The phases of one right-hand-side
+evaluation at 128³ on eight ranks, periodic, the maximum over ranks of each
+rank's minimum over repeated calls on a settled state, ns per point (the
+first four inside `compute_rhs!`, `filter_state!` outside it), with the
+single-rank `-t 16` figures beside them:
+
+```
+                           8 ranks, -t 1                 1 rank, -t 16
+                            C6      C8      C10          C6      C8      C10
+velocity gradients         9.38   10.86   13.20         8.69    9.87   14.01
+scalar gradients           5.23    6.28    8.01         6.03    6.60    9.28
+artificial properties     18.77   20.14   17.63        16.06   16.27   15.55
+assemble_fluxes!           7.32    7.32    6.86         8.42    9.19    9.28
+compute_rhs! (whole)      73.64   82.75   90.26        71.32   73.27   92.20
+filter_state!             24.35   21.98   21.63        19.19   18.25   19.31
+```
+
+In the production configuration C8 costs 4% of a step over C6 and C10
+16%; at 32³ per rank the C8 figure stays where it is and the C10 figure
+rises to about 20%, while every operator's cost per point rises 13% from
+the communication share. The single-rank single-thread ratios, 10% and
+29%, are the undiluted arithmetic: the derivative solves are a fifth to a
+quarter of the right-hand side, the artificial-property pass and the filter
+are flat across the operators to within 3%, and a decomposed line solve
+adds a reduced-interface stage and a halo exchange per direction that no
+operator changes, which dilutes C8's extra multiply-adds more than C10's
+extra band since the pentadiagonal interface stage is itself wider. The
+closed configuration costs the same as the periodic one on eight ranks and
+less on one, where the closed line solve carries no cyclic correction. The
+pentadiagonal plans add 1.1 MiB to a 234 MiB per-rank footprint at 64³ per
+rank, and the allocation per step (7.7 KiB per rank) is the same across the
+operators.
+
+Rank placement is not controllable with this launcher. Microsoft MPI's
+`-affinity` and `-affinity_layout seq:P` options have no effect through the
+JLL `mpiexec`, which runs without the `smpd` service and sets no affinity
+mask: sampled over two seconds of work, every rank migrated over the whole
+machine including the efficiency cores, and two ranks were seen on one
+logical CPU at the same instant. The process-to-process spread at 64³ per
+rank is 2.7–4.2% on five of six cells (one 15% outlier), the size of the
+whole C8 effect, and 19–30% at 32³ per rank in the periodic cells; the C8
+figure is therefore quoted as a few percent. Pinning would take a
+`SetProcessAffinityMask` call inside the run, not a launcher flag.
+
+```text
+MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
+"$MPIEXEC" -n 8 julia --project=. -t 1 bench/derivcost.jl 128 30 dims=2,2,2
+"$MPIEXEC" -n 8 julia --project=. -t 1 bench/derivcost.jl 128 30 dims=2,2,2 derivs=c10,c8,c6
+"$MPIEXEC" -n 8 julia --project=. -t 1 bench/derivcost.jl 64 30 dims=2,2,2
+"$MPIEXEC" -n 8 julia --project=. -t 1 bench/derivcost.jl 128 10 dims=2,2,2 phases=true cases=periodic
+julia --project=. -t 1  bench/derivcost.jl 64 20 cases=periodic
+julia --project=. -t 16 bench/derivcost.jl 64 30
+```

@@ -109,22 +109,37 @@ periodic dimension omits the duplicate endpoint and uses a cyclic compact
 system. Coordinate singularities instead use the parity and antipodal folds
 described in [Curvilinear coordinates](@ref).
 
-The tridiagonal derivatives [`lele_d1_6`](@ref) and [`lele_d1_8`](@ref) offer
-four closure sets through their `closures` keyword. The C6 default
-`:neutral3` is an explicit third-order first row on four points and a
-fourth-order compact second row on five points, with coefficients chosen so
-that the Euler step linearized about a uniform state between slip walls is
-neutral; it keeps the cascade's orders at about 2.5 times its wall error
-constant. `:cascade3`, the C8 default, is the reduced-order cascade of
-Carpenter, Gottlieb and Abarbanel (1993): a third-order one-sided first
-row, a fourth-order Padé second row,
-and the sixth-order interior row where a third is needed. `:cascade4` raises
-the first row to Lele's fourth-order one-sided relation. `:brady_livescu` applies the
-closure rows of Brady and Livescu (2019), one order below the interior on
-every row, constructed to be discretely conservative and selected by
-optimization on the Euler equations for stability without a filter. Their
-rows are far from diagonally dominant, and the closed-line condition number
-rises from about 16 to about 1e3, which costs three digits at the wall.
+The three derivative operators select their closure rows through a
+`closures` keyword: [`lele_d1_6`](@ref) and [`lele_d1_8`](@ref) offer four
+sets, the pentadiagonal [`lele_d1_10`](@ref) the first two. The default on
+all three is `:neutral3`. Its first row is the explicit third-order
+one-sided difference on four points and its second a fourth-order compact
+row on five points, with coefficients chosen so that the Euler equations
+linearized about a uniform state between slip walls have a neutral
+spectrum at every line length. On C8 and C10 a third row is needed, and it
+is the sixth-order C6 interior row; C10 carries the same rows with a zero
+outer band. `:cascade3` is the reduced-order cascade of Carpenter,
+Gottlieb and Abarbanel (1993), which the neutral set replaced: a
+third-order one-sided first row, the fourth-order Padé second row, and the
+same interior row where a third is needed. `:cascade4` raises the cascade's
+first row to Lele's fourth-order one-sided relation. `:brady_livescu` takes
+the rows of Brady and Livescu (2019), one order below the interior on every
+row, discretely conservative, and selected by optimization on the Euler
+equations for stability without a filter; they are far from diagonally
+dominant, and the closed-line condition number rises from about 16 to about
+1e3, which costs three digits at the wall.
+
+The row orders decide what a wall-bounded run receives. Under `:neutral3`
+and under `:cascade3` the first row is third order, so one derivative on a
+wall-bounded line is third order in the maximum norm for every operator,
+the compact solve carrying the first row's truncation inward, and a
+wall-bounded evolution is fourth order at the wall. The closed-domain
+studies of C8 and C10 read the C6 study's errors to the printed digits. An
+operator's interior order applies to a periodic dimension and to the
+interior of a closed one. Only different wall closure coefficients raise
+the wall order: `:cascade4` by one, and C6 `:brady_livescu` to about six.
+The neutral rows cost about 1.35 times the cascade's wall error and 3.4
+times its interior error on one derivative, at unchanged orders.
 
 C6 `:brady_livescu` under the default filter rows is the supported
 high-order wall configuration, within measured limits: a wall whose
@@ -150,11 +165,12 @@ stronger one-sided filter makes it worse. Dirichlet ends, viscous no-slip
 walls and the unfiltered `:brady_livescu` rows are neutral, and the
 artificial properties saturate the mode near a wall-normal velocity of
 1e-2, which a Float64 seed reaches after roughly thirty time units. The
-C6 default `:neutral3` removes it: the linearized step is neutral at slip
-walls, Dirichlet ends and no-slip walls, filtered and unfiltered, and a
-uniform state holds its round-off seed through forty time units. The C8
-and C10 cascade rows still carry the mode, so a long inviscid run between
-slip walls or symmetry planes on those schemes should carry
+default `:neutral3` removes it on C6, and the same two rows over the
+sixth-order interior row remove it on C8 and on C10: the linearized step is
+neutral at slip walls, Dirichlet ends and no-slip walls, filtered and
+unfiltered, and a uniform state holds its round-off seed through forty time
+units. A long inviscid run between slip walls or symmetry planes on the
+`:cascade3` rows of any of the three operators should carry
 `compact_filter(closures = :cascade)` or physical viscosity.
 
 The state filter [`compact_filter`](@ref) has closure rows of its own, and

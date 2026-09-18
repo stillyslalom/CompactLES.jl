@@ -518,11 +518,14 @@ end
     fillf!(solver, f, (r, θ, z) -> r * exp(-4r^2))            # odd across the axis
     CL.exchange_halos!(f, solver.decomp)
     CL.deriv_along!(df, f, solver, 1, -1); CL._scale_grad!(df, solver, 1)
-    @test ferr(solver, df, (r, θ, z) -> (1 - 8r^2) * exp(-4r^2)) < 5e-6
+    # Both errors sit at the closed outer end, so they carry the default
+    # closure's wall constant: measured 3.6e-6 and 2.1e-5 under `:neutral3`,
+    # 2.4e-6 and 1.6e-5 under `:cascade3`.
+    @test ferr(solver, df, (r, θ, z) -> (1 - 8r^2) * exp(-4r^2)) < 6e-6
     fillf!(solver, f, (r, θ, z) -> exp(-4r^2))                # even across the axis
     CL.exchange_halos!(f, solver.decomp)
     CL.deriv_along!(df, f, solver, 1, 1); CL._scale_grad!(df, solver, 1)
-    @test ferr(solver, df, (r, θ, z) -> -8r * exp(-4r^2)) < 2e-5
+    @test ferr(solver, df, (r, θ, z) -> -8r * exp(-4r^2)) < 3e-5
 end
 
 @testset "transposed y/z path ≡ x path on permuted data" begin
@@ -563,8 +566,11 @@ end
                          (lele_d1_6(closures=:cascade4), 4),
                          (lele_d1_6(closures=:brady_livescu), 5),
                          (lele_d1_8(), 3),
+                         (lele_d1_8(closures=:cascade3), 3),
                          (lele_d1_8(closures=:cascade4), 4),
-                         (lele_d1_8(closures=:brady_livescu), 7))
+                         (lele_d1_8(closures=:brady_livescu), 7),
+                         (lele_d1_10(), 3),
+                         (lele_d1_10(closures=:cascade3), 3))
         solver = Solver(n_global=(32, 16, 16), L_domain=(1.0, 1.0, 1.0),
                         bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                         deriv=deriv, art=ArtParams(enabled=false))
@@ -579,7 +585,50 @@ end
         @test ferr(solver, df, (x, y, z) -> (deg + 1) * x^deg) > 1e-7
     end
     @test_throws ErrorException lele_d1_6(closures=:unknown)
-    @test_throws ErrorException lele_d1_8(closures=:neutral3)
+    # The C8 neutral set is the C6 neutral rows over the C6 interior row,
+    # which is also the third cascade row.
+    @test lele_d1_8().closures[1:2] == lele_d1_6().closures
+    @test lele_d1_8().closures[3] == lele_d1_8(closures=:cascade3).closures[3]
+    @test_throws ErrorException CL.neutral_closures(Float64, 4)
+    # The C10 rows are the C8 rows with a zero outer band, whichever set is
+    # selected, and the cascade set reproduces the rows the scheme carried
+    # before it took a keyword.
+    for j in 1:3
+        @test lele_d1_10().closures[j].lhs == [0; lele_d1_8().closures[j].lhs...; 0]
+        @test lele_d1_10().closures[j].rhs == lele_d1_8().closures[j].rhs
+        @test lele_d1_10(closures=:cascade3).closures[j].lhs ==
+            [0; lele_d1_8(closures=:cascade3).closures[j].lhs...; 0]
+        @test lele_d1_10(closures=:cascade3).closures[j].rhs ==
+            lele_d1_8(closures=:cascade3).closures[j].rhs
+    end
+    let rows = lele_d1_10(closures=:cascade3).closures
+        @test rows[1].lhs == [0, 0, 1, 2, 0]
+        @test rows[1].rhs == [-5//2, 2, 1//2]
+        @test rows[2].lhs == [0, 1//4, 1, 1//4, 0]
+        @test rows[2].rhs == [-3//4, 0, 3//4]
+        @test rows[3].lhs == Float64[0, 1//3, 1, 1//3, 0]
+        @test rows[3].rhs == Float64[-1//36, -7//9, 0, 7//9, 1//36]
+        @test all(row -> row.first == 1, rows)
+    end
+    @test_throws ErrorException lele_d1_10(closures=:cascade4)
+    @test_throws ErrorException lele_d1_10(closures=:brady_livescu)
+    # An interface imposes no wall condition, so a neutral scheme falls back
+    # to the cascade rows of its own width there, and a cascade scheme keeps
+    # what it has.
+    @test CL.interface_divergence_closures(lele_d1_8()) ==
+        lele_d1_8(closures=:cascade3).closures
+    @test length(CL.interface_divergence_closures(lele_d1_8())) == 3
+    @test CL.interface_divergence_closures(lele_d1_8(closures=:cascade3)) ==
+        lele_d1_8(closures=:cascade3).closures
+    @test CL.interface_divergence_closures(lele_d1_6()) ==
+        lele_d1_6(closures=:cascade3).closures
+    @test CL.interface_divergence_closures(lele_d1_10()) ==
+        lele_d1_10(closures=:cascade3).closures
+    @test length(CL.interface_divergence_closures(lele_d1_10())) == 3
+    @test CL.interface_divergence_closures(lele_d1_10(closures=:cascade3)) ==
+        lele_d1_10(closures=:cascade3).closures
+    @test CL.interface_divergence_closures(compact_d8()) == compact_d8().closures
+    @test CL.interface_divergence_closures(pade_d1_4()) == pade_d1_4().closures
 end
 
 @testset "filter closures: one-sided rows, published row, wall exactness" begin

@@ -138,9 +138,12 @@ end
     # digits on a derivative of magnitude 8) and rises with N rather than
     # falling, while Float64 continues down at the closure order. Measured
     # at N = 96: C6 2.8e-3 / 3.5e-7, C8 1.5e-3 / 3.5e-8 (Float32 / Float64),
-    # against 9.0e-5 / 7.7e-5 for the default cascade. So in Float32 the
-    # default closure is the more accurate one from N = 48 up, which is the
-    # restriction this testset pins; the device path runs Float32.
+    # against 9.0e-5 / 7.7e-5 for the cascade rows and 9.1e-5 / 1.0e-4 for the
+    # default `:neutral3` rows, which C6 and C8 share to these digits since
+    # the maximum sits in the two rows the two sets have in common. So in
+    # Float32 the default closure is the more accurate one from N = 48 up,
+    # which is the restriction this testset pins; the device path runs
+    # Float32.
     for mk in (T -> lele_d1_6(T; closures=:brady_livescu),
                T -> lele_d1_8(T; closures=:brady_livescu))
         e32 = _f32_closed_derivative_error(96; deriv=mk(Float32))
@@ -149,8 +152,9 @@ end
         @test Float32(2e-4) < e32 < Float32(1e-2)
         @test e32 > 100 * e64
     end
-    ecas = _f32_closed_derivative_error(96)
-    @test ecas < Float32(2e-4)
+    edefault = _f32_closed_derivative_error(96)
+    @test edefault < Float32(2e-4)
+    @test _f32_closed_derivative_error(96; deriv=lele_d1_8(Float32)) < Float32(2e-4)
 end
 
 @testset "Float32 Sod profile and conservation" begin

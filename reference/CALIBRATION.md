@@ -115,14 +115,14 @@ effect. The appendix link carries the sweep.
   rows. `C_kappa` does not help under the default smoother, and the deficit
   does not converge away with resolution ([walls](#walls-folds-and-metrics)).
 - **A long inviscid run between slip walls or symmetry planes grows a
-  wall-normal velocity from nothing.** The run is on `lele_d1_6(closures =
-  :cascade3)`, or on C8 or C10, whose closure rows carry the slip-wall
+  wall-normal velocity from nothing.** The run is on the `:cascade3` rows
+  of `lele_d1_6`, `lele_d1_8` or `lele_d1_10`, which carry the slip-wall
   mode: 1.0 per unit time under the default filter, visible after about
-  30 time units in Float64 and 15 in Float32. The C6 default `:neutral3`
-  is neutral there; on C8 and C10 the choices are `compact_filter(closures
-  = :cascade)`, which damps the mode at a second-order wall defect,
-  physical viscosity at a no-slip wall, or C6 with its default rows
-  ([the mode](#walls-folds-and-metrics)).
+  30 time units in Float64 and 15 in Float32. The default `:neutral3` rows
+  of every interior are neutral there; a run that must keep the cascade
+  rows can carry `compact_filter(closures = :cascade)`, which damps the
+  mode at a second-order wall defect, or physical viscosity at a no-slip
+  wall ([the mode](#walls-folds-and-metrics)).
 - **A smooth wave train or a contact is over-damped.** `C_beta = 0.5` keeps
   0.7% more Shu–Osher amplitude and an 18% narrower contact than 1.0, at
   the cost of half the spherical origin's timestep. `detector = :d8` keeps
@@ -517,8 +517,10 @@ resolved over fewer than about ten cells, where they read two to three
 times the cascade's error. The derivative closures `:brady_livescu` raise
 the smooth wall order from 3.17 to 5.88 (C6) and 7.91 (C8) but fail
 Woodward–Colella under the cascade rows through a β\*-driven wall mode;
-under the one-sided rows both complete it and neither takes the singular
-cold start of Noh, and `:cascade4` needs the F2 row the one-sided rows
+under the one-sided rows both complete it. Both failed the singular
+cold start of Noh in that pre-N6h measurement; the current-solver
+[N6j remeasurement](CALIBRATION_APPENDIX.md#fifth-order-closures-under-the-dilatation-sensor)
+supersedes that result for Brady–Livescu. `:cascade4` needs the F2 row the one-sided rows
 remove. The coupling rule: `:cascade4` with `closures = :cascade`,
 `:cascade3` or `:brady_livescu` with the default
 ([wall cascade](CALIBRATION_APPENDIX.md#the-filters-wall-cascade),
@@ -544,8 +546,14 @@ at a shocked wall it reproduces the default's Woodward–Colella
 profile to 0.1% in `L1` at every CFL number and holds the warm Noh wall
 within 0.2% where the default reads 1%. In Float32 a wall evolution
 floors near 3e-5 under either closure, so the rows' 1e-3 one-derivative
-floor does not reach the solution. `:neutral3` remains the default for
-the singular start it completes and the rows do not. C8 `:brady_livescu`
+floor does not reach the solution. N6j confirms the smooth-wall benefit
+under `beta_sensor = :dilatation` and retains `:neutral3` as the default.
+At N = 200 and CFL 0.3, C6 Brady–Livescu now completes cold planar Noh
+under both sensors with seven inadmissible cells under `validity = :permissive`;
+that bounded completion does not extend its supported cold-start range or
+remove its measured linear resonances
+([N6j](CALIBRATION_APPENDIX.md#fifth-order-closures-under-the-dilatation-sensor)).
+C8 `:brady_livescu`
 is not supported at a wall: it fails a smooth wall from `cfl = 1.25`
 with its mirror completing, the warm Noh wall from 0.9, the Cartesian
 Noh plane on both starts, and every planar start but the 40-cell one
@@ -585,9 +593,22 @@ window eight times smaller), and a cold planar Noh wall deficit of 52.8%
 against 50.3%. Two other routes were measured and rejected: a filter
 mirroring only the normal acoustic pair is neutral but drops the wall
 evolution to third order, and Brady–Livescu rows on the divergence alone
-inherit that set's cold-start failure, which the divergence rows are shown
-to cause. The C8 and C10 cascade rows still carry the mode
-([the neutral rows](CALIBRATION_APPENDIX.md#the-neutral-closure-rows)).
+inherited that set's cold-start failure in the pre-N6h measurement.
+N6j supersedes the full C6 set's cold outcome; the divergence-only variant
+has not been requalified. The same two rows over the C6 interior row are
+the C8 and C10 defaults from September 2026, the only members of their
+three-row families to hold every line length from 12 to 1200, at the
+same 1.35 and 3.4 factors on the wall and interior windows of one
+derivative. For the C6 rows the certificate is measured rather than
+proved: the pseudospectral abscissa is the first-order eigenvalue
+perturbation over six decades of ε, the Kreiss constant stays below 2.5
+and the eigenvector condition number below 9 to N = 801, and the
+transient amplification over twenty time units is below 4 at every line
+length; the neighbouring members' growth at particular line lengths is
+the collision of the two interior wavenumber branches of the compact
+scheme, whose period the interior row sets
+([the neutral rows](CALIBRATION_APPENDIX.md#the-neutral-closure-rows),
+[the certificate](CALIBRATION_APPENDIX.md#the-neutral-rows-certificate-and-the-c8-and-c10-sets)).
 
 **Constant annihilation.** A closure row leaves 2–40 eps of c/h on a
 constant c at the wall, the solve amplifying the products' rounding by 2
@@ -691,11 +712,14 @@ stays stable.
    [the fold](CALIBRATION_APPENDIX.md#the-fold)).
 8. **Decide `species_flux`** on the vortex-ring/SF6 case
    ([open](CALIBRATION_APPENDIX.md#open)).
-9. **A neutral closure set for C8**, whose cascade rows carry the
-   slip-wall mode at 1.4 per unit time; the C6 `:neutral3` rows are
-   derived for the C6 interior and need a three-row family and their own
-   line-length sweep for C8
-   ([the neutral rows](CALIBRATION_APPENDIX.md#the-neutral-closure-rows)).
+9. **A neutral closure set for C8: closed, September 2026.** The C6
+   `:neutral3` rows over the C6 interior row are the neutral set for C8
+   and for C10, the only members of their three-row families to hold
+   every line length from 12 to 1200, and are the defaults of `lele_d1_8`
+   and `lele_d1_10`; the C6 rows carry a measured pseudospectral
+   certificate and the line-length resonance of their neighbours is
+   explained
+   ([the certificate](CALIBRATION_APPENDIX.md#the-neutral-rows-certificate-and-the-c8-and-c10-sets)).
 10. **The `:gaussian` smoother's wall rows: closed, September 2026.** Its
     closure rows are folded onto the node-centred mirror of a reflecting
     wall, built from the interior weights so the unit row sum is inherited.

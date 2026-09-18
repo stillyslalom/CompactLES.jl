@@ -42,7 +42,11 @@ Before interpreting any scaling or timing number, identify the hardware.
 uniform all change the interpretation; a hybrid performance/efficiency-core
 desktop will spread threads across both and understate scaling. `ThreadPinning`
 supplies the topology queries `clusterprobe.jl` uses. Nothing pins threads yet;
-only the querying half has been validated.
+only the querying half has been validated. The JLL `mpiexec` on Windows sets
+no affinity mask either (`-affinity_layout` has no effect without the `smpd`
+service), so ranks migrate across the performance and efficiency cores and a
+timing at eight ranks carries a 3–4% process-to-process spread at 64³ per
+rank; form ratios within a process, as `bench/derivcost.jl` does.
 
 Windows checkouts may have CRLF line endings. Helper scripts that match
 multi-line text against `\n` will silently find nothing; match a line at a time.
@@ -186,16 +190,19 @@ decomposition-independent profile.
 `test/convergence.jl` prints measured orders against regression guards baked
 into the file: C6 6.01, C8 8.00, C10 10.04, C6 wall closures 3.18
 (`:cascade3` 3.17, `:cascade4` 4.02, `:brady_livescu` 5.88), C8 wall closures
-`:brady_livescu` 7.91, filter pass `:cascade` 1.88 / `:onesided` 8.07,
+3.18 (`:brady_livescu` 7.91), C10 wall closures 3.18, filter pass
+`:cascade` 1.88 / `:onesided` 8.07,
 cylindrical axis odd 3.76 / even 2.99, resolved-θ 3.76, spherical origin
-2.97, closure rows on a polynomial 3.00 / 3.00 / 4.00 / 5.00 / 7.00
-(`:neutral3`, `:cascade3`, `:cascade4`, C6 and C8 `:brady_livescu`), wall
+2.97, closure rows on a polynomial 3.00 / 3.00 / 4.00 / 5.00 / 3.00 / 7.00 /
+3.00 (C6 `:neutral3`, `:cascade3`, `:cascade4`, `:brady_livescu`, then C8
+`:neutral3` and `:brady_livescu`, then C10 `:neutral3`), wall
 evolution 4.01 (`:cascade3` 3.93, cascade filter 1.94, one-sided filter
 3.90, `:brady_livescu` 5.73, viscous no-slip 4.00, viscous slip 4.00,
 shear mode 4.67),
 interface evolution 3.31 (two patches), 3.62 / 6.01 (two levels, C6 /
 `:brady_livescu`), 3.72 (three levels subcycled), 4.12 (two levels
-filtered). The C6 default closure is `:neutral3`; the fold studies close
+filtered). The default closure of all three derivative presets is
+`:neutral3`; the fold studies close
 their outer end with a wall and use the default rows, while the interface
 studies keep the cascade rows, since an interface divergence selects them.
 The evolution

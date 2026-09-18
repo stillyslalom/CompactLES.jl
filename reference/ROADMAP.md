@@ -325,8 +325,9 @@ below exposed behavior outside those passing checks.
   one-sided rows cut the planar Noh wall deficit at N = 800 from 61% to 43%, at
   the cost of a reflection resolved over fewer than about ten cells, two to
   three times the cascade's error. `:cascade4` stays paired with
-  `closures = :cascade`, and the Brady–Livescu sets fail the cold Noh start
-  under either. The validation guards were re-baselined
+  `closures = :cascade`, and the Brady–Livescu sets failed the cold Noh start
+  under either in this pre-N6h measurement; N6j records the current C6 outcome.
+  The validation guards were re-baselined
   ([the measurements](CALIBRATION_APPENDIX.md#the-filters-wall-rows-on-the-current-solver),
   [the applied form](CALIBRATION.md#walls-folds-and-metrics),
   [completion record](HISTORY.md#the-filters-wall-rows-september-2026)).
@@ -352,7 +353,8 @@ below exposed behavior outside those passing checks.
   smooth wall cases channel by channel, CFL ladders, the shocked walls and the
   precision and extent floors. The C6 rows track the cascade to
   `cfl = 1.75` on a smooth wall and 1.2 on the shocked ones and hold a resolved
-  warm Noh wall, but take no singular start; C8 fails a smooth wall from
+  warm Noh wall, but took no singular start in that measurement (superseded
+  for the C6 cold preset by N6j); C8 fails a smooth wall from
   `cfl = 1.25` and the Cartesian Noh plane on both starts. With the properties
   on, a wall was fourth order under either closure, which N6e traced to the
   detector's clamped edge acting through β\*.
@@ -562,21 +564,29 @@ below exposed behavior outside those passing checks.
   ([measurements](CALIBRATION_APPENDIX.md#the-aligned-noh-transverse-mode),
   [completion record](HISTORY.md#the-aligned-noh-transverse-mode-september-2026)).
 
-- [ ] **N6j — Re-measure the fifth-order closure candidates under
-  `beta_sensor = :dilatation`.** The search recorded in
-  [the appendix](CALIBRATION_APPENDIX.md#fifth-order-c6-closure-search) found
-  no fifth-order six- or seven-point family that is a production candidate:
-  Brady–Livescu, the searched rows, the joint derivative/filter treatment and
-  the differential-evolution rows fail cold planar Noh at steps 36, 316, 34
-  and 32, where `:neutral3` completes it, and `de_scheme()` also grows at a
-  Dirichlet end, filtered radius 1.0746. The instruments are retained:
-  `bench/closuresearch.jl`, `closurequalify.jl`, `closureenergy.jl` and
-  `closuredamping.jl`. Start only if a resolved-start, properties-off or
-  `:dilatation` workload needs a fifth-order wall.
-  **Gate:** the smooth wall matrix under `:dilatation`, where the inviscid
-  wall is no longer capped, before any derivative row is searched again.
+- [x] **N6j — Re-measure the fifth-order closure candidates under
+  `beta_sensor = :dilatation`.**
+  **Delivered:** the expanded five-case smooth wall matrix for the four
+  retained fifth-order coefficient sets and the joint acoustic treatment,
+  with `:neutral3`, strain-sensor and properties-off controls, three
+  resolutions, and half-CFL checks. Dilatation removes the inviscid
+  strain-sensor cap: C6 Brady–Livescu reads orders 5.66 / 6.19 and DE
+  5.91 / 6.00 under the default filter; viscous and shear walls already
+  track their properties-off controls. Fine shear errors reach roundoff.
+  Current shock controls supersede the archived pre-N6h failures:
+  Brady–Livescu and the unfiltered-search rows now complete the cold
+  N = 200 planar Noh preset under both sensors, with seven inadmissible
+  cells under the permissive policy. Candidate, DE and joint treatments
+  still fail it. Those bounded completions do not remove the archived
+  linear resonances, DE's Dirichlet growth, or the joint prototype's limits.
+  The existing production choices and numerical baselines are retained;
+  no new search or closure promotion is justified by this measurement.
+  **Code:** [closurequalify.jl](../bench/closurequalify.jl),
+  [closuredamping.jl](../bench/closuredamping.jl).
+  [Measurements and reproduction](CALIBRATION_APPENDIX.md#fifth-order-closures-under-the-dilatation-sensor),
+  [completion record](HISTORY.md#fifth-order-closures-under-the-dilatation-sensor-september-2026).
 
-- [ ] **N6k — Certify the neutral rows and extend them to C8 and C10.**
+- [x] **N6k — Certify the neutral rows and extend them to C8 and C10.**
   The neutrality of `:neutral3` is measured over line lengths 12 to 1200
   and not proved, and a neutral spectrum of a non-normal operator is
   necessary, not sufficient. Deliver a pseudospectral or eigenvector
@@ -593,6 +603,63 @@ below exposed behavior outside those passing checks.
   **Depends on:** N6d's instrument and linear model.
   **Gate:** a certificate or a measured pseudospectral abscissa for the
   adopted rows, and C8 and C10 sets passing N6d's gate.
+  **Code:** [kernels.jl](../src/kernels.jl),
+  [kernels_banded.jl](../src/kernels_banded.jl),
+  [closurecertify.jl](../bench/closurecertify.jl),
+  [neutralsearch8.jl](../bench/neutralsearch8.jl),
+  [neutralsearch10.jl](../bench/neutralsearch10.jl).
+  **Delivered:** the measured certificate and the C8 and C10 defaults.
+  On the exact 2N model the adopted rows' ε-pseudospectral abscissa is
+  the first-order eigenvalue perturbation over six decades of ε, the
+  Kreiss constant stays below 2.5 and the eigenvector condition number
+  below 9 to N = 801, and the transient amplification over twenty time
+  units is below 4 at every line length, with no trend in N; the exact
+  Lyapunov norm exists and has no structure, and the corner-supported
+  norm reported under N6d does not discriminate when solved exactly. The
+  neighbour's growth at N = 371 + 44k is the collision of one mode from
+  each wavenumber branch of the C6 modified-wavenumber relation at 4.6
+  points per wavelength, with the period set by the interior row and the
+  occurrence by the closure's wall phases. The C6 rows over the C6
+  interior row are the only members of the C8 and C10 three-row families
+  to hold every line length from 12 to 1200, and are the `:neutral3`
+  defaults of `lele_d1_8` and `lele_d1_10`, at the cost C6 paid and with
+  the cascade rows kept at interfaces
+  ([the measurements](CALIBRATION_APPENDIX.md#the-neutral-rows-certificate-and-the-c8-and-c10-sets),
+  [completion record](HISTORY.md#the-neutral-rows-certificate-and-the-c8-and-c10-sets-september-2026)).
+
+- [ ] **N6l — Fold a slip wall on a face-centred mirror for full wall order.**
+  An inviscid slip wall is a symmetry plane: density, pressure, energy,
+  species and the tangential velocity are even about it and the normal
+  velocity odd. The closed-edge rows exist because the wall sits on a
+  node, where a general field has no parity, and under every closure set
+  they hold a wall-bounded line to third order in the maximum norm and a
+  wall-bounded evolution to fourth order at the wall, whatever the
+  interior order (N6k). On a wall placed half a cell outside the first
+  node, every operator (derivative, filter, sensor smoother, detector) can
+  be the interior stencil folded with the parity sign, as the coordinate
+  folds of `folds.jl` and the sensor operators' wall rows (N6f, N6g)
+  already are, with no order loss and no closure row, hence no
+  closure-row stability question: the folded operator is the periodic
+  operator on the doubled line restricted by parity. Public Pyranda does
+  this at a declared symmetry plane (`SYMM`), even and odd operator pairs
+  exact to degree 10 and 11 about a mirror half a cell outside node 1,
+  and uses it for the r = 0 axis; its solid walls keep the same
+  third-order one-sided rows as ours. Costs to design for: the wall moves
+  from a node to a cell face (a coordinate convention for walled
+  dimensions, or a per-wall option), two operators per walled direction,
+  no injected wall value (u_n = 0 follows from the odd fold, so `enforce!`
+  and the flux contract of N6h refer to a plane that holds no node), a
+  wall-normal profile diagnostic and a case whose wall sits at x = 0
+  (the Noh presets) that shift by half a cell, and the no-slip wall and
+  Dirichlet ends, which have no parity and keep the closure rows.
+  **Depends on:** N6f's half-offset fold path and N6g's mirror
+  construction; coordinate the coordinate convention with `metric.jl`.
+  **Gate:** the smooth wall matrix at the interior order at a folded slip
+  wall for C6, C8 and C10; the production Jacobian neutral at N = 51 and
+  101 and the exact model neutral at every line length; the battery's
+  slip-wall cases (planar and aligned Noh, Woodward–Colella) at or better
+  than the node-centred wall; MPI and device parity; no-slip and
+  Dirichlet baselines unchanged.
 
 - [ ] **N7 — Complete NSCBC inflow transverse coupling.**
   Add the Yoo–Im transverse terms that exist for outflow but not inflow.
@@ -773,9 +840,14 @@ keeps the cascade rows, so the interface baselines did not move. N6h gave
 flux and a shear traction that a viscous slip wall carried at the closure's
 truncation level. N6i measured the aligned Noh case's transverse shock
 interaction and retained its guard for the exact regression preset and
-endpoint. The open wall items are N6j and N6k: a re-measurement of the
-fifth-order closure candidates under `beta_sensor = :dilatation`, and a
-stability certificate for the neutral rows with their C8 and C10 counterparts.
+endpoint. N6j remeasured the fifth-order candidates under
+`beta_sensor = :dilatation` and retained the existing production choices.
+N6k gave the neutral rows a measured pseudospectral certificate,
+explained the line-length resonance of their neighbours, and made the
+same rows the C8 and C10 defaults, which leaves every preset at third
+order on a wall-bounded line. The open wall item is N6l: a slip wall
+folded on a face-centred mirror, at the interior order and without a
+closure row.
 Use N10/N11 to qualify interface candidates before promotion; invoke N15
 only when the smaller closure change
 misses a target. N16 transfer measurements may begin with N6, while final

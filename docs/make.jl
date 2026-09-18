@@ -112,6 +112,7 @@ DocMeta.setdocmeta!(
         "How-to guides" => [
             "Define a problem" => "how-to/problem-setup.md",
             "Choose boundary conditions" => "how-to/boundary-conditions.md",
+            "Choose numerics for accuracy per cost" => "how-to/numerics-choices.md",
             "Control and diagnose a run" => "how-to/run-control.md",
             "Write output and restart" => "how-to/output-restart.md",
             "Run in parallel" => "how-to/parallel-runs.md",

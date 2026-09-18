@@ -4,6 +4,9 @@
 #   julia --project=. -t 1 bench/closuredamping.jl parts=smooth strength=0.3
 #   julia --project=. -t 1 bench/closuredamping.jl parts=jacobian,uniform
 #       schemes=candidate strength=0.1 components=acoustic
+#   julia --project=. -t 1 bench/closuredamping.jl parts=wallmatrix
+#       schemes=candidate strength=0.1 components=acoustic cfl=0.25
+# The wall matrix fixes the production filter relaxation reference at 0.35.
 #
 # A seven-point sixth-difference vector v defines I-sigma*v*v'/(v'v),
 # applied at each wall after the ordinary filter. It preserves polynomials
@@ -156,21 +159,40 @@ function uniform(opts)
     end
 end
 
+function art_modes(text)
+    modes = split(text, ',')
+    all(mode -> mode in ("on", "off"), modes) ||
+        error("property controls must be on or off")
+    return (mode == "on" for mode in modes)
+end
+
+function art_params(enabled, opts)
+    ArtParams(enabled=enabled, beta_sensor=Symbol(opts.beta_sensor))
+end
+
+function endpoint(solver, state, target)
+    "t=$(solver.t) step=$(solver.step) completed=$(CQ.completed(solver,target)) " *
+    string(state_report(solver,state))
+end
+
 function stress(opts)
-    for name in split(opts.schemes,','), start in (0.0,0.1)
+    for name in split(opts.schemes,','), properties_on in art_modes(opts.stress_properties),
+        start in (0.0,0.1)
         prob = CQ.noh_problem(1; N=200,t0=start)
         solver,state = setup(prob,Numerics(n_global=(200,1,1),deriv=scheme(name),
-            art=ArtParams(enabled=true),cfl=0.3,filter_interval=1,filter_cfl=0.35,
+            art=art_params(properties_on,opts),cfl=0.3,filter_interval=1,filter_cfl=0.35,
             control=StepControl(validity=:permissive)))
+        target = CQ.NOH_T-start
         try
-            run!(solver,state; tfinal=CQ.NOH_T-start,nmax=30000,
+            run!(solver,state; tfinal=target,nmax=30000,
                 callback=(s,q) -> damp!(s,q,opts.strength;
                     blocks=opts.blocks,components=opts.components))
-            println("Noh ",name," start=",start," completed=",
-                CQ.completed(solver,CQ.NOH_T-start)," ",state_report(solver,state))
+            println("Noh ",name," properties=",properties_on," beta_sensor=",opts.beta_sensor,
+                " start=",start," ",endpoint(solver,state,target))
         catch err
             err isa SolverFailure || rethrow()
-            println("Noh ",name," start=",start," FAILED ",err)
+            println("Noh ",name," properties=",properties_on," beta_sensor=",opts.beta_sensor,
+                " start=",start," FAILED ",err," ",endpoint(solver,state,target))
         end
         flush(stdout)
     end
@@ -232,12 +254,14 @@ end
 
 function smooth(opts)
     ns = parse.(Int,split(opts.smooth_ns,','))
-    for name in split(opts.schemes,','), art in (false,true), cfl in (0.25,0.125)
+    viscous_modes = parse.(Bool,split(opts.smooth_viscous,','))
+    for name in split(opts.schemes,','), viscous in viscous_modes,
+        properties_on in art_modes(opts.smooth_properties), cfl in (0.25,0.125)
         errors = Float64[]
         deriv = scheme(name)
         for n in ns
             settings = (deriv=deriv, cfl=cfl, filter_interval=1,
-                        art=ArtParams(enabled=art))
+                        viscous=viscous, art=art_params(properties_on,opts))
             solver, state = CQ.wall_case(n; settings...)
             mirror, reference = CQ.mirror_case(n; settings...)
             try
@@ -245,19 +269,43 @@ function smooth(opts)
                     callback=(s,q) -> damp!(s,q,opts.strength;
                         blocks=opts.blocks,components=opts.components))
                 run!(mirror,reference; tfinal=0.4,nmax=30000)
+                if !(CQ.completed(solver,0.4) && CQ.completed(mirror,0.4))
+                    println("smooth ",name," viscous=",viscous," properties=",properties_on,
+                        " beta_sensor=",opts.beta_sensor," FAILED wall ",
+                        endpoint(solver,state,0.4)," mirror ",endpoint(mirror,reference,0.4))
+                    break
+                end
                 e = CQ.regional_errors(solver,state,CQ.NodeReference(mirror,reference))
                 push!(errors,e.wall)
-                @printf("smooth %s N=%d art=%s cfl=%.3f wall=%.6e interior=%.6e\n",
-                        name,n,art,cfl,e.wall,e.interior)
+                Printf.format(stdout, Printf.Format(
+                    "smooth %s N=%d viscous=%s properties=%s beta_sensor=%s " *
+                    "cfl=%.3f wall=%.6e interior=%.6e\n"),
+                    name,n,viscous,properties_on,opts.beta_sensor,cfl,e.wall,e.interior)
             catch err
                 err isa SolverFailure || rethrow()
-                println("smooth ",name," FAILED ",err)
+                println("smooth ",name," viscous=",viscous," properties=",properties_on,
+                    " beta_sensor=",opts.beta_sensor," FAILED ",err," ",
+                    endpoint(solver,state,0.4))
                 break
             end
         end
-        length(errors) == length(ns) && println("orders ",
+        length(errors) == length(ns) && println("orders ",name," viscous=",viscous,
+            " properties=",properties_on," beta_sensor=",opts.beta_sensor," ",
             CQ.successive_orders(1.0 ./ (ns .- 1),errors))
         flush(stdout)
+    end
+end
+
+# The five wall contracts live in ClosureQualification so the independent and
+# joint measurements use identical wall and periodic-mirror constructions.
+function wallmatrix(opts)
+    opts.filter_cfl == 0.35 ||
+        error("wallmatrix fixes filter_cfl=0.35, its production reference")
+    matrix_opts = merge(opts, (ns=opts.smooth_ns,))
+    for name in split(opts.schemes, ',')
+        CQ.dilatation_check(name, scheme(name), matrix_opts;
+            wall_callback=(s,q) -> damp!(s,q,opts.strength;
+                blocks=opts.blocks,components=opts.components))
     end
 end
 
@@ -268,8 +316,15 @@ function main(args=ARGS)
     opts = CL.script_args(args, (parts="spectrum", schemes="bl,unfiltered,candidate",
         ns="17,31,51,79,101,171", strengths="0,0.01,0.03,0.1,0.3,0.6,1",
         strength=0.3, blocks=1, smooth_ns="49,97,193", firstn=14,lastn=200,
-        cfl=0.5,filter_cfl=0.35,jns="51,101",components="all"))
+        cfl=0.5,filter_cfl=0.35,jns="51,101",components="all",
+        beta_sensor="strain", smooth_viscous="false", smooth_properties="off,on",
+        stress_properties="on",
+        smooth_cases="inviscid_slip,viscous_noslip,viscous_slip_shear," *
+                     "shear_adiabatic,shear_isothermal",
+        smooth_controls="dilatation,off", smooth_filters="on", tfinal=0.4, nmax=30000))
     opts.components in ("all","acoustic") || error("unknown damping components")
+    opts.beta_sensor in ("strain", "dilatation") ||
+        error("beta_sensor must be strain or dilatation")
     0 <= opts.strength <= 1 || error("strength must lie in [0,1]")
     opts.blocks >= 1 || error("blocks must be positive")
     for part in split(opts.parts,',')
@@ -278,7 +333,9 @@ function main(args=ARGS)
         part == "jacobian" ? jacobian(opts) :
         part == "uniform" ? uniform(opts) :
         part == "stress" ? stress(opts) :
-        part == "smooth" ? smooth(opts) : error("unknown part")
+        part == "wallmatrix" ? wallmatrix(opts) :
+        part == "smooth" ? smooth(opts) :
+        error("unknown part")
     end
 end
 

@@ -70,7 +70,7 @@ pad(s, n) = rpad(s, n)
 const DERIVS = (("C6 cascade3", T -> lele_d1_6(T; closures=:cascade3)),
                 ("C6 cascade4", T -> lele_d1_6(T; closures=:cascade4)),
                 ("C6 BL", T -> lele_d1_6(T; closures=:brady_livescu)),
-                ("C8 cascade3", T -> lele_d1_8(T)),
+                ("C8 cascade3", T -> lele_d1_8(T; closures=:cascade3)),
                 ("C8 BL", T -> lele_d1_8(T; closures=:brady_livescu)),
                 ("C10", T -> lele_d1_10(T)),
                 ("C6 neutral3", T -> lele_d1_6(T)))
@@ -520,9 +520,11 @@ function jacobian_part()
     jacobian_row("C6 BL, unfiltered", lele_d1_6(closures=:brady_livescu))
     jacobian_row("C6 BL, onesided filter (unrelaxed)", lele_d1_6(closures=:brady_livescu);
                  filter_on=true)
-    jacobian_row("C8 cascade3, unfiltered", lele_d1_8())
+    jacobian_row("C8 neutral3, unfiltered", lele_d1_8())
+    jacobian_row("C8 cascade3, unfiltered", lele_d1_8(closures=:cascade3))
     jacobian_row("C8 BL, unfiltered", lele_d1_8(closures=:brady_livescu))
-    jacobian_row("C10 (cascade), unfiltered", lele_d1_10())
+    jacobian_row("C10 neutral3, unfiltered", lele_d1_10())
+    jacobian_row("C10 cascade3, unfiltered", lele_d1_10(closures=:cascade3))
     jacobian_row("C6 cascade3, no-slip, mu = 0.005, unfiltered", c3; mu=0.005,
                  wall=:noslip)
     jacobian_row("C6 cascade3, slip, mu = 0.005, unfiltered", c3; mu=0.005)
