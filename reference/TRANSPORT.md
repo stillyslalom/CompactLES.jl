@@ -2,9 +2,11 @@
 
 CompactLES currently has a single-temperature, mass-gradient Fickian species
 flux.  This file defines what that model can represent, the evidence required
-for hydrogen-isotope transport, and the interface changes needed before it can
-represent high-energy-density plasma transport.  A scalar diffusion coefficient
-is not a closure for ion separation in a plasma.
+for hydrogen-isotope transport and other declared HED materials, and the physical
+closures needed before it can represent high-energy-density plasma transport.
+The software ownership, query, cache and analytic fast-path contracts are in
+[DESIGN.md](DESIGN.md#material-and-physics-interfaces); this file owns physical
+model assumptions, data coverage and transport verification.
 
 ## Present contract and its limit
 
@@ -149,8 +151,13 @@ boundary, an ionization criterion, or a switch for the cold-to-warm model.
 
 ## Required interface
 
+The following are requirements on the rich material/flux path in
+[the interface design](DESIGN.md#material-and-physics-interfaces), not additions
+to every scalar transport query. The ideal analytic path retains its direct
+recovery and `(mu, kappa, D)` contract without population or plasma workspaces.
+
 Separate coefficient evaluation from flux closure.  A future plasma transport
-provider should receive local thermodynamic and ionization state, including
+provider should consume the shared local thermodynamic and ionization state, including
 `rho`, number fractions, isotope masses, charge states, `T_ion`, `T_ele`, and
 the screening/degeneracy state required by the selected model.  It should
 return symmetric interspecies resistance coefficients and the thermal-force
@@ -163,7 +170,7 @@ diffusion and the selected current constraint to solver tolerance.
 The scalar `transport_at(...).D` result cannot carry those coefficients.  The
 flux routine must accept a transport result type and dispatch to neutral
 mixture-averaged or plasma multicomponent assembly.  The diffusive timestep
-estimate must use the spectral bound of the resulting diffusion operator, not
+estimate must use a justified spectral bound of the resulting diffusion operator, not
 the maximum of scalar `D_k`.  Diffusive enthalpy transport must remain paired
 with species flux; separate ion/electron heat flux and Dufour terms require an
 explicit energy-budget decision.
@@ -232,6 +239,38 @@ arrives.  Model blending, if unavoidable, is based on common state variables
 and overlapping validity regions, preserves positive entropy production, and
 is included in the uncertainty assessment.
 
+## Other HED materials and mixtures
+
+Roadmap H5b extends the material coverage work to C, CH and CD. These are
+separate qualification targets; a successful DT model does not validate them.
+For each target, first record the intended composition, material form, initial
+phase and reference density/temperature, followed by the path through heating
+and compression. The inventory must distinguish the following evidence:
+
+| Quantity | Required qualification |
+|---|---|
+| EOS/recovery | References, phases, inversion, derivatives, equilibrium assumptions |
+| Populations/electron density | EOS/inventory consistency and collision-model sufficiency |
+| Transport | Phases/channels, state range, independent coefficients, uncertainty/gaps |
+| Opacity when used | Composition/populations, groups, compatibility with material state |
+| Mixture/contact model | Mixing/equilibrium rules, independent energy/transport checks |
+
+Do not interpret CH/CD as a choice of gas-phase molecular species solely from
+the label. A material table needs its actual composition and phase documented;
+replacing H masses by D masses is an estimate unless independently qualified for
+the property and regime concerned. Likewise, separate elemental EOS tables do
+not by themselves specify a compound or a fuel–ablator mixture EOS. Declare
+whether a calculation represents a homogeneous mixture or distinct materials
+at an interface before selecting a transport closure.
+
+This section establishes coverage requirements, not a claim that suitable C,
+CH or CD datasets have been selected or bundled. Record source-specific evidence
+and unresolved gaps here as H5b proceeds. Start each material's evolution tests
+inside a validated range, then extend across transitions only when compatible
+EOS, population and transport evidence supports them. The cold-to-warm DT
+prohibitions on arbitrary switches and numerical freezing apply to these models
+as well; physical suppression and numerical flux limiting remain distinct.
+
 ## Staged execution and gates
 
 1. **H4a coefficient foundation, now.** Implement a standalone
@@ -247,8 +286,9 @@ is included in the uncertainty assessment.
    current `theta >= 10` software domain.
 2. **H5a cold-to-warm material contract.** Select an openly usable multiphase
    DT EOS or construct a documented table from open data and published models. Its query
-   returns phase, molecular/atomic populations, charge-state moments and free
-   electron density consistently with pressure, energy and derivatives.  Pair
+   returns phase, molecular/atomic and charge-state populations (or a validated
+   reduced population closure) and free electron density consistently with
+   pressure, energy and derivatives. Pair
    it with a regime-dispatched conductivity/collision contract whose providers
    overlap; do not add a temperature switch or freeze state.  Gate table nodes,
    thermodynamic inversion and derivatives first, then a cold DT slab/contact

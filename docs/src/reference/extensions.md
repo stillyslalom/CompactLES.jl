@@ -53,8 +53,10 @@ this coefficient interface; artificial coefficients are added separately.
 Keep the model and returned coefficients concrete and allocation-free for
 pointwise evaluation. The built-in CEA model stores fixed-size coefficient
 tuples so its transport data can cross a device-kernel boundary. This hook
-also allows a future plasma transport law to replace the gas mixture closure
-without changing flux assembly.
+replaces scalar coefficient laws within the existing flux closure. Plasma
+transport with pressure, temperature and electric driving terms requires
+additional state and a constrained flux closure; supplying different `D` values
+does not implement those capabilities.
 The generic host adapter assembles `Y` from the species fields; models with a
 fixed species count can specialize `CompactLES.transport_at` as the CEA model
 does to keep tuple construction statically sized, which is needed for device
@@ -67,6 +69,10 @@ conversion, and `conserved_parity`. The parity tuple records how each conserved
 component reflects across a coordinate fold; it must agree with the velocity and
 species ordering used by the equation set. `NavierStokes1T` is the built-in
 one-temperature reference implementation.
+
+The current RHS and primitive storage remain specific to the supported
+Navier–Stokes system. A new layout and parity method alone do not implement
+multi-temperature, radiation or MHD evolution.
 
 ```@docs
 conserved_parity

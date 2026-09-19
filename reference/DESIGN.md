@@ -19,10 +19,11 @@ is intended to support modification and extension of the solver. For usage, see
 11. [Curvilinear metrics and the discrete GCL](#curvilinear-metrics-and-the-discrete-gcl)
 12. [Coordinate-singularity folds](#coordinate-singularity-folds)
 13. [Multicomponent thermodynamics](#multicomponent-thermodynamics)
-14. [State validity and its policy](#state-validity-and-its-policy)
-15. [Characteristic boundary conditions](#characteristic-boundary-conditions)
-16. [Threading and MPI discipline](#threading-and-mpi-discipline)
-17. [Extension points](#extension-points)
+14. [Material and physics interfaces](#material-and-physics-interfaces)
+15. [State validity and its policy](#state-validity-and-its-policy)
+16. [Characteristic boundary conditions](#characteristic-boundary-conditions)
+17. [Threading and MPI discipline](#threading-and-mpi-discipline)
+18. [Extension points](#extension-points)
 
 ## Overview
 
@@ -853,15 +854,16 @@ derives R from each record's molar mass. Its default `reference=:sensible`
 shifts every interval by one enthalpy constant so h(298.15 K) = 0; use
 `:formation` to retain the absolute heat-of-formation gauge.
 
-Because hot loops reach the EOS through a function barrier (`primitives!`
-dispatches on `typeof(solver.eos)`), an abstractly typed `eos` field costs one
-dynamic dispatch per array pass, not per point. Cubic (Peng–Robinson) or tabular
-models can therefore be added without touching the flow solver or paying a
-per-point dispatch penalty.
+`Solver` carries concrete EOS and transport type parameters, and `primitives!`
+dispatches to a recovery loop specialized on the EOS. Setup-only abstract fields
+therefore need not introduce per-point dynamic dispatch. The existing hooks
+support the three models above; general non-ideal mixtures also need richer
+enthalpy, derivative, and flux contracts, as designed below. NASA-9 remains an
+ideal-gas mixture model despite its temperature-dependent heat capacities.
 
-Species diffusion uses a common molecular diffusivity (μ₀/Sc) plus the
-per-species Cook artificial D\*_k, with a **correction velocity** in the flux
-assembly:
+Species diffusion uses molecular coefficients from `transport_at`, including
+`D_k = μ₀/(ρ Sc)` for constant `Transport`, plus the per-species Cook artificial
+D\*_k, with a **correction velocity** in the flux assembly:
 
     J_k = −ρ D_k ∇Y_k + ρ Y_k Σ_j D_j ∇Y_j
 
@@ -870,7 +872,7 @@ energy flux. `ArtParams.species_flux = :bulk` replaces the artificial part
 of this flux by one diffusive flux on every conserved variable (the species
 channel, above); the molecular part stays Fickian.
 
-A caloric model has no closed form for T(e), so `Nasa9Mixture` inverts
+The NASA-9 caloric model uses numerical inversion of T(e): `Nasa9Mixture` inverts
 Σ_k Y_k e_k(T) = e per point. `mixture_temperature_status` is a safeguarded
 Newton: it maintains a bracket from the sign of the residual, which is valid
 because the derivative of the residual is the mixture cv, and replaces a Newton
@@ -903,6 +905,241 @@ which does not. A temperature outside a fit's declared interval is frequently a
 units error rather than a physical excursion, since NASA-9 intervals are in
 kelvin; a nondimensional state put to a dimensional fit is outside it at every
 point.
+
+## Material and physics interfaces
+
+This section specifies the intended interface design; the new signatures and
+module boundaries below are not implemented or public API. The current EOS,
+transport and source hooks remain supported during migration. Open deliverables
+and acceptance gates belong to [ROADMAP.md](ROADMAP.md), principally A7/A8 and
+H1–H6; transport evidence and material coverage belong to
+[TRANSPORT.md](TRANSPORT.md).
+
+### Ownership and package boundaries
+
+Separate local material calculations from field adapters and evolution. Start
+with an internal `MaterialModels` submodule containing solver-independent
+evaluators, readers, and data definitions. Retain simple analytic models and
+their direct solver methods; moving their public types is not a prerequisite.
+Keep the following ownership boundaries explicit; field adapters depend on
+material contracts, while material evaluators remain independent of the solver:
+
+| Layer | Owns |
+|---|---|
+| Material models | Local EOS/population/property evaluation, data, validity, provenance |
+| CompactLES adapters | Field conversion, device preparation, wall/regularization mappings |
+| Equation and closure components | Flux/source algebra, energy partitions, local derivatives |
+| Numerical execution | Storage, spatial operators, communication, stages, solves, rollback |
+
+Keep H1/H2 implicit operators and integration in the numerical infrastructure.
+Develop H3/H4/H4a/H6 and H8 as internal equation/closure components first. H7's
+local ray and absorption calculations may later be reusable independently; ray
+migration and mesh deposition still require a solver-owned schedule.
+
+Extract a material package only after a second consumer, substantial optional
+dependencies/data, or an independent release cycle justifies it. The extracted
+package must not depend on CompactLES, MPI, or patch types. A CompactLES package
+extension can supply wrappers implementing `EOS` and transport/closure adapters
+for its types. Extensions provide optional integration; their loading is not a
+physics-selection policy. Preserve convenient constructors and supported imports
+during migration, and version restart identities when type ownership changes.
+Do not introduce a separate interfaces package without multiple consumers.
+
+### Analytic execution contract
+
+`IdealMixture` with constant or analytic scalar properties retains direct
+conserved recovery, algebraic sound speed/enthalpy, and the existing compact
+scalar transport result. `StiffenedGas` retains its direct recovery too. NASA-9
+may share readers and coefficient preparation with material models while keeping
+its specialized inversion loop. No analytic model is routed through a generic
+nonlinear solver solely to conform to the richer interface.
+
+Setup selects concrete model, closure, and execution types once. A default
+explicit ideal 1T run allocates no phase/population, electron/radiation,
+table-cache, or implicit workspace fields and performs no corresponding queries,
+gradients, launches, or collectives. It need not construct a general material-state
+record at each cell. An explicitly selected implicit method or additional physics
+may allocate its own required fields even with an analytic EOS.
+Existing validity checks remain in force; removing them is not a fast path.
+Avoid runtime property dictionaries, abstract per-cell objects, and per-cell
+tests for enabled physics in the analytic kernel. A locally varying physical
+regime is handled inside a selected rich material model, never by silently
+switching an analytic input deck into a different physical model.
+
+Keep the analytic arithmetic independently readable: a short recovery body and
+scalar property calls, with shared array traversal and numerical operators where
+useful. The general path may share algebra through small methods, but must not
+require the analytic implementation to manufacture empty populations or emulate
+an equilibrium solver. Specialization is a means to preserve these guarantees,
+not evidence that they have been met; A7/A8 require measured regressions.
+
+### Local material evaluation
+
+The proposed entry points describe operations; exact type names remain internal
+until exercised by the existing models and a tabulated model:
+
+```text
+material_definition(model) -> definition
+evaluate_material(model, input, request) -> (state, status)
+evaluate_transport(transport, state, request) -> (coefficients, status)
+evaluate_opacity(opacity, state, groups, request) -> (coefficients, status)
+```
+
+`definition` is setup metadata: ordered conserved composition basis, mass/number
+fraction convention and normalization, isotope and chemical identities, masses
+and charge conventions, units, energy references,
+equilibrium assumptions, material/phase identity, and data/model fingerprints.
+Dimensional data providers declare their native units; setup/adapters establish
+one consistent calculation unit system without implicit per-cell conversion.
+Providers use public metadata accessors rather than reaching into fields such
+as `eos.Rk`. Validate compatible definitions at setup; matching names or mean
+molecular weights alone do not establish compatibility.
+
+Inputs have concrete, unambiguous forms. A 1T recovery input contains mass
+density, specific material internal energy, and composition. A forward query
+contains density, `T_ion`, and composition. A multi-temperature input contains
+the declared independent material energies or temperatures, including `T_ele`
+where supported; it must not mix redundant constraints without a documented
+consistency check. The adapter removes kinetic energy and any separately evolved
+field energies according to the equation set before querying the material model.
+Radiation energy/groups belong to the equation set and are not automatically
+part of material internal energy.
+
+Use a small set of concrete requests determined by the selected execution path,
+such as recovery or implicit linearization, rather than arbitrary symbol lists.
+Each model/request pair has one inferable result type across its admitted domain,
+including failure. A recovery result supplies the required pressure, temperature,
+sound speed and caloric quantities. Rich results additionally provide declared
+phase fractions, molecular/atomic/charge populations, electron density, and
+model-specific shared intermediates. Transport and opacity consume this same
+thermodynamic/population state rather than independently reconstructing it.
+An equilibrium table that lacks populations needs a separately validated,
+compatible population closure before it can support a model requiring them.
+
+Derivative requests state independent variables and what is held fixed,
+including frozen versus equilibrated composition/populations. Sound speed must
+match the equation system's relaxation assumption. Implicit residual derivatives,
+caloric inversion, and pressure must use the same interpolation/equilibrium
+model; phase boundaries need an explicit branch and derivative policy. A 1T
+table does not imply a valid 2T partition. Species enthalpy on a non-ideal path
+is a partial-enthalpy query on the full state, not necessarily a function of
+temperature alone.
+
+Local evaluation has no file I/O, MPI, kernel launch, or mutation of conserved
+state. Hot evaluators return typed status flags for convergence, domain,
+extrapolation, unsupported closure, or invalid input; setup rejects structural
+incompatibilities. Failed lanes use documented finite placeholders only to keep
+subsequent scheduled arithmetic safe. The driver aggregates failure before
+acceptance and applies the declared domain/retry policy collectively; a
+placeholder is never a successful physical query. There is no universal `e > 0`
+condition, and a rich model must not silently inherit a permissive extrapolation
+policy from the NASA-9 defaults.
+
+### Composition and cold material identity
+
+The material definition distinguishes transported composition from populations
+recovered under an equilibrium assumption. For an equilibrium DT model the
+conserved basis can track isotope inventories while molecular and charge-state
+populations change during recovery. A finite-rate model instead declares the
+additional independently evolved variables and reaction sources; those variables
+cannot be reconstructed as if they were equilibrium caches. Existing gas-mixture
+species retain their current meaning.
+
+The same interface must represent C, CH, CD, and other explicitly defined HED
+materials. A CH or CD label identifies neither a unique phase nor a licensed,
+validated EOS: record elemental/isotopic proportions, material form, reference
+state, and coverage. A compound material table is not interchangeable with an
+ideal mixture of isolated C and H/D species. Multi-material mixtures require an
+explicit mixing rule and mechanical/thermal equilibrium assumptions; immiscible
+interfaces and separate material temperatures are additional equation models.
+No universal mixture rule or carbon charge model is implied by DT support.
+
+Latent, dissociation, and ionization energy must enter the declared material
+energy once. Equilibrium recovery changes temperature/populations at fixed
+supplied energy; finite-rate sources and extra energy equations must not count
+the same binding energy again. Physical phase plateaus are allowed. Numerical
+freezing, arbitrary temperature switches, and filling data gaps by an undeclared
+hot-limit extrapolation are not material closures. Qualify DT first, then each
+additional material and mixture against its own evidence in TRANSPORT.md.
+
+### Transport, fluxes, and coupled evolution
+
+Retain `transport_coefficients(model, eos, temperature, rho, cp, Y)` and its
+`(mu, kappa, D)` result for the current scalar path. Rich transport returns
+concrete coefficient objects for its closure, including resistance and
+thermal-force coefficients where needed. A separate proposed local operation is
+
+```text
+diffusive_fluxes(closure, state, coefficients, forces) -> (fluxes, status)
+```
+
+`forces` contains only gradients and field information requested by that closure,
+in the coordinate-aligned physical basis. Returned fluxes are physical fluxes
+entering `dQ/dt = -div(F) + S`: mass flux per area/time and energy flux per
+area/time in the calculation's units. Thus scalar conduction returns
+`q = -kappa * grad(T_ion)` and diffusive enthalpy contributes `sum(h_k * J_k)`;
+metric factors and divergence remain numerical operations. The closure defines
+the mass frame, mass/current constraints, enthalpy transport, heat channels,
+and any cross terms. The scalar
+Fickian kernel remains specialized; plasma transport cannot be implemented merely
+by placing different numbers in `D`. Explicit rate estimation needs a justified
+bound for the selected coupled operator; implicit use needs a residual and a
+consistent linearization or Jacobian action, not just scalar diffusivities.
+
+Equation components declare conserved layout/parities, primitive requirements,
+inviscid flux and wave-speed methods, diffusive closure, local exchanges, and
+boundary/regularization support. Setup checks the combination before allocating
+plans. Current `EquationSet` layout/parity hooks alone do not provide this
+contract. NSCBC projections, wall energies, artificial conductivity scales,
+filtering and admissibility must be qualified for each new equation/EOS pair;
+unsupported combinations are rejected rather than borrowing ideal-gas formulas.
+
+Local energy exchange is evaluated through a proposed
+`exchange_rates(component, state, t) -> (rates, status)` operation, with rates
+per volume/time and a declared donor/receiver convention. It is evaluated once
+and mapped consistently into the equations. For example, ion-to-electron
+transfer gives opposite ion/electron contributions when both are evolved,
+but no source in a total material-energy
+equation that already contains both. Matter–radiation exchange closes over both
+subsystems. The equation set defines the partition and prevents double counting.
+Components expose contributions to a joint implicit residual/linearization;
+separate component ownership does not impose operator splitting. H2 owns the
+explicit/implicit partition, stage times, convergence tolerances and failure
+recovery, including stiff-limit and splitting-error qualification.
+
+### Fusion, caches, and device execution
+
+Point evaluators must be callable inside solver-owned fused kernels. Optional
+bulk evaluators write caller-owned buffers and may use explicit scratch for
+large tables or constrained systems; they do not own MPI or stage advancement.
+The execution plan can share interval searches, interpolation weights, powers,
+populations, and derivatives within an evaluation, or cache selected results
+across flux/opacity/residual consumers. It need not materialize every property,
+and it may recompute cheap analytic quantities. Fusion versus caching is measured
+against memory traffic, register pressure, repeated evaluation, and launch cost.
+
+Persistent material caches belong to a patch; shared RHS scratch remains valid
+only within its documented phase. Cache validity includes state generation,
+patch, stage/nonlinear iterate, model identity and requested properties.
+Initialization, filtering, regridding, restart, rollback, and every changed
+nonlinear trial invalidate affected results. Warm-start guesses are advisory;
+their effect on convergence, determinism, and restart must be declared. They do
+not redefine the physical state. A2 owns these lifetimes and A5 owns persistent
+configuration and continuation semantics.
+
+Prepare device coefficient/table representations at setup. Small analytic
+coefficients may be immutable tuples; large tables use adapted device arrays
+and device-compatible views, not giant type parameters. Rich models may use
+allocated scratch only in a caller-owned, measured bulk path. Unsupported
+backend/precision/model combinations fail at setup; no per-cell host fallback
+or silent precision promotion is permitted. NASA-9 table flattening and device
+preparation remain one coordinated S5/S13 task.
+
+The solver owns halo exchanges, compact solves, gradient scheduling, source and
+boundary phases, and collective failure decisions. Physics components cannot
+insert a cross-patch collective into the current sequential per-patch RHS.
+Their requirements must be assembled into a consistent schedule, including AMR
+stage times and nonlinear iterates, before execution.
 
 ## State validity and its policy
 
@@ -1048,8 +1285,10 @@ collectives must also be reached on ranks that do not own the face.
 
 **New equation sets and equations of state.** An `EquationSet` owns component
 indices, names, conserved conversion, and fold parity. Implement the EOS contract
-(`nspecies`, the state evaluation in `primitives!`, and `species_enthalpy`) plus
-`conserved_from_prim`. The function barrier confines dispatch overhead.
+documented in `physics.jl`, including validity, wall and characteristic hooks,
+and `conserved_from_prim`. Layout/parity extensions alone do not replace the
+Navier–Stokes flux and recovery implementation. The planned wider contract and
+analytic fast path are in [Material and physics interfaces](#material-and-physics-interfaces).
 
 **New output formats.** `io.jl` shows the pattern: per-rank writes plus a rank-0
 container, using `MPI.Allgather` only to collect piece extents. HDF5/XDMF for

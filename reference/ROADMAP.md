@@ -319,7 +319,9 @@ temporal certification with V3 and default filter time-scaling with N1.
   Inventory persistent integrator state, per-patch primitives/geometry, shared RHS
   scratch, and diagnostic storage. Define invalidation after initialization,
   stepping, filtering, regridding, and restart; audit property forwarding and
-  `prepared`/`primitives_current` assumptions.
+  `prepared`/`primitives_current` assumptions. Include optional material caches,
+  nonlinear trial states, and rollback invalidation under the
+  [material interface design](DESIGN.md#material-and-physics-interfaces).
   **Gate:** multi-patch consumers cannot silently read another patch's scratch;
   R1 remains fixed without duplicating every patch workspace.
 
@@ -342,8 +344,10 @@ temporal certification with V3 and default filter time-scaling with N1.
 
 - [ ] **A5 — Strengthen restart configuration compatibility.**
   Add versioned EOS parameter/data fingerprints and numerical/transport/boundary
-  provenance. Current type names and component names admit identically named
-  species with different thermodynamic constants.
+  provenance. Include material composition basis, energy partition/reference,
+  phase/equilibrium assumptions, mixing rule, and table/interpolation identity;
+  current type names and component names admit identically named species with
+  different thermodynamic constants. Account for A8's changes in type ownership.
   Define exact continuation versus an intentional configuration change; record
   supported overrides and caller-owned callback/writer state.
   **Gate:** incompatible thermodynamics are rejected, equivalent configurations
@@ -358,6 +362,43 @@ temporal certification with V3 and default filter time-scaling with N1.
   remains Navier–Stokes-specific; define the additional hooks needed by H3/H6/H8.
   **Gate:** accepted/rejected combinations and extension examples are tested;
   avoid promising unsupported feature combinations.
+
+- [ ] **A7 — Implement material interfaces with an explicit analytic fast path.**
+  Follow [the interface design](DESIGN.md#material-and-physics-interfaces):
+  separate local material queries, solver field adapters, and flux closures;
+  define composition/energy metadata, typed results/status, and setup checks.
+  Preserve the existing ideal/stiffened analytic recovery and scalar transport
+  methods, public constructors, and readable arithmetic. Introduce an internal
+  `MaterialModels` boundary for standalone evaluators/readers, removing EOS field
+  assumptions from adapters. No package extraction or HED state allocation is
+  required for this step; numerical formulas and default policies stay unchanged.
+  **Sequence:** inventory current hooks and exercise independent queries with
+  existing ideal, NASA-9 and transport models; coordinate cache/setup ownership
+  with A2/A3 and precision with A1; qualify a tabulated model with H5 before
+  stabilizing the rich interface. H1 and offline material/transport work may
+  proceed independently; H3 uses the relevant A7 contracts as they mature.
+  **Gate:** existing input decks and numerical baselines, independent query and
+  adapter agreement, inference/allocations, and unchanged ideal workspace,
+  gradient, launch and collective counts. Compare before/after full-step costs
+  on single/multispecies ideal cases, including constant and analytic transport,
+  plus NASA-9 and stiffened-gas controls; run `bench/jetcheck.jl` and
+  `bench/audit.jl` and relevant CPU/MPI/device gates. Use paired measurements and
+  repeated processes on the same hardware; no reproducible ideal-fluid slowdown
+  or added per-point allocation is accepted to accommodate the rich path.
+  Record measurements in the appendix and unavailable hardware explicitly.
+
+- [ ] **A8 — Qualify optional material-package extraction after interface use.**
+  Decide whether to retain the internal module or extract it after A7 and H5
+  exercise the boundary. Require a concrete reuse, dependency/data, or release
+  benefit; independent packaging is not a prerequisite for HED development.
+  If extracting, keep material evaluation independent of CompactLES/MPI, supply
+  CompactLES adapters through an optional extension, preserve supported imports,
+  and coordinate restart identity with A5. Avoid a separate interfaces package
+  until multiple consumers need it.
+  **Gate:** record the extraction/retention decision; for extraction, independent
+  package tests, extension loading/compatibility and coupled numerical tests,
+  A7's ideal-performance gate, and measured load/precompile cost. Package/module
+  boundaries must still allow solver-owned fusion and optional bulk evaluation.
 
 ## P2: scale, devices, I/O, and geometry
 
@@ -545,29 +586,41 @@ opt-in Float32 already exist; the tasks below extend or validate them.
 H1 is the principal infrastructure dependency for stiff diffusion. These are
 separate capabilities with independent verification gates, not a claim that new
 equation layouts alone make the current RHS a general multiphysics solver.
+Ownership and coupling follow [the material interface design](DESIGN.md#material-and-physics-interfaces);
+DT is the first cold-material path, with C/CH/CD coverage tracked separately in
+H5b. Every integration preserves A7's ideal analytic execution contract.
 
 - [ ] **H1 — Build implicit diffusion infrastructure.**
   Reuse the distributed banded kernels for ADI or line-relaxation smoothing;
-  compare geometric multigrid and Krylov outer solves.
+  compare geometric multigrid and Krylov outer solves. Keep operators and
+  communication in core numerics with optional workspace allocated only when used.
   **Gate:** manufactured constant/variable-coefficient heat conduction in every
   supported metric, distributed residual/convergence studies, and freestream
   preservation. Variable coefficients require a factorization-update policy.
 
 - [ ] **H2 — Add compatible IMEX time integration.**
   Evaluate established IMEX-ARK tableaus before implementing new ones; define a
-  compatible explicit/implicit pair and workspace contract.
+  compatible explicit/implicit pair and workspace contract. Accept component
+  contributions to a joint residual and consistent linearization/Jacobian action;
+  define coefficient refresh, nonlinear trial invalidation and collective retry.
+  Independent physics components must not force sequential split updates.
   **Depends on:** H1. **Gate:** temporal order, stiff stability, source/diffusion
   splitting error, and recovery from a failed implicit solve.
 
 - [ ] **H3 — Add separate ion/electron/radiation energy evolution.**
   Extend the equation/flux/recovery interfaces for `T_ion`, `T_ele`, and `T_rad`,
-  electron pressure, and electron–ion equilibration.
-  **Depends on:** A6, R3/R4, and H2 for stiff coupling.
+  electron pressure, and electron–ion equilibration. Specify independent energy
+  variables, binding-energy references, pressure work and exchange mappings;
+  prevent double counting in total-energy and subsystem equations. Declare
+  gradient, boundary, wave-speed and regularization requirements at setup.
+  **Depends on:** A6/A7 contracts, R3/R4, and H2 for stiff coupling.
   **Gate:** total-energy conservation, equilibrium limits, and independent
   relaxation problems before coupled implosion runs.
 
 - [ ] **H4 — Add electron thermal conduction.**
   Implement flux-limited Spitzer–Härm transport through the implicit solver.
+  Treat this as the hot-limit closure; wider material conduction consumes H5a/H5b
+  state and validated coefficients without imposing their cost on scalar transport.
   **Depends on:** H1–H3 and the dispatchable transport interface.
   **Gate:** analytic/manufactured transport limits, limiter behavior, and coupled
   energy budgets.
@@ -577,7 +630,7 @@ equation layouts alone make the current RHS a general multiphysics solver.
   add concentration, pressure, ion/electron temperature, and electric-field
   driving terms with a defined ambipolar closure. Validate dense-plasma models
   separately from the weak-coupling limit; see [the transport plan](TRANSPORT.md).
-  **Depends on:** A6/H3 for coupled flux and energy evolution, H1/H2 when stiff,
+  **Depends on:** A6/A7/H3 for coupled flux and energy evolution, H1/H2 when stiff,
   and H5 or an explicit ionization closure outside the fully ionized regime.
   Coefficient and flux-reference work can proceed before these dependencies.
   **Gate:** independent H–D/H–T/D–T references, isotope permutation and trace
@@ -586,8 +639,13 @@ equation layouts alone make the current RHS a general multiphysics solver.
 
 - [ ] **H5 — Add tabulated EOS support.**
   Implement IONMIX reading and thermodynamically consistent interpolation/inversion;
-  consider SESAME later subject to data access/licensing.
-  **Depends on:** R3/R4 and A5.
+  consider SESAME later subject to data access/licensing. Exercise A7's rich
+  queries and shared interpolation/derivative results with a bounded table model;
+  qualify forward/recovery adapters before stabilizing that interface. Declare
+  frozen/equilibrium derivatives and supported temperature partitions; a 1T table
+  alone does not supply a 2T EOS or the populations required by transport.
+  **Depends on:** R3/R4, A5 and the relevant A7 contracts; reader/data work may
+  precede their completion.
   **Gate:** table-node/interpolation checks, inverse consistency, derivatives,
   phase/domain handling, and an EOS-specific artificial-conductivity scale.
 
@@ -596,6 +654,8 @@ equation layouts alone make the current RHS a general multiphysics solver.
   molecular dissociation, partial ionization, and the ionized limit. Derive EOS,
   charge populations, electron density, and transport from a consistent material
   state, including latent, dissociation, and ionization energies where relevant.
+  Declare transported isotope inventory separately from equilibrium molecular
+  and charge populations; finite-rate populations require their own evolution.
   Couple neutral, charged, and electron collision channels without an arbitrary
   temperature switch or applying fully ionized coefficients to cold fuel.
   **Depends on:** H3–H5 and H4a; H6 for a radiation-driven front.
@@ -605,8 +665,25 @@ equation layouts alone make the current RHS a general multiphysics solver.
   State physical transport suppression separately from any numerical limiter;
   data coverage and transition assumptions follow [the transport plan](TRANSPORT.md).
 
+- [ ] **H5b — Qualify additional HED materials and their mixtures.**
+  Inventory open EOS, population and transport coverage for C, CH and CD with
+  explicit composition, material form, phase, units and energy references.
+  Reuse the A7/H5 interface and H5a methodology, qualifying one declared material
+  and density/temperature path at a time. Compound tables and physical mixtures
+  require explicit mixing/equilibrium closures; ideal species mixing and isotope
+  substitution do not establish cold-material validity.
+  **Depends on:** A7/H5 for runtime material queries; H3/H4 and H1/H2 for the
+  selected coupled heating case, H6 if radiation-driven. Coverage and standalone
+  reference work may begin before DT evolution is complete.
+  **Gate:** source/provenance and missing-range inventory, independent cold and
+  warm references, inversion/derivative and population consistency, then energy
+  and front-convergence tests for each claimed material. Qualify fuel–ablator
+  mixture/contact closures separately; preserve A7's ideal-performance gate.
+
 - [ ] **H6 — Add flux-limited radiation diffusion, gray before multigroup.**
-  Define opacity and group interfaces plus radiation-energy components.
+  Define opacity and group interfaces plus radiation-energy components. Opacity
+  consumes the same material/population state as transport; couple exchange
+  through H2/H3's residual and energy contract, with explicit group conventions.
   **Depends on:** H1–H3 and suitable EOS/opacity data.
   **Gate:** independent diffusion/equilibration references, group convergence,
   positivity policy, and matter–radiation energy conservation.
