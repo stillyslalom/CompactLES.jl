@@ -4728,3 +4728,36 @@ add no allocations beyond the 16-byte scalar measurement overhead. The CEA
 coefficient return is fully inferred. Existing convergence and shock-validation
 guards pass without baseline or tolerance changes; the MPI core gate passes at
 two ranks and its selected phases at eight ranks.
+
+## Neutral polynomial transport
+
+`test/neutral_transport_integration_tests.jl` isolates ordinary binary diffusion
+with a periodic cosine at uniform pressure and temperature and synthetic equal
+species thermodynamics. It uses the sourced H2-D2 Marrero--Mason coefficient;
+this is a numerical closure test, not an isotope experiment. A separate NASA-9
+H2/D2 test checks physical species identities, the correction-velocity mass
+constraint, nonzero diffusive enthalpy transport, and species permutation.
+Thermal diffusion is absent in both cases.
+
+The manufactured case uses a 0.01 m periodic interval, 300 K, 101325 Pa,
+mean mass fraction 0.45 and cosine amplitude 0.08, evolved to 0.001 s with
+C6, CFL 0.35, and filtering and artificial transport disabled. Both synthetic
+species have gas constant 1.0e-4 and gamma 1.4 to isolate diffusion from sound
+propagation; these are not the physical isotope thermodynamics.
+
+| Nodes | Maximum mass-fraction error |
+|---:|---:|
+| 24 | 1.176427e-9 |
+| 48 | 1.827178e-11 |
+
+The error decreases by 64.4 under doubling, consistent with sixth order.
+Species conservation and uniform pressure and temperature are gated alongside
+this result. The source fits and the constant transport defaults are unchanged.
+
+`test/neutral_transport_coefficients_tests.jl` gates exact species order,
+scalar conversion, the direct binary limit, pure and trace compositions,
+strict inclusive source bounds and finite positive coefficients.
+`test/neutral_transport_domain_tests.jl` exercises collective rejection on
+single patches, disjoint patch owners and subcycled fine-level subsets,
+including the KernelAbstractions CPU launch path. These checks do not add
+data or change the provenance and source distinctions recorded above.

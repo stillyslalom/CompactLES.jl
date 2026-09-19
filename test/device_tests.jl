@@ -578,6 +578,7 @@ const POINTWISE_BODIES = (
     :_subtract_div_point!,
     :_subtract_jac_div_point!, :_tag_delta4_point!, :_tag_gradient_point!,
     :_tag_rho_point!, :_tag_sensor_point!, :_tag_vorticity_point!,
+    :_transport_status_point!,
     :_volume_weight_point!, :_weighted_blend_point!, :_zero_component_point!)
 
 @testset "pointwise bodies stay inside the splat budget" begin

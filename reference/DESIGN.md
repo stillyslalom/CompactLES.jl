@@ -91,6 +91,7 @@ validation cases are discussed, and never a viscosity.
 | `src/physics.jl`          | EOS abstraction, `IdealMixture`, `Transport`, `primitives!` |
 | `src/nasa9_data.jl`       | Reader for the fixed-column NASA CEA thermodynamic database bundled in `data/` |
 | `src/transport.jl`        | CEA transport reader, mixture properties, binary diffusion model, and shared pointwise transport dispatch |
+| `src/transport_domain.jl` | Collective neutral-diffusion domain preflight and parent-level failure propagation support |
 | `src/ion_transport.jl`    | Standalone fully ionized isotope interdiffusion reference; the state/flux and cold-to-warm design is in [TRANSPORT.md](TRANSPORT.md) |
 | `src/equations.jl`        | `EquationSet`, conserved layout, names, and fold parity rules |
 | `src/boundary.jl`         | `BoundaryCondition` types, wall enforcement, `apply_bcs!` |

@@ -17,8 +17,9 @@ J_k = rho * (-D_k * grad(Y_k) + Y_k * sum_j(D_j * grad(Y_j))).
 ```
 
 The correction velocity enforces `sum(J_k) = 0`.  `CeaTransport` can obtain the
-mixture-averaged `D_k` from symmetric binary coefficients, whose present data
-model scales every pair as `T^n/p`.  This is a useful dilute-neutral-gas model.
+mixture-averaged `D_k` from symmetric binary coefficients, using either the
+legacy `T^n/p` model or species-labelled pair polynomials with strict source
+ranges. This is a useful dilute-neutral-gas model.
 It has no driving terms for pressure, ion or electron temperature, or electric
 potential, no interspecies friction matrix, no charge or ionization state, and
 no zero-current or ambipolar closure.  The evolved state also has one material
@@ -331,11 +332,14 @@ as well; physical suppression and numerical flux limiting remain distinct.
    The H2-D2 correlation, every calculated pair and every measurement
    agree within their stated uncertainties.  Tritiated pairs are included
    with their stated 2% error.
-5. **Neutral flux integration.** Use the polynomial pairs in the existing
-   mixture-averaged closure.  Gate with binary Loschmidt diffusion at uniform
-   pressure and temperature, convergence, conservation, permutation of species
-   order, and agreement between direct binary and mixture-averaged limits.
-   Thermal diffusion is deliberately absent and must be stated in results.
+5. **Neutral flux integration.** `CeaTransport` accepts the polynomial pairs
+   in exact EOS species order; each species still requires CEA pure transport.
+   Strict domain preflight rejects invalid states collectively, propagating
+   subcycled fine-level failures to parent ranks before throwing; it never
+   extrapolates, clamps, or retries a source-domain rejection. The binary
+   Loschmidt convergence, conservation, species-permutation and direct-binary
+   gates are recorded in the [neutral transport checks](CALIBRATION_APPENDIX.md#neutral-polynomial-transport).
+   Thermal diffusion is deliberately absent.
 6. **Plasma cross-model verification, offline.** Implement Paquette or an
    independently formulated effective-potential evaluator as a second
    coefficient model.  Compare its weak-coupling asymptote with

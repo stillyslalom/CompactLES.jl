@@ -63,6 +63,12 @@ are vendored, not the source tables; the Figshare record labels the supporting
 artifact CC BY-NC 4.0. Müller and Klemm, Z. Naturforsch. 25a,
 243 (1970), Tab. 1, is nine
 measured room-temperature values transcribed twice from the page image.
+For Müller--Klemm, the repository records numerical values, uncertainties and
+pair identities as attributed scientific facts; it does not redistribute the
+article, its table image or its prose, and does not assert a license to do so.
+The source-specific notices above are not a blanket license for the papers or
+supporting artifacts, and the Song--Wang artifact's noncommercial condition
+must not be replaced by the NASA tables' Apache license.
 
 ## Taylor-Green reference solution
 

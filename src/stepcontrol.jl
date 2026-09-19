@@ -405,7 +405,9 @@ end
 Thrown by [`run!`](@ref) when the timestep or the state fails a
 [`StepControl`](@ref) check and no retries remain. `reason` is one of
 `:nonfinite`, `:planck`, `:dt_min`, `:dt_collapse`, `:negative_density`,
-`:invalid_state` (a state the validation rejected under `StepControl.validity`)
+`:invalid_state` (a state the validation rejected under `StepControl.validity`),
+`:transport_domain` (neutral diffusion outside its source domain; a strict,
+collective rejection independent of validity policy and without retries),
 or `:no_progress` (a step the solver's clock cannot represent as an advance;
 a retry cannot help, so the CFL hint below does not fire for it). The
 remaining fields record the state the check rejected: `step`, `t`, `dt`, `cfl`,
@@ -523,4 +525,3 @@ function check_validity(control::StepControl, report::StateReport, stage,
                          "$stage rejected under validity = :$(control.validity): " *
                          "$report")
 end
-

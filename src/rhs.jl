@@ -1948,6 +1948,7 @@ forwarding method of a function with keywords.
 function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
     decomp = solver.decomp
     compute_primitives_and_gradients!(solver, Q, primitives_current)
+    _validate_transport_state!(solver, Q; current=true)
     compute_artificial!(solver, Q)
     for d in 1:3
         decomp.active[d] || continue

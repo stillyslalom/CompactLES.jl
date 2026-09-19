@@ -129,6 +129,7 @@ function step!(solver::Solver, Q, dQ, du, dt, prepared::Bool=false)
     end
     solver.tstage = solver.t + dt
     apply_bcs!(solver, Q)
+    _validate_transport_state!(solver, Q)
     return Q
 end
 
@@ -179,7 +180,8 @@ function step!(solver::Solver, states::Vector{<:ConservedState},
         # patches, then each level's tiles), so a stacked level's tiles
         # evaluate together.
         for lev in levels
-            _level_rhs!(solver, lev, states, dQs, first_prepared)
+            status = _level_rhs!(solver, lev, states, dQs, first_prepared)
+            _check_transport_status(solver, status)
         end
         for lev in levels
             _level_update!(solver, lev, states, dQs, dus, RKA[stage], RKB[stage], dt)
@@ -191,6 +193,7 @@ function step!(solver::Solver, states::Vector{<:ConservedState},
     for (i, p) in enumerate(patches)
         apply_bcs!(PatchSolver(solver, p), states[i])
     end
+    _validate_transport_state!(solver, states)
     return states
 end
 
@@ -211,7 +214,13 @@ end
 # conditions first, which a prepared state never needs and the Hermite
 # endpoint's extra evaluation skips too, its state being enforced already.
 function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
-                     enforce::Bool=!prepared)
+                     enforce::Bool=!prepared, comm=solver.comm)
+    status = _prepare_level_transport!(solver, lev, states, prepared, enforce, comm)
+    status == 0 || return status
+    if transport_has_domain(solver.transport)
+        prepared = true
+        enforce = false
+    end
     patches = getfield(solver, :patches)
     if isempty(lev.stacks)
         for pi in lev.patches
@@ -219,7 +228,7 @@ function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
             enforce && apply_bcs!(ps, states[pi])
             compute_rhs!(ps, states[pi], dQs[pi], prepared)
         end
-        return states
+        return UInt8(0)
     end
     enforce && for pi in lev.patches
         apply_bcs!(PatchSolver(solver, patches[pi]), states[pi])
@@ -228,7 +237,7 @@ function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
         compute_rhs!(PatchSolver(solver, st.patch), _stack_state(st, states),
                      _stack_state(st, dQs), prepared)
     end
-    return states
+    return UInt8(0)
 end
 
 function _level_update!(solver::Solver, lev::Level, states, dQs, dus, A, B, dt)
@@ -305,9 +314,11 @@ function subcycled_step!(solver::Solver, states::Vector{<:ConservedState},
     t0 = solver.t
     # `solver.step` counts completed steps; the level counts below are
     # one-based indices of the step in progress.
-    _advance_level!(solver, 1, states, dQs, dus, t0, dt, prepared,
-                    solver.step + 1, dt, 1)
+    status = _advance_level!(solver, 1, states, dQs, dus, t0, dt, prepared,
+                             solver.step + 1, dt, 1)
+    _check_transport_status(solver, status)
     solver.tstage = t0 + dt
+    _validate_transport_state!(solver, states)
     return states
 end
 
@@ -371,7 +382,9 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         solver.tstage = t0 + oftype(t0, RKC[stage]) * dt
         first_prepared = prepared && stage == 1
         ℓ > 1 && shell!((T(m - 1) + T(RKC[stage])) / T(3))
-        _level_rhs!(solver, lev, states, dQs, first_prepared)
+        status = _level_rhs!(solver, lev, states, dQs, first_prepared,
+                             !first_prepared, lev.level_comm.comm)
+        status == 0 || return status
         stage == 1 && save_boxes!(false)
         _level_update!(solver, lev, states, dQs, dus, RKA[stage], RKB[stage], dt)
         # Same-level consistency before the next stage's shell imposition,
@@ -391,10 +404,12 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         # next substep (or the restriction) reads a consistent boundary.
         shell!(θ_end)
     end
-    child === nothing && return states
+    child === nothing && return _prepare_level_transport!(
+        solver, lev, states, false, false, lev.level_comm.comm)
     # The t^{n+1} Hermite endpoint: the conditions are already enforced on
     # this state, so the right-hand side alone, with its primitives refreshed.
-    _level_rhs!(solver, lev, states, dQs, false, false)
+    status = _level_rhs!(solver, lev, states, dQs, false, false, lev.level_comm.comm)
+    status == 0 || return status
     save_boxes!(true)
     dtf = dt / T(3)
     # A rank owning level ℓ but not level ℓ+1 skips the substeps: they carry
@@ -402,10 +417,15 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     # count is fixed, so the two rank sets do not diverge.
     if child.level_comm.owned
         for mc in 1:3
-            _advance_level!(solver, ℓ + 1, states, dQs, dus,
+            status = _advance_level!(solver, ℓ + 1, states, dQs, dus,
                             t0 + (mc - 1) * dtf, dtf, false,
                             _child_count(count, mc), dt, mc)
+            status == 0 || break
         end
+    end
+    if transport_has_domain(solver.transport)
+        status = MPI.Allreduce(status, max, lev.level_comm.comm)
+        status == 0 || return status
     end
     # The root's restriction is `run!`'s, after its filter pass; every deeper
     # level restricts here so its parent's next substep sees the composite.
@@ -417,7 +437,7 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         # level; its neighbors' ghosts must see them before the next substep.
         _sync_level!(solver, states, lev)
     end
-    return states
+    return UInt8(0)
 end
 
 """
@@ -482,6 +502,7 @@ the diffusive term subsequently drives `dt` toward zero.
 function max_rate(solver::Solver, Q)
     exchange_state!(Q, solver.decomp)   # keep halos consistent for primitives!
     primitives!(solver, Q)
+    _validate_transport_state!(solver, Q; current=true)
     rate, ρ_min, dir = _local_max_rate(solver, Q)
     # One collective, not five: every quantity is reduced with `max` by
     # negating the density, and this runs every step of every run.
@@ -500,6 +521,7 @@ rank set, exactly once, hoisted outside the patch loop as the collective
 discipline requires.
 """
 function max_rate(solver::Solver, states::Vector{<:ConservedState})
+    _validate_transport_state!(solver, states)
     T = typeof(solver.cfl)
     rate = zero(T)
     ρ_min = T(Inf)
@@ -755,6 +777,7 @@ function dt_report(solver::Solver, Q)
     decomp = solver.decomp
     exchange_state!(Q, decomp)
     primitives!(solver, Q)
+    _validate_transport_state!(solver, Q; current=true)
     o1, o2, o3 = decomp.n_halo_d
     tr = solver.transport
     best = (rate=-Inf, i=0, j=0, k=0, dim=0, kind=:none)
@@ -1159,7 +1182,8 @@ _prime_rhs!(solver::Solver, Q, workspace) =
     (apply_bcs!(solver, Q); compute_rhs!(solver, Q, workspace.dQ, false); Q)
 function _prime_rhs!(solver::Solver, states::Vector{<:ConservedState}, workspace)
     for lev in getfield(solver, :levels)
-        _level_rhs!(solver, lev, states, workspace.dQ, false)
+        status = _level_rhs!(solver, lev, states, workspace.dQ, false)
+        _check_transport_status(solver, status)
     end
     return states
 end
@@ -1332,6 +1356,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
     # before it is validated: a repair mode needs scales from a state that was
     # still valid, and this is the last point at which that is known.
     validate_state!(solver, Q; control=control, stage="the state entering run!")
+    _validate_transport_state!(solver, Q)
     if control.floor_ratio > 0 && rho_floor <= 0
         rank == 0 && @warn "run!: the positivity failsafe is inactive. The global " *
                            "minimum density or internal energy of the state " *
@@ -1354,6 +1379,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
     stopped = false
     while true
         if stopped || !(solver.t < tfin && solver.step < nmax)
+            _validate_transport_state!(solver, Q)
             # The state this run is about to return. Checking it here rather
             # than after the loop keeps it on the retry path: a rejection rolls
             # back to the savepoint and lowers the CFL like any other failure,
@@ -1506,6 +1532,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         end
         # A rollback `continue`s above this, so an abandoned iteration never
         # records a step time; wall_total counts work that stood.
+        _validate_transport_state!(solver, Q)
         solver.wall_step = (time_ns() - wall_0) / 1e9
         solver.wall_total += solver.wall_step
         solver.wait_total += solver.wall_wait

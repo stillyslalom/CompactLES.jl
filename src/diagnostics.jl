@@ -671,6 +671,7 @@ this between steps does not change the next timestep or a regrid decision.
 Every rank in `solver.comm` must call this function.
 """
 function dissipation_rate(solver::Solver, Q)
+    _validate_transport_state!(solver, Q)
     red = preserving_artificial(solver) do
         compute_primitives_and_gradients!(solver, Q)
         compute_artificial!(solver, Q)
@@ -718,6 +719,7 @@ initialized needs those first. Every patch's artificial coefficient arrays are
 restored to the values the integrator left.
 """
 function dissipation_rate(solver::Solver, states::Vector{<:ConservedState})
+    _validate_transport_state!(solver, states)
     acc = zeros(2)
     preserving_artificial(solver) do
         for (ps, Q) in eachpatch(solver, states)

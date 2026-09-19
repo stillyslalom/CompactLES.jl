@@ -144,8 +144,9 @@ Use [`binary_diffusivity`](@ref) for checked evaluation.
 
 This model is for a supplied dilute neutral-gas correlation only. It supplies
 no isotope data or plasma closure, and it does not model ambipolar, thermo-,
-electro-, or pressure diffusion. It is not currently accepted by
-[`CeaTransport`](@ref).
+electro-, or pressure diffusion. It can supply the pair data for
+[`CeaTransport`](@ref)'s mixture-averaged closure when its ordered species list
+exactly matches the EOS.
 """ BinaryDiffusionPolynomial
 struct BinaryDiffusionPolynomial{T,N,M,Names}
     D_ref::NTuple{N,NTuple{N,T}}
@@ -236,6 +237,8 @@ end
 species_names(::BinaryDiffusionPolynomial{T,N,M,Names}) where {T,N,M,Names} =
     [String(name) for name in Names]
 
+@inline _binary_diffusion_names(::BinaryDiffusionPolynomial{T,N,M,Names}) where {T,N,M,Names} = Names
+
 """
     binary_diffusivity(model, temperature, pressure, i, j)
 
@@ -290,12 +293,16 @@ end
 Temperature-dependent molecular transport using NASA CEA pure-species
 viscosity and conductivity fits. `:unity_lewis` obtains every species
 diffusivity from `kappa/(rho*cp*Lewis)`. `:mixture_averaged` requires a
-[`BinaryDiffusion`](@ref), since CEA's transport table contains no binary
-diffusion coefficients. Outside a fit's stated temperature range, the nearest
-interval polynomial is extrapolated. Inputs to [`transport_coefficients`](@ref)
-must have positive finite temperature, density and heat capacity and finite,
-nonnegative mass fractions with a positive sum. The hot pointwise path assumes
-that setup and state validation enforce this contract.
+[`BinaryDiffusion`](@ref) or species-labelled
+[`BinaryDiffusionPolynomial`](@ref), since CEA's transport table contains no
+binary diffusion coefficients. The polynomial model's species order must
+exactly match the EOS, and its pair validity ranges bound scalar coefficient
+queries. Outside a CEA pure-property fit's stated temperature range, the
+nearest interval polynomial is extrapolated. Inputs to
+[`transport_coefficients`](@ref) must have positive finite temperature,
+density and heat capacity and finite, nonnegative mass fractions with a
+positive sum. The hot pointwise path assumes that setup and state validation
+enforce this contract.
 
 Returned `mu`, `kappa`, and `D` use SI units Pa s, W/(m K), and m^2/s.
 """
@@ -321,6 +328,61 @@ function _cea_fixed_intervals(::Type{T}, values, name, property) where {T}
     end
     filler = converted[end]
     return ntuple(i -> i <= length(converted) ? converted[i] : filler, 3)
+end
+
+function _transport_scalar(::Type{T}, value, description) where {T}
+    converted = try
+        T(value)
+    catch err
+        err isa InterruptException && rethrow()
+        throw(ArgumentError("$description is not representable in EOS scalar type $T"))
+    end
+    return converted
+end
+
+function _convert_binary_diffusion(model::BinaryDiffusion{S,N}, ::Type{T}) where {S,N,T}
+    values = ntuple(i -> ntuple(j -> _transport_scalar(T, model.D_ref[i][j],
+        "BinaryDiffusion coefficients"), Val(N)), Val(N))
+    temperature_ref = _transport_scalar(T, model.temperature_ref, "BinaryDiffusion temperature_ref")
+    pressure_ref = _transport_scalar(T, model.pressure_ref, "BinaryDiffusion pressure_ref")
+    exponent = _transport_scalar(T, model.temperature_exponent, "BinaryDiffusion temperature_exponent")
+    all(isfinite(values[i][j]) for i in 1:N for j in 1:N) &&
+        all(i == j || values[i][j] > zero(T) for i in 1:N for j in 1:N) ||
+        throw(ArgumentError("BinaryDiffusion coefficients are not representable in EOS scalar type $T"))
+    isfinite(temperature_ref) && temperature_ref > zero(T) &&
+        isfinite(pressure_ref) && pressure_ref > zero(T) && isfinite(exponent) ||
+        throw(ArgumentError("BinaryDiffusion scaling values are not representable in EOS scalar type $T"))
+    return BinaryDiffusion{T,N}(values, temperature_ref, pressure_ref, exponent)
+end
+
+function _convert_binary_diffusion(model::BinaryDiffusionPolynomial{S,N,M,Names},
+                                   ::Type{T}) where {S,N,M,Names,T}
+    values = ntuple(i -> ntuple(j -> _transport_scalar(T, model.D_ref[i][j],
+        "BinaryDiffusionPolynomial coefficients"), Val(N)), Val(N))
+    coefficients = ntuple(i -> ntuple(j -> ntuple(m -> _transport_scalar(T,
+        model.temperature_coefficients[i][j][m], "BinaryDiffusionPolynomial temperature coefficients"),
+        Val(M)), Val(N)), Val(N))
+    Tmin = ntuple(i -> ntuple(j -> _transport_scalar(T, model.temperature_min[i][j],
+        "BinaryDiffusionPolynomial temperature ranges"), Val(N)), Val(N))
+    Tmax = ntuple(i -> ntuple(j -> _transport_scalar(T, model.temperature_max[i][j],
+        "BinaryDiffusionPolynomial temperature ranges"), Val(N)), Val(N))
+    temperature_ref = _transport_scalar(T, model.temperature_ref,
+                                        "BinaryDiffusionPolynomial temperature_ref")
+    pressure_ref = _transport_scalar(T, model.pressure_ref,
+                                     "BinaryDiffusionPolynomial pressure_ref")
+    all(isfinite(values[i][j]) for i in 1:N for j in 1:N) &&
+        all(i == j || values[i][j] > zero(T) for i in 1:N for j in 1:N) &&
+        all(isfinite(coefficients[i][j][m]) for i in 1:N for j in 1:N for m in 1:M) &&
+        all(i == j || (isfinite(Tmin[i][j]) && Tmin[i][j] > zero(T) &&
+                       isfinite(Tmax[i][j]) && Tmax[i][j] >= Tmin[i][j])
+            for i in 1:N for j in 1:N) &&
+        isfinite(temperature_ref) && temperature_ref > zero(T) &&
+        isfinite(pressure_ref) && pressure_ref > zero(T) &&
+        all(i == j || Tmin[i][j] <= temperature_ref <= Tmax[i][j]
+            for i in 1:N for j in 1:N) ||
+        throw(ArgumentError("BinaryDiffusionPolynomial data are not representable in EOS scalar type $T"))
+    return BinaryDiffusionPolynomial{T,N,M,Names}(values, coefficients, Tmin, Tmax,
+                                                    temperature_ref, pressure_ref)
 end
 
 function CeaTransport(eos; diffusion::Symbol=:unity_lewis, Lewis=1.0,
@@ -349,21 +411,13 @@ function CeaTransport(eos; diffusion::Symbol=:unity_lewis, Lewis=1.0,
         binary_diffusion === nothing || throw(ArgumentError("binary_diffusion is unused with diffusion=:unity_lewis"))
         nothing
     elseif diffusion === :mixture_averaged
-        binary_diffusion isa BinaryDiffusion || throw(ArgumentError(
-            "diffusion=:mixture_averaged requires BinaryDiffusion data; CEA trans.inp contains no diffusion coefficients"))
+        (binary_diffusion isa BinaryDiffusion || binary_diffusion isa BinaryDiffusionPolynomial) || throw(ArgumentError(
+            "diffusion=:mixture_averaged requires BinaryDiffusion or BinaryDiffusionPolynomial data; CEA trans.inp contains no diffusion coefficients"))
         length(binary_diffusion.D_ref) == N || throw(ArgumentError("BinaryDiffusion species count does not match EOS"))
-        b = binary_diffusion
-        values = ntuple(i -> ntuple(j -> T(b.D_ref[i][j]), Val(N)), Val(N))
-        temperature_ref = T(b.temperature_ref)
-        pressure_ref = T(b.pressure_ref)
-        exponent = T(b.temperature_exponent)
-        all(isfinite(values[i][j]) for i in 1:N for j in 1:N) &&
-            all(i == j || values[i][j] > zero(T) for i in 1:N for j in 1:N) ||
-            throw(ArgumentError("BinaryDiffusion coefficients are not representable in EOS scalar type $T"))
-        isfinite(temperature_ref) && temperature_ref > zero(T) &&
-            isfinite(pressure_ref) && pressure_ref > zero(T) && isfinite(exponent) ||
-            throw(ArgumentError("BinaryDiffusion scaling values are not representable in EOS scalar type $T"))
-        BinaryDiffusion{T,N}(values, temperature_ref, pressure_ref, exponent)
+        binary_diffusion isa BinaryDiffusionPolynomial &&
+            _binary_diffusion_names(binary_diffusion) != ntuple(k -> Symbol(names[k]), Val(N)) &&
+            throw(ArgumentError("BinaryDiffusionPolynomial species order does not match EOS"))
+        _convert_binary_diffusion(binary_diffusion, T)
     else
         throw(ArgumentError("diffusion must be :unity_lewis or :mixture_averaged"))
     end
@@ -410,6 +464,92 @@ Return pointwise dynamic viscosity `mu`, thermal conductivity `kappa`, and an
 """
 function transport_coefficients end
 
+const TRANSPORT_OK = UInt8(0)
+const TRANSPORT_INVALID_TEMPERATURE = UInt8(1)
+const TRANSPORT_INVALID_PRESSURE = UInt8(2)
+const TRANSPORT_TEMPERATURE_OUT_OF_RANGE = UInt8(4)
+const TRANSPORT_INVALID_COEFFICIENT = UInt8(8)
+
+"Whether `transport` has a finite pointwise validity domain to preflight."
+transport_has_domain(::AbstractTransport) = false
+transport_has_domain(::CeaTransport{T,N,<:BinaryDiffusionPolynomial}) where {T,N} = true
+
+"""
+    transport_domain_status(transport, eos, temperature, rho, Y) -> UInt8
+
+Return pointwise transport-domain flags without throwing. Solver preflight uses
+this hook before entering unchecked coefficient evaluation. The flags describe
+an invalid temperature or pressure, a polynomial pair-range violation, or a
+non-finite/nonpositive evaluated pair coefficient.
+"""
+transport_domain_status(::AbstractTransport, eos, temperature, rho, Y) = TRANSPORT_OK
+
+@inline function _transport_pressure_status(transport::CeaTransport{T,N}, temperature,
+                                            rho, Y::NTuple{N}) where {T,N}
+    isfinite(temperature) && temperature > zero(temperature) || return TRANSPORT_INVALID_TEMPERATURE, zero(T), zero(T)
+    temperature_T = T(temperature)
+    isfinite(temperature_T) && temperature_T > zero(T) || return TRANSPORT_INVALID_TEMPERATURE, zero(T), zero(T)
+    isfinite(rho) && rho > zero(rho) || return TRANSPORT_INVALID_PRESSURE, temperature_T, zero(T)
+    rho_T = T(rho)
+    isfinite(rho_T) && rho_T > zero(T) || return TRANSPORT_INVALID_PRESSURE, temperature_T, zero(T)
+    sumYR = zero(T)
+    @inbounds for k in 1:N
+        y = Y[k]
+        isfinite(y) && y >= zero(y) || return TRANSPORT_INVALID_PRESSURE, temperature_T, zero(T)
+        y_T = T(y)
+        isfinite(y_T) && y_T >= zero(T) || return TRANSPORT_INVALID_PRESSURE, temperature_T, zero(T)
+        sumYR += y_T * transport.Rk[k]
+    end
+    pressure = rho_T * sumYR * temperature_T
+    isfinite(pressure) && pressure > zero(T) || return TRANSPORT_INVALID_PRESSURE, temperature_T, pressure
+    return TRANSPORT_OK, temperature_T, pressure
+end
+
+@inline function transport_domain_status(transport::CeaTransport{T,N}, eos, temperature,
+                                         rho, Y::NTuple{N}) where {T,N}
+    status, _, _ = _transport_pressure_status(transport, temperature, rho, Y)
+    return status
+end
+
+@inline function transport_domain_status(transport::CeaTransport{T,N,<:BinaryDiffusionPolynomial},
+                                         eos, temperature, rho, Y::NTuple{N}) where {T,N}
+    status, temperature_T, pressure = _transport_pressure_status(transport, temperature, rho, Y)
+    status == TRANSPORT_OK || return status
+    model = transport.diffusion
+    @inbounds for i in 1:N, j in i + 1:N
+        # Keep scalar queries strict in their caller precision.  Converting a
+        # Float64 just above a Float32 endpoint first could otherwise round it
+        # back onto the inclusive endpoint.
+        model.temperature_min[i][j] <= temperature <= model.temperature_max[i][j] ||
+            return TRANSPORT_TEMPERATURE_OUT_OF_RANGE
+        Dij = _binary_diffusivity(model, temperature_T, pressure, i, j)
+        isfinite(Dij) && Dij > zero(T) || return TRANSPORT_INVALID_COEFFICIENT
+    end
+    return TRANSPORT_OK
+end
+
+@inline function _checked_transport_state(transport::CeaTransport{T,N}, eos, temperature,
+                                          rho, cp, Y::NTuple{N}) where {T,N}
+    status = transport_domain_status(transport, eos, temperature, rho, Y)
+    status == TRANSPORT_OK || throw(ArgumentError(_transport_domain_message(status)))
+    isfinite(cp) && cp > zero(cp) ||
+        throw(ArgumentError("transport heat capacity must be finite and positive"))
+    cp_T = T(cp)
+    isfinite(cp_T) && cp_T > zero(T) ||
+        throw(ArgumentError("transport heat capacity is not representable as finite and positive"))
+    return nothing
+end
+
+@inline function _transport_domain_message(status)
+    status == TRANSPORT_INVALID_TEMPERATURE && return "transport temperature must be finite and positive"
+    status == TRANSPORT_INVALID_PRESSURE && return "transport pressure must be finite and positive"
+    status == TRANSPORT_TEMPERATURE_OUT_OF_RANGE &&
+        return "transport temperature lies outside the binary-diffusion validity range"
+    status == TRANSPORT_INVALID_COEFFICIENT &&
+        return "binary diffusion coefficient is not finite and positive at this state"
+    return "transport state is invalid"
+end
+
 @inline function transport_coefficients(transport::Transport, eos, temperature, rho, cp,
                                         Y::NTuple{N}) where {N}
     mu = transport.mu0
@@ -420,12 +560,21 @@ end
 # Public coefficient queries commonly use a literal temperature such as 300.
 # Solver fields already carry floating-point temperatures and use the method
 # below directly, preserving its arithmetic and specialization.
-@inline transport_coefficients(transport::CeaTransport{T,N}, eos, temperature::Integer,
-                               rho, cp, Y::NTuple{N}) where {T,N} =
-    transport_coefficients(transport, eos, T(temperature), rho, cp, Y)
+@inline function transport_coefficients(transport::CeaTransport{T,N}, eos,
+                                        temperature::Integer, rho, cp,
+                                        Y::NTuple{N}) where {T,N}
+    _checked_transport_state(transport, eos, temperature, rho, cp, Y)
+    return _transport_coefficients(transport, T(temperature), rho, cp, Y)
+end
 
 @inline function transport_coefficients(transport::CeaTransport{T,N}, eos, temperature,
                                         rho, cp, Y::NTuple{N}) where {T,N}
+    _checked_transport_state(transport, eos, temperature, rho, cp, Y)
+    return _transport_coefficients(transport, temperature, rho, cp, Y)
+end
+
+@inline function _transport_coefficients(transport::CeaTransport{T,N}, temperature,
+                                         rho, cp, Y::NTuple{N}) where {T,N}
     sumYR = sum(ntuple(k -> Y[k] * transport.Rk[k], Val(N)))
     X = ntuple(k -> Y[k] * transport.Rk[k] / sumYR, Val(N))
     viscosity = ntuple(k -> oftype(temperature, 1e-7) *
@@ -473,6 +622,30 @@ end
     end
 end
 
+@inline function _transport_diffusivities(transport::CeaTransport{T,N,<:BinaryDiffusionPolynomial},
+                                          temperature, rho, cp, Y, X, sumYR, kappa) where {T,N}
+    N == 1 && return (zero(temperature),)
+    binary = transport.diffusion
+    pressure = rho * sumYR * temperature
+    return ntuple(Val(N)) do i
+        sum_X_over_D = zero(temperature)
+        sum_XW = zero(temperature)
+        sum_XW_over_D = zero(temperature)
+        @inbounds for j in 1:N
+            if j != i
+                Dij = _binary_diffusivity(binary, temperature, pressure, i, j)
+                sum_X_over_D += X[j] / Dij
+                XW = X[j] / transport.Rk[j]
+                sum_XW += XW
+                sum_XW_over_D += XW / Dij
+            end
+        end
+        denominator = sum_X_over_D
+        sum_XW > zero(sum_XW) && (denominator += X[i] * sum_XW_over_D / sum_XW)
+        denominator > zero(denominator) ? inv(denominator) : zero(temperature)
+    end
+end
+
 @inline transport_at(transport::Transport, eos, temperature, rho, cp, Y, I) =
     (mu=transport.mu0, kappa=transport.mu0 * cp[I] / transport.Pr,
      D=UniformDiffusivity(transport.mu0 / (rho[I] * transport.Sc)))
@@ -480,7 +653,7 @@ end
 @inline function transport_at(transport::CeaTransport{T,N}, eos, temperature, rho, cp,
                               Y, I) where {T,N}
     fractions = ntuple(k -> @inbounds(Y[k][I]), Val(N))
-    return transport_coefficients(transport, eos, temperature[I], rho[I], cp[I], fractions)
+    return _transport_coefficients(transport, temperature[I], rho[I], cp[I], fractions)
 end
 
 @inline function transport_at(transport::AbstractTransport, eos, temperature, rho, cp,

@@ -123,7 +123,7 @@ diffusivities in EOS species order. The binary model scales them by
 ``(T/T_{ref})^n p_{ref}/p``; its exponent is configurable and the reference
 data and scaling must be appropriate to the gas and temperature range.
 
-[`BinaryDiffusionPolynomial`](@ref) is a separate, checked evaluator for
+[`BinaryDiffusionPolynomial`](@ref) supplies checked, species-labelled
 pair-specific dilute-neutral-gas fits. It records exact species names, a
 temperature range for each pair, and a polynomial in ``\log(T/T_{ref})``.
 [`neutral_binary_diffusion`](@ref) builds one from the correlations of
@@ -137,9 +137,19 @@ fits of [`SONG_WANG_2016`](@ref), and the room-temperature measurements
 of [`MUELLER_KLEMM_1970`](@ref) are the independent check on both. The
 builder takes a `source` preference list and never estimates a pair no
 source carries; [`neutral_binary_sources`](@ref) reports the choice per
-pair. The polynomial is not accepted by `CeaTransport` yet and does not
-supply atomic H/D/T or ionized-plasma transport, which needs coupled
+pair. Pass the result as `CeaTransport(eos; diffusion=:mixture_averaged,
+binary_diffusion=model)`, with the exact EOS species order; every species
+also needs its own CEA viscosity and conductivity record. Thus the standalone
+HD and tritiated molecular coefficients do not by themselves provide complete
+solver transport. The polynomial does not supply atomic H/D/T or ionized-plasma transport, which needs coupled
 driving forces and field closure rather than scalar binary diffusivities.
+
+Polynomial diffusion uses strict source ranges, including pairs whose species
+are locally absent. The solver checks temperature, pressure and coefficient
+representability before flux and timestep evaluation, and rejects an invalid
+state collectively with `SolverFailure(:transport_domain)`, including on
+partially owned AMR levels. This error does not retry or follow
+`StepControl.validity`; there is no extrapolation or clamping policy.
 
 For the mass-fraction gradients used by the solver, the mixture coefficient is
 
