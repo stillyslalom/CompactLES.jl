@@ -99,10 +99,9 @@ details are in [DESIGN.md](DESIGN.md).
 - [x] **N6l** — `SymmetryPlaneBC` folds a slip wall on a face-centred mirror and
   reads the interior order, for a single unrefined patch (commit `8a5bdfe`).
 
-- [ ] **N7 — Complete NSCBC inflow transverse coupling.**
-  Add the Yoo–Im transverse terms that exist for outflow but not inflow.
-  **Gate:** oblique/acoustic and vortical inflow tests, reflection measurements,
-  geometry restrictions, time-dependent targets, and MPI collective consistency.
+- [x] **N7** — `NSCBCInflowBC` carries the Yoo–Im transverse terms on every
+  incoming wave, at the full share by default, measured on an oblique pulse
+  and an entering vortex at three Mach numbers (commit `d3d3f30`).
 
 - [ ] **N8 — Introduce a dispatchable temperature-dependent transport model.**
   Connect the bundled NASA CEA transport data: reader, per-species viscosity and
