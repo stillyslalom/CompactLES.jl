@@ -62,10 +62,10 @@ Primary evidence, in preferred order:
    It covers neutral dilute
    gases only.  Correlation ranges and stated pair-specific uncertainty must be
    transcribed and independently checked against the plotted values.
-2. Mueller and Klemm measured `H2-HD`, `H2-D2`, and `HD-D2` at 24 C and 760
+2. Müller and Klemm measured `H2-HD`, `H2-D2`, and `HD-D2` at 24 C and 760
    Torr and jointly fit older measurements involving `HT`, `DT`, and `T2`:
    [*Diffusion in Binary Mixtures of H2, HD and D2 at 24 C*, Z. Naturforsch.
-   25a, 243--246 (1970)](https://doi.org/10.1515/zna-1970-0214).  The new
+   25a, 243--246 (1970)](https://doi.org/10.1515/zna-1970-0216).  The new
    measurements report about one-percent error; the tritium-containing values
    are older and less precise.  Use the paper's actual tabulated values and
    labels, never a mass-scaled substitute.
@@ -318,6 +318,19 @@ as well; physical suppression and numerical flux limiting remain distinct.
    uncertainty are independently recovered.  Gate on symmetry, positivity,
    units, exact `1/p`, fit residuals at every source node, source-range behavior,
    and comparison with an independent published value not used by the fit.
+   Delivered: `MARRERO_MASON_1972` carries Tables 12 and 13 of Marrero and
+   Mason in SI after two independent transcriptions were diffed, with the
+   H2-D2 fit gated against the paper's Table 20 nodes; `SONG_WANG_2016`
+   carries the calculated isotopologue and helium pairs as fits made by
+   `data/songwang_extract.jl` from the publisher's PDF and independently
+   recovered by the Xpdf/layout audit in `data/songwang_verify.jl`, which
+   checks all 78 mixture tables and 702 equimolar nodes; and
+   `MUELLER_KLEMM_1970` carries the nine measured room-temperature values.
+   `neutral_binary_diffusion` fits the polynomial type to any pair of them
+   under a `source` preference list that keeps the three kinds distinct.
+   The H2-D2 correlation, every calculated pair and every measurement
+   agree within their stated uncertainties.  Tritiated pairs are included
+   with their stated 2% error.
 5. **Neutral flux integration.** Use the polynomial pairs in the existing
    mixture-averaged closure.  Gate with binary Loschmidt diffusion at uniform
    pressure and temperature, convergence, conservation, permutation of species

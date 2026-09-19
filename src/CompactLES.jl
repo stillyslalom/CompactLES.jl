@@ -40,6 +40,7 @@ include("physics.jl")
 include("nasa9_data.jl")
 include("transport.jl")
 include("ion_transport.jl")
+include("neutral_diffusion_data.jl")
 include("equations.jl")
 include("boundary.jl")
 include("operators.jl")
@@ -95,6 +96,14 @@ export AbstractTransport, BinaryDiffusion, BinaryDiffusionPolynomial, binary_dif
 export CeaTransport, read_cea_transport, transport_coefficients
 export H_ION_MASS, D_ION_MASS, T_ION_MASS, StantonMurilloDiagnostics
 export stanton_murillo_interdiffusivity
+export MarreroMasonPair, MARRERO_MASON_1972, MARRERO_MASON_UNCERTAINTY
+export marrero_mason_pair, marrero_mason_pairs, marrero_mason_diffusivity
+export neutral_binary_diffusion
+export neutral_binary_diffusion_residual, temperature_domain
+export SongWangPair, SONG_WANG_2016, SONG_WANG_UNCERTAINTY, song_wang_pair
+export song_wang_diffusivity, MuellerKlemmPair, MUELLER_KLEMM_1970
+export MUELLER_KLEMM_TEMPERATURE, MUELLER_KLEMM_PRESSURE, mueller_klemm_pair
+export neutral_binary_sources
 export StiffenedGas, Nasa9Interval, Nasa9Species, Nasa9Mixture
 export nasa9_constant_cp, read_nasa9
 export recover_primitives!, species_names, species_enthalpy

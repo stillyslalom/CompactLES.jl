@@ -126,10 +126,20 @@ data and scaling must be appropriate to the gas and temperature range.
 [`BinaryDiffusionPolynomial`](@ref) is a separate, checked evaluator for
 pair-specific dilute-neutral-gas fits. It records exact species names, a
 temperature range for each pair, and a polynomial in ``\log(T/T_{ref})``.
-It is useful for sourced neutral H2/D2/HD data, but is not accepted by
-`CeaTransport` yet and does not supply atomic H/D/T or ionized-plasma
-transport. Plasma isotope transport needs coupled driving forces and field
-closure rather than scalar binary diffusivities.
+[`neutral_binary_diffusion`](@ref) builds one from the correlations of
+Marrero and Mason (1972), vendored as [`MARRERO_MASON_1972`](@ref) in SI
+units with each pair's stated temperature range and reliability group.
+[`neutral_binary_diffusion_residual`](@ref) reports how far a fit departs
+from its source, and [`temperature_domain`](@ref) the interval every pair
+of a model shares. H2-D2 is the only hydrogen isotopologue pair that
+paper correlates; the HD and tritiated pairs come from the calculated
+fits of [`SONG_WANG_2016`](@ref), and the room-temperature measurements
+of [`MUELLER_KLEMM_1970`](@ref) are the independent check on both. The
+builder takes a `source` preference list and never estimates a pair no
+source carries; [`neutral_binary_sources`](@ref) reports the choice per
+pair. The polynomial is not accepted by `CeaTransport` yet and does not
+supply atomic H/D/T or ionized-plasma transport, which needs coupled
+driving forces and field closure rather than scalar binary diffusivities.
 
 For the mass-fraction gradients used by the solver, the mixture coefficient is
 

@@ -4643,6 +4643,83 @@ against the analytic acoustic-plus-diffusive bound; host and
 KernelAbstractions CPU paths agree. Float32 coefficients retain their scalar
 type. Hardware GPU coverage is unavailable in this environment.
 
+### bench/neutraldiffusion.jl: the Marrero--Mason fits
+
+```text
+julia --project=. -t 1 bench/neutraldiffusion.jl [degree]
+julia --project=. -t 1 test/neutral_diffusion_tests.jl
+```
+
+N8a vendors Tables 12 and 13 of Marrero and Mason (1972) as
+`MARRERO_MASON_1972`: 77 rows, 74 distinct pairs, H2-D2 the only hydrogen
+isotopologue pair. Two Opus agents transcribed the tables independently
+from the NIST reprint scan at 600--800 dpi and a script diffed the 77 rows
+with no disagreement. The printed digits sit in the row constructors and
+are converted to SI on construction. `neutral_binary_diffusion` fits the
+log-polynomial of `BinaryDiffusionPolynomial` to each row over its stated
+range, anchored at that range's geometric midpoint so overlapping rows are
+selected unambiguously; the largest relative departure from the source equation over all
+77 rows, by polynomial degree, is:
+
+| degree | 6 | 8 | 10 (default) | 12 |
+|---|---:|---:|---:|---:|
+| worst row residual | 1.66e-2 | 2.84e-3 | 3.53e-4 | 3.32e-5 |
+
+The worst row at every degree is the 3He-4He correlation from 1.74 K; at
+the default degree H2-D2 over 14--10^4 K is 2.16e-5, He-Kr 4.76e-6 and
+N2-CO 8.56e-6, and every eq (4.3-2) row without a Sutherland term is at
+round-off. The paper's uncertainty limits are 1--3% at 300 K and 10--20%
+at 10^4 K, so the default degree is an order below the tightest of them
+on every row.
+
+The H2-D2 equation is checked against the paper's own Table 20 curve-fit
+nodes (viscosity-derived below 1000 K, molecular-beam above), which the
+paper fitted with `s` fixed at 1.500. The equation departs from those
+nodes by the scatter its deviation plots show, and the polynomial adds
+under 5e-5 to that:
+
+| T [K] | 14.12 | 20.32 | 90.0 | 26.09 | 70.32 | 293.0 | 986 | 3313 | 10000 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| equation vs node | -3.15% | +3.08% | -6.88% | +3.42% | -1.64% | -0.30% | +4.84% | +2.45% | -1.60% |
+
+The 90.0 K node is printed out of temperature order in the paper and is
+the largest departure.
+
+`data/songwang_extract.jl` fits the 26 Song--Wang pairs from the
+supporting information's text layer. An independent Xpdf/layout recovery
+in `data/songwang_verify.jl` checks the pinned publisher PDF, all 78 mixture
+tables and all 702 equimolar nodes. PyMuPDF cell-order, Xpdf layout-column and
+pypdf layout-row recoveries agreed exactly on all 2106 `(T,D12)` tuples. A
+visual audit of Table S18 independently confirmed its 27 D12 values, cm²/s
+units, 101.3 kPa pressure and 2.0% expanded uncertainty at 0.95 confidence
+with `k = 2`.
+A degree-4 polynomial in
+log(T / 300 K) reproduces every one of the 27 nodes per pair to between
+2.2e-5 and 6.7e-5, the table's own five-digit rounding; the 0.25 and 0.75
+mole-fraction tables sit within 1.7e-3 to 5.0e-3 of the equimolar one,
+which is the composition dependence the model drops. The three sources
+agree within their stated uncertainties where they overlap, in cm^2/s at
+1 atm:
+
+| pair | Müller--Klemm measured, 297.15 K | Song--Wang calculated, 298.15 K | Marrero--Mason, 297.15 K |
+|---|---:|---:|---:|
+| H2-HD | 1.349 ± 0.013 | 1.351 | — |
+| H2-D2 | 1.268 ± 0.013 | — | 1.246 |
+| HD-D2 | 1.126 ± 0.011 | 1.130 | — |
+| H2-HT | 1.274 ± 0.025 | 1.284 | — |
+| H2-DT | 1.212 ± 0.024 | 1.242 | — |
+| H2-T2 | 1.207 ± 0.030 | 1.214 | — |
+| D2-HT | 1.044 ± 0.021 | 1.045 | — |
+| D2-DT | 0.989 ± 0.020 | 0.992 | — |
+| D2-T2 | 0.956 ± 0.019 | 0.956 | — |
+| He-H2 | — | 1.574 (4He) | 1.535 at 298.15 K |
+
+The one-kelvin offset between the measured and calculated columns is
+worth 0.6%. H2-DT is the widest gap at 2.5%, inside the 2% measurement
+and 2% calculation limits combined; the H2-D2 correlation sits 1.7% below
+the measurement it never used, inside its 2% group II limit at 300 K.
+
+
 The constant-model allocation and JET dispatch audits match their pre-change
 baselines. A warmed 16-by-12 NASA-9 H2/N2 case with artificial transport off
 allocates 4048 bytes per RHS and 176 per CFL evaluation under both constant

@@ -242,7 +242,9 @@ and validated against analytic references.
   optional floor repairs negative-energy cells.
 - `Transport` retains constant viscosity and a single Schmidt number;
   `CeaTransport` uses the bundled NASA fits, with unity-Lewis diffusion unless
-  binary diffusion data are supplied. See the [transport model](docs/src/explanation/thermodynamics.md).
+  binary diffusion data are supplied; the Marrero--Mason dilute-gas
+  correlations are vendored as a checked standalone evaluator, not yet
+  connected to the flux. See the [transport model](docs/src/explanation/thermodynamics.md).
 - The GPU backend runs a single patch per solver with host-staged MPI, and
   refinement is Cartesian-only, single-region, with a small interface
   conservation drift.

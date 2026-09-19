@@ -45,6 +45,12 @@ sync_levels! sync_patches! tanh_blend tke_profile total_energy
 binary_diffusivity stanton_murillo_interdiffusivity transport_coefficients turbulent_kinetic_energy validate_bc validate_state! velocity volume_average
 volume_integral wall_internal_energy xcoord
 H_ION_MASS D_ION_MASS T_ION_MASS
+MarreroMasonPair MARRERO_MASON_1972 MARRERO_MASON_UNCERTAINTY marrero_mason_pair
+marrero_mason_pairs marrero_mason_diffusivity neutral_binary_diffusion
+neutral_binary_diffusion_residual temperature_domain
+SongWangPair SONG_WANG_2016 SONG_WANG_UNCERTAINTY song_wang_pair song_wang_diffusivity
+MuellerKlemmPair MUELLER_KLEMM_1970 MUELLER_KLEMM_TEMPERATURE MUELLER_KLEMM_PRESSURE
+mueller_klemm_pair neutral_binary_sources
 """)))
 
 const ADVANCED_QUALIFIED_API = (

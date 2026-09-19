@@ -34,6 +34,38 @@ read_cea_transport
 transport_coefficients
 ```
 
+## Neutral binary diffusion data
+
+Three vendored dilute neutral-gas sources and the polynomial fits built
+from them: the evaluated correlations of Marrero and Mason (1972) for
+H2-D2 and the combustion, air, noble-gas and atomic pairs of that paper;
+the calculated hydrogen-isotopologue and helium pairs of Song et al.
+(2016); and the room-temperature measurements of Müller and Klemm (1970).
+Measured, evaluated and calculated values stay in separate tables.
+
+```@docs
+MarreroMasonPair
+MARRERO_MASON_1972
+MARRERO_MASON_UNCERTAINTY
+marrero_mason_pair
+marrero_mason_pairs
+marrero_mason_diffusivity
+neutral_binary_diffusion
+neutral_binary_diffusion_residual
+temperature_domain
+neutral_binary_sources
+SongWangPair
+SONG_WANG_2016
+SONG_WANG_UNCERTAINTY
+song_wang_pair
+song_wang_diffusivity
+MuellerKlemmPair
+MUELLER_KLEMM_1970
+MUELLER_KLEMM_TEMPERATURE
+MUELLER_KLEMM_PRESSURE
+mueller_klemm_pair
+```
+
 ## Ion transport reference
 
 The standalone ion evaluator supplies a checked hot-plasma reference coefficient.

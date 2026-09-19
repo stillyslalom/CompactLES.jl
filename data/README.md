@@ -37,6 +37,33 @@ properties. Its default diffusion model is unity Lewis; mixture-averaged
 diffusion requires separately supplied binary diffusivities. The original
 `Transport` remains the constant-viscosity, single-Schmidt model.
 
+The binary diffusion correlations of Marrero and Mason, J. Phys. Chem. Ref.
+Data 1, 3--118 (1972), Tables 12 and 13, are not a vendored file: they are
+transcribed as source constants in `src/neutral_diffusion_data.jl`, the
+printed digits converted to SI on construction, with each pair's stated range
+and reliability group, from the NIST reprint at <https://www.nist.gov/system/files/documents/srd/jpcrd1.pdf>.
+The transcription was made twice independently and diffed. The paper is a
+National Standard Reference Data System evaluation whose copyright the
+issue assigns to AIP and ACS; the correlation parameters are the recommended
+values themselves, reproduced with attribution and without the paper's text,
+figures or data tables.
+
+Two more sources sit beside it in the same file. Song et al., J. Chem. Eng.
+Data 61, 1910 (2016), tabulate calculated hydrogen-isotopologue and helium
+pairs in their supporting information (DOI `10.1021/acs.jced.6b00076.s001`,
+ACS Figshare record 3208147/file 5037301). `songwang_extract.jl` fits each
+pair from a PyMuPDF text dump. `songwang_verify.jl` independently parses
+Xpdf `pdftotext -layout` output and, given the user-local publisher PDF, checks the
+artifact hash, all 78 mixture tables and 702 equimolar nodes against the
+vendored fits, pair identities, composition spread and the printed 2.0%
+expanded uncertainty. The verified PDF has SHA-256
+`e93ee0a69c8f1d976e321065efe9bd3042a6352630a5e589d4e049587271de9a`
+(publisher MD5 `d73f257d12bc84d99ba9f2a50f298175`). Only fits and diagnostics
+are vendored, not the source tables; the Figshare record labels the supporting
+artifact CC BY-NC 4.0. Müller and Klemm, Z. Naturforsch. 25a,
+243 (1970), Tab. 1, is nine
+measured room-temperature values transcribed twice from the page image.
+
 ## Taylor-Green reference solution
 
 | File | What it is | Used by |

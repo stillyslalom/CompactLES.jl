@@ -115,6 +115,11 @@ details are in [DESIGN.md](DESIGN.md).
   **Gate:** independent coefficients, isotope/pair identity, licensed data,
   fit residuals, and collective domain handling before solver integration.
   Neutral fits do not supply the plasma transport required by H4a.
+  **Status:** delivered and gated on three sources kept distinct
+  (Marrero--Mason evaluated correlations, Song--Wang calculated
+  isotopologue fits independently recovered through PyMuPDF/cell-order and
+  Xpdf/layout paths, Müller--Klemm measurements). Solver integration and
+  collective domain handling remain open.
 
 - [ ] **N9 — Validate the bulk species channel beyond its existing cases.**
   Measure `species_flux=:bulk` in 3-D shock/mixing runs and calibrate its inherited
