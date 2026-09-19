@@ -107,19 +107,9 @@ details are in [DESIGN.md](DESIGN.md).
   viscosity and conductivity, with unity-Lewis diffusion or mixture-averaged
   diffusivities from supplied binary data (commit `6594afd`).
 
-- [ ] **N8a — Supply validated neutral binary diffusion data.**
-  Use species-labelled, pair-specific temperature fits with explicit validity
-  ranges and provenance; prioritize hydrogen isotopes alongside core combustion
-  pairs. Keep measured values, collision-model predictions, and isotope-scaling
-  estimates distinct, following [the transport plan](TRANSPORT.md).
-  **Gate:** independent coefficients, isotope/pair identity, licensed data,
-  fit residuals, and collective domain handling before solver integration.
-  Neutral fits do not supply the plasma transport required by H4a.
-  **Status:** delivered and gated on three sources kept distinct
-  (Marrero--Mason evaluated correlations, Song--Wang calculated
-  isotopologue fits independently recovered through PyMuPDF/cell-order and
-  Xpdf/layout paths, Müller--Klemm measurements). Solver integration and
-  collective domain handling remain open.
+- [x] **N8a** — Validated, species-labelled neutral pair fits feed the
+  mixture-averaged solver closure with strict collective domain rejection,
+  including subcycled AMR, with the sources kept distinct (commit `711cecf`).
 
 - [ ] **N9 — Validate the bulk species channel beyond its existing cases.**
   Measure `species_flux=:bulk` in 3-D shock/mixing runs and calibrate its inherited
