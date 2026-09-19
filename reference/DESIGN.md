@@ -994,8 +994,16 @@ components.
   (acoustic, entropy, transverse, species) with a relaxation toward the targets
   while keeping the single outgoing acoustic wave as computed. Targets may be
   constant or a pointwise `(x, y, z, t) -> Prim` function evaluated at the stage
-  time. The LODI derivation of each relaxation form is spelled out in the source
-  so the signs can be audited.
+  time. Each imposed amplitude carries the β_t-weighted transverse contribution
+  of its characteristic, `L* = relaxation − β_t 𝒯` (Yoo & Im 2007): at β_t = 1
+  the incoming characteristic variables follow their targets through a
+  transverse flow at the face, at 0 the relaxation acts on the LODI amplitude
+  alone. The transverse terms are the Cartesian ones; the curvature sources of
+  a curvilinear face stay in the right-hand side as computed, like the viscous
+  terms. The LODI derivation of each relaxation form and of each transverse
+  term is spelled out in the source so the signs can be audited, and
+  `test/runtests.jl` checks the frozen-characteristic property at both faces.
+  The weights are measured in `reference/CALIBRATION_APPENDIX.md`.
 
 The full LODI algebra (the mapping from wave-amplitude deltas to conserved
 components, including the species contribution to the energy through ∂φ/∂Y_k)

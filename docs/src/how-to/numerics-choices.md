@@ -124,7 +124,7 @@ Choose each face's condition from its physics, as described in
 | [`SymmetryPlaneBC`](@ref) | the interior operator's | unconditional: the folded step is the periodic step restricted by parity | none; a single unrefined, unstretched patch | the slip wall half a cell outside the end node; nothing is injected and no closure row exists |
 | [`NoSlipWallBC`](@ref) | closure rows: 3, evolution 4 | neutral, viscosity damps every closure's wall mode | the wall flux contract | adiabatic by default; a wall temperature makes it isothermal |
 | [`DirichletBC`](@ref) | closure rows | neutral under every closure option | none | shock tubes and supersonic inflow |
-| [`NSCBCInflowBC`](@ref), [`NSCBCOutflowBC`](@ref) | closure rows | depends on the relaxation scale | one characteristic solve per face per stage | faces with a unit scale factor only; the outflow carries the transverse coupling of Yoo and Im and the inflow does not |
+| [`NSCBCInflowBC`](@ref), [`NSCBCOutflowBC`](@ref) | closure rows | depends on the relaxation scale | one to three compact solves per face per stage, six for an inflow carrying its transverse terms | faces with a unit scale factor only; both carry the transverse coupling of Yoo and Im, weighted by `beta_t` |
 | folds ([`AxisBC`](@ref), [`OriginBC`](@ref), [`PoleBC`](@ref)) | 3 | neutral | the fold exchange | the spherical origin needs data resolved over three cells and a CFL of 0.3 on a converging shock |
 
 When the problem's symmetry permits a periodic or folded dimension, use it

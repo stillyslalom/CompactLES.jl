@@ -2489,6 +2489,62 @@ function test_covered_masks()
     end
 end
 
+# ---------------------------------------------------------------------------
+# 4c. NSCBC inflow with its plane decomposed. The transverse terms read
+#     compact derivatives of p and ρ along the transverse dimensions,
+#     distributed solves every rank must enter ahead of the plane-ownership
+#     test, and the plane then spans several ranks, each holding a block of
+#     the transverse variation. The right-hand side and a few steps are
+#     measured against the serial rebuild on COMM_SELF, split along the
+#     transverse dimension and along the face normal in turn; the second
+#     split leaves the plane on one rank while the normal solves stay
+#     distributed.
+# ---------------------------------------------------------------------------
+function test_nscbc_inflow()
+    section("NSCBC inflow: transverse terms on a decomposed plane")
+    function blockdiff(s, a, ref, b)
+        e = 0.0
+        for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
+            loc = Tuple(I) .- s.decomp.n_halo_d
+            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            e = max(e, abs(Float64(a[I, c] - b[J, c])))
+        end
+        e
+    end
+    ic = (x, y, z) -> begin
+        θ = 0.5 + 0.2 * sin(2π * y)
+        Prim(u=(0.3 + 0.05 * sin(2π * y), 0.1 * cos(2π * y), 0.0),
+             p=1 + 0.05 * sin(2π * y + 1), T_ion=1 + 0.1 * cos(2π * y),
+             Y=(θ, 1 - θ))
+    end
+    function build(comm_here, dims_here)
+        bc = NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0, Y=[0.6, 0.4])
+        sol = Solver(n_global=(SPLITN, SPLITN, 1), L_domain=(1.0, 1.0, 1.0),
+                     bcs=((bc, NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
+                     eos=IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                                       IdealSpecies{Float64}("b", 0.5, 1.4)]),
+                     comm=comm_here, dims=dims_here,
+                     transport=Transport(mu0=0.0), art=ArtParams(enabled=false),
+                     cfl=0.4)
+        Q = allocate_state(sol)
+        initialize!(sol, Q, ic)
+        apply_bcs!(sol, Q)
+        dQ = zero(Q)
+        compute_rhs!(sol, Q, dQ)
+        return sol, Q, dQ
+    end
+    for ax in (2, 1)
+        s, Q, dQ = build(comm, splitdims(ax))
+        ref, Qref, dQref = build(MPI.COMM_SELF, (1, 1, 1))
+        check("inflow RHS matches serial, split along dim $ax",
+              gmax(blockdiff(s, dQ, ref, dQref)), 1e-10)
+        run!(s, Q; tfinal=1e9, nmax=4)
+        run!(ref, Qref; tfinal=1e9, nmax=4)
+        check("inflow run matches serial, split along dim $ax",
+              gmax(blockdiff(s, Q, ref, Qref)), 1e-10)
+    end
+end
+
 include("wall_flux_mpi.jl")
 
 const SUITE = (
@@ -2507,6 +2563,7 @@ const SUITE = (
     ("halo consistency", test_halo_consistency),
     ("off-rank folds", test_offrank_folds),
     ("symmetry plane", test_symmetry_plane),
+    ("NSCBC inflow", test_nscbc_inflow),
     ("freestream", test_freestream),
     ("conservation", test_conservation),
     ("sync", test_sync),

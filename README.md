@@ -241,7 +241,7 @@ and validated against analytic references.
   while density, total energy, and the Noh plateau stay sound (within 0.07%); an
   optional floor repairs negative-energy cells.
 - `Transport` uses constant properties (the bundled NASA transport table is not
-  yet wired in); NSCBC inflow transverse terms are not implemented.
+  yet wired in).
 - The GPU backend runs a single patch per solver with host-staged MPI, and
   refinement is Cartesian-only, single-region, with a small interface
   conservation drift.

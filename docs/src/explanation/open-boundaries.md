@@ -54,15 +54,30 @@ EOS.
 
 ## Transverse and viscous effects
 
-The LODI approximation separates normal waves. `beta_t` controls how much of
-the transverse contribution is carried by the imposed acoustic wave; a negative
-value selects the local-Mach recommendation. Viscous boundary terms are retained
-as computed and are not included in the characteristic derivation.
+The LODI approximation separates normal waves. With the transverse
+convective terms kept, the rate of each incoming characteristic variable is
+the imposed amplitude plus a transverse contribution ``\mathcal{T}``: for the
+acoustic wave ``u_t\cdot\nabla_t p + \rho c^2\,\nabla_t\cdot u_t \pm \rho c\,
+u_t\cdot\nabla_t u_n``, for the entropy wave ``u_t\cdot(c^2\nabla_t\rho -
+\nabla_t p)``, for a transverse velocity ``u_t\cdot\nabla_t u_t + \nabla_t
+p/\rho`` and for a species ``u_t\cdot\nabla_t Y_k``. Both conditions carry
+``-\beta_t\mathcal{T}`` in every imposed amplitude, where `beta_t` weights the
+share of the transverse contribution. At the inflow the default is the full
+share: the relaxed quantities then follow their targets through a
+transverse flow at the face, whereas a relaxation acting on the LODI
+amplitude alone holds them off their targets by the transverse contribution
+over the relaxation rate. At the outflow the default is the local Mach
+number, a damped share that keeps the incoming acoustic wave from reflecting
+obliquely incident waves. A negative value selects the local Mach number
+at either face. Viscous boundary terms are retained as computed and are not
+included in the characteristic derivation.
 
 Current NSCBC is intended for faces whose normal coordinate has unit scale
 factor: Cartesian faces, cylindrical radial or axial faces, and spherical
 radial faces. Angular faces require additional metric terms in the wave
-analysis and should not be assumed equivalent.
+analysis and should not be assumed equivalent. The transverse terms are the
+Cartesian ones; on a cylindrical or spherical face the curvature sources of
+the transverse directions stay in the right-hand side as computed.
 
 ## EOS dependence
 

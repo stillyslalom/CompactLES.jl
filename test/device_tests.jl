@@ -122,7 +122,9 @@ end
     end
 
     # NSCBC inflow/outflow with an isothermal no-slip wall: the plane bodies
-    # and their EOS queries, plus the relaxed filter blend.
+    # and their EOS queries, plus the relaxed filter blend. The stream varies
+    # across the inflow plane so that the transverse terms of both
+    # conditions are live in the launched bodies.
     @test compare(; nmax=8, tfinal=0.05) do backend
         s = Solver(n_global=(48, 16, 1), L_domain=(2.0, 1.0, 1.0),
                    bcs=((NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0),
@@ -130,7 +132,9 @@ end
                         (NoSlipWallBC(Twall=1.0), SlipWallBC()), per),
                    backend=backend, cfl=0.4, filter_cfl=0.6)
         Q = allocate_state(s)
-        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0, u=(0.3, 0.0, 0.0)))
+        initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1 + 0.02 * cos(π * y),
+                                            u=(0.3 + 0.05 * sin(π * y),
+                                               0.02 * sin(π * y), 0.0)))
         return s, Q
     end
 

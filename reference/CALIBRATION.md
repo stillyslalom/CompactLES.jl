@@ -41,6 +41,8 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 | `filter_interval` | 1 | keep | Redundant with α: the dissipation per unit time depends on the two only through (1 − 2α) / `filter_interval` ([filter dissipation](CALIBRATION_APPENDIX.md#the-filters-dissipation)). |
 | `filter_cfl` | 0.35 | keep | Makes the filter's dissipation a rate, invariant to the CFL, to landing steps, to retries and to subcycling; clears the battery at its production CFL numbers ([filter dissipation](CALIBRATION_APPENDIX.md#the-filters-dissipation)). |
 | `filter_weighting` | `:none` | keep | The volume-weighted form conserves no better on a closed line, is 17 times less conservative at an axis or a pole, and moves the Noh wall deficit in opposite directions at the axis and the origin ([non-uniform volumes](CALIBRATION_APPENDIX.md#filtering-on-non-uniform-volumes)). |
+| `NSCBCInflowBC` `beta_t` | 1 | keep | The full transverse share admits an entering vortex with a third of the LODI error at every relaxation rate and is the only weight under which the imposed state follows its target through a transverse flow; it reflects an oblique pulse at 0.13 of the incident amplitude against 0.047 at the outflow's Mach-number weight ([inflow transverse terms](CALIBRATION_APPENDIX.md#the-inflow-transverse-terms)). |
+| `NSCBCOutflowBC` `beta_t` | −1 (local Mach) | keep | Least pulse reflection near the Mach number; a vortex leaves most cleanly at 1 − M, measured at one Mach number only ([inflow transverse terms](CALIBRATION_APPENDIX.md#the-inflow-transverse-terms)). |
 
 Every constant above was fitted under `compact_filter(0.45)` applied at full
 strength every step, and the four that could depend on it have been re-swept at

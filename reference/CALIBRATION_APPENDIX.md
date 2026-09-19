@@ -38,10 +38,11 @@ section that moved it says so in one sentence and the older figure is gone.
     (`bench/wallclosure.jl`, `test/mpi_tests.jl`)
 16. [The aligned Noh transverse mode](#the-aligned-noh-transverse-mode)
     (`bench/noh_transverse.jl`)
-17. [Fold order and geometry limits](#fold-order-and-geometry-limits) (`bench/foldorder.jl`)
-18. [Operator and step cost](#operator-and-step-cost) (`bench/derivcost.jl`,
+17. [The inflow transverse terms](#the-inflow-transverse-terms) (`bench/nscbcinflow.jl`)
+18. [Fold order and geometry limits](#fold-order-and-geometry-limits) (`bench/foldorder.jl`)
+19. [Operator and step cost](#operator-and-step-cost) (`bench/derivcost.jl`,
     `bench/phases.jl`)
-19. [AMR](#amr) (`bench/amr_transfer.jl`, `test/level_tests.jl`)
+20. [AMR](#amr) (`bench/amr_transfer.jl`, `test/level_tests.jl`)
 
 ## The shock battery
 
@@ -3978,6 +3979,146 @@ The validation guard is `uniformity < 5e-7` for exactly N = 100, AR = 4, nx = 12
 that preset and horizon, not a stability bound for another width, an injected disturbance or
 later evolution. At a face-centred symmetry plane the same case reads 5.135e-10 and its
 guard is 5e-9 ([the face-centred symmetry plane](#the-face-centred-symmetry-plane)).
+
+## The inflow transverse terms
+
+```text
+julia --project=. -t 1 bench/nscbcinflow.jl pulse vortex outflow betas=0,0.15,0.3,0.5,0.7,0.85,1 etas=4,16,64
+julia --project=. -t 1 bench/nscbcinflow.jl pulse vortex outflow M=0.1 betas=0,-1,0.9,1 etas=16
+julia --project=. -t 1 bench/nscbcinflow.jl pulse vortex outflow M=0.5 betas=0,-1,0.5,1 etas=16
+julia --project=. -t 1 bench/nscbcinflow.jl vortex betas=0,0.5,1 etas=256,1024
+```
+
+Every imposed amplitude of `NSCBCInflowBC` carries `−beta_t·𝒯`, the
+weighted transverse contribution of its characteristic (the derivation is in
+`src/nscbc.jl`); `NSCBCOutflowBC` has carried the same weight on its one
+incoming wave since its introduction. The instrument measures both faces on a
+two-dimensional stream at Mach 0.3 (γ = 1.4, p = ρ = 1, 64 points per unit
+length, periodic width 1, artificial properties off, the default filter every
+step) against the same run on a domain extended two units past the face under
+test, where the disturbance meets no boundary in the run: the difference is
+the face's reflection or the error of its imposition. A pressure pulse of
+amplitude 1e-3 and radius 0.1 released half a unit inside the face meets it
+at every incidence angle; the deviation is scaled by the largest excursion the
+extended run carries across the plane of the face (2.1e-4 at the inflow,
+2.6e-4 at the outflow). An isentropic vortex of peak velocity 0.3 of the
+stream and radius 0.1 enters through the inflow from a time-dependent target,
+the analytic vortex at the plane, or leaves through the outflow; the
+deviation is scaled by its peak velocity and by its pressure depression
+(1.5e-2). The vortex rows run to the time the centre reaches one unit inside
+the face; the pulse rows to the time the reflection is half a unit back
+inside.
+
+### The pulse at the inflow
+
+Maximum and root-mean-square deviation of p over the region the reflection
+has crossed, over the incident amplitude, at the default relaxation rates:
+
+| `beta_t` | max | rms |
+|---|---|---|
+| 0 (LODI) | 0.220 | 0.045 |
+| 0.15 | 0.126 | 0.025 |
+| 0.3 (= M) | 0.047 | 0.0093 |
+| 0.5 | 0.048 | 0.0096 |
+| 0.7 | 0.100 | 0.017 |
+| 0.85 | 0.119 | 0.020 |
+| 1 | 0.128 | 0.022 |
+
+The reflection is least at a weight near the Mach number, a factor 4.7 under
+the LODI form, and the full share halves the LODI reflection.
+
+### The vortex at the inflow
+
+Maximum and root-mean-square deviation of u over the peak velocity, the
+maximum of v likewise, and the maximum of p over the pressure depression,
+once the centre is one unit inside:
+
+| `eta` | `beta_t` | max u | rms u | max v | max p |
+|---|---|---|---|---|---|
+| 4 | 0 | 0.93 | 0.168 | 1.21 | 0.97 |
+| 4 | 0.5 | 0.84 | 0.157 | 1.26 | 0.95 |
+| 4 | 1 | 0.63 | 0.107 | 1.10 | 0.83 |
+| 16 | 0 | 0.52 | 0.107 | 1.22 | 0.67 |
+| 16 | 0.5 | 0.39 | 0.079 | 0.99 | 0.54 |
+| 16 | 1 | 0.26 | 0.043 | 0.58 | 0.36 |
+| 64 | 0 | 0.22 | 0.036 | 0.44 | 0.40 |
+| 64 | 0.3 | 0.17 | 0.028 | 0.35 | 0.31 |
+| 64 | 0.5 | 0.14 | 0.023 | 0.30 | 0.25 |
+| 64 | 0.7 | 0.10 | 0.018 | 0.24 | 0.18 |
+| 64 | 1 | 0.063 | 0.011 | 0.16 | 0.091 |
+| 256 | 0 | 0.061 | 0.0093 | 0.11 | 0.11 |
+| 256 | 0.5 | 0.037 | 0.0058 | 0.074 | 0.065 |
+| 256 | 1 | 0.016 | 0.0029 | 0.040 | 0.024 |
+| 1024 | 0 | 0.016 | 0.0024 | 0.027 | 0.028 |
+| 1024 | 0.5 | 0.011 | 0.0015 | 0.018 | 0.017 |
+| 1024 | 1 | 0.0050 | 0.0008 | 0.010 | 0.0068 |
+
+At the default rates (0.28) the vortex does not enter at all under any
+weight: the error is the vortex itself. A relaxation admits a structure only
+when its time L_ref/(η c) is short against the passage time r_v/u_0, 0.28
+here against 6 at the default rate and 0.03 at η = 64, and the error then
+falls as 1/η up to the largest rate run, with no stiffness at η = 1024. At
+every rate the full share is the best weight, by a factor 3 to 4 over the
+LODI form from η = 64 up and with the error falling monotonically in the
+weight; the pressure error falls fastest, 0.40 to 0.091 at η = 64.
+
+### Across the Mach number
+
+The same two disturbances at Mach 0.1, 0.3 and 0.5 (the domain and the
+disturbances unchanged, η = 16 for the vortex), the pulse's maximum
+deviation over its incident amplitude and the vortex's maximum u over its
+peak velocity and maximum p over its pressure depression:
+
+| M | `beta_t` | pulse max | vortex max u | vortex max p |
+|---|---|---|---|---|
+| 0.1 | 0 | 0.158 | 0.55 | 0.94 |
+| 0.1 | M | 0.093 | 0.52 | 0.86 |
+| 0.1 | 1 | 0.114 | 0.082 | 0.115 |
+| 0.3 | 0 | 0.220 | 0.52 | 0.67 |
+| 0.3 | M | 0.047 | 0.45 | 0.60 |
+| 0.3 | 1 | 0.128 | 0.26 | 0.36 |
+| 0.5 | 0 | 0.376 | 0.66 | 0.92 |
+| 0.5 | M | 0.025 | 0.57 | 0.78 |
+| 0.5 | 1 | 0.112 | 0.44 | 0.61 |
+
+The ordering is the same at every Mach number: the Mach-number weight
+reflects the pulse least and the full share admits the vortex best, by a
+factor 7 over the LODI form at Mach 0.1, where the Mach-number weight is
+nearly the LODI form. The full share reflects the pulse less than the LODI
+form at every Mach number.
+
+### The same disturbances at the outflow
+
+| `beta_t` | pulse max | pulse rms | vortex max u | vortex rms u | vortex max v | vortex max p |
+|---|---|---|---|---|---|---|
+| 0 (LODI) | 0.106 | 0.015 | 0.033 | 0.013 | 0.045 | 0.69 |
+| 0.15 | 0.060 | 0.0079 | 0.021 | 0.0088 | 0.034 | 0.50 |
+| 0.3 (= M, default) | 0.097 | 0.0067 | 0.015 | 0.0065 | 0.024 | 0.27 |
+| 0.5 | 0.128 | 0.014 | 0.0093 | 0.0043 | 0.010 | 0.10 |
+| 0.7 (= 1 − M) | 0.194 | 0.022 | 0.0061 | 0.0026 | 0.0012 | 0.050 |
+| 0.85 | 0.242 | 0.028 | 0.057 | 0.0071 | 0.067 | 0.098 |
+| 1 | 0.284 | 0.033 | 0.022 | 0.0034 | 0.019 | 0.10 |
+
+The outflow's reflection of the pulse is least at the Mach number in the
+root-mean-square and at half of it in the maximum, and the vortex leaves
+most cleanly at 1 − M, where the pressure error is a fourteenth of the LODI
+form's and a fifth of the default's. At Mach 0.1 the pulse reflection is
+0.187, 0.117 and 0.273 under the LODI form, the Mach number and the full
+share, and at Mach 0.5 it is 0.052, 0.131 and 0.279; the vortex leaves at
+Mach 0.5 with a pressure error of 0.48, 0.19 and 0.37, and 0.064 at 1 − M.
+The default is unchanged by this measurement: the weight that carries a
+vortex out best, 1 − M, reflects the pulse worst at every Mach number but
+0.1, and the outflow's task is the pulse's.
+
+### The decision
+
+`NSCBCInflowBC` defaults to `beta_t = 1`, the full share, which is the form
+the literature restates for an inflow and the one under which the imposed
+state follows its target through a transverse flow: the frozen-characteristic
+property `test/runtests.jl` asserts holds only there. The cost is the pulse
+reflection above, 0.13 of the incident amplitude against 0.047 at the Mach
+number; a run whose inflow admits no structure and faces outgoing waves
+selects `beta_t = -1`. `NSCBCOutflowBC` keeps the Mach number.
 
 ## Fold order and geometry limits
 

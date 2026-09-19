@@ -128,7 +128,7 @@ jobs:
                         "device line solves", "tiled refinement",
                         "AMR transfer pair", "halo consistency",
                         "off-rank folds", "freestream", "no-slip wall flux",
-                        "slip wall flux", "symmetry plane",
+                        "slip wall flux", "symmetry plane", "NSCBC inflow",
                         "positivity floor", "slicing"), ',')
           MPI.mpiexec() do mpiexec
               julia = Base.julia_cmd()

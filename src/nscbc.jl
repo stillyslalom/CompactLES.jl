@@ -21,10 +21,11 @@
 # map onto the conserved components (species scale with Y_k, energy through
 # φ = cv_m / R_m = ∂(ρe)/∂p |_{ρ,Y}, ideal mixtures). Supersonic-outflow
 # points (M ≥ 1) receive no correction: all waves leave the domain. Viscous
-# terms are left as computed, which is the classical NSCBC approximation. The
-# outflow correction carries the Yoo & Im transverse damping term (see the
-# derivation at its point loop); the inflow correction does not, and relaxes
-# its transverse waves on the LODI amplitudes alone.
+# terms are left as computed, which is the classical NSCBC approximation. Both
+# corrections carry the Yoo & Im transverse terms under a damping weight
+# `beta_t`: the outflow on its one incoming wave (the derivation is at its
+# point loop), the inflow on every incoming wave (the derivation is at the
+# head of its section).
 #
 # Restricted to faces whose normal has unit scale factor (Cartesian faces,
 # cylindrical r/z faces, spherical r faces); on angular faces the stored
@@ -202,12 +203,36 @@ end
 #   transverse:  ∂u_t/∂t = −L₃,₄, so L₃,₄* = η_t (c/L)(u_t − u_t∞);
 #   species:     ∂Y_k/∂t = −L_{s,k}, so L_{s,k}* = η_Y (c/L)(Y_k − Y∞_k).
 #
+# Transverse terms (Yoo & Im 2007). With the transverse convective terms
+# kept, each primitive equation reads ∂φ/∂t = −(d_i + 𝒯_φ), and the
+# combination that isolates one incoming amplitude carries the matching
+# combination of 𝒯 terms, the transverse contribution of that characteristic:
+#
+#   acoustic:   ∂(p ± ρc u_n)/∂t = −(L₅,₁ + 𝒯_ac),
+#               𝒯_ac = u_t·∇_t p + ρc² ∇_t·u_t ± ρc u_t·∇_t u_n
+#               (+ for L₅ at a low face, − for L₁ at a high face);
+#   entropy:    ∂(c²ρ − p)/∂t = −(L₂ + 𝒯_en),  𝒯_en = u_t·(c² ∇_t ρ − ∇_t p)
+#               (the velocity divergence cancels);
+#   transverse: ∂u_t/∂t = −(L₃,₄ + 𝒯_t),  𝒯_t = u_t·∇_t u_t + ∇_t p / ρ;
+#   species:    ∂Y_k/∂t = −(L_{s,k} + 𝒯_Y),  𝒯_Y = u_t·∇_t Y_k.
+#
+# A relaxation imposed on the LODI amplitude alone leaves the rate of the
+# relaxed quantity at −(relaxation + 𝒯), so a steady transverse flow at the
+# face (a diverging stream, a vortex crossing the plane) holds it off its
+# target by 𝒯 over the relaxation rate. Each imposed amplitude therefore
+# carries −β_t·𝒯, as the outflow's does: L* = relaxation − β_t 𝒯, with
+# β_t = 1 the full accounting, under which the incoming characteristic
+# variables follow their targets through the transverse flow, and 0 the plain
+# LODI form. The curvature terms of a cylindrical or spherical face are not
+# part of 𝒯 (they stay in dQ as computed, like the viscous terms): this is
+# the Cartesian form of the transverse terms, applied on a face whose normal
+# scale factor is one.
+#
 # The deltas relative to the physically computed amplitudes then use the
 # outflow mapping to conserved components, with the species terms
 # entering the energy through ρe = p·φ(Y), ∂φ/∂Y_k = (cv_k R_m − R_k cv_m)/R_m².
 # Supersonic points are skipped (full-state DirichletBC is the right tool
-# there). Constant targets for now; (x, t)-dependent targets are a natural
-# extension via the same Prim-function pattern as DirichletBC.
+# there). Targets are constant or a pointwise stage-time function (`target`).
 
 # Parametric on the target-callback type: a `Union{Nothing,Function}` field is
 # abstract, so `bc.target(...)` was a runtime dispatch whose `Prim` result
@@ -217,15 +242,25 @@ end
 # compile time.
 """
     NSCBCInflowBC(; u, T_ion, Y=[1.0], eta_u=0.28, eta_T=0.28,
-                  eta_t=0.28, eta_Y=0.28, Lref=0.0, target=nothing)
+                  eta_t=0.28, eta_Y=0.28, Lref=0.0, beta_t=1.0, target=nothing)
 
 Subsonic characteristic inflow. Incoming acoustic, entropy, transverse, and
 species waves relax toward target velocity `u`, temperature `T_ion`, and mass
 fractions `Y`; the outgoing acoustic wave remains determined by the interior.
 
+`beta_t` weights the transverse terms (Yoo & Im 2007) that every imposed wave
+carries: 1 is the full accounting, under which the relaxed quantities follow
+their targets through a transverse flow at the face, 0 the plain LODI
+relaxation, and a negative value the local Mach number, the outflow's
+damping.
+
 `target` may be a stage-time function `(x, y, z, t) -> Prim` overriding the
 constant targets pointwise. Its state must contain temperature and the full
-composition. `Lref <= 0` selects the domain length normal to the face.
+composition. `Lref <= 0` selects the domain length normal to the face. A
+structure the inflow is to admit, a vortex or a turbulent inflow, enters
+only when the relaxation time `Lref / (eta c)` is short against its passage
+time, which the default rates do not give; the error of its imposition then
+falls as `1 / eta`.
 
 Use `DirichletBC`, not NSCBC inflow, for a supersonic boundary or one whose
 full state is to be forced. As for the outflow, the formulation covers only faces
@@ -241,6 +276,7 @@ struct NSCBCInflowBC{T<:AbstractFloat,F} <: BoundaryCondition
     eta_t::T
     eta_Y::T
     Lref::T                         # ≤ 0 → domain length in d
+    beta_t::T                       # transverse-term weight, as the outflow's
     target::F
     # Optional (x₁, x₂, x₃, t) -> Prim overriding the constant targets per
     # point at the RK stage time (the Prim must carry T_ion and the full Y).
@@ -249,24 +285,49 @@ end
 
 function NSCBCInflowBC(; u, T_ion::Real, Y=[1.0], eta_u::Real=0.28,
                        eta_T::Real=0.28, eta_t::Real=0.28,
-                       eta_Y::Real=0.28, Lref::Real=0.0, target=nothing)
+                       eta_Y::Real=0.28, Lref::Real=0.0, beta_t::Real=1.0,
+                       target=nothing)
     T = typeof(float(T_ion))
     uT = ntuple(i -> T(u[i]), 3)
     YT = T.(collect(Y))
     return NSCBCInflowBC{T,typeof(target)}(uT, T(T_ion), YT, T(eta_u),
                                            T(eta_T), T(eta_t), T(eta_Y),
-                                           T(Lref), target)
+                                           T(Lref), T(beta_t), target)
 end
 
 enforce!(::NSCBCInflowBC, Q, solver, d, side) = nothing
 
 function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
-    # Run these distributed solves along `d` before the boundary-plane ownership
-    # check. Every rank must call them before any rank returns early; see the
+    # Run these distributed solves before the boundary-plane ownership check.
+    # Every rank must call them before any rank returns early; see the
     # outflow method above.
     # One-sided coordinate derivatives of p and ρ along d.
     deriv_along!(solver.tmp_a, solver.p, solver, d, 1)
     deriv_along!(solver.tmp_b, solver.rho, solver, d, 1)
+    # Coordinate derivatives of p and ρ along the active transverse
+    # dimensions, for the transverse terms, and only when those are weighted
+    # at all. `beta_t` and `active` are setup constants, identical on every
+    # rank, so no collective sits below a rank-dependent branch; a cleared
+    # flag also tells the point body not to read the array, which is
+    # unwritten scratch then.
+    #
+    # `sensor_sp` and the three `grad_T_ion` arrays are borrowed. The outflow
+    # method records why the sensor scratch is dead by this point of
+    # `compute_rhs!`; the temperature gradients were consumed by
+    # `assemble_fluxes!` and the wall flux hooks, both ahead of the
+    # divergence, and nothing reads them again before the next evaluation
+    # rebuilds them (`max_rate` writes its own directional rates into them
+    # first). `sensor` is not touched, for the reason given there.
+    t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)   # transverse dims
+    transverse = bc.beta_t != 0
+    act1 = transverse && solver.decomp.active[t1]
+    act2 = transverse && solver.decomp.active[t2]
+    dp_t1, dr_t1 = solver.sensor_sp, solver.grad_T_ion[1]
+    dp_t2, dr_t2 = solver.grad_T_ion[2], solver.grad_T_ion[3]
+    act1 && deriv_along!(dp_t1, solver.p, solver, t1, 1)
+    act1 && deriv_along!(dr_t1, solver.rho, solver, t1, 1)
+    act2 && deriv_along!(dp_t2, solver.p, solver, t2, 1)
+    act2 && deriv_along!(dr_t2, solver.rho, solver, t2, 1)
 
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
@@ -278,12 +339,16 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
     # converted to the state's type before any arithmetic: an unconverted
     # Float64 target or relaxation rate promotes the whole LODI algebra below
     # to Float64 in a Float32 solver.
-    etas = (T(bc.eta_u), T(bc.eta_T), T(bc.eta_t), T(bc.eta_Y))
-    t1, t2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)   # transverse dims
-    m = solver.equations.i_mom
-    i_energy = solver.equations.i_energy
-    n_species = solver.equations.n_species
-    lowface = side == 1
+    #
+    # The scalars ride in tuples. With the six derivative arrays of the
+    # transverse terms, a flat argument list would pass the 32-element splat
+    # limit recorded at the outflow launch.
+    coef = (T(bc.eta_u), T(bc.eta_T), T(bc.eta_t), T(bc.eta_Y), T(bc.beta_t),
+            Lref)
+    flags = (side == 1, act1, act2)
+    dts = (d, t1, t2)
+    eq = (solver.equations.i_mom, solver.equations.i_energy,
+          solver.equations.n_species)
     if bc.target === nothing
         # Constant targets: one launchable plane body, with the composition
         # tuple and field collections materialized at launch.
@@ -293,85 +358,67 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
                          dQ, solver.eos, solver.rho, solver.u, solver.v,
                          solver.w, solver.p, solver.c, solver.T_ion,
                          solver.cp_mix, ft.Y, ft.grad_u, ft.grad_Y,
-                         solver.tmp_a, solver.tmp_b, solver.inv_h[d],
-                         map(T, bc.u), T(bc.T_ion), YT,
-                         etas, Lref,
-                         lowface, (d, t1, t2), m, i_energy, n_species)
+                         solver.tmp_a, solver.tmp_b, dp_t1, dr_t1, dp_t2, dr_t2,
+                         solver.inv_h[d], solver.inv_h[t1], solver.inv_h[t2],
+                         (map(T, bc.u), T(bc.T_ion)), YT, coef, flags, dts, eq)
         return nothing
     end
     # A pointwise `target` is an arbitrary host closure; the loop stays on the
-    # host, which a device-resident patch cannot serve yet.
+    # host, which a device-resident patch cannot serve yet. The per-point
+    # algebra is the launched body's, `_nscbc_inflow_apply!`, with the
+    # targets evaluated per point ahead of it.
     _cpu_storage(Q) ||
         error("NSCBCInflowBC with a pointwise target is host-only; use " *
               "constant targets on a DeviceBackend")
-    vel = (solver.u, solver.v, solver.w)
-    grad_u = solver.grad_u
-    Gdd = grad_u[d, d]
     tnow = solver.tstage
     @inbounds for I in plane
         i1, i2, i3 = interior_index(solver, I)
         pr = bc.target(xcoord(solver, 1, i1), xcoord(solver, 2, i2),
                        xcoord(solver, 3, i3), tnow)
         isnan(pr.T_ion) && error("NSCBCInflowBC target must specify T_ion")
-        uT = map(T, pr.u); TT = T(pr.T_ion); YT = map(T, pr.Y)
-        ρ = solver.rho[I]
-        c = solver.c[I]
-        p = solver.p[I]
-        Tp = solver.T_ion[I]
-        un = vel[d][I]
-        Ma = abs(un) / c
-        Ma < 1 || continue
-        ih = solver.inv_h[d][I]
-        dpn = ih * solver.tmp_a[I]
-        drn = ih * solver.tmp_b[I]
-        dun = Gdd[I]
-        K = c / Lref
-        # Physically computed amplitudes.
-        L1c = (un - c) * (dpn - ρ * c * dun)
-        L5c = (un + c) * (dpn + ρ * c * dun)
-        L2c = un * (c * c * drn - dpn)
-        # Imposed incoming amplitudes (outgoing one kept as computed).
-        rel_ac = etas[1] * ρ * c * c * (1 - Ma * Ma) / Lref * (un - uT[d])
-        ΔL1 = lowface ? zero(T) : (-rel_ac - L1c)
-        ΔL5 = lowface ? (rel_ac - L5c) : zero(T)
-        ΔL2 = etas[2] * ρ * c^3 * (TT - Tp) / (Lref * Tp) - L2c
-        Δd1 = ΔL2 / (c * c) + (ΔL5 + ΔL1) / (2 * c * c)
-        Δd2 = (ΔL5 + ΔL1) / 2
-        Δd3 = (ΔL5 - ΔL1) / (2 * ρ * c)
-        Δd4 = etas[3] * K * (vel[t1][I] - uT[t1]) - un * solver.grad_u[d, t1][I]
-        Δd5 = etas[3] * K * (vel[t2][I] - uT[t2]) - un * solver.grad_u[d, t2][I]
-        # Mixture quantities for the energy mapping, through the EOS contract.
-        cpm = solver.cp_mix[I]
-        φ = eos_phi(solver.eos, ρ, p, Tp, cpm)
-        u1, u2, u3 = solver.u[I], solver.v[I], solver.w[I]
-        ke = (u1*u1 + u2*u2 + u3*u3) / T(2)
-        uv = (u1, u2, u3)
-        ΣφY = zero(T)
-        for k in 1:n_species
-            ΔLs = etas[4] * K * (solver.Y[k][I] - YT[k]) -
-                  un * solver.grad_Y[d, k][I]
-            dQ[I, k] -= solver.Y[k][I] * Δd1 + ρ * ΔLs
-            ΣφY += eos_dphi_dY(solver.eos, k, ρ, p, Tp, cpm) * ΔLs
-        end
-        for a in 1:3
-            extra = a == d ? ρ * Δd3 : a == t1 ? ρ * Δd4 : ρ * Δd5
-            dQ[I, m[a]] -= uv[a] * Δd1 + extra
-        end
-        dQ[I, i_energy] -= ke * Δd1 + φ * Δd2 + p * ΣφY +
-                     ρ * (un * Δd3 + uv[t1] * Δd4 + uv[t2] * Δd5)
+        targets = (map(T, pr.u), T(pr.T_ion))
+        YT = map(T, pr.Y)
+        _nscbc_inflow_apply!(dQ, solver.eos, solver.rho, solver.u, solver.v,
+                             solver.w, solver.p, solver.c, solver.T_ion,
+                             solver.cp_mix, solver.Y, solver.grad_u,
+                             solver.grad_Y, solver.tmp_a, solver.tmp_b,
+                             dp_t1, dr_t1, dp_t2, dr_t2, solver.inv_h[d],
+                             solver.inv_h[t1], solver.inv_h[t2], targets, YT,
+                             coef, flags, dts, eq, I)
     end
     return nothing
 end
 
 @inline function _nscbc_inflow_point!(dQ, eos, rho, u, v, w, p_a, c_a, T_a,
                                       cp_a, Y, grad_u, grad_Y, dp_n, dr_n,
-                                      ih_d, uT, TT, YT, etas, Lref, lowface,
-                                      dts, m, i_energy, n_species,
+                                      dp_t1, dr_t1, dp_t2, dr_t2, ih_d, ih_t1,
+                                      ih_t2, targets, YT, coef, flags, dts, eq,
                                       o1, o2, o3, i, j, k)
+    I = CartesianIndex(i + o1, j + o2, k + o3)
+    _nscbc_inflow_apply!(dQ, eos, rho, u, v, w, p_a, c_a, T_a, cp_a, Y, grad_u,
+                         grad_Y, dp_n, dr_n, dp_t1, dr_t1, dp_t2, dr_t2, ih_d,
+                         ih_t1, ih_t2, targets, YT, coef, flags, dts, eq, I)
+    return nothing
+end
+
+# The inflow correction at one padded index `I`: the launched body and the
+# host loop of a pointwise target share it. `targets` is `(u∞, T∞)` and `YT`
+# the target composition tuple; `coef` is `(η_u, η_T, η_t, η_Y, β_t, L_ref)`,
+# `flags` is `(lowface, act1, act2)`, `dts` is `(d, t1, t2)`, and `eq` is
+# `(i_mom, i_energy, n_species)`. `dp_*`/`dr_*` are coordinate derivatives of
+# p and ρ along the face normal and the two transverse dimensions, read only
+# where the matching `act` flag is set.
+@inline function _nscbc_inflow_apply!(dQ, eos, rho, u, v, w, p_a, c_a, T_a,
+                                      cp_a, Y, grad_u, grad_Y, dp_n, dr_n,
+                                      dp_t1, dr_t1, dp_t2, dr_t2, ih_d, ih_t1,
+                                      ih_t2, targets, YT, coef, flags, dts, eq,
+                                      I)
     @inbounds begin
-        eta_u, eta_T, eta_t, eta_Y = etas
+        uT, TT = targets
+        eta_u, eta_T, eta_t, eta_Y, beta_t, Lref = coef
+        lowface, act1, act2 = flags
         d, t1, t2 = dts
-        I = CartesianIndex(i + o1, j + o2, k + o3)
+        m, i_energy, n_species = eq
         T = eltype(rho)
         ρ = rho[I]
         c = c_a[I]
@@ -390,23 +437,57 @@ end
         L1c = (un - c) * (dpn - ρ * c * dun)
         L5c = (un + c) * (dpn + ρ * c * dun)
         L2c = un * (c * c * drn - dpn)
-        # Imposed incoming amplitudes (outgoing one kept as computed).
+        # Transverse contributions of the incoming characteristics, derived
+        # at the head of this section. `sgn` is the sign of the ρc u_t·∇_t u_n
+        # term of the acoustic one: + for L₅ at a low face, − for L₁ at a
+        # high face, the outflow's convention.
+        sgn = lowface ? one(T) : -one(T)
+        tr_ac = zero(T)
+        tr_en = zero(T)
+        tr_t1 = zero(T)
+        tr_t2 = zero(T)
+        if act1
+            ut = uv[t1]
+            dpt = ih_t1[I] * dp_t1[I]
+            drt = ih_t1[I] * dr_t1[I]
+            tr_ac += ut * dpt + ρ * c * c * grad_u[t1, t1][I] +
+                     sgn * ρ * c * ut * grad_u[t1, d][I]
+            tr_en += ut * (c * c * drt - dpt)
+            tr_t1 += ut * grad_u[t1, t1][I] + dpt / ρ
+            tr_t2 += ut * grad_u[t1, t2][I]
+        end
+        if act2
+            ut = uv[t2]
+            dpt = ih_t2[I] * dp_t2[I]
+            drt = ih_t2[I] * dr_t2[I]
+            tr_ac += ut * dpt + ρ * c * c * grad_u[t2, t2][I] +
+                     sgn * ρ * c * ut * grad_u[t2, d][I]
+            tr_en += ut * (c * c * drt - dpt)
+            tr_t1 += ut * grad_u[t2, t1][I]
+            tr_t2 += ut * grad_u[t2, t2][I] + dpt / ρ
+        end
+        βt = beta_t < 0 ? Ma : beta_t
+        # Imposed incoming amplitudes (outgoing one kept as computed), each
+        # the relaxation less the weighted transverse contribution.
         rel_ac = eta_u * ρ * c * c * (1 - Ma * Ma) / Lref * (un - uT[d])
-        ΔL1 = lowface ? zero(T) : (-rel_ac - L1c)
-        ΔL5 = lowface ? (rel_ac - L5c) : zero(T)
-        ΔL2 = eta_T * ρ * c^3 * (TT - Tp) / (Lref * Tp) - L2c
+        ΔL1 = lowface ? zero(T) : (-rel_ac - βt * tr_ac - L1c)
+        ΔL5 = lowface ? (rel_ac - βt * tr_ac - L5c) : zero(T)
+        ΔL2 = eta_T * ρ * c^3 * (TT - Tp) / (Lref * Tp) - βt * tr_en - L2c
         Δd1 = ΔL2 / (c * c) + (ΔL5 + ΔL1) / (2 * c * c)
         Δd2 = (ΔL5 + ΔL1) / 2
         Δd3 = (ΔL5 - ΔL1) / (2 * ρ * c)
-        Δd4 = eta_t * K * (uv[t1] - uT[t1]) - un * grad_u[d, t1][I]
-        Δd5 = eta_t * K * (uv[t2] - uT[t2]) - un * grad_u[d, t2][I]
+        Δd4 = eta_t * K * (uv[t1] - uT[t1]) - βt * tr_t1 - un * grad_u[d, t1][I]
+        Δd5 = eta_t * K * (uv[t2] - uT[t2]) - βt * tr_t2 - un * grad_u[d, t2][I]
         # Mixture quantities for the energy mapping, through the EOS contract.
         cpm = cp_a[I]
         φ = eos_phi(eos, ρ, p, Tp, cpm)
         ke = (uv[1]*uv[1] + uv[2]*uv[2] + uv[3]*uv[3]) / T(2)
         ΣφY = zero(T)
         for kk in 1:n_species
-            ΔLs = eta_Y * K * (Y[kk][I] - YT[kk]) -
+            tr_Y = zero(T)
+            act1 && (tr_Y += uv[t1] * grad_Y[t1, kk][I])
+            act2 && (tr_Y += uv[t2] * grad_Y[t2, kk][I])
+            ΔLs = eta_Y * K * (Y[kk][I] - YT[kk]) - βt * tr_Y -
                   un * grad_Y[d, kk][I]
             dQ[I, kk] -= Y[kk][I] * Δd1 + ρ * ΔLs
             ΣφY += eos_dphi_dY(eos, kk, ρ, p, Tp, cpm) * ΔLs

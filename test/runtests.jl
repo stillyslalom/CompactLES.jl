@@ -1572,6 +1572,86 @@ end
     @test m2 > 1e-3
 end
 
+@testset "NSCBC inflow: transverse terms freeze the incoming characteristics" begin
+    # With the relaxation rates at zero and beta_t = 1, every imposed
+    # incoming amplitude is −𝒯, so at the plane the rates of the incoming
+    # characteristic variables, p ± ρc u_n for the incoming acoustic wave,
+    # c²ρ − p, u_t and Y_k, vanish up to the truncation gap between the
+    # conservative divergence in dQ and the characteristic form; the outgoing
+    # one stays of order one. Under beta_t = 0 the same rates are of order
+    # one, and doubling the transverse resolution shrinks the gap at the
+    # sixth order (measured ×70; ×16 is asserted). Both faces, two species
+    # of one γ so that ρe = p/(γ − 1) gives ∂p/∂t from dQ.
+    γ = 1.4
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, γ),
+                        IdealSpecies{Float64}("b", 0.5, γ)])
+    ic(sgn) = (x, y, z) -> begin
+        θ = 0.5 + 0.2 * sin(2π * y) * cos(4π * z)
+        Prim(u=(sgn * (0.3 + 0.05 * sin(2π * y) + 0.02 * cos(4π * z)),
+                0.1 * cos(2π * y), 0.05 * sin(4π * z) * cos(2π * y)),
+             p=1 + 0.05 * sin(2π * y + 1) + 0.02 * cos(4π * z),
+             T_ion=1 + 0.1 * cos(2π * y) * sin(4π * z), Y=(θ, 1 - θ))
+    end
+    function rhs(side, beta_t, n; eta=0.0, target=nothing)
+        sgn = side == 1 ? 1.0 : -1.0
+        bc = NSCBCInflowBC(u=(0.3sgn, 0.0, 0.0), T_ion=1.0, Y=[0.6, 0.4],
+                           eta_u=eta, eta_T=eta, eta_t=eta, eta_Y=eta,
+                           beta_t=beta_t, target=target)
+        out = NSCBCOutflowBC(pinf=1.0)
+        solver = Solver(n_global=n, L_domain=(1.0, 1.0, 0.5),
+                        bcs=(side == 1 ? (bc, out) : (out, bc), per3[2], per3[3]),
+                        eos=eos, transport=Transport(mu0=0.0),
+                        art=ArtParams(enabled=false))
+        Q = allocate_state(solver)
+        initialize!(solver, Q, ic(sgn))
+        apply_bcs!(solver, Q)
+        dQ = zero(Q)
+        compute_rhs!(solver, Q, dQ)
+        return solver, dQ
+    end
+    # Plane maxima of the incoming characteristic rates and of the outgoing.
+    function rates(solver, dQ, side)
+        m = solver.equations.i_mom
+        ie = solver.equations.i_energy
+        nx, ny, nz = solver.decomp.n_local
+        i = side == 1 ? 1 : nx
+        sgn = side == 1 ? 1.0 : -1.0
+        ac_in = ac_out = en = tv = ty = 0.0
+        for k in 1:nz, j in 1:ny
+            I = gidx(solver, i, j, k)
+            ρ = solver.rho[I]; c = solver.c[I]
+            u = (solver.u[I], solver.v[I], solver.w[I])
+            ρt = dQ[I, 1] + dQ[I, 2]
+            ut = ntuple(a -> (dQ[I, m[a]] - u[a] * ρt) / ρ, 3)
+            pt = (γ - 1) * (dQ[I, ie] - sum(abs2, u) / 2 * ρt - ρ * sum(u .* ut))
+            ac_in = max(ac_in, abs(pt + sgn * ρ * c * ut[1]))
+            ac_out = max(ac_out, abs(pt - sgn * ρ * c * ut[1]))
+            en = max(en, abs(c^2 * ρt - pt))
+            tv = max(tv, abs(ut[2]), abs(ut[3]))
+            ty = max(ty, abs((dQ[I, 1] - solver.Y[1][I] * ρt) / ρ))
+        end
+        return (ac_in, en, tv, ty), ac_out
+    end
+    for side in (1, 2)
+        full, out = rates(rhs(side, 1.0, (24, 24, 16))..., side)
+        lodi, _ = rates(rhs(side, 0.0, (24, 24, 16))..., side)
+        fine, _ = rates(rhs(side, 1.0, (24, 48, 32))..., side)
+        @test out > 1.0
+        @test all(lodi .> (1.0, 0.05, 0.1, 0.05))
+        @test all(full ./ lodi .< 1e-2)
+        @test all(full ./ fine .> 16)
+    end
+    # A pointwise target returning the constants reproduces the constant
+    # body bitwise, relaxation on; the weight changes the answer.
+    _, d1 = rhs(1, 1.0, (24, 24, 16); eta=0.28)
+    _, d2 = rhs(1, 1.0, (24, 24, 16); eta=0.28,
+                target=(x, y, z, t) -> Prim(u=(0.3, 0.0, 0.0), T_ion=1.0,
+                                            p=1.0, Y=(0.6, 0.4)))
+    _, d3 = rhs(1, 0.0, (24, 24, 16); eta=0.28)
+    @test parent(d1) == parent(d2)
+    @test parent(d1) != parent(d3)
+end
+
 @testset "validate_bc: NSCBC restrictions are setup errors" begin
     # Both restrictions are setup errors rather than documented caveats: left
     # unchecked, an angular face would fail nothing, since the wave analysis
