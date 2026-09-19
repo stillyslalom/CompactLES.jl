@@ -16,9 +16,9 @@ api_ic(x, y, z) = Prim(rho=1.0, p=1.0)
 # Deliberate compatibility manifest: changing an export is an API decision, not
 # an incidental consequence of adding a binding to the module.
 const EXPECTED_EXPORTS = Set(Symbol.(split("""
-ArtParams AtTime AxisBC BandedClosureRow BandedCompactScheme BlockRegion
+AbstractTransport ArtParams AtTime AxisBC BandedClosureRow BandedCompactScheme BinaryDiffusion BlockRegion
 BoundaryCondition CPUBackend Callback CartesianMetric ClosureRow CompactScheme
-ConservedState ConstantBodyForce CylindricalMetric DEFAULT_VTK_FIELDS
+CeaTransport ConservedState ConstantBodyForce CylindricalMetric DEFAULT_VTK_FIELDS
 DeviceBackend DirichletBC EOS EquationSet EveryStep EveryTime ExtrapolationBC
 FieldWriter FloorTally IdealMixture IdealSpecies MPI Metric NSCBCInflowBC
 NSCBCOutflowBC Nasa9Interval Nasa9Mixture Nasa9Species NavierStokes1T
@@ -37,12 +37,12 @@ load_checkpoint_hdf5!
 makie_available mass_fraction max_rate mix_width mixture_density molecular_mixing
 mpi_main nasa9_constant_cp next_time nlevels npatches nspecies pade_d1_4
 plane_profile profile_coordinate profile_spacing profileplot profileplot! pyranda_filter
-read_nasa9 recover_primitives! refined_region refresh_primitives! revolve_profile
+read_cea_transport read_nasa9 recover_primitives! refined_region refresh_primitives! revolve_profile
 rewind! run! save_checkpoint save_checkpoint_hdf5 save_hdf5 save_vtk sensor_mirror setup
 sine_cluster species_enthalpy species_names species_pdf state_admissibility
 state_guard state_report state_valid step! switch! switched
 sync_levels! sync_patches! tanh_blend tke_profile total_energy
-turbulent_kinetic_energy validate_bc validate_state! velocity volume_average
+transport_coefficients turbulent_kinetic_energy validate_bc validate_state! velocity volume_average
 volume_integral wall_internal_energy xcoord
 """)))
 

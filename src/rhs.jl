@@ -23,10 +23,10 @@
 # not such a difference: they are stored abstractly on the `Patch`
 # (patches.jl), so a level-1 patch under an interface often shares its
 # parent's type outright.
-mutable struct Solver{T,Eq<:EquationSet,E<:EOS,M<:Metric,St,Src,P}
+mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metric,St,Src,P}
     equations::Eq
     eos::E
-    transport::Transport{T}
+    transport::Tr
     art::ArtParams{T}
     metric::M
     stretch::St
@@ -195,7 +195,7 @@ them.
 function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 eos=_default_ideal_mixture(),
                 equations=nothing,
-                transport::Transport{T}=Transport(),
+                transport::AbstractTransport{T}=Transport(),
                 art::ArtParams=ArtParams(),
                 metric::Metric=CartesianMetric(),
                 stretch::NTuple{3,Union{Nothing,Stretch}}=(nothing, nothing, nothing),
@@ -227,6 +227,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 rebalance::Real=0,
                 rebalance_persist::Int=2) where {T}
     eos = _as_eos(eos)
+    validate_transport(transport, eos)
     for d in 1:3
         isperiodic(bcs[d][1]) == isperiodic(bcs[d][2]) ||
             error("dimension $d mixes periodic and non-periodic conditions")
@@ -691,7 +692,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   _empty_level_scratch(empty_field(backend, T)))
     if isempty(refines)
         patches = [patch]
-        solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
+        solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                         typeof(stretch),typeof(sources),typeof(patch)}(
                       equations, eos, transport, art, metric, stretch, sources,
                       Lt, orig, coord_shift, h,
@@ -843,7 +844,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                                    2 * decomp.n_halo_d[d], 3)),
                            T(untag_ratio), tile_lifetime, 0,
                            Dict(lt.region => 0 for lt in levels[2].transfers))
-    solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
+    solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,
                   Lt, orig, coord_shift, h,
@@ -1205,7 +1206,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
     ghost_sends, ghost_recvs, plane_pairs = build_interface_records(
         T, world, regions, faces_all, my_pids, [p.decomp for p in patches], n_cons)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
-    solver = Solver{T,typeof(equations),typeof(eos),typeof(metric),
+    solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,
                   Lt, orig, coord_shift, h,
@@ -1699,7 +1700,7 @@ assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, 
 # type comes off an array argument instead.
 @inline function _fluxes_point!(Q, eos, rho, u, v, w, p, T_ion,
                                 cp_mix, mu_art, beta_art, kappa_art, D_art, Y,
-                                grad_u, gT, gY, flux, mu0, Pr, Sc, n_species,
+                                grad_u, gT, gY, flux, transport, n_species,
                                 m1, m2, m3, i_energy, act, bulk, o1, o2, o3,
                                 i, j, k)
     T = eltype(rho)
@@ -1710,10 +1711,10 @@ assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, 
         pI = p[I]
         Tp = T_ion[I]
         E = Q[I, i_energy]
-        μ = mu0 + mu_art[I]
+        molecular = transport_at(transport, eos, T_ion, rho, cp_mix, Y, I)
+        μ = molecular.mu + mu_art[I]
         β = beta_art[I]
-        κ = mu0 * cp_mix[I] / Pr + kappa_art[I]
-        D0 = mu0 / (Sc * ρ)                  # molecular part of each D_k
+        κ = molecular.kappa + kappa_art[I]
         divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
         # T(2)/T(3), not the literal 2/3: the Float64 literal promotes the
         # normal stresses under a narrower T, making τ a heterogeneous tuple
@@ -1743,12 +1744,12 @@ assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, 
             # not be read as a Fickian coefficient.
             Vc = zero(T)
             for sp in 1:n_species
-                Dk = bulk ? D0 : D0 + D_art[sp][I]
+                Dk = bulk ? molecular.D[sp] : molecular.D[sp] + D_art[sp][I]
                 Vc += Dk * gY[d, sp][I]
             end
             hdiff = zero(T)              # Σ_k h_k J_{k,d}
             for sp in 1:n_species
-                Dk = bulk ? D0 : D0 + D_art[sp][I]
+                Dk = bulk ? molecular.D[sp] : molecular.D[sp] + D_art[sp][I]
                 Jkd = ρ * (-Dk * gY[d, sp][I] + Y[sp][I] * Vc)
                 flux[d, sp][I] = ρ * Y[sp][I] * ud + Jkd
                 hdiff += species_enthalpy(eos, sp, Tp) * Jkd
@@ -1780,7 +1781,7 @@ function _assemble_fluxes!(solver::SolverLike{T}, eos, Q) where {T}
                solver.T_ion, solver.cp_mix, solver.mu_art, solver.beta_art,
                solver.kappa_art, ft.D_art, ft.Y, ft.grad_u,
                solver.grad_T_ion, ft.grad_Y, ft.flux,
-               tr.mu0, tr.Pr, tr.Sc, n_species, m1, m2, m3, i_energy,
+               tr, n_species, m1, m2, m3, i_energy,
                decomp.active, bulk, o1, o2, o3)
     # The bulk species channel: −D_b ∂_d Q_c on every component, D_b read
     # from `D_art[1]` (every `D_art[k]` holds it) and ∂_d Q_c from the

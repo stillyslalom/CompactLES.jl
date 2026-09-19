@@ -656,7 +656,7 @@ end
     dissipation_rate(solver, Q) -> Float64
 
 Volume-averaged resolved dissipation ⟨τ_ij ∂u_i/∂x_j⟩ / ⟨ρ⟩, with τ built from
-the total viscosity: molecular μ₀ plus the artificial μ\\* and β\\*. The
+the total viscosity: local molecular μ plus the artificial μ\\* and β\\*. The
 artificial terms represent the subgrid model in this scheme and can dominate
 the energy sink at a shock; they are therefore included in the reported rate.
 
@@ -678,11 +678,12 @@ function dissipation_rate(solver::Solver, Q)
         o1, o2, o3 = decomp.n_halo_d
         nx, ny, nz = decomp.n_local
         grad_u = solver.grad_u
-        mu0 = solver.transport.mu0
         diss = solver.tmp_b
         fill!(diss, 0)
         @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
             I = CartesianIndex(i + o1, j + o2, k + o3)
+            mu0 = transport_at(solver.transport, solver.eos, solver.T_ion,
+                               solver.rho, solver.cp_mix, solver.field_tuples.Y, I).mu
             μ = mu0 + solver.mu_art[I]
             β = solver.beta_art[I]
             divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]
@@ -726,11 +727,12 @@ function dissipation_rate(solver::Solver, states::Vector{<:ConservedState})
             o1, o2, o3 = decomp.n_halo_d
             nx, ny, nz = decomp.n_local
             grad_u = ps.grad_u
-            mu0 = solver.transport.mu0
             diss = ps.tmp_b
             fill!(diss, 0)
             @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
                 I = CartesianIndex(i + o1, j + o2, k + o3)
+                mu0 = transport_at(ps.transport, ps.eos, ps.T_ion,
+                                   ps.rho, ps.cp_mix, ps.field_tuples.Y, I).mu
                 μ = mu0 + ps.mu_art[I]
                 β = ps.beta_art[I]
                 divu = grad_u[1, 1][I] + grad_u[2, 2][I] + grad_u[3, 3][I]

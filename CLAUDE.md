@@ -664,7 +664,8 @@ them.
   it is a numerics decision (shared vs per-species sensor), not a code tweak.
 - The NASA CEA thermo and limited transport databases are bundled verbatim in `data/`
   with their Apache license and notice. `read_nasa9` handles multi-interval
-  thermo records; the transport table is not yet connected to `Transport`.
+  thermo records; `CeaTransport` connects the transport fits with a unity-Lewis
+  fallback, or mixture-averaged diffusion from supplied binary data.
 - Cluster-side open questions (whether `ThreadPinning`'s pinning API would buy
   anything, and the unexplained ~4300x SMT-sibling collapse) are in
   `reference/CLUSTER.md`.

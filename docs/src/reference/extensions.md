@@ -42,6 +42,24 @@ artificial_conductivity_scale
 wall_internal_energy
 ```
 
+## Molecular transport
+
+Subtype [`AbstractTransport`](@ref) with the solver's floating-point type and
+implement `transport_coefficients(model, eos, temperature, rho, cp, Y)`.
+Return `(mu=..., kappa=..., D=...)`, with one molecular diffusivity per species
+in `Y` order. The flux, timestep, wall, geometry, and dissipation paths all use
+this coefficient interface; artificial coefficients are added separately.
+
+Keep the model and returned coefficients concrete and allocation-free for
+pointwise evaluation. The built-in CEA model stores fixed-size coefficient
+tuples so its transport data can cross a device-kernel boundary. This hook
+also allows a future plasma transport law to replace the gas mixture closure
+without changing flux assembly.
+The generic host adapter assembles `Y` from the species fields; models with a
+fixed species count can specialize `CompactLES.transport_at` as the CEA model
+does to keep tuple construction statically sized, which is needed for device
+kernels and for an allocation-free custom-model path.
+
 ## Equation sets
 
 Subtype [`EquationSet`](@ref) and provide its conserved layout, primitive

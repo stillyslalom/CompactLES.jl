@@ -58,8 +58,8 @@ not attach units, so mixing unit systems is not detected automatically.
 
 ## Scope
 
-The current model has one temperature, no reactions, and constant molecular
-transport coefficients. Cartesian, cylindrical, and spherical coordinates are
+The current model has one temperature and no reactions, with constant or
+CEA temperature-dependent molecular transport. Cartesian, cylindrical, and spherical coordinates are
 available, including regularized axes, origins, and poles. These paths do not
 all have equal maturity; each explanation page states the relevant evidence
 and limitations.

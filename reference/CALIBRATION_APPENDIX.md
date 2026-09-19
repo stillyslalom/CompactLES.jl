@@ -43,6 +43,8 @@ section that moved it says so in one sentence and the older figure is gone.
 19. [Operator and step cost](#operator-and-step-cost) (`bench/derivcost.jl`,
     `bench/phases.jl`)
 20. [AMR](#amr) (`bench/amr_transfer.jl`, `test/level_tests.jl`)
+21. [Temperature-dependent transport](#temperature-dependent-transport)
+    (`test/transport_tests.jl`, `test/transport_integration_tests.jl`)
 
 ## The shock battery
 
@@ -4590,3 +4592,53 @@ without a stall watch beside it.
   KA-CPU test and failed only on real device storage.
 - Judge a cost case on the quantity the refinement predicts, not on pointwise
   in-region error.
+
+## Temperature-dependent transport
+
+```text
+julia --project=. -t 1 test/transport_tests.jl
+julia --project=. -t 1 test/transport_integration_tests.jl
+julia --project=. -t 1 bench/transport.jl
+```
+
+N8 retains `Transport()` as the default and adds `CeaTransport(eos)` as an
+opt-in dimensional gas model. The bundled table supplies 66 pure-species
+viscosity/conductivity records and 41 binary viscosity-interaction records,
+but no binary diffusion coefficients. Unity-Lewis diffusion is therefore the
+CEA model's default; mixture-averaged mass diffusion requires explicitly
+supplied `BinaryDiffusion` data. The mixture rules and units are documented in
+[thermodynamics](../docs/src/explanation/thermodynamics.md).
+
+The coefficient checks evaluate independent literal CEA rows in SI units,
+test the pure/trace and species-permutation limits, and distinguish the
+mass-gradient diffusion convention from the mole-gradient convention using
+unequal ternary coefficients. The evolution cases use a periodic Fourier
+profile with analytic time-dependent forcing, no filter or artificial
+transport, and nonlinear temperature-dependent conductivity or
+composition-dependent corrected species diffusivity. These are manufactured
+solution checks of the implementation, not experimental calibration of the
+gas model or its binary diffusion inputs.
+
+On Julia 1.11.4, Windows x86-64, with `cfl=0.15` and final time `0.01`,
+the maximum solution errors are:
+
+| Manufactured solution | N = 32 | N = 64 |
+|---|---:|---:|
+| Temperature, linear-in-temperature conductivity | 5.42455e-12 | 8.48210e-14 |
+| Mass fraction, composition-dependent corrected diffusion | 5.67204e-11 | 8.71969e-13 |
+
+The integration checks exercise isothermal and adiabatic wall fluxes,
+cylindrical/spherical viscous momentum sources, and single/composite-patch
+dissipation. The high-diffusivity timestep check compares the absolute rate
+against the analytic acoustic-plus-diffusive bound; host and
+KernelAbstractions CPU paths agree. Float32 coefficients retain their scalar
+type. Hardware GPU coverage is unavailable in this environment.
+
+The constant-model allocation and JET dispatch audits match their pre-change
+baselines. A warmed 16-by-12 NASA-9 H2/N2 case with artificial transport off
+allocates 4048 bytes per RHS and 176 per CFL evaluation under both constant
+transport and either CEA diffusion mode; 1000 pointwise coefficient evaluations
+add no allocations beyond the 16-byte scalar measurement overhead. The CEA
+coefficient return is fully inferred. Existing convergence and shock-validation
+guards pass without baseline or tolerance changes; the MPI core gate passes at
+two ranks and its selected phases at eight ranks.

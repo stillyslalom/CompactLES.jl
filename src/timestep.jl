@@ -556,24 +556,24 @@ end
 # placeholder state `primitives!` writes where ρ ≤ 0 has cv = 0, and a point
 # like that has failed the positivity check `max_rate` reports, so the
 # fallback there only needs to stay finite.
-@inline function _diffusive_rate(eos, ρ, p, T_ion, cp, mu0, Pr, Sc,
+@inline function _diffusive_rate(eos, ρ, p, T_ion, cp, molecular,
                                  mu_art, beta_art, kappa_art, D_art, I,
                                  n_species)
     ri = one(ρ) / ρ
-    Dmax = mu0 / (Sc * ρ)
+    Dmax = molecular.D[1]
     for sp in 1:n_species
-        Dmax = max(Dmax, mu0 / (Sc * ρ) + D_art[sp][I])
+        Dmax = max(Dmax, molecular.D[sp] + D_art[sp][I])
     end
-    κ = mu0 * cp / Pr + kappa_art[I]
+    κ = molecular.kappa + kappa_art[I]
     cv = mixture_cv(eos, ρ, p, T_ion, cp)
     thermal = κ * ri / (cv > 0 ? cv : cp)
-    return (mu0 + mu_art[I] + beta_art[I]) * ri + thermal + Dmax
+    return (molecular.mu + mu_art[I] + beta_art[I]) * ri + thermal + Dmax
 end
 
 @inline function _rate_point!(rate_out, rhoq_out, dir_out, Q, rho, u, v, w,
                               parr, Tarr, carr, cparr, eos, mu_art, beta_art,
                               kappa_art, D_art, inv_h1, inv_h2, inv_h3, inv_r,
-                              cot_over_r, metric, act, hh, mu0, Pr, Sc,
+                              cot_over_r, metric, act, hh, transport, Y,
                               n_species, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -600,7 +600,8 @@ end
         acc += c * sqrt(dsum)                 # the acoustic symbol is c |k'|
         acc += _curvature_rate_point(metric, act[2], act[3], inv_r, cot_over_r,
                                      I, uv)
-        ν = _diffusive_rate(eos, ρ, parr[I], Tarr[I], cp, mu0, Pr, Sc,
+        molecular = transport_at(transport, eos, Tarr, rho, cparr, Y, I)
+        ν = _diffusive_rate(eos, ρ, parr[I], Tarr[I], cp, molecular,
                             mu_art, beta_art, kappa_art, D_art, I, n_species)
         rate_out[I] = acc + 2 * ν * dsum
     end
@@ -621,7 +622,7 @@ function _local_max_rate_launch(solver::SolverLike, Q)
                solver.kappa_art, ft.D_art, solver.inv_h[1], solver.inv_h[2],
                solver.inv_h[3], solver.inv_r, solver.cot_over_r, solver.metric,
                decomp.active, solver.h,
-               tr.mu0, tr.Pr, tr.Sc, solver.equations.n_species, o1, o2, o3)
+               tr, ft.Y, solver.equations.n_species, o1, o2, o3)
     interior = (o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
     rates = view(solver.tmp_a, interior...)
     rhos = view(solver.tmp_b, interior...)
@@ -679,8 +680,10 @@ function _local_max_rate_loop(solver::SolverLike, Q)
         # loop skips it entirely, yet ρu_θ²/r still drives u_r as a stiff
         # source at small r. That term is added here.
         acc += curvature_rate(solver, solver.metric, I, uv)
+        molecular = transport_at(tr, solver.eos, solver.T_ion, solver.rho,
+                                  solver.cp_mix, solver.field_tuples.Y, I)
         ν = _diffusive_rate(solver.eos, ρ, solver.p[I], solver.T_ion[I], cp,
-                            tr.mu0, tr.Pr, tr.Sc, solver.mu_art, solver.beta_art,
+                            molecular, solver.mu_art, solver.beta_art,
                             solver.kappa_art, solver.D_art, I,
                             solver.equations.n_species)
         acc += 2 * ν * dsum
@@ -771,8 +774,10 @@ function dt_report(solver::Solver, Q)
         end
         acc += c * sqrt(dsum)
         crate = curvature_rate(solver, solver.metric, I, uv)
+        molecular = transport_at(tr, solver.eos, solver.T_ion, solver.rho,
+                                  solver.cp_mix, solver.field_tuples.Y, I)
         ν = _diffusive_rate(solver.eos, ρ, solver.p[I], solver.T_ion[I], cp,
-                            tr.mu0, tr.Pr, tr.Sc, solver.mu_art, solver.beta_art,
+                            molecular, solver.mu_art, solver.beta_art,
                             solver.kappa_art, solver.D_art, I,
                             solver.equations.n_species)
         drate = 2 * ν * dsum

@@ -58,7 +58,7 @@ Problem(; domain, bcs, ic, name="problem",
 | `ic` | `(x1,x2,x3) -> Prim` | Required; keep it pure |
 | `name` | Display/output label | `"problem"` |
 | `eos` | Species and thermodynamic closure | `IdealSpecies("gas"; R=1, gamma=1.4)` |
-| `transport` | Molecular viscosity and Prandtl/Schmidt numbers | `Transport()` (`mu0=0`, `Pr=0.7`, `Sc=0.7`) |
+| `transport` | Molecular transport model | `Transport()` (`mu0=0`, `Pr=0.7`, `Sc=0.7`) |
 | `metric` | Coordinate geometry | `CartesianMetric()` |
 | `sources` | Tuple of explicit source objects | `()` |
 
@@ -85,6 +85,9 @@ internally to the one-species mixture representation. See
 `Transport(mu0=..., Pr=..., Sc=...)` uses constant molecular properties: the
 thermal conductivity is `mu0 * cp / Pr` and the species diffusivity, common to
 all species, is `mu0 / (rho * Sc)`.
+Use `CeaTransport(eos)` for temperature-dependent viscosity and conductivity
+with unity-Lewis diffusion; mixture-averaged diffusion requires a supplied
+`BinaryDiffusion` model. See [Thermodynamics and species transport](@ref).
 
 ### Geometry
 

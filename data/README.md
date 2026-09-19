@@ -12,7 +12,7 @@ redistribution requires them.
 | File | What it is | Used by |
 |---|---|---|
 | `thermo.inp` | NASA-9 thermodynamic polynomial coefficients, piecewise in T | `read_nasa9` |
-| `trans.inp` | Viscosity and thermal conductivity fits | nothing yet — see below |
+| `trans.inp` | Viscosity and thermal conductivity fits | `read_cea_transport`, `CeaTransport` |
 | `LICENSE.txt` | Apache License 2.0, verbatim | — |
 | `NOTICE.txt` | Upstream NOTICE, verbatim | — |
 
@@ -32,9 +32,10 @@ of formation with no fit. `trans.inp` holds 66 pure species and 41 binary
 interaction pairs, and supplies viscosity and conductivity but **no diffusion
 coefficients**.
 
-`trans.inp` is not connected to `Transport`, which still uses constant
-properties. The rationale for deferring that integration is recorded in the
-`Transport` entry under **Known limitations** in `CLAUDE.md`.
+`CeaTransport` connects the pure-species fits to temperature-dependent mixture
+properties. Its default diffusion model is unity Lewis; mixture-averaged
+diffusion requires separately supplied binary diffusivities. The original
+`Transport` remains the constant-viscosity, single-Schmidt model.
 
 ## Taylor-Green reference solution
 

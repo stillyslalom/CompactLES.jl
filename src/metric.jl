@@ -337,11 +337,12 @@ add_metric_sources!(solver, dQ, Q, ::CartesianMetric) = solver
     rho[I] * uv[a] * uv[b] + (a == b ? p[I] : zero(p[I])) - τ
 end
 
-@inline function _metric_src_cyl_point!(dQ, grad_u, mu0, mu_art, beta_art,
+@inline function _metric_src_cyl_point!(dQ, grad_u, transport, eos, T_ion, cp_mix, Y, mu_art, beta_art,
                                         rho, u, v, w, p, inv_r, m1, m2,
                                         o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
+        mu0 = transport_at(transport, eos, T_ion, rho, cp_mix, Y, I).mu
         ir = inv_r[I]
         # +Π_θθ / r on radial momentum, −Π_θr / r on the azimuthal one.
         dQ[I, m1] += ir * _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 2)
@@ -355,17 +356,19 @@ function add_metric_sources!(solver, dQ, Q, ::CylindricalMetric)
     nx, ny, nz = decomp.n_local
     m = solver.equations.i_mom
     pointwise!(_metric_src_cyl_point!, solver.inv_r, nx, ny, nz,
-               dQ, solver.field_tuples.grad_u, solver.transport.mu0, solver.mu_art,
+               dQ, solver.field_tuples.grad_u, solver.transport, solver.eos,
+               solver.T_ion, solver.cp_mix, solver.field_tuples.Y, solver.mu_art,
                solver.beta_art, solver.rho, solver.u, solver.v, solver.w,
                solver.p, solver.inv_r, m[1], m[2], o1, o2, o3)
     return solver
 end
 
-@inline function _metric_src_sph_point!(dQ, grad_u, mu0, mu_art, beta_art,
+@inline function _metric_src_sph_point!(dQ, grad_u, transport, eos, T_ion, cp_mix, Y, mu_art, beta_art,
                                         rho, u, v, w, p, inv_r, cot_over_r,
                                         m1, m2, m3, o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
+        mu0 = transport_at(transport, eos, T_ion, rho, cp_mix, Y, I).mu
         ir  = inv_r[I]
         ctr = cot_over_r[I]
         Pθθ = _Pi(grad_u, mu0, mu_art, beta_art, rho, u, v, w, p, I, 2, 2)
@@ -384,7 +387,8 @@ function add_metric_sources!(solver, dQ, Q, ::SphericalMetric)
     nx, ny, nz = decomp.n_local
     m = solver.equations.i_mom
     pointwise!(_metric_src_sph_point!, solver.inv_r, nx, ny, nz,
-               dQ, solver.field_tuples.grad_u, solver.transport.mu0, solver.mu_art,
+               dQ, solver.field_tuples.grad_u, solver.transport, solver.eos,
+               solver.T_ion, solver.cp_mix, solver.field_tuples.Y, solver.mu_art,
                solver.beta_art, solver.rho, solver.u, solver.v, solver.w,
                solver.p, solver.inv_r, solver.cot_over_r_gcl, m[1], m[2], m[3],
                o1, o2, o3)

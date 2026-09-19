@@ -38,6 +38,7 @@ include("kernels.jl")
 include("kernels_banded.jl")
 include("physics.jl")
 include("nasa9_data.jl")
+include("transport.jl")
 include("equations.jl")
 include("boundary.jl")
 include("operators.jl")
@@ -89,6 +90,7 @@ export save_checkpoint_hdf5, load_checkpoint_hdf5!, save_hdf5
 export SwitchableBC, switch!, switched
 export Prim, Problem, Numerics, setup, initialize!, conserved_from_prim, tanh_blend
 export EOS, IdealSpecies, IdealMixture, nspecies, Transport
+export AbstractTransport, BinaryDiffusion, CeaTransport, read_cea_transport, transport_coefficients
 export StiffenedGas, Nasa9Interval, Nasa9Species, Nasa9Mixture
 export nasa9_constant_cp, read_nasa9
 export recover_primitives!, species_names, species_enthalpy

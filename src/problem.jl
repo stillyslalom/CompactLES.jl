@@ -561,7 +561,7 @@ Physical specification independent of grid resolution and process count. A
 - `eos`: equation of state and species definition. An [`IdealSpecies`](@ref)
   is promoted to a one-species [`IdealMixture`](@ref). Default: a
   nondimensional gas with `R = 1` and `gamma = 1.4`.
-- `transport`: constant molecular transport properties. Default:
+- `transport`: molecular transport model. Default:
   [`Transport()`](@ref), which has zero molecular viscosity.
 - `metric`: coordinate metric. Default: [`CartesianMetric()`](@ref).
 - `sources`: tuple of explicit source objects applied to the RHS. Default: `()`.
@@ -573,7 +573,7 @@ mass fractions in every returned `Prim` must follow the order defined by `eos`.
 struct Problem
     name::String
     eos::EOS
-    transport::Transport
+    transport::AbstractTransport
     metric::Metric
     sources::Tuple
     domain::NTuple{3,Tuple{Float64,Float64}}

@@ -1122,6 +1122,11 @@ function recover_primitives!(solver, eos::Nasa9Mixture, Q)
 end
 
 """
+Base type for molecular-transport models with scalar type `T`.
+"""
+abstract type AbstractTransport{T} end
+
+"""
     Transport(; mu0=0.0, Pr=0.7, Sc=0.7)
 
 Constant molecular-transport model.
@@ -1138,7 +1143,7 @@ Constant molecular-transport model.
 `Pr` and `Sc` are dimensionless and should be positive. The constructor does
 not enforce positivity. All three values must use the same numeric type.
 """
-Base.@kwdef struct Transport{T}
+Base.@kwdef struct Transport{T} <: AbstractTransport{T}
     mu0::T = 0.0
     Pr::T  = 0.7
     Sc::T  = 0.7

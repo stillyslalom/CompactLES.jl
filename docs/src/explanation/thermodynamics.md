@@ -74,11 +74,84 @@ Between completed steps, prefer state-query functions reading `Q`. Call
 `refresh_primitives!` before using cached pressure or temperature fields in a
 callback.
 
+## Temperature-dependent molecular transport
+
+[`Transport`](@ref) retains constant viscosity and Prandtl/Schmidt numbers.
+For dimensional gas calculations, use the bundled CEA pure-species fits:
+
+```julia
+eos = Nasa9Mixture(["N2", "O2"])
+transport = CeaTransport(eos)
+```
+
+Pass both objects to `Problem`. Temperatures are kelvin, density is kg/m³,
+viscosity is Pa s, conductivity is W/(m K), and diffusivities are m²/s.
+The model follows the EOS species order and works with both calorically
+perfect and NASA-9 ideal mixtures. Missing pure-species fits are setup errors.
+Outside a tabulated temperature range, the nearest interval is extrapolated;
+this does not extend the fit's physical validation range.
+
+[`read_cea_transport`](@ref) reads the fixed-column `data/trans.inp` table.
+Each viscosity or conductivity fit has the form
+
+```math
+\ln f_k=A_k\ln T+B_k/T+C_k/T^2+D_k.
+```
+
+The reader preserves the temperature intervals and binary viscosity-interaction
+records. The mixture model uses the pure-species fits: Wilke's viscosity rule
+and the Wassiljewa conductivity approximation with the same viscosity-based
+interaction weights. It does not reproduce CEA's equilibrium/reacting
+conductivity or use its binary viscosity-interaction fits as diffusion data.
+The fit format and units follow
+[NASA's transport-data specification](https://www.grc.nasa.gov/www/winddocs/user/files.html).
+
+Writing mole fractions as ``X_k=Y_kR_k/\sum_jY_jR_j``, the mixture rules are
+
+```math
+\mu=\sum_i\frac{X_i\mu_i}{\sum_jX_j\phi_{ij}},\qquad
+\kappa=\sum_i\frac{X_i\kappa_i}{\sum_jX_j\phi_{ij}},\qquad
+\phi_{ij}=\frac{[1+\sqrt{\mu_i/\mu_j}(M_j/M_i)^{1/4}]^2}
+{\sqrt{8(1+M_i/M_j)}}.
+```
+
+The default `diffusion=:unity_lewis` uses ``D_k=\kappa/(\rho c_p)``.
+The bundled table has no binary diffusivities. To select
+`diffusion=:mixture_averaged`, supply `binary_diffusion=BinaryDiffusion(...)`
+with a symmetric matrix of measured or independently modelled reference
+diffusivities in EOS species order. The binary model scales them by
+``(T/T_{ref})^n p_{ref}/p``; its exponent is configurable and the reference
+data and scaling must be appropriate to the gas and temperature range.
+
+For the mass-fraction gradients used by the solver, the mixture coefficient is
+
+```math
+\frac{1}{D_i}=\sum_{j\ne i}\frac{X_j}{D_{ij}}
++\frac{X_i}{\sum_{j\ne i}X_jM_j}
+\sum_{j\ne i}\frac{X_jM_j}{D_{ij}}.
+```
+
+This is the mass-gradient convention of
+[Cantera's mixture diffusion coefficients](https://cantera.org/3.1/cxx/d5/de4/GasTransport_8cpp_source.html).
+It gives the binary coefficient for both species in a binary mixture. At an
+exactly pure composition the present species has zero diffusion coefficient;
+absent species retain their trace diffusivity. Soret, Dufour, pressure
+diffusion, and plasma transport are outside this gas model.
+
+The same local coefficients enter the fluxes, wall heat transfer, geometric
+stress terms, and diagnostics. The timestep uses the largest species
+diffusivity and the thermal rate ``\kappa/(\rho c_v)``, including artificial
+contributions; the thermal stability rate uses ``c_v``, while unity Lewis uses
+``c_p``. Verification is recorded in the
+[transport checks](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION_APPENDIX.md#temperature-dependent-transport).
+
 ## Species diffusion
 
-Molecular diffusivity is presently common across species and is set by
-`mu0/Sc`, the molecular viscosity over the Schmidt number. Artificial
-diffusivity may differ by species because each mass fraction has its own sensor.
+The constant [`Transport`](@ref) uses the same molecular diffusivity
+`mu0 / (rho * Sc)` for every species. [`CeaTransport`](@ref) offers a unity-Lewis
+fallback or species-specific mixture-averaged diffusivities from supplied
+binary data. Artificial diffusivity may differ by species because each mass
+fraction has its own sensor.
 The correction-velocity flux
 
 ```math

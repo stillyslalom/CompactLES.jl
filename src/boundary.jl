@@ -82,7 +82,8 @@ on the wall plane are set to zero. With the default `Twall=NaN`, the kinetic
 energy they carried is removed and the total normal energy flux is set to zero
 before divergence (adiabatic). A finite `Twall` instead sets the internal energy
 from the EOS at that temperature and permits the conductive energy flux
-`-(mu0 * cp_mix / Pr + kappa_art) * grad_T_ion[dim]` (isothermal).
+`-(kappa_molecular + kappa_art) * grad_T_ion[dim]` (isothermal), using
+the transport model's local conductivity.
 
 Every species has zero total normal flux, including molecular and artificial
 diffusion. The artificial `:bulk` channel's normal species and energy transport
@@ -617,7 +618,7 @@ function enforce!(bc::NoSlipWallBC, Q, solver, d, side)
 end
 
 @inline function _no_slip_flux_point!(flux, cp_mix, kappa_art, grad_T,
-                                      mu0, Pr, iso, d, n_species, i_energy,
+                                      transport, eos, T_ion, rho, Y, iso, d, n_species, i_energy,
                                       o1, o2, o3, i, j, k)
     @inbounds begin
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -628,9 +629,12 @@ end
         # convective/viscous work transports energy. Rebuild the allowed heat
         # flux rather than subtracting terms: this also removes the complete
         # bulk component flux, and is independent of the EOS energy gauge.
-        flux[d, i_energy][I] = iso ?
-            -(mu0 * cp_mix[I] / Pr + kappa_art[I]) * grad_T[I] :
-            zero(eltype(cp_mix))
+        if iso
+            molecular = transport_at(transport, eos, T_ion, rho, cp_mix, Y, I)
+            flux[d, i_energy][I] = -(molecular.kappa + kappa_art[I]) * grad_T[I]
+        else
+            flux[d, i_energy][I] = zero(eltype(cp_mix))
+        end
     end
     return nothing
 end
@@ -640,7 +644,8 @@ function correct_flux!(bc::NoSlipWallBC, solver, Q, d, side)
     plane === nothing && return nothing
     plane_pointwise!(_no_slip_flux_point!, solver.rho, plane,
                      solver.field_tuples.flux, solver.cp_mix, solver.kappa_art,
-                     solver.grad_T_ion[d], solver.transport.mu0, solver.transport.Pr,
+                     solver.grad_T_ion[d], solver.transport, solver.eos,
+                     solver.T_ion, solver.rho, solver.field_tuples.Y,
                      !isnan(bc.Twall), d, solver.equations.n_species,
                      solver.equations.i_energy)
     return nothing

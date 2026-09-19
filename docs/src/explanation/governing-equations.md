@@ -84,8 +84,8 @@ viscosity used to spread shocks.
 
 ## Molecular and artificial transport
 
-Molecular viscosity ``\mu_0`` is presently constant. The molecular heat
-conductivity and species diffusivity are
+The default [`Transport`](@ref) has constant molecular viscosity ``\mu_0``.
+Its molecular heat conductivity and species diffusivity are
 
 ```math
 \kappa_0=\frac{\mu_0c_p}{\mathrm{Pr}},\qquad
@@ -95,6 +95,11 @@ D_0=\frac{\mu_0}{\rho\,\mathrm{Sc}},
 where ``\mathrm{Pr}`` is the Prandtl number and ``\mathrm{Sc}`` the Schmidt
 number, both constants of the [`Transport`](@ref) model, and ``c_p`` is the
 mixture specific heat at constant pressure.
+
+[`CeaTransport`](@ref) instead evaluates temperature-dependent viscosity and
+conductivity from the bundled CEA fits, with unity-Lewis or mixture-averaged
+species diffusion. See [Thermodynamics and species transport](@ref) for the
+mixture rules, units, and required binary diffusion data.
 
 The conductive heat flux is
 
