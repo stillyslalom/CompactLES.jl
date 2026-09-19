@@ -459,9 +459,9 @@ nearest `tfinal`, reached to within half the floating-point spacing there:
 exactly `tfinal` in a Float64 solver given a Float64 endpoint, and within 6e-8
 relative in a Float32 one. Without the conversion the comparison is made
 against a value no sequence of steps can reach, and the remainder is taken
-again on every step: a Float32 run given `tfinal = 0.7` stops advancing at
-0.699999988079071 and then repeats a 1.1920929e-8 step, which the clock cannot
-add, until `nmax` ends the run.
+again on every step: a Float32 run given `tfinal = 0.7` stops at the Float32
+below it and then repeats a step of one Float32 spacing, which the clock
+cannot add, until `nmax` ends the run.
 
 Progress is checked on the stored result of `solver.t + dt`, once the
 `StepControl` floors, the endpoint clip and the landing on a scheduled instant
@@ -480,9 +480,8 @@ CFL rate, and the sensor tag criterion reads them at a regrid check.
 `compute_artificial!` rebuilds them from whatever state it is handed, so an
 observational call at a step boundary would otherwise replace the coefficients
 the last Runge–Kutta stage left and change the next timestep with no change to
-the conserved state. Measured on a 64-point Sod at cfl = 0.15, one
-`field_array(solver, Q, :beta_art)` after the first step moved the next dt from
-1.8692671e-3 to 1.8683252e-3.
+the conserved state. On a 64-point Sod, one `field_array(solver, Q, :beta_art)`
+after the first step moved the next dt in its fourth significant figure.
 
 Every path that reaches `compute_artificial!` from outside the RHS therefore
 runs inside `preserving_artificial`, which restores those arrays afterwards:
@@ -644,7 +643,7 @@ coefficient per grid direction in that direction's normal stress with a
 per-direction diffusive step limit, was measured in September 2026 on an
 anisotropic Noh case and not adopted: the bulk force then ceases to be the
 gradient of a scalar and generates vorticity in a cold pre-shock flow
-([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#directional-bulk-viscosity-on-anisotropic-grids)).
+([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#directional-bulk-viscosity)).
 
 ### The species channel
 

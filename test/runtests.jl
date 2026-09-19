@@ -4454,6 +4454,7 @@ include("seam_tests.jl")
 include("io_tests.jl")
 include("runloop_tests.jl")
 include("docrefs_tests.jl")
+include("reference_tests.jl")
 include("api_surface_tests.jl")
 
 # HDF5 is a weak dependency and is not loadable from the package environment

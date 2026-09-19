@@ -10,18 +10,23 @@ the place to record a result.
 | `reference/DESIGN.md` | the numerics — source map, compact solve, folds, GCL, NSCBC |
 | `reference/CLUSTER.md` | MPI configuration, launch rules, sizing, measured scaling |
 | `reference/CALIBRATION.md` | the calibrated defaults and which setting to change for an instability or an over-dissipated solution |
-| `reference/CALIBRATION_APPENDIX.md` | the measurements behind them: every sweep, dead end and null result, the CFL restriction, TGV |
-| `reference/ROADMAP.md` | positioning, comparisons, open work items |
-| `reference/HISTORY.md` | completed phases and their measured outcomes |
+| `reference/CALIBRATION_APPENDIX.md` | every measurement, one section per instrument: the sweeps, dead ends and null results behind the defaults |
+| `reference/ROADMAP.md` | positioning, comparisons, open work items; a closed item is one line naming its commit |
 | `reference/AMR_GPU.md` | the patch-AMR + GPU design as delivered, measured lessons, roadmap |
 | `reference/IMMERSED.md` | the immersed-boundary design: level-set bodies, blend imposition |
 | `reference/MODE_TRUNCATION.md` | azimuthal mode truncation plan for the pole CFL squeeze |
 | `docs/` | the Documenter site: `make.jl` and the `src/` pages. `docs/src/tutorials/` and `docs/build/` are generated (from `docs/literate/`) and gitignored, so edit `literate/`, never `src/tutorials/` |
 
 Read those for anything about *what* the code does, *where* it runs, or *where it
-is going*. This file is about *how to work on it*. When a measurement proves
-durable, it belongs in one of the files above, with a one-line pointer here
-only if an instance would go wrong without it.
+is going*. This file is about *how to work on it*. Each kind of information
+has one place: a measured digit goes in the appendix, once, in the section of
+the instrument that produced it, and a newer measurement replaces the older
+one rather than annotating it; the git log is the history, so a closed roadmap
+item is one line and its commit message is the account; every other file gets
+at most three sentences and a link, or nothing. Results of a session are
+reported in the reply, not recorded in the repository. `test/reference_tests.jl`
+enforces the layout, and a pointer appears here only if an instance would go
+wrong without it.
 
 ## Environment
 
@@ -76,7 +81,7 @@ preference rebuilds on its own. `bench/tgv_energy.jl` is the intended first prod
 on a cluster: the one bench script whose reductions are all collective. Those
 reductions are order-dependent `Allreduce(+)`, so it reproduces serial numbers
 to round-off (of order 1e-14 relative), not bit-for-bit; `test/mpi_tests.jl`
-measures 3.1e-15 at np = 4 for the decomposed compact solve it rests on.
+measures the decomposed compact solve it rests on at np = 4.
 
 ## The gate
 
@@ -85,9 +90,10 @@ For mixed changes, take the union of the requirements. If the impact is
 unclear, run the full gate. Report what ran, any baseline changes, and any
 required coverage that remains unavailable.
 
-- **Prose, comments, and docstrings only:** run `test/docrefs_tests.jl`.
-  Build the documentation when changing Documenter configuration, page
-  generation, or executable documentation examples.
+- **Prose, comments, and docstrings only:** run `test/docrefs_tests.jl`, and
+  `test/reference_tests.jl` when `reference/`, `README.md` or this file
+  changed. Build the documentation when changing Documenter configuration,
+  page generation, or executable documentation examples.
 - **Benchmarks, examples, and standalone tooling:** run the affected scripts
   with a small representative workload. Changes to shared package code also
   require the checks below.
@@ -632,13 +638,11 @@ them.
 
 - **A converging strong shock at the spherical origin is CFL-limited to 0.3**
   by an excursion of the origin cell near t = 0.39 on Noh, at every
-  resolution; `StepControl(retries = 4)` recovers it, and `detector = :d8`
-  lowers the ceiling to 0.25. The planar wall and the cylindrical axis carry no
-  ceiling: their recorded ones (0.25 and 0.2) were the first step of the run,
-  sized before any artificial coefficient existed, and `run!` primes the
-  coefficients. Every discretization-order explanation, the density
-  proportionality of β\* and the per-step filter strength have been measured
-  and ruled out for the origin. → `reference/CALIBRATION_APPENDIX.md`
+  resolution; `StepControl(retries = 4)` recovers it. The planar wall and the
+  cylindrical axis carry no ceiling, since `run!` primes the artificial
+  coefficients before the first step. The discretization-order explanations,
+  the density proportionality of β\* and the per-step filter strength have
+  been ruled out for the origin. → `reference/CALIBRATION_APPENDIX.md`
 - **κ\* is written as `ρc/T_ion`** and is not singular in practice: the sound
   speed vanishes with the temperature at a floored cell, and on Noh the κ\*
   rate is an order below the β\* rate at every ambient pressure from 1e-2 to
@@ -656,9 +660,8 @@ them.
   default `:gaussian` smoother (the 31.8% figure is the `:compact` one),
   in the filter line-solves that smooth the sensors, one sweep per species. At
   `n_species == 2` that machinery is measurably a no-op (`D*_1` and `D*_2` agree
-  to 4.8e-16), and
-  it only earns its cost at three or more species. Cutting it is a numerics
-  decision (shared vs per-species sensor), not a code tweak.
+  to round-off), and it only earns its cost at three or more species. Cutting
+  it is a numerics decision (shared vs per-species sensor), not a code tweak.
 - The NASA CEA thermo and limited transport databases are bundled verbatim in `data/`
   with their Apache license and notice. `read_nasa9` handles multi-interval
   thermo records; the transport table is not yet connected to `Transport`.
@@ -668,12 +671,10 @@ them.
 - **The relaxed filter reads a directional hyperbolic rate, not the rate
   that sized the step.** `filter_weight` scales a pass along `d` by
   `dt · (|u_d| + c)/h_d · √n / filter_cfl`, so its dissipation per unit time
-  is invariant to the step, to the diffusive rates, physical or artificial,
-  and to the spacing of the other directions. Reading the step's own maximum
-  ran 15× the passes under a diffusion-limited step and completed the
-  planar Noh run on an aspect-ratio-16 grid with a wrong solution. A
-  directional β\* removes the aspect-ratio penalty in the step and fails on
-  a curved front by making vorticity in cold gas; it was measured and not
-  adopted. → `reference/CALIBRATION_APPENDIX.md`
+  is invariant to the step, to the diffusive rates and to the spacing of the
+  other directions; reading the step's own maximum completed an
+  aspect-ratio-16 Noh run with a wrong solution. A directional β\* was
+  measured and rejected for making vorticity in cold gas on a curved front.
+  → `reference/CALIBRATION_APPENDIX.md`
 - Wanted: a `bench/` runner taking medians over repeated *processes*, to get
   under the 10–20% run-to-run spread.

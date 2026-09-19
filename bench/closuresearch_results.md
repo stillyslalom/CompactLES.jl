@@ -1,9 +1,9 @@
 # Fifth-order closure-search results (60da34b)
 
-This is an archive of the search and its then-current solver measurements.
-N6h subsequently changed the slip-wall flux contract. The current-solver
-smooth-wall and shock remeasurement, including superseded cold-Noh failures,
-is recorded under [N6j](../reference/CALIBRATION_APPENDIX.md#fifth-order-closures-under-the-dilatation-sensor).
+This is an archive of the search and the solver measurements taken at the time.
+The slip-wall flux contract changed afterwards; the current-solver smooth-wall
+and shock remeasurement, cold-Noh failures included, is recorded in
+[the fifth-order closure search](../reference/CALIBRATION_APPENDIX.md#the-fifth-order-closure-search).
 
 Instrument: `bench/closuresearch.jl`. All rows are exact on monomials of
 degree 0:5 by construction. Growth rates below are from the reduced injected

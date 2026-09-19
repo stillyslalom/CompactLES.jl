@@ -1,26 +1,14 @@
 # CompactLES — Patch AMR and the GPU backend
 
-Part I describes the patch-based adaptive mesh refinement (AMR) and the
-device backend as delivered: the constraints that bound the design, the
-mechanisms, and the measurements behind them. Part II is the plan for the
-production AMR the delivered capability is not yet: the structural
-assumptions still in place, the design that replaces each, and the order of
-the work with its gates. Prerequisite reading: `DESIGN.md` for the compact
-operators, the distributed line solve, and the coordinate folds.
-
-Every number here was produced by a bench script or testset and is usually
-still guarded by one. Delivery history is in `HISTORY.md` and the git log.
-Other documents cite the original plan's stage names; they map onto Part I
-as Stage 1 → [Transfer operators](#transfer-operators), Stage 2 →
-[Patches and same-level interfaces](#patches-and-same-level-interfaces),
-Stages 3–4 → [Refinement](#refinement), G1–G4a → the subsections of
-[The device backend](#the-device-backend), and sequencing items 1–3 →
-[Refinement](#refinement) and
-[Ownership and load balance](#ownership-and-load-balance).
+The design of the patch-based adaptive mesh refinement (AMR) and the device
+backend: the constraints that bound it, the mechanisms, and the lessons the
+measurements left. The measurements themselves are in the appendix's AMR
+section ([measurements](CALIBRATION_APPENDIX.md#amr)); the open work is in
+[ROADMAP.md](ROADMAP.md) and the delivery history in the git log.
+Prerequisite reading: `DESIGN.md` for the compact operators, the distributed
+line solve, and the coordinate folds.
 
 ## Contents
-
-Part I: the delivered system
 
 1. [Status](#status)
 2. [Target problems](#target-problems)
@@ -32,20 +20,12 @@ Part I: the delivered system
 8. [I/O and restart](#io-and-restart)
 9. [The device backend](#the-device-backend)
 10. [Verification](#verification)
-11. [Performance summary](#performance-summary)
+11. [Performance](#performance)
 12. [Lessons](#lessons)
 13. [Scope boundaries today](#scope-boundaries-today)
-
-Part II: the production AMR
-
-14. [What remains](#what-remains)
-15. [Design of the remaining work](#design-of-the-remaining-work)
-16. [Open measurements](#open-measurements)
-17. [Sequencing](#sequencing)
+14. [Open work](#open-work)
 
 ---
-
-# Part I: the delivered system
 
 ## Status
 
@@ -90,7 +70,7 @@ plans or their device mirrors (`src/lines_device.jl`) behind one
 `apply_along!` entry point. There is no second code path for the device
 beyond the launchers.
 
-This is not yet a production AMR. [What remains](#what-remains) lists the
+This is not yet a production AMR. [Open work](#open-work) lists the
 structural assumptions that separate it from one.
 
 ## Target problems
@@ -120,12 +100,12 @@ shell isotropically, which is what the tiles pay for.
 **A shock tube with a mixing layer.** Only the mixing region, a slab or a
 thin distorted sheet, needs resolution; the rest of the domain carries
 smooth waves and a coarse level suffices. One or a few boxes serve, the
-refined fraction is small, and the run is long, so what binds is the
-conservation drift across level boundaries, the artificial-property sensor
-behavior where a shock crosses a coarse–fine boundary, and the cost of the
-level coupling per step rather than the tile geometry. The delivered
-two-level solver is closest to this class; the measured mixing case under
-[Measured costs](#measured-costs) is of this shape.
+refined fraction is small, and the run is long. The binding quantities are
+the conservation drift across level boundaries, the artificial-property
+sensor behavior where a shock crosses a coarse–fine boundary, and the cost
+of the level coupling per step rather than the tile geometry. The delivered
+two-level solver is closest to this class, and the mixing cost case of
+`bench/amr_cost.jl` is of this shape.
 
 Both classes share the general demands: several levels, restart, diagnostics
 that exclude covered coarse nodes, and a rank assignment that does not put
@@ -172,18 +152,15 @@ numbering.
 7. **Error localization is favorable.** The inverse of a compact LHS decays
    geometrically off the diagonal (≈ α^|i−j|, α = 1/3 for C6), so pollution
    injected at an inexact interface decays about 3× per point into the
-   patch. Measured in situ at ≈ 3.4× per point (shock round-trip pollution,
-   `bench/amr_transfer.jl`); the default 4-coarse-cell tagging buffer drops
-   interface pollution two orders of magnitude and is sized from this
-   number. The rate is the root of the LHS symbol, 0.382 per point for C6,
-   0.451 for C8 and 0.556 for C10 (1.8× per point), and the derivative's
-   response to a unit error in the first ghost layer, through the interface
-   closure rows and the interior solve, decays at exactly those rates
-   (`closure_localization`, same bench). At C10 that response is 5e-3 of
-   the ghost error eight fine points in and 5e-4 at twelve, the default
-   buffer's width, so the buffer holds two orders at C10 where it holds
-   five at C6; the level buffers were remeasured at C10 with the same
-   outcome ([Banded schemes at interfaces](#banded-schemes-at-interfaces)).
+   patch, and the default 4-coarse-cell tagging buffer is sized from the
+   measured rate. The `closure_localization` study of
+   `bench/amr_transfer.jl` measures the decay of the derivative's response
+   to a unit error in the first ghost layer, through the interface closure
+   rows and the interior solve, and finds it at exactly the root of the LHS
+   symbol. The root grows with the band, so a C10 interface pollutes
+   further than a C6 one and the same buffer holds two orders where it held
+   five; the level buffers were remeasured at C10 with the same outcome
+   ([measurements](CALIBRATION_APPENDIX.md#amr)).
 
 ## Transfer operators
 
@@ -217,29 +194,29 @@ ghost data is available.
 LHS, Gaussian RHS); prolongation a `BandedCompactScheme` with q = 2,
 interior rows normalized to a unit diagonal. Both bind to a dimension with
 the existing `plan_direction`, which supplies the distributed spike solve
-and the fold parity variants without further code (measured ≤ 1e-13 against
-parity-extended full lines, both schemes, both signs).
+and the fold parity variants without further code, and reproduces
+parity-extended full lines for both schemes and both signs.
 
 **The 3:1 sampling convention**, pinned numerically because the public
 kernels do not fully specify it: restriction filters the fine line and takes
 the coincident nodes (fine node 3m − 2 ↔ coarse node m); prolongation
 injects coarse values onto coincident fine nodes, fills the intermediate
 nodes by Lagrange interpolation (order 4/6/8, default 6), then deconvolves.
-Measured: the pair round-trips at 1.6e-15 closed / 2.7e-15 periodic;
-restriction is a left inverse of prolongation (coarse → fine → coarse exact
-at 8.9e-16 for arbitrary data), while fine → coarse → fine converges at the
-interpolation order (3.97 / 5.93 / 7.97); a constant survives restriction to
-the last bit and prolongation to 13 ULPs; within 6 points of a closed end
-the round-trip converges at ≈ 3 (the closure order).
+The pair round-trips to round-off, restriction is a left inverse of
+prolongation for arbitrary data, fine → coarse → fine converges at the
+interpolation order, and a constant survives both directions; within 6
+points of a closed end the round-trip converges at the closure order
+([measurements](CALIBRATION_APPENDIX.md#amr)).
 
-**Conditioning.** Prolongation is deconvolution of a Gaussian (gain 20.24
-at the fine Nyquist, closure condition number 33), benign while the coarse
-field carries no content above its Nyquist. Measured in situ: the smoothed
-δ⁴ sensor of a 2h shock round-trips at 1.03–1.13, the state undershoots
-≤ 3% of ambient at the shock, and pollution decays ≈ 3.4× per point outside
-it. An explicit Gaussian pass ahead of restriction (the `c4ff3` role in Pyranda)
-cuts the undershoot 2.8× but raises total round-trip error; it is the tool
-if regridding onto captured shocks proves positivity-limited, not a default.
+**Conditioning.** Prolongation is deconvolution of a Gaussian, benign while
+the coarse field carries no content above its Nyquist, and the measured gain
+at the fine Nyquist and the closure condition number are both modest. In
+situ on a 2h captured shock the smoothed δ⁴ sensor round-trips near unity,
+the state undershoots a few percent of ambient at the shock, and pollution
+decays quickly outside it. An explicit Gaussian pass ahead of restriction
+(the `c4ff3` role in Pyranda) cuts the undershoot but raises the total
+round-trip error; it is the tool if regridding onto captured shocks proves
+positivity-limited, not a default.
 
 **SBP–SAT is the fallback of last resort** and the theory guiding interface
 placement (Carpenter, Gottlieb & Abarbanel 1993; Mattsson & Rydin 2022 on
@@ -279,20 +256,16 @@ divergence plans so the discrete GCL cancellation is preserved. A banded
 scheme takes `q` such rows per end
 ([Banded schemes at interfaces](#banded-schemes-at-interfaces)).
 
-Measured at the two-conforming-patch gates: entropy-wave order 3.1–3.5
-across the interface (the divergence's one-sided rows binding); acoustic
-pulse reflected amplitude 2.3e-3 of incident at 192 points, converging at
-≈ 5th order; conservation drift 1.2e-8 relative over a long periodic run
-against 4.5e-15 single-patch. Rank partitioning reproduces the serial
-two-patch answer bitwise at one rank per patch; once a patch itself
-decomposes, agreement is round-off (3.1e-15 at np = 4 against a 9.5e-8
-signal) with identical step counts. The inviscid gates run the divergence
-alone, whose plans keep the one-sided rows, so they cannot tell
-`:extended` from `:onesided`; the viscous-wave gate reaches the interface
-rows through the gradients, and there the extended-data rows converge at
-4.3 / 4.0 against the single-patch answer at the same N (6.1e-5, 3.0e-6,
-1.9e-7 at 48 / 96 / 192 points) where the one-sided rows give 2.1 / 1.7
-(8.4e-5, 2.0e-5, 5.9e-6).
+The two-conforming-patch gates measure the entropy wave across the
+interface, the reflected amplitude of an acoustic pulse, the conservation
+drift over a long periodic run, and a viscous wave. The divergence's
+one-sided rows bind the inviscid orders, so the inviscid gates cannot tell
+`:extended` from `:onesided`; the viscous gate reaches the interface rows
+through the gradients, and there the extended-data rows are worth about two
+orders over the one-sided ones. Rank partitioning reproduces the serial
+two-patch answer bitwise at one rank per patch, and to round-off with
+identical step counts once a patch itself decomposes
+([measurements](CALIBRATION_APPENDIX.md#amr)).
 
 ### Banded schemes at interfaces
 
@@ -317,40 +290,28 @@ scheme's own closure cascade (the C6 rows) as at every interface, and the
 filter stays C8, so the minimum extent does not move. The `:d8` ring
 detector, the other banded scheme, is the sensor's operator and keeps its
 closed-edge rows at an interface as the sensor smoother does; patched runs
-still reject it pending the sensor gate of item 8.
+still reject it pending the sensor gate of ROADMAP.md's N11.
 
-Measured at the gates: the two-patch entropy wave at C10 converges at
-3.06 / 3.52 (8.2e-7, 9.8e-8, 8.5e-9 at 48 / 96 / 192; C6 3.09 / 3.53),
-the divergence's one-sided rows binding as before; the pulse reflection is
-4.1e-3 of the incident amplitude at 192 (7.5e-2 at 96, 7.7e-5 at 384),
-above C6's 2.3e-3 by the larger mismatch between the interior rows and the
-closure cascade; the viscous wave converges through the interface rows at
-3.93 / 3.92 against the single-patch answer (6.0e-5, 4.0e-6, 2.6e-7)
-where the one-sided rows give 2.00 / 1.67; and a degree-9 polynomial
-differentiates to 2e-12 through both ends of a closed line whose ghosts
-carry it, where the scheme's own cascade leaves 1e-4. Across the
-coarse-fine boundary the two-level wave measures 3.84 / 3.54 (8.2e-8,
-5.7e-9, 4.9e-10; subcycled 3.88 / 3.53), the Sod crossing leaves 5.4e-10
-of momentum noise ahead of the shock (subcycled 4.0e-10; C6 6.4e-10 and
-1.3e-10), and the tiled regrid tracks the shock with positivity intact.
-Rank-partitioned, the viscous two-patch C10 run reproduces the serial
-answer bitwise at one rank per patch and to round-off once a patch
-decomposes, as C6 does.
+C10 tracks C6 at every gate: the same entropy-wave orders across a patch
+interface and across a coarse-fine boundary, the divergence's one-sided rows
+still binding, and a somewhat larger pulse reflection from the larger
+mismatch between the interior rows and the closure cascade. The
+rows themselves are exact where the ghosts carry the data: a degree-9
+polynomial differentiates through both ends of a closed line to round-off,
+where the scheme's own cascade leaves a fourth-decimal error.
+Rank-partitioned, the viscous two-patch C10 run reproduces the serial answer
+bitwise at one rank per patch and to round-off once a patch decomposes, as
+C6 does.
 
-The level buffers were remeasured at C10 with the two-level entropy wave
-and the subcycled Sod crossing over `RESTRICT_MARGIN` 0–3 and
-`LEVEL_BUFFER` 4 and 6, in a scratch copy of the tree with the constants
-edited, the two testsets being the instrument. C10 tracks C6 at every
-setting: the wave error at 96 nodes is 5.1e-9 / 5.1e-9 / 5.7e-9 / 5.4e-9
-over margins 0–3 against C6's 5.0e-9 / 5.0e-9 / 7.7e-9 / 5.8e-9, the
-growth of that error from t = 0.5 to t = 2 is 2.2 / 2.2 / 3.3 / 1.9
-against 1.7 / 1.7 / 2.5 / 1.6, the Sod noise stays between 3.5e-10 and
-8.8e-10, and `LEVEL_BUFFER = 6` reproduces the buffer-4 numbers to the
-last digit at both schemes. Nothing at C10 calls for wider buffers, and the
-constants stay where they are. The amplifying loop `RESTRICT_MARGIN` was
-introduced against did not appear at margin 0 in this configuration for
-either scheme, which is an observation about the current coupling, not a
-reason to move a C6 constant.
+The level buffers were remeasured at C10 with the two-level entropy wave and
+the subcycled Sod crossing over `RESTRICT_MARGIN` 0–3 and `LEVEL_BUFFER` 4
+and 6, in a scratch copy of the tree with the constants edited, the two
+testsets being the instrument. C10 tracks C6 at every setting, nothing calls
+for wider buffers, and the constants stay where they are
+([measurements](CALIBRATION_APPENDIX.md#amr)). The amplifying loop
+`RESTRICT_MARGIN` was introduced against did not appear at margin 0 in this
+configuration for either scheme, which is an observation about the current
+coupling, not a reason to move a C6 constant.
 
 ## Refinement
 
@@ -381,10 +342,11 @@ which restricted data is and the live coarse solution is not. Deconvolving
 point samples sharpens data that was never smoothed; filtering on the way
 down writes an attenuated representation into a field of point samples;
 both are O(h²) against the solution, and the manufactured-solution gate
-measured order 1.3–1.7 through the pair. The default coupling is therefore
-order-6 Lagrange interpolation up (`interpolate!`) and coincident-node
-injection down (a sampled `gather_region!`), which measures order 3.46/3.64
-with errors three decades lower. `level_restriction = :filter` keeps the
+confirms it. The default coupling is therefore order-6 Lagrange
+interpolation up (`interpolate!`) and coincident-node injection down (a
+sampled `gather_region!`), which converges at better than third order with
+errors three decades lower ([measurements](CALIBRATION_APPENDIX.md#amr)).
+`level_restriction = :filter` keeps the
 anti-aliasing pair selectable, and regridding initializes *new* fine cells
 by interpolation for the same reason.
 
@@ -397,8 +359,8 @@ step the fine state writes back onto the covered coarse region, holding
 `RESTRICT_MARGIN = 2` coarse nodes off the boundary. The margin is not
 optional: restricting all the way to the boundary closes an amplifying loop
 through the fine solution's least-accurate nodes (its imposed shell) into
-the closure rows that feed the next shell (measured gain ≈ 2 per step, flat
-with the margin in place).
+the closure rows that feed the next shell; the measured growth is flat with
+the margin in place ([measurements](CALIBRATION_APPENDIX.md#amr)).
 
 **Distribution of the coupling.** The coupling runs on a replicated-data,
 distributed-work split. Data replicates: `gather_region!` assembles a node
@@ -406,12 +368,14 @@ region of a distributed field on every rank with one Allgatherv (the
 buffered coarse box per shell imposition, the coincident nodes for `:inject`
 restriction, the surviving fine state at a box regrid). Work distributes: a
 subcycled step imposes the shell ~20 times, each a K-stage tensor-product
-interpolation per component, and replicating that per rank put the 3-D
-cost case at 85% of the uniform-fine wall; under `_impose_shell!` rank r
+interpolation per component, and replicating that per rank cost most of the
+advantage the refinement exists to buy; under `_impose_shell!` rank r
 runs the chain only for components c ≡ r (mod np) and shares the thin shell
 ring through one Allgatherv, which moves the same values instead of
-recomputing them (serial results bit-identical) and brought the composite
-to 49%. Every rank writes only the nodes it owns; tagging reduces its
+recomputing them, serial results bit-identical, and brought the composite
+back to about half the uniform-fine wall
+([measurements](CALIBRATION_APPENDIX.md#amr)).
+Every rank writes only the nodes it owns; tagging reduces its
 bounds globally; a fine patch picks its process grid through `_amr_dims`
 over the rank range it is assigned
 ([Ownership and load balance](#ownership-and-load-balance)). A patch's
@@ -431,9 +395,10 @@ extra coarse RHS per step, since the next step's stage-1 RHS arrives too
 late and restriction invalidates a cached one. Each patch's rate is divided
 by 3^level, so the step is coarse-limited. Each level filters its own state
 at its own step cadence, which is dt-consistent whenever `filter_cfl > 0`.
-Measured: the entropy-wave orders are unchanged by subcycling at a third of
-the steps, and the subcycled Sod gate improves on the global-dt one
-(ahead-of-shock noise 5.7e-11 vs 6.4e-10; mass drift 9.8e-5 vs 1.36e-4).
+Subcycling leaves the entropy-wave orders unchanged at a third of the steps,
+and the subcycled Sod gate improves on the global-dt one in both
+ahead-of-shock noise and mass drift
+([measurements](CALIBRATION_APPENDIX.md#amr)).
 
 The step driver is recursive (`_advance_level!`): one step of level ℓ, the
 extra RHS that saves the Hermite endpoint for its children, three substeps
@@ -445,8 +410,7 @@ children, about 1/15 of the RHS work at similarly weighted levels, not a
 fraction that compounds with depth. A three-level static nest on the
 entropy wave converges at the two-level orders in both stepping modes, and
 the three-level Sod gate runs at cfl 0.4 without a rate check per substep
-(see [Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check)
-for what is not built).
+(ROADMAP.md, N12).
 
 ### Tiles and adjacency
 
@@ -463,7 +427,8 @@ that a regrid never changes a surviving tile's region.
 
 Fixed tiles were chosen over Berger–Rigoutsos clustering for three reasons:
 equal extents let the device batch line solves across a level's tiles
-([Device](#device)); the lattice makes the face-closure decision binary;
+([Launch policy](#launch-policy)); the lattice makes the face-closure
+decision binary;
 and the measured waste on the target problems is the only thing that would
 justify the clustering algorithm.
 
@@ -488,8 +453,9 @@ dimension d span the transverse dimensions before d over their padded
 ranges, with the per-patch halo exchange between phases. Two things depend
 on that. A node shared by four tiles (eight in 3-D) reaches the mean of all
 its copies only that way, since one flat pairwise pass reads values an
-earlier pair has changed (a probe with copies 1, 2, 3, 4 ended at 2.23,
-2.68, 2.41, 2.68); and the edge and corner ghosts of an interior tile,
+earlier pair has changed and ends away from the mean
+([measurements](CALIBRATION_APPENDIX.md#amr)); and the edge and corner
+ghosts of an interior tile,
 which no shell writes and no face strip covers, are reached by the later
 phases' strips through the earlier phases' ghosts, the argument `halo.jl`
 makes for rank halos. A tile's buffered box may span several parent
@@ -527,13 +493,13 @@ views of the spanning patch's stacked set ([Launch policy](#launch-policy)),
 one set per stack, since the batched evaluation writes every tile's
 scratch in one launch.
 
-Measured: a tiled level costs nothing visible against the one-patch level
-(1-D entropy wave, tile 8: 6.0e-10 against 6.2e-10 at N = 192, orders
-3.95/3.91; a 2×2 tile nest in 2-D, corner included, 4.29e-8 against
-4.27e-8), decomposed runs reproduce serial to round-off, and the tiled
-regrid tracks the Sod shock through lattice cells that stay contiguous. On
-an annular tag set in 2-D (`bench/amr_tiles.jl`, N = 192) the cover is 41%
-of the bounding box at tile 6 and 47% at tile 12.
+A tiled level costs nothing visible in accuracy against the one-patch level
+on the 1-D entropy wave or a 2×2 nest in 2-D with its corner, decomposed
+runs reproduce serial to round-off, and the tiled regrid tracks the Sod
+shock through lattice cells that stay contiguous. On an annular tag set in
+2-D (`bench/amr_tiles.jl`) the lattice covers well under half the bounding
+box, which is the implosion argument for tiles
+([measurements](CALIBRATION_APPENDIX.md#amr)).
 
 ### Tagging and regridding
 
@@ -553,7 +519,7 @@ the parent level's state run through `pointwise!` on the host
   the evaluation that wrote them and outlive it, never from the pooled
   workspace's `sensor`, which at the head of the step holds whichever
   patch of that padded extent evaluated last. A captured Sod shock reads
-  about 2 under the default C_β;
+  two orders above the threshold the cost case tags on;
 - the mass-fraction change per cell, max_k |δY_k| over the centered
   difference of one cell, > `tag_gradient_threshold`, for mixing layers;
 - the vorticity magnitude from centered differences > `tag_vorticity_threshold`;
@@ -625,12 +591,11 @@ range moved is rebuilt on its new owners and takes its evolved interior back
 by point-to-point migration
 ([Ownership and load balance](#ownership-and-load-balance)).
 
-Measured on moving-region gates: Sod at N = 201 coarse against a 601-node
-uniform-fine reference, composite density error 2.8e-3 where uniform-coarse
-gives 7.3e-2 (26×), with fine resolution over a third of the domain;
-Shu–Osher 10× better in L∞ over the wave train, 6.7× in L1, at 2497 coarse
-steps against the reference's 4662. The tiled regrid reproduces the Sod
-moving-region gate.
+The moving-region gates are Sod and Shu–Osher against uniform-fine
+references: the composite is an order of magnitude or more closer to the
+fine answer than the uniform-coarse run, at a fraction of the fine run's
+step count, and the tiled regrid reproduces the Sod gate
+([measurements](CALIBRATION_APPENDIX.md#amr)).
 
 ### Diagnostics on the composite grid
 
@@ -675,12 +640,12 @@ was and apply no mask.
 The composite quadrature is exact for a linear field on a wall-bounded
 box, which pins it to round-off on one refined patch, a 3×3×3 tile nest
 and a three-level nest, where the same sums without the masks carry the
-covered volume twice (serial and MPI suites). On Taylor–Green at 24³ with an
-8³ region refined off-center, the composite energy history over 61 steps
-stays within 2.5e-4 of the single-level history, the fine sampling's own
-quadrature difference, where the unmasked sum sits 1.4e-2 above it; the
-same check runs in `bench/tgv_energy.jl` with `refine=`. The mixing-layer
-cost case's ∫Y(1−Y)dV (`bench/amr_cost.jl`) is this quadrature.
+covered volume twice (serial and MPI suites). On a refined Taylor–Green the
+masked composite energy history tracks the single-level history to the fine
+sampling's own quadrature difference, where the unmasked sum sits nearly two
+orders above it ([measurements](CALIBRATION_APPENDIX.md#amr)); the same check
+runs in `bench/tgv_energy.jl` with `refine=`. The mixing-layer cost case's
+∫Y(1−Y)dV (`bench/amr_cost.jl`) is this quadrature.
 
 ### Startup and rollback traps
 
@@ -698,55 +663,43 @@ the retry's first RHS, are banked with the savepoint and restored beside
 the state, since a finite failure can leave them large enough to size the
 retry's first step at zero.
 
-### Measured costs
+### Cost structure
 
-**The cost case** (`bench/amr_cost.jl`, np = 8): a heavy-gas blob mixing
+**The cost case** (`bench/amr_cost.jl`, np = 8) is a heavy-gas blob mixing
 case on a 48³ root grid with a subcycled, regridding region covering a
 sixth of the volume, against uniform 48³ and 142³ references at t = 1. On
-∫Y(1−Y)dV the composite lands 5× closer to the fine answer than the coarse
-run at 49% of the fine wall and 24% of its memory (342 s / 655 MiB vs
-696 s / 2737 MiB; coarse 45 s / 179 MiB). Pointwise in-region error is the
-wrong metric: coarse and composite both sit at max ≈ 0.19 against fine
+∫Y(1−Y)dV the composite lands several times closer to the fine answer than
+the coarse run, at a third to a half of the fine wall and a quarter of its
+memory, under the δ⁴ρ tag and under the sensor tag alone
+([measurements](CALIBRATION_APPENDIX.md#amr)). Pointwise in-region error is
+the wrong metric: coarse and composite sit at the same maximum against fine
 there, the sub-cell displacement of a near-discontinuous interface.
-Rerun with the masked quadrature and the tag criteria: under the δ⁴ρ tag
-the composite's mixedness error is 1.5e-3 against the coarse run's
-6.9e-3 (4.6× closer) at 43% of the fine wall (204 s against 471 s; the
-coarse run 18 s), and under the sensor tag alone (`tag=sensor
-sensor=0.02`, the δ⁴ criterion parked; the artificial diffusivity number
-is confined to the interface shell, nothing above 0.02 farther than 0.6
-from it on the coarse grid) 1.7e-3 at 35% of the fine wall, tracking the
-blob to the same final region. The two wall figures are single runs at
-np = 8 with the run-to-run spread `CLAUDE.md` records.
 
-**Per-tile costs.** Setup costs 0.06–0.12 s per tile in plan construction,
-which argues for tile edges of 12 or more in 3-D. The other setup cost is
-compilation, which is why every tile of a level carries one `Patch` type:
-the boundary-condition tuple is a type parameter, the right-hand side and
-the stage drivers compile once per distinct patch type (native code, not
-inference: 1.8 s per type on the CPU backend and 3.9 s on the device
-backend on the workstation), and a 3-D nest with corners has up to 64 face
-patterns. Every refined face therefore carries `InterfaceBC`, a parent-fed
-face with neighbor 0 (`CoarseFineBC()` constructs that), and
-`solver.patches` is a typed `Vector{Patch}` rather than a splat, whose
-`promote_typeof` specialization cost 0.5–1.7 s per distinct patch count.
-Warm construction of plans, scratch, transfers and communicators is 0.03 s
-for eight tiles. The shared RHS scratch,
-measured on the annular case (N = 192, tile 6, 208 tiles of 19² plus the
-root): 103.0 MB over the patch set before the pooling, 60.3 MB after, a
-factor of 1.71, with 0.207 MB of each tile's 0.398 MB shared. The warm
-per-step wall of that case is 0.55 s before the pooling and 0.56 s after,
-at one rank on 16 threads, inside the run-to-run spread;
-`bench/amr_tiles.jl` times steps after a warm-up and is the instrument.
-Under MPI each tile is decomposed over its own rank range, so a tile pays
-its owners' collective latency per imposition, and on a many-tile run that
-is one rank; the box gathers and restriction that feed it remain collective
-over the parent level.
+**Per-tile costs.** Plan construction costs about a tenth of a second per
+tile, which argues for tile edges of 12 or more in 3-D. The other setup
+cost is compilation, which is why every tile of a level carries one `Patch`
+type: the boundary-condition tuple is a type parameter, the right-hand side
+and the stage drivers compile once per distinct patch type (native code,
+not inference, and several times more expensive on the device backend than
+on the CPU), and a 3-D nest with corners has up to 64 face patterns. Every
+refined face therefore carries `InterfaceBC`, a parent-fed face with
+neighbor 0 (`CoarseFineBC()` constructs that), and `solver.patches` is a
+typed `Vector{Patch}` rather than a splat, whose `promote_typeof`
+specialization cost seconds per distinct patch count. The shared RHS
+scratch cuts the patch set's footprint by a factor near two on the annular
+case, about half of each tile's arrays being shared, and leaves the warm
+per-step wall inside the run-to-run spread; `bench/amr_tiles.jl` times
+steps after a warm-up and is the instrument. Under MPI each tile is
+decomposed over its own rank range, so a tile pays its owners' collective
+latency per imposition, and on a many-tile run that is one rank; the box
+gathers and restriction that feed it remain collective over the parent
+level.
 
-**Workstation pathology.** Any 2-D case at np = 8 on the workstation runs
-at ~7 s/step, one patch or four tiles alike, against ~0.5 s at np = 4: a
-machine pathology of the kind `CLUSTER.md` records for hybrid cores, not a
-tile cost, and the reason the MPI suite's tiled check is bounded to ten
-steps.
+**Workstation pathology.** Any 2-D case at np = 8 on the workstation runs an
+order of magnitude slower per step than at np = 4, one patch or four tiles
+alike: a machine pathology of the kind `CLUSTER.md` records for hybrid
+cores, not a tile cost, and the reason the MPI suite's tiled check is
+bounded to ten steps.
 
 ## Ownership and load balance
 
@@ -888,9 +841,10 @@ busy time of its owner ranks, a group's shared among its tiles by fine
 volume, and a fresh tile takes its volume at the mean measured cost per
 node. The interface factor, which the per-apply reduced-solve fence makes
 larger for small tiles than their volume, is therefore taken by the run
-that it balances, which is the only place it can be taken, since the
-per-rank costs on rzhound and rzadams differ from the workstation's by
-27–66x and move with rank placement. The default is off (`rebalance = 0`),
+that it balances, which is the only place it can be taken: per-rank costs
+on the clusters differ from the workstation's by more than an order of
+magnitude and move with rank placement (`CLUSTER.md`).
+The default is off (`rebalance = 0`),
 and a threshold of one repartitions whenever the streak reaches `persist`,
 since any measured spread exceeds it. `bench/amr_balance.jl` prints the
 per-check max/mean, the owner ranges, and the transient memory of each
@@ -932,9 +886,9 @@ at zero, so the two paths agree bitwise where both apply.
 
 A tile owned by a proper subset is a different decomposition of it, so it
 reproduces the every-rank answer to round-off rather than bitwise, the tier
-the MPI suite applies to decomposed patches; the suite measures 0 to 6e-15
-on the tiled wave cases at np = 2, 4 and 8, and the tiled Sod regrid with
-rebalancing on reaches the serial time to 5e-18. A rank outside a subset
+the MPI suite applies to decomposed patches, and the tiled wave and Sod
+regrid cases hold it at np = 2, 4 and 8
+([measurements](CALIBRATION_APPENDIX.md#amr)). A rank outside a subset
 follows the same step sequence and trigger firing as one inside it, which
 the suite pins; the smallest such case refines a region of four coarse
 nodes, which `_amr_dims` cannot split over two ranks and which runs with
@@ -1003,13 +957,12 @@ rebuilding needs a `RegridSpec`, where the schemes a fresh tile is planned
 with live. Every decision derives from the record, identical on every rank,
 so the communicator splits are reached together.
 
-Measured: the tiled and box Sod regrid cases checkpointed at step 23 and
-continued to step 130 through the regrids in between agree with the
-uninterrupted run at every slot, tag history included, serially and (the
-tiled case at 400 nodes, checkpointed at step 21 and continued to 41) at
-np = 2, 4 and 8; a twelve-tile wave written on half the ranks and restored
-on all of them, rebuilt from a six-tile initial region, continues to 1e-12
-in the wave error.
+The tiled and box Sod regrid cases checkpointed mid-run and continued
+through the regrids in between agree with the uninterrupted run at every
+slot, tag history included, serially and at np = 2, 4 and 8; a twelve-tile
+wave written on half the ranks and restored on all of them, rebuilt from a
+six-tile initial region, continues to the round-off tier
+([measurements](CALIBRATION_APPENDIX.md#amr)).
 
 ### Field output
 
@@ -1039,18 +992,20 @@ through the same `field(backend, decomp)` / `allocate_state` interface
 Every pointwise phase is one shared `@inline` per-point `_point!` body
 launched through `pointwise!`: `Array` storage takes the `@threaded` loop,
 any other storage a KernelAbstractions kernel. The CPU keeps `@threaded`
-because KA-CPU measured 2.8× (flux assembly) to 40–50× (RK update) slower
-at 64³, a per-launch task-spawn cost with no work threshold.
+because KA-CPU is several times to tens of times slower on it, a per-launch
+task-spawn cost with no work threshold
+([measurements](CALIBRATION_APPENDIX.md#amr)).
 
 Kernel-argument adaptation is the central design concern. A `Vector{A}` or
 `Matrix{A}` kernel argument **hangs** in adaptation rather than erroring,
 so field collections reach bodies as `FieldVector`/`FieldMatrix`: host
-wrappers that adapt to isbits `NTuple` mirrors only at launch (holding the
-tuple form on the host measured 3× on `assemble_fluxes!`). The gas-model
-EOS objects adapt to coefficient mirrors the same way. Bodies take no
-`::Type` argument (9× per-point dispatch on both paths), and a splatted
-kernel-argument tuple longer than 32 elements is an `InvalidIRError` on
-device; `test/device_tests.jl` asserts the budget for every body.
+wrappers that adapt to isbits `NTuple` mirrors only at launch, holding the
+tuple form on the host being measurably slower. The gas-model EOS objects
+adapt to coefficient mirrors the same way. Bodies take no `::Type` argument,
+which costs an order of magnitude in silent per-point dispatch on both
+paths, and a splatted kernel-argument tuple longer than 32 elements is an
+`InvalidIRError` on device; `test/device_tests.jl` asserts the budget for
+every body ([measurements](CALIBRATION_APPENDIX.md#amr)).
 
 ### Line solves
 
@@ -1115,7 +1070,8 @@ synchronize per launch. The only unconditional fence is the one the
 algorithm requires, before the host reads the packed interface values of
 the reduced solve, once per `apply_along!`. `DEVICE_SYNC[] = true` restores
 synchronize-per-launch and is the correctness fallback. Removing the
-per-launch synchronize took 28–32% off the device step. Per-patch streams
+per-launch synchronize took roughly a third off the device step
+([measurements](CALIBRATION_APPENDIX.md#amr)). Per-patch streams
 are not implemented: a rank's patches advance in sequence, and the
 remaining gap to CPU is bound by the per-apply reduced-solve fence, which
 a second stream cannot remove. A tiled level of small tiles instead
@@ -1157,18 +1113,20 @@ new stack is a new allocation. Tiles clipped at the domain edge, whose
 extent differs from the lattice cell's, form stacks of their own.
 
 The measurements on the workstation GPU (`bench/device_solver.jl`, an
-RX 6800 XT, an indicator of structure and not a target number) are under
-[Performance summary](#performance-summary).
+RX 6800 XT, an indicator of structure and not a target number) are in the
+appendix ([measurements](CALIBRATION_APPENDIX.md#amr)).
 
 ### Precision
 
 Uniform Float32 is a supported opt-in end to end, with literals typed
 against the state's eltype and `positive_floor` replacing raw 1e-300
-guards. CPU measurement (64³ TGV, t = 10): identical peak dissipation to the
-printed precision, 2.00× smaller footprint, 1.10× wall, and mean-density
-drift 1.4e-4 against 7.5e-13; the drift is why Float32 is not the default.
-On device Float32 runs 1.25× the Float64 rate, because the step is bounded
-by launch submission and fences, not arithmetic. A mixed-precision policy
+guards. On the CPU it halves the footprint at nearly the Float64 wall and
+reproduces the dissipation history, but carries a mean-density drift orders
+of magnitude above the Float64 one, which is why it is not the default. On
+device Float32 runs only a little faster than Float64, because the step is
+bounded
+by launch submission and fences rather than arithmetic
+([measurements](CALIBRATION_APPENDIX.md#amr)). A mixed-precision policy
 waits for a memory-capacity-bound case on the target machine, where FP64
 runs at full rate and the question is traffic, not FLOPs.
 
@@ -1190,8 +1148,8 @@ The oracle hierarchy, strongest first:
    and the migration is held bitwise against the replicated carry it
    replaced; a restart on the writing rank count continues the run bitwise
    through its later regrids. A decomposed patch reproduces the serial
-   answer to round-off (1e-15 to 6e-15), which is the tier for anything a
-   subset owns, a restart on another rank count included.
+   answer to round-off, which is the tier for anything a subset owns, a
+   restart on another rank count included.
 3. **CPU-side pins without a GPU.** `FORCE_KA`, `FORCE_DEVICE_EXCHANGE`, and
    `DEVICE_SYNC` route ordinary arrays through the device paths, held
    bitwise by the serial and MPI suites. They cannot catch what only actual
@@ -1213,7 +1171,7 @@ instrument: launch floors, stall watch, line-solve matrix, TGV step table).
 The device scripts need an environment carrying the device package; the
 workstation keeps one at `~/.julia/dev/CompactLES_gpu_env`.
 
-## Performance summary
+## Performance
 
 The performance target is an LLNL rzadams / El Capitan-class machine
 (MI300A APUs, GPU-aware Cray MPICH). Workstation numbers (RX 6800 XT,
@@ -1224,44 +1182,28 @@ memory removes the staging economics every device↔host number is priced
 in, and GPU-aware MPI flips `device_mpi_direct`. Run-to-run spread on the
 workstation is 10–20%; read ratios, not third digits.
 
-Workstation: 64³ TGV full step, device 0.146 s/step (Float64) / 0.117
-(Float32) against ~0.12/0.10 for the 8-thread CPU, the floor being launch
-submission plus one reduced-solve fence per apply; isolated kernels clear
-CPU where launches amortize (flux assembly 9.9× at 64³ two-species);
-staged halo/pair copies 0.6–6.6% of device wall, reduced-interface copies
-2–5%; first-launch kernel compilation ~9 s per body.
-
-Workstation, tiled levels (`bench/device_solver.jl`, warm steps, one run
-each, the 8-thread CPU as reference). Before stacked storage the
-one-dimensional tiled regridding Sod, eight tiles of 25 fine nodes
-subcycled, took 0.11 s per device step against 1.1 ms on the CPU, and the
-two-slab viscous wave 9 ms against 0.1 ms: a per-launch floor paid once per
-tiny patch per phase. With the tiles stacked the Sod's device step is
-0.049 s (seven tiles in one stack, one clipped tile beside it at some
-regrids), the two-slab case is unchanged at 9.8 ms (the root level is not
-stacked), and a three-dimensional level of twelve 16³ tiles in one stack,
-subcycled, runs at 0.354 s per device step against 0.576 s on the CPU,
-the first tiled configuration on which the device leads. The residual
-floor is the per-tile work that stays per tile: the shell impositions
+On the workstation a full 64³ TGV step runs at about the 8-thread CPU's
+rate, the floor being launch submission plus one reduced-solve fence per
+apply, while isolated kernels clear the CPU by an order of magnitude where
+launches amortize. Staged halo and reduced-interface copies are a few
+percent of the device wall. Before stacked storage a tiled level of small
+tiles ran two orders slower than the CPU, a per-launch floor paid once per
+tiny patch per phase; with the tiles stacked a three-dimensional level of
+twelve tiles is the first tiled configuration on which the device leads.
+The residual floor is the work that stays per tile: the shell impositions
 (the gathers, the chain and the ring per tile), the interface records, and
-`max_rate`'s two reductions per tile. The unstacked 64³ TGV measures
-0.164–0.176 s per device step against the 0.146 s recorded above, at the
-edge of the run-to-run spread; whether the fill and scatter kernels' fourth
-index dimension of extent one costs anything there is a question for a
-repeated-process measurement.
+`max_rate`'s two reductions per tile
+([measurements](CALIBRATION_APPENDIX.md#amr)).
 
-rzadams (2026-08-19/20, `bench/logs/rzadams_20260819*.txt`): kernel
-submission 10 µs, launch+sync 25 µs, line solves 0.14–0.40 ms/apply, the
-64³ TGV over 4 APUs at 0.074–0.088 s/step with an F64/F32 ratio near 1.2,
-and a 256³ single-species TGV over 4 APUs at 0.35 s/step baseline
-(24,490 steps to t = 10 in 3.69 h; `CALIBRATION_APPENDIX.md`). The open issue is an
+On rzadams the device floors, the line solves and the 64³ and 256³ TGV
+rates are recorded with the same instrument. The open issue there is an
 intermittent stall mode in which every device wait costs an integer number
-of milliseconds (13.000 ms medians) for seconds to beyond 30 s; it sits
-below the Julia layer, and inflated the 256³ run's solver average to
-0.52 s/step even at `-t 1`. `reference/rocm_wait_stall_report.md` has the
-characterization. Until it is resolved, run device-resident rzadams jobs at
-`-t 1` per rank, and treat any wall number from a multithreaded process as
-untrustworthy without a stall watch beside it.
+of milliseconds for seconds at a time; it sits below the Julia layer and
+inflates a whole run's average.
+`reference/rocm_wait_stall_report.md` has the characterization. Until it is
+resolved, run device-resident rzadams jobs at `-t 1` per rank, and treat
+any wall number from a multithreaded process as untrustworthy without a
+stall watch beside it.
 
 ## Lessons
 
@@ -1270,13 +1212,12 @@ guarded somewhere; none should be re-derived.
 
 1. **The live inter-level coupling must match the data's provenance.**
    Deconvolution belongs only where the matching convolution has been
-   applied; on live point samples the invertible pair is O(h²) (order
-   1.3–1.7) against 3.5–3.7 for interpolation/injection.
+   applied; on live point samples the invertible pair is O(h²) where
+   interpolation/injection reaches third order.
 2. **Replicated coupling work scales as rank count × imposition count, and
    subcycling multiplies impositions.** Redistribute work, never re-derive
    values: distributing the chains by component recovered the cost
-   advantage (85% → 49% of uniform-fine wall) while keeping serial results
-   bit-identical.
+   advantage while keeping serial results bit-identical.
 3. **KA-CPU equality cannot certify the device path.** Four defects passed
    every KA-CPU test and failed only on real device storage (an un-adapted
    kernel argument, the >32-element splat, host-typed placeholders in
@@ -1288,10 +1229,10 @@ guarded somewhere; none should be re-derived.
    design surface.** Every new collection that reaches a kernel needs its
    adapt story decided first.
 5. **Specialization heuristics are part of the interface.** A `::Type`
-   through the launcher cost 9× as silent per-point dispatch; an
-   `Any`-typed cache lookup behind a runtime branch put 33 dispatch sites
-   into the RHS report without ever executing. Jetcheck deltas are the
-   tripwire.
+   through the launcher cost an order of magnitude in silent per-point
+   dispatch; an `Any`-typed cache lookup behind a runtime branch put dozens
+   of dispatch sites into the RHS report without ever executing. Jetcheck
+   deltas are the tripwire.
 6. **Bitwise device equality is achievable and pays for itself as a test
    oracle.** A tolerance-based gate loose enough to pass accumulated
    round-off also passes a defect of that size; a last-bit difference
@@ -1301,8 +1242,8 @@ guarded somewhere; none should be re-derived.
    algorithm requires bounds what any stream topology can recover.
 8. **Pointwise metrics misread interface-dominated fields.** Judge a cost
    case on the quantity the refinement exists to predict.
-9. **Restriction must stand off the imposed boundary** (`RESTRICT_MARGIN`;
-   gain ≈ 2 per step without it).
+9. **Restriction must stand off the imposed boundary** (`RESTRICT_MARGIN`);
+   without the margin the coupling amplifies from step to step.
 10. **NaN survives rollback** in the artificial coefficient arrays and the
     low-storage accumulator; the resets are gated on `:nonfinite` failures.
 11. **A device package loaded inside `main` is a world-age trap.** Bench
@@ -1345,7 +1286,9 @@ Configurations rejected at setup, and the reason:
   the patches of the level above and span ≥ 4 parent nodes per active
   dimension; a tiled level's tiles are clipped to that margin at the
   domain edge and must still lie inside the parent tiles. Regridding is
-  two-level. Rebalancing requires a tiled, regridding level.
+  two-level. Rebalancing requires a tiled, regridding level. Converging-shock
+  problems on folded grids use a globally fine level 0 in r near the fold;
+  on a Cartesian grid the question does not arise.
 - **Device runs** reject `Nasa9Mixture` (no fixed-width device mirror), a
   pointwise NSCBC inflow `target` (host closure),
   `StepControl.floor_ratio > 0` and `dt_report` (host sweeps), and `:filter`
@@ -1353,193 +1296,35 @@ Configurations rejected at setup, and the reason:
 - The artificial-property sensors are built per patch with closed-edge
   clamping at interfaces; no gate has measured the effect.
 
----
+## Open work
 
-# Part II: the production AMR
+The open items are in [ROADMAP.md](ROADMAP.md): N10–N12 and N14–N16 for the
+interface numerics (conservation drift, sensors and filters at an imposed
+shell, fine-level rates during startup and regrid transients, the interface
+divergence closures, and the live transfer order), S1–S5 for the
+target-machine device campaign, the compact-solve and transfer scaling
+limits, the production tile and ownership cost studies, the mixed-precision
+policy and the NASA-9 device mirror, and S8 for regridding below level 1 and
+for multiblock geometry beyond the slab layout.
 
-## What remains
+Two things are recorded here and nowhere else.
 
-The delivered system rests on structural assumptions that a production AMR
-replaces. Each names the design subsection that replaces it and the
-sequencing item that delivers it.
-
-| assumption | replaced by | item |
-|---|---|---|
-| a device rank launches per patch; a tiled level of small tiles is launch-bound | [Device](#device) | 7 |
-| no rate check per substep; measured weights carry the root's work | [Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check) | as needed |
-| regridding is two-level | not sequenced; see [Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check) | — |
-
-The box regrid's replicated carry (`tile = 0`) is not on the list: the
-tiled level is the production path, and the box path serves the one-patch
+**The structural assumptions that remain.** A tiled level of small tiles is
+launch-bound on a device unless its tiles stack. The timestep carries no rate
+check per substep, so depth widens the number of fine substeps one root rate
+measurement covers; when the check is built it belongs after the stage-1
+right-hand side has refreshed the artificial coefficients and before the
+update. The measured rebalance weights include each rank's root-level work,
+which overstates the cost of a tile on a rank holding few. Regridding is
+two-level, because `regrid!` and `_regrid_tiles!` assume the root and one
+refined level while `_advance_level!` and the ownership tables are already
+written per level, and a regrid at depth ℓ must re-nest every level below it.
+The box regrid's replicated carry (`tile = 0`) is not on that list: the tiled
+level is the production path, and the box path serves the one-patch
 configurations that need no rank-partitioned carry.
 
-## Design of the remaining work
-
-Each subsection is the design as it stands; the order is the dependency
-order, which [Sequencing](#sequencing) turns into deliverables with gates.
-
-### Device
-
-Item 7's four pieces are delivered and described under
-[Residency](#residency), [Communication](#communication) and
-[Launch policy](#launch-policy): the interface records stage through the
-backend, the transfer chain runs on the fine patch's device scratch,
-tagging evaluates on the device, and a tiled level's tiles take stacked
-storage, so the right-hand side, the stage update and the filter launch
-once per level and the compact solves batch every tile's lines behind one
-interface fence. Each is pinned bitwise against the CPU solver in the
-serial and MPI suites under `FORCE_KA` and `FORCE_DEVICE_EXCHANGE`, the
-second toggle taking every device-storage branch on host arrays, and on
-the workstation GPU through `bench/device_solver.jl`. Stacking is why the
-tiles are fixed-size: equal extents are what let one launch and one line
-buffer cover a level.
-
-What remains of the device item is measurement, not mechanism. Streams
-remain unbuilt unless a measurement shows the batched launches still leave
-the device idle; if the reduced-solve fence itself still binds after
-batching, the routes are an on-device reduced solve (redundant per-rank
-solves on gathered ends) or GPU-aware MPI through `device_mpi_direct`,
-both rzadams measurements. `max_rate` still reduces per tile (two device
-reductions per tile per step); a stacked reduction over the tiles'
-interiors is the next launch count to cut if a profile shows it.
-
-`Nasa9Mixture` is the last EOS off the device: a flattened, fixed-width
-interval table with `Adapt.adapt_structure` plus the Newton inversion in
-the body; mechanical.
-
-### Ownership refinements and the rate check
-
-**The measured weights carry the root's work.** Each rank's busy time
-includes its root-level work along with its tiles', which overstates the
-cost of a tile on a rank holding few; a rank holding no tile measures that
-baseline. Subtracting it is a refinement to make once a cluster case shows
-the bias; the correction is the per-rank root work, which is nearly uniform
-across ranks under a slab root decomposition and so cancels in the ratio
-until tile counts per rank differ widely.
-
-**A rate check per substep.** Depth widens the number of fine substeps one
-root rate measurement covers, so a startup or regrid transient at three or
-more levels is a real unguarded case, though not yet a measured ceiling.
-When built it sits after the stage-1 RHS has refreshed the artificial
-coefficients and before the update, limited at first to startup and regrid
-steps, one `max_rate` reduction per substep, and it must return a failure
-to `run!` rather than throw: the retry handling runs before `step!`, and an
-exception inside `_advance_level!` would escape it. A violated rate then
-becomes a `SolverFailure` retry rather than a silent overstep. Whether a
-cheaper dense output than the recurring Hermite endpoint RHS is worth
-building at three or more levels is a measurement to make once a case
-demands it.
-
-**Multi-level regridding** is not sequenced. `_advance_level!` and the
-ownership tables are written per level, so the recursion admits a regrid at
-every depth, but `regrid!` and `_regrid_tiles!` assume the root and one
-refined level, and a regrid at depth ℓ must re-nest every level below it.
-The implosion target needs it only once the shell collapses to a hot spot
-with a level-2 nest inside; until a case demands it, it stays a two-level
-mechanism.
-
-### Open numerics
-
-- **Conservation drift.** Compact closure rows at an interface do not
-  telescope, so global conservation carries a drift term (1.2e-8 relative
-  per long periodic run at a same-level interface; 1e-4 over a full
-  two-level shock crossing) where a finite-volume code would reflux. On a
-  long mixing-layer run that will show in ∫Y(1−Y). The surface-correction
-  fallback on interface fluxes is designed but unbuilt; build it only when
-  a case shows the drift competing with the answer, and measure the drift
-  on the mixing-layer case first.
-- **Sensors at level boundaries.** A shock crossing a coarse–fine boundary
-  is where the per-patch, closed-edge-clamped sensor construction will
-  show as a reflected wave. Needs a gate before either target problem is
-  trusted.
-- **The filter at the shell.** The fine patch filters its imposed shell
-  nodes before they are overwritten. The `:onesided` filter rows that fixed
-  the Brady–Livescu wall case (`CALIBRATION_APPENDIX.md`) may matter here too;
-  untested.
-- **Filter cadence under subcycling** is measured on Sod gates only; the
-  smooth-turbulence dissipation budget under subcycling ties into the
-  filter calibration item in `ROADMAP.md`.
-- **Fold-adjacent refinement** stays forbidden. Converging-shock problems on
-  the folded grids use a globally fine level 0 in r near the fold; on a
-  Cartesian grid the question does not arise.
-
-## Open measurements
-
-Measurements the design depends on that the workstation cannot make, or
-has not made. Each is a bench run, not a code change, and the design above
-is written so that its result changes a parameter or a decision rather than
-a structure.
-
-- **The 3-D tile shell.** The implosion's fine level as a shell of tiles at
-  a memory-sized tile edge (12 or more, from the per-tile setup cost) is a
-  bench measurement, not a testset; `bench/amr_tiles.jl` is the 2-D
-  instrument and its 3-D counterpart is unwritten.
-- **Per-imposition latency after tile ownership.** A tile pays its owners'
-  collective latency per shell imposition, one rank on a many-tile run, and
-  the parent-level gathers that feed it remain collective. Whether that
-  latency still binds is a cluster measurement.
-- **The tiled-level overhead question.** A rough count says the RHS work of
-  the tiles, at 3 substeps per root step over padded extents, should land
-  near 2 s per subcycled step for 40 tiles of 37² on a 96² root, where the
-  one cold measurement was 8–10 s; the warm annular reading at a different
-  configuration matches expectation. Remeasure warm at the original
-  configuration.
-- **What a rebalance is worth, and what the migration saves.** The
-  per-rank costs on rzhound and rzadams differ from the workstation's by
-  27–66x and move with rank placement, and on the workstation's tiled Sod a
-  moved tile is one kilobyte. The case that decides both is the implosion
-  at a rank count for which the replicated carry is measurably the
-  regrid's cost.
-- **The rzadams wait stall** ([Performance summary](#performance-summary))
-  sits below the Julia layer and gates every device wall number on that
-  machine.
-
-## Sequencing
-
-Each item names its gate. Nothing is built ahead of the item before it.
-Items 1–6 are delivered and described in Part I: the level hierarchy with
-its recursive driver ([Refinement](#refinement)), the tiled fine level with
-full adjacency and the set-difference regrid
-([Tiles and adjacency](#tiles-and-adjacency)), ownership
-([Ownership and load balance](#ownership-and-load-balance)), which was
-pulled ahead of tagging and I/O because a flat globally ordered
-`solver.patches`, an equal patch count per rank, and full-communicator
-gather tables on every `LevelTransfer` are structural, and diagnostics or
-I/O built on them would have been rebuilt once ranks held different tile
-subsets, the tag criteria with their hysteresis and the covered masks
-([Tagging and regridding](#tagging-and-regridding),
-[Diagnostics on the composite grid](#diagnostics-on-the-composite-grid)),
-the checkpoint of the hierarchy with its restart on any rank count and
-the multiblock field output ([I/O and restart](#io-and-restart)), whose
-gate was a restart continuing the regridding cases bit for bit on the
-writing rank count and to round-off on another, and the banded interface
-closures with the buffers remeasured at C10
-([Banded schemes at interfaces](#banded-schemes-at-interfaces)), whose
-gate was the two-conforming-patch orders and reflection amplitude
-reproduced at C10 and the localization study at C10 setting the buffers.
-Their gates hold in the serial and MPI suites; the per-substep rate check
-deferred from item 1 is under
-[Ownership refinements and the rate check](#ownership-refinements-and-the-rate-check),
-and the cluster measurements the items leave open are under
-[Open measurements](#open-measurements).
-
-7. **Device: staged interface records, device transfer chain and tagging,
-   batched cross-tile launches.** Gate: bitwise equality against the CPU
-   hierarchy over full refined runs; the implosion case's device step
-   measured against its CPU step on the workstation and on rzadams. All
-   four pieces are delivered ([Device](#device)), the bitwise gate holds
-   in both suites, and the workstation measurement is under
-   [Performance summary](#performance-summary); the rzadams measurement
-   remains.
-8. **Numerics debts on the target problems**: conservation drift on the
-   long mixing-layer run, the sensor at a level boundary under a crossing
-   shock, filter rows at the shell. Each is a measurement first and a
-   change only if the measurement demands one.
-
-Items 1–6 make a run possible, restartable, its diagnostics counting each
-node once, and C10 available on it; 7 makes it fast.
-The conservation drift and the boundary numerics of item 8 remain open
-debts on the target problems, so a production acceptance still needs a
-conservation budget tied to the reported mixing and energy quantities. The
-rate check and the root-work correction land inside whichever item first
-needs them.
+**A cheaper dense output.** Subcycling costs one extra coarse right-hand side
+per step to save the Hermite endpoint for the children, and the extra
+evaluation recurs on every level that has children. Whether a cheaper dense
+output than the recurring endpoint right-hand side is worth building at three
+or more levels is a measurement to make once a case demands it.

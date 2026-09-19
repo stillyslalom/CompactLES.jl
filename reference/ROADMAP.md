@@ -3,675 +3,101 @@
 Prioritized open work for compressible, variable-density mixing and implosion.
 The September 2026 source review adds runtime and API corrections to the existing
 numerics, validation, AMR/GPU, and high-energy-density (HED) backlog.
-The wall/interface follow-up adds R5, expands N6, and sequences N14–N16 from
-the experiments in [BOUNDARY_ACCURACY.md](BOUNDARY_ACCURACY.md).
-Completed implementation and benchmark history belong in [HISTORY.md](HISTORY.md);
-method details belong in [DESIGN.md](DESIGN.md).
+The wall/interface follow-up adds R5, expands N6, and sequences N14–N16.
+Completed work is recorded by the commit that delivered it, and the measurements
+behind it are in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md); method
+details are in [DESIGN.md](DESIGN.md).
 
 ## How to use this plan
 
 - Unchecked boxes are open deliverables. Stable IDs identify dependencies.
 - Start with P0 correctness, then P1 numerical credibility and API contracts.
   P2 work can proceed independently when its stated prerequisites are met.
-- A measurement task is complete when its result and resulting decision are
-  recorded, including a decision to retain the current method.
+- A measurement task is complete when its result and the resulting decision,
+  including a decision to retain the current method, are recorded: one line
+  here naming the commit, its table in
+  [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), and its default in
+  [CALIBRATION.md](CALIBRATION.md) if a default moved.
 - Close implementation tasks with the stated regression checks and the applicable
-  repository validation gate. Numerical changes require explained baseline updates
-  in [CALIBRATION.md](CALIBRATION.md), not merely relaxed test tolerances.
+  repository validation gate. A numerical change requires an explained baseline
+  update, not a relaxed test tolerance.
 - Historical references to model debts 1/2/3 correspond to N1 / R3+N3 / V1 below;
   former Phase 2 items correspond to H1–H8.
 
-The review baseline is Julia 1.11.4 on Windows: 2,025 serial assertions and the
-spatial convergence suite passed. HDF5 and Makie tests were skipped locally;
-multi-rank and hardware-GPU tests were not run in that review. The R1–R3 probes
-below exposed behavior outside those passing checks.
-
 ## P0: runtime and boundary correctness
 
-- [x] **R1 — Make diagnostics independent of integrator state.**
-  In a 64-point Sod case at CFL 0.15, after one step, requesting
-  `field_array(..., :beta_art)` changed the next dt from 0.000587255 to
-  0.000961137 without changing Q. Artificial-field output and `dissipation_rate`
-  also overwrite coefficients consumed by the next CFL check.
-  Separate diagnostic storage or preserve the integrator coefficients; audit
-  primitive refreshes used by sensor-based regridding as well.
-  **Gate:** identical dt histories, states, and regrid decisions with and without
-  observational calls at the same step boundaries, on single and multiple patches,
-  CPU/device paths, and MPI. Test output scheduling separately.
-  **Code:** [viz.jl](../src/viz.jl), [io.jl](../src/io.jl),
-  [diagnostics.jl](../src/diagnostics.jl), [timestep.jl](../src/timestep.jl).
-
-- [x] **R2 — Guarantee clock progress and reachable endpoints.**
-  A Float32 run with Float64 `tfinal=0.7` stalls at 0.699999988079071,
-  repeatedly taking a 1.1920929e-8 remainder that cannot advance its clock.
-  Define endpoint conversion/tolerance semantics and check progress after all
-  clipping, including callback landing. Return a diagnosed failure for an
-  unrepresentable advancing step instead of running to `nmax`.
-  **Gate:** Float32/Float64 endpoints on both sides of representable values,
-  large restart times, scheduled callbacks, and subcycling all terminate with
-  documented time accuracy. Avoid an endless test by bounding steps.
-  **Code:** [timestep.jl](../src/timestep.jl), [callbacks.jl](../src/callbacks.jl).
-
-- [x] **R3 — Validate accepted and returned states under an explicit policy.**
-  The current guard checks mixture density and dt before stepping. Probes completed
-  with ideal-gas specific internal energy -1 or species densities (-0.1, 1.1).
-  A uniform density sink took rho from 1 to -1 at `tfinal=0.02` and returned
-  normally because no next iteration checked the result.
-  Add EOS-aware checks of finite conserved values, partial densities, and
-  thermodynamic admissibility at initialization and before accepting/returning a
-  step, including `nmax` and callback exits. Distinguish strict rejection,
-  explicitly permissive research runs, and optional repair; report substitutions.
-  Do not impose e > 0 universally: formation-energy gauges and EOS domains differ.
-  **Gate:** invalid final states trigger the selected policy, failures remain
-  collective and retryable, and permissive/repair modes report their interventions.
-  Preserve and quantify the known Noh repair tradeoff under N3.
-  **Code:** [stepcontrol.jl](../src/stepcontrol.jl),
-  [physics.jl](../src/physics.jl), [problem.jl](../src/problem.jl).
-
-- [x] **R4 — Make NASA-9 recovery failure observable.**
-  `mixture_temperature` currently returns its estimate after 30 iterations or
-  nonpositive mixture cv without a final residual/status check. Outside-range
-  polynomial evaluation also proceeds silently.
-  Add residual-based success criteria, diagnosed failure, and an explicit
-  extrapolation policy; use a safeguarded inversion where the EOS admits a bracket.
-  **Gate:** interval joins, temperature extremes, invalid compositions, and
-  nonconvergence behave consistently in both precisions; connect failure to R3.
-  **Code:** [physics.jl](../src/physics.jl).
-
-- [x] **R5 — Enforce the adiabatic, impermeable no-slip wall flux contract.**
-  `NoSlipWallBC()` zeros velocity but leaves the normal conductive energy flux
-  unconstrained. With rho=1, u=0, p=1+0.1x and mu0=0.01, the audit obtains
-  energy flux -0.005 at both endpoints after enforcement and RHS evaluation.
-  This incompatible-state probe demonstrates missing flux imposition; it is not
-  a convergence study. Define the noncatalytic species and thermal wall contract,
-  including molecular/artificial transport and the `:bulk` species channel.
-  Implement it in the flux/derivative boundary treatment before divergence, or
-  with an equivalent correction to every affected RHS row; changing only the
-  endpoint energy update does not correct the compact divergence nearby.
-  The first implementation candidate is a wall-flux hook after complete flux
-  assembly (including `:bulk`) and before flux exchange/divergence, so corrected
-  boundary fluxes enter every affected compact row.
-  Retain prescribed temperature and account for heat exchange at isothermal walls.
-  **Gate:** zero normal energy/species leakage at an adiabatic impermeable wall;
-  compatible manufactured insulated conduction and species-diffusion evolution;
-  isothermal heat-flux/energy balance; both faces in x/y/z, corners, supported
-  metrics/EOS, Float32/Float64, and ranks that do not own a wall. Exercise filter
-  and artificial-transport paths separately and preserve collective ordering.
-  Track whole-domain budget defects separately from pointwise wall enforcement.
-  **Code:** [boundary.jl](../src/boundary.jl), [rhs.jl](../src/rhs.jl),
-  [runtests.jl](../test/runtests.jl),
-  [boundaryorder.jl](../bench/boundaryorder.jl).
-  **Delivered:** `correct_flux!` with serial/MPI and hardware regressions;
-  [measured errors and budgets](CALIBRATION_APPENDIX.md#no-slip-wall-flux-contract-r5-september-2026),
-  [completion record](HISTORY.md#no-slip-wall-flux-contract-september-2026).
+- [x] **R1** — Diagnostics and field output no longer disturb the artificial
+  coefficients the next timestep check reads (commit `4be4ac0`).
+- [x] **R2** — Endpoint conversion and progress checks turn an unrepresentable
+  advancing step into a diagnosed failure instead of a stalled clock
+  (commit `4be4ac0`).
+- [x] **R3** — An EOS-aware validity policy checks accepted and returned states
+  under `:strict`, `:permissive` or `:repair` (commit `4be4ac0`).
+- [x] **R4** — The NASA-9 inversion reports convergence and extrapolation status
+  instead of returning an unchecked estimate (commit `4be4ac0`).
+- [x] **R5** — `correct_flux!` imposes the adiabatic impermeable no-slip wall's
+  species and energy flux contract on the assembled flux before divergence
+  (commit `51d7b2a`).
 
 ## P1: numerical credibility
 
 ### Filtering, regularization, and boundaries
 
-- [x] **N1 — Calibrate filtering and settle its time-scaling policy.**
-  Complete, September 2026. α is bounded from above by the shock battery at
-  a per-pass strength near 0.0025 in either formulation, the battery clears
-  `filter_cfl = 0.35` at its production CFL numbers, `C_beta`, `C_kappa`,
-  `C_D` and `C_Y` do not move under either candidate default, and the
-  relaxed formulation is measured invariant to the CFL, to landing steps, to
-  retries and to subcycling. The default is `filter_cfl = 0.35` at α = 0.45,
-  applied to `Numerics` and to the pins in `test/cases.jl` together, with
-  α = 0.49 the per-run value for resolved smooth turbulence. The 128³
-  confirmation that `C_mu` cannot be fitted on Taylor–Green is N4's. Spectra
-  are postprocessed offline; no distributed FFT exists or is needed.
-  **Depends on:** R1–R3.
-  **Code:** [kernels.jl](../src/kernels.jl), [timestep.jl](../src/timestep.jl),
-  [tgv_energy.jl](../bench/tgv_energy.jl),
-  [tgv_spectrum.jl](../bench/tgv_spectrum.jl), [artcal.jl](../bench/artcal.jl),
-  [filterrate.jl](../bench/filterrate.jl).
-  **Delivered:** the default and its record
-  ([the compact filter](CALIBRATION.md#the-compact-filter),
-  [completion record](HISTORY.md#the-filter-default-september-2026));
-  the retry and subcycling invariances
-  ([invariances](CALIBRATION_APPENDIX.md#retries-and-subcycling-under-relaxation));
-  the vendored 512³ reference history
-  ([provenance](../data/README.md#taylor-green-reference-solution)); the fit
-  instrument and its measured energy budget
-  ([instrument](CALIBRATION_APPENDIX.md#the-fit-instrument),
-  [budget](CALIBRATION_APPENDIX.md#the-measured-budget)); the α, cadence and relaxation
-  legs at 128³ with the 256³ transfer check
-  ([α](CALIBRATION_APPENDIX.md#the-alpha-sweep-at-128),
-  [cadence](CALIBRATION_APPENDIX.md#cadence-and-alpha-are-one-axis),
-  [relaxation](CALIBRATION_APPENDIX.md#the-relaxation-leg),
-  [256³](CALIBRATION_APPENDIX.md#the-256-confirmation)); the spectra
-  ([spectra](CALIBRATION_APPENDIX.md#the-spectra-at-128)); the shock battery under α
-  ([battery](CALIBRATION_APPENDIX.md#the-battery-under-alpha)); the `C_mu` controls
-  at 64³ ([controls](CALIBRATION_APPENDIX.md#the-mu-controls-at-64)); the battery under
-  the relaxed formulation, the stability edge, the constants under both
-  candidates and the recommendation
-  ([relaxed battery](CALIBRATION_APPENDIX.md#the-battery-under-relaxation),
-  [edge](CALIBRATION_APPENDIX.md#the-stability-edge),
-  [constants](CALIBRATION_APPENDIX.md#the-constants-under-a-weaker-filter),
-  [decision](CALIBRATION_APPENDIX.md#the-default-decision)); and the landing-step
-  invariance ([per application](CALIBRATION_APPENDIX.md#dissipation-per-application)).
-
-- [x] **N2 — Measure and implement conservative filtering on nonuniform metrics.**
-  Complete, September 2026, with the current method retained. The
-  volume-weighted form of
-  [Pyranda's public implementation](https://github.com/LLNL/pyranda) is
-  implemented behind `filter_weighting = :volume` and measured against the
-  unweighted default on the assembled line operators and on the battery. The
-  discrete property is Mᵀ V = V on the quadrature volumes, not constant
-  preservation, which both forms have to 1e-15 on every metric. A closed
-  line fails it in the closure rows on any grid, 2–4% of the first rows'
-  content per pass decaying at the tridiagonal root, identically on uniform,
-  clustered and curvilinear lines; the weighted form leaves that alone,
-  conserves to round-off at the spherical origin as the default does, and is
-  17× worse at the cylindrical axis and the
-  poles. Noh's wall deficit moves down at the axis and up at the origin
-  under it; uniform Cartesian runs are the same bit for bit.
-  **Gate:** constants, volume-integrated mass/momentum/energy defects, folds,
-  stretching, and converging-shock behavior; unchanged uniform Cartesian results.
-  **Code:** [timestep.jl](../src/timestep.jl) (`filter_state!`),
-  [metric.jl](../src/metric.jl) (`volume_parity`),
-  [filter_conservation.jl](../bench/filter_conservation.jl).
-  **Delivered:** the measurement and the decision
-  ([non-uniform volumes](CALIBRATION_APPENDIX.md#the-filter-on-non-uniform-volumes),
-  [walls, folds and metrics](CALIBRATION.md#walls-folds-and-metrics),
-  [completion record](HISTORY.md#filtering-on-non-uniform-volumes-september-2026)).
-
-- [x] **N3 — Resolve symmetry-cell startup robustness and the cold-state limit.**
-  Instrument planar, cylindrical, and spherical Noh with the existing floor tally;
-  compare permissive, representable-repair, and internal-energy-repair trajectories.
-  Measure the pressureless wall layer and repair budgets as well as plateau and
-  shock position. Test density-proportional beta feedback and filter-rate dependence.
-  Separately evaluate a nonsingular gas-model artificial-conductivity scale near
-  cold ambient states, retaining the EOS dispatch hook.
-  **Gate:** configuration-specific CFL envelopes, conservation/error budgets, and
-  a justified treatment of the spherical singular start and initial smoothing.
-  Consult [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md) before reopening rejected predictor,
-  sensor-reach, or fold-order explanations; the old universal CFL 0.15 description
-  is obsolete.
-  **Done (September 2026).** The wall and axis ceilings were the first step of
-  the run, sized before any artificial coefficient existed; `run!` now primes
-  the coefficients and both geometries complete from `cfl = 0.9`. The origin
-  keeps a ceiling of 0.3 from its excursion; smoothed-density β\* and the
-  filter rate leave it in place. κ\* is not singular in practice (its rate is
-  an order below β\*'s from p₀ = 1e-2 to 1e-8). The negative-energy cells are
-  the pre-shock precursor, not a wall layer; the representable floor
-  reproduces the permissive trajectory and the internal-energy repair ends
-  every geometry within 102 steps. The rollback now banks the coefficient
-  arrays with the savepoint. The warm start stays the spherical treatment:
-  the singular start completes only below cfl 0.075 with a plateau 18% low
-  ([the first step](CALIBRATION_APPENDIX.md#the-first-step-of-a-run),
-  [completion record](HISTORY.md#the-first-step-and-the-symmetry-cell-september-2026)).
+- [x] **N1** — The compact filter default is `filter_cfl = 0.35` at α = 0.45,
+  with the relaxed formulation measured invariant to the step (commit `dbe2899`).
+- [x] **N2** — Volume-weighted filtering on non-uniform metrics was measured
+  against the unweighted default and the current method retained (commit `811d382`).
+- [x] **N3** — `run!` primes the artificial coefficients, which removed the wall
+  and axis CFL ceilings; the spherical origin keeps its own (commit `c407e0b`).
 
 - [ ] **N4 — Refit artificial shear viscosity after the filter policy is fixed.**
   Fit `C_mu` under the adopted smoother/detector on a 3-D case with an
   unresolved cascade, scored on the history misfit and not the peak, which is
-  void as an estimator at 128³ ([Taylor–Green](CALIBRATION_APPENDIX.md#taylorgreen)).
-  One-dimensional shocks cannot determine the shear channel, and on
-  Taylor–Green at 64³ the best-fitting `C_mu` is zero under both the production
-  and the near-off filter ([the controls](CALIBRATION_APPENDIX.md#the-mu-controls-at-64)),
-  so confirm that at 128³ and choose the case accordingly; that confirmation
-  is the one item N1 left open, and it needs cluster time
+  void as an estimator at 128³. One-dimensional shocks cannot determine the
+  shear channel, and on Taylor–Green at 64³ the best-fitting `C_mu` is zero
+  under both the production and the near-off filter
+  ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)), so confirm that at
+  128³ and choose the case accordingly; that confirmation is the one item N1
+  left open, and it needs cluster time
   ([n1_recal128.sbatch](../bench/slurm/n1_recal128.sbatch) holds the leg).
   **Depends on:** N1 and the 3-D campaign. Retain `C_beta=1` unless new evidence
   overturns its completed refit; record error and dissipation attribution.
 
-- [x] **N5 — Establish an anisotropic case before directional bulk viscosity.**
-  Add a strongly stretched or anisotropic validation case, then compare scalar and
-  directional beta with the matching directional diffusive timestep constraint.
-  **Gate:** a measurable accuracy/stability benefit on that case; a null result on
-  isotropic cases is not justification for implementation.
-  **Done (September 2026), the scalar form retained.** Two Noh cases on
-  Cartesian grids of aspect ratio AR were added, the planar implosion along
-  the coarse direction (`noh_aligned`) and the cylindrical implosion on the
-  full plane (`noh_cartesian`), and two directional forms were implemented
-  for the measurement: the per-direction sensor split and the spacing-scaled
-  split β\*_d = β\*(Δ_d/Δ_max)², each in direction d's normal stress with
-  the per-direction step limit. On the aligned control both take 4.5× fewer
-  steps at AR 4 and 15× at AR 16 for the same profile. On the curved case
-  both fail from AR 3 on, at every CFL, ambient pressure and sensor field,
-  earlier under refinement: with unequal coefficients the bulk force is no
-  longer the gradient of a scalar, and in the cold irrotational pre-shock
-  gas it makes vorticity (20× the scalar form's at t = 0.06) until the flow
-  cavitates ahead of the front. The gated dilatation sensor postpones this
-  and does not remove it. The implementation was not retained; the cases
-  and the sweep are. The scalar form's AR 16 aligned run exposed a filter
-  finding, N5a below
-  ([the measurement](CALIBRATION_APPENDIX.md#directional-bulk-viscosity-on-anisotropic-grids),
-  [completion record](HISTORY.md#directional-bulk-viscosity-september-2026)).
-  **Code:** [cases.jl](../test/cases.jl), [validation.jl](../test/validation.jl),
-  [anisotropic.jl](../bench/anisotropic.jl).
-
-- [x] **N5a — Relax the filter against the acoustic rate.**
-  `filter_weight` scaled a pass by `dt · rate / filter_cfl` with `rate` the
-  maximum that sized the step, so the weight was `cfl / filter_cfl` whatever
-  limited the step and the number of passes per unit time followed the rate.
-  N1 measured the invariance on acoustic-limited runs; where the diffusive
-  rate governed, as it does under a scalar β\* on a grid of aspect ratio 16,
-  the filter ran 15× the passes per unit time and the aligned Noh run
-  completed with a wrong solution (wall density 24 against 4, front at
-  0.047 against 0.2).
-  **Done (September 2026), the weight directional and hyperbolic.** Each
-  directional pass now reads its own direction's one-dimensional hyperbolic
-  rate `(|u_d| + c) / h_d`, which `max_rate` reduces beside the rate that
-  sizes the step, scaled by `√n` over the active dimensions so that
-  `filter_cfl` keeps the convention of `cfl`. The acoustic rate alone was
-  chosen over the acoustic and molecular rates because a molecular
-  diffusive rate carries the same `1/h²` aspect-ratio penalty on a stretched
-  wall-normal grid, and a scalar acoustic rate over the Euclidean sum was
-  rejected because the fine direction raises it by the aspect ratio: only
-  a directional weight leaves the coarse direction's passes unchanged. The
-  aligned case at N = 100 reads the same profile at AR 1, 4 and 16 (plateau
-  3.984, front 0.212) where it read 3.986, 3.916 and 1.029; the N1
-  invariances hold to six figures under the new weight; the battery's Noh
-  rows moved and are explained in `test/validation.jl`'s header
-  ([the measurement](CALIBRATION_APPENDIX.md#the-filter-relaxed-against-the-directional-acoustic-rate),
-  [completion record](HISTORY.md#relaxing-the-filter-against-the-acoustic-rate-september-2026)).
-  **Code:** [timestep.jl](../src/timestep.jl) (`filter_weight`, `max_rate`),
-  [anisotropic.jl](../bench/anisotropic.jl).
-
-- [x] **N6 — Establish spatial boundary/interface accuracy acceptance studies.**
-  Promote the audit's polynomial and phase-varied evolution probes into durable
-  studies of operator truncation, one filter pass, instantaneous RHS error, and
-  final-time solution error. The default wall numbers are derivative order 3.17
-  and one-pass filter order 1.88; neither is a measured evolution order.
-  C6/C8 Brady–Livescu rows have pointwise orders 5/7, despite the existing
-  field-specific 5.88/7.91 fits. Use actual h, fixed physical refinement endpoints,
-  several fields/phases, at least three resolutions above roundoff, separate fold,
-  outer-wall, interface and interior norms, and composite volume-weighted norms
-  excluding covered parents. Retain fold studies as controls for wall pollution.
-  **Deliver:** a reproducible accuracy matrix and regression gates for smooth
-  inviscid and viscous walls, same-level interfaces, and two-/three-level AMR;
-  compare unfiltered and filtered evolution. Sweep dt until temporal differences
-  are below 10% of the spatial error used for a slope; V3 owns pure temporal-order
-  certification. Report repeated-filter accumulation and cadence explicitly.
-  **Depends on:** R5 for claims about adiabatic viscous walls; inviscid/interface
-  studies can proceed immediately. Preserve or explain changes to historical
-  regression guards in [CALIBRATION.md](CALIBRATION.md).
-  **Code:** [convergence.jl](../test/convergence.jl),
-  [patch_tests.jl](../test/patch_tests.jl), [level_tests.jl](../test/level_tests.jl),
-  [boundaryorder.jl](../bench/boundaryorder.jl).
-  **Delivered:** [smooth_cases.jl](../test/smooth_cases.jl) holds the cases, the
-  periodic-mirror and nested-reference constructions and the regional norms;
-  [convergence.jl](../test/convergence.jl) gates fifteen closure, wall, shear,
-  patch-interface and level evolution orders; and
-  [boundaryorder.jl](../bench/boundaryorder.jl) carries the full matrix over
-  closures, filters, cadence and the timestep floor. The cascade filter's F2 row
-  caps every filtered wall row near 1.8 whatever the derivative closure, and C8
-  `:brady_livescu` fails on smooth data under the cascade filter in every
-  configuration
-  ([the measurements](CALIBRATION_APPENDIX.md#the-smooth-evolution-accuracy-matrix),
-  [completion record](HISTORY.md#the-smooth-evolution-accuracy-matrix-september-2026)).
-
-- [x] **N6a — Qualify the one-sided wall filter and decide its default.**
-  Compare `compact_filter(closures=:onesided)` against `:cascade`, initially with
-  C6 `:cascade3` derivatives. The one-pass wall slope rises from 1.88 to 8.07;
-  earlier planar Noh runs reduced wall heating from 64% to 27% at N=400.
-  Reproduce those outcomes under the current solver, then compare smooth evolution,
-  wall energy/species budgets, acoustic pulses, Woodward–Colella, and cold/warm Noh.
-  **Depends on:** relevant N6 studies; R5 for thermal-wall cases. Coordinate
-  time-scaling with N1, but the wall comparison need not wait for cluster TGV data.
-  Hold alpha, cadence and rate parameters fixed within each comparison and
-  stratify results by time-scaling formulation; N1 owns their fit and time-policy
-  decision. Select only the wall-row default here. N11 owns imposed AMR shells.
-  **Gate:** improved smooth errors with bounded positivity/repair and conservation
-  budgets in both precisions; a documented closure-compatibility table and default
-  decision, updated wall calibration, and the repository numerical gate. Do not
-  combine cascade4 with the one-sided filter as an assumed safe upgrade: that pair
-  has recorded instability even on a smooth pulse.
-  **Delivered:** `compact_filter` defaults to `closures = :onesided`.
-  [wallfilter.jl](../bench/wallfilter.jl) runs the trial battery under both row
-  sets at both filter weights, with the closure-compatibility table, a slip-wall
-  reflection against its periodic mirror, the wall budgets and Float32. The
-  one-sided rows cut the planar Noh wall deficit at N = 800 from 61% to 43%, at
-  the cost of a reflection resolved over fewer than about ten cells, two to
-  three times the cascade's error. `:cascade4` stays paired with
-  `closures = :cascade`, and the Brady–Livescu sets failed the cold Noh start
-  under either in this pre-N6h measurement; N6j records the current C6 outcome.
-  The validation guards were re-baselined
-  ([the measurements](CALIBRATION_APPENDIX.md#the-filters-wall-rows-on-the-current-solver),
-  [the applied form](CALIBRATION.md#walls-folds-and-metrics),
-  [completion record](HISTORY.md#the-filters-wall-rows-september-2026)).
-
-- [x] **N6b — Qualify a high-order physical-wall configuration.**
-  Evaluate C6 Brady–Livescu under the default one-sided filter rows first;
-  evaluate C8 separately.
-  Establish solution order, the stable CFL range, and conditioning/error floors
-  for the complete derivative/filter/variable-diffusion update, including
-  `D(beta D)`. Test smooth compatible walls before shock-loaded and cold-start
-  walls. The recorded cold-Noh failures and Float32 wall errors near 1e-3 prevent
-  treating these rows as a universal default.
-  **Depends on:** N6/N6a and R5 for viscous thermal walls; coordinate startup
-  measurements with N3 and any mixed-precision remedy with S4.
-  **Gate:** an explicitly bounded supported configuration with measured solution
-  order, precision and minimum-extent limits; retain the robust alternative when
-  a target fails. A C10 wall closure requires a separate derivation and validation,
-  not reuse of a favorable C6/C8 slope.
-  **Delivered:** C6 `:brady_livescu` under the default filter rows is a
-  supported wall configuration within measured limits, the default is
-  unchanged, and C8 `:brady_livescu` is not supported at a wall.
-  [wallclosure.jl](../bench/wallclosure.jl) runs the qualification over the
-  smooth wall cases channel by channel, CFL ladders, the shocked walls and the
-  precision and extent floors. The C6 rows track the cascade to
-  `cfl = 1.75` on a smooth wall and 1.2 on the shocked ones and hold a resolved
-  warm Noh wall, but took no singular start in that measurement (superseded
-  for the C6 cold preset by N6j); C8 fails a smooth wall from
-  `cfl = 1.25` and the Cartesian Noh plane on both starts. With the properties
-  on, a wall was fourth order under either closure, which N6e traced to the
-  detector's clamped edge acting through β\*.
-  [validation.jl](../test/validation.jl) guards the configuration on
-  Woodward–Colella and the warm Noh wall
-  ([the measurements](CALIBRATION_APPENDIX.md#the-bradylivescu-rows-as-a-wall-configuration),
-  [the applied form](CALIBRATION.md#walls-folds-and-metrics),
-  [completion record](HISTORY.md#the-bradylivescu-rows-as-a-wall-configuration-september-2026)).
-
-- [x] **N6c — Decide whether constant-annihilation roundoff needs a change.**
-  Measure derivative residuals on scaled constants and small perturbations over
-  large offsets, separating coefficient cancellation, solve conditioning, and
-  summation roundoff in both precisions. Compare anchored-difference rows only
-  if the defect affects an evolution error or useful precision range.
-  **Gate:** record a no-change decision for a roundoff-only result; otherwise
-  demonstrate a practical reduction without degrading polynomial accuracy,
-  decomposition agreement, inference, or allocations. This is independent of
-  the truncation-order fixes in N6a/N14.
-  **Code:** [kernels.jl](../src/kernels.jl), [kernels_banded.jl](../src/kernels_banded.jl).
-  **Delivered:** a no-change decision. [constantfloor.jl](../bench/constantfloor.jl)
-  measures every derivative and filter preset in both precisions: the
-  weights' sums, the fill and solved residuals, an anchored form beside the
-  plain one, a perturbation over an offset to 1e9, and a uniform state
-  between slip walls against a periodic control. The wall residual is 2–40
-  eps relative to c/h, and anchoring would recover a factor of two to thirty
-  only where the stored field's quantization already floors the interior at
-  the same level. The instrument found the slip-wall mode of N6d
-  ([the measurements](CALIBRATION_APPENDIX.md#constant-annihilation-and-the-slip-wall-mode),
-  [completion record](HISTORY.md#constant-annihilation-and-the-slip-wall-mode-september-2026)).
-
-- [x] **N6d — Remove the inviscid slip-wall instability of the cascade closures.**
-  Under the default C6 `:cascade3` rows a uniform inviscid state between
-  slip walls grows a wall-normal velocity from round-off at 2.3 per unit
-  time (c = 1.31 on a unit domain), an eigenmode of the linearized step
-  with half its norm within four nodes of the walls, at the same rate at
-  N = 51, 101 and 201 and at half the step; the C8 cascade grows at 1.4,
-  the C10 cascade rows at 2.6 and `:cascade4` at 7. The cascade filter's
-  F2 row damped it exactly (|λ| = 1.00000004), which is how it went
-  unseen before N6a; the default one-sided rows only halve it (1.2
-  unrelaxed, 1.0 relaxed at cfl 0.5) and a stronger one-sided filter
-  worsens it (1.4 at αf = 0.40, 1.8 at 0.30). Dirichlet ends are neutral,
-  a viscous no-slip wall is neutral, a viscous slip wall reads 0.04, C6
-  `:brady_livescu` is neutral unfiltered and 0.6 under the one-sided
-  filter (the filter rows' own gain), and the artificial properties
-  saturate the mode near |u| = 1e-2. A Float64 seed reaches that in about
-  30 time units under the defaults and a Float32 seed in about 15, so the
-  battery's wall cases do not see it and a long inviscid run between
-  slip walls or symmetry planes does.
-  **Deliver:** a closed-end treatment neutral or damped on the linearized
-  step (`bench/constantfloor.jl jacobian`, both wall types and Dirichlet
-  ends, N = 51 and 101) without the F2 row's second-order wall defect.
-  Candidates, in order: a wall-only damping row applied with the filter
-  pass; a filter row set whose closed rows do not exceed unit gain; C6
-  `:brady_livescu` with such a set; an SBP-like closure under N15.
-  **Depends on:** N6, N6a and N6b for the instruments and the accuracy
-  matrix; coordinate any filter-row change with N1's time policy.
-  **Gate:** |λ|max ≤ 1 + 1e-8 on the Jacobian for slip, no-slip and
-  Dirichlet ends at both resolutions, the N6 evolution orders and the
-  N6a reflection tables unchanged, the battery unchanged to four digits,
-  MPI and device parity, and a 40-time-unit uniform-state run holding
-  its seed.
-  **Code:** [kernels.jl](../src/kernels.jl), [boundary.jl](../src/boundary.jl),
-  [constantfloor.jl](../bench/constantfloor.jl).
-  **Delivered:** the `:neutral3` closure set of `lele_d1_6`, now the C6
-  default, with `:cascade3` kept for comparison. Widening the cascade's two
-  rows by one point each frees three coefficients at fixed order, and an exact
-  linear model of the injected step located the set whose linearized Euler step
-  between slip walls is spectrally neutral at every N from 12 to 1200. A
-  uniform state holds its seed through forty time units where the cascade fails
-  at t = 30, at 2.5 times the cascade's wall error constant and the same
-  orders; the two candidate treatments above were rejected on measurement.
-  A patch or level interface keeps the cascade rows
-  (`interface_divergence_closures`), where the neutral rows read two to five
-  times the error. The battery and the wall orders were re-recorded; the C8 and
-  C10 cascade rows still carry the mode, and no energy norm has been proved for
-  the new rows
-  ([the measurements](CALIBRATION_APPENDIX.md#the-neutral-closure-rows),
-  [completion record](HISTORY.md#the-neutral-closure-rows-september-2026)).
-
-- [x] **N6e — Put the detector's closed edge on the node-centred mirror
-  at a wall.** N6b traced the fourth-order wall defect of a run with the
-  artificial properties on to `delta4_sum!`'s clamped edge, through β\*.
-  **Deliver:** an extension at reflecting faces that returns a wall with the
-  properties on to its properties-off error.
-  **Depends on:** N6b for the smooth-wall matrix and the channel attribution.
-  **Gate:** the smooth-wall matrix with the properties on and off, the
-  battery re-recorded with an explanation, the dispatch and allocation
-  audits, and the serial and MPI suites.
-  **Code:** [artificial.jl](../src/artificial.jl),
-  [boundary.jl](../src/boundary.jl), [wallclosure.jl](../bench/wallclosure.jl).
-  **Delivered:** `delta4_sum!` reads past a reflecting wall from the
-  node-centred mirror of the interior with the field's sign, and the exported
-  hook `sensor_mirror(bc)` names the reflecting faces, so Dirichlet,
-  extrapolation, NSCBC and interface ends keep the clamp. A viscous no-slip wall
-  and an adiabatic shear wall with the properties on now read within about 1% of
-  their properties-off error where the clamp cost two orders of magnitude; the
-  inviscid slip wall is left on the strain sensor's cusp, which
-  `beta_sensor = :dilatation` removes. The aligned Noh case's transverse
-  round-off grew and its guard with it (N6i). The suites pass and
-  `test/convergence.jl` is bit-identical
-  ([the measurements](CALIBRATION_APPENDIX.md#the-detectors-wall-mirror),
-  [completion record](HISTORY.md#the-detectors-wall-mirror-september-2026)).
-
-- [x] **N6f — Put the fold's even path on the half-offset mirror.**
-  The other half of [CALIBRATION.md](CALIBRATION.md#open-items) item 7: at a
-  fold an even field still takes the clamp, which is wrong by a term the
-  vanishing edge derivative makes O(h²), and a paired fold needs the
-  butterfly with even parity.
-  **Depends on:** N6e for the wall half and its mirror construction.
-  **Gate:** the cylindrical and spherical Noh rows and the Sedov row
-  re-recorded with an explanation, the fold studies of
-  `test/convergence.jl` unchanged, since they run with the artificial
-  properties off, and the MPI off-rank fold phase.
-  **Code:** [artificial.jl](../src/artificial.jl),
-  [validation.jl](../test/validation.jl).
-  **Delivered:** `delta4_sum!` takes the half-offset mirror at a fold for every
-  field with the field's sign; a self-paired fold mirrors onto the line itself,
-  a paired fold goes through the even/odd butterfly of `folds.jl`, and the clamp
-  remains only at a closed edge that is neither a wall nor a fold. At the first
-  interior cell the clamp read 43 and 169 times the analytic δ⁴ at N = 32 and
-  64 where the mirror reads it exactly. The battery and the CFL ladders keep
-  every verdict. Two observations left open: the butterfly's exchange, now
-  carried by every scalar sensor at a paired fold, is untimed, and no MPI phase
-  runs the detector across a paired fold (V3)
-  ([the measurements](CALIBRATION_APPENDIX.md#the-fold),
-  [completion record](HISTORY.md#the-folds-even-path-september-2026)).
-
-- [x] **N6g — Give the sensor smoother and the `:d8` detector wall
-  closures of their own.** Two wall defects the `:delta4` mirror does not
-  reach. `gaussian_filter`'s closure rows fold their overhanging weights onto
-  the half-offset mirror, half a cell out at a node-centred wall: relative
-  4.72e-4 at the first node for N = 193, falling as h², where the
-  `:compact` smoother reads 8.8e-10. `ring_sum!` returns 2.34e-8 at N = 97 on
-  a field exactly even about the wall against a periodic 6.58e-16, over at
-  least six nodes, so `detector = :d8` keeps a wall defect. Neither carries
-  the inviscid wall residual.
-  **Depends on:** N6e.
-  **Gate:** the appendix's operator probe, the detector and then the
-  smoother on an even field against the periodic mirror, at the closure's
-  order for both; the smooth-wall table and the battery re-recorded.
-  **Code:** [kernels.jl](../src/kernels.jl),
-  [kernels_banded.jl](../src/kernels_banded.jl),
-  [boundary.jl](../src/boundary.jl), [sensorwall.jl](../bench/sensorwall.jl).
-  **Delivered:** `wall_closures(scheme, σ)` builds closure rows by folding a
-  symmetric scheme's interior stencil onto the node-centred mirror of a
-  reflecting wall with the field's sign σ. The `:gaussian` smoother is planned
-  with the σ = +1 rows at every face `sensor_mirror` names, the `:d8` detector
-  with both signs, and a fold's closed far end with the same rows. On the new
-  [sensorwall.jl](../bench/sensorwall.jl) both reproduce the periodic mirror to
-  round-off at the six nodes nearest a wall, removing the smoother's and the
-  detector's wall defects, and an inviscid wall under `:d8` is left on the
-  strain sensor's cusp as one under `:delta4` is. The
-  cold planar Noh wall deficit reads 50% and the aligned Noh guard returns to
-  1e-7 (N6i). The suites pass and an RX 6800 XT run is bitwise against the CPU
-  solver at the wall nodes
-  ([the measurements](CALIBRATION_APPENDIX.md#the-sensor-operators-wall-rows),
-  [completion record](HISTORY.md#the-sensor-operators-wall-rows-september-2026)).
-
-- [x] **N6h — Add a `correct_flux!` method for `SlipWallBC` under
-  physical viscosity.** With the artificial properties off and a physical
-  shear viscosity a slip wall does not reproduce its mirror at the closure's
-  order: μ = 5e-3 reads 2.167e-7 / 1.103e-7 / 9.489e-8 at
-  N = 49 / 97 / 193, orders 0.97 / 0.22, and μ = 5e-4 reads 9.183e-9 /
-  8.248e-10 / 2.395e-10, orders 3.48 / 1.78. R5 delivered the same contract
-  for the no-slip wall; `SlipWallBC` has no `correct_flux!` method.
-  **Depends on:** R5 for the wall-flux hook.
-  **Gate:** the viscous slip wall at the closure's order in the smooth
-  matrix, both faces and corners, and ranks that do not own a wall.
-  **Code:** [boundary.jl](../src/boundary.jl),
-  [wall_flux_tests.jl](../test/wall_flux_tests.jl),
-  [wall_flux_mpi.jl](../test/wall_flux_mpi.jl),
-  [wallclosure.jl](../bench/wallclosure.jl).
-  **Delivered:** `SlipWallBC` imposes the symmetry plane's flux contract on
-  the assembled wall-plane flux: zero normal species and total-energy
-  fluxes, zero tangential momentum fluxes, and the normal momentum flux left
-  whole. The defect came from the conductive term −κ ∂T/∂n, whose closure
-  truncation is a heat flux across a plane that conducts none; the resulting
-  temperature defect in the first cells regenerates the gradient, so flux and
-  gradient settle at a level that no longer follows h. The viscous
-  slip wall's window order rises from 0.40 / 0.12 to 3.79 / 3.90 at μ = 5e-3,
-  and a two-dimensional wall with a tangential shear from 1.36 / 0.42 to
-  3.95 / 3.94, of which the last order and a half is the tangential
-  traction. `test/convergence.jl` gains a viscous slip row at 4.00 and the
-  smooth matrix a viscous slip table. In the battery's two Noh implosions
-  against a slip wall the wall heating falls by about half, the planar deficit
-  from 50% to 24%, since the contract also removes the wall's
-  κ\* transport ([the measurements](CALIBRATION_APPENDIX.md#the-slip-walls-flux-contract),
-  [completion record](HISTORY.md#the-slip-walls-flux-contract-september-2026)).
-
-- [x] **N6i — Explain the transverse mode of the aligned Noh case.**
-  **Delivered:** [noh_transverse.jl](../bench/noh_transverse.jl) measures a
-  transverse shock interaction whose amplitude depends strongly on the
-  startup and perturbation history. The dominant m = 2 mode bursts from the
-  wall into the bulk ahead of the shock, then localizes near the captured
-  shock. Its finite-window burst rate is 131.6 per unit time. Controlled
-  small seeds receive 66–69 times finite gain; a larger
-  seed produces nonlinear amplification and a harmonic. On the same
-  two-dimensional strip with a uniform postshock state, the seeded mode is
-  slightly damped, supporting the shock-interaction interpretation rather
-  than an autonomous `:neutral3` wall mode. An extended run settles into
-  bounded oscillations near 3e-4 from t = 1.35 through 2.0; this is observed
-  finite-time saturation, not a stability certificate. The existing 5e-7
-  guard is retained against 2.052e-7 for the exact N = 100, AR = 4, nx = 12,
-  t = 0.6 regression. It does not bound other widths or later times. Channel
-  controls establish no unique nonlinear feedback mechanism; failed
-  filter-off runs do not isolate the filter's role
-  ([measurements](CALIBRATION_APPENDIX.md#the-aligned-noh-transverse-mode),
-  [completion record](HISTORY.md#the-aligned-noh-transverse-mode-september-2026)).
-
-- [x] **N6j — Re-measure the fifth-order closure candidates under
-  `beta_sensor = :dilatation`.**
-  **Delivered:** the expanded five-case smooth wall matrix for the four
-  retained fifth-order coefficient sets and the joint acoustic treatment,
-  with `:neutral3`, strain-sensor and properties-off controls, three
-  resolutions, and half-CFL checks. Dilatation removes the inviscid
-  strain-sensor cap: C6 Brady–Livescu reads orders 5.66 / 6.19 and DE
-  5.91 / 6.00 under the default filter; viscous and shear walls already
-  track their properties-off controls. Fine shear errors reach roundoff.
-  Current shock controls supersede the archived pre-N6h failures:
-  Brady–Livescu and the unfiltered-search rows now complete the cold
-  N = 200 planar Noh preset under both sensors, with seven inadmissible
-  cells under the permissive policy. Candidate, DE and joint treatments
-  still fail it. Those bounded completions do not remove the archived
-  linear resonances, DE's Dirichlet growth, or the joint prototype's limits.
-  The existing production choices and numerical baselines are retained;
-  no new search or closure promotion is justified by this measurement.
-  **Code:** [closurequalify.jl](../bench/closurequalify.jl),
-  [closuredamping.jl](../bench/closuredamping.jl).
-  [Measurements and reproduction](CALIBRATION_APPENDIX.md#fifth-order-closures-under-the-dilatation-sensor),
-  [completion record](HISTORY.md#fifth-order-closures-under-the-dilatation-sensor-september-2026).
-
-- [x] **N6k — Certify the neutral rows and extend them to C8 and C10.**
-  The neutrality of `:neutral3` is measured over line lengths 12 to 1200
-  and not proved, and a neutral spectrum of a non-normal operator is
-  necessary, not sufficient. Deliver a pseudospectral or eigenvector
-  condition-number check of the injected acoustic operator against N on the
-  exact 2N linear model (the fast N×N form has a 1e-5 noise floor), which is
-  also the instrument most likely to explain why the neighbouring member
-  (1/4, 3/5, 1/5) grows at N = 371 + 44k while the adopted (0, 3/5, 3/10)
-  stays neutral; the corner-block norm of Sharan, Brady and Livescu (SIAM
-  J. Numer. Anal. 60, 2022) is the certificate that would hold for every N,
-  which the TᵀWT ansatz did not find. The C8 and C10 cascade rows still
-  carry the slip-wall mode, at 1.4 and 2.6 per unit time, and need
-  three-row families and their own line-length sweeps
-  ([CALIBRATION.md](CALIBRATION.md#open-items) item 9).
-  **Depends on:** N6d's instrument and linear model.
-  **Gate:** a certificate or a measured pseudospectral abscissa for the
-  adopted rows, and C8 and C10 sets passing N6d's gate.
-  **Code:** [kernels.jl](../src/kernels.jl),
-  [kernels_banded.jl](../src/kernels_banded.jl),
-  [closurecertify.jl](../bench/closurecertify.jl),
-  [neutralsearch8.jl](../bench/neutralsearch8.jl),
-  [neutralsearch10.jl](../bench/neutralsearch10.jl).
-  **Delivered:** the measured certificate and the C8 and C10 defaults.
-  On the exact 2N model the adopted rows' ε-pseudospectral abscissa is
-  the first-order eigenvalue perturbation over six decades of ε, the
-  Kreiss constant stays below 2.5 and the eigenvector condition number
-  below 9 to N = 801, and the transient amplification over twenty time
-  units is below 4 at every line length, with no trend in N; the exact
-  Lyapunov norm exists and has no structure, and the corner-supported
-  norm reported under N6d does not discriminate when solved exactly. The
-  neighbour's growth at N = 371 + 44k is the collision of one mode from
-  each wavenumber branch of the C6 modified-wavenumber relation at 4.6
-  points per wavelength, with the period set by the interior row and the
-  occurrence by the closure's wall phases. The C6 rows over the C6
-  interior row are the only members of the C8 and C10 three-row families
-  to hold every line length from 12 to 1200, and are the `:neutral3`
-  defaults of `lele_d1_8` and `lele_d1_10`, at the cost C6 paid and with
-  the cascade rows kept at interfaces
-  ([the measurements](CALIBRATION_APPENDIX.md#the-neutral-rows-certificate-and-the-c8-and-c10-sets),
-  [completion record](HISTORY.md#the-neutral-rows-certificate-and-the-c8-and-c10-sets-september-2026)).
-
-- [x] **N6l — Fold a slip wall on a face-centred mirror for full wall order.**
-  An inviscid slip wall is a symmetry plane: density, pressure, energy,
-  species and the tangential velocity are even about it and the normal
-  velocity odd. The closed-edge rows exist because the wall sits on a
-  node, where a general field has no parity, and under every closure set
-  they hold a wall-bounded line to third order in the maximum norm and a
-  wall-bounded evolution to fourth order at the wall, whatever the
-  interior order (N6k). On a wall placed half a cell outside the first
-  node, every operator (derivative, filter, sensor smoother, detector) can
-  be the interior stencil folded with the parity sign, as the coordinate
-  folds of `folds.jl` and the sensor operators' wall rows (N6f, N6g)
-  already are, with no order loss and no closure row, hence no
-  closure-row stability question: the folded operator is the periodic
-  operator on the doubled line restricted by parity. Public Pyranda does
-  this at a declared symmetry plane (`SYMM`), even and odd operator pairs
-  exact to degree 10 and 11 about a mirror half a cell outside node 1,
-  and uses it for the r = 0 axis; its solid walls keep the same
-  third-order one-sided rows as ours. Costs to design for: the wall moves
-  from a node to a cell face (a coordinate convention for walled
-  dimensions, or a per-wall option), two operators per walled direction,
-  no injected wall value (u_n = 0 follows from the odd fold, so `enforce!`
-  and the flux contract of N6h refer to a plane that holds no node), a
-  wall-normal profile diagnostic and a case whose wall sits at x = 0
-  (the Noh presets) that shift by half a cell, and the no-slip wall and
-  Dirichlet ends, which have no parity and keep the closure rows.
-  **Depends on:** N6f's half-offset fold path and N6g's mirror
-  construction; coordinate the coordinate convention with `metric.jl`.
-  **Gate:** the smooth wall matrix at the interior order at a folded slip
-  wall for C6, C8 and C10; the production Jacobian neutral at N = 51 and
-  101 and the exact model neutral at every line length; the battery's
-  slip-wall cases (planar and aligned Noh, Woodward–Colella) at or better
-  than the node-centred wall; MPI and device parity; no-slip and
-  Dirichlet baselines unchanged.
-  **Code:** [boundary.jl](../src/boundary.jl), [rhs.jl](../src/rhs.jl),
-  [wallclosure.jl](../bench/wallclosure.jl),
-  [closurecertify.jl](../bench/closurecertify.jl).
-  **Delivered:** `SymmetryPlaneBC`, the slip wall as the self-paired fold
-  of the axis on any Cartesian dimension or cylindrical z, at either end
-  or both. Every gate leg passes: the plane reads the interior order,
-  its linearized step is antisymmetric to round-off, the battery holds,
-  and MPI and device parity are measured. Patched and refined runs keep
-  `SlipWallBC`; extending the fold to them is open, as is switching the
-  tutorials whose walls are true symmetry planes
-  ([the measurements](CALIBRATION_APPENDIX.md#the-face-centred-symmetry-plane),
-  [completion record](HISTORY.md#the-face-centred-symmetry-plane-september-2026)).
+- [x] **N5** — Directional bulk viscosity was measured on anisotropic Noh cases
+  and rejected; the scalar form is retained (commit `7dd161f`).
+- [x] **N5a** — `filter_weight` reads each direction's own hyperbolic rate rather
+  than the rate that sized the step (commit `d1de5cc`).
+- [x] **N6** — The wall and interface accuracy probes became the smooth-evolution
+  matrix of `bench/boundaryorder.jl`, with its orders gated in
+  `test/convergence.jl` (commit `a1d7660`).
+- [x] **N6a** — `compact_filter` defaults to `closures = :onesided`, which cuts
+  the planar Noh wall deficit at the cost of a sharper reflection
+  (commit `d611bae`).
+- [x] **N6b** — C6 `:brady_livescu` is a supported wall configuration within
+  measured limits, C8 is not, and the default is unchanged (commit `a619a6e`).
+- [x] **N6c** — The constant-annihilation audit closed with no change and found
+  the slip-wall mode of the cascade closures (commit `02c34eb`).
+- [x] **N6d** — The `:neutral3` rows, spectrally neutral at an inviscid slip
+  wall, became the C6 default, with the cascade rows kept at interfaces
+  (commit `1e76f50`).
+- [x] **N6e** — The `:delta4` detector reads past a reflecting wall from the
+  node-centred mirror of the interior instead of clamping the index
+  (commit `60da34b`).
+- [x] **N6f** — The detector takes the half-offset mirror at a coordinate fold
+  for an even field as well as an odd one (commit `abe3d8d`).
+- [x] **N6g** — `wall_closures` gives the `:gaussian` smoother and the `:d8`
+  detector wall rows folded from their own interior stencils (commit `ae574ca`).
+- [x] **N6h** — `SlipWallBC` imposes the symmetry plane's flux contract on the
+  assembled wall-plane flux (commit `e2a6c4f`).
+- [x] **N6i** — The aligned Noh transverse mode is a shock interaction rather
+  than an autonomous wall mode, and its guard is retained (commit `f81b1c6`).
+- [x] **N6j** — The fifth-order closure candidates were re-measured under
+  `beta_sensor = :dilatation` and the production choices retained
+  (commit `de30ccc`).
+- [x] **N6k** — The neutral rows carry a measured pseudospectral certificate and
+  are the `:neutral3` defaults of C8 and C10 as well (commit `de30ccc`).
+- [x] **N6l** — `SymmetryPlaneBC` folds a slip wall on a face-centred mirror and
+  reads the interior order, for a single unrefined patch (commit `8a5bdfe`).
 
 - [ ] **N7 — Complete NSCBC inflow transverse coupling.**
   Add the Yoo–Im transverse terms that exist for outflow but not inflow.
@@ -695,14 +121,11 @@ below exposed behavior outside those passing checks.
 
 ### AMR numerics
 
-Current node-centered coupling is interpolation/injection with compact interface
-closures, not a conservative flux reconciliation. In the review, two-level Sod
-mass drift was 1.36e-4; smooth two-level C6 orders were 3.46–3.64.
-The follow-up isolates the default divergence closures: fourfold CFL reduction
-barely changes those errors, while C6 Brady–Livescu reaches 5.99/5.75 on a
-phase-shifted smooth wave at CFL 0.125, with about 1,000 times less error at N=192.
-These are serial Float64, unfiltered inviscid results, not production qualification.
-The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
+Node-centered patch and level coupling is interpolation and injection with
+compact interface closures, not a conservative flux reconciliation. The measured
+interface orders are in the appendix's smooth-evolution
+[accuracy matrix](CALIBRATION_APPENDIX.md#the-smooth-evolution-accuracy-matrix);
+the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
 
 - [ ] **N10 — Bound and reduce interface conservation drift.**
   Measure mass, momentum, energy, and mixing diagnostics over long mixing-layer and
@@ -725,6 +148,9 @@ The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
 - [ ] **N12 — Check fine-level rates during startup and regrid transients.**
   Measure rate growth over the substeps covered by one root CFL estimate, especially
   at three or more levels. Add a refreshed-coefficient substep check where needed.
+  The coarse endpoint RHS that saves the Hermite box costs one extra evaluation per
+  level with children; whether a cheaper dense output pays at three or more levels
+  is unmeasured (AMR_GPU.md, Open work).
   **Gate:** route a violation to the collective rollback/acceptance path from R3;
   an exception inside recursive stepping must not bypass retry handling.
 
@@ -828,43 +254,15 @@ The existing designs and fallback analysis remain in [AMR_GPU.md](AMR_GPU.md).
   [levels.jl](../src/levels.jl),
   [regrid.jl](../src/regrid.jl), [timestep.jl](../src/timestep.jl).
 
-Boundary/interface sequence: R5, N6, N6a, N6b, N6e, N6f and N6g are complete, and
-N6's matrix (`bench/boundaryorder.jl`, gated in `test/convergence.jl`) with
-N6a's trial battery (`bench/wallfilter.jl`) and N6b's qualification
-(`bench/wallclosure.jl`) is the instrument for N14 and N16. N6b found the
-artificial diffusion's own fourth-order wall defect, which capped any
-closure with the properties on; N6e put the detector's closed edge on the
-node-centred mirror at a wall, which was a calibration item rather than a
-closure one, and an inviscid wall there is now limited by the strain
-sensor's cusp. N6f completed that change at a coordinate fold, so the
-detector's clamp remains only at a closed edge that is neither a wall nor a
-fold. N6g gave the `:gaussian` sensor smoother and the `:d8` detector
-node-centred wall rows of their own, built from their interior weights by
-`wall_closures`, so every sensor operator reproduces a reflecting wall to
-round-off and an inviscid wall under `:d8` is limited by the same strain-sensor
-cusp as one under `:delta4`. N6c, the roundoff audit, closed with no change
-and found the slip-wall mode that N6d then removed:
-the cascade closures are linearly unstable at an inviscid slip wall, the
-F2 filter row that N6a retired was what damped it, and the C6 default is
-now the neutral `:neutral3` set; the flux divergence at an interface end
-keeps the cascade rows, so the interface baselines did not move. N6h gave
-`SlipWallBC` the symmetry plane's flux contract, removing a conductive heat
-flux and a shear traction that a viscous slip wall carried at the closure's
-truncation level. N6i measured the aligned Noh case's transverse shock
-interaction and retained its guard for the exact regression preset and
-endpoint. N6j remeasured the fifth-order candidates under
-`beta_sensor = :dilatation` and retained the existing production choices.
-N6k gave the neutral rows a measured pseudospectral certificate,
-explained the line-length resonance of their neighbours, and made the
-same rows the C8 and C10 defaults, which leaves every preset at third
-order on a wall-bounded line. N6l added the face-centred symmetry plane,
-a slip wall folded by parity at the interior order without a closure
-row, for a single unrefined patch; the node-centred `SlipWallBC` keeps
-the closure rows and remains the wall of patched and refined runs.
-Use N10/N11 to qualify interface candidates before promotion; invoke N15
-only when the smaller closure change
-misses a target. N16 transfer measurements may begin with N6, while final
-accuracy qualification follows the selected interface treatment. Coordinate
+Boundary/interface sequence: the N6 matrix (`bench/boundaryorder.jl`, gated in
+`test/convergence.jl`), N6a's trial battery (`bench/wallfilter.jl`) and N6b's
+qualification (`bench/wallclosure.jl`) are the instruments for N14 and N16.
+Qualify interface candidates under N10 and N11 before promotion, and invoke N15
+only when the smaller closure change misses a target. N16 transfer measurements
+may begin with the N6 instruments, while final accuracy qualification follows the
+selected interface treatment. Extending N6l's face-centred fold to patched and
+refined runs is open, as is switching the tutorials whose walls are true symmetry
+planes; those runs keep the node-centred `SlipWallBC` until then. Coordinate
 temporal certification with V3 and default filter time-scaling with N1.
 
 ### Independent validation and regression coverage
@@ -896,6 +294,10 @@ temporal certification with V3 and default filter time-scaling with N1.
   Add an MPI phase that runs the `:delta4` detector across a paired fold: the
   suite's off-rank fold phase covers derivatives and filters only, and since
   N6f every scalar sensor carries the butterfly's exchange there.
+  Keep each instrument's current transcript under `bench/results/<script>.txt`
+  so that an appendix table is a quoted output and never a retyped one; a
+  transcript is the script's own output, so each lands with that script's
+  next run rather than being assembled from the tables it would replace.
   **Gate:** CI distinguishes skipped/unavailable coverage from passing coverage.
   KA-on-CPU equality does not substitute for hardware-GPU tests under S1.
 
@@ -962,7 +364,7 @@ opt-in Float32 already exist; the tasks below extend or validate them.
 - [ ] **S1 — Complete target-machine GPU measurements and resolve the wait stall.**
   Continue the rzadams/MI300A campaign using the existing measurements as a baseline,
   not as an unmeasured port. Characterize/resolve the intermittent ROCm wait stall
-  in [rocm_wait_stall_report.md](rocm_wait_stall_report.md) before interpreting
+  in [rocm_wait_stall_report.md](bugreports/rocm_wait_stall_report.md) before interpreting
   performance changes. Record hardware, MPI stack, precision, synchronization
   policy, repeat variability, and correctness with every result.
   **Gate:** full single/refined/tiled runs on target hardware, including real device
