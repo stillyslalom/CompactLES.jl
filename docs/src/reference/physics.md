@@ -28,8 +28,23 @@ state_admissibility
 AbstractTransport
 CeaTransport
 BinaryDiffusion
+BinaryDiffusionPolynomial
+binary_diffusivity
 read_cea_transport
 transport_coefficients
+```
+
+## Ion transport reference
+
+The standalone ion evaluator supplies a checked hot-plasma reference coefficient.
+It does not provide a solver flux closure or a cold-to-warm material model.
+
+```@docs
+StantonMurilloDiagnostics
+stanton_murillo_interdiffusivity
+H_ION_MASS
+D_ION_MASS
+T_ION_MASS
 ```
 
 ## Temperature-dependent thermodynamics

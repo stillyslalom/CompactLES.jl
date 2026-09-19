@@ -4528,6 +4528,7 @@ end
 
 include("wall_flux_tests.jl")
 include("transport_tests.jl")
+include("binary_diffusion_tests.jl")
 include("transport_integration_tests.jl")
 include("device_tests.jl")
 include("patch_tests.jl")

@@ -107,6 +107,15 @@ details are in [DESIGN.md](DESIGN.md).
   viscosity and conductivity, with unity-Lewis diffusion or mixture-averaged
   diffusivities from supplied binary data (commit `6594afd`).
 
+- [ ] **N8a — Supply validated neutral binary diffusion data.**
+  Use species-labelled, pair-specific temperature fits with explicit validity
+  ranges and provenance; prioritize hydrogen isotopes alongside core combustion
+  pairs. Keep measured values, collision-model predictions, and isotope-scaling
+  estimates distinct, following [the transport plan](TRANSPORT.md).
+  **Gate:** independent coefficients, isotope/pair identity, licensed data,
+  fit residuals, and collective domain handling before solver integration.
+  Neutral fits do not supply the plasma transport required by H4a.
+
 - [ ] **N9 — Validate the bulk species channel beyond its existing cases.**
   Measure `species_flux=:bulk` in 3-D shock/mixing runs and calibrate its inherited
   constants. Compare pressure equilibrium, species bounds, energy budgets, and cost
@@ -563,12 +572,38 @@ equation layouts alone make the current RHS a general multiphysics solver.
   **Gate:** analytic/manufactured transport limits, limiter behavior, and coupled
   energy budgets.
 
+- [ ] **H4a — Add isotope-resolved H/D/T ion transport.**
+  Begin with independently verified unmagnetized, fully ionized coefficients;
+  add concentration, pressure, ion/electron temperature, and electric-field
+  driving terms with a defined ambipolar closure. Validate dense-plasma models
+  separately from the weak-coupling limit; see [the transport plan](TRANSPORT.md).
+  **Depends on:** A6/H3 for coupled flux and energy evolution, H1/H2 when stiff,
+  and H5 or an explicit ionization closure outside the fully ionized regime.
+  Coefficient and flux-reference work can proceed before these dependencies.
+  **Gate:** independent H–D/H–T/D–T references, isotope permutation and trace
+  limits, zero-net-mass flux, charge/current closure, driven isotope separation,
+  total-energy budgets, and declared coupling/degeneracy validity ranges.
+
 - [ ] **H5 — Add tabulated EOS support.**
   Implement IONMIX reading and thermodynamically consistent interpolation/inversion;
   consider SESAME later subject to data access/licensing.
   **Depends on:** R3/R4 and A5.
   **Gate:** table-node/interpolation checks, inverse consistency, derivatives,
   phase/domain handling, and an EOS-specific artificial-conductivity scale.
+
+- [ ] **H5a — Evolve DT from its true cold state through heating.**
+  Prioritize open isotope-resolved data and models covering the intended cold phase,
+  molecular dissociation, partial ionization, and the ionized limit. Derive EOS,
+  charge populations, electron density, and transport from a consistent material
+  state, including latent, dissociation, and ionization energies where relevant.
+  Couple neutral, charged, and electron collision channels without an arbitrary
+  temperature switch or applying fully ionized coefficients to cold fuel.
+  **Depends on:** H3–H5 and H4a; H6 for a radiation-driven front.
+  **Gate:** a cold DT target heats under a conduction/radiation wave without a
+  manually frozen region, with independently checked cold equilibrium, front
+  propagation, energy accounting, phase/charge limits, and timestep convergence.
+  State physical transport suppression separately from any numerical limiter;
+  data coverage and transition assumptions follow [the transport plan](TRANSPORT.md).
 
 - [ ] **H6 — Add flux-limited radiation diffusion, gray before multigroup.**
   Define opacity and group interfaces plus radiation-energy components.

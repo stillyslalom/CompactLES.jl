@@ -123,6 +123,159 @@ function BinaryDiffusion(D_ref::AbstractMatrix{<:Real}; temperature_ref=300.0,
                                 T(temperature_exponent))
 end
 
+@doc raw"""
+    BinaryDiffusionPolynomial(species, D_ref, temperature_coefficients,
+                              temperature_min, temperature_max;
+                              temperature_ref=300, pressure_ref=101325)
+
+Pair-specific, dilute-neutral-gas binary-diffusion fits. `species` gives the
+exact species identity and order of the matrices.  For each off-diagonal pair,
+the evaluator uses
+
+```math
+D_{ij}(T,p) = D_{ij,ref}\exp\left(\sum_{m=1}^{M} c_{ij,m}
+                 [\log(T/T_{ref})]^m\right)\frac{p_{ref}}{p},
+```
+
+where `temperature_coefficients[i,j,m]` is ``c_{ij,m}``.  `D_ref` is in
+m^2/s, temperature is in K, and pressure is in Pa.  The input ranges are
+pair-specific and inclusive; `temperature_ref` must lie in every pair range.
+Use [`binary_diffusivity`](@ref) for checked evaluation.
+
+This model is for a supplied dilute neutral-gas correlation only. It supplies
+no isotope data or plasma closure, and it does not model ambipolar, thermo-,
+electro-, or pressure diffusion. It is not currently accepted by
+[`CeaTransport`](@ref).
+""" BinaryDiffusionPolynomial
+struct BinaryDiffusionPolynomial{T,N,M,Names}
+    D_ref::NTuple{N,NTuple{N,T}}
+    temperature_coefficients::NTuple{N,NTuple{N,NTuple{M,T}}}
+    temperature_min::NTuple{N,NTuple{N,T}}
+    temperature_max::NTuple{N,NTuple{N,T}}
+    temperature_ref::T
+    pressure_ref::T
+end
+
+function BinaryDiffusionPolynomial(species, D_ref::AbstractMatrix{<:Real},
+                                   temperature_coefficients::AbstractArray{<:Real,3},
+                                   temperature_min::AbstractMatrix{<:Real},
+                                   temperature_max::AbstractMatrix{<:Real};
+                                   temperature_ref=300.0, pressure_ref=101325.0)
+    species isa AbstractString &&
+        throw(ArgumentError("BinaryDiffusionPolynomial species must be an ordered tuple or vector of names, not one string"))
+    (species isa Tuple || species isa AbstractVector) ||
+        throw(ArgumentError("BinaryDiffusionPolynomial species must be an ordered tuple or vector of strings or symbols"))
+    all(name -> name isa AbstractString || name isa Symbol, species) ||
+        throw(ArgumentError("BinaryDiffusionPolynomial species names must be strings or symbols"))
+    names = Tuple(String(name) for name in species)
+    N = length(names)
+    N > 0 || throw(ArgumentError("BinaryDiffusionPolynomial species must be nonempty"))
+    all(name -> !isempty(strip(name)), names) ||
+        throw(ArgumentError("BinaryDiffusionPolynomial species names must not be blank"))
+    length(unique(names)) == N ||
+        throw(ArgumentError("BinaryDiffusionPolynomial species names must be unique"))
+    size(D_ref) == (N, N) ||
+        throw(ArgumentError("BinaryDiffusionPolynomial D_ref must be N by N in species order"))
+    size(temperature_min) == (N, N) && size(temperature_max) == (N, N) ||
+        throw(ArgumentError("BinaryDiffusionPolynomial temperature ranges must be N by N in species order"))
+    size(temperature_coefficients, 1) == N && size(temperature_coefficients, 2) == N ||
+        throw(ArgumentError("BinaryDiffusionPolynomial coefficients must be N by N by M in species order"))
+    M = size(temperature_coefficients, 3)
+    M > 0 || throw(ArgumentError("BinaryDiffusionPolynomial requires at least one temperature coefficient"))
+    T = promote_type(eltype(D_ref), eltype(temperature_coefficients), eltype(temperature_min),
+                     eltype(temperature_max), typeof(float(temperature_ref)),
+                     typeof(float(pressure_ref)))
+    isfinite(temperature_ref) && temperature_ref > 0 ||
+        throw(ArgumentError("temperature_ref must be finite and positive"))
+    isfinite(pressure_ref) && pressure_ref > 0 ||
+        throw(ArgumentError("pressure_ref must be finite and positive"))
+    temperature_ref_T = T(temperature_ref)
+    pressure_ref_T = T(pressure_ref)
+    isfinite(temperature_ref_T) && temperature_ref_T > zero(T) ||
+        throw(ArgumentError("temperature_ref is not representable as a finite positive coefficient"))
+    isfinite(pressure_ref_T) && pressure_ref_T > zero(T) ||
+        throw(ArgumentError("pressure_ref is not representable as a finite positive coefficient"))
+    for i in 1:N, j in i+1:N
+        Dij, Dji = D_ref[i, j], D_ref[j, i]
+        isfinite(Dij) && Dij > 0 ||
+            throw(ArgumentError("binary D_ref[$i,$j] must be finite and positive"))
+        isfinite(Dji) && Dji > 0 && isapprox(Dij, Dji; rtol=8eps(T), atol=zero(T)) ||
+            throw(ArgumentError("binary D_ref must be symmetric"))
+        isfinite(T(Dij)) && T(Dij) > zero(T) && isfinite(T(Dji)) && T(Dji) > zero(T) ||
+            throw(ArgumentError("binary D_ref is not representable as finite positive coefficients"))
+        Tmin, Tmax = temperature_min[i, j], temperature_max[i, j]
+        Tmin_j, Tmax_j = temperature_min[j, i], temperature_max[j, i]
+        isfinite(Tmin) && isfinite(Tmax) && Tmin > 0 && Tmax >= Tmin ||
+            throw(ArgumentError("binary temperature range [$i,$j] must be finite, positive, and ordered"))
+        isfinite(Tmin_j) && isfinite(Tmax_j) && isapprox(Tmin, Tmin_j; rtol=8eps(T), atol=zero(T)) &&
+            isapprox(Tmax, Tmax_j; rtol=8eps(T), atol=zero(T)) ||
+            throw(ArgumentError("binary temperature ranges must be symmetric"))
+        isfinite(T(Tmin)) && T(Tmin) > zero(T) && isfinite(T(Tmax)) && T(Tmax) >= T(Tmin) &&
+            isfinite(T(Tmin_j)) && isfinite(T(Tmax_j)) ||
+            throw(ArgumentError("binary temperature ranges are not representable as finite positive coefficients"))
+        T(Tmin) <= temperature_ref_T <= T(Tmax) ||
+            throw(ArgumentError("temperature_ref must lie in every binary pair temperature range"))
+        for m in 1:M
+            cij, cji = temperature_coefficients[i, j, m], temperature_coefficients[j, i, m]
+            isfinite(cij) && isfinite(cji) && isapprox(cij, cji; rtol=8eps(T), atol=zero(T)) ||
+                throw(ArgumentError("binary temperature coefficients must be finite and symmetric"))
+            isfinite(T(cij)) && isfinite(T(cji)) ||
+                throw(ArgumentError("binary temperature coefficients are not representable in coefficient type"))
+        end
+    end
+    values = ntuple(i -> ntuple(j -> i == j ? zero(T) : T(D_ref[i, j]), Val(N)), Val(N))
+    coefficients = ntuple(i -> ntuple(j -> ntuple(m ->
+        i == j ? zero(T) : T(temperature_coefficients[i, j, m]), Val(M)), Val(N)), Val(N))
+    Tmin = ntuple(i -> ntuple(j -> i == j ? zero(T) : T(temperature_min[i, j]), Val(N)), Val(N))
+    Tmax = ntuple(i -> ntuple(j -> i == j ? zero(T) : T(temperature_max[i, j]), Val(N)), Val(N))
+    name_tuple = ntuple(i -> Symbol(names[i]), Val(N))
+    return BinaryDiffusionPolynomial{T,N,M,name_tuple}(values, coefficients, Tmin, Tmax,
+                                                        temperature_ref_T, pressure_ref_T)
+end
+
+species_names(::BinaryDiffusionPolynomial{T,N,M,Names}) where {T,N,M,Names} =
+    [String(name) for name in Names]
+
+"""
+    binary_diffusivity(model, temperature, pressure, i, j)
+
+Evaluate a [`BinaryDiffusionPolynomial`](@ref) pair in SI units. `i` and `j`
+are distinct one-based species indices in the exact `species` order passed to
+the constructor. Temperature and pressure must be finite and positive, and the
+temperature must lie in that pair's stated inclusive validity range.
+"""
+function binary_diffusivity(model::BinaryDiffusionPolynomial{T,N}, temperature, pressure,
+                            i::Integer, j::Integer) where {T,N}
+    1 <= i <= N && 1 <= j <= N || throw(ArgumentError("binary diffusion species indices must lie in 1:$N"))
+    i != j || throw(ArgumentError("binary diffusion requires distinct species indices"))
+    isfinite(temperature) && temperature > 0 ||
+        throw(ArgumentError("binary diffusion temperature must be finite and positive"))
+    isfinite(pressure) && pressure > 0 ||
+        throw(ArgumentError("binary diffusion pressure must be finite and positive"))
+    temperature_T, pressure_T = T(temperature), T(pressure)
+    isfinite(temperature_T) && temperature_T > zero(T) ||
+        throw(ArgumentError("binary diffusion temperature is not representable as finite and positive"))
+    isfinite(pressure_T) && pressure_T > zero(T) ||
+        throw(ArgumentError("binary diffusion pressure is not representable as finite and positive"))
+    model.temperature_min[i][j] <= temperature <= model.temperature_max[i][j] ||
+        throw(ArgumentError("binary diffusion temperature lies outside the pair validity range"))
+    D = _binary_diffusivity(model, temperature_T, pressure_T, i, j)
+    isfinite(D) && D > zero(T) ||
+        throw(ArgumentError("binary diffusion coefficient is not finite and positive at this state"))
+    return D
+end
+
+@inline function _binary_diffusivity(model::BinaryDiffusionPolynomial{T,N,M}, temperature,
+                                     pressure, i::Integer, j::Integer) where {T,N,M}
+    z = log(temperature / model.temperature_ref)
+    exponent = zero(T)
+    @inbounds for m in 1:M
+        exponent += model.temperature_coefficients[i][j][m] * z^m
+    end
+    log_D = log(model.D_ref[i][j]) + exponent + log(model.pressure_ref) - log(pressure)
+    return exp(log_D)
+end
+
 struct CeaSpeciesTransport{T}
     viscosity::NTuple{3,CeaTransportInterval{T}}
     conductivity::NTuple{3,CeaTransportInterval{T}}

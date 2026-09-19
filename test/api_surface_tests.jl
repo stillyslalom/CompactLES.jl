@@ -16,7 +16,7 @@ api_ic(x, y, z) = Prim(rho=1.0, p=1.0)
 # Deliberate compatibility manifest: changing an export is an API decision, not
 # an incidental consequence of adding a binding to the module.
 const EXPECTED_EXPORTS = Set(Symbol.(split("""
-AbstractTransport ArtParams AtTime AxisBC BandedClosureRow BandedCompactScheme BinaryDiffusion BlockRegion
+AbstractTransport ArtParams AtTime AxisBC BandedClosureRow BandedCompactScheme BinaryDiffusion BinaryDiffusionPolynomial BlockRegion
 BoundaryCondition CPUBackend Callback CartesianMetric ClosureRow CompactScheme
 CeaTransport ConservedState ConstantBodyForce CylindricalMetric DEFAULT_VTK_FIELDS
 DeviceBackend DirichletBC EOS EquationSet EveryStep EveryTime ExtrapolationBC
@@ -24,7 +24,7 @@ FieldWriter FloorTally IdealMixture IdealSpecies MPI Metric NSCBCInflowBC
 NSCBCOutflowBC Nasa9Interval Nasa9Mixture Nasa9Species NavierStokes1T
 NoSlipWallBC Numerics OriginBC PeriodicBC PoleBC Prim Problem ProgressLog
 SlipWallBC Solver SolverFailure SphericalMetric StateGuard StateReport
-StepControl StiffenedGas Stretch SwitchableBC SymmetryPlaneBC
+StantonMurilloDiagnostics StepControl StiffenedGas Stretch SwitchableBC SymmetryPlaneBC
 Transport Trigger WhenState Workspace add_source! allocate_state
 apply_bcs! artificial_conductivity_scale boundary_plane cartesian_slice
 compact_d8 compact_filter compute_dt compute_rhs! conserved_from_prim
@@ -42,8 +42,9 @@ rewind! run! save_checkpoint save_checkpoint_hdf5 save_hdf5 save_vtk sensor_mirr
 sine_cluster species_enthalpy species_names species_pdf state_admissibility
 state_guard state_report state_valid step! switch! switched
 sync_levels! sync_patches! tanh_blend tke_profile total_energy
-transport_coefficients turbulent_kinetic_energy validate_bc validate_state! velocity volume_average
+binary_diffusivity stanton_murillo_interdiffusivity transport_coefficients turbulent_kinetic_energy validate_bc validate_state! velocity volume_average
 volume_integral wall_internal_energy xcoord
+H_ION_MASS D_ION_MASS T_ION_MASS
 """)))
 
 const ADVANCED_QUALIFIED_API = (

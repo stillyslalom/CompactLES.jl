@@ -123,6 +123,14 @@ diffusivities in EOS species order. The binary model scales them by
 ``(T/T_{ref})^n p_{ref}/p``; its exponent is configurable and the reference
 data and scaling must be appropriate to the gas and temperature range.
 
+[`BinaryDiffusionPolynomial`](@ref) is a separate, checked evaluator for
+pair-specific dilute-neutral-gas fits. It records exact species names, a
+temperature range for each pair, and a polynomial in ``\log(T/T_{ref})``.
+It is useful for sourced neutral H2/D2/HD data, but is not accepted by
+`CeaTransport` yet and does not supply atomic H/D/T or ionized-plasma
+transport. Plasma isotope transport needs coupled driving forces and field
+closure rather than scalar binary diffusivities.
+
 For the mass-fraction gradients used by the solver, the mixture coefficient is
 
 ```math
