@@ -103,13 +103,9 @@ details are in [DESIGN.md](DESIGN.md).
   incoming wave, at the full share by default, measured on an oblique pulse
   and an entering vortex at three Mach numbers (commit `d3d3f30`).
 
-- [ ] **N8 — Introduce a dispatchable temperature-dependent transport model.**
-  Connect the bundled NASA CEA transport data: reader, per-species viscosity and
-  conductivity, mixture rule, and mixture-averaged diffusivities, retaining a
-  unity-Lewis fallback. Keep a function barrier suitable for later plasma transport.
-  **Gate:** independent coefficient checks, mixture limits, thermal/species
-  diffusion solutions, and consistent timestep limits. Document the current
-  constant-coefficient/single-Schmidt limitation until delivery.
+- [x] **N8** — Dispatchable CEA transport supplies temperature-dependent mixture
+  viscosity and conductivity, with unity-Lewis diffusion or mixture-averaged
+  diffusivities from supplied binary data (commit `6594afd`).
 
 - [ ] **N9 — Validate the bulk species channel beyond its existing cases.**
   Measure `species_flux=:bulk` in 3-D shock/mixing runs and calibrate its inherited
