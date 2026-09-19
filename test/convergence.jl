@@ -58,8 +58,8 @@
 #   C6 :brady_livescu 5.73 | viscous no-slip C6 4.00 | viscous slip C6 4.00 |
 #   shear mode 4.67
 #   symmetry-plane evolution (window max norm, t = 0.4, against the fine
-#   folded mirror): inviscid C6 4.14 | C6 onesided filter 4.45 | C8 3.97 |
-#   C10 3.96 | viscous slip with shear C6 6.04
+#   folded mirror): inviscid C6 4.46 | C6 onesided filter 4.69 | C8 4.00 |
+#   C10 4.00 | viscous slip with shear C6 6.04
 #   interface evolution (entropy wave, t = 0.5): two patches C6 (k = 1) 3.31 |
 #   two levels C6 (k = 3) 3.62 | two levels :brady_livescu 6.01 | three levels
 #   subcycled 3.72 | two levels, cascade filter 4.12
@@ -475,6 +475,7 @@ end
 
 const EVOLUTION_CFL = 0.25
 const WALL_NS = (49, 97, 193)          # closed lines, h = 1/(N − 1)
+const PLANE_NS = (25, 49, 97)          # folded lines, h = 1/N; see the plane rows
 const PERIODIC_NS = (48, 96, 192)      # periodic roots, multiples of 24 for the nest
 
 # The periodic mirror of the wall run that has just finished, at the same
@@ -561,37 +562,44 @@ evolution_study("shear mode, no-slip wall, C6, unfiltered", WALL_NS,
 # The same wave between symmetry planes, against the fine folded mirror. The
 # wall window has no closure row and reads what the interior reads: on the
 # inviscid rows at cfl = 0.25 that is the time integrator's own order, which
-# dominates the C6, C8 and C10 spatial errors alike and is why the three land
-# on one number and at one error level. Quartering the step leaves the C6
-# error at 1.5e-11 / 2.8e-13 / 2.1e-14 over the three grids, a sixth-order
-# sequence, so the spatial part is the interior order and nothing at the plane
-# caps it; the viscous row's smaller step shows the same thing directly.
+# the C8 and C10 rows read as 4.00; the C6 rows sit above it because the
+# coarsest grid still shows the sixth-order spatial part on top. Quartering
+# the step isolates that part at 5.93, so nothing at the plane caps it, and
+# the viscous row's smaller step shows the same thing directly.
+#
+# The plane rows run one ladder coarser than the wall rows. On WALL_NS the
+# finest grid's error is 2.5e-13, where the step's accumulated round-off is a
+# few percent of the difference and moves with the host's arithmetic: the
+# same code measured the C10 row at 3.96 on one machine and 4.00 on another,
+# outside DRIFT_TOL, with the two coarser grids agreeing to four digits.
+# PLANE_NS keeps every difference above 1e-12, where that spread is under
+# 0.2% and the fitted order moves by 0.001.
 println("\n=== smooth evolution: symmetry plane, wall window, t = 0.4 ===")
-evolution_study("inviscid planes, C6, unfiltered", WALL_NS,
+evolution_study("inviscid planes, C6, unfiltered", PLANE_NS,
                 N -> wall_case(N; folded=true, cfl=EVOLUTION_CFL),
                 folded_reference;
-                primary=:wall, tfinal=0.4, expect=4.1, tol=0.8, recorded=4.14)
-evolution_study("inviscid planes, C6, onesided filter", WALL_NS,
+                primary=:wall, tfinal=0.4, expect=4.4, tol=0.8, recorded=4.46)
+evolution_study("inviscid planes, C6, onesided filter", PLANE_NS,
                 N -> wall_case(N; folded=true, cfl=EVOLUTION_CFL,
                                filter_interval=1),
                 s -> folded_reference(s; filter_interval=1);
-                primary=:wall, tfinal=0.4, expect=4.4, tol=0.8, recorded=4.45)
-evolution_study("inviscid planes, C8, unfiltered", WALL_NS,
+                primary=:wall, tfinal=0.4, expect=4.6, tol=0.8, recorded=4.69)
+evolution_study("inviscid planes, C8, unfiltered", PLANE_NS,
                 N -> wall_case(N; folded=true, cfl=EVOLUTION_CFL,
                                deriv=lele_d1_8()),
                 s -> folded_reference(s; deriv=lele_d1_8());
-                primary=:wall, tfinal=0.4, expect=4.0, tol=0.8, recorded=3.97)
-evolution_study("inviscid planes, C10, unfiltered", WALL_NS,
+                primary=:wall, tfinal=0.4, expect=4.0, tol=0.8, recorded=4.00)
+evolution_study("inviscid planes, C10, unfiltered", PLANE_NS,
                 N -> wall_case(N; folded=true, cfl=EVOLUTION_CFL,
                                deriv=lele_d1_10()),
                 s -> folded_reference(s; deriv=lele_d1_10());
-                primary=:wall, tfinal=0.4, expect=4.0, tol=0.8, recorded=3.96)
-# The viscous row runs one ladder coarser. Its step is diffusion-limited, so
-# the step error is far below the spatial one and the row reads the interior
-# order instead of the integrator's; on WALL_NS that puts the finest grid's
-# difference at round-off, and the reference, whose step falls with h², costs
-# the cube of its refinement there.
-evolution_study("viscous slip planes, C6, unfiltered", (25, 49, 97),
+                primary=:wall, tfinal=0.4, expect=4.0, tol=0.8, recorded=4.00)
+# The viscous row's step is diffusion-limited, so the step error is far below
+# the spatial one and the row reads the interior order instead of the
+# integrator's. On WALL_NS that would put the finest grid's difference at
+# round-off, and the reference, whose step falls with h², costs the cube of
+# its refinement there.
+evolution_study("viscous slip planes, C6, unfiltered", PLANE_NS,
                 N -> wall_case(N; folded=true, cfl=EVOLUTION_CFL, viscous=true,
                                slip=true, c=0.05),
                 s -> folded_reference(s; viscous=true, c=0.05);

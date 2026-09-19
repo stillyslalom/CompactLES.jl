@@ -3788,19 +3788,28 @@ reads the run's own total error and equals the interior column in every row:
 
 ```text
                                         Ns          errors                        order
-inviscid planes, C6, unfiltered        49/97/193  7.399e-11  4.084e-12  2.522e-13  4.14
-inviscid planes, C6, one-sided filter  49/97/193  7.970e-11  4.092e-12  1.796e-13  4.45
-inviscid planes, C8, unfiltered        49/97/193  5.900e-11  3.838e-12  2.542e-13  3.97
-inviscid planes, C10, unfiltered       49/97/193  5.901e-11  3.844e-12  2.580e-13  3.96
+inviscid planes, C6, unfiltered        25/49/97   1.719e-9   7.399e-11  4.084e-12  4.46
+inviscid planes, C6, one-sided filter  25/49/97   2.353e-9   7.970e-11  4.092e-12  4.69
+inviscid planes, C8, unfiltered        25/49/97   8.689e-10  5.900e-11  3.838e-12  4.00
+inviscid planes, C10, unfiltered       25/49/97   8.693e-10  5.901e-11  3.844e-12  4.00
+inviscid planes, C6, cfl/4             25/49/97   8.587e-10  1.526e-11  2.782e-13  5.93
 viscous slip planes, C6, unfiltered    25/49/97   8.751e-10  1.528e-11  2.445e-13  6.04
 ```
 
-The 4.1 of the inviscid rows is the time integrator. Halving the step at N = 49 takes
-7.40e-11 to 1.87e-11 and quartering it to 1.53e-11: a fourth-order time error over a fixed
-spatial floor of 1.5e-11. The cfl/4 ladder 1.53e-11 / 2.78e-13 / 2.11e-14 is sixth order
-between the first two grids and at round-off on the third, which is why C6, C8 and C10 land
-on one number at one error level. The viscous row's step is diffusion-limited and shows the
-spatial order directly.
+The 4.00 of the C8 and C10 rows is the time integrator. Halving the step at N = 49 takes
+the C6 error 7.40e-11 to 1.87e-11 and quartering it to 1.53e-11: a fourth-order time error
+over a fixed spatial floor of 1.5e-11, and the cfl/4 row is that floor's sixth-order
+sequence. The C6 rows read above 4 because that floor is still visible at N = 25, where
+they sit twice as high as C8 and C10; the gap is 25% at N = 49 and 6% at N = 97. The
+viscous row's step is diffusion-limited and shows the spatial order directly.
+
+The rows first ran on 49/97/193. The finest grid's difference was then 2.5e-13, and at that
+level the step's accumulated round-off differs between hosts: the same code gave the C10
+row 3.844e-12 / 2.580e-13 and an order of 3.96 on the workstation and 3.838e-12 / 2.456e-13
+and 4.00 on the GitHub runner, with the N = 49 column identical to four digits. Julia
+1.11.4 and 1.13.0 on the workstation agree to every printed digit, so the spread is the
+hardware's arithmetic and not the compiler's. At the coarser ladder's finest grid the two
+hosts differ by 0.16% and the fitted order by 0.001.
 
 ### The production Jacobian
 

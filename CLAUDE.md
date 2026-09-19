@@ -207,7 +207,7 @@ cylindrical axis odd 3.76 / even 2.99, resolved-θ 3.76, spherical origin
 evolution 4.01 (`:cascade3` 3.93, cascade filter 1.94, one-sided filter
 3.90, `:brady_livescu` 5.73, viscous no-slip 4.00, viscous slip 4.00,
 shear mode 4.67),
-symmetry-plane evolution 4.14 (one-sided filter 4.45, C8 3.97, C10 3.96,
+symmetry-plane evolution 4.46 (one-sided filter 4.69, C8 4.00, C10 4.00,
 viscous slip with a tangential shear 6.04),
 interface evolution 3.31 (two patches), 3.62 / 6.01 (two levels, C6 /
 `:brady_livescu`), 3.72 (three levels subcycled), 4.12 (two levels
