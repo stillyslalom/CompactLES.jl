@@ -124,16 +124,11 @@ interface orders are in the appendix's smooth-evolution
 [accuracy matrix](CALIBRATION_APPENDIX.md#the-smooth-evolution-accuracy-matrix);
 the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
 
-- [ ] **N10 — Bound and reduce interface conservation drift.**
-  Measure mass, momentum, energy, and mixing diagnostics over long mixing-layer and
-  moving-interface runs, separating same-level, coarse–fine, and regrid defects.
-  Set application error budgets; implement the designed surface-flux correction
-  when drift exceeds them. Retain SBP–SAT as the documented fallback.
-  **Gate:** composite budgets across rank counts, refinement depths, and subcycling,
-  with smooth accuracy and reflection checks. Transfer invertibility is not a
-  conservation proof.
-  Establish comparison budgets before promoting N14–N16 candidates; this task
-  owns the conservation correction, while those tasks own spatial accuracy.
+- [x] **N10** — Composite conservation budgets were measured on long
+  passive-species mixing and moving-refinement runs across rank counts,
+  refinement depths and subcycling, and every layout is inside its
+  declared budget, so no surface-flux correction is enabled (commit
+  `74895a4`).
 
 - [ ] **N11 — Validate sensors and filters at imposed fine shells.**
   Add targeted crossing-shock reflection gates for closed-edge-clamped sensors;
