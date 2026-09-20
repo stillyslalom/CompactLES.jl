@@ -4315,6 +4315,98 @@ per-species sensor, and not a code tweak.
 Patch AMR, the level hierarchy and the device backend. The mechanism is in
 `reference/AMR_GPU.md`; the numbers are here.
 
+### bench/interfaceconservation.jl: composite conservation budgets
+
+`mpiexec -n 8 julia --project=. -t 1 bench/interfaceconservation.jl N=96 ny=24
+tfinal=50.26548245743669 moving_tfinal=50.26548245743669 samples=16 check=true`,
+and the same at 1, 2 and 4 ranks.
+
+The case is periodic passive-species shear on [0, 8π) × [0, 2π): two
+thermodynamically identical ideal species at uniform density and pressure,
+u = 1, v = 0.08 sin(x/4), and the composition a periodic pair of perturbed
+tanh sheets, width parameter 0.22 for the fixed layouts and 0.18 for moving
+refinement. 96 × 24, Float64, C6, the default C8 filter every step, CFL 0.45,
+no physical transport, the artificial properties off except the
+mass-fraction bound, permissive validity (below). The layouts are the uniform
+grid, two same-level patches, a two-level and a three-level nest each with
+global steps and subcycled, and the two-level nest regridded 16 times under
+species-gradient tagging. Every run lasts two domain transits, t = 16π.
+
+The budgets were declared before the measurement: 1e-3 of each initial
+species mass, of total mass and of total energy; 1e-3 of M₀c₀ per momentum
+component, which gives the initially zero transverse components a scale; the
+same for each layout's initial sampling offset from the uniform run; 0.01 in
+molecular mixing and 1% of the domain length in mix width for the mixing
+comparisons. The conserved snapshot is the covered-cell node quadrature with
+shared planes counted once, and each layout's drift is taken from its own
+initial integral, sampled sixteen times so that a cancelling excursion is not
+hidden by the endpoint. The regrid ledger records the jump across each
+transfer separately from the evolution between transfers.
+
+**Fixed layouts.** The sampled maximum of the normalized drift over two
+transits, and the largest mass-fraction excursion outside [0, 1] seen at any
+sample. The drift is an exchange between the two species: total mass,
+momentum and energy hold to 1e-11 in every layout, and the two species masses
+move by equal and opposite amounts.
+
+| layout | root steps | max drift | species excursion |
+|---|---|---|---|
+| uniform | 1184 | 1e-13 (round-off) | 0 |
+| two same-level patches | 1184 | 1.6e-9 | 4.2e-5 |
+| two levels, global step | 3532 | 7.0e-5 | 0 |
+| two levels, subcycled | 1184 | 6.9e-5 | 0 |
+| three levels, global step | 10570 | 7.6e-5 | 5.8e-4 |
+| three levels, subcycled | 1184 | 7.6e-5 | 0 |
+
+The initial sampling offsets from the uniform run are 8.1e-6 (two levels)
+and 8.7e-6 (three levels); the mixing comparisons stay within 2.1e-3 of the
+domain length in width and 1.2e-3 in molecular mixing over the history, both
+an order inside their budgets. The numbers are the same to the printed
+precision at 1, 2, 4 and 8 ranks, apart from the round-off of the uniform
+baseline.
+
+**Moving refinement.** Sixteen regrids over two transits, global step and
+subcycled.
+
+| quantity | global step | subcycled |
+|---|---|---|
+| per-regrid jump, typical | 5e-5 | 5e-5 |
+| sum of the absolute jumps | 8.4e-4 | 8.4e-4 |
+| sampled max drift, transfers included | 1.0e-4 | 1.0e-4 |
+| sampled max drift, transfers subtracted | 2.1e-4 | 2.2e-4 |
+| final drift | 1.5e-5 | 2.2e-5 |
+| species excursion | 7.4e-4 | 5.6e-4 |
+
+The absolute sum grows with the regrid count while the signed sum stays near
+2e-5, so the transfers do not accumulate a bias at this count; the budget
+compares the absolute sum, and a run regridding more than about twenty times
+at this spacing would exceed it on that measure alone. Regridding a
+three-level hierarchy is unsupported and is not measured.
+
+**Why the runs are permissive, and the bound is on.** With the artificial
+properties off entirely, strict validity ended the three-level global-step
+run at t = 37.7, the long moving-refinement run at t = 25.1 and an unfiltered
+uniform run at t = 28.3, in every case on mass fractions past the 1e-4 dead
+band. A per-step probe of the three-level run shows no growth anywhere else:
+velocity, pressure and density stay at their initial values to four digits,
+and the step size is steady. The undershoot sits on the root and level-1
+nodes along the edges of the nested box, is advected with the flow, and grows
+from 1e-4 at t = 34 to 3e-4 at t = 38; the mass-fraction bound at its default
+slows it but does not hold it below the dead band, since it acts in
+proportion to the excursion. The same layout subcycled shows no excursion at
+all. The drift up to the point of failure was inside the budget in every one
+of those runs, so the validity failure and the conservation budget are
+independent measurements, and the instrument reports the excursion beside
+the drift instead of stopping on it.
+
+**Decision.** Every layout is inside its conservation budget, the fixed
+layouts by an order of magnitude, so no surface-flux correction is enabled and the coupling stays as
+it is; the requirements a correction would have to meet are in
+[AMR_GPU.md](AMR_GPU.md#composite-conservation-budgets). The root-edge
+mass-fraction undershoot under global stepping is an imposed-shell accuracy
+question for N11, not a conservation one. No turbulent, variable-density,
+shock or hardware-GPU claim follows from these passive-species cases.
+
 ### bench/amr_transfer.jl: the 3:1 transfer pair
 
 `julia --project=. bench/amr_transfer.jl` (`7dbf319`; banded schemes

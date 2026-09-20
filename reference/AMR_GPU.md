@@ -183,9 +183,11 @@ alpha = -0.0321826755129339
 ```
 
 Restriction applies the filter; prolongation deconvolves it, using the same
-coefficients with LHS and RHS roles swapped. Conservation comes from unit DC
-gain (a + 2b + 2c = 1 + 2α to the last bit), not refluxing, and the
-tabulated boundary closures preserve that gain. The extended-data closure
+coefficients with LHS and RHS roles swapped. Unit DC gain
+(a + 2b + 2c = 1 + 2α to the last bit) preserves constants, and the
+tabulated boundary closures preserve that gain. This does not establish
+conservation under the composite quadrature or during coupled evolution.
+The extended-data closure
 variant is tabulated identically to the one-sided one, "to maintain
 invertibility" per the source comments, which set the precedent for every
 interface closure in this code: the LHS couples no ghost unknown even where
@@ -225,6 +227,41 @@ implicit SBP; Nissen et al. 2015 on block-adaptive grids; Almquist & Dunham
 2018 on non-conforming interfaces). Its costs (interface-order loss, penalty
 terms above 4th order, a rewrite of the closure cascade and every
 convergence guard) have not been justified by any measurement.
+
+### Composite conservation budgets
+
+The coupling is measured, not proved, conservative. `bench/interfaceconservation.jl`
+integrates the conserved variables over the composite quadrature (covered-cell
+node weights, shared planes counted once, one reduction over the solver
+communicator that every rank enters, including ranks holding only the root)
+on periodic passive-species shear through uniform, same-level, two-level,
+three-level and regridded layouts, global-step and subcycled, and compares
+each layout's drift from its own initial integral against budgets declared
+before the measurement
+([measurements](CALIBRATION_APPENDIX.md#benchinterfaceconservationjl-composite-conservation-budgets)).
+The drift over time is the budgeted quantity: a difference between two layouts
+at one instant mixes solution error with quadrature error, since the node
+quadrature of a moving smooth field changes on a nonuniform composite grid
+without any time-integration error. Regrid samples record the jump across
+each transfer separately from the evolution between transfers. Mixing width
+and molecular mixing are physical diagnostics, not conserved variables.
+
+Every measured configuration is inside its budget, the fixed layouts by an
+order of magnitude, so no surface-flux correction is enabled. If one is ever needed, it would
+retain the outward metric-weighted flux on each interface while the patch's
+RHS workspace is live, accumulate it with the low-storage RK weights, and
+reconcile coincident faces after every participating patch has evaluated its
+stages; a subcycled parent needs the sum over its children's substeps,
+endpoint evaluations taken only for the Hermite interpolation must stay out
+of the register, and a rejected step discards the register with the state.
+That register alone would not close the budget, because the compact
+one-sided divergence does not telescope under the diagnostic quadrature and
+the shared-plane average, the imposed shells, the filter, restriction and
+regrid transfer each move the integral. A face-local correction must
+preserve constants and pass the smooth-order, reflection and state-validity
+gates; rescaling the whole state to fix a global integral is not one.
+Compatible SBP–SAT operators and quadrature remain the fallback if a
+localized correction cannot pass those gates.
 
 ## Patches and same-level interfaces
 

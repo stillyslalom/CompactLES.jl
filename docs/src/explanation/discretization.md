@@ -94,12 +94,16 @@ solve represents the same global line, so rank-interface contributions do not
 create or destroy the summed conserved quantity.
 
 This is the scope verified by the serial and distributed periodic conservation
-tests. It is not a blanket statement that every one-sided closure or every
-operation in a timestep preserves an arbitrary discrete integral. Physical
-boundary fluxes, characteristic corrections, and explicit sources change the
-balance as specified by the problem. The compact state filter is applied after
-the Runge--Kutta step and has its own conservation properties; it is not part
-of the flux-divergence identity above.
+tests. Patch and level interfaces lie outside it: their coupling is
+interpolation and injection through compact interface closures, and its
+conservation is measured as a drift of the composite integrals rather than
+proved, inside the budgets set for it on long periodic mixing and
+moving-refinement runs. It is not a blanket statement that every one-sided
+closure or every operation in a timestep preserves an arbitrary discrete
+integral. Physical boundary fluxes, characteristic corrections, and explicit
+sources change the balance as specified by the problem. The compact state
+filter is applied after the Runge--Kutta step and has its own conservation
+properties; it is not part of the flux-divergence identity above.
 
 ## Boundary closures
 

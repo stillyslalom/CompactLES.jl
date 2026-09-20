@@ -72,7 +72,8 @@ cell_measure(solver::SolverLike) = prod(ntuple(d -> solver.decomp.active[d] ?
 # forms: several patches on this rank, or a refined level somewhere in the
 # run, which a rank holding only the root must still enter the reductions
 # of. A `PatchSolver` is one patch by construction.
-_composite(solver::Solver) = nlevels(solver) > 1 || npatches(solver) > 1
+_composite(solver::Solver) = nlevels(solver) > 1 ||
+                             length(getfield(solver, :patch_regions)) > 1
 _composite(::PatchSolver) = false
 
 """
@@ -138,6 +139,70 @@ function _local_volume_integral(solver::SolverLike, f::AbstractArray{<:Real,3},
         end
     end
     return acc * dV
+end
+
+# One collective snapshot of the extensive conserved quantities, for
+# `bench/interfaceconservation.jl` and its tests. Private until a use
+# establishes which history or drift representation belongs in the API;
+# unlike separate `volume_integral` calls, every channel here uses the same
+# state, mask and reduction.
+function _conserved_budget(solver::SolverLike, Q::ConservedState)
+    _composite(solver) && throw(ArgumentError(
+        "a multi-patch or refined solver requires the state-vector form"))
+    local_budget = _local_conserved_budget(solver, Q, false)
+    return _budget_tuple(MPI.Allreduce(local_budget, +, solver.comm),
+                         solver.equations)
+end
+
+function _conserved_budget(solver::Solver, states::Vector{<:ConservedState})
+    length(states) == npatches(solver) || throw(ArgumentError(
+        "state vector has $(length(states)) entries for $(npatches(solver)) local patches"))
+    n = solver.equations.n_species + 4
+    local_budget = zeros(Float64, n)
+    for (ps, Q) in eachpatch(solver, states)
+        local_budget .+= _local_conserved_budget(ps, Q, true)
+    end
+    return _budget_tuple(MPI.Allreduce(local_budget, +, solver.comm),
+                         solver.equations)
+end
+
+function _local_conserved_budget(solver::SolverLike, Q::ConservedState,
+                                 masked::Bool)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    eq = solver.equations
+    nsp = eq.n_species
+    out = zeros(Float64, nsp + 4)
+    covered = solver.covered
+    dV = Float64(cell_measure(solver))
+    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        w = quad_weight(solver, 1, i) * quad_weight(solver, 2, j) *
+            quad_weight(solver, 3, k)
+        if masked
+            m = covered[I]
+            m == 0 || (w *= uncovered_fraction(m))
+        end
+        vol = Float64(w / solver.inv_J[I]) * dV
+        for sp in 1:nsp
+            out[sp] += vol * Float64(Q[I, sp])
+        end
+        for c in 1:3
+            out[nsp + c] += vol * Float64(Q[I, eq.i_mom[c]])
+        end
+        out[nsp + 4] += vol * Float64(Q[I, eq.i_energy])
+    end
+    return out
+end
+
+function _budget_tuple(values::Vector{Float64}, equations)
+    nsp = equations.n_species
+    species = values[1:nsp]
+    return (species_masses=species,
+            total_mass=sum(species),
+            momentum=(values[nsp + 1], values[nsp + 2], values[nsp + 3]),
+            total_energy=values[nsp + 4])
 end
 
 """
@@ -252,7 +317,7 @@ end
 # grid) and the area element.
 function _plane_accumulate!(num::Vector{Float64}, den::Vector{Float64},
                             solver::PatchSolver, f::AbstractArray{<:Real,3},
-                            d::Int)
+                            d::Int; masked::Bool=true)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -281,14 +346,18 @@ function _plane_accumulate!(num::Vector{Float64}, den::Vector{Float64},
                 il = d == 1 ? i : d == 2 ? j : k
                 m = base + il
                 (m - 1) % stride == 0 || continue
-                g = (m - 1) ÷ stride + 1
+                # A periodic same-level slab carries its wrapped high plane as
+                # global station n + 1.  It is station 1 in the root profile.
+                g = mod1((m - 1) ÷ stride + 1, length(num))
                 w = wj * (d == 1 ? 1.0 : quad_weight(solver, 1, i)) * area
                 node = decomp.offset[d] + il
                 ((node == 1 && shared_lo) || (node == n_patch && shared_hi)) &&
                     (w *= 0.5)
                 I = CartesianIndex(i + o1, j + o2, k + o3)
-                c = covered[I]
-                c == 0 || (w *= uncovered_plane_fraction(c, d))
+                if masked
+                    c = covered[I]
+                    c == 0 || (w *= uncovered_plane_fraction(c, d))
+                end
                 w *= Ad[I]
                 num[g] += w * f[I]
                 den[g] += w
@@ -296,6 +365,23 @@ function _plane_accumulate!(num::Vector{Float64}, den::Vector{Float64},
         end
     end
     return num
+end
+
+# Root-grid plane average assembled across every same-level root patch and
+# every rank.  Unlike the composite solution profile it deliberately ignores
+# fine-level cover masks: coordinate and spacing profiles describe the root
+# stations themselves.
+function _root_profile(field::F, solver::Solver, d::Int) where {F}
+    n = solver.n_global[d]
+    num = zeros(n)
+    den = zeros(n)
+    for (i, p) in enumerate(getfield(solver, :patches))
+        p.level == 0 || continue
+        ps = PatchSolver(solver, p)
+        _plane_accumulate!(num, den, ps, field(ps, i), d; masked=false)
+    end
+    red = MPI.Allreduce([num; den], +, solver.comm)
+    return red[1:n] ./ red[n+1:2n]
 end
 
 # The composite plane average: `field(ps, i)` hands back the array to
@@ -331,13 +417,21 @@ plane_profile(solver::Solver, fs::Vector{<:AbstractArray{<:Real,3}}, d::Int) =
 
 Physical coordinate of each station of a `plane_profile` along `d`, as a vector
 of length `n_global[d]`. The companion length element is `profile_spacing`.
-Every rank in the dimension's sub-communicator must call this function, and
-each receives the same vector. On a refined solver the stations are the root's,
-so this is the root patch's coordinate vector.
+Every rank in the dimension's sub-communicator must call the single-patch form.
+The composite form is local (the root coordinates follow from global solver
+configuration) and returns the same vector on every rank. On a refined solver
+the stations are the root's.
 """
 function profile_coordinate(solver::SolverLike, d::Int)
-    _composite(solver) &&
-        return profile_coordinate(PatchSolver(solver, getfield(solver, :patches)[1]), d)
+    if _composite(solver)
+        origin = getfield(solver, :origin)[d]
+        shift = getfield(solver, :coord_shift)[d]
+        h = getfield(solver, :h)[d]
+        stretch = getfield(solver, :stretch)[d]
+        return Float64[stretch === nothing ? origin + shift + (g - 1) * h :
+                       stretch.x(origin + shift + (g - 1) * h)
+                       for g in 1:solver.n_global[d]]
+    end
     decomp = solver.decomp
     loc = Float64[xcoord(solver, d, i) for i in 1:decomp.n_local[d]]
     decomp.sub_size[d] == 1 && return loc
@@ -358,14 +452,41 @@ the same weights as `plane_profile`, so the two quantities compose into a line
 integral.
 
 For an active dimension, every rank that participates in the plane average must
-call this function. A collapsed dimension instead returns `[1.0]` without
-communication; every rank takes that branch together. On a refined solver the
-stations are the root's, and this is the unmasked root-patch spacing because
-the profile length element describes geometry rather than plane quadrature.
+call this function; the composite form reduces across `solver.comm`. A collapsed
+dimension instead returns `[1.0]` without communication; every rank takes that
+branch together. On a refined solver the stations are the root's, and this is
+the unmasked root-grid spacing because the profile length element describes
+geometry rather than solution coverage.
 """
 function profile_spacing(solver::SolverLike, d::Int)
-    _composite(solver) &&
-        return profile_spacing(PatchSolver(solver, getfield(solver, :patches)[1]), d)
+    if _composite(solver)
+        solver.n_global[d] == 1 && return [1.0]
+        prof = _root_profile(solver, d) do ps, i
+            scale = ps.tmp_a
+            invh = ps.inv_h[d]
+            @inbounds for idx in eachindex(scale)
+                scale[idx] = 1 / invh[idx]
+            end
+            scale
+        end .* getfield(solver, :h)[d]
+        half = zeros(Int, 2) # physical node-centered low and high edges
+        for p in getfield(solver, :patches)
+            p.level == 0 || continue
+            ps = PatchSolver(solver, p)
+            fold = ps.folds[d]
+            lo_fold = fold !== nothing && fold.lo
+            hi_fold = fold !== nothing && fold.hi
+            p.region.offset[d] == 0 && p.faces[d][1] == 0 &&
+                !ps.decomp.periodic[d] && !lo_fold && (half[1] = 1)
+            p.region.offset[d] + p.region.extent[d] == solver.n_global[d] &&
+                p.faces[d][2] == 0 && !ps.decomp.periodic[d] && !hi_fold &&
+                (half[2] = 1)
+        end
+        half = MPI.Allreduce(half, max, solver.comm)
+        half[1] == 1 && (prof[1] *= 0.5)
+        half[2] == 1 && (prof[end] *= 0.5)
+        return prof
+    end
     decomp = solver.decomp
     decomp.active[d] || return [1.0]
     # 1/inv_h[d] is the physical arclength per unit computational coordinate.

@@ -2546,6 +2546,7 @@ function test_nscbc_inflow()
 end
 
 include("wall_flux_mpi.jl")
+include("conservation_mpi.jl")
 
 const SUITE = (
     ("periodic C6", test_periodic_c6),
@@ -2566,6 +2567,7 @@ const SUITE = (
     ("NSCBC inflow", test_nscbc_inflow),
     ("freestream", test_freestream),
     ("conservation", test_conservation),
+    ("composite budgets", test_composite_budgets),
     ("sync", test_sync),
     ("artificial decomposition", test_artificial_decomposition),
     ("bulk species channel", test_bulk_decomposition),
