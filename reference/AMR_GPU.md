@@ -24,6 +24,7 @@ line solve, and the coordinate folds.
 12. [Lessons](#lessons)
 13. [Scope boundaries today](#scope-boundaries-today)
 14. [Open work](#open-work)
+    - [Long-term target: dendritic meshes](#long-term-target-dendritic-meshes)
 
 ---
 
@@ -1307,7 +1308,7 @@ limits, the production tile and ownership cost studies, the mixed-precision
 policy and the NASA-9 device mirror, and S8 for regridding below level 1 and
 for multiblock geometry beyond the slab layout.
 
-Two things are recorded here and nowhere else.
+Additional open items and long-term targets are recorded here.
 
 **The structural assumptions that remain.** A tiled level of small tiles is
 launch-bound on a device unless its tiles stack. The timestep carries no rate
@@ -1328,3 +1329,79 @@ per step to save the Hermite endpoint for the children, and the extra
 evaluation recurs on every level that has children. Whether a cheaper dense
 output than the recurring endpoint right-hand side is worth building at three
 or more levels is a measurement to make once a case demands it.
+
+### Long-term target: dendritic meshes
+
+Deferred, with no immediate implementation commitment: static cylindrical
+and spherical block layouts that coarsen angular resolution toward the axis,
+origin, and poles while retaining radial resolution. The motivation is the
+geometric timestep penalty in resolved-angle converging or swirling flows.
+The physical spacings are `(Δr, rΔθ, Δz)` in cylindrical coordinates and
+`(Δr, rΔθ, r sinθ Δφ)` in spherical coordinates. Choose angular counts to
+keep those spacings comparable, subject to the compact schemes' minimum
+extents. Cylindrical annuli could use azimuthal counts such as
+`324 → 108 → 36 → 12` inward, transitioning as radius decreases by roughly
+three. Spherical shells also need latitude-dependent azimuthal coarsening
+to address the polar restriction. Fornax provides a finite-volume precedent
+for the geometry, using ratio 2 rather than this code's ratio 3
+([Skinner et al. 2019, §VII](https://arxiv.org/html/1806.07390v2#S7)).
+
+The fine angular degrees of freedom must actually be absent from the inner
+blocks; filtering a fully resolved grid after a step does not by itself
+justify a larger explicit timestep. The target removes excess geometric
+stiffness, not the physical timescales of compression, diffusion, or swirl.
+Start with a common timestep: balanced physical spacing does not call for
+the fixed 3:1 stepping ratio used by the current hierarchy's optional
+subcycling.
+
+**Reusable pieces and new structure.** `Patch`, per-block geometry and
+operator plans, interface closures, and the directional 3:1 transfer plans
+are building blocks. The delivered level driver instead refines every
+active dimension and requires Cartesian geometry without folds. A dendritic
+layout needs separate refinement ratios per direction and interfaces
+between abutting blocks with different angular counts. The shared-plane
+copy/average rules do not apply unchanged. Constraint 4 remains enforced
+today; this target would require a designed extension preserving uniform
+antipodal pairing within each folded block. Even azimuthal counts can
+survive division by three, but half-offset polar sampling needs its own
+coincident-node map. The axis/origin/pole folds remain necessary.
+
+**Compatibility with compact derivatives.** Each rectangular block can
+retain its compact line solves. Angular derivatives on a uniform annulus
+are straightforward; radial lines branch at angular-coarsening interfaces.
+The natural first approach is separate banded solves closed locally, with
+restriction/interpolation supplying neighboring solution data. Coupling the
+derivative unknowns across the interface is another possible design, but
+generally introduces a coupled interface system beyond independent scalar
+tridiagonal solves. Compact schemes with high-order interpolation on
+nonmatching grids have precedent
+([Sherer & Scott 2005](https://doi.org/10.1016/j.jcp.2005.04.017)); that is
+evidence of compatibility, not validation of a dendritic discretization.
+
+Preserving the interior order globally is a separate interface-numerics
+target. Current one-sided divergence closures already limit cross-interface
+convergence, including at C10. An `O(h^q)` ghost interpolation error can
+enter a first derivative as `O(h^(q-1))` absent cancellation, so matching
+advertised interpolation and derivative orders is insufficient. Modes above
+the coarse angular Nyquist cannot pass unchanged: measure aliasing,
+reflection, and dissipation as well as smooth-solution convergence. Retain
+the lesson that deconvolution requires samples of the matching filtered
+field; the pair's exact round trip does not make it the default transfer
+for live point samples or prove evolution stability. Energy-compatible projections and
+penalty coupling are a possible route if measurements justify redesigning
+the operators ([Kozdon & Wilcox](https://arxiv.org/abs/1410.5746)).
+
+Metric-weighted interface conservation, angular-momentum balance, and
+momentum transfer between rotating coordinate bases need explicit design.
+Constant preservation alone establishes neither global conservation nor
+freestream preservation. Keep sufficient points for the existing closures
+and folds instead of collapsing the innermost ring to evade those limits.
+
+**Evaluation sequence when prioritized.** Begin with one static cylindrical
+3:1 angular transition away from the axis. Measure a smooth wave crossing
+it for convergence, reflected amplitude, long-time stability, conservation
+drift, and timestep/cost gains. Then add the folded inner annulus and check
+Cartesian freestream preservation, solid-body rotation, vortex transport,
+and a converging shock. Extend to spherical origin and polar transitions
+only after those gates establish the coupling. This separates the mesh's
+CFL benefit from any claim of globally sixth- or eighth-order accuracy.
