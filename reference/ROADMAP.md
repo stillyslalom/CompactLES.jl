@@ -143,7 +143,7 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
 
 - [x] **N12a** — Level-aware filter trials remove the fixed-layer
   undershoot within composite budgets; smooth-error and moving-refinement
-  tradeoffs retain the production default and subcycling (commit pending).
+  tradeoffs retain the production default and subcycling (commit `fbb3ad3`).
 
 - [ ] **N13 — Settle the default state-validity policy and its species band.**
   Ten shipped cases select `validity = :permissive`, in three groups: the
