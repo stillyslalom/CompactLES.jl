@@ -114,7 +114,7 @@ details are in [DESIGN.md](DESIGN.md).
 - [x] **N9** — The bulk species channel was measured in three dimensions
   against the Fickian one, its constants confirmed, and its entropy inequality
   restated as a continuous-model property; `:fickian` stays the default
-  (commit pending).
+  (commit `7a86a2c`).
 
 ### AMR numerics
 
