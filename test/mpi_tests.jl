@@ -1979,8 +1979,10 @@ function test_refined_decomposed()
     # Tagging-driven regridding tracks a Sod shock to the same region. The
     # four Sod regrid cases in this file run the unrelaxed filter
     # (filter_cfl = 0): their tile histories, regions and times reached were
-    # measured serially under it, and the relaxed default, a weaker filter at
-    # cfl = 0.2, walks the tags differently.
+    # measured serially under it. Every regrid check now refreshes artificial
+    # coefficients before the next root CFL estimate, so the recorded times
+    # below are the replacement trajectory; the relaxed default, a weaker
+    # filter at cfl = 0.2, walks the tags differently.
     wall2 = (SlipWallBC(), SlipWallBC())
     solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
                     bcs=(wall2, per3[2], per3[3]), cfl=0.2, filter_cfl=0.0,
@@ -2014,7 +2016,7 @@ function test_refined_decomposed()
     # level's spacing moves it. Serial value at step 61; the tolerance is the
     # Allreduce round-off tier.
     check("regridded Sod: time reached matches serial",
-          abs(gmax(solver.t) - 0.0054805719785845078), 1e-14)
+          abs(gmax(solver.t) - 0.005505030961213709), 1e-14)
     # The regrids dropped the setup-time fine patch. Decomposed over more
     # than one rank, or over a split communicator, its decomposition owns
     # Cartesian communicators, which must be freed at the drop and not left
@@ -2188,7 +2190,7 @@ function test_tiled_level()
         check("tiled regrid under ownership: last tile tracks as serial (184)",
               abs(gmax(last(offs)) - 184), 0.5)
         check("tiled regrid under ownership: time reached matches serial",
-              abs(gmax(solver.t) - 0.0033189621649104477), 1e-13)
+              abs(gmax(solver.t) - 0.003194481761204692), 1e-13)
         spec = getfield(solver, :regrid)
         record = sort([(r.offset[1], c) for (r, c) in spec.created])
         flat = Int[spec.checks; length(record);
@@ -2220,7 +2222,9 @@ function test_tiled_level()
     # with it on at a threshold of one, which any measured spread of busy
     # time exceeds, the level is repartitioned on the measured weights, a
     # survivor moves, and the tracked tile set and time are still the
-    # serial ones to round-off. The hold band is off here: the block tests
+    # serial ones to round-off. Fresh coefficients after every regrid check
+    # set the CFL sequence used by these serial baselines. The hold band is
+    # off here: the block tests
     # ownership, and a survivor moving at every rank count rests on the
     # tile ahead of the shock entering and leaving the set, which the band
     # damps.
@@ -2259,7 +2263,7 @@ function test_tiled_level()
         check("stored ownership: no survivor moved with rebalance off",
               gmax(moved), 0.5)
         check("stored ownership: tile set tracks as serial",
-              abs(gmax(first(offs)) - 168) + abs(gmax(last(offs)) - 192), 0.5)
+              abs(gmax(first(offs)) - 168) + abs(gmax(last(offs)) - 184), 0.5)
         # The same run with the migration audit on: every moved tile is also
         # carried through the replicated gather, and the migrated state
         # must equal that reference at every slot.
@@ -2280,14 +2284,14 @@ function test_tiled_level()
               np >= 4 && gsum(audit.tiles) == 0 ? 1.0 : 0.0, 0.5)
         check("migration: migrated state equals the gathered carry bitwise",
               gsum(audit.mismatches), 0.5)
-        check("rebalance on: tile count tracks as serial (4)",
-              abs(gmax(length(offs)) - 4), 0.5)
+        check("rebalance on: tile count tracks as serial (3)",
+              abs(gmax(length(offs)) - 3), 0.5)
         check("rebalance on: first tile tracks as serial (168)",
               abs(gmax(first(offs)) - 168), 0.5)
-        check("rebalance on: last tile tracks as serial (192)",
-              abs(gmax(last(offs)) - 192), 0.5)
+        check("rebalance on: last tile tracks as serial (184)",
+              abs(gmax(last(offs)) - 184), 0.5)
         check("rebalance on: time reached matches serial",
-              abs(gmax(solver.t) - 0.003318961972053177), 1e-13)
+              abs(gmax(solver.t) - 0.003194481019080914), 1e-13)
         check("rebalance on: max/mean busy time measured",
               isfinite(spec.imbalance) && spec.imbalance >= 1 ? 0.0 : 1.0, 0.5)
         # Hysteresis, on synthetic per-rank busy times: rank r reports
@@ -2429,13 +2433,14 @@ function test_level_subset()
           (!lc0.scoped || lc0.comm == MPI.COMM_NULL) ? 0.0 : 1.0, 0.5)
     check("regrid under subsets: finite composite state", fin ? 0.0 : 1.0, 0.5)
     # Serial values under the default hold band (171/24 without it, at the
-    # same time reached).
+    # same time reached). Fresh coefficients after each regrid change the CFL
+    # sequence from the prior stale-array measurement.
     check("regrid under subsets: region offset tracks as serial (170)",
           abs(gmax(region.offset[1]) - 170), 0.5)
     check("regrid under subsets: region extent tracks as serial (25)",
           abs(gmax(region.extent[1]) - 25), 0.5)
     check("regrid under subsets: time reached matches serial",
-          abs(gmax(solver.t) - 0.0055447477787401445), 1e-13)
+          abs(gmax(solver.t) - 0.0055135979946853665), 1e-13)
 end
 
 # ---------------------------------------------------------------------------

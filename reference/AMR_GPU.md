@@ -446,9 +446,11 @@ level below the root filters itself at its own cadence, substep index
 `3 · parent index + m`. The extra parent RHS recurs on every level that has
 children, about 1/15 of the RHS work at similarly weighted levels, not a
 fraction that compounds with depth. A three-level static nest on the
-entropy wave converges at the two-level orders in both stepping modes, and
-the three-level Sod gate runs at cfl 0.4 without a rate check per substep
-(ROADMAP.md, N12).
+entropy wave converges at the two-level orders in both stepping modes.
+An optional `StepControl.substep_cfl` ceiling checks refreshed rates before
+each refined RK update and returns violations collectively to root-step
+rollback; every regrid check refreshes coefficients before the next root CFL
+estimate, independently of timing-based ownership changes.
 
 ### Tiles and adjacency
 
@@ -1341,9 +1343,8 @@ Configurations rejected at setup, and the reason:
 
 ## Open work
 
-The open items are in [ROADMAP.md](ROADMAP.md): N10–N12 and N14–N16 for the
-interface numerics (conservation drift, sensors and filters at an imposed
-shell, fine-level rates during startup and regrid transients, the interface
+The open items are in [ROADMAP.md](ROADMAP.md): N12a and N14–N16 for the
+interface numerics (level-aware global-step filtering, the interface
 divergence closures, and the live transfer order), S1–S5 for the
 target-machine device campaign, the compact-solve and transfer scaling
 limits, the production tile and ownership cost studies, the mixed-precision
@@ -1353,11 +1354,10 @@ for multiblock geometry beyond the slab layout.
 Additional open items and long-term targets are recorded here.
 
 **The structural assumptions that remain.** A tiled level of small tiles is
-launch-bound on a device unless its tiles stack. The timestep carries no rate
-check per substep, so depth widens the number of fine substeps one root rate
-measurement covers; when the check is built it belongs after the stage-1
-right-hand side has refreshed the artificial coefficients and before the
-update. The measured rebalance weights include each rank's root-level work,
+launch-bound on a device unless its tiles stack. Depth widens the number of
+fine substeps one root rate measurement covers; the refreshed-rate guard is
+opt-in because its absolute ceiling requires case-specific qualification.
+The measured rebalance weights include each rank's root-level work,
 which overstates the cost of a tile on a rank holding few. Regridding is
 two-level, because `regrid!` and `_regrid_tiles!` assume the root and one
 refined level while `_advance_level!` and the ownership tables are already
@@ -1366,11 +1366,11 @@ The box regrid's replicated carry (`tile = 0`) is not on that list: the tiled
 level is the production path, and the box path serves the one-patch
 configurations that need no rank-partitioned carry.
 
-**A cheaper dense output.** Subcycling costs one extra coarse right-hand side
-per step to save the Hermite endpoint for the children, and the extra
-evaluation recurs on every level that has children. Whether a cheaper dense
-output than the recurring endpoint right-hand side is worth building at three
-or more levels is a measurement to make once a case demands it.
+**Dense output.** Retain cubic Hermite reconstruction: the measured parent
+endpoint RHS share does not justify replacing it on the tested three- and
+four-level nests ([substep study](CALIBRATION_APPENDIX.md#benchsubstepratesjl-refreshed-refined-level-rates)).
+The estimate excludes box gathers and does not qualify distributed or device
+layouts, whose endpoint costs should be measured if they become limiting.
 
 ### Long-term target: dendritic meshes
 

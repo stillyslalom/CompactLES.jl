@@ -4564,12 +4564,63 @@ undershoots, and it does so at the level-1 boundary plane first, at
 t = 37.7 on the coarse node coincident with that plane and the two or
 three root nodes outside it while the root interior and level 2 are still
 positive; by t = 50.3 the flow has carried it over the whole root outside
-the box and through level 1. The unrelaxed filter reproduces every
-entry to two digits, so the relaxed weight of a root pass, one ninth of
-full strength under that stepping, is not the cause; what remains is the
-coupling itself when the root advances at the level-2 step, nine times
-below its own, since the two-level nest at a third of the root's step
-shows nothing. The mechanism is not identified here.
+the box and through level 1. The unrelaxed filter reproduces every entry
+to two digits. Direct weight measurements below show that global stepping
+uses the finest directional rate on every patch; the root pass is not
+relaxed in proportion to its own coarse spacing.
+
+**Global-step follow-up (N12).** Reducing the two-level CFL from 0.45 to
+0.15 matches the three-level root-step scale without adding another
+interface. The two-level run then develops an undershoot too, so the
+second transfer is not necessary for its onset. A diagnostic driver that
+restricts fine data onto the parent every third step retains the same
+RK stages, shell impositions and filter passes. It produces almost the
+same undershoot, ruling out the frequency of fine-to-coarse restriction.
+
+| two-level run, CFL 0.15 | t | completed steps | root face / level-1 plane | root outside, 4+ nodes | level-1 interior, 5+ nodes |
+|---|---|---|---|---|---|
+| production | 37.6991 | 7929 | +2.348e-4 | +8.906e-5 | +7.005e-4 |
+| production | 43.9823 | 9251 | +3.027e-5 | +6.388e-5 | +7.047e-5 |
+| production | 50.2655 | 10572 | -7.997e-5 | -2.395e-4 | +2.588e-4 |
+| restriction every third step | 50.2655 | 10572 | -8.091e-5 | -2.397e-4 | +2.567e-4 |
+
+Keeping the small timestep but filtering every third step restores the
+ordinary two-level physical filter cadence and remains positive at every
+sample: at t = 50.2655 the root face minimum is +1.347e-4, the root outside
+four nodes is +3.852e-5, and the level-1 plane and interior minima are
++1.002e-4 and +2.511e-4. Thus the smaller RK timestep alone does not cause
+the undershoot; the changed filter application schedule is required in
+this reproducer.
+
+The startup weights are identical on every patch of a hierarchy:
+
+| levels | CFL | filter interval | dt | x weight | y weight |
+|---|---|---|---|---|---|
+| 2 | 0.45 | 1 | 0.0143184855 | 1 | 0.830373924 |
+| 3 | 0.45 | 1 | 0.00478678860 | 1 | 0.827484401 |
+| 2 | 0.15 | 1 | 0.00477282850 | 0.482471992 | 0.276791308 |
+| 2 | 0.15 | 3 | 0.00477282850 | 1 | 0.830373924 |
+
+Under global stepping the finest directional rate compensates for the
+smaller timestep in the per-pass weight, while another level adds about
+three times as many coarse-grid filter passes per unit physical time.
+Reducing CFL on a fixed hierarchy also changes the number and weights of
+the interleaved filter and shell operations; the x weight's cap makes even
+the integrated relaxation strength different in these rows. The experiments
+identify sensitivity to this filter schedule, not a CFL violation or a
+restriction-frequency failure, and do not isolate an individual operator
+commutator. Keep subcycling as the demonstrated remedy. A new global-step
+filter policy needs three-level accuracy and composite-conservation
+qualification before promotion.
+
+Reproduce with `julia --project=. -t 1 bench/interfacesensor.jl undershoot
+layerN=96 layerny=24 layer_tfinal=50.26548245743669 samples=8 nmax=40000
+undershoot_depths=2 "undershoot_variants=depth-3 dt" undershoot_ghosts=on`;
+select `"undershoot_variants=sparse projection"` for the restriction
+ablation or `"undershoot_variants==two levels, matched dt, filter every 3"`
+for the filter cadence. The leading equals sign selects the exact label
+instead of comma-separated substrings. These are controlled changes to
+operation cadence, not a proposal to weaken synchronization in production.
 
 **Decision.** The detector reads the ghost layers at an interface face
 for every field recovered over the padded extent, the default; the strain
@@ -4583,6 +4634,87 @@ therefore promotes none of them. The step-on-a-plane failure and the
 three-level undershoot under global stepping are recorded as limitations:
 the first is an initial-data restriction with a stated workaround, the
 second is removed by subcycling.
+
+### bench/substeprates.jl: refreshed refined-level rates
+
+`bench/substeprates.jl` measures the rates after the refined RK right-hand
+sides refresh the artificial coefficients, using the production subcycling
+driver. The root estimate is taken after startup priming or regrid priming,
+and the state filter uses the production cadence and relaxation.
+
+Reproduction: `julia --project=. -t 1 bench/substeprates.jl steps=3
+levels=3,4 regrid_steps=6`. Serial Float64 on an Intel Core i9-12900K,
+Julia 1.11.4, one Julia thread: 201 root nodes, a Sod jump at x = 0.69
+inside the deepest nested box, root CFL 0.2. Both startup maxima occur
+in the first root step:
+
+| levels | peak refreshed substep CFL | divided by root CFL target | refined level | substep | RK stage |
+|---|---|---|---|---|---|
+| 3 | 1.607612 | 8.03806 | 1 | 3 | 5 |
+| 4 | 1.704789 | 8.52395 | 1 | 2 | 1 |
+
+The location is the level with the largest observed rate, not necessarily
+the finest level. These are rate-growth measurements, not stability or
+solution-accuracy certificates.
+
+The supported two-level moving-box case changes layout four times in six
+root steps. Its largest changed-layout CFL is 0.188657 (0.943283 times the
+root target), on root step 2, refined level 1, substep 6, RK stage 1,
+after the box changes from offset/extent (50, 31) to (87, 30). The largest
+unchanged-layout value is 0.198363. These readings include the new regrid
+coefficient refresh and therefore measure its resulting trajectory.
+
+The original proposed absolute ceiling of 1 was rejected: the existing
+subcycled Sod precompile case at root CFL 0.2 reached a refreshed refined
+stage CFL of 1.011060 on its first step. The rate used to choose a step and
+the largest rate within its RK trajectory are different quantities; that
+observation alone does not establish a stability ceiling. The refreshed-rate
+check therefore remains opt-in (`StepControl.substep_cfl = 0` by default),
+with a positive value interpreted as an absolute ceiling qualified for the
+case. A violation returns through the level communicators to the root's
+savepoint/retry path before any accepted-step clock or callback advances.
+
+Every regrid check now refreshes artificial coefficients before the next
+root estimate, including checks that keep the layout. This makes the refresh
+cadence independent of timing-based ownership moves; a changed layout saves
+the refreshed coefficients in its retry state. This applies to both direct
+`regrid!` calls and the run-loop hook, for box and tiled refinement. Dynamic
+regridding below the first refined level remains unsupported; the deeper
+startup cases do not qualify that missing capability.
+
+The `test/mpi_tests.jl` moving-Sod references were remeasured with this
+refresh cadence, keeping the existing round-off tolerances. Serial and
+two-rank runs agree to round-off; the changed times follow from using fresh
+coefficients in the root CFL estimate, rather than the previous stale arrays.
+All cases use 400 root nodes, root CFL 0.2 and the unrelaxed filter.
+
+| regression fixture | completed steps | serial time | final offset/extent or tile offsets |
+|---|---|---|---|
+| distributed regrid | 61 | 0.005505030961213709 | 159 / 43 |
+| level rank subsets | 41 | 0.0055135979946853665 | 170 / 25 |
+| tiled regrid | 41 | 0.003194481761204692 | 168, 176, 184 |
+| stored ownership / rebalance | 41 | 0.003194481019080914 | 168, 176, 184 |
+
+**Cost and dense-output decision.** Two warm whole runs precede five pairs
+of three-step smooth runs, with the guard disabled and enabled on identical
+initial data. The table reports the minimum time in each group; differences
+between the two depth-dependent percentages are not resolved against
+workstation timing noise.
+
+| levels | guard off, ms/root step | guard on, ms/root step | scan overhead | estimated endpoint share of RHS time |
+|---|---|---|---|---|
+| 3 | 2.472 | 2.738 | 10.7% | 5.48% |
+| 4 | 9.152 | 9.923 | 8.4% | 4.63% |
+
+The endpoint estimate weights measured per-level RHS costs by the recursive
+evaluation counts. Three levels use 65 stage RHS evaluations and 4 endpoint
+evaluations; four use 200 and 13. Minimum warm RHS costs from five samples
+are (39.8, 18.6, 26.0) μs and (32.3, 19.2, 27.0, 38.5) μs respectively.
+This is an estimate for the measured serial layouts, excluding endpoint box
+gathers; it is neither an equal-cost count nor a distributed speedup bound.
+Retain cubic Hermite output: removing this small RHS share does not justify
+a new temporal reconstruction and its accuracy qualification. Revisit the
+choice if a measured layout makes parent endpoint work dominant.
 
 ### bench/amr_transfer.jl: the 3:1 transfer pair
 

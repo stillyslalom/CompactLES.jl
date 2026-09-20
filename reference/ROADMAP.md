@@ -136,19 +136,24 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
   imposed shells on shock crossings, with the step-on-a-plane failure and
   the three-level global-step undershoot recorded (commit `b4fe9d6`).
 
-- [ ] **N12 — Check fine-level rates during startup and regrid transients.**
-  Measure rate growth over the substeps covered by one root CFL estimate, especially
-  at three or more levels. Add a refreshed-coefficient substep check where needed.
-  The coarse endpoint RHS that saves the Hermite box costs one extra evaluation per
-  level with children; whether a cheaper dense output pays at three or more levels
-  is unmeasured (AMR_GPU.md, Open work). The passive-species layer on a
-  three-level nest under global stepping undershoots at the level-1 plane
-  from the second transit on, with the filter relaxation ruled out and
-  subcycling free of it
-  ([interface sensors](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface));
-  the mechanism is open and belongs with this item's global-step study.
-  **Gate:** route a violation to the collective rollback/acceptance path from R3;
-  an exception inside recursive stepping must not bypass retry handling.
+- [x] **N12** — Regrid checks refresh coefficients, opt-in refined-stage CFL
+  violations use collective rollback, and three-/four-level rate and cost
+  measurements retain Hermite output; the global-step undershoot depends on
+  the filter application schedule (commit pending).
+
+- [ ] **N12a — Qualify level-aware filtering under global stepping.**
+  The globally reduced finest directional rate currently sets every patch's
+  filter weight, so another level increases the coarse filter pass frequency
+  without a proportional reduction in weight. Restoring the physical filter
+  cadence removes the matched-small-step two-level undershoot, while changing
+  restriction cadence does not
+  ([interface sensors](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
+  Measure a level-aware rate/cadence policy on the three-level layer, smooth
+  evolution, shock crossings and moving refinement before changing the default;
+  retain subcycling as the demonstrated workaround. **Depends on:** N1 and N12.
+  **Gate:** N10 composite budgets, N11 positivity/reflection checks, both
+  stepping modes, and rank-independent results. The cadence ablation alone
+  does not qualify a general interval multiplier or isolate an operator mode.
 
 - [ ] **N13 — Settle the default state-validity policy and its species band.**
   Ten shipped cases select `validity = :permissive`, in three groups: the

@@ -86,6 +86,18 @@ On a recoverable failure, `run!` restores its savepoint, reduces the CFL, and
 retries. An exhausted retry budget or timestep floor raises
 [`SolverFailure`](@ref) with the step, time, timestep, CFL, and reason.
 
+With AMR subcycling, a positive `StepControl(substep_cfl = ...)` checks each refined
+level's rate after its stage RHS has refreshed the artificial coefficients.
+If the substep size times that rate exceeds the limit, all ranks reject the
+root step with `:substep_cfl` and use the same rollback policy. This is an
+absolute CFL tripwire, independent of the requested `cfl`, rather than a
+stability guarantee. The default is zero (disabled): accepted shock transients
+can exceed the root CFL target within a stage, so the limit needs to be
+qualified for the chosen case. A direct `step!` call reports the failure
+without retrying. Every regrid check refreshes the artificial coefficients
+before the next root timestep estimate, even when the layout stays the same
+or the substep check is disabled.
+
 ## Choose what an invalid state does
 
 `run!` sizes and checks each step from the state that enters it, so the state it

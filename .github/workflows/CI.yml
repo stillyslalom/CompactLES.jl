@@ -136,6 +136,7 @@ jobs:
                   t = @elapsed run(`$mpiexec -n $np $julia --project=. -t 1 test/mpi_tests.jl $args`)
                   @printf("=== np = %d finished in %.1f s ===\n", np, t)
                   run(`$mpiexec -n $np $julia --project=. -t 1 test/neutral_transport_domain_tests.jl`)
+                  run(`$mpiexec -n $np $julia --project=. -t 1 test/substep_rate_tests.jl`)
               end
           end
 

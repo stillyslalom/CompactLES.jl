@@ -311,15 +311,95 @@ function subcycled_step!(solver::Solver, states::Vector{<:ConservedState},
                          dQs::Vector{<:ConservedState},
                          dus::Vector{<:ConservedState}, dt,
                          prepared::Bool=false)
+    status, guard = _subcycled_step_status!(solver, states, dQs, dus, dt,
+                                             prepared, solver.control)
+    status == SUBSTEP_CFL && throw(_substep_cfl_failure(solver, guard, dt,
+                                                        solver.control))
+    _check_transport_status(solver, status)
+    return states
+end
+
+# A refreshed coefficient field is available only after `_level_rhs!`.  A
+# subcycled level can cross a newly formed front before the root recomputes its
+# CFL rate, so inspect every refreshed RK stage rather than relying on the next
+# root-step estimate. The status deliberately climbs out of the recursive
+# schedule: throwing on a child owner would strand its parent peers in the box
+# gathers and bypass `run!`'s rollback path.
+const SUBSTEP_CFL = UInt8(0x80)
+
+mutable struct SubstepCFLGuard{T}
+    rate::T
+    dt::T
+    level::Int
+    stage::Int
+    count::Int
+end
+
+SubstepCFLGuard(dt) = SubstepCFLGuard(zero(dt), zero(dt), 0, 0, 0)
+
+function _refreshed_substep_status!(solver, lev, states, dt, stage, count,
+                                    control, guard)
+    (lev.index > 0 && control.substep_cfl > 0) || return UInt8(0)
+    rate = zero(dt)
+    patches = getfield(solver, :patches)
+    for pi in lev.patches
+        r = _local_max_rate(PatchSolver(solver, patches[pi]), states[pi])[1]
+        rate = max(rate, r)
+    end
+    # A NaN cannot be meaningfully ordered by the MPI max reduction.  It is a
+    # CFL violation in its own right, represented by Inf so every rank agrees.
+    rate = isfinite(rate) ? rate : oftype(rate, Inf)
+    t0 = time_ns()
+    rate = MPI.Allreduce(rate, max, lev.level_comm.comm)
+    _wait!(solver, t0)
+    cfl = dt * rate
+    if cfl > guard.dt * guard.rate
+        guard.rate = rate
+        guard.dt = dt
+        guard.level = lev.index
+        guard.stage = stage
+        guard.count = count
+    end
+    return cfl <= control.substep_cfl ? UInt8(0) : SUBSTEP_CFL
+end
+
+function _substep_cfl_failure(solver, guard, root_dt, control)
+    local_cfl = guard.dt * guard.rate
+    t0 = time_ns()
+    cfl = MPI.Allreduce(local_cfl, max, solver.comm)
+    _wait!(solver, t0)
+    return SolverFailure(:substep_cfl, solver.step, solver.t, root_dt, solver.cfl,
+        "refreshed refined-level substep CFL is $cfl, above the configured " *
+        "StepControl.substep_cfl = $(control.substep_cfl)")
+end
+
+function _subcycled_step_status!(solver::Solver, states, dQs, dus, dt,
+                                 prepared::Bool, control)
     t0 = solver.t
+    guard = SubstepCFLGuard(dt)
     # `solver.step` counts completed steps; the level counts below are
     # one-based indices of the step in progress.
     status = _advance_level!(solver, 1, states, dQs, dus, t0, dt, prepared,
-                             solver.step + 1, dt, 1)
-    _check_transport_status(solver, status)
+                             solver.step + 1, dt, 1, control, guard)
+    status == 0 || return status, guard
     solver.tstage = t0 + dt
     _validate_transport_state!(solver, states)
-    return states
+    return UInt8(0), guard
+end
+
+# `step!` keeps its direct contract: a substep violation is thrown there.  The
+# outer driver needs the same completed-or-rejected distinction without an
+# exception escaping recursive stepping, so it uses this private form and lets
+# `_rollback!` decide whether the rejection is recoverable.
+function _run_step!(solver, Q, workspace, dt, prepared, control)
+    getfield(solver, :subcycle) || return (step!(solver, Q, workspace, dt, prepared);
+                                           nothing)
+    status, guard = _subcycled_step_status!(solver, Q, workspace.dQ, workspace.du,
+                                             dt, prepared, control)
+    status == 0 && return nothing
+    status == SUBSTEP_CFL && return _substep_cfl_failure(solver, guard, dt, control)
+    _check_transport_status(solver, status)
+    return nothing
 end
 
 # The one-based global index of substep `mc` of a child level under its
@@ -339,7 +419,8 @@ _child_count(count::Int, mc::Int) = 3 * (count - 1) + mc
 # two-level driver established, so a two-level run is unchanged by the
 # recursion.
 function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
-                         prepared::Bool, count::Int, parent_dt, m::Int)
+                         prepared::Bool, count::Int, parent_dt, m::Int,
+                         control, guard)
     levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
     lev = levels[ℓ]
@@ -385,6 +466,9 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         status = _level_rhs!(solver, lev, states, dQs, first_prepared,
                              !first_prepared, lev.level_comm.comm)
         status == 0 || return status
+        status = _refreshed_substep_status!(solver, lev, states, dt, stage,
+                                            count, control, guard)
+        status == 0 || return status
         stage == 1 && save_boxes!(false)
         _level_update!(solver, lev, states, dQs, dus, RKA[stage], RKB[stage], dt)
         # Same-level consistency before the next stage's shell imposition,
@@ -419,11 +503,11 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         for mc in 1:3
             status = _advance_level!(solver, ℓ + 1, states, dQs, dus,
                             t0 + (mc - 1) * dtf, dtf, false,
-                            _child_count(count, mc), dt, mc)
+                            _child_count(count, mc), dt, mc, control, guard)
             status == 0 || break
         end
     end
-    if transport_has_domain(solver.transport)
+    if transport_has_domain(solver.transport) || control.substep_cfl > 0
         status = MPI.Allreduce(status, max, lev.level_comm.comm)
         status == 0 || return status
     end
@@ -1217,7 +1301,7 @@ function _rollback!(solver, Q, workspace, callback, control, save, failure,
     # it re-failed every retry on a subcycled Sod whose plain restart at
     # the same lowered CFL succeeded. The artificial coefficient arrays
     # were the other such place until the savepoint began carrying them.
-    failure.reason === :nonfinite && _reset_workspace!(workspace)
+    failure.reason in (:nonfinite, :substep_cfl) && _reset_workspace!(workspace)
     # Instants between the savepoint and the failure were visited on a
     # trajectory that no longer exists. Re-arm them so the replacement
     # trajectory visits them too; see `rewind!` for what is and is not
@@ -1503,7 +1587,13 @@ function run!(solver::Solver, Q, workspace::Workspace;
                                 "whose spacing at this t is $(eps(solver.t))"))
         end
         prepared = true         # see the apply_bcs!/max_rate note above
-        step!(solver, Q, workspace, dt, prepared)
+        failure = _run_step!(solver, Q, workspace, dt, prepared, control)
+        if failure !== nothing
+            attempts = _rollback!(solver, Q, workspace, callback, control, save,
+                                  failure, attempts, rank)
+            dt_seen = 0.0
+            continue
+        end
         solver.t += dt
         solver.step += 1
         solver.dt_prev = dt

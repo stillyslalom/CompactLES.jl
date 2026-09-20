@@ -224,6 +224,15 @@ repair changes states produced by the scheme but does not change the scheme.
   calls the EOS at every point, which is why the per-step check is off by
   default rather than merely cheap.
 
+## Refreshed substeps
+
+- `substep_cfl = 0.0`: maximum CFL allowed after a refined level refreshes its
+  artificial coefficients at an RK stage. The check covers every substep of a
+  subcycled hierarchy and routes a violation through `run!`'s rollback path;
+  it is an absolute tripwire, independent of the root CFL. Set it to `0` to
+  disable the check, the default because a transient refreshed rate by itself
+  does not establish a stability ceiling.
+
 The validation applies no universal internal-energy positivity test. Whether
 `e < 0` is a failure depends on the enthalpy gauge and the domain of the model,
 so the question is put to the EOS through `state_admissibility`.
@@ -267,12 +276,13 @@ Base.@kwdef struct StepControl
     floor_scope::Symbol = :representable
     validity::Symbol = :strict
     validity_interval::Int = 0
+    substep_cfl::Float64 = 0.0
     # `landing_steps = 0` does not disable the shortening. The gap clip
     # is the same expression, so a scheduled instant would be overshot and its
     # trigger would fire late.
     function StepControl(predict, max_growth, landing_steps, dt_min, dt_min_ratio,
                          retries, cfl_backoff, savepoint_interval, floor_ratio,
-                         floor_scope, validity, validity_interval)
+                         floor_scope, validity, validity_interval, substep_cfl)
         landing_steps >= 1 ||
             throw(ArgumentError("StepControl: landing_steps must be >= 1 " *
                                 "(1 is a hard clip onto the scheduled time)"))
@@ -296,9 +306,12 @@ Base.@kwdef struct StepControl
         validity_interval >= 0 ||
             throw(ArgumentError("StepControl: validity_interval must be >= 0, " *
                                 "got $validity_interval"))
+        isfinite(substep_cfl) && substep_cfl >= 0 ||
+            throw(ArgumentError("StepControl: substep_cfl must be finite and non-negative, " *
+                                "got $substep_cfl"))
         new(predict, max_growth, landing_steps, dt_min, dt_min_ratio,
             retries, cfl_backoff, savepoint_interval, floor_ratio, floor_scope,
-            validity, validity_interval)
+            validity, validity_interval, substep_cfl)
     end
 end
 
@@ -408,6 +421,8 @@ Thrown by [`run!`](@ref) when the timestep or the state fails a
 `:invalid_state` (a state the validation rejected under `StepControl.validity`),
 `:transport_domain` (neutral diffusion outside its source domain; a strict,
 collective rejection independent of validity policy and without retries),
+`:substep_cfl` (a refreshed refined-level coefficient field exceeded
+`StepControl.substep_cfl`; recoverable through the same savepoint path),
 or `:no_progress` (a step the solver's clock cannot represent as an advance;
 a retry cannot help, so the CFL hint below does not fire for it). The
 remaining fields record the state the check rejected: `step`, `t`, `dt`, `cfl`,

@@ -463,7 +463,7 @@ function _carry_over!(Qf_new, dnew::Decomp, rnew::BlockRegion,
 end
 
 """
-    regrid!(solver, states, workspace, save) -> Bool
+Internal layout-rebuild implementation for [`regrid!`](@ref).
 
 Retag the coarse level and, when the tagged region moved, rebuild the level-1
 patch over it: a new [`Patch`](@ref) and [`LevelTransfer`](@ref) from the
@@ -486,8 +486,8 @@ savepoint writes: after a rollback nothing is banked at or below the step
 that failed (`Savepoint.guard`), so a regrid landing inside that window
 cannot re-arm the retry loop that guard exists to break.
 """
-function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
-                 workspace::Workspace, save) where {T}
+function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
+                       workspace::Workspace, save) where {T}
     spec = getfield(solver, :regrid)
     spec.tile > 0 && return _regrid_tiles!(solver, states, workspace, save)
     levels = getfield(solver, :levels)
@@ -571,11 +571,29 @@ function regrid!(solver::Solver{T}, states::Vector{<:ConservedState},
     _fill_fine_from_coarse!(solver, states, newlt)
     held && _carry_over!(states[fi], newfine.decomp, newregion, old_gather,
                          Nf_old, oldregion, active_g, n_cons)
-    _rebank!(solver, states, save)
     # The old transfer's chains are on COMM_SELF, so this free is rank-local
     # and every holder of the transfer makes it.
     free_transfer_decomps!(lt)
     return true
+end
+
+"""
+    regrid!(solver, states, workspace, save) -> Bool
+
+Retag and, when needed, rebuild the refined layout. Every call also refreshes
+the artificial coefficients on the resulting hierarchy before the next root
+CFL estimate; the refresh cadence is therefore every regrid check, independent
+of whether tagging or load balancing changed the layout. The savepoint is
+rebuilt only after an actual layout change. Returns whether it changed.
+"""
+function regrid!(solver::Solver, states::Vector{<:ConservedState},
+                 workspace::Workspace, save)
+    changed = _regrid_impl!(solver, states, workspace, save)
+    # The coefficient refresh is a regrid-check cadence, not a layout-change
+    # side effect: otherwise a timing-dependent rebalance decision changes the
+    # root CFL sequence.  A savepoint still follows only a changed layout.
+    _regrid_prime!(solver, states, workspace, save, changed)
+    return changed
 end
 
 # Grow or shrink this rank's patch vector (and the state vectors aligned with
@@ -612,6 +630,19 @@ function _rebank!(solver, states, save)
         save.step = solver.step
     end
     return save
+end
+
+# A regridded fine patch begins with blank artificial properties.  Rebuild them
+# before either the next root CFL estimate or a retry bank can read the new
+# layout; this is shared by direct `regrid!` and run!'s cadence hook.
+function _regrid_prime!(solver, states, workspace, save, changed)
+    if solver.art.enabled
+        solver.tstage = solver.t
+        _presync!(solver, states)
+        _prime_rhs!(solver, states, workspace)
+    end
+    changed && _rebank!(solver, states, save)
+    return nothing
 end
 
 # --- Tiled regridding -------------------------------------------------------
@@ -1083,7 +1114,6 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         is_fresh[fresh] .= true
         _seed_planes!(solver, states, levels[2], is_fresh)
     end
-    _rebank!(solver, states, save)
     # Every old transfer was replaced above, surviving tiles included, and a
     # departing or rebuilt tile's decomposition has no further reader, the
     # migration's sends having completed inside `_migrate_tile!`. Free

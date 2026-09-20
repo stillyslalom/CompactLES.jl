@@ -44,7 +44,11 @@
 #               stepping mode, filter cadence and relaxation, nesting depth
 #               and the sensor toggle. `undershoot_depths=2,3` and
 #               `undershoot_variants=all` (or a comma-separated list of
-#               label substrings) select the rows. Minutes per row.
+#               label substrings) select the rows; prefix a full label with
+#               `=` for an exact match. `undershoot_ghosts=on|off|both` selects
+#               the sensor toggle. The matched-step filter and projection
+#               cadence rows separate the global-step undershoot mechanisms.
+#               Minutes per row.
 #
 # What the mechanism is, as found in the tree:
 #
@@ -93,7 +97,8 @@ const args = CL.script_args(ARGS,
     (parts="all", smoke=false, ns="48,96,192", nodes=6,
      N=201, nmax=40000, waveN=96, wave_tfinal=0.5,
      layerN=96, layerny=24, layer_tfinal=50.26548245743669, samples=8,
-     undershoot_depths="2,3", undershoot_variants="all");
+     undershoot_depths="2,3", undershoot_variants="all",
+     undershoot_ghosts="both");
     positional=(:parts,))
 
 const RANK = MPI.Comm_rank(MPI.COMM_WORLD)
@@ -891,10 +896,11 @@ function undershoot_sample(solver, states)
 end
 
 function undershoot_run(label, N, ny, tfinal, samples, nmax; subcycle, filt_int,
-                        ghosts, depth=2, filter_cfl=0.35)
+                        ghosts, depth=2, filter_cfl=0.35, cfl=0.45,
+                        projection_interval=1, show_weight=false)
     attempt() do
         s = Solver(n_global=(N, ny, 1), L_domain=(8pi, 2pi, 1.0), bcs=PER3,
-                   eos=two_gases(), cfl=0.45,
+                   eos=two_gases(), cfl=cfl,
                    art=ArtParams(C_mu=0.0, C_beta=0.0, C_kappa=0.0, C_D=0.0),
                    control=StepControl(validity=:permissive),
                    filter_interval=filt_int, filter_cfl=filter_cfl,
@@ -905,13 +911,57 @@ function undershoot_run(label, N, ny, tfinal, samples, nmax; subcycle, filt_int,
         states = Q isa Vector ? Q : [Q]
         ws = Workspace(Q)
         out = Any[]
+        if show_weight
+            with_ghosts(() -> run!(s, Q, ws; tfinal=tfinal, nmax=1), ghosts)
+            weights = [(ps.patch.level, ntuple(d -> ps.decomp.active[d] ?
+                        CL.filter_weight(ps, d) : NaN, 3))
+                       for (ps, _) in CL.eachpatch(s, states)]
+            say("    startup rate=$(s.rate_prev) dt=$(s.dt_prev) ",
+                "direction_rates=$(s.filter_rate_prev) weights=$weights")
+        end
         for t in range(tfinal / samples, tfinal; length=samples)
-            with_ghosts(() -> run!(s, Q, ws; tfinal=t, nmax=nmax), ghosts)
+            if projection_interval == 1
+                with_ghosts(() -> run!(s, Q, ws; tfinal=t, nmax=nmax), ghosts)
+            else
+                with_ghosts(() -> sparse_projection_run!(s, Q, ws, t, nmax,
+                                                         projection_interval), ghosts)
+            end
             push!(out, (s.t, s.step, undershoot_sample(s, states)...))
             s.step >= nmax && break
         end
         return out
     end
+end
+
+# Diagnostic-only global-step driver. It retains the production RK stages,
+# per-stage shell imposition, rate calculation and filter, but restricts the
+# hierarchy only on the selected cadence. On intervening steps the filtered
+# state gets a root-down shell refresh without a fine-to-coarse projection.
+function sparse_projection_run!(solver, states, workspace, tfinal, nmax, interval)
+    solver.step == 0 && CL._prime_coefficients!(solver, states, workspace)
+    while solver.t < tfinal && solver.step < nmax
+        CL.sync_patches!(solver, states)
+        CL.prolong_level_ghosts!(solver, states)
+        solver.tstage = solver.t
+        apply_bcs!(solver, states)
+        rate, _, filter_rate = max_rate(solver, states)
+        dt = min(CL.predicted_dt(solver, solver.control, rate), tfinal - solver.t)
+        step!(solver, states, workspace, dt, true)
+        solver.t += dt
+        solver.step += 1
+        solver.dt_prev = dt
+        solver.rate_prev = rate
+        solver.filter_rate_prev = filter_rate
+        if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
+            filter_state!(solver, states)
+        end
+        if solver.step % interval == 0
+            CL.sync_levels!(solver, states)
+        else
+            CL.prolong_level_ghosts!(solver, states)
+        end
+    end
+    return states
 end
 
 function print_undershoot(label, r)
@@ -949,23 +999,41 @@ function undershoot_part(N, ny, tfinal, samples, nmax)
     say("coarse-evolved values), and by distance in fine nodes from each ",
         "level's own imposed plane")
     depths = Set(parse.(Int, split(args.undershoot_depths, ',')))
-    variants = Any[("two levels, global step", (subcycle=false, filt_int=1)),
+    variants = Any[("two levels, global step", (subcycle=false, filt_int=1,
+                                                show_weight=true)),
+                   # Match the three-level global run's root-step scale without
+                   # adding its second transfer. This separates the smaller
+                   # globally shared dt from the extra coupling operation.
+                   ("two levels, global step, depth-3 dt",
+                    (subcycle=false, filt_int=1, cfl=0.15, show_weight=true)),
+                   ("two levels, matched dt, filter every 3",
+                    (subcycle=false, filt_int=3, cfl=0.15, show_weight=true)),
+                   ("two levels, sparse projection every 3",
+                    (subcycle=false, filt_int=1, cfl=0.15,
+                     projection_interval=3)),
                    ("two levels, global step, no filter",
                     (subcycle=false, filt_int=0)),
                    ("two levels, subcycled", (subcycle=true, filt_int=1)),
                    ("three levels, global step",
-                    (subcycle=false, filt_int=1, depth=3)),
+                    (subcycle=false, filt_int=1, depth=3, show_weight=true)),
                    ("three levels, subcycled",
                     (subcycle=true, filt_int=1, depth=3)),
-                   # The relaxed weight of a root pass under global stepping is
-                   # the finest level's step over the root's own; the unrelaxed
-                   # pass separates that weight from the stepping itself.
+                   # Every level reads the same finest-grid directional rate.
+                   # This tests relaxation at the fixed global pass cadence;
+                   # the printed weights show when a direction already saturates.
                    ("three levels, global step, unrelaxed filter",
                     (subcycle=false, filt_int=1, depth=3, filter_cfl=0.0))]
-    wanted = args.undershoot_variants == "all" ? nothing :
+    exact = startswith(args.undershoot_variants, "=") ?
+            args.undershoot_variants[2:end] : nothing
+    wanted = args.undershoot_variants == "all" || exact !== nothing ? nothing :
              split(args.undershoot_variants, ',')
-    for (vlab, vkw) in variants, g in GHOST_MODES
+    ghosts = args.undershoot_ghosts == "both" ? GHOST_MODES :
+             args.undershoot_ghosts == "on" ? (true,) :
+             args.undershoot_ghosts == "off" ? (false,) :
+             error("undershoot_ghosts must be on, off, or both")
+    for (vlab, vkw) in variants, g in ghosts
         get(vkw, :depth, 2) in depths || continue
+        exact === nothing || vlab == exact || continue
         wanted === nothing || any(w -> occursin(w, vlab), wanted) || continue
         label = "$vlab, $(ghost_label(g))"
         r = undershoot_run(label, N, ny, tfinal, samples, nmax;
