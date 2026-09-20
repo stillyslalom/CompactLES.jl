@@ -149,6 +149,7 @@ filtering even when artificial properties are enabled. Use
 | `smoother` | `:gaussian`, explicit | `:compact`, one pass of the state filter per sensor: a quarter of the right-hand side in the multicomponent case, and one sweep per species |
 | `beta_sensor` | `:strain` | `:dilatation` on an inviscid wall or wherever the strain cusp costs order |
 | `detector` | `:delta4` | `:d8` separates shocks from smooth flow only with a cusp-free sensor field, and lowers the spherical-origin CFL ceiling to 0.25 |
+| `species_flux` | `:fickian`, a per-species flux with the correction velocity | `:bulk`, one diffusive flux on every conserved variable, for an advected interface between gases of unequal molecular weight that must hold a uniform pressure, or a shocked interface at a large density ratio; equal on shocked mixing otherwise, at a fifth to a third more per step (see [Filtering and artificial properties](@ref)) |
 
 Sensor smoothing is the largest single cost in the artificial-property
 calculation. With the default smoother, it takes about a quarter of a

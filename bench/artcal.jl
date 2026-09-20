@@ -6,11 +6,12 @@
 #   julia --project=. -t auto bench/artcal.jl filter filter_cfl=0
 #
 # Sweeps available: mu beta kappa D Y cfl resolution sensor smoother detector
-# field response brill2025 bulk
+# field response brill2025 bulk bulkconst
 #
 # Background settings (`key=value`): smoother, detector, alphaf (the compact
 # filter's alpha, 0.45 = the solver default) and filter_cfl (0.35 = the solver
-# default, 0 = unrelaxed).
+# default, 0 = unrelaxed). `bulkconst` also reads C_Ds and C_Ys, each a comma
+# list overriding the swept C_D and C_Y values.
 # The filter background reaches every case, so a constant re-swept at a
 # candidate alpha or under the relaxed formulation is measured on the same
 # battery its default was fitted on.
@@ -53,7 +54,7 @@ include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 const DEFAULTS = ArtParams()
 const ALL = ["mu", "beta", "kappa", "D", "Y", "cfl", "filter", "resolution",
              "sensor", "smoother", "detector", "field", "response",
-             "brill2025", "bulk"]
+             "brill2025", "bulk", "bulkconst"]
 # Sweep names are bare words; `key=value` sets the background configuration that
 # every sweep then runs against. Refitting a constant under a changed smoother
 # is exactly `artcal.jl kappa smoother=gaussian`, and keeping the two forms in
@@ -67,7 +68,13 @@ const ALL = ["mu", "beta", "kappa", "D", "Y", "cfl", "filter", "resolution",
 const OPTS = CompactLES.script_args(filter(a -> occursin('=', a), ARGS),
                          (smoother = DEFAULTS.smoother,
                           detector = DEFAULTS.detector,
-                          alphaf = 0.45, filter_cfl = 0.35))
+                          alphaf = 0.45, filter_cfl = 0.35,
+                          C_Ds = "0.0025,0.005,0.01,0.02,0.04",
+                          C_Ys = "50,100,200"))
+# `bulkconst` reads its two constant lists off these; a string default so a
+# plain run of the rest of the sweeps never has to parse them.
+const BULK_C_Ds = parse.(Float64, split(OPTS.C_Ds, ','))
+const BULK_C_Ys = parse.(Float64, split(OPTS.C_Ys, ','))
 # The filter background every case runs under. The two values above are the
 # `Numerics` defaults, spelled out because `Numerics` holds them only inside a
 # built filter; the `filter` sweep marks 0.45 as the default for the same
@@ -617,6 +624,35 @@ if want("bulk")
                 flux, mx, s1[1], s1[3], s1[4], s2[1], s2[3], s2[4],
                 sl[1], sl[2], sl[3], sl[4])
     end
+    println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
+end
+
+# The bulk channel's one diffusivity also carries momentum and energy, so the
+# Fickian channel's C_D = 0.01, C_Y = 100 are not assumed to transfer; this
+# sweeps both constants at once on the same battery as `bulk`, against the
+# Fickian channel at its own constants as the reference line. The extra row
+# turns the mass-fraction bound off (C_Y = 0) at the default C_D to isolate
+# its effect from C_D's.
+if want("bulkconst")
+    println("\n=== bulk channel constants (C_D, C_Y) against the Fickian default ===")
+    println("channel  C_D      C_Y     | mix wid | SI 5.04: minY  wid steps | " *
+            "SI 100: minY  wid steps | slab 100/7: max|p-1|  minY  min rho  steps")
+    hr()
+    function bulkconst_row(channel, cd, cy, a)
+        mx = m_mix(art=a)
+        s1 = m_si_ratio(art=a, delta=2)
+        s2 = m_si_ratio(art=a, delta=2, rho_heavy=100.0)
+        sl = m_slab(art=a)
+        @printf("%-8s %-8.4g %-7.4g | %7.5f | %+7.4f %4g %5g | ",
+                channel, cd, cy, mx, s1[1], s1[3], s1[4])
+        @printf("%+7.4f %4g %5g | %9.2e %+8.4f %7.4f %5g\n",
+                s2[1], s2[3], s2[4], sl[1], sl[2], sl[3], sl[4])
+    end
+    bulkconst_row("fickian", DEFAULTS.C_D, DEFAULTS.C_Y, art(species_flux=:fickian))
+    for cd in BULK_C_Ds, cy in BULK_C_Ys
+        bulkconst_row("bulk", cd, cy, art(species_flux=:bulk, C_D=cd, C_Y=cy))
+    end
+    bulkconst_row("bulk", 0.01, 0.0, art(species_flux=:bulk, C_D=0.01, C_Y=0.0))
     println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end
 

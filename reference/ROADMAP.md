@@ -111,12 +111,10 @@ details are in [DESIGN.md](DESIGN.md).
   mixture-averaged solver closure with strict collective domain rejection,
   including subcycled AMR, with the sources kept distinct (commit `711cecf`).
 
-- [ ] **N9 — Validate the bulk species channel beyond its existing cases.**
-  Measure `species_flux=:bulk` in 3-D shock/mixing runs and calibrate its inherited
-  constants. Compare pressure equilibrium, species bounds, energy budgets, and cost
-  with the Fickian channel. Distinguish continuous-model entropy properties from
-  any verified property of the complete discrete update.
-  **Depends on:** N1 and V1; keep default selection evidence-based.
+- [x] **N9** — The bulk species channel was measured in three dimensions
+  against the Fickian one, its constants confirmed, and its entropy inequality
+  restated as a continuous-model property; `:fickian` stays the default
+  (commit pending).
 
 ### AMR numerics
 

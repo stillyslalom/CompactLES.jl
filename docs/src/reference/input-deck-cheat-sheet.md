@@ -168,14 +168,20 @@ the same `Problem` and `Numerics`.
 
 ```julia
 ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01, C_D=0.01,
+          C_Y=100.0, Y_tolerance=1e-4,
           mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
-          smoother=:gaussian, detector=:delta4)
+          smoother=:gaussian, detector=:delta4, species_flux=:fickian)
 ```
 
 Set `enabled=false` for an inviscid/unregularized experiment. `C_mu`, `C_beta`,
 `C_kappa`, and `C_D` control artificial shear viscosity, bulk viscosity,
-conductivity, and species diffusion. The sensor symbols select the fields;
-`reduction`, `smoother`, and `detector` select how they are combined.
+conductivity, and species diffusion; `C_Y` bounds the mass fractions to
+`[0, 1]` beyond a dead band of `Y_tolerance`. The sensor symbols select the
+fields; `reduction`, `smoother`, and `detector` select how they are combined.
+`species_flux=:bulk` replaces the per-species flux by one diffusive flux on
+every conserved variable, which holds a uniform pressure across an advected
+interface of unequal molecular weights at a higher cost per step (see
+[Filtering and artificial properties](@ref)).
 
 ## Timestep control: `StepControl`
 

@@ -127,8 +127,9 @@ Cook-style artificial-property controls.
   the mass and mole fraction f ∈ {Y_k, X_k} of max(C_D Δ_d|D_d f|, C_Y Δ_g ·
   excursion(f))]: the same bracket, constants and smoothing as the Fickian
   D\\*_k, sensed on both fields. It is conservative, holds a uniform (u, p, T)
-  state invariant to round-off whatever the composition, and satisfies every
-  entropy inequality; the Fickian channel's enthalpy flux moves ρE across a
+  state invariant to round-off whatever the composition, and as a continuous
+  model satisfies every entropy inequality, which the discrete update is not
+  shown to inherit; the Fickian channel's enthalpy flux moves ρE across a
   uniform-pressure interface of unequal gas constants, and this is the term
   that removes the pressure error of an advected large-density-ratio
   interface (7 to 8 orders on the Brill, Olson & Bokman advection test) and
@@ -137,9 +138,11 @@ Cook-style artificial-property controls.
   `D_art[k]`, enters the diffusive timestep as they do, and costs n_cons
   gradient line solves per direction in place of the Fickian channel's
   n_species, plus one detector and smoother pass per species. Not the
-  default: its constants are inherited from the Fickian channel and it has
-  not been run on a three-dimensional case. Patched and refined runs take it
-  as the root does.
+  default: on a shocked sphere in three dimensions the two channels agree on
+  the mass-fraction excursions and the mixing measures and this one costs
+  about a third more per step, so select it for an advected interface at a
+  large density ratio, where the Fickian pressure error is the defect.
+  Patched and refined runs take it as the root does.
 - `detector`: the high-pass that builds every sensor, in
   `detect_sum!`. `:delta4` (default) is Cook's undivided fourth
   difference, computed explicitly. `:d8` is Pyranda's

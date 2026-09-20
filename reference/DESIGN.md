@@ -690,12 +690,22 @@ properties follow from the form alone.
    air/SF6 interface with the filter and the artificial properties on: u, p
    and T stay below 4e-14 over 298 steps while ρ relaxes by 2e-2, where the
    Fickian channel drifts u to 2e-4.
-3. It satisfies every entropy inequality. For any convex entropy pair (η, ψ)
+3. The continuous model satisfies every entropy inequality. For any convex
+   entropy pair (η, ψ)
    of the hyperbolic system, multiplying by η'(q) gives
    ∂_t η + ∇·(ψ − D_b ∇η) = −D_b ∇qᵀ η''(q) ∇q ≤ 0 pointwise for D_b ≥ 0, and
    the inequality survives D_b → 0. For the Euler system with η = −ρs this is
    thermodynamic consistency. A spatially varying D_b factors out of the
    quadratic form, so the argument needs no smoothness of the coefficient.
+   The discrete update inherits none of this by argument: the compact
+   derivative is not summation-by-parts against the trapezoid quadrature,
+   and the filter and the Runge–Kutta step are separate operators. Measured
+   (`bench/bulkentropy.jl`), the semi-discrete channel term produces entropy
+   at every sample and matches the quadratic form closely, while the filter
+   pass and the Runge–Kutta step on an interface with mass fractions outside
+   [0, 1] both lower ∫ρs
+   ([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), "The bulk species
+   channel in three dimensions").
 4. It differs from the diffused-density form of Brill, Olson & Bokman
    (arXiv:2503.12680, 2025), J_i = −D∇ρ_i with the consistency fluxes
    F = (Σ_i J_i) ⊗ u and H = (Σ_i J_i)(½|u|²) + Σ_i J_i e_i, by exactly a

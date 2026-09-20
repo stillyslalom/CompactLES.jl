@@ -91,11 +91,50 @@ only a starting point under another.
 - `C_beta`: artificial bulk viscosity from the sensor named by `beta_sensor`,
   which under the default setting is the same sensor;
 - `C_kappa`: artificial conductivity from internal-energy variation; and
-- `C_D`: per-species artificial diffusivity from mass-fraction variation.
+- `C_D`: per-species artificial diffusivity from mass-fraction variation,
+  with `C_Y` the bound that raises it wherever a mass fraction leaves
+  `[0, 1]` by more than `Y_tolerance`.
 
 The resulting fields `mu_art`, `beta_art`, `kappa_art`, and `D_art` enter the
 same stress, heat, and species fluxes as molecular transport. Setting
 `enabled=false` skips their construction.
+
+### Two forms of the species channel
+
+`species_flux` selects how the artificial species diffusivity enters the
+equations. The default `:fickian` is a per-species flux of the form the
+molecular one takes, with the correction velocity that keeps the fluxes
+summing to zero and the enthalpy flux in the energy equation. It moves no
+bulk mass and no momentum. At a composition interface between gases of
+different gas constants it does move energy: the species enthalpies differ,
+so the enthalpy flux changes the pressure of a state whose velocity,
+pressure and temperature are uniform. On an advected interface at a density
+ratio of a hundred that error reaches a percent of the pressure after a few
+transits, and it grows with the ratio.
+
+`:bulk` replaces that flux by one diffusive flux `-D_b ∇q` on every conserved
+variable, with a single diffusivity built from the same sensor on both the
+mass and the mole fraction of every species. The form holds a uniform
+velocity, pressure and temperature invariant to round-off whatever the
+composition, so the pressure error above disappears, and in one dimension
+it carries a shock through a density ratio of a hundred that the Fickian
+channel does not. Its diffusivity also diffuses momentum and energy, which
+acts as a small added viscosity and conduction; on a shocked sphere in
+three dimensions the two channels give the same mass-fraction excursions and
+mixing measures, and the added sink is a few percent of the artificial
+viscosities'. The cost is four more gradient line solves per direction and
+a second sensor field per species, a fifth to a third more wall time per
+step. As a continuous model the bulk form also satisfies the entropy
+inequality of the system; the discrete update does not inherit that
+property, and the filter pass lowers the total entropy on most steps under
+either channel.
+
+Choose `:bulk` for an interface between gases of unequal molecular weight
+that must hold a uniform pressure over a long advection, or for a shocked
+interface at a large density ratio; keep the default for a single species,
+for equal molecular weights (the two forms then coincide), and wherever the
+extra cost buys nothing. Both channels use `C_D = 0.01` and `C_Y = 100`;
+neither constant needs refitting under `:bulk`.
 
 Bulk viscosity is the primary shock-spreading mechanism. Conductivity controls
 thermal ringing and wall heating. Species diffusivity prevents an unresolved

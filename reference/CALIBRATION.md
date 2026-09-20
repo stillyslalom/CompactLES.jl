@@ -33,7 +33,7 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 | `mu_sensor`, `beta_sensor`, `reduction` | `:strain`, `:strain`, `:sum` | keep | The alternatives move no battery column past the fourth digit, or lose a converging geometry ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `smoother` | `:gaussian` | keep | Raises the spherical-origin ceiling from 0.15 to 0.4 in its sweep, runs 29% cheaper, and costs seven points of planar wall heating ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `detector` | `:delta4` | provisional | `:d8` improves six of seven battery columns and halves the wall deficit at high CFL, and lowers the origin ceiling from 0.3 to 0.25 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
-| `species_flux` | `:fickian` | provisional | `:bulk` is at least as good on every measured column; the constants are fitted on the Fickian channel ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
+| `species_flux` | `:fickian` | provisional | `:bulk` removes the pressure error of an advected interface at a large density ratio and matches the default on a shocked sphere at a third more per step; the constants are fitted on the Fickian channel and insensitive under this one ([battery](CALIBRATION_APPENDIX.md#the-bulk-species-channel), [three dimensions](CALIBRATION_APPENDIX.md#the-bulk-species-channel-in-three-dimensions)). |
 | `cfl` | 0.5 | keep | Use 0.3 or `StepControl(retries = 4)` for a converging shock at a spherical origin, whose ceiling is 0.3; walls and axes carry none ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)). |
 | `deriv` closure rows | `:neutral3` | keep | Neutral at an inviscid slip wall, where the cascade rows grow a wall-normal velocity; the C6 rows carry a measured pseudospectral certificate ([certificates](CALIBRATION_APPENDIX.md#closure-certificates)). |
 | `compact_filter` α | 0.45 | too strong | 0.49 fits at 128³ and at 256³ and clears the battery; the stability edge is α = 0.49875 at full strength ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)). |
@@ -88,10 +88,14 @@ cost. The link is to the section holding the evidence.
   profile; resolution, closures, detector, sensor field, CFL and filter strength
   each move the excursion by nothing
   ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
-- **A shocked species interface at a large density ratio fails.** At a density
-  ratio of 100 the Fickian channel fails and `species_flux = :bulk` completes, for four
-  more gradient line solves per direction. The constants are fitted on the
-  Fickian channel ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
+- **A shocked species interface at a large density ratio fails, or an advected
+  one drifts in pressure.** In one dimension at a density ratio of 100 the
+  Fickian channel fails and `species_flux = :bulk` completes; the Fickian
+  enthalpy flux moves the pressure of an advected interface where the bulk
+  channel holds it to round-off, in one dimension and three; on a shocked
+  sphere in three dimensions the two are indistinguishable
+  ([battery](CALIBRATION_APPENDIX.md#the-bulk-species-channel),
+  [three dimensions](CALIBRATION_APPENDIX.md#the-bulk-species-channel-in-three-dimensions)).
 - **A passive interface broadens faster than the species diffusivity explains.**
   The filter is the broadening: a passive interface more than doubles in width
   with D\* off, and a 64-fold sweep in `C_D` moves the width by 22%. Weaken the

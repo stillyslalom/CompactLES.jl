@@ -45,6 +45,8 @@ section that moved it says so in one sentence and the older figure is gone.
 20. [AMR](#amr) (`bench/amr_transfer.jl`, `test/level_tests.jl`)
 21. [Temperature-dependent transport](#temperature-dependent-transport)
     (`test/transport_tests.jl`, `test/transport_integration_tests.jl`)
+22. [The bulk species channel in three dimensions](#the-bulk-species-channel-in-three-dimensions)
+    (`bench/bulkchannel.jl`, `bench/bulkentropy.jl`)
 
 ## The shock battery
 
@@ -780,14 +782,35 @@ relaxes by 2.0e-2, where the default channel's enthalpy flux drives u to 2.2e-4 
 1.3e-4. The channel costs n_cons gradient line solves per direction in place of the Fickian
 flux's n_species, four more, plus one further detector and smoother pass per species.
 
-Not the default. The four constants are calibrated on the Fickian channel, and the
-single-species battery is untouched either way. The case that should decide it is the
-vortex-ring/SF6 run that motivated the mass-fraction bound, in three dimensions and with the
-artificial viscosities active, and it has not been run under the bulk channel. Two further
-questions: whether the unequal-γ contact drift of 5e-3 with no shock is also the Fickian
-enthalpy flux, which the slab test cannot see at equal γ; and the ratio-1000 failures, which
-are the transmitted shock's foot on the shock case and the seven-cell density jump on the
-slab, neither a species-channel failure.
+The two constants under the channel (`bench/artcal.jl bulkconst`), on the same rows, with
+the Fickian default as the reference line. The rows at C_D = 0.005 and 0.02 lie between
+their neighbours and are not printed.
+
+```
+channel  C_D     C_Y | mix width | SI 5.04: worst Y / cells / steps | SI 100                | slab 100/7: max|p-1| / worst Y / rho_min / steps
+fickian  0.01    100 | 0.01820   | -0.0129 / 4 / 647                | FAIL                  | 1.86e-02 / -0.0810 / 0.9949 / 4207
+bulk     0.0025   50 | 0.01795   | -0.0170 / 3 / 641                | -0.0318 / 7 / 674     | 6.30e-11 / -0.0950 / 0.9907 / 4207
+bulk     0.0025  100 | 0.01795   | -0.0112 / 3 / 645                | -0.0197 / 7 / 684     | 3.43e-11 / -0.0645 / 0.9973 / 4242
+bulk     0.0025  200 | FAIL      | -0.0060 / 3 / 648                | -0.0222 / 7 / 715     | 3.73e-11 / -0.0440 / 0.9985 / 4275
+bulk     0.01     50 | 0.01819   | -0.0164 / 3 / 641                | -0.0311 / 7 / 674     | 4.27e-11 / -0.0947 / 0.9900 / 4161
+bulk     0.01    100 | 0.01820   | -0.0108 / 3 / 644                | -0.0193 / 7 / 684     | 4.92e-11 / -0.0643 / 0.9938 / 4201
+bulk     0.01    200 | 0.01820   | -0.0087 / 4 / 647                | -0.0183 / 7 / 712     | 6.16e-11 / -0.0440 / 0.9961 / 4254
+bulk     0.04     50 | 0.01902   | -0.0149 / 4 / 640                | -0.0278 / 7 / 674     | 4.94e-11 / -0.0935 / 0.9924 / 4056
+bulk     0.04    100 | 0.01902   | -0.0101 / 4 / 643                | -0.0201 / 7 / 682     | 4.29e-11 / -0.0636 / 0.9953 / 4085
+bulk     0.04    200 | 0.01902   | -0.0067 / 4 / 647                | -0.0283 / 7 / 707     | 4.81e-11 / -0.0439 / 0.9971 / 4129
+bulk     0.01      0 | 0.01819   | -0.1923 / 4 / 640                | FAIL                  | 6.50e-11 / -2.6201 / 0.5489 / 4116
+```
+
+C_D moves the shocked excursion by a tenth over a sixteenfold range and the advected width
+by 6%; C_Y is the active constant and trades the excursion for steps. The two failed
+advection rows are the mass-fraction bound and not the channel: the two channels are
+bit-identical on that equal-weight case, and at C_Y = 200 both lose positivity on the first
+step, since a bound that switches on inside a step is not in the step size set before it.
+C_D = 0.01 and C_Y = 100 stay. The three-dimensional measurements are in [their own
+section](#the-bulk-species-channel-in-three-dimensions). Open beside them: the
+ratio-1000 failures, which are the transmitted shock's foot on the shock case and
+the seven-cell density jump on the slab, neither a species-channel failure; the unequal-γ
+drift is answered there.
 
 ### The CFL rate convention
 
@@ -4761,3 +4784,105 @@ strict inclusive source bounds and finite positive coefficients.
 single patches, disjoint patch owners and subcycled fine-level subsets,
 including the KernelAbstractions CPU launch path. These checks do not add
 data or change the provenance and source distinctions recorded above.
+
+## The bulk species channel in three dimensions
+
+`bench/bulkchannel.jl` runs `species_flux = :bulk` against the default `:fickian` on two
+three-dimensional cases at the package's constants, eight ranks at `-t 1`. The slab is
+`brill_slab` as a sphere: the heavy gas at uniform p = 1 and T = 1 advected at u = 10 along
+x through a periodic cube of 48³ points, seven cells across the interface, for two transits,
+both gases at γ = 1.4. The bubble is `shock_interface` as a sphere: a Mach 1.5 air shock
+into a sphere of radius 0.1 of the heavy gas (γ = 1.09) on a 2h interface, in
+(0, 1) × (0, 0.5)² on 128 × 64 × 64 points, Dirichlet ends and periodic sides, to t = 0.25.
+Each runs at density ratio 5.04 and 100. The bubble's mixedness is ∫ Y_air Y_heavy dV,
+theta is `molecular_mixing` and W `mix_width` along x, and "outside" counts the interior
+points beyond the 1e-4 dead band at the end.
+
+```
+slab: max|p-1| / max|u-u0|/u0 / worst Y / final rho_min / steps / ms per step
+fickian, R = 5.04 | 7.9e-03 / 1.2e-03 / -0.011 / 0.9941 / 334 / 66.9
+fickian, R = 100  | 1.8e-01 / 1.0e-02 / -0.103 / 0.9646 / 476 / 65.6
+bulk, R = 5.04    | 1.1e-12 / 2.1e-14 / -0.011 / 0.9955 / 329 / 78.4
+bulk, R = 100     | 2.2e-11 / 3.2e-13 / -0.064 / 0.9770 / 408 / 78.9
+
+bubble: worst Y / outside / mixedness / theta / W / steps / ms per step
+fickian, R = 5.04 | -0.0116 / 4414 / 7.562e-04 / 0.2733 / 0.0443 / 435 / 237
+fickian, R = 100  | -0.0284 / 8997 / 1.311e-03 / 0.1984 / 0.1057 / 688 / 237
+bulk, R = 5.04    | -0.0123 / 4377 / 7.556e-04 / 0.2733 / 0.0442 / 418 / 307
+bulk, R = 100     | -0.0321 / 8857 / 1.317e-03 / 0.1987 / 0.1060 / 594 / 306
+```
+
+The slab carries the one-dimensional result into three dimensions: the Fickian pressure
+error is the enthalpy flux's and grows with the ratio, the bulk channel's stays at round-off,
+and at ratio 100 the bulk channel holds the mass fraction to two thirds of the Fickian
+excursion. On the shocked sphere the two channels are indistinguishable at what the grid
+resolves: the excursions agree within 15% with the bulk channel's the larger, the mixing
+measures to three digits, the kinetic-energy histories to half a percent, and the Fickian
+channel completes ratio 100, where the one-dimensional case fails on the transmitted
+shock's foot at 400 points. The channel costs 17% per step on the slab and 30% on the
+bubble: the n_cons − n_species extra gradient solves per direction and the second sensor
+field per species.
+
+The `budget` part evaluates the right-hand side three times on one state, on the run's own
+solver, on one with C_D = C_Y = 0 and on one with every artificial constant zero, so the
+species channel's rate of change of kinetic energy stands beside the three artificial
+viscosities'. The isolation is exact, since neither constant enters μ\*, β\* or κ\*. The
+Fickian flux has no momentum component and its kinetic-energy rate is zero by construction
+(1e-19 measured). Under the bulk channel −D_b ∇(ρu) is a viscosity, and on the bubble its
+sink runs at 0.4 to 1.6% of the artificial viscosities' at ratio 5.04 and 2 to 5% at ratio
+100 once the shock has crossed the sphere, with max D_b at 1e-3 to 7e-3 against max μ\*/ρ at
+1e-5: the composition varies where the velocity is smooth. The compact filter's sink is
+outside this budget.
+
+The `constants` part, the bubble at 96 × 48 × 48 under the bulk channel:
+
+```
+worst Y / points outside the band / theta
+C_D    | R = 5.04: C_Y 50 / 100 / 200                          | R = 100: C_Y 50 / 100 / 200
+0.005  | -0.016 / 2747 / 0.333, -0.011 / 2342 / 0.333, -0.009 / 2030 / 0.334 | -0.042 / 5626 / 0.241, -0.032 / 4816 / 0.241, -0.069 / 4037 / 0.242
+0.01   | -0.016 / 2723 / 0.333, -0.011 / 2290 / 0.334, -0.009 / 1978 / 0.334 | -0.042 / 5563 / 0.242, -0.031 / 4707 / 0.242, -0.098 / 3941 / 0.243
+0.02   | -0.015 / 2631 / 0.335, -0.011 / 2226 / 0.335, -0.009 / 1934 / 0.336 | -0.041 / 5561 / 0.244, -0.030 / 4574 / 0.245, -0.056 / 3935 / 0.245
+```
+
+C_D moves the excursion by 5% over a fourfold range and the mixing measures by a percent;
+C_Y = 100 is the minimum of the excursion at ratio 100, where 200 doubles or triples it,
+and at ratio 5.04 the gain from 100 to 200 is a fifth. The constants stay where the
+Fickian channel put them. With the heavy gas at γ = 1.09 the slab's Fickian pressure error
+is unchanged (7.9e-3 and 2.1e-1) and the bulk channel's stays at round-off, so the
+unequal-γ contact drift with no shock is the Fickian enthalpy flux as well.
+
+`bench/bulkentropy.jl` measures what the discrete operators make of the entropy inequality
+of `reference/DESIGN.md` ("The species channel", property 3), on a Taylor–Green velocity
+field at Mach 0.1 carrying a sphere of the heavy gas (ratio 5.04, γ = 1.09) through a
+periodic cube of 32³ points to t = 2, 46 steps, and on the one-dimensional `brill_slab`. It
+derives the entropy variables w = ∂(ρs)/∂q of an ideal mixture and checks them against
+central differences (7e-10 relative over 64 states); integrates the channel's semi-discrete
+production ∫ w·R dV, with R the right-hand-side difference above, beside the continuous
+quadratic form D_b ∇qᵀ(−η'')∇q on the solver's own gradients, their difference being the
+defect of a derivative that is not summation-by-parts against the quadrature; and records
+∫ρs after every Runge–Kutta step and after every filter pass, the pass run from the
+callback and verified bitwise against an ordinary run. Points where a partial density is
+nonpositive are excluded from the production integrals and counted, and floored in ∫ρs.
+
+```
+semi-discrete, 32^3: P_channel / defect from the quadratic form (bulk), P_channel (fickian)
+t = 0.22 .. 1.99 | +7.27e-3 .. +8.06e-3 / -8e-8 .. -1e-7 | +5.69e-3 .. +6.33e-3
+
+fully discrete: steps / RK decreases (worst) / filter decreases (worst) / total change
+32^3 bulk    |   46 /    0            /   43 (-7e-6)    | +1.5e-2
+32^3 fickian |   46 /    0            /   43 (-7e-6)    | +1.2e-2
+32^3 art off |   45 /   45 (-1e-7)    /   42 (-7e-6)    | -1.7e-4
+slab bulk    | 4201 / 2017 (-9e-4)    / 4185 (-1e-4)    | +7.7e-3
+slab fickian | 4207 / 1954 (-7e-3)    / 2715 (-7e-4)    | -2.5e-2
+slab art off | fails at step 187
+```
+
+The channel's semi-discrete production is positive at every sample under both channels and
+is the whole right-hand side's, and the bulk channel's agrees with the continuous quadratic
+form to 1e-5: the non-SBP defect is not where the inequality is lost. The complete update
+does not inherit it. On the resolved three-dimensional case the Runge–Kutta step never
+lowers ∫ρs with a channel on and the filter pass lowers it on nearly every step, by 1% of
+what the channel produces; on the slab, whose interface holds mass fractions outside [0, 1]
+throughout, the Runge–Kutta step lowers it on half the steps under either channel. The
+inequality is a property of the continuous model and of the semi-discrete channel term; the
+filter and the bounded-fraction excursions are outside it.
