@@ -1742,7 +1742,7 @@ function test_bulk_patched()
     tol = np <= 2 ? 1e-14 : 1e-12
     check("bulk two-patch slab: max rho matches serial", abs(gmax(m) - ref), tol)
 end
-const BULK_PATCHED_MAX_RHO = 19.99999737294068
+const BULK_PATCHED_MAX_RHO = 19.99999737294109
 
 # ---------------------------------------------------------------------------
 # Device line solves (reference/AMR_GPU.md). A DevicePlan runs the fill,
@@ -2188,7 +2188,7 @@ function test_tiled_level()
         check("tiled regrid under ownership: last tile tracks as serial (184)",
               abs(gmax(last(offs)) - 184), 0.5)
         check("tiled regrid under ownership: time reached matches serial",
-              abs(gmax(solver.t) - 0.0033189626348560978), 1e-13)
+              abs(gmax(solver.t) - 0.0033189621649104477), 1e-13)
         spec = getfield(solver, :regrid)
         record = sort([(r.offset[1], c) for (r, c) in spec.created])
         flat = Int[spec.checks; length(record);
@@ -2287,7 +2287,7 @@ function test_tiled_level()
         check("rebalance on: last tile tracks as serial (192)",
               abs(gmax(last(offs)) - 192), 0.5)
         check("rebalance on: time reached matches serial",
-              abs(gmax(solver.t) - 0.0033189624419977413), 1e-13)
+              abs(gmax(solver.t) - 0.003318961972053177), 1e-13)
         check("rebalance on: max/mean busy time measured",
               isfinite(spec.imbalance) && spec.imbalance >= 1 ? 0.0 : 1.0, 0.5)
         # Hysteresis, on synthetic per-rank busy times: rank r reports
@@ -2435,7 +2435,7 @@ function test_level_subset()
     check("regrid under subsets: region extent tracks as serial (25)",
           abs(gmax(region.extent[1]) - 25), 0.5)
     check("regrid under subsets: time reached matches serial",
-          abs(gmax(solver.t) - 0.0055447496435236483), 1e-13)
+          abs(gmax(solver.t) - 0.0055447477787401445), 1e-13)
 end
 
 # ---------------------------------------------------------------------------

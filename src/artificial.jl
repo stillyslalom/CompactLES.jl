@@ -30,9 +30,11 @@
 # replaces that Fickian channel by one diffusivity D_b on every conserved
 # variable (`bulk_diffusivity!`; the flux is assembled in rhs.jl), sensed on
 # the mass and the mole fraction of every species. Under `:delta4`, indices past
-# a closed physical edge come from a mirror where the edge has one, node-centred
-# at a wall (`sensor_mirror`) and half-offset across a fold, carrying the
-# field's sign in either case, and are clamped elsewhere. `:d8` reaches the
+# a closed edge come from a mirror where the edge has one, node-centred at a
+# wall (`sensor_mirror`) and half-offset across a fold, carrying the
+# field's sign in either case; at a patch or coarse-fine interface they come
+# from the exchanged or imposed ghost layers, for the fields recovered over the
+# padded extent, and everywhere else the index is clamped. `:d8` reaches the
 # same continuations through closure rows: `wall_closures` at a wall, one set
 # per sign of the field and chosen at setup, and the scheme's own half-offset
 # rows at a fold or at a closed edge that reflects nothing. The smoother
@@ -200,7 +202,7 @@ end
 
 """
     delta4_sum!(out, f, solver, wpow; accumulate=false, parity=(1, 1, 1),
-                wall_parity=(1, 1, 1))
+                wall_parity=(1, 1, 1), ghosts=false)
 
 Interior reduction of Δ_d^wpow |δ⁴_d f| over the active directions into `out`,
 combined by Σ_d or by MAX according to `ArtParams.reduction` and combined with
@@ -220,14 +222,27 @@ the wall-normal component, which only `velocity_mu!` passes. The two signs are
 carried separately because one line may end at a fold and at a wall and they
 need not agree there; each is applied at its own kind of edge and nowhere else.
 
-Indices past a closed edge are read from a mirror where the edge has one and
-clamped where it does not. A wall face, which `sensor_mirror` names, mirrors
-about the boundary node, a node of the grid, with the sign `wall_parity[d]`
+Indices past a closed edge are read from a mirror where the edge has one, from
+the ghost layers where valid ones exist, and clamped otherwise. A wall face,
+which `sensor_mirror` names, mirrors about the boundary node, a node of the
+grid, with the sign `wall_parity[d]`
 gives. A folded edge mirrors about the half-offset singular point (ghost j ↔
 interior j) with the sign `parity[d]` gives; on a half-offset grid that differs
 from the clamp on one tap only, the outermost of the first interior cell's
 stencil, since every other out-of-range tap has the same source under both.
-Only a closed edge that is neither a wall nor a fold keeps the clamp, a
+
+`ghosts` states that `f` carries valid data in the ghost layers of a patch
+interface, which holds for a field recovered over the padded extent from a
+conserved state the interface exchange and the coarse-to-fine imposition keep
+current there: the primitives, the internal energy, a mass fraction, a mole
+fraction. With it set, an [`InterfaceBC`](@ref) face, same-level or
+coarse-fine, is read like a rank boundary inside a patch. A field computed on
+the interior and then halo-exchanged has no such ghosts and must leave `ghosts`
+at its default: the strain magnitude and the dilatation are the two, and both
+keep the clamp at an interface. `SENSOR_INTERFACE_GHOSTS` turns the interface
+reads off for a comparison on one build.
+
+A closed edge that is none of the three keeps the clamp, a
 zeroth-order extension whose error differs in order with the field: for an even
 field it misplaces one δ⁴ tap by a term
 that the vanishing edge derivative makes O(h²), and for an odd field the edge
@@ -261,9 +276,18 @@ sensor.
 # leaves the face on the clamp.
 @noinline _face_mirror(@nospecialize(bc)) = sensor_mirror(bc) === true
 
+"""
+Test and benchmark toggle: `true`, the default, lets a `ghosts = true` call of
+[`delta4_sum!`](@ref) read the exchanged or imposed ghost layers at an
+[`InterfaceBC`](@ref) face. `false` clamps there instead, the policy of every
+closed edge that reflects nothing, so that one build measures both.
+"""
+const SENSOR_INTERFACE_GHOSTS = Ref(true)
+
 function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
                      parity::NTuple{3,Int}=(1, 1, 1),
-                     wall_parity::NTuple{3,Int}=(1, 1, 1))
+                     wall_parity::NTuple{3,Int}=(1, 1, 1),
+                     ghosts::Bool=false)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -271,20 +295,27 @@ function delta4_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
     accumulate || fill!(out, 0)
     invh = solver.inv_h
     bcs = solver.bcs
+    # Read once per call. An interface face then differs from a rank boundary
+    # in the two clamp bounds alone, so no per-point body sees this at all.
+    iface = ghosts && SENSOR_INTERFACE_GHOSTS[]
     for d in 1:3
         decomp.active[d] || continue
         h_d = solver.h[d]
         ih_d = invh[d]
         n_d = decomp.n_local[d]
-        lomin = at_lo_edge(decomp, d) ? 1 : -1
-        himax = at_hi_edge(decomp, d) ? n_d : n_d + 2
+        lo_edge = at_lo_edge(decomp, d)
+        hi_edge = at_hi_edge(decomp, d)
+        # `isa` on the abstractly stored face condition is a type test, not a
+        # hook: `_face_mirror` stays the one dispatch site of this routine.
+        lomin = lo_edge && !(iface && bcs[d][1] isa InterfaceBC) ? 1 : -1
+        himax = hi_edge && !(iface && bcs[d][2] isa InterfaceBC) ? n_d : n_d + 2
         fold = solver.folds[d]
         mirror = fold !== nothing
-        mirror_lo = mirror && at_lo_edge(decomp, d) && fold.lo
-        mirror_hi = mirror && at_hi_edge(decomp, d) && fold.hi
+        mirror_lo = mirror && lo_edge && fold.lo
+        mirror_hi = mirror && hi_edge && fold.hi
         fsgn = parity[d]
-        wall_lo = at_lo_edge(decomp, d) && _face_mirror(bcs[d][1])
-        wall_hi = at_hi_edge(decomp, d) && _face_mirror(bcs[d][2])
+        wall_lo = lo_edge && _face_mirror(bcs[d][1])
+        wall_hi = hi_edge && _face_mirror(bcs[d][2])
         wsgn = wall_parity[d]
         if mirror && fold.pair !== nothing
             pair = fold.pair
@@ -409,7 +440,7 @@ end
 
 """
     ring_sum!(out, f, solver, wpow; accumulate=false, parity=(1, 1, 1),
-              wall_parity=(1, 1, 1))
+              wall_parity=(1, 1, 1), ghosts=false)
 
 The [`compact_d8`](@ref) counterpart of [`delta4_sum!`](@ref): reduces
 Δ_d^wpow |d⁸_d f| over the active directions into `out`, one distributed
@@ -439,10 +470,16 @@ this function alone. It cannot be `tmp_a` or `tmp_b`: both of
 those hold live inputs at two of the call sites (the internal energy for
 κ\\*, and the dilatation and its compression switch in
 [`dilatation_beta!`](@ref)).
+
+`ghosts` is accepted for a common signature with [`delta4_sum!`](@ref) and
+ignored. It states that `f` has valid patch-interface ghosts, which the
+closure rows of this detector read in either case; `:d8` is in any event
+rejected in a patched or refined run.
 """
 function ring_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
                    parity::NTuple{3,Int}=(1, 1, 1),
-                   wall_parity::NTuple{3,Int}=(1, 1, 1))
+                   wall_parity::NTuple{3,Int}=(1, 1, 1),
+                   ghosts::Bool=false)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -474,10 +511,11 @@ end
 
 """
     detect_sum!(out, f, solver, wpow; accumulate=false, parity=(1, 1, 1),
-                wall_parity=(1, 1, 1))
+                wall_parity=(1, 1, 1), ghosts=false)
 
 Apply the detector named by `ArtParams.detector`, [`delta4_sum!`](@ref) or
-[`ring_sum!`](@ref), to build one sensor field.
+[`ring_sum!`](@ref), to build one sensor field. `ghosts` says whether `f`
+carries valid patch-interface ghost data; see [`delta4_sum!`](@ref).
 
 The choice is made once per sensor, not inside either kernel: both are
 full array passes, and a per-point test would cost more than the difference
@@ -493,16 +531,18 @@ above `ring_sum!`'s collectives.
 """
 detect_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
             parity::NTuple{3,Int}=(1, 1, 1),
-            wall_parity::NTuple{3,Int}=(1, 1, 1)) =
-    _detect_sum!(out, f, solver, wpow, accumulate, parity, wall_parity,
+            wall_parity::NTuple{3,Int}=(1, 1, 1), ghosts::Bool=false) =
+    _detect_sum!(out, f, solver, wpow, accumulate, parity, wall_parity, ghosts,
                  solver.ring_plans)
 
-_detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, wpar, ::Nothing) =
+_detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, wpar, gh::Bool,
+             ::Nothing) =
     delta4_sum!(out, f, solver, wpow; accumulate=acc, parity=par,
-                wall_parity=wpar)
-_detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, wpar, ::Tuple) =
+                wall_parity=wpar, ghosts=gh)
+_detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, wpar, gh::Bool,
+             ::Tuple) =
     ring_sum!(out, f, solver, wpow; accumulate=acc, parity=par,
-              wall_parity=wpar)
+              wall_parity=wpar, ghosts=gh)
 
 """
     smooth!(f, solver)
@@ -603,7 +643,7 @@ function velocity_mu!(solver, C_mu)
     for j in 1:3
         detect_sum!(solver.sensor, vel[j], solver, 1; accumulate=true,
                     parity=ntuple(d -> vel_parity(solver, d, j), 3),
-                    wall_parity=ntuple(d -> d == j ? -1 : 1, 3))
+                    wall_parity=ntuple(d -> d == j ? -1 : 1, 3), ghosts=true)
     end
     smooth!(solver.sensor, solver)
     rho_sensor!(solver.mu_art, solver, C_mu)
@@ -902,7 +942,7 @@ function compute_artificial!(solver, Q)
     pointwise!(_internal_energy_point!, solver.tmp_a, nxf, nyf, nzf,
                solver.tmp_a, Q, solver.rho, m1, m2, m3, i_energy)
     exchange_halos!(solver.tmp_a, decomp)
-    detect_sum!(solver.sensor, solver.tmp_a, solver, 1)
+    detect_sum!(solver.sensor, solver.tmp_a, solver, 1; ghosts=true)
     smooth!(solver.sensor, solver)
     pointwise!(_kappa_point!, solver.kappa_art, nx, ny, nz,
                solver.kappa_art, solver.eos, solver.rho, solver.c,
@@ -937,7 +977,7 @@ function compute_artificial!(solver, Q)
             return solver
         end
         for sp in 1:solver.equations.n_species
-            detect_sum!(solver.sensor_sp, solver.Y[sp], solver, 1)
+            detect_sum!(solver.sensor_sp, solver.Y[sp], solver, 1; ghosts=true)
             pointwise!(_species_bound_point!, solver.sensor_sp, nx, ny, nz,
                        solver.sensor_sp, solver.Y[sp], C_D, C_Y, h_bound, inv_n,
                        ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)
@@ -991,7 +1031,7 @@ function bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
     acc = solver.sensor_sp
     fill!(acc, 0)
     for sp in 1:n_species
-        detect_sum!(solver.tmp_b, solver.Y[sp], solver, 1)
+        detect_sum!(solver.tmp_b, solver.Y[sp], solver, 1; ghosts=true)
         pointwise!(_species_bound_point!, solver.tmp_b, nx, ny, nz,
                    solver.tmp_b, solver.Y[sp], C_D, C_Y, h_bound, inv_n,
                    ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)
@@ -1000,7 +1040,7 @@ function bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
         pointwise!(_mole_fraction_point!, solver.tmp_a, nxf, nyf, nzf,
                    solver.tmp_a, solver.eos, solver.field_tuples.Y, sp,
                    n_species)
-        detect_sum!(solver.tmp_b, solver.tmp_a, solver, 1)
+        detect_sum!(solver.tmp_b, solver.tmp_a, solver, 1; ghosts=true)
         pointwise!(_species_bound_point!, solver.tmp_b, nx, ny, nz,
                    solver.tmp_b, solver.tmp_a, C_D, C_Y, h_bound, inv_n,
                    ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)

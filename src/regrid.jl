@@ -69,8 +69,8 @@ const TAG_MARK = Int8(2)
     return nothing
 end
 
-# Σ_d |δ⁴_d ρ| / ρ against the threshold pair, the zeroth-order closed-edge
-# clamp of `delta4_sum!`.
+# Σ_d |δ⁴_d ρ| / ρ against the threshold pair, under the zeroth-order
+# closed-edge clamp `delta4_sum!` applies where an edge reflects nothing.
 @inline function _tag_delta4_point!(tags, rho, thr, thr_lo, lomin, himax,
                                     active, o, i, j, k)
     @inbounds begin

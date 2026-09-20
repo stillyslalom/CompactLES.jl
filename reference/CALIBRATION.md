@@ -116,6 +116,12 @@ cost. The link is to the section holding the evidence.
   then carries no closure row and reads the interior order; the end node moves
   half a cell inside the plane
   ([symmetry plane](CALIBRATION_APPENDIX.md#the-face-centred-symmetry-plane)).
+- **A run with same-level patches fails within its first steps.** The initial
+  data has a discontinuity within one node of a shared patch plane, which the
+  default ghost-reading interface rows do not survive; a shock arriving from
+  the interior crosses the plane without incident. Move the plane, resolve the
+  discontinuity over a few cells, or set `interface_rhs = :onesided`
+  ([interface sensors](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
 - **A patched, refined or switching face needs a reflecting condition.**
   `SymmetryPlaneBC` is unavailable there; use `SlipWallBC()`, which carries the
   same flux contract at the cost of a closure row

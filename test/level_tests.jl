@@ -146,7 +146,7 @@ end
     run!(solver, states; tfinal=0.1, nmax=20000)
     # Ahead of the shock (x > 0.85) the exact solution is still quiescent, so
     # any momentum there beyond round-off is interface-generated noise.
-    # Measured 6.4e-10 with the unrefined run at 1.9e-10.
+    # Measured 3.5e-10 with the unrefined run at 1.9e-10.
     ps = PatchSolver(solver, solver.patches[1])
     pad = ps.decomp.n_halo_d[1]
     m1 = solver.equations.i_mom[1]
@@ -164,7 +164,7 @@ end
     run!(solver, states; tfinal=0.2, nmax=40000)
     drift = abs(_two_level_mass(solver, states, N) - m0) / m0
     @info "two-level Sod mass drift" drift
-    # Measured 1.36e-4 (:inject; :filter halves it at three decades of smooth
+    # Measured 1.28e-4 (:inject; :filter halves it at three decades of smooth
     # accuracy — src/levels.jl header). The unrefined run drifts 5e-11.
     @test drift < 5e-4
 end
@@ -425,9 +425,9 @@ end
         m1 = solver.equations.i_mom[1]
         noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
         @info "subcycled Sod through refinement boundary, $label" noise
-        # Measured 1.3e-10 against the global-dt gate's 6.4e-10 (5.7e-11
+        # Measured 7.3e-11 against the global-dt gate's 3.5e-10 (5.7e-11
         # under the former κ/(ρ cp) diffusive limit; the cv form takes
-        # different steps); C10 4.0e-10.
+        # different steps); C10 6.2e-10.
         @test noise < 1e-8
         for (psq, Q) in CL.eachpatch(solver, states)
             n = psq.decomp.n_local[1]
@@ -437,7 +437,8 @@ end
         run!(solver, states; tfinal=0.2, nmax=40000)
         drift = abs(_two_level_mass(solver, states, N) - m0) / m0
         @info "subcycled two-level Sod mass drift, $label" drift
-        # Measured 9.9e-5 at both schemes against the global-dt gate's 1.36e-4.
+        # Measured 1.05e-4 (C6) and 1.03e-4 (C10) against the global-dt gate's
+        # 1.28e-4.
         @test drift < 5e-4
     end
 end
@@ -591,8 +592,9 @@ end
     pad = ps.decomp.n_halo_d[1]
     m1 = solver.equations.i_mom[1]
     # Momentum ahead of the shock on the two-level gate's schedule (t = 0.1,
-    # x > 0.85) is refinement-boundary noise; measured 6.4e-10, the
-    # two-level figure, so the inner boundary pair adds nothing visible.
+    # x > 0.85) is refinement-boundary noise; measured 2.9e-10 against the
+    # two-level figure's 3.5e-10, so the inner boundary pair adds nothing
+    # visible.
     noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
     @info "three-level Sod noise ahead of the shock" noise
     @test noise < 1e-8

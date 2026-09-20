@@ -1331,8 +1331,13 @@ Configurations rejected at setup, and the reason:
   pointwise NSCBC inflow `target` (host closure),
   `StepControl.floor_ratio > 0` and `dt_report` (host sweeps), and `:filter`
   restriction; a `tag_predicate` downloads the coarse block at each check.
-- The artificial-property sensors are built per patch with closed-edge
-  clamping at interfaces; no gate has measured the effect.
+- The artificial-property sensors are built per patch. The δ⁴ detector
+  reads the exchanged or imposed ghost layers at an interface face for the
+  fields recovered over the padded extent and clamps the strain and
+  dilatation there; the smoother keeps closed-edge rows at every interface
+  face, since its input has no ghosts. The measured cost of each, and of
+  the filter's interface rows, is in the appendix
+  ([interface sensors](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
 
 ## Open work
 

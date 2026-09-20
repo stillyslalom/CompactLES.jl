@@ -92,7 +92,10 @@ condition needs:
 - `sensor_mirror(bc)` declares a reflecting wall, so that the artificial-property
   detector reads past the face from the node-centred mirror instead of clamping,
   and the sensor smoother and the `:d8` detector close the face with the
-  node-centred rows of `wall_closures` in place of their half-offset ones.
+  node-centred rows of `wall_closures` in place of their half-offset ones. A
+  patch or coarse–fine interface face needs no declaration: the detector reads
+  the exchanged or imposed ghost layers there for every field recovered over
+  the padded extent, and clamps only the strain and dilatation sensors.
 
 Periodic and fold behavior is collective setup state. If a boundary method
 enters a collective derivative or reduction, every rank must reach it in the

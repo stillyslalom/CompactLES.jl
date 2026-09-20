@@ -4407,6 +4407,183 @@ mass-fraction undershoot under global stepping is an imposed-shell accuracy
 question for N11, not a conservation one. No turbulent, variable-density,
 shock or hardware-GPU claim follows from these passive-species cases.
 
+### bench/interfacesensor.jl: the sensors and the filter at an interface
+
+`julia --project=. -t 16 bench/interfacesensor.jl` (`probe`, `crossing`,
+`filter` and `undershoot`; the toggle `SENSOR_INTERFACE_GHOSTS` selects
+the detector's interface taps).
+
+**The operator probe.** One application of each operator on
+ρ = 1 + 0.3 sin(2π(x + 1/7)) + 0.05 sin(10π(x + 1/7)), p = 1, u = 0 on
+[0, 1), against the uniform periodic grid of the same spacing: the level-1
+patch of a two-level nest at h/3, its shell imposed from the root's own
+initialization, and the two patches of a same-level pair. The entry is
+|interface − uniform| over the input amplitude at the first node in from
+the face; the orders are log₂ of successive ratios. The detector runs at
+weight power zero on the internal energy.
+
+| operator, face | N = 48 | 96 | 192 | orders |
+|---|---|---|---|---|
+| δ⁴, ghost taps, shell | 2.2e-5 | 3.3e-7 | 5.0e-9 | 6.06 / 6.07 |
+| δ⁴, clamped taps, shell | 2.3e-2 | 1.2e-2 | 5.8e-3 | 1.00 / 1.00 |
+| δ⁴, ghost taps, same level | 0 | 0 | 0 | bitwise |
+| δ⁴, clamped taps, same level | 2.8e-2 | 1.6e-2 | 8.4e-3 | 0.78 / 0.96 |
+| `:gaussian` smoother, shell | 5.9e-3 | 3.0e-3 | 1.5e-3 | 0.95 / 0.98 |
+| `:compact` smoother, shell | 9.4e-11 | 3.7e-13 | 1.5e-15 | 7.98 / 7.94 |
+| filter, extended rows, shell, node 2 | 1.4e-7 | 2.0e-9 | 3.0e-11 | 6.08 / 6.08 |
+| filter, onesided rows, shell, node 2 | 6.5e-12 | 3.6e-13 | 1.6e-15 | 4.17 / 7.78 |
+| filter, cascade rows, shell, node 2 | 3.2e-5 | 9.6e-6 | 2.6e-6 | 1.75 / 1.90 |
+| filter, extended rows, same level | 2.4e-7 | 9.7e-10 | 3.8e-12 | 7.96 / 7.99 |
+| filter, onesided rows, same level, node 2 | 7.0e-7 | 3.6e-9 | 2.4e-11 | 7.59 / 7.23 |
+| filter, cascade rows, same level, node 2 | 3.5e-4 | 1.1e-4 | 2.8e-5 | 1.73 / 1.95 |
+
+The clamp is a first-order error in the sensor at the two nodes it
+touches and exactly zero beyond them; the ghost taps carry the shell's
+order-6 interpolation error at a coarse-fine face and reproduce the
+uniform grid bitwise at a same-level face. The `:gaussian` smoother's
+closed-edge rows add a first-order error over four nodes where the
+`:compact` smoother stays at its own order. The filter's identity row
+leaves node 1 at round-off under every row set. At a coarse-fine face the
+extended rows read the imposed ghosts and so carry the interpolation
+error into nodes 2 to 6, three decades above the filter's own change on
+this field; the one-sided rows read nothing and stay at round-off. At a
+same-level face the ghosts are exact neighbour data and the ordering
+reverses: the extended rows track the uniform filter at order 8 and the
+closed rows depart from it. The cascade rows are the worst set at both
+faces.
+
+**The Sod crossing.** Root N = 201 on [0, 1] between slip walls, CFL 0.4,
+the default artificial properties and filter, the level-1 box over
+[0.6, 0.8], run to t = 0.2 so that the shock enters through the low face
+near t = 0.057 and leaves through the high face near t = 0.17. The base
+row is C6, subcycled, one tile, `filter_cfl = 0.35`, the default rows,
+ghost taps; each other row changes one setting. The columns are the
+momentum ahead of the shock at t = 0.1 (x > 0.85, the level suite's gate
+quantity), the minimum density and pressure over every patch on any
+step, the artificial diffusivity number ((μ\* + β\*)/ρ + κ\*/(ρc_p) +
+max D\*)/(ch) over the four fine nodes nearest each face at t = 0.03,
+before the shock arrives, and at t = 0.1, and the density error against
+the uniform run at the fine spacing over those nodes at t = 0.2. No row
+counted an inadmissible point on any step.
+
+| row | noise | ρ_min | p_min | shell number, t = 0.03 | t = 0.1 | shell error, t = 0.2 |
+|---|---|---|---|---|---|---|
+| base | 7.4e-11 | 0.061 | 0.040 | 9.8e-5 | 2.5e-3 | 7.7e-3 |
+| clamped taps | 7.4e-11 | 0.061 | 0.040 | 9.7e-5 | 2.5e-3 | 7.7e-3 |
+| C10 | 6.4e-10 | 0.067 | 0.045 | 2.6e-4 | 6.3e-3 | 7.7e-3 |
+| global step | 3.5e-10 | 0.062 | 0.038 | 1.3e-4 | 2.3e-3 | 8.9e-3 |
+| tile 8 | 7.0e-11 | 0.061 | 0.040 | 9.8e-5 | 4.4e-1 | 8.3e-2 |
+| three levels | 2.9e-10 | 0.061 | 0.040 | 9.4e-5 | 1.2e-2 | 6.3e-3 |
+| `filter_cfl = 0` | 1.0e-10 | 0.054 | 0.033 | 1.6e-4 | 4.1e-3 | 8.6e-3 |
+| `:cascade4` rows | 7.1e-11 | 0.061 | 0.040 | 1.2e-4 | 2.7e-3 | 7.9e-3 |
+| `:brady_livescu` rows | 7.6e-11 | 0.061 | 0.040 | 4.1e-5 | 4.8e-2 | 8.2e-3 |
+| artificial properties off | 3.9e-11 | 0.090 | 0.050 | 0 | 0 | 1.4e-3 |
+| three same-level patches | 3.6e-10 | 0.062 | 0.041 | 1.8e-5 | 4.5e-1 | 7.4e-2 |
+| two species, ghost taps | 7.2e-11 | 0.061 | 0.041 | 7.1e-5 | 2.7e-2 | 7.7e-3 |
+| two species, clamped taps | 7.2e-11 | 0.061 | 0.041 | 7.0e-5 | 2.7e-2 | 7.7e-3 |
+
+The minimum density is the step data's start-up transient at step 3, and
+the uniform run reads the same 0.062 at both spacings. Under the tiled
+level and the three-patch layout the shell window includes the tile and
+patch faces the shock is crossing at t = 0.1, so those two rows read the
+shock itself. The tap policy moves nothing past the third digit on a
+shock, whose own δ⁴ signal is orders above the clamp's error; the
+two-species contact carries the composition through both faces with a
+mass-fraction excursion of 1.4e-8 over the shell against 4.0e-4 at the
+contact itself, under either policy. The `:brady_livescu` rows put
+twenty times the base row's sensor on the shell during the crossing and
+complete it; no closure candidate fails this gate and none is promoted
+by it.
+
+A discontinuity initialized on a same-level plane is the one failure.
+With two patches the shared plane is node 101, the Sod diaphragm, and
+the run fails on negative density at step 2 with ρ = −50 at the plane;
+the artificial properties off (step 10) and the filter off (step 2) fail
+the same way, the one-sided interface rows complete the run, a diaphragm
+one node to the right of the plane completes it, one node to the left or
+adjacent on a 200-node grid fails, and a coarse-fine box face on the
+diaphragm completes. The extended gradient rows read the jump through
+the ghosts while the divergence keeps its one-sided rows, and the
+mismatch on a step that is one node wide is what fails; a captured shock
+arriving from the interior is several nodes wide and crosses either kind
+of face without incident, as every other row shows.
+
+**The filter's change at the shell.** The density change of each filter
+pass, its maximum over the run at each distance from a coarse-fine face
+relative to its maximum over the fine interior, global stepping. The
+entropy wave is ρ = 1 + 0.1 sin(2πx), u = 1, p = 1 at root N = 96 to
+t = 0.5; the Sod crossing is the base case above to t = 0.2; the
+two-dimensional row is the wave on (96, 24, 1) with a two-dimensional
+box, where the plane column is the transverse pass.
+
+| case, rows | interior | plane | node 2 | node 3 | node 4 | node 6 |
+|---|---|---|---|---|---|---|
+| wave, extended | 2.8e-11 | 8e-6 | 2.8 | 3.9 | 3.9 | 2.0 |
+| wave, onesided | 3.1e-10 | 0 | 1.4 | 2.2 | 2.5 | 1.7 |
+| wave, cascade | 4.3e-7 | 0 | 3.3 | 2.1 | 2.0 | 1.6 |
+| Sod, extended | 2.8e-4 | 2e-13 | 5.5 | 5.3 | 3.1 | 1.2 |
+| Sod, onesided | 1.6e-3 | 4e-14 | 1.1 | 1.7 | 1.9 | 1.5 |
+| Sod, cascade | 3.1e-4 | 2e-13 | 8.8 | 7.7 | 4.1 | 2.0 |
+| 2-D wave, extended | 8.4e-10 | 1.4 | 14 | 18 | 8.0 | 1.7 |
+| 2-D wave, onesided | 6.4e-9 | 0.26 | 14 | 14 | 11 | 4.5 |
+| 2-D wave, cascade | 6.3e-7 | 8.0 | 24 | 20 | 13 | 1.7 |
+
+Under the default extended rows the filter acts three to five times
+harder on the two nodes beside a coarse-fine face than in the fine
+interior, and fifteen times harder in two dimensions, where the
+transverse pass also moves the plane node itself by its interior level
+before the shell is re-imposed. The one-sided rows filter the whole fine
+interior five to ten times harder, since their closed rows make content
+the extended rows do not, and the cascade rows are four decades worse on
+the smooth wave.
+
+**The root-edge undershoot.** The two-species layer of
+`bench/interfaceconservation.jl` on (96, 24, 1) with only the
+mass-fraction bound on, permissive, over two transits, sampled eight
+times: the minimum mass fraction by distance from the level-1 box edge,
+in root nodes on the root and in fine nodes from the imposed plane on
+each fine level. The toggle changes no digit in any row, since the bound
+is the only species sensor and it is zero inside [0, 1].
+
+| nest, stepping | t = 37.7, root face node | root outside, 2–3 nodes | level-1 plane | t = 50.3, root face node | root outside, 4+ nodes | level-1 interior | level-2 interior |
+|---|---|---|---|---|---|---|---|
+| two levels, global | +1.6e-4 | +1.3e-4 | +1.6e-4 | +1.3e-4 | +3.9e-5 | +2.5e-4 | — |
+| two levels, subcycled | +2.9e-4 | +1.3e-4 | +2.9e-4 | +2.6e-4 | +1.0e-4 | +4.1e-4 | — |
+| two levels, global, no filter | −2.4e-4 | −2.9e-4 | −2.4e-4 | −4.7e-4 | −4.9e-4 | −3.6e-4 | — |
+| three levels, global | −1.2e-4 | −2.5e-4 | −1.2e-4 | −5.1e-4 | −5.8e-4 | −3.4e-4 | −9.8e-5 |
+| three levels, subcycled | +2.9e-4 | +1.3e-4 | +2.9e-4 | +2.6e-4 | +1.0e-4 | +4.1e-4 | +6.4e-4 |
+| three levels, global, unrelaxed filter | −1.1e-4 | −2.5e-4 | −1.1e-4 | −5.0e-4 | −5.8e-4 | −3.4e-4 | −9.8e-5 |
+
+A positive entry is a minimum above zero, so the two-level nests and both
+subcycled nests carry no undershoot at any sample. Without the filter the
+sheet undershoots on its own, at the box face and four or more root nodes
+outside it alike, which is the unfiltered ringing the conservation
+instrument's header describes and not an interface effect. The
+three-level nest under global stepping is the one refined case that
+undershoots, and it does so at the level-1 boundary plane first, at
+t = 37.7 on the coarse node coincident with that plane and the two or
+three root nodes outside it while the root interior and level 2 are still
+positive; by t = 50.3 the flow has carried it over the whole root outside
+the box and through level 1. The unrelaxed filter reproduces every
+entry to two digits, so the relaxed weight of a root pass, one ninth of
+full strength under that stepping, is not the cause; what remains is the
+coupling itself when the root advances at the level-2 step, nine times
+below its own, since the two-level nest at a third of the root's step
+shows nothing. The mechanism is not identified here.
+
+**Decision.** The detector reads the ghost layers at an interface face
+for every field recovered over the padded extent, the default; the strain
+and dilatation sensors, computed on the interior, keep the clamp, and the
+smoother keeps its closed-edge rows since its input has no ghosts. The
+filter keeps the extended interface rows; the cascade rows are the worst
+set at either kind of face. `detector = :d8` stays rejected in patched and
+refined runs, since no interface rows exist for its pentadiagonal
+operator. The closure candidates all pass the crossing gate, which
+therefore promotes none of them. The step-on-a-plane failure and the
+three-level undershoot under global stepping are recorded as limitations:
+the first is an initial-data restriction with a stated workaround, the
+second is removed by subcycling.
+
 ### bench/amr_transfer.jl: the 3:1 transfer pair
 
 `julia --project=. bench/amr_transfer.jl` (`7dbf319`; banded schemes

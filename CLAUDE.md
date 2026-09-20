@@ -435,7 +435,11 @@ Names are spelled out in full. Current vocabulary:
 - `pointwise!` (the shared launcher of every per-point loop: `Array` storage
   takes `@threaded`, device storage a KernelAbstractions kernel),
   `pointwise_ka!`, `FORCE_KA` (test/bench toggle), and the `_point!` suffix
-  for a per-point body. A body takes plain arrays and scalars, never the
+  for a per-point body. `ghosts` (the `delta4_sum!` keyword declaring that a
+  sensed field carries valid interface ghosts: the primitives, the internal
+  energy and the mass and mole fractions do, the strain magnitude and the
+  dilatation do not) and `SENSOR_INTERFACE_GHOSTS` (the test/bench toggle
+  that clamps those taps instead). A body takes plain arrays and scalars, never the
   solver, and never a `Type` argument: a `Type` inside the launcher's
   Vararg defeats specialization and turns the body call into a per-point
   runtime dispatch (measured 9× on `assemble_fluxes!`).

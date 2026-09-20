@@ -142,7 +142,12 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
   at three or more levels. Add a refreshed-coefficient substep check where needed.
   The coarse endpoint RHS that saves the Hermite box costs one extra evaluation per
   level with children; whether a cheaper dense output pays at three or more levels
-  is unmeasured (AMR_GPU.md, Open work).
+  is unmeasured (AMR_GPU.md, Open work). The passive-species layer on a
+  three-level nest under global stepping undershoots at the level-1 plane
+  from the second transit on, with the filter relaxation ruled out and
+  subcycling free of it
+  ([interface sensors](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface));
+  the mechanism is open and belongs with this item's global-step study.
   **Gate:** route a violation to the collective rollback/acceptance path from R3;
   an exception inside recursive stepping must not bypass retry handling.
 

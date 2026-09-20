@@ -191,8 +191,10 @@ the same-level coupling runs through the interface ghost exchange, the
 interface closure rows, and the shared-plane averaging (patches.jl), and a
 parent-fed face's ghost layers and boundary plane are overwritten from the
 prolonged coarse state after every RK stage (levels.jl); both close the line
-solves with the same extended-data rows. `Solver` substitutes this onto such
-faces itself; it is not a user-supplied condition.
+solves with the same extended-data rows. The δ⁴ sensor detector reads those
+ghost layers as well, for the fields recovered over the padded extent
+(`delta4_sum!`). `Solver` substitutes this onto such faces itself; it is not a
+user-supplied condition.
 
 One type serves both faces on purpose. A patch's face conditions are part of
 its `Patch` type and the right-hand side compiles once per distinct patch
@@ -418,8 +420,10 @@ end
 Whether a closed face reflects the fields the artificial-property sensors are
 built from. The fourth-difference detector reads two taps past the boundary;
 where this answers `true` it takes them from the node-centred mirror of the
-interior, with the sign of the field across the wall, and where it answers
-`false` it clamps the index instead (`delta4_sum!`).
+interior, with the sign of the field across the wall. Where it answers
+`false` it clamps the index instead, except at an [`InterfaceBC`](@ref) face,
+whose ghost layers hold the abutting patch's or the coarse level's own values
+for a field recovered over the padded extent (`delta4_sum!`).
 
 The compact sensor operators read the same face. Where this answers `true`,
 the `:gaussian` smoother and the `:d8` detector close the face with the
@@ -432,10 +436,10 @@ takes them only when both of its conditions answer `true` here; see
 The default is `false`. A mirror is the statement that the solution continues
 past the face as its own reflection, which holds at an impermeable wall and at
 no other condition here: an inflow, a Dirichlet face and a characteristic
-outflow admit an arbitrary continuation, an interface end is supplied by the
-neighboring patch, and a fold end takes its own half-offset mirror inside the
-same routine. The clamp makes no such statement. Extend this method for a
-custom reflecting wall.
+outflow admit an arbitrary continuation, an interface end reads the data the
+abutting patch or the coarse level supplied, and a fold end takes its own
+half-offset mirror inside the same routine. The clamp makes no such statement.
+Extend this method for a custom reflecting wall.
 
 A [`SwitchableBC`](@ref) answers for whichever condition is active, so a face
 that leaves the wall state during a run leaves the mirror with it. Every rank
