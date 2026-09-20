@@ -130,12 +130,11 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
   declared budget, so no surface-flux correction is enabled (commit
   `74895a4`).
 
-- [ ] **N11 — Validate sensors and filters at imposed fine shells.**
-  Add targeted crossing-shock reflection gates for closed-edge-clamped sensors;
-  measure filter changes to imposed shell nodes and compare one-sided filter rows.
-  **Gate:** localized errors/reflections and positivity excursions across interface
-  locations, C6/C10, and tiled layouts. Coordinate cadence studies with N1.
-  Include N14 closure candidates; physical-wall filter selection remains N6a.
+- [x] **N11** — The δ⁴ detector reads the ghost layers at patch and
+  coarse-fine faces for every field recovered over the padded extent, and
+  the sensors, the filter rows and the closure candidates were measured at
+  imposed shells on shock crossings, with the step-on-a-plane failure and
+  the three-level global-step undershoot recorded (commit `b4fe9d6`).
 
 - [ ] **N12 — Check fine-level rates during startup and regrid transients.**
   Measure rate growth over the substeps covered by one root CFL estimate, especially
