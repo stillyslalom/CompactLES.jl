@@ -123,6 +123,11 @@ cost. The link is to the section holding the evidence.
   the interior crosses the plane without incident. Move the plane, resolve the
   discontinuity over a few cells, or set `interface_rhs = :onesided`
   ([interface sensors](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
+- **A deep nest develops species undershoot under global stepping.** Use
+  subcycling, the demonstrated workaround. Level-aware filter trials trade
+  improved layer behavior for larger smooth errors and remain benchmark-only;
+  the production filter policy is unchanged
+  ([level-aware filtering](CALIBRATION_APPENDIX.md#benchlevelfilterjl-level-aware-filtering-under-global-stepping)).
 - **A patched, refined or switching face needs a reflecting condition.**
   `SymmetryPlaneBC` is unavailable there; use `SlipWallBC()`, which carries the
   same flux contract at the cost of a closure row

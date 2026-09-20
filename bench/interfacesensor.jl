@@ -33,6 +33,8 @@
 #               root, and the artificial diffusivity number over each of
 #               those regions before, during and after the crossing. Closes
 #               with a two-species Sod whose contact carries the composition.
+#               `crossing_variants=all` or comma-separated label substrings
+#               selects rows, including both stepping modes at three levels.
 #   filter      the filter's own change at the shell: max |Δρ| per distance
 #               from a coarse-fine face over the run's passes, under the
 #               three interface filter row sets. A smooth entropy wave and
@@ -98,7 +100,7 @@ const args = CL.script_args(ARGS,
      N=201, nmax=40000, waveN=96, wave_tfinal=0.5,
      layerN=96, layerny=24, layer_tfinal=50.26548245743669, samples=8,
      undershoot_depths="2,3", undershoot_variants="all",
-     undershoot_ghosts="both");
+     undershoot_ghosts="both", crossing_variants="all");
     positional=(:parts,))
 
 const RANK = MPI.Comm_rank(MPI.COMM_WORLD)
@@ -528,6 +530,8 @@ function reference_lines(row, N, ts, nmax)
     out = Vector{Vector{Float64}}()
     for t in ts
         run!(s, Q, ws; tfinal=t, nmax=nmax)
+        s.t >= t - 16eps(t) ||
+            error("uniform crossing reference incomplete at t=$(s.t), target=$t")
         refresh_primitives!(s, Q)
         push!(out, last(line_sample(s, Q, :rho)))
     end
@@ -549,6 +553,8 @@ function crossing_row(row, N, ts, nmax, refs)
         noise = NaN
         for (k, t) in enumerate(ts)
             run!(s, Q, ws; tfinal=t, nmax=nmax, callback=cb)
+            s.t >= t - 16eps(t) ||
+                error("crossing incomplete at t=$(s.t), target=$t")
             refresh_primitives!(s, states)
             push!(qs, region_max(s, states, diffusivity_number))
             k == 1 && continue
@@ -602,6 +608,8 @@ function crossing_rows()
     push!(rows, merge(base, (; label="global dt", subcycle=false)))
     push!(rows, merge(base, (; label="tile 8", tile=8)))
     push!(rows, merge(base, (; label="three levels", depth=3)))
+    push!(rows, merge(base, (; label="three levels global dt", depth=3,
+                              subcycle=false)))
     push!(rows, merge(base, (; label="filter_cfl 0", filter_cfl=0.0)))
     for cl in (:cascade3, :cascade4, :brady_livescu)
         push!(rows, merge(base, (; label="deriv $cl", closures=cl)))
@@ -615,6 +623,16 @@ function crossing_rows()
     for g in GHOST_MODES
         push!(species, merge(base, (; label="two species, " * ghost_label(g),
                                     species=2, ghosts=g)))
+    end
+    push!(species, merge(base, (; label="two species global dt", species=2,
+                                subcycle=false)))
+    if args.crossing_variants != "all"
+        wanted = split(args.crossing_variants, ',')
+        keep(row) = any(w -> occursin(w, row.label), wanted)
+        filter!(keep, rows)
+        filter!(keep, species)
+        isempty(rows) && isempty(species) &&
+            error("crossing_variants selects no crossing rows")
     end
     return rows, species
 end

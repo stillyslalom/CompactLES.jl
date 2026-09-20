@@ -141,19 +141,9 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
   measurements retain Hermite output; the global-step undershoot depends on
   the filter application schedule (commit pending).
 
-- [ ] **N12a — Qualify level-aware filtering under global stepping.**
-  The globally reduced finest directional rate currently sets every patch's
-  filter weight, so another level increases the coarse filter pass frequency
-  without a proportional reduction in weight. Restoring the physical filter
-  cadence removes the matched-small-step two-level undershoot, while changing
-  restriction cadence does not
-  ([interface sensors](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
-  Measure a level-aware rate/cadence policy on the three-level layer, smooth
-  evolution, shock crossings and moving refinement before changing the default;
-  retain subcycling as the demonstrated workaround. **Depends on:** N1 and N12.
-  **Gate:** N10 composite budgets, N11 positivity/reflection checks, both
-  stepping modes, and rank-independent results. The cadence ablation alone
-  does not qualify a general interval multiplier or isolate an operator mode.
+- [x] **N12a** — Level-aware filter trials remove the fixed-layer
+  undershoot within composite budgets; smooth-error and moving-refinement
+  tradeoffs retain the production default and subcycling (commit pending).
 
 - [ ] **N13 — Settle the default state-validity policy and its species band.**
   Ten shipped cases select `validity = :permissive`, in three groups: the

@@ -26,6 +26,8 @@
 #       tfinal=50.26548245743669 moving_tfinal=50.26548245743669 samples=16 check=true
 # `maxlevels=2` runs the bounded two-level comparison independently of the
 # deeper hierarchy's validity gate. `parts=regrid` isolates moving refinement.
+# `layouts=uniform,depth3 stepping=global` selects a long rank-comparison
+# run; mixing selections must retain `uniform` for the attribution baseline.
 #
 # The predeclared application budgets are deliberately coarse enough to be
 # useful on a long, interface-crossing calculation: 0.1% of initial mass,
@@ -52,7 +54,9 @@ const args = CompactLES.script_args(ARGS, (N=192, ny=32, tfinal=8.0, nmax=typema
                                            smoke=false, moving_tfinal=8.0,
                                            samples=8, parts="all", check=false,
                                            moving_width=0.18, filter_interval=1,
-                                           maxlevels=3);
+                                           maxlevels=3,
+                                           layouts="uniform,samelevel,depth2,depth3",
+                                           stepping="both");
                                     positional=(:N, :tfinal))
 
 # Application comparison budgets, fixed independently of the results.
@@ -297,7 +301,8 @@ function main()
     rank == 0 && println("Regularization: art=bound only, " *
                          "filter_interval=$(args.filter_interval), cfl=0.45, " *
                          "validity=permissive, moving_width=$(args.moving_width), " *
-                         "check=$(args.check).")
+                         "check=$(args.check), layouts=$(args.layouts), " *
+                         "stepping=$(args.stepping).")
     rank == 0 && flush(stdout)
     parts = Set(Symbol.(split(args.parts, ',')))
     allparts = :all in parts
@@ -309,6 +314,16 @@ function main()
     isfinite(args.moving_width) && args.moving_width > 0 ||
         error("moving_width must be finite and positive")
     args.maxlevels in (2, 3) || error("maxlevels must be 2 or 3")
+    layouts = Symbol.(split(args.layouts, ','))
+    all(m -> m in (:uniform, :samelevel, :depth2, :depth3), layouts) ||
+        error("layouts must select uniform, samelevel, depth2, or depth3")
+    length(unique(layouts)) == length(layouts) || error("layouts must not repeat")
+    (allparts || :mixing in parts) && !(:uniform in layouts) &&
+        error("mixing layouts must include uniform for attribution comparisons")
+    args.stepping in ("both", "global", "subcycled") ||
+        error("stepping must be both, global, or subcycled")
+    subcycles = args.stepping == "both" ? (false, true) :
+                args.stepping == "global" ? (false,) : (true,)
     N >= 48 || error("N must be at least 48 for the nested C8-filter shells")
     if allparts || :mixing in parts || :regrid in parts
         ny >= 18 || error("ny must be at least 18 for the three-level nest")
@@ -318,9 +333,9 @@ function main()
     mixing_failure = false
     initial_sampling_failure = false
     if allparts || :mixing in parts
-        for mode in (:uniform, :samelevel, :depth2, :depth3), subcycle in (false, true)
+        for mode in layouts,
+            subcycle in (mode in (:uniform, :samelevel) ? (false,) : subcycles)
             mode === :depth3 && args.maxlevels == 2 && continue
-            mode in (:uniform, :samelevel) && subcycle && continue
             r = evolve(mode, N, ny, tfinal, nmax, subcycle)
             results[(mode, subcycle)] = r
             if rank == 0
@@ -375,7 +390,7 @@ function main()
                 "|dwidth| <= $(WIDTH_COMPARISON_BUDGET).")
     end
     if allparts || :regrid in parts
-        for subcycle in (false, true)
+        for subcycle in subcycles
             j = regrid_history!(N, ny, moving_tfinal, nmax, subcycle)
             regrid_failure |= !j.complete || isempty(j.events) ||
                               j.cumulative_jump > REGRID_BUDGET ||

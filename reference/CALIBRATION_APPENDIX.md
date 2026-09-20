@@ -4609,9 +4609,9 @@ the interleaved filter and shell operations; the x weight's cap makes even
 the integrated relaxation strength different in these rows. The experiments
 identify sensitivity to this filter schedule, not a CFL violation or a
 restriction-frequency failure, and do not isolate an individual operator
-commutator. Keep subcycling as the demonstrated remedy. A new global-step
-filter policy needs three-level accuracy and composite-conservation
-qualification before promotion.
+commutator. Keep subcycling as the demonstrated remedy; the subsequent
+[level-aware filter qualification](#benchlevelfilterjl-level-aware-filtering-under-global-stepping)
+measures candidate global-step policies and their accuracy tradeoffs.
 
 Reproduce with `julia --project=. -t 1 bench/interfacesensor.jl undershoot
 layerN=96 layerny=24 layer_tfinal=50.26548245743669 samples=8 nmax=40000
@@ -4634,6 +4634,181 @@ therefore promotes none of them. The step-on-a-plane failure and the
 three-level undershoot under global stepping are recorded as limitations:
 the first is an initial-data restriction with a stated workaround, the
 second is removed by subcycling.
+
+### bench/levelfilter.jl: level-aware filtering under global stepping
+
+N12a compares the production filter with two benchmark-only policies. The
+driver explicitly loads `bench/level_filter_policy.jl` in a fresh process;
+it does not install a solver option or change the package default. These
+are Float64 CPU measurements on an Intel Core i9-12900K, Julia 1.11.4,
+one Julia thread per process. The helper pays for an extra rate sweep and
+collective; no performance conclusion is drawn from it.
+
+For patch level `l`, the normalized policy forms the globally reduced
+directional envelope `q_d = max(r_patch,d / 3^l)` and uses `3^l q_d` in
+that patch's existing relaxed filter weight. The CFL rate that sizes the
+step is unchanged. The reduction includes all ranks, with zeros from
+nonowners, and is rebuilt at every rate estimate, including the first
+estimate after regridding. This is the same conservative envelope used by
+subcycling, expressed in each patch's physical time units.
+
+The cadence comparator uses that envelope but filters level `l` only
+every `3^(L-1-l)` global steps, multiplying its weight by the same stride;
+`L` is the number of levels. It is restricted to `filter_interval=1`.
+It multiplies the latest timestep rather than accumulating elapsed time,
+so shortened steps and an unfinished final stride are not a general
+physical-cadence prescription. Both trials delegate subcycling and
+`filter_cfl=0` to production unchanged. The helper also provides an
+actual-per-level envelope for diagnostic checks; that variant is outside
+the qualification matrix below.
+
+**Two-transit layer and composite budgets.** The conservation instrument
+runs the bound-only two-species layer on `(96,24,1)` to
+`t=50.26548245743669`, with sixteen equally spaced observations, CFL 0.45
+and permissive validity. Each drift is relative to that layout's own
+initialized composite quadrature. The evolution budget remains 1e-3 for
+mass, each species mass, energy and momentum scaled by initial mass times
+sound speed; it was not adjusted for these candidates.
+
+| policy, global stepping | levels | steps | maximum sampled conserved drift | maximum species excursion |
+|---|---|---|---|---|
+| production | 2 | 3532 | 6.951e-5 | 0 |
+| normalized | 2 | 3532 | 6.948e-5 | 0 |
+| cadence | 2 | 3532 | 6.943e-5 | 0 |
+| production | 3 | 10570 | 7.567e-5 | 5.82e-4 |
+| normalized | 3 | 10568 | 7.578e-5 | 0 |
+| cadence | 3 | 10568 | 7.573e-5 | 0 |
+
+Both candidates remove the sampled late undershoot while remaining well
+inside the conservation allowance. Subcycling remains positive at both depths
+and its production maximum drifts are 6.943e-5 and 7.574e-5. The agreement
+of the two candidate layer outcomes does not make their operators
+equivalent: one applies a weak pass at every fine-sized step, the other
+interleaves fewer stronger passes with shell imposition.
+
+Reproduce with `julia --project=. -t 1 bench/levelfilter.jl
+policy=normalized instrument=budgets N=96 ny=24
+tfinal=50.26548245743669 moving_tfinal=50.26548245743669 samples=16
+check=true`. Use `parts=mixing layouts=uniform,depth3 stepping=global`
+to isolate the long three-level rank comparison while retaining its
+uniform attribution baseline.
+
+**Moving refinement.** The sharper moving layer uses the same grid and
+end time, with sixteen explicitly sampled regrids of a two-level nest.
+The table separates evolution from the immediate transfer jumps, using
+the existing 1e-3 allowance for each reported conserved-budget measure.
+
+| policy, global stepping | sum of absolute transfer jumps | maximum total drift | maximum drift with transfers subtracted | species excursion |
+|---|---|---|---|---|
+| production | 8.423e-4 | 1.002e-4 | 2.136e-4 | 7.42e-4 |
+| normalized | 8.423e-4 | 1.006e-4 | 2.200e-4 | 6.76e-4 |
+| cadence | 8.422e-4 | 1.009e-4 | 2.213e-4 | 5.53e-4 |
+
+Every conservation measure passes, but moving refinement still has a
+species excursion beyond the validity dead band under either trial.
+The unchanged subcycled control has cumulative jumps 8.422e-4, maximum
+total drift 1.009e-4, transfer-subtracted drift 2.213e-4 and species
+excursion 5.56e-4. These policies therefore resolve the fixed-layer
+reproducer, not general species positivity. Three-level moving
+refinement is unsupported and is not measured.
+
+**Smooth evolution and reflection.** The shared entropy-wave case runs to
+`t=0.5` at root `N=48,96,192`, CFL 0.25 and 0.125, with the filter on.
+The interface maximum counts actual patch faces, not MPI block ends;
+the L2 norm uses the solver's masked composite quadrature. The following
+orders fit all three spacings at CFL 0.25.
+
+| policy, global stepping | levels | interface order | L2 order | L2 error, N=192 |
+|---|---|---|---|---|
+| production | 2 | 4.120 | 4.334 | 3.162e-9 |
+| normalized | 2 | 4.100 | 4.116 | 3.523e-9 |
+| cadence | 2 | 4.106 | 4.120 | 3.501e-9 |
+| production | 3 | 4.416 | 5.126 | 2.177e-9 |
+| normalized | 3 | 4.101 | 4.112 | 3.569e-9 |
+| cadence | 3 | 4.111 | 4.121 | 3.489e-9 |
+
+Both trials bring the two depths close to the subcycled order, about
+4.09 at the interface and 4.11 in L2. They increase the finest-grid
+global-step L2 error by about 11% at two levels and 60--64% at three
+levels. Thus the long-layer improvement does not mean every smooth error
+is smaller. Across both stepping modes the largest relative change on
+halving CFL is 1.24% (production), 1.04% (normalized) and 1.62% (cadence),
+below the accuracy instrument's 10% temporal-contamination criterion.
+These measured orders do not identify an individual operator mode or
+establish sixth-order AMR.
+
+The filtered acoustic pulse crosses both faces of the nest at root
+`N=192`, measured at `t=pi/sqrt(1.4)` against a filtered uniform run.
+In serial, the maximum of the upstream pressure-wake and leftgoing-characteristic
+errors, divided by pulse amplitude, is 3.26e-9 for production, 1.53e-9
+for normalized rates and 1.46e-9 for cadence, across two/three levels
+and both stepping modes. All pass the pre-existing 1% reflection bound.
+Subcycled accuracy and reflection rows are unchanged by the trial hooks.
+Reproduce with `bench/levelfilter.jl policy=normalized instrument=accuracy
+parts=all ns=48,96,192` after `julia --project=. -t 1`.
+
+**Shock crossings.** The sensor instrument's Sod shock enters and exits
+the refinement box by `t=0.2`, root `N=201`, with a uniform fine-spacing
+reference. All listed runs completed with zero inadmissible steps. The
+minimum density and pressure include startup; the disturbance is the
+momentum ahead of the shock at `t=0.1`, `x>0.85`.
+
+| policy, global stepping | levels | minimum density | minimum pressure | disturbance ahead of shock |
+|---|---|---|---|---|
+| production | 2 | 0.06239 | 0.03822 | 3.543e-10 |
+| normalized | 2 | 0.07956 | 0.05828 | 1.216e-10 |
+| cadence | 2 | 0.07670 | 0.05181 | 2.210e-10 |
+| production | 3 | 0.05121 | 0.02518 | 4.446e-9 |
+| normalized | 3 | 0.08174 | 0.06098 | 5.048e-11 |
+| cadence | 3 | 0.07740 | 0.05315 | 2.403e-10 |
+
+The two-species global-step crossing also stays admissible under every
+policy. Its final mass-fraction excursion at the contact changes from
+4.951e-4 (production) to 3.990e-4 (normalized) and 3.909e-4 (cadence);
+the corresponding shell excursions are 6.953e-8, 1.328e-8 and 6.283e-9.
+The subcycled two- and three-level rows reproduce production under both
+trials. This tests passage into and out of a refined region; it does not
+remove the separate discontinuity-on-a-same-level-plane limitation.
+
+Reproduce the crossing rows with
+`julia --project=. -t 1 bench/levelfilter.jl policy=normalized
+instrument=sensors parts=crossing N=201
+"crossing_variants=base,global,three levels,two species"`, substituting
+`policy=default` or `policy=cadence` for the controls.
+
+**Rank coverage.** The normalized three-level global-step layer was run
+over both transits at 1, 2, 4 and 8 ranks. Every run took 10568 steps,
+with maximum sampled conserved drift 7.578e-5, zero species excursion,
+and matching printed width and molecular-mixing histories. The
+conservation, initial-sampling and mixing-comparison checks all pass.
+
+All three policies' smooth and reflection matrices were repeated at four
+and eight ranks, with the normalized matrix also repeated at two ranks.
+Eight ranks use `ns=96,192`; the 48-node root cannot supply the filter's
+nine nodes per rank. Over common resolutions, the largest absolute
+difference from serial in any reported smooth error norm is below
+3.6e-14. Every reflection row passes. The standalone
+`bench/level_filter_policy_check.jl` checks default delegation, shortened
+steps, skipped and due cadence passes, subcycle trajectory equality, and
+propagation of a fastest rate present only on deep-level owners to root
+ranks that own no deep tile.
+
+The policy checks pass at 1, 2, 4 and 8 ranks. Normalized-policy moving
+regrid smoke runs pass at four and eight ranks in both stepping modes;
+the eight-rank global shock crossings reproduce the serial diagnostics
+at the printed precision, with zero inadmissible steps. The full moving
+two-transit comparison above was measured in serial.
+
+**Decision.** Retain the production default and subcycling as the supported
+workaround. The normalized envelope is a viable benchmark-only candidate
+for the fixed Cartesian layer: it removes that undershoot and preserves
+the declared conservation and reflection budgets, but raises the finest-grid
+error in the measured smooth case and does not ensure species positivity after
+moving refinement. The cadence comparator offers no demonstrated general
+advantage over rate normalization and needs elapsed-time and phase handling
+before it could become a production policy. This qualification is bounded
+to the tested Float64 CPU cases; it does not identify an operator mode or
+promote a general filter-interval multiplier.
 
 ### bench/substeprates.jl: refreshed refined-level rates
 
