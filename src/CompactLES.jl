@@ -55,6 +55,7 @@ include("sources.jl")
 include("patches.jl")
 include("levels.jl")
 include("rhs.jl")
+include("pointwise_callbacks.jl")
 include("transport_domain.jl")
 include("nscbc.jl")
 include("io.jl")
@@ -62,6 +63,7 @@ include("hdf5.jl")
 include("callbacks.jl")
 include("timestep.jl")
 include("regrid.jl")
+include("amr_frontend.jl")
 include("io_levels.jl")
 include("diagnostics.jl")
 include("viz.jl")
@@ -91,7 +93,7 @@ export FieldWriter, DEFAULT_VTK_FIELDS
 export BlockRegion, hdf5_available, hdf5_parallel
 export save_checkpoint_hdf5, load_checkpoint_hdf5!, save_hdf5
 export SwitchableBC, switch!, switched
-export Prim, Problem, Numerics, setup, initialize!, conserved_from_prim, tanh_blend
+export Prim, Problem, Numerics, AMR, setup, initialize!, conserved_from_prim, tanh_blend
 export EOS, IdealSpecies, IdealMixture, nspecies, Transport
 export AbstractTransport, BinaryDiffusion, BinaryDiffusionPolynomial, binary_diffusivity
 export CeaTransport, read_cea_transport, transport_coefficients

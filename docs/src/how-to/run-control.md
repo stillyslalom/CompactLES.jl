@@ -79,6 +79,7 @@ control = StepControl(
 )
 
 numerics = Numerics(n_global = (256, 1, 1), control = control)
+solver, Q = setup(problem, numerics)
 run!(solver, Q; tfinal = 0.5, nmax = 100_000)
 ```
 
@@ -98,12 +99,17 @@ without retrying. Every regrid check refreshes the artificial coefficients
 before the next root timestep estimate, even when the layout stays the same
 or the substep check is disabled.
 
+For a periodic validity sweep during a long run, set
+`StepControl(validity_interval = k)`. It inspects the state entering every
+`k`th step; `run!` also validates the state on entry and at its return. The
+default `0` avoids this full EOS sweep between endpoint checks.
+
 ## Choose what an invalid state does
 
-`run!` sizes and checks each step from the state that enters it, so the state it
-*returns* is inspected by nothing: an `nmax`, `tfinal`, or callback exit leaves
-the last result unchecked. [`state_guard`](@ref) closes that by validating every
-accepted state, including the final one.
+`run!` validates the state on entry and at its return. Use
+[`state_guard`](@ref) when every accepted state must be inspected, including
+those between the endpoints; `validity_interval` is a lower-overhead periodic
+alternative.
 
 ```julia
 control = StepControl(validity = :permissive)

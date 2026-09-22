@@ -182,12 +182,13 @@ when artificial properties remain enabled.
 ## Stability and timestep coupling
 
 Larger artificial coefficients increase diffusive stability rates and can make
-the explicit timestep much smaller. Converging strong shocks separately require
-a reduced CFL while the shock forms at a symmetry plane: under the default
-`smoother = :gaussian`, 0.4 at the spherical origin and 0.2 at the cylindrical
-axis and the planar wall. The restriction is measured to originate at the wall,
-axis or origin cell, not in the artificial properties. Retry control is often
-cheaper than imposing that small CFL throughout a calculation:
+the explicit timestep much smaller. `run!` evaluates the initial RHS before
+choosing its first step, so startup estimates already include the artificial
+coefficients. In the current converging-shock calibration, planar and
+cylindrical cases complete from `cfl = 0.9` without retry; the spherical
+origin requires a lower accepted CFL during the shock excursion. For a
+converging shock at that origin, use `cfl = 0.3` under the default detector,
+or allow retry control to reduce a larger initial CFL only when needed:
 
 ```julia
 Numerics(
@@ -198,9 +199,11 @@ Numerics(
 )
 ```
 
-The conductivity scale used by the gas models behaves as `rho*c/T_ion` and is
-singular as temperature approaches zero. Extremely cold nondimensional ambient
-states can therefore collapse the diffusive timestep.
+The spherical-origin limit depends on the detector and the initial profile;
+under `detector = :d8` the measured ceiling is 0.25. An initially unresolved
+shock at the origin remains a separate limitation even when the first RHS is
+primed. See the [calibration appendix](https://github.com/stillyslalom/CompactLES.jl/blob/main/reference/CALIBRATION_APPENDIX.md#recovery-strategy)
+for the measured trajectories and accepted CFL values.
 
 ## Selecting coefficients
 

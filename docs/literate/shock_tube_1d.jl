@@ -26,22 +26,27 @@ CairoMakie.activate!(type = "png")
 # first Runge--Kutta stage.
 
 nx = 256
-hx = 1 / (nx - 1)
 
 problem = Problem(
     name = "Sod shock tube",
     eos = IdealSpecies("gas"; R = 1.0, gamma = 1.4),
     domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
-    bcs = ((SlipWallBC(), SlipWallBC()),
-           (PeriodicBC(), PeriodicBC()),
-           (PeriodicBC(), PeriodicBC())),
-    ic = (x, y, z) -> begin
-        blend = tanh_blend(x, 0.5, 2hx)
+    bcs = (SlipWallBC(), PeriodicBC(), PeriodicBC()),
+    ic = (x, y, z, h) -> begin
+        blend = tanh_blend(x, 0.5, 2h)
         Prim(p = 1.0 + blend * (0.1 - 1.0),
              rho = 1.0 + blend * (0.125 - 1.0))
     end,
 )
 
+# The optional fourth argument `h` is the smallest local physical spacing in
+# a resolved direction. `setup` supplies it from `Numerics`, so the same
+# `Problem` keeps a two-cell numerical transition when the grid changes.
+# A physical interface thickness would instead stay fixed in physical units,
+# as in [Construct a multicomponent state](@ref). The three-argument IC form
+# remains appropriate whenever no spacing is needed. A bare boundary
+# condition applies at both ends of its coordinate direction.
+#
 # Strong startup transients require a smaller CFL than smooth flow. Retry
 # control also permits a failed step to roll back and retry at a reduced CFL.
 # The Cook-style coefficients in [`ArtParams`](@ref) are exposed so the

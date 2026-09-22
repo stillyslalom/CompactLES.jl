@@ -71,8 +71,7 @@ problem = Problem(
     metric = CylindricalMetric(),
     domain = ((0.0, 1.0), (0.0, 2pi), (0.0, Lz)),
     bcs = ((AxisBC(), SlipWallBC()),
-           (PeriodicBC(), PeriodicBC()),
-           (PeriodicBC(), PeriodicBC())),
+           PeriodicBC(), PeriodicBC()),
     ic = (r, theta, z) -> begin
         b = blob(r, theta, z)
         Prim(p = 1.0 + 0.4b, rho = 1.0 + 0.4b)

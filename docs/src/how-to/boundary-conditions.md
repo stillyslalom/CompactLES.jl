@@ -3,6 +3,25 @@
 Choose a boundary condition from the physical information available at the
 face, not from the desired visual appearance of the solution.
 
+## Lay out the six faces
+
+`bcs` has one entry per coordinate direction. A bare condition applies at both
+ends, while a two-tuple makes the low and high faces different:
+
+```julia
+bcs = (
+    (NSCBCInflowBC(u=(0.2, 0, 0), T_ion=1.0), NSCBCOutflowBC(pinf=1.0)),
+    PeriodicBC(),
+    SlipWallBC(),
+)
+```
+
+The first entry above is an asymmetric streamwise pair; the second and third
+use the same object at both faces. A periodic or collapsed direction must be
+periodic at both ends. If a mutable [`SwitchableBC`](@ref) is used bare or on
+both sides of a pair, both faces share its state: one `switch!` changes both.
+Construct two wrappers when the two faces must switch independently.
+
 | Physical boundary | Condition | Required information |
 |:--|:--|:--|
 | Periodic continuation | [`PeriodicBC`](@ref) | matching opposite face |
@@ -32,7 +51,8 @@ All three wall conditions are impermeable and noncatalytic: every species has
 zero normal flux, including molecular diffusion, artificial diffusion, and the
 artificial `:bulk` species channel. The default adiabatic no-slip wall also has
 exactly zero normal total-energy flux. An isothermal wall permits conductive
-heat exchange with conductivity `mu0 * cp_mix / Pr + kappa_art`; its normal
+heat exchange with the molecular thermal conductivity selected by `transport`
+plus `kappa_art`; its normal
 energy flux contains no species enthalpy diffusion or bulk component diffusion.
 Pressure and viscous wall stresses remain in the momentum flux.
 
@@ -84,6 +104,22 @@ The function is evaluated at Runge--Kutta stage time. A full-state condition
 over-constrains subsonic flow and ordinarily reflects acoustic waves; use a
 characteristic inflow there.
 
+For forcing whose width should track the local mesh, use the five-argument
+form. The final argument is the smallest physical spacing at that point after
+stretching, coordinate-metric scaling, and AMR refinement; collapsed directions
+do not participate.
+
+```julia
+driver(x, y, z, t, h) = Prim(
+    u = (0.1sin(2pi * t) * tanh((x - 0.2) / (3h)), 0.0, 0.0),
+    p = 1.0,
+    rho = 1.0,
+)
+```
+
+The original four-argument form remains valid. If a callable supports both
+forms, CompactLES selects the longer one.
+
 ## Characteristic boundaries
 
 For a constant subsonic inflow target:
@@ -91,6 +127,21 @@ For a constant subsonic inflow target:
 ```julia
 NSCBCInflowBC(u = (0.2, 0.0, 0.0), T_ion = 1.0, Y = [1.0])
 ```
+
+An inflow target may similarly vary at every stage and use local spacing:
+
+```julia
+target(x, y, z, t, h) = Prim(
+    u = (0.2 * tanh((y - 0.5) / (2h)), 0.0, 0.0),
+    rho = 1.0,
+    T_ion = 1.0,
+)
+inlet = NSCBCInflowBC(u=(0.2, 0.0, 0.0), T_ion=1.0, Y=[1.0], target=target)
+```
+
+The target must specify `T_ion` and every species mass fraction. Its compatible
+four-argument form `(x, y, z, t)` remains valid, and the five-argument form is
+chosen when both apply. Pointwise NSCBC targets remain host-only.
 
 For a subsonic outflow:
 

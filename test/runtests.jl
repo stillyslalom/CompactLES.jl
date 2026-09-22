@@ -57,6 +57,13 @@ include("cases.jl")
 # already a local scope, and the helpers defined between them become locals.
 @testset "CompactLES serial suite" verbose=true begin
 
+@testset "Problem preserves endpoint conversion" begin
+    prob = Problem(domain=((0, 1), (0, pi), (0, 2pi)), bcs=per3,
+                   ic=(x, y, z) -> Prim(p=1.0, rho=1.0))
+    @test prob.domain === ((0.0, 1.0), (0.0, Float64(pi)), (0.0, 2pi))
+    @test prob.ic(0.0, 0.0, 0.0).p == 1.0
+end
+
 @testset "concise frontend displays" begin
     prob = Problem(name="display test",
                    domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
@@ -4546,6 +4553,9 @@ include("runloop_tests.jl")
 include("docrefs_tests.jl")
 include("reference_tests.jl")
 include("api_surface_tests.jl")
+include("pointwise_callbacks_tests.jl")
+include("amr_frontend_tests.jl")
+include("boundary_shorthand_tests.jl")
 
 # HDF5 is a weak dependency and is not loadable from the package environment
 # alone, so the extension tests run only where it is present. The skip is

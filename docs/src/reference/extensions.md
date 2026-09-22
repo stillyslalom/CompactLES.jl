@@ -49,6 +49,11 @@ implement `transport_coefficients(model, eos, temperature, rho, cp, Y)`.
 Return `(mu=..., kappa=..., D=...)`, with one molecular diffusivity per species
 in `Y` order. The flux, timestep, wall, geometry, and dissipation paths all use
 this coefficient interface; artificial coefficients are added separately.
+For a transport model with a strict state domain, extend the internal
+`CompactLES.transport_has_domain` and `CompactLES.transport_domain_status`
+hooks so the solver can reject invalid states collectively before coefficient
+evaluation. The built-in polynomial binary-diffusion model is the reference
+implementation.
 
 Keep the model and returned coefficients concrete and allocation-free for
 pointwise evaluation. The built-in CEA model stores fixed-size coefficient

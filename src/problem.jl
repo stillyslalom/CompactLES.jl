@@ -142,9 +142,13 @@ end
     initialize!(solver, Q, ic)
 
 Overwrite the rank-local interior of conserved state `Q` from
-`ic(x1, x2, x3) -> Prim`, evaluated at physical coordinates. The callback receives
-neither ranks and halos nor the conserved-component layout, and should be pure
-because it can be called concurrently from multiple threads.
+`ic(x1, x2, x3) -> Prim`, or its spacing-aware form
+`ic(x1, x2, x3, h) -> Prim`, evaluated at physical coordinates. `h` is the
+smallest physical mesh spacing at that point, excluding collapsed directions;
+it includes local stretching, metric scale factors, and refined-patch spacing.
+The callback receives neither ranks and halos nor the conserved-component
+layout, and should be pure because it can be called concurrently from multiple
+threads.
 
 This function leaves halo cells unchanged and does not reset solver time,
 timestep history, or diagnostics. Use it to reuse an existing solver and
@@ -180,14 +184,22 @@ function _initialize_interior!(solver::SolverLike, Q, ic)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
+    x1_0 = xcoord(solver, 1, 1)
+    x2_0 = xcoord(solver, 2, 1)
+    x3_0 = xcoord(solver, 3, 1)
+    cb = initial_callback(ic, x1_0, x2_0, x3_0,
+                          point_spacing(solver, CartesianIndex(o1 + 1, o2 + 1,
+                                                                 o3 + 1)))
     @threaded nx*ny*nz for jk in outer_indices(ny, nz)
         j, k = Tuple(jk)
         x2 = xcoord(solver, 2, j)
         x3 = xcoord(solver, 3, k)
         for i in 1:nx
             x1 = xcoord(solver, 1, i)
-            write_conserved!(Q, CartesianIndex(i + o1, j + o2, k + o3), solver,
-                             ic(x1, x2, x3))
+            I = CartesianIndex(i + o1, j + o2, k + o3)
+            write_conserved!(Q, I, solver,
+                             pointwise_initial(cb, x1, x2, x3,
+                                               point_spacing(solver, I)))
         end
     end
     return Q
@@ -393,13 +405,12 @@ end
 A per-step state validation, to be paired with a [`Trigger`](@ref) and passed to
 [`run!`](@ref) as a callback. [`state_guard`](@ref) is the one-line form.
 
-`run!` checks the state entering each step through [`check_step`](@ref) and the
-reduced quantities [`max_rate`](@ref) produces, which covers the mixture density
-and the timestep but not the composition, the finiteness of every component, or
-the thermodynamic domain of the EOS. Nor is any check applied to the state a run
-returns: the last step's result is inspected only by the iteration that follows
-it, and there is none after an `nmax`, `tfinal`, or callback exit. A guard runs
-after every completed step, including that last one, and so covers both.
+`run!` validates the state on entry and return. Its per-step [`check_step`](@ref)
+and [`max_rate`](@ref) checks cover mixture density and timestep limits; a
+positive `StepControl.validity_interval` additionally requests periodic full
+state validation. A guard inspects every completed state, including its
+composition, component finiteness, and EOS domain, and records rejected states
+in its own counters.
 
 The floors the `:repair` mode needs are derived from `Q` at construction, which
 is collective, on the same reasoning as [`run!`](@ref): they scale with the state
@@ -483,8 +494,10 @@ tanh_blend(x, x0, δ) = 0.5 * (1 + tanh((x - x0) / δ))
     DirichletBC(fun)
 
 Hard prescription of the full state on a boundary plane from
-`fun(x₁, x₂, x₃, t) -> Prim`, evaluated at the RK stage time. This is the right
-tool for supersonic or forced inflow, pistons, and oscillating
+`fun(x₁, x₂, x₃, t) -> Prim`, or the spacing-aware
+`fun(x₁, x₂, x₃, t, h) -> Prim`, evaluated at the RK stage time. `h` is the
+smallest physical mesh spacing at the boundary point. This is the right tool
+for supersonic or forced inflow, pistons, and oscillating
 drivers. It over-constrains a subsonic boundary, where it will reflect the
 outgoing acoustic wave; use [`NSCBCInflowBC`](@ref) there, which relaxes the
 incoming amplitudes toward the same targets and accepts a stage-time `target`
@@ -502,12 +515,18 @@ function enforce!(bc::DirichletBC, Q, solver, d, side)
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
     t = solver.tstage
+    I0 = first(plane)
+    i0, j0, k0 = interior_index(solver, I0)
+    cb = boundary_callback(bc.fun, xcoord(solver, 1, i0), xcoord(solver, 2, j0),
+                           xcoord(solver, 3, k0), t, point_spacing(solver, I0))
     if _cpu_storage(Q)
         @inbounds for I in plane
             i, j, k = interior_index(solver, I)
+            x1, x2, x3 = xcoord(solver, 1, i), xcoord(solver, 2, j),
+                         xcoord(solver, 3, k)
             write_conserved!(Q, I, solver,
-                             bc.fun(xcoord(solver, 1, i), xcoord(solver, 2, j),
-                                    xcoord(solver, 3, k), t))
+                             pointwise_boundary(cb, x1, x2, x3, t,
+                                                point_spacing(solver, I)))
         end
         return nothing
     end
@@ -522,9 +541,11 @@ function enforce!(bc::DirichletBC, Q, solver, d, side)
                   (ii, I1) in enumerate(r1)
         I = CartesianIndex(I1, J, K)
         i, j, k = interior_index(solver, I)
+        x1, x2, x3 = xcoord(solver, 1, i), xcoord(solver, 2, j),
+                     xcoord(solver, 3, k)
         q = conserved_from_prim(solver.equations, solver.eos,
-                                bc.fun(xcoord(solver, 1, i), xcoord(solver, 2, j),
-                                       xcoord(solver, 3, k), t))
+                                pointwise_boundary(cb, x1, x2, x3, t,
+                                                   point_spacing(solver, I)))
         for c in 1:n_cons
             block[ii, jj, kk, c] = q[c]
         end
@@ -549,11 +570,15 @@ Physical specification independent of grid resolution and process count. A
 
 - `domain`: three `(lo, hi)` coordinate intervals. [`setup`](@ref) requires
   every interval to have positive extent.
-- `bcs`: three `(low, high)` pairs of [`BoundaryCondition`](@ref) objects, one
-  pair per coordinate direction. A periodic direction must use `PeriodicBC` at
-  both ends; a collapsed direction must also use a periodic pair.
-- `ic`: pointwise function `(x1, x2, x3) -> Prim`. It should be pure because
-  setup can evaluate it from multiple threads.
+- `bcs`: three entries, one per direction. Each is a [`BoundaryCondition`](@ref)
+  for both faces, or a `(low, high)` pair. For example,
+  `(SlipWallBC(), PeriodicBC(), PeriodicBC())`. A singleton `(condition,)` is
+  also accepted and expanded to a pair.
+  Sharing a mutable `SwitchableBC` also shares its switch state. A periodic or
+  collapsed direction must be periodic at both ends.
+- `ic`: pointwise function `(x1, x2, x3) -> Prim` or
+  `(x1, x2, x3, h) -> Prim`, with `h` the minimum local physical spacing over
+  resolved directions. It should be pure because setup can call it on threads.
 
 # Optional keywords
 
@@ -570,7 +595,7 @@ Physical specification independent of grid resolution and process count. A
 Coordinates passed to `ic` and to boundary callbacks follow `metric`. Species
 mass fractions in every returned `Prim` must follow the order defined by `eos`.
 """
-struct Problem
+struct Problem{F}
     name::String
     eos::EOS
     transport::AbstractTransport
@@ -578,14 +603,14 @@ struct Problem
     sources::Tuple
     domain::NTuple{3,Tuple{Float64,Float64}}
     bcs::NTuple{3,Tuple{BoundaryCondition,BoundaryCondition}}
-    ic::Function
+    ic::F
 end
 
 function Problem(; name="problem", eos=_default_ideal_mixture(),
                  transport=Transport(), metric=CartesianMetric(), sources=(),
                  domain, bcs, ic)
-    return Problem(String(name), _as_eos(eos), transport, metric, sources,
-                   domain, bcs, ic)
+    return Problem{typeof(ic)}(String(name), _as_eos(eos), transport, metric, sources,
+                   domain, _face_conditions(bcs), ic)
 end
 
 """
@@ -662,6 +687,12 @@ filter is the binding scheme. Reduce decomposition in that direction or
 increase `n_global` if setup reports a smaller local block.
 
 # Refinement keywords (reference/AMR_GPU.md)
+
+Prefer `amr = AMR(...)` to group refinement, tagging, and regridding choices.
+Its initial cover can be selected from sensors or a physical-coordinate
+predicate, without embedding grid indices in the problem. The flat keywords
+below remain supported for existing decks; nondefault flat settings cannot be
+combined with `amr`.
 
 - `refine`: a `BlockRegion` in root node space selecting static refinement
   at ratio 3 over that region, or a vector of them selecting a nested
@@ -744,6 +775,7 @@ Base.@kwdef struct Numerics
     patch_grid::NTuple{3,Int} = (1, 1, 1)
     backend::AbstractBackend = CPUBackend()
     interface_rhs::Symbol = :extended
+    amr::Union{Nothing,AMR} = nothing
     refine::Union{Nothing,BlockRegion,Vector{BlockRegion}} = nothing
     level_restriction::Symbol = :inject
     subcycle::Bool = false
@@ -760,6 +792,16 @@ Base.@kwdef struct Numerics
     rebalance::Float64 = 0.0
     rebalance_persist::Int = 2
 end
+
+const _AMR_LEGACY_FIELDS = (
+    :refine, :level_restriction, :subcycle, :regrid_interval,
+    :tag_threshold, :tag_buffer, :tag_sensor_threshold, :tag_gradient_threshold,
+    :tag_vorticity_threshold, :tag_predicate, :untag_ratio, :tile_lifetime,
+    :tile, :rebalance, :rebalance_persist,
+)
+
+_legacy_amr_keywords(num::Numerics) =
+    NamedTuple{_AMR_LEGACY_FIELDS}(map(k -> getfield(num, k), _AMR_LEGACY_FIELDS))
 
 """
     setup(prob, num) -> (solver, Q)
@@ -790,6 +832,18 @@ that communicator must call `setup` with the same `prob` and `num`. A split
 communicator lets two independent solvers share one job.
 """
 function setup(prob::Problem, num::Numerics)
+    legacy = _legacy_amr_keywords(num)
+    if num.amr !== nothing
+        legacy == _legacy_amr_keywords(Numerics(n_global=num.n_global)) ||
+            throw(ArgumentError("use amr=AMR(...) or the legacy refinement keywords, " *
+                                "not both"))
+        return _setup_amr(prob, num, num.amr)
+    end
+    return _setup_with_amr_keywords(prob, num, legacy)
+end
+
+function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
+                                  seed_only::Bool=false)
     origin = ntuple(d -> prob.domain[d][1], 3)
     L_domain = ntuple(d -> prob.domain[d][2] - prob.domain[d][1], 3)
     all(>(0), L_domain) || error("domain extents must be positive")
@@ -802,7 +856,7 @@ function setup(prob::Problem, num::Numerics)
                   "x(0) = $(st.x(0.0)), x(1) = $(st.x(1.0)), " *
                   "domain = $(prob.domain[d])")
     end
-    solver = Solver(n_global=num.n_global, L_domain=L_domain, bcs=prob.bcs,
+    solver = Solver(; n_global=num.n_global, L_domain=L_domain, bcs=prob.bcs,
                eos=prob.eos, transport=prob.transport, art=num.art,
                metric=prob.metric, stretch=num.stretch, sources=prob.sources,
                origin=origin,
@@ -813,18 +867,23 @@ function setup(prob::Problem, num::Numerics)
                filter_weighting=num.filter_weighting,
                dims=num.dims, n_halo=num.n_halo, comm=num.comm,
                patch_grid=num.patch_grid, backend=num.backend,
-               interface_rhs=num.interface_rhs, refine=num.refine,
-               level_restriction=num.level_restriction, subcycle=num.subcycle,
-               regrid_interval=num.regrid_interval,
-               tag_threshold=num.tag_threshold, tag_buffer=num.tag_buffer,
-               tag_sensor_threshold=num.tag_sensor_threshold,
-               tag_gradient_threshold=num.tag_gradient_threshold,
-               tag_vorticity_threshold=num.tag_vorticity_threshold,
-               tag_predicate=num.tag_predicate,
-               untag_ratio=num.untag_ratio, tile_lifetime=num.tile_lifetime,
-               tile=num.tile, rebalance=num.rebalance,
-               rebalance_persist=num.rebalance_persist)
+               interface_rhs=num.interface_rhs, kw...)
     Q = allocate_state(solver)
+    if seed_only
+        # The temporary fine cover exists only to plan the initial tagging.
+        # Do not evaluate the user's spacing-aware IC on nodes that may never
+        # belong to the selected hierarchy. Validate the coarse state before
+        # any sensor divides by its density or recovers thermodynamics.
+        root = PatchSolver(solver, first(getfield(solver, :patches)))
+        initialize!(root, Q[1], prob.ic)
+        report = _cpu_storage(Q[1]) ?
+                 _reduce_state_report(solver, _local_state_report(root, Q[1])) :
+                 StateReport()
+        failure = check_validity(num.control, report, "the initial coarse state",
+                                 solver.step, solver.t, solver.dt_prev, solver.cfl)
+        failure === nothing || throw(failure)
+        return solver, Q
+    end
     initialize!(solver, Q, prob.ic)
     validate_state!(solver, Q; control=num.control, stage="the initial state")
     return solver, Q

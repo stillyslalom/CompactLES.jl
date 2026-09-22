@@ -22,9 +22,24 @@ julia --project=. test/runtests.jl
 
 The serial suite checks banded algebra, compact derivatives, closure
 polynomials, filters, curvilinear folds, freestream preservation, conservation,
-EOS round trips, boundary conditions, callbacks, diagnostics, and I/O. Exact or
-manufactured identities isolate implementation errors without requiring a long
-hydrodynamic run.
+EOS round trips, boundary conditions, molecular transport, callbacks,
+diagnostics, and I/O. The wall-flux regressions check the assembled flux at
+faces and corners, including adiabatic and isothermal heat exchange, zero
+species flux, and slip-wall symmetry. Neutral diffusion tests check pair
+identity, coefficient ranges, a Loschmidt diffusion evolution, and agreement
+between threaded and device-kernel paths. Exact or manufactured identities
+isolate implementation errors without requiring a long hydrodynamic run.
+
+The polynomial transport domain checks also have a standalone MPI test:
+
+```sh
+julia --project=. -t 1 test/neutral_transport_domain_tests.jl
+mpiexec -n 2 julia --project=. -t 1 test/neutral_transport_domain_tests.jl
+```
+
+It checks collective rejection of a single local range violation and on
+partially owned refined levels. A failure is `SolverFailure(:transport_domain)`;
+the solver does not extrapolate a polynomial pair fit.
 
 ## Observed-order studies
 
@@ -111,9 +126,10 @@ Changing any of those invalidates a claim of unchanged calibration.
 
 Current evidence includes two important limits:
 
-- a converging strong shock is CFL-limited at the symmetry cell, at 0.4 for the
-  spherical origin and 0.2 for the cylindrical axis and the planar wall under
-  the default `smoother = :gaussian`; and
+- a converging strong shock at a spherical origin needs `cfl = 0.3` under
+  the default detector, or retry control from a larger initial CFL; the
+  planar wall and cylindrical axis complete the current calibrated cases
+  from `cfl = 0.9` with the initial RHS primed; and
 - the spherical origin requires initial data smooth over at least several
   cells.
 

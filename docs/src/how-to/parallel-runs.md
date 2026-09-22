@@ -133,6 +133,44 @@ subcommunicator. Every rank must enter them in the same order. In particular:
 A collective-ordering error usually appears as a zero-CPU hang, not an
 exception.
 
+## Start an AMR or GPU run
+
+Begin with the serial or MPI deck that resolves the entire domain, then select
+an initial refined region from physical coordinates:
+
+```julia
+numerics = Numerics(
+    n_global = (96, 48, 48),
+    amr = AMR(initial = (x, y, z, t) -> abs(x - 0.5) < 0.1,
+              tag_threshold = Inf, subcycle = true),
+)
+```
+
+`initial=:sensor` instead selects from the initialized coarse state; an
+explicit `BlockRegion` gives a fixed node-space location. A child has three
+times the parent resolution, and `subcycle=true` gives it three steps per root
+step. Add `regrid_interval` for a moving feature and a positive `tile` edge
+when several fine patches are useful. The [AMR reference](@ref "Adaptive mesh refinement")
+explains tags, tiling, restrictions, and restarts. Legacy flat refinement
+keywords remain usable in `Numerics`, but cannot be combined with `amr`.
+
+AMR currently requires Cartesian, unstretched, unfolded coordinates. It does
+not reflux coarse--fine fluxes, so treat composite mass, momentum, or energy
+budgets as diagnostics to check. A refined device configuration supports
+subcycling, tiling, and regridding, but not `level_restriction=:filter` or
+`Nasa9Mixture`. Load the GPU package first and wrap its backend:
+
+```julia
+using CUDA
+numerics = Numerics(n_global = (64, 64, 64),
+                    backend = DeviceBackend(CUDABackend()))
+```
+
+Keep the first device run small, use Float32 only after comparing a CPU result,
+and verify the actual GPU path on the target hardware. The CPU
+`DeviceBackend` test backend checks code paths but does not measure GPU memory
+or throughput.
+
 ## Record enough information to interpret timing
 
 Report Julia version, MPI implementation, rank and thread counts, process grid,

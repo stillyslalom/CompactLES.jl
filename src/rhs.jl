@@ -226,6 +226,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 tile::Int=0,
                 rebalance::Real=0,
                 rebalance_persist::Int=2) where {T}
+    bcs = _face_conditions(bcs)
     eos = _as_eos(eos)
     validate_transport(transport, eos)
     for d in 1:3

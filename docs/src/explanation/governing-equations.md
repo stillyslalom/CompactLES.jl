@@ -124,6 +124,20 @@ diffusivity add to their molecular counterparts near under-resolved gradients.
 They are numerical regularization, not constitutive properties of the fluid;
 see [Filtering and artificial properties](@ref).
 
+## Impermeable wall fluxes
+
+Wall conditions act on the assembled normal flux before its compact
+divergence. [`SlipWallBC`](@ref) sets normal species, energy, and tangential
+momentum fluxes to zero; the normal momentum flux retains pressure and normal
+stress. [`NoSlipWallBC`](@ref) sets every normal species flux to zero, including
+artificial diffusion. Its default adiabatic form also sets the normal energy
+flux to zero. With a finite `Twall`, it instead permits the conductive flux
+``-\kappa\nabla T`` evaluated with local molecular and artificial conductivity;
+species enthalpy transport and artificial `:bulk` energy diffusion remain
+suppressed. Pressure and viscous traction remain in the momentum flux. These
+face conditions apply at corners as well as on open face interiors. Hard wall
+state enforcement and the later state filter are separate operations.
+
 ## Thermodynamic closure
 
 The conservation laws do not determine pressure and temperature without an

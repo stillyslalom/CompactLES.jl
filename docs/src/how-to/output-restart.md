@@ -7,7 +7,7 @@ save_vtk(
     solver,
     Q,
     "output/flow";
-    fields = (:rho, :velocity, :pressure, :schlieren),
+    fields = (:rho, :velocity, :p, :schlieren),
     stride = 2,
 )
 ```
@@ -47,7 +47,7 @@ their physical times:
 ```julia
 writer = FieldWriter(
     "output/frame";
-    fields = (:rho, :pressure, :velocity),
+    fields = (:rho, :p, :velocity),
     slice = (3, 128),
 )
 
@@ -84,6 +84,9 @@ The restarting solver must have the same global grid and process grid. The
 checkpoint carries the artificial coefficient arrays beside the state, so
 the restarted run takes the same first step as the uninterrupted one and
 continues it bit for bit.
+
+Checkpointing does not support a same-level `patch_grid` layout. Use an
+unpatched solver or a refined hierarchy; `save_vtk` remains available for both.
 
 ## Restart a refined run
 

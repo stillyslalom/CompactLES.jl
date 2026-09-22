@@ -36,9 +36,11 @@ The tutorials are ordered so that each adds one layer to the preceding
 calculations. [Your first CompactLES simulation](@ref) introduces the state,
 grid, CFL-controlled time advancement, and output path. The shock tube adds
 filtering and artificial transport, and the multicomponent example adds
-thermodynamic closure and species storage. The geometry sequence then starts
-with a collapsed radial calculation before resolving a full cylinder and,
-finally, a sphere with an origin and poles.
+thermodynamic closure and species storage. [Evolve a molecular mixing layer](@ref)
+then introduces binary diffusion. [Follow a moving feature with refinement](@ref)
+shows how a physical-coordinate selector places fine cells. The geometry
+sequence starts with a collapsed radial calculation before resolving a full
+cylinder and, finally, a sphere with an origin and poles.
 
 The tutorials give enough explanation to run and interpret each calculation.
 For the mathematical development, read [Governing equations](@ref) followed by
@@ -58,11 +60,24 @@ not attach units, so mixing unit systems is not detected automatically.
 
 ## Scope
 
-The current model has one temperature and no reactions, with constant or
-CEA temperature-dependent molecular transport. Cartesian, cylindrical, and spherical coordinates are
-available, including regularized axes, origins, and poles. These paths do not
-all have equal maturity; each explanation page states the relevant evidence
-and limitations.
+The current equation set has one temperature and no built-in reactions.
+Molecular transport can use constant properties or temperature-dependent CEA
+fits, with unity-Lewis diffusion or mixture-averaged diffusion from supplied
+binary data. The bundled neutral-gas correlations feed the latter through
+validated polynomial fits with collective runtime domain checks; see
+[Thermodynamics and species transport](@ref).
+
+Cartesian, cylindrical, and spherical coordinates are available, including
+regularized axes, origins, and poles. Unstretched Cartesian runs also support
+nested refinement, lattice tiles, two-level dynamic regridding, and optional
+Berger–Oliger subcycling. [`AMR`](@ref) groups region selection, tagging, and
+time stepping. CPU and device backends support MPI decomposition and refined
+layouts. [Adaptive mesh refinement](@ref) describes their setup and restrictions.
+
+These paths do not all have equal maturity. Refinement has no conservative
+refluxing (a correction that balances fluxes across coarse–fine interfaces),
+and filtering and interface coupling can change composite conserved quantities.
+Each explanation page states the relevant evidence and limitations.
 
 !!! warning "Research software"
     CompactLES is research code under active development. Validate a

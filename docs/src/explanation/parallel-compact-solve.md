@@ -49,8 +49,9 @@ factorized once. Each operator application then performs:
 4. local spike corrections.
 
 The pentadiagonal path generalizes the interface to the first and last two
-values. It reproduces the serial compact solution exactly; the rank interface
-is not approximated with an explicit stencil.
+values. It solves the same algebraic system as the serial compact operator,
+with floating-point agreement to roundoff; the rank interface is not
+approximated with an explicit stencil.
 
 ## Memory layout
 

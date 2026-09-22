@@ -25,8 +25,9 @@ eos = Nasa9Mixture(species)
 
 # ## Define pressure, temperature, and composition
 #
-# [`Prim`](@ref) requires pressure, mass fractions, and exactly one of density
-# or temperature. When temperature is supplied, the EOS calculates density.
+# [`Prim`](@ref) requires exactly two of pressure, density, and temperature,
+# together with the mass fractions. With pressure and temperature supplied,
+# the EOS calculates density.
 # Here the pressure and temperature are uniform while composition varies, so
 # the density change follows solely from the mixture gas constant.
 
@@ -38,9 +39,7 @@ problem = Problem(
     eos = eos,
     transport = Transport(mu0 = 0.0),
     domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
-    bcs = ((SlipWallBC(), SlipWallBC()),
-           (PeriodicBC(), PeriodicBC()),
-           (PeriodicBC(), PeriodicBC())),
+    bcs = (SlipWallBC(), PeriodicBC(), PeriodicBC()),
     ic = (x, y, z) -> begin
         Yco2 = tanh_blend(x, 0.5, transition_width)
         Prim(Y = (1 - Yco2, Yco2), p = 101_325.0, T_ion = 300.0)
@@ -82,7 +81,8 @@ lines!(ax2, x, density, color = :black)
 fig
 
 # The heavier molecular species has the smaller specific gas constant and is
-# consequently denser at the same pressure and temperature. If density had
-# been supplied instead, the EOS would have inferred temperature. Supplying
-# both, or neither, is rejected so inconsistent initial thermodynamic data do
+# consequently denser at the same pressure and temperature. With pressure and
+# density supplied, the EOS would instead infer temperature; with density and
+# temperature supplied, it would infer pressure. Supplying all three, or fewer
+# than two, is rejected so overspecified or incomplete thermodynamic data do
 # not pass silently into the calculation.

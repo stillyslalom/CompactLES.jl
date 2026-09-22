@@ -16,7 +16,7 @@ api_ic(x, y, z) = Prim(rho=1.0, p=1.0)
 # Deliberate compatibility manifest: changing an export is an API decision, not
 # an incidental consequence of adding a binding to the module.
 const EXPECTED_EXPORTS = Set(Symbol.(split("""
-AbstractTransport ArtParams AtTime AxisBC BandedClosureRow BandedCompactScheme BinaryDiffusion BinaryDiffusionPolynomial BlockRegion
+AMR AbstractTransport ArtParams AtTime AxisBC BandedClosureRow BandedCompactScheme BinaryDiffusion BinaryDiffusionPolynomial BlockRegion
 BoundaryCondition CPUBackend Callback CartesianMetric ClosureRow CompactScheme
 CeaTransport ConservedState ConstantBodyForce CylindricalMetric DEFAULT_VTK_FIELDS
 DeviceBackend DirichletBC EOS EquationSet EveryStep EveryTime ExtrapolationBC

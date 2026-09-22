@@ -19,6 +19,12 @@ conditions, initial state) evaluated by a **`Numerics`** (the discretization:
 resolution, scheme, CFL, process grid), so the same problem can be run at any
 resolution or scheme order unchanged.
 
+The physical transport model sets molecular viscosity, heat conduction, and
+species diffusion. Artificial transport and the compact filter add numerical
+dissipation to control shocks and unresolved scales. Their contribution matters
+when interpreting an LES: grid resolution and regularization settings are part
+of the model and should be checked together in a refinement study.
+
 For a compact constructor reference, defaults, and common recipes, see the
 [Input deck cheat sheet](https://stillyslalom.github.io/CompactLES.jl/dev/reference/input-deck-cheat-sheet/).
 
@@ -28,7 +34,7 @@ MPI.Init(threadlevel=:funneled)     # CompactLES re-exports MPI
 
 prob = Problem(
     domain = ((0.0, 2π), (0.0, 2π), (0.0, 2π)),
-    bcs    = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
+    bcs    = (PeriodicBC(), PeriodicBC(), PeriodicBC()),
     ic     = (x, y, z) -> Prim(u=(sin(x)*cos(y), -cos(x)*sin(y), 0.0),
                                p=71.43, rho=1.0))
 
@@ -39,26 +45,34 @@ run!(solver, Q; tfinal=1.0)
 ## Features
 
 - **High-order compact operators.** Sixth-order tridiagonal Lele derivatives by
-  default, tenth-order pentadiagonal available, and an eighth-order
-  Gaitonde–Visbal compact filter for dealiasing and near-wall dissipation.
+  default, eighth- and tenth-order presets, and an eighth-order
+  Gaitonde–Visbal compact filter with timestep-scaled relaxation.
 - **Shock and subgrid capturing** without Riemann solvers or limiters: Cook
   (2007) artificial shear/bulk viscosity, conductivity, and species diffusivity,
   driven by high-derivative sensors.
 - **Multicomponent thermodynamics.** Any number of transported species behind a
   pluggable EOS; `IdealMixture`, `Nasa9Mixture` (NASA CEA piecewise cp), and
   `StiffenedGas`.
+- **Molecular transport.** Constant-property `Transport` or temperature-dependent
+  `CeaTransport`, with unity-Lewis or mixture-averaged species diffusion.
+  Bundled neutral binary diffusion correlations can be fitted over an explicit
+  temperature interval and used directly in the flux calculation.
 - **Curvilinear geometry.** Cartesian, cylindrical, and spherical coordinates
   with regularized axis, origin, and poles; collapsed dimensions give efficient
   1-D, 2-D, and axisymmetric-with-swirl runs; optional grid stretching.
 - **Boundary conditions.** Periodic, slip / no-slip (adiabatic or isothermal)
-  walls, Navier-Stokes characteristic subsonic inflow/outflow, and time-dependent Dirichlet forcing.
+  walls, face-centred symmetry planes, characteristic subsonic inflow/outflow
+  with transverse terms, and time-dependent or switchable forcing.
 - **Parallelism.** MPI 3-D decomposition with a distributed tridiagonal /
   pentadiagonal solve for the globally coupled compact schemes, over threads.
-- **Adaptive refinement.** Block-structured AMR with sensor-driven tagging and
-  regridding, optionally Berger–Oliger subcycled; currently Cartesian-only and
-  one refined region.
-- **GPU execution.** A `KernelAbstractions.jl` device backend runs the whole
-  solver on any supported GPU, bit-for-bit against the CPU, in Float64 or Float32.
+- **Adaptive refinement.** `AMR(initial=:sensor)` or a physical-coordinate
+  predicate chooses the first refined region; nested Cartesian levels use
+  refinement ratio 3. Optional lattice tiling, regridding and load balancing, and
+  global or Berger–Oliger subcycled timesteps. Dynamic regridding currently
+  supports one refined level.
+- **GPU execution.** A `KernelAbstractions.jl` device backend supports Float64
+  and Float32, including MPI decomposition, tiled refinement, and regridding.
+  Validated device configurations reproduce their CPU counterparts bit for bit.
 - **Diagnostics and I/O.** Coordinate-system-aware, MPI-reduced mixing diagnostics;
   checkpoint/restart and VTK or HDF5/XDMF output for ParaView / VisIt.
 
@@ -101,11 +115,11 @@ dimensions from splitting too finely.
 
 Problems are described in **primitive, pointwise** terms and never reference
 ranks, halos, or the conserved-variable layout. A `Prim` gives velocity,
-composition, and exactly two of pressure, density and temperature; the EOS
+composition, and exactly two of pressure, density, and temperature; the EOS
 supplies the third:
 
 ```julia
-Prim(; u=(0,0,0), p, T_ion=NaN, rho=NaN, Y=(1.0,))
+Prim(; u=(0,0,0), p=NaN, T_ion=NaN, rho=NaN, Y=(1.0,))
 ```
 
 ```julia
@@ -115,9 +129,9 @@ prob = Problem(
     metric    = CartesianMetric(),                      # or Cylindrical / Spherical
     sources   = (ConstantBodyForce((0.0, -9.81, 0.0)),),
     domain    = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),   # (lo, hi) per dimension
-    bcs       = ((SlipWallBC(), NSCBCOutflowBC(pinf=0.1)),
-                 (PeriodicBC(), PeriodicBC()),
-                 (PeriodicBC(), PeriodicBC())),
+    bcs       = ((SlipWallBC(), NSCBCOutflowBC(pinf=1.0)),
+                 PeriodicBC(),
+                 PeriodicBC()),
     ic        = (x, y, z) -> Prim(u=(0,0,0), p=1.0, rho=1.0))
 
 num = Numerics(
@@ -138,6 +152,21 @@ IdealMixture(["He", "CO2"])                 # constant-cp mixture
 Nasa9Mixture(["He", "CO2"])                 # temperature-dependent mixture
 ```
 
+| Choice | Use it when |
+|--------|-------------|
+| `IdealSpecies` / `IdealMixture` | Constant species heat capacities are adequate over the temperature range. |
+| `Nasa9Mixture` | Temperature-dependent heat capacities matter; the gas remains thermally ideal. |
+| `Transport` | You prescribe constant viscosity and Prandtl/Schmidt numbers, often in a nondimensional study. |
+| `CeaTransport` | You need dimensional, temperature-dependent gas transport; specify binary diffusion data when unity Lewis is inadequate. |
+| Static refinement / regridding | A known region / a moving feature needs higher resolution than the rest of a Cartesian domain. |
+
+The Prandtl, Schmidt, and Lewis numbers compare momentum, species, and thermal
+diffusion: `Pr = mu*cp/kappa`, `Sc = mu/(rho*D)`, and
+`Le = kappa/(rho*cp*D)`. Unity Lewis sets species diffusivity equal to thermal
+diffusivity; it does not represent measured diffusion for every species pair.
+See [Thermodynamics and species transport](docs/src/explanation/thermodynamics.md)
+for the mixture rules, units, and validity ranges.
+
 `setup` returns the solver and its initialized conserved state; `run!` advances
 it, taking an optional `callback`. `ProgressLog` is a ready-made callback that
 prints step, time, `dt`, wall time, and an optional reduced diagnostic:
@@ -149,23 +178,31 @@ run!(solver, Q; tfinal=0.25, nmax=100_000,
                           quantity=turbulent_kinetic_energy))
 ```
 
-Initial-condition and forcing functions are plain functions of physical
-coordinates (and time, for forcing); a convergence study is the same `Problem`
-across a sequence of `Numerics`.
+Initial conditions receive physical `(x,y,z)` or `(x,y,z,h)`, where `h` is
+the local physical spacing. Prescribed boundary targets may also receive
+time and `h`. A convergence study can reuse the same `Problem` across a
+sequence of `Numerics`.
 
 ## Adaptive refinement and GPU execution
 
-AMR & GPU are selected within `Numerics`.
-`refine` places a refined level at ratio 3 over a `BlockRegion` of the
-coarse grid (a zero-based node offset and extent), or a nested chain of them
-(a vector, each region in the parent level's node space), optionally tiled on a
-lattice (`tile`), subcycled, and regridding:
+Adaptive mesh refinement (AMR) and GPU execution are selected within `Numerics`.
+`AMR` groups the refinement controls. Its initial region can follow the
+initialized state's sensors or a predicate of physical coordinates and time:
 
 ```julia
-num = Numerics(n_global = (48, 48, 48),
-               refine   = BlockRegion((16, 16, 16), (16, 16, 16)),
-               subcycle = true, regrid_interval = 20)
+num = Numerics(n_global = (96, 48, 48),
+               amr = AMR(initial = (x, y, z, t) -> abs(x - 0.5) < 0.1,
+                         tag_threshold = Inf, regrid_interval = 20,
+                         subcycle = true))
 ```
+
+`AMR(initial=:sensor)` uses the current tagging criteria at setup. An explicit
+`BlockRegion` (or vector of nested regions) remains available for known static
+layouts. The physical predicate is reused at each regrid check and combines
+with enabled sensor tags; `tag_threshold=Inf` disables the default density tag.
+Legacy flat `Numerics` refinement keywords remain available, but cannot be
+mixed with `amr=AMR(...)`. See the [AMR reference](docs/src/reference/amr.md)
+for nesting, tags, tiling, and transfer choices.
 
 `backend = DeviceBackend(ka)` moves the whole solver onto a GPU,
 where `ka` is `CUDABackend()` for Nvidia or `ROCBackend()` for AMD.
@@ -175,8 +212,16 @@ using AMDGPU  # or CUDA
 num = Numerics(n_global = (64, 64, 64), backend = DeviceBackend(ROCBackend()))
 ```
 
-Refinement is currently Cartesian-only and single-region; a device run takes a single
-patch per solver.
+Refinement requires unstretched Cartesian coordinates without folds and a
+tridiagonal filter. A static hierarchy can contain several nested levels;
+dynamic regridding is limited to a root and one refined level. Device runs
+support these layouts with host-staged MPI exchanges.
+The device backend currently excludes `Nasa9Mixture` and filtered restriction
+(`level_restriction=:filter`); use a supported constant-heat-capacity EOS and
+the default coincident-node restriction (`:inject`).
+Subcycling advances a fine level three times per parent step; global stepping
+advances every level with the timestep required by the finest constraints.
+See [Run in parallel](docs/src/how-to/parallel-runs.md) for setup and constraints.
 
 ## Examples
 
@@ -204,7 +249,9 @@ patch per solver.
   vector a refined solver holds: `save_vtk` then writes one piece per patch
   under a `.vtm` multiblock index with the covered coarse nodes blanked, and a
   checkpoint records the tile layout, ownership and tag history, so a restart
-  rebuilds the hierarchy on any rank count (bit for bit on the writing one).
+  rebuilds the hierarchy. HDF5 permits a different rank count; per-rank binary
+  checkpoints require the writing rank count. A matching layout and rank count
+  continue bit for bit, while a changed decomposition agrees to roundoff.
 
 ## Testing
 
@@ -231,8 +278,9 @@ LSRK(5,4) integration, artificial properties, multicomponent transport, the
 curvilinear metrics, and the distributed solve) is covered by the suites above
 and validated against analytic references.
 
-- Float64 by default; a uniform Float32 mode (CPU and GPU) halves the memory
-  footprint but carries a mean-density drift of order 1e-4.
+- Float64 by default; a uniform Float32 mode (CPU and GPU) reduces state-array
+  storage, with precision-dependent conservation error. See the
+  [precision measurements](reference/CALIBRATION_APPENDIX.md#amr).
 - A converging strong shock at a spherical origin is CFL-limited to 0.3 by an
   excursion of the origin cell as the shock forms; `StepControl(retries=4)`
   recovers it automatically. The planar wall and the cylindrical axis carry
@@ -240,14 +288,16 @@ and validated against analytic references.
 - Converging-shock runs carry cells of negative internal energy at the front,
   while density, total energy, and the Noh plateau stay sound (within 0.07%); an
   optional floor repairs negative-energy cells.
-- `Transport` retains constant viscosity and a single Schmidt number;
-  `CeaTransport` uses the bundled NASA fits, with unity-Lewis diffusion unless
-  binary diffusion data are supplied; the Marrero--Mason dilute-gas
-  correlations are vendored as a checked standalone evaluator, not yet
-  connected to the flux. See the [transport model](docs/src/explanation/thermodynamics.md).
-- The GPU backend runs a single patch per solver with host-staged MPI, and
-  refinement is Cartesian-only, single-region, with a small interface
-  conservation drift.
+- Neutral mixture-averaged diffusion requires supported species pairs and a
+  validated temperature interval. Runtime domain checks reject states outside
+  the fitted interval; fits are not silently extrapolated. The standalone
+  Stanton–Murillo ion interdiffusivity evaluator is not a plasma EOS or a
+  coupled ion-transport model. See the
+  [transport model](docs/src/explanation/thermodynamics.md).
+- Refinement is Cartesian-only and does not provide conservative refluxing
+  (a coarse–fine flux correction that enforces a shared conservation budget).
+  Patch and level interfaces, restriction, and filtering can affect composite
+  conservation; assess those errors for the chosen calculation.
 - Wall boundary conditions assume coordinate-surface walls; Soret/Dufour and
   reacting chemistry are not built in (reactions can use the source interface).
 

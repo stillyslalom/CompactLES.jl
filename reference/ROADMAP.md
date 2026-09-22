@@ -387,6 +387,16 @@ temporal certification with V3 and default filter time-scaling with N1.
   A7's ideal-performance gate, and measured load/precompile cost. Package/module
   boundaries must still allow solver-owned fusion and optional bulk evaluation.
 
+- [ ] **A9 — Accept symbolic field selectors in composite AMR diagnostics.**
+  Support calls such as `line_profile(solver, states, :rho)` and symbolic
+  selectors for composite profiles and integrals, including species selection,
+  without requiring callers to extract one field array per patch. Reuse the
+  existing composite weighting and covered-node masking, refresh primitives
+  safely, and document sampling and collective-call semantics.
+  **Gate:** agreement with explicit per-patch fields on static, tiled, and
+  regridded hierarchies in serial and MPI; diagnostics leave the trajectory
+  unchanged. Simplify the AMR tutorial to exercise the symbolic route.
+
 ## P2: scale, devices, I/O, and geometry
 
 Detailed mechanisms and measurements remain in [AMR_GPU.md](AMR_GPU.md) and

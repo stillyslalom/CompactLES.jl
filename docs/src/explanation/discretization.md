@@ -27,10 +27,13 @@ the complete grid line. Compared with an explicit stencil of similar width,
 this implicit relation resolves a larger fraction of the representable
 wavenumber range accurately.
 
-Built-in derivatives are fourth-order Padé, sixth-order Lele C6, and
-tenth-order pentadiagonal Lele C10. These orders describe a periodic interior.
-One-sided boundary closures and coordinate folds reduce the measured global
-order to approximately three in current tests.
+Built-in derivatives are fourth-order Padé, sixth-order Lele C6,
+eighth-order Lele C8, and tenth-order pentadiagonal Lele C10. These orders
+describe a periodic interior. A closed line also uses one-sided boundary
+closures; their measured order depends on the chosen rows. Coordinate folds
+instead impose parity across a half-offset singular set. The
+[verification results](@ref "Verification, validation, and calibration")
+report periodic, wall, and fold orders separately.
 
 ## From state to spatial right-hand side
 
@@ -163,10 +166,10 @@ solution converges at sixth order with the artificial properties off and
 at fourth order with them on, at an error fifteen times below the
 cascade's, because the artificial diffusion carries a fourth-order closure
 defect of its own at a wall that no derivative closure raises. At a
-shocked wall it reproduces the default's profile to 0.1%. The cascade
-remains the default for the singular start it completes and the rows do
-not. C8 `:brady_livescu` is not supported at a wall: it fails a smooth
-wall from CFL 1.25 where the periodic interior completes.
+shocked wall it reproduces the default's profile to 0.1%. The default
+`:neutral3` rows remain the supported choice for singular starts that the
+high-order rows do not complete. C8 `:brady_livescu` is not supported at a wall:
+it fails a smooth wall from CFL 1.25 where the periodic interior completes.
 
 The cascade closures carry a linear instability at an inviscid slip wall.
 A uniform state between slip walls grows a wall-normal velocity from
@@ -182,7 +185,7 @@ default `:neutral3` removes it on C6, and the same two rows over the
 sixth-order interior row remove it on C8 and on C10: the linearized step is
 neutral at slip walls, Dirichlet ends and no-slip walls, filtered and
 unfiltered, and a uniform state holds its round-off seed through forty time
-units. A long inviscid run between slip walls or symmetry planes on the
+units. A long inviscid run between node-centered slip walls on the
 `:cascade3` rows of any of the three operators should carry
 `compact_filter(closures = :cascade)` or physical viscosity.
 
@@ -240,15 +243,21 @@ from the state entering the step. Schematically,
 
 ```math
 \Delta t=\frac{\mathrm{CFL}}{\max_i \lambda_i},\qquad
-\lambda_i=\sum_d\left(\frac{|u_d|+c}{\Delta x_d}
-+\frac{2\nu}{\Delta x_d^{2}}\right)+R_{\mathrm{curvature}}.
+\lambda_i=\sum_d\frac{|u_d|}{\Delta x_d}
++c\sqrt{\sum_d\frac{1}{\Delta x_d^2}}
++2\nu\sum_d\frac{1}{\Delta x_d^{2}}
++R_{\mathrm{curvature}}.
 ```
 
 Here ``i`` indexes grid points and ``d`` the resolved directions, ``c`` is the
 mixture sound speed, ``\Delta x_d`` the physical spacing along ``d``, and ``\nu``
 the sum of the kinematic momentum, thermal, and species diffusivities at that
 point, each including its artificial contribution and the last taken over the
-most diffusive species. The factor two is the diffusive safety constant, not one
+most diffusive species. The thermal contribution is
+``\kappa/(\rho c_v)`` because the internal-energy equation sets the explicit
+thermal limit. The acoustic term uses the Euclidean norm of inverse spacings,
+so its multidimensional contribution differs from the sum of one-dimensional
+acoustic rates. The factor two is the diffusive safety constant, not one
 of the `ArtParams` coefficients.
 ``R_{\mathrm{curvature}}`` is the geometric source rate that a collapsed angular
 dimension would otherwise contribute unaccounted; it is zero in Cartesian
@@ -271,8 +280,10 @@ One accepted outer-loop iteration occurs in this order:
 6. invoke callbacks on the completed, optionally filtered state.
 
 Artificial coefficients in the timestep estimate lag by one completed RHS
-evaluation. `StepControl` can mitigate a strong startup transient by rolling
-back to a saved state and retrying at lower CFL, but it does not make an
+evaluation. Before its first step, `run!` evaluates the initial right-hand
+side once to populate those coefficients. `StepControl` can mitigate a strong
+startup transient by rolling back to a saved state and retrying at lower
+CFL, but it does not make an
 intrinsically unstable configuration valid. See
 [Control and diagnose a run](@ref) for endpoint scheduling, retries, and
 timestep diagnostics.

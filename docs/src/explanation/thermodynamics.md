@@ -5,6 +5,9 @@
 The conserved state provides density, momentum, and total energy. Fluxes and
 timesteps additionally require pressure, temperature, sound speed, heat
 capacity, and species enthalpies. An [`EOS`](@ref) supplies that closure.
+The field name `T_ion` denotes the single material temperature solved by the
+current one-temperature equations; it does not imply a separate ion energy
+equation or plasma transport model.
 
 ## Calorically perfect ideal mixtures
 
@@ -65,9 +68,10 @@ range.
 
 ## Primitive-to-conserved conversion
 
-`Prim` accepts pressure, velocity, composition, and one of temperature or
-density. [`conserved_from_prim`](@ref) applies the selected equation set and EOS
-to calculate partial densities and total energy. The inverse bulk conversion
+`Prim` accepts velocity and composition together with exactly two of pressure,
+density, and temperature (`T_ion`). The EOS computes the third quantity.
+[`conserved_from_prim`](@ref) applies the selected equation set and EOS to
+calculate partial densities and total energy. The inverse bulk conversion
 occurs during each RHS evaluation.
 
 Between completed steps, prefer state-query functions reading `Q`. Call

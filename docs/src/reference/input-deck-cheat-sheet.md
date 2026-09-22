@@ -15,7 +15,7 @@ gas = IdealSpecies("gas"; R=1.0, gamma=1.4)
 problem = Problem(
     eos=gas,
     domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)),
-    bcs=ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
+    bcs=(PeriodicBC(), PeriodicBC(), PeriodicBC()),
     ic=(x, y, z) -> Prim(u=(0.0, 0.0, 0.0), p=1.0, rho=1.0),
 )
 numerics = Numerics(n_global=(64, 64, 64))
@@ -54,8 +54,8 @@ Problem(; domain, bcs, ic, name="problem",
 | Keyword | Meaning | Default/shape |
 |---|---|---|
 | `domain` | Coordinate intervals `(lo, hi)` | Required `((lo,hi),(lo,hi),(lo,hi))` |
-| `bcs` | Low/high condition for each coordinate | Required `((lo,hi),(lo,hi),(lo,hi))` |
-| `ic` | `(x1,x2,x3) -> Prim` | Required; keep it pure |
+| `bcs` | A symmetric condition or low/high pair per coordinate | Required `(x,y,z)` |
+| `ic` | `(x1,x2,x3) -> Prim` or `(x1,x2,x3,h) -> Prim` | Required; keep it pure |
 | `name` | Display/output label | `"problem"` |
 | `eos` | Species and thermodynamic closure | `IdealSpecies("gas"; R=1, gamma=1.4)` |
 | `transport` | Molecular transport model | `Transport()` (`mu0=0`, `Pr=0.7`, `Sc=0.7`) |
@@ -103,7 +103,9 @@ domain interval.
 
 ### Boundary tuple layout
 
-`bcs = ((xlow, xhigh), (ylow, yhigh), (zlow, zhigh))`.
+Each entry of `bcs = (xfaces, yfaces, zfaces)` is either one condition for both
+faces or a `(low, high)` pair. For example, a triply periodic domain uses
+`bcs = (PeriodicBC(), PeriodicBC(), PeriodicBC())`.
 
 | Condition | Constructor | Use |
 |---|---|---|
@@ -121,15 +123,22 @@ domain interval.
 (`before`) to another (`after`) mid-run; call `switch!` from
 a globally consistent callback. Fold conditions cannot be switched.
 
+ICs can accept `(x,y,z,h)` and `DirichletBC` or NSCBC targets can accept
+`(x,y,z,t,h)`, where `h` is the minimum local physical spacing over resolved
+directions. The shorter forms still work; the longer form wins if both are
+applicable. Use `tanh_blend(x,x0,2h)` for a numerical two-cell transition,
+or a fixed physical width for a resolved material layer.
+
 ## Discretization: `Numerics`
 
 ```julia
 Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
     art=ArtParams(), cfl=0.5, control=StepControl(), filter_interval=1,
-    filter_cfl=0.35, dims=nothing, n_halo=4, comm=MPI.COMM_WORLD,
+    filter_cfl=0.35, filter_weighting=:none,
+    dims=nothing, n_halo=4, comm=MPI.COMM_WORLD,
     stretch=(nothing,nothing,nothing), patch_grid=(1,1,1),
     backend=CPUBackend(), interface_rhs=:extended,
-    refine=nothing)                          # plus the AMR keywords below
+    amr=nothing)                             # AMR(...) groups refinement options
 ```
 
 | Keyword | Meaning | Default |
@@ -142,13 +151,15 @@ Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
 | `control` | Timestep landing, recovery, and floors | `StepControl()` |
 | `filter_interval` | Apply filter every `k` completed steps | `1`; `0` disables |
 | `filter_cfl` | Reference CFL of a full-strength filter pass; `0` unrelaxed | `0.35` |
+| `filter_weighting` | `:none` or volume-weighted state filtering | `:none` |
 | `dims` | MPI process grid | `nothing` (automatic) |
 | `n_halo` | Halo layers per side | `4` |
 | `comm` | MPI communicator | `MPI.COMM_WORLD` |
 | `stretch` | Per-direction `Stretch` mappings | all `nothing` |
-| `patch_grid` | Slab patches along one dimension; excludes explicit `dims` and `refine` | `(1,1,1)` |
+| `patch_grid` | Slab patches along one dimension; excludes explicit `dims` and AMR | `(1,1,1)` |
 | `backend` | Storage/execution backend | `CPUBackend()` |
 | `interface_rhs` | Patch-interface closure policy | `:extended` |
+| `amr` | Refinement, tagging, subcycling, and balancing configuration | `nothing` |
 
 Each resolved rank-local dimension needs enough points for the selected
 stencils (nine with the defaults). Every rank in `comm` must call `setup` with
@@ -189,7 +200,7 @@ interface of unequal molecular weights at a higher cost per step (see
 StepControl(; predict=0.0, max_growth=0.0, landing_steps=2,
     dt_min=0.0, dt_min_ratio=1e-8, retries=0, cfl_backoff=0.5,
     savepoint_interval=25, floor_ratio=0.0, floor_scope=:representable,
-    validity=:strict)
+    validity=:strict, validity_interval=0, substep_cfl=0.0)
 ```
 
 | Keyword | Meaning |
@@ -203,6 +214,8 @@ StepControl(; predict=0.0, max_growth=0.0, landing_steps=2,
 | `floor_ratio` | Positivity failsafe strength; `0` disables |
 | `floor_scope` | `:representable` or `:internal_energy` repair policy |
 | `validity` | `:strict`, `:permissive`, or `:repair` state-validation policy |
+| `validity_interval` | Validate every `k` entering states; `0` checks only run endpoints |
+| `substep_cfl` | Absolute refined-substep tripwire after refreshed coefficients; `0` disables it |
 
 For production runs set `nmax` in `run!`; use `retries=2–4` for difficult startup
 transients and lower `cfl` for converging shocks.
@@ -270,27 +283,38 @@ above 1-D. The reasons and the exceptions are in [Threads and ranks](@ref).
 GPU package. A device solver may be decomposed, patched, refined, or tiled; it
 excludes `level_restriction=:filter` and `Nasa9Mixture`.
 
-## AMR
+## Adaptive refinement
 
 ```julia
-Numerics(n_global=(48,48,48),
-    refine=BlockRegion((16,16,16), (16,16,16)),
-    subcycle=true, regrid_interval=20)
+Numerics(n_global=(96,48,48),
+    amr=AMR(initial=(x,y,z,t) -> abs(x - 0.5) < 0.1,
+            tag_threshold=Inf, regrid_interval=20, subcycle=true))
 ```
 
-`refine` accepts one `BlockRegion(offset, extent)` in root node space, or a
-vector of them for a nested hierarchy, each region given in its parent level's
-node space. The refinement ratio is three. Useful controls are `level_restriction=:inject` or `:filter`,
-`subcycle=false/true`, `regrid_interval`, `tag_threshold`, `tag_buffer`,
-`tag_sensor_threshold`, `tag_gradient_threshold`, `tag_vorticity_threshold`,
-`tag_predicate`, `untag_ratio`, `tile_lifetime`, `tile`, `rebalance`, and
-`rebalance_persist`. Current AMR is Cartesian-only.
+`AMR(initial=:sensor)` selects the first fine region from enabled tags on the
+initialized coarse state; a physical `(x,y,z,t)->Bool` predicate selects by
+coordinates and is reused at each regrid check. The predicate is unioned with
+sensor tags, so `tag_threshold=Inf` disables the default density criterion for
+an exclusively geometric selection. An explicit `BlockRegion(offset, extent)`
+selects a known location in parent node space; a vector supplies static nested
+levels. Refinement ratio is three. If a sensor or predicate selects no nodes
+at setup, `setup` raises an error instead of creating an arbitrary fine patch.
+
+`regrid_interval=0` keeps the initial layout; a positive interval retags one
+refined level. `tile` optionally partitions that level into a global lattice,
+and `subcycle=true` advances a child three times per parent step. Inspect the
+layout with `level_regions(solver, level)`; `refined_region(solver, level)`
+requires exactly one patch on that level. Legacy flat refinement keywords on
+`Numerics` remain available for existing decks, but cannot be combined with
+`amr=AMR(...)`. The [AMR reference](@ref "Adaptive mesh refinement") gives the
+full keyword table, support limits, and conservation and restart guidance.
 
 ## Common traps
 
 - A collapsed dimension (`n_global[d] == 1`) must be periodic at both ends and
   is not decomposed.
-- `bcs` is nested by dimension, then `(low, high)`; it is not a flat six-tuple.
+- `bcs` has one entry per dimension: a single condition for both faces or a
+  `(low, high)` pair. It is not a flat six-tuple.
 - `Y` ordering and length must match the EOS exactly, and fractions must sum to one.
 - `Prim` requires exactly two of `p`, `rho`, and `T_ion`.
 - `IdealSpecies("CO2")`, `IdealMixture(["He", "CO2"])`, and `Nasa9Mixture`

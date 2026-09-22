@@ -33,7 +33,7 @@ problem = Problem(
     name = "periodic acoustic pulse",
     eos = IdealSpecies("gas"; R = 1.0, gamma = gamma),
     domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
-    bcs = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
+    bcs = (PeriodicBC(), PeriodicBC(), PeriodicBC()),
     ic = (x, y, z) -> begin
         p = pressure(x)
         Prim(p = p, rho = p^(1 / gamma))

@@ -33,6 +33,23 @@ dispatch in the boundary hooks costs.
 """
 const FaceConditions = NTuple{3,Tuple{BoundaryCondition,BoundaryCondition}}
 
+# Normalize deck shorthand once, before geometry checks or patch construction.
+# A bare condition shares the supplied object across both faces; in particular,
+# switching a shared SwitchableBC intentionally switches both faces together.
+function _face_conditions(bcs)
+    bcs isa Tuple && length(bcs) == 3 ||
+        throw(ArgumentError("bcs must be a three-tuple of conditions or face pairs"))
+    return ntuple(3) do d
+        pair = bcs[d]
+        pair isa BoundaryCondition && return (pair, pair)
+        pair isa Tuple && length(pair) in (1, 2) ||
+            throw(ArgumentError("bcs[$d] must be a boundary condition or a face pair"))
+        all(bc -> bc isa BoundaryCondition, pair) ||
+            throw(ArgumentError("bcs[$d] entries must be BoundaryCondition objects"))
+        length(pair) == 1 ? (pair[1], pair[1]) : pair
+    end
+end
+
 """
     enforce!(bc, Q, solver, dim, side)
 

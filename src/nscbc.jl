@@ -254,9 +254,11 @@ their targets through a transverse flow at the face, 0 the plain LODI
 relaxation, and a negative value the local Mach number, the outflow's
 damping.
 
-`target` may be a stage-time function `(x, y, z, t) -> Prim` overriding the
-constant targets pointwise. Its state must contain temperature and the full
-composition. `Lref <= 0` selects the domain length normal to the face. A
+`target` may be a stage-time function `(x, y, z, t) -> Prim`, or its
+spacing-aware form `(x, y, z, t, h) -> Prim`, overriding the constant targets
+pointwise. `h` is the smallest physical mesh spacing at the face point. Its
+state must contain temperature and the full composition. `Lref <= 0` selects
+the domain length normal to the face. A
 structure the inflow is to admit, a vortex or a turbulent inflow, enters
 only when the relaxation time `Lref / (eta c)` is short against its passage
 time, which the default rates do not give; the error of its imposition then
@@ -278,8 +280,9 @@ struct NSCBCInflowBC{T<:AbstractFloat,F} <: BoundaryCondition
     Lref::T                         # ≤ 0 → domain length in d
     beta_t::T                       # transverse-term weight, as the outflow's
     target::F
-    # Optional (x₁, x₂, x₃, t) -> Prim overriding the constant targets per
-    # point at the RK stage time (the Prim must carry T_ion and the full Y).
+    # Optional (x₁, x₂, x₃, t) -> Prim or (x₁, x₂, x₃, t, h) -> Prim overriding
+    # the constant targets per point at the RK stage time (the Prim must carry
+    # T_ion and the full Y).
 end
 
 
@@ -371,10 +374,16 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
         error("NSCBCInflowBC with a pointwise target is host-only; use " *
               "constant targets on a DeviceBackend")
     tnow = solver.tstage
+    I0 = first(plane)
+    i0, j0, k0 = interior_index(solver, I0)
+    cb = boundary_callback(bc.target, xcoord(solver, 1, i0),
+                           xcoord(solver, 2, j0), xcoord(solver, 3, k0), tnow,
+                           point_spacing(solver, I0))
     @inbounds for I in plane
         i1, i2, i3 = interior_index(solver, I)
-        pr = bc.target(xcoord(solver, 1, i1), xcoord(solver, 2, i2),
-                       xcoord(solver, 3, i3), tnow)
+        x1, x2, x3 = xcoord(solver, 1, i1), xcoord(solver, 2, i2),
+                     xcoord(solver, 3, i3)
+        pr = pointwise_boundary(cb, x1, x2, x3, tnow, point_spacing(solver, I))
         isnan(pr.T_ion) && error("NSCBCInflowBC target must specify T_ion")
         targets = (map(T, pr.u), T(pr.T_ion))
         YT = map(T, pr.Y)

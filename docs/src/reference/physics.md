@@ -42,6 +42,11 @@ H2-D2 and the combustion, air, noble-gas and atomic pairs of that paper;
 the calculated hydrogen-isotopologue and helium pairs of Song et al.
 (2016); and the room-temperature measurements of Müller and Klemm (1970).
 Measured, evaluated and calculated values stay in separate tables.
+The polynomial model is usable by `CeaTransport` with
+`diffusion=:mixture_averaged` when the EOS species order and all required
+pure-species CEA records match. Its pair temperature ranges are checked during
+the solver's flux and timestep preflight; see
+[Thermodynamics and species transport](@ref).
 
 ```@docs
 MarreroMasonPair

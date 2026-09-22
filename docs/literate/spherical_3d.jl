@@ -50,7 +50,7 @@ problem = Problem(
     domain = ((0.0, 1.0), (0.0, pi), (0.0, 2pi)),
     bcs = ((OriginBC(), SlipWallBC()),
            (PoleBC(), PoleBC()),
-           (PeriodicBC(), PeriodicBC())),
+           PeriodicBC()),
     ic = (r, theta, phi) -> begin
         b = blast(r)
         Prim(p = 1.0 + 2.0b, rho = 1.0 + 2.0b)

@@ -44,8 +44,7 @@ problem = Problem(
     metric = CylindricalMetric(),
     domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
     bcs = ((AxisBC(), SlipWallBC()),
-           (PeriodicBC(), PeriodicBC()),
-           (PeriodicBC(), PeriodicBC())),
+           PeriodicBC(), PeriodicBC()),
     ic = (r, theta, z) -> begin
         ring = exp(-((r - 0.65) / 0.07)^2)
         p = 1 + 0.02 * ring
