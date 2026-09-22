@@ -633,6 +633,11 @@ be revisited.
   agent habit of opening a branch per change is noise here; do not create one
   unless asked. Commit only when asked, and first complete the applicable checks
   under "The gate."
+- **A roadmap closure rides the next commit; it does not get one of its own.**
+  After a commit lands, fill its hash into the `ROADMAP.md` line it closes, but
+  leave that edit uncommitted rather than pushing a standalone "close N_" commit.
+  Fold it into whichever substantial commit comes next, silently: that commit's
+  message describes only its own work, not the bookkeeping it carries along.
 
 ## Known limitations
 
