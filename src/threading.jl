@@ -109,9 +109,8 @@ function __init_blas__()
     # the communicator cannot say which rank this is; every launcher publishes
     # it in the environment before the process starts.
     _launcher_rank() == 0 || return nothing
-    @info "CompactLES set BLAS threads $n -> 1: its only BLAS call is a tiny " *
-          "reduced interface solve, which threading slows down. Set " *
-          "OPENBLAS_NUM_THREADS to keep your own value."
+    @info "CompactLES set BLAS threads $n -> 1. Set " *
+          "OPENBLAS_NUM_THREADS to override."
     return nothing
 end
 
