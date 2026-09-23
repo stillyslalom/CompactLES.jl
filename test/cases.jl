@@ -330,38 +330,47 @@ end
 # u. Nothing else happens: no shock, no shear, no pressure gradient, so the
 # interface growth measures the effect of artificial species diffusivity. This
 # is the only case in the set that isolates C_D.
+#
+# A periodic domain holds an even number of interfaces, so the profile is a
+# slab of the second species over (0.25, 0.75) with two identical tanh edges.
+# It is symmetric about x = 0.5 and takes the same value at both ends of the
+# domain; a single edge at 0.25 would leave a one-cell step at the seam, which
+# rings at the same amplitude on every grid.
 
 const MIX_N = 256
 const MIX_T = 0.5
 const MIX_U = 1.0
 
 """
-    species_advection(; N, tfin, art, cfl, filt, filter_cfl) -> (x, Y1, rho, p, completed)
+    species_advection(; N, tfin, art, cfl, filt, filter_cfl, delta, callback,
+                      control) -> (x, Y1, rho, p, completed)
 
-Uniform advection of a tanh species interface. Returns the FIRST mass fraction
-in the slot the shock-tube cases use for velocity, since ρ, u and p are uniform
-by construction and carry no information here.
+Uniform advection of a slab bounded by two tanh species interfaces. Returns the
+FIRST mass fraction in the slot the shock-tube cases use for velocity, since ρ,
+u and p are uniform by construction and carry no information here; at the
+default `tfin` the edge that started at x = 0.25 is the last crossing, at
+x = 0.75, which is the one `contact_width` reads. `delta` is the interface
+width in cells, as in `shock_interface`; `callback` is passed to `run!`.
 """
 function species_advection(; N=MIX_N, tfin=MIX_T, art=ArtParams(enabled=true),
                            cfl=0.4, nmax=NMAX, filt=compact_filter(0.45),
-                           filter_cfl=0.35)
+                           filter_cfl=0.35, delta=2.0, callback=nothing,
+                           control=StepControl())
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 1.0, 1.4)])
     h = 1.0 / N
     prob = Problem(eos=eos, transport=Transport(mu0=0.0),
                    domain=((0.0, 1.0), (0.0, h), (0.0, h)), bcs=per3,
                    ic=(x, y, z) -> begin
-                       θ = tanh_blend(x, 0.25, 2h)
+                       θ = tanh_blend(x, 0.25, delta * h) -
+                           tanh_blend(x, 0.75, delta * h)
                        Prim(Y=(1 - θ, θ), u=(MIX_U, 0.0, 0.0), p=1.0, rho=1.0)
                    end)
-    # A filtered species interface ends a few points outside the mass-fraction
-    # band, which is the residual this case exists to measure rather than a
-    # state to reject.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filt=filt, filter_interval=1,
                                      filter_cfl=filter_cfl,
-                                     control=StepControl(validity=:permissive)))
-    run!(solver, Q; tfinal=tfin, nmax=nmax)
+                                     control=control))
+    run!(solver, Q; tfinal=tfin, nmax=nmax, callback=callback)
     CL.exchange_state!(Q, solver.decomp)
     CL.primitives!(solver, Q)
     nx = solver.decomp.n_local[1]
@@ -444,18 +453,15 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
                        Prim(Y=(1 - θ, θ), rho=ρ, u=((1 - s) * u2, 0.0, 0.0),
                             p=(1 - s) * p2 + s)
                    end)
-    # The shocked interface overshoots the mass-fraction bound by more than
-    # its dead band for the length of the run, which is the excursion this case
-    # exists to measure. Rejecting on it would remove the measurement, so the
-    # case states the violation and its caller bounds the excursion, the
-    # affected-cell count and the solution error together.
+    # The shocked interface overshoots the mass-fraction bound by about 1.3%
+    # at every resolution, inside the default `species_band`, so the case runs
+    # strict; the caller guards the excursion itself, much closer than that.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filt=filt, filter_interval=1,
                                      filter_cfl=filter_cfl,
                                      filter_weighting=filter_weighting,
                                      stretch=(stretch1, nothing, nothing),
-                                     control=StepControl(retries=4,
-                                                         validity=:permissive)))
+                                     control=StepControl(retries=4)))
     nx = solver.decomp.n_local[1]
     worst_min = Ref(Inf)
     worst_max = Ref(-Inf)
@@ -535,15 +541,10 @@ function brill_slab(; R=BR_R, Np=BR_NP, art=ArtParams(enabled=true), cfl=0.4,
                        Yh = V * R / ρ
                        Prim(Y=(1 - Yh, Yh), rho=ρ, u=(BR_U, 0.0, 0.0), p=1.0)
                    end)
-    # Two species across a slab interface, so the run ends a few points beyond
-    # the mass-fraction band as the shocked-interface case does. Under a strict
-    # exit check the rollback cannot repair an endpoint that is inadmissible at
-    # any CFL, and the run would spend all four retries re-integrating.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
                                      filt=filt, filter_interval=1,
                                      filter_cfl=filter_cfl,
-                                     control=StepControl(retries=4,
-                                                         validity=:permissive)))
+                                     control=StepControl(retries=4)))
     nx = solver.decomp.n_local[1]
     worst_min = Ref(Inf)
     worst_max = Ref(-Inf)
@@ -657,6 +658,8 @@ function noh_cartesian(; N=NC_N, AR=4, L=NC_L, t0=0.0, tfinal=NOH_T, p0=NOH_P0,
                    transport=Transport(mu0=0.0),
                    domain=((-L, L), (-L, L), (0.0, h2)),
                    bcs=((inflow, inflow), (inflow, inflow), per3[3]), ic=ic)
+    # Permissive for the reason `noh_case` is: the cold precursor carries
+    # negative internal energy, and the caller bounds the closing report.
     num = Numerics(n_global=(n1, n2, 1), art=art, cfl=cfl, deriv=deriv, filt=filt,
                    filter_interval=1, filter_cfl=filter_cfl,
                    control=StepControl(validity=:permissive))
@@ -731,6 +734,8 @@ function noh_aligned(; N=Dict(NOH_N)[1], AR=4, nx=12, art=ArtParams(enabled=true
                    bcs=(per3[1], (folded ? SymmetryPlaneBC() : SlipWallBC(),
                                   inflow), per3[3]),
                    ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, -1.0, 0.0), p=NOH_P0))
+    # Permissive for the reason `noh_case` is: the cold precursor carries
+    # negative internal energy, and the caller bounds the closing report.
     solver, Q = setup(prob, Numerics(n_global=(nx, N, 1), art=art, cfl=cfl,
                                      filt=filt, filter_interval=1,
                                      filter_cfl=filter_cfl,
@@ -788,8 +793,7 @@ and `filt` default to the solver's defaults in `T`.
 """
 function pulse_case(::Type{T}, N; amp, art, mirror=false, deriv=lele_d1_6(T),
                     filt=compact_filter(T(0.45), T), cfl=0.4, filter_cfl=0.35,
-                    filter_interval=1,
-                    control=StepControl(validity=:permissive)) where {T}
+                    filter_interval=1, control=StepControl()) where {T}
     per = (PeriodicBC(), PeriodicBC())
     h = one(T) / T(N - 1)
     n = mirror ? 2(N - 1) : N

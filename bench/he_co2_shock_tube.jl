@@ -35,9 +35,9 @@
 # The state validation runs permissively. The artificial mass-fraction bound
 # holds the interface's undershoot at about 1e-2 (the calibrated behavior of
 # `C_Y = 100`, see the shocked-interface rows of reference/CALIBRATION.md),
-# which is above the 1e-4 dead band the strict policy rejects at the end of a
-# run. The history file records the undershoot; it is one of the quantities
-# the comparison is for.
+# inside the default species band. The history file records the undershoot
+# as one of the quantities the comparison is for, so a variant that leaves
+# the band is reported rather than rejected.
 #
 # The wall the closing line prints spans `run!` and so includes compiling it
 # for this deck's callback closure, 3.2 s at -t 8 on the development

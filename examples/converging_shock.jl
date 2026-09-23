@@ -23,8 +23,7 @@ mpi_main() do
     )
     numerics = Numerics(n_global=(opt.nx, 1, 1), art=ArtParams(enabled=true),
                         cfl=0.4, filter_interval=1,
-                        dims=(MPI.Comm_size(MPI.COMM_WORLD), 1, 1),
-                        control=StepControl(validity=:permissive))
+                        dims=(MPI.Comm_size(MPI.COMM_WORLD), 1, 1))
     solver, Q = setup(problem, numerics)
     run!(solver, Q; tfinal=opt.tfinal, nmax=opt.nmax,
          callback=ProgressLog(every=opt.every, tfinal=opt.tfinal))

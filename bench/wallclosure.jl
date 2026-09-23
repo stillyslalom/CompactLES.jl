@@ -216,8 +216,11 @@ end
 
 function pulse_vs_mirror(::Type{T}, N, deriv; amp, art, tfinal=0.7, cfl=0.4) where {T}
     attempt() do
+        # The row tabulates the inadmissible count, so the run accepts and
+        # reports it rather than rejecting on it.
         kw = (amp=amp, art=art, deriv=deriv, cfl=cfl,
-              filt=compact_filter(T(0.45), T))
+              filt=compact_filter(T(0.45), T),
+              control=StepControl(validity=:permissive))
         solver, Q = pulse_case(T, N; kw...)
         run!(solver, Q; tfinal=T(tfinal), nmax=CAP)
         mirror, Qm = pulse_case(T, N; mirror=true, kw...)

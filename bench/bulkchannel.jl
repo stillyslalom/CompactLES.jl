@@ -83,8 +83,8 @@
 # The mass-fraction extremes are the worst over every step, read from `Q` in a
 # callback: the excursions of a shocked interface are transient and the final
 # profile need not show them. The bubble case runs under
-# `validity = :permissive` for the reason `shock_interface` records; its
-# interface violates the mass-fraction dead band by design.
+# `validity = :permissive`, so a configuration whose interface leaves the
+# species band prints its row rather than raising.
 #
 # Scratch tooling, like everything else in bench/: it prints tables and asserts
 # nothing.

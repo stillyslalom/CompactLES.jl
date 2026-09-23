@@ -145,24 +145,10 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
   undershoot within composite budgets; smooth-error and moving-refinement
   tradeoffs retain the production default and subcycling (commit `fbb3ad3`).
 
-- [ ] **N13 — Settle the default state-validity policy and its species band.**
-  Ten shipped cases select `validity = :permissive`, in three groups: the
-  mass-fraction band at a filtered species interface, including one at uniform
-  p, u and rho where nothing but the filter acts; negative internal energy at
-  the Noh wall and behind the Sedov blast; and the near-vacuum a strong shock
-  leaves. A default that most shock-capturing runs must opt out of is either
-  the wrong default or the wrong threshold, and the two are separable. The
-  species test currently borrows `ArtParams.Y_tolerance`, which was calibrated
-  as the dead band of a regularization term and not as a validity bound.
-  Measure what excursion a converged interface actually carries as a function
-  of resolution, decide the threshold from that, and then decide whether
-  `:strict` or `:permissive` is the better default.
-  **Gate:** the shipped cases pass under the chosen default without per-case
-  opt-outs beyond those the physics genuinely requires, and each remaining
-  opt-out keeps a bound on affected-cell count and worst defect. Record the
-  threshold and its basis in [CALIBRATION.md](CALIBRATION.md).
-  **Code:** [problem.jl](../src/problem.jl), [stepcontrol.jl](../src/stepcontrol.jl),
-  [cases.jl](../test/cases.jl).
+- [x] **N13** — Mass fractions are validated against a measured
+  `StepControl.species_band` of 0.05, so every species case and both examples
+  run under the retained `:strict` default; only cold-ambient converging shocks
+  opt out, with bounded counts (commit pending).
 
 - [ ] **N14 — Select interface divergence closures independently of wall closures.**
   Add an opt-in policy applied only to same-level and coarse–fine interface ends

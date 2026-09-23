@@ -214,6 +214,7 @@ StepControl(; predict=0.0, max_growth=0.0, landing_steps=2,
 | `floor_ratio` | Positivity failsafe strength; `0` disables |
 | `floor_scope` | `:representable` or `:internal_energy` repair policy |
 | `validity` | `:strict`, `:permissive`, or `:repair` state-validation policy |
+| `species_band` | Mass fraction below `-species_band` is rejected; default `0.05` |
 | `validity_interval` | Validate every `k` entering states; `0` checks only run endpoints |
 | `substep_cfl` | Absolute refined-substep tripwire after refreshed coefficients; `0` disables it |
 
@@ -227,9 +228,9 @@ state during a run, including the one it returns, pass a guard as a callback:
 run!(solver, Q; tfinal=1.0, callback=state_guard(solver, Q))
 ```
 
-A converging-shock run integrates through cells the equation of state calls
-inadmissible and needs `validity=:permissive`, which reports them instead of
-rejecting them.
+A shock converging into a cold or near-vacuum ambient integrates through cells
+the equation of state calls inadmissible and needs `validity=:permissive`, which
+reports them instead of rejecting them.
 
 ## Run control, callbacks, and output
 

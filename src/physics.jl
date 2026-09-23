@@ -1293,11 +1293,10 @@ the rest are independent bits, so one point can carry several.
 - `STATE_NONFINITE`: a conserved component is not finite.
 - `STATE_NEGATIVE_DENSITY`: the partial densities do not sum to a positive
   mixture density, which is the state `primitives!` replaces with placeholders.
-- `STATE_NEGATIVE_SPECIES`: a partial density is negative while the mixture
-  density is positive, by more than the dead band `ArtParams.Y_tolerance`
-  places on the artificial mass-fraction bound. A filtered interface carries
-  mass fractions a rounding step below zero over much of a domain, which that
-  band exists to ignore.
+- `STATE_NEGATIVE_SPECIES`: a mass fraction is below `-StepControl.species_band`
+  while the mixture density is positive. A species interface held at a few
+  cells carries mass fractions about 1% outside [0, 1] at any resolution,
+  which the band exists to accept.
 - `STATE_INADMISSIBLE`: the EOS places the point outside its thermodynamic
   domain.
 - `STATE_UNRECOVERABLE`: the EOS could not recover the temperature at this

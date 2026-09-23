@@ -131,11 +131,18 @@ rolled back; the retryable checks remain the ones `run!` applies before a step.
 
 Whether a given internal energy is admissible is asked of the equation of state,
 not fixed by the integrator, because the gauge that places its zero belongs to
-the model. Converging-shock runs integrate through cells an ideal gas calls
-inadmissible and still reach the correct answer, so a guard on such a run wants
-`:permissive`. A converged Noh run ends with six of four hundred cells at
-negative internal energy, and the validation suite bounds such runs at twelve.
+the model. A shock converging into a cold or near-vacuum ambient integrates
+through cells an ideal gas calls inadmissible and still reaches the correct
+answer, so such a run wants `:permissive`. A converged Noh run ends with six
+of four hundred cells at negative internal energy, and the validation suite
+bounds such runs at twelve.
 [`setup`](@ref) applies the same policy to the initial state.
+
+A mass fraction is rejected only below `-species_band`, 0.05 by default. A
+captured species interface is a few cells wide at any resolution and lies about
+1% outside [0, 1] under the artificial mass-fraction bound, and 10 to 20%
+outside with the bound off; the band accepts the first and rejects the second,
+so a multicomponent run needs no opt-out for its interfaces.
 
 ## Read the completed state
 

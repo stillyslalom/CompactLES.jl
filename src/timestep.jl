@@ -1367,8 +1367,8 @@ can end: reaching `tfinal`, reaching `nmax`, and a callback effect returning
 rollback the step checks use, so `control.retries` recovers from it by
 restoring the savepoint and lowering the CFL rather than raising past that
 recovery. A run whose physics legitimately visits inadmissible states selects
-`validity = :permissive`, which accepts and reports them, as the
-converging-shock cases in `test/cases.jl` do.
+`validity = :permissive`, which accepts and reports them, as the cold-ambient
+Noh and Sedov cases in `test/cases.jl` do.
 
 Recovery from a rejected endpoint costs the trajectory. The rollback restores
 the last savepoint, so the run repeats every step from there, and it does so

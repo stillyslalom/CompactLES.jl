@@ -389,11 +389,9 @@ function interface_problem(ratio)
                    end)
 end
 
-# `validity = :permissive` for the reason `brill_slab` takes it: a two-species
-# interface ends a few points outside the mass-fraction band whatever the
-# species bound does, and under the strict policy `run!` rejects the state it
-# returns rather than reporting it. The excursion is what the entropy floor
-# above counts, so it is measured here rather than hidden.
+# `validity = :permissive`: the mass-fraction excursion is what the entropy
+# floor above counts, so a run that leaves the species band is measured here
+# rather than rejected.
 interface_setup(opt, art) =
     setup(interface_problem(opt.ratio),
           Numerics(n_global=(opt.N, opt.N, opt.N), cfl=opt.cfl, art=art,

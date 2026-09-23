@@ -516,15 +516,9 @@ let r = shock_interface()
     @test r.worst_min_Y > -0.02
     @test r.worst_max_Y < 1.02
     @test r.width_cells <= 6
-    # The same bound from the validation sweep's side: the excursion above is
-    # the worst over the run, this is the state the run ends on. A permissive
-    # mode reports its violations, and the report is guarded so that it cannot
-    # grow unnoticed.
-    sayf("  closing state: %d cell(s) beyond the mass-fraction band
-",
-         r.report.negative_species)
-    @test r.report.negative_species <= 12
-    @test r.report.nonfinite == 0 && r.report.negative_density == 0
+    # The case runs strict, so the state it ends on has passed the species
+    # band already; the report restates that from the validation sweep's side.
+    @test state_valid(r.report)
     @test r.report.rho_min > 0
 end
 
@@ -538,6 +532,14 @@ say("
 # the measured values, 1.5–2x out: the step counts are the aspect-ratio
 # penalty of the scalar form and the relaxed filter's pass count with it,
 # and a change to either moves them first.
+#
+# Both run under `validity = :permissive` for the reason the three geometries
+# above do, and their closing states are bounded the same way, at twice the
+# measured counts: 72 inadmissible cells on either aligned wall (six per
+# transverse station, as on the planar line) and 538 over the AR = 2 plane,
+# with e_min -0.0313, -0.0045 and -0.0226.
+const ALIGNED_CELLS = 144
+const CARTESIAN_CELLS = 1100
 let r = noh_aligned(; N=100, AR=4)
     @test r.completed
     plat, deficit, Rnum, epre = noh_metrics(r.y, r.rho, 1)
@@ -555,6 +557,12 @@ let r = noh_aligned(; N=100, AR=4)
     # mode".
     @test r.uniformity < 5e-7
     @test r.steps < 8000
+    sayf("        closing state: %d inadmissible cell(s), e_min %+.4f
+",
+         r.report.inadmissible, r.report.e_min)
+    @test r.report.inadmissible <= ALIGNED_CELLS
+    @test r.report.e_min > -1.0
+    @test r.report.nonfinite == 0 && r.report.negative_density == 0
     NODE_ROWS[:aligned] = (plateau=plat, deficit=deficit, shock=Rnum,
                            steps=r.steps, uniformity=r.uniformity)
 end
@@ -583,6 +591,12 @@ let r = noh_aligned(; N=100, AR=4, folded=true)
     # node-centred row's note describes as sensitive.
     @test r.uniformity < 5e-9
     @test r.steps < 8000              # measured 4938, against 4966
+    sayf("        closing state: %d inadmissible cell(s), e_min %+.4f
+",
+         r.report.inadmissible, r.report.e_min)
+    @test r.report.inadmissible <= ALIGNED_CELLS
+    @test r.report.e_min > -1.0
+    @test r.report.nonfinite == 0 && r.report.negative_density == 0
 end
 let r = noh_cartesian(; N=24, AR=2)
     @test r.completed
@@ -597,6 +611,11 @@ let r = noh_cartesian(; N=24, AR=2)
     @test all(f -> abs(f - 0.2) < 0.06, (r.cut_x.front, r.cut_y.front, r.cut_diag.front))
     @test r.l1 < 1.2
     @test r.steps < 1200
+    sayf("        closing state: %d inadmissible cell(s), e_min %+.4f
+",
+         r.report.inadmissible, r.report.e_min)
+    @test r.report.inadmissible <= CARTESIAN_CELLS
+    @test r.report.e_min > -1.0
     @test r.report.nonfinite == 0 && r.report.negative_density == 0
 end
 

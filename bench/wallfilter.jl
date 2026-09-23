@@ -222,9 +222,13 @@ end
 #
 # The case is `pulse_case` of test/cases.jl, the wall run against its
 # periodic mirror at the same spacing and step; `cl` selects the filter rows.
+# The rows tabulate the inadmissible count of the state a run ends on, so the
+# runs accept and report it rather than rejecting on it.
 
-pulse_solver(::Type{T}, N; cl, filter_cfl=OPTS.filter_cfl, kw...) where {T} =
-    pulse_case(T, N; filt=filt_of(cl, T), filter_cfl=filter_cfl, kw...)
+pulse_solver(::Type{T}, N; cl, filter_cfl=OPTS.filter_cfl,
+             control=StepControl(validity=:permissive), kw...) where {T} =
+    pulse_case(T, N; filt=filt_of(cl, T), filter_cfl=filter_cfl, control=control,
+               kw...)
 
 function pulse_row(::Type{T}, N; amp, art, cl, tfinal, comp=1, kw...) where {T}
     attempt() do

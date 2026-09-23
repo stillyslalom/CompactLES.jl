@@ -221,12 +221,15 @@ end
 # it once on the initial state.
 
 """
-    state_report(solver, Q) -> StateReport
+    state_report(solver, Q; species_band = solver.control.species_band)
+        -> StateReport
 
 Inspect the interior of the conserved state and return the reduced
 [`StateReport`](@ref) of what it contains. `Q` may be a single conserved array or
 the vector of patch states of a multi-patch solver, in which case every patch
-this rank holds is inspected.
+this rank holds is inspected. A mass fraction below `-species_band` is counted
+as a negative species; the policy functions pass the band of the
+[`StepControl`](@ref) whose verdict they take.
 
 Every rank in `solver.comm` must call this, since it ends in two `Allreduce`s;
 each receives the totals over the whole domain rather than its own block. The
@@ -238,16 +241,19 @@ A state on device storage is not inspected and comes back as an empty report.
 The sweep is a host loop, as the positivity failsafe is, and the storage choice
 is solver-wide, so this returns early on every rank at once and cannot deadlock.
 """
-function state_report(solver::Solver, Q)
+function state_report(solver::Solver, Q;
+                      species_band::Real=solver.control.species_band)
     _cpu_storage(Q) || return StateReport()
-    return _reduce_state_report(solver, _local_state_report(solver, Q))
+    return _reduce_state_report(solver,
+                                _local_state_report(solver, Q, species_band))
 end
 
-function state_report(solver::Solver, states::Vector{<:ConservedState})
+function state_report(solver::Solver, states::Vector{<:ConservedState};
+                      species_band::Real=solver.control.species_band)
     isempty(states) || _cpu_storage(states[1]) || return StateReport()
     acc = _empty_local_report()
     for (ps, Q) in eachpatch(solver, states)
-        acc = _merge_local_report(acc, _local_state_report(ps, Q))
+        acc = _merge_local_report(acc, _local_state_report(ps, Q, species_band))
     end
     return _reduce_state_report(solver, acc)
 end
@@ -274,7 +280,7 @@ function _reduce_state_report(solver::Solver, local_report)
                        extrema_reduced[2])
 end
 
-function _local_state_report(solver::SolverLike, Q)
+function _local_state_report(solver::SolverLike, Q, species_band)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -283,11 +289,6 @@ function _local_state_report(solver::SolverLike, Q)
     n_cons = solver.equations.n_cons
     m1, m2, m3 = solver.equations.i_mom
     i_energy = solver.equations.i_energy
-    # The dead band of the artificial mass-fraction bound, reused here so the
-    # validation and the regularization agree on what counts as an excursion.
-    # Without it a mass fraction of −1e-17, which a filtered interface produces
-    # over most of the domain, would be reported as an invalid state.
-    Y_tolerance = solver.art.Y_tolerance
     # Arithmetic in the state's own type, so the validation reads the same
     # numbers the solver does under Float32; the reduced extrema are Float64.
     T = eltype(Q)
@@ -321,7 +322,7 @@ function _local_state_report(solver::SolverLike, Q)
             negative_density += 1
             continue
         end
-        q_min < -T(Y_tolerance) * ρ && (negative_species += 1)
+        q_min < -T(species_band) * ρ && (negative_species += 1)
         ri = one(T) / ρ
         ke = (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / (2ρ)
         e = (Q[I, i_energy] - ke) / ρ
@@ -375,7 +376,8 @@ function _apply_validity!(solver::Solver, Q; control::StepControl=solver.control
                           stage::AbstractString="state",
                           floors::Tuple{Float64,Float64}=(0.0, 0.0),
                           warn::Bool=true)
-    report = state_report(solver, Q)
+    band = control.species_band
+    report = state_report(solver, Q; species_band=band)
     rank = MPI.Comm_rank(solver.comm)
     if control.validity === :repair && !state_valid(report) && floors[1] > 0
         tally = apply_positivity_floor!(solver, Q, floors[1], floors[2],
@@ -388,7 +390,7 @@ function _apply_validity!(solver::Solver, Q; control::StepControl=solver.control
                       "internal-energy floor. Mass added $(tally.mass), energy " *
                       "added $(tally.energy), momentum removed $(tally.momentum)."
         end
-        report = state_report(solver, Q)
+        report = state_report(solver, Q; species_band=band)
     end
     failure = check_validity(control, report, stage, solver.step, solver.t,
                              solver.dt_prev, solver.cfl)
@@ -443,13 +445,14 @@ end
 
 function (guard::StateGuard)(solver::Solver, Q)
     guard.checks += 1
-    report = state_report(solver, Q)
+    band = guard.control.species_band
+    report = state_report(solver, Q; species_band=band)
     if guard.control.validity === :repair && !state_valid(report) &&
        guard.rho_floor > 0
         tally = apply_positivity_floor!(solver, Q, guard.rho_floor,
                                         guard.e_floor, guard.control.floor_scope)
         (tally.cells > 0 || tally.low_energy > 0) && record_floor!(solver, tally)
-        report = state_report(solver, Q)
+        report = state_report(solver, Q; species_band=band)
     end
     state_valid(report) && return false
     guard.rejected += 1
@@ -877,7 +880,9 @@ function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
         root = PatchSolver(solver, first(getfield(solver, :patches)))
         initialize!(root, Q[1], prob.ic)
         report = _cpu_storage(Q[1]) ?
-                 _reduce_state_report(solver, _local_state_report(root, Q[1])) :
+                 _reduce_state_report(solver,
+                                      _local_state_report(root, Q[1],
+                                                          num.control.species_band)) :
                  StateReport()
         failure = check_validity(num.control, report, "the initial coarse state",
                                  solver.step, solver.t, solver.dt_prev, solver.cfl)

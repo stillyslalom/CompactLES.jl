@@ -1167,6 +1167,12 @@ report rejects:
 | `:permissive` | accept the state and report what it contains |
 | `:repair` | apply the positivity failsafe, report the substitutions, then reject what remains |
 
+A mass fraction counts as negative only below `-StepControl.species_band`. A
+captured species interface is a few cells wide at any resolution and lies about
+1% outside [0, 1] under the artificial mass-fraction bound, against 10–20%
+without it, so the band separates a bounded interface from an unbounded one. It
+is a separate threshold from the bound's own dead band `Y_tolerance`.
+
 `setup` validates the initial state. `run!` validates the state entering the
 call, the state it returns, and, on the cadence `StepControl.validity_interval`
 sets, the state entering a step. The returned state is checked at each of the

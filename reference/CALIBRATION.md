@@ -36,6 +36,8 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 | `species_flux` | `:fickian` | provisional | `:bulk` removes the pressure error of an advected interface at a large density ratio and matches the default on a shocked sphere at a third more per step; the constants are fitted on the Fickian channel and insensitive under this one ([battery](CALIBRATION_APPENDIX.md#the-bulk-species-channel), [three dimensions](CALIBRATION_APPENDIX.md#the-bulk-species-channel-in-three-dimensions)). |
 | `cfl` | 0.5 | keep | Use 0.3 or `StepControl(retries = 4)` for a converging shock at a spherical origin, whose ceiling is 0.3; walls and axes carry none ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)). |
 | `StepControl.substep_cfl` | 0 (disabled) | opt-in | An absolute ceiling on refreshed refined-stage CFL, with collective rollback. Qualify a positive ceiling for the case; accepted startup transients can exceed the root target ([substep rates](CALIBRATION_APPENDIX.md#benchsubstepratesjl-refreshed-refined-level-rates)). |
+| `StepControl.validity` | `:strict` | keep | The species cases, the shock tubes and both examples pass strict; only a shock converging into a cold or near-vacuum ambient ends on cells of negative internal energy, which an ideal gas does not admit at any threshold, and those six cases opt out with bounded counts ([species band](CALIBRATION_APPENDIX.md#the-species-validity-band)). |
+| `StepControl.species_band` | 0.05 | keep | A grid-scale species interface carries about 1% outside [0, 1] at every resolution under the mass-fraction bound and 10 to 20% without it; the band sits between the two, and is separate from the bound's dead band `Y_tolerance` ([species band](CALIBRATION_APPENDIX.md#the-species-validity-band)). |
 | `deriv` closure rows | `:neutral3` | keep | Neutral at an inviscid slip wall, where the cascade rows grow a wall-normal velocity; the C6 rows carry a measured pseudospectral certificate ([certificates](CALIBRATION_APPENDIX.md#closure-certificates)). |
 | `compact_filter` α | 0.45 | too strong | 0.49 fits at 128³ and at 256³ and clears the battery; the stability edge is α = 0.49875 at full strength ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)). |
 | `compact_filter` closures | `:onesided` | keep | The cascade's F2 row caps every filtered wall at second order; the one-sided rows return the wall to the derivative closure's order and take 10 to 18 points off the planar Noh wall deficit, at two to three times the error on a reflection resolved over fewer than ten cells ([filter wall rows](CALIBRATION_APPENDIX.md#the-filters-wall-rows)). |
@@ -167,12 +169,18 @@ cost. The link is to the section holding the evidence.
   smoother, most of it the line solves that smooth one sensor per species.
   Cutting it means choosing a shared sensor over a per-species one, which is a
   numerics decision ([step cost](CALIBRATION_APPENDIX.md#operator-and-step-cost)).
-- **The run ends on a state the EOS rejects.** Converging shocks carry six to
-  eight cells of negative internal energy for the whole run and still reach the
-  exact plateau; repairing those cells terminates the run. Use
+- **The run ends on a state the EOS rejects.** A shock converging into a cold
+  or near-vacuum ambient carries six to eight cells of negative internal energy
+  for the whole run and still reaches the exact plateau; repairing those cells
+  terminates the run. Use
   `validity = :permissive` with the default `floor_scope = :representable`, and
   bound the count in a guard
   ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)).
+- **A multicomponent run is rejected for negative species.** A mass fraction
+  beyond `species_band` means the interface is no longer bounded:
+  check that `C_Y` is on and that an interface meant to be resolved spans
+  seven or more cells. Widening the band admits the failure rather than
+  repairing it ([species band](CALIBRATION_APPENDIX.md#the-species-validity-band)).
 - **A smooth run is suspected of an artificial-property error.**
   `ArtParams(enabled = false)` skips the sensors and the coefficient
   calculation entirely. Taylor-Green at 128³ completes without them, which it

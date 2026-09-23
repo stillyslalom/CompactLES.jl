@@ -8,8 +8,9 @@
 # band within one transit without it, on the uniform grid as much as at an
 # interface. The bound holds an excursion only asymptotically, and the root
 # and level-1 nodes along the edges of a nested box still undershoot by a
-# few 1e-4 over two transits, so the runs are permissive and the largest
-# mass-fraction excursion is reported next to the drift; density, pressure
+# few 1e-4 over two transits. The runs are permissive so that a layout
+# leaving the species band still reports its drift, and the largest
+# mass-fraction excursion is printed next to it; density, pressure
 # and velocity stay at their initial values throughout.
 # `layer` is a long, weakly perturbed mixing layer; `moving` advects a
 # sharper species interface with a translating shear and takes immediate

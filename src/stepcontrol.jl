@@ -202,11 +202,12 @@ repair changes states produced by the scheme but does not change the scheme.
 
   - `:strict` raises [`SolverFailure`](@ref)`(:invalid_state)` for any point the
     sweep rejects: a non-finite conserved value, a nonpositive mixture density,
-    a partial density below the dead band of the artificial mass-fraction
-    bound, or a point the EOS places outside its thermodynamic domain.
-  - `:permissive` accepts the state and reports what it contains. Converging
-    shocks integrate through inadmissible states for the length of a run that
-    reaches the correct answer; such a run selects this mode explicitly.
+    a mass fraction below `-species_band`, or a point the EOS places outside
+    its thermodynamic domain.
+  - `:permissive` accepts the state and reports what it contains. A shock
+    converging into a cold or near-vacuum ambient integrates through cells of
+    negative internal energy for the length of a run that reaches the correct
+    answer; such a run selects this mode explicitly and bounds the count.
   - `:repair` applies the positivity failsafe above to the state first, reports
     the substitutions it made, and then rejects whatever the repair could not
     fix. It requires `floor_ratio > 0`, since that is where the repair and its
@@ -214,6 +215,17 @@ repair changes states produced by the scheme but does not change the scheme.
 
   The verdict rests on reduced counts, so it is identical on every rank and a
   rejection is raised everywhere at once rather than on the rank that saw it.
+
+- `species_band = 0.05`: how far below zero a mass fraction may fall before the
+  validation counts the point. A captured species interface is a few cells
+  wide at any resolution, and after the filter and the Runge–Kutta stages its
+  mass fractions lie outside [0, 1] by an amount that does not decrease under
+  refinement: about 1% at a shocked or grid-scale interface with the default
+  artificial mass-fraction bound, and 10–20% with the bound disabled. The band
+  lies between the two, so a bounded interface passes and an unbounded one is
+  rejected. It is a validity threshold, separate from the bound's own dead
+  band `ArtParams.Y_tolerance`, which is 500 times smaller. `0` rejects any
+  negative mass fraction.
 
 - `validity_interval = 0`: how often [`run!`](@ref) validates the state entering
   a step, in steps, with 0 checking none of them. The state entering `run!` and
@@ -275,6 +287,7 @@ Base.@kwdef struct StepControl
     floor_ratio::Float64 = 0.0
     floor_scope::Symbol = :representable
     validity::Symbol = :strict
+    species_band::Float64 = 0.05
     validity_interval::Int = 0
     substep_cfl::Float64 = 0.0
     # `landing_steps = 0` does not disable the shortening. The gap clip
@@ -282,7 +295,8 @@ Base.@kwdef struct StepControl
     # trigger would fire late.
     function StepControl(predict, max_growth, landing_steps, dt_min, dt_min_ratio,
                          retries, cfl_backoff, savepoint_interval, floor_ratio,
-                         floor_scope, validity, validity_interval, substep_cfl)
+                         floor_scope, validity, species_band, validity_interval,
+                         substep_cfl)
         landing_steps >= 1 ||
             throw(ArgumentError("StepControl: landing_steps must be >= 1 " *
                                 "(1 is a hard clip onto the scheduled time)"))
@@ -303,6 +317,9 @@ Base.@kwdef struct StepControl
         validity === :repair && floor_ratio <= 0 &&
             throw(ArgumentError("StepControl: validity = :repair requires a " *
                                 "positive floor_ratio"))
+        0 <= species_band < 1 ||
+            throw(ArgumentError("StepControl: species_band must be in [0, 1), " *
+                                "got $species_band"))
         validity_interval >= 0 ||
             throw(ArgumentError("StepControl: validity_interval must be >= 0, " *
                                 "got $validity_interval"))
@@ -311,7 +328,7 @@ Base.@kwdef struct StepControl
                                 "got $substep_cfl"))
         new(predict, max_growth, landing_steps, dt_min, dt_min_ratio,
             retries, cfl_backoff, savepoint_interval, floor_ratio, floor_scope,
-            validity, validity_interval, substep_cfl)
+            validity, species_band, validity_interval, substep_cfl)
     end
 end
 
@@ -356,8 +373,9 @@ rank holds the same report and a verdict taken from it is collective.
 - `points`: interior points inspected.
 - `nonfinite`, `negative_density`, `negative_species`: points carrying
   `STATE_NONFINITE`, `STATE_NEGATIVE_DENSITY`, and `STATE_NEGATIVE_SPECIES`.
-  The last counts a mass fraction below `-ArtParams.Y_tolerance`, the dead band
-  of the artificial bound, not every excursion a filtered interface leaves.
+  The last counts a mass fraction below `-species_band` (a
+  [`StepControl`](@ref) field), not every excursion a filtered interface
+  leaves.
 - `inadmissible`, `unrecoverable`, `extrapolated`: points the EOS flagged
   through `state_admissibility`. A point with a nonpositive mixture density is
   not put to the EOS, since its internal energy cannot be formed. Extrapolated

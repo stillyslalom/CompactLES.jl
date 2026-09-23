@@ -47,6 +47,7 @@ section that moved it says so in one sentence and the older figure is gone.
     (`test/transport_tests.jl`, `test/transport_integration_tests.jl`)
 22. [The bulk species channel in three dimensions](#the-bulk-species-channel-in-three-dimensions)
     (`bench/bulkchannel.jl`, `bench/bulkentropy.jl`)
+23. [The species validity band](#the-species-validity-band) (`bench/speciesband.jl`)
 
 ## The shock battery
 
@@ -187,7 +188,9 @@ dispatch point where a tabular or condensed-matter model sets its own scale.
 ### C_D, the species diffusivity
 
 A sharp binary interface advected at u = 1 for t = 0.5 on 256 points, initial 10–90% width
-2h = 0.0078:
+2h = 0.0078. The case is a periodic slab with two such edges; the widths here and in the
+tables below were taken on a single edge whose periodic seam was a one-cell step, which
+moves them by at most 0.07% (0.01819 against 0.01820 at the default):
 
 ```
 C_D       | interface width
@@ -1630,12 +1633,10 @@ representable repair leaves the negative internal energy in place. The closing s
 [State validation](DESIGN.md#state-validity-and-its-policy) puts admissibility to the EOS,
 and a calorically perfect gas answers that a cell with e < 0 is outside its domain. That
 verdict is correct over 25179 cell-steps of a run that reaches the right answer, so a strict
-check on the returned state rejects a completed and correct Noh run. The shock/SF6 case ends
-with six of four hundred points whose mass fraction is below −`Y_tolerance`, first crossing
-that band at step 32 of 646. Both cases therefore run under `validity = :permissive`,
-guarded on the state they end with as well as on their solution error. A binary interface
-spanning about one cell overshoots the mass-fraction bound by 1.5e-2 within two steps, so
-the small configurations in `src/precompile.jl` also use `:permissive`.
+check on the returned state rejects a completed and correct Noh run. The Noh cases therefore
+run under `validity = :permissive`, guarded on the state they end with as well as on their
+solution error. The mass-fraction side of the same check has its own
+[band](#the-species-validity-band).
 
 ### Recovery strategy
 
@@ -5462,3 +5463,59 @@ what the channel produces; on the slab, whose interface holds mass fractions out
 throughout, the Runge–Kutta step lowers it on half the steps under either channel. The
 inequality is a property of the continuous model and of the semi-discrete channel term; the
 filter and the bounded-fraction excursions are outside it.
+
+## The species validity band
+
+`julia --project=. bench/speciesband.jl` (about three minutes, serial). The cases are
+`species_advection`, `shock_interface` and `brill_slab` of `test/cases.jl` under the
+defaults; `worst run` is the largest max(−Y_k, Y_k − 1) over every point and completed step,
+`worst end` the same on the state the run returns, and the last column counts end-state
+points beyond four candidate bands.
+
+```
+case                         N   worst run   worst end   end points beyond 1e-4 / 1e-3 / 1e-2 / 5e-2
+advection, 2 cells          64   2.076e-04   1.774e-04   4 / 0 / 0 / 0
+advection, 2 cells         256   5.591e-04   3.917e-04   8 / 0 / 0 / 0
+advection, 2 cells        1024   5.591e-04   4.049e-04   10 / 0 / 0 / 0
+advection, 1/32 physical   128   0           0           0 / 0 / 0 / 0
+advection, 1/32 physical  1024   0           0           0 / 0 / 0 / 0
+shock, C_Y = 100           100   1.342e-02   1.992e-03   7 / 2 / 0 / 0
+shock, C_Y = 100           400   1.293e-02   9.221e-04   6 / 0 / 0 / 0
+shock, C_Y = 100          1600   1.204e-02   3.856e-04   5 / 0 / 0 / 0
+shock, C_Y = 0             200   2.126e-01   1.495e-01   13 / 8 / 2 / 1
+shock, C_Y = 0             400   2.054e-01   9.751e-02   14 / 9 / 4 / 1
+shock, C_Y = 0             800   1.963e-01   9.094e-02   15 / 8 / 4 / 1
+slab, Np = 7               140   8.103e-02   2.835e-03   16 / 3 / 0 / 0
+slab, Np = 14              280   5.186e-03   1.555e-03   8 / 1 / 0 / 0
+slab, Np = 28              560   3.667e-04   2.877e-04   4 / 0 / 0 / 0
+```
+
+The excursion of an interface held at grid scale does not converge with the grid. The
+advected slab with two-cell edges overshoots by 5.6e-4 at every N from 128 up, while edges
+of fixed physical width stay inside [0, 1] exactly once they span four cells; the shocked
+interface holds 1.2–1.3e-2 from N = 100 to 1600, since the shock compresses it to the few
+cells the artificial diffusivity sets, which a shock-capturing run has somewhere. Only the slab, whose interface is resolved over
+`Np` cells by construction, converges (from 8.1e-2 at the default Np = 7 to 3.7e-4 at 28);
+below Np = 7 it loses positivity. The endpoints are smaller than the transients in every
+case and stay below 3e-3. With the mass-fraction bound off, the shocked interface reaches
+0.2 and ends at 0.09–0.15.
+
+The earlier species test borrowed `ArtParams.Y_tolerance = 1e-4`, the bound's dead band,
+which every run in the table crosses at its endpoint; under it the Mach 1.5 case, the slab,
+the uniform advection and the He/CO2 shock tube of `examples/shock_tube.jl` (117 of 6144
+points at nx = 384, ny = 16) all fail a strict check, and a run with retries repeats its
+trajectory four times before failing. `StepControl.species_band = 0.05` sits above every
+bound-on excursion measured here and the Mach 3 worst of −0.043 recorded under
+[C_Y](#c_y-the-mass-fraction-bound), and below the bound-off endpoint, which still crosses it.
+The one bound-on transient above the band is the slab at Np = 7, which only a
+`validity_interval` check or a guard would see. With the band, the species cases, both
+examples and the small configurations of `src/precompile.jl` run under the default
+`:strict`; the He/CO2 example completes at its default 768 × 48.
+
+What remains permissive is the negative internal energy of a shock converging into a cold
+or near-vacuum ambient ([below](#negative-internal-energy-in-completed-runs)): the three Noh
+geometries, the two anisotropic Cartesian Noh cases and Sedov. The cylindrical converging
+shock of `examples/converging_shock.jl`, whose ambient is at p = 1, completes strict at nx =
+256, 512 and 1024. An ideal gas at e < 0 has no temperature, so no threshold can admit
+these cells honestly, and `:strict` stays the default: each of the six cases bounds its
+closing inadmissible count and e_min in `test/validation.jl`.

@@ -2635,9 +2635,23 @@ end
     @test isfinite(r.rho_min)                   # the NaN point is skipped whole
     r = poison(Qx -> (Qx[I, 1] = -3.0; Qx[I, 2] = 0.0))
     @test (r.nonfinite, r.negative_density, r.negative_species) == (0, 1, 0)
-    r = poison(Qx -> (Qx[I, 1] = -0.1; Qx[I, 2] = 2.1))
+    r = poison(Qx -> (Qx[I, 1] = -0.2; Qx[I, 2] = 2.2))
     @test (r.negative_density, r.negative_species) == (0, 1)
     @test state_valid(r) == false
+    # A mass fraction of -0.01 is the excursion a species interface carries at
+    # any resolution, inside the default band; a zero band rejects it.
+    @test StepControl().species_band == 0.05
+    @test_throws ArgumentError StepControl(species_band=1.0)
+    @test_throws ArgumentError StepControl(species_band=-0.01)
+    Qs = copy(Q); Qs[I, 1] = -0.02; Qs[I, 2] = 2.02
+    @test state_valid(state_report(solver, Qs))
+    @test state_report(solver, Qs; species_band=0.0).negative_species == 1
+    @test CL.check_validity(StepControl(species_band=0.0),
+                            state_report(solver, Qs; species_band=0.0), "s",
+                            1, 0.0, 1e-3, 0.4) isa SolverFailure
+    @test validate_state!(solver, Qs; warn=false).negative_species == 0
+    @test_throws SolverFailure validate_state!(solver, Qs;
+                                               control=StepControl(species_band=0.0))
     # Internal energy below zero is inadmissible for a calorically perfect gas,
     # where e = cv T, and is reported as such rather than by a hardcoded test.
     r = poison(Qx -> Qx[I, ie] = 0.5 * Qx[I, m1]^2 / 2.0 - 1.0)
