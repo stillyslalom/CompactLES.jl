@@ -25,6 +25,10 @@
 #   filter       the repeated-filter accumulation on the wall case: cadence,
 #                relaxation and the wall rows, against the mirror
 #   dt           the timestep floor of each family's finest grid
+#   idiv         the flux divergence's rows at interface ends from each
+#                `interface_divergence` source, walls on the default rows:
+#                same-level and coarse-fine faces, both gradient treatments,
+#                mixed wall and interface ends, Float32, acoustic reflection
 #
 # Every evolution row is run at `cfl` and at `cfl/2`, and the `dt` column
 # is the relative change of the primary error between the two; a row whose
@@ -328,7 +332,7 @@ end
 function fields_study()
     println("\n=== the other components: rho u and E ===")
     fine = fine_mirror(false)
-    for (label, deriv) in (DERIVS[1], DERIVS[3]), (cname, comp) in (("rho u", 2), ("E", 5))
+    for (label, deriv) in (DERIVS[1], DERIVS[4]), (cname, comp) in (("rho u", 2), ("E", 5))
         evolution_study("inviscid wall, $label, unfiltered, $cname",
                         (N; cfl) -> wall_case(N; deriv=deriv, cfl=cfl),
                         (s, cfl) -> fine, NS; comp=comp)
@@ -392,7 +396,7 @@ function dt_study()
     println("\ninviscid wall N=$N, C6 BL, unfiltered, against the fine reference")
     println("   cfl     steps  wall       interior   l2")
     for cfl in (0.5, 0.25, 0.125, 0.0625)
-        run1 = evolve!((N; cfl) -> wall_case(N; deriv=DERIVS[3][2], cfl=cfl), N, cfl, TFINAL)
+        run1 = evolve!((N; cfl) -> wall_case(N; deriv=DERIVS[4][2], cfl=cfl), N, cfl, TFINAL)
         run1 === nothing && continue
         solver, states = run1
         e = regional_errors(solver, states, fine)
@@ -411,7 +415,7 @@ function dt_study()
         println("\nentropy wave k=3 N=$Np, 3 levels, subcycle=$subcycle, C6 BL, unfiltered")
         println("   cfl     steps  interface  covered    interior   l2")
         for cfl in (0.5, 0.25, 0.125, 0.0625)
-            run1 = evolve!((N; cfl) -> entropy_case(N; deriv=DERIVS[3][2], levels=3,
+            run1 = evolve!((N; cfl) -> entropy_case(N; deriv=DERIVS[4][2], levels=3,
                                                     subcycle=subcycle, cfl=cfl),
                            Np, cfl, TFINAL_ENTROPY)
             run1 === nothing && continue
@@ -422,6 +426,160 @@ function dt_study()
         end
     end
     flush(stdout)
+end
+
+# --- the interface divergence rows ---------------------------------------------------
+#
+# The derivative operator stays `lele_d1_6()` throughout, so every physical
+# wall keeps the default rows, and only the flux divergence's rows at patch
+# and level interface ends change with the `interface_divergence` source.
+
+const IDIV_CLOSURES = (("default", nothing), ("cascade4", :cascade4),
+                       ("BL", :brady_livescu))
+"The `interface_divergence` source of each candidate, in element type `T`."
+idiv_sources(T=Float64) = [(label, cl === nothing ? nothing : lele_d1_6(T; closures=cl))
+                           for (label, cl) in IDIV_CLOSURES]
+const IDIV = idiv_sources()
+const IDIV_FILTERS = ((" unfiltered", (filter_interval=0,)),
+                      (" default filter", (filter_interval=1,)))
+
+# The acoustic pulse of test/patch_tests.jl and test/interface_reflection_tests.jl:
+# a right-running pulse launched at π/2 on the periodic [0, 2π), run past
+# the faces; the left-running characteristic left behind on uncovered root
+# nodes upstream of the first face, against the run without the interface.
+function pulse_leftgoing(N; source=nothing, patch_grid=(1, 1, 1), refine=nothing,
+                         subcycle=false)
+    amp = 1e-3; c0 = sqrt(GAMMA)
+    pulse(x) = amp * exp(-40 * (x - pi / 2)^2)
+    s = Solver(n_global=(N, 1, 1), L_domain=(2pi, 1.0, 1.0), bcs=per3,
+               art=ArtParams(enabled=false), filter_interval=0,
+               patch_grid=patch_grid, refine=refine, subcycle=subcycle,
+               interface_divergence=source)
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(rho=(1 + pulse(x))^(1 / GAMMA),
+                                        p=1 + pulse(x), u=(pulse(x) / c0, 0, 0)))
+    run!(s, Q; tfinal=pi / c0)
+    states = Q isa Vector ? Q : [Q]
+    ps = CL.PatchSolver(s, getfield(s, :patches)[1])
+    refresh_primitives!(ps, states[1])
+    return [((ps.p[gidx(ps, i, 1, 1)] - 1) - c0 * ps.u[gidx(ps, i, 1, 1)]) / 2 / amp
+            for i in 1:ps.decomp.n_local[1] if xcoord(ps, 1, i) < 2.1]
+end
+
+function idiv_study()
+    println("\n=== interface divergence rows, deriv = lele_d1_6(), walls on its rows ===")
+    per_rhs = (("extended", :extended), ("onesided", :onesided))
+    # The instantaneous right-hand side on exact data.
+    for (clabel, src) in IDIV, levels in (1, 2)
+        what = levels == 1 ? "two patches" : "2 levels"
+        rhs_row("RHS entropy wave k=3, $what, source $clabel",
+                N -> entropy_case(N; levels=levels, interface_divergence=src,
+                                  patch_grid=levels == 1 ? (2, 1, 1) : (1, 1, 1)),
+                s -> exact_rhs(s.equations, entropy_profile(3, 0.37)), NS_PERIODIC;
+                primary=:interface)
+    end
+    # Same-level interfaces: two entropy waves and the inviscid standing wave.
+    fine_inviscid = fine_periodic(mu=0.0)
+    for (clabel, src) in IDIV, (flabel, fopts) in IDIV_FILTERS
+        for (k, phase) in ((3, 0.37), (1, 0.0))
+            evolution_study("entropy wave k=$k, two patches, source $clabel,$flabel",
+                            (N; cfl) -> entropy_case(N; k=k, phase=phase,
+                                                     patch_grid=(2, 1, 1), cfl=cfl,
+                                                     interface_divergence=src, fopts...),
+                            entropy_reference(k, phase), NS_PERIODIC;
+                            primary=:interface, tfinal=TFINAL_ENTROPY)
+        end
+        evolution_study("inviscid standing wave, two patches, source $clabel,$flabel",
+                        (N; cfl) -> viscous_periodic_case(N; mu=0.0, patch_grid=(2, 1, 1),
+                                                          cfl=cfl, interface_divergence=src,
+                                                          fopts...),
+                        (s, cfl) -> fine_inviscid, NS_PERIODIC; primary=:interface)
+    end
+    # Coarse-fine interfaces: nests, stepping modes, tiles.
+    for (clabel, src) in IDIV
+        for levels in (2, 3), subcycle in (false, true)
+            evolution_study("entropy wave k=3, $levels levels, subcycle=$subcycle, " *
+                            "source $clabel, unfiltered",
+                            (N; cfl) -> entropy_case(N; levels=levels, subcycle=subcycle,
+                                                     cfl=cfl, interface_divergence=src,
+                                                     filter_interval=0),
+                            entropy_reference(3, 0.37), NS_PERIODIC;
+                            primary=:interface, tfinal=TFINAL_ENTROPY)
+        end
+        evolution_study("entropy wave k=3, 2 levels, source $clabel, default filter",
+                        (N; cfl) -> entropy_case(N; levels=2, cfl=cfl, filter_interval=1,
+                                                 interface_divergence=src),
+                        entropy_reference(3, 0.37), NS_PERIODIC;
+                        primary=:interface, tfinal=TFINAL_ENTROPY)
+        evolution_study("entropy wave k=1, 2 levels, source $clabel, unfiltered",
+                        (N; cfl) -> entropy_case(N; k=1, phase=0.0, levels=2, cfl=cfl,
+                                                 interface_divergence=src),
+                        entropy_reference(1, 0.0), NS_PERIODIC;
+                        primary=:interface, tfinal=TFINAL_ENTROPY)
+        evolution_study("inviscid standing wave, 2 levels, source $clabel, unfiltered",
+                        (N; cfl) -> viscous_periodic_case(N; mu=0.0, levels=2, cfl=cfl,
+                                                          interface_divergence=src),
+                        (s, cfl) -> fine_inviscid, NS_PERIODIC; primary=:interface)
+        evolution_study("entropy wave k=3, 2 levels tiled (tile 4), subcycled, " *
+                        "source $clabel, unfiltered",
+                        (N; cfl) -> entropy_case(N; levels=2, subcycle=true, tile=4,
+                                                 cfl=cfl, interface_divergence=src),
+                        entropy_reference(3, 0.37), NS_PERIODIC;
+                        primary=:interface, tfinal=TFINAL_ENTROPY)
+    end
+    # Physical and interface ends on one line: the standing wave between slip
+    # walls through a same-level interface at x = 1/2.
+    fine = fine_mirror(false)
+    for (clabel, src) in IDIV, (flabel, fopts) in IDIV_FILTERS
+        evolution_study("inviscid wall + interface, two patches, source $clabel,$flabel",
+                        (N; cfl) -> wall_case(N; patch_grid=(2, 1, 1), cfl=cfl,
+                                              interface_divergence=src, fopts...),
+                        (s, cfl) -> fine, NS; primary=:interface)
+    end
+    # Viscous: the gradient rows at the interface are `interface_rhs`'s.
+    fine_viscous = fine_periodic()
+    for (clabel, src) in IDIV, (rlabel, rhs) in per_rhs, levels in (1, 2)
+        what = levels == 1 ? "two patches" : "2 levels"
+        evolution_study("viscous standing wave, $what, interface_rhs $rlabel, " *
+                        "source $clabel, unfiltered",
+                        (N; cfl) -> viscous_periodic_case(N; levels=levels, cfl=cfl,
+                                                          patch_grid=levels == 1 ?
+                                                              (2, 1, 1) : (1, 1, 1),
+                                                          interface_rhs=rhs,
+                                                          interface_divergence=src),
+                        (s, cfl) -> fine_viscous, NS_PERIODIC; primary=:interface)
+    end
+    # Float32: the entropy wave k=1 (the smallest signal-to-rounding ratio of
+    # the resolved fields here) through each interface kind.
+    for ((clabel, _), (_, src32)) in zip(IDIV, idiv_sources(Float32)),
+        (what, kw) in (("two patches", (patch_grid=(2, 1, 1),)), ("2 levels", (levels=2,)))
+        evolution_study("Float32 entropy wave k=1, $what, source $clabel, unfiltered",
+                        (N; cfl) -> entropy_case(N; k=1, phase=0.0, cfl=cfl,
+                                                 precision=Float32,
+                                                 deriv=lele_d1_6(Float32),
+                                                 filt=compact_filter(0.45, Float32),
+                                                 interface_divergence=src32, kw...),
+                        entropy_reference(1, 0.0), NS_PERIODIC;
+                        primary=:interface, tfinal=TFINAL_ENTROPY)
+    end
+    # Acoustic reflection: the left-running characteristic upstream of the
+    # first face over the pulse amplitude, against the run without it.
+    println("\nacoustic pulse, left-running characteristic upstream of the faces / amplitude")
+    println("   N    layout                    source      reflected")
+    r1(N) = BlockRegion((80N ÷ 192, 0, 0), (32N ÷ 192 + 1, 1, 1))
+    for N in (96, 192, 384)
+        base = pulse_leftgoing(N)
+        for (what, kw) in (("two patches", (patch_grid=(2, 1, 1),)),
+                           ("2 levels", (refine=r1(N),)),
+                           ("2 levels subcycled", (refine=r1(N), subcycle=true)))
+            for (clabel, src) in IDIV
+                r = pulse_leftgoing(N; source=src, kw...)
+                @printf("%5d    %-24s  %-10s  %.3e\n", N, what, clabel,
+                        maximum(abs.(r .- base)))
+            end
+        end
+        flush(stdout)
+    end
 end
 
 function main()
@@ -435,6 +593,7 @@ function main()
     selected("fields") && fields_study()
     selected("filter") && filter_study()
     selected("dt") && dt_study()
+    selected("idiv") && idiv_study()
     @printf("\ndone in %.1f s\n", time() - t0)
 end
 

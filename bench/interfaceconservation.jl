@@ -29,6 +29,9 @@
 # deeper hierarchy's validity gate. `parts=regrid` isolates moving refinement.
 # `layouts=uniform,depth3 stepping=global` selects a long rank-comparison
 # run; mixing selections must retain `uniform` for the attribution baseline.
+# `idiv=cascade4` or `idiv=brady_livescu` takes the flux divergence's rows at
+# every interface end from that `interface_divergence` source (`default`
+# keeps the solver's own); the uniform baseline has no interface to change.
 #
 # The predeclared application budgets are deliberately coarse enough to be
 # useful on a long, interface-crossing calculation: 0.1% of initial mass,
@@ -57,7 +60,7 @@ const args = CompactLES.script_args(ARGS, (N=192, ny=32, tfinal=8.0, nmax=typema
                                            moving_width=0.18, filter_interval=1,
                                            maxlevels=3,
                                            layouts="uniform,samelevel,depth2,depth3",
-                                           stepping="both");
+                                           stepping="both", idiv="default");
                                     positional=(:N, :tfinal))
 
 # Application comparison budgets, fixed independently of the results.
@@ -176,8 +179,10 @@ function build(mode, N, ny; subcycle=false, regrid=false)
          # density is intentionally uniform in this thermodynamic control.
          tag_gradient_threshold=regrid ? 0.02 : 0, tag_buffer=3)
     end
+    source = mode === :uniform || args.idiv == "default" ? nothing :
+             lele_d1_6(closures=Symbol(args.idiv))
     return Solver(n_global=(N, ny, 1), L_domain=(8pi, 2pi, 1.0), bcs=periodic,
-                  eos=eos, cfl=0.45,
+                  eos=eos, cfl=0.45, interface_divergence=source,
                   art=ArtParams(C_mu=0.0, C_beta=0.0, C_kappa=0.0, C_D=0.0),
                   control=StepControl(validity=:permissive),
                   filter_interval=args.filter_interval; kw...)

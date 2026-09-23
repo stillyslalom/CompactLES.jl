@@ -216,3 +216,70 @@ end
                                        bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
                                        patch_grid=(2, 1, 1))
 end
+
+# The flux divergence's rows at an interface end come from the
+# `interface_divergence` scheme when one is given, independently of the
+# gradient rows (`interface_rhs`) and of a physical end's rows.
+_div_rows_match(plan, decomp, deriv, h, lo, hi) =
+    (ref = CL.plan_direction(decomp, deriv, 1, h; lo_closures=lo, hi_closures=hi);
+     plan.clo == ref.clo && plan.chi == ref.chi && plan.clo_first == ref.clo_first)
+
+function _patched_rhs(; kw...)
+    per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    s = Solver(n_global=(48, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+               art=ArtParams(enabled=false), filter_interval=0,
+               transport=Transport(mu0=1e-2), patch_grid=(2, 1, 1); kw...)
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(u=(0.5 + 0.1 * sin(2x), 0, 0),
+                                        p=1.0 + 0.05 * cos(x), rho=1.0 + 0.2 * sin(x)))
+    dQ = [zero(q) for q in Q]
+    CL._presync!(s, Q)
+    for lev in getfield(s, :levels)
+        CL._level_rhs!(s, lev, Q, dQ, false)
+    end
+    return [parent(d) for d in dQ]
+end
+
+@testset "interface divergence rows follow their source scheme" begin
+    per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    walls = ((SlipWallBC(), SlipWallBC()), per3[2], per3[3])
+    c6 = lele_d1_6()
+    bl = lele_d1_6(closures=:brady_livescu)
+    # A wall at the low end of patch 1 keeps the derivative's own rows, and
+    # the interface at its high end takes the source's, under either
+    # gradient treatment.
+    for rhs in (:extended, :onesided)
+        s = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=walls,
+                   patch_grid=(2, 1, 1), interface_rhs=rhs, interface_divergence=bl)
+        p1 = getfield(s, :patches)[1]
+        @test _div_rows_match(p1.div_plans[1], p1.decomp, c6, p1.h[1],
+                              nothing, bl.closures)
+    end
+    # The default, spelled out: an interface takes the cascade3 rows in place
+    # of the neutral set, so naming them changes no bit of the right-hand side.
+    @test _patched_rhs() == _patched_rhs(interface_divergence=lele_d1_6(closures=:cascade3))
+    # With extended gradients a periodic pair reads the derivative's closure
+    # rows only in the divergence, so a source scheme is the whole of the
+    # difference between the two derivative operators there.
+    @test _patched_rhs(interface_divergence=bl) == _patched_rhs(deriv=bl)
+    @test _patched_rhs(interface_divergence=bl) != _patched_rhs()
+    # Refused at setup: another interior, another element type, a filter, a
+    # run without an interface, and more rows than a regridded patch holds.
+    mk(; kw...) = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3; kw...)
+    @test_throws "interior coefficients" mk(patch_grid=(2, 1, 1),
+                                            interface_divergence=lele_d1_8())
+    @test_throws "interior coefficients" mk(patch_grid=(2, 1, 1),
+                                            interface_divergence=lele_d1_6(Float32))
+    @test_throws "interior coefficients" mk(patch_grid=(2, 1, 1), deriv=lele_d1_10(),
+                                            interface_divergence=c6)
+    @test_throws "interior coefficients" mk(patch_grid=(2, 1, 1),
+                                            interface_divergence=compact_filter(0.45))
+    @test_throws "has neither" mk(interface_divergence=bl)
+    @test_throws "raise tile" mk(deriv=lele_d1_8(),
+                                 interface_divergence=lele_d1_8(closures=:brady_livescu),
+                                 refine=BlockRegion((18, 0, 0), (8, 1, 1)),
+                                 regrid_interval=5)
+    @test_throws "unknown closure set" lele_d1_10(closures=:brady_livescu)
+    @test npatches(mk(patch_grid=(2, 1, 1), deriv=lele_d1_10(),
+                      interface_divergence=lele_d1_10(closures=:cascade3))) == 2
+end

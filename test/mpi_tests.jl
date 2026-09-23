@@ -1683,6 +1683,31 @@ function test_two_patch_layout()
     check("two-patch C10 viscous wave: max rho matches serial",
           abs(gmax(m) - 1.3014436321154803), tol)
     check("two-patch C10 run: step count matches serial", abs(solver10.step - 78), 0.5)
+    # Slip walls at the outer ends and one-sided gradients, the flux
+    # divergence taking the Brady–Livescu rows at the interface ends only
+    # (`interface_divergence`): each patch's rank owning a closed end plans
+    # it with the wall's or the interface's rows. Serial value of this run.
+    wall2 = (SlipWallBC(), SlipWallBC())
+    solverbl = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                      bcs=(wall2, per3[2], per3[3]), art=ArtParams(enabled=false),
+                      filter_interval=0, transport=Transport(mu0=5e-3),
+                      patch_grid=(2, 1, 1), interface_rhs=:onesided,
+                      interface_divergence=lele_d1_6(closures=:brady_livescu))
+    statesbl = allocate_state(solverbl)
+    initialize!(solverbl, statesbl, (x, y, z) ->
+        Prim(u=(0.05 * sin(π * x), 0, 0), p=(1 + 0.05 * cos(π * x))^1.4,
+             rho=1 + 0.05 * cos(π * x)))
+    run!(solverbl, statesbl; tfinal=0.4, nmax=40)
+    m = 0.0
+    for (ps, Q) in CL.eachpatch(solverbl, statesbl)
+        for i in 1:ps.decomp.n_local[1]
+            m = max(m, Q[gidx(ps, i, 1, 1), 1])
+        end
+    end
+    check("two-patch walls, source divergence rows: max rho matches serial",
+          abs(gmax(m) - 1.0433664263818199), tol)
+    check("two-patch walls, source divergence rows: step count matches serial",
+          abs(solverbl.step - 40), 0.5)
 end
 
 # ---------------------------------------------------------------------------
@@ -1930,7 +1955,7 @@ function test_refined_decomposed()
     # Twenty steps of each run: the checks are agreement with serial to
     # round-off, which every step tests alike, and on an oversubscribed
     # runner the phase cost is linear in steps (see the callback phase).
-    function wave_error(; subcycle, levels=2)
+    function wave_error(; subcycle, levels=2, kw...)
         N = 192
         r1 = BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1))
         e1 = 3 * (N ÷ 6) - 2
@@ -1938,7 +1963,7 @@ function test_refined_decomposed()
         solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
                         art=ArtParams(enabled=false), filter_interval=0,
                         subcycle=subcycle,
-                        refine=levels == 3 ? [r1, r2] : r1)
+                        refine=levels == 3 ? [r1, r2] : r1; kw...)
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) ->
             Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
@@ -1975,6 +2000,12 @@ function test_refined_decomposed()
           abs(e3s - 3.545892468537204e-10), 1e-12)
     check("subcycled three-level step count matches serial",
           abs(n3s - 20), 0.5)
+    # The fine level's divergence under the Brady–Livescu interface rows,
+    # planned on every rank of the level's decomposition.
+    e_src, _ = wave_error(subcycle=false,
+                          interface_divergence=lele_d1_6(closures=:brady_livescu))
+    check("static two-level wave error, source divergence rows, matches serial",
+          abs(e_src - 3.26405569239796e-14), 5e-15)
 
     # Tagging-driven regridding tracks a Sod shock to the same region. The
     # four Sod regrid cases in this file run the unrelaxed filter

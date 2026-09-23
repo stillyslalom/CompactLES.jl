@@ -139,7 +139,7 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
 - [x] **N12** — Regrid checks refresh coefficients, opt-in refined-stage CFL
   violations use collective rollback, and three-/four-level rate and cost
   measurements retain Hermite output; the global-step undershoot depends on
-  the filter application schedule (commit pending).
+  the filter application schedule (commit `e7bb381`).
 
 - [x] **N12a** — Level-aware filter trials remove the fixed-layer
   undershoot within composite budgets; smooth-error and moving-refinement
@@ -150,38 +150,9 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
   run under the retained `:strict` default; only cold-ambient converging shocks
   opt out, with bounded counts (commit pending).
 
-- [ ] **N14 — Select interface divergence closures independently of wall closures.**
-  Add an opt-in policy applied only to same-level and coarse–fine interface ends
-  of `div_plans`, independently of gradient `interface_rhs` and physical-wall rows.
-  Prototype an optional `interface_divergence` closure-source scheme, defaulting
-  to `nothing`: require its interior coefficients to match `deriv` and use only
-  its closure rows at interface ends. This admits custom schemes without silently
-  applying C6 rows to a different interior; reject mismatches during setup.
-  Compare C6 cascade3, cascade4, and Brady–Livescu first; C8 is a separately
-  qualified extension. Preserve the current default and reject unsupported
-  scheme/extent/halo combinations, including an unimplemented C10 closure choice.
-  Carry the policy through fine/same-level plan construction, tiled device plans,
-  `RegridSpec`, regrid/rebalance rebuilds, and supported restart continuation.
-  A5 owns configuration provenance and incompatible-restart rejection.
-  **Depends on:** N6's inviscid/interface studies. Obtain N10 conservation budgets
-  and N11 reflection/positivity gates before promotion; physical-wall work and R5
-  do not block this experiment.
-  **Gate:** target at least 5.5 observed solution order for C6 Float64 on multiple
-  resolved smooth inviscid fields at both same-level and coarse–fine interfaces,
-  with temporal error controlled; document viscous order and the usable Float32
-  error floor separately. Compare error magnitudes, acoustic reflection, drift,
-  both directions of shock crossing, moving/tiled refinement, and subcycling.
-  Test mixed physical/interface ends, both `interface_rhs` settings, both precisions,
-  MPI np=2/4/8, and host/device plans; state hardware coverage explicitly.
-  Initial opt-in implementation must retain default regression behavior. Deliver
-  a recorded selection decision: retain the default, promote a qualified candidate
-  for a bounded tier, or keep it experimental. A candidate failing stability or
-  N10/N11 checks is not promoted; smooth-only results may justify a documented
-  Float64 opt-in, not general sixth-order AMR.
-  **Code:** [problem.jl](../src/problem.jl), [rhs.jl](../src/rhs.jl),
-  [patches.jl](../src/patches.jl),
-  [levels.jl](../src/levels.jl), [regrid.jl](../src/regrid.jl),
-  [kernels.jl](../src/kernels.jl), [io_levels.jl](../src/io_levels.jl).
+- [x] **N14** — `interface_divergence` selects the flux divergence's closure rows at
+  interface ends; the default stays, `:cascade4` is rejected and the Brady–Livescu
+  rows stay an experimental Float64 option (commit pending).
 
 - [ ] **N15 — Design and trial divergence with valid current-stage ghost fluxes.**
   Start only if N14 misses a stated accuracy/stability target or a case requires

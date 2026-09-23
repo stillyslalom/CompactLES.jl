@@ -310,7 +310,8 @@ end
         run!(s, states; tfinal=0.06, nmax=400)
         return s, states
     end
-    for kw in ((;), (tag_sensor_threshold=0.05,))
+    for kw in ((;), (tag_sensor_threshold=0.05,),
+               (interface_divergence=lele_d1_6(closures=:brady_livescu),))
         s1, q1 = tiled(CPUBackend(); kw...)
         CL.FORCE_KA[] = true
         CL.FORCE_DEVICE_EXCHANGE[] = true
@@ -337,6 +338,13 @@ end
         @test st.patch.rho.ntiles == length(st.members)
         @test st.patch.deriv_plans[1].ntiles == length(st.members)
         @test st.patch.deriv_plans[1].lines == length(st.members)
+        # The batched divergence plans close with the source scheme's rows.
+        if haskey(kw, :interface_divergence)
+            rows = kw.interface_divergence.closures
+            ref = CL.plan_direction(st.patch.decomp, lele_d1_6(), 1, st.patch.h[1];
+                                    lo_closures=rows, hi_closures=rows)
+            @test st.patch.div_plans[1].host.chi == ref.chi
+        end
         for (slot, li) in enumerate(st.members)
             tile = getfield(s2, :patches)[li]
             @test parent(tile.rho) === parent(st.patch.rho)

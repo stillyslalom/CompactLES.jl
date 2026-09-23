@@ -194,14 +194,20 @@ end
 const SMOOTH_DEFAULTS = (deriv=lele_d1_6(), filt=compact_filter(0.45),
                          filter_interval=0, filter_cfl=0.35, cfl=0.5)
 
+# `precision` selects the solver's element type; a Float32 case takes
+# Float32 schemes (`deriv`, `filt` and any `interface_divergence`) from the
+# caller, and the ideal gas of the Float64 default in Float32.
 function _smooth_solver(n_global, L, bcs, prof; deriv, filt, filter_interval,
                         filter_cfl, cfl, mu=0.0, Pr=0.7, sources=(),
-                        art=ArtParams(enabled=false), kwargs...)
+                        precision=Float64, art=ArtParams{precision}(enabled=false),
+                        kwargs...)
+    typed = precision === Float64 ? (;) :
+            (eos=IdealSpecies(precision, "gas"; R=1, gamma=1.4),)
     solver = Solver(n_global=n_global, L_domain=(L, 1.0, 1.0), bcs=bcs,
                     deriv=deriv, filt=filt, filter_interval=filter_interval,
                     filter_cfl=filter_cfl, cfl=cfl,
-                    transport=Transport(mu0=mu, Pr=Pr), sources=sources,
-                    art=art; kwargs...)
+                    transport=Transport{precision}(mu0=mu, Pr=Pr), sources=sources,
+                    art=art; typed..., kwargs...)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> begin
         rho, u, v, p = prof(x)

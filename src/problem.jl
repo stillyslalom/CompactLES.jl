@@ -778,6 +778,7 @@ Base.@kwdef struct Numerics
     patch_grid::NTuple{3,Int} = (1, 1, 1)
     backend::AbstractBackend = CPUBackend()
     interface_rhs::Symbol = :extended
+    interface_divergence::Union{Nothing,AbstractCompactScheme} = nothing
     amr::Union{Nothing,AMR} = nothing
     refine::Union{Nothing,BlockRegion,Vector{BlockRegion}} = nothing
     level_restriction::Symbol = :inject
@@ -870,7 +871,8 @@ function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
                filter_weighting=num.filter_weighting,
                dims=num.dims, n_halo=num.n_halo, comm=num.comm,
                patch_grid=num.patch_grid, backend=num.backend,
-               interface_rhs=num.interface_rhs, kw...)
+               interface_rhs=num.interface_rhs,
+               interface_divergence=num.interface_divergence, kw...)
     Q = allocate_state(solver)
     if seed_only
         # The temporary fine cover exists only to plan the initial tagging.

@@ -316,7 +316,9 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                ws_pool, solver.equations.n_species,
                                                n_cons,
                                                solver.art.species_flux === :bulk,
-                                               1, 1, spec.tile)
+                                               1, 1, spec.tile;
+                                               interface_divergence=
+                                                   spec.interface_divergence)
     restriction = lev.transfers[1].restriction
     transfers = [build_level_transfer(
         T, tr, active, spec.n_halo, [root.region], [1],

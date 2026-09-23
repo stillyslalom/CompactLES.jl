@@ -4636,6 +4636,103 @@ three-level undershoot under global stepping are recorded as limitations:
 the first is an initial-data restriction with a stated workaround, the
 second is removed by subcycling.
 
+### bench/boundaryorder.jl idiv: the interface divergence rows
+
+```text
+julia --project=. -t 1 bench/boundaryorder.jl study=idiv
+julia --project=. -t 1 bench/interfacesensor.jl crossing "crossing_variants=base,idiv,reversed,two patches,three patches"
+julia --project=. -t 4 bench/interfaceconservation.jl N=96 ny=24 tfinal=8.0 moving_tfinal=8.0 idiv=brady_livescu
+```
+
+`interface_divergence` replaces the flux divergence's closure rows at patch and level
+interface ends and nowhere else; the derivative operator stays `lele_d1_6()`, so a wall keeps
+the `:neutral3` rows. Without it an interface takes the `:cascade3` rows, and those rows below
+reproduce [the matrix](#patch-interfaces-and-refinement-levels) to every digit. Serial
+Float64, `cfl = 0.25`, the interface window of the matrix, root N = 48, 96, 192 (49, 97, 193
+for the wall rows); the `dt` column is below 0.1 on every row cited as an order unless
+marked.
+
+```
+                                            default                cascade4               Brady–Livescu
+                                            N=192     orders       N=192     orders       N=192     orders
+RHS on exact data, two patches, k=3         2.395e-5  3.36 / 3.25  3.546e-6  3.98 / 4.03  3.861e-7  5.27 / 5.41
+RHS on exact data, 2 levels, k=3            1.849e-6  3.03 / 3.02  1.815e-8  4.23 / 4.14  2.435e-9  5.02 / 5.03
+two patches, entropy k=3                    6.315e-7  5.10 / 4.71  2.716e-7  5.23 / 5.02  1.119e-8  6.63 / 6.96
+two patches, entropy k=1                    8.262e-9  3.09 / 3.53  1.078e-9  5.64 / 4.97  8.611e-12 6.49 / 6.52
+two patches, standing wave                  1.949e-8  3.41 / 3.87  6.000e-9  5.45 / 2.39  4.504e-11 5.77 / 5.82
+two patches, standing wave, filtered        1.025e-8  3.63 / 3.90  9.671e-9  4.32 / 2.00  4.196e-11 5.97 / 5.45
+2 levels, entropy k=3                       9.408e-8  3.41 / 3.83  4.428e-10 5.71 / 3.92  6.401e-11 6.02 / 6.01
+2 levels subcycled, entropy k=3             9.198e-8  3.43 / 3.84  4.475e-10 5.74 / 3.88  6.480e-11 6.02 / 5.99
+3 levels, entropy k=3                       7.407e-8  3.50 / 3.89  4.481e-10 5.72 / 3.89  6.391e-11 6.02 / 6.01
+3 levels subcycled, entropy k=3             7.192e-8  3.52 / 3.92  4.410e-10 5.75 / 3.87  6.491e-11 6.02 / 5.99
+2 levels, tile 4, subcycled, entropy k=3    7.205e-8  3.99 / 3.72  1.572e-8  4.20 / 3.36  6.481e-11 6.02 / 5.99
+2 levels, entropy k=3, filtered             1.577e-8  4.29 / 3.95  1.049e-10 7.01 / 6.80  7.378e-10 5.25 / 5.81
+2 levels, entropy k=1                       7.380e-10 3.37 / 3.76  8.036e-12 4.31 / 4.93  5.174e-14 5.33 / time
+2 levels, standing wave                     1.030e-9  3.37 / 3.47  9.571e-12 4.76 / 4.59  4.998e-13 5.13 / 5.11
+walls and an interface, two patches         4.234e-10 5.04 / 5.66  1.322e-7  2.38 / 1.20  2.375e-9  4.56 / 5.19
+walls and an interface, filtered            1.860e-10 4.26 / 4.86  9.169e-8  2.72 / −3.01 1.211e-10 5.20 / 4.03
+viscous, two patches, extended gradients    2.469e-8  3.62 / 3.87  1.419e-9  4.87 / 4.99  6.850e-11 4.92 / 5.66
+viscous, two patches, one-sided gradients   2.470e-6  1.91 / 0.91  4.788e-6  0.49 / 0.23  4.770e-6  0.84 / 0.16
+viscous, 2 levels, extended gradients       8.597e-10 3.61 / 3.65  7.309e-12 4.85 / 4.75  3.511e-13 5.57 / 5.34
+viscous, 2 levels, one-sided gradients      3.455e-9  3.44 / 3.66  3.652e-10 2.92 / 3.07  4.927e-10 3.25 / 3.30
+```
+
+The standing wave through two levels at `cfl = 0.125` and root N = 96, 192, 384 reads
+2.022e-11, 3.459e-13, 6.084e-14 under the Brady–Livescu rows (5.08, then the round-off
+floor, `dt` 0.004 at N = 192) and 1.109e-8, 7.778e-10, 7.504e-11 under the default. The
+walls-and-interface rows' wall window is 3.1e-9 (default) and 2.8e-9 (Brady–Livescu) at
+N = 193, the `:neutral3` wall's fourth order, and the interface window reads that error.
+
+In Float32 the entropy wave k = 1 reads 3e-6 to 6e-5 in the interface window at every N and
+under every source, rising with N; no row converges and no source lowers the floor.
+
+The acoustic pulse of the reflection tests, the left-running characteristic upstream of
+the first face over the pulse amplitude, against the run without the face:
+
+```
+                      N = 96                           N = 192                          N = 384
+                      default   cascade4  BL           default   cascade4  BL           default   cascade4  BL
+two patches           9.740e-6  6.060e-5  1.543e-5     2.049e-6  8.356e-6  1.139e-6     2.685e-7  1.897e-6  2.477e-8
+2 levels              1.182e-6  1.241e-6  1.189e-6     1.188e-8  3.062e-9  1.240e-9     8.427e-10 1.046e-10 6.066e-11
+2 levels subcycled    8.314e-7  8.928e-7  8.933e-7     1.051e-8  2.897e-9  1.099e-9     7.058e-10 8.713e-11 5.242e-11
+```
+
+**Shocks.** The Sod crossing of
+[the interface sensor instrument](#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface),
+root N = 201, `cfl = 0.4`, the artificial properties and the filter live; shell and root
+columns are the density error against the uniform run at t = 0.2:
+
+| row | default | `:cascade4` | Brady–Livescu |
+|---|---|---|---|
+| two levels subcycled: steps, p_min, shell, root | 373, 0.0405, 7.7e-3, 2.4e-2 | 373, 0.0405, 7.9e-3, 2.4e-2 | 373, 0.0405, 8.2e-3, 2.6e-2 |
+| global dt: p_min, shell | — | 0.0382, 9.0e-3 | 0.0382, 1.0e-2 |
+| three levels: shell | — | 6.5e-3 | 7.0e-3 |
+| tile 8: p_min, shell | — | 0.0405, 8.3e-2 | 0.0206, 7.8e-2 |
+| three patches: p_min, shell, root | 0.0412, 7.4e-2, 2.7e-2 | 0.0412, 7.7e-2, 2.7e-2 | 0.0205, 6.8e-2, 5.5e-2 |
+| diaphragm on the shared plane | negative density, step 2 | step 1 | step 1 |
+| the same, one-sided gradients | completes, p_min 0.097 | negative density, step 113 | step 2 |
+
+The mirrored tube, the shock running right to left through the same faces, reproduces every
+printed digit of the forward rows. The Brady–Livescu rows halve the minimum pressure where
+the shock crosses a same-level face, and neither candidate survives a discontinuity on a
+shared plane; both remove the one-sided gradient rows as a workaround for it.
+
+**Conservation.** The layer of
+[the conservation instrument](#benchinterfaceconservationjl-composite-conservation-budgets)
+on (96, 24, 1) to t = 8: the nests and the regrid histories agree across the three sources
+to the second digit (6.9e-5 to 7.1e-5 fixed-nest drift, 2.2e-4 cumulative regrid jump, all
+within the 1e-3 budget). The same-level layout's drift is 5.2e-10, 5.9e-10 and 9.8e-11
+under the default, `:cascade4` and Brady–Livescu rows, and its largest mass-fraction
+excursion 3.1e-5, 2.2e-4 and 4.0e-4.
+
+**Decision.** The default stays. `:cascade4` is rejected: the undamped mode it carries at an
+inviscid wall appears at an interface on the standing wave and grows between walls and an
+interface. The Brady–Livescu rows reach 5.8–7.0 at a same-level interface and 6.0 at every
+coarse-fine nest on the entropy waves, but 5.1 on the acoustic standing wave at a
+coarse-fine face, their formal fifth order, below the 5.5 target; they halve the minimum
+pressure of a shock crossing a same-level face and raise the same-level mass-fraction
+excursion thirteenfold. The option stays experimental, a Float64 smooth-flow setting.
+
 ### bench/levelfilter.jl: level-aware filtering under global stepping
 
 N12a compares the production filter with two benchmark-only policies. The

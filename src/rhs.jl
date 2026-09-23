@@ -211,6 +211,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 patch_grid::NTuple{3,Int}=(1, 1, 1),
                 backend::AbstractBackend=CPUBackend(),
                 interface_rhs::Symbol=:extended,
+                interface_divergence::Union{Nothing,AbstractCompactScheme}=nothing,
                 refine::Union{Nothing,BlockRegion,Vector{BlockRegion}}=nothing,
                 level_restriction::Symbol=:inject,
                 subcycle::Bool=false,
@@ -473,6 +474,24 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 fine_extent(rg, active_g)), ntuple(d -> (true, true), 3), active_g)]
         end
     end
+    # --- Interface divergence rows ------------------------------------------
+    # The source scheme only supplies the divergence's closure rows at patch
+    # and level interface ends, so a run without an interface would ignore it.
+    if interface_divergence !== nothing
+        npatch > 1 || !isempty(refines) ||
+            error("interface_divergence selects the flux divergence rows at a " *
+                  "patch or level interface; this run has neither (patch_grid, " *
+                  "refine)")
+        idiv_rows = interface_divergence_rows(deriv, interface_divergence)
+        # A regrid builds refined patches mid-run, down to 10 fine nodes along
+        # a dimension (4 parent nodes; a tile of t parent nodes gives 3t + 1),
+        # and a patch closed at both ends by these rows needs 2 rows + 1.
+        min_fine = tile > 0 ? 3 * tile + 1 : 10
+        regrid_interval == 0 || 2 * length(idiv_rows) + 1 <= min_fine ||
+            error("interface_divergence '$(interface_divergence.name)' closes a " *
+                  "line with $(length(idiv_rows)) rows per end, more than a " *
+                  "regridded patch of $min_fine fine nodes admits; raise tile")
+    end
     # --- Device residency -------------------------------------------------
     # A DeviceBackend supports a decomposed patch, patched, refined or
     # tiled: halos, fold pairs, the interface records and the level
@@ -531,7 +550,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                      coord_shift, h, deriv, filt, smoo, cfl,
                                      filter_interval, filter_cfl, filter_weighting,
                                      control, n_halo, comm, backend, interface_rhs,
-                                     n_cons, n_species)
+                                     n_cons, n_species; interface_divergence)
     end
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
     mkd(sch, d; kw...) =
@@ -773,7 +792,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                                  interface_rhs, backend, ws_pool,
                                                  n_species, n_cons,
                                                  art.species_flux === :bulk,
-                                                 id0, ℓ, tile)
+                                                 id0, ℓ, tile; interface_divergence)
             append!(fines, built)
             indices = [id0 + k for k in eachindex(held)]
             for (k, ti) in enumerate(held)
@@ -844,7 +863,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                            zeros(Int8, ntuple(d -> decomp.n_local[d] +
                                                    2 * decomp.n_halo_d[d], 3)),
                            T(untag_ratio), tile_lifetime, 0,
-                           Dict(lt.region => 0 for lt in levels[2].transfers))
+                           Dict(lt.region => 0 for lt in levels[2].transfers),
+                           interface_divergence)
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,
@@ -883,10 +903,11 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            ws_pool::AbstractVector,
                            n_species::Int, n_cons::Int, bulk::Bool, id::Int,
                            level::Int,
-                           faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3)
-                           ) where {T}
+                           faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3);
+                           interface_divergence=nothing) where {T}
     region_f, decomp_f, hf = _fine_decomp(T, refine, active_g, h, n_halo, comm)
-    plans = _fine_plans(decomp_f, hf, deriv, filt, smoo, interface_rhs, backend)
+    plans = _fine_plans(decomp_f, hf, deriv, filt, smoo, interface_rhs, backend;
+                        interface_divergence)
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
     # Refinement takes the `:delta4` detector (rejected otherwise at setup), so
@@ -925,22 +946,27 @@ end
 # smoother. `ntiles` and `stride` plan the batched device solve of a stacked
 # level's spanning patch (lines_device.jl); the default is one patch's plans.
 function _fine_plans(decomp_f::Decomp, hf, deriv, filt, smoo, interface_rhs::Symbol,
-                     backend::AbstractBackend; ntiles::Int=1, stride::Int=0)
+                     backend::AbstractBackend; ntiles::Int=1, stride::Int=0,
+                     interface_divergence=nothing)
     mkf(sch, d; kw...) =
         backend_plan(backend, plan_direction(decomp_f, sch, d, hf[d]; kw...,
                                              lines_factor=ntiles); ntiles, stride)
     ext_f = interface_rhs === :extended
     icd = ext_f ? interface_closures(deriv) : nothing
     icf = ext_f ? interface_closures(filt) : nothing
-    ivd = ext_f ? interface_divergence_closures(deriv) : nothing
+    ivd = ext_f || interface_divergence !== nothing ?
+          interface_divergence_rows(deriv, interface_divergence) : nothing
     # Every face of a refined patch closes with the interface rows and reads
     # ghosts; the boundary condition (`_fine_bcs`) only records where they
     # come from. The divergence takes the one-sided interface rows instead
-    # (`interface_divergence_closures`), since a flux array has no ghosts.
+    # (`interface_divergence_rows`), since a flux array has no ghosts. A
+    # source scheme selects those rows under either `interface_rhs`; without
+    # one, `:onesided` keeps the gradient plans' own rows for the divergence.
     dplans_f = ntuple(d -> decomp_f.active[d] ?
         mkf(deriv, d; lo_closures=icd, hi_closures=icd) : nothing, 3)
     vplans_f = ntuple(d -> !decomp_f.active[d] ? nothing :
-        (ext_f ? mkf(deriv, d; lo_closures=ivd, hi_closures=ivd) : dplans_f[d]), 3)
+        (ivd !== nothing ? mkf(deriv, d; lo_closures=ivd, hi_closures=ivd) :
+         dplans_f[d]), 3)
     fplans_f = ntuple(d -> decomp_f.active[d] ?
         mkf(filt, d; lo_closures=icf, hi_closures=icf) : nothing, 3)
     # The sensor smoother's input is built per patch and its coarse-fine
@@ -1007,7 +1033,8 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               deriv, filt, smoo, smoother::Symbol,
                               interface_rhs::Symbol, backend::AbstractBackend,
                               ws_pool::AbstractVector, n_species::Int, n_cons::Int,
-                              bulk::Bool, id0::Int, level::Int, tile::Int) where {T}
+                              bulk::Bool, id0::Int, level::Int, tile::Int;
+                              interface_divergence=nothing) where {T}
     patches = Patch[]
     stacks = TileStack[]
     if !_stacked_level(backend, tile)
@@ -1016,7 +1043,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                              comm, deriv, filt, smoo, smoother,
                                              interface_rhs, backend, ws_pool,
                                              n_species, n_cons, bulk, id0 + k,
-                                             level, faces[ti]))
+                                             level, faces[ti]; interface_divergence))
         end
         return patches, stacks
     end
@@ -1030,7 +1057,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         [faces[held[k]] for k in ks], members,
                                         active_g, h, n_halo, comm, deriv, filt, smoo,
                                         interface_rhs, backend, n_species, n_cons,
-                                        bulk, level)
+                                        bulk, level; interface_divergence)
         for (slot, k) in enumerate(ks)
             patches[k] = tiles[slot]
         end
@@ -1045,13 +1072,13 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            h::NTuple{3,T}, n_halo::Int, comm::MPI.Comm,
                            deriv, filt, smoo, interface_rhs::Symbol,
                            backend::DeviceBackend, n_species::Int, n_cons::Int,
-                           bulk::Bool, level::Int) where {T}
+                           bulk::Bool, level::Int; interface_divergence=nothing) where {T}
     ntiles = length(tregions)
     region1, decomp1, hf = _fine_decomp(T, tregions[1], active_g, h, n_halo, comm)
     npad = padded_extent(decomp1)
     stride = npad[3]
     span_plans = _fine_plans(decomp1, hf, deriv, filt, smoo, interface_rhs, backend;
-                             ntiles, stride)
+                             ntiles, stride, interface_divergence)
     empty_raw = empty_field(backend, T)
     stacked() = StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
                                                       ntiles * stride),
@@ -1088,7 +1115,8 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                        inv_h=map(v, arrays.inv_h), inv_r=v(arrays.inv_r),
                        cot_over_r=v(arrays.cot_over_r),
                        cot_over_r_gcl=v(arrays.cot_over_r_gcl))
-        plans_t = _fine_plans(decomp_t, hf, deriv, filt, smoo, interface_rhs, backend)
+        plans_t = _fine_plans(decomp_t, hf, deriv, filt, smoo, interface_rhs, backend;
+                              interface_divergence)
         scratch = _level_scratch(empty_raw, refine, active_g, n_halo, n_cons,
                                  MPI.Comm_size(comm), MPI.Comm_rank(comm))
         push!(tiles, _assemble_patch(ids[slot], level, region_t, comm, decomp_t, hf,
@@ -1126,7 +1154,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                                h, deriv, filt, smoo, cfl, filter_interval,
                                filter_cfl, filter_weighting, control, n_halo,
                                comm, backend,
-                               interface_rhs, n_cons, n_species) where {T}
+                               interface_rhs, n_cons, n_species;
+                               interface_divergence=nothing) where {T}
     MPI.Initialized() || MPI.Init(threadlevel=:funneled)
     world = comm
     np = MPI.Comm_size(world)
@@ -1144,7 +1173,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
     ext = interface_rhs === :extended
     icd = ext ? interface_closures(deriv) : nothing
     icf = ext ? interface_closures(filt) : nothing
-    ivd = ext ? interface_divergence_closures(deriv) : nothing
+    ivd = ext || interface_divergence !== nothing ?
+          interface_divergence_rows(deriv, interface_divergence) : nothing
     nofold = (nothing, nothing, nothing)
     # One RHS scratch pool for the rank's patches. A partitioned run gives each
     # rank one patch; a serial one holds every slab, and equal-extent slabs
@@ -1166,11 +1196,12 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
             nothing, 3)
         # The flux divergence keeps one-sided closures at an interface (ghost
         # fluxes are unavailable; see patches.jl), the scheme's own rows or
-        # the cascade's for the neutral set (`interface_divergence_closures`),
-        # so it takes separate plans exactly where the gradient plans read
-        # ghosts; a physical end keeps the scheme's rows on both.
+        # the cascade's for the neutral set (`interface_divergence_rows`), or
+        # a source scheme's rows under either `interface_rhs`, so it takes
+        # separate plans wherever an interface end takes rows of its own; a
+        # physical end keeps the scheme's rows on both.
         vplans = ntuple(d -> !dcp.active[d] ? nothing :
-            (ext && (faces[d][1] != 0 || faces[d][2] != 0) ?
+            (ivd !== nothing && (faces[d][1] != 0 || faces[d][2] != 0) ?
              mk(deriv, d; lo_closures=locl(ivd, d), hi_closures=hicl(ivd, d)) :
              dplans[d]), 3)
         fplans = ntuple(d -> dcp.active[d] ?

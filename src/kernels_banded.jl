@@ -123,6 +123,10 @@ function interface_divergence_closures(scheme::BandedCompactScheme{T}) where {T}
         _banded_closure_rows(cascade_closures(T, 3, 3)) : scheme.closures
 end
 
+_same_interior(a::BandedCompactScheme{T}, b::BandedCompactScheme{T}) where {T} =
+    a.q == b.q && a.lhs == b.lhs && a.a0 == b.a0 && a.coeffs == b.coeffs &&
+    a.symmetric == b.symmetric
+
 """
     compact_d8()
 

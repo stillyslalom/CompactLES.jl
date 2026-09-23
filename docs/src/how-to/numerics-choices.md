@@ -28,6 +28,7 @@ measurements:
 | wall-bounded evolution, C6 `:brady_livescu` | 6 | 5.73 |
 | cylindrical axis, spherical origin (folds) | 3 | 3.76 / 2.97 |
 | patch or level interface | 3 to 4 | 3.31 / 3.62 |
+| patch or level interface, C6 `interface_divergence` `:brady_livescu`, Float64 | 5 to 6 | 5.8 to 7.0 / 5.1 to 6.0 |
 
 With default wall closures, the closed-line C8 and C10 studies have the same
 wall and maximum-norm errors as C6, to the printed digits. Their benefit is
@@ -111,6 +112,25 @@ and is not supported as a wall configuration.
 Patch and level interfaces keep the cascade rows regardless of the selected
 wall closures. An interface imposes no boundary condition, and the cascade
 rows have smaller truncation-error constants there.
+
+The `interface_divergence` keyword replaces the flux divergence's rows at
+interface ends only, leaving walls and the gradient rows unchanged. Pass a
+scheme with the same interior coefficients and element type as `deriv`, such
+as `interface_divergence = lele_d1_6(closures = :brady_livescu)` beside the
+default `deriv`; any other scheme is rejected at setup. On smooth Float64
+flows, the Brady–Livescu rows lower the interface error by one to three
+orders of magnitude and raise the measured order to about 6, or 5 for an
+acoustic wave through a coarse–fine face. They cost nothing per step. They
+are experimental, and are not recommended for:
+
+- Float32 runs, whose interface error floor they do not lower;
+- shocks crossing same-level patch planes, where they halve the minimum
+  pressure behind the shock;
+- runs that use `interface_rhs = :onesided` to survive a discontinuity on a
+  shared plane, which then fail within two steps.
+
+The `:cascade4` rows are unstable between a wall and an interface; do not
+use them here.
 
 ## Boundary conditions
 

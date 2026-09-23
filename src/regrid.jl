@@ -548,7 +548,8 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                           solver.art.smoother, spec.interface_rhs,
                           spec.backend, ws_pool,
                           solver.equations.n_species, n_cons,
-                          solver.art.species_flux === :bulk, fi, 1) : nothing
+                          solver.art.species_flux === :bulk, fi, 1;
+                          interface_divergence=spec.interface_divergence) : nothing
     newlt = build_level_transfer(T, newregion, active_g, spec.n_halo,
                                  [patches[1].region], [1],
                                  Union{Nothing,Decomp{T}}[patches[1].decomp],
@@ -1003,7 +1004,9 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                              spec.backend, ws_pool,
                                              solver.equations.n_species, n_cons,
                                              solver.art.species_flux === :bulk,
-                                             1, 1, spec.tile)
+                                             1, 1, spec.tile;
+                                             interface_divergence=
+                                                 spec.interface_divergence)
         append!(new_patches, built)
         resize!(new_states, length(held))
         resize!(new_dQ, length(held))
@@ -1041,7 +1044,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                       spec.interface_rhs, spec.backend, ws_pool,
                                       solver.equations.n_species, n_cons,
                                       solver.art.species_flux === :bulk,
-                                      idx, 1, faces[ti])
+                                      idx, 1, faces[ti];
+                                      interface_divergence=spec.interface_divergence)
                 Q = _state_like(p.rho, n_cons)
                 push!(new_states, Q)
                 push!(new_dQ, zero(Q))

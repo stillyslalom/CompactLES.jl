@@ -2144,6 +2144,7 @@ mutable struct RegridSpec{T}
     checks::Int                      # regrid checks so far
     created::Dict{BlockRegion,Int}   # per current tile: the check it was
                                      # created at (0 at setup)
+    interface_divergence::Union{Nothing,CompactScheme{T},BandedCompactScheme{T}}
 end
 
 RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
@@ -2153,7 +2154,7 @@ RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
                   deriv, filt, smoo, backend, tile, last_step,
                   rebalance, persist, 0, 1.0, 0.0, 0.0, 0.0,
                   zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
-                  T(2), 1, 0, Dict{BlockRegion,Int}())
+                  T(2), 1, 0, Dict{BlockRegion,Int}(), nothing)
 
 """
     hermite_level_shell!(solver, states, lt, θ, dt)

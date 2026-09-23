@@ -234,6 +234,52 @@ end
     rm(dir; recursive=true)
 end
 
+@testset "interface divergence rows survive regrids and a restart" begin
+    # Every refined patch a regrid or a restart builds plans its divergence
+    # with the source scheme's rows at both ends, box and tiled alike, and
+    # the restarted run continues bit for bit.
+    wall = (SlipWallBC(), SlipWallBC())
+    ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    bl = lele_d1_6(closures=:brady_livescu)
+    mk(; kw...) = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=(wall, io_per, io_per), cfl=0.2, subcycle=true,
+                         regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
+                         interface_divergence=bl; kw...)
+    function rows_ok(s)
+        all(getfield(s, :patches)[2:end]) do p
+            ref = CL.plan_direction(p.decomp, lele_d1_6(), 1, p.h[1];
+                                    lo_closures=bl.closures, hi_closures=bl.closures)
+            p.div_plans[1].clo == ref.clo && p.div_plans[1].chi == ref.chi
+        end
+    end
+    dir = mktempdir()
+    for tile in (8, 0)
+        stem = joinpath(dir, "tile$tile")
+        s = mk(tile=tile)
+        @test getfield(s, :regrid).interface_divergence === bl
+        states = allocate_state(s)
+        initialize!(s, states, ic)
+        run!(s, states; tfinal=1.0, nmax=23)
+        @test level_regions(s, 1) != level_regions(mk(tile=tile), 1)
+        @test rows_ok(s)
+        save_checkpoint(s, states, stem)
+        run!(s, states; tfinal=1.0, nmax=40)
+        r = mk(tile=tile)
+        sr = allocate_state(r)
+        load_checkpoint!(r, sr, stem)
+        @test rows_ok(r)
+        run!(r, sr; tfinal=1.0, nmax=40)
+        @test r.t == s.t && level_regions(r, 1) == level_regions(s, 1)
+        @test rows_ok(r)
+        @test all(eachindex(states)) do i
+            inner = CL.interior(s.patches[i].decomp)
+            parent(sr[i])[inner, :] == parent(states[i])[inner, :]
+        end
+    end
+    rm(dir; recursive=true)
+end
+
 @testset "checkpoint round trip in Float32" begin
     T = Float32
     dir = mktempdir()

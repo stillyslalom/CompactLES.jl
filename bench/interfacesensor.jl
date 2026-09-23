@@ -35,6 +35,9 @@
 #               with a two-species Sod whose contact carries the composition.
 #               `crossing_variants=all` or comma-separated label substrings
 #               selects rows, including both stepping modes at three levels.
+#               Rows marked `idiv` take the flux divergence's interface rows
+#               from an `interface_divergence` source; `reversed` rows mirror
+#               the tube so the shock runs right to left through the faces.
 #   filter      the filter's own change at the shell: max |Δρ| per distance
 #               from a coarse-fine face over the run's passes, under the
 #               three interface filter row sets. A smooth entropy wave and
@@ -379,6 +382,17 @@ two_gases() = IdealMixture([IdealSpecies{Float64}("species-a", 1.0, 1.4),
 
 deriv_of(row) = row.scheme === :C10 ? lele_d1_10(closures=row.closures) :
                 lele_d1_6(closures=row.closures)
+idiv_of(row) = row.idiv === nothing ? nothing : lele_d1_6(closures=row.idiv)
+
+# The row's initial data, mirrored about x = 1/2 when the row runs reversed.
+function ic_of(row)
+    f = row.species == 2 ? sod2_ic : sod_ic
+    return row.direction > 0 ? f : (x, y, z) -> f(1 - x, y, z)
+end
+
+# A region of a level's node space `0:nmax` mirrored end for end.
+mirror_region(r, nmax) = BlockRegion((nmax - (r.offset[1] + r.extent[1] - 1), 0, 0),
+                                     r.extent)
 
 const CROSSING_CFL = 0.4
 const SHELL_W = 4
@@ -397,16 +411,21 @@ function crossing_regions(N, depth)
 end
 
 function crossing_solver(row, N)
+    regions = crossing_regions(N, row.depth)
+    if row.direction < 0
+        regions = regions isa BlockRegion ? mirror_region(regions, N - 1) :
+                  [mirror_region(regions[1], N - 1), mirror_region(regions[2], 3(N - 1))]
+    end
     extra = row.mode === :patches ? (patch_grid=row.patch_grid,) :
-            (refine=crossing_regions(N, row.depth), subcycle=row.subcycle,
-             tile=row.tile)
+            (refine=regions, subcycle=row.subcycle, tile=row.tile)
     eos = row.species == 2 ? two_gases() : IdealSpecies("gas"; gamma=1.4, R=1.0)
     s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(WALL2, PER, PER),
                cfl=CROSSING_CFL, eos=eos, deriv=deriv_of(row),
                art=ArtParams(enabled=row.art), filter_cfl=row.filter_cfl,
+               interface_rhs=row.interface_rhs, interface_divergence=idiv_of(row),
                control=StepControl(validity=:permissive); extra...)
     Q = allocate_state(s)
-    initialize!(s, Q, row.species == 2 ? sod2_ic : sod_ic)
+    initialize!(s, Q, ic_of(row))
     return s, Q
 end
 
@@ -486,13 +505,14 @@ end
 
 # Momentum ahead of the shock on the root, the quantity the level-test gate
 # reads: the exact solution is still quiescent above x = 0.85 at t = 0.1.
-function ahead_noise(solver, states)
+function ahead_noise(solver, states, direction=1)
     m1 = solver.equations.i_mom[1]
     worst = 0.0
     for (ps, Q) in CL.eachpatch(solver, states)
         ps.patch.level == 0 || continue
         for i in 1:ps.decomp.n_local[1]
-            xcoord(ps, 1, i) > 0.85 || continue
+            x = xcoord(ps, 1, i)
+            (direction > 0 ? x > 0.85 : x < 0.15) || continue
             worst = max(worst, abs(Q[gidx(ps, i, 1, 1), m1]))
         end
     end
@@ -525,7 +545,7 @@ function reference_lines(row, N, ts, nmax)
                filter_cfl=row.filter_cfl,
                control=StepControl(validity=:permissive))
     Q = allocate_state(s)
-    initialize!(s, Q, row.species == 2 ? sod2_ic : sod_ic)
+    initialize!(s, Q, ic_of(row))
     ws = Workspace(Q)
     out = Vector{Vector{Float64}}()
     for t in ts
@@ -538,7 +558,8 @@ function reference_lines(row, N, ts, nmax)
     return out
 end
 
-refkey(row) = (row.scheme, row.closures, row.filter_cfl, row.art, row.species)
+refkey(row) = (row.scheme, row.closures, row.filter_cfl, row.art, row.species,
+               row.direction)
 
 function crossing_row(row, N, ts, nmax, refs)
     have_ref = !failed(refs)
@@ -559,7 +580,7 @@ function crossing_row(row, N, ts, nmax, refs)
             push!(qs, region_max(s, states, diffusivity_number))
             k == 1 && continue
             have_ref && push!(errs, region_max(s, states, density_error(refs[k])))
-            k == 2 && (noise = ahead_noise(s, states))
+            k == 2 && (noise = ahead_noise(s, states, row.direction))
         end
         exc = row.species == 2 ? shell_excursion(s, states) : (0.0, 0.0)
         return (; steps=s.step, noise, mon, errs, qs, exc, t=s.t,
@@ -600,7 +621,8 @@ end
 function crossing_rows()
     base = (; label="base (C6, subcycled)", mode=:levels, depth=2, subcycle=true,
             tile=0, scheme=:C6, closures=:neutral3, filter_cfl=0.35, art=true,
-            ghosts=true, patch_grid=(1, 1, 1), species=1)
+            ghosts=true, patch_grid=(1, 1, 1), species=1, idiv=nothing,
+            direction=1, interface_rhs=:extended)
     rows = Any[base]
     HAS_GHOST_TOGGLE &&
         push!(rows, merge(base, (; label="sensor taps clamped", ghosts=false)))
@@ -619,6 +641,25 @@ function crossing_rows()
                              patch_grid=(2, 1, 1))))
     push!(rows, merge(base, (; label="three patches", mode=:patches,
                              patch_grid=(3, 1, 1))))
+    # The interface divergence rows alone, the walls on the default rows.
+    # "two patches" puts the diaphragm on the shared plane.
+    for cl in (:cascade4, :brady_livescu)
+        for (label, change) in (("", (;)), (" global dt", (; subcycle=false)),
+                                (" three levels", (; depth=3)),
+                                (" tile 8", (; tile=8)),
+                                (" reversed", (; direction=-1)),
+                                (" two patches", (; mode=:patches, patch_grid=(2, 1, 1))),
+                                (" two patches onesided", (; mode=:patches,
+                                                            patch_grid=(2, 1, 1),
+                                                            interface_rhs=:onesided)),
+                                (" three patches", (; mode=:patches,
+                                                    patch_grid=(3, 1, 1))))
+            push!(rows, merge(base, change, (; label="idiv $cl$label", idiv=cl)))
+        end
+    end
+    push!(rows, merge(base, (; label="reversed", direction=-1)))
+    push!(rows, merge(base, (; label="two patches onesided", mode=:patches,
+                             patch_grid=(2, 1, 1), interface_rhs=:onesided)))
     species = Any[]
     for g in GHOST_MODES
         push!(species, merge(base, (; label="two species, " * ghost_label(g),

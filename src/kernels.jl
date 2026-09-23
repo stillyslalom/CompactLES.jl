@@ -507,6 +507,36 @@ function interface_divergence_closures(scheme::CompactScheme{T}) where {T}
         cascade_closures(T, nrows, 3) : scheme.closures
 end
 
+# Closure rows of the flux divergence at a patch or level interface end: those
+# of `interface_divergence_closures(deriv)` when the `interface_divergence`
+# source is `nothing`, the source scheme's own closure rows otherwise.
+interface_divergence_rows(deriv::AbstractCompactScheme, ::Nothing) =
+    interface_divergence_closures(deriv)
+function interface_divergence_rows(deriv::AbstractCompactScheme,
+                                   source::AbstractCompactScheme)
+    # A closure row is derived against the interior rows it hands over to:
+    # its truncation constants and the stability of the closed line both
+    # assume that interior, so rows taken from a scheme with other interior
+    # coefficients, or another element type, are not admitted.
+    _same_interior(deriv, source) ||
+        throw(ArgumentError("interface_divergence must carry the interior " *
+                            "coefficients and element type of deriv; " *
+                            "'$(source.name)' ($(typeof(source))) does not " *
+                            "match '$(deriv.name)' ($(typeof(deriv)))"))
+    source.symmetric &&
+        throw(ArgumentError("interface_divergence must be a first-derivative " *
+                            "scheme; '$(source.name)' is symmetric"))
+    nclosure(source) >= 1 ||
+        throw(ArgumentError("interface_divergence '$(source.name)' carries no " *
+                            "closure rows"))
+    return source.closures
+end
+
+_same_interior(a::AbstractCompactScheme, b::AbstractCompactScheme) = false
+_same_interior(a::CompactScheme{T}, b::CompactScheme{T}) where {T} =
+    a.alpha == b.alpha && a.a0 == b.a0 && a.coeffs == b.coeffs &&
+    a.symmetric == b.symmetric
+
 # --- Reflecting-wall closures ------------------------------------------------
 #
 # At a reflecting wall the solution continues past the boundary node as its own
