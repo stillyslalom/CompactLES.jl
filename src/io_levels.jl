@@ -325,7 +325,8 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         Union{Nothing,Decomp{T}}[root.decomp], local_of[ti], restriction,
         n_cons, getfield(solver, :subcycle),
         local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp,
-        root_lc.comm, length(owners[ti]), faces[ti])
+        root_lc.comm, length(owners[ti]), faces[ti];
+        interpolation_order=spec.interpolation_order)
         for (ti, tr) in enumerate(regions)]
     resize!(patches, 1 + length(held))
     resize!(states, 1 + length(held))

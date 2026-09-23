@@ -214,6 +214,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 interface_divergence::Union{Nothing,AbstractCompactScheme}=nothing,
                 refine::Union{Nothing,BlockRegion,Vector{BlockRegion}}=nothing,
                 level_restriction::Symbol=:inject,
+                level_interpolation_order::Int=6,
                 subcycle::Bool=false,
                 regrid_interval::Int=0,
                 tag_threshold::Real=0.02,
@@ -440,6 +441,14 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         level_restriction in (:inject, :filter) ||
             error("level_restriction must be :inject or :filter, " *
                   "got :$level_restriction")
+        # The Lagrange tables are built for even orders 2 to 8. Every stencil
+        # fits the gathered box, whose extent along a refined dimension is at
+        # least 4 + 2·LEVEL_BUFFER = 12 nodes; up to order 6 it is centered at
+        # every shell node, and at order 8 the outermost ghost layer's stencil
+        # sits one node inward of centered.
+        level_interpolation_order in (2, 4, 6, 8) ||
+            error("level_interpolation_order must be 2, 4, 6 or 8, " *
+                  "got $level_interpolation_order")
         # The level shell is read from the fine box at an offset of
         # 3·LEVEL_BUFFER nodes; a halo wider than that would index the box's
         # own zero halo silently (`_write_fine_shell!`, `_impose_shell!`).
@@ -811,7 +820,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                              for p in pids],
                     local_of[ti], level_restriction, n_cons, subcycle,
                     decomp_at(local_of[ti]), parent_lc.comm,
-                    length(owners[ti]), faces[ti]))
+                    length(owners[ti]), faces[ti];
+                    interpolation_order=level_interpolation_order))
             end
             if lc.owned
                 # A record's partner is a rank number in the communicator the
@@ -864,7 +874,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                                    2 * decomp.n_halo_d[d], 3)),
                            T(untag_ratio), tile_lifetime, 0,
                            Dict(lt.region => 0 for lt in levels[2].transfers),
-                           interface_divergence)
+                           interface_divergence,
+                           level_interpolation_order)
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,

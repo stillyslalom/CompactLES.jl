@@ -211,6 +211,73 @@ end
                                    regrid_interval=-1)
 end
 
+@testset "level interpolation order: configuration, exactness and rebuilds" begin
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    mk(p; kw...) = Solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
+                          bcs=per3l, art=ArtParams(enabled=false), filter_interval=0,
+                          refine=BlockRegion((40, 0, 0), (17, 1, 1)),
+                          level_interpolation_order=p, kw...)
+    for bad in (0, 3, 5, 10)
+        @test_throws ErrorException mk(bad)
+    end
+    chain_order(s) = only(unique(pl.interp_order
+                                 for pl in getfield(s, :levels)[2].transfers[1].pplans))
+    @test chain_order(Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
+                             refine=BlockRegion((40, 0, 0), (17, 1, 1)))) == 6
+    # The shell reproduces a polynomial of degree p − 1 and not one of
+    # degree p: the chain runs at the order requested.
+    for p in (2, 4, 6, 8)
+        s = mk(p)
+        @test chain_order(s) == p
+        errs = map((p - 1, p)) do deg
+            states = allocate_state(s)
+            f(x) = (3 * (x - π))^deg
+            for (k, Q) in enumerate(states)
+                ps = PatchSolver(s, s.patches[k])
+                pad = ps.decomp.n_halo_d[1]
+                for I in CartesianIndices(size(Q)[1:3])
+                    Q[I, 1] = f(xcoord(ps, 1, I[1] - pad))
+                    Q[I, 5] = 2.5
+                end
+            end
+            prolong_level_ghosts!(s, states)
+            ps = PatchSolver(s, s.patches[2])
+            pad = ps.decomp.n_halo_d[1]
+            slots = CartesianIndices(size(states[2])[1:3])
+            maximum(abs(states[2][I, 1] - f(xcoord(ps, 1, I[1] - pad))) for I in slots) /
+                maximum(abs(states[2][I, 1]) for I in slots)
+        end
+        @test errs[1] < 1e-13
+        @test errs[2] > 1e-10
+    end
+    # A regrid rebuilds its transfer at the configured order.
+    center = Ref(Float64(π))
+    predicate = (patch, I) -> abs(xcoord(patch, 1, interior_index(patch, I)[1]) -
+                                  center[]) < π / 6
+    s = mk(8; regrid_interval=1, tag_threshold=1e6, tag_buffer=2,
+           tag_predicate=predicate)
+    @test getfield(s, :regrid).interpolation_order == 8
+    states = allocate_state(s)
+    initialize!(s, states, (x, y, z) -> Prim(rho=1 + 0.2sin(x), u=(0.5, 0, 0), p=1.0))
+    center[] = π + 0.5
+    getfield(s, :regrid).checks += 1     # the run! cadence hook's count
+    @test CL.regrid!(s, states, Workspace(states), nothing)
+    @test chain_order(s) == 8
+    # Both configuration fronts carry the keyword, and the sensor-selected
+    # initial layout (built by the regrid machinery) keeps it.
+    prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3l,
+                   ic=(x, y, z) -> Prim(p=1.0, rho=1.0, u=(0.0, 0.0, 0.0)))
+    s4, _ = setup(prob, Numerics(n_global=(96, 1, 1), filter_interval=0,
+                                 refine=BlockRegion((40, 0, 0), (17, 1, 1)),
+                                 level_interpolation_order=4))
+    @test chain_order(s4) == 4
+    s8, _ = setup(prob, Numerics(n_global=(96, 1, 1), filter_interval=0,
+                                 art=ArtParams(enabled=false),
+                                 amr=AMR(initial=(x, y, z, t) -> abs(x - 0.7) < 0.04,
+                                         level_interpolation_order=8)))
+    @test chain_order(s8) == 8
+end
+
 @testset "level rank subsets: sizing and the serial ownership" begin
     # `_level_ranks` sizes a level's rank subset from the largest count for
     # which every tile clears the C8 filter's nine-point minimum. The numbers

@@ -267,7 +267,9 @@ end
         return solver, states
     end
     for kw in ((;), (subcycle=true,),
-               (subcycle=true, regrid_interval=20, tag_buffer=8))
+               (subcycle=true, regrid_interval=20, tag_buffer=8),
+               (subcycle=true, regrid_interval=20, tag_buffer=8,
+                level_interpolation_order=8))
         s1, q1 = wave(CPUBackend(); kw...)
         CL.FORCE_KA[] = true
         CL.FORCE_DEVICE_EXCHANGE[] = true

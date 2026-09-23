@@ -44,6 +44,7 @@ regridding is enabled, while a multi-level vector remains static.
 | `rebalance` | `0` | Off at zero; otherwise minimum measured maximum/mean rank-busy-time ratio for tile repartitioning |
 | `rebalance_persist` | `2` | Consecutive imbalanced checks required before repartitioning |
 | `level_restriction` | `:inject` | Coincident fine-node injection; `:filter` anti-aliases before restriction and is serial-only |
+| `level_interpolation_order` | `6` | Lagrange order, 2, 4, 6 or 8, of the interpolation that fills fine ghost data and newly refined regions from the parent |
 | `subcycle` | `false` | At `true`, each fine level takes three steps per parent step with time-interpolated boundary data |
 
 The density criterion is enabled by default, including when `initial` is a
@@ -61,7 +62,17 @@ be combined with it.
 After selecting the layout, setup evaluates the initial-condition function
 directly at each fine node. During a run, a newly refined region is filled
 from the current coarse solution and preserves fine data where regions
-overlap. `regrid_interval=0` keeps the initial layout fixed. Positive intervals
+overlap.
+
+The same interpolation fills each fine level's ghost data at every stage,
+and `level_interpolation_order` sets its order. An interpolated value of
+order p gives a first derivative of order p − 1 and a second derivative of
+order p − 2. The default 6 does not limit accuracy under the default
+interface rows. Order 8 reduces the error in viscous, filtered or
+multidimensional runs and with `interface_divergence`, at no measurable cost
+in conservation or regrid drift. Orders above 2 are not monotone: refilling
+a step narrower than one parent cell overshoots by up to about 3% of the
+jump. Order 4 has no measured advantage. `regrid_interval=0` keeps the initial layout fixed. Positive intervals
 support one refined level; a vector of multiple nested regions is static.
 The solver retains all levels and restriction updates covered parent nodes.
 Composite integrals and profiles avoid counting both parent and fine values

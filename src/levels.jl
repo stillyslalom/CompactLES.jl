@@ -19,7 +19,8 @@
 # through the point-sample halves of the transfer machinery (transfer.jl):
 #
 #   - After every RK stage update, `prolong_level_ghosts!` interpolates the
-#     coarse state (order 6) over a box extending `LEVEL_BUFFER` coarse nodes
+#     coarse state (order 6 unless `level_interpolation_order` says otherwise)
+#     over a box extending `LEVEL_BUFFER` coarse nodes
 #     beyond the refined region and overwrites the fine patch's ghost ring and
 #     its boundary-plane nodes from the result. Including the plane nodes lets
 #     the coarse solution force the fine solve's boundary as a `DirichletBC`
@@ -1192,7 +1193,7 @@ end
     build_level_transfer(T, region, active, n_halo, coarse_regions,
                          coarse_local, coarse_decomps, fine_index,
                          restriction, n_cons, subcycle, fine_decomp,
-                         parent_comm, np_tile, faces)
+                         parent_comm, np_tile, faces; interpolation_order=6)
 
 The [`LevelTransfer`](@ref) coupling one refined patch to its parents. Built
 on every rank of the parent level's subset, the child's owners and the ranks
@@ -1217,14 +1218,14 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
                               n_cons::Int, subcycle::Bool,
                               fine_decomp::Union{Nothing,Decomp{T}},
                               parent_comm::MPI.Comm, np_tile::Int,
-                              faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3)
-                              ) where {T}
+                              faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3);
+                              interpolation_order::Int=6) where {T}
     imposed = ntuple(d -> (faces[d][1] == 0, faces[d][2] == 0), 3)
     dims_to_refine = [d for d in 1:3 if active[d]]
     boxext = ntuple(d -> active[d] ? region.extent[d] + 2 * LEVEL_BUFFER :
                                      region.extent[d], 3)
     pdecomps, pplans, pstage = _refine_chain(T, boxext, active, dims_to_refine,
-                                             n_halo, 6)
+                                             n_halo, interpolation_order)
     # The restriction chain never interpolates (that half of each TransferPlan
     # goes unused), so it is built at interpolation order 2, which admits the
     # smallest legal regions. Only `:filter` restriction applies it; `:inject`
@@ -1816,9 +1817,10 @@ end
     prolong_level_ghosts!(solver, states)
 
 Impose every refined patch's ghost ring and boundary-plane nodes from the
-order-6 interpolation of the current state of its parent over the buffered
-box, per conserved component, and return `states`. Levels are visited from
-the root down, so a patch two levels deep reads a parent whose own shell has
+Lagrange interpolation (`level_interpolation_order`) of the current state of
+its parent over the buffered box, per conserved component, and return
+`states`. Levels are visited from the root down, so a patch two levels deep
+reads a parent whose own shell has
 just been imposed. Runs after every RK stage update and inside the pre-step
 synchronization; a solver without refinement returns immediately.
 Collective in two rank sets per transfer, so the loop is written over levels
@@ -2080,7 +2082,9 @@ Configuration and rebuild inputs for tagging-driven regridding
 (`src/regrid.jl`): the regrid cadence in coarse steps, the tag criteria, the
 buffer of coarse cells added around tagged cells, the nesting margin, and
 everything a fine-patch rebuild needs that the `Solver` does not itself
-retain: the schemes, halo width, interface treatment, and backend.
+retain: the schemes, including the `interface_divergence` source, the
+halo width, the interface treatment, the level interpolation order and the
+backend.
 `last_step` records the step of the most recent regrid check so a run
 resumed on the same solver keeps the cadence. Constructed by the
 [`Solver`](@ref) constructor's `regrid_interval` keyword; consumed by
@@ -2145,6 +2149,7 @@ mutable struct RegridSpec{T}
     created::Dict{BlockRegion,Int}   # per current tile: the check it was
                                      # created at (0 at setup)
     interface_divergence::Union{Nothing,CompactScheme{T},BandedCompactScheme{T}}
+    interpolation_order::Int         # Lagrange order of a rebuilt transfer
 end
 
 RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
@@ -2154,14 +2159,14 @@ RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
                   deriv, filt, smoo, backend, tile, last_step,
                   rebalance, persist, 0, 1.0, 0.0, 0.0, 0.0,
                   zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
-                  T(2), 1, 0, Dict{BlockRegion,Int}(), nothing)
+                  T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6)
 
 """
     hermite_level_shell!(solver, states, lt, θ, dt)
 
 Impose the shell (ghost ring plus boundary planes) of the refined patch of
 `lt` from the cubic Hermite reconstruction of its parent's solution at
-fraction `θ` of the parent step of size `dt`, through the same order-6
+fraction `θ` of the parent step of size `dt`, through the same
 interpolation chain [`prolong_level_ghosts!`](@ref) uses. Requires both
 endpoint slots filled by [`save_level_box!`](@ref); at `θ = 0` the result is
 exactly the parent's `t^n` state and the imposition reduces to the

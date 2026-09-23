@@ -17,6 +17,7 @@ vector of nested regions is static.
 Base.@kwdef struct AMR
     initial::Any = :sensor
     level_restriction::Symbol = :inject
+    level_interpolation_order::Int = 6
     subcycle::Bool = false
     regrid_interval::Int = 0
     tag_threshold::Float64 = 0.02
@@ -45,6 +46,7 @@ function _amr_keywords(amr::AMR; refine=amr.initial, bootstrap::Bool=false)
     interval = bootstrap ? max(1, amr.regrid_interval) : amr.regrid_interval
     predicate = _amr_callable(amr.initial) ? _amr_physical_tag(amr.initial) : nothing
     return (; refine, level_restriction=amr.level_restriction,
+            level_interpolation_order=amr.level_interpolation_order,
             subcycle=amr.subcycle, regrid_interval=interval,
             tag_threshold=amr.tag_threshold, tag_buffer=amr.tag_buffer,
             tag_sensor_threshold=amr.tag_sensor_threshold,

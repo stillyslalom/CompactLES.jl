@@ -29,6 +29,20 @@
 #                `interface_divergence` source, walls on the default rows:
 #                same-level and coarse-fine faces, both gradient treatments,
 #                mixed wall and interface ends, Float32, acoustic reflection
+#   transfer     the level rows at each `level_interpolation_order` in
+#                `orders`, C6, C6 Brady–Livescu and C8 Brady–Livescu, with
+#                C10 under the default filter; global step, subcycled, three
+#                levels, viscous, and the 2-D entropy wave through a square
+#                level (`entropy2d_case`)
+#   transfertime the temporal order of the finest two-level grid, global step
+#                and subcycled, at the highest of `orders`
+#
+# The last two run only when named; `all` leaves them out.
+#
+# `coupling` is a Julia expression for a NamedTuple of further `Solver`
+# keywords applied to every row of the two transfer studies, e.g. an
+# interface divergence choice: `coupling="(key=value,)"`. Empty by default,
+# which measures the default interface coupling.
 #
 # Every evolution row is run at `cfl` and at `cfl/2`, and the `dt` column
 # is the relative change of the primary error between the two; a row whose
@@ -45,7 +59,10 @@ const CL = CompactLES
 MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("run this study on one rank")
 include(joinpath(@__DIR__, "..", "test", "smooth_cases.jl"))
 
-const OPTS = CL.script_args(ARGS, (study="all", ns="49,97,193", cfl=0.25, tfinal=0.4))
+const OPTS = CL.script_args(ARGS, (study="all", ns="49,97,193", cfl=0.25, tfinal=0.4,
+                                   orders="4,6,8", coupling=""))
+const TRANSFER_ORDERS = parse.(Int, split(OPTS.orders, ','))
+const COUPLING = isempty(OPTS.coupling) ? (;) : Core.eval(Main, Meta.parse(OPTS.coupling))
 const NS = parse.(Int, split(OPTS.ns, ','))
 const NS_PERIODIC = NS .- 1          # 48, 96, 192: multiples of 24 for the nest
 const CFL = OPTS.cfl
@@ -55,6 +72,7 @@ const GAMMA = 1.4
 const MU = 0.005
 
 selected(name) = OPTS.study == "all" || name in split(OPTS.study, ',')
+named(name) = name in split(OPTS.study, ',')
 
 const DERIVS = (("C6 neutral3", lele_d1_6()),
                 ("C6 cascade3", lele_d1_6(closures=:cascade3)),
@@ -117,7 +135,7 @@ end
 const FAILED = (wall=NaN, interface=NaN, covered=NaN, interior=NaN, l2=NaN, at=(0, 0))
 
 function evolution_study(title, build, reference, ns; primary=:wall, comp=1,
-                         tfinal=TFINAL, cfl=CFL)
+                         tfinal=TFINAL, cfl=CFL, errors=regional_errors)
     header(title)
     hs = Float64[]; es = []
     for N in ns
@@ -128,9 +146,9 @@ function evolution_study(title, build, reference, ns; primary=:wall, comp=1,
             continue
         end
         solver, states = run1
-        e = regional_errors(solver, states, reference(solver, cfl); comp=comp)
+        e = errors(solver, states, reference(solver, cfl); comp=comp)
         solver2, states2 = run2
-        e2 = regional_errors(solver2, states2, reference(solver2, cfl / 2); comp=comp)
+        e2 = errors(solver2, states2, reference(solver2, cfl / 2); comp=comp)
         dtsens = abs(getfield(e2, primary) - getfield(e, primary)) /
                  max(getfield(e, primary), 1e-300)
         push!(hs, root_spacing(solver)); push!(es, e)
@@ -176,6 +194,11 @@ end
 entropy_reference(k, phase) =
     (solver, cfl) -> analytic_reference(solver.equations,
                                         entropy_profile(k, phase; t=solver.t))
+entropy2d_reference() =
+    (solver, cfl) -> begin
+        prof = entropy2d_profile(2, 1, 0.37; t=solver.t)
+        (x, y) -> conserved(solver.equations, prof(x, y))
+    end
 shear_reference(V) =
     (solver, cfl) -> analytic_reference(solver.equations, shear_profile(V, MU; t=solver.t))
 
@@ -582,6 +605,99 @@ function idiv_study()
     end
 end
 
+function transfer_study()
+    println("\n=== level transfer order, fixed physical endpoints, coupling = " *
+            "$(isempty(OPTS.coupling) ? "default" : OPTS.coupling) ===")
+    fine = fine_periodic()
+    derivs = (("C6", lele_d1_6()), ("C6 BL", lele_d1_6(closures=:brady_livescu)),
+              ("C8 BL", lele_d1_8(closures=:brady_livescu)))
+    for (label, deriv) in derivs, p in TRANSFER_ORDERS
+        o = (deriv=deriv, level_interpolation_order=p, COUPLING...)
+        evolution_study("entropy wave k=3, 2 levels, $label, order $p, unfiltered",
+                        (N; cfl) -> entropy_case(N; levels=2, cfl=cfl, o...),
+                        entropy_reference(3, 0.37), NS_PERIODIC;
+                        primary=:interface, tfinal=TFINAL_ENTROPY)
+        evolution_study("entropy wave k=3, 2 levels, $label, order $p, filtered",
+                        (N; cfl) -> entropy_case(N; levels=2, cfl=cfl, filter_interval=1,
+                                                 o...),
+                        entropy_reference(3, 0.37), NS_PERIODIC;
+                        primary=:interface, tfinal=TFINAL_ENTROPY)
+        evolution_study("entropy wave k=3, 2 levels subcycled, $label, order $p, unfiltered",
+                        (N; cfl) -> entropy_case(N; levels=2, subcycle=true, cfl=cfl, o...),
+                        entropy_reference(3, 0.37), NS_PERIODIC;
+                        primary=:interface, tfinal=TFINAL_ENTROPY)
+        evolution_study("entropy wave k=3, 3 levels subcycled, $label, order $p, unfiltered",
+                        (N; cfl) -> entropy_case(N; levels=3, subcycle=true, cfl=cfl, o...),
+                        entropy_reference(3, 0.37), NS_PERIODIC;
+                        primary=:interface, tfinal=TFINAL_ENTROPY)
+        evolution_study("viscous standing wave, 2 levels, $label, order $p, unfiltered",
+                        (N; cfl) -> viscous_periodic_case(N; levels=2, cfl=cfl, o...),
+                        (s, cfl) -> fine, NS_PERIODIC; primary=:interface)
+    end
+    # Two dimensions: the imposed planes carry interpolated values along the
+    # other dimension, so the inviscid solution itself reads the order.
+    ns2 = filter(n -> n % 12 == 0, NS_PERIODIC)
+    for (label, deriv) in derivs[1:2], p in TRANSFER_ORDERS, filtered in (false, true)
+        evolution_study("2-D entropy wave (2, 1), 2 levels, $label, order $p, " *
+                        (filtered ? "filtered" : "unfiltered"),
+                        (N; cfl) -> entropy2d_case(N; cfl=cfl, deriv=deriv,
+                                                   filter_interval=filtered ? 1 : 0,
+                                                   level_interpolation_order=p,
+                                                   COUPLING...),
+                        entropy2d_reference(), ns2; primary=:interface,
+                        tfinal=TFINAL_ENTROPY, errors=regional_errors2d)
+    end
+    # The C10 interior carries the C8 filter in any claim made for it.
+    for p in TRANSFER_ORDERS
+        evolution_study("entropy wave k=3, 2 levels, C10, order $p, filtered",
+                        (N; cfl) -> entropy_case(N; levels=2, cfl=cfl, filter_interval=1,
+                                                 deriv=lele_d1_10(),
+                                                 level_interpolation_order=p,
+                                                 COUPLING...),
+                        entropy_reference(3, 0.37), NS_PERIODIC;
+                        primary=:interface, tfinal=TFINAL_ENTROPY)
+    end
+end
+
+# The time error alone: each run against the same configuration at a sixteenth
+# of the largest step, node by node on the root and the fine patch, so the
+# spatial error, identical in every run, cancels.
+function transfer_time_study()
+    Np = maximum(NS_PERIODIC)
+    p = maximum(TRANSFER_ORDERS)
+    println("
+=== temporal order at a level interface, N = $Np, order $p ===")
+    cfls = (0.8, 0.4, 0.2, 0.1)
+    for (label, deriv) in (("C6", lele_d1_6()),
+                           ("C6 BL", lele_d1_6(closures=:brady_livescu))),
+        subcycle in (false, true)
+        println("
+entropy wave k=3, 2 levels, subcycle=$subcycle, $label, unfiltered")
+        build = (N; cfl) -> entropy_case(N; deriv=deriv, levels=2, subcycle=subcycle,
+                                         cfl=cfl, level_interpolation_order=p,
+                                         COUPLING...)
+        ref = evolve!(build, Np, cfls[end] / 2, TFINAL_ENTROPY)
+        ref === nothing && continue
+        _, ref_states = ref
+        println("   cfl     steps  max |Q − Q(cfl = $(cfls[end] / 2))|  root / fine")
+        ds = Float64[]
+        for cfl in cfls
+            run1 = evolve!(build, Np, cfl, TFINAL_ENTROPY)
+            run1 === nothing && (push!(ds, NaN); continue)
+            solver, states = run1
+            d = [maximum(abs.(parent(states[k])[:, :, :, 1] .-
+                              parent(ref_states[k])[:, :, :, 1])) for k in 1:2]
+            push!(ds, maximum(d))
+            @printf("  %.4f  %5d  %.3e / %.3e
+", cfl, solver.step, d...)
+        end
+        @printf("      temporal orders: %s\n",
+                join((@sprintf("%.2f", log(ds[k] / ds[k+1]) / log(2))
+                      for k in 1:length(ds)-1), " / "))
+        flush(stdout)
+    end
+end
+
 function main()
     t0 = time()
     selected("truncation") && truncation_study()
@@ -594,6 +710,9 @@ function main()
     selected("filter") && filter_study()
     selected("dt") && dt_study()
     selected("idiv") && idiv_study()
+    # Run only when named: they repeat the level rows once per order.
+    named("transfer") && transfer_study()
+    named("transfertime") && transfer_time_study()
     @printf("\ndone in %.1f s\n", time() - t0)
 end
 

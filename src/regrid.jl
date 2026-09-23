@@ -16,7 +16,7 @@
 # level-1 patch and tile clustering only pays once several fine patches exist
 # (reference/AMR_GPU.md, tiles and adjacency).
 #
-# The new fine state is initialized by the order-6 interpolation of the coarse
+# The new fine state is initialized by the Lagrange interpolation of the coarse
 # state, the same operator as the live shell coupling and the right one here
 # for the same reason: the coarse data are point samples, which the
 # deconvolving `prolong!` would sharpen spuriously (see `interpolate!`).
@@ -468,7 +468,7 @@ Internal layout-rebuild implementation for [`regrid!`](@ref).
 Retag the coarse level and, when the tagged region moved, rebuild the level-1
 patch over it: a new [`Patch`](@ref) and [`LevelTransfer`](@ref) from the
 schemes retained on [`RegridSpec`](@ref), a new fine state initialized by
-order-6 interpolation of the coarse state with surviving fine data copied
+Lagrange interpolation of the coarse state with surviving fine data copied
 across the region overlap, and stage arrays for the new extents. The RHS
 scratch is taken from the rank's pool, into which the departing patch's set
 is returned first, so a region that moved without changing extent allocates
@@ -556,7 +556,8 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                                  fi, lt.restriction, n_cons,
                                  getfield(solver, :subcycle),
                                  newfine === nothing ? nothing : newfine.decomp,
-                                 root_lc.comm, length(owners[1]))
+                                 root_lc.comm, length(owners[1]);
+                                 interpolation_order=spec.interpolation_order)
     _resize_level_patches!(solver, states, workspace, held ? 2 : 1)
     if held
         Qf_new = _state_like(newfine.rho, n_cons)
@@ -1059,7 +1060,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         Union{Nothing,Decomp{T}}[root.decomp], local_of[ti],
         lev.transfers[1].restriction, n_cons, getfield(solver, :subcycle),
         local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp,
-        root_lc.comm, length(owners[ti]), faces[ti])
+        root_lc.comm, length(owners[ti]), faces[ti];
+        interpolation_order=spec.interpolation_order)
         for (ti, tr) in enumerate(wanted)]
     _resize_level_patches!(solver, states, workspace, 1 + length(held))
     for (k, p) in enumerate(new_patches)

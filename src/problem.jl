@@ -706,6 +706,12 @@ combined with `amr`.
 - `level_restriction`: `:inject` (default) writes the fine coincident-node
   values onto the covered region of the parent; `:filter` applies the
   invertible transfer pair's anti-alias filter first.
+- `level_interpolation_order`: `6` (default), or 2, 4 or 8. The order of
+  the Lagrange interpolation from the parent that fills a refined level's
+  ghost ring and boundary planes at every stage, and a newly refined
+  region at a regrid. Order 8 lowers the error with viscosity, the filter,
+  a multidimensional level or `interface_divergence`; 2 is the only
+  monotone choice. Checkpoints do not record it.
 - `subcycle`: `false` (default) advances every level at the global dt;
   `true` selects the Berger–Oliger step, three steps of a third of the
   parent's step on each refined level, recursively, with Hermite boundary
@@ -782,6 +788,7 @@ Base.@kwdef struct Numerics
     amr::Union{Nothing,AMR} = nothing
     refine::Union{Nothing,BlockRegion,Vector{BlockRegion}} = nothing
     level_restriction::Symbol = :inject
+    level_interpolation_order::Int = 6
     subcycle::Bool = false
     regrid_interval::Int = 0
     tag_threshold::Float64 = 0.02
@@ -798,7 +805,8 @@ Base.@kwdef struct Numerics
 end
 
 const _AMR_LEGACY_FIELDS = (
-    :refine, :level_restriction, :subcycle, :regrid_interval,
+    :refine, :level_restriction, :level_interpolation_order, :subcycle,
+    :regrid_interval,
     :tag_threshold, :tag_buffer, :tag_sensor_threshold, :tag_gradient_threshold,
     :tag_vorticity_threshold, :tag_predicate, :untag_ratio, :tile_lifetime,
     :tile, :rebalance, :rebalance_persist,

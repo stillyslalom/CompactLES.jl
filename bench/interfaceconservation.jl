@@ -32,6 +32,7 @@
 # `idiv=cascade4` or `idiv=brady_livescu` takes the flux divergence's rows at
 # every interface end from that `interface_divergence` source (`default`
 # keeps the solver's own); the uniform baseline has no interface to change.
+# `interpolation_order` sets `level_interpolation_order` on the refined layouts.
 #
 # The predeclared application budgets are deliberately coarse enough to be
 # useful on a long, interface-crossing calculation: 0.1% of initial mass,
@@ -58,7 +59,7 @@ const args = CompactLES.script_args(ARGS, (N=192, ny=32, tfinal=8.0, nmax=typema
                                            smoke=false, moving_tfinal=8.0,
                                            samples=8, parts="all", check=false,
                                            moving_width=0.18, filter_interval=1,
-                                           maxlevels=3,
+                                           maxlevels=3, interpolation_order=6,
                                            layouts="uniform,samelevel,depth2,depth3",
                                            stepping="both", idiv="default");
                                     positional=(:N, :tfinal))
@@ -177,7 +178,8 @@ function build(mode, N, ny; subcycle=false, regrid=false)
          regrid_interval=regrid ? 1_000_000 : 0, tag_threshold=1e6,
          # Species-gradient tagging follows the translating composition sheet;
          # density is intentionally uniform in this thermodynamic control.
-         tag_gradient_threshold=regrid ? 0.02 : 0, tag_buffer=3)
+         tag_gradient_threshold=regrid ? 0.02 : 0, tag_buffer=3,
+         level_interpolation_order=args.interpolation_order)
     end
     source = mode === :uniform || args.idiv == "default" ? nothing :
              lele_d1_6(closures=Symbol(args.idiv))
@@ -308,7 +310,8 @@ function main()
                          "filter_interval=$(args.filter_interval), cfl=0.45, " *
                          "validity=permissive, moving_width=$(args.moving_width), " *
                          "check=$(args.check), layouts=$(args.layouts), " *
-                         "stepping=$(args.stepping).")
+                         "stepping=$(args.stepping), " *
+                         "interpolation_order=$(args.interpolation_order).")
     rank == 0 && flush(stdout)
     parts = Set(Symbol.(split(args.parts, ',')))
     allparts = :all in parts

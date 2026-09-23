@@ -42,7 +42,8 @@ section that moved it says so in one sentence and the older figure is gone.
 18. [Fold order and geometry limits](#fold-order-and-geometry-limits) (`bench/foldorder.jl`)
 19. [Operator and step cost](#operator-and-step-cost) (`bench/derivcost.jl`,
     `bench/phases.jl`)
-20. [AMR](#amr) (`bench/amr_transfer.jl`, `test/level_tests.jl`)
+20. [AMR](#amr) (`bench/amr_transfer.jl`, `bench/leveltransfer.jl`,
+    `test/level_tests.jl`)
 21. [Temperature-dependent transport](#temperature-dependent-transport)
     (`test/transport_tests.jl`, `test/transport_integration_tests.jl`)
 22. [The bulk species channel in three dimensions](#the-bulk-species-channel-in-three-dimensions)
@@ -2071,6 +2072,66 @@ inviscid wall, C6 BL, E              8.409e-9    1.427e-10   3.051e-12   5.88 / 
 The energy reads the density's order at the wall and the momentum half an order more; at a
 level interface the three components read one order to two digits, so the density rows the
 guards are set from are representative.
+
+### Level transfer order
+
+`julia --project=. -t 1 bench/boundaryorder.jl study=transfer,transfertime`
+(about thirteen minutes; `coupling="(key=value,)"` reruns every row under
+another interface coupling). The level rows at each
+`level_interpolation_order`, default interface coupling, interface window at
+N = 192 with the orders over 48 / 96 / 192; "same" is identical to the
+last digit across orders 4, 6 and 8.
+
+```
+                                            order 4             order 6             order 8
+1-D, 2 levels, C6, unfiltered               9.408e-8 (same)     same                same         3.41 / 3.83
+1-D, 2 levels, C6, filtered                 8.968e-8 4.31/3.99  1.577e-8 4.29/3.95  1.561e-8 4.10/3.91
+1-D, 2 levels subcycled / 3 levels, C6      9.198e-8 / 7.192e-8, same at every order
+1-D viscous, 2 levels, C6                   4.575e-10 3.80/4.17 8.597e-10 3.61/3.65 8.616e-10 3.61/3.65
+1-D, 2 levels, C6 BL, unfiltered            6.401e-11 (same)    same                same         6.02 / 6.01
+1-D, 2 levels, C6 BL, filtered              3.309e-7 3.67/3.96  7.378e-10 5.25/5.81 1.049e-10 6.98/6.78
+1-D, 2 levels subcycled / 3 levels, C6 BL   6.480e-11 / 6.491e-11, same at every order
+1-D viscous, 2 levels, C6 BL                1.239e-9 2.90/2.87  3.511e-13 5.57/5.34 1.080e-13 6.20/5.98
+1-D, 2 levels, C10, filtered                9.047e-8 4.30/3.99  1.592e-8 4.31/3.95  1.575e-8 4.13/3.91
+2-D, 2 levels, C6, unfiltered               1.019e-7 3.98/3.57  1.840e-8 3.35/3.82  1.840e-8 3.35/3.82
+2-D, 2 levels, C6, filtered                 8.095e-8 3.90/4.00  3.720e-9 4.05/4.04  3.697e-9 3.92/4.01
+2-D, 2 levels, C6 BL, unfiltered            1.024e-7 3.66/3.89  9.156e-11 5.72/5.81 7.739e-12 5.63/5.71
+2-D, 2 levels, C6 BL, filtered              6.894e-7 2.61/2.61  6.043e-10 4.87/4.69 1.279e-11 6.69/6.58
+```
+
+The 2-D case is the oblique entropy wave (k = (2, 1), u = (0.5, 0.25)) through
+a square level (`entropy2d_case`). In one dimension the imposed boundary
+plane is a single node coincident with a parent node, so an inviscid,
+unfiltered run never reads an interpolated value and its rows cannot depend
+on the order; the transfer enters through the ghosts a gradient (viscous) or
+a filter reads, and in two dimensions through the planes, interpolated along
+the other dimension. Under the default coupling order 6 is saturated
+everywhere but the viscous row, where order 4 happens to measure lower.
+Under Brady–Livescu interface rows, which stand in here for a sixth-order
+interface divergence, order 6 holds the filtered, viscous and 2-D rows to
+4.7–5.8 and order 8 lifts them to 5.6–7.0 with errors 3 to 47 times lower at
+N = 192; the 2-D filtered rows read `dt` 0.066 at N = 192, the time error
+beginning to show. C8 Brady–Livescu at a level interface is unstable at every
+order: the inviscid error grows between N = 96 and 192 and the filtered runs
+lose positivity by t = 0.4. The C10 interior under the C8 filter reads the C6
+rows.
+
+**Time.** N = 192, two levels, order 8, each run against the same run at
+cfl = 0.05, maximum over the root and the fine patch; cfl 0.8 / 0.4 / 0.2 /
+0.1:
+
+```
+C6, global step         3.57e-9   1.72e-9   7.51e-10  2.52e-10   orders 1.05 / 1.20 / 1.57
+C6, subcycled           9.48e-9   4.76e-9   2.15e-9   7.32e-10   orders 0.99 / 1.15 / 1.56
+C6 BL, global step      2.65e-12  1.14e-12  4.92e-13  1.93e-13   orders 1.22 / 1.21 / 1.35
+C6 BL, subcycled        4.36e-10  2.90e-11  2.41e-12  5.23e-13   orders 3.91 / 3.59 / 2.20
+```
+
+A first-order time error in the reference biases the last ratio upward, as
+measured (1.05, 1.20, 1.57 against the 1.10, 1.22, 1.58 that K(cfl − 0.05) gives). The level
+interface carries a time error first order in the step, about 1/25 of the
+spatial error at cfl 0.8; the subcycled Brady–Livescu rows show the Hermite
+shell's fourth order above it.
 
 ### Repeated filtering
 
@@ -5027,6 +5088,91 @@ symbol.
 
 Settled: the default 4-coarse-cell tagging buffer holds two orders at C10
 where it holds five at C6, which is enough; the buffers did not move.
+
+### bench/leveltransfer.jl: the live interpolation order
+
+`julia --project=. -t 1 bench/leveltransfer.jl` (orders 2, 4, 6, 8; about a
+minute).
+
+The live coupling by itself, on analytic data with the root exact: the
+`level_interpolation_order` Lagrange interpolation that fills a refined
+patch's shell and a freshly created fine region, the restriction, and
+repeated regrids. 2-D fields are periodic on [0, 2π)² with a square level
+fixed at 5L/12..7L/12; the smooth field is 1 + 0.2 sin(3x + 0.37) cos(2y − 0.1);
+N is the root count.
+
+**Values.** A tensor polynomial of degree p − 1 per dimension is reproduced
+in the shell and in a fresh fill to 1e-15 of its maximum (degree p: 7.5e-3,
+3.4e-4, 4.7e-5, 1.6e-5 at p = 2, 4, 6, 8). On the smooth field:
+
+| order | ghosts, N = 48 / 96 / 192 | boundary planes, N = 192 | fresh fill, N = 192 | order |
+|---|---|---|---|---|
+| 2 | 4.86e-3 / 1.23e-3 / 3.01e-4 | 1.25e-4 | 3.09e-4 | 2.0 |
+| 4 | 1.15e-4 / 7.28e-6 / 4.46e-7 | 2.23e-7 | 4.57e-7 | 4.0 |
+| 6 | 3.28e-6 / 5.27e-8 / 8.09e-10 | 4.46e-10 | 8.30e-10 | 6.0 |
+| 8 | 1.18e-7 / 4.66e-10 / 1.80e-12 | 9.37e-13 | 1.80e-12 | 8.0 |
+
+At order 8 the outermost ghost layer's stencil sits one node inward of
+centred (`LEVEL_BUFFER = 4`); the ghost column reads 8.0 regardless.
+
+**Derivatives.** `interp` is the fine patch's operator on the imposed shell
+minus the same operator on exact shell data, the transfer's own contribution;
+`total` is against the exact derivative. The first derivative goes through
+the gradient plans, whose extended interface rows read the ghosts; the
+second applies the divergence plans (one-sided at the interface end, the
+viscous flux path) to that first derivative, along x (xx) and along y (xy).
+Windows are the four fine nodes nearest an end along the differentiated
+dimension; N = 192, orders over 48 / 96 / 192:
+
+| order | 1st interp | 1st interp on a plane | xx interp | xy interp | xx total | fill, 1st interp |
+|---|---|---|---|---|---|---|
+| 2 | 3.66e-3 (1.0) | 1.62e-2 (1.0) | 0.61 (0.0) | 0.50 (0.0) | 0.61 | 2.21e-2 (1.0) |
+| 4 | 6.54e-6 (3.0) | 2.39e-5 (3.0) | 3.77e-4 (2.0) | 6.52e-4 (2.0) | 3.76e-4 | 3.94e-5 (3.0) |
+| 6 | 1.31e-8 (5.0) | 4.59e-8 (5.0) | 7.53e-7 (4.0) | 1.22e-6 (4.0) | 1.78e-6 (3.4) | 7.86e-8 (5.0) |
+| 8 | 2.75e-11 (7.0) | 9.65e-11 (7.0) | 1.58e-9 (6.0) | 2.56e-9 (6.0) | 1.29e-6 (3.1) | 1.65e-10 (7.0) |
+
+An O(h^p) value error enters the first derivative at h^(p−1) and the second
+at h^(p−2), each at the fine spacing, as the counting predicts; a fresh fill
+carries the first-derivative loss over the whole patch, not only at its
+edge. The second-derivative total is the divergence's own closure error at
+order 8, while at order 6 the transfer term is 64% of the total at N = 96
+and 42% at N = 192, so under the default coupling the viscous path is where
+the order-6 transfer is visible.
+
+**Restriction.** Injection writes the fine coincident values onto the
+covered root nodes exactly (20, 157 and 814 written nodes at N = 48, 96,
+192; difference at round-off). The filtered restriction on point samples
+errs by 1.68e-3, 4.63e-4, 1.16e-4, order 1.9 / 2.0: it is not a
+point-sample transfer.
+
+**Repeated regrids.** A 1-D level moved ±N/24 root nodes sixteen times with
+no evolution, restricted after each: the fine error after the last regrid is
+1.09 to 1.16 times the error after the first at every order and N, and the
+order of both is the interpolation order (2.0, 4.0, 6.0, 8.0; 6.98e-10 and
+7.63e-10 at order 6, N = 192). Regrids do not accumulate transfer error.
+
+**Positivity.** A fresh fill of the step 1 → 0.125 of width w root cells:
+at w = 0.5 the fill undershoots the low state by 1.2%, 2.3% and 2.9% of the
+jump at orders 4, 6 and 8 (overshoot 0.8%, 0.4%, 0.03%); order 2 is
+monotone, and at w = 1 and 2 no order leaves the range. The moving-region
+Sod gate of `test/level_tests.jl` (N = 201, subcycled, regrid every five
+steps) is order-independent: composite density error 8.7e-4, 8.4e-4, 9.5e-4,
+8.9e-4 at orders 2, 4, 6, 8, minimum density 0.1245–0.1248 and minimum
+pressure 0.0994–0.0995, all 628 steps.
+
+**Budgets.** `bench/interfaceconservation.jl` at `interpolation_order=8`,
+serial, `layouts=uniform,depth2`, otherwise the command of that section:
+two levels drift 6.95e-5 (global) and 6.94e-5 (subcycled); the sixteen
+regrids sum to 8.41e-4 in absolute jumps, sampled drift with transfers
+1.0e-4, transfers subtracted 2.1e-4 / 2.2e-4, final 1.7e-5 / 2.5e-5,
+species excursion 7.4e-4 / 5.6e-4. Every figure matches order 6 to the
+digits that section prints.
+
+Settled: the live order is a choice among 2, 4, 6 and 8 with 6 the default.
+Order 8 fits the default halo and buffer, costs nothing measurable in
+conservation, positivity on resolved data or regrid drift, and removes the
+transfer from the second-derivative and filtered error budgets; order 2 is
+the only monotone choice.
 
 ### test/patch_tests.jl: same-level patch interfaces
 

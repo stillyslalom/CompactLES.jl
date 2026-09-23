@@ -152,7 +152,7 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
 
 - [x] **N14** — `interface_divergence` selects the flux divergence's closure rows at
   interface ends; the default stays, `:cascade4` is rejected and the Brady–Livescu
-  rows stay an experimental Float64 option (commit pending).
+  rows stay an experimental Float64 option (commit `6928fe5`).
 
 - [ ] **N15 — Design and trial divergence with valid current-stage ghost fluxes.**
   Start only if N14 misses a stated accuracy/stability target or a case requires
@@ -176,31 +176,10 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
   memory, allocations, inference and step cost with N14. Reusing gradient plans
   without populating valid flux ghosts is not an implementation of this item.
 
-- [ ] **N16 — Make live transfer order explicit and qualify spatial accuracy tiers.**
-  Measure interpolation and restriction separately from divergence, first on
-  point samples and then through first/second derivatives and regrids. Live
-  prolongation currently hardcodes order 6; the standalone weights support even
-  orders through 8. Expose a validated live interpolation-order choice and thread
-  it through initial creation, regridding, Hermite shells, and CPU/device chains,
-  with sufficient buffer/halo/stencil extents and early configuration checks.
-  Retain point-sample semantics; the filtered/deconvolving pair is not an upgrade
-  for unfiltered coarse data.
-  **Depends on:** N6 for measurement; qualify evolution with the selected N14 or
-  N15 coupling and N10's composite budgets. Begin with a C6 target; derive wider
-  transfer/closure support for C8/C10 only as a separately measured extension.
-  **Gate:** polynomial/value-transfer exactness, derivative consistency, repeated
-  regrid error, positivity and composite mass/momentum/energy budgets, followed
-  by smooth inviscid and viscous solution orders at fixed physical interfaces.
-  An O(h^r) value error can enter first/second derivatives as O(h^(r-1))/O(h^(r-2));
-  interpolation order alone is not the acceptance test. Publish separate spatial,
-  filter, temporal and subcycled-boundary orders: LSRK and cubic Hermite remain
-  fourth order in time, and the C8 filter must be included in any C10 claim.
-  Escalate to a compatible conservative/SBP–SAT design only with an explicit
-  decision under N10/N15; energy-compatible interpolation is not a drop-in table
-  for the current compact operators.
-  **Code:** [problem.jl](../src/problem.jl), [transfer.jl](../src/transfer.jl),
-  [levels.jl](../src/levels.jl),
-  [regrid.jl](../src/regrid.jl), [timestep.jl](../src/timestep.jl).
+- [x] **N16** — `level_interpolation_order` (2, 4, 6 or 8) sets the live
+  transfer order; 6 stays the default, which the default interface rows
+  saturate, and 8 is the opt-in for viscous, filtered, multidimensional or
+  `interface_divergence` runs (commit pending).
 
 Boundary/interface sequence: the N6 matrix (`bench/boundaryorder.jl`, gated in
 `test/convergence.jl`), N6a's trial battery (`bench/wallfilter.jl`) and N6b's
@@ -236,6 +215,9 @@ temporal certification with V3 and default filter time-scaling with N1.
   into durable regressions.
   Separate pure temporal certification here from N6's dt-sensitivity checks;
   qualify the improved N14–N16 coupling, where Hermite error can become visible.
+  A global-step level interface carries a time error of first order in `dt`
+  ([level transfer order](CALIBRATION_APPENDIX.md#level-transfer-order));
+  subcycled runs read fourth order.
   Add a scheduled full shock-validation battery and explicit Makie extension
   checks; retain HDF5 tests in the package test target and add parallel-HDF5
   execution where the required stack exists.

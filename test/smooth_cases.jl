@@ -7,8 +7,8 @@
 # here means the matrix and the guards cannot drift apart: a guard is set
 # from exactly the run the matrix measures.
 #
-# Every case is one-dimensional along dimension 1 with the transverse
-# dimensions collapsed, so each costs N points rather than N³. Three
+# Every case but `entropy2d_case` is one-dimensional along dimension 1 with
+# the transverse dimensions collapsed, so each costs N points rather than N³. Three
 # references are used, and each case says which:
 #
 #   * an exact solution (the entropy wave, the decaying shear mode);
@@ -490,6 +490,90 @@ function rhs_errors(solver, states, exact; comp=1, W=SMOOTH_W)
     apply_bcs!(solver, states)
     compute_rhs!(solver, states, dQ)
     return regional_errors(solver, dQ, exact; comp=comp, W=W)
+end
+
+# --- a two-dimensional level ------------------------------------------------------
+#
+# In one dimension a fine patch's boundary plane is a single node coincident
+# with a parent node, so the imposed plane is an injection and the
+# interpolation reaches the solution only through the ghosts a gradient or a
+# filter reads. In two dimensions the plane runs along the other dimension,
+# where every third node is interpolated, so the inviscid solution itself
+# carries the transfer's order.
+
+"""
+    entropy2d_profile(k1, k2, phase; u0=0.5, v0=0.25, t=0)
+
+rho = 1 + 0.2 sin(k1(x − u0 t) + k2(y − v0 t) + phase) at constant velocity
+(u0, v0) and p = 1, an exact Euler solution on the periodic [0, 2π)², as a
+map (x, y) -> (rho, u, v, p).
+"""
+entropy2d_profile(k1, k2, phase; u0=0.5, v0=0.25, t=0.0) =
+    (x, y) -> (1 + 0.2 * sin(k1 * (x - u0 * t) + k2 * (y - v0 * t) + phase),
+               u0 + zero(x), v0 + zero(x), one(x))
+
+"The square level over 5L/12..7L/12 in both dimensions, fixed in physical space."
+function refine_region2d(N)
+    N % 12 == 0 || error("N = $N: the square level needs N divisible by 12")
+    return BlockRegion((5N ÷ 12, 5N ÷ 12, 0), (N ÷ 6 + 1, N ÷ 6 + 1, 1))
+end
+
+"""
+    entropy2d_case(N; k1=2, k2=1, phase=0.37, subcycle=false, opts...)
+
+The oblique entropy wave on the periodic [0, 2π)² with N² root nodes and one
+square refined level, exact at every time.
+"""
+function entropy2d_case(N; k1=2, k2=1, phase=0.37, subcycle=false, opts...)
+    o = merge(SMOOTH_DEFAULTS, opts)
+    prof = entropy2d_profile(k1, k2, phase)
+    solver = Solver(; n_global=(N, N, 1), L_domain=(2pi, 2pi, 1.0), bcs=per3,
+                    art=ArtParams(enabled=false), refine=refine_region2d(N),
+                    subcycle=subcycle, o...)
+    states = allocate_state(solver)
+    initialize!(solver, states, (x, y, z) -> begin
+        rho, u, v, p = prof(x, y)
+        Prim(rho=rho, u=(u, v, 0.0), p=p)
+    end)
+    return solver, states
+end
+
+"""
+    regional_errors2d(solver, states, reference; comp=1, W=SMOOTH_W)
+
+`regional_errors` for a two-dimensional nest: `reference(x, y)` returns the
+conserved tuple; `interface` is the fine patch within W nodes of its
+boundary along either dimension, `covered` the parent nodes under it,
+`interior` the rest, and `l2` the composite masked root-mean-square.
+"""
+function regional_errors2d(solver, states, reference; comp=1, W=SMOOTH_W)
+    patches = getfield(solver, :patches)
+    interface = covered = interior = 0.0
+    at = (0, 0)
+    sq = Vector{Array{Float64,3}}(undef, length(patches))
+    for (pi, p) in enumerate(patches)
+        ps = CompactLES.PatchSolver(solver, p)
+        Q = states[pi]
+        n = ps.decomp.n_local
+        e2 = zeros(size(Q, 1), size(Q, 2), size(Q, 3))
+        for j in 1:n[2], i in 1:n[1]
+            I = gidx(ps, i, j, 1)
+            e = abs(Q[I, comp] - reference(xcoord(ps, 1, i), xcoord(ps, 2, j))[comp])
+            e2[I] = e * e
+            e > max(interface, covered, interior) && (at = (pi, i))
+            if ps.covered[I] != 0
+                covered = max(covered, e)
+            elseif pi > 1 && (min(i, j) <= W || i > n[1] - W || j > n[2] - W)
+                interface = max(interface, e)
+            else
+                interior = max(interior, e)
+            end
+        end
+        sq[pi] = e2
+    end
+    l2 = sqrt(volume_integral(solver, sq) / domain_volume(solver))
+    return (wall=0.0, interface=interface, covered=covered, interior=interior,
+            l2=l2, at=at)
 end
 
 "The root level's spacing, on a solver of any number of patches."
