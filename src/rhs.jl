@@ -88,6 +88,12 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # tally on every step it runs, and it runs only when
     # `StepControl.floor_ratio` is set, so a run that leaves it off pays nothing.
     floor_tally::FloorTally
+    # How the flux divergence treats an interface end: `:closure` closes it
+    # with one-sided rows (`div_plans`); `:ghost` differences the inviscid
+    # flux through the end with the gradient plans' interface rows, reading
+    # inviscid fluxes evaluated on the exchanged or imposed ghost state, and
+    # the remainder of the flux through `div_plans`.
+    interface_flux::Symbol
 end
 
 # Patch-owned property names forward to the sole patch, which keeps every
@@ -212,6 +218,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 backend::AbstractBackend=CPUBackend(),
                 interface_rhs::Symbol=:extended,
                 interface_divergence::Union{Nothing,AbstractCompactScheme}=nothing,
+                interface_flux::Symbol=:closure,
                 refine::Union{Nothing,BlockRegion,Vector{BlockRegion}}=nothing,
                 level_restriction::Symbol=:inject,
                 level_interpolation_order::Int=6,
@@ -501,6 +508,23 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   "line with $(length(idiv_rows)) rows per end, more than a " *
                   "regridded patch of $min_fine fine nodes admits; raise tile")
     end
+    # --- Ghost-flux divergence -----------------------------------------------
+    # `:ghost` differences the inviscid flux through an interface end with
+    # the gradient plans, whose interface rows exist only under `:extended`;
+    # the ghost fluxes carry no area or Jacobian factors, so the geometry
+    # must be unit.
+    interface_flux in (:closure, :ghost) ||
+        error("interface_flux must be :closure or :ghost, got :$interface_flux")
+    if interface_flux === :ghost
+        npatch > 1 || !isempty(refines) ||
+            error("interface_flux = :ghost differences through a patch or level " *
+                  "interface; this run has neither (patch_grid, refine)")
+        interface_rhs === :extended ||
+            error("interface_flux = :ghost reads the gradient plans' interface " *
+                  "rows, which exist under interface_rhs = :extended only")
+        metric isa CartesianMetric && all(isnothing, stretch) ||
+            error("interface_flux = :ghost requires an unstretched CartesianMetric")
+    end
     # --- Device residency -------------------------------------------------
     # A DeviceBackend supports a decomposed patch, patched, refined or
     # tiled: halos, fold pairs, the interface records and the level
@@ -559,7 +583,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                      coord_shift, h, deriv, filt, smoo, cfl,
                                      filter_interval, filter_cfl, filter_weighting,
                                      control, n_halo, comm, backend, interface_rhs,
-                                     n_cons, n_species; interface_divergence)
+                                     n_cons, n_species; interface_divergence,
+                                     interface_flux)
     end
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
     mkd(sch, d; kw...) =
@@ -731,7 +756,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                       [Level{T}(0, root_level_comm(comm), [1],
                                 LevelTransfer{T}[])], false, nothing,
                       zero(T), zero(T), 0, zero(T), zero(T),
-                  ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally())
+                  ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
+                  interface_flux)
         init_geometry!(solver)
         return solver
     end
@@ -885,7 +911,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   GhostRecord{T}[], GhostRecord{T}[], PlaneRecord{T}[],
                   levels, subcycle, regrid,
                   zero(T), zero(T), 0, zero(T), zero(T),
-                  ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally())
+                  ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
+                  interface_flux)
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
@@ -1166,7 +1193,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                                filter_cfl, filter_weighting, control, n_halo,
                                comm, backend,
                                interface_rhs, n_cons, n_species;
-                               interface_divergence=nothing) where {T}
+                               interface_divergence=nothing,
+                               interface_flux::Symbol=:closure) where {T}
     MPI.Initialized() || MPI.Init(threadlevel=:funneled)
     world = comm
     np = MPI.Comm_size(world)
@@ -1260,7 +1288,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                             collect(eachindex(patches)), LevelTransfer{T}[])],
                   false, nothing,
                   zero(T), zero(T), 0, zero(T), zero(T),
-                  ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally())
+                  ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
+                  interface_flux)
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
@@ -1855,6 +1884,106 @@ end
     return nothing
 end
 
+# --- The flux divergence through interface ends -------------------------------
+#
+# Under `interface_flux = :ghost` the inviscid flux of an interface dimension
+# is evaluated pointwise over the padded block, ghosts included, from the
+# primitives: at an interface end those ghosts hold the neighbour's state as
+# of the current stage (the same-level ghost refill, or the coarse-fine shell
+# imposed at the stage time), so the gradient plans' interface rows, which
+# read ghost layers, apply to it. What the ghosts cannot supply is the rest of
+# the flux (viscous, conductive, diffusive, artificial and the wall
+# corrections), which needs gradients and coefficients beyond the block; that
+# remainder keeps the one-sided rows of `div_plans`. The split costs one
+# pointwise pass and, where a remainder exists, a second pass and a second
+# line solve per component and interface dimension; it allocates nothing
+# beyond `tmp_b` and, on a device plan, `tmp_a`.
+
+"Whether dimension `d` of this patch has an interface end the divergence closes."
+@inline _interface_dim(solver::SolverLike, d::Int) =
+    _plan_at(solver.div_plans, d) !== _plan_at(solver.deriv_plans, d)
+
+# Whether the flux along `d` carries a part beyond the inviscid one: any
+# transport, the artificial properties, or a face whose `correct_flux!` may
+# rewrite the flux plane. Setup constants of the patch, so every rank of its
+# communicator takes the same branch.
+function _flux_remainder(solver::SolverLike, d::Int)
+    tr = solver.transport
+    inviscid = !solver.art.enabled && solver.art.species_flux !== :bulk &&
+               tr isa Transport && iszero(tr.mu0)
+    inviscid || return true
+    bc_lo, bc_hi = solver.bcs[d]
+    per = solver.decomp.periodic[d]
+    return !(per || bc_lo isa InterfaceBC) || !(per || bc_hi isa InterfaceBC)
+end
+
+# The inviscid flux of component `c` along `d` at every padded point into
+# `out`, or, under `remainder`, the assembled flux `F` less it. The
+# expressions are those of `_fluxes_point!`, so on an inviscid run the
+# remainder is exactly zero. At an interface end `F`'s ghosts hold no data
+# and neither does the remainder there; the divergence rows that take it
+# read none.
+@inline function _inviscid_flux_point!(out, F, Q, rho, u, v, w, p, Y, c, d,
+                                       n_species, m1, m2, m3, i_energy,
+                                       remainder, i, j, k)
+    T = eltype(rho)
+    @inbounds begin
+        I = CartesianIndex(i, j, k)
+        ρ = rho[I]
+        uv = (u[I], v[I], w[I])
+        ud = uv[d]
+        pI = p[I]
+        f = zero(T)
+        if c <= n_species
+            f = ρ * Y[c][I] * ud
+        elseif c == m1
+            f = ρ * ud * uv[1] + (d == 1 ? pI : zero(T))
+        elseif c == m2
+            f = ρ * ud * uv[2] + (d == 2 ? pI : zero(T))
+        elseif c == m3
+            f = ρ * ud * uv[3] + (d == 3 ? pI : zero(T))
+        elseif c == i_energy
+            f = (Q[I, i_energy] + pI) * ud
+        end
+        out[I] = remainder ? F[I] - f : f
+    end
+    return nothing
+end
+
+# dQ[:, c] -= D_div(F - F_inviscid) + D_ext(F_inviscid) along `d`: the first
+# through the divergence plans, skipped where the remainder is identically
+# zero, the second through the gradient plans, reading the ghost fluxes. Both
+# are collective line solves along `d`, and the branch before the first is a
+# setup constant of the patch. `F` itself is left as assembled.
+function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
+    decomp = solver.decomp
+    eq = solver.equations
+    m1, m2, m3 = eq.i_mom
+    n1f, n2f, n3f = padded_extent(decomp)
+    if _flux_remainder(solver, d)
+        pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
+                   solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
+                   solver.p, solver.field_tuples.Y, c, d, eq.n_species, m1, m2, m3,
+                   eq.i_energy, true)
+        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, nothing)
+    end
+    pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
+               solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
+               solver.p, solver.field_tuples.Y, c, d, eq.n_species, m1, m2, m3,
+               eq.i_energy, false)
+    plan = _plan_at(solver.deriv_plans, d)
+    if plan isa DevicePlan
+        apply_along!(solver.tmp_a, plan, solver.tmp_b, decomp)
+        nx, ny, nz = decomp.n_local
+        o1, o2, o3 = decomp.n_halo_d
+        pointwise!(_subtract_div_point!, dQ, nx, ny, nz,
+                   dQ, solver.tmp_a, c, o1, o2, o3)
+    else
+        apply_along_subtract!(dQ, c, plan, solver.tmp_b, decomp, nothing)
+    end
+    return dQ
+end
+
 @inline function _copy_component_point!(dest, Q, c, i, j, k)
     @inbounds dest[i, j, k] = Q[i, j, k, c]
     return nothing
@@ -2025,13 +2154,18 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
     # for a 5-component 3-D RHS, in what the phase budget shows is the single
     # largest phase. Curved or stretched grids take the general path unchanged.
     unitgeom = solver.metric isa CartesianMetric && all(isnothing, solver.stretch)
+    ghost = solver.interface_flux === :ghost
     for c in 1:solver.equations.n_cons
         pointwise!(_zero_component_point!, dQ, nx, ny, nz, dQ, c, o1, o2, o3)
         for d in 1:3
             decomp.active[d] || continue
             Fdc = solver.flux[d, c]
             σ = solver.folds[d] === nothing ? 1 : solver.folds[d].sigflux[c]
-            if unitgeom
+            # Setup constants of the patch, identical on every rank of its
+            # communicator, so each rank takes the same solves.
+            if ghost && _interface_dim(solver, d)
+                _ghost_flux_divergence!(dQ, c, Fdc, solver, Q, d)
+            elseif unitgeom
                 div_subtract_along!(dQ, c, Fdc, solver, d, σ, nothing)
             else
                 # tmp_b = A_d F_d over the full array; A_d is odd in r for the

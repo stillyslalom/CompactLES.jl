@@ -138,7 +138,7 @@ Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
     dims=nothing, n_halo=4, comm=MPI.COMM_WORLD,
     stretch=(nothing,nothing,nothing), patch_grid=(1,1,1),
     backend=CPUBackend(), interface_rhs=:extended,
-    interface_divergence=nothing,
+    interface_divergence=nothing, interface_flux=:closure,
     amr=nothing)                             # AMR(...) groups refinement options
 ```
 
@@ -161,6 +161,7 @@ Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
 | `backend` | Storage/execution backend | `CPUBackend()` |
 | `interface_rhs` | Patch-interface closure policy | `:extended` |
 | `interface_divergence` | Scheme supplying the flux divergence's closure rows at interface ends; experimental, Float64 only | `nothing` |
+| `interface_flux` | `:ghost` differentiates the inviscid flux through interfaces from ghost values; experimental | `:closure` |
 | `amr` | Refinement, tagging, subcycling, and balancing configuration | `nothing` |
 
 Each resolved rank-local dimension needs enough points for the selected

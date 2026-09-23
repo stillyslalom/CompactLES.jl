@@ -283,3 +283,71 @@ end
     @test npatches(mk(patch_grid=(2, 1, 1), deriv=lele_d1_10(),
                       interface_divergence=lele_d1_10(closures=:cascade3))) == 2
 end
+
+# `interface_flux = :ghost` differences the inviscid flux through an
+# interface end from fluxes evaluated on the ghost state. On data whose
+# conserved variables are polynomials of degree 4 and whose inviscid fluxes
+# are of degree 5, the interior rows, the gradient plans' interface rows and
+# the order-6 level interpolation are all exact, so the right-hand side is
+# exact to round-off at a same-level interface and at both ends of a refined
+# patch; the one-sided rows of the default are not.
+function _polynomial_rhs_error(; kw...)
+    γ = 1.4
+    ρ(x) = 1 + 0.2x - 0.1x^2;  dρ(x) = 0.2 - 0.2x
+    u(x) = 0.3 + 0.2x;         du = 0.2
+    p(x) = 1 + 0.1x^2;         dp(x) = 0.2x
+    E(x) = p(x) / (γ - 1) + ρ(x) * u(x)^2 / 2
+    dE(x) = dp(x) / (γ - 1) + (dρ(x) * u(x)^2 + 2ρ(x) * u(x) * du) / 2
+    exact(x) = (-(dρ(x) * u(x) + ρ(x) * du),
+                -(dρ(x) * u(x)^2 + 2ρ(x) * u(x) * du + dp(x)),
+                -((dE(x) + dp(x)) * u(x) + (E(x) + p(x)) * du))
+    per = (PeriodicBC(), PeriodicBC())
+    ext = (ExtrapolationBC(), ExtrapolationBC())
+    s = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(ext, per, per),
+               art=ArtParams(enabled=false), filter_interval=0; kw...)
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) -> Prim(rho=ρ(x), u=(u(x), 0, 0), p=p(x)))
+    dQ = [zero(q) for q in Q]
+    CL._presync!(s, Q)
+    for lev in getfield(s, :levels)
+        CL._level_rhs!(s, lev, Q, dQ, false)
+    end
+    eq = s.equations
+    err = 0.0
+    # Within four nodes of an interface end: of the shared plane between the
+    # two slabs, or of either end of the refined patch.
+    for (ps, d) in CL.eachpatch(s, dQ)
+        n = ps.decomp.n_local[1]
+        lo = ps.bcs[1][1] isa CL.InterfaceBC
+        hi = ps.bcs[1][2] isa CL.InterfaceBC
+        for i in 1:n
+            (lo && i <= 4) || (hi && i > n - 4) || continue
+            I = gidx(ps, i, 1, 1)
+            e = exact(xcoord(ps, 1, i))
+            err = max(err, abs(d[I, 1] - e[1]), abs(d[I, eq.i_mom[1]] - e[2]),
+                      abs(d[I, eq.i_energy] - e[3]))
+        end
+    end
+    return err
+end
+
+@testset "interface flux: ghost fluxes through interface ends" begin
+    for layout in ((patch_grid=(2, 1, 1),), (refine=BlockRegion((40, 0, 0), (17, 1, 1)),))
+        @test _polynomial_rhs_error(; layout..., interface_flux=:ghost) < 1e-11
+        @test _polynomial_rhs_error(; layout...) > 1e-10
+    end
+    # The default spelled out changes no bit; on a viscous pair the ghost
+    # path splits the flux and changes the interface rows only.
+    @test _patched_rhs() == _patched_rhs(interface_flux=:closure)
+    @test _patched_rhs(interface_flux=:ghost) != _patched_rhs()
+    per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    mk(; kw...) = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3; kw...)
+    @test_throws "must be :closure or :ghost" mk(patch_grid=(2, 1, 1),
+                                                 interface_flux=:extended)
+    @test_throws "has neither" mk(interface_flux=:ghost)
+    @test_throws "interface_rhs = :extended" mk(patch_grid=(2, 1, 1),
+                                                interface_rhs=:onesided,
+                                                interface_flux=:ghost)
+    @test npatches(mk(patch_grid=(2, 1, 1), interface_flux=:ghost,
+                      interface_divergence=lele_d1_6(closures=:brady_livescu))) == 2
+end

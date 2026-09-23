@@ -123,9 +123,11 @@ cost. The link is to the section holding the evidence.
   data has a discontinuity within one node of a shared patch plane, which the
   default ghost-reading interface rows do not survive; a shock arriving from
   the interior crosses the plane without incident. Move the plane, resolve the
-  discontinuity over a few cells, or set `interface_rhs = :onesided` with
+  discontinuity over a few cells, set `interface_flux = :ghost` with the
+  artificial properties on, or set `interface_rhs = :onesided` with
   `interface_divergence = nothing`; a divergence source defeats the one-sided
-  workaround ([interface divergence rows](CALIBRATION_APPENDIX.md#benchboundaryorderjl-idiv-the-interface-divergence-rows),
+  workaround ([ghost fluxes](CALIBRATION_APPENDIX.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes),
+  [interface divergence rows](CALIBRATION_APPENDIX.md#benchboundaryorderjl-idiv-the-interface-divergence-rows),
   [interface sensors](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
 - **A deep nest develops species undershoot under global stepping.** Use
   subcycling, the demonstrated workaround. Level-aware filter trials trade

@@ -58,10 +58,11 @@ end
     # The viscous case keeps the interface rows live through the gradients.
     cpu_ka = CL.KernelAbstractions.CPU()
     per = (PeriodicBC(), PeriodicBC())
-    function slabs(backend; deriv=lele_d1_6(), n_halo=4)
+    function slabs(backend; deriv=lele_d1_6(), n_halo=4, interface_flux=:closure)
         s = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=(per, per, per),
                    art=ArtParams(enabled=false), transport=Transport(mu0=2e-2),
-                   patch_grid=(2, 1, 1), backend=backend, deriv=deriv, n_halo=n_halo)
+                   patch_grid=(2, 1, 1), backend=backend, deriv=deriv, n_halo=n_halo,
+                   interface_flux=interface_flux)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) ->
             Prim(u=(0.5 + 0.1 * sin(2x), 0, 0), p=1.0 + 0.05 * cos(x),
@@ -69,7 +70,7 @@ end
         run!(s, states; tfinal=0.3)
         return s, states
     end
-    for kw in ((;), (deriv=lele_d1_10(),))
+    for kw in ((;), (deriv=lele_d1_10(),), (interface_flux=:ghost,))
         s1, q1 = slabs(CPUBackend(); kw...)
         CL.FORCE_KA[] = true
         CL.FORCE_DEVICE_EXCHANGE[] = true
@@ -313,7 +314,8 @@ end
         return s, states
     end
     for kw in ((;), (tag_sensor_threshold=0.05,),
-               (interface_divergence=lele_d1_6(closures=:brady_livescu),))
+               (interface_divergence=lele_d1_6(closures=:brady_livescu),),
+               (interface_flux=:ghost,))
         s1, q1 = tiled(CPUBackend(); kw...)
         CL.FORCE_KA[] = true
         CL.FORCE_DEVICE_EXCHANGE[] = true
@@ -572,7 +574,7 @@ const POINTWISE_BODIES = (
     :_fine_shell_point!, :_fluxes_point!, :_fold_fill_point!,
     :_gate_beta_point!, :_gated_beta_point!, :_gcl_cotr_point!,
     :_grad_corr_cyl_point!, :_grad_corr_sph_point!, :_hermite_point!,
-    :_internal_energy_point!, :_interp_point!,
+    :_internal_energy_point!, :_interp_point!, :_inviscid_flux_point!,
     :_kappa_point!, :_max_into_point!, :_metric_src_cyl_point!,
     :_metric_src_sph_point!, :_mole_fraction_point!,
     :_mu_beta_point!, :_no_slip_flux_point!, :_no_slip_wall_point!, :_nscbc_inflow_point!,

@@ -3,7 +3,7 @@
 Prioritized open work for compressible, variable-density mixing and implosion.
 The September 2026 source review adds runtime and API corrections to the existing
 numerics, validation, AMR/GPU, and high-energy-density (HED) backlog.
-The wall/interface follow-up adds R5, expands N6, and sequences N14–N16.
+The wall/interface follow-up adds R5, expands N6, and sequences N14–N17.
 Completed work is recorded by the commit that delivered it, and the measurements
 behind it are in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md); method
 details are in [DESIGN.md](DESIGN.md).
@@ -154,43 +154,60 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
   interface ends; the default stays, `:cascade4` is rejected and the Brady–Livescu
   rows stay an experimental Float64 option (commit `6928fe5`).
 
-- [ ] **N15 — Design and trial divergence with valid current-stage ghost fluxes.**
-  Start only if N14 misses a stated accuracy/stability target or a case requires
-  higher-order viscous/C8/C10 interfaces. Compare local inviscid ghost-flux
-  evaluation from exchanged state with a phased assemble/exchange/diverge RHS.
-  For viscous/artificial fluxes, specify the required gradient/coefficient data,
-  coarse–fine representation and interpolation, and subcycled stage-time source.
-  A same-level exchange alone does not supply nonconforming or Hermite-time fluxes.
-  **Deliver:** a dependency/storage/collective schedule and bounded prototype,
-  first at same-level inviscid interfaces, then viscous and coarse–fine interfaces.
-  Account for the shared RHS workspace: retain only justified interface data or
-  quantify the memory cost of persistent per-patch fluxes. Keep GCL divergence
-  and diagnostic freshness consistent; no cross-patch collective may be inserted
-  into a sequential per-patch RHS without changing its schedule.
-  **Depends on:** the N14 decision and N6 tests for design/prototyping; N10 budgets
-  before promotion. Coordinate ownership with A2 and ghost-value accuracy with
-  N16. N10 owns flux reconciliation.
-  **Gate:** polynomial/RHS consistency at both interface ends, full inviscid and
-  viscous evolution orders, reflection and conservation budgets, nested-subcycle
-  timing, and no stale data/deadlocks under MPI or device execution. Compare
-  memory, allocations, inference and step cost with N14. Reusing gradient plans
-  without populating valid flux ghosts is not an implementation of this item.
+- [x] **N15** — `interface_flux = :ghost` differences the inviscid flux through
+  interface ends from ghost fluxes; it leads at same-level faces, and at
+  coarse–fine faces under `level_interpolation_order = 8`, and stays
+  experimental (commit pending).
+
+- [ ] **N15a — Extend ghost fluxes to the viscous and artificial terms and
+  qualify promotion.** The viscous and artificial fluxes still take the one-sided
+  rows of `div_plans` under `interface_flux = :ghost`. At a coarse–fine face,
+  take compact gradients on the Hermite-in-time box, which already extends
+  `LEVEL_BUFFER` coarse nodes past the region, for ghost-ring gradients at the
+  stage time without communication; at a same-level face, exchange gradient or
+  flux records mid-RHS, which splits `_level_rhs!` into two phases (per-patch
+  flux storage of about 45 MB per 64³ patch if fluxes are kept). Artificial
+  coefficients stay on one-sided rows. Carry `interface_flux` into checkpoint
+  provenance with A5, and decide promotion together with an order-8 default
+  (N17). **Gate:** the N15 instruments (`bench/boundaryorder.jl study=gflux`,
+  `bench/interfacesensor.jl`, `bench/interfaceconservation.jl iflux=ghost`) on
+  viscous rows, MPI np=2/4/8 and the device path; curvilinear metrics need ghost
+  `area_d` and a matching GCL operator and are out of scope until a case needs
+  them.
 
 - [x] **N16** — `level_interpolation_order` (2, 4, 6 or 8) sets the live
   transfer order; 6 stays the default, which the default interface rows
   saturate, and 8 is the opt-in for viscous, filtered, multidimensional or
-  `interface_divergence` runs (commit pending).
+  `interface_divergence` runs (commit `c7d26e3`).
+
+- [ ] **N17 — Match the level interpolation order to the derivative order.**
+  Default `level_interpolation_order` from `deriv`: 6 for `lele_d1_6`, 8 for
+  `lele_d1_8`, 10 for `lele_d1_10`, keeping an explicit value as an override and
+  6 for a custom scheme. Order 10 needs weights beyond the current even-order
+  limit of 8 in `transfer.jl`, and its ten-point stencil against the four-node
+  `LEVEL_BUFFER`: the outer ghost layers sit off-centre, as order 8's outermost
+  layer already does, and `n_halo` stays 4. Measure the off-centre stencil's
+  error and the overshoot at an under-resolved step before adopting it. Under
+  `interface_flux = :ghost` the C6 case already wants order 8 at coarse–fine
+  faces, so weigh an order-8 C6 default here too.
+  **Depends on:** N16's instruments (`bench/leveltransfer.jl`,
+  `bench/boundaryorder.jl study=transfer`) and the N14/N15 interface treatments,
+  since a C8 or C10 level run is otherwise limited by its interface closure, and
+  C8 Brady–Livescu rows are unstable at a level interface at every order.
+  **Gate:** value exactness at order 10, derivative orders through the level
+  rows for C8 and C10 (C10 under the C8 filter), N10 budgets, the device chain
+  and MPI at np=2/4/8; C6 runs bit-identical unless its default changes, and
+  every changed guard explained.
 
 Boundary/interface sequence: the N6 matrix (`bench/boundaryorder.jl`, gated in
 `test/convergence.jl`), N6a's trial battery (`bench/wallfilter.jl`) and N6b's
-qualification (`bench/wallclosure.jl`) are the instruments for N14 and N16.
-Qualify interface candidates under N10 and N11 before promotion, and invoke N15
-only when the smaller closure change misses a target. N16 transfer measurements
-may begin with the N6 instruments, while final accuracy qualification follows the
-selected interface treatment. Extending N6l's face-centred fold to patched and
-refined runs is open, as is switching the tutorials whose walls are true symmetry
-planes; those runs keep the node-centred `SlipWallBC` until then. Coordinate
-temporal certification with V3 and default filter time-scaling with N1.
+qualification (`bench/wallclosure.jl`), with the `idiv`, `gflux` and `transfer`
+studies and `bench/leveltransfer.jl`, are the instruments for N15a and N17.
+Qualify interface candidates under N10 and N11 before promotion. Extending N6l's
+face-centred fold to patched and refined runs is open, as is switching the
+tutorials whose walls are true symmetry planes; those runs keep the node-centred
+`SlipWallBC` until then. Coordinate temporal certification with V3 and default
+filter time-scaling with N1.
 
 ### Independent validation and regression coverage
 

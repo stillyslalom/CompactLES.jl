@@ -38,6 +38,7 @@
 #               Rows marked `idiv` take the flux divergence's interface rows
 #               from an `interface_divergence` source; `reversed` rows mirror
 #               the tube so the shock runs right to left through the faces.
+#               Rows marked `gflux` take `interface_flux = :ghost`.
 #   filter      the filter's own change at the shell: max |Δρ| per distance
 #               from a coarse-fine face over the run's passes, under the
 #               three interface filter row sets. A smooth entropy wave and
@@ -423,6 +424,7 @@ function crossing_solver(row, N)
                cfl=CROSSING_CFL, eos=eos, deriv=deriv_of(row),
                art=ArtParams(enabled=row.art), filter_cfl=row.filter_cfl,
                interface_rhs=row.interface_rhs, interface_divergence=idiv_of(row),
+               interface_flux=row.iflux,
                control=StepControl(validity=:permissive); extra...)
     Q = allocate_state(s)
     initialize!(s, Q, ic_of(row))
@@ -622,7 +624,7 @@ function crossing_rows()
     base = (; label="base (C6, subcycled)", mode=:levels, depth=2, subcycle=true,
             tile=0, scheme=:C6, closures=:neutral3, filter_cfl=0.35, art=true,
             ghosts=true, patch_grid=(1, 1, 1), species=1, idiv=nothing,
-            direction=1, interface_rhs=:extended)
+            direction=1, interface_rhs=:extended, iflux=:closure)
     rows = Any[base]
     HAS_GHOST_TOGGLE &&
         push!(rows, merge(base, (; label="sensor taps clamped", ghosts=false)))
@@ -657,6 +659,21 @@ function crossing_rows()
             push!(rows, merge(base, change, (; label="idiv $cl$label", idiv=cl)))
         end
     end
+    # The inviscid flux differenced through the interface ends from ghost
+    # fluxes, the rest on the default rows.
+    for (label, change) in (("", (;)), (" global dt", (; subcycle=false)),
+                            (" three levels", (; depth=3)),
+                            (" three levels global dt", (; depth=3, subcycle=false)),
+                            (" tile 8", (; tile=8)),
+                            (" reversed", (; direction=-1)),
+                            (" art off", (; art=false)),
+                            (" two patches", (; mode=:patches, patch_grid=(2, 1, 1))),
+                            (" two patches art off", (; mode=:patches,
+                                                      patch_grid=(2, 1, 1), art=false)),
+                            (" three patches", (; mode=:patches,
+                                                patch_grid=(3, 1, 1))))
+        push!(rows, merge(base, change, (; label="gflux$label", iflux=:ghost)))
+    end
     push!(rows, merge(base, (; label="reversed", direction=-1)))
     push!(rows, merge(base, (; label="two patches onesided", mode=:patches,
                              patch_grid=(2, 1, 1), interface_rhs=:onesided)))
@@ -667,6 +684,8 @@ function crossing_rows()
     end
     push!(species, merge(base, (; label="two species global dt", species=2,
                                 subcycle=false)))
+    push!(species, merge(base, (; label="gflux two species", species=2,
+                                iflux=:ghost)))
     if args.crossing_variants != "all"
         wanted = split(args.crossing_variants, ',')
         keep(row) = any(w -> occursin(w, row.label), wanted)

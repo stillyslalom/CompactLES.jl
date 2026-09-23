@@ -316,6 +316,33 @@ function entropy_case(N; k=3, phase=0.37, patch_grid=(1, 1, 1), levels=1,
 end
 
 """
+    polynomial_profile()
+
+rho, u and p of degrees 2, 1 and 2 on [0, 1], so that every conserved
+variable has degree at most 4 and every inviscid flux component at most 5:
+the C6 interior rows and the order-6 level interpolation both reproduce it,
+and a right-hand side on its exact data measures an interface row's
+polynomial consistency alone. Not a solution; for `rhs_errors` only.
+"""
+polynomial_profile() =
+    x -> (1 + 0.2x - 0.1x * x, 0.3 + 0.2x, zero(x), 1 + 0.1x * x)
+
+"""
+    polynomial_case(N; patch_grid=(1, 1, 1), levels=1, opts...)
+
+`polynomial_profile` on N nodes of [0, 1] between `ExtrapolationBC` ends,
+through a patch interface or a nest as `entropy_case`; inviscid. The ends'
+closure error decays through the compact solve over the tens of nodes to the
+interface windows.
+"""
+function polynomial_case(N; patch_grid=(1, 1, 1), levels=1, opts...)
+    bc = ExtrapolationBC()
+    _smooth_solver((N, 1, 1), 1.0, ((bc, bc), per3[2], per3[3]),
+                   polynomial_profile(); patch_grid=patch_grid,
+                   refine=refine_regions(N, levels), merge(SMOOTH_DEFAULTS, opts)...)
+end
+
+"""
     viscous_periodic_case(N; a=0.05, b=0.05, mu=0.005, patch_grid=(1, 1, 1),
                           levels=1, subcycle=false, opts...)
 

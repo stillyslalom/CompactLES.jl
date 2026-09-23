@@ -33,6 +33,7 @@
 # every interface end from that `interface_divergence` source (`default`
 # keeps the solver's own); the uniform baseline has no interface to change.
 # `interpolation_order` sets `level_interpolation_order` on the refined layouts.
+# `iflux=ghost` sets `interface_flux = :ghost` on every layout but the uniform one.
 #
 # The predeclared application budgets are deliberately coarse enough to be
 # useful on a long, interface-crossing calculation: 0.1% of initial mass,
@@ -61,7 +62,8 @@ const args = CompactLES.script_args(ARGS, (N=192, ny=32, tfinal=8.0, nmax=typema
                                            moving_width=0.18, filter_interval=1,
                                            maxlevels=3, interpolation_order=6,
                                            layouts="uniform,samelevel,depth2,depth3",
-                                           stepping="both", idiv="default");
+                                           stepping="both", idiv="default",
+                                           iflux="closure");
                                     positional=(:N, :tfinal))
 
 # Application comparison budgets, fixed independently of the results.
@@ -185,6 +187,7 @@ function build(mode, N, ny; subcycle=false, regrid=false)
              lele_d1_6(closures=Symbol(args.idiv))
     return Solver(n_global=(N, ny, 1), L_domain=(8pi, 2pi, 1.0), bcs=periodic,
                   eos=eos, cfl=0.45, interface_divergence=source,
+                  interface_flux=mode === :uniform ? :closure : Symbol(args.iflux),
                   art=ArtParams(C_mu=0.0, C_beta=0.0, C_kappa=0.0, C_D=0.0),
                   control=StepControl(validity=:permissive),
                   filter_interval=args.filter_interval; kw...)

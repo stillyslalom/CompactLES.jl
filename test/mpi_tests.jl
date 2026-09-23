@@ -1708,6 +1708,29 @@ function test_two_patch_layout()
           abs(gmax(m) - 1.0433664263818199), tol)
     check("two-patch walls, source divergence rows: step count matches serial",
           abs(solverbl.step - 40), 0.5)
+    # The same pair with the inviscid flux differenced through the interface
+    # from ghost fluxes and the viscous remainder on the one-sided rows: two
+    # line solves per component along the split dimension, every rank of each
+    # patch entering both. Serial value of this run.
+    solvergf = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                      bcs=(wall2, per3[2], per3[3]), art=ArtParams(enabled=false),
+                      filter_interval=0, transport=Transport(mu0=5e-3),
+                      patch_grid=(2, 1, 1), interface_flux=:ghost)
+    statesgf = allocate_state(solvergf)
+    initialize!(solvergf, statesgf, (x, y, z) ->
+        Prim(u=(0.05 * sin(π * x), 0, 0), p=(1 + 0.05 * cos(π * x))^1.4,
+             rho=1 + 0.05 * cos(π * x)))
+    run!(solvergf, statesgf; tfinal=0.4, nmax=40)
+    m = 0.0
+    for (ps, Q) in CL.eachpatch(solvergf, statesgf)
+        for i in 1:ps.decomp.n_local[1]
+            m = max(m, Q[gidx(ps, i, 1, 1), 1])
+        end
+    end
+    check("two-patch walls, ghost-flux divergence: max rho matches serial",
+          abs(gmax(m) - 1.0433664263816558), tol)
+    check("two-patch walls, ghost-flux divergence: step count matches serial",
+          abs(solvergf.step - 40), 0.5)
 end
 
 # ---------------------------------------------------------------------------
@@ -2006,6 +2029,11 @@ function test_refined_decomposed()
                           interface_divergence=lele_d1_6(closures=:brady_livescu))
     check("static two-level wave error, source divergence rows, matches serial",
           abs(e_src - 3.26405569239796e-14), 5e-15)
+    # The ghost-flux divergence, subcycled: the fine patch's ghost fluxes are
+    # evaluated on the Hermite shell imposed at each substage.
+    e_gf, _ = wave_error(subcycle=true, interface_flux=:ghost)
+    check("subcycled two-level wave error, ghost-flux divergence, matches serial",
+          abs(e_gf - 3.6078917631243712e-12), 5e-15)
 
     # Tagging-driven regridding tracks a Sod shock to the same region. The
     # four Sod regrid cases in this file run the unrelaxed filter
@@ -2072,12 +2100,12 @@ function test_tiled_level()
     # records. Ten steps: a 2-D case at np = 8 runs slowly on the workstation
     # (7 s/step, one patch or four; see CLUSTER.md on the hybrid cores),
     # and ten cross every interface many times over.
-    function tiled_error(; subcycle)
+    function tiled_error(; subcycle, kw...)
         u0v, v0 = 0.4, 0.3
         solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3,
                         art=ArtParams(enabled=false), filter_interval=0,
                         subcycle=subcycle, tile=12,
-                        refine=BlockRegion((12, 12, 0), (24, 24, 1)))
+                        refine=BlockRegion((12, 12, 0), (24, 24, 1)); kw...)
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) ->
             Prim(u=(u0v, v0, 0), p=1.0, rho=1.0 + 0.1 * sin(x) * sin(y)))
@@ -2112,6 +2140,12 @@ function test_tiled_level()
     check("subcycled tiled 2-D wave error matches serial",
           abs(ets - 7.64822569720991e-8), 1e-12)
     check("subcycled tiled 2-D step count matches serial", abs(nts - 10), 0.5)
+    # The ghost-flux divergence through the tile faces and the coarse-fine
+    # faces in both dimensions, the tiles decomposed at np >= 8.
+    etg, ntg, _ = tiled_error(subcycle=true, interface_flux=:ghost)
+    check("subcycled tiled 2-D wave error, ghost-flux divergence, matches serial",
+          abs(etg - 2.326346004721813e-9), 1e-12)
+    check("subcycled tiled 2-D step count, ghost-flux divergence", abs(ntg - 10), 0.5)
 
     # Multi-tile corner consensus and diagonal ghosts, decomposed: the
     # dimension-phased sync must give every copy of the corner node the
