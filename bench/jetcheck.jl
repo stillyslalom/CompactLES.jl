@@ -56,20 +56,37 @@ Qb = allocate_state(sb); dQb = zero(Qb)
 initialize!(sb, Qb, (x, y, z) -> Prim(Y=(0.5 + 0.4tanh(4sin(x)), 0.5 - 0.4tanh(4sin(x))),
                                        u=(0.1sin(x), 0, 0), p=1.0, rho=1 + 0.5cos(x)))
 
+# A report is dropped when its stack passes through a call site that is itself
+# reported as a runtime dispatch. JET follows such a call into the callee and
+# infers it at the call's abstract argument types, but at run time the callee
+# is compiled for the concrete types it receives, so what JET finds in that
+# abstract instance is code that never runs. The dispatch site itself is still
+# reported, in its concrete caller. This matters for the dispatches the solver
+# makes on purpose (the plan-operator handle of `compute_artificial!`, the
+# `_cold` barriers of timestep.jl): the callees are probed at concrete types
+# below instead.
+_frame_key(vf) = (vf.linfo, vf.file, vf.line)
+
 function summarize(name, res)
-    reports = JET.get_reports(res)
-    buf = IOBuffer()
-    show(IOContext(buf, :color => false, :limit => false), res)
-    txt = String(take!(buf))
+    all_reports = JET.get_reports(res)
+    sites = Set(Tuple(map(_frame_key, r.vst)) for r in all_reports
+                if r isa JET.RuntimeDispatchReport)
+    beyond(r) = any(i -> Tuple(map(_frame_key, r.vst[1:i])) in sites,
+                    1:length(r.vst)-1)
+    reports = filter(!beyond, all_reports)
     @printf("\n%-24s %4d runtime-dispatch reports\n", name, length(reports))
     # one line per distinct dispatch site, deduplicated
     seen = Set{String}()
-    for ln in split(txt, '\n')
-        occursin("runtime dispatch detected", ln) || continue
-        t = strip(replace(ln, r"^[│├└─\s]*" => ""))
-        t in seen && continue
-        push!(seen, t)
-        println("    ", first(t, 150))
+    for r in reports
+        buf = IOBuffer()
+        JET.print_report(IOContext(buf, :color => false, :limit => false), r)
+        for ln in split(String(take!(buf)), '\n')
+            occursin("runtime dispatch detected", ln) || continue
+            t = strip(replace(ln, r"^[│├└─\s]*" => ""))
+            t in seen && continue
+            push!(seen, t)
+            println("    ", first(t, 150))
+        end
     end
 end
 
@@ -84,5 +101,11 @@ summarize("step!",         @report_opt target_modules=(CL,) step!(solver, Q, dQ,
 summarize("compute_rhs! (axis fold)", @report_opt target_modules=(CL,) compute_rhs!(sf, Qf, dQf))
 summarize("compute_rhs! (bulk species)", @report_opt target_modules=(CL,) compute_rhs!(sb, Qb, dQb))
 summarize("compute_dt (bulk species)", @report_opt target_modules=(CL,) compute_dt(sb, Qb))
+# Callees the solver reaches only through an intended dynamic dispatch, probed
+# at the concrete types they are compiled for at run time (see `summarize`).
+summarize("smooth!", @report_opt target_modules=(CL,) CL.smooth!(solver.sensor, solver))
+summarize("_detect!", @report_opt target_modules=(CL,) CL._detect!(solver.sensor, solver.tmp_a, solver, 1, true))
+summarize("_bulk_diffusivity!", @report_opt target_modules=(CL,) CL._bulk_diffusivity!(sb))
+summarize("_bulk_gradients!", @report_opt target_modules=(CL,) CL._bulk_gradients!(sb, Qb))
 
 println("\njet check complete")

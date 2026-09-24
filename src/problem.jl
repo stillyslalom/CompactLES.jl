@@ -372,6 +372,20 @@ end
 # it. `run!` needs the verdict as a value so that a rejection can take the
 # rollback path its other failures take; every caller that has no trajectory to
 # roll back to goes through `validate_state!` and raises.
+function _validity_repair!(solver, Q, floors, control, stage, warn, rank)
+    tally = apply_positivity_floor!(solver, Q, floors[1], floors[2],
+                                    control.floor_scope)
+    if tally.cells > 0 || tally.low_energy > 0
+        record_floor!(solver, tally)
+        warn && rank == 0 &&
+            @warn "validate_state!: repaired $(tally.cells) cell(s) of " *
+                  "$stage and saw $(tally.low_energy) below the " *
+                  "internal-energy floor. Mass added $(tally.mass), energy " *
+                  "added $(tally.energy), momentum removed $(tally.momentum)."
+    end
+    return nothing
+end
+
 function _apply_validity!(solver::Solver, Q; control::StepControl=solver.control,
                           stage::AbstractString="state",
                           floors::Tuple{Float64,Float64}=(0.0, 0.0),
@@ -380,16 +394,8 @@ function _apply_validity!(solver::Solver, Q; control::StepControl=solver.control
     report = state_report(solver, Q; species_band=band)
     rank = MPI.Comm_rank(solver.comm)
     if control.validity === :repair && !state_valid(report) && floors[1] > 0
-        tally = apply_positivity_floor!(solver, Q, floors[1], floors[2],
-                                        control.floor_scope)
-        if tally.cells > 0 || tally.low_energy > 0
-            record_floor!(solver, tally)
-            warn && rank == 0 &&
-                @warn "validate_state!: repaired $(tally.cells) cell(s) of " *
-                      "$stage and saw $(tally.low_energy) below the " *
-                      "internal-energy floor. Mass added $(tally.mass), energy " *
-                      "added $(tally.energy), momentum removed $(tally.momentum)."
-        end
+        # Off by default (`validity = :strict`), so behind `_cold` (timestep.jl).
+        _validity_repair!(_cold(solver), Q, floors, control, stage, warn, rank)
         report = state_report(solver, Q; species_band=band)
     end
     failure = check_validity(control, report, stage, solver.step, solver.t,

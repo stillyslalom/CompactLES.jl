@@ -437,6 +437,46 @@ end
 @inline Base.setproperty!(ps::PatchSolver, name::Symbol, value) =
     setproperty!(getfield(ps, :solver), name, value)
 
+"""
+    PatchFields
+
+The storage one right-hand-side phase reads and writes, gathered off a
+`Solver` or `PatchSolver` by [`patch_fields`](@ref): the decomposition, the
+spacings, and the field arrays. Its type depends on the element type and the
+array types alone, never on the operator plans, folds, stretch, sources, or
+the wrapper, so an orchestration body keyed on it compiles once per
+`(T, array type)` and is shared by every scheme, detector, dimensionality
+and patch wrapper. The plan-dependent operators are reached through the
+solver passed alongside as an unspecialized handle; see
+[`compute_artificial!`](@ref).
+
+Built on the stack at each call: the same array objects, no copies.
+"""
+struct PatchFields{T,A<:AbstractArray{T,3},YV,W,GQ,H,FT}
+    decomp::Decomp{T}
+    h::NTuple{3,T}
+    inv_h::H
+    rho::A; u::A; v::A; w::A
+    p::A; T_ion::A; c::A; cp_mix::A
+    Y::YV
+    mu_art::A; beta_art::A; kappa_art::A
+    D_art::YV
+    strain_mag::W; sensor::W; sensor_sp::W; tmp_a::W; tmp_b::W
+    grad_T_ion::NTuple{3,W}
+    grad_Q::GQ
+    ft::FT
+end
+
+@inline patch_fields(s) =
+    PatchFields(s.decomp, s.h, s.inv_h, s.rho, s.u, s.v, s.w, s.p, s.T_ion,
+                s.c, s.cp_mix, s.Y, s.mu_art, s.beta_art, s.kappa_art,
+                s.D_art, s.strain_mag, s.sensor, s.sensor_sp, s.tmp_a,
+                s.tmp_b, s.grad_T_ion, s.grad_Q, s.field_tuples)
+
+# The equation set's layout as plain integers, so a body taking it is not
+# keyed on the equation-set type: (n_species, n_cons, i_energy, i_mom).
+@inline equation_layout(eq) = (eq.n_species, eq.n_cons, eq.i_energy, eq.i_mom)
+
 # --- Patch layout -----------------------------------------------------------
 
 """

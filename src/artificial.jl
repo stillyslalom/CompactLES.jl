@@ -896,11 +896,60 @@ must provide its own storage. Multi-patch output cannot use the shared sensor
 workspace and must likewise provide persistent per-patch storage.
 """
 function compute_artificial!(solver, Q)
+    solver.art.enabled || return solver   # arrays stay zero from allocation
+    _compute_artificial!(patch_fields(solver), solver.eos, solver.art,
+                         equation_layout(solver.equations), Q, solver)
+    return solver
+end
+
+# Positional forms of the plan-dependent operators for the body below, which
+# reaches them through an unspecialized handle. A keyword call through a
+# dynamic dispatch builds its NamedTuple on the heap, and a floating-point
+# argument is boxed, so these take only arrays, the handle, and small
+# integers or Bools (which Julia keeps preallocated), and read constants off
+# the handle themselves.
+_detect!(out, f, solver, wpow::Int, ghosts::Bool) =
+    detect_sum!(out, f, solver, wpow; ghosts=ghosts)
+_velocity_mu!(solver) = velocity_mu!(solver, solver.art.C_mu)
+_dilatation_beta!(solver, gated::Bool) =
+    dilatation_beta!(solver, solver.art.C_beta, gated)
+function _bulk_diffusivity!(solver)
     art = solver.art
-    if !art.enabled
-        return solver   # arrays stay zero from allocation
+    h_bound, inv_n = _species_bound_length(solver.decomp, solver.h, art.C_D)
+    a1, a2, a3 = solver.decomp.active
+    ih1, ih2, ih3 = solver.inv_h
+    return bulk_diffusivity!(solver, art.C_D, art.C_Y, h_bound, inv_n,
+                             ih1, ih2, ih3, a1, a2, a3, art.Y_tolerance)
+end
+
+# The mass-fraction bound's length is the geometric mean of the local physical
+# spacings over the active directions. The product of the computational ones
+# and the exponent are the same at every point; the point supplies the
+# product of the `inv_h` that divide them.
+function _species_bound_length(decomp, h, C_D)
+    h_bound = one(C_D)
+    n_active = 0
+    for d in 1:3
+        decomp.active[d] || continue
+        h_bound *= h[d]
+        n_active += 1
     end
-    decomp = solver.decomp
+    return h_bound, one(C_D) / n_active
+end
+
+# The body of `compute_artificial!`, keyed on what its launches read: the
+# field storage `f` (a `PatchFields`, typed by T and the array types only), the
+# EOS, the parameters, the equation layout as integers, and the conserved
+# array `Q`. Every `pointwise!` launch here is therefore a static call with
+# concrete arguments. The solver itself arrives as `ops`, unspecialized: it is
+# consulted only by the operators that depend on plan, fold and wall types
+# (`detect_sum!`, `smooth!` and the optional sensor rebuilds), each one
+# dynamic dispatch in front of a whole-array sweep whose callee specializes on
+# the concrete solver. Those calls pass only arrays loaded from `f`, the
+# already-boxed handle, and small integers, so none of them allocates.
+function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
+    n_species, _, i_energy, (m1, m2, m3) = eqi
+    decomp = f.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     # The coefficients are read into locals, not off `art` inside the
@@ -918,8 +967,8 @@ function compute_artificial!(solver, Q)
 
     # Strain-rate magnitude |S| = sqrt(S_ij S_ij) in the interior (physical
     # components; the metric corrections are in grad_u).
-    pointwise!(_strain_mag_point!, solver.strain_mag, nx, ny, nz,
-               solver.strain_mag, solver.field_tuples.grad_u, o1, o2, o3)
+    pointwise!(_strain_mag_point!, f.strain_mag, nx, ny, nz,
+               f.strain_mag, f.ft.grad_u, o1, o2, o3)
 
     # Strain sensor: Δ_d² |D_d S| reduced over directions for the selected
     # detector D, smoothed. One pass serves μ* and β* where both are built from
@@ -930,43 +979,46 @@ function compute_artificial!(solver, Q)
     strain_mu = art.mu_sensor === :strain
     strain_beta = art.beta_sensor === :strain || art.beta_sensor === :gated_strain
     if strain_mu || strain_beta
-        exchange_halos!(solver.strain_mag, decomp)
-        detect_sum!(solver.sensor, solver.strain_mag, solver, 2)
-        smooth!(solver.sensor, solver)
+        exchange_halos!(f.strain_mag, decomp)
+        _detect!(f.sensor, f.strain_mag, ops, 2, false)
+        smooth!(f.sensor, ops)
         if strain_mu && strain_beta
-            pointwise!(_mu_beta_point!, solver.mu_art, nx, ny, nz,
-                       solver.mu_art, solver.beta_art, solver.rho,
-                       solver.sensor, C_mu, C_beta, o1, o2, o3)
+            pointwise!(_mu_beta_point!, f.mu_art, nx, ny, nz,
+                       f.mu_art, f.beta_art, f.rho,
+                       f.sensor, C_mu, C_beta, o1, o2, o3)
         elseif strain_mu
-            rho_sensor!(solver.mu_art, solver, C_mu)
+            pointwise!(_rho_sensor_point!, f.mu_art, nx, ny, nz,
+                       f.mu_art, f.rho, f.sensor, C_mu, o1, o2, o3)
         else
-            rho_sensor!(solver.beta_art, solver, C_beta)
+            pointwise!(_rho_sensor_point!, f.beta_art, nx, ny, nz,
+                       f.beta_art, f.rho, f.sensor, C_beta, o1, o2, o3)
         end
     end
     # μ* may instead come from the velocity components, and β* may be keyed on
     # compression, rebuilt from the dilatation, or both. Each rebuild writes one
     # coefficient array and leaves the other untouched.
-    art.mu_sensor === :velocity && velocity_mu!(solver, C_mu)
-    art.beta_sensor === :gated_strain && gate_beta!(solver)
-    art.beta_sensor === :dilatation && dilatation_beta!(solver, C_beta, true)
-    art.beta_sensor === :ungated_dilatation && dilatation_beta!(solver, C_beta, false)
+    art.mu_sensor === :velocity && _velocity_mu!(ops)
+    if art.beta_sensor === :gated_strain
+        pointwise!(_gate_beta_point!, f.beta_art, nx, ny, nz,
+                   f.beta_art, f.ft.grad_u, o1, o2, o3)
+    end
+    art.beta_sensor === :dilatation && _dilatation_beta!(ops, true)
+    art.beta_sensor === :ungated_dilatation && _dilatation_beta!(ops, false)
 
     # κ* sensor: Σ_d Δ_d |D_d e|, smoothed; κ* = C_κ · scale(EOS) · sensor,
     # with the scale ρc/T_ion for the gas models. Internal energy comes straight
     # from Q, so the sensor itself is EOS-agnostic; the scale is an EOS query
     # (see the note in physics.jl on why it is the weaker of the two
     # abstractions and what it is still singular in).
-    i_energy = solver.equations.i_energy
-    m1, m2, m3 = solver.equations.i_mom
     nxf, nyf, nzf = padded_extent(decomp)
-    pointwise!(_internal_energy_point!, solver.tmp_a, nxf, nyf, nzf,
-               solver.tmp_a, Q, solver.rho, m1, m2, m3, i_energy)
-    exchange_halos!(solver.tmp_a, decomp)
-    detect_sum!(solver.sensor, solver.tmp_a, solver, 1; ghosts=true)
-    smooth!(solver.sensor, solver)
-    pointwise!(_kappa_point!, solver.kappa_art, nx, ny, nz,
-               solver.kappa_art, solver.eos, solver.rho, solver.c,
-               solver.T_ion, solver.cp_mix, solver.sensor, C_kappa,
+    pointwise!(_internal_energy_point!, f.tmp_a, nxf, nyf, nzf,
+               f.tmp_a, Q, f.rho, m1, m2, m3, i_energy)
+    exchange_halos!(f.tmp_a, decomp)
+    _detect!(f.sensor, f.tmp_a, ops, 1, true)
+    smooth!(f.sensor, ops)
+    pointwise!(_kappa_point!, f.kappa_art, nx, ny, nz,
+               f.kappa_art, eos, f.rho, f.c,
+               f.T_ion, f.cp_mix, f.sensor, C_kappa,
                o1, o2, o3)
 
     # Per-species D*_k = c · G[max(C_D Σ_d Δ_d |D_d Y_k|, C_Y Δ_g (Y_k's excursion
@@ -976,38 +1028,26 @@ function compute_artificial!(solver, Q)
     # two separately measures the same to three digits. Costs n_species filter
     # sweeps per RHS; the flux assembly's correction velocity keeps Σ_k J_k = 0
     # despite unequal D_k. Only meaningful with more than one species.
-    if solver.equations.n_species > 1
-        # The bound's length is the geometric mean of the local physical
-        # spacings over the active directions. The product of the
-        # computational ones and the exponent are the same at every point;
-        # the point supplies the product of the `inv_h` that divide them.
-        h_bound = one(C_D)
-        n_active = 0
-        for d in 1:3
-            decomp.active[d] || continue
-            h_bound *= solver.h[d]
-            n_active += 1
+    if n_species > 1
+        if _shared_species_diffusivity(art, n_species)
+            _bulk_diffusivity!(ops)
+            return nothing
         end
-        inv_n = one(C_D) / n_active
+        h_bound, inv_n = _species_bound_length(decomp, f.h, C_D)
         a1, a2, a3 = decomp.active
-        ih1, ih2, ih3 = solver.inv_h
-        if _shared_species_diffusivity(art, solver.equations.n_species)
-            bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
-                              a1, a2, a3, Y_tolerance)
-            return solver
-        end
-        for sp in 1:solver.equations.n_species
-            detect_sum!(solver.sensor_sp, solver.Y[sp], solver, 1; ghosts=true)
-            pointwise!(_species_bound_point!, solver.sensor_sp, nx, ny, nz,
-                       solver.sensor_sp, solver.Y[sp], C_D, C_Y, h_bound, inv_n,
+        ih1, ih2, ih3 = f.inv_h
+        for sp in 1:n_species
+            _detect!(f.sensor_sp, f.Y[sp], ops, 1, true)
+            pointwise!(_species_bound_point!, f.sensor_sp, nx, ny, nz,
+                       f.sensor_sp, f.Y[sp], C_D, C_Y, h_bound, inv_n,
                        ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)
-            smooth!(solver.sensor_sp, solver)
-            pointwise!(_species_diffusivity_point!, solver.sensor_sp,
-                       nx, ny, nz, solver.D_art[sp], solver.c,
-                       solver.sensor_sp, o1, o2, o3)
+            smooth!(f.sensor_sp, ops)
+            pointwise!(_species_diffusivity_point!, f.sensor_sp,
+                       nx, ny, nz, f.D_art[sp], f.c,
+                       f.sensor_sp, o1, o2, o3)
         end
     end
-    return solver
+    return nothing
 end
 
 """

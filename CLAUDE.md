@@ -241,13 +241,20 @@ add a case there, not in either consumer.
 `bench/jetcheck.jl` and `bench/audit.jl` print counts, not pass/fail. Record
 them before a change and compare after, and read the delta, not the absolute
 count. `jetcheck.jl` reports zero dispatch sites at every probed entry point
-but the boundary ones, so *any* report elsewhere is a regression. The
-boundary baseline is one site in `apply_bcs!` (`enforce!`) and three in
-`compute_rhs!` (`correct_flux!`, `correct_rhs!`, and `sensor_mirror` through
-the detector's `_face_mirror`), hence four in `step!`:
-face conditions are stored abstractly on the `Patch` so that a combination of
-them does not recompile the right-hand-side tree, and the docstring there has
-the measurement. The counts overlap between entry points
+but the intended ones, so *any* report elsewhere is a regression. The
+baseline is one site in `apply_bcs!` (`enforce!`) and five in
+`compute_rhs!`, hence six in `step!`. Three are the boundary hooks
+(`correct_flux!`, `correct_rhs!`, and `sensor_mirror` through the detector's
+`_face_mirror`): face conditions are stored abstractly on the `Patch` so that a
+combination of them does not recompile the right-hand-side tree, and the
+docstring there has the measurement. Two are `_cold` barriers
+(`_cold_bulk_gradients!`, `_cold_ghost_flux_divergence!`), which keep paths a
+configuration never takes out of every solver type's compile; the note on
+`_cold` in timestep.jl has the rule. The script drops reports from inside a
+dispatched callee, which JET infers at abstract types that never run, and
+probes those callees at concrete types instead. The plan-operator handle of
+`compute_artificial!` is `@nospecialize`, which JET's inference does not see,
+so its dispatches do not appear here. The counts overlap between entry points
 (`step!` contains `compute_rhs!`), so compare like with like and never sum them.
 
 `audit.jl`'s inference probe reads `code_typed` at a spelled-out signature. A

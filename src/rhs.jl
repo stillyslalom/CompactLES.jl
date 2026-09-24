@@ -1765,7 +1765,11 @@ cons_parity(solver::SolverLike, d::Int, c::Int) =
     solver.folds[d] === nothing ? 1 :
     conserved_parity(solver.equations, solver.folds[d].sigvel, c)
 
-assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, Q)
+assemble_fluxes!(solver::SolverLike, Q) =
+    (_assemble_fluxes!(patch_fields(solver), solver.eos, solver.transport,
+                       equation_layout(solver.equations),
+                       _shared_species_diffusivity(solver), solver.art.species_flux,
+                       Q); solver)
 
 # No `::Type` argument here: a `Type` inside `pointwise!`'s Vararg defeats
 # Julia's specialization heuristics and the body call turns into a per-point
@@ -1838,22 +1842,20 @@ assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, 
     return nothing
 end
 
-function _assemble_fluxes!(solver::SolverLike{T}, eos, Q) where {T}
-    decomp = solver.decomp
+# Keyed on the field storage, EOS, transport and `Q` only (see `PatchFields`),
+# so every scheme, detector, dimensionality and patch wrapper shares one
+# compiled body per (T, array type, EOS, transport).
+function _assemble_fluxes!(f, eos, tr, eqi, shared::Bool, species_flux::Symbol, Q)
+    n_species, n_cons, i_energy, (m1, m2, m3) = eqi
+    decomp = f.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
-    tr = solver.transport
-    n_species = solver.equations.n_species
-    n_cons = solver.equations.n_cons
-    i_energy = solver.equations.i_energy
-    m1, m2, m3 = solver.equations.i_mom
-    ft = solver.field_tuples
-    shared = _shared_species_diffusivity(solver)
-    pointwise!(_fluxes_point!, solver.rho, nx, ny, nz,
-               Q, eos, solver.rho, solver.u, solver.v, solver.w, solver.p,
-               solver.T_ion, solver.cp_mix, solver.mu_art, solver.beta_art,
-               solver.kappa_art, ft.D_art, ft.Y, ft.grad_u,
-               solver.grad_T_ion, ft.grad_Y, ft.flux,
+    ft = f.ft
+    pointwise!(_fluxes_point!, f.rho, nx, ny, nz,
+               Q, eos, f.rho, f.u, f.v, f.w, f.p,
+               f.T_ion, f.cp_mix, f.mu_art, f.beta_art,
+               f.kappa_art, ft.D_art, ft.Y, ft.grad_u,
+               f.grad_T_ion, ft.grad_Y, ft.flux,
                tr, n_species, m1, m2, m3, i_energy,
                decomp.active, shared, o1, o2, o3)
     # The shared-D_b species channels, D_b read from `D_art[1]` (every
@@ -1863,17 +1865,17 @@ function _assemble_fluxes!(solver::SolverLike{T}, eos, Q) where {T}
     # than a branch inside the body above, which is at the argument count
     # the launcher accepts. `species_flux` is a setup constant identical on
     # every rank, so the branch is safe with no collective below it.
-    if shared && solver.art.species_flux === :bulk
-        pointwise!(_bulk_flux_point!, solver.rho, nx, ny, nz,
-                   ft.flux, solver.D_art[1], FieldMatrix(solver.grad_Q),
+    if shared && species_flux === :bulk
+        pointwise!(_bulk_flux_point!, f.rho, nx, ny, nz,
+                   ft.flux, f.D_art[1], FieldMatrix(f.grad_Q),
                    n_cons, decomp.active, o1, o2, o3)
-    elseif shared && solver.art.species_flux === :partial_density
-        pointwise!(_partial_density_flux_point!, solver.rho, nx, ny, nz,
-                   ft.flux, eos, solver.D_art[1], FieldMatrix(solver.grad_Q),
-                   solver.u, solver.v, solver.w, solver.T_ion, n_species,
+    elseif shared && species_flux === :partial_density
+        pointwise!(_partial_density_flux_point!, f.rho, nx, ny, nz,
+                   ft.flux, eos, f.D_art[1], FieldMatrix(f.grad_Q),
+                   f.u, f.v, f.w, f.T_ion, n_species,
                    m1, m2, m3, i_energy, decomp.active, o1, o2, o3)
     end
-    return solver
+    return nothing
 end
 
 # The partial-density species channel of Brill, Olson & Bokman (2025, eqs.
@@ -2032,6 +2034,14 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
     end
     return dQ
 end
+
+# Entries for the `_cold` calls in `compute_rhs!`. They take the arrays under
+# the `ConservedState` wrappers, which are already on the heap, and rewrap
+# them here: the immutable wrapper itself would be boxed crossing the dynamic
+# call, 16 B per argument per call.
+_cold_bulk_gradients!(solver, q) = _bulk_gradients!(solver, ConservedState(q))
+_cold_ghost_flux_divergence!(dq, c::Int, Fdc, solver, q, d::Int) =
+    _ghost_flux_divergence!(ConservedState(dq), c, Fdc, solver, ConservedState(q), d)
 
 @inline function _copy_component_point!(dest, Q, c, i, j, k)
     @inbounds dest[i, j, k] = Q[i, j, k, c]
@@ -2208,7 +2218,8 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
     # setup-constant branch identical on every rank, so no collective sits
     # below it unreached. Behind a function barrier so that the default
     # path's inferred body (bench/audit.jl) does not carry the branch.
-    _shared_species_diffusivity(solver) && _bulk_gradients!(solver, Q)
+    _shared_species_diffusivity(solver) &&
+        _cold_bulk_gradients!(_cold(solver), parent(Q))
     assemble_fluxes!(solver, Q)
     # Physical wall fluxes must enter the compact divergence, including its
     # near-wall rows. All ranks visit the hooks in the same order; the wall
@@ -2239,7 +2250,8 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
             # Setup constants of the patch, identical on every rank of its
             # communicator, so each rank takes the same solves.
             if ghost && _interface_dim(solver, d)
-                _ghost_flux_divergence!(dQ, c, Fdc, solver, Q, d)
+                _cold_ghost_flux_divergence!(parent(dQ), c, Fdc, _cold(solver),
+                                             parent(Q), d)
             elseif unitgeom
                 div_subtract_along!(dQ, c, Fdc, solver, d, σ, nothing)
             else

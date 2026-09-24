@@ -394,6 +394,11 @@ end
 function _run_step!(solver, Q, workspace, dt, prepared, control)
     getfield(solver, :subcycle) || return (step!(solver, Q, workspace, dt, prepared);
                                            nothing)
+    return _subcycled_run_step!(_cold(solver), Q, workspace, dt, prepared,
+                                control)::Union{Nothing,SolverFailure}
+end
+
+function _subcycled_run_step!(solver, Q, workspace, dt, prepared, control)
     status, guard = _subcycled_step_status!(solver, Q, workspace.dQ, workspace.du,
                                              dt, prepared, control)
     status == 0 && return nothing
@@ -409,6 +414,17 @@ end
 # `3 count + mc` on a 0-based root count gave level 2 the counts 4 .. 12,
 # the wrong number and phase of filter passes at depth two and below.
 _child_count(count::Int, mc::Int) = 3 * (count - 1) + mc
+
+# A path a run either takes or never takes, gated by a setting (subcycling,
+# ghost interface fluxes, the shared-diffusivity species channels, the
+# positivity failsafe, savepoints) or by a failure (rollback), is called
+# through this barrier. The
+# callee is then compiled on first use, for the solver type that takes it,
+# rather than with every solver type whose driver can reach the branch; a
+# run that never takes it pays nothing, and one that does pays one dynamic
+# dispatch per call. Per-type codegen of the drivers otherwise carries every
+# such path whether or not the configuration can reach it.
+@inline _cold(x) = Base.inferencebarrier(x)
 
 # One step of size `dt` from `t0` on level `ℓ` (1-based index into
 # `solver.levels`), followed by three substeps of each child and their
@@ -1430,9 +1446,9 @@ function run!(solver::Solver, Q, workspace::Workspace;
     # every remaining step of its `nmax`.
     tfin = oftype(solver.t, tfinal)
     _prime_coefficients!(solver, Q, workspace)
-    save = control.retries > 0 ?
-           Savepoint(_snapshot(Q), _art_snapshot(solver), solver.t, solver.step, -1) :
-           nothing
+    # Off by default (`retries = 0`), so behind `_cold`: `save` is then
+    # untyped, and read only on the rollback and savepoint paths, both cold.
+    save = control.retries > 0 ? _savepoint(_cold(solver), Q) : nothing
     attempts = 0
     dt_seen = 0.0
     rho_floor, e_floor = positivity_floors(solver, Q, control)
@@ -1472,8 +1488,8 @@ function run!(solver::Solver, Q, workspace::Workspace;
                                           stage="the state run! returns",
                                           floors=(rho_floor, e_floor))
             failure === nothing && break
-            attempts = _rollback!(solver, Q, workspace, callback, control, save,
-                                  failure, attempts, rank)
+            attempts = _rollback!(_cold(solver), Q, workspace, callback, control,
+                                  save, failure, attempts, rank)::Int
             dt_seen = 0.0
             stopped = false
             continue
@@ -1509,8 +1525,8 @@ function run!(solver::Solver, Q, workspace::Workspace;
                                           floors=(rho_floor, e_floor))
         end
         if failure !== nothing
-            attempts = _rollback!(solver, Q, workspace, callback, control, save,
-                                  failure, attempts, rank)
+            attempts = _rollback!(_cold(solver), Q, workspace, callback, control,
+                                  save, failure, attempts, rank)::Int
             dt_seen = 0.0
             continue
         end
@@ -1519,10 +1535,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # after stepping would bank a state nothing has yet vetted.
         if save !== nothing && control.savepoint_interval > 0 &&
            solver.step > save.guard && solver.step % control.savepoint_interval == 0
-            _restore_state!(save.Q, Q)
-            _bank_art!(save.art, solver)
-            save.t = solver.t
-            save.step = solver.step
+            _bank_savepoint!(_cold(solver), save, Q)
         end
         dt_seen = max(dt_seen, dt)
         # Clip to the endpoint AFTER the checks, and to the next scheduled
@@ -1589,8 +1602,8 @@ function run!(solver::Solver, Q, workspace::Workspace;
         prepared = true         # see the apply_bcs!/max_rate note above
         failure = _run_step!(solver, Q, workspace, dt, prepared, control)
         if failure !== nothing
-            attempts = _rollback!(solver, Q, workspace, callback, control, save,
-                                  failure, attempts, rank)
+            attempts = _rollback!(_cold(solver), Q, workspace, callback, control,
+                                  save, failure, attempts, rank)::Int
             dt_seen = 0.0
             continue
         end
@@ -1607,19 +1620,8 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # entering the next iteration's checks is the repaired one whichever of
         # the two damaged it. The compact filter is not monotone, so it can
         # produce sub-floor values itself.
-        if rho_floor > 0
-            tally = apply_positivity_floor!(solver, Q, rho_floor, e_floor,
-                                            control.floor_scope)
-            if tally.cells > 0 || tally.low_energy > 0
-                ft = record_floor!(solver, tally)
-                ft.steps == floor_0.steps + 1 && rank == 0 &&
-                    @warn "run!: the positivity failsafe saw $(tally.low_energy) " *
-                          "cell(s) below the internal-energy floor and repaired " *
-                          "$(tally.cells) at step $(solver.step), t = $(solver.t). " *
-                          "Later steps are counted in solver.floor_tally and " *
-                          "summarized when this run ends."
-            end
-        end
+        rho_floor > 0 && _positivity_failsafe!(_cold(solver), Q, rho_floor,
+                                                e_floor, control, floor_0, rank)
         # A rollback `continue`s above this, so an abandoned iteration never
         # records a step time; wall_total counts work that stood.
         _validate_transport_state!(solver, Q)
@@ -1642,6 +1644,35 @@ function run!(solver::Solver, Q, workspace::Workspace;
                               "trajectory rather than a converged one." : "")
     end
     return Q
+end
+
+_savepoint(solver, Q) =
+    Savepoint(_snapshot(Q), _art_snapshot(solver), solver.t, solver.step, -1)
+
+# The savepoint bank and the positivity failsafe of `run!`, behind `_cold`:
+# each runs only under a `StepControl` setting that is off by default.
+function _bank_savepoint!(solver, save, Q)
+    _restore_state!(save.Q, Q)
+    _bank_art!(save.art, solver)
+    save.t = solver.t
+    save.step = solver.step
+    return nothing
+end
+
+function _positivity_failsafe!(solver, Q, rho_floor, e_floor, control, floor_0,
+                               rank)
+    tally = apply_positivity_floor!(solver, Q, rho_floor, e_floor,
+                                    control.floor_scope)
+    if tally.cells > 0 || tally.low_energy > 0
+        ft = record_floor!(solver, tally)
+        ft.steps == floor_0.steps + 1 && rank == 0 &&
+            @warn "run!: the positivity failsafe saw $(tally.low_energy) " *
+                  "cell(s) below the internal-energy floor and repaired " *
+                  "$(tally.cells) at step $(solver.step), t = $(solver.t). " *
+                  "Later steps are counted in solver.floor_tally and " *
+                  "summarized when this run ends."
+    end
+    return nothing
 end
 
 function run!(solver::Solver, Q; workspace=nothing, kwargs...)
