@@ -393,6 +393,81 @@ end
     rm(dir; recursive=true)
 end
 
+@testset "field_snapshot: the unpadded grid and fields in memory" begin
+    # A density linear in the coordinates and a sheared velocity make every
+    # gathered value definitional: the snapshot must reproduce them at its
+    # own coordinates, and the derived fields must equal the padded ones.
+    rho_fn(x, y, z) = 1 + 0.1x + 0.2y + 0.3z
+    solver = Solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5),
+                    bcs=(io_per, io_per, io_per))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) ->
+        Prim(u=(sin(2π * y), 0, 0), p=1.0, rho=rho_fn(x, y, z)))
+    run!(solver, Q; tfinal=1.0, nmax=1)
+    beta_before = copy(solver.beta_art)
+    snap = field_snapshot(solver, Q; fields=(:rho, :velocity, :Y, :vorticity_magnitude,
+                                             :beta_art))
+    @test snap isa FieldSnapshot{Float64}
+    @test size(snap) == (24, 16, 12)
+    @test snap.coords == ntuple(d -> [global_xcoord(solver, d, g)
+                                      for g in 1:solver.n_global[d]], 3)
+    @test snap.t == solver.t && snap.step == 1
+    @test (snap.level, snap.offset) == (0, (0, 0, 0)) && !any(snap.covered)
+    @test Set(keys(snap)) == Set((:rho, :velocity, :Y, :vorticity_magnitude, :beta_art))
+    @test size(snap[:velocity]) == (24, 16, 12, 3)
+    @test size(snap[:Y]) == (24, 16, 12, 1)
+    interior(a) = a[gidx(solver, 1, 1, 1):gidx(solver, 24, 16, 12)]
+    for name in (:rho, :beta_art, :vorticity_magnitude)
+        @test snap[name] == interior(field_array(solver, Q, name))
+    end
+    @test snap[:velocity][:, :, :, 1] == interior(field_array(solver, Q, :u))
+    @test solver.beta_art == beta_before
+    X, Y, Z = cartesian_coordinates(snap)
+    @test X[:, 1, 1] == snap.coords[1] && Z[1, 1, :] == snap.coords[3]
+    @test occursin("24 × 16 × 12", sprint(show, snap))
+
+    @test_throws ArgumentError field_snapshot(solver, Q; fields=(:bogus,))
+    @test_throws ArgumentError field_snapshot(solver, Q; fields=(:rho, :rho))
+
+    # The patch-layout form: one snapshot per patch, the root first, each
+    # tile at its level's spacing and offset, and the root's fully covered
+    # nodes flagged as the VTK ghost array blanks them.
+    amr = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
+                 bcs=(io_per, io_per, io_per), tile=12,
+                 refine=BlockRegion((12, 12, 0), (24, 24, 1)),
+                 art=ArtParams(enabled=false))
+    states = allocate_state(amr)
+    wave(x, y) = 1 + 0.1 * sin(x) * sin(y)
+    initialize!(amr, states, (x, y, z) -> Prim(u=(0.4, 0.3, 0), p=1.0, rho=wave(x, y)))
+    snaps = field_snapshot(amr, states; fields=[:rho])
+    @test [s.level for s in snaps] == [0, 1, 1, 1, 1]
+    @test [s.offset for s in snaps[2:end]] ==
+          [(36, 36, 0), (36, 72, 0), (72, 36, 0), (72, 72, 0)]
+    @test all(size(s) == (37, 37, 1) for s in snaps[2:end])
+    @test count(snaps[1].covered) == 23 * 23 && !any(s -> any(s.covered), snaps[2:end])
+    spacing(s) = s.coords[1][2] - s.coords[1][1]
+    @test spacing(snaps[2]) ≈ spacing(snaps[1]) / 3
+    @test maximum(maximum(abs, s[:rho] .- [wave(x, y) for x in s.coords[1],
+                                           y in s.coords[2], z in s.coords[3]])
+                  for s in snaps) < 1e-14
+    @test_throws ArgumentError field_snapshot(amr, states[1])
+
+    # A curvilinear block keeps its metric coordinates, and the Cartesian
+    # positions follow from them.
+    cyl = Solver(n_global=(16, 16, 1), L_domain=(1.0, 2π, 1.0),
+                 metric=CylindricalMetric(),
+                 bcs=((AxisBC(), SlipWallBC()), io_per, io_per),
+                 art=ArtParams(enabled=false))
+    Qc = allocate_state(cyl)
+    initialize!(cyl, Qc, (r, θ, z) -> Prim(p=1.0, rho=1 + r^2))
+    snapc = field_snapshot(cyl, Qc; fields=(:rho,))
+    X, Y, _ = cartesian_coordinates(snapc)
+    r, θ = snapc.coords[1], snapc.coords[2]
+    @test X ≈ [r[i] * cos(θ[j]) for i in 1:16, j in 1:16, k in 1:1]
+    @test Y ≈ [r[i] * sin(θ[j]) for i in 1:16, j in 1:16, k in 1:1]
+    @test snapc[:rho][:, 1, 1] ≈ 1 .+ r .^ 2
+end
+
 @testset "VTK headers declare the byte order actually written" begin
     # The appended blocks go out in native order, so the declaration follows
     # ENDIAN_BOM rather than asserting little-endian.

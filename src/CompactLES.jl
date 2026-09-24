@@ -132,6 +132,7 @@ export boundary_plane
 export volume_integral, volume_average, domain_volume, plane_profile
 export profile_coordinate, profile_spacing
 export field_array, line_profile, line_sample, field_slice, cartesian_slice
+export FieldSnapshot, field_snapshot, cartesian_coordinates
 export revolve_profile
 export profileplot, profileplot!, fieldheatmap, fieldheatmap!, makie_available
 export mix_width, molecular_mixing, species_pdf

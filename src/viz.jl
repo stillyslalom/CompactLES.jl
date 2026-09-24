@@ -230,6 +230,219 @@ function _plane_index(normal::Int, ia::Int, ib::Int, kn::Int)
     return CartesianIndex(ia, ib, kn)
 end
 
+# --- Whole-grid gather -------------------------------------------------------
+#
+# A snapshot is every node of a block, gathered to rank 0 for in-memory
+# postprocessing. Each rank serializes its interior blocks with their global
+# placement, and rank 0 writes them into the assembled arrays; no rank but the
+# root allocates the whole grid. `MPI.gather` counts bytes in a `Cint`, which
+# caps one rank's share at 2 GiB, far beyond the desktop runs this serves;
+# larger runs write VTK or HDF5.
+
+"""
+    FieldSnapshot
+
+The unpadded fields of one block of nodes and the grid they sit on, as
+[`field_snapshot`](@ref) returns them on rank 0. The block is the whole grid
+for a single-patch solver and one patch for the patch-layout form.
+
+- `coords`: three coordinate vectors; `coords[d][i]` is the metric coordinate
+  of node `i` along dimension `d`, stretch mapping and fold offset included.
+  The grid is their tensor product.
+- `fields`: a `Dict{Symbol,Array}` keyed by the requested names. A scalar is an
+  `n1 × n2 × n3` array. `:Y` and `:D_art` carry a fourth dimension over
+  species, and `:velocity` and `:vorticity` a fourth of length 3 over
+  components along the metric's own directions (`(u_r, u_θ, u_z)` on a
+  cylindrical grid), not rotated into the Cartesian frame.
+- `t`, `step`: the solver clock and step count when the snapshot was taken.
+- `metric`: the solver's metric, which [`cartesian_coordinates`](@ref) reads.
+- `level`, `offset`: the refinement level (0 is the root) and the block's node
+  offset in that level's index space; `0` and `(0, 0, 0)` for a single patch.
+- `covered`: `true` at a node whose quadrature cell a finer level covers
+  entirely, where a composite view shows the finer block instead. All `false`
+  on the finest level and for a single-patch solver.
+
+`snap[name]` is `snap.fields[name]`, `keys(snap)` lists the names, and
+`size(snap)` gives the node counts.
+"""
+struct FieldSnapshot{T,M<:Metric}
+    coords::NTuple{3,Vector{T}}
+    fields::Dict{Symbol,Array{T}}
+    t::T
+    step::Int
+    metric::M
+    level::Int
+    offset::NTuple{3,Int}
+    covered::BitArray{3}
+end
+
+Base.getindex(snap::FieldSnapshot, name::Symbol) = snap.fields[name]
+Base.keys(snap::FieldSnapshot) = keys(snap.fields)
+Base.haskey(snap::FieldSnapshot, name::Symbol) = haskey(snap.fields, name)
+Base.size(snap::FieldSnapshot) = map(length, snap.coords)
+
+function Base.show(io::IO, snap::FieldSnapshot{T}) where {T}
+    print(io, "FieldSnapshot{")
+    show(io, T)
+    print(io, "}(")
+    _show_dimensions(io, size(snap))
+    snap.level == 0 || print(io, ", level ", snap.level)
+    print(io, ", t=", snap.t, ", fields: ", join(sort!(collect(keys(snap))), ", "),
+          ')')
+end
+
+"""
+    cartesian_coordinates(snap::FieldSnapshot) -> (X, Y, Z)
+
+The Cartesian position of every node of `snap`, as three arrays of its node
+counts. On a Cartesian grid these repeat `snap.coords` over the grid; on a
+cylindrical or spherical grid they map `(r, θ, z)` or `(r, θ, φ)` to `(x, y, z)`,
+for a scatter or surface plot of a curvilinear block. Vector fields in the
+snapshot remain in the metric's own components.
+"""
+function cartesian_coordinates(snap::FieldSnapshot{T}) where {T}
+    n = size(snap)
+    X, Y, Z = (Array{T}(undef, n) for _ in 1:3)
+    x1, x2, x3 = snap.coords
+    for k in 1:n[3], j in 1:n[2], i in 1:n[1]
+        X[i, j, k], Y[i, j, k], Z[i, j, k] =
+            _cartesian_position(snap.metric, x1[i], x2[j], x3[k])
+    end
+    return X, Y, Z
+end
+
+"""
+    field_snapshot(solver, Q; fields = DEFAULT_VTK_FIELDS)
+        -> FieldSnapshot or nothing
+    field_snapshot(solver, states::Vector; fields = DEFAULT_VTK_FIELDS)
+        -> Vector{FieldSnapshot} or nothing
+
+Every interior node of the named fields, without halo padding, gathered with the
+grid coordinates into a [`FieldSnapshot`](@ref) on rank 0, in the solver's
+element type. Every other rank returns `nothing`. This is the in-memory
+counterpart of [`save_vtk`](@ref) for postprocessing and plotting a
+desktop-scale run: rank 0 holds the whole grid, so a large run is better
+written with `save_vtk` or `save_hdf5`.
+
+`fields` is a tuple or vector of the names `save_vtk` accepts: the scalars of
+[`scalar_field`](@ref), the per-species `:Y` and `:D_art`, and the vectors
+`:velocity` and `:vorticity`. Preparation costs what it does for `save_vtk`: a
+field derived from a velocity gradient adds a gradient pass, an artificial
+coefficient adds `compute_artificial!`, and the artificial coefficient arrays
+are restored afterwards, so a snapshot between steps does not change the next
+timestep.
+
+The first form takes a single-patch solver and its state and returns the whole
+grid. The second takes the state vector of a refined or patch-partitioned
+solver and returns one snapshot per patch, ordered by level and then by node
+offset; each carries its level, its offset in that level's index space, and
+the nodes a finer level covers. Abutting root patches share their interface
+plane, which appears in both.
+
+Every rank of `solver.comm` must call this function with the same `fields`,
+since the derived fields run distributed solves in the order given.
+"""
+function field_snapshot(solver::Solver, Q; fields=DEFAULT_VTK_FIELDS)
+    patches = getfield(solver, :patches)
+    length(patches) == 1 && nlevels(solver) == 1 &&
+        only(patches).region.extent == solver.n_global ||
+        throw(ArgumentError("field_snapshot: this solver holds several patches; " *
+                            "pass the state vector allocate_state returns"))
+    snaps = _snapshot(solver, [Q], fields)
+    return snaps === nothing ? nothing : only(snaps)
+end
+
+function field_snapshot(solver::Solver, states::Vector{<:ConservedState};
+                        fields=DEFAULT_VTK_FIELDS)
+    return _snapshot(solver, states, fields)
+end
+
+const _SNAPSHOT_STACKED = (:velocity, :vorticity, :Y, :D_art)
+
+function _snapshot(solver::Solver, states, fields)
+    names = Tuple(fields)
+    for name in names
+        name in SCALAR_FIELD_NAMES || name in _SNAPSHOT_STACKED ||
+            throw(ArgumentError("field_snapshot: unknown field $name; known " *
+                                "names are $(join(SCALAR_FIELD_NAMES, ", ")), " *
+                                join(_SNAPSHOT_STACKED, ", ")))
+    end
+    allunique(names) ||
+        throw(ArgumentError("field_snapshot: fields $names repeat a name"))
+    patches = getfield(solver, :patches)
+    blocks = preserving_artificial(solver, any(_wants_artificial, names)) do
+        # Patch order is the collective order of the derived fields, as in
+        # the patch-layout `save_vtk`.
+        map(eachindex(patches)) do li
+            ps = PatchSolver(solver, patches[li])
+            _prepare_fields!(ps, states[li], names)
+            _snapshot_block(ps, names)
+        end
+    end
+    gathered = MPI.gather(blocks, solver.comm; root=0)
+    MPI.Comm_rank(solver.comm) == 0 || return nothing
+    return _assemble_snapshots(solver, reduce(vcat, gathered), names)
+end
+
+# This rank's interior block of one patch, with its placement in the patch.
+function _snapshot_block(ps::PatchSolver, names)
+    decomp = ps.decomp
+    n = decomp.n_local
+    interior = ntuple(d -> decomp.n_halo_d[d] .+ (1:n[d]), 3)
+    # Device storage is copied to the host whole before the interior is cut.
+    grab(a) = (a isa Array ? a : Array(a))[interior...]
+    stacked(arrays) = cat(map(grab, arrays)...; dims=4)
+    data = map(names) do name
+        name === :velocity && return stacked((ps.u, ps.v, ps.w))
+        name === :vorticity && return stacked(_vorticity_arrays(ps))
+        name === :Y && return stacked(ps.Y)
+        name === :D_art && return stacked(ps.D_art)
+        return grab(scalar_field(ps, name))
+    end
+    T = eltype(ps.rho)
+    coords = ntuple(d -> T[xcoord(ps, d, i) for i in 1:n[d]], 3)
+    region = ps.patch.region
+    return (level=ps.patch.level, offset=region.offset, extent=region.extent,
+            lo=decomp.offset, coords=coords, data=collect(data),
+            covered=BitArray(ps.covered[interior...] .== 0xff))
+end
+
+# Rank 0: the blocks of every rank written into one snapshot per patch. A
+# patch is named by its level and offset, which no two patches share.
+function _assemble_snapshots(solver::Solver, blocks, names)
+    T = eltype(first(blocks).coords[1])
+    groups = Dict{Tuple{Int,NTuple{3,Int}},Vector{Any}}()
+    for b in blocks
+        push!(get!(() -> Any[], groups, (b.level, b.offset)), b)
+    end
+    snaps = FieldSnapshot{T,typeof(solver.metric)}[]
+    for key in sort!(collect(keys(groups)))
+        parts = groups[key]
+        n = first(parts).extent
+        coords = ntuple(d -> Vector{T}(undef, n[d]), 3)
+        fields = Dict{Symbol,Array{T}}()
+        for (m, name) in enumerate(names)
+            a = first(parts).data[m]
+            fields[name] = Array{T}(undef, n..., size(a)[4:end]...)
+        end
+        covered = falses(n)
+        for b in parts
+            span = ntuple(d -> b.lo[d] .+ (1:length(b.coords[d])), 3)
+            for d in 1:3
+                coords[d][span[d]] = b.coords[d]
+            end
+            for (m, name) in enumerate(names)
+                f = fields[name]
+                view(f, span..., ntuple(_ -> Colon(), ndims(f) - 3)...) .= b.data[m]
+            end
+            covered[span...] = b.covered
+        end
+        push!(snaps, FieldSnapshot(coords, fields, T(solver.t), Int(solver.step),
+                                   solver.metric, key[1], key[2], covered))
+    end
+    return snaps
+end
+
 # --- Curvilinear slice → Cartesian raster -----------------------------------
 
 """

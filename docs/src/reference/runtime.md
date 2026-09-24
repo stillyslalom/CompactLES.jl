@@ -144,6 +144,14 @@ Cartesian raster, and [`revolve_profile`](@ref) revolves a collapsed radial
 profile into a disk. See the tutorials for worked cylindrical and spherical
 initializations.
 
+[`field_snapshot`](@ref) gathers every interior node of the requested fields,
+without halo padding, to rank 0 as a [`FieldSnapshot`](@ref): the coordinate
+vectors of the grid and one array per field, for postprocessing or plotting a
+desktop-scale run in memory. A refined or patch-partitioned solver gives one
+snapshot per patch, each with its level, offset and the nodes a finer level
+covers. [`cartesian_coordinates`](@ref) maps a curvilinear snapshot's nodes to
+Cartesian positions.
+
 The plotting functions live in a package extension and require a Makie backend
 (`using CairoMakie` or `using GLMakie`); [`makie_available`](@ref) reports
 whether it is loaded. [`profileplot`](@ref) draws a `line_profile`, and
@@ -156,6 +164,9 @@ CompactLES.scalar_field
 line_profile
 line_sample
 field_slice
+field_snapshot
+FieldSnapshot
+cartesian_coordinates
 cartesian_slice
 revolve_profile
 makie_available

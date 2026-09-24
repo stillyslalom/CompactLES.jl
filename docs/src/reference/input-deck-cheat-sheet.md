@@ -255,7 +255,7 @@ run!(solver, Q; tfinal=1.0, nmax=100_000, callback=cb)
 | Single VTK frame | `save_vtk(solver, Q, path; fields=(:rho, :velocity, :p), stride=2)` |
 | HDF5/XDMF frame | `save_hdf5(solver, Q, path; fields=(:rho, :velocity, :p), stride=2)` after `using HDF5` |
 | Restart | `save_checkpoint`/`load_checkpoint!`; HDF5 variants for rank-count-independent restart |
-| Read fields | `field_array`, `line_sample` (one grid line), `line_profile` (transverse-plane mean), `field_slice`, `cartesian_slice` |
+| Read fields | `field_array`, `line_sample` (one grid line), `line_profile` (transverse-plane mean), `field_slice`, `cartesian_slice`; `field_snapshot` (whole grid in memory) |
 | Plot | `profileplot`/`fieldheatmap` after loading a Makie backend |
 
 `quantity` is any `(solver, Q) -> Real`, such as `volume_integral` or the

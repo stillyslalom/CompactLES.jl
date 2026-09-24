@@ -29,7 +29,8 @@ Transport Trigger WhenState Workspace add_source! allocate_state
 apply_bcs! artificial_conductivity_scale boundary_plane cartesian_slice
 compact_d8 compact_filter compute_dt compute_rhs! conserved_from_prim
 conserved_parity correct_flux! correct_rhs! dissipation_rate domain_volume dt_report eachpatch
-enforce! eos_dphi_dY eos_phi field_array field_slice fieldheatmap fieldheatmap!
+enforce! eos_dphi_dY eos_phi field_array field_slice field_snapshot
+FieldSnapshot cartesian_coordinates fieldheatmap fieldheatmap!
 filter_state! fired! gaussian_filter gidx global_xcoord hdf5_available
 hdf5_parallel initialize! interior_index isperiodic lele_d1_10 lele_d1_6
 lele_d1_8 level_regions line_profile line_sample load_checkpoint!

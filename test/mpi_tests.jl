@@ -1098,6 +1098,22 @@ function test_slicing()
     rank == 0 && foreach(rm, filter(startswith("mpi_slice_z"), readdir()))
     MPI.Barrier(comm)
 
+    # (c) The whole grid gathered to rank 0, which alone returns it: every
+    #     rank's block lands at its offset, so the snapshot is the initial
+    #     condition at its own coordinates.
+    snap = field_snapshot(solver, Q; fields=(:rho, :velocity))
+    check("snapshot returned on rank 0 only",
+          abs(gsum(snap === nothing ? 0 : 1) - 1), 0.5)
+    e = 0.0
+    if rank == 0
+        x = snap.coords[1]
+        e = max(maximum(abs, snap[:rho] .- (1 .+ x)),
+                maximum(abs, snap[:velocity][:, :, :, 1] .- 0.1),
+                size(snap) == (SPLITN, 16, 16) ? 0.0 : 1.0,
+                maximum(abs, x .- [global_xcoord(solver, 1, g) for g in 1:SPLITN]))
+    end
+    check("snapshot assembles the decomposed grid", gmax(e), 1e-14)
+
     # An out-of-range plane is rejected on every rank, not only the one that
     # would have held it.
     threw = try
@@ -2188,6 +2204,28 @@ function test_tiled_level()
         check("tiled corner: four copies at the mean", gmax(e_corner), 1e-15)
         check("tiled corner: diagonal ghosts from the diagonal tile",
               gmax(e_ghost), 1e-15)
+    end
+
+    # A snapshot of the decomposed tiles: every tile's blocks gathered from
+    # its rank range into one snapshot on rank 0, root first.
+    let
+        solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3,
+                        art=ArtParams(enabled=false), tile=12,
+                        refine=BlockRegion((12, 12, 0), (24, 24, 1)))
+        states = allocate_state(solver)
+        wave(x, y) = 1.0 + 0.1 * sin(x) * sin(y)
+        initialize!(solver, states, (x, y, z) -> Prim(p=1.0, rho=wave(x, y)))
+        snaps = field_snapshot(solver, states; fields=(:rho,))
+        e = 0.0
+        if rank == 0
+            e = [s.level for s in snaps] == [0, 1, 1, 1, 1] ? 0.0 : 1.0
+            e += count(snaps[1].covered) == 23 * 23 ? 0.0 : 1.0
+            for s in snaps
+                e = max(e, maximum(abs, s[:rho] .- [wave(x, y) for x in s.coords[1],
+                                                    y in s.coords[2], z in 1:1]))
+            end
+        end
+        check("tiled snapshot assembles every tile on rank 0", gmax(e), 1e-14)
     end
 
     # More tiles than ranks: twelve 25-node tiles of a 1-D level, each

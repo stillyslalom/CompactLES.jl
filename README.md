@@ -243,6 +243,9 @@ See [Run in parallel](docs/src/how-to/parallel-runs.md) for setup and constraint
   `.h5` per frame with an XDMF sidecar. Both take `fields` (primitives plus
   derived fields such as `:vorticity`, `:qcriterion`, `:schlieren`, and the
   artificial-property internals), `stride` subsampling, and `slice`.
+- **In-memory output.** `field_snapshot(solver, Q; fields)` gathers the grid
+  coordinates and the unpadded fields to rank 0 for postprocessing a
+  desktop-scale run without writing files.
 - **Time series.** `Callback(EveryTime(Δt), FieldWriter("out/field"))` dumps on
   a time schedule and writes a `.pvd` collection to animate against time.
 - **Refined runs.** Every writer and checkpoint above also takes the state
