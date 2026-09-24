@@ -17,7 +17,7 @@ used interchangeably.
 ## Serial code verification
 
 ```sh
-julia --project=. test/runtests.jl
+julia --project=. -O1 test/runtests.jl
 ```
 
 The serial suite checks banded algebra, compact derivatives, closure

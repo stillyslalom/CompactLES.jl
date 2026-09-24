@@ -48,9 +48,15 @@ jobs:
               Base.UUID("b1f6c1e2-4a83-4c5f-9d2e-7c3a1e5b8f10"),
               "precompile_device" => true; force=true)
       - uses: julia-actions/julia-buildpkg@v1
-      - uses: julia-actions/julia-runtest@v1
-        with:
-          coverage: false
+      # At -O1: the serial suite is compile-bound, and -O1 reuses the -O2
+      # image buildpkg made (see test/runtests.jl). julia-runtest has no
+      # optimization input, so this is its Pkg.test call with the flag added;
+      # Pkg.test keeps its own --check-bounds=yes.
+      - name: Run the serial suite at -O1
+        shell: julia --project=. --color=yes {0}
+        run: |
+          using Pkg
+          Pkg.test(; coverage=false, julia_args=["-O1"])
 
   numerics:
     name: Convergence and MPI

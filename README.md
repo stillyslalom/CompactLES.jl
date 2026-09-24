@@ -256,7 +256,7 @@ See [Run in parallel](docs/src/how-to/parallel-runs.md) for setup and constraint
 ## Testing
 
 ```
-julia --project=. test/runtests.jl                      # serial unit tests
+julia --project=. -O1 test/runtests.jl                  # serial unit tests
 mpiexec -n 4 julia --project=. -t 1 test/mpi_tests.jl   # distributed (phases=a,b selects)
 julia --project=. -t auto test/convergence.jl           # order studies
 julia --project=. -t auto test/validation.jl            # shock-capturing battery
