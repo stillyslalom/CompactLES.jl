@@ -211,9 +211,17 @@ necessarily a padded extent, and every body must be safe to run at any point
 of the box in any order; this is the pointwise contract. A route that is a
 `StackedArray` (or a conserved state over one) runs the box once per tile in
 one launch; see the stacked launches below.
+
+The launcher is `@noinline`, so each distinct launch compiles once, keyed on
+the body and the argument types, and is shared by every caller that makes
+it. Inlined, every call site carried the serial loop, the threaded closure and
+the KernelAbstractions branch into its caller, and the orchestration functions
+were regenerated with all of it for every solver type. `Vararg{Any,N}` keeps
+the launch specialized on its arguments: a plain `args...` left it
+unspecialized, which cost at run time.
 """
-@inline function pointwise!(body!::F, route::AbstractArray, n1::Int, n2::Int,
-                            n3::Int, args...) where {F}
+@noinline function pointwise!(body!::F, route::AbstractArray, n1::Int, n2::Int,
+                              n3::Int, args::Vararg{Any,N}) where {F,N}
     if _cpu_storage(route) && !FORCE_KA[]
         @threaded n1 * n2 * n3 for jk in outer_indices(n2, n3)
             j, k = Tuple(jk)
