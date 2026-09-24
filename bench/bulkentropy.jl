@@ -1,4 +1,4 @@
-# Does the bulk species channel's entropy inequality survive the discretization?
+# Do the species channels' entropy inequalities survive the discretization?
 #
 # `reference/DESIGN.md` derives the inequality for the continuous model: for a
 # convex entropy pair (η, ψ) of the hyperbolic system, adding the flux
@@ -43,12 +43,13 @@
 #               D* of the off solver beside every sample, which is the check
 #               that the isolation holds. Reported per sample: the channel's
 #               production ∫ w·R dV, the whole right-hand side's ∫ w·dQ dV so
-#               the channel's share is visible, and, under `:bulk`, the
-#               continuous model's quadratic form ∫ D_b Σ_d ∂_d qᵀ (−(ρs)'')
-#               ∂_d q dV evaluated with the discrete conserved gradients the
-#               solver already holds in `grad_Q`. The difference between that
-#               form and ∫ w·R dV is the discrete non-summation-by-parts
-#               defect, which is the number this part exists for. Both
+#               the channel's share is visible, and the continuous model's
+#               production evaluated with the discrete conserved gradients the
+#               solver already holds in `grad_Q`: under `:bulk` the quadratic
+#               form ∫ D_b Σ_d ∂_d qᵀ (−(ρs)'') ∂_d q dV, under
+#               `:partial_density` ∫ D_b Σ_d Σ_k R_k (∂_d ρ_k)²/ρ_k dV. The
+#               difference between that form and ∫ w·R dV is the discrete
+#               non-summation-by-parts defect, which is the number this part exists for. Both
 #               integrals exclude the points where a partial density has gone
 #               nonpositive, since the entropy Hessian carries R_k/ρ_k and is
 #               not defined there, and the count of excluded points is printed
@@ -56,8 +57,9 @@
 #               defect is a statement about a fraction of the domain.
 #
 #   step        The fully discrete update: S = ∫ρs dV recorded after every
-#               Runge–Kutta step and again after the filter pass, for the bulk
-#               channel, the Fickian channel and the artificial properties off.
+#               Runge–Kutta step and again after the filter pass, for the
+#               partial-density, bulk and Fickian channels and the artificial
+#               properties off.
 #               The off configuration is what makes the filter's own
 #               contribution readable. S is the integral over the whole domain,
 #               so a point outside the entropy's domain enters it at a floored
@@ -358,6 +360,41 @@ function quadratic_integral(solver, Q, buf)
     return volume_integral(solver, f)
 end
 
+"""
+∫ D_b Σ_d Σ_k R_k (∂_d ρ_k)² / ρ_k dV, the continuous model's entropy production
+of the partial-density channel (`reference/DESIGN.md`, "The species channel"),
+evaluated with the partial-density gradients `_bulk_gradients!` leaves in the
+first n_species columns of `solver.grad_Q` under `species_flux =
+:partial_density`. Masked to the entropy's domain as the other two integrals
+are.
+"""
+function partial_density_integral(solver, Q, buf)
+    nx, ny, nz = solver.decomp.n_local
+    q, f = buf.q, buf.field
+    active = solver.decomp.active
+    D_b = solver.D_art[1]
+    gQ = solver.grad_Q
+    @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
+        I = gidx(solver, i, j, k)
+        for c in 1:buf.n_cons
+            q[c] = Q[I, c]
+        end
+        if !admissible(buf.cvk, q, buf.ns, buf.mom, buf.ie)
+            f[I] = 0.0
+            continue
+        end
+        acc = 0.0
+        for d in 1:3
+            active[d] || continue
+            for sp in 1:buf.ns
+                acc += buf.Rk[sp] * gQ[d, sp][I]^2 / q[sp]
+            end
+        end
+        f[I] = D_b[I] * acc
+    end
+    return volume_integral(solver, f)
+end
+
 # --- the two flow cases ------------------------------------------------------
 
 # Radius and half-thickness of the interface. The thickness is physical rather
@@ -522,13 +559,14 @@ The full solver's coefficient arrays are put back afterwards: `max_rate` sizes
 the next step from them and this sample has overwritten them, so without the
 restore the instrument would perturb the run it is measuring.
 """
-function production_sample(full, off, Q, Q_off, dQf, dQo, buf, bulk)
+function production_sample(full, off, Q, Q_off, dQf, dQo, buf, channel)
     art_saved = CL.art_block(full)
     tstage_saved = full.tstage
     CL.compute_rhs!(full, Q, dQf)
     # Before anything else runs on this solver: `grad_Q` and `D_art` are
     # workspace and coefficient arrays the next evaluation overwrites.
-    form = bulk ? quadratic_integral(full, Q, buf) : NaN
+    form = channel === :bulk ? quadratic_integral(full, Q, buf) :
+           channel === :partial_density ? partial_density_integral(full, Q, buf) : NaN
     blk_full = CL.art_block(full)
     copyto!(parent(Q_off), parent(Q))
     CL.compute_rhs!(off, Q_off, dQo)
@@ -549,7 +587,7 @@ end
 function part_production(opt, rank)
     rank == 0 && println("\n=== semi-discrete entropy production of the " *
                          "species channel ===")
-    for channel in (:bulk, :fickian)
+    for channel in (:partial_density, :bulk, :fickian)
         art_on = ArtParams(species_flux=channel)
         art_off = ArtParams(species_flux=channel, C_D=0.0, C_Y=0.0)
         full, Q = interface_setup(opt, art_on)
@@ -561,7 +599,7 @@ function part_production(opt, rank)
         rows = NamedTuple[]
         record = Callback(EveryStep(opt.sample), (s, Qs) -> begin
             push!(rows, production_sample(s, off, Qs, Q_off, dQf, dQo, buf,
-                                          channel === :bulk))
+                                          channel))
             nothing
         end)
         callbacks = opt.progress > 0 ?
@@ -683,7 +721,8 @@ function attempt_step(f, label, rank)
 end
 
 function part_step(opt, rank)
-    configs = (("bulk", ArtParams(species_flux=:bulk)),
+    configs = (("partial", ArtParams(species_flux=:partial_density)),
+               ("bulk", ArtParams(species_flux=:bulk)),
                ("fickian", ArtParams(species_flux=:fickian)),
                ("art off", ArtParams(enabled=false)))
     header = "config     steps/rec  S(0)         dS total    " *

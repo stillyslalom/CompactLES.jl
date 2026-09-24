@@ -221,11 +221,11 @@ repair changes states produced by the scheme but does not change the scheme.
   wide at any resolution, and after the filter and the Runge–Kutta stages its
   mass fractions lie outside [0, 1] by an amount that does not decrease under
   refinement: about 1% at a shocked or grid-scale interface with the default
-  artificial mass-fraction bound, and 10–20% with the bound disabled. The band
-  lies between the two, so a bounded interface passes and an unbounded one is
-  rejected. It is a validity threshold, separate from the bound's own dead
-  band `ArtParams.Y_tolerance`, which is 500 times smaller. `0` rejects any
-  negative mass fraction.
+  artificial mass-fraction bound, and 5–7% at its worst with the bound
+  disabled. The band lies above every bounded excursion measured, so a bounded
+  interface passes, and below the unbounded peak. It is a validity threshold,
+  separate from the bound's own dead band `ArtParams.Y_tolerance`, which is 500
+  times smaller. `0` rejects any negative mass fraction.
 
 - `validity_interval = 0`: how often [`run!`](@ref) validates the state entering
   a step, in steps, with 0 checking none of them. The state entering `run!` and

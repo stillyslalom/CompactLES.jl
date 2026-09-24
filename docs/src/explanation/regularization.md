@@ -112,7 +112,10 @@ momentum and kinetic energy, and each species carries its internal energy,
 following [Brill, Olson & Bokman (2025)](https://arxiv.org/abs/2503.12680).
 A state of uniform velocity, pressure and temperature therefore stays
 uniform to round-off whatever the composition, and the channel adds no
-viscosity or conduction of its own.
+viscosity or conduction of its own. It produces thermodynamic entropy
+wherever every partial density is positive: the internal energy it carries
+with each species, rather than the enthalpy, is what makes the production
+nonnegative.
 
 `:fickian` is Cook's per-species flux of the form the molecular one takes,
 with the correction velocity that keeps the fluxes summing to zero and the
@@ -138,9 +141,8 @@ Keep the default. Choose `:bulk` for a shocked interface at a density ratio
 of a hundred or more, where its added dissipation holds the mass fractions
 closer to [0, 1]. Choose `:fickian` to reproduce a code that uses Cook's
 form. On a two-dimensional shocked helium/carbon dioxide interface the
-default costs about a quarter more per step than `:fickian` and `:bulk`
-about two fifths more, for the added gradient solves and the second sensor
-field per species.
+default costs about a tenth more per step than `:fickian` and `:bulk`
+about a fifth more.
 
 Bulk viscosity is the primary shock-spreading mechanism. Conductivity controls
 thermal ringing and wall heating. Species diffusivity prevents an unresolved

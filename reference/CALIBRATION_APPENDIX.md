@@ -893,15 +893,16 @@ is 0.011 Fickian, 0.0096 bulk and 0.0097 partial density, and 0.0020 partial den
 all within 1979 to 1992 steps.
 
 The two-dimensional example itself, 768 × 48 to 2.5 ms at C_D = 0.1, `-t 16` on the
-development workstation. Grid-scale pressure is max |δ⁴_x p|/16p over pure helium within
+development workstation. The time per step is the range over alternating runs of each
+channel to 1.5 ms, taken after the two reductions described below. Grid-scale pressure is max |δ⁴_x p|/16p over pure helium within
 0.25 m behind the interface, excluding six cells beside it; the helium dip is 1 − Y_CO2 at
 its minimum inside the mushroom head on the line y = L/2 at 2.5 ms:
 
 ```
-channel          | steps | s/step | grid-scale p at 1.5 / 2.0 / 2.5 ms | worst Y_CO2 | helium dip
-fickian          | 3576  | 0.022  | 3.2e-4 / 7.7e-4 / 6.2e-4           | -4.6e-3     | 15%
-bulk             | 3327  | 0.031  | 3.3e-5 / 1.5e-4 / 1.3e-4           | -3.9e-3     | 3.5%
-partial_density  | 3572  | 0.028  | 6.5e-5 / 1.9e-4 / 1.4e-4           | -3.7e-3     | 15%
+channel          | steps | s/step          | grid-scale p at 1.5 / 2.0 / 2.5 ms | worst Y_CO2 | helium dip
+fickian          | 3576  | 0.0221 .. 0.0242 | 3.2e-4 / 7.7e-4 / 6.2e-4           | -4.6e-3     | 15%
+bulk             | 3327  | 0.0267 .. 0.0297 | 3.3e-5 / 1.5e-4 / 1.3e-4           | -3.9e-3     | 3.5%
+partial_density  | 3572  | 0.0250 .. 0.0275 | 6.5e-5 / 1.9e-4 / 1.4e-4           | -3.7e-3     | 15%
 ```
 
 Under the Fickian channel concentric pressure ripples four to five cells in wavelength
@@ -910,10 +911,18 @@ remains has a period of eight to ten cells. The bulk channel also weakens the vo
 visibly (their pressure minima and the v field) and entrains less helium into the head,
 which is its added viscosity ρD_b∇u; the partial-density channel reproduces the Fickian
 roll-up. No converged reference decides which roll-up is right, and no published comparison
-of RM mixing between these forms was found. The per-step cost is 27% over the Fickian
-channel for the partial-density one and 41% for the bulk one, from the added gradient
-solves and the second sensor field per species; the partial-density channel's gradients
-are n_species per direction, the bulk channel's n_cons.
+of RM mixing between these forms was found.
+
+As first implemented the partial-density channel cost 27% per step over the Fickian one and
+the bulk channel 41%. `bench/phases.jl` on its two-species tube (512 × 32, per right-hand
+side) put the difference in the conserved gradients (0.25 ms of 2.85, four line solves) and
+the sensor on both Y and X (0.19 ms). Two reductions followed. Under `Transport(mu0 = 0)`
+the shared-D_b channels skip `grad_Y`, whose only other reader is `NSCBCInflowBC`, which
+now computes it itself; that returns the four solves. With two species only the first is
+sensed, since the second's detector outputs and excursions equal the first's to round-off;
+that takes the sensor phase from 0.80 to 0.64 ms, the Fickian channel's figure. The tube
+then runs the partial-density right-hand side in 2.38 to 2.61 ms against the Fickian 2.27,
+with 24 line solves each, and the bulk one in 3.16 ms with 32.
 
 In the literature, Brill, Olson & Bokman and Aslani & Regele (Int. J. Numer. Meth. Fluids
 88, 2018) both reject the Fickian flux with the enthalpy term on this pressure argument and
@@ -5904,39 +5913,48 @@ Fickian channel put them. With the heavy gas at γ = 1.09 the slab's Fickian pre
 is unchanged (7.9e-3 and 2.1e-1) and the bulk channel's stays at round-off, so the
 unequal-γ contact drift with no shock is the Fickian enthalpy flux as well.
 
-`bench/bulkentropy.jl` measures what the discrete operators make of the entropy inequality
-of `reference/DESIGN.md` ("The species channel", property 3), on a Taylor–Green velocity
+`bench/bulkentropy.jl` measures what the discrete operators make of the entropy inequalities
+of `reference/DESIGN.md` ("The species channel", property 3 and its partial-density form), on a Taylor–Green velocity
 field at Mach 0.1 carrying a sphere of the heavy gas (ratio 5.04, γ = 1.09) through a
 periodic cube of 32³ points to t = 2, 46 steps, and on the one-dimensional `brill_slab`. It
 derives the entropy variables w = ∂(ρs)/∂q of an ideal mixture and checks them against
 central differences (7e-10 relative over 64 states); integrates the channel's semi-discrete
 production ∫ w·R dV, with R the right-hand-side difference above, beside the continuous
-quadratic form D_b ∇qᵀ(−η'')∇q on the solver's own gradients, their difference being the
+production on the solver's own gradients, the quadratic form D_b ∇qᵀ(−η'')∇q for the bulk
+channel and Σ_k R_k D_b |∇ρ_k|²/ρ_k for the partial-density one, their difference being the
 defect of a derivative that is not summation-by-parts against the quadrature; and records
 ∫ρs after every Runge–Kutta step and after every filter pass, the pass run from the
 callback and verified bitwise against an ordinary run. Points where a partial density is
 nonpositive are excluded from the production integrals and counted, and floored in ∫ρs.
 
 ```
-semi-discrete, 32^3: P_channel / defect from the quadratic form (bulk), P_channel (fickian)
-t = 0.22 .. 1.99 | +7.27e-3 .. +8.06e-3 / -8e-8 .. -1e-7 | +5.69e-3 .. +6.33e-3
+semi-discrete, 32^3, C_D = 0.1, t = 0.44 .. 1.77: P_channel / defect from the continuous form
+partial density | +7.12e-2 .. +7.30e-2 / -9e-7 .. -1.1e-6
+bulk            | +7.18e-2 .. +7.35e-2 / -9e-7 .. -1.1e-6
+fickian         | +5.60e-2 .. +5.73e-2 / n/a
 
 fully discrete: steps / RK decreases (worst) / filter decreases (worst) / total change
-32^3 bulk    |   46 /    0            /   43 (-7e-6)    | +1.5e-2
-32^3 fickian |   46 /    0            /   43 (-7e-6)    | +1.2e-2
+32^3 partial |   46 /    0            /   43 (-6e-6)    | +1.4e-1
+32^3 bulk    |   46 /    0            /   43 (-6e-6)    | +1.4e-1
+32^3 fickian |   46 /    0            /   43 (-6e-6)    | +1.1e-1
 32^3 art off |   45 /   45 (-1e-7)    /   42 (-7e-6)    | -1.7e-4
-slab bulk    | 4201 / 2017 (-9e-4)    / 4185 (-1e-4)    | +7.7e-3
-slab fickian | 4207 / 1954 (-7e-3)    / 2715 (-7e-4)    | -2.5e-2
+slab partial | 4049 / 1996 (-9e-4)    / 4033 (-1e-4)    | +1.1e-2
+slab bulk    | 4049 / 1996 (-9e-4)    / 4033 (-1e-4)    | +1.1e-2
+slab fickian | 4094 / 2080 (-3e-3)    / 1987 (-1e-4)    | -2.2e-2
 slab art off | fails at step 187
 ```
 
-The channel's semi-discrete production is positive at every sample under both channels and
-is the whole right-hand side's, and the bulk channel's agrees with the continuous quadratic
-form to 1e-5: the non-SBP defect is not where the inequality is lost. The complete update
+The channel's semi-discrete production is positive at every sample under all three channels
+and is the whole right-hand side's, and the two consistent channels' agree with their
+continuous forms to 1.5e-5 relative: the non-SBP defect is not where the inequality is
+lost. The partial-density channel produces slightly less than the bulk one, whose added
+viscosity and conduction produce the difference; on the slab, at uniform u and T, the two
+are the same operator and their records agree to the digits printed. The complete update
 does not inherit it. On the resolved three-dimensional case the Runge–Kutta step never
-lowers ∫ρs with a channel on and the filter pass lowers it on nearly every step, by 1% of
-what the channel produces; on the slab, whose interface holds mass fractions outside [0, 1]
-throughout, the Runge–Kutta step lowers it on half the steps under either channel. The
+lowers ∫ρs with a channel on and the filter pass lowers it on nearly every step, by a
+tenth of a percent of what the channel produces; on the slab, whose interface holds mass
+fractions outside [0, 1] throughout, the Runge–Kutta step lowers it on half the steps under
+every channel. The
 inequality is a property of the continuous model and of the semi-discrete channel term; the
 filter and the bounded-fraction excursions are outside it.
 
@@ -5950,31 +5968,32 @@ points beyond four candidate bands.
 
 ```
 case                         N   worst run   worst end   end points beyond 1e-4 / 1e-3 / 1e-2 / 5e-2
-advection, 2 cells          64   2.076e-04   1.774e-04   4 / 0 / 0 / 0
-advection, 2 cells         256   5.591e-04   3.917e-04   8 / 0 / 0 / 0
-advection, 2 cells        1024   5.591e-04   4.049e-04   10 / 0 / 0 / 0
+advection, 2 cells          64   1.415e-04   1.394e-04   2 / 0 / 0 / 0
+advection, 2 cells         256   3.995e-04   3.351e-04   6 / 0 / 0 / 0
+advection, 2 cells        1024   3.995e-04   2.761e-04   6 / 0 / 0 / 0
 advection, 1/32 physical   128   0           0           0 / 0 / 0 / 0
 advection, 1/32 physical  1024   0           0           0 / 0 / 0 / 0
-shock, C_Y = 100           100   1.342e-02   1.992e-03   7 / 2 / 0 / 0
-shock, C_Y = 100           400   1.293e-02   9.221e-04   6 / 0 / 0 / 0
-shock, C_Y = 100          1600   1.204e-02   3.856e-04   5 / 0 / 0 / 0
-shock, C_Y = 0             200   2.126e-01   1.495e-01   13 / 8 / 2 / 1
-shock, C_Y = 0             400   2.054e-01   9.751e-02   14 / 9 / 4 / 1
-shock, C_Y = 0             800   1.963e-01   9.094e-02   15 / 8 / 4 / 1
-slab, Np = 7               140   8.103e-02   2.835e-03   16 / 3 / 0 / 0
-slab, Np = 14              280   5.186e-03   1.555e-03   8 / 1 / 0 / 0
-slab, Np = 28              560   3.667e-04   2.877e-04   4 / 0 / 0 / 0
+shock, C_Y = 100           100   1.144e-02   2.201e-03   4 / 1 / 0 / 0
+shock, C_Y = 100           400   9.844e-03   9.215e-04   4 / 0 / 0 / 0
+shock, C_Y = 100          1600   8.862e-03   4.022e-04   4 / 0 / 0 / 0
+shock, C_Y = 0             200   6.620e-02   1.018e-02   7 / 3 / 1 / 0
+shock, C_Y = 0             400   5.987e-02   8.050e-03   7 / 4 / 0 / 0
+shock, C_Y = 0             800   5.445e-02   7.076e-03   11 / 4 / 0 / 0
+slab, Np = 7               140   6.205e-02   1.897e-03   9 / 2 / 0 / 0
+slab, Np = 14              280   4.250e-03   1.638e-03   8 / 1 / 0 / 0
+slab, Np = 28              560   2.313e-04   1.982e-04   4 / 0 / 0 / 0
 ```
 
 The excursion of an interface held at grid scale does not converge with the grid. The
-advected slab with two-cell edges overshoots by 5.6e-4 at every N from 128 up, while edges
+advected slab with two-cell edges overshoots by 4.0e-4 at every N from 256 up, while edges
 of fixed physical width stay inside [0, 1] exactly once they span four cells; the shocked
-interface holds 1.2–1.3e-2 from N = 100 to 1600, since the shock compresses it to the few
+interface holds 0.9–1.1e-2 from N = 100 to 1600, since the shock compresses it to the few
 cells the artificial diffusivity sets, which a shock-capturing run has somewhere. Only the slab, whose interface is resolved over
-`Np` cells by construction, converges (from 8.1e-2 at the default Np = 7 to 3.7e-4 at 28);
+`Np` cells by construction, converges (from 6.2e-2 at the default Np = 7 to 2.3e-4 at 28);
 below Np = 7 it loses positivity. The endpoints are smaller than the transients in every
 case and stay below 3e-3. With the mass-fraction bound off, the shocked interface reaches
-0.2 and ends at 0.09–0.15.
+0.054–0.066 and ends at 0.007–0.010; before the defaults moved to the partial-density
+channel at C_D = 0.1 it reached 0.2 and ended at 0.09–0.15, the ringing C_D now damps.
 
 The earlier species test borrowed `ArtParams.Y_tolerance = 1e-4`, the bound's dead band,
 which every run in the table crosses at its endpoint; under it the Mach 1.5 case, the slab,
@@ -5982,7 +6001,8 @@ the uniform advection and the He/CO2 shock tube of `examples/shock_tube.jl` (117
 points at nx = 384, ny = 16) all fail a strict check, and a run with retries repeats its
 trajectory four times before failing. `StepControl.species_band = 0.05` sits above every
 bound-on excursion measured here and the Mach 3 worst of −0.043 recorded under
-[C_Y](#c_y-the-mass-fraction-bound), and below the bound-off endpoint, which still crosses it.
+[C_Y](#c_y-the-mass-fraction-bound), and below the bound-off transient, which still crosses
+it.
 The one bound-on transient above the band is the slab at Np = 7, which only a
 `validity_interval` check or a guard would see. With the band, the species cases, both
 examples and the small configurations of `src/precompile.jl` run under the default

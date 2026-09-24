@@ -2038,6 +2038,30 @@ end
     return nothing
 end
 
+# The mass-fraction gradients `grad_Y`. Two terms read them: the molecular part
+# of the species flux, which multiplies them by the molecular diffusivity, and
+# the transverse terms of `NSCBCInflowBC`. Under a shared-D_b species channel
+# with `Transport(mu0 = 0)` the first is identically zero, so `compute_rhs!`
+# skips the n_species line solves per direction and the inflow condition takes
+# them itself (`correct_rhs!`, above its early return). The flux body then
+# multiplies whatever `grad_Y` last held by a zero diffusivity. The transport
+# type is a type parameter of the solver, so the test adds no dispatch.
+_species_gradients_skipped(solver) =
+    _shared_species_diffusivity(solver) && _zero_molecular_diffusion(solver.transport)
+_zero_molecular_diffusion(transport::Transport) = iszero(transport.mu0)
+_zero_molecular_diffusion(::AbstractTransport) = false
+
+function _species_gradients!(solver::SolverLike)
+    decomp = solver.decomp
+    for d in 1:3
+        decomp.active[d] || continue
+        for sp in 1:solver.equations.n_species
+            deriv_scaled_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
+        end
+    end
+    return solver
+end
+
 # The shared-D_b species channels difference conserved components themselves
 # (`:bulk` all of them, `:partial_density` the partial densities),
 # ∂_d Q_c through the same scaled compact derivative, not a product-rule
@@ -2047,8 +2071,8 @@ end
 # the species fluxes to round-off, which is what makes that state an exact
 # discrete invariant of the term (reference/DESIGN.md, "The species
 # channel"). n_cons or n_species line solves per active direction, on top of the
-# n_species + 1 of `compute_rhs!`; `grad_Y` stays, since the characteristic
-# boundary conditions read it. Every rank enters the solves. `tmp_a` is free
+# 1 + n_species of `compute_rhs!`, whose n_species `_species_gradients_skipped`
+# may remove. Every rank enters the solves. `tmp_a` is free
 # at this point of the evaluation and holds the component being differenced.
 function _bulk_gradients!(solver::SolverLike, Q)
     decomp = solver.decomp
@@ -2178,10 +2202,8 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
     for d in 1:3
         decomp.active[d] || continue
         deriv_scaled_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1)
-        for sp in 1:solver.equations.n_species
-            deriv_scaled_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
-        end
     end
+    _species_gradients_skipped(solver) || _species_gradients!(solver)
     # The shared-D_b species channels' gradients of conserved components; a
     # setup-constant branch identical on every rank, so no collective sits
     # below it unreached. Behind a function barrier so that the default

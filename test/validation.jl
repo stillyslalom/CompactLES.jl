@@ -59,7 +59,7 @@
 #   Noh nu=2   plateau 15.009/16   shock 0.2091/0.2   wall deficit 55%
 #   Noh nu=3   plateau 62.555/64   shock 0.2089/0.2   wall deficit 29%
 #   Shock/SF6  worst Y -0.0098 / 1.0098, width 4 cells, 644 steps, TV - 1 0.0066
-#   Slab 100   max|p - 1| 5.0e-11, max|u - u0|/u0 5.9e-13, worst Y -0.0620, 4049 steps
+#   Slab 100   max|p - 1| 5.2e-11, max|u - u0|/u0 1.1e-12, worst Y -0.0620, 4049 steps
 #   Noh aligned N=100 AR=4    plateau 4.0035/4   deficit 33%   shock 0.2084   4966 steps
 #   Noh plane   N=24  AR=2    plateau 11.858/16  front 0.236/0.2  L1 rho 0.893  745 steps
 #

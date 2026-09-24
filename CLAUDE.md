@@ -292,7 +292,9 @@ Names are spelled out in full. Current vocabulary:
   `bulk_diffusivity!` from `mole_fraction` and the mass fractions and stored in
   every `D_art[k]`, with the conserved gradients in the workspace's `grad_Q`),
   `_shared_species_diffusivity` (whether a solver's channel uses `D_b`: false
-  for `:fickian` and for a single species)
+  for `:fickian` and for a single species), `_species_gradients_skipped`
+  (whether `compute_rhs!` leaves `grad_Y` to the one boundary condition that
+  reads it)
 - `grad_u`, `grad_T_ion`, `grad_Y`, `strain_mag`, `sensor`, `sensor_sp`
 - `inv_J`, `area_d`, `inv_h`, `inv_r`, `cot_over_r`, `coord_shift`, `flux`
 - `filter_interval` (cadence in steps) vs `filter_cfl` (the reference CFL at

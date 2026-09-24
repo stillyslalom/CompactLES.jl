@@ -33,13 +33,18 @@ function budget(name, solver, Q)
     end)
     t["metric grad corr"] = best(() -> CL.metric_correct_gradients!(solver, solver.metric))
     t["artificial"]       = best(() -> CL.compute_artificial!(solver, Q))
-    t["scalar grads"]     = best(() -> for d in 1:3
-        decomp.active[d] || continue
-        CL.deriv_scaled_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1)
-        for sp in 1:solver.equations.n_species
-            CL.deriv_scaled_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
+    t["scalar grads"]     = best(() -> begin
+        for d in 1:3
+            decomp.active[d] || continue
+            CL.deriv_scaled_along!(solver.grad_T_ion[d], solver.T_ion, solver, d, 1)
         end
+        # as compute_rhs! does: no grad_Y where no term reads it
+        CL._species_gradients_skipped(solver) || CL._species_gradients!(solver)
     end)
+    # The conserved gradients of the shared-D_b species channels (`:bulk`,
+    # `:partial_density`), which `compute_rhs!` takes before assembling fluxes.
+    shared = CL._shared_species_diffusivity(solver)
+    shared && (t["channel grads"] = best(() -> CL._bulk_gradients!(solver, Q)))
     t["assemble_fluxes!"] = best(() -> CL.assemble_fluxes!(solver, Q))
     t["flux halo exch"]   = best(() -> for d in 1:3
         CL.exchange_dim_batch!(view(solver.flux, d, :), decomp, d)
@@ -89,8 +94,11 @@ function budget(name, solver, Q)
     ndetect = art.enabled ? nsensor + (art.mu_sensor === :velocity ? 2 : 0) : 0
     nsmooth = art.smoother === :compact ? nact * nsensor : 0
     nring = art.detector === :d8 ? nact * ndetect : 0
-    nsolves = 3 * nact + nact * (1 + solver.equations.n_species) +
-              solver.equations.n_cons * nact + nsmooth + nring
+    nchannel = !shared ? 0 : art.species_flux === :bulk ?
+               solver.equations.n_cons : solver.equations.n_species
+    nY = CL._species_gradients_skipped(solver) ? 0 : solver.equations.n_species
+    nsolves = 3 * nact + nact * (1 + nY) +
+              solver.equations.n_cons * nact + nchannel * nact + nsmooth + nring
     @printf("\n===== %s =====\n", name)
     @printf("  %d points, %d species, %d active dims; compute_rhs! = %.3f ms (%.1f ns/pt)\n",
             npt, solver.equations.n_species, nact, 1e3whole, 1e9whole / npt)
@@ -117,7 +125,8 @@ opt = CompactLES.script_args(ARGS, (smoother = ART_DEFAULTS.smoother,
                          detector = ART_DEFAULTS.detector,
                          mu_sensor = ART_DEFAULTS.mu_sensor,
                          beta_sensor = ART_DEFAULTS.beta_sensor,
-                         reduction = ART_DEFAULTS.reduction))
+                         reduction = ART_DEFAULTS.reduction,
+                         species_flux = ART_DEFAULTS.species_flux))
 
 # tgv-like: 3-D periodic, single species, art off
 s1 = Solver(n_global=(64, 64, 64), L_domain=(2π, 2π, 2π), bcs=per3,
@@ -134,7 +143,8 @@ s2 = Solver(n_global=(512, 32, 1), L_domain=(1.0, 0.06, 1.0), eos=eos,
             bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
             art=ArtParams(enabled=true, smoother=opt.smoother,
                           detector=opt.detector, mu_sensor=opt.mu_sensor,
-                          beta_sensor=opt.beta_sensor, reduction=opt.reduction))
+                          beta_sensor=opt.beta_sensor, reduction=opt.reduction,
+                          species_flux=Symbol(opt.species_flux)))
 Q2 = allocate_state(s2)
 initialize!(s2, Q2, (x, y, z) -> begin
     θ = tanh_blend(x, 0.5, 0.02)

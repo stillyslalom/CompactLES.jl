@@ -734,12 +734,25 @@ with one D_b for every species: at uniform u and T each added momentum and
 energy term is a fixed multiple of a species flux, and
 ∂_t(p/T) = −Σ_k R_k ∇·J_k = ∇·(D_b ∇(Σ_k R_k ρ_k)) = 0 at uniform p. The
 gradients are those of the partial densities only, n_species line solves per
-direction. Property 3 does not carry over, by item 4, and no entropy
-inequality is established for this form. It adds no stress and no
-conduction, which is why it is the default: on a shocked He/CO2 interface
-in two dimensions `:bulk`'s added viscosity visibly weakens the vortex
-cores, where this form reproduces the Fickian roll-up without the Fickian
-pressure error ([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), "The partial-density
+direction. The argument of property 3 does not apply (item 4), but the
+thermodynamic entropy obeys an inequality of its own. With the channel's terms alone the kinetic-energy parts cancel and
+∂_t(ρe) = −∇·(Σ_k e_k J_k); the Gibbs relation T d(ρs) = d(ρe) − Σ_k g_k dρ_k
+then gives ∂_t(ρs) + ∇·(Σ_k (e_k − g_k) J_k / T) = σ with
+σ = Σ_k J_k·[e_k ∇(1/T) − ∇(g_k/T)]. For a thermally perfect mixture
+∇(g_k/T) = h_k ∇(1/T) + R_k ∇ln p_k, and with e_k − h_k = −R_k T the bracket
+is −R_k ∇ln(p_k/T) = −R_k ∇ln ρ_k, so σ = Σ_k R_k D_b |∇ρ_k|²/ρ_k ≥ 0
+wherever every partial density is positive. The internal energy in the
+energy flux is what makes the bracket collapse; the enthalpy would leave a
+term in ∇ln p_k of no sign. The inequality is for the physical entropy only,
+not for every generalized entropy as under `:bulk`, and it fails where a
+partial density has gone negative. `bench/bulkentropy.jl` measures the
+semi-discrete channel term against σ and the fully discrete update
+([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), "The bulk species
+channel in three dimensions"). The form adds no stress and no conduction: on
+a shocked He/CO2 interface in two dimensions `:bulk`'s added viscosity
+visibly weakens the vortex cores, and this form reproduces the Fickian
+roll-up without the Fickian pressure error
+([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), "The partial-density
 species channel").
 
 D_b is built by `bulk_diffusivity!` from the same bracket as the Fickian
@@ -764,18 +777,24 @@ coefficients; `_fluxes_point!` skips the Fickian channel under either
 shared-D_b channel rather than reading `D_art` as a Fickian coefficient. The
 workspace carries `grad_Q`, a 3 × n_cons matrix of arrays under the two
 shared-D_b channels with more than one species and a 0 × 0 matrix of the same
-type otherwise, so the types do not depend on the option. `grad_Y` is still
-computed: the characteristic boundary conditions read it. `:bulk` costs
-n_cons gradient line solves per direction and `:partial_density` n_species,
-on top of the n_species + 1 of the Fickian path, and both one further
-detector and smoother pass per species. A patched or refined run takes it as a single
-patch does: the conserved gradients go through the same interface plans as
-`grad_Y`, and on a stacked device level the component copy, the gradients
-and the sensor passes run once per stack over the spanning patch's arrays,
-as every other full-extent pass does. At equal molecular weights X_k ≡ Y_k
-and the bulk flux of ρY_k at uniform ρ is the Fickian flux, so the two
-channels agree to round-off on `species_advection`, and the single-species
-cases are untouched by the option.
+type otherwise, so the types do not depend on the option. `:bulk` costs
+n_cons gradient line solves per direction and `:partial_density` n_species
+(the partial densities). Both skip the n_species solves of `grad_Y`
+(`_species_gradients_skipped`) under `Transport(mu0 = 0)`: with a shared D_b
+the molecular diffusivity is then the only coefficient of `grad_Y` in the
+flux, and it is zero. `NSCBCInflowBC`, whose transverse terms read `grad_Y`,
+computes it in its own `correct_rhs!`, above the early return. The sensor
+senses every species on Y and X, except with two species, where Y_2 = 1 − Y_1
+and X_2 = 1 − X_1 make the second species' contributions equal to the
+first's to round-off and only the first is sensed. A patched or refined run
+takes the channel as a single patch does: the conserved gradients go
+through the same interface plans as `grad_Y`, and on a stacked device level
+the component copy, the gradients and the sensor passes run once per stack
+over the spanning patch's arrays, as every other full-extent pass does. At
+equal molecular weights X_k ≡ Y_k and the flux of ρY_k at uniform ρ is the
+Fickian flux, so the three channels agree to round-off on
+`species_advection`, and the single-species cases are untouched by the
+option.
 
 ## Curvilinear metrics and the discrete GCL
 

@@ -1795,7 +1795,7 @@ function test_bulk_patched()
     tol = np <= 2 ? 1e-14 : 1e-12
     check("bulk two-patch slab: max rho matches serial", abs(gmax(m) - ref), tol)
 end
-const BULK_PATCHED_MAX_RHO = 19.99999735804409
+const BULK_PATCHED_MAX_RHO = 19.99999735804433
 
 # ---------------------------------------------------------------------------
 # Device line solves (reference/AMR_GPU.md). A DevicePlan runs the fill,
@@ -2573,7 +2573,9 @@ end
 #     measured against the serial rebuild on COMM_SELF, split along the
 #     transverse dimension and along the face normal in turn; the second
 #     split leaves the plane on one rank while the normal solves stay
-#     distributed.
+#     distributed. With the artificial properties on, the default species
+#     channel leaves `grad_Y` to this condition, whose own solves then join
+#     the ones ahead of the ownership test.
 # ---------------------------------------------------------------------------
 function test_nscbc_inflow()
     section("NSCBC inflow: transverse terms on a decomposed plane")
@@ -2592,14 +2594,14 @@ function test_nscbc_inflow()
              p=1 + 0.05 * sin(2π * y + 1), T_ion=1 + 0.1 * cos(2π * y),
              Y=(θ, 1 - θ))
     end
-    function build(comm_here, dims_here)
+    function build(comm_here, dims_here, art_on)
         bc = NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0, Y=[0.6, 0.4])
         sol = Solver(n_global=(SPLITN, SPLITN, 1), L_domain=(1.0, 1.0, 1.0),
                      bcs=((bc, NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
                      eos=IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                                        IdealSpecies{Float64}("b", 0.5, 1.4)]),
                      comm=comm_here, dims=dims_here,
-                     transport=Transport(mu0=0.0), art=ArtParams(enabled=false),
+                     transport=Transport(mu0=0.0), art=ArtParams(enabled=art_on),
                      cfl=0.4)
         Q = allocate_state(sol)
         initialize!(sol, Q, ic)
@@ -2608,14 +2610,15 @@ function test_nscbc_inflow()
         compute_rhs!(sol, Q, dQ)
         return sol, Q, dQ
     end
-    for ax in (2, 1)
-        s, Q, dQ = build(comm, splitdims(ax))
-        ref, Qref, dQref = build(MPI.COMM_SELF, (1, 1, 1))
-        check("inflow RHS matches serial, split along dim $ax",
+    for art_on in (false, true), ax in (2, 1)
+        s, Q, dQ = build(comm, splitdims(ax), art_on)
+        ref, Qref, dQref = build(MPI.COMM_SELF, (1, 1, 1), art_on)
+        tag = art_on ? ", artificial properties on" : ""
+        check("inflow RHS matches serial, split along dim $ax$tag",
               gmax(blockdiff(s, dQ, ref, dQref)), 1e-10)
         run!(s, Q; tfinal=1e9, nmax=4)
         run!(ref, Qref; tfinal=1e9, nmax=4)
-        check("inflow run matches serial, split along dim $ax",
+        check("inflow run matches serial, split along dim $ax$tag",
               gmax(blockdiff(s, Q, ref, Qref)), 1e-10)
     end
 end

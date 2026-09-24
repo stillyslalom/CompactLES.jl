@@ -327,6 +327,9 @@ function correct_rhs!(bc::NSCBCInflowBC, solver, Q, dQ, d::Int, side::Int)
     act2 = transverse && solver.decomp.active[t2]
     dp_t1, dr_t1 = solver.sensor_sp, solver.grad_T_ion[1]
     dp_t2, dr_t2 = solver.grad_T_ion[2], solver.grad_T_ion[3]
+    # `compute_rhs!` skips the mass-fraction gradients where nothing else reads
+    # them; these transverse terms do, so the skip is made up here, collectively.
+    _species_gradients_skipped(solver) && _species_gradients!(solver)
     act1 && deriv_along!(dp_t1, solver.p, solver, t1, 1)
     act1 && deriv_along!(dr_t1, solver.rho, solver, t1, 1)
     act2 && deriv_along!(dp_t2, solver.p, solver, t2, 1)

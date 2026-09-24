@@ -140,9 +140,9 @@ bounds such runs at twelve.
 
 A mass fraction is rejected only below `-species_band`, 0.05 by default. A
 captured species interface is a few cells wide at any resolution and lies about
-1% outside [0, 1] under the artificial mass-fraction bound, and 10 to 20%
-outside with the bound off; the band accepts the first and rejects the second,
-so a multicomponent run needs no opt-out for its interfaces.
+1% outside [0, 1] under the artificial mass-fraction bound, and 5 to 7% at its
+worst with the bound off; the band accepts the first, so a multicomponent run
+needs no opt-out for its interfaces.
 
 ## Read the completed state
 

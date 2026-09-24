@@ -135,9 +135,10 @@ Cook-style artificial-property controls.
   D_b = c · G[max over species and over f ∈ {Y_k, X_k} of max(C_D Δ_d|D_d f|,
   C_Y Δ_g · excursion(f))] is the bracket above sensed on the mass and the
   mole fraction. A uniform (u, p, T) state stays uniform to round-off
-  whatever the composition, and no stress or conduction is added. Beyond the
-  Fickian channel it costs n_species gradient line solves per direction and
-  a second detector and smoother pass per species.
+  whatever the composition, no stress or conduction is added, and the
+  channel produces thermodynamic entropy wherever the partial densities are
+  positive. Under `Transport(mu0 = 0)` it takes as many line solves as the
+  Fickian channel and about a tenth more time per step.
   `:fickian` is Cook's per-species flux J_k = −ρ D\\*_k ∇Y_k, with the
   correction velocity that keeps Σ_k J_k = 0 and the enthalpy flux
   Σ_k h_k J_k in the energy equation. Between gases of unequal molecular
@@ -149,7 +150,8 @@ Cook-style artificial-property controls.
   It holds a uniform (u, p, T) state as the default does, and also adds an
   artificial viscosity ρD_b ∇u and conduction, which damp the roll-up of a
   shocked interface and hold a density ratio of 100 tighter. It costs n_cons
-  gradient line solves per direction.
+  gradient line solves per direction, about a fifth more per step than the
+  Fickian channel.
   D_b is stored in every `D_art[k]` and enters the diffusive timestep. Patched
   and refined runs take the channel as the root does.
 - `detector`: the high-pass that builds every sensor, in
@@ -186,11 +188,11 @@ end
 
 # Whether the species channel builds one diffusivity D_b shared by every species
 # (`bulk_diffusivity!`) and differences conserved components (`_bulk_gradients!`):
-# `:bulk` and `:partial_density` do, `:fickian` builds one D*_k per species. A
-# single species has no composition for either to act on, and none of the
-# channel's passes or storage is set up for it.
+# `:bulk` and `:partial_density` do, `:fickian` builds one D*_k per species. With
+# the artificial properties off or a single species there is nothing for either
+# to act on, and none of the channel's passes or storage is set up for it.
 _shared_species_diffusivity(art::ArtParams, n_species::Integer) =
-    n_species > 1 && art.species_flux !== :fickian
+    art.enabled && n_species > 1 && art.species_flux !== :fickian
 _shared_species_diffusivity(solver) =
     _shared_species_diffusivity(solver.art, solver.equations.n_species)
 
@@ -1048,7 +1050,12 @@ function bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
     n_species = solver.equations.n_species
     acc = solver.sensor_sp
     fill!(acc, 0)
-    for sp in 1:n_species
+    # With two species Y_2 = 1 − Y_1 and X_2 = 1 − X_1, so the second species'
+    # detector outputs and excursions equal the first's to round-off and add
+    # nothing to the maximum; one species is sensed. The mole fraction's floor
+    # and clamp break the symmetry only at a state whose mixture gas constant
+    # has reached zero.
+    for sp in 1:(n_species == 2 ? 1 : n_species)
         detect_sum!(solver.tmp_b, solver.Y[sp], solver, 1; ghosts=true)
         pointwise!(_species_bound_point!, solver.tmp_b, nx, ny, nz,
                    solver.tmp_b, solver.Y[sp], C_D, C_Y, h_bound, inv_n,

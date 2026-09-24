@@ -1868,7 +1868,7 @@ end
 
         # (c) The Brill slab at density ratio 100 and 7 cells per interface, ten
         # periods: the pressure error at the end is round-off under both channels
-        # (measured 4.7e-11 and 5.0e-11 in 4049 steps) and 4.0e-2 under the
+        # (measured about 5e-11 in 4049 steps) and 4.0e-2 under the
         # Fickian one, whose enthalpy flux is the one operator that moves ρE
         # across a uniform-pressure interface of unequal gas constants.
         let r = brill_slab(art=bulk, nmax=6000)
