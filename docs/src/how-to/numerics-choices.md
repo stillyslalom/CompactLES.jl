@@ -29,7 +29,7 @@ measurements:
 | cylindrical axis, spherical origin (folds) | 3 | 3.76 / 2.97 |
 | patch or level interface | 3 to 4 | 3.31 / 3.62 |
 | patch or level interface, C6 `interface_divergence` `:brady_livescu`, Float64 | 5 to 6 | 5.8 to 7.0 / 5.1 to 6.0 |
-| patch or level interface, C6 `interface_flux = :ghost`, level interpolation order 8, Float64 | 6 | 5.4 to 6.9 / 5.8 to 6.1 |
+| patch or level interface, C6 `interface_flux = :ghost` (level interpolation order 8), Float64 | 6 | 5.4 to 6.9 / 5.8 to 7.0 |
 
 With default wall closures, the closed-line C8 and C10 studies have the same
 wall and maximum-norm errors as C6, to the printed digits. Their benefit is
@@ -134,16 +134,26 @@ The `:cascade4` rows are unstable between a wall and an interface; do not
 use them here.
 
 The experimental `interface_flux = :ghost` removes the closure rows from the
-inviscid part of the divergence. It evaluates the inviscid flux on the
-interface ghost layers and differentiates it through the interface with the
-interior stencil, so a same-level interface has the interior's error. At a
-coarse-fine interface the ghost values are interpolated from the parent, and
-sixth order in the solution requires `level_interpolation_order = 8`. The
-viscous and artificial fluxes keep the closure rows, which
+inviscid and molecular parts of the divergence. It evaluates the inviscid flux
+on the interface ghost layers and differentiates the flux through the
+interface with the interior stencil. The viscous, conductive and diffusive
+flux on the ghost layers of a same-level interface is the neighbouring
+patch's own, exchanged once every patch has evaluated its right-hand side,
+so a same-level interface has the interior's error with or without
+viscosity. At a coarse-fine interface the ghost values are interpolated from
+the parent and the molecular flux there is evaluated from the gradients of
+the interpolated state, so the level interpolation order sets the error: the
+default rises to 8 under this option, which gives sixth order with C6. The
+artificial fluxes and the wall corrections keep the closure rows, which
 `interface_divergence` selects. This option also runs a discontinuity
 placed on a shared patch plane, which fails under the closure rows. It
-requires `interface_rhs = :extended` and an unstretched Cartesian grid,
-and it adds 5 to 25% to the step time. Float32 runs do not benefit.
+requires `interface_rhs = :extended` and an unstretched Cartesian grid, and
+with molecular transport at a refined level one of the built-in equations
+of state. Without viscosity it adds about 20% to the step time. With
+viscosity it adds 40% on two three-dimensional slabs and nearly doubles the
+step on a two-dimensional level of four small tiles, most of it in the
+gradients taken on the interpolated parent state. Float32 runs do not
+benefit.
 
 ## Boundary conditions
 

@@ -2234,6 +2234,34 @@ order: the inviscid error grows between N = 96 and 192 and the filtered runs
 lose positivity by t = 0.4. The C10 interior under the C8 filter reads the C6
 rows.
 
+The default-row C8 and C10 levels (`derivs=c8,c10 orders=6,8,10`) read the
+same at orders 6, 8 and 10 on every row, to the second digit: C8 1.288e-7
+(3.27 / 3.85) and C10 1.432e-7 (3.61 / 3.76) unfiltered, both 1.57–1.59e-8
+filtered, the viscous rows 9.2e-10 and 9.8e-10 at 3.5–3.6. The closure rows
+bind, so matching the order to the operator costs nothing there. Under the
+ghost fluxes (`coupling="(interface_flux=:ghost,)" orders=8,10
+derivs=c6,c8,c10`) the shell binds instead:
+
+```
+                                            order 8              order 10
+2 levels, C6, unfiltered                    6.380e-11 6.02/6.01  the same
+2 levels, C6, filtered                      1.049e-10 6.96/6.78  the same
+2 or 3 levels subcycled, C6                 6.481e-11 6.02/5.99  the same
+viscous, 2 levels, C6                       1.060e-13 6.29/6.06  1.059e-13 6.31/6.06
+2-D, 2 levels, C6, unfiltered / filtered    4.071e-12 / 6.636e-12, 6.08/5.89 / 6.87/6.91; the same
+2 levels, C8, unfiltered                    1.873e-12 7.27/7.46  8.715e-14 8.00/7.77
+viscous, 2 levels, C8                       9.497e-13 at N = 96  1.354e-14 at N = 96
+2 levels, C10, unfiltered                   1.392e-12 7.70/7.55  1.643e-14 9.80/7.23
+viscous, 2 levels, C10                      3.646e-13 at N = 96  1.932e-14 at N = 96
+2 levels, C8 or C10, filtered               8.13e-11 7.14/7.04   the same
+```
+
+C6 is saturated at order 8; C8 reaches its eighth order and C10 its tenth
+only at order 10, below which the shell sets the constant, and the viscous
+rows reach the 1e-14 floor at N = 96. The filtered rows read the C8 filter.
+The subcycled C8 and C10 rows (7.2–7.8 over N = 48 / 96) turn to the
+Hermite shell's time error by N = 192, `dt` 0.4–0.9.
+
 **Time.** N = 192, two levels, order 8, each run against the same run at
 cfl = 0.05, maximum over the root and the fine patch; cfl 0.8 / 0.4 / 0.2 /
 0.1:
@@ -4917,74 +4945,68 @@ excursion thirteenfold. The option stays experimental, a Float64 smooth-flow set
 ```text
 julia --project=. -t 1 bench/boundaryorder.jl study=gflux
 julia --project=. -t 1 bench/interfacesensor.jl crossing "crossing_variants=base,gflux,two patches,three patches"
-julia --project=. -t 4 bench/interfaceconservation.jl N=96 ny=24 tfinal=8.0 moving_tfinal=8.0 iflux=ghost
+julia --project=. -t 4 bench/interfaceconservation.jl N=96 ny=24 tfinal=8.0 moving_tfinal=8.0 iflux=ghost [mu=1e-3]
 ```
 
 `interface_flux = :ghost` evaluates the inviscid flux on the padded block, the interface ghosts
-included, and differences it through the gradient plans' interface rows; the rest of the flux
-takes the one-sided rows of `div_plans`, the default's or an `interface_divergence` source's.
-Serial Float64, `cfl = 0.25`, the matrix's interface window, root N = 48, 96, 192 (49, 97, 193
-for the wall rows), beside the default and Brady–Livescu (BL) columns of the section above,
-which this study reproduces to every digit. The polynomial row is `polynomial_case(96)`, every
-inviscid flux component of degree at most five, at the interface window:
+included, and differences it through the gradient plans' interface rows. The molecular flux
+joins it: its ghost values at a same-level face are the neighbouring patch's own interior
+flux, exchanged after every patch of the level has evaluated, and at a coarse-fine face they
+are evaluated from the conserved gradients of the interpolated fine box, taken with explicit
+seventh-order rows at the box ends. The artificial fluxes and the wall corrections take the
+one-sided rows of `div_plans`, the default's or an `interface_divergence` source's. The
+ghost column runs at the ghost path's default level interpolation order, 8. Serial Float64,
+`cfl = 0.25`, the matrix's interface window, root N = 48, 96, 192 (49, 97, 193 for the wall
+rows), beside the default and Brady–Livescu (BL) columns of the section above, which this
+study reproduces to every digit. The polynomial row is `polynomial_case(96)`, every inviscid
+flux component of degree at most five, at the interface window:
 
 ```
                                             default                BL                     ghost
                                             N=192     orders       N=192     orders       N=192     orders
 polynomial RHS, two patches (ρu, E)         2.09e-8, 1.06e-8       4.58e-12, 9.25e-13     2.99e-14, 2.18e-14
-polynomial RHS, 2 levels (ρu, E)            7.73e-10, 4.20e-10     5.68e-12, 1.01e-11     1.53e-13, 1.81e-13
+polynomial RHS, 2 levels (ρu, E)            7.73e-10, 4.20e-10     5.68e-12, 1.01e-11     1.58e-13, 1.81e-13
 RHS on exact data, two patches, k=3         2.395e-5  3.36 / 3.25  3.861e-7  5.27 / 5.41  1.785e-9  5.97 / 5.99
-RHS on exact data, 2 levels, k=3            1.849e-6  3.03 / 3.02  2.435e-9  5.02 / 5.03  1.989e-8  5.01 / 5.01
+RHS on exact data, 2 levels, k=3            1.849e-6  3.03 / 3.02  2.435e-9  5.02 / 5.03  1.280e-10 6.39 / 6.00
 two patches, entropy k=3                    6.315e-7  5.10 / 4.71  1.119e-8  6.63 / 6.96  1.416e-10 6.75 / 6.78
 two patches, entropy k=1                    8.262e-9  3.09 / 3.53  8.611e-12 6.49 / 6.52  6.950e-14 6.88 / 6.70
 two patches, standing wave                  1.949e-8  3.41 / 3.87  4.504e-11 5.77 / 5.82  4.308e-12 5.44 / time
 two patches, standing wave, filtered        1.025e-8  3.63 / 3.90  4.196e-11 5.97 / 5.45  4.516e-12 5.35 / time
-2 levels, entropy k=3                       9.408e-8  3.41 / 3.83  6.401e-11 6.02 / 6.01  7.646e-10 5.38 / 5.17
-2 levels subcycled, entropy k=3             9.198e-8  3.43 / 3.84  6.480e-11 6.02 / 5.99  6.991e-10 5.40 / 5.28
-3 levels, entropy k=3                       7.407e-8  3.50 / 3.89  6.391e-11 6.02 / 6.01  1.092e-9  5.33 / 4.58
-3 levels subcycled, entropy k=3             7.192e-8  3.52 / 3.92  6.491e-11 6.02 / 5.99  8.526e-10 5.35 / 4.91
-2 levels, tile 4, subcycled, entropy k=3    7.205e-8  3.99 / 3.72  6.481e-11 6.02 / 5.99  6.891e-10 5.44 / 5.17
-2 levels, entropy k=3, filtered             1.577e-8  4.29 / 3.95  7.378e-10 5.25 / 5.81  1.395e-10 6.97 / 6.44
-2 levels, entropy k=1                       7.380e-10 3.37 / 3.76  5.174e-14 5.33 / time  4.777e-13 5.47 / 5.63
-2 levels, standing wave                     1.030e-9  3.37 / 3.47  4.998e-13 5.13 / 5.11  6.162e-12 5.10 / 4.75
-2 levels subcycled, standing wave           9.640e-10 3.37 / 3.47  1.519e-11 4.70 / time  1.883e-11 5.22 / time
+2 levels, entropy k=3                       9.408e-8  3.41 / 3.83  6.401e-11 6.02 / 6.01  6.380e-11 6.02 / 6.01
+2 levels subcycled, entropy k=3             9.198e-8  3.43 / 3.84  6.480e-11 6.02 / 5.99  6.481e-11 6.02 / 5.99
+3 levels, entropy k=3                       7.407e-8  3.50 / 3.89  6.391e-11 6.02 / 6.01  6.379e-11 6.02 / 6.01
+3 levels subcycled, entropy k=3             7.192e-8  3.52 / 3.92  6.491e-11 6.02 / 5.99  6.481e-11 6.02 / 5.99
+2 levels, tile 4, subcycled, entropy k=3    7.205e-8  3.99 / 3.72  6.481e-11 6.02 / 5.99  6.481e-11 6.02 / 5.99
+2 levels, entropy k=3, filtered             1.577e-8  4.29 / 3.95  7.378e-10 5.25 / 5.81  1.049e-10 6.96 / 6.78
+2 levels, entropy k=1                       7.380e-10 3.37 / 3.76  5.174e-14 5.33 / time  3.431e-14 6.01 / 5.77
+2 levels, standing wave                     1.030e-9  3.37 / 3.47  4.998e-13 5.13 / 5.11  1.666e-13 6.12 / 5.94
+2 levels subcycled, standing wave           9.640e-10 3.37 / 3.47  1.519e-11 4.70 / time  1.938e-11 4.84 / time
 walls and an interface, two patches         4.234e-10 5.04 / 5.66  2.375e-9  4.56 / 5.19  1.525e-10 4.27 / 4.98
 walls and an interface, filtered            1.860e-10 4.26 / 4.86  1.211e-10 5.20 / 4.03  1.316e-10 4.89 / 4.12
-viscous, two patches                        2.469e-8  3.62 / 3.87  6.850e-11 4.92 / 5.66  6.712e-11 4.09 / 3.96
-viscous, 2 levels                           8.597e-10 3.61 / 3.65  3.511e-13 5.57 / 5.34  1.728e-12 5.83 / 5.77
+viscous, two patches                        2.469e-8  3.62 / 3.87  6.850e-11 4.92 / 5.66  3.151e-13 6.75 / 6.43
+viscous, 2 levels                           8.597e-10 3.61 / 3.65  3.511e-13 5.57 / 5.34  1.060e-13 6.29 / 6.06
+viscous, 2 levels subcycled                 8.529e-10 3.61 / 3.64  3.400e-13 5.53 / 5.39  1.054e-13 6.28 / 6.06
 ```
 
-With the BL rows on the remainder as well (`interface_flux = :ghost` and
-`interface_divergence = lele_d1_6(closures=:brady_livescu)`), the viscous rows read 7.327e-13
-(6.56 / 6.57) through two patches and 2.164e-12 (5.50 / 5.49) through 2 levels. At a same-level
-face the interface window's error equals the interior's on every ghost row (the entropy wave
-k = 3 reads 1.42e-10 at the face and 1.55e-10 inside); the standing-wave slopes there are set by
-the time integrator (`dt` column 0.83–0.86 at N = 192). At a coarse–fine face the ghost state is
-the order-6 interpolation of the parent, whose O(h⁶) value error enters the differenced flux as
-O(h⁵): the RHS on exact data converges at 5.01 against the BL rows' 5.02 with a constant eight
-times larger, and the evolution errors sit five to twelve times above the BL rows through every
-nest. Under `level_interpolation_order = 8` that bound is gone; the coarse–fine rows at N = 192,
-BL (unchanged from order 6) against ghost:
-
-```
-                                            BL (order 8)           ghost (order 8)
-                                            N=192     orders       N=192     orders
-polynomial RHS, 2 levels (ρu, E)            5.68e-12, 1.01e-11     1.58e-13, 1.81e-13
-RHS on exact data, 2 levels, k=3            2.435e-9  5.02 / 5.03  1.280e-10 6.39 / 6.00
-2 levels, entropy k=3                       6.401e-11 6.02 / 6.01  6.380e-11 6.02 / 6.01
-2 levels subcycled, entropy k=3             6.480e-11 6.02 / 5.99  6.481e-11 6.02 / 5.99
-3 levels, entropy k=3                       6.391e-11 6.02 / 6.01  6.379e-11 6.02 / 6.01
-3 levels subcycled, entropy k=3             6.491e-11 6.02 / 5.99  6.481e-11 6.02 / 5.99
-2 levels, tile 4, subcycled, entropy k=3    6.481e-11 6.02 / 5.99  6.481e-11 6.02 / 5.99
-2 levels, entropy k=1                       5.174e-14 5.33 / time  3.431e-14 6.01 / 5.77
-2 levels, standing wave                     4.998e-13 5.13 / 5.11  1.666e-13 6.12 / 5.94
-2 levels subcycled, standing wave           1.519e-11 4.70 / time  1.938e-11 4.84 / time
-pulse, 2 levels, N = 96 / 192 / 384         1.19e-6, 1.24e-9, 6.07e-11   9.77e-7, 9.68e-10, 2.03e-11
-pulse, 2 levels subcycled                   8.93e-7, 1.10e-9, 5.24e-11   4.82e-7, 1.42e-9, 5.23e-11
-```
+At a same-level face the interface window's error equals the interior's on every ghost row,
+viscous ones included (the entropy wave k = 3 reads 1.42e-10 at the face and 1.55e-10 inside);
+the inviscid standing-wave slopes there are set by the time integrator (`dt` column 0.83–0.86
+at N = 192). The BL rows on the remainder change nothing without the artificial properties:
+the ghost path leaves no remainder, and the `ghost+BL` column repeats the ghost column to
+every digit. At a coarse-fine face the ghost state is the interpolation of the parent, whose
+O(h^p) value error enters the differenced inviscid flux at h^(p−1) and the molecular flux at
+h^(p−2). At order 6 the RHS on exact data converged at 5.01 against the BL rows' 5.02 with a
+constant eight times larger and the evolution errors sat five to twelve times above the BL
+rows; at order 8 every coarse-fine row matches or leads them. The viscous right-hand side
+on exact data within four nodes of an interface end, against the periodic operator at the
+patch's spacing (the check of `test/patch_tests.jl`, on one species), converges at 5.92 / 5.98
+through two patches and 6.73 / 5.44 / 7.02 through a level (N = 48 to 384; 6.23 then the 1e-12
+floor at order 10). Under the third-order closure rows of the operator's own set at the box ends, the level row
+had instead stalled at 5e-11, a second-order floor: the box ends lie eight to eleven fine
+nodes from the ghost layers, and a closure row's error decays by 2 − √3 per node.
 
 In Float32 the entropy wave k = 1 keeps the floor of the other sources (4.4e-6 two patches,
-9.4e-6 two levels at N = 192).
+8.4e-6 two levels at N = 192).
 
 The acoustic pulse of the reflection tests, left-running characteristic over the amplitude:
 
@@ -4992,49 +5014,57 @@ The acoustic pulse of the reflection tests, left-running characteristic over the
                       N = 96                           N = 192                          N = 384
                       default   BL        ghost        default   BL        ghost        default   BL        ghost
 two patches           9.740e-6  1.543e-5  1.540e-6     2.049e-6  1.139e-6  2.049e-8     2.685e-7  2.477e-8  5.775e-10
-2 levels              1.182e-6  1.189e-6  9.749e-7     1.188e-8  1.240e-9  3.033e-9     8.427e-10 6.066e-11 8.687e-11
-2 levels subcycled    8.314e-7  8.933e-7  4.788e-7     1.051e-8  1.099e-9  2.079e-9     7.058e-10 5.242e-11 6.046e-11
+2 levels              1.182e-6  1.189e-6  9.773e-7     1.188e-8  1.240e-9  9.675e-10    8.427e-10 6.066e-11 2.031e-11
+2 levels subcycled    8.314e-7  8.933e-7  4.824e-7     1.051e-8  1.099e-9  1.417e-9     7.058e-10 5.242e-11 5.227e-11
 ```
 
 **Shocks.** The Sod crossing, root N = 201, `cfl = 0.4`, the artificial properties and the
-filter live (their fluxes on the one-sided remainder):
+filter live (their fluxes on the one-sided remainder), inviscid, at the ghost path's default
+order 8; every ghost figure repeats the order-6 measurement to the printed digit but the
+three-level global-step shell (7.0e-3) and the two-species excursions (3.1e-8, 4.1e-4):
 
 | row | default | ghost |
 |---|---|---|
 | two levels subcycled: steps, p_min, shell, root | 373, 0.0405, 7.7e-3, 2.4e-2 | 373, 0.0405, 7.3e-3, 2.4e-2 |
 | global dt: steps, p_min, shell | — | 708, 0.0382, 8.4e-3 |
 | three levels: p_min, shell | — | 0.0405, 5.8e-3 |
-| three levels global dt: p_min, shell | 0.0252, 5.9e-3 | 0.0251, 7.0e-3 |
+| three levels global dt: p_min, shell | 0.0252, 5.9e-3 | 0.0251, 7.1e-3 |
 | tile 8: p_min, shell | — | 0.0405, 8.3e-2 |
 | three patches: p_min, shell, root | 0.0412, 7.4e-2, 2.7e-2 | 0.0412, 7.9e-2, 2.8e-2 |
 | diaphragm on the shared plane | negative density, step 2 | completes: 303 steps, p_min 0.072, shell 1.0e-2, root 1.0e-1 |
 | the same, art off | — | negative density, step 20 |
-| two species: shell Y excursion, elsewhere | — | 3.1e-8, 4.1e-4 |
+| two species: shell Y excursion, elsewhere | — | 2.8e-8, 3.5e-4 |
 
 The reversed tube reproduces every printed digit of the forward ghost row. On the shared plane the
 one-sided gradient workaround reads p_min 0.097, shell 4.6e-2 and root 2.4e-1 in the same run.
 
-**Conservation.** The layer on (96, 24, 1) to t = 8: the same-level layout's drift is 6.2e-13
-and its mass-fraction excursion zero (5.2e-10 and 3.1e-5 under the default rows), and every nest
-and regrid history agrees with the default to the third digit.
+**Conservation.** The layer on (96, 24, 1) to t = 8, inviscid: the same-level layout's drift
+is 6.2e-13 and its mass-fraction excursion zero (5.2e-10 and 3.1e-5 under the default rows),
+and every nest and regrid history agrees with the default to the third digit. With
+`mu=1e-3` on every layout, the uniform run included: the same-level drift is 5.3e-13 against
+2.2e-10 under the closure rows, the nests drift 6.75e-5 to 6.92e-5 against 6.76e-5 to 6.93e-5,
+the regrid histories sum to 2.24e-4 in both, and no layout leaves [0, 1].
 
 **Cost.** Serial, one thread, median step over interleaved runs in one process, ghost over
-default: (64, 48, 48) in two patches 1.20 inviscid and 1.05 with the artificial properties and
-viscosity on; a 2-D three-level subcycled nest 1.08 and 1.24; a 2-D subcycled level of four
-tiles 1.08 and 1.24. The inviscid overhead is one padded pass per component and interface
-dimension; the viscous one adds a second pass and a second line solve for the remainder. No
-array is added: the pass writes the workspace's `tmp_b`.
+default: (64, 48, 48) in two patches 1.18 inviscid and 1.38 with the artificial properties and
+`mu = 1e-3`; a 2-D subcycled level of sixteen 37-node tiles 1.24 inviscid and 1.90 viscous. The
+inviscid overhead is one padded pass per component and interface dimension. The molecular
+part adds a pass, a halo exchange and a line solve per component and interface dimension,
+and at a coarse-fine face the compact derivatives of every component along every dimension
+on the interpolated box at each shell imposition, which a profile of the tiled level puts at
+about a fifth of the step; a tile with no parent-fed face skips them. The `ghost_flux`
+arrays add one state-sized array per interface dimension of a patch.
 
-**Decision.** Same-level interfaces: the ghost fluxes remove the interface from the inviscid
-error budget (the interface window equals the interior at every order-measuring row), cut the
-acoustic reflection forty-fold below the BL rows at N = 384, keep the default's shock minimum
-pressure, conserve to round-off without a mass-fraction excursion, and are the first treatment
-under which the diaphragm on a shared plane runs with the extended gradients. Coarse–fine faces:
-at the default interpolation order 6 the ghost state's interpolation error sets the order and the
-BL rows stay ahead; at order 8 the ghost path reaches 5.9–6.1 on the acoustic standing wave and
-matches or leads the BL rows on every row, so one treatment serves both interface kinds and no
-per-end selection is needed. Viscous fluxes keep one-sided rows on the remainder, where the BL
-rows give the best measured orders.
+**Decision.** Same-level interfaces: the ghost fluxes remove the interface from the error
+budget, inviscid and viscous (the interface window equals the interior at every
+order-measuring row), cut the acoustic reflection forty-fold below the BL rows at N = 384, keep
+the default's shock minimum pressure, conserve to round-off without a mass-fraction excursion,
+and are the first treatment under which the diaphragm on a shared plane runs with the extended
+gradients. Coarse–fine faces: at the ghost path's default order 8 it reads 5.8–7.0 on every
+smooth row the time integrator leaves, viscous included, and matches or leads the BL rows
+everywhere, so one treatment
+serves both interface kinds. It stays experimental: the promotion to the default is ROADMAP
+N15b, which names what remains.
 
 ### bench/levelfilter.jl: level-aware filtering under global stepping
 
@@ -5333,7 +5363,7 @@ where it holds five at C6, which is enough; the buffers did not move.
 
 ### bench/leveltransfer.jl: the live interpolation order
 
-`julia --project=. -t 1 bench/leveltransfer.jl` (orders 2, 4, 6, 8; about a
+`julia --project=. -t 1 bench/leveltransfer.jl orders=2,4,6,8,10` (about a
 minute).
 
 The live coupling by itself, on analytic data with the root exact: the
@@ -5344,8 +5374,8 @@ fixed at 5L/12..7L/12; the smooth field is 1 + 0.2 sin(3x + 0.37) cos(2y − 0.1
 N is the root count.
 
 **Values.** A tensor polynomial of degree p − 1 per dimension is reproduced
-in the shell and in a fresh fill to 1e-15 of its maximum (degree p: 7.5e-3,
-3.4e-4, 4.7e-5, 1.6e-5 at p = 2, 4, 6, 8). On the smooth field:
+in the shell and in a fresh fill to 1e-14 of its maximum (degree p: 7.5e-3,
+3.4e-4, 4.7e-5, 1.6e-5, 1.3e-5 at p = 2, 4, 6, 8, 10). On the smooth field:
 
 | order | ghosts, N = 48 / 96 / 192 | boundary planes, N = 192 | fresh fill, N = 192 | order |
 |---|---|---|---|---|
@@ -5353,9 +5383,11 @@ in the shell and in a fresh fill to 1e-15 of its maximum (degree p: 7.5e-3,
 | 4 | 1.15e-4 / 7.28e-6 / 4.46e-7 | 2.23e-7 | 4.57e-7 | 4.0 |
 | 6 | 3.28e-6 / 5.27e-8 / 8.09e-10 | 4.46e-10 | 8.30e-10 | 6.0 |
 | 8 | 1.18e-7 / 4.66e-10 / 1.80e-12 | 9.37e-13 | 1.80e-12 | 8.0 |
+| 10 | 6.70e-9 / 6.68e-12 / 6.66e-15 | 2.11e-15 | 6.66e-15 | 10.0 |
 
 At order 8 the outermost ghost layer's stencil sits one node inward of
-centred (`LEVEL_BUFFER = 4`); the ghost column reads 8.0 regardless.
+centred (`LEVEL_BUFFER = 4`), and at order 10 the outer two sit two and one
+nodes inward; the ghost column reads the order regardless.
 
 **Derivatives.** `interp` is the fine patch's operator on the imposed shell
 minus the same operator on exact shell data, the transfer's own contribution;
@@ -5372,9 +5404,11 @@ dimension; N = 192, orders over 48 / 96 / 192:
 | 4 | 6.54e-6 (3.0) | 2.39e-5 (3.0) | 3.77e-4 (2.0) | 6.52e-4 (2.0) | 3.76e-4 | 3.94e-5 (3.0) |
 | 6 | 1.31e-8 (5.0) | 4.59e-8 (5.0) | 7.53e-7 (4.0) | 1.22e-6 (4.0) | 1.78e-6 (3.4) | 7.86e-8 (5.0) |
 | 8 | 2.75e-11 (7.0) | 9.65e-11 (7.0) | 1.58e-9 (6.0) | 2.56e-9 (6.0) | 1.29e-6 (3.1) | 1.65e-10 (7.0) |
+| 10 | 1.06e-13 (9.0, 8.4) | 2.27e-13 (9.0) | 8.01e-12 (8.0, 7.0) | 5.94e-12 (7.9) | 1.29e-6 (3.1) | 3.93e-13 (8.9) |
 
 An O(h^p) value error enters the first derivative at h^(p−1) and the second
-at h^(p−2), each at the fine spacing, as the counting predicts; a fresh fill
+at h^(p−2), each at the fine spacing, as the counting predicts, the order-10
+rows reaching round-off by N = 192; a fresh fill
 carries the first-derivative loss over the whole patch, not only at its
 edge. The second-derivative total is the divergence's own closure error at
 order 8, while at order 6 the transfer term is 64% of the total at N = 96
@@ -5390,17 +5424,17 @@ point-sample transfer.
 **Repeated regrids.** A 1-D level moved ±N/24 root nodes sixteen times with
 no evolution, restricted after each: the fine error after the last regrid is
 1.09 to 1.16 times the error after the first at every order and N, and the
-order of both is the interpolation order (2.0, 4.0, 6.0, 8.0; 6.98e-10 and
+order of both is the interpolation order (2.0, 4.0, 6.0, 8.0, 9.9; 6.98e-10 and
 7.63e-10 at order 6, N = 192). Regrids do not accumulate transfer error.
 
 **Positivity.** A fresh fill of the step 1 → 0.125 of width w root cells:
-at w = 0.5 the fill undershoots the low state by 1.2%, 2.3% and 2.9% of the
-jump at orders 4, 6 and 8 (overshoot 0.8%, 0.4%, 0.03%); order 2 is
-monotone, and at w = 1 and 2 no order leaves the range. The moving-region
-Sod gate of `test/level_tests.jl` (N = 201, subcycled, regrid every five
-steps) is order-independent: composite density error 8.7e-4, 8.4e-4, 9.5e-4,
-8.9e-4 at orders 2, 4, 6, 8, minimum density 0.1245–0.1248 and minimum
-pressure 0.0994–0.0995, all 628 steps.
+at w = 0.5 the fill undershoots the low state by 1.2%, 2.3%, 2.9% and 3.2%
+of the jump at orders 4, 6, 8 and 10 (overshoot 0.8%, 0.4%, 0.03%, 0.05%);
+order 2 is monotone, and at w = 1 and 2 no order leaves the range. The
+moving-region Sod gate of `test/level_tests.jl` (N = 201, subcycled, regrid
+every five steps) is order-independent: composite density error 8.7e-4,
+8.4e-4, 9.5e-4, 8.9e-4, 9.2e-4 at orders 2, 4, 6, 8, 10, minimum density
+0.1243–0.1248 and minimum pressure 0.0992–0.0995, all 628 steps.
 
 **Budgets.** `bench/interfaceconservation.jl` at `interpolation_order=8`,
 serial, `layouts=uniform,depth2`, otherwise the command of that section:
@@ -5408,13 +5442,19 @@ two levels drift 6.95e-5 (global) and 6.94e-5 (subcycled); the sixteen
 regrids sum to 8.41e-4 in absolute jumps, sampled drift with transfers
 1.0e-4, transfers subtracted 2.1e-4 / 2.2e-4, final 1.7e-5 / 2.5e-5,
 species excursion 7.4e-4 / 5.6e-4. Every figure matches order 6 to the
-digits that section prints.
+digits that section prints. At `interpolation_order=10`, measured later on
+the same command: two levels drift 6.88e-5 (global) and 6.89e-5
+(subcycled); the eight regrids of that run sum to 2.20e-4 in absolute jumps,
+transfers subtracted 1.20e-4, final 3.8e-6 / 4.5e-6, and no species leaves
+[0, 1]; every figure is inside its budget.
 
-Settled: the live order is a choice among 2, 4, 6 and 8 with 6 the default.
-Order 8 fits the default halo and buffer, costs nothing measurable in
-conservation, positivity on resolved data or regrid drift, and removes the
-transfer from the second-derivative and filtered error budgets; order 2 is
-the only monotone choice.
+Settled: the live order is a choice among 2, 4, 6, 8 and 10, by default the
+derivative operator's interior order, two more under `interface_flux =
+:ghost`. Orders 8 and 10 fit the default halo and buffer, the off-centre
+outer stencils included, cost nothing measurable in conservation, positivity
+on resolved data or regrid drift, and remove the transfer from the
+second-derivative and filtered error budgets; order 2 is the only monotone
+choice.
 
 ### test/patch_tests.jl: same-level patch interfaces
 

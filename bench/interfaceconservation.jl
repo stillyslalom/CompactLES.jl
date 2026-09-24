@@ -32,8 +32,12 @@
 # `idiv=cascade4` or `idiv=brady_livescu` takes the flux divergence's rows at
 # every interface end from that `interface_divergence` source (`default`
 # keeps the solver's own); the uniform baseline has no interface to change.
-# `interpolation_order` sets `level_interpolation_order` on the refined layouts.
+# `interpolation_order` sets `level_interpolation_order` on the refined layouts;
+# 0, the default, leaves the solver's own (6, or 8 under `iflux=ghost`).
 # `iflux=ghost` sets `interface_flux = :ghost` on every layout but the uniform one.
+# `mu` puts molecular transport (`Transport(mu0 = mu)`) on every layout, the
+# uniform one included, which carries the molecular flux through the ghost
+# fluxes under `iflux=ghost`.
 #
 # The predeclared application budgets are deliberately coarse enough to be
 # useful on a long, interface-crossing calculation: 0.1% of initial mass,
@@ -60,7 +64,7 @@ const args = CompactLES.script_args(ARGS, (N=192, ny=32, tfinal=8.0, nmax=typema
                                            smoke=false, moving_tfinal=8.0,
                                            samples=8, parts="all", check=false,
                                            moving_width=0.18, filter_interval=1,
-                                           maxlevels=3, interpolation_order=6,
+                                           maxlevels=3, interpolation_order=0, mu=0.0,
                                            layouts="uniform,samelevel,depth2,depth3",
                                            stepping="both", idiv="default",
                                            iflux="closure");
@@ -181,12 +185,14 @@ function build(mode, N, ny; subcycle=false, regrid=false)
          # Species-gradient tagging follows the translating composition sheet;
          # density is intentionally uniform in this thermodynamic control.
          tag_gradient_threshold=regrid ? 0.02 : 0, tag_buffer=3,
-         level_interpolation_order=args.interpolation_order)
+         level_interpolation_order=args.interpolation_order == 0 ? nothing :
+                                   args.interpolation_order)
     end
     source = mode === :uniform || args.idiv == "default" ? nothing :
              lele_d1_6(closures=Symbol(args.idiv))
     return Solver(n_global=(N, ny, 1), L_domain=(8pi, 2pi, 1.0), bcs=periodic,
                   eos=eos, cfl=0.45, interface_divergence=source,
+                  transport=Transport(mu0=Float64(args.mu)),
                   interface_flux=mode === :uniform ? :closure : Symbol(args.iflux),
                   art=ArtParams(C_mu=0.0, C_beta=0.0, C_kappa=0.0, C_D=0.0),
                   control=StepControl(validity=:permissive),
@@ -314,7 +320,8 @@ function main()
                          "validity=permissive, moving_width=$(args.moving_width), " *
                          "check=$(args.check), layouts=$(args.layouts), " *
                          "stepping=$(args.stepping), " *
-                         "interpolation_order=$(args.interpolation_order).")
+                         "interpolation_order=$(args.interpolation_order), " *
+                         "mu=$(args.mu).")
     rank == 0 && flush(stdout)
     parts = Set(Symbol.(split(args.parts, ',')))
     allparts = :all in parts

@@ -315,7 +315,8 @@ end
     end
     for kw in ((;), (tag_sensor_threshold=0.05,),
                (interface_divergence=lele_d1_6(closures=:brady_livescu),),
-               (interface_flux=:ghost,))
+               (interface_flux=:ghost,),
+               (interface_flux=:ghost, transport=Transport(mu0=1e-3)))
         s1, q1 = tiled(CPUBackend(); kw...)
         CL.FORCE_KA[] = true
         CL.FORCE_DEVICE_EXCHANGE[] = true
@@ -568,15 +569,15 @@ end
 # list and the call sites disagree, in either direction.
 const POINTWISE_BODIES = (
     :_area_flux_point!, :_blend_interior_point!, :_body_force_point!,
-    :_bulk_flux_point!, :_copy_component_point!,
+    :_bulk_flux_point!, :_coarse_fine_flux_point!, :_copy_component_point!,
     :_copy_interior_point!, :_delta4_point!, :_delta4_signed_point!,
     :_dilatation_point!, :_dilatation_switch_point!, :_extrapolation_point!,
     :_fine_shell_point!, :_fluxes_point!, :_fold_fill_point!,
-    :_gate_beta_point!, :_gated_beta_point!, :_gcl_cotr_point!,
+    :_gate_beta_point!, :_gated_beta_point!, :_gcl_cotr_point!, :_ghost_only_point!,
     :_grad_corr_cyl_point!, :_grad_corr_sph_point!, :_hermite_point!,
     :_internal_energy_point!, :_interp_point!, :_inviscid_flux_point!,
     :_kappa_point!, :_max_into_point!, :_metric_src_cyl_point!,
-    :_metric_src_sph_point!, :_mole_fraction_point!,
+    :_metric_src_sph_point!, :_molecular_flux_point!, :_mole_fraction_point!,
     :_mu_beta_point!, :_no_slip_flux_point!, :_no_slip_wall_point!, :_nscbc_inflow_point!,
     :_nscbc_outflow_point!, :_pair_backward_local_point!,
     :_pair_backward_remote_point!, :_pair_forward_local_point!,

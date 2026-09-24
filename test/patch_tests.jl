@@ -351,3 +351,75 @@ end
     @test npatches(mk(patch_grid=(2, 1, 1), interface_flux=:ghost,
                       interface_divergence=lele_d1_6(closures=:brady_livescu))) == 2
 end
+
+# Under `interface_flux = :ghost` with molecular transport the viscous,
+# conductive and diffusive flux joins the ghost-differenced part: at a
+# same-level face its ghost values are the neighbour's own interior flux,
+# exchanged after every patch has evaluated, and at a coarse-fine face they
+# are evaluated from the gradients of the interpolated shell. The right-hand
+# side on smooth exact data within four nodes of an interface end is compared
+# with the uniform periodic operator at the patch's own spacing, sampled at
+# the same points, over N = 48 and 96.
+function _viscous_interface_error(N; kw...)
+    per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    ic(x, y, z) = Prim(rho=1 + 0.2sin(x + 0.3), u=(0.4 + 0.1cos(2x), 0, 0),
+                       p=1 + 0.1cos(x - 0.2), Y=(0.6 + 0.2sin(x), 0.4 - 0.2sin(x)))
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 0.5, 1.3)])
+    mk(; k...) = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3, eos=eos,
+                        art=ArtParams(enabled=false), filter_interval=0,
+                        transport=Transport(mu0=2e-2); k...)
+    s = mk(; kw...)
+    Q = allocate_state(s)
+    initialize!(s, Q, ic)
+    dQ = [zero(q) for q in Q]
+    CL._presync!(s, Q)
+    for lev in getfield(s, :levels)
+        CL._level_rhs!(s, lev, Q, dQ, false)
+    end
+    err = 0.0
+    for (ps, d) in CL.eachpatch(s, dQ)
+        h = ps.h[1]
+        Nu = round(Int, 2π / h)
+        su = mk(; n_global=(Nu, 1, 1))
+        Qu = allocate_state(su)
+        initialize!(su, Qu, ic)
+        dQu = zero(Qu)
+        compute_rhs!(su, Qu, dQu)
+        n = ps.decomp.n_local[1]
+        lo = ps.bcs[1][1] isa CL.InterfaceBC
+        hi = ps.bcs[1][2] isa CL.InterfaceBC
+        for i in 1:n
+            (lo && i <= 4) || (hi && i > n - 4) || continue
+            iu = mod1(round(Int, xcoord(ps, 1, i) / h) + 1, Nu)
+            I = gidx(ps, i, 1, 1)
+            Iu = gidx(su, iu, 1, 1)
+            err = max(err, maximum(abs(d[I, c] - dQu[Iu, c]) for c in 1:size(d, 4)))
+        end
+    end
+    return err
+end
+
+@testset "interface flux: molecular ghost fluxes" begin
+    level(N) = BlockRegion((5N ÷ 12, 0, 0), (N ÷ 6 + 1, 1, 1))
+    for (layout, ghost_max, order_min) in (((patch_grid=(2, 1, 1),), 1e-6, 5.5),
+                                           ((refine=level,), 1e-8, 6.0))
+        kw(N) = map(v -> v isa Function ? v(N) : v, layout)
+        e48 = _viscous_interface_error(48; kw(48)..., interface_flux=:ghost)
+        e96 = _viscous_interface_error(96; kw(96)..., interface_flux=:ghost)
+        closure96 = _viscous_interface_error(96; kw(96)...)
+        @test e96 < ghost_max
+        @test log2(e48 / e96) > order_min
+        @test closure96 > 100 * e96
+    end
+    # The ghost flux arrays exist only where they are read: under the ghost
+    # path with molecular transport, along each interface dimension.
+    per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    mk(; kw...) = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+                         patch_grid=(2, 1, 1); kw...)
+    extents(s) = [size(p.ghost_flux[d], 4) for p in getfield(s, :patches), d in 1:3]
+    @test all(==(0), extents(mk(interface_flux=:ghost)))
+    @test all(==(0), extents(mk(transport=Transport(mu0=1e-2))))
+    viscous = extents(mk(interface_flux=:ghost, transport=Transport(mu0=1e-2)))
+    @test all(==(5), viscous[:, 1]) && all(==(0), viscous[:, 2:3])
+end

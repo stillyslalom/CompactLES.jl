@@ -30,14 +30,16 @@
 #                same-level and coarse-fine faces, both gradient treatments,
 #                mixed wall and interface ends, Float32, acoustic reflection
 #   gflux        the same rows under `interface_flux = :ghost` (the inviscid
-#                flux differenced through interface ends from ghost fluxes)
-#                beside the default and the Brady–Livescu rows, with the
-#                polynomial right-hand side at both kinds of interface end
+#                and molecular fluxes differenced through interface ends from
+#                ghost fluxes) beside the default and the Brady–Livescu rows,
+#                with the polynomial right-hand side at both kinds of
+#                interface end
 #   transfer     the level rows at each `level_interpolation_order` in
-#                `orders`, C6, C6 Brady–Livescu and C8 Brady–Livescu, with
+#                `orders` for each derivative operator in `derivs` (c6, c6bl,
+#                c8, c8bl, c10: the default rows or Brady–Livescu's), with
 #                C10 under the default filter; global step, subcycled, three
 #                levels, viscous, and the 2-D entropy wave through a square
-#                level (`entropy2d_case`)
+#                level (`entropy2d_case`) for the C6 operators among them
 #   transfertime the temporal order of the finest two-level grid, global step
 #                and subcycled, at the highest of `orders`
 #
@@ -64,7 +66,8 @@ MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("run this study on one rank")
 include(joinpath(@__DIR__, "..", "test", "smooth_cases.jl"))
 
 const OPTS = CL.script_args(ARGS, (study="all", ns="49,97,193", cfl=0.25, tfinal=0.4,
-                                   orders="4,6,8", coupling=""))
+                                   orders="4,6,8", derivs="c6,c6bl,c8bl",
+                                   coupling=""))
 const TRANSFER_ORDERS = parse.(Int, split(OPTS.orders, ','))
 const COUPLING = isempty(OPTS.coupling) ? (;) : Core.eval(Main, Meta.parse(OPTS.coupling))
 const NS = parse.(Int, split(OPTS.ns, ','))
@@ -613,8 +616,12 @@ function transfer_study()
     println("\n=== level transfer order, fixed physical endpoints, coupling = " *
             "$(isempty(OPTS.coupling) ? "default" : OPTS.coupling) ===")
     fine = fine_periodic()
-    derivs = (("C6", lele_d1_6()), ("C6 BL", lele_d1_6(closures=:brady_livescu)),
-              ("C8 BL", lele_d1_8(closures=:brady_livescu)))
+    table = Dict("c6" => ("C6", lele_d1_6()),
+                 "c6bl" => ("C6 BL", lele_d1_6(closures=:brady_livescu)),
+                 "c8" => ("C8", lele_d1_8()),
+                 "c8bl" => ("C8 BL", lele_d1_8(closures=:brady_livescu)),
+                 "c10" => ("C10", lele_d1_10()))
+    derivs = [table[k] for k in split(OPTS.derivs, ',')]
     for (label, deriv) in derivs, p in TRANSFER_ORDERS
         o = (deriv=deriv, level_interpolation_order=p, COUPLING...)
         evolution_study("entropy wave k=3, 2 levels, $label, order $p, unfiltered",
@@ -641,7 +648,8 @@ function transfer_study()
     # Two dimensions: the imposed planes carry interpolated values along the
     # other dimension, so the inviscid solution itself reads the order.
     ns2 = filter(n -> n % 12 == 0, NS_PERIODIC)
-    for (label, deriv) in derivs[1:2], p in TRANSFER_ORDERS, filtered in (false, true)
+    derivs2 = filter(((label, _),) -> startswith(label, "C6"), derivs)
+    for (label, deriv) in derivs2, p in TRANSFER_ORDERS, filtered in (false, true)
         evolution_study("2-D entropy wave (2, 1), 2 levels, $label, order $p, " *
                         (filtered ? "filtered" : "unfiltered"),
                         (N; cfl) -> entropy2d_case(N; cfl=cfl, deriv=deriv,
@@ -792,13 +800,11 @@ function gflux_study()
                         (s, cfl) -> fine, NS; primary=:interface)
     end
     fine_viscous = fine_periodic()
-    for (label, kw) in GFLUX_VISCOUS, levels in (1, 2)
-        what = levels == 1 ? "two patches" : "2 levels"
+    for (label, kw) in GFLUX_VISCOUS,
+        (what, lkw) in (("two patches", (patch_grid=(2, 1, 1),)), ("2 levels", (levels=2,)),
+                        ("2 levels subcycled", (levels=2, subcycle=true)))
         evolution_study("viscous standing wave, $what, $label, unfiltered",
-                        (N; cfl) -> viscous_periodic_case(N; levels=levels, cfl=cfl,
-                                                          patch_grid=levels == 1 ?
-                                                              (2, 1, 1) : (1, 1, 1),
-                                                          kw...),
+                        (N; cfl) -> viscous_periodic_case(N; cfl=cfl, lkw..., kw...),
                         (s, cfl) -> fine_viscous, NS_PERIODIC; primary=:interface)
     end
     for (label, kw) in (("default", (;)), ("ghost", (interface_flux=:ghost,))),

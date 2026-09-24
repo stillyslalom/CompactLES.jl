@@ -228,15 +228,21 @@ function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
             enforce && apply_bcs!(ps, states[pi])
             compute_rhs!(ps, states[pi], dQs[pi], prepared)
         end
-        return UInt8(0)
+    else
+        enforce && for pi in lev.patches
+            apply_bcs!(PatchSolver(solver, patches[pi]), states[pi])
+        end
+        for st in lev.stacks
+            compute_rhs!(PatchSolver(solver, st.patch), _stack_state(st, states),
+                         _stack_state(st, dQs), prepared)
+        end
     end
-    enforce && for pi in lev.patches
-        apply_bcs!(PatchSolver(solver, patches[pi]), states[pi])
-    end
-    for st in lev.stacks
-        compute_rhs!(PatchSolver(solver, st.patch), _stack_state(st, states),
-                     _stack_state(st, dQs), prepared)
-    end
+    # The molecular flux through interface ends reads every patch's interior
+    # flux, so it follows the whole level (rhs.jl, phase two). A setup
+    # constant, the same on every rank.
+    _ghost_viscous(solver) &&
+        _level_ghost_fluxes!(solver, lev, states, dQs,
+                             lev.index == 0 ? solver.comm : lev.level_comm.comm)
     return UInt8(0)
 end
 

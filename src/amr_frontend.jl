@@ -17,7 +17,7 @@ vector of nested regions is static.
 Base.@kwdef struct AMR
     initial::Any = :sensor
     level_restriction::Symbol = :inject
-    level_interpolation_order::Int = 6
+    level_interpolation_order::Union{Nothing,Int} = nothing
     subcycle::Bool = false
     regrid_interval::Int = 0
     tag_threshold::Float64 = 0.02

@@ -201,7 +201,7 @@ parameters of their own for a third reason: `nothing` in either holds a whole
 operator path (the fold closures, the `:d8` detector) off the default
 configuration's inference path entirely.
 """
-struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,TF}
+struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,GF,TF}
     id::Int
     level::Int
     region::BlockRegion                     # offset + extent, in this LEVEL's node
@@ -258,6 +258,15 @@ struct Patch{T,A<:AbstractArray{T,3},Fo,DP,VP,FP,SP,RP,W,LS,TF}
     # on the transfer's own host stages, and on a patch that is nobody's
     # child.
     level_scratch::LS
+    # The molecular flux of each dimension with an interface end, all
+    # conserved components, under `interface_flux = :ghost` with molecular
+    # transport (`_ghost_viscous`): written over the interior by the
+    # right-hand side, over a coarse-fine face's ghost layers from the
+    # shell's gradients, and over a same-level face's ghost layers by the
+    # level's flux records, which read the neighbour's interior (the
+    # `ghost_flux` section of rhs.jl). A zero-extent array in every other
+    # dimension and configuration.
+    ghost_flux::GF
     # The same collections as isbits-adaptable tuples (FieldVector /
     # FieldMatrix, pointwise.jl): what the pointwise per-point bodies index,
     # since a Vector or Matrix kernel argument hangs a device launch. Same
@@ -275,7 +284,7 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                pairbuf, pairout, rho, u, v, w, p, T_ion, c, cp_mix, Y,
                mu_art, beta_art, kappa_art, D_art,
                inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
-               rhs_workspace, covered, level_scratch)
+               rhs_workspace, covered, level_scratch, ghost_flux)
     field_tuples = (Y=FieldVector(Y), D_art=FieldVector(D_art),
                     grad_u=FieldMatrix(rhs_workspace.grad_u),
                     grad_Y=FieldMatrix(rhs_workspace.grad_Y),
@@ -285,7 +294,7 @@ function Patch(id, level, region, comm, decomp, h, faces, bcs, folds,
                  ring_plans, pairbuf, pairout, rho, u, v, w, p, T_ion, c,
                  cp_mix, Y, mu_art, beta_art, kappa_art, D_art,
                  inv_J, area_d, inv_h, inv_r, cot_over_r, cot_over_r_gcl,
-                 rhs_workspace, covered, level_scratch, field_tuples)
+                 rhs_workspace, covered, level_scratch, ghost_flux, field_tuples)
 end
 
 # --- Covered masks ----------------------------------------------------------
@@ -396,7 +405,7 @@ end
     n === :decomp || n === :bcs || n === :folds || n === :faces ||
     n === :region || n === :h || n === :deriv_plans || n === :div_plans ||
     n === :filter_plans || n === :smooth_plans || n === :ring_plans ||
-    n === :pairbuf || n === :pairout ||
+    n === :pairbuf || n === :pairout || n === :ghost_flux ||
     n === :rho || n === :u || n === :v || n === :w ||
     n === :p || n === :T_ion || n === :c || n === :cp_mix || n === :Y ||
     n === :mu_art || n === :beta_art || n === :kappa_art || n === :D_art ||

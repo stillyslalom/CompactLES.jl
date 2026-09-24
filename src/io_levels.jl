@@ -318,7 +318,8 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                _shared_species_diffusivity(solver),
                                                1, 1, spec.tile;
                                                interface_divergence=
-                                                   spec.interface_divergence)
+                                                   spec.interface_divergence,
+                                               ghost_viscous=_ghost_viscous(solver))
     restriction = lev.transfers[1].restriction
     transfers = [build_level_transfer(
         T, tr, active, spec.n_halo, [root.region], [1],
@@ -326,7 +327,9 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         n_cons, getfield(solver, :subcycle),
         local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp,
         root_lc.comm, length(owners[ti]), faces[ti];
-        interpolation_order=spec.interpolation_order)
+        interpolation_order=spec.interpolation_order,
+        gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
+        parent_h=root.h)
         for (ti, tr) in enumerate(regions)]
     resize!(patches, 1 + length(held))
     resize!(states, 1 + length(held))

@@ -549,7 +549,8 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                           spec.backend, ws_pool,
                           solver.equations.n_species, n_cons,
                           _shared_species_diffusivity(solver), fi, 1;
-                          interface_divergence=spec.interface_divergence) : nothing
+                          interface_divergence=spec.interface_divergence,
+                          ghost_viscous=_ghost_viscous(solver)) : nothing
     newlt = build_level_transfer(T, newregion, active_g, spec.n_halo,
                                  [patches[1].region], [1],
                                  Union{Nothing,Decomp{T}}[patches[1].decomp],
@@ -557,7 +558,10 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                                  getfield(solver, :subcycle),
                                  newfine === nothing ? nothing : newfine.decomp,
                                  root_lc.comm, length(owners[1]);
-                                 interpolation_order=spec.interpolation_order)
+                                 interpolation_order=spec.interpolation_order,
+                                 gradient_deriv=_ghost_viscous(solver) ?
+                                                spec.deriv : nothing,
+                                 parent_h=getfield(solver, :h))
     _resize_level_patches!(solver, states, workspace, held ? 2 : 1)
     if held
         Qf_new = _state_like(newfine.rho, n_cons)
@@ -1007,7 +1011,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                              _shared_species_diffusivity(solver),
                                              1, 1, spec.tile;
                                              interface_divergence=
-                                                 spec.interface_divergence)
+                                                 spec.interface_divergence,
+                                             ghost_viscous=_ghost_viscous(solver))
         append!(new_patches, built)
         resize!(new_states, length(held))
         resize!(new_dQ, length(held))
@@ -1046,7 +1051,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                       solver.equations.n_species, n_cons,
                                       _shared_species_diffusivity(solver),
                                       idx, 1, faces[ti];
-                                      interface_divergence=spec.interface_divergence)
+                                      interface_divergence=spec.interface_divergence,
+                                      ghost_viscous=_ghost_viscous(solver))
                 Q = _state_like(p.rho, n_cons)
                 push!(new_states, Q)
                 push!(new_dQ, zero(Q))
@@ -1061,7 +1067,9 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         lev.transfers[1].restriction, n_cons, getfield(solver, :subcycle),
         local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp,
         root_lc.comm, length(owners[ti]), faces[ti];
-        interpolation_order=spec.interpolation_order)
+        interpolation_order=spec.interpolation_order,
+        gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
+        parent_h=root.h)
         for (ti, tr) in enumerate(wanted)]
     _resize_level_patches!(solver, states, workspace, 1 + length(held))
     for (k, p) in enumerate(new_patches)

@@ -38,6 +38,8 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 | `StepControl.substep_cfl` | 0 (disabled) | opt-in | An absolute ceiling on refreshed refined-stage CFL, with collective rollback. Qualify a positive ceiling for the case; accepted startup transients can exceed the root target ([substep rates](CALIBRATION_APPENDIX.md#benchsubstepratesjl-refreshed-refined-level-rates)). |
 | `StepControl.validity` | `:strict` | keep | The species cases, the shock tubes and both examples pass strict; only a shock converging into a cold or near-vacuum ambient ends on cells of negative internal energy, which an ideal gas does not admit at any threshold, and those six cases opt out with bounded counts ([species band](CALIBRATION_APPENDIX.md#the-species-validity-band)). |
 | `StepControl.species_band` | 0.05 | keep | A grid-scale species interface carries about 1% outside [0, 1] at every resolution under the mass-fraction bound and 5 to 7% at its worst without it; the band sits between the two, and is separate from the bound's dead band `Y_tolerance` ([species band](CALIBRATION_APPENDIX.md#the-species-validity-band)). |
+| `interface_flux` | `:closure` | provisional | `:ghost` leads the closure rows on every smooth interface row, inviscid and viscous, keeps the shock minima and conserves as they do; its promotion waits on the device gradient ring and the re-recorded guards (ROADMAP N15b) ([ghost fluxes](CALIBRATION_APPENDIX.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes)). |
+| `level_interpolation_order` | `deriv`'s interior order; +2 under `:ghost`, at most 10 | keep | Under the closure rows the interface divergence binds before the shell, so C6 runs are unchanged and C8 and C10 read the same at 6, 8 and 10; the ghost path reads the shell at p − 1 and p − 2 and wants the two orders more ([interpolation order](CALIBRATION_APPENDIX.md#benchleveltransferjl-the-live-interpolation-order), [transfer order](CALIBRATION_APPENDIX.md#level-transfer-order)). |
 | `deriv` closure rows | `:neutral3` | keep | Neutral at an inviscid slip wall, where the cascade rows grow a wall-normal velocity; the C6 rows carry a measured pseudospectral certificate ([certificates](CALIBRATION_APPENDIX.md#closure-certificates)). |
 | `compact_filter` α | 0.45 | too strong | 0.49 fits at 128³ and at 256³ and clears the battery; the stability edge is α = 0.49875 at full strength ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)). |
 | `compact_filter` closures | `:onesided` | keep | The cascade's F2 row caps every filtered wall at second order; the one-sided rows return the wall to the derivative closure's order and take 10 to 18 points off the planar Noh wall deficit, at two to three times the error on a reflection resolved over fewer than ten cells ([filter wall rows](CALIBRATION_APPENDIX.md#the-filters-wall-rows)). |
@@ -139,6 +141,12 @@ cost. The link is to the section holding the evidence.
   workaround ([ghost fluxes](CALIBRATION_APPENDIX.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes),
   [interface divergence rows](CALIBRATION_APPENDIX.md#benchboundaryorderjl-idiv-the-interface-divergence-rows),
   [interface sensors](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).
+- **A smooth patched or refined run is limited by its interfaces.** The
+  closure rows hold an interface end to third or fourth order whatever the
+  interior. Set `interface_flux = :ghost`: the inviscid and molecular fluxes
+  then cross the interface through the interior stencil, and the level
+  interpolation order rises by two with it
+  ([ghost fluxes](CALIBRATION_APPENDIX.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes)).
 - **A deep nest develops species undershoot under global stepping.** Use
   subcycling, the demonstrated workaround. Level-aware filter trials trade
   improved layer behavior for larger smooth errors and remain benchmark-only;

@@ -19,8 +19,9 @@
 # through the point-sample halves of the transfer machinery (transfer.jl):
 #
 #   - After every RK stage update, `prolong_level_ghosts!` interpolates the
-#     coarse state (order 6 unless `level_interpolation_order` says otherwise)
-#     over a box extending `LEVEL_BUFFER` coarse nodes
+#     coarse state (at `level_interpolation_order`, by default the derivative
+#     operator's interior order, `default_interpolation_order` in
+#     transfer.jl) over a box extending `LEVEL_BUFFER` coarse nodes
 #     beyond the refined region and overwrites the fine patch's ghost ring and
 #     its boundary-plane nodes from the result. Including the plane nodes lets
 #     the coarse solution force the fine solve's boundary as a `DirichletBC`
@@ -468,6 +469,70 @@ struct ShellRing{T}
 end
 
 """
+    ShellGradients
+
+The conserved-variable gradients a refined patch's ghost fluxes read at its
+coarse-fine faces under `interface_flux = :ghost` with molecular transport:
+the compact derivative plans along each active dimension over the fine box
+the interpolation chain produces (`nothing` elsewhere), a box-sized scratch
+field, and the gradient ring, one column per conserved component and
+dimension (`3(c − 1) + j` holds ∂Q_c/∂x_j), laid out as the shell ring is.
+`_impose_shell!` refreshes the ring with the shell itself, so the two
+describe the same interpolated state.
+"""
+struct ShellGradients{T}
+    plans::Vector{Any}
+    tmp::Array{T,3}
+    gring::Matrix{T}
+end
+
+# The derivative operator the gradient ring is taken with: `deriv`'s interior
+# with explicit one-sided rows of seventh order on eight points at the box
+# ends, one per closure row the interior needs. The ghost layers sit eight to
+# eleven fine nodes inside the box, where a closure row's error has decayed
+# by the interior rows' factor per node (2 − √3 for C6) but not vanished:
+# under the third-order rows of the operator's default set it entered the
+# molecular divergence at second order in the spacing, a floor of 5e-11 on
+# the viscous standing wave at N = 192. A derivative taken once, and never
+# stepped, has no stability constraint on its closure rows.
+function _box_gradient_scheme(deriv::CompactScheme{T}) where {T}
+    rows = [ClosureRow{T}((zero(T), one(T), zero(T)), _one_sided_d1(T, r, 8))
+            for r in 1:nclosure(deriv)]
+    return CompactScheme{T}(deriv.name * ", box gradient", deriv.alpha, deriv.a0,
+                            deriv.coeffs, deriv.symmetric, rows)
+end
+function _box_gradient_scheme(deriv::BandedCompactScheme{T}) where {T}
+    rows = [ClosureRow{T}((zero(T), one(T), zero(T)), _one_sided_d1(T, r, 8))
+            for r in 1:nclosure(deriv)]
+    return BandedCompactScheme{T}(deriv.name * ", box gradient", deriv.q, deriv.lhs,
+                                  deriv.a0, deriv.coeffs, deriv.symmetric,
+                                  _banded_closure_rows(rows))
+end
+_box_gradient_scheme(deriv) = deriv
+
+# The first-derivative weights at node `r` of the nodes 1..npts, from the
+# Lagrange interpolant through them, exact rationals, undivided.
+function _one_sided_d1(::Type{T}, r::Int, npts::Int) where {T}
+    x = collect(1:npts) .// 1
+    w = zeros(Rational{BigInt}, npts)
+    for j in 1:npts
+        # d/dx of the j-th Lagrange basis polynomial at x[r].
+        s = 0 // 1
+        for m in 1:npts
+            m == j && continue
+            p = 1 // (x[j] - x[m])
+            for q in 1:npts
+                (q == j || q == m) && continue
+                p *= (x[r] - x[q]) // (x[j] - x[q])
+            end
+            s += p
+        end
+        w[j] = s
+    end
+    return T.(w)
+end
+
+"""
     LevelTransfer
 
 Bound form of the coupling between one refined patch and its parent: the
@@ -536,6 +601,10 @@ struct LevelTransfer{T}
     box_buffers::GatherBuffers{T}
     restrict_buffers::GatherBuffers{T}
     shell::ShellRing{T}
+    gradients::Union{Nothing,ShellGradients{T}}  # the ghost fluxes' gradient
+                                     # ring; `nothing` unless the solver
+                                     # differences molecular fluxes through
+                                     # ghost fluxes (`_ghost_viscous`)
 end
 
 """
@@ -1219,7 +1288,9 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
                               fine_decomp::Union{Nothing,Decomp{T}},
                               parent_comm::MPI.Comm, np_tile::Int,
                               faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3);
-                              interpolation_order::Int=6) where {T}
+                              interpolation_order::Int=6,
+                              gradient_deriv=nothing,
+                              parent_h=nothing) where {T}
     imposed = ntuple(d -> (faces[d][1] == 0, faces[d][2] == 0), 3)
     dims_to_refine = [d for d in 1:3 if active[d]]
     boxext = ntuple(d -> active[d] ? region.extent[d] + 2 * LEVEL_BUFFER :
@@ -1253,6 +1324,20 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
                              Matrix{T}(undef, ringlen, n_cons), ring_counts,
                              GatherBuffers{T}())
     end
+    # The gradients are taken on the chain's fine box, whose ends lie
+    # 3·LEVEL_BUFFER fine nodes beyond the patch, with the derivative
+    # operator's own closure rows there; only the owners of the refined patch
+    # run the chain.
+    gradients = nothing
+    if gradient_deriv !== nothing && fine_decomp !== nothing
+        boxf = pdecomps[end]
+        scheme = _box_gradient_scheme(gradient_deriv)
+        plans = Any[active[d] ? plan_direction(boxf, scheme, d,
+                                               T(parent_h[d]) / 3) : nothing
+                    for d in 1:3]
+        gradients = ShellGradients{T}(plans, zeros(T, size(pstage[end])),
+                                      zeros(T, shell.len, 3 * n_cons))
+    end
     return LevelTransfer{T}(region, active, coarse_regions, coarse_local,
                             fine_index, parent_comm, imposed,
                             restriction, dims_to_refine,
@@ -1264,7 +1349,8 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
                             _owned_blocks(fine_decomp, parent_comm),
                             zeros(T, size(pstage[1])..., n_cons),
                             zeros(T, region.extent..., n_cons),
-                            GatherBuffers{T}(), GatherBuffers{T}(), shell)
+                            GatherBuffers{T}(), GatherBuffers{T}(), shell,
+                            gradients)
 end
 
 # --- Replicated-region gathers ----------------------------------------------
@@ -1682,7 +1768,17 @@ end
 # rings, and impose each rank's own shell slots. Collective over the fine
 # communicator. A device patch runs the chain on its `LevelScratch`; the
 # host patch on the transfer's host stages.
+#
+# Under `lt.gradients` each component's ring is followed by the rings of its
+# derivatives along the three dimensions (zero along a collapsed one), taken
+# on the fine box the chain produced, and the unpack fills the gradient ring
+# beside the shell ring. The derivatives run on the host: a device patch's
+# final stage is downloaded for them, which only this opt-in path pays. A
+# tile with no parent-fed face reads no gradient ring and takes none.
 function _impose_shell!(solver, states, lt::LevelTransfer, fill)
+    lt.gradients === nothing ||
+        !any(d -> lt.active[d] && any(lt.imposed[d]), 1:3) ||
+        return _impose_shell_gradients!(solver, states, lt, fill)
     patches = getfield(solver, :patches)
     fine = patches[lt.fine_index]
     Qf = states[lt.fine_index]
@@ -1757,6 +1853,87 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill)
         at += ringlen
     end
     _write_shell_from_ring!(Qf, ring, table, lt, fdcp, n_cons)
+    return states
+end
+
+function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
+    patches = getfield(solver, :patches)
+    fine = patches[lt.fine_index]
+    Qf = states[lt.fine_index]
+    fdcp = fine.decomp
+    comm = fdcp.comm
+    np = MPI.Comm_size(comm)
+    me = MPI.Comm_rank(comm)
+    n_cons = solver.equations.n_cons
+    K = length(lt.pplans)
+    shell = lt.shell
+    slabs = shell.slabs
+    ringlen = shell.len
+    g = lt.gradients
+    boxf = lt.pdecomps[K+1]
+    padb = boxf.n_halo_d
+    shift = ntuple(d -> fdcp.active[d] ? 3 * LEVEL_BUFFER : 0, 3)
+    owned = (me+1):np:n_cons
+    n_owned = length(owned)
+    sendbuf = _fit!(shell.buffers.send, 4 * ringlen * n_owned)
+    device_stage = nothing
+    if _device_path(Qf)
+        scratch = fine.level_scratch
+        stages = scratch.stages
+        _fill_stage0_dev!(fill, stages[1], scratch, lt, owned)
+        for k in 1:K
+            _interpolate_dev!(stages[k+1], lt.pplans[k], stages[k], n_owned)
+        end
+        device_stage = Array(stages[K+1])
+    end
+    bf = lt.pstage[K+1]
+    pos = 0
+    for (b, c) in enumerate(owned)
+        if device_stage === nothing
+            _fill_stage0!(fill, lt.pstage[1], lt, c)
+            for k in 1:K
+                interpolate!(lt.pstage[k+1], lt.pplans[k], lt.pstage[k])
+            end
+        else
+            copyto!(bf, view(device_stage, :, :, :, b))
+        end
+        for j in 0:3
+            src = bf
+            if j > 0
+                plan = g.plans[j]
+                if plan === nothing
+                    fill!(view(sendbuf, pos+1:pos+ringlen), 0)
+                    pos += ringlen
+                    continue
+                end
+                apply_along!(g.tmp, plan, bf, boxf)
+                src = g.tmp
+            end
+            @inbounds for s in slabs, g3 in s[3], g2 in s[2], g1 in s[1]
+                pos += 1
+                sendbuf[pos] = src[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
+                                   g3 + shift[3] + padb[3]]
+            end
+        end
+    end
+    recv = sendbuf
+    if np > 1
+        counts = 4 .* shell.counts
+        recv = _fit!(shell.buffers.recv, sum(counts))
+        MPI.Allgatherv!(sendbuf, MPI.VBuffer(recv, counts), comm)
+    end
+    ring = shell.ring
+    gring = g.gring
+    at = 0
+    for r in 0:np-1, c in (r+1):np:n_cons
+        copyto!(view(ring, :, c), view(recv, at+1:at+ringlen))
+        at += ringlen
+        for j in 1:3
+            copyto!(view(gring, :, 3 * (c - 1) + j), view(recv, at+1:at+ringlen))
+            at += ringlen
+        end
+    end
+    _write_shell_from_ring!(Qf, ring, shell.table, lt, fdcp, n_cons)
     return states
 end
 

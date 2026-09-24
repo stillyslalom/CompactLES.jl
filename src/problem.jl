@@ -712,11 +712,14 @@ combined with `amr`.
 - `level_restriction`: `:inject` (default) writes the fine coincident-node
   values onto the covered region of the parent; `:filter` applies the
   invertible transfer pair's anti-alias filter first.
-- `level_interpolation_order`: `6` (default), or 2, 4 or 8. The order of
-  the Lagrange interpolation from the parent that fills a refined level's
-  ghost ring and boundary planes at every stage, and a newly refined
-  region at a regrid. Order 8 lowers the error with viscosity, the filter,
-  a multidimensional level or `interface_divergence`; 2 is the only
+- `level_interpolation_order`: 2, 4, 6, 8 or 10; by default the interior
+  order of `deriv`, so 6 for [`lele_d1_6`](@ref), 8 for
+  [`lele_d1_8`](@ref), 10 for [`lele_d1_10`](@ref) and 6 for any other
+  scheme. The order of the Lagrange interpolation from the parent that
+  fills a refined level's ghost ring and boundary planes at every stage,
+  and a newly refined region at a regrid. Order 8 under C6 lowers the error
+  with viscosity, the filter, a multidimensional level,
+  `interface_divergence` or `interface_flux = :ghost`; 2 is the only
   monotone choice. Checkpoints do not record it.
 - `subcycle`: `false` (default) advances every level at the global dt;
   `true` selects the Berger–Oliger step, three steps of a third of the
@@ -795,7 +798,7 @@ Base.@kwdef struct Numerics
     amr::Union{Nothing,AMR} = nothing
     refine::Union{Nothing,BlockRegion,Vector{BlockRegion}} = nothing
     level_restriction::Symbol = :inject
-    level_interpolation_order::Int = 6
+    level_interpolation_order::Union{Nothing,Int} = nothing
     subcycle::Bool = false
     regrid_interval::Int = 0
     tag_threshold::Float64 = 0.02

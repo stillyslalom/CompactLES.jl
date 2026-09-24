@@ -128,8 +128,8 @@ interior class is `r = order ÷ 2 - 1`. Each weight row sums to exactly one
 before conversion to `T`.
 """
 function amr_interpolation_weights(::Type{T}, order::Int) where {T}
-    (iseven(order) && 2 <= order <= 8) ||
-        error("interpolation order must be even and between 2 and 8, got $order")
+    (iseven(order) && 2 <= order <= 10) ||
+        error("interpolation order must be even and between 2 and 10, got $order")
     p = order
     W = Array{T,3}(undef, p, 2, p - 1)
     for r in 0:(p-2), (sub, ξ) in enumerate((1 // 3, 2 // 3))
@@ -144,6 +144,26 @@ function amr_interpolation_weights(::Type{T}, order::Int) where {T}
         end
     end
     return W
+end
+
+# The level interpolation order a solver takes when it is given none: the
+# derivative operator's own interior order for the three Lele operators,
+# recognized by their interior coefficients so that any closure rows qualify,
+# and 6 for any other scheme; two more, up to 10, under
+# `interface_flux = :ghost`. An O(h^p) shell value enters a first derivative
+# at h^(p-1) and a second at h^(p-2). Under the closure rows the interface
+# divergence reads no ghost flux and its own rows bind first, so the interior
+# order suffices; the ghost fluxes difference the shell's inviscid flux and
+# carry its molecular flux, which read the shell at p − 1 and p − 2.
+function default_interpolation_order(deriv::AbstractCompactScheme,
+                                     interface_flux::Symbol=:closure)
+    p = 6
+    if deriv isa Union{CompactScheme,BandedCompactScheme}
+        T = typeof(deriv.a0)
+        _same_interior(deriv, lele_d1_10(T)) && (p = 10)
+        _same_interior(deriv, lele_d1_8(T)) && (p = 8)
+    end
+    return interface_flux === :ghost ? min(p + 2, 10) : p
 end
 
 """
@@ -185,7 +205,7 @@ a transfer dimension (refinement across a fold's singular region is
 forbidden); the schemes accept `lo_fold`/`hi_fold` through
 [`plan_direction`](@ref) directly should future work lift that.
 
-`interp_order` (even, 2–8, default 6) sets the Lagrange stencil width of the
+`interp_order` (even, 2–10, default 6) sets the Lagrange stencil width of the
 coarse-to-fine interpolation and therefore the measured order of the
 fine → coarse → fine round trip on smooth data.
 """

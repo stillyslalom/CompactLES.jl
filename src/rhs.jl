@@ -221,7 +221,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 interface_flux::Symbol=:closure,
                 refine::Union{Nothing,BlockRegion,Vector{BlockRegion}}=nothing,
                 level_restriction::Symbol=:inject,
-                level_interpolation_order::Int=6,
+                level_interpolation_order::Union{Nothing,Int}=nothing,
                 subcycle::Bool=false,
                 regrid_interval::Int=0,
                 tag_threshold::Real=0.02,
@@ -237,6 +237,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 rebalance_persist::Int=2) where {T}
     bcs = _face_conditions(bcs)
     eos = _as_eos(eos)
+    level_interpolation_order =
+        something(level_interpolation_order,
+                  default_interpolation_order(deriv, interface_flux))
     validate_transport(transport, eos)
     for d in 1:3
         isperiodic(bcs[d][1]) == isperiodic(bcs[d][2]) ||
@@ -449,13 +452,14 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         level_restriction in (:inject, :filter) ||
             error("level_restriction must be :inject or :filter, " *
                   "got :$level_restriction")
-        # The Lagrange tables are built for even orders 2 to 8. Every stencil
+        # The Lagrange tables are built for even orders 2 to 10. Every stencil
         # fits the gathered box, whose extent along a refined dimension is at
         # least 4 + 2·LEVEL_BUFFER = 12 nodes; up to order 6 it is centered at
-        # every shell node, and at order 8 the outermost ghost layer's stencil
-        # sits one node inward of centered.
-        level_interpolation_order in (2, 4, 6, 8) ||
-            error("level_interpolation_order must be 2, 4, 6 or 8, " *
+        # every shell node, at order 8 the outermost ghost layer's stencil
+        # sits one node inward of centered, and at order 10 two nodes inward
+        # for the outermost layer and one for the next.
+        level_interpolation_order in (2, 4, 6, 8, 10) ||
+            error("level_interpolation_order must be 2, 4, 6, 8 or 10, " *
                   "got $level_interpolation_order")
         # The level shell is read from the fine box at an offset of
         # 3·LEVEL_BUFFER nodes; a halo wider than that would index the box's
@@ -525,6 +529,13 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   "rows, which exist under interface_rhs = :extended only")
         metric isa CartesianMetric && all(isnothing, stretch) ||
             error("interface_flux = :ghost requires an unstretched CartesianMetric")
+        # A coarse-fine face's molecular ghost flux recovers the temperature
+        # gradient from the conserved ones through the internal energy.
+        isempty(refines) || !_ghost_viscous(interface_flux, transport) ||
+            _ghost_gradient_eos(eos) ||
+            error("interface_flux = :ghost with molecular transport at a refined " *
+                  "level supports IdealMixture, Nasa9Mixture and StiffenedGas; " *
+                  "got $(typeof(eos))")
     end
     # --- Device residency -------------------------------------------------
     # A DeviceBackend supports a decomposed patch, patched, refined or
@@ -744,7 +755,8 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                   [f() for _ in 1:n_species],
                   f(), (f(), f(), f()), (f(), f(), f()), f(), f(), f(),
                   ws_root, _covered_mask(decomp),
-                  _empty_level_scratch(empty_field(backend, T)))
+                  _empty_level_scratch(empty_field(backend, T)),
+                  ntuple(_ -> similar(empty_field(backend, T), T, 0, 0, 0, 0), 3))
     if isempty(refines)
         patches = [patch]
         solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
@@ -828,7 +840,10 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                                  interface_rhs, backend, ws_pool,
                                                  n_species, n_cons,
                                                  _shared_species_diffusivity(art, n_species),
-                                                 id0, ℓ, tile; interface_divergence)
+                                                 id0, ℓ, tile; interface_divergence,
+                                                 ghost_viscous=
+                                                     _ghost_viscous(interface_flux,
+                                                                    transport))
             append!(fines, built)
             indices = [id0 + k for k in eachindex(held)]
             for (k, ti) in enumerate(held)
@@ -848,7 +863,10 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                     local_of[ti], level_restriction, n_cons, subcycle,
                     decomp_at(local_of[ti]), parent_lc.comm,
                     length(owners[ti]), faces[ti];
-                    interpolation_order=level_interpolation_order))
+                    interpolation_order=level_interpolation_order,
+                    gradient_deriv=_ghost_viscous(interface_flux, transport) ?
+                                   deriv : nothing,
+                    parent_h=parent_h))
             end
             if lc.owned
                 # A record's partner is a rank number in the communicator the
@@ -943,7 +961,8 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            n_species::Int, n_cons::Int, bulk::Bool, id::Int,
                            level::Int,
                            faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3);
-                           interface_divergence=nothing) where {T}
+                           interface_divergence=nothing,
+                           ghost_viscous::Bool=false) where {T}
     region_f, decomp_f, hf = _fine_decomp(T, refine, active_g, h, n_halo, comm)
     plans = _fine_plans(decomp_f, hf, deriv, filt, smoo, interface_rhs, backend;
                         interface_divergence)
@@ -957,11 +976,27 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                         bulk)
     scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
                              MPI.Comm_size(comm), MPI.Comm_rank(comm))
+    # Every face of a refined patch is an interface end, a coarse-fine or a
+    # same-level one, so each active dimension takes a ghost-flux array.
+    gflux = _ghost_flux_arrays(() -> parent(allocate_state(backend, decomp_f, n_cons)),
+                               similar(empty3, T, 0, 0, 0, 0),
+                               ghost_viscous ? active_g : (false, false, false))
     return _assemble_patch(id, level, region_f, comm, decomp_f, hf, faces,
                            _fine_bcs(active_g, faces), plans, empty3,
                            _patch_arrays(g, n_species), ws, _covered_mask(decomp_f),
-                           scratch)
+                           scratch, gflux)
 end
+
+# Whether the flux through an interface end carries a molecular part through
+# ghost fluxes: `interface_flux = :ghost` with transport that is not zero.
+_ghost_viscous(interface_flux::Symbol, transport) =
+    interface_flux === :ghost && !_zero_molecular_diffusion(transport)
+_ghost_viscous(solver) = _ghost_viscous(solver.interface_flux, solver.transport)
+
+# A patch's `ghost_flux` arrays: `g4()` in each dimension of `dims`, the
+# zero-extent `empty4` in the others.
+_ghost_flux_arrays(g4::F, empty4, dims::NTuple{3,Bool}) where {F} =
+    ntuple(d -> dims[d] ? g4() : empty4, 3)
 
 # The refined region's node space, decomposition and spacing: parent-level
 # node g is refined-level node 3(g − 1) + 1.
@@ -1032,14 +1067,14 @@ _patch_arrays(g::F, n_species::Int) where {F} =
 # The refined `Patch` from its parts; fold-free, with no ring plans and no
 # pair buffers (`empty` stands in for both).
 _assemble_patch(id::Int, level::Int, region, comm, decomp, hf, faces, bcs, plans,
-                empty, a, ws, covered, scratch) =
+                empty, a, ws, covered, scratch, gflux) =
     Patch(id, level, region, comm, decomp, hf, faces, bcs,
           (nothing, nothing, nothing), plans.deriv, plans.div, plans.filter,
           plans.smooth, nothing, empty, empty,
           a.rho, a.u, a.v, a.w, a.p, a.T_ion, a.c, a.cp_mix, a.Y,
           a.mu_art, a.beta_art, a.kappa_art, a.D_art,
           a.inv_J, a.area_d, a.inv_h, a.inv_r, a.cot_over_r, a.cot_over_r_gcl,
-          ws, covered, scratch)
+          ws, covered, scratch, gflux)
 
 # --- Stacked tiles of a device level ------------------------------------------
 #
@@ -1073,7 +1108,8 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               interface_rhs::Symbol, backend::AbstractBackend,
                               ws_pool::AbstractVector, n_species::Int, n_cons::Int,
                               bulk::Bool, id0::Int, level::Int, tile::Int;
-                              interface_divergence=nothing) where {T}
+                              interface_divergence=nothing,
+                              ghost_viscous::Bool=false) where {T}
     patches = Patch[]
     stacks = TileStack[]
     if !_stacked_level(backend, tile)
@@ -1082,7 +1118,8 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                              comm, deriv, filt, smoo, smoother,
                                              interface_rhs, backend, ws_pool,
                                              n_species, n_cons, bulk, id0 + k,
-                                             level, faces[ti]; interface_divergence))
+                                             level, faces[ti]; interface_divergence,
+                                             ghost_viscous))
         end
         return patches, stacks
     end
@@ -1096,7 +1133,8 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         [faces[held[k]] for k in ks], members,
                                         active_g, h, n_halo, comm, deriv, filt, smoo,
                                         interface_rhs, backend, n_species, n_cons,
-                                        bulk, level; interface_divergence)
+                                        bulk, level; interface_divergence,
+                                        ghost_viscous)
         for (slot, k) in enumerate(ks)
             patches[k] = tiles[slot]
         end
@@ -1111,7 +1149,8 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            h::NTuple{3,T}, n_halo::Int, comm::MPI.Comm,
                            deriv, filt, smoo, interface_rhs::Symbol,
                            backend::DeviceBackend, n_species::Int, n_cons::Int,
-                           bulk::Bool, level::Int; interface_divergence=nothing) where {T}
+                           bulk::Bool, level::Int; interface_divergence=nothing,
+                           ghost_viscous::Bool=false) where {T}
     ntiles = length(tregions)
     region1, decomp1, hf = _fine_decomp(T, tregions[1], active_g, h, n_halo, comm)
     npad = padded_extent(decomp1)
@@ -1125,6 +1164,13 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
     empty_s = StackedArray(empty_raw, ntiles, stride)
     arrays = _patch_arrays(stacked, n_species)
     ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons, false, bulk)
+    empty4 = similar(empty_raw, T, 0, 0, 0, 0)
+    gflux_span = _ghost_flux_arrays(
+        () -> StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
+                                                    ntiles * stride, n_cons),
+                           ntiles, stride),
+        StackedArray(empty4, ntiles, stride),
+        ghost_viscous ? active_g : (false, false, false))
     # The spanning patch: id 0 (it is not in `solver.patches`), the first
     # tile's region, faces and boundary conditions (nothing in the batched
     # phases reads them: every refined face closes with the interface rows,
@@ -1132,7 +1178,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
     span = _assemble_patch(0, level, region1, comm, decomp1, hf, faces[1],
                            _fine_bcs(active_g, faces[1]), span_plans, empty_s,
                            arrays, ws_span, zeros(UInt8, 0, 0, 0),
-                           _empty_level_scratch(empty_raw))
+                           _empty_level_scratch(empty_raw), gflux_span)
     tiles = Patch[]
     for (slot, refine) in enumerate(tregions)
         region_t, decomp_t, _ = slot == 1 ? (region1, decomp1, hf) :
@@ -1162,7 +1208,11 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                                      faces[slot], _fine_bcs(active_g, faces[slot]),
                                      plans_t, view(empty_raw, :, :, 1:0),
                                      tile_arrays, _view_workspace(ws_span, kr),
-                                     _covered_mask(decomp_t), scratch))
+                                     _covered_mask(decomp_t), scratch,
+                                     map(a -> size(a, 3) == 0 ?
+                                              view(parent(a), :, :, 1:0, :) :
+                                              view(parent(a), :, :, kr, :),
+                                         gflux_span)))
     end
     return span, tiles
 end
@@ -1273,7 +1323,13 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
               g(), g(), g(),
               [g() for _ in 1:n_species],
               g(), (g(), g(), g()), (g(), g(), g()), g(), g(), g(),
-              ws, _covered_mask(dcp), _empty_level_scratch(empty3))
+              ws, _covered_mask(dcp), _empty_level_scratch(empty3),
+              _ghost_flux_arrays(() -> parent(allocate_state(backend, dcp, n_cons)),
+                                 similar(empty3, T, 0, 0, 0, 0),
+                                 ntuple(d -> _ghost_viscous(interface_flux, transport) &&
+                                             dcp.active[d] &&
+                                             (pbcs[d][1] isa InterfaceBC ||
+                                              pbcs[d][2] isa InterfaceBC), 3)))
     end
     ghost_sends, ghost_recvs, plane_pairs = build_interface_records(
         T, world, regions, faces_all, my_pids, [p.decomp for p in patches], n_cons)
@@ -1942,41 +1998,51 @@ end
 # primitives: at an interface end those ghosts hold the neighbour's state as
 # of the current stage (the same-level ghost refill, or the coarse-fine shell
 # imposed at the stage time), so the gradient plans' interface rows, which
-# read ghost layers, apply to it. What the ghosts cannot supply is the rest of
-# the flux (viscous, conductive, diffusive, artificial and the wall
-# corrections), which needs gradients and coefficients beyond the block; that
-# remainder keeps the one-sided rows of `div_plans`. The split costs one
-# pointwise pass and, where a remainder exists, a second pass and a second
-# line solve per component and interface dimension; it allocates nothing
-# beyond `tmp_b` and, on a device plan, `tmp_a`.
+# read ghost layers, apply to it. The molecular flux (viscous stress,
+# conduction and species diffusion) needs gradients beyond the block. Its
+# interior values go into the patch's `ghost_flux` array here, and its ghost
+# values enter afterwards, once every patch of the level has evaluated
+# (`_level_ghost_fluxes!`): at a same-level face the neighbour's own interior
+# values arrive through the level's flux records, and at a coarse-fine face
+# they are evaluated from the shell's gradient ring. The divergence is
+# linear, so the ghost values' contribution is a second line solve over a
+# field that is zero but for those ghosts, added to the first. What neither
+# covers (the artificial fluxes and the wall corrections) keeps the one-sided
+# rows of `div_plans`. Without molecular transport the split is the inviscid
+# one alone. The split costs one pointwise pass and, where a remainder
+# exists, a second pass and a second line solve per component and interface
+# dimension; the molecular part adds one pass, one halo exchange and one
+# line solve per component. It allocates nothing beyond `tmp_b` and, on a
+# device plan, `tmp_a`, and the `ghost_flux` arrays sized at construction.
 
 "Whether dimension `d` of this patch has an interface end the divergence closes."
 @inline _interface_dim(solver::SolverLike, d::Int) =
     _plan_at(solver.div_plans, d) !== _plan_at(solver.deriv_plans, d)
 
-# Whether the flux along `d` carries a part beyond the inviscid one: any
-# transport, the artificial properties, or a face whose `correct_flux!` may
-# rewrite the flux plane. Setup constants of the patch, so every rank of its
-# communicator takes the same branch.
+# Whether the flux along `d` carries a part beyond the ghost-differenced one:
+# the artificial properties, molecular transport not carried by the ghost
+# fluxes, or a face whose `correct_flux!` may rewrite the flux plane. Setup
+# constants of the patch, so every rank of its communicator takes the same
+# branch.
 function _flux_remainder(solver::SolverLike, d::Int)
-    tr = solver.transport
-    inviscid = !solver.art.enabled && !_shared_species_diffusivity(solver) &&
-               tr isa Transport && iszero(tr.mu0)
-    inviscid || return true
+    molecular = !_zero_molecular_diffusion(solver.transport) && !_ghost_viscous(solver)
+    (solver.art.enabled || _shared_species_diffusivity(solver) || molecular) &&
+        return true
     bc_lo, bc_hi = solver.bcs[d]
     per = solver.decomp.periodic[d]
     return !(per || bc_lo isa InterfaceBC) || !(per || bc_hi isa InterfaceBC)
 end
 
-# The inviscid flux of component `c` along `d` at every padded point into
-# `out`, or, under `remainder`, the assembled flux `F` less it. The
+# The ghost-differenced flux of component `c` along `d` at every padded point
+# into `out`: the inviscid flux, plus the molecular flux `G` under `viscous`,
+# or, under `remainder`, the assembled flux `F` less it. The inviscid
 # expressions are those of `_fluxes_point!`, so on an inviscid run the
 # remainder is exactly zero. At an interface end `F`'s ghosts hold no data
 # and neither does the remainder there; the divergence rows that take it
-# read none.
-@inline function _inviscid_flux_point!(out, F, Q, rho, u, v, w, p, Y, c, d,
+# read none, and `G` is zero there (`_molecular_flux_point!`).
+@inline function _inviscid_flux_point!(out, F, Q, rho, u, v, w, p, Y, G, c, d,
                                        n_species, m1, m2, m3, i_energy,
-                                       remainder, i, j, k)
+                                       remainder, viscous, i, j, k)
     T = eltype(rho)
     @inbounds begin
         I = CartesianIndex(i, j, k)
@@ -1996,41 +2062,332 @@ end
         elseif c == i_energy
             f = (Q[I, i_energy] + pI) * ud
         end
+        viscous && (f += G[I, c])
         out[I] = remainder ? F[I] - f : f
     end
     return nothing
 end
 
-# dQ[:, c] -= D_div(F - F_inviscid) + D_ext(F_inviscid) along `d`: the first
-# through the divergence plans, skipped where the remainder is identically
-# zero, the second through the gradient plans, reading the ghost fluxes. Both
-# are collective line solves along `d`, and the branch before the first is a
-# setup constant of the patch. `F` itself is left as assembled.
+# The molecular flux along `d` of every conserved component into `G[I, :]`:
+# the viscous stress, the conduction and the species diffusion of
+# `_fluxes_point!` with the artificial coefficients left out, from the
+# velocity gradients `gu` (`gu[j][m]` is ∂_j u_m), the temperature gradient
+# `dTd` along `d` and `dYd(sp)`, the mass-fraction gradient along `d`. The
+# expressions are `_fluxes_point!`'s term for term, so with the artificial
+# properties off the two agree to the association of the energy sum.
+@inline function _molecular_flux!(G, I, eos, ρ, uv, Tp, Y, molecular, gu, dTd,
+                                  dYd::F, n_species, m1, m2, m3, i_energy,
+                                  d) where {F}
+    T = typeof(ρ)
+    @inbounds begin
+        μ = molecular.mu
+        κ = molecular.kappa
+        divu = gu[1][1] + gu[2][2] + gu[3][3]
+        two_thirds = T(2) / T(3)
+        τ11 = μ * (2*gu[1][1] - two_thirds * divu)
+        τ22 = μ * (2*gu[2][2] - two_thirds * divu)
+        τ33 = μ * (2*gu[3][3] - two_thirds * divu)
+        τ12 = μ * (gu[1][2] + gu[2][1])
+        τ13 = μ * (gu[1][3] + gu[3][1])
+        τ23 = μ * (gu[2][3] + gu[3][2])
+        τd = d == 1 ? (τ11, τ12, τ13) : d == 2 ? (τ12, τ22, τ23) : (τ13, τ23, τ33)
+        Vc = zero(T)
+        for sp in 1:n_species
+            Vc += molecular.D[sp] * dYd(sp)
+        end
+        hdiff = zero(T)
+        for sp in 1:n_species
+            Jkd = ρ * (-molecular.D[sp] * dYd(sp) + Y[sp][I] * Vc)
+            G[I, sp] = Jkd
+            hdiff += species_enthalpy(eos, sp, Tp) * Jkd
+        end
+        G[I, m1] = -τd[1]
+        G[I, m2] = -τd[2]
+        G[I, m3] = -τd[3]
+        G[I, i_energy] = -(uv[1]*τd[1] + uv[2]*τd[2] + uv[3]*τd[3]) -
+                         κ * dTd + hdiff
+    end
+    return nothing
+end
+
+# The molecular flux along `d` over the padded block from the interior
+# gradients: evaluated where the point is interior along every active
+# dimension, zero elsewhere, so an interface end's ghost layers start from
+# zero and the rank halos along `d` take the neighbour's values in the
+# exchange that follows. `stride` is the padded extent along the third
+# dimension, which a stacked launch adds to `k` once per tile.
+@inline function _molecular_flux_point!(G, eos, rho, u, v, w, T_ion, cp_mix, Y,
+                                        grad_u, gT, gY, transport, n_species,
+                                        m1, m2, m3, i_energy, d, n_cons, nl, pad,
+                                        stride, i, j, k)
+    T = eltype(rho)
+    @inbounds begin
+        I = CartesianIndex(i, j, k)
+        kl = (k - 1) % stride + 1
+        inside = pad[1] < i <= pad[1] + nl[1] && pad[2] < j <= pad[2] + nl[2] &&
+                 pad[3] < kl <= pad[3] + nl[3]
+        if !inside
+            for c in 1:n_cons
+                G[I, c] = zero(T)
+            end
+            return nothing
+        end
+        molecular = transport_at(transport, eos, T_ion, rho, cp_mix, Y, I)
+        gu = ((grad_u[1, 1][I], grad_u[1, 2][I], grad_u[1, 3][I]),
+              (grad_u[2, 1][I], grad_u[2, 2][I], grad_u[2, 3][I]),
+              (grad_u[3, 1][I], grad_u[3, 2][I], grad_u[3, 3][I]))
+        _molecular_flux!(G, I, eos, rho[I], (u[I], v[I], w[I]), T_ion[I], Y,
+                         molecular, gu, gT[d][I], sp -> gY[d, sp][I], n_species,
+                         m1, m2, m3, i_energy, d)
+    end
+    return nothing
+end
+
+# Phase one of the molecular ghost flux along an interface dimension `d`: the
+# interior molecular flux into the patch's `ghost_flux[d]`, with its rank
+# halos along `d` exchanged, from the gradients this evaluation computed.
+# Collective over the patch's communicator.
+function _molecular_ghost_flux!(solver::SolverLike, d::Int)
+    decomp = solver.decomp
+    eq = solver.equations
+    m1, m2, m3 = eq.i_mom
+    n1f, n2f, n3f = padded_extent(decomp)
+    ft = solver.field_tuples
+    G = solver.ghost_flux[d]
+    pointwise!(_molecular_flux_point!, G, n1f, n2f, n3f,
+               G, solver.eos, solver.rho, solver.u, solver.v, solver.w,
+               solver.T_ion, solver.cp_mix, ft.Y, ft.grad_u, solver.grad_T_ion,
+               ft.grad_Y, solver.transport, eq.n_species, m1, m2, m3,
+               eq.i_energy, d, eq.n_cons, decomp.n_local, decomp.n_halo_d, n3f)
+    exchange_dim_batch!(ComponentViews(G), decomp, d)
+    return solver
+end
+
+# dQ[:, c] -= D_div(F - P) + D_ext(P) along `d`, P the ghost-differenced
+# flux: the first through the divergence plans, skipped where the remainder
+# is identically zero, the second through the gradient plans, reading the
+# ghost fluxes. Both are collective line solves along `d`, and the branch
+# before the first is a setup constant of the patch. `F` itself is left as
+# assembled. The first component's call fills the molecular flux of every
+# component (`_molecular_ghost_flux!`), which the conserved-component loop of
+# `compute_rhs!` reaches before any other along `d`.
 function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
     decomp = solver.decomp
     eq = solver.equations
     m1, m2, m3 = eq.i_mom
     n1f, n2f, n3f = padded_extent(decomp)
+    viscous = _ghost_viscous(solver)
+    viscous && c == 1 && _molecular_ghost_flux!(solver, d)
+    G = solver.ghost_flux[d]
     if _flux_remainder(solver, d)
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
-                   solver.p, solver.field_tuples.Y, c, d, eq.n_species, m1, m2, m3,
-                   eq.i_energy, true)
+                   solver.p, solver.field_tuples.Y, G, c, d, eq.n_species, m1, m2, m3,
+                   eq.i_energy, true, viscous)
         div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, nothing)
     end
     pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
-               solver.p, solver.field_tuples.Y, c, d, eq.n_species, m1, m2, m3,
-               eq.i_energy, false)
+               solver.p, solver.field_tuples.Y, G, c, d, eq.n_species, m1, m2, m3,
+               eq.i_energy, false, viscous)
+    _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d)
+    return dQ
+end
+
+# dQ[:, c] -= D_ext(f) along `d` through the gradient plans, whose interface
+# rows read `f`'s ghost layers; a device plan takes the two-pass route
+# through `tmp_a`.
+function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int)
+    decomp = solver.decomp
     plan = _plan_at(solver.deriv_plans, d)
     if plan isa DevicePlan
-        apply_along!(solver.tmp_a, plan, solver.tmp_b, decomp)
+        apply_along!(solver.tmp_a, plan, f, decomp)
         nx, ny, nz = decomp.n_local
         o1, o2, o3 = decomp.n_halo_d
         pointwise!(_subtract_div_point!, dQ, nx, ny, nz,
                    dQ, solver.tmp_a, c, o1, o2, o3)
     else
-        apply_along_subtract!(dQ, c, plan, solver.tmp_b, decomp, nothing)
+        apply_along_subtract!(dQ, c, plan, f, decomp, nothing)
+    end
+    return dQ
+end
+
+# --- Phase two: the molecular flux through interface ends ---------------------
+#
+# Run by `_level_rhs!` after every patch of a level has evaluated its
+# right-hand side, so each patch's `ghost_flux` holds its interior molecular
+# flux. The level's flux records copy each same-level neighbour's interior
+# values into the abutting ghost layers, over the same records that refill the
+# state's ghosts; each coarse-fine face's ghost layers are evaluated from the
+# shell's gradient ring. The ghost values alone then go through the gradient
+# plans and are subtracted from `dQ`: the divergence is linear, so this
+# completes the phase-one solve, whose ghosts were zero.
+
+# Whether the patch's face `side` of `d` is an interface end whose ghost
+# layers this rank holds: a same-level or coarse-fine face (both are
+# `InterfaceBC`s), at the patch's own edge of the decomposition.
+@inline function _ghost_face(solver::SolverLike, d::Int, side::Int)
+    bc = solver.bcs[d][side]
+    bc isa InterfaceBC || return false
+    decomp = solver.decomp
+    return side == 1 ? at_lo_edge(decomp, d) : at_hi_edge(decomp, d)
+end
+
+# `out` ← component `c` of `G` on the ghost layers of the interface ends along
+# `d` flagged in `ends` (over the interior transverse range), zero elsewhere.
+@inline function _ghost_only_point!(out, G, c, d, ends, nl, pad, i, j, k)
+    T = eltype(out)
+    @inbounds begin
+        I = CartesianIndex(i, j, k)
+        idx = (i, j, k)
+        v = zero(T)
+        transverse = true
+        for e in 1:3
+            e == d && continue
+            transverse &= pad[e] < idx[e] <= pad[e] + nl[e]
+        end
+        if transverse && ((ends[1] && idx[d] <= pad[d]) ||
+                          (ends[2] && idx[d] > pad[d] + nl[d]))
+            v = G[I, c]
+        end
+        out[I] = v
+    end
+    return nothing
+end
+
+# The molecular flux along `d` on one coarse-fine face's ghost layers, from
+# the patch's state and primitives there (the imposed shell) and the gradient
+# ring: the primitive gradients follow from the conserved ones by the chain
+# rule, ∂u = (∂(ρu) − u ∂ρ)/ρ, ∂Y_k = (∂(ρY_k) − Y_k ∂ρ)/ρ, and ∂e from ∂E,
+# with ∂T from ∂e and the ∂Y_k through `_temperature_gradient`. The launch
+# box is (ghost layers along `d`) × (interior transverse), `base` the padded
+# index before the first layer.
+@inline function _coarse_fine_flux_point!(G, Q, eos, rho, u, v, w, p, T_ion, cp_mix,
+                                          Y, gring, table, off, pad, transport,
+                                          n_species, m1, m2, m3, i_energy, d, base,
+                                          a, b, c3)
+    T = eltype(rho)
+    @inbounds begin
+        # The launch coordinates (a along `d`, then the transverse pair in
+        # ascending dimension order) as a padded index.
+        o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
+        idx = ntuple(e -> e == d ? base + a : e == o1 ? pad[e] + b : pad[e] + c3, 3)
+        I = CartesianIndex(idx)
+        at = _ring_offset(table, idx[1] - pad[1] + off[1], idx[2] - pad[2] + off[2],
+                          idx[3] - pad[3] + off[3])
+        ρ = rho[I]
+        uv = (u[I], v[I], w[I])
+        E = Q[I, i_energy]
+        drho = ntuple(3) do j
+            s = zero(T)
+            for sp in 1:n_species
+                s += gring[at, 3 * (sp - 1) + j]
+            end
+            s
+        end
+        mom = (m1, m2, m3)
+        gu = ntuple(j -> ntuple(m -> (gring[at, 3 * (mom[m] - 1) + j] -
+                                      uv[m] * drho[j]) / ρ, 3), 3)
+        dYd(sp) = (gring[at, 3 * (sp - 1) + d] - Y[sp][I] * drho[d]) / ρ
+        de = (gring[at, 3 * (i_energy - 1) + d] - (E / ρ) * drho[d]) / ρ -
+             (uv[1] * gu[d][1] + uv[2] * gu[d][2] + uv[3] * gu[d][3])
+        Tp = T_ion[I]
+        eY = zero(T)
+        for sp in 1:n_species
+            eY += _species_internal_energy(eos, sp, Tp) * dYd(sp)
+        end
+        dTd = _temperature_gradient(eos, ρ, p[I], Tp, cp_mix[I], drho[d], de, eY)
+        molecular = transport_at(transport, eos, T_ion, rho, cp_mix, Y, I)
+        _molecular_flux!(G, I, eos, ρ, uv, Tp, Y, molecular, gu, dTd, dYd,
+                         n_species, m1, m2, m3, i_energy, d)
+    end
+    return nothing
+end
+
+# ∂T along a line from ∂ρ, ∂e and Σ_k e_k ∂Y_k: for a mixture whose internal
+# energy is Σ_k Y_k e_k(T), ∂e = c_v ∂T + Σ_k e_k ∂Y_k; the stiffened gas
+# carries e = c_v T + p∞/ρ. `mixture_cv` is the heat capacity the EOS
+# contract gives from the primitives.
+@inline _temperature_gradient(eos, ρ, p, T_ion, cp, drho, de, eY) =
+    (de - eY) / mixture_cv(eos, ρ, p, T_ion, cp)
+@inline _temperature_gradient(eos::Union{StiffenedGas,StiffenedGasCoeffs}, ρ, p,
+                              T_ion, cp, drho, de, eY) =
+    (de + eos.p_inf * drho / (ρ * ρ)) / eos.cv
+
+# The EOS models whose internal energy `_temperature_gradient` inverts; a
+# coarse-fine face's molecular ghost flux needs one of them.
+_ghost_gradient_eos(eos) =
+    eos isa Union{IdealMixture,Nasa9Mixture,StiffenedGas}
+
+# Phase two over one level. Collective over the level's communicator (the
+# flux records) and over each patch's (its line solves); every rank that
+# evaluated the level's right-hand sides enters it.
+function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs, comm)
+    patches = getfield(solver, :patches)
+    isempty(lev.patches) && return dQs
+    n_cons = solver.equations.n_cons
+    # The same-level records: the root's are the solver's (a slab layout,
+    # so they run along one dimension), a refined level's its own per
+    # dimension.
+    for d in 1:3
+        records = lev.index == 0 ? (solver.ghost_sends, solver.ghost_recvs) :
+                  (lev.ghost_sends[d], lev.ghost_recvs[d])
+        lev.index == 0 && !any(p -> size(p.ghost_flux[d], 4) > 0,
+                               view(patches, lev.patches)) && continue
+        lev.index > 0 && !lev.phases[d] && continue
+        # Wrapped as states are, so that a stacked tile's view, not the
+        # stack beneath it, is the array the records index.
+        fields = [ConservedState(p.ghost_flux[d]) for p in patches]
+        _exchange_ghosts!(solver, fields, comm, records...)
+    end
+    for (k, pi) in enumerate(lev.patches)
+        ps = PatchSolver(solver, patches[pi])
+        lt = lev.index == 0 ? nothing : lev.transfers[lev.tiles[k]]
+        _patch_ghost_fluxes!(ps, lt, states[pi], dQs[pi], n_cons)
+    end
+    return dQs
+end
+
+function _patch_ghost_fluxes!(solver::SolverLike, lt, Q, dQ, n_cons::Int)
+    decomp = solver.decomp
+    eq = solver.equations
+    m1, m2, m3 = eq.i_mom
+    n1f, n2f, n3f = padded_extent(decomp)
+    pad = decomp.n_halo_d
+    nl = decomp.n_local
+    ft = solver.field_tuples
+    for d in 1:3
+        G = solver.ghost_flux[d]
+        size(G, 4) > 0 || continue
+        # The coarse-fine faces' ghost layers, from the gradient ring. Every
+        # rank of the patch takes the same branches: the conditions are the
+        # patch's, and `_ghost_face` only restricts the writes to the edge.
+        if lt !== nothing && lt.gradients !== nothing
+            gring = lt.gradients.gring
+            if _device_path(G)
+                dg = similar(parent(G), size(gring))
+                copyto!(dg, gring)
+                gring = dg
+            end
+            for side in 1:2
+                parent_fed(solver.bcs[d][side]) && _ghost_face(solver, d, side) ||
+                    continue
+                o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
+                base = side == 1 ? 0 : pad[d] + nl[d]
+                pointwise!(_coarse_fine_flux_point!, G, pad[d], nl[o1], nl[o2],
+                           G, Q, solver.eos, solver.rho,
+                           solver.u, solver.v, solver.w, solver.p, solver.T_ion,
+                           solver.cp_mix, ft.Y, gring, (lt.shell.table...,),
+                           decomp.offset, pad, solver.transport, eq.n_species,
+                           m1, m2, m3, eq.i_energy, d, base)
+            end
+        end
+        ends = (_ghost_face(solver, d, 1), _ghost_face(solver, d, 2))
+        for c in 1:n_cons
+            pointwise!(_ghost_only_point!, solver.tmp_b, n1f, n2f, n3f,
+                       solver.tmp_b, G, c, d, ends, nl, pad)
+            _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d)
+        end
     end
     return dQ
 end

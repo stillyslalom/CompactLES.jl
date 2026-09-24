@@ -413,6 +413,14 @@ Names are spelled out in full. Current vocabulary:
   swap for the sends), `_gather_tile`/`_carry_over!` (the box regrid's
   replicated carry, kept as the migration's reference), `MIGRATION_AUDIT`
   / `MIGRATION_AUDIT_RESULT` (the test hook comparing the two bitwise)
+- `interface_flux` (`:closure` or `:ghost`), `_ghost_viscous` (whether the
+  ghost path carries the molecular flux), `ghost_flux` (a `Patch` field: the
+  molecular flux of each interface dimension, interior values from the
+  right-hand side, ghost values from the flux records or the gradient ring),
+  `_level_ghost_fluxes!` (the second phase of a level's right-hand side),
+  `ShellGradients`/`gradients` (a `LevelTransfer`'s gradient ring beside the
+  shell ring), `default_interpolation_order` (the order a solver given none
+  takes, from `deriv` and `interface_flux`)
 - `subcycle` (the Berger–Oliger mode flag), `subcycled_step!` and the
   recursive `_advance_level!` beneath it, `save_level_box!`/
   `hermite_level_shell!` (the Hermite box, `box_Q0` .. `box_dQ1`),

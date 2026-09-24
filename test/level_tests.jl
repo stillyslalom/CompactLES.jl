@@ -217,16 +217,26 @@ end
                           bcs=per3l, art=ArtParams(enabled=false), filter_interval=0,
                           refine=BlockRegion((40, 0, 0), (17, 1, 1)),
                           level_interpolation_order=p, kw...)
-    for bad in (0, 3, 5, 10)
+    for bad in (0, 3, 5, 12)
         @test_throws ErrorException mk(bad)
     end
     chain_order(s) = only(unique(pl.interp_order
                                  for pl in getfield(s, :levels)[2].transfers[1].pplans))
-    @test chain_order(Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
-                             refine=BlockRegion((40, 0, 0), (17, 1, 1)))) == 6
+    # By default the derivative operator's interior order, two more under
+    # the ghost fluxes, and at most 10.
+    for (deriv, closure, ghost) in ((lele_d1_6(), 6, 8), (lele_d1_8(), 8, 10),
+                                    (lele_d1_10(), 10, 10),
+                                    (lele_d1_6(closures=:brady_livescu), 6, 8))
+        for (flux, p) in ((:closure, closure), (:ghost, ghost))
+            @test chain_order(Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
+                                     bcs=per3l, deriv=deriv, interface_flux=flux,
+                                     refine=BlockRegion((40, 0, 0), (17, 1, 1)))) == p
+        end
+    end
+    @test CL.default_interpolation_order(compact_filter(0.45)) == 6
     # The shell reproduces a polynomial of degree p − 1 and not one of
     # degree p: the chain runs at the order requested.
-    for p in (2, 4, 6, 8)
+    for p in (2, 4, 6, 8, 10)
         s = mk(p)
         @test chain_order(s) == p
         errs = map((p - 1, p)) do deg
