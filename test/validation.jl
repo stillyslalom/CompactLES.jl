@@ -35,12 +35,13 @@
 #   current behaviour so a later change is measured against it.
 #     Shock/interface — a Mach 1.5 shock in air into an air/SF6 interface.
 #                       The mass fractions leave [0, 1] as the shock crosses
-#                       the density and γ jump; the guard bounds the worst
-#                       excursion over the run and the interface width at the
-#                       end. Both are to be tightened when a term that holds
-#                       the mass fractions lands, and until then the case
-#                       records what the artificial species diffusivity does
-#                       under a shock.
+#                       the density and γ jump, and ring inside it behind
+#                       the interface; the guards bound the worst excursion
+#                       over the run, the ringing in the final profile and
+#                       the interface width at the end.
+#     Advected slab  — a slab of density ratio 100 at uniform p, T and u;
+#                       the species channel must hold that state to
+#                       round-off.
 #
 # Guards are set from measured behaviour, as in test/convergence.jl, at roughly
 # 1.5–2x the measured value. The measured numbers print every run; a moved digit
@@ -57,7 +58,8 @@
 #   Noh nu=1   plateau 3.9988/4    shock 0.2021/0.2   wall deficit 24%
 #   Noh nu=2   plateau 15.009/16   shock 0.2091/0.2   wall deficit 55%
 #   Noh nu=3   plateau 62.555/64   shock 0.2089/0.2   wall deficit 29%
-#   Shock/SF6  worst Y -0.0129 / 1.0129, width 4 cells, 647 steps
+#   Shock/SF6  worst Y -0.0098 / 1.0098, width 4 cells, 644 steps, TV - 1 0.0066
+#   Slab 100   max|p - 1| 5.0e-11, max|u - u0|/u0 5.9e-13, worst Y -0.0620, 4049 steps
 #   Noh aligned N=100 AR=4    plateau 4.0035/4   deficit 33%   shock 0.2084   4966 steps
 #   Noh plane   N=24  AR=2    plateau 11.858/16  front 0.236/0.2  L1 rho 0.893  745 steps
 #
@@ -507,19 +509,39 @@ say("\n=== Mach 1.5 shock into an air/SF6 interface (measured, no reference) ===
 # not the 1.5–2x of the cases above: the excursion is the residual the
 # mass-fraction bound `C_Y` leaves at a three-cell contact, which the guard
 # exists to see move in either direction. The same case reaches -0.204 with
-# `C_Y = 0`.
+# `C_Y = 0`. The ringing inside [0, 1], where the bound is zero, is guarded
+# through the total variation of the final profile beyond the 1 a monotone
+# profile carries: 0.0788 under the Fickian channel at `C_D = 0.01`, where a
+# two-cell lump of SF6 separates from the light side of the interface, and
+# 0.0066 at the defaults.
 let r = shock_interface()
     @test r.completed
-    sayf("  N=%d  worst Y: min %+.4f  max %.4f   width %d cells   steps %d\n",
-         SI_N, r.worst_min_Y, r.worst_max_Y, r.width_cells, r.steps)
+    tv_excess = sum(abs, diff(r.Y_air)) - 1
+    sayf("  N=%d  worst Y: min %+.4f  max %.4f   width %d cells   steps %d   " *
+         "TV - 1 %.4f\n", SI_N, r.worst_min_Y, r.worst_max_Y, r.width_cells,
+         r.steps, tv_excess)
     @test all(isfinite, r.rho) && minimum(r.rho) > 0
     @test r.worst_min_Y > -0.02
     @test r.worst_max_Y < 1.02
     @test r.width_cells <= 6
+    @test tv_excess < 0.03
     # The case runs strict, so the state it ends on has passed the species
     # band already; the report restates that from the validation sweep's side.
     @test state_valid(r.report)
     @test r.report.rho_min > 0
+end
+
+# An advected slab of density ratio 100 at uniform p, T and u, ten periods
+# (`brill_slab`): the default species channel holds the uniform state to
+# round-off whatever the composition, where the Fickian channel's enthalpy
+# flux moves the pressure by 4.0e-2 at the same constants.
+let r = brill_slab()
+    @test r.completed
+    sayf("  slab ratio %g  max|p - 1| %.1e  max|u - u0|/u0 %.1e  worst Y %+.4f  steps %d\n",
+         BR_R, r.p_error, r.u_error, r.worst_min_Y, r.steps)
+    @test r.p_error < 1e-9
+    @test r.u_error < 1e-9
+    @test r.worst_min_Y > -0.1
 end
 
 # ===========================================================================

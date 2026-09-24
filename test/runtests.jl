@@ -1795,74 +1795,105 @@ end
     @test 0 < r.width_cells < 30
 end
 
-@testset "bulk species channel: invariance, shocked interface, slab, width" begin
-    # `species_flux = :bulk` replaces the Fickian species flux by one diffusive
-    # flux on every conserved variable (reference/DESIGN.md, "The species
-    # channel"). Four measured properties are guarded here.
-    bulk = ArtParams(enabled=true, species_flux=:bulk)
-    fick = ArtParams(enabled=true)
-
-    # (a) A resting air/SF6 interface at uniform p, T and u = 0, with the
-    # artificial properties and the filter on: every operator of the bulk
-    # channel preserves the uniform state to round-off while the partial
-    # densities interdiffuse, so u, p and T stay at round-off and ρ moves.
-    # Under the Fickian channel the enthalpy flux drives u to 1e-4 here.
-    let N = 400, h = 1.0 / N, δ = 2h
-        eos = IdealMixture([IdealSpecies{Float64}("air", 1.0, 1.4),
-                            IdealSpecies{Float64}("sf6", 1 / 5.04, 1.09)])
-        Rk, cvk = eos.Rk, eos.cvk
-        two(x) = (θ = tanh_blend(x, 0.3, δ) - tanh_blend(x, 0.7, δ); (1 - θ, θ))
-        prob = Problem(eos=eos, transport=Transport(mu0=0.0),
-                       domain=((0.0, 1.0), (0.0, h), (0.0, h)), bcs=per3,
-                       ic=(x, y, z) -> begin
-                           Y = two(x)
-                           Prim(Y=Y, rho=1 / (Y[1] * Rk[1] + Y[2] * Rk[2]),
-                                u=(0.0, 0.0, 0.0), p=1.0)
-                       end)
-        solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=bulk, cfl=0.4,
-                                         filter_interval=1,
-                                         control=StepControl(validity=:permissive)))
-        nx = solver.decomp.n_local[1]
-        eqs = solver.equations
-        rho0 = [Q[gidx(solver, i, 1, 1), 1] + Q[gidx(solver, i, 1, 1), 2] for i in 1:nx]
-        umax = Ref(0.0); dpmax = Ref(0.0); dTmax = Ref(0.0); drmax = Ref(0.0)
-        function drift(s, Q)
-            for i in 1:nx
-                I = gidx(s, i, 1, 1)
-                ρ = Q[I, 1] + Q[I, 2]
-                y = Q[I, 1] / ρ
-                u = Q[I, eqs.i_mom[1]] / ρ
-                e = Q[I, eqs.i_energy] / ρ - 0.5u^2
-                T = e / (y * cvk[1] + (1 - y) * cvk[2])
-                p = ρ * (y * Rk[1] + (1 - y) * Rk[2]) * T
-                umax[] = max(umax[], abs(u))
-                dpmax[] = max(dpmax[], abs(p - 1))
-                dTmax[] = max(dTmax[], abs(T - 1))
-                drmax[] = max(drmax[], abs(ρ - rho0[i]) / rho0[i])
+@testset "consistent species channels: invariance, shocked interface, slab, width" begin
+    # `species_flux = :bulk` diffuses every conserved variable with one D_b, and
+    # the default `:partial_density` diffuses the partial densities with it and
+    # carries their mass flux into momentum and energy (reference/DESIGN.md,
+    # "The species channel"). Four measured properties are guarded for both.
+    fick = ArtParams(enabled=true, species_flux=:fickian)
+    for bulk in (ArtParams(enabled=true, species_flux=:bulk),
+                 ArtParams(enabled=true, species_flux=:partial_density))
+        # (a) A resting air/SF6 interface at uniform p, T and u = 0, with the
+        # artificial properties and the filter on: every operator of either
+        # channel preserves the uniform state to round-off while the partial
+        # densities interdiffuse, so u, p and T stay at round-off and ρ moves.
+        # Under the Fickian channel the enthalpy flux drives u to 1e-4 here.
+        let N = 400, h = 1.0 / N, δ = 2h
+            eos = IdealMixture([IdealSpecies{Float64}("air", 1.0, 1.4),
+                                IdealSpecies{Float64}("sf6", 1 / 5.04, 1.09)])
+            Rk, cvk = eos.Rk, eos.cvk
+            two(x) = (θ = tanh_blend(x, 0.3, δ) - tanh_blend(x, 0.7, δ); (1 - θ, θ))
+            prob = Problem(eos=eos, transport=Transport(mu0=0.0),
+                           domain=((0.0, 1.0), (0.0, h), (0.0, h)), bcs=per3,
+                           ic=(x, y, z) -> begin
+                               Y = two(x)
+                               Prim(Y=Y, rho=1 / (Y[1] * Rk[1] + Y[2] * Rk[2]),
+                                    u=(0.0, 0.0, 0.0), p=1.0)
+                           end)
+            solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=bulk, cfl=0.4,
+                                             filter_interval=1,
+                                             control=StepControl(validity=:permissive)))
+            nx = solver.decomp.n_local[1]
+            eqs = solver.equations
+            rho0 = [Q[gidx(solver, i, 1, 1), 1] + Q[gidx(solver, i, 1, 1), 2] for i in 1:nx]
+            umax = Ref(0.0); dpmax = Ref(0.0); dTmax = Ref(0.0); drmax = Ref(0.0)
+            function drift(s, Q)
+                for i in 1:nx
+                    I = gidx(s, i, 1, 1)
+                    ρ = Q[I, 1] + Q[I, 2]
+                    y = Q[I, 1] / ρ
+                    u = Q[I, eqs.i_mom[1]] / ρ
+                    e = Q[I, eqs.i_energy] / ρ - 0.5u^2
+                    T = e / (y * cvk[1] + (1 - y) * cvk[2])
+                    p = ρ * (y * Rk[1] + (1 - y) * Rk[2]) * T
+                    umax[] = max(umax[], abs(u))
+                    dpmax[] = max(dpmax[], abs(p - 1))
+                    dTmax[] = max(dTmax[], abs(T - 1))
+                    drmax[] = max(drmax[], abs(ρ - rho0[i]) / rho0[i])
+                end
             end
+            run!(solver, Q; tfinal=0.25, nmax=1000, callback=drift)
+            # Measured 1.2e-14, 3.8e-14, 4.0e-14 and 2.0e-2 over 298 steps; the
+            # Fickian channel measures 2.2e-4, 1.3e-4, 2.5e-5 and 1.8e-2 here.
+            @test completed(solver, 0.25)
+            @test umax[] < 1e-13
+            @test dpmax[] < 1e-13
+            @test dTmax[] < 1e-13
+            @test drmax[] > 1e-3
         end
-        run!(solver, Q; tfinal=0.25, nmax=1000, callback=drift)
-        # Measured 1.2e-14, 3.8e-14, 4.0e-14 and 2.0e-2 over 298 steps; the
-        # Fickian channel measures 2.2e-4, 1.3e-4, 2.5e-5 and 1.8e-2 here.
-        @test completed(solver, 0.25)
-        @test umax[] < 1e-13
-        @test dpmax[] < 1e-13
-        @test dTmax[] < 1e-13
-        @test drmax[] > 1e-3
+
+        # (b) The Mach 1.5 shocked interface at density ratio 100 and 2h: the
+        # consistent channels carry it (measured worst Y −0.0171 in 677 steps
+        # under `:bulk`, −0.0189 in 704 under `:partial_density`);
+        # the Fickian channel loses positivity at step 427 with a DomainError out
+        # of the sound speed, so a bounded attempt must either raise or stop
+        # short of completion.
+        let r = shock_interface(art=bulk, delta=2.0, rho_heavy=100.0, nmax=1500)
+            @test r.completed
+            @test all(isfinite, r.rho) && minimum(r.rho) > 0
+            @test r.worst_min_Y > -0.03
+            @test r.worst_max_Y < 1.03
+            @test r.width_cells <= 9
+        end
+
+        # (c) The Brill slab at density ratio 100 and 7 cells per interface, ten
+        # periods: the pressure error at the end is round-off under both channels
+        # (measured 4.7e-11 and 5.0e-11 in 4049 steps) and 4.0e-2 under the
+        # Fickian one, whose enthalpy flux is the one operator that moves ρE
+        # across a uniform-pressure interface of unequal gas constants.
+        let r = brill_slab(art=bulk, nmax=6000)
+            @test r.completed
+            @test all(isfinite, r.rho) && minimum(r.rho) > 0
+            @test r.p_error < 1e-9
+            @test r.u_error < 1e-9
+            @test r.worst_min_Y > -0.1
+        end
+
+        # (d) At equal molecular weights the mole fraction is the mass fraction,
+        # the bulk flux of ρY_k at uniform ρ is the Fickian flux, and the two
+        # channels' energy fluxes both vanish, so the advected interface's width
+        # agrees to round-off accumulation (measured identical to eight digits,
+        # the mass fractions within 5e-14).
+        let (xs_f, Yf, _, _, okf) = species_advection(art=fick, nmax=2000),
+            (xs_b, Yb, _, _, okb) = species_advection(art=bulk, nmax=2000)
+            @test okf && okb
+            wf = contact_width(xs_f, Yf, 0.0, 1.0)
+            wb = contact_width(xs_b, Yb, 0.0, 1.0)
+            @test abs(wb - wf) < 1e-6 * wf
+        end
     end
 
-    # (b) The Mach 1.5 shocked interface at density ratio 100 and 2h: the
-    # bulk channel carries it (measured worst Y −0.0222, 7 cells, 684 steps);
-    # the Fickian channel loses positivity at step 427 with a DomainError out
-    # of the sound speed, so a bounded attempt must either raise or stop
-    # short of completion.
-    let r = shock_interface(art=bulk, delta=2.0, rho_heavy=100.0, nmax=1500)
-        @test r.completed
-        @test all(isfinite, r.rho) && minimum(r.rho) > 0
-        @test r.worst_min_Y > -0.03
-        @test r.worst_max_Y < 1.03
-        @test r.width_cells <= 9
-    end
+    # The Fickian channel loses positivity on case (b).
     let ok = try
             shock_interface(art=fick, delta=2.0, rho_heavy=100.0, nmax=600).completed
         catch err
@@ -1872,56 +1903,30 @@ end
         @test !ok
     end
 
-    # (c) The Brill slab at density ratio 100 and 7 cells per interface, ten
-    # periods: the pressure error at the end is round-off under the bulk
-    # channel (measured 5.4e-11 over 4201 steps) and 1.67e-2 under the Fickian
-    # one, whose enthalpy flux is the one operator that moves ρE across a
-    # uniform-pressure interface of unequal gas constants.
-    let r = brill_slab(art=bulk, nmax=6000)
-        @test r.completed
-        @test all(isfinite, r.rho) && minimum(r.rho) > 0
-        @test r.p_error < 1e-9
-        @test r.u_error < 1e-9
-        @test r.worst_min_Y > -0.1
-    end
-
-    # (d) At equal molecular weights the mole fraction is the mass fraction,
-    # the bulk flux of ρY_k at uniform ρ is the Fickian flux, and the two
-    # channels' energy fluxes both vanish, so the advected interface's width
-    # agrees to round-off accumulation (measured identical to eight digits,
-    # the mass fractions within 5e-14).
-    let (xs_f, Yf, _, _, okf) = species_advection(art=fick, nmax=2000),
-        (xs_b, Yb, _, _, okb) = species_advection(art=bulk, nmax=2000)
-        @test okf && okb
-        wf = contact_width(xs_f, Yf, 0.0, 1.0)
-        wb = contact_width(xs_b, Yb, 0.0, 1.0)
-        @test abs(wb - wf) < 1e-6 * wf
-    end
-
     # The option is validated at setup.
     @test_throws ErrorException Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
                                        bcs=per3, art=ArtParams(species_flux=:brill))
 end
 
-@testset "bulk species channel on patched, refined and tiled layouts" begin
+@testset "consistent species channels on patched, refined and tiled layouts" begin
     # A slab of density ratio 20 advected at uniform (u, p, T) through a
-    # periodic domain, under `species_flux = :bulk`. Every operator the bulk
-    # channel meets on these layouts is linear on the conserved variables,
-    # the interface rows and the level transfers included, so u, p and T
-    # must stay at round-off on every layout while the partial densities
-    # interdiffuse (reference/DESIGN.md, "The species channel"). The Fickian
-    # channel's enthalpy flux moves p to 1e-4 on the same case. Measured
-    # drifts are 1e-14 on each layout below; D_b is small on the smooth
-    # slab but must be nonzero on every patch, which is what shows the
-    # channel is built and running there.
+    # periodic domain, under both `species_flux = :bulk` and the default
+    # `:partial_density`. Every operator either channel meets on these layouts
+    # is linear on the conserved variables, the interface rows and the level
+    # transfers included, so u, p and T must stay at round-off on every
+    # layout while the partial densities interdiffuse (reference/DESIGN.md,
+    # "The species channel"). The Fickian channel's enthalpy flux moves p to
+    # 1e-4 on the same case. Measured drifts are 1e-14 on each layout below;
+    # D_b is small on the smooth slab but must be nonzero on every patch,
+    # which is what shows the channel is built and running there.
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 1 / 20, 1.4)])
     Rk, cvk = eos.Rk, eos.cvk
-    function slab(; kw...)
+    function slab(channel; kw...)
         N = 96
         h = 1.0 / N
         s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, eos=eos,
-                   art=ArtParams(enabled=true, species_flux=:bulk),
+                   art=ArtParams(enabled=true, species_flux=channel),
                    transport=Transport(mu0=0.0), filter_interval=1; kw...)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) -> begin
@@ -1958,33 +1963,36 @@ end
         end
         return (s=s, states=sv, drift=drift[], Dmax=Dmax, rho=rho)
     end
-    single = slab()
-    @test single.s.step == 40
-    @test single.drift < 1e-12
-    @test single.Dmax[1] > 0
-    # Two patches under both interface forms: the conserved gradients take
-    # the interface plans `grad_Y` takes. The patched root differs from the
-    # single patch by the interface rows' own error (measured 2e-5 with the
-    # extended rows and 5e-4 with the one-sided ones on a wider slab), not
-    # by the channel.
-    for irhs in (:extended, :onesided)
-        r = slab(patch_grid=(2, 1, 1), interface_rhs=irhs)
-        @test npatches(r.s) == 2
-        @test r.s.step == 40
-        @test r.drift < 1e-12
-        @test all(>(0), r.Dmax)
-        d = maximum(abs(r.rho[k] - single.rho[k]) for k in keys(single.rho))
-        @test d < 1e-2
-    end
-    # One refined level over the slab's left edge, as a box and as a lattice
-    # of tiles; the fine patches carry their own D_b.
-    for tile in (0, 8)
-        r = slab(refine=BlockRegion((16, 0, 0), (24, 1, 1)), tile=tile)
-        @test npatches(r.s) == (tile == 0 ? 2 : 4)
-        @test r.s.step == 40
-        @test all(Q -> all(isfinite, parent(Q)), r.states)
-        @test r.drift < 1e-12
-        @test all(>(0), r.Dmax)
+    for channel in (:bulk, :partial_density)
+        single = slab(channel)
+        @test single.s.step == 40
+        @test single.drift < 1e-12
+        @test single.Dmax[1] > 0
+        # Two patches under both interface forms: the conserved gradients take
+        # the interface plans `grad_Y` takes. The patched root differs from the
+        # single patch by the interface rows' own error (measured 2e-5 with the
+        # extended rows and 5e-4 with the one-sided ones on a wider slab), not
+        # by the channel.
+        for irhs in (:extended, :onesided)
+            r = slab(channel; patch_grid=(2, 1, 1), interface_rhs=irhs)
+            @test npatches(r.s) == 2
+            @test r.s.step == 40
+            @test r.drift < 1e-12
+            @test all(>(0), r.Dmax)
+            d = maximum(abs(r.rho[k] - single.rho[k]) for k in keys(single.rho))
+            @test d < 1e-2
+        end
+        # One refined level over the slab's left edge, as a box and as a
+        # lattice of tiles; the fine patches carry their own D_b.
+        for tile in (0, 8)
+            r = slab(channel; refine=BlockRegion((16, 0, 0), (24, 1, 1)),
+                     tile=tile)
+            @test npatches(r.s) == (tile == 0 ? 2 : 4)
+            @test r.s.step == 40
+            @test all(Q -> all(isfinite, parent(Q)), r.states)
+            @test r.drift < 1e-12
+            @test all(>(0), r.Dmax)
+        end
     end
 end
 
@@ -4442,15 +4450,16 @@ end
     @test s1.step == s2.step
     @test parent(Q1) == parent(Q2)
 
-    # The same tube under the bulk species channel, which adds the
-    # mole-fraction, maximum, component-copy and bulk-flux bodies and passes
-    # the EOS and the conserved gradients through the launcher.
-    function bulk_tube_pair()
+    # The tube above runs the default partial-density species channel. The
+    # same tube under the bulk channel adds the conserved-gradient flux body,
+    # and under the Fickian one the per-species bound and diffusivity bodies
+    # and the correction-velocity branch of the flux body.
+    function channel_tube_pair(channel)
         eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                             IdealSpecies{Float64}("heavy", 0.2, 1.09)])
         s = Solver(n_global=(48, 32, 1), L_domain=(1.0, 0.6, 1.0), eos=eos,
                    bcs=((SlipWallBC(), SlipWallBC()), per3k[2], per3k[3]),
-                   art=ArtParams(enabled=true, species_flux=:bulk))
+                   art=ArtParams(enabled=true, species_flux=channel))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             θ = 0.5 * (1 + tanh((x - 0.5) / 0.05))
@@ -4459,20 +4468,24 @@ end
         end)
         return s, Q
     end
-    s1b, Q1b = bulk_tube_pair()
-    run!(s1b, Q1b; tfinal=0.02, nmax=50)
-    local s2b, Q2b
-    CL.FORCE_KA[] = true
-    try
-        s2b, Q2b = bulk_tube_pair()
-        run!(s2b, Q2b; tfinal=0.02, nmax=50)
-    finally
-        CL.FORCE_KA[] = false
+    for channel in (:bulk, :fickian)
+        s1b, Q1b = channel_tube_pair(channel)
+        run!(s1b, Q1b; tfinal=0.02, nmax=50)
+        local s2b, Q2b
+        CL.FORCE_KA[] = true
+        try
+            s2b, Q2b = channel_tube_pair(channel)
+            run!(s2b, Q2b; tfinal=0.02, nmax=50)
+        finally
+            CL.FORCE_KA[] = false
+        end
+        @test s1b.step == s2b.step
+        @test parent(Q1b) == parent(Q2b)
+        @test maximum(s1b.D_art[1]) > 0
+        channel === :bulk && @test s1b.D_art[1] == s1b.D_art[2]
     end
-    @test s1b.step == s2b.step
-    @test parent(Q1b) == parent(Q2b)
-    @test maximum(s1b.D_art[1]) > 0
-    @test s1b.D_art[1] == s1b.D_art[2]
+    @test maximum(s1.D_art[1]) > 0
+    @test s1.D_art[1] == s1.D_art[2]
 
     function axis_pair()
         s = Solver(n_global=(32, 1, 24), L_domain=(1.0, 2π, 1.0),

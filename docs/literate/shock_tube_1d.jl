@@ -56,7 +56,7 @@ problem = Problem(
 numerics = Numerics(
     n_global = (nx, 1, 1),
     art = ArtParams(C_mu = 0.002, C_beta = 1.0,
-                    C_kappa = 0.01, C_D = 0.01),
+                    C_kappa = 0.01, C_D = 0.1),
     cfl = 0.15,
     control = StepControl(retries = 2),
     filter_interval = 1,

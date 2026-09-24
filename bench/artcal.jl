@@ -38,9 +38,10 @@
 #         pulling the other way from Noh.
 #   WC    survival at a 10^5 pressure ratio, a pass/fail robustness floor.
 #   Mix   interface width, the only case that isolates C_D.
-#   SI    mass-fraction excursion and interface width at a shocked air/SF6
-#         interface: the effect of C_D where the interface is forced, which
-#         Mix never is; the width it costs against the excursion it removes.
+#   SI    mass-fraction excursion, ringing inside [0, 1] (TV - 1 of the final
+#         profile) and interface width at a shocked air/SF6 interface: the
+#         effect of C_D where the interface is forced, which Mix never is; the
+#         width it costs against the ringing it removes.
 
 using MPI
 MPI.Init(threadlevel=:funneled)
@@ -168,20 +169,21 @@ end
 
 # Width and steps come back as floats so a failed row prints as NaN or Inf
 # through the same format as a healthy one.
-m_si(; kw...) = attempt((NaN, NaN, NaN, NaN)) do
+m_si(; kw...) = attempt((NaN, NaN, NaN, NaN, NaN)) do
     r = shock_interface(; nmax=CAP, BG..., kw...)
-    r.completed || return (Inf, Inf, Inf, Inf)
-    (r.worst_min_Y, r.worst_max_Y, Float64(r.width_cells), Float64(r.steps))
+    r.completed || return (Inf, Inf, Inf, Inf, Inf)
+    (r.worst_min_Y, r.worst_max_Y, Float64(r.width_cells), Float64(r.steps),
+     sum(abs, diff(r.Y_air)) - 1)
 end
 
-# The shocked interface fails at density ratio 100 under the default channel
+# The shocked interface fails at density ratio 100 under the Fickian channel
 # with a DomainError out of the sound speed rather than a SolverFailure, so
 # this form also reports that as a failed row instead of ending the sweep.
 m_si_ratio(; kw...) = try
     m_si(; kw...)
 catch err
     err isa DomainError || rethrow()
-    (NaN, NaN, NaN, NaN)
+    (NaN, NaN, NaN, NaN, NaN)
 end
 
 m_slab(; kw...) = attempt((NaN, NaN, NaN, NaN)) do
@@ -258,7 +260,7 @@ if want("D")
     println("\n=== C_D sweep (artificial species diffusivity) ===")
     println("C_D       | interface width after t=$(MIX_T) at u=$(MIX_U) (initial 2h = $(round(2/MIX_N, digits=5)))")
     hr()
-    for c in (0.0, 0.0025, 0.01, 0.04, 0.16)
+    for c in (0.0, 0.0025, 0.01, 0.04, 0.1, 0.16)
         @printf("%-8.4g%s | %.5f\n", c, mark(c, DEFAULTS.C_D), m_mix(art=art(C_D=c)))
     end
 end
@@ -266,12 +268,12 @@ end
 # ===========================================================================
 if want("Y")
     println("\n=== C_D at a shocked air/SF6 interface (mass-fraction excursion) ===")
-    println("C_D       delta/h | worst min Y   max Y | width cells | steps")
+    println("C_D       delta/h | worst min Y   max Y | width cells | steps | TV - 1")
     hr()
-    for c in (0.01, 0.1, 1.0), d in (2, 4, 8)
+    for c in (0.01, 0.03, 0.1, 0.3), d in (2, 4, 8)
         si = m_si(art=art(C_D=c), delta=d)
-        @printf("%-8.4g%s %-7.3g | %+11.4f %7.4f | %11g | %5g\n",
-                c, mark(c, DEFAULTS.C_D), d, si[1], si[2], si[3], si[4])
+        @printf("%-8.4g%s %-7.3g | %+11.4f %7.4f | %11g | %5g | %6.4f\n",
+                c, mark(c, DEFAULTS.C_D), d, si[1], si[2], si[3], si[4], si[5])
     end
     println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
     println("\n=== C_Y at the same interface, delta = 2h (the mass-fraction bound) ===")
@@ -600,27 +602,27 @@ if want("brill2025")
     println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
 end
 
-# The bulk species channel (`species_flux = :bulk`) against the default Fickian
-# one on the battery rows that carry more than one species, which are the only
-# rows the option touches: the advected interface (width), the shocked
-# air/SF6 interface at SF6's density ratio and at 100, and the Brill slab at
+# The three species channels (`species_flux`) on the battery rows that carry
+# more than one species, which are the only rows the option touches: the
+# advected interface (width), the shocked air/SF6 interface at SF6's density
+# ratio and at 100, and the Brill slab at
 # density ratio 100 with 7 cells per interface (pressure error at ten
 # periods, the paper's stability metric). The single-species rows are
-# bit-identical between the two and are not repeated here. The measurements
+# bit-identical between them and are not repeated here. The measurements
 # behind the option are in reference/CALIBRATION_APPENDIX.md, "The bulk species
-# channel".
+# channel" and "The partial-density species channel".
 if want("bulk")
-    println("\n=== The bulk species channel against the Fickian one ===")
-    println("channel  | mix wid | SI 5.04: minY  wid steps | " *
+    println("\n=== The species channels ===")
+    println("channel          | mix wid | SI 5.04: minY  wid steps | " *
             "SI 100: minY  wid steps | slab 100/7: max|p-1|  minY  min rho  steps")
     hr()
-    for flux in (:fickian, :bulk)
+    for flux in (:fickian, :bulk, :partial_density)
         a = art(species_flux=flux)
         mx = m_mix(art=a)
         s1 = m_si_ratio(art=a, delta=2)
         s2 = m_si_ratio(art=a, delta=2, rho_heavy=100.0)
         sl = m_slab(art=a)
-        @printf("%-8s | %7.5f | %+7.4f %4g %5g | %+7.4f %4g %5g | %9.2e %+8.4f %7.4f %5g\n",
+        @printf("%-16s | %7.5f | %+7.4f %4g %5g | %+7.4f %4g %5g | %9.2e %+8.4f %7.4f %5g\n",
                 flux, mx, s1[1], s1[3], s1[4], s2[1], s2[3], s2[4],
                 sl[1], sl[2], sl[3], sl[4])
     end
@@ -628,7 +630,7 @@ if want("bulk")
 end
 
 # The bulk channel's one diffusivity also carries momentum and energy, so the
-# Fickian channel's C_D = 0.01, C_Y = 100 are not assumed to transfer; this
+# Fickian channel's constants are not assumed to transfer; this
 # sweeps both constants at once on the same battery as `bulk`, against the
 # Fickian channel at its own constants as the reference line. The extra row
 # turns the mass-fraction bound off (C_Y = 0) at the default C_D to isolate

@@ -24,12 +24,12 @@
 # or by MAX, under
 # `ArtParams.reduction`. `smooth!` stands in for Cook's Gaussian test filter,
 # and `ArtParams.smoother` selects the operator it applies. With more than one
-# species, each carries its own sensor and its own D*_k; Σ_k J_k = 0 is then
-# restored by the correction velocity in the flux assembly (rhs.jl), not by
-# giving every species the same diffusivity. `ArtParams.species_flux = :bulk`
-# replaces that Fickian channel by one diffusivity D_b on every conserved
-# variable (`bulk_diffusivity!`; the flux is assembled in rhs.jl), sensed on
-# the mass and the mole fraction of every species. Under `:delta4`, indices past
+# species, the default `ArtParams.species_flux = :partial_density` and the
+# `:bulk` channel build one diffusivity D_b shared by every species, sensed on
+# the mass and the mole fraction of each (`bulk_diffusivity!`); the fluxes are
+# assembled in rhs.jl. Under `:fickian` each species carries its own sensor and
+# its own D*_k, and Σ_k J_k = 0 is restored by the correction velocity in the
+# flux assembly. Under `:delta4`, indices past
 # a closed edge come from a mirror where the edge has one, node-centred at a
 # wall (`sensor_mirror`) and half-offset across a fold, carrying the
 # field's sign in either case; at a patch or coarse-fine interface they come
@@ -45,10 +45,11 @@
 # of a strictly physical-space one; only the length weighting is physical.
 
 """
-    ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01, C_D=0.01,
+    ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01, C_D=0.1,
               C_Y=100.0, Y_tolerance=1e-4,
               mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
-              smoother=:gaussian, detector=:delta4)
+              smoother=:gaussian, detector=:delta4,
+              species_flux=:partial_density)
 
 Cook-style artificial-property controls.
 
@@ -63,8 +64,13 @@ Cook-style artificial-property controls.
   shock-spreading term.
 - `C_kappa`: coefficient for artificial conductivity generated from the
   internal-energy sensor.
-- `C_D`: coefficient for per-species artificial diffusivity generated from
-  mass-fraction sensors.
+- `C_D`: coefficient of the artificial species diffusivity generated from
+  the mass-fraction sensors. It damps oscillation of `Y_k` inside [0, 1],
+  which the bound below leaves untouched, such as the ringing behind an
+  interface a shock has compressed to a few cells. The default is ten times
+  the value Shankar, Kawai & Lele (below) use in the same `cΔ` scaling. Under
+  `species_flux = :fickian` the pressure error at an interface grows in
+  proportion to it.
 - `C_Y`: coefficient of the mass-fraction bound, a second contribution to the
   species diffusivity that is zero wherever `0 ≤ Y_k ≤ 1` and grows with the
   excursion outside: `D*_k = c · G[max(C_D Δ_d |δ⁴Y_k|, C_Y Δ_g max(0, −Y_k,
@@ -80,7 +86,7 @@ Cook-style artificial-property controls.
   [Brill, Olson & Bokman (2025, eq. 24)](https://arxiv.org/abs/2503.12680).
   The ringing sensor alone cannot hold a species interface that a shock or a
   strain field has thinned to a few cells: a 2h interface hit by a Mach 1.5
-  shock reaches Y = −0.2 with `C_Y = 0` and −0.013 at the default.
+  shock reaches Y = −0.2 with `C_Y = 0` and −0.010 at the defaults.
   Set `C_Y = 0` to disable it.
 - `Y_tolerance`: dead band of the bound; an excursion smaller than this is
   ignored. The stages of the Runge–Kutta step overshoot a smooth profile
@@ -120,31 +126,32 @@ Cook-style artificial-property controls.
   the cylindrical from 0.15 to 0.2, and makes the sensor phase 29% cheaper, at
   the cost of about seven points of planar wall heating. The four constants
   above are calibrated per setting.
-- `species_flux`: the form of the artificial species regularization.
-  `:fickian` (default) is the per-species Fickian flux J_k = −ρ D\\*_k ∇Y_k
-  with the correction velocity that keeps Σ_k J_k = 0 and the enthalpy flux
-  Σ_k h_k J_k in the energy equation. `:bulk` replaces it by one diffusive
-  flux −D_b ∇q on every conserved variable q, the classical parabolic
-  regularization of the system, with D_b = c · G[max over species and over
-  the mass and mole fraction f ∈ {Y_k, X_k} of max(C_D Δ_d|D_d f|, C_Y Δ_g ·
-  excursion(f))]: the same bracket, constants and smoothing as the Fickian
-  D\\*_k, sensed on both fields. It is conservative, holds a uniform (u, p, T)
-  state invariant to round-off whatever the composition, and as a continuous
-  model satisfies every entropy inequality, which the discrete update is not
-  shown to inherit; the Fickian channel's enthalpy flux moves ρE across a
-  uniform-pressure interface of unequal gas constants, and this is the term
-  that removes the pressure error of an advected large-density-ratio
-  interface (7 to 8 orders on the Brill, Olson & Bokman advection test) and
-  carries a Mach 1.5 shock through a 2h interface at density ratio 100,
-  which the Fickian channel does not. The one D_b is stored in every
-  `D_art[k]`, enters the diffusive timestep as they do, and costs n_cons
-  gradient line solves per direction in place of the Fickian channel's
-  n_species, plus one detector and smoother pass per species. Not the
-  default: on a shocked sphere in three dimensions the two channels agree on
-  the mass-fraction excursions and the mixing measures and this one costs
-  about a third more per step, so select it for an advected interface at a
-  large density ratio, where the Fickian pressure error is the defect.
-  Patched and refined runs take it as the root does.
+- `species_flux`: how the artificial species diffusivity enters the
+  equations. `:partial_density` (default) diffuses each partial density with
+  one diffusivity shared by every species, J_k = −D_b ∇(ρY_k), and carries
+  the resulting mass flux into momentum as (Σ_k J_k) u and into energy as
+  (Σ_k J_k)|u|²/2 + Σ_k e_k J_k, with e_k the species internal energy
+  [(Brill, Olson & Bokman 2025, eqs. 38–40)](https://arxiv.org/abs/2503.12680).
+  D_b = c · G[max over species and over f ∈ {Y_k, X_k} of max(C_D Δ_d|D_d f|,
+  C_Y Δ_g · excursion(f))] is the bracket above sensed on the mass and the
+  mole fraction. A uniform (u, p, T) state stays uniform to round-off
+  whatever the composition, and no stress or conduction is added. Beyond the
+  Fickian channel it costs n_species gradient line solves per direction and
+  a second detector and smoother pass per species.
+  `:fickian` is Cook's per-species flux J_k = −ρ D\\*_k ∇Y_k, with the
+  correction velocity that keeps Σ_k J_k = 0 and the enthalpy flux
+  Σ_k h_k J_k in the energy equation. Between gases of unequal molecular
+  weight this flux carries a net volume, so it moves the pressure at an
+  interface and radiates grid-scale sound. It is the cheapest channel, and
+  that error vanishes between gases of equal molecular weight.
+  `:bulk` applies −D_b ∇q to every conserved variable q, the parabolic
+  regularization of [Guermond & Popov (2014)](https://arxiv.org/abs/1212.5566).
+  It holds a uniform (u, p, T) state as the default does, and also adds an
+  artificial viscosity ρD_b ∇u and conduction, which damp the roll-up of a
+  shocked interface and hold a density ratio of 100 tighter. It costs n_cons
+  gradient line solves per direction.
+  D_b is stored in every `D_art[k]` and enters the diffusive timestep. Patched
+  and refined runs take the channel as the root does.
 - `detector`: the high-pass that builds every sensor, in
   `detect_sum!`. `:delta4` (default) is Cook's undivided fourth
   difference, computed explicitly. `:d8` is Pyranda's
@@ -166,7 +173,7 @@ Base.@kwdef struct ArtParams{T}
     C_mu::T    = 0.002
     C_beta::T  = 1.0
     C_kappa::T = 0.01
-    C_D::T     = 0.01
+    C_D::T     = 0.1
     C_Y::T     = 100.0
     Y_tolerance::T = 1e-4
     mu_sensor::Symbol = :strain
@@ -174,8 +181,18 @@ Base.@kwdef struct ArtParams{T}
     reduction::Symbol = :sum
     smoother::Symbol = :gaussian
     detector::Symbol = :delta4
-    species_flux::Symbol = :fickian
+    species_flux::Symbol = :partial_density
 end
+
+# Whether the species channel builds one diffusivity D_b shared by every species
+# (`bulk_diffusivity!`) and differences conserved components (`_bulk_gradients!`):
+# `:bulk` and `:partial_density` do, `:fickian` builds one D*_k per species. A
+# single species has no composition for either to act on, and none of the
+# channel's passes or storage is set up for it.
+_shared_species_diffusivity(art::ArtParams, n_species::Integer) =
+    n_species > 1 && art.species_flux !== :fickian
+_shared_species_diffusivity(solver) =
+    _shared_species_diffusivity(solver.art, solver.equations.n_species)
 
 # Integer coefficients keep the exact stencil while adopting the field's
 # arithmetic type under multiplication, without forcing Float64 on FP32.
@@ -842,8 +859,9 @@ Fill `solver.mu_art`, `solver.beta_art` and `solver.kappa_art`, and
 `solver.D_art` when the equation set carries more than one species, from the
 current primitives and (metric-corrected) velocity gradients. A single-species
 run never enters the per-species sweep, so its `D_art` keeps the zeros it was
-allocated with. Under `ArtParams.species_flux = :bulk` the species sweep is
-[`bulk_diffusivity!`](@ref), which writes one diffusivity into every
+allocated with. Under the default `ArtParams.species_flux = :partial_density`
+and under `:bulk` the species sweep is [`bulk_diffusivity!`](@ref), which
+writes one diffusivity into every
 `D_art[k]`. `solver.strain_mag` is written whichever sensors are selected,
 since `scalar_field(solver, :strain_mag)` exposes it. `Q` is the padded
 conserved array, read only for the internal energy behind the κ\\* sensor.
@@ -971,7 +989,7 @@ function compute_artificial!(solver, Q)
         inv_n = one(C_D) / n_active
         a1, a2, a3 = decomp.active
         ih1, ih2, ih3 = solver.inv_h
-        if art.species_flux === :bulk
+        if _shared_species_diffusivity(art, solver.equations.n_species)
             bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
                               a1, a2, a3, Y_tolerance)
             return solver
@@ -995,7 +1013,7 @@ end
                       a1, a2, a3, Y_tolerance)
 
 The species sweep of [`compute_artificial!`](@ref) under
-`ArtParams.species_flux = :bulk`: one diffusivity
+`ArtParams.species_flux = :partial_density` or `:bulk`: one diffusivity
 D_b = c · G[max_k max_{f ∈ {Y_k, X_k}} max(C_D Δ_d|D_d f|, C_Y Δ_g excursion(f))],
 written into every `solver.D_art[k]`, so that the checkpoint's coefficient
 block and `max_rate`'s diffusive rate see it where they saw the Fickian

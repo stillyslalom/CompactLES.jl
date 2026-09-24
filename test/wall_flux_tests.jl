@@ -32,7 +32,7 @@ function _wf_prepare!(solver, Q; kappa_art=nothing, D_art=nothing)
             CL.deriv_scaled_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
         end
     end
-    solver.art.species_flux === :bulk && CL._bulk_gradients!(solver, Q)
+    CL._shared_species_diffusivity(solver) && CL._bulk_gradients!(solver, Q)
     CL.assemble_fluxes!(solver, Q)
     return solver
 end
@@ -106,7 +106,7 @@ end
                             CL.nasa9_constant_cp(T, "b", T(0.7), T(3.2))))
     cases = ((T, d, channel, d == 2 ? nasa : ideal)
              for T in (Float32, Float64) for d in 1:3
-             for channel in (:fickian, :bulk))
+             for channel in (:fickian, :bulk, :partial_density))
     for (T, d, channel, eosfn) in cases
         eos = eosfn(T)
         Tw = T(315)
@@ -161,7 +161,7 @@ end
                             CL.nasa9_constant_cp(T, "b", T(0.7), T(3.2))))
     cases = ((T, d, channel, d == 2 ? nasa : ideal)
              for T in (Float32, Float64) for d in 1:3
-             for channel in (:fickian, :bulk))
+             for channel in (:fickian, :bulk, :partial_density))
     for (T, d, channel, eosfn) in cases
         walls = (SlipWallBC(), SlipWallBC())
         # Every face is a slip wall, so their intersections are exercised too.

@@ -255,8 +255,9 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
         error("art.smoother must be :compact or :gaussian, got :$(art.smoother)")
     art.detector in (:delta4, :d8) ||
         error("art.detector must be :delta4 or :d8, got :$(art.detector)")
-    art.species_flux in (:fickian, :bulk) ||
-        error("art.species_flux must be :fickian or :bulk, got :$(art.species_flux)")
+    art.species_flux in (:fickian, :bulk, :partial_density) ||
+        error("art.species_flux must be :fickian, :bulk or :partial_density, " *
+              "got :$(art.species_flux)")
     # Per-condition restrictions on geometry and EOS agreement (boundary.jl).
     for d in 1:3, side in 1:2
         validate_bc(bcs[d][side], metric, eos, d, side)
@@ -728,7 +729,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
     ws_pool = rhs_workspace_pool(backend, T)
     ws_root = rhs_workspace!(ws_pool, backend, decomp, n_species, n_cons,
                              art.detector !== :delta4,
-                             art.species_flux === :bulk)
+                             _shared_species_diffusivity(art, n_species))
     patch = Patch(1, 0, regions[1], comm, decomp, h,
                   ntuple(d -> (0, 0), 3), bcs_t, folds,
                   deriv_plans, deriv_plans, filter_plans, smooth_plans, ring_plans,
@@ -826,7 +827,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                                                  filt, smoo, art.smoother,
                                                  interface_rhs, backend, ws_pool,
                                                  n_species, n_cons,
-                                                 art.species_flux === :bulk,
+                                                 _shared_species_diffusivity(art, n_species),
                                                  id0, ℓ, tile; interface_divergence)
             append!(fines, built)
             indices = [id0 + k for k in eachindex(held)]
@@ -949,9 +950,9 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
     # Refinement takes the `:delta4` detector (rejected otherwise at setup), so
-    # no refined patch carries the `:d8` ringing buffer; `bulk` is
-    # `species_flux === :bulk`, whose conserved gradients a refined patch
-    # differences as the root does.
+    # no refined patch carries the `:d8` ringing buffer; `bulk` selects the
+    # conserved gradients of the shared-D_b species channels, which a refined
+    # patch differences as the root does.
     ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons, false,
                         bulk)
     scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
@@ -1263,7 +1264,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
         # channel's conserved gradients go through the same interface plans
         # as `grad_Y`.
         ws = rhs_workspace!(ws_pool, backend, dcp, n_species, n_cons, false,
-                            art.species_flux === :bulk)
+                            _shared_species_diffusivity(art, n_species))
         Patch(pid, 0, region, pcomm, dcp, h, faces, pbcs, nofold,
               dplans, vplans, fplans, splans, nothing,
               empty3, empty3,
@@ -1809,11 +1810,11 @@ assemble_fluxes!(solver::SolverLike, Q) = _assemble_fluxes!(solver, solver.eos, 
             # Per-species diffusion with a correction velocity:
             # J_k = −ρ D_k ∇Y_k + ρ Y_k V_c, V_c = Σ_j D_j ∇Y_j,
             # which enforces Σ_k J_k = 0 exactly since ΣY_k = 1. Under the
-            # bulk species channel (`species_flux = :bulk`) the artificial
-            # part of this flux is the −D_b ∂_d Q_c that `_bulk_flux_point!`
-            # adds to every component afterwards, so only the molecular
-            # diffusivity D0 enters here; `D_art` then holds D_b, which must
-            # not be read as a Fickian coefficient.
+            # shared-D_b species channels (`:partial_density`, `:bulk`) the
+            # artificial part of this flux is added afterwards by
+            # `_partial_density_flux_point!` or `_bulk_flux_point!`, so only
+            # the molecular diffusivity D0 enters here; `D_art` then holds
+            # D_b, which must not be read as a Fickian coefficient.
             Vc = zero(T)
             for sp in 1:n_species
                 Dk = bulk ? molecular.D[sp] : molecular.D[sp] + D_art[sp][I]
@@ -1847,27 +1848,75 @@ function _assemble_fluxes!(solver::SolverLike{T}, eos, Q) where {T}
     i_energy = solver.equations.i_energy
     m1, m2, m3 = solver.equations.i_mom
     ft = solver.field_tuples
-    bulk = solver.art.species_flux === :bulk
+    shared = _shared_species_diffusivity(solver)
     pointwise!(_fluxes_point!, solver.rho, nx, ny, nz,
                Q, eos, solver.rho, solver.u, solver.v, solver.w, solver.p,
                solver.T_ion, solver.cp_mix, solver.mu_art, solver.beta_art,
                solver.kappa_art, ft.D_art, ft.Y, ft.grad_u,
                solver.grad_T_ion, ft.grad_Y, ft.flux,
                tr, n_species, m1, m2, m3, i_energy,
-               decomp.active, bulk, o1, o2, o3)
-    # The bulk species channel: −D_b ∂_d Q_c on every component, D_b read
-    # from `D_art[1]` (every `D_art[k]` holds it) and ∂_d Q_c from the
-    # gradients `compute_rhs!` filled into `grad_Q`. A separate pass rather
+               decomp.active, shared, o1, o2, o3)
+    # The shared-D_b species channels, D_b read from `D_art[1]` (every
+    # `D_art[k]` holds it) and ∂_d Q_c from the gradients `compute_rhs!` filled
+    # into `grad_Q`: `:bulk` adds −D_b ∂_d Q_c to every component,
+    # `:partial_density` the partial-density flux below. A separate pass rather
     # than a branch inside the body above, which is at the argument count
     # the launcher accepts. `species_flux` is a setup constant identical on
     # every rank, so the branch is safe with no collective below it.
-    if bulk
+    if shared && solver.art.species_flux === :bulk
         pointwise!(_bulk_flux_point!, solver.rho, nx, ny, nz,
                    ft.flux, solver.D_art[1], FieldMatrix(solver.grad_Q),
                    n_cons, decomp.active, o1, o2, o3)
+    elseif shared && solver.art.species_flux === :partial_density
+        pointwise!(_partial_density_flux_point!, solver.rho, nx, ny, nz,
+                   ft.flux, eos, solver.D_art[1], FieldMatrix(solver.grad_Q),
+                   solver.u, solver.v, solver.w, solver.T_ion, n_species,
+                   m1, m2, m3, i_energy, decomp.active, o1, o2, o3)
     end
     return solver
 end
+
+# The partial-density species channel of Brill, Olson & Bokman (2025, eqs.
+# 38–40): J_k = −D_b ∂_d(ρY_k) on each species, the mass flux ΣJ carried into
+# momentum as (ΣJ) u and into energy as (ΣJ) |u|²/2 + Σ_k e_k J_k, with the
+# species internal energy e_k and not the enthalpy. At uniform (u, p, T) every
+# added term is a fixed linear combination of the species fluxes, so the state
+# is an exact discrete invariant, and no stress or conduction is added beyond
+# what the mass flux carries.
+@inline function _partial_density_flux_point!(flux, eos, D_b, gQ, u, v, w, T_ion,
+                                              n_species, m1, m2, m3, i_energy,
+                                              act, o1, o2, o3, i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i + o1, j + o2, k + o3)
+        Db = D_b[I]
+        uv = (u[I], v[I], w[I])
+        Tp = T_ion[I]
+        ke = (uv[1]^2 + uv[2]^2 + uv[3]^2) / 2
+        for d in 1:3
+            act[d] || continue
+            Jsum = zero(Db)
+            eJ = zero(Db)
+            for sp in 1:n_species
+                Jkd = -Db * gQ[d, sp][I]
+                flux[d, sp][I] += Jkd
+                Jsum += Jkd
+                eJ += _species_internal_energy(eos, sp, Tp) * Jkd
+            end
+            flux[d, m1][I] += Jsum * uv[1]
+            flux[d, m2][I] += Jsum * uv[2]
+            flux[d, m3][I] += Jsum * uv[3]
+            flux[d, i_energy][I] += Jsum * ke + eJ
+        end
+    end
+    return nothing
+end
+
+# e_k(T) = h_k(T) − R_k T for the ideal-gas models; a single-component
+# stiffened gas carries no composition gradient for the channel to act on.
+@inline _species_internal_energy(eos, k::Int, T_ion) =
+    species_enthalpy(eos, k, T_ion) - eos.Rk[k] * T_ion
+@inline _species_internal_energy(eos::Union{StiffenedGas,StiffenedGasCoeffs},
+                                 ::Int, T_ion) = eos.cv * T_ion
 
 @inline function _bulk_flux_point!(flux, D_b, gQ, n_cons, act, o1, o2, o3,
                                    i, j, k)
@@ -1909,7 +1958,7 @@ end
 # communicator takes the same branch.
 function _flux_remainder(solver::SolverLike, d::Int)
     tr = solver.transport
-    inviscid = !solver.art.enabled && solver.art.species_flux !== :bulk &&
+    inviscid = !solver.art.enabled && !_shared_species_diffusivity(solver) &&
                tr isa Transport && iszero(tr.mu0)
     inviscid || return true
     bc_lo, bc_hi = solver.bcs[d]
@@ -1989,21 +2038,25 @@ end
     return nothing
 end
 
-# The bulk species channel differences the conserved components themselves,
+# The shared-D_b species channels difference conserved components themselves
+# (`:bulk` all of them, `:partial_density` the partial densities),
 # ∂_d Q_c through the same scaled compact derivative, not a product-rule
 # reconstruction from the stored gradients: the derivative is linear, and at
 # uniform (u, p, T) every component is a fixed linear combination of the
 # partial densities, so the fluxes of ρu and ρE are the same combinations of
 # the species fluxes to round-off, which is what makes that state an exact
 # discrete invariant of the term (reference/DESIGN.md, "The species
-# channel"). n_cons line solves per active direction, on top of the
+# channel"). n_cons or n_species line solves per active direction, on top of the
 # n_species + 1 of `compute_rhs!`; `grad_Y` stays, since the characteristic
 # boundary conditions read it. Every rank enters the solves. `tmp_a` is free
 # at this point of the evaluation and holds the component being differenced.
 function _bulk_gradients!(solver::SolverLike, Q)
     decomp = solver.decomp
     n1f, n2f, n3f = padded_extent(decomp)
-    for c in 1:solver.equations.n_cons
+    # `:partial_density` differences the partial densities alone.
+    n_diff = solver.art.species_flux === :bulk ? solver.equations.n_cons :
+             solver.equations.n_species
+    for c in 1:n_diff
         pointwise!(_copy_component_point!, solver.tmp_a, n1f, n2f, n3f,
                    solver.tmp_a, Q, c)
         for d in 1:3
@@ -2129,11 +2182,11 @@ function compute_rhs!(solver::SolverLike, Q, dQ, primitives_current::Bool=false)
             deriv_scaled_along!(solver.grad_Y[d, sp], solver.Y[sp], solver, d, 1)
         end
     end
-    # The bulk species channel's gradients of the conserved components; a
+    # The shared-D_b species channels' gradients of conserved components; a
     # setup-constant branch identical on every rank, so no collective sits
     # below it unreached. Behind a function barrier so that the default
     # path's inferred body (bench/audit.jl) does not carry the branch.
-    solver.art.species_flux === :bulk && _bulk_gradients!(solver, Q)
+    _shared_species_diffusivity(solver) && _bulk_gradients!(solver, Q)
     assemble_fluxes!(solver, Q)
     # Physical wall fluxes must enter the compact divergence, including its
     # near-wall rows. All ranks visit the hooks in the same order; the wall

@@ -285,10 +285,14 @@ Names are spelled out in full. Current vocabulary:
   `mu_sensor` (`:strain` or `:velocity`), `beta_sensor` (`:strain`,
   `:gated_strain`, `:dilatation` or `:ungated_dilatation`), `reduction` (`:sum`
   or `:max`), `smoother` (`:gaussian` or `:compact`), `detector` (`:delta4` or
-  `:d8`), `species_flux` (`:fickian`, the per-species flux with the correction
-  velocity, or `:bulk`, one `D_b` on every conserved variable built by
-  `bulk_diffusivity!` from `mole_fraction` and the mass fractions, stored in
-  every `D_art[k]`, with the conserved gradients in the workspace's `grad_Q`)
+  `:d8`), `species_flux` (`:partial_density`, the default, one `D_b` on the
+  partial densities with the mass flux carried into momentum and energy;
+  `:bulk`, the same `D_b` on every conserved variable; `:fickian`, the
+  per-species flux with the correction velocity), `D_b` (built by
+  `bulk_diffusivity!` from `mole_fraction` and the mass fractions and stored in
+  every `D_art[k]`, with the conserved gradients in the workspace's `grad_Q`),
+  `_shared_species_diffusivity` (whether a solver's channel uses `D_b`: false
+  for `:fickian` and for a single species)
 - `grad_u`, `grad_T_ion`, `grad_Y`, `strain_mag`, `sensor`, `sensor_sp`
 - `inv_J`, `area_d`, `inv_h`, `inv_r`, `cot_over_r`, `coord_shift`, `flux`
 - `filter_interval` (cadence in steps) vs `filter_cfl` (the reference CFL at

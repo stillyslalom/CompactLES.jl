@@ -315,7 +315,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                spec.interface_rhs, spec.backend,
                                                ws_pool, solver.equations.n_species,
                                                n_cons,
-                                               solver.art.species_flux === :bulk,
+                                               _shared_species_diffusivity(solver),
                                                1, 1, spec.tile;
                                                interface_divergence=
                                                    spec.interface_divergence)

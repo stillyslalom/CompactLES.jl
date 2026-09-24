@@ -580,7 +580,7 @@ const POINTWISE_BODIES = (
     :_mu_beta_point!, :_no_slip_flux_point!, :_no_slip_wall_point!, :_nscbc_inflow_point!,
     :_nscbc_outflow_point!, :_pair_backward_local_point!,
     :_pair_backward_remote_point!, :_pair_forward_local_point!,
-    :_pair_forward_remote_point!, :_pair_select_point!,
+    :_pair_forward_remote_point!, :_pair_select_point!, :_partial_density_flux_point!,
     :_primitives_ideal_point!, :_primitives_stiffened_point!, :_rate_point!,
     :_reciprocal_interior_point!, :_reciprocal_point!,
     :_rho_sensor_point!, :_ring_accum_point!, :_ring_pack_point!, :_rk_point!,

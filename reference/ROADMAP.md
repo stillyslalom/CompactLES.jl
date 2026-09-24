@@ -157,7 +157,7 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
 - [x] **N15** — `interface_flux = :ghost` differences the inviscid flux through
   interface ends from ghost fluxes; it leads at same-level faces, and at
   coarse–fine faces under `level_interpolation_order = 8`, and stays
-  experimental (commit pending).
+  experimental (commit `b42e819`).
 
 - [ ] **N15a — Extend ghost fluxes to the viscous and artificial terms and
   qualify promotion.** The viscous and artificial fluxes still take the one-sided

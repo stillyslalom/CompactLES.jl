@@ -9,7 +9,7 @@ function test_no_slip_wall_flux()
     for T in (Float64, Float32), ax in 1:3, iso in (false, true)
         # Alternate channels across axes; the serial tests isolate nonzero
         # artificial coefficients independently of the detector response.
-        channel = ax == 2 ? :bulk : :fickian
+        channel = (:fickian, :bulk, :partial_density)[ax]
         wall = NoSlipWallBC(Twall=iso ? T(2) : T(NaN))
         bcs = ntuple(d -> d == ax ? (wall, wall) : per3[d], 3)
         ng = ntuple(d -> d == ax ? SPLITN : 1, 3)
@@ -73,7 +73,7 @@ end
 function test_slip_wall_flux()
     section("slip wall flux: the symmetry plane and the distributed divergence")
     for T in (Float64, Float32), ax in 1:3
-        channel = ax == 2 ? :bulk : :fickian
+        channel = (:fickian, :bulk, :partial_density)[ax]
         wall = SlipWallBC()
         bcs = ntuple(d -> d == ax ? (wall, wall) : per3[d], 3)
         ng = ntuple(d -> d == ax ? SPLITN : 1, 3)

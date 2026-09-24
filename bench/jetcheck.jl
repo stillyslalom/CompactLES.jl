@@ -45,8 +45,9 @@ sf = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMet
 Qf = allocate_state(sf); dQf = zero(Qf)
 initialize!(sf, Qf, (r, θ, z) -> Prim(u=(0, 0, 0), p=1 + exp(-40(r - 0.4)^2), rho=1.0))
 
-# two-species solver under the bulk species channel: the mole-fraction and
-# bulk-flux bodies, and the conserved gradients, which the default skips
+# two-species solver under the bulk species channel: the mole-fraction pass,
+# the conserved gradients and both shared-D_b flux bodies, since the channel is
+# a runtime field and JET analyses the partial-density branch in the same method
 eos2 = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                      IdealSpecies{Float64}("b", 0.2, 1.09)])
 sb = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3, eos=eos2,

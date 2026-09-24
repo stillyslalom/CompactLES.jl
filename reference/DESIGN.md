@@ -608,8 +608,9 @@ Concretely, `compute_artificial!`:
 - Computes the internal energy directly from `Q` (EOS-agnostic), takes its δ⁴
   sensor, smooths, and sets κ\* = C_κ·(ρc/T_ion)·sensor.
 - For each species, takes the δ⁴ sensor of Y_k, smooths, and sets
-  D\*_k = C_D·c·sensor_k; or, under `ArtParams.species_flux = :bulk`, one
-  diffusivity D_b for the whole system (the species channel, below).
+  D\*_k = C_D·c·sensor_k under `ArtParams.species_flux = :fickian`; under the
+  default `:partial_density` and under `:bulk`, one diffusivity D_b for the
+  whole system (the species channel, below).
 
 `ArtParams.mu_sensor` and `ArtParams.beta_sensor` select which field each of
 the first two channels reads. Cook (2007) takes both from |S|, as above;
@@ -636,7 +637,7 @@ evaluation. The settings behave very differently at a coordinate fold; measured
 effects are in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md).
 
 Constants live in `ArtParams` (defaults C_μ = 0.002, C_β = 1.0, C_κ = 0.01,
-C_D = 0.01) and should be revisited per configuration. `enabled=false` skips the
+C_D = 0.1) and should be revisited per configuration. `enabled=false` skips the
 whole computation and leaves the coefficient arrays zero. The high-pass itself
 acts in computational index space on every grid, a grid-based regularization
 consistent with resolving power following the mesh; only the length weighting
@@ -652,7 +653,8 @@ gradient of a scalar and generates vorticity in a cold pre-shock flow
 ### The species channel
 
 `ArtParams.species_flux` selects how the artificial species diffusivity enters
-the equations. The default `:fickian` is Cook's form: a per-species flux
+the equations. The default is `:partial_density`, below. `:fickian` is Cook's
+form: a per-species flux
 J_k = −ρ D\*_k ∇Y_k + ρ Y_k Σ_j D\*_j ∇Y_j, whose correction velocity keeps
 Σ_k J_k = 0, with the enthalpy flux Σ_k h_k J_k in the energy equation
 (`_fluxes_point!`). It moves no bulk mass and no momentum. It does move
@@ -666,6 +668,10 @@ combination. The Fickian flux is the one operator that does not, and on an
 advected interface of density ratio 100 it leaves a pressure error of 1e-2
 after ten periods where everything else leaves 1e-10
 ([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), "The bulk species channel").
+A mass flux that sums to zero carries a net volume between gases of unequal
+molecular weight, and at uniform p and T that volume has to be produced
+acoustically; with an artificial D the error is grid-scale and proportional
+to C_D, and no Fickian driving force removes it for two species.
 
 `:bulk` replaces it by the classical parabolic regularization of the system,
 one flux F_q = −D_b ∇q on every conserved variable q with one nonnegative
@@ -706,7 +712,7 @@ properties follow from the form alone.
    [0, 1] both lower ∫ρs
    ([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), "The bulk species
    channel in three dimensions").
-4. It differs from the diffused-density form of Brill, Olson & Bokman
+4. It differs from the partial-density form of Brill, Olson & Bokman
    (arXiv:2503.12680, 2025), J_i = −D∇ρ_i with the consistency fluxes
    F = (Σ_i J_i) ⊗ u and H = (Σ_i J_i)(½|u|²) + Σ_i J_i e_i, by exactly a
    viscous stress and a conduction: expanding the bulk fluxes with the
@@ -716,6 +722,25 @@ properties follow from the form alone.
    equilibrium state; but Brill's diffusion matrix, written on q, is the
    rank-N_s projection onto the equilibrium manifold, neither symmetric nor
    positive semidefinite, so the entropy argument above does not apply to it.
+
+The default `:partial_density` is that form of Brill, Olson & Bokman,
+assembled in `_partial_density_flux_point!` after the physical fluxes:
+J_k = −D_b ∂_d(ρY_k) on each species, (Σ_k J_k) u on momentum and
+(Σ_k J_k)|u|²/2 + Σ_k e_k J_k on energy, with e_k = h_k − R_k T the species
+internal energy (Aslani & Regele 2018 derive the same momentum term for a
+five-equation model, and Jain, Mani & Moin 2020 the analogous terms for a
+volume-fraction flux). Property 1 holds as for `:bulk`. Property 2 holds
+with one D_b for every species: at uniform u and T each added momentum and
+energy term is a fixed multiple of a species flux, and
+∂_t(p/T) = −Σ_k R_k ∇·J_k = ∇·(D_b ∇(Σ_k R_k ρ_k)) = 0 at uniform p. The
+gradients are those of the partial densities only, n_species line solves per
+direction. Property 3 does not carry over, by item 4, and no entropy
+inequality is established for this form. It adds no stress and no
+conduction, which is why it is the default: on a shocked He/CO2 interface
+in two dimensions `:bulk`'s added viscosity visibly weakens the vortex
+cores, where this form reproduces the Fickian roll-up without the Fickian
+pressure error ([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), "The partial-density
+species channel").
 
 D_b is built by `bulk_diffusivity!` from the same bracket as the Fickian
 D\*_k, max(C_D Δ_d|D_d f|, C_Y Δ_g excursion(f)), taken over every species
@@ -735,14 +760,15 @@ denominator Σ_j Y_j R_j passes through zero at a light-gas undershoot of
 
 The one D_b is written into every `D_art[k]`, so the checkpoint's coefficient
 block and `max_rate`'s diffusive rate see it where they saw the Fickian
-coefficients; `_fluxes_point!` skips the Fickian channel under `:bulk` rather
-than reading `D_art` as a Fickian coefficient. The workspace carries
-`grad_Q`, a 3 × n_cons matrix of arrays under `:bulk` and a 0 × 0 matrix of
-the same type otherwise, so the default path's types do not depend on the
-option. `grad_Y` is still computed: the characteristic boundary conditions
-read it. The channel costs n_cons gradient line solves per direction, four
-more than the n_species the Fickian flux needs, and one further detector and
-smoother pass per species. A patched or refined run takes it as a single
+coefficients; `_fluxes_point!` skips the Fickian channel under either
+shared-D_b channel rather than reading `D_art` as a Fickian coefficient. The
+workspace carries `grad_Q`, a 3 × n_cons matrix of arrays under the two
+shared-D_b channels with more than one species and a 0 × 0 matrix of the same
+type otherwise, so the types do not depend on the option. `grad_Y` is still
+computed: the characteristic boundary conditions read it. `:bulk` costs
+n_cons gradient line solves per direction and `:partial_density` n_species,
+on top of the n_species + 1 of the Fickian path, and both one further
+detector and smoother pass per species. A patched or refined run takes it as a single
 patch does: the conserved gradients go through the same interface plans as
 `grad_Y`, and on a stacked device level the component copy, the gradients
 and the sensor passes run once per stack over the spanning patch's arrays,
@@ -854,7 +880,7 @@ origin-plus-poles combination has received the least testing.
 - a `(ρ, e, Y) → (p, T_ion, c, cₚ_mix)` state evaluation (via `primitives!`)
 - `species_enthalpy(eos, k, T_ion)` → partial specific enthalpy h_k(T_ion)
 - `mole_fraction(eos, k, Y, I, n_species)` → mole fraction X_k at a padded
-  index, for the bulk species channel's sensor
+  index, for the shared-D_b species channels' sensor
 - `state_admissibility(eos, ρ, e, Yat, n_species)` → whether a point lies in the
   model's thermodynamic domain, as flags (see below)
 
@@ -879,8 +905,8 @@ D\*_k, with a **correction velocity** in the flux assembly:
     J_k = −ρ D_k ∇Y_k + ρ Y_k Σ_j D_j ∇Y_j
 
 which enforces Σ_k J_k = 0 exactly. Enthalpy diffusion Σ h_k J_k enters the
-energy flux. `ArtParams.species_flux = :bulk` replaces the artificial part
-of this flux by one diffusive flux on every conserved variable (the species
+energy flux. Under the default `ArtParams.species_flux = :partial_density`
+and under `:bulk` the artificial part of this flux is replaced (the species
 channel, above); the molecular part stays Fickian.
 
 The NASA-9 caloric model uses numerical inversion of T(e): `Nasa9Mixture` inverts

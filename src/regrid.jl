@@ -548,7 +548,7 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                           solver.art.smoother, spec.interface_rhs,
                           spec.backend, ws_pool,
                           solver.equations.n_species, n_cons,
-                          solver.art.species_flux === :bulk, fi, 1;
+                          _shared_species_diffusivity(solver), fi, 1;
                           interface_divergence=spec.interface_divergence) : nothing
     newlt = build_level_transfer(T, newregion, active_g, spec.n_halo,
                                  [patches[1].region], [1],
@@ -1004,7 +1004,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                              solver.art.smoother, spec.interface_rhs,
                                              spec.backend, ws_pool,
                                              solver.equations.n_species, n_cons,
-                                             solver.art.species_flux === :bulk,
+                                             _shared_species_diffusivity(solver),
                                              1, 1, spec.tile;
                                              interface_divergence=
                                                  spec.interface_divergence)
@@ -1044,7 +1044,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                       spec.smoo, solver.art.smoother,
                                       spec.interface_rhs, spec.backend, ws_pool,
                                       solver.equations.n_species, n_cons,
-                                      solver.art.species_flux === :bulk,
+                                      _shared_species_diffusivity(solver),
                                       idx, 1, faces[ti];
                                       interface_divergence=spec.interface_divergence)
                 Q = _state_like(p.rho, n_cons)

@@ -59,7 +59,7 @@ using Printf
 const DEFAULTS = (nx = 768, ny = 48, tfinal = 2.5e-3, cfl = 0.5, alphaf = 0.45,
                   deriv = "c6", filter = "gv", detector = "delta4", mu_sensor = "strain",
                   beta_sensor = "strain", reduction = "sum",
-                  C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.01, C_Y = 100.0,
+                  C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.1, C_Y = 100.0,
                   every = 50, snapshots = "0.5,1.0,1.5,2.0,2.5",
                   prefix = "he_co2_tube")
 const opt = CompactLES.script_args(ARGS, DEFAULTS; positional = (:nx, :ny, :tfinal))

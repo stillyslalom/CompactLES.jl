@@ -453,7 +453,7 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
                        Prim(Y=(1 - θ, θ), rho=ρ, u=((1 - s) * u2, 0.0, 0.0),
                             p=(1 - s) * p2 + s)
                    end)
-    # The shocked interface overshoots the mass-fraction bound by about 1.3%
+    # The shocked interface overshoots the mass-fraction bound by about 1.2%
     # at every resolution, inside the default `species_band`, so the case runs
     # strict; the caller guards the excursion itself, much closer than that.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,

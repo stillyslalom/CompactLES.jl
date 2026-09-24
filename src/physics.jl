@@ -35,7 +35,7 @@
 #                        n_species, Twall)
 #   mole_fraction(eos, k, Y, I,          mole fraction X_k at index I from the
 #                 n_species)             padded mass fractions Y (a FieldVector),
-#                                        for the bulk species channel of
+#                                        for the shared-D_b species channels of
 #                                        compute_artificial!
 #   state_admissibility(eos, ρ, e, Yat,  whether a point is in the model's
 #                       n_species)       thermodynamic domain, as STATE_ flags.
@@ -1228,7 +1228,7 @@ function recover_primitives!(solver, eos::IdealMixture, Q)
 end
 
 # ---------------------------------------------------------------------------
-# Mole fractions, the field the bulk species channel senses beside the mass
+# Mole fractions, the field the shared-D_b species channels sense beside the mass
 # fraction (artificial.jl, `bulk_diffusivity!`). For an ideal mixture at one
 # pressure and temperature the mole fraction is also the volume fraction, so
 # it sits on the density interface where the mass fraction, weighted by the
@@ -1259,8 +1259,8 @@ Mole fraction of species `k` at padded index `I`, from the mass fractions `Y`
 (a `FieldVector` of the padded arrays). For the gas mixtures it is
 Y_k R_k / Σ_j Y_j R_j with the denominator floored at `positive_floor` and the
 result clamped to [−1, 2]; a single-material EOS returns the mass fraction.
-Part of the EOS contract (see the header); consumed by the bulk species
-channel of `compute_artificial!`.
+Part of the EOS contract (see the header); consumed by the shared-D_b species
+channels of `compute_artificial!`.
 """
 @inline mole_fraction(eos::IdealMixture, k::Int, Y, I, n_species::Int) =
     _mole_fraction_from_R(eos.Rk, k, Y, I, n_species)

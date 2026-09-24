@@ -86,7 +86,7 @@ struct RHSWorkspace{T,A<:AbstractArray{T,3}}
     tmp_b::A
     ring_buf::A                    # detector = :d8 only; empty otherwise
     flux::Matrix{A}                # flux[d, c]
-    grad_Q::Matrix{A}              # species_flux = :bulk only; 0 × 0 otherwise
+    grad_Q::Matrix{A}              # shared-D_b species channels; 0 × 0 otherwise
 end
 
 """
@@ -95,10 +95,10 @@ end
 Allocate one scratch set on `backend` for a patch decomposed as `decomp`.
 `ring` selects the `detector = :d8` ringing buffer, which is a zero-extent
 placeholder under the default `:delta4`; `bulk` selects the `grad_Q`
-gradients of the conserved components, `grad_Q[d, c]`, which the bulk species
-channel (`species_flux = :bulk`) differences into its flux and which is a
-0 × 0 matrix of the same array type otherwise, so the default path's types
-do not depend on the option.
+gradients of the conserved components, `grad_Q[d, c]`, which the species
+channels with one shared diffusivity (`species_flux = :partial_density` and
+`:bulk`) difference into their fluxes and which is a 0 × 0 matrix of the
+same array type otherwise, so the types do not depend on the option.
 """
 function RHSWorkspace(backend::AbstractBackend, decomp::Decomp{T},
                       n_species::Int, n_cons::Int, ring::Bool,

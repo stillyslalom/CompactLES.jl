@@ -444,7 +444,7 @@ function test_symmetry_plane()
         bcs = ntuple(d -> d == ax ? sym : per3[d], 3)
         s = compare("$T dim=$ax", T, ng, bcs, ic, splitdims(ax);
                     detector=(ax == 3 ? :d8 : :delta4),
-                    channel=(ax == 2 ? :bulk : :fickian))
+                    channel=(:partial_density, :bulk, :fickian)[ax])
         # At np > 2 the middle ranks of the split hold neither plane and reach
         # the folded solve only because nothing on the path returns early.
         owns_neither = all(sd -> CL.wallplane(s.decomp, ax, sd) === nothing, 1:2)
@@ -1385,7 +1385,7 @@ function test_artificial_decomposition()
 end
 
 # ---------------------------------------------------------------------------
-# 7c'. The bulk species channel under decomposition. `species_flux = :bulk`
+# 7c'. The shared-diffusivity species channels under decomposition. `:bulk`
 #     adds n_cons distributed line solves per direction (the conserved
 #     gradients), a mole-fraction pass over the padded extent that relies on
 #     the exchanged mass fractions, and a second detector pass per species,
@@ -1431,6 +1431,11 @@ function test_bulk_decomposition()
     fick = planar_step(:fickian, 1)
     rel = abs(fick[end] - bulk[1][end]) / max(abs(fick[end]), 1e-300)
     check("bulk: Σ D differs from the Fickian channel", 1e-3 / max(rel, 1e-300), 1.0)
+    # The default partial-density channel shares the diffusivity and the
+    # conserved-gradient solves, restricted to the partial densities.
+    pd = (planar_step(:partial_density, 1), planar_step(:partial_density, 2))
+    check("partial density: Σ Q and Σ D_b spread over the two split axes",
+          maximum(abs, pd[1] - pd[2]), 1e-10 * scale)
 end
 
 # ---------------------------------------------------------------------------
@@ -1790,7 +1795,7 @@ function test_bulk_patched()
     tol = np <= 2 ? 1e-14 : 1e-12
     check("bulk two-patch slab: max rho matches serial", abs(gmax(m) - ref), tol)
 end
-const BULK_PATCHED_MAX_RHO = 19.99999737294109
+const BULK_PATCHED_MAX_RHO = 19.99999735804409
 
 # ---------------------------------------------------------------------------
 # Device line solves (reference/AMR_GPU.md). A DevicePlan runs the fill,
