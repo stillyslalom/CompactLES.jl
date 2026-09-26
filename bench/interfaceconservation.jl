@@ -35,7 +35,7 @@
 # `interpolation_order` sets `level_interpolation_order` on the refined layouts;
 # 0, the default, leaves the solver's own (6, or 8 under `iflux=ghost`).
 # `iflux=ghost` sets `interface_flux = :ghost` on every layout but the uniform one.
-# `mu` puts molecular transport (`Transport(mu0 = mu)`) on every layout, the
+# `mu` puts molecular transport (`ConstantTransport(mu0 = mu)`) on every layout, the
 # uniform one included, which carries the molecular flux through the ghost
 # fluxes under `iflux=ghost`.
 #
@@ -192,9 +192,9 @@ function build(mode, N, ny; subcycle=false, regrid=false)
              lele_d1_6(closures=Symbol(args.idiv))
     return Solver(n_global=(N, ny, 1), L_domain=(8pi, 2pi, 1.0), bcs=periodic,
                   eos=eos, cfl=0.45, interface_divergence=source,
-                  transport=Transport(mu0=Float64(args.mu)),
+                  transport=ConstantTransport(mu0=Float64(args.mu)),
                   interface_flux=mode === :uniform ? :closure : Symbol(args.iflux),
-                  art=ArtParams(C_mu=0.0, C_beta=0.0, C_kappa=0.0, C_D=0.0),
+                  art=ArtificialProperties(C_mu=0.0, C_beta=0.0, C_kappa=0.0, C_D=0.0),
                   control=StepControl(validity=:permissive),
                   filter_interval=args.filter_interval; kw...)
 end

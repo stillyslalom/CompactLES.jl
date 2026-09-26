@@ -1,5 +1,9 @@
 # Define a problem
 
+```@meta
+CurrentModule = CompactLES
+```
+
 A [`Problem`](@ref) describes physics independently of resolution and process
 count. A [`Numerics`](@ref) supplies those numerical choices. Keeping the two
 separate lets a convergence study reuse one physical specification unchanged.
@@ -50,9 +54,12 @@ material mixing length.
 A state made of several gases or several regions, such as a shocked gas, the
 gas ahead of the shock and a second gas beyond an interface, is written as a
 [`Layers`](@ref) initial condition: a background state overlaid by regions,
-each a [`Shape`](@ref) paired with a `Prim`.
+each a [`Shape`](@ref) paired with a `Prim`. The shapes and `Layers` are in the
+`CompactLES.Regions` submodule, which `using CompactLES` does not load.
 
 ```julia
+using CompactLES.Regions
+
 eos = Nasa9Mixture(["Air", "SF6"])
 air = Prim(Y = mass_fractions(eos, "Air" => 1.0; basis = :mole),
            p = 101_325.0, T_ion = 295.0)
@@ -127,7 +134,7 @@ the jump at the face has not yet been spread over any cells.
 problem = Problem(
     name = "example",
     eos = IdealMixture(["He", "CO2"]),
-    transport = Transport(mu0 = 1e-5, Pr = 0.7, Sc = 0.7),
+    transport = ConstantTransport(mu0 = 1e-5, Pr = 0.7, Sc = 0.7),
     metric = CartesianMetric(),
     sources = (),
     domain = ((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
@@ -154,7 +161,7 @@ numerics = Numerics(
     n_global = (256, 1, 1),
     deriv = lele_d1_6(),
     filt = compact_filter(0.45),
-    art = ArtParams(enabled = true),
+    art = ArtificialProperties(enabled = true),
     cfl = 0.5,
     control = StepControl(retries = 4),
     filter_interval = 1,

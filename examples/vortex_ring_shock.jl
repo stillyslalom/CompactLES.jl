@@ -26,6 +26,7 @@
 #      mpiexec -n 8 julia --project=. -t 1 examples/vortex_ring_shock.jl nr=224 nz=768
 
 using CompactLES
+using CompactLES.Regions
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
 const opt = CompactLES.script_args(ARGS,
@@ -77,7 +78,7 @@ mpi_main() do
         bcs=((AxisBC(), SlipWallBC()), PeriodicBC(), (SlipWallBC(), top)),
         ic=Layers(air, Slab(3, hi=z_interface) => sf6; width=Cells(2)),
     )
-    numerics = Numerics(n_global=(opt.nr, 1, opt.nz), art=ArtParams(enabled=true),
+    numerics = Numerics(n_global=(opt.nr, 1, opt.nz), art=ArtificialProperties(enabled=true),
                         control=StepControl(retries=4))
     solver, Q = setup(problem, numerics)
 

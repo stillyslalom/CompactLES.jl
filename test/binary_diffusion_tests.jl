@@ -3,6 +3,7 @@
 # Included by runtests.jl and runnable directly.
 
 using CompactLES
+using CompactLES.DiffusionData
 using Test
 
 function synthetic_binary_diffusion(::Type{T}=Float64) where {T<:AbstractFloat}
@@ -87,9 +88,9 @@ sm_interdiffusivity(args...) = stanton_murillo_interdiffusivity(
 
     # Directly cover the two published K11 fits and their rounded join.
     weak_g = 1.0e-8
-    @test CompactLES._sm_K11(weak_g) ≈ -log(1.4660weak_g) / 4 rtol=2e-8
-    below = CompactLES._sm_K11(prevfloat(1.0))
-    above = CompactLES._sm_K11(1.0)
+    @test CompactLES.DiffusionData._sm_K11(weak_g) ≈ -log(1.4660weak_g) / 4 rtol=2e-8
+    below = CompactLES.DiffusionData._sm_K11(prevfloat(1.0))
+    above = CompactLES.DiffusionData._sm_K11(1.0)
     @test below > 0 && above > 0
     @test below ≈ above rtol=2e-4
 

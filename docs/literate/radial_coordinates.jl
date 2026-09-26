@@ -54,7 +54,7 @@ problem = Problem(
 
 numerics = Numerics(
     n_global = (nr, 1, 1),
-    art = ArtParams(enabled = false),
+    art = ArtificialProperties(enabled = false),
     cfl = 0.5,
     filter_interval = 0,
 )

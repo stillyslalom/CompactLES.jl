@@ -45,9 +45,17 @@ amr = AMR(
     subcycle = true,
 )
 
+# A fixed region can be given as a shape instead of a predicate. The shapes
+# are in the `CompactLES.Regions` submodule, which `using CompactLES` does not
+# load. Makie also exports `Box` and `Sphere`, so after `using CairoMakie`
+# write those two as `Regions.Box` and `Regions.Sphere`.
+
+using CompactLES.Regions
+fixed = AMR(initial = Slab(1, lo = 0.2, hi = 0.4), subcycle = true)
+
 root_nodes = 64
 common = (
-    art = ArtParams(enabled = false),
+    art = ArtificialProperties(enabled = false),
     filter_interval = 0,
     cfl = 0.35,
 )

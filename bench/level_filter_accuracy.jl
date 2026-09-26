@@ -6,6 +6,7 @@
 # 48-node root cannot provide nine filter nodes to each rank.
 
 using CompactLES
+using CompactLES: padded_index, xcoord
 using MPI
 using Printf
 
@@ -61,7 +62,7 @@ function _lf_regional_errors(solver, states, reference; comp=1, W=SMOOTH_W)
         hi_interface = patch.bcs[1][2] isa CompactLES.InterfaceBC
         e2 = zeros(size(Q, 1), size(Q, 2), size(Q, 3))
         for i in 1:decomp.n_local[1]
-            I = gidx(ps, i, 1, 1)
+            I = padded_index(ps, i, 1, 1)
             e = abs(Q[I, comp] - reference(xcoord(ps, 1, i))[comp])
             e2[I] = e * e
             # `i` is rank-local. Classify a window from the node's index in
@@ -168,7 +169,7 @@ function _lf_reflection_solution(; refine=nothing, subcycle=false, nmax=20000)
     ic(x, y, z) = Prim(rho=(1 + pulse(x))^(1 / 1.4),
                        p=1 + pulse(x), u=(pulse(x) / c0, 0, 0))
     solver = Solver(n_global=(N, 1, 1), L_domain=(2pi, 1.0, 1.0),
-                    bcs=bcs, art=ArtParams(enabled=false), filter_interval=1,
+                    bcs=bcs, art=ArtificialProperties(enabled=false), filter_interval=1,
                     filter_cfl=0.35, refine=refine, subcycle=subcycle)
     state = allocate_state(solver)
     initialize!(solver, state, ic)
@@ -182,7 +183,7 @@ function _lf_reflection_solution(; refine=nothing, subcycle=false, nmax=20000)
     leftgoing = Float64[]
     for i in 1:ps.decomp.n_local[1]
         xcoord(ps, 1, i) < 2.1 || continue
-        I = gidx(ps, i, 1, 1)
+        I = padded_index(ps, i, 1, 1)
         dp = ps.p[I] - 1
         push!(pressure, dp)
         push!(leftgoing, (dp - c0 * ps.u[I]) / 2)

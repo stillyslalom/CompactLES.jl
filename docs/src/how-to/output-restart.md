@@ -1,5 +1,9 @@
 # Write output and restart
 
+```@meta
+CurrentModule = CompactLES
+```
+
 ## Write a visualization frame
 
 ```julia

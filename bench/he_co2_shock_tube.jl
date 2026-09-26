@@ -54,6 +54,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: padded_index
 using Printf
 
 const DEFAULTS = (nx = 768, ny = 48, tfinal = 2.5e-3, cfl = 0.5, alphaf = 0.45,
@@ -90,7 +91,7 @@ function main()
     prob = Problem(
         name = "He-driven RM shock tube, ideal mixture",
         eos = eos,
-        transport = Transport(mu0=0.0),   # Euler + artificial regularization
+        transport = ConstantTransport(mu0=0.0),   # Euler + artificial regularization
         domain = ((0.0, Lx), (0.0, Lyz), (0.0, Lyz)),
         bcs = ((SlipWallBC(), SlipWallBC()),
                (PeriodicBC(), PeriodicBC()), (PeriodicBC(), PeriodicBC())),
@@ -101,10 +102,12 @@ function main()
             Prim(Y = (1 - θ, θ), p = p, T_ion = T0)
         end)
 
-    art = ArtParams(enabled=true, C_mu=opt.C_mu, C_beta=opt.C_beta,
-                    C_kappa=opt.C_kappa, C_D=opt.C_D, C_Y=opt.C_Y,
-                    mu_sensor=Symbol(opt.mu_sensor), beta_sensor=Symbol(opt.beta_sensor),
-                    reduction=Symbol(opt.reduction), detector=Symbol(opt.detector))
+    art = ArtificialProperties(enabled=true, C_mu=opt.C_mu, C_beta=opt.C_beta,
+                               C_kappa=opt.C_kappa, C_D=opt.C_D, C_Y=opt.C_Y,
+                               mu_sensor=Symbol(opt.mu_sensor),
+                               beta_sensor=Symbol(opt.beta_sensor),
+                               reduction=Symbol(opt.reduction),
+                               detector=Symbol(opt.detector))
     deriv = opt.deriv == "c10" ? lele_d1_10() :
             opt.deriv == "c6" ? lele_d1_6() :
             error("deriv must be c6 or c10, got $(opt.deriv)")
@@ -134,7 +137,7 @@ function main()
         ρmin, ρmax, umax = Inf, -Inf, 0.0
         y1min, y1max, y2min, y2max = Inf, -Inf, Inf, -Inf
         for k in 1:n3, j in 1:n2, i in 1:n1
-            I = gidx(solver, i, j, k)
+            I = padded_index(solver, i, j, k)
             ρ = Q[I, 1] + Q[I, 2]
             ρmin = min(ρmin, ρ); ρmax = max(ρmax, ρ)
             umax = max(umax, abs(Q[I, m1] / ρ))

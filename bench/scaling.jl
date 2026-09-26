@@ -8,6 +8,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: compute_rhs!
 using Printf
 const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
@@ -25,7 +26,7 @@ println("threads = ", Threads.nthreads())
 @printf("%-8s %10s %12s %12s\n", "N", "points", "rhs [ms]", "ns/point")
 for N in (24, 32, 48, 64, 96)
     solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3,
-               transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
+               transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=true))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
     dQ = zero(Q)
@@ -37,7 +38,7 @@ end
 # 1-D radial (converging_shock.jl shape): threading overhead should dominate
 sf = Solver(n_global=(512, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
             bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-            art=ArtParams(enabled=true))
+            art=ArtificialProperties(enabled=true))
 Qf = allocate_state(sf)
 initialize!(sf, Qf, (r, θ, z) -> Prim(u=(0, 0, 0), p=1 + exp(-40(r - 0.4)^2), rho=1.0))
 dQf = zero(Qf)

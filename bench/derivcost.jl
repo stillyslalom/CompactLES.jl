@@ -90,6 +90,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: compute_rhs!
 using Printf
 using Statistics
 using LinearAlgebra: BLAS
@@ -127,7 +128,7 @@ function build(case, deriv, N, cfl, dims)
     c0 = 10.0                      # Ma ~ 0.1 at |u|max = 1
     p0 = c0^2 / γ
     prob = Problem(eos=IdealSpecies("gas"; R=1.0, gamma=γ),
-                   transport=Transport(mu0=1 / 1600),
+                   transport=ConstantTransport(mu0=1 / 1600),
                    domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)),
                    bcs=case_bcs(case),
                    ic=(x, y, z) -> Prim(
@@ -138,7 +139,7 @@ function build(case, deriv, N, cfl, dims)
     return setup(prob, Numerics(n_global=(N, N, N), cfl=cfl,
                                 deriv=deriv_scheme(deriv),
                                 filt=compact_filter(0.45),
-                                art=ArtParams(), dims=dims))
+                                art=ArtificialProperties(), dims=dims))
 end
 
 # Minimum over repeated calls: the phase timings below compare stencils on a

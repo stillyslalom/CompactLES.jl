@@ -53,7 +53,7 @@ run!(solver, Q; tfinal=1.0)
 - **Multicomponent thermodynamics.** Any number of transported species behind a
   pluggable EOS; `IdealMixture`, `Nasa9Mixture` (NASA CEA piecewise cp), and
   `StiffenedGas`.
-- **Molecular transport.** Constant-property `Transport` or temperature-dependent
+- **Molecular transport.** `ConstantTransport` or temperature-dependent
   `CeaTransport`, with unity-Lewis or mixture-averaged species diffusion.
   Bundled neutral binary diffusion correlations can be fitted over an explicit
   temperature interval and used directly in the flux calculation.
@@ -125,7 +125,7 @@ Prim(; u=(0,0,0), p=NaN, T_ion=NaN, rho=NaN, Y=(1.0,))
 ```julia
 prob = Problem(
     eos       = IdealSpecies("gas"; R=1.0, gamma=1.4),  # or IdealMixture(["He", "CO2"])
-    transport = Transport(mu0=1/1600, Pr=0.7, Sc=0.7),  # viscosity, Prandtl, Schmidt
+    transport = ConstantTransport(mu0=1/1600, Pr=0.7, Sc=0.7),  # viscosity, Prandtl, Schmidt
     metric    = CartesianMetric(),                      # or Cylindrical / Spherical
     sources   = (ConstantBodyForce((0.0, -9.81, 0.0)),),
     domain    = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),   # (lo, hi) per dimension
@@ -156,7 +156,7 @@ Nasa9Mixture(["He", "CO2"])                 # temperature-dependent mixture
 |--------|-------------|
 | `IdealSpecies` / `IdealMixture` | Constant species heat capacities are adequate over the temperature range. |
 | `Nasa9Mixture` | Temperature-dependent heat capacities matter; the gas remains thermally ideal. |
-| `Transport` | You prescribe constant viscosity and Prandtl/Schmidt numbers, often in a nondimensional study. |
+| `ConstantTransport` | You prescribe constant viscosity and Prandtl/Schmidt numbers, often in a nondimensional study. |
 | `CeaTransport` | You need dimensional, temperature-dependent gas transport; specify binary diffusion data when unity Lewis is inadequate. |
 | Static refinement / regridding | A known region / a moving feature needs higher resolution than the rest of a Cartesian domain. |
 
@@ -192,6 +192,7 @@ coordinates:
 ```julia
 AMR(initial = :sensor, subcycle = true)          # follow shocks and interfaces
 AMR(initial = (x, y, z, t) -> abs(x - 0.5 - 0.2t) < 0.1)   # a prescribed path
+using CompactLES.Regions                         # Box, Sphere and the other shapes
 AMR(initial = [Box((0.2, 0, 0), (0.6, 1, 1)),    # fixed nested levels,
                Sphere((0.4, 0.5, 0.5), 0.05)])   # finest last
 ```

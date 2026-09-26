@@ -7,6 +7,8 @@
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: padded_index
+using CompactLES.Regions
 using Test
 
 @testset "shock relations reproduce the constant-γ closed forms" begin
@@ -130,12 +132,12 @@ end
                              width=0.005))
     solver, Q = setup(prob, Numerics(n_global=(32, 32, 1)))
     Yhe = field_array(solver, Q, :Y; species=2)
-    @test Yhe[gidx(solver, 17, 17, 1)] ≈ 1 atol = 1e-12
+    @test Yhe[padded_index(solver, 17, 17, 1)] ≈ 1 atol = 1e-12
     # On the box's boundary half the volume is helium, a mole fraction of 1/2
     # and a mass fraction of W_He / (W_He + W_N2).
     Xhe = field_array(solver, Q, :X; species=2)
-    @test Xhe[gidx(solver, 1, 1, 1)] ≈ 0.5 rtol = 1e-12
-    @test Yhe[gidx(solver, 17, 30, 1)] < 1e-12
+    @test Xhe[padded_index(solver, 1, 1, 1)] ≈ 0.5 rtol = 1e-12
+    @test Yhe[padded_index(solver, 17, 30, 1)] < 1e-12
     @test signed_distance(Sphere((0.0, 0.0, 0.0), 1.0), (2.0, 0.0, 9.0),
                           (true, false, false)) ≈ 1.0
     @test signed_distance(!Sphere((0.0, 0.0, 0.0), 1.0) ∩ Box((-2, -2, -2), (2, 2, 2)),
@@ -158,7 +160,7 @@ end
                    bcs=(PeriodicBC(), PeriodicBC(), PeriodicBC()),
                    ic=(x, y, z) -> Prim(p=1.0, rho=1.0 + 0.1sin(2π * x)))
     num = Numerics(n_global=(96, 1, 1), filter_interval=0,
-                   art=ArtParams(enabled=false),
+                   art=ArtificialProperties(enabled=false),
                    amr=AMR(initial=(x, y, z) -> abs(x - 0.5) < 0.05))
     solver, states = setup(prob, num)
     @test nlevels(solver) == 2
@@ -168,14 +170,14 @@ end
     @test length(x) == 96
     @test maximum(abs.(rho .- (1.0 .+ 0.1sin.(2π .* x)))) < 1e-12
     @test_throws ArgumentError setup(prob, Numerics(n_global=(96, 1, 1),
-        art=ArtParams(enabled=false),
+        art=ArtificialProperties(enabled=false),
         amr=AMR(initial=:sensor, tag_sensor_threshold=1.0)))
 end
 
 @testset "erf transitions and multimode interfaces" begin
-    @test CompactLES._erf(0.5) ≈ 0.5204998778130465 rtol = 1e-15
-    @test CompactLES._erf(2.0) ≈ 0.9953222650189527 rtol = 1e-15
-    @test all(x -> abs(CompactLES._erf(x)) <= 1, range(-7, 7, length=1401))
+    @test CompactLES.Regions._erf(0.5) ≈ 0.5204998778130465 rtol = 1e-15
+    @test CompactLES.Regions._erf(2.0) ≈ 0.9953222650189527 rtol = 1e-15
+    @test all(x -> abs(CompactLES.Regions._erf(x)) <= 1, range(-7, 7, length=1401))
     m = Multimode(lengths=(0.05,), modes=1:8, rms=5e-4, spectrum=n -> n^-2.0)
     ys = range(0, 0.05, length=4001)[1:end-1]
     @test sqrt(sum(abs2, m.(ys)) / length(ys)) ≈ 5e-4 rtol = 1e-10
@@ -247,7 +249,7 @@ end
     per = PeriodicBC()
     prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(per, per, per),
                    ic=(x, y, z) -> Prim(p=1.0, rho=1.0 + 0.1sin(2π * x)))
-    base = (n_global=(96, 1, 1), filter_interval=0, art=ArtParams(enabled=false))
+    base = (n_global=(96, 1, 1), filter_interval=0, art=ArtificialProperties(enabled=false))
     nested = AMR(initial=[Box((0.3, 0, 0), (0.7, 1, 1)), Box((0.45, 0, 0), (0.55, 1, 1))])
     solver, states = setup(prob, Numerics(; base..., amr=nested))
     @test nlevels(solver) == 3
@@ -303,7 +305,7 @@ end
         prob = Problem(eos=eos, domain=domain, bcs=(walls, PeriodicBC(), PeriodicBC()),
                        ic=ic, sources=(force,))
         s, q = setup(prob, Numerics(n_global=(n, 1, 1), filter_interval=filter_interval,
-                                    art=ArtParams(enabled=false)))
+                                    art=ArtificialProperties(enabled=false)))
         run!(s, q; tfinal=1e9, nmax=nmax)
         _, u = line_profile(s, q, :u)
         return s, q, maximum(abs, u)
@@ -331,12 +333,12 @@ end
                                   p_ref=10.0, at=0.0),
                    sources=(ConstantBodyForce((0.0, -1.0, 0.0)),))
     plane, Qp = setup(prob, Numerics(n_global=(12, 48, 1), filter_interval=0,
-                                     art=ArtParams(enabled=false)))
+                                     art=ArtificialProperties(enabled=false)))
     run!(plane, Qp; tfinal=1e9, nmax=200)
     m = maximum(I -> max(abs(Qp[I, 3]), abs(Qp[I, 4])),
                 CompactLES.interior(plane.decomp))
     @test m < 1e-13
-    @test field_array(plane, Qp, :p)[gidx(plane, 5, 1, 1)] ≈ 10.0 rtol = 1e-12
+    @test field_array(plane, Qp, :p)[padded_index(plane, 5, 1, 1)] ≈ 10.0 rtol = 1e-12
 
     bad(bcs, sources; kw...) =
         setup(Problem(eos=eos, domain=domain, bcs=bcs, sources=sources,

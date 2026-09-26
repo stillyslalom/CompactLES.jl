@@ -15,6 +15,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: CPUBackend
 using Printf
 const CL = CompactLES
 

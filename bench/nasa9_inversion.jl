@@ -31,6 +31,7 @@
 #   julia --project=. -t 1 bench/nasa9_inversion.jl N=48 extrapolate=linear
 
 using CompactLES
+using CompactLES: recover_primitives!
 using Printf
 
 const CL = CompactLES

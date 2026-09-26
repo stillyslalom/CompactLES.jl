@@ -4,6 +4,7 @@
 #      mpiexec -n 2 julia --project=. -t 1 examples/taylor_green.jl N=64
 
 using CompactLES
+using CompactLES: padded_index
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
 const opt = CompactLES.script_args(ARGS, (N=64, tfinal=1.0, nmax=200, every=10, output="");
@@ -16,7 +17,7 @@ mpi_main() do
     problem = Problem(
         name="Taylor-Green vortex",
         eos=IdealSpecies("gas"; R=1.0, gamma=gamma_gas),
-        transport=Transport(mu0=1.0 / reynolds),
+        transport=ConstantTransport(mu0=1.0 / reynolds),
         domain=((0.0, 2pi), (0.0, 2pi), (0.0, 2pi)),
         bcs=(PeriodicBC(), PeriodicBC(), PeriodicBC()),
         ic=(x, y, z) -> Prim(
@@ -24,7 +25,8 @@ mpi_main() do
             p=p0 + (cos(2x) + cos(2y)) * (cos(2z) + 2) / 16,
             rho=1.0),
     )
-    numerics = Numerics(n_global=(opt.N, opt.N, opt.N), art=ArtParams(enabled=false),
+    numerics = Numerics(n_global=(opt.N, opt.N, opt.N),
+                        art=ArtificialProperties(enabled=false),
                         cfl=0.6, filter_interval=1)
     solver, Q = setup(problem, numerics)
     ke_field = CompactLES.field(solver.decomp)
@@ -32,7 +34,7 @@ mpi_main() do
         nx, ny, nz = solver.decomp.n_local
         m1, m2, m3 = solver.equations.i_mom
         for k in 1:nz, j in 1:ny, i in 1:nx
-            I = gidx(solver, i, j, k)
+            I = padded_index(solver, i, j, k)
             ke_field[I] = (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / (2Q[I, 1])
         end
         volume_integral(solver, ke_field)

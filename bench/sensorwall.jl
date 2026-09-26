@@ -84,7 +84,7 @@ windows(N, w, p, scale, nodes) =
 # fold continues the field with; the two are the same statement about the field
 # at boundaries of different kinds.
 function detector_case(N, detector, fn, σw, nodes, folded)
-    art = ArtParams(detector=detector)
+    art = ArtificialProperties(detector=detector)
     sw, sp = build(N, art, folded)
     gw, gp = load(sw, fn), load(sp, fn)
     ow, op = CL.field(sw.decomp), CL.field(sp.decomp)
@@ -96,7 +96,7 @@ function detector_case(N, detector, fn, σw, nodes, folded)
 end
 
 function smoother_case(N, smoother, nodes, folded)
-    art = ArtParams(smoother=smoother)
+    art = ArtificialProperties(smoother=smoother)
     sw, sp = build(N, art, folded)
     fw, fp = load(sw, even_field), load(sp, even_field)
     scale = maximum(abs, line(sp, fp))

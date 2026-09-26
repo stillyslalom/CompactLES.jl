@@ -283,8 +283,8 @@ function tgv_build(T, deriv, n, ka_backend)
     p0 = c0^2 / γ
     s = Solver(n_global=(n, n, n), L_domain=(T(2π), T(2π), T(2π)),
                bcs=(per, per, per), eos=IdealSpecies("gas"; R=one(T), gamma=T(1.4)),
-               transport=Transport{T}(mu0=T(1 / 1600)),
-               art=ArtParams{T}(enabled=false),
+               transport=ConstantTransport{T}(mu0=T(1 / 1600)),
+               art=ArtificialProperties{T}(enabled=false),
                deriv=deriv, filt=compact_filter(T(0.45), T),
                cfl=T(0.6), backend=DeviceBackend(ka_backend))
     Q = allocate_state(s)

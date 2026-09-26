@@ -1,5 +1,9 @@
 # Thermodynamics and species transport
 
+```@meta
+CurrentModule = CompactLES
+```
+
 ## Why an EOS is required
 
 The conserved state provides density, momentum, and total energy. Fluxes and
@@ -80,7 +84,7 @@ callback.
 
 ## Temperature-dependent molecular transport
 
-[`Transport`](@ref) retains constant viscosity and Prandtl/Schmidt numbers.
+[`ConstantTransport`](@ref) retains constant viscosity and Prandtl/Schmidt numbers.
 For dimensional gas calculations, use the bundled CEA pure-species fits:
 
 ```julia
@@ -179,7 +183,7 @@ contributions; the thermal stability rate uses ``c_v``, while unity Lewis uses
 
 ## Species diffusion
 
-The constant [`Transport`](@ref) uses the same molecular diffusivity
+[`ConstantTransport`](@ref) uses the same molecular diffusivity
 `mu0 / (rho * Sc)` for every species. [`CeaTransport`](@ref) offers a unity-Lewis
 fallback or species-specific mixture-averaged diffusivities from supplied
 binary data. Artificial diffusivity may differ by species because each mass

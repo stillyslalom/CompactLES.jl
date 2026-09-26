@@ -9,6 +9,7 @@
 # establish hardware coverage. Manufactured evolution/budgets live in
 # test/wall_flux_tests.jl. This script asserts its acceptance criteria.
 using CompactLES, MPI, KernelAbstractions
+using CompactLES: correct_flux!, compute_rhs!, apply_bcs!, CPUBackend
 const CL = CompactLES
 opt = CL.script_args(ARGS, (backend="cpu",))
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
@@ -37,8 +38,8 @@ function wall_case(::Type{T}, d, kind, channel, backend) where T
                         IdealSpecies(T, "b"; R=T(0.7), gamma=T(1.3))))
     s = Solver(n_global=(12, 12, 12), L_domain=(one(T), one(T), one(T)),
                bcs=ntuple(_ -> (wall, wall), 3), eos=eos, backend=backend,
-               transport=Transport{T}(mu0=T(0.01)),
-               art=ArtParams{T}(enabled=true, species_flux=channel),
+               transport=ConstantTransport{T}(mu0=T(0.01)),
+               art=ArtificialProperties{T}(enabled=true, species_flux=channel),
                deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
                filter_interval=0)
     Q = allocate_state(s)

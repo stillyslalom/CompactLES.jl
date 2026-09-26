@@ -6,6 +6,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: compute_rhs!, apply_bcs!
 using Printf
 const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
@@ -119,8 +120,8 @@ end
 # `detector=d8` adds a pentadiagonal solve per active dimension per detected
 # field; `mu_sensor=velocity` triples the fields the μ* channel detects, which
 # is free under `:delta4` and three line solves per dimension under `:d8`.
-# Defaults track `ArtParams()` so a bare run profiles the default configuration.
-const ART_DEFAULTS = ArtParams()
+# Defaults track `ArtificialProperties()` so a bare run profiles the default configuration.
+const ART_DEFAULTS = ArtificialProperties()
 opt = CompactLES.script_args(ARGS, (smoother = ART_DEFAULTS.smoother,
                          detector = ART_DEFAULTS.detector,
                          mu_sensor = ART_DEFAULTS.mu_sensor,
@@ -130,7 +131,7 @@ opt = CompactLES.script_args(ARGS, (smoother = ART_DEFAULTS.smoother,
 
 # tgv-like: 3-D periodic, single species, art off
 s1 = Solver(n_global=(64, 64, 64), L_domain=(2π, 2π, 2π), bcs=per3,
-            transport=Transport(mu0=1e-3), art=ArtParams(enabled=false))
+            transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=false))
 Q1 = allocate_state(s1)
 initialize!(s1, Q1, (x, y, z) -> Prim(u=(sin(x) * cos(y), -cos(x) * sin(y), 0.0),
                                       p=1 + 0.05cos(2z), rho=1.0))
@@ -141,10 +142,10 @@ eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                     IdealSpecies{Float64}("heavy", 0.2, 1.09)])
 s2 = Solver(n_global=(512, 32, 1), L_domain=(1.0, 0.06, 1.0), eos=eos,
             bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-            art=ArtParams(enabled=true, smoother=opt.smoother,
-                          detector=opt.detector, mu_sensor=opt.mu_sensor,
-                          beta_sensor=opt.beta_sensor, reduction=opt.reduction,
-                          species_flux=Symbol(opt.species_flux)))
+            art=ArtificialProperties(enabled=true, smoother=opt.smoother,
+                                     detector=opt.detector, mu_sensor=opt.mu_sensor,
+                                     beta_sensor=opt.beta_sensor, reduction=opt.reduction,
+                                     species_flux=Symbol(opt.species_flux)))
 Q2 = allocate_state(s2)
 initialize!(s2, Q2, (x, y, z) -> begin
     θ = tanh_blend(x, 0.5, 0.02)

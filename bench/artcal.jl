@@ -52,7 +52,7 @@ const CL = CompactLES
 include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
-const DEFAULTS = ArtParams()
+const DEFAULTS = ArtificialProperties()
 const ALL = ["mu", "beta", "kappa", "D", "Y", "cfl", "filter", "resolution",
              "sensor", "smoother", "detector", "field", "response",
              "brill2025", "bulk", "bulkconst"]
@@ -61,7 +61,7 @@ const ALL = ["mu", "beta", "kappa", "D", "Y", "cfl", "filter", "resolution",
 # is exactly `artcal.jl kappa smoother=gaussian`, and keeping the two forms in
 # using one argument list avoids a second script.
 #
-# The background defaults are read off `ArtParams()` rather than written out, so
+# The background defaults are read off `ArtificialProperties()` rather than written out, so
 # a bare run measures against the default configuration and follows it when the
 # default moves. Spelled-out values became stale when the smoother default
 # changed: every sweep then silently measured on top of
@@ -100,13 +100,13 @@ want(name) = name in WHICH
 # exposes a failure that gets *worse* as the timestep falls.
 const CAP = 30_000
 
-art(; kw...) = ArtParams(; enabled=true,
-                         C_mu=DEFAULTS.C_mu, C_beta=DEFAULTS.C_beta,
-                         C_kappa=DEFAULTS.C_kappa, C_D=DEFAULTS.C_D,
-                         mu_sensor=DEFAULTS.mu_sensor,
-                         beta_sensor=DEFAULTS.beta_sensor,
-                         reduction=DEFAULTS.reduction,
-                         smoother=OPTS.smoother, detector=OPTS.detector, kw...)
+art(; kw...) = ArtificialProperties(; enabled=true,
+                                    C_mu=DEFAULTS.C_mu, C_beta=DEFAULTS.C_beta,
+                                    C_kappa=DEFAULTS.C_kappa, C_D=DEFAULTS.C_D,
+                                    mu_sensor=DEFAULTS.mu_sensor,
+                                    beta_sensor=DEFAULTS.beta_sensor,
+                                    reduction=DEFAULTS.reduction,
+                                    smoother=OPTS.smoother, detector=OPTS.detector, kw...)
 
 mark(v, d) = v == d ? "*" : " "     # flags the default in a sweep
 
@@ -524,7 +524,7 @@ if want("response")
     N = 64
     function sine_solver(k, a)
         prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
-                       transport=Transport(mu0=0.0),
+                       transport=ConstantTransport(mu0=0.0),
                        domain=((0.0, 2π), (0.0, 0.1), (0.0, 0.1)), bcs=per3,
                        ic=(x, y, z) -> Prim(rho=1.0, p=1.0,
                                             u=(cos(k * x), 0.0, 0.0)))

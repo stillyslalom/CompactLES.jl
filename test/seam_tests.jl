@@ -5,6 +5,8 @@
 # rest of the suite passed while the seam was wrong. Included from runtests.jl,
 # which supplies `CL`, `per3`, `fillf!` and `ferr`.
 
+using CompactLES: compute_rhs!, apply_bcs!, xcoord
+
 @testset "resolved axis: velocity components of a smooth Cartesian field" begin
     # A uniform Cartesian flow has u_r = cosθ and u_θ = −sinθ: both vary in θ
     # and are constant along every line through the axis, so their radial
@@ -14,7 +16,7 @@
     solver = Solver(n_global=(24, 32, 1), L_domain=(1.0, 2π, 1.0),
                     metric=CylindricalMetric(),
                     bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                    art=ArtParams(enabled=false))
+                    art=ArtificialProperties(enabled=false))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     for (fun, dfun, σ) in (((r, θ, z) -> cos(θ), (r, θ, z) -> 0.0, -1),
                            ((r, θ, z) -> -sin(θ), (r, θ, z) -> 0.0, -1),
@@ -30,7 +32,7 @@
     solver = Solver(n_global=(24, 64, 1), L_domain=(1.0, 2π, 1.0),
                     metric=CylindricalMetric(),
                     bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                    art=ArtParams(mu_sensor=:velocity))
+                    art=ArtificialProperties(mu_sensor=:velocity))
     Q = allocate_state(solver)
     initialize!(solver, Q, (r, θ, z) -> Prim(u=(cos(θ), -sin(θ), 0.0), p=1.0, rho=1.0))
     apply_bcs!(solver, Q)
@@ -51,7 +53,7 @@ end
     solver = Solver(n_global=(16, 32, 12), L_domain=(1.0, π/2, 2π),
                     origin=(1.0, π/4, 0.0), metric=SphericalMetric(),
                     bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
-                         per3[3]), art=ArtParams(enabled=false))
+                         per3[3]), art=ArtificialProperties(enabled=false))
     o1, o2, o3 = solver.decomp.n_halo_d
     nx, ny = solver.decomp.n_local[1], solver.decomp.n_local[2]
     ana(i, j) = cos(xcoord(solver, 2, j)) / (xcoord(solver, 1, i) * sin(xcoord(solver, 2, j)))
@@ -75,7 +77,7 @@ end
     # its reciprocal, and the two differed in the last bit.
     solver = Solver(n_global=(24, 24, 12), L_domain=(1.0, 1.0, 0.5),
                     bcs=((SlipWallBC(), SlipWallBC()), (SlipWallBC(), SlipWallBC()),
-                         per3[3]), deriv=lele_d1_10(), art=ArtParams(enabled=false))
+                         per3[3]), deriv=lele_d1_10(), art=ArtificialProperties(enabled=false))
     f = CL.field(solver.decomp); g = CL.field(solver.decomp)
     d1 = CL.field(solver.decomp); d2 = CL.field(solver.decomp)
     fn(x, y, z) = exp(sin(3x)) * (1 + 0.1z)
@@ -95,8 +97,8 @@ end
     # at γ = 1.4, a 40% larger thermal rate than the cp form gives.
     n = (16, 16, 12)
     solver = Solver(n_global=n, L_domain=(1.0, 1.0, 0.75), bcs=per3,
-                    transport=Transport(mu0=1e-2, Pr=1e-3, Sc=1.0),
-                    art=ArtParams(enabled=false))
+                    transport=ConstantTransport(mu0=1e-2, Pr=1e-3, Sc=1.0),
+                    art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
     rate, _ = CL.max_rate(solver, Q)

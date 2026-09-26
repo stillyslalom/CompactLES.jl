@@ -36,6 +36,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: compute_rhs!, apply_bcs!
 using Printf
 
 const CL = CompactLES
@@ -62,7 +63,7 @@ function jet_case(n, inflow, art)
     face = CompositeBC((wall, orifice), (x, y, z) -> abs(x - xc) < w ? 2 : 1)
     s = Solver(n_global=(n, n, 1), L_domain=(1.0, 1.0, 1.0),
                bcs=((wall, wall), (face, wall), PeriodicBC()),
-               transport=Transport(mu0=2e-3), art=ArtParams(enabled=art),
+               transport=ConstantTransport(mu0=2e-3), art=ArtificialProperties(enabled=art),
                filter_interval=art ? 1 : 0)
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0))
@@ -109,7 +110,8 @@ function slots()
                        (x, y, z) -> abs(y - 1) < ws ? 2 : 1)
     s = Solver(n_global=(33, 65, 1), L_domain=(1.0, 2.0, 1.0),
                bcs=((side, side), (bottom, top), PeriodicBC()), eos=eos,
-               transport=Transport(mu0=OPTS.mu), art=ArtParams(enabled=true))
+               transport=ConstantTransport(mu0=OPTS.mu),
+               art=ArtificialProperties(enabled=true))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> begin
         θ = 0.5 * (1 + tanh((y - 1) / 0.05))

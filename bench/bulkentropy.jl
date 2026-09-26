@@ -16,7 +16,7 @@
 # c_v,k = R_k/(γ_k − 1). Signs follow η = −ρs, so a positive number is entropy
 # produced and the continuous model's channel contribution is nonnegative.
 #
-# Both flow cases are inviscid (`Transport(mu0 = 0)`), so no physical
+# Both flow cases are inviscid (`ConstantTransport(mu0 = 0)`), so no physical
 # dissipation enters any number reported: what is measured is the scheme's own
 # entropy budget, split into the artificial species channel, the rest of the
 # right-hand side, and the filter.
@@ -93,6 +93,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: padded_index
 using Printf
 using Random
 
@@ -108,7 +109,7 @@ const DEFAULTS = (N = 32, tfin = 2.0, nmax = typemax(Int), ratio = 5.04,
                   parts = "variables,production,step")
 
 # A partial density at or below zero is outside the entropy's domain, and the
-# species bound of `ArtParams` reduces such an excursion without removing it, so
+# species bound of `ArtificialProperties` reduces such an excursion without removing it, so
 # a two-species interface produces them and the run continues. The logarithm is
 # floored rather than allowed to raise, at this fraction of the local mixture
 # density: relative, so a floored point contributes a bounded ~28 R_k ρ_k
@@ -278,7 +279,7 @@ function entropy_total(solver, Q, buf)
     q, f = buf.q, buf.field
     bad = 0
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        I = gidx(solver, i, j, k)
+        I = padded_index(solver, i, j, k)
         for c in 1:buf.n_cons
             q[c] = Q[I, c]
         end
@@ -302,7 +303,7 @@ function production_integral(solver, Q, dQ, dQ_off, buf)
     q, w, f = buf.q, buf.w, buf.field
     bad = 0
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        I = gidx(solver, i, j, k)
+        I = padded_index(solver, i, j, k)
         for c in 1:buf.n_cons
             q[c] = Q[I, c]
         end
@@ -339,7 +340,7 @@ function quadratic_integral(solver, Q, buf)
     D_b = solver.D_art[1]
     gQ = solver.grad_Q
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        I = gidx(solver, i, j, k)
+        I = padded_index(solver, i, j, k)
         for c in 1:buf.n_cons
             q[c] = Q[I, c]
         end
@@ -375,7 +376,7 @@ function partial_density_integral(solver, Q, buf)
     D_b = solver.D_art[1]
     gQ = solver.grad_Q
     @inbounds for k in 1:nz, j in 1:ny, i in 1:nx
-        I = gidx(solver, i, j, k)
+        I = padded_index(solver, i, j, k)
         for c in 1:buf.n_cons
             q[c] = Q[I, c]
         end
@@ -414,7 +415,7 @@ function interface_problem(ratio)
     eos = IdealMixture([IdealSpecies{Float64}("air", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 1 / ratio, 1.09)])
     amp = 0.1 * sqrt(1.4)          # Mach 0.1 on air's sound speed at p = T = 1
-    return Problem(eos=eos, transport=Transport(mu0=0.0),
+    return Problem(eos=eos, transport=ConstantTransport(mu0=0.0),
                    domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3,
                    ic=(x, y, z) -> begin
                        r = sqrt((x - π)^2 + (y - π)^2 + (z - π)^2)
@@ -444,7 +445,7 @@ function slab_setup(art)
     w = 3 * BR_NP * h / 16
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 1 / BR_R, 1.4)])
-    prob = Problem(eos=eos, transport=Transport(mu0=0.0),
+    prob = Problem(eos=eos, transport=ConstantTransport(mu0=0.0),
                    domain=((0.0, 1.0), (0.0, h), (0.0, h)), bcs=per3,
                    ic=(x, y, z) -> begin
                        V = (1 - tanh((abs(x - 0.5) - 0.25) / w)) / 2
@@ -588,8 +589,8 @@ function part_production(opt, rank)
     rank == 0 && println("\n=== semi-discrete entropy production of the " *
                          "species channel ===")
     for channel in (:partial_density, :bulk, :fickian)
-        art_on = ArtParams(species_flux=channel)
-        art_off = ArtParams(species_flux=channel, C_D=0.0, C_Y=0.0)
+        art_on = ArtificialProperties(species_flux=channel)
+        art_off = ArtificialProperties(species_flux=channel, C_D=0.0, C_Y=0.0)
         full, Q = interface_setup(opt, art_on)
         off, Q_off = interface_setup(opt, art_off)
         workspace = Workspace(Q)
@@ -721,10 +722,10 @@ function attempt_step(f, label, rank)
 end
 
 function part_step(opt, rank)
-    configs = (("partial", ArtParams(species_flux=:partial_density)),
-               ("bulk", ArtParams(species_flux=:bulk)),
-               ("fickian", ArtParams(species_flux=:fickian)),
-               ("art off", ArtParams(enabled=false)))
+    configs = (("partial", ArtificialProperties(species_flux=:partial_density)),
+               ("bulk", ArtificialProperties(species_flux=:bulk)),
+               ("fickian", ArtificialProperties(species_flux=:fickian)),
+               ("art off", ArtificialProperties(enabled=false)))
     header = "config     steps/rec  S(0)         dS total    " *
              "|  RK step: dec      worst        sum" *
              " |  filter: dec      worst        sum |  floored  wall"

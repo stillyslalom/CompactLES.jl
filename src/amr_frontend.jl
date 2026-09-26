@@ -39,7 +39,7 @@ nothing tags or holds removes every tile past `tile_lifetime`.
 predicate, where it defaults to `Inf` so that the predicate alone selects the
 refined region; give it explicitly to combine the two.
 `tag_sensor_threshold` reads the artificial coefficients, so it requires
-`ArtParams(enabled = true)`.
+`ArtificialProperties(enabled = true)`.
 
 Regions use root node indices; the ratio between successive levels is three.
 The other keywords match the established refinement controls of [`Numerics`](@ref).
@@ -268,7 +268,7 @@ function _setup_amr(prob, num, amr::AMR)
                             "tile > 0 and regridding"))
     amr.tag_sensor_threshold > 0 && !num.art.enabled &&
         throw(ArgumentError("AMR tag_sensor_threshold reads the artificial " *
-                            "coefficients, which ArtParams(enabled = false) " *
+                            "coefficients, which ArtificialProperties(enabled = false) " *
                             "leaves at zero; enable them or tag with another " *
                             "criterion"))
     if amr.initial isa BlockRegion || amr.initial isa Vector{BlockRegion}

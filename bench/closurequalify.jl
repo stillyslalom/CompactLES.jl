@@ -19,6 +19,7 @@
 module ClosureQualification
 
 using MPI, CompactLES, LinearAlgebra, Printf
+using CompactLES: apply_bcs!, filter_state!, padded_index, xcoord
 const CL = CompactLES
 include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
@@ -64,8 +65,8 @@ function smooth_check(name, deriv, opts)
             errors = Float64[]
             for n in ns
                 settings = (deriv=deriv, viscous=viscous,
-                            art=ArtParams(enabled=art_on,
-                                          beta_sensor=Symbol(opts.beta_sensor)),
+                            art=ArtificialProperties(enabled=art_on,
+                                                     beta_sensor=Symbol(opts.beta_sensor)),
                             cfl=cfl,
                             filter_interval=filtered ? 1 : 0)
                 solver, state = wall_case(n; settings...)
@@ -112,11 +113,11 @@ const DILATATION_CASES = (
 )
 
 function smooth_art(control::AbstractString, beta_sensor::AbstractString)
-    control == "off" && return ArtParams(enabled=false)
+    control == "off" && return ArtificialProperties(enabled=false)
     sensor = Symbol(control == "on" ? beta_sensor : control)
     sensor in (:strain, :dilatation) ||
         error("smooth control must be on, off, strain, or dilatation; got $control")
-    return ArtParams(enabled=true, beta_sensor=sensor)
+    return ArtificialProperties(enabled=true, beta_sensor=sensor)
 end
 
 function smooth_filter(control::AbstractString)
@@ -247,8 +248,8 @@ function uniform_solver(deriv, n; filtered=false, wall=:slip)
     solver = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
                     bcs=((bc, bc), per3[2], per3[3]), deriv=deriv,
                     eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
-                    art=ArtParams(enabled=false),
-                    transport=Transport(mu0=wall == :noslip ? 0.005 : 0.0),
+                    art=ArtificialProperties(enabled=false),
+                    transport=ConstantTransport(mu0=wall == :noslip ? 0.005 : 0.0),
                     filter_interval=filtered ? 1 : 0, filter_cfl=0.0, cfl=0.5)
     state = allocate_state(solver)
     initialize!(solver, state, (x, y, z) -> profile(x, y, z, 0.0))
@@ -260,7 +261,7 @@ function production_jacobian(deriv, n; filtered=false, delta=1e-5, wall=:slip,
                              poststep=nothing)
     solver, initial, sound = uniform_solver(deriv, n; filtered=filtered, wall=wall)
     dt = 0.5 / ((n - 1) * sound)
-    indices = [(gidx(solver, i, 1, 1), c)
+    indices = [(padded_index(solver, i, 1, 1), c)
                for c in 1:solver.equations.n_cons for i in 1:n]
     function step_map(state)
         CL.step!(solver, state, zero(state), zero(state), dt)
@@ -306,10 +307,10 @@ function uniform_check(name, deriv, opts)
         initial = copy(state)
         try
             run!(solver, state; tfinal=opts.longtime, nmax=opts.nmax)
-            velocity = maximum(abs(state[gidx(solver, i, 1, 1), 2] /
-                                   state[gidx(solver, i, 1, 1), 1]) for i in 1:n)
-            drift = maximum(abs(state[gidx(solver, i, 1, 1), c] -
-                                initial[gidx(solver, i, 1, 1), c])
+            velocity = maximum(abs(state[padded_index(solver, i, 1, 1), 2] /
+                                   state[padded_index(solver, i, 1, 1), 1]) for i in 1:n)
+            drift = maximum(abs(state[padded_index(solver, i, 1, 1), c] -
+                                initial[padded_index(solver, i, 1, 1), c])
                             for i in 1:n for c in 1:solver.equations.n_cons)
             @printf("uniform %-15s N=%4d filter=%s t=%.1f |u| %.6e drift %.6e\n",
                     name, n, filtered, solver.t, velocity, drift)
@@ -325,7 +326,7 @@ function stress_check(name, deriv, opts)
     sensor = Symbol(opts.beta_sensor)
     sensor in (:strain, :dilatation) ||
         error("beta_sensor must be strain or dilatation; got $(opts.beta_sensor)")
-    art = ArtParams(enabled=true, beta_sensor=sensor)
+    art = ArtificialProperties(enabled=true, beta_sensor=sensor)
     for start in (0.0, 0.1)
         try
             result = noh_case(1; N=opts.stressn, t0=start, deriv=deriv,

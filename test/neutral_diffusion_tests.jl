@@ -7,6 +7,7 @@
 # directly.
 
 using CompactLES
+using CompactLES.DiffusionData
 using Test
 
 # Marrero and Mason, Table 12, H2-D2 row as printed: 10^3 A = 24.7,
@@ -125,7 +126,7 @@ end
         @test pair.group in (:I, :II, :III, :miscellaneous)
         # Positive, finite and increasing in temperature over the stated range.
         D = [marrero_mason_diffusivity(pair, T, ATM)
-             for T in CompactLES._log_spaced(pair.temperature_min, pair.temperature_max, 200)]
+             for T in CompactLES.DiffusionData._log_spaced(pair.temperature_min, pair.temperature_max, 200)]
         @test all(isfinite, D) && D[1] > 0 && issorted(D; lt=(<=))
     end
     # 74 distinct systems, as the paper counts them.

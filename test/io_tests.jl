@@ -16,6 +16,7 @@ if !@isdefined(CL)
     using Test
     const CL = CompactLES
 end
+using CompactLES: padded_index, global_xcoord, FieldSnapshot, hdf5_available
 
 const io_per = (PeriodicBC(), PeriodicBC())
 
@@ -23,7 +24,7 @@ const io_per = (PeriodicBC(), PeriodicBC())
 # periodic, which keeps the grid small enough to build several of these.
 io_solver(lo, hi; kw...) =
     Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
-           bcs=((lo, hi), io_per, io_per), art=ArtParams(enabled=false), kw...)
+           bcs=((lo, hi), io_per, io_per), art=ArtificialProperties(enabled=false), kw...)
 
 io_state(solver) = begin
     Q = allocate_state(solver)
@@ -63,7 +64,7 @@ end
     # Resuming with this cleared would run the remainder of the calculation
     # under the pre-switch boundary condition, silently.
     @test switched(read_back)
-    @test all(Q2[gidx(s2, i, j, k), c] == Q[gidx(s, i, j, k), c]
+    @test all(Q2[padded_index(s2, i, j, k), c] == Q[padded_index(s, i, j, k), c]
               for c in 1:5, i in 1:12, j in 1:12, k in 1:12)
 
     # A face the file describes as switchable and this solver does not, and the
@@ -138,7 +139,7 @@ end
     # would start from zeros the writer did not have.
     # The configuration record sees the change first; allowing it leaves the
     # coefficient record's own check in force.
-    off = mk(art=ArtParams(enabled=false))
+    off = mk(art=ArtificialProperties(enabled=false))
     @test_throws "configuration mismatch" load_checkpoint!(
         off, allocate_state(off), stem)
     @test_throws "artificial-property mismatch" load_checkpoint!(
@@ -221,7 +222,7 @@ end
     e1 = 3 * 16 - 2
     r2 = BlockRegion((3 * 40 + e1 ÷ 4, 0, 0), (e1 ÷ 2, 1, 1))
     mk3(regions) = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                          refine=regions, art=ArtParams(enabled=false))
+                          refine=regions, art=ArtificialProperties(enabled=false))
     wave(x, y, z) = Prim(u=(0.5, 0, 0), p=1.0, rho=1 + 0.2sin(x))
     s3 = mk3([r1, r2])
     st3 = allocate_state(s3)
@@ -293,8 +294,8 @@ end
     dir = mktempdir()
     stem = joinpath(dir, "f32")
     mk32() = Solver(n_global=(12, 12, 12), L_domain=(one(T), one(T), one(T)),
-                    bcs=ntuple(_ -> io_per, 3), transport=Transport{T}(),
-                    art=ArtParams{T}(enabled=false), deriv=lele_d1_6(T),
+                    bcs=ntuple(_ -> io_per, 3), transport=ConstantTransport{T}(),
+                    art=ArtificialProperties{T}(enabled=false), deriv=lele_d1_6(T),
                     filt=compact_filter(T(0.45), T))
     s = mk32()
     Q = io_state(s)
@@ -307,14 +308,14 @@ end
     Q2 = allocate_state(s2)
     load_checkpoint!(s2, Q2, stem)
     @test s2.step == 5
-    @test all(Q2[gidx(s2, i, j, k), c] == Q[gidx(s, i, j, k), c]
+    @test all(Q2[padded_index(s2, i, j, k), c] == Q[padded_index(s, i, j, k), c]
               for c in 1:5, i in 1:12, j in 1:12, k in 1:12)
 
     # The payload is raw binary, so reading a Float32 block at Float64 does not
     # produce wrong numbers, it runs off the end of the file. The element type
     # is stored to make that a message instead.
     s64 = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                 bcs=ntuple(_ -> io_per, 3), art=ArtParams(enabled=false))
+                 bcs=ntuple(_ -> io_per, 3), art=ArtificialProperties(enabled=false))
     @test_throws "element type mismatch" load_checkpoint!(s64,
                                                           allocate_state(s64),
                                                           stem)
@@ -328,7 +329,7 @@ end
     # numerical or boundary configuration over the same state layout.
     line = (SlipWallBC(), SlipWallBC())
     mk(; kw...) = Solver(n_global=(12, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                         bcs=(line, io_per, io_per), art=ArtParams(enabled=false);
+                         bcs=(line, io_per, io_per), art=ArtificialProperties(enabled=false);
                          kw...)
     rec(s) = CL.configuration_record(s)
     groups(a, b) = first.(CL.configuration_differences(rec(a), rec(b)))
@@ -394,7 +395,7 @@ end
     save_checkpoint(s, allocate_state(s), stem)
     for (kw, group) in (((deriv=lele_d1_8(),), :numerics),
                         ((filter_interval=2,), :numerics),
-                        ((transport=Transport(mu0=1e-3),), :transport))
+                        ((transport=ConstantTransport(mu0=1e-3),), :transport))
         other = mk(; eos=pair(1.4, 1.6), kw...)
         e = try
             load_checkpoint!(other, allocate_state(other), stem)
@@ -410,7 +411,7 @@ end
     end
     wall = Solver(n_global=(12, 1, 1), L_domain=(1.0, 1.0, 1.0),
                   bcs=((NoSlipWallBC(Twall=1.0), SlipWallBC()), io_per, io_per),
-                  eos=pair(1.4, 1.6), art=ArtParams(enabled=false))
+                  eos=pair(1.4, 1.6), art=ArtificialProperties(enabled=false))
     @test_throws "boundaries" load_checkpoint!(wall, allocate_state(wall), stem)
     load_checkpoint!(wall, allocate_state(wall), stem; allow=(:boundaries,))
 
@@ -479,7 +480,7 @@ end
     solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
                     bcs=(io_per, io_per, io_per), tile=12,
                     refine=BlockRegion((12, 12, 0), (24, 24, 1)),
-                    art=ArtParams(enabled=false))
+                    art=ArtificialProperties(enabled=false))
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(0.4, 0.3, 0), p=1.0, rho=1 + 0.1 * sin(x) * sin(y)))
@@ -549,7 +550,7 @@ end
     @test Set(keys(snap)) == Set((:rho, :velocity, :Y, :vorticity_magnitude, :beta_art))
     @test size(snap[:velocity]) == (24, 16, 12, 3)
     @test size(snap[:Y]) == (24, 16, 12, 1)
-    interior(a) = a[gidx(solver, 1, 1, 1):gidx(solver, 24, 16, 12)]
+    interior(a) = a[padded_index(solver, 1, 1, 1):padded_index(solver, 24, 16, 12)]
     for name in (:rho, :beta_art, :vorticity_magnitude)
         @test snap[name] == interior(field_array(solver, Q, name))
     end
@@ -568,7 +569,7 @@ end
     amr = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
                  bcs=(io_per, io_per, io_per), tile=12,
                  refine=BlockRegion((12, 12, 0), (24, 24, 1)),
-                 art=ArtParams(enabled=false))
+                 art=ArtificialProperties(enabled=false))
     states = allocate_state(amr)
     wave(x, y) = 1 + 0.1 * sin(x) * sin(y)
     initialize!(amr, states, (x, y, z) -> Prim(u=(0.4, 0.3, 0), p=1.0, rho=wave(x, y)))
@@ -590,7 +591,7 @@ end
     cyl = Solver(n_global=(16, 16, 1), L_domain=(1.0, 2π, 1.0),
                  metric=CylindricalMetric(),
                  bcs=((AxisBC(), SlipWallBC()), io_per, io_per),
-                 art=ArtParams(enabled=false))
+                 art=ArtificialProperties(enabled=false))
     Qc = allocate_state(cyl)
     initialize!(cyl, Qc, (r, θ, z) -> Prim(p=1.0, rho=1 + r^2))
     snapc = field_snapshot(cyl, Qc; fields=(:rho,))

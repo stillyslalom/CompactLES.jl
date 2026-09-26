@@ -3,6 +3,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: compute_rhs!, apply_bcs!
 using Printf
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
@@ -20,7 +21,7 @@ for N in (32, 64)
     solver = Solver(n_global=(N, N, N), L_domain=(1.0, 0.4, 0.4),
                bcs=((DirichletBC((x, y, z, t) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0)),
                      NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
-               transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
+               transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=true))
     Q = allocate_state(solver); dQ = zero(Q)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0))
     trhs = timeit(() -> compute_rhs!(solver, Q, dQ))
@@ -31,7 +32,7 @@ for N in (32, 64)
     # slip walls only: same plane loops, much cheaper body
     s2 = Solver(n_global=(N, N, N), L_domain=(1.0, 0.4, 0.4),
                 bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
+                transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=true))
     Q2 = allocate_state(s2); dQ2 = zero(Q2)
     initialize!(s2, Q2, (x, y, z) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0))
     @printf("N=%-4d slip walls        compute_rhs! %8.3f ms   apply_bcs! %8.4f ms\n",

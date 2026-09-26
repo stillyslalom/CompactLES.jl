@@ -12,6 +12,7 @@ using MPI
 MPI.Init(threadlevel=:funneled)
 
 using CompactLES
+using CompactLES: compute_rhs!, padded_index, xcoord
 using GLMakie
 using Serialization
 using Statistics
@@ -42,7 +43,7 @@ function taylor_green_data(; n=64, tfinal=12.0)
     problem = Problem(
         name="Taylor–Green showcase",
         eos=IdealSpecies("gas"; R=1.0, gamma=gamma),
-        transport=Transport(mu0=1 / 1600),
+        transport=ConstantTransport(mu0=1 / 1600),
         domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)),
         bcs=ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
         ic=(x, y, z) -> Prim(
@@ -56,7 +57,7 @@ function taylor_green_data(; n=64, tfinal=12.0)
     )
     numerics = Numerics(
         n_global=(n, n, n),
-        art=ArtParams(enabled=false),
+        art=ArtificialProperties(enabled=false),
         cfl=0.6,
         filter_interval=1,
         dims=(1, 1, 1),
@@ -67,7 +68,7 @@ function taylor_green_data(; n=64, tfinal=12.0)
         total = 0.0
         m1, m2, m3 = solver.equations.i_mom
         for k in 1:n, j in 1:n, i in 1:n
-            I = gidx(solver, i, j, k)
+            I = padded_index(solver, i, j, k)
             rho = Q[I, 1]
             total += (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / (2rho)
         end
@@ -111,7 +112,7 @@ function taylor_green_data(; n=64, tfinal=12.0)
     compute_rhs!(solver, Q, work.dQ)
     omega = Array{Float64}(undef, n, n, n)
     for k in 1:n, j in 1:n, i in 1:n
-        I = gidx(solver, i, j, k)
+        I = padded_index(solver, i, j, k)
         wx = solver.grad_u[2, 3][I] - solver.grad_u[3, 2][I]
         wy = solver.grad_u[3, 1][I] - solver.grad_u[1, 3][I]
         wz = solver.grad_u[1, 2][I] - solver.grad_u[2, 1][I]
@@ -144,7 +145,7 @@ function shock_tube_data(; nx=384, ny=48, tfinal=2.0e-3)
     problem = Problem(
         name="He-driven RM showcase",
         eos=eos,
-        transport=Transport(mu0=0.0),
+        transport=ConstantTransport(mu0=0.0),
         domain=((0.0, Lx), (0.0, Ly), (0.0, 1.0)),
         bcs=((SlipWallBC(), SlipWallBC()),
              (PeriodicBC(), PeriodicBC()),
@@ -158,7 +159,7 @@ function shock_tube_data(; nx=384, ny=48, tfinal=2.0e-3)
     )
     numerics = Numerics(
         n_global=(nx, ny, 1),
-        art=ArtParams(enabled=true),
+        art=ArtificialProperties(enabled=true),
         cfl=0.5,
         filter_interval=1,
         dims=(1, 1, 1),
@@ -169,7 +170,7 @@ function shock_tube_data(; nx=384, ny=48, tfinal=2.0e-3)
     rho = Array{Float64}(undef, nx, ny)
     Yco2 = similar(rho)
     for j in 1:ny, i in 1:nx
-        I = gidx(solver, i, j, 1)
+        I = padded_index(solver, i, j, 1)
         rho[i, j] = Q[I, 1] + Q[I, 2]
         Yco2[i, j] = Q[I, 2] / rho[i, j]
     end
@@ -195,7 +196,7 @@ function converging_shock_data(; nr=640, tfinal=0.30)
     )
     numerics = Numerics(
         n_global=(nr, 1, 1),
-        art=ArtParams(enabled=true),
+        art=ArtificialProperties(enabled=true),
         cfl=0.4,
         filter_interval=1,
         dims=(1, 1, 1),
@@ -209,7 +210,7 @@ function converging_shock_data(; nr=640, tfinal=0.30)
     m1, m2, m3 = solver.equations.i_mom
     ie = solver.equations.i_energy
     for i in 1:nr
-        I = gidx(solver, i, 1, 1)
+        I = padded_index(solver, i, 1, 1)
         rho[i] = Q[I, 1]
         kinetic = (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / (2rho[i])
         pressure[i] = 0.4 * (Q[I, ie] - kinetic)

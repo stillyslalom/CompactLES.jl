@@ -6,7 +6,7 @@
 # Sensors use an undivided high-pass in the computational indices: Cook's
 # explicit fourth difference δ⁴ (1, −4, 6, −4, 1) by default, or Pyranda's
 # compact eighth derivative under
-# `ArtParams.detector = :d8`. The formal grid-spacing powers therefore reduce to
+# `ArtificialProperties.detector = :d8`. The formal grid-spacing powers therefore reduce to
 # per-dimension weights: Δ² for a field carrying one velocity derivative (|S|,
 # ∇·u) and Δ for a field carrying none (the velocity components themselves, the
 # internal energy, a mass fraction). The two weights coincide at the grid scale,
@@ -15,16 +15,17 @@
 # computational spacing scaled by the metric scale factor and by a `Stretch`'s
 # Jacobian.
 #
-# `ArtParams.mu_sensor` and `ArtParams.beta_sensor` select the field each of the
-# two viscosities is built from. Cook (2007) takes both from the strain magnitude
-# |S|; Cook (2009, appendix A) changes β* to a dilatation sensor. Pyranda's
-# public kernels build μ* from the velocity components and β* from the
-# dilatation (see `velocity_mu!` and `dilatation_beta!`). β* may also key on
-# compression through a Ducros switch (`gate_beta!`). Directions combine by Σ_d
-# or by MAX, under
-# `ArtParams.reduction`. `smooth!` stands in for Cook's Gaussian test filter,
-# and `ArtParams.smoother` selects the operator it applies. With more than one
-# species, the default `ArtParams.species_flux = :partial_density` and the
+# `ArtificialProperties.mu_sensor` and `ArtificialProperties.beta_sensor` select
+# the field each of the two viscosities is built from. Cook (2007) takes both
+# from the strain magnitude |S|; Cook (2009, appendix A) changes β* to a
+# dilatation sensor. Pyranda's public kernels build μ* from the velocity
+# components and β* from the dilatation (see `velocity_mu!` and
+# `dilatation_beta!`). β* may also key on compression through a Ducros switch
+# (`gate_beta!`). Directions combine by Σ_d or by MAX, under
+# `ArtificialProperties.reduction`. `smooth!` stands in for Cook's Gaussian test
+# filter, and `ArtificialProperties.smoother` selects the operator it applies.
+# With more than one species, the default
+# `ArtificialProperties.species_flux = :partial_density` and the
 # `:bulk` channel build one diffusivity D_b shared by every species, sensed on
 # the mass and the mole fraction of each (`bulk_diffusivity!`); the fluxes are
 # assembled in rhs.jl. Under `:fickian` each species carries its own sensor and
@@ -45,11 +46,11 @@
 # of a strictly physical-space one; only the length weighting is physical.
 
 """
-    ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01, C_D=0.1,
-              C_Y=100.0, Y_tolerance=1e-4,
-              mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
-              smoother=:gaussian, detector=:delta4,
-              species_flux=:partial_density)
+    ArtificialProperties(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01,
+                         C_D=0.1, C_Y=100.0, Y_tolerance=1e-4,
+                         mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
+                         smoother=:gaussian, detector=:delta4,
+                         species_flux=:partial_density)
 
 Cook-style artificial-property controls.
 
@@ -137,7 +138,7 @@ Cook-style artificial-property controls.
   mole fraction. A uniform (u, p, T) state stays uniform to round-off
   whatever the composition, no stress or conduction is added, and the
   channel produces thermodynamic entropy wherever the partial densities are
-  positive. Under `Transport(mu0 = 0)` it takes as many line solves as the
+  positive. Under `ConstantTransport(mu0 = 0)` it takes as many line solves as the
   Fickian channel and about a tenth more time per step.
   `:fickian` is Cook's per-species flux J_k = −ρ D\\*_k ∇Y_k, with the
   correction velocity that keeps Σ_k J_k = 0 and the enthalpy flux
@@ -172,7 +173,7 @@ values can reduce the explicit diffusive timestep. Each of `C_mu`, `C_beta`,
 `C_kappa`, `C_D`, `C_Y` and `Y_tolerance` must be finite and nonnegative;
 [`Solver`](@ref) construction raises an `ArgumentError` otherwise.
 """
-Base.@kwdef struct ArtParams{T}
+Base.@kwdef struct ArtificialProperties{T}
     enabled::Bool = true
     C_mu::T    = 0.002
     C_beta::T  = 1.0
@@ -188,14 +189,15 @@ Base.@kwdef struct ArtParams{T}
     species_flux::Symbol = :partial_density
 end
 
-# The numeric fields of an `ArtParams`, checked at `Solver` construction. A
+# The numeric fields of an `ArtificialProperties`, checked at `Solver` construction. A
 # negative coefficient makes an artificial diffusivity negative, which is
 # anti-diffusion, and a non-finite one reaches the state as NaN.
-function validate_art(art::ArtParams)
+function validate_art(art::ArtificialProperties)
     for name in (:C_mu, :C_beta, :C_kappa, :C_D, :C_Y, :Y_tolerance)
         value = getfield(art, name)
         isfinite(value) && value >= 0 ||
-            throw(ArgumentError("ArtParams: $name must be finite and >= 0, got $value"))
+            throw(ArgumentError("ArtificialProperties: $name must be finite and >= 0, " *
+                                "got $value"))
     end
     return nothing
 end
@@ -205,7 +207,7 @@ end
 # `:bulk` and `:partial_density` do, `:fickian` builds one D*_k per species. With
 # the artificial properties off or a single species there is nothing for either
 # to act on, and none of the channel's passes or storage is set up for it.
-_shared_species_diffusivity(art::ArtParams, n_species::Integer) =
+_shared_species_diffusivity(art::ArtificialProperties, n_species::Integer) =
     art.enabled && n_species > 1 && art.species_flux !== :fickian
 _shared_species_diffusivity(solver) =
     _shared_species_diffusivity(solver.art, solver.equations.n_species)
@@ -238,7 +240,7 @@ end
                 wall_parity=(1, 1, 1), ghosts=false)
 
 Interior reduction of Δ_d^wpow |δ⁴_d f| over the active directions into `out`,
-combined by Σ_d or by MAX according to `ArtParams.reduction` and combined with
+combined by Σ_d or by MAX according to `ArtificialProperties.reduction` and combined with
 the existing contents when `accumulate`. Δ_d is the local physical spacing
 along `d`, `solver.h[d] / solver.inv_h[d][I]`, so the weight follows a
 `Stretch`'s Jacobian and an angular direction's scale factor rather than the
@@ -550,7 +552,7 @@ end
     detect_sum!(out, f, solver, wpow; accumulate=false, parity=(1, 1, 1),
                 wall_parity=(1, 1, 1), ghosts=false)
 
-Apply the detector named by `ArtParams.detector`, [`delta4_sum!`](@ref) or
+Apply the detector named by `ArtificialProperties.detector`, [`delta4_sum!`](@ref) or
 [`ring_sum!`](@ref), to build one sensor field. `ghosts` says whether `f`
 carries valid patch-interface ghost data; see [`delta4_sum!`](@ref).
 
@@ -590,7 +592,7 @@ with even parity, which is correct for every field smoothed here: each is a
 detector output, and each detector ends in an absolute value. The same holds
 at a reflecting wall, where the `:gaussian` smoother closes on the
 node-centred mirror with the even rows of [`wall_closures`](@ref). Which
-operator runs is `ArtParams.smoother`; see [`smooth_along!`](@ref).
+operator runs is `ArtificialProperties.smoother`; see [`smooth_along!`](@ref).
 
 `solver.tmp_a` is scratch and is overwritten. The halo exchanges along each
 active dimension require all ranks to participate. Under
@@ -642,13 +644,13 @@ end
     velocity_mu!(solver, C_mu)
 
 Rebuild `solver.mu_art` from the velocity components, replacing the strain
-form. Selected by `ArtParams(mu_sensor = :velocity)`.
+form. Selected by `ArtificialProperties(mu_sensor = :velocity)`.
 
 The sensor is the reduction of Δ_d |D_d u_j| over the (direction, component)
 pairs, three velocity components by each active direction and so nine pairs in
 a three-dimensional run, smoothed as the strain sensor is; this is Pyranda's
 [public `ringV` construction](https://github.com/LLNL/pyranda), and
-`ArtParams.reduction` chooses between its MAX and Cook's Σ. The
+`ArtificialProperties.reduction` chooses between its MAX and Cook's Σ. The
 weight is Δ, against the strain form's Δ², because u carries one derivative
 fewer than |S|, and the two agree at the grid scale: a grid-to-grid oscillation
 of amplitude A gives 16AΔ either way, so `C_mu` transfers between the settings
@@ -730,7 +732,7 @@ end
 
 Multiply `solver.beta_art` in place by `compression_switch`, leaving the
 Cook strain sensor that produced it untouched. Selected by
-`ArtParams(beta_sensor = :gated_strain)`.
+`ArtificialProperties(beta_sensor = :gated_strain)`.
 
 This is the shock-switch half of the Mani, Larsson & Moin refinement without
 the sensor-field half. The two are separable and they do different things: the
@@ -770,12 +772,12 @@ end
     dilatation_beta!(solver, C_beta, gated)
 
 Rebuild `solver.beta_art` from a sensor built on the dilatation, replacing the
-strain form. Selected by `ArtParams(beta_sensor = :ungated_dilatation)` for
+strain form. Selected by `ArtificialProperties(beta_sensor = :ungated_dilatation)` for
 `gated = false` and `= :dilatation` for `gated = true`.
 
 The sensor is the reduction of |D_d Δ| over the active directions, weighted by
 the squared local physical spacing along `d` as the strain sensor is
-([`delta4_sum!`](@ref)), for the detector D named by `ArtParams.detector`,
+([`delta4_sum!`](@ref)), for the detector D named by `ArtificialProperties.detector`,
 built from the dilatation Δ = ∇·u and
 smoothed as the strain sensor is. The ungated form is the one the reference
 implementation uses. The gated form multiplies it by `compression_switch`
@@ -879,7 +881,7 @@ Fill `solver.mu_art`, `solver.beta_art` and `solver.kappa_art`, and
 `solver.D_art` when the equation set carries more than one species, from the
 current primitives and (metric-corrected) velocity gradients. A single-species
 run never enters the per-species sweep, so its `D_art` keeps the zeros it was
-allocated with. Under the default `ArtParams.species_flux = :partial_density`
+allocated with. Under the default `ArtificialProperties.species_flux = :partial_density`
 and under `:bulk` the species sweep is [`bulk_diffusivity!`](@ref), which
 writes one diffusivity into every
 `D_art[k]`. `solver.strain_mag` is written whichever sensors are selected,
@@ -897,7 +899,7 @@ runs `compute_primitives_and_gradients!` on the same `Q` immediately before
 this. Every rank must call this function because `smooth!` exchanges halos
 along every active dimension, and both it and `detect_sum!` may run distributed
 line solves. The `enabled` early return precedes those operations and is safe
-because `ArtParams` is a setup-time constant identical on every rank.
+because `ArtificialProperties` is a setup-time constant identical on every rank.
 
 `solver.sensor`, `solver.sensor_sp`, `solver.tmp_a`, and `solver.tmp_b` are
 scratch for the RHS computation, as is `solver.ring_buf` under
@@ -976,9 +978,9 @@ function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
     # loops. A threaded closure that captures the struct allocates once per
     # region in proportion to the closure's size: 768 B per RHS call when this
     # was written the obvious way. The driver is that size, not `beta_sensor`
-    # making ArtParams non-isbits, since an isbits struct of the same shape
+    # making ArtificialProperties non-isbits, since an isbits struct of the same shape
     # measures the same +128 B per region when captured. Unpacking is therefore
-    # the fix, and a further ArtParams field costs nothing so long as no loop
+    # the fix, and a further ArtificialProperties field costs nothing so long as no loop
     # closes over the struct. A field consulted *inside* a loop is the case to
     # avoid: keep the test at a function barrier, as `beta_sensor` is below.
     C_mu, C_beta = art.C_mu, art.C_beta
@@ -1075,7 +1077,7 @@ end
                       a1, a2, a3, Y_tolerance)
 
 The species sweep of [`compute_artificial!`](@ref) under
-`ArtParams.species_flux = :partial_density` or `:bulk`: one diffusivity
+`ArtificialProperties.species_flux = :partial_density` or `:bulk`: one diffusivity
 D_b = c · G[max_k max_{f ∈ {Y_k, X_k}} max(C_D Δ_d|D_d f|, C_Y Δ_g excursion(f))],
 written into every `solver.D_art[k]`, so that the checkpoint's coefficient
 block and `max_rate`'s diffusive rate see it where they saw the Fickian

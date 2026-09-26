@@ -33,7 +33,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     equations::Eq
     eos::E
     transport::Tr
-    art::ArtParams{T}
+    art::ArtificialProperties{T}
     metric::M
     stretch::St
     sources::Src
@@ -182,14 +182,14 @@ function global_xcoord(solver::SolverLike, d::Int, g::Int)
 end
 
 """
-    gidx(solver, i, j, k) -> CartesianIndex
+    padded_index(solver, i, j, k) -> CartesianIndex
 
 Convert rank-local, one-based interior indices to a `CartesianIndex` for the
 halo-padded state and solver fields. Collapsed directions have zero padding.
 The result is rank-local; it does not locate a global point owned by another
 rank.
 """
-function gidx(solver::SolverLike, i::Int, j::Int, k::Int)
+function padded_index(solver::SolverLike, i::Int, j::Int, k::Int)
     pad = solver.decomp.n_halo_d
     return CartesianIndex(i + pad[1], j + pad[2], k + pad[3])
 end
@@ -198,7 +198,7 @@ end
     interior_index(solver, I) -> (i, j, k)
 
 Rank-local, one-based interior indices of the padded `CartesianIndex` `I`; the
-inverse of [`gidx`](@ref). Use it wherever a padded index has to be handed to
+inverse of [`padded_index`](@ref). Use it wherever a padded index has to be handed to
 something that takes interior ones. [`boundary_plane`](@ref) yields padded
 indices, while [`xcoord`](@ref) expects an interior index:
 
@@ -226,7 +226,7 @@ end
 # between steps, when the primitives are stale; see
 # `refresh_primitives!`.
 #
-# All of them index the PADDED arrays, following the convention of `gidx` and
+# All of them index the PADDED arrays, following the convention of `padded_index` and
 # `boundary_plane`, and all are rank-local: they report nothing about points
 # this rank does not hold. A predicate built from them is reduced by
 # `WhenState`, or must be reduced by the caller.

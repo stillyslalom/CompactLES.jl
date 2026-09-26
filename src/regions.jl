@@ -20,6 +20,23 @@
 # pressure and temperature the rule reproduces that temperature exactly.
 
 """
+    CompactLES.Regions
+
+Regions of space and the initial conditions assembled from them: the shapes
+[`Slab`](@ref), [`Box`](@ref), [`Ellipsoid`](@ref), [`Sphere`](@ref),
+[`Cylinder`](@ref) and [`LevelSet`](@ref), the [`Layers`](@ref) initial condition
+that stacks them, and the [`Cells`](@ref) width unit. CompactLES does not export
+the module's names, several of which are common in plotting and geometry
+packages; load them with `using CompactLES.Regions` or qualify them.
+CompactLES exports `Cells` as well, for the duration of a
+[`Ramp`](@ref CompactLES.Ramp).
+"""
+module Regions
+
+export Shape, Slab, Box, Ellipsoid, Sphere, Cylinder, LevelSet, signed_distance
+export Cells, Layer, Layers
+
+"""
     Shape
 
 A region of space for a [`Layers`](@ref) initial condition, defined by a signed
@@ -247,10 +264,10 @@ _fraction(profile::Symbol, d, w) =
 An initial condition built from regions: `background` everywhere, overlaid in
 order by each region, given as `shape => state` or as a [`Layer`](@ref). A later
 region covers the earlier ones where they overlap. Pass it to a
-[`Problem`](@ref) as `ic`.
+[`Problem`](@ref CompactLES.Problem) as `ic`.
 
-Each state is a [`Prim`](@ref), or a function `(x, y, z) -> Prim` for a region
-whose state varies in space. The volume fraction of a region across its boundary
+Each state is a [`Prim`](@ref CompactLES.Prim), or a function `(x, y, z) -> Prim`
+for a region whose state varies in space. The volume fraction of a region across its boundary
 is `(1 - tanh(d/width))/2` at signed distance `d`, or `erfc(d/width)/2` with
 `profile = :erf`, the diffusion profile many mixing-layer benchmark
 specifications state. `width` is the scale of that transition:
@@ -295,6 +312,11 @@ function Layers(background, regions...; width=Cells(3), profile::Symbol=:tanh)
     return Layers{typeof(background),typeof(layers),typeof(width)}(background, layers,
                                                                    width, profile)
 end
+
+end # module Regions
+
+using .Regions
+using .Regions: _width_value, _fraction
 
 # The form `initialize!` evaluates: the regions bound to the run's EOS and its
 # resolved directions, as the four-argument initial condition.

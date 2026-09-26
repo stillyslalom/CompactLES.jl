@@ -37,7 +37,7 @@ transition_width = 0.025
 problem = Problem(
     name = "helium--carbon-dioxide interface",
     eos = eos,
-    transport = Transport(mu0 = 0.0),
+    transport = ConstantTransport(mu0 = 0.0),
     domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
     bcs = (SlipWallBC(), PeriodicBC(), PeriodicBC()),
     ic = (x, y, z) -> begin
@@ -48,7 +48,7 @@ problem = Problem(
 
 numerics = Numerics(
     n_global = (nx, 1, 1),
-    art = ArtParams(enabled = false),
+    art = ArtificialProperties(enabled = false),
     filter_interval = 0,
 )
 

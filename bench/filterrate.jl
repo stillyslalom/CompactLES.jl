@@ -77,6 +77,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: eachpatch, padded_index
 using Printf
 
 const CL = CompactLES
@@ -109,7 +110,7 @@ function kinetic(solver, Q::AbstractArray)
     nx, ny, nz = solver.decomp.n_local
     ke = 0.0
     for k in 1:nz, j in 1:ny, i in 1:nx
-        I = gidx(solver, i, j, k)
+        I = padded_index(solver, i, j, k)
         ke += solver.rho[I] * (solver.u[I]^2 + solver.v[I]^2 + solver.w[I]^2)
     end
     return MPI.Allreduce(0.5 * ke * prod(solver.h), +, solver.decomp.comm)
@@ -126,10 +127,10 @@ function kinetic(solver, states::Vector)
     return CL.volume_integral(solver, fs)
 end
 
-_poison!(solver, Q::AbstractArray) = (Q[gidx(solver, 1, 1, 1), 1] = -1.0; nothing)
+_poison!(solver, Q::AbstractArray) = (Q[padded_index(solver, 1, 1, 1), 1] = -1.0; nothing)
 function _poison!(solver, states::Vector)
     ps, Q = first(eachpatch(solver, states))
-    Q[gidx(ps, 1, 1, 1), 1] = -1.0
+    Q[padded_index(ps, 1, 1, 1), 1] = -1.0
     return nothing
 end
 
@@ -154,11 +155,11 @@ function build(cfl, filter_cfl)
     ic = (x, y, z) -> Prim(rho = 1.0, p = 10.0, u = velocity(y))
     if opt.refine == 0
         prob = Problem(eos = IdealSpecies("gas"; gamma = 1.4, R = 1.0),
-                       transport = Transport(mu0 = 0.0),
+                       transport = ConstantTransport(mu0 = 0.0),
                        domain = ((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs = per3,
                        ic = ic)
         return setup(prob, Numerics(n_global = n_global, cfl = cfl,
-                                    art = ArtParams(enabled = false),
+                                    art = ArtificialProperties(enabled = false),
                                     filter_interval = 1, filter_cfl = filter_cfl,
                                     control = control))
     end
@@ -167,8 +168,8 @@ function build(cfl, filter_cfl)
     extent = opt.planar ? (opt.refine, opt.refine, 1) : (opt.refine, opt.refine, opt.refine)
     solver = Solver(n_global = n_global, L_domain = (2π, 2π, 2π), bcs = per3,
                     eos = IdealSpecies("gas"; gamma = 1.4, R = 1.0),
-                    transport = Transport(mu0 = 0.0),
-                    art = ArtParams(enabled = false), cfl = cfl,
+                    transport = ConstantTransport(mu0 = 0.0),
+                    art = ArtificialProperties(enabled = false), cfl = cfl,
                     filter_interval = 1, filter_cfl = filter_cfl,
                     control = control, subcycle = true,
                     refine = BlockRegion(offset, extent))

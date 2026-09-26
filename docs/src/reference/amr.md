@@ -12,6 +12,8 @@ decisions: `initial` chooses the first region, while `regrid_interval` controls
 whether the solver retags after completed steps.
 
 ```julia
+using CompactLES.Regions                                  # Sphere, Box
+
 AMR(initial = :sensor)                                    # follow the features
 AMR(initial = (x, y, z, t) -> abs(x - 0.5 - 0.2t) < 0.1)  # a prescribed path
 AMR(initial = Sphere((0.5, 0.5, 0.5), 0.1))               # a fixed region

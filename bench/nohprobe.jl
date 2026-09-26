@@ -106,15 +106,16 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: padded_index, xcoord
 using Printf
 
 const CL = CompactLES
 include(joinpath(@__DIR__, "..", "test", "references.jl"))
 include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 
-# Sensor-shape defaults track `ArtParams()`, so a bare run probes the current
+# Sensor-shape defaults track `ArtificialProperties()`, so a bare run probes the current
 # defaults rather than whatever they were when this line was written.
-const ART_DEFAULTS = ArtParams()
+const ART_DEFAULTS = ArtificialProperties()
 opt = CompactLES.script_args(ARGS, (nu = 1, cfl = 0.3, N = 0, nmax = 400, every = 25,
                          sensor = string(ART_DEFAULTS.beta_sensor),
                          smoother = string(ART_DEFAULTS.smoother),
@@ -140,7 +141,7 @@ function make_probe(solver, xs, h)
     n = length(xs)
     o1, o2, o3 = solver.decomp.n_halo_d
     i_energy = solver.equations.i_energy
-    grab(f) = [f[gidx(solver, i, 1, 1)] for i in 1:n]
+    grab(f) = [f[padded_index(solver, i, 1, 1)] for i in 1:n]
     return function (solver, Q)
         rho = grab(solver.rho); u = grab(solver.u); b = grab(solver.beta_art)
         # From Q rather than T_ion: primitives! floors T_ion at 1e-300 wherever
@@ -183,7 +184,7 @@ function make_probe(solver, xs, h)
 end
 
 function main()
-    art = ArtParams(beta_sensor = Symbol(opt.sensor),
+    art = ArtificialProperties(beta_sensor = Symbol(opt.sensor),
                 smoother = Symbol(opt.smoother),
                 detector = Symbol(opt.detector))
     metric = ν == 1 ? CartesianMetric() :
@@ -207,7 +208,7 @@ function main()
              p = (1 - θ) * pin + θ * NOH_P0)
     end
     prob = Problem(eos = IdealSpecies("gas"; gamma = NOH_G, R = 1.0),
-                   transport = Transport(mu0 = 0.0), metric = metric,
+                   transport = ConstantTransport(mu0 = 0.0), metric = metric,
                    domain = ((0.0, 1.0), dom2, dom3),
                    bcs = ((lobc, inflow), per3[2], per3[3]), ic = ic)
     control = StepControl(floor_ratio = opt.floor, floor_scope = Symbol(opt.scope))

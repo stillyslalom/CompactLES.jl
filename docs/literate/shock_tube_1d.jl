@@ -49,14 +49,14 @@ problem = Problem(
 #
 # Strong startup transients require a smaller CFL than smooth flow. Retry
 # control also permits a failed step to roll back and retry at a reduced CFL.
-# The Cook-style coefficients in [`ArtParams`](@ref) are exposed so the
+# The Cook-style coefficients in [`ArtificialProperties`](@ref) are exposed so the
 # numerical assumptions are visible. They are calibration choices conditional
 # on the grid, filter, and flow regime, not universal fluid constants.
 
 numerics = Numerics(
     n_global = (nx, 1, 1),
-    art = ArtParams(C_mu = 0.002, C_beta = 1.0,
-                    C_kappa = 0.01, C_D = 0.1),
+    art = ArtificialProperties(C_mu = 0.002, C_beta = 1.0,
+                               C_kappa = 0.01, C_D = 0.1),
     cfl = 0.15,
     control = StepControl(retries = 2),
     filter_interval = 1,

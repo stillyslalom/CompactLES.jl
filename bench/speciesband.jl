@@ -18,6 +18,7 @@
 # reference/CALIBRATION_APPENDIX.md.
 
 using CompactLES, Printf, MPI
+using CompactLES: padded_index
 const CL = CompactLES
 MPI.Initialized() || MPI.Init()
 include(joinpath(@__DIR__, "..", "test", "references.jl"))
@@ -47,7 +48,7 @@ function advection_sweep()
             worst = Ref(0.0)
             cb = (s, Q) -> begin
                 for i in 1:s.decomp.n_local[1]
-                    I = gidx(s, i, 1, 1)
+                    I = padded_index(s, i, 1, 1)
                     worst[] = max(worst[], excursion(Q[I, 1] / (Q[I, 1] + Q[I, 2])))
                 end
             end
@@ -66,7 +67,7 @@ function shock_sweep()
         row("shock, C_Y = 100", N, max(-r.worst_min_Y, r.worst_max_Y - 1), r.Y_air)
     end
     for N in (200, 400, 800)
-        r = shock_interface(; N, art=ArtParams(enabled=true, C_Y=0.0))
+        r = shock_interface(; N, art=ArtificialProperties(enabled=true, C_Y=0.0))
         row("shock, C_Y = 0", N, max(-r.worst_min_Y, r.worst_max_Y - 1), r.Y_air)
     end
 end

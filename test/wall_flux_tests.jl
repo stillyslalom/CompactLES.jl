@@ -10,6 +10,7 @@ if !isdefined(@__MODULE__, :CL)
     using Test
     const CL = CompactLES
 end
+using CompactLES: compute_rhs!, apply_bcs!, filter_state!, CPUBackend, padded_index, xcoord
 
 import KernelAbstractions
 
@@ -64,12 +65,12 @@ struct UncorrectedWallBC <: CL.BoundaryCondition end
     # energy RHS.
     T = Float64
     eos = IdealMixture(IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)))
-    transport = Transport{T}(mu0=T(0.01), Pr=T(0.8), Sc=T(0.7))
+    transport = ConstantTransport{T}(mu0=T(0.01), Pr=T(0.8), Sc=T(0.7))
     function audit(bc)
         sol = Solver(n_global=(33, 1, 1), L_domain=(one(T), one(T), one(T)),
                      bcs=((bc, bc), _wf_per(), _wf_per()), eos=eos,
                      transport=transport,
-                     art=ArtParams{T}(enabled=false), deriv=lele_d1_6(T),
+                     art=ArtificialProperties{T}(enabled=false), deriv=lele_d1_6(T),
                      filt=compact_filter(T(0.45), T))
         Q = allocate_state(sol)
         initialize!(sol, Q, (x, y, z) -> Prim(rho=one(T), p=one(T) + T(0.1)*x,
@@ -93,7 +94,7 @@ struct UncorrectedWallBC <: CL.BoundaryCondition end
         # i=2 is not a wall node. Its change proves the corrected boundary
         # flux entered the compact divergence solve rather than an
         # endpoint-only fix.
-        I2 = gidx(s, 2, 1, 1)
+        I2 = padded_index(s, 2, 1, 1)
         @test abs(dQ[I2, ie] - dQr[I2, ie]) > T(1e-5)
         @test isfinite(dQ[I2, ie])
     end
@@ -114,8 +115,8 @@ end
         bcs = (walls, walls, walls)
         s = Solver(n_global=(12, 12, 12), L_domain=(one(T), one(T), one(T)),
                    bcs=bcs, eos=eos,
-                   transport=Transport{T}(mu0=T(0.02), Pr=T(0.75), Sc=T(0.6)),
-                   art=ArtParams{T}(enabled=true, species_flux=channel),
+                   transport=ConstantTransport{T}(mu0=T(0.02), Pr=T(0.75), Sc=T(0.6)),
+                   art=ArtificialProperties{T}(enabled=true, species_flux=channel),
                    deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
@@ -167,8 +168,8 @@ end
         # Every face is a slip wall, so their intersections are exercised too.
         s = Solver(n_global=(12, 12, 12), L_domain=(one(T), one(T), one(T)),
                    bcs=(walls, walls, walls), eos=eosfn(T),
-                   transport=Transport{T}(mu0=T(0.02), Pr=T(0.75), Sc=T(0.6)),
-                   art=ArtParams{T}(enabled=true, species_flux=channel),
+                   transport=ConstantTransport{T}(mu0=T(0.02), Pr=T(0.75), Sc=T(0.6)),
+                   art=ArtificialProperties{T}(enabled=true, species_flux=channel),
                    deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
@@ -216,7 +217,8 @@ end
     prof(x) = (1 + 0.05cospi(x), 0.05sinpi(x), 0.05cospi(x))
     function line(N, bc, L, bcs)
         s = Solver(n_global=(N, 1, 1), L_domain=(L, 1.0, 1.0), bcs=bcs,
-                   transport=Transport(mu0=mu, Pr=0.7), art=ArtParams(enabled=false),
+                   transport=ConstantTransport(mu0=mu, Pr=0.7),
+                   art=ArtificialProperties(enabled=false),
                    deriv=lele_d1_6(), filter_interval=0, cfl=0.25)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
@@ -232,7 +234,8 @@ end
         s, Q = line(N, wall, 1.0, (wall, _wf_per(), _wf_per()))
         m, Qm = line(2(N - 1), PeriodicBC(), 2.0,
                      (_wf_per(), _wf_per(), _wf_per()))
-        push!(errs, maximum(abs(Q[gidx(s, i, 1, 1), 1] - Qm[gidx(m, i, 1, 1), 1])
+        push!(errs,
+              maximum(abs(Q[padded_index(s, i, 1, 1), 1] - Qm[padded_index(m, i, 1, 1), 1])
                             for i in 1:N))
         ie = s.equations.i_energy
         for side in 1:2, I in CL.wallplane(s.decomp, 1, side)
@@ -257,7 +260,7 @@ end
     bc = SwitchableBC(NoSlipWallBC(Twall=1.0), SlipWallBC())
     s = Solver(n_global=(17, 1, 1), L_domain=(1.0, 1.0, 1.0),
                bcs=((bc, NoSlipWallBC()), _wf_per(), _wf_per()),
-               transport=Transport(mu0=0.01), art=ArtParams(enabled=false))
+               transport=ConstantTransport(mu0=0.01), art=ArtificialProperties(enabled=false))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, T_ion=1.0 + 0.2x))
     _wf_prepare!(s, Q)
@@ -280,8 +283,8 @@ end
     walls = (NoSlipWallBC(), NoSlipWallBC())
     s = Solver(n_global=(65, 1, 1), L_domain=(one(T), one(T), one(T)),
                bcs=(walls, _wf_per(), _wf_per()), eos=eos,
-               transport=Transport{T}(mu0=mu, Pr=Pr, Sc=Sc),
-               art=ArtParams{T}(enabled=false), deriv=lele_d1_6(T))
+               transport=ConstantTransport{T}(mu0=mu, Pr=Pr, Sc=Sc),
+               art=ArtificialProperties{T}(enabled=false), deriv=lele_d1_6(T))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> begin
         Y1 = T(0.5) + T(0.1)*cospi(T(2)*x)
@@ -304,7 +307,7 @@ end
     errsY = T[]; errsE = T[]
     for i in 7:59
         x = xcoord(s, 1, i)
-        I = gidx(s, i, 1, 1)
+        I = padded_index(s, i, 1, 1)
         push!(errsY, abs(dQ[I, 1] - (mu/Sc) * (-T(0.4)*T(pi)^2*cospi(T(2)*x))))
         push!(errsE, abs(dQ[I, ie] - kcond * (-T(0.32)*T(pi)^2*cospi(T(2)*x))))
     end
@@ -318,7 +321,7 @@ end
     # A node-centered trapezoid is not the compact operator's conservation
     # norm. Keep this whole-domain defect visible, but distinct from exact
     # pointwise wall flux enforcement.
-    trap(c) = sum((i == 1 || i == 65 ? 0.5 : 1.0) * dQ[gidx(s, i, 1, 1), c]
+    trap(c) = sum((i == 1 || i == 65 ? 0.5 : 1.0) * dQ[padded_index(s, i, 1, 1), c]
                   for i in 1:65) / 64
     @test abs(trap(1)) < 2e-5
     @test abs(trap(ie)) < 2e-5
@@ -336,7 +339,7 @@ function CL.add_source!(source::WallConductionBalance, solver, dQ, Q, t)
     decay = exp(-source.diffusivity * 4pi^2 * t)
     for i in 1:solver.decomp.n_local[1]
         x = xcoord(solver, 1, i)
-        I = gidx(solver, i, 1, 1)
+        I = padded_index(solver, i, 1, 1)
         dQ[I, solver.equations.i_mom[1]] +=
             -2pi * source.amplitude * decay * sinpi(2x)
     end
@@ -353,19 +356,19 @@ end
         s = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), eos=eos,
                    bcs=((NoSlipWallBC(), NoSlipWallBC()), _wf_per(), _wf_per()),
                    sources=(WallConductionBalance(amp, diffusivity),),
-                   transport=Transport(mu0=mu, Pr=Pr),
-                   art=ArtParams(enabled=false), filter_interval=0, cfl=0.2)
+                   transport=ConstantTransport(mu0=mu, Pr=Pr),
+                   art=ArtificialProperties(enabled=false), filter_interval=0, cfl=0.2)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, T_ion=1+amp*cospi(2x)))
         ie = s.equations.i_energy
-        energy() = sum((i in (1, n) ? 0.5 : 1.0) * Q[gidx(s, i, 1, 1), ie]
+        energy() = sum((i in (1, n) ? 0.5 : 1.0) * Q[padded_index(s, i, 1, 1), ie]
                        for i in 1:n) / (n-1)
         E0 = energy()
         run!(s, Q; tfinal=tf, nmax=100)
         @test s.t == tf
         CL.refresh_primitives!(s, Q)
         decay = exp(-diffusivity * 4pi^2 * tf)
-        push!(errors, maximum(abs(s.T_ion[gidx(s, i, 1, 1)] -
+        push!(errors, maximum(abs(s.T_ion[padded_index(s, i, 1, 1)] -
                          (1+amp*decay*cospi(2xcoord(s, 1, i)))) for i in 1:n))
         push!(defects, abs(energy()-E0))
         compute_rhs!(s, Q, zero(Q))
@@ -391,8 +394,8 @@ end
                         IdealSpecies(T, "b"; R=one(T), gamma=T(1.4))))
     s = Solver(n_global=(65, 1, 1), L_domain=(one(T), one(T), one(T)),
                bcs=((NoSlipWallBC(), NoSlipWallBC()), _wf_per(), _wf_per()), eos=eos,
-               transport=Transport{T}(mu0=mu, Pr=T(0.8), Sc=Sc),
-               art=ArtParams{T}(enabled=false), filter_interval=0, cfl=T(0.2))
+               transport=ConstantTransport{T}(mu0=mu, Pr=T(0.8), Sc=Sc),
+               art=ArtificialProperties{T}(enabled=false), filter_interval=0, cfl=T(0.2))
     Q = allocate_state(s)
     amp, tf = T(0.1), T(0.002)
     initialize!(s, Q, (x, y, z) -> begin
@@ -402,15 +405,15 @@ end
     run!(s, Q; tfinal=tf, nmax=100)
     @test s.t == tf
     decay = exp(-(mu/Sc) * T(4pi^2) * tf)
-    err = maximum(abs(Q[gidx(s, i, 1, 1), 1] -
+    err = maximum(abs(Q[padded_index(s, i, 1, 1), 1] -
                       (T(0.5) + amp*decay*cospi(T(2)*xcoord(s, 1, i))))
                   for i in 1:65)
     # N=65 measures 6.51e-7 in the full-domain max norm (including walls)
     # under the `:neutral3` rows, 2.445e-7 under `:cascade3`.
     @test err < 1e-6
     CL.refresh_primitives!(s, Q)
-    @test maximum(abs(s.p[gidx(s, i, 1, 1)] - one(T)) for i in 1:65) < 2e-12
-    @test maximum(abs(s.T_ion[gidx(s, i, 1, 1)] - one(T)) for i in 1:65) < 2e-12
+    @test maximum(abs(s.p[padded_index(s, i, 1, 1)] - one(T)) for i in 1:65) < 2e-12
+    @test maximum(abs(s.T_ion[padded_index(s, i, 1, 1)] - one(T)) for i in 1:65) < 2e-12
 end
 
 @testset "no-slip wall flux: isothermal heat exchange and energy balance" begin
@@ -424,14 +427,14 @@ end
     s = Solver(n_global=(65, 1, 1), L_domain=(one(T), one(T), one(T)),
                bcs=((NoSlipWallBC(Twall=Tw), NoSlipWallBC(Twall=Tw)),
                     _wf_per(), _wf_per()), eos=eos,
-               transport=Transport{T}(mu0=mu, Pr=Pr, Sc=T(0.7)),
-               art=ArtParams{T}(enabled=false), filter_interval=0, cfl=T(0.1))
+               transport=ConstantTransport{T}(mu0=mu, Pr=Pr, Sc=T(0.7)),
+               art=ArtificialProperties{T}(enabled=false), filter_interval=0, cfl=T(0.1))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) ->
         Prim(rho=one(T), T_ion=Tw + T(0.05)*sinpi(x)))
     ie = s.equations.i_energy
     weights = [i == 1 || i == 65 ? T(0.5) : one(T) for i in 1:65]
-    energy(A) = sum(weights[i] * A[gidx(s, i, 1, 1), ie] for i in 1:65) / T(64)
+    energy(A) = sum(weights[i] * A[padded_index(s, i, 1, 1), ie] for i in 1:65) / T(64)
     function heatflux!()
         apply_bcs!(s, Q)
         dQ = zero(Q)
@@ -439,7 +442,7 @@ end
         Il = first(CL.wallplane(s.decomp, 1, 1))
         Ih = first(CL.wallplane(s.decomp, 1, 2))
         return s.flux[1, ie][Il], s.flux[1, ie][Ih],
-               sum(weights[i] * dQ[gidx(s, i, 1, 1), ie] for i in 1:65) / T(64)
+               sum(weights[i] * dQ[padded_index(s, i, 1, 1), ie] for i in 1:65) / T(64)
     end
     E0 = energy(Q)
     Fl0, Fh0, rhsint = heatflux!()
@@ -468,8 +471,8 @@ end
         walls = (bc, bc)
         s = Solver(n_global=(12, 12, 12), L_domain=extent,
                    bcs=(walls, _wf_per(), _wf_per()), metric=metric, origin=origin,
-                   eos=eos, transport=Transport(mu0=0.01),
-                   art=ArtParams(enabled=false))
+                   eos=eos, transport=ConstantTransport(mu0=0.01),
+                   art=ArtificialProperties(enabled=false))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0 + 0.03x))
         apply_bcs!(s, Q)
@@ -485,8 +488,8 @@ end
         wall in (NoSlipWallBC(Twall=1.1), SlipWallBC())
         s = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), backend=backend,
                    bcs=((wall, wall), _wf_per(), _wf_per()),
-                   transport=Transport(mu0=0.01),
-                   art=ArtParams(enabled=false))
+                   transport=ConstantTransport(mu0=0.01),
+                   art=ArtificialProperties(enabled=false))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, T_ion=0.9 + 0.3x,
                                              u=(0.1, -0.2, 0.05)))
@@ -509,7 +512,7 @@ end
                bcs=((NoSlipWallBC(), NoSlipWallBC()), _wf_per(), _wf_per()),
                eos=IdealMixture((IdealSpecies("a"; R=1.0, gamma=1.4),
                                  IdealSpecies("b"; R=1.0, gamma=1.4))),
-               transport=Transport(mu0=0.01), art=ArtParams(enabled=false),
+               transport=ConstantTransport(mu0=0.01), art=ArtificialProperties(enabled=false),
                filt=compact_filter(0.35))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=1.0 + 0.02cospi(4x),
@@ -518,7 +521,7 @@ end
     filter_state!(s, Q)
     @test maximum(abs(Q[I, 1]-Qbefore[I, 1]) for I in CL.interior(s.decomp)) > 1e-4
     budget_change(c) = sum((i in (1, 33) ? 0.5 : 1.0) *
-        (Q[gidx(s, i, 1, 1), c]-Qbefore[gidx(s, i, 1, 1), c]) for i in 1:33) / 32
+        (Q[padded_index(s, i, 1, 1), c]-Qbefore[padded_index(s, i, 1, 1), c]) for i in 1:33) / 32
     changes = (species=budget_change(1), energy=budget_change(s.equations.i_energy))
     @info "Filter-only budget changes" changes
     _wf_prepare!(s, Q)

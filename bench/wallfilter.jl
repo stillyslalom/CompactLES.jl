@@ -43,6 +43,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: filter_state!, padded_index, xcoord
 using Printf
 
 const CL = CompactLES
@@ -363,14 +364,14 @@ function wc_build(cl; N=WC_N, control=StepControl(validity=:permissive), filter_
     h = 1.0 / (N - 1)
     δ = 2h
     prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
-                   transport=Transport(mu0=0.0),
+                   transport=ConstantTransport(mu0=0.0),
                    domain=((0.0, 1.0), (0.0, h), (0.0, h)),
                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                    ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
                         p = 1000 * (1 - tanh_blend(x, 0.1, δ)) +
                             0.01 * (tanh_blend(x, 0.1, δ) - tanh_blend(x, 0.9, δ)) +
                             100 * tanh_blend(x, 0.9, δ)))
-    () -> setup(prob, Numerics(n_global=(N, 1, 1), art=ArtParams(enabled=true),
+    () -> setup(prob, Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=true),
                                cfl=0.3, filt=filt_of(cl), filter_interval=0,
                                filter_cfl=filter_cfl, control=control))
 end
@@ -390,7 +391,8 @@ function layer_build(cl; N, amp=0.1, control=StepControl(validity=:permissive),
     () -> begin
         solver = Solver(; n_global=(N, 1, 1), L_domain=(1.0, h, h),
                         bcs=((SlipWallBC(), SlipWallBC()), per, per), eos=eos,
-                        transport=Transport(mu0=0.0), art=ArtParams(enabled=true),
+                        transport=ConstantTransport(mu0=0.0),
+                        art=ArtificialProperties(enabled=true),
                         filt=filt_of(cl), cfl=0.4, filter_interval=0,
                         filter_cfl=filter_cfl, control=control)
         Q = allocate_state(solver)
@@ -418,7 +420,8 @@ function budget_part()
     end
     println("\n--- planar Noh N=400, cold start (inflow end open) ---")
     for (flab, cl) in FILTERS
-        num = Numerics(n_global=(400, 1, 1), art=ArtParams(enabled=true), cfl=NOH_CFL,
+        num = Numerics(n_global=(400, 1, 1), art=ArtificialProperties(enabled=true),
+                       cfl=NOH_CFL,
                        filt=filt_of(cl), filter_interval=0, filter_cfl=OPTS.filter_cfl,
                        control=StepControl(validity=:permissive))
         r = budget_run(() -> setup(noh_problem(1; N=400, t0=0.0), num), NOH_T)
@@ -430,7 +433,8 @@ function budget_part()
                100deficit, Rs)
     end
     for (flab, cl) in FILTERS
-        num = Numerics(n_global=(400, 1, 1), art=ArtParams(enabled=true), cfl=NOH_CFL,
+        num = Numerics(n_global=(400, 1, 1), art=ArtificialProperties(enabled=true),
+                       cfl=NOH_CFL,
                        filt=filt_of(cl), filter_interval=0, filter_cfl=OPTS.filter_cfl,
                        control=StepControl(validity=:permissive, floor_ratio=1e-6))
         r = budget_run(() -> setup(noh_problem(1; N=400, t0=0.0), num), NOH_T)
@@ -450,7 +454,7 @@ function budget_part()
             failed(r) && continue
             s, Q = r.solver, r.Q
             nx = s.decomp.n_local[1]
-            Y1 = [Q[gidx(s, i, 1, 1), 1] / (Q[gidx(s, i, 1, 1), 1] + Q[gidx(s, i, 1, 1), 2])
+            Y1 = [Q[padded_index(s, i, 1, 1), 1] / (Q[padded_index(s, i, 1, 1), 1] + Q[padded_index(s, i, 1, 1), 2])
                   for i in 1:nx]
             m1 = volume_integral(s, view(Q, :, :, :, 1))
             m2 = volume_integral(s, view(Q, :, :, :, 2))
@@ -475,7 +479,8 @@ function noh_planar_T(::Type{T}, N; cl, cfl=NOH_CFL, filter_cfl=OPTS.filter_cfl)
     solver = Solver(; n_global=(N, 1, 1), L_domain=(one(T), h, h),
                     bcs=((SlipWallBC(), inflow), per, per),
                     eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(γ)),
-                    transport=Transport{T}(mu0=zero(T)), art=ArtParams{T}(enabled=true),
+                    transport=ConstantTransport{T}(mu0=zero(T)),
+                    art=ArtificialProperties{T}(enabled=true),
                     deriv=lele_d1_6(T; closures=:cascade3), filt=filt_of(cl, T), cfl=T(cfl),
                     filter_interval=1, filter_cfl=filter_cfl,
                     control=StepControl(validity=:permissive))
@@ -492,7 +497,8 @@ function woodward_T(::Type{T}, N; cl, cfl=0.3, filter_cfl=OPTS.filter_cfl) where
     solver = Solver(; n_global=(N, 1, 1), L_domain=(one(T), h, h),
                     bcs=((SlipWallBC(), SlipWallBC()), per, per),
                     eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
-                    transport=Transport{T}(mu0=zero(T)), art=ArtParams{T}(enabled=true),
+                    transport=ConstantTransport{T}(mu0=zero(T)),
+                    art=ArtificialProperties{T}(enabled=true),
                     deriv=lele_d1_6(T; closures=:cascade3), filt=filt_of(cl, T), cfl=T(cfl),
                     filter_interval=1, filter_cfl=filter_cfl,
                     control=StepControl(validity=:permissive))
@@ -517,7 +523,7 @@ function float32_part()
                 completed(solver, NOH_T) || return "step cap"
                 xs = [Float64(xcoord(solver, 1, i)) for i in 1:400]
                 CL.exchange_state!(Q, solver.decomp); CL.primitives!(solver, Q)
-                ρ = [Float64(solver.rho[gidx(solver, i, 1, 1)]) for i in 1:400]
+                ρ = [Float64(solver.rho[padded_index(solver, i, 1, 1)]) for i in 1:400]
                 plat, deficit, Rs, epre = noh_metrics(xs, ρ, 1)
                 rep = state_report(solver, Q)
                 sprintf("plateau %.4f  deficit %+3.0f%%  shock %.4f  L1 pre %.2e  " *
@@ -534,7 +540,7 @@ function float32_part()
                 completed(solver, WC_T) || return "step cap"
                 xs = [Float64(xcoord(solver, 1, i)) for i in 1:WC_N]
                 CL.exchange_state!(Q, solver.decomp); CL.primitives!(solver, Q)
-                ρ = [Float64(solver.rho[gidx(solver, i, 1, 1)]) for i in 1:WC_N]
+                ρ = [Float64(solver.rho[padded_index(solver, i, 1, 1)]) for i in 1:WC_N]
                 xr, ρr, _, _ = read_ref("woodward_colella.csv")
                 imax = argmax(ρ)
                 sprintf("L1 rho %.3e  peak rho %.4f at %.4f  rho_min %.4f  steps %d",

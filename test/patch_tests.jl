@@ -7,6 +7,8 @@
 # Guards follow the convergence-suite convention: measured values are baked in
 # with headroom, and a moved digit means the interface treatment changed.
 
+using CompactLES: compute_rhs!, npatches, padded_index, xcoord
+
 @testset "patch layout arithmetic" begin
     # Non-periodic split shares the interface plane: extents sum to N + P - 1.
     regions = CL.patch_slabs((97, 12, 1), (false, true, true), (2, 1, 1))
@@ -37,7 +39,7 @@ function _entropy_wave_error(N::Int, patch_grid; tfinal=0.5, interface_rhs=:exte
     u0 = 0.5
     ic(x, y, z) = Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x))
     solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                    art=ArtParams(enabled=false), filter_interval=0,
+                    art=ArtificialProperties(enabled=false), filter_interval=0,
                     patch_grid=patch_grid, interface_rhs=interface_rhs,
                     deriv=deriv, n_halo=n_halo)
     Q = allocate_state(solver)
@@ -48,7 +50,7 @@ function _entropy_wave_error(N::Int, patch_grid; tfinal=0.5, interface_rhs=:exte
     for (ps, Qp) in CL.eachpatch(solver, states)
         nx = ps.decomp.n_local[1]
         for i in 1:nx
-            I = gidx(ps, i, 1, 1)
+            I = padded_index(ps, i, 1, 1)
             exact = 1.0 + 0.2 * sin(xcoord(ps, 1, i) - u0 * solver.t)
             err = max(err, abs(Qp[I, 1] - exact))
         end
@@ -87,8 +89,8 @@ function _viscous_wave(N::Int, patch_grid; deriv, n_halo, interface_rhs=:extende
     ic(x, y, z) = Prim(u=(0.5 + 0.1 * sin(2x), 0, 0), p=1.0 + 0.05 * cos(x),
                        rho=1.0 + 0.2 * sin(x))
     solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                    art=ArtParams(enabled=false), filter_interval=0,
-                    transport=Transport(mu0=2e-2), patch_grid=patch_grid,
+                    art=ArtificialProperties(enabled=false), filter_interval=0,
+                    transport=ConstantTransport(mu0=2e-2), patch_grid=patch_grid,
                     deriv=deriv, n_halo=n_halo, interface_rhs=interface_rhs)
     Q = allocate_state(solver)
     initialize!(solver, Q, ic)
@@ -97,7 +99,7 @@ function _viscous_wave(N::Int, patch_grid; deriv, n_halo, interface_rhs=:extende
     rho = Dict{Int,Float64}()          # by root node
     for (ps, Qp) in CL.eachpatch(solver, states)
         for i in 1:ps.decomp.n_local[1]
-            rho[ps.patch.region.offset[1] + i] = Qp[gidx(ps, i, 1, 1), 1]
+            rho[ps.patch.region.offset[1] + i] = Qp[padded_index(ps, i, 1, 1), 1]
         end
     end
     return rho
@@ -136,7 +138,7 @@ end
     ic(x, y, z) = Prim(u=(pulse(x) / sqrt(1.4), 0, 0), p=1.0 + pulse(x),
                        rho=(1.0 + pulse(x))^(1 / 1.4))
     solver = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                    art=ArtParams(enabled=false), filter_interval=0,
+                    art=ArtificialProperties(enabled=false), filter_interval=0,
                     patch_grid=(2, 1, 1))
     states = allocate_state(solver)
     initialize!(solver, states, ic)
@@ -149,7 +151,7 @@ end
     for i in 1:nx
         x = xcoord(ps, 1, i)
         x < π - 1.0 || continue    # behind the pulse, clear of the interface
-        I = gidx(ps, i, 1, 1)
+        I = padded_index(ps, i, 1, 1)
         reflected = max(reflected, abs(ps.p[I] - 1.0))
     end
     @info "two-patch pulse reflection" reflected reflected / amp
@@ -159,7 +161,7 @@ end
     # C10: 4.1e-3 at 192 (7.5e-2 at 96, 7.7e-5 at 384), the larger mismatch
     # between the interior rows and the divergence's C6 closure cascade.
     solver10 = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                      art=ArtParams(enabled=false), filter_interval=0,
+                      art=ArtificialProperties(enabled=false), filter_interval=0,
                       patch_grid=(2, 1, 1), deriv=lele_d1_10())
     states10 = allocate_state(solver10)
     initialize!(solver10, states10, ic)
@@ -169,7 +171,7 @@ end
     CL.refresh_primitives!(ps10, states10[1])
     for i in 1:ps10.decomp.n_local[1]
         xcoord(ps10, 1, i) < π - 1.0 || continue
-        reflected10 = max(reflected10, abs(ps10.p[gidx(ps10, i, 1, 1)] - 1.0))
+        reflected10 = max(reflected10, abs(ps10.p[padded_index(ps10, i, 1, 1)] - 1.0))
     end
     @info "two-patch pulse reflection, C10" reflected10 reflected10 / amp
     @test reflected10 / amp < 1e-2
@@ -181,7 +183,7 @@ end
                        rho=1.0 + 0.2 * sin(x))
     drift = map(((1, 1, 1), (2, 1, 1))) do pg
         solver = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                        art=ArtParams(enabled=false), filter_interval=1,
+                        art=ArtificialProperties(enabled=false), filter_interval=1,
                         patch_grid=pg)
         Q = allocate_state(solver)
         initialize!(solver, Q, ic)
@@ -210,7 +212,7 @@ end
                           interface_rhs=:onesided)) == 2
     @test_throws ErrorException Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
                                        bcs=per3, patch_grid=(2, 1, 1),
-                                       art=ArtParams(detector=:d8))
+                                       art=ArtificialProperties(detector=:d8))
     @test_throws ErrorException Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
                                        metric=CylindricalMetric(),
                                        bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
@@ -227,8 +229,8 @@ _div_rows_match(plan, decomp, deriv, h, lo, hi) =
 function _patched_rhs(; kw...)
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     s = Solver(n_global=(48, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-               art=ArtParams(enabled=false), filter_interval=0,
-               transport=Transport(mu0=1e-2), patch_grid=(2, 1, 1); kw...)
+               art=ArtificialProperties(enabled=false), filter_interval=0,
+               transport=ConstantTransport(mu0=1e-2), patch_grid=(2, 1, 1); kw...)
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(u=(0.5 + 0.1 * sin(2x), 0, 0),
                                         p=1.0 + 0.05 * cos(x), rho=1.0 + 0.2 * sin(x)))
@@ -304,7 +306,7 @@ function _polynomial_rhs_error(; kw...)
     per = (PeriodicBC(), PeriodicBC())
     ext = (ExtrapolationBC(), ExtrapolationBC())
     s = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(ext, per, per),
-               art=ArtParams(enabled=false), filter_interval=0; kw...)
+               art=ArtificialProperties(enabled=false), filter_interval=0; kw...)
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=ρ(x), u=(u(x), 0, 0), p=p(x)))
     dQ = [zero(q) for q in Q]
@@ -322,7 +324,7 @@ function _polynomial_rhs_error(; kw...)
         hi = ps.bcs[1][2] isa CL.InterfaceBC
         for i in 1:n
             (lo && i <= 4) || (hi && i > n - 4) || continue
-            I = gidx(ps, i, 1, 1)
+            I = padded_index(ps, i, 1, 1)
             e = exact(xcoord(ps, 1, i))
             err = max(err, abs(d[I, 1] - e[1]), abs(d[I, eq.i_mom[1]] - e[2]),
                       abs(d[I, eq.i_energy] - e[3]))
@@ -367,8 +369,8 @@ function _viscous_interface_error(N; kw...)
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.5, 1.3)])
     mk(; k...) = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3, eos=eos,
-                        art=ArtParams(enabled=false), filter_interval=0,
-                        transport=Transport(mu0=2e-2); k...)
+                        art=ArtificialProperties(enabled=false), filter_interval=0,
+                        transport=ConstantTransport(mu0=2e-2); k...)
     s = mk(; kw...)
     Q = allocate_state(s)
     initialize!(s, Q, ic)
@@ -392,8 +394,8 @@ function _viscous_interface_error(N; kw...)
         for i in 1:n
             (lo && i <= 4) || (hi && i > n - 4) || continue
             iu = mod1(round(Int, xcoord(ps, 1, i) / h) + 1, Nu)
-            I = gidx(ps, i, 1, 1)
-            Iu = gidx(su, iu, 1, 1)
+            I = padded_index(ps, i, 1, 1)
+            Iu = padded_index(su, iu, 1, 1)
             err = max(err, maximum(abs(d[I, c] - dQu[Iu, c]) for c in 1:size(d, 4)))
         end
     end
@@ -419,7 +421,7 @@ end
                          patch_grid=(2, 1, 1); kw...)
     extents(s) = [size(p.ghost_flux[d], 4) for p in getfield(s, :patches), d in 1:3]
     @test all(==(0), extents(mk(interface_flux=:ghost)))
-    @test all(==(0), extents(mk(transport=Transport(mu0=1e-2))))
-    viscous = extents(mk(interface_flux=:ghost, transport=Transport(mu0=1e-2)))
+    @test all(==(0), extents(mk(transport=ConstantTransport(mu0=1e-2))))
+    viscous = extents(mk(interface_flux=:ghost, transport=ConstantTransport(mu0=1e-2)))
     @test all(==(5), viscous[:, 1]) && all(==(0), viscous[:, 2:3])
 end

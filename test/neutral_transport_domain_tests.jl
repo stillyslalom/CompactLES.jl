@@ -15,6 +15,7 @@ module NeutralTransportDomainTests
 
 using ..MPI
 using ..CompactLES
+using ..CompactLES: compute_rhs!, max_rate, step!, padded_index
 using ..Test
 
 const CL = CompactLES
@@ -55,12 +56,12 @@ function base_solver(; kwargs...)
     eos, transport = polynomial_transport()
     return Solver(n_global=(72, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
                   eos=eos, transport=transport, dims=(NP, 1, 1),
-                  art=ArtParams(enabled=false), filter_interval=0; kwargs...)
+                  art=ArtificialProperties(enabled=false), filter_interval=0; kwargs...)
 end
 
 function poison!(ps, Q)
     i, j, k = ntuple(d -> cld(ps.decomp.n_local[d], 2), 3)
-    CL.write_conserved!(Q, gidx(ps, i, j, k), ps, bad_prim())
+    CL.write_conserved!(Q, padded_index(ps, i, j, k), ps, bad_prim())
     return Q
 end
 
@@ -134,7 +135,7 @@ end
     eos, transport = polynomial_transport()
     solver = Solver(n_global=(144, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
                     eos=eos, transport=transport, patch_grid=(2, 1, 1),
-                    art=ArtParams(enabled=false), filter_interval=0)
+                    art=ArtificialProperties(enabled=false), filter_interval=0)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> good_prim())
     for (ps, Q) in CL.eachpatch(solver, states)
@@ -150,7 +151,7 @@ end
     solver = Solver(n_global=(72, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
                     eos=eos, transport=transport,
                     refine=BlockRegion((32, 0, 0), (4, 1, 1)), subcycle=true,
-                    art=ArtParams(enabled=false), filter_interval=0)
+                    art=ArtificialProperties(enabled=false), filter_interval=0)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> good_prim())
     poisoned = false

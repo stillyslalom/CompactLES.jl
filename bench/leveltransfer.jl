@@ -35,6 +35,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES, Printf
+using CompactLES: interior_index, xcoord
 const CL = CompactLES
 MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("run this study on one rank")
 
@@ -56,7 +57,7 @@ function layout2d(N, order; kw...)
     N % 12 == 0 || error("N = $N must be a multiple of 12")
     r = BlockRegion((5N ÷ 12, 5N ÷ 12, 0), (N ÷ 6 + 1, N ÷ 6 + 1, 1))
     solver = Solver(n_global=(N, N, 1), L_domain=(2pi, 2pi, 1.0), bcs=per3,
-                    art=ArtParams(enabled=false), filter_interval=0, refine=r,
+                    art=ArtificialProperties(enabled=false), filter_interval=0, refine=r,
                     level_interpolation_order=order; kw...)
     return solver, allocate_state(solver)
 end
@@ -322,7 +323,8 @@ function regrid_study()
             end
             r0 = BlockRegion((5N ÷ 12, 0, 0), (N ÷ 6 + 1, 1, 1))
             solver = Solver(n_global=(N, 1, 1), L_domain=(2pi, 1.0, 1.0), bcs=per3,
-                            art=ArtParams(enabled=false), filter_interval=0, refine=r0,
+                            art=ArtificialProperties(enabled=false), filter_interval=0,
+                            refine=r0,
                             regrid_interval=1, tag_threshold=1e6, tag_buffer=2,
                             tag_predicate=predicate, level_interpolation_order=p)
             states = allocate_state(solver)
@@ -363,7 +365,7 @@ function positivity_study()
     for p in ORDERS, wcells in (0.5, 1.0, 2.0)
         r0 = BlockRegion((5N ÷ 12, 0, 0), (N ÷ 6 + 1, 1, 1))
         solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
-                        art=ArtParams(enabled=false), filter_interval=0, refine=r0,
+                        art=ArtificialProperties(enabled=false), filter_interval=0, refine=r0,
                         level_interpolation_order=p)
         states = allocate_state(solver)
         h = 1 / N

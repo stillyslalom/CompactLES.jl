@@ -6,6 +6,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: apply_bcs!, filter_state!, max_rate
 using Printf
 const CL = CompactLES
 const OPTS = CL.script_args(ARGS, (steps=3, levels="3,4", regrid_steps=6))

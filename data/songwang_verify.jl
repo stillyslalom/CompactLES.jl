@@ -9,6 +9,7 @@
 # Run with:
 #   julia --project=. -t 1 data/songwang_verify.jl je6b00076_si_001.pdf
 using CompactLES
+using CompactLES.DiffusionData
 using LinearAlgebra
 using SHA
 

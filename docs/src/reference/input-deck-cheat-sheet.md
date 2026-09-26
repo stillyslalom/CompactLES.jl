@@ -52,13 +52,14 @@ omitted quantity remains `NaN` in the object; it is derived only during
 | Several regions with smooth transitions | `Layers(background, shape => prim, ...; width=Cells(3))` |
 | Pressure in hydrostatic balance with the body force | `Hydrostatic(ic; p_ref, at)` |
 | Shapes | `Slab`, `Box`, `Sphere`, `Ellipsoid`, `Cylinder`, `LevelSet`; `∪`, `∩`, `setdiff`, `!` |
+| Load the shapes and `Layers` | `using CompactLES.Regions` |
 | Constant boundary state | `DirichletBC(prim)`, `NSCBCInflowBC(prim)` |
 
 ## Physical model: `Problem`
 
 ```julia
 Problem(; domain, bcs, ic, name="problem",
-        eos=IdealSpecies("gas"; R=1, gamma=1.4), transport=Transport(),
+        eos=IdealSpecies("gas"; R=1, gamma=1.4), transport=ConstantTransport(),
         metric=CartesianMetric(), sources=())
 ```
 
@@ -69,7 +70,7 @@ Problem(; domain, bcs, ic, name="problem",
 | `ic` | `(x1,x2,x3) -> Prim` or `(x1,x2,x3,h) -> Prim` | Required; keep it pure |
 | `name` | Display/output label | `"problem"` |
 | `eos` | Species and thermodynamic closure | `IdealSpecies("gas"; R=1, gamma=1.4)` |
-| `transport` | Molecular transport model | `Transport()` (`mu0=0`, `Pr=0.7`, `Sc=0.7`) |
+| `transport` | Molecular transport model | `ConstantTransport()` (`mu0=0`, `Pr=0.7`, `Sc=0.7`) |
 | `metric` | Coordinate geometry | `CartesianMetric()` |
 | `sources` | Tuple of explicit source objects | `()` |
 
@@ -93,7 +94,7 @@ order required by every `Prim.Y`. A single `IdealSpecies` is promoted
 internally to the one-species mixture representation. See
 [Thermodynamics and species transport](@ref).
 
-`Transport(mu0=..., Pr=..., Sc=...)` uses constant molecular properties: the
+`ConstantTransport(mu0=..., Pr=..., Sc=...)` uses constant molecular properties: the
 thermal conductivity is `mu0 * cp / Pr` and the species diffusivity, common to
 all species, is `mu0 / (rho * Sc)`.
 Use `CeaTransport(eos)` for temperature-dependent viscosity and conductivity
@@ -144,11 +145,11 @@ or a fixed physical width for a resolved material layer.
 
 ```julia
 Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
-    art=ArtParams(), cfl=0.5, control=StepControl(), filter_interval=1,
+    art=ArtificialProperties(), cfl=0.5, control=StepControl(), filter_interval=1,
     filter_cfl=0.35, filter_weighting=:none,
     dims=nothing, n_halo=4, comm=MPI.COMM_WORLD,
     stretch=(nothing,nothing,nothing), patch_grid=(1,1,1),
-    backend=CPUBackend(), interface_rhs=:extended,
+    backend=CompactLES.CPUBackend(), interface_rhs=:extended,
     interface_divergence=nothing, interface_flux=:closure,
     amr=nothing)                             # AMR(...) groups refinement options
 ```
@@ -158,7 +159,7 @@ Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
 | `n_global` | Global points in `(x,y,z)` | Required; `1` collapses a direction |
 | `deriv` | First-derivative compact scheme | `lele_d1_6()` |
 | `filt` | Conserved-state compact filter | `compact_filter(0.45)` |
-| `art` | Artificial properties | `ArtParams()` |
+| `art` | Artificial properties | `ArtificialProperties()` |
 | `cfl` | CFL multiplier | `0.5` |
 | `control` | Timestep landing, recovery, and floors | `StepControl()` |
 | `filter_interval` | Apply filter every `k` completed steps | `1`; `0` disables |
@@ -169,7 +170,7 @@ Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
 | `comm` | MPI communicator | `MPI.COMM_WORLD` |
 | `stretch` | Per-direction `Stretch` mappings | all `nothing` |
 | `patch_grid` | Slab patches along one dimension; excludes explicit `dims` and AMR | `(1,1,1)` |
-| `backend` | Storage/execution backend | `CPUBackend()` |
+| `backend` | Storage/execution backend | `CompactLES.CPUBackend()` |
 | `interface_rhs` | Patch-interface closure policy | `:extended` |
 | `interface_divergence` | Scheme supplying the flux divergence's closure rows at interface ends; experimental, Float64 only | `nothing` |
 | `interface_flux` | `:ghost` differentiates the inviscid and molecular fluxes through interfaces from ghost values; experimental | `:closure` |
@@ -189,10 +190,10 @@ the same `Problem` and `Numerics`.
 | Sensor combination | `reduction=:sum` or `:max`; `smoother=:gaussian` or `:compact` |
 | Detector | `detector=:delta4` (default) or `:d8` |
 
-## Artificial properties: `ArtParams`
+## Artificial properties: `ArtificialProperties`
 
 ```julia
-ArtParams(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01, C_D=0.1,
+ArtificialProperties(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01, C_D=0.1,
           C_Y=100.0, Y_tolerance=1e-4,
           mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
           smoother=:gaussian, detector=:delta4, species_flux=:partial_density)
@@ -297,7 +298,7 @@ fixed core count, single-threaded ranks have beaten multithreaded ranks by
 about 2x on every machine measured, a 2-D workstation case included, so use
 `-t 1` under `mpiexec` and `mpiexec -n 8 -t 1` rather than `-t 8` for anything
 above 1-D. The reasons and the exceptions are in [Threads and ranks](@ref).
-`CPUBackend()` is the default; wrap a
+`CompactLES.CPUBackend()` is the default; wrap a
 `CUDABackend()` or `ROCBackend()` in `DeviceBackend` after loading the matching
 GPU package. A device solver may be decomposed, patched, refined, or tiled; it
 excludes `level_restriction=:filter` and `Nasa9Mixture`.

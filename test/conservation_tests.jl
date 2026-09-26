@@ -1,6 +1,7 @@
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: npatches, ConservedState, interior_index, xcoord
 using Test
 
 const CL = CompactLES
@@ -31,7 +32,7 @@ const CL = CompactLES
                         BlockRegion((120, 0, 0), (8, 1, 1))], subcycle=true))
     for layout in layouts
         solver = Solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                        bcs=bcs, eos=eos, art=ArtParams(enabled=false),
+                        bcs=bcs, eos=eos, art=ArtificialProperties(enabled=false),
                         filter_interval=0; layout...)
         states = allocate_state(solver)
         initialize!(solver, states, ic)
@@ -62,7 +63,7 @@ const CL = CompactLES
 
     periodic = Solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
                       bcs=(per, per, per), eos=eos,
-                      art=ArtParams(enabled=false), patch_grid=(2, 1, 1))
+                      art=ArtificialProperties(enabled=false), patch_grid=(2, 1, 1))
     periodic_states = allocate_state(periodic)
     initialize!(periodic, periodic_states,
                 (x, y, z) -> Prim(Y=(0.3, 0.7), u=velocity, p=2.0,
@@ -81,7 +82,7 @@ const CL = CompactLES
     # budget must follow the new layout while preserving this linear state.
     pred = (p, I) -> xcoord(p, 1, interior_index(p, I)[1]) > 0.72
     moving = Solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=bcs, eos=eos, art=ArtParams(enabled=false),
+                    bcs=bcs, eos=eos, art=ArtificialProperties(enabled=false),
                     filter_interval=0, subcycle=true, regrid_interval=1,
                     tag_buffer=0, tag_predicate=pred,
                     refine=BlockRegion((48, 0, 0), (32, 1, 1)))
@@ -100,7 +101,7 @@ const CL = CompactLES
     @test after.total_energy ≈ before.total_energy atol=2e-12
 
     single = Solver(n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                    bcs=bcs, eos=eos, art=ArtParams(enabled=false))
+                    bcs=bcs, eos=eos, art=ArtificialProperties(enabled=false))
     Q = allocate_state(single)
     initialize!(single, Q, ic)
     @test CL._conserved_budget(single, Q).total_mass ≈ mass atol=1e-13

@@ -16,6 +16,7 @@ if !@isdefined(CL)
     using Test
     const CL = CompactLES
 end
+using CompactLES: padded_index, xcoord, global_xcoord, hdf5_available, hdf5_parallel
 using HDF5
 
 @testset "HDF5 extension: shared-file checkpoint" begin
@@ -40,7 +41,7 @@ using HDF5
     # C8 filter closure requires; the transverse dimensions stay undivided.
     mk() = begin
         s = Solver(bcs=per3h, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                   eos=eos, art=ArtParams(enabled=false), dims=(np, 1, 1))
+                   eos=eos, art=ArtificialProperties(enabled=false), dims=(np, 1, 1))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), u=(x, 2y, 3z),
                                             p=1 + x, rho=1 + y + 2z))
@@ -93,7 +94,7 @@ using HDF5
     d = 0.0
     for c in 1:s2.equations.n_cons, k in 1:s2.decomp.n_local[3],
         j in 1:s2.decomp.n_local[2], i in 1:s2.decomp.n_local[1]
-        I = gidx(s2, i, j, k)
+        I = padded_index(s2, i, j, k)
         d = max(d, abs(Q2[I, c] - Q1[I, c]))
     end
     @test MPI.Allreduce(d, max, comm) == 0.0
@@ -101,7 +102,7 @@ using HDF5
     # The state is stored in global index space, so a mismatched grid is
     # detected rather than silently misread.
     s3 = Solver(bcs=per3h, n_global=(72, 16, 12), L_domain=(1.0, 1.0, 1.0),
-                eos=eos, art=ArtParams(enabled=false), dims=(np, 1, 1))
+                eos=eos, art=ArtificialProperties(enabled=false), dims=(np, 1, 1))
     Q3 = allocate_state(s3)
     @test_throws ErrorException load_checkpoint_hdf5!(s3, Q3, stem)
 
@@ -120,25 +121,25 @@ using HDF5
     other = IdealMixture([IdealSpecies{Float64}("c", 1.0, 1.4),
                           IdealSpecies{Float64}("d", 2.0, 1.6)])
     reject(Solver(bcs=per3h, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                  eos=other, art=ArtParams(enabled=false), dims=(np, 1, 1)),
+                  eos=other, art=ArtificialProperties(enabled=false), dims=(np, 1, 1)),
            "conserved component mismatch")
 
     # A different species count, which also moves n_cons.
     reject(Solver(bcs=per3h, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
                   eos=IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4)]),
-                  art=ArtParams(enabled=false), dims=(np, 1, 1)),
+                  art=ArtificialProperties(enabled=false), dims=(np, 1, 1)),
            "conserved layout mismatch")
 
     # The same grid dimensions over a longer domain, which n_global cannot see
     # and the coordinates can.
     reject(Solver(bcs=per3h, n_global=(72, 16, 16), L_domain=(2.0, 1.0, 1.0),
-                  eos=eos, art=ArtParams(enabled=false), dims=(np, 1, 1)),
+                  eos=eos, art=ArtificialProperties(enabled=false), dims=(np, 1, 1)),
            "grid coordinate mismatch")
 
     # The same grid shifted, likewise invisible to every other field.
     reject(Solver(bcs=per3h, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
                   origin=(0.5, 0.0, 0.0), eos=eos,
-                  art=ArtParams(enabled=false), dims=(np, 1, 1)),
+                  art=ArtificialProperties(enabled=false), dims=(np, 1, 1)),
            "grid coordinate mismatch")
 
     # A stretched dimension against the uniform grid it was written on. The two
@@ -150,7 +151,7 @@ using HDF5
     mkw(st) = begin
         s = Solver(bcs=wall1, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
                    stretch=(st, nothing, nothing), eos=eos,
-                   art=ArtParams(enabled=false), dims=(np, 1, 1))
+                   art=ArtificialProperties(enabled=false), dims=(np, 1, 1))
         s, allocate_state(s)
     end
     su, Qu = mkw(nothing)
@@ -171,7 +172,7 @@ using HDF5
     reject(Solver(bcs=((SlipWallBC(), SlipWallBC()), per3h[2], per3h[3]),
                   n_global=(72, 16, 16), L_domain=(1.0, 2π, 1.0),
                   origin=(0.5, 0.0, 0.0), metric=CylindricalMetric(),
-                  eos=eos, art=ArtParams(enabled=false), dims=(np, 1, 1)),
+                  eos=eos, art=ArtificialProperties(enabled=false), dims=(np, 1, 1)),
            "metric mismatch")
 
     # The mutable run state. (t, step) alone leaves behind a retry's reduced
@@ -180,7 +181,7 @@ using HDF5
     # the collective pattern is a deadlock on resume, not a wrong answer.
     mkstate(bcs) = begin
         s = Solver(bcs=bcs, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                   eos=eos, art=ArtParams(enabled=false), dims=(np, 1, 1))
+                   eos=eos, art=ArtificialProperties(enabled=false), dims=(np, 1, 1))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), p=1.0, rho=1.0))
         s, Q
@@ -223,7 +224,7 @@ using HDF5
     lean = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                          IdealSpecies{Float64}("b", 2.0, 1.5)])
     mkrec(; kw...) = Solver(bcs=per3h, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                            art=ArtParams(enabled=false), dims=(np, 1, 1); kw...)
+                            art=ArtificialProperties(enabled=false), dims=(np, 1, 1); kw...)
     refused = try
         load_checkpoint_hdf5!(mkrec(eos=lean), allocate_state(mkrec(eos=lean)), stem)
         0
@@ -296,7 +297,7 @@ end
     # least the 9 points the C8 filter closure needs on every rank.
     build(dims) = begin
         s = Solver(bcs=per3h, n_global=(72, 72, 12), L_domain=(1.0, 1.0, 1.0),
-                   art=ArtParams(enabled=false), dims=dims)
+                   art=ArtificialProperties(enabled=false), dims=dims)
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         s, Q
@@ -312,7 +313,7 @@ end
     # global array; at np == 1 it degenerates to the same one, and the check
     # still verifies the global-index round trip.
     sr = Solver(bcs=per3h, n_global=(72, 72, 12), L_domain=(1.0, 1.0, 1.0),
-                art=ArtParams(enabled=false), dims=(1, np, 1))
+                art=ArtificialProperties(enabled=false), dims=(1, np, 1))
     Qr = allocate_state(sr)
     load_checkpoint_hdf5!(sr, Qr, stem)
     @test sr.t == 0.5
@@ -326,7 +327,7 @@ end
     d = 0.0
     for c in 1:sr.equations.n_cons, k in 1:sr.decomp.n_local[3],
         j in 1:sr.decomp.n_local[2], i in 1:sr.decomp.n_local[1]
-        I = gidx(sr, i, j, k)
+        I = padded_index(sr, i, j, k)
         d = max(d, abs(Qr[I, c] - ref[I, c]))
     end
     @test MPI.Allreduce(d, max, comm) == 0.0
@@ -382,7 +383,7 @@ end
     d = max(d, maximum(abs.(r.beta_art[inner] .- s.beta_art[inner])))
     @test MPI.Allreduce(d, max, comm) == 0.0
 
-    off = mk(art=ArtParams(enabled=false))
+    off = mk(art=ArtificialProperties(enabled=false))
     @test_throws "artificial-property mismatch" load_checkpoint_hdf5!(
         off, allocate_state(off), stem)
 
@@ -527,7 +528,7 @@ end
     u0 = 0.5
     wave(x, y, z) = Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x))
     mk(refine, sub) = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0),
-                             bcs=per3h, art=ArtParams(enabled=false),
+                             bcs=per3h, art=ArtificialProperties(enabled=false),
                              filter_interval=0, subcycle=true, tile=8,
                              regrid_interval=5, tile_lifetime=100,
                              refine=refine, comm=sub)
@@ -535,7 +536,7 @@ end
         e = 0.0
         for (ps, Q) in CL.eachpatch(solver, states)
             for i in 1:ps.decomp.n_local[1]
-                I = gidx(ps, i, 1, 1)
+                I = padded_index(ps, i, 1, 1)
                 e = max(e, abs(Q[I, 1] - (1.0 + 0.2 * sin(xcoord(ps, 1, i) -
                                                           u0 * solver.t))))
             end
@@ -592,7 +593,7 @@ end
     nx, ny, nz = 72, 16, 12
     rho_of = (x, y, z) -> 1 + x + 100y + 10000z
     s = Solver(bcs=per3h, n_global=(nx, ny, nz), L_domain=(1.0, 1.0, 1.0),
-               art=ArtParams(enabled=false), dims=(np, 1, 1))
+               art=ArtificialProperties(enabled=false), dims=(np, 1, 1))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(u=(x, 10y, 100z), p=1.0,
                                         rho=rho_of(x, y, z)))
@@ -674,7 +675,7 @@ end
     cyl = Solver(bcs=((SlipWallBC(), SlipWallBC()), per3h[2], per3h[3]),
                  n_global=(12, 72, 10), L_domain=(1.0, 2π, 1.0),
                  origin=(0.5, 0.0, 0.0), metric=CylindricalMetric(),
-                 art=ArtParams(enabled=false), dims=(1, np, 1))
+                 art=ArtificialProperties(enabled=false), dims=(1, np, 1))
     Qc = allocate_state(cyl)
     initialize!(cyl, Qc, (r, θ, z) -> Prim(u=(0.0, 0.5, 0.0), p=1.0, rho=1.0))
     save_hdf5(cyl, Qc, joinpath(dir, "annulus"); fields=(:rho, :velocity))
@@ -721,7 +722,7 @@ end
     nx, ny, nz = 72, 16, 12
     rho_of = (x, y, z) -> 1 + x + 100y + 10000z
     s = Solver(bcs=per3h, n_global=(nx, ny, nz), L_domain=(1.0, 1.0, 1.0),
-               art=ArtParams(enabled=false), dims=(np, 1, 1))
+               art=ArtificialProperties(enabled=false), dims=(np, 1, 1))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0, rho=rho_of(x, y, z)))
 
@@ -862,7 +863,7 @@ grid_time(grid::XNode) = parse(Float64, only(xml_find(grid, "Time")).attrs["Valu
                         IdealSpecies{Float64}("b", 2.0, 1.6)])
     mk() = begin
         s = Solver(bcs=per3h, n_global=(72, 16, 12), L_domain=(1.0, 1.0, 1.0),
-                   eos=eos, art=ArtParams(enabled=false), dims=(np, 1, 1))
+                   eos=eos, art=ArtificialProperties(enabled=false), dims=(np, 1, 1))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(Y=(0.3 + 0.2sin(2π * x), 0.7 - 0.2sin(2π * x)),
                                             u=(0.2, 0, 0), p=1.0, rho=1.0))

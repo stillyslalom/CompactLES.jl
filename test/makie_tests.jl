@@ -16,13 +16,14 @@ if !@isdefined(CL)
     using Test
     const CL = CompactLES
 end
+using CompactLES: padded_index, makie_available
 using CairoMakie
 
 # The old `density_line`: rank-local sampling of mixture_density along dim 1 at
 # (i, 1, 1). Kept here as the reference the new API must reproduce.
 function density_line_local(solver, Q)
     n = solver.decomp.n_local[1]
-    [mixture_density(solver, Q, gidx(solver, i, 1, 1)) for i in 1:n]
+    [mixture_density(solver, Q, padded_index(solver, i, 1, 1)) for i in 1:n]
 end
 
 @testset "Makie extension: extraction API" begin
@@ -41,7 +42,7 @@ end
                        p = 1 + 0.1 * exp(-((x - 0.4) / 0.05)^2)
                        Prim(p=p, rho=p^(1 / gamma))
                    end)
-    num = Numerics(n_global=(96, 1, 1), art=ArtParams(enabled=false),
+    num = Numerics(n_global=(96, 1, 1), art=ArtificialProperties(enabled=false),
                    filter_interval=0, dims=(np, 1, 1))
     solver, Q = setup(prob, num)
 
@@ -80,7 +81,7 @@ end
                    bcs=ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
                    ic=(x, y, z) -> Prim(p=1.0,
                                         rho=1.0 + 0.5sin(2pi * x) * cos(2pi * y)))
-    num = Numerics(n_global=(48, 16, 1), art=ArtParams(enabled=false),
+    num = Numerics(n_global=(48, 16, 1), art=ArtificialProperties(enabled=false),
                    filter_interval=0, dims=dims)
     solver, Q = setup(prob, num)
 
@@ -115,7 +116,7 @@ end
                    domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                    bcs=ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
                    ic=(x, y, z) -> Prim(p=1.0, rho=1.0 + 0.5sin(2pi * x) * cos(2pi * y)))
-    num = Numerics(n_global=(36, 24, 1), art=ArtParams(enabled=false),
+    num = Numerics(n_global=(36, 24, 1), art=ArtificialProperties(enabled=false),
                    filter_interval=0, refine=BlockRegion((10, 6, 0), (10, 8, 1)))
     solver, states = setup(prob, num)
     @test states isa Vector
@@ -147,7 +148,7 @@ if MPI.Comm_size(MPI.COMM_WORLD) == 1
                             (PeriodicBC(), PeriodicBC()),
                             (PeriodicBC(), PeriodicBC())),
                        ic=(r, th, z) -> Prim(p=1.0, rho=1.0 + 0.2cos(th) * r))
-        num = Numerics(n_global=(24, 16, 1), art=ArtParams(enabled=false),
+        num = Numerics(n_global=(24, 16, 1), art=ArtificialProperties(enabled=false),
                        filter_interval=0)
         solver, Q = setup(prob, num)
 
@@ -170,7 +171,7 @@ if MPI.Comm_size(MPI.COMM_WORLD) == 1
                            (PoleBC(), PoleBC()),
                            (PeriodicBC(), PeriodicBC())),
                       ic=(r, th, ph) -> Prim(p=1.0, rho=1.0 + exp(-(r / 0.25)^2)))
-        snum = Numerics(n_global=(24, 16, 12), art=ArtParams(enabled=false),
+        snum = Numerics(n_global=(24, 16, 12), art=ArtificialProperties(enabled=false),
                         filter_interval=0)
         ssolver, sQ = setup(sph, snum)
         x1, x2, vals = field_slice(ssolver, sQ, :rho; normal=3, index=1)

@@ -3,25 +3,26 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: compute_rhs!
 using JET, Printf
 const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 solver = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
-           transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
+           transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=true))
 Q = allocate_state(solver); dQ = zero(Q)
 initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
 
 sc = Solver(n_global=(32, 16, 12), L_domain=(1.0, 2π, 0.5), metric=CylindricalMetric(),
             origin=(0.2, 0.0, 0.0),
             bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-            art=ArtParams(enabled=true))
+            art=ArtificialProperties(enabled=true))
 Qc = allocate_state(sc); dQc = zero(Qc)
 initialize!(sc, Qc, (r, θ, z) -> Prim(u=(0, 0.1r, 0), p=1.0, rho=1.0))
 
 sn = Solver(n_global=(32, 12, 12), L_domain=(1.0, 0.4, 0.4),
             bcs=((SlipWallBC(), NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
-            art=ArtParams(enabled=true))
+            art=ArtificialProperties(enabled=true))
 Qn = allocate_state(sn); dQn = zero(Qn)
 initialize!(sn, Qn, (x, y, z) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0))
 

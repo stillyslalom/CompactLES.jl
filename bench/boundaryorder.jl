@@ -61,6 +61,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES, Printf
+using CompactLES: padded_index, xcoord
 const CL = CompactLES
 MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("run this study on one rank")
 include(joinpath(@__DIR__, "..", "test", "smooth_cases.jl"))
@@ -482,7 +483,7 @@ function pulse_leftgoing(N; source=nothing, patch_grid=(1, 1, 1), refine=nothing
     amp = 1e-3; c0 = sqrt(GAMMA)
     pulse(x) = amp * exp(-40 * (x - pi / 2)^2)
     s = Solver(n_global=(N, 1, 1), L_domain=(2pi, 1.0, 1.0), bcs=per3,
-               art=ArtParams(enabled=false), filter_interval=0,
+               art=ArtificialProperties(enabled=false), filter_interval=0,
                patch_grid=patch_grid, refine=refine, subcycle=subcycle;
                merge((interface_divergence=source,), opts)...)
     Q = allocate_state(s)
@@ -492,7 +493,7 @@ function pulse_leftgoing(N; source=nothing, patch_grid=(1, 1, 1), refine=nothing
     states = Q isa Vector ? Q : [Q]
     ps = CL.PatchSolver(s, getfield(s, :patches)[1])
     refresh_primitives!(ps, states[1])
-    return [((ps.p[gidx(ps, i, 1, 1)] - 1) - c0 * ps.u[gidx(ps, i, 1, 1)]) / 2 / amp
+    return [((ps.p[padded_index(ps, i, 1, 1)] - 1) - c0 * ps.u[padded_index(ps, i, 1, 1)]) / 2 / amp
             for i in 1:ps.decomp.n_local[1] if xcoord(ps, 1, i) < 2.1]
 end
 

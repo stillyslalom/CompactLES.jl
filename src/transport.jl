@@ -550,8 +550,8 @@ end
     return "transport state is invalid"
 end
 
-@inline function transport_coefficients(transport::Transport, eos, temperature, rho, cp,
-                                        Y::NTuple{N}) where {N}
+@inline function transport_coefficients(transport::ConstantTransport, eos, temperature, rho,
+                                        cp, Y::NTuple{N}) where {N}
     mu = transport.mu0
     return (mu=mu, kappa=mu * cp / transport.Pr,
             D=ntuple(_ -> mu / (rho * transport.Sc), Val(N)))
@@ -646,7 +646,7 @@ end
     end
 end
 
-@inline transport_at(transport::Transport, eos, temperature, rho, cp, Y, I) =
+@inline transport_at(transport::ConstantTransport, eos, temperature, rho, cp, Y, I) =
     (mu=transport.mu0, kappa=transport.mu0 * cp[I] / transport.Pr,
      D=UniformDiffusivity(transport.mu0 / (rho[I] * transport.Sc)))
 
@@ -666,15 +666,15 @@ end
 end
 
 validate_transport(::AbstractTransport, eos) = nothing
-function validate_transport(transport::Transport, eos)
+function validate_transport(transport::ConstantTransport, eos)
     (; mu0, Pr, Sc) = transport
     isfinite(mu0) && mu0 >= 0 ||
-        throw(ArgumentError("Transport: mu0 must be finite and >= 0 (0 is inviscid), " *
-                            "got $mu0"))
+        throw(ArgumentError("ConstantTransport: mu0 must be finite and >= 0 " *
+                            "(0 is inviscid), got $mu0"))
     isfinite(Pr) && Pr > 0 ||
-        throw(ArgumentError("Transport: Pr must be finite and positive, got $Pr"))
+        throw(ArgumentError("ConstantTransport: Pr must be finite and positive, got $Pr"))
     isfinite(Sc) && Sc > 0 ||
-        throw(ArgumentError("Transport: Sc must be finite and positive, got $Sc"))
+        throw(ArgumentError("ConstantTransport: Sc must be finite and positive, got $Sc"))
     return nothing
 end
 function validate_transport(transport::CeaTransport{T,N,D,Names}, eos) where {T,N,D,Names}

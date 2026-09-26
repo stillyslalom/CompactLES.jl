@@ -19,18 +19,19 @@ tanh_blend
 ## Regions
 
 ```@docs
-Layers
-Layer
-Cells
+Regions
+Regions.Layers
+Regions.Layer
+Regions.Cells
 Hydrostatic
-Shape
-Slab
-Box
-Ellipsoid
-Sphere
-Cylinder
-LevelSet
-signed_distance
+Regions.Shape
+Regions.Slab
+Regions.Box
+Regions.Ellipsoid
+Regions.Sphere
+Regions.Cylinder
+Regions.LevelSet
+Regions.signed_distance
 Multimode
 Ramp
 TurbulentInflow
@@ -54,6 +55,6 @@ riemann_interface
 ```@docs
 xcoord
 global_xcoord
-gidx
+padded_index
 interior_index
 ```

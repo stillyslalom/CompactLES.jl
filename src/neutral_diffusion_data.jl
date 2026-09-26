@@ -1,3 +1,30 @@
+"""
+    CompactLES.DiffusionData
+
+Vendored binary diffusion data: the neutral-gas correlations of Marrero and
+Mason (1972), the calculated fits of Song et al. (2016) and the measurements of
+Müller and Klemm (1970), with their lookups and uncertainties, and the
+Stanton--Murillo ionic interdiffusion reference evaluator. CompactLES does not
+export the module's names; load them with `using CompactLES.DiffusionData` or
+qualify them. The polynomial model built from the neutral tables,
+[`neutral_binary_diffusion`](@ref CompactLES.neutral_binary_diffusion), is exported by
+CompactLES.
+"""
+module DiffusionData
+
+using ..CompactLES: BinaryDiffusionPolynomial, binary_diffusivity, species_names
+
+export H_ION_MASS, D_ION_MASS, T_ION_MASS, StantonMurilloDiagnostics
+export stanton_murillo_interdiffusivity
+export MarreroMasonPair, MARRERO_MASON_1972, MARRERO_MASON_UNCERTAINTY
+export marrero_mason_pair, marrero_mason_pairs, marrero_mason_diffusivity
+export SongWangPair, SONG_WANG_2016, SONG_WANG_UNCERTAINTY, song_wang_pair
+export song_wang_diffusivity, MuellerKlemmPair, MUELLER_KLEMM_1970
+export MUELLER_KLEMM_TEMPERATURE, MUELLER_KLEMM_PRESSURE, mueller_klemm_pair
+export neutral_binary_sources, neutral_binary_diffusion_residual
+
+include("ion_transport.jl")
+
 # Dilute neutral-gas binary diffusion correlations from T. R. Marrero and
 # E. A. Mason, "Gaseous Diffusion Coefficients", J. Phys. Chem. Ref. Data 1,
 # 3--118 (1972), https://doi.org/10.1063/1.3253094. The rows below are Tables
@@ -66,8 +93,9 @@ end
 The correlated gas pairs of Marrero and Mason (1972), Tables 12 and 13, as
 [`MarreroMasonPair`](@ref) rows. Look a pair up with
 [`marrero_mason_pair`](@ref) and evaluate it with
-[`marrero_mason_diffusivity`](@ref); [`neutral_binary_diffusion`](@ref)
-fits a [`BinaryDiffusionPolynomial`](@ref) to the rows of a species list.
+[`marrero_mason_diffusivity`](@ref);
+[`neutral_binary_diffusion`](@ref CompactLES.neutral_binary_diffusion) fits a
+[`BinaryDiffusionPolynomial`](@ref) to the rows of a species list.
 The only hydrogen isotopologue pair is H2-D2. The paper's N2 and CO rows
 share coefficients by design, since it treats the two as isosteric.
 """
@@ -496,8 +524,8 @@ end
 """
     neutral_binary_sources(species; source=:marrero_mason, temperature_ref=300)
 
-Which source [`neutral_binary_diffusion`](@ref) takes each pair of
-`species` from, as a `Dict` from the pair to `:marrero_mason`,
+Which source [`neutral_binary_diffusion`](@ref CompactLES.neutral_binary_diffusion)
+takes each pair of `species` from, as a `Dict` from the pair to `:marrero_mason`,
 `:song_wang` or `:mueller_klemm`; a pair no listed source carries maps to
 `nothing`. A source is eligible only when `temperature_ref` lies in that
 source's stated range. `source` is one of those symbols or a tuple of them in
@@ -512,6 +540,56 @@ function neutral_binary_sources(species; source=:marrero_mason, temperature_ref=
     end
     return out
 end
+
+"""
+    neutral_binary_diffusion_residual(model, i, j; source=:marrero_mason,
+                                      samples=2000)
+
+The largest relative departure of pair `(i, j)` of a
+[`BinaryDiffusionPolynomial`](@ref) built by
+[`neutral_binary_diffusion`](@ref CompactLES.neutral_binary_diffusion) from its
+source, resolved with the same `source` preference: against the Marrero and
+Mason correlation on `samples` log-spaced temperatures over the pair's range, or
+against the Song and Wang fit likewise with that fit's own node residual added,
+or against the Müller and Klemm measurement at its temperature.
+"""
+function neutral_binary_diffusion_residual(model::BinaryDiffusionPolynomial, i::Integer,
+                                           j::Integer; source=:marrero_mason,
+                                           samples::Integer=2000)
+    names = species_names(model)
+    found = _neutral_source(names[i], names[j], source, model.temperature_ref)
+    found === nothing && throw(ArgumentError(
+        "no listed source carries a $(names[i])-$(names[j]) pair at " *
+        "$(model.temperature_ref) K"))
+    which, pair = found
+    lo, hi = model.temperature_min[i][j], model.temperature_max[i][j]
+    worst = which === :song_wang ? pair.node_residual : 0.0
+    for temperature in (lo == hi ? (lo,) : _log_spaced(lo, hi, samples))
+        fitted = binary_diffusivity(model, temperature, model.pressure_ref, i, j)
+        reference = which === :marrero_mason ?
+            marrero_mason_diffusivity(pair, temperature, model.pressure_ref) :
+            which === :song_wang ?
+            song_wang_diffusivity(pair, temperature, model.pressure_ref) :
+            pair.D * MUELLER_KLEMM_PRESSURE / model.pressure_ref
+        worst = max(worst, abs(fitted / reference - 1))
+    end
+    return worst
+end
+
+# Log-spaced samples whose end points are exactly the range bounds, since a
+# round trip through exp and log lands a hair outside an inclusive range.
+function _log_spaced(lo, hi, samples)
+    temperatures = exp.(range(log(lo), log(hi), length=samples))
+    temperatures[1] = lo
+    temperatures[end] = hi
+    return temperatures
+end
+
+end # module DiffusionData
+
+using .DiffusionData
+using .DiffusionData: _ATMOSPHERE, _neutral_source, _marrero_mason_pD,
+    _SONG_WANG_TEMPERATURE_REF
 
 """
     neutral_binary_diffusion(species; source=:marrero_mason, degree=10,
@@ -645,50 +723,6 @@ function _fit_log_polynomial(pair::MarreroMasonPair, lo, hi, temperature_ref, de
     vandermonde = [(zk / scale)^m for zk in z, m in 1:degree]
     scaled = vandermonde \ log_ratio
     return [scaled[m] / scale^m for m in 1:degree]
-end
-
-"""
-    neutral_binary_diffusion_residual(model, i, j; source=:marrero_mason,
-                                      samples=2000)
-
-The largest relative departure of pair `(i, j)` of a
-[`BinaryDiffusionPolynomial`](@ref) built by
-[`neutral_binary_diffusion`](@ref) from its source, resolved with the
-same `source` preference: against the Marrero and Mason correlation on
-`samples` log-spaced temperatures over the pair's range, or against the
-Song and Wang fit likewise with that fit's own node residual added, or
-against the Müller and Klemm measurement at its temperature.
-"""
-function neutral_binary_diffusion_residual(model::BinaryDiffusionPolynomial, i::Integer,
-                                           j::Integer; source=:marrero_mason,
-                                           samples::Integer=2000)
-    names = species_names(model)
-    found = _neutral_source(names[i], names[j], source, model.temperature_ref)
-    found === nothing && throw(ArgumentError(
-        "no listed source carries a $(names[i])-$(names[j]) pair at " *
-        "$(model.temperature_ref) K"))
-    which, pair = found
-    lo, hi = model.temperature_min[i][j], model.temperature_max[i][j]
-    worst = which === :song_wang ? pair.node_residual : 0.0
-    for temperature in (lo == hi ? (lo,) : _log_spaced(lo, hi, samples))
-        fitted = binary_diffusivity(model, temperature, model.pressure_ref, i, j)
-        reference = which === :marrero_mason ?
-            marrero_mason_diffusivity(pair, temperature, model.pressure_ref) :
-            which === :song_wang ?
-            song_wang_diffusivity(pair, temperature, model.pressure_ref) :
-            pair.D * MUELLER_KLEMM_PRESSURE / model.pressure_ref
-        worst = max(worst, abs(fitted / reference - 1))
-    end
-    return worst
-end
-
-# Log-spaced samples whose end points are exactly the range bounds, since a
-# round trip through exp and log lands a hair outside an inclusive range.
-function _log_spaced(lo, hi, samples)
-    temperatures = exp.(range(log(lo), log(hi), length=samples))
-    temperatures[1] = lo
-    temperatures[end] = hi
-    return temperatures
 end
 
 """

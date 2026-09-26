@@ -16,6 +16,7 @@
 # expected bitwise as well, and the printout says whether that held.
 
 using CompactLES
+using CompactLES: compute_rhs!, max_rate, CPUBackend
 using Printf
 const CL = CompactLES
 
@@ -60,7 +61,7 @@ function main(opt)
     # --- smooth periodic (TGV-shaped IC, multispecies sensors active) -----
     compare_run("periodic smooth 32^3", nmax=10, tfinal=0.5) do backend
         s = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π),
-                   bcs=(per, per, per), transport=Transport(mu0=1 / 1600),
+                   bcs=(per, per, per), transport=ConstantTransport(mu0=1 / 1600),
                    backend=backend)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(
@@ -114,7 +115,8 @@ function main(opt)
         s = Solver(n_global=(12, 12, 12), L_domain=(1.0, Float64(π), 2π),
                    bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
                    metric=SphericalMetric(), backend=backend,
-                   art=ArtParams(enabled=false), transport=Transport(mu0=0.0))
+                   art=ArtificialProperties(enabled=false),
+                   transport=ConstantTransport(mu0=0.0))
         Q = allocate_state(s)
         initialize!(s, Q, (r, θ, φ) -> Prim(rho=1.0, p=1.0, u=(0.0, 0.0, 0.0)))
         return s, Q
@@ -142,7 +144,7 @@ function main(opt)
         bcs1 = (DirichletBC((x, y, z, t) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1.0)),
                 DirichletBC((x, y, z, t) -> Prim(rho=0.125, u=(0.0, 0.0, 0.0), p=0.1)))
         s = Solver(n_global=(N, 1, 1), L_domain=(1.0, h, h),
-                   bcs=(bcs1, per, per), transport=Transport(mu0=0.0),
+                   bcs=(bcs1, per, per), transport=ConstantTransport(mu0=0.0),
                    cfl=0.4, backend=backend)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
@@ -157,7 +159,7 @@ function main(opt)
     function refined_wave(backend; kw...)
         N = 96
         s = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0),
-                   bcs=(per, per, per), art=ArtParams(enabled=false),
+                   bcs=(per, per, per), art=ArtificialProperties(enabled=false),
                    filter_interval=0,
                    refine=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1)),
                    backend=backend; kw...)
@@ -199,8 +201,8 @@ function main(opt)
     end
     function two_slabs(backend)
         s = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
-                   bcs=(per, per, per), art=ArtParams(enabled=false),
-                   transport=Transport(mu0=2e-2), patch_grid=(2, 1, 1),
+                   bcs=(per, per, per), art=ArtificialProperties(enabled=false),
+                   transport=ConstantTransport(mu0=2e-2), patch_grid=(2, 1, 1),
                    backend=backend)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) ->
@@ -228,7 +230,7 @@ function main(opt)
     function tiled_box(backend)
         N = 30
         s = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=(per, per, per),
-                   transport=Transport(mu0=1e-2), subcycle=true,
+                   transport=ConstantTransport(mu0=1e-2), subcycle=true,
                    refine=BlockRegion((11, 11, 11), (7, 7, 13)), tile=6,
                    backend=backend)
         states = allocate_state(s)
@@ -266,8 +268,8 @@ function main(opt)
             s = Solver(n_global=(n, n, n),
                        L_domain=(Tp(2π), Tp(2π), Tp(2π)),
                        bcs=(per, per, per), eos=IdealSpecies("gas"; R=one(Tp), gamma=Tp(1.4)),
-                       transport=Transport{Tp}(mu0=Tp(1 / 1600)),
-                       art=ArtParams{Tp}(enabled=false),
+                       transport=ConstantTransport{Tp}(mu0=Tp(1 / 1600)),
+                       art=ArtificialProperties{Tp}(enabled=false),
                        deriv=lele_d1_6(Tp), filt=compact_filter(Tp(0.45), Tp),
                        cfl=Tp(0.6), backend=backend)
             Q = allocate_state(s)

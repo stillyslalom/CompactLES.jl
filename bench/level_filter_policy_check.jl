@@ -10,6 +10,7 @@
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: eachpatch, padded_index
 using Test
 
 include(joinpath(@__DIR__, "level_filter_policy.jl"))
@@ -112,7 +113,7 @@ function main()
         momentum = ps.equations.i_mom[1]
         energy = ps.equations.i_energy
         for i in 1:ps.decomp.n_local[1]
-            I = gidx(ps, i, 1, 1)
+            I = padded_index(ps, i, 1, 1)
             rho = Q[I, 1]
             old_momentum = Q[I, momentum]
             Q[I, momentum] = 2rho

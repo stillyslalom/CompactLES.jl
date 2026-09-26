@@ -29,6 +29,8 @@
 #
 # Include after CompactLES.
 
+using CompactLES: compute_rhs!, apply_bcs!, padded_index, xcoord
+
 const SMOOTH_W = 4
 const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
@@ -122,7 +124,7 @@ function CompactLES.add_source!(source::ShearHeatingBalance, solver, dQ, Q, t)
     ie = solver.equations.i_energy
     for i in 1:solver.decomp.n_local[1]
         x = xcoord(solver, 1, i)
-        dQ[gidx(solver, i, 1, 1), ie] -= source.mu * (source.V * pi * cos(pi * x))^2 * decay
+        dQ[padded_index(solver, i, 1, 1), ie] -= source.mu * (source.V * pi * cos(pi * x))^2 * decay
     end
     return dQ
 end
@@ -198,12 +200,12 @@ const SMOOTH_DEFAULTS = (deriv=lele_d1_6(), filt=compact_filter(0.45),
 # and artificial-property coefficients are converted to it.
 function _smooth_solver(n_global, L, bcs, prof; deriv, filt, filter_interval,
                         filter_cfl, cfl, mu=0.0, Pr=0.7, sources=(),
-                        precision=Float64, art=ArtParams(enabled=false),
+                        precision=Float64, art=ArtificialProperties(enabled=false),
                         kwargs...)
     solver = Solver(n_global=n_global, L_domain=(L, 1.0, 1.0), bcs=bcs,
                     deriv=deriv, filt=filt, filter_interval=filter_interval,
                     filter_cfl=filter_cfl, cfl=cfl, precision=precision,
-                    transport=Transport{Float64}(mu0=mu, Pr=Pr), sources=sources,
+                    transport=ConstantTransport{Float64}(mu0=mu, Pr=Pr), sources=sources,
                     art=art; kwargs...)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> begin
@@ -387,7 +389,7 @@ function state_difference(solver, a, b; patch=0)
         ps = CompactLES.PatchSolver(solver, p)
         nl = ps.decomp.n_local
         for c in 1:solver.equations.n_cons, k in 1:nl[3], j in 1:nl[2], i in 1:nl[1]
-            I = gidx(ps, i, j, k)
+            I = padded_index(ps, i, j, k)
             ps.covered[I] == 0 || continue
             e = max(e, abs(as[pi][I, c] - bs[pi][I, c]))
         end
@@ -478,16 +480,16 @@ function closed_derivative_errors(N, deriv, f, df; W=SMOOTH_W, folded=false,
     bc = folded ? SymmetryPlaneBC() : SlipWallBC()
     solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
                     bcs=((bc, bc), per3[2], per3[3]),
-                    deriv=deriv, art=ArtParams(enabled=false), filter_interval=0)
+                    deriv=deriv, art=ArtificialProperties(enabled=false), filter_interval=0)
     a = CompactLES.field(solver.decomp); da = similar(a)
     for i in 1:N
-        a[gidx(solver, i, 1, 1)] = f(xcoord(solver, 1, i))
+        a[padded_index(solver, i, 1, 1)] = f(xcoord(solver, 1, i))
     end
     CompactLES.deriv_along!(da, a, solver, 1, parity)
     CompactLES._scale_grad!(da, solver, 1)
     wall = interior = 0.0
     for i in 1:N
-        e = abs(da[gidx(solver, i, 1, 1)] - df(xcoord(solver, 1, i)))
+        e = abs(da[padded_index(solver, i, 1, 1)] - df(xcoord(solver, 1, i)))
         if i <= W || i > N - W
             wall = max(wall, e)
         else
@@ -519,7 +521,7 @@ function NodeReference(solver, Q::AbstractArray)
     n == solver.n_global[1] || error("NodeReference needs the whole line on one rank")
     vals = Matrix{Float64}(undef, n, solver.equations.n_cons)
     for c in 1:solver.equations.n_cons, i in 1:n
-        vals[i, c] = Q[gidx(solver, i, 1, 1), c]
+        vals[i, c] = Q[padded_index(solver, i, 1, 1), c]
     end
     NodeReference(xcoord(solver, 1, 1), solver.h[1], n,
                   CompactLES.isperiodic(solver.bcs[1][1]), vals)
@@ -572,7 +574,7 @@ function regional_errors(solver, states, reference; comp=1, W=SMOOTH_W)
         face = length(patches) > 1
         e2 = zeros(size(Q, 1), size(Q, 2), size(Q, 3))
         for i in 1:n
-            I = gidx(ps, i, 1, 1)
+            I = padded_index(ps, i, 1, 1)
             e = abs(Q[I, comp] - reference(xcoord(ps, 1, i))[comp])
             e2[I] = e * e
             if e > max(wall, interface, covered, interior)
@@ -654,7 +656,7 @@ function entropy2d_case(N; k1=2, k2=1, phase=0.37, subcycle=false, opts...)
     o = merge(SMOOTH_DEFAULTS, opts)
     prof = entropy2d_profile(k1, k2, phase)
     solver = Solver(; n_global=(N, N, 1), L_domain=(2pi, 2pi, 1.0), bcs=per3,
-                    art=ArtParams(enabled=false), refine=refine_region2d(N),
+                    art=ArtificialProperties(enabled=false), refine=refine_region2d(N),
                     subcycle=subcycle, o...)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> begin
@@ -683,7 +685,7 @@ function regional_errors2d(solver, states, reference; comp=1, W=SMOOTH_W)
         n = ps.decomp.n_local
         e2 = zeros(size(Q, 1), size(Q, 2), size(Q, 3))
         for j in 1:n[2], i in 1:n[1]
-            I = gidx(ps, i, j, 1)
+            I = padded_index(ps, i, j, 1)
             e = abs(Q[I, comp] - reference(xcoord(ps, 1, i), xcoord(ps, 2, j))[comp])
             e2[I] = e * e
             e > max(interface, covered, interior) && (at = (pi, i))

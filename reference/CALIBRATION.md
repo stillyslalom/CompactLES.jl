@@ -11,7 +11,7 @@ Taylor-Green results.
 ## The defaults
 
 ```
-ArtParams(enabled = true,
+ArtificialProperties(enabled = true,
           C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.1, C_Y = 100,
           Y_tolerance = 1e-4, mu_sensor = :strain, beta_sensor = :strain,
           reduction = :sum, smoother = :gaussian, detector = :delta4,
@@ -204,7 +204,7 @@ cost. The link is to the section holding the evidence.
   seven or more cells. Widening the band admits the failure rather than
   repairing it ([species band](CALIBRATION_APPENDIX.md#the-species-validity-band)).
 - **A smooth run is suspected of an artificial-property error.**
-  `ArtParams(enabled = false)` skips the sensors and the coefficient
+  `ArtificialProperties(enabled = false)` skips the sensors and the coefficient
   calculation entirely. Taylor-Green at 128³ completes without them, which it
   does not without the filter
   ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)).

@@ -53,6 +53,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: compute_rhs!, apply_bcs!, filter_state!, padded_index
 using Printf
 
 const CL = CompactLES
@@ -282,7 +283,8 @@ function uniform_solver(::Type{T}, N, deriv; rho, v, p, R, gamma, filter_on,
     solver = Solver(; n_global=(N, 1, 1), L_domain=(one(T), h, h),
                     bcs=(periodic ? per : (SlipWallBC(), SlipWallBC()), per, per),
                     eos=IdealSpecies(T, "gas"; R=T(R), gamma=T(gamma)),
-                    transport=Transport{T}(mu0=zero(T)), art=ArtParams{T}(enabled=art_on),
+                    transport=ConstantTransport{T}(mu0=zero(T)),
+                    art=ArtificialProperties{T}(enabled=art_on),
                     deriv=deriv, filt=compact_filter(T(0.45), T), cfl=T(cfl),
                     filter_interval=filter_on ? 1 : 0, filter_cfl=T(0.35),
                     control=control)
@@ -298,8 +300,8 @@ function drift(::Type{T}, st, deriv; filter_on, periodic, nmax) where {T}
     CL.exchange_state!(Q, solver.decomp)
     CL.primitives!(solver, Q)
     n = solver.decomp.n_local[1]
-    u = [Float64(solver.u[gidx(solver, i, 1, 1)]) for i in 1:n]
-    dp = [Float64(solver.p[gidx(solver, i, 1, 1)]) / st.p - 1 for i in 1:n]
+    u = [Float64(solver.u[padded_index(solver, i, 1, 1)]) for i in 1:n]
+    dp = [Float64(solver.p[padded_index(solver, i, 1, 1)]) / st.p - 1 for i in 1:n]
     return (u=u, dp=dp, t=Float64(solver.t))
 end
 
@@ -324,7 +326,7 @@ function freestream_part()
             n = solver.decomp.n_local[1]
             cols = String[]
             for c in 1:solver.equations.n_cons
-                v = [Float64(dQ[gidx(solver, i, 1, 1), c]) for i in 1:n]
+                v = [Float64(dQ[padded_index(solver, i, 1, 1), c]) for i in 1:n]
                 push!(cols, sprintf("%.1e/%.1e", wall_max(v), interior_max(v)))
             end
             printf("  %-8s %-20s %s\n", T, rlabel, join(cols, "  "))
@@ -398,7 +400,7 @@ function mode_part()
             CL.exchange_state!(Q, solver.decomp)
             CL.primitives!(solver, Q)
             n = solver.decomp.n_local[1]
-            push!(us, maximum(abs(solver.u[gidx(solver, i, 1, 1)]) for i in 1:n))
+            push!(us, maximum(abs(solver.u[padded_index(solver, i, 1, 1)]) for i in 1:n))
             push!(ts, solver.t)
         end
         if length(us) < 3
@@ -450,7 +452,8 @@ function jacobian_row(label, deriv; N=51, filter_on=false, cl=:onesided, mu=0.0,
          SlipWallBC()
     solver = Solver(; n_global=(N, 1, 1), L_domain=(1.0, h, h), bcs=((bc, bc), per, per),
                     eos=IdealSpecies("gas"; R=st.R, gamma=st.gamma),
-                    transport=Transport(mu0=mu), art=ArtParams(enabled=false),
+                    transport=ConstantTransport(mu0=mu),
+                    art=ArtificialProperties(enabled=false),
                     deriv=deriv, filt=compact_filter(alphaf; closures=cl),
                     filter_interval=filter_on ? 1 : 0, filter_cfl=0.0, cfl=0.5)
     Q0 = allocate_state(solver)
@@ -460,7 +463,7 @@ function jacobian_row(label, deriv; N=51, filter_on=false, cl=:onesided, mu=0.0,
     dt = 0.5 * h / c
     ncons = solver.equations.n_cons
     base = step_map(solver, Q0, dt, filter_on)
-    idx = [(gidx(solver, i, 1, 1), comp) for comp in 1:ncons for i in 1:N]
+    idx = [(padded_index(solver, i, 1, 1), comp) for comp in 1:ncons for i in 1:N]
     m = length(idx)
     function amplification(delta)
         G = zeros(m, m)

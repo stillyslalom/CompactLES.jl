@@ -71,6 +71,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: apply_bcs!, filter_state!, padded_index
 using LinearAlgebra
 using Printf
 
@@ -454,7 +455,8 @@ function jacobian_row(label, deriv; N=51, filter_on=false, cl=:onesided, mu=0.0,
          SlipWallBC()
     solver = Solver(; n_global=(N, 1, 1), L_domain=(1.0, h, h), bcs=((bc, bc), per, per),
                     eos=IdealSpecies("gas"; R=st.R, gamma=st.gamma),
-                    transport=Transport(mu0=mu), art=ArtParams(enabled=false),
+                    transport=ConstantTransport(mu0=mu),
+                    art=ArtificialProperties(enabled=false),
                     deriv=deriv, filt=compact_filter(alphaf; closures=cl),
                     filter_interval=filter_on ? 1 : 0, filter_cfl=0.0, cfl=0.5)
     Q0 = allocate_state(solver)
@@ -464,7 +466,7 @@ function jacobian_row(label, deriv; N=51, filter_on=false, cl=:onesided, mu=0.0,
     dt = 0.5 * h / c
     ncons = solver.equations.n_cons
     base = step_map(solver, Q0, dt, filter_on)
-    idx = [(gidx(solver, i, 1, 1), comp) for comp in 1:ncons for i in 1:N]
+    idx = [(padded_index(solver, i, 1, 1), comp) for comp in 1:ncons for i in 1:N]
     m = length(idx)
     function amplification(delta)
         G = zeros(m, m)
@@ -553,7 +555,8 @@ function uniform_solver(N, deriv; cfl=0.5)
     solver = Solver(; n_global=(N, 1, 1), L_domain=(1.0, h, h),
                     bcs=((SlipWallBC(), SlipWallBC()), per, per),
                     eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
-                    transport=Transport(mu0=0.0), art=ArtParams(enabled=true),
+                    transport=ConstantTransport(mu0=0.0),
+                    art=ArtificialProperties(enabled=true),
                     deriv=deriv, filt=compact_filter(0.45), cfl=cfl,
                     filter_interval=1, filter_cfl=0.35,
                     control=StepControl(validity=:permissive))
@@ -580,7 +583,7 @@ function uniform_row(label, deriv, N)
         CL.primitives!(solver, Q)
         n = solver.decomp.n_local[1]
         push!(cols, sprintf("%.1e",
-            maximum(abs(solver.u[gidx(solver, i, 1, 1)]) for i in 1:n)))
+            maximum(abs(solver.u[padded_index(solver, i, 1, 1)]) for i in 1:n)))
     end
     printf("  N = %3d  %-28s %s\n", N, label, join(cols, "  "))
     flush(stdout)

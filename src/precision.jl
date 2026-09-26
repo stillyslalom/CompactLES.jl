@@ -4,7 +4,7 @@
 # kernel. A component that carries its own scalar type (the EOS, the transport
 # model, the artificial-property coefficients, the compact schemes) and
 # disagrees with `T` either fails to convert where the solver stores it
-# (`ArtParams{T}`) or promotes the kernel arithmetic it enters: a Float64
+# (`ArtificialProperties{T}`) or promotes the kernel arithmetic it enters: a Float64
 # `IdealMixture` under Float32 storage turns `cvk[sp] * T_ion` into a Float64
 # product at every point. `_resolve_precision` settles `T` once, at setup,
 # and either converts every component to it or rejects the mixture.
@@ -17,7 +17,7 @@
 # The floating-point type a configuration component carries, or `nothing` for
 # a component without one.
 _precision_of(x) = nothing
-_precision_of(::ArtParams{T}) where {T} = T
+_precision_of(::ArtificialProperties{T}) where {T} = T
 _precision_of(::AbstractTransport{T}) where {T} = T
 _precision_of(::IdealMixture{T}) where {T} = T
 _precision_of(::StiffenedGas{T}) where {T} = T
@@ -32,11 +32,12 @@ _precision_of(::BandedCompactScheme{T}) where {T} = T
 # same inputs. A type with a scalar type and no method here is rejected.
 _to_precision(::Type{T}, x) where {T} =
     _precision_of(x) in (nothing, T) ? x : _no_precision_conversion(T, x)
-_to_precision(::Type{T}, x::ArtParams{T}) where {T} = x
-_to_precision(::Type{T}, x::ArtParams) where {T} =
-    ArtParams{T}((getfield(x, f) for f in fieldnames(ArtParams))...)
-_to_precision(::Type{T}, x::Transport{T}) where {T} = x
-_to_precision(::Type{T}, x::Transport) where {T} = Transport{T}(x.mu0, x.Pr, x.Sc)
+_to_precision(::Type{T}, x::ArtificialProperties{T}) where {T} = x
+_to_precision(::Type{T}, x::ArtificialProperties) where {T} =
+    ArtificialProperties{T}((getfield(x, f) for f in fieldnames(ArtificialProperties))...)
+_to_precision(::Type{T}, x::ConstantTransport{T}) where {T} = x
+_to_precision(::Type{T}, x::ConstantTransport) where {T} =
+    ConstantTransport{T}(x.mu0, x.Pr, x.Sc)
 _to_precision(::Type{T}, x::CeaTransport{T}) where {T} = x
 function _to_precision(::Type{T}, x::CeaTransport{S,N,D,Names}) where {T,S,N,D,Names}
     ivl(a) = CeaTransportInterval{T}(T(a.Tmin), T(a.Tmax), T(a.A), T(a.B), T(a.C),

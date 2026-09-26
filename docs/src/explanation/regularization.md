@@ -31,7 +31,7 @@ follows the mesh rather than the computational index.
 
 Every sensor is assembled in the same three stages. A field is selected, a
 high-pass operator is applied to it along each active direction, and the
-directional results are combined and smoothed. [`ArtParams`](@ref) carries one
+directional results are combined and smoothed. [`ArtificialProperties`](@ref) carries one
 setting per stage. The default sensor construction follows
 [Cook (2007, eqs. 15--21)](https://doi.org/10.1063/1.2728937). The alternatives
 are exposed in
@@ -85,7 +85,7 @@ only a starting point under another.
 
 ## Four artificial properties
 
-`ArtParams` controls:
+`ArtificialProperties` controls:
 
 - `C_mu`: artificial shear viscosity from the sensor named by `mu_sensor`;
 - `C_beta`: artificial bulk viscosity from the sensor named by `beta_sensor`,
@@ -201,7 +201,7 @@ or allow retry control to reduce a larger initial CFL only when needed:
 ```julia
 Numerics(
     n_global = (512, 1, 1),
-    art = ArtParams(enabled = true),
+    art = ArtificialProperties(enabled = true),
     cfl = 0.5,
     control = StepControl(retries = 4),
 )

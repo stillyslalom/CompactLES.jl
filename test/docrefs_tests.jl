@@ -10,12 +10,16 @@
 # Three things are checked, each a Documenter failure mode that needs no
 # build to detect:
 #   1. every `@ref` in a rendered docstring or a page resolves to a `@docs`
-#      entry or to a page header;
-#   2. every `@docs` entry names a documented binding of CompactLES;
-#   3. every exported name CompactLES owns has a docstring and is rendered by
-#      some `@docs` block. Documenter's `checkdocs = :exports` misses an
-#      exported binding that has no docstring at all, so this is deliberately
-#      stricter.
+#      entry or to a page header, and an unqualified one in a docstring names
+#      a binding of the docstring's own module, where Documenter looks it up;
+#   2. every `@docs` entry names a documented binding of CompactLES or of one
+#      of its submodules;
+#   3. every exported or public name CompactLES or a submodule owns has a
+#      docstring and is rendered by some `@docs` block. Documenter's
+#      `checkdocs = :exports` misses an exported binding that has no docstring
+#      at all and does not look at `public` names, so this is deliberately
+#      stricter. `public` is Julia 1.11 syntax; on 1.10 only the exports are
+#      checked.
 #
 # Standalone: julia --project=. test/docrefs_tests.jl
 # The serial suite includes it as one testset.
@@ -144,12 +148,16 @@ function refs(text::AbstractString)
     return out
 end
 
-# Raw docstring text of every documented binding of CompactLES, keyed by the
-# binding's name. A binding documented at several signatures contributes all
-# of them.
+# CompactLES and the submodules whose names it documents.
+const MODULES = (CompactLES, CompactLES.Regions, CompactLES.DiffusionData)
+
+# Raw docstring text of every documented binding of CompactLES and its
+# submodules, keyed by the binding's name, and the module each is documented
+# in. A binding documented at several signatures contributes all of them.
 function docstrings()
     texts = Dict{String,String}()
-    for (binding, multidoc) in Base.Docs.meta(CompactLES)
+    owners = Dict{String,Module}()
+    for mod in MODULES, (binding, multidoc) in Base.Docs.meta(mod)
         parts = String[]
         for (_, docstr) in multidoc.docs
             for t in docstr.text
@@ -157,22 +165,24 @@ function docstrings()
             end
         end
         texts[String(binding.var)] = join(parts, "\n")
+        owners[String(binding.var)] = mod
     end
-    return texts
+    return texts, owners
 end
 
-# Exported names owned by CompactLES. A re-exported binding from a dependency,
-# such as the `MPI` module, has its documentation in that package and is
-# invisible to Documenter's `checkdocs`, which reads only this module's own
-# docstring table; skip it here for the same reason.
+# Exported names, and from Julia 1.11 public ones, that CompactLES or a
+# submodule owns. A re-exported binding from a dependency, such as the `MPI`
+# module, has its documentation in that package and is invisible to
+# Documenter's `checkdocs`, which reads only this package's own docstring
+# tables; skip it here for the same reason.
 function exported_names()
     out = String[]
-    for n in names(CompactLES)
-        n === :CompactLES && continue
-        Base.which(CompactLES, n) === CompactLES || continue
+    for mod in MODULES, n in names(mod)
+        n === nameof(mod) && continue
+        Base.which(mod, n) === mod || continue
         push!(out, String(n))
     end
-    return out
+    return unique!(out)
 end
 
 """
@@ -187,7 +197,7 @@ function check()
     entries = docs_entries(page_paths)
     rendered = Set{String}()
     unknown_entries = String[]
-    texts = docstrings()
+    texts, owners = docstrings()
     for (page, entry) in entries
         name = base_name(entry)
         if name === nothing || !haskey(texts, name)
@@ -203,10 +213,21 @@ function check()
     resolves(target, is_code) =
         is_code ? (n = base_name(target); n !== nothing && n in rendered) :
                   slug(target) in header_slugs
+    # Documenter resolves an unqualified name in a docstring's `@ref` in the
+    # module the docstring belongs to, and falls back to `Main` only for a
+    # fully qualified name.
+    function binds(owner, target)
+        occursin('.', first(split(target, '('))) && return true
+        n = base_name(target)
+        return n !== nothing && isdefined(owner, Symbol(n))
+    end
     for name in sort(collect(rendered))
         for (target, is_code) in refs(texts[name])
             resolves(target, is_code) ||
                 push!(unresolved, "docstring of `$name`: @ref `$target`")
+            !is_code || binds(owners[name], target) ||
+                push!(unresolved, "docstring of `$name` in $(owners[name]): @ref " *
+                                  "`$target` is not bound there; qualify it")
         end
     end
     for (page, text) in texts_by_page

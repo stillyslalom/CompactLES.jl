@@ -47,7 +47,7 @@
 # 1.5–2x the measured value. The measured numbers print every run; a moved digit
 # after a change not intended to touch numerics indicates a numerical effect.
 #
-# Measured on this code (serial, C6, ArtParams defaults, filter_cfl = 0.35,
+# Measured on this code (serial, C6, ArtificialProperties defaults, filter_cfl = 0.35,
 # compact_filter(0.45) with its one-sided wall rows; each case's CFL is in
 # test/cases.jl):
 #
@@ -196,7 +196,7 @@
 # sizing the first step from the initial data's artificial coefficients; no
 # other row moved to the digits printed.
 #
-# All rows were re-measured when ArtParams.smoother moved to
+# All rows were re-measured when ArtificialProperties.smoother moved to
 # :gaussian; reference/CALIBRATION_APPENDIX.md carries why, and the previous set under
 # :compact for comparison. Every plateau and every pre-shock L1 improved, wall
 # heating worsened at nu = 1 and nu = 2 and improved at nu = 3, and the two

@@ -5,6 +5,7 @@
 # diffusion modes. Positive allocation deltas reveal per-point inference
 # regressions; test/transport_tests.jl supplies the numerical/inference gates.
 using CompactLES
+using CompactLES: compute_rhs!, padded_index
 
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
@@ -14,7 +15,7 @@ const cea_eos = Nasa9Mixture(["H2", "N2"])
 function build(transport)
     solver = Solver(n_global=(16, 12, 1), L_domain=(1.0, 0.75, 1.0),
                     bcs=PER, eos=cea_eos, transport=transport,
-                    art=ArtParams(enabled=false), filter_interval=0)
+                    art=ArtificialProperties(enabled=false), filter_interval=0)
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> begin
         Prim(Y=(0.2 + 0.1sinpi(2x), 0.8 - 0.1sinpi(2x)), rho=0.9,
@@ -29,7 +30,7 @@ function audit(transport)
     compute_dt(solver, Q)
     rhs = @allocated compute_rhs!(solver, Q, dQ)
     cfl = @allocated compute_dt(solver, Q)
-    I = gidx(solver, 5, 5, 1)
+    I = padded_index(solver, 5, 5, 1)
     coefficients() = begin
         total = zero(eltype(Q))
         for _ in 1:1_000
@@ -45,7 +46,7 @@ function audit(transport)
     return (; rhs, cfl, coeff)
 end
 
-constant = audit(Transport(mu0=1e-5, Pr=0.7, Sc=0.7))
+constant = audit(ConstantTransport(mu0=1e-5, Pr=0.7, Sc=0.7))
 cea = audit(CeaTransport(cea_eos))
 # Synthetic reference values exercise the diffusion path, not a fit to H2/N2.
 binary = audit(CeaTransport(cea_eos; diffusion=:mixture_averaged,

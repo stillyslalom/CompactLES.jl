@@ -53,7 +53,7 @@ problem = Problem(
 numerics = Numerics(
     n_global = (128, 1, 1),
     deriv = lele_d1_6(),
-    art = ArtParams(enabled = false),
+    art = ArtificialProperties(enabled = false),
     cfl = 0.6,
     filter_interval = 0,
 )

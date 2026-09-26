@@ -35,7 +35,7 @@ opt = CL.script_args(ARGS, (grid = 32, steps = 3, mincount = 50, art = false,
 
 solver = Solver(n_global = (opt.grid, opt.grid, opt.grid),
                 L_domain = (2π, 2π, 2π), bcs = per3,
-                art = ArtParams(enabled = opt.art))
+                art = ArtificialProperties(enabled = opt.art))
 Q = allocate_state(solver)
 initialize!(solver, Q, (x, y, z) -> Prim(u = (0.1sin(x), 0, 0), p = 1.0,
                                          rho = 1.0))

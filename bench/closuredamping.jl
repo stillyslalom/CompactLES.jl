@@ -23,6 +23,7 @@
 module ClosureDamping
 
 using CompactLES, MPI, LinearAlgebra, Printf
+using CompactLES: apply_bcs!, padded_index
 const CL = CompactLES
 include(joinpath(@__DIR__, "closuresearch.jl"))
 include(joinpath(@__DIR__, "closurequalify.jl"))
@@ -145,10 +146,10 @@ function uniform(opts)
             run!(solver,state; tfinal=40.0,nmax=30000,
                 callback=(s,q) -> damp!(s,q,opts.strength;
                     blocks=opts.blocks,components=opts.components))
-            velocity = maximum(abs(state[gidx(solver,i,1,1),2] /
-                                   state[gidx(solver,i,1,1),1]) for i in 1:n)
-            drift = maximum(abs(state[gidx(solver,i,1,1),c] -
-                initial[gidx(solver,i,1,1),c]) for i in 1:n for c in 1:5)
+            velocity = maximum(abs(state[padded_index(solver,i,1,1),2] /
+                                   state[padded_index(solver,i,1,1),1]) for i in 1:n)
+            drift = maximum(abs(state[padded_index(solver,i,1,1),c] -
+                initial[padded_index(solver,i,1,1),c]) for i in 1:n for c in 1:5)
             @printf("uniform %s N=%d t=%.1f maxvelocity=%.6e drift=%.6e\n",
                     name,n,solver.t,velocity,drift)
         catch err
@@ -167,7 +168,7 @@ function art_modes(text)
 end
 
 function art_params(enabled, opts)
-    ArtParams(enabled=enabled, beta_sensor=Symbol(opts.beta_sensor))
+    ArtificialProperties(enabled=enabled, beta_sensor=Symbol(opts.beta_sensor))
 end
 
 function endpoint(solver, state, target)
@@ -210,11 +211,11 @@ function damp!(solver, state, strength; blocks=1,components="all")
     end
     for start in 1:blocks, side in (1,2), c in 1:solver.equations.n_cons
         nodes = side == 1 ? (start:start+6) : (n-start+1:-1:n-start-5)
-        anchor = state[gidx(solver,first(nodes),1,1),c]
-        projection = sum(DIFFERENCE[j]*(state[gidx(solver,i,1,1),c]-anchor)
+        anchor = state[padded_index(solver,first(nodes),1,1),c]
+        projection = sum(DIFFERENCE[j]*(state[padded_index(solver,i,1,1),c]-anchor)
                          for (j,i) in enumerate(nodes))
         for (j,i) in enumerate(nodes)
-            state[gidx(solver,i,1,1),c] -= sigma*DIFFERENCE[j]*projection/DIFFERENCE_NORM
+            state[padded_index(solver,i,1,1),c] -= sigma*DIFFERENCE[j]*projection/DIFFERENCE_NORM
         end
     end
     apply_bcs!(solver,state)
@@ -230,17 +231,17 @@ function acoustic_damp!(solver,state,sigma; blocks=1)
     m1,m2,m3 = solver.equations.i_mom
     for start in 1:blocks, side in (1,2)
         nodes = side == 1 ? (start:start+6) : (n-start+1:-1:n-start-5)
-        velocity = [state[gidx(solver,i,1,1),m1]/state[gidx(solver,i,1,1),1]
+        velocity = [state[padded_index(solver,i,1,1),m1]/state[padded_index(solver,i,1,1),1]
                     for i in nodes]
         pressure = map(nodes) do i
-            index = gidx(solver,i,1,1)
+            index = padded_index(solver,i,1,1)
             kinetic = sum(state[index,m]^2 for m in (m1,m2,m3))/(2state[index,1])
             (gamma-1)*(state[index,ie]-kinetic)
         end
         du = sum(DIFFERENCE .* (velocity .- first(velocity)))/DIFFERENCE_NORM
         dp = sum(DIFFERENCE .* (pressure .- first(pressure)))/DIFFERENCE_NORM
         for (j,i) in enumerate(nodes)
-            index = gidx(solver,i,1,1)
+            index = padded_index(solver,i,1,1)
             rho = state[index,1]
             oldmomentum = state[index,m1]
             newmomentum = rho*(velocity[j]-sigma*DIFFERENCE[j]*du)

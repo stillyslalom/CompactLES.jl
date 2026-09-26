@@ -131,7 +131,7 @@ _same_interior(a::BandedCompactScheme{T}, b::BandedCompactScheme{T}) where {T} =
     compact_d8()
 
 Pentadiagonal compact eighth derivative, undivided, used as the ringing
-detector of [`ArtParams`](@ref) under `detector = :d8`. It is Pyranda's
+detector of [`ArtificialProperties`](@ref) under `detector = :d8`. It is Pyranda's
 [public `ring` operator](https://github.com/LLNL/pyranda)
 (`pyranda/parcop/stencils.f90`, `c10d8`), whose interior rows are
 

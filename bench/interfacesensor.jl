@@ -95,6 +95,7 @@
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: apply_bcs!, filter_state!, max_rate, step!, npatches, padded_index, xcoord
 using Printf
 const CL = CompactLES
 
@@ -170,7 +171,7 @@ order(a, b) = (a > 0 && b > 0) ? log2(a / b) : NaN
 # Mixture density at one interior node, summed from the partial densities so
 # the reading does not depend on current primitives.
 function node_density(ps, Q, i, j=1, k=1)
-    I = gidx(ps, i, j, k)
+    I = padded_index(ps, i, j, k)
     ρ = zero(eltype(Q))
     for sp in 1:ps.equations.n_species
         ρ += Q[I, sp]
@@ -343,11 +344,11 @@ function probe_part(ns, nodes)
     end
     for g in GHOST_MODES
         push!(cases, ("detector :d8, " * ghost_label(g), op_detector,
-                      (art=ArtParams(detector=:d8),), g, true))
+                      (art=ArtificialProperties(detector=:d8),), g, true))
     end
     for smoo in (:gaussian, :compact)
         push!(cases, ("smoother :$smoo", op_smoother,
-                      (art=ArtParams(smoother=smoo),), first(GHOST_MODES), false))
+                      (art=ArtificialProperties(smoother=smoo),), first(GHOST_MODES), false))
     end
     for (flab, fkw) in FILTER_ROWS
         push!(cases, ("state filter, $flab rows", op_filter, fkw,
@@ -435,7 +436,7 @@ function crossing_solver(row, N)
     eos = row.species == 2 ? two_gases() : IdealSpecies("gas"; gamma=1.4, R=1.0)
     s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(WALL2, PER, PER),
                cfl=CROSSING_CFL, eos=eos, deriv=deriv_of(row), filt=filt_of(row),
-               art=ArtParams(enabled=row.art, detector=row.detector),
+               art=ArtificialProperties(enabled=row.art, detector=row.detector),
                filter_cfl=row.filter_cfl,
                interface_rhs=row.interface_rhs, interface_divergence=idiv_of(row),
                interface_flux=row.iflux,
@@ -459,7 +460,7 @@ end
 # Shell window, fine interior, covered root, uncovered root. A same-level
 # patch has no covered nodes, and its interface window is reported as `shell`.
 function node_region(ps, i)
-    ps.covered[gidx(ps, i, 1, 1)] != 0 && return 3
+    ps.covered[padded_index(ps, i, 1, 1)] != 0 && return 3
     d = face_distance(ps, (i, 1, 1))
     (d != 0 && d <= SHELL_W) && return 1
     return ps.patch.level == 0 ? 4 : 2
@@ -488,7 +489,7 @@ end
 # The artificial diffusivity number ((mu*+beta*)/rho + kappa*/(rho cp) +
 # max_k D*_k) / (c h), read from the persistent coefficient arrays.
 function diffusivity_number(ps, Q, i)
-    I = gidx(ps, i, 1, 1)
+    I = padded_index(ps, i, 1, 1)
     ν = (ps.mu_art[I] + ps.beta_art[I]) / ps.rho[I] +
         ps.kappa_art[I] / (ps.rho[I] * ps.cp_mix[I])
     isempty(ps.D_art) || (ν += maximum(D[I] for D in ps.D_art))
@@ -512,7 +513,7 @@ function monitor!(mon, solver, states)
     refresh_primitives!(solver, states)
     for (ps, Q) in CL.eachpatch(solver, states)
         for i in 1:ps.decomp.n_local[1]
-            pmin = min(pmin, ps.p[gidx(ps, i, 1, 1)])
+            pmin = min(pmin, ps.p[padded_index(ps, i, 1, 1)])
         end
     end
     mon.p_min = min(mon.p_min, MPI.Allreduce(pmin, min, solver.comm))
@@ -529,7 +530,7 @@ function ahead_noise(solver, states, direction=1)
         for i in 1:ps.decomp.n_local[1]
             x = xcoord(ps, 1, i)
             (direction > 0 ? x > 0.85 : x < 0.15) || continue
-            worst = max(worst, abs(Q[gidx(ps, i, 1, 1), m1]))
+            worst = max(worst, abs(Q[padded_index(ps, i, 1, 1), m1]))
         end
     end
     return MPI.Allreduce(worst, max, solver.comm)
@@ -543,7 +544,7 @@ function shell_excursion(solver, states)
     refresh_primitives!(solver, states)
     for (ps, Q) in CL.eachpatch(solver, states)
         for Y in ps.Y, i in 1:ps.decomp.n_local[1]
-            y = Y[gidx(ps, i, 1, 1)]
+            y = Y[padded_index(ps, i, 1, 1)]
             e = max(-y, y - 1)
             node_region(ps, i) == 1 ? (shell = max(shell, e)) :
                                       (rest = max(rest, e))
@@ -558,7 +559,7 @@ function reference_lines(row, N, ts, nmax)
     s = Solver(n_global=(3N - 2, 1, 1), L_domain=(1.0, 1.0, 1.0),
                bcs=(WALL2, PER, PER), cfl=CROSSING_CFL, eos=eos,
                deriv=deriv_of(row), filt=filt_of(row),
-               art=ArtParams(enabled=row.art, detector=row.detector),
+               art=ArtificialProperties(enabled=row.art, detector=row.detector),
                filter_cfl=row.filter_cfl,
                control=StepControl(validity=:permissive))
     Q = allocate_state(s)
@@ -799,7 +800,7 @@ function tally_filter!(tally, solver, states)
         gx = ps.decomp.offset[1]
         ngx = ps.decomp.n_global[1]
         for k in 1:n[3], j in 1:n[2], i in 1:n[1]
-            I = gidx(ps, i, j, k)
+            I = padded_index(ps, i, j, k)
             Δ = abs(Q[I, 1] - before[pi][I])
             d = face_distance(ps, (i, j, k))
             if d == 0 || d > FILTER_BINS
@@ -977,7 +978,7 @@ function undershoot_sample(solver, states)
         n = ps.decomp.n_local
         off = ps.patch.region.offset .+ ps.decomp.offset
         for k in 1:n[3], j in 1:n[2], i in 1:n[1]
-            I = gidx(ps, i, j, k)
+            I = padded_index(ps, i, j, k)
             y = minimum(Y[I] for Y in ps.Y)
             if ps.patch.level == 0
                 d, isin = box_distance(region, off[1] + i, off[2] + j)
@@ -1006,7 +1007,7 @@ function undershoot_run(label, N, ny, tfinal, samples, nmax; subcycle, filt_int,
     attempt() do
         s = Solver(n_global=(N, ny, 1), L_domain=(8pi, 2pi, 1.0), bcs=PER3,
                    eos=two_gases(), cfl=cfl,
-                   art=ArtParams(C_mu=0.0, C_beta=0.0, C_kappa=0.0, C_D=0.0),
+                   art=ArtificialProperties(C_mu=0.0, C_beta=0.0, C_kappa=0.0, C_D=0.0),
                    control=StepControl(validity=:permissive),
                    filter_interval=filt_int, filter_cfl=filter_cfl,
                    refine=layer_regions(N, ny, depth),

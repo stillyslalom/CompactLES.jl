@@ -509,7 +509,7 @@ Names are spelled out in full. Current vocabulary:
 - `refresh_primitives!`, `mixture_density`, `boundary_plane` (the in-flight
   state-query API; primitives are stale inside a callback, see the
   `refresh_primitives!` docstring)
-- `gidx` (interior indices → padded) and `interior_index` (its inverse); a
+- `padded_index` (interior indices → padded) and `interior_index` (its inverse); a
   padded index goes through the latter before reaching `xcoord`
 - `validate_bc` (the setup-time boundary-condition hook), `unit_scalefactor`
 - `outer_indices` (the flattened outer iteration space of a pointwise nest; see

@@ -37,7 +37,7 @@ function main(opt)
     n = opt.n
     # tgv-like: 3-D periodic, single species, art off
     s1 = Solver(n_global=(n, n, n), L_domain=(2π, 2π, 2π), bcs=per3,
-                transport=Transport(mu0=1e-3), art=ArtParams(enabled=false))
+                transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=false))
     Q1 = allocate_state(s1)
     initialize!(s1, Q1, (x, y, z) -> Prim(u=(sin(x) * cos(y), -cos(x) * sin(y), 0.0),
                                           p=1 + 0.05cos(2z), rho=1.0))
@@ -63,7 +63,7 @@ function main(opt)
                         IdealSpecies{Float64}("heavy", 0.2, 1.09)])
     s2 = Solver(n_global=(512, 32, 1), L_domain=(1.0, 0.06, 1.0), eos=eos,
                 bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                art=ArtParams(enabled=true))
+                art=ArtificialProperties(enabled=true))
     Q2 = allocate_state(s2)
     initialize!(s2, Q2, (x, y, z) -> begin
         θ = tanh_blend(x, 0.5, 0.02)

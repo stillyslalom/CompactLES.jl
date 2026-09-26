@@ -31,6 +31,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: padded_index, xcoord
 using Printf
 using LinearAlgebra
 
@@ -71,9 +72,9 @@ function mode_sample(solver, Q)
     velocity_modes = zeros(nm); velocity_y = zeros(nm)
     spread = 0.0; station_difference = 0.0
     for j in 1:ny
-        rho = [Float64(Q[gidx(solver, i, j, 1), 1]) for i in 1:nx]
-        ux = [Float64(Q[gidx(solver, i, j, 1), m1] /
-                      Q[gidx(solver, i, j, 1), 1]) for i in 1:nx]
+        rho = [Float64(Q[padded_index(solver, i, j, 1), 1]) for i in 1:nx]
+        ux = [Float64(Q[padded_index(solver, i, j, 1), m1] /
+                      Q[padded_index(solver, i, j, 1), 1]) for i in 1:nx]
         spread = max(spread, maximum(rho) - minimum(rho))
         station_difference = max(station_difference,
                                  maximum(abs(rho[i] - rho[1]) for i in 1:nx))
@@ -114,21 +115,21 @@ function observe!(trace::ModeTrace, solver, Q)
 end
 
 function art_channels(name)
-    name == :default && return ArtParams(enabled=true)
-    name == :off && return ArtParams(enabled=false)
-    name == :beta_only && return ArtParams(C_mu=0.0, C_beta=1.0, C_kappa=0.0,
-                                           C_D=0.0)
-    name == :beta_mu && return ArtParams(C_mu=0.002, C_beta=1.0, C_kappa=0.0,
-                                         C_D=0.0)
-    name == :beta_kappa && return ArtParams(C_mu=0.0, C_beta=1.0, C_kappa=0.01,
-                                            C_D=0.0)
-    name == :no_species && return ArtParams(C_mu=0.002, C_beta=1.0, C_kappa=0.01,
-                                            C_D=0.0)
-    name == :beta_off && return ArtParams(C_beta=0.0)
-    name == :mu_only && return ArtParams(C_mu=0.002, C_beta=0.0, C_kappa=0.0,
-                                         C_D=0.0)
-    name == :kappa_only && return ArtParams(C_mu=0.0, C_beta=0.0, C_kappa=0.01,
-                                            C_D=0.0)
+    name == :default && return ArtificialProperties(enabled=true)
+    name == :off && return ArtificialProperties(enabled=false)
+    name == :beta_only && return ArtificialProperties(C_mu=0.0, C_beta=1.0, C_kappa=0.0,
+                                                      C_D=0.0)
+    name == :beta_mu && return ArtificialProperties(C_mu=0.002, C_beta=1.0, C_kappa=0.0,
+                                                    C_D=0.0)
+    name == :beta_kappa && return ArtificialProperties(C_mu=0.0, C_beta=1.0, C_kappa=0.01,
+                                                       C_D=0.0)
+    name == :no_species && return ArtificialProperties(C_mu=0.002, C_beta=1.0, C_kappa=0.01,
+                                                       C_D=0.0)
+    name == :beta_off && return ArtificialProperties(C_beta=0.0)
+    name == :mu_only && return ArtificialProperties(C_mu=0.002, C_beta=0.0, C_kappa=0.0,
+                                                    C_D=0.0)
+    name == :kappa_only && return ArtificialProperties(C_mu=0.0, C_beta=0.0, C_kappa=0.01,
+                                                       C_D=0.0)
     error("unknown artificial-property selection $name")
 end
 
@@ -155,7 +156,7 @@ function aligned_problem(; N, AR, nx, seed, seed_mode, t0=0.0)
     end
     per = (PeriodicBC(), PeriodicBC())
     problem = Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
-                      transport=Transport(mu0=0.0),
+                      transport=ConstantTransport(mu0=0.0),
                       domain=((0.0, Lx), (0.0, 1.0), (0.0, h2)),
                       bcs=(per, (SlipWallBC(), inflow), per), ic=ic)
     return problem
@@ -172,7 +173,7 @@ function uniform_postshock_problem(; N, AR, nx, seed, seed_mode)
                              u=(0.0, uy0, 0.0), p=pressure0)
     per = (PeriodicBC(), PeriodicBC())
     return Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
-                   transport=Transport(mu0=0.0),
+                   transport=ConstantTransport(mu0=0.0),
                    domain=((0.0, Lx), (0.0, 1.0), (0.0, h2)),
                    bcs=(per, (SlipWallBC(), DirichletBC(state)), per), ic=ic)
 end

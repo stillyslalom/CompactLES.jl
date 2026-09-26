@@ -29,6 +29,7 @@ if !@isdefined(CL)
     using Test
     const CL = CompactLES
 end
+using CompactLES: step!, CPUBackend, padded_index
 
 const rl_per = (PeriodicBC(), PeriodicBC())
 
@@ -155,7 +156,7 @@ function rl_sensor_number(solver)
     root = CL.PatchSolver(solver, solver.patches[1])
     q = 0.0
     for i in 1:root.decomp.n_local[1]
-        I = gidx(root, i, 1, 1)
+        I = padded_index(root, i, 1, 1)
         ν = (root.mu_art[I] + root.beta_art[I]) / root.rho[I] +
             root.kappa_art[I] / (root.rho[I] * root.cp_mix[I]) +
             maximum(D[I] for D in root.D_art)
@@ -233,7 +234,8 @@ function rl_box(::Type{T}; cfl=0.5, kw...) where {T}
     solver = Solver(n_global=(24, 12, 12), L_domain=(one(T), one(T), one(T)),
                     bcs=ntuple(_ -> rl_per, 3),
                     eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
-                    transport=Transport{T}(), art=ArtParams{T}(enabled=false),
+                    transport=ConstantTransport{T}(),
+                    art=ArtificialProperties{T}(enabled=false),
                     deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
                     cfl=T(cfl), filter_interval=0; kw...)
     Q = allocate_state(solver)
@@ -347,7 +349,7 @@ end
     face = SwitchableBC(SlipWallBC(), SlipWallBC())
     solver = Solver(n_global=(24, 1, 1), L_domain=(1.0, h, h),
                     bcs=((face, SlipWallBC()), rl_per, rl_per), cfl=0.3,
-                    art=ArtParams(enabled=false))
+                    art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) ->
         Prim(u=(0, 0, 0), p=1.0 + 0.1exp(-50(x - 0.5)^2), rho=1.0))
@@ -365,7 +367,7 @@ end
                  (s, q) -> (switch!(face); push!(switches, s.step); false)),
         Callback(EveryStep(), (s, q) -> (s.step == 5 && !spoiled[] &&
                                          (spoiled[] = true;
-                                          q[gidx(s, 3, 1, 1), 1] = -1.0); false)))
+                                          q[padded_index(s, 3, 1, 1), 1] = -1.0); false)))
     @test_logs (:warn, r"rolled back to step 4") match_mode=:any run!(
         solver, Q; tfinal=1.0, nmax=7, callback=callbacks,
         control=StepControl(retries=1, savepoint_interval=2))

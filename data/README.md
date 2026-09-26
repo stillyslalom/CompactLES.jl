@@ -35,7 +35,7 @@ coefficients**.
 `CeaTransport` connects the pure-species fits to temperature-dependent mixture
 properties. Its default diffusion model is unity Lewis; mixture-averaged
 diffusion requires separately supplied binary diffusivities. The original
-`Transport` remains the constant-viscosity, single-Schmidt model.
+`ConstantTransport` remains the constant-viscosity, single-Schmidt model.
 
 The binary diffusion correlations of Marrero and Mason, J. Phys. Chem. Ref.
 Data 1, 3--118 (1972), Tables 12 and 13, are not a vendored file: they are

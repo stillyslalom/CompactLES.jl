@@ -85,8 +85,8 @@ const CLOSURES = (("C6 neutral3", T -> lele_d1_6(T)),
                   ("C6 BL", T -> lele_d1_6(T; closures=:brady_livescu)),
                   ("C8 BL", T -> lele_d1_8(T; closures=:brady_livescu)))
 const FILTERED = (filter_interval=1, filt=compact_filter(0.45), filter_cfl=0.35)
-const ART_ON = ArtParams(enabled=true)
-const ART_OFF = ArtParams(enabled=false)
+const ART_ON = ArtificialProperties(enabled=true)
+const ART_OFF = ArtificialProperties(enabled=false)
 
 sprintf(fmt::String, args...) = Printf.format(Printf.Format(fmt), args...)
 printf(fmt::String, args...) = print(sprintf(fmt, args...))
@@ -291,14 +291,15 @@ end
 function channels_part()
     variants = (("off", ART_OFF),
                 ("all on", ART_ON),
-                ("C_mu only", ArtParams(C_beta=0.0, C_kappa=0.0)),
-                ("C_beta only", ArtParams(C_mu=0.0, C_kappa=0.0)),
-                ("C_kappa only", ArtParams(C_mu=0.0, C_beta=0.0)),
-                ("all zero, enabled", ArtParams(C_mu=0.0, C_beta=0.0, C_kappa=0.0)),
-                ("all on, smoother=:compact", ArtParams(smoother=:compact)),
-                ("all on, detector=:d8", ArtParams(detector=:d8)),
-                ("all on, mu_sensor=:velocity", ArtParams(mu_sensor=:velocity)),
-                ("all on, beta_sensor=:dilatation", ArtParams(beta_sensor=:dilatation)))
+                ("C_mu only", ArtificialProperties(C_beta=0.0, C_kappa=0.0)),
+                ("C_beta only", ArtificialProperties(C_mu=0.0, C_kappa=0.0)),
+                ("C_kappa only", ArtificialProperties(C_mu=0.0, C_beta=0.0)),
+                ("all zero, enabled", ArtificialProperties(C_mu=0.0, C_beta=0.0, C_kappa=0.0)),
+                ("all on, smoother=:compact", ArtificialProperties(smoother=:compact)),
+                ("all on, detector=:d8", ArtificialProperties(detector=:d8)),
+                ("all on, mu_sensor=:velocity", ArtificialProperties(mu_sensor=:velocity)),
+                ("all on, beta_sensor=:dilatation",
+                 ArtificialProperties(beta_sensor=:dilatation)))
     println("\n=== the artificial-property channels at an inviscid wall, against the " *
             "mirror, cfl = $CFL, t = $TFINAL ===")
     for (label, mk) in (CLOSURES[3], CLOSURES[1], CLOSURES[2])

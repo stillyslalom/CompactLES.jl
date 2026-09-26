@@ -619,7 +619,7 @@ end
 
 """
     Problem(; domain, bcs, ic, name="problem", eos=IdealSpecies("gas"; R=1, gamma=1.4),
-            transport=Transport(), metric=CartesianMetric(), sources=())
+            transport=ConstantTransport(), metric=CartesianMetric(), sources=())
 
 Physical specification independent of grid resolution and process count. A
 `Problem` can therefore be reused with different [`Numerics`](@ref) objects.
@@ -645,7 +645,7 @@ Physical specification independent of grid resolution and process count. A
   is promoted to a one-species [`IdealMixture`](@ref). Default: a
   nondimensional gas with `R = 1` and `gamma = 1.4`.
 - `transport`: molecular transport model. Default:
-  [`Transport()`](@ref), which has zero molecular viscosity.
+  [`ConstantTransport()`](@ref), which has zero molecular viscosity.
 - `metric`: coordinate metric. Default: [`CartesianMetric()`](@ref).
 - `sources`: tuple of explicit source objects applied to the RHS. Default: `()`.
   See [`add_source!`](@ref) when defining a custom source.
@@ -665,7 +665,7 @@ struct Problem{F}
 end
 
 function Problem(; name="problem", eos=_default_ideal_mixture(),
-                 transport=Transport(), metric=CartesianMetric(), sources=(),
+                 transport=ConstantTransport(), metric=CartesianMetric(), sources=(),
                  domain, bcs, ic)
     return Problem{typeof(ic)}(String(name), _as_eos(eos), transport, metric, sources,
                    domain, _face_conditions(bcs), ic)
@@ -673,7 +673,7 @@ end
 
 """
     Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
-             art=ArtParams(), cfl=0.5, control=StepControl(),
+             art=ArtificialProperties(), cfl=0.5, control=StepControl(),
              filter_interval=1, filter_cfl=0.35, filter_weighting=:none,
              dims=nothing, n_halo=4, stretch=(nothing, nothing, nothing),
              precision=nothing)
@@ -691,9 +691,9 @@ Grid, scheme, timestep, and decomposition choices used to realize a
 - `filt`: compact filter applied to the conserved state. Default:
   [`compact_filter(0.45)`](@ref), where values nearer `0.5` filter more weakly.
   It doubles as the artificial-property sensor smoother only under
-  `ArtParams(smoother = :compact)`; the default `:gaussian` smoother is an
+  `ArtificialProperties(smoother = :compact)`; the default `:gaussian` smoother is an
   explicit stencil that ignores this keyword.
-- `art`: artificial-property coefficients. Default: [`ArtParams()`](@ref).
+- `art`: artificial-property coefficients. Default: [`ArtificialProperties()`](@ref).
 - `cfl`: multiplier used by [`compute_dt`](@ref). Default: `0.5`. Strong shocks
   can require a lower startup value.
 - `control`: timestep prediction, failure floors, and retry policy. Default:
@@ -701,7 +701,7 @@ Grid, scheme, timestep, and decomposition choices used to realize a
 - `filter_interval`: state-filter cadence in completed steps. A positive value
   `k` applies `filt` every `k` steps, counted from the completed step number.
   The default `1` filters every step; `0` disables state filtering, which leaves
-  `filt` unused altogether unless `ArtParams(smoother = :compact)` also selects
+  `filt` unused altogether unless `ArtificialProperties(smoother = :compact)` also selects
   it as the sensor smoother.
 - `filter_cfl`: reference CFL of a full-strength filter pass, making the
   filter's dissipation a rate, not a per-application amount. A pass along a
@@ -852,7 +852,7 @@ Base.@kwdef struct Numerics
     n_global::NTuple{3,Int}
     deriv::AbstractCompactScheme = lele_d1_6()
     filt::AbstractCompactScheme = compact_filter(0.45)
-    art::ArtParams = ArtParams()
+    art::ArtificialProperties = ArtificialProperties()
     cfl::Float64 = 0.5
     control::StepControl = StepControl()
     filter_interval::Int = 1

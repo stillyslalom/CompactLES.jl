@@ -18,6 +18,7 @@
 # time series.
 
 using CompactLES
+using CompactLES.Regions
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
 const opt = CompactLES.script_args(ARGS,
@@ -64,7 +65,8 @@ mpi_main() do
     # one box spanning both; the regrid interval takes its default.
     amr = opt.amr ? AMR(initial=:sensor, subcycle=true, tag_gradient_threshold=0.02,
                         tile=16) : nothing
-    numerics = Numerics(n_global=(opt.nx, opt.ny, opt.nz), art=ArtParams(enabled=true),
+    numerics = Numerics(n_global=(opt.nx, opt.ny, opt.nz),
+                        art=ArtificialProperties(enabled=true),
                         control=StepControl(retries=4), amr=amr)
     solver, Q = setup(problem, numerics)
 

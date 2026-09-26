@@ -63,6 +63,9 @@ include("timing.jl")
     using LinearAlgebra
     import KernelAbstractions
 end
+using CompactLES: compute_rhs!, apply_bcs!, filter_state!, CPUBackend, padded_index, xcoord,
+                  global_xcoord
+using CompactLES.Regions
 
 const CL = CompactLES
 const comm = MPI.COMM_WORLD
@@ -87,7 +90,7 @@ const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 function ferr(solver, f, fn)
     e = 0.0
     for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
-        e = max(e, abs(f[gidx(solver, i, j, k)] -
+        e = max(e, abs(f[padded_index(solver, i, j, k)] -
                        fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))))
     end
     e
@@ -95,7 +98,8 @@ end
 
 fillf!(solver, f, fn) = (for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
                         i in 1:solver.decomp.n_local[1]
-    f[gidx(solver, i, j, k)] = fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))
+    f[padded_index(solver, i, j, k)] = fn(xcoord(solver, 1, i), xcoord(solver, 2, j),
+                                          xcoord(solver, 3, k))
 end; f)
 
 gmax(x) = MPI.Allreduce(Float64(x), MPI.MAX, comm)
@@ -139,7 +143,7 @@ function test_periodic_c6()
     for ax in 1:3
         ng = ntuple(d -> d == ax ? SPLITN : 16, 3)
         solver = Solver(n_global=ng, L_domain=(2π, 2π, 2π), bcs=per3,
-                   art=ArtParams(enabled=false), dims=splitdims(ax))
+                   art=ArtificialProperties(enabled=false), dims=splitdims(ax))
         f = CL.field(solver.decomp); df = CL.field(solver.decomp)
         fillf!(solver, f, fx)
         CL.exchange_halos!(f, solver.decomp)
@@ -166,7 +170,7 @@ function test_pentadiagonal_c10()
     for ax in 1:2   # x (direct) and y (transposed banded path)
         ng = ntuple(d -> d == ax ? SPLITN : 16, 3)
         solver = Solver(n_global=ng, L_domain=(2π, 2π, 2π), bcs=per3,
-                   deriv=lele_d1_10(), art=ArtParams(enabled=false),
+                   deriv=lele_d1_10(), art=ArtificialProperties(enabled=false),
                    dims=splitdims(ax))
         f = CL.field(solver.decomp); df = CL.field(solver.decomp)
         fillf!(solver, f, fx)
@@ -180,7 +184,7 @@ function test_pentadiagonal_c10()
     # polynomial is exact through the C10 closure rows, under either set.
     sc = Solver(n_global=(SPLITN, 12, 12), L_domain=(1.0, 1.0, 1.0),
                 bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                deriv=lele_d1_10(), art=ArtParams(enabled=false),
+                deriv=lele_d1_10(), art=ArtificialProperties(enabled=false),
                 dims=splitdims(1))
     fc = CL.field(sc.decomp); dfc = CL.field(sc.decomp)
     fillf!(sc, fc, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
@@ -198,7 +202,7 @@ function test_closed_c6()
     section("closed-domain C6 closures: polynomial exactness, derivative dim split")
     solver = Solver(n_global=(SPLITN, 12, 12), L_domain=(1.0, 1.0, 1.0),
                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtParams(enabled=false), dims=splitdims(1))
+               art=ArtificialProperties(enabled=false), dims=splitdims(1))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     fillf!(solver, f, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
     CL.exchange_halos!(f, solver.decomp)
@@ -215,7 +219,7 @@ function test_closed_c6()
          ("C8 :brady_livescu", lele_d1_8(closures=:brady_livescu), 7))
         solver = Solver(n_global=(SPLITN, 12, 12), L_domain=(1.0, 1.0, 1.0),
                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                   deriv=deriv, art=ArtParams(enabled=false), dims=splitdims(1))
+                   deriv=deriv, art=ArtificialProperties(enabled=false), dims=splitdims(1))
         f = CL.field(solver.decomp); df = CL.field(solver.decomp)
         fillf!(solver, f, (x, y, z) -> sum(x^m for m in 0:deg))
         CL.exchange_halos!(f, solver.decomp)
@@ -300,7 +304,7 @@ function test_offrank_folds()
     solver = Solver(n_global=(40, SPLITN, 1), L_domain=(1.0, 2π, 1.0),
                metric=CylindricalMetric(),
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtParams(enabled=false), dims=splitdims(2))
+               art=ArtificialProperties(enabled=false), dims=splitdims(2))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     # A scalar whose antipodal image is −f: σ = +1, the odd combination
     # carries all of it (see the fold_apply! comment on the mirror signs).
@@ -316,7 +320,7 @@ function test_offrank_folds()
     ssθ = Solver(n_global=(40, SPLITN, 12), L_domain=(1.0, π, 2π),
                  metric=SphericalMetric(),
                  bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
-                 art=ArtParams(enabled=false), dims=splitdims(2))
+                 art=ArtificialProperties(enabled=false), dims=splitdims(2))
     f = CL.field(ssθ.decomp); df = CL.field(ssθ.decomp)
     fillf!(ssθ, f, (r, θ, φ) -> exp(-4r^2))
     CL.exchange_halos!(f, ssθ.decomp)
@@ -338,14 +342,14 @@ function test_offrank_folds()
          () -> Solver(n_global=(40, SPLITN, 1), L_domain=(1.0, 2π, 1.0),
                       metric=CylindricalMetric(),
                       bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                      art=ArtParams(enabled=false), dims=splitdims(2),
+                      art=ArtificialProperties(enabled=false), dims=splitdims(2),
                       filter_weighting=:volume)),
         ("sph origin+poles, θ split",
          () -> Solver(n_global=(40, SPLITN, 12), L_domain=(1.0, π, 2π),
                       metric=SphericalMetric(),
                       bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()),
                            per3[3]),
-                      art=ArtParams(enabled=false), dims=splitdims(2),
+                      art=ArtificialProperties(enabled=false), dims=splitdims(2),
                       filter_weighting=:volume)))
         sv = mk()
         Q = allocate_state(sv)
@@ -358,7 +362,7 @@ function test_offrank_folds()
         for k in 1:sv.decomp.n_local[3], j in 1:sv.decomp.n_local[2],
             i in 1:sv.decomp.n_local[1]
             xcoord(sv, 1, i) < 0.5 || continue
-            I = gidx(sv, i, j, k)
+            I = padded_index(sv, i, j, k)
             m = max(m, abs(Q[I, 1] - Q0[I, 1]))
         end
         check("volume-weighted filter through the fold: " * label, gmax(m), 1e-6)
@@ -379,23 +383,23 @@ function test_offrank_folds()
         scale = 0.0
         for I in CL.interior(s.decomp), c in 1:ncomp
             loc = Tuple(I) .- s.decomp.n_halo_d
-            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            J = padded_index(ref, (loc .+ s.decomp.offset)...)
             e = max(e, abs(a[I, c] - b[J, c]))
             scale = max(scale, abs(b[J, c]))
         end
         return gmax(e) / gmax(scale)
     end
-    cyl(comm_here, dims_here; art=ArtParams(enabled=false)) =
+    cyl(comm_here, dims_here; art=ArtificialProperties(enabled=false)) =
         Solver(n_global=(40, SPLITN, 1), L_domain=(1.0, 2π, 1.0),
                metric=CylindricalMetric(),
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-               transport=Transport(mu0=1e-3), art=art,
+               transport=ConstantTransport(mu0=1e-3), art=art,
                comm=comm_here, dims=dims_here)
     sph(comm_here, dims_here) =
         Solver(n_global=(40, SPLITN, 12), L_domain=(1.0, π, 2π),
                metric=SphericalMetric(),
                bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
-               art=ArtParams(enabled=false), comm=comm_here, dims=dims_here)
+               art=ArtificialProperties(enabled=false), comm=comm_here, dims=dims_here)
     # A smooth scalar (the Cartesian coordinate along the pairing, σ = +1)
     # and the radial component of a uniform Cartesian flow, which changes
     # sign across the fold (σ = −1).
@@ -426,7 +430,7 @@ function test_offrank_folds()
                                 -0.3 * sin(θ), 0.0))
     for (label, dims_here) in (("θ split", splitdims(2)), ("r and θ split", rdims)),
         mu_sensor in (:strain, :velocity)
-        art = ArtParams(enabled=true, mu_sensor=mu_sensor)
+        art = ArtificialProperties(enabled=true, mu_sensor=mu_sensor)
         label = "$label, $mu_sensor"
         s = cyl(comm, dims_here; art=art)
         ref = cyl(MPI.COMM_SELF, (1, 1, 1); art=art)
@@ -473,7 +477,7 @@ function test_symmetry_plane()
         e = 0.0
         for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
             loc = Tuple(I) .- s.decomp.n_halo_d
-            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            J = padded_index(ref, (loc .+ s.decomp.offset)...)
             e = max(e, abs(Float64(a[I, c] - b[J, c])))
         end
         e
@@ -486,9 +490,9 @@ function test_symmetry_plane()
                      eos=IdealMixture([IdealSpecies{T}("a", T(1), T(1.4)),
                                        IdealSpecies{T}("b", T(0.7), T(1.3))]),
                      comm=comm_here, dims=dims_here,
-                     transport=Transport{T}(mu0=T(0.01)),
-                     art=ArtParams{T}(enabled=true, detector=detector,
-                                      species_flux=channel),
+                     transport=ConstantTransport{T}(mu0=T(0.01)),
+                     art=ArtificialProperties{T}(enabled=true, detector=detector,
+                                                 species_flux=channel),
                      deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
                      filter_interval=1, filter_cfl=zero(T), cfl=T(0.4))
         Q = allocate_state(sol)
@@ -586,7 +590,7 @@ function test_halo_consistency()
     for ax in 1:3
         ng = ntuple(d -> d == ax ? SPLITN : 16, 3)
         solver = Solver(n_global=ng, L_domain=(2π, 2π, 2π), bcs=per3,
-                   art=ArtParams(enabled=false), dims=splitdims(ax))
+                   art=ArtificialProperties(enabled=false), dims=splitdims(ax))
         a = CL.field(solver.decomp); b = CL.field(solver.decomp); c = CL.field(solver.decomp)
         fillf!(solver, a, fn); fillf!(solver, b, fn); fillf!(solver, c, fn)
         for d in 1:3
@@ -604,14 +608,14 @@ function test_halo_consistency()
     # Dims_create path is covered too; at np ≥ 4 that is a genuine 2-D/3-D
     # grid with real diagonal neighbours.
     solver = Solver(n_global=(24, 24, 24), L_domain=(2π, 2π, 2π), bcs=per3,
-               art=ArtParams(enabled=false))
+               art=ArtificialProperties(enabled=false))
     f = CL.field(solver.decomp)
     fillf!(solver, f, fn)
     CL.exchange_halos!(f, solver.decomp)
     e = 0.0
     for kk in (0, solver.decomp.n_local[3] + 1), jj in (0, solver.decomp.n_local[2] + 1),
         ii in (0, solver.decomp.n_local[1] + 1)
-        e = max(e, abs(f[gidx(solver, ii, jj, kk)] -
+        e = max(e, abs(f[padded_index(solver, ii, jj, kk)] -
                        fn(xcoord(solver, 1, ii), xcoord(solver, 2, jj), xcoord(solver, 3, kk))))
     end
     check("corner halos filled (all 8 corners)", gmax(e), 1e-12)
@@ -652,7 +656,7 @@ function test_freestream()
     ]
     for cs in cases
         kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain, metric=cs.metric,
-                    bcs=cs.bcs, dims=cs.dims, art=ArtParams(enabled=false),
+                    bcs=cs.bcs, dims=cs.dims, art=ArtificialProperties(enabled=false),
                     filter_weighting=:volume), cs.kw)
         solver = Solver(; kw...)
         Q = allocate_state(solver)
@@ -663,7 +667,7 @@ function test_freestream()
         m = 0.0
         for c in 1:solver.equations.n_cons, k in 1:solver.decomp.n_local[3],
             j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
-            m = max(m, abs(dQ[gidx(solver, i, j, k), c]))
+            m = max(m, abs(dQ[padded_index(solver, i, j, k), c]))
         end
         check(cs.name, gmax(m), 1e-8)
         # The volume-weighted filter divides F(J) by itself, so a uniform
@@ -674,7 +678,7 @@ function test_freestream()
         m = 0.0
         for c in 1:solver.equations.n_cons, k in 1:solver.decomp.n_local[3],
             j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
-            I = gidx(solver, i, j, k)
+            I = padded_index(solver, i, j, k)
             m = max(m, abs(Q[I, c] - Q0[I, c]))
         end
         check(cs.name * ": volume-weighted filter holds a uniform state",
@@ -690,7 +694,7 @@ function test_conservation()
     section("conservation: periodic RHS integrates to zero (global sum)")
     N = SPLITN                   # ≥ 9 per rank up to np = 8 (filter closure)
     solver = Solver(n_global=(N, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
-               transport=Transport(mu0=1e-3), art=ArtParams(enabled=false),
+               transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=false),
                dims=splitdims(1))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) ->
@@ -703,7 +707,7 @@ function test_conservation()
     for c in 1:solver.equations.n_cons
         loc = 0.0
         for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
-            loc += dQ[gidx(solver, i, j, k), c]
+            loc += dQ[padded_index(solver, i, j, k), c]
         end
         worst = max(worst, abs(gsum(loc)))
     end
@@ -720,7 +724,7 @@ end
 function test_sync()
     section("global synchronization: dt and time identical on every rank")
     solver = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
-               art=ArtParams(enabled=false), dims=splitdims(1))
+               art=ArtificialProperties(enabled=false), dims=splitdims(1))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) ->
         Prim(u=(0.2sin(x), 0, 0), p=1 + 0.1cos(y), rho=1 + 0.2sin(z)))
@@ -741,7 +745,7 @@ function test_sync()
     nbad = 0.0
     for c in 1:s2.equations.n_cons, k in 1:s2.decomp.n_local[3], j in 1:s2.decomp.n_local[2],
         i in 1:s2.decomp.n_local[1]
-        isfinite(Q2[gidx(s2, i, j, k), c]) || (nbad += 1)
+        isfinite(Q2[padded_index(s2, i, j, k), c]) || (nbad += 1)
     end
     check("10 RK steps stay finite (count of non-finite)", gsum(nbad), 0.5)
     tspread = MPI.Allreduce(s2.t, max, comm) - MPI.Allreduce(s2.t, min, comm)
@@ -793,7 +797,7 @@ function test_callback_consistency()
     err = 0.0
     for c in 1:s_local.equations.n_cons, k in 1:s_local.decomp.n_local[3],
         j in 1:s_local.decomp.n_local[2], i in 1:s_local.decomp.n_local[1]
-        I = gidx(s_local, i, j, k)
+        I = padded_index(s_local, i, j, k)
         err = max(err, abs(Q_local[I, c] - Q_glob[I, c]))
     end
     check("rank-local vs global trigger: state difference",
@@ -908,7 +912,7 @@ function test_observation_clock()
     check("dt sequence unchanged by observation", gmax(dt0 == dt1 ? 0.0 : 1.0), 0.5)
     err = 0.0
     for c in 1:s0.equations.n_cons, i in 1:s0.decomp.n_local[1]
-        I = gidx(s0, i, 1, 1)
+        I = padded_index(s0, i, 1, 1)
         err = max(err, abs(Q0[I, c] - Q1[I, c]))
     end
     check("state unchanged by observation", gmax(err), 1e-300)
@@ -923,7 +927,7 @@ function test_observation_clock()
     sf = Solver(n_global=(SPLITN, 1, 1), L_domain=(one(T), T(h), T(h)),
                 bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                 eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
-                transport=Transport{T}(), art=ArtParams{T}(enabled=false),
+                transport=ConstantTransport{T}(), art=ArtificialProperties{T}(enabled=false),
                 deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
                 cfl=T(0.4), filter_interval=0, dims=splitdims(1),
                 # One cell of 72 ends with a negative internal energy behind
@@ -986,7 +990,7 @@ function test_state_queries()
     # afterwards each rank's primitives agree with its own Q.
     err = 0.0
     for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2], i in 1:s.decomp.n_local[1]
-        I = gidx(s, i, j, k)
+        I = padded_index(s, i, j, k)
         err = max(err, abs(mixture_density(s, Q, I) - s.rho[I]))
         u, v, w = velocity(s, Q, I)
         err = max(err, abs(u - s.u[I]), abs(v - s.v[I]), abs(w - s.w[I]))
@@ -1278,7 +1282,7 @@ end
 function test_checkpoint()
     section("checkpoint round trip, decomposed")
     solver = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
-               art=ArtParams(enabled=false), dims=splitdims(1))
+               art=ArtificialProperties(enabled=false), dims=splitdims(1))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
     solver.t = 1.25; solver.step = 17
@@ -1290,7 +1294,7 @@ function test_checkpoint()
     d = 0.0
     for c in 1:solver.equations.n_cons, k in 1:solver.decomp.n_local[3],
         j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
-        d = max(d, abs(Q2[gidx(solver, i, j, k), c] - Q[gidx(solver, i, j, k), c]))
+        d = max(d, abs(Q2[padded_index(solver, i, j, k), c] - Q[padded_index(solver, i, j, k), c]))
     end
     check("state bit-identical after round trip", gmax(d), 1e-300)
     # The header describes the state, not only its shape. Each rank writes the
@@ -1298,7 +1302,7 @@ function test_checkpoint()
     # the same extents over a longer domain is refused on every rank at once
     # rather than on whichever ranks happen to notice.
     stretched = Solver(n_global=(SPLITN, 16, 16), L_domain=(4π, 2π, 2π), bcs=per3,
-                       art=ArtParams(enabled=false), dims=splitdims(1))
+                       art=ArtificialProperties(enabled=false), dims=splitdims(1))
     threw = try
         load_checkpoint!(stretched, allocate_state(stretched), "mpi_ckpt")
         0
@@ -1311,7 +1315,7 @@ function test_checkpoint()
     # and a numerics change is refused on every rank unless allowed.
     hot = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
                  eos=IdealMixture([IdealSpecies("gas", 1.0, 1.3)]),
-                 art=ArtParams(enabled=false), dims=splitdims(1))
+                 art=ArtificialProperties(enabled=false), dims=splitdims(1))
     threw = try
         load_checkpoint!(hot, allocate_state(hot), "mpi_ckpt")
         0
@@ -1321,7 +1325,7 @@ function test_checkpoint()
     check("a different gamma under the same name is refused on every rank",
           abs(gsum(threw) - np), 0.5)
     c8 = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
-                deriv=lele_d1_8(), art=ArtParams(enabled=false), dims=splitdims(1))
+                deriv=lele_d1_8(), art=ArtificialProperties(enabled=false), dims=splitdims(1))
     threw = try
         load_checkpoint!(c8, allocate_state(c8), "mpi_ckpt")
         0
@@ -1456,7 +1460,7 @@ function test_unrefined_start()
           [r.offset[1] for r in regs] == [4, 8, 16] ? 0.0 : 1.0, 0.5)
     ps = PatchSolver(solver, solver.patches[1])
     off = ps.decomp.offset[1]
-    local_shock = something(findfirst(i -> states[1][gidx(ps, i, 1, 1), 1] < 1.43,
+    local_shock = something(findfirst(i -> states[1][padded_index(ps, i, 1, 1), 1] < 1.43,
                                       1:ps.decomp.n_local[1]), typemax(Int) - off)
     shock = Int(MPI.Allreduce(local_shock + off, MPI.MIN, comm))
     check("unrefined start: the shock lies in a tile",
@@ -1665,7 +1669,7 @@ function test_artificial_decomposition()
         sums = Float64[]
         for ax in 1:3
             solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3,
-                       art=ArtParams(enabled=true, beta_sensor=sensor),
+                       art=ArtificialProperties(enabled=true, beta_sensor=sensor),
                        dims=splitdims(ax))
             Q = allocate_state(solver)
             # Compressible and vortical at once, so both the dilatation gate and
@@ -1677,7 +1681,7 @@ function test_artificial_decomposition()
             loc = 0.0
             for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
                 i in 1:solver.decomp.n_local[1]
-                loc += solver.beta_art[gidx(solver, i, j, k)]
+                loc += solver.beta_art[padded_index(solver, i, j, k)]
             end
             push!(sums, gsum(loc))
         end
@@ -1697,13 +1701,14 @@ function test_artificial_decomposition()
     end
     # The μ* channel, whose two settings are the field it reads and how the
     # directions combine. Both are plain reductions with no switch, so both
-    # reproduce to round-off; `:max` is the one setting in `ArtParams` that a
+    # reproduce to round-off; `:max` is the one setting in `ArtificialProperties` that a
     # one-dimensional test cannot distinguish from the default at all, which
     # leaves this its only coverage outside Taylor–Green.
     musums = Dict{Symbol,Vector{Float64}}()
-    for (label, art) in ((:strain_sum, ArtParams(enabled=true)),
-                         (:velocity_sum, ArtParams(enabled=true, mu_sensor=:velocity)),
-                         (:strain_max, ArtParams(enabled=true, reduction=:max)))
+    for (label, art) in ((:strain_sum, ArtificialProperties(enabled=true)),
+                         (:velocity_sum,
+                          ArtificialProperties(enabled=true, mu_sensor=:velocity)),
+                         (:strain_max, ArtificialProperties(enabled=true, reduction=:max)))
         sums = Float64[]
         for ax in 1:3
             solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3,
@@ -1716,7 +1721,7 @@ function test_artificial_decomposition()
             loc = 0.0
             for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
                 i in 1:solver.decomp.n_local[1]
-                loc += solver.mu_art[gidx(solver, i, j, k)]
+                loc += solver.mu_art[padded_index(solver, i, j, k)]
             end
             push!(sums, gsum(loc))
         end
@@ -1750,7 +1755,7 @@ function test_bulk_decomposition()
                         IdealSpecies{Float64}("heavy", 0.2, 1.09)])
     function planar_step(flux, ax)
         solver = Solver(n_global=(N, N, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
-                        eos=eos, art=ArtParams(enabled=true, species_flux=flux),
+                        eos=eos, art=ArtificialProperties(enabled=true, species_flux=flux),
                         dims=splitdims(ax))
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> begin
@@ -1762,7 +1767,7 @@ function test_bulk_decomposition()
         sums = zeros(solver.equations.n_cons + 1)
         for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
             i in 1:solver.decomp.n_local[1]
-            I = gidx(solver, i, j, k)
+            I = padded_index(solver, i, j, k)
             for c in 1:solver.equations.n_cons
                 sums[c] += Q[I, c]
             end
@@ -1808,7 +1813,7 @@ function test_ring_detector_decomposition()
         bsums, ksums = Float64[], Float64[]
         for ax in 1:3
             solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=bcx,
-                       art=ArtParams(enabled=true, detector=detector),
+                       art=ArtificialProperties(enabled=true, detector=detector),
                        dims=splitdims(ax))
             Q = allocate_state(solver)
             initialize!(solver, Q, (x, y, z) ->
@@ -1818,7 +1823,7 @@ function test_ring_detector_decomposition()
             bloc, kloc = 0.0, 0.0
             for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
                 i in 1:solver.decomp.n_local[1]
-                I = gidx(solver, i, j, k)
+                I = padded_index(solver, i, j, k)
                 bloc += solver.beta_art[I]
                 kloc += solver.kappa_art[I]
             end
@@ -1852,7 +1857,7 @@ function test_state_validity()
     for ax in 1:3
         n_global = ntuple(d -> d == ax ? SPLITN : 16, 3)
         solver = Solver(n_global=n_global, L_domain=(2π, 2π, 2π), bcs=per3,
-                        eos=eos, art=ArtParams(enabled=false), dims=splitdims(ax))
+                        eos=eos, art=ArtificialProperties(enabled=false), dims=splitdims(ax))
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(rho=1.5, u=(0.4, 0.0, 0.0),
                                                  p=1.0, Y=(0.5, 0.5)))
@@ -1865,7 +1870,7 @@ function test_state_validity()
         # The mixture density is left where it was, so the point is rejected on
         # its composition alone and the density check cannot mask it.
         if rank == 0
-            I = gidx(solver, 1, 2, 2)
+            I = padded_index(solver, 1, 2, 2)
             ρ = mixture_density(solver, Q, I)
             Q[I, 1] = -0.5
             Q[I, 2] = ρ + 0.5
@@ -1917,7 +1922,7 @@ function test_positivity_floor()
     for ax in 1:3
         n_global = ntuple(d -> d == ax ? SPLITN : 16, 3)
         solver = Solver(n_global=n_global, L_domain=(2π, 2π, 2π), bcs=per3,
-                        eos=eos, art=ArtParams(enabled=false), dims=splitdims(ax))
+                        eos=eos, art=ArtificialProperties(enabled=false), dims=splitdims(ax))
         others = filter(d -> d != ax, 1:3)
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(rho=1.5, u=(0.4, 0.0, 0.0), p=1.0,
@@ -1933,7 +1938,7 @@ function test_positivity_floor()
             # Global index to this rank's local one; skip what it does not own.
             loc = ntuple(d -> gi[d] - off[d], 3)
             all(d -> 1 <= loc[d] <= nloc[d], 1:3) || continue
-            I = gidx(solver, loc...)
+            I = padded_index(solver, loc...)
             if n <= 2
                 ρ = mixture_density(solver, Q, I)
                 Q[I, 1] = -0.5
@@ -1954,7 +1959,7 @@ function test_positivity_floor()
         # Every damaged cell is now representable on the rank that owns it.
         nbad = 0.0
         for k in 1:nloc[3], j in 1:nloc[2], i in 1:nloc[1]
-            I = gidx(solver, i, j, k)
+            I = padded_index(solver, i, j, k)
             ρ = mixture_density(solver, Q, I)
             ρ >= rho_floor || (nbad += 1)
             ke = 0.5 * (Q[I, m1]^2 + Q[I, m1 + 1]^2 + Q[I, m1 + 2]^2) / ρ
@@ -1988,7 +1993,7 @@ function test_two_patch_layout()
     u0 = 0.5
     ic(x, y, z) = Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x))
     solver = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                    art=ArtParams(enabled=false), filter_interval=0,
+                    art=ArtificialProperties(enabled=false), filter_interval=0,
                     patch_grid=(2, 1, 1))
     states = allocate_state(solver)
     initialize!(solver, states, ic)
@@ -1996,7 +2001,7 @@ function test_two_patch_layout()
     err = 0.0
     for (ps, Q) in CL.eachpatch(solver, states)
         for i in 1:ps.decomp.n_local[1]
-            I = gidx(ps, i, 1, 1)
+            I = padded_index(ps, i, 1, 1)
             exact = 1.0 + 0.2 * sin(xcoord(ps, 1, i) - u0 * solver.t)
             err = max(err, abs(Q[I, 1] - exact))
         end
@@ -2020,8 +2025,8 @@ function test_two_patch_layout()
     ic10(x, y, z) = Prim(u=(u0 + 0.1 * sin(2x), 0, 0), p=1.0 + 0.05 * cos(x),
                          rho=1.0 + 0.2 * sin(x))
     solver10 = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                      art=ArtParams(enabled=false), filter_interval=0,
-                      transport=Transport(mu0=2e-2), patch_grid=(2, 1, 1),
+                      art=ArtificialProperties(enabled=false), filter_interval=0,
+                      transport=ConstantTransport(mu0=2e-2), patch_grid=(2, 1, 1),
                       deriv=lele_d1_10())
     states10 = allocate_state(solver10)
     initialize!(solver10, states10, ic10)
@@ -2029,7 +2034,7 @@ function test_two_patch_layout()
     m = 0.0
     for (ps, Q) in CL.eachpatch(solver10, states10)
         for i in 1:ps.decomp.n_local[1]
-            m = max(m, Q[gidx(ps, i, 1, 1), 1])
+            m = max(m, Q[padded_index(ps, i, 1, 1), 1])
         end
     end
     check("two-patch C10 viscous wave: max rho matches serial",
@@ -2041,8 +2046,8 @@ function test_two_patch_layout()
     # it with the wall's or the interface's rows. Serial value of this run.
     wall2 = (SlipWallBC(), SlipWallBC())
     solverbl = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                      bcs=(wall2, per3[2], per3[3]), art=ArtParams(enabled=false),
-                      filter_interval=0, transport=Transport(mu0=5e-3),
+                      bcs=(wall2, per3[2], per3[3]), art=ArtificialProperties(enabled=false),
+                      filter_interval=0, transport=ConstantTransport(mu0=5e-3),
                       patch_grid=(2, 1, 1), interface_rhs=:onesided,
                       interface_divergence=lele_d1_6(closures=:brady_livescu))
     statesbl = allocate_state(solverbl)
@@ -2053,7 +2058,7 @@ function test_two_patch_layout()
     m = 0.0
     for (ps, Q) in CL.eachpatch(solverbl, statesbl)
         for i in 1:ps.decomp.n_local[1]
-            m = max(m, Q[gidx(ps, i, 1, 1), 1])
+            m = max(m, Q[padded_index(ps, i, 1, 1), 1])
         end
     end
     check("two-patch walls, source divergence rows: max rho matches serial",
@@ -2067,8 +2072,8 @@ function test_two_patch_layout()
     # component along the split dimension, every rank of each patch entering
     # each. Serial value of this run.
     solvergf = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                      bcs=(wall2, per3[2], per3[3]), art=ArtParams(enabled=false),
-                      filter_interval=0, transport=Transport(mu0=5e-3),
+                      bcs=(wall2, per3[2], per3[3]), art=ArtificialProperties(enabled=false),
+                      filter_interval=0, transport=ConstantTransport(mu0=5e-3),
                       patch_grid=(2, 1, 1), interface_flux=:ghost)
     statesgf = allocate_state(solvergf)
     initialize!(solvergf, statesgf, (x, y, z) ->
@@ -2078,7 +2083,7 @@ function test_two_patch_layout()
     m = 0.0
     for (ps, Q) in CL.eachpatch(solvergf, statesgf)
         for i in 1:ps.decomp.n_local[1]
-            m = max(m, Q[gidx(ps, i, 1, 1), 1])
+            m = max(m, Q[padded_index(ps, i, 1, 1), 1])
         end
     end
     check("two-patch walls, ghost-flux divergence: max rho matches serial",
@@ -2105,8 +2110,8 @@ function test_bulk_patched()
     N = 96
     h = 1.0 / N
     solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, eos=eos,
-                    art=ArtParams(enabled=true, species_flux=:bulk),
-                    transport=Transport(mu0=0.0), filter_interval=1,
+                    art=ArtificialProperties(enabled=true, species_flux=:bulk),
+                    transport=ConstantTransport(mu0=0.0), filter_interval=1,
                     patch_grid=(2, 1, 1))
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> begin
@@ -2121,7 +2126,7 @@ function test_bulk_patched()
     for (ps, Q) in CL.eachpatch(solver, states)
         eq = ps.equations
         for i in 1:ps.decomp.n_local[1]
-            I = gidx(ps, i, 1, 1)
+            I = padded_index(ps, i, 1, 1)
             ρ = Q[I, 1] + Q[I, 2]
             y = Q[I, 1] / ρ
             u = Q[I, eq.i_mom[1]] / ρ
@@ -2274,7 +2279,8 @@ function test_staged_exchange()
     # regridding run are bitwise against the CPUBackend ones.
     function slabs(backend)
         s = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                   art=ArtParams(enabled=false), transport=Transport(mu0=2e-2),
+                   art=ArtificialProperties(enabled=false),
+                   transport=ConstantTransport(mu0=2e-2),
                    patch_grid=(2, 1, 1), backend=backend)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) ->
@@ -2332,7 +2338,7 @@ function test_refined_decomposed()
     # Twenty steps of each run: the checks are agreement with serial to
     # round-off, which every step tests alike, and on an oversubscribed
     # runner the phase cost is linear in steps (see the callback phase).
-    function wave_error(; subcycle, levels=2, art=ArtParams(enabled=false),
+    function wave_error(; subcycle, levels=2, art=ArtificialProperties(enabled=false),
                         filter_interval=0, kw...)
         N = 192
         r1 = BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1))
@@ -2349,7 +2355,7 @@ function test_refined_decomposed()
         e = 0.0
         for (ps, Q) in CL.eachpatch(solver, states)
             for i in 1:ps.decomp.n_local[1]
-                I = gidx(ps, i, 1, 1)
+                I = padded_index(ps, i, 1, 1)
                 e = max(e, abs(Q[I, 1] - (1.0 + 0.2 * sin(xcoord(ps, 1, i) -
                                                           u0 * solver.t))))
             end
@@ -2393,7 +2399,7 @@ function test_refined_decomposed()
     # The d8 detector and the pentadiagonal filter, one fine box and eight-node
     # tiles: the detector's interface rows read the imposed and exchanged
     # ghosts, and both banded plans solve over the level's decomposition.
-    d8pyr = (art=ArtParams(enabled=true, detector=:d8), filt=pyranda_filter(),
+    d8pyr = (art=ArtificialProperties(enabled=true, detector=:d8), filt=pyranda_filter(),
              filter_interval=1)
     e_d8, _ = wave_error(; subcycle=false, d8pyr...)
     check("static two-level wave error, d8 detector and pentadiagonal filter, " *
@@ -2470,7 +2476,7 @@ function test_tiled_level()
     function tiled_error(; subcycle, kw...)
         u0v, v0 = 0.4, 0.3
         solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3,
-                        art=ArtParams(enabled=false), filter_interval=0,
+                        art=ArtificialProperties(enabled=false), filter_interval=0,
                         subcycle=subcycle, tile=12,
                         refine=BlockRegion((12, 12, 0), (24, 24, 1)); kw...)
         states = allocate_state(solver)
@@ -2481,7 +2487,7 @@ function test_tiled_level()
         for (ps, Q) in CL.eachpatch(solver, states)
             n = ps.decomp.n_local
             for j in 1:n[2], i in 1:n[1]
-                I = gidx(ps, i, j, 1)
+                I = padded_index(ps, i, j, 1)
                 exact = 1.0 + 0.1 * sin(xcoord(ps, 1, i) - u0v * solver.t) *
                               sin(xcoord(ps, 2, j) - v0 * solver.t)
                 e = max(e, abs(Q[I, 1] - exact))
@@ -2517,7 +2523,7 @@ function test_tiled_level()
     # cross ranks, and the coarse-fine gradient ring carries each rank's
     # components.
     etv, ntv, _ = tiled_error(subcycle=true, interface_flux=:ghost,
-                              transport=Transport(mu0=2e-2))
+                              transport=ConstantTransport(mu0=2e-2))
     check("subcycled tiled 2-D viscous wave, molecular ghost fluxes, matches serial",
           abs(etv - 8.7293825468126585e-7), 1e-12)
     check("subcycled tiled 2-D viscous step count, molecular ghost fluxes",
@@ -2565,7 +2571,7 @@ function test_tiled_level()
     # its rank range into one snapshot on rank 0, root first.
     let
         solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3,
-                        art=ArtParams(enabled=false), tile=12,
+                        art=ArtificialProperties(enabled=false), tile=12,
                         refine=BlockRegion((12, 12, 0), (24, 24, 1)))
         states = allocate_state(solver)
         wave(x, y) = 1.0 + 0.1 * sin(x) * sin(y)
@@ -2590,7 +2596,7 @@ function test_tiled_level()
     let
         u0 = 0.5
         solver = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                        art=ArtParams(enabled=false), filter_interval=0,
+                        art=ArtificialProperties(enabled=false), filter_interval=0,
                         subcycle=true, tile=8,
                         refine=BlockRegion((40, 0, 0), (96, 1, 1)))
         states = allocate_state(solver)
@@ -2600,7 +2606,7 @@ function test_tiled_level()
         e = 0.0
         for (ps, Q) in CL.eachpatch(solver, states)
             for i in 1:ps.decomp.n_local[1]
-                I = gidx(ps, i, 1, 1)
+                I = padded_index(ps, i, 1, 1)
                 e = max(e, abs(Q[I, 1] - (1.0 + 0.2 * sin(xcoord(ps, 1, i) -
                                                           u0 * solver.t))))
             end
@@ -2809,7 +2815,7 @@ function test_level_subset()
     # the firings this rank saw.
     function wave(ext; subcycle=false, landing=false)
         solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                        art=ArtParams(enabled=false), filter_interval=0,
+                        art=ArtificialProperties(enabled=false), filter_interval=0,
                         subcycle=subcycle,
                         refine=BlockRegion((N ÷ 2, 0, 0), (ext, 1, 1)))
         states = allocate_state(solver)
@@ -2822,7 +2828,7 @@ function test_level_subset()
         e = 0.0
         for (ps, Q) in CL.eachpatch(solver, states)
             for i in 1:ps.decomp.n_local[1]
-                I = gidx(ps, i, 1, 1)
+                I = padded_index(ps, i, 1, 1)
                 e = max(e, abs(Q[I, 1] - (1.0 + 0.2 * sin(xcoord(ps, 1, i) -
                                                           u0 * solver.t))))
             end
@@ -2935,8 +2941,8 @@ function test_covered_masks()
             a = similar(ps.rho)
             d = ps.decomp
             for k in 1:d.n_local[3], j in 1:d.n_local[2], i in 1:d.n_local[1]
-                a[gidx(ps, i, j, k)] = lin(xcoord(ps, 1, i), xcoord(ps, 2, j),
-                                           xcoord(ps, 3, k))
+                a[padded_index(ps, i, j, k)] = lin(xcoord(ps, 1, i), xcoord(ps, 2, j),
+                                                   xcoord(ps, 3, k))
             end
             a
         end
@@ -3043,7 +3049,7 @@ function test_nscbc_inflow()
         e = 0.0
         for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
             loc = Tuple(I) .- s.decomp.n_halo_d
-            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            J = padded_index(ref, (loc .+ s.decomp.offset)...)
             e = max(e, abs(Float64(a[I, c] - b[J, c])))
         end
         e
@@ -3061,7 +3067,8 @@ function test_nscbc_inflow()
                      eos=IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                                        IdealSpecies{Float64}("b", 0.5, 1.4)]),
                      comm=comm_here, dims=dims_here,
-                     transport=Transport(mu0=0.0), art=ArtParams(enabled=art_on),
+                     transport=ConstantTransport(mu0=0.0),
+                     art=ArtificialProperties(enabled=art_on),
                      cfl=0.4)
         Q = allocate_state(sol)
         initialize!(sol, Q, ic)
@@ -3096,7 +3103,7 @@ function test_turbulent_inflow()
         e = 0.0
         for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
             loc = Tuple(I) .- s.decomp.n_halo_d
-            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            J = padded_index(ref, (loc .+ s.decomp.offset)...)
             e = max(e, abs(Float64(a[I, c] - b[J, c])))
         end
         e
@@ -3108,7 +3115,7 @@ function test_turbulent_inflow()
         sol = Solver(n_global=(16, SPLITN, 18), L_domain=(0.5, 1.0, 0.4),
                      bcs=((inlet, NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
                      comm=comm_here, dims=dims_here,
-                     art=ArtParams(enabled=false), cfl=0.4)
+                     art=ArtificialProperties(enabled=false), cfl=0.4)
         Q = allocate_state(sol)
         initialize!(sol, Q, (x, y, z) -> mean)
         return sol, Q
@@ -3155,7 +3162,7 @@ function test_hydrostatic()
         e = 0.0
         for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
             loc = Tuple(I) .- s.decomp.n_halo_d
-            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            J = padded_index(ref, (loc .+ s.decomp.offset)...)
             e = max(e, abs(Float64(a[I, c] - b[J, c])))
         end
         e
@@ -3172,7 +3179,7 @@ function test_hydrostatic()
                        ic=ic, sources=(ConstantBodyForce(g),))
         ng = ntuple(d -> d == ax ? SPLITN : d == 3 ? 1 : 12, 3)
         num(c, dims) = Numerics(n_global=ng, comm=c, dims=dims, filter_interval=0,
-                                art=ArtParams(enabled=false))
+                                art=ArtificialProperties(enabled=false))
         s, Q = setup(prob, num(comm, splitdims(ax)))
         ref, Qref = setup(prob, num(MPI.COMM_SELF, (1, 1, 1)))
         check("hydrostatic state matches serial, split along dim $ax",
@@ -3203,7 +3210,7 @@ function test_composite_face()
         e = 0.0
         for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
             loc = Tuple(I) .- s.decomp.n_halo_d
-            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            J = padded_index(ref, (loc .+ s.decomp.offset)...)
             e = max(e, abs(Float64(a[I, c] - b[J, c])))
         end
         e
@@ -3227,7 +3234,8 @@ function test_composite_face()
                      eos=IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                                        IdealSpecies{Float64}("b", 0.5, 1.4)]),
                      comm=comm_here, dims=dims_here,
-                     transport=Transport(mu0=1e-3), art=ArtParams(enabled=art_on),
+                     transport=ConstantTransport(mu0=1e-3),
+                     art=ArtificialProperties(enabled=art_on),
                      cfl=0.4)
         Q = allocate_state(sol)
         initialize!(sol, Q, ic)

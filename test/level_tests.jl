@@ -13,6 +13,8 @@
 # created: at np = 1 every decomposition borrows `COMM_WORLD` or `COMM_SELF`
 # and owns none, so this suite sees only the second case. The MPI suite checks
 # the first on the regridded Sod case.
+using CompactLES: npatches, ConservedState, interior_index, padded_index, xcoord
+
 released_communicators(decomp) =
     !decomp.owns_communicators || decomp.comm == CL.MPI.COMM_NULL
 
@@ -28,7 +30,7 @@ released_communicators(decomp) =
     @test npatches(mk(deriv=lele_d1_10())) == 2
     # The d8 detector and a pentadiagonal filter close the coarse-fine
     # boundary with banded interface rows of their own.
-    @test npatches(mk(art=ArtParams(detector=:d8))) == 2
+    @test npatches(mk(art=ArtificialProperties(detector=:d8))) == 2
     @test npatches(mk(filt=pyranda_filter())) == 2
     @test_throws ErrorException mk(metric=CylindricalMetric())
     @test_throws ErrorException mk(patch_grid=(2, 1, 1))
@@ -59,7 +61,7 @@ function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false,
     e1 = 3 * (N ÷ 6) - 2
     r2 = BlockRegion((3 * r1.offset[1] + e1 ÷ 4, 0, 0), (e1 ÷ 2, 1, 1))
     solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
-                    art=ArtParams(enabled=false), filter_interval=0,
+                    art=ArtificialProperties(enabled=false), filter_interval=0,
                     level_restriction=mode, subcycle=subcycle, tile=tile,
                     refine=levels == 3 ? [r1, r2] : r1, deriv=deriv,
                     n_halo=n_halo)
@@ -70,7 +72,7 @@ function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false,
     e = 0.0
     for (ps, Q) in CL.eachpatch(solver, states)
         for i in 1:ps.decomp.n_local[1]
-            I = gidx(ps, i, 1, 1)
+            I = padded_index(ps, i, 1, 1)
             e = max(e, abs(Q[I, 1] - (1.0 + 0.2 * sin(xcoord(ps, 1, i) -
                                                       u0 * solver.t))))
         end
@@ -176,18 +178,18 @@ end
     # run with the same numerics) and the mass drift 6.1e-5.
     s8 = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
                 bcs=(wall2, per, per), cfl=0.4, filt=pyranda_filter(),
-                art=ArtParams(detector=:d8),
+                art=ArtificialProperties(detector=:d8),
                 refine=BlockRegion((120, 0, 0), (41, 1, 1)))
     q8 = allocate_state(s8)
     initialize!(s8, q8, ic)
     m8 = _two_level_mass(s8, q8, N)
     run!(s8, q8; tfinal=0.1, nmax=20000)
     p8 = PatchSolver(s8, s8.patches[1])
-    @test maximum(abs(q8[1][gidx(p8, i, 1, 1), m1]) for i in 172:N) < 1e-4
+    @test maximum(abs(q8[1][padded_index(p8, i, 1, 1), m1]) for i in 172:N) < 1e-4
     run!(s8, q8; tfinal=0.2, nmax=40000)
     @test s8.t ≈ 0.2
     for (psq, Q) in CL.eachpatch(s8, q8)
-        @test minimum(Q[gidx(psq, i, 1, 1), 1] for i in 1:psq.decomp.n_local[1]) > 0.05
+        @test minimum(Q[padded_index(psq, i, 1, 1), 1] for i in 1:psq.decomp.n_local[1]) > 0.05
     end
     @test abs(_two_level_mass(s8, q8, N) - m8) / m8 < 5e-4
 end
@@ -200,7 +202,7 @@ end
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     u0, v0 = 0.4, 0.3
     solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                    art=ArtParams(enabled=false), filter_interval=0,
+                    art=ArtificialProperties(enabled=false), filter_interval=0,
                     refine=BlockRegion((18, 18, 0), (12, 12, 1)))
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
@@ -210,7 +212,7 @@ end
     for (ps, Q) in CL.eachpatch(solver, states)
         n = ps.decomp.n_local
         for j in 1:n[2], i in 1:n[1]
-            I = gidx(ps, i, j, 1)
+            I = padded_index(ps, i, j, 1)
             exact = 1.0 + 0.1 * sin(xcoord(ps, 1, i) - u0 * solver.t) *
                           sin(xcoord(ps, 2, j) - v0 * solver.t)
             e = max(e, abs(Q[I, 1] - exact))
@@ -237,7 +239,8 @@ end
 @testset "level interpolation order: configuration, exactness and rebuilds" begin
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     mk(p; kw...) = Solver(; n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0),
-                          bcs=per3l, art=ArtParams(enabled=false), filter_interval=0,
+                          bcs=per3l, art=ArtificialProperties(enabled=false),
+                          filter_interval=0,
                           refine=BlockRegion((40, 0, 0), (17, 1, 1)),
                           level_interpolation_order=p, kw...)
     for bad in (0, 3, 5, 12)
@@ -305,7 +308,7 @@ end
                                  level_interpolation_order=4))
     @test chain_order(s4) == 4
     s8, _ = setup(prob, Numerics(n_global=(96, 1, 1), filter_interval=0,
-                                 art=ArtParams(enabled=false),
+                                 art=ArtificialProperties(enabled=false),
                                  amr=AMR(initial=(x, y, z, t) -> abs(x - 0.7) < 0.04,
                                          level_interpolation_order=8)))
     @test chain_order(s8) == 8
@@ -702,7 +705,7 @@ end
     @test all(all(isfinite, parent(Q)) for Q in states)
     for (psq, Q) in CL.eachpatch(solver, states)
         n = psq.decomp.n_local[1]
-        @test minimum(Q[gidx(psq, i, 1, 1), 1] for i in 1:n) > 0.05
+        @test minimum(Q[padded_index(psq, i, 1, 1), 1] for i in 1:n) > 0.05
     end
 end
 
@@ -771,7 +774,7 @@ end
     u0, v0 = 0.4, 0.3
     function vortex(; tile, subcycle)
         solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
-                        art=ArtParams(enabled=false), filter_interval=0,
+                        art=ArtificialProperties(enabled=false), filter_interval=0,
                         subcycle=subcycle, tile=tile,
                         refine=BlockRegion((18, 18, 0), (12, 12, 1)))
         states = allocate_state(solver)
@@ -782,7 +785,7 @@ end
         for (ps, Q) in CL.eachpatch(solver, states)
             n = ps.decomp.n_local
             for j in 1:n[2], i in 1:n[1]
-                I = gidx(ps, i, j, 1)
+                I = padded_index(ps, i, j, 1)
                 exact = 1.0 + 0.1 * sin(xcoord(ps, 1, i) - u0 * solver.t) *
                               sin(xcoord(ps, 2, j) - v0 * solver.t)
                 e = max(e, abs(Q[I, 1] - exact))
@@ -833,7 +836,7 @@ end
     @test all(all(isfinite, parent(Q)) for Q in states)
     for (psq, Q) in CL.eachpatch(sa, states)
         n = psq.decomp.n_local[1]
-        @test minimum(Q[gidx(psq, i, 1, 1), 1] for i in 1:n) > 0.05
+        @test minimum(Q[padded_index(psq, i, 1, 1), 1] for i in 1:n) > 0.05
     end
     @test length(sa.patches) == length(states) == length(regs) + 1
 end
@@ -850,7 +853,7 @@ end
                    bcs=(wall2, per, per), cfl=0.2, subcycle=true,
                    regrid_interval=5, tag_buffer=16, tile=tile,
                    refine=BlockRegion((85, 0, 0), (31, 1, 1)),
-                   filt=pyranda_filter(), art=ArtParams(detector=:d8))
+                   filt=pyranda_filter(), art=ArtificialProperties(detector=:d8))
         states = allocate_state(s)
         initialize!(s, states, ic)
         b0 = CL._conserved_budget(s, states)
@@ -861,7 +864,7 @@ end
         @test all(p -> p.level == 0 || p.ring_plans[1] isa CL.InterfaceRingPlans, s.patches)
         for (psq, Q) in CL.eachpatch(s, states)
             n = psq.decomp.n_local[1]
-            @test minimum(Q[gidx(psq, i, 1, 1), 1] for i in 1:n) > 0.05
+            @test minimum(Q[padded_index(psq, i, 1, 1), 1] for i in 1:n) > 0.05
         end
         b1 = CL._conserved_budget(s, states)
         @test abs(b1.total_mass - b0.total_mass) / b0.total_mass < 5e-4
@@ -1020,7 +1023,7 @@ end
         ps = PatchSolver(sa, sa.patches[i + 1])
         qs = PatchSolver(sa, sa.patches[j + 1])
         nr = ps.decomp.n_local[1]
-        @test states[i + 1][gidx(ps, nr, 1, 1), 1] == states[j + 1][gidx(qs, 1, 1, 1), 1]
+        @test states[i + 1][padded_index(ps, nr, 1, 1), 1] == states[j + 1][padded_index(qs, 1, 1, 1), 1]
     end
 end
 
@@ -1117,7 +1120,7 @@ end
     root = PatchSolver(ss, ss.patches[1])
     qmax = 0.0
     for i in 1:root.decomp.n_local[1]
-        I = gidx(root, i, 1, 1)
+        I = padded_index(root, i, 1, 1)
         ν = (root.mu_art[I] + root.beta_art[I]) / root.rho[I] +
             root.kappa_art[I] / (root.rho[I] * root.cp_mix[I]) +
             maximum(D[I] for D in root.D_art)
@@ -1326,7 +1329,7 @@ end
     @test level_regions(s, 1) == [r]
     @test all(Q -> all(isfinite, parent(Q)), states)
     ps = PatchSolver(s, s.patches[2])
-    @test all(abs(states[2][gidx(ps, i, 1, 1), 1] - 1) < 1e-12
+    @test all(abs(states[2][padded_index(ps, i, 1, 1), 1] - 1) < 1e-12
               for i in 1:ps.decomp.n_local[1])
     # The substep counts of the recursive driver: one-based at every
     # level, level 2 taking 1 .. 9 under the first root step.
@@ -1354,14 +1357,14 @@ end
             a = similar(ps.rho)
             d = ps.decomp
             for k in 1:d.n_local[3], j in 1:d.n_local[2], i in 1:d.n_local[1]
-                a[gidx(ps, i, j, k)] = f(xcoord(ps, 1, i), xcoord(ps, 2, j),
-                                         xcoord(ps, 3, k))
+                a[padded_index(ps, i, j, k)] = f(xcoord(ps, 1, i), xcoord(ps, 2, j),
+                                                 xcoord(ps, 3, k))
             end
             a
         end
     end
     mk(; kw...) = Solver(n_global=(N, N, N), L_domain=(1.0, 1.0, 1.0),
-                         bcs=walls3, eos=two, transport=Transport(mu0=0.01); kw...)
+                         bcs=walls3, eos=two, transport=ConstantTransport(mu0=0.01); kw...)
     # A composition linear in x and a shear u = y: the plane averages the
     # mixing measures need are exact at every station, and the shear's
     # gradient is exact for every compact derivative.
@@ -1415,7 +1418,7 @@ end
         # normal to x a face node at x = x_lo is fully covered, in the
         # plane normal to y it is half covered.
         root = PatchSolver(s, s.patches[1])
-        m(g1, g2, g3) = root.covered[gidx(root, g1, g2, g3)]
+        m(g1, g2, g3) = root.covered[padded_index(root, g1, g2, g3)]
         @test CL.uncovered_fraction(m(10, 10, 10)) == 0
         @test CL.uncovered_fraction(m(lo, 10, 10)) == 0.5
         @test CL.uncovered_fraction(m(hi, 10, 10)) == 0.5
@@ -1487,7 +1490,7 @@ end
                     best[g], sums[g], cnt[g] = p.level, 0.0, 0.0
                 end
                 p.level == best[g] || continue
-                sums[g] += fs[li][gidx(ps, i, j, k)]
+                sums[g] += fs[li][padded_index(ps, i, j, k)]
                 cnt[g] += 1
             end
         end
@@ -1598,7 +1601,7 @@ end
     tgv(x, y, z) = Prim(u=(sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), 0.0),
                         p=p0 + (cos(2x) + cos(2y)) * (cos(2z) + 2) / 16, rho=1.0)
     mk(; kw...) = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3l,
-                         transport=Transport(mu0=1 / 1600), cfl=0.6; kw...)
+                         transport=ConstantTransport(mu0=1 / 1600), cfl=0.6; kw...)
     # Kinetic energy per unit volume: the composite quadrature of ½ρ|u|²
     # over the held patches, and the same sums without the masks.
     function energies(s, states)
@@ -1607,7 +1610,7 @@ end
             m = s.equations.i_mom
             d = ps.decomp
             for k in 1:d.n_local[3], j in 1:d.n_local[2], i in 1:d.n_local[1]
-                I = gidx(ps, i, j, k)
+                I = padded_index(ps, i, j, k)
                 f[I] = 0.5 * (Q[I, m[1]]^2 + Q[I, m[2]]^2 + Q[I, m[3]]^2) / Q[I, 1]
             end
             f
@@ -1704,7 +1707,7 @@ end
     regs = level_regions(s, 1)
     # The shock is the first root node below the mean of the two densities.
     root = CL.PatchSolver(s, s.patches[1])
-    shock = findfirst(i -> states[1][gidx(root, i, 1, 1), 1] < 1.43, 1:121)
+    shock = findfirst(i -> states[1][padded_index(root, i, 1, 1), 1] < 1.43, 1:121)
     @info("unrefined start", tiles50=Tuple(r.offset[1] for r in regs50),
           tiles80=Tuple(r.offset[1] for r in regs), shock)
     @test length(regs) > length(regs50)
@@ -1945,7 +1948,7 @@ end
     bump = Callback(EveryStep(3), (s, q) -> (foreach(Q -> parent(Q) .*= 1 + 1e-6,
                                                      q[2:end]); false))
     spoil(done) = Callback(EveryStep(), (s, q) -> (s.step == 5 && !done[] &&
-        (done[] = true; q[1][gidx(first(CL.eachpatch(s, q))[1], 3, 3, 1), 1] = -1.0);
+        (done[] = true; q[1][padded_index(first(CL.eachpatch(s, q))[1], 3, 3, 1), 1] = -1.0);
         false))
     cases = [
         "static" => (nest, steps(8)),

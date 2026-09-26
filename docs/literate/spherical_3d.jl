@@ -59,7 +59,7 @@ problem = Problem(
 
 numerics = Numerics(
     n_global = (nr, ntheta, nphi),
-    art = ArtParams(enabled = true),
+    art = ArtificialProperties(enabled = true),
     cfl = 0.3,
     filter_interval = 1,
 )

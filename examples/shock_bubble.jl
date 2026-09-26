@@ -10,6 +10,7 @@
 #      mpiexec -n 4 julia --project=. -t 1 examples/shock_bubble.jl nx=1152 ny=288
 
 using CompactLES
+using CompactLES.Regions
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
 const opt = CompactLES.script_args(ARGS,
@@ -45,7 +46,7 @@ mpi_main() do
                   Slab(1, hi=x_shock) => incident.post,
                   Sphere(center, radius) => bubble),
     )
-    numerics = Numerics(n_global=(opt.nx, opt.ny, 1), art=ArtParams(enabled=true),
+    numerics = Numerics(n_global=(opt.nx, opt.ny, 1), art=ArtificialProperties(enabled=true),
                         control=StepControl(retries=4))
     solver, Q = setup(problem, numerics)
 

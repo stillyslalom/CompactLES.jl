@@ -7,6 +7,7 @@ using Test
 
 module SubstepRateTests
 using ..MPI, ..CompactLES, ..Test
+using ..CompactLES: max_rate, step!
 
 const CL = CompactLES
 const COMM = MPI.COMM_WORLD

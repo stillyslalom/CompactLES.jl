@@ -12,7 +12,7 @@ using CompactLES: n_art_fields, art_block, set_art_block!, nlevels
 using CompactLES: _check_level_count, _check_art_count, refresh_primitives!
 using CompactLES: HierarchyRecord, LevelRecord, hierarchy_record, restore_hierarchy!
 using CompactLES: ConfigurationRecord, configuration_record, configuration_digests
-using CompactLES: _verify_configuration
+using CompactLES: _verify_configuration, xcoord, ConservedState
 using MPI
 using HDF5
 

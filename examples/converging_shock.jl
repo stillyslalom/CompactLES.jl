@@ -21,7 +21,7 @@ mpi_main() do
             Prim(rho=1.0 + 3.0 * drive, p=1.0 + 19.0 * drive)
         end,
     )
-    numerics = Numerics(n_global=(opt.nx, 1, 1), art=ArtParams(enabled=true),
+    numerics = Numerics(n_global=(opt.nx, 1, 1), art=ArtificialProperties(enabled=true),
                         cfl=0.4, filter_interval=1,
                         dims=(MPI.Comm_size(MPI.COMM_WORLD), 1, 1))
     solver, Q = setup(problem, numerics)

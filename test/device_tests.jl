@@ -12,6 +12,8 @@
 # (geometry upload, initialize!, Dirichlet planes) and the GPUArrays
 # reductions are measured on the GPU itself by bench/device_solver.jl.
 
+using CompactLES: compute_rhs!, max_rate, ConservedState, CPUBackend
+
 @testset "device-resident patch: construction" begin
     cpu_ka = CL.KernelAbstractions.CPU()
     bk = DeviceBackend(cpu_ka)
@@ -60,7 +62,8 @@ end
     per = (PeriodicBC(), PeriodicBC())
     function slabs(backend; deriv=lele_d1_6(), n_halo=4, interface_flux=:closure)
         s = Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=(per, per, per),
-                   art=ArtParams(enabled=false), transport=Transport(mu0=2e-2),
+                   art=ArtificialProperties(enabled=false),
+                   transport=ConstantTransport(mu0=2e-2),
                    patch_grid=(2, 1, 1), backend=backend, deriv=deriv, n_halo=n_halo,
                    interface_flux=interface_flux)
         states = allocate_state(s)
@@ -211,7 +214,8 @@ end
         s = Solver(n_global=(12, 12, 12), L_domain=(1.0, Float64(π), 2π),
                    bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per),
                    metric=SphericalMetric(), backend=backend,
-                   art=ArtParams(enabled=false), transport=Transport(mu0=0.0))
+                   art=ArtificialProperties(enabled=false),
+                   transport=ConstantTransport(mu0=0.0))
         Q = allocate_state(s)
         initialize!(s, Q, (r, θ, φ) -> Prim(rho=1.0, p=1.0, u=(0.0, 0.0, 0.0)))
         return s, Q
@@ -256,7 +260,7 @@ end
     function wave(backend; kw...)
         N = 96
         solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0),
-                        bcs=(per, per, per), art=ArtParams(enabled=false),
+                        bcs=(per, per, per), art=ArtificialProperties(enabled=false),
                         filter_interval=0,
                         refine=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0),
                                            (N ÷ 6, 1, 1)),
@@ -316,7 +320,7 @@ end
     for kw in ((;), (tag_sensor_threshold=0.05,),
                (interface_divergence=lele_d1_6(closures=:brady_livescu),),
                (interface_flux=:ghost,),
-               (interface_flux=:ghost, transport=Transport(mu0=1e-3)))
+               (interface_flux=:ghost, transport=ConstantTransport(mu0=1e-3)))
         s1, q1 = tiled(CPUBackend(); kw...)
         CL.FORCE_KA[] = true
         CL.FORCE_DEVICE_EXCHANGE[] = true
@@ -384,7 +388,7 @@ end
     function box3d(backend)
         N = 30
         s = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=(per, per, per),
-                   transport=Transport(mu0=1e-2), subcycle=true,
+                   transport=ConstantTransport(mu0=1e-2), subcycle=true,
                    refine=BlockRegion((12, 12, 12), (7, 7, 13)), tile=6,
                    backend=backend)
         states = allocate_state(s)
@@ -426,8 +430,8 @@ end
         h = 1.0 / N
         s = Solver(n_global=(N, N ÷ 2, 1), L_domain=(1.0, 0.5, 1.0),
                    bcs=(per, per, per), eos=eos,
-                   art=ArtParams(enabled=true, species_flux=:bulk),
-                   transport=Transport(mu0=0.0), filter_interval=1,
+                   art=ArtificialProperties(enabled=true, species_flux=:bulk),
+                   transport=ConstantTransport(mu0=0.0), filter_interval=1,
                    refine=BlockRegion((18, 8, 0), (12, 8, 1)), tile=6,
                    backend=backend)
         states = allocate_state(s)
@@ -512,7 +516,7 @@ end
     run!(s1, Q1; tfinal=T(0.05), nmax=5)
     s2, Q2 = build(DeviceBackend(cpu_ka))
     @test s2.deriv_plans[1] isa DevicePlan{T}
-    @test s2.eos isa IdealMixture{T} && s2.art isa ArtParams{T}
+    @test s2.eos isa IdealMixture{T} && s2.art isa ArtificialProperties{T}
     CL.FORCE_KA[] = true
     try
         run!(s2, Q2; tfinal=T(0.05), nmax=5)

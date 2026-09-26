@@ -4,6 +4,7 @@ using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
 using CompactLES
+using CompactLES: compute_rhs!, max_rate, CPUBackend, padded_index, xcoord
 using Test
 import KernelAbstractions
 
@@ -42,7 +43,7 @@ function CL.add_source!(src::ManufacturedTransportSource, solver, dQ, Q, t)
         vx = -2pi*src.amplitude*decay*s
         vxx = -4pi^2*src.amplitude*decay*c
         vt = -src.amplitude*decay*c
-        I = gidx(solver, i, 1, 1)
+        I = padded_index(solver, i, 1, 1)
         if src.mode === :thermal
             divflux = src.k0*((1 + src.thermal_slope*value)*vxx +
                               src.thermal_slope*vx^2)
@@ -263,7 +264,7 @@ end
                       domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                       bcs=PER, ic=ic)
     solver, Q = setup(problem, Numerics(n_global=(16, 1, 1),
-                                        art=ArtParams(enabled=false),
+                                        art=ArtificialProperties(enabled=false),
                                         filter_interval=0))
     @test solver.transport isa CeaTransport
     @test isfinite(compute_dt(solver, Q))
@@ -271,14 +272,14 @@ end
 
     patched = Solver(n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
                      eos=eos, transport=tr, patch_grid=(2, 1, 1),
-                     art=ArtParams(enabled=false))
+                     art=ArtificialProperties(enabled=false))
     @test patched.transport isa CeaTransport
     @test length(patched.patches) == 2
 
     refined = Solver(n_global=(32, 16, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
                      eos=eos, transport=tr,
                      refine=BlockRegion((8, 4, 0), (16, 8, 1)),
-                     art=ArtParams(enabled=false))
+                     art=ArtificialProperties(enabled=false))
     @test refined.transport isa CeaTransport
     @test length(refined.patches) > 1
 end
@@ -289,7 +290,7 @@ end
 
     eos1 = IdealMixture(IdealSpecies("gas"; R=1.0, gamma=1.4))
     st = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                eos=eos1, transport=tr, art=ArtParams(enabled=false),
+                eos=eos1, transport=tr, art=ArtificialProperties(enabled=false),
                 filter_interval=0)
     Qt = allocate_state(st)
     base, amp = 1.2, 0.08
@@ -304,7 +305,7 @@ end
         Txx = -4pi^2*amp*cospi(2x)
         exact = tr.k0*((1 + tr.thermal_slope*temp)*Txx +
                        tr.thermal_slope*Tx^2)
-        abs(dQt[gidx(st, i, 1, 1), ie] - exact)
+        abs(dQt[padded_index(st, i, 1, 1), ie] - exact)
     end
     @test thermal_error < 2e-7
 
@@ -314,7 +315,7 @@ end
     eos2 = IdealMixture((IdealSpecies("a"; R=1.0, gamma=1.4),
                          IdealSpecies("b"; R=1.0, gamma=1.4)))
     ss = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
-                eos=eos2, transport=tr, art=ArtParams(enabled=false),
+                eos=eos2, transport=tr, art=ArtificialProperties(enabled=false),
                 filter_interval=0)
     Qs = allocate_state(ss)
     ybase, yamp = 0.45, 0.12
@@ -332,7 +333,7 @@ end
         Deff = tr.D0*(1 + 2tr.species_slope*y1*(1-y1))
         dDeff = 2tr.D0*tr.species_slope*(1-2y1)
         exact = Deff*yxx + dDeff*yx^2
-        abs(dQs[gidx(ss, i, 1, 1), 1] - exact)
+        abs(dQs[padded_index(ss, i, 1, 1), 1] - exact)
     end
     @test species_error < 2e-7
 end
@@ -348,7 +349,7 @@ end
                                             tr.thermal_slope, tr.k0, 0, 0)
         st = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
                     eos=eos1, transport=tr, sources=(tsrc,), cfl=0.15,
-                    art=ArtParams(enabled=false), filter_interval=0)
+                    art=ArtificialProperties(enabled=false), filter_interval=0)
         Qt = allocate_state(st)
         initialize!(st, Qt, (x, y, z) -> Prim(rho=1.0,
                     T_ion=tsrc.base + tsrc.amplitude*cospi(2x)))
@@ -356,7 +357,7 @@ end
         CL.refresh_primitives!(st, Qt)
         push!(thermal_errors, maximum(1:n) do i
             exact = tsrc.base + tsrc.amplitude*exp(-tf)*cospi(2xcoord(st, 1, i))
-            abs(st.T_ion[gidx(st, i, 1, 1)] - exact)
+            abs(st.T_ion[padded_index(st, i, 1, 1)] - exact)
         end)
 
         eos2 = IdealMixture((IdealSpecies("a"; R=1.0, gamma=1.4),
@@ -365,7 +366,7 @@ end
                                             tr.species_slope, tr.D0)
         ss = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
                     eos=eos2, transport=tr, sources=(ssrc,), cfl=0.15,
-                    art=ArtParams(enabled=false), filter_interval=0)
+                    art=ArtificialProperties(enabled=false), filter_interval=0)
         Qs = allocate_state(ss)
         initialize!(ss, Qs, (x, y, z) -> begin
             y1 = ssrc.base + ssrc.amplitude*cospi(2x)
@@ -374,7 +375,7 @@ end
         run!(ss, Qs; tfinal=tf, nmax=1000)
         push!(species_errors, maximum(1:n) do i
             exact = ssrc.base + ssrc.amplitude*exp(-tf)*cospi(2xcoord(ss, 1, i))
-            abs(Qs[gidx(ss, i, 1, 1), 1] - exact)
+            abs(Qs[padded_index(ss, i, 1, 1), 1] - exact)
         end)
     end
     println("manufactured variable transport: thermal errors = ", thermal_errors,
@@ -391,7 +392,7 @@ end
     tr = VariableTransport(0.0, 0.0, 2.5, 0.0)
     s = Solver(n_global=(24, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=PER,
                eos=eos, transport=tr, cfl=0.4,
-               art=ArtParams(enabled=false), filter_interval=0)
+               art=ArtificialProperties(enabled=false), filter_interval=0)
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), rho=1.0, T_ion=1.0))
     h = s.h[1]
@@ -448,7 +449,7 @@ end
     function build(backend)
         s = Solver(n_global=(16, 12, 1), L_domain=(1.0, 0.75, 1.0), bcs=PER,
                    eos=eos, transport=tr, backend=backend,
-                   art=ArtParams(enabled=false), filter_interval=0)
+                   art=ArtificialProperties(enabled=false), filter_interval=0)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(Y=(0.2 + 0.1sinpi(2x),
                                                     0.8 - 0.1sinpi(2x)),

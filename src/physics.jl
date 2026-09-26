@@ -1219,7 +1219,7 @@ Base type for molecular-transport models with scalar type `T`.
 abstract type AbstractTransport{T} end
 
 """
-    Transport(; mu0=0.0, Pr=0.7, Sc=0.7)
+    ConstantTransport(; mu0=0.0, Pr=0.7, Sc=0.7)
 
 Constant molecular-transport model.
 
@@ -1227,7 +1227,7 @@ Constant molecular-transport model.
 
 - `mu0`: dynamic shear viscosity. Its default `0.0` selects inviscid molecular
   transport; artificial properties remain independently controlled by
-  [`ArtParams`](@ref).
+  [`ArtificialProperties`](@ref).
 - `Pr`: Prandtl number. Molecular conductivity is `mu0 * cp / Pr`.
 - `Sc`: Schmidt number. Each molecular species diffusivity is
   `mu0 / (rho * Sc)`.
@@ -1236,7 +1236,7 @@ Constant molecular-transport model.
 [`Solver`](@ref) construction raises an `ArgumentError` otherwise. All three
 values must use the same numeric type.
 """
-Base.@kwdef struct Transport{T} <: AbstractTransport{T}
+Base.@kwdef struct ConstantTransport{T} <: AbstractTransport{T}
     mu0::T = 0.0
     Pr::T  = 0.7
     Sc::T  = 0.7

@@ -3,7 +3,9 @@
 # Float32 tests in runtests.jl compile the individual paths; these cases ask
 # whether they retain the solver's physical invariants and reference behavior.
 
-_f32_numerics(; art=false) = (precision=Float32, art=ArtParams(enabled=art))
+using CompactLES: compute_rhs!, apply_bcs!, padded_index, xcoord
+
+_f32_numerics(; art=false) = (precision=Float32, art=ArtificialProperties(enabled=art))
 
 @testset "Float32 freestream/GCL matrix" begin
     T = Float32
@@ -52,7 +54,7 @@ _f32_numerics(; art=false) = (precision=Float32, art=ArtParams(enabled=art))
         dQ = zero(Q)
         compute_rhs!(solver, Q, dQ)
         push!(residuals,
-              maximum(abs(dQ[gidx(solver, i, j, k), c])
+              maximum(abs(dQ[padded_index(solver, i, j, k), c])
                       for c in 1:solver.equations.n_cons,
                           i in 1:solver.decomp.n_local[1],
                           j in 1:solver.decomp.n_local[2],
@@ -73,7 +75,7 @@ end
 function _f32_closed_derivative_error(N; spherical=false, T=Float32,
                                       deriv=lele_d1_6(T))
     per = (PeriodicBC(), PeriodicBC())
-    numerics = (precision=T, art=ArtParams(enabled=false), deriv=deriv)
+    numerics = (precision=T, art=ArtificialProperties(enabled=false), deriv=deriv)
     solver = if spherical
         Solver(; n_global=(N, 12, 12),
                L_domain=(one(T), T(π), T(2π)),
@@ -91,7 +93,7 @@ function _f32_closed_derivative_error(N; spherical=false, T=Float32,
     for k in 1:solver.decomp.n_local[3],
         j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
         x = xcoord(solver, 1, i)
-        f[gidx(solver, i, j, k)] =
+        f[padded_index(solver, i, j, k)] =
             spherical ? exp(-T(4) * x^2) : exp(sin(T(3) * x))
     end
     CL.exchange_halos!(f, solver.decomp)
@@ -104,7 +106,7 @@ function _f32_closed_derivative_error(N; spherical=false, T=Float32,
         exact = spherical ?
             -T(8) * x * exp(-T(4) * x^2) :
             T(3) * cos(T(3) * x) * exp(sin(T(3) * x))
-        err = max(err, abs(df[gidx(solver, i, j, k)] - exact))
+        err = max(err, abs(df[padded_index(solver, i, j, k)] - exact))
     end
     return err
 end
@@ -179,7 +181,7 @@ end
         exact_riemann_star(1.0, 0.0, 1.0, 0.125, 0.0, 0.1, 1.4)
     eρ = eu = ep = 0.0
     for i in 1:N
-        I = gidx(solver, i, 1, 1)
+        I = padded_index(solver, i, 1, 1)
         x = Float64(xcoord(solver, 1, i))
         ρ, u, p = exact_riemann_sample(
             (x - 0.5) / 0.2, 1.0, 0.0, 1.0, 0.125, 0.0, 0.1, 1.4,
@@ -205,8 +207,8 @@ function _tgv_short_history(::Type{T}) where {T<:AbstractFloat}
                     L_domain=(T(2π), T(2π), T(2π)),
                     bcs=(per, per, per),
                     eos=IdealSpecies(T, "gas"; gamma=T(1.4), R=one(T)),
-                    transport=Transport{T}(mu0=one(T) / T(1600)),
-                    art=ArtParams{T}(enabled=false),
+                    transport=ConstantTransport{T}(mu0=one(T) / T(1600)),
+                    art=ArtificialProperties{T}(enabled=false),
                     deriv=lele_d1_6(T),
                     filt=compact_filter(T(0.45), T), cfl=T(0.6))
     Q = allocate_state(solver)
@@ -224,7 +226,7 @@ function _tgv_short_history(::Type{T}) where {T<:AbstractFloat}
         ke = 0.0
         m1, m2, m3 = solver.equations.i_mom
         for k in 1:N, j in 1:N, i in 1:N
-            I = gidx(solver, i, j, k)
+            I = padded_index(solver, i, j, k)
             ρ = Float64(Q[I, 1])
             mass += ρ
             ke += 0.5 * (Float64(Q[I, m1])^2 +
@@ -274,28 +276,30 @@ struct _Float64OnlyTransport <: AbstractTransport{Float64} end
     # Float64 components converted by `precision`, against the same deck
     # built at Float32 by hand: every stored scalar and every step agree.
     s1, Q1 = sod(precision=T, eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
-                 transport=Transport(mu0=1e-3), art=ArtParams(enabled=true),
+                 transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=true),
                  deriv=lele_d1_6(), filt=compact_filter(0.45))
     s2, Q2 = sod(eos=IdealSpecies(T, "gas"; R=1, gamma=1.4),
-                 transport=Transport{T}(mu0=T(1e-3)), art=ArtParams{T}(enabled=true),
+                 transport=ConstantTransport{T}(mu0=T(1e-3)),
+                 art=ArtificialProperties{T}(enabled=true),
                  deriv=lele_d1_6(T), filt=compact_filter(0.45, T))
     @test parent(Q1) isa Array{T,4}
     @test s1.eos isa IdealMixture{T}
-    @test s1.transport isa Transport{T}
-    @test s1.art isa ArtParams{T}
+    @test s1.transport isa ConstantTransport{T}
+    @test s1.art isa ArtificialProperties{T}
     @test s1.deriv_plans[1] isa DirPlan{T}
     @test s1.filter_plans[1] isa DirPlan{T}
     @test s1.step == s2.step > 1
     @test parent(Q1) == parent(Q2)
 
     # Components left out are built at the precision of those given.
-    s = small(transport=Transport{T}())
-    @test s.eos isa IdealMixture{T} && s.art isa ArtParams{T}
+    s = small(transport=ConstantTransport{T}())
+    @test s.eos isa IdealMixture{T} && s.art isa ArtificialProperties{T}
     @test s.deriv_plans[1] isa DirPlan{T}
 
     # Without `precision`, a mixture is rejected and each component named.
     err = try
-        small(transport=Transport{T}(), art=ArtParams(), eos=IdealSpecies("gas"; R=1, gamma=1.4))
+        small(transport=ConstantTransport{T}(), art=ArtificialProperties(),
+              eos=IdealSpecies("gas"; R=1, gamma=1.4))
     catch e
         e
     end
@@ -303,7 +307,8 @@ struct _Float64OnlyTransport <: AbstractTransport{Float64} end
     msg = sprint(showerror, err)
     @test occursin("eos is Float64", msg) && occursin("transport is Float32", msg) &&
           occursin("art is Float64", msg) && occursin("precision = Float32", msg)
-    prob = Problem(transport=Transport{T}(), domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+    prob = Problem(transport=ConstantTransport{T}(),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                    bcs=bcs, ic=(x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
     @test_throws ArgumentError setup(prob, Numerics(n_global=(16, 1, 1)))
     @test_throws ArgumentError small(precision=Int)
@@ -311,10 +316,11 @@ struct _Float64OnlyTransport <: AbstractTransport{Float64} end
 
     # `precision` through `setup`, and conversion upward.
     solver, Q = setup(prob, Numerics(n_global=(16, 1, 1), precision=T))
-    @test parent(Q) isa Array{T,4} && solver.art isa ArtParams{T}
-    s = small(precision=Float64, eos=StiffenedGas{T}(), transport=Transport{T}(mu0=T(0.1)),
-              art=ArtParams{T}(), deriv=lele_d1_10(T))
-    @test s.eos isa StiffenedGas{Float64} && s.transport isa Transport{Float64}
+    @test parent(Q) isa Array{T,4} && solver.art isa ArtificialProperties{T}
+    s = small(precision=Float64, eos=StiffenedGas{T}(),
+              transport=ConstantTransport{T}(mu0=T(0.1)),
+              art=ArtificialProperties{T}(), deriv=lele_d1_10(T))
+    @test s.eos isa StiffenedGas{Float64} && s.transport isa ConstantTransport{Float64}
     @test s.transport.mu0 == Float64(T(0.1)) && s.deriv_plans[1] isa BandPlan{Float64}
 
     # A NASA-9 mixture and its CEA transport convert to the objects built at

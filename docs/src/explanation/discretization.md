@@ -258,7 +258,7 @@ most diffusive species. The thermal contribution is
 thermal limit. The acoustic term uses the Euclidean norm of inverse spacings,
 so its multidimensional contribution differs from the sum of one-dimensional
 acoustic rates. The factor two is the diffusive safety constant, not one
-of the `ArtParams` coefficients.
+of the `ArtificialProperties` coefficients.
 ``R_{\mathrm{curvature}}`` is the geometric source rate that a collapsed angular
 dimension would otherwise contribute unaccounted; it is zero in Cartesian
 coordinates and for every resolved angular direction.

@@ -114,6 +114,7 @@ include("timing.jl")
     using CompactLES
     using Printf, Test
 end
+using CompactLES: padded_index, xcoord
 
 const CL = CompactLES
 # The smooth-evolution cases, their references and regional norms; shared
@@ -122,13 +123,14 @@ include("smooth_cases.jl")
 
 fillf!(solver, f, fn) = (for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
                         i in 1:solver.decomp.n_local[1]
-    f[gidx(solver, i, j, k)] = fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))
+    f[padded_index(solver, i, j, k)] = fn(xcoord(solver, 1, i), xcoord(solver, 2, j),
+                                          xcoord(solver, 3, k))
 end; f)
 
 function ferr(solver, f, fn)
     e = 0.0
     for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
-        e = max(e, abs(f[gidx(solver, i, j, k)] -
+        e = max(e, abs(f[padded_index(solver, i, j, k)] -
                        fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))))
     end
     e
@@ -139,7 +141,7 @@ function ferr2(solver, f, fn)
     e = 0.0; n = 0
     nl = solver.decomp.n_local
     for k in 1:nl[3], j in 1:nl[2], i in 1:nl[1]
-        e += (f[gidx(solver, i, j, k)] -
+        e += (f[padded_index(solver, i, j, k)] -
               fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k)))^2
         n += 1
     end
@@ -225,19 +227,19 @@ end
 println("\n=== interior order (periodic) ===")
 study("C6 periodic derivative", (16, 32, 64),
       N -> Solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (x, y, z) -> sin(x),
       (fn=(x, y, z) -> cos(x), parity=1); expect=6.0, tol=1.2, recorded=6.01)
 
 study("C8 periodic derivative", (16, 32, 64),
       N -> Solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
-                  deriv=lele_d1_8(), art=ArtParams(enabled=false)),
+                  deriv=lele_d1_8(), art=ArtificialProperties(enabled=false)),
       (x, y, z) -> sin(x),
       (fn=(x, y, z) -> cos(x), parity=1); expect=8.0, tol=1.5, recorded=8.00)
 
 study("C10 periodic derivative", (16, 24, 32),
       N -> Solver(n_global=(N, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3,
-                  deriv=lele_d1_10(), art=ArtParams(enabled=false)),
+                  deriv=lele_d1_10(), art=ArtificialProperties(enabled=false)),
       (x, y, z) -> sin(x),
       (fn=(x, y, z) -> cos(x), parity=1); expect=10.0, tol=2.5, recorded=10.04)
 
@@ -245,7 +247,7 @@ println("\n=== closed-domain order (boundary closures active) ===")
 study("C6 with wall closures", (24, 48, 96),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=3.2, tol=0.8, recorded=3.18)
@@ -254,7 +256,7 @@ study("C6 wall closures, :cascade3", (24, 48, 96),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                   deriv=lele_d1_6(closures=:cascade3),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=3.2, tol=0.8, recorded=3.17)
@@ -263,7 +265,7 @@ study("C6 wall closures, :cascade4", (24, 48, 96),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                   deriv=lele_d1_6(closures=:cascade4),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=4.0, tol=0.8, recorded=4.02)
@@ -272,7 +274,7 @@ study("C6 wall closures, :brady_livescu", (24, 48, 96),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                   deriv=lele_d1_6(closures=:brady_livescu),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=6.0, tol=1.0, recorded=5.88)
@@ -280,7 +282,7 @@ study("C6 wall closures, :brady_livescu", (24, 48, 96),
 study("C8 with wall closures", (24, 48, 96),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  deriv=lele_d1_8(), art=ArtParams(enabled=false)),
+                  deriv=lele_d1_8(), art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=3.2, tol=0.8, recorded=3.18)
@@ -289,7 +291,7 @@ study("C8 wall closures, :brady_livescu", (24, 48, 96),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                   deriv=lele_d1_8(closures=:brady_livescu),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=8.0, tol=1.2, recorded=7.91)
@@ -297,7 +299,7 @@ study("C8 wall closures, :brady_livescu", (24, 48, 96),
 study("C10 with wall closures", (24, 48, 96),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  deriv=lele_d1_10(), art=ArtParams(enabled=false)),
+                  deriv=lele_d1_10(), art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1);
       expect=3.2, tol=0.8, recorded=3.18)
@@ -312,7 +314,7 @@ study("C8 filter pass, :cascade", (12, 16, 24, 32),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                   filt=compact_filter(0.45; closures=:cascade),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> exp(sin(3x)), parity=1);
       expect=2.0, tol=0.6, recorded=1.88, op=:filter)
@@ -321,7 +323,7 @@ study("C8 filter pass, :onesided", (12, 16, 24, 32),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                   filt=compact_filter(0.45; closures=:onesided),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> exp(sin(3x)), parity=1);
       expect=8.0, tol=1.5, recorded=8.07, op=:filter)
@@ -337,7 +339,7 @@ const SYM = (SymmetryPlaneBC(), SymmetryPlaneBC())
 sym_solver(N, deriv) =
     Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
            bcs=(SYM, per3[2], per3[3]), deriv=deriv,
-           art=ArtParams(enabled=false))
+           art=ArtificialProperties(enabled=false))
 sym_even(x, y, z) = exp(cospi(x))
 sym_deven(x, y, z) = -pi * sinpi(x) * exp(cospi(x))
 sym_odd(x, y, z) = sinpi(x) * exp(cospi(x))
@@ -375,7 +377,7 @@ study("cylindrical axis, odd field (u_r-like)", (32, 64, 128),
       N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
                   metric=CylindricalMetric(),
                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (r, θ, z) -> r * exp(-4r^2),
       (fn=(r, θ, z) -> (1 - 8r^2) * exp(-4r^2), parity=-1);
       expect=3.7, tol=0.8, recorded=3.76)
@@ -384,7 +386,7 @@ study("cylindrical axis, even field (scalar)", (32, 64, 128),
       N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
                   metric=CylindricalMetric(),
                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (r, θ, z) -> exp(-4r^2),
       (fn=(r, θ, z) -> -8r * exp(-4r^2), parity=1);
       expect=3.0, tol=0.8, recorded=2.99)
@@ -393,7 +395,7 @@ study("resolved-θ axis, x-like field", (32, 64, 128),
       N -> Solver(n_global=(N, 16, 1), L_domain=(1.0, 2π, 1.0),
                   metric=CylindricalMetric(),
                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (r, θ, z) -> r * cos(θ) * exp(-4r^2),
       (fn=(r, θ, z) -> cos(θ) * (1 - 8r^2) * exp(-4r^2), parity=1);
       expect=3.7, tol=0.8, recorded=3.76)
@@ -403,7 +405,7 @@ study("spherical origin, radial Gaussian", (24, 48, 96),
                   metric=SphericalMetric(),
                   bcs=((OriginBC(), SlipWallBC()),
                        (PoleBC(), PoleBC()), per3[3]),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (r, θ, φ) -> exp(-4r^2),
       (fn=(r, θ, φ) -> -8r * exp(-4r^2), parity=1);
       expect=3.0, tol=0.8, recorded=2.97)
@@ -645,7 +647,8 @@ evolution_study("two levels, C6, cascade filter", PERIODIC_NS,
 evolution_study("two levels, C6 :brady_livescu, d8 detector", PERIODIC_NS,
                 N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2,
                                   deriv=lele_d1_6(closures=:brady_livescu),
-                                  art=ArtParams(enabled=true, detector=:d8)), entropy_ref;
+                                  art=ArtificialProperties(enabled=true, detector=:d8)),
+                entropy_ref;
                 primary=:interface, tfinal=0.5, expect=5.9, tol=0.8, recorded=5.93)
 evolution_study("two levels, C6, pentadiagonal filter", PERIODIC_NS,
                 N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2, filter_interval=1,
@@ -713,20 +716,21 @@ temporal_study("two levels, subcycled, ghost fluxes", (14, 20, 28),
 function taylor_green_ke(N; tfinal=10.0, Re=1600.0)
     γ = 1.4; c0 = 10.0; p0 = c0^2 / γ
     prob = Problem(eos=IdealSpecies("gas"; R=1.0, gamma=γ),
-                   transport=Transport(mu0=1 / Re),
+                   transport=ConstantTransport(mu0=1 / Re),
                    domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)), bcs=per3,
                    ic=(x, y, z) -> Prim(
                        u=(sin(x) * cos(y) * cos(z), -cos(x) * sin(y) * cos(z), 0.0),
                        p=p0 + (1 / 16) * (cos(2x) + cos(2y)) * (cos(2z) + 2),
                        rho=1.0))
-    solver, Q = setup(prob, Numerics(n_global=(N, N, N), art=ArtParams(enabled=false),
+    solver, Q = setup(prob,
+                      Numerics(n_global=(N, N, N), art=ArtificialProperties(enabled=false),
                                 cfl=0.6))
     cellvol = prod(solver.h)
     ts = Float64[]; kes = Float64[]
     cb = (solver, Q) -> begin
         ke = 0.0
         for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
-            I = gidx(solver, i, j, k)
+            I = padded_index(solver, i, j, k)
             ρ = Q[I, 1]
             m1, m2, m3 = solver.equations.i_mom
             ke += 0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / ρ

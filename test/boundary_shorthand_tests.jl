@@ -1,4 +1,5 @@
 using CompactLES, Test
+using CompactLES: step!
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
 @testset "symmetric boundary shorthand" begin

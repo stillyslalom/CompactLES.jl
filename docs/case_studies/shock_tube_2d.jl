@@ -26,6 +26,7 @@ using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 
 using CompactLES
+using CompactLES: padded_index, xcoord
 using CairoMakie
 CairoMakie.activate!(type = "png")
 
@@ -124,7 +125,7 @@ downstream = DirichletBC((x, y, z, t) -> Prim(Y = (0.0, 1.0), u = (U, 0.0, 0.0),
 problem(xlo_bc) = Problem(
     name = "2-D shock/interface interaction",
     eos = eos,
-    transport = Transport(mu0 = 0.0),          # Euler + artificial regularization
+    transport = ConstantTransport(mu0 = 0.0),          # Euler + artificial regularization
     domain = ((0.0, Lx), (0.0, Ly), (0.0, hx)),
     bcs = ((xlo_bc, downstream),
            (PeriodicBC(), PeriodicBC()),
@@ -132,7 +133,7 @@ problem(xlo_bc) = Problem(
     ic = ic,
 )
 
-numerics = Numerics(n_global = (nx, ny, 1), art = ArtParams(enabled = true),
+numerics = Numerics(n_global = (nx, ny, 1), art = ArtificialProperties(enabled = true),
                     cfl = 0.4, filter_interval = 1)
 
 solver, Q = setup(problem(upstream), numerics)
@@ -147,7 +148,7 @@ solver, Q = setup(problem(upstream), numerics)
 
 function density(solver, Q)
     nxl, nyl, _ = solver.decomp.n_local
-    [mixture_density(solver, Q, gidx(solver, i, j, 1)) for i in 1:nxl, j in 1:nyl]
+    [mixture_density(solver, Q, padded_index(solver, i, j, 1)) for i in 1:nxl, j in 1:nyl]
 end
 
 xs = [xcoord(solver, 1, i) for i in 1:nx]

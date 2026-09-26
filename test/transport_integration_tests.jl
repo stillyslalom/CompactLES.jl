@@ -3,6 +3,7 @@ module TransportIntegrationTests
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 using CompactLES, Test
+using CompactLES: compute_rhs!, apply_bcs!, sync_patches!, padded_index, xcoord
 const CL = CompactLES
 const PER = (PeriodicBC(), PeriodicBC())
 
@@ -20,7 +21,7 @@ argon_kappa(T) = 1e-4 * exp(0.60968928log(T) - 70.892249/T +
                              (NoSlipWallBC(), NoSlipWallBC())
         s = Solver(n_global=(32, 1, 1), L_domain=(0.01, 1.0, 1.0),
                    bcs=(walls, PER, PER), eos=eos, transport=tr,
-                   art=ArtParams(enabled=false), filter_interval=0)
+                   art=ArtificialProperties(enabled=false), filter_interval=0)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, T_ion=300 + 30000x))
         CL.FORCE_KA[] = ka
@@ -31,7 +32,7 @@ argon_kappa(T) = 1e-4 * exp(0.60968928log(T) - 70.892249/T +
             CL.FORCE_KA[] = false
         end
         for (i, temp) in ((1, 300), (32, 600))
-            I = gidx(s, i, 1, 1)
+            I = padded_index(s, i, 1, 1)
             @test s.flux[1, 1][I] == 0
             expected = isothermal ? -argon_kappa(temp) * 30000 : 0.0
             @test s.flux[1, s.equations.i_energy][I] ≈ expected atol=2e-9
@@ -53,7 +54,7 @@ end
                    origin=(1.0, pi/2, 0.0),
                    bcs=((ExtrapolationBC(), ExtrapolationBC()), PER, PER),
                    eos=eos, transport=tr, metric=metric,
-                   art=ArtParams(enabled=false), filter_interval=0)
+                   art=ArtificialProperties(enabled=false), filter_interval=0)
         Q = allocate_state(s)
         initialize!(s, Q, (r, theta, phi) ->
             Prim(rho=1.0, T_ion=300 + 100r,
@@ -67,7 +68,7 @@ end
             CL.FORCE_KA[] = false
         end
         for i in (8, 16, 24)
-            I = gidx(s, i, 1, 1)
+            I = padded_index(s, i, 1, 1)
             r = xcoord(s, 1, i)
             @test dQ[I, s.equations.i_mom[tangent]] ≈ a*argon_mu(300 + 100r) rtol=1e-8
         end
@@ -81,7 +82,7 @@ end
     for patch_grid in ((1, 1, 1), (2, 1, 1))
         s = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0),
                    bcs=(PER, PER, PER), eos=eos, transport=tr,
-                   patch_grid=patch_grid, art=ArtParams(enabled=false),
+                   patch_grid=patch_grid, art=ArtificialProperties(enabled=false),
                    filter_interval=0)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) ->

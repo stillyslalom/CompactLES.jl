@@ -1,5 +1,9 @@
 # Control and diagnose a run
 
+```@meta
+CurrentModule = CompactLES
+```
+
 ## Retain stage storage
 
 [`Workspace`](@ref) owns the two arrays used by the low-storage Runge--Kutta

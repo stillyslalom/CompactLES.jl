@@ -41,6 +41,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: padded_index
 using Printf
 
 const CL = CompactLES
@@ -71,8 +72,8 @@ function build(xlo, xhi, xbcs, ic)
     solver = Solver(n_global=(nx, ny, 1), L_domain=(xhi - xlo, OPTS.Ly, 1.0),
                     origin=(xlo, 0.0, 0.0), bcs=(xbcs, per, per),
                     eos=IdealSpecies("gas"; gamma=γ, R=1.0),
-                    transport=Transport(mu0=0.0),
-                    art=ArtParams(enabled=OPTS.art), cfl=OPTS.cfl)
+                    transport=ConstantTransport(mu0=0.0),
+                    art=ArtificialProperties(enabled=OPTS.art), cfl=OPTS.cfl)
     Q = allocate_state(solver)
     initialize!(solver, Q, ic)
     return solver, Q
@@ -87,7 +88,7 @@ function interior(solver, Q, name)
     CL.refresh_primitives!(solver, Q)
     f = CL.scalar_field(solver, name)
     nx, ny, _ = solver.decomp.n_local
-    return [f[gidx(solver, i, j, 1)] for i in 1:nx, j in 1:ny]
+    return [f[padded_index(solver, i, j, 1)] for i in 1:nx, j in 1:ny]
 end
 
 # Maximum and root-mean-square of run − reference over x ∈ [xa, xb], the
@@ -120,7 +121,7 @@ function plane_excursion!(ref, xf)
     cb = (s, Q) -> begin
         CL.refresh_primitives!(s, Q)
         for j in 1:ny
-            peak[] = max(peak[], abs(s.p[gidx(s, i, j, 1)] - 1))
+            peak[] = max(peak[], abs(s.p[padded_index(s, i, j, 1)] - 1))
         end
         nothing
     end

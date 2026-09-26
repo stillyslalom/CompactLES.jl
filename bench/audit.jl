@@ -13,6 +13,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: compute_rhs!, apply_bcs!, recover_primitives!, filter_state!, step!
 using Printf, InteractiveUtils
 
 const CL = CompactLES
@@ -25,8 +26,8 @@ function build(; N=48, n_species=1, art=true, deriv=lele_d1_6(),
           IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.2, 1.09)])
     solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3, eos=eos,
-               transport=Transport(mu0=1e-3), deriv=deriv,
-               art=ArtParams(enabled=art, species_flux=species_flux))
+               transport=ConstantTransport(mu0=1e-3), deriv=deriv,
+               art=ArtificialProperties(enabled=art, species_flux=species_flux))
     Q = allocate_state(solver)
     if n_species == 1
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1sin(x) * cos(y), -0.1cos(x) * sin(y), 0.05sin(z)),
@@ -81,7 +82,7 @@ alloc("step!        (2 species, bulk)", () -> step!(sb, Qb, dQb, dub, 1e-4); sca
 println("\n=== allocation per call (cylindrical axis fold, 1-D radial) ===")
 sf = Solver(n_global=(128, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
             bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-            art=ArtParams(enabled=true))
+            art=ArtificialProperties(enabled=true))
 Qf = allocate_state(sf)
 initialize!(sf, Qf, (r, θ, z) -> Prim(u=(0, 0, 0), p=1 + exp(-40(r - 0.4)^2), rho=1.0))
 dQf = zero(Qf); duf = zero(Qf)
@@ -145,21 +146,23 @@ function float64_in_point_bodies()
                          u=(0.0, 0.05sin(y), 0.0), p=1.0, rho=1 + 0.1sin(y))
     runs = [
         ((n_global=(24, 24, 24), L_domain=(2π, 2π, 2π), bcs=per3,
-          transport=Transport(mu0=1e-3), art=ArtParams(enabled=true)), wave),
+          transport=ConstantTransport(mu0=1e-3),
+          art=ArtificialProperties(enabled=true)), wave),
         ((n_global=(24, 16, 1), L_domain=(1.0, 2π, 1.0), bcs=(iso, per, per),
-          eos=mix, transport=Transport(mu0=1e-3),
-          art=ArtParams(enabled=true, species_flux=:bulk),
+          eos=mix, transport=ConstantTransport(mu0=1e-3),
+          art=ArtificialProperties(enabled=true, species_flux=:bulk),
           sources=(ConstantBodyForce((0.0, -1.0, 0.0)),)), pair),
         ((n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
           bcs=((NSCBCInflowBC(u=(0.1, 0.0, 0.0), T_ion=1.0),
                 NSCBCOutflowBC(pinf=1.0)), per, per),
-          art=ArtParams(enabled=true)),
+          art=ArtificialProperties(enabled=true)),
          (x, y, z) -> Prim(u=(0.1, 0.0, 0.0), p=1.0, rho=1.0)),
         ((n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
-          eos=StiffenedGas(gamma=4.4, p_inf=1.0, cv=1.0), art=ArtParams(enabled=true)),
+          eos=StiffenedGas(gamma=4.4, p_inf=1.0, cv=1.0),
+          art=ArtificialProperties(enabled=true)),
          (x, y, z) -> Prim(u=(0.1, 0.0, 0.0), p=1 + 0.1sin(2π * x), rho=1.0)),
         ((n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
-          bcs=((AxisBC(), SlipWallBC()), per, per), art=ArtParams(enabled=true)),
+          bcs=((AxisBC(), SlipWallBC()), per, per), art=ArtificialProperties(enabled=true)),
          (r, θ, z) -> Prim(u=(0, 0, 0), p=1 + 0.1exp(-40(r - 0.4)^2), rho=1.0)),
     ]
     for (deck, ic) in runs

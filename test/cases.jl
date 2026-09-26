@@ -13,6 +13,8 @@
 #
 # Include after CompactLES and Printf; `references.jl` supplies noh_exact.
 
+using CompactLES: padded_index, xcoord
+
 const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 # Step ceiling. A healthy run of the largest case here takes a few thousand
@@ -40,9 +42,9 @@ function case_line_profile(solver, Q)
     CL.primitives!(solver, Q)
     nx = solver.decomp.n_local[1]
     loc = (Float64[xcoord(solver, 1, i) for i in 1:nx],
-           [solver.rho[gidx(solver, i, 1, 1)] for i in 1:nx],
-           [solver.u[gidx(solver, i, 1, 1)]   for i in 1:nx],
-           [solver.p[gidx(solver, i, 1, 1)]   for i in 1:nx])
+           [solver.rho[padded_index(solver, i, 1, 1)] for i in 1:nx],
+           [solver.u[padded_index(solver, i, 1, 1)]   for i in 1:nx],
+           [solver.p[padded_index(solver, i, 1, 1)]   for i in 1:nx])
     comm = solver.decomp.sub[1]
     MPI.Comm_size(comm) == 1 && return loc
     counts = MPI.Allgather(Int32(nx), comm)
@@ -84,7 +86,7 @@ initial condition — the high-resolution reference profiles in test/refs are
 therefore generated at the test resolution's delta, not their own.
 """
 function tube(left, right; N, L=1.0, x0=0.5, tfin, γ=1.4,
-              art=ArtParams(enabled=true), cfl=0.4, xlo=0.0, rhofun=nothing,
+              art=ArtificialProperties(enabled=true), cfl=0.4, xlo=0.0, rhofun=nothing,
               nmax=NMAX, delta=nothing, filt=compact_filter(0.45),
               filter_cfl=0.35)
     h = L / (N - 1)
@@ -95,7 +97,7 @@ function tube(left, right; N, L=1.0, x0=0.5, tfin, γ=1.4,
     bcs = (DirichletBC((x, y, z, t) -> Prim(rho=ρL, u=(uL, 0.0, 0.0), p=pL)),
            DirichletBC((x, y, z, t) -> Prim(rho=ρat(x), u=(uR, 0.0, 0.0), p=pR)))
     prob = Problem(eos=IdealSpecies("gas"; gamma=γ, R=1.0),
-                   transport=Transport(mu0=0.0),
+                   transport=ConstantTransport(mu0=0.0),
                    domain=((xlo, xlo + L), (0.0, h), (0.0, h)),
                    bcs=(bcs, per3[2], per3[3]),
                    ic=(x, y, z) -> begin
@@ -138,7 +140,7 @@ shu_osher(; N=SO_N, kw...) =
 const WC_T = 0.038
 const WC_N = 800
 
-function woodward(; N=WC_N, art=ArtParams(enabled=true), cfl=0.3, nmax=NMAX,
+function woodward(; N=WC_N, art=ArtificialProperties(enabled=true), cfl=0.3, nmax=NMAX,
                   delta=nothing, deriv=lele_d1_6(), filt=compact_filter(0.45),
                   filter_cfl=0.35, folded=false)
     # Both walls move half a cell outside the line when they are folded, so the
@@ -148,7 +150,7 @@ function woodward(; N=WC_N, art=ArtParams(enabled=true), cfl=0.3, nmax=NMAX,
     δ = delta === nothing ? 2h : delta
     wall = folded ? SymmetryPlaneBC() : SlipWallBC()
     prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
-                   transport=Transport(mu0=0.0),
+                   transport=ConstantTransport(mu0=0.0),
                    domain=((0.0, 1.0), (0.0, h), (0.0, h)),
                    bcs=((wall, wall), per3[2], per3[3]),
                    ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
@@ -188,7 +190,7 @@ function sedov_problem(; R=1.2, σ=SEDOV_S)
     # ∫₀^∞ r² e^{−r²/σ²} dr = σ³√π/4, so E = π^{3/2} p_in σ³ / (γ−1).
     pin = SEDOV_E * (γ - 1) / (π^1.5 * σ^3)
     prob = Problem(eos=IdealSpecies("gas"; gamma=γ, R=1.0),
-                   transport=Transport(mu0=0.0),
+                   transport=ConstantTransport(mu0=0.0),
                    metric=SphericalMetric(),
                    domain=((0.0, R), (π / 2, π / 2 + 1), (0.0, 1.0)),
                    bcs=((OriginBC(), SlipWallBC()), per3[2], per3[3]),
@@ -197,7 +199,7 @@ function sedov_problem(; R=1.2, σ=SEDOV_S)
     return prob
 end
 
-function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtParams(enabled=true), cfl=0.3,
+function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtificialProperties(enabled=true), cfl=0.3,
                nmax=NMAX, filt=compact_filter(0.45), filter_cfl=0.35,
                filter_weighting=:none)
     prob = sedov_problem(; R, σ)
@@ -280,7 +282,7 @@ function noh_problem(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν], R=1.0,
              p=(1 - θ) * pin + θ * NOH_P0)
     end
     return Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
-                   transport=Transport(mu0=0.0), metric=metric,
+                   transport=ConstantTransport(mu0=0.0), metric=metric,
                    domain=((0.0, R), dom2, dom3),
                    bcs=((lobc, inflow), per3[2], per3[3]), ic=ic)
 end
@@ -303,7 +305,7 @@ The case runs under `validity = :permissive` and returns the closing
 on rather than accepting whatever it produces.
 """
 function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
-                  art=ArtParams(enabled=true), cfl=NOH_CFL, R=1.0, nmax=NMAX,
+                  art=ArtificialProperties(enabled=true), cfl=NOH_CFL, R=1.0, nmax=NMAX,
                   deriv=lele_d1_6(), filt=compact_filter(0.45), filter_cfl=0.35,
                   filter_weighting=:none, folded=false)
     prob = noh_problem(ν; N, t0, R, folded)
@@ -352,14 +354,14 @@ default `tfin` the edge that started at x = 0.25 is the last crossing, at
 x = 0.75, which is the one `contact_width` reads. `delta` is the interface
 width in cells, as in `shock_interface`; `callback` is passed to `run!`.
 """
-function species_advection(; N=MIX_N, tfin=MIX_T, art=ArtParams(enabled=true),
+function species_advection(; N=MIX_N, tfin=MIX_T, art=ArtificialProperties(enabled=true),
                            cfl=0.4, nmax=NMAX, filt=compact_filter(0.45),
                            filter_cfl=0.35, delta=2.0, callback=nothing,
                            control=StepControl())
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 1.0, 1.4)])
     h = 1.0 / N
-    prob = Problem(eos=eos, transport=Transport(mu0=0.0),
+    prob = Problem(eos=eos, transport=ConstantTransport(mu0=0.0),
                    domain=((0.0, 1.0), (0.0, h), (0.0, h)), bcs=per3,
                    ic=(x, y, z) -> begin
                        θ = tanh_blend(x, 0.25, delta * h) -
@@ -375,9 +377,9 @@ function species_advection(; N=MIX_N, tfin=MIX_T, art=ArtParams(enabled=true),
     CL.primitives!(solver, Q)
     nx = solver.decomp.n_local[1]
     xs = Float64[xcoord(solver, 1, i) for i in 1:nx]
-    Y1 = [solver.Y[1][gidx(solver, i, 1, 1)] for i in 1:nx]
-    ρ = [solver.rho[gidx(solver, i, 1, 1)] for i in 1:nx]
-    p = [solver.p[gidx(solver, i, 1, 1)] for i in 1:nx]
+    Y1 = [solver.Y[1][padded_index(solver, i, 1, 1)] for i in 1:nx]
+    ρ = [solver.rho[padded_index(solver, i, 1, 1)] for i in 1:nx]
+    p = [solver.p[padded_index(solver, i, 1, 1)] for i in 1:nx]
     return xs, Y1, ρ, p, completed(solver, tfin)
 end
 
@@ -425,7 +427,7 @@ species and every step, read from `Q` in a callback because the excursions
 are transient and the final profile need not show them; `width_cells` counts
 the interior points with 0.05 < Y_air < 0.95 at the end.
 """
-function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
+function shock_interface(; N=SI_N, tfin=SI_T, art=ArtificialProperties(enabled=true),
                          cfl=0.4, delta=2.0, nmax=NMAX, stretch1=nothing,
                          rho_heavy=SI_RHO_HEAVY, filt=compact_filter(0.45),
                          filter_cfl=0.35, filter_weighting=:none)
@@ -443,7 +445,7 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
                                             u=(u2, 0.0, 0.0), p=p2)),
            DirichletBC((x, y, z, t) -> Prim(Y=(0.0, 1.0), rho=rho_heavy,
                                             u=(0.0, 0.0, 0.0), p=1.0)))
-    prob = Problem(eos=eos, transport=Transport(mu0=0.0),
+    prob = Problem(eos=eos, transport=ConstantTransport(mu0=0.0),
                    domain=((0.0, 1.0), (0.0, h), (0.0, h)),
                    bcs=(bcs, per3[2], per3[3]),
                    ic=(x, y, z) -> begin
@@ -467,7 +469,7 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
     worst_max = Ref(-Inf)
     function excursion(s, Q)
         for i in 1:nx
-            I = gidx(s, i, 1, 1)
+            I = padded_index(s, i, 1, 1)
             y = Q[I, 1] / (Q[I, 1] + Q[I, 2])
             worst_min[] = min(worst_min[], y, 1 - y)
             worst_max[] = max(worst_max[], y, 1 - y)
@@ -477,9 +479,9 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtParams(enabled=true),
     CL.exchange_state!(Q, solver.decomp)
     CL.primitives!(solver, Q)
     xs = Float64[xcoord(solver, 1, i) for i in 1:nx]
-    Y1 = [solver.Y[1][gidx(solver, i, 1, 1)] for i in 1:nx]
-    ρ = [solver.rho[gidx(solver, i, 1, 1)] for i in 1:nx]
-    p = [solver.p[gidx(solver, i, 1, 1)] for i in 1:nx]
+    Y1 = [solver.Y[1][padded_index(solver, i, 1, 1)] for i in 1:nx]
+    ρ = [solver.rho[padded_index(solver, i, 1, 1)] for i in 1:nx]
+    p = [solver.p[padded_index(solver, i, 1, 1)] for i in 1:nx]
     width = count(y -> 0.05 < y < 0.95, Y1)
     comm = solver.decomp.sub[1]
     if MPI.Comm_size(comm) > 1
@@ -525,7 +527,7 @@ the end, max |p − 1| and max |u − BR_U| / BR_U, which are the stability metr
 of the paper. On a rank-split dimension 1 the extremes are reduced over the
 directional communicator.
 """
-function brill_slab(; R=BR_R, Np=BR_NP, art=ArtParams(enabled=true), cfl=0.4,
+function brill_slab(; R=BR_R, Np=BR_NP, art=ArtificialProperties(enabled=true), cfl=0.4,
                     periods=BR_PERIODS, nmax=NMAX, filt=compact_filter(0.45),
                     filter_cfl=0.35)
     N = 20 * Np
@@ -533,7 +535,7 @@ function brill_slab(; R=BR_R, Np=BR_NP, art=ArtParams(enabled=true), cfl=0.4,
     w = 3 * Np * h / 16
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 1 / R, 1.4)])
-    prob = Problem(eos=eos, transport=Transport(mu0=0.0),
+    prob = Problem(eos=eos, transport=ConstantTransport(mu0=0.0),
                    domain=((0.0, 1.0), (0.0, h), (0.0, h)), bcs=per3,
                    ic=(x, y, z) -> begin
                        V = (1 - tanh((abs(x - 0.5) - 0.25) / w)) / 2
@@ -550,7 +552,7 @@ function brill_slab(; R=BR_R, Np=BR_NP, art=ArtParams(enabled=true), cfl=0.4,
     worst_max = Ref(-Inf)
     function excursion(s, Q)
         for i in 1:nx
-            I = gidx(s, i, 1, 1)
+            I = padded_index(s, i, 1, 1)
             y = Q[I, 1] / (Q[I, 1] + Q[I, 2])
             worst_min[] = min(worst_min[], y, 1 - y)
             worst_max[] = max(worst_max[], y, 1 - y)
@@ -561,10 +563,10 @@ function brill_slab(; R=BR_R, Np=BR_NP, art=ArtParams(enabled=true), cfl=0.4,
     CL.exchange_state!(Q, solver.decomp)
     CL.primitives!(solver, Q)
     xs = Float64[xcoord(solver, 1, i) for i in 1:nx]
-    Y1 = [solver.Y[1][gidx(solver, i, 1, 1)] for i in 1:nx]
-    ρ = [solver.rho[gidx(solver, i, 1, 1)] for i in 1:nx]
-    p = [solver.p[gidx(solver, i, 1, 1)] for i in 1:nx]
-    u = [solver.u[gidx(solver, i, 1, 1)] for i in 1:nx]
+    Y1 = [solver.Y[1][padded_index(solver, i, 1, 1)] for i in 1:nx]
+    ρ = [solver.rho[padded_index(solver, i, 1, 1)] for i in 1:nx]
+    p = [solver.p[padded_index(solver, i, 1, 1)] for i in 1:nx]
+    u = [solver.u[padded_index(solver, i, 1, 1)] for i in 1:nx]
     p_error = maximum(abs, p .- 1)
     u_error = maximum(abs, u .- BR_U) / BR_U
     comm = solver.decomp.sub[1]
@@ -629,7 +631,7 @@ rebuild the run on the same state under another setting. Serial only: the
 cuts are read from one rank.
 """
 function noh_cartesian(; N=NC_N, AR=4, L=NC_L, t0=0.0, tfinal=NOH_T, p0=NOH_P0,
-                       art=ArtParams(enabled=true), cfl=NC_CFL, nmax=NMAX,
+                       art=ArtificialProperties(enabled=true), cfl=NC_CFL, nmax=NMAX,
                        deriv=lele_d1_6(), filt=compact_filter(0.45), filter_cfl=0.35)
     MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("noh_cartesian runs serially")
     n2 = 2N - 1
@@ -655,7 +657,7 @@ function noh_cartesian(; N=NC_N, AR=4, L=NC_L, t0=0.0, tfinal=NOH_T, p0=NOH_P0,
              p=(1 - θ) * pin + θ * p0)
     end
     prob = Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
-                   transport=Transport(mu0=0.0),
+                   transport=ConstantTransport(mu0=0.0),
                    domain=((-L, L), (-L, L), (0.0, h2)),
                    bcs=((inflow, inflow), (inflow, inflow), per3[3]), ic=ic)
     # Permissive for the reason `noh_case` is: the cold precursor carries
@@ -669,7 +671,7 @@ function noh_cartesian(; N=NC_N, AR=4, L=NC_L, t0=0.0, tfinal=NOH_T, p0=NOH_P0,
     kind = dt_report(solver, Q).kind
     CL.exchange_state!(Q, solver.decomp)
     CL.primitives!(solver, Q)
-    ρ = (i, j) -> solver.rho[gidx(solver, i, j, 1)]
+    ρ = (i, j) -> solver.rho[padded_index(solver, i, j, 1)]
     xs = Float64[xcoord(solver, 1, i) for i in 1:n1]
     ys = Float64[xcoord(solver, 2, j) for j in 1:n2]
     i0, j0 = AR * (N - 1) + 1, N                  # the central node
@@ -720,7 +722,7 @@ limiting rate of the last step and the closing report.
 first node, which makes the dimension-2 spacing 1/(N − ½); dimension 1 keeps
 1/AR of it, so the aspect ratio is the same on either grid.
 """
-function noh_aligned(; N=Dict(NOH_N)[1], AR=4, nx=12, art=ArtParams(enabled=true),
+function noh_aligned(; N=Dict(NOH_N)[1], AR=4, nx=12, art=ArtificialProperties(enabled=true),
                      cfl=NC_CFL, nmax=NMAX, filt=compact_filter(0.45),
                      filter_cfl=0.35, folded=false)
     MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("noh_aligned runs serially")
@@ -729,7 +731,7 @@ function noh_aligned(; N=Dict(NOH_N)[1], AR=4, nx=12, art=ArtParams(enabled=true
     inflow = DirichletBC((x, y, z, t) -> Prim(rho=1.0, u=(0.0, -1.0, 0.0),
                                               p=NOH_P0))
     prob = Problem(eos=IdealSpecies("gas"; gamma=NOH_G, R=1.0),
-                   transport=Transport(mu0=0.0),
+                   transport=ConstantTransport(mu0=0.0),
                    domain=((0.0, nx * h1), (0.0, 1.0), (0.0, h2)),
                    bcs=(per3[1], (folded ? SymmetryPlaneBC() : SlipWallBC(),
                                   inflow), per3[3]),
@@ -745,7 +747,7 @@ function noh_aligned(; N=Dict(NOH_N)[1], AR=4, nx=12, art=ArtParams(enabled=true
     kind = dt_report(solver, Q).kind
     CL.exchange_state!(Q, solver.decomp)
     CL.primitives!(solver, Q)
-    ρ = (i, j) -> solver.rho[gidx(solver, i, j, 1)]
+    ρ = (i, j) -> solver.rho[padded_index(solver, i, j, 1)]
     ys = Float64[xcoord(solver, 2, j) for j in 1:N]
     ρy = [ρ(1, j) for j in 1:N]
     uniformity = maximum(abs(ρ(i, j) - ρy[j]) for j in 1:N, i in 1:nx)
@@ -802,8 +804,8 @@ function pulse_case(::Type{T}, N; amp, art, mirror=false, deriv=lele_d1_6(T),
     solver = Solver(; n_global=(n, 1, 1), L_domain=(L, h, h),
                     bcs=(bcs, per, per),
                     eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(PULSE_G)),
-                    transport=Transport{T}(mu0=zero(T)),
-                    art=ArtParams{T}(enabled=art), deriv=deriv, filt=filt,
+                    transport=ConstantTransport{T}(mu0=zero(T)),
+                    art=ArtificialProperties{T}(enabled=art), deriv=deriv, filt=filt,
                     cfl=T(cfl), filter_interval=filter_interval,
                     filter_cfl=filter_cfl, control=control)
     Q = allocate_state(solver)
@@ -817,7 +819,7 @@ function case_line_component(solver, Q, comp)
     CL.exchange_state!(Q, solver.decomp)
     CL.primitives!(solver, Q)
     nx = solver.decomp.n_local[1]
-    return [Float64(Q[gidx(solver, i, 1, 1), comp]) for i in 1:nx]
+    return [Float64(Q[padded_index(solver, i, 1, 1), comp]) for i in 1:nx]
 end
 
 """

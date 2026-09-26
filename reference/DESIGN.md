@@ -88,7 +88,7 @@ validation cases are discussed, and never a viscosity.
 | `src/lines_transposed.jl` | Cache-friendly (lines × n) fill/solve/scatter for the y/z sweeps |
 | `src/kernels.jl`          | `CompactScheme`, `ClosureRow`, and tridiagonal presets (C6, C4, C8 filter) |
 | `src/kernels_banded.jl`   | `BandedCompactScheme`, the C10 pentadiagonal preset, and the d8 ring detector |
-| `src/physics.jl`          | EOS abstraction, `IdealMixture`, `Transport`, `primitives!` |
+| `src/physics.jl`          | EOS abstraction, `IdealMixture`, `ConstantTransport`, `primitives!` |
 | `src/nasa9_data.jl`       | Reader for the fixed-column NASA CEA thermodynamic database bundled in `data/` |
 | `src/transport.jl`        | CEA transport reader, mixture properties, binary diffusion model, and shared pointwise transport dispatch |
 | `src/transport_domain.jl` | Collective neutral-diffusion domain preflight and parent-level failure propagation support |
@@ -184,7 +184,7 @@ Key derived quantities on `Decomp`:
 
 Fields are allocated by `field(decomp)` (a scalar with halos) and `allocate_state`
 (the 4-D conserved array `Q[x, y, z, 1:n_cons]`). Two index helpers recur
-throughout: `gidx(solver, i, j, k)` maps a local interior index to the halo-offset
+throughout: `padded_index(solver, i, j, k)` maps a local interior index to the halo-offset
 `CartesianIndex`, and `xcoord(solver, d, i)` maps a local index to a physical
 coordinate (including any stretch mapping and half-cell offset).
 
@@ -318,7 +318,7 @@ pentadiagonal derivative (β = 1/20, α = 1/2) with a C6-cascade closure on the
 first three rows; its RHS reaches ±3, so the default `n_halo = 4` suffices.
 `compact_d8()` is the second preset and the one symmetric banded scheme: an
 undivided compact eighth derivative used as the sensor high-pass under
-`ArtParams.detector = :d8`. Being an even derivative it preserves parity, so it
+`ArtificialProperties.detector = :d8`. Being an even derivative it preserves parity, so it
 is planned with the filter conventions, not the derivative ones, and its
 four mirror-folded closure rows put the same nine-point minimum extent on a
 rank as the C8 filter.
@@ -570,7 +570,7 @@ call sits in a serial section between threaded regions.
 [Cook (2007) model](https://doi.org/10.1063/1.2728937). The sensors are built from an
 **undivided** high-pass in the computational indices: by default the explicit
 fourth difference δ⁴ = (1, −4, 6, −4, 1), or the compact eighth derivative of
-`compact_d8()` under `ArtParams.detector = :d8`, which reproduces the operator in
+`compact_d8()` under `ArtificialProperties.detector = :d8`, which reproduces the operator in
 [Pyranda's public kernels](https://github.com/LLNL/pyranda/tree/master/pyranda/parcop)
 and is normalized to the same response at two points per wavelength, allowing
 the four constants to carry over. Being undivided,
@@ -599,23 +599,23 @@ Fluids 23, 024102, 2011, eq. A5) weight the same way.
 The Gaussian test filter of the original model is `smooth!`, by default the
 explicit nine-point stencil [Pyranda](https://github.com/LLNL/pyranda) applies
 and optionally a
-compact-filter pass (`ArtParams.smoother`).
+compact-filter pass (`ArtificialProperties.smoother`).
 
 Concretely, `compute_artificial!`:
 
 - Builds the strain-rate magnitude |S| from the metric-corrected `grad_u`, computes
   its δ⁴ sensor summed over directions, smooths it, and sets
   μ\* = C_μ·ρ·sensor and β\* = C_β·ρ·sensor. Directions combine by Σ_d or,
-  under `ArtParams.reduction = :max`, by Pyranda's MAX;
+  under `ArtificialProperties.reduction = :max`, by Pyranda's MAX;
   the two are the same operation in one dimension.
 - Computes the internal energy directly from `Q` (EOS-agnostic), takes its δ⁴
   sensor, smooths, and sets κ\* = C_κ·(ρc/T_ion)·sensor.
 - For each species, takes the δ⁴ sensor of Y_k, smooths, and sets
-  D\*_k = C_D·c·sensor_k under `ArtParams.species_flux = :fickian`; under the
+  D\*_k = C_D·c·sensor_k under `ArtificialProperties.species_flux = :fickian`; under the
   default `:partial_density` and under `:bulk`, one diffusivity D_b for the
   whole system (the species channel, below).
 
-`ArtParams.mu_sensor` and `ArtParams.beta_sensor` select which field each of
+`ArtificialProperties.mu_sensor` and `ArtificialProperties.beta_sensor` select which field each of
 the first two channels reads. Cook (2007) takes both from |S|, as above;
 [Cook (2009, appendix A)](https://doi.org/10.1063/1.3139305) changes β\* to the
 dilatation Δ = ∇·u. Pyranda takes μ\* from the velocity components and β\* from
@@ -639,7 +639,7 @@ switch to that as well; either costs one more sensor smoothing pass per RHS
 evaluation. The settings behave very differently at a coordinate fold; measured
 effects are in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md).
 
-Constants live in `ArtParams` (defaults C_μ = 0.002, C_β = 1.0, C_κ = 0.01,
+Constants live in `ArtificialProperties` (defaults C_μ = 0.002, C_β = 1.0, C_κ = 0.01,
 C_D = 0.1) and should be revisited per configuration. `enabled=false` skips the
 whole computation and leaves the coefficient arrays zero. The high-pass itself
 acts in computational index space on every grid, a grid-based regularization
@@ -655,7 +655,7 @@ gradient of a scalar and generates vorticity in a cold pre-shock flow
 
 ### The species channel
 
-`ArtParams.species_flux` selects how the artificial species diffusivity enters
+`ArtificialProperties.species_flux` selects how the artificial species diffusivity enters
 the equations. The default is `:partial_density`, below. `:fickian` is Cook's
 form: a per-species flux
 J_k = −ρ D\*_k ∇Y_k + ρ Y_k Σ_j D\*_j ∇Y_j, whose correction velocity keeps
@@ -783,7 +783,7 @@ shared-D_b channels with more than one species and a 0 × 0 matrix of the same
 type otherwise, so the types do not depend on the option. `:bulk` costs
 n_cons gradient line solves per direction and `:partial_density` n_species
 (the partial densities). Both skip the n_species solves of `grad_Y`
-(`_species_gradients_skipped`) under `Transport(mu0 = 0)`: with a shared D_b
+(`_species_gradients_skipped`) under `ConstantTransport(mu0 = 0)`: with a shared D_b
 the molecular diffusivity is then the only coefficient of `grad_Y` in the
 flux, and it is zero. `NSCBCInflowBC`, whose transverse terms read `grad_Y`,
 computes it in its own `correct_rhs!`, above the early return. The sensor
@@ -921,13 +921,13 @@ enthalpy, derivative, and flux contracts, as designed below. NASA-9 remains an
 ideal-gas mixture model despite its temperature-dependent heat capacities.
 
 Species diffusion uses molecular coefficients from `transport_at`, including
-`D_k = μ₀/(ρ Sc)` for constant `Transport`, plus the per-species Cook artificial
+`D_k = μ₀/(ρ Sc)` for `ConstantTransport`, plus the per-species Cook artificial
 D\*_k, with a **correction velocity** in the flux assembly:
 
     J_k = −ρ D_k ∇Y_k + ρ Y_k Σ_j D_j ∇Y_j
 
 which enforces Σ_k J_k = 0 exactly. Enthalpy diffusion Σ h_k J_k enters the
-energy flux. Under the default `ArtParams.species_flux = :partial_density`
+energy flux. Under the default `ArtificialProperties.species_flux = :partial_density`
 and under `:bulk` the artificial part of this flux is replaced (the species
 channel, above); the molecular part stays Fickian.
 

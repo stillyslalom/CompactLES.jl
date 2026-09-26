@@ -1,5 +1,6 @@
 using Test
 using CompactLES
+using CompactLES: padded_index
 
 const AMR_TEST_BCS = (PeriodicBC(), PeriodicBC(), PeriodicBC())
 
@@ -20,7 +21,7 @@ end
         selector = MovingAMRWindow(0.65)
         solver, states = setup(amr_test_problem(),
             Numerics(n_global=(n, 1, 1), filter_interval=0,
-                     art=ArtParams(enabled=false),
+                     art=ArtificialProperties(enabled=false),
                      amr=AMR(initial=selector, tag_buffer=2, regrid_interval=0)))
         region = refined_region(solver)
         center = (region.offset[1] + region.extent[1] / 2) / n
@@ -35,13 +36,13 @@ end
     ic = (x, y, z, h) -> Prim(p=1.0, rho=1.0 + h, u=(0.0, 0.0, 0.0))
     solver, states = setup(amr_test_problem(ic),
         Numerics(n_global=(96, 1, 1), filter_interval=0,
-                 art=ArtParams(enabled=false),
+                 art=ArtificialProperties(enabled=false),
                  amr=AMR(initial=(x, y, z, t) -> abs(x - 0.7) < 0.04)))
     root = CompactLES.PatchSolver(solver, getfield(solver, :patches)[1])
-    @test states[1][gidx(root, 1, 1, 1), 1] ≈ 1 + root.h[1]
+    @test states[1][padded_index(root, 1, 1, 1), 1] ≈ 1 + root.h[1]
     if length(states) > 1
         fine = CompactLES.PatchSolver(solver, getfield(solver, :patches)[2])
-        @test states[2][gidx(fine, 1, 1, 1), 1] ≈ 1 + fine.h[1]
+        @test states[2][padded_index(fine, 1, 1, 1), 1] ≈ 1 + fine.h[1]
         @test fine.h[1] ≈ root.h[1] / 3
     end
 
@@ -104,7 +105,7 @@ end
     prob = amr_test_problem((x, y, z, h) ->
         Prim(p=1.0, rho=1.0 + 0.1sin(2pi * x), u=(0.0, 0.0, 0.0)))
     common = (n_global=(96, 1, 1), filter_interval=0,
-              art=ArtParams(enabled=false))
+              art=ArtificialProperties(enabled=false))
     legacy, Qlegacy = setup(prob, Numerics(; common..., refine=region))
     grouped, Qgrouped = setup(prob, Numerics(; common..., amr=AMR(initial=region)))
     @test refined_region(grouped) == refined_region(legacy)
@@ -124,7 +125,7 @@ end
 @testset "AMR frontend tiled bootstrap drops seed layout" begin
     solver, states = setup(amr_test_problem(),
         Numerics(n_global=(96, 1, 1), filter_interval=0,
-                 art=ArtParams(enabled=false),
+                 art=ArtificialProperties(enabled=false),
                  amr=AMR(initial=MovingAMRWindow(0.72),
                          tag_threshold=Inf, tag_buffer=1, tile=8,
                          tile_lifetime=10)))

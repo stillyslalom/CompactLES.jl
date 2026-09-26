@@ -39,7 +39,6 @@ include("kernels_banded.jl")
 include("physics.jl")
 include("nasa9_data.jl")
 include("transport.jl")
-include("ion_transport.jl")
 include("neutral_diffusion_data.jl")
 include("equations.jl")
 include("boundary.jl")
@@ -85,69 +84,74 @@ export MPI
 
 # Common input-deck and runtime surface. Lower-level decomposition, directional
 # plan, transfer, and hierarchy records remain supported through qualified
-# `CompactLES.name` access and are documented as the advanced API.
-export ConservedState, allocate_state
-export CompactScheme, ClosureRow, lele_d1_6, lele_d1_8, pade_d1_4, compact_filter
+# `CompactLES.name` access and are documented as the advanced API. The region
+# shapes and the vendored diffusion tables are in the submodules `Regions` and
+# `DiffusionData`, loaded with their own `using`, since several of their names
+# are common in plotting and geometry packages.
+export allocate_state
+export lele_d1_6, lele_d1_8, compact_filter
 export gaussian_filter
-export BandedCompactScheme, BandedClosureRow, lele_d1_10, compact_d8, pyranda_filter
+export lele_d1_10, pyranda_filter
 export BoundaryCondition, PeriodicBC, SlipWallBC, NoSlipWallBC
 export ExtrapolationBC, AxisBC, OriginBC, PoleBC, SymmetryPlaneBC
-export enforce!, correct_flux!, correct_rhs!, validate_bc, sensor_mirror, isperiodic
 export NSCBCOutflowBC, NSCBCInflowBC, DirichletBC, save_checkpoint, load_checkpoint!, save_vtk
-export FieldWriter, DEFAULT_VTK_FIELDS
-export BlockRegion, hdf5_available, hdf5_parallel
+export FieldWriter
+export BlockRegion
 export save_checkpoint_hdf5, load_checkpoint_hdf5!, save_hdf5
 export SwitchableBC, switch!, switched, CompositeBC
 export Prim, Problem, Numerics, AMR, setup, initialize!, conserved_from_prim, tanh_blend
-export EOS, IdealSpecies, IdealMixture, nspecies, Transport
+export EOS, IdealSpecies, IdealMixture, nspecies, ConstantTransport
 export AbstractTransport, BinaryDiffusion, BinaryDiffusionPolynomial, binary_diffusivity
 export CeaTransport, read_cea_transport, transport_coefficients
-export H_ION_MASS, D_ION_MASS, T_ION_MASS, StantonMurilloDiagnostics
-export stanton_murillo_interdiffusivity
-export MarreroMasonPair, MARRERO_MASON_1972, MARRERO_MASON_UNCERTAINTY
-export marrero_mason_pair, marrero_mason_pairs, marrero_mason_diffusivity
-export neutral_binary_diffusion
-export neutral_binary_diffusion_residual, temperature_domain
-export SongWangPair, SONG_WANG_2016, SONG_WANG_UNCERTAINTY, song_wang_pair
-export song_wang_diffusivity, MuellerKlemmPair, MUELLER_KLEMM_1970
-export MUELLER_KLEMM_TEMPERATURE, MUELLER_KLEMM_PRESSURE, mueller_klemm_pair
-export neutral_binary_sources
+export neutral_binary_diffusion, temperature_domain
 export StiffenedGas, Nasa9Interval, Nasa9Species, Nasa9Mixture
 export nasa9_constant_cp, read_nasa9
-export recover_primitives!, species_names, species_enthalpy
-export eos_phi, eos_dphi_dY, artificial_conductivity_scale, wall_internal_energy
-export state_admissibility
-export EquationSet, NavierStokes1T
-export conserved_parity
-export Metric, CartesianMetric, CylindricalMetric, SphericalMetric
+export species_names
+export CartesianMetric, CylindricalMetric, SphericalMetric
 export Stretch, sine_cluster
-export ArtParams, Solver
-export CPUBackend, DeviceBackend
-export npatches, eachpatch, sync_patches!
-export nlevels, refined_region, level_regions, sync_levels!
-export ConstantBodyForce, add_source!
-export Workspace, compute_rhs!, apply_bcs!, compute_dt, dt_report, step!, run!, mpi_main
-export StepControl, SolverFailure, max_rate, FloorTally
-export StateReport, state_report, state_valid, validate_state!
+export ArtificialProperties, Solver
+export DeviceBackend
+export nlevels, refined_region, level_regions
+export ConstantBodyForce
+export Workspace, compute_dt, dt_report, run!, mpi_main
+export StepControl, SolverFailure
+export state_report, state_valid, validate_state!
 export StateGuard, state_guard
 export Trigger, AtTime, EveryStep, EveryTime, WhenState, Callback, ProgressLog
-export fired!, next_time, rewind!, fires_at_start
 export refresh_primitives!, mixture_density, velocity, total_energy, mass_fraction
 export boundary_plane
 export volume_integral, volume_average, domain_volume, plane_profile
 export profile_coordinate, profile_spacing
 export field_array, line_profile, line_sample, field_slice, cartesian_slice
-export FieldSnapshot, field_snapshot, cartesian_coordinates
+export field_snapshot, cartesian_coordinates
 export revolve_profile
-export profileplot, profileplot!, fieldheatmap, fieldheatmap!, makie_available
+export profileplot, profileplot!, fieldheatmap, fieldheatmap!
 export mix_width, molecular_mixing, species_pdf
 export tke_profile, turbulent_kinetic_energy, dissipation_rate
-export xcoord, global_xcoord, gidx, interior_index, filter_state!
 export thermodynamic_state, mass_fractions, mole_fractions
 export shock_jump, driver_pressure, reflected_shock, shock_tube
-export Shape, Slab, Box, Ellipsoid, Sphere, Cylinder, LevelSet, signed_distance
-export Cells, Layer, Layers, Hydrostatic, Ramp, Multimode, riemann_interface
+export Cells, Hydrostatic, Ramp, Multimode, riemann_interface
 export TurbulentInflow
+
+# Supported names reached as `CompactLES.name`: the submodules, the hooks a new
+# boundary condition, equation of state, trigger or source implements, the
+# runtime and storage internals a hand-written driver calls, and the scheme
+# constructors. `public` is Julia 1.11 syntax, so it is parsed only there.
+@static if VERSION >= v"1.11.0-DEV.469"
+    eval(Meta.parse("""public Regions, DiffusionData,
+        enforce!, correct_flux!, correct_rhs!, validate_bc, sensor_mirror, isperiodic,
+        eos_phi, eos_dphi_dY, artificial_conductivity_scale, wall_internal_energy,
+        state_admissibility, conserved_parity, species_enthalpy,
+        Metric, EquationSet, NavierStokes1T,
+        fired!, next_time, rewind!, fires_at_start, add_source!,
+        compute_rhs!, apply_bcs!, recover_primitives!, filter_state!, max_rate,
+        FloorTally, step!, sync_patches!, sync_levels!, eachpatch, npatches,
+        ConservedState, CPUBackend, interior_index, padded_index, xcoord, global_xcoord,
+        DEFAULT_VTK_FIELDS, StateReport, FieldSnapshot,
+        makie_available, hdf5_available, hdf5_parallel,
+        ClosureRow, BandedClosureRow, CompactScheme, BandedCompactScheme,
+        pade_d1_4, compact_d8"""))
+end
 
 __init__() = (__init_threading__(); __init_blas__())
 

@@ -1,6 +1,6 @@
 # Taylor–Green vortex with the kinetic-energy budget split by which mechanism
 # removes the energy. Built for the C_mu question: `test/convergence.jl` already
-# runs TGV, but with `art=ArtParams(enabled=false)`, so it tests the physical
+# runs TGV, but with `art=ArtificialProperties(enabled=false)`, so it tests the physical
 # viscous term and says nothing about the artificial one.
 #
 # The split is the purpose of the script. -dKE/dt is the total energy loss, and
@@ -136,7 +136,7 @@
 #             bad configurations should set one: a run that loses positivity
 #             does not crash but grinds (CLAUDE.md, Conventions).
 #   smoother, mu_sensor, beta_sensor, reduction
-#             `ArtParams` settings applied to every configuration in the sweep,
+#             `ArtificialProperties` settings applied to every configuration in the sweep,
 #             so a comparison across them is one invocation each rather than one
 #             entry each. `mu_sensor` is the setting this case is suited to: TGV is
 #             the only case in the repository where the μ* channel carries a
@@ -220,6 +220,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: step!, CPUBackend, padded_index, hdf5_available
 import CompactLES: AbstractBackend, PatchSolver
 using Printf
 
@@ -525,7 +526,7 @@ function kinetic_energy(solver, hosts::Vector)
         dv = prod(ps.h)
         for k in 1:ps.decomp.n_local[3], j in 1:ps.decomp.n_local[2],
             i in 1:ps.decomp.n_local[1]
-            I = gidx(ps, i, j, k)
+            I = padded_index(ps, i, j, k)
             ke += _node_weight(ps, i, j, k, I) * dv *
                   0.5 * (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / Q[I, 1]
         end
@@ -542,7 +543,7 @@ function mean_density(solver, hosts::Vector)
         dv = Float64(prod(ps.h))
         for k in 1:ps.decomp.n_local[3], j in 1:ps.decomp.n_local[2],
             i in 1:ps.decomp.n_local[1]
-            I = gidx(ps, i, j, k)
+            I = padded_index(ps, i, j, k)
             w = _node_weight(ps, i, j, k, I) * dv
             for sp in 1:solver.equations.n_species
                 mass += w * Float64(Q[I, sp])
@@ -575,7 +576,7 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
     c0 = T(10)                     # Ma ≈ 0.1 at |u|max = 1
     p0 = c0^2 / γ
     prob = Problem(eos=IdealSpecies("gas"; R=one(T), gamma=γ),
-                   transport=Transport{T}(mu0=one(T) / T(Re)),
+                   transport=ConstantTransport{T}(mu0=one(T) / T(Re)),
                    domain=((zero(T), T(2π)), (zero(T), T(2π)),
                            (zero(T), T(2π))), bcs=per3,
                    ic=(x, y, z) -> Prim(
@@ -592,11 +593,11 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
             Numerics(n_global=(N, N, N), cfl=cfl,
                      filter_interval=filter_interval, filter_cfl=filter_cfl,
                      deriv=lele_d1_6(T), filt=compact_filter(T(alphaf), T),
-                     art=ArtParams{T}(enabled=art_on, C_mu=T(C_mu),
-                                      smoother=smoother,
-                                      mu_sensor=mu_sensor,
-                                      beta_sensor=beta_sensor,
-                                      reduction=reduction),
+                     art=ArtificialProperties{T}(enabled=art_on, C_mu=T(C_mu),
+                                                 smoother=smoother,
+                                                 mu_sensor=mu_sensor,
+                                                 beta_sensor=beta_sensor,
+                                                 reduction=reduction),
                      backend=backend, refine=region, tile=tile,
                      subcycle=subcycle))
     end

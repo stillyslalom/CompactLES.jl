@@ -59,7 +59,7 @@ if MPIPreferences.binary != "system"
     per = (PeriodicBC(), PeriodicBC())
     per3 = (per, per, per)
     walls = (SlipWallBC(), SlipWallBC())
-    off = ArtParams(enabled=false)
+    off = ArtificialProperties(enabled=false)
     cpu = KernelAbstractions.CPU()
     @compile_workload begin
         # Periodic and closed C6 / C10 derivatives.
@@ -97,11 +97,11 @@ if MPIPreferences.binary != "system"
             compute_rhs!(s, Q, zero(Q))
         end
         # Artificial properties: every β sensor and both detectors.
-        for art in (ArtParams(enabled=true, beta_sensor=:strain),
-                    ArtParams(enabled=true, beta_sensor=:gated_strain),
-                    ArtParams(enabled=true, beta_sensor=:dilatation),
-                    ArtParams(enabled=true, beta_sensor=:ungated_dilatation),
-                    ArtParams(enabled=true, detector=:d8))
+        for art in (ArtificialProperties(enabled=true, beta_sensor=:strain),
+                    ArtificialProperties(enabled=true, beta_sensor=:gated_strain),
+                    ArtificialProperties(enabled=true, beta_sensor=:dilatation),
+                    ArtificialProperties(enabled=true, beta_sensor=:ungated_dilatation),
+                    ArtificialProperties(enabled=true, detector=:d8))
             s = Solver(n_global=(12, 12, 12), L_domain=(2π, 2π, 2π), bcs=per3, art=art)
             Q = allocate_state(s)
             initialize!(s, Q, (x, y, z) ->
@@ -213,7 +213,7 @@ if MPIPreferences.binary != "system"
         # first built, which is why the 3-D refined device case is left to the
         # suite rather than spending a third dimension of image on it.
         T = Float32
-        f32 = (precision=T, art=ArtParams(enabled=false))
+        f32 = (precision=T, art=ArtificialProperties(enabled=false))
         for extra in (PRECOMPILE_DEVICE ? ((;), (; backend=DeviceBackend(cpu))) :
                       ((;),))
             s = Solver(; n_global=(16, 12, 12),

@@ -238,7 +238,7 @@ repair changes states produced by the scheme but does not change the scheme.
   artificial mass-fraction bound, and 5–7% at its worst with the bound
   disabled. The band lies above every bounded excursion measured, so a bounded
   interface passes, and below the unbounded peak. It is a validity threshold,
-  separate from the bound's own dead band `ArtParams.Y_tolerance`, which is 500
+  separate from the bound's own dead band `ArtificialProperties.Y_tolerance`, which is 500
   times smaller. `0` rejects any negative mass fraction.
 
 - `validity_interval = 0`: how often [`run!`](@ref) validates the state entering

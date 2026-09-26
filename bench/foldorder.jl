@@ -32,6 +32,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: padded_index, xcoord
 using Printf
 
 const CL = CompactLES
@@ -43,7 +44,7 @@ function regional_errs(solver, f, fn)
     n1, n2, n3 = solver.decomp.n_local
     fold = 0.0; mid = 0.0; outer = 0.0; imax = 0; emax = 0.0
     for k in 1:n3, j in 1:n2, i in 1:n1
-        e = abs(f[gidx(solver, i, j, k)] -
+        e = abs(f[padded_index(solver, i, j, k)] -
                 fn(xcoord(solver, 1, i), xcoord(solver, 2, j),
                    xcoord(solver, 3, k)))
         if e > emax
@@ -73,9 +74,9 @@ function study(name, Ns, build, fld, ref)
         f = CL.field(solver.decomp); df = CL.field(solver.decomp)
         for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
             i in 1:solver.decomp.n_local[1]
-            f[gidx(solver, i, j, k)] = fld(xcoord(solver, 1, i),
-                                           xcoord(solver, 2, j),
-                                           xcoord(solver, 3, k))
+            f[padded_index(solver, i, j, k)] = fld(xcoord(solver, 1, i),
+                                                   xcoord(solver, 2, j),
+                                                   xcoord(solver, 3, k))
         end
         CL.exchange_halos!(f, solver.decomp)
         CL.deriv_along!(df, f, solver, 1, ref.parity)
@@ -100,7 +101,7 @@ end
 study("C6, both ends walls (control)", (24, 48, 96),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(sin(3x)),
       (fn=(x, y, z) -> 3cos(3x) * exp(sin(3x)), parity=1))
 
@@ -111,14 +112,14 @@ study("C6, both ends walls (control)", (24, 48, 96),
 study("symmetry plane / slip wall, even field", (32, 64, 128),
       N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
                   bcs=((SymmetryPlaneBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (x, y, z) -> exp(-4x^2),
       (fn=(x, y, z) -> -8x * exp(-4x^2), parity=1))
 
 study("symmetry plane / slip wall, odd field", (32, 64, 128),
       N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
                   bcs=((SymmetryPlaneBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (x, y, z) -> x * exp(-4x^2),
       (fn=(x, y, z) -> (1 - 8x^2) * exp(-4x^2), parity=-1))
 
@@ -126,7 +127,7 @@ study("cylindrical axis, odd field (u_r-like)", (32, 64, 128),
       N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
                   metric=CylindricalMetric(),
                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (r, θ, z) -> r * exp(-4r^2),
       (fn=(r, θ, z) -> (1 - 8r^2) * exp(-4r^2), parity=-1))
 
@@ -134,7 +135,7 @@ study("cylindrical axis, even field (scalar)", (32, 64, 128),
       N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
                   metric=CylindricalMetric(),
                   bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (r, θ, z) -> exp(-4r^2),
       (fn=(r, θ, z) -> -8r * exp(-4r^2), parity=1))
 
@@ -142,7 +143,7 @@ study("spherical origin, even field (scalar)", (24, 48, 96),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, π, 2π),
                   metric=SphericalMetric(),
                   bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (r, θ, φ) -> exp(-4r^2),
       (fn=(r, θ, φ) -> -8r * exp(-4r^2), parity=1))
 
@@ -152,7 +153,7 @@ study("spherical origin, odd field (u_r-like)", (24, 48, 96),
       N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, π, 2π),
                   metric=SphericalMetric(),
                   bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
-                  art=ArtParams(enabled=false)),
+                  art=ArtificialProperties(enabled=false)),
       (r, θ, φ) -> r * exp(-4r^2),
       (fn=(r, θ, φ) -> (1 - 8r^2) * exp(-4r^2), parity=-1))
 

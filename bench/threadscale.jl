@@ -4,13 +4,14 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: compute_rhs!, step!
 using Printf
 const CL = CompactLES
 per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
 N = length(ARGS) >= 1 ? parse(Int, ARGS[1]) : 48
 solver = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=per3,
-           transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
+           transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=true))
 Q = allocate_state(solver)
 initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1sin(x), 0, 0), p=1.0, rho=1.0))
 dQ = zero(Q); du = zero(Q)

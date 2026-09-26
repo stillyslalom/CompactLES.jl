@@ -40,6 +40,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: padded_index, xcoord
 using Printf
 
 const CL = CompactLES
@@ -69,7 +70,7 @@ function preshock_curl(r, tfin)
     wmax = 0.0; dmax = 0.0
     for j in 2:ny-1, i in 2:nx-1
         hypot(xcoord(s, 1, i), xcoord(s, 2, j)) > 1.2Rs || continue
-        I = gidx(s, i, j, 1)
+        I = padded_index(s, i, j, 1)
         dvdx = (s.v[I + ex] - s.v[I - ex]) / 2hx
         dudy = (s.u[I + ey] - s.u[I - ey]) / 2hy
         dudx = (s.u[I + ex] - s.u[I - ex]) / 2hx

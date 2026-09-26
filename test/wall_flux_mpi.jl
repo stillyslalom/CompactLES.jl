@@ -4,6 +4,8 @@
 # The slip-wall case carries a tangential velocity in its initial data, so
 # that the tangential momentum fluxes its contract zeros are nonzero to
 # begin with.
+using CompactLES: compute_rhs!, apply_bcs!, padded_index
+
 function test_no_slip_wall_flux()
     section("no-slip wall flux: impermeability and distributed divergence")
     for T in (Float64, Float32), ax in 1:3, iso in (false, true)
@@ -18,8 +20,8 @@ function test_no_slip_wall_flux()
         function build_wall(comm_here, dims_here)
             sol = Solver(n_global=ng, L_domain=(one(T), one(T), one(T)),
                        bcs=bcs, eos=eos, comm=comm_here, dims=dims_here,
-                       transport=Transport{T}(mu0=T(0.01)),
-                       art=ArtParams{T}(enabled=true, species_flux=channel),
+                       transport=ConstantTransport{T}(mu0=T(0.01)),
+                       art=ArtificialProperties{T}(enabled=true, species_flux=channel),
                        deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
                        filter_interval=0)
             state = allocate_state(sol)
@@ -41,7 +43,7 @@ function test_no_slip_wall_flux()
         err = 0.0
         for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
             loc = Tuple(I) .- s.decomp.n_halo_d
-            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            J = padded_index(ref, (loc .+ s.decomp.offset)...)
             err = max(err, abs(Float64(dQ[I, c] - dQref[J, c])))
         end
         tol = T === Float32 ? 5e-4 : 1e-8
@@ -82,8 +84,8 @@ function test_slip_wall_flux()
         function build_slip(comm_here, dims_here)
             sol = Solver(n_global=ng, L_domain=(one(T), one(T), one(T)),
                        bcs=bcs, eos=eos, comm=comm_here, dims=dims_here,
-                       transport=Transport{T}(mu0=T(0.01)),
-                       art=ArtParams{T}(enabled=true, species_flux=channel),
+                       transport=ConstantTransport{T}(mu0=T(0.01)),
+                       art=ArtificialProperties{T}(enabled=true, species_flux=channel),
                        deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
                        filter_interval=0)
             state = allocate_state(sol)
@@ -107,7 +109,7 @@ function test_slip_wall_flux()
         err = 0.0
         for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
             loc = Tuple(I) .- s.decomp.n_halo_d
-            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            J = padded_index(ref, (loc .+ s.decomp.offset)...)
             err = max(err, abs(Float64(dQ[I, c] - dQref[J, c])))
         end
         tol = T === Float32 ? 5e-4 : 1e-8

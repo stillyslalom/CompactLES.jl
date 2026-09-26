@@ -257,7 +257,7 @@ species channel](#the-partial-density-species-channel)).
 
 A shocked species interface rings. Measured on a Mach 1.5 shock in air (γ = 1.4, R = 1)
 running into a tanh interface with SF6 (γ = 1.09, density 5.04) on 400 points, Dirichlet
-ends, `cfl = 0.4`, default `ArtParams`:
+ends, `cfl = 0.4`, default `ArtificialProperties`:
 
 ```
 initial interface | worst Y          | final Y range     | width (cells)
@@ -349,7 +349,7 @@ stencil source](https://github.com/LLNL/pyranda/tree/b4e0afc),
 107/103680. Over the common denominator 103680 these sum to exactly 1, so constants are
 preserved without cancellation; at boundaries the overhanging weight folds onto the mirror
 point. There is no linear solve and no interface reduction, and the halo is four.
-`ArtParams.smoother` selects between that Gaussian and one pass of `compact_filter(0.45)`,
+`ArtificialProperties.smoother` selects between that Gaussian and one pass of `compact_filter(0.45)`,
 whose transfer function is 0.999 at k/π = 0.25 and 0.85 at 0.75 where the Gaussian reads
 0.663 and 0.021: as a Cook test filter the compact pass is close to the identity over the
 whole resolved band, at a distributed line solve per active dimension per sensor. Highest
@@ -397,7 +397,7 @@ rows ([the filter's wall rows](#the-filters-wall-rows)).
 (`c10d8`, `parcop/stencils.f90`) with a pentadiagonal left-hand side, a nine-point
 right-hand side, and its own symmetric and antisymmetric boundary closures. `artificial.jl`
 uses the undivided fourth difference δ⁴ = (1, −4, 6, −4, 1), following [Cook
-(2007)](https://doi.org/10.1063/1.2728937) literally. `ArtParams.detector` selects between
+(2007)](https://doi.org/10.1063/1.2728937) literally. `ArtificialProperties.detector` selects between
 them: `:delta4` is the default and `:d8` is [`compact_d8`](../src/kernels_banded.jl), the
 reference operator transcribed, with interior rows
 
@@ -520,8 +520,8 @@ Cook's [2007 model](https://doi.org/10.1063/1.2728937) builds μ\* and β\* from
 magnitude |S| = sqrt(S_ij S_ij); his [2009 model](https://doi.org/10.1063/1.3139305) changes
 β\* to the dilatation. Pyranda builds μ\* from `ringV(u, v, w)`, the ring of each velocity
 component along each direction reduced by `MAX` over the nine pairs, and β\* from
-`ring(∇·u)`. Neither reference field carries an absolute value. `ArtParams.mu_sensor`
-(`:strain`, `:velocity`), `ArtParams.beta_sensor` and `ArtParams.reduction` (`:sum`, `:max`)
+`ring(∇·u)`. Neither reference field carries an absolute value. `ArtificialProperties.mu_sensor`
+(`:strain`, `:velocity`), `ArtificialProperties.beta_sensor` and `ArtificialProperties.reduction` (`:sum`, `:max`)
 select between them. The weight is h_d for a field carrying one velocity derivative fewer
 against h_d² for |S| and ∇·u, and the two coincide at the grid scale, so the four constants
 transfer between sensor fields as they do between detectors. With S the strain-rate tensor,
@@ -769,7 +769,7 @@ constants were calibrated under Cook's 2007 sensor construction.
 
 ### The bulk species channel
 
-`ArtParams.species_flux = :bulk` replaces the Fickian artificial species flux by one
+`ArtificialProperties.species_flux = :bulk` replaces the Fickian artificial species flux by one
 diffusive flux F_q = −D_b ∇q on every conserved variable, with D_b built from the Fickian
 channel's own bracket sensed on both the mass and the mole fraction of every species
 (`reference/DESIGN.md`, "The species channel"). Everything below is on the one-dimensional
@@ -916,7 +916,7 @@ of RM mixing between these forms was found.
 As first implemented the partial-density channel cost 27% per step over the Fickian one and
 the bulk channel 41%. `bench/phases.jl` on its two-species tube (512 × 32, per right-hand
 side) put the difference in the conserved gradients (0.25 ms of 2.85, four line solves) and
-the sensor on both Y and X (0.19 ms). Two reductions followed. Under `Transport(mu0 = 0)`
+the sensor on both Y and X (0.19 ms). Two reductions followed. Under `ConstantTransport(mu0 = 0)`
 the shared-D_b channels skip `grad_Y`, whose only other reader is `NSCBCInflowBC`, which
 now computes it itself; that returns the four solves. With two species only the first is
 sensed, since the second's detector outputs and excursions equal the first's to round-off;
@@ -1849,7 +1849,7 @@ dimension-1 spacing is 1/AR of the dimension-2 spacing.
 
 Cook's scalar coefficient is β\* = C_β ρ G[Σ_d Δ_d² |δ⁴_d S|], with G the smoother, entering
 every normal stress as β\* ∇·u and the step through 2β\*/ρ · Σ_d 1/Δ_d². Two directional
-forms were implemented behind an `ArtParams` option and removed after the measurement. Each
+forms were implemented behind an `ArtificialProperties` option and removed after the measurement. Each
 stored β\*_d in three arrays, entered direction d's normal stress as β\*_d ∇·u (the
 reference's eq. 5), and was charged in the step as 2 Σ_d β\*_d/(ρ Δ_d²):
 
@@ -4482,7 +4482,7 @@ process and every absolute figure is a median of three.
 
 Wall-clock cost per grid point per step of `lele_d1_6`, `lele_d1_8` and `lele_d1_10` on a
 single-species ideal-gas box, the Taylor–Green field as the initial state, the default
-filter every step, `ArtParams()` defaults, cfl 0.5, Float64, on a 12th-gen Core i9-12900K (8
+filter every step, `ArtificialProperties()` defaults, cfl 0.5, Float64, on a 12th-gen Core i9-12900K (8
 performance and 8 efficiency cores, 24 threads) under Microsoft MPI 10.1 from the JLL. Each
 cell is warmed over three steps and timed over thirty through `solver.wall_total`, spanning
 `max_rate`, `apply_bcs!`, the stages and the filter pass, reduced as the maximum over ranks
@@ -5801,7 +5801,7 @@ julia --project=. -t 1 test/transport_integration_tests.jl
 julia --project=. -t 1 bench/transport.jl
 ```
 
-N8 retains `Transport()` as the default and adds `CeaTransport(eos)` as an
+N8 retains `ConstantTransport()` as the default and adds `CeaTransport(eos)` as an
 opt-in dimensional gas model. The bundled table supplies 66 pure-species
 viscosity/conductivity records and 41 binary viscosity-interaction records,
 but no binary diffusion coefficients. Unity-Lewis diffusion is therefore the
@@ -6101,7 +6101,7 @@ case and stay below 3e-3. With the mass-fraction bound off, the shocked interfac
 0.054–0.066 and ends at 0.007–0.010; before the defaults moved to the partial-density
 channel at C_D = 0.1 it reached 0.2 and ended at 0.09–0.15, the ringing C_D now damps.
 
-The earlier species test borrowed `ArtParams.Y_tolerance = 1e-4`, the bound's dead band,
+The earlier species test borrowed `ArtificialProperties.Y_tolerance = 1e-4`, the bound's dead band,
 which every run in the table crosses at its endpoint; under it the Mach 1.5 case, the slab,
 the uniform advection and the He/CO2 shock tube of `examples/shock_tube.jl` (117 of 6144
 points at nx = 384, ny = 16) all fail a strict check, and a run with retries repeats its

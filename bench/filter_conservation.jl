@@ -30,6 +30,7 @@
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: filter_state!, padded_index
 using Printf
 
 const CL = CompactLES
@@ -46,8 +47,8 @@ const WEIGHTINGS = (:none, :volume)
 function line_operator(solver, d::Int, c::Int, N::Int)
     Q = allocate_state(solver)
     σ = CL.cons_parity(solver, d, c)
-    idx(n) = d == 1 ? gidx(solver, n, 1, 1) :
-             d == 2 ? gidx(solver, 6, n, 1) : gidx(solver, 1, 1, n)
+    idx(n) = d == 1 ? padded_index(solver, n, 1, 1) :
+             d == 2 ? padded_index(solver, 6, n, 1) : padded_index(solver, 1, 1, n)
     M = zeros(N, N)
     weighted = CL._weighted_filter(solver)
     for n in 1:N
@@ -81,7 +82,7 @@ function operator_part(opt)
     filt(cl) = compact_filter(opt.alphaf; closures=cl)
     walls = ((SlipWallBC(), SlipWallBC()), per3[2], per3[3])
     line(wt; kw...) = Solver(; n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                             art=ArtParams(enabled=false), filter_weighting=wt,
+                             art=ArtificialProperties(enabled=false), filter_weighting=wt,
                              kw...)
     configs = [
         ("cartesian periodic", 1, wt -> line(wt; bcs=per3, filt=filt(:cascade))),
@@ -102,7 +103,7 @@ function operator_part(opt)
                       metric=SphericalMetric(), origin=(0.2, 0.0, 0.0),
                       bcs=((SlipWallBC(), SlipWallBC()), (PoleBC(), PoleBC()),
                            per3[3]),
-                      art=ArtParams(enabled=false), filter_weighting=wt,
+                      art=ArtificialProperties(enabled=false), filter_weighting=wt,
                       filt=filt(:cascade))),
     ]
     println("\n=== line operators, N = $N, alphaf = $(opt.alphaf) ===")
@@ -179,7 +180,7 @@ function noh_part(opt)
         N = Dict(NOH_N)[ν]
         t0 = Dict(NOH_T0)[ν]
         for wt in WEIGHTINGS
-            num = Numerics(n_global=(N, 1, 1), art=ArtParams(enabled=true),
+            num = Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=true),
                            cfl=NOH_CFL, deriv=lele_d1_6(),
                            filt=compact_filter(opt.alphaf), filter_interval=0,
                            filter_cfl=0.35, filter_weighting=wt,
@@ -198,7 +199,7 @@ end
 function sedov_part(opt)
     println("\n=== Sedov through the spherical origin, both weightings ===")
     for wt in WEIGHTINGS
-        num = Numerics(n_global=(SEDOV_N, 1, 1), art=ArtParams(enabled=true),
+        num = Numerics(n_global=(SEDOV_N, 1, 1), art=ArtificialProperties(enabled=true),
                        cfl=0.3, filt=compact_filter(opt.alphaf), filter_interval=0,
                        filter_cfl=0.35, filter_weighting=wt,
                        control=StepControl(validity=:permissive))

@@ -4,6 +4,8 @@
 # Then the δ⁴ sensor's reading of the ghost data at those same faces.
 # Included by runtests.jl after the patch and level suites.
 
+using CompactLES: padded_index, xcoord
+
 @testset "interface budgets: coarse-fine acoustic reflection" begin
     N = 192
     amp = 1e-3
@@ -14,7 +16,7 @@
                        p=1 + pulse(x), u=(pulse(x) / c0, 0, 0))
     function reflected_characteristic(; refine=nothing, subcycle=false)
         s = Solver(n_global=(N, 1, 1), L_domain=(2pi, 1.0, 1.0),
-                   bcs=bcs, art=ArtParams(enabled=false), filter_interval=0,
+                   bcs=bcs, art=ArtificialProperties(enabled=false), filter_interval=0,
                    refine=refine, subcycle=subcycle)
         Q = allocate_state(s)
         initialize!(s, Q, ic)
@@ -23,7 +25,7 @@
         ps = CL.PatchSolver(s, s.patches[1])
         refresh_primitives!(ps, states[1])
         # This window is uncovered root grid, upstream of the first face.
-        window = [gidx(ps, i, 1, 1) for i in 1:ps.decomp.n_local[1]
+        window = [padded_index(ps, i, 1, 1) for i in 1:ps.decomp.n_local[1]
                   if xcoord(ps, 1, i) < 2.1]
         (pressure=[ps.p[I] - 1 for I in window],
          leftgoing=[((ps.p[I] - 1) - c0 * ps.u[I]) / 2 for I in window])
@@ -53,7 +55,7 @@ function _interface_sensor_line(ps, Q)
                   ps.tmp_a, Q, ps.rho, m1, m2, m3, ps.equations.i_energy)
     exchange_halos!(ps.tmp_a, ps.decomp)
     CL.detect_sum!(ps.sensor, ps.tmp_a, ps, 0; ghosts=true)
-    return [ps.sensor[gidx(ps, i, 1, 1)] for i in 1:ps.decomp.n_local[1]]
+    return [ps.sensor[padded_index(ps, i, 1, 1)] for i in 1:ps.decomp.n_local[1]]
 end
 
 @testset "interface ghosts: the δ⁴ sensor at a patch face" begin
@@ -64,7 +66,7 @@ end
     ic(x, y, z) = Prim(rho=1 + 0.3 * sinpi(2x) + 0.05 * sinpi(10x), p=1.0,
                        u=(0.0, 0.0, 0.0))
     mk(n; kw...) = Solver(; n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                          bcs=perx, art=ArtParams(enabled=false),
+                          bcs=perx, art=ArtificialProperties(enabled=false),
                           filter_interval=0, kw...)
     # The references: one grid, no interface. The refined patch runs at h/3,
     # and the 3N grid carries its nodes at the same coordinates.

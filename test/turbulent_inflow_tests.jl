@@ -9,6 +9,7 @@
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: apply_bcs!, padded_index, xcoord
 using Test
 
 const TI = CompactLES
@@ -196,7 +197,7 @@ end
     function runwith(inlet)
         s = Solver(n_global=(16, 12, 12), L_domain=(0.5, 0.4, 0.4),
                    bcs=((inlet, NSCBCOutflowBC(pinf=1.0)), per, per), eos=eos,
-                   art=ArtParams(enabled=false), cfl=0.4)
+                   art=ArtificialProperties(enabled=false), cfl=0.4)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> mean)
         run!(s, Q; tfinal=1e9, nmax=4)
@@ -208,9 +209,10 @@ end
     @test all(isfinite, parent(Q)[inner, :])
     # The uniform stream stays uniform; the turbulent one has taken up a
     # transverse velocity at the inflow face.
-    face = [s.v[gidx(s, 1, j, k)] for j in 1:12, k in 1:12]
+    face = [s.v[padded_index(s, 1, j, k)] for j in 1:12, k in 1:12]
     @test maximum(abs, face) > 1e-3
-    @test maximum(abs, [steady.v[gidx(steady, 1, j, k)] for j in 1:12, k in 1:12]) < 1e-12
+    @test maximum(abs,
+                  [steady.v[padded_index(steady, 1, j, k)] for j in 1:12, k in 1:12]) < 1e-12
     # A checkpoint records the construction arguments, not the mode table.
     rec = TI.configuration_record(s)
     @test any(endswith(".target.seed"), rec.paths)
@@ -221,7 +223,7 @@ end
     d.tstage = d.t
     apply_bcs!(d, Qd)
     im = d.equations.i_mom
-    err = maximum(abs(Qd[gidx(d, 1, j, k), im[2]] / Qd[gidx(d, 1, j, k), 1] -
+    err = maximum(abs(Qd[padded_index(d, 1, j, k), im[2]] / Qd[padded_index(d, 1, j, k), 1] -
                       turb(xcoord(d, 1, 1), xcoord(d, 2, j), xcoord(d, 3, k), d.t).u[2])
                   for j in 1:12, k in 1:12)
     @test err < 1e-12

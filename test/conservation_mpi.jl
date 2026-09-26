@@ -1,5 +1,7 @@
 # Included by mpi_tests.jl after its MPI harness definitions.
 
+using CompactLES: npatches
+
 function test_composite_budgets()
     section("composite conserved budgets and mixing profiles")
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
@@ -9,7 +11,7 @@ function test_composite_budgets()
                        rho=1.0 + 0.2sin(2π * x))
     function make(comm_here, dims_here; kw...)
         common = (; n_global=(192, 1, 1), L_domain=(1.0, 1.0, 1.0),
-                  bcs=per3, eos=eos, art=ArtParams(enabled=false),
+                  bcs=per3, eos=eos, art=ArtificialProperties(enabled=false),
                   filter_interval=0, comm=comm_here)
         s = dims_here === nothing ? Solver(; common..., kw...) :
                                     Solver(; common..., dims=dims_here, kw...)

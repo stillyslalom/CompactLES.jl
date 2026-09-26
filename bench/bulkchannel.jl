@@ -92,6 +92,7 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: compute_rhs!, padded_index
 using Printf
 
 const CL = CompactLES
@@ -151,8 +152,8 @@ mixture(ratio, gamma_heavy, light) =
                   IdealSpecies{Float64}("heavy", 1 / ratio, gamma_heavy)])
 
 art_for(channel, C_D, C_Y) =
-    ArtParams(enabled = true, C_D = C_D, C_Y = C_Y,
-              species_flux = Symbol(channel))
+    ArtificialProperties(enabled = true, C_D = C_D, C_Y = C_Y,
+                         species_flux = Symbol(channel))
 
 # --- diagnostics ------------------------------------------------------------
 #
@@ -164,7 +165,7 @@ art_for(channel, C_D, C_Y) =
 function integrate(solver, buf, body)
     n1, n2, n3 = solver.decomp.n_local
     for k in 1:n3, j in 1:n2, i in 1:n1
-        I = gidx(solver, i, j, k)
+        I = padded_index(solver, i, j, k)
         buf[I] = body(I)
     end
     return volume_integral(solver, buf)
@@ -192,7 +193,7 @@ mixedness(solver, buf) =
 function scan_mass_fractions!(lo, hi, solver, Q)
     n1, n2, n3 = solver.decomp.n_local
     for k in 1:n3, j in 1:n2, i in 1:n1
-        I = gidx(solver, i, j, k)
+        I = padded_index(solver, i, j, k)
         y = Q[I, 1] / (Q[I, 1] + Q[I, 2])
         lo[] = min(lo[], y, 1 - y)
         hi[] = max(hi[], y, 1 - y)
@@ -206,7 +207,7 @@ function count_outside_band(solver)
     n1, n2, n3 = solver.decomp.n_local
     n = 0
     for k in 1:n3, j in 1:n2, i in 1:n1
-        I = gidx(solver, i, j, k)
+        I = padded_index(solver, i, j, k)
         y = solver.Y[1][I]
         (y < -BAND || y > 1 + BAND) && (n += 1)
     end
@@ -218,7 +219,7 @@ function min_density(solver, Q)
     n1, n2, n3 = solver.decomp.n_local
     m = Inf
     for k in 1:n3, j in 1:n2, i in 1:n1
-        m = min(m, mixture_density(solver, Q, gidx(solver, i, j, k)))
+        m = min(m, mixture_density(solver, Q, padded_index(solver, i, j, k)))
     end
     return MPI.Allreduce(m, min, solver.comm)
 end
@@ -276,7 +277,7 @@ function channel_budget(solver, Q, offs, alloffs, dQ, buf)
     n1, n2, n3 = solver.decomp.n_local
     mom_max, rho_max, d_max, nu_max = 0.0, 0.0, 0.0, 0.0
     for k in 1:n3, j in 1:n2, i in 1:n1
-        I = gidx(solver, i, j, k)
+        I = padded_index(solver, i, j, k)
         mom_max = max(mom_max, abs(Rspecies(I, m1)), abs(Rspecies(I, m2)),
                       abs(Rspecies(I, m3)))
         rho_max = max(rho_max, abs(sum(Rspecies(I, sp) for sp in 1:n_species)))
@@ -308,7 +309,7 @@ function slab_case(channel, ratio)
     u0 = opt.diagonal ? (SLAB_U, SLAB_U, SLAB_U) : (SLAB_U, 0.0, 0.0)
     unorm = sqrt(u0[1]^2 + u0[2]^2 + u0[3]^2)
     prob = Problem(eos = mixture(ratio, opt.gamma_heavy, "light"),
-                   transport = Transport(mu0 = 0.0),
+                   transport = ConstantTransport(mu0 = 0.0),
                    domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs = PER,
                    ic = (x, y, z) -> begin
                        r = sqrt((x - 0.5)^2 + (y - 0.5)^2 + (z - 0.5)^2)
@@ -341,7 +342,7 @@ function slab_case(channel, ratio)
     n1, n2, n3 = solver.decomp.n_local
     p_error, u_error = 0.0, 0.0
     for k in 1:n3, j in 1:n2, i in 1:n1
-        I = gidx(solver, i, j, k)
+        I = padded_index(solver, i, j, k)
         p_error = max(p_error, abs(solver.p[I] - 1))
         u_error = max(u_error, abs(solver.u[I] - u0[1]),
                       abs(solver.v[I] - u0[2]), abs(solver.w[I] - u0[3]))
@@ -373,7 +374,7 @@ function bubble_problem(ratio, nx, Ly)
            DirichletBC((x, y, z, t) -> Prim(Y = (1.0, 0.0), rho = 1.0,
                                             u = (0.0, 0.0, 0.0), p = 1.0)))
     prob = Problem(eos = mixture(ratio, BUBBLE_GAMMA_HEAVY, "air"),
-                   transport = Transport(mu0 = 0.0),
+                   transport = ConstantTransport(mu0 = 0.0),
                    domain = ((0.0, 1.0), (0.0, Ly), (0.0, Ly)),
                    bcs = (bcs, PER[2], PER[3]),
                    ic = (x, y, z) -> begin
@@ -419,8 +420,8 @@ function bubble_case(channel, ratio; nx = opt.nx, ny = opt.ny, C_D = 0.01,
                                  control = control)
         off, Qoff = setup(prob, numerics(art_for(channel, 0.0, 0.0)))
         alloff, Qalloff = setup(prob, numerics(
-            ArtParams(enabled = true, C_mu = 0.0, C_beta = 0.0, C_kappa = 0.0,
-                      C_D = 0.0, C_Y = 0.0, species_flux = Symbol(channel))))
+            ArtificialProperties(enabled = true, C_mu = 0.0, C_beta = 0.0, C_kappa = 0.0,
+                                 C_D = 0.0, C_Y = 0.0, species_flux = Symbol(channel))))
         dQ, dQoff, dQalloff = zero(Q), zero(Q), zero(Q)
     end
     buf = similar(solver.rho)

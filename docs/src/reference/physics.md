@@ -18,7 +18,7 @@ EOS
 nspecies
 IdealSpecies
 IdealMixture
-Transport
+ConstantTransport
 state_admissibility
 ```
 
@@ -49,26 +49,27 @@ the solver's flux and timestep preflight; see
 [Thermodynamics and species transport](@ref).
 
 ```@docs
-MarreroMasonPair
-MARRERO_MASON_1972
-MARRERO_MASON_UNCERTAINTY
-marrero_mason_pair
-marrero_mason_pairs
-marrero_mason_diffusivity
+DiffusionData
+DiffusionData.MarreroMasonPair
+DiffusionData.MARRERO_MASON_1972
+DiffusionData.MARRERO_MASON_UNCERTAINTY
+DiffusionData.marrero_mason_pair
+DiffusionData.marrero_mason_pairs
+DiffusionData.marrero_mason_diffusivity
 neutral_binary_diffusion
-neutral_binary_diffusion_residual
+DiffusionData.neutral_binary_diffusion_residual
 temperature_domain
-neutral_binary_sources
-SongWangPair
-SONG_WANG_2016
-SONG_WANG_UNCERTAINTY
-song_wang_pair
-song_wang_diffusivity
-MuellerKlemmPair
-MUELLER_KLEMM_1970
-MUELLER_KLEMM_TEMPERATURE
-MUELLER_KLEMM_PRESSURE
-mueller_klemm_pair
+DiffusionData.neutral_binary_sources
+DiffusionData.SongWangPair
+DiffusionData.SONG_WANG_2016
+DiffusionData.SONG_WANG_UNCERTAINTY
+DiffusionData.song_wang_pair
+DiffusionData.song_wang_diffusivity
+DiffusionData.MuellerKlemmPair
+DiffusionData.MUELLER_KLEMM_1970
+DiffusionData.MUELLER_KLEMM_TEMPERATURE
+DiffusionData.MUELLER_KLEMM_PRESSURE
+DiffusionData.mueller_klemm_pair
 ```
 
 ## Ion transport reference
@@ -77,11 +78,11 @@ The standalone ion evaluator supplies a checked hot-plasma reference coefficient
 It does not provide a solver flux closure or a cold-to-warm material model.
 
 ```@docs
-StantonMurilloDiagnostics
-stanton_murillo_interdiffusivity
-H_ION_MASS
-D_ION_MASS
-T_ION_MASS
+DiffusionData.StantonMurilloDiagnostics
+DiffusionData.stanton_murillo_interdiffusivity
+DiffusionData.H_ION_MASS
+DiffusionData.D_ION_MASS
+DiffusionData.T_ION_MASS
 ```
 
 ## Temperature-dependent thermodynamics
@@ -112,7 +113,7 @@ StiffenedGas
 ## Artificial properties
 
 ```@docs
-ArtParams
+ArtificialProperties
 ```
 
 ## Explicit sources

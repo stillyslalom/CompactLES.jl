@@ -173,9 +173,9 @@ end
     smooth_along!(out, f, solver, d, σf)
 
 Sensor smoother of `f` along dimension `d` with antipodal sign `σf`. This is
-the Cook test filter, selected by `ArtParams.smoother`, and is a distinct
+the Cook test filter, selected by `ArtificialProperties.smoother`, and is a distinct
 operator from `filt_along!`: the two coincide only under
-`ArtParams(smoother = :compact)`, which aliases the filter plans and avoids
+`ArtificialProperties(smoother = :compact)`, which aliases the filter plans and avoids
 planning an operator of its own; the default `:gaussian` plans the explicit
 nine-point stencil of [`gaussian_filter`](@ref). Only the artificial-property
 sensors go through here, by way of `smooth!`.
@@ -201,7 +201,7 @@ end
     ring_along!(out, f, solver, d, σf, σw = 1, ghosts = false)
 
 Compact eighth derivative of `f` along dimension `d` with antipodal sign `σf`,
-the ringing detector selected by `ArtParams(detector = :d8)`. Only `ring_sum!`
+the ringing detector selected by `ArtificialProperties(detector = :d8)`. Only `ring_sum!`
 calls this, and only under that setting: `solver.ring_plans` is `nothing`
 otherwise, which keeps this function off the default configuration's inference
 path. Indexing that field under `:delta4` would throw. See `detect_sum!`.
@@ -898,14 +898,14 @@ end
 # The mass-fraction gradients `grad_Y`. Two terms read them: the molecular part
 # of the species flux, which multiplies them by the molecular diffusivity, and
 # the transverse terms of `NSCBCInflowBC`. Under a shared-D_b species channel
-# with `Transport(mu0 = 0)` the first is identically zero, so `compute_rhs!`
+# with `ConstantTransport(mu0 = 0)` the first is identically zero, so `compute_rhs!`
 # skips the n_species line solves per direction and the inflow condition takes
 # them itself (`correct_rhs!`, above its early return). The flux body then
 # multiplies whatever `grad_Y` last held by a zero diffusivity. The transport
 # type is a type parameter of the solver, so the test adds no dispatch.
 _species_gradients_skipped(solver) =
     _shared_species_diffusivity(solver) && _zero_molecular_diffusion(solver.transport)
-_zero_molecular_diffusion(transport::Transport) = iszero(transport.mu0)
+_zero_molecular_diffusion(transport::ConstantTransport) = iszero(transport.mu0)
 _zero_molecular_diffusion(::AbstractTransport) = false
 
 function _species_gradients!(solver::SolverLike)

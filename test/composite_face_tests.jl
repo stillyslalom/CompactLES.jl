@@ -5,6 +5,7 @@
 using MPI
 MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: sensor_mirror, isperiodic, compute_rhs!, apply_bcs!, xcoord
 using Test
 
 const CL = CompactLES
@@ -58,7 +59,8 @@ end
         bottom = NSCBCInflowBC(u=(0.0, 0.2, 0.0), T_ion=1.0, Y=[0.0, 1.0])
         s = Solver(n_global=(17, 25, 1), L_domain=(1.0, 2.0, 1.0),
                    bcs=((side, side), (bottom, top), PeriodicBC()), eos=eos,
-                   transport=Transport(mu0=1e-3), art=ArtParams(enabled=false))
+                   transport=ConstantTransport(mu0=1e-3),
+                   art=ArtificialProperties(enabled=false))
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         run!(s, Q; tfinal=1.0, nmax=10)
@@ -92,7 +94,7 @@ end
     face = CompositeBC((wall, orifice), (x, y, z) -> abs(x - xc) < w ? 2 : 1)
     s = Solver(n_global=(n, n, 1), L_domain=(1.0, 1.0, 1.0),
                bcs=((wall, wall), (face, wall), PeriodicBC()),
-               transport=Transport(mu0=2e-3), art=ArtParams(enabled=true))
+               transport=ConstantTransport(mu0=2e-3), art=ArtificialProperties(enabled=true))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0))
     mass() = volume_integral(s, Array(view(Q, :, :, :, 1)))
@@ -146,7 +148,7 @@ end
                        (x, y, z) -> abs(y - 1) < ws ? 2 : 1)
     s = Solver(n_global=(17, 33, 1), L_domain=(1.0, 2.0, 1.0),
                bcs=((side, side), (bottom, top), PeriodicBC()), eos=eos,
-               transport=Transport(mu0=1e-3), art=ArtParams(enabled=true))
+               transport=ConstantTransport(mu0=1e-3), art=ArtificialProperties(enabled=true))
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> begin
         θ = 0.5 * (1 + tanh((y - 1) / 0.05))

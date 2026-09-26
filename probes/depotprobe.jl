@@ -518,7 +518,7 @@ it; it does not include the compact solves' own exchanges.
 function step_costs(g, nsteps)
     s, t_build, c_build, _, _ = timed() do
         Solver(n_global = (g, g, g), L_domain = (2π, 2π, 2π), bcs = per3,
-               art = ArtParams(enabled = false))
+               art = ArtificialProperties(enabled = false))
     end
     Q = allocate_state(s)
     _, t_init, c_init, _, _ = timed() do

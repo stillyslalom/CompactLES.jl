@@ -10,6 +10,7 @@
 # the value at the nearest bound instead. Each fit is anchored at its range's
 # geometric midpoint so overlapping rows select their own correlation.
 using CompactLES
+using CompactLES.DiffusionData
 using Printf
 
 opt = CompactLES.script_args(ARGS, (degree=10,); positional=(:degree,))

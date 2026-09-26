@@ -49,7 +49,7 @@ problem = Problem(
 
 solver, Q = setup(problem, Numerics(
     n_global = (32, 1, 1),
-    art = ArtParams(enabled = false),
+    art = ArtificialProperties(enabled = false),
     filter_interval = 0,
     cfl = 0.4,
 ))

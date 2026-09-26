@@ -6,6 +6,11 @@
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
+using CompactLES: validate_bc, sensor_mirror, isperiodic, state_admissibility, EquationSet,
+                  NavierStokes1T, rewind!, compute_rhs!, apply_bcs!, filter_state!,
+                  max_rate, step!, npatches, ConservedState, interior_index, padded_index,
+                  xcoord, global_xcoord, StateReport, CompactScheme, BandedCompactScheme,
+                  pade_d1_4, compact_d8
 import CompactLES: Decomp, exchange_halos!, interior, field, DirPlan, BandPlan,
                    DevicePlan, device_plan, apply_along!, filter_field!,
                    amr_transfer_schemes, amr_restriction_scheme,
@@ -21,13 +26,14 @@ using Test, LinearAlgebra, Random
 const CL = CompactLES
 Random.seed!(7)
 
-mkslv(; kw...) = Solver(; bcs=per3, L_domain=(2π, 2π, 2π), art=ArtParams(enabled=false), kw...)
+mkslv(; kw...) = Solver(; bcs=per3, L_domain=(2π, 2π, 2π),
+                        art=ArtificialProperties(enabled=false), kw...)
 
 "Max interior error of a scalar field against an analytic function."
 function ferr(solver, f, fn)
     e = 0.0
     for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
-        e = max(e, abs(f[gidx(solver, i, j, k)] -
+        e = max(e, abs(f[padded_index(solver, i, j, k)] -
                        fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))))
     end
     e
@@ -35,7 +41,8 @@ end
 
 fillf!(solver, f, fn) = (for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2],
                         i in 1:solver.decomp.n_local[1]
-    f[gidx(solver, i, j, k)] = fn(xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))
+    f[padded_index(solver, i, j, k)] = fn(xcoord(solver, 1, i), xcoord(solver, 2, j),
+                                          xcoord(solver, 3, k))
 end; f)
 
 # Analytic references (exact Riemann solver, Noh, Sedov) live in one place so
@@ -59,7 +66,7 @@ end
     prob = Problem(name="display test",
                    domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
                    ic=(x, y, z) -> Prim(u=(x, y, z), p=1.0, rho=1.0))
-    num = Numerics(n_global=(12, 12, 12), art=ArtParams(enabled=false))
+    num = Numerics(n_global=(12, 12, 12), art=ArtificialProperties(enabled=false))
     solver, Q = setup(prob, num)
 
     @test Q isa ConservedState
@@ -109,17 +116,17 @@ end
 @testset "Float32 frontend and full step" begin
     T = Float32
     prob = Problem(name="Float32 smoke", eos=IdealSpecies(T, "gas"; R=one(T), gamma=T(1.4)),
-                   transport=Transport{T}(),
+                   transport=ConstantTransport{T}(),
                    domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
                    ic=(x, y, z) -> Prim(rho=1 + 0.01sin(2π * x), T_ion=1,
                                         u=(0.1, 0.0, 0.0)))
     num = Numerics(n_global=(12, 12, 12), deriv=lele_d1_6(T),
-                   filt=compact_filter(T(0.45), T), art=ArtParams{T}(),
+                   filt=compact_filter(T(0.45), T), art=ArtificialProperties{T}(),
                    cfl=0.2)
     solver, Q = setup(prob, num)
 
-    @test prob.transport isa Transport{T}
-    @test num.art isa ArtParams{T}
+    @test prob.transport isa ConstantTransport{T}
+    @test num.art isa ArtificialProperties{T}
     @test parent(Q) isa Array{T,4}
     @test solver.deriv_plans[1] isa DirPlan{T}
     @test CL.positive_floor(T) > zero(T)
@@ -155,7 +162,8 @@ end
     for N in (12, 18, 24)
         solver = Solver(n_global=(N, 12, 12),
                         L_domain=(T(2π), T(2π), T(2π)), bcs=per3,
-                        transport=Transport{T}(), art=ArtParams{T}(enabled=false),
+                        transport=ConstantTransport{T}(),
+                        art=ArtificialProperties{T}(enabled=false),
                         deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
         f = CL.field(solver.decomp)
         df = similar(f)
@@ -175,7 +183,7 @@ end
 @testset "Float32 built-in EOS and closed boundary matrix" begin
     T = Float32
     typed_num(; enabled=false) =
-        (transport=Transport{T}(), art=ArtParams{T}(enabled=enabled),
+        (transport=ConstantTransport{T}(), art=ArtificialProperties{T}(enabled=enabled),
          deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
 
     # A NASA-9 fit is tabulated in kelvin over a declared interval, so the
@@ -192,7 +200,7 @@ end
     initialize!(ns, NQ, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1, T_ion=300))
     CL.exchange_state!(NQ, ns.decomp)
     CL.primitives!(ns, NQ)
-    I = gidx(ns, 3, 4, 5)
+    I = padded_index(ns, 3, 4, 5)
     @test ns.p[I] ≈ T(1) rtol=T(2e-6)
     # The inversion's own criterion is 32 eps(Float32) relative, so the
     # recovered temperature is checked at that scale and not tighter.
@@ -213,8 +221,8 @@ end
         Prim(u=(0.1sin(T(π) * x), 0, 0), p=1, rho=1))
     apply_bcs!(ss, SQ)
     m1 = ss.equations.i_mom[1]
-    @test SQ[gidx(ss, 1, 1, 1), m1] == zero(T)
-    @test SQ[gidx(ss, 24, 1, 1), m1] == zero(T)
+    @test SQ[padded_index(ss, 1, 1, 1), m1] == zero(T)
+    @test SQ[padded_index(ss, 24, 1, 1), m1] == zero(T)
     SdQ = zero(SQ)
     compute_rhs!(ss, SQ, SdQ)
     @test all(isfinite, parent(SdQ))
@@ -226,7 +234,8 @@ end
     T = Float32
     solver = Solver(n_global=(48, 1, 1),
                     L_domain=(T(2π), one(T), one(T)), bcs=per3,
-                    transport=Transport{T}(), art=ArtParams{T}(enabled=false),
+                    transport=ConstantTransport{T}(),
+                    art=ArtificialProperties{T}(enabled=false),
                     deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T),
                     filter_interval=0, cfl=T(0.2),
                     refine=BlockRegion((20, 0, 0), (8, 1, 1)))
@@ -242,7 +251,7 @@ end
 
 @testset "Float32 varying-cp mixture and open/viscous boundaries" begin
     T = Float32
-    typed = (transport=Transport{T}(), art=ArtParams{T}(enabled=false),
+    typed = (transport=ConstantTransport{T}(), art=ArtificialProperties{T}(enabled=false),
              deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
 
     # Both fits are tabulated over the CEA default range of 200 K to 6000 K and
@@ -263,7 +272,7 @@ end
         Prim(u=(0.1, 0, 0), p=1, T_ion=300, Y=(0.3, 0.7)))
     CL.exchange_state!(NQ, ns.decomp)
     CL.primitives!(ns, NQ)
-    I = gidx(ns, 3, 4, 5)
+    I = padded_index(ns, 3, 4, 5)
     @test ns.p[I] ≈ T(1) rtol=T(2e-6)
     @test ns.T_ion[I] ≈ T(300) rtol=T(1e-5)
     @test ns.Y[1][I] ≈ T(0.3) rtol=T(2e-6)
@@ -283,7 +292,7 @@ end
     apply_bcs!(sb, BQ)
     BdQ = zero(BQ)
     compute_rhs!(sb, BQ, BdQ)
-    matched = maximum(abs(BdQ[gidx(sb, i, 1, 1), c])
+    matched = maximum(abs(BdQ[padded_index(sb, i, 1, 1), c])
                       for i in (1, 32), c in 1:sb.equations.n_cons)
     @test matched < T(5e-5)
     @test sb.bcs[1][1] isa NSCBCInflowBC{T}
@@ -304,7 +313,7 @@ end
     CL.exchange_state!(WQ, sw.decomp)
     CL.primitives!(sw, WQ)
     for i in (1, 24)
-        Iw = gidx(sw, i, 1, 1)
+        Iw = padded_index(sw, i, 1, 1)
         @test sw.u[Iw] == sw.v[Iw] == sw.w[Iw] == zero(T)
         @test sw.T_ion[Iw] == Twall
     end
@@ -314,7 +323,7 @@ end
 @testset "Float32 resolved fold and moving subcycled level" begin
     T = Float32
     per = (PeriodicBC(), PeriodicBC())
-    typed = (transport=Transport{T}(), art=ArtParams{T}(enabled=false),
+    typed = (transport=ConstantTransport{T}(), art=ArtificialProperties{T}(enabled=false),
              deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
 
     sf = Solver(; n_global=(32, 16, 1),
@@ -337,7 +346,7 @@ end
                 bcs=(wall, per, per), cfl=T(0.1),
                 subcycle=true, regrid_interval=1,
                 refine=BlockRegion((34, 0, 0), (28, 1, 1)),
-                transport=Transport{T}(), art=ArtParams{T}(),
+                transport=ConstantTransport{T}(), art=ArtificialProperties{T}(),
                 deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
     states = allocate_state(sr)
     initialize!(sr, states, (x, y, z) ->
@@ -349,7 +358,7 @@ end
     @test sr.t isa T
     @test all(Q -> eltype(Q) === T && all(isfinite, parent(Q)), states)
     for (ps, Q) in CL.eachpatch(sr, states)
-        @test minimum(Q[gidx(ps, i, 1, 1), 1]
+        @test minimum(Q[padded_index(ps, i, 1, 1), 1]
                       for i in 1:ps.decomp.n_local[1]) > T(0.05)
     end
 end
@@ -413,7 +422,7 @@ end
     # (a distinct band path: closure substitution, V = W = 0, no reduced stage).
     sc = Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
                 bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                deriv=lele_d1_10(), art=ArtParams(enabled=false))
+                deriv=lele_d1_10(), art=ArtificialProperties(enabled=false))
     fc = CL.field(sc.decomp); dfc = CL.field(sc.decomp)
     fillf!(sc, fc, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
     CL.exchange_halos!(fc, sc.decomp)
@@ -502,7 +511,7 @@ end
         ng = ntuple(k -> k == d ? 32 : 12, 3)
         bcs = ntuple(k -> k == d ? (SlipWallBC(), SlipWallBC()) : per3[k], 3)
         solver = Solver(n_global=ng, L_domain=(1.0, 1.0, 1.0), bcs=bcs,
-                   art=ArtParams(enabled=false))
+                   art=ArtificialProperties(enabled=false))
         f = CL.field(solver.decomp); df = CL.field(solver.decomp)
         poly = t -> 1 + 2t + 3t^2 - t^3
         dpoly = t -> 2 + 6t - 3t^2
@@ -520,7 +529,7 @@ end
     solver = Solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 0.5),
                metric=CylindricalMetric(), deriv=lele_d1_10(),
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtParams(enabled=false))
+               art=ArtificialProperties(enabled=false))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     fillf!(solver, f, (r, θ, z) -> r * exp(-4r^2))            # odd across the axis
     CL.exchange_halos!(f, solver.decomp)
@@ -545,7 +554,7 @@ end
     CL.exchange_halos!(f, solver.decomp); CL.exchange_halos!(g, solver.decomp)
     CL.deriv_along!(d1, f, solver, 1, 1)
     CL.deriv_along!(d2, g, solver, 2, 1)
-    e = maximum(abs(d1[gidx(solver, i, j, k)] - d2[gidx(solver, j, i, k)])
+    e = maximum(abs(d1[padded_index(solver, i, j, k)] - d2[padded_index(solver, j, i, k)])
                 for i in 1:24, j in 1:24, k in 1:24)
     @test e < 1e-11
 end
@@ -553,7 +562,7 @@ end
 @testset "closed-domain closures: polynomial exactness (deg ≤ 3)" begin
     solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtParams(enabled=false))
+               art=ArtificialProperties(enabled=false))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     fillf!(solver, f, (x, y, z) -> 1 + 2x + 3x^2 - x^3)
     CL.exchange_halos!(f, solver.decomp)
@@ -580,7 +589,7 @@ end
                          (lele_d1_10(closures=:cascade3), 3))
         solver = Solver(n_global=(32, 16, 16), L_domain=(1.0, 1.0, 1.0),
                         bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                        deriv=deriv, art=ArtParams(enabled=false))
+                        deriv=deriv, art=ArtificialProperties(enabled=false))
         f = CL.field(solver.decomp); df = CL.field(solver.decomp)
         fillf!(solver, f, (x, y, z) -> sum(x^m for m in 0:deg))
         CL.exchange_halos!(f, solver.decomp)
@@ -658,7 +667,7 @@ end
     for (filt, deg, exact) in ((os, 7, true), (base, 3, false))
         solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
                         bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                        filt=filt, art=ArtParams(enabled=false))
+                        filt=filt, art=ArtificialProperties(enabled=false))
         f = CL.field(solver.decomp); g = CL.field(solver.decomp)
         fillf!(solver, f, (x, y, z) -> sum(x^m for m in 0:deg))
         CL.exchange_halos!(f, solver.decomp)
@@ -676,10 +685,10 @@ end
     @test ferr(solver, f, (x, y, z) -> 1.0) < 1e-12
     nx = solver.decomp.n_local[1]
     for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:nx
-        f[gidx(solver, i, j, k)] = 1.0 + 0.5 * (-1)^i        # constant + Nyquist
+        f[padded_index(solver, i, j, k)] = 1.0 + 0.5 * (-1)^i        # constant + Nyquist
     end
     filter_field!(f, solver)
-    dev = maximum(abs(f[gidx(solver, i, 1, 1)] - 1.0) for i in 1:nx)
+    dev = maximum(abs(f[padded_index(solver, i, 1, 1)] - 1.0) for i in 1:nx)
     @test dev < 0.35                                      # sawtooth strongly damped
 end
 
@@ -691,10 +700,10 @@ end
     ic = (x, y, z) -> Prim(rho=1.0 + 0.2sin(x) * cos(2y), p=1.0 + 0.1sin(3z),
                            u=(0.3sin(2x), 0.2cos(y), 0.1sin(z) * cos(x)))
     build(fc) = setup(Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
-                              transport=Transport(mu0=0.0),
+                              transport=ConstantTransport(mu0=0.0),
                               domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)),
                               bcs=per3, ic=ic),
-                      Numerics(n_global=(16, 16, 16), art=ArtParams(enabled=false),
+                      Numerics(n_global=(16, 16, 16), art=ArtificialProperties(enabled=false),
                                cfl=0.4, filter_cfl=fc))
 
     solver0, Q0 = build(0.0)
@@ -722,7 +731,7 @@ end
     # of 2.83 against a filter effect three orders smaller.
     function interior(solver, Q)
         nx, ny, nz = solver.decomp.n_local
-        [Q[gidx(solver, i, j, k), c]
+        [Q[padded_index(solver, i, j, k), c]
          for i in 1:nx, j in 1:ny, k in 1:nz, c in 1:solver.equations.n_cons]
     end
     dev(A, B) = maximum(abs, A .- B)
@@ -775,19 +784,19 @@ end
     walls = ((SlipWallBC(), SlipWallBC()), per3[2], per3[3])
     line(wt; filt=compact_filter(0.45; closures=:cascade), kw...) =
         Solver(; n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), filt=filt,
-               art=ArtParams(enabled=false), filter_weighting=wt, kw...)
+               art=ArtificialProperties(enabled=false), filter_weighting=wt, kw...)
     function line_operator(s)
         Q = allocate_state(s)
         M = zeros(N, N)
         for n in 1:N
             fill!(parent(Q), 0.0)
-            Q[gidx(s, n, 1, 1), 1] = 1.0
+            Q[padded_index(s, n, 1, 1), 1] = 1.0
             filter_state!(s, Q)
             for k in 1:N
-                M[k, n] = Q[gidx(s, k, 1, 1), 1]
+                M[k, n] = Q[padded_index(s, k, 1, 1), 1]
             end
         end
-        V = [CL.quad_weight(s, 1, n) / s.inv_J[gidx(s, n, 1, 1)] for n in 1:N]
+        V = [CL.quad_weight(s, 1, n) / s.inv_J[padded_index(s, n, 1, 1)] for n in 1:N]
         return M, V
     end
     defect(s) = ((M, V) = line_operator(s); (M' * V .- V) ./ V)
@@ -845,7 +854,7 @@ end
     # every metric, folds and stretching included.
     function interior_change(s, Q, Q0)
         nx, ny, nz = s.decomp.n_local
-        maximum(abs(Q[gidx(s, i, j, k), c] - Q0[gidx(s, i, j, k), c])
+        maximum(abs(Q[padded_index(s, i, j, k), c] - Q0[padded_index(s, i, j, k), c])
                 for c in 1:s.equations.n_cons, i in 1:nx, j in 1:ny, k in 1:nz)
     end
     metrics = [
@@ -859,7 +868,7 @@ end
            bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3])),
     ]
     for cs in metrics, wt in (:none, :volume)
-        s = Solver(; cs..., art=ArtParams(enabled=false), filter_weighting=wt)
+        s = Solver(; cs..., art=ArtificialProperties(enabled=false), filter_weighting=wt)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
         apply_bcs!(s, Q)
@@ -874,7 +883,7 @@ end
                             p=1 + 0.1cos(x)cos(z), rho=1 + 0.2sin(y))
     states = map((:none, :volume)) do wt
         s = Solver(n_global=(16, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
-                   art=ArtParams(enabled=false), filter_weighting=wt)
+                   art=ArtificialProperties(enabled=false), filter_weighting=wt)
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         filter_state!(s, Q)
@@ -1095,7 +1104,7 @@ end
     solver = Solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 0.5),
                metric=CylindricalMetric(),
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtParams(enabled=false))
+               art=ArtificialProperties(enabled=false))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     fillf!(solver, f, (r, θ, z) -> r * exp(-4r^2))            # odd across the axis
     CL.exchange_halos!(f, solver.decomp)
@@ -1118,7 +1127,7 @@ end
     solver = Solver(n_global=(48, 16, 1), L_domain=(1.0, 2π, 1.0),
                metric=CylindricalMetric(),
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtParams(enabled=false))
+               art=ArtificialProperties(enabled=false))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     fillf!(solver, f, (r, θ, z) -> r * cos(θ) * exp(-4r^2))
     CL.exchange_halos!(f, solver.decomp)
@@ -1139,7 +1148,7 @@ end
                metric=SphericalMetric(),
                bcs=((OriginBC(), SlipWallBC()),
                     (PoleBC(), PoleBC()), per3[3]),
-               art=ArtParams(enabled=false))
+               art=ArtificialProperties(enabled=false))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)
     fillf!(solver, f, (r, θ, φ) -> exp(-4r^2))
     CL.exchange_halos!(f, solver.decomp)
@@ -1157,7 +1166,7 @@ end
     wall = SlipWallBC()
     cart(bcs1) = Solver(n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
                         bcs=(bcs1, per3[2], per3[3]),
-                        art=ArtParams(enabled=false))
+                        art=ArtificialProperties(enabled=false))
     both = cart(sym)
     @test both.h[1] ≈ 1 / 16
     @test both.coord_shift[1] ≈ both.h[1] / 2
@@ -1194,7 +1203,7 @@ end
     # A plane on dimension 3 beside a cylindrical axis on dimension 1: the
     # pairing is per dimension, and the axis' resolved-θ fold still buffers.
     cyl = Solver(n_global=(16, 16, 12), L_domain=(1.0, 2π, 0.5),
-                 metric=CylindricalMetric(), art=ArtParams(enabled=false),
+                 metric=CylindricalMetric(), art=ArtificialProperties(enabled=false),
                  bcs=((AxisBC(), SlipWallBC()), per3[2], sym))
     @test cyl.h[3] ≈ 0.5 / 12
     @test cyl.coord_shift[3] ≈ cyl.h[3] / 2
@@ -1212,7 +1221,7 @@ end
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 0.5, 1.3)])
     solver = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), eos=eos,
-                    bcs=(sym, sym, sym), art=ArtParams(enabled=true))
+                    bcs=(sym, sym, sym), art=ArtificialProperties(enabled=true))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) ->
         Prim(Y=(0.3, 0.7), rho=1.2, p=0.8, u=(0.0, 0.0, 0.0)))
@@ -1224,10 +1233,10 @@ end
     run!(solver, Q; tfinal=1e9, nmax=5)
     spread, drift = 0.0, 0.0
     for c in 1:solver.equations.n_cons
-        v0 = Q0[gidx(solver, 1, 1, 1), c]
+        v0 = Q0[padded_index(solver, 1, 1, 1), c]
         for k in 1:12, j in 1:12, i in 1:12
-            v = Q[gidx(solver, i, j, k), c]
-            spread = max(spread, abs(v - Q[gidx(solver, 1, 1, 1), c]))
+            v = Q[padded_index(solver, i, j, k), c]
+            spread = max(spread, abs(v - Q[padded_index(solver, 1, 1, 1), c]))
             drift = max(drift, abs(v - v0))
         end
     end
@@ -1248,7 +1257,7 @@ end
     two = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
                         IdealSpecies{Float64}("heavy", 0.5, 1.3)])
     a, b, N, nsteps = 0.05, 0.05, 32, 30
-    function mirror_error(; deriv=lele_d1_6(), art=ArtParams(enabled=true),
+    function mirror_error(; deriv=lele_d1_6(), art=ArtificialProperties(enabled=true),
                           mu=0.0, dim=1, eos=nothing, n=N)
         h = 1 / n
         nt = 12                                    # transverse extent, 2-D form
@@ -1264,7 +1273,7 @@ end
                      rho=rho, u=u, p=rho^1.4)
         end
         common = (; deriv=deriv, art=art, filter_interval=1, filter_cfl=0.0,
-                  cfl=0.4, transport=Transport(mu0=mu, Pr=0.7))
+                  cfl=0.4, transport=ConstantTransport(mu0=mu, Pr=0.7))
         eos === nothing || (common = merge(common, (; eos=eos)))
         function advance(ng, L, bcs, origin)
             s = Solver(; n_global=ng, L_domain=L, bcs=bcs, origin=origin,
@@ -1288,8 +1297,8 @@ end
         err, scale = 0.0, 0.0
         ni, nj = dim == 1 ? (n, 1) : (nt, n)
         for c in 1:sf.equations.n_cons, j in 1:nj, i in 1:ni
-            vf = Qf[gidx(sf, i, j, 1), c]
-            vp = Qp[gidx(sp, i, j, 1), c]
+            vf = Qf[padded_index(sf, i, j, 1), c]
+            vp = Qp[padded_index(sp, i, j, 1), c]
             err = max(err, abs(vf - vp))
             scale = max(scale, abs(vp))
         end
@@ -1300,7 +1309,7 @@ end
     # 5.5e-15 for the two-dimensional plane on dimension 2.
     for deriv in (lele_d1_6(), lele_d1_8(), lele_d1_10()),
         detector in (:delta4, :d8), smoother in (:gaussian, :compact)
-        art = ArtParams(enabled=true, detector=detector, smoother=smoother)
+        art = ArtificialProperties(enabled=true, detector=detector, smoother=smoother)
         @test mirror_error(deriv=deriv, art=art) < 2e-14
     end
     # Two species, the mass fractions even about both planes.
@@ -1317,7 +1326,7 @@ end
 @testset "symmetry plane: setup rejections" begin
     sym = (SymmetryPlaneBC(), SymmetryPlaneBC())
     wall = (SlipWallBC(), SlipWallBC())
-    off = ArtParams(enabled=false)
+    off = ArtificialProperties(enabled=false)
     cart(; kw...) = Solver(n_global=(48, 12, 12), L_domain=(1.0, 1.0, 1.0),
                            bcs=(sym, per3[2], per3[3]), art=off; kw...)
     @test cart() isa Solver
@@ -1353,14 +1362,14 @@ end
     solver = Solver(n_global=(32, 16, 12), L_domain=(1.0, 2π, 0.5),
                metric=CylindricalMetric(), origin=(0.2, 0.0, 0.0),
                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtParams(enabled=false))
+               art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, (r, θ, z) -> Prim(u=(0.0, 0.3r, 0.0), p=1.0, rho=1.0))
     dQ = zero(Q)
     compute_rhs!(solver, Q, dQ)
     smax = 0.0
     for k in 1:solver.decomp.n_local[3], j in 1:solver.decomp.n_local[2], i in 1:solver.decomp.n_local[1]
-        I = gidx(solver, i, j, k)
+        I = padded_index(solver, i, j, k)
         for b in 1:3, a in 1:3
             smax = max(smax, abs(0.5 * (solver.grad_u[a, b][I] + solver.grad_u[b, a][I])))
         end
@@ -1391,14 +1400,14 @@ end
     ]
     for cs in cases
         kw = merge((; n_global=cs.n_global, L_domain=cs.L_domain, metric=cs.metric,
-                     bcs=cs.bcs, art=ArtParams(enabled=false)), cs.kw)
+                     bcs=cs.bcs, art=ArtificialProperties(enabled=false)), cs.kw)
         solver = Solver(; kw...)
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
         apply_bcs!(solver, Q)
         dQ = zero(Q)
         compute_rhs!(solver, Q, dQ)
-        m = maximum(abs(dQ[gidx(solver, i, j, k), c])
+        m = maximum(abs(dQ[padded_index(solver, i, j, k), c])
                     for c in 1:solver.equations.n_cons, i in 1:solver.decomp.n_local[1],
                         j in 1:solver.decomp.n_local[2], k in 1:solver.decomp.n_local[3])
         @test m < 1e-8
@@ -1414,7 +1423,7 @@ end
     initialize!(solver, Q, (x, y, z) -> pr)
     CL.exchange_state!(Q, solver.decomp)
     CL.primitives!(solver, Q)
-    I = gidx(solver, 3, 4, 5)
+    I = padded_index(solver, 3, 4, 5)
     @test solver.p[I] ≈ 0.8 atol = 1e-12
     @test solver.T_ion[I] ≈ 1.7 atol = 1e-12
     @test solver.u[I] ≈ 0.3 atol = 1e-12
@@ -1447,7 +1456,7 @@ end
         Prim(u=(0.5, 0.25, -0.1), p=1.0, rho=2.0))
     dQ = zero(Q)
     compute_rhs!(solver, Q, dQ)
-    I = gidx(solver, 3, 4, 5)
+    I = padded_index(solver, 3, 4, 5)
     @test dQ[I, solver.equations.i_mom[1]] ≈ 2.0 atol = 1e-10
     @test dQ[I, solver.equations.i_mom[2]] ≈ 4.0 atol = 1e-10
     @test dQ[I, solver.equations.i_mom[3]] ≈ -6.0 atol = 1e-10
@@ -1475,7 +1484,7 @@ end
 end
 
 @testset "conservation: periodic RHS integrates to zero" begin
-    solver = mkslv(n_global=(16, 16, 16), transport=Transport(mu0=1e-3))
+    solver = mkslv(n_global=(16, 16, 16), transport=ConstantTransport(mu0=1e-3))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) ->
         Prim(u=(0.1sin(x)cos(y), -0.1cos(x)sin(y), 0.05sin(z)),
@@ -1483,7 +1492,7 @@ end
     dQ = zero(Q)
     compute_rhs!(solver, Q, dQ)
     for c in 1:solver.equations.n_cons
-        tot = sum(dQ[gidx(solver, i, j, k), c] for i in 1:16, j in 1:16, k in 1:16)
+        tot = sum(dQ[padded_index(solver, i, j, k), c] for i in 1:16, j in 1:16, k in 1:16)
         @test abs(tot) < 1e-8 * 16^3
     end
 end
@@ -1492,14 +1501,14 @@ end
     solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 0.4, 0.4),
                bcs=((DirichletBC((x, y, z, t) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0)),
                      NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
-               art=ArtParams(enabled=false))
+               art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.3, 0, 0), p=1.0, rho=1.0))
     apply_bcs!(solver, Q)
     dQ = zero(Q)
     compute_rhs!(solver, Q, dQ)
     nx = solver.decomp.n_local[1]
-    m = maximum(abs(dQ[gidx(solver, nx, j, k), c])
+    m = maximum(abs(dQ[padded_index(solver, nx, j, k), c])
                 for c in 1:solver.equations.n_cons, j in 1:12, k in 1:12)
     @test m < 1e-8
 end
@@ -1509,19 +1518,19 @@ end
         solver = Solver(n_global=(24, 12, 12), L_domain=(1.0, 0.4, 0.4),
                    bcs=((NoSlipWallBC(Twall=Twall), NoSlipWallBC(Twall=Twall)),
                         per3[2], per3[3]),
-                   art=ArtParams(enabled=false))
+                   art=ArtificialProperties(enabled=false))
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0.3, -0.2, 0.1), p=1.0, T_ion=1.0))
         apply_bcs!(solver, Q)
         CL.exchange_state!(Q, solver.decomp)
         CL.primitives!(solver, Q)
         nx = solver.decomp.n_local[1]
-        uw = maximum(abs(solver.u[gidx(solver, i, j, k)]) + abs(solver.v[gidx(solver, i, j, k)]) +
-                     abs(solver.w[gidx(solver, i, j, k)])
+        uw = maximum(abs(solver.u[padded_index(solver, i, j, k)]) + abs(solver.v[padded_index(solver, i, j, k)]) +
+                     abs(solver.w[padded_index(solver, i, j, k)])
                      for i in (1, nx), j in 1:12, k in 1:12)   # both walls
         @test uw < 1e-12
         if !isnan(Twall)                       # isothermal wall holds Twall
-            e = maximum(abs(solver.T_ion[gidx(solver, i, j, k)] - Twall)
+            e = maximum(abs(solver.T_ion[padded_index(solver, i, j, k)] - Twall)
                         for i in (1, nx), j in 1:12, k in 1:12)
             @test e < 1e-12
         end
@@ -1531,15 +1540,15 @@ end
 @testset "ExtrapolationBC: copies the adjacent interior plane" begin
     solver = Solver(n_global=(24, 12, 12), L_domain=(1.0, 0.4, 0.4),
                bcs=((ExtrapolationBC(), ExtrapolationBC()), per3[2], per3[3]),
-               art=ArtParams(enabled=false))
+               art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2 + x, 0, 0), p=1 + 0.1x, rho=1 + 0.3x))
     apply_bcs!(solver, Q)
     nx = solver.decomp.n_local[1]
     d = 0.0
     for c in 1:solver.equations.n_cons, j in 1:12, k in 1:12
-        d = max(d, abs(Q[gidx(solver, 1, j, k), c]  - Q[gidx(solver, 2, j, k), c]))
-        d = max(d, abs(Q[gidx(solver, nx, j, k), c] - Q[gidx(solver, nx-1, j, k), c]))
+        d = max(d, abs(Q[padded_index(solver, 1, j, k), c]  - Q[padded_index(solver, 2, j, k), c]))
+        d = max(d, abs(Q[padded_index(solver, nx, j, k), c] - Q[padded_index(solver, nx-1, j, k), c]))
     end
     @test d == 0.0
     # a uniform state must be untouched by the extrapolation
@@ -1559,13 +1568,13 @@ end
                bcs=((NSCBCInflowBC(u=uin, T_ion=1.0), NSCBCOutflowBC(pinf=1.0)),
                     per3[2], per3[3]),
                eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
-               art=ArtParams(enabled=false))
+               art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=uin, p=1.0, T_ion=1.0))
     apply_bcs!(solver, Q)
     dQ = zero(Q)
     compute_rhs!(solver, Q, dQ)
-    m = maximum(abs(dQ[gidx(solver, 1, j, k), c])
+    m = maximum(abs(dQ[padded_index(solver, 1, j, k), c])
                 for c in 1:solver.equations.n_cons, j in 1:12, k in 1:12)
     @test m < 1e-8
     # and a mismatched stream must produce a non-trivial correction
@@ -1574,7 +1583,7 @@ end
     apply_bcs!(solver, Q2)
     dQ2 = zero(Q2)
     compute_rhs!(solver, Q2, dQ2)
-    m2 = maximum(abs(dQ2[gidx(solver, 1, j, k), c])
+    m2 = maximum(abs(dQ2[padded_index(solver, 1, j, k), c])
                  for c in 1:solver.equations.n_cons, j in 1:12, k in 1:12)
     @test m2 > 1e-3
 end
@@ -1607,8 +1616,8 @@ end
         out = NSCBCOutflowBC(pinf=1.0)
         solver = Solver(n_global=n, L_domain=(1.0, 1.0, 0.5),
                         bcs=(side == 1 ? (bc, out) : (out, bc), per3[2], per3[3]),
-                        eos=eos, transport=Transport(mu0=0.0),
-                        art=ArtParams(enabled=false))
+                        eos=eos, transport=ConstantTransport(mu0=0.0),
+                        art=ArtificialProperties(enabled=false))
         Q = allocate_state(solver)
         initialize!(solver, Q, ic(sgn))
         apply_bcs!(solver, Q)
@@ -1625,7 +1634,7 @@ end
         sgn = side == 1 ? 1.0 : -1.0
         ac_in = ac_out = en = tv = ty = 0.0
         for k in 1:nz, j in 1:ny
-            I = gidx(solver, i, j, k)
+            I = padded_index(solver, i, j, k)
             ρ = solver.rho[I]; c = solver.c[I]
             u = (solver.u[I], solver.v[I], solver.w[I])
             ρt = dQ[I, 1] + dQ[I, 2]
@@ -1669,7 +1678,7 @@ end
     wall = (SlipWallBC(), SlipWallBC())
     cyl(θbc) = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
                       bcs=(wall, θbc, per3[3]), metric=CylindricalMetric(),
-                      origin=(1.0, 0.0, 0.0), art=ArtParams(enabled=false))
+                      origin=(1.0, 0.0, 0.0), art=ArtificialProperties(enabled=false))
     # r is a length under CylindricalMetric, θ is not.
     @test cyl(wall) isa Solver
     @test_throws ErrorException cyl((NSCBCOutflowBC(pinf=1.0), SlipWallBC()))
@@ -1683,7 +1692,7 @@ end
     cart(Y) = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
                      bcs=((NSCBCInflowBC(u=(0.3, 0.0, 0.0), T_ion=1.0, Y=Y),
                            NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
-                     eos=two, art=ArtParams(enabled=false))
+                     eos=two, art=ArtificialProperties(enabled=false))
     @test cart([0.4, 0.6]) isa Solver
     @test_throws ErrorException cart([1.0])
     @test_throws ErrorException cart([0.2, 0.3, 0.5])
@@ -1695,7 +1704,7 @@ end
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 0.2, 1.09)])
     solver = Solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3, eos=eos,
-               art=ArtParams(enabled=true))
+               art=ArtificialProperties(enabled=true))
     Q = allocate_state(solver)
     dQ = zero(Q)
     # smooth composition: D* must stay tiny
@@ -1731,7 +1740,7 @@ end
     function art_coefficients(L, st)
         s = Solver(n_global=(Nx, 12, 12), L_domain=(L, 0.2, 0.2), eos=eos2,
                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                   art=ArtParams(enabled=true), stretch=(st, nothing, nothing))
+                   art=ArtificialProperties(enabled=true), stretch=(st, nothing, nothing))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             θ = tanh_blend(x, 0.5L, 0.03L)
@@ -1741,7 +1750,7 @@ end
         # Drive one plane's mass fractions out of [0, 1] so the bound term,
         # the only consumer of the geometric mean, is exercised as well.
         for k in 1:s.decomp.n_local[3], j in 1:s.decomp.n_local[2]
-            I = gidx(s, Nx ÷ 4, j, k)
+            I = padded_index(s, Nx ÷ 4, j, k)
             ρ = Q[I, 1] + Q[I, 2]
             Q[I, 1] -= 0.05ρ
             Q[I, 2] += 0.05ρ
@@ -1800,9 +1809,9 @@ end
     # the default `:partial_density` diffuses the partial densities with it and
     # carries their mass flux into momentum and energy (reference/DESIGN.md,
     # "The species channel"). Four measured properties are guarded for both.
-    fick = ArtParams(enabled=true, species_flux=:fickian)
-    for bulk in (ArtParams(enabled=true, species_flux=:bulk),
-                 ArtParams(enabled=true, species_flux=:partial_density))
+    fick = ArtificialProperties(enabled=true, species_flux=:fickian)
+    for bulk in (ArtificialProperties(enabled=true, species_flux=:bulk),
+                 ArtificialProperties(enabled=true, species_flux=:partial_density))
         # (a) A resting air/SF6 interface at uniform p, T and u = 0, with the
         # artificial properties and the filter on: every operator of either
         # channel preserves the uniform state to round-off while the partial
@@ -1813,7 +1822,7 @@ end
                                 IdealSpecies{Float64}("sf6", 1 / 5.04, 1.09)])
             Rk, cvk = eos.Rk, eos.cvk
             two(x) = (θ = tanh_blend(x, 0.3, δ) - tanh_blend(x, 0.7, δ); (1 - θ, θ))
-            prob = Problem(eos=eos, transport=Transport(mu0=0.0),
+            prob = Problem(eos=eos, transport=ConstantTransport(mu0=0.0),
                            domain=((0.0, 1.0), (0.0, h), (0.0, h)), bcs=per3,
                            ic=(x, y, z) -> begin
                                Y = two(x)
@@ -1825,11 +1834,11 @@ end
                                              control=StepControl(validity=:permissive)))
             nx = solver.decomp.n_local[1]
             eqs = solver.equations
-            rho0 = [Q[gidx(solver, i, 1, 1), 1] + Q[gidx(solver, i, 1, 1), 2] for i in 1:nx]
+            rho0 = [Q[padded_index(solver, i, 1, 1), 1] + Q[padded_index(solver, i, 1, 1), 2] for i in 1:nx]
             umax = Ref(0.0); dpmax = Ref(0.0); dTmax = Ref(0.0); drmax = Ref(0.0)
             function drift(s, Q)
                 for i in 1:nx
-                    I = gidx(s, i, 1, 1)
+                    I = padded_index(s, i, 1, 1)
                     ρ = Q[I, 1] + Q[I, 2]
                     y = Q[I, 1] / ρ
                     u = Q[I, eqs.i_mom[1]] / ρ
@@ -1905,7 +1914,7 @@ end
 
     # The option is validated at setup.
     @test_throws ErrorException Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=per3, art=ArtParams(species_flux=:brill))
+                                       bcs=per3, art=ArtificialProperties(species_flux=:brill))
 end
 
 @testset "consistent species channels on patched, refined and tiled layouts" begin
@@ -1926,8 +1935,8 @@ end
         N = 96
         h = 1.0 / N
         s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, eos=eos,
-                   art=ArtParams(enabled=true, species_flux=channel),
-                   transport=Transport(mu0=0.0), filter_interval=1; kw...)
+                   art=ArtificialProperties(enabled=true, species_flux=channel),
+                   transport=ConstantTransport(mu0=0.0), filter_interval=1; kw...)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) -> begin
             V = (1 - tanh((abs(x - 0.5) - 0.25) / 3h)) / 2
@@ -1939,7 +1948,7 @@ end
             for (ps, Q) in CL.eachpatch(sol, Qs isa Vector ? Qs : [Qs])
                 eq = ps.equations
                 for i in 1:ps.decomp.n_local[1]
-                    I = gidx(ps, i, 1, 1)
+                    I = padded_index(ps, i, 1, 1)
                     ρ = Q[I, 1] + Q[I, 2]
                     y = Q[I, 1] / ρ
                     u = Q[I, eq.i_mom[1]] / ρ
@@ -1957,7 +1966,7 @@ end
         for (ps, Q) in CL.eachpatch(s, sv)
             ps.patch.level == 0 || continue
             for i in 1:ps.decomp.n_local[1]
-                I = gidx(ps, i, 1, 1)
+                I = padded_index(ps, i, 1, 1)
                 rho[ps.patch.region.offset[1] + i] = Q[I, 1] + Q[I, 2]
             end
         end
@@ -2003,7 +2012,7 @@ end
     # every case — is bit-identical across the three settings.
     tgv(sensor) = begin
         s = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
-                   art=ArtParams(enabled=true, beta_sensor=sensor))
+                   art=ArtificialProperties(enabled=true, beta_sensor=sensor))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=100.0,
             u=(sin(x)cos(y)cos(z), -cos(x)sin(y)cos(z), 0.0)))
@@ -2020,7 +2029,7 @@ end
     # those points, where the vorticity vanishes along with |S| itself. The
     # test is therefore on the total, with the surviving peak recorded here
     # rather than asserted away.
-    bsum(s) = sum(s.beta_art[gidx(s, i, j, k)] for i in 1:32, j in 1:32, k in 1:32)
+    bsum(s) = sum(s.beta_art[padded_index(s, i, j, k)] for i in 1:32, j in 1:32, k in 1:32)
     @test maximum(sd.beta_art) < 1e-12 * maximum(ss.beta_art)
     @test bsum(sg) < 1e-2 * bsum(ss)
     @test sd.mu_art == ss.mu_art
@@ -2031,7 +2040,7 @@ end
     # and must still switch on where it compresses.
     ramp(sensor) = begin
         s = Solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3,
-                   art=ArtParams(enabled=true, beta_sensor=sensor))
+                   art=ArtificialProperties(enabled=true, beta_sensor=sensor))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=1.0,
                                             u=(0.5tanh((x - 0.5) / 0.02), 0.0, 0.0)))
@@ -2042,7 +2051,7 @@ end
     rstrain = ramp(:strain)
     for sensor in (:gated_strain, :dilatation)
         s = ramp(sensor)
-        idx = [gidx(s, i, 1, 1) for i in 1:64]
+        idx = [padded_index(s, i, 1, 1) for i in 1:64]
         expanding = [I for I in idx if div1(s, I) > 0]
         @test !isempty(expanding)
         @test all(I -> s.beta_art[I] == 0.0, expanding)
@@ -2051,11 +2060,11 @@ end
     # gated_strain multiplies the strain sensor by a factor in [0, 1], so it can
     # only ever reduce beta*, never move it somewhere new.
     sg2 = ramp(:gated_strain)
-    @test all(i -> sg2.beta_art[gidx(sg2, i, 1, 1)] <=
-                   rstrain.beta_art[gidx(rstrain, i, 1, 1)] + 1e-300, 1:64)
+    @test all(i -> sg2.beta_art[padded_index(sg2, i, 1, 1)] <=
+                   rstrain.beta_art[padded_index(rstrain, i, 1, 1)] + 1e-300, 1:64)
 
     @test_throws ErrorException Solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=per3, art=ArtParams(beta_sensor=:bogus))
+                                       bcs=per3, art=ArtificialProperties(beta_sensor=:bogus))
 end
 
 @testset "compact_d8 ring detector: symbol, closures, and selectivity" begin
@@ -2066,7 +2075,7 @@ end
     # sign conventions (RHS added rather than subtracted, high-edge closure
     # rows mirrored rather than negated).
     N = 64
-    art8 = ArtParams(detector=:d8)
+    art8 = ArtificialProperties(detector=:d8)
     s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), art=art8, bcs=per3)
     f = CL.field(s.decomp); out = CL.field(s.decomp)
     pad = s.decomp.n_halo_d[1]
@@ -2113,7 +2122,7 @@ end
     end
 
     @test_throws ErrorException Solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=per3, art=ArtParams(detector=:bogus))
+                                       bcs=per3, art=ArtificialProperties(detector=:bogus))
 end
 
 @testset "sensor operators at a reflecting wall" begin
@@ -2145,14 +2154,14 @@ end
     win(s, a) = (pad = s.decomp.n_halo_d[1];
                  [a[i+pad, 1, 1] for i in [1:6; (N-5):N]])
 
-    sw, sp = both(ArtParams())
+    sw, sp = both(ArtificialProperties())
     fw, fp = load(sw, even_field), load(sp, even_field)
     CL.smooth!(fw, sw)
     CL.smooth!(fp, sp)
     @test maximum(abs, win(sw, fw) .- win(sp, fp)) <
           1e-14 * maximum(abs, win(sp, fp))
 
-    dw, dp = both(ArtParams(detector=:d8))
+    dw, dp = both(ArtificialProperties(detector=:d8))
     for (fn, σw) in ((even_field, 1), (odd_field, -1))
         gw, gp = load(dw, fn), load(dp, fn)
         ow, op = CL.field(dw.decomp), CL.field(dp.decomp)
@@ -2198,14 +2207,14 @@ end
     # same rows, so the fold holds one detector plan per ghost parity and per
     # wall sign.
     sa = Solver(n_global=(32, 1, 12), L_domain=(1.0, 1.0, 0.5),
-                metric=CylindricalMetric(), art=ArtParams(detector=:d8),
+                metric=CylindricalMetric(), art=ArtificialProperties(detector=:d8),
                 bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]))
     rp = sa.folds[1].ring_plans
     @test length(rp) == 2 && all(p -> length(p) == 2, rp)
     @test rp[1][1] !== rp[1][2] && rp[2][1] !== rp[2][2]
     # An outer end that reflects nothing keeps one plan in both slots.
     sx = Solver(n_global=(32, 1, 12), L_domain=(1.0, 1.0, 0.5),
-                metric=CylindricalMetric(), art=ArtParams(detector=:d8),
+                metric=CylindricalMetric(), art=ArtificialProperties(detector=:d8),
                 bcs=((AxisBC(), ExtrapolationBC()), per3[2], per3[3]))
     @test sx.folds[1].ring_plans[1][1] === sx.folds[1].ring_plans[1][2]
 end
@@ -2271,7 +2280,7 @@ end
     # `reference/CALIBRATION_APPENDIX.md`.
     sensors(detector, fn) = begin
         s = Solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3,
-                   art=ArtParams(enabled=true, detector=detector))
+                   art=ArtificialProperties(enabled=true, detector=detector))
         Q = allocate_state(s)
         initialize!(s, Q, fn)
         compute_rhs!(s, Q, zero(Q))
@@ -2302,7 +2311,7 @@ end
     s = Solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 0.5),
                metric=CylindricalMetric(),
                bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-               art=ArtParams(enabled=true, detector=:d8))
+               art=ArtificialProperties(enabled=true, detector=:d8))
     f = CL.field(s.decomp); out = CL.field(s.decomp)
     # An even function of r: d8 across the axis fold must stay smooth and
     # small, and in particular must not blow up in the first cells.
@@ -2314,7 +2323,7 @@ end
     # outer slip wall, so it is not the reflection the wall closure rows
     # continue it as, and the detector reads that mismatch over the last cells;
     # the fold at the other end is what this case measures.
-    @test maximum(abs, out[gidx(s, i, 1, k)] for i in 1:32, k in 1:12) < 1e-3
+    @test maximum(abs, out[padded_index(s, i, 1, k)] for i in 1:32, k in 1:12) < 1e-3
     # And the full sensor path runs through the fold.
     Q = allocate_state(s)
     initialize!(s, Q, (r, θ, z) -> Prim(rho=1.0, p=1.0, u=(-1.0, 0.0, 0.0)))
@@ -2339,10 +2348,11 @@ end
     # and every sensor built from them returns zero there. The velocity sensor
     # returns the full undivided response, C_mu·ρ·16h.
     nyq = (x, y, z) -> Prim(rho=1.0, p=1.0, u=(cospi(64x), 0.0, 0.0))
-    @test maximum(oned(ArtParams(mu_sensor=:strain), nyq).mu_art) == 0.0
-    @test maximum(oned(ArtParams(mu_sensor=:velocity), nyq).mu_art) ≈
+    @test maximum(oned(ArtificialProperties(mu_sensor=:strain), nyq).mu_art) == 0.0
+    @test maximum(oned(ArtificialProperties(mu_sensor=:velocity), nyq).mu_art) ≈
           0.002 * 16 / 64 rtol = 1e-12
-    @test maximum(oned(ArtParams(beta_sensor=:ungated_dilatation), nyq).beta_art) == 0.0
+    @test maximum(oned(ArtificialProperties(beta_sensor=:ungated_dilatation),
+                       nyq).beta_art) == 0.0
 
     # 2. The detector's selectivity survives the field change, which is the
     # reason for making it. On a wave resolved over eight points the two
@@ -2351,18 +2361,19 @@ end
     # where the strain passes through zero being grid-scale structure at every
     # wavelength. Measured 569 and 1.28.
     wave = (x, y, z) -> Prim(rho=1.0, p=1.0, u=(cospi(16x), 0.0, 0.0))
-    peak(ms, det) = maximum(oned(ArtParams(mu_sensor=ms, detector=det), wave).mu_art)
+    peak(ms, det) =
+        maximum(oned(ArtificialProperties(mu_sensor=ms, detector=det), wave).mu_art)
     @test peak(:velocity, :d8) < peak(:velocity, :delta4) / 100
     @test peak(:strain, :d8) > peak(:strain, :delta4) / 10
 
     # 3. Σ_d against MAX. They are the same operation in one dimension, and the
     # reduction is a per-direction one, so MAX can never exceed Σ_d anywhere.
     ramp1 = (x, y, z) -> Prim(rho=1.0, p=1.0, u=(0.5tanh((x - 0.5) / 0.02), 0.0, 0.0))
-    @test oned(ArtParams(reduction=:sum), ramp1).mu_art ==
-          oned(ArtParams(reduction=:max), ramp1).mu_art
+    @test oned(ArtificialProperties(reduction=:sum), ramp1).mu_art ==
+          oned(ArtificialProperties(reduction=:max), ramp1).mu_art
     tgv3(red) = begin
         s = Solver(n_global=(32, 32, 32), L_domain=(2π, 2π, 2π), bcs=per3,
-                   art=ArtParams(reduction=red))
+                   art=ArtificialProperties(reduction=red))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> Prim(rho=1.0, p=100.0,
             u=(sin(x)cos(y)cos(z), -cos(x)sin(y)cos(z), 0.0)))
@@ -2395,40 +2406,41 @@ end
     # wall node, and the pentadiagonal inverse carries a decaying tail of that
     # mismatch back across the 31 cells to the axis. Measured 8.7e-14 against a
     # wall-node 5.5e-5 and the uniform case's 1.6e-4 at the axis below.
-    sl = axial(ArtParams(mu_sensor=:velocity), lin)
-    @test sl.mu_art[gidx(sl, 1, 1, 1)] == 0.0
-    s8 = axial(ArtParams(mu_sensor=:velocity, detector=:d8), lin)
-    @test s8.mu_art[gidx(s8, 1, 1, 1)] < 1e-12
-    su = axial(ArtParams(mu_sensor=:velocity), uni)
-    @test su.mu_art[gidx(su, 1, 1, 1)] > 0
+    sl = axial(ArtificialProperties(mu_sensor=:velocity), lin)
+    @test sl.mu_art[padded_index(sl, 1, 1, 1)] == 0.0
+    s8 = axial(ArtificialProperties(mu_sensor=:velocity, detector=:d8), lin)
+    @test s8.mu_art[padded_index(s8, 1, 1, 1)] < 1e-12
+    su = axial(ArtificialProperties(mu_sensor=:velocity), uni)
+    @test su.mu_art[padded_index(su, 1, 1, 1)] > 0
 
     # 5. The ungated dilatation sensor is the form the reference uses. The
     # gated one is that sensor multiplied by the Ducros switch, so it is never
     # larger, and is exactly zero wherever the flow expands.
-    ug = oned(ArtParams(beta_sensor=:ungated_dilatation), ramp1)
-    g = oned(ArtParams(beta_sensor=:dilatation), ramp1)
+    ug = oned(ArtificialProperties(beta_sensor=:ungated_dilatation), ramp1)
+    g = oned(ArtificialProperties(beta_sensor=:dilatation), ramp1)
     @test all(g.beta_art .<= ug.beta_art .+ 1e-300)
     div1(s, I) = s.grad_u[1, 1][I] + s.grad_u[2, 2][I] + s.grad_u[3, 3][I]
-    expanding = [gidx(ug, i, 1, 1) for i in 1:64 if div1(ug, gidx(ug, i, 1, 1)) > 0]
+    expanding = [padded_index(ug, i, 1, 1) for i in 1:64 if div1(ug, padded_index(ug, i, 1, 1)) > 0]
     @test !isempty(expanding)
     @test all(I -> g.beta_art[I] == 0.0, expanding)
     @test any(I -> ug.beta_art[I] > 0.0, expanding)
 
     # 6. The channels are independent: rebuilding one leaves the other's
     # numbers bit-identical to the default configuration's.
-    base = oned(ArtParams(), ramp1)
-    @test oned(ArtParams(mu_sensor=:velocity), ramp1).beta_art == base.beta_art
-    @test oned(ArtParams(beta_sensor=:ungated_dilatation), ramp1).mu_art == base.mu_art
-    @test oned(ArtParams(mu_sensor=:velocity), ramp1).mu_art != base.mu_art
+    base = oned(ArtificialProperties(), ramp1)
+    @test oned(ArtificialProperties(mu_sensor=:velocity), ramp1).beta_art == base.beta_art
+    @test oned(ArtificialProperties(beta_sensor=:ungated_dilatation),
+               ramp1).mu_art == base.mu_art
+    @test oned(ArtificialProperties(mu_sensor=:velocity), ramp1).mu_art != base.mu_art
 
     @test_throws ErrorException Solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=per3, art=ArtParams(mu_sensor=:bogus))
+                                       bcs=per3, art=ArtificialProperties(mu_sensor=:bogus))
     @test_throws ErrorException Solver(n_global=(16, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                                       bcs=per3, art=ArtParams(reduction=:bogus))
+                                       bcs=per3, art=ArtificialProperties(reduction=:bogus))
 end
 
 @testset "dt_report agrees with compute_dt and names the limiter" begin
-    solver = mkslv(n_global=(16, 16, 16), transport=Transport(mu0=1e-3))
+    solver = mkslv(n_global=(16, 16, 16), transport=ConstantTransport(mu0=1e-3))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2sin(x), 0, 0), p=1 + 0.1cos(y), rho=1.0))
     r = dt_report(solver, Q)
@@ -2447,7 +2459,7 @@ end
         solver = Solver(n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=metric,
                    origin=(0.5, π / 2, 0.0),
                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                   art=ArtParams(enabled=false))
+                   art=ArtificialProperties(enabled=false))
         Q = allocate_state(solver)
         initialize!(solver, Q, (r, θ, φ) -> Prim(u=(0.0, uang, uang), p=1.0, rho=1.0))
         solver, Q
@@ -2456,12 +2468,13 @@ end
         s0, Q0 = mk(metric, 0.0)
         s1, Q1 = mk(metric, 2.0)
         @test compute_dt(s1, Q1) < compute_dt(s0, Q0)
-        @test CL.curvature_rate(s1, metric, gidx(s1, 5, 1, 1), (0.0, 2.0, 2.0)) > 0
-        @test CL.curvature_rate(s0, metric, gidx(s0, 5, 1, 1), (0.0, 0.0, 0.0)) == 0
+        @test CL.curvature_rate(s1, metric, padded_index(s1, 5, 1, 1), (0.0, 2.0, 2.0)) > 0
+        @test CL.curvature_rate(s0, metric, padded_index(s0, 5, 1, 1), (0.0, 0.0, 0.0)) == 0
     end
     # Cartesian has no curvature term at all
     sc = mkslv(n_global=(16, 16, 16))
-    @test CL.curvature_rate(sc, CartesianMetric(), gidx(sc, 2, 2, 2), (1.0, 1.0, 1.0)) == 0
+    @test CL.curvature_rate(sc, CartesianMetric(), padded_index(sc, 2, 2, 2),
+                            (1.0, 1.0, 1.0)) == 0
 end
 
 @testset "StepControl: floors, positivity, and the default no-op" begin
@@ -2536,10 +2549,10 @@ end
     @test e_floor ≈ 1e-6 * e0 rtol = 1e-12
     # Disabled by default, and disabled again when the state supplies no scale.
     @test CL.positivity_floors(solver, Q, StepControl()) == (0.0, 0.0)
-    saved = Q[gidx(solver, 2, 2, 2), 1]
-    Q[gidx(solver, 2, 2, 2), 1] = -3.0
+    saved = Q[padded_index(solver, 2, 2, 2), 1]
+    Q[padded_index(solver, 2, 2, 2), 1] = -3.0
     @test CL.positivity_floors(solver, Q, StepControl(floor_ratio=1e-6)) == (0.0, 0.0)
-    Q[gidx(solver, 2, 2, 2), 1] = saved
+    Q[padded_index(solver, 2, 2, 2), 1] = saved
 
     floor!(Qx, scope) = CL.apply_positivity_floor!(solver, Qx, rho_floor, e_floor,
                                                    scope)
@@ -2553,7 +2566,7 @@ end
 
     # 1. A negative partial density is clipped and the mixture density is left
     #    exactly where it was, so the repair adds no mass at all.
-    I = gidx(solver, 3, 3, 3)
+    I = padded_index(solver, 3, 3, 3)
     Q2 = copy(Q)
     ρ_before = mixture_density(solver, Q2, I)
     Q2[I, 1] = -0.4
@@ -2626,7 +2639,7 @@ end
                                              Y=(0.25, 0.75)))
     m1, m2, m3 = solver.equations.i_mom
     ie = solver.equations.i_energy
-    I = gidx(solver, 3, 3, 3)
+    I = padded_index(solver, 3, 3, 3)
 
     clean = state_report(solver, Q)
     @test state_valid(clean)
@@ -2798,7 +2811,7 @@ end
     # first species onto the second, outside the species band.
     function poison!(s, Qs)
         s.step == 1 || return false
-        I = gidx(s, 3, 3, 3)
+        I = padded_index(s, 3, 3, 3)
         rho = Qs[I, 1] + Qs[I, 2]
         Qs[I, 1] = -0.2rho
         Qs[I, 2] = 1.2rho
@@ -2836,7 +2849,7 @@ end
     # ways a run ends. The step checks read the state ENTERING a step, so
     # without this an nmax, tfinal or callback exit returned its last result
     # uninspected.
-    sink!(s, Qs) = (Qs[gidx(s, 2, 2, 2), 1] = -1.0; false)
+    sink!(s, Qs) = (Qs[padded_index(s, 2, 2, 2), 1] = -1.0; false)
     fresh(; control=StepControl()) = begin
         s = mkslv(n_global=(16, 12, 12), control=control)
         Qs = allocate_state(s)
@@ -2846,7 +2859,7 @@ end
     s, Qs = fresh()
     @test_throws SolverFailure run!(s, Qs; tfinal=1.0, nmax=1, callback=sink!)
     # A callback that ends the run is the third exit, and is checked too.
-    stop!(s, Qs) = (Qs[gidx(s, 2, 2, 2), 1] = -1.0; true)
+    stop!(s, Qs) = (Qs[padded_index(s, 2, 2, 2), 1] = -1.0; true)
     s, Qs = fresh()
     @test_throws SolverFailure run!(s, Qs; tfinal=1.0, nmax=99, callback=stop!)
     # Permissive returns it and says so.
@@ -2854,7 +2867,7 @@ end
     @test_logs (:warn,) match_mode=:any run!(s, Qs; tfinal=1.0, nmax=1,
                                              callback=sink!)
     @test s.step == 1
-    @test mixture_density(s, Qs, gidx(s, 2, 2, 2)) < 0
+    @test mixture_density(s, Qs, padded_index(s, 2, 2, 2)) < 0
     @test state_valid(state_report(s, Qs)) == false
 
     # The rejection reaches the retry path rather than raising past it: with a
@@ -2864,7 +2877,7 @@ end
     s, Qs = fresh(control=StepControl(retries=2, savepoint_interval=1))
     fired = Ref(0)
     once!(sv, Qv) = (fired[] += 1; fired[] == 1 &&
-                     (Qv[gidx(sv, 2, 2, 2), 1] = -1.0); false)
+                     (Qv[padded_index(sv, 2, 2, 2), 1] = -1.0); false)
     cfl0 = s.cfl
     @test_logs (:warn,) match_mode=:any run!(s, Qs; tfinal=1.0, nmax=2,
                                              callback=once!)
@@ -2882,7 +2895,7 @@ end
     @test_logs (:warn,) match_mode=:any run!(s, Qs; tfinal=1.0, nmax=1,
         callback=(sink!, Callback(EveryStep(), guard)))
     @test (guard.checks, guard.rejected) == (1, 1)
-    @test mixture_density(s, Qs, gidx(s, 2, 2, 2)) < 0   # accepted, not repaired
+    @test mixture_density(s, Qs, padded_index(s, 2, 2, 2)) < 0   # accepted, not repaired
 
     s, Qs = fresh()
     repair = StepControl(validity=:repair, floor_ratio=1e-6)
@@ -2890,7 +2903,7 @@ end
     run!(s, Qs; tfinal=1.0, nmax=1, callback=(sink!, Callback(EveryStep(), guard)))
     @test guard.rejected == 0                   # the repair left nothing to reject
     @test s.floor_tally.cells == 1
-    @test mixture_density(s, Qs, gidx(s, 2, 2, 2)) ≈ 1e-6 rtol = 1e-12
+    @test mixture_density(s, Qs, padded_index(s, 2, 2, 2)) ≈ 1e-6 rtol = 1e-12
 end
 
 @testset "run!: failure is raised, and recoverable with retries" begin
@@ -2931,10 +2944,11 @@ end
             Prim(rho=(1 - θ) * ρin + θ * ρout, u=(-θ, 0.0, 0.0),
                  p=(1 - θ) * pin + θ * p0)
         end
-        prob = Problem(eos=IdealSpecies("gas"; gamma=γ, R=1.0), transport=Transport(mu0=0.0),
+        prob = Problem(eos=IdealSpecies("gas"; gamma=γ, R=1.0),
+                       transport=ConstantTransport(mu0=0.0),
                        metric=metric, domain=((0.0, 1.0), dom2, dom3),
                        bcs=((lobc, inflow), per3[2], per3[3]), ic=ic)
-        setup(prob, Numerics(n_global=(N, 1, 1), art=ArtParams(enabled=true),
+        setup(prob, Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=true),
                              cfl=cfl, control=control, filter_interval=1,
                              filter_cfl=0.0))
     end
@@ -2944,7 +2958,7 @@ end
     plateau(s, Q, N) = begin
         CL.exchange_state!(Q, s.decomp); CL.primitives!(s, Q)
         core = [i for i in 1:N if 0.06 <= xcoord(s, 1, i) <= 0.14]
-        sum(s.rho[gidx(s, i, 1, 1)] for i in core) / length(core)
+        sum(s.rho[padded_index(s, i, 1, 1)] for i in core) / length(core)
     end
 
     # Permissive on the returned state: a Noh run ends with a handful of
@@ -3008,7 +3022,7 @@ end
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0.3, 0, 0), p=0.8, T_ion=1.7))
         CL.exchange_state!(Q, solver.decomp)
         CL.primitives!(solver, Q)
-        I = gidx(solver, 3, 4, 5)
+        I = padded_index(solver, 3, 4, 5)
         @test solver.p[I] ≈ 0.8 rtol = 1e-12
         @test solver.T_ion[I] ≈ 1.7 rtol = 1e-12
         @test solver.c[I] ≈ sqrt(γ * R * 1.7) rtol = 1e-12
@@ -3050,7 +3064,7 @@ end
                                              p=2.5e5, T_ion=1400.0))
     CL.exchange_state!(Q, solver.decomp)
     CL.primitives!(solver, Q)
-    I = gidx(solver, 3, 4, 5)
+    I = padded_index(solver, 3, 4, 5)
     @test solver.p[I] ≈ 2.5e5 rtol = 1e-10
     @test solver.T_ion[I] ≈ 1400.0 rtol = 1e-10
     @test solver.Y[2][I] ≈ 0.65 rtol = 1e-12
@@ -3175,7 +3189,7 @@ end
     initialize!(solver, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), p=1e5, T_ion=1000.0))
     CL.primitives!(solver, Q)
     @test (@allocated CL.primitives!(solver, Q)) == 0
-    @test solver.T_ion[gidx(solver, 3, 1, 1)] ≈ 1000.0 rtol = 1e-10
+    @test solver.T_ion[padded_index(solver, 3, 1, 1)] ≈ 1000.0 rtol = 1e-10
 end
 
 @testset "NASA CEA reader: intervals, molar mass, and energy reference" begin
@@ -3256,7 +3270,7 @@ end
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> pr)
     CL.exchange_state!(Q, solver.decomp); CL.primitives!(solver, Q)
-    I = gidx(solver, 3, 4, 5)
+    I = padded_index(solver, 3, 4, 5)
     @test solver.p[I] ≈ 0.8 rtol = 1e-12
     @test solver.T_ion[I] ≈ 1.7 rtol = 1e-12
     @test solver.c[I] ≈ sqrt(γ * R * 1.7) rtol = 1e-12
@@ -3267,11 +3281,11 @@ end
     # perfect gas would give a few hundred.
     water = StiffenedGas(gamma=4.4, p_inf=6.0e8, cv=1816.0, name="water")
     s2 = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0), bcs=per3,
-                eos=water, art=ArtParams(enabled=false))
+                eos=water, art=ArtificialProperties(enabled=false))
     Q2 = allocate_state(s2)
     initialize!(s2, Q2, (x, y, z) -> Prim(u=(0, 0, 0), p=101325.0, rho=1000.0))
     CL.exchange_state!(Q2, s2.decomp); CL.primitives!(s2, Q2)
-    J = gidx(s2, 3, 4, 5)
+    J = padded_index(s2, 3, 4, 5)
     @test s2.p[J] ≈ 101325.0 rtol = 1e-9
     @test 1400 < s2.c[J] < 1700                      # c = sqrt(γ(p+p∞)/ρ)
     @test s2.c[J] ≈ sqrt(4.4 * (101325.0 + 6.0e8) / 1000.0) rtol = 1e-12
@@ -3287,7 +3301,7 @@ end
     run!(s2, Q2; tfinal=1e9, nmax=5)
     CL.primitives!(s2, Q2)
     @test all(isfinite, Q2)
-    @test minimum(s2.rho[gidx(s2, i, j, k)] for i in 1:12, j in 1:12, k in 1:12) > 0
+    @test minimum(s2.rho[padded_index(s2, i, j, k)] for i in 1:12, j in 1:12, k in 1:12) > 0
 end
 
 @testset "line_sample: one grid line, distinct from the plane average" begin
@@ -3297,7 +3311,7 @@ end
     ic(x, y, z) = Prim(p=1.0, rho=1 + 0.1x + 0.2y + 0.3z)
     rho_fn(x, y, z) = 1 + 0.1x + 0.2y + 0.3z
     solver = Solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5), bcs=per3,
-                    art=ArtParams(enabled=false))
+                    art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, ic)
     gx(d, g) = global_xcoord(solver, d, g)
@@ -3327,7 +3341,7 @@ end
     _, mean_line = line_profile(solver, Q, :rho; dim=1)
     @test maximum(abs, mean_line .- first_line) > 0.1
     solver1 = Solver(n_global=(32, 1, 1), L_domain=(2.0, 1.0, 1.0), bcs=per3,
-                     art=ArtParams(enabled=false))
+                     art=ArtificialProperties(enabled=false))
     Q1 = allocate_state(solver1)
     initialize!(solver1, Q1, ic)
     _, sample1 = line_sample(solver1, Q1, :rho)
@@ -3347,7 +3361,7 @@ end
     # node-centered edge by construction (see the note in diagnostics.jl).
     solver = Solver(n_global=(24, 16, 12), L_domain=(2.0, 1.0, 0.5),
                     bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                    art=ArtParams(enabled=false))
+                    art=ArtificialProperties(enabled=false))
     @test domain_volume(solver) ≈ 1.0 atol = 1e-12          # 2.0 × 1.0 × 0.5
     ones_f = CL.field(solver.decomp); fill!(ones_f, 1.0)
     @test volume_integral(solver, ones_f) ≈ 1.0 atol = 1e-12
@@ -3370,7 +3384,7 @@ end
     cyl = Solver(n_global=(64, 1, 12), L_domain=(1.0, 1.0, 1.0),
                  metric=CylindricalMetric(),
                  bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
-                 art=ArtParams(enabled=false))
+                 art=ArtificialProperties(enabled=false))
     ones_c = CL.field(cyl.decomp); fill!(ones_c, 1.0)
     h = cyl.h[1]
     @test volume_integral(cyl, ones_c) ≈ 0.5 rtol = 1e-3    # ∫r dr dθ dz, θ collapsed
@@ -3381,7 +3395,7 @@ end
                         IdealSpecies{Float64}("b", 1.0, 1.4)])
     mk(ic) = begin
         s = Solver(n_global=(64, 12, 12), L_domain=(1.0, 0.2, 0.2), bcs=per3,
-                   eos=eos, art=ArtParams(enabled=false))
+                   eos=eos, art=ArtificialProperties(enabled=false))
         Q = allocate_state(s)
         initialize!(s, Q, ic)
         CL.exchange_state!(Q, s.decomp); CL.primitives!(s, Q)
@@ -3428,7 +3442,7 @@ end
     @test abs(dissipation_rate(s4, Q4)) < 1e-20
     s6, Q6 = mk((x, y, z) -> Prim(Y=(1.0, 0.0), u=(0.0, 0.3sin(2π * x), 0),
                                   p=1.0, rho=1.0))
-    s6.transport = Transport(mu0=1e-2)
+    s6.transport = ConstantTransport(mu0=1e-2)
     @test dissipation_rate(s6, Q6) > 0
 end
 
@@ -3480,7 +3494,7 @@ end
 @testset "save_vtk: field selection and derived fields" begin
     dir = mktempdir()
     solver = Solver(bcs=per3, n_global=(32, 32, 12), L_domain=(1.0, 1.0, 1.0),
-                    art=ArtParams(enabled=true))
+                    art=ArtificialProperties(enabled=true))
     Q = allocate_state(solver)
 
     # (a) A uniform stream, for which every derived field is zero by
@@ -3536,7 +3550,7 @@ end
     dir = mktempdir()
     N = (32, 16, 16)
     solver = Solver(bcs=per3, n_global=N, L_domain=(1.0, 1.0, 1.0),
-                    art=ArtParams(enabled=false))
+                    art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0,
                                              rho=1 + x + 2y + 4z))
@@ -3575,7 +3589,7 @@ end
     # shifted.
     want = Float32[]
     for k in 1:2:16, j in 1:2:16, i in 1:2:32
-        push!(want, Float32(solver.rho[gidx(solver, i, j, k)]))
+        push!(want, Float32(solver.rho[padded_index(solver, i, j, k)]))
     end
     @test rho2 == want
 
@@ -3586,7 +3600,7 @@ end
 
     # An odd extent keeps the ceiling: 1, 3, ..., 15 out of 15 is 8 stations.
     odd = Solver(bcs=per3, n_global=(15, 16, 16), L_domain=(1.0, 1.0, 1.0),
-                 art=ArtParams(enabled=false))
+                 art=ArtificialProperties(enabled=false))
     Qo = allocate_state(odd)
     initialize!(odd, Qo, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
     save_vtk(odd, Qo, joinpath(dir, "odd"); fields=(:rho,), stride=2)
@@ -3603,7 +3617,7 @@ end
     dir = mktempdir()
     N = (24, 16, 12)
     solver = Solver(bcs=per3, n_global=N, L_domain=(1.0, 1.0, 1.0),
-                    art=ArtParams(enabled=false))
+                    art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0,
                                              rho=1 + x + 100y + 10000z))
@@ -3625,7 +3639,7 @@ end
         @test length(got["rho"]) == prod(want)
         # And the values are the plane at g, not some other plane.
         idx = ntuple(t -> t == d ? (g:g) : (1:N[t]), 3)
-        expect = Float32[solver.rho[gidx(solver, i, j, k)]
+        expect = Float32[solver.rho[padded_index(solver, i, j, k)]
                          for i in idx[1], j in idx[2], k in idx[3]][:]
         @test got["rho"] == expect
     end
@@ -3656,7 +3670,7 @@ end
     nr, nθ, nz = 12, 24, 10
     solver = Solver(bcs=bcs, n_global=(nr, nθ, nz), L_domain=(1.0, 2π, 1.0),
                     origin=(0.5, 0.0, 0.0), metric=CylindricalMetric(),
-                    art=ArtParams(enabled=false))
+                    art=ArtificialProperties(enabled=false))
     Q = allocate_state(solver)
     # Solid-body swirl: purely azimuthal, constant magnitude.
     initialize!(solver, Q, (r, θ, z) -> Prim(u=(0.0, 0.5, 0.0), p=1.0, rho=1.0))
@@ -3694,7 +3708,7 @@ end
     axi = Solver(bcs=(bcs[1], (PeriodicBC(), PeriodicBC()), bcs[3]),
                  n_global=(nr, 1, nz), L_domain=(1.0, 2π, 1.0),
                  origin=(0.5, 0.0, 0.0), metric=CylindricalMetric(),
-                 art=ArtParams(enabled=false))
+                 art=ArtificialProperties(enabled=false))
     @test container_extension(axi) == ".pvtr"
     rm(dir; recursive=true)
 end
@@ -3704,7 +3718,7 @@ end
     solver = Solver(bcs=((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
                          (PeriodicBC(), PeriodicBC())),
                     n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                    art=ArtParams(enabled=false), cfl=0.4)
+                    art=ArtificialProperties(enabled=false), cfl=0.4)
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
                                              p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
@@ -3811,11 +3825,11 @@ end
     @test names(() -> mk(filter_cfl=-0.1), "filter_cfl")
     @test names(() -> mk(L_domain=(1.0, Inf, 1.0)), "L_domain")
     @test names(() -> mk(n_global=(16, 0, 1)), "n_global")
-    @test names(() -> mk(transport=Transport(mu0=NaN)), "mu0")
-    @test names(() -> mk(transport=Transport(Pr=0.0)), "Pr")
-    @test names(() -> mk(transport=Transport(Sc=-1.0)), "Sc")
-    @test names(() -> mk(art=ArtParams(C_beta=-1.0)), "C_beta")
-    @test names(() -> mk(art=ArtParams(Y_tolerance=NaN)), "Y_tolerance")
+    @test names(() -> mk(transport=ConstantTransport(mu0=NaN)), "mu0")
+    @test names(() -> mk(transport=ConstantTransport(Pr=0.0)), "Pr")
+    @test names(() -> mk(transport=ConstantTransport(Sc=-1.0)), "Sc")
+    @test names(() -> mk(art=ArtificialProperties(C_beta=-1.0)), "C_beta")
+    @test names(() -> mk(art=ArtificialProperties(Y_tolerance=NaN)), "Y_tolerance")
     # A grid below the scheme minimum is reported with the binding scheme and
     # the extent required before any plan is built: the C8 filter at a wall.
     err = try mk(n_global=(8, 12, 1)); nothing catch e; e end
@@ -3832,7 +3846,7 @@ end
              (PeriodicBC(), PeriodicBC()))
     mkrun() = begin
         solver = Solver(bcs=wall3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                        art=ArtParams(enabled=false), cfl=0.4)
+                        art=ArtificialProperties(enabled=false), cfl=0.4)
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
                                                  p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
@@ -3896,7 +3910,7 @@ end
         # cfl 0.244 keeps the step this test was written at (0.4 under the
         # summed acoustic rate): the sliver below needs dt below the 0.01 interval.
         solver = Solver(bcs=wall3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                        art=ArtParams(enabled=false), cfl=0.244)
+                        art=ArtificialProperties(enabled=false), cfl=0.244)
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
                                                  p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
@@ -3989,7 +4003,7 @@ end
 
     et = EveryTime(0.01)
     solver = Solver(bcs=per3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                    art=ArtParams(enabled=false))
+                    art=ArtificialProperties(enabled=false))
     solver.t = 0.045
     @test CL.next_time(et, solver) ≈ 0.05
     CL.rewind!(et, 0.021, 3)
@@ -4005,7 +4019,7 @@ end
     walls = ((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
              (PeriodicBC(), PeriodicBC()))
     s2 = Solver(bcs=walls, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                art=ArtParams(enabled=false), cfl=0.4)
+                art=ArtificialProperties(enabled=false), cfl=0.4)
     Q2 = allocate_state(s2)
     initialize!(s2, Q2, (x, y, z) -> Prim(u=(0.2, 0, 0),
                                           p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
@@ -4015,7 +4029,7 @@ end
     # one-shot fault is held in the condition, not in the trigger.
     spoiled = Ref(false)
     spoil = Callback(WhenState((x, _) -> x.t >= 0.037 && !spoiled[]),
-                     (x, q) -> (spoiled[] = true; q[gidx(x, 3, 3, 3), 1] = -1.0;
+                     (x, q) -> (spoiled[] = true; q[padded_index(x, 3, 3, 3), 1] = -1.0;
                                 nothing))
     run!(s2, Q2; tfinal=0.06, nmax=5000,
          control=StepControl(retries=2, savepoint_interval=2),
@@ -4035,7 +4049,7 @@ end
     eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                         IdealSpecies{Float64}("b", 2.0, 1.6)])
     solver = Solver(bcs=per3, n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                    eos=eos, art=ArtParams(enabled=false), cfl=0.4)
+                    eos=eos, art=ArtificialProperties(enabled=false), cfl=0.4)
     Q = allocate_state(solver)
     initialize!(solver, Q, (x, y, z) -> Prim(Y=(0.3, 0.7), u=(0.2, -0.1, 0.05),
                                              p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
@@ -4043,7 +4057,7 @@ end
 
     # The layout-free spellings agree with the primitives they stand in for, and
     # do not assume a species count.
-    I = gidx(solver, 5, 4, 3)
+    I = padded_index(solver, 5, 4, 3)
     @test mixture_density(solver, Q, I) ≈ solver.rho[I] rtol = 1e-14
     @test all(velocity(solver, Q, I) .≈ (solver.u[I], solver.v[I], solver.w[I]))
     @test mass_fraction(solver, Q, I, 2) ≈ solver.Y[2][I] rtol = 1e-14
@@ -4057,10 +4071,10 @@ end
     # interior_index is the documented conversion between the two index bases:
     # boundary_plane yields padded indices, xcoord takes interior ones.
     @test interior_index(solver, I) == (5, 4, 3)
-    @test gidx(solver, interior_index(solver, I)...) == I
+    @test padded_index(solver, interior_index(solver, I)...) == I
     for J in boundary_plane(solver, 1, 2)
         i, j, k = interior_index(solver, J)
-        @test gidx(solver, i, j, k) == J
+        @test padded_index(solver, i, j, k) == J
         @test i == solver.decomp.n_local[1]              # the high-x face
         @test xcoord(solver, 1, i) ==
               global_xcoord(solver, 1, solver.decomp.offset[1] + i)
@@ -4095,7 +4109,7 @@ end
         solver = Solver(bcs=(xbc, (PeriodicBC(), PeriodicBC()),
                              (PeriodicBC(), PeriodicBC())),
                         n_global=(16, 12, 12), L_domain=(1.0, 1.0, 1.0),
-                        art=ArtParams(enabled=false), cfl=0.4)
+                        art=ArtificialProperties(enabled=false), cfl=0.4)
         Q = allocate_state(solver)
         initialize!(solver, Q, (x, y, z) -> Prim(u=(0.2, 0, 0),
                                                  p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
@@ -4181,7 +4195,7 @@ end
     build(xbc; xlo=0.0) = begin
         n = round(Int, (1.0 - xlo) / Hx) + 1
         δ = 2Hx
-        setup(Problem(eos=eos2, transport=Transport(mu0=0.0),
+        setup(Problem(eos=eos2, transport=ConstantTransport(mu0=0.0),
                       domain=((xlo, xlo + (n - 1) * Hx), (0.0, Hx), (0.0, Hx)),
                       bcs=(xbc, per3[2], per3[3]),
                       ic=(x, y, z) -> begin
@@ -4191,7 +4205,7 @@ end
                                p=(1 - s) * p2 + s * p1,
                                T_ion=(1 - s) * T2 + s * T1)
                       end),
-              Numerics(n_global=(n, 1, 1), art=ArtParams(enabled=true),
+              Numerics(n_global=(n, 1, 1), art=ArtificialProperties(enabled=true),
                        cfl=0.4, filter_interval=1,
                        # A shocked binary interface ends beyond the
                        # mass-fraction band, five of 160 points here, as the
@@ -4232,9 +4246,9 @@ end
         CL.primitives!(s, Q)
         nx = s.decomp.n_local[1]
         ([xcoord(s, 1, i) for i in 1:nx],
-         [s.p[gidx(s, i, 1, 1)] for i in 1:nx],
-         [s.u[gidx(s, i, 1, 1)] for i in 1:nx],
-         [s.Y[2][gidx(s, i, 1, 1)] for i in 1:nx])
+         [s.p[padded_index(s, i, 1, 1)] for i in 1:nx],
+         [s.u[padded_index(s, i, 1, 1)] for i in 1:nx],
+         [s.Y[2][padded_index(s, i, 1, 1)] for i in 1:nx])
     end
     # Interface position, interpolated across the cell where Y_heavy crosses
     # 1/2 — a sub-cell measure, since a re-shock moves the interface by a
@@ -4333,7 +4347,7 @@ end
     Q2 = allocate_state(solver); solver.t = 0.0; solver.step = 0
     load_checkpoint!(solver, Q2, "test_ckpt")
     @test solver.t == 0.37 && solver.step == 42
-    @test all(Q2[gidx(solver, i, j, k), c] == Q[gidx(solver, i, j, k), c]
+    @test all(Q2[padded_index(solver, i, j, k), c] == Q[padded_index(solver, i, j, k), c]
               for c in 1:5, i in 1:12, j in 1:12, k in 1:12)
     foreach(rm, filter(startswith("test_ckpt"), readdir()))
 end
@@ -4345,7 +4359,7 @@ end
     # expected message is asserted to ensure each case exercises its intended
     # check, not an earlier one.
     mk(; kw...) = Solver(; n_global=(12, 12, 12), bcs=per3, L_domain=(2π, 2π, 2π),
-                         art=ArtParams(enabled=false), kw...)
+                         art=ArtificialProperties(enabled=false), kw...)
     eos2 = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
                          IdealSpecies{Float64}("b", 2.0, 1.6)])
     base = mk(eos=eos2)
@@ -4392,7 +4406,7 @@ end
     # that the check is shown to discriminate rather than to refuse everything.
     mkw(st) = Solver(n_global=(12, 12, 12), L_domain=(1.0, 1.0, 1.0),
                      bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
-                     stretch=(st, nothing, nothing), art=ArtParams(enabled=false))
+                     stretch=(st, nothing, nothing), art=ArtificialProperties(enabled=false))
     uniform = mkw(nothing)
     Qu = allocate_state(uniform)
     initialize!(uniform, Qu, (x, y, z) -> Prim(p=1.0, rho=1.0))
@@ -4424,7 +4438,7 @@ end
     )
         solver, Q = build()
         run!(solver, Q; tfinal=1e9, nmax=3)
-        bad = any(!isfinite(Q[gidx(solver, i, j, k), c])
+        bad = any(!isfinite(Q[padded_index(solver, i, j, k), c])
                   for c in 1:solver.equations.n_cons, i in 1:solver.decomp.n_local[1],
                       j in 1:solver.decomp.n_local[2], k in 1:solver.decomp.n_local[3])
         @test !bad
@@ -4446,7 +4460,7 @@ end
     x0 = 0.5; tfin = 0.2
     Nx = 400; Lx = 1.0; hx = Lx / (Nx - 1); δ = 2hx
     prob = Problem(name="Sod", eos=IdealSpecies("gas"; gamma=γ, R=1.0),
-                   transport=Transport(mu0=0.0),
+                   transport=ConstantTransport(mu0=0.0),
                    domain=((0.0, Lx), (0.0, hx), (0.0, hx)),
                    bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                    ic=(x, y, z) -> begin
@@ -4455,7 +4469,8 @@ end
                             u=((1 - θ) * uL + θ * uR, 0.0, 0.0),
                             p=(1 - θ) * pL + θ * pR)
                    end)
-    solver, Q = setup(prob, Numerics(n_global=(Nx, 1, 1), art=ArtParams(enabled=true),
+    solver, Q = setup(prob,
+                      Numerics(n_global=(Nx, 1, 1), art=ArtificialProperties(enabled=true),
                                 cfl=0.4, filter_interval=1))
     run!(solver, Q; tfinal=tfin, nmax=100_000)
     CL.exchange_state!(Q, solver.decomp)
@@ -4469,7 +4484,7 @@ end
     nx = solver.decomp.n_local[1]
     eρ = eu = ep = 0.0
     for i in 1:nx
-        I = gidx(solver, i, 1, 1); x = xcoord(solver, 1, i)
+        I = padded_index(solver, i, 1, 1); x = xcoord(solver, 1, i)
         r, u, p = exact_riemann_sample((x - x0) / tfin, ρL, uL, pL, ρR, uR, pR,
                                        γ, pstar, ustar, cL, cR)
         eρ += abs(solver.rho[I] - r); eu += abs(solver.u[I] - u); ep += abs(solver.p[I] - p)
@@ -4567,7 +4582,7 @@ end
                             IdealSpecies{Float64}("heavy", 0.2, 1.09)])
         s = Solver(n_global=(48, 32, 1), L_domain=(1.0, 0.6, 1.0), eos=eos,
                    bcs=((SlipWallBC(), SlipWallBC()), per3k[2], per3k[3]),
-                   art=ArtParams(enabled=true, species_flux=channel))
+                   art=ArtificialProperties(enabled=true, species_flux=channel))
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) -> begin
             θ = 0.5 * (1 + tanh((x - 0.5) / 0.05))
