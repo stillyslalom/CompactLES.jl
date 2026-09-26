@@ -754,6 +754,189 @@ function enforce!(::ExtrapolationBC, Q, solver, d, side)
     nothing
 end
 
+"""
+    CompositeBC(members, selector)
+
+One face divided among several conditions. `members` is a tuple of boundary
+conditions and `selector(x1, x2, x3)` returns the index of the member that
+holds the face point at those coordinates. The selector is evaluated once per
+face point, when a rank first applies the face, and the result is stored as a
+mask over that rank's part of the face plane.
+
+Each hook runs every member in order on every rank, so a member's collectives
+are reached on ranks whose part of the face holds none of its points. Every
+member acts on the whole plane from the same input, and the composite keeps
+each member's result only at the points the mask assigns to it: the
+boundary-plane state in [`enforce!`](@ref), the normal flux in
+[`correct_flux!`](@ref) and the right-hand side in [`correct_rhs!`](@ref). A
+member's writes anywhere else are not masked. The cost is two plane copies
+per member per hook.
+
+The change from one member to the next is sharp. An inflow member whose target
+velocity falls to zero at the edge of its region avoids a velocity jump there.
+An [`NSCBCInflowBC`](@ref) member with a pointwise `target` evaluates it over
+the whole face.
+
+The face uses the scheme's closure rows, as every nonperiodic face does.
+[`sensor_mirror`](@ref) is `true` only when it is `true` for every member, so
+a face mixing a wall with an open condition clamps the detector taps over the
+whole face.
+
+A member cannot be periodic, a fold, an interface marker, a
+[`SwitchableBC`](@ref) or another composite. A `SwitchableBC` may wrap a
+composite face.
+"""
+struct CompositeBC{M<:Tuple,F} <: BoundaryCondition
+    members::M
+    selector::F
+    # (decomp, region, d, side) => _FaceScratch, filled on first use per face
+    scratch::IdDict{Any,Any}
+end
+
+function CompositeBC(members::Tuple, selector)
+    isempty(members) && throw(ArgumentError("CompositeBC needs at least one member"))
+    for m in members
+        m isa BoundaryCondition ||
+            throw(ArgumentError("CompositeBC members must be BoundaryCondition objects"))
+        (isperiodic(m) || _is_fold_bc(m) || m isa InterfaceBC || m isa SwitchableBC ||
+         m isa CompositeBC) &&
+            throw(ArgumentError("CompositeBC cannot hold a $(nameof(typeof(m))): " *
+                                "periodic, fold, interface, switchable and " *
+                                "composite conditions act on the whole face"))
+    end
+    return CompositeBC(members, selector, IdDict{Any,Any}())
+end
+
+# One face's mask and blend buffers on one rank, over the padded index box of
+# its `wallplane`. `mask` and the buffers share the storage of the patch's
+# fields, so the blend bodies launch on the same backend as the members.
+struct _FaceScratch{M,B}
+    mask::M               # member index per plane point
+    present::Vector{Bool} # whether this rank's plane holds any point of member m
+    saved::B              # the plane before a member acted, per component
+    picked::B             # the blended result, per component
+end
+
+function _face_scratch(bc::CompositeBC, solver, plane::WallPlane, d::Int, side::Int)
+    key = (solver.decomp, solver.region, d, side)
+    s = get(bc.scratch, key, nothing)
+    s === nothing || return s
+    r1, r2, r3 = plane.indices
+    dims = (length(r1), length(r2), length(r3))
+    host = Array{Int32}(undef, dims)
+    nm = length(bc.members)
+    present = fill(false, nm)
+    for (c, I) in zip(CartesianIndices(dims), plane)
+        i, j, k = interior_index(solver, I)
+        m = bc.selector(xcoord(solver, 1, i), xcoord(solver, 2, j),
+                        xcoord(solver, 3, k))
+        (m isa Integer && 1 <= m <= nm) ||
+            error("CompositeBC selector returned $m at a face point of dimension " *
+                  "$d side $side; expected an integer in 1:$nm")
+        host[c] = m
+        present[m] = true
+    end
+    T = eltype(solver.rho)
+    mask = similar(solver.rho, Int32, dims)
+    copyto!(mask, host)
+    n_cons = solver.equations.n_cons
+    saved = similar(solver.rho, T, (dims..., n_cons))
+    picked = similar(solver.rho, T, (dims..., n_cons))
+    s = _FaceScratch(mask, present, saved, picked)
+    bc.scratch[key] = s
+    return s
+end
+
+# A blended plane is a component of the conserved state (`Q`, `dQ`), indexed
+# `A[I, c]`, or of the normal flux, indexed `A[d, c][I]`.
+@inline _face_get(A, d, I, c) = @inbounds A[I, c]
+@inline _face_get(A::Union{FieldMatrix,DeviceFieldMatrix}, d, I, c) = @inbounds A[d, c][I]
+@inline _face_set!(A, v, d, I, c) = (@inbounds A[I, c] = v; nothing)
+@inline _face_set!(A::Union{FieldMatrix,DeviceFieldMatrix}, v, d, I, c) =
+    (@inbounds A[d, c][I] = v; nothing)
+
+@inline function _face_save_point!(S, A, d, n, o1, o2, o3, i, j, k)
+    I = CartesianIndex(i + o1, j + o2, k + o3)
+    for c in 1:n
+        @inbounds S[i, j, k, c] = _face_get(A, d, I, c)
+    end
+    return nothing
+end
+
+# Keep member `m`'s result where the mask selects it, then restore the saved
+# plane so that the next member starts from the same input.
+@inline function _face_pick_point!(R, A, S, mask, m, d, n, o1, o2, o3, i, j, k)
+    I = CartesianIndex(i + o1, j + o2, k + o3)
+    @inbounds mine = mask[i, j, k] == m
+    for c in 1:n
+        @inbounds begin
+            mine && (R[i, j, k, c] = _face_get(A, d, I, c))
+            _face_set!(A, S[i, j, k, c], d, I, c)
+        end
+    end
+    return nothing
+end
+
+@inline function _face_put_point!(A, R, d, n, o1, o2, o3, i, j, k)
+    I = CartesianIndex(i + o1, j + o2, k + o3)
+    for c in 1:n
+        @inbounds _face_set!(A, R[i, j, k, c], d, I, c)
+    end
+    return nothing
+end
+
+# Run `hook(member)` for every member in order, unrolled over the tuple so
+# that each call is concrete.
+@inline _each_member(hook::H, ::Tuple{}, m::Int) where {H} = nothing
+@inline function _each_member(hook::H, members::Tuple, m::Int) where {H}
+    hook(first(members), m)
+    return _each_member(hook, Base.tail(members), m + 1)
+end
+
+# The shared blend of the three hooks. `A` is the array a member writes on
+# the plane (`Q`, the flux collection or `dQ`), `route` the pointwise route,
+# and `hook(member)` the member's own call. On a rank owning none of the
+# plane every member still runs, for its collectives.
+function _composite_apply!(hook::H, bc::CompositeBC, solver, A, route, d::Int,
+                           side::Int) where {H}
+    plane = wallplane(solver.decomp, d, side)
+    if plane === nothing
+        _each_member((member, m) -> hook(member), bc.members, 1)
+        return nothing
+    end
+    s = _face_scratch(bc, solver, plane, d, side)
+    n = solver.equations.n_cons
+    plane_pointwise!(_face_save_point!, route, plane, s.saved, A, d, n)
+    _each_member(bc.members, 1) do member, m
+        hook(member)
+        # A member absent from this rank's plane contributes nothing; its
+        # writes are undone by the restore alone.
+        plane_pointwise!(_face_pick_point!, route, plane, s.picked, A, s.saved,
+                         s.mask, Int32(s.present[m] ? m : 0), d, n)
+    end
+    plane_pointwise!(_face_put_point!, route, plane, A, s.picked, d, n)
+    return nothing
+end
+
+enforce!(bc::CompositeBC, Q, solver, d, side) =
+    _composite_apply!(member -> enforce!(member, Q, solver, d, side), bc, solver,
+                      Q, Q, d, side)
+
+correct_flux!(bc::CompositeBC, solver, Q, d, side) =
+    _composite_apply!(member -> correct_flux!(member, solver, Q, d, side), bc,
+                      solver, solver.field_tuples.flux, solver.rho, d, side)
+
+correct_rhs!(bc::CompositeBC, solver, Q, dQ, d, side) =
+    _composite_apply!(member -> correct_rhs!(member, solver, Q, dQ, d, side), bc,
+                      solver, dQ, dQ, d, side)
+
+validate_bc(bc::CompositeBC, metric, eos, d::Int, side::Int) =
+    foreach(member -> validate_bc(member, metric, eos, d, side), bc.members)
+
+sensor_mirror(bc::CompositeBC) = all(member -> sensor_mirror(member) === true,
+                                     bc.members)
+planned_sensor_mirror(bc::CompositeBC) = all(planned_sensor_mirror, bc.members)
+
 "Enforce every boundary condition on the conserved state `Q` in place, over the
 active dimensions only, and return `Q`. No condition CompactLES provides
 communicates here; each acts through `wallplane` and so does nothing on a rank

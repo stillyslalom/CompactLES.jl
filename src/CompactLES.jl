@@ -95,7 +95,7 @@ export NSCBCOutflowBC, NSCBCInflowBC, DirichletBC, save_checkpoint, load_checkpo
 export FieldWriter, DEFAULT_VTK_FIELDS
 export BlockRegion, hdf5_available, hdf5_parallel
 export save_checkpoint_hdf5, load_checkpoint_hdf5!, save_hdf5
-export SwitchableBC, switch!, switched
+export SwitchableBC, switch!, switched, CompositeBC
 export Prim, Problem, Numerics, AMR, setup, initialize!, conserved_from_prim, tanh_blend
 export EOS, IdealSpecies, IdealMixture, nspecies, Transport
 export AbstractTransport, BinaryDiffusion, BinaryDiffusionPolynomial, binary_diffusivity

@@ -51,6 +51,12 @@ switch!
 switched
 ```
 
+## Composite faces
+
+```@docs
+CompositeBC
+```
+
 ## Developer internals: patch-interface markers
 
 `Solver` places these on internal patch faces itself; they are not

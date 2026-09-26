@@ -18,7 +18,7 @@ api_ic(x, y, z) = Prim(rho=1.0, p=1.0)
 const EXPECTED_EXPORTS = Set(Symbol.(split("""
 AMR AbstractTransport ArtParams AtTime AxisBC BandedClosureRow BandedCompactScheme BinaryDiffusion BinaryDiffusionPolynomial BlockRegion
 BoundaryCondition CPUBackend Callback CartesianMetric ClosureRow CompactScheme
-CeaTransport ConservedState ConstantBodyForce CylindricalMetric DEFAULT_VTK_FIELDS
+CeaTransport CompositeBC ConservedState ConstantBodyForce CylindricalMetric DEFAULT_VTK_FIELDS
 DeviceBackend DirichletBC EOS EquationSet EveryStep EveryTime ExtrapolationBC
 FieldWriter FloorTally IdealMixture IdealSpecies MPI Metric NSCBCInflowBC
 NSCBCOutflowBC Nasa9Interval Nasa9Mixture Nasa9Species NavierStokes1T

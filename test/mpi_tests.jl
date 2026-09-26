@@ -2878,6 +2878,68 @@ function test_hydrostatic()
     end
 end
 
+# ---------------------------------------------------------------------------
+# Composite face with its mask divided among the ranks. Four members share
+# the low-x face: a no-slip wall, a Dirichlet stream, a characteristic outflow
+# and a characteristic inflow, over bands of y. Split along y, the face spans
+# every rank and most ranks hold one or two of the members, so the other
+# members' distributed solves run on ranks whose part of the face holds none
+# of their points. Split along x, one rank holds the whole face and the rest
+# none of it. The right-hand side and a few steps are measured against the
+# serial rebuild on COMM_SELF, with and without the artificial properties.
+# ---------------------------------------------------------------------------
+function test_composite_face()
+    section("composite face: members' collectives on ranks without their points")
+    function blockdiff(s, a, ref, b)
+        e = 0.0
+        for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
+            loc = Tuple(I) .- s.decomp.n_halo_d
+            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            e = max(e, abs(Float64(a[I, c] - b[J, c])))
+        end
+        e
+    end
+    ic = (x, y, z) -> begin
+        θ = 0.5 + 0.2 * sin(2π * y)
+        Prim(u=(0.2 + 0.05 * sin(2π * y), 0.05 * cos(2π * y), 0.0),
+             p=1 + 0.02 * sin(2π * y + 1), T_ion=1 + 0.05 * cos(2π * y),
+             Y=(θ, 1 - θ))
+    end
+    stream = (x, y, z, t) -> Prim(u=(0.2, 0.0, 0.0), T_ion=1.0, rho=1.0, Y=(0.6, 0.4))
+    # Bands at the eighths, the y blocks of an eight-rank split.
+    band(y) = y < 0.25 ? 1 : y < 0.375 ? 2 : y < 0.5 ? 3 : y < 0.75 ? 4 : 1
+    function build(comm_here, dims_here, art_on)
+        face = CompositeBC((NoSlipWallBC(), DirichletBC(stream),
+                            NSCBCOutflowBC(pinf=1.0),
+                            NSCBCInflowBC(u=(0.2, 0.0, 0.0), T_ion=1.0, Y=[0.6, 0.4])),
+                           (x, y, z) -> band(y))
+        sol = Solver(n_global=(SPLITN, SPLITN, 1), L_domain=(1.0, 1.0, 1.0),
+                     bcs=((face, NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
+                     eos=IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                                       IdealSpecies{Float64}("b", 0.5, 1.4)]),
+                     comm=comm_here, dims=dims_here,
+                     transport=Transport(mu0=1e-3), art=ArtParams(enabled=art_on),
+                     cfl=0.4)
+        Q = allocate_state(sol)
+        initialize!(sol, Q, ic)
+        apply_bcs!(sol, Q)
+        dQ = zero(Q)
+        compute_rhs!(sol, Q, dQ)
+        return sol, Q, dQ
+    end
+    for art_on in (false, true), ax in (2, 1)
+        s, Q, dQ = build(comm, splitdims(ax), art_on)
+        ref, Qref, dQref = build(MPI.COMM_SELF, (1, 1, 1), art_on)
+        tag = art_on ? ", artificial properties on" : ""
+        check("composite RHS matches serial, split along dim $ax$tag",
+              gmax(blockdiff(s, dQ, ref, dQref)), 1e-10)
+        run!(s, Q; tfinal=1e9, nmax=4)
+        run!(ref, Qref; tfinal=1e9, nmax=4)
+        check("composite run matches serial, split along dim $ax$tag",
+              gmax(blockdiff(s, Q, ref, Qref)), 1e-10)
+    end
+end
+
 include("wall_flux_mpi.jl")
 include("conservation_mpi.jl")
 
@@ -2898,6 +2960,7 @@ const SUITE = (
     ("off-rank folds", test_offrank_folds),
     ("symmetry plane", test_symmetry_plane),
     ("NSCBC inflow", test_nscbc_inflow),
+    ("composite face", test_composite_face),
     ("hydrostatic state", test_hydrostatic),
     ("freestream", test_freestream),
     ("conservation", test_conservation),

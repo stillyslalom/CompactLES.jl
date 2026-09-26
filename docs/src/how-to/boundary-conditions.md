@@ -178,3 +178,30 @@ unreduced rank-local test.
 Both wrapped conditions must agree on periodicity. Coordinate-fold conditions
 cannot be wrapped because setup must identify them before constructing the
 operator plans.
+
+## Divide one face among conditions
+
+[`CompositeBC`](@ref) assigns each point of a face to one of several member
+conditions through a function of the point's coordinates. A jet entering
+through an orifice in a wall is one example:
+
+```julia
+orifice = NSCBCInflowBC(u = (0.0, 0.3, 0.0), T_ion = 1.0,
+                        target = (x, y, z, t) ->
+                            Prim(u = (0.0, abs(x - 0.5) < 0.1 ?
+                                          0.3 * cospi((x - 0.5) / 0.2)^2 : 0.0, 0.0),
+                                 T_ion = 1.0, rho = 1.0))
+face = CompositeBC((NoSlipWallBC(), orifice),
+                   (x, y, z) -> abs(x - 0.5) < 0.1 ? 2 : 1)
+bcs = (NoSlipWallBC(), (face, NoSlipWallBC()), PeriodicBC())
+```
+
+A characteristic inflow over the whole face with zero target velocity outside
+the orifice does not work: the inflow formulation assumes that gas enters
+everywhere on the face, and the flow the jet entrains leaves through the part
+of the face at rest. With the composite, that part is a wall.
+
+Every member runs on every rank, including the collectives of the
+characteristic conditions, and the composite keeps each member's result where
+the selector chose it. The change between members is sharp, so an inflow
+member's target velocity should fall to zero at the edge of its region.

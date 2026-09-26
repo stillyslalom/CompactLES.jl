@@ -365,13 +365,9 @@ filter time-scaling with N1.
   periodic seam, with the conservation and interface-reflection tests of a
   uniformly fine run; the vortex-ring case with the ring formed at the face.
 
-- [ ] **A11 — Start unrefined and refine when tags appear.**
-  A regridded run must refine something at setup, so a feature that forms later
-  (a shock fired from a boundary, an instability) needs an invented region; the
-  hierarchy should admit zero refined levels, create the first when tags appear,
-  and remove the last when they vanish.
-  **Gate:** a quiescent start that refines on the arrival of a boundary-driven
-  shock, serial and MPI, with checkpoints taken before and after.
+- [x] **A11** — A tiled, regridded level may hold no tiles, so a run starts
+  unrefined, refines when tags appear and empties when they vanish; the box
+  keeps its region (commit `1a97ab4`).
 
 - [ ] **A12 — Regrid more than one level, with `max_levels`.**
   Regridding moves one refined level; nested levels are static. Sensor-driven
