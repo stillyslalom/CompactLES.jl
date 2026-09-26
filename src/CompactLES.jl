@@ -68,6 +68,8 @@ include("io_levels.jl")
 include("diagnostics.jl")
 include("viz.jl")
 include("problem.jl")
+include("thermo_states.jl")
+include("regions.jl")
 include("scriptargs.jl")
 include("display.jl")
 
@@ -126,7 +128,7 @@ export StepControl, SolverFailure, max_rate, FloorTally
 export StateReport, state_report, state_valid, validate_state!
 export StateGuard, state_guard
 export Trigger, AtTime, EveryStep, EveryTime, WhenState, Callback, ProgressLog
-export fired!, next_time, rewind!
+export fired!, next_time, rewind!, fires_at_start
 export refresh_primitives!, mixture_density, velocity, total_energy, mass_fraction
 export boundary_plane
 export volume_integral, volume_average, domain_volume, plane_profile
@@ -138,6 +140,10 @@ export profileplot, profileplot!, fieldheatmap, fieldheatmap!, makie_available
 export mix_width, molecular_mixing, species_pdf
 export tke_profile, turbulent_kinetic_energy, dissipation_rate
 export xcoord, global_xcoord, gidx, interior_index, filter_state!
+export thermodynamic_state, mass_fractions, mole_fractions
+export shock_jump, driver_pressure, reflected_shock, shock_tube
+export Shape, Slab, Box, Ellipsoid, Sphere, Cylinder, LevelSet, signed_distance
+export Cells, Layer, Layers, Ramp, Multimode, riemann_interface
 
 __init__() = (__init_threading__(); __init_blas__())
 

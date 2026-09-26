@@ -12,28 +12,47 @@ decisions: `initial` chooses the first region, while `regrid_interval` controls
 whether the solver retags after completed steps.
 
 ```julia
-amr = AMR(initial=(x, y, z, t) -> abs(x - 0.5) < 0.1,
-          regrid_interval=5, tag_buffer=4)
-num = Numerics(n_global=(129, 1, 1), amr=amr)
+AMR(initial = :sensor)                                    # follow the features
+AMR(initial = (x, y, z, t) -> abs(x - 0.5 - 0.2t) < 0.1)  # a prescribed path
+AMR(initial = Sphere((0.5, 0.5, 0.5), 0.1))               # a fixed region
+AMR(initial = [Box((0.2, 0, 0), (0.8, 1, 1)),             # fixed nested levels,
+               Box((0.4, 0, 0), (0.6, 1, 1))])            # finest last
 ```
 
-The physical predicate sees the node's actual coordinates and current solver
-time. It selects nodes independently of root grid indices, and the same
-predicate runs at each regrid check. The predicate's tags are **united** with
-the density and other enabled sensor tags. Set `tag_threshold=Inf` to select
-only the physical predicate when the optional thresholds are all zero.
-`initial=:sensor` uses the enabled criteria on the initialized coarse state.
-The selected nodes are buffered and covered by a coarse-grid box or lattice
-tiles. If no node tags at setup, `setup` throws an `ArgumentError`: choose a
-region explicitly for a uniform state. A `BlockRegion` or vector of nested
-regions can also be supplied as `initial`; a single region may move when
-regridding is enabled, while a multi-level vector remains static.
+Every region is given in physical coordinates. A [`Shape`](@ref), or a vector
+of nested shapes with the finest last, is covered by the nodes of each level's
+parent, with no counting of nodes. A predicate `(x, y, z, t) -> Bool` sees the
+node's coordinates and the solver time and is evaluated again at each regrid
+check, so it can move the region on a prescribed path; `(x, y, z) -> Bool`
+describes a fixed one. A predicate alone selects the region: the density
+criterion defaults to off under a predicate, and giving `tag_threshold`
+explicitly unites the two. `initial=:sensor` uses the enabled criteria on the
+initialized coarse state. The selected nodes are buffered and covered by a
+coarse-grid box or lattice tiles. If no node tags at setup, `setup` throws an
+`ArgumentError`: give a shape for a uniform state.
+
+A refined level stays at least `max(n_halo, 4)` of its parent's nodes inside
+its parent, the root's boundaries included, whether they are walls, open faces
+or periodic seams. A shape or a tagged feature reaching into that band is
+refined only up to it, and a warning says so.
+
+`regrid_interval` defaults to zero, a fixed layout, for a shape, a region or a
+predicate of position alone. For `:sensor` and a time-dependent predicate it
+defaults to `tag_buffer / (2 cfl)` steps, the time a feature moving at the
+CFL limit takes to cross half the buffer, so the feature cannot leave its
+region between checks. `tile = 0`, the default, covers the tags with one box,
+the cheaper cover of a single compact feature. A positive edge covers them with
+lattice tiles so that separated features refine separately rather than as one
+bounding box; each tile carries its own halo and transfer, so a small edge in
+three dimensions costs more than the cells it saves.
+[`BlockRegion`](@ref)s remain available for an exact layout; a single region
+may move when regridding is enabled, while a multi-level vector stays fixed.
 
 | Keyword | Default | Meaning |
 |:--|:--|:--|
-| `initial` | `:sensor` | Initial sensor selection, physical `(x,y,z,t)->Bool`, `BlockRegion`, or nested vector of regions |
-| `regrid_interval` | `0` | Completed root steps between retagging; zero keeps the selected layout fixed |
-| `tag_threshold` | `0.02` | Relative undivided fourth difference of mixture density; `Inf` disables this criterion |
+| `initial` | `:sensor` | Sensor selection, a predicate `(x,y,z,t)->Bool` or `(x,y,z)->Bool`, a `Shape` or nested vector of shapes, or `BlockRegion`s |
+| `regrid_interval` | `nothing` | Completed root steps between retagging; zero keeps the layout fixed; by default fixed for a shape or static predicate and `tag_buffer / (2 cfl)` for a followed feature |
+| `tag_threshold` | `nothing` | Relative undivided fourth difference of mixture density; `0.02` by default, `Inf` (off) under a predicate |
 | `tag_sensor_threshold` | `0` | Artificial diffusivity divided by acoustic cell diffusivity; zero disables |
 | `tag_gradient_threshold` | `0` | Mass-fraction change per coarse cell; zero disables |
 | `tag_vorticity_threshold` | `0` | Vorticity magnitude, in inverse-time units; zero disables |
@@ -47,9 +66,9 @@ regridding is enabled, while a multi-level vector remains static.
 | `level_interpolation_order` | `nothing` | Lagrange order, 2, 4, 6, 8 or 10, of the interpolation that fills fine ghost data and newly refined regions from the parent; `nothing` takes the derivative operator's interior order, two more under `interface_flux = :ghost` |
 | `subcycle` | `false` | At `true`, each fine level takes three steps per parent step with time-interpolated boundary data |
 
-The density criterion is enabled by default, including when `initial` is a
-predicate. The artificial-diffusivity criterion requires artificial transport
-to be enabled. Sensor and gradient thresholds are dimensionless; the
+The density criterion is enabled by default except under a predicate. The
+artificial-diffusivity criterion requires artificial transport to be enabled,
+and `setup` rejects it otherwise. Sensor and gradient thresholds are dimensionless; the
 vorticity threshold uses the run's units of inverse time. The fourth
 difference detects unresolved density changes, while the gradient criterion
 can target a mixing layer with little density contrast. Thresholds determine
@@ -86,7 +105,8 @@ Composite integrals and profiles avoid counting both parent and fine values
 over the same physical region.
 
 `BlockRegion(offset, extent)` uses zero-based offsets and node counts in its
-parent level. A level's fine index corresponding to parent index `g` is
+parent level's lattice over the whole domain, not relative to the parent
+patch; a nesting error prints the admissible offsets. A level's fine index corresponding to parent index `g` is
 `3(g-1)+1`. The solver enforces a coarse-node nesting margin around each
 fine region and a minimum fine patch extent. Explicit regions provide exact
 placement; sensor and predicate placement is clamped to that legal interior.

@@ -75,11 +75,24 @@ The default is a no-op, which is correct for any trigger reading only `step`.
 rewind!(::Trigger, t, step) = nothing
 
 """
+    fires_at_start(trigger, solver) -> Bool
+
+Whether `trigger` is due at the initial state, before any step. [`run!`](@ref)
+asks this once, when it starts from step 0, and runs the effect of each callback
+whose trigger answers `true`, so that a scheduled output includes the initial
+condition. [`AtTime`](@ref) and [`EveryTime`](@ref) answer `true` when one of
+their instants is the initial time, and consume it; the default is `false`.
+The verdict must be identical on every rank.
+"""
+fires_at_start(::Trigger, solver) = false
+
+"""
     AtTime(t)
     AtTime([t1, t2, ...])
 
 Fire once at each listed time. The list is sorted on construction, and `run!`
-shortens `dt` to end a step at the next scheduled instant. Times are
+shortens `dt` to end a step at the next scheduled instant. A listed time equal to
+the initial time fires before the first step. Times are
 visited in order and each fires once; a time behind `solver.t` fires on
 the next completed step. At most one time is consumed per step, so several times
 behind `solver.t` are visited one per step.
@@ -106,6 +119,14 @@ function fired!(trigger::AtTime, solver, Q)
     return true
 end
 
+function fires_at_start(trigger::AtTime, solver)
+    target = next_time(trigger, solver)
+    isfinite(target) && abs(solver.t - target) <= _land_tol(target, solver.t) ||
+        return false
+    trigger.next += 1
+    return true
+end
+
 function rewind!(trigger::AtTime, t, step)
     idx = findfirst(target -> target > t + _land_tol(target), trigger.times)
     trigger.next = idx === nothing ? length(trigger.times) + 1 : idx
@@ -128,7 +149,9 @@ _land_tol(target, t) = _land_tol(oftype(t, max(abs(target), one(target))))
     EveryTime(interval; start = 0.0)
 
 Fire at `start + n*interval` for every integer `n >= 0`, with `run!` ending a step
-at each instant. This is the unbounded counterpart to [`AtTime`](@ref) and produces
+at each instant. An instant at the initial time fires before the first step, so
+`Callback(EveryTime(dt), FieldWriter(...))` writes the initial condition as its
+first frame. This is the unbounded counterpart to [`AtTime`](@ref) and produces
 an evenly spaced output schedule. Unlike a materialized
 `AtTime(start:interval:tfinal)`, it requires no advance `tfinal` and can resume
 from a restart. The next instant is computed from `solver.t` when the trigger is
@@ -171,6 +194,17 @@ function fired!(trigger::EveryTime, solver, Q)
     target = next_time(trigger, solver)
     solver.t >= target - _land_tol(target, solver.t) || return false
     trigger.next = _instant_after(trigger, solver.t)
+    return true
+end
+
+function fires_at_start(trigger::EveryTime, solver)
+    t = solver.t
+    n = round((t - trigger.start) / trigger.interval)
+    n >= 0 || return false
+    inst = trigger.start + n * trigger.interval
+    abs(t - inst) <= _land_tol(inst, t) || return false
+    # The next instant is anchored after t, which `_instant_after` already does.
+    trigger.next = _instant_after(trigger, t)
     return true
 end
 
@@ -260,6 +294,18 @@ rewind_callbacks!(cbs::Tuple, t, step) =
     (rewind_callbacks!(first(cbs), t, step);
      rewind_callbacks!(Base.tail(cbs), t, step))
 rewind_callbacks!(_, t, step) = nothing
+
+# The initial-state pass: only callbacks whose trigger is due at the start run.
+run_start_callbacks!(::Nothing, solver, Q) = false
+run_start_callbacks!(::Tuple{}, solver, Q) = false
+run_start_callbacks!(cb::Callback, solver, Q) =
+    fires_at_start(cb.trigger, solver) && cb.effect!(solver, Q) === true
+function run_start_callbacks!(cbs::Tuple, solver, Q)
+    stop_first = run_start_callbacks!(first(cbs), solver, Q)
+    stop_rest = run_start_callbacks!(Base.tail(cbs), solver, Q)
+    return stop_first || stop_rest
+end
+run_start_callbacks!(_, solver, Q) = false
 
 run_callbacks!(::Nothing, solver, Q) = false
 run_callbacks!(::Tuple{}, solver, Q) = false

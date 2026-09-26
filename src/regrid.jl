@@ -353,6 +353,15 @@ function tagged_region(solver::Solver, Qc)
     tlo, thi = bounds
     margin = spec.margin
     n_global = solver.n_global
+    # Tagged nodes in the margin band cannot be refined; say so once rather
+    # than leave a feature at a boundary silently coarse. The bounds are
+    # reduced, so every rank agrees and only rank 0 speaks.
+    if MPI.Comm_rank(solver.comm) == 0 &&
+       any(d -> n_global[d] > 1 && (tlo[d] <= margin || thi[d] > n_global[d] - margin), 1:3)
+        @warn "AMR: tagged cells lie within $margin root nodes of the domain " *
+              "boundary, where a refined level cannot reach; they stay at the root " *
+              "resolution." maxlog = 1
+    end
     offext = ntuple(3) do d
         n_global[d] > 1 || return (0, 1)
         # Both ends clamp into the feasible interval, so a tagged set inside

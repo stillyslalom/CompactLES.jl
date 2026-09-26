@@ -309,5 +309,5 @@ end
     run!(solver, states; tfinal=0.03, nmax=400, callback=cb)
     @test solver.step < 400
     @test solver.t == 0.03
-    @test fired[] == 3
+    @test fired[] == 4          # t = 0 and the three instants
 end

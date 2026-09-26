@@ -112,7 +112,10 @@ end
 
 @noinline _patch_prop_error(name::Symbol) =
     error("property `$name` is per-patch state and this solver holds several " *
-          "patches; access it through solver.patches or a per-patch driver")
+          "patches (a refined or patched run). Pass the state vector to a " *
+          "diagnostic that takes it (line_profile, field_array, mix_width, " *
+          "save_vtk), or iterate `for (ps, Q) in eachpatch(solver, states)`, " *
+          "where `ps.$name` is one patch's array")
 
 """
 Union of the two objects the compute path accepts: a (single-patch) `Solver`,
@@ -483,10 +486,18 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                               "$d with offset 0 and extent 1")
                 end
             end
-            _covered_by(_buffered(rg, active_g, margin), parent_regions) ||
-                error("level $ℓ region must be nested at least $margin " *
+            if !_covered_by(_buffered(rg, active_g, margin), parent_regions)
+                p = only(parent_regions)
+                ranges = join(("offset $(p.offset[d] + margin):" *
+                               "$(p.offset[d] + p.extent[d] - margin - rg.extent[d]) " *
+                               "along dimension $d" for d in 1:3 if active_g[d]), ", ")
+                error("level $ℓ region $rg must be nested at least $margin " *
                       "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches' " *
-                      "own (not imposed) nodes")
+                      "own (not imposed) nodes: with its extent that is $ranges, " *
+                      "counted on the level-$(ℓ - 1) lattice over the whole domain. " *
+                      "AMR(initial = [shape, ...]) takes the levels as shapes in " *
+                      "physical coordinates instead")
+            end
             # The next level reads this one's own nodes: a one-patch level's
             # boundary planes are imposed data and are eroded (the tiled
             # cover is checked face by face at construction).

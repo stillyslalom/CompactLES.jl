@@ -264,6 +264,13 @@ only when the relaxation time `Lref / (eta c)` is short against its passage
 time, which the default rates do not give; the error of its imposition then
 falls as `1 / eta`.
 
+The formulation assumes that gas enters through the whole face. A target with
+zero velocity over part of the face, such as a jet through an orifice with the
+rest of the face at rest, lets the flow the jet entrains leave through that
+part, which the inflow characteristics do not describe; under fast relaxation
+the outflow grows until the state fails. Hold such a face with a
+[`DirichletBC`](@ref) instead.
+
 Use `DirichletBC`, not NSCBC inflow, for a supersonic boundary or one whose
 full state is to be forced. As for the outflow, the formulation covers only faces
 whose normal metric scale factor is one, and [`setup`](@ref) rejects an angular

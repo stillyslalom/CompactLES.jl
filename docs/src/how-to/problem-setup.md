@@ -45,6 +45,68 @@ instead remain fixed in physical units during a refinement study. A
 two-cell transition describes regularization of a sharp interface, not a
 material mixing length.
 
+## Build a state from regions
+
+A state made of several gases or several regions, such as a shocked gas, the
+gas ahead of the shock and a second gas beyond an interface, is written as a
+[`Layers`](@ref) initial condition: a background state overlaid by regions,
+each a [`Shape`](@ref) paired with a `Prim`.
+
+```julia
+eos = Nasa9Mixture(["Air", "SF6"])
+air = Prim(Y = mass_fractions(eos, "Air" => 1.0; basis = :mole),
+           p = 101_325.0, T_ion = 295.0)
+sf6 = Prim(Y = mass_fractions(eos, "SF6" => 1.0; basis = :mole),
+           p = 101_325.0, T_ion = 295.0)
+shocked = shock_jump(eos, air, 1.5).post
+
+initial = Layers(air,
+                 Slab(1, hi = 0.20) => shocked,
+                 Slab(1, lo = (y, z) -> 0.25 + 0.002cos(2π * y / 0.05)) => sf6)
+```
+
+A later region covers an earlier one where they overlap. The shapes are
+[`Slab`](@ref) (between two bounds along one axis, either of which may be a
+function of the other two coordinates), [`Box`](@ref), [`Sphere`](@ref),
+[`Ellipsoid`](@ref), [`Cylinder`](@ref) and [`LevelSet`](@ref) for any other
+region, combined with `∪`, `∩`, `setdiff` and `!`. A shape ignores collapsed
+directions, so a `Sphere` is a disc in a planar run.
+
+Each region boundary is a tanh transition. `width = Cells(n)` gives it `n`
+local mesh spacings, the default being three; a plain number gives a physical
+thickness. Within a transition the states are mixed as volumes of gas: the
+partial densities, momentum and pressure are volume-weighted, and the
+temperature follows from the EOS. Two regions at the same pressure therefore
+stay at that pressure through the transition, whatever their gases and
+temperatures, and the transition adds no acoustic disturbance. Weighting the
+temperature or the energy instead does not have this property when the two
+gases differ in heat capacity ratio.
+
+[`mass_fractions`](@ref) orders a composition given by species name, in mole
+or mass fractions, and the `:X` output field reports mole fractions.
+
+## Shocked states
+
+[`shock_jump`](@ref) returns the state behind a normal shock of given Mach
+number from the Rankine–Hugoniot relations, evaluated through the EOS, so a
+[`Nasa9Mixture`](@ref) gets the jump of its temperature-dependent heat
+capacities. [`shock_tube`](@ref) adds the driver pressure the shock requires
+and the reflection from a closed end, and [`thermodynamic_state`](@ref)
+reports density, temperature, sound speed and the other derived quantities of
+any `Prim`. The post-shock state carries pressure and temperature, so it serves
+directly as a region of a `Layers` initial condition and as the target of an
+inflow condition:
+
+```julia
+incident = shock_jump(eos, air, 1.5)
+bcs = ((NSCBCInflowBC(incident.post), SlipWallBC()), PeriodicBC(), PeriodicBC())
+```
+
+Placing the shock inside the initial domain avoids starting it at a boundary.
+A boundary target that switches discontinuously in time takes effect in the
+middle of a Runge–Kutta step, so its stages disagree about the boundary, and
+the jump at the face has not yet been spread over any cells.
+
 ## Assemble the physical specification
 
 ```julia

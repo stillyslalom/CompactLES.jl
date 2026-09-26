@@ -159,11 +159,16 @@ Rank-local and non-collective. Each rank writes only its own block, so the
 halos hold whatever they held before and a caller needing them current must
 exchange afterwards; [`run!`](@ref) and [`step!`](@ref) do so themselves.
 """
-initialize!(solver::SolverLike, Q, ic) = _initialize!(solver, solver.eos, Q, ic)
+initialize!(solver::SolverLike, Q, ic) =
+    _initialize!(solver, solver.eos, Q, _bind_initial(ic, solver))
 
 initialize!(solver::Solver, states::Vector{<:ConservedState}, ic) =
-    (foreach(((ps, Q),) -> _initialize!(ps, ps.eos, Q, ic),
+    (foreach(((ps, Q),) -> _initialize!(ps, ps.eos, Q, _bind_initial(ic, ps)),
              eachpatch(solver, states)); states)
+
+# An initial condition that needs the run's EOS or its resolved directions
+# (a `Layers`, regions.jl) is completed here; a plain function is used as is.
+_bind_initial(ic, solver) = ic
 
 function _initialize!(solver::SolverLike, eos, Q, ic)
     if _cpu_storage(Q)
@@ -519,6 +524,19 @@ The boundary condition is parameterized by the callback type. Storing
 struct DirichletBC{F} <: BoundaryCondition
     fun::F
 end
+
+"""
+    DirichletBC(state::Prim)
+
+A constant [`DirichletBC`](@ref) holding `state` on the whole face, for
+example the post-shock state from [`shock_jump`](@ref) at a supersonic inflow.
+"""
+DirichletBC(state::Prim) = DirichletBC(_ConstantState(state))
+
+struct _ConstantState{N}
+    state::Prim{N}
+end
+(c::_ConstantState)(x1, x2, x3, t) = c.state
 
 function enforce!(bc::DirichletBC, Q, solver, d, side)
     plane = wallplane(solver.decomp, d, side)

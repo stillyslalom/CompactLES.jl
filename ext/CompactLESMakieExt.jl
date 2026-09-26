@@ -89,6 +89,7 @@ function _field_label(name::Symbol, species::Int)
     name === :p && return "p"
     name === :T_ion && return "T"
     name === :Y && return "Y$(species)"
+    name === :X && return "X$(species)"
     name === :D_art && return "D_art$(species)"
     return String(name)
 end

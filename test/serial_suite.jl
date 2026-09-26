@@ -3660,10 +3660,11 @@ end
     run!(solver, Q; tfinal=0.03,
          callback=Callback(EveryTime(0.01), writer))
 
-    # One frame per instant, numbered from zero, with the directory created.
-    @test writer.index == 3
-    @test writer.times ≈ [0.01, 0.02, 0.03] rtol = 1e-14
-    for m in 0:2
+    # One frame per instant, the initial state first, numbered from zero, with
+    # the directory created.
+    @test writer.index == 4
+    @test writer.times ≈ [0.0, 0.01, 0.02, 0.03] rtol = 1e-14
+    for m in 0:3
         @test isfile(CL.frame_prefix(writer, m) * ".pvtr")
         @test filesize(CL.frame_prefix(writer, m) * ".pvtr") > 0
     end
@@ -3672,10 +3673,10 @@ end
     # frame index, so its timesteps are the assertion.
     pvd = read(joinpath(dir, "frames", "field.pvd"), String)
     @test occursin("type=\"Collection\"", pvd)
-    @test count("<DataSet", pvd) == 3
+    @test count("<DataSet", pvd) == 4
     stamps = [parse(Float64, m.captures[1])
               for m in eachmatch(r"timestep=\"([^\"]+)\"", pvd)]
-    @test stamps ≈ [0.01, 0.02, 0.03] rtol = 1e-14
+    @test stamps ≈ [0.0, 0.01, 0.02, 0.03] rtol = 1e-14
     # Pieces are named relative to the .pvd's own directory rather than by
     # absolute path, so the collection remains readable on another machine.
     @test occursin("file=\"field_0000.pvtr\"", pvd)
@@ -3799,12 +3800,21 @@ end
         solver, Q
     end
 
-    # Every instant is landed on exactly, and none is skipped.
+    # Every instant is landed on exactly, and none is skipped; the instant at
+    # the initial time fires before the first step.
     solver, Q = mkrun()
     hits = Float64[]
     run!(solver, Q; tfinal=0.05,
          callback=Callback(EveryTime(0.01), (s, _) -> (push!(hits, s.t); nothing)))
-    @test hits ≈ collect(0.01:0.01:0.05) rtol = 1e-14
+    @test hits ≈ collect(0.0:0.01:0.05) rtol = 1e-14
+    @test solver.step > 0 && count(iszero, hits) == 1
+
+    # AtTime fires at a listed initial time too, and only once.
+    solver, Q = mkrun()
+    hits = Float64[]
+    run!(solver, Q; tfinal=0.02,
+         callback=Callback(AtTime([0.0, 0.01]), (s, _) -> (push!(hits, s.t); nothing)))
+    @test hits ≈ [0.0, 0.01] rtol = 1e-14
 
     # Anchored to solver.t on first use, not to zero: a restarted run picks up at
     # the next instant rather than replaying the schedule.
@@ -4573,6 +4583,7 @@ include("reference_tests.jl")
 include("api_surface_tests.jl")
 include("pointwise_callbacks_tests.jl")
 include("amr_frontend_tests.jl")
+include("initial_states_tests.jl")
 include("boundary_shorthand_tests.jl")
 
 # HDF5 is a weak dependency and is not loadable from the package environment

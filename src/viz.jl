@@ -26,12 +26,12 @@ composes with the reductions in diagnostics.jl (`plane_profile`,
 `name` is resolved through [`scalar_field`](@ref), the catalog
 [`save_vtk`](@ref) also uses, so the available names are identical: stored
 primitives (`:rho`, `:p`, `:T_ion`, `:c`, `:u`, `:v`, `:w`), the per-species
-`:Y` and `:D_art` (selected with `species`), and derived scalars (`:mach`,
-`:divergence`, `:vorticity_magnitude`, `:qcriterion`, `:schlieren`,
-`:strain_mag`, `:sensor`, `:mu_art`, `:beta_art`, `:kappa_art`).
+`:Y`, `:X` (mole fraction) and `:D_art` (selected with `species`), and derived
+scalars (`:mach`, `:divergence`, `:vorticity_magnitude`, `:qcriterion`,
+`:schlieren`, `:strain_mag`, `:sensor`, `:mu_art`, `:beta_art`, `:kappa_art`).
 
-`species` selects the array for `:Y` and `:D_art` and is ignored by every other
-name.
+`species` selects the array for `:Y`, `:X` and `:D_art` and is ignored by every
+other name.
 
 Every rank must call this function because it calls
 [`refresh_primitives!`](@ref), and a derived name runs the gradient pass and,
@@ -57,6 +57,42 @@ function field_array(solver::Solver, Q, name::Symbol; species::Int=1)
         return Array(scalar_field(solver, name; species=species))
     end
 end
+
+"""
+    field_array(solver, states::Vector, name::Symbol; species = 1) -> Vector{Array}
+
+The multi-patch form, for the state vector of a refined or patched run: one
+refreshed copy of the named field per patch this rank holds, aligned with
+`solver.patches`. This is the form the composite diagnostics take
+([`plane_profile`](@ref), [`volume_integral`](@ref)). Every rank must call it.
+"""
+function field_array(solver::Solver, states::Vector{<:ConservedState}, name::Symbol;
+                     species::Int=1)
+    patches = getfield(solver, :patches)
+    return preserving_artificial(solver, _wants_artificial(name)) do
+        map(eachindex(patches)) do li
+            ps = PatchSolver(solver, patches[li])
+            Q = states[li]
+            if _wants_gradients(name) || _wants_artificial(name)
+                compute_primitives_and_gradients!(ps, Q)
+                _wants_artificial(name) && compute_artificial!(ps, Q)
+            else
+                refresh_primitives!(ps, Q)
+            end
+            Array(scalar_field(ps, name; species=species))
+        end
+    end
+end
+
+"""
+    volume_integral(solver, Q, name::Symbol; species = 1) -> Float64
+
+∫ f dV of the named field, for a single state or the state vector of a
+refined run, through [`field_array`](@ref). Every rank must call it.
+"""
+volume_integral(solver::Solver, Q::Union{ConservedState,Vector{<:ConservedState}},
+                name::Symbol; species::Int=1) =
+    volume_integral(solver, field_array(solver, Q, name; species=species))
 
 # --- Line profiles ----------------------------------------------------------
 
@@ -85,6 +121,20 @@ function line_profile(solver::Solver, Q, name::Symbol; dim::Int=1, species::Int=
     coord = profile_coordinate(solver, dim)
     value = plane_profile(solver, f, dim)
     return coord, value
+end
+
+"""
+    line_profile(solver, states::Vector, name; dim = 1, species = 1) -> (coord, value)
+
+The composite profile of a refined or patched run, at the root's stations:
+each plane average combines the uncovered root nodes with the coinciding
+nodes of every finer patch, as the composite [`plane_profile`](@ref) does.
+"""
+function line_profile(solver::Solver, states::Vector{<:ConservedState}, name::Symbol;
+                      dim::Int=1, species::Int=1)
+    1 <= dim <= 3 || throw(ArgumentError("line_profile: dim must be 1, 2, or 3"))
+    fs = field_array(solver, states, name; species=species)
+    return profile_coordinate(solver, dim), plane_profile(solver, fs, dim)
 end
 
 """
@@ -250,7 +300,7 @@ for a single-patch solver and one patch for the patch-layout form.
   of node `i` along dimension `d`, stretch mapping and fold offset included.
   The grid is their tensor product.
 - `fields`: a `Dict{Symbol,Array}` keyed by the requested names. A scalar is an
-  `n1 × n2 × n3` array. `:Y` and `:D_art` carry a fourth dimension over
+  `n1 × n2 × n3` array. `:Y`, `:X` and `:D_art` carry a fourth dimension over
   species, and `:velocity` and `:vorticity` a fourth of length 3 over
   components along the metric's own directions (`(u_r, u_θ, u_z)` on a
   cylindrical grid), not rotated into the Cartesian frame.
@@ -357,7 +407,7 @@ function field_snapshot(solver::Solver, states::Vector{<:ConservedState};
     return _snapshot(solver, states, fields)
 end
 
-const _SNAPSHOT_STACKED = (:velocity, :vorticity, :Y, :D_art)
+const _SNAPSHOT_STACKED = (:velocity, :vorticity, :Y, :X, :D_art)
 
 function _snapshot(solver::Solver, states, fields)
     names = Tuple(fields)
@@ -396,6 +446,8 @@ function _snapshot_block(ps::PatchSolver, names)
         name === :velocity && return stacked((ps.u, ps.v, ps.w))
         name === :vorticity && return stacked(_vorticity_arrays(ps))
         name === :Y && return stacked(ps.Y)
+        name === :X && return stacked(ntuple(sp -> _mole_fraction_array(ps, sp),
+                                             ps.equations.n_species))
         name === :D_art && return stacked(ps.D_art)
         return grab(scalar_field(ps, name))
     end

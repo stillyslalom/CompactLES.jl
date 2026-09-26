@@ -767,8 +767,8 @@ function test_callback_consistency()
     ticks = Float64[]
     run!(s_e, Q_e; tfinal=0.009,
          callback=Callback(EveryTime(0.003), (s, _) -> (push!(ticks, s.t); nothing)))
-    tick_spread = length(ticks) == 3 ? 0.0 : Inf
-    for (m, want) in enumerate((0.003, 0.006, 0.009))
+    tick_spread = length(ticks) == 4 ? 0.0 : Inf
+    for (m, want) in enumerate((0.0, 0.003, 0.006, 0.009))
         m <= length(ticks) || break
         tick_spread = max(tick_spread, abs(ticks[m] - want),
                           MPI.Allreduce(ticks[m], max, comm) -
@@ -922,7 +922,8 @@ function test_field_writer()
                                                    rho=1.0)),
                       Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
     writer = FieldWriter(joinpath("mpi_frames", "field"))
-    # The piece and container counts below assume three frames; the run is only
+    # The piece and container counts below assume four frames, the initial
+    # state and three instants; the run is only
     # as long as it takes to produce them, since
     # every check here is on the files rather than on the state in them. The
     # interval is a little over one CFL step, so the frames still land on
@@ -935,8 +936,9 @@ function test_field_writer()
           MPI.Allreduce(writer.index, max, comm) -
           MPI.Allreduce(writer.index, min, comm), 0.5)
     tspread = 0.0
-    for m in 1:min(writer.index, 3)
-        tspread = max(tspread, abs(writer.times[m] - 0.002m),
+    # Four frames: the initial state and three instants.
+    for m in 1:min(writer.index, 4)
+        tspread = max(tspread, abs(writer.times[m] - 0.002(m - 1)),
                       MPI.Allreduce(writer.times[m], max, comm) -
                       MPI.Allreduce(writer.times[m], min, comm))
     end
@@ -945,15 +947,15 @@ function test_field_writer()
     # One piece per rank per frame, one container per frame, one collection.
     MPI.Barrier(comm)
     counted = rank == 0 ? length(filter(endswith(".vtr"), readdir("mpi_frames"))) : 0
-    check("one .vtr piece per rank per frame", abs(gsum(counted) - 3 * np), 0.5)
+    check("one .vtr piece per rank per frame", abs(gsum(counted) - 4 * np), 0.5)
     containers = rank == 0 ? length(filter(endswith(".pvtr"), readdir("mpi_frames"))) : 0
-    check("one .pvtr container per frame", abs(gsum(containers) - 3), 0.5)
+    check("one .pvtr container per frame", abs(gsum(containers) - 4), 0.5)
     pieces = rank == 0 ?
         count("<Piece", read(joinpath("mpi_frames", "field_0000.pvtr"), String)) : 0
     check("container lists every rank's piece", abs(gsum(pieces) - np), 0.5)
     sets = rank == 0 ?
         count("<DataSet", read(joinpath("mpi_frames", "field.pvd"), String)) : 0
-    check("collection written once, by rank 0", abs(gsum(sets) - 3), 0.5)
+    check("collection written once, by rank 0", abs(gsum(sets) - 4), 0.5)
 
     MPI.Barrier(comm)
     rank == 0 && rm("mpi_frames"; recursive=true)
@@ -2524,7 +2526,7 @@ function test_level_subset()
     check("one-rank level: callback fired equally on every rank",
           spread(firesL), 0.5)
     check("one-rank level: callback fired as serially",
-          abs(firesL - 2), 0.5)
+          abs(firesL - 3), 0.5)
 
     # Regridding under subset ownership: the region grows from 8 coarse nodes
     # (22 fine, two ranks) to 25 (73 fine, eight), so the subset is resized

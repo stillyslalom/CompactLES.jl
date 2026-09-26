@@ -21,7 +21,7 @@ end
         solver, states = setup(amr_test_problem(),
             Numerics(n_global=(n, 1, 1), filter_interval=0,
                      art=ArtParams(enabled=false),
-                     amr=AMR(initial=selector, tag_buffer=2)))
+                     amr=AMR(initial=selector, tag_buffer=2, regrid_interval=0)))
         region = refined_region(solver)
         center = (region.offset[1] + region.extent[1] / 2) / n
         @test abs(center - 0.65) < 6 / n

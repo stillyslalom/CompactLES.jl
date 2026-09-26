@@ -930,6 +930,20 @@ _vorticity_arrays(solver::SolverLike) = begin
     (w1, w2, w3)
 end
 
+# Mole (number) fraction of one species over the padded array, through the EOS
+# contract's `mole_fraction`, which the species channels of the artificial
+# diffusivity also read.
+function _mole_fraction_array(solver::SolverLike, species::Int)
+    out = similar(solver.rho)
+    eos = solver.eos
+    Y = solver.Y
+    n_species = solver.equations.n_species
+    @inbounds for I in CartesianIndices(out)
+        out[I] = mole_fraction(eos, species, Y, I, n_species)
+    end
+    return out
+end
+
 function _scalar_from(solver::SolverLike, f)
     out = similar(solver.rho)
     @inbounds for idx in eachindex(out)
@@ -942,7 +956,7 @@ end
 Scalar report variables that [`scalar_field`](@ref) resolves to a full padded
 array, in the order its error message lists them. The vector names (`:velocity`,
 `:vorticity`) are not among them, since `scalar_field` rejects those; the
-species-expanded names (`:Y`, `:D_art`) are omitted because they name one array
+species-expanded names (`:Y`, `:X`, `:D_art`) are omitted because they name one array
 per species, which [`vtk_field_entries`](@ref) and the viz wrappers expand.
 """
 const SCALAR_FIELD_NAMES = (:rho, :p, :T_ion, :c, :u, :v, :w, :mach, :divergence,
@@ -964,7 +978,8 @@ The stored fields are returned as the solver's own arrays, not as copies,
 so writing to the result writes to the solver: `:rho`, `:p`, `:T_ion`, `:c`, the
 velocity components `:u`/`:v`/`:w`, the per-species `:Y` and `:D_art` (selected
 by `species`), and `:strain_mag`, `:sensor`, `:mu_art`, `:beta_art`,
-`:kappa_art`. The derived names `:mach`, `:divergence`, `:vorticity_magnitude`,
+`:kappa_art`. The per-species mole (number) fraction `:X` and the derived names
+`:mach`, `:divergence`, `:vorticity_magnitude`,
 `:qcriterion` and `:schlieren` allocate a new array, and assume the relevant
 gradient and artificial passes have run; `save_vtk` and `field_array`
 arrange that, and `field_array` also copies in every case.
@@ -992,6 +1007,8 @@ function scalar_field(solver::SolverLike, name::Symbol; species::Int=1)
         return solver.w
     elseif name === :Y
         return solver.Y[species]
+    elseif name === :X
+        return _mole_fraction_array(solver, species)
     elseif name === :D_art
         return solver.D_art[species]
     elseif name === :mach
@@ -1031,7 +1048,7 @@ function scalar_field(solver::SolverLike, name::Symbol; species::Int=1)
                         "rho, p, T_ion, c, u, v, w, mach, divergence, " *
                         "vorticity_magnitude, qcriterion, schlieren, strain_mag, " *
                         "sensor, mu_art, beta_art, kappa_art; and per-species " *
-                        "Y, D_art (also velocity, vorticity as vectors)"))
+                        "Y, X, D_art (also velocity, vorticity as vectors)"))
 end
 
 """
@@ -1045,8 +1062,8 @@ them. `rotate` requests the rotation of a vector field's coordinate-aligned
 components into the Cartesian frame, which the curvilinear `.vts` grids need and
 the rectilinear ones do not; it has no effect on a scalar name.
 
-Most names produce a single entry via [`scalar_field`](@ref). `:Y` and `:D_art`
-produce one entry per species, and `:velocity` and `:vorticity` produce one
+Most names produce a single entry via [`scalar_field`](@ref). `:Y`, `:X` and
+`:D_art` produce one entry per species, and `:velocity` and `:vorticity` produce one
 three-component entry. `Q` is taken for uniformity with the rest of the write
 path and is not read.
 """
@@ -1060,6 +1077,9 @@ function vtk_field_entries(solver::SolverLike, Q, name::Symbol, rotate::Bool, ra
         return E[("vorticity", 3, _interior_vector(solver, w1, w2, w3, rotate, ranges))]
     elseif name === :Y
         return E[("Y$(sp)", 1, _interior(solver, solver.Y[sp], ranges))
+                 for sp in 1:solver.equations.n_species]
+    elseif name === :X
+        return E[("X$(sp)", 1, _interior(solver, _mole_fraction_array(solver, sp), ranges))
                  for sp in 1:solver.equations.n_species]
     elseif name === :D_art
         return E[("D_art$(sp)", 1, _interior(solver, solver.D_art[sp], ranges))
@@ -1109,7 +1129,8 @@ dump; use [`FieldWriter`](@ref) for a sequence.
 |---|---|
 | `:rho`, `:p`, `:T_ion`, `:c` | density, pressure, temperature, sound speed |
 | `:velocity` | three-component velocity |
-| `:Y` | one scalar per species |
+| `:Y` | mass fraction, one scalar per species |
+| `:X` | mole (number) fraction, one scalar per species |
 | `:mach` | \\|u\\|/c |
 | `:divergence` | ∇·u |
 | `:vorticity`, `:vorticity_magnitude` | ∇×u and its magnitude |

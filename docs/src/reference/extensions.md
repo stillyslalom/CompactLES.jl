@@ -130,6 +130,7 @@ rollback must restore trigger state. Pair the trigger with
 fired!
 next_time
 rewind!
+fires_at_start
 ```
 
 ## Sources

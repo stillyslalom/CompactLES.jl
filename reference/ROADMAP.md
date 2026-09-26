@@ -98,6 +98,21 @@ details are in [DESIGN.md](DESIGN.md).
   are the `:neutral3` defaults of C8 and C10 as well (commit `de30ccc`).
 - [x] **N6l** — `SymmetryPlaneBC` folds a slip wall on a face-centred mirror and
   reads the interior order, for a single unrefined patch (commit `8a5bdfe`).
+- [ ] **N6m — Admit higher-order wall closures behind an initial-data check.**
+  A production closure must take a singular start on its own rows, so every
+  derivative operator uses third-order rows at a wall and C8 and C10 gain
+  nothing on a wall-bounded run. C6 `:brady_livescu` holds the wall wherever
+  the cascade rows do and fails only when singular data sit on the closure
+  rows themselves; C8 `:brady_livescu` needs the front tens of cells from the
+  wall. Replace the singular-start requirement for opt-in higher-order rows
+  with a setup-time check of the initial state near each closed edge that
+  raises an error on data the rows cannot take, and qualify the rows on the
+  starts the check admits
+  ([wall closures in production](CALIBRATION_APPENDIX.md#wall-closures-in-production)).
+  Known obstacles: the Brady–Livescu rows grow at some line lengths under the
+  default filter, and no C8 or C10 set holds the warm starts
+  ([the fifth-order closure search](CALIBRATION_APPENDIX.md#the-fifth-order-closure-search)).
+  **Depends on:** N6b and N6j.
 
 - [x] **N7** — `NSCBCInflowBC` carries the Yoo–Im transverse terms on every
   incoming wave, at the full share by default, measured on an oblique pulse
@@ -163,7 +178,7 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
   differenced through interface ends from ghost fluxes, a same-level face's taken
   from the neighbour's flux records and a coarse-fine face's from the shell's
   gradient ring; viscous interface rows read 6.1–6.8, and promotion moves to
-  N15b (commit pending).
+  N15b (commit `decf45a`).
 
 - [ ] **N15b — Promote `interface_flux = :ghost` to the default.** The ghost
   path leads the closure rows on every smooth row, inviscid and viscous, keeps
@@ -187,7 +202,7 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
 - [x] **N17** — `level_interpolation_order` defaults to the derivative
   operator's interior order, two more under `interface_flux = :ghost` up to 10;
   order 10 is exact to degree 9 behind the four-node buffer, and a C6 run under
-  the closure rows is unchanged (commit pending).
+  the closure rows is unchanged (commit `decf45a`).
 
 Boundary/interface sequence: the N6 matrix (`bench/boundaryorder.jl`, gated in
 `test/convergence.jl`), N6a's trial battery (`bench/wallfilter.jl`) and N6b's
@@ -334,14 +349,78 @@ filter time-scaling with N1.
   boundaries must still allow solver-owned fusion and optional bulk evaluation.
 
 - [ ] **A9 — Accept symbolic field selectors in composite AMR diagnostics.**
-  Support calls such as `line_profile(solver, states, :rho)` and symbolic
-  selectors for composite profiles and integrals, including species selection,
-  without requiring callers to extract one field array per patch. Reuse the
-  existing composite weighting and covered-node masking, refresh primitives
+  `field_array`, `line_profile` and `volume_integral` take the state vector and
+  a name; `line_sample`, `field_slice` and the Makie recipes do not yet. Reuse
+  the existing composite weighting and covered-node masking, refresh primitives
   safely, and document sampling and collective-call semantics.
   **Gate:** agreement with explicit per-patch fields on static, tiled, and
   regridded hierarchies in serial and MPI; diagnostics leave the trajectory
   unchanged. Simplify the AMR tutorial to exercise the symbolic route.
+
+- [ ] **A10 — Let a refined level reach and cross the domain boundary.**
+  Every level now stays `max(n_halo, 4)` parent nodes inside its parent, so a
+  feature at a wall, an inflow face, or across a periodic seam stays coarse
+  (a warning now says so for a box and for shapes; the tiled path drops the
+  margin band silently). AMReX-style grids touch physical faces and wrap
+  periodic ones. Needs boundary conditions evaluated on fine patches, a
+  periodic image of the parent box gather, and wrapped tile regions.
+  The target case is the 3-D vortex ring fired from a tube's top face into an
+  air/SF6 interface and then shocked through it (the axisymmetric form is
+  `examples/vortex_ring_shock.jl`): the ring forms at the injector face, so
+  without this item it can only be formed inside the domain by a body force.
+  In that workaround one refined box follows the ring well; lattice tiles of
+  small edge cost many times more per step than the box for a compact feature.
+  **Gate:** a shock and an interface followed into a wall and through a
+  periodic seam, with the conservation and interface-reflection tests of a
+  uniformly fine run; the vortex-ring case with the ring formed at the face.
+
+- [ ] **A11 — Start unrefined and refine when tags appear.**
+  A regridded run must refine something at setup, so a feature that forms later
+  (a shock fired from a boundary, an instability) needs an invented region; the
+  hierarchy should admit zero refined levels, create the first when tags appear,
+  and remove the last when they vanish.
+  **Gate:** a quiescent start that refines on the arrival of a boundary-driven
+  shock, serial and MPI, with checkpoints taken before and after.
+
+- [ ] **A12 — Regrid more than one level, with `max_levels`.**
+  Regridding moves one refined level; nested levels are static. Sensor-driven
+  nesting to a requested depth is the common AMR interface (AMReX `max_level`,
+  Trixi's `AMRController`, Basilisk `adapt_wavelet(..., maxlevel)`).
+  **Depends on:** the level-ℓ tag sweep over tiled parents.
+  **Gate:** a three-level shock–interface run whose finest level follows the
+  feature, against a uniformly fine reference.
+
+- [ ] **A13 — Refinement scope beyond uniform Cartesian grids.**
+  Refinement rejects cylindrical and spherical metrics, stretched grids,
+  symmetry planes, pentadiagonal filters and the `:d8` detector, which rules out
+  the axisymmetric shock-tube and vortex-ring configurations. Each needs its
+  transfer closures and fold-aware gathers; order them by use.
+  **Gate:** per extension, the refined-versus-uniform convergence rows of
+  `test/convergence.jl`.
+
+- [ ] **A14 — Discretely balanced hydrostatic initial states.**
+  A Rayleigh–Taylor start under `ConstantBodyForce` needs a density and pressure
+  profile in discrete balance with the solver's own derivative operator, per
+  region of a `Layers` initial condition, or the first steps launch acoustic
+  waves of order h⁶ g L. Provide a constructor integrating the balance on the
+  grid (it needs `h`, which `Layers` already receives).
+  **Gate:** a stratified two-fluid column that stays at rest to round-off over
+  many acoustic times.
+
+- [ ] **A15 — Composite faces: different conditions over parts of one face.**
+  A face takes one condition, so neither a jet through an orifice in a wall nor
+  the outflow slots of a vertical shock tube, which set up an air/SF6
+  stagnation plane by venting both gases through the side walls at the
+  interface height, can be expressed. Written as a characteristic inflow over
+  the whole face with zero target velocity outside the orifice, a 150 m/s jet
+  drew gas out through the face beside it (the inflow formulation assumes
+  inflow) until the outflow reached 425 m/s and the density went negative, with
+  the far end closed or open. A face condition selecting a condition per point
+  from a mask of face coordinates, with every member's collectives hoisted as
+  `nscbc.jl` does, expresses both.
+  **Gate:** a jet through a walled orifice into a closed box conserves mass to
+  the injected amount; a two-slot stagnation-plane flow reaches a steady
+  interface.
 
 ## P2: scale, devices, I/O, and geometry
 

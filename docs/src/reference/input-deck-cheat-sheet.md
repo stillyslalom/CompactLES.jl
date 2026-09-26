@@ -43,6 +43,16 @@ resolutions or schemes.
 omitted quantity remains `NaN` in the object; it is derived only during
 `conserved_from_prim`.
 
+| Need | Use |
+|---|---|
+| Composition by species name | `mass_fractions(eos, "He" => 0.95, "Air" => 0.05; basis=:mole)` |
+| Derived quantities (`rho`, `c`, `gamma`, `h`, ...) | `thermodynamic_state(eos, prim)` |
+| Post-shock state | `shock_jump(eos, pre, Mach).post` |
+| Shock-tube states and driver pressure | `shock_tube(eos, driver, driven, Mach)` |
+| Several regions with smooth transitions | `Layers(background, shape => prim, ...; width=Cells(3))` |
+| Shapes | `Slab`, `Box`, `Sphere`, `Ellipsoid`, `Cylinder`, `LevelSet`; `∪`, `∩`, `setdiff`, `!` |
+| Constant boundary state | `DirichletBC(prim)`, `NSCBCInflowBC(prim)` |
+
 ## Physical model: `Problem`
 
 ```julia
@@ -260,12 +270,15 @@ run!(solver, Q; tfinal=1.0, nmax=100_000, callback=cb)
 
 `quantity` is any `(solver, Q) -> Real`, such as `volume_integral` or the
 diagnostics on the [Diagnostics](@ref) page. `fields` is a tuple drawn from
-`:rho`, `:p`, `:T_ion`, `:c`, `:velocity`, `:Y`, `:mach`, `:divergence`,
+`:rho`, `:p`, `:T_ion`, `:c`, `:velocity`, `:Y`, `:X` (mole fraction), `:mach`,
+`:divergence`,
 `:vorticity`, `:vorticity_magnitude`, `:qcriterion`, `:schlieren`,
 `:strain_mag`, `:sensor`, `:mu_art`, `:beta_art`, `:kappa_art`, and `:D_art`;
 `DEFAULT_VTK_FIELDS` is `(:rho, :velocity, :p, :T_ion, :Y)`. `stride` is one
 `Int` or a 3-tuple.
 
+An `AtTime` or `EveryTime` instant at the initial time fires before the first
+step, so a `FieldWriter` sequence begins with the initial condition.
 Callbacks fire between completed steps. Their trigger verdict and any collective
 diagnostic must be consistent across ranks. Call `refresh_primitives!` before a
 callback reads cached primitive arrays; `Q` itself is current between steps.

@@ -1306,6 +1306,10 @@ function _rollback!(solver, Q, workspace, callback, control, save, failure,
     _restore_art!(solver, save.art)
     solver.t = save.t
     solver.step = save.step
+    # A scheduled switch is a function of t, so the restored time decides it.
+    for p in getfield(solver, :patches)
+        rewind_scheduled_switches!(p.bcs, solver.t, _land_tol(solver.t))
+    end
     # Compounding: the CFL is reduced from its current value and never
     # restored from the savepoint, so three retries give backoff^3.
     solver.cfl *= control.cfl_backoff
@@ -1366,7 +1370,9 @@ the third positional argument or the keyword of the same name) to reuse one.
 contract, return value ignored), a [`Callback`](@ref) pairing a trigger with an
 effect, or a tuple of those. A scheduled [`AtTime`](@ref) or [`EveryTime`](@ref)
 trigger shortens `dt` over the preceding `control.landing_steps` steps to end a
-step at the scheduled instant without an arbitrarily small final step. An
+step at the scheduled instant without an arbitrarily small final step. Starting
+from step 0, a callback whose trigger is due at the initial time (see
+[`fires_at_start`](@ref)) runs once before the first step. An
 effect returning `true` ends the run after that step. `tfinal` uses a direct
 clip, so scheduled callbacks do not alter the step sequence of a run that has
 none.
@@ -1457,6 +1463,11 @@ function run!(solver::Solver, Q, workspace::Workspace;
     save = control.retries > 0 ? _savepoint(_cold(solver), Q) : nothing
     attempts = 0
     dt_seen = 0.0
+    # Scheduled boundary switches, gathered once so that every rank lands on
+    # the same instants whichever faces it holds; a switch already due applies
+    # before the first step.
+    switch_times = _switch_schedule(solver)
+    _apply_switches!(solver)
     rho_floor, e_floor = positivity_floors(solver, Q, control)
     # The floors come from the state entering the run, so they are derived
     # before it is validated: a repair mode needs scales from a state that was
@@ -1483,6 +1494,11 @@ function run!(solver::Solver, Q, workspace::Workspace;
     # check below rather than out of the loop, so that a callback exit is
     # validated on the same terms as reaching `tfinal` or `nmax`.
     stopped = false
+    # The initial state, after it has been validated and its artificial
+    # coefficients primed, so an output of either at t = 0 reads what the first
+    # step starts from. A restarted solver (step > 0) has written its initial
+    # frames already.
+    solver.step == 0 && run_start_callbacks!(callback, solver, Q) && (stopped = true)
     while true
         if stopped || !(solver.t < tfin && solver.step < nmax)
             _validate_transport_state!(solver, Q)
@@ -1570,7 +1586,9 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # instant is converted before the arithmetic below, exactly as `tfinal`
         # is. The trigger's landing tolerance is measured in the clock's
         # precision for the same reason (`_land_tol` in callbacks.jl).
-        next_instant = oftype(solver.t, callback_next_time(callback, solver))
+        next_instant = oftype(solver.t,
+                              min(callback_next_time(callback, solver),
+                                  _next_switch(switch_times, solver.t)))
         gap = next_instant - solver.t
         # Soft landing. Clipping directly to the gap lands exactly but leaves an
         # arbitrarily small step before a scheduled instant: a dump every 1e-4
@@ -1618,6 +1636,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
         solver.dt_prev = dt
         solver.rate_prev = rate
         solver.filter_rate_prev = filter_rate
+        _apply_switches!(solver)
         if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
             filter_state!(solver, Q)
         end
@@ -1651,6 +1670,23 @@ function run!(solver::Solver, Q, workspace::Workspace;
     end
     return Q
 end
+
+# The distinct scheduled switch times over the faces every rank holds, sorted.
+function _switch_schedule(solver::Solver)
+    local_times = Float64[bc.at for p in getfield(solver, :patches)
+                          for bc in _switchables(p.bcs) if _scheduled(bc)]
+    gathered = MPI.gather(local_times, solver.comm; root=0)
+    times = MPI.Comm_rank(solver.comm) == 0 ?
+            sort!(unique!(reduce(vcat, gathered))) : Float64[]
+    return MPI.bcast(times, solver.comm; root=0)
+end
+
+_next_switch(times, t) = (i = findfirst(s -> s > t + _land_tol(s, t), times);
+                          i === nothing ? Inf : times[i])
+
+_apply_switches!(solver::Solver) =
+    foreach(p -> apply_scheduled_switches!(p.bcs, solver.t, _land_tol(solver.t)),
+            getfield(solver, :patches))
 
 _savepoint(solver, Q) =
     Savepoint(_snapshot(Q), _art_snapshot(solver), solver.t, solver.step, -1)

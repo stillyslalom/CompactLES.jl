@@ -253,11 +253,19 @@ isperiodic(::BoundaryCondition) = false
 isperiodic(::PeriodicBC) = true
 
 """
-    SwitchableBC(before, after)
+    SwitchableBC(before, after; at = nothing)
 
-One face that behaves as `before` until [`switch!`](@ref) is called on it, then
-as `after`. This supports calculations that require one boundary condition
-during an interaction and another to transmit the resulting outgoing waves.
+One face that behaves as `before` until it switches, then as `after`. This
+supports calculations that require one boundary condition during an interaction
+and another afterwards: a wall that becomes an outflow once the waves of interest
+have formed, or an inflow that injects one flow and then fires a shock.
+
+With `at = t`, the face switches by itself at time `t`: [`run!`](@ref) ends a
+step exactly at `t`, as it does for a scheduled [`AtTime`](@ref) callback, and
+switches between that step and the next, so every Runge–Kutta stage of a step
+sees the same condition. A [`StepControl`](@ref) rollback to before `t` restores
+`before`. Without `at`, the face switches when [`switch!`](@ref) is called on
+it, typically from a [`Callback`](@ref).
 
 The wrapper carries both conditions because `bcs` sits on an immutable
 [`Patch`](@ref) as an immutable tuple; a switch mutates the wrapper, not the
@@ -278,19 +286,65 @@ mutable struct SwitchableBC{B1<:BoundaryCondition,B2<:BoundaryCondition} <: Boun
     before::B1
     after::B2
     switched::Bool
+    at::Float64         # scheduled switch time; NaN when switched by hand
 end
 
 _is_fold_bc(bc) = bc isa AxisBC || bc isa OriginBC || bc isa PoleBC ||
                   bc isa SymmetryPlaneBC
 
-function SwitchableBC(before::BoundaryCondition, after::BoundaryCondition)
+function SwitchableBC(before::BoundaryCondition, after::BoundaryCondition;
+                      at::Union{Nothing,Real}=nothing)
     isperiodic(before) == isperiodic(after) ||
         throw(ArgumentError("SwitchableBC: both conditions must agree on periodicity"))
     (_is_fold_bc(before) || _is_fold_bc(after)) &&
         throw(ArgumentError("SwitchableBC cannot wrap a fold condition " *
                             "(AxisBC, OriginBC, PoleBC, SymmetryPlaneBC); " *
                             "setup detects those by type"))
-    return SwitchableBC(before, after, false)
+    return SwitchableBC(before, after, false, at === nothing ? NaN : Float64(at))
+end
+
+# --- Scheduled switches. `t` advances identically on every rank, so a switch
+# decided from it needs no reduction, as for `AtTime`.
+
+# Every SwitchableBC reachable from a face list, including one nested as the
+# `before` or `after` of another.
+_switchables!(out, bc::SwitchableBC) =
+    (push!(out, bc); _switchables!(out, bc.before); _switchables!(out, bc.after); out)
+_switchables!(out, bc) = out
+
+function _switchables(bcs)
+    out = SwitchableBC[]
+    for d in 1:3, bc in bcs[d]
+        _switchables!(out, bc)
+    end
+    return unique!(out)     # a condition shared by two faces appears once
+end
+
+_scheduled(bc::SwitchableBC) = !isnan(bc.at)
+
+"The earliest scheduled switch still ahead, or `Inf`."
+function next_switch_time(bcs)
+    t = Inf
+    for bc in _switchables(bcs)
+        _scheduled(bc) && !bc.switched && (t = min(t, bc.at))
+    end
+    return t
+end
+
+"Switch every scheduled face whose time `t` has reached; `tol` absorbs rounding."
+function apply_scheduled_switches!(bcs, t, tol)
+    for bc in _switchables(bcs)
+        _scheduled(bc) && !bc.switched && t >= bc.at - tol && switch!(bc)
+    end
+    return bcs
+end
+
+"Set every scheduled face to the side of its switch time that `t` is on."
+function rewind_scheduled_switches!(bcs, t, tol)
+    for bc in _switchables(bcs)
+        _scheduled(bc) && (bc.switched = t >= bc.at - tol)
+    end
+    return bcs
 end
 
 """

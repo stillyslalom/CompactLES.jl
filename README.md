@@ -186,23 +186,23 @@ sequence of `Numerics`.
 ## Adaptive refinement and GPU execution
 
 Adaptive mesh refinement (AMR) and GPU execution are selected within `Numerics`.
-`AMR` groups the refinement controls. Its initial region can follow the
-initialized state's sensors or a predicate of physical coordinates and time:
+`AMR` groups the refinement controls, and every region is given in physical
+coordinates:
 
 ```julia
-num = Numerics(n_global = (96, 48, 48),
-               amr = AMR(initial = (x, y, z, t) -> abs(x - 0.5) < 0.1,
-                         tag_threshold = Inf, regrid_interval = 20,
-                         subcycle = true))
+AMR(initial = :sensor, subcycle = true)          # follow shocks and interfaces
+AMR(initial = (x, y, z, t) -> abs(x - 0.5 - 0.2t) < 0.1)   # a prescribed path
+AMR(initial = [Box((0.2, 0, 0), (0.6, 1, 1)),    # fixed nested levels,
+               Sphere((0.4, 0.5, 0.5), 0.05)])   # finest last
 ```
 
-`AMR(initial=:sensor)` uses the current tagging criteria at setup. An explicit
-`BlockRegion` (or vector of nested regions) remains available for known static
-layouts. The physical predicate is reused at each regrid check and combines
-with enabled sensor tags; `tag_threshold=Inf` disables the default density tag.
-Legacy flat `Numerics` refinement keywords remain available, but cannot be
-mixed with `amr=AMR(...)`. See the [AMR reference](docs/src/reference/amr.md)
-for nesting, tags, tiling, and transfer choices.
+A followed feature is regridded at an interval set from the CFL and the tag
+buffer. `tile` covers separated features with lattice tiles instead of one
+bounding box. The results take the state
+vector `setup` returns: `line_profile(solver, states, :rho)`,
+`volume_integral(solver, states, :rho)`, `save_vtk` and `FieldWriter`.
+See the [AMR reference](docs/src/reference/amr.md) for tags, tiling, and
+transfer choices.
 
 `backend = DeviceBackend(ka)` moves the whole solver onto a GPU,
 where `ka` is `CUDABackend()` for Nvidia or `ROCBackend()` for AMD.

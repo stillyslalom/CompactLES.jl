@@ -52,6 +52,10 @@ neutral_binary_diffusion_residual temperature_domain
 SongWangPair SONG_WANG_2016 SONG_WANG_UNCERTAINTY song_wang_pair song_wang_diffusivity
 MuellerKlemmPair MUELLER_KLEMM_1970 MUELLER_KLEMM_TEMPERATURE MUELLER_KLEMM_PRESSURE
 mueller_klemm_pair neutral_binary_sources
+fires_at_start thermodynamic_state mass_fractions mole_fractions
+shock_jump driver_pressure reflected_shock shock_tube
+Shape Slab Box Ellipsoid Sphere Cylinder LevelSet signed_distance Cells Layer Layers
+Ramp Multimode riemann_interface
 """)))
 
 const ADVANCED_QUALIFIED_API = (
