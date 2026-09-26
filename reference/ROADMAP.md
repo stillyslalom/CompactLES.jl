@@ -401,15 +401,10 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   **Gate:** CPU/device recovery and full-run comparisons over interval joins and
   difficult states in both precisions, followed by actual-device profiling.
 
-- [ ] **S6 — Verify collective HDF5 writes on a parallel libhdf5.**
-  `FieldWriter(format = :hdf5)` and its XDMF temporal collection landed in
-  commit `c04abf1`, and every block write issues an empty-selection H5Dwrite
-  on a rank without a block, exercised only under the serialized backend.
-  Run `test/hdf5_tests.jl` against a parallel libhdf5 built for the run's MPI,
-  including a slice that leaves ranks with no selection, and measure whether
-  the collective transfer mode on the block datasets pays there.
-  **Depends on:** a cluster with parallel HDF5. A refined solver's HDF5 dump
-  (a spatial collection per patch with blanking) waits for a case.
+- [x] **S6** — `test/hdf5_tests.jl` passes on a parallel libhdf5 at one, two
+  and four ranks under both transfer modes, and the collective mode, measured
+  faster on a local disk, is the default (commit TBD). A refined solver's
+  HDF5 dump (a spatial collection per patch with blanking) waits for a case.
 
 - [ ] **S7 — Validate thread pinning and cluster placement.**
   Wire pinning only after controlled target-cluster trials: fixed-rank comparisons

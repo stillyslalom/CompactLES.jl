@@ -152,8 +152,8 @@ load_checkpoint_hdf5!(solver, Q, "restart/global")
 
 The shared checkpoint stores one global state and can be restored onto a
 different decomposition. [`hdf5_parallel`](@ref) reports whether the loaded
-HDF5 library can write collectively through the run's MPI implementation;
-otherwise rank zero gathers and writes.
+HDF5 library writes through the run's MPI implementation; otherwise the ranks
+open the file one after another and each writes its own block.
 
 For shared visualization output, [`save_hdf5`](@ref) writes one `.h5` frame and
 an XDMF sidecar. This avoids one file per rank per frame at large process

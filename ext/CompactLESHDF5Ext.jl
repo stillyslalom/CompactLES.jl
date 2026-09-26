@@ -58,32 +58,31 @@ const CKPT_FORMAT_UNRECORDED = 5
 
 # --- Transfer mode under the parallel backend --------------------------------
 #
-# Nothing here sets `dxpl_mpio = :collective`, so every hyperslab write below
-# goes out under HDF5's default independent transfer mode. That is correct but
-# not fast: a collective transfer lets the MPI-IO layer aggregate the per-rank
-# hyperslabs into a few large contiguous writes, accounting for most of a
-# shared write scale at high rank counts.
+# The block datasets are created with the transfer mode `BLOCK_TRANSFER[]`
+# holds, `:collective` by default. A collective transfer lets the MPI-IO layer
+# aggregate the per-rank hyperslabs into a few large contiguous writes; the
+# independent mode has every rank write its own hyperslab where it lands.
 #
 # A collective transfer requires every rank of the file's communicator to call
-# H5Dwrite on the same dataset in the same order. `write_block!` below already
-# does that: a rank holding no block of a dataset (no part of a sliced plane, or
+# H5Dwrite on the same dataset in the same order. `write_block!` below does
+# that: a rank holding no block of a dataset (no part of a sliced plane, or
 # no piece of a refined tile) issues a write with an empty selection instead of
 # skipping it. The empty write is issued under the serialized backend too, where
-# it is a no-op, so the workstation tests exercise the call sequence the parallel
-# backend depends on. Setting `dxpl_mpio = :collective` on the block datasets is
-# what remains, and belongs on a machine with a parallel libhdf5 built against
-# the run's MPI, the only place it can be exercised: `hdf5_parallel()` is false
-# on a workstation, where no transfer property applies.
+# it is a no-op, so the tests exercise the call sequence under either backend,
+# and `test/hdf5_tests.jl` writes the sliced plane under both modes on a
+# parallel libhdf5. The metadata datasets keep the default independent mode:
+# rank 0 alone writes them, which a collective transfer would not admit.
 #
-# Measured on that machine: the change does not pay.
-# A 128^3 Taylor-Green run over 224 ranks on two rzhound nodes (system
-# MVAPICH2 2.3.7, hdf5-parallel 1.14.0, Lustre at stripe count 8) wrote two
-# 151 MB checkpoints during 11,504 steps. Everything outside the solver came to
-# 17.75 s of a 1176.34 s run, 1.5%, and that figure also includes a per-step
-# globally reduced kinetic energy from the caller's own callback. Both
-# independent-mode writes together therefore cost at most 1.5% of the run, and
-# in practice far less. At this rank count and file size the aggregation a
-# collective transfer buys cannot be large.
+# Measured with `bench/hdf5xfer.jl` on a parallel libhdf5 over a workstation's
+# local disk, the collective mode is faster on every block dataset of any
+# size, by a quarter to a half on the checkpoint and the frame, and equal on a
+# sliced plane, where one rank holds all the data. The appendix section "The
+# shared-file write" has the table. On rzhound (system MVAPICH2 2.3.7,
+# hdf5-parallel 1.14.0, Lustre at stripe count 8) two 151 MB independent-mode
+# checkpoints of a 128^3 run over 224 ranks cost under 1.5% of an 1176 s run,
+# that figure including a per-step reduction of the caller's own, so either
+# mode is affordable there; the same script compares them on a parallel
+# filesystem, and `BLOCK_TRANSFER[] = :independent` is the switch back.
 
 # The relay token's tag. Nothing else uses 0 on these communicators; the halo
 # families start at 10 (see the tag note in src/halo.jl).
@@ -135,11 +134,19 @@ function _raise_shared_failure(failure, path::AbstractString, comm::MPI.Comm)
     return nothing
 end
 
+# The MPI transfer mode of the block datasets under the parallel backend,
+# `:collective` or `:independent`; see the transfer-mode note above.
+# `bench/hdf5xfer.jl` times both.
+const BLOCK_TRANSFER = Ref(:collective)
+
 # A dataset covering the whole global array, created once and written in
 # per-rank pieces. Under the serialized backend only rank 0 creates it.
 function shared_dataset(file, name::AbstractString, ::Type{T}, dims,
                         comm::MPI.Comm) where {T}
-    if has_parallel() || MPI.Comm_rank(comm) == 0
+    if has_parallel()
+        return create_dataset(file, name, datatype(T), dataspace(dims);
+                              dxpl_mpio=BLOCK_TRANSFER[])
+    elseif MPI.Comm_rank(comm) == 0
         return create_dataset(file, name, datatype(T), dataspace(dims))
     end
     return file[name]

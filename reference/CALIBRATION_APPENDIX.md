@@ -49,6 +49,8 @@ section that moved it says so in one sentence and the older figure is gone.
 22. [The bulk species channel in three dimensions](#the-bulk-species-channel-in-three-dimensions)
     (`bench/bulkchannel.jl`, `bench/bulkentropy.jl`)
 23. [The species validity band](#the-species-validity-band) (`bench/speciesband.jl`)
+24. [The shared-file write](#the-shared-file-write) (`bench/hdf5xfer.jl`,
+    `test/hdf5_tests.jl`)
 
 ## The shock battery
 
@@ -6158,3 +6160,48 @@ shock of `examples/converging_shock.jl`, whose ambient is at p = 1, completes st
 256, 512 and 1024. An ideal gas at e < 0 has no temperature, so no threshold can admit
 these cells honestly, and `:strict` stays the default: each of the six cases bounds its
 closing inadmissible count and e_min in `test/validation.jl`.
+
+## The shared-file write
+
+```text
+"$MPIEXEC" -n 4 julia --project=<env with HDF5> -t 1 bench/hdf5xfer.jl 64 5
+"$MPIEXEC" -n 4 julia --project=<env with HDF5> -t 1 bench/hdf5xfer.jl 128 5
+"$MPIEXEC" -n 8 julia --project=<env with HDF5> -t 1 bench/hdf5xfer.jl 128 5
+```
+
+The MPI transfer mode of the block datasets, `:collective` (the default) against
+`:independent`, on a parallel libhdf5: conda-forge hdf5 2.2.0 over OpenMPI 5.0.11 under WSL2
+on the workstation (12th-gen Core i9-12900K), writing to the WSL virtual disk. Each cell is
+the maximum over ranks of the wall time of the whole collective call, file creation and
+close included, the median and the minimum of five after one untimed write. The checkpoint
+is the Float64 state (5 N³ values), the frame the Float32 density and velocity (4 N³), and
+the slice one plane across the split dimension, which one rank holds entirely while the
+others issue empty-selection writes.
+
+```
+                                   independent          collective       collective /
+                                   median    min        median    min    independent
+64^3,  4 ranks (2,2,1) checkpoint  0.0273  0.0263       0.0201  0.0195   0.74
+                       frame       0.0126  0.0121       0.0100  0.0095   0.79
+                       slice       0.0024  0.0021       0.0022  0.0020   0.92
+128^3, 4 ranks (2,2,1) checkpoint  0.2300  0.1261       0.0870  0.0761   0.38
+                       frame       0.0656  0.0604       0.0490  0.0468   0.75
+                       slice       0.0093  0.0092       0.0092  0.0092   0.99
+128^3, 8 ranks (2,2,2) checkpoint  0.1366  0.1226       0.0985  0.0826   0.72
+                       frame       0.0652  0.0618       0.0457  0.0401   0.70
+                       slice       0.0099  0.0091       0.0099  0.0088   1.00
+```
+
+Seconds per write; the ratio column is of medians. The collective mode is faster wherever
+more than one rank holds data and equal on the slice, so it is the default. The 80 MiB
+checkpoint completes in a tenth of a second, which is the page cache and not the disk, so
+the ratios measure the aggregation of the per-rank hyperslabs against uncoordinated writes
+into the kernel and say nothing about a parallel filesystem at high rank counts; the same
+script gives that comparison from a cluster environment. The independent-mode cost on
+rzhound's Lustre is in `reference/CLUSTER.md`, and either mode is affordable there.
+
+`test/hdf5_tests.jl` passes on this stack at one, two and four ranks under both modes,
+including the sliced plane and the tiled hierarchy checkpoint, whose ranks without a tile
+issue the empty write; the same file passes on the Windows HDF5_jll, whose MPI build over
+Microsoft MPI also reports `hdf5_parallel() == true`, at one and two ranks, and on a
+conda-forge `nompi` libhdf5, which selects the serialized relay, at one and two ranks.

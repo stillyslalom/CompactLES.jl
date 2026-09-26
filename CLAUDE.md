@@ -184,9 +184,12 @@ HDF5 suite ran. To run it, use an environment
 carrying both CompactLES and HDF5, serially and under `mpiexec`; the
 decomposition-independent restart writes on one process grid and reads on
 another, which np = 1 cannot exercise. `hdf5_parallel()` reports which write
-backend the libhdf5 build selects; it is `false` on a workstation, and the
-collective path can only be exercised where a parallel libhdf5 built against
-the run's MPI exists.
+backend the libhdf5 build selects. It is `true` on this workstation under the
+Windows HDF5_jll, an MPI build over Microsoft MPI, and under the WSL conda
+stack `reference/CLUSTER.md` describes, which is where a parallel libhdf5
+against a system MPI is exercised without a cluster; the serialized relay
+needs a serial libhdf5 (conda `hdf5=*=nompi*`) pointed at through the same
+preference.
 
 `test/makie_tests.jl` covers the Makie extension and is skipped the same way,
 but for a different reason: HDF5 is in `Project.toml`'s test target and

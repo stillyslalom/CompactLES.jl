@@ -29,6 +29,9 @@ using HDF5
     # Which backend is in use is a property of the libhdf5 binary, not of the
     # run. Both produce the same file; only the cost differs.
     @test hdf5_parallel() isa Bool
+    rank == 0 && println("HDF5 write backend: ",
+                         hdf5_parallel() ? "parallel, libhdf5 " *
+                             string(HDF5.API.h5_get_libversion()) : "serialized")
 
     # A block description is independent of Decomp, allowing a refinement patch
     # to use the same write path later.
@@ -726,29 +729,40 @@ end
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0, rho=rho_of(x, y, z)))
 
-    # Across the split dimension, so most ranks hold no part of the plane and
-    # write no hyperslab; the dataset is still the full plane.
+    # Across the split dimension, so every rank but one holds no part of the
+    # plane and issues an empty-selection write; the dataset is still the full
+    # plane. On a parallel libhdf5 the write is made under both transfer modes;
+    # the default collective one requires that empty write from every rank.
     gx = nx ÷ 2 + 1
-    save_hdf5(s, Q, joinpath(dir, "sx"); fields=(:rho,), slice=(1, gx))
-    MPI.Barrier(comm)
-    if rank == 0
-        h5open(joinpath(dir, "sx.h5")) do h
-            @test size(h["fields/rho"]) == (1, ny, nz)
-            @test size(h["grid/x"]) == (1,)
-            @test read(h["grid/x"]) ≈ [global_xcoord(s, 1, gx)]
-            rho = read(h["fields/rho"])
-            e = 0.0
-            for k in 1:nz, j in 1:ny
-                want = rho_of(global_xcoord(s, 1, gx), global_xcoord(s, 2, j),
-                              global_xcoord(s, 3, k))
-                e = max(e, abs(rho[1, j, k] - Float32(want)))
+    o = s.decomp.offset[1]
+    @test MPI.Allreduce(o < gx <= o + s.decomp.n_local[1] ? 0 : 1, +, comm) == np - 1
+    ext = Base.get_extension(CL, :CompactLESHDF5Ext)
+    modes = hdf5_parallel() ? (:independent, :collective) : (:independent,)
+    transfer = ext.BLOCK_TRANSFER[]
+    for mode in modes
+        ext.BLOCK_TRANSFER[] = mode
+        save_hdf5(s, Q, joinpath(dir, "sx"); fields=(:rho,), slice=(1, gx))
+        ext.BLOCK_TRANSFER[] = transfer
+        MPI.Barrier(comm)
+        if rank == 0
+            h5open(joinpath(dir, "sx.h5")) do h
+                @test size(h["fields/rho"]) == (1, ny, nz)
+                @test size(h["grid/x"]) == (1,)
+                @test read(h["grid/x"]) ≈ [global_xcoord(s, 1, gx)]
+                rho = read(h["fields/rho"])
+                e = 0.0
+                for k in 1:nz, j in 1:ny
+                    want = rho_of(global_xcoord(s, 1, gx), global_xcoord(s, 2, j),
+                                  global_xcoord(s, 3, k))
+                    e = max(e, abs(rho[1, j, k] - Float32(want)))
+                end
+                @test e < 1e-2                    # Float32 at magnitude 1e4
             end
-            @test e < 1e-2                        # Float32 at magnitude 1e4
+            @test occursin("Dimensions=\"$nz $ny 1\"",
+                           read(joinpath(dir, "sx.xmf"), String))
         end
-        @test occursin("Dimensions=\"$nz $ny 1\"",
-                       read(joinpath(dir, "sx.xmf"), String))
+        MPI.Barrier(comm)
     end
-    MPI.Barrier(comm)
 
     # Across an undivided dimension, so every rank contributes part of the plane.
     gz = 5

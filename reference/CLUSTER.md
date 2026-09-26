@@ -114,15 +114,41 @@ preference is set: the JLL remains a dependency but is never loaded.
 On rzhound this is `hdf5-parallel/1.14.0` under the
 `MPI/intel-classic/2021.6.0-magic/mvapich2/2.3.7` hierarchy. It gives
 `hdf5_parallel() == true` and exercises the collective-open path in
-`with_shared_file`, which no workstation reaches: a 64 cubed snapshot written
+`with_shared_file`: a 64 cubed snapshot written
 that way at 16 ranks reproduces a serial single-process write to five or six
 digits per spectral shell, diverging only where the two grids differ.
 
 Write cost is negligible. Two 151 MB checkpoints from a 128 cubed run over 224
 ranks cost under 1.5% of an 1176 s run, and that figure also includes the
 per-step reductions of the same callback list. The transfer-mode note at the
-top of `ext/CompactLESHDF5Ext.jl` records the measurement and the resulting
-decision.
+top of `ext/CompactLESHDF5Ext.jl` records the decision, and
+[the shared-file write](CALIBRATION_APPENDIX.md#the-shared-file-write) the
+measurement behind it.
+
+### Parallel HDF5 on a workstation
+
+conda-forge ships a parallel libhdf5 built against its own OpenMPI, which
+gives the same stack without root under WSL or any Linux. Keep the driver
+project outside the checkout, so that its `LocalPreferences.toml` selects the
+conda MPI for that project alone, and write the libhdf5 preference as above:
+
+```bash
+micromamba create -n phdf5 -c conda-forge openmpi 'hdf5=*=mpi_openmpi*'
+P=$HOME/micromamba/envs/phdf5
+julia --project=$HOME/phdf5env -e 'using Pkg; Pkg.develop(path="<checkout>"); \
+    Pkg.add(["MPI", "MPIPreferences", "HDF5", "Preferences", "Test"])'
+julia --project=$HOME/phdf5env -e 'using MPIPreferences; MPIPreferences.use_system_binary( \
+    library_names=["'$P'/lib/libmpi.so"], mpiexec="'$P'/bin/mpiexec")'
+# set_preferences! as above, naming $P/lib/libhdf5.so and $P/lib/libhdf5_hl.so
+julia --project=$HOME/phdf5env -e 'using MPI, HDF5, CompactLES; println(CompactLES.hdf5_parallel())'
+$P/bin/mpiexec -n 4 julia --project=$HOME/phdf5env -t 1 test/hdf5_tests.jl
+```
+
+Verified with OpenMPI 5.0.11, libhdf5 2.2.0 and HDF5.jl 0.17.4 under WSL2
+Ubuntu 24.04, with the checkout on the Windows drive; `hdf5_parallel()` is
+true, and `test/hdf5_tests.jl` passes at one, two and four ranks under either
+transfer mode. `bench/hdf5xfer.jl` times the two modes from the same
+environment.
 
 ### One home directory, several clusters
 
