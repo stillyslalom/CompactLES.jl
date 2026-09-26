@@ -451,7 +451,8 @@ The configuration record of `solver`, identical on every rank. Groups:
 - `layout`: the equation set, the precision, the metric, `n_global` and the
   stretch mappings.
 - `numerics`: the derivative and filter schemes, the filter cadence and
-  relaxation, the artificial-property parameters, and on a refined solver
+  relaxation, the artificial-property parameters, `polar_truncation` when it
+  is on, and on a refined solver
   `interface_rhs`, `interface_flux`, `interface_divergence`,
   `level_interpolation_order`, `level_restriction` and `subcycle`, and
   `max_levels` when more than one refined level regrids.
@@ -486,6 +487,10 @@ function configuration_record(solver::Solver)
     _record!(rec, g, "filter_cfl", solver.filter_cfl)
     _record!(rec, g, "filter_weighting", solver.filter_weighting)
     _record!(rec, g, "art", solver.art)
+    # Entered only when on, so a record written before the entry existed
+    # matches a solver that leaves the truncation off.
+    kappa = getfield(solver, :truncation).kappa
+    kappa > 0 && _record!(rec, g, "polar_truncation", kappa)
     if nlevels(solver) > 1
         _record!(rec, g, "interface_rhs", schemes.interface_rhs)
         _record!(rec, g, "interface_flux", getfield(solver, :interface_flux))

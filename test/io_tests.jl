@@ -415,6 +415,29 @@ end
     @test_throws "boundaries" load_checkpoint!(wall, allocate_state(wall), stem)
     load_checkpoint!(wall, allocate_state(wall), stem; allow=(:boundaries,))
 
+    # Azimuthal mode truncation is a numerics entry, present only when on, so
+    # a record from before the entry existed matches a solver without it and
+    # differs from one with it in the numerics group alone.
+    cyl(κ) = Solver(n_global=(12, 16, 1), L_domain=(1.0, 2π, 1.0),
+                    metric=CylindricalMetric(),
+                    bcs=((AxisBC(), SlipWallBC()), io_per, io_per),
+                    art=ArtificialProperties(enabled=false), polar_truncation=κ)
+    on, off = cyl(1.0), cyl(0.0)
+    @test !("polar_truncation" in rec(off).paths)
+    @test groups(on, off) == ["numerics"]
+    predates = rec(on)
+    keep = findall(!=("polar_truncation"), predates.paths)
+    predates = CL.ConfigurationRecord(predates.version, predates.groups[keep],
+                                      predates.paths[keep], predates.values[keep])
+    @test isempty(CL.configuration_differences(predates, rec(off)))
+    cyl_stem = joinpath(dir, "truncated")
+    save_checkpoint(on, allocate_state(on), cyl_stem)
+    @test_throws "allow = (:numerics,)" load_checkpoint!(off, allocate_state(off),
+                                                         cyl_stem)
+    load_checkpoint!(off, allocate_state(off), cyl_stem; allow=(:numerics,))
+    save_checkpoint(off, allocate_state(off), cyl_stem)
+    load_checkpoint!(cyl(0.0), allocate_state(off), cyl_stem)
+
     # A file of the previous version carries no record: it loads with a
     # warning and nothing compared. Such a file is this version's file with
     # the record removed and the version word set back.
