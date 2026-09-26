@@ -1513,7 +1513,7 @@ end
 
 """
     FieldWriter(prefix; fields = DEFAULT_VTK_FIELDS, stride = 1, slice = nothing,
-                pad = 4, collection = true, start_index = 0)
+                pad = 4, collection = true, start_index = 0, format = :vtk)
 
 Write a numbered field dump each time its trigger fires, together with a `.pvd`
 collection recording the physical time of every frame. Use it as the effect of a
@@ -1552,6 +1552,13 @@ the checkpoint carries the solver's run state and not the caller's frame
 counter, so the number of the next frame has to be supplied here. The `.pvd` of
 a restarted writer lists only the frames that writer wrote, since it has no
 record of the times of the earlier ones.
+
+`format = :hdf5` writes each frame with [`save_hdf5`](@ref), as one shared
+`.h5` file and its own `.xmf` sidecar, and the collection as `prefix.xmf`, an
+XDMF temporal collection with every frame's grid written inline. Open the
+collection in ParaView or VisIt. It is replaced in one rename after each frame,
+so an interrupted run leaves the collection of its last completed frame. This
+format requires `using HDF5` and does not take a refined solver's state vector.
 """
 mutable struct FieldWriter{F,S}
     prefix::String
@@ -1560,25 +1567,45 @@ mutable struct FieldWriter{F,S}
     slice::S
     pad::Int
     collection::Bool
+    format::Symbol
     start_index::Int
     index::Int
     times::Vector{Float64}
+    # Per frame, the grid description the HDF5 extension returns for the
+    # collection; empty under `format = :vtk`.
+    grids::Vector{Any}
     wall_io::Float64
 end
 
-FieldWriter(prefix::AbstractString; fields=DEFAULT_VTK_FIELDS, stride=1,
-            slice=nothing, pad::Int=4, collection::Bool=true,
-            start_index::Int=0) =
-    FieldWriter(String(prefix), fields, _normalize_stride(stride), slice, pad,
-                collection, start_index, start_index, Float64[], 0.0)
+function FieldWriter(prefix::AbstractString; fields=DEFAULT_VTK_FIELDS, stride=1,
+                     slice=nothing, pad::Int=4, collection::Bool=true,
+                     start_index::Int=0, format::Symbol=:vtk)
+    format in (:vtk, :hdf5) ||
+        throw(ArgumentError("FieldWriter: format must be :vtk or :hdf5, got :$format"))
+    format === :hdf5 && !hdf5_available() &&
+        _hdf5_required("FieldWriter(format = :hdf5)")
+    return FieldWriter(String(prefix), fields, _normalize_stride(stride), slice, pad,
+                       collection, format, start_index, start_index, Float64[], Any[],
+                       0.0)
+end
 
 "Path stem of frame `m` (0-based) of a [`FieldWriter`](@ref), without extension."
 frame_prefix(writer::FieldWriter, m::Integer) =
     string(writer.prefix, "_", lpad(m, writer.pad, '0'))
 
-_write_dump!(writer::FieldWriter, solver, Q, stem) =
+# Returns the frame's grid description under `format = :hdf5`, and `nothing`
+# under `:vtk`, whose collection needs none.
+function _write_dump!(writer::FieldWriter, solver, Q, stem)
+    if writer.format === :hdf5
+        return _hdf5_extension().write_field_frame(solver, Q, stem;
+                                                   fields=writer.fields,
+                                                   stride=writer.stride,
+                                                   slice=writer.slice)
+    end
     save_vtk(solver, Q, stem; fields=writer.fields, stride=writer.stride,
              slice=writer.slice)
+    return nothing
+end
 
 function (writer::FieldWriter)(solver, Q)
     wall_0 = time_ns()
@@ -1586,11 +1613,17 @@ function (writer::FieldWriter)(solver, Q)
     # Once per writer, not once per frame, and keyed on the frame list because
     # `start_index` need not be zero.
     isempty(writer.times) && ensure_output_dir(writer.prefix, comm)
-    _write_dump!(writer, solver, Q, frame_prefix(writer, writer.index))
+    grid = _write_dump!(writer, solver, Q, frame_prefix(writer, writer.index))
     push!(writer.times, Float64(solver.t))
+    writer.format === :hdf5 && push!(writer.grids, grid)
     writer.index += 1
-    writer.collection && MPI.Comm_rank(comm) == 0 &&
-        _write_pvd(writer, container_extension(solver))
+    if writer.collection && MPI.Comm_rank(comm) == 0
+        if writer.format === :hdf5
+            _hdf5_extension().write_xdmf_collection(writer)
+        else
+            _write_pvd(writer, container_extension(solver))
+        end
+    end
     writer.wall_io += (time_ns() - wall_0) / 1e9
     return false
 end
@@ -1601,7 +1634,7 @@ end
 # completed frame. An appended file would lack its closing tags and would not
 # open at all.
 function _write_pvd(writer::FieldWriter, ext::AbstractString)
-    open(string(writer.prefix, ".pvd"), "w") do io
+    _replace_file(string(writer.prefix, ".pvd")) do io
         write(io, "<?xml version=\"1.0\"?>\n")
         write(io, "<VTKFile type=\"Collection\" version=\"1.0\" ",
                   "byte_order=\"", VTK_BYTE_ORDER, "\">\n<Collection>\n")
@@ -1615,4 +1648,23 @@ function _write_pvd(writer::FieldWriter, ext::AbstractString)
         write(io, "</Collection>\n</VTKFile>\n")
     end
     return writer
+end
+
+# Write `path` through `body(io)` into a temporary file beside it, then rename
+# it over `path`, so that an interruption during the write leaves the previous
+# complete file. `Base.Filesystem.rename` replaces the destination in one
+# call (rename(2), MoveFileEx on Windows). It falls back to a copy when that
+# fails, as it does on Windows while a reader holds the old file open, and the
+# copy refuses an existing destination, so the fallback is repeated here with
+# `force`.
+function _replace_file(body, path::AbstractString)
+    tmp = string(path, ".tmp")
+    open(body, tmp, "w")
+    try
+        Base.Filesystem.rename(tmp, path)
+    catch
+        cp(tmp, path; force=true)
+        rm(tmp; force=true)
+    end
+    return path
 end

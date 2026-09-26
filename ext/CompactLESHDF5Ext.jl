@@ -59,14 +59,16 @@ const CKPT_FORMAT = 5
 # hyperslabs into a few large contiguous writes, accounting for most of a
 # shared write scale at high rank counts.
 #
-# Adopting it is a behavioural change, not a keyword. A collective
-# transfer requires every rank of the file's communicator to call H5Dwrite on
-# the same dataset in the same order, and the slice path does not: a rank
-# holding no part of the requested plane writes nothing today and would instead
-# have to issue a write with an empty selection. Making that change belongs on a
-# machine with a parallel libhdf5 built against the run's MPI, which is the only
-# place it can be exercised: `hdf5_parallel()` is false on a workstation, where
-# the serialized relay above runs instead and no transfer property applies.
+# A collective transfer requires every rank of the file's communicator to call
+# H5Dwrite on the same dataset in the same order. `write_block!` below already
+# does that: a rank holding no block of a dataset (no part of a sliced plane, or
+# no piece of a refined tile) issues a write with an empty selection instead of
+# skipping it. The empty write is issued under the serialized backend too, where
+# it is a no-op, so the workstation tests exercise the call sequence the parallel
+# backend depends on. Setting `dxpl_mpio = :collective` on the block datasets is
+# what remains, and belongs on a machine with a parallel libhdf5 built against
+# the run's MPI, the only place it can be exercised: `hdf5_parallel()` is false
+# on a workstation, where no transfer property applies.
 #
 # Measured on that machine: the change does not pay.
 # A 128^3 Taylor-Green run over 224 ranks on two rzhound nodes (system
@@ -76,8 +78,7 @@ const CKPT_FORMAT = 5
 # globally reduced kinetic energy from the caller's own callback. Both
 # independent-mode writes together therefore cost at most 1.5% of the run, and
 # in practice far less. At this rank count and file size the aggregation a
-# collective transfer buys cannot repay the empty-selection restructuring
-# described above.
+# collective transfer buys cannot be large.
 
 # The relay token's tag. Nothing else uses 0 on these communicators; the halo
 # families start at 10 (see the tag note in src/halo.jl).
@@ -179,10 +180,33 @@ function write_strings!(g, name::AbstractString, strs, rank::Int)
     return nothing
 end
 
-write_region3!(dset, region::BlockRegion, data) =
-    (dset[region_ranges(region)...] = data)
-write_region4!(dset, region::BlockRegion, data, ncomp::Int) =
-    (dset[region_ranges(region)..., 1:ncomp] = data)
+
+# One rank's block of a shared dataset: `dset[ranges...] = data`, or, with
+# `data === nothing` on a rank holding no block, a write selecting no element in
+# either dataspace. Every rank calls this for every block dataset, in the same
+# order, which a collective transfer requires; see the transfer-mode note above.
+function write_block!(dset, ranges, data)
+    data === nothing || return (dset[ranges...] = data)
+    memtype = datatype(dset)
+    fspace = dataspace(dset)
+    mspace = dataspace((0,))
+    try
+        lock(HDF5.API.liblock)
+        status = try
+            ccall((:H5Sselect_none, HDF5.API.libhdf5), HDF5.API.herr_t,
+                  (HDF5.API.hid_t,), fspace)
+        finally
+            unlock(HDF5.API.liblock)
+        end
+        status < 0 && error("write_block!: H5Sselect_none failed")
+        HDF5.API.h5d_write(dset, memtype, mspace, fspace, dset.xfer, UInt8[0])
+    finally
+        close(mspace)
+        close(fspace)
+        close(memtype)
+    end
+    return nothing
+end
 read_region3(dset, region::BlockRegion) = dset[region_ranges(region)...]
 read_region4(dset, region::BlockRegion, ncomp::Int) =
     dset[region_ranges(region)..., 1:ncomp]
@@ -303,21 +327,24 @@ function _write_state!(file, name::AbstractString, ps, Q, extent, comm::MPI.Comm
     region = ps === nothing ? nothing : owned_region(ps.decomp)
     # `T` is the state's element type, not Float64: a Float32 solver would
     # otherwise write a widened copy that no longer round-trips bit for bit.
+    ranges = ps === nothing ? () : (region_ranges(region)..., 1:n_cons)
     dset = shared_dataset(file, name * "/Q", T, (extent..., n_cons), comm)
     try
+        data = nothing
         if ps !== nothing
             o1, o2, o3 = ps.decomp.n_halo_d
             nx, ny, nz = ps.decomp.n_local
-            write_region4!(dset, region, Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :],
-                           n_cons)
+            data = Q[o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz, :]
         end
+        write_block!(dset, ranges, data)
     finally
         close(dset)
     end
     n_art > 0 || return file
     dset = shared_dataset(file, name * "/art", T, (extent..., n_art), comm)
     try
-        ps === nothing || write_region4!(dset, region, art_block(ps), n_art)
+        write_block!(dset, ps === nothing ? () : (region_ranges(region)..., 1:n_art),
+                     ps === nothing ? nothing : art_block(ps))
     finally
         close(dset)
     end
@@ -524,14 +551,43 @@ function _coarse_axis(solver::Solver, d, stride, slice)
     return Float64[CompactLES.global_xcoord(solver, d, g) for g in 1:stride[d]:n]
 end
 
+# What the XDMF description of one frame needs: the `.h5` file name relative to
+# the description, the time, the written extent, each field's name and component
+# count, and the grid type. The frame's own sidecar and the temporal collection
+# are both written from it, so the two cannot describe the same frame
+# differently.
+struct FrameGrid
+    h5name::String
+    t::Float64
+    nglobal::NTuple{3,Int}
+    fields::Vector{Tuple{String,Int}}
+    curvilinear::Bool
+end
+
+_patch_layout_error(name) =
+    error("$name: a patch layout has no shared-file field dump; save_vtk and " *
+          "FieldWriter(format = :vtk) write it as one piece per patch under a " *
+          "multiblock index")
+
 CompactLES.save_hdf5(solver::Solver, states::Vector{<:ConservedState},
-                     prefix::AbstractString; kwargs...) =
-    error("save_hdf5: a patch layout has no shared-file field dump; save_vtk " *
-          "writes it as one piece per patch under a multiblock index")
+                     prefix::AbstractString; kwargs...) = _patch_layout_error("save_hdf5")
 
 function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
                               fields=CompactLES.DEFAULT_VTK_FIELDS, stride=1,
                               slice=nothing)
+    write_field_frame(solver, Q, prefix; fields=fields, stride=stride, slice=slice)
+    return prefix
+end
+
+# The frame writer behind `save_hdf5` and `FieldWriter(format = :hdf5)`, which
+# returns the frame's `FrameGrid` for the collection.
+write_field_frame(solver::Solver, states::Vector{<:ConservedState},
+                  prefix::AbstractString; kwargs...) =
+    _patch_layout_error("FieldWriter(format = :hdf5)")
+
+function write_field_frame(solver::Solver, Q, prefix::AbstractString;
+                           fields=CompactLES.DEFAULT_VTK_FIELDS, stride=1,
+                           slice=nothing)
     decomp = solver.decomp
     comm = decomp.comm
     rank = MPI.Comm_rank(comm)
@@ -588,6 +644,7 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
             # creation call under the parallel backend.
             dset = shared_dataset(file, "grid/points", Float64, (3, nglobal...), comm)
             try
+                pts = nothing
                 if mine
                     # One position per point, component first, so the sidecar
                     # can point XDMF's XYZ geometry straight at it.
@@ -602,9 +659,8 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
                         pts[2, ii, jj, kk] = y
                         pts[3, ii, jj, kk] = z
                     end
-                    r = region_ranges(region)
-                    dset[1:3, r...] = pts
                 end
+                write_block!(dset, (1:3, region_ranges(region)...), pts)
             finally
                 close(dset)
             end
@@ -614,17 +670,14 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
             dset = shared_dataset(file, "fields/" * name, Float32, dims, comm)
             try
                 # A rank holding no part of the plane creates the dataset and
-                # writes nothing into it, which is all the serialized backend
-                # needs. Under the parallel backend the write is independent
-                # and not collective; see the note on `dxpl_mpio` at the
-                # head of this file.
-                if mine
-                    if ncomp == 1
-                        write_region3!(dset, region, reshape(data, nlocal))
-                    else
-                        r = region_ranges(region)
-                        dset[1:ncomp, r...] = reshape(data, ncomp, nlocal...)
-                    end
+                # issues an empty write into it; see the note on `dxpl_mpio`
+                # at the head of this file.
+                r = region_ranges(region)
+                if ncomp == 1
+                    write_block!(dset, r, mine ? reshape(data, nlocal) : nothing)
+                else
+                    write_block!(dset, (1:ncomp, r...),
+                                 mine ? reshape(data, ncomp, nlocal...) : nothing)
                 end
             finally
                 close(dset)
@@ -632,49 +685,79 @@ function CompactLES.save_hdf5(solver::Solver, Q, prefix::AbstractString;
         end
     end
 
-    rank == 0 && _write_xdmf(string(prefix, ".xmf"), basename(path), solver,
-                             nglobal, entries, curvilinear)
+    grid = FrameGrid(basename(path), Float64(solver.t), nglobal,
+                     Tuple{String,Int}[(name, ncomp) for (name, ncomp, _) in entries],
+                     curvilinear)
+    rank == 0 && _write_xdmf(string(prefix, ".xmf"), grid)
     MPI.Barrier(comm)
-    return prefix
+    return grid
 end
 
-function _write_xdmf(path, h5name, solver::Solver, nglobal, entries,
-                     curvilinear::Bool)
-    dims = _xdmf_dims(nglobal)
+const XDMF_HEADER = "<?xml version=\"1.0\" ?>\n<!DOCTYPE Xdmf SYSTEM \"Xdmf.dtd\" []>\n" *
+                    "<Xdmf Version=\"3.0\">\n <Domain>\n"
+const XDMF_FOOTER = " </Domain>\n</Xdmf>\n"
+
+# One frame's uniform grid, every line prefixed with `indent`.
+function _write_grid(io, g::FrameGrid, indent::AbstractString)
+    dims = _xdmf_dims(g.nglobal)
+    h5name = g.h5name
+    line(parts...) = write(io, indent, parts..., "\n")
+    line("<Grid Name=\"mesh\" GridType=\"Uniform\">")
+    line(" <Time Value=\"", string(g.t), "\"/>")
+    if g.curvilinear
+        line(" <Topology TopologyType=\"3DSMesh\" Dimensions=\"", dims, "\"/>")
+        line(" <Geometry GeometryType=\"XYZ\">")
+        line("  <DataItem Dimensions=\"", dims, " 3\" NumberType=\"Float\" ",
+             "Precision=\"8\" Format=\"HDF\">", h5name, ":/grid/points</DataItem>")
+        line(" </Geometry>")
+    else
+        line(" <Topology TopologyType=\"3DRectMesh\" Dimensions=\"", dims, "\"/>")
+        line(" <Geometry GeometryType=\"VXVYVZ\">")
+        for d in 1:3
+            line("  <DataItem Dimensions=\"", string(g.nglobal[d]),
+                 "\" NumberType=\"Float\" Precision=\"8\" Format=\"HDF\">",
+                 h5name, ":/grid/", "xyz"[d:d], "</DataItem>")
+        end
+        line(" </Geometry>")
+    end
+    for (name, ncomp) in g.fields
+        kind = ncomp == 1 ? XDMF_SCALAR : XDMF_VECTOR
+        shape = ncomp == 1 ? dims : string(dims, " ", ncomp)
+        line(" <Attribute Name=\"", name, "\" AttributeType=\"", kind,
+             "\" Center=\"Node\">")
+        line("  <DataItem Dimensions=\"", shape, "\" NumberType=\"Float\" ",
+             "Precision=\"4\" Format=\"HDF\">", h5name, ":/fields/", name,
+             "</DataItem>")
+        line(" </Attribute>")
+    end
+    line("</Grid>")
+    return io
+end
+
+function _write_xdmf(path, g::FrameGrid)
     open(path, "w") do io
-        write(io, "<?xml version=\"1.0\" ?>\n")
-        write(io, "<!DOCTYPE Xdmf SYSTEM \"Xdmf.dtd\" []>\n")
-        write(io, "<Xdmf Version=\"3.0\">\n <Domain>\n")
-        write(io, "  <Grid Name=\"mesh\" GridType=\"Uniform\">\n")
-        write(io, "   <Time Value=\"", string(Float64(solver.t)), "\"/>\n")
-        if curvilinear
-            write(io, "   <Topology TopologyType=\"3DSMesh\" Dimensions=\"",
-                      dims, "\"/>\n")
-            write(io, "   <Geometry GeometryType=\"XYZ\">\n")
-            write(io, "    <DataItem Dimensions=\"", dims, " 3\" NumberType=\"Float\" ",
-                      "Precision=\"8\" Format=\"HDF\">", h5name, ":/grid/points",
-                      "</DataItem>\n   </Geometry>\n")
-        else
-            write(io, "   <Topology TopologyType=\"3DRectMesh\" Dimensions=\"",
-                      dims, "\"/>\n")
-            write(io, "   <Geometry GeometryType=\"VXVYVZ\">\n")
-            for d in 1:3
-                write(io, "    <DataItem Dimensions=\"", string(nglobal[d]),
-                          "\" NumberType=\"Float\" Precision=\"8\" Format=\"HDF\">",
-                          h5name, ":/grid/", "xyz"[d:d], "</DataItem>\n")
-            end
-            write(io, "   </Geometry>\n")
+        write(io, XDMF_HEADER)
+        _write_grid(io, g, "  ")
+        write(io, XDMF_FOOTER)
+    end
+    return path
+end
+
+# The temporal collection of a `FieldWriter(format = :hdf5)`, rewritten in full
+# after every frame, for the reason `_write_pvd` gives, and replaced in one
+# rename so that an interruption leaves the previous complete file. Each frame's
+# grid is written inline rather than through XInclude of its sidecar, which not
+# every XDMF reader resolves. Called on rank 0 only.
+function write_xdmf_collection(writer)
+    path = string(writer.prefix, ".xmf")
+    CompactLES._replace_file(path) do io
+        write(io, XDMF_HEADER)
+        write(io, "  <Grid Name=\"", basename(writer.prefix), "\" ",
+                  "GridType=\"Collection\" CollectionType=\"Temporal\">\n")
+        for g in writer.grids
+            _write_grid(io, g::FrameGrid, "   ")
         end
-        for (name, ncomp, _) in entries
-            kind = ncomp == 1 ? XDMF_SCALAR : XDMF_VECTOR
-            shape = ncomp == 1 ? dims : string(dims, " ", ncomp)
-            write(io, "   <Attribute Name=\"", name, "\" AttributeType=\"", kind,
-                      "\" Center=\"Node\">\n")
-            write(io, "    <DataItem Dimensions=\"", shape, "\" NumberType=\"Float\" ",
-                      "Precision=\"4\" Format=\"HDF\">", h5name, ":/fields/", name,
-                      "</DataItem>\n   </Attribute>\n")
-        end
-        write(io, "  </Grid>\n </Domain>\n</Xdmf>\n")
+        write(io, "  </Grid>\n", XDMF_FOOTER)
     end
     return path
 end

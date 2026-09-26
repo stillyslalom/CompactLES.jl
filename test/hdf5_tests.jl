@@ -712,3 +712,242 @@ end
     rank == 0 && rm(dir; recursive=true)
     MPI.Barrier(comm)
 end
+
+# A minimal well-formedness check for the XDMF this package writes: elements,
+# double-quoted attributes and text, with the declaration and DOCTYPE skipped.
+# It throws on an unbalanced or unrecognized construct, so a truncated or
+# malformed collection fails the parse rather than an assertion further on.
+mutable struct XNode
+    name::String
+    attrs::Dict{String,String}
+    children::Vector{XNode}
+    text::String
+end
+
+function parse_xml(s::AbstractString)
+    s = replace(s, r"<\?.*?\?>"s => "", r"<!DOCTYPE[^>]*>" => "")
+    root = XNode("#document", Dict{String,String}(), XNode[], "")
+    stack = [root]
+    token = r"\G(?:<(/?)([A-Za-z_][\w.-]*)((?:\s+[\w.:-]+=\"[^\"<]*\")*)\s*(/?)>|([^<]+))"
+    pos = 1
+    while pos <= ncodeunits(s)
+        m = match(token, s, pos)
+        m === nothing && error("parse_xml: unrecognized markup at byte $pos")
+        pos += ncodeunits(m.match)
+        if m.captures[5] !== nothing
+            txt = strip(m.captures[5])
+            isempty(txt) || (stack[end].text *= txt)
+        elseif m.captures[1] == "/"
+            stack[end].name == m.captures[2] ||
+                error("parse_xml: </$(m.captures[2])> closes <$(stack[end].name)>")
+            pop!(stack)
+        else
+            attrs = Dict(String(a.captures[1]) => String(a.captures[2])
+                         for a in eachmatch(r"([\w.:-]+)=\"([^\"]*)\"", m.captures[3]))
+            node = XNode(m.captures[2], attrs, XNode[], "")
+            push!(stack[end].children, node)
+            m.captures[4] == "/" || push!(stack, node)
+        end
+    end
+    length(stack) == 1 || error("parse_xml: <$(stack[end].name)> is not closed")
+    length(root.children) == 1 || error("parse_xml: more than one root element")
+    return root.children[1]
+end
+
+xml_equal(a::XNode, b::XNode) =
+    a.name == b.name && a.attrs == b.attrs && a.text == b.text &&
+    length(a.children) == length(b.children) &&
+    all(xml_equal(x, y) for (x, y) in zip(a.children, b.children))
+
+function xml_find(node::XNode, name::AbstractString, out=XNode[])
+    node.name == name && push!(out, node)
+    foreach(c -> xml_find(c, name, out), node.children)
+    return out
+end
+
+# The uniform grids of a temporal collection, after checking its structure.
+function collection_grids(path)
+    doc = parse_xml(read(path, String))
+    @test doc.name == "Xdmf"
+    domain = only(doc.children)
+    series = only(domain.children)
+    @test series.attrs["GridType"] == "Collection"
+    @test series.attrs["CollectionType"] == "Temporal"
+    return series.children
+end
+
+# Every DataItem of `grid` names an HDF5 file relative to `dir` and a dataset in
+# it whose shape is the declared Dimensions, which XDMF lists row-major.
+function datasets_match(grid::XNode, dir)
+    ok = true
+    for item in xml_find(grid, "DataItem")
+        file, path = split(item.text, ":")
+        ok &= !isabspath(file) && isfile(joinpath(dir, file))
+        ok || return false
+        dims = reverse(parse.(Int, split(item.attrs["Dimensions"])))
+        h5open(joinpath(dir, file), "r") do h
+            ok &= haskey(h, path) && collect(size(h[path])) == dims
+        end
+    end
+    return ok
+end
+
+grid_time(grid::XNode) = parse(Float64, only(xml_find(grid, "Time")).attrs["Value"])
+
+@testset "HDF5 extension: FieldWriter time series and XDMF collection" begin
+    comm = MPI.COMM_WORLD
+    np = MPI.Comm_size(comm)
+    rank = MPI.Comm_rank(comm)
+    per3h = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 2.0, 1.6)])
+    mk() = begin
+        s = Solver(bcs=per3h, n_global=(72, 16, 12), L_domain=(1.0, 1.0, 1.0),
+                   eos=eos, art=ArtParams(enabled=false), dims=(np, 1, 1))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> Prim(Y=(0.3 + 0.2sin(2π * x), 0.7 - 0.2sin(2π * x)),
+                                            u=(0.2, 0, 0), p=1.0, rho=1.0))
+        s, Q
+    end
+
+    dir = rank == 0 ? mktempdir() : ""
+    dir = MPI.bcast(dir, comm; root=0)
+    out = joinpath(dir, "series")
+    prefix = joinpath(out, "field")
+
+    # An EveryTime schedule stopped between instants, as a run ended by the
+    # scheduler is, and a second writer on an AtTime list in the same run.
+    s, Q = mk()
+    writer = FieldWriter(prefix; format=:hdf5, fields=(:rho, :velocity, :Y))
+    listed = FieldWriter(joinpath(out, "listed"); format=:hdf5, fields=(:p,),
+                         stride=(2, 2, 1))
+    run!(s, Q; tfinal=0.025,
+         callback=(Callback(EveryTime(0.01), writer),
+                   Callback(AtTime([0.005, 0.015]), listed)))
+    @test writer.index == 3
+    @test writer.times ≈ [0.0, 0.01, 0.02] rtol = 1e-14
+    @test listed.times ≈ [0.005, 0.015] rtol = 1e-14
+    save_checkpoint_hdf5(s, Q, joinpath(dir, "ckpt"))
+    MPI.Barrier(comm)
+    if rank == 0
+        grids = collection_grids(prefix * ".xmf")
+        @test length(grids) == 3
+        @test grid_time.(grids) ≈ [0.0, 0.01, 0.02] rtol = 1e-14
+        @test all(datasets_match(g, out) for g in grids)
+        # The collection repeats each frame's own sidecar grid, so a frame read
+        # on its own and read through the collection are the same description:
+        # the species expansion and the vector component count included.
+        for (m, g) in enumerate(grids)
+            frame = parse_xml(read(CL.frame_prefix(writer, m - 1) * ".xmf", String))
+            @test xml_equal(g, only(xml_find(frame, "Grid")))
+        end
+        names = [a.attrs["Name"] for a in xml_find(grids[1], "Attribute")]
+        @test names == ["rho", "velocity", "Y1", "Y2"]
+        vel = only(filter(a -> a.attrs["Name"] == "velocity",
+                          xml_find(grids[1], "Attribute")))
+        @test vel.attrs["AttributeType"] == "Vector"
+        @test only(xml_find(vel, "DataItem")).attrs["Dimensions"] == "12 16 72 3"
+        h5open(CL.frame_prefix(writer, 2) * ".h5", "r") do h
+            @test read(h["meta/t"]) ≈ 0.02 rtol = 1e-14
+            @test size(h["fields/Y2"]) == (72, 16, 12)
+        end
+        # Relative paths only, so the directory can be moved.
+        @test !occursin(dir, read(prefix * ".xmf", String))
+
+        lgrids = collection_grids(joinpath(out, "listed.xmf"))
+        @test grid_time.(lgrids) ≈ [0.005, 0.015] rtol = 1e-14
+        @test all(datasets_match(g, out) for g in lgrids)
+        @test only(xml_find(lgrids[1], "Topology")).attrs["Dimensions"] == "12 8 36"
+    end
+    MPI.Barrier(comm)
+
+    # An interruption during a collection rewrite leaves a partial temporary
+    # file beside the complete collection of the previous frame. The next frame
+    # replaces both.
+    if rank == 0
+        write(prefix * ".xmf.tmp", "<?xml version=\"1.0\" ?>\n<Xdmf Version=\"3.0\">\n <Dom")
+        @test_throws ErrorException parse_xml(read(prefix * ".xmf.tmp", String))
+        @test length(collection_grids(prefix * ".xmf")) == 3
+    end
+    MPI.Barrier(comm)
+
+    # Restart from the checkpoint and continue the frame sequence. The frame
+    # counter is not in the checkpoint, so it is supplied as start_index; the
+    # restarted collection lists the frames this writer wrote, as the .pvd of a
+    # restarted VTK writer does, and the earlier frames stay readable on their own.
+    s2, Q2 = mk()
+    load_checkpoint_hdf5!(s2, Q2, joinpath(dir, "ckpt"))
+    @test s2.t ≈ 0.025 rtol = 1e-14
+    resumed = FieldWriter(prefix; format=:hdf5, fields=(:rho, :velocity, :Y),
+                          start_index=writer.index)
+    run!(s2, Q2; tfinal=0.04, callback=Callback(EveryTime(0.01), resumed))
+    @test resumed.index == 5
+    @test resumed.times ≈ [0.03, 0.04] rtol = 1e-14
+    MPI.Barrier(comm)
+    if rank == 0
+        @test !isfile(prefix * ".xmf.tmp")
+        grids = collection_grids(prefix * ".xmf")
+        @test grid_time.(grids) ≈ [0.03, 0.04] rtol = 1e-14
+        @test all(datasets_match(g, out) for g in grids)
+        refs = unique(String(first(split(item.text, ":")))
+                      for g in grids for item in xml_find(g, "DataItem"))
+        @test refs == ["field_0003.h5", "field_0004.h5"]
+        for m in 0:2
+            frame = parse_xml(read(CL.frame_prefix(writer, m) * ".xmf", String))
+            @test datasets_match(only(xml_find(frame, "Grid")), out)
+        end
+    end
+    MPI.Barrier(comm)
+
+    # Stride and slice as the VTK writer takes them. The slice crosses the
+    # split dimension, so at np > 1 most ranks hold no part of the plane and
+    # write an empty selection.
+    gx = 72 ÷ 2 + 1
+    sliced = FieldWriter(joinpath(out, "sliced"); format=:hdf5, fields=(:rho, :velocity),
+                         slice=(1, gx))
+    sliced(s2, Q2)
+    MPI.Barrier(comm)
+    if rank == 0
+        grids = collection_grids(joinpath(out, "sliced.xmf"))
+        @test only(xml_find(grids[1], "Topology")).attrs["Dimensions"] == "12 16 1"
+        @test all(datasets_match(g, out) for g in grids)
+        h5open(joinpath(out, "sliced_0000.h5"), "r") do h
+            @test size(h["fields/velocity"]) == (3, 1, 16, 12)
+            @test read(h["grid/x"]) ≈ [global_xcoord(s2, 1, gx)]
+            # Every point of the plane was written: a skipped block reads as
+            # the dataset's fill value, zero, and the density is near one.
+            @test all(>(0.5), read(h["fields/rho"]))
+        end
+    end
+    MPI.Barrier(comm)
+
+    # Rank 0 owns the collection: a writer holding `collection = true` on every
+    # rank but rank 0 writes none, and one holding it on rank 0 alone writes it.
+    others = FieldWriter(joinpath(out, "others"); format=:hdf5, fields=(:rho,),
+                         collection=rank != 0)
+    others(s2, Q2)
+    root = FieldWriter(joinpath(out, "root"); format=:hdf5, fields=(:rho,),
+                       collection=rank == 0)
+    root(s2, Q2)
+    MPI.Barrier(comm)
+    if rank == 0
+        @test !isfile(joinpath(out, "others.xmf"))
+        @test isfile(joinpath(out, "others_0000.xmf"))
+        @test length(collection_grids(joinpath(out, "root.xmf"))) == 1
+    end
+    MPI.Barrier(comm)
+
+    # A refined solver's state vector has no shared-file form.
+    wall = (SlipWallBC(), SlipWallBC())
+    amr = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                 bcs=(wall, per3h[2], per3h[3]), tile=8, dims=(np, 1, 1),
+                 refine=BlockRegion((85, 0, 0), (31, 1, 1)))
+    states = allocate_state(amr)
+    initialize!(amr, states, (x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
+    @test_throws "patch layout" FieldWriter(joinpath(out, "amr"); format=:hdf5)(amr, states)
+    @test_throws ArgumentError FieldWriter(prefix; format=:netcdf)
+
+    MPI.Barrier(comm)
+    rank == 0 && rm(dir; recursive=true)
+    MPI.Barrier(comm)
+end

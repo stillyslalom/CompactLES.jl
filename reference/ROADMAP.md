@@ -389,20 +389,9 @@ filter time-scaling with N1.
   discrete balance with the run's derivative operator, and an unfiltered
   two-fluid column stays at rest to round-off (commit `acfe5cb`).
 
-- [ ] **A15 — Composite faces: different conditions over parts of one face.**
-  A face takes one condition, so neither a jet through an orifice in a wall nor
-  the outflow slots of a vertical shock tube, which set up an air/SF6
-  stagnation plane by venting both gases through the side walls at the
-  interface height, can be expressed. Written as a characteristic inflow over
-  the whole face with zero target velocity outside the orifice, a 150 m/s jet
-  drew gas out through the face beside it (the inflow formulation assumes
-  inflow) until the outflow reached 425 m/s and the density went negative, with
-  the far end closed or open. A face condition selecting a condition per point
-  from a mask of face coordinates, with every member's collectives hoisted as
-  `nscbc.jl` does, expresses both.
-  **Gate:** a jet through a walled orifice into a closed box conserves mass to
-  the injected amount; a two-slot stagnation-plane flow reaches a steady
-  interface.
+- [x] **A15** — `CompositeBC` divides a face among member conditions by a
+  coordinate mask; a walled-orifice jet and a two-slot stagnation plane run
+  on it (commit `9574aea`).
 
 ## P2: scale, devices, I/O, and geometry
 

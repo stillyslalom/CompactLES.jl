@@ -336,6 +336,14 @@ end
     plain = FieldWriter(joinpath(dir, "plain"); fields=(:rho,))
     plain(s, Q)
     @test isfile(joinpath(dir, "plain_0000.pvtr"))
+
+    # The HDF5 format names what it needs when the extension is not loaded, at
+    # construction rather than at the first frame; test/hdf5_tests.jl covers it
+    # when it is. An unknown format is refused.
+    hdf5_available() ||
+        @test_throws "using HDF5" FieldWriter(joinpath(dir, "h5"); format=:hdf5)
+    @test_throws ArgumentError FieldWriter(joinpath(dir, "nc"); format=:netcdf)
+    @test plain.format === :vtk
     rm(dir; recursive=true)
 end
 
