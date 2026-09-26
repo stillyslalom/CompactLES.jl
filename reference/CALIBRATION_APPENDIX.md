@@ -51,6 +51,7 @@ section that moved it says so in one sentence and the older figure is gone.
 23. [The species validity band](#the-species-validity-band) (`bench/speciesband.jl`)
 24. [The shared-file write](#the-shared-file-write) (`bench/hdf5xfer.jl`,
     `test/hdf5_tests.jl`)
+25. [Azimuthal mode truncation](#azimuthal-mode-truncation) (`polar_truncation`)
 
 ## The shock battery
 
@@ -6239,3 +6240,28 @@ including the sliced plane and the tiled hierarchy checkpoint, whose ranks witho
 issue the empty write; the same file passes on the Windows HDF5_jll, whose MPI build over
 Microsoft MPI also reports `hdf5_parallel() == true`, at one and two ranks, and on a
 conda-forge `nompi` libhdf5, which selects the serialized relay, at one and two ranks.
+
+## Azimuthal mode truncation
+
+```julia
+Solver(n_global=(64, 64, 1), L_domain=(1.0, 2π, 1.0), metric=CylindricalMetric(),
+       bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), polar_truncation=κ)
+```
+
+The first measurement of the Stage 1 truncation, one run per κ on a disk at rest under the
+default artificial properties and CFL, with a pressure pulse p = 1 + 0.2 exp(−|x − x₀|²/0.01)
+centred at r = 0.3, ρ = 1; the mean step is over steps 3 to 40 of `run!`, at `-t 8` on the
+workstation with other jobs running, so the wall times are indicative only.
+
+```
+κ     active rings   limiter at t = 0   mean dt     vs κ = 0   wall/step   truncate_modes!
+0     0              θ, ring 1          3.262e-4    1          5.43 ms     -
+1     10             r, ring 11         4.552e-3    13.95      5.66 ms     72 µs
+2     20             r, ring 19         5.394e-3    16.53      5.58 ms     146 µs
+```
+
+At κ = 1 the step is already limited by the radial spacing, so doubling κ adds 18%. The
+projection costs 1.3% of a step at κ = 1 and 2.6% at κ = 2. The truncated runs end at t =
+0.18 and 0.22, before the pulse reaches the axis; 40 steps record the rate and the cost but not the
+stability margin, which is left to Stage 3 of [MODE_TRUNCATION.md](MODE_TRUNCATION.md) on a
+converging shock.

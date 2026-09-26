@@ -146,7 +146,7 @@ or a fixed physical width for a resolved material layer.
 ```julia
 Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
     art=ArtificialProperties(), cfl=0.5, control=StepControl(), filter_interval=1,
-    filter_cfl=0.35, filter_weighting=:none,
+    filter_cfl=0.35, filter_weighting=:none, polar_truncation=0.0,
     dims=nothing, n_halo=4, comm=MPI.COMM_WORLD,
     stretch=(nothing,nothing,nothing), patch_grid=(1,1,1),
     backend=CompactLES.CPUBackend(), interface_rhs=:extended,
@@ -165,6 +165,7 @@ Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
 | `filter_interval` | Apply filter every `k` completed steps | `1`; `0` disables |
 | `filter_cfl` | Reference CFL of a full-strength filter pass; `0` unrelaxed | `0.35` |
 | `filter_weighting` | `:none` or volume-weighted state filtering | `:none` |
+| `polar_truncation` | Azimuthal mode truncation margin κ near a cylindrical axis with resolved θ | `0.0` (off) |
 | `dims` | MPI process grid | `nothing` (automatic) |
 | `n_halo` | Halo layers per side | `4` |
 | `comm` | MPI communicator | `MPI.COMM_WORLD` |

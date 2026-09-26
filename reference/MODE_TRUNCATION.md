@@ -160,6 +160,9 @@ Each is structural or follows from a repo convention; none is a preference.
 
 ## Stage 1 — serial cylindrical
 
+Delivered. Setup also rejects a stretched r, several patches or levels, and a
+device backend, and the testset is in `test/serial_suite.jl`.
+
 Deliverables:
 
 - Setup: the `mode_limit` table, the active index range, cos/sin basis

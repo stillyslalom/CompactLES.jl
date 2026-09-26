@@ -675,8 +675,8 @@ end
     Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
              art=ArtificialProperties(), cfl=0.5, control=StepControl(),
              filter_interval=1, filter_cfl=0.35, filter_weighting=:none,
-             dims=nothing, n_halo=4, stretch=(nothing, nothing, nothing),
-             precision=nothing)
+             polar_truncation=0.0, dims=nothing, n_halo=4,
+             stretch=(nothing, nothing, nothing), precision=nothing)
 
 Grid, scheme, timestep, and decomposition choices used to realize a
 [`Problem`](@ref).
@@ -730,6 +730,21 @@ Grid, scheme, timestep, and decomposition choices used to realize a
   at the axis and at the origin, which is why it is not the default. On a
   uniform Cartesian grid the two are one operator bit for bit. See
   [`filter_state!`](@ref).
+- `polar_truncation`: azimuthal mode truncation near a cylindrical axis with
+  resolved θ. `0.0`, the default, disables it. A value κ ≥ 1 projects each
+  ring of fixed r and z, once per step, onto its azimuthal Fourier modes
+  m ≤ max(1, ⌊πr/(κΔr)⌋), and the timestep charges the θ direction at the
+  spacing of the highest mode kept, about κΔr, instead of rΔθ. A field that is
+  smooth through the axis carries mode m only as r^m, so the modes removed are
+  ones the inner rings cannot resolve, and without the truncation the step is
+  sized by their spacing. Use it when [`dt_report`](@ref) names θ at the innermost rings as
+  the limiting direction; a larger κ removes more modes and allows a longer
+  step. Modes 0 and 1 are always kept, so the ring sums of the conserved
+  variables and a uniform freestream are unchanged. The cost is one
+  projection per step over the rings below the threshold radius, small against
+  a filter pass. Requires `CylindricalMetric`, θ periodic over 2π and held on
+  one rank (`dims[2] = 1`), an unstretched radial dimension, a single patch
+  without refinement, and the host backend.
 - `dims`: MPI process-grid dimensions. `nothing` lets MPI distribute ranks over
   resolved directions. An explicit tuple must have product equal to the
   communicator size and must contain `1` in every collapsed direction.
@@ -858,6 +873,7 @@ Base.@kwdef struct Numerics
     filter_interval::Int = 1
     filter_cfl::Float64 = 0.35
     filter_weighting::Symbol = :none
+    polar_truncation::Float64 = 0.0
     dims::Union{Nothing,NTuple{3,Int}} = nothing
     n_halo::Int = 4
     comm::MPI.Comm = MPI.COMM_WORLD
@@ -966,6 +982,7 @@ function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
                filter_interval=num.filter_interval,
                filter_cfl=num.filter_cfl,
                filter_weighting=num.filter_weighting,
+               polar_truncation=num.polar_truncation,
                dims=num.dims, n_halo=num.n_halo, comm=num.comm,
                patch_grid=num.patch_grid, backend=num.backend,
                interface_rhs=num.interface_rhs,

@@ -1142,6 +1142,114 @@ end
     @test ferr(solver, df, (r, θ, z) -> -8r * exp(-4r^2) * (1 + 0.5cos(2θ))) < 1e-4  # 3rd-order, larger const
 end
 
+@testset "azimuthal mode truncation: table, projection, rate cap" begin
+    # N_θ = 32 over 24 radial nodes at κ = 1: mode_limit(r_i) =
+    # max(1, ⌊π(i − ½)⌋) is 1, 4, 7, 10, 14 on the first five rings, and
+    # ring 6 (17 ≥ N_θ/2) is the first to keep every mode.
+    mk(κ; kw...) = Solver(; n_global=(24, 32, 1), L_domain=(1.0, 2π, 1.0),
+                          metric=CylindricalMetric(),
+                          bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                          art=ArtificialProperties(enabled=false),
+                          polar_truncation=κ, kw...)
+    solver = mk(1.0)
+    tr = solver.truncation
+    o1 = solver.decomp.n_halo_d[1]
+    @test tr.mode_limit == [1, 4, 7, 10, 14]
+    @test tr.rings == (o1 + 1):(o1 + 5)
+    @test isempty(mk(0.0).truncation.rings)
+    @test mk(2.0).truncation.mode_limit == [1, 2, 3, 5, 7, 8, 10, 11, 13, 14]
+    @test_throws ArgumentError mk(0.5)
+    @test_throws ErrorException mk(1.0; n_global=(24, 1, 1), L_domain=(1.0, 1.0, 1.0))
+    @test_throws ErrorException Solver(n_global=(24, 32, 1),
+                                       L_domain=(1.0, π, 1.0), bcs=per3,
+                                       polar_truncation=1.0)
+    @test_throws ErrorException Solver(n_global=(24, 32, 1), L_domain=(1.0, π, 2π),
+                                       metric=SphericalMetric(),
+                                       bcs=((OriginBC(), SlipWallBC()),
+                                            (PoleBC(), PoleBC()), per3[3]),
+                                       polar_truncation=1.0)
+
+    nθ = 32
+    ring(Q, i, c) = [Q[padded_index(solver, i, j, 1), c] for j in 1:nθ]
+    # Amplitude of mode m on ring i of component c.
+    amp(Q, i, c, m) = (v = ring(Q, i, c); θ = [xcoord(solver, 2, j) for j in 1:nθ];
+                       hypot(sum(v .* cos.(m .* θ)), sum(v .* sin.(m .* θ))) * 2 / nθ)
+    maxdiff(A, B) = maximum(abs, parent(A) .- parent(B))
+    U = 0.3
+    stream(r, θ, z) = Prim(u=(U * cos(θ), -U * sin(θ), 0.0), p=1.0, rho=1.0)
+
+    # A uniform freestream is m = 1 in the physical velocity components.
+    Q = allocate_state(solver)
+    initialize!(solver, Q, stream)
+    Q0 = deepcopy(Q)
+    CL.truncate_modes!(solver, Q)
+    @test maxdiff(Q, Q0) < 1e-14
+
+    # Rigid rotation over a radially varying state is m = 0 on every ring.
+    initialize!(solver, Q, (r, θ, z) -> Prim(u=(0.0, 0.4r, 0.0), p=1 + r^2,
+                                             rho=1 + 0.5r^2))
+    Q0 = deepcopy(Q)
+    CL.truncate_modes!(solver, Q)
+    @test maxdiff(Q, Q0) < 1e-14
+
+    # m = 6 seeded on ring 2 (limit 4) is removed and m = 3 there is kept; the
+    # same m = 6 on ring 10, outside the table, is untouched bit for bit.
+    seeded(r, θ, z) = Prim(u=(U * cos(θ), -U * sin(θ), 0.0), p=1.0,
+                           rho=1 + (abs(r - xcoord(solver, 1, 2)) < 1e-12 ?
+                                    0.1cos(6θ) + 0.05sin(3θ) : 0.0) +
+                               (abs(r - xcoord(solver, 1, 10)) < 1e-12 ?
+                                    0.1cos(6θ) : 0.0))
+    initialize!(solver, Q, seeded)
+    Q0 = deepcopy(Q)
+    CL.truncate_modes!(solver, Q)
+    @test amp(Q0, 2, 1, 6) ≈ 0.1
+    @test amp(Q, 2, 1, 6) < 1e-14
+    @test amp(Q, 2, 1, 3) ≈ 0.05 rtol = 1e-13
+    @test ring(Q, 10, 1) == ring(Q0, 10, 1)
+    @test ring(Q, 10, 5) == ring(Q0, 10, 5)
+    # Idempotent: a second projection changes nothing beyond round-off.
+    Q1 = deepcopy(Q)
+    CL.truncate_modes!(solver, Q)
+    @test maxdiff(Q, Q1) < 1e-14
+
+    # Ring sums of mass, energy and Cartesian momentum, over a state with
+    # content in every mode on every ring.
+    rng = MersenneTwister(11)
+    for k in axes(parent(Q), 4), I in CartesianIndices(solver.rho)
+        parent(Q)[I, k] = (k == 1 ? 1.0 : k == 5 ? 2.5 : 0.0) + 0.1 * randn(rng)
+    end
+    Q0 = deepcopy(Q)
+    CL.truncate_modes!(solver, Q)
+    @test maxdiff(Q, Q0) > 1e-2
+    im = solver.equations.i_mom
+    for i in 1:6
+        θ = [xcoord(solver, 2, j) for j in 1:nθ]
+        for S in (Q -> sum(ring(Q, i, 1)), Q -> sum(ring(Q, i, 5)),
+                  Q -> sum(ring(Q, i, im[1]) .* cos.(θ) .- ring(Q, i, im[2]) .* sin.(θ)),
+                  Q -> sum(ring(Q, i, im[1]) .* sin.(θ) .+ ring(Q, i, im[2]) .* cos.(θ)))
+            @test S(Q) ≈ S(Q0) atol = 1e-13
+        end
+    end
+
+    # The rate cap: the same state steps longer under the table, dt_report
+    # agrees with compute_dt, and at κ = 0 the loop is the untruncated one.
+    off = mk(0.0)
+    Qoff = allocate_state(off)
+    initialize!(off, Qoff, stream)
+    initialize!(solver, Q, stream)
+    @test compute_dt(solver, Q) > 4 * compute_dt(off, Qoff)
+    @test dt_report(solver, Q).dt ≈ compute_dt(solver, Q) rtol = 1e-12
+    @test dt_report(off, Qoff).dt ≈ compute_dt(off, Qoff) rtol = 1e-12
+
+    # run! applies the projection after every step: a seeded m = 2 on ring 1
+    # (limit 1) is gone after one step.
+    initialize!(solver, Q, (r, θ, z) -> Prim(u=(U * cos(θ), -U * sin(θ), 0.0),
+                                             p=1.0 + 0.01cos(2θ) * exp(-20r^2),
+                                             rho=1.0))
+    run!(solver, Q; tfinal=1.0, nmax=1)
+    @test all(c -> amp(Q, 1, c, 2) < 1e-14, 1:solver.equations.n_cons)
+end
+
 @testset "spherical poles + origin: derivative of a smooth 3-D Gaussian" begin
     # f = e^{−4r²} is smooth at origin and poles; ∂f/∂r and (1/r)∂f/∂θ = 0.
     solver = Solver(n_global=(40, 16, 12), L_domain=(1.0, π, 2π),

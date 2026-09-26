@@ -69,8 +69,8 @@ test and benchmark suites do. It allocates no conserved state, so pair it with
 
 `eos`, `transport`, `metric`, and `sources` take their defaults and meaning from
 [`Problem`](@ref); `art`, `deriv`, `filt`, `cfl`, `control`, `filter_interval`,
-`filter_cfl`, `filter_weighting`, `dims`, `n_halo`, `stretch`, and `precision`
-from [`Numerics`](@ref). Without `precision`, the element type is the one
+`filter_cfl`, `filter_weighting`, `polar_truncation`, `dims`, `n_halo`, `stretch`,
+and `precision` from [`Numerics`](@ref). Without `precision`, the element type is the one
 shared by the components passed explicitly (`eos`, `transport`, `art`,
 `deriv`, `filt`, `interface_divergence`), or `Float64` when none is passed.
 Components left out are built at that type, and components of different
@@ -190,6 +190,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 filt::AbstractCompactScheme,
                 cfl::Real=0.5, filter_interval::Int=1, filter_cfl::Real=0.35,
                 filter_weighting::Symbol=:none,
+                polar_truncation::Real=0,
                 control::StepControl=StepControl(),
                 dims=nothing, n_halo::Int=4,
                 comm::MPI.Comm=MPI.COMM_WORLD,
@@ -363,6 +364,26 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         regrid_interval == 0 ||
             error("regrid_interval requires a refined region (the refine " *
                   "keyword supplies the initial one)")
+    end
+    # --- Azimuthal mode truncation (modes.jl) ----------------------------
+    # The ring projection is a Fourier series in θ over the whole circle on
+    # one rank's host storage, and the limit table assumes a uniform Δr.
+    isfinite(polar_truncation) && (polar_truncation == 0 || polar_truncation >= 1) ||
+        throw(ArgumentError("polar_truncation must be 0 (off) or a margin of at " *
+                            "least 1, got $polar_truncation"))
+    if polar_truncation > 0
+        metric isa CylindricalMetric ||
+            error("polar_truncation applies to CylindricalMetric; the " *
+                  "spherical form is not implemented")
+        n_global[2] > 1 && periodic[2] &&
+            isapprox(Float64(L_domain[2]), 2π; atol=angle_tol) ||
+            error("polar_truncation requires θ resolved and periodic over 2π")
+        stretch[1] === nothing ||
+            error("polar_truncation requires an unstretched radial dimension")
+        npatch == 1 && nlev == 1 ||
+            error("polar_truncation takes a single patch without refinement")
+        backend isa CPUBackend ||
+            error("polar_truncation runs on the host backend only")
     end
     regrid_interval >= 0 || error("regrid_interval must be non-negative")
     tag_buffer >= 0 || error("tag_buffer must be non-negative")
@@ -577,6 +598,12 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                      interface_flux, schemes)
     end
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
+    # The process grid is replicated, so every rank raises this together.
+    polar_truncation > 0 && decomp.dims[2] > 1 &&
+        error("polar_truncation requires θ on one rank (dims[2] = 1); the " *
+              "process grid $(decomp.dims) splits it")
+    truncation = mode_truncation(T, polar_truncation, decomp,
+                                 T(origin[1]) + coord_shift[1], h[1], n_global[2])
     # The per-rank extent check in `plan_direction` would raise on some ranks
     # only when the blocks differ in size; this one is replicated.
     check_block_extents(n_global, decomp.dims,
@@ -758,7 +785,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                 LevelTransfer{T}[])], false, nothing,
                       zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux, schemes)
+                  interface_flux, schemes, truncation)
         init_geometry!(solver)
         return solver
     end
@@ -932,7 +959,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                   levels, subcycle, regrid,
                   zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux, schemes)
+                  interface_flux, schemes, ModeTruncation{T}())
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
@@ -1364,7 +1391,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                   false, nothing,
                   zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux, schemes)
+                  interface_flux, schemes, ModeTruncation{T}())
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end

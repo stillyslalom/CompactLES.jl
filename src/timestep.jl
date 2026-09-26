@@ -688,9 +688,10 @@ _wait!(solver::Solver, t0::UInt64) =
 # storage's own `maximum`/`minimum`. All of that scratch is free here:
 # max_rate runs before the step's first RHS evaluation, which refills it.
 # Maximum and minimum are exact and order-independent, so the two paths agree
-# bitwise.
+# bitwise. The azimuthal rate cap (modes.jl) is read by the loop alone, which
+# setup's host-backend restriction on `polar_truncation` makes sufficient.
 function _local_max_rate(solver::SolverLike, Q)
-    if _cpu_storage(Q) && !FORCE_KA[]
+    if _cpu_storage(Q) && (!FORCE_KA[] || _truncating(solver.truncation))
         return _local_max_rate_loop(solver, Q)
     end
     return _local_max_rate_launch(solver, Q)
@@ -785,6 +786,8 @@ function _local_max_rate_loop(solver::SolverLike, Q)
     nx, ny, nz = decomp.n_local
     n_species = solver.equations.n_species
     tr = solver.transport
+    modes = solver.truncation
+    capped = _truncating(modes)
     T = eltype(Q)
     rate = zero(T)
     ρ_min = T(Inf)
@@ -806,6 +809,8 @@ function _local_max_rate_loop(solver::SolverLike, Q)
         for d in 1:3
             decomp.active[d] || continue      # no resolved variation
             idx = solver.inv_h[d][I] / solver.h[d]      # inverse physical spacing
+            # At a truncated ring the θ spacing is that of the highest mode kept.
+            d == 2 && capped && (idx = _theta_spacing(modes, I[1], idx))
             acc += abs(uv[d]) * idx
             dsum += idx * idx
             # The direction's own hyperbolic rate, the same expression as the
@@ -905,6 +910,8 @@ function dt_report(solver::Solver, Q)
     _validate_transport_state!(solver, Q; current=true)
     o1, o2, o3 = decomp.n_halo_d
     tr = solver.transport
+    modes = solver.truncation
+    capped = _truncating(modes)
     best = (rate=-Inf, i=0, j=0, k=0, dim=0, kind=:none)
     @inbounds for k in 1:decomp.n_local[3], j in 1:decomp.n_local[2], i in 1:decomp.n_local[1]
         I = CartesianIndex(i + o1, j + o2, k + o3)
@@ -914,6 +921,7 @@ function dt_report(solver::Solver, Q)
         for d in 1:3
             decomp.active[d] || continue
             idx = solver.inv_h[d][I] / solver.h[d]
+            d == 2 && capped && (idx = _theta_spacing(modes, I[1], idx))
             # The per-direction figure is the diagnostic; the selecting total
             # below combines the acoustic part as `max_rate` does.
             rd = (abs(uv[d]) + c) * idx
@@ -1726,6 +1734,9 @@ function run!(solver::Solver, Q, workspace::Workspace;
         if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
             filter_state!(solver, Q)
         end
+        # Once per step, after the filter and before the failsafe; see
+        # `truncate_modes!` for why the halos may stay stale here.
+        _truncating(solver.truncation) && truncate_modes!(solver, Q)
         _post_step!(solver, Q)
         levels_synced = restrict_repeats
         # After the filter, not immediately after step!, ensuring the state

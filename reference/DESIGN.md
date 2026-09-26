@@ -101,6 +101,7 @@ validation cases are discussed, and never a viscosity.
 | `src/transfer.jl`         | AMR level-transfer operators: the invertible 3:1 compact filter pair and its conditioning |
 | `src/metric.jl`           | Cartesian/cylindrical/spherical metrics, stretch mappings, curvature corrections, momentum sources, the discrete geometric conservation law (GCL) |
 | `src/folds.jl`            | Coordinate-singularity (axis/origin/pole) parity and antipodal folds |
+| `src/modes.jl`            | Azimuthal mode truncation near a cylindrical axis: the `mode_limit` table, the ring projection, the θ rate cap |
 | `src/artificial.jl`       | Cook artificial μ\*, β\*, κ\*, D\* from δ⁴ or compact-d8 sensors |
 | `src/stepcontrol.jl`      | `StepControl`: timestep floors, prediction, and rollback-and-retry recovery |
 | `src/sources.jl`          | Inferable tuple source interface and `ConstantBodyForce` |

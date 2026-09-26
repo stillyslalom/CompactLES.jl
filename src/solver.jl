@@ -101,6 +101,10 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # the remainder of the flux through `div_plans`.
     interface_flux::Symbol
     schemes::SchemeSettings                 # construction record; see above
+    # The azimuthal mode truncation table (modes.jl): read by `max_rate` and
+    # `dt_report` for the θ rate cap and by `truncate_modes!` once per step.
+    # Empty unless `polar_truncation > 0`.
+    truncation::ModeTruncation{T}
 end
 
 # Patch-owned property names forward to the sole patch, which keeps every
