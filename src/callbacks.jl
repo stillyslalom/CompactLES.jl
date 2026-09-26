@@ -355,26 +355,31 @@ function run_start_callbacks!(cbs::Tuple, solver, Q)
 end
 run_start_callbacks!(_, solver, Q) = false
 
-run_callbacks!(::Nothing, solver, Q) = false
-run_callbacks!(::Tuple{}, solver, Q) = false
+# The per-step pass returns `(stop, ran)`: whether an effect asked to end the
+# run, and whether any effect ran at all. An effect may write the state, so
+# `run!` repeats the level restriction before the next step whenever one ran.
+# A trigger decides identically on every rank (see the top of this file), so
+# `ran` is the same everywhere.
+run_callbacks!(::Nothing, solver, Q) = (false, false)
+run_callbacks!(::Tuple{}, solver, Q) = (false, false)
 
 function run_callbacks!(cb::Callback, solver, Q)
-    fired!(cb.trigger, solver, Q) || return false
-    return cb.effect!(solver, Q) === true
+    fired!(cb.trigger, solver, Q) || return (false, false)
+    return (cb.effect!(solver, Q) === true, true)
 end
 
 function run_callbacks!(cbs::Tuple, solver, Q)
     # Both sides run: an early return would let the first stop request skip the
     # rest, causing a diagnostic callback to miss its final step.
-    stop_first = run_callbacks!(first(cbs), solver, Q)
-    stop_rest = run_callbacks!(Base.tail(cbs), solver, Q)
-    return stop_first || stop_rest
+    stop_first, ran_first = run_callbacks!(first(cbs), solver, Q)
+    stop_rest, ran_rest = run_callbacks!(Base.tail(cbs), solver, Q)
+    return (stop_first || stop_rest, ran_first || ran_rest)
 end
 
 # A bare callable keeps its old contract exactly: called every step, return value
 # ignored. Honouring `=== true` here would silently turn any existing callback
 # whose last expression happens to be a comparison into an early stop.
-run_callbacks!(cb, solver, Q) = (cb(solver, Q); false)
+run_callbacks!(cb, solver, Q) = (cb(solver, Q); (false, true))
 
 # --- Progress reporting.
 #

@@ -1881,3 +1881,94 @@ end
     @test length(rs) == length(states) && all(same, eachindex(states))
     rm(dir; recursive=true)
 end
+
+@testset "the pre-step restriction runs only after the state was written" begin
+    per = (PeriodicBC(), PeriodicBC())
+    wall2 = (SlipWallBC(), SlipWallBC())
+    # Four tiles meeting at a corner, walls along y, and a filter pass on
+    # every other step, so both of the step's endings reach the restriction.
+    function nest(; kw...)
+        s = Solver(; n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0),
+                   bcs=(per, wall2, per), filter_interval=2, tile=6,
+                   refine=BlockRegion((18, 18, 0), (12, 12, 1)), kw...)
+        q = allocate_state(s)
+        initialize!(s, q, (x, y, z) -> Prim(u=(0.4, 0.3 * sin(x) * sin(y), 0),
+                                            p=1.0, rho=1.0 + 0.1 * sin(x) * cos(y)))
+        return s, q
+    end
+    sod_ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                                Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    function sod(; N=81, kw...)
+        s = Solver(; n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(wall2, per, per), cfl=0.2, tile=8, kw...)
+        q = allocate_state(s)
+        initialize!(s, q, sod_ic)
+        return s, q
+    end
+    function counted(s, q; kw...)
+        n0 = CL.RESTRICTION_COUNT[]
+        run!(s, q; tfinal=1.0, kw...)
+        return CL.RESTRICTION_COUNT[] - n0
+    end
+    try
+        # Five steps of a continuing call: one restriction per step after the
+        # step, and one before the first step, where the state may have been
+        # written since the previous call. Before, every step restricted twice.
+        s, q = nest()
+        run!(s, q; tfinal=1.0, nmax=2)
+        @test counted(s, q; nmax=s.step + 5) == 6
+        CL.FORCE_PRESYNC_RESTRICT[] = true
+        @test counted(s, q; nmax=s.step + 5) == 10
+        CL.FORCE_PRESYNC_RESTRICT[] = false
+        # A bare callback runs every step and may write the state.
+        @test counted(s, q; nmax=s.step + 3, callback=(_, _) -> nothing) == 6
+    finally
+        CL.FORCE_PRESYNC_RESTRICT[] = false
+    end
+    # Each case run under both schedules, compared bit for bit, halos included.
+    function same_both_ways(build, runner)
+        out = map((true, false)) do force
+            CL.FORCE_PRESYNC_RESTRICT[] = force
+            try
+                s, q = build()
+                runner(s, q)
+                (s.t, s.step, s.cfl, s.floor_tally.cells, [copy(parent(Q)) for Q in q])
+            finally
+                CL.FORCE_PRESYNC_RESTRICT[] = false
+            end
+        end
+        return isequal(out[1], out[2]), out[2]
+    end
+    steps(n; kw...) = (s, q) -> run!(s, q; tfinal=1.0, nmax=n, kw...)
+    # A callback writing the refined state every third step, and one spoiling
+    # a root density once at step 5, which rolls back to step 4.
+    bump = Callback(EveryStep(3), (s, q) -> (foreach(Q -> parent(Q) .*= 1 + 1e-6,
+                                                     q[2:end]); false))
+    spoil(done) = Callback(EveryStep(), (s, q) -> (s.step == 5 && !done[] &&
+        (done[] = true; q[1][gidx(first(CL.eachpatch(s, q))[1], 3, 3, 1), 1] = -1.0);
+        false))
+    cases = [
+        "static" => (nest, steps(8)),
+        "subcycled" => (() -> nest(subcycle=true), steps(6)),
+        "callback" => (nest, steps(8; callback=bump)),
+        "rollback" => (nest, (s, q) -> run!(s, q; tfinal=1.0, nmax=7,
+                                            callback=spoil(Ref(false)),
+                                            control=StepControl(retries=1,
+                                                                savepoint_interval=2))),
+        "tiled regrid" => (() -> sod(N=201, subcycle=true, regrid_interval=5,
+                                     refine=BlockRegion((85, 0, 0), (31, 1, 1))),
+                           steps(20)),
+        "three regridded levels" => (() -> sod(refine=BlockRegion((20, 0, 0), (41, 1, 1)),
+                                               max_levels=3, regrid_interval=4),
+                                     steps(16)),
+        "positivity failsafe" => (() -> sod(refine=BlockRegion((30, 0, 0), (21, 1, 1))),
+                                  steps(20; control=StepControl(floor_ratio=0.999))),
+    ]
+    for (name, (build, runner)) in cases
+        same, (_, _, cfl, repaired, _) = same_both_ways(build, runner)
+        @test same
+        name == "rollback" && @test cfl < 0.5
+        name == "positivity failsafe" && @test repaired > 0
+        same || @info "pre-step restriction schedules differ" name
+    end
+end

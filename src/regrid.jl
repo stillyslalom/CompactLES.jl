@@ -1595,13 +1595,15 @@ end
 
 # The `run!` hook: cadence check, then `regrid!`. The single-array state form
 # never regrids; a multi-patch solver without a RegridSpec returns at the
-# first test.
-_maybe_regrid!(solver::Solver, Q, workspace::Workspace, save) = nothing
+# first test. Returns whether `regrid!` ran, which is the same on every rank;
+# a check that changes no level can still write the state (the hierarchy
+# regrid's restriction, the coefficient priming's boundary conditions).
+_maybe_regrid!(solver::Solver, Q, workspace::Workspace, save) = false
 function _maybe_regrid!(solver::Solver, states::Vector{<:ConservedState},
                         workspace::Workspace, save)
     spec = getfield(solver, :regrid)
-    spec === nothing && return nothing
-    solver.step - spec.last_step >= spec.interval || return nothing
+    spec === nothing && return false
+    solver.step - spec.last_step >= spec.interval || return false
     spec.last_step = solver.step
     spec.checks += 1
     # The regrid's own work is excluded from the busy time the next check
@@ -1611,5 +1613,5 @@ function _maybe_regrid!(solver::Solver, states::Vector{<:ConservedState},
     wait0 = solver.wall_wait
     regrid!(solver, states, workspace, save)
     spec.wall_regrid += (time_ns() - t0) / 1e9 - (solver.wall_wait - wait0)
-    return nothing
+    return true
 end

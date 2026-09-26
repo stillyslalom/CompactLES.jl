@@ -2112,6 +2112,10 @@ function _write_covered_patch!(coarse_Q, src4, win, off, parent_patch::Patch)
     return coarse_Q
 end
 
+# Test hook: the number of `restrict_level!` calls in this process, from
+# which a test reads the restrictions a run takes per step.
+const RESTRICTION_COUNT = Ref(0)
+
 """
     restrict_level!(solver, states)
 
@@ -2130,6 +2134,7 @@ over every rank owning the parent, including those outside the refined level's
 own subset, so all of them enter the gather and none of them may skip it.
 """
 function restrict_level!(solver, states)
+    RESTRICTION_COUNT[] += 1
     levels = getfield(solver, :levels)
     for ℓ in length(levels):-1:2
         levels[ℓ-1].level_comm.owned || continue

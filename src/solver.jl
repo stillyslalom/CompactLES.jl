@@ -9,7 +9,8 @@
 # dimension is active and unfolded, a static level keeps no scheme at all, and
 # `interface_rhs`, the interpolation order and the restriction live only in
 # the transfers and the `RegridSpec`. The checkpoint's configuration record
-# (io.jl) reads them from here. Never read on the step path.
+# (io.jl) reads them from here, and `run!` reads the restriction once per call.
+# Never read on the step path.
 struct SchemeSettings
     deriv::AbstractCompactScheme
     filt::AbstractCompactScheme

@@ -1364,10 +1364,25 @@ function _rollback!(solver, Q, workspace, callback, control, save, failure,
 end
 
 # Interface and level consistency before the pre-step reads. The single-patch
-# path has neither and skips this entirely.
-_presync!(solver, Q) = Q
-_presync!(solver, states::Vector{<:ConservedState}) =
-    (sync_patches!(solver, states); sync_levels!(solver, states))
+# path has neither and skips this entirely. `restrict = false` omits the
+# restriction and keeps the shell imposition; `run!` passes it when the
+# levels are as its previous post-step synchronization left them. The
+# injection writes parent nodes at least `RESTRICT_MARGIN` from a parent-fed
+# face and reads the fine nodes coincident with them. The shell imposition
+# writes none of those, and the shared-plane averaging leaves them unchanged,
+# since the planes were averaged after the last stage or filter pass, so a
+# repeated restriction would write every node's own value.
+_presync!(solver, Q, restrict::Bool=true) = Q
+function _presync!(solver, states::Vector{<:ConservedState}, restrict::Bool=true)
+    sync_patches!(solver, states)
+    return restrict ? sync_levels!(solver, states) :
+                      prolong_level_ghosts!(solver, states)
+end
+
+# Test toggle: `run!` restricts before every step, as it did before the
+# pre-step restriction became conditional, so a test can compare the two
+# schedules bit for bit in one process.
+const FORCE_PRESYNC_RESTRICT = Ref(false)
 
 # Per-step level maintenance, after the state filter: restrict the fine state
 # onto the covered coarse region, then re-impose the fine shell from the
@@ -1544,6 +1559,17 @@ function run!(solver::Solver, Q, workspace::Workspace;
     # step starts from. A restarted solver (step > 0) has written its initial
     # frames already.
     solver.step == 0 && run_start_callbacks!(callback, solver, Q) && (stopped = true)
+    # Whether the levels are as the previous iteration's post-step
+    # synchronization left them, so that the pre-step restriction would repeat
+    # it (see `_presync!`). False entering the call, since the state may have
+    # been written since the last one, and cleared by everything below that
+    # can write the state between the two: a regrid check, a rollback, a
+    # validity or positivity repair, and a callback effect. Every input is
+    # replicated or reduced, so the collective restriction is taken or skipped
+    # on every rank together. The filtered restriction reads the imposed
+    # shell through its whole-patch line solve and is never skipped.
+    levels_synced = false
+    restrict_repeats = getfield(solver, :schemes).level_restriction === :inject
     while true
         if stopped || !(solver.t < tfin && solver.step < nmax)
             _validate_transport_state!(solver, Q)
@@ -1559,6 +1585,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
                                   save, failure, attempts, rank)::Int
             dt_seen = 0.0
             stopped = false
+            levels_synced = false
             continue
         end
         # Timed from here, not around step! alone: max_rate carries the
@@ -1568,8 +1595,9 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # itself and report that as solver cost.
         wall_0 = time_ns()
         solver.wall_wait = 0.0
-        _maybe_regrid!(solver, Q, workspace, save)
-        _presync!(solver, Q)
+        _maybe_regrid!(solver, Q, workspace, save) && (levels_synced = false)
+        _presync!(solver, Q, !levels_synced || FORCE_PRESYNC_RESTRICT[])
+        levels_synced = false
         # Boundary conditions before the rate measurement, for two reasons. The
         # step should be sized from the state it is about to advance, and the
         # previous iteration's filter_state! has smeared whatever the conditions
@@ -1699,19 +1727,23 @@ function run!(solver::Solver, Q, workspace::Workspace;
             filter_state!(solver, Q)
         end
         _post_step!(solver, Q)
+        levels_synced = restrict_repeats
         # After the filter, not immediately after step!, ensuring the state
         # entering the next iteration's checks is the repaired one whichever of
         # the two damaged it. The compact filter is not monotone, so it can
-        # produce sub-floor values itself.
+        # produce sub-floor values itself. The repaired count is reduced.
         rho_floor > 0 && _positivity_failsafe!(_cold(solver), Q, rho_floor,
-                                                e_floor, control, floor_0, rank)
+                                                e_floor, control, floor_0,
+                                                rank)::Bool && (levels_synced = false)
         # A rollback `continue`s above this, so an abandoned iteration never
         # records a step time; wall_total counts work that stood.
         _validate_transport_state!(solver, Q)
         solver.wall_step = (time_ns() - wall_0) / 1e9
         solver.wall_total += solver.wall_step
         solver.wait_total += solver.wall_wait
-        run_callbacks!(callback, solver, Q) && (stopped = true)
+        stop, ran = run_callbacks!(callback, solver, Q)
+        stop && (stopped = true)
+        ran && (levels_synced = false)
     end
     ft = solver.floor_tally
     if ft.steps > floor_0.steps && rank == 0
@@ -1805,7 +1837,7 @@ function _positivity_failsafe!(solver, Q, rho_floor, e_floor, control, floor_0,
                   "Later steps are counted in solver.floor_tally and " *
                   "summarized when this run ends."
     end
-    return nothing
+    return tally.cells > 0
 end
 
 function run!(solver::Solver, Q; workspace=nothing, kwargs...)
