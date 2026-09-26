@@ -973,7 +973,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     # decomposition through `_repatch` and must not appear here. A moved
     # tile's old state and decomposition on this rank are held past the swap
     # by tile, for the sends the migration posts from them.
-    # On a stacked device level (rhs.jl, stacked tiles) every tile is rebuilt
+    # On a stacked device level (construction.jl, stacked tiles) every tile is rebuilt
     # into the new stacks, a kept tile included, which then copies its arrays
     # across below and drops its old decomposition like the rest.
     stacked = _stacked_level(spec.backend, spec.tile)

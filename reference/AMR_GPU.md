@@ -1126,7 +1126,7 @@ batches its launches across the tiles through stacked storage.
 padded extent share one allocation per field, the tiles' padded blocks
 laid along the third array dimension at a fixed stride, the padded extent
 of one tile (`StackedArray`, `src/pointwise.jl`; `TileStack` on the
-`Level`, `src/levels.jl`; the construction in `src/rhs.jl`). A spanning
+`Level`, `src/levels.jl`; the construction in `src/construction.jl`). A spanning
 `Patch` holds the stacked arrays, the first tile's decomposition and
 communicator, a stacked `RHSWorkspace`, and batched device plans; each
 tile's `Patch` holds plain views of the same arrays, workspace included,

@@ -106,7 +106,9 @@ validation cases are discussed, and never a viscosity.
 | `src/sources.jl`          | Inferable tuple source interface and `ConstantBodyForce` |
 | `src/patches.jl`          | `Patch` (per-patch state), `PatchSolver`, slab layout, interface ghost exchange and shared-plane averaging |
 | `src/levels.jl`           | Nested level refinement: patch–parent coupling schedules, level transfer chains, the level hierarchy |
-| `src/rhs.jl`              | `Solver` container, flux assembly, the conservative NS RHS |
+| `src/solver.jl`           | `Solver` container, property forwarding, index maps, state readers, `allocate_state` |
+| `src/construction.jl`     | `Solver` construction: validation, plans, root patch, refined levels and tiles |
+| `src/rhs.jl`              | Flux assembly, the conservative NS RHS |
 | `src/nscbc.jl`            | Navier–Stokes characteristic boundary conditions (NSCBC): subsonic outflow and inflow |
 | `src/io.jl`               | Per-rank checkpoint/restart, parallel VTK output |
 | `src/hdf5.jl`             | `BlockRegion` and the shared-file HDF5 interface; the writer itself is the `ext/` extension |
@@ -186,9 +188,10 @@ throughout: `gidx(solver, i, j, k)` maps a local interior index to the halo-offs
 `CartesianIndex`, and `xcoord(solver, d, i)` maps a local index to a physical
 coordinate (including any stretch mapping and half-cell offset).
 
-The `Solver` struct (in `rhs.jl`) is the backend container, split since the
-patch refactor (`reference/AMR_GPU.md`, Stage 2) into configuration and
-per-patch state. The solver itself holds the concrete equation set, EOS,
+The `Solver` struct (in `solver.jl`, built in `construction.jl`) is the backend
+container, split since the patch refactor (`reference/AMR_GPU.md`, Stage 2)
+into configuration and per-patch state. The solver itself holds the concrete
+equation set, EOS,
 transport and source tuple, the artificial-property parameters, the metric,
 the run clock, and a vector of `Patch` objects (`patches.jl`); each patch
 holds its `Decomp`, fold specs, per-dimension operator plans (`deriv_plans`,

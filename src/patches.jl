@@ -7,7 +7,7 @@
 # RHSWorkspace shared by the rank's patches of equal padded extent, since a
 # rank advances them in sequence (see "Ownership and freshness" below for the
 # three fields that are read after the evaluation that filled them). The
-# Solver in rhs.jl keeps the physics configuration and the run clock,
+# Solver in solver.jl keeps the physics configuration and the run clock,
 # plus the vector of this rank's patches in global order. In the common case of
 # one patch spanning all ranks, that patch's decomposition is built over
 # MPI.COMM_WORLD, and `Base.getproperty` on Solver forwards the patch-owned
@@ -176,7 +176,7 @@ end
 
 # The set from an allocator `f()` and the zero-extent placeholder `empty` of
 # the same storage type: `field` on a backend above, or the stacked arrays
-# of a device level's spanning patch (rhs.jl).
+# of a device level's spanning patch (construction.jl).
 function _rhs_workspace(f::F, empty, n_species::Int, n_cons::Int,
                         ring::Bool, bulk::Bool) where {F}
     return RHSWorkspace([f() for _ in 1:3, _ in 1:3],
@@ -512,7 +512,7 @@ end
 @inline Base.setproperty!(ps::PatchSolver, name::Symbol, value) =
     setproperty!(getfield(ps, :solver), name, value)
 
-# The patch a `SolverLike` evaluates; the `Solver` method is in rhs.jl.
+# The patch a `SolverLike` evaluates; the `Solver` method is in solver.jl.
 @inline _patch_of(ps::PatchSolver) = getfield(ps, :patch)
 
 # Record the patch of `solver` as the last writer of its workspace's

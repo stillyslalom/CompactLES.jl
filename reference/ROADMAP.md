@@ -255,15 +255,9 @@ filter time-scaling with N1.
   component, mixed types are rejected at setup, and `bench/audit.jl` checks
   Float32 point bodies for promotion (commit `5bd9b46`).
 
-- [ ] **A2 — Make cache ownership and freshness explicit.**
-  Inventory persistent integrator state, per-patch primitives/geometry, shared RHS
-  scratch, and diagnostic storage. Define invalidation after initialization,
-  stepping, filtering, regridding, and restart; audit property forwarding and
-  `prepared`/`primitives_current` assumptions. Include optional material caches,
-  nonlinear trial states, and rollback invalidation under the
-  [material interface design](DESIGN.md#material-and-physics-interfaces).
-  **Gate:** multi-patch consumers cannot silently read another patch's scratch;
-  R1 remains fixed without duplicating every patch workspace.
+- [x] **A2** — Field ownership and freshness are documented in `patches.jl`,
+  a scratch read names the patch that wrote it, and a `:repair` before the
+  step renews the prepared state (commit `57b4ed2`).
 
 - [ ] **A3 — Separate solver construction from RHS execution.**
   Move configuration validation, plan/hierarchy construction, and device setup out

@@ -307,7 +307,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         local_of[ti] = k + 1
     end
     # Every tile is fresh: on the host through `_build_fine_patch`, on a
-    # device backend as stacked storage (rhs.jl).
+    # device backend as stacked storage (construction.jl).
     new_patches, stacks = _build_level_patches(T, regions, held, faces, active,
                                                root.h, spec.n_halo, group.comm,
                                                spec.deriv, spec.filt, spec.smoo,
