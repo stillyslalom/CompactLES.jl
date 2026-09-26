@@ -263,7 +263,7 @@ filter time-scaling with N1.
 
 - [x] **A6** — The supported-combinations page lists what setup accepts and
   the error of each rejection, held to the code by `test/capability_tests.jl`
-  (commit TBD).
+  (commit `fb3b242`).
 
 - [ ] **A7 — Implement material interfaces with an explicit analytic fast path.**
   Follow [the interface design](DESIGN.md#material-and-physics-interfaces):

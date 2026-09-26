@@ -102,6 +102,9 @@ them.
   origin additionally requires a θ range symmetric about π/2, and the poles the
   full range (0, π). Either may be combined with the other. φ may be collapsed
   or resolved over 2π with an even point count, as θ may be at the axis.
+- Without these folds, setup rejects a grid with a node at r = 0 or, under
+  `SphericalMetric`, at θ = 0 or π. A collapsed θ sits at the low end of its
+  range.
 """
 function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 precision::Union{Nothing,Type}=nothing,
@@ -175,6 +178,52 @@ function _validate_configuration(transport, eos, art, bcs, metric, n_global,
         validate_bc(bcs[d][side], metric, eos, d, side)
     end
     return nothing
+end
+
+# Reject a grid node on a coordinate singularity: r = 0 under either curvilinear
+# metric, and sin θ = 0 under SphericalMetric. The volume Jacobian (r, or
+# r² sin θ) vanishes there, so the first step divides by zero. The folds place
+# the nodes half a cell off the singularity, so a folded end never trips this;
+# an unfolded end or a collapsed dimension placed on it does. The node
+# coordinates follow `global_xcoord`, in the solver's element type, and the
+# tolerances absorb that type's representation of π and of the spacing.
+function _check_singular_nodes(::Type{T}, metric, n_global, L_domain, origin,
+                               stretch, coord_shift, h, angle_tol) where {T}
+    metric isa Union{CylindricalMetric,SphericalMetric} || return nothing
+    function first_node(on_singularity, d)
+        ξ0 = stretch[d] === nothing ? T(origin[d]) : zero(T)
+        for g in 1:n_global[d]
+            ξ = ξ0 + coord_shift[d] + (g - 1) * h[d]
+            x = stretch[d] === nothing ? ξ : stretch[d].x(ξ)
+            on_singularity(Float64(x)) && return g
+        end
+        return nothing
+    end
+    r_tol = angle_tol * max(abs(Float64(origin[1])), Float64(L_domain[1]))
+    g = first_node(r -> abs(r) <= r_tol, 1)
+    if g !== nothing
+        spherical = metric isa SphericalMetric
+        throw(ArgumentError(
+            "$(spherical ? "SphericalMetric" : "CylindricalMetric"): radial node " *
+            "$g lies on the $(spherical ? "origin" : "axis") r = 0, where the " *
+            "volume Jacobian vanishes; close that end with " *
+            "$(spherical ? "OriginBC" : "AxisBC"), which offsets the nodes half " *
+            "a cell, or start the radial domain above r = 0"))
+    end
+    metric isa SphericalMetric || return nothing
+    g = first_node(θ -> abs(θ - π * round(θ / π)) <= angle_tol, 2)
+    g === nothing && return nothing
+    n_global[2] == 1 &&
+        throw(ArgumentError(
+            "SphericalMetric: the collapsed θ node lies on a pole (sin θ = 0), " *
+            "where the volume Jacobian vanishes; a collapsed θ sits at the low " *
+            "end of its domain, so start that domain away from 0 and π " *
+            "(at π/2, for example)"))
+    throw(ArgumentError(
+        "SphericalMetric: θ node $g lies on a pole (sin θ = 0), where the " *
+        "volume Jacobian vanishes; fold both θ ends with PoleBC over (0, π), " *
+        "which offsets the nodes half a cell, or keep every θ node strictly " *
+        "between 0 and π"))
 end
 
 function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
@@ -309,6 +358,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         periodic[d] ? Lt[d] / n_global[d] : Lt[d] / (n_global[d] - 1)
     end
     coord_shift = ntuple(d -> fold_lo_dim[d] ? h[d] / 2 : zero(T), 3)
+    _check_singular_nodes(T, metric, n_global, L_domain, origin, stretch,
+                          coord_shift, h, angle_tol)
     filter_weighting in (:none, :volume) ||
         error("filter_weighting must be :none or :volume, got :$filter_weighting")
     # --- Patch layout ----------------------------------------------------

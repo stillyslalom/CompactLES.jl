@@ -256,6 +256,28 @@ end # module Capabilities
                           domain=((0.5, 1.0), (0.0, π), (0.0, 1.0)),
                           metric=SphericalMetric(), ic=C.ic_shell),
                 Numerics(n_global=(16, 16, 1)))
+        rejects("CylindricalMetric: radial node 1 lies on the axis r = 0",
+                C.problem(bcs=(wall, per, per), domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)),
+                          metric=CylindricalMetric(), ic=C.ic_shell),
+                Numerics(n_global=(24, 1, 1)))
+        rejects("SphericalMetric: radial node 1 lies on the origin r = 0",
+                C.problem(bcs=(wall, per, per),
+                          domain=((0.0, 1.0), (π / 2 - 0.5, π / 2 + 0.5), (0.0, 1.0)),
+                          metric=SphericalMetric(), ic=C.ic_shell),
+                Numerics(n_global=(24, 1, 1)))
+        rejects("SphericalMetric: θ node 1 lies on a pole",
+                C.problem(bcs=(wall, wall, per), domain=((0.5, 1.0), (0.0, π), (0.0, 1.0)),
+                          metric=SphericalMetric(), ic=C.ic_shell),
+                Numerics(n_global=(16, 16, 1)))
+        rejects("SphericalMetric: θ node 16 lies on a pole",
+                C.problem(bcs=(wall, wall, per), domain=((0.5, 1.0), (0.1, π), (0.0, 1.0)),
+                          metric=SphericalMetric(), ic=C.ic_shell),
+                Numerics(n_global=(16, 16, 1), precision=Float32))
+        rejects("SphericalMetric: the collapsed θ node lies on a pole",
+                C.problem(bcs=((OriginBC(), SlipWallBC()), per, per),
+                          domain=((0.0, 1.0), (0.0, π), (0.0, 1.0)),
+                          metric=SphericalMetric(), ic=C.ic_radial),
+                Numerics(n_global=(24, 1, 1)))
         rejects("SymmetryPlaneBC on dimension 1 requires CartesianMetric or the z " *
                 "dimension of CylindricalMetric",
                 C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per),
@@ -330,10 +352,10 @@ end # module Capabilities
                 C.problem(bcs=axis, metric=CylindricalMetric(), ic=C.ic_radial),
                 Numerics(n_global=(24, 1, 1), polar_truncation=2.0))
         rejects("polar_truncation requires an unstretched radial dimension",
-                C.problem(bcs=(wall, per, per), domain=((0.0, 1.0), (0.0, 2π), (0.0, 1.0)),
+                C.problem(bcs=(wall, per, per), domain=((0.5, 1.5), (0.0, 2π), (0.0, 1.0)),
                           metric=CylindricalMetric(), ic=C.ic_shell),
                 Numerics(n_global=(16, 32, 1), polar_truncation=2.0,
-                         stretch=(sine_cluster(0.0, 1.0, 0.5, 0.3), nothing, nothing)))
+                         stretch=(sine_cluster(0.5, 1.5, 0.5, 0.3), nothing, nothing)))
         rejects("polar_truncation takes a single patch without refinement",
                 C.problem(bcs=(wall, per, per), domain=((0.5, 1.5), (0.0, 2π), (0.0, 1.0)),
                           metric=CylindricalMetric(), ic=C.ic_shell),

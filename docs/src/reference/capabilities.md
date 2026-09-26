@@ -58,13 +58,13 @@ range (0, π). NSCBC faces require a unit scale factor in their normal
 direction: any Cartesian face, a cylindrical r or z face, or a spherical r
 face.
 
-Two geometric conditions are not checked at setup, and a run that violates
-either fails at its first step with a non-finite state. Every θ node of a
-spherical grid must lie strictly between 0 and π unless both θ ends carry
-[`PoleBC`](@ref). With θ collapsed, the single θ node sits at the low end of
-the θ domain, so a domain such as `(0, π)` places it on the pole. A radial
-domain that starts at r = 0 must close that end with [`AxisBC`](@ref) or
-[`OriginBC`](@ref).
+No grid node may lie on a coordinate singularity, where the volume Jacobian
+vanishes. A radial domain that starts at r = 0 must close that end with
+[`AxisBC`](@ref) or [`OriginBC`](@ref), and every θ node of a spherical grid
+must lie strictly between 0 and π unless both θ ends carry [`PoleBC`](@ref);
+these folds offset the nodes half a cell from the singularity. With θ
+collapsed, the single θ node sits at the low end of the θ domain, so a domain
+such as `(0, π)` places it on the pole.
 
 ## Patch and refinement layouts
 

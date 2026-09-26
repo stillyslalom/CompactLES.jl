@@ -32,7 +32,8 @@ released_communicators(decomp) =
     # boundary with banded interface rows of their own.
     @test npatches(mk(art=ArtificialProperties(detector=:d8))) == 2
     @test npatches(mk(filt=pyranda_filter())) == 2
-    @test_throws ErrorException mk(metric=CylindricalMetric())
+    @test_throws "refinement requires CartesianMetric" mk(metric=CylindricalMetric(),
+                                                          origin=(0.5, 0.0, 0.0))
     @test_throws ErrorException mk(patch_grid=(2, 1, 1))
     # Nesting margin: a region reaching the boundary is refused.
     @test_throws ErrorException Solver(n_global=(96, 1, 1), L_domain=(2π, 1, 1),
