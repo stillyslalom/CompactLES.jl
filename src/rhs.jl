@@ -833,12 +833,15 @@ function _level_ghost_fluxes!(solver::Solver, lev::Level, states, dQs, comm)
     for (k, pi) in enumerate(lev.patches)
         ps = PatchSolver(solver, patches[pi])
         lt = lev.index == 0 ? nothing : lev.transfers[lev.tiles[k]]
-        _patch_ghost_fluxes!(ps, lt, states[pi], dQs[pi], n_cons)
+        _patch_ghost_fluxes!(ps, lt, patches[pi].level_scratch, states[pi], dQs[pi],
+                             n_cons)
     end
     return dQs
 end
 
-function _patch_ghost_fluxes!(solver::SolverLike, lt, Q, dQ, n_cons::Int)
+# `scratch` is the patch's `LevelScratch`, whose gradient ring a device
+# patch reads in place of the transfer's host one.
+function _patch_ghost_fluxes!(solver::SolverLike, lt, scratch, Q, dQ, n_cons::Int)
     decomp = solver.decomp
     eq = solver.equations
     m1, m2, m3 = eq.i_mom
@@ -853,12 +856,7 @@ function _patch_ghost_fluxes!(solver::SolverLike, lt, Q, dQ, n_cons::Int)
         # rank of the patch takes the same branches: the conditions are the
         # patch's, and `_ghost_face` only restricts the writes to the edge.
         if lt !== nothing && lt.gradients !== nothing
-            gring = lt.gradients.gring
-            if _device_path(G)
-                dg = similar(parent(G), size(gring))
-                copyto!(dg, gring)
-                gring = dg
-            end
+            gring = _device_path(G) ? scratch.gring : lt.gradients.gring
             for side in 1:2
                 parent_fed(solver.bcs[d][side]) && _ghost_face(solver, d, side) ||
                     continue

@@ -494,13 +494,22 @@ the interpolation chain produces (`nothing` elsewhere), a box-sized scratch
 field, and the gradient ring, one column per conserved component and
 dimension (`3(c − 1) + j` holds ∂Q_c/∂x_j), laid out as the shell ring is.
 `_impose_shell!` refreshes the ring with the shell itself, so the two
-describe the same interpolated state.
+describe the same interpolated state. A device patch holds the backend's
+form of the plans, the scratch field and the ring in its `LevelScratch`
+instead, and the host fields here go unused on it.
 """
 struct ShellGradients{T}
     plans::Vector{Any}
     tmp::Array{T,3}
     gring::Matrix{T}
 end
+
+# The host plans of the gradient ring over the fine box `boxf`: `deriv`'s
+# box-gradient form along each active dimension at the fine spacing `hf`,
+# `nothing` along a collapsed one.
+_box_gradient_plans(boxf::Decomp{T}, deriv, active::NTuple{3,Bool}, hf) where {T} =
+    Any[active[d] ? plan_direction(boxf, _box_gradient_scheme(deriv), d, T(hf[d])) :
+        nothing for d in 1:3]
 
 # The derivative operator the gradient ring is taken with: `deriv`'s interior
 # with explicit one-sided rows of seventh order on eight points at the box
@@ -1038,42 +1047,58 @@ _padded_extent(e::NTuple{3,Int}, active::NTuple{3,Bool}, n_halo::Int) =
 # four Hermite boxes once per parent step and the blend runs as a kernel),
 # the tensor-product Lagrange chain runs as one kernel per stage over this
 # rank's components, and the shell ring packs on the device ahead of its
-# Allgatherv. The scratch below is the storage that takes: it lives on the
-# fine `Patch` (typed by the patch's array type, so `LevelTransfer`, `Level`
-# and `Solver` keep their types) and is empty on the host backend, whose
-# chain runs on the transfer's own host stages.
+# Allgatherv. Under `interface_flux = :ghost` with molecular transport the
+# conserved gradients of the ring are taken there too, through device plans
+# on the chain's fine box, and the gradient ring stays on the device for the
+# right-hand side that reads it. The scratch below is the storage that
+# takes: it lives on the fine `Patch` (typed by the patch's array type, so
+# `LevelTransfer`, `Level` and `Solver` keep their types) and is empty on the
+# host backend, whose chain runs on the transfer's own host stages.
 
 """
     LevelScratch
 
 Device storage of one refined patch's level transfer: the four Hermite
-boxes (all components, uploaded by `save_level_box!`) and the interpolation
+boxes (all components, uploaded by `save_level_box!`), the interpolation
 chain's stages 0 .. K over this rank's own components (the
-component-distributed chain of `_impose_shell!`). Empty on the host
-backend and on a patch without a parent.
+component-distributed chain of `_impose_shell!`) and, under
+`interface_flux = :ghost` with molecular transport, the backend's form of
+the `ShellGradients` plans, its box-sized scratch field and its gradient
+ring. Empty on the host backend and on a patch without a parent.
 """
-struct LevelScratch{A4<:AbstractArray}
+struct LevelScratch{A4<:AbstractArray,A3<:AbstractArray,A2<:AbstractArray}
     Q0::A4
     dQ0::A4
     Q1::A4
     dQ1::A4
     stages::Vector{A4}
+    gplans::Vector{Any}
+    gtmp::A3
+    gring::A2
 end
 
 # The empty scratch of a host patch or a root patch, typed by the backend's
 # array type through a field of it.
 function _empty_level_scratch(f::AbstractArray{T,3}) where {T}
     e() = similar(f, T, 0, 0, 0, 0)
-    return LevelScratch(e(), e(), e(), e(), typeof(e())[])
+    return LevelScratch(e(), e(), e(), e(), typeof(e())[], Any[],
+                        similar(f, T, 0, 0, 0), similar(f, T, 0, 0))
 end
 
 # The scratch of a refined patch over `region` (parent node space) on the
 # backend `f` belongs to: empty on host storage. `np` and `me` are the
 # tile's communicator size and this rank's position, which fix the
-# components this rank's chain runs (`(me+1):np:n_cons`).
+# components this rank's chain runs (`(me+1):np:n_cons`). A
+# `gradient_deriv` adds the gradient ring's storage on `backend`, whatever
+# the patch's faces: a tile kept at a regrid keeps its scratch while its
+# faces change. `fine_decomp` and `hf` are the patch's decomposition and
+# spacing.
 function _level_scratch(f::AbstractArray{T,3}, region::BlockRegion,
                         active::NTuple{3,Bool}, n_halo::Int, n_cons::Int,
-                        np::Int, me::Int) where {T}
+                        np::Int, me::Int; gradient_deriv=nothing,
+                        backend::AbstractBackend=CPUBackend(),
+                        fine_decomp::Union{Nothing,Decomp}=nothing,
+                        hf=nothing) where {T}
     _device_path(f) || return _empty_level_scratch(f)
     dims = [d for d in 1:3 if active[d]]
     boxext = ntuple(d -> active[d] ? region.extent[d] + 2 * LEVEL_BUFFER :
@@ -1083,9 +1108,24 @@ function _level_scratch(f::AbstractArray{T,3}, region::BlockRegion,
     box = _padded_extent(exts[1], active, n_halo)
     stages = [similar(f, T, _padded_extent(e, active, n_halo)..., n_owned)
               for e in exts]
+    gplans = Any[]
+    gtmp = similar(f, T, 0, 0, 0)
+    gring = similar(f, T, 0, 0)
+    if gradient_deriv !== nothing
+        # The chain's final box, as `_refine_chain` builds it.
+        boxf = Decomp{T}(exts[end], ntuple(d -> !active[d], 3); dims=(1, 1, 1),
+                         n_halo=n_halo, comm=MPI.COMM_SELF)
+        gplans = Any[p === nothing ? nothing : backend_plan(backend, p)
+                     for p in _box_gradient_plans(boxf, gradient_deriv, active, hf)]
+        gtmp = fill!(similar(f, T, _padded_extent(exts[end], active, n_halo)), 0)
+        _, ringlen = _slab_table(_ring_slabs(region,
+                                             ntuple(d -> fine_decomp.active[d], 3),
+                                             fine_decomp.n_halo_d))
+        gring = fill!(similar(f, T, ringlen, 3 * n_cons), 0)
+    end
     return LevelScratch(similar(f, T, box..., n_cons), similar(f, T, box..., n_cons),
                         similar(f, T, box..., n_cons), similar(f, T, box..., n_cons),
-                        stages)
+                        stages, gplans, gtmp, gring)
 end
 
 # Stage-0 sources of an imposition: the gathered box as it is, or the cubic
@@ -1349,11 +1389,8 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
     # run the chain.
     gradients = nothing
     if gradient_deriv !== nothing && fine_decomp !== nothing
-        boxf = pdecomps[end]
-        scheme = _box_gradient_scheme(gradient_deriv)
-        plans = Any[active[d] ? plan_direction(boxf, scheme, d,
-                                               T(parent_h[d]) / 3) : nothing
-                    for d in 1:3]
+        plans = _box_gradient_plans(pdecomps[end], gradient_deriv, active,
+                                    ntuple(d -> T(parent_h[d]) / 3, 3))
         gradients = ShellGradients{T}(plans, zeros(T, size(pstage[end])),
                                       zeros(T, shell.len, 3 * n_cons))
     end
@@ -1791,9 +1828,11 @@ end
 # Under `lt.gradients` each component's ring is followed by the rings of its
 # derivatives along the three dimensions (zero along a collapsed one), taken
 # on the fine box the chain produced, and the unpack fills the gradient ring
-# beside the shell ring. The derivatives run on the host: a device patch's
-# final stage is downloaded for them, which only this opt-in path pays. A
-# tile with no parent-fed face reads no gradient ring and takes none.
+# beside the shell ring. A device patch takes the derivatives through its
+# scratch's device plans and packs and unpacks both rings on the device, so
+# the box stays there; only the Allgatherv of a decomposed patch stages the
+# packed rings through the host. A tile with no parent-fed face reads no
+# gradient ring and takes none.
 function _impose_shell!(solver, states, lt::LevelTransfer, fill)
     lt.gradients === nothing ||
         !any(d -> lt.active[d] && any(lt.imposed[d]), 1:3) ||
@@ -1895,26 +1934,17 @@ function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
     owned = (me+1):np:n_cons
     n_owned = length(owned)
     sendbuf = _fit!(shell.buffers.send, 4 * ringlen * n_owned)
-    device_stage = nothing
     if _device_path(Qf)
-        scratch = fine.level_scratch
-        stages = scratch.stages
-        _fill_stage0_dev!(fill, stages[1], scratch, lt, owned)
-        for k in 1:K
-            _interpolate_dev!(stages[k+1], lt.pplans[k], stages[k], n_owned)
-        end
-        device_stage = Array(stages[K+1])
+        _impose_shell_gradients_dev!(fine, Qf, lt, fill, owned, sendbuf, shift,
+                                     n_cons)
+        return states
     end
     bf = lt.pstage[K+1]
     pos = 0
-    for (b, c) in enumerate(owned)
-        if device_stage === nothing
-            _fill_stage0!(fill, lt.pstage[1], lt, c)
-            for k in 1:K
-                interpolate!(lt.pstage[k+1], lt.pplans[k], lt.pstage[k])
-            end
-        else
-            copyto!(bf, view(device_stage, :, :, :, b))
+    for c in owned
+        _fill_stage0!(fill, lt.pstage[1], lt, c)
+        for k in 1:K
+            interpolate!(lt.pstage[k+1], lt.pplans[k], lt.pstage[k])
         end
         for j in 0:3
             src = bf
@@ -1954,6 +1984,116 @@ function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
     end
     _write_shell_from_ring!(Qf, ring, shell.table, lt, fdcp, n_cons)
     return states
+end
+
+# The device form over the fine patch's scratch: the chain, the derivatives
+# through the scratch's plans, and a pack of each owned component's value and
+# gradient rings into one device buffer in the order the host path packs
+# them. The unpack writes the shell ring and the scratch's gradient ring from
+# that buffer, or, on a decomposed patch, from the gathered rings, which
+# stage through the host for the Allgatherv: one download of this rank's
+# rings and one upload of every rank's.
+function _impose_shell_gradients_dev!(fine, Qf, lt::LevelTransfer, fill, owned,
+                                      sendbuf, shift, n_cons::Int)
+    fdcp = fine.decomp
+    np = MPI.Comm_size(fdcp.comm)
+    K = length(lt.pplans)
+    shell = lt.shell
+    ringlen = shell.len
+    table = (shell.table...,)
+    boxf = lt.pdecomps[K+1]
+    padb = boxf.n_halo_d
+    scratch = fine.level_scratch
+    stages = scratch.stages
+    n_owned = length(owned)
+    _fill_stage0_dev!(fill, stages[1], scratch, lt, owned)
+    for k in 1:K
+        _interpolate_dev!(stages[k+1], lt.pplans[k], stages[k], n_owned)
+    end
+    route = parent(Qf)
+    dsend = _device_send_stage(route, 4 * ringlen * n_owned)
+    for b in 1:n_owned
+        bf = view(stages[K+1], :, :, :, b)
+        for j in 0:3
+            base = (4 * (b - 1) + j) * ringlen
+            if j == 0
+                pointwise!(_ring_pack_field_point!, route, ringlen, 1, 1,
+                           dsend, bf, table, shift, padb, base)
+                continue
+            end
+            plan = scratch.gplans[j]
+            if plan === nothing
+                fill!(view(dsend, (base + 1):(base + ringlen)), 0)
+                continue
+            end
+            apply_along!(scratch.gtmp, plan, bf, boxf)
+            pointwise!(_ring_pack_field_point!, route, ringlen, 1, 1,
+                       dsend, scratch.gtmp, table, shift, padb, base)
+        end
+    end
+    recv = dsend
+    if np > 1
+        counts = 4 .* shell.counts
+        total = sum(counts)
+        _tracked_copy!(sendbuf, 1, dsend, 1, 4 * ringlen * n_owned)
+        hrecv = _fit!(shell.buffers.recv, total)
+        MPI.Allgatherv!(sendbuf, MPI.VBuffer(hrecv, counts), fdcp.comm)
+        recv = _device_send_stage(route, total)
+        _tracked_copy!(recv, 1, hrecv, 1, total)
+    end
+    ring = similar(route, ringlen, n_cons)
+    pointwise!(_ring_unpack_point!, route, ringlen, 4 * n_cons, 1,
+               ring, scratch.gring, recv, ringlen, np, n_cons)
+    _write_shell_from_ring!(Qf, ring, shell.table, lt, fdcp, n_cons)
+    return Qf
+end
+
+# One ring entry of a field `src` over the chain's final box, written at
+# offset `base` of the send buffer; the slab decode is `_ring_pack_point!`'s.
+@inline function _ring_pack_field_point!(send, src, table, shift, padb, base,
+                                         at, _j, _k)
+    @inbounds for (lo, hi, sbase) in table
+        n1 = hi[1] - lo[1] + 1
+        n2 = hi[2] - lo[2] + 1
+        n3 = hi[3] - lo[3] + 1
+        if sbase < at <= sbase + n1 * n2 * n3
+            r = at - sbase - 1
+            g1 = lo[1] + r % n1
+            r ÷= n1
+            g2 = lo[2] + r % n2
+            g3 = lo[3] + r ÷ n2
+            send[base + at] = src[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
+                                  g3 + shift[3] + padb[3]]
+        end
+    end
+    return nothing
+end
+
+# One entry of the gathered rings: block `p − 1` holds, in the ranks'
+# order, the value ring (`j = 0`) or the gradient ring along `j` of the
+# component that position of the order names, rank r's components being
+# (r+1):np:n_cons.
+@inline function _ring_unpack_point!(ring, gring, recv, ringlen, np, n_cons,
+                                     at, p, _k)
+    @inbounds begin
+        blk, j = divrem(p - 1, 4)
+        c = 0
+        for r in 0:np-1
+            nr = r < n_cons ? (n_cons - r - 1) ÷ np + 1 : 0
+            if blk < nr
+                c = r + 1 + blk * np
+                break
+            end
+            blk -= nr
+        end
+        v = recv[(p - 1) * ringlen + at]
+        if j == 0
+            ring[at, c] = v
+        else
+            gring[at, 3 * (c - 1) + j] = v
+        end
+    end
+    return nothing
 end
 
 function _write_shell_from_ring!(Qf, ring, table, lt::LevelTransfer,

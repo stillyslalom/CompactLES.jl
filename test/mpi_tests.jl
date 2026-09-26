@@ -2301,8 +2301,25 @@ function test_staged_exchange()
         run!(s, states; tfinal=0.03, nmax=41)
         return s, states
     end
+    # A viscous level under `interface_flux = :ghost`, decomposed over the
+    # ranks with the root: the gradient ring is taken through the fine
+    # patch's device plans, and the packed rings cross the component-
+    # distributed Allgatherv through the host staging.
+    function ghost_level(backend)
+        s = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                   art=ArtificialProperties(enabled=false),
+                   transport=ConstantTransport(mu0=2e-2), interface_flux=:ghost,
+                   refine=BlockRegion((80, 0, 0), (32, 1, 1)), backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) ->
+            Prim(u=(0.5 + 0.1 * sin(2x), 0, 0), p=1.0 + 0.05 * cos(x),
+                 rho=1.0 + 0.2 * sin(x)))
+        run!(s, states; tfinal=0.3, nmax=6)
+        return s, states
+    end
     for (label, build) in (("two viscous slabs", slabs),
-                           ("tiled regridding Sod", tiled))
+                           ("tiled regridding Sod", tiled),
+                           ("ghost-flux viscous level", ghost_level))
         s5, q5 = build(CPUBackend())
         CL.FORCE_KA[] = true
         CL.FORCE_DEVICE_EXCHANGE[] = true

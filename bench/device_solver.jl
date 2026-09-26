@@ -171,7 +171,15 @@ function main(opt)
     end
     for (label, kw) in (("refined static wave", (;)),
                         ("refined subcycle+regrid",
-                         (subcycle=true, regrid_interval=20, tag_buffer=8)))
+                         (subcycle=true, regrid_interval=20, tag_buffer=8)),
+                        # The coarse-fine molecular ghost flux: the gradient
+                        # ring taken on the fine box through device plans.
+                        ("refined viscous, ghost flux",
+                         (transport=ConstantTransport(mu0=2e-2),
+                          interface_flux=:ghost)),
+                        ("refined viscous, ghost flux, subcycled",
+                         (transport=ConstantTransport(mu0=2e-2),
+                          interface_flux=:ghost, subcycle=true)))
         s1, q1 = refined_wave(CPUBackend(); kw...)
         s2, q2 = refined_wave(DeviceBackend(ka_backend); kw...)
         dmax = maximum(maximum(abs.(Array(parent(q2[i])) .- parent(q1[i])))
@@ -227,12 +235,12 @@ function main(opt)
     # dimension, the configuration whose per-tile launch floor the stacked
     # storage is meant to amortize. Static refinement, so the timing is the
     # step's alone.
-    function tiled_box(backend)
+    function tiled_box(backend; kw...)
         N = 30
         s = Solver(n_global=(N, N, N), L_domain=(2π, 2π, 2π), bcs=(per, per, per),
                    transport=ConstantTransport(mu0=1e-2), subcycle=true,
                    refine=BlockRegion((11, 11, 11), (7, 7, 13)), tile=6,
-                   backend=backend)
+                   backend=backend; kw...)
         states = allocate_state(s)
         initialize!(s, states, (x, y, z) ->
             Prim(u=(0.3 + 0.1 * sin(x) * cos(y) * cos(z),
@@ -243,7 +251,9 @@ function main(opt)
     end
     for (label, build) in (("two viscous slabs", two_slabs),
                            ("tiled subcycled regridding Sod", tiled_sod),
-                           ("tiled 3-D box, 12 tiles", tiled_box))
+                           ("tiled 3-D box, 12 tiles", tiled_box),
+                           ("tiled 3-D box, ghost flux",
+                            b -> tiled_box(b; interface_flux=:ghost)))
         s1, q1 = build(CPUBackend())
         s2, q2 = build(DeviceBackend(ka_backend))
         dmax = states_diff(q1, q2)

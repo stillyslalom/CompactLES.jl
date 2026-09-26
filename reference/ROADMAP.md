@@ -173,9 +173,7 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
 - [ ] **N15b — Promote `interface_flux = :ghost` to the default.** The ghost
   path leads the closure rows on every smooth row, inviscid and viscous, keeps
   the shock minima and conserves as they do (N15, N15a). Before it becomes the
-  default: take the coarse-fine gradient ring on the device (device plans on the
-  fine box and a device ring; a device patch now downloads the box at every
-  imposition), give a custom EOS the temperature-gradient hook the coarse-fine
+  default: give a custom EOS the temperature-gradient hook the coarse-fine
   molecular flux needs, re-record every guard and serial value a patched or
   refined default run moves (`test/convergence.jl` interface rows, the MPI
   suite's patch and level phases, the tutorials), and settle Float32, where the

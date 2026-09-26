@@ -979,7 +979,9 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons,
                         detector === :d8, bulk)
     scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
-                             MPI.Comm_size(comm), MPI.Comm_rank(comm))
+                             MPI.Comm_size(comm), MPI.Comm_rank(comm);
+                             gradient_deriv=ghost_viscous ? deriv : nothing,
+                             backend, fine_decomp=decomp_f, hf)
     # Every face of a refined patch is an interface end, a coarse-fine or a
     # same-level one, so each active dimension takes a ghost-flux array.
     gflux = _ghost_flux_arrays(() -> parent(allocate_state(backend, decomp_f, n_cons)),
@@ -1219,7 +1221,9 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
         plans_t = _fine_plans(decomp_t, hf, deriv, filt, smoo, interface_rhs, backend;
                               interface_divergence, detector)
         scratch = _level_scratch(empty_raw, refine, active_g, n_halo, n_cons,
-                                 MPI.Comm_size(comm), MPI.Comm_rank(comm))
+                                 MPI.Comm_size(comm), MPI.Comm_rank(comm);
+                                 gradient_deriv=ghost_viscous ? deriv : nothing,
+                                 backend, fine_decomp=decomp_t, hf)
         push!(tiles, _assemble_patch(ids[slot], level, region_t, comm, decomp_t, hf,
                                      faces[slot], _fine_bcs(active_g, faces[slot]),
                                      plans_t, view(empty_raw, :, :, 1:0),

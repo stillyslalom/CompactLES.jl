@@ -1138,7 +1138,11 @@ per fine node; and the shell ring packs on the device before its
 Allgatherv, so a subcycled step's impositions cost no host arithmetic. A
 fresh tile's whole-patch fill at a regrid runs the same chain in slices of
 the scratch's component width. On a one-rank tile the packed ring stays on
-the device and the shell writes from it directly.
+the device and the shell writes from it directly. Under `interface_flux =
+:ghost` with molecular transport the scratch also holds device plans on the
+chain's fine box and the gradient ring, which the chain fills beside the
+shell ring and the coarse-fine ghost fluxes read in place; only a
+decomposed tile's Allgatherv stages the rings through the host.
 
 ### Communication
 
