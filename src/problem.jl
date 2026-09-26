@@ -792,7 +792,10 @@ combined with `amr`.
   positive edge (in parent nodes, at least 3) covers it with the tiles of a
   global lattice of that edge instead, abutting tiles sharing their
   interface plane and coupled as root slabs are. Regridding then moves
-  tiles in and out of the set, a surviving tile never changing its region.
+  tiles in and out of the set, a surviving tile never changing its region,
+  and the set may become empty: a check at which no cell tags or holds
+  removes every tile past `tile_lifetime`, and the next tag creates tiles
+  again.
 - `rebalance` (default `0`, off) and `rebalance_persist` (default `2`): a
   threshold on the ratio of the largest to the mean per-rank busy time over
   a regrid interval, measured by the run, above which a tiled level is

@@ -25,10 +25,11 @@
 # boundary planes (the old plane was imposed data; the new one is re-imposed by
 # the next shell fill).
 #
-# When no cell tags, or the box did not move, the current region is kept: a
-# feature fading below threshold leaves refinement where it last was instead
-# of collapsing it, the conservative choice for a machinery whose purpose is
-# robustness at captured features.
+# When no cell tags, or the box did not move, the box keeps its current region:
+# a feature fading below threshold leaves refinement where it last was instead
+# of collapsing it, since the box has no empty form. A tiled level instead
+# drops every tile past its lifetime when nothing tags or holds, and the next
+# tag creates tiles again (`_regrid_tiles!`).
 
 # --- Tag criteria -------------------------------------------------------------
 #
@@ -889,10 +890,13 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     active = ntuple(d -> n_global[d] > 1, 3)
     flags, K = _tag_tiles(solver, states[1], spec)
     busy = _rebalance_due!(solver, spec)
-    any(!=(0), flags) || return false
+    old_regions = [lt.region for lt in lev.transfers]
+    # With no tile and no tag there is nothing to build or move; the flags
+    # are reduced and the tile set is held by every rank, so this return is
+    # uniform.
+    isempty(old_regions) && all(==(0), flags) && return false
     lo = ntuple(d -> 1 + spec.margin, 3)
     hi = ntuple(d -> n_global[d] - spec.margin, 3)
-    old_regions = [lt.region for lt in lev.transfers]
     # A cell at the tag level is wanted; one at the hold level, or younger
     # than the lifetime, is wanted where its tile exists (the hysteresis).
     # `created` is derived from the reduced flags, so every rank holds it.
@@ -905,7 +909,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         young = exists && spec.checks - get(spec.created, t, 0) < spec.lifetime
         (f == TAG_MARK || (exists && (f == TAG_HOLD || young))) && push!(wanted, t)
     end
-    isempty(wanted) && return false
+    # An empty wanted set removes every tile: the level stays in the
+    # hierarchy with no tiles, and the next tag builds its first again.
     wanted != old_regions || busy !== nothing || return false
     for r in old_regions
         r in wanted || delete!(spec.created, r)
@@ -932,7 +937,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     # tile takes ranks beyond the old level or a departure vacates its top
     # ranks; a survivor's Cartesian communicator is independent of the
     # level communicator the resize replaces, so it survives the resize.
-    if busy === nothing
+    if busy === nothing || isempty(wanted)
         owners, np_new = _place_tiles(wanted, active, root_lc.size,
                                       old_regions, lev.owners)
     else
@@ -1070,10 +1075,10 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
             push!(new_patches, p)
         end
     end
-    transfers = [build_level_transfer(
+    transfers = LevelTransfer{T}[build_level_transfer(
         T, tr, active, spec.n_halo, [root.region], [1],
         Union{Nothing,Decomp{T}}[root.decomp], local_of[ti],
-        lev.transfers[1].restriction, n_cons, getfield(solver, :subcycle),
+        spec.restriction, n_cons, getfield(solver, :subcycle),
         local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp,
         root_lc.comm, length(owners[ti]), faces[ti];
         interpolation_order=spec.interpolation_order,

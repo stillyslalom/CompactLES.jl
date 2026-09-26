@@ -1298,6 +1298,99 @@ function test_hierarchy_checkpoint()
 end
 
 # ---------------------------------------------------------------------------
+# 7b'. The unrefined start, decomposed: the tiled, regridded level of the
+#     serial case holds no tile on any rank at setup, the shock fired from a
+#     Dirichlet inflow creates tiles that some ranks hold none of, the tiles
+#     follow the shock as serially, and runs checkpointed before and after
+#     the creation continue bitwise on the same rank count. A check on a
+#     quiescent state then removes every tile on every rank together.
+# ---------------------------------------------------------------------------
+function test_unrefined_start()
+    section("unrefined start: tiles created by a boundary-driven shock")
+    ramp(t) = clamp((t - 0.04) / 0.01, 0.0, 1.0)
+    inflow = DirichletBC((x, y, z, t) -> (w = ramp(t);
+        Prim(rho=1 + 0.8621w, u=(0.8216w, 0.0, 0.0), p=1 + 1.4583w)))
+    rest = (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1.0)
+    prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=((inflow, SlipWallBC()), per3[2], per3[3]), ic=rest)
+    num = Numerics(n_global=(121, 1, 1), cfl=0.3,
+                   amr=AMR(initial=:sensor, tile=8, regrid_interval=5,
+                           tag_buffer=2, subcycle=true))
+    empty_everywhere(s, states) =
+        gmax(!(isempty(level_regions(s, 1)) && length(states) == 1 &&
+               !s.levels[2].level_comm.owned &&
+               all(==(0), s.patches[1].covered)))
+    solver, states = setup(prob, num)
+    check("unrefined start: no tile on any rank at setup",
+          empty_everywhere(solver, states), 0.5)
+    run!(solver, states; tfinal=1.0, nmax=15)
+    check("unrefined start: no tile before the shock (step 15)",
+          empty_everywhere(solver, states), 0.5)
+    save_checkpoint(solver, states, "mpi_unref_before")
+    run!(solver, states; tfinal=1.0, nmax=50)
+    regs50 = level_regions(solver, 1)
+    check("unrefined start: tiles created by step 50 as serial (4, 8)",
+          [r.offset[1] for r in regs50] == [4, 8] ? 0.0 : 1.0, 0.5)
+    check("unrefined start: state vector aligned with the patches",
+          gmax(length(states) != length(solver.patches)), 0.5)
+    save_checkpoint(solver, states, "mpi_unref_after")
+    run!(solver, states; tfinal=1.0, nmax=80)
+    regs = level_regions(solver, 1)
+    check("unrefined start: tiles follow the shock as serial (4, 8, 16)",
+          [r.offset[1] for r in regs] == [4, 8, 16] ? 0.0 : 1.0, 0.5)
+    ps = PatchSolver(solver, solver.patches[1])
+    off = ps.decomp.offset[1]
+    local_shock = something(findfirst(i -> states[1][gidx(ps, i, 1, 1), 1] < 1.43,
+                                      1:ps.decomp.n_local[1]), typemax(Int) - off)
+    shock = Int(MPI.Allreduce(local_shock + off, MPI.MIN, comm))
+    check("unrefined start: the shock lies in a tile",
+          any(r -> r.offset[1] < shock <= r.offset[1] + r.extent[1], regs) ? 0.0 : 1.0,
+          0.5)
+    idle = gsum(length(states) == 1)
+    np > 2 * length(regs) &&
+        check("unrefined start: some rank holds no tile", idle > 0 ? 0.0 : 1.0, 0.5)
+    MPI.Barrier(comm)
+    for stem in ("before", "after")
+        r, rs = setup(prob, num)
+        load_checkpoint!(r, rs, "mpi_unref_" * stem)
+        want = stem == "before" ? BlockRegion[] : regs50
+        check("unrefined start: restart $stem rebuilds the recorded tiles",
+              level_regions(r, 1) == want ? 0.0 : 1.0, 0.5)
+        run!(r, rs; tfinal=1.0, nmax=80)
+        check("unrefined start: restart $stem reaches the same time",
+              gmax(abs(r.t - solver.t)), 1e-300)
+        tracks = level_regions(r, 1) == regs &&
+                 getfield(r, :regrid).created == getfield(solver, :regrid).created
+        check("unrefined start: restart $stem tracks the tile set",
+              tracks ? 0.0 : 1.0, 0.5)
+        d = length(rs) == length(states) ? 0.0 : Inf
+        if isfinite(d)
+            for i in eachindex(states)
+                inner = CL.interior(solver.patches[i].decomp)
+                d = max(d, maximum(abs.(parent(rs[i])[inner, :] .-
+                                        parent(states[i])[inner, :])))
+            end
+        end
+        check("unrefined start: restart $stem continues bitwise", gmax(d), 1e-300)
+    end
+    initialize!(solver, states, rest)
+    workspace = Workspace(states)
+    getfield(solver, :regrid).checks += 1
+    CL.regrid!(solver, states, workspace, nothing)
+    check("unrefined start: a quiescent check removes every tile",
+          empty_everywhere(solver, states), 0.5)
+    run!(solver, states; tfinal=1.0, nmax=solver.step + 10)
+    check("unrefined start: the re-formed shock creates tiles again",
+          isempty(level_regions(solver, 1)) ? 1.0 : 0.0, 0.5)
+    check("unrefined start: finite composite state",
+          gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith("mpi_unref"), readdir()))
+    MPI.Barrier(comm)
+end
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 rank == 0 && println("=== CompactLES multi-rank test suite (np = $np) ===")
@@ -2823,6 +2916,7 @@ const SUITE = (
     ("line sample", test_line_sample),
     ("checkpoint", test_checkpoint),
     ("hierarchy checkpoint", test_hierarchy_checkpoint),
+    ("unrefined start", test_unrefined_start),
     ("two-patch layout", test_two_patch_layout),
     ("bulk patched layout", test_bulk_patched),
 )

@@ -338,6 +338,9 @@ function _write_record!(file, rec::HierarchyRecord, rank::Int)
         regions = reshape(Int64[v for r in lev.regions for v in (r.offset..., r.extent...)],
                           6, n)
         owners = reshape(Int64[v for o in lev.owners for v in (first(o), last(o))], 2, n)
+        # A level with no tiles writes no tables; the reader takes their
+        # absence as the empty set.
+        n == 0 && continue
         write_meta!(lg, "regions", regions, rank)
         write_meta!(lg, "owners", owners, rank)
     end
@@ -358,6 +361,10 @@ function _read_record(file)
     g = file["hierarchy"]
     levels = LevelRecord[]
     for ℓ in 1:Int(read(g["n_levels"]))
+        if !haskey(g["level$ℓ"], "regions")
+            push!(levels, LevelRecord(BlockRegion[], UnitRange{Int}[]))
+            continue
+        end
         R = read(g["level$ℓ/regions"])
         O = read(g["level$ℓ/owners"])
         push!(levels, LevelRecord(

@@ -140,9 +140,12 @@ end
     # ownership change would decide which steps see current coefficients.
     # Suppress all density tags, then make the coefficient cache stale without
     # touching Q. An unchanged check must not replace the existing savepoint.
+    # With nothing tagged the tiles are kept by their lifetime alone; without
+    # it the check would remove them all.
     saved = CL.Savepoint(CL._snapshot(Qs), CL._art_snapshot(sod), sod.t, sod.step, -1)
     saved_Q, saved_art = saved.Q, saved.art
     sod.regrid.threshold = Inf
+    sod.regrid.lifetime = typemax(Int)
     for p in sod.patches, a in CL._art_arrays(p)
         fill!(a, 0)
     end

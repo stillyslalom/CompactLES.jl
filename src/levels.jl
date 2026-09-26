@@ -152,10 +152,13 @@ absent_level_comm() = LevelComm(MPI.COMM_NULL, false, false, 0)
 
 The [`LevelComm`](@ref) of a level owned by the first `np` ranks of `parent`.
 Returns `parent` unsplit when `np` is its whole size, so the common case adds
-no communicator. Collective over `parent.comm`; a rank outside `parent` must
-not call it, and every rank inside must pass the same `np`.
+no communicator, and `absent_level_comm()` when `np` is zero, the
+ownership of a level with no tiles. Collective over `parent.comm` otherwise;
+a rank outside `parent` must not call it, and every rank inside must pass the
+same `np`.
 """
 function split_level_comm(parent::LevelComm, np::Int)
+    np == 0 && return absent_level_comm()
     np == parent.size && return LevelComm(parent.comm, true, false, np)
     key = MPI.Comm_rank(parent.comm)
     inside = key < np
@@ -676,7 +679,9 @@ rank holding no tile of the level; `owners` and `transfers` are held by every
 rank of the parent level's subset, since the box gathers and the restriction
 write-back built on them run there, and are indexed by tile. `owners` is the
 authority across regrids: a surviving tile keeps its range there until a
-rebalance moves it (`_place_tiles`, `src/regrid.jl`).
+rebalance moves it (`_place_tiles`, `src/regrid.jl`). A regridded tiled
+level may hold no tiles; `owners` and `transfers` are then empty and every
+rank carries an absent `LevelComm`.
 `patches[i]` is tile `tiles[i]`; `transfers[t].fine_index` is the
 `solver.patches` index of tile `t` on this rank, or 0.
 """
@@ -2260,8 +2265,8 @@ Configuration and rebuild inputs for tagging-driven regridding
 buffer of coarse cells added around tagged cells, the nesting margin, and
 everything a fine-patch rebuild needs that the `Solver` does not itself
 retain: the schemes, including the `interface_divergence` source, the
-halo width, the interface treatment, the level interpolation order and the
-backend.
+halo width, the interface treatment, the level interpolation order, the
+level restriction and the backend.
 `last_step` records the step of the most recent regrid check so a run
 resumed on the same solver keeps the cadence. Constructed by the
 [`Solver`](@ref) constructor's `regrid_interval` keyword; consumed by
@@ -2327,6 +2332,7 @@ mutable struct RegridSpec{T}
                                      # created at (0 at setup)
     interface_divergence::Union{Nothing,CompactScheme{T},BandedCompactScheme{T}}
     interpolation_order::Int         # Lagrange order of a rebuilt transfer
+    restriction::Symbol              # level_restriction of a rebuilt transfer
 end
 
 RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
@@ -2336,7 +2342,7 @@ RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
                   deriv, filt, smoo, backend, tile, last_step,
                   rebalance, persist, 0, 1.0, 0.0, 0.0, 0.0,
                   zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
-                  T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6)
+                  T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6, :inject)
 
 """
     hermite_level_shell!(solver, states, lt, θ, dt)

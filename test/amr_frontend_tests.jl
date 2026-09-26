@@ -67,6 +67,15 @@ end
     @test_throws ArgumentError setup(uniform,
         Numerics(n_global=(64, 1, 1), filter_interval=0,
                  amr=AMR(initial=(x, y, z, t) -> false)))
+    # A tiled, regridded run has an empty form and starts in it.
+    unrefined, Qu = setup(uniform,
+        Numerics(n_global=(64, 1, 1), filter_interval=0,
+                 amr=AMR(initial=:sensor, tile=8)))
+    @test nlevels(unrefined) == 2 && isempty(level_regions(unrefined, 1))
+    @test length(Qu) == 1
+    @test_throws ArgumentError setup(uniform,
+        Numerics(n_global=(64, 1, 1), filter_interval=0,
+                 amr=AMR(initial=:sensor, tile=8, regrid_interval=0)))
     invalid = amr_test_problem((x, y, z, h) ->
         Prim(p=1.0, rho=-1.0, u=(0.0, 0.0, 0.0)))
     @test_throws SolverFailure setup(invalid,

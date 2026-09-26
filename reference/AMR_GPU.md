@@ -622,11 +622,16 @@ interpolation of the parent; an unwanted one is dropped, its last
 restriction already on the parent. Between distinct lattice cells no
 carry-over arises: they overlap in a shared plane at most, and that plane
 takes the neighbor's values at the first averaging after the regrid, a
-one-node perturbation of interpolation order. A refined level is never
-empty: as for the box, a check at which no cell reaches the hold level
-keeps the tile set as it is, whatever the lifetimes say, so a feature that
-fades entirely leaves its last tiles in place rather than emptying the
-level, which the hierarchy does not represent. A surviving tile whose owner
+one-node perturbation of interpolation order. A tiled level may hold no
+tiles: a check at which no cell reaches the hold level drops every tile past
+its lifetime, and the level stays in `solver.levels` with no transfers, an
+absent `LevelComm` on every rank and a zero covered mask, so the solver type
+and the state vector survive the change. The subcycled driver takes a child
+with no tiles as no child, so the root step is the unrefined one, and the
+next tag places the first tiles as fresh ones (`_place_tiles` with no
+survivor). The AMR frontend starts a tiled, regridded run this way when its
+initial state tags nothing. The box has no empty form and keeps its region
+when nothing tags. A surviving tile whose owner
 range moved is rebuilt on its new owners and takes its evolved interior back
 by point-to-point migration
 ([Ownership and load balance](#ownership-and-load-balance)).

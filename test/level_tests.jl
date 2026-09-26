@@ -1561,3 +1561,73 @@ end
     @test drift < 1e-3
     @test double > 1e-2
 end
+
+@testset "tiled regrid starts unrefined and refines on a boundary-driven shock" begin
+    # A tube at rest with a Dirichlet inflow that ramps to the post-shock
+    # state of a Mach 1.5 shock over 0.04 < t < 0.05. The initial state tags
+    # nothing, so the frontend starts with a tiled level holding no tiles;
+    # the shock fired from the inflow creates them and they follow it. Runs
+    # checkpointed before and after the creation continue bit for bit.
+    per = (PeriodicBC(), PeriodicBC())
+    ramp(t) = clamp((t - 0.04) / 0.01, 0.0, 1.0)
+    inflow = DirichletBC((x, y, z, t) -> (w = ramp(t);
+        Prim(rho=1 + 0.8621w, u=(0.8216w, 0.0, 0.0), p=1 + 1.4583w)))
+    rest(x, y, z) = Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1.0)
+    prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=((inflow, SlipWallBC()), per, per), ic=rest)
+    num = Numerics(n_global=(121, 1, 1), cfl=0.3,
+                   amr=AMR(initial=:sensor, tile=8, regrid_interval=5,
+                           tag_buffer=2, subcycle=true))
+    same(a, b, decomp) = (inner = CL.interior(decomp);
+                          parent(a)[inner, :] == parent(b)[inner, :])
+    empty_level(s, states) = isempty(level_regions(s, 1)) && nlevels(s) == 2 &&
+        length(states) == length(s.patches) == 1 &&
+        !getfield(s, :levels)[2].level_comm.owned &&
+        all(==(0), getfield(s, :patches)[1].covered)
+    s, states = setup(prob, num)
+    @test empty_level(s, states)
+    dir = mktempdir()
+    # Measured: the first tile appears at the check of step 25 (t = 0.048),
+    # a second by step 45 and a third by step 75, the last holding the shock.
+    run!(s, states; tfinal=1.0, nmax=15)
+    @test empty_level(s, states)
+    save_checkpoint(s, states, joinpath(dir, "before"))
+    run!(s, states; tfinal=1.0, nmax=50)
+    regs50 = level_regions(s, 1)
+    @test !isempty(regs50) && length(states) == length(s.patches) == 1 + length(regs50)
+    save_checkpoint(s, states, joinpath(dir, "after"))
+    run!(s, states; tfinal=1.0, nmax=80)
+    regs = level_regions(s, 1)
+    # The shock is the first root node below the mean of the two densities.
+    root = CL.PatchSolver(s, s.patches[1])
+    shock = findfirst(i -> states[1][gidx(root, i, 1, 1), 1] < 1.43, 1:121)
+    @info("unrefined start", tiles50=Tuple(r.offset[1] for r in regs50),
+          tiles80=Tuple(r.offset[1] for r in regs), shock)
+    @test length(regs) > length(regs50)
+    @test regs[end].offset[1] > regs50[end].offset[1]
+    @test any(r -> r.offset[1] < shock <= r.offset[1] + r.extent[1], regs)
+    @test all(all(isfinite, parent(Q)) for Q in states)
+    for stem in ("before", "after")
+        r, rs = setup(prob, num)
+        load_checkpoint!(r, rs, joinpath(dir, stem))
+        @test level_regions(r, 1) == (stem == "before" ? BlockRegion[] : regs50)
+        run!(r, rs; tfinal=1.0, nmax=80)
+        @test r.t == s.t && level_regions(r, 1) == regs
+        @test getfield(r, :regrid).created == getfield(s, :regrid).created
+        @test length(rs) == length(states) &&
+              all(same(rs[i], states[i], s.patches[i].decomp) for i in eachindex(states))
+    end
+    rm(dir; recursive=true)
+    # A check at which nothing tags removes every tile; the next tag, from
+    # the inflow's shock re-forming on the quiescent state, creates them again.
+    initialize!(s, states, rest)
+    workspace = CL.Workspace(states)
+    getfield(s, :regrid).checks += 1
+    @test CL.regrid!(s, states, workspace, nothing)
+    @test empty_level(s, states) && length(workspace.dQ) == 1
+    @test isempty(getfield(s, :regrid).created)
+    run!(s, states; tfinal=1.0, nmax=s.step + 10)
+    @test !isempty(level_regions(s, 1))
+    @test all(all(isfinite, parent(Q)) for Q in states)
+end

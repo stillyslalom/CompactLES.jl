@@ -30,7 +30,10 @@ single compact feature; a positive edge covers them with lattice tiles instead,
 so that separated features (a shock and a distant interface) refine
 separately rather than as one bounding box, at a per-tile cost that makes
 small edges expensive in three dimensions. At setup, sensor and predicate
-selection require at least one tagged node.
+selection require at least one tagged node, except in a tiled run that
+regrids: there an initial state that tags nothing starts with no refined
+tiles, the first regrid check that tags creates them, and a check at which
+nothing tags or holds removes every tile past `tile_lifetime`.
 
 `tag_threshold`, the density criterion, defaults to `0.02` except under a
 predicate, where it defaults to `Inf` so that the predicate alone selects the
@@ -279,9 +282,13 @@ function _setup_amr(prob, num, amr::AMR)
         compute_rhs!(root, states[1], workspace.dQ[1])
     end
     candidate = tagged_region(solver, states[1])
-    candidate === nothing &&
+    # A regridded tiled level may hold no tiles, so a start with nothing tagged
+    # begins unrefined and the first regrid check that tags creates its tiles.
+    # The box has no empty form.
+    candidate === nothing && !(amr.tile > 0 && amr.regrid_interval > 0) &&
         throw(ArgumentError("AMR initial selection tagged no root nodes; " *
-                            "supply a BlockRegion or lower the tag threshold"))
+                            "supply a BlockRegion, lower the tag threshold, or " *
+                            "give tile > 0 with regridding to start unrefined"))
     spec = getfield(solver, :regrid)
     if candidate != seed || amr.tile > 0
         # The temporary seed is not a user-selected tile. Bypass its normal

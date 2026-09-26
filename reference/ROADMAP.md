@@ -562,16 +562,12 @@ opt-in Float32 already exist; the tasks below extend or validate them.
 - [ ] **S13 — Cut the remaining cost of the NASA-9 temperature inversion.**
   `recover_primitives!` under `Nasa9Mixture` runs a safeguarded Newton solve
   per point and per Runge–Kutta stage, and that solve is the ~6× step cost of
-  the NASA-9 model over `IdealMixture`. Measured on the workstation at four
-  species over 300–3000 K: 362 ns per point before the fused per-species
-  evaluation and the precomputed `T_guess` seed (`e_guess` / `cv_guess`),
-  274 ns after, with temperatures bitwise unchanged. What remains, in order
-  of payoff per risk:
-  1. Flatten the interval storage to an isbits form. The lookup through
-     `Vector{Nasa9Species}` into each species' `Vector{Nasa9Interval}` costs
-     5 ns against 2–3 ns for each polynomial, and is the bulk of one
-     residual evaluation even after the fusion. S5 needs the same
-     fixed-width representation for the device mirror; do it once.
+  the NASA-9 model over `IdealMixture`. The interval table is isbits and the
+  inversion shares the powers of T across species (commit `9e0f126`,
+  measured with `bench/nasa9_inversion.jl`). What remains, in order of payoff
+  per risk:
+  1. Share the powers of T across species in the `species_cp` loop of
+     `recover_primitives!` as the inversion now does; bitwise safe.
   2. Relax the convergence criterion from 32 eps toward 1e-10 relative,
      which saves about one of the four or five iterations. Newton's last
      iteration exists to certify the previous one. A numerics decision: it

@@ -958,7 +958,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                            T(untag_ratio), tile_lifetime, 0,
                            Dict(lt.region => 0 for lt in levels[2].transfers),
                            interface_divergence,
-                           level_interpolation_order)
+                           level_interpolation_order, level_restriction)
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,

@@ -285,7 +285,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
             error("restart: $(length(stored_owners)) owner ranges for " *
                   "$(length(regions)) tiles")
         owners = stored_owners
-        np_new = maximum(last, owners) + 1
+        np_new = maximum(last, owners; init=-1) + 1
         np_new <= root_lc.size ||
             error("restart: the recorded ownership reaches rank $(np_new - 1) " *
                   "of $(root_lc.size)")
@@ -320,8 +320,8 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                interface_divergence=
                                                    spec.interface_divergence,
                                                ghost_viscous=_ghost_viscous(solver))
-    restriction = lev.transfers[1].restriction
-    transfers = [build_level_transfer(
+    restriction = spec.restriction
+    transfers = LevelTransfer{T}[build_level_transfer(
         T, tr, active, spec.n_halo, [root.region], [1],
         Union{Nothing,Decomp{T}}[root.decomp], local_of[ti], restriction,
         n_cons, getfield(solver, :subcycle),

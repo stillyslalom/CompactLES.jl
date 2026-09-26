@@ -402,13 +402,64 @@ end
     MPI.Barrier(comm)
 end
 
+# A tiled, regridded run that starts with no tiles: the file written before
+# the first tag records a level with no tables, the one written after records
+# the tiles, and a solver set up unrefined continues from either bit for bit.
+@testset "HDF5 extension: hierarchy checkpoint of an unrefined start" begin
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    per = (PeriodicBC(), PeriodicBC())
+    ramp(t) = clamp((t - 0.04) / 0.01, 0.0, 1.0)
+    inflow = DirichletBC((x, y, z, t) -> (w = ramp(t);
+        Prim(rho=1 + 0.8621w, u=(0.8216w, 0.0, 0.0), p=1 + 1.4583w)))
+    prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=((inflow, SlipWallBC()), per, per),
+                   ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1.0))
+    num = Numerics(n_global=(121, 1, 1), cfl=0.3,
+                   amr=AMR(initial=:sensor, tile=8, regrid_interval=5,
+                           tag_buffer=2, subcycle=true))
+    dir = rank == 0 ? mktempdir() : ""
+    dir = MPI.bcast(dir, comm; root=0)
+    s, states = setup(prob, num)
+    run!(s, states; tfinal=1.0, nmax=15)
+    @test isempty(level_regions(s, 1))
+    save_checkpoint_hdf5(s, states, joinpath(dir, "before"))
+    run!(s, states; tfinal=1.0, nmax=50)
+    regs50 = level_regions(s, 1)
+    @test !isempty(regs50)
+    save_checkpoint_hdf5(s, states, joinpath(dir, "after"))
+    run!(s, states; tfinal=1.0, nmax=80)
+    MPI.Barrier(comm)
+    for (stem, want) in (("before", BlockRegion[]), ("after", regs50))
+        r, rs = setup(prob, num)
+        load_checkpoint_hdf5!(r, rs, joinpath(dir, stem))
+        @test level_regions(r, 1) == want
+        run!(r, rs; tfinal=1.0, nmax=80)
+        @test r.t == s.t && level_regions(r, 1) == level_regions(s, 1)
+        d = length(rs) == length(states) ? 0.0 : Inf
+        if isfinite(d)
+            for i in eachindex(states)
+                inner = CL.interior(s.patches[i].decomp)
+                d = max(d, maximum(abs.(parent(rs[i])[inner, :] .-
+                                        parent(states[i])[inner, :])))
+            end
+        end
+        @test MPI.Allreduce(d, max, comm) == 0.0
+    end
+    MPI.Barrier(comm)
+    rank == 0 && rm(dir; recursive=true)
+    MPI.Barrier(comm)
+end
+
 # The property the hierarchy checkpoint exists for: a file written on one
 # rank count restored onto another, the level's tiles partitioned afresh. The
 # writer runs on the first half of the ranks and the reader on all of them,
 # built with a different initial region so that the restart rebuilds the
 # level from the recorded twelve tiles; the continued wave error agrees with
 # the writer's continuation to round-off, the tier a different decomposition
-# of the same tiles holds.
+# of the same tiles holds. The smooth wave tags nothing, so the tiles are held
+# by their lifetime; without it the first check would remove them all.
 @testset "HDF5 extension: hierarchy restart across a different rank count" begin
     comm = MPI.COMM_WORLD
     np = MPI.Comm_size(comm)
@@ -419,7 +470,8 @@ end
     mk(refine, sub) = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0),
                              bcs=per3h, art=ArtParams(enabled=false),
                              filter_interval=0, subcycle=true, tile=8,
-                             regrid_interval=5, refine=refine, comm=sub)
+                             regrid_interval=5, tile_lifetime=100,
+                             refine=refine, comm=sub)
     function wave_error(solver, states)
         e = 0.0
         for (ps, Q) in CL.eachpatch(solver, states)

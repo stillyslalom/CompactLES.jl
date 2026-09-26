@@ -446,7 +446,12 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     levels = getfield(solver, :levels)
     patches = getfield(solver, :patches)
     lev = levels[ℓ]
-    child = ℓ < length(levels) ? levels[ℓ+1] : nothing
+    # A child level with no tiles (a regridded level before its first tag or
+    # after its last) takes no Hermite endpoint and no substeps, so the step
+    # is the one a level without children takes. Its transfers are held by
+    # every owner of this level, so the test is uniform over them.
+    child = ℓ < length(levels) && !isempty(levels[ℓ+1].transfers) ?
+            levels[ℓ+1] : nothing
     T = typeof(dt)
     # Communication ownership follows the data at each level:
     #
