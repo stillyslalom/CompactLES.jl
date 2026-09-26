@@ -3719,9 +3719,60 @@ end
                             rtol=1e-12))
     end
     # Exactly two, no more and no fewer.
-    @test_throws ErrorException Prim(p=1.0)
-    @test_throws ErrorException Prim(rho=1.0)
-    @test_throws ErrorException Prim(p=1.0, rho=1.0, T_ion=1.0)
+    @test_throws ArgumentError Prim(p=1.0)
+    @test_throws ArgumentError Prim(rho=1.0)
+    @test_throws ArgumentError Prim(p=1.0, rho=1.0, T_ion=1.0)
+end
+
+@testset "parameter ranges: early errors naming the parameter" begin
+    # Each check raises an ArgumentError whose message names the parameter.
+    function names(f, name)
+        err = try f(); nothing catch e; e end
+        return err isa ArgumentError && occursin(name, err.msg)
+    end
+    wall = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    mk(; kw...) = Solver(; n_global=(16, 12, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=(wall, per, per), kw...)
+    for (kw, name) in [((; predict=-1.0), "predict"), ((; max_growth=0.5), "max_growth"),
+                       ((; dt_min=NaN), "dt_min"), ((; dt_min_ratio=1.0), "dt_min_ratio"),
+                       ((; retries=-1), "retries"), ((; cfl_backoff=1.0), "cfl_backoff"),
+                       ((; cfl_backoff=0.0), "cfl_backoff")]
+        @test names(() -> StepControl(; kw...), name)
+    end
+    @test names(() -> compact_filter(0.5), "alphaf")
+    @test names(() -> compact_filter(-0.6), "alphaf")
+    @test names(() -> StiffenedGas(gamma=1.0), "gamma")
+    @test names(() -> StiffenedGas(p_inf=-1.0), "p_inf")
+    @test names(() -> StiffenedGas(cv=0.0), "cv")
+    @test names(() -> Prim(p=Inf, rho=1.0), "finite")
+    @test names(() -> Prim(p=1.0, rho=-1.0), "rho")
+    @test names(() -> Prim(p=1.0, T_ion=-1.0), "T_ion")
+    @test names(() -> Prim(p=1.0, rho=1.0, u=(NaN, 0, 0)), "u")
+    @test names(() -> Prim(p=1.0, rho=1.0, Y=(1.1, -0.1)), "nonnegative")
+    @test names(() -> Prim(p=1.0, rho=1.0, Y=(0.5, 0.6)), "sum to 1")
+    @test names(() -> AtTime([0.1, NaN]), "finite")
+    @test names(() -> EveryTime(Inf), "interval")
+    @test names(() -> SwitchableBC(SlipWallBC(), SlipWallBC(); at=NaN), "at")
+    @test names(() -> mk(cfl=0.0), "cfl")
+    @test names(() -> mk(filter_interval=-1), "filter_interval")
+    @test names(() -> mk(filter_cfl=-0.1), "filter_cfl")
+    @test names(() -> mk(L_domain=(1.0, Inf, 1.0)), "L_domain")
+    @test names(() -> mk(n_global=(16, 0, 1)), "n_global")
+    @test names(() -> mk(transport=Transport(mu0=NaN)), "mu0")
+    @test names(() -> mk(transport=Transport(Pr=0.0)), "Pr")
+    @test names(() -> mk(transport=Transport(Sc=-1.0)), "Sc")
+    @test names(() -> mk(art=ArtParams(C_beta=-1.0)), "C_beta")
+    @test names(() -> mk(art=ArtParams(Y_tolerance=NaN)), "Y_tolerance")
+    # A grid below the scheme minimum is reported with the binding scheme and
+    # the extent required before any plan is built: the C8 filter at a wall.
+    err = try mk(n_global=(8, 12, 1)); nothing catch e; e end
+    @test err isa ArgumentError && occursin("n_global[1]", err.msg) &&
+          occursin("at least 9", err.msg) && occursin("filter", err.msg)
+    @test names(() -> mk(n_global=(16, 6, 1)), "n_global[2]")
+    prob = Problem(domain=((0.0, 1.0), (0.0, Inf), (0.0, 1.0)), bcs=(wall, per, per),
+                   ic=(x, y, z) -> Prim(p=1.0, rho=1.0))
+    @test names(() -> setup(prob, Numerics(n_global=(16, 12, 1))), "domain")
 end
 
 @testset "callbacks: triggers, dt landing, composition, termination" begin
@@ -3908,8 +3959,12 @@ end
                                           p=1 + 0.1exp(-40(x - 0.5)^2), rho=1.0))
     instants = collect(0.005:0.005:0.06)
     seen = Float64[]
-    spoil = Callback(WhenState((x, _) -> x.t >= 0.037),
-                     (x, q) -> (q[gidx(x, 3, 3, 3), 1] = -1.0; nothing))
+    # A rollback re-arms a WhenState that fired after the savepoint, so the
+    # one-shot fault is held in the condition, not in the trigger.
+    spoiled = Ref(false)
+    spoil = Callback(WhenState((x, _) -> x.t >= 0.037 && !spoiled[]),
+                     (x, q) -> (spoiled[] = true; q[gidx(x, 3, 3, 3), 1] = -1.0;
+                                nothing))
     run!(s2, Q2; tfinal=0.06, nmax=5000,
          control=StepControl(retries=2, savepoint_interval=2),
          callback=(Callback(AtTime(instants), (x, _) -> (push!(seen, x.t); nothing)),

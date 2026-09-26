@@ -369,6 +369,11 @@ function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64;
     # a Float32 filter carries the rounded Float64 weights. Solving the
     # one-sided rows' Vandermonde systems in Float32 instead leaves errors of
     # tens of ulps.
+    # |αf| < 1/2 keeps the tridiagonal system diagonally dominant. At αf = 1/2
+    # the periodic system is singular at the Nyquist wavenumber.
+    isfinite(alphaf) && -0.5 < alphaf < 0.5 ||
+        throw(ArgumentError("compact_filter: alphaf must be in (-0.5, 0.5), " *
+                            "got $alphaf"))
     S = promote_type(Float64, T)
     as = S(alphaf)
     af = T(as)

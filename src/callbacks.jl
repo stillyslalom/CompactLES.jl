@@ -59,20 +59,26 @@ fired!(trigger::Trigger, solver, Q) =
 
 """
     rewind!(trigger, t, step)
+    rewind!(effect, t, step)
 
 Restore a trigger's schedule to `(t, step)`. [`run!`](@ref) calls this method
-when `StepControl` restores a savepoint. Scheduled instants between the
-savepoint and the failed state are then visited on the replacement trajectory.
+when `StepControl` restores a savepoint, for the trigger and then for the
+effect of every [`Callback`](@ref). Scheduled instants between the savepoint
+and the failed state are then visited on the replacement trajectory.
 
-Only the schedule is restored; callback effects are not reversed. Repeatable
-effects, such as an output file, can be evaluated again at the same instant.
-Non-repeatable effects cannot be reversed by the trigger. Consequently,
-[`WhenState`](@ref) remains in its existing armed state: a `SwitchableBC` that
-has switched cannot be restored to its earlier condition.
+The built-in triggers restore their schedules: [`AtTime`](@ref) and
+[`EveryTime`](@ref) from `t`, and a `once = true` [`WhenState`](@ref) that
+fired after `step` is re-armed. A [`FieldWriter`](@ref) effect drops the
+frames it recorded after `t` from its collection, and the replacement
+trajectory's frames take their file names. Any other effect is not reversed:
+state a user effect keeps outside the solver stays as the abandoned
+trajectory left it unless that effect implements this method.
 
-The default is a no-op, which is correct for any trigger reading only `step`.
+The default is a no-op, which is correct for any trigger reading only `step`
+and for any effect that keeps no state.
 """
 rewind!(::Trigger, t, step) = nothing
+rewind!(effect, t, step) = nothing
 
 """
     fires_at_start(trigger, solver) -> Bool
@@ -102,8 +108,12 @@ mutable struct AtTime <: Trigger
     next::Int
 end
 
-AtTime(times::AbstractVector) = AtTime(sort(collect(Float64, times)), 1)
-AtTime(t::Real) = AtTime([Float64(t)], 1)
+function AtTime(times::AbstractVector)
+    all(isfinite, times) ||
+        throw(ArgumentError("AtTime: every time must be finite, got $(collect(times))"))
+    return AtTime(sort(collect(Float64, times)), 1)
+end
+AtTime(t::Real) = AtTime([t])
 
 next_time(trigger::AtTime, solver) =
     trigger.next > length(trigger.times) ? Inf : trigger.times[trigger.next]
@@ -167,7 +177,11 @@ mutable struct EveryTime <: Trigger
 end
 
 function EveryTime(interval::Real; start::Real=0.0)
-    interval > 0 || throw(ArgumentError("EveryTime interval must be positive"))
+    isfinite(interval) && interval > 0 ||
+        throw(ArgumentError("EveryTime: interval must be finite and positive, " *
+                            "got $interval"))
+    isfinite(start) ||
+        throw(ArgumentError("EveryTime: start must be finite, got $start"))
     return EveryTime(Float64(interval), Float64(start), NaN)
 end
 
@@ -238,14 +252,19 @@ The condition is evaluated on each rank and reduced across the communicator, so
 it may be true only on the rank that owns a boundary plane. The callback
 performs this reduction, so the condition may read a local field plane and
 return a rank-local result.
+
+A `once = true` trigger records the step at which it fired. A
+[`StepControl`](@ref) rollback to a savepoint before that step re-arms it, so
+the condition is evaluated again on the replacement trajectory.
 """
 mutable struct WhenState{F} <: Trigger
     condition::F
     once::Bool
     done::Bool
+    fired_step::Int     # completed step at which a once-trigger fired; -1 before
 end
 
-WhenState(condition; once::Bool=true) = WhenState(condition, once, false)
+WhenState(condition; once::Bool=true) = WhenState(condition, once, false, -1)
 
 function fired!(trigger::WhenState, solver, Q)
     trigger.done && return false
@@ -253,8 +272,20 @@ function fired!(trigger::WhenState, solver, Q)
     # reductions elsewhere in the solver; semantically this is a logical OR.
     local_hit = trigger.condition(solver, Q)::Bool
     hit = MPI.Allreduce(Int(local_hit), max, solver.comm) > 0
-    hit && trigger.once && (trigger.done = true)
+    if hit && trigger.once
+        trigger.done = true
+        trigger.fired_step = solver.step
+    end
     return hit
+end
+
+# A firing after the savepoint's step happened on the abandoned trajectory.
+function rewind!(trigger::WhenState, t, step)
+    if trigger.done && trigger.fired_step > step
+        trigger.done = false
+        trigger.fired_step = -1
+    end
+    return nothing
 end
 
 """
@@ -267,6 +298,11 @@ Pair a [`Trigger`](@ref) with `effect!(solver, Q)`, run after a completed step
 Pass one to `run!` as `callback=`, or pass several as a tuple. Every element of a
 tuple runs, including after one has requested a stop. A bare function is also
 accepted; it runs after every step and its return value is ignored.
+
+A [`StepControl`](@ref) rollback abandons the steps after its savepoint, whose
+callbacks have already run. [`rewind!`](@ref) is then called on the trigger and
+on `effect!`; an effect that keeps state across steps implements it to undo
+what it did on the abandoned steps.
 """
 struct Callback{Tr<:Trigger,F}
     trigger::Tr
@@ -289,11 +325,23 @@ callback_next_time(_, solver) = Inf
 
 rewind_callbacks!(::Nothing, t, step) = nothing
 rewind_callbacks!(::Tuple{}, t, step) = nothing
-rewind_callbacks!(cb::Callback, t, step) = rewind!(cb.trigger, t, step)
+rewind_callbacks!(cb::Callback, t, step) =
+    (rewind!(cb.trigger, t, step); rewind!(cb.effect!, t, step))
 rewind_callbacks!(cbs::Tuple, t, step) =
     (rewind_callbacks!(first(cbs), t, step);
      rewind_callbacks!(Base.tail(cbs), t, step))
 rewind_callbacks!(_, t, step) = nothing
+
+# Frames written after the savepoint's time belong to the abandoned trajectory.
+# Dropping them from the frame list gives the replacement frames their indices
+# and file names; the collection file is rewritten with the next frame.
+function rewind!(writer::FieldWriter, t, step)
+    keep = count(τ -> τ <= t + _land_tol(t), writer.times)
+    resize!(writer.times, keep)
+    length(writer.grids) > keep && resize!(writer.grids, keep)
+    writer.index = writer.start_index + keep
+    return nothing
+end
 
 # The initial-state pass: only callbacks whose trigger is due at the start run.
 run_start_callbacks!(::Nothing, solver, Q) = false

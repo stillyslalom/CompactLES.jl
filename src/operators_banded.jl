@@ -28,6 +28,9 @@ struct BandPlan{T} <: AbstractDirPlan
     B::Matrix{T}
 end
 
+_block_need(scheme::BandedCompactScheme, nlo::Int, nhi::Int) =
+    max(nlo + nhi + 1, 2 * halfwidth(scheme) + 1, 2 * scheme.q + 1)
+
 """
     plan_direction(decomp, scheme::BandedCompactScheme, dim, h;
                    lo_fold=nothing, hi_fold=nothing,
@@ -77,7 +80,7 @@ function plan_direction(decomp::Decomp, scheme::BandedCompactScheme{T}, dim::Int
     hi_rows = hi_closures === nothing ? scheme.closures : hi_closures
     nlo = lo_closed ? length(lo_rows) : 0
     nhi = hi_closed ? length(hi_rows) : 0
-    nmin = max(nlo + nhi + 1, 2M + 1, 2q + 1)
+    nmin = _block_need(scheme, nlo, nhi)
     n >= nmin || error(
         "local extent $n along dim $dim too small for scheme '$(scheme.name)' " *
         "(need ≥ $nmin); use fewer ranks in this dimension")

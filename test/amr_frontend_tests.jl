@@ -77,7 +77,7 @@ end
         Numerics(n_global=(64, 1, 1), filter_interval=0,
                  amr=AMR(initial=:sensor, tile=8, regrid_interval=0)))
     invalid = amr_test_problem((x, y, z, h) ->
-        Prim(p=1.0, rho=-1.0, u=(0.0, 0.0, 0.0)))
+        Prim(p=-1.0, rho=1.0, u=(0.0, 0.0, 0.0)))
     @test_throws SolverFailure setup(invalid,
         Numerics(n_global=(64, 1, 1), filter_interval=0,
                  amr=AMR(initial=:sensor)))

@@ -26,16 +26,21 @@ All values are converted to `Float64`.
 - `u`: three physical velocity components in the coordinate-aligned orthonormal
   basis. The default is a stationary state.
 - `Y`: species mass fractions, in the order used to construct the EOS. They
-  must sum to one; the default is a single species with unit mass fraction.
+  must be nonnegative and sum to one, each within a rounding tolerance; the
+  default is a single species with unit mass fraction.
 
 The omitted quantity is stored as `NaN` and is not filled in: a `Prim` records
 what was specified, and the conversion never reads the value it derives. Code
 reading a field back must therefore expect `NaN` in whichever one the caller
 left out.
 
-The number of entries in `Y` is checked against [`nspecies`](@ref) when the
-state is converted with [`conserved_from_prim`](@ref). CompactLES does not
-clip negative or out-of-range primitive values.
+The given values must be finite, `rho` positive and `T_ion` nonnegative, and
+the constructor raises an `ArgumentError` otherwise. The pressure is not
+checked here, since its admissible range depends on the EOS; the state a
+pressure produces is checked by the state validation of [`setup`](@ref). The
+number of entries in `Y` is checked against [`nspecies`](@ref) when the state
+is converted with [`conserved_from_prim`](@ref). CompactLES does not clip
+primitive values.
 """
 struct Prim{N}
     Y::NTuple{N,Float64}
@@ -48,8 +53,22 @@ end
 function Prim(; u=(0.0, 0.0, 0.0), p::Real=NaN, T_ion::Real=NaN, rho::Real=NaN,
               Y=(1.0,))
     count(isnan, (Float64(p), Float64(T_ion), Float64(rho))) == 1 ||
-        error("Prim: specify exactly two of p, rho, and T_ion; the EOS derives " *
-              "the third")
+        throw(ArgumentError("Prim: specify exactly two of p, rho, and T_ion; the " *
+                            "EOS derives the third"))
+    # NaN marks the omitted quantity, so only an infinite value is caught here.
+    all(x -> !isinf(x), (p, T_ion, rho)) ||
+        throw(ArgumentError("Prim: p, rho and T_ion must be finite, got " *
+                            "p = $p, rho = $rho, T_ion = $T_ion"))
+    isnan(rho) || rho > 0 ||
+        throw(ArgumentError("Prim: rho must be positive, got $rho"))
+    # A cold state (T_ion = 0, or p = 0 beside rho) is a legitimate initial
+    # condition under `StepControl(validity = :permissive)`.
+    isnan(T_ion) || T_ion >= 0 ||
+        throw(ArgumentError("Prim: T_ion must be nonnegative, got $T_ion"))
+    length(u) == 3 && all(isfinite, u) ||
+        throw(ArgumentError("Prim: u must hold three finite components, got $u"))
+    all(isfinite, Y) ||
+        throw(ArgumentError("Prim: mass fractions must be finite, got $Y"))
     Yt = Tuple(Float64.(Y))
     # The sum is taken in Float64, but the entries may arrive in a narrower type
     # whose own rounding is all the accuracy there is: (0.6f0, 0.4f0) widens to a
@@ -58,7 +77,11 @@ function Prim(; u=(0.0, 0.0, 0.0), p::Real=NaN, T_ion::Real=NaN, rho::Real=NaN,
     Ytol = max(1e-10, 8 * length(Yt) *
                       maximum(x -> Float64(eps(float(typeof(x)))), Y;
                               init=eps(Float64)))
-    abs(sum(Yt) - 1) < Ytol || error("Prim: mass fractions must sum to 1")
+    abs(sum(Yt) - 1) < Ytol ||
+        throw(ArgumentError("Prim: mass fractions must sum to 1, got $Y " *
+                            "(sum $(sum(Yt)))"))
+    all(>=(-Ytol), Yt) ||
+        throw(ArgumentError("Prim: mass fractions must be nonnegative, got $Y"))
     Prim{length(Yt)}(Yt, Tuple(Float64.(u)), Float64(p), Float64(T_ion), Float64(rho))
 end
 
@@ -154,6 +177,14 @@ This function leaves halo cells unchanged and does not reset solver time,
 timestep history, or diagnostics. Use it to reuse an existing solver and
 allocation for a different initial state with the same EOS, geometry, and
 numerical configuration. It returns `Q`.
+
+On a solver that has already stepped, a following [`run!`](@ref) continues
+from the old clock and step counter, so its `tfinal` and `nmax` are counted
+from there, and it sizes its first step from the artificial coefficients and
+the rate history of the old state. To run the new state as a new calculation
+from `t = 0`, also set `solver.t`, `solver.step`, `solver.dt_prev` and
+`solver.rate_prev` to zero; `run!` then forms the coefficients from the new
+state before its first step and runs the initial-state callbacks.
 
 Rank-local and non-collective. Each rank writes only its own block, so the
 halos hold whatever they held before and a caller needing them current must
@@ -717,8 +748,14 @@ Grid, scheme, timestep, and decomposition choices used to realize a
 
 Compact plans impose a scheme-dependent minimum rank-local extent. With the
 defaults, each resolved local extent needs at least nine points because the
-filter is the binding scheme. Reduce decomposition in that direction or
-increase `n_global` if setup reports a smaller local block.
+filter is the binding scheme. Setup checks every block of the process grid
+against this minimum before building a plan and raises an `ArgumentError`
+naming the dimension, the scheme and the extent required; reduce the
+decomposition in that direction or increase `n_global`.
+
+`cfl` must be finite and positive, `filter_interval` nonnegative, and
+`filter_cfl` finite and nonnegative. These and the parameter ranges of
+`art`, the transport model and the EOS are checked when the solver is built.
 
 # Refinement keywords (reference/AMR_GPU.md)
 
@@ -897,7 +934,12 @@ function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
                                   seed_only::Bool=false)
     origin = ntuple(d -> prob.domain[d][1], 3)
     L_domain = ntuple(d -> prob.domain[d][2] - prob.domain[d][1], 3)
-    all(>(0), L_domain) || error("domain extents must be positive")
+    all(d -> all(isfinite, prob.domain[d]), 1:3) ||
+        throw(ArgumentError("Problem domain endpoints must be finite, got " *
+                            "$(prob.domain)"))
+    all(>(0), L_domain) ||
+        throw(ArgumentError("Problem domain extents must be positive, got " *
+                            "$(prob.domain)"))
     for d in 1:3
         st = num.stretch[d]
         st === nothing && continue

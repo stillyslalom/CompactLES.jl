@@ -430,9 +430,9 @@ Single-component stiffened-gas equation of state,
 
 # Keywords
 
-- `gamma`: constant heat-capacity ratio.
-- `p_inf`: cohesive pressure that raises the acoustic stiffness.
-- `cv`: constant-volume specific heat.
+- `gamma`: constant heat-capacity ratio, greater than one.
+- `p_inf`: cohesive pressure that raises the acoustic stiffness, nonnegative.
+- `cv`: constant-volume specific heat, positive.
 - `name`: species label used in conserved-component names and output.
 
 The thermal relation is `p + p_inf = rho * R * T_ion`, with
@@ -447,7 +447,19 @@ Base.@kwdef struct StiffenedGas{T} <: EOS
     p_inf::T = 6.0e8
     cv::T    = 1816.0
     name::String = "liquid"
+    function StiffenedGas{T}(gamma, p_inf, cv, name) where {T}
+        isfinite(gamma) && gamma > 1 ||
+            throw(ArgumentError("StiffenedGas: gamma must be finite and > 1, got $gamma"))
+        isfinite(p_inf) && p_inf >= 0 ||
+            throw(ArgumentError("StiffenedGas: p_inf must be finite and >= 0, got $p_inf"))
+        isfinite(cv) && cv > 0 ||
+            throw(ArgumentError("StiffenedGas: cv must be finite and positive, got $cv"))
+        return new{T}(gamma, p_inf, cv, name)
+    end
 end
+
+StiffenedGas(gamma::T, p_inf::T, cv::T, name::AbstractString) where {T} =
+    StiffenedGas{T}(gamma, p_inf, cv, name)
 
 nspecies(::StiffenedGas) = 1
 gas_constant(eos::StiffenedGas) = (eos.gamma - 1) * eos.cv
@@ -1220,8 +1232,9 @@ Constant molecular-transport model.
 - `Sc`: Schmidt number. Each molecular species diffusivity is
   `mu0 / (rho * Sc)`.
 
-`Pr` and `Sc` are dimensionless and should be positive. The constructor does
-not enforce positivity. All three values must use the same numeric type.
+`mu0` must be finite and nonnegative, and `Pr` and `Sc` finite and positive;
+[`Solver`](@ref) construction raises an `ArgumentError` otherwise. All three
+values must use the same numeric type.
 """
 Base.@kwdef struct Transport{T} <: AbstractTransport{T}
     mu0::T = 0.0

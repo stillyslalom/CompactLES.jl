@@ -263,9 +263,14 @@ have formed, or an inflow that injects one flow and then fires a shock.
 With `at = t`, the face switches by itself at time `t`: [`run!`](@ref) ends a
 step exactly at `t`, as it does for a scheduled [`AtTime`](@ref) callback, and
 switches between that step and the next, so every Runge–Kutta stage of a step
-sees the same condition. A [`StepControl`](@ref) rollback to before `t` restores
-`before`. Without `at`, the face switches when [`switch!`](@ref) is called on
-it, typically from a [`Callback`](@ref).
+sees the same condition. Without `at`, the face switches when
+[`switch!`](@ref) is called on it, typically from a [`Callback`](@ref).
+
+A [`StepControl`](@ref) rollback restores the face as it was at the savepoint:
+a scheduled face from the savepoint's time, a face switched by hand from the
+flag recorded with the savepoint. A `once = true` [`WhenState`](@ref) trigger
+that made the switch after the savepoint is re-armed with it, so the switch is
+decided again on the replacement trajectory.
 
 The wrapper carries both conditions because `bcs` sits on an immutable
 [`Patch`](@ref) as an immutable tuple; a switch mutates the wrapper, not the
@@ -300,6 +305,8 @@ function SwitchableBC(before::BoundaryCondition, after::BoundaryCondition;
         throw(ArgumentError("SwitchableBC cannot wrap a fold condition " *
                             "(AxisBC, OriginBC, PoleBC, SymmetryPlaneBC); " *
                             "setup detects those by type"))
+    at === nothing || isfinite(at) ||
+        throw(ArgumentError("SwitchableBC: at must be a finite time or nothing, got $at"))
     return SwitchableBC(before, after, false, at === nothing ? NaN : Float64(at))
 end
 

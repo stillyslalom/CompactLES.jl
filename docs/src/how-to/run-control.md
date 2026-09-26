@@ -86,6 +86,16 @@ run!(solver, Q; tfinal = 0.5, nmax = 100_000)
 On a recoverable failure, `run!` restores its savepoint, reduces the CFL, and
 retries. An exhausted retry budget or timestep floor raises
 [`SolverFailure`](@ref) with the step, time, timestep, CFL, and reason.
+The rollback restores the conserved state, the artificial coefficients,
+`solver.t`, `solver.step` and every [`SwitchableBC`](@ref) to the savepoint,
+and re-arms the built-in triggers. Callback effects that keep their own state
+are not reversed unless they implement [`rewind!`](@ref).
+
+`tfinal` and `nmax` are values of `solver.t` and `solver.step`, counted from
+construction or from the loaded checkpoint, not from the call. A second
+`run!` on the same solver continues from where the first stopped and passes
+`nmax = solver.step + n` for `n` more steps; an `nmax` that would allow no
+step raises an `ArgumentError`.
 
 With AMR subcycling, a positive `StepControl(substep_cfl = ...)` checks each refined
 level's rate after its stage RHS has refreshed the artificial coefficients.

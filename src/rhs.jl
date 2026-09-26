@@ -289,6 +289,23 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     schemes = SchemeSettings(deriv, filt, interface_divergence, interface_rhs,
                              level_interpolation_order, level_restriction)
     validate_transport(transport, eos)
+    validate_art(art)
+    all(>=(1), n_global) ||
+        throw(ArgumentError("n_global must be at least 1 in every direction " *
+                            "(1 collapses one), got $n_global"))
+    all(L -> isfinite(L) && L > 0, L_domain) ||
+        throw(ArgumentError("L_domain must hold three finite positive extents, " *
+                            "got $L_domain"))
+    all(isfinite, origin) ||
+        throw(ArgumentError("origin must be finite, got $origin"))
+    isfinite(cfl) && cfl > 0 ||
+        throw(ArgumentError("cfl must be finite and positive, got $cfl"))
+    filter_interval >= 0 ||
+        throw(ArgumentError("filter_interval must be >= 0 (0 disables the state " *
+                            "filter), got $filter_interval"))
+    isfinite(filter_cfl) && filter_cfl >= 0 ||
+        throw(ArgumentError("filter_cfl must be finite and >= 0 (0 disables the " *
+                            "relaxation), got $filter_cfl"))
     for d in 1:3
         isperiodic(bcs[d][1]) == isperiodic(bcs[d][2]) ||
             error("dimension $d mixes periodic and non-periodic conditions")
@@ -655,6 +672,16 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                      interface_flux, schemes)
     end
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
+    # The per-rank extent check in `plan_direction` would raise on some ranks
+    # only when the blocks differ in size; this one is replicated.
+    check_block_extents(n_global, decomp.dims,
+                        ntuple(d -> !periodic[d] && !fold_lo_dim[d], 3),
+                        ntuple(d -> !periodic[d] && !fold_hi_dim[d], 3),
+                        d -> (
+        (deriv, nothing, nothing), (filt, nothing, nothing),
+        (art.smoother === :gaussian ? ((smoo, swrow(d, 1), swrow(d, 2)),) : ())...,
+        (art.detector === :delta4 ? () :
+         ((ring, rwrow(d, 1, 1), rwrow(d, 2, 1)),))...))
     mkd(sch, d; kw...) =
         backend_plan(backend, plan_direction(decomp, sch, d, h[d]; kw...))
     f() = field(backend, decomp)

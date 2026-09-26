@@ -283,17 +283,10 @@ filter time-scaling with N1.
   switched boundary or arbitrary user state.
   **Gate:** early actionable errors and explicit continuation/rollback semantics.
 
-- [ ] **A5 — Strengthen restart configuration compatibility.**
-  Add versioned EOS parameter/data fingerprints and numerical/transport/boundary
-  provenance, `interface_flux` and `level_interpolation_order` among it. Include material composition basis, energy partition/reference,
-  phase/equilibrium assumptions, mixing rule, and table/interpolation identity;
-  current type names and component names admit identically named species with
-  different thermodynamic constants. Account for A8's changes in type ownership.
-  Define exact continuation versus an intentional configuration change; record
-  supported overrides and caller-owned callback/writer state.
-  **Gate:** incompatible thermodynamics are rejected, equivalent configurations
-  round-trip, and existing same-rank/changed-rank continuation tiers remain tested.
-  **Code:** [io.jl](../src/io.jl), [io_levels.jl](../src/io_levels.jl).
+- [x] **A5** — Checkpoints carry a versioned configuration record compared
+  at load: thermodynamics and layout strictly, the other groups under `allow`
+  (commit `77b3adb`). Under A8, move `thermodynamic_model` and the
+  `_record_fields` overrides with the types.
 
 - [ ] **A6 — Publish a capability and extension matrix tied to setup checks.**
   Cover EOS × backend × precision × metric × patch/refinement mode, including

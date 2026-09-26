@@ -315,3 +315,70 @@ end
     @test solver.t == 0.03
     @test fired[] == 4          # t = 0 and the three instants
 end
+
+@testset "tfinal and nmax are absolute; step! leaves the clock" begin
+    solver, Q = rl_box(Float64)
+    run!(solver, Q; tfinal=1.0, nmax=3)
+    @test solver.step == 3
+    t3 = solver.t
+    # The first call's cap, passed again, would take no step: an error, not a
+    # silent return.
+    err = try run!(solver, Q; tfinal=1.0, nmax=3); nothing catch e; e end
+    @test err isa ArgumentError && occursin("nmax", err.msg)
+    # Continuing counts from the solver's clock and counter.
+    run!(solver, Q; tfinal=1.0, nmax=solver.step + 2)
+    @test solver.step == 5 && solver.t > t3
+    err = try run!(solver, Q; tfinal=t3, nmax=10); nothing catch e; e end
+    @test err isa ArgumentError && occursin("tfinal", err.msg)
+    @test_throws ArgumentError run!(solver, Q; tfinal=NaN, nmax=10)
+    @test_throws ArgumentError run!(solver, Q; tfinal=1.0, nmax=-1)
+    # An endpoint already reached returns without a step and without error.
+    run!(solver, Q; tfinal=solver.t, nmax=5)
+    @test solver.step == 5
+    # step! advances the state and nothing else.
+    t5 = solver.t
+    step!(solver, Q, Workspace(Q), 1e-3)
+    @test solver.t == t5 && solver.step == 5
+end
+
+@testset "a rollback restores switches and re-arms their triggers" begin
+    h = 1.0 / 23
+    face = SwitchableBC(SlipWallBC(), SlipWallBC())
+    solver = Solver(n_global=(24, 1, 1), L_domain=(1.0, h, h),
+                    bcs=((face, SlipWallBC()), rl_per, rl_per), cfl=0.3,
+                    art=ArtParams(enabled=false))
+    Q = allocate_state(solver)
+    initialize!(solver, Q, (x, y, z) ->
+        Prim(u=(0, 0, 0), p=1.0 + 0.1exp(-50(x - 0.5)^2), rho=1.0))
+    # Savepoints at steps 0, 2 and 4. After step 5 the face switches and the
+    # state is spoiled once, so the run rolls back to step 4 and replays step 5.
+    seen = Tuple{Int,Bool}[]          # (step, switched) before the switcher runs
+    switches = Int[]
+    calls = Ref(0)                    # user state: not rewound
+    spoiled = Ref(false)
+    writer = FieldWriter(joinpath(mktempdir(), "frame"))
+    callbacks = (
+        Callback(EveryStep(), (s, q) -> (push!(seen, (s.step, switched(face)));
+                                         calls[] += 1; false)),
+        Callback(WhenState((s, _) -> s.step >= 5),
+                 (s, q) -> (switch!(face); push!(switches, s.step); false)),
+        Callback(EveryStep(), (s, q) -> (s.step == 5 && !spoiled[] &&
+                                         (spoiled[] = true;
+                                          q[gidx(s, 3, 1, 1), 1] = -1.0); false)))
+    @test_logs (:warn, r"rolled back to step 4") match_mode=:any run!(
+        solver, Q; tfinal=1.0, nmax=7, callback=callbacks,
+        control=StepControl(retries=1, savepoint_interval=2))
+    @test solver.step == 7
+    # Step 5 ran twice. On the replay the face was back to `before`, and the
+    # re-armed WhenState switched it again.
+    @test [x for x in seen if x[1] == 5] == [(5, false), (5, false)]
+    @test switches == [5, 5]
+    @test switched(face)
+    @test calls[] == solver.step + 1  # the abandoned step 5 is counted
+    # A FieldWriter drops the frames recorded after the savepoint's time.
+    writer.times = [0.0, 0.1, 0.2]
+    writer.index = writer.start_index + 3
+    CL.rewind!(writer, 0.1, 4)
+    @test writer.times == [0.0, 0.1]
+    @test writer.index == writer.start_index + 2
+end

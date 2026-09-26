@@ -116,8 +116,8 @@ this file.
   step but never lengthen one. Measured: no lookahead between 0 and 30 steps
   prevents the Noh failure at cfl = 0.3.
 - `max_growth = 0.0`: largest multiple of the previous step that `dt` may take;
-  0 disables the cap. A value of 1.05 delayed the same failure from step 175 to
-  186 but did not prevent it.
+  0 disables the cap, and a nonzero value must be at least 1. A value of 1.05
+  delayed the same failure from step 175 to 186 but did not prevent it.
 
 ## Landing on a scheduled instant
 
@@ -149,11 +149,25 @@ this file.
   complete calculation at the fixed stable CFL; the planar and cylindrical
   cases complete from 0.9 without a retry.
 - `cfl_backoff = 0.5`: multiplier applied to the solver's current CFL on each
-  retry, so successive retries compound.
+  retry, so successive retries compound. It must lie in (0, 1).
 - `savepoint_interval = 25`: steps between savepoints, counted on the solver's
   step number. The savepoint costs one extra state array and is allocated only
   when `retries > 0`; a value of 0 or less leaves the state on entry to `run!`
   as the only rollback target.
+
+A rollback restores, from the savepoint, the conserved state, the artificial
+coefficient arrays, `solver.t`, `solver.step` and the `switched` flag of every
+[`SwitchableBC`](@ref), and calls [`rewind!`](@ref) on the trigger and the
+effect of every [`Callback`](@ref), which re-arms the built-in triggers and
+drops the frames a [`FieldWriter`](@ref) wrote after the savepoint. It
+lowers `solver.cfl` and zeroes `dt_prev` and `rate_prev`. It does not restore
+`solver.floor_tally`, the wall-clock counters, the counts of a
+[`StateGuard`](@ref), or state an effect keeps elsewhere without a `rewind!`
+method; these include the abandoned steps. Callbacks run only after a step
+has completed, so a step that fails does not run them, but the steps between
+the savepoint and the failure have run theirs, and those are the effects the
+rewind reverses. A regrid refreshes the savepoint, so a rollback never
+crosses one.
 
 Rollback can recover an abrupt failure caused by an excessive initial CFL. It
 does not recover gradual degradation when the most recent savepoint itself
@@ -300,6 +314,26 @@ Base.@kwdef struct StepControl
         landing_steps >= 1 ||
             throw(ArgumentError("StepControl: landing_steps must be >= 1 " *
                                 "(1 is a hard clip onto the scheduled time)"))
+        isfinite(predict) && predict >= 0 ||
+            throw(ArgumentError("StepControl: predict must be finite and >= 0 " *
+                                "(0 disables the extrapolation), got $predict"))
+        # A cap below one shrinks every step against the previous one, so the
+        # step decays geometrically until a floor ends the run.
+        isfinite(max_growth) && (max_growth == 0 || max_growth >= 1) ||
+            throw(ArgumentError("StepControl: max_growth must be 0 (off) or a " *
+                                "finite factor >= 1, got $max_growth"))
+        isfinite(dt_min) && dt_min >= 0 ||
+            throw(ArgumentError("StepControl: dt_min must be finite and >= 0 " *
+                                "(0 disables the floor), got $dt_min"))
+        0 <= dt_min_ratio < 1 ||
+            throw(ArgumentError("StepControl: dt_min_ratio must be in [0, 1) " *
+                                "(0 disables the floor), got $dt_min_ratio"))
+        retries >= 0 ||
+            throw(ArgumentError("StepControl: retries must be >= 0 " *
+                                "(0 disables recovery), got $retries"))
+        0 < cfl_backoff < 1 ||
+            throw(ArgumentError("StepControl: cfl_backoff must be in (0, 1), " *
+                                "got $cfl_backoff"))
         # An upper bound as well as a lower one. The floors are fractions of the
         # initial minima, so a ratio at or above 1 would floor the state at its
         # own starting minimum, clamping the physics along with the failure.
@@ -481,7 +515,10 @@ refreshes in place at each savepoint; `art` holds copies of μ\\*, β\\*, κ\\* 
 the D\\* of every patch as the last right-hand-side evaluation left them, the
 arrays `max_rate` sizes the next step from, so that a retry's first step is
 sized as a restart from a checkpoint of the same instant would be; `t` and
-`step` are the solver clock at the moment of that copy.
+`step` are the solver clock at the moment of that copy. `switches` holds the
+`switched` flag of every [`SwitchableBC`](@ref) without a scheduled time, so
+a switch made by a callback on the abandoned trajectory is undone; a scheduled
+switch is restored from `t` instead.
 
 The CFL is excluded because reductions to it must persist across rollbacks and
 compound across retries; it remains on the solver when this state is restored.
@@ -493,7 +530,11 @@ mutable struct Savepoint{A}
     step::Int
     guard::Int   # step at or below which re-banking is suppressed after a
                  # rollback; -1 when none (see `run!`)
+    switches::Vector{Tuple{SwitchableBC,Bool}}
 end
+
+Savepoint(Q, art, t, step, guard) =
+    Savepoint(Q, art, t, step, guard, Tuple{SwitchableBC,Bool}[])
 
 """
     check_step(control, dt, rho_min, dt_seen, step, t, cfl) -> Union{Nothing,SolverFailure}

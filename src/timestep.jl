@@ -102,7 +102,17 @@ work arrays of the same shape as `Q`, holding the stage right-hand side and the
 low-storage accumulator; both are overwritten during the step, as is `Q`. A
 [`Workspace`](@ref) supplies the pair. `solver.tstage` is left at
 `solver.t + dt`, and boundary conditions are enforced on `Q` at that time before
-returning; `solver.t` itself is not advanced, which [`run!`](@ref) does.
+returning.
+
+The clock is advanced by [`run!`](@ref). This function does not advance
+`solver.t` or `solver.step`, and it does not apply the state filter, the
+scheduled boundary switches, the callbacks, the positivity failsafe or the
+state validation, all of which `run!` performs between steps. A driver that
+calls it directly advances the clock itself, `solver.t += dt` and
+`solver.step += 1`, before the next call. Otherwise every stage of the next
+step is evaluated at the old time, and anything scheduled on `solver.t` or
+`solver.step` (a time-dependent boundary condition, the filter cadence of a
+later `run!`) reads the stale value.
 
 Every rank must call this function because each stage evaluates
 [`compute_rhs!`](@ref).
@@ -1312,9 +1322,13 @@ function _rollback!(solver, Q, workspace, callback, control, save, failure,
     solver.t = save.t
     solver.step = save.step
     # A scheduled switch is a function of t, so the restored time decides it.
+    # A switch made by hand (a callback's `switch!`) belongs to the abandoned
+    # trajectory if it was made after the savepoint, and takes the flag banked
+    # with it; `rewind_callbacks!` below re-arms a `WhenState` that fired there.
     for p in getfield(solver, :patches)
         rewind_scheduled_switches!(p.bcs, solver.t, _land_tol(solver.t))
     end
+    _restore_switches!(save)
     # Compounding: the CFL is reduced from its current value and never
     # restored from the savepoint, so three retries give backoff^3.
     solver.cfl *= control.cfl_backoff
@@ -1364,9 +1378,30 @@ _post_step!(solver, states::Vector{<:ConservedState}) =
 
 Advance until `solver.t` reaches `tfinal` or `solver.step` reaches `nmax`,
 filtering the conserved variables every `solver.filter_interval` steps and
-invoking `callback` after each step. `nmax` bounds the solver's step counter,
-not the steps taken by this call, so a second `run!` on the same solver
-must raise it. Returns `Q`, which is advanced in place.
+invoking `callback` after each step. Returns `Q`, which is advanced in place.
+
+`tfinal` and `nmax` are absolute: `tfinal` is a value of the solver clock
+`solver.t` and `nmax` a value of the step counter `solver.step`, both counted
+from the solver's construction (or from the checkpoint it was loaded from),
+not from this call. A second `run!` on the same solver therefore continues
+from where the first stopped, and takes `nmax = solver.step + n` for `n`
+more steps. An `ArgumentError` is raised for a `tfinal` that is NaN or behind
+`solver.t`, a negative `nmax`, and an `nmax` at or below a nonzero
+`solver.step` while `solver.t` is short of `tfinal`, which would return
+without taking a step. `tfinal == solver.t` returns at once and `nmax = 0` on
+a new solver takes no step; both still validate the state, and at step 0 they
+run the initial-state callbacks.
+
+A continuing call starts from the solver as the last one left it: the lowered
+`solver.cfl` of any retries, the step and rate history `dt_prev` and
+`rate_prev` read by `control.predict` and `control.max_growth`, and the
+artificial coefficients of the last right-hand side, which size the first
+step (only a solver at step 0 evaluates the right-hand side once before its
+first step to form them). The positivity floors, the `dt_min_ratio`
+reference and the rollback savepoint are formed afresh from the state
+entering each call. The same holds after [`initialize!`](@ref) has written a
+new state into a solver that has already stepped: the clock, the counters,
+the rate history and the coefficients are those of the old state.
 
 The first form allocates a [`Workspace`](@ref) per call; pass `workspace` (as
 the third positional argument or the keyword of the same name) to reuse one.
@@ -1462,6 +1497,7 @@ function run!(solver::Solver, Q, workspace::Workspace;
     # advancing at 0.699999988079071 and took a 1.1920929e-8 remainder for
     # every remaining step of its `nmax`.
     tfin = oftype(solver.t, tfinal)
+    _check_run_limits(solver, tfinal, tfin, nmax)
     _prime_coefficients!(solver, Q, workspace)
     # Off by default (`retries = 0`), so behind `_cold`: `save` is then
     # untyped, and read only on the rollback and savepoint paths, both cold.
@@ -1676,6 +1712,24 @@ function run!(solver::Solver, Q, workspace::Workspace;
     return Q
 end
 
+# The endpoint and the step cap against the solver's clock, which every rank
+# holds identically, so a rejection is raised everywhere.
+function _check_run_limits(solver, tfinal, tfin, nmax)
+    isnan(tfinal) && throw(ArgumentError("run!: tfinal must be a number, got NaN"))
+    tfin < solver.t &&
+        throw(ArgumentError("run!: tfinal = $tfinal is behind the solver clock " *
+                            "t = $(solver.t); the clock is not reset between runs"))
+    nmax >= 0 || throw(ArgumentError("run!: nmax must be >= 0, got $nmax"))
+    # A second `run!` given the first one's `nmax` would return at once.
+    solver.step > 0 && nmax <= solver.step && solver.t < tfin &&
+        throw(ArgumentError("run!: nmax = $nmax does not exceed solver.step = " *
+                            "$(solver.step), so no step would be taken. nmax " *
+                            "counts the solver's steps since construction, not " *
+                            "this call's; pass nmax = solver.step + n for n " *
+                            "more steps"))
+    return nothing
+end
+
 # The distinct scheduled switch times over the faces every rank holds, sorted.
 function _switch_schedule(solver::Solver)
     local_times = Float64[bc.at for p in getfield(solver, :patches)
@@ -1694,7 +1748,19 @@ _apply_switches!(solver::Solver) =
             getfield(solver, :patches))
 
 _savepoint(solver, Q) =
-    Savepoint(_snapshot(Q), _art_snapshot(solver), solver.t, solver.step, -1)
+    Savepoint(_snapshot(Q), _art_snapshot(solver), solver.t, solver.step, -1,
+              _switch_snapshot(solver))
+
+# The hand-switched faces and their flags. A scheduled face is a function of
+# the clock and is restored from the savepoint's time instead.
+function _switch_snapshot(solver::Solver)
+    out = Tuple{SwitchableBC,Bool}[]
+    for p in getfield(solver, :patches), bc in _switchables(p.bcs)
+        _scheduled(bc) || any(e -> e[1] === bc, out) || push!(out, (bc, bc.switched))
+    end
+    return out
+end
+_restore_switches!(save) = foreach(((bc, flag),) -> (bc.switched = flag), save.switches)
 
 # The savepoint bank and the positivity failsafe of `run!`, behind `_cold`:
 # each runs only under a `StepControl` setting that is off by default.
@@ -1703,6 +1769,7 @@ function _bank_savepoint!(solver, save, Q)
     _bank_art!(save.art, solver)
     save.t = solver.t
     save.step = solver.step
+    save.switches = _switch_snapshot(solver)
     return nothing
 end
 

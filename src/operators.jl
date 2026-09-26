@@ -41,6 +41,52 @@ struct DirPlan{T} <: AbstractDirPlan
     B::Matrix{T}
 end
 
+# Points a block needs along a line with `nlo` and `nhi` closure rows at its
+# ends: every closure row and one interior point, or the interior stencil.
+_block_need(scheme::CompactScheme, nlo::Int, nhi::Int) =
+    max(nlo + nhi + 1, 2 * halfwidth(scheme) + 1)
+
+"""
+    check_block_extents(n_global, dims, closed_lo, closed_hi, rows)
+
+Apply the minimum-extent rule of `plan_direction` to every block of the
+process grid `dims`, before any plan is built. `closed_lo[d]` and
+`closed_hi[d]` say whether dimension `d` ends at a closed edge, where closure
+rows apply, and `rows(d)` lists `(scheme, lo_rows, hi_rows)` for the schemes
+planned along `d`, with `nothing` selecting the scheme's own closure rows. The
+inputs are replicated, so every rank raises the same `ArgumentError`, which
+names the dimension, the global and block extents, the scheme and the
+requirement.
+"""
+function check_block_extents(n_global, dims, closed_lo, closed_hi, rows)
+    for d in 1:3
+        n_global[d] > 1 || continue
+        P = dims[d]
+        for c in 0:P-1
+            n = local_range(n_global[d], P, c)[1]
+            lo = c == 0 && closed_lo[d]
+            hi = c == P - 1 && closed_hi[d]
+            # The largest requirement, so one error names the binding scheme.
+            need, name = 0, ""
+            for (scheme, lo_rows, hi_rows) in rows(d)
+                nlo = lo ? length(something(lo_rows, scheme.closures)) : 0
+                nhi = hi ? length(something(hi_rows, scheme.closures)) : 0
+                k = _block_need(scheme, nlo, nhi)
+                k > need && ((need, name) = (k, scheme.name))
+            end
+            n >= need && continue
+            blocks = P == 1 ? "" : " over $P ranks, whose block $(c + 1) has $n points"
+            advice = P == 1 ? "raise n_global[$d] to at least $need" :
+                     "raise n_global[$d] or use fewer ranks along dimension $d"
+            throw(ArgumentError(
+                "n_global[$d] = $(n_global[d])$blocks; scheme '$name' needs at " *
+                "least $need points per block along dimension $d" *
+                "$(lo || hi ? " at a closed edge" : ""): " * advice))
+        end
+    end
+    return nothing
+end
+
 """
     plan_direction(decomp, scheme, dim, h; lo_fold=nothing, hi_fold=nothing)
 
@@ -115,7 +161,7 @@ function plan_direction(decomp::Decomp, scheme::CompactScheme{T}, dim::Int,
     # the six-row T8 set to 13 points on periodic dimensions too.
     nlo = lo_closed ? length(lo_rows) : 0
     nhi = hi_closed ? length(hi_rows) : 0
-    need = max(nlo + nhi + 1, 2M + 1)
+    need = _block_need(scheme, nlo, nhi)
     n >= need || error(
         "local extent $n along dim $dim too small for scheme '$(scheme.name)' " *
         "(need ≥ $need); use fewer ranks in this dimension")

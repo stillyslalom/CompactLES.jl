@@ -168,7 +168,9 @@ The coefficients are dimensionless numerical regularization parameters, not
 material properties. Their useful values depend on resolution, flow regime,
 the scheme supplied as `Numerics.filt`, and filter cadence. The displayed
 defaults are documented starting points, not universal values; larger
-values can reduce the explicit diffusive timestep.
+values can reduce the explicit diffusive timestep. Each of `C_mu`, `C_beta`,
+`C_kappa`, `C_D`, `C_Y` and `Y_tolerance` must be finite and nonnegative;
+[`Solver`](@ref) construction raises an `ArgumentError` otherwise.
 """
 Base.@kwdef struct ArtParams{T}
     enabled::Bool = true
@@ -184,6 +186,18 @@ Base.@kwdef struct ArtParams{T}
     smoother::Symbol = :gaussian
     detector::Symbol = :delta4
     species_flux::Symbol = :partial_density
+end
+
+# The numeric fields of an `ArtParams`, checked at `Solver` construction. A
+# negative coefficient makes an artificial diffusivity negative, which is
+# anti-diffusion, and a non-finite one reaches the state as NaN.
+function validate_art(art::ArtParams)
+    for name in (:C_mu, :C_beta, :C_kappa, :C_D, :C_Y, :Y_tolerance)
+        value = getfield(art, name)
+        isfinite(value) && value >= 0 ||
+            throw(ArgumentError("ArtParams: $name must be finite and >= 0, got $value"))
+    end
+    return nothing
 end
 
 # Whether the species channel builds one diffusivity D_b shared by every species

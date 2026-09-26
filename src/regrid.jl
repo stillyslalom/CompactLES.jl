@@ -644,6 +644,7 @@ function _rebank!(solver, states, save)
         save.art = _art_snapshot(solver)
         save.t = solver.t
         save.step = solver.step
+        save.switches = _switch_snapshot(solver)
     end
     return save
 end

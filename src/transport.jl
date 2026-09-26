@@ -666,7 +666,17 @@ end
 end
 
 validate_transport(::AbstractTransport, eos) = nothing
-validate_transport(::Transport, eos) = nothing
+function validate_transport(transport::Transport, eos)
+    (; mu0, Pr, Sc) = transport
+    isfinite(mu0) && mu0 >= 0 ||
+        throw(ArgumentError("Transport: mu0 must be finite and >= 0 (0 is inviscid), " *
+                            "got $mu0"))
+    isfinite(Pr) && Pr > 0 ||
+        throw(ArgumentError("Transport: Pr must be finite and positive, got $Pr"))
+    isfinite(Sc) && Sc > 0 ||
+        throw(ArgumentError("Transport: Sc must be finite and positive, got $Sc"))
+    return nothing
+end
 function validate_transport(transport::CeaTransport{T,N,D,Names}, eos) where {T,N,D,Names}
     nspecies(eos) == N || throw(ArgumentError("CeaTransport species count does not match EOS"))
     ntuple(k -> Symbol(species_names(eos)[k]), Val(N)) == Names ||
