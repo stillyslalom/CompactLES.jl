@@ -128,7 +128,8 @@ jobs:
       # (2x2x2 at np = 8, 2x1x1 at np = 2) and the tiled fine level's
       # _amr_dims grid (4x2 against 2x1). A composite face's member mask splits
       # across more ranks, and the deep-regrid levels fall onto rank subsets
-      # and move a tile only at np = 8. The slicing phase derives its
+      # and move a tile only at np = 8. The mode-truncation phase splits θ
+      # over np / 2 or np ranks and r in two. The slicing phase derives its
       # over-coarse stride from np. The remaining phases (the timestepping
       # runs, the writers, the checkpoint, the sensor comparisons) count
       # ranks or change block sizes only, and they are the step-bound ones.
@@ -142,7 +143,8 @@ jobs:
           eight = join(("periodic C6", "pentadiagonal C10", "closed C6",
                         "device line solves", "tiled refinement",
                         "AMR transfer pair", "halo consistency",
-                        "off-rank folds", "freestream", "no-slip wall flux",
+                        "off-rank folds", "mode truncation", "freestream",
+                        "no-slip wall flux",
                         "slip wall flux", "symmetry plane", "NSCBC inflow",
                         "positivity floor", "slicing", "composite budgets",
                         "composite face", "deep regrid subsets"), ',')

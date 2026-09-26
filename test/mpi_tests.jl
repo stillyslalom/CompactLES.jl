@@ -3274,6 +3274,83 @@ function test_composite_face()
     end
 end
 
+# ---------------------------------------------------------------------------
+# Azimuthal mode truncation with θ split. Each rank packs its θ block of the
+# active rings and one Allgatherv over the θ sub-communicator completes each
+# ring, so the projection sums in global θ order on every process grid and
+# must equal the same rank's serial rebuild on COMM_SELF bit for bit. With
+# 24 radial nodes, N_θ = 72 and κ = 1 the active rings are i ≤ 11, so the
+# grid splitting r in two leaves the outer radial block without any: its
+# ranks make no call while the inner block's ranks gather. The third grid
+# splits z, so a ring slab carries several z planes. A short run is then
+# compared to round-off, since the reductions in `max_rate` depend on the
+# summation order.
+# ---------------------------------------------------------------------------
+function test_mode_truncation()
+    section("azimuthal mode truncation: θ split across ranks")
+    mk(comm_here, dims_here, nz) =
+        Solver(n_global=(24, SPLITN, nz), L_domain=(1.0, 2π, 1.0),
+               metric=CylindricalMetric(),
+               bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+               art=ArtificialProperties(enabled=false), polar_truncation=1.0,
+               comm=comm_here, dims=dims_here)
+    function blockdiff(s, a, ref, b)
+        e = 0.0
+        for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
+            loc = Tuple(I) .- s.decomp.n_halo_d
+            e = max(e, abs(a[I, c] - b[padded_index(ref, (loc .+ s.decomp.offset)...), c]))
+        end
+        return gmax(e)
+    end
+    # Content in every mode of every ring, from the global node index alone.
+    function seed!(sv, Q)
+        for I in CL.interior(sv.decomp), c in 1:sv.equations.n_cons
+            g = Tuple(I) .- sv.decomp.n_halo_d .+ sv.decomp.offset
+            Q[I, c] = (c == 1 ? 1.0 : c == 5 ? 2.5 : 0.0) +
+                      0.1 * sin(1.3g[1] + 2.9g[2] + 0.7g[3] + 1.1c)
+        end
+        return Q
+    end
+    flow = (r, θ, z) -> Prim(rho=1 + 0.1 * r^2 * cos(2θ) * exp(-4r^2),
+                             p=1 + 0.05 * exp(-8r^2) * sin(3θ),
+                             u=(0.3 * cos(θ), -0.3 * sin(θ), 0.0))
+    for (label, dims_here, nz) in (("θ split", splitdims(2), 1),
+                                   ("r and θ split", (2, np ÷ 2, 1), 1),
+                                   ("θ and z split", (1, np ÷ 2, 2), 18))
+        s = mk(comm, dims_here, nz)
+        ref = mk(MPI.COMM_SELF, (1, 1, 1), nz)
+        label = "$label $(s.decomp.dims)"
+        if dims_here[1] == 2
+            check("ranks without an active ring, $label",
+                  abs(gsum(isempty(s.truncation.rings)) - np ÷ 2), 0.5)
+        end
+        Q = seed!(s, allocate_state(s))
+        Qref = seed!(ref, allocate_state(ref))
+        Q0 = copy(Q)
+        CL.truncate_modes!(s, Q)
+        CL.truncate_modes!(ref, Qref)
+        # The reciprocal of the largest change, so that the check fails when
+        # the projection leaves the seeded rings in place.
+        check("reciprocal change of the seeded rings, $label",
+              1 / gmax(maximum(abs, parent(Q) .- parent(Q0))), 1e2)
+        check("truncation matches serial bit for bit, $label",
+              blockdiff(s, Q, ref, Qref), 1e-300)
+        bytes = @allocated CL.truncate_modes!(s, Q)
+        check("truncation allocates nothing, $label", gmax(bytes), 0.5)
+        nz == 1 || continue
+        states = map((s, ref)) do sv
+            Qs = allocate_state(sv)
+            initialize!(sv, Qs, flow)
+            run!(sv, Qs; tfinal=1e9, nmax=3)
+            Qs
+        end
+        check("three truncated steps match serial, $label",
+              blockdiff(s, states[1], ref, states[2]), 1e-12)
+        check("simulation time matches serial, $label",
+              gmax(abs(s.t - ref.t) / ref.t), 1e-12)
+    end
+end
+
 include("wall_flux_mpi.jl")
 include("conservation_mpi.jl")
 
@@ -3292,6 +3369,7 @@ const SUITE = (
     ("AMR transfer pair", test_transfer_pair),
     ("halo consistency", test_halo_consistency),
     ("off-rank folds", test_offrank_folds),
+    ("mode truncation", test_mode_truncation),
     ("symmetry plane", test_symmetry_plane),
     ("NSCBC inflow", test_nscbc_inflow),
     ("turbulent inflow", test_turbulent_inflow),

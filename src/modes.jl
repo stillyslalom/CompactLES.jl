@@ -21,6 +21,15 @@
 # Fourier modes have parity (−1)^m under θ → θ + π, so the projection
 # commutes with the antipodal fold (folds.jl), which pairs radial lines and
 # is never touched by a ring at r > 0.
+#
+# Every ring is projected from a buffer holding it in global θ order: a rank
+# packs its θ block into the buffer at its θ offset, and when θ is split one
+# in-place Allgatherv over the θ sub-communicator completes the circle. Each
+# rank of that communicator then evaluates the same sums in the same order,
+# so the projection is independent of the process grid bit for bit, which a
+# reduction of partial coefficient sums would not be. The ranks of one θ
+# sub-communicator share a radial block and so agree on the active rings; a
+# block holding none makes no call, and no θ sub-communicator spans blocks.
 
 """
     ModeTruncation{T}
@@ -34,8 +43,11 @@ radial indices of this rank's active rings, those whose limit
 falls below N_θ/2, and `mode_limit` and `theta_cap = mode_limit / (π r)`
 hold the limit and the capped inverse θ spacing of each. `cosines` and
 `sines` tabulate cos(2πn/N_θ) and sin(2πn/N_θ), `coef` is the host scratch
-of one ring's coefficients. With `kappa == 0` every table is empty and the
-feature is off; see `truncate_modes!`.
+of one ring's coefficients. `ring_buf` holds every active ring of this rank's
+radial and z block over the whole circle, indexed `[ring, k, component, j]`
+with `j` the global θ index, and `counts` and `displs` are the in-place
+Allgatherv layout of its θ blocks over `decomp.sub[2]`. With `kappa == 0`
+every table is empty and the feature is off; see `truncate_modes!`.
 """
 struct ModeTruncation{T}
     kappa::T                        # 0 = off
@@ -45,16 +57,20 @@ struct ModeTruncation{T}
     cosines::Vector{T}              # cos(2π n / N_θ), n = 0 … N_θ − 1
     sines::Vector{T}
     coef::Vector{T}                 # one ring's a₀, (a_m, b_m) …; host scratch
+    ring_buf::Array{T,4}            # [ring, k, component, global j]
+    counts::Vector{Cint}            # per θ rank: its block of ring_buf
+    displs::Vector{Cint}
 end
 
 ModeTruncation{T}() where {T} =
-    ModeTruncation{T}(zero(T), 1:0, Int[], T[], T[], T[], T[])
+    ModeTruncation{T}(zero(T), 1:0, Int[], T[], T[], T[], T[],
+                      zeros(T, 0, 0, 0, 0), Cint[], Cint[])
 
 # The table over this rank's radial block. `r0` is the physical radius of
 # global radial node 1 and `Δr` the uniform radial spacing; the limit is
 # evaluated in Float64 once here, and every consumer reads the integers.
 function mode_truncation(::Type{T}, kappa, decomp::Decomp, r0, Δr,
-                         n_theta::Int) where {T}
+                         n_theta::Int, n_cons::Int) where {T}
     kappa > 0 || return ModeTruncation{T}()
     κ = Float64(kappa)
     o1 = decomp.n_halo_d[1]
@@ -72,8 +88,18 @@ function mode_truncation(::Type{T}, kappa, decomp::Decomp, r0, Δr,
     cosines = T[cospi(2k / n_theta) for k in n]
     sines = T[sinpi(2k / n_theta) for k in n]
     mmax = isempty(limits) ? 0 : maximum(limits)
+    # The θ blocks of the sub-communicator in rank order, which is θ order
+    # (`sub_rank[2] == coords[2]`, see `Decomp`); a rank's slab of ring_buf
+    # is contiguous because j is its outermost index.
+    nz = decomp.n_local[3]
+    slab = length(limits) * nz * n_cons
+    counts = Cint[slab * local_range(n_theta, decomp.sub_size[2], p)[1]
+                  for p in 0:(decomp.sub_size[2] - 1)]
+    displs = Cint[sum(counts[1:p]; init=Cint(0)) for p in 0:(length(counts) - 1)]
     return ModeTruncation{T}(T(kappa), rings, limits, caps, cosines, sines,
-                             zeros(T, 2mmax + 1))
+                             zeros(T, 2mmax + 1),
+                             zeros(T, length(limits), nz, n_cons, n_theta),
+                             counts, displs)
 end
 
 # Whether the feature is on. Replicated: κ is a setup keyword.
@@ -96,7 +122,13 @@ solver's azimuthal truncation table onto the ring's Fourier modes
 built with `polar_truncation > 0`. [`run!`](@ref) calls it once per step,
 after the state filter and before the positivity failsafe; halos are left
 stale, as they are after the failsafe, and the next `max_rate` exchanges
-them. Rank-local and free of collectives, since setup keeps θ on one rank.
+them.
+
+When θ is split across ranks the call is collective over the θ
+sub-communicator of every rank holding an active ring, so all ranks call it
+together, as `run!` does. Each rank gathers its rings over the whole circle
+and projects them in global θ order, so the result is the same bit for bit
+on every process grid.
 
 The projection is idempotent to round-off, preserves the ring sum of every
 component, and keeps modes 0 and 1, hence a uniform freestream and the
@@ -105,7 +137,16 @@ Cartesian momentum of each ring.
 function truncate_modes!(solver, Q::ConservedState)
     tr = solver.truncation
     _truncating(tr) || return Q
-    _truncate_rings!(parent(Q), tr, solver.decomp, solver.equations.n_cons)
+    isempty(tr.rings) && return Q      # replicated over the θ sub-communicator
+    q = parent(Q)
+    decomp = solver.decomp
+    _pack_rings!(tr.ring_buf, q, tr.rings, decomp)
+    if decomp.sub_size[2] > 1
+        MPI.Allgatherv!(MPI.VBuffer(tr.ring_buf, tr.counts, tr.displs,
+                                    MPI.Datatype(eltype(q))), decomp.sub[2])
+    end
+    _project_rings!(tr.ring_buf, tr)
+    _unpack_rings!(q, tr.ring_buf, tr.rings, decomp)
     return Q
 end
 
@@ -113,21 +154,42 @@ truncate_modes!(solver, states::Vector{<:ConservedState}) =
     (_truncating(solver.truncation) &&
      error("polar_truncation takes a single-patch solver"); states)
 
-function _truncate_rings!(q::AbstractArray{T,4}, tr::ModeTruncation{T},
-                          decomp::Decomp, n_cons::Int) where {T}
+# This rank's θ block of each active ring, interior only, into `buf` at its
+# global θ offset, and back.
+function _pack_rings!(buf::Array{T,4}, q::AbstractArray{T,4}, rings::UnitRange{Int},
+                      decomp::Decomp) where {T}
     o2, o3 = decomp.n_halo_d[2], decomp.n_halo_d[3]
-    nz = decomp.n_local[3]
+    j0 = decomp.offset[2]
+    @inbounds for j in 1:decomp.n_local[2], comp in axes(buf, 3), k in axes(buf, 2),
+                  (slot, ir) in enumerate(rings)
+        buf[slot, k, comp, j0 + j] = q[ir, o2 + j, o3 + k, comp]
+    end
+    return buf
+end
+
+function _unpack_rings!(q::AbstractArray{T,4}, buf::Array{T,4}, rings::UnitRange{Int},
+                        decomp::Decomp) where {T}
+    o2, o3 = decomp.n_halo_d[2], decomp.n_halo_d[3]
+    j0 = decomp.offset[2]
+    @inbounds for comp in axes(buf, 3), k in axes(buf, 2), j in 1:decomp.n_local[2],
+                  (slot, ir) in enumerate(rings)
+        q[ir, o2 + j, o3 + k, comp] = buf[slot, k, comp, j0 + j]
+    end
+    return q
+end
+
+# The projection of every ring of `buf`, in place and in global θ order.
+function _project_rings!(buf::Array{T,4}, tr::ModeTruncation{T}) where {T}
     N = length(tr.cosines)
     cs = tr.cosines
     sn = tr.sines
     a = tr.coef
     invN = one(T) / N
-    @inbounds for comp in 1:n_cons, k in (o3 + 1):(o3 + nz),
-                  (slot, ir) in enumerate(tr.rings)
+    @inbounds for comp in axes(buf, 3), k in axes(buf, 2), slot in axes(buf, 1)
         M = tr.mode_limit[slot]
         s = zero(T)
         for j in 1:N
-            s += q[ir, j + o2, k, comp]
+            s += buf[slot, k, comp, j]
         end
         a[1] = s * invN
         for m in 1:M
@@ -135,7 +197,7 @@ function _truncate_rings!(q::AbstractArray{T,4}, tr::ModeTruncation{T},
             ss = zero(T)
             n = 0                              # m (j − 1) mod N
             for j in 1:N
-                x = q[ir, j + o2, k, comp]
+                x = buf[slot, k, comp, j]
                 sc += x * cs[n + 1]
                 ss += x * sn[n + 1]
                 n += m
@@ -152,8 +214,8 @@ function _truncate_rings!(q::AbstractArray{T,4}, tr::ModeTruncation{T},
                 n >= N && (n -= N)
                 x += a[2m] * cs[n + 1] + a[2m + 1] * sn[n + 1]
             end
-            q[ir, j + o2, k, comp] = x
+            buf[slot, k, comp, j] = x
         end
     end
-    return q
+    return buf
 end

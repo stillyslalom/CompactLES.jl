@@ -424,9 +424,9 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   consistency. Fold-adjacent refinement stays forbidden pending a separate design.
 
 - [ ] **S9 — Implement azimuthal mode truncation in staged form.**
-  Follow [MODE_TRUNCATION.md](MODE_TRUNCATION.md). Stage 1, serial cylindrical
-  (`polar_truncation`, off by default), is delivered; the decomposed angle,
-  calibration/defaults and the spherical azimuth remain.
+  Follow [MODE_TRUNCATION.md](MODE_TRUNCATION.md). Stages 1 and 2, cylindrical
+  (`polar_truncation`, off by default) with θ serial or decomposed, are
+  delivered; calibration/defaults and the spherical azimuth remain.
   **Gate:** conservation and mode errors, pole/axis behavior, and achieved CFL/cost
   benefit. Keep this acoustic/geometric restriction distinct from the diffusive
   restriction addressed by H1.

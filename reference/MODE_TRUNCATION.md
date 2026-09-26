@@ -191,6 +191,10 @@ and no new allocation in the step path.
 
 ## Stage 2 — decomposed θ
 
+Delivered, with one in-place Allgatherv per step carrying all of a rank's
+active rings rather than one per ring, and the `mode truncation` phase in
+`test/mpi_tests.jl`.
+
 Deliverables:
 
 - The `Allgatherv` ring path over `decomp.sub[2]` per design decision 6,

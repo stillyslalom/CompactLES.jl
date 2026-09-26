@@ -742,9 +742,10 @@ Grid, scheme, timestep, and decomposition choices used to realize a
   step. Modes 0 and 1 are always kept, so the ring sums of the conserved
   variables and a uniform freestream are unchanged. The cost is one
   projection per step over the rings below the threshold radius, small against
-  a filter pass. Requires `CylindricalMetric`, θ periodic over 2π and held on
-  one rank (`dims[2] = 1`), an unstretched radial dimension, a single patch
-  without refinement, and the host backend.
+  a filter pass; when θ is split across ranks, the ranks sharing a ring also
+  gather it once per step. Requires `CylindricalMetric`, θ periodic over 2π,
+  an unstretched radial dimension, a single patch without refinement, and the
+  host backend.
 - `dims`: MPI process-grid dimensions. `nothing` lets MPI distribute ranks over
   resolved directions. An explicit tuple must have product equal to the
   communicator size and must contain `1` in every collapsed direction.

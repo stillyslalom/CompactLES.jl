@@ -367,7 +367,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     end
     # --- Azimuthal mode truncation (modes.jl) ----------------------------
     # The ring projection is a Fourier series in θ over the whole circle on
-    # one rank's host storage, and the limit table assumes a uniform Δr.
+    # host storage, and the limit table assumes a uniform Δr.
     isfinite(polar_truncation) && (polar_truncation == 0 || polar_truncation >= 1) ||
         throw(ArgumentError("polar_truncation must be 0 (off) or a margin of at " *
                             "least 1, got $polar_truncation"))
@@ -598,12 +598,9 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                      interface_flux, schemes)
     end
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
-    # The process grid is replicated, so every rank raises this together.
-    polar_truncation > 0 && decomp.dims[2] > 1 &&
-        error("polar_truncation requires θ on one rank (dims[2] = 1); the " *
-              "process grid $(decomp.dims) splits it")
     truncation = mode_truncation(T, polar_truncation, decomp,
-                                 T(origin[1]) + coord_shift[1], h[1], n_global[2])
+                                 T(origin[1]) + coord_shift[1], h[1], n_global[2],
+                                 n_cons)
     # The per-rank extent check in `plan_direction` would raise on some ranks
     # only when the blocks differ in size; this one is replicated.
     check_block_extents(n_global, decomp.dims,
