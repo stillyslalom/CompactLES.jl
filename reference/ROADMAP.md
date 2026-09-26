@@ -102,7 +102,7 @@ details are in [DESIGN.md](DESIGN.md).
   ladder on the current solver, the singular one included, and its remaining
   failures are CFL ceilings that no initial-data measure orders, so the
   resolved-start requirement is lifted by measurement and no initial-data
-  check is added; C8 `:brady_livescu` stays unsupported at a wall (commit TBD).
+  check is added; C8 `:brady_livescu` stays unsupported at a wall (commit `4faed86`).
 
 - [x] **N7** — `NSCBCInflowBC` carries the Yoo–Im transverse terms on every
   incoming wave, at the full share by default, measured on an oblique pulse

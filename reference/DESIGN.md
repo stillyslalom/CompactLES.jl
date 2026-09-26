@@ -240,9 +240,12 @@ Presets:
   tridiagonal family. It shares the tridiagonal line solve and every path
   built on it (decomposed, multi-patch, device) with `lele_d1_6`, which the
   pentadiagonal `lele_d1_10` does not; its closed edge takes three rows.
-- Both tridiagonal derivatives take `closures = :cascade3` (default; row 1 is
-  Lele's third-order one-sided row, row 2 the fourth-order Padé row, row 3 the
-  C6 interior), `:cascade4` (row 1 at α = 3, fourth order) or
+- Both tridiagonal derivatives take `closures = :neutral3` (default; an
+  explicit third-order row 1 on four points and a fourth-order compact row 2,
+  with coefficients that make the linearized Euler step between slip walls
+  neutral), `:cascade3` (row 1 is Lele's third-order one-sided row, row 2 the
+  fourth-order Padé row, row 3 the C6 interior), `:cascade4` (row 1 at
+  α = 3, fourth order) or
   `:brady_livescu` (Brady & Livescu, Computers & Fluids 2019, schemes T6 and
   T8, set 1 of their Data in Brief databases: four fifth-order rows for C6, six
   seventh-order rows for C8, discretely conservative and stable on their
@@ -254,7 +257,7 @@ Presets:
   under `:cascade3` and 5.7 under C6 `:brady_livescu` (the smooth-evolution
   rows of the same file). The Brady–Livescu rows are far from diagonally dominant,
   and a closed line's condition number rises from 16 to about 1e3 (C6) and
-  4e3 (C8); the cascade stays the default for that reason. The T8 set needs
+  4e3 (C8), and neither set is the default for that reason. The T8 set needs
   13 points along a dimension closed at both ends (`plan_direction` counts
   closure rows only at closed ends, so a periodic or interior block needs
   the interior stencil's 7). Under the filter's cascade rows neither
