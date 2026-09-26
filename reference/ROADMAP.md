@@ -398,11 +398,11 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   timestep progress, memory, and throughput; no CPU-default change from speed alone.
 
 - [x] **S5** — `Nasa9Mixture` runs on device storage through an isbits mirror
-  carrying the flattened interval table (commit TBD).
+  carrying the flattened interval table (commit `b78acd4`).
 
 - [x] **S6** — `test/hdf5_tests.jl` passes on a parallel libhdf5 at one, two
   and four ranks under both transfer modes, and the collective mode, measured
-  faster on a local disk, is the default (commit TBD). A refined solver's
+  faster on a local disk, is the default (commit `c8df974`). A refined solver's
   HDF5 dump (a spatial collection per patch with blanking) waits for a case.
 
 - [ ] **S7 — Validate thread pinning and cluster placement.**
@@ -476,11 +476,9 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   Per-step collective latency is not the limit: Allgathers span one direction's
   P ranks and the measured node scaling was 93% per doubling at four nodes.
   Stages, in order:
-  1. Instrument first: a probe that times the local sweep, the Allgather and
-     `_reduced_solve!` separately at the target P and N, for both `LineSolver`
-     and `BandLineSolver`, so the table becomes a measurement and the
-     wall-clock crossover (later than the count, since the dense solve runs
-     cache-resident while the sweep streams memory) is known.
+  1. Instrument first: `bench/reducedsolve.jl` times the local sweep, the
+     Allgather and `_reduced_solve!` separately for both solvers, and its
+     run on rzhound (`bench/slurm/s12_reducedsolve.sbatch`) remains.
   2. Banded factorization of the reduced matrix, which is block-tridiagonal in
      P because a rank's interface unknowns couple only to its neighbors:
      per-line cost O(q²P), per-rank cost back to N²/P. Covers the
