@@ -23,7 +23,8 @@
 #      periodic self-wrap.
 #   3. Off-rank coordinate-singularity folds — the pair_forward!/pair_backward!
 #      butterfly that does MPI.Sendrecv! of whole blocks (the e-keeper/o-keeper
-#      split), reached only when the pairing/reversed dimension is split.
+#      split), reached only when the pairing/reversed dimension is split, for
+#      the derivatives, the filters and the :delta4 detector.
 #   4. The discrete-GCL freestream identity with the θ-derivative of the area
 #      factor crossing a rank boundary.
 #   5. Telescoping flux conservation across rank boundaries.
@@ -361,6 +362,94 @@ function test_offrank_folds()
             m = max(m, abs(Q[I, 1] - Q0[I, 1]))
         end
         check("volume-weighted filter through the fold: " * label, gmax(m), 1e-6)
+    end
+
+    # (d) The :delta4 detector through the same butterfly. `delta4_sum!` takes
+    # every sensed field across a paired fold as the even and odd combinations
+    # of the line and its antipodal partner, so the off-rank exchange carries
+    # the sensors as well as the derivatives. Each case is compared with the
+    # same rank's serial rebuild on COMM_SELF, first the detector alone on an
+    # even and an odd field, then the artificial coefficients, the right-hand
+    # side and a few steps of a flow crossing the axis. The second process
+    # grid splits r as well, so the ranks away from the axis take the
+    # butterfly without holding the fold (at np = 2 with the pair local).
+    rdims = (2, np ÷ 2, 1)
+    function detector_diff(s, ref, a, b, ncomp)
+        e = 0.0
+        scale = 0.0
+        for I in CL.interior(s.decomp), c in 1:ncomp
+            loc = Tuple(I) .- s.decomp.n_halo_d
+            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            e = max(e, abs(a[I, c] - b[J, c]))
+            scale = max(scale, abs(b[J, c]))
+        end
+        return gmax(e) / gmax(scale)
+    end
+    cyl(comm_here, dims_here; art=ArtParams(enabled=false)) =
+        Solver(n_global=(40, SPLITN, 1), L_domain=(1.0, 2π, 1.0),
+               metric=CylindricalMetric(),
+               bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+               transport=Transport(mu0=1e-3), art=art,
+               comm=comm_here, dims=dims_here)
+    sph(comm_here, dims_here) =
+        Solver(n_global=(40, SPLITN, 12), L_domain=(1.0, π, 2π),
+               metric=SphericalMetric(),
+               bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
+               art=ArtParams(enabled=false), comm=comm_here, dims=dims_here)
+    # A smooth scalar (the Cartesian coordinate along the pairing, σ = +1)
+    # and the radial component of a uniform Cartesian flow, which changes
+    # sign across the fold (σ = −1).
+    fields = (("even", (r, θ, z) -> exp(-4r^2) * (1 + r * cos(θ)), (1, 1, 1)),
+              ("odd", (r, θ, z) -> cos(θ) * (1 + r^2), (-1, 1, 1)))
+    for (label, mk, dims_here) in (("cyl axis, θ split", cyl, splitdims(2)),
+                                   ("cyl axis, r and θ split", cyl, rdims),
+                                   ("sph origin+poles, θ split", sph, splitdims(2)))
+        s = mk(comm, dims_here)
+        ref = mk(MPI.COMM_SELF, (1, 1, 1))
+        for (parity_label, fn, parity) in fields
+            out = map((s, ref)) do sv
+                f = CL.field(sv.decomp)
+                sensed = CL.field(sv.decomp)
+                fillf!(sv, f, fn)
+                CL.exchange_halos!(f, sv.decomp)
+                CL.delta4_sum!(sensed, f, sv, 2; parity=parity)
+            end
+            check("δ⁴ detector, $parity_label field, $label",
+                  detector_diff(s, ref, out[1], out[2], 1), 1e-12)
+        end
+    end
+    # A uniform Cartesian stream through the axis with a radial compression
+    # on it. The `:velocity` μ* sensor takes each velocity component across
+    # the fold with its own sign, the `:strain` one the strain magnitude.
+    flow = (r, θ, z) -> Prim(rho=1 + 0.5 * exp(-4r^2), p=1 + 0.2 * exp(-8r^2),
+                             u=(0.3 * cos(θ) - 0.2 * r * exp(-4r^2),
+                                -0.3 * sin(θ), 0.0))
+    for (label, dims_here) in (("θ split", splitdims(2)), ("r and θ split", rdims)),
+        mu_sensor in (:strain, :velocity)
+        art = ArtParams(enabled=true, mu_sensor=mu_sensor)
+        label = "$label, $mu_sensor"
+        s = cyl(comm, dims_here; art=art)
+        ref = cyl(MPI.COMM_SELF, (1, 1, 1); art=art)
+        states = map((s, ref)) do sv
+            Q = allocate_state(sv)
+            initialize!(sv, Q, flow)
+            apply_bcs!(sv, Q)
+            dQ = zero(Q)
+            compute_rhs!(sv, Q, dQ)
+            (Q, dQ)
+        end
+        for name in (:mu_art, :beta_art, :kappa_art)
+            check("$name through the axis, $label",
+                  detector_diff(s, ref, getproperty(s, name),
+                                getproperty(ref, name), 1), 1e-10)
+        end
+        ncons = s.equations.n_cons
+        check("RHS with the detector through the axis, $label",
+              detector_diff(s, ref, states[1][2], states[2][2], ncons), 1e-10)
+        run!(s, states[1][1]; tfinal=1e9, nmax=3)
+        run!(ref, states[2][1]; tfinal=1e9, nmax=3)
+        check("three steps through the axis, $label",
+              detector_diff(s, ref, states[1][1], states[2][1], ncons), 1e-10)
     end
 end
 
