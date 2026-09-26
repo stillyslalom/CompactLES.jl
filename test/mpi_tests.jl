@@ -1506,6 +1506,118 @@ function test_unrefined_start()
 end
 
 # ---------------------------------------------------------------------------
+# 7b''. Three regridded levels, decomposed: the serial level-test case (a
+#     shock driven into light gas and through a contact into heavy gas,
+#     max_levels = 3 through the AMR frontend) on this run's ranks against
+#     the same run on COMM_SELF: the same tile sets on both refined levels and
+#     the composite density to round-off. A checkpoint taken while level 2
+#     exists continues bitwise on the same rank count.
+# ---------------------------------------------------------------------------
+function test_deep_regrid()
+    section("deep regrid: three regridded levels follow a shock")
+    ic = (x, y, z) -> x < 0.25 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                      x < 0.5  ? Prim(u=(0, 0, 0), p=0.1, rho=0.125) :
+                                 Prim(u=(0, 0, 0), p=0.1, rho=0.5)
+    wall2 = (SlipWallBC(), SlipWallBC())
+    prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=(wall2, per3[2], per3[3]), ic=ic)
+    amr = AMR(initial=:sensor, tile=8, regrid_interval=4, subcycle=true,
+              max_levels=3)
+    num(c) = Numerics(n_global=(81, 1, 1), cfl=0.2, comm=c, amr=amr)
+    solver, states = setup(prob, num(comm))
+    ref, rstates = setup(prob, num(MPI.COMM_SELF))
+    # A rank outside a level's parent holds none of its layout; rank 0
+    # holds every level's.
+    layout(s) = (level_regions(s, 1), level_regions(s, 2))
+    as_serial(s, r) = MPI.bcast(layout(s) == layout(r), comm; root=0) ? 0.0 : 1.0
+    check("deep regrid: the initial layout is the serial one",
+          as_serial(solver, ref), 0.5)
+    run!(solver, states; tfinal=0.1, nmax=10000)
+    save_checkpoint(solver, states, "mpi_deep")
+    run!(solver, states; tfinal=0.15, nmax=10000)
+    run!(ref, rstates; tfinal=0.1, nmax=10000)
+    run!(ref, rstates; tfinal=0.15, nmax=10000)
+    check("deep regrid: the same steps as serial",
+          gmax(solver.step != ref.step), 0.5)
+    check("deep regrid: both refined levels regrid as serial",
+          as_serial(solver, ref), 0.5)
+    check("deep regrid: level 2 holds tiles", isempty(level_regions(solver, 2)) ?
+          1.0 : 0.0, 0.5)
+    check("deep regrid: state vector aligned with the patches",
+          gmax(length(states) != length(solver.patches)), 0.5)
+    _, rho = line_sample(solver, states, :rho)
+    _, rho_ref = line_sample(ref, rstates, :rho)
+    check("deep regrid: composite density matches serial",
+          gmax(maximum(abs, rho .- rho_ref)), 1e-9)
+    MPI.Barrier(comm)
+    r, rs = setup(prob, num(comm))
+    load_checkpoint!(r, rs, "mpi_deep")
+    run!(r, rs; tfinal=0.15, nmax=10000)
+    check("deep regrid: restart rebuilds and tracks both levels",
+          gmax(layout(r) != layout(solver) ||
+               getfield(r, :regrid).deep_created !=
+               getfield(solver, :regrid).deep_created), 0.5)
+    d = length(rs) == length(states) && r.step == solver.step ? 0.0 : Inf
+    if isfinite(d)
+        for i in eachindex(states)
+            inner = CL.interior(solver.patches[i].decomp)
+            d = max(d, maximum(abs.(parent(rs[i])[inner, :] .-
+                                    parent(states[i])[inner, :])))
+        end
+    end
+    check("deep regrid: restart continues bitwise", gmax(d), 1e-300)
+    check("deep regrid: finite composite state",
+          gmax(!all(all(isfinite, parent(Q)) for Q in states)), 0.5)
+    MPI.Barrier(comm)
+    rank == 0 && foreach(rm, filter(startswith("mpi_deep"), readdir()))
+    MPI.Barrier(comm)
+    # A single shock on small tiles (edge 4, buffer 1), where the levels'
+    # rank subsets fall below the run at np = 8 and a level-2 survivor's
+    # range leaves its parent's subset, so the tile moves. The layouts are
+    # compared every three steps and the density at the end.
+    sod = (x, y, z) -> x < 0.3 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                                 Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=(wall2, per3[2], per3[3]), ic=sod)
+    amr = AMR(initial=:sensor, tile=4, tag_buffer=1, regrid_interval=3,
+              subcycle=true, max_levels=3)
+    num(c) = Numerics(n_global=(121, 1, 1), cfl=0.1, comm=c, amr=amr)
+    solver, states = setup(prob, num(comm))
+    ref, rstates = setup(prob, num(MPI.COMM_SELF))
+    differ = 0
+    subsets = 0
+    moves = 0
+    for n in 3:3:150
+        owners0 = [(lt.region, o) for (lt, o) in
+                   zip(solver.levels[3].transfers, solver.levels[3].owners)]
+        run!(solver, states; tfinal=1.0, nmax=n)
+        run!(ref, rstates; tfinal=1.0, nmax=n)
+        differ += rank == 0 && layout(solver) != layout(ref)
+        subsets += solver.levels[3].level_comm.size < np
+        owners1 = Dict(lt.region => o for (lt, o) in
+                       zip(solver.levels[3].transfers, solver.levels[3].owners))
+        moves += count(((r, o),) -> haskey(owners1, r) && owners1[r] != o, owners0)
+    end
+    _, rho = line_sample(solver, states, :rho)
+    _, rho_ref = line_sample(ref, rstates, :rho)
+    check("deep regrid under subsets: composite density matches serial",
+          gmax(maximum(abs, rho .- rho_ref)), 1e-9)
+    # Rank 0 holds every level's layout and owners (a rank outside a
+    # level's parent holds neither), so its counts are the run's.
+    counts = MPI.bcast((differ, subsets, moves), comm; root=0)
+    check("deep regrid under subsets: both levels regrid as serial",
+          counts[1], 0.5)
+    if np == 8
+        check("deep regrid under subsets: level 2 on a rank subset",
+              counts[2] > 0 ? 0.0 : 1.0, 0.5)
+        check("deep regrid under subsets: a level-2 survivor moved",
+              counts[3] > 0 ? 0.0 : 1.0, 0.5)
+    end
+end
+
+# ---------------------------------------------------------------------------
 # Driver
 # ---------------------------------------------------------------------------
 rank == 0 && println("=== CompactLES multi-rank test suite (np = $np) ===")
@@ -3169,6 +3281,7 @@ const SUITE = (
     ("checkpoint", test_checkpoint),
     ("hierarchy checkpoint", test_hierarchy_checkpoint),
     ("unrefined start", test_unrefined_start),
+    ("deep regrid", test_deep_regrid),
     ("two-patch layout", test_two_patch_layout),
     ("bulk patched layout", test_bulk_patched),
 )

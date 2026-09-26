@@ -1734,3 +1734,150 @@ end
     @test !isempty(level_regions(s, 1))
     @test all(all(isfinite, parent(Q)) for Q in states)
 end
+
+# --- Regridding several levels -------------------------------------------------
+
+@testset "tag sweep over a tiled parent matches a uniform sweep" begin
+    # A level-1 tile set swept with its edges open reads the same density
+    # differences as a uniform grid at the level-1 spacing: exactly across
+    # the tiles' shared faces, whose ghosts the level records fill from the
+    # neighbor, and away from the parent-fed faces, whose shell is the
+    # parent's interpolation rather than the initial condition.
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    ic(x, y, z) = Prim(u=(0, 0, 0), p=1.0, rho=1.0 + 0.5 * tanh((x - 0.5) / 0.005))
+    N = 81
+    mk(n; kw...) = Solver(; n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                          bcs=(wall2, per, per), tile=8, regrid_interval=1, kw...)
+    s = mk(N; refine=BlockRegion((24, 0, 0), (33, 1, 1)), max_levels=3)
+    @test [r.offset[1] for r in level_regions(s, 1)] == [24, 32, 40, 48]
+    states = allocate_state(s)
+    initialize!(s, states, ic)
+    CL._presync!(s, states)
+    u = mk(3 * (N - 1) + 1; max_levels=2)
+    Qu = allocate_state(u)
+    initialize!(u, Qu, ic)
+    marks(dict) = (g1, g2, g3, level) -> (dict[g1] = max(get(dict, g1, 0), level); nothing)
+    tiled = Dict{Int,Int8}()
+    for li in getfield(s, :levels)[2].patches
+        p = s.patches[li]
+        CL._tag_sweep!(marks(tiled), s, p, states[li], zeros(Int8, size(p.covered)),
+                       false)
+    end
+    uniform = Dict{Int,Int8}()
+    CL._tag_sweep!(marks(uniform), u, Qu[1])
+    # Level-1 nodes 73 .. 169 are the tiles'; two nodes in from each end the
+    # δ⁴ taps stay off the imposed shell. The shared faces are 97, 121, 145.
+    inner = 75:167
+    @test count(g -> get(uniform, g, 0) == CL.TAG_MARK, inner) > 4
+    @test all(g -> get(tiled, g, 0) == get(uniform, g, 0), inner)
+end
+
+@testset "max_levels: configuration and levels created on demand" begin
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    mk(; kw...) = Solver(; n_global=(81, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=(wall2, per, per), kw...)
+    r1 = BlockRegion((20, 0, 0), (41, 1, 1))
+    r2 = BlockRegion((80, 0, 0), (30, 1, 1))
+    # A level refine does not give starts empty, which needs tiles and a
+    # regrid; more than one regridded level needs tiles and no rebalancing;
+    # max_levels cannot drop a level refine gives.
+    @test_throws ErrorException mk(max_levels=3, regrid_interval=4)
+    @test_throws ErrorException mk(max_levels=3, tile=8)
+    @test_throws ErrorException mk(refine=[r1, r2], regrid_interval=4)
+    @test_throws ErrorException mk(max_levels=3, tile=8, regrid_interval=4,
+                                   rebalance=1.5)
+    @test_throws ErrorException mk(refine=[r1, r2], max_levels=2)
+    s = mk(max_levels=3, tile=8, regrid_interval=4, subcycle=true)
+    @test nlevels(s) == 3 && npatches(s) == 1
+    @test all(isempty(level_regions(s, ℓ)) for ℓ in 1:2)
+    @test length(getfield(s, :regrid).deep_created) == 1
+    s = mk(refine=r1, max_levels=3, tile=8, regrid_interval=4)
+    @test length(level_regions(s, 1)) == 6 && isempty(level_regions(s, 2))
+    prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=(wall2, per, per),
+                   ic=(x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0), p=1.0))
+    @test_throws ArgumentError setup(prob, Numerics(n_global=(81, 1, 1),
+                                                    amr=AMR(max_levels=3)))
+end
+
+@testset "three regridded levels follow a shock through an interface" begin
+    # A shock driven from the left into light gas crosses a contact into
+    # heavy gas at x = 0.5. The AMR frontend builds three levels from the
+    # tags of the initial state, every level regrids, and the finest follows
+    # the leading shock. The composite is compared with a uniform run at the
+    # finest spacing and with the root alone.
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    ic(x, y, z) = x < 0.25 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                  x < 0.5  ? Prim(u=(0, 0, 0), p=0.1, rho=0.125) :
+                             Prim(u=(0, 0, 0), p=0.1, rho=0.5)
+    prob = Problem(eos=IdealSpecies("gas"; gamma=1.4, R=1.0),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=(wall2, per, per), ic=ic)
+    N = 81
+    # A discontinuity inside the refined levels at t = 0 needs a CFL of 0.2
+    # under subcycling; the references take the same.
+    num(n; amr=nothing) = Numerics(n_global=(n, 1, 1), cfl=0.2, amr=amr)
+    amr = AMR(initial=:sensor, tile=8, regrid_interval=4, subcycle=true,
+              max_levels=3)
+    s, states = setup(prob, num(N; amr))
+    @test nlevels(s) == 3
+    initial2 = level_regions(s, 2)
+    @test !isempty(level_regions(s, 1)) && !isempty(initial2)
+    # Level 2 lies in level 1's tiles with the nesting margin.
+    parents = [CL._erode(CL._fine_region(lt.region, (true, false, false)), lt.imposed,
+                         (true, false, false))
+               for lt in getfield(s, :levels)[2].transfers]
+    @test all(r -> CL._covered_by(CL._buffered(r, (true, false, false), 4), parents),
+              initial2)
+    # The leading shock is the last root node above the ahead pressure by
+    # half the jump; it lies in a level-2 tile at every sampled time.
+    function shock_in_finest(s, states)
+        _, p = line_sample(s, states, :p)
+        i = findlast(>(0.2), p)
+        g = 3 * (i - 1) + 1
+        return any(r -> r.offset[1] < g <= r.offset[1] + r.extent[1],
+                   level_regions(s, 2))
+    end
+    dir = mktempdir()
+    for t in (0.05, 0.1, 0.15)
+        run!(s, states; tfinal=t, nmax=10000)
+        @test shock_in_finest(s, states)
+    end
+    save_checkpoint(s, states, joinpath(dir, "deep"))
+    run!(s, states; tfinal=0.25, nmax=10000)
+    @test shock_in_finest(s, states)
+    regs2 = level_regions(s, 2)
+    @test maximum(r -> r.offset[1], regs2) > maximum(r -> r.offset[1], initial2)
+    @test length(states) == length(s.patches)
+    @test all(all(isfinite, parent(Q)) for Q in states)
+    _, rho = line_sample(s, states, :rho)
+    r, Qr = setup(prob, num(N))
+    run!(r, Qr; tfinal=0.25, nmax=10000)
+    _, rho_root = line_sample(r, Qr, :rho)
+    f, Qf = setup(prob, num(9 * (N - 1) + 1))
+    run!(f, Qf; tfinal=0.25, nmax=100000)
+    _, rho_fine = line_sample(f, Qf, :rho)
+    rho_fine = rho_fine[1:9:end]
+    e_composite = sum(abs, rho .- rho_fine) / N
+    e_root = sum(abs, rho_root .- rho_fine) / N
+    # Measured: 1.44e-3 against 2.37e-2 for the root alone.
+    @info "three-level shock and interface" e_composite e_root
+    @test e_composite < 3e-3
+    @test e_root > 8 * e_composite
+    # The checkpoint taken while level 2 exists continues bit for bit.
+    rs_solver, rs = setup(prob, num(N; amr))
+    load_checkpoint!(rs_solver, rs, joinpath(dir, "deep"))
+    run!(rs_solver, rs; tfinal=0.25, nmax=10000)
+    @test rs_solver.t == s.t && rs_solver.step == s.step
+    @test all(ℓ -> level_regions(rs_solver, ℓ) == level_regions(s, ℓ), 1:2)
+    spec, rspec = getfield(s, :regrid), getfield(rs_solver, :regrid)
+    @test rspec.created == spec.created && rspec.deep_created == spec.deep_created
+    same(i) = (inner = CL.interior(s.patches[i].decomp);
+               parent(rs[i])[inner, :] == parent(states[i])[inner, :])
+    @test length(rs) == length(states) && all(same, eachindex(states))
+    rm(dir; recursive=true)
+end

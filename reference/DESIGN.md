@@ -114,7 +114,7 @@ validation cases are discussed, and never a viscosity.
 | `src/hdf5.jl`             | `BlockRegion` and the shared-file HDF5 interface; the writer itself is the `ext/` extension |
 | `src/callbacks.jl`        | Step-boundary callbacks: the `AtTime` / `EveryTime` / `EveryStep` / `WhenState` triggers and their effects |
 | `src/timestep.jl`         | RK45, CFL timestep, the `run!` loop, per-step filtering |
-| `src/regrid.jl`           | Tagging and regridding (two-level hierarchies) |
+| `src/regrid.jl`           | Tagging and regridding |
 | `src/diagnostics.jl`      | Volume and plane reductions, and the variable-density mixing diagnostics built on them |
 | `src/viz.jl`              | Geometry-aware extraction of report fields (`line_profile`, `field_slice`) and the Makie plotting interface |
 | `src/problem.jl`          | Frontend: `Prim`, `Problem`, `Numerics`, `setup`, initialization |

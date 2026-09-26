@@ -453,7 +453,8 @@ The configuration record of `solver`, identical on every rank. Groups:
 - `numerics`: the derivative and filter schemes, the filter cadence and
   relaxation, the artificial-property parameters, and on a refined solver
   `interface_rhs`, `interface_flux`, `interface_divergence`,
-  `level_interpolation_order`, `level_restriction` and `subcycle`.
+  `level_interpolation_order`, `level_restriction` and `subcycle`, and
+  `max_levels` when more than one refined level regrids.
 - `transport`, `boundaries` (each face of the root patch) and `sources`.
 
 Not entered: the CFL number and the step history (restored from the
@@ -493,6 +494,10 @@ function configuration_record(solver::Solver)
                  schemes.level_interpolation_order)
         _record!(rec, g, "level_restriction", schemes.level_restriction)
         _record!(rec, g, "subcycle", getfield(solver, :subcycle))
+        # The depth of a hierarchy whose levels are all regridded; a static
+        # hierarchy's depth is its layout, which the hierarchy record checks.
+        getfield(solver, :regrid) !== nothing && nlevels(solver) > 2 &&
+            _record!(rec, g, "max_levels", nlevels(solver))
     end
     _record!(rec, "transport", "transport", solver.transport)
     for d in 1:3, side in 1:2
@@ -876,9 +881,9 @@ solver's, so the solver may be built with any initial `refine` region, and
 recorded regrid state. Every tile block is then read into the patch that
 holds it, and the primitives of every patch are refreshed. Collective.
 
-The tile edge must be the recorded one, and a hierarchy of more than two
-levels must have been built with the recorded regions, since only a
-two-level hierarchy regrids.
+The tile edge must be the recorded one. A regridded hierarchy of more than
+two levels rebuilds every level from the record; a static one must have been
+built with the recorded regions.
 """
 function load_checkpoint!(solver::Solver, states::Vector{<:ConservedState},
                           prefix::AbstractString; allow=())

@@ -184,8 +184,9 @@ continues bit for bit; on another rank count the level is partitioned afresh
 and the continuation agrees to round-off. The `RegridSpec` takes the recorded
 regrid state, every tile this rank then holds reads its block, and the
 primitives of every patch are refreshed. The tile edge must be the recorded
-one, and a hierarchy of more than two levels must have been built with the
-recorded regions, since only a two-level hierarchy regrids. Collective.
+one. A regridded hierarchy of more than two levels rebuilds every level from
+the record; a static one must have been built with the recorded regions.
+Collective.
 
 Requires `using HDF5`.
 """

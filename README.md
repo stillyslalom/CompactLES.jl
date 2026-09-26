@@ -68,8 +68,8 @@ run!(solver, Q; tfinal=1.0)
 - **Adaptive refinement.** `AMR(initial=:sensor)` or a physical-coordinate
   predicate chooses the first refined region; nested Cartesian levels use
   refinement ratio 3. Optional lattice tiling, regridding and load balancing, and
-  global or Berger–Oliger subcycled timesteps. Dynamic regridding currently
-  supports one refined level.
+  global or Berger–Oliger subcycled timesteps. Tiled regridding follows
+  features to a requested depth (`max_levels`).
 - **GPU execution.** A `KernelAbstractions.jl` device backend supports Float64
   and Float32, including MPI decomposition, tiled refinement, and regridding.
   Validated device configurations reproduce their CPU counterparts bit for bit.
@@ -213,9 +213,9 @@ num = Numerics(n_global = (64, 64, 64), backend = DeviceBackend(ROCBackend()))
 ```
 
 Refinement requires unstretched Cartesian coordinates without folds. A
-static hierarchy can contain several nested levels;
-dynamic regridding is limited to a root and one refined level. Device runs
-support these layouts with host-staged MPI exchanges.
+static hierarchy can contain several nested levels; dynamic regridding of
+more than one refined level requires tiles and the host backend. Device runs
+support the other layouts with host-staged MPI exchanges.
 The device backend currently excludes `Nasa9Mixture` and filtered restriction
 (`level_restriction=:filter`); use a supported constant-heat-capacity EOS and
 the default coincident-node restriction (`:inject`).

@@ -213,7 +213,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 tile_lifetime::Int=1,
                 tile::Int=0,
                 rebalance::Real=0,
-                rebalance_persist::Int=2) where {T}
+                rebalance_persist::Int=2,
+                max_levels::Union{Nothing,Int}=nothing) where {T}
     bcs = _face_conditions(bcs)
     level_interpolation_order =
         something(level_interpolation_order,
@@ -344,7 +345,19 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     # `refines[ℓ]` is level ℓ's region in level ℓ−1's node space.
     refines = refine === nothing ? BlockRegion[] :
               refine isa BlockRegion ? [refine] : refine
-    if isempty(refines)
+    # The hierarchy's depth, the root included. Levels beyond those `refine`
+    # gives start with no tiles and are created by the regrid.
+    nlev = something(max_levels, length(refines) + 1)
+    nlev >= length(refines) + 1 ||
+        error("max_levels = $nlev holds fewer levels than the $(length(refines)) " *
+              "refined region(s) of refine and the root")
+    if nlev > length(refines) + 1
+        regrid_interval > 0 && tile > 0 ||
+            error("max_levels = $nlev asks for levels that refine does not give; " *
+                  "they start with no tiles, which requires tile > 0 and " *
+                  "regrid_interval > 0")
+    end
+    if nlev == 1
         subcycle &&
             error("subcycle requires a refined region (the refine keyword)")
         regrid_interval == 0 ||
@@ -381,10 +394,18 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         error("rebalance repartitions a tiled level at the regrid cadence; " *
               "it requires tile > 0 and regrid_interval > 0")
     rebalance_persist >= 1 || error("rebalance_persist must be at least 1")
-    regrid_interval == 0 || length(refines) <= 1 ||
-        error("regridding is implemented for a two-level hierarchy; " *
-              "$(length(refines)) refined levels were given")
-    if !isempty(refines)
+    if regrid_interval > 0 && nlev > 2
+        tile > 0 ||
+            error("regridding more than one refined level requires tile > 0; " *
+                  "$(nlev - 1) refined levels were asked for")
+        rebalance == 0 ||
+            error("rebalance repartitions the refined level of a two-level " *
+                  "hierarchy; it cannot combine with $(nlev - 1) regridded levels")
+        backend isa DeviceBackend &&
+            error("regridding more than one refined level runs on the host " *
+                  "backend only")
+    end
+    if nlev > 1
         MPI.Initialized() || MPI.Init(threadlevel=:funneled)
         MPI.Comm_size(comm) == 1 || level_restriction === :inject ||
             error("level_restriction = :filter restricts through a " *
@@ -459,7 +480,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     # The source scheme only supplies the divergence's closure rows at patch
     # and level interface ends, so a run without an interface would ignore it.
     if interface_divergence !== nothing
-        npatch > 1 || !isempty(refines) ||
+        npatch > 1 || nlev > 1 ||
             error("interface_divergence selects the flux divergence rows at a " *
                   "patch or level interface; this run has neither (patch_grid, " *
                   "refine)")
@@ -481,7 +502,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     interface_flux in (:closure, :ghost) ||
         error("interface_flux must be :closure or :ghost, got :$interface_flux")
     if interface_flux === :ghost
-        npatch > 1 || !isempty(refines) ||
+        npatch > 1 || nlev > 1 ||
             error("interface_flux = :ghost differences through a patch or level " *
                   "interface; this run has neither (patch_grid, refine)")
         interface_rhs === :extended ||
@@ -491,7 +512,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             error("interface_flux = :ghost requires an unstretched CartesianMetric")
         # A coarse-fine face's molecular ghost flux recovers the temperature
         # gradient from the conserved ones through the internal energy.
-        isempty(refines) || !_ghost_viscous(interface_flux, transport) ||
+        nlev == 1 || !_ghost_viscous(interface_flux, transport) ||
             _ghost_gradient_eos(eos) ||
             error("interface_flux = :ghost with molecular transport at a refined " *
                   "level supports IdealMixture, Nasa9Mixture and StiffenedGas; " *
@@ -727,7 +748,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                   ws_root, _covered_mask(decomp),
                   _empty_level_scratch(empty_field(backend, T)),
                   ntuple(_ -> similar(empty_field(backend, T), T, 0, 0, 0, 0), 3))
-    if isempty(refines)
+    if nlev == 1
         patches = [patch]
         solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                         typeof(stretch),typeof(sources),typeof(patch)}(
@@ -758,6 +779,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     parent_h = h
     margin = max(n_halo, LEVEL_BUFFER)
     parent_lc = root_lc
+    level_tiles = Vector{BlockRegion}[]     # every level's tiles, on every rank
     for (ℓ, rg) in enumerate(refines)
         if tile == 0
             tregions = [rg]
@@ -773,6 +795,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 error("level $ℓ region admits no tile of edge $tile inside " *
                       "the nesting margin")
         end
+        push!(level_tiles, tregions)
         faces = _tile_faces(tregions)
         for tr in tregions
             _covered_by(_buffered(tr, active_g, margin), parent_valid) ||
@@ -867,6 +890,14 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                         for (r, imp) in zip(fine_regions, imposed_all)]
         parent_h = next_h
     end
+    # The levels `refine` does not give, up to `max_levels`, start with no
+    # tiles: no owners, no transfers and an absent communicator on every rank,
+    # the form a regridded level takes when its last tile is dropped.
+    for ℓ in (length(refines) + 1):(nlev - 1)
+        push!(levels, Level{T}(ℓ, absent_level_comm(), UnitRange{Int}[],
+                               absent_tile_group(), Int[], Int[], LevelTransfer{T}[]))
+        push!(level_tiles, BlockRegion[])
+    end
     # A `Vector{Patch}`: the element type is fixed for the life of the solver
     # and a regrid may hand this rank tiles later, whose types differ from the
     # root's (the boundary-condition tuple, and on a device backend the view
@@ -889,9 +920,11 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                            zeros(Int8, ntuple(d -> decomp.n_local[d] +
                                                    2 * decomp.n_halo_d[d], 3)),
                            T(untag_ratio), tile_lifetime, 0,
-                           Dict(lt.region => 0 for lt in levels[2].transfers),
+                           Dict(r => 0 for r in level_tiles[1]),
                            interface_divergence,
-                           level_interpolation_order, level_restriction)
+                           level_interpolation_order, level_restriction,
+                           [Dict(r => 0 for r in regions)
+                            for regions in level_tiles[2:end]])
     solver = Solver{T,typeof(equations),typeof(eos),typeof(transport),typeof(metric),
                     typeof(stretch),typeof(sources),eltype(patches)}(
                   equations, eos, transport, art, metric, stretch, sources,

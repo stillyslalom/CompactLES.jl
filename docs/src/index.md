@@ -69,7 +69,7 @@ validated polynomial fits with collective runtime domain checks; see
 
 Cartesian, cylindrical, and spherical coordinates are available, including
 regularized axes, origins, and poles. Unstretched Cartesian runs also support
-nested refinement, lattice tiles, two-level dynamic regridding, and optional
+nested refinement, lattice tiles, dynamic regridding, and optional
 Berger–Oliger subcycling. [`AMR`](@ref) groups region selection, tagging, and
 time stepping. CPU and device backends support MPI decomposition and refined
 layouts. [Adaptive mesh refinement](@ref) describes their setup and restrictions.

@@ -311,7 +311,9 @@ ranks are dealt to the fresh tiles as if they were contiguous, and a range
 that would straddle a gap between free ranks is cut at the gap, so a group
 stays a contiguous rank range; when the survivors leave no rank free, a
 fresh tile joins the group of the survivor nearest it on the space-filling
-curve. With no survivor the level is partitioned afresh. The level's rank
+curve among the groups whose rank count admits the tile, and the level is
+partitioned afresh when none does. With no survivor the level is partitioned
+afresh. The level's rank
 count is one past the highest rank any range uses, so a rank inside the
 level may hold no tile of it after a departure. Every input is identical on
 every rank (the wanted set is reduced, and the previous owners are held by
@@ -342,9 +344,19 @@ function _place_tiles(regions::Vector{BlockRegion}, active::NTuple{3,Bool},
         free = [r for r in 0:(np - 1) if !taken[r + 1]]
         if isempty(free)
             keys = [_morton(r.offset) for r in regions]
+            # A group's ranges all decompose each of its tiles, so a fresh
+            # tile joins only a group whose rank count admits it (a tile
+            # clipped at the margin can admit fewer ranks than a lattice
+            # cell); with no such group the level is partitioned afresh.
+            function admits(r, g)
+                ext = fine_extent(r, active)
+                return _amr_dims_or_nothing(ext, ntuple(d -> ext[d] > 1, 3),
+                                            g) !== nothing
+            end
             for t in fresh
-                nearest = survivors[argmin([abs(keys[t] - keys[s])
-                                            for s in survivors])]
+                fit = [s for s in survivors if admits(regions[t], length(owners[s]))]
+                isempty(fit) && return _tile_owners(regions, active, np)
+                nearest = fit[argmin([abs(keys[t] - keys[s]) for s in fit])]
                 owners[t] = owners[nearest]
             end
         else
@@ -757,7 +769,8 @@ end
     level_regions(solver, level) -> Vector{BlockRegion}
 
 The regions of the patches on `level`, in the parent level's node space, in
-patch order.
+patch order. Empty on a rank outside the rank subset of the parent level,
+which holds no part of that level; rank 0 holds every level's regions.
 """
 level_regions(solver, level::Int) =
     [lt.region for lt in getfield(solver, :levels)[level + 1].transfers]
@@ -2290,6 +2303,7 @@ whatever the tags say. `checks` counts the regrid checks so far and
 `created` records, per current tile region, the check at which the tile was
 created (0 at setup): the tag history, derived from the reduced tag flags
 so that every rank holds the same record, and state that survives a regrid.
+`created` is level 1's record and `deep_created[ℓ - 1]` that of level ℓ ≥ 2.
 
 The rebalance fields drive the repartition of a tiled level on measured
 load: `rebalance` is the threshold on the ratio of the largest to the mean
@@ -2334,6 +2348,7 @@ mutable struct RegridSpec{T}
     interface_divergence::Union{Nothing,CompactScheme{T},BandedCompactScheme{T}}
     interpolation_order::Int         # Lagrange order of a rebuilt transfer
     restriction::Symbol              # level_restriction of a rebuilt transfer
+    deep_created::Vector{Dict{BlockRegion,Int}} # `created` of levels 2, 3, ...
 end
 
 RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
@@ -2343,7 +2358,11 @@ RegridSpec{T}(interval, threshold, buffer, margin, n_halo, interface_rhs,
                   deriv, filt, smoo, backend, tile, last_step,
                   rebalance, persist, 0, 1.0, 0.0, 0.0, 0.0,
                   zero(T), zero(T), zero(T), nothing, zeros(Int8, 0, 0, 0),
-                  T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6, :inject)
+                  T(2), 1, 0, Dict{BlockRegion,Int}(), nothing, 6, :inject,
+                  Dict{BlockRegion,Int}[])
+
+# The creation record of refined level `ℓ` (`created` for level 1).
+_created(spec::RegridSpec, ℓ::Int) = ℓ == 1 ? spec.created : spec.deep_created[ℓ - 1]
 
 """
     hermite_level_shell!(solver, states, lt, θ, dt)

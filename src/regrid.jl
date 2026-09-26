@@ -1,4 +1,6 @@
-# Tagging and regridding for the two-level refinement.
+# Tagging and regridding. The sections below through the tiled regrid move
+# the one refined level of a two-level hierarchy; the last section regrids a
+# deeper tiled hierarchy level by level with the same tag criteria.
 #
 # Every `RegridSpec.interval` coarse steps, `run!` retags the coarse level and
 # rebuilds the level-1 patch when the tagged region moved. The tag is a union
@@ -216,9 +218,18 @@ end
 # g3, level)` is then called for every flagged node, in global node indices
 # with its level (`TAG_MARK` or `TAG_HOLD`). Rank-local apart from the halo
 # exchange.
-function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
-    patches = getfield(solver, :patches)
-    coarse = patches[1]
+_tag_sweep!(mark!::F, solver::Solver, Qc) where {F} =
+    _tag_sweep!(mark!, solver, getfield(solver, :patches)[1], Qc,
+                getfield(solver, :regrid).tags, true)
+
+# The sweep over one patch `coarse` of a parent level with state `Qc`, into
+# the scratch `tags` (the patch's padded extent), calling `mark!` in the
+# parent level's global node indices. `closed` clamps the taps at the
+# patch's own edges, the root's closed-edge rule; a refined tile is swept
+# with its edges open, since its ghost layers hold the imposed shell or the
+# same-level neighbor's nodes at the head of a step.
+function _tag_sweep!(mark!::F, solver::Solver, coarse::Patch, Qc, tags_scratch,
+                     closed::Bool) where {F}
     dcp = coarse.decomp
     spec = getfield(solver, :regrid)
     exchange_state!(Qc, dcp)
@@ -250,9 +261,9 @@ function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     ext = ntuple(d -> active[d] ? (-1:n[d]+2) : (1:1), 3)
     pointwise!(_tag_rho_point!, rho, length(ext[1]), length(ext[2]), length(ext[3]),
                rho, Qc, n_species, ntuple(d -> first(ext[d]) - 1 + o[d], 3))
-    lomin = ntuple(d -> at_lo_edge(dcp, d) ? 1 : -1, 3)
-    himax = ntuple(d -> at_hi_edge(dcp, d) ? n[d] : n[d] + 2, 3)
-    tags = on_device ? similar(parent(Qc), Int8, size(spec.tags)) : spec.tags
+    lomin = ntuple(d -> closed && at_lo_edge(dcp, d) ? 1 : -1, 3)
+    himax = ntuple(d -> closed && at_hi_edge(dcp, d) ? n[d] : n[d] + 2, 3)
+    tags = on_device ? similar(parent(Qc), Int8, size(tags_scratch)) : tags_scratch
     fill!(tags, zero(Int8))
     ratio = spec.untag_ratio
     pointwise!(_tag_delta4_point!, tags, n[1], n[2], n[3],
@@ -284,10 +295,10 @@ function _tag_sweep!(mark!::F, solver::Solver, Qc) where {F}
     spec.predicate === nothing ||
         _tag_predicate!(tags, spec.predicate, PatchSolver(solver, coarse), n, o)
     if on_device
-        copyto!(spec.tags, tags)
-        tags = spec.tags
+        copyto!(tags_scratch, tags)
+        tags = tags_scratch
     end
-    off = dcp.offset
+    off = ntuple(d -> coarse.region.offset[d] + dcp.offset[d], 3)
     @inbounds for k in 1:n[3], j in 1:n[2], i in 1:n[1]
         I = CartesianIndex(i + o[1], j + o[2], k + o[3])
         tags[I] == 0 || mark!(i + off[1], j + off[2], k + off[3], tags[I])
@@ -497,10 +508,12 @@ that failed (`Savepoint.guard`), so a regrid landing inside that window
 cannot re-arm the retry loop that guard exists to break.
 """
 function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
-                       workspace::Workspace, save) where {T}
+                       workspace::Workspace, save; bootstrap::Bool=false) where {T}
     spec = getfield(solver, :regrid)
-    spec.tile > 0 && return _regrid_tiles!(solver, states, workspace, save)
     levels = getfield(solver, :levels)
+    spec.tile > 0 && length(levels) > 2 &&
+        return _regrid_hierarchy!(solver, states, workspace, save; bootstrap)
+    spec.tile > 0 && return _regrid_tiles!(solver, states, workspace, save)
     # A two-level hierarchy, enforced at setup: the root and one refined
     # patch, the sole transfer of level 1.
     lt = levels[2].transfers[1]
@@ -615,7 +628,7 @@ end
 
 # Grow or shrink this rank's patch vector (and the state vectors aligned with
 # it) to `n` entries. The refined level's tiles are the trailing run of the
-# vector (regridding is two-level), so the root at index 1 stays put and the
+# vector (a two-level hierarchy), so the root at index 1 stays put and the
 # caller overwrites every entry above it; the added entries are placeholders.
 function _resize_level_patches!(solver::Solver, states, workspace, n::Int)
     patches = getfield(solver, :patches)
@@ -1160,6 +1173,424 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         free_communicators!(decomp)
     end
     return true
+end
+
+# --- Regridding several levels ----------------------------------------------
+#
+# A hierarchy of more than one refined level regrids top-down at each check.
+# Level ℓ is tagged on level ℓ − 1 after that level has been regridded, by
+# the level-1 rule on the lattice of level ℓ − 1's node space; a wanted cell
+# must also lie, with the nesting margin, inside the own (not imposed) nodes
+# of level ℓ − 1's tiles, and a cell that does not is left out. A level whose
+# parent was rebuilt is rebuilt with it, since its transfers, its patch
+# indices and its rank subset follow the parent's tiles, and a surviving tile
+# keeps its arrays and its state throughout.
+#
+# The decision of each level is taken on rank 0 and broadcast. Rank 0 belongs
+# to every level that holds a tile (the subsets are prefixes of the rank
+# list), so it holds every parent's layout, while a rank outside a parent's
+# subset holds none; the broadcast gives every rank the same wanted set, owner
+# ranges and creation record, which is what keeps the communicator splits and
+# frees collective.
+#
+# Before the first level is tagged the whole hierarchy is restricted, finest
+# first, so that a tile about to leave has written its state onto its parent;
+# this is the one-level rule's last restriction of a departing tile, taken
+# while every old communicator is still live. A surviving tile whose owner
+# range no longer fits its parent's shrunken subset moves: its state is
+# gathered replicated over the run's communicator, since its old owners may
+# lie outside the parent's new subset, and copied into the rebuilt tile by the
+# box regrid's carry-over. Rebalancing is not offered here (the constructor
+# refuses it), so no other tile moves.
+
+# The tag buffer of a level that may have children: a child cell reaches
+# `buffer + tile` of its own parent's nodes past a tagged node and needs
+# `margin` more of them, plus one eroded plane, inside that parent's own
+# nodes, which is a third as many nodes of this level. With the tag at the
+# same place on both levels, this buffer lets the child nest.
+_nest_buffer(buffer::Int, tile::Int, margin::Int) =
+    max(buffer, cld(buffer + tile + margin + 1, 3) + 1)
+
+# The lattice cell of a tile region: its offset over the edge, which also
+# holds for a tile clipped at the domain's margin.
+_cell_of(r::BlockRegion, tile::Int, active::NTuple{3,Bool}) =
+    ntuple(d -> active[d] ? r.offset[d] ÷ tile : 0, 3)
+
+# A tile region of level ℓ − 1's node space as a region of level ℓ's.
+_fine_region(r::BlockRegion, active::NTuple{3,Bool}) =
+    BlockRegion(ntuple(d -> active[d] ? 3 * r.offset[d] : 0, 3), fine_extent(r, active))
+
+# Fill every refined tile by interpolation of its parent, top-down: the
+# initial layout of the AMR frontend, whose seed tile holds no state yet.
+# Collective over each parent level's communicator.
+function _fill_levels_from_parents!(solver::Solver, states)
+    levels = getfield(solver, :levels)
+    for ℓ in 2:length(levels)
+        levels[ℓ - 1].level_comm.owned || continue
+        for lt in levels[ℓ].transfers
+            _fill_fine_from_coarse!(solver, states, lt)
+        end
+    end
+    return states
+end
+
+# The decision of rank 0 for level ℓ from the reduced cell flags: the wanted
+# tiles in lattice order, the owner ranges, and what survives.
+function _decide_level(solver::Solver, ℓ::Int, spec::RegridSpec,
+                       flags::Dict{NTuple{3,Int},Int8}, active::NTuple{3,Bool},
+                       N::NTuple{3,Int}, parent_changed::Bool)
+    levels = getfield(solver, :levels)
+    lev = levels[ℓ + 1]
+    parent = levels[ℓ]
+    a = spec.tile
+    margin = spec.margin
+    old_regions = [lt.region for lt in lev.transfers]
+    old_owners = lev.owners
+    created = copy(_created(spec, ℓ))
+    parent_valid = ℓ == 1 ? [BlockRegion((0, 0, 0), solver.n_global)] :
+                   [_erode(_fine_region(lt.region, active), lt.imposed, active)
+                    for lt in parent.transfers]
+    parent_np = parent.level_comm.size
+    lo = ntuple(d -> 1 + margin, 3)
+    hi = ntuple(d -> N[d] - margin, 3)
+    wanted = BlockRegion[]
+    if !isempty(parent_valid)
+        cells = Set(keys(flags))
+        foreach(r -> push!(cells, _cell_of(r, a, active)), old_regions)
+        for k in sort!(collect(cells); by=k -> (k[3], k[2], k[1]))
+            t = _lattice_tile(k, active, a, lo, hi)
+            t === nothing && continue
+            f = get(flags, k, zero(Int8))
+            exists = t in old_regions
+            young = exists && spec.checks - get(created, t, 0) < spec.lifetime
+            (f == TAG_MARK || (exists && (f == TAG_HOLD || young))) || continue
+            _covered_by(_buffered(t, active, margin), parent_valid) || continue
+            push!(wanted, t)
+        end
+    end
+    changed = (wanted != old_regions || parent_changed) &&
+              !(isempty(wanted) && isempty(old_regions))
+    changed || return (changed=false,)
+    for r in old_regions
+        r in wanted || delete!(created, r)
+    end
+    for r in wanted
+        haskey(created, r) || (created[r] = spec.checks)
+    end
+    # A survivor keeps its range where the parent's subset still holds it.
+    fit = [last(o) < parent_np for o in old_owners]
+    owners, np_new = _place_tiles(wanted, active, parent_np, old_regions[fit],
+                                  old_owners[fit])
+    old_index = [something(findfirst(==(r), old_regions), 0) for r in wanted]
+    kept = [old_index[ti] > 0 && old_owners[old_index[ti]] == owners[ti]
+            for ti in eachindex(wanted)]
+    return (changed=true, wanted=wanted, owners=owners, np_new=np_new,
+            np_old=lev.level_comm.size, old_index=old_index, kept=kept,
+            created=created)
+end
+
+# Tag level ℓ − 1 and decide level ℓ. The sweep runs on the tiles each rank
+# holds (the root for ℓ = 1); the flagged lattice cells gather on rank 0,
+# which decides, and the decision is broadcast. Collective over the run's
+# communicator, whatever the rank holds.
+function _level_decision(solver::Solver, states, ℓ::Int, spec::RegridSpec,
+                         parent_changed::Bool)
+    levels = getfield(solver, :levels)
+    patches = getfield(solver, :patches)
+    comm = getfield(solver, :comm)
+    n_global = solver.n_global
+    active = ntuple(d -> n_global[d] > 1, 3)
+    a = spec.tile
+    b = ℓ < length(levels) - 1 ? _nest_buffer(spec.buffer, a, spec.margin) :
+        spec.buffer
+    N = ntuple(d -> active[d] ? 3^(ℓ - 1) * (n_global[d] - 1) + 1 : 1, 3)
+    K = ntuple(d -> active[d] ? (N[d] - 1) ÷ a + 1 : 1, 3)
+    cells = Dict{NTuple{3,Int},Int8}()
+    function mark!(g1, g2, g3, level)
+        g = (g1, g2, g3)
+        spans = ntuple(d -> active[d] ?
+                       intersect(_tile_span(g[d] - b, g[d] + b, a), 0:K[d]-1) :
+                       (0:0), 3)
+        for k3 in spans[3], k2 in spans[2], k1 in spans[1]
+            k = (k1, k2, k3)
+            cells[k] = max(get(cells, k, zero(Int8)), level)
+        end
+        return nothing
+    end
+    if ℓ == 1
+        _tag_sweep!(mark!, solver, states[1])
+    else
+        for li in levels[ℓ].patches
+            p = patches[li]
+            _tag_sweep!(mark!, solver, p, states[li], zeros(Int8, size(p.covered)),
+                        false)
+        end
+    end
+    packed = Int64[]
+    for (k, v) in cells
+        append!(packed, (k[1], k[2], k[3], v))
+    end
+    gathered = MPI.gather(packed, comm; root=0)
+    decision = nothing
+    if MPI.Comm_rank(comm) == 0
+        flags = Dict{NTuple{3,Int},Int8}()
+        for buf in gathered, i in 1:4:length(buf)
+            k = (Int(buf[i]), Int(buf[i + 1]), Int(buf[i + 2]))
+            flags[k] = max(get(flags, k, zero(Int8)), Int8(buf[i + 3]))
+        end
+        decision = _decide_level(solver, ℓ, spec, flags, active, N, parent_changed)
+    end
+    decision = MPI.bcast(decision, comm; root=0)
+    if decision.changed
+        created = _created(spec, ℓ)
+        empty!(created)
+        merge!(created, decision.created)
+    end
+    return decision
+end
+
+# One tile's state replicated on every rank of `comm`, from the blocks of it
+# the ranks hold (`piece` is this rank's `(Q, decomp)` or `nothing`).
+# Collective over `comm`.
+function _gather_replicated(::Type{T}, region::BlockRegion, active::NTuple{3,Bool},
+                            n_cons::Int, piece, comm::MPI.Comm) where {T}
+    Nf = fine_extent(region, active)
+    dst = zeros(T, Nf..., n_cons)
+    Q, dp = piece === nothing ? (nothing, nothing) : piece
+    gather_region!(dst, ntuple(d -> 1:Nf[d], 3), (0, 0, 0), (0, 0, 0), Q, comm,
+                   _owned_blocks(dp, comm),
+                   dp === nothing ? (0, 0, 0) : dp.offset,
+                   dp === nothing ? (0, 0, 0) : dp.n_halo_d)
+    return dst
+end
+
+# A level whose patches moved by `delta` places in the patch vector. Its
+# transfers still name the old indices; the caller rebuilds the level before
+# anything reads them.
+_shifted_level(lev::Level{T}, delta::Int) where {T} = delta == 0 ? lev :
+    Level{T}(lev.index, lev.level_comm, lev.owners, lev.group, lev.tiles,
+             lev.patches .+ delta, lev.transfers, lev.ghost_sends, lev.ghost_recvs,
+             lev.plane_pairs, lev.phases, lev.stacks)
+
+"""
+Internal: rebuild refined level `ℓ` of a hierarchy to the tiles of
+`decision` (`wanted`, `owners`, `np_new`, `np_old`, `old_index`, `kept`, the
+same on every rank), after level ℓ − 1 has taken its own new layout.
+
+A kept tile (region and owner range unchanged) keeps its arrays and state
+under a new id, faces and transfer; every other tile is built fresh. With
+`init`, a fresh tile is filled by interpolation of its parent, a moved
+survivor then takes its old interior back through the replicated carry, and
+the planes fresh tiles share with survivors are seeded from the survivors; a
+restart passes `init = false` and reads the state afterwards. The patch
+vector, `states` and, when given, the workspace's stage arrays are spliced
+at the level's place, and the deeper levels' patch indices are shifted with
+them (those levels are rebuilt next). `resplit` says whether level ℓ − 1's
+communicator was split afresh in this pass; the return value says the same
+of level ℓ's. Collective over the run's communicator.
+"""
+function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
+                      workspace::Union{Nothing,Workspace}, ℓ::Int, decision,
+                      resplit::Bool, init::Bool) where {T}
+    spec = getfield(solver, :regrid)
+    levels = getfield(solver, :levels)
+    patches = getfield(solver, :patches)
+    comm = getfield(solver, :comm)
+    lev = levels[ℓ + 1]
+    parent = levels[ℓ]
+    wanted = decision.wanted
+    owners = decision.owners
+    old_index = decision.old_index
+    kept = decision.kept
+    n_global = solver.n_global
+    active = ntuple(d -> n_global[d] > 1, 3)
+    n_cons = solver.equations.n_cons
+    base = 1 + sum((length(levels[k].patches) for k in 2:ℓ); init=0)
+    nold = length(lev.patches)
+    lev.patches == collect((base + 1):(base + nold)) ||
+        error("regrid: level $ℓ's patches are not the contiguous run after its parents'")
+    old_local = Dict(zip(lev.tiles, lev.patches))
+    # The moved survivors' states, replicated while the old decompositions
+    # are live. The list is the broadcast decision's, so every rank enters
+    # the same gathers.
+    carried = Dict{Int,Array{T,4}}()
+    for ti in eachindex(wanted)
+        (old_index[ti] == 0 || kept[ti]) && continue
+        li = get(old_local, old_index[ti], 0)
+        carried[ti] = _gather_replicated(T, wanted[ti], active, n_cons,
+                                         li == 0 ? nothing :
+                                         (states[li], patches[li].decomp), comm)
+    end
+    kept_old = Set(old_index[ti] for ti in eachindex(wanted) if kept[ti])
+    dropped = Decomp{T}[patches[li].decomp for (li, t) in zip(lev.patches, lev.tiles)
+                        if !(t in kept_old)]
+    # The old group and, where the subset changes, the old level communicator
+    # are freed by their members; the new ones are split over the parent's
+    # new subset. `resized` is derived from broadcast values, so it agrees on
+    # every rank.
+    parent_lc = parent.level_comm
+    old_lc = lev.level_comm
+    free_tile_group!(lev.group)
+    resized = resplit || decision.np_new != decision.np_old
+    resized && free_level_comm!(old_lc)
+    new_lc = !parent_lc.owned ? absent_level_comm() :
+             resized ? split_level_comm(parent_lc, decision.np_new) : old_lc
+    group = new_lc.owned ? split_tile_comm(new_lc, owners) : absent_tile_group()
+    held = [ti for ti in eachindex(wanted) if owners[ti] == group.ranks]
+    faces = _tile_faces(wanted)
+    ws_pool = [p.rhs_workspace for p in patches]
+    ph = patches[1].h
+    for _ in 2:ℓ
+        ph = ntuple(d -> active[d] ? ph[d] / 3 : ph[d], 3)
+    end
+    new_patches = Patch[]
+    new_states = similar(states, 0)
+    new_dQ = similar(states, 0)
+    new_du = similar(states, 0)
+    local_of = zeros(Int, length(wanted))
+    for (k, ti) in enumerate(held)
+        idx = base + k
+        local_of[ti] = idx
+        if kept[ti]
+            oi = old_local[old_index[ti]]
+            push!(new_patches, _repatch(patches[oi], idx, faces[ti],
+                                        _fine_bcs(active, faces[ti])))
+            push!(new_states, states[oi])
+            if workspace !== nothing
+                push!(new_dQ, workspace.dQ[oi])
+                push!(new_du, workspace.du[oi])
+            end
+        else
+            p = _build_fine_patch(T, wanted[ti], active, ph, spec.n_halo, group.comm,
+                                  spec.deriv, spec.filt, spec.smoo,
+                                  solver.art.smoother, spec.interface_rhs,
+                                  spec.backend, ws_pool, solver.equations.n_species,
+                                  n_cons, _shared_species_diffusivity(solver), idx, ℓ,
+                                  faces[ti];
+                                  interface_divergence=spec.interface_divergence,
+                                  ghost_viscous=_ghost_viscous(solver),
+                                  detector=solver.art.detector)
+            Q = _state_like(p.rho, n_cons)
+            push!(new_patches, p)
+            push!(new_states, Q)
+            if workspace !== nothing
+                push!(new_dQ, zero(Q))
+                push!(new_du, zero(Q))
+            end
+        end
+    end
+    # The transfers, on every rank of the parent's subset, against the
+    # parent's current tiles (whose patch indices precede this level's and
+    # are untouched by the splice below).
+    transfers = LevelTransfer{T}[]
+    if parent_lc.owned
+        pregions = ℓ == 1 ? [patches[1].region] :
+                   [_fine_region(lt.region, active) for lt in parent.transfers]
+        plocal = ℓ == 1 ? [1] : [lt.fine_index for lt in parent.transfers]
+        pdecomp(li) = li == 0 ? nothing : patches[li].decomp
+        for (ti, tr) in enumerate(wanted)
+            pids = _parents_of(tr, active, collect(eachindex(pregions)), pregions)
+            fi = local_of[ti]
+            push!(transfers, build_level_transfer(
+                T, tr, active, spec.n_halo, pregions[pids], plocal[pids],
+                Union{Nothing,Decomp{T}}[pdecomp(plocal[p]) for p in pids], fi,
+                spec.restriction, n_cons, getfield(solver, :subcycle),
+                fi == 0 ? nothing : new_patches[fi - base].decomp,
+                parent_lc.comm, length(owners[ti]), faces[ti];
+                interpolation_order=spec.interpolation_order,
+                gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
+                parent_h=ph))
+        end
+    end
+    rng = (base + 1):(base + nold)
+    splice!(patches, rng, new_patches)
+    splice!(states, rng, new_states)
+    if workspace !== nothing
+        splice!(workspace.dQ, rng, new_dQ)
+        splice!(workspace.du, rng, new_du)
+    end
+    delta = length(new_patches) - nold
+    for k in (ℓ + 2):length(levels)
+        levels[k] = _shifted_level(levels[k], delta)
+    end
+    indices = [base + k for k in eachindex(held)]
+    if new_lc.owned
+        records = _level_records(T, new_lc.comm,
+                                 [_fine_region(tr, active) for tr in wanted], held,
+                                 indices, [p.decomp for p in new_patches], n_cons)
+        levels[ℓ + 1] = Level{T}(ℓ, new_lc, owners, group, held, indices, transfers,
+                                 records)
+    elseif parent_lc.owned
+        levels[ℓ + 1] = Level{T}(ℓ, new_lc, owners, group, held, indices, transfers)
+    else
+        levels[ℓ + 1] = Level{T}(ℓ, absent_level_comm(), UnitRange{Int}[],
+                                 absent_tile_group(), Int[], Int[],
+                                 LevelTransfer{T}[])
+    end
+    for li in parent.patches
+        _fill_covered!(patches[li], wanted)
+    end
+    fresh = [ti for ti in eachindex(wanted) if !kept[ti]]
+    for ti in fresh
+        local_of[ti] == 0 || init_geometry!(PatchSolver(solver, patches[local_of[ti]]))
+    end
+    if init && parent_lc.owned
+        for ti in fresh
+            _fill_fine_from_coarse!(solver, states, transfers[ti])
+            li = local_of[ti]
+            (li != 0 && haskey(carried, ti)) || continue
+            r = wanted[ti]
+            _carry_over!(states[li], patches[li].decomp, r, carried[ti],
+                         fine_extent(r, active), r, active, n_cons)
+        end
+        if !isempty(fresh) && new_lc.owned
+            is_fresh = falses(length(wanted))
+            is_fresh[fresh] .= true
+            _seed_planes!(solver, states, levels[ℓ + 1], is_fresh)
+        end
+    end
+    # The old transfers' chains are on COMM_SELF; the dropped tiles'
+    # decompositions are freed by their old owners in the order they held
+    # them, the migration's reads being done.
+    for lt in lev.transfers
+        free_transfer_decomps!(lt)
+    end
+    for decomp in dropped
+        free_communicators!(decomp)
+    end
+    return resized
+end
+
+"""
+Internal: the regrid of a hierarchy of more than one refined level (see the
+section comment above). Restricts the hierarchy, then tags, decides and,
+where anything changed, rebuilds each level top-down. `bootstrap` skips the
+restriction, for the AMR frontend's initial layout, whose refined state is
+not yet the solution. Returns whether any level changed; the value is the
+same on every rank.
+"""
+function _regrid_hierarchy!(solver::Solver, states::Vector{<:ConservedState},
+                            workspace::Union{Nothing,Workspace}, save;
+                            bootstrap::Bool=false)
+    spec = getfield(solver, :regrid)
+    levels = getfield(solver, :levels)
+    bootstrap || restrict_level!(solver, states)
+    changed = false
+    parent_changed = false
+    resplit = false
+    for ℓ in 1:length(levels)-1
+        decision = _level_decision(solver, states, ℓ, spec, parent_changed)
+        if decision.changed
+            resplit = _swap_level!(solver, states, workspace, ℓ, decision, resplit,
+                                   true)
+            parent_changed = true
+            changed = true
+        else
+            parent_changed = false
+            resplit = false
+        end
+    end
+    return changed
 end
 
 # The `run!` hook: cadence check, then `regrid!`. The single-array state form

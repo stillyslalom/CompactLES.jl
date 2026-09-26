@@ -27,9 +27,11 @@
 # decompositions, and the run then continues bit for bit. On another rank
 # count the level is partitioned afresh by `_tile_owners`, a different
 # decomposition of the same tiles, and the continuation agrees to round-off,
-# the tier a subset-owned tile already holds against the serial answer. A
-# level below the first is static (regridding is two-level), so its layout
-# must be the solver's own; the constructor's `refine` keyword supplies it.
+# the tier a subset-owned tile already holds against the serial answer. In a
+# regridded hierarchy of more than two levels every level is rebuilt from the
+# record the same way, top-down (`_restore_levels!`); in a static one a level
+# below the first cannot be rebuilt, so its layout must be the solver's own,
+# and the constructor's `refine` keyword supplies it.
 #
 # Every decision here is derived from the record, which is identical on every
 # rank (broadcast from rank 0 at the write, read by every rank at the load),
@@ -55,8 +57,8 @@ What a checkpoint carries of the refinement hierarchy beyond the root's
 state: the rank count of the writing run, one [`LevelRecord`](@ref) per
 refined level, and the regrid state (`tile`, `interval`, `threshold` and
 `buffer` for provenance and the tile check; `last_step`, `checks`, the
-per-tile `created` record aligned with level 1's regions, `streak` and
-`imbalance` restored onto the `RegridSpec`). `tile` is −1 when the writing
+per-tile `created` record aligned with the levels' regions in level order,
+`streak` and `imbalance` restored onto the `RegridSpec`). `tile` is −1 when the writing
 run had no `RegridSpec`. Built by [`hierarchy_record`](@ref) and consumed by
 [`restore_hierarchy!`](@ref).
 """
@@ -90,8 +92,9 @@ function hierarchy_record(solver::Solver)
         spec = getfield(solver, :regrid)
         recs = [LevelRecord([lt.region for lt in lev.transfers], copy(lev.owners))
                 for lev in levels[2:end]]
-        created = spec === nothing || isempty(recs) ? Int[] :
-                  [get(spec.created, r, 0) for r in recs[1].regions]
+        created = spec === nothing ? Int[] :
+                  [get(_created(spec, ℓ), r, 0) for ℓ in eachindex(recs)
+                   for r in recs[ℓ].regions]
         rec = spec === nothing ?
               HierarchyRecord(MPI.Comm_size(comm), recs, -1, 0, 0.0, 0, 0, 0,
                               created, 0, 1.0) :
@@ -172,8 +175,10 @@ from the solver's, or when the rank count is the one that wrote `rec` and
 the stored ownership differs; the rebuilt tiles are fresh, and the caller
 reads their state from the checkpoint afterwards. Rebuilding requires a
 `RegridSpec` (the schemes a fresh tile is planned with live there) with the
-recorded tile edge, and a hierarchy of two levels. Every level below the
-first must already match, since it is static. Collective over the run.
+recorded tile edge. A regridded hierarchy of more than two levels rebuilds
+each level the same way, top-down, a level also when its parent was
+rebuilt; in a static hierarchy every level below the first must already
+match. Collective over the run.
 """
 function restore_hierarchy!(solver::Solver, states::Vector{<:ConservedState},
                             rec::HierarchyRecord, source::AbstractString)
@@ -184,10 +189,21 @@ function restore_hierarchy!(solver::Solver, states::Vector{<:ConservedState},
               "level(s) and this solver has $(length(levels) - 1)")
     np = MPI.Comm_size(getfield(solver, :comm))
     same_np = rec.np == np
+    # Every level of a regridded hierarchy deeper than two is rebuilt from
+    # the record, top-down.
+    regridded = spec !== nothing && length(levels) > 2
+    if regridded
+        spec.tile == rec.tile ||
+            error("tile mismatch: $source was written with tile = $(rec.tile) " *
+                  "and this solver has tile = $(spec.tile); a layout on one " *
+                  "lattice cannot be placed on another")
+        _restore_levels!(solver, states, rec, same_np, source)
+    end
     # A static level: nothing can rebuild it, so the solver must have been
     # built with its regions. A rank outside the parent's subset holds no
     # transfer to compare, and the ranks that do hold them raise together.
     for ℓ in 2:length(rec.levels)
+        regridded && break
         lev = levels[ℓ + 1]
         isempty(lev.transfers) && continue
         current = [lt.region for lt in lev.transfers]
@@ -197,7 +213,7 @@ function restore_hierarchy!(solver::Solver, states::Vector{<:ConservedState},
                   "$current; a level below the first is static, so build the " *
                   "solver with the regions the checkpoint records")
     end
-    if !isempty(rec.levels)
+    if !isempty(rec.levels) && !regridded
         lev = levels[2]
         want = rec.levels[1]
         current = [lt.region for lt in lev.transfers]
@@ -231,17 +247,24 @@ function restore_hierarchy!(solver::Solver, states::Vector{<:ConservedState},
         spec.wall_mark = solver.wall_total
         spec.wait_mark = solver.wait_total
         spec.wall_regrid = 0.0
+        # A file written without regridding records no creation check, and
+        # one written before the deeper levels regridded records level 1's
+        # alone; a tile it does not date dates from check 0, as at setup.
+        counts = [length(lr.regions) for lr in rec.levels]
+        created = rec.created
+        isempty(created) || length(created) == sum(counts; init=0) ||
+            (!isempty(counts) && length(created) == counts[1]) ||
+            error("hierarchy record: $(length(created)) creation checks for " *
+                  "$(sum(counts; init=0)) tiles")
         empty!(spec.created)
-        if !isempty(rec.levels)
-            regions = rec.levels[1].regions
-            # A file written without regridding records no creation check;
-            # every tile then dates from check 0, as at setup.
-            created = isempty(rec.created) ? zeros(Int, length(regions)) : rec.created
-            length(created) == length(regions) ||
-                error("hierarchy record: $(length(created)) creation checks for " *
-                      "$(length(regions)) tiles")
-            for (r, c) in zip(regions, created)
-                spec.created[r] = c
+        at = 0
+        for ℓ in eachindex(rec.levels)
+            ℓ == 1 || ℓ - 1 <= length(spec.deep_created) || break
+            record = _created(spec, ℓ)
+            empty!(record)
+            for r in rec.levels[ℓ].regions
+                at += 1
+                record[r] = at <= length(created) ? created[at] : 0
             end
         end
     end
@@ -362,6 +385,64 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     end
     for decomp in dropped_decomps
         free_communicators!(decomp)
+    end
+    return solver
+end
+
+# Rebuild the refined levels of a regridded hierarchy of more than two
+# levels to the record, top-down: a level whose regions differ, whose stored
+# ownership differs on the writing rank count, or whose parent was rebuilt is
+# replaced by fresh tiles (`_swap_level!` without initialization; the caller
+# reads their state from the checkpoint). Rank 0, which belongs to every level
+# holding a tile, takes each decision and broadcasts it. Collective over the
+# run.
+function _restore_levels!(solver::Solver, states::Vector{<:ConservedState},
+                          rec::HierarchyRecord, same_np::Bool,
+                          source::AbstractString)
+    levels = getfield(solver, :levels)
+    comm = getfield(solver, :comm)
+    active = ntuple(d -> solver.n_global[d] > 1, 3)
+    rebuilt = false
+    resplit = false
+    for ℓ in 1:length(levels)-1
+        decision = nothing
+        if MPI.Comm_rank(comm) == 0
+            lev = levels[ℓ + 1]
+            want = rec.levels[ℓ]
+            current = [lt.region for lt in lev.transfers]
+            if rebuilt || current != want.regions ||
+               (same_np && lev.owners != want.owners)
+                parent_np = levels[ℓ].level_comm.size
+                n = length(want.regions)
+                if same_np
+                    owners = want.owners
+                    np_new = maximum(last, owners; init=-1) + 1
+                else
+                    owners, np_new = _tile_owners(want.regions, active, parent_np)
+                end
+                message = n > 0 && parent_np == 0 ?
+                    "restart: $source records $n tiles on level $ℓ, whose parent " *
+                    "holds none" :
+                    np_new > parent_np ?
+                    "restart: the recorded ownership of level $ℓ reaches rank " *
+                    "$(np_new - 1) of $parent_np" : nothing
+                decision = (changed=true, wanted=want.regions, owners=owners,
+                            np_new=np_new, np_old=lev.level_comm.size,
+                            old_index=zeros(Int, n), kept=falses(n), error=message)
+            else
+                decision = (changed=false, error=nothing)
+            end
+        end
+        decision = MPI.bcast(decision, comm; root=0)
+        decision.error === nothing || error(decision.error)
+        if decision.changed
+            resplit = _swap_level!(solver, states, nothing, ℓ, decision, resplit,
+                                   false)
+            rebuilt = true
+        else
+            rebuilt = false
+            resplit = false
+        end
     end
     return solver
 end

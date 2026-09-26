@@ -790,7 +790,14 @@ combined with `amr`.
 - `regrid_interval`: `0` (default) keeps the region static; a positive `K`
   retags the coarse level every `K` steps and moves the region to the
   buffered bounding box of the tagged cells. Requires `refine` with a single
-  region.
+  region, or `tile` for more than one refined level.
+- `max_levels` (default: one more than the regions `refine` gives): the
+  number of levels, the root included. With `regrid_interval` and `tile`,
+  every refined level regrids, each tagged on the level above it and nested
+  in its tiles, and a level that `refine` does not give starts with no tiles.
+  A regridded level with children buffers its tags by enough parent nodes
+  for its children to nest. Rebalancing is not available with more than one
+  regridded level.
 - `tag_threshold` (default `0.02`) and `tag_buffer` (default `4`): the
   tagging threshold on the relative undivided fourth difference of the
   mixture density, and the coarse-cell buffer added around tagged cells.
@@ -877,6 +884,7 @@ Base.@kwdef struct Numerics
     tile::Int = 0
     rebalance::Float64 = 0.0
     rebalance_persist::Int = 2
+    max_levels::Union{Nothing,Int} = nothing
     precision::Union{Nothing,Type{<:AbstractFloat}} = nothing
 end
 
@@ -885,7 +893,7 @@ const _AMR_LEGACY_FIELDS = (
     :regrid_interval,
     :tag_threshold, :tag_buffer, :tag_sensor_threshold, :tag_gradient_threshold,
     :tag_vorticity_threshold, :tag_predicate, :untag_ratio, :tile_lifetime,
-    :tile, :rebalance, :rebalance_persist,
+    :tile, :rebalance, :rebalance_persist, :max_levels,
 )
 
 _legacy_amr_keywords(num::Numerics) =

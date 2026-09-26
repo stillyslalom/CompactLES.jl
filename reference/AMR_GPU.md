@@ -593,8 +593,9 @@ longer and stops its re-creation, and it keeps the rarefaction head's tiles,
 a marginal feature that the threshold alone admits and drops.
 
 The retry savepoint refreshes at a regrid, since restoring across a layout
-change is not meaningful. Regridding is two-level: the root and one refined
-level.
+change is not meaningful. The box and tiled regrids below move the refined
+level of a two-level hierarchy; a deeper tiled hierarchy regrids level by
+level ([Regridding several levels](#regridding-several-levels)).
 
 **The box regrid** (`tile = 0`) rebuilds the level's one patch over the
 bounding box of the tagged set when that box moved. The new patch and
@@ -641,6 +642,49 @@ references: the composite is an order of magnitude or more closer to the
 fine answer than the uniform-coarse run, at a fraction of the fine run's
 step count, and the tiled regrid reproduces the Sod gate
 ([measurements](CALIBRATION_APPENDIX.md#amr)).
+
+### Regridding several levels
+
+`max_levels` fixes the depth of a tiled, regridded hierarchy, the root
+included; the constructor builds every level, those `refine` does not give
+with no tiles, so the solver type and the level vector never change
+(`_regrid_hierarchy!`, `src/regrid.jl`). Each check first restricts the whole
+hierarchy, finest first, which is the last restriction of every tile about
+to leave, taken while every old communicator is live. The levels are then
+regridded top-down: level ℓ is tagged on level ℓ − 1 after that level has
+taken its new tiles, by the same criteria swept over each held tile with its
+ghost layers read rather than clamped (the imposed shell at a parent-fed
+face, the neighbor's nodes at a shared one), on the lattice of level ℓ − 1's
+global node space. The level-1 rules of the tiled regrid apply, and a cell
+is also wanted only if its buffered extent lies in level ℓ − 1's own nodes
+by the nesting margin; a cell that does not is left out, not clipped. A
+level that may have children buffers its tags by
+max(b, ⌈(b + tile + margin + 1)/3⌉ + 1) of its parent's nodes, which lets a
+child tagged at the same place nest. A level whose parent was rebuilt is
+rebuilt with it (`_swap_level!`): its transfers, patch indices and subset
+follow the parent's tiles, and a kept tile keeps its arrays and state.
+
+The flagged cells of every rank gather on rank 0, which decides the level
+and broadcasts the wanted set, the owner ranges and the creation record.
+Rank 0 belongs to every level that holds a tile, since the subsets are
+prefixes of the rank list, while a rank outside a level's parent holds none
+of its layout; the broadcast keeps every split and free collective and
+every rank's tag history equal. A survivor whose owner range leaves its
+parent's shrunken subset moves: its state is gathered replicated over the
+run's communicator, because its old owners may lie outside the parent's new
+subset, and the box regrid's carry-over writes it into the rebuilt tile.
+Rebalancing is refused with more than one regridded level, and the device
+backend is refused too, since the tile sweep and the carry run on the host.
+A restart rebuilds each level from the record the same way
+(`_restore_levels!`), on the writing rank count with the stored ownership.
+
+The gate is a shock driven through a contact into heavy gas in 1-D with
+three levels built from the initial state's tags: the finest level holds
+the leading shock at every sampled time, the composite is an order of
+magnitude closer than the root alone to a uniform run at the finest spacing
+([measurements](CALIBRATION_APPENDIX.md#amr)), decomposed runs reproduce the
+serial tile sets and density to round-off at np = 2, 4 and 8, and a
+checkpoint taken with level 2 present continues bit for bit.
 
 ### Diagnostics on the composite grid
 
@@ -849,7 +893,9 @@ restricted to the ranks the survivors leave free (`_place_tiles`): the free
 ranks are dealt to the fresh tiles as if contiguous, a range that would
 straddle a gap between them is cut at the gap so that every group stays a
 contiguous rank range, and when no rank is free a fresh tile joins the
-group of the survivor nearest it on the curve. The level's rank count is
+group of the survivor nearest it on the curve among the groups whose rank
+count admits the tile (a tile clipped at the margin admits fewer), the level
+being partitioned afresh when none does. The level's rank count is
 one past the highest rank in use, so a departure can leave a rank inside
 the level holding no tile; such a rank enters the level's point-to-point
 records with none of its own and the cross-level gathers with nothing to
@@ -996,10 +1042,11 @@ run continues bit for bit, later regrids included. On another rank count
 `_tile_owners` partitions the level afresh, a different decomposition of
 the same tiles, and the continuation agrees to round-off, the tier a
 subset-owned tile already holds ([Reproducibility tier](#reproducibility-tier)).
-A level below the first is static, since regridding is two-level, so its
+In a static hierarchy a level below the first cannot be rebuilt, so its
 layout must be the solver's own and the constructor's `refine` supplies it;
-rebuilding needs a `RegridSpec`, where the schemes a fresh tile is planned
-with live. Every decision derives from the record, identical on every rank,
+a regridded hierarchy of more than two levels rebuilds every level from the
+record, top-down. Rebuilding needs a `RegridSpec`, where the schemes a fresh
+tile is planned with live. Every decision derives from the record, identical on every rank,
 so the communicator splits are reached together.
 
 The tiled and box Sod regrid cases checkpointed mid-run and continued
@@ -1333,8 +1380,9 @@ Configurations rejected at setup, and the reason:
   Each region must nest by `max(n_halo, LEVEL_BUFFER)` parent nodes inside
   the patches of the level above and span ≥ 4 parent nodes per active
   dimension; a tiled level's tiles are clipped to that margin at the
-  domain edge and must still lie inside the parent tiles. Regridding is
-  two-level. Rebalancing requires a tiled, regridding level. Converging-shock
+  domain edge and must still lie inside the parent tiles. Regridding more
+  than one refined level requires tiles and the host backend and excludes
+  rebalancing. Rebalancing requires a tiled, regridding level. Converging-shock
   problems on folded grids use a globally fine level 0 in r near the fold;
   on a Cartesian grid the question does not arise.
 - **Device runs** reject `Nasa9Mixture` (no fixed-width device mirror), a
@@ -1366,13 +1414,12 @@ launch-bound on a device unless its tiles stack. Depth widens the number of
 fine substeps one root rate measurement covers; the refreshed-rate guard is
 opt-in because its absolute ceiling requires case-specific qualification.
 The measured rebalance weights include each rank's root-level work,
-which overstates the cost of a tile on a rank holding few. Regridding is
-two-level, because `regrid!` and `_regrid_tiles!` assume the root and one
-refined level while `_advance_level!` and the ownership tables are already
-written per level, and a regrid at depth ℓ must re-nest every level below it.
-The box regrid's replicated carry (`tile = 0`) is not on that list: the tiled
-level is the production path, and the box path serves the one-patch
-configurations that need no rank-partitioned carry.
+which overstates the cost of a tile on a rank holding few. A deeper
+regridded hierarchy moves a survivor through a replicated carry rather than
+point-to-point migration, and cannot rebalance. The box regrid's replicated
+carry (`tile = 0`) is not on that list: the tiled level is the production
+path, and the box path serves the one-patch configurations that need no
+rank-partitioned carry.
 
 **Dense output.** Retain cubic Hermite reconstruction: the measured parent
 endpoint RHS share does not justify replacing it on the tested three- and

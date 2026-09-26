@@ -43,8 +43,11 @@ refined region; give it explicitly to combine the two.
 
 Regions use root node indices; the ratio between successive levels is three.
 The other keywords match the established refinement controls of [`Numerics`](@ref).
-The current regrid implementation permits one refined level. An explicit
-vector of nested regions is static.
+`max_levels` sets the depth of a regridded, tiled hierarchy, the root
+included: each refined level is tagged on the level above it, and the
+levels start from the tags of the initial state. Without `tile`, one refined
+level regrids. An explicit vector of nested regions is static unless
+`regrid_interval` and `tile` are given, when it is the initial layout.
 """
 Base.@kwdef struct AMR
     initial::Any = :sensor
@@ -62,6 +65,7 @@ Base.@kwdef struct AMR
     tile::Int = 0
     rebalance::Float64 = 0.0
     rebalance_persist::Int = 2
+    max_levels::Union{Nothing,Int} = nothing
 end
 
 # A predicate of position alone describes a fixed region; it is called with the
@@ -101,7 +105,8 @@ function _amr_keywords(amr::AMR; refine=amr.initial, bootstrap::Bool=false)
             tag_vorticity_threshold=amr.tag_vorticity_threshold,
             tag_predicate=predicate, untag_ratio=amr.untag_ratio,
             tile_lifetime=amr.tile_lifetime, tile=amr.tile,
-            rebalance=amr.rebalance, rebalance_persist=amr.rebalance_persist)
+            rebalance=amr.rebalance, rebalance_persist=amr.rebalance_persist,
+            max_levels=amr.max_levels)
 end
 
 _amr_callable(initial) = !(initial isa Symbol || initial isa BlockRegion ||
@@ -256,6 +261,11 @@ function _setup_amr(prob, num, amr::AMR)
         throw(ArgumentError("AMR initial must be :sensor, a predicate " *
                             "(x, y, z, t) -> Bool or (x, y, z) -> Bool, a " *
                             "BlockRegion, or a Vector{BlockRegion}"))
+    amr.max_levels === nothing || amr.max_levels <= 2 ||
+        amr.tile > 0 && amr.regrid_interval > 0 ||
+        throw(ArgumentError("AMR: max_levels = $(amr.max_levels) regrids " *
+                            "$(amr.max_levels - 1) refined levels, which requires " *
+                            "tile > 0 and regridding"))
     amr.tag_sensor_threshold > 0 && !num.art.enabled &&
         throw(ArgumentError("AMR tag_sensor_threshold reads the artificial " *
                             "coefficients, which ArtParams(enabled = false) " *
@@ -293,7 +303,17 @@ function _setup_amr(prob, num, amr::AMR)
         # The temporary fine state is blank. Layout construction reuses the
         # regrid machinery without its RHS priming; the final state is filled
         # directly from the IC below rather than interpolated seed values.
-        _regrid_impl!(solver, states, workspace, nothing)
+        # A deeper level is tagged on its parent, whose seed state is filled
+        # from the root for the first pass; each later pass tags on the
+        # initial condition itself.
+        deep = nlevels(solver) > 2
+        deep && _fill_levels_from_parents!(solver, states)
+        _regrid_impl!(solver, states, workspace, nothing; bootstrap=true)
+        for _ in 3:nlevels(solver)
+            initialize!(solver, states, prob.ic)
+            spec.checks += spec.lifetime
+            _regrid_impl!(solver, states, workspace, nothing; bootstrap=true)
+        end
     end
     initialize!(solver, states, prob.ic)
     validate_state!(solver, states; control=num.control,
@@ -301,8 +321,8 @@ function _setup_amr(prob, num, amr::AMR)
     # Bootstrap is layout construction, not a completed regrid check. Start
     # the user's hysteresis clock at zero for every actual initial tile.
     spec.checks = 0
-    for region in keys(spec.created)
-        spec.created[region] = 0
+    for record in (spec.created, spec.deep_created...), region in keys(record)
+        record[region] = 0
     end
     amr.regrid_interval == 0 && setfield!(solver, :regrid, nothing)
     return solver, states

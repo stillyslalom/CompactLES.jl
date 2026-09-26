@@ -98,8 +98,10 @@ multidimensional runs and with `interface_divergence`, at no measurable cost
 in conservation or regrid drift. Orders above 2 are not monotone: refilling
 a step narrower than one parent cell undershoots by 2.3%, 2.9% and 3.2% of
 the jump at orders 6, 8 and 10. Order 4 has no measured advantage.
-`regrid_interval=0` keeps the initial layout fixed. Positive intervals
-support one refined level; a vector of multiple nested regions is static.
+`regrid_interval=0` keeps the initial layout fixed. A positive interval
+regrids one refined level, or with `tile` every level up to `max_levels`,
+each tagged on the level above it; without `tile` a vector of multiple
+nested regions is static.
 The solver retains all levels and restriction updates covered parent nodes.
 Composite integrals and profiles avoid counting both parent and fine values
 over the same physical region.

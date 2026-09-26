@@ -5594,6 +5594,15 @@ reference: composite density error 2.8e-3 where uniform-coarse gives 7.3e-2,
 better in L∞ over the wave train, 6.7× in L1, at 2497 coarse steps against the
 reference's 4662. The tiled regrid reproduces the Sod gate.
 
+**Three regridded levels.** A shock driven from x = 0.25 through a contact
+into heavy gas at x = 0.5 (densities 1, 0.125, 0.5), N = 81, tile 8,
+`max_levels = 3`, subcycled, CFL 0.2, against a 721-node uniform reference
+at t = 0.25: composite density L1 error at the root stations 1.44e-3 where
+the root alone gives 2.37e-2, 16× better. Decomposed runs match the serial
+tile sets and density to 1e-14 to 7e-13 at np = 2, 4 and 8. At CFL 0.2,
+moving the first discontinuity to x = 0.3 fails at step 1 at two levels as at
+three; CFL 0.1 runs.
+
 **Composite diagnostics.** Taylor–Green at 24³ with an 8³ region refined
 off-centre, 61 steps: the masked composite energy history stays within 2.5e-4
 of the single-level history, the fine sampling's own quadrature difference,

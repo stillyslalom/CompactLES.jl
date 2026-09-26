@@ -352,10 +352,12 @@ filter time-scaling with N1.
   feature, against a uniformly fine reference.
 
 - [ ] **A13 — Refinement scope beyond uniform Cartesian grids.**
-  Refinement rejects cylindrical and spherical metrics, stretched grids,
-  symmetry planes, pentadiagonal filters and the `:d8` detector, which rules out
-  the axisymmetric shock-tube and vortex-ring configurations. Each needs its
-  transfer closures and fold-aware gathers; order them by use.
+  Refinement rejects cylindrical and spherical metrics, stretched grids and
+  symmetry planes, which rules out the axisymmetric shock-tube and vortex-ring
+  configurations; pentadiagonal filters and the `:d8` detector are admitted
+  (commit `32b9de0`), except in same-level `patch_grid` runs. Each remaining
+  extension needs its transfer closures and fold-aware gathers; order them by
+  use.
   **Gate:** per extension, the refined-versus-uniform convergence rows of
   `test/convergence.jl`.
 
