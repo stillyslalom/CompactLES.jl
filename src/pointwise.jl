@@ -21,7 +21,8 @@
 # (`Patch.field_tuples`) and using the same indexing as the `Vector`/`Matrix`
 # forms, so the bodies read identically on either path; the gas-model EOS
 # objects adapt to coefficient mirrors at launch time (`physics.jl`).
-# `Nasa9Mixture` has no mirror yet: it needs the fixed-width interval table
+# `Nasa9Mixture` has no mirror yet; its interval table (`intervals`, a dense
+# matrix of isbits records) is the form one would carry
 # (reference/AMR_GPU.md, open numerics).
 
 using KernelAbstractions

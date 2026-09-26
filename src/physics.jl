@@ -752,6 +752,19 @@ struct Nasa9Mixture{T} <: EOS
     # per-species fits behind it need evaluating only once per mixture.
     e_guess::Vector{T}
     cv_guess::Vector{T}
+    # Every species' intervals in one isbits matrix, column k holding species
+    # k's in order, padded to the longest count by repeating its last interval,
+    # which leaves the interval search's result unchanged. The per-point
+    # evaluations read this table rather than `sp`, whose records each hold
+    # their intervals behind a pointer; a dense matrix of isbits records is
+    # also the form a device array can hold.
+    intervals::Matrix{Nasa9Interval{T}}
+end
+
+function _nasa9_interval_table(sp::Vector{Nasa9Species{T}}) where {T}
+    width = maximum(length(x.intervals) for x in sp)
+    return Nasa9Interval{T}[x.intervals[min(i, length(x.intervals))]
+                            for i in 1:width, x in sp]
 end
 
 function _nasa9_mixture(::Type{T}, species; T_guess=300.0,
@@ -761,13 +774,15 @@ function _nasa9_mixture(::Type{T}, species; T_guess=300.0,
         throw(ArgumentError("Nasa9Mixture: extrapolate must be :polynomial, " *
                             ":linear or :missing, got :$extrapolate"))
     sp = Nasa9Species{T}[_convert_nasa9_species(T, item) for item in species]
+    table = _nasa9_interval_table(sp)
     Tg = T(T_guess)
     linear = extrapolate === :linear || extrapolate === :missing
-    seed = [_nasa9_h_cp_over_R_at(x, Tg, linear) for x in sp]
+    seed = [_nasa9_h_cp_over_R(_nasa9_interval(table, k, Tg), Tg, linear)
+            for k in eachindex(sp)]
     e_guess = T[x.R * h - x.R * Tg for (x, (h, _)) in zip(sp, seed)]
     cv_guess = T[x.R * cp - x.R for (x, (_, cp)) in zip(sp, seed)]
     return Nasa9Mixture{T}(sp, [x.R for x in sp], Tg, extrapolate,
-                           e_guess, cv_guess)
+                           e_guess, cv_guess, table)
 end
 
 function Nasa9Mixture(species::AbstractVector{<:Nasa9Species}; T_guess=300.0,
@@ -822,6 +837,15 @@ species_names(eos::Nasa9Mixture) = [x.name for x in eos.sp]
     return intervals[end]
 end
 
+# The same search over column k of a mixture's interval table.
+@inline function _nasa9_interval(table::AbstractMatrix{<:Nasa9Interval}, k::Int, T_ion)
+    width = size(table, 1)
+    @inbounds for i in 1:width-1
+        T_ion <= table[i, k].Tmax && return table[i, k]
+    end
+    @inbounds return table[width, k]
+end
+
 # Outside the union of a species' intervals the fit carries no information, so
 # the two extrapolation policies of `Nasa9Mixture` differ only there. Both
 # select the nearest interval; `:linear` additionally evaluates the polynomial
@@ -830,37 +854,45 @@ end
 @inline _nasa9_linear(eos::Nasa9Mixture) =
     eos.extrapolate === :linear || eos.extrapolate === :missing
 
-@inline function _nasa9_cp_over_R_at(species::Nasa9Species, T_ion, linear::Bool)
-    interval = _nasa9_interval(species, T_ion)
+@inline function _nasa9_cp_over_R_at(interval::Nasa9Interval, T_ion, linear::Bool)
     T_fit = linear ? clamp(T_ion, interval.Tmin, interval.Tmax) : T_ion
     return _nasa9_cp_over_R(interval, T_fit)
 end
 
-@inline function _nasa9_h_over_R_at(species::Nasa9Species, T_ion, linear::Bool)
-    interval = _nasa9_interval(species, T_ion)
+@inline function _nasa9_h_over_R_at(interval::Nasa9Interval, T_ion, linear::Bool)
     linear || return _nasa9_h_over_R(interval, T_ion)
     T_fit = clamp(T_ion, interval.Tmin, interval.Tmax)
     return _nasa9_h_over_R(interval, T_fit) +
            _nasa9_cp_over_R(interval, T_fit) * (T_ion - T_fit)
 end
 
-# h/R and cp/R together, from one interval search and one set of powers of T.
-# The temperature inversion needs both at every iterate, and the search costs
-# more there than either polynomial. The powers are written as literal powers,
-# not built up by repeated multiplication, so the values are those the two
-# single-quantity forms above return, bit for bit.
-@inline function _nasa9_h_cp_over_R_at(species::Nasa9Species, T_ion, linear::Bool)
-    interval = _nasa9_interval(species, T_ion)
-    T_fit = linear ? clamp(T_ion, interval.Tmin, interval.Tmax) : T_ion
+# h/R and cp/R together from one set of powers of T. The temperature inversion
+# needs both at every iterate, and the logarithm and the fourth and fifth powers
+# cost several times the interval search and the polynomial arithmetic, so the
+# inversion forms them once per iterate for every species evaluated at that
+# temperature. The powers are written as literal powers, not built up by
+# repeated multiplication, so the values are those the two single-quantity forms
+# above return, bit for bit.
+@inline _nasa9_powers(T_fit) = (T_fit, T_fit^2, T_fit^3, T_fit^4, T_fit^5, log(T_fit))
+
+@inline function _nasa9_h_cp_over_R(interval::Nasa9Interval, powers)
+    T_fit, T2, T3, T4, T5, log_T = powers
     a = interval.a
-    T2 = T_fit^2
-    T3 = T_fit^3
-    T4 = T_fit^4
     cp_over_R = a[1] / T2 + a[2] / T_fit + a[3] + a[4] * T_fit +
                 a[5] * T2 + a[6] * T3 + a[7] * T4
-    h_over_R = -a[1] / T_fit + a[2] * log(T_fit) + a[3] * T_fit +
+    h_over_R = -a[1] / T_fit + a[2] * log_T + a[3] * T_fit +
                a[4] * T2 / 2 + a[5] * T3 / 3 +
-               a[6] * T4 / 4 + a[7] * T_fit^5 / 5 + interval.b1
+               a[6] * T4 / 4 + a[7] * T5 / 5 + interval.b1
+    return (h_over_R, cp_over_R)
+end
+
+# `powers` is `_nasa9_powers(T_ion)`, reused wherever the fit is evaluated at
+# T_ion itself, which is everywhere but the `:linear` extension.
+@inline function _nasa9_h_cp_over_R(interval::Nasa9Interval, T_ion, linear::Bool,
+                                    powers=_nasa9_powers(T_ion))
+    T_fit = linear ? clamp(T_ion, interval.Tmin, interval.Tmax) : T_ion
+    h_over_R, cp_over_R =
+        _nasa9_h_cp_over_R(interval, T_fit == T_ion ? powers : _nasa9_powers(T_fit))
     linear && (h_over_R += cp_over_R * (T_ion - T_fit))
     return (h_over_R, cp_over_R)
 end
@@ -872,23 +904,26 @@ end
 @inline _nasa9_rtol(::Type{T}) where {T<:AbstractFloat} =
     max(T(1e-14), T(32) * eps(T))
 
-"Whether `T_ion` lies outside the union of a species' fitted intervals."
-@inline function _nasa9_out_of_range(species::Nasa9Species, T_ion)
+"Whether `T_ion` lies outside the union of species k's fitted intervals."
+@inline function _nasa9_out_of_range(table::AbstractMatrix{<:Nasa9Interval}, k::Int,
+                                     T_ion)
     margin = _nasa9_rtol(typeof(float(T_ion)))
-    @inbounds return T_ion < species.intervals[1].Tmin * (1 - margin) ||
-                     T_ion > species.intervals[end].Tmax * (1 + margin)
+    @inbounds return T_ion < table[1, k].Tmin * (1 - margin) ||
+                     T_ion > table[end, k].Tmax * (1 + margin)
 end
 
 "cp_k(T_ion) from the applicable NASA-9 interval."
 @inline function species_cp(eos::Nasa9Mixture, k::Int, T_ion)
-    species = eos.sp[k]
-    return species.R * _nasa9_cp_over_R_at(species, T_ion, _nasa9_linear(eos))
+    R = eos.Rk[k]   # checked first: the table search below reads without checks
+    interval = _nasa9_interval(eos.intervals, k, T_ion)
+    return R * _nasa9_cp_over_R_at(interval, T_ion, _nasa9_linear(eos))
 end
 
 "h_k(T_ion), the exact interval-wise integral of `species_cp`."
 @inline function species_enthalpy(eos::Nasa9Mixture, k::Int, T_ion)
-    species = eos.sp[k]
-    return species.R * _nasa9_h_over_R_at(species, T_ion, _nasa9_linear(eos))
+    R = eos.Rk[k]
+    interval = _nasa9_interval(eos.intervals, k, T_ion)
+    return R * _nasa9_h_over_R_at(interval, T_ion, _nasa9_linear(eos))
 end
 
 "e_k(T_ion) = h_k − R_k T_ion."
@@ -975,7 +1010,8 @@ depend on call history. A state-based seed preserves the bit-for-bit agreement
 between serial and decomposed calculations tested by the MPI suite.
 """
 @inline function mixture_temperature_status(eos::Nasa9Mixture, e, Yat::F) where {F}
-    n = length(eos.sp)
+    n = length(eos.Rk)
+    table = eos.intervals
     # First-order inversion about a fixed reference state. This handles any
     # enthalpy gauge; when e_k = cv_k*T it reduces algebraically to e/cv.
     Tnum = typeof(eos.T_guess)
@@ -995,12 +1031,14 @@ between serial and decomposed calculations tested by the MPI suite.
     bracketed = true
     for _ in 1:NASA9_TEMPERATURE_ITERATIONS
         f = -e; cvm = zero(Tnum)
+        powers = _nasa9_powers(T_ion)
         @inbounds for k in 1:n
             Yk = Yat(k)
-            species = eos.sp[k]
-            h_over_R, cp_over_R = _nasa9_h_cp_over_R_at(species, T_ion, linear)
-            f += Yk * (species.R * h_over_R - eos.Rk[k] * T_ion)
-            cvm += Yk * (species.R * cp_over_R - eos.Rk[k])
+            R = eos.Rk[k]
+            interval = _nasa9_interval(table, k, T_ion)
+            h_over_R, cp_over_R = _nasa9_h_cp_over_R(interval, T_ion, linear, powers)
+            f += Yk * (R * h_over_R - R * T_ion)
+            cvm += Yk * (R * cp_over_R - R)
         end
         if !(cvm > 0)
             bracketed = false
@@ -1039,7 +1077,7 @@ between serial and decomposed calculations tested by the MPI suite.
         status |= TEMPERATURE_AT_BOUND
     end
     for k in 1:n
-        if Yat(k) != 0 && _nasa9_out_of_range(eos.sp[k], T_ion)
+        if Yat(k) != 0 && _nasa9_out_of_range(table, k, T_ion)
             status |= TEMPERATURE_OUT_OF_RANGE
             break
         end

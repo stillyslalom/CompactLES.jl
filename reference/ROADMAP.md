@@ -255,13 +255,9 @@ filter time-scaling with N1.
 
 ## P1: API, state ownership, and reproducibility
 
-- [ ] **A1 — Give precision one coherent public entry point.**
-  Normalize EOS, transport, artificial controls, schemes, geometry, and runtime
-  types from an explicit precision choice, or reject conflicts at setup with a
-  useful message. Storage currently follows `Transport{T}`; Float32 transport
-  plus default Float64 `ArtParams` produces a conversion MethodError.
-  **Gate:** concise Float32/Float64 input decks, early mixed-type diagnostics,
-  and no accidental promotion in audited CPU/device kernels. Coordinate with R2.
+- [x] **A1** — `precision` on `Numerics` and `Solver` converts every typed
+  component, mixed types are rejected at setup, and `bench/audit.jl` checks
+  Float32 point bodies for promotion (commit `5bd9b46`).
 
 - [ ] **A2 — Make cache ownership and freshness explicit.**
   Inventory persistent integrator state, per-patch primitives/geometry, shared RHS
