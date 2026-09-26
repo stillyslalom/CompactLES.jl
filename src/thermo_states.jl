@@ -500,3 +500,217 @@ function (m::Multimode)(u, v=0.0)
     end
     return η
 end
+
+# --- Synthetic turbulent inflow ---------------------------------------------------
+
+# One wave vector of a `TurbulentInflow`: the velocity it contributes is
+# `a cos θ + b sin θ` with `θ = k · x + omega t + phase`. `a` and `b` are the
+# two polarizations normal to `k`, already scaled by the Cholesky factor.
+struct _FourierMode
+    k::NTuple{3,Float64}
+    a::NTuple{3,Float64}
+    b::NTuple{3,Float64}
+    omega::Float64
+    phase::Float64
+end
+
+"""
+    TurbulentInflow(mean::Prim; length_scale, intensity = nothing,
+                    reynolds_stress = nothing, n_modes = 192, seed = 1,
+                    min_wavelength = length_scale / 2, spectrum = :von_karman,
+                    convect = true)
+
+A synthetic turbulent velocity fluctuation added to `mean`, callable as
+`(x, y, z, t) -> Prim` for the target of a [`DirichletBC`](@ref) or an
+[`NSCBCInflowBC`](@ref). Density, pressure, temperature and composition are
+those of `mean`; an NSCBC target needs a `mean` that gives `T_ion`.
+
+The fluctuation is a sum of `n_modes` random Fourier modes (Kraichnan 1970;
+Smirnov, Shi and Celik 2001), `u' = A Σ_n (a_n cos θ_n + b_n sin θ_n)` with
+`θ_n = k_n · (x - U t) + ω_n t + φ_n`, where `U` is the mean velocity, or zero
+when `convect = false`. The wave numbers follow a von Kármán spectrum
+truncated at `min_wavelength`, with its peak placed so that the longitudinal
+integral length scale is `length_scale`. The wave vectors come in orthogonal
+triads, each a random rotation of the coordinate axes, so the unscaled sum has
+unit covariance for any `n_modes`, a multiple of 3, and zero divergence. The
+frequencies `ω_n` are normal with standard deviation `u_rms |k_n|`.
+
+`A` is the lower Cholesky factor of the Reynolds-stress tensor (Lund, Wu and
+Squires 1998): `reynolds_stress`, a symmetric positive semidefinite 3×3
+matrix, or `(intensity |U|)^2` times the identity. The long-time average of
+`u'_i u'_j` over a face is then that tensor. An anisotropic tensor makes the
+fluctuation divergent.
+
+The modes are drawn from `seed` by a fixed integer hash at construction, so the
+field is a function of `(x, y, z, t)` alone: it is the same on every rank, on
+every process grid and after a restart, and has no state to checkpoint. A call
+evaluates one `sincos` per mode and does not allocate. The coordinates are
+taken as Cartesian positions.
+"""
+struct TurbulentInflow{N}
+    mean::Prim{N}
+    reynolds_stress::NTuple{3,NTuple{3,Float64}}
+    length_scale::Float64
+    min_wavelength::Float64
+    n_modes::Int
+    seed::Int
+    spectrum::Symbol
+    convect::Bool
+    convection::NTuple{3,Float64}
+    modes::Vector{_FourierMode}
+end
+
+# The modes are derived from the fields above, so a checkpoint's configuration
+# record enters those and not the mode table.
+_record_fields(::TurbulentInflow) = (:mean, :reynolds_stress, :length_scale,
+                                     :min_wavelength, :n_modes, :seed, :spectrum,
+                                     :convect)
+
+# Lower Cholesky factor of a symmetric positive semidefinite 3×3 matrix. A zero
+# pivot, a component without fluctuation, leaves its column zero.
+function _cholesky3(R)
+    L = zeros(3, 3)
+    scale = max(maximum(abs, R), floatmin(Float64))
+    for j in 1:3
+        s = R[j, j] - sum(L[j, m]^2 for m in 1:j-1; init=0.0)
+        s < -1e-12 * scale &&
+            throw(ArgumentError("TurbulentInflow: reynolds_stress is not " *
+                                "positive semidefinite"))
+        L[j, j] = sqrt(max(s, 0.0))
+        for i in j+1:3
+            r = R[i, j] - sum(L[i, m] * L[j, m] for m in 1:j-1; init=0.0)
+            if L[j, j] > 1e-12 * sqrt(scale)
+                L[i, j] = r / L[j, j]
+            elseif abs(r) > 1e-12 * scale
+                throw(ArgumentError("TurbulentInflow: reynolds_stress is not " *
+                                    "positive semidefinite"))
+            end
+        end
+    end
+    return L
+end
+
+# Unnormalized von Kármán energy spectrum with its peak near `ke`.
+_von_karman(k, ke) = (k / ke)^4 / (1 + (k / ke)^2)^(17 / 6)
+
+# Longitudinal integral length scale of a shell set carrying energies `q2`:
+# L11 = (3π/4) ∫ E/k dk / ∫ E dk for isotropic turbulence.
+_integral_length(k, q2) = 3π / 4 * sum(q2 ./ k) / sum(q2)
+
+function TurbulentInflow(mean::Prim{N}; length_scale::Real, intensity=nothing,
+                         reynolds_stress=nothing, n_modes::Integer=192,
+                         seed::Integer=1, min_wavelength::Real=length_scale / 2,
+                         spectrum::Symbol=:von_karman,
+                         convect::Bool=true) where {N}
+    L = Float64(length_scale)
+    λmin = Float64(min_wavelength)
+    L > 0 && isfinite(L) ||
+        throw(ArgumentError("TurbulentInflow: length_scale must be positive"))
+    0 < λmin < 2L ||
+        throw(ArgumentError("TurbulentInflow: min_wavelength must lie in " *
+                            "(0, 2 length_scale)"))
+    n_modes > 0 && n_modes % 3 == 0 ||
+        throw(ArgumentError("TurbulentInflow: n_modes must be a positive " *
+                            "multiple of 3, got $n_modes"))
+    spectrum === :von_karman ||
+        throw(ArgumentError("TurbulentInflow: spectrum must be :von_karman"))
+    (intensity === nothing) != (reynolds_stress === nothing) ||
+        throw(ArgumentError("TurbulentInflow: give exactly one of intensity " *
+                            "and reynolds_stress"))
+    if intensity !== nothing
+        speed = sqrt(sum(abs2, mean.u))
+        intensity >= 0 && speed > 0 ||
+            throw(ArgumentError("TurbulentInflow: intensity needs a nonnegative " *
+                                "value and a nonzero mean velocity"))
+        σ2 = (Float64(intensity) * speed)^2
+        R = [i == j ? σ2 : 0.0 for i in 1:3, j in 1:3]
+    else
+        R = Float64.(collect(reynolds_stress))
+        size(R) == (3, 3) && all(isfinite, R) ||
+            throw(ArgumentError("TurbulentInflow: reynolds_stress must be a " *
+                                "finite 3×3 matrix"))
+        maximum(abs, R - R') <= 1e-12 * max(maximum(abs, R), floatmin(Float64)) ||
+            throw(ArgumentError("TurbulentInflow: reynolds_stress must be symmetric"))
+    end
+    A = _cholesky3(R)
+    u_rms = sqrt((R[1, 1] + R[2, 2] + R[3, 3]) / 3)
+
+    # Shells evenly spaced in log k from well below the spectral peak to the
+    # cutoff. Each carries E(k) dk, with dk ∝ k at even log spacing.
+    shells = n_modes ÷ 3
+    ke0 = 0.7468 / L        # the von Kármán peak for integral scale L
+    klo, khi = ke0 / 8, 2π / λmin
+    k = shells == 1 ? [sqrt(klo * khi)] :
+        [klo * (khi / klo)^((m - 1) / (shells - 1)) for m in 1:shells]
+    energy(ke) = [_von_karman(km, ke) * km for km in k]
+    # The truncation shifts the integral scale; the peak is moved until the
+    # discrete shells give `length_scale` exactly.
+    lo, hi = ke0 / 16, 16ke0
+    _integral_length(k, energy(lo)) > L > _integral_length(k, energy(hi)) ||
+        throw(ArgumentError("TurbulentInflow: no von Kármán peak gives " *
+                            "length_scale $L above min_wavelength $λmin; " *
+                            "lower min_wavelength or raise n_modes"))
+    for _ in 1:200
+        mid = sqrt(lo * hi)
+        _integral_length(k, energy(mid)) > L ? (lo = mid) : (hi = mid)
+        hi / lo - 1 < 1e-14 && break
+    end
+    q2 = energy(sqrt(lo * hi))
+    q2 ./= sum(q2)
+
+    mix(v) = (A[1, 1] * v[1], A[2, 1] * v[1] + A[2, 2] * v[2],
+              A[3, 1] * v[1] + A[3, 2] * v[2] + A[3, 3] * v[3])
+    modes = Vector{_FourierMode}(undef, n_modes)
+    for g in 1:shells
+        r(slot) = _unit_random(seed, -g, slot)
+        # A uniformly random rotation (Shoemake's quaternion); its columns
+        # are the triad.
+        u1, u2, u3 = r(1), r(2), r(3)
+        qx, qy = sqrt(1 - u1) * sin(2π * u2), sqrt(1 - u1) * cos(2π * u2)
+        qz, qw = sqrt(u1) * sin(2π * u3), sqrt(u1) * cos(2π * u3)
+        Rot = ((1 - 2(qy^2 + qz^2), 2(qx * qy + qz * qw), 2(qx * qz - qy * qw)),
+               (2(qx * qy - qz * qw), 1 - 2(qx^2 + qz^2), 2(qy * qz + qx * qw)),
+               (2(qx * qz + qy * qw), 2(qy * qz - qx * qw), 1 - 2(qx^2 + qy^2)))
+        q = sqrt(q2[g])
+        for c in 1:3
+            e, s1, s2 = Rot[c], Rot[mod1(c + 1, 3)], Rot[mod1(c + 2, 3)]
+            # Two polarizations a quarter period apart at one wave vector: the
+            # pair has covariance q²(I - e eᵀ)/2, and the triad q² I. The
+            # sense of the pair is random.
+            h = r(3 + c) < 0.5 ? -1.0 : 1.0
+            phase = 2π * r(6 + c)
+            ξ = sqrt(-2 * log(1 - r(9 + c))) * cos(2π * r(12 + c))
+            modes[3(g-1)+c] = _FourierMode(k[g] .* e, mix(q .* s1),
+                                           mix((h * q) .* s2),
+                                           u_rms * k[g] * ξ, phase)
+        end
+    end
+    Rt = ntuple(i -> ntuple(j -> R[i, j], 3), 3)
+    convection = convect ? mean.u : (0.0, 0.0, 0.0)
+    return TurbulentInflow{N}(mean, Rt, L, λmin, Int(n_modes), Int(seed),
+                              spectrum, convect, convection, modes)
+end
+
+# The velocity fluctuation at a point.
+@inline function _inflow_fluctuation(f::TurbulentInflow, x1, x2, x3, t)
+    tt = Float64(t)
+    X1 = Float64(x1) - f.convection[1] * tt
+    X2 = Float64(x2) - f.convection[2] * tt
+    X3 = Float64(x3) - f.convection[3] * tt
+    u1 = u2 = u3 = 0.0
+    @inbounds for m in f.modes
+        s, c = sincos(m.k[1] * X1 + m.k[2] * X2 + m.k[3] * X3 +
+                      m.omega * tt + m.phase)
+        u1 += m.a[1] * c + m.b[1] * s
+        u2 += m.a[2] * c + m.b[2] * s
+        u3 += m.a[3] * c + m.b[3] * s
+    end
+    return (u1, u2, u3)
+end
+
+function (f::TurbulentInflow{N})(x1, x2, x3, t) where {N}
+    du = _inflow_fluctuation(f, x1, x2, x3, t)
+    m = f.mean
+    return Prim{N}(m.Y, (m.u[1] + du[1], m.u[2] + du[2], m.u[3] + du[3]),
+                   m.p, m.T_ion, m.rho)
+end

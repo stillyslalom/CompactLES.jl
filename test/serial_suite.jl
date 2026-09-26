@@ -4640,6 +4640,7 @@ include("api_surface_tests.jl")
 include("pointwise_callbacks_tests.jl")
 include("amr_frontend_tests.jl")
 include("initial_states_tests.jl")
+include("turbulent_inflow_tests.jl")
 include("boundary_shorthand_tests.jl")
 
 # HDF5 is a weak dependency and is not loadable from the package environment

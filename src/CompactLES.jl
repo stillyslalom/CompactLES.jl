@@ -145,6 +145,7 @@ export thermodynamic_state, mass_fractions, mole_fractions
 export shock_jump, driver_pressure, reflected_shock, shock_tube
 export Shape, Slab, Box, Ellipsoid, Sphere, Cylinder, LevelSet, signed_distance
 export Cells, Layer, Layers, Hydrostatic, Ramp, Multimode, riemann_interface
+export TurbulentInflow
 
 __init__() = (__init_threading__(); __init_blas__())
 

@@ -56,7 +56,7 @@ fires_at_start thermodynamic_state mass_fractions mole_fractions
 shock_jump driver_pressure reflected_shock shock_tube
 Shape Slab Box Ellipsoid Sphere Cylinder LevelSet signed_distance Cells Layer Layers
 Hydrostatic
-Ramp Multimode riemann_interface
+Ramp Multimode riemann_interface TurbulentInflow
 """)))
 
 const ADVANCED_QUALIFIED_API = (

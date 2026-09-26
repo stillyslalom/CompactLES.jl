@@ -2951,6 +2951,67 @@ function test_nscbc_inflow()
 end
 
 # ---------------------------------------------------------------------------
+# Synthetic turbulent inflow as an NSCBC target on a face divided among the
+# ranks. The field is a function of position and time alone, so the decomposed
+# run matches the serial one to round-off and a restart continues bit for bit
+# with no generator state in the checkpoint; a different seed is a boundary
+# change the configuration record refuses.
+# ---------------------------------------------------------------------------
+function test_turbulent_inflow()
+    section("turbulent inflow: decomposed face and restart")
+    function blockdiff(s, a, ref, b)
+        e = 0.0
+        for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
+            loc = Tuple(I) .- s.decomp.n_halo_d
+            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            e = max(e, abs(Float64(a[I, c] - b[J, c])))
+        end
+        e
+    end
+    mean = Prim(u=(0.3, 0.0, 0.0), p=1.0, T_ion=1.0)
+    function build(comm_here, dims_here; seed=1)
+        turb = TurbulentInflow(mean; length_scale=0.1, intensity=0.1, seed=seed)
+        inlet = NSCBCInflowBC(mean; target=turb, eta_u=5.0, eta_T=5.0)
+        sol = Solver(n_global=(16, SPLITN, 18), L_domain=(0.5, 1.0, 0.4),
+                     bcs=((inlet, NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
+                     comm=comm_here, dims=dims_here,
+                     art=ArtParams(enabled=false), cfl=0.4)
+        Q = allocate_state(sol)
+        initialize!(sol, Q, (x, y, z) -> mean)
+        return sol, Q
+    end
+    ref, Qref = build(MPI.COMM_SELF, (1, 1, 1))
+    run!(ref, Qref; tfinal=1e9, nmax=4)
+    grids = np >= 4 && iseven(np) ? (splitdims(2), (1, np ÷ 2, 2)) : (splitdims(2),)
+    for dims_here in grids
+        s, Q = build(comm, dims_here)
+        run!(s, Q; tfinal=1e9, nmax=2)
+        save_checkpoint(s, Q, "mpi_turb_ckpt")
+        run!(s, Q; tfinal=1e9, nmax=4)
+        check("turbulent inflow run matches serial, dims $dims_here",
+              gmax(blockdiff(s, Q, ref, Qref)), 1e-10)
+        r, Qr = build(comm, dims_here)
+        load_checkpoint!(r, Qr, "mpi_turb_ckpt")
+        inner = CL.interior(s.decomp)
+        run!(r, Qr; tfinal=1e9, nmax=4)
+        check("restart continues bit for bit, dims $dims_here",
+              gmax(maximum(abs, parent(Qr)[inner, :] - parent(Q)[inner, :])) +
+              abs(r.t - s.t), 1e-300)
+        other, Qo = build(comm, dims_here; seed=2)
+        threw = try
+            load_checkpoint!(other, Qo, "mpi_turb_ckpt")
+            0
+        catch e
+            occursin("allow = (:boundaries,)", sprint(showerror, e)) ? 1 : 0
+        end
+        check("another seed is refused on every rank", abs(gsum(threw) - np), 0.5)
+        MPI.Barrier(comm)
+        rank == 0 && foreach(rm, filter(startswith("mpi_turb_ckpt"), readdir()))
+        MPI.Barrier(comm)
+    end
+end
+
+# ---------------------------------------------------------------------------
 # Hydrostatic initial state with the acceleration along a decomposed
 # dimension. Every rank solves its own lines whole, so the state must match the
 # serial one exactly and stay at rest through the distributed divergence.
@@ -3075,6 +3136,7 @@ const SUITE = (
     ("off-rank folds", test_offrank_folds),
     ("symmetry plane", test_symmetry_plane),
     ("NSCBC inflow", test_nscbc_inflow),
+    ("turbulent inflow", test_turbulent_inflow),
     ("composite face", test_composite_face),
     ("hydrostatic state", test_hydrostatic),
     ("freestream", test_freestream),

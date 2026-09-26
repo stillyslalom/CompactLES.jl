@@ -232,15 +232,12 @@ filter time-scaling with N1.
   decomposition and restart, and a V1 experiment use case.
 
 - [ ] **V3 — Close gaps in automated verification.**
-  Add dedicated temporal-order studies for the full RK update and subcycled
-  boundary forcing, with spatial and filter errors controlled. Turn R1–R4 probes
-  into durable regressions.
-  Separate pure temporal certification here from N6's dt-sensitivity checks;
-  qualify the improved N14–N16 coupling, where Hermite error can become visible.
-  A global-step level interface carries a time error of first order in `dt`
-  ([level transfer order](CALIBRATION_APPENDIX.md#level-transfer-order));
-  subcycled runs read fourth order.
-  Add a scheduled full shock-validation battery and explicit Makie extension
+  The temporal-order studies landed in commit `d8ea472`
+  ([temporal order](CALIBRATION_APPENDIX.md#temporal-order)): the level
+  interface is first order in `dt` from the once-per-step injection into the
+  covered parent nodes, and injecting before every stage restores fourth order
+  at one restriction per stage; deciding that is open. Turn R1–R4 probes into
+  durable regressions. Add a scheduled full shock-validation battery and explicit Makie extension
   checks; retain HDF5 tests in the package test target and add parallel-HDF5
   execution where the required stack exists.
   Keep each instrument's current transcript under `bench/results/<script>.txt`

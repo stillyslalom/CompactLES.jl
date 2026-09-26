@@ -143,6 +143,25 @@ The target must specify `T_ion` and every species mass fraction. Its compatible
 four-argument form `(x, y, z, t)` remains valid, and the five-argument form is
 chosen when both apply. Pointwise NSCBC targets remain host-only.
 
+A [`TurbulentInflow`](@ref) is such a target: the mean state plus a synthetic
+velocity fluctuation with a prescribed Reynolds-stress tensor and integral
+length scale, convected through the face at the mean velocity. The field is a
+fixed function of position and time for a given `seed`, so a decomposed run
+and a restarted one see the same inflow. The default relaxation rates damp the
+fluctuation at the face; raise `eta_u` until the relaxation time
+`Lref / (eta_u c)` is short against the passage time `length_scale / |u|`.
+
+```julia
+mean = Prim(u = (0.3, 0.0, 0.0), p = 1.0, T_ion = 1.0)
+turbulence = TurbulentInflow(mean; length_scale = 0.05, intensity = 0.05,
+                             seed = 1)
+inlet = NSCBCInflowBC(mean; target = turbulence, eta_u = 5.0, eta_T = 5.0)
+```
+
+Pass `reynolds_stress` (a symmetric 3×3 matrix) in place of `intensity` for an
+anisotropic tensor. The same object serves as a [`DirichletBC`](@ref) target at a
+supersonic inflow.
+
 For a subsonic outflow:
 
 ```julia
