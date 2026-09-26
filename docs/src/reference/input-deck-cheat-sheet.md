@@ -302,7 +302,8 @@ above 1-D. The reasons and the exceptions are in [Threads and ranks](@ref).
 `CompactLES.CPUBackend()` is the default; wrap a
 `CUDABackend()` or `ROCBackend()` in `DeviceBackend` after loading the matching
 GPU package. A device solver may be decomposed, patched, refined, or tiled; it
-excludes `level_restriction=:filter` and `Nasa9Mixture`.
+excludes `level_restriction=:filter`, `polar_truncation`, and regridding more
+than one refined level. [Supported combinations](@ref) lists the rest.
 
 ## Adaptive refinement
 

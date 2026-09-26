@@ -142,6 +142,7 @@ DocMeta.setdocmeta!(
                 "case-studies/switchable-boundary.md",
         ],
         "Reference" => [
+            "Supported combinations" => "reference/capabilities.md",
             "Input and runtime API" => [
                 "Problem setup" => "reference/frontend.md",
                 "Physics models" => "reference/physics.md",

@@ -261,14 +261,9 @@ filter time-scaling with N1.
   (commit `77b3adb`). Under A8, move `thermodynamic_model` and the
   `_record_fields` overrides with the types.
 
-- [ ] **A6 — Publish a capability and extension matrix tied to setup checks.**
-  Cover EOS × backend × precision × metric × patch/refinement mode, including
-  static nested levels versus two-level regridding and checkpoint restrictions.
-  Correct stale README/reference claims against current code and tested hardware.
-  Clarify that `EquationSet` currently owns layout/parity while flux assembly
-  remains Navier–Stokes-specific; define the additional hooks needed by H3/H6/H8.
-  **Gate:** accepted/rejected combinations and extension examples are tested;
-  avoid promising unsupported feature combinations.
+- [x] **A6** — The supported-combinations page lists what setup accepts and
+  the error of each rejection, held to the code by `test/capability_tests.jl`
+  (commit TBD).
 
 - [ ] **A7 — Implement material interfaces with an explicit analytic fast path.**
   Follow [the interface design](DESIGN.md#material-and-physics-interfaces):

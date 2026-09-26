@@ -280,12 +280,15 @@ runs Lax, Sedov–Taylor, Noh, Shu–Osher, and Woodward–Colella.
 Research code under active development. The core solver (compact operators,
 LSRK(5,4) integration, artificial properties, multicomponent transport, the
 curvilinear metrics, and the distributed solve) is covered by the suites above
-and validated against analytic references.
+and validated against analytic references. The
+[supported combinations](https://stillyslalom.github.io/CompactLES.jl/dev/reference/capabilities/)
+of equation of state, backend, precision, geometry, refinement layout and
+checkpoint are listed with the setup error each rejected one raises.
 
 - Float64 by default; a uniform Float32 mode (`Numerics(precision = Float32)`,
   CPU and GPU) reduces state-array storage, with precision-dependent
-  conservation error. See the
-  [precision measurements](reference/CALIBRATION_APPENDIX.md#amr).
+  conservation error. See
+  [Precision and step size](docs/src/how-to/numerics-choices.md#precision-and-step-size).
 - A converging strong shock at a spherical origin is CFL-limited to 0.3 by an
   excursion of the origin cell as the shock forms; `StepControl(retries=4)`
   recovers it automatically. The planar wall and the cylindrical axis carry

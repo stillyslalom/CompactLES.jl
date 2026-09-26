@@ -25,12 +25,16 @@ Subtype [`EOS`](@ref) and implement the following methods:
 | `eos_dphi_dY(eos, k, rho, p, T_ion, cp_mix)` | Composition derivative of `eos_phi` |
 | `artificial_conductivity_scale(eos, rho, c, T_ion, cp_mix)` | Conductivity scale per artificial sensor |
 | `wall_internal_energy(eos, Q, I, n_species, Twall)` | Internal energy at an isothermal wall |
+| `state_admissibility(eos, rho, e, Yat, n_species)` | Whether a point lies in the model's thermodynamic domain; [`setup`](@ref) calls it on the initial state |
+| `CompactLES.mole_fraction(eos, k, Y, I, n_species)` | Mole fraction of species `k`, read by the shared artificial species diffusivity of a multispecies run |
 
 `species_names` may use the fallback labels when names are not meaningful.
+A one-species EOS may omit `mole_fraction`.
 Array-level recovery must leave finite placeholders at invalid padded points so
 the following stencil passes remain safe. Keep the hot-loop methods concrete and
 type-stable. See [Thermodynamics and species transport](@ref) for the physical
-meaning of the derivatives.
+meaning of the derivatives, and [Supported combinations](@ref) for what a user
+EOS needs on a GPU.
 
 ```@docs
 recover_primitives!

@@ -134,9 +134,10 @@ resizes `states` with it, so build any [`Workspace`](@ref) after the load.
 On the rank count that wrote the file the stored ownership is restored and
 the run continues bit for bit, later regrids included; on another rank
 count the level is partitioned afresh and the continuation agrees to
-round-off. A hierarchy deeper than two levels is static and must be built
-with the recorded `refine` regions. The per-rank `save_checkpoint` form
-restores onto the rank count that wrote it only.
+round-off. A tiled, regridded hierarchy deeper than two levels is rebuilt
+level by level in the same way. A static hierarchy deeper than two levels
+must be built with the recorded `refine` regions. The per-rank
+`save_checkpoint` form restores onto the rank count that wrote it only.
 
 ## Restart on another rank count
 

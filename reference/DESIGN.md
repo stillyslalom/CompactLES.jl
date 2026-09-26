@@ -1362,6 +1362,28 @@ and `conserved_from_prim`. Layout/parity extensions alone do not replace the
 Navier–Stokes flux and recovery implementation. The planned wider contract and
 analytic fast path are in [Material and physics interfaces](#material-and-physics-interfaces).
 
+At present `EquationSet` owns the conserved layout, the component names, the
+primitive-to-conserved conversion and the fold parities, and `NavierStokes1T`
+is its only implementation. Primitive recovery, flux assembly, the timestep
+rates, the NSCBC projections, the wall conditions and the artificial
+properties are written for the one-temperature Navier–Stokes system and are
+not dispatched on the equation set. The planned items require the following
+hooks beyond the current ones:
+
+- H3 (separate ion, electron and radiation energies): one energy component and
+  temperature per subsystem in primitive recovery, an EOS query per
+  temperature, an exchange-rate term between them, and wave speeds, NSCBC
+  amplitudes and wall energies that read the partition.
+- H6 (radiation diffusion): a radiation-energy component with its own diffusive
+  flux and opacity query, a residual and linearization for the implicit
+  integrator of H2, and a rate bound that keeps it out of the explicit step.
+- H8 (MHD): magnetic-field components with their own fold parities, an
+  inviscid flux and fast-magnetosonic wave speed supplied by the equation set,
+  and a divergence-cleaning source with its boundary treatment.
+
+Each hook is to be paired with a setup check that rejects any equation, EOS
+and boundary combination not yet qualified for it.
+
 **New output formats.** `io.jl` shows the pattern: per-rank writes plus a rank-0
 container, using `MPI.Allgather` only to collect piece extents. HDF5/XDMF for
 very large runs would follow the same shape.

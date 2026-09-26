@@ -4849,6 +4849,7 @@ include("amr_frontend_tests.jl")
 include("initial_states_tests.jl")
 include("turbulent_inflow_tests.jl")
 include("boundary_shorthand_tests.jl")
+include("capability_tests.jl")
 
 # The extension suites run only where their weak dependency loads. A skip is
 # recorded as a broken test, so the summary tree shows it in its own column

@@ -48,7 +48,8 @@ lattice tiles so that separated features refine separately rather than as one
 bounding box; each tile carries its own halo and transfer, so a small edge in
 three dimensions costs more than the cells it saves.
 [`BlockRegion`](@ref)s remain available for an exact layout; a single region
-may move when regridding is enabled, while a multi-level vector stays fixed.
+may move when regridding is enabled, and a multi-level vector moves only with
+a positive `tile`. A vector of shapes stays fixed.
 
 | Keyword | Default | Meaning |
 |:--|:--|:--|
@@ -117,7 +118,8 @@ placement; sensor and predicate placement is clamped to that legal interior.
 Tiling uses a global lattice, so surviving tiles keep their locations as tags
 move. A positive `regrid_interval` allows tiled regions to enter and leave;
 `rebalance` may then move ownership among ranks after persistent measured
-imbalance. Multi-level nested vectors cannot currently regrid.
+imbalance in a two-level hierarchy. A multi-level nested vector regrids only
+with a positive `tile`.
 
 Refinement uses interpolation to fill new fine nodes and restriction to
 update covered parent nodes. Injection does not make arbitrary composite

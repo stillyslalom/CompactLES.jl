@@ -203,7 +203,7 @@ species; its benefit appears at three or more.
 
 ## Precision and step size
 
-Float32 uses half the memory of Float64 and is used by the device path.
+Float32 uses half the memory of Float64 on either backend.
 With default closures, the Float32 wall-evolution error reaches a floor
 near 3e-5, and a freestream at a wall holds to roundoff of about 2e-6.
 At 96 points, a single derivative's wall error is about 9e-5 in either
