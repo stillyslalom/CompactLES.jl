@@ -97,6 +97,7 @@ end
 "In-place banded solve of columns `lo:hi` of `B` (n × lines), interleaved."
 function solve_cols!(B::AbstractMatrix{T}, F::BandFactor{T},
                      lo::Int, hi::Int) where {T}
+    F.q == 2 && return solve_cols!(B, F, lo, hi, Val(2))
     n, q = F.n, F.q
     Lb, U = F.L, F.U
     @inbounds for k in 1:(n-1)
@@ -116,6 +117,89 @@ function solve_cols!(B::AbstractMatrix{T}, F::BandFactor{T},
                 acc -= U[1+t, i] * B[i+t, col]
             end
             B[i, col] = acc * u0
+        end
+    end
+    return B
+end
+
+# The same solve with the half-bandwidth a compile-time constant. `B` and `U`
+# are both `Matrix{T}`, so in the method above the compiler cannot rule out
+# that a store to `B` changes `U` and reloads `U[1+t, i]` for every column,
+# inside a coupling loop whose trip count it does not know. Reading an
+# interior row's `Q` coefficients once, before the column loop, removes both.
+# Per column the operations and their order are those of the method above, so
+# the result is bitwise identical.
+function solve_cols!(B::AbstractMatrix{T}, F::BandFactor{T}, lo::Int, hi::Int,
+                     ::Val{Q}) where {T, Q}
+    n = F.n
+    Lb, U = F.L, F.U
+    @inbounds for k in 1:(n-1)
+        for m in 1:min(Q, n - k)
+            lm = Lb[m, k]
+            iszero(lm) && continue
+            for col in lo:hi
+                B[k+m, col] -= lm * B[k, col]
+            end
+        end
+    end
+    @inbounds for i in n:-1:(n-Q+1)
+        u0 = inv(U[1, i])
+        for col in lo:hi
+            acc = B[i, col]
+            for t in 1:(n - i)
+                acc -= U[1+t, i] * B[i+t, col]
+            end
+            B[i, col] = acc * u0
+        end
+    end
+    @inbounds for i in (n-Q):-1:1
+        u0 = inv(U[1, i])
+        u = ntuple(t -> U[1+t, i], Val(Q))
+        for col in lo:hi
+            acc = B[i, col]
+            for t in 1:Q
+                acc -= u[t] * B[i+t, col]
+            end
+            B[i, col] = acc * u0
+        end
+    end
+    return B
+end
+
+# Spike correction B[:, l] -= V·zbp[l, :] + W·zbn[l, :] of the x layout, one
+# line per column of `B`. Per point the sum runs over t in order from zero,
+# and the `Val` method keeps that order. The transposed layout subtracts once
+# per t instead, so the two layouts may differ in the last bit.
+function _correct_lines!(B::AbstractMatrix{T}, V, W, zbp, zbn, q::Int) where {T}
+    n, L = size(B)
+    @threaded n*L for l in 1:L
+        @inbounds for i in 1:n
+            acc = zero(T)
+            for t in 1:q
+                acc += V[i, t] * zbp[l, t] + W[i, t] * zbn[l, t]
+            end
+            B[i, l] -= acc
+        end
+    end
+    return B
+end
+
+# The same correction with `Q` a compile-time constant and the line's interface
+# values read once. In the method above the loads of `zbp` and `zbn` repeat per
+# point for the reason given at the `Val` method of `solve_cols!`, and the point
+# loop does not vectorize; here it does.
+function _correct_lines!(B::AbstractMatrix{T}, V, W, zbp, zbn,
+                         ::Val{Q}) where {T, Q}
+    n, L = size(B)
+    @threaded n*L for l in 1:L
+        zp = ntuple(t -> @inbounds(zbp[l, t]), Val(Q))
+        zn = ntuple(t -> @inbounds(zbn[l, t]), Val(Q))
+        @inbounds for i in 1:n
+            acc = zero(T)
+            for t in 1:Q
+                acc += V[i, t] * zp[t] + W[i, t] * zn[t]
+            end
+            B[i, l] -= acc
         end
     end
     return B
@@ -288,14 +372,10 @@ function solve_lines!(B::AbstractMatrix{T}, line_solver::BandLineSolver{T}) wher
     _reduced_solve!(line_solver, L)
     V, W = line_solver.V, line_solver.W
     zbp, zbn = line_solver.zbp, line_solver.zbn
-    @threaded n*L for l in 1:L
-        @inbounds for i in 1:n
-            acc = zero(T)
-            for t in 1:q
-                acc += V[i, t] * zbp[l, t] + W[i, t] * zbn[l, t]
-            end
-            B[i, l] -= acc
-        end
+    if q == 2
+        _correct_lines!(B, V, W, zbp, zbn, Val(2))
+    else
+        _correct_lines!(B, V, W, zbp, zbn, q)
     end
     return B
 end

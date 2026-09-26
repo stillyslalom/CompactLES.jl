@@ -41,7 +41,7 @@ section that moved it says so in one sentence and the older figure is gone.
 17. [The inflow transverse terms](#the-inflow-transverse-terms) (`bench/nscbcinflow.jl`)
 18. [Fold order and geometry limits](#fold-order-and-geometry-limits) (`bench/foldorder.jl`)
 19. [Operator and step cost](#operator-and-step-cost) (`bench/derivcost.jl`,
-    `bench/phases.jl`)
+    `bench/phases.jl`, `bench/reducedsolve.jl`)
 20. [AMR](#amr) (`bench/amr_transfer.jl`, `bench/leveltransfer.jl`,
     `test/level_tests.jl`)
 21. [Temperature-dependent transport](#temperature-dependent-transport)
@@ -4513,6 +4513,8 @@ MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 "$MPIEXEC" -n 8 julia --project=. -t 1 bench/derivcost.jl 128 30 dims=2,2,2
 "$MPIEXEC" -n 8 julia --project=. -t 1 bench/derivcost.jl 128 10 dims=2,2,2 phases=true cases=periodic
 julia --project=. -t 1 bench/phases.jl
+julia --project=. -t 1 bench/reducedsolve.jl 48 derivs=c6,c10
+"$MPIEXEC" -n 2 julia --project=. -t 1 bench/reducedsolve.jl 96 derivs=c6,c10
 ```
 
 Run-to-run spread on this workstation is 10–20%, so every ratio below is formed within a
@@ -4578,6 +4580,39 @@ rank is 2.7–4.2% on five of six cells (one 15% outlier), the size of the whole
 and 19–30% at 32³ per rank in the periodic cells, so the C8 figure is quoted as a few
 percent. Pinning would take a `SetProcessAffinityMask` call inside the run, not a launcher
 flag.
+
+### The x-direction pentadiagonal solve
+
+`bench/reducedsolve.jl` (`48 derivs=c6,c10` serially, `96` at np = 2, `-t 1`, fully
+periodic) splits a line solve into the local sweep, the reduced interface stage, and the spike
+correction (total − sweep − reduced). On the x layout, where a line is a column of the n ×
+lines block, the C10 correction cost as much as the sweep. Its point loop, an inner sum over
+the q coupling columns with a runtime trip count, reloaded the interface values for every
+point, because the compiler cannot rule out aliasing between them and the stores into the
+block, and its `code_llvm` carried no vector instruction. The back substitution of the band
+sweep reloaded its U coefficients once per column for the same reason. Both loops now take
+q = 2 as a compile-time constant and read those values once per line and once per row, with
+bitwise-identical results. Times in µs, before and after:
+
+```
+                                sweep   correction    total
+48^3, 1 rank, x      before     260.4      251.2      544.0
+                     after      150.0       37.6      222.8
+48^3, 1 rank, y                  43.0       37.5      114.7
+96^3, 2 ranks, x     before    1237.4     1084.2     2637.4
+(P = 2)              after      905.6       68.5     1286.5
+96^3, 2 ranks, y (P = 1)        383.2      126.1      639.0
+```
+
+Timed in one process against a copy of the previous loops, the whole x solve of the C10
+derivative and the `pyranda_filter` plans is 2.3–2.9x faster on a periodic line and
+1.6–1.8x on a closed one, which carries no correction, at 48³ and 96³ serially. `bench/derivcost.jl 64 20
+cases=periodic` on one rank at `-t 1` gave a C10/C6 step ratio of 1.29 before and 1.19 after,
+one process each. The remaining gap is the x sweep, 3.5x the y sweep at 48³ where C6's is
+2.8x, from reading a column block with a stride of n. A scratch prototype that copies 64
+lines into a lines × n buffer, sweeps it as the transposed path does, and copies back was
+bitwise equal and 1.4x faster than the hoisted sweep; it needs a scratch buffer per task and
+was not adopted.
 
 ### The sensor phase
 
