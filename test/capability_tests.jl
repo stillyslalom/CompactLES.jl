@@ -1,7 +1,10 @@
 # The combinations of docs/src/reference/capabilities.md, held against the
-# setup checks. Each accepted row is built at a small size and advanced three
-# steps; each rejected combination must raise the error the page quotes. A
-# setup check changed without the page fails here.
+# setup checks. Each rejected combination must raise the error the page
+# quotes, and a smoke subset of the accepted rows, one host and one device
+# row, is built at a small size and advanced three steps. A setup check
+# changed without the page fails here. Every accepted row, with the
+# checkpoint round trips, is in test/capability_matrix.jl, which the weekly
+# validation workflow runs.
 #
 # Standalone: julia --project=. -O1 test/capability_tests.jl
 # The serial suite includes it.
@@ -12,92 +15,7 @@ MPI.Initialized() || MPI.Init(threadlevel=:funneled)
 using CompactLES
 using CompactLES.Regions: Box
 
-module Capabilities
-
-using CompactLES
-using CompactLES.Regions: Box
-using CompactLES: EOS, NavierStokes1T
-
-# An equation of state defined outside the package. It implements the methods
-# the extension page lists by forwarding to an IdealMixture it holds, so its
-# run is the ideal one; a method missing from that list fails here as a
-# MethodError.
-struct ForwardingGas{T} <: EOS
-    inner::IdealMixture{T}
-end
-const _FG = ForwardingGas
-CompactLES.nspecies(e::_FG) = CompactLES.nspecies(e.inner)
-CompactLES.species_names(e::_FG) = CompactLES.species_names(e.inner)
-CompactLES.recover_primitives!(s, e::_FG, Q) =
-    CompactLES.recover_primitives!(s, e.inner, Q)
-CompactLES.conserved_from_prim(eq::NavierStokes1T, e::_FG, pr::Prim) =
-    CompactLES.conserved_from_prim(eq, e.inner, pr)
-CompactLES.species_enthalpy(e::_FG, k::Int, T_ion) =
-    CompactLES.species_enthalpy(e.inner, k, T_ion)
-CompactLES.eos_phi(e::_FG, ρ, p, T_ion, cp) = CompactLES.eos_phi(e.inner, ρ, p, T_ion, cp)
-CompactLES.eos_dphi_dY(e::_FG, k::Int, ρ, p, T_ion, cp) =
-    CompactLES.eos_dphi_dY(e.inner, k, ρ, p, T_ion, cp)
-CompactLES.artificial_conductivity_scale(e::_FG, ρ, c, T_ion, cp) =
-    CompactLES.artificial_conductivity_scale(e.inner, ρ, c, T_ion, cp)
-CompactLES.wall_internal_energy(e::_FG, Q, I, n::Int, Twall) =
-    CompactLES.wall_internal_energy(e.inner, Q, I, n, Twall)
-CompactLES.mole_fraction(e::_FG, k::Int, Y, I, n::Int) =
-    CompactLES.mole_fraction(e.inner, k, Y, I, n)
-CompactLES.state_admissibility(e::_FG, ρ, en, Yat::F, n::Int) where {F} =
-    CompactLES.state_admissibility(e.inner, ρ, en, Yat, n)
-
-const per = (PeriodicBC(), PeriodicBC())
-const wall = (SlipWallBC(), SlipWallBC())
-const unit = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0))
-const cyl_domain = ((0.0, 1.0), (0.0, 2π), (0.0, 1.0))
-const axis = ((AxisBC(), SlipWallBC()), per, per)
-
-pulse(x) = 1.0 + 0.1 * exp(-40 * (x - 0.5)^2)
-ic_gas(x, y, z) = Prim(p=pulse(x), rho=1.0)
-ic_two(x, y, z) = (θ = 0.5 + 0.4 * sin(2π * x); Prim(Y=(θ, 1 - θ), p=1.0, rho=1.0))
-ic_air(x, y, z) = Prim(p=1e5 * pulse(x), T_ion=300.0)
-ic_radial(r, a, b) = Prim(p=1.0 + 0.1 * exp(-20r^2), rho=1.0)
-ic_shell(r, a, b) = Prim(p=1.0 + 0.1 * exp(-20(r - 0.75)^2), rho=1.0)
-
-const EOSES = [
-    ("IdealMixture", IdealSpecies("gas"; R=1, gamma=1.4), ic_gas),
-    ("IdealMixture, two species",
-     IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
-                   IdealSpecies{Float64}("b", 0.5, 1.2)]), ic_two),
-    ("StiffenedGas", StiffenedGas(gamma=4.4, p_inf=1.0, cv=1.0), ic_gas),
-    ("Nasa9Mixture", Nasa9Mixture(["N2"]), ic_air),
-    ("user EOS", ForwardingGas(IdealMixture([IdealSpecies{Float64}("gas", 1.0, 1.4)])),
-     ic_gas),
-]
-
-device() = DeviceBackend(CompactLES.KernelAbstractions.CPU())
-
-# The backend and precision pairs the geometry and layout rows run at; the
-# EOS rows run all four.
-const PAIRS = ((CompactLES.CPUBackend(), Float64), (device(), Float32))
-
-problem(; domain=unit, bcs=(per, per, per), ic=ic_gas,
-        eos=IdealSpecies("gas"; R=1, gamma=1.4), metric=CartesianMetric(),
-        transport=ConstantTransport()) =
-    Problem(; domain, bcs, ic, eos, metric, transport)
-
-# Build and advance three steps. A device backend runs its pointwise bodies
-# and staged exchanges through the KernelAbstractions kernels.
-function advances(prob, num)
-    on_device = num.backend isa DeviceBackend
-    CompactLES.FORCE_KA[] = on_device
-    CompactLES.FORCE_DEVICE_EXCHANGE[] = on_device
-    try
-        solver, Q = setup(prob, num)
-        run!(solver, Q; tfinal=1.0, nmax=3)
-        return solver.step == 3
-    finally
-        CompactLES.FORCE_KA[] = false
-        CompactLES.FORCE_DEVICE_EXCHANGE[] = false
-    end
-end
-
-end # module Capabilities
+include("capability_cases.jl")
 
 @testset "capability matrix" begin
     C = Capabilities
@@ -105,133 +23,14 @@ end # module Capabilities
     stretched = (sine_cluster(0.0, 1.0, 0.5, 0.5), nothing, nothing)
     t0 = time()
 
-    @testset "accepted: EOS × backend × precision" begin
-        for (name, eos, ic) in C.EOSES, backend in (CompactLES.CPUBackend(), C.device()),
-            precision in (Float64, Float32)
+    @testset "accepted: smoke rows" begin
+        name, eos, ic = C.EOSES[1]
+        for (backend, precision) in C.PAIRS
             ok = C.advances(C.problem(; eos, ic),
                             Numerics(; n_global=(32, 1, 1), backend, precision))
             ok || @warn "capability matrix: $name on $backend at $precision did not advance"
             @test ok
         end
-    end
-
-    @testset "accepted: geometry × backend × precision" begin
-        geometries = [
-            ("stretched Cartesian", C.problem(bcs=(wall, per, per)),
-             (; n_global=(32, 1, 1), stretch=stretched)),
-            ("cylindrical axis, θ collapsed",
-             C.problem(bcs=axis, metric=CylindricalMetric(), ic=C.ic_radial),
-             (; n_global=(24, 1, 1))),
-            ("cylindrical axis, θ resolved",
-             C.problem(bcs=axis, domain=C.cyl_domain, metric=CylindricalMetric(),
-                       ic=C.ic_radial),
-             (; n_global=(16, 16, 1))),
-            ("spherical origin",
-             C.problem(bcs=((OriginBC(), SlipWallBC()), per, per),
-                       domain=((0.0, 1.0), (π / 2 - 0.5, π / 2 + 0.5), (0.0, 1.0)),
-                       metric=SphericalMetric(), ic=C.ic_radial),
-             (; n_global=(24, 1, 1))),
-            ("spherical poles",
-             C.problem(bcs=(wall, (PoleBC(), PoleBC()), per),
-                       domain=((0.5, 1.0), (0.0, π), (0.0, 2π)),
-                       metric=SphericalMetric(), ic=C.ic_shell),
-             (; n_global=(16, 16, 1))),
-            ("Cartesian symmetry plane",
-             C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per)),
-             (; n_global=(32, 1, 1))),
-            ("cylindrical z symmetry plane",
-             C.problem(bcs=(axis[1], per, (SymmetryPlaneBC(), SlipWallBC())),
-                       metric=CylindricalMetric(),
-                       ic=(r, θ, z) -> Prim(p=1.0 + 0.1exp(-20(r^2 + z^2)), rho=1.0)),
-             (; n_global=(16, 1, 16))),
-        ]
-        for (name, prob, kw) in geometries, (backend, precision) in C.PAIRS
-            ok = C.advances(prob, Numerics(; backend, precision, kw...))
-            ok || @warn "capability matrix: $name on $backend at $precision did not advance"
-            @test ok
-        end
-        # Azimuthal mode truncation: host only, with or without the axis.
-        for prob in (C.problem(bcs=axis, domain=C.cyl_domain, metric=CylindricalMetric(),
-                               ic=C.ic_radial),
-                     C.problem(bcs=(wall, per, per),
-                               domain=((0.5, 1.0), (0.0, 2π), (0.0, 1.0)),
-                               metric=CylindricalMetric(), ic=C.ic_shell))
-            @test C.advances(prob, Numerics(n_global=(16, 32, 1), polar_truncation=2.0))
-        end
-    end
-
-    @testset "accepted: layouts × backend × precision" begin
-        feature = (x, y, z, t) -> abs(x - 0.5) < 0.1
-        layouts = [
-            ("patch_grid", (; patch_grid=(2, 1, 1))),
-            ("static nested levels",
-             (; amr=AMR(initial=[Box((0.25, 0, 0), (0.75, 1, 1)),
-                                 Box((0.4, 0, 0), (0.6, 1, 1))]))),
-            ("regridded box", (; amr=AMR(initial=feature, regrid_interval=1))),
-            ("regridded tiles", (; amr=AMR(initial=feature, regrid_interval=1, tile=4))),
-            ("subcycled levels",
-             (; amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)), subcycle=true))),
-        ]
-        for (name, kw) in layouts, (backend, precision) in C.PAIRS
-            ok = C.advances(C.problem(), Numerics(; n_global=(48, 1, 1), backend,
-                                                  precision, kw...))
-            ok || @warn "capability matrix: $name on $backend at $precision did not advance"
-            @test ok
-        end
-        # More than two regridded levels: tiles on the host backend.
-        @test C.advances(C.problem(),
-                         Numerics(n_global=(48, 1, 1),
-                                  amr=AMR(initial=feature, regrid_interval=1, tile=4,
-                                          max_levels=3)))
-        # Nested BlockRegions regrid with tiles.
-        @test C.advances(C.problem(),
-                         Numerics(n_global=(48, 1, 1),
-                                  amr=AMR(initial=[BlockRegion((16, 0, 0), (16, 1, 1)),
-                                                   BlockRegion((60, 0, 0), (20, 1, 1))],
-                                          regrid_interval=1, tile=4)))
-        # Every EOS on a patched and on a refined layout.
-        for (name, eos, ic) in C.EOSES[2:end],
-            kw in ((; patch_grid=(2, 1, 1)), (; amr=AMR(initial=feature, regrid_interval=1)))
-            @test C.advances(C.problem(; eos, ic), Numerics(; n_global=(48, 1, 1), kw...))
-        end
-        # Slabs on a cylindrical annulus and along a uniform dimension of a
-        # stretched grid; the ghost-flux interface on slabs and on a level.
-        annulus = C.problem(bcs=(wall, per, per), metric=CylindricalMetric(),
-                            domain=((0.5, 1.5), (0.0, 1.0), (0.0, 1.0)),
-                            ic=(r, θ, z) -> Prim(p=1.0 + 0.1exp(-20(r - 1)^2), rho=1.0))
-        for backend in (CompactLES.CPUBackend(), C.device())
-            @test C.advances(annulus, Numerics(n_global=(48, 1, 1), patch_grid=(2, 1, 1),
-                                               backend=backend))
-        end
-        @test C.advances(C.problem(bcs=(wall, per, per)),
-                         Numerics(n_global=(16, 48, 1), patch_grid=(1, 2, 1),
-                                  stretch=stretched))
-        @test C.advances(C.problem(), Numerics(n_global=(48, 1, 1), patch_grid=(2, 1, 1),
-                                               interface_flux=:ghost))
-        @test C.advances(C.problem(transport=ConstantTransport(mu0=1e-3)),
-                         Numerics(n_global=(48, 1, 1), interface_flux=:ghost,
-                                  amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)))))
-    end
-
-    @testset "accepted: checkpoints" begin
-        dir = mktempdir()
-        restarts(prob, num; reload=num) = begin
-            solver, Q = setup(prob, num)
-            run!(solver, Q; tfinal=1.0, nmax=2)
-            save_checkpoint(solver, Q, joinpath(dir, "c"))
-            solver2, Q2 = setup(prob, reload)
-            load_checkpoint!(solver2, Q2, joinpath(dir, "c"))
-            run!(solver2, Q2; tfinal=1.0, nmax=4)
-            solver2.step == 4
-        end
-        n = (48, 1, 1)
-        @test restarts(C.problem(), Numerics(n_global=n, backend=C.device()))
-        @test restarts(C.problem(eos=C.EOSES[4][2], ic=C.ic_air), Numerics(n_global=n))
-        @test restarts(C.problem(), Numerics(n_global=n,
-            amr=AMR(initial=(x, y, z, t) -> abs(x - 0.5) < 0.1, regrid_interval=1,
-                    tile=4)))
-        @test restarts(C.problem(), Numerics(n_global=n, backend=C.device(),
-                                             amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)))))
     end
 
     @testset "rejected at setup" begin

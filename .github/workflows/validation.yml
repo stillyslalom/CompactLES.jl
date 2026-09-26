@@ -4,6 +4,9 @@ name: Validation
 # thousands of steps, so it runs on a schedule and on request rather than on
 # every push. The cases and their guards are the ones the local core gate in
 # CLAUDE.md runs; a scheduled run catches a drift that no push job measured.
+# The accepted rows of the supported-combinations page
+# (test/capability_matrix.jl) run here too: the serial suite keeps the
+# rejections and a smoke subset, and the full set costs about 80 s.
 on:
   schedule:
     - cron: '17 6 * * 1'
@@ -30,5 +33,8 @@ jobs:
           using Pkg
           Pkg.instantiate()
       - uses: julia-actions/julia-buildpkg@v1
+      - name: Run the accepted capability matrix
+        run: julia --project=. -O1 --color=yes test/capability_matrix.jl
       - name: Run the validation battery
+        if: ${{ !cancelled() }}
         run: julia --project=. --color=yes test/validation.jl

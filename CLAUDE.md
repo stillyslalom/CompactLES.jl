@@ -107,6 +107,9 @@ required coverage that remains unavailable.
   An isolated change to output, plotting, or a utility requires its affected
   tests and the serial suite; add numerical or MPI checks when its effects
   reach those paths.
+- **Setup checks:** a change to what `Solver` or `setup` accepts or rejects
+  also runs `test/capability_matrix.jl`, which builds every accepted row of
+  the supported-combinations page (weekly in CI, about 80 s).
 - **Distributed algorithms:** run the core gate and the full MPI suite at
   2, 4, and 8 ranks for changes to decomposition, communication, ownership,
   distributed solves, folds, or AMR synchronization.
@@ -139,7 +142,8 @@ The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.
 It exercises rank-dependent block sizes and process-grid shapes.
 
 For the full gate, replace the two MPI commands with full-suite runs at
-2, 4, and 8 ranks, and add both performance audits. Use the full gate for
+2, 4, and 8 ranks, and add both performance audits and
+`test/capability_matrix.jl`. Use the full gate for
 broad numerical refactors, release validation, or uncertain impact.
 Affected extension and hardware checks remain additional requirements.
 

@@ -6,10 +6,10 @@ CurrentModule = CompactLES
 
 This page lists the configurations that [`setup`](@ref) and the low-level
 [`Solver`](@ref) constructor accept, and the error each rejected combination
-raises. The tables follow the checks in the code, and the serial test suite
-builds every accepted row at a small size, advances it a few steps, and
-asserts every listed rejection, so a change to a setup check that this page
-does not follow fails the suite.
+raises. The tables follow the checks in the code. The serial test suite
+asserts every listed rejection, and a weekly test builds every accepted row
+at a small size and advances it a few steps, so a change to a setup check
+that this page does not follow fails one of the two.
 
 "Device" means a [`DeviceBackend`](@ref) wrapping a KernelAbstractions
 backend. The test suite runs the device path on the KernelAbstractions CPU
