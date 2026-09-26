@@ -54,8 +54,7 @@ common = (
 numerics = Numerics(; n_global = (root_nodes, 1, 1), amr, common...)
 solver, states = setup(problem, numerics)
 initial_cover = level_regions(solver, 1)
-refresh_primitives!(solver, states)
-initial_mass = volume_integral(solver, [copy(ps.rho) for (ps, _) in eachpatch(solver, states)])
+initial_mass = volume_integral(solver, states, :rho)
 
 # There are two levels: the root covers the whole domain, and the refined
 # level has three times its spatial resolution. `subcycle = true` advances
@@ -104,19 +103,16 @@ run!(fine, Qfine; tfinal, nmax = 4000)
 # ## Read the composite solution
 #
 # Pass the entire state vector to diagnostics. Selecting `states[1]` would
-# omit the fine solution. Refresh the primitive fields, then give
-# [`plane_profile`](@ref) one density array per local patch. It combines level
-# contributions at root-grid stations, so this plot compares profiles on a
-# common sampling grid. Sample the uniform fine solution at every third node
-# for the same comparison. The separate mesh plot shows the fine nodes that
-# this diagnostic sampling leaves out. All ranks must enter the profile and
-# integral reductions.
+# omit the fine solution. [`line_profile`](@ref) and [`volume_integral`](@ref)
+# take the state vector and a field name, refresh the primitive fields on
+# every patch, and combine the levels. The profile is sampled at the root-grid
+# stations, so this plot compares profiles on a common sampling grid. Sample
+# the uniform fine solution at every third node for the same comparison. The
+# separate mesh plot shows the fine nodes that this sampling leaves out. All
+# ranks must enter the profile and integral reductions.
 
-refresh_primitives!(solver, states)
-density_fields = [copy(ps.rho) for (ps, _) in eachpatch(solver, states)]
-x = profile_coordinate(solver, 1)
-rho = plane_profile(solver, density_fields, 1)
-final_mass = volume_integral(solver, density_fields)
+x, rho = line_profile(solver, states, :rho)
+final_mass = volume_integral(solver, states, :rho)
 relative_mass_change = (final_mass - initial_mass) / initial_mass
 exact = density.(x, tfinal)
 _, rho_coarse = line_profile(coarse, Qcoarse, :rho)

@@ -398,14 +398,9 @@ filter time-scaling with N1.
   **Gate:** per extension, the refined-versus-uniform convergence rows of
   `test/convergence.jl`.
 
-- [ ] **A14 — Discretely balanced hydrostatic initial states.**
-  A Rayleigh–Taylor start under `ConstantBodyForce` needs a density and pressure
-  profile in discrete balance with the solver's own derivative operator, per
-  region of a `Layers` initial condition, or the first steps launch acoustic
-  waves of order h⁶ g L. Provide a constructor integrating the balance on the
-  grid (it needs `h`, which `Layers` already receives).
-  **Gate:** a stratified two-fluid column that stays at rest to round-off over
-  many acoustic times.
+- [x] **A14** — `Hydrostatic` sets the pressure of an initial condition in
+  discrete balance with the run's derivative operator, and an unfiltered
+  two-fluid column stays at rest to round-off (commit `acfe5cb`).
 
 - [ ] **A15 — Composite faces: different conditions over parts of one face.**
   A face takes one condition, so neither a jet through an orifice in a wall nor

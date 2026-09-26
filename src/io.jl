@@ -637,9 +637,10 @@ const VTK_BYTE_ORDER = Base.ENDIAN_BOM == 0x04030201 ? "LittleEndian" : "BigEndi
 # dimension leaves a tensor-product grid.
 _curvilinear(solver::SolverLike) = _curvilinear(solver, solver.metric)
 _curvilinear(solver::SolverLike, ::CartesianMetric) = false
-_curvilinear(solver::SolverLike, ::CylindricalMetric) = solver.decomp.active[2]
+# Read from the whole-grid extents, which a multi-patch solver also carries.
+_curvilinear(solver::SolverLike, ::CylindricalMetric) = solver.n_global[2] > 1
 _curvilinear(solver::SolverLike, ::SphericalMetric) =
-    solver.decomp.active[2] || solver.decomp.active[3]
+    solver.n_global[2] > 1 || solver.n_global[3] > 1
 
 """
 Extension of the container `save_vtk` will write for this solver: the

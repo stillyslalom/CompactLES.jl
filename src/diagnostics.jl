@@ -423,15 +423,7 @@ configuration) and returns the same vector on every rank. On a refined solver
 the stations are the root's.
 """
 function profile_coordinate(solver::SolverLike, d::Int)
-    if _composite(solver)
-        origin = getfield(solver, :origin)[d]
-        shift = getfield(solver, :coord_shift)[d]
-        h = getfield(solver, :h)[d]
-        stretch = getfield(solver, :stretch)[d]
-        return Float64[stretch === nothing ? origin + shift + (g - 1) * h :
-                       stretch.x(origin + shift + (g - 1) * h)
-                       for g in 1:solver.n_global[d]]
-    end
+    _composite(solver) && return _root_coordinates(solver, d)
     decomp = solver.decomp
     loc = Float64[xcoord(solver, d, i) for i in 1:decomp.n_local[d]]
     decomp.sub_size[d] == 1 && return loc

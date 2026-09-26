@@ -142,7 +142,9 @@ end
     quiet = (s, q) -> nothing
     watch = (s, q) -> (dissipation_rate(s, q);
                        save_vtk(s, q, joinpath(dir, "patched");
-                                fields=(:rho, :beta_art)); nothing)
+                                fields=(:rho, :beta_art));
+                       line_sample(s, q, :mu_art); field_slice(s, q, :sensor);
+                       nothing)
     rl_identical(rl_history(build, quiet; steps=steps),
                  rl_history(build, watch; steps=steps))
 end
@@ -185,7 +187,9 @@ end
     threshold = rl_sensor_number(cal) / 2
     @test threshold > 0
     quiet = (s, q) -> nothing
-    watch = (s, q) -> (dissipation_rate(s, q); nothing)
+    watch = (s, q) -> (dissipation_rate(s, q); line_sample(s, q, :beta_art);
+                       field_slice(s, q, :sensor); line_profile(s, q, :rho);
+                       volume_integral(s, q, :kappa_art); nothing)
     base = rl_history(() -> build(threshold), quiet; steps=steps, refined=true)
     seen = rl_history(() -> build(threshold), watch; steps=steps, refined=true)
     rl_identical(base, seen)

@@ -138,11 +138,12 @@ internal [`scalar_field`](@ref) catalog, the same catalog `save_vtk` uses, and r
 build on it: a profile is a collective, area-weighted average over the planes
 transverse to one axis, a sample is the field on one grid line of that axis
 (the general replacement for a hand-written sampling loop), and a slice is a
-rank-0 gather of a transverse plane. [`cartesian_slice`](@ref) resamples a
-curvilinear slice onto a
-Cartesian raster, and [`revolve_profile`](@ref) revolves a collapsed radial
-profile into a disk. See the tutorials for worked cylindrical and spherical
-initializations.
+rank-0 gather of a transverse plane. On a patched or refined solver each
+takes the state vector in place of `Q`, and a sample or a slice is taken at
+root-grid nodes from the finest level holding each node.
+[`cartesian_slice`](@ref) resamples a curvilinear slice onto a Cartesian raster,
+and [`revolve_profile`](@ref) revolves a collapsed radial profile into a disk.
+See the tutorials for worked cylindrical and spherical initializations.
 
 [`field_snapshot`](@ref) gathers every interior node of the requested fields,
 without halo padding, to rank 0 as a [`FieldSnapshot`](@ref): the coordinate

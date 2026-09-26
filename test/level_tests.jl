@@ -1358,6 +1358,128 @@ end
     @test abs(volume_integral(sa, fields(sa, states, (x, y, z) -> x)) - 0.5) < 1e-13
 end
 
+@testset "composite samples: line_sample and field_slice take the finest level" begin
+    # A root node takes the value of the finest level holding it. The
+    # reference below finds the holders by coordinate, independently of the
+    # node-index arithmetic the implementation uses: per root node on the
+    # line, the mean over the patches of the highest level with a node at
+    # that position.
+    wall = (SlipWallBC(), SlipWallBC())
+    N = 24
+    function explicit_line(s, fs, dim, ga, gb)
+        a, b = CL._plane_dims(dim)
+        xs = ntuple(d -> profile_coordinate(s, d), 3)
+        n = s.n_global[dim]
+        best, sums, cnt = fill(-1, n), zeros(n), zeros(n)
+        for (li, p) in enumerate(s.patches)
+            ps = PatchSolver(s, p)
+            d = ps.decomp
+            for k in 1:d.n_local[3], j in 1:d.n_local[2], i in 1:d.n_local[1]
+                x = (xcoord(ps, 1, i), xcoord(ps, 2, j), xcoord(ps, 3, k))
+                abs(x[a] - xs[a][ga]) < 1e-9 && abs(x[b] - xs[b][gb]) < 1e-9 ||
+                    continue
+                g = findfirst(xg -> abs(xg - x[dim]) < 1e-9, xs[dim])
+                g === nothing && continue
+                if p.level > best[g]
+                    best[g], sums[g], cnt[g] = p.level, 0.0, 0.0
+                end
+                p.level == best[g] || continue
+                sums[g] += fs[li][gidx(ps, i, j, k)]
+                cnt[g] += 1
+            end
+        end
+        return sums ./ cnt
+    end
+    # Scaling a patch's whole state by 1 + level makes the density a marker
+    # of the level a value came from.
+    function mark_levels!(s, states)
+        for (ps, Q) in CL.eachpatch(s, states)
+            parent(Q) .*= 1 + ps.patch.level
+        end
+    end
+    lin(x, y, z) = Prim(u=(0.1x^2, 0.1y, 0), p=1.0, rho=1 + x + 2y + 3z)
+    r1 = BlockRegion((6, 6, 6), (8, 8, 8))
+    layouts = ((refine=r1, tile=0, patch_grid=(1, 1, 1)),
+               (refine=r1, tile=4, patch_grid=(1, 1, 1)),
+               (refine=[r1, BlockRegion((24, 24, 24), (8, 8, 8))], tile=0,
+                patch_grid=(1, 1, 1)),
+               (refine=nothing, tile=0, patch_grid=(2, 1, 1)))
+    for lay in layouts
+        s = Solver(n_global=(N, N, N), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(wall, wall, wall), refine=lay.refine, tile=lay.tile,
+                   patch_grid=lay.patch_grid)
+        states = allocate_state(s)
+        initialize!(s, states, lin)
+        # A linear field is the same number on every level.
+        x, v = line_sample(s, states, :rho; dim=1, index=(10, 12))
+        xs = profile_coordinate(s, 2)
+        @test x == profile_coordinate(s, 1)
+        @test maximum(abs.(v .- (1 .+ x .+ 2xs[10] .+ 3xs[12]))) < 1e-13
+        x1, x2, plane = field_slice(s, states, :rho; normal=2, index=12)
+        @test size(plane) == (N, N)
+        @test maximum(abs(plane[i, k] - (1 + x1[i] + 2xs[12] + 3x2[k]))
+                      for i in 1:N, k in 1:N) < 1e-13
+        # `at` snaps to the nearest root node.
+        _, snapped = line_sample(s, states, :rho; dim=3,
+                                 at=(x[10] + 0.01, xs[11] - 0.01))
+        @test snapped == line_sample(s, states, :rho; dim=3, index=(10, 11))[2]
+        # A derived field agrees with the explicit per-patch arrays.
+        fs = field_array(s, states, :divergence)
+        _, dv = line_sample(s, states, :divergence; dim=2, index=(11, 10))
+        @test dv == explicit_line(s, fs, 2, 11, 10)
+        _, v0 = line_sample(s, states, :rho; dim=1, index=(10, 10))
+        mark_levels!(s, states)
+        fs = field_array(s, states, :rho)
+        for (dim, ga, gb) in ((1, 10, 12), (2, 11, 10), (3, 8, 13))
+            _, v = line_sample(s, states, :rho; dim=dim, index=(ga, gb))
+            @test v == explicit_line(s, fs, dim, ga, gb)
+        end
+        # The line through (10, 10) meets the finest level of every layout.
+        top = maximum(p.level for p in s.patches)
+        _, v = line_sample(s, states, :rho; dim=1, index=(10, 10))
+        ratio = v ./ v0
+        @test maximum(abs.(ratio .- round.(ratio))) < 1e-14
+        @test maximum(ratio) ≈ 1 + top && minimum(ratio) ≈ 1
+        @test_throws ArgumentError line_sample(s, states[1], :rho)
+        @test_throws ArgumentError field_slice(s, states[1], :rho)
+        @test_throws ArgumentError line_sample(s, states, :rho; index=(1, N + 1))
+        @test_throws ArgumentError field_slice(s, states, :rho; index=0)
+    end
+    # One patch: the state-vector form is the single-state one.
+    s = Solver(n_global=(N, 12, 1), L_domain=(1.0, 1.0, 1.0),
+               bcs=(wall, wall, (PeriodicBC(), PeriodicBC())))
+    Q = allocate_state(s)
+    initialize!(s, Q, lin)
+    @test line_sample(s, [Q], :divergence; dim=2, index=(5, 1)) ==
+          line_sample(s, Q, :divergence; dim=2, index=(5, 1))
+    @test field_slice(s, [Q], :rho) == field_slice(s, Q, :rho)
+    # After regrids: the tiles have moved, and a marked state still reads the
+    # finest level at every root node the level-1 tiles hold.
+    per = (PeriodicBC(), PeriodicBC())
+    sa = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                bcs=(wall, per, per), cfl=0.2, subcycle=true,
+                regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
+                tile=8)
+    states = allocate_state(sa)
+    initialize!(sa, states, (x, y, z) -> x < 0.5 ?
+        Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+    before = level_regions(sa, 1)
+    run!(sa, states; tfinal=1.0, nmax=20)
+    @test level_regions(sa, 1) != before
+    fs = field_array(sa, states, :rho)
+    x, v = line_sample(sa, states, :rho)
+    @test v == explicit_line(sa, fs, 1, 1, 1)
+    held = falses(201)
+    for r in level_regions(sa, 1)
+        held[r.offset[1]+1:r.offset[1]+r.extent[1]] .= true
+    end
+    mark_levels!(sa, states)
+    _, v2 = line_sample(sa, states, :rho)
+    @test v2[held] == 2 .* v[held] && v2[.!held] == v[.!held]
+    _, _, plane = field_slice(sa, states, :rho; normal=3)
+    @test vec(plane) == v2
+end
+
 @testset "covered masks: refined TGV energy history matches the single level" begin
     # Taylor–Green at 24³ with an 8³ region refined off-center, where the
     # kinetic energy density is well above its mean, so a coarse node under

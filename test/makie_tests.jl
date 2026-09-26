@@ -108,6 +108,32 @@ end
     @test isapprox(count(isfinite, disk) / length(disk), pi / 4; atol=0.03)
 end
 
+@testset "Makie extension: refined state vector" begin
+    # The composite forms: `profileplot` and `fieldheatmap` take the state
+    # vector of a refined run and draw the root-grid profile and plane.
+    prob = Problem(name="refined", eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
+                   domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
+                   ic=(x, y, z) -> Prim(p=1.0, rho=1.0 + 0.5sin(2pi * x) * cos(2pi * y)))
+    num = Numerics(n_global=(36, 24, 1), art=ArtParams(enabled=false),
+                   filter_interval=0, refine=BlockRegion((10, 6, 0), (10, 8, 1)))
+    solver, states = setup(prob, num)
+    @test states isa Vector
+    fig, ax, plt = profileplot(solver, states, :rho)
+    @test plt isa Makie.Lines
+    slice = field_slice(solver, states, :rho)
+    heat = fieldheatmap(solver, states, :rho)
+    if MPI.Comm_rank(MPI.COMM_WORLD) == 0
+        x1, x2, vals = slice
+        @test size(vals) == (36, 24)
+        @test maximum(abs(vals[i, j] - (1.0 + 0.5sin(2pi * x1[i]) * cos(2pi * x2[j])))
+                      for i in 1:36, j in 1:24) < 1e-12
+        @test heat[3] isa Makie.Heatmap
+    else
+        @test slice === nothing && heat === nothing
+    end
+end
+
 # Building a plot is a rank-0 / serial concern: `profileplot` returns a replicated
 # figure and `fieldheatmap` gathers to rank 0. The curvilinear solver here also
 # resolves θ, which does not decompose cleanly at small extents, so this runs

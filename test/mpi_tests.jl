@@ -2613,7 +2613,74 @@ function test_covered_masks()
         label == "small box" &&
             check("small box: ranks outside the child's subset at np > 1",
                   abs(outside - (np - 1)), 0.5)
+        composite_samples(label, solver, states)
     end
+    # The same after regrids have moved the tiles of a one-dimensional run.
+    per = (PeriodicBC(), PeriodicBC())
+    solver = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                    bcs=(wall, per, per), cfl=0.2, subcycle=true, regrid_interval=5,
+                    refine=BlockRegion((85, 0, 0), (31, 1, 1)), tile=8)
+    states = allocate_state(solver)
+    initialize!(solver, states, (x, y, z) -> x < 0.5 ?
+        Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+    before = level_regions(solver, 1)
+    run!(solver, states; tfinal=1.0, nmax=20)
+    check("regridded: the tiles moved", Float64(level_regions(solver, 1) == before), 0.5)
+    composite_samples("regridded", solver, states)
+end
+
+# The composite `line_sample` and `field_slice` of a hierarchy: a linear density
+# comes back exactly on every rank, and a state scaled by 1 + level on each patch
+# reads the finest level holding each root node, found from the level regions.
+function composite_samples(label, solver, states)
+    N = solver.n_global
+    spread(x) = MPI.Allreduce(Float64(x), max, comm) -
+                MPI.Allreduce(Float64(x), min, comm)
+    lin(x, y, z) = Prim(u=(0, 0, 0), p=1.0, rho=1 + x + 2y + 3z)
+    initialize!(solver, states, lin)
+    at = ntuple(d -> min(10, N[d]), 3)
+    xs = ntuple(d -> profile_coordinate(solver, d), 3)
+    x, v = line_sample(solver, states, :rho; dim=1, index=(at[2], at[3]))
+    check("$label: composite line sample exact",
+          gmax(maximum(abs.(v .- (1 .+ x .+ 2xs[2][at[2]] .+ 3xs[3][at[3]])))), 1e-13)
+    check("$label: every rank samples the same line", spread(sum(v)), 1e-15)
+    slice = field_slice(solver, states, :rho; normal=3, index=at[3])
+    err = 0.0
+    if MPI.Comm_rank(comm) == 0
+        x1, x2, plane = slice
+        err = maximum(abs(plane[i, j] - (1 + x1[i] + 2x2[j] + 3xs[3][at[3]]))
+                      for i in 1:N[1], j in 1:N[2])
+    else
+        err = Float64(slice !== nothing)
+    end
+    check("$label: composite slice exact on rank 0, nothing elsewhere", gmax(err), 1e-13)
+    # Level ℓ holds root node g when its node (g − 1)·3^(ℓ−1) + 1 in the parent
+    # level's node space lies in one of its regions.
+    function finest(g)
+        top = 0
+        for l in 1:CL.nlevels(solver)-1
+            m = (g .- 1) .* 3^(l - 1) .+ 1
+            any(r -> all(r.offset[d] < m[d] <= r.offset[d] + r.extent[d] for d in 1:3),
+                level_regions(solver, l)) && (top = l)
+        end
+        return top
+    end
+    for (ps, Q) in CL.eachpatch(solver, states)
+        parent(Q) .*= 1 + ps.patch.level
+    end
+    _, marked = line_sample(solver, states, :rho; dim=1, index=(at[2], at[3]))
+    expect = [1 + finest((g, at[2], at[3])) for g in 1:N[1]]
+    check("$label: each root node reads the finest level holding it",
+          gmax(maximum(abs.(marked ./ v .- expect))), 1e-14)
+    threw = try
+        line_sample(solver, states, :rho; index=(0, 1))
+        false
+    catch e
+        e isa ArgumentError
+    end
+    check("$label: an index out of range throws on every rank",
+          MPI.Allreduce(Int(!threw), +, comm), 0.5)
+    return nothing
 end
 
 # ---------------------------------------------------------------------------

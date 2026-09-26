@@ -64,7 +64,10 @@ end
 The multi-patch form, for the state vector of a refined or patched run: one
 refreshed copy of the named field per patch this rank holds, aligned with
 `solver.patches`. This is the form the composite diagnostics take
-([`plane_profile`](@ref), [`volume_integral`](@ref)). Every rank must call it.
+([`plane_profile`](@ref), [`volume_integral`](@ref)), and the state-vector forms
+of [`line_profile`](@ref), [`line_sample`](@ref) and [`field_slice`](@ref) call
+it. Every rank must call it. The primitives are refreshed from `states`, and the
+artificial coefficient arrays are restored as in the single-state form.
 """
 function field_array(solver::Solver, states::Vector{<:ConservedState}, name::Symbol;
                      species::Int=1)
@@ -158,7 +161,8 @@ snapped to the nearest node of that dimension; passing both throws.
 The value is the field at the node, in the solver's element type, and the
 coordinate comes from [`global_xcoord`](@ref). Every rank must call this
 function, including one whose block holds no part of the line; see
-[`field_array`](@ref).
+[`field_array`](@ref). A refined or patched solver takes the state vector
+instead of `Q`, and this form throws `ArgumentError` on one.
 """
 function line_sample(solver::Solver, Q, name::Symbol; dim::Int=1,
                      index::Union{Nothing,NTuple{2,Int}}=nothing,
@@ -166,6 +170,7 @@ function line_sample(solver::Solver, Q, name::Symbol; dim::Int=1,
     1 <= dim <= 3 || throw(ArgumentError("line_sample: dim must be 1, 2, or 3"))
     index === nothing || at === nothing ||
         throw(ArgumentError("line_sample: give index or at, not both"))
+    _composite(solver) && throw(_state_vector_error("line_sample"))
     decomp = solver.decomp
     a, b = _plane_dims(dim)
     if at !== nothing
@@ -199,6 +204,45 @@ function line_sample(solver::Solver, Q, name::Symbol; dim::Int=1,
     return coord, line
 end
 
+"""
+    line_sample(solver, states::Vector, name; dim = 1, index = (1, 1), at = nothing,
+                species = 1) -> (coord, value)
+
+The composite form, for the state vector of a refined or patched run. The line
+runs through the root grid's nodes: `index` and `at` are root global indices
+and coordinates, and `coord` is the root coordinate. Each value is the field
+on the finest level that holds the root node, where a patch holds the nodes of
+its own boundary planes. Where several patches of that level hold the node, on
+a shared plane or a periodic seam, the value is their mean. The fine nodes
+between root nodes are not sampled. Every rank of `solver.comm` must
+call this function, including a rank that holds no patch of a refined level.
+"""
+function line_sample(solver::Solver, states::Vector{<:ConservedState}, name::Symbol;
+                     dim::Int=1, index::Union{Nothing,NTuple{2,Int}}=nothing,
+                     at::Union{Nothing,NTuple{2,Real}}=nothing, species::Int=1)
+    1 <= dim <= 3 || throw(ArgumentError("line_sample: dim must be 1, 2, or 3"))
+    index === nothing || at === nothing ||
+        throw(ArgumentError("line_sample: give index or at, not both"))
+    n_global = solver.n_global
+    a, b = _plane_dims(dim)
+    if at !== nothing
+        ga = _nearest_index(_root_coordinates(solver, a), at[1])
+        gb = _nearest_index(_root_coordinates(solver, b), at[2])
+    else
+        ga, gb = index === nothing ? (1, 1) : index
+    end
+    for (d, g) in ((a, ga), (b, gb))
+        1 <= g <= n_global[d] ||
+            throw(ArgumentError("line_sample: index $g out of range " *
+                                "1:$(n_global[d]) along dimension $d"))
+    end
+    fs = field_array(solver, states, name; species=species)
+    fixed = ntuple(d -> d == a ? ga : d == b ? gb : 0, 3)
+    acc = MPI.Allreduce(_composite_samples(solver, fs, fixed), +, solver.comm)
+    T = eltype(getfield(solver, :h))
+    return _root_coordinates(solver, dim), T.(vec(_finest_values(acc)))
+end
+
 # The global index along `d` whose coordinate is nearest `x`; the first of a
 # tie. Coordinates are monotone in the index, stretched or not, so a linear
 # scan of n_global[d] values is exact and cheap.
@@ -209,6 +253,93 @@ function _nearest_global_index(solver::Solver, d::Int, x::Real)
         e < dist && ((best, dist) = (g, e))
     end
     return best
+end
+
+# The same rule over a coordinate vector.
+function _nearest_index(xs::AbstractVector, x::Real)
+    best, dist = 1, Inf
+    for (g, xg) in enumerate(xs)
+        e = abs(xg - x)
+        e < dist && ((best, dist) = (g, e))
+    end
+    return best
+end
+
+_state_vector_error(name) =
+    ArgumentError("$name: this solver holds several patches or levels; pass the " *
+                  "state vector allocate_state returns")
+
+# --- Composite point samples -------------------------------------------------
+#
+# A point sample of a refined or patched run is taken at root nodes, the
+# stations the composite profiles use. A level-ℓ node m (that level's node
+# space) lies on root node (m − 1) / 3^ℓ + 1 when 3^ℓ divides m − 1, wrapped
+# onto the root's range at a periodic seam. Per root node and level the held
+# values are summed and counted on this rank; after the reduction the value
+# is the mean over the finest level with a nonzero count. Choosing by level
+# rather than by the covered masks keeps a child's face nodes, which the
+# parent's mask marks as partly covered, on the child's value, and needs no
+# case for the corner and edge nodes of a tile nest.
+
+# Sums and counts, as a (2, nlevels, m1, m2, m3) array: `fixed[d]` is the root
+# index the sample is taken at along `d`, or 0 for every root node along `d`
+# (then m_d = n_global[d], otherwise 1).
+function _composite_samples(solver::Solver, fs::Vector, fixed::NTuple{3,Int})
+    n_global = solver.n_global
+    m = ntuple(d -> fixed[d] == 0 ? n_global[d] : 1, 3)
+    acc = zeros(Float64, 2, nlevels(solver), m...)
+    for (li, p) in enumerate(getfield(solver, :patches))
+        decomp = p.decomp
+        stride = 3^p.level
+        # Per dimension, the (local interior index, output index) pairs.
+        picks = ntuple(3) do d
+            out = Tuple{Int,Int}[]
+            for il in 1:decomp.n_local[d]
+                node = p.region.offset[d] + decomp.offset[d] + il
+                (node - 1) % stride == 0 || continue
+                g = mod1((node - 1) ÷ stride + 1, n_global[d])
+                if fixed[d] == 0
+                    push!(out, (il, g))
+                elseif g == fixed[d]
+                    push!(out, (il, 1))
+                end
+            end
+            out
+        end
+        _add_samples!(acc, fs[li], p.level + 1, decomp.n_halo_d, picks...)
+    end
+    return acc
+end
+
+function _add_samples!(acc, f, level, o, p1, p2, p3)
+    @inbounds for (k, g3) in p3, (j, g2) in p2, (i, g1) in p1
+        acc[1, level, g1, g2, g3] += f[i + o[1], j + o[2], k + o[3]]
+        acc[2, level, g1, g2, g3] += 1
+    end
+    return acc
+end
+
+# The reduced samples: per node, the mean over the finest level holding it.
+function _finest_values(acc::Array{Float64})
+    out = Array{Float64}(undef, size(acc)[3:end])
+    for I in CartesianIndices(out)
+        level = findlast(l -> acc[2, l, I] > 0, 1:size(acc, 2))
+        level === nothing &&
+            error("composite sample: no patch holds root node $(Tuple(I))")
+        out[I] = acc[1, level, I] / acc[2, level, I]
+    end
+    return out
+end
+
+# Root-grid coordinate of every node along `d`, local to each rank.
+_root_coordinates(solver::Solver, d::Int) =
+    Float64[_root_xcoord(solver, d, g) for g in 1:solver.n_global[d]]
+
+function _root_xcoord(solver::Solver, d::Int, g::Int)
+    ξ = getfield(solver, :origin)[d] + getfield(solver, :coord_shift)[d] +
+        (g - 1) * getfield(solver, :h)[d]
+    stretch = getfield(solver, :stretch)[d]
+    return stretch === nothing ? ξ : stretch.x(ξ)
 end
 
 # --- Two-dimensional slices -------------------------------------------------
@@ -233,11 +364,14 @@ onto a Cartesian grid for a heatmap.
 that range throws `ArgumentError`, as does a `normal` outside `1:3`.
 
 Every rank must call this function, including a rank whose block holds no part
-of the requested plane; see [`field_array`](@ref).
+of the requested plane; see [`field_array`](@ref). A refined or patched solver
+takes the state vector instead of `Q`, and this form throws `ArgumentError` on
+one.
 """
 function field_slice(solver::Solver, Q, name::Symbol; normal::Int=3, index::Int=1,
                      species::Int=1)
     1 <= normal <= 3 || throw(ArgumentError("field_slice: normal must be 1, 2, or 3"))
+    _composite(solver) && throw(_state_vector_error("field_slice"))
     decomp = solver.decomp
     ng = decomp.n_global[normal]
     1 <= index <= ng ||
@@ -268,6 +402,34 @@ function field_slice(solver::Solver, Q, name::Symbol; normal::Int=3, index::Int=
     x2 = [global_xcoord(solver, b, g) for g in 1:nb]
     MPI.Comm_rank(decomp.comm) == 0 || return nothing
     return x1, x2, plane
+end
+
+"""
+    field_slice(solver, states::Vector, name; normal = 3, index = 1, species = 1)
+        -> (x1, x2, values) or nothing
+
+The composite form, for the state vector of a refined or patched run. The
+plane is the root grid's plane at root global index `index`, and each value is
+taken as in the composite [`line_sample`](@ref): the field on the finest level
+that holds the root node, averaged where several patches of that level hold
+it. The result is on rank 0 and `nothing` on every other rank. Every rank of
+`solver.comm` must call this function.
+"""
+function field_slice(solver::Solver, states::Vector{<:ConservedState}, name::Symbol;
+                     normal::Int=3, index::Int=1, species::Int=1)
+    1 <= normal <= 3 || throw(ArgumentError("field_slice: normal must be 1, 2, or 3"))
+    n_global = solver.n_global
+    ng = n_global[normal]
+    1 <= index <= ng ||
+        throw(ArgumentError("field_slice: index $index out of range 1:$ng along " *
+                            "dimension $normal"))
+    fs = field_array(solver, states, name; species=species)
+    fixed = ntuple(d -> d == normal ? index : 0, 3)
+    acc = MPI.Reduce(_composite_samples(solver, fs, fixed), +, solver.comm; root=0)
+    a, b = _plane_dims(normal)
+    MPI.Comm_rank(solver.comm) == 0 || return nothing
+    plane = reshape(_finest_values(acc), n_global[a], n_global[b])
+    return _root_coordinates(solver, a), _root_coordinates(solver, b), plane
 end
 
 # The two in-plane dimensions transverse to `normal`, in increasing order.
@@ -571,10 +733,20 @@ function cartesian_slice(solver::Solver, dims, x1, x2, values; period=:auto, kwa
     if period === :auto
         # The azimuth of a polar (r, θ) or (θ, φ) plane closes the raster when
         # that dimension is decomposed as periodic over its full extent.
-        period = (solver.decomp.periodic[b] && solver.decomp.active[b]) ?
-                 solver.decomp.n_global[b] * solver.h[b] : nothing
+        period = (_root_periodic(solver, b) && solver.n_global[b] > 1) ?
+                 solver.n_global[b] * getfield(solver, :h)[b] : nothing
     end
     return cartesian_slice(solver.metric, dims, x1, x2, values; period=period, kwargs...)
+end
+
+# Whether the root grid is periodic along `d`. A slab layout (`patch_grid`)
+# splits one periodic dimension into patches that are not periodic on their
+# own; its last slab then reaches the wrapped node n_global[d] + 1.
+function _root_periodic(solver::Solver, d::Int)
+    getfield(solver, :patches)[1].decomp.periodic[d] && return true
+    nlevels(solver) == 1 || return false
+    return any(r -> r.offset[d] + r.extent[d] > solver.n_global[d],
+               getfield(solver, :patch_regions))
 end
 
 """
@@ -704,7 +876,8 @@ builds a figure with axis labels drawn from the metric (`r`/`θ`/`z` for
 cylindrical, `r`/`θ`/`φ` for spherical, `x`/`y`/`z` for Cartesian);
 `profileplot!` draws into an existing axis. On `profileplot`, `figure` and `axis`
 are keyword collections forwarded to Makie's `Figure` and `Axis`. Extra keyword
-arguments pass through to Makie's `lines!`.
+arguments pass through to Makie's `lines!`. For a refined or patched run, pass
+the state vector as `Q`; the profile is then the composite `line_profile`.
 
 Requires a Makie backend (see [`makie_available`](@ref)). Extraction through
 [`field_array`](@ref) requires every rank to call this function. The profile is
@@ -729,6 +902,8 @@ a resolved angular dimension the plane is resampled onto a Cartesian raster with
 axes are used directly. On `fieldheatmap`, `figure` and `axis` are keyword
 collections forwarded to Makie's `Figure` and `Axis`, and `colorbar = false`
 omits the colorbar. Extra keyword arguments pass through to Makie's `heatmap!`.
+For a refined or patched run, pass the state vector as `Q`; the plane is then
+the composite `field_slice` on the root grid's nodes.
 
 Requires a Makie backend (see [`makie_available`](@ref)). Every rank must call
 this function. The plot is produced on rank 0, and both forms return `nothing`

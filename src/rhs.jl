@@ -113,7 +113,8 @@ end
 @noinline _patch_prop_error(name::Symbol) =
     error("property `$name` is per-patch state and this solver holds several " *
           "patches (a refined or patched run). Pass the state vector to a " *
-          "diagnostic that takes it (line_profile, field_array, mix_width, " *
+          "diagnostic that takes it (line_profile, line_sample, field_slice, " *
+          "field_array, mix_width, " *
           "save_vtk), or iterate `for (ps, Q) in eachpatch(solver, states)`, " *
           "where `ps.$name` is one patch's array")
 
