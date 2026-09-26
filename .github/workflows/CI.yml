@@ -52,11 +52,18 @@ jobs:
       # image buildpkg made (see test/runtests.jl). julia-runtest has no
       # optimization input, so this is its Pkg.test call with the flag added;
       # Pkg.test keeps its own --check-bounds=yes.
+      #
+      # The extension suites skip where their weak dependency does not load,
+      # and a skip is recorded as a broken test, not a pass. HDF5 is in the
+      # test target, so this job expects that suite to run: `require=hdf5`
+      # fails the job on the skip instead. Makie is expected to skip here
+      # (CairoMakie is not in the test target) and runs in the docs job.
       - name: Run the serial suite at -O1
         shell: julia --project=. --color=yes {0}
         run: |
           using Pkg
-          Pkg.test(; coverage=false, julia_args=["-O1"])
+          Pkg.test(; coverage=false, julia_args=["-O1"],
+                   test_args=["require=hdf5"])
 
   numerics:
     name: Convergence and MPI
@@ -170,6 +177,19 @@ jobs:
           using Pkg
           Pkg.develop(PackageSpec(path=pwd()))
           Pkg.instantiate()
+      # The Makie extension is loadable only from this environment (CairoMakie
+      # is not in the package's test target, so the serial job records its
+      # suite as skipped). Serially, and at two ranks for the
+      # decomposition-independent profile.
+      - name: Run the Makie extension tests
+        shell: julia --project=docs --color=yes {0}
+        run: |
+          using MPI
+          julia = Base.julia_cmd()
+          run(`$julia --project=docs test/makie_tests.jl`)
+          MPI.mpiexec() do mpiexec
+              run(`$mpiexec -n 2 $julia --project=docs -t 1 test/makie_tests.jl`)
+          end
       - uses: julia-actions/julia-docdeploy@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

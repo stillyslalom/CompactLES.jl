@@ -177,7 +177,10 @@ after.
 
 `test/hdf5_tests.jl` covers the HDF5 extension and is skipped by the gate above:
 HDF5 is a `[weakdeps]` entry, so it is not loadable from the package
-environment. `runtests.jl` prints when it skips. To run it, use an environment
+environment. `runtests.jl` records a skipped extension suite as a broken test
+and prints why; the test argument `require=hdf5,makie` turns the skip of a
+named suite into a failure, which is how CI's serial job asserts that the
+HDF5 suite ran. To run it, use an environment
 carrying both CompactLES and HDF5, serially and under `mpiexec`; the
 decomposition-independent restart writes on one process grid and reads on
 another, which np = 1 cannot exercise. `hdf5_parallel()` reports which write
@@ -191,7 +194,7 @@ CairoMakie is not, because resolving and precompiling it for two
 testsets is out of proportion to what they cover. **`Pkg.test` therefore never
 runs them.** The Makie extension is verified only from the docs environment,
 which carries CairoMakie, and under `mpiexec` for the
-decomposition-independent profile.
+decomposition-independent profile; CI's documentation job runs both.
 
 `test/convergence.jl` prints measured orders against regression guards baked
 into the file: C6 6.01, C8 8.00, C10 10.04, C6 wall closures 3.18

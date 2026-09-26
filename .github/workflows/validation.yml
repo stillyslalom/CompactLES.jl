@@ -1,0 +1,34 @@
+name: Validation
+
+# The shock-capturing battery (test/validation.jl) integrates each case for
+# thousands of steps, so it runs on a schedule and on request rather than on
+# every push. The cases and their guards are the ones the local core gate in
+# CLAUDE.md runs; a scheduled run catches a drift that no push job measured.
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  validation:
+    name: Shock-capturing validation battery
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: julia-actions/setup-julia@v3
+        with:
+          version: '1'
+          arch: x64
+      - uses: julia-actions/cache@v3
+      - name: Instantiate
+        shell: julia --project=. --color=yes {0}
+        run: |
+          using Pkg
+          Pkg.instantiate()
+      - uses: julia-actions/julia-buildpkg@v1
+      - name: Run the validation battery
+        run: julia --project=. --color=yes test/validation.jl

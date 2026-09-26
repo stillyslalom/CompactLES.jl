@@ -1011,3 +1011,41 @@ grid_time(grid::XNode) = parse(Float64, only(xml_find(grid, "Time")).attrs["Valu
     rank == 0 && rm(dir; recursive=true)
     MPI.Barrier(comm)
 end
+
+# A dump requesting an artificial coefficient rebuilds the coefficient arrays,
+# which `max_rate` reads for the next timestep, so the extension restores them
+# afterwards. test/runloop_tests.jl pins this for the VTK writer and the
+# diagnostics; this is the HDF5 writer's own path through
+# `preserving_artificial`.
+@testset "HDF5 extension: a dump leaves the next timestep unchanged" begin
+    comm = MPI.COMM_WORLD
+    np = MPI.Comm_size(comm)
+    rank = MPI.Comm_rank(comm)
+    dir = rank == 0 ? mktempdir() : ""
+    dir = MPI.bcast(dir, comm; root=0)
+    # A shock tube split along x; 72 points keep 9 per rank at np = 8.
+    N = 72
+    h = 1.0 / (N - 1)
+    per = (PeriodicBC(), PeriodicBC())
+    s = Solver(n_global=(N, 1, 1), L_domain=(1.0, h, h),
+               bcs=((SlipWallBC(), SlipWallBC()), per, per), cfl=0.15,
+               filter_interval=1, dims=(np, 1, 1))
+    Q = allocate_state(s)
+    initialize!(s, Q, (x, y, z) ->
+        x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                  Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+    run!(s, Q; tfinal=1e6, nmax=1)
+    dt_kept = CL.compute_dt(s, Q)
+    kept = map(copy, CL.art_arrays(s))
+    save_hdf5(s, Q, joinpath(dir, "art"); fields=(:rho, :beta_art, :sensor))
+    @test CL.compute_dt(s, Q) == dt_kept
+    @test all(a == b for (a, b) in zip(CL.art_arrays(s), kept))
+    @test MPI.Allreduce(maximum(s.beta_art), max, comm) > 0
+    # The recomputation the dump performed would otherwise have moved it.
+    CL.compute_primitives_and_gradients!(s, Q)
+    CL.compute_artificial!(s, Q)
+    @test CL.compute_dt(s, Q) != dt_kept
+    MPI.Barrier(comm)
+    rank == 0 && rm(dir; recursive=true)
+    MPI.Barrier(comm)
+end

@@ -3192,6 +3192,38 @@ end
     @test solver.T_ion[padded_index(solver, 3, 1, 1)] ≈ 1000.0 rtol = 1e-10
 end
 
+@testset "NASA-9: leaving the fitted range ends a run only under :missing" begin
+    # The per-point verdicts above, reached through run!, which validates the
+    # state entering the call under the solver's policy. He is fitted from
+    # 300 K, so a 250 K state is an extrapolation at every point.
+    ic = (x, y, z) -> Prim(Y=(0.3, 0.7), p=1e5, T_ion=250.0)
+    build(policy; kw...) = begin
+        s = mkslv(n_global=(12, 1, 1),
+                  eos=Nasa9Mixture(["He", "CO2"]; extrapolate=policy); kw...)
+        Qs = allocate_state(s)
+        initialize!(s, Qs, ic)
+        (s, Qs)
+    end
+    for policy in (:polynomial, :linear)
+        s, Qs = build(policy)
+        run!(s, Qs; tfinal=1.0, nmax=1)
+        r = state_report(s, Qs)
+        @test s.step == 1
+        @test (r.extrapolated, r.inadmissible) == (12, 0)
+        @test state_valid(r)
+    end
+    s, Qs = build(:missing)
+    err = try run!(s, Qs; tfinal=1.0, nmax=1); nothing catch e; e end
+    @test err isa SolverFailure && err.reason === :invalid_state
+    @test s.step == 0
+    s, Qs = build(:missing; control=StepControl(validity=:permissive))
+    @test_logs (:warn,) match_mode=:any run!(s, Qs; tfinal=1.0, nmax=1)
+    r = state_report(s, Qs)
+    @test s.step == 1
+    @test (r.extrapolated, r.inadmissible) == (12, 12)
+    @test state_valid(r) == false
+end
+
 @testset "NASA CEA reader: intervals, molar mass, and energy reference" begin
     he, co2 = read_nasa9(["He", "CO2"])
     @test (he.name, co2.name) == ("He", "CO2")
@@ -4710,20 +4742,32 @@ include("initial_states_tests.jl")
 include("turbulent_inflow_tests.jl")
 include("boundary_shorthand_tests.jl")
 
+# The extension suites run only where their weak dependency loads. A skip is
+# recorded as a broken test, so the summary tree shows it in its own column
+# rather than as a pass, and `require=hdf5,makie` (a test argument:
+# `Pkg.test(test_args=["require=hdf5"])`, or on the command line) turns the
+# skip of a named suite into a failure, for a job that expects the suite to
+# run.
+const SUITE_OPTS = script_args(ARGS, (require = "",))
+const REQUIRED_SUITES = Symbol.(filter(!isempty, split(SUITE_OPTS.require, ',')))
+
 # HDF5 is a weak dependency and is not loadable from the package environment
-# alone, so the extension tests run only where it is present. The skip is
-# printed rather than silent.
-if (try
-        @eval using HDF5
-        true
-    catch
-        false
-    end)
+# alone; the test target carries it, so `Pkg.test` runs the suite.
+hdf5_loaded = try
+    @eval using HDF5
+    true
+catch
+    false
+end
+if hdf5_loaded
     include("hdf5_tests.jl")
 else
     println("HDF5 not loadable in this environment — extension tests SKIPPED. " *
             "Run test/hdf5_tests.jl from an environment carrying both, and " *
             "under mpiexec for the decomposition-independent restart.")
+    @testset "HDF5 extension: skipped" begin
+        @test hdf5_loaded skip=!(:hdf5 in REQUIRED_SUITES)
+    end
 end
 
 # A Makie backend is likewise a weak dependency, absent from the package
@@ -4733,19 +4777,24 @@ end
 #
 # Unlike HDF5, CairoMakie is not in Project.toml's test target: it
 # is a heavy dependency to resolve and precompile for two testsets, so
-# `Pkg.test` never reaches this branch. The Makie extension is therefore
-# verified only from the docs environment, which carries CairoMakie already.
-if (try
-        @eval using CairoMakie
-        true
-    catch
-        false
-    end)
+# `Pkg.test` never reaches this branch. The Makie extension is verified from
+# the docs environment, which carries CairoMakie already; CI's documentation
+# job runs test/makie_tests.jl there.
+makie_loaded = try
+    @eval using CairoMakie
+    true
+catch
+    false
+end
+if makie_loaded
     include("makie_tests.jl")
 else
     println("Makie backend not loadable in this environment — extension tests " *
             "SKIPPED. CairoMakie is not in the test target, so Pkg.test always " *
             "skips these: run test/makie_tests.jl from the docs environment, " *
             "and under mpiexec for the decomposition-independent profile.")
+    @testset "Makie extension: skipped" begin
+        @test makie_loaded skip=!(:makie in REQUIRED_SUITES)
+    end
 end
 

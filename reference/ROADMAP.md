@@ -238,16 +238,17 @@ filter time-scaling with N1.
   ([temporal order](CALIBRATION_APPENDIX.md#temporal-order)): the level
   interface is first order in `dt` from the once-per-step injection into the
   covered parent nodes, and injecting before every stage restores fourth order
-  at one restriction per stage; deciding that is open. Turn R1–R4 probes into
-  durable regressions. Add a scheduled full shock-validation battery and explicit Makie extension
-  checks; retain HDF5 tests in the package test target and add parallel-HDF5
-  execution where the required stack exists.
-  Keep each instrument's current transcript under `bench/results/<script>.txt`
-  so that an appendix table is a quoted output and never a retyped one; a
-  transcript is the script's own output, so each lands with that script's
-  next run rather than being assembled from the tables it would replace.
-  **Gate:** CI distinguishes skipped/unavailable coverage from passing coverage.
-  KA-on-CPU equality does not substitute for hardware-GPU tests under S1.
+  at one restriction per stage; deciding that is open. The R1–R4 regressions,
+  the Makie checks in CI's documentation job, the scheduled validation
+  battery (`.github/workflows/validation.yml`) and the skip accounting in the
+  serial suite are in place. Remaining: parallel-HDF5 execution where the
+  required stack exists, and each instrument's current transcript under
+  `bench/results/<script>.txt`, so that an appendix table is a quoted output
+  and never a retyped one; a transcript is the script's own output, so each
+  lands with that script's next run rather than being assembled from the
+  tables it would replace.
+  **Gate:** KA-on-CPU equality does not substitute for hardware-GPU tests
+  under S1.
 
 ## P1: API, state ownership, and reproducibility
 
