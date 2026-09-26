@@ -343,13 +343,9 @@ filter time-scaling with N1.
   unrefined, refines when tags appear and empties when they vanish; the box
   keeps its region (commit `1a97ab4`).
 
-- [ ] **A12 — Regrid more than one level, with `max_levels`.**
-  Regridding moves one refined level; nested levels are static. Sensor-driven
-  nesting to a requested depth is the common AMR interface (AMReX `max_level`,
-  Trixi's `AMRController`, Basilisk `adapt_wavelet(..., maxlevel)`).
-  **Depends on:** the level-ℓ tag sweep over tiled parents.
-  **Gate:** a three-level shock–interface run whose finest level follows the
-  feature, against a uniformly fine reference.
+- [x] **A12** — A tiled hierarchy regrids every level up to `max_levels`, each
+  tagged on its parent; a three-level shock–contact run is 16× closer to the
+  uniform-fine reference than the root (commit `737550c`).
 
 - [ ] **A13 — Refinement scope beyond uniform Cartesian grids.**
   Refinement rejects cylindrical and spherical metrics, stretched grids and
@@ -435,8 +431,9 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   guidance in [CLUSTER.md](CLUSTER.md).
 
 - [ ] **S8 — Extend refinement and multiblock geometry when a target needs them.**
-  For a nested implosion, implement regridding below level 1 with descendant
-  re-nesting, ownership, transfer, and restart updates. For geometric multiblock
+  Tiled regridding below level 1 landed with A12; for a nested implosion, add
+  rebalancing, point-to-point migration and the device backend to it. For
+  geometric multiblock
   use, extend beyond the current slab layout with explicit adjacency and compatible
   geometry; add same-level patch checkpoint support.
   **Depends on:** a concrete case, N10–N12, and relevant A5 contracts.

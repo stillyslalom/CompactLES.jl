@@ -1572,6 +1572,14 @@ function test_deep_regrid()
     MPI.Barrier(comm)
     rank == 0 && foreach(rm, filter(startswith("mpi_deep"), readdir()))
     MPI.Barrier(comm)
+end
+
+# The deep regrid on small tiles, a phase of its own because its rank-subset
+# and moved-tile checks read only at np = 8.
+function test_deep_regrid_subsets()
+    section("deep regrid under subsets: levels on rank subsets, a moved tile")
+    wall2 = (SlipWallBC(), SlipWallBC())
+    layout(s) = (level_regions(s, 1), level_regions(s, 2))
     # A single shock on small tiles (edge 4, buffer 1), where the levels'
     # rank subsets fall below the run at np = 8 and a level-2 survivor's
     # range leaves its parent's subset, so the tile moves. The layouts are
@@ -1589,7 +1597,8 @@ function test_deep_regrid()
     differ = 0
     subsets = 0
     moves = 0
-    for n in 3:3:150
+    # The first survivor moves near step 75 at np = 8.
+    for n in 3:3:81
         owners0 = [(lt.region, o) for (lt, o) in
                    zip(solver.levels[3].transfers, solver.levels[3].owners)]
         run!(solver, states; tfinal=1.0, nmax=n)
@@ -3282,6 +3291,7 @@ const SUITE = (
     ("hierarchy checkpoint", test_hierarchy_checkpoint),
     ("unrefined start", test_unrefined_start),
     ("deep regrid", test_deep_regrid),
+    ("deep regrid subsets", test_deep_regrid_subsets),
     ("two-patch layout", test_two_patch_layout),
     ("bulk patched layout", test_bulk_patched),
 )

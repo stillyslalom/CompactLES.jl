@@ -321,10 +321,11 @@ end
     run!(solver, Q; tfinal=1.0, nmax=3)
     @test solver.step == 3
     t3 = solver.t
-    # The first call's cap, passed again, would take no step: an error, not a
-    # silent return.
-    err = try run!(solver, Q; tfinal=1.0, nmax=3); nothing catch e; e end
-    @test err isa ArgumentError && occursin("nmax", err.msg)
+    # The first call's cap, passed again, takes no step and warns rather than
+    # returning silently.
+    @test_logs (:warn, r"nmax = 3 does not exceed") match_mode=:any run!(
+        solver, Q; tfinal=1.0, nmax=3)
+    @test solver.step == 3 && solver.t == t3
     # Continuing counts from the solver's clock and counter.
     run!(solver, Q; tfinal=1.0, nmax=solver.step + 2)
     @test solver.step == 5 && solver.t > t3

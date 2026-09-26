@@ -1390,11 +1390,11 @@ from the solver's construction (or from the checkpoint it was loaded from),
 not from this call. A second `run!` on the same solver therefore continues
 from where the first stopped, and takes `nmax = solver.step + n` for `n`
 more steps. An `ArgumentError` is raised for a `tfinal` that is NaN or behind
-`solver.t`, a negative `nmax`, and an `nmax` at or below a nonzero
-`solver.step` while `solver.t` is short of `tfinal`, which would return
-without taking a step. `tfinal == solver.t` returns at once and `nmax = 0` on
-a new solver takes no step; both still validate the state, and at step 0 they
-run the initial-state callbacks.
+`solver.t` and for a negative `nmax`. An `nmax` at or below a nonzero
+`solver.step` while `solver.t` is short of `tfinal` takes no step and logs a
+warning on rank 0. `tfinal == solver.t` returns at once and `nmax = 0` on a
+new solver takes no step, which checks a deck without advancing it; both still
+validate the state, and at step 0 they run the initial-state callbacks.
 
 A continuing call starts from the solver as the last one left it: the lowered
 `solver.cfl` of any retries, the step and rate history `dt_prev` and
@@ -1737,13 +1737,15 @@ function _check_run_limits(solver, tfinal, tfin, nmax)
         throw(ArgumentError("run!: tfinal = $tfinal is behind the solver clock " *
                             "t = $(solver.t); the clock is not reset between runs"))
     nmax >= 0 || throw(ArgumentError("run!: nmax must be >= 0, got $nmax"))
-    # A second `run!` given the first one's `nmax` would return at once.
-    solver.step > 0 && nmax <= solver.step && solver.t < tfin &&
-        throw(ArgumentError("run!: nmax = $nmax does not exceed solver.step = " *
-                            "$(solver.step), so no step would be taken. nmax " *
-                            "counts the solver's steps since construction, not " *
-                            "this call's; pass nmax = solver.step + n for n " *
-                            "more steps"))
+    # A second `run!` given the first one's `nmax` returns at once. A call that
+    # takes no step can be intended (a deck check), so this warns and runs.
+    if solver.step > 0 && nmax <= solver.step && solver.t < tfin &&
+       MPI.Comm_rank(solver.comm) == 0
+        @warn "run!: nmax = $nmax does not exceed solver.step = $(solver.step), " *
+              "so no step is taken. nmax counts the solver's steps since " *
+              "construction, not this call's; pass nmax = solver.step + n for " *
+              "n more steps"
+    end
     return nothing
 end
 

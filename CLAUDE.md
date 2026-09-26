@@ -132,7 +132,7 @@ julia --project=. test/convergence.jl
 julia --project=. test/validation.jl
 "$MPIEXEC" -n 2 julia --project=. -t 1 test/mpi_tests.jl
 "$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl \
-  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,AMR transfer pair,halo consistency,off-rank folds,freestream,no-slip wall flux,slip wall flux,symmetry plane,NSCBC inflow,positivity floor,slicing,composite budgets"
+  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,AMR transfer pair,halo consistency,off-rank folds,freestream,no-slip wall flux,slip wall flux,symmetry plane,NSCBC inflow,positivity floor,slicing,composite budgets,composite face,deep regrid subsets"
 ```
 
 The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.

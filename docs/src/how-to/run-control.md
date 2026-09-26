@@ -94,8 +94,9 @@ are not reversed unless they implement [`rewind!`](@ref).
 `tfinal` and `nmax` are values of `solver.t` and `solver.step`, counted from
 construction or from the loaded checkpoint, not from the call. A second
 `run!` on the same solver continues from where the first stopped and passes
-`nmax = solver.step + n` for `n` more steps; an `nmax` that would allow no
-step raises an `ArgumentError`.
+`nmax = solver.step + n` for `n` more steps. An `nmax` that allows no step
+returns without advancing and logs a warning; `nmax = 0` on a new solver
+checks a deck without taking a step.
 
 With AMR subcycling, a positive `StepControl(substep_cfl = ...)` checks each refined
 level's rate after its stage RHS has refreshed the artificial coefficients.
