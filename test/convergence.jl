@@ -67,7 +67,8 @@
 #   C10 4.00 | viscous slip with shear C6 6.04
 #   interface evolution (entropy wave, t = 0.5): two patches C6 (k = 1) 3.31 |
 #   two levels C6 (k = 3) 3.62 | two levels :brady_livescu 6.01 | three levels
-#   subcycled 3.72 | two levels, cascade filter 4.12
+#   subcycled 3.72 | two levels, cascade filter 4.12 | two levels
+#   :brady_livescu, d8 detector 5.93 | two levels, pentadiagonal filter 4.05
 #   temporal order (fixed grid, equal steps): Dirichlet inflow g(t) 3.99 |
 #   NSCBC inflow target(t) 4.09 | two levels, global step 1.00 | two levels
 #   subcycled, ghost fluxes 3.85
@@ -79,7 +80,7 @@
 # interface studies keep the cascade rows, because the flux divergence at an
 # interface end selects them (`interface_divergence_closures`).
 #
-# Those fifty-two numbers are also passed to each study as `recorded` and
+# Those fifty-four numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -637,6 +638,19 @@ evolution_study("two levels, C6, cascade filter", PERIODIC_NS,
                 N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2, filter_interval=1),
                 entropy_ref;
                 primary=:interface, tfinal=0.5, expect=4.1, tol=0.8, recorded=4.12)
+# The artificial properties on under the :d8 detector, whose interface rows
+# read the imposed ghosts. The :brady_livescu row is the one whose error
+# level exposes the sensor: closing the detector on its own rows at the
+# coarse-fine faces instead reads order 2.
+evolution_study("two levels, C6 :brady_livescu, d8 detector", PERIODIC_NS,
+                N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2,
+                                  deriv=lele_d1_6(closures=:brady_livescu),
+                                  art=ArtParams(enabled=true, detector=:d8)), entropy_ref;
+                primary=:interface, tfinal=0.5, expect=5.9, tol=0.8, recorded=5.93)
+evolution_study("two levels, C6, pentadiagonal filter", PERIODIC_NS,
+                N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2, filter_interval=1,
+                                  filt=pyranda_filter()), entropy_ref;
+                primary=:interface, tfinal=0.5, expect=4.0, tol=0.8, recorded=4.05)
 
 # ---------------------------------------------------------------------------
 # Temporal order. Each row integrates one case on one grid in a sequence of

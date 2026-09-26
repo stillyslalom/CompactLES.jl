@@ -313,7 +313,9 @@ sensor.
 Test and benchmark toggle: `true`, the default, lets a `ghosts = true` call of
 [`delta4_sum!`](@ref) read the exchanged or imposed ghost layers at an
 [`InterfaceBC`](@ref) face. `false` clamps there instead, the policy of every
-closed edge that reflects nothing, so that one build measures both.
+closed edge that reflects nothing, so that one build measures both. Under
+`detector = :d8`, `false` closes the face with the scheme's own rows instead
+of the ghost-reading rows ([`ring_sum!`](@ref)).
 """
 const SENSOR_INTERFACE_GHOSTS = Ref(true)
 
@@ -504,10 +506,11 @@ those hold live inputs at two of the call sites (the internal energy for
 κ\\*, and the dilatation and its compression switch in
 [`dilatation_beta!`](@ref)).
 
-`ghosts` is accepted for a common signature with [`delta4_sum!`](@ref) and
-ignored. It states that `f` has valid patch-interface ghosts, which the
-closure rows of this detector read in either case; `:d8` is in any event
-rejected in a patched or refined run.
+`ghosts` states that `f` has valid interface ghosts, as it does for
+[`delta4_sum!`](@ref). On a refined patch it selects the interface rows that
+read them; without it, or with `SENSOR_INTERFACE_GHOSTS` off, an interface
+end keeps the scheme's own closure rows. A single-patch solver has no
+interface end and ignores it; `:d8` is rejected in a same-level patched run.
 """
 function ring_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
                    parity::NTuple{3,Int}=(1, 1, 1),
@@ -523,9 +526,10 @@ function ring_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
     # its size, as recorded on `compute_artificial!`.
     ring_buf = solver.ring_buf
     hh, invh = solver.h, solver.inv_h
+    iface = ghosts && SENSOR_INTERFACE_GHOSTS[]
     for d in 1:3
         decomp.active[d] || continue
-        ring_along!(ring_buf, f, solver, d, parity[d], wall_parity[d])
+        ring_along!(ring_buf, f, solver, d, parity[d], wall_parity[d], iface)
         pointwise!(_ring_accum_point!, out, nx, ny, nz,
                    out, ring_buf, hh[d], invh[d], wpow, maxred, o1, o2, o3)
     end

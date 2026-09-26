@@ -2211,13 +2211,14 @@ function test_refined_decomposed()
     # Twenty steps of each run: the checks are agreement with serial to
     # round-off, which every step tests alike, and on an oversubscribed
     # runner the phase cost is linear in steps (see the callback phase).
-    function wave_error(; subcycle, levels=2, kw...)
+    function wave_error(; subcycle, levels=2, art=ArtParams(enabled=false),
+                        filter_interval=0, kw...)
         N = 192
         r1 = BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1))
         e1 = 3 * (N ÷ 6) - 2
         r2 = BlockRegion((3 * r1.offset[1] + e1 ÷ 4, 0, 0), (e1 ÷ 2, 1, 1))
         solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
-                        art=ArtParams(enabled=false), filter_interval=0,
+                        art=art, filter_interval=filter_interval,
                         subcycle=subcycle,
                         refine=levels == 3 ? [r1, r2] : r1; kw...)
         states = allocate_state(solver)
@@ -2268,6 +2269,17 @@ function test_refined_decomposed()
     e_gf, _ = wave_error(subcycle=true, interface_flux=:ghost)
     check("subcycled two-level wave error, ghost-flux divergence, matches serial",
           abs(e_gf - 3.4861002973229915e-12), 5e-15)
+    # The d8 detector and the pentadiagonal filter, one fine box and eight-node
+    # tiles: the detector's interface rows read the imposed and exchanged
+    # ghosts, and both banded plans solve over the level's decomposition.
+    d8pyr = (art=ArtParams(enabled=true, detector=:d8), filt=pyranda_filter(),
+             filter_interval=1)
+    e_d8, _ = wave_error(; subcycle=false, d8pyr...)
+    check("static two-level wave error, d8 detector and pentadiagonal filter, " *
+          "matches serial", abs(e_d8 - 3.0154478913857474e-10), 1e-12)
+    e_d8t, _ = wave_error(; subcycle=true, tile=8, d8pyr...)
+    check("subcycled tiled wave error, d8 detector and pentadiagonal filter, " *
+          "matches serial", abs(e_d8t - 3.079330124222679e-10), 1e-12)
 
     # Tagging-driven regridding tracks a Sod shock to the same region. The
     # four Sod regrid cases in this file run the unrelaxed filter

@@ -26,7 +26,10 @@ released_communicators(decomp) =
     # root's C8 filter trips first at three).
     @test_throws ErrorException mk(deriv=lele_d1_10(), n_halo=3)
     @test npatches(mk(deriv=lele_d1_10())) == 2
-    @test_throws ErrorException mk(art=ArtParams(detector=:d8))
+    # The d8 detector and a pentadiagonal filter close the coarse-fine
+    # boundary with banded interface rows of their own.
+    @test npatches(mk(art=ArtParams(detector=:d8))) == 2
+    @test npatches(mk(filt=pyranda_filter())) == 2
     @test_throws ErrorException mk(metric=CylindricalMetric())
     @test_throws ErrorException mk(patch_grid=(2, 1, 1))
     # Nesting margin: a region reaching the boundary is refused.
@@ -167,6 +170,26 @@ end
     # Measured 1.28e-4 (:inject; :filter halves it at three decades of smooth
     # accuracy — src/levels.jl header). The unrefined run drifts 5e-11.
     @test drift < 5e-4
+
+    # The :d8 detector and the pentadiagonal filter at the same faces. The
+    # momentum ahead of the shock measured 7.3e-6 (2.0e-6 on the unrefined
+    # run with the same numerics) and the mass drift 6.1e-5.
+    s8 = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                bcs=(wall2, per, per), cfl=0.4, filt=pyranda_filter(),
+                art=ArtParams(detector=:d8),
+                refine=BlockRegion((120, 0, 0), (41, 1, 1)))
+    q8 = allocate_state(s8)
+    initialize!(s8, q8, ic)
+    m8 = _two_level_mass(s8, q8, N)
+    run!(s8, q8; tfinal=0.1, nmax=20000)
+    p8 = PatchSolver(s8, s8.patches[1])
+    @test maximum(abs(q8[1][gidx(p8, i, 1, 1), m1]) for i in 172:N) < 1e-4
+    run!(s8, q8; tfinal=0.2, nmax=40000)
+    @test s8.t ≈ 0.2
+    for (psq, Q) in CL.eachpatch(s8, q8)
+        @test minimum(Q[gidx(psq, i, 1, 1), 1] for i in 1:psq.decomp.n_local[1]) > 0.05
+    end
+    @test abs(_two_level_mass(s8, q8, N) - m8) / m8 < 5e-4
 end
 
 
@@ -813,6 +836,37 @@ end
         @test minimum(Q[gidx(psq, i, 1, 1), 1] for i in 1:n) > 0.05
     end
     @test length(sa.patches) == length(states) == length(regs) + 1
+end
+
+@testset "regridding rebuilds the d8 detector and a pentadiagonal filter" begin
+    # Rebuilt patches take the detector's interface plans, its buffer and the
+    # banded filter. Composite drift measured 1.5e-4 (tiled) and 1.2e-5 (box).
+    wall2 = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    for tile in (8, 0)
+        s = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(wall2, per, per), cfl=0.2, subcycle=true,
+                   regrid_interval=5, tag_buffer=16, tile=tile,
+                   refine=BlockRegion((85, 0, 0), (31, 1, 1)),
+                   filt=pyranda_filter(), art=ArtParams(detector=:d8))
+        states = allocate_state(s)
+        initialize!(s, states, ic)
+        b0 = CL._conserved_budget(s, states)
+        initial = level_regions(s, 1)
+        run!(s, states; tfinal=0.2, nmax=40000)
+        @test s.t ≈ 0.2
+        @test level_regions(s, 1) != initial
+        @test all(p -> p.level == 0 || p.ring_plans[1] isa CL.InterfaceRingPlans, s.patches)
+        for (psq, Q) in CL.eachpatch(s, states)
+            n = psq.decomp.n_local[1]
+            @test minimum(Q[gidx(psq, i, 1, 1), 1] for i in 1:n) > 0.05
+        end
+        b1 = CL._conserved_budget(s, states)
+        @test abs(b1.total_mass - b0.total_mass) / b0.total_mass < 5e-4
+        @test abs(b1.total_energy - b0.total_energy) / b0.total_energy < 5e-4
+    end
 end
 
 

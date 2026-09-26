@@ -439,6 +439,15 @@ end
     @test all(r -> length(r.rhs) == 9, rows)
     ring = CL.interface_closures(compact_d8())
     @test [(r.first, r.rhs) for r in ring] == [(1, [1.0]), (2, [1.0])]
+    # The detector's own interface rows keep the undivided eighth difference:
+    # degree-7 polynomials are annihilated, and the response at k = π is
+    # the interior's 16, row 2 also matching its k → 0 ratio 1/232.
+    d8rows = CL._ring_interface_rows(Float64)
+    @test [r.first for r in d8rows] == [-3, -2]
+    @test all(r -> all(n -> abs(sum(r.rhs .* (-4:4) .^ n)) < 1e-12, 0:7), d8rows)
+    nyquist(r) = sum(r.rhs .* (-1) .^ (-4:4)) / (1 - 2r.lhs[2])
+    @test all(r -> nyquist(r) ≈ 16, d8rows)
+    @test d8rows[2].rhs[5] / 70 / (1 + 2d8rows[2].lhs[2]) ≈ 1 / 232
     n = 40
     h = 0.1
     d = Decomp((n, 4, 4), (false, true, true); dims=(1, 1, 1))

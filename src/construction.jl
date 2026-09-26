@@ -401,11 +401,6 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         any(any, symplane) &&
             error("refinement across a SymmetryPlaneBC is forbidden; a " *
                   "refined run takes SlipWallBC at that face")
-        filt isa CompactScheme ||
-            error("the coarse-fine boundary carries closure variants for a " *
-                  "tridiagonal filter only")
-        art.detector === :delta4 ||
-            error("refinement supports the :delta4 detector only")
         level_restriction in (:inject, :filter) ||
             error("level_restriction must be :inject or :filter, " *
                   "got :$level_restriction")
@@ -818,7 +813,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                                  id0, ℓ, tile; interface_divergence,
                                                  ghost_viscous=
                                                      _ghost_viscous(interface_flux,
-                                                                    transport))
+                                                                    transport),
+                                                 detector=art.detector)
             append!(fines, built)
             indices = [id0 + k for k in eachindex(held)]
             for (k, ti) in enumerate(held)
@@ -937,18 +933,18 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            level::Int,
                            faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3);
                            interface_divergence=nothing,
-                           ghost_viscous::Bool=false) where {T}
+                           ghost_viscous::Bool=false,
+                           detector::Symbol=:delta4) where {T}
     region_f, decomp_f, hf = _fine_decomp(T, refine, active_g, h, n_halo, comm)
     plans = _fine_plans(decomp_f, hf, deriv, filt, smoo, interface_rhs, backend;
-                        interface_divergence)
+                        interface_divergence, detector)
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
-    # Refinement takes the `:delta4` detector (rejected otherwise at setup), so
-    # no refined patch carries the `:d8` ringing buffer; `bulk` selects the
-    # conserved gradients of the shared-D_b species channels, which a refined
-    # patch differences as the root does.
-    ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons, false,
-                        bulk)
+    # `detector = :d8` adds the ringing buffer; `bulk` selects the conserved
+    # gradients of the shared-D_b species channels, which a refined patch
+    # differences as the root does.
+    ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons,
+                        detector === :d8, bulk)
     scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
                              MPI.Comm_size(comm), MPI.Comm_rank(comm))
     # Every face of a refined patch is an interface end, a coarse-fine or a
@@ -985,12 +981,14 @@ function _fine_decomp(::Type{T}, refine::BlockRegion, active_g::NTuple{3,Bool},
     return region_f, decomp_f, hf
 end
 
-# A refined patch's plans on `backend`: gradient, divergence, filter and
-# smoother. `ntiles` and `stride` plan the batched device solve of a stacked
-# level's spanning patch (lines_device.jl); the default is one patch's plans.
-function _fine_plans(decomp_f::Decomp, hf, deriv, filt, smoo, interface_rhs::Symbol,
-                     backend::AbstractBackend; ntiles::Int=1, stride::Int=0,
-                     interface_divergence=nothing)
+# A refined patch's plans on `backend`: gradient, divergence, filter,
+# smoother and, under `detector = :d8`, the detector. `ntiles` and `stride`
+# plan the batched device solve of a stacked level's spanning patch
+# (lines_device.jl); the default is one patch's plans.
+function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
+                     interface_rhs::Symbol, backend::AbstractBackend;
+                     ntiles::Int=1, stride::Int=0, interface_divergence=nothing,
+                     detector::Symbol=:delta4) where {T}
     mkf(sch, d; kw...) =
         backend_plan(backend, plan_direction(decomp_f, sch, d, hf[d]; kw...,
                                              lines_factor=ntiles); ntiles, stride)
@@ -1022,7 +1020,20 @@ function _fine_plans(decomp_f::Decomp, hf, deriv, filt, smoo, interface_rhs::Sym
     # No wall rows either: every face of a refined patch is a coarse-fine or
     # interface end (`_fine_bcs`), so none of them reflects.
     splans_f = ntuple(d -> decomp_f.active[d] ? mkf(smoo, d) : nothing, 3)
-    return (deriv=dplans_f, div=vplans_f, filter=fplans_f, smooth=splans_f)
+    # The d8 detector reads the interface ghosts of a field recovered over the
+    # padded extent through rows of its own (`_ring_interface_rows`), and
+    # closes on the scheme's own rows for a field without them. `nothing`
+    # under `:delta4`, as on the root, so `detect_sum!` dispatches alike.
+    rplans_f = nothing
+    if detector === :d8
+        ring = compact_d8(T)
+        rrows = _ring_interface_rows(T)
+        rplans_f = ntuple(d -> !decomp_f.active[d] ? nothing :
+            InterfaceRingPlans(mkf(ring, d; lo_closures=rrows, hi_closures=rrows),
+                               mkf(ring, d)), 3)
+    end
+    return (deriv=dplans_f, div=vplans_f, filter=fplans_f, smooth=splans_f,
+            ring=rplans_f)
 end
 
 # The persistent arrays of a patch from an allocator `g()`, by name, in the
@@ -1033,13 +1044,13 @@ _patch_arrays(g::F, n_species::Int) where {F} =
      D_art=[g() for _ in 1:n_species], inv_J=g(), area_d=(g(), g(), g()),
      inv_h=(g(), g(), g()), inv_r=g(), cot_over_r=g(), cot_over_r_gcl=g())
 
-# The refined `Patch` from its parts; fold-free, with no ring plans and no
-# pair buffers (`empty` stands in for both).
+# The refined `Patch` from its parts; fold-free, with no pair buffers
+# (`empty` stands in for both).
 _assemble_patch(id::Int, level::Int, region, comm, decomp, hf, faces, bcs, plans,
                 empty, a, ws, covered, scratch, gflux) =
     Patch(id, level, region, comm, decomp, hf, faces, bcs,
           (nothing, nothing, nothing), plans.deriv, plans.div, plans.filter,
-          plans.smooth, nothing, empty, empty,
+          plans.smooth, plans.ring, empty, empty,
           a.rho, a.u, a.v, a.w, a.p, a.T_ion, a.c, a.cp_mix, a.Y,
           a.mu_art, a.beta_art, a.kappa_art, a.D_art,
           a.inv_J, a.area_d, a.inv_h, a.inv_r, a.cot_over_r, a.cot_over_r_gcl,
@@ -1078,7 +1089,8 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               ws_pool::AbstractVector, n_species::Int, n_cons::Int,
                               bulk::Bool, id0::Int, level::Int, tile::Int;
                               interface_divergence=nothing,
-                              ghost_viscous::Bool=false) where {T}
+                              ghost_viscous::Bool=false,
+                              detector::Symbol=:delta4) where {T}
     patches = Patch[]
     stacks = TileStack[]
     if !_stacked_level(backend, tile)
@@ -1088,7 +1100,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                              interface_rhs, backend, ws_pool,
                                              n_species, n_cons, bulk, id0 + k,
                                              level, faces[ti]; interface_divergence,
-                                             ghost_viscous))
+                                             ghost_viscous, detector))
         end
         return patches, stacks
     end
@@ -1103,7 +1115,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         active_g, h, n_halo, comm, deriv, filt, smoo,
                                         interface_rhs, backend, n_species, n_cons,
                                         bulk, level; interface_divergence,
-                                        ghost_viscous)
+                                        ghost_viscous, detector)
         for (slot, k) in enumerate(ks)
             patches[k] = tiles[slot]
         end
@@ -1119,20 +1131,22 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            deriv, filt, smoo, interface_rhs::Symbol,
                            backend::DeviceBackend, n_species::Int, n_cons::Int,
                            bulk::Bool, level::Int; interface_divergence=nothing,
-                           ghost_viscous::Bool=false) where {T}
+                           ghost_viscous::Bool=false,
+                           detector::Symbol=:delta4) where {T}
     ntiles = length(tregions)
     region1, decomp1, hf = _fine_decomp(T, tregions[1], active_g, h, n_halo, comm)
     npad = padded_extent(decomp1)
     stride = npad[3]
     span_plans = _fine_plans(decomp1, hf, deriv, filt, smoo, interface_rhs, backend;
-                             ntiles, stride, interface_divergence)
+                             ntiles, stride, interface_divergence, detector)
     empty_raw = empty_field(backend, T)
     stacked() = StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
                                                       ntiles * stride),
                              ntiles, stride)
     empty_s = StackedArray(empty_raw, ntiles, stride)
     arrays = _patch_arrays(stacked, n_species)
-    ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons, false, bulk)
+    ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons,
+                             detector === :d8, bulk)
     empty4 = similar(empty_raw, T, 0, 0, 0, 0)
     gflux_span = _ghost_flux_arrays(
         () -> StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
@@ -1170,7 +1184,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                        cot_over_r=v(arrays.cot_over_r),
                        cot_over_r_gcl=v(arrays.cot_over_r_gcl))
         plans_t = _fine_plans(decomp_t, hf, deriv, filt, smoo, interface_rhs, backend;
-                              interface_divergence)
+                              interface_divergence, detector)
         scratch = _level_scratch(empty_raw, refine, active_g, n_halo, n_cons,
                                  MPI.Comm_size(comm), MPI.Comm_rank(comm))
         push!(tiles, _assemble_patch(ids[slot], level, region_t, comm, decomp_t, hf,

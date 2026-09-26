@@ -319,7 +319,8 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                1, 1, spec.tile;
                                                interface_divergence=
                                                    spec.interface_divergence,
-                                               ghost_viscous=_ghost_viscous(solver))
+                                               ghost_viscous=_ghost_viscous(solver),
+                                               detector=solver.art.detector)
     restriction = spec.restriction
     transfers = LevelTransfer{T}[build_level_transfer(
         T, tr, active, spec.n_halo, [root.region], [1],

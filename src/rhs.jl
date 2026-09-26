@@ -198,7 +198,7 @@ function smooth_along!(out, f, solver::SolverLike, d::Int, σf::Int)
 end
 
 """
-    ring_along!(out, f, solver, d, σf, σw = 1)
+    ring_along!(out, f, solver, d, σf, σw = 1, ghosts = false)
 
 Compact eighth derivative of `f` along dimension `d` with antipodal sign `σf`,
 the ringing detector selected by `ArtParams(detector = :d8)`. Only `ring_sum!`
@@ -212,13 +212,19 @@ the plan whose closure rows fold onto the node-centred mirror with that sign
 the choice is a tuple index rather than a branch. Where neither face is such a
 wall the pair holds one plan twice and the index is immaterial.
 
+A refined patch has no wall face and holds an `InterfaceRingPlans` per
+dimension instead. `ghosts` selects between its two plans: rows reading the
+interface ghost layers of `f`, or the scheme's own closure rows, which read
+none.
+
 Every rank in the directional sub-communicator must call this function. Its
 halo and fold contract matches `deriv_along!`.
 """
-function ring_along!(out, f, solver::SolverLike, d::Int, σf::Int, σw::Int=1)
+function ring_along!(out, f, solver::SolverLike, d::Int, σf::Int, σw::Int=1,
+                     ghosts::Bool=false)
     fold = solver.folds[d]
     if fold === nothing
-        apply_along!(out, _wall_at(_plan_at(solver.ring_plans, d), σw), f,
+        apply_along!(out, _ring_plan(_plan_at(solver.ring_plans, d), σw, ghosts), f,
                      solver.decomp)
     else
         fold_apply!(out, f, solver, fold, σf, Val(:ring), σw)
@@ -231,6 +237,25 @@ end
 # path; see the comment above `_plan_at` for why the dimension is indexed the
 # same way.
 @inline _wall_at(pair, σw::Int) = σw > 0 ? pair[1] : pair[2]
+
+"""
+    InterfaceRingPlans(ghost, closed)
+
+The `detector = :d8` plans of a refined patch along one dimension. Every face
+of a refined patch is a coarse-fine or same-level interface end. `ghost`
+closes such an end with rows that read the ghost layers, for a field
+recovered over the padded extent; `closed` keeps the scheme's own closure
+rows, for a field whose interface ghosts carry no data (the strain magnitude,
+the dilatation). `ring_along!` selects between them.
+"""
+struct InterfaceRingPlans{P}
+    ghost::P
+    closed::P
+end
+
+@inline _ring_plan(pair::Tuple, σw::Int, ghosts::Bool) = _wall_at(pair, σw)
+@inline _ring_plan(plans::InterfaceRingPlans, σw::Int, ghosts::Bool) =
+    ghosts ? plans.ghost : plans.closed
 
 # Scale a raw coordinate-derivative field by 1/h_d pointwise (full array).
 @inline function _scale_grad_point!(g, ih, i, j, k)

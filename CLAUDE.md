@@ -211,7 +211,9 @@ symmetry-plane evolution 4.46 (one-sided filter 4.69, C8 4.00, C10 4.00,
 viscous slip with a tangential shear 6.04),
 interface evolution 3.31 (two patches), 3.62 / 6.01 (two levels, C6 /
 `:brady_livescu`), 3.72 (three levels subcycled), 4.12 (two levels
-filtered), temporal order 3.99 / 4.09 (Dirichlet / NSCBC inflow data),
+filtered), 5.93 (two levels, `:brady_livescu` with the `:d8` detector),
+4.05 (two levels, pentadiagonal filter), temporal order 3.99 / 4.09
+(Dirichlet / NSCBC inflow data),
 1.00 / 3.85 (two levels, global step / subcycled). The default closure of all three derivative presets is
 `:neutral3`; the coordinate-singularity studies close
 their outer end with a wall and use the default rows, while the interface

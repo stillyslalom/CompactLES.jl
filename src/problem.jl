@@ -770,7 +770,7 @@ combined with `amr`.
   hierarchy, region ℓ given in level ℓ−1's node space (level-(ℓ−1) node
   `g` is level-ℓ node `3(g − 1) + 1`). Default `nothing`. The
   [`Solver`](@ref) constructor enforces the scope (Cartesian, unstretched,
-  unfolded, a tridiagonal filter, nesting).
+  unfolded, nesting).
 - `level_restriction`: `:inject` (default) writes the fine coincident-node
   values onto the covered region of the parent; `:filter` applies the
   invertible transfer pair's anti-alias filter first.

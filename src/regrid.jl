@@ -560,7 +560,8 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                           solver.equations.n_species, n_cons,
                           _shared_species_diffusivity(solver), fi, 1;
                           interface_divergence=spec.interface_divergence,
-                          ghost_viscous=_ghost_viscous(solver)) : nothing
+                          ghost_viscous=_ghost_viscous(solver),
+                          detector=solver.art.detector) : nothing
     newlt = build_level_transfer(T, newregion, active_g, spec.n_halo,
                                  [patches[1].region], [1],
                                  Union{Nothing,Decomp{T}}[patches[1].decomp],
@@ -1027,7 +1028,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                              1, 1, spec.tile;
                                              interface_divergence=
                                                  spec.interface_divergence,
-                                             ghost_viscous=_ghost_viscous(solver))
+                                             ghost_viscous=_ghost_viscous(solver),
+                                             detector=solver.art.detector)
         append!(new_patches, built)
         resize!(new_states, length(held))
         resize!(new_dQ, length(held))
@@ -1067,7 +1069,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                       _shared_species_diffusivity(solver),
                                       idx, 1, faces[ti];
                                       interface_divergence=spec.interface_divergence,
-                                      ghost_viscous=_ghost_viscous(solver))
+                                      ghost_viscous=_ghost_viscous(solver),
+                                      detector=solver.art.detector)
                 Q = _state_like(p.rho, n_cons)
                 push!(new_states, Q)
                 push!(new_dQ, zero(Q))

@@ -259,13 +259,9 @@ filter time-scaling with N1.
   a scratch read names the patch that wrote it, and a `:repair` before the
   step renews the prepared state (commit `57b4ed2`).
 
-- [ ] **A3 — Separate solver construction from RHS execution.**
-  Move configuration validation, plan/hierarchy construction, and device setup out
-  of `rhs.jl` behind explicit construction boundaries. Preserve specialized
-  runtime types and per-patch function barriers; setup-only abstract fields do not
-  by themselves justify a type-system rewrite.
-  **Gate:** unchanged numerical results plus inference/allocation comparisons for
-  the existing hot paths; preserve compatibility of supported accessors.
+- [x] **A3** — Construction lives in `construction.jl` and the `Solver` container
+  in `solver.jl`, moved verbatim with byte-identical inference and allocation
+  audits; `rhs.jl` holds only the right-hand side (commit `f123739`).
 
 - [x] **A4** — Parameter ranges fail early with named errors, `run!`'s absolute
   `tfinal`/`nmax` are enforced, and a rollback restores switches, triggers and

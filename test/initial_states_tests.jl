@@ -267,14 +267,15 @@ end
     s3, _ = setup(step_prob, Numerics(n_global=(96, 1, 1), cfl=0.5, amr=AMR()))
     @test getfield(s3, :regrid).interval == 4
     # Scope violations are argument errors naming AMR.
+    stretched = (Stretch(ξ -> ξ, ξ -> 1.0), nothing, nothing)
     @test_throws ArgumentError setup(prob, Numerics(; base..., amr=nested,
-                                                    filt=pyranda_filter()))
+                                                    stretch=stretched))
     err = try
-        setup(prob, Numerics(; base..., amr=nested, filt=pyranda_filter()))
+        setup(prob, Numerics(; base..., amr=nested, stretch=stretched))
     catch e
         e
     end
-    @test occursin("AMR", err.msg) && occursin("compact_filter", err.msg)
+    @test occursin("AMR", err.msg) && occursin("stretch = nothing", err.msg)
     @test volume_integral(solver, states, :rho) ≈ 1.0 rtol = 1e-10
 end
 

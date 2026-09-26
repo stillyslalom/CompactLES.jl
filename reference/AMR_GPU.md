@@ -326,9 +326,9 @@ offset as it does for a `DirPlan`, so the device line solve stays bitwise
 against the host under decomposition. The flux divergence keeps the
 scheme's own closure cascade (the C6 rows) as at every interface, and the
 filter stays C8, so the minimum extent does not move. The `:d8` ring
-detector, the other banded scheme, is the sensor's operator and keeps its
-closed-edge rows at an interface as the sensor smoother does; patched runs
-still reject it pending the sensor gate of ROADMAP.md's N11.
+detector, the other banded scheme, reads the ghost layers at a coarse-fine
+or tile face through two rows of its own (`_ring_interface_rows`); patched
+runs still reject it.
 
 C10 tracks C6 at every gate: the same entropy-wave orders across a patch
 interface and across a coarse-fine boundary, the divergence's one-sided rows
@@ -1327,8 +1327,8 @@ Configurations rejected at setup, and the reason:
   explicit `dims`. The layout tiles slabs along
   one dimension, so corner-coupled adjacency does not arise. Field output
   takes the multiblock form; a slab layout has no checkpoint.
-- **Refined runs** require Cartesian metric, no stretching, no folds, a
-  tridiagonal filter, `:delta4`, one region per level, and no same-level
+- **Refined runs** require Cartesian metric, no stretching, no folds, one
+  region per level, and no same-level
   `patch_grid` alongside. `level_restriction = :filter` is serial-only.
   Each region must nest by `max(n_halo, LEVEL_BUFFER)` parent nodes inside
   the patches of the level above and span ≥ 4 parent nodes per active

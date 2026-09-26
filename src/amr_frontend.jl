@@ -135,11 +135,6 @@ function _check_amr_scope(prob, num)
         fail("requires a uniform grid; set stretch = nothing in every direction")
     any(pair -> any(bc -> bc isa SymmetryPlaneBC, pair), prob.bcs) &&
         fail("cannot refine a run with a SymmetryPlaneBC; use SlipWallBC at that face")
-    num.filt isa CompactScheme ||
-        fail("requires a tridiagonal filter such as compact_filter(0.45); " *
-             "$(typeof(num.filt).name.name) is not one")
-    num.art.detector === :delta4 ||
-        fail("requires ArtParams(detector = :delta4)")
     return nothing
 end
 

@@ -212,8 +212,8 @@ using AMDGPU  # or CUDA
 num = Numerics(n_global = (64, 64, 64), backend = DeviceBackend(ROCBackend()))
 ```
 
-Refinement requires unstretched Cartesian coordinates without folds and a
-tridiagonal filter. A static hierarchy can contain several nested levels;
+Refinement requires unstretched Cartesian coordinates without folds. A
+static hierarchy can contain several nested levels;
 dynamic regridding is limited to a root and one refined level. Device runs
 support these layouts with host-staged MPI exchanges.
 The device backend currently excludes `Nasa9Mixture` and filtered restriction

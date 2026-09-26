@@ -314,6 +314,24 @@ function _taylor_d1_row(pairs::Vector{Int}, singles::Vector{Int}, m::Int)
     return x[1:np_], x[np_+1:np_+ns], x[np_+ns+1:end]
 end
 
+# The interface rows of the `compact_d8` detector at a patch or coarse-fine
+# end, for a field whose ghost layers are valid. `interface_closures` makes a
+# symmetric operator the identity at its first `q` rows, which suits a
+# filter and would return the field itself from a detector, so these rows
+# keep the undivided eighth difference δ⁸ and drop only the left-hand-side
+# couplings to ghost unknowns. Row 1 is explicit, g₁ = δ⁸f₁/16, whose
+# response to a grid-to-grid oscillation is 16, the interior value; it reads
+# four ghost layers. Row 2 is tridiagonal, α(g₁ + g₃) + g₂ = c δ⁸f₂, with α
+# and c set so that the row matches the interior response both at k = π
+# (c·256/(1 − 2α) = 16) and at k → 0 (c/(1 + 2α) = 1/232, the interior's
+# ratio to δ⁸): α = 27/62, c = 1/124. Row 1 is 14.5 times the interior at
+# k → 0, where the detector output is O(h⁸).
+function _ring_interface_rows(::Type{T}) where {T}
+    d8 = T[1, -8, 28, -56, 70, -56, 28, -8, 1]
+    return [BandedClosureRow{T}(T[0, 0, 1, 0, 0], d8 ./ 16, -3),
+            BandedClosureRow{T}(T[0, 27//62, 1, 27//62, 0], d8 ./ 124, -2)]
+end
+
 """
     wall_closures(scheme::BandedCompactScheme, σ) -> Vector{BandedClosureRow}
 

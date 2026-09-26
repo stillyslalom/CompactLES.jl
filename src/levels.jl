@@ -53,12 +53,13 @@
 # dimensions) `TransferPlan`s connects the coarse box to the fully fine box
 # through K − 1 intermediate grids, each stage carrying its own scratch array.
 #
-# Scope, enforced by `Solver`: Cartesian metric, no stretching, no folds, a
-# tridiagonal filter, the `:delta4` detector, and no same-level patch
-# decomposition alongside refinement. The fine patch's line solves close at
-# the coarse–fine boundary with the same-level interface rows (extended-data
-# gradients and filters, one-sided divergence); the pentadiagonal C10 takes
-# two such rows per end (kernels_banded.jl).
+# Scope, enforced by `Solver`: Cartesian metric, no stretching, no folds, and
+# no same-level patch decomposition alongside refinement. The fine patch's
+# line solves close at the coarse–fine boundary with the same-level interface
+# rows (extended-data gradients and filters, one-sided divergence); a
+# pentadiagonal scheme, the C10 derivative or a banded filter, takes two such
+# rows per end (kernels_banded.jl). The `:d8` detector closes there with rows
+# of its own that read the imposed ghosts (`_ring_interface_rows`).
 #
 # Distribution: each level is owned by a rank subset of its parent's, a
 # contiguous prefix of the parent level's communicator (`LevelComm`), and
@@ -2308,8 +2309,8 @@ mutable struct RegridSpec{T}
     n_halo::Int
     interface_rhs::Symbol
     deriv::Union{CompactScheme{T},BandedCompactScheme{T}}
-    filt::CompactScheme{T}
-    smoo::CompactScheme{T}
+    filt::Union{CompactScheme{T},BandedCompactScheme{T}}
+    smoo::Union{CompactScheme{T},BandedCompactScheme{T}}
     backend::AbstractBackend
     tile::Int                        # lattice edge; 0 = one box over the tags
     last_step::Int

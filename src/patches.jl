@@ -195,9 +195,10 @@ end
 # evaluation writes. The placeholder keeps the view type at zero extent.
 function _view_workspace(ws::RHSWorkspace, kr::UnitRange{Int})
     v(a) = view(a, :, :, kr)
+    ring = size(ws.ring_buf, 3) == 0 ? view(ws.ring_buf, :, :, 1:0) : v(ws.ring_buf)
     return RHSWorkspace(map(v, ws.grad_u), map(v, ws.grad_T_ion), map(v, ws.grad_Y),
                         v(ws.strain_mag), v(ws.sensor), v(ws.sensor_sp),
-                        v(ws.tmp_a), v(ws.tmp_b), view(ws.ring_buf, :, :, 1:0),
+                        v(ws.tmp_a), v(ws.tmp_b), ring,
                         map(v, ws.flux), map(v, ws.grad_Q))
 end
 

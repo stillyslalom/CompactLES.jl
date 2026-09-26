@@ -39,6 +39,9 @@
 #               from an `interface_divergence` source; `reversed` rows mirror
 #               the tube so the shock runs right to left through the faces.
 #               Rows marked `gflux` take `interface_flux = :ghost`.
+#               Rows marked `d8` take `detector = :d8` and rows marked
+#               `pyranda` the pentadiagonal `pyranda_filter()`, on a nest
+#               only (a same-level patched run rejects both).
 #   filter      the filter's own change at the shell: max |Δρ| per distance
 #               from a coarse-fine face over the run's passes, under the
 #               three interface filter row sets. A smooth entropy wave and
@@ -333,17 +336,25 @@ function probe_part(ns, nodes)
     say("printed: |interface - uniform| / input amplitude, then the log2 ",
         "orders; round-off is near 1e-16")
     cases = Any[]
+    # The last entry marks a case a same-level patched run rejects.
     for g in GHOST_MODES
-        push!(cases, ("detector :delta4, " * ghost_label(g), op_detector, (;), g))
+        push!(cases, ("detector :delta4, " * ghost_label(g), op_detector, (;), g,
+                      false))
+    end
+    for g in GHOST_MODES
+        push!(cases, ("detector :d8, " * ghost_label(g), op_detector,
+                      (art=ArtParams(detector=:d8),), g, true))
     end
     for smoo in (:gaussian, :compact)
         push!(cases, ("smoother :$smoo", op_smoother,
-                      (art=ArtParams(smoother=smoo),), first(GHOST_MODES)))
+                      (art=ArtParams(smoother=smoo),), first(GHOST_MODES), false))
     end
     for (flab, fkw) in FILTER_ROWS
         push!(cases, ("state filter, $flab rows", op_filter, fkw,
-                      first(GHOST_MODES)))
+                      first(GHOST_MODES), false))
     end
+    push!(cases, ("state filter, pyranda_filter", op_filter,
+                  (filt=pyranda_filter(),), first(GHOST_MODES), true))
     modes = ((:levels, "two-level nest, level-1 patch at h/3, " *
                        "reference = uniform 3N",
               "shell, low face", "shell, high face"),
@@ -352,7 +363,8 @@ function probe_part(ns, nodes)
               "interface, patch 2 side", "interface, patch 1 side"))
     for (mode, title, lolab, hilab) in modes
         say("\n--- $title ---")
-        for (name, op, kw, g) in cases
+        for (name, op, kw, g, nest_only) in cases
+            nest_only && mode === :patches && continue
             results = [probe_case(N, mode, op, kw, nodes, g) for N in ns]
             say("")
             probe_report("$name, $lolab", ns, [r[1] for r in results], nodes)
@@ -384,6 +396,7 @@ two_gases() = IdealMixture([IdealSpecies{Float64}("species-a", 1.0, 1.4),
 deriv_of(row) = row.scheme === :C10 ? lele_d1_10(closures=row.closures) :
                 lele_d1_6(closures=row.closures)
 idiv_of(row) = row.idiv === nothing ? nothing : lele_d1_6(closures=row.idiv)
+filt_of(row) = row.filt === :pyranda ? pyranda_filter() : compact_filter(0.45)
 
 # The row's initial data, mirrored about x = 1/2 when the row runs reversed.
 function ic_of(row)
@@ -421,8 +434,9 @@ function crossing_solver(row, N)
             (refine=regions, subcycle=row.subcycle, tile=row.tile)
     eos = row.species == 2 ? two_gases() : IdealSpecies("gas"; gamma=1.4, R=1.0)
     s = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=(WALL2, PER, PER),
-               cfl=CROSSING_CFL, eos=eos, deriv=deriv_of(row),
-               art=ArtParams(enabled=row.art), filter_cfl=row.filter_cfl,
+               cfl=CROSSING_CFL, eos=eos, deriv=deriv_of(row), filt=filt_of(row),
+               art=ArtParams(enabled=row.art, detector=row.detector),
+               filter_cfl=row.filter_cfl,
                interface_rhs=row.interface_rhs, interface_divergence=idiv_of(row),
                interface_flux=row.iflux,
                control=StepControl(validity=:permissive); extra...)
@@ -543,7 +557,8 @@ function reference_lines(row, N, ts, nmax)
     eos = row.species == 2 ? two_gases() : IdealSpecies("gas"; gamma=1.4, R=1.0)
     s = Solver(n_global=(3N - 2, 1, 1), L_domain=(1.0, 1.0, 1.0),
                bcs=(WALL2, PER, PER), cfl=CROSSING_CFL, eos=eos,
-               deriv=deriv_of(row), art=ArtParams(enabled=row.art),
+               deriv=deriv_of(row), filt=filt_of(row),
+               art=ArtParams(enabled=row.art, detector=row.detector),
                filter_cfl=row.filter_cfl,
                control=StepControl(validity=:permissive))
     Q = allocate_state(s)
@@ -561,7 +576,7 @@ function reference_lines(row, N, ts, nmax)
 end
 
 refkey(row) = (row.scheme, row.closures, row.filter_cfl, row.art, row.species,
-               row.direction)
+               row.direction, row.detector, row.filt)
 
 function crossing_row(row, N, ts, nmax, refs)
     have_ref = !failed(refs)
@@ -624,7 +639,8 @@ function crossing_rows()
     base = (; label="base (C6, subcycled)", mode=:levels, depth=2, subcycle=true,
             tile=0, scheme=:C6, closures=:neutral3, filter_cfl=0.35, art=true,
             ghosts=true, patch_grid=(1, 1, 1), species=1, idiv=nothing,
-            direction=1, interface_rhs=:extended, iflux=:closure)
+            direction=1, interface_rhs=:extended, iflux=:closure,
+            detector=:delta4, filt=:compact)
     rows = Any[base]
     HAS_GHOST_TOGGLE &&
         push!(rows, merge(base, (; label="sensor taps clamped", ghosts=false)))
@@ -675,6 +691,17 @@ function crossing_rows()
         push!(rows, merge(base, change, (; label="gflux$label", iflux=:ghost)))
     end
     push!(rows, merge(base, (; label="reversed", direction=-1)))
+    # The pentadiagonal filter and the d8 detector at the coarse-fine faces.
+    for (label, change) in (("", (;)), (" global dt", (; subcycle=false)),
+                            (" tile 8", (; tile=8)), (" three levels", (; depth=3)),
+                            (" reversed", (; direction=-1)))
+        push!(rows, merge(base, change, (; label="d8$label", detector=:d8)))
+        push!(rows, merge(base, change, (; label="pyranda$label", filt=:pyranda)))
+    end
+    HAS_GHOST_TOGGLE &&
+        push!(rows, merge(base, (; label="d8 sensor taps clamped", detector=:d8,
+                                 ghosts=false)))
+    push!(rows, merge(base, (; label="d8 pyranda", detector=:d8, filt=:pyranda)))
     push!(rows, merge(base, (; label="two patches onesided", mode=:patches,
                              patch_grid=(2, 1, 1), interface_rhs=:onesided)))
     species = Any[]
