@@ -281,8 +281,9 @@ LSRK(5,4) integration, artificial properties, multicomponent transport, the
 curvilinear metrics, and the distributed solve) is covered by the suites above
 and validated against analytic references.
 
-- Float64 by default; a uniform Float32 mode (CPU and GPU) reduces state-array
-  storage, with precision-dependent conservation error. See the
+- Float64 by default; a uniform Float32 mode (`Numerics(precision = Float32)`,
+  CPU and GPU) reduces state-array storage, with precision-dependent
+  conservation error. See the
   [precision measurements](reference/CALIBRATION_APPENDIX.md#amr).
 - A converging strong shock at a spherical origin is CFL-limited to 0.3 by an
   excursion of the origin cell as the shock forms; `StepControl(retries=4)`

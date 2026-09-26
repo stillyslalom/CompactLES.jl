@@ -213,8 +213,7 @@ if MPIPreferences.binary != "system"
         # first built, which is why the 3-D refined device case is left to the
         # suite rather than spending a third dimension of image on it.
         T = Float32
-        f32 = (transport=Transport{T}(), art=ArtParams{T}(enabled=false),
-               deriv=lele_d1_6(T), filt=compact_filter(T(0.45), T))
+        f32 = (precision=T, art=ArtParams(enabled=false))
         for extra in (PRECOMPILE_DEVICE ? ((;), (; backend=DeviceBackend(cpu))) :
                       ((;),))
             s = Solver(; n_global=(16, 12, 12),

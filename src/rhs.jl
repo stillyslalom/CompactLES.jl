@@ -172,8 +172,12 @@ test and benchmark suites do. It allocates no conserved state, so pair it with
 
 `eos`, `transport`, `metric`, and `sources` take their defaults and meaning from
 [`Problem`](@ref); `art`, `deriv`, `filt`, `cfl`, `control`, `filter_interval`,
-`filter_cfl`, `filter_weighting`, `dims`, `n_halo`, and `stretch` from
-[`Numerics`](@ref). The two with no
+`filter_cfl`, `filter_weighting`, `dims`, `n_halo`, `stretch`, and `precision`
+from [`Numerics`](@ref). Without `precision`, the element type is the one
+shared by the components passed explicitly (`eos`, `transport`, `art`,
+`deriv`, `filt`, `interface_divergence`), or `Float64` when none is passed.
+Components left out are built at that type, and components of different
+types raise an `ArgumentError`. The two keywords with no
 `Problem`/`Numerics` counterpart are:
 
 - `origin`: low corner of the domain, one value per direction. Default
@@ -203,16 +207,39 @@ them.
   or resolved over 2π with an even point count, as θ may be at the axis.
 """
 function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
-                eos=_default_ideal_mixture(),
+                precision::Union{Nothing,Type}=nothing,
+                eos=nothing,
+                transport::Union{Nothing,AbstractTransport}=nothing,
+                art::Union{Nothing,ArtParams}=nothing,
+                deriv::Union{Nothing,AbstractCompactScheme}=nothing,
+                filt::Union{Nothing,AbstractCompactScheme}=nothing,
+                interface_divergence::Union{Nothing,AbstractCompactScheme}=nothing,
+                kwargs...)
+    eos === nothing || (eos = _as_eos(eos))
+    T = _resolve_precision(precision, (; eos, transport, art, deriv, filt,
+                                        interface_divergence))
+    cv(x, default) = x === nothing ? default : _to_precision(T, x)
+    return _Solver(T; n_global, L_domain, bcs,
+                   eos=cv(eos, _default_ideal_mixture(T)),
+                   transport=cv(transport, Transport{T}()),
+                   art=cv(art, ArtParams{T}()),
+                   deriv=cv(deriv, lele_d1_6(T)),
+                   filt=cv(filt, compact_filter(0.45, T)),
+                   interface_divergence=cv(interface_divergence, nothing),
+                   kwargs...)
+end
+
+function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
+                eos::EOS,
                 equations=nothing,
-                transport::AbstractTransport{T}=Transport(),
-                art::ArtParams=ArtParams(),
+                transport::AbstractTransport{T},
+                art::ArtParams{T},
                 metric::Metric=CartesianMetric(),
                 stretch::NTuple{3,Union{Nothing,Stretch}}=(nothing, nothing, nothing),
                 sources=(),
                 origin=(0.0, 0.0, 0.0),
-                deriv::AbstractCompactScheme=lele_d1_6(),
-                filt::AbstractCompactScheme=compact_filter(0.45),
+                deriv::AbstractCompactScheme,
+                filt::AbstractCompactScheme,
                 cfl::Real=0.5, filter_interval::Int=1, filter_cfl::Real=0.35,
                 filter_weighting::Symbol=:none,
                 control::StepControl=StepControl(),
@@ -221,7 +248,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 patch_grid::NTuple{3,Int}=(1, 1, 1),
                 backend::AbstractBackend=CPUBackend(),
                 interface_rhs::Symbol=:extended,
-                interface_divergence::Union{Nothing,AbstractCompactScheme}=nothing,
+                interface_divergence::Union{Nothing,AbstractCompactScheme},
                 interface_flux::Symbol=:closure,
                 refine::Union{Nothing,BlockRegion,Vector{BlockRegion}}=nothing,
                 level_restriction::Symbol=:inject,
@@ -240,7 +267,6 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                 rebalance::Real=0,
                 rebalance_persist::Int=2) where {T}
     bcs = _face_conditions(bcs)
-    eos = _as_eos(eos)
     level_interpolation_order =
         something(level_interpolation_order,
                   default_interpolation_order(deriv, interface_flux))

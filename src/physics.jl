@@ -301,7 +301,8 @@ function IdealMixture(::Type{T}, names::AbstractVector{<:AbstractString};
     return IdealMixture(T, species)
 end
 
-_default_ideal_mixture() = IdealMixture(IdealSpecies("gas"; R=1.0, gamma=1.4))
+_default_ideal_mixture(::Type{T}=Float64) where {T<:AbstractFloat} =
+    IdealMixture(IdealSpecies(T, "gas"; R=1.0, gamma=1.4))
 _as_eos(eos::EOS) = eos
 _as_eos(species::IdealSpecies) = IdealMixture(species)
 _as_eos(eos) = throw(ArgumentError(

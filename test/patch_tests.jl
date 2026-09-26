@@ -268,8 +268,8 @@ end
     mk(; kw...) = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3; kw...)
     @test_throws "interior coefficients" mk(patch_grid=(2, 1, 1),
                                             interface_divergence=lele_d1_8())
-    @test_throws "interior coefficients" mk(patch_grid=(2, 1, 1),
-                                            interface_divergence=lele_d1_6(Float32))
+    @test_throws "floating-point types" mk(patch_grid=(2, 1, 1), deriv=lele_d1_6(),
+                                           interface_divergence=lele_d1_6(Float32))
     @test_throws "interior coefficients" mk(patch_grid=(2, 1, 1), deriv=lele_d1_10(),
                                             interface_divergence=c6)
     @test_throws "interior coefficients" mk(patch_grid=(2, 1, 1),

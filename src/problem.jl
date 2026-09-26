@@ -644,7 +644,8 @@ end
     Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
              art=ArtParams(), cfl=0.5, control=StepControl(),
              filter_interval=1, filter_cfl=0.35, filter_weighting=:none,
-             dims=nothing, n_halo=4, stretch=(nothing, nothing, nothing))
+             dims=nothing, n_halo=4, stretch=(nothing, nothing, nothing),
+             precision=nothing)
 
 Grid, scheme, timestep, and decomposition choices used to realize a
 [`Problem`](@ref).
@@ -707,6 +708,12 @@ Grid, scheme, timestep, and decomposition choices used to realize a
 - `stretch`: one entry per direction, each either `nothing` for a uniform grid
   or a [`Stretch`](@ref). A mapping must span the corresponding `Problem.domain`
   interval and can be used only in a nonperiodic, non-folded direction.
+- `precision`: `Float32` or `Float64`, or `nothing` (the default). When set,
+  the EOS, the transport model, `art`, `deriv`, `filt` and
+  `interface_divergence` are converted to this type, and the solver stores
+  and computes in it. Left at `nothing`, those components must all carry one
+  type, which the solver adopts; components of different types raise an
+  `ArgumentError` at setup that names the type of each.
 
 Compact plans impose a scheme-dependent minimum rank-local extent. With the
 defaults, each resolved local extent needs at least nine points because the
@@ -830,6 +837,7 @@ Base.@kwdef struct Numerics
     tile::Int = 0
     rebalance::Float64 = 0.0
     rebalance_persist::Int = 2
+    precision::Union{Nothing,Type{<:AbstractFloat}} = nothing
 end
 
 const _AMR_LEGACY_FIELDS = (
@@ -909,7 +917,8 @@ function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
                patch_grid=num.patch_grid, backend=num.backend,
                interface_rhs=num.interface_rhs,
                interface_divergence=num.interface_divergence,
-               interface_flux=num.interface_flux, kw...)
+               interface_flux=num.interface_flux,
+               precision=num.precision, kw...)
     Q = allocate_state(solver)
     if seed_only
         # The temporary fine cover exists only to plan the initial tagging.

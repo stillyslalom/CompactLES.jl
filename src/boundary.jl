@@ -686,7 +686,10 @@ function enforce!(bc::NoSlipWallBC, Q, solver, d, side)
     plane = wallplane(solver.decomp, d, side)
     plane === nothing && return nothing
     m1, m2, m3 = solver.equations.i_mom
-    plane_pointwise!(_no_slip_wall_point!, Q, plane, Q, solver.eos, bc.Twall,
+    # The keyword constructor stores a Float64 `Twall`; convert it to the
+    # state's type so an isothermal wall does not promote the energy update.
+    plane_pointwise!(_no_slip_wall_point!, Q, plane, Q, solver.eos,
+                     convert(eltype(Q), bc.Twall),
                      !isnan(bc.Twall), m1, m2, m3, solver.equations.i_energy,
                      solver.equations.n_species)
     nothing

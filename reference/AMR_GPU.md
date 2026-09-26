@@ -1160,7 +1160,10 @@ appendix ([measurements](CALIBRATION_APPENDIX.md#amr)).
 
 Uniform Float32 is a supported opt-in end to end, with literals typed
 against the state's eltype and `positive_floor` replacing raw 1e-300
-guards. On the CPU it halves the footprint at nearly the Float64 wall and
+guards. `precision = Float32` on `Numerics` or `Solver` converts the EOS,
+transport, artificial coefficients and schemes to it; without the keyword,
+components of different types are rejected at setup. On the CPU it halves
+the footprint at nearly the Float64 wall and
 reproduces the dissipation history, but carries a mean-density drift orders
 of magnitude above the Float64 one, which is why it is not the default. On
 device Float32 runs only a little faster than Float64, because the step is

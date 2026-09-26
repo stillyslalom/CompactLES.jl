@@ -2,11 +2,13 @@
 #
 #   julia --project=. -t auto bench/audit.jl
 #
-# Two questions, answered per call site:
+# Three questions, answered per call site:
 #   1. How many bytes does a steady-state call allocate? Anything that scales
 #      with the grid is a bug; a small constant is threading/closure overhead.
 #   2. Does inference produce concrete types? Reported as the number of
 #      non-concrete slots @code_warntype would colour red.
+#   3. Does a Float32 run compute in Float32? Reported per point body as the
+#      number of Float64 values in its optimized code.
 
 using MPI
 MPI.Init(threadlevel=:funneled)
@@ -124,6 +126,75 @@ probes = [
 for (name, f, T) in probes
     n, bad = badtypes(f, T)
     @printf("  %-24s  %4d non-concrete SSA values\n", name, n)
+end
+
+# --- precision probe --------------------------------------------------------
+# Float64 values in the per-point bodies of Float32 runs. Each run below
+# compiles the bodies it launches at Float32 argument types; a Float64 SSA
+# value in a body's optimized code is a Float64 operand (a literal, or a
+# component stored at Float64) promoting Float32 arithmetic. Code behind a
+# call the optimizer does not inline is not seen.
+function float64_in_point_bodies()
+    per = (PeriodicBC(), PeriodicBC())
+    iso = (NoSlipWallBC(Twall=1.0), NoSlipWallBC(Twall=1.0))
+    mix = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 0.2, 1.09)])
+    wave(x, y, z) = Prim(u=(0.1sin(x), 0.05cos(y), 0.0), p=1 + 0.05cos(z),
+                         rho=1 + 0.1sin(y))
+    pair(x, y, z) = Prim(Y=(0.6 + 0.1sin(x), 0.4 - 0.1sin(x)),
+                         u=(0.0, 0.05sin(y), 0.0), p=1.0, rho=1 + 0.1sin(y))
+    runs = [
+        ((n_global=(24, 24, 24), L_domain=(2π, 2π, 2π), bcs=per3,
+          transport=Transport(mu0=1e-3), art=ArtParams(enabled=true)), wave),
+        ((n_global=(24, 16, 1), L_domain=(1.0, 2π, 1.0), bcs=(iso, per, per),
+          eos=mix, transport=Transport(mu0=1e-3),
+          art=ArtParams(enabled=true, species_flux=:bulk),
+          sources=(ConstantBodyForce((0.0, -1.0, 0.0)),)), pair),
+        ((n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0),
+          bcs=((NSCBCInflowBC(u=(0.1, 0.0, 0.0), T_ion=1.0),
+                NSCBCOutflowBC(pinf=1.0)), per, per),
+          art=ArtParams(enabled=true)),
+         (x, y, z) -> Prim(u=(0.1, 0.0, 0.0), p=1.0, rho=1.0)),
+        ((n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
+          eos=StiffenedGas(gamma=4.4, p_inf=1.0, cv=1.0), art=ArtParams(enabled=true)),
+         (x, y, z) -> Prim(u=(0.1, 0.0, 0.0), p=1 + 0.1sin(2π * x), rho=1.0)),
+        ((n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0), metric=CylindricalMetric(),
+          bcs=((AxisBC(), SlipWallBC()), per, per), art=ArtParams(enabled=true)),
+         (r, θ, z) -> Prim(u=(0, 0, 0), p=1 + 0.1exp(-40(r - 0.4)^2), rho=1.0)),
+    ]
+    for (deck, ic) in runs
+        s = Solver(; precision=Float32, cfl=0.3, deck...)
+        Q = allocate_state(s)
+        initialize!(s, Q, ic)
+        run!(s, Q; tfinal=1.0, nmax=2)
+    end
+    counts = Pair{Symbol,Int}[]
+    scanned = 0
+    for n in names(CL; all=true)
+        endswith(string(n), "_point!") || continue
+        f = getfield(CL, n)
+        f isa Function || continue
+        k = 0
+        for m in methods(f), mi in Base.specializations(m)
+            mi === nothing && continue
+            occursin("Float32", string(mi.specTypes)) || continue
+            scanned += 1
+            for (ci, _) in Base.code_typed_by_type(mi.specTypes; optimize=true)
+                k += count(t -> Core.Compiler.widenconst(t) === Float64,
+                           ci.ssavaluetypes)
+            end
+        end
+        k > 0 && push!(counts, n => k)
+    end
+    return counts, scanned
+end
+
+println("\n=== precision: Float64 SSA values in Float32 point bodies ===")
+promoted, scanned = float64_in_point_bodies()
+@printf("  %d Float32 specializations scanned\n", scanned)
+isempty(promoted) && println("  none carries a Float64 value")
+for (n, k) in promoted
+    @printf("  %-32s %4d\n", n, k)
 end
 
 println("\naudit complete")

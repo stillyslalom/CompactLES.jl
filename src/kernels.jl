@@ -365,22 +365,28 @@ left unfiltered; `closures` selects rows 2–4:
 """
 function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64;
                         closures::Symbol=:onesided) where {T}
-    af = T(alphaf)
-    a0 = (93 + 70af) / 128
-    a1 = (7 + 18af) / 16
-    a2 = (-7 + 14af) / 32
-    a3 = (1 - 2af) / 16
-    a4 = (-1 + 2af) / 128
+    # The weights are evaluated in at least Float64 and rounded once to T, so
+    # a Float32 filter carries the rounded Float64 weights. Solving the
+    # one-sided rows' Vandermonde systems in Float32 instead leaves errors of
+    # tens of ulps.
+    S = promote_type(Float64, T)
+    as = S(alphaf)
+    af = T(as)
+    a0 = (93 + 70as) / 128
+    a1 = (7 + 18as) / 16
+    a2 = (-7 + 14as) / 32
+    a3 = (1 - 2as) / 16
+    a4 = (-1 + 2as) / 128
     # Boundary closures: row 1 identity; under `:cascade` rows 2–4 host
     # centered compact filters of order 2, 4, 6 (same αf), the standard
     # reduced-order cascade. Consistency: the RHS coefficients of each of
     # these rows sum to 1 + 2αf.
-    b2 = (T((1 + 2af) / 2), T((1 + 2af) / 2))                        # F2: a0, a1
-    b4 = (T((5 + 6af) / 8), T((1 + 2af) / 2), T((-1 + 2af) / 8))     # F4
-    b6 = (T((11 + 10af) / 16), T((15 + 34af) / 32),
-          T((-3 + 6af) / 16), T((1 - 2af) / 32))                     # F6
-    ctr(c) = [ [c[m + 1] / 2 for m in length(c)-1:-1:1]; c[1];
-               [c[m + 1] / 2 for m in 1:length(c)-1] ]
+    b2 = ((1 + 2as) / 2, (1 + 2as) / 2)                              # F2: a0, a1
+    b4 = ((5 + 6as) / 8, (1 + 2as) / 2, (-1 + 2as) / 8)              # F4
+    b6 = ((11 + 10as) / 16, (15 + 34as) / 32,
+          (-3 + 6as) / 16, (1 - 2as) / 32)                           # F6
+    ctr(c) = T[ [c[m + 1] / 2 for m in length(c)-1:-1:1]; c[1];
+                [c[m + 1] / 2 for m in 1:length(c)-1] ]
     row1 = ClosureRow{T}((zero(T), one(T), zero(T)), T[1])
     cl = if closures === :cascade
         [row1,
@@ -388,13 +394,13 @@ function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64;
          ClosureRow{T}((af, one(T), af), ctr(b4)),
          ClosureRow{T}((af, one(T), af), ctr(b6))]
     elseif closures === :onesided
-        [row1; [ClosureRow{T}((af, one(T), af), onesided_filter_row(af, i, 4))
+        [row1; [ClosureRow{T}((af, one(T), af), T.(onesided_filter_row(as, i, 4)))
                 for i in 2:4]]
     else
         error("unknown filter closure set $(repr(closures)); " *
               "use :cascade or :onesided")
     end
-    CompactScheme{T}("Gaitonde–Visbal C8 filter", af, a0,
+    CompactScheme{T}("Gaitonde–Visbal C8 filter", af, T(a0),
                      T[a1/2, a2/2, a3/2, a4/2], true, cl)
 end
 
@@ -426,14 +432,17 @@ state and not a test filter: at αf = 0.45 it retains 99% of the
 amplitude at four points per wavelength where this filter retains 19%.
 """
 function gaussian_filter(::Type{T}=Float64) where {T}
-    a = T(3565//10368); b = T(3091//12960); c = T(1997//25920)
-    d = T(149//12960);  e = T(107//103680)
+    # The folded row sums are formed in at least Float64 and rounded once to
+    # T, as in `compact_filter`.
+    S = promote_type(Float64, T)
+    a = S(3565//10368); b = S(3091//12960); c = S(1997//25920)
+    d = S(149//12960);  e = S(107//103680)
     lhs = (zero(T), one(T), zero(T))
     cl = [ClosureRow{T}(lhs, T[a+b, b+c, c+d, d+e, e]),
           ClosureRow{T}(lhs, T[b+c, a+d, b+e, c, d, e]),
           ClosureRow{T}(lhs, T[c+d, b+e, a, b, c, d, e]),
           ClosureRow{T}(lhs, T[d+e, c, b, a, b, c, d, e])]
-    CompactScheme{T}("explicit 9-point Gaussian", zero(T), a, T[b, c, d, e], true, cl)
+    CompactScheme{T}("explicit 9-point Gaussian", zero(T), T(a), T[b, c, d, e], true, cl)
 end
 
 # --- Patch-interface closures ------------------------------------------------

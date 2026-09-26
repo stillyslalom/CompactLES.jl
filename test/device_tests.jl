@@ -501,9 +501,7 @@ end
     per = (PeriodicBC(), PeriodicBC())
     function build(backend)
         s = Solver(n_global=(16, 12, 12), L_domain=(T(2π), T(2π), T(2π)),
-                   bcs=(per, per, per), transport=Transport{T}(),
-                   art=ArtParams{T}(), deriv=lele_d1_6(T),
-                   filt=compact_filter(T(0.45), T), cfl=T(0.4),
+                   bcs=(per, per, per), precision=T, cfl=0.4,
                    backend=backend)
         Q = allocate_state(s)
         initialize!(s, Q, (x, y, z) ->
@@ -514,6 +512,7 @@ end
     run!(s1, Q1; tfinal=T(0.05), nmax=5)
     s2, Q2 = build(DeviceBackend(cpu_ka))
     @test s2.deriv_plans[1] isa DevicePlan{T}
+    @test s2.eos isa IdealMixture{T} && s2.art isa ArtParams{T}
     CL.FORCE_KA[] = true
     try
         run!(s2, Q2; tfinal=T(0.05), nmax=5)

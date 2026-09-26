@@ -3,11 +3,7 @@
 # Float32 tests in runtests.jl compile the individual paths; these cases ask
 # whether they retain the solver's physical invariants and reference behavior.
 
-_f32_numerics(; art=false) =
-    (transport=Transport{Float32}(),
-     art=ArtParams{Float32}(enabled=art),
-     deriv=lele_d1_6(Float32),
-     filt=compact_filter(Float32(0.45), Float32))
+_f32_numerics(; art=false) = (precision=Float32, art=ArtParams(enabled=art))
 
 @testset "Float32 freestream/GCL matrix" begin
     T = Float32
@@ -77,11 +73,7 @@ end
 function _f32_closed_derivative_error(N; spherical=false, T=Float32,
                                       deriv=lele_d1_6(T))
     per = (PeriodicBC(), PeriodicBC())
-    numerics = (_f32_numerics()..., deriv=deriv)
-    if T === Float64
-        numerics = (transport=Transport{T}(), art=ArtParams{T}(enabled=false),
-                    deriv=deriv, filt=compact_filter(T(0.45), T))
-    end
+    numerics = (precision=T, art=ArtParams(enabled=false), deriv=deriv)
     solver = if spherical
         Solver(; n_global=(N, 12, 12),
                L_domain=(one(T), T(π), T(2π)),
@@ -258,4 +250,80 @@ end
     @test all(diff(ke32) .< 0)
     @test maximum(abs.(ke32 .- ke64)) < 5e-7
     @test abs(first(h32[end]) - first(h32[1])) < 3e-6
+end
+
+# A transport model with a scalar type and no precision conversion.
+struct _Float64OnlyTransport <: AbstractTransport{Float64} end
+
+@testset "precision keyword" begin
+    T = Float32
+    per = (PeriodicBC(), PeriodicBC())
+    bcs = ((SlipWallBC(), SlipWallBC()), per, per)
+    small(; kw...) = Solver(; n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                            bcs=bcs, kw...)
+    function sod(; kw...)
+        s = Solver(; n_global=(64, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=bcs,
+                   cfl=0.4, kw...)
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                                                 Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+        run!(s, Q; tfinal=0.02, nmax=20)
+        return s, Q
+    end
+
+    # Float64 components converted by `precision`, against the same deck
+    # built at Float32 by hand: every stored scalar and every step agree.
+    s1, Q1 = sod(precision=T, eos=IdealSpecies("gas"; R=1.0, gamma=1.4),
+                 transport=Transport(mu0=1e-3), art=ArtParams(enabled=true),
+                 deriv=lele_d1_6(), filt=compact_filter(0.45))
+    s2, Q2 = sod(eos=IdealSpecies(T, "gas"; R=1, gamma=1.4),
+                 transport=Transport{T}(mu0=T(1e-3)), art=ArtParams{T}(enabled=true),
+                 deriv=lele_d1_6(T), filt=compact_filter(0.45, T))
+    @test parent(Q1) isa Array{T,4}
+    @test s1.eos isa IdealMixture{T}
+    @test s1.transport isa Transport{T}
+    @test s1.art isa ArtParams{T}
+    @test s1.deriv_plans[1] isa DirPlan{T}
+    @test s1.filter_plans[1] isa DirPlan{T}
+    @test s1.step == s2.step > 1
+    @test parent(Q1) == parent(Q2)
+
+    # Components left out are built at the precision of those given.
+    s = small(transport=Transport{T}())
+    @test s.eos isa IdealMixture{T} && s.art isa ArtParams{T}
+    @test s.deriv_plans[1] isa DirPlan{T}
+
+    # Without `precision`, a mixture is rejected and each component named.
+    err = try
+        small(transport=Transport{T}(), art=ArtParams(), eos=IdealSpecies("gas"; R=1, gamma=1.4))
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    msg = sprint(showerror, err)
+    @test occursin("eos is Float64", msg) && occursin("transport is Float32", msg) &&
+          occursin("art is Float64", msg) && occursin("precision = Float32", msg)
+    prob = Problem(transport=Transport{T}(), domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
+                   bcs=bcs, ic=(x, y, z) -> Prim(u=(0, 0, 0), p=1.0, rho=1.0))
+    @test_throws ArgumentError setup(prob, Numerics(n_global=(16, 1, 1)))
+    @test_throws ArgumentError small(precision=Int)
+    @test_throws ArgumentError small(precision=T, transport=_Float64OnlyTransport())
+
+    # `precision` through `setup`, and conversion upward.
+    solver, Q = setup(prob, Numerics(n_global=(16, 1, 1), precision=T))
+    @test parent(Q) isa Array{T,4} && solver.art isa ArtParams{T}
+    s = small(precision=Float64, eos=StiffenedGas{T}(), transport=Transport{T}(mu0=T(0.1)),
+              art=ArtParams{T}(), deriv=lele_d1_10(T))
+    @test s.eos isa StiffenedGas{Float64} && s.transport isa Transport{Float64}
+    @test s.transport.mu0 == Float64(T(0.1)) && s.deriv_plans[1] isa BandPlan{Float64}
+
+    # A NASA-9 mixture and its CEA transport convert to the objects built at
+    # Float32 from the same data.
+    eos = Nasa9Mixture(["N2", "O2"])
+    s = small(precision=T, eos=eos, transport=CeaTransport(eos))
+    eos32 = Nasa9Mixture(T, ["N2", "O2"])
+    tr32 = CeaTransport(eos32)
+    @test s.eos isa Nasa9Mixture{T} && s.transport isa typeof(tr32)
+    @test s.eos.e_guess == eos32.e_guess && s.eos.cv_guess == eos32.cv_guess
+    @test s.transport.species == tr32.species && s.transport.Rk == tr32.Rk
 end

@@ -348,14 +348,9 @@ filter time-scaling with N1.
   A7's ideal-performance gate, and measured load/precompile cost. Package/module
   boundaries must still allow solver-owned fusion and optional bulk evaluation.
 
-- [ ] **A9 — Accept symbolic field selectors in composite AMR diagnostics.**
-  `field_array`, `line_profile` and `volume_integral` take the state vector and
-  a name; `line_sample`, `field_slice` and the Makie recipes do not yet. Reuse
-  the existing composite weighting and covered-node masking, refresh primitives
-  safely, and document sampling and collective-call semantics.
-  **Gate:** agreement with explicit per-patch fields on static, tiled, and
-  regridded hierarchies in serial and MPI; diagnostics leave the trajectory
-  unchanged. Simplify the AMR tutorial to exercise the symbolic route.
+- [x] **A9** — `line_sample`, `field_slice` and the Makie recipes take the
+  state vector of a refined run and sample root nodes from the finest level
+  holding them (commit `e5d521d`).
 
 - [ ] **A10 — Let a refined level reach and cross the domain boundary.**
   Every level now stays `max(n_halo, 4)` parent nodes inside its parent, so a
