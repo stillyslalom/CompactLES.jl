@@ -1093,7 +1093,8 @@ Kernel-argument adaptation is the central design concern. A `Vector{A}` or
 so field collections reach bodies as `FieldVector`/`FieldMatrix`: host
 wrappers that adapt to isbits `NTuple` mirrors only at launch, holding the
 tuple form on the host being measurably slower. The gas-model EOS objects
-adapt to coefficient mirrors the same way. Bodies take no `::Type` argument,
+adapt to coefficient mirrors the same way, a `Nasa9Mixture` with its interval
+table flattened into one tuple at the host table's padded width. Bodies take no `::Type` argument,
 which costs an order of magnitude in silent per-point dispatch on both
 paths, and a splatted kernel-argument tuple longer than 32 elements is an
 `InvalidIRError` on device; `test/device_tests.jl` asserts the budget for
@@ -1240,7 +1241,9 @@ The oracle hierarchy, strongest first:
    over full runs: smooth periodic and closed cases, NSCBC, folds,
    freestream/GCL, a 578-step Sod, refined static and regridding runs, 64³
    TGV histories in both precisions, and distributed runs at np = 2/4/8, in
-   both launch-policy modes.
+   both launch-policy modes. `Nasa9Mixture` is the exception on hardware:
+   the device's logarithm and integer powers are its own, so its runs agree
+   with the CPU to round-off and are bitwise only on the KA CPU backend.
 2. **Bitwise equality within a patch across configurations.** The
    single-patch and level paths are held bit-identical where the
    configuration admits it (`test/convergence.jl`, `test/level_tests.jl`),
@@ -1389,10 +1392,12 @@ Configurations rejected at setup, and the reason:
   rebalancing. Rebalancing requires a tiled, regridding level. Converging-shock
   problems on folded grids use a globally fine level 0 in r near the fold;
   on a Cartesian grid the question does not arise.
-- **Device runs** reject `Nasa9Mixture` (no fixed-width device mirror), a
-  pointwise NSCBC inflow `target` (host closure),
+- **Device runs** reject a pointwise NSCBC inflow `target` (host closure),
   `StepControl.floor_ratio > 0` and `dt_report` (host sweeps), and `:filter`
   restriction; a `tag_predicate` downloads the coarse block at each check.
+  The state validation is a host sweep that reports nothing on device
+  storage, so a `Nasa9Mixture` run there does not surface its recovery and
+  extrapolation flags, although the device mirror computes them.
 - The artificial-property sensors are built per patch. The δ⁴ detector
   reads the exchanged or imposed ghost layers at an interface face for the
   fields recovered over the padded extent and clamps the strain and
@@ -1405,10 +1410,10 @@ Configurations rejected at setup, and the reason:
 
 The open items are in [ROADMAP.md](ROADMAP.md): N12a and N14–N16 for the
 interface numerics (level-aware global-step filtering, the interface
-divergence closures, and the live transfer order), S1–S5 for the
+divergence closures, and the live transfer order), S1–S4 for the
 target-machine device campaign, the compact-solve and transfer scaling
-limits, the production tile and ownership cost studies, the mixed-precision
-policy and the NASA-9 device mirror, and S8 for regridding below level 1 and
+limits, the production tile and ownership cost studies and the mixed-precision
+policy, and S8 for regridding below level 1 and
 for multiblock geometry beyond the slab layout.
 
 Additional open items and long-term targets are recorded here.

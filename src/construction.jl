@@ -528,9 +528,6 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         refine === nothing || level_restriction === :inject ||
             error("level_restriction = :filter is host-only; use :inject " *
                   "on a DeviceBackend")
-        eos isa Nasa9Mixture &&
-            error("Nasa9Mixture has no device coefficient mirror yet; use " *
-                  "IdealMixture or StiffenedGas on a DeviceBackend")
     end
     ds_split = npatch > 1 ? findfirst(>(1), patch_grid) : 0
     faces_all = [ntuple(3) do d

@@ -578,7 +578,7 @@ end
 wall_internal_energy(eos::StiffenedGasCoeffs, Q, I, ::Int, Twall) =
     @inbounds Q[I, 1] * eos.cv * Twall + eos.p_inf
 
-wall_internal_energy(eos::Nasa9Mixture, Q, I, n_species::Int, Twall) = begin
+wall_internal_energy(eos::Nasa9Model, Q, I, n_species::Int, Twall) = begin
     ρe = zero(eltype(Q))
     point = _species_point(eos, Twall)
     @inbounds for k in 1:n_species

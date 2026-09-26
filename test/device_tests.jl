@@ -528,6 +528,153 @@ end
     @test parent(Q1) == parent(Q2)
 end
 
+# Everything a device launch asks of a NASA-9 EOS at one state, written as a
+# pointwise body so that the launch carries the EOS as a kernel argument: the
+# recovery and its status, the admissibility verdict, and the species and
+# mixture evaluations at a given temperature, in both the scalar and the
+# shared-powers forms.
+function _nasa9_probe_point!(out, eos, e, Y, Tq, n_species, i, j, k)
+    @inbounds begin
+        Yat = sp -> Y[sp, i]
+        T_rec, status = CL.mixture_temperature_status(eos, e[i], Yat)
+        out[1, i] = T_rec
+        out[2, i] = status
+        out[3, i] = state_admissibility(eos, one(T_rec), e[i], Yat, n_species)
+        T = Tq[i]
+        point = CL._species_point(eos, T)
+        cp = zero(T); h = zero(T); ev = zero(T); hp = zero(T); ep = zero(T)
+        Rm = zero(T)
+        for sp in 1:n_species
+            cp += Y[sp, i] * CL.species_cp(eos, sp, T)
+            h += Y[sp, i] * CL.species_enthalpy(eos, sp, T)
+            ev += Y[sp, i] * CL.species_energy(eos, sp, T)
+            hp += Y[sp, i] * CL.species_enthalpy(eos, sp, point)
+            ep += Y[sp, i] * CL.species_energy(eos, sp, point)
+            Rm += Y[sp, i] * eos.Rk[sp]
+        end
+        out[4, i] = cp; out[5, i] = h; out[6, i] = ev; out[7, i] = hp
+        out[8, i] = ep
+        p = Rm * T
+        out[9, i] = CL.eos_phi(eos, one(T), p, T, cp)
+        out[10, i] = CL.eos_dphi_dY(eos, n_species, one(T), p, T, cp)
+        out[11, i] = CL.artificial_conductivity_scale(eos, one(T), one(T), T, cp)
+    end
+    return nothing
+end
+
+@testset "NASA-9 device mirror: recovery and status" begin
+    # A device launch replaces a Nasa9Mixture with its isbits mirror, and on
+    # the KA CPU backend `_kernel_arg` does the same, so the launch below runs
+    # the mirror's methods. They must reproduce the host mixture bit for bit
+    # over the states the inversion finds hard: interval joins approached to
+    # a few ulp, the edges of the fitted range and beyond them under each
+    # extrapolation policy, energies with no root in the search bounds, and
+    # compositions with no bracket.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    for T in (Float64, Float32), policy in (:polynomial, :linear, :missing)
+        eos = Nasa9Mixture(T, ["He", "CO2", "N2"]; extrapolate=policy)
+        mirror = CL.Adapt.adapt(cpu_ka, eos)
+        @test mirror isa CL.Nasa9MixtureCoeffs{T,3}
+        @test isbitstype(typeof(mirror))
+        @test size(mirror.intervals) == size(eos.intervals)
+        @test all(mirror.intervals[i, k] === eos.intervals[i, k]
+                  for i in axes(eos.intervals, 1), k in 1:3)
+        comps = (T.((0.2, 0.5, 0.3)), T.((1, 0, 0)), T.((0, 1, 0)),
+                 T.((-0.3, 0.8, 0.5)), T.((0, 0, 0)))
+        temps = T[]
+        for Tj in (1000, 6000), s in (-1e-3, -4eps(T), 0, 4eps(T), 1e-3)
+            push!(temps, T(Tj) * (1 + T(s)))
+        end
+        append!(temps, T.((100, 200, 250, 300, 2500, 20000, 30000, 1e5)))
+        states = [(Y, Tr, sum(Y[k] * CL.species_energy(eos, k, Tr) for k in 1:3))
+                  for Y in comps for Tr in temps]
+        for Y in comps, e in T.((-1e12, 1e30))
+            push!(states, (Y, T(500), e))
+        end
+        n = length(states)
+        Ym = T[states[i][1][k] for k in 1:3, i in 1:n]
+        Tq = T[s[2] for s in states]
+        e = T[s[3] for s in states]
+        host = zeros(T, 11, n)
+        for i in 1:n
+            _nasa9_probe_point!(host, eos, e, Ym, Tq, 3, i, 1, 1)
+        end
+        dev = zeros(T, 11, n)
+        CL.pointwise_ka!(_nasa9_probe_point!, cpu_ka, n, 1, 1, dev, eos, e, Ym,
+                         Tq, 3)
+        @test isequal(host, dev)
+        # The set reaches the failure and extrapolation statuses.
+        hard = CL.TEMPERATURE_NOT_CONVERGED | CL.TEMPERATURE_NO_BRACKET |
+               CL.TEMPERATURE_OUT_OF_RANGE
+        @test reduce(|, UInt8.(host[2, :])) & hard == hard
+        verdicts = reduce(|, UInt8.(host[3, :]))
+        @test verdicts & CL.STATE_EXTRAPOLATED != 0
+        @test (verdicts & CL.STATE_INADMISSIBLE != 0) == (policy === :missing)
+    end
+end
+
+@testset "NASA-9 device mirror: full runs reproduce the CPU solver" begin
+    # A NASA-9 run on the DeviceBackend construction path under FORCE_KA,
+    # bitwise against the CPUBackend run. The gas crosses the 1000 K join of
+    # both fits between the hot core and the isothermal wall, so the
+    # recovery, the fluxes, the sensors' mole fractions and the wall's
+    # internal energy all evaluate on both sides of it through the mirror.
+    cpu_ka = CL.KernelAbstractions.CPU()
+    per = (PeriodicBC(), PeriodicBC())
+    function wall_case(backend, T, n2)
+        eos = Nasa9Mixture(T, ["N2", "CO2"])
+        s = Solver(n_global=(32, n2, 1), L_domain=(T(0.1), T(0.04), T(1)),
+                   eos=eos, precision=T, backend=backend, cfl=0.4,
+                   bcs=((NoSlipWallBC(Twall=800.0), SlipWallBC()), per, per),
+                   transport=ConstantTransport(mu0=2e-5))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> begin
+            θ = (1 + tanh((x - T(0.05)) / T(0.008))) / 2
+            Prim(Y=(1 - θ, θ), p=1e5, T_ion=900 + 700 * sin(π * x / T(0.1)),
+                 u=(0.0, 20 * sin(2π * y / T(0.04)), 0.0))
+        end)
+        return s, Q
+    end
+    # A refined periodic wave with the ghost interface flux: the coarse-fine
+    # molecular flux recovers the temperature gradient from the species
+    # internal energies at the interface.
+    function level_case(backend)
+        N = 72
+        eos = Nasa9Mixture(["N2", "CO2"])
+        s = Solver(n_global=(N, 1, 1), L_domain=(0.1, 1.0, 1.0), eos=eos,
+                   bcs=(per, per, per), transport=ConstantTransport(mu0=2e-5),
+                   refine=BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1)),
+                   subcycle=true, interface_flux=:ghost, backend=backend)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) -> begin
+            θ = (1 + sin(2π * x / 0.1)) / 2
+            Prim(Y=(1 - θ, θ), p=1e5, T_ion=700 + 600θ, u=(30.0, 0, 0))
+        end)
+        return s, states
+    end
+    function compare(build; nmax)
+        s1, q1 = build(CPUBackend())
+        run!(s1, q1; tfinal=1.0, nmax=nmax)
+        CL.FORCE_KA[] = true
+        CL.FORCE_DEVICE_EXCHANGE[] = true
+        s2, q2 = try
+            s, q = build(DeviceBackend(cpu_ka))
+            run!(s, q; tfinal=1.0, nmax=nmax)
+            s, q
+        finally
+            CL.FORCE_KA[] = false
+            CL.FORCE_DEVICE_EXCHANGE[] = false
+        end
+        a = q1 isa AbstractVector ? q1 : [q1]
+        b = q2 isa AbstractVector ? q2 : [q2]
+        return s1.step == s2.step == nmax && all(isfinite, parent(b[1])) &&
+               all(parent(a[i]) == parent(b[i]) for i in eachindex(a))
+    end
+    @test compare(backend -> wall_case(backend, Float64, 12); nmax=6)
+    @test compare(backend -> wall_case(backend, Float32, 1); nmax=6)
+    @test compare(level_case; nmax=4)
+end
+
 @testset "field collections adapt to their device forms" begin
     # DeviceFieldVector, DeviceFieldMatrix and the ConservedState rule are
     # what a real device launch builds out of the host wrappers. Nothing
@@ -586,7 +733,8 @@ const POINTWISE_BODIES = (
     :_nscbc_outflow_point!, :_pair_backward_local_point!,
     :_pair_backward_remote_point!, :_pair_forward_local_point!,
     :_pair_forward_remote_point!, :_pair_select_point!, :_partial_density_flux_point!,
-    :_primitives_ideal_point!, :_primitives_stiffened_point!, :_rate_point!,
+    :_primitives_ideal_point!, :_primitives_nasa9_point!, :_primitives_stiffened_point!,
+    :_rate_point!,
     :_reciprocal_interior_point!, :_reciprocal_point!,
     :_rho_sensor_point!, :_ring_accum_point!, :_ring_pack_field_point!,
     :_ring_pack_point!, :_ring_unpack_point!, :_rk_point!,

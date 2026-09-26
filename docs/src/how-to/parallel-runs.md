@@ -157,8 +157,8 @@ keywords remain usable in `Numerics`, but cannot be combined with `amr`.
 AMR currently requires Cartesian, unstretched, unfolded coordinates. It does
 not reflux coarse--fine fluxes, so treat composite mass, momentum, or energy
 budgets as diagnostics to check. A refined device configuration supports
-subcycling, tiling, and regridding, but not `level_restriction=:filter` or
-`Nasa9Mixture`. Load the GPU package first and wrap its backend:
+subcycling, tiling, and regridding, but not `level_restriction=:filter`.
+Load the GPU package first and wrap its backend:
 
 ```julia
 using CUDA

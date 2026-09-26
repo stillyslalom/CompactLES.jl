@@ -5794,6 +5794,40 @@ was accepted on `max |device − cpu| = 0` over full runs at np = 2, 4 and 8, in
 both launch-policy modes. The staged transfer volumes are the halo and
 reduced-interface percentages recorded above.
 
+### bench/device_nasa9.jl: NASA-9 on the device
+
+`julia --project=<env-with-AMDGPU> -t 8 bench/device_nasa9.jl backend=amdgpu`,
+RX 6800 XT, He/CO2/N2 unless noted. The recovery set is 120 hard states
+(joins to a few ulp, range edges and beyond, no-root energies, no-bracket
+compositions) plus 100,000 swept states from 150 to 30,000 K. On the KA CPU
+backend the mirror is bitwise against the host (`test/device_tests.jl`); on
+the GPU the logarithm and the integer powers are the device's own.
+
+| measurement | Float64 | Float32 |
+|---|---|---|
+| recovered T_ion, max relative difference | 2.9e-14 (130 eps) | 1.7e-5 (142 eps) |
+| cp, max relative difference | 5.7e-15 | 2.8e-6 |
+| points whose status differs, of 100,120 | 0 | 24, all met/missed convergence |
+| the same at 8 species (`:polynomial`, of 20,220) | 3 | 71 |
+| wall case, 20 steps, max component difference / max component | 1.3e-13 | 1.2e-4 (Float64 against Float32 on the CPU: 6.0e-5) |
+| He/CO2 shock tube, 200 steps | 6.1e-15 | 3.7e-6 (Float64 against Float32: 1.5e-5) |
+| refined wave through the ghost flux, 12 steps | 2.0e-14 | — |
+| 8-species wall case, 10 steps | 3.2e-14 | — |
+| mirror size that still launches | 4.2 kB (16 species, three intervals) | |
+| 48³ recovery, CPU 8 threads / device, NASA-9 | 2.96 / 1.05 ms | 3.64 / 0.22 ms |
+| the same, `IdealMixture` | 0.52 / 0.35 ms | 0.23 / 0.19 ms |
+| 48³ step, CPU / device, NASA-9 | 146 / 185 ms | 127 / 144 ms |
+| the same, `IdealMixture` | 110 / 174 ms | 98 / 149 ms |
+
+Settled: the device reproduces the host recovery to the inversion's own
+tolerance. At three species a status differs only where one side meets the
+32 eps criterion and the other misses it; at eight species under
+`:polynomial` three points differ in another bit, in a sweep where the
+polynomial extension leaves 6,286 host points unrecovered. No pitfall: a
+NASA-9 step costs 6% more than an `IdealMixture` step on the device, against
+33% on the CPU. The Float32 misses on the host itself sit at the 6000 K
+join and near 10–11 kK.
+
 ### probes/device_floors.jl: rzadams floors and the wait stall
 
 `julia --project=<env> probes/device_floors.jl`. rzadams MI300A, ROCm 6.4.3,

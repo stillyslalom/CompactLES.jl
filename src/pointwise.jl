@@ -20,10 +20,8 @@
 # below, tuples of the same arrays, built once at `Patch` construction
 # (`Patch.field_tuples`) and using the same indexing as the `Vector`/`Matrix`
 # forms, so the bodies read identically on either path; the gas-model EOS
-# objects adapt to coefficient mirrors at launch time (`physics.jl`).
-# `Nasa9Mixture` has no mirror yet; its interval table (`intervals`, a dense
-# matrix of isbits records) is the form one would carry
-# (reference/AMR_GPU.md, open numerics).
+# objects adapt to coefficient mirrors at launch time (`physics.jl`), the
+# `Nasa9Mixture` interval table among them as one flattened tuple.
 
 using KernelAbstractions
 using KernelAbstractions: get_backend, synchronize

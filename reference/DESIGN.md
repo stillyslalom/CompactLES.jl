@@ -1195,8 +1195,10 @@ coefficients may be immutable tuples; large tables use adapted device arrays
 and device-compatible views, not giant type parameters. Rich models may use
 allocated scratch only in a caller-owned, measured bulk path. Unsupported
 backend/precision/model combinations fail at setup; no per-cell host fallback
-or silent precision promotion is permitted. NASA-9 table flattening and device
-preparation remain one coordinated S5/S13 task.
+or silent precision promotion is permitted. A NASA-9 mechanism's interval
+table is tens of records, so its mirror is a tuple built at launch; a table
+large enough to press the kernel-parameter limit would take the
+adapted-array form.
 
 The solver owns halo exchanges, compact solves, gradient scheduling, source and
 boundary phases, and collective failure decisions. Physics components cannot

@@ -365,7 +365,9 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   not as an unmeasured port. Characterize/resolve the intermittent ROCm wait stall
   in [rocm_wait_stall_report.md](bugreports/rocm_wait_stall_report.md) before interpreting
   performance changes. Record hardware, MPI stack, precision, synchronization
-  policy, repeat variability, and correctness with every result.
+  policy, repeat variability, and correctness with every result. Profile a
+  `Nasa9Mixture` step there too with `bench/device_nasa9.jl`, which has run only
+  on the workstation GPU.
   **Gate:** full single/refined/tiled runs on target hardware, including real device
   communication paths; report measured reproducibility rather than universal
   bitwise claims. Validate other advertised backends on their own hardware.
@@ -395,11 +397,8 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   **Gate:** conservation drift, thermodynamic recovery, closure conditioning,
   timestep progress, memory, and throughput; no CPU-default change from speed alone.
 
-- [ ] **S5 — Add the NASA-9 device coefficient mirror.**
-  Flatten interval tables into a fixed-width adapted representation and port
-  inversion/recovery with R4's status and domain policy.
-  **Gate:** CPU/device recovery and full-run comparisons over interval joins and
-  difficult states in both precisions, followed by actual-device profiling.
+- [x] **S5** — `Nasa9Mixture` runs on device storage through an isbits mirror
+  carrying the flattened interval table (commit TBD).
 
 - [x] **S6** — `test/hdf5_tests.jl` passes on a parallel libhdf5 at one, two
   and four ranks under both transfer modes, and the collective mode, measured

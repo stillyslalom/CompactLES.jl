@@ -866,6 +866,58 @@ end
 nspecies(eos::Nasa9Mixture) = length(eos.sp)
 species_names(eos::Nasa9Mixture) = [x.name for x in eos.sp]
 
+# Device-side mirror of a `Nasa9Mixture`, on the pattern of `IdealMixtureCoeffs`:
+# the species records, their names, the `Vector` tables and the `extrapolate`
+# symbol cannot be kernel arguments, so a launch replaces the mixture with this
+# isbits form. The interval table keeps the host table's padded width W and its
+# column-major order, flattened into one tuple, so the interval search visits
+# the same records in the same order. The per-point methods below are written
+# once for `Nasa9Model` and read the same field names from either form; the
+# host mixture compiles them against its vectors and matrix, the mirror
+# against tuples, with the same arithmetic.
+#
+# The mirror is a kernel argument, so its size counts against the backend's
+# kernel-parameter limit: 10 values per interval, 3 per species, in the
+# coefficient type. Four species of three-interval fits come to about 1.1 kB
+# in Float64.
+struct Nasa9Table{I,W,N,L} <: AbstractMatrix{I}
+    data::NTuple{L,I}
+end
+
+Base.size(::Nasa9Table{I,W,N}) where {I,W,N} = (W, N)
+Base.@propagate_inbounds Base.getindex(t::Nasa9Table{I,W}, i::Int, k::Int) where {I,W} =
+    t.data[(k - 1) * W + i]
+
+struct Nasa9MixtureCoeffs{T,N,Tab<:Nasa9Table}
+    Rk::NTuple{N,T}
+    T_guess::T
+    e_guess::NTuple{N,T}
+    cv_guess::NTuple{N,T}
+    intervals::Tab
+    # `extrapolate` as the two questions the per-point code asks of it.
+    linear::Bool
+    fit_missing::Bool
+end
+
+function _nasa9_coeffs(eos::Nasa9Mixture{T}) where {T}
+    W, N = size(eos.intervals)
+    table = Nasa9Table{Nasa9Interval{T},W,N,W * N}((eos.intervals...,))
+    return Nasa9MixtureCoeffs{T,N,typeof(table)}(
+        (eos.Rk...,), eos.T_guess, (eos.e_guess...,), (eos.cv_guess...,), table,
+        _nasa9_linear(eos), eos.extrapolate === :missing)
+end
+
+Adapt.adapt_structure(to, eos::Nasa9Mixture) = _nasa9_coeffs(eos)
+
+# The KernelAbstractions CPU backend adapts no argument, so without this rule a
+# forced-KA run would launch the host mixture and never compile the mirror. With
+# it, the device test runs on ordinary arrays execute the mirror's methods and
+# compare them bitwise against the host path.
+@inline _kernel_arg(eos::Nasa9Mixture) = _nasa9_coeffs(eos)
+
+# The host `Nasa9Mixture` and its device mirror, which share every per-point method.
+const Nasa9Model = Union{Nasa9Mixture,Nasa9MixtureCoeffs}
+
 @inline function _nasa9_interval(species::Nasa9Species, T_ion)
     intervals = species.intervals
     @inbounds for i in 1:length(intervals)-1
@@ -890,6 +942,10 @@ end
 # tangent extension of the fit and is monotone in T at any temperature.
 @inline _nasa9_linear(eos::Nasa9Mixture) =
     eos.extrapolate === :linear || eos.extrapolate === :missing
+@inline _nasa9_linear(eos::Nasa9MixtureCoeffs) = eos.linear
+
+@inline _nasa9_missing(eos::Nasa9Mixture) = eos.extrapolate === :missing
+@inline _nasa9_missing(eos::Nasa9MixtureCoeffs) = eos.fit_missing
 
 # In these three, `powers` is the powers of T_ion itself, reused wherever the
 # fit is evaluated at T_ion, which is everywhere but the `:linear` extension.
@@ -939,39 +995,39 @@ end
 end
 
 "cp_k(T_ion) from the applicable NASA-9 interval."
-@inline function species_cp(eos::Nasa9Mixture, k::Int, T_ion)
+@inline function species_cp(eos::Nasa9Model, k::Int, T_ion)
     R = eos.Rk[k]   # checked first: the table search below reads without checks
     interval = _nasa9_interval(eos.intervals, k, T_ion)
     return R * _nasa9_cp_over_R_at(interval, T_ion, _nasa9_linear(eos))
 end
 
 "h_k(T_ion), the exact interval-wise integral of `species_cp`."
-@inline function species_enthalpy(eos::Nasa9Mixture, k::Int, T_ion)
+@inline function species_enthalpy(eos::Nasa9Model, k::Int, T_ion)
     R = eos.Rk[k]
     interval = _nasa9_interval(eos.intervals, k, T_ion)
     return R * _nasa9_h_over_R_at(interval, T_ion, _nasa9_linear(eos))
 end
 
 "e_k(T_ion) = h_k − R_k T_ion."
-@inline species_energy(eos::Nasa9Mixture, k::Int, T_ion) =
+@inline species_energy(eos::Nasa9Model, k::Int, T_ion) =
     species_enthalpy(eos, k, T_ion) - eos.Rk[k] * T_ion
 
 # The same three from powers of T_ion formed once for every species.
-@inline function species_cp(eos::Nasa9Mixture, k::Int, point::Nasa9Powers)
+@inline function species_cp(eos::Nasa9Model, k::Int, point::Nasa9Powers)
     R = eos.Rk[k]
     T_ion = point.powers[1]
     interval = _nasa9_interval(eos.intervals, k, T_ion)
     return R * _nasa9_cp_over_R_at(interval, T_ion, _nasa9_linear(eos), point.powers)
 end
 
-@inline function species_enthalpy(eos::Nasa9Mixture, k::Int, point::Nasa9Powers)
+@inline function species_enthalpy(eos::Nasa9Model, k::Int, point::Nasa9Powers)
     R = eos.Rk[k]
     T_ion = point.powers[1]
     interval = _nasa9_interval(eos.intervals, k, T_ion)
     return R * _nasa9_h_over_R_at(interval, T_ion, _nasa9_linear(eos), point.powers)
 end
 
-@inline species_energy(eos::Nasa9Mixture, k::Int, point::Nasa9Powers) =
+@inline species_energy(eos::Nasa9Model, k::Int, point::Nasa9Powers) =
     species_enthalpy(eos, k, point) - eos.Rk[k] * point.powers[1]
 
 # The temperature argument that a loop over species at one point passes to
@@ -980,7 +1036,7 @@ end
 # forms them once rather than once per species. The results are the same bit
 # for bit.
 @inline _species_point(eos, T_ion) = T_ion
-@inline _species_point(::Nasa9Mixture, T_ion) = Nasa9Powers(_nasa9_powers(T_ion))
+@inline _species_point(::Nasa9Model, T_ion) = Nasa9Powers(_nasa9_powers(T_ion))
 
 # Search bounds and iteration cap of the NASA-9 temperature inversion. The
 # bounds bracket every temperature the fitted intervals cover, with margin on
@@ -1023,7 +1079,7 @@ or straight out of the conserved array without materializing anything. This is
 the value-only form of `mixture_temperature_status`, which documents the
 iteration and reports whether it succeeded.
 """
-@inline mixture_temperature(eos::Nasa9Mixture, e, Yat::F) where {F} =
+@inline mixture_temperature(eos::Nasa9Model, e, Yat::F) where {F} =
     mixture_temperature_status(eos, e, Yat)[1]
 
 """
@@ -1061,7 +1117,7 @@ value at the same point generally saves one iteration but makes the result
 depend on call history. A state-based seed preserves the bit-for-bit agreement
 between serial and decomposed calculations tested by the MPI suite.
 """
-@inline function mixture_temperature_status(eos::Nasa9Mixture, e, Yat::F) where {F}
+@inline function mixture_temperature_status(eos::Nasa9Model, e, Yat::F) where {F}
     n = length(eos.Rk)
     table = eos.intervals
     # First-order inversion about a fixed reference state. This handles any
@@ -1137,7 +1193,7 @@ between serial and decomposed calculations tested by the MPI suite.
     return (T_ion, status)
 end
 
-@inline function eos_phi(::Nasa9Mixture, ρ, p, T_ion, cp_mix)
+@inline function eos_phi(::Nasa9Model, ρ, p, T_ion, cp_mix)
     Rm = p / (ρ * T_ion)
     return cp_mix / Rm - 1
 end
@@ -1145,71 +1201,78 @@ end
 # ∂φ/∂Y_k at fixed T_ion, with φ = cv_m/R_m: both numerator and denominator are
 # mass-fraction averages, so the quotient rule gives the same shape as the ideal
 # mixture with the temperature-dependent cv_k in place of the constant.
-@inline function eos_dphi_dY(eos::Nasa9Mixture, k::Int, ρ, p, T_ion, cp_mix)
+@inline function eos_dphi_dY(eos::Nasa9Model, k::Int, ρ, p, T_ion, cp_mix)
     Rm = p / (ρ * T_ion)
     cvm = cp_mix - Rm
     cvk = species_cp(eos, k, T_ion) - eos.Rk[k]
     return (cvk * Rm - eos.Rk[k] * cvm) / (Rm * Rm)
 end
 
-@inline artificial_conductivity_scale(::Nasa9Mixture, ρ, c, T_ion, cp_mix) =
+@inline artificial_conductivity_scale(::Nasa9Model, ρ, c, T_ion, cp_mix) =
     ρ * c / max(T_ion, temperature_floor(typeof(T_ion)))
+
+@inline function _primitives_nasa9_point!(Q, ρa, ua, va, wa, pa, T_iona, ca,
+                                          cpa, Y, eos, n_species,
+                                          m1, m2, m3, i_energy, i, j, k)
+    @inbounds begin
+        Rk = eos.Rk
+        Tnum = eltype(Q)
+        ρ = zero(Tnum)
+        for sp in 1:n_species
+            ρ += Q[i, j, k, sp]
+        end
+        if ρ > 0
+            ri = one(Tnum) / ρ
+            Rm = zero(Tnum)
+            for sp in 1:n_species
+                Y[sp][i, j, k] = Q[i, j, k, sp] * ri
+                Rm += Q[i, j, k, sp] * Rk[sp]
+            end
+            Rm *= ri   # one scaling, as `_primitives_ideal_point!` does
+            u = Q[i, j, k, m1] * ri
+            v = Q[i, j, k, m2] * ri
+            w = Q[i, j, k, m3] * ri
+            e = Q[i, j, k, i_energy] * ri -
+                (u*u + v*v + w*w) / Tnum(2)
+            # Mass fractions straight out of Q: the Newton solve takes an
+            # accessor, not a vector, so this stays allocation-free.
+            T_ion = mixture_temperature(eos, e, sp -> Q[i, j, k, sp] * ri)
+            cpm = zero(Tnum)
+            point = Nasa9Powers(_nasa9_cp_powers(T_ion))
+            for sp in 1:n_species
+                cpm += Y[sp][i, j, k] * species_cp(eos, sp, point)
+            end
+            cvm = cpm - Rm
+            ρa[i, j, k] = ρ
+            ua[i, j, k] = u; va[i, j, k] = v; wa[i, j, k] = w
+            pa[i, j, k] = ρ * Rm * T_ion
+            T_iona[i, j, k] = T_ion
+            ca[i, j, k] = sqrt(max((cpm / cvm) * Rm * T_ion, zero(Tnum)))
+            cpa[i, j, k] = cpm
+        else
+            ρa[i, j, k] = 1
+            ua[i, j, k] = 0; va[i, j, k] = 0; wa[i, j, k] = 0
+            pa[i, j, k] = 1; T_iona[i, j, k] = 1; ca[i, j, k] = 1
+            cpa[i, j, k] = 1
+            for sp in 1:n_species
+                Y[sp][i, j, k] = sp == 1 ? 1 : 0
+            end
+        end
+    end
+    return nothing
+end
 
 function recover_primitives!(solver, eos::Nasa9Mixture, Q)
     n_species = solver.equations.n_species
     m1, m2, m3 = solver.equations.i_mom
     i_energy = solver.equations.i_energy
-    Rk = eos.Rk
     ρa, ua, va, wa = solver.rho, solver.u, solver.v, solver.w
     pa, T_iona, ca, cpa = solver.p, solver.T_ion, solver.c, solver.cp_mix
-    nxf, nyf, nzf = size(ρa)
-    @threaded nxf*nyf*nzf for jk in outer_indices(nyf, nzf)
-        j, k = Tuple(jk)
-        @inbounds for i in 1:nxf
-            Tnum = eltype(Q)
-            ρ = zero(Tnum)
-            for sp in 1:n_species
-                ρ += Q[i, j, k, sp]
-            end
-            if ρ > 0
-                ri = one(Tnum) / ρ
-                Rm = zero(Tnum)
-                for sp in 1:n_species
-                    solver.Y[sp][i, j, k] = Q[i, j, k, sp] * ri
-                    Rm += Q[i, j, k, sp] * Rk[sp]
-                end
-                Rm *= ri   # one scaling, as `_primitives_ideal_point!` does
-                u = Q[i, j, k, m1] * ri
-                v = Q[i, j, k, m2] * ri
-                w = Q[i, j, k, m3] * ri
-                e = Q[i, j, k, i_energy] * ri -
-                    (u*u + v*v + w*w) / Tnum(2)
-                # Mass fractions straight out of Q: the Newton solve takes an
-                # accessor, not a vector, so this stays allocation-free.
-                T_ion = mixture_temperature(eos, e, sp -> Q[i, j, k, sp] * ri)
-                cpm = zero(Tnum)
-                point = Nasa9Powers(_nasa9_cp_powers(T_ion))
-                for sp in 1:n_species
-                    cpm += solver.Y[sp][i, j, k] * species_cp(eos, sp, point)
-                end
-                cvm = cpm - Rm
-                ρa[i, j, k] = ρ
-                ua[i, j, k] = u; va[i, j, k] = v; wa[i, j, k] = w
-                pa[i, j, k] = ρ * Rm * T_ion
-                T_iona[i, j, k] = T_ion
-                ca[i, j, k] = sqrt(max((cpm / cvm) * Rm * T_ion, zero(Tnum)))
-                cpa[i, j, k] = cpm
-            else
-                ρa[i, j, k] = 1
-                ua[i, j, k] = 0; va[i, j, k] = 0; wa[i, j, k] = 0
-                pa[i, j, k] = 1; T_iona[i, j, k] = 1; ca[i, j, k] = 1
-                cpa[i, j, k] = 1
-                for sp in 1:n_species
-                    solver.Y[sp][i, j, k] = sp == 1 ? 1 : 0
-                end
-            end
-        end
-    end
+    nxf, nyf, nzf = padded_extent(solver.decomp)
+    pointwise!(_primitives_nasa9_point!, ρa, nxf, nyf, nzf,
+               Q, ρa, ua, va, wa, pa, T_iona, ca, cpa,
+               solver.field_tuples.Y, eos,
+               n_species, m1, m2, m3, i_energy)
     return solver
 end
 
@@ -1359,7 +1422,7 @@ channels of `compute_artificial!`.
     _mole_fraction_from_R(eos.Rk, k, Y, I, n_species)
 @inline mole_fraction(eos::IdealMixtureCoeffs, k::Int, Y, I, n_species::Int) =
     _mole_fraction_from_R(eos.Rk, k, Y, I, n_species)
-@inline mole_fraction(eos::Nasa9Mixture, k::Int, Y, I, n_species::Int) =
+@inline mole_fraction(eos::Nasa9Model, k::Int, Y, I, n_species::Int) =
     _mole_fraction_from_R(eos.Rk, k, Y, I, n_species)
 Base.@propagate_inbounds mole_fraction(::StiffenedGas, k::Int, Y, I, ::Int) =
     Y[k][I]
@@ -1446,7 +1509,7 @@ end
 # policy makes the state a failure is the mixture's `extrapolate` setting, not
 # the validation's: `:polynomial` and `:linear` accept the extension and report
 # the point, `:missing` declares the fit undefined there.
-@inline function state_admissibility(eos::Nasa9Mixture, ρ, e, Yat::F,
+@inline function state_admissibility(eos::Nasa9Model, ρ, e, Yat::F,
                                      n_species::Int) where {F}
     _, status = mixture_temperature_status(eos, e, Yat)
     flags = STATE_OK
@@ -1455,7 +1518,7 @@ end
     end
     if (status & TEMPERATURE_OUT_OF_RANGE) != 0
         flags |= STATE_EXTRAPOLATED
-        eos.extrapolate === :missing && (flags |= STATE_INADMISSIBLE)
+        _nasa9_missing(eos) && (flags |= STATE_INADMISSIBLE)
     end
     return flags
 end

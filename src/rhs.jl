@@ -461,7 +461,7 @@ end
     species_enthalpy(eos, k, T_ion) - eos.Rk[k] * T_ion
 @inline _species_internal_energy(eos::Union{StiffenedGas,StiffenedGasCoeffs},
                                  ::Int, T_ion) = eos.cv * T_ion
-@inline _species_internal_energy(eos::Nasa9Mixture, k::Int, point::Nasa9Powers) =
+@inline _species_internal_energy(eos::Nasa9Model, k::Int, point::Nasa9Powers) =
     species_energy(eos, k, point)
 
 @inline function _bulk_flux_point!(flux, D_b, gQ, n_cons, act, o1, o2, o3,

@@ -217,9 +217,9 @@ Refinement requires unstretched Cartesian coordinates without folds. A
 static hierarchy can contain several nested levels; dynamic regridding of
 more than one refined level requires tiles and the host backend. Device runs
 support the other layouts with host-staged MPI exchanges.
-The device backend currently excludes `Nasa9Mixture` and filtered restriction
-(`level_restriction=:filter`); use a supported constant-heat-capacity EOS and
-the default coincident-node restriction (`:inject`).
+The device backend excludes filtered restriction
+(`level_restriction=:filter`); use the default coincident-node restriction
+(`:inject`).
 Subcycling advances a fine level three times per parent step; global stepping
 advances every level with the timestep required by the finest constraints.
 See [Run in parallel](docs/src/how-to/parallel-runs.md) for setup and constraints.
