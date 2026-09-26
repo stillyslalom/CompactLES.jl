@@ -2675,6 +2675,49 @@ function test_nscbc_inflow()
     end
 end
 
+# ---------------------------------------------------------------------------
+# Hydrostatic initial state with the acceleration along a decomposed
+# dimension. Every rank solves its own lines whole, so the state must match the
+# serial one exactly and stay at rest through the distributed divergence.
+# ---------------------------------------------------------------------------
+function test_hydrostatic()
+    section("hydrostatic state: balance along a decomposed dimension")
+    function blockdiff(s, a, ref, b)
+        e = 0.0
+        for I in CL.interior(s.decomp), c in 1:s.equations.n_cons
+            loc = Tuple(I) .- s.decomp.n_halo_d
+            J = gidx(ref, (loc .+ s.decomp.offset)...)
+            e = max(e, abs(Float64(a[I, c] - b[J, c])))
+        end
+        e
+    end
+    eos = IdealMixture([IdealSpecies("heavy"; R=1.0, gamma=1.4),
+                        IdealSpecies("light"; R=3.0, gamma=1.4)])
+    heavy = Prim(Y=(1.0, 0.0), p=10.0, rho=3.0)
+    light = Prim(Y=(0.0, 1.0), p=10.0, rho=1.0)
+    for ax in (1, 2)
+        g = ntuple(d -> d == ax ? -1.0 : 0.0, 3)
+        bcs = ntuple(d -> d == ax ? (SlipWallBC(), SlipWallBC()) : per3[d], 3)
+        ic = Hydrostatic(Layers(light, Slab(ax, lo=0.5) => heavy); p_ref=10.0, at=1.0)
+        prob = Problem(eos=eos, domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=bcs,
+                       ic=ic, sources=(ConstantBodyForce(g),))
+        ng = ntuple(d -> d == ax ? SPLITN : d == 3 ? 1 : 12, 3)
+        num(c, dims) = Numerics(n_global=ng, comm=c, dims=dims, filter_interval=0,
+                                art=ArtParams(enabled=false))
+        s, Q = setup(prob, num(comm, splitdims(ax)))
+        ref, Qref = setup(prob, num(MPI.COMM_SELF, (1, 1, 1)))
+        check("hydrostatic state matches serial, split along dim $ax",
+              gmax(blockdiff(s, Q, ref, Qref)), 1e-13)
+        run!(s, Q; tfinal=1e9, nmax=50)
+        m = 0.0
+        for I in CL.interior(s.decomp), c in s.equations.i_mom
+            m = max(m, abs(Q[I, c]))
+        end
+        check("hydrostatic column at rest after 50 steps, split along dim $ax",
+              gmax(m), 1e-13)
+    end
+end
+
 include("wall_flux_mpi.jl")
 include("conservation_mpi.jl")
 
@@ -2695,6 +2738,7 @@ const SUITE = (
     ("off-rank folds", test_offrank_folds),
     ("symmetry plane", test_symmetry_plane),
     ("NSCBC inflow", test_nscbc_inflow),
+    ("hydrostatic state", test_hydrostatic),
     ("freestream", test_freestream),
     ("conservation", test_conservation),
     ("composite budgets", test_composite_budgets),

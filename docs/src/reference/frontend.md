@@ -22,6 +22,7 @@ tanh_blend
 Layers
 Layer
 Cells
+Hydrostatic
 Shape
 Slab
 Box

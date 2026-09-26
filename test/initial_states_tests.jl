@@ -277,3 +277,74 @@ end
     @test occursin("AMR", err.msg) && occursin("compact_filter", err.msg)
     @test volume_integral(solver, states, :rho) ≈ 1.0 rtol = 1e-10
 end
+
+@testset "Hydrostatic: a stratified column stays at rest" begin
+    # Heavy gas over light under gravity, slip walls along it. Equal γ keeps the
+    # pressure linear in the conserved variables across the transition.
+    eos = IdealMixture([IdealSpecies("heavy"; R=1.0, gamma=1.4),
+                        IdealSpecies("light"; R=3.0, gamma=1.4)])
+    heavy = Prim(Y=(1.0, 0.0), p=10.0, rho=3.0)
+    light = Prim(Y=(0.0, 1.0), p=10.0, rho=1.0)
+    layers = Layers(light, Slab(1, lo=0.5) => heavy)
+    n = 64
+    w = 3 / (n - 1)
+    # The continuous hydrostatic pressure of the same density profile.
+    ρ(x) = 1 + 2 * (1 + tanh((x - 0.5) / w)) / 2
+    Ρ(x) = x + (x + w * log(cosh((x - 0.5) / w)))
+    continuous = (x, y, z, h) -> begin
+        s = CompactLES.BoundLayers(layers, eos, (true, false, false), 2)(x, y, z, h)
+        Prim(Y=s.Y, p=10.0 - (Ρ(x) - Ρ(1.0)), rho=s.rho)
+    end
+    walls = (SlipWallBC(), SlipWallBC())
+    force = ConstantBodyForce((-1.0, 0.0, 0.0))
+    domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0))
+    function column(ic; filter_interval=0, nmax=2000)
+        prob = Problem(eos=eos, domain=domain, bcs=(walls, PeriodicBC(), PeriodicBC()),
+                       ic=ic, sources=(force,))
+        s, q = setup(prob, Numerics(n_global=(n, 1, 1), filter_interval=filter_interval,
+                                    art=ArtParams(enabled=false)))
+        run!(s, q; tfinal=1e9, nmax=nmax)
+        _, u = line_profile(s, q, :u)
+        return s, q, maximum(abs, u)
+    end
+    balanced = Hydrostatic(layers; p_ref=10.0, at=1.0)
+    # About 16 acoustic crossings of the column.
+    solver, Q, u_balanced = column(balanced)
+    _, _, u_continuous = column(continuous)
+    @test u_balanced < 1e-13
+    @test u_continuous > 1e-9
+    x, p = line_profile(solver, Q, :p)
+    @test p[end] ≈ 10.0 rtol = 1e-12
+    _, rho = line_profile(solver, Q, :rho)
+    @test rho[1] ≈ 1.0 rtol = 1e-8
+    @test rho[end] ≈ 3.0 rtol = 1e-8
+    # The filter does not commute with the derivative at the closure rows, so a
+    # filtered run holds the balance to the end residual, not to round-off.
+    _, _, u_filtered = column(balanced; filter_interval=1, nmax=200)
+    @test u_filtered < 1e-8
+
+    # Gravity along y, on a plane, against no-slip walls.
+    prob = Problem(eos=eos, domain=domain,
+                   bcs=(PeriodicBC(), (NoSlipWallBC(), NoSlipWallBC()), PeriodicBC()),
+                   ic=Hydrostatic(Layers(light, Slab(2, lo=0.5) => heavy);
+                                  p_ref=10.0, at=0.0),
+                   sources=(ConstantBodyForce((0.0, -1.0, 0.0)),))
+    plane, Qp = setup(prob, Numerics(n_global=(12, 48, 1), filter_interval=0,
+                                     art=ArtParams(enabled=false)))
+    run!(plane, Qp; tfinal=1e9, nmax=200)
+    m = maximum(I -> max(abs(Qp[I, 3]), abs(Qp[I, 4])),
+                CompactLES.interior(plane.decomp))
+    @test m < 1e-13
+    @test field_array(plane, Qp, :p)[gidx(plane, 5, 1, 1)] ≈ 10.0 rtol = 1e-12
+
+    bad(bcs, sources; kw...) =
+        setup(Problem(eos=eos, domain=domain, bcs=bcs, sources=sources,
+                      ic=Hydrostatic(layers; p_ref=10.0, at=get(kw, :at, 1.0))),
+              Numerics(n_global=(n, 1, 1)))
+    per = PeriodicBC()
+    @test_throws ArgumentError bad((per, per, per), (force,))
+    @test_throws ArgumentError bad((walls, per, per), ())
+    @test_throws ArgumentError bad((walls, per, per), (force,); at=2.0)
+    @test_throws ArgumentError bad((walls, per, per),
+                                   (ConstantBodyForce((-1.0, 0.5, 0.0)),))
+end

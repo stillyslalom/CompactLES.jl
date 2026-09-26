@@ -50,6 +50,7 @@ omitted quantity remains `NaN` in the object; it is derived only during
 | Post-shock state | `shock_jump(eos, pre, Mach).post` |
 | Shock-tube states and driver pressure | `shock_tube(eos, driver, driven, Mach)` |
 | Several regions with smooth transitions | `Layers(background, shape => prim, ...; width=Cells(3))` |
+| Pressure in hydrostatic balance with the body force | `Hydrostatic(ic; p_ref, at)` |
 | Shapes | `Slab`, `Box`, `Sphere`, `Ellipsoid`, `Cylinder`, `LevelSet`; `∪`, `∩`, `setdiff`, `!` |
 | Constant boundary state | `DirichletBC(prim)`, `NSCBCInflowBC(prim)` |
 

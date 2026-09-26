@@ -82,6 +82,20 @@ temperatures, and the transition adds no acoustic disturbance. Weighting the
 temperature or the energy instead does not have this property when the two
 gases differ in heat capacity ratio.
 
+Under a [`ConstantBodyForce`](@ref), a column stays at rest only if its
+pressure is in hydrostatic balance with the solver's own derivative operator.
+A continuous hydrostatic profile is not: at rest the momentum right-hand side
+equals the truncation error of the derivative, and acoustic waves appear from
+the first step. [`Hydrostatic`](@ref) wraps an initial condition, keeps its
+density, composition and velocity, and replaces its pressure with the discrete
+balance, fixed by a reference pressure at one coordinate along the
+acceleration:
+
+```julia
+initial = Hydrostatic(Layers(light, Slab(2, lo = 0.5) => heavy);
+                      p_ref = 1e5, at = 1.0)
+```
+
 [`mass_fractions`](@ref) orders a composition given by species name, in mole
 or mass fractions, and the `:X` output field reports mole fractions.
 

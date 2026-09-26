@@ -343,6 +343,231 @@ function (b::BoundLayers)(x1, x2, x3, h)
     return Prim(Y=map(q -> q / ρ, ρY), u=map(q -> q / ρ, ρu), p=p, rho=ρ)
 end
 
+# --- Hydrostatic balance ------------------------------------------------------
+#
+# At rest the momentum right-hand side along the acceleration is −D p + ρ g,
+# with D the run's divergence operator along that direction: the compact first
+# derivative with its closure rows, prescaled by 1/h. D annihilates constants,
+# so D p = ρ g on a line of n nodes has a solution only when ρ g lies in the
+# (n − 1)-dimensional range of D. The range misses the direction of D's left
+# null vector, an odd-even mode, and a density transition of a few cells has a
+# component along it. The balance is therefore imposed at the n − 2 interior
+# nodes, where it is exact, and the residual goes to the two end nodes, whose
+# normal momentum is reset by a wall condition after every stage. With the
+# reference pressure that leaves one free direction z (D z = 0 at the interior
+# nodes), chosen to minimize the sum of the squared residuals at the two ends.
+#
+# The compact filter spreads an end residual into the nodes beside the wall,
+# since it does not commute with D at the closure rows, so a filtered run holds
+# the balance only to the size of that residual, which decreases as the
+# density transition widens. An unfiltered run holds it to round-off.
+#
+# Each line is solved on its own, so each column of a perturbed interface is
+# balanced along the acceleration, and the pressure difference between
+# columns drives the instability.
+
+"""
+    Hydrostatic(ic; p_ref, at, acceleration = nothing)
+
+An initial condition in discrete hydrostatic balance with the run's body force.
+`ic` is a [`Layers`](@ref) initial condition or a function `(x, y, z) -> Prim`
+and sets the density, composition and velocity; its pressure is replaced. Pass
+the result to a [`Problem`](@ref) as `ic`.
+
+The acceleration is the sum of the run's [`ConstantBodyForce`](@ref) sources,
+or `acceleration`, a three-tuple, when given. It must have one nonzero
+component, along a resolved direction that is not periodic and carries no
+symmetry plane or patch interface. Along each grid line in that direction the
+pressure satisfies `D p = ρ g` at every node except the two end nodes, with `D`
+the solver's first-derivative operator including its boundary closure rows,
+and equals `p_ref` at coordinate `at` along that direction, interpolated
+linearly between the neighbouring nodes. The temperature follows from the EOS.
+At rest the momentum right-hand side is then at round-off away from the two
+end nodes, where a wall condition resets the normal momentum; a continuous
+hydrostatic profile leaves the truncation error of `D` instead. The compact
+filter does not preserve the balance exactly beside the walls, and the
+artificial diffusivities act on a sharp density transition, so a run with
+either keeps a small residual motion that decreases as the transition widens.
+
+The balance is computed per grid line, each rank for its own lines, with no
+communication. It costs a dense factorization of order `n³` for `n` points
+along the acceleration, then `n²` per line.
+
+```julia
+g = ConstantBodyForce((0.0, -9.81, 0.0))
+ic = Hydrostatic(Layers(light, Slab(2, lo = 0.5) => heavy); p_ref = 1e5, at = 1.0)
+prob = Problem(eos = eos, domain = domain, bcs = bcs, ic = ic, sources = (g,))
+```
+"""
+struct Hydrostatic{I}
+    ic::I
+    p_ref::Float64
+    at::Float64
+    acceleration::Union{Nothing,NTuple{3,Float64}}
+end
+
+function Hydrostatic(ic; p_ref::Real, at::Real, acceleration=nothing)
+    acc = acceleration === nothing ? nothing : Float64.(Tuple(acceleration))
+    acc === nothing || length(acc) == 3 ||
+        throw(ArgumentError("Hydrostatic: acceleration is a three-tuple"))
+    return Hydrostatic(ic, Float64(p_ref), Float64(at), acc)
+end
+
+# The pressure of each rank-local interior point, and the bound inner
+# condition that supplies everything else.
+struct BoundHydrostatic{I,P<:AbstractArray{Float64,3}}
+    ic::I
+    p::P
+end
+
+_body_acceleration(sources::Tuple) =
+    foldl((acc, s) -> s isa ConstantBodyForce ?
+              acc .+ Float64.(s.acceleration) : acc, sources; init=(0.0, 0.0, 0.0))
+
+function _hydrostatic_direction(ic::Hydrostatic, solver)
+    g = ic.acceleration === nothing ? _body_acceleration(solver.sources) :
+        ic.acceleration
+    dims = findall(!iszero, g)
+    length(dims) == 1 || throw(ArgumentError(
+        "Hydrostatic: the acceleration $g must have exactly one nonzero component"))
+    d = dims[1]
+    solver.decomp.active[d] || throw(ArgumentError(
+        "Hydrostatic: the acceleration is along collapsed direction $d"))
+    solver.decomp.periodic[d] && throw(ArgumentError(
+        "Hydrostatic: direction $d is periodic, which admits no hydrostatic state"))
+    solver.folds[d] === nothing || throw(ArgumentError(
+        "Hydrostatic: direction $d carries a fold"))
+    any(s -> solver.bcs[d][s] isa InterfaceBC, 1:2) && throw(ArgumentError(
+        "Hydrostatic: direction $d ends at a patch interface; the balance " *
+        "needs the whole line"))
+    (solver.metric isa CartesianMetric && solver.stretch[d] === nothing) ||
+        throw(ArgumentError("Hydrostatic: needs a Cartesian metric, unstretched " *
+                            "along the acceleration"))
+    return d, g[d]
+end
+
+# The divergence operator along a line of `n` nodes at spacing `h`, as a dense
+# matrix: the scheme's own plan applied to the identity on a one-rank
+# decomposition, so the closure rows and the line solve are those of the run.
+function _line_operator(scheme, n::Int, h, n_halo::Int, ::Type{T}) where {T}
+    decomp = Decomp{T}((n, n, 1), (false, false, false); dims=(1, 1, 1),
+                       n_halo=n_halo, comm=MPI.COMM_SELF)
+    plan = plan_direction(decomp, scheme, 1, h)
+    o1, o2, _ = decomp.n_halo_d
+    f = zeros(T, n + 2o1, n + 2o2, 1)
+    out = zeros(T, n + 2o1, n + 2o2, 1)
+    for j in 1:n
+        f[j + o1, j + o2, 1] = one(T)
+    end
+    apply_along!(out, plan, f, decomp)
+    return Float64.(out[o1+1:o1+n, o2+1:o2+n, 1])
+end
+
+function _bind_initial(ic::Hydrostatic, solver)
+    d, g = _hydrostatic_direction(ic, solver)
+    decomp = solver.decomp
+    inner = _bind_initial(ic.ic, solver)
+    n = decomp.n_global[d]
+    goff = solver.region.offset[d]
+    xg = [global_xcoord(solver, d, goff + i) for i in 1:n]
+    (xg[1] <= ic.at <= xg[n]) || throw(ArgumentError(
+        "Hydrostatic: at = $(ic.at) lies outside the grid along direction $d, " *
+        "[$(xg[1]), $(xg[n])]"))
+    plan = _plan_at(solver.div_plans, d)
+    plan = plan isa DevicePlan ? plan.host : plan
+    T = eltype(solver.h)
+    D = _line_operator(plan.scheme, n, solver.h[d], decomp.n_halo, T)
+    # Rows 1:n-2 the interior nodes, row n-1 the low end, row n the reference.
+    K = zeros(n, n)
+    K[1:n-2, :] .= view(D, 2:n-1, :)
+    K[n-1, :] .= view(D, 1, :)
+    m = clamp(searchsortedlast(xg, ic.at), 1, n - 1)
+    θ = (ic.at - xg[m]) / (xg[m+1] - xg[m])
+    K[n, m] = 1 - θ
+    K[n, m+1] = θ
+    F = lu!(K)
+    # The free direction: zero at the interior rows and the reference, a unit
+    # residual at the low end, and a residual `cz` at the high end.
+    z = zeros(n)
+    z[n-1] = 1.0
+    ldiv!(F, z)
+    cz = dot(view(D, n, :), z)
+
+    o = decomp.n_halo_d
+    nl = decomp.n_local
+    others = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
+    na, nb = nl[others[1]], nl[others[2]]
+    P = zeros(nl)
+    x0 = (xcoord(solver, 1, 1), xcoord(solver, 2, 1), xcoord(solver, 3, 1))
+    cb = initial_callback(inner, x0...,
+                          point_spacing(solver, CartesianIndex(o[1] + 1, o[2] + 1,
+                                                                 o[3] + 1)))
+    R = zeros(n, na)
+    col = zeros(n)
+    bN = zeros(na)
+    for b in 1:nb
+        for a in 1:na
+            # The line's first local node sets the spacing a `Cells` width
+            # reads; unstretched along `d`, it is the same along the line.
+            li = ntuple(k -> k == d ? 1 : k == others[1] ? a : b, 3)
+            h = point_spacing(solver, CartesianIndex(li[1] + o[1], li[2] + o[2],
+                                                     li[3] + o[3]))
+            for i in 1:n
+                xi = ntuple(k -> k == d ? xg[i] : xcoord(solver, k, li[k]), 3)
+                pr = pointwise_initial(cb, xi..., h)
+                ρ, _ = _density_pressure(solver.eos, pr)
+                # The mixture density as the body force sums it, from the
+                # partial densities.
+                ρs = 0.0
+                for k in eachindex(pr.Y)
+                    ρs += ρ * pr.Y[k]
+                end
+                col[i] = ρs * g
+            end
+            R[1:n-2, a] .= view(col, 2:n-1)
+            R[n-1, a] = col[1]
+            R[n, a] = ic.p_ref
+            bN[a] = col[n]
+        end
+        # The lines of one transverse row as one multi-column solve, then the
+        # step along z minimizing r₁² + r_n², with r₁ = 0 before it.
+        ldiv!(F, R)
+        for a in 1:na
+            rN = dot(view(D, n, :), view(R, :, a)) - bN[a]
+            view(R, :, a) .-= (cz * rN / (1 + cz^2)) .* z
+        end
+        for a in 1:na, i in 1:nl[d]
+            li = ntuple(k -> k == d ? i : k == others[1] ? a : b, 3)
+            P[li...] = R[decomp.offset[d] + i, a]
+        end
+    end
+    return BoundHydrostatic(inner, P)
+end
+
+function _initialize_interior!(solver::SolverLike, Q, ic::BoundHydrostatic)
+    decomp = solver.decomp
+    o1, o2, o3 = decomp.n_halo_d
+    nx, ny, nz = decomp.n_local
+    cb = initial_callback(ic.ic, xcoord(solver, 1, 1), xcoord(solver, 2, 1),
+                          xcoord(solver, 3, 1),
+                          point_spacing(solver, CartesianIndex(o1 + 1, o2 + 1,
+                                                                 o3 + 1)))
+    @threaded nx*ny*nz for jk in outer_indices(ny, nz)
+        j, k = Tuple(jk)
+        x2 = xcoord(solver, 2, j)
+        x3 = xcoord(solver, 3, k)
+        for i in 1:nx
+            x1 = xcoord(solver, 1, i)
+            I = CartesianIndex(i + o1, j + o2, k + o3)
+            pr = pointwise_initial(cb, x1, x2, x3, point_spacing(solver, I))
+            ρ, _ = _density_pressure(solver.eos, pr)
+            write_conserved!(Q, I, solver,
+                             Prim{length(pr.Y)}(pr.Y, pr.u, ic.p[i, j, k], NaN, ρ))
+        end
+    end
+    return Q
+end
+
 # --- Transitions in time, for boundary targets --------------------------------
 
 """
