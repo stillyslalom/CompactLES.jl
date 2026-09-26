@@ -569,17 +569,42 @@ struct Nasa9Interval{T}
     b1::T
 end
 
-@inline function _nasa9_cp_over_R(interval::Nasa9Interval, T_ion)
+# The fits are evaluated from a tuple of powers of T. The logarithm and the
+# fourth and fifth powers cost several times the interval search and the
+# polynomial arithmetic, so a caller evaluating several species at one
+# temperature forms the powers once and passes them to each. The powers are
+# written as literal powers, not built up by repeated multiplication, and the
+# single-temperature forms go through the same tuple, so every caller gets the
+# same values bit for bit whether it shares the powers or not. cp needs only
+# the first four entries, and accepts the longer tuple as well.
+@inline _nasa9_powers(T_fit) = (T_fit, T_fit^2, T_fit^3, T_fit^4, T_fit^5, log(T_fit))
+@inline _nasa9_cp_powers(T_fit) = (T_fit, T_fit^2, T_fit^3, T_fit^4)
+
+@inline function _nasa9_cp_over_R(interval::Nasa9Interval, powers::Tuple)
+    T_fit, T2, T3, T4 = powers
     a = interval.a
-    return a[1] / T_ion^2 + a[2] / T_ion + a[3] + a[4] * T_ion +
-           a[5] * T_ion^2 + a[6] * T_ion^3 + a[7] * T_ion^4
+    return a[1] / T2 + a[2] / T_fit + a[3] + a[4] * T_fit +
+           a[5] * T2 + a[6] * T3 + a[7] * T4
 end
 
-@inline function _nasa9_h_over_R(interval::Nasa9Interval, T_ion)
+@inline function _nasa9_h_over_R(interval::Nasa9Interval, powers::Tuple)
+    T_fit, T2, T3, T4, T5, log_T = powers
     a = interval.a
-    return -a[1] / T_ion + a[2] * log(T_ion) + a[3] * T_ion +
-           a[4] * T_ion^2 / 2 + a[5] * T_ion^3 / 3 +
-           a[6] * T_ion^4 / 4 + a[7] * T_ion^5 / 5 + interval.b1
+    return -a[1] / T_fit + a[2] * log_T + a[3] * T_fit +
+           a[4] * T2 / 2 + a[5] * T3 / 3 +
+           a[6] * T4 / 4 + a[7] * T5 / 5 + interval.b1
+end
+
+@inline _nasa9_cp_over_R(interval::Nasa9Interval, T_ion) =
+    _nasa9_cp_over_R(interval, _nasa9_cp_powers(T_ion))
+@inline _nasa9_h_over_R(interval::Nasa9Interval, T_ion) =
+    _nasa9_h_over_R(interval, _nasa9_powers(T_ion))
+
+# The powers of one temperature, passed in place of the temperature to
+# `species_cp`, `species_enthalpy` and `species_energy` by a loop over species
+# at a fixed point; `_species_point` forms it.
+struct Nasa9Powers{P<:Tuple}
+    powers::P
 end
 
 # The join check exists to catch a mistranscribed coefficient, which puts an
@@ -854,40 +879,29 @@ end
 @inline _nasa9_linear(eos::Nasa9Mixture) =
     eos.extrapolate === :linear || eos.extrapolate === :missing
 
-@inline function _nasa9_cp_over_R_at(interval::Nasa9Interval, T_ion, linear::Bool)
+# In these three, `powers` is the powers of T_ion itself, reused wherever the
+# fit is evaluated at T_ion, which is everywhere but the `:linear` extension.
+@inline function _nasa9_cp_over_R_at(interval::Nasa9Interval, T_ion, linear::Bool,
+                                     powers=_nasa9_cp_powers(T_ion))
     T_fit = linear ? clamp(T_ion, interval.Tmin, interval.Tmax) : T_ion
-    return _nasa9_cp_over_R(interval, T_fit)
+    return T_fit == T_ion ? _nasa9_cp_over_R(interval, powers) :
+                            _nasa9_cp_over_R(interval, T_fit)
 end
 
-@inline function _nasa9_h_over_R_at(interval::Nasa9Interval, T_ion, linear::Bool)
-    linear || return _nasa9_h_over_R(interval, T_ion)
+@inline function _nasa9_h_over_R_at(interval::Nasa9Interval, T_ion, linear::Bool,
+                                    powers=_nasa9_powers(T_ion))
+    linear || return _nasa9_h_over_R(interval, powers)
     T_fit = clamp(T_ion, interval.Tmin, interval.Tmax)
-    return _nasa9_h_over_R(interval, T_fit) +
-           _nasa9_cp_over_R(interval, T_fit) * (T_ion - T_fit)
+    fit = T_fit == T_ion ? powers : _nasa9_powers(T_fit)
+    return _nasa9_h_over_R(interval, fit) +
+           _nasa9_cp_over_R(interval, fit) * (T_ion - T_fit)
 end
 
-# h/R and cp/R together from one set of powers of T. The temperature inversion
-# needs both at every iterate, and the logarithm and the fourth and fifth powers
-# cost several times the interval search and the polynomial arithmetic, so the
-# inversion forms them once per iterate for every species evaluated at that
-# temperature. The powers are written as literal powers, not built up by
-# repeated multiplication, so the values are those the two single-quantity forms
-# above return, bit for bit.
-@inline _nasa9_powers(T_fit) = (T_fit, T_fit^2, T_fit^3, T_fit^4, T_fit^5, log(T_fit))
+# h/R and cp/R together, which the temperature inversion needs at every
+# iterate for every species.
+@inline _nasa9_h_cp_over_R(interval::Nasa9Interval, powers::Tuple) =
+    (_nasa9_h_over_R(interval, powers), _nasa9_cp_over_R(interval, powers))
 
-@inline function _nasa9_h_cp_over_R(interval::Nasa9Interval, powers)
-    T_fit, T2, T3, T4, T5, log_T = powers
-    a = interval.a
-    cp_over_R = a[1] / T2 + a[2] / T_fit + a[3] + a[4] * T_fit +
-                a[5] * T2 + a[6] * T3 + a[7] * T4
-    h_over_R = -a[1] / T_fit + a[2] * log_T + a[3] * T_fit +
-               a[4] * T2 / 2 + a[5] * T3 / 3 +
-               a[6] * T4 / 4 + a[7] * T5 / 5 + interval.b1
-    return (h_over_R, cp_over_R)
-end
-
-# `powers` is `_nasa9_powers(T_ion)`, reused wherever the fit is evaluated at
-# T_ion itself, which is everywhere but the `:linear` extension.
 @inline function _nasa9_h_cp_over_R(interval::Nasa9Interval, T_ion, linear::Bool,
                                     powers=_nasa9_powers(T_ion))
     T_fit = linear ? clamp(T_ion, interval.Tmin, interval.Tmax) : T_ion
@@ -929,6 +943,32 @@ end
 "e_k(T_ion) = h_k − R_k T_ion."
 @inline species_energy(eos::Nasa9Mixture, k::Int, T_ion) =
     species_enthalpy(eos, k, T_ion) - eos.Rk[k] * T_ion
+
+# The same three from powers of T_ion formed once for every species.
+@inline function species_cp(eos::Nasa9Mixture, k::Int, point::Nasa9Powers)
+    R = eos.Rk[k]
+    T_ion = point.powers[1]
+    interval = _nasa9_interval(eos.intervals, k, T_ion)
+    return R * _nasa9_cp_over_R_at(interval, T_ion, _nasa9_linear(eos), point.powers)
+end
+
+@inline function species_enthalpy(eos::Nasa9Mixture, k::Int, point::Nasa9Powers)
+    R = eos.Rk[k]
+    T_ion = point.powers[1]
+    interval = _nasa9_interval(eos.intervals, k, T_ion)
+    return R * _nasa9_h_over_R_at(interval, T_ion, _nasa9_linear(eos), point.powers)
+end
+
+@inline species_energy(eos::Nasa9Mixture, k::Int, point::Nasa9Powers) =
+    species_enthalpy(eos, k, point) - eos.Rk[k] * point.powers[1]
+
+# The temperature argument that a loop over species at one point passes to
+# `species_cp`, `species_enthalpy` and `species_energy`: `T_ion` itself, except
+# under `Nasa9Mixture`, where it carries the powers of `T_ion` so that the loop
+# forms them once rather than once per species. The results are the same bit
+# for bit.
+@inline _species_point(eos, T_ion) = T_ion
+@inline _species_point(::Nasa9Mixture, T_ion) = Nasa9Powers(_nasa9_powers(T_ion))
 
 # Search bounds and iteration cap of the NASA-9 temperature inversion. The
 # bounds bracket every temperature the fitted intervals cover, with margin on
@@ -1136,8 +1176,9 @@ function recover_primitives!(solver, eos::Nasa9Mixture, Q)
                 # accessor, not a vector, so this stays allocation-free.
                 T_ion = mixture_temperature(eos, e, sp -> Q[i, j, k, sp] * ri)
                 cpm = zero(Tnum)
+                point = Nasa9Powers(_nasa9_cp_powers(T_ion))
                 for sp in 1:n_species
-                    cpm += solver.Y[sp][i, j, k] * species_cp(eos, sp, T_ion)
+                    cpm += solver.Y[sp][i, j, k] * species_cp(eos, sp, point)
                 end
                 cvm = cpm - Rm
                 ρa[i, j, k] = ρ

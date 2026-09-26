@@ -1881,6 +1881,7 @@ assemble_fluxes!(solver::SolverLike, Q) =
         uv = (u[I], v[I], w[I])
         pI = p[I]
         Tp = T_ion[I]
+        point = _species_point(eos, Tp)
         E = Q[I, i_energy]
         molecular = transport_at(transport, eos, T_ion, rho, cp_mix, Y, I)
         μ = molecular.mu + mu_art[I]
@@ -1923,7 +1924,7 @@ assemble_fluxes!(solver::SolverLike, Q) =
                 Dk = bulk ? molecular.D[sp] : molecular.D[sp] + D_art[sp][I]
                 Jkd = ρ * (-Dk * gY[d, sp][I] + Y[sp][I] * Vc)
                 flux[d, sp][I] = ρ * Y[sp][I] * ud + Jkd
-                hdiff += species_enthalpy(eos, sp, Tp) * Jkd
+                hdiff += species_enthalpy(eos, sp, point) * Jkd
             end
             flux[d, m1][I] = ρ * ud * uv[1] + (d == 1 ? pI : zero(T)) - τd[1]
             flux[d, m2][I] = ρ * ud * uv[2] + (d == 2 ? pI : zero(T)) - τd[2]
@@ -1986,7 +1987,7 @@ end
         I = CartesianIndex(i + o1, j + o2, k + o3)
         Db = D_b[I]
         uv = (u[I], v[I], w[I])
-        Tp = T_ion[I]
+        point = _species_point(eos, T_ion[I])
         ke = (uv[1]^2 + uv[2]^2 + uv[3]^2) / 2
         for d in 1:3
             act[d] || continue
@@ -1996,7 +1997,7 @@ end
                 Jkd = -Db * gQ[d, sp][I]
                 flux[d, sp][I] += Jkd
                 Jsum += Jkd
-                eJ += _species_internal_energy(eos, sp, Tp) * Jkd
+                eJ += _species_internal_energy(eos, sp, point) * Jkd
             end
             flux[d, m1][I] += Jsum * uv[1]
             flux[d, m2][I] += Jsum * uv[2]
@@ -2013,6 +2014,8 @@ end
     species_enthalpy(eos, k, T_ion) - eos.Rk[k] * T_ion
 @inline _species_internal_energy(eos::Union{StiffenedGas,StiffenedGasCoeffs},
                                  ::Int, T_ion) = eos.cv * T_ion
+@inline _species_internal_energy(eos::Nasa9Mixture, k::Int, point::Nasa9Powers) =
+    species_energy(eos, k, point)
 
 @inline function _bulk_flux_point!(flux, D_b, gQ, n_cons, act, o1, o2, o3,
                                    i, j, k)
@@ -2134,10 +2137,11 @@ end
             Vc += molecular.D[sp] * dYd(sp)
         end
         hdiff = zero(T)
+        point = _species_point(eos, Tp)
         for sp in 1:n_species
             Jkd = ρ * (-molecular.D[sp] * dYd(sp) + Y[sp][I] * Vc)
             G[I, sp] = Jkd
-            hdiff += species_enthalpy(eos, sp, Tp) * Jkd
+            hdiff += species_enthalpy(eos, sp, point) * Jkd
         end
         G[I, m1] = -τd[1]
         G[I, m2] = -τd[2]
@@ -2331,8 +2335,9 @@ end
              (uv[1] * gu[d][1] + uv[2] * gu[d][2] + uv[3] * gu[d][3])
         Tp = T_ion[I]
         eY = zero(T)
+        point = _species_point(eos, Tp)
         for sp in 1:n_species
-            eY += _species_internal_energy(eos, sp, Tp) * dYd(sp)
+            eY += _species_internal_energy(eos, sp, point) * dYd(sp)
         end
         dTd = _temperature_gradient(eos, ρ, p[I], Tp, cp_mix[I], drho[d], de, eY)
         molecular = transport_at(transport, eos, T_ion, rho, cp_mix, Y, I)

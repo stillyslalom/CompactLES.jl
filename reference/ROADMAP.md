@@ -440,18 +440,15 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   **Gate:** CPU/device recovery and full-run comparisons over interval joins and
   difficult states in both precisions, followed by actual-device profiling.
 
-- [ ] **S6 — Deliver HDF5 time-series output and verify collective writes.**
-  Add `FieldWriter(format=:vtk/:hdf5)` routing through `_write_dump!`; current
-  routing is VTK-only. Implement the extension-backed XDMF temporal collection,
-  reusing the field descriptors emitted by the frame writer, including species
-  expansion and vector component counts.
-  Rewrite a complete collection after each completed frame, inline each frame's
-  Grid/Time/topology/geometry/attributes, use relative paths, and keep individual
-  frames independently readable; do not depend on XInclude reader support.
-  **Gate:** scheduled times, restart frame indices, fields/stride/slice, rank-0
-  collection ownership, and continued readability after interruption.
-  Separately test with parallel libhdf5 built against the run's MPI: ranks owning
-  no selected slice must participate with empty selections, not skip H5Dwrite.
+- [ ] **S6 — Verify collective HDF5 writes on a parallel libhdf5.**
+  `FieldWriter(format = :hdf5)` and its XDMF temporal collection landed in
+  commit `c04abf1`, and every block write issues an empty-selection H5Dwrite
+  on a rank without a block, exercised only under the serialized backend.
+  Run `test/hdf5_tests.jl` against a parallel libhdf5 built for the run's MPI,
+  including a slice that leaves ranks with no selection, and measure whether
+  the collective transfer mode on the block datasets pays there.
+  **Depends on:** a cluster with parallel HDF5. A refined solver's HDF5 dump
+  (a spatial collection per patch with blanking) waits for a case.
 
 - [ ] **S7 — Validate thread pinning and cluster placement.**
   Wire pinning only after controlled target-cluster trials: fixed-rank comparisons

@@ -573,8 +573,9 @@ wall_internal_energy(eos::StiffenedGasCoeffs, Q, I, ::Int, Twall) =
 
 wall_internal_energy(eos::Nasa9Mixture, Q, I, n_species::Int, Twall) = begin
     ρe = zero(eltype(Q))
+    point = _species_point(eos, Twall)
     @inbounds for k in 1:n_species
-        ρe += Q[I, k] * species_energy(eos, k, Twall)
+        ρe += Q[I, k] * species_energy(eos, k, point)
     end
     ρe
 end
