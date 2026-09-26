@@ -274,14 +274,9 @@ filter time-scaling with N1.
   **Gate:** unchanged numerical results plus inference/allocation comparisons for
   the existing hot paths; preserve compatibility of supported accessors.
 
-- [ ] **A4 — Tighten and document public runtime contracts.**
-  Validate physical/numerical parameter ranges and finite inputs, including
-  transport coefficients, CFL/backoff, grid sizes, and primitive composition.
-  Document or simplify `step!` clock ownership, absolute `nmax`, initialization
-  without reset, cached fields, and scalar versus state-vector APIs.
-  Audit rollback across callback effects: schedule rewind does not restore a
-  switched boundary or arbitrary user state.
-  **Gate:** early actionable errors and explicit continuation/rollback semantics.
+- [x] **A4** — Parameter ranges fail early with named errors, `run!`'s absolute
+  `tfinal`/`nmax` are enforced, and a rollback restores switches, triggers and
+  writer frames (commit `99be93c`).
 
 - [x] **A5** — Checkpoints carry a versioned configuration record compared
   at load: thermodynamics and layout strictly, the other groups under `allow`

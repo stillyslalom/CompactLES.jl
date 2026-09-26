@@ -35,7 +35,12 @@
 #      pointwise truncation; the cascade filter caps every wall row near 1.8
 #      and the one-sided rows lift the cap; a level interface reads the C6
 #      closure cascade at the fine spacing, 3.6, and :brady_livescu 6.0.
-#   6. Taylor–Green kinetic-energy decay — an end-to-end physics check
+#   6. Temporal order — one case on one grid in a sequence of equal steps
+#      against the same case in many more steps, so the spatial error cancels
+#      and the slope is the time integration's: time-dependent boundary data
+#      evaluated at the stage times read the integrator's fourth order, and a
+#      level interface reads the coupling schedule's order.
+#   7. Taylor–Green kinetic-energy decay — an end-to-end physics check
 #      against published Re = 1600 data.
 #
 # The `expect` values below are REGRESSION GUARDS set from measured behaviour,
@@ -63,6 +68,9 @@
 #   interface evolution (entropy wave, t = 0.5): two patches C6 (k = 1) 3.31 |
 #   two levels C6 (k = 3) 3.62 | two levels :brady_livescu 6.01 | three levels
 #   subcycled 3.72 | two levels, cascade filter 4.12
+#   temporal order (fixed grid, equal steps): Dirichlet inflow g(t) 3.99 |
+#   NSCBC inflow target(t) 4.09 | two levels, global step 1.00 | two levels
+#   subcycled, ghost fluxes 3.85
 #
 # The default of all three derivative presets is `:neutral3`; the `:cascade3`
 # rows are measured beside it wherever the two closures differ. The
@@ -71,7 +79,7 @@
 # interface studies keep the cascade rows, because the flux divergence at an
 # interface end selects them (`interface_divergence_closures`).
 #
-# Those forty-eight numbers are also passed to each study as `recorded` and
+# Those fifty-two numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -629,6 +637,57 @@ evolution_study("two levels, C6, cascade filter", PERIODIC_NS,
                 N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2, filter_interval=1),
                 entropy_ref;
                 primary=:interface, tfinal=0.5, expect=4.1, tol=0.8, recorded=4.12)
+
+# ---------------------------------------------------------------------------
+# Temporal order. Each row integrates one case on one grid in a sequence of
+# equal steps, through `run!` one step at a time, and reads the maximum
+# difference over the conserved components against the same case on the
+# same grid in many more steps (`temporal_errors` in test/smooth_cases.jl).
+# The spatial error cancels exactly, so the slope against the step is the
+# time integration's; bench/temporalorder.jl runs the full set.
+#
+# The inflow rows carry their time dependence in the boundary data alone, a
+# `DirichletBC` state and an `NSCBCInflowBC` target, both evaluated at the
+# stage time, and read the integrator's fourth order. The level rows read
+# the coupling schedule instead: the fine solution is injected into the
+# covered parent nodes once per completed step, which makes the global step
+# first order in the step, and the subcycled row, under the ghost fluxes,
+# where that term is smallest, reads the Hermite shell's fourth order above
+# it at the largest steps. With the injection removed both read four.
+
+function temporal_study(name, steps, build, tfinal, ref_steps; expect, tol, recorded)
+    t0 = time(); c0 = compile_ns()
+    errs = temporal_errors(build, tfinal, steps, ref_steps)
+    dts = tfinal ./ collect(steps)
+    p = observed_order(dts, errs)
+    @printf("%-38s  ", name)
+    for (n, e) in zip(steps, errs)
+        @printf("n=%-4d %.3e  ", n, e)
+    end
+    @printf("order ≈ %.2f  (%s)\n", p,
+            join((@sprintf("%.2f", o) for o in successive_orders(dts, errs)), " / "))
+    push!(PHASE_LOG, (name, time() - t0, (compile_ns() - c0) / 1e9))
+    _guard(name, p, expect, tol, recorded)
+    p
+end
+
+# A cfl the endpoint clip always undercuts, so every step is the requested one.
+const TEMPORAL_CFL = 50.0
+
+println("\n=== temporal order: fixed grid, equal steps ===")
+temporal_study("Dirichlet inflow g(t), N = 33", (48, 96, 192),
+               () -> inflow_case(33; cfl=TEMPORAL_CFL), 0.4, 1536;
+               expect=4.0, tol=0.5, recorded=3.99)
+temporal_study("NSCBC inflow target(t), N = 33", (24, 48, 96),
+               () -> target_inflow_case(33; cfl=TEMPORAL_CFL), 0.4, 768;
+               expect=4.0, tol=0.5, recorded=4.09)
+temporal_study("two levels, global step, N = 48", (24, 48, 96),
+               () -> entropy_case(48; levels=2, cfl=TEMPORAL_CFL), 0.5, 1536;
+               expect=1.0, tol=0.5, recorded=1.00)
+temporal_study("two levels, subcycled, ghost fluxes", (14, 20, 28),
+               () -> entropy_case(96; levels=2, subcycle=true, interface_flux=:ghost,
+                                  cfl=TEMPORAL_CFL), 0.5, 2240;
+               expect=3.8, tol=0.6, recorded=3.85)
 
 # ---------------------------------------------------------------------------
 # Taylor–Green vortex: dissipation-rate history at Re = 1600. Reference peak

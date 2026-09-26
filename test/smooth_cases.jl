@@ -313,6 +313,108 @@ function entropy_case(N; k=3, phase=0.37, patch_grid=(1, 1, 1), levels=1,
 end
 
 """
+    inflow_case(N; k=2pi, phase=0.37, u0=2.0, opts...)
+
+The entropy wave of `entropy_profile` at the supersonic speed `u0` on [0, 1]
+with N nodes, entering through a `DirichletBC` that holds the exact state
+at the stage time and leaving through an `NSCBCOutflowBC`, exact at every
+time. The inflow data are the only time dependence the boundary carries, so
+a temporal study of this case measures how the integrator treats them.
+"""
+function inflow_case(N; k=2pi, phase=0.37, u0=2.0, opts...)
+    inflow = DirichletBC((x, y, z, t) -> begin
+        rho, u, _, p = entropy_profile(k, phase; u0=u0, t=t)(x)
+        Prim(rho=rho, u=(u, 0.0, 0.0), p=p)
+    end)
+    _smooth_solver((N, 1, 1), 1.0, ((inflow, NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
+                   entropy_profile(k, phase; u0=u0); merge(SMOOTH_DEFAULTS, opts)...)
+end
+
+"""
+    target_inflow_case(N; u0=0.3, period=0.4, eta=2.0, opts...)
+
+A uniform subsonic stream at `u0`, rho = p = 1, on [0, 1] with N nodes,
+between an `NSCBCInflowBC` whose pointwise target velocity and temperature
+oscillate with `period` and an `NSCBCOutflowBC`. No closed form; the
+relaxation rates `eta` are raised from the defaults so that the targets move
+the solution within the run.
+"""
+function target_inflow_case(N; u0=0.3, period=0.4, eta=2.0, opts...)
+    target(x, y, z, t) = Prim(u=(u0 * (1 + 0.1 * sinpi(2t / period)), 0.0, 0.0),
+                              T_ion=1 + 0.02 * cospi(2t / period), p=1.0, Y=[1.0])
+    inflow = NSCBCInflowBC(u=(u0, 0.0, 0.0), T_ion=1.0, Y=[1.0], eta_u=eta,
+                           eta_T=eta, target=target)
+    _smooth_solver((N, 1, 1), 1.0, ((inflow, NSCBCOutflowBC(pinf=1.0)), per3[2], per3[3]),
+                   x -> (one(x), u0 + zero(x), zero(x), one(x));
+                   merge(SMOOTH_DEFAULTS, opts)...)
+end
+
+# --- fixed-step integration and temporal errors -----------------------------
+
+"""
+    fixed_step_run!(solver, states, tfinal, nsteps)
+
+Advance to `tfinal` in `nsteps` equal steps through `run!`, one call per
+step with the endpoint as the only limit on the step: the solver must be
+built with a `cfl` large enough that the endpoint clip always binds. Every
+step then takes the path a production step takes, boundary enforcement,
+filter and level synchronization included.
+"""
+function fixed_step_run!(solver, states, tfinal, nsteps)
+    dt = tfinal / nsteps
+    for n in 1:nsteps
+        run!(solver, states; tfinal=n == nsteps ? tfinal : n * dt)
+    end
+    solver.step == nsteps ||
+        error("$(solver.step) steps taken for $nsteps: raise the case's cfl")
+    return states
+end
+
+"""
+    state_difference(solver, a, b; patch=0)
+
+The maximum difference between two states of one solver over every
+conserved component and every uncovered interior node, of patch `patch`
+alone when it is nonzero.
+"""
+function state_difference(solver, a, b; patch=0)
+    patches = getfield(solver, :patches)
+    as = a isa Vector ? a : [a]
+    bs = b isa Vector ? b : [b]
+    e = 0.0
+    for (pi, p) in enumerate(patches)
+        patch == 0 || pi == patch || continue
+        ps = CompactLES.PatchSolver(solver, p)
+        nl = ps.decomp.n_local
+        for c in 1:solver.equations.n_cons, k in 1:nl[3], j in 1:nl[2], i in 1:nl[1]
+            I = gidx(ps, i, j, k)
+            ps.covered[I] == 0 || continue
+            e = max(e, abs(as[pi][I, c] - bs[pi][I, c]))
+        end
+    end
+    return e
+end
+
+"""
+    temporal_errors(build, tfinal, steps, ref_steps; patch=0) -> Vector
+
+The temporal error of `build()` integrated to `tfinal` in each of `steps`
+equal steps, against the same case in `ref_steps` steps on the same grid,
+so that the spatial error cancels exactly and the difference is the time
+integration's alone. `ref_steps` should be a multiple of every entry of
+`steps` large enough that the reference's own time error is negligible.
+"""
+function temporal_errors(build, tfinal, steps, ref_steps; patch=0)
+    solver, ref = build()
+    fixed_step_run!(solver, ref, tfinal, ref_steps)
+    map(steps) do n
+        s, q = build()
+        fixed_step_run!(s, q, tfinal, n)
+        state_difference(s, q, ref; patch=patch)
+    end
+end
+
+"""
     polynomial_profile()
 
 rho, u and p of degrees 2, 1 and 2 on [0, 1], so that every conserved

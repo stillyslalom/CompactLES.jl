@@ -24,7 +24,7 @@ section that moved it says so in one sentence and the older figure is gone.
    (`bench/nohprobe.jl`)
 6. [Directional bulk viscosity](#directional-bulk-viscosity) (`bench/anisotropic.jl`)
 7. [The smooth-evolution accuracy matrix](#the-smooth-evolution-accuracy-matrix)
-   (`bench/boundaryorder.jl`, `test/convergence.jl`)
+   (`bench/boundaryorder.jl`, `bench/temporalorder.jl`, `test/convergence.jl`)
 8. [The filter's wall rows](#the-filters-wall-rows) (`bench/wallfilter.jl`)
 9. [Wall closures in production](#wall-closures-in-production) (`bench/wallclosure.jl`)
 10. [The wall flux contracts](#the-wall-flux-contracts) (`test/wall_flux_tests.jl`)
@@ -2262,22 +2262,7 @@ rows reach the 1e-14 floor at N = 96. The filtered rows read the C8 filter.
 The subcycled C8 and C10 rows (7.2–7.8 over N = 48 / 96) turn to the
 Hermite shell's time error by N = 192, `dt` 0.4–0.9.
 
-**Time.** N = 192, two levels, order 8, each run against the same run at
-cfl = 0.05, maximum over the root and the fine patch; cfl 0.8 / 0.4 / 0.2 /
-0.1:
-
-```
-C6, global step         3.57e-9   1.72e-9   7.51e-10  2.52e-10   orders 1.05 / 1.20 / 1.57
-C6, subcycled           9.48e-9   4.76e-9   2.15e-9   7.32e-10   orders 0.99 / 1.15 / 1.56
-C6 BL, global step      2.65e-12  1.14e-12  4.92e-13  1.93e-13   orders 1.22 / 1.21 / 1.35
-C6 BL, subcycled        4.36e-10  2.90e-11  2.41e-12  5.23e-13   orders 3.91 / 3.59 / 2.20
-```
-
-A first-order time error in the reference biases the last ratio upward, as
-measured (1.05, 1.20, 1.57 against the 1.10, 1.22, 1.58 that K(cfl − 0.05) gives). The level
-interface carries a time error first order in the step, about 1/25 of the
-spatial error at cfl 0.8; the subcycled Brady–Livescu rows show the Hermite
-shell's fourth order above it.
+**Time.** The temporal order of these rows is in [temporal order](#temporal-order).
 
 ### Repeated filtering
 
@@ -2340,6 +2325,78 @@ error; the wall window's closure defect is reached by `cfl = 0.25`, which is why
 run there and why the C8 rows, whose closure defect is below 1e-12 at N = 97, are measured
 and not gated. At a level interface the global-step run is spatially limited at every step
 tested, and the subcycled run's Hermite shell adds 25% at `cfl = 0.5` and 1.5% at 0.25.
+
+### Temporal order
+
+```text
+julia --project=. -t 1 bench/temporalorder.jl [restrict=step|stage|none]
+```
+
+Each row integrates one case on one grid in equal steps through `run!` and reads the
+maximum difference over the conserved components against the same case on the same grid
+in at least 16 times as many steps, so the spatial error cancels. The inflow cases carry
+their time dependence in the boundary data alone: a supersonic entropy wave through a
+`DirichletBC` holding the exact state, and a uniform stream under an `NSCBCInflowBC` whose
+target velocity and temperature oscillate, both with an `NSCBCOutflowBC`. `test/convergence.jl`
+guards four rows on smaller grids. Steps, error and the orders between successive step
+counts:
+
+```
+periodic standing wave, 96 nodes     20 1.248e-7   40 7.710e-9   80 4.787e-10  160 2.982e-11   4.02 / 4.01 / 4.00
+slip walls, N = 49                   20 2.468e-7   40 1.700e-8   80 1.055e-9   160 6.794e-11   3.86 / 4.01 / 3.96
+Dirichlet inflow g(t), N = 65        80 3.361e-7  160 2.280e-8  320 1.474e-9   640 9.367e-11   3.88 / 3.95 / 3.98
+NSCBC inflow target(t), N = 65       40 5.517e-6   80 4.016e-7  160 2.422e-8   320 1.466e-9    3.78 / 4.05 / 4.05
+filter, periodic, relaxed            20 1.248e-7   40 7.702e-9   80 4.790e-10  160 2.999e-11   4.02 / 4.01 / 4.00
+filter, periodic, full strength      20 1.240e-7   40 6.949e-9   80 4.415e-10  160 6.947e-10   4.16 / 3.98 / -0.65
+filter, walls, one-sided, relaxed    20 2.301e-7   40 3.953e-8   80 3.521e-8   160 1.683e-8    2.54 / 0.17 / 1.06
+filter, walls, cascade, relaxed      20 4.774e-5   40 2.389e-5   80 9.042e-6   160 4.386e-6    1.00 / 1.40 / 1.04
+
+dt = h/5 and h/10 by N (h/5 is cfl 0.64 on the inflow wave), order in h at h/5
+                                     N = 33     65         129        257        orders in h         in dt at 257
+periodic entropy wave, u0 = 2        2.539e-7   1.594e-8   9.960e-10  6.255e-11  3.99 / 4.00 / 3.99  3.84
+Dirichlet data at the stage time     4.906e-7   5.470e-8   1.232e-8   2.929e-9   3.16 / 2.15 / 2.07  3.92
+Dirichlet data through dq/dt         4.422e-7   3.119e-8   2.160e-9   1.702e-10  3.83 / 3.85 / 3.67  4.08
+NSCBC target(t)                      1.347e-7   5.991e-8   2.575e-8   1.105e-8   1.17 / 1.22 / 1.22  4.04
+NSCBC constant target, pulse         4.108e-7   2.296e-8   1.444e-9   9.074e-11  4.16 / 3.99 / 3.99  4.00
+
+entropy wave, two levels, N = 96, t = 0.5, composite
+global step, steps                   40         80         160        320
+  default                            3.016e-8   1.535e-8   7.651e-9   3.726e-9    0.97 / 1.00 / 1.04
+  ghost fluxes                       9.659e-11  2.236e-11  9.823e-12  4.836e-12   2.11 / 1.19 / 1.02
+  C6 BL                              8.269e-11  2.805e-11  1.323e-11  6.320e-12   1.56 / 1.08 / 1.07
+  default, restrict=stage            1.455e-10  9.680e-12  6.020e-13  9.326e-14   3.91 / 4.01 / 2.69
+  default, restrict=none             1.455e-10  9.683e-12  6.133e-13  1.499e-13   3.91 / 3.98 / 2.03
+subcycled, steps                     14         20         28         40         56         80
+  default                            8.139e-8   5.789e-8   4.223e-8   3.014e-8   2.176e-8   1.532e-8    0.96 / 0.94 / 0.95 / 0.97 / 0.98
+  ghost fluxes                       5.730e-9   1.405e-9   3.973e-10  1.202e-10  4.887e-11  2.455e-11   3.94 / 3.75 / 3.35 / 2.68 / 1.93
+  C6 BL                              4.596e-9   1.144e-9   3.282e-10  1.016e-10  4.633e-11  2.692e-11   3.90 / 3.71 / 3.29 / 2.33 / 1.52
+  default, restrict=none             4.115e-9   9.882e-10  2.573e-10  6.178e-11  1.608e-11  3.863e-12   4.00 / 4.00 / 4.00 / 4.00 / 4.00
+  ghost fluxes, restrict=none        6.007e-9   1.427e-9   3.689e-10  8.807e-11  2.282e-11  5.436e-12   4.03 / 4.02 / 4.02 / 4.01 / 4.02
+```
+
+On a fixed grid the update is fourth order with the boundary data evaluated at the
+stage time, Dirichlet and NSCBC alike. At a fixed ratio of step to spacing the temporal
+error of time-dependent boundary data falls more slowly than the interior's h⁴: as h² for
+the Dirichlet state, largest at the first nodes of the inflow, and as h^1.2 for the NSCBC
+target, whose faces keep h⁴ with constant targets and a pulse in the interior. The same
+Dirichlet data imposed through their time derivative on the face node's right-hand side
+(a bench-local condition) keep 3.7–3.9. This is the boundary-data order reduction of
+Runge–Kutta methods of stage order one (Carpenter, Gottlieb, Abarbanel and Don, SIAM J.
+Sci. Comput. 16, 1995).
+
+The relaxed filter is a splitting first order in the step: where a pass changes the
+solution, as the cascade rows do at a wall, the error is first order, and on the smooth
+periodic wave the change is below the integrator's error. At full strength the filter's
+error grows with the number of passes.
+
+The level interface is first order in the step under the package's schedule, global step
+and subcycled alike, about 1/45 of the spatial interface error (1.342e-6) at 40 steps.
+Injecting the fine solution into the covered parent nodes before every stage of the global
+step (`restrict=stage`), or never (`restrict=none`), gives fourth order, so the term is the
+once-per-step injection, after which the coarse operator advances the covered nodes for a
+whole step. It scales with the interface's spatial defect: the ghost-flux and
+Brady–Livescu rows are 770 and 590 times smaller than the default's at 320 steps. The
+subcycled Hermite shell's fourth order shows above it at the largest steps.
 
 ### What the matrix settles
 
