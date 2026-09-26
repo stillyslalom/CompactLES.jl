@@ -207,9 +207,68 @@ using HDF5
 
     # A face the file describes as switchable where this solver has a plain
     # condition: the boundary would silently differ for the rest of the run.
+    # The configuration record refuses it first; allowing the boundary
+    # change leaves the switch record in force.
     splain, Qplain = mkstate(((SlipWallBC(), SlipWallBC()), per3h[2], per3h[3]))
+    @test_throws "configuration mismatch" load_checkpoint_hdf5!(splain, Qplain,
+                                                                state_stem)
     @test_throws "boundary mismatch" load_checkpoint_hdf5!(splain, Qplain,
-                                                           state_stem)
+                                                           state_stem;
+                                                           allow=(:boundaries,))
+
+    # The configuration record: the same species names over another gamma are
+    # refused on every rank, since every rank reads the one record; a numerics
+    # change is refused unless allowed. The record's groups are summarized by
+    # digest in `config/digests`.
+    lean = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                         IdealSpecies{Float64}("b", 2.0, 1.5)])
+    mkrec(; kw...) = Solver(bcs=per3h, n_global=(72, 16, 16), L_domain=(1.0, 1.0, 1.0),
+                            art=ArtParams(enabled=false), dims=(np, 1, 1); kw...)
+    refused = try
+        load_checkpoint_hdf5!(mkrec(eos=lean), allocate_state(mkrec(eos=lean)), stem)
+        0
+    catch e
+        occursin("eos.sp[2].gamma", sprint(showerror, e)) ? 1 : 0
+    end
+    @test MPI.Allreduce(refused, +, comm) == np
+    c8 = mkrec(eos=eos, deriv=lele_d1_8())
+    @test_throws "allow = (:numerics,)" load_checkpoint_hdf5!(c8, allocate_state(c8),
+                                                               stem)
+    Qc8 = allocate_state(c8)
+    load_checkpoint_hdf5!(c8, Qc8, stem; allow=(:numerics,))
+    @test c8.step == 17
+    if rank == 0
+        h5open(stem * ".h5", "r") do file
+            @test read(file["meta/format"]) == 6
+            digests = String.(read(file["config/digests"]))
+            @test startswith(digests[1], "thermodynamics fnv1a64 ")
+            @test "eos.sp[2].gamma" in String.(read(file["config/paths"]))
+        end
+    end
+    MPI.Barrier(comm)
+
+    # A file of the previous format has no record and loads with a warning,
+    # nothing compared: this format's file without `config`, format word 5.
+    legacy_stem = joinpath(dir, "legacy")
+    if rank == 0
+        cp(stem * ".h5", legacy_stem * ".h5")
+        h5open(legacy_stem * ".h5", "r+") do file
+            delete_object(file, "config")
+            delete_object(file, "meta/format")
+            file["meta/format"] = 5
+        end
+    end
+    MPI.Barrier(comm)
+    old = mkrec(eos=lean)
+    Qold = allocate_state(old)
+    if rank == 0
+        @test_logs (:warn, r"no configuration record") match_mode=:any begin
+            load_checkpoint_hdf5!(old, Qold, legacy_stem)
+        end
+    else
+        load_checkpoint_hdf5!(old, Qold, legacy_stem)
+    end
+    @test old.step == 17
 
     MPI.Barrier(comm)
     rank == 0 && rm(dir; recursive=true)

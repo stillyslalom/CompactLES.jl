@@ -243,9 +243,6 @@ filter time-scaling with N1.
   Add a scheduled full shock-validation battery and explicit Makie extension
   checks; retain HDF5 tests in the package test target and add parallel-HDF5
   execution where the required stack exists.
-  Add an MPI phase that runs the `:delta4` detector across a paired fold: the
-  suite's off-rank fold phase covers derivatives and filters only, and since
-  N6f every scalar sensor carries the butterfly's exchange there.
   Keep each instrument's current transcript under `bench/results/<script>.txt`
   so that an appendix table is a quoted output and never a retyped one; a
   transcript is the script's own output, so each lands with that script's
@@ -545,27 +542,24 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   `recover_primitives!` under `Nasa9Mixture` runs a safeguarded Newton solve
   per point and per Runge–Kutta stage, and that solve is the ~6× step cost of
   the NASA-9 model over `IdealMixture`. The interval table is isbits and the
-  inversion shares the powers of T across species (commit `9e0f126`,
-  measured with `bench/nasa9_inversion.jl`). What remains, in order of payoff
-  per risk:
-  1. Share the powers of T across species in the `species_cp` loop of
-     `recover_primitives!` as the inversion now does; bitwise safe.
-  2. Relax the convergence criterion from 32 eps toward 1e-10 relative,
+  inversion and every per-point species loop share the powers of T (commits
+  `9e0f126`, `405037f`, measured with `bench/nasa9_inversion.jl`). What
+  remains, in order of payoff per risk:
+  1. Relax the convergence criterion from 32 eps toward 1e-10 relative,
      which saves about one of the four or five iterations. Newton's last
      iteration exists to certify the previous one. A numerics decision: it
      moves recovered temperatures at the 1e-10 level and so the serial and
      MPI baselines.
-  3. Warm-start from the stored `T_ion` field, one or two iterations instead
+  2. Warm-start from the stored `T_ion` field, one or two iterations instead
      of four or five. It trades away the state-only seed that
      `mixture_temperature_status` documents for bit-for-bit agreement between
      serial and decomposed runs and for restart independence; only worth it
-     if 1 and 2 leave the model still far from the ideal-gas step cost.
+     if 1 leaves the model still far from the ideal-gas step cost.
   Keep the polynomial powers literal (`T^4`): a repeated product is not
   bit-identical to the library power and moves every baseline for nothing.
-  **Depends on:** nothing for stage 1; a baseline decision for 2 and 3.
-  **Gate:** the core gate with bit-identical convergence orders for stage 1,
-  and explained baseline updates for 2 or 3; time the inversion before and
-  after at four species in the same session.
+  **Depends on:** a baseline decision.
+  **Gate:** the core gate with explained baseline updates; time the inversion
+  before and after at four species in the same session.
 
 ## P2/P3: high-energy-density physics
 

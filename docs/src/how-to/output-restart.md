@@ -88,6 +88,26 @@ continues it bit for bit.
 Checkpointing does not support a same-level `patch_grid` layout. Use an
 unpatched solver or a refined hierarchy; `save_vtk` remains available for both.
 
+## Restart under a changed configuration
+
+Every checkpoint records the configuration it was written under: the EOS
+constants and model assumptions, the species order, the derivative and filter
+schemes, the artificial-property parameters, the refinement options, the
+transport model, the boundary conditions and the sources. The load compares
+that record with the restarting solver. A thermodynamic or layout difference
+always throws. A difference in the numerics, the transport, the boundary
+conditions or the sources throws unless the load names the group:
+
+```julia
+load_checkpoint!(solver, Q, "restart/state"; allow = (:numerics, :transport))
+```
+
+The load then proceeds and logs the differences. Functions, such as a boundary
+target or a stretch mapping, are recorded as `function` and are not compared.
+Callback schedules, `StepControl` settings and a `FieldWriter`'s frame index
+are not recorded; restore them in the restarting script, and give the writer a
+`start_index`.
+
 ## Restart a refined run
 
 Both checkpoint forms take the state vector and record the hierarchy: the

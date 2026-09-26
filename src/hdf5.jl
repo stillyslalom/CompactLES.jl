@@ -106,7 +106,9 @@ the species count, the level count, the coefficient field count, the conserved
 component names, the element type, the metric and EOS type names, and the
 global coordinate vector along each dimension. The coordinates carry the domain
 extent, the origin and any [`Stretch`](@ref) mapping, none of which the extent
-alone constrains.
+alone constrains. The configuration record that [`save_checkpoint`](@ref)
+describes is stored under `config`, with one digest per group in
+`config/digests` as a readable summary.
 
 Requires `using HDF5`.
 """
@@ -141,7 +143,7 @@ Requires `using HDF5`.
 save_hdf5(args...; kwargs...) = _hdf5_required("save_hdf5")
 
 """
-    load_checkpoint_hdf5!(solver, Q, prefix)
+    load_checkpoint_hdf5!(solver, Q, prefix; allow = ())
 
 Restore the interior of `Q` and the run state (`t`, `step`, `cfl`, `dt_prev`,
 `rate_prev`, `filter_rate_prev`, each `SwitchableBC`'s `switched` flag through
@@ -163,11 +165,13 @@ metric and EOS type names, the switchable-face layout, and the coordinates
 along each dimension. Coordinates are compared to a relative tolerance of
 1e-10, which separates a rebuilt identical grid from any different one.
 
-Two limits apply. Species are identified by name, so two species sets that share
-names while differing in their thermodynamic constants are not distinguished.
-A checkpoint written in an earlier format is rejected outright.
+The configuration record is then compared, and `allow` accepts a
+`:numerics`, `:transport`, `:boundaries` or `:sources` difference, as
+[`load_checkpoint!`](@ref) describes. A file written in the previous format,
+which has no record, loads with a warning and without that comparison; a
+file in an older format is rejected outright.
 
-    load_checkpoint_hdf5!(solver, states::Vector, prefix)
+    load_checkpoint_hdf5!(solver, states::Vector, prefix; allow = ())
 
 The refined-hierarchy form, for a file written from a state vector. After
 the header checks and the root's block, the hierarchy is brought to the

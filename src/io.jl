@@ -28,9 +28,9 @@
 #
 #   The metric and the EOS are stored by type name. For the metric that is a
 #   complete description, the types being singletons. For the EOS it is a coarse
-#   check that catches a different model at the same `n_cons`; the species are
-#   identified by the names in `component_names`, so two species sets sharing
-#   names while differing in their thermodynamic constants are not distinguished.
+#   check that catches a different model at the same `n_cons`; the configuration
+#   record below compares the constants, so two species sets sharing names while
+#   differing in their thermodynamic constants are distinguished there.
 #
 #   The element type is stored by name too. The payload is raw binary, so the
 #   element type fixes both the length of the block and the meaning of its
@@ -78,7 +78,9 @@
 
 const CKPT_MAGIC_V1 = 0x434c4553_434b5054   # "CLESCKPT", the unversioned format
 const CKPT_MAGIC = 0x434c4553_52434b50      # "CLESRCKP"
-const CKPT_VERSION = 5
+const CKPT_VERSION = 6
+# The previous version, read without a configuration record (see below).
+const CKPT_VERSION_UNRECORDED = 5
 
 _ckpt_name(prefix::AbstractString, rank::Int) =
     string(prefix, ".r", lpad(rank, 4, '0'), ".ckpt")
@@ -233,6 +235,413 @@ function restore_switches!(solver::SolverLike, codes, source::AbstractString)
     return solver
 end
 
+# --- The configuration record ------------------------------------------------
+#
+# The header checks above identify how the payload is laid out. They do not
+# identify the model the state was advanced under: two species sets with the
+# same names and different constants pass them, as do a different derivative
+# operator, filter, transport model or boundary condition. The configuration
+# record compares those. It is a list of `(group, path, value)` entries built
+# from the solver's content, one per leaf value, written with every checkpoint
+# and compared entry by entry at the load.
+#
+#   Content, not type identity. A struct is entered as the unqualified name of
+#   its type (`nameof`) plus any type parameter that is a value rather than a
+#   type, then one entry per field. No module path is recorded, so a type moved
+#   into another module or package keeps its record, and old checkpoints stay
+#   loadable. A type parameter that is a type (the element type) is left out;
+#   the precision has an entry of its own.
+#
+#   Exact values. A float is entered as its shortest round-trip text, which is
+#   exact and does not depend on the session. A numeric array longer than
+#   `CONFIG_ARRAY_INLINE` is entered as its size and an FNV-1a digest of the
+#   element texts, so a large table costs one entry. `hash` is not used: it is
+#   not stable across Julia versions or sessions.
+#
+#   What cannot be compared. A function, closures included, is entered as
+#   `function`, so two different functions compare equal; the coordinates
+#   checked above cover a `Stretch`, and nothing covers a user boundary or
+#   source function. A mutable object other than an array is entered as
+#   `opaque` with its type name unless `_record_fields` names the fields to
+#   enter, since its state changes during a run (a `SwitchableBC` has its
+#   `switched` flag restored separately, and a `CompositeBC` holds per-face
+#   scratch).
+#
+#   Derived fields. `_record_fields` also drops fields computed from others at
+#   construction (an `IdealMixture`'s coefficient vectors, a `Nasa9Mixture`'s
+#   interval table and seed values), which would repeat a difference or, where
+#   the derivation calls `log`, could differ in the last bit between builds.
+#
+# The groups divide into two classes. `thermodynamics` (the EOS, its model
+# identity, the species order) and `layout` (the equation set, the precision,
+# the metric, the grid extent, the stretch) decide what the stored numbers mean,
+# so a difference there always refuses the load. `numerics`, `transport`,
+# `boundaries` and `sources` decide how the state evolves from here; a
+# difference refuses the load unless the caller names the group in `allow`,
+# in which case the load goes ahead and reports the difference.
+#
+# The record is built from data every rank holds identically, and the verdict
+# is reduced over the run's communicator, so a mismatch raises on every rank
+# and no rank goes on to the collective primitive refresh alone.
+
+const CONFIG_RECORD_VERSION = 1
+const CONFIG_STRICT_GROUPS = ("thermodynamics", "layout")
+const CONFIG_ALLOWABLE_GROUPS = (:numerics, :transport, :boundaries, :sources)
+const CONFIG_ARRAY_INLINE = 64
+
+"""
+    ConfigurationRecord
+
+The configuration record a checkpoint carries: the record `version` and three
+parallel string vectors, `groups`, `paths` and `values`, one element per entry.
+Built by `configuration_record` and compared by `configuration_differences`.
+"""
+struct ConfigurationRecord
+    version::Int
+    groups::Vector{String}
+    paths::Vector{String}
+    values::Vector{String}
+end
+
+ConfigurationRecord() =
+    ConfigurationRecord(CONFIG_RECORD_VERSION, String[], String[], String[])
+
+function _push_entry!(rec::ConfigurationRecord, group, path, value)
+    push!(rec.groups, group)
+    push!(rec.paths, path)
+    push!(rec.values, value)
+    return rec
+end
+
+# FNV-1a, 64 bit: a fixed arithmetic definition, so the digest of a given text
+# is the same in every session and every Julia version. It identifies content
+# in a message and in the HDF5 summary; the load compares the entries.
+function _fnv1a64(s::AbstractString)
+    h = 0xcbf29ce484222325
+    for b in codeunits(s)
+        h = (h ⊻ b) * 0x00000100000001b3
+    end
+    return h
+end
+
+_leaf_text(x::AbstractFloat) = repr(x)
+_leaf_text(x::Integer) = string(x)
+_leaf_text(x::Number) = repr(x)
+_leaf_text(x::Symbol) = repr(x)
+_leaf_text(x::AbstractString) = repr(String(x))
+_leaf_text(x::Char) = repr(x)
+
+_is_leaf(x) = x isa Union{Number,Symbol,AbstractString,Char}
+
+# The name a struct is entered under: the unqualified type name and the value
+# parameters (a species-name tuple, a count), never a module path.
+function _record_tag(x)
+    T = typeof(x)
+    values = [repr(p) for p in T.parameters if !(p isa Type || p isa TypeVar)]
+    name = string(nameof(T))
+    return isempty(values) ? name : name * "{" * join(values, ", ") * "}"
+end
+
+"""
+    _record_fields(x)
+
+The fields of `x` the configuration record enters, or `nothing` to enter `x`
+as opaque. Every field of an immutable struct by default and nothing of a
+mutable one; a method narrows the set to a type's primary data or names the
+comparable fields of a mutable type.
+"""
+_record_fields(x) = ismutable(x) ? nothing : fieldnames(typeof(x))
+_record_fields(::IdealMixture) = (:sp,)
+_record_fields(::Nasa9Mixture) = (:sp, :T_guess, :extrapolate)
+_record_fields(::CeaTransport) = (:species, :diffusion, :Lewis)
+_record_fields(::SwitchableBC) = (:before, :after, :at)
+_record_fields(::CompositeBC) = (:members, :selector)
+
+# Enter `x` under `path` in `group`, and its parts beneath it.
+function _record!(rec::ConfigurationRecord, group::String, path::String, x,
+                  depth::Int=0)
+    depth > 16 && return _push_entry!(rec, group, path, "nested too deeply")
+    if x === nothing
+        _push_entry!(rec, group, path, "nothing")
+    elseif _is_leaf(x)
+        _push_entry!(rec, group, path, _leaf_text(x))
+    elseif x isa Function
+        _push_entry!(rec, group, path, "function")
+    elseif x isa Type
+        _push_entry!(rec, group, path,
+                     "type " * (x isa DataType ? string(nameof(x)) : string(x)))
+    elseif x isa AbstractArray && eltype(x) <: Number &&
+           length(x) > CONFIG_ARRAY_INLINE
+        digest = _fnv1a64(join((_leaf_text(v) for v in x), '\n'))
+        _push_entry!(rec, group, path,
+                     "array " * join(size(x), "x") * " fnv1a64 " *
+                     string(digest; base=16, pad=16))
+    elseif x isa Union{Tuple,AbstractArray}
+        _push_entry!(rec, group, path, x isa Tuple ? "tuple $(length(x))" :
+                                       "array " * join(size(x), "x"))
+        for (i, v) in enumerate(x)
+            _record!(rec, group, path * "[$i]", v, depth + 1)
+        end
+    elseif x isa NamedTuple
+        _push_entry!(rec, group, path, "named tuple")
+        for (k, v) in pairs(x)
+            _record!(rec, group, path * ".$k", v, depth + 1)
+        end
+    else
+        fields = x isa Union{Module,IO,Ptr} ? nothing : _record_fields(x)
+        if fields === nothing
+            _push_entry!(rec, group, path, "opaque " * string(nameof(typeof(x))))
+        else
+            _push_entry!(rec, group, path, _record_tag(x))
+            for f in fields
+                _record!(rec, group, path * ".$f", getfield(x, f), depth + 1)
+            end
+        end
+    end
+    return rec
+end
+
+"""
+    thermodynamic_model(eos) -> Vector{Pair{String,String}}
+
+The modelling assumptions of `eos` that its constants do not show: the
+composition basis, the mixing rule, the energy reference, the phase and
+equilibrium assumption and, for a table, how it is evaluated, with a model
+`version`. The configuration record enters them in its `thermodynamics`
+group, so a change to what a model type computes, made under the same type
+name, is caught by bumping `version`. Empty for an EOS without a method.
+"""
+thermodynamic_model(::EOS) = Pair{String,String}[]
+
+const _PARTIAL_DENSITY_BASIS = "partial densities rho_k; Y_k = rho_k / rho"
+
+thermodynamic_model(::IdealMixture) = [
+    "version" => "1",
+    "composition" => _PARTIAL_DENSITY_BASIS,
+    "mixing" => "ideal-gas mixture: R and c_v weighted by mass fraction",
+    "energy" => "e_k = c_v,k T_ion, zero at T_ion = 0",
+    "phase" => "single gas phase, frozen composition"]
+
+thermodynamic_model(::Nasa9Mixture) = [
+    "version" => "1",
+    "composition" => _PARTIAL_DENSITY_BASIS,
+    "mixing" => "ideal-gas mixture of thermally perfect species, weighted " *
+                "by mass fraction",
+    "energy" => "e_k = h_k(T_ion) - R_k T_ion from the fit; the reference " *
+                "is carried by each interval's b1",
+    "table" => "NASA-9 intervals selected by temperature; outside the fitted " *
+               "range as `extrapolate` states",
+    "phase" => "single gas phase, frozen composition"]
+
+thermodynamic_model(::StiffenedGas) = [
+    "version" => "1",
+    "composition" => "single component",
+    "energy" => "e = c_v T_ion + p_inf / rho",
+    "phase" => "single phase"]
+
+_precision(::Solver{T}) where {T} = T
+
+"""
+    configuration_record(solver) -> ConfigurationRecord
+
+The configuration record of `solver`, identical on every rank. Groups:
+
+- `thermodynamics`: the EOS and its constants, `thermodynamic_model`, and the
+  species names in order.
+- `layout`: the equation set, the precision, the metric, `n_global` and the
+  stretch mappings.
+- `numerics`: the derivative and filter schemes, the filter cadence and
+  relaxation, the artificial-property parameters, and on a refined solver
+  `interface_rhs`, `interface_flux`, `interface_divergence`,
+  `level_interpolation_order`, `level_restriction` and `subcycle`.
+- `transport`, `boundaries` (each face of the root patch) and `sources`.
+
+Not entered: the CFL number and the step history (restored from the
+checkpoint), the [`StepControl`](@ref), the backend, the process grid, the
+regrid cadence and tag criteria (the hierarchy record carries the tile edge
+and checks it), and everything outside the solver.
+"""
+function configuration_record(solver::Solver)
+    rec = ConfigurationRecord()
+    eos = solver.eos
+    root = getfield(solver, :patches)[1]
+    g = "thermodynamics"
+    _record!(rec, g, "eos", eos)
+    for (key, value) in thermodynamic_model(eos)
+        _push_entry!(rec, g, "model." * key, value)
+    end
+    _record!(rec, g, "species", species_names(eos))
+    g = "layout"
+    _record!(rec, g, "equations", solver.equations)
+    _push_entry!(rec, g, "precision", string(_precision(solver)))
+    _record!(rec, g, "metric", solver.metric)
+    _record!(rec, g, "n_global", solver.n_global)
+    _record!(rec, g, "stretch", solver.stretch)
+    g = "numerics"
+    schemes = getfield(solver, :schemes)
+    _record!(rec, g, "deriv", schemes.deriv)
+    _record!(rec, g, "filt", schemes.filt)
+    _record!(rec, g, "filter_interval", solver.filter_interval)
+    _record!(rec, g, "filter_cfl", solver.filter_cfl)
+    _record!(rec, g, "filter_weighting", solver.filter_weighting)
+    _record!(rec, g, "art", solver.art)
+    if nlevels(solver) > 1
+        _record!(rec, g, "interface_rhs", schemes.interface_rhs)
+        _record!(rec, g, "interface_flux", getfield(solver, :interface_flux))
+        _record!(rec, g, "interface_divergence", schemes.interface_divergence)
+        _record!(rec, g, "level_interpolation_order",
+                 schemes.level_interpolation_order)
+        _record!(rec, g, "level_restriction", schemes.level_restriction)
+        _record!(rec, g, "subcycle", getfield(solver, :subcycle))
+    end
+    _record!(rec, "transport", "transport", solver.transport)
+    for d in 1:3, side in 1:2
+        _record!(rec, "boundaries", "face[$d," * (side == 1 ? "lo" : "hi") * "]",
+                 root.bcs[d][side])
+    end
+    _record!(rec, "sources", "sources", solver.sources)
+    return rec
+end
+
+# The entries of one group as (path, value) pairs, in record order.
+_group_entries(rec::ConfigurationRecord, group) =
+    [rec.paths[i] => rec.values[i] for i in eachindex(rec.groups)
+     if rec.groups[i] == group]
+
+"""
+    configuration_digests(rec) -> Vector{Pair{String,String}}
+
+One FNV-1a digest per group of `rec`, in hexadecimal, over the group's
+`path=value` lines: a short identifier of the group's content for messages
+and file summaries. Two records compare equal exactly when their entries do;
+the digests are not used for the comparison.
+"""
+function configuration_digests(rec::ConfigurationRecord)
+    return [group => string(_fnv1a64(join((p * "=" * v * "\n"
+                                           for (p, v) in _group_entries(rec, group)))),
+                            base=16, pad=16)
+            for group in unique(rec.groups)]
+end
+
+"""
+    configuration_differences(stored, current) -> Vector{Pair{String,Vector{String}}}
+
+The groups in which two records differ, in the order the groups first appear,
+each with one line per differing path giving the stored and the current
+value. Empty when the records agree.
+"""
+function configuration_differences(stored::ConfigurationRecord,
+                                   current::ConfigurationRecord)
+    out = Pair{String,Vector{String}}[]
+    for group in unique(vcat(stored.groups, current.groups))
+        a = _group_entries(stored, group)
+        b = _group_entries(current, group)
+        a == b && continue
+        da, db = Dict(a), Dict(b)
+        lines = String[]
+        for path in unique(vcat(first.(a), first.(b)))
+            va, vb = get(da, path, "(absent)"), get(db, path, "(absent)")
+            va == vb || push!(lines, "$path: file $va, solver $vb")
+        end
+        isempty(lines) && push!(lines, "the same entries in a different order")
+        push!(out, group => lines)
+    end
+    return out
+end
+
+# `allow` as a set of group names, rejecting a strict or unknown group.
+function _allowed_groups(allow)
+    names = allow isa Symbol ? (allow,) : Tuple(allow)
+    for name in names
+        name isa Symbol ||
+            throw(ArgumentError("allow takes group names as Symbols, got $(repr(name))"))
+        String(name) in CONFIG_STRICT_GROUPS &&
+            throw(ArgumentError("allow: a $name difference changes what the stored " *
+                                "state means and cannot be allowed"))
+        name in CONFIG_ALLOWABLE_GROUPS ||
+            throw(ArgumentError("allow: unknown group :$name; the groups that " *
+                                "can be allowed are " *
+                                join((":$g" for g in CONFIG_ALLOWABLE_GROUPS), ", ")))
+    end
+    return Set(String(n) for n in names)
+end
+
+const _SHOWN_DIFFERENCES = 6
+
+function _describe_differences(diffs)
+    io = IOBuffer()
+    for (group, lines) in diffs
+        print(io, "\n  ", group, ":")
+        for line in first(lines, _SHOWN_DIFFERENCES)
+            print(io, "\n    ", line)
+        end
+        length(lines) > _SHOWN_DIFFERENCES &&
+            print(io, "\n    ($(length(lines) - _SHOWN_DIFFERENCES) more)")
+    end
+    return String(take!(io))
+end
+
+# Compare the record `stored` (`nothing` for a file written before records
+# existed) with `solver`'s, accept the groups `allow` names, and raise on
+# every rank when any rank refuses. Collective over the solver's communicator.
+function _verify_configuration(stored::Union{Nothing,ConfigurationRecord},
+                               solver::Solver, allow, source::AbstractString)
+    allowed = _allowed_groups(allow)
+    comm = getfield(solver, :comm)
+    message = nothing
+    accepted = Pair{String,Vector{String}}[]
+    if stored !== nothing && stored.version != CONFIG_RECORD_VERSION
+        message = "configuration record version mismatch: $source carries " *
+                  "version $(stored.version) and this build reads version " *
+                  "$CONFIG_RECORD_VERSION"
+    elseif stored !== nothing
+        diffs = configuration_differences(stored, configuration_record(solver))
+        refused = filter(d -> !(first(d) in allowed), diffs)
+        accepted = filter(d -> first(d) in allowed, diffs)
+        if !isempty(refused)
+            open_groups = [first(d) for d in refused
+                           if !(first(d) in CONFIG_STRICT_GROUPS)]
+            hint = isempty(open_groups) ? "" :
+                   "\nTo continue under the changed " * join(open_groups, ", ") *
+                   ", pass allow = (" *
+                   join((":$g," for g in open_groups), " ") * ") to the load."
+            strict = any(d -> first(d) in CONFIG_STRICT_GROUPS, refused)
+            message = "configuration mismatch: $source was written under a " *
+                      "different configuration" * _describe_differences(refused) *
+                      (strict ? "\nA thermodynamics or layout difference cannot " *
+                                "be allowed." : "") * hint
+        end
+    end
+    failed = MPI.Allreduce(Int(message !== nothing), max, comm)
+    failed == 0 ||
+        error(something(message, "configuration mismatch on another rank of " *
+                                 "this run while reading $source"))
+    if MPI.Comm_rank(comm) == 0
+        stored === nothing &&
+            @warn "$source carries no configuration record (an earlier format); " *
+                  "the thermodynamics, numerics, transport, boundary conditions " *
+                  "and sources it was written under are not checked"
+        isempty(accepted) ||
+            @info "Checkpoint $source: continuing under an allowed configuration " *
+                  "change" * _describe_differences(accepted)
+    end
+    return accepted
+end
+
+# The per-rank checkpoint's image of a record: the version, then the three
+# string lists. The layout does not depend on the version, so a reader can
+# read any version's record before deciding whether it can compare it.
+function _write_configuration(io, rec::ConfigurationRecord)
+    write(io, Int64(rec.version))
+    _write_strings(io, rec.groups)
+    _write_strings(io, rec.paths)
+    _write_strings(io, rec.values)
+    return io
+end
+
+_read_configuration(io) = ConfigurationRecord(Int(read(io, Int64)), _read_strings(io),
+                                              _read_strings(io), _read_strings(io))
+
 """
     ensure_output_dir(prefix, comm)
 
@@ -266,7 +675,11 @@ species counts, the level count, the global and local extents, this rank's
 Cartesian coordinates, the conserved component names, the metric and EOS type
 names, the element type of `Q`, and the global coordinate vector along each
 dimension. The coordinates carry the domain extent, the origin and any
-[`Stretch`](@ref) mapping, none of which the extent alone constrains.
+[`Stretch`](@ref) mapping, none of which the extent alone constrains. The
+header also carries a configuration record: the EOS constants and model
+assumptions, the species order, the derivative and filter schemes, the
+artificial-property parameters, the refinement options, the transport model,
+the boundary conditions and the sources, entered by value.
 
 The run state is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`,
 `filter_rate_prev`, the `switched` flag of every [`SwitchableBC`](@ref)
@@ -365,6 +778,7 @@ function _write_ckpt_header(io, solver::Solver, root::SolverLike, Q)
     for d in 1:3
         write(io, global_axis(root, d))
     end
+    _write_configuration(io, configuration_record(solver))
     write(io, Float64(solver.t))
     write(io, Int64(solver.step))
     write(io, Float64(solver.cfl))
@@ -390,7 +804,7 @@ function _write_ckpt_block(io, ps::SolverLike, Q)
 end
 
 """
-    load_checkpoint!(solver, Q, prefix)
+    load_checkpoint!(solver, Q, prefix; allow = ())
 
 Restore the interior of `Q` and the solver's run state from `prefix.rNNNN.ckpt`,
 and return `Q`. Halos are left untouched. Every field of the header
@@ -400,6 +814,19 @@ only onto a solver whose species set, metric, EOS, element type and grid
 coordinates are the ones it was written from. Coordinates are compared to a
 relative tolerance of 1e-10, which separates a rebuilt identical grid from any
 different one.
+
+The configuration record is compared entry by entry. A difference in the
+thermodynamics (the EOS type and constants, its model assumptions, the species
+order) or the layout (the equation set, precision, metric, grid extent) always
+throws. A difference in the `:numerics` (schemes, filter settings,
+artificial-property parameters, refinement options), `:transport`,
+`:boundaries` or `:sources` throws unless `allow` names that group, as in
+`allow = (:numerics,)`; the load then proceeds and rank 0 logs the
+difference. Functions, such as a boundary target or a stretch mapping, are
+recorded as `function` and not compared. The CFL number, the
+[`StepControl`](@ref), the backend and the process grid are not compared. A
+file written by the previous version, which has no record, loads with a
+warning and without this comparison.
 
 The run state restored is `t`, `step`, `cfl`, `dt_prev`, `rate_prev`,
 `filter_rate_prev`, the `switched` flag of every [`SwitchableBC`](@ref)
@@ -413,20 +840,21 @@ the restored state before returning, so a callback may read them. Callback
 schedules and a [`FieldWriter`](@ref)'s frame index are not recorded and
 remain the caller's to restore.
 
-A file written in the original unversioned format is rejected outright: it
-carries no record of the species set, the metric or the grid, so a partial
-validation would accept exactly the restart the header was extended to refuse.
+A file written in the original unversioned format, or in any version before
+the previous one, is rejected outright: it carries no record of the species
+set, the metric or the grid, so a partial validation would accept exactly the
+restart the header was extended to refuse.
 
 [`load_checkpoint_hdf5!`](@ref) is the decomposition-independent alternative,
 and checks the same fields.
 """
-function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
+function load_checkpoint!(solver::Solver, Q, prefix::AbstractString; allow=())
     _multipatch(solver) &&
         error("load_checkpoint!: this solver holds a patch layout; pass the state " *
               "vector allocate_state returned")
     path = _ckpt_name(prefix, MPI.Comm_rank(solver.comm))
     open(path, "r") do io
-        _read_ckpt_header!(io, solver, solver, Q, path)
+        _read_ckpt_header!(io, solver, solver, Q, path, allow)
         _read_ckpt_block!(io, solver, Q, path)
     end
     refresh_primitives!(solver, Q)
@@ -434,7 +862,7 @@ function load_checkpoint!(solver::Solver, Q, prefix::AbstractString)
 end
 
 """
-    load_checkpoint!(solver, states::Vector, prefix)
+    load_checkpoint!(solver, states::Vector, prefix; allow = ())
 
 The refined-hierarchy form of the restore, for a file
 [`save_checkpoint`](@ref) wrote from a state vector. The file is per rank
@@ -453,7 +881,7 @@ levels must have been built with the recorded regions, since only a
 two-level hierarchy regrids.
 """
 function load_checkpoint!(solver::Solver, states::Vector{<:ConservedState},
-                          prefix::AbstractString)
+                          prefix::AbstractString; allow=())
     _check_hierarchy_layout(solver, "load_checkpoint!")
     patches = getfield(solver, :patches)
     levels = getfield(solver, :levels)
@@ -461,7 +889,7 @@ function load_checkpoint!(solver::Solver, states::Vector{<:ConservedState},
     path = _ckpt_name(prefix, MPI.Comm_rank(solver.comm))
     open(path, "r") do io
         root = PatchSolver(solver, patches[1])
-        _read_ckpt_header!(io, solver, root, states[1], path)
+        _read_ckpt_header!(io, solver, root, states[1], path, allow)
         _read_ckpt_block!(io, root, states[1], path)
         ints = read!(io, Vector{Int64}(undef, Int(read(io, Int64))))
         floats = read!(io, Vector{Float64}(undef, Int(read(io, Int64))))
@@ -497,7 +925,7 @@ end
 # The header checks, each against the root patch `root`, then the mutable run
 # state onto `solver`.
 function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
-                            path::AbstractString)
+                            path::AbstractString, allow)
     decomp = root.decomp
     n_cons = solver.equations.n_cons
     magic = read(io, UInt64)
@@ -507,9 +935,10 @@ function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
               "the grid and cannot be validated; rerun to regenerate it")
     magic == CKPT_MAGIC || error("$path is not a CompactLES checkpoint")
     version = Int(read(io, Int64))
-    version == CKPT_VERSION ||
+    version in (CKPT_VERSION, CKPT_VERSION_UNRECORDED) ||
         error("checkpoint version mismatch in $path: the file is version " *
-              "$version; this build writes and reads version $CKPT_VERSION")
+              "$version; this build writes version $CKPT_VERSION and reads " *
+              "versions $CKPT_VERSION_UNRECORDED and $CKPT_VERSION")
     file_n_cons = Int(read(io, Int64))
     file_n_cons == n_cons ||
         error("conserved layout mismatch: file has $file_n_cons, solver " *
@@ -559,6 +988,10 @@ function _read_ckpt_header!(io, solver::Solver, root::SolverLike, Q,
                   "extent, the origin or a Stretch mapping is not the one " *
                   "the checkpoint was written on")
     end
+    # Version 5 is version 6 without the record; it loads unchecked, with a
+    # warning. The comparison precedes every write to the solver.
+    stored = version == CKPT_VERSION ? _read_configuration(io) : nothing
+    _verify_configuration(stored, solver, allow, path)
     solver.t = read(io, Float64)
     solver.step = Int(read(io, Int64))
     solver.cfl = read(io, Float64)

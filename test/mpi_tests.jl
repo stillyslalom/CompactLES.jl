@@ -1306,6 +1306,32 @@ function test_checkpoint()
         occursin("grid coordinate mismatch", sprint(showerror, e)) ? 1 : 0
     end
     check("a different domain is refused on every rank", abs(gsum(threw) - np), 0.5)
+    # The configuration record, written by every rank from the same data: the
+    # species under the same name with another gamma is refused on every rank,
+    # and a numerics change is refused on every rank unless allowed.
+    hot = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
+                 eos=IdealMixture([IdealSpecies("gas", 1.0, 1.3)]),
+                 art=ArtParams(enabled=false), dims=splitdims(1))
+    threw = try
+        load_checkpoint!(hot, allocate_state(hot), "mpi_ckpt")
+        0
+    catch e
+        occursin("eos.sp[1].gamma", sprint(showerror, e)) ? 1 : 0
+    end
+    check("a different gamma under the same name is refused on every rank",
+          abs(gsum(threw) - np), 0.5)
+    c8 = Solver(n_global=(SPLITN, 16, 16), L_domain=(2π, 2π, 2π), bcs=per3,
+                deriv=lele_d1_8(), art=ArtParams(enabled=false), dims=splitdims(1))
+    threw = try
+        load_checkpoint!(c8, allocate_state(c8), "mpi_ckpt")
+        0
+    catch e
+        occursin("allow = (:numerics,)", sprint(showerror, e)) ? 1 : 0
+    end
+    check("a numerics change is refused on every rank", abs(gsum(threw) - np), 0.5)
+    Q8 = allocate_state(c8)
+    load_checkpoint!(c8, Q8, "mpi_ckpt"; allow=(:numerics,))
+    check("an allowed numerics change restores the state", gmax(abs(c8.step - 17)), 0.5)
     # One rank does the cleanup: every rank wrote its own file, but all of them
     # racing to rm the whole glob makes them delete each other's entries
     # and throw ENOENT.

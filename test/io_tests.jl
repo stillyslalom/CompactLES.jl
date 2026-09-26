@@ -67,17 +67,21 @@ end
               for c in 1:5, i in 1:12, j in 1:12, k in 1:12)
 
     # A face the file describes as switchable and this solver does not, and the
-    # reverse: both change what the boundary does for the rest of the run.
+    # reverse: both change what the boundary does for the rest of the run. The
+    # configuration record refuses either first; allowing a boundary change
+    # leaves the switch record in force.
+    @test_throws "configuration mismatch" load_checkpoint!(
+        io_solver(SlipWallBC(), SlipWallBC()), allocate_state(s2), stem)
     @test_throws "boundary mismatch" load_checkpoint!(
         io_solver(SlipWallBC(), SlipWallBC()),
-        allocate_state(s2), stem)
+        allocate_state(s2), stem; allow=(:boundaries,))
 
     plain_stem = joinpath(dir, "plain")
     sp = io_solver(SlipWallBC(), SlipWallBC())
     save_checkpoint(sp, io_state(sp), plain_stem)
     @test_throws "boundary mismatch" load_checkpoint!(
         io_solver(SwitchableBC(SlipWallBC(), ExtrapolationBC()), SlipWallBC()),
-        allocate_state(sp), plain_stem)
+        allocate_state(sp), plain_stem; allow=:boundaries)
 
     # switch! is one-way, so a checkpoint written before a face switched cannot
     # be restored onto a solver whose face already has.
@@ -132,12 +136,16 @@ end
     # A solver that does not compute the coefficients is refused: it would
     # ignore a record the writer's next step depended on, and the reverse
     # would start from zeros the writer did not have.
+    # The configuration record sees the change first; allowing it leaves the
+    # coefficient record's own check in force.
     off = mk(art=ArtParams(enabled=false))
-    @test_throws "artificial-property mismatch" load_checkpoint!(
+    @test_throws "configuration mismatch" load_checkpoint!(
         off, allocate_state(off), stem)
+    @test_throws "artificial-property mismatch" load_checkpoint!(
+        off, allocate_state(off), stem; allow=(:numerics,))
     save_checkpoint(off, allocate_state(off), joinpath(dir, "off"))
     @test_throws "artificial-property mismatch" load_checkpoint!(
-        mk(), allocate_state(s), joinpath(dir, "off"))
+        mk(), allocate_state(s), joinpath(dir, "off"); allow=(:numerics,))
     rm(dir; recursive=true)
 end
 
@@ -204,7 +212,7 @@ end
     static = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
                     bcs=(wall, io_per, io_per), refine=initial, tile=8)
     @test_throws "cannot rebuild" load_checkpoint!(static, allocate_state(static),
-                                                   stem)
+                                                   stem; allow=(:numerics,))
 
     # A static three-level hierarchy round-trips onto the layout it was
     # built with and continues bit for bit; another level-2 region is refused.
@@ -310,6 +318,123 @@ end
     @test_throws "element type mismatch" load_checkpoint!(s64,
                                                           allocate_state(s64),
                                                           stem)
+    rm(dir; recursive=true)
+end
+
+@testset "checkpoint configuration record" begin
+    # The record separates what the header's names and extents cannot: the same
+    # species names over different constants, a changed coefficient in a
+    # thermodynamic table, a different energy reference, and a different
+    # numerical or boundary configuration over the same state layout.
+    line = (SlipWallBC(), SlipWallBC())
+    mk(; kw...) = Solver(n_global=(12, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=(line, io_per, io_per), art=ArtParams(enabled=false);
+                         kw...)
+    rec(s) = CL.configuration_record(s)
+    groups(a, b) = first.(CL.configuration_differences(rec(a), rec(b)))
+    pair(g1, g2) = IdealMixture([IdealSpecies("a", 1.0, g1), IdealSpecies("b", 2.0, g2)])
+
+    # Equivalent configurations built twice produce the same record, the
+    # tabulated ones included.
+    air = ["N2", "O2"]
+    n9() = Nasa9Mixture(air)
+    @test isempty(groups(mk(eos=pair(1.4, 1.6)), mk(eos=pair(1.4, 1.6))))
+    @test isempty(groups(mk(eos=n9(), transport=CeaTransport(n9())),
+                         mk(eos=n9(), transport=CeaTransport(n9()))))
+    # Keyed on content: no entry carries a module path, so moving a type into
+    # another module leaves old checkpoints loadable.
+    r = rec(mk(eos=n9(), transport=CeaTransport(n9())))
+    @test !any(v -> occursin("CompactLES.", v), r.values)
+    @test "eos.sp[2].intervals[1].a[3]" in r.paths
+
+    # Thermodynamics: the same names with a different gamma, one NASA-9
+    # coefficient changed by one part in 1e12, another energy reference, and
+    # the species order.
+    @test groups(mk(eos=pair(1.4, 1.6)), mk(eos=pair(1.4, 1.5))) == ["thermodynamics"]
+    sp = n9().sp
+    iv = sp[2].intervals[1]
+    nudged = CL.Nasa9Interval(iv.Tmin, iv.Tmax,
+                              ntuple(i -> i == 3 ? iv.a[3] * (1 + 1e-12) : iv.a[i], 7),
+                              iv.b1)
+    o2 = CL.Nasa9Species(sp[2].name, sp[2].R, [nudged; sp[2].intervals[2:end]])
+    @test groups(mk(eos=n9()), mk(eos=Nasa9Mixture([sp[1], o2]))) == ["thermodynamics"]
+    @test groups(mk(eos=n9()), mk(eos=Nasa9Mixture(air; reference=:formation))) ==
+          ["thermodynamics"]
+    @test "thermodynamics" in groups(mk(eos=pair(1.4, 1.6)),
+                                     mk(eos=IdealMixture([IdealSpecies("b", 2.0, 1.6),
+                                                          IdealSpecies("a", 1.0, 1.4)])))
+
+    dir = mktempdir()
+    stem = joinpath(dir, "record")
+    s = mk(eos=pair(1.4, 1.6))
+    save_checkpoint(s, allocate_state(s), stem)
+    load_checkpoint!(mk(eos=pair(1.4, 1.6)), allocate_state(s), stem)
+    err = try
+        load_checkpoint!(mk(eos=pair(1.4, 1.5)), allocate_state(s), stem;
+                         allow=CL.CONFIG_ALLOWABLE_GROUPS)
+        ""
+    catch e
+        sprint(showerror, e)
+    end
+    @test occursin("configuration mismatch", err)
+    @test occursin("eos.sp[2].gamma: file 1.6, solver 1.5", err)
+    @test occursin("cannot be allowed", err)
+    @test_throws ArgumentError load_checkpoint!(s, allocate_state(s), stem;
+                                                allow=(:thermodynamics,))
+    @test_throws ArgumentError load_checkpoint!(s, allocate_state(s), stem;
+                                                allow=(:filter,))
+    n9_stem = joinpath(dir, "nasa9")
+    save_checkpoint(mk(eos=n9()), allocate_state(mk(eos=n9())), n9_stem)
+    @test_throws "configuration mismatch" load_checkpoint!(
+        mk(eos=Nasa9Mixture([sp[1], o2])), allocate_state(mk(eos=n9())), n9_stem)
+
+    # Numerics, transport and boundaries: refused by default, accepted when
+    # the group is named, and the state is restored either way.
+    s.step = 3
+    save_checkpoint(s, allocate_state(s), stem)
+    for (kw, group) in (((deriv=lele_d1_8(),), :numerics),
+                        ((filter_interval=2,), :numerics),
+                        ((transport=Transport(mu0=1e-3),), :transport))
+        other = mk(; eos=pair(1.4, 1.6), kw...)
+        e = try
+            load_checkpoint!(other, allocate_state(other), stem)
+            ""
+        catch x
+            sprint(showerror, x)
+        end
+        @test occursin("allow = (:$group,)", e)
+        @test_logs (:info, r"allowed configuration change") match_mode=:any begin
+            load_checkpoint!(other, allocate_state(other), stem; allow=(group,))
+        end
+        @test other.step == 3
+    end
+    wall = Solver(n_global=(12, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                  bcs=((NoSlipWallBC(Twall=1.0), SlipWallBC()), io_per, io_per),
+                  eos=pair(1.4, 1.6), art=ArtParams(enabled=false))
+    @test_throws "boundaries" load_checkpoint!(wall, allocate_state(wall), stem)
+    load_checkpoint!(wall, allocate_state(wall), stem; allow=(:boundaries,))
+
+    # A file of the previous version carries no record: it loads with a
+    # warning and nothing compared. Such a file is this version's file with
+    # the record removed and the version word set back.
+    bytes = read(stem * ".r0000.ckpt")
+    image = take!(CL._write_configuration(IOBuffer(), rec(s)))
+    at = findfirst(image, bytes)
+    legacy = vcat(bytes[1:first(at)-1], bytes[last(at)+1:end])
+    legacy[9:16] .= reinterpret(UInt8, [Int64(CL.CKPT_VERSION_UNRECORDED)])
+    write(joinpath(dir, "legacy.r0000.ckpt"), legacy)
+    old = mk(eos=pair(1.4, 1.5))
+    @test_logs (:warn, r"no configuration record") match_mode=:any begin
+        load_checkpoint!(old, allocate_state(old), joinpath(dir, "legacy"))
+    end
+    @test old.step == 3
+
+    # A record of another version cannot be compared entry by entry.
+    newer = copy(bytes)
+    newer[first(at):first(at)+7] .= reinterpret(UInt8, [Int64(99)])
+    write(joinpath(dir, "newer.r0000.ckpt"), newer)
+    @test_throws "record version mismatch" load_checkpoint!(
+        s, allocate_state(s), joinpath(dir, "newer"))
     rm(dir; recursive=true)
 end
 

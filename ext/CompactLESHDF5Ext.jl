@@ -11,6 +11,8 @@ using CompactLES: ensure_output_dir, restore_switches!, switch_codes
 using CompactLES: n_art_fields, art_block, set_art_block!, nlevels
 using CompactLES: _check_level_count, _check_art_count, refresh_primitives!
 using CompactLES: HierarchyRecord, LevelRecord, hierarchy_record, restore_hierarchy!
+using CompactLES: ConfigurationRecord, configuration_record, configuration_digests
+using CompactLES: _verify_configuration
 using MPI
 using HDF5
 
@@ -21,10 +23,13 @@ has_parallel() = HDF5.has_parallel()
 # type of the state and the mutable run state (`cfl`, `dt_prev`, `rate_prev`,
 # and the `switched` flag of each boundary face); format 4 the level count and
 # the artificial coefficient arrays; format 5 the per-direction rates
-# `filter_weight` reads; the reasoning is at the top of `src/io.jl`. The
-# reader requires an exact match and does not accept an older
-# file, since a restart those fields do not cover cannot be validated at all.
-const CKPT_FORMAT = 5
+# `filter_weight` reads; format 6 the configuration record under `config`.
+# The reasoning is at the top of `src/io.jl`. The reader accepts format 5,
+# which is format 6 without the record, and loads it unchecked with a
+# warning; an older file is refused, since a restart those fields do not
+# cover cannot be validated at all.
+const CKPT_FORMAT = 6
+const CKPT_FORMAT_UNRECORDED = 5
 
 # --- Opening a shared file --------------------------------------------------
 #
@@ -314,8 +319,30 @@ function _write_ckpt_meta!(file, solver::Solver, root, Q, rank::Int)
     for d in 1:3
         write_meta!(cg, "xyz"[d:d], global_axis(root, d), rank)
     end
+    _write_configuration!(file, configuration_record(solver), rank)
     return file
 end
+
+# The configuration record as three parallel string datasets, with one
+# digest per group as a readable summary (`group fnv1a64 <hex>`); the reader
+# compares the entries, not the digests.
+function _write_configuration!(file, rec::ConfigurationRecord, rank::Int)
+    g = create_group(file, "config")
+    write_meta!(g, "version", Int64(rec.version), rank)
+    write_strings!(g, "groups", rec.groups, rank)
+    write_strings!(g, "paths", rec.paths, rank)
+    write_strings!(g, "values", rec.values, rank)
+    write_strings!(g, "digests",
+                   [group * " fnv1a64 " * digest
+                    for (group, digest) in configuration_digests(rec)], rank)
+    return file
+end
+
+_read_configuration(file) =
+    ConfigurationRecord(Int(read(file["config/version"])),
+                        String.(read(file["config/groups"])),
+                        String.(read(file["config/paths"])),
+                        String.(read(file["config/values"])))
 
 # One patch's state under group `name`: `Q` over the patch's node space
 # `extent`, and the artificial coefficients beside it when they are
@@ -408,7 +435,8 @@ function _read_record(file)
                            Float64(read(rg["imbalance"])))
 end
 
-function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractString)
+function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractString;
+                                          allow=())
     CompactLES._multipatch(solver) &&
         error("load_checkpoint_hdf5!: this solver holds a patch layout; pass the " *
               "state vector allocate_state returned")
@@ -416,7 +444,7 @@ function CompactLES.load_checkpoint_hdf5!(solver::Solver, Q, prefix::AbstractStr
     # Read is not a write, so every rank may open the file at once even without
     # a parallel build.
     h5open(path, "r") do file
-        n_art = _read_ckpt_meta!(file, solver, solver, Q, path)
+        n_art = _read_ckpt_meta!(file, solver, solver, Q, path, allow)
         _read_state!(file, "state", solver, Q, n_art)
     end
     refresh_primitives!(solver, Q)
@@ -429,13 +457,13 @@ end
 # holds reads its block from the tile's dataset.
 function CompactLES.load_checkpoint_hdf5!(solver::Solver,
                                           states::Vector{<:ConservedState},
-                                          prefix::AbstractString)
+                                          prefix::AbstractString; allow=())
     CompactLES._check_hierarchy_layout(solver, "load_checkpoint_hdf5!")
     patches = getfield(solver, :patches)
     path = string(prefix, ".h5")
     h5open(path, "r") do file
         root = PatchSolver(solver, patches[1])
-        n_art = _read_ckpt_meta!(file, solver, root, states[1], path)
+        n_art = _read_ckpt_meta!(file, solver, root, states[1], path, allow)
         _read_state!(file, "state", root, states[1], n_art)
         restore_hierarchy!(solver, states, _read_record(file), path)
         for (ℓ, ti, li) in CompactLES._held_tiles(solver)
@@ -449,15 +477,17 @@ end
 
 # The header checks against the root patch `root`, then the mutable run
 # state onto `solver`; returns the coefficient field count the blocks carry.
-function _read_ckpt_meta!(file, solver::Solver, root, Q, path::AbstractString)
+function _read_ckpt_meta!(file, solver::Solver, root, Q, path::AbstractString, allow)
     decomp = root.decomp
     n_cons = solver.equations.n_cons
     fmt = Int(read(file["meta/format"]))
-    fmt == CKPT_FORMAT ||
+    fmt in (CKPT_FORMAT, CKPT_FORMAT_UNRECORDED) ||
         error("checkpoint format mismatch in $path: file is format $fmt, " *
-              "this version writes and reads format $CKPT_FORMAT. A file " *
-              "written before format $CKPT_FORMAT carries no grid or metric " *
-              "record and cannot be validated; rerun to regenerate it.")
+              "this version writes format $CKPT_FORMAT and reads formats " *
+              "$CKPT_FORMAT_UNRECORDED and $CKPT_FORMAT. A file written " *
+              "before format $CKPT_FORMAT_UNRECORDED lacks header fields a " *
+              "restart depends on and cannot be validated; rerun to " *
+              "regenerate it.")
     ng = read(file["meta/n_global"])
     Tuple(Int.(ng)) == Tuple(decomp.n_global) ||
         error("global grid mismatch: file has $(Tuple(Int.(ng))), " *
@@ -498,6 +528,9 @@ function _read_ckpt_meta!(file, solver::Solver, root, Q, path::AbstractString)
                   "extent, the origin or a Stretch mapping is not the one " *
                   "the checkpoint was written on")
     end
+    # The comparison precedes every write to the solver.
+    stored = fmt == CKPT_FORMAT ? _read_configuration(file) : nothing
+    _verify_configuration(stored, solver, allow, path)
     solver.t = read(file["meta/t"])
     solver.step = Int(read(file["meta/step"]))
     solver.cfl = read(file["meta/cfl"])

@@ -14,6 +14,21 @@
 # diagonal (per solution parity σg: derivatives flip field parity, filters
 # preserve it). No node sits at r = 0 and no scale factor vanishes.
 
+# The numerical choices a solver is built with that its plans and levels do
+# not keep in a comparable form: a plan holds its scheme only where the
+# dimension is active and unfolded, a static level keeps no scheme at all, and
+# `interface_rhs`, the interpolation order and the restriction live only in
+# the transfers and the `RegridSpec`. The checkpoint's configuration record
+# (io.jl) reads them from here. Never read on the step path.
+struct SchemeSettings
+    deriv::AbstractCompactScheme
+    filt::AbstractCompactScheme
+    interface_divergence::Union{Nothing,AbstractCompactScheme}
+    interface_rhs::Symbol
+    level_interpolation_order::Int
+    level_restriction::Symbol
+end
+
 # The patch parameter `P` is unconstrained, not `P <: Patch{T}`: a refined
 # solver stores its root and level-1 patches in one vector, and where the two
 # differ in a `Patch` parameter `P` is their typejoin. The per-patch loops
@@ -94,6 +109,7 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # inviscid fluxes evaluated on the exchanged or imposed ghost state, and
     # the remainder of the flux through `div_plans`.
     interface_flux::Symbol
+    schemes::SchemeSettings                 # construction record; see above
 end
 
 # Patch-owned property names forward to the sole patch, which keeps every
@@ -270,6 +286,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     level_interpolation_order =
         something(level_interpolation_order,
                   default_interpolation_order(deriv, interface_flux))
+    schemes = SchemeSettings(deriv, filt, interface_divergence, interface_rhs,
+                             level_interpolation_order, level_restriction)
     validate_transport(transport, eos)
     for d in 1:3
         isperiodic(bcs[d][1]) == isperiodic(bcs[d][2]) ||
@@ -634,7 +652,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                      filter_interval, filter_cfl, filter_weighting,
                                      control, n_halo, comm, backend, interface_rhs,
                                      n_cons, n_species; interface_divergence,
-                                     interface_flux)
+                                     interface_flux, schemes)
     end
     decomp = Decomp{T}(n_global, periodic; dims=dims, n_halo=n_halo, comm=comm)
     mkd(sch, d; kw...) =
@@ -808,7 +826,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                 LevelTransfer{T}[])], false, nothing,
                       zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux)
+                  interface_flux, schemes)
         init_geometry!(solver)
         return solver
     end
@@ -969,7 +987,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                   levels, subcycle, regrid,
                   zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux)
+                  interface_flux, schemes)
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
@@ -1283,7 +1301,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                                comm, backend,
                                interface_rhs, n_cons, n_species;
                                interface_divergence=nothing,
-                               interface_flux::Symbol=:closure) where {T}
+                               interface_flux::Symbol=:closure,
+                               schemes::SchemeSettings) where {T}
     MPI.Initialized() || MPI.Init(threadlevel=:funneled)
     world = comm
     np = MPI.Comm_size(world)
@@ -1384,7 +1403,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                   false, nothing,
                   zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux)
+                  interface_flux, schemes)
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
