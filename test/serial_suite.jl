@@ -2766,6 +2766,49 @@ end
     @test solver.floor_tally.momentum > 0
 end
 
+@testset "state validity: a repair before the step renews the prepared state" begin
+    # run! measures the rate, which refreshes the primitives the first stage
+    # reuses, and then validates. A repair there rewrites points after that
+    # refresh, so the step must start from the repaired state as if it had
+    # been handed that state: the run below is compared with one whose
+    # callback applies the same repair itself.
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 2.0, 1.6)])
+    control = StepControl(validity=:repair, floor_ratio=1e-6, validity_interval=1)
+    ic(x, y, z) = Prim(rho=2.0 + 0.1sin(x), u=(0.5, 0.0, 0.0), p=1.0 + 0.1cos(y),
+                       Y=(0.25, 0.75))
+    fresh() = begin
+        s = mkslv(n_global=(12, 12, 12), eos=eos)
+        Qs = allocate_state(s)
+        initialize!(s, Qs, ic)
+        (s, Qs)
+    end
+    s0, Q0 = fresh()
+    floors = CL.positivity_floors(s0, Q0, control)
+    # After the first step, move a fifth of one point's mixture mass from the
+    # first species onto the second, outside the species band.
+    function poison!(s, Qs)
+        s.step == 1 || return false
+        I = gidx(s, 3, 3, 3)
+        rho = Qs[I, 1] + Qs[I, 2]
+        Qs[I, 1] = -0.2rho
+        Qs[I, 2] = 1.2rho
+        return false
+    end
+    repaired!(s, Qs) = (poison!(s, Qs);
+                        s.step == 1 && CL.apply_positivity_floor!(s, Qs, floors...,
+                                                                  control.floor_scope);
+                        false)
+    sa, Qa = fresh()
+    @test_logs (:warn, r"repaired 1 cell") match_mode=:any run!(sa, Qa;
+        tfinal=1.0, nmax=2, callback=poison!, control=control)
+    sb, Qb = fresh()
+    run!(sb, Qb; tfinal=1.0, nmax=2, callback=repaired!, control=control)
+    @test sa.floor_tally.cells == sb.floor_tally.cells + 1
+    @test sa.dt_prev == sb.dt_prev
+    @test maximum(abs, parent(Qa) .- parent(Qb)) == 0
+end
+
 @testset "state validity: initial and returned states are checked" begin
     # An initial condition outside the EOS domain is rejected by setup, where
     # the previous behaviour was to integrate it.

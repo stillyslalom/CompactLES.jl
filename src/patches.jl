@@ -5,8 +5,8 @@
 # field array, typed A <: AbstractArray{T,3} against the storage backend. The
 # scratch of a right-hand-side evaluation is not per patch: it lives on an
 # RHSWorkspace shared by the rank's patches of equal padded extent, since a
-# rank advances them in sequence and nothing in that scratch outlives the
-# evaluation that filled it. The
+# rank advances them in sequence (see "Ownership and freshness" below for the
+# three fields that are read after the evaluation that filled them). The
 # Solver in rhs.jl keeps the physics configuration and the run clock,
 # plus the vector of this rank's patches in global order. In the common case of
 # one patch spanning all ranks, that patch's decomposition is built over
@@ -46,6 +46,53 @@
 # coordinate fold (constraint 4 of reference/AMR_GPU.md; `Solver` rejects
 # both).
 
+# --- Ownership and freshness --------------------------------------------------
+#
+# Every array a run keeps, its owner, its writers, and what makes it stale.
+# "Writes to Q" are the stage update, `filter_state!`, the positivity repairs,
+# `sync_patches!`/`sync_levels!`, `regrid!`, `load_checkpoint!`, a rollback,
+# and a callback.
+#
+# On the Patch, one set per patch:
+#   rho u v w p T_ion c cp_mix Y   `primitives!` (through `refresh_primitives!`,
+#       `max_rate`, `compute_rhs!`). Valid for the Q they were computed from and
+#       stale after any write to Q; in a callback they hold the input of the
+#       last RK stage. `prepared` (timestep.jl) asserts them current, and
+#       `run!` passes it only after its own `max_rate` with no write to Q since.
+#   mu_art beta_art kappa_art D_art   `compute_artificial!`. Read by the next
+#       `max_rate` and the sensor tag criterion, so they outlive the step.
+#       `preserving_artificial` restores them after an observation; a rollback
+#       and `load_checkpoint!` restore them from the banked or recorded block;
+#       `regrid!` recomputes them on the new hierarchy.
+#   inv_J area_d inv_h inv_r cot_over_r cot_over_r_gcl   geometry, written once
+#       by `init_geometry!`.
+#   covered   `_fill_covered!` at setup and at every regrid.
+#   ghost_flux   written and consumed within one level's right-hand side.
+#   level_scratch   within one parent step.
+#   pairbuf pairout   within one line operation.
+#
+# On the RHSWorkspace, one set per padded extent per rank:
+#   grad_T_ion grad_Y grad_Q flux sensor_sp ring_buf   valid only inside the
+#       evaluation that wrote them; `max_rate` borrows grad_T_ion.
+#   tmp_a tmp_b   free scratch of any single call (the RHS, `max_rate`,
+#       `filter_state!`, the diagnostics, the tag sweep).
+#   grad_u, strain_mag sensor   `compute_primitives_and_gradients!` and
+#       `compute_artificial!`. They keep the last pass, which may belong to
+#       another patch of the extent; `gradients_filled_by`/`sensors_filled_by`
+#       name the patch and `scalar_field` checks them.
+#
+# On the Solver: the clock and step history (t, step, tstage, dt_prev,
+# rate_prev, filter_rate_prev, cfl), which a rollback restores or zeroes and a
+# checkpoint records. Held by the caller or by `run!`: the `Workspace` pair
+# dQ/du, whose accumulator stage 1 forgets (RKA[1] = 0) except for a NaN, which
+# a rollback after a non-finite failure clears; and the savepoint (Q, the
+# coefficients, the clock, the switch flags), banked at a vetted step entry.
+#
+# Material caches of the planned material interface (a per-point equilibrium
+# or table state) would sit on the patch beside the primitives and go stale
+# with them on any write to Q. A nonlinear trial state is scratch of the solve
+# that owns it and is discarded with the stage on a rollback.
+
 """
     RHSWorkspace
 
@@ -64,12 +111,15 @@ never changes. Those groups therefore stay on the patch. Gradients, sensor
 fields, sensor scratch, and assembled fluxes are written and consumed within
 one patch's RHS and remain in the shared workspace.
 
-Two fields with a reader outside the RHS are here nonetheless.
-`scalar_field(solver, :strain_mag)` and `:sensor` expose the smoothed sensors
-for output after a step, but that method takes a `Solver` and reads through
-the single-patch property forwarding, so it is reachable only where the pool
-is that one patch's own set; on a multi-patch solver the forward refuses the
-name outright. A multi-patch output path has to take storage of its own.
+Three fields are read after the evaluation that wrote them. `grad_u` holds the
+last gradient pass and `strain_mag` and `sensor` the last artificial-property
+pass, and [`scalar_field`](@ref) returns them for `:strain_mag`, `:sensor`, and
+the names derived from the velocity gradients. On a multi-patch solver that
+pass may belong to another patch of the same extent. `gradients_filled_by` and
+`sensors_filled_by` therefore record the patch that wrote each group last, and
+`scalar_field` raises an error for a patch that did not. [`field_array`](@ref),
+`save_vtk` and `field_snapshot` recompute the fields of each patch before
+reading them. A direct property read such as `ps.sensor` is not checked.
 
 `pairbuf`/`pairout` stay on the patch instead: their allocation follows that
 patch's coordinate folds, and a fold is rejected on every patched and refined
@@ -87,7 +137,23 @@ struct RHSWorkspace{T,A<:AbstractArray{T,3}}
     ring_buf::A                    # detector = :d8 only; empty otherwise
     flux::Matrix{A}                # flux[d, c]
     grad_Q::Matrix{A}              # shared-D_b species channels; 0 × 0 otherwise
+    # The patch whose gradient pass last wrote `grad_u` and whose artificial
+    # pass last wrote `strain_mag` and `sensor`, recorded as that patch's
+    # `covered` array: a host array every patch allocates for itself and
+    # `_repatch` carries over, so `===` on it identifies the patch without
+    # hashing an immutable `Patch`. `SCRATCH_UNFILLED` before the first pass.
+    gradients_filled_by::Base.RefValue{Array{UInt8,3}}
+    sensors_filled_by::Base.RefValue{Array{UInt8,3}}
 end
+
+# The mark of a workspace no pass has written yet.
+const SCRATCH_UNFILLED = zeros(UInt8, 0, 0, 0)
+
+RHSWorkspace(grad_u, grad_T_ion, grad_Y, strain_mag, sensor, sensor_sp, tmp_a,
+             tmp_b, ring_buf, flux, grad_Q) =
+    RHSWorkspace(grad_u, grad_T_ion, grad_Y, strain_mag, sensor, sensor_sp, tmp_a,
+                 tmp_b, ring_buf, flux, grad_Q, Ref(SCRATCH_UNFILLED),
+                 Ref(SCRATCH_UNFILLED))
 
 """
     RHSWorkspace(backend, decomp, n_species, n_cons, ring, bulk)
@@ -445,6 +511,38 @@ end
 # Solver clock updates written through a PatchSolver land on the solver.
 @inline Base.setproperty!(ps::PatchSolver, name::Symbol, value) =
     setproperty!(getfield(ps, :solver), name, value)
+
+# The patch a `SolverLike` evaluates; the `Solver` method is in rhs.jl.
+@inline _patch_of(ps::PatchSolver) = getfield(ps, :patch)
+
+# Record the patch of `solver` as the last writer of its workspace's
+# `grad_u` (`_mark_gradients!`) or `strain_mag` and `sensor`
+# (`_mark_sensors!`). One reference store per pass.
+@inline function _mark_gradients!(solver)
+    p = _patch_of(solver)
+    getfield(p, :rhs_workspace).gradients_filled_by[] = getfield(p, :covered)
+    return nothing
+end
+@inline function _mark_sensors!(solver)
+    p = _patch_of(solver)
+    getfield(p, :rhs_workspace).sensors_filled_by[] = getfield(p, :covered)
+    return nothing
+end
+
+# The guard of `scalar_field` on a name it reads from the shared workspace:
+# the group (`:gradients` or `:sensors`) must have been written last by this
+# patch, or by no pass at all, in which case it holds its allocation zeros.
+function _check_scratch_writer(solver, group::Symbol, name::Symbol)
+    p = _patch_of(solver)
+    ws = getfield(p, :rhs_workspace)
+    mark = group === :gradients ? ws.gradients_filled_by[] : ws.sensors_filled_by[]
+    (mark === getfield(p, :covered) || mark === SCRATCH_UNFILLED) && return nothing
+    throw(ArgumentError(
+        "scalar_field: `$name` is read from RHS scratch that this patch shares " *
+        "with other patches of the same extent, and another patch wrote it last. " *
+        "Use field_array(solver, states, :$name), which recomputes it for each " *
+        "patch."))
+end
 
 """
     PatchFields

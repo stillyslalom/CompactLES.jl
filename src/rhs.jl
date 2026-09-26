@@ -126,13 +126,24 @@ end
     return getfield(s, name)
 end
 
-@noinline _patch_prop_error(name::Symbol) =
+@noinline function _patch_prop_error(name::Symbol)
+    diagnostics = "Pass the state vector to a diagnostic that takes it " *
+                  "(line_profile, line_sample, field_slice, field_array, " *
+                  "mix_width, save_vtk)"
+    _is_workspace_prop(name) &&
+        error("property `$name` is right-hand-side scratch and this solver holds " *
+              "several patches (a refined or patched run), which share it by " *
+              "extent, so it holds values from the patch evaluated last. " *
+              diagnostics * ", which recompute it for each patch")
     error("property `$name` is per-patch state and this solver holds several " *
-          "patches (a refined or patched run). Pass the state vector to a " *
-          "diagnostic that takes it (line_profile, line_sample, field_slice, " *
-          "field_array, mix_width, " *
-          "save_vtk), or iterate `for (ps, Q) in eachpatch(solver, states)`, " *
-          "where `ps.$name` is one patch's array")
+          "patches (a refined or patched run). " * diagnostics * ", or iterate " *
+          "`for (ps, Q) in eachpatch(solver, states)`, where `ps.$name` is one " *
+          "patch's array")
+end
+
+# The sole patch of a single-patch solver, for the scratch-writer records
+# (patches.jl); the compute path never reaches this with several patches.
+@inline _patch_of(s::Solver) = @inbounds getfield(s, :patches)[1]
 
 """
 Union of the two objects the compute path accepts: a (single-patch) `Solver`,
@@ -2563,7 +2574,8 @@ A callback must therefore call this function before reading the primitive
 fields. `save_vtk`, `dissipation_rate`, and the mixing diagnostics perform this
 update internally. The conserved state `Q` is current in a callback;
 `mixture_density` and related functions read it without depending on the
-conserved layout.
+conserved layout. A callback may also write to `Q`; `run!` enforces the
+boundary conditions and refreshes the primitives from `Q` before the next step.
 """
 refresh_primitives!(solver::SolverLike, Q) =
     (exchange_state!(Q, solver.decomp); primitives!(solver, Q); solver)
@@ -2614,6 +2626,7 @@ function compute_primitives_and_gradients!(solver::SolverLike, Q,
         end
     end
     metric_correct_gradients!(solver, solver.metric)   # additive curvature terms
+    _mark_gradients!(solver)
     return solver
 end
 
@@ -2638,7 +2651,8 @@ fold exists, and `ring_buf` under `detector = :d8`. Everything in that list
 except the primitives, the artificial coefficients and the fold pair buffers
 lives on the [`RHSWorkspace`](@ref) this patch shares with the rank's other
 patches of the same extent, so on a multi-patch solver those fields carry the
-patch evaluated last, not this one, once the call returns. The docstring of
+patch evaluated last, not this one, once the call returns; the workspace
+records that patch for `grad_u`, `strain_mag` and `sensor`. The docstring of
 `compute_artificial!` records which of the sensor scratch fields are dead on
 return and may therefore be borrowed by a later phase of the same call.
 

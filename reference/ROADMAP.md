@@ -225,11 +225,13 @@ filter time-scaling with N1.
   and a docs validation section. Keep analytic validation, external data, and
   self-generated regression profiles explicitly distinguished.
 
-- [ ] **V2 — Add reproducible turbulent inflow generation.**
-  Implement a digital-filter or synthetic-eddy utility producing a
-  `(x, y, z, t) -> Prim` target for Dirichlet or NSCBC inflow.
-  **Gate:** prescribed statistics/correlations, reproducible seeds across
-  decomposition and restart, and a V1 experiment use case.
+- [ ] **V2 — Qualify the turbulent inflow on a V1 experiment.**
+  `TurbulentInflow`, a seeded random-Fourier-mode target with prescribed
+  Reynolds stresses and integral scale, reproducible across decomposition and
+  restart, landed in commit `ebbe4d6`. Remaining: a V1 experiment use case,
+  and the NSCBC relaxation rates (`eta_u`, `eta_T`) that admit the
+  fluctuation without damping it.
+  **Depends on:** V1.
 
 - [ ] **V3 — Close gaps in automated verification.**
   The temporal-order studies landed in commit `d8ea472`

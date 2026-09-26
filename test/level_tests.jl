@@ -886,6 +886,55 @@ end
     @test single.field_tuples.Y[1] === single.patches[1].Y[1]
 end
 
+@testset "tiled level: a scratch read names the patch that wrote it" begin
+    # The tiles below share one RHS workspace, so after a step its gradients
+    # and sensors are the last tile's. scalar_field refuses them for any other
+    # tile rather than return that tile's values.
+    per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    solver = Solver(n_global=(48, 48, 1), L_domain=(2π, 2π, 1.0), bcs=per3l,
+                    refine=BlockRegion((18, 18, 0), (12, 12, 1)), tile=6)
+    states = allocate_state(solver)
+    initialize!(solver, states, (x, y, z) ->
+        Prim(rho=1 + 0.2sin(x) * cos(y), u=(0.3sin(y), 0.2cos(x), 0.0), p=1.0))
+    run!(solver, states; tfinal=1.0, nmax=1)
+    patches = solver.patches
+    first_tile, last_tile = patches[2], patches[end]
+    ws = first_tile.rhs_workspace
+    @test ws === last_tile.rhs_workspace
+    @test ws.gradients_filled_by[] === last_tile.covered
+    @test ws.sensors_filled_by[] === last_tile.covered
+    @test patches[1].rhs_workspace.sensors_filled_by[] === patches[1].covered
+    ps_first = CL.PatchSolver(solver, first_tile)
+    ps_last = CL.PatchSolver(solver, last_tile)
+    for name in (:sensor, :strain_mag, :divergence, :qcriterion,
+                 :vorticity_magnitude)
+        @test_throws ArgumentError CL.scalar_field(ps_first, name)
+        @test CL.scalar_field(ps_last, name) isa AbstractArray
+    end
+    # What a silent read would have returned differs from the tile's own field.
+    stale = Array(CL.scalar_field(ps_last, :sensor))
+    own = field_array(solver, states, :sensor)
+    @test own[2] != stale
+    # Recomputed for the first tile, the read is that tile's and passes.
+    fresh = CL.preserving_artificial(solver) do
+        CL.compute_primitives_and_gradients!(ps_first, states[2])
+        CL.compute_artificial!(ps_first, states[2])
+        Array(CL.scalar_field(ps_first, :sensor))
+    end
+    @test fresh == own[2]
+    @test_throws ArgumentError CL.scalar_field(ps_last, :sensor)
+    # A surviving tile keeps its identity through a regrid's repatching.
+    @test CL._repatch(first_tile, 99, first_tile.faces, first_tile.bcs).covered ===
+          first_tile.covered
+    # The multi-patch forward names the scratch as shared.
+    err = try
+        solver.sensor
+    catch e
+        e
+    end
+    @test occursin("right-hand-side scratch", sprint(showerror, err))
+end
+
 @testset "tiled regrid seeds fresh tiles from surviving neighbors" begin
     wall2 = (SlipWallBC(), SlipWallBC())
     per = (PeriodicBC(), PeriodicBC())

@@ -121,9 +121,13 @@ Every rank must call this function because each stage evaluates
 `solver.t` and that the primitive fields are current for it, which lets the first
 stage skip a halo exchange and a primitives pass. [`run!`](@ref) can assert this
 because it applies the boundary conditions itself immediately before calling
-[`max_rate`](@ref), which performs the exchange and the primitives pass. A direct
-caller should leave the default in place unless it has done the same. The
-argument is positional for the reason given under [`compute_rhs!`](@ref).
+[`max_rate`](@ref), which performs the exchange and the primitives pass.
+Between that call and the step, `run!` writes to `Q` only when the `:repair`
+validity policy repairs a point, and it then repeats the boundary conditions
+and the rate measurement. The regrid, the filter, the positivity failsafe and the callbacks
+run before the next iteration's measurement. A direct caller should leave the
+default in place unless it has done the same. The argument is positional for
+the reason given under [`compute_rhs!`](@ref).
 """
 function step!(solver::Solver, Q, dQ, du, dt, prepared::Bool=false)
     decomp = solver.decomp
@@ -1583,9 +1587,22 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # `check_step`'s reduced scalars are the cheap check that always runs.
         if failure === nothing && control.validity_interval > 0 &&
            solver.step % control.validity_interval == 0
+            repaired_0 = solver.floor_tally.cells
             _, failure = _apply_validity!(solver, Q; control=control,
                                           stage="the state entering the step",
                                           floors=(rho_floor, e_floor))
+            # A `:repair` policy rewrites interior points after `max_rate` has
+            # read them, which leaves the halos, the boundary values and the
+            # primitives that `prepared` asserts behind the state. The tally is
+            # reduced, so every rank takes this branch together.
+            if failure === nothing && solver.floor_tally.cells != repaired_0
+                _presync!(solver, Q)
+                apply_bcs!(solver, Q)
+                rate, rho_min, filter_rate = max_rate(solver, Q)
+                dt = predicted_dt(solver, control, rate)
+                failure = check_step(control, dt, rho_min, dt_seen, solver.step,
+                                     solver.t, solver.cfl)
+            end
         end
         if failure !== nothing
             attempts = _rollback!(_cold(solver), Q, workspace, callback, control,

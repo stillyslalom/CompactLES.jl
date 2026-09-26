@@ -902,17 +902,19 @@ phases may overwrite `sensor_sp`, `tmp_a`, `tmp_b`, and `ring_buf`.
 `NSCBCOutflowBC` uses `tmp_b` and `sensor_sp` for transverse pressure
 derivatives under this contract.
 
-For a single-patch solver, `solver.sensor` is deliberately retained after the
-RHS so `scalar_field(solver, :sensor)` can expose the most recently computed
-sensor. Later RHS phases, boundary conditions, and source terms must not
-overwrite it. Any additional post-artificial reader of the other scratch fields
-must provide its own storage. Multi-patch output cannot use the shared sensor
-workspace and must likewise provide persistent per-patch storage.
+`solver.strain_mag` and `solver.sensor` are retained after the RHS so that
+`scalar_field(solver, :strain_mag)` and `:sensor` can return the most recently
+computed values. Later RHS phases, boundary conditions, and source terms must
+not overwrite them. The workspace records the patch whose pass wrote them (see
+[`RHSWorkspace`](@ref)), and `scalar_field` refuses them for any other patch.
+Any additional post-artificial reader of the other scratch fields must provide
+its own storage.
 """
 function compute_artificial!(solver, Q)
     solver.art.enabled || return solver   # arrays stay zero from allocation
     _compute_artificial!(patch_fields(solver), solver.eos, solver.art,
                          equation_layout(solver.equations), Q, solver)
+    _mark_sensors!(solver)
     return solver
 end
 

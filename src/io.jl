@@ -1354,6 +1354,7 @@ end
 
 # grad_u[d, j] is ∂u_j/∂x_d, so the curl reads the off-diagonal pairs.
 _vorticity_arrays(solver::SolverLike) = begin
+    _check_scratch_writer(solver, :gradients, :vorticity)
     g = solver.grad_u
     w1 = similar(solver.rho); w2 = similar(solver.rho); w3 = similar(solver.rho)
     @inbounds for idx in eachindex(w1)
@@ -1418,6 +1419,11 @@ by `species`), and `:strain_mag`, `:sensor`, `:mu_art`, `:beta_art`,
 gradient and artificial passes have run; `save_vtk` and `field_array`
 arrange that, and `field_array` also copies in every case.
 
+`:strain_mag`, `:sensor`, and the names derived from the velocity gradients
+read [`RHSWorkspace`](@ref) scratch, which the patches of equal extent on a
+rank share. For a patch other than the one whose pass wrote that scratch last,
+they raise `ArgumentError`.
+
 `:schlieren` takes a distributed derivative pass, so every rank in the
 directional sub-communicators must reach this call in the same order.
 
@@ -1449,6 +1455,7 @@ function scalar_field(solver::SolverLike, name::Symbol; species::Int=1)
         return _scalar_from(solver, idx ->
             sqrt(solver.u[idx]^2 + solver.v[idx]^2 + solver.w[idx]^2) / solver.c[idx])
     elseif name === :divergence
+        _check_scratch_writer(solver, :gradients, name)
         return _scalar_from(solver, idx -> g[1, 1][idx] + g[2, 2][idx] + g[3, 3][idx])
     elseif name === :vorticity_magnitude
         w1, w2, w3 = _vorticity_arrays(solver)
@@ -1456,6 +1463,7 @@ function scalar_field(solver::SolverLike, name::Symbol; species::Int=1)
     elseif name === :qcriterion
         # Q = ½(Ω_ij Ω_ij − S_ij S_ij): positive where rotation beats strain,
         # which is the usual vortex-core criterion.
+        _check_scratch_writer(solver, :gradients, name)
         return _scalar_from(solver, idx -> begin
             ss = 0.0; oo = 0.0
             for b in 1:3, a in 1:3
@@ -1468,8 +1476,10 @@ function scalar_field(solver::SolverLike, name::Symbol; species::Int=1)
     elseif name === :schlieren
         return _schlieren(solver)
     elseif name === :strain_mag
+        _check_scratch_writer(solver, :sensors, name)
         return solver.strain_mag
     elseif name === :sensor
+        _check_scratch_writer(solver, :sensors, name)
         return solver.sensor
     elseif name === :mu_art
         return solver.mu_art
