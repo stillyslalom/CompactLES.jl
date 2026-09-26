@@ -223,20 +223,20 @@ b = 1/9. `closures` selects the rows applied at a closed edge:
   F2 row of `compact_filter(closures = :cascade)` damps; under the default
   one-sided filter rows it fails even a smooth pulse.
 - `:brady_livescu`: the four fifth-order rows of Brady & Livescu (2019),
-  scheme T6. Select it for a high-order wall on a resolved start: under
-  the default one-sided filter rows it is the supported high-order wall
-  configuration within measured limits, a wall whose initial state is
-  resolved (not the singular start of cold planar Noh), the CFL numbers
-  the default closure completes a case at, either precision, the block
-  extents the filter already requires, serial or decomposed. Its wall
-  solution is sixth order with the artificial properties off; with them
-  on a viscous or shear wall keeps that order and an inviscid slip wall is
-  limited by the strain sensor's cusp (`beta_sensor = :dilatation` removes
-  it). Costs: a closed-line condition number near 1e3 (see the source
-  comment), which in Float32 floors one derivative's wall error near 1e-3
-  from N = 48 up, and a wall mode under `compact_filter(closures =
-  :cascade)` wherever the artificial bulk viscosity is active at a slip
-  wall.
+  scheme T6. Select it for a high-order wall: under the default one-sided
+  filter rows it is the supported high-order wall configuration within
+  measured limits, the CFL numbers the default closure completes a case
+  at on a resolved start and a lower ceiling on the singular start of
+  cold planar Noh, which it completes at that case's CFL number, either
+  precision, the block extents the filter already requires, serial or
+  decomposed. Its wall solution is sixth order with the artificial
+  properties off; with them on a viscous or shear wall keeps that order
+  and an inviscid slip wall is limited by the strain sensor's cusp
+  (`beta_sensor = :dilatation` removes it). Costs: a closed-line condition
+  number near 1e3 (see the source comment), which in Float32 floors one
+  derivative's wall error near 1e-3 from N = 48 up, and a wall mode under
+  `compact_filter(closures = :cascade)` wherever the artificial bulk
+  viscosity is active at a slip wall.
 """
 function lele_d1_6(::Type{T}=Float64; closures::Symbol=:neutral3) where {T}
     CompactScheme{T}("Lele C6 first derivative", T(1//3), zero(T),

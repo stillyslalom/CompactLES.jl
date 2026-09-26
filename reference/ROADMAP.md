@@ -98,21 +98,11 @@ details are in [DESIGN.md](DESIGN.md).
   are the `:neutral3` defaults of C8 and C10 as well (commit `de30ccc`).
 - [x] **N6l** — `SymmetryPlaneBC` folds a slip wall on a face-centred mirror and
   reads the interior order, for a single unrefined patch (commit `8a5bdfe`).
-- [ ] **N6m — Admit higher-order wall closures behind an initial-data check.**
-  A production closure must take a singular start on its own rows, so every
-  derivative operator uses third-order rows at a wall and C8 and C10 gain
-  nothing on a wall-bounded run. C6 `:brady_livescu` holds the wall wherever
-  the cascade rows do and fails only when singular data sit on the closure
-  rows themselves; C8 `:brady_livescu` needs the front tens of cells from the
-  wall. Replace the singular-start requirement for opt-in higher-order rows
-  with a setup-time check of the initial state near each closed edge that
-  raises an error on data the rows cannot take, and qualify the rows on the
-  starts the check admits
-  ([wall closures in production](CALIBRATION_APPENDIX.md#wall-closures-in-production)).
-  Known obstacles: the Brady–Livescu rows grow at some line lengths under the
-  default filter, and no C8 or C10 set holds the warm starts
-  ([the fifth-order closure search](CALIBRATION_APPENDIX.md#the-fifth-order-closure-search)).
-  **Depends on:** N6b and N6j.
+- [x] **N6m** — C6 `:brady_livescu` takes every start of the planar Noh
+  ladder on the current solver, the singular one included, and its remaining
+  failures are CFL ceilings that no initial-data measure orders, so the
+  resolved-start requirement is lifted by measurement and no initial-data
+  check is added; C8 `:brady_livescu` stays unsupported at a wall (commit TBD).
 
 - [x] **N7** — `NSCBCInflowBC` carries the Yoo–Im transverse terms on every
   incoming wave, at the full share by default, measured on an oblique pulse

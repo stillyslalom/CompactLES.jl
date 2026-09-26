@@ -163,8 +163,9 @@ cost. The link is to the section holding the evidence.
   ([wall closures](CALIBRATION_APPENDIX.md#wall-closures-in-production)).
 - **A wall that must carry more than third order, on a face that cannot be a
   symmetry plane.** Use C6 `:brady_livescu` under the default filter rows, which
-  raises the smooth wall order from 3.17 to 5.88 on resolved initial data. C8
-  `:brady_livescu` is not supported at a wall
+  raises the smooth wall order from 3.17 to 5.88 and takes the singular planar
+  Noh start at that case's CFL number, under a lower CFL ceiling than the
+  default rows carry there. C8 `:brady_livescu` is not supported at a wall
   ([wall closures](CALIBRATION_APPENDIX.md#wall-closures-in-production)).
 - **A wall solution loses its closure order once the artificial properties are
   on.** The detector reads a closed edge from the node-centred mirror of the

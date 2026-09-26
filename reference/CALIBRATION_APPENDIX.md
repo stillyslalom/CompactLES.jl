@@ -2495,8 +2495,10 @@ Noh warm t0=0.3    C6 :cascade3    rho[1:4] 3.990 3.994 3.998 4.001       4.025 
 ```
 
 `:cascade4` needs the F2 row, failing Woodward–Colella and overshooting the cold wall without
-it; C6 Brady–Livescu needs the one-sided rows at a shock-bounded wall and takes no singular
-start under either; C8 Brady–Livescu fails the cold start under both.
+it; C6 Brady–Livescu needs the one-sided rows at a shock-bounded wall; C8 Brady–Livescu fails
+the cold start under both. The cold rows predate the detector's wall mirror and the slip-wall
+flux contract, under which C6 Brady–Livescu completes that start ([how resolved a start must
+be](#how-resolved-a-start-must-be)).
 
 The C6 Brady–Livescu failure under the cascade rows is a wall mode driven by the artificial
 bulk viscosity, not by the discontinuity. A planar Noh warm-started from the exact solution
@@ -2760,6 +2762,28 @@ reads 4.01–4.03; C8 Brady–Livescu completes Woodward–Colella to 1.2 within
 the warm Noh wall from `cfl = 0.6` (4.15, then 4.34 at 0.9), fails it at 1.2, and fails the
 steepening pulse from 1.2.
 
+The singular start of the same case (N = 400, t0 = 0) carries a ceiling of its own under the
+C6 Brady–Livescu rows. `rho[1:4]`, the wall deficit and the shock position at `retries = 0`:
+
+```
+cfl     C6 neutral3                            C6 cascade3                            C6 BL                                  C8 BL
+0.15    3.043 3.370 3.712 3.941  24%  0.2021    3.115 3.490 3.717 3.923  22%  0.2020    3.126 3.576 4.229 4.516  22%  0.2019    negative density, step 23
+0.30    3.049 3.376 3.717 3.942  24%  0.2021    3.173 3.508 3.722 3.934  21%  0.2019    3.279 3.640 4.295 4.547  18%  0.2017    negative density, step 13
+0.45    3.056 3.384 3.721 3.942  24%  0.2021    3.236 3.523 3.729 3.949  19%  0.2019    4.086 4.298 4.696 4.722  -2%  0.1999    negative density, step 7
+0.60    3.063 3.390 3.724 3.943  23%  0.2021    3.301 3.534 3.741 3.967  17%  0.2018    negative density, step 57, t = 0.0197  negative density, step 6
+0.90    3.072 3.398 3.730 3.949  23%  0.2021    3.313 3.557 3.772 3.978  17%  0.2017    negative density, step 38, t = 0.0195  negative density, step 4
+```
+
+The third- and fourth-order rows complete the singular start at every CFL number of the
+ladder with a wall profile that moves in the second digit. The C6 Brady–Livescu rows complete
+it to `cfl = 0.45` and lose positivity within the first sixty steps from 0.6, a startup event
+of the kind [the CFL section](#the-cfl-restriction-and-the-symmetry-cell) describes:
+`StepControl(retries = 4)` completes 0.6 and 0.9 from a rollback (3.360 3.679 4.337 4.564 and
+4.015 4.319 4.727 4.734). Their profile is not the default's: the first node sits nearer the
+plateau while the third and fourth overshoot it by 6% and 13% at cfl 0.15, and at 0.45 the
+whole wall window sits above 4 with the shock 1% inside the exact position. C8 Brady–Livescu
+fails the singular start at every CFL number, with or without retries.
+
 ### How resolved a start must be
 
 Planar Noh at N = 400 from the exact solution at t0, `cfl = 0.15`. The front is at t0/3, the
@@ -2767,23 +2791,35 @@ cell is 0.0025, and the warm start blends the plateau into the inflow over four 
 the front, so below t0 ≈ 0.03 the initial state is not the exact one under any closure:
 
 ```
-t0      front (cells)   C6 cascade3                C6 BL                       C8 BL
-0.3     40              4.025 3.988 3.993 4.007    3.992 3.996 3.996 4.000     3.895 3.995 4.001 3.997
-0.1     13              4.057 3.968 4.021 4.010    3.985 3.976 4.029 4.005     negative density, t = 0.075
-0.03    4               4.365 4.662 4.788 4.360    12.446 6.769 4.785 4.210    negative density, step 3
-0.01    1.3             11.403 4.930 3.655 3.756   4.931 4.989 4.167 4.030     negative density, step 20
-0.003   0.4             90.740 4.308 2.892 3.764   negative density, t = 0.18  negative density, step 21
-0.0     singular        1.990 2.560 3.288 3.743    negative density, t = 0.006 negative density, step 21
+t0      front (cells)   C6 neutral3                C6 cascade3                C6 BL                      C8 BL
+0.3     40              3.999 3.994 3.998 4.002    4.014 3.990 3.992 4.003    3.989 3.993 3.995 4.000    3.944 4.000 4.000 3.996
+0.1     13              4.018 3.973 4.025 4.005    4.033 3.967 4.020 4.007    3.960 3.974 4.029 4.005    3.834 4.012 4.084 4.055
+0.03    4               4.283 4.668 4.762 4.351    4.465 4.639 4.775 4.363    6.074 4.739 4.447 4.135    negative density, step 4
+0.01    1.3             4.979 4.415 3.859 3.752    4.906 4.363 3.826 3.733    4.729 4.445 3.934 3.976    negative density, step 27
+0.003   0.4             3.941 3.491 3.584 3.729    4.086 3.536 3.562 3.713    3.556 3.505 3.765 4.109    negative density, step 83
+0.0     singular        3.043 3.370 3.712 3.941    3.115 3.490 3.717 3.923    3.126 3.576 4.229 4.516    negative density, step 23
 ```
 
-`StepControl(retries = 4)` changes no row, so this is not the startup restriction of [the CFL
-section](#the-cfl-restriction-and-the-symmetry-cell). C6 Brady–Livescu holds the wall wherever
-the cascade does; the two sets differ on the singular start, which the cascade completes with
-its deficit and the rows do not complete at all. C8 Brady–Livescu takes only the 40-cell
-start. On the current solver, with the sensor mirrors and the slip-wall flux contract in
-place, both Brady–Livescu and the archived fifth-order unfiltered-search rows complete the
-cold N = 200 preset that failed earlier, so those older failure steps are not current
-evidence; the change appears in the strain control too and is not attributable to the sensor.
+`StepControl(retries = 4)` changes no completing row and completes no C8 row, so this is not
+the startup restriction of [the CFL section](#the-cfl-restriction-and-the-symmetry-cell). With
+the detector's wall mirror and the slip-wall flux contract in place, C6 Brady–Livescu
+completes every start of the ladder, the singular one included, where an earlier solver lost
+positivity on the two least resolved starts within a few steps; the intermediate starts t0 =
+0.05, 0.02, 0.006 and 0.001, and N = 200 and 800 at t0 = 0, 0.003 and 0.01, complete as
+well. On the singular start the rows read the default closure's plateau (1.0003 against
+0.9997 of the exact 4) with a wall deficit of 22% against 24%. C8 Brady–Livescu takes the
+40- and 13-cell starts only.
+
+No measure of the initial data on the closure-row footprint orders the C6 failures that
+remain. The largest one-cell jump of the normal velocity over the sound speed on the six
+nodes the rows read, after the wall value is injected, is 77 on the singular start, 1.0 at
+t0 = 0.003, 0.49 at t0 = 0.02 and 0.013 at t0 = 0.1; the rows complete every one of these
+under the strain sensor, and under `beta_sensor = :dilatation` they complete the singular
+start and t0 = 0.003 but lose positivity at step 136 of the t0 = 0.02 start. The remaining
+C6 failure on this case is a CFL ceiling of the singular start, tabulated under [the stable
+CFL range](#the-stable-cfl-range). A setup-time initial-data check for these rows would
+therefore reject starts they take or admit starts they fail, and none was added (roadmap
+N6m).
 
 ### The round-off floor
 
@@ -2851,8 +2887,8 @@ C8 BL warm         negative density at t = 0.20
 ```
 
 C6 Brady–Livescu reads the cascade's plateau, deficit and fronts to three digits on both
-starts, the cold one included, since this case's singular start is at the centre of the plane
-and no closure row sees it; the rows fail only where singular data sit on the row itself.
+starts, the cold one included; this case's singular start is at the centre of the plane, where
+no closure row sees it.
 
 ### The production Jacobian and the uniform state
 
@@ -2919,8 +2955,9 @@ fourth digit.
 
 **C6 `:neutral3` is the default.** Every long inviscid run between slip walls or symmetry
 planes grew the cascade's mode, and the alternatives were a knob (`compact_filter(closures =
-:cascade)` with its second-order wall defect, viscosity, or Brady–Livescu with its cold-start
-failure); the cost is a factor 2.5 in the wall error constant at unchanged orders and a
+:cascade)` with its second-order wall defect, viscosity, or Brady–Livescu, which failed the
+cold start on the solver of that decision and carries a line-length resonance under the
+filter); the cost is a factor 2.5 in the wall error constant at unchanged orders and a
 fourth-digit move of the planar Noh battery. `:cascade3` stays available for comparison with
 earlier results, and the same two neutral rows are the C8 and C10 defaults ([closure
 certificates](#closure-certificates)).
@@ -2935,19 +2972,19 @@ neutral rows the entropy-wave interface-window errors were two to five times lar
 injected condition, and the interface baselines are unchanged to every printed digit.
 
 **C6 `:brady_livescu` with the default `compact_filter` is a supported wall configuration**
-within these limits: a wall whose initial state is resolved (the front thirteen cells out on
-the warm Noh ladder; no singular start on a closure row), any CFL number the default closure
-completes the case at, Float64 or Float32, block extents no smaller than the filter requires,
-serial or decomposed. Its wall solution is sixth order with the artificial properties off and
-fourth order with them on under the strain sensor, at an error fifteen times below the
-cascade's, and under `beta_sensor = :dilatation` it recovers the closure's own order at an
-error eighty times smaller again. `test/validation.jl` guards it on Woodward–Colella and the
-warm Noh wall.
+within these limits: any CFL number the default closure completes a resolved case at, a
+lower ceiling on the singular planar Noh start ([the stable CFL range](#the-stable-cfl-range)),
+which the rows complete at that case's CFL number, Float64 or Float32, block extents no
+smaller than the filter requires, serial or decomposed. Its wall solution is sixth order with
+the artificial properties off and fourth order with them on under the strain sensor, at an
+error fifteen times below the cascade's, and under `beta_sensor = :dilatation` it recovers
+the closure's own order at an error eighty times smaller again. `test/validation.jl` guards
+it on Woodward–Colella, the warm Noh wall and the cold one.
 
 **C8 `:brady_livescu` is not supported at a wall**: the T8 rows fail a smooth wall from `cfl
 = 1.25` with the mirror completing, the warm Noh wall from 0.9, the two-dimensional plane on
-both starts, and every start of the planar case but the 40-cell one. They remain available
-for a periodic or interior block.
+both starts, and every start of the planar case but the 40- and 13-cell ones. They remain
+available for a periodic or interior block.
 
 ## The wall flux contracts
 

@@ -35,7 +35,9 @@
 #            failure is attributed to the rows or to the interior
 #   start    how resolved a wall start must be: planar Noh from the exact
 #            solution at t0 down to the singular start, with and without
-#            retries
+#            retries, then the singular start on a CFL ladder, every
+#            closure, so a failure there reads as a CFL ceiling of the rows
+#            on that start rather than a start they cannot take
 #   floor    the round-off floor: one derivative of a smooth field up to
 #            N = 3073 in Float64, and the pulse against its mirror in
 #            Float32, every closure
@@ -424,6 +426,14 @@ function start_part()
         (t0 > 0.01 && retries > 0) && continue
         println("  ", pad(label, 14), sprintf("%.3f   %d        ", t0, retries),
                 noh_row(mk(Float64); t0=t0, retries=retries))
+        flush(stdout)
+    end
+    println("\n--- the singular start (t0 = 0) on a CFL ladder ---")
+    println("  closure       cfl     retries  rho[1:4]                       " *
+            "plateau  deficit  shock")
+    for (label, mk) in CLOSURES, cfl in (0.15, 0.3, 0.45, 0.6, 0.9), retries in (0, 4)
+        println("  ", pad(label, 14), sprintf("%.2f    %d        ", cfl, retries),
+                noh_row(mk(Float64); t0=0.0, cfl=cfl, retries=retries))
         flush(stdout)
     end
 end

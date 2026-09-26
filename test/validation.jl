@@ -90,12 +90,13 @@
 # mirror, below.
 #   Woodward, C6 :brady_livescu   L1 rho 3.216e-2, peak rho 6.617 at x = 0.7785
 #   Noh nu=1 warm t0=0.3, C6 :brady_livescu   rho[1:4] 3.989 3.993 3.995 4.000
+#   Noh nu=1 cold, C6 :brady_livescu   plateau 4.0013/4  shock 0.2019  wall deficit 22%
 #
-# The two Brady–Livescu rows guard the supported high-order wall
-# configuration: the rows under the default
-# filter reproduce the default closure's Woodward profile and hold the
-# resolved warm Noh wall; they take no singular start, so the cold Noh
-# rows above stay on the default closure.
+# The three Brady–Livescu rows guard the supported high-order wall
+# configuration: the rows under the default filter reproduce the default
+# closure's Woodward profile, hold the resolved warm Noh wall, and complete
+# the singular cold start at the case's CFL number with the default
+# closure's plateau and a smaller wall deficit.
 #
 # The fold rows moved when the same detector took the
 # half-offset mirror at a coordinate fold on every field rather than on an
@@ -490,15 +491,37 @@ end
 # planar case warm-started from the exact solution at t0 = 0.3, so the wall
 # carries the rho = 4 plateau and no singular start, under C6
 # `:brady_livescu` and the default filter rows. Measured rho[1:4] 3.989
-# 3.993 3.995 4.000 against the default closure's 4.025 3.988 3.993 4.007;
-# the cold start of the case above fails under these rows and is not
-# supported.
+# 3.993 3.995 4.000 against the default closure's 4.025 3.988 3.993 4.007.
 let (xs, ρ, u, p, ok, report) = noh_case(1; t0=0.3,
                                           deriv=lele_d1_6(closures=:brady_livescu))
     @test ok
     sayf("  nu=1 N=%d warm t0=0.3, C6 :brady_livescu   rho[1:4] %.3f %.3f %.3f %.3f\n",
          Dict(NOH_N)[1], ρ[1], ρ[2], ρ[3], ρ[4])
     @test all(r -> abs(r / 4 - 1) < 0.03, ρ[1:4])
+    @test report.nonfinite == 0 && report.negative_density == 0
+end
+
+# The same rows from the singular cold start of the case above, at the case's
+# CFL number. The rows once failed this start within a few steps and were
+# qualified on resolved starts only; with the detector's wall mirror and the
+# slip-wall flux contract in place they complete it, and this guard keeps
+# that. The bounds are the default closure's, measured under these rows at
+# plateau 4.0013, deficit 22% (the first node; the third and fourth overshoot
+# the plateau by 6% and 13%) and shock 0.2019.
+let (xs, ρ, u, p, ok, report) = noh_case(1; deriv=lele_d1_6(closures=:brady_livescu))
+    @test ok
+    plat, deficit, Rnum, epre = noh_metrics(xs, ρ, 1)
+    sayf("  nu=1 N=%d cold, C6 :brady_livescu   plateau %.4f  deficit %+.0f%%  " *
+         "shock %.4f  L1 pre-shock rho %.2e\n",
+         Dict(NOH_N)[1], plat, 100deficit, Rnum, epre)
+    sayf("        closing state: %d inadmissible cell(s), e_min %+.4f\n",
+         report.inadmissible, report.e_min)
+    @test abs(plat / 4 - 1) < 0.01
+    @test 0 < deficit < 0.7
+    @test abs(Rnum - (NOH_G - 1) / 2 * NOH_T) < 0.025
+    @test epre < 5e-2
+    @test report.inadmissible <= 12
+    @test report.e_min > -1.0
     @test report.nonfinite == 0 && report.negative_density == 0
 end
 

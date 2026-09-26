@@ -39,8 +39,7 @@ periodic box, each operator delivers its formal order throughout the domain.
 
 To raise the wall order, change the closure coefficients. Increasing the
 interior derivative order alone does not help. The supported higher-order
-wall configuration is C6 `:brady_livescu` with a resolved initial state,
-described below.
+wall configuration is C6 `:brady_livescu`, described below.
 
 ## Built-in derivative operators
 
@@ -98,11 +97,13 @@ between slip walls or symmetry planes. If you use cascade derivative rows
 instead, their wall oscillation needs damping from
 `compact_filter(closures = :cascade)` or physical viscosity.
 
-For a higher-order wall, choose C6 `:brady_livescu` with a resolved initial
-state: no discontinuity within about thirteen cells of the wall. Singular
-cold starts remain outside this qualified configuration. A shock that
-arrives later has already been spread by the artificial properties; the
-measured error is then within a few tenths of a percent.
+For a higher-order wall, choose C6 `:brady_livescu`. A shock that arrives
+at the wall has already been spread by the artificial properties, and the
+measured error is then within a few tenths of a percent. The rows also
+complete the singular cold start of planar Noh at that case's CFL number,
+with the default closure's plateau and a smaller wall deficit, under a
+lower CFL ceiling than the default rows carry on that start; a start
+resolved over the closure rows carries no such ceiling.
 
 The Brady–Livescu rows lose about three digits of wall accuracy through
 conditioning. In Float32, a single derivative's wall error reaches a floor
@@ -225,7 +226,7 @@ reported in the literature. See
 | Problem | Derivative | Closures | Filter | Sensors | Precision | Reason |
 |:--|:--|:--|:--|:--|:--|:--|
 | periodic turbulence box | C8 or C10 | not used | default | default | Float64, or Float32 on a device | every dimension retains the formal order; choose based on resolving power per point and step cost |
-| wall-bounded channel or cavity | C6 | `:brady_livescu` for a sixth-order wall with a resolved start; `:neutral3` for a shocked start | default `:onesided` rows | `:dilatation` if the walls are inviscid | Float64 | wall closure coefficients determine the wall order |
+| wall-bounded channel or cavity | C6 | `:brady_livescu` for a sixth-order wall; `:neutral3` for a shocked start at a high CFL number | default `:onesided` rows | `:dilatation` if the walls are inviscid | Float64 | wall closure coefficients determine the wall order |
 | shock tube, Dirichlet ends | C6 | `:neutral3` | default | default | either | the ends are neutral and the shock sets the resolution |
 | converging shock on a cylindrical axis or spherical origin | C6 | `:neutral3` | default | default; not `:d8` at the origin | Float64 | the fold is third order; at the origin start with resolved data, `cfl = 0.3` and retries |
 | long inviscid run between symmetry planes | any | `:neutral3` | default | default | either | the neutral rows hold the round-off seed; the cascade rows do not |

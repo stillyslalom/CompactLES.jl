@@ -261,16 +261,17 @@ Presets:
   Brady–Livescu set survives a captured shock at a slip wall: the bulk
   viscosity term assembled from their rows grows a wall mode. Under the
   filter's one-sided rows, the default since September 2026, both sets
-  complete Woodward–Colella and the warm-started planar Noh and neither
-  takes the singular cold start, while `:cascade4` loses the F2 filter row
+  complete Woodward–Colella and the warm-started planar Noh, the C6 set
+  takes the singular cold start as well, while `:cascade4` loses the F2 filter row
   it depends on and fails even a smooth pulse, so it is paired with
   `compact_filter(closures = :cascade)`. In Float32 the Brady–Livescu wall
   error of one derivative floors near 1e-3, above the cascade's, from
   N = 48 up, while a wall evolution floors near 3e-5 under either. C6
   `:brady_livescu` under the default filter rows is the supported
   high-order wall configuration, within the limits measured in September
-  2026: a resolved start, the CFL numbers the default closure takes,
-  either precision, the filter's block extents, serial or decomposed;
+  2026: the CFL numbers the default closure takes on a resolved start and
+  a lower ceiling on the singular one, either precision, the filter's
+  block extents, serial or decomposed;
   with the artificial properties on its wall is fourth order at an error
   fifteen times below the cascade's, the artificial diffusion carrying a
   closure defect of its own at a wall. C8 `:brady_livescu` is not
