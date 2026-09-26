@@ -467,7 +467,13 @@ end
         e = CartesianIndex(ntuple(q -> q == d ? 1 : 0, 3))
         il = (d == 1 ? i : d == 2 ? j : k)
         v = sd == 1 ? i : sd == 2 ? j : k
-        sgn = (sd == 0 || v <= half) ? sgn_a : sgn_b
+        # A select, not `(sd == 0 || v <= half) ? sgn_a : sgn_b`: on an RX 6800
+        # XT (gfx1030, Julia 1.11, AMDGPU.jl 2.7) the short-circuit form joins two
+        # kernel arguments in a phi under a per-thread condition, the backend
+        # keeps that phi in a scalar register, and every thread of the launch
+        # received `sgn_b`. The resolved-θ axis then sensed the lower half of θ
+        # with the wrong mirror sign, and the run took a different step count.
+        sgn = ifelse((sd == 0) | (v <= half), sgn_a, sgn_b)
         signed[I] = _delta4_line(w, I, e, il, n_d, lomin, himax,
                                  mirror_lo, mirror_hi, sgn,
                                  wall_lo, wall_hi, wsgn)

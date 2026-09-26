@@ -584,6 +584,15 @@ form (KernelAbstractions.jl#652). `--check-bounds=yes` hides it, so the serial
 CI job passes while the MPI leg fails. Filed as JuliaLang/julia#63129;
 `reference/julia_aliasscope_bug_report.md` has the reproducer.
 
+**No short-circuit condition choosing between two uniform values in a device
+body.** On the workstation's RX 6800 XT (gfx1030, Julia 1.11, AMDGPU.jl 2.7),
+`x = (a || b) ? p : q`, with `p` and `q` kernel arguments and `b` varying per
+thread, compiles to a phi the backend holds in a scalar register, so every
+thread receives one of the two values; the KernelAbstractions CPU backend is
+correct, so no CI job sees it. Write `ifelse(a | b, p, q)`, as
+`_delta4_signed_point!` does, and trust `bench/device_solver.jl` on a GPU, not
+the KA-CPU suite, for a body of that shape.
+
 **A run that fails does not stop.** Losing positivity drives the diffusive rate
 in `compute_dt` up until `dt` collapses, and the run then grinds forever at no
 progress. A sweep that visits bad configurations must pass a low `nmax`, and
