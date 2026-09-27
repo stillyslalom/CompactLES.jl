@@ -2431,8 +2431,12 @@ function test_refined_decomposed()
     # decomposition's effect. The pentadiagonal filter's decomposed solve
     # moves the solution by 1e-13 to 1.4e-12 against serial under either
     # interface flux and at every wavenumber measured, where the default
-    # filter moves it by 7e-15; at wavenumber 1 the ghost fluxes' error is
-    # 1.9e-13, the same size. The default's row runs at wavenumber 8, where
+    # filter moves it by 7e-15. That is round-off: the pentadiagonal filter's
+    # periodic left-hand side has condition number 2.1e3 against 19, and one
+    # decomposed solve departs from serial by the same fraction of cond·eps
+    # for both (`bench/reducedsolve.jl mode=accuracy`). At wavenumber 1 the
+    # ghost fluxes' error is 1.9e-13, the same size. The default's row runs
+    # at wavenumber 8, where
     # the error is 7.5e-9 and the decomposed runs reproduce it to 1.6e-13.
     d8pyr = (art=ArtificialProperties(enabled=true, detector=:d8), filt=pyranda_filter(),
              filter_interval=1)

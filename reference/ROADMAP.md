@@ -479,16 +479,17 @@ opt-in Float32 already exist; the tasks below extend or validate them.
      P because a rank's interface unknowns couple only to its neighbors:
      per-line cost O(q²P), per-rank cost back to N²/P. Covers the
      tridiagonal and pentadiagonal paths alike; the Allgather is unchanged.
-     Round-off, not bitwise, agreement with the dense solve; the MPI suite's
-     3e-15 expectation for the decomposed solve is the bar.
+     Round-off, not bitwise, agreement with the dense solve. The bar is the
+     dense solve's own departure from serial per operator, a fraction of
+     cond(A)·eps that `bench/reducedsolve.jl mode=accuracy` measures; 3e-15
+     holds only for the operators with cond(A) near 20.
   3. Only if the Allgather volume (2qP lines' worth per rank) then shows in
      the probe: a distributed reduced solve in which only neighbors exchange,
      the SPIKE recursion, which also removes the replicated factorization.
   Process-grid guidance follows from the same count: for a fixed rank count
   the per-rank reduced cost is proportional to the sum of the cubes of the
   per-direction rank counts, so near-uniform grids minimize it and slabs
-  maximize it. **Depends on:** system-MPI cluster time for stage 1, and S14
-  before stage 2. **Gate:**
+  maximize it. **Depends on:** system-MPI cluster time for stage 1. **Gate:**
   the MPI suite at 2, 4 and 8 ranks, `bench/tgv_energy.jl` reproducing serial
   energy histories to round-off, and the node-scaling table re-measured at
   the largest rank count available with the probe's breakdown beside it.
@@ -511,19 +512,11 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   **Gate:** the core gate with explained baseline updates; time the inversion
   before and after at four species in the same session.
 
-- [ ] **S14 — Account for the decomposed pentadiagonal solve's departure from serial.**
-  A run with the pentadiagonal filter departs from its serial counterpart by
-  1e-13 to 1.4e-12 under either interface flux, on coarse nodes far from any
-  refinement, against about 7e-15 for the default tridiagonal filter and the
-  3e-15 that S12 sets as the bar for a decomposed solve. Whether the reduced
-  pentadiagonal system's conditioning, the order of the Allgathered sums or a
-  defect sets it is unknown. Measure the departure of one `BandLineSolver`
-  application against the serial solve at P = 2 to 8 with
-  `bench/reducedsolve.jl`, beside the reduced matrix's condition number, and
-  fix it or record it as the method's floor.
-  **Gate:** the MPI suite at 2, 4 and 8 ranks; if the solve changes, the core
-  gate and the serial-equivalence tolerances of the MPI suite's pentadiagonal
-  rows re-derived from the measurement.
+- [x] **S14** — The decomposed `pyranda_filter` solve's departure from serial is
+  the round-off floor of its ill-conditioned left-hand side, the same fraction
+  of cond(A)·eps as every other operator's, and is recorded as such
+  ([the measurement](CALIBRATION_APPENDIX.md#the-decomposed-line-solve-against-serial))
+  (commit TBD).
 
 ## P2/P3: high-energy-density physics
 

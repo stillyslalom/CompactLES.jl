@@ -4515,6 +4515,8 @@ MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 julia --project=. -t 1 bench/phases.jl
 julia --project=. -t 1 bench/reducedsolve.jl 48 derivs=c6,c10
 "$MPIEXEC" -n 2 julia --project=. -t 1 bench/reducedsolve.jl 96 derivs=c6,c10
+"$MPIEXEC" -n 8 julia --project=. -t 1 bench/reducedsolve.jl 96 mode=accuracy
+"$MPIEXEC" -n 8 julia --project=. -t 1 bench/reducedsolve.jl 96,192 mode=accuracy operators=filter,pyranda rhs=random
 ```
 
 Run-to-run spread on this workstation is 10–20%, so every ratio below is formed within a
@@ -4613,6 +4615,40 @@ one process each. The remaining gap is the x sweep, 3.5x the y sweep at 48³ whe
 lines into a lines × n buffer, sweeps it as the transposed path does, and copies back was
 bitwise equal and 1.4x faster than the hoisted sweep; it needs a scratch buffer per task and
 was not adopted.
+
+### The decomposed line solve against serial
+
+`bench/reducedsolve.jl mode=accuracy` at np = 8, 96 points, 64 smooth right-hand sides per
+operator: one application of the x line solver with the line split over P ranks, against
+the P = 1 solve and against a 256-bit dense solve, max-norm relative to the largest exact
+value. The departure from serial is the same fraction of cond(A)·eps for every operator,
+0.13–0.44 for the four well-conditioned ones and 0.13–0.21 for `pyranda_filter`, whose
+left-hand side symbol 1 + 2α cos k + 2β cos 2k falls to 1.3e-3 near k = 0.98π and sets
+cond(A) = 2087 against 5–21 for the others:
+
+```
+                     cond(A)  cond(red)    serial error   departure, P = 2..8   pivoted dense LU
+c6                     5.0      2.24        2.4e-16        3.7e-16 – 4.9e-16       2.4e-16
+c10                   21.0      5.51        8.4e-16        9.2e-16 – 1.4e-15       1.1e-15
+compact_filter()      19.0      4.36        4.2e-16        5.6e-16 – 1.0e-15       1.0e-15
+compact_d8()          15.0      4.49        6.8e-16        8.3e-16 – 1.5e-15       8.3e-16
+pyranda_filter()    2087       394–440      4.8e-14        5.9e-14 – 9.5e-14       1.0e-13
+```
+
+The departure does not grow with P, the reduced matrix is better conditioned than A at
+every P, and the local block's condition number falls with n (2083 at P = 1, 766 at
+P = 8), so neither the interface stage nor the unpivoted local factorization amplifies
+round-off. The serial solve itself sits 4.8e-14 from the exact solution, and a pivoted
+dense LU of the same system in Float64 sits 1.0e-13 from it: the decomposed solve departs
+from serial by the error any Float64 solve of this system carries. With uniform-noise
+right-hand sides the departure is 2.4e-14 – 5.2e-14 at 96 and 192 points, 0.05–0.11
+cond(A)·eps, and the default filter's 1.1e-15 – 1.8e-15. The per-solve ratio between the
+two filters, 60–170 on smooth data, is of the order of the ratio between the decomposed
+runs' departures from serial in the MPI suite's two-level wave rows under the two filters
+(1e-13 to 1.4e-12 against 7e-15), so those departures are this floor accumulated over the
+steps, not a defect of the distributed solve. A decomposed solve of a system of condition
+number κ reproduces serial to between a twentieth and a half of κ·eps, and 3e-15 is that bar
+only for the operators with cond(A) near 20.
 
 ### The sensor phase
 

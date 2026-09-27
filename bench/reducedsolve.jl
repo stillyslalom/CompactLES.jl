@@ -79,26 +79,49 @@
 #           tridiagonal and one pentadiagonal solver).
 #   reps    timed calls per stage per rank (default 50), after `warmup`
 #           untimed calls (default 5).
+#   mode    `timing` (default), the tables above, or `accuracy`, below.
+#
+# `mode=accuracy` measures instead how far a decomposed line solve departs
+# from the serial one (ROADMAP S14). For each operator in `operators`
+# (comma-separated from c6, c8, c10, filter for `compact_filter()`, d8 for
+# `compact_d8()` and pyranda for `pyranda_filter()`; default
+# c6,c10,filter,d8,pyranda), one set of 64 right-hand sides on a periodic x
+# line of N points is solved by the line solver of the x plan with the line
+# split over the first P ranks, for every P from 1 to the rank count; ranks
+# past P sit out. `rhs` selects the right-hand sides: `smooth` (default), four
+# low-wavenumber modes of random amplitude and phase per line, or `random`,
+# uniform noise. Per operator the table gives cond(A), the 2-norm condition
+# number of the global periodic left-hand side, and the error of a pivoted
+# dense Float64 solve of the same system, a second serial method for scale;
+# per P, the condition numbers of the reduced interface matrix and of rank 0's
+# local block, the error against a dense solve in 256-bit BigFloat, and the
+# departure from the P = 1 solve, also in units of cond(A) eps. All are
+# max-norm, relative to the largest exact value. Nothing is timed.
+#
+#   "$MPIEXEC" -n 8 julia --project=. -t 1 bench/reducedsolve.jl 96 mode=accuracy
 #
 # On a workstation under the JLL `mpiexec` nothing pins the ranks, and on a
 # hybrid performance/efficiency-core CPU they migrate between core types, so
 # a workstation table is a smoke test and not the crossover. Compare stages
 # within one run, not across runs.
 #
-# Prints tables and asserts nothing. Rows prefixed `row,` are machine-readable
-# for pooling several processes.
+# Prints tables and asserts nothing. Rows prefixed `row,` (timing) and `acc,`
+# (accuracy) are machine-readable for pooling several processes.
 
 using MPI
 MPI.Init(threadlevel=:funneled)
 using CompactLES
 using Printf
 using Statistics
-using LinearAlgebra: BLAS
+using LinearAlgebra: BLAS, I, Tridiagonal, cond, lu
+using Random: MersenneTwister
 
 const CL = CompactLES
 const per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
 
-const DEFAULTS = (N = "96", dims = "", derivs = "c6,c10", reps = 50, warmup = 5)
+const DEFAULTS = (N = "96", dims = "", derivs = "c6,c10", reps = 50, warmup = 5,
+                  mode = "timing", operators = "c6,c10,filter,d8,pyranda",
+                  rhs = "smooth")
 
 function deriv_scheme(name)
     name == "c6" && return lele_d1_6(Float64)
@@ -276,5 +299,154 @@ function main(opt)
     return nothing
 end
 
+# ---------------------------------------------------------------------------
+# mode=accuracy: the departure of a decomposed line solve from the serial one.
+
+function operator_scheme(name)
+    name in ("c6", "c8", "c10") && return deriv_scheme(name)
+    name == "filter" && return compact_filter()
+    name == "d8" && return CL.compact_d8()
+    name == "pyranda" && return pyranda_filter()
+    error("operator must be c6, c8, c10, filter, d8 or pyranda; got '$name'")
+end
+
+lhs_offdiagonals(scheme::CL.CompactScheme) = [scheme.alpha]
+lhs_offdiagonals(scheme::CL.BandedCompactScheme) = scheme.lhs
+
+"The left-hand side of `scheme` on a periodic line of `N` points, dense, in `T`."
+function periodic_lhs(::Type{T}, scheme, N) where {T}
+    A = zeros(T, N, N)
+    for i in 1:N
+        A[i, i] = one(T)
+        for (s, c) in enumerate(lhs_offdiagonals(scheme))
+            A[i, mod1(i + s, N)] += T(c)
+            A[i, mod1(i - s, N)] += T(c)
+        end
+    end
+    return A
+end
+
+"The local block of a line solver's factorization, rebuilt dense as L U."
+function local_block(F::CL.BandFactor)
+    n, q = F.n, F.q
+    Lm = Matrix{Float64}(I, n, n)
+    Um = zeros(n, n)
+    for k in 1:n, m in 1:q
+        k + m <= n && (Lm[k+m, k] = F.L[m, k])
+    end
+    for i in 1:n, s in 0:q
+        i + s <= n && (Um[i, i+s] = F.U[1+s, i])
+    end
+    return Lm * Um
+end
+function local_block(F::CL.TriFactor)
+    n = F.n
+    Lm = Matrix{Float64}(I, n, n)
+    Um = zeros(n, n)
+    for i in 1:n
+        i > 1 && (Lm[i, i-1] = F.l[i])
+        Um[i, i] = 1 / F.dinv[i]
+        i < n && (Um[i, i+1] = F.c[i])
+    end
+    return Lm * Um
+end
+
+"""
+`lines` right-hand sides of `N` points, identical on every rank: four
+low-wavenumber modes of random amplitude and phase per line (`smooth`, the
+magnitude profile a filter or derivative solve sees in a resolved run), or
+uniform noise (`random`).
+"""
+function global_rhs(N, lines, kind)
+    rng = MersenneTwister(20260927)
+    kind == "random" && return rand(rng, N, lines) .- 0.5
+    kind == "smooth" || error("rhs must be smooth or random; got '$kind'")
+    B = zeros(N, lines)
+    for l in 1:lines, k in 1:4
+        a, φ = rand(rng), 2π * rand(rng)
+        for i in 1:N
+            B[i, l] += a * sin(2π * k * (i - 1) / N + φ)
+        end
+    end
+    return B
+end
+
+relmax(x, ref) = maximum(abs.(x .- ref)) / maximum(abs.(ref))
+
+"""
+Solve the right-hand sides `B` with the line solver of the x plan of `scheme`
+on a periodic line of `N` points split over the first `P` ranks of `comm`, and
+return the whole solution on every rank, with the condition numbers of the
+reduced matrix and of the local block on rank 0. Collective over `comm`.
+"""
+function decomposed_solve(scheme, N, Nt, P, B, comm)
+    rank = MPI.Comm_rank(comm)
+    inside = rank < P
+    sub = MPI.Comm_split(comm, inside ? 0 : 1, rank)
+    X = zeros(size(B))
+    cond_reduced = cond_local = 0.0
+    if inside
+        decomp = CL.Decomp((N, Nt, Nt), (true, true, true); dims = (P, 1, 1),
+                           comm = sub)
+        ls = CL.plan_direction(decomp, scheme, 1, 1.0).line_solver
+        n, o = decomp.n_local[1], decomp.offset[1]
+        Bl = B[o+1:o+n, :]
+        CL.solve_lines!(Bl, ls)
+        X[o+1:o+n, :] .= Bl
+        if rank == 0
+            cond_reduced = ls.red === nothing ? NaN : cond(Matrix(ls.red))
+            cond_local = cond(local_block(ls.F))
+        end
+        CL.free_communicators!(decomp)
+    end
+    MPI.free(sub)
+    # A rank outside the line contributes zeros, so the sum is exact.
+    MPI.Allreduce!(X, +, comm)
+    return X, cond_reduced, cond_local
+end
+
+function accuracy(opt)
+    comm = MPI.COMM_WORLD
+    nranks = MPI.Comm_size(comm)
+    root = MPI.Comm_rank(comm) == 0
+    say(fmt, args...) = root && print(Printf.format(Printf.Format(fmt), args...))
+    Ns = parse.(Int, strip.(split(opt.N, ',')))
+    ops = String.(strip.(split(opt.operators, ',')))
+    Nt = 8
+    say("=== distributed line solve against serial (ROADMAP S14): periodic x line, " *
+        "%d lines, %s right-hand sides, P = 1..%d\n", Nt^2, opt.rhs, nranks)
+    say("    max-norm errors relative to the largest exact value; exact is a dense " *
+        "LU in %d-bit BigFloat\n", precision(BigFloat))
+    for N in Ns
+        B = global_rhs(N, Nt^2, opt.rhs)
+        for name in ops
+            scheme = operator_scheme(name)
+            A = periodic_lhs(Float64, scheme, N)
+            cond_A = cond(A)
+            exact = root ? Float64.(lu(periodic_lhs(BigFloat, scheme, N)) \
+                                    BigFloat.(B)) : zeros(0, 0)
+            say("\n  %s, N = %d, cond(A) = %.3e; dense pivoted LU in Float64: " *
+                "error %.2e\n", name, N, cond_A, root ? relmax(A \ B, exact) : 0.0)
+            say("   P    n  cond(red) cond(local)      error  departure  " *
+                "departure/(cond(A) eps)\n")
+            serial = nothing
+            for P in 1:nranks
+                X, cond_reduced, cond_local = decomposed_solve(scheme, N, Nt, P, B, comm)
+                P == 1 && (serial = X)
+                root || continue
+                err, dep = relmax(X, exact), relmax(X, serial)
+                say("  %2d %4d %10.3e %10.3e %10.2e %10.2e %10.3f\n", P, cld(N, P),
+                    cond_reduced, cond_local, err, dep, dep / (cond_A * eps()))
+                say("acc,%s,%d,%s,%d,%.4e,%.4e,%.4e,%.4e,%.4e\n", name, N, opt.rhs,
+                    P, cond_A, cond_reduced, cond_local, err, dep)
+                flush(stdout)
+            end
+        end
+    end
+    return nothing
+end
+
 const _opt = CompactLES.script_args(ARGS, DEFAULTS; positional = (:N,))
-mpi_main(() -> main(_opt))
+_opt.mode in ("timing", "accuracy") ||
+    error("mode must be timing or accuracy; got '$(_opt.mode)'")
+mpi_main(() -> _opt.mode == "timing" ? main(_opt) : accuracy(_opt))
