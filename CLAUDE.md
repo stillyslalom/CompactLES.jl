@@ -15,6 +15,7 @@ the place to record a result.
 | `reference/AMR_GPU.md` | the patch-AMR + GPU design as delivered, measured lessons, roadmap |
 | `reference/IMMERSED.md` | the immersed-boundary design: level-set bodies, blend imposition |
 | `reference/MODE_TRUNCATION.md` | azimuthal mode truncation plan for the pole CFL squeeze |
+| `reference/IMPLICIT.md` | the implicit-diffusion and IMEX design for the HED items: staggered operator, preconditioned Krylov solve, ARK pair |
 | `docs/` | the Documenter site: `make.jl` and the `src/` pages. `docs/src/tutorials/` and `docs/build/` are generated (from `docs/literate/`) and gitignored, so edit `literate/`, never `src/tutorials/` |
 
 Read those for anything about *what* the code does, *where* it runs, or *where it

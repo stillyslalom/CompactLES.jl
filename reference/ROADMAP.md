@@ -516,7 +516,7 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   the round-off floor of its ill-conditioned left-hand side, the same fraction
   of cond(A)·eps as every other operator's, and is recorded as such
   ([the measurement](CALIBRATION_APPENDIX.md#the-decomposed-line-solve-against-serial))
-  (commit TBD).
+  (commit `1723ea3`).
 
 ## P2/P3: high-energy-density physics
 
@@ -528,16 +528,18 @@ DT is the first cold-material path, with C/CH/CD coverage tracked separately in
 H5b. Every integration preserves A7's ideal analytic execution contract.
 
 - [ ] **H1 — Build implicit diffusion infrastructure.**
-  Reuse the distributed banded kernels for ADI or line-relaxation smoothing;
-  compare geometric multigrid and Krylov outer solves. Keep operators and
+  Follow [IMPLICIT.md](IMPLICIT.md): the implicit operator is the conservative
+  staggered compact form, solved matrix-free by a Krylov method preconditioned
+  with a multigrid cycle on the second-order operator, whose line smoother can
+  reuse the distributed tridiagonal kernels. Keep operators and
   communication in core numerics with optional workspace allocated only when used.
   **Gate:** manufactured constant/variable-coefficient heat conduction in every
   supported metric, distributed residual/convergence studies, and freestream
   preservation. Variable coefficients require a factorization-update policy.
 
 - [ ] **H2 — Add compatible IMEX time integration.**
-  Evaluate established IMEX-ARK tableaus before implementing new ones; define a
-  compatible explicit/implicit pair and workspace contract. Accept component
+  ARK4(3)6L[2]SA is the chosen pair and RKL2 super-time-stepping is rejected
+  ([IMPLICIT.md](IMPLICIT.md#the-integrator)); define its workspace contract. Accept component
   contributions to a joint residual and consistent linearization/Jacobian action;
   define coefficient refresh, nonlinear trial invalidation and collective retry.
   Independent physics components must not force sequential split updates.

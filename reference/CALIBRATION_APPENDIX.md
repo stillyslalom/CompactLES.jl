@@ -52,6 +52,7 @@ section that moved it says so in one sentence and the older figure is gone.
 24. [The shared-file write](#the-shared-file-write) (`bench/hdf5xfer.jl`,
     `test/hdf5_tests.jl`)
 25. [Azimuthal mode truncation](#azimuthal-mode-truncation) (`polar_truncation`)
+26. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`)
 
 ## The shock battery
 
@@ -6412,3 +6413,68 @@ projection costs 1.3% of a step at κ = 1 and 2.6% at κ = 2. The truncated runs
 0.18 and 0.22, before the pulse reaches the axis; 40 steps record the rate and the cost but not the
 stability margin, which is left to Stage 3 of [MODE_TRUNCATION.md](MODE_TRUNCATION.md) on a
 converging shock.
+
+## Stiff diffusion
+
+```text
+julia --project=. -t 1 bench/stiffdiffusion.jl
+```
+
+One-dimensional periodic model problems with dense matrices, measured before any implicit
+code exists, for the operator and integrator choices of [IMPLICIT.md](IMPLICIT.md).
+
+### The implicit operator and its preconditioner
+
+`(I − τL)x = b` with κ = 1 + 1e3·exp(−((x − 1/2)/0.05)²), solved by conjugate gradients
+preconditioned with the second-order conservative operator. The wide form is the C6 first
+derivative applied twice, as in the explicit molecular fluxes; the staggered form is the C6
+staggered derivative from nodes to midpoints and back with κ interpolated to the midpoints at
+sixth order. Errors are the truncation errors of each operator on a manufactured field;
+iterations are at a step 1e2, 1e4 and 1e6 times the explicit diffusive limit:
+
+```
+     n     err wide    err stag | iterations wide / staggered at dt/dt_explicit = 1e2, 1e4, 1e6
+   128    7.647e-01   4.256e+00 |   19 /  13     42 /  14     46 /  15
+   256    1.147e-02   6.918e-02 |   21 /  13     53 /  12     76 /  13
+   512    1.785e-04   1.099e-03 |   26 /  13     74 /  10    114 /  10
+  1024    2.973e-06   1.781e-05 |   37 /  12    120 /   8    201 /   8
+```
+
+Both forms converge at sixth order, the staggered one with an error constant six times larger.
+The wide form's count grows with the grid and with the step, because its symbol vanishes at
+the Nyquist mode where the preconditioner's does not; the staggered form's count is flat
+across a ten-thousandfold range in the step and an eightfold range in the grid.
+
+### ARK against RKL2
+
+`T_t + T_x = (κ₀ T^{5/2} T_x)_x` on 128 nodes to t = 0.25 at advective CFL 0.5 and at twice
+as many steps, the diffusion on the staggered operator. ARK is ARK4(3)6L[2]SA with a Picard
+iteration on κ in each implicit stage; STS is Strang splitting with RKL2 half steps around RK4
+advection. Errors are against ARK at sixteen times the steps; `apply` counts applications of
+the diffusion operator per step and `prec` the preconditioner solves, each a V-cycle in 3-D.
+R is the step over the forward-Euler diffusive limit at the peak temperature:
+
+```
+      κ0        R  steps |     ARK err  order  apply   prec |     STS err  apply
+   1e-04      0.1     64 |   3.864e-09    NaN     31     30 |   3.390e-08      6
+   1e-04      0.0    128 |   2.493e-10   3.95     31     30 |   2.120e-09      6
+   1e-03      0.8     64 |   7.671e-09    NaN     41     40 |   5.648e-08      6
+   1e-03      0.4    128 |   4.881e-10   3.97     37     36 |   3.713e-09      6
+   1e-02      8.2     64 |   7.243e-08    NaN     54     53 |   6.545e-07      6
+   1e-02      4.1    128 |   4.872e-09   3.89     46     45 |   9.092e-08      6
+   1e-01     81.9     64 |   6.878e-08    NaN    115    114 |   5.722e-07     19
+   1e-01     40.9    128 |   4.386e-09   3.97     85     84 |   1.475e-07     14
+   1e+00    818.9     64 |   2.180e-10    NaN     71     70 |   9.553e-08     47
+   1e+00    409.5    128 |   2.456e-11   3.15     58     57 |   2.358e-08     35
+   1e+01   8189.2     64 |   1.572e-11    NaN     21     20 |   4.091e-11    139
+   1e+01   4094.6    128 |   1.761e-11  -0.16     18     17 |   4.113e-11     98
+```
+
+ARK is fourth order through R ≈ 80 and 3.15 at R ≈ 800, the reduction expected of stage
+order two. At κ₀ = 10 the profile has relaxed toward uniform and both errors sit near the
+Picard tolerance, so that row measures cost only. At equal steps the split RKL2 is second
+order and from 9 to over 400 times less accurate, the gap widest where the diffusion is
+stiffest while the solution still varies. Its diffusion work grows as √R, from 6 applications
+per step at R ≤ 8 to 139 at R ≈ 8e3, while the implicit count falls once the solution
+smooths; the two cross in operator applications between R ≈ 800 and R ≈ 8e3, and later once
+a V-cycle is costed. A Picard stage converged in every row.

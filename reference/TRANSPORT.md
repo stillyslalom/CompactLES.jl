@@ -272,6 +272,18 @@ EOS, population and transport evidence supports them. The cold-to-warm DT
 prohibitions on arbitrary switches and numerical freezing apply to these models
 as well; physical suppression and numerical flux limiting remain distinct.
 
+The first-principles EOS database of Militzer et al.,
+[Phys. Rev. E 103, 013203 (2021)](https://doi.org/10.1103/PhysRevE.103.013203),
+[open manuscript](https://arxiv.org/abs/2012.07093), is the one open,
+redistributable (CC BY 4.0) source found so far with C, CH, CH2 and C2H3
+tables, alongside H, He, B, N, O and several ablator compounds, with its
+interpolation code in the supplement. It spans roughly 0.5 to 50 g/cm3 and
+10^4 to 10^9 K, so it covers the heated and compressed ablator but not the
+initial solid, and it tabulates CH, not CD; its other compositions are
+reached by linear mixing, which is itself an unvalidated closure here. It is
+a candidate first table for H5's reader and inversion checks, not a
+qualified CD model.
+
 ## Staged execution and gates
 
 1. **H4a coefficient foundation, now.** Implement a standalone
