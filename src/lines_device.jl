@@ -36,8 +36,8 @@
 # failed the bitwise gate at np = 2 while passing under `--check-bounds=yes`.
 # The banded sweep carries the same dependency and compiled correctly by
 # chance. On a GPU backend `@Const` only marks loads read-only, a hint
-# these kernels can do without. reference/julia_aliasscope_bug_report.md
-# has the reproducer.
+# these kernels can do without.
+# reference/bugreports/julia_aliasscope_bug_report.md has the reproducer.
 
 """
     DeviceBackend(ka)

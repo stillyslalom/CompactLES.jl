@@ -574,11 +574,12 @@ shows little else.
 bound outside it throws `UndefVarError`. Wrap script bodies in a function.
 
 **A nondeterministic crash or bitwise failure in the serial suite under Julia
-1.12.7 on Windows may not be yours.** `reference/julia_codegen_bug_report.md`
-diagnoses a concurrent-JIT race: three `EXCEPTION_ACCESS_VIOLATION` signatures
-in the compile path, a crash line that moves between runs, and the `device line
-solves` testset failing a bitwise comparison on a few of forty. Read it before
-bisecting a change against a failure of that shape.
+1.12.7 on Windows may not be yours.**
+`reference/bugreports/julia_codegen_bug_report.md` diagnoses a concurrent-JIT
+race: three `EXCEPTION_ACCESS_VIOLATION` signatures in the compile path, a
+crash line that moves between runs, and the `device line solves` testset
+failing a bitwise comparison on a few of forty. Read it before bisecting a
+change against a failure of that shape.
 
 **No `@Const` in a KernelAbstractions kernel.** On the CPU backend a `@Const`
 argument makes KernelAbstractions wrap the body in `@aliasscope`, which Julia
@@ -586,16 +587,18 @@ argument makes KernelAbstractions wrap the body in `@aliasscope`, which Julia
 (the Thomas sweep) once bounds checks are elided; 1.11 and 1.12 have a related
 form (KernelAbstractions.jl#652). `--check-bounds=yes` hides it, so the serial
 CI job passes while the MPI leg fails. Filed as JuliaLang/julia#63129;
-`reference/julia_aliasscope_bug_report.md` has the reproducer.
+`reference/bugreports/julia_aliasscope_bug_report.md` has the reproducer.
 
 **No short-circuit condition choosing between two uniform values in a device
-body.** On the workstation's RX 6800 XT (gfx1030, Julia 1.11, AMDGPU.jl 2.7),
-`x = (a || b) ? p : q`, with `p` and `q` kernel arguments and `b` varying per
-thread, compiles to a phi the backend holds in a scalar register, so every
-thread receives one of the two values; the KernelAbstractions CPU backend is
-correct, so no CI job sees it. Write `ifelse(a | b, p, q)`, as
-`_delta4_signed_point!` does, and trust `bench/device_solver.jl` on a GPU, not
-the KA-CPU suite, for a body of that shape.
+body.** `x = (a || b) ? p : q`, with `p` and `q` kernel arguments and `b`
+varying per thread, can give every thread `q`: the LLVM 22.1.8 `llc` that
+GPUCompiler runs for every AMD target, gfx942 included, drops the phi while
+structurizing the control flow, under any Julia version. The
+KernelAbstractions CPU backend is correct, so no CI job sees it. Write
+`ifelse(a | b, p, q)`, as `_delta4_signed_point!` does, and trust
+`bench/device_solver.jl` on a GPU, not the KA-CPU suite, for a body of that
+shape; `reference/bugreports/amdgpu_shortcircuit_bug_report.md` has the
+reproducers.
 
 **A run that fails does not stop.** Losing positivity drives the diffusive rate
 in `compute_dt` up until `dt` collapses, and the run then grinds forever at no
