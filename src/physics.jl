@@ -1095,7 +1095,12 @@ increasing and the sign of the residual at each iterate places the root on one
 side of it. The iteration maintains that bracket, starting from
 `NASA9_TEMPERATURE_BOUNDS`, and replaces any Newton step leaving it with the
 geometric mean of the bracket, which halves the exponent range rather than the
-interval and so is the appropriate bisection over twelve decades.
+interval and so is the appropriate bisection over twelve decades. An iterate
+that would leave the temperatures fitted for every species present is placed on
+the edge of that range instead, unless the bracket already places the root
+beyond the edge. Under `extrapolate = :polynomial` a fit can turn cv negative
+outside its range, and an iterate there would end the search short of a root
+that lies inside it.
 
 Success is the residual criterion |f| ≤ rtol·T·cv, equivalently a Newton step
 of at most rtol·T. Writing it through the derivative the iteration already has
@@ -1118,6 +1123,26 @@ depend on call history. A state-based seed preserves the bit-for-bit agreement
 between serial and decomposed calculations tested by the MPI suite.
 """
 @inline function mixture_temperature_status(eos::Nasa9Model, e, Yat::F) where {F}
+    T_ion, status, _ = _nasa9_temperature(eos, e, Yat)
+    return (T_ion, status)
+end
+
+# An iterate beyond [fit_lo, fit_hi] is moved to the edge it crossed, unless the
+# bracket [lo, hi] already places the root beyond that edge. A degree-four fit
+# run past its range can turn cv negative, and an iterate there ends the search
+# without a bracket even when the root lies inside the data. After one
+# evaluation at the edge the bracket holds the edge, so a root that does lie
+# outside is still reached, one iteration later. The edge lies strictly inside
+# the bracket whenever it is returned.
+@inline function _nasa9_fitted_iterate(T_ion, lo, hi, fit_lo, fit_hi)
+    T_ion > fit_hi && lo < fit_hi && return fit_hi
+    T_ion < fit_lo && hi > fit_lo && return fit_lo
+    return T_ion
+end
+
+# The inversion itself, returning the number of Newton iterations as well, which
+# `bench/nasa9_inversion.jl` reads; the public forms drop it after inlining.
+@inline function _nasa9_temperature(eos::Nasa9Model, e, Yat::F) where {F}
     n = length(eos.Rk)
     table = eos.intervals
     # First-order inversion about a fixed reference state. This handles any
@@ -1127,17 +1152,29 @@ between serial and decomposed calculations tested by the MPI suite.
     hi = Tnum(NASA9_TEMPERATURE_BOUNDS[2])
     e0 = zero(Tnum)
     cv0 = zero(Tnum)
+    # The temperatures that the fits of every species carrying mass cover. An
+    # empty intersection leaves the search unrestricted.
+    fit_lo = lo
+    fit_hi = hi
     @inbounds for k in 1:n
         Yk = Yat(k)
         e0 += Yk * eos.e_guess[k]
         cv0 += Yk * eos.cv_guess[k]
+        if Yk != 0
+            fit_lo = max(fit_lo, table[1, k].Tmin)
+            fit_hi = min(fit_hi, table[end, k].Tmax)
+        end
     end
+    fit_lo < fit_hi || (fit_lo = lo; fit_hi = hi)
     T_ion = cv0 > 0 ? clamp(eos.T_guess + (e - e0) / cv0, lo, hi) : eos.T_guess
+    T_ion = _nasa9_fitted_iterate(T_ion, lo, hi, fit_lo, fit_hi)
     rtol = _nasa9_rtol(Tnum)
     linear = _nasa9_linear(eos)
     converged = false
     bracketed = true
+    iterations = 0
     for _ in 1:NASA9_TEMPERATURE_ITERATIONS
+        iterations += 1
         f = -e; cvm = zero(Tnum)
         powers = _nasa9_powers(T_ion)
         @inbounds for k in 1:n
@@ -1173,6 +1210,7 @@ between serial and decomposed calculations tested by the MPI suite.
         lo < hi || (lo = Tnum(NASA9_TEMPERATURE_BOUNDS[1]);
                     hi = Tnum(NASA9_TEMPERATURE_BOUNDS[2]))
         (lo < T_ion < hi) || (T_ion = sqrt(lo) * sqrt(hi))
+        T_ion = _nasa9_fitted_iterate(T_ion, lo, hi, fit_lo, fit_hi)
         # A step below one ulp of the estimate cannot make further progress,
         # which happens once the bracket has collapsed onto a search bound.
         T_ion == T_prev && break
@@ -1190,7 +1228,7 @@ between serial and decomposed calculations tested by the MPI suite.
             break
         end
     end
-    return (T_ion, status)
+    return (T_ion, status, iterations)
 end
 
 @inline function eos_phi(::Nasa9Model, ρ, p, T_ion, cp_mix)

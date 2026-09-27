@@ -3270,8 +3270,9 @@ end
         @test CL.species_enthalpy(poly, 1, Tq) === CL.species_enthalpy(lin, 1, Tq)
     end
     # Outside it, the degree-four fit is not a model of anything: run past
-    # 20000 K it inverts an energy to a temperature half again too large, while
-    # the tangent extension recovers the temperature it was built from. Both
+    # 20000 K its energy is not monotone in T, and the inversion finds another
+    # temperature of the same energy, thousands of kelvin from the one the
+    # energy was formed at, while the tangent extension recovers that one. Both
     # report that the answer came from outside the data.
     e_hot = CL.species_energy(poly, 1, 30000.0)
     Tpoly, spoly = CL.mixture_temperature_status(poly, e_hot, _ -> 1.0)
@@ -3280,9 +3281,22 @@ end
                                                _ -> 1.0)
     @test spoly & CL.TEMPERATURE_OUT_OF_RANGE != 0
     @test slin & CL.TEMPERATURE_OUT_OF_RANGE != 0
-    @test Tpoly > 1.5 * 30000.0
+    @test abs(Tpoly - 30000.0) > 1000
     @test Tlin ≈ 30000.0 rtol = 1e-12
     @test CL.species_cp(lin, 1, 40000.0) === CL.species_cp(lin, 1, 20000.0)
+    # A hot state inside the range recovers under `:polynomial` as well. Its seed lands
+    # past 20000 K, where the polynomial CO2 fit has a negative cv; an iterate
+    # there would end the search with no bracket and a temperature twice the
+    # root's. The iterate is held on the edge of the fitted range instead.
+    for T in (Float64, Float32)
+        co2 = Nasa9Mixture(T, ["CO2"])
+        for Tref in T.((13000, 15000, 17500, 19900))
+            e = CL.species_energy(co2, 1, Tref)
+            Trec, status = CL.mixture_temperature_status(co2, e, _ -> one(T))
+            @test status == CL.TEMPERATURE_OK
+            @test Trec ≈ Tref rtol = 1e-4
+        end
+    end
 
     # The inversion and its status run per point inside the primitives pass, so
     # neither the status nor the bracket may allocate. Measured on the pass
