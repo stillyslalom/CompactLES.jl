@@ -1,6 +1,6 @@
 # Operator and integrator choices for implicit diffusion (ROADMAP H1/H2),
-# measured on 1-D periodic model problems with dense matrices, before any
-# solver code exists. reference/IMPLICIT.md is the design this informs.
+# measured on 1-D model problems with dense matrices, periodic but for the
+# wall part. reference/IMPLICIT.md is the design this informs.
 #
 # Part `spectra`: the implicit system (I - τL)x = b for a variable
 # conductivity κ = 1 + 1e3·exp(-((x - 1/2)/0.05)²), solved by conjugate
@@ -29,15 +29,33 @@
 # The profile relaxes toward uniform within t = 0.25 once κ0 ≥ 10, so the
 # stiff rows measure cost, not accuracy.
 #
-# Usage (seconds for spectra, a few minutes for imex; single-threaded):
-#   julia --project=. -t 1 bench/stiffdiffusion.jl [parts=spectra,imex]
+# Part `walls`: the staggered operator L = G K D_s on a closed line x ∈ [0, 1]
+# with nodes on the walls, under two wall treatments:
+#   rows    one-sided explicit closure rows on K points: D_s at the first
+#           midpoint, G at the first two nodes with the wall flux as data,
+#           and the interpolation at the first two midpoints (sixth order)
+#   mirror  the node-centred mirror of src/staggered.jl: T even through the
+#           wall node (the adiabatic wall), midpoint data odd, which is the
+#           periodic operator on the doubled line folded back
+# It prints the max-norm truncation error of L, and of D_s and G for the rows;
+# the relative asymmetry of W_n L with the trapezoidal W_n; the conservation
+# defect |Σ W_n L T - (F(1) - F(0))|; and the largest real part of an
+# eigenvalue of the zero-flux operator. The rows run on exp(sin 3x) with
+# κ = 1 + sin(2x)/2; the mirror on a field and coefficient of its own parity,
+# then on T'(0) = 0 with T'''(0) ≠ 0, and on κ'(0) ≠ 0: the price of the
+# mirror when the data are not of its parity.
+#
+# Usage (seconds for spectra and walls, a few minutes for imex;
+# single-threaded):
+#   julia --project=. -t 1 bench/stiffdiffusion.jl [parts=spectra,imex,walls]
 #       [n=128,256,512,1024] [imex_n=128] [kappa0=1e-4,1e-3,1e-2,1e-1,1,10]
-#       [refine=16]
+#       [refine=16] [wall_n=25,49,97,193]
 
 using CompactLES, LinearAlgebra, Printf
 
-const OPT = CompactLES.script_args(ARGS, (parts = "spectra,imex", n = "128,256,512,1024",
-    imex_n = 128, kappa0 = "1e-4,1e-3,1e-2,1e-1,1,10", refine = 16))
+const OPT = CompactLES.script_args(ARGS, (parts = "spectra,imex,walls",
+    n = "128,256,512,1024", imex_n = 128, kappa0 = "1e-4,1e-3,1e-2,1e-1,1,10",
+    refine = 16, wall_n = "25,49,97,193"))
 
 circulant(n, taps) = (M = zeros(n, n);
     for i in 1:n, (o, v) in taps; M[i, mod1(i + o, n)] += v; end; M)
@@ -283,10 +301,128 @@ function imex(n, κ0s, refine)
     end
 end
 
+# Node i + 1/2 from node i: the midpoint derivative mid → node and the
+# sixth-order interpolation, periodic.
+staggered_back(n, h) = circulant(n, [(0, 1.0), (-1, 9/62), (1, 9/62)]) \
+    circulant(n, [(0, 63/62/h), (-1, -63/62/h), (1, 17/62/3h), (-2, -17/62/3h)])
+interpolation6(n) = circulant(n, [(0, 150/256), (1, 150/256), (-1, -25/256),
+                                  (2, -25/256), (-2, 3/256), (3, 3/256)])
+
+# Explicit weights on the points `pts` (in units of h) for the m-th derivative
+# at `x`, exact to degree length(pts) - 1, solved in rationals.
+function onesided(pts, x, m)
+    K = length(pts)
+    M = [Rational{BigInt}(p)^k for k in 0:K-1, p in pts]
+    r = [k < m ? big(0) // 1 :
+         factorial(big(k)) // factorial(big(k - m)) * Rational{BigInt}(x)^(k - m)
+         for k in 0:K-1]
+    Float64.(M \ r)
+end
+
+# D_s (mids × nodes), G (nodes × [wall, mids, wall]) and the interpolation on
+# N nodes of a closed line, the ends closed by one-sided rows on K points.
+function closure_rows(N, K)
+    h = 1 / (N - 1); M = N - 1
+    P = Matrix(1.0I, M, M); Q = zeros(M, N)
+    for j in 2:M-1
+        P[j, j-1] = P[j, j+1] = 9/62
+        Q[j, j-1:j+2] .= [-17/186, -63/62, 63/62, 17/186]
+    end
+    c = onesided(0:K-1, 1//2, 1)
+    Q[1, 1:K] .= c; Q[M, N:-1:N-K+1] .= -c
+    Pn = Matrix(1.0I, N, N); Qn = zeros(N, M + 2)
+    for i in 3:N-2
+        Pn[i, i-1] = Pn[i, i+1] = 9/62
+        Qn[i, i-1:i+2] .= [-17/186, -63/62, 63/62, 17/186]
+    end
+    pts = vcat(0//1, [j - 1//2 for j in 1:K-1])
+    for (r, x) in ((1, 0), (2, 1))
+        w = onesided(pts, x, 1)
+        Qn[r, 1:K] .= w; Qn[N+1-r, M+2:-1:M+3-K] .= -w
+    end
+    I6 = zeros(M, N)
+    for j in 3:M-2
+        I6[j, j-2:j+3] .= [3, -25, 150, 150, -25, 3] ./ 256
+    end
+    for r in 1:2
+        w = onesided(0:5, r - 1//2, 0)
+        I6[r, 1:6] .= w; I6[M+1-r, N:-1:N-5] .= w
+    end
+    (P \ Q) ./ h, (Pn \ Qn) ./ h, I6
+end
+
+# The node-centred mirror: the periodic operators on the doubled line of
+# 2(N - 1) nodes, restricted to T even through both walls.
+function mirror_operator(N, κ)
+    h = 1 / (N - 1); n2 = 2(N - 1)
+    E = zeros(n2, N)
+    for i in 1:n2
+        E[i, i <= N ? i : n2 + 2 - i] = 1
+    end
+    L = staggered_back(n2, h) * Diagonal(interpolation6(n2) * (E * κ)) * staggered_d1(n2, h)
+    return (L * E)[1:N, :]
+end
+
+function wall_properties(L, LT, h, flux_jump)
+    N = size(L, 1)
+    Wn = fill(h, N); Wn[1] = Wn[end] = h / 2
+    WL = Diagonal(Wn) * L
+    norm(WL - WL') / norm(WL), abs(sum(Wn .* LT) - flux_jump), maximum(real.(eigvals(L)))
+end
+
+function walls(Ns)
+    println("== walls: L = G K D_s on [0, 1], nodes on the walls")
+    @printf("%-14s %5s  %9s %9s %9s | %9s %9s %9s\n", "", "N", "err D_s", "err G",
+            "err L", "asym W L", "cons", "max Re λ")
+    T(x) = exp(sin(3x)); dT(x) = 3cos(3x) * T(x)
+    d2T(x) = (9cos(3x)^2 - 9sin(3x)) * T(x)
+    κf(x) = 1 + sin(2x) / 2; dκ(x) = cos(2x)
+    F(x) = κf(x) * dT(x); dF(x) = dκ(x) * dT(x) + κf(x) * d2T(x)
+    for K in (4, 5)
+        for N in Ns
+            h = 1 / (N - 1); x = collect(0:N-1) .* h; y = x[1:end-1] .+ h / 2
+            Ds, Gs, I6 = closure_rows(N, K)
+            LT = Gs * vcat(F(0.0), (I6 * κf.(x)) .* (Ds * T.(x)), F(1.0))
+            L0 = Gs[:, 2:end-1] * Diagonal(I6 * κf.(x)) * Ds
+            asym, cons, λ = wall_properties(L0, LT, h, F(1.0) - F(0.0))
+            @printf("%-14s %5d  %9.2e %9.2e %9.2e | %9.2e %9.2e %9.1e\n", "rows K = $K", N,
+                    maximum(abs.(Ds * T.(x) .- dT.(y))),
+                    maximum(abs.(Gs * vcat(F(0.0), F.(y), F(1.0)) .- dF.(x))),
+                    maximum(abs.(LT .- dF.(x))), asym, cons, λ)
+        end
+    end
+    # A field of the mirror's parity, and one with T'(0) = 0 but T'''(0) ≠ 0.
+    cases = (("mirror, even",
+              x -> cos(2π * x) + 0.3cos(3π * x), x -> 1 + 0.5cos(π * x),
+              x -> -2π * sin(2π * x) - 0.9π * sin(3π * x),
+              x -> -(2π)^2 * cos(2π * x) - 2.7π^2 * cos(3π * x), x -> -0.5π * sin(π * x)),
+             ("mirror, T'''",
+              x -> cos(π * x) + x^3 * (1 - x)^3, x -> 1 + 0.5cos(π * x),
+              x -> -π * sin(π * x) + 3x^2 * (1 - x)^2 * (1 - 2x),
+              x -> -π^2 * cos(π * x) + 6x * (1 - x) * (1 - 5x + 5x^2),
+              x -> -0.5π * sin(π * x)),
+             ("mirror, κ'",
+              x -> cos(2π * x) + 0.3cos(3π * x), x -> 1 + x / 2,
+              x -> -2π * sin(2π * x) - 0.9π * sin(3π * x),
+              x -> -(2π)^2 * cos(2π * x) - 2.7π^2 * cos(3π * x), x -> 0.5))
+    for (name, Tc, κc, dTc, d2Tc, dκc) in cases
+        for N in Ns
+            h = 1 / (N - 1); x = collect(0:N-1) .* h
+            L = mirror_operator(N, κc.(x))
+            LT = L * Tc.(x)
+            exact = dκc.(x) .* dTc.(x) .+ κc.(x) .* d2Tc.(x)
+            asym, cons, λ = wall_properties(L, LT, h, 0.0)
+            @printf("%-14s %5d  %9s %9s %9.2e | %9.2e %9.2e %9.1e\n", name, N, "", "",
+                    maximum(abs.(LT .- exact)), asym, cons, λ)
+        end
+    end
+end
+
 function main()
     parts = split(OPT.parts, ',')
     "spectra" in parts && spectra(parse.(Int, split(OPT.n, ',')))
     "imex" in parts && imex(OPT.imex_n, parse.(Float64, split(OPT.kappa0, ',')), OPT.refine)
+    "walls" in parts && walls(parse.(Int, split(OPT.wall_n, ',')))
 end
 
 main()

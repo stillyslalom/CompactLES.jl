@@ -28,6 +28,10 @@
 #      own pointwise order, 3/4/5/7 for :cascade3/:cascade4/C6 and C8
 #      :brady_livescu, which the smooth-field slopes of item 2 sit above by
 #      the favorable phase of exp(sin(3x)).
+#   4b. Staggered operators — the implicit diffusion operator's derivatives
+#      between nodes and midpoints, the midpoint interpolation and their
+#      composition, periodic and under the wall mirror on fields of its
+#      parity: all six, since the mirror plans no closure row.
 #   5. Smooth evolution — the final-time solution error of the wall window,
 #      or of the patch/level interface window, on cases with a reference
 #      free of closure error (test/smooth_cases.jl). These are the orders a
@@ -61,6 +65,8 @@
 #   polynomial rows: C6 :neutral3 3.00 | :cascade3 3.00 | :cascade4 4.00 |
 #   C6 :brady_livescu 5.00 | C8 :neutral3 3.00 | C8 :brady_livescu 7.00 |
 #   C10 :neutral3 3.00
+#   staggered operators: periodic D_s 6.04 | G 6.07 | interpolation 5.97 |
+#   L 6.06 | wall mirror D_s 6.00 | G 6.02 | interpolation 5.99 | L 6.02
 #   wall evolution (window max norm, t = 0.4): inviscid C6 4.01 | inviscid C6
 #   :cascade3 3.93 | cascade filter 1.94 | onesided filter 3.90 |
 #   C6 :brady_livescu 5.73 | viscous no-slip C6 4.00 | viscous slip C6 4.00 |
@@ -87,7 +93,7 @@
 # the flux divergence at an interface end selects the cascade rows
 # (`interface_divergence_closures`) or the source scheme's.
 #
-# Those fifty-five numbers are also passed to each study as `recorded` and
+# Those sixty-three numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -536,6 +542,90 @@ truncation_study("C8 :brady_livescu rows, d/dx x^8", (17, 33, 65, 129),
                  lele_d1_8(closures=:brady_livescu), 8; expect=7.0, tol=0.5, recorded=7.00)
 truncation_study("C10 :neutral3 rows, d/dx x^4", (17, 33, 65, 129), lele_d1_10(), 4;
                  expect=3.0, tol=0.5, recorded=3.00)
+
+# ---------------------------------------------------------------------------
+# The staggered operators of the implicit diffusion operator
+# (src/staggered.jl): D_s from nodes to midpoints, G back to nodes, the
+# midpoint interpolation of the coefficient, and their composition
+# L = G K D_s against (κ T')'. Each is measured on a line of N nodes along x,
+# periodic, and closed with the wall mirror on fields of its parity (T and κ
+# even through both walls, the flux odd), where the interior rows reach the
+# wall and the order is the interior's.
+
+function staggered_errors(N, periodic, which)
+    decomp = CL.Decomp((N, 1, 1), (periodic, false, false))
+    h = periodic ? 1 / N : 1 / (N - 1)
+    op = CL.StaggeredDiffusion(decomp, 1, h; parity=1)
+    k1, k2 = periodic ? (2π, 6π) : (2π, 3π)
+    c1, c2 = periodic ? (sin, cos) : (cos, cos)
+    T(x) = c1(k1 * x) + 0.2c2(k2 * x)
+    dT(x) = periodic ? k1 * cos(k1 * x) - 0.2k2 * sin(k2 * x) :
+                       -k1 * sin(k1 * x) - 0.2k2 * sin(k2 * x)
+    d2T(x) = -k1^2 * c1(k1 * x) - 0.2k2^2 * c2(k2 * x)
+    κ(x) = periodic ? 1 + 0.5sin(2π * x) : 1 + 0.5cos(π * x)
+    dκ(x) = periodic ? π * cos(2π * x) : -0.5π * sin(π * x)
+    pad = decomp.n_halo_d[1]
+    load!(f, fn, shift) = (for i in 1:N; f[i+pad, 1, 1] = fn((i - 1) * h + shift); end; f)
+    Tf = load!(CL.field(decomp), T, 0.0)
+    κf = load!(CL.field(decomp), κ, 0.0)
+    out = CL.field(decomp)
+    nmid = periodic ? N : N - 1
+    if which === :to_mid
+        CL.exchange_dim!(Tf, decomp, 1)
+        CL.apply_along!(out, op.to_mid, Tf, decomp)
+        fn, npts, shift = dT, nmid, h / 2
+    elseif which === :interpolate
+        CL.exchange_dim!(κf, decomp, 1)
+        CL.apply_along!(out, op.interpolate, κf, decomp)
+        fn, npts, shift = κ, nmid, h / 2
+    elseif which === :to_node
+        g = load!(CL.field(decomp), x -> κ(x) * dT(x), h / 2)
+        CL.exchange_dim!(g, decomp, 1)
+        CL.apply_along!(out, op.to_node, g, decomp)
+        fn, npts, shift = x -> dκ(x) * dT(x) + κ(x) * d2T(x), N, 0.0
+    else
+        CL.staggered_diffusion!(out, op, Tf, κf, decomp)
+        fn, npts, shift = x -> dκ(x) * dT(x) + κ(x) * d2T(x), N, 0.0
+    end
+    e = [out[i+pad, 1, 1] - fn((i - 1) * h + shift) for i in 1:npts]
+    return h, maximum(abs, e), sqrt(sum(abs2, e) / npts)
+end
+
+function staggered_study(name, Ns, periodic, which; expect, tol, recorded)
+    t0 = time(); c0 = compile_ns()
+    hs = Float64[]; errs = Float64[]; errs2 = Float64[]
+    for N in Ns
+        h, e, e2 = staggered_errors(N, periodic, which)
+        push!(hs, h); push!(errs, e); push!(errs2, e2)
+    end
+    p = observed_order(hs, errs)
+    @printf("%-38s  ", name)
+    for (N, e) in zip(Ns, errs)
+        @printf("N=%-4d %.3e  ", N, e)
+    end
+    @printf("order ≈ %.2f  (L2 %.2f)\n", p, observed_order(hs, errs2))
+    push!(PHASE_LOG, (name, time() - t0, (compile_ns() - c0) / 1e9))
+    _guard(name, p, expect, tol, recorded)
+    p
+end
+
+println("\n=== staggered operators (implicit diffusion) ===")
+staggered_study("staggered D_s, periodic", (16, 32, 64), true, :to_mid;
+                expect=6.0, tol=0.5, recorded=6.04)
+staggered_study("staggered G, periodic", (16, 32, 64), true, :to_node;
+                expect=6.0, tol=0.5, recorded=6.07)
+staggered_study("staggered interpolation, periodic", (16, 32, 64), true, :interpolate;
+                expect=6.0, tol=0.5, recorded=5.97)
+staggered_study("staggered L = G K D_s, periodic", (16, 32, 64), true, :diffusion;
+                expect=6.0, tol=0.5, recorded=6.06)
+staggered_study("staggered D_s, wall mirror", (17, 33, 65), false, :to_mid;
+                expect=6.0, tol=0.5, recorded=6.00)
+staggered_study("staggered G, wall mirror", (17, 33, 65), false, :to_node;
+                expect=6.0, tol=0.5, recorded=6.02)
+staggered_study("staggered interpolation, wall mirror", (17, 33, 65), false, :interpolate;
+                expect=6.0, tol=0.5, recorded=5.99)
+staggered_study("staggered L = G K D_s, wall mirror", (17, 33, 65), false, :diffusion;
+                expect=6.0, tol=0.5, recorded=6.02)
 
 println("\n=== smooth evolution: wall window, t = 0.4 ===")
 evolution_study("inviscid wall, C6, unfiltered", WALL_NS,

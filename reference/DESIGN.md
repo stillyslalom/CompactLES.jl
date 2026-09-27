@@ -97,6 +97,7 @@ validation cases are discussed, and never a viscosity.
 | `src/boundary.jl`         | `BoundaryCondition` types, wall enforcement, `apply_bcs!` |
 | `src/operators.jl`        | `DirPlan`: bind a scheme to a dimension; line fill, distributed solve, scatter |
 | `src/operators_banded.jl` | `BandPlan`: the banded counterpart |
+| `src/staggered.jl`        | `StaggeredPlan`: the staggered compact derivatives between nodes and midpoints and the midpoint interpolation, with the wall mirror; `StaggeredDiffusion`, the implicit diffusion operator of [IMPLICIT.md](IMPLICIT.md) |
 | `src/lines_device.jl`     | `DevicePlan`: the device mirror of a plan, one thread per line, reduced interface stage on the host |
 | `src/transfer.jl`         | AMR level-transfer operators: the invertible 3:1 compact filter pair and its conditioning |
 | `src/metric.jl`           | Cartesian/cylindrical/spherical metrics, stretch mappings, curvature corrections, momentum sources, the discrete geometric conservation law (GCL) |

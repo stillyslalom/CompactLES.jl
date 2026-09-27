@@ -142,7 +142,8 @@ jobs:
           using MPI, Printf
           eight = join(("periodic C6", "pentadiagonal C10", "closed C6",
                         "device line solves", "tiled refinement",
-                        "AMR transfer pair", "halo consistency",
+                        "AMR transfer pair", "staggered operators",
+                        "halo consistency",
                         "off-rank folds", "mode truncation", "freestream",
                         "no-slip wall flux",
                         "slip wall flux", "symmetry plane", "NSCBC inflow",

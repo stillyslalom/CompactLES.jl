@@ -3381,6 +3381,52 @@ function test_mode_truncation()
     end
 end
 
+# ---------------------------------------------------------------------------
+# Staggered operators of the implicit diffusion operator (src/staggered.jl),
+# split along each dimension in turn, periodic and closed under both wall
+# parities: the midpoint flux κ D_s T and L = G K D_s T against the same
+# operators on an undivided copy of the grid on each rank. The derivatives'
+# reduced-interface solve, the midpoint halo exchange and the wall mirror on
+# the edge ranks are all on the path, and the undivided solve reproduces the
+# distributed one to round-off, so an interface bug is an O(1) difference.
+# ---------------------------------------------------------------------------
+function test_staggered()
+    section("staggered operators: decomposed against undivided")
+    for ax in 1:3, (periodic, parity) in ((true, 1), (false, 1), (false, -1))
+        ng = ntuple(d -> d == ax ? SPLITN : 6, 3)
+        pers = ntuple(d -> d == ax ? periodic : true, 3)
+        h = periodic ? 1 / SPLITN : 1 / (SPLITN - 1)
+        results = map((Decomp(ng, pers; dims=splitdims(ax)),
+                       Decomp(ng, pers; comm=MPI.COMM_SELF))) do decomp
+            op = CL.StaggeredDiffusion(decomp, ax, h; parity=parity)
+            T = CL.field(decomp); κ = CL.field(decomp); out = CL.field(decomp)
+            pad = decomp.n_halo_d; off = decomp.offset
+            for I in CartesianIndices(decomp.n_local)
+                g = Tuple(I) .+ off
+                x = (g[ax] - 1) * h
+                other = 1 + 0.1cos(0.9g[mod1(ax + 1, 3)]) * sin(0.4g[mod1(ax + 2, 3)])
+                J = I + CartesianIndex(pad)
+                T[J] = (cos(2π * x) + 0.4sin(5x)) * other
+                κ[J] = 1 + 0.5cos(π * x) + 0.2x
+            end
+            CL.staggered_diffusion!(out, op, T, κ, decomp)
+            (decomp, op.flux, out)
+        end
+        (decomp, flux, out), (_, flux_ref, out_ref) = results
+        diff = (0.0, 0.0); scale = (0.0, 0.0)
+        pad = decomp.n_halo_d; off = decomp.offset
+        for I in CartesianIndices(decomp.n_local)
+            J = I + CartesianIndex(pad)
+            K = CartesianIndex(Tuple(I) .+ off) + CartesianIndex(pad)
+            diff = max.(diff, (abs(flux[J] - flux_ref[K]), abs(out[J] - out_ref[K])))
+            scale = max.(scale, (abs(flux_ref[K]), abs(out_ref[K])))
+        end
+        label = "dim $ax $(periodic ? "periodic" : "closed, parity $parity")"
+        check("κ D_s T, $label", gmax(diff[1]) / gmax(scale[1]), 1e-12)
+        check("G K D_s T, $label", gmax(diff[2]) / gmax(scale[2]), 1e-12)
+    end
+end
+
 include("wall_flux_mpi.jl")
 include("conservation_mpi.jl")
 
@@ -3397,6 +3443,7 @@ const SUITE = (
     ("tiled refinement", test_tiled_level),
     ("covered masks", test_covered_masks),
     ("AMR transfer pair", test_transfer_pair),
+    ("staggered operators", test_staggered),
     ("halo consistency", test_halo_consistency),
     ("off-rank folds", test_offrank_folds),
     ("mode truncation", test_mode_truncation),

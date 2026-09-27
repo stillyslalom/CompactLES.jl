@@ -88,6 +88,19 @@ and it costs the same: one tridiagonal solve per direction per derivative.
 Preconditioned by `L₂` its conjugate-gradient count is flat in both the grid
 and the step over the whole design range; the wide form's is not.
 
+At a closed wall the operators do not use closure rows. Each wall node is a
+mirror plane: the temperature is even through it (the adiabatic wall) or,
+written on `T − T_wall`, odd (the isothermal wall), the flux has the opposite
+parity, and the interior rows run to the wall on the mirrored data. The
+adjoint identity of the periodic pair then holds on the closed line with
+trapezoidal node weights, so the discrete operator stays symmetric, negative
+semidefinite and conservative. One-sided closure rows keep a second- or third-order
+truncation but make the operator nonsymmetric and leave a conservation
+defect, which rules out conjugate gradients; the mirror is exact to the
+interior order on data of its parity and first order at the wall node on
+data that are not. The measurements are in the appendix under
+[stiff diffusion](CALIBRATION_APPENDIX.md#wall-treatment-of-the-staggered-operator).
+
 The staggered form enters only the implicit part. The explicit molecular
 fluxes keep `D κ D`, so no current baseline moves. A conduction channel moved
 into the implicit part changes discretization with it, which is a numerics
@@ -168,11 +181,18 @@ one residual and are not updated in sequence, as H2 requires.
 
 ## Stages
 
-1. **Staggered operator.** A staggered derivative plan (nodes to midpoints
-   and back) with periodic, wall and fold closures, and midpoint
-   interpolation of the coefficient. Gate: the convergence rows of the
-   operator in every metric, and an explicit conduction run on it against
-   the wide form.
+1. **Staggered operator.** `src/staggered.jl`: the plans from nodes to
+   midpoints and back and the midpoint interpolation of the coefficient,
+   periodic and with the wall mirror, on the distributed tridiagonal solve
+   of `plan_direction`; not reached from the right-hand side. Delivered on
+   uniform Cartesian lines, with sixth-order convergence rows, the adjoint
+   and symmetry identities in the serial suite, the decomposed solve against
+   the undivided one in the MPI suite, and an explicit conduction run
+   against the wide form (`bench/staggeredconduction.jl`). Remaining: the
+   half-offset folds of the symmetry plane and the coordinate
+   singularities, where a midpoint lies on the plane, and the curvilinear
+   metric, which puts the face area over the spacing into `K` at the
+   midpoints and `inv_J` on the divergence.
 2. **Implicit solve on one patch.** Matrix-free stage operator, `L₂`
    assembly on the patch metric, preconditioned conjugate gradients, and a
    multigrid preconditioner. Gate: manufactured constant- and
@@ -194,8 +214,11 @@ Spitzer–Härm coefficient with its flux limiter, and H6 the radiation energy.
 
 ## Open questions
 
-- Staggered closures at walls and folds: Lele's one-sided staggered rows
-  exist, and their neutrality and conservation at a wall are unmeasured.
+- Walls whose data are not of the mirror's parity: an isothermal wall with
+  κ(T), where the odd mirror is inexact in `T''`, and a prescribed nonzero
+  wall flux. A summation-by-parts closure with diagonal norms and one
+  modified row did not reach first-degree accuracy in a brief numerical
+  search; wider closures and a non-diagonal node norm remain untried.
 - A flux limiter makes the coefficient depend on the gradient, so the
   Picard iteration may stall; JFNK with the limited flux is the fallback.
 - The iteration counts are measured in 1-D with an exact preconditioner

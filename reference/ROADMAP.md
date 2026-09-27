@@ -527,7 +527,9 @@ H5b. Every integration preserves A7's ideal analytic execution contract.
   Follow [IMPLICIT.md](IMPLICIT.md): the implicit operator is the conservative
   staggered compact form, solved matrix-free by a Krylov method preconditioned
   with a multigrid cycle on the second-order operator, whose line smoother can
-  reuse the distributed tridiagonal kernels. Keep operators and
+  reuse the distributed tridiagonal kernels. The staggered operator of stage 1
+  is in `src/staggered.jl`, periodic and with the wall mirror on Cartesian
+  lines; its folds and the curvilinear metric remain. Keep operators and
   communication in core numerics with optional workspace allocated only when used.
   **Gate:** manufactured constant/variable-coefficient heat conduction in every
   supported metric, distributed residual/convergence studies, and freestream

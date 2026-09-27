@@ -559,6 +559,90 @@ end
     @test e < 1e-11
 end
 
+@testset "staggered operators: adjoint pair, telescoping, symmetry, sweep paths" begin
+    # Dense matrices of the three staggered operators on one line of N nodes,
+    # columns from unit vectors. The midpoint rows and columns are the first
+    # N - 1 on a closed line, where slot N carries no midpoint.
+    function staggered_matrices(N, periodic, parity)
+        decomp = Decomp((N, 1, 1), (periodic, false, false))
+        h = periodic ? 1 / N : 1 / (N - 1)
+        plans = (CL.plan_staggered(decomp, :to_mid, 1, h; parity=parity),
+                 CL.plan_staggered(decomp, :to_node, 1, h; parity=-parity),
+                 CL.plan_staggered(decomp, :interpolate, 1, h; parity=1))
+        f = field(decomp); out = field(decomp); pad = decomp.n_halo
+        mats = map(plans) do plan
+            M = zeros(N, N)
+            for j in 1:N
+                f .= 0; f[j+pad, 1, 1] = 1
+                CL.exchange_dim!(f, decomp, 1)
+                out .= NaN
+                apply_along!(out, plan, f, decomp)
+                M[:, j] = out[pad+1:pad+N, 1, 1]
+            end
+            M
+        end
+        return mats..., h
+    end
+    for N in (16, 17)
+        D, G, Ip, h = staggered_matrices(N, true, 1)
+        # Periodic: G is exactly the negative transpose of D, so L = -Dᵀ K D.
+        @test norm(G + D') < 1e-12 * norm(D)
+        @test norm(D * ones(N)) < 1e-12 * norm(D)
+        @test norm(Ip * ones(N) .- 1) < 1e-14
+        κ = 1 .+ 0.5 .* sin.(2π .* (0:N-1) ./ N)
+        L = G * Diagonal(Ip * κ) * D
+        @test norm(L - L') < 1e-12 * norm(L)
+        @test maximum(eigvals(Symmetric((L + L') / 2))) < 1e-10 * norm(L)
+        @test abs(sum(L * sin.(1:N))) < 1e-11 * norm(L)
+    end
+    for N in (16, 17), parity in (1, -1)
+        D, G, Ip, h = staggered_matrices(N, false, parity)
+        M = N - 1
+        # The slot of midpoint N is zero whatever the input.
+        @test all(iszero, D[N, :]) && all(iszero, Ip[N, :])
+        D = D[1:M, :]; G = G[:, 1:M]; Ip = Ip[1:M, :]
+        # Under the wall mirror the pair stays adjoint in the trapezoidal node
+        # weights: W_n G = -Dᵀ W_m with W_m = h, on the nodes the parity
+        # leaves free (all of them for the even temperature of an adiabatic
+        # wall; the interior for the odd one of an isothermal wall).
+        Wn = fill(h, N); Wn[1] = Wn[N] = h / 2
+        free = parity == 1 ? (1:N) : (2:N-1)
+        @test norm((Diagonal(Wn) * G .+ h .* D')[free, :]) < 1e-12 * norm(D) * h
+        @test norm(Ip * ones(N) .- 1) < 1e-14
+        κ = 1 .+ 0.5 .* cos.(π .* (0:N-1) ./ (N - 1))
+        WL = (Diagonal(Wn) * G * Diagonal(Ip * κ) * D)[free, free]
+        @test norm(WL - WL') < 1e-12 * norm(WL)
+        @test maximum(eigvals(Symmetric((WL + WL') / 2))) < 1e-10 * norm(WL)
+        if parity == 1
+            # The even mirror is the adiabatic wall: a constant carries no
+            # flux, and Σ W_n L T telescopes to the zero wall flux. (The odd
+            # mirror passes flux through the wall and conserves nothing.)
+            @test norm(D * ones(N)) < 1e-12 * norm(D)
+            @test abs(sum(WL * sin.(1:N))) < 1e-11 * norm(WL)
+        end
+    end
+    # The transposed y and z sweeps against the x sweep on permuted data, on a
+    # decomposition with every dimension active.
+    for periodic in (true, false), op in (:to_mid, :to_node, :interpolate)
+        decomp = Decomp((12, 12, 12), (periodic, periodic, periodic))
+        h = 1 / 12
+        f = field(decomp); pad = decomp.n_halo
+        for k in 1:12, j in 1:12, i in 1:12
+            f[i+pad, j+pad, k+pad] = sin(0.7i + 0.2) * cos(0.3j) + 0.1k
+        end
+        CL.exchange_halos!(f, decomp)
+        outs = map(1:3) do d
+            out = field(decomp)
+            g = permutedims(f, d == 1 ? (1, 2, 3) : d == 2 ? (2, 1, 3) : (3, 2, 1))
+            apply_along!(out, CL.plan_staggered(decomp, op, d, h), g, decomp)
+            permutedims(out, d == 1 ? (1, 2, 3) : d == 2 ? (2, 1, 3) : (3, 2, 1))
+        end
+        inner = ntuple(_ -> pad+1:pad+12, 3)
+        @test maximum(abs.(outs[2][inner...] .- outs[1][inner...])) < 1e-12
+        @test maximum(abs.(outs[3][inner...] .- outs[1][inner...])) < 1e-12
+    end
+end
+
 @testset "closed-domain closures: polynomial exactness (deg ≤ 3)" begin
     solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),

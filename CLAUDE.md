@@ -136,7 +136,7 @@ julia --project=. test/convergence.jl
 julia --project=. test/validation.jl
 "$MPIEXEC" -n 2 julia --project=. -t 1 test/mpi_tests.jl
 "$MPIEXEC" -n 8 julia --project=. -t 1 test/mpi_tests.jl \
-  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,AMR transfer pair,halo consistency,off-rank folds,mode truncation,freestream,no-slip wall flux,slip wall flux,symmetry plane,NSCBC inflow,positivity floor,slicing,composite budgets,composite face,deep regrid subsets"
+  "phases=periodic C6,pentadiagonal C10,closed C6,device line solves,tiled refinement,AMR transfer pair,staggered operators,halo consistency,off-rank folds,mode truncation,freestream,no-slip wall flux,slip wall flux,symmetry plane,NSCBC inflow,positivity floor,slicing,composite budgets,composite face,deep regrid subsets"
 ```
 
 The 8-rank selection matches `.github/workflows/CI.yml`; keep them aligned.
@@ -214,7 +214,9 @@ on an even and an odd field, with a filter pass between planes at 7.88,
 cylindrical axis odd 3.76 / even 2.99, resolved-θ 3.76, spherical origin
 2.97, closure rows on a polynomial 3.00 / 3.00 / 4.00 / 5.00 / 3.00 / 7.00 /
 3.00 (C6 `:neutral3`, `:cascade3`, `:cascade4`, `:brady_livescu`, then C8
-`:neutral3` and `:brady_livescu`, then C10 `:neutral3`), wall
+`:neutral3` and `:brady_livescu`, then C10 `:neutral3`), staggered
+operators 6.04 / 6.07 / 5.97 / 6.06 periodic (D_s, G, interpolation, L) and
+6.00 / 6.02 / 5.99 / 6.02 under the wall mirror, wall
 evolution 4.01 (`:cascade3` 3.93, cascade filter 1.94, one-sided filter
 3.90, `:brady_livescu` 5.73, viscous no-slip 4.00, viscous slip 4.00,
 shear mode 4.67),

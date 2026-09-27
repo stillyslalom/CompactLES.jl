@@ -52,7 +52,7 @@ section that moved it says so in one sentence and the older figure is gone.
 24. [The shared-file write](#the-shared-file-write) (`bench/hdf5xfer.jl`,
     `test/hdf5_tests.jl`)
 25. [Azimuthal mode truncation](#azimuthal-mode-truncation) (`polar_truncation`)
-26. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`)
+26. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`, `bench/staggeredconduction.jl`)
 
 ## The shock battery
 
@@ -6491,8 +6491,9 @@ converging shock.
 julia --project=. -t 1 bench/stiffdiffusion.jl
 ```
 
-One-dimensional periodic model problems with dense matrices, measured before any implicit
-code exists, for the operator and integrator choices of [IMPLICIT.md](IMPLICIT.md).
+One-dimensional model problems with dense matrices, periodic but for the wall treatment,
+measured before any implicit code exists, for the operator and integrator choices of
+[IMPLICIT.md](IMPLICIT.md).
 
 ### The implicit operator and its preconditioner
 
@@ -6549,3 +6550,80 @@ stiffest while the solution still varies. Its diffusion work grows as √R, from
 per step at R ≤ 8 to 139 at R ≈ 8e3, while the implicit count falls once the solution
 smooths; the two cross in operator applications between R ≈ 800 and R ≈ 8e3, and later once
 a V-cycle is costed. A Picard stage converged in every row.
+
+### Wall treatment of the staggered operator
+
+```text
+julia --project=. -t 1 bench/stiffdiffusion.jl parts=walls
+```
+
+`L = G K D_s` on a closed line with nodes on the walls. The rows close each end with
+one-sided explicit rows on K points (D_s at the first midpoint, G at the first two nodes with
+the wall flux as data, the interpolation at sixth order); the mirror is the node-centred wall
+of `src/staggered.jl`, the periodic operator on the doubled line folded back. Errors are max-norm
+truncation errors; `asym` is ‖W L − (W L)ᵀ‖/‖W L‖ with trapezoidal node weights W, `cons` the
+defect of Σ W L T against the wall-flux difference, and the last column the largest real part
+of an eigenvalue of the zero-flux operator. The rows run on exp(sin 3x) with κ = 1 + sin(2x)/2;
+"even" is a field and a coefficient of the mirror's parity, "T'''" one with T'(0) = 0 but
+T'''(0) ≠ 0 under an even κ, and "κ'" an even field under κ = 1 + x/2:
+
+```
+                   N    err D_s     err G     err L |  asym W L      cons  max Re λ
+rows K = 4        25   1.24e-03  1.90e-02  1.54e-01 |  9.77e-02  1.64e-03  -4.3e-13
+rows K = 4        49   1.42e-04  2.30e-03  3.64e-02 |  6.79e-02  2.30e-04   4.0e-13
+rows K = 4        97   1.68e-05  2.79e-04  8.82e-03 |  4.76e-02  3.31e-05  -4.3e-12
+rows K = 4       193   2.03e-06  3.46e-05  2.17e-03 |  3.35e-02  5.12e-06  -3.3e-11
+rows K = 5        25   1.87e-04  5.29e-03  2.31e-02 |  1.38e-01  3.99e-04  -5.9e-13
+rows K = 5        49   1.34e-05  2.13e-04  3.76e-03 |  9.58e-02  5.18e-06  -4.0e-13
+rows K = 5        97   8.53e-07  9.84e-06  5.05e-04 |  6.71e-02  5.25e-06   1.8e-12
+rows K = 5       193   5.33e-08  5.11e-07  6.47e-05 |  4.73e-02  1.73e-06   2.5e-13
+mirror, even      25                       8.94e-05 |  8.61e-17  2.65e-14  -2.1e-14
+mirror, even      49                       1.39e-06 |  9.80e-17  1.71e-13   4.1e-13
+mirror, even      97                       2.16e-08 |  1.14e-16  1.17e-13  -4.9e-12
+mirror, even     193                       4.34e-10 |  1.09e-16  1.42e-13  -7.6e-12
+mirror, T'''      25                       6.99e-02 |  8.61e-17  1.81e-14  -2.1e-14
+mirror, T'''      49                       3.50e-02 |  9.80e-17  3.79e-13   4.1e-13
+mirror, T'''      97                       1.75e-02 |  1.14e-16  2.42e-13  -4.9e-12
+mirror, T'''     193                       8.76e-03 |  1.09e-16  3.52e-12  -7.6e-12
+mirror, κ'        25                       2.18e-01 |  9.43e-17  8.08e-14   3.3e-13
+mirror, κ'        49                       1.07e-01 |  8.91e-17  1.35e-13  -3.9e-14
+mirror, κ'        97                       5.35e-02 |  1.01e-16  5.48e-13  -2.2e-12
+mirror, κ'       193                       2.67e-02 |  9.41e-17  1.09e-12  -1.2e-11
+```
+
+The rows converge at their own order in D_s and G but leave L at second order (K = 4) and
+near third (K = 5), with an asymmetry of 3 to 14% that decays only as h^(1/2) and a
+conservation defect well above round-off; their spectrum stays real and nonpositive. The
+mirror is symmetric and conservative to round-off at every N and sixth order on data of its
+parity. On data that are not, the jump of an odd derivative in the mirrored extension gives a
+first-order truncation at the wall node, from T''' and from κ' alike. For conduction behind an
+adiabatic wall with κ = κ(T) the solution has that parity (T', κ' = κ'(T) T' and T''' vanish
+at the wall), so the loss is confined to incompatible initial data.
+
+### Staggered conduction against the wide form
+
+```text
+julia --project=. -t 1 bench/staggeredconduction.jl
+```
+
+`T_t = (κ₀ T^{5/2} T_x)_x + S` manufacturing T = 1 + 0.3e^(−t) f(x), κ₀ = 0.02, to t = 0.1 by
+RK4 at dt = 0.2 h²/κmax, on the package plans: the staggered `StaggeredDiffusion` and, periodic
+only, the wide form D κ D on `lele_d1_6`. The last column is the grid-Nyquist amplitude at
+t = 0.1 of a second run started with a Nyquist perturbation of 1e-3:
+
+```
+line      form           N  steps       error  order  Σ W T drift     Nyquist
+periodic  staggered     32     20   5.436e-08    NaN    2.22e-16   4.478e-07
+periodic  staggered     64     79   8.640e-10   5.98    4.44e-16   4.946e-15
+periodic  staggered    128    316   1.363e-11   5.99    6.66e-16   8.674e-19
+periodic  wide          32     20   5.565e-08    NaN    4.44e-16   1.000e-03
+periodic  wide          64     79   8.480e-10   6.04    7.77e-16   1.000e-03
+periodic  wide         128    316   1.317e-11   6.01    0.00e+00   1.000e-03
+wall      staggered     32     20   3.049e-10    NaN    3.33e-16   4.374e-07
+wall      staggered     64     79   4.777e-12   6.00    6.66e-16   4.115e-13
+wall      staggered    128    316   7.483e-14   6.00    2.22e-16   5.040e-14
+```
+
+On this single-mode solution the two forms agree to within 4% at sixth order, and both
+conserve Σ W T to round-off. The wide form carries the Nyquist perturbation unchanged; the
+staggered form removes it. Behind the adiabatic wall mirror the staggered run keeps sixth order.
