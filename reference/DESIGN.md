@@ -764,6 +764,61 @@ roll-up without the Fickian pressure error
 ([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md), "The partial-density
 species channel").
 
+The invariance argument needs a uniform temperature, and at a contact with
+uniform p and u and a temperature jump no channel is required to hold p. In
+the frame of the uniform velocity, with r_k = ∂_t ρ_k and q_T = ρ c_v ∂_t T,
+∂_t p = T Σ_k R_k r_k + (Σ_k ρ_k R_k) q_T/(ρ c_v). Under the partial-density
+flux Σ_k R_k J_k = −D_b ∂(p/T), which at uniform p is D_b p ∂T/T², and
+q_T = −Σ_k c_v,k J_k ∂T; both terms are proportional to ∂T. `:bulk` adds
+∂(D_b ρ c_v ∂T) to q_T, and the Fickian ∂_t p is nonzero at uniform T as
+well. Every channel's continuous model thus carries a volume source S_p
+wherever a species gradient crosses a temperature gradient, and so does κ\*
+through q_T = ∂(κ\* ∂T). In the low-Mach limit the pressure stays uniform and
+the source sets a velocity divergence (S_p − P')/(ρc²), P' the mean that keeps
+the periodic volume fixed. The drift the model calls for is that velocity, a
+pressure disturbance of order ρc times it radiated while the compressible
+system sets it up, and a change of the mean pressure toward the completely
+mixed state, which is nonzero under unequal heat capacities since p is then
+not a linear function of (ρ_k, ρe). With D_b and κ\* grid-scale, all of it
+vanishes with h at a fixed interface width. The convective terms call for no
+drift. At uniform u every convective flux is u times a conserved component, so
+the discrete ∂_t u is zero exactly, but ∂_t p = −u Σ_c (∂p/∂q_c) D q_c, which
+differs from −u D p = 0 wherever p is nonlinear in the conserved variables
+along the profile. This is the pressure-equilibrium failure of conservative
+schemes at multicomponent contacts (Abgrall, J. Comput. Phys. 125, 1996). It
+is absent at uniform T and at equal constant γ, where p is linear in
+(ρ_k, ρe), and present under unequal heat capacities and under NASA-9 heat
+capacities. At uniform u every split form of a product reduces to u D q, so no
+split form removes it. `bench/thermalcontact.jl` evaluates the continuous
+rates beside the discrete ones and measures the drift
+([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-contact-with-a-temperature-jump)).
+
+The consistency fluxes are formed pointwise as the exact products (Σ_k J_k) u
+and (Σ_k J_k)|u|²/2 + Σ_k e_k J_k of the discrete species fluxes, so the
+identities between the mass, momentum and energy fluxes hold at the flux
+level, and at uniform u each added term is u times a linear combination of
+the species fluxes. The equations derived from them need a discrete product
+rule that the compact derivative D does not satisfy. With F = Σ_k J_k, the
+channel's kinetic-energy residual is its contribution to
+u·∂_t(ρu) − (|u|²/2) ∂_t ρ plus the divergence of the kinetic-energy flux
+F|u|²/2, −u D(uF) + (u²/2) D F + D(F u²/2), and its heating residual is
+−D(Σ_k e_k J_k) + Σ_k e_k D J_k + Σ_k c_v,k J_k D T; they vanish at uniform u
+and at uniform T respectively. The convective kinetic-energy and pressure-work
+residuals are the same construction on ρu and on p. Total energy is
+conservative, so each is an exchange between kinetic and internal energy.
+Where D is skew-symmetric the heating (at constant c_v,k) and pressure-work
+residuals integrate to zero, and the kinetic-energy residuals integrate to
+∫ F (u Du − D(u²)/2) and ∫ ρu (u Du − D(u²)/2); the split form
+[D(uF) + u DF + F Du]/2 of the channel's momentum term removes the first.
+Measured on a shocked contact, the channel's exchange stays below a few
+thousandths of the artificial viscosity's dissipation, of either sign, and the
+convective one below a hundredth of it, always dissipative. The split form is
+not conservative against the boundary and interface closure rows, where D is
+not skew-symmetric, so it would trade discrete momentum conservation for that
+exchange; the product form is kept. No split form reaches the heating
+residual, since the species and energy equations have to stay in divergence
+form.
+
 D_b is built by `bulk_diffusivity!` from the same bracket as the Fickian
 D\*_k, max(C_D Δ_d|D_d f|, C_Y Δ_g excursion(f)), taken over every species
 and over two fields per species, the mass fraction Y_k and the mole fraction

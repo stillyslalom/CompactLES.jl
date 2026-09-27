@@ -48,11 +48,13 @@ section that moved it says so in one sentence and the older figure is gone.
     (`test/transport_tests.jl`, `test/transport_integration_tests.jl`)
 22. [The bulk species channel in three dimensions](#the-bulk-species-channel-in-three-dimensions)
     (`bench/bulkchannel.jl`, `bench/bulkentropy.jl`)
-23. [The species validity band](#the-species-validity-band) (`bench/speciesband.jl`)
-24. [The shared-file write](#the-shared-file-write) (`bench/hdf5xfer.jl`,
+23. [The contact with a temperature jump](#the-contact-with-a-temperature-jump)
+    (`bench/thermalcontact.jl`)
+24. [The species validity band](#the-species-validity-band) (`bench/speciesband.jl`)
+25. [The shared-file write](#the-shared-file-write) (`bench/hdf5xfer.jl`,
     `test/hdf5_tests.jl`)
-25. [Azimuthal mode truncation](#azimuthal-mode-truncation) (`polar_truncation`)
-26. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`, `bench/staggeredconduction.jl`)
+26. [Azimuthal mode truncation](#azimuthal-mode-truncation) (`polar_truncation`)
+27. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`, `bench/staggeredconduction.jl`)
 
 ## The shock battery
 
@@ -6405,6 +6407,109 @@ fractions outside [0, 1] throughout, the Runge–Kutta step lowers it on half th
 every channel. The
 inequality is a property of the continuous model and of the semi-discrete channel term; the
 filter and the bounded-fraction excursions are outside it.
+
+## The contact with a temperature jump
+
+`bench/thermalcontact.jl`, serial at `-t 1`, all parts at their defaults (about four
+minutes). The slab is a layer of CO2 at 300 or 900 K filling the middle half of a periodic
+1 m domain of He at 300 K, at uniform 1e5 Pa and 100 m/s, each interface 0.05 m thick
+(6.4 cells at N = 128, 12.8 at 256), physical transport off, the production filter and
+constants. `ideal` is the `IdealMixture` of the same two species with heat capacities fixed
+at 298.15 K (γ = 5/3 and 1.29); `nasa9` raises CO2's c_p by about 40% between 300 and
+900 K. The method and the continuous rates are in `reference/DESIGN.md`, "The species
+channel".
+
+The initial rates: the pressure change per τ = h/(U + c_He) over p0, discrete (the
+right-hand side increment through the EOS linearization) against the continuous model's
+rate in the temperature-equation form with the same coefficient field; U_LM is the
+low-Mach velocity amplitude the continuous source sets up. "convection" is the scheme with
+the artificial properties off, whose continuous rate is zero; each other row is an
+increment. max |∂_t u| τ is below 7e-13 m/s on every row, the uniform-u identity.
+
+```
+T_CO2 = 900 K     | max|dp| disc / cont / rel diff / U_LM m/s
+                  | nasa9, N = 128                  | nasa9, N = 256                  | ideal, N = 128                  | ideal, N = 256
+convection        | 2.3e-03 / 0 / - / -             | 4.4e-05 / 0 / - / -             | 1.9e-03 / 0 / - / -             | 3.1e-05 / 0 / - / -
+kappa*            | 2.9e-04 / 2.9e-04 / 5e-14 / 0.31 | 9.2e-06 / 9.2e-06 / 2e-12 / 0.015 | 4.6e-04 / 4.6e-04 / 6e-14 / 0.57 | 2.2e-05 / 2.2e-05 / 1e-12 / 0.034
+fickian           | 1.3e-02 / 1.5e-02 / 0.125 / 13.9 | 5.2e-04 / 5.2e-04 / 0.0070 / 0.88 | 1.4e-02 / 1.5e-02 / 0.138 / 13.7 | 5.2e-04 / 5.2e-04 / 0.0076 / 0.88
+bulk              | 4.3e-03 / 4.3e-03 / 0.041 / 4.20 | 1.6e-04 / 1.6e-04 / 0.0046 / 0.24 | 3.1e-03 / 3.1e-03 / 0.069 / 2.88 | 1.2e-04 / 1.2e-04 / 0.0059 / 0.16
+partial_density   | 5.4e-03 / 5.5e-03 / 0.028 / 4.93 | 1.7e-04 / 1.7e-04 / 0.0019 / 0.31 | 5.0e-03 / 5.1e-03 / 0.017 / 4.83 | 1.6e-04 / 1.6e-04 / 0.0035 / 0.30
+
+T_CO2 = 300 K     | fickian 1.2e-02 (N = 128), 4.5e-04 (256), discrete = continuous to 1e-13, U_LM 12.6 and 0.77 m/s,
+                  | under both EOS; bulk, partial density, kappa* and convection below 1e-16
+```
+
+At uniform T the Fickian pressure error is its own continuous model's volume source, to
+round-off; the consistent channels have none. At the temperature jump every row has one.
+Each channel's discrete rate converges to its continuous model's, the relative difference
+falling 5 to 18 times for the doubling, and the model's own rate falls 26 to 32 times,
+since D_b is sensed at the grid scale and the interface is better resolved. The
+partial-density and bulk models call for a third of the Fickian velocity and κ\* for a
+twentieth to a sixtieth of it. The convective error is of the same order as the channel's
+source at N = 128 and falls 52 to 62 times; the NASA-9 heat capacities raise it by a fifth
+over the constant-c_p control, so most of it comes from the unequal γ.
+
+The advected slab over one transit: the largest spatial deviation of p from its mean over
+p0 and of u from 100 m/s over the run, and the mean-pressure change at the end. "off" has
+the artificial properties disabled, "none" has them on with C_D = C_Y = 0. The mean
+pressure of the completely mixed state is 0.359 p0 above p0 under NASA-9 and 0.237 p0 under
+the control at 900 K, and zero to round-off at 300 K.
+
+```
+T_CO2 = 900 K     | max|p−p̄|/p0 / max|u−U| m/s / (p̄−p0)/p0
+                  | nasa9, N = 128             | nasa9, N = 256             | ideal, N = 128             | ideal, N = 256
+off               | FAIL step 2378             | 4.7e-04 / 0.26 / -7.6e-05  | 9.3e-03 / 3.77 / -1.7e-03  | 3.4e-04 / 0.17 / -1.1e-05
+none              | 1.9e-02 / 6.16 / +5.8e-03  | 4.6e-04 / 0.25 / +1.4e-04  | 9.2e-03 / 3.43 / +8.1e-04  | 3.4e-04 / 0.15 / +1.9e-04
+fickian           | 3.1e-02 / 15.8 / +8.3e-03  | 1.8e-03 / 1.03 / +1.3e-03  | 2.6e-02 / 14.6 / +4.5e-03  | 1.9e-03 / 0.99 / +1.0e-03
+bulk              | 2.1e-02 / 6.86 / +1.5e-02  | 9.1e-04 / 0.45 / +4.6e-03  | 1.4e-02 / 4.74 / +1.1e-02  | 6.7e-04 / 0.31 / +3.4e-03
+partial_density   | 2.0e-02 / 8.10 / +1.2e-02  | 8.3e-04 / 0.58 / +3.3e-03  | 1.4e-02 / 6.34 / +9.1e-03  | 7.5e-04 / 0.45 / +2.5e-03
+
+T_CO2 = 300 K     | fickian 2.7e-02 / 15.7 (N = 128), 1.8e-03 / 1.05 (256) under both EOS;
+                  | every other row below 5e-14 / 2e-11
+```
+
+The measured velocity drift of each channel is the convective one ("none") plus about its
+continuous U_LM: at N = 256 under NASA-9, 0.25 + 0.31 against 0.58 m/s for the default,
+0.25 + 0.24 against 0.45 for bulk and 1.03 against 0.88 for the Fickian. The pressure deviation
+is of order ρcU_LM/p0 over the He, 5e-4 for the default at N = 256. The mean pressure moves
+toward the mixed value in every channel, fastest under bulk, whose added conduction
+exchanges the most heat. The one failure is the NASA-9 slab at N = 128 with the artificial
+properties off. The rows without a species channel at N = 128 take `StepControl` retries
+near the end of the transit and complete.
+
+The identities on the shocked contact: a Mach 1.5 shock in the He at x = 0.15 into the
+CO2 at 900 K at x = 0.35, N = 400, Dirichlet ends, to 400 µs, sampled every 40 steps. Φ is
+1.0e7 to 2.0e7 W/m² and Π −1.0e8 to −1.3e8 W/m² throughout.
+
+```
+W/m², over the 21 samples      | nasa9                  | ideal
+∫rK_ch, steps 40–280          | |.| ≤ 5.4e1            | |.| ≤ 4.9e1
+∫rK_ch, steps 320–480         | −4.9e4 to +3.2e2       | −1.8e4 to +5.8e3
+∫rK_ch, steps 520–840         | |.| ≤ 4.5              | |.| ≤ 0.7
+∫rK_sp                        | |.| < 4e-10            | |.| < 3e-10
+∫rK_cv                        | −3.1e4 to −1.8e5       | −4.5e4 to −1.8e5
+∫rP, steps 40–440             | |.| ≤ 4.1              | |.| ≤ 4.7
+∫rP, steps 480–840            | +7.3e2 to −9.0e3       | +7.4e2 to −9.4e3
+rel |rT_ch|                   | 0.14 to 1.08           | 0.06 to 0.80
+rel |rK_cv|                   | 0.017 to 0.15          | 0.019 to 0.15
+rel |rP|                      | 0.019 to 0.16          | 0.018 to 0.14
+```
+
+The channel's kinetic-energy exchange reaches 3e-3 of Φ while the transmitted and
+reflected waves cross the interface (steps 320–480) and stays below 1e-5 of it before and
+after, with either sign; the convective one is 0.2% to 1% of Φ and dissipative. The split
+form of the channel's momentum term integrates to round-off, as skew-symmetry requires.
+∫rP departs from zero only through the boundary rows once the reflected wave reaches the
+Dirichlet end, at 7e-5 of Π. The heating residual has
+an order-one local relative error at the two-cell shocked interface under either EOS; at
+the resolved contact of the `rates` table the same residual is the 0.2–3% `rel diff` of
+the partial-density row.
+
+**Decision:** the default is retained. At the temperature jump the partial-density
+channel's pressure and velocity drift is its own continuous model's volume source,
+reproduced to 0.2% at N = 256, of the same order as the bulk channel's and a third of the
+Fickian one, and it adds to a convective pressure-equilibrium error of similar size that
+no channel removes. The product form of the consistency fluxes is kept.
 
 ## The species validity band
 
