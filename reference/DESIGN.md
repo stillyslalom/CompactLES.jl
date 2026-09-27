@@ -638,8 +638,9 @@ Concretely, `compute_artificial!`:
 `ArtificialProperties.mu_sensor` and `ArtificialProperties.beta_sensor` select which field each of
 the first two channels reads. Cook (2007) takes both from |S|, as above;
 [Cook (2009, appendix A)](https://doi.org/10.1063/1.3139305) changes β\* to the
-dilatation Δ = ∇·u. Pyranda takes μ\* from the velocity components and β\* from
-the dilatation, and the difference is the absolute value in
+dilatation Δ = ∇·u. Brill, Olson & Bokman (2025) take μ\* from the velocity
+components and β\* from the dilatation, as two of Pyranda's example decks do (the
+rest keep μ\* on |S|), and the difference is the absolute value in
 |S| = sqrt(S_ij S_ij), which puts a cusp wherever the strain passes through
 zero. `mu_sensor = :velocity` reduces Δ_d|D_d u_j| over the nine (direction,
 component) pairs. The weight is Δ_d, not Δ_d², because u carries one

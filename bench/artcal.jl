@@ -567,29 +567,29 @@ end
 # Olson & Bokman (2025, eqs. 22–29; https://arxiv.org/abs/2503.12680) document a
 # later set with the eighth-derivative detector, directional maximum, μ* from the
 # velocity components, β* from the dilatation, and smaller values C_mu = 1e-4,
-# C_beta = 7e-2, C_kappa = 1e-3 and C_D = 2e-4. Those values scale with Δ²/Δt
-# where this package scales with cΔ, a ratio of roughly 1/CFL ≈ 2.5, so the
-# comparable values here are 2.5× theirs. Each option is measured alone in the
-# sweeps above; this is the combination, at the package's constants, at the
-# rescaled ones, at a midpoint, and at the rescaled ones with C_beta held at 1.0,
-# the
-# lower edge of the `:d8` window, since `:dilatation` loses the converging Noh
-# geometries at the fold and the question is whether the constant alone
-# recovers them.
+# C_beta = 7e-2, C_kappa = 1e-3 and C_D = 2e-4. Their detector is the eighth
+# derivative times Δ⁸ (eq. 22), Pyranda's `c10d8` with a two-point response of
+# 3840, where `compact_d8` is the same operator divided by 240; μ*, β* and the
+# species diffusivity of their eqs. 34–37 contain no Δt. Each constant therefore
+# converts by 240: C_mu = 0.024, C_beta = 16.8, C_D = 0.048, and C_kappa = 0.24
+# up to the rate factor of Pyranda's h²/Δt form. Each option is measured alone
+# in the sweeps above; this is the combination at the package's constants, at
+# the converted ones under the gated and the ungated dilatation (theirs is
+# ungated), and at the converted ones with C_beta held at 1.0, the default.
 if want("brill2025")
-    println("\n=== Brill–Olson–Bokman 2025 set (rescaled constants) ===")
+    println("\n=== Brill–Olson–Bokman 2025 set (converted constants) ===")
     println("config             | Noh1 plat   def | Noh2 plat   def | Noh3 plat   def" *
             " | Lax L1  | Shu tr | WC peak | mix wid | SI minY  wid")
     hr()
     sensors = (detector=:d8, reduction=:max, mu_sensor=:velocity,
                beta_sensor=:dilatation)
-    scaled = (C_mu=2.5e-4, C_beta=0.175, C_kappa=2.5e-3, C_D=5e-4)
+    converted = (C_mu=0.024, C_beta=16.8, C_kappa=0.24, C_D=0.048)
     rows = (("default", art()),
             ("sensors only", art(; sensors...)),
-            ("sensors, x1", art(; sensors..., scaled...)),
-            ("sensors, x4", art(; sensors..., C_mu=1e-3, C_beta=0.7,
-                                C_kappa=1e-2, C_D=2e-3)),
-            ("sensors, x1, Cb=1", art(; sensors..., scaled..., C_beta=1.0)))
+            ("sensors, Brill", art(; sensors..., converted...)),
+            ("ungated, Brill", art(; sensors..., converted...,
+                                   beta_sensor=:ungated_dilatation)),
+            ("sensors, Brill, Cb=1", art(; sensors..., converted..., C_beta=1.0)))
     for (name, a) in rows
         n1 = m_noh(1; art=a); n2 = m_noh(2; art=a); n3 = m_noh(3; art=a)
         lx = m_lax(art=a);    sh = m_shu(art=a);    wc = m_wc(art=a)

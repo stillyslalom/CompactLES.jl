@@ -210,9 +210,10 @@ cost. The link is to the section holding the evidence.
   does not without the filter
   ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)).
 - **A published Cook-family parameter set is preferred to these constants.**
-  `bench/artcal.jl brill2025` runs the smaller set of Brill, Olson and Bokman
-  through the battery; it survives both converging geometries and belongs to
-  its own scaling ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
+  `bench/artcal.jl brill2025` runs the set of Brill, Olson and Bokman, converted
+  by the detector's factor of 240, through the battery; it completes every Noh
+  geometry and its C_beta of 16.8 over-damps the converging plateaus
+  ([battery](CALIBRATION_APPENDIX.md#the-brill-2025-parameter-set)).
 - **The ambient is cold.** κ\* is written as ρc/T_ion and is not singular in
   practice: the sound speed vanishes with the temperature at a floored cell.
   A cold ambient changes the count of cells the EOS calls inadmissible,

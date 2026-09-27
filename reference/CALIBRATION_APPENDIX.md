@@ -528,9 +528,11 @@ timestep.
 
 Cook's [2007 model](https://doi.org/10.1063/1.2728937) builds μ\* and β\* from the strain
 magnitude |S| = sqrt(S_ij S_ij); his [2009 model](https://doi.org/10.1063/1.3139305) changes
-β\* to the dilatation. Pyranda builds μ\* from `ringV(u, v, w)`, the ring of each velocity
-component along each direction reduced by `MAX` over the nine pairs, and β\* from
-`ring(∇·u)`. Neither reference field carries an absolute value. `ArtificialProperties.mu_sensor`
+β\* to the dilatation. Brill, Olson & Bokman (2025, eq. 25) build μ\* from the velocity
+components, the form of Pyranda's `ringV(u, v, w)`, the ring of each velocity component
+along each direction reduced by `MAX` over the nine pairs, and β\* from `ring(∇·u)`; neither
+field carries an absolute value. Most of Pyranda's example decks keep μ\* on `ring(|S|)`
+([Pyranda's implementation](#the-partial-density-species-channel)). `ArtificialProperties.mu_sensor`
 (`:strain`, `:velocity`), `ArtificialProperties.beta_sensor` and `ArtificialProperties.reduction` (`:sum`, `:max`)
 select between them. The weight is h_d for a field carrying one velocity derivative fewer
 against h_d² for |S| and ∇·u, and the two coincide at the grid scale, so the four constants
@@ -752,30 +754,39 @@ The coefficient families and their original values come from [Cook (2007, eqs.
 `C_D = 0.003`, `C_Y = 100`. [Brill, Olson & Bokman (2025, eqs.
 22–29)](https://arxiv.org/abs/2503.12680) use a later set with an eighth-derivative
 detector, the max over directions, μ\* from the velocity components and β\* from the
-dilatation; their values are an order of magnitude or more below Cook's and use a Δ²/Δt
-scaling that differs from the cΔ one here by about 1/CFL. In `bench/artcal.jl brill2025`,
-`sensors` is `detector = :d8, reduction = :max, mu_sensor = :velocity, beta_sensor =
-:dilatation`; `x1` is C_mu = 2.5e-4, C_beta = 0.175, C_kappa = 2.5e-3, C_D = 5e-4, their
-values in this scaling; `x4` is four times that; C_Y = 100 throughout.
+ungated dilatation: C_μ = 1e-4, C_β = 7e-2, C_κ = 1e-3 and C_D,Y = C_D,V = 2e-4. Their
+detector F (eq. 22) is the eighth derivative times Δ⁸, which is Pyranda's `c10d8` with a
+two-point response of 3840, and `compact_d8` is the same operator divided by 240
+([Pyranda's implementation](#the-partial-density-species-channel)). μ\* (eq. 25), β\*
+(eq. 26) and the species diffusivity of their new method (eqs. 34–37, c_s F Δ) contain no
+Δt; only the traditional D\* of eq. 24 carries Δ²/Δt. Each constant multiplying a detector
+output therefore converts by 240: C_mu = 0.024, C_beta = 16.8, C_D = 0.048, and C_kappa =
+0.24, the last up to the rate factor of Pyranda's κ\* = C_κ ρ c_v G[h² ring(T)]/(T Δt), which
+eq. 27 does not settle. Their C_O,Y = 100 multiplies twice the excursion, C_Y = 200 here;
+the rows keep C_Y = 100. An earlier version of this table converted by 1/CFL = 2.5 and
+carried constants 96 times too small.
+
+In `bench/artcal.jl brill2025`, `sensors` is `detector = :d8, reduction = :max, mu_sensor =
+:velocity, beta_sensor = :dilatation`; `Brill` is the converted set, `ungated` the same
+under `beta_sensor = :ungated_dilatation`, theirs; the last row holds C_beta at the default.
 
 ```
-config             | Noh1 plat   def | Noh2 plat   def | Noh3 plat   def | Lax L1  | Shu tr | WC peak | mix wid | SI minY  wid
-default            |    0.9993   +64% |    0.9367   +56% |    0.9751   +27% | 5.0e-03 | 1.6180 |  6.6050 | 0.01820 | -0.0135    4
-sensors only       |    0.9997   +51% |    0.9477   +56% |    0.9929   +36% | 4.7e-03 | 1.6289 |  6.4269 | 0.01787 | -0.0176    4
-sensors, x1        |    0.9996   +22% |    0.9650   +39% |       NaN  +NaN% | 5.1e-03 | 1.6490 |  6.3467 | 0.01787 | -0.0203    4
-sensors, x4        |    0.9997   +48% |    0.9518   +52% |    1.0006   +37% | 4.7e-03 | 1.6321 |  6.3836 | 0.01787 | -0.0184    4
-sensors, x1, Cb=1  |    0.9997   +52% |    0.9472   +57% |    0.9923   +36% | 4.7e-03 | 1.6312 |  6.4693 | 0.01787 | -0.0178    4
+config               | Noh1 plat   def | Noh2 plat   def | Noh3 plat   def | Lax L1  | Shu tr | WC peak | mix wid | SI minY  wid
+default              |    0.9997   +24% |    0.9380   +55% |    0.9774   +29% | 5.0e-03 | 1.6183 |  6.6068 | 0.02024 | -0.0098    4
+sensors only         |    0.9998   +27% |    0.9483   +60% |    0.9940   +40% | 4.7e-03 | 1.6287 |  6.4178 | 0.01789 | -0.0146    4
+sensors, Brill       |    0.9997   +26% |    0.9093   +65% |    0.9216   +42% | 5.6e-03 | 1.5823 |  6.8131 | 0.01788 | -0.0072    3
+ungated, Brill       |    0.9996   +27% |    0.9095   +64% |    0.9205   +38% | 5.7e-03 | 1.5768 |  6.6891 | 0.01788 | -0.0074    3
+sensors, Brill, Cb=1 |    0.9997   +11% |    0.9561   +41% |    1.0058   +39% | 5.0e-03 | 1.5714 |  6.1650 | 0.01788 | -0.0141    4
 ```
 
-The combination survives both converging geometries at the default CFL, which `:dilatation`
-alone does not; whether `:d8`'s fold closure or the max reduction is responsible is not
-separated here, and the CFL ladder was not run. The one loss, spherical Noh at `x1`, is
-C_beta = 0.175 and not the dilatation switch, since C_beta = 1.0 with the other three
-constants at `x1` is indistinguishable from `sensors only` in every column. Against the
-default, the sensors buy the Noh plateaus and Lax and cost 2.7% of the Woodward peak, 0.7%
-of the Shu–Osher train and 30% on the shocked interface's excursion. The strongest refit
-candidate is `x4`, the only row with ν = 3 within 0.06%. None of it is the default; the four
-constants were calibrated under Cook's 2007 sensor construction.
+Every row completes all three Noh geometries at the default CFL; the CFL ladder was not
+run. The converted set over-damps: C_beta = 16.8 puts the ν = 2 and ν = 3 plateaus 9% and
+8% below exact, against 5% and 1% under the sensors alone, and C_beta = 1 with the other
+three constants converted restores them, so the loss is the bulk constant, gated or not.
+The Shu–Osher train loses 2.2 to 2.9% against the default under every converted row, where
+the sensors alone gain 0.6%; C_mu and C_kappa in that set are 12 and 24 times the defaults. The
+shocked interface's excursion halves under the converted set and returns with C_beta = 1,
+so it follows the bulk viscosity and not the species constant. None of it is the default.
 
 ### The bulk species channel
 
@@ -939,6 +950,55 @@ In the literature, Brill, Olson & Bokman and Aslani & Regele (Int. J. Numer. Met
 diffuse the partial densities with consistency terms; PadeOps (Lele group, `cgrid.F90`)
 uses the Fickian form with the enthalpy flux, and Pyranda's example decks carry no species
 term in the energy equation at all.
+
+**Pyranda's implementation.** Read at [LLNL/pyranda](https://github.com/LLNL/pyranda)
+`b4e0afc`, the upstream master of 2026-06-24; no upstream branch computes a sharpening
+flux, a volume fraction or a partial-density flux, and the Miranda reader reads Miranda's
+volume fractions and a single `diffusivity` field (`pyrandaMirandaReader.py:24–46`). Source
+paths are under `pyranda/`, deck paths under `examples/`.
+
+- *Detector.* `ring(f)` is `ringS(f, 2)` and `ringV(a, b, c)` is `ringV(·, 1)`
+  (`parcop/parcop.f90:313–333`), giving MAX_d h_d^L |d8_d f|, maximized over the three
+  components for `ringV` (`parcop/operators.f90:615–699`). `d8x` is undivided, with the
+  division by h⁸ commented out (`parcop/compact_operators.f90:280–313`), and the weights
+  are `c10d8` unscaled (`parcop/stencils.f90:515–621`; `parcop/compact_basetype.f90:65–209`
+  applies no factor): left side (1.5, 14, 29, 14, 1.5), right side 60 δ⁸, closure rows
+  folded onto the half-offset mirror. A grid-to-grid oscillation of amplitude A returns
+  60·256A/4 = 3840A against 16A from `compact_d8`, so the ratio of 240 holds at every
+  wavenumber, since the two are the same operator. The low-wavenumber gain is (kh)⁸, that
+  of Brill's F (eq. 22), so the conversion holds for any consistent eighth-derivative
+  operator Miranda might use, below the grid scale.
+- *Fields, per deck.* β\* from `ring(∇·u)` in every deck, ungated; μ\* from
+  `abs(ring(|S|))` (weight h²) in most decks and from `ringV(u, v, w)` (weight h) only in
+  `equation_library.py:66,106` and `naca_curv.py:106`; κ\* from
+  `ring(T)`; the species term from `ring(Y)` of one species (`shockBubble.py:89–108`,
+  `RT3D.py:133–150`).
+- *Formulas.* β\* = C_β G[ρ ring(∇·u)], μ\* = C_μ ρ G[|ring(|S|)|] (or G[ρ ringV(u)]),
+  κ\* = C_κ G[ρ c_v ring(T)/(T Δt)], and ρD\* = G[ρ max(C_D ring(Y), C_Y (|Y| − 1 + |1 − Y|)
+  h_min²)/Δt], with C_β = 0.07, C_μ = 1e-3 or 1e-4, C_κ = 1e-3, C_D = 1e-4 to 2e-4 and
+  C_Y = 10 or 100. Δt is the variable `:dt:`, the stability limit at CFL 1 from `dt.courant`,
+  1/max(Σ_d |u_d|/h_d + c/h_min), lowered by 0.2 of the diffusive limits
+  (`pyrandaTimestep.py:42–75`), so h²/Δt is a global rate times h and not the local sound
+  speed. μ\* and β\* contain no Δt. G is `gbar`, the nine-point Gaussian `cgfs4`
+  (`parcop/stencils.f90:1387–1476`), applied to the coefficient after the product with ρ.
+  One D\* serves both species, and h_min is `gridLen`, min_d h_d (`parcop/mesh.f90:211`).
+- *Species flux.* Cook's Fickian form for two species with no enthalpy flux: J = ρD\*∇Y_A,
+  subtracted from ρY_A and added to ρY_B, with no term in momentum or energy
+  (`shockBubble.py:65–69,106–108`). Brill's partial-density flux (eqs. 32–40), the
+  maximum over Y and V (eqs. 33–37) and the sharpening flux (eq. 68) are absent, as is any
+  positivity treatment beyond the C_Y term.
+- *Filter.* `fbar` is `sfilter`, spec `sfspec = 2` (`parcop/compact.f90:28`), `c8ff8`:
+  pentadiagonal, eighth order, transfer-function integral 9/10, α = 0.66624, β = 0.16688
+  (`parcop/stencils.f90:713–835`), with telescoped closure rows: identity at the boundary
+  node, then three-, five- and seven-point symmetric rows (`:763–786`), which matches Brill's
+  eighth-order filter removing the top 10% of wavenumbers. The decks put `fbar` in the equation block,
+  so it runs after every Runge–Kutta stage (`pyranda.py:800–810`, `updateVars` at 396).
+
+Pyranda therefore carries the traditional method of Brill's section 3 (eqs. 16–27, with
+Pyranda's Fickian flux in place of eq. 16's enthalpy flux) and none of section 4; it
+settles the detector's normalization, the sensed fields, the Gaussian, the filter and its
+cadence, and the meaning of Δt in Pyranda. Which Δt Miranda uses in eq. 24, how Miranda
+discretizes eqs. 32–40 and 68, and how eq. 27 reads are not in it.
 
 **Recommendation:** `:partial_density` as the default, with C_D = 0.1; `:bulk` at a density
 ratio of 100 or more, where its viscosity holds the ringing; `:fickian` only to reproduce
