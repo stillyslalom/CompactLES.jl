@@ -43,7 +43,7 @@
 #
 #   julia --project=. -t 1 bench/nasa9_inversion.jl
 #   julia --project=. -t 1 bench/nasa9_inversion.jl 200000 species=He,CO2
-#   julia --project=. -t 1 bench/nasa9_inversion.jl N=48 extrapolate=linear
+#   julia --project=. -t 1 bench/nasa9_inversion.jl N=48 extrapolate=polynomial
 #   julia --project=. bench/nasa9_inversion.jl 200000 part=sweep
 #   julia --project=. bench/nasa9_inversion.jl part=sweep sets="CO2;N2" bands=6000,20000
 
@@ -55,7 +55,7 @@ const CL = CompactLES
 
 const DEFAULTS = (n_points = 100_000, N = 32, repeats = 20,
                   species = "N2,O2,CO2,H2O", T_min = 300.0, T_max = 3000.0,
-                  extrapolate = :polynomial, part = :timing,
+                  extrapolate = :linear, part = :timing,
                   sets = "N2;CO2;He;N2,O2,CO2,H2O",
                   bands = "200,1000,6000,13000,20000", wrong = 1e-3)
 

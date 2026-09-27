@@ -950,12 +950,15 @@ status rather than raising, because it runs inside a per-point loop.
 
 Outside the union of a species' fitted intervals nothing in the data constrains
 the polynomial, and `Nasa9Mixture(extrapolate = ...)` names which extension is
-taken. `:polynomial` (default) evaluates the nearest interval's fit, which is
-conventional and can turn cp negative far outside the range; `:linear` freezes
-cp at the interval endpoint and continues h linearly, which stays monotone and
-therefore invertible at any temperature. Run past 20000 K, the bundled CO₂ fit
-inverts an energy built at 30000 K to about 62000 K under `:polynomial` and to
-30000 K under `:linear`.
+taken. `:linear` (default) freezes cp at the interval endpoint and continues h
+linearly, which stays monotone and therefore invertible at any temperature;
+`:polynomial` evaluates the nearest interval's fit, which is conventional and
+can turn cp negative or the energy non-monotone outside the range. Run past
+20000 K, the bundled CO₂ fit inverts an energy built at 30000 K to about
+62000 K under `:polynomial` and to 30000 K under `:linear`. The default is
+`:linear` because a non-monotone extension can give an energy a second root
+inside the fitted range, which the inversion returns with no failure status
+(`reference/CALIBRATION_APPENDIX.md`, `bench/nasa9_inversion.jl`).
 
 That setting also decides whether leaving the range ends a run. `:polynomial`
 and `:linear` are statements that the extension is acceptable for the

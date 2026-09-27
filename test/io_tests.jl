@@ -388,6 +388,22 @@ end
     save_checkpoint(mk(eos=n9()), allocate_state(mk(eos=n9())), n9_stem)
     @test_throws "configuration mismatch" load_checkpoint!(
         mk(eos=Nasa9Mixture([sp[1], o2])), allocate_state(mk(eos=n9())), n9_stem)
+    # The extrapolation policy decides the temperature a stored energy means
+    # beyond the fitted range, so it is a thermodynamics entry: a checkpoint
+    # written under `:polynomial` refuses the default `:linear` mixture, naming
+    # the entry, and loads into a mixture that states `:polynomial`.
+    poly() = Nasa9Mixture(air; extrapolate=:polynomial)
+    poly_stem = joinpath(dir, "nasa9_polynomial")
+    save_checkpoint(mk(eos=poly()), allocate_state(mk(eos=poly())), poly_stem)
+    err = try
+        load_checkpoint!(mk(eos=n9()), allocate_state(mk(eos=n9())), poly_stem)
+        ""
+    catch e
+        sprint(showerror, e)
+    end
+    @test occursin("eos.extrapolate: file :polynomial, solver :linear", err)
+    @test occursin("cannot be allowed", err)
+    load_checkpoint!(mk(eos=poly()), allocate_state(mk(eos=poly())), poly_stem)
 
     # Numerics, transport and boundaries: refused by default, accepted when
     # the group is named, and the state is restored either way.

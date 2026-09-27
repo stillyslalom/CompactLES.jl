@@ -341,7 +341,8 @@ Names are spelled out in full. Current vocabulary:
   e > 0 test) and the `STATE_` flags it returns,
   `mixture_temperature_status` and the `TEMPERATURE_` flags (whether the
   NASA-9 inversion converged and whether it was extrapolated),
-  `extrapolate` (`Nasa9Mixture`: `:polynomial` or `:linear`)
+  `extrapolate` (`Nasa9Mixture`: `:linear`, the default, `:polynomial` or
+  `:missing`)
 - `trigger` (an `AtTime` / `EveryTime` / `EveryStep` / `WhenState`), `effect!`,
   `fired!`, `next_time`, `rewind!`, `landing_steps`,
   `switch!`/`switched` (a `SwitchableBC`)

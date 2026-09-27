@@ -55,7 +55,14 @@ that interprets it.
 
 The database fit has finite temperature intervals. Extrapolating far outside
 them is not a validated thermodynamic model even if polynomial evaluation
-returns a finite number.
+returns a finite number. By default the mixture holds each species' `cp` at
+its value on the edge of the fitted range and continues the enthalpy linearly
+(`extrapolate = :linear`), so internal energy stays monotone in temperature
+and the recovery has one root at any temperature. `extrapolate = :polynomial`
+evaluates the nearest interval's fit instead. The energy of a fit run far past
+its range can equal the energy at a second temperature inside the range, and
+the recovery can then return that temperature without a failure status. `extrapolate = :missing` reports such states as
+inadmissible, so a run under strict validation stops on them.
 
 ## Stiffened gas
 

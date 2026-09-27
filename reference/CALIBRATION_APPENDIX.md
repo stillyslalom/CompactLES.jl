@@ -4682,7 +4682,8 @@ and 1e-4 left 6,021, 0 and 0 of those misses.
 Settled: under `:linear` the sweep finds no failure in either precision. Every remaining
 failure is the four-species mixture above 6000 K under `:polynomial`, where the H2O fit ends
 and its extrapolated energy is not monotone: states with no bracket, and silent ones whose
-energy has a second root inside the fitted range, which the inversion returns.
+energy has a second root inside the fitted range, which the inversion returns. `:linear` is
+therefore the default of `Nasa9Mixture`, and `:polynomial` an opt-in.
 
 ## AMR
 

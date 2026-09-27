@@ -499,7 +499,7 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   the NASA-9 model over `IdealMixture`. The interval table is isbits and the
   inversion and every per-point species loop share the powers of T (commits
   `9e0f126`, `405037f`, measured with `bench/nasa9_inversion.jl`). The
-  convergence criterion is eps^(2/3), floored at 1e-10 (commit TBD), which
+  convergence criterion is eps^(2/3), floored at 1e-10 (commit `dc67f71`), which
   saves most of one iteration. What remains is a warm start from the stored
   `T_ion` field, one or two iterations instead of about four. It trades away
   the state-only seed that `mixture_temperature_status` documents for

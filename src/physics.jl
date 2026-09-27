@@ -741,7 +741,7 @@ nasa9_constant_cp(name::String, R::Real, cp::Real) =
     nasa9_constant_cp(Float64, name, R, cp)
 
 """
-    Nasa9Mixture(species; T_guess=300.0, extrapolate=:polynomial)
+    Nasa9Mixture(species; T_guess=300.0, extrapolate=:linear)
 
 Multicomponent mixture with piecewise NASA-9 heat capacities. `species` is a
 nonempty vector of [`Nasa9Species`](@ref) values; vector order defines every
@@ -757,14 +757,17 @@ default is `300.0` K. It should lie in the representative range of the fits.
 `extrapolate` selects what happens outside the union of a species' tabulated
 intervals, where nothing in the data constrains the fit:
 
-- `:polynomial` (default) evaluates the nearest interval's fit at the requested
-  temperature. This is the conventional treatment and reproduces earlier
-  releases exactly, but a degree-four fit run beyond its range can turn `cp`
-  negative, which destroys the monotonicity the temperature inversion relies on.
-- `:linear` freezes `cp` at the value it takes at the nearest interval endpoint
-  and continues `h` linearly from there. The extension is monotone in `T` and
-  keeps the inversion bracketed at any temperature, at the cost of a first
-  derivative that is discontinuous at the edge of the fitted range.
+- `:linear` (default) freezes `cp` at the value it takes at the nearest interval
+  endpoint and continues `h` linearly from there. The extension is monotone in
+  `T`, so the temperature recovery stays bracketed and has one root at any
+  temperature, at the cost of a derivative of `cp` that is discontinuous at the
+  edge of the fitted range.
+- `:polynomial` evaluates the nearest interval's fit at the requested
+  temperature, the conventional treatment. A degree-four fit run beyond its
+  range can turn `cp` negative or make the energy non-monotone; the recovery
+  then finds no bracket, or returns a second temperature inside the fitted
+  range with no failure status. Use it to reproduce a calculation that
+  evaluated the fits this way.
 - `:missing` treats the fit as undefined outside its intervals. The evaluation
   still returns the `:linear` extension, so a step in progress completes and the
   offending state can be inspected, but the point is reported as inadmissible
@@ -777,7 +780,9 @@ is acceptable for this calculation, and a run using them is not rejected for
 extrapolating; the points are still counted and reported. `:missing` is the
 statement that it is not acceptable. An extrapolated state is reported under
 every setting, since successful evaluation of the polynomial is not evidence
-that the state lies in the model's domain.
+that the state lies in the model's domain. The setting is part of a
+checkpoint's thermodynamics record, so a checkpoint loads only into a mixture
+with the same `extrapolate`.
 """
 struct Nasa9Mixture{T} <: EOS
     sp::Vector{Nasa9Species{T}}
@@ -805,7 +810,7 @@ function _nasa9_interval_table(sp::Vector{Nasa9Species{T}}) where {T}
 end
 
 function _nasa9_mixture(::Type{T}, species; T_guess=300.0,
-                        extrapolate::Symbol=:polynomial) where {T<:AbstractFloat}
+                        extrapolate::Symbol=:linear) where {T<:AbstractFloat}
     isempty(species) && throw(ArgumentError("Nasa9Mixture requires at least one species"))
     extrapolate in (:polynomial, :linear, :missing) ||
         throw(ArgumentError("Nasa9Mixture: extrapolate must be :polynomial, " *
@@ -823,7 +828,7 @@ function _nasa9_mixture(::Type{T}, species; T_guess=300.0,
 end
 
 function Nasa9Mixture(species::AbstractVector{<:Nasa9Species}; T_guess=300.0,
-                      extrapolate::Symbol=:polynomial)
+                      extrapolate::Symbol=:linear)
     isempty(species) && throw(ArgumentError("Nasa9Mixture requires at least one species"))
     T = promote_type((typeof(item.R) for item in species)...)
     return _nasa9_mixture(T, species; T_guess=T_guess, extrapolate=extrapolate)
@@ -841,7 +846,7 @@ Nasa9Mixture(::Type{T}, species::Tuple{Vararg{Nasa9Species}}; kwargs...) where
 
 function Nasa9Mixture(names::AbstractVector{<:AbstractString}; path=nothing,
                       reference=:sensible, T_ref=298.15, T_guess=300.0,
-                      extrapolate::Symbol=:polynomial)
+                      extrapolate::Symbol=:linear)
     database_path = path === nothing ? NASA9_THERMO_PATH : path
     species = read_nasa9(names; path=database_path, reference=reference,
                          T_ref=T_ref)
@@ -856,7 +861,7 @@ Nasa9Mixture(::Type{T}, names::Tuple{Vararg{AbstractString}}; kwargs...) where
 function Nasa9Mixture(::Type{T}, names::AbstractVector{<:AbstractString};
                       path=nothing, reference=:sensible, T_ref=298.15,
                       T_guess=300.0,
-                      extrapolate::Symbol=:polynomial) where {T<:AbstractFloat}
+                      extrapolate::Symbol=:linear) where {T<:AbstractFloat}
     database_path = path === nothing ? NASA9_THERMO_PATH : path
     species = read_nasa9(names; path=database_path, reference=reference,
                          T_ref=T_ref)

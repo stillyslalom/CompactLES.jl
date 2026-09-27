@@ -3107,11 +3107,13 @@ end
     # constant term a3 populated, cp is temperature-independent and every
     # quantity — including the Newton inversion of e(T) — must reproduce the
     # closed-form ideal-gas answer to round-off. A transcription error in the
-    # enthalpy integral, the cv, or the sound speed shows up here.
+    # enthalpy integral, the cv, or the sound speed shows up here. The
+    # temperatures are nondimensional and lie below the record's 200 K edge, so
+    # the polynomial is evaluated there by stating `:polynomial`.
     γ, R = 1.4, 1.0
     cp = γ * R / (γ - 1)
     ideal = IdealSpecies("gas"; gamma=γ, R=R)
-    poly = Nasa9Mixture([nasa9_constant_cp("gas", R, cp)])
+    poly = Nasa9Mixture([nasa9_constant_cp("gas", R, cp)]; extrapolate=:polynomial)
     @test nspecies(poly) == 1
     for T in (0.3, 1.0, 7.5, 300.0)
         @test CL.species_cp(poly, 1, T) ≈ cp rtol = 1e-14
@@ -3254,10 +3256,13 @@ end
     end
 
     # The extrapolation policy is a choice, and it is inert inside the range.
-    poly = Nasa9Mixture(["CO2"])
+    poly = Nasa9Mixture(["CO2"]; extrapolate=:polynomial)
     lin = Nasa9Mixture(["CO2"]; extrapolate=:linear)
     @test_throws ArgumentError Nasa9Mixture(["CO2"]; extrapolate=:constant)
     @test poly.extrapolate === :polynomial
+    @test Nasa9Mixture(["CO2"]).extrapolate === :linear
+    @test Nasa9Mixture(Float32, ["CO2"]).extrapolate === :linear
+    @test Nasa9Mixture(read_nasa9(["CO2"])).extrapolate === :linear
     # `:missing` evaluates as the tangent extension does, so a step in progress
     # completes and the offending state can be read back; the difference is the
     # verdict it carries, not the number it returns.
@@ -3289,7 +3294,7 @@ end
     # there would end the search with no bracket and a temperature twice the
     # root's. The iterate is held on the edge of the fitted range instead.
     for T in (Float64, Float32)
-        co2 = Nasa9Mixture(T, ["CO2"])
+        co2 = Nasa9Mixture(T, ["CO2"]; extrapolate=:polynomial)
         for Tref in T.((13000, 15000, 17500, 19900))
             e = CL.species_energy(co2, 1, Tref)
             Trec, status = CL.mixture_temperature_status(co2, e, _ -> one(T))
