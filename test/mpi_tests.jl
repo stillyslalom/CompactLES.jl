@@ -2355,8 +2355,10 @@ function test_refined_decomposed()
     # Twenty steps of each run: the checks are agreement with serial to
     # round-off, which every step tests alike, and on an oversubscribed
     # runner the phase cost is linear in steps (see the callback phase).
+    # Returns the composite error, the step count and the error over the
+    # refined levels alone, which the coarse-fine faces set.
     function wave_error(; subcycle, levels=2, art=ArtificialProperties(enabled=false),
-                        filter_interval=0, kw...)
+                        filter_interval=0, k=1, kw...)
         N = 192
         r1 = BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1))
         e1 = 3 * (N ÷ 6) - 2
@@ -2367,40 +2369,46 @@ function test_refined_decomposed()
                         refine=levels == 3 ? [r1, r2] : r1; kw...)
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) ->
-            Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
+            Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(k * x)))
         run!(solver, states; tfinal=0.5, nmax=20)
-        e = 0.0
+        e = e_fine = 0.0
         for (ps, Q) in CL.eachpatch(solver, states)
             for i in 1:ps.decomp.n_local[1]
                 I = padded_index(ps, i, 1, 1)
-                e = max(e, abs(Q[I, 1] - (1.0 + 0.2 * sin(xcoord(ps, 1, i) -
+                ei = abs(Q[I, 1] - (1.0 + 0.2 * sin(k * (xcoord(ps, 1, i) -
                                                           u0 * solver.t))))
+                e = max(e, ei)
+                ps.h[1] < 2π / N / 2 && (e_fine = max(e_fine, ei))
             end
         end
-        return gmax(e), solver.step
+        return gmax(e), solver.step, gmax(e_fine)
     end
-    # Under the default ghost fluxes the static rows' error falls to
-    # round-off, where agreement with serial tests nothing, and the d8 and
-    # pentadiagonal rows' to where the decomposition's round-off moves it by
-    # several percent, so these rows take the closure rows; the subcycled
-    # three-level row and the ghost-flux row below carry the default's.
-    closure = (interface_flux=:closure,)
-    e_static, n_static = wave_error(; subcycle=false, closure...)
-    check("static two-level wave error matches serial",
-          abs(e_static - 3.237645707088177e-10), 1e-12)
+    # The static rows carry the wavenumber-8 wave: at wavenumber 1 the ghost
+    # fluxes leave a 20-step error of a few ulps (5.6e-15), and agreement
+    # with serial at that level tests nothing. At wavenumber 8 the refined
+    # levels' error, 1.9e-9 to 6.4e-9, peaks at a coarse-fine face, and the
+    # decomposed runs reproduce it to 9e-16 at np = 2, 4 and 8. The
+    # subcycled rows keep wavenumber 1, where the subcycled coupling sets a
+    # 3.5e-12 error that the decomposed runs reproduce to 1e-15.
+    e_static, n_static, ef_static = wave_error(; subcycle=false, k=8)
+    check("static two-level refined-level wave error matches serial",
+          abs(ef_static - 6.398861107648202e-9), 1e-14)
     check("static two-level step count matches serial",
           abs(n_static - 20), 0.5)
-    e_sub, n_sub = wave_error(; subcycle=true, closure...)
+    # Subcycled: the fine patch's ghost fluxes are evaluated on the Hermite
+    # shell imposed at each substage, interpolated at the order-8 default of
+    # the ghost path.
+    e_sub, n_sub = wave_error(; subcycle=true)
     check("subcycled two-level wave error matches serial",
-          abs(e_sub - 3.523323854892624e-10), 1e-12)
+          abs(e_sub - 3.4861002973229915e-12), 5e-15)
     check("subcycled two-level step count matches serial",
           abs(n_sub - 20), 0.5)
     # Three levels: the level-2 patch's coupling gathers over the level-1
     # patch's own decomposition, and the recursive driver's substep sequence
     # is collective at every depth.
-    e3, n3 = wave_error(; subcycle=false, levels=3, closure...)
-    check("static three-level wave error matches serial",
-          abs(e3 - 1.0962919461121601e-10), 1e-12)
+    e3, n3, ef3 = wave_error(; subcycle=false, levels=3, k=8)
+    check("static three-level refined-level wave error matches serial",
+          abs(ef3 - 1.933603832604547e-9), 1e-14)
     check("static three-level step count matches serial", abs(n3 - 20), 0.5)
     e3s, n3s = wave_error(subcycle=true, levels=3)
     check("subcycled three-level wave error matches serial",
@@ -2408,20 +2416,24 @@ function test_refined_decomposed()
     check("subcycled three-level step count matches serial",
           abs(n3s - 20), 0.5)
     # The fine level's divergence under the Brady–Livescu interface rows,
-    # planned on every rank of the level's decomposition.
+    # planned on every rank of the level's decomposition. The rows close the
+    # divergence at an interface, which only the closure-row path does.
+    closure = (interface_flux=:closure,)
     e_src, _ = wave_error(; subcycle=false, closure...,
                           interface_divergence=lele_d1_6(closures=:brady_livescu))
     check("static two-level wave error, source divergence rows, matches serial",
           abs(e_src - 3.26405569239796e-14), 5e-15)
-    # The ghost-flux divergence, subcycled: the fine patch's ghost fluxes are
-    # evaluated on the Hermite shell imposed at each substage, interpolated at
-    # the order-8 default of the ghost path.
-    e_gf, _ = wave_error(subcycle=true, interface_flux=:ghost)
-    check("subcycled two-level wave error, ghost-flux divergence, matches serial",
-          abs(e_gf - 3.4861002973229915e-12), 5e-15)
     # The d8 detector and the pentadiagonal filter, one fine box and eight-node
     # tiles: the detector's interface rows read the imposed and exchanged
     # ghosts, and both banded plans solve over the level's decomposition.
+    # These rows test the detector and the filter, not the interface flux,
+    # and keep the closure rows, whose 3e-10 error lies well above the
+    # decomposition's effect. The pentadiagonal filter's decomposed solve
+    # moves the solution by 1e-13 to 1.4e-12 against serial under either
+    # interface flux and at every wavenumber measured, where the default
+    # filter moves it by 7e-15; at wavenumber 1 the ghost fluxes' error is
+    # 1.9e-13, the same size. The default's row runs at wavenumber 8, where
+    # the error is 7.5e-9 and the decomposed runs reproduce it to 1.6e-13.
     d8pyr = (art=ArtificialProperties(enabled=true, detector=:d8), filt=pyranda_filter(),
              filter_interval=1)
     e_d8, _ = wave_error(; subcycle=false, closure..., d8pyr...)
@@ -2430,6 +2442,9 @@ function test_refined_decomposed()
     e_d8t, _ = wave_error(; subcycle=true, tile=8, closure..., d8pyr...)
     check("subcycled tiled wave error, d8 detector and pentadiagonal filter, " *
           "matches serial", abs(e_d8t - 3.079330124222679e-10), 1e-12)
+    e_d8g, _ = wave_error(; subcycle=false, k=8, d8pyr...)
+    check("static two-level wave error, d8 and pentadiagonal filter, ghost " *
+          "fluxes, matches serial", abs(e_d8g - 7.4608481615001665e-9), 1e-12)
 
     # Tagging-driven regridding tracks a Sod shock to the same region. The
     # four Sod regrid cases in this file run the unrelaxed filter
@@ -2532,16 +2547,13 @@ function test_tiled_level()
     check("tiled 2-D wave error matches serial",
           abs(et - 1.1764478280440471e-11), 1e-14)
     check("tiled 2-D step count matches serial", abs(nt - 10), 0.5)
-    ets, nts, _ = tiled_error(subcycle=true, interface_flux=:closure)
+    # Subcycled, the ghost fluxes cross the tile faces and the coarse-fine
+    # faces in both dimensions, the tiles decomposed at np >= 8. Measured
+    # agreement 4e-16 at np = 2 and 0 at np = 4 and 8.
+    ets, nts, _ = tiled_error(subcycle=true)
     check("subcycled tiled 2-D wave error matches serial",
-          abs(ets - 7.64822569720991e-8), 1e-12)
+          abs(ets - 3.3744118610457008e-11), 1e-14)
     check("subcycled tiled 2-D step count matches serial", abs(nts - 10), 0.5)
-    # The ghost-flux divergence through the tile faces and the coarse-fine
-    # faces in both dimensions, the tiles decomposed at np >= 8.
-    etg, ntg, _ = tiled_error(subcycle=true, interface_flux=:ghost)
-    check("subcycled tiled 2-D wave error, ghost-flux divergence, matches serial",
-          abs(etg - 3.3744118610457008e-11), 1e-12)
-    check("subcycled tiled 2-D step count, ghost-flux divergence", abs(ntg - 10), 0.5)
     # The molecular flux through the same faces: the tile faces' flux records
     # cross ranks, and the coarse-fine gradient ring carries each rank's
     # components.
@@ -2835,40 +2847,47 @@ function test_level_subset()
     # the steps approaching each scheduled instant; a rank outside the
     # level's subset holds no state from which that shortening follows, so
     # its agreement rests on the global dt reduction alone. `fires` counts
-    # the firings this rank saw.
-    function wave(ext; subcycle=false, landing=false, kw...)
+    # the firings this rank saw. `e_fine` is the error over the refined
+    # level alone, which the coarse-fine faces set.
+    function wave(ext; subcycle=false, landing=false, k=1, kw...)
         solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
                         art=ArtificialProperties(enabled=false), filter_interval=0,
                         subcycle=subcycle,
                         refine=BlockRegion((N ÷ 2, 0, 0), (ext, 1, 1)); kw...)
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) ->
-            Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
+            Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(k * x)))
         fires = Ref(0)
         cb = landing ?
              Callback(EveryTime(0.02), (_, _) -> (fires[] += 1; nothing)) : nothing
         run!(solver, states; tfinal=0.5, nmax=20, callback=cb)
-        e = 0.0
+        e = e_fine = 0.0
         for (ps, Q) in CL.eachpatch(solver, states)
             for i in 1:ps.decomp.n_local[1]
                 I = padded_index(ps, i, 1, 1)
-                e = max(e, abs(Q[I, 1] - (1.0 + 0.2 * sin(xcoord(ps, 1, i) -
+                ei = abs(Q[I, 1] - (1.0 + 0.2 * sin(k * (xcoord(ps, 1, i) -
                                                           u0 * solver.t))))
+                e = max(e, ei)
+                ps.h[1] < 2π / N / 2 && (e_fine = max(e_fine, ei))
             end
         end
         owners = MPI.Allreduce(Int(solver.levels[2].level_comm.owned), +, comm)
-        return solver, gmax(e), owners, fires[]
+        return solver, gmax(e), owners, fires[], gmax(e_fine)
     end
     spread(x) = MPI.Allreduce(Float64(x), max, comm) -
                 MPI.Allreduce(Float64(x), min, comm)
 
     # Twenty-two fine nodes: two ranks, so np = 2 owns the level whole and
-    # np = 4 and 8 own it on a prefix. The static rows take the closure rows,
-    # whose error the ghost fluxes would take to round-off.
-    s8, e8, own8, _ = wave(8; interface_flux=:closure)
+    # np = 4 and 8 own it on a prefix. The static rows carry the
+    # wavenumber-8 wave, as in the distributed-refinement phase: at
+    # wavenumber 1 the ghost fluxes leave an error of a few ulps. At
+    # wavenumber 8 the refined level's error, 6.6e-9 to 7.7e-9, peaks at a
+    # coarse-fine face, and the decomposed runs reproduce it to 1.5e-15 at
+    # np = 2, 4 and 8.
+    s8, _, own8, _, e8 = wave(8; k=8)
     check("22-node level takes two ranks", abs(own8 - min(np, 2)), 0.5)
-    check("subset-owned level: wave error matches serial",
-          abs(e8 - 1.3106626894909823e-11), 1e-13)
+    check("subset-owned level: refined-level wave error matches serial",
+          abs(e8 - 6.554074283293687e-9), 1e-14)
     check("subset-owned level: step count matches serial", abs(s8.step - 20), 0.5)
     s8s, e8s, _, _ = wave(8; subcycle=true)
     check("subcycled subset-owned level: wave error matches serial",
@@ -2878,19 +2897,19 @@ function test_level_subset()
 
     # Ten fine nodes cannot be split at all: without a one-rank subset this
     # configuration admits no process grid at any np > 1.
-    s4, e4, own4, _ = wave(4; interface_flux=:closure)
+    s4, _, own4, _, e4 = wave(4; k=8)
     check("10-node level takes one rank", abs(own4 - 1), 0.5)
-    check("one-rank level: wave error matches serial",
-          abs(e4 - 2.0219825813683201e-11), 1e-13)
+    check("one-rank level: refined-level wave error matches serial",
+          abs(e4 - 7.686864256228887e-9), 1e-14)
     check("one-rank level: step count matches serial", abs(s4.step - 20), 0.5)
     # A rank outside the level's subset runs no part of it, yet agrees on
     # the step sequence and on every trigger: dt comes from one reduction
     # over the whole run, and `t` and `step` advance from it. The
     # scheduled trigger also shortens dt on its approach, so a rank that
     # disagreed anywhere would land on a different instant.
-    sL, eL, _, firesL = wave(4; landing=true, interface_flux=:closure)
-    check("landed one-rank level: wave error matches serial",
-          abs(eL - 1.6264545266153618e-11), 1e-13)
+    sL, _, _, firesL, eL = wave(4; landing=true, k=8)
+    check("landed one-rank level: refined-level wave error matches serial",
+          abs(eL - 6.981902833658182e-9), 1e-14)
     check("one-rank level: time agrees on every rank",
           spread(sL.t), 1e-14 * max(sL.t, 1e-30))
     check("one-rank level: step agrees on every rank", spread(sL.step), 0.5)

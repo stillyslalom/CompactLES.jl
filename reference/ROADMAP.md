@@ -173,7 +173,7 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
 - [x] **N15b** — `interface_flux = :ghost` is the default at patch and level
   interfaces and inert without one; `:closure` remains for shock-dominated and
   Float32 runs, and a configuration `:ghost` does not support raises an
-  `ArgumentError` naming it (commit TBD).
+  `ArgumentError` naming it (commit `e9a91ed`).
 
 - [x] **N16** — `level_interpolation_order` (2, 4, 6 or 8) sets the live
   transfer order; 6 stays the default, which the default interface rows

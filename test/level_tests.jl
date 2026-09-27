@@ -54,7 +54,7 @@ end
 
 function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false,
                            levels=2, tile=0, deriv=lele_d1_6(), n_halo=4,
-                           interface_flux=:ghost)
+                           interface_flux=:ghost, cfl=0.5)
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     u0 = 0.5
     r1 = BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1))
@@ -66,7 +66,7 @@ function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false,
                     art=ArtificialProperties(enabled=false), filter_interval=0,
                     level_restriction=mode, subcycle=subcycle, tile=tile,
                     refine=levels == 3 ? [r1, r2] : r1, deriv=deriv,
-                    n_halo=n_halo, interface_flux=interface_flux)
+                    n_halo=n_halo, interface_flux=interface_flux, cfl=cfl)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
@@ -81,6 +81,18 @@ function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false,
     end
     return e
 end
+
+# The cfl of the subcycled entropy-wave rows. At the default cfl = 0.5 the
+# subcycled coupling's temporal error exceeds the spatial error of the ghost
+# fluxes from N = 96 on: 6.9e-12 at N = 192 against the global step's
+# 3.3e-14. At fixed N = 192 it falls by 18 as cfl halves from 0.5 to 0.25,
+# but at fixed cfl only by 3.6 as N doubles from 96 to 192, so the slope in
+# N falls with N and measures the coupling rather than the interface. At
+# cfl = 1/8 the error is the global step's to within 1% at N = 48 and 96
+# and to within 15% at N = 192, where both sit near the round-off floor.
+# The coupling's temporal order is the subcycled row of the temporal study
+# in test/convergence.jl.
+const SUBCYCLE_CFL = 0.125
 
 @testset "two levels: manufactured solution across the coarse-fine boundary" begin
     errs = [_level_wave_error(N) for N in (48, 96, 192)]
@@ -508,17 +520,17 @@ end
 end
 
 @testset "subcycled two levels: manufactured solution across the boundary" begin
-    errs = [_level_wave_error(N; subcycle=true) for N in (48, 96, 192)]
+    errs = [_level_wave_error(N; subcycle=true, cfl=SUBCYCLE_CFL) for N in (48, 96, 192)]
     orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
     @info "subcycled two-level entropy wave" errs orders
-    # Measured 1.6e-10 / 2.5e-11 / 6.9e-12, orders 2.65 / 1.86. The global
-    # step reads 3.3e-14 at N = 192, so the subcycled coupling's own error,
-    # not the interface's, sets this slope at the default CFL. Under the
-    # closure rows 8.4e-8 / 7.5e-9 / 5.9e-10, orders 3.49 / 3.66, within a
-    # few percent of the global step's. The step count drops threefold: dt
-    # is coarse-limited (the fine rate enters the reduction divided by 3).
-    @test all(>(1.5), orders)
-    @test errs[3] < 1e-11
+    # Measured 1.5e-10 / 2.0e-12 / 3.4e-14, orders 6.25 / 5.83, against the
+    # global step's 1.5e-10 / 2.0e-12 / 3.3e-14 at the default cfl. Under
+    # the closure rows at the default cfl 8.4e-8 / 7.5e-9 / 5.9e-10, orders
+    # 3.49 / 3.66. dt is coarse-limited (the fine rate enters the reduction
+    # divided by 3), so N = 192 takes 223 steps here against the global
+    # step's 159.
+    @test all(>(5.0), orders)
+    @test errs[2] < 1e-11
 end
 
 @testset "subcycled Sod through the refinement boundary" begin
@@ -677,16 +689,21 @@ end
 
 @testset "three levels: manufactured solution across nested boundaries" begin
     for subcycle in (false, true)
-        errs = [_level_wave_error(N; levels=3, subcycle=subcycle)
+        errs = [_level_wave_error(N; levels=3, subcycle=subcycle,
+                                  cfl=subcycle ? SUBCYCLE_CFL : 0.5)
                 for N in (48, 96, 192)]
         orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
         @info "three-level entropy wave" subcycle errs orders
-        # Measured orders 6.25 / 5.20 at the global dt and 2.62 / 1.85
-        # subcycled, the two-level figures with a second coarse-fine
-        # boundary pair inside the first; errors 1.4e-10 and 1.6e-10 at
-        # N = 48. Under the closure rows 3.31 / 3.74 and 3.35 / 3.79.
-        @test all(>(subcycle ? 1.5 : 5.0), orders)
-        @test errs[2] < 1e-10
+        # Measured 1.45e-10 / 1.90e-12 / 5.2e-14, orders 6.25 / 5.20, at the
+        # global step and 1.44e-10 / 1.91e-12 / 5.9e-14, orders 6.24 / 5.01,
+        # subcycled at SUBCYCLE_CFL: the two-level figures with a second
+        # coarse-fine boundary pair inside the first. The N = 192 errors lie
+        # near the round-off floor, which lowers the second order, so the
+        # subcycled second order has the wider guard. Under the closure
+        # rows at the default cfl, orders 3.31 / 3.74 and 3.35 / 3.79.
+        @test orders[1] > 5.5
+        @test orders[2] > (subcycle ? 4.5 : 5.0)
+        @test errs[2] < 1e-11
     end
 end
 
@@ -780,11 +797,11 @@ end
     # inside the level cost nothing visible at N = 192.
     @test all(>(5.0), orders)
     @test errs[3] < 1e-12
-    # Subcycled, one tiled level: measured 6.8e-12 against the one-patch
-    # level's 6.9e-12.
-    es = _level_wave_error(192; tile=8, subcycle=true)
+    # Subcycled, one tiled level at SUBCYCLE_CFL: measured 3.6e-14 against
+    # the one-patch level's 3.4e-14.
+    es = _level_wave_error(192; tile=8, subcycle=true, cfl=SUBCYCLE_CFL)
     @info "subcycled tiled entropy wave" es
-    @test es < 2e-11
+    @test es < 1e-13
 end
 
 @testset "tiled level: 2-D tile nest with corners" begin
