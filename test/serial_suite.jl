@@ -3153,6 +3153,9 @@ end
                                                floors=floors, warn=false)
     @test solver.floor_tally.cells == tally_before + 1
     @test mixture_density(solver, Qrep, I) ≈ floors[1] rtol = 1e-12
+    # Every species change the repairs make is tallied: the clip moves mass
+    # between species and the density floor adds `mass`.
+    @test sum(solver.floor_tally.species) ≈ solver.floor_tally.mass rtol = 1e-12
 
     # The scope that converts kinetic energy back into internal energy does
     # fix it, and the state is then accepted.

@@ -388,10 +388,14 @@ the solver as `floor_tally` and accumulated over every [`run!`](@ref) call.
 - `energy`: total energy added, contributed only by the branch that cannot damp
   the velocity because there is no kinetic energy left to convert.
 - `momentum`: momentum magnitude removed by the velocity damping.
+- `species`: the change of each species' mass, from the clip of a negative
+  partial density and the rescale of the others, which conserves the mixture
+  mass and not the species masses, and from the density floor, whose share
+  is `mass`. Empty until the failsafe first fires.
 
-The three physical quantities are volume-weighted on the same convention as
+The physical quantities are volume-weighted on the same convention as
 [`volume_integral`](@ref), so each is directly comparable with the integral of
-the field it perturbs. All six are global: `run!` reduces the per-step tally
+the field it perturbs. All seven are global: `run!` reduces the per-step tally
 across the communicator before accumulating it here. Every field stays zero
 under the default `StepControl(floor_ratio = 0)`.
 """
@@ -402,9 +406,10 @@ mutable struct FloorTally
     mass::Float64
     energy::Float64
     momentum::Float64
+    species::Vector{Float64}
 end
 
-FloorTally() = FloorTally(0, 0, 0, 0.0, 0.0, 0.0)
+FloorTally() = FloorTally(0, 0, 0, 0.0, 0.0, 0.0, Float64[])
 
 """
 What one sweep of [`state_report`](@ref) found in a conserved state. All counts

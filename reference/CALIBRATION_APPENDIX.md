@@ -4949,6 +4949,62 @@ mass-fraction undershoot under global stepping is an imposed-shell accuracy
 question for N11, not a conservation one. No turbulent, variable-density,
 shock or hardware-GPU claim follows from these passive-species cases.
 
+**Attribution.** `ledger=true` books each run's drift to the mechanism that
+made it (DESIGN.md, [attributing the conserved
+budgets](DESIGN.md#attributing-the-conserved-budgets)). Species 1 on its
+initial mass, two levels subcycled, 96 × 24 over two transits at 8 ranks; the
+row "at t = 5π" is the sample of largest drift. Total mass, momentum and
+energy stay at 1e-11 or below in every row, so the species exchange is the
+whole drift. Rows absent from a run (`restrict`, `same_level` on a refined
+layout, `unattributed`) were zero.
+
+| piece | at t = 5π | at t = 16π |
+|---|---|---|
+| right-hand side, both levels | +6.92e-5 | +3.54e-6 |
+| of which: root, less its face fluxes | +6.53e-5 | −3.7e-8 |
+| of which: level 1, less its face fluxes | −7.32e-6 | +1.9e-8 |
+| of which: coarse–fine flux mismatch | +1.12e-5 | +3.56e-6 |
+| imposed shell | +2.7e-7 | −9.9e-8 |
+| filter | −3.8e-8 | −1.1e-7 |
+| total drift | +6.94e-5 | +3.34e-6 |
+| telescoping residual | 2e-16 | 2e-15 |
+| right-hand side less its stage integral | 1e-15 | 7e-15 |
+
+The mismatch is the fine side's flux through its parent-fed faces plus the
+parent's flux across the covered region's boundary, both integrated through
+the stage recurrence; it is the quantity a refluxing register would
+redistribute. The root row is the parent operator near the covered region:
+its compact divergence reads covered nodes through the rows that straddle
+the region's boundary, and the mask removes them from the quadrature, so the
+root's uncovered integral does not telescope to its face fluxes. The same
+split holds for the global step (6.95e-5 at t = 5π, 3.06e-6 at the end), for
+three levels subcycled (root 6.53e-5, level 1 −1.6e-6, level 2 −6.4e-7,
+mismatch 1.24e-5 at t = 5π) and at 1, 2 and 4 ranks to three digits. The
+uniform run books 3e-14 to the right-hand side and the filter, and two
+same-level patches 1.6e-9, of which the filter carries 1.1e-9 and the
+same-level averaging 2e-15. Under moving refinement the sixteen regrid
+jumps sum to +2.29e-5, the right-hand side to −5.03e-5 and the imposed
+shell to +5.2e-6.
+
+At 192 × 48 the two-level subcycled drift at t = 5π is 1.37e-5, against
+6.94e-5 at 96 × 24, a ratio of 5.1; the mismatch falls from 1.12e-5 to
+1.08e-6 and the root row from 6.53e-5 to 1.42e-5. The drift is a truncation
+error of the coupling that converges at second order or better, concentrated
+in the right-hand side at the coarse–fine boundary, and the transfers
+(shell, restriction, filter) are two orders below it.
+
+**Decision.** No conservative correction is added. The attributed
+non-conservation is a converging operator defect at the coarse–fine
+boundary, 7e-5 at its largest against the 1e-3 budget at this
+resolution. A refluxing
+register would remove only the mismatch row, a sixth of the drift at t = 5π,
+and leave the root's straddling-row defect, which no face-local flux fix
+reaches; its cost is the register the section on composite budgets in
+AMR_GPU.md describes, one flux plane per interface face and component
+retained per stage and summed over the child's substeps, and a correction of
+the parent's rows next to the covered region, which changes the imposed
+state the smooth-order gates are measured on.
+
 ### bench/interfacesensor.jl: the sensors and the filter at an interface
 
 `julia --project=. -t 16 bench/interfacesensor.jl` (`probe`, `crossing`,

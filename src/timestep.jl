@@ -136,13 +136,22 @@ function step!(solver::Solver, Q, dQ, du, dt, prepared::Bool=false)
         # RKC[1] = 0, so a prepared caller's boundary values are the ones this
         # stage would compute; nothing between there and here has touched Q.
         first_prepared = prepared && stage == 1
-        first_prepared || apply_bcs!(solver, Q)
+        if !first_prepared
+            _ledger_open!(solver, Q)
+            apply_bcs!(solver, Q)
+            _ledger!(solver, Q, :wall_enforce)
+        end
         compute_rhs!(solver, Q, dQ, first_prepared)
+        _ledger_faces!(solver, 1)
+        _ledger_open!(solver, Q)
         _rk_update!(decomp, solver.equations.n_cons, Q, dQ, du,
                     RKA[stage], RKB[stage], dt)
+        _ledger_update!(solver, Q, dQ, RKA[stage], RKB[stage], dt)
     end
     solver.tstage = solver.t + dt
+    _ledger_open!(solver, Q)
     apply_bcs!(solver, Q)
+    _ledger!(solver, Q, :wall_enforce)
     _validate_transport_state!(solver, Q)
     return Q
 end
@@ -198,15 +207,22 @@ function step!(solver::Solver, states::Vector{<:ConservedState},
             _check_transport_status(solver, status)
         end
         for lev in levels
+            _ledger_open!(solver, states, lev)
             _level_update!(solver, lev, states, dQs, dus, RKA[stage], RKB[stage], dt)
+            _ledger_update!(solver, states, dQs, RKA[stage], RKB[stage], dt, lev)
         end
+        _ledger_open!(solver, states)
         sync_patches!(solver, states)
+        _ledger!(solver, states, :same_level)
         prolong_level_ghosts!(solver, states)
+        _ledger!(solver, states, :shell)
     end
     solver.tstage = solver.t + dt
+    _ledger_open!(solver, states)
     for (i, p) in enumerate(patches)
         apply_bcs!(PatchSolver(solver, p), states[i])
     end
+    _ledger!(solver, states, :wall_enforce)
     _validate_transport_state!(solver, states)
     return states
 end
@@ -239,10 +255,17 @@ function _level_rhs!(solver::Solver, lev::Level, states, dQs, prepared::Bool,
     if isempty(lev.stacks)
         for pi in lev.patches
             ps = PatchSolver(solver, patches[pi])
-            enforce && apply_bcs!(ps, states[pi])
+            if enforce
+                _ledger_open!(solver, states, pi)
+                apply_bcs!(ps, states[pi])
+                _ledger!(solver, states, :wall_enforce, pi)
+            end
             compute_rhs!(ps, states[pi], dQs[pi], prepared)
+            _ledger_faces!(solver, pi)
         end
     else
+        # A stacked level is device storage, which the ledger does not
+        # sweep, so it takes no hooks.
         enforce && for pi in lev.patches
             apply_bcs!(PatchSolver(solver, patches[pi]), states[pi])
         end
@@ -538,9 +561,13 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     #
     # Every owner of level ℓ enters this function. A tile shell imposition is
     # entered only by the ranks that own that tile.
-    shell!(θ) = for lt in lev.transfers
-        lt.fine_index == 0 ||
-            hermite_level_shell!(solver, states, lt, θ, parent_dt)
+    function shell!(θ)
+        _ledger_open!(solver, states, lev)
+        for lt in lev.transfers
+            lt.fine_index == 0 ||
+                hermite_level_shell!(solver, states, lt, θ, parent_dt)
+        end
+        _ledger!(solver, states, :shell, lev)
     end
     # Hermite endpoints for the children: the RHS at t^n falls out of stage 1
     # (RKC[1] = 0, so stage 1's dQ is the RHS on the unmodified Q). Every
@@ -569,20 +596,27 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
                                             count, control, guard)
         status == 0 || return status
         stage == 1 && save_boxes!(false)
+        _ledger_open!(solver, states, lev)
         _level_update!(solver, lev, states, dQs, dus, RKA[stage], RKB[stage], dt)
+        _ledger_update!(solver, states, dQs, RKA[stage], RKB[stage], dt, lev)
         # Same-level consistency before the next stage's shell imposition,
         # which leaves the shared faces to these records.
         _sync_level!(solver, states, lev)
+        _ledger!(solver, states, :same_level, lev)
     end
     solver.tstage = t0 + dt
     θ_end = T(m) / T(3)
     ℓ > 1 && shell!(θ_end)
+    _ledger_open!(solver, states, lev)
     for pi in lev.patches
         apply_bcs!(PatchSolver(solver, patches[pi]), states[pi])
     end
+    _ledger!(solver, states, :wall_enforce, lev)
     if ℓ > 1 && solver.filter_interval > 0 && count % solver.filter_interval == 0
         _level_filter!(solver, lev, states)
+        _ledger!(solver, states, :filter, lev)
         _sync_level!(solver, states, lev)
+        _ledger!(solver, states, :same_level, lev)
         # The filter is not shell-preserving; re-impose the forcing so the
         # next substep (or the restriction) reads a consistent boundary.
         shell!(θ_end)
@@ -618,12 +652,15 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
     # The root's restriction is `run!`'s, after its filter pass; every deeper
     # level restricts here so its parent's next substep sees the composite.
     if ℓ > 1
+        _ledger_open!(solver, states, lev)
         for lt in child.transfers
             _restrict_patch!(solver, states, lt, lev.level_comm)
         end
+        _ledger!(solver, states, :restrict, lev)
         # The restriction can change nodes beside a tile interface of this
         # level; its neighbors' ghosts must see them before the next substep.
         _sync_level!(solver, states, lev)
+        _ledger!(solver, states, :same_level, lev)
     end
     return UInt8(0)
 end
@@ -1096,7 +1133,8 @@ end
 
 Inspect the interior of `Q` for points outside the physical state space, repair
 them in place as far as `scope` allows, and report the global
-`(cells, low_energy, mass, energy, momentum)` tally of what that cost. The
+`(cells, low_energy, mass, energy, momentum, species)` tally of what that
+cost, `species` holding each species' mass change. The
 floors come from `positivity_floors`, `scope` is `StepControl.floor_scope`, and
 [`run!`](@ref) applies this after each completed step when
 `StepControl.floor_ratio` is set.
@@ -1107,6 +1145,7 @@ the previous one leaves:
 1. **Negative partial densities** are clipped to zero and the remaining positive
    ones rescaled onto the mixture density the point carried, which
    leaves that density and therefore the mixture mass exactly unchanged.
+   The species masses are not conserved, and their change is tallied.
 2. **A mixture density below `rho_floor`** is raised to it, distributed over the
    positive partial densities, or onto the first species where there are none,
    which is the composition `primitives!` substitutes at a point it
@@ -1127,7 +1166,7 @@ the previous one leaves:
 fallback. That scope therefore always raises the energy and never damps a
 velocity.
 
-Every rank in `solver.comm` enters one `Allreduce` of the five-element tally.
+Every rank in `solver.comm` enters one `Allreduce` of the tally.
 Each rank receives the same totals, and rank 0 reports the whole domain rather
 than its own block.
 
@@ -1137,29 +1176,35 @@ anything at the top of the next iteration.
 """
 function apply_positivity_floor!(solver::Solver, Q, rho_floor, e_floor,
                                  scope::Symbol)
-    tally = _local_positivity_repair!(solver, Q, rho_floor, e_floor, scope)
-    t0 = time_ns()
-    red = MPI.Allreduce(collect(tally), +, solver.comm)
-    _wait!(solver, t0)
-    return (cells=round(Int, red[1]), low_energy=round(Int, red[2]), mass=red[3],
-            energy=red[4], momentum=red[5])
+    species = zeros(solver.equations.n_species)
+    tally = _local_positivity_repair!(solver, Q, rho_floor, e_floor, scope, species)
+    return _reduce_floor_tally(solver, tally, species)
 end
 
 function apply_positivity_floor!(solver::Solver, states::Vector{<:ConservedState},
                                  rho_floor, e_floor, scope::Symbol)
     acc = (0.0, 0.0, 0.0, 0.0, 0.0)
+    species = zeros(solver.equations.n_species)
     for (ps, Q) in eachpatch(solver, states)
-        acc = acc .+ _local_positivity_repair!(ps, Q, rho_floor, e_floor, scope)
+        acc = acc .+ _local_positivity_repair!(ps, Q, rho_floor, e_floor, scope,
+                                               species)
     end
+    return _reduce_floor_tally(solver, acc, species)
+end
+
+# One `Allreduce` of the five scalars and the per-species changes.
+function _reduce_floor_tally(solver, tally, species)
     t0 = time_ns()
-    red = MPI.Allreduce(collect(acc), +, solver.comm)
+    red = MPI.Allreduce(vcat(collect(tally), species), +, solver.comm)
     _wait!(solver, t0)
     return (cells=round(Int, red[1]), low_energy=round(Int, red[2]), mass=red[3],
-            energy=red[4], momentum=red[5])
+            energy=red[4], momentum=red[5], species=red[6:end])
 end
 
 function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
-                                   scope::Symbol)
+                                   scope::Symbol,
+                                   species::Vector{Float64}=zeros(
+                                       solver.equations.n_species))
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
@@ -1208,7 +1253,9 @@ function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
                     # shrinks and never divides by zero.
                     s = ρ / pos
                     for sp in 1:n_species
-                        Q[I, sp] = max(Q[I, sp], zero(T)) * s
+                        old = Q[I, sp]
+                        Q[I, sp] = max(old, zero(T)) * s
+                        species[sp] += (Q[I, sp] - old) * vol
                     end
                 end
                 if ρ < rho_floor
@@ -1219,11 +1266,15 @@ function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
                     if pos > 0
                         s = T(rho_floor) / pos
                         for sp in 1:n_species
-                            Q[I, sp] = max(Q[I, sp], zero(T)) * s
+                            old = Q[I, sp]
+                            Q[I, sp] = max(old, zero(T)) * s
+                            species[sp] += (Q[I, sp] - old) * vol
                         end
                     else
                         for sp in 1:n_species
+                            old = Q[I, sp]
                             Q[I, sp] = sp == 1 ? T(rho_floor) : zero(T)
+                            species[sp] += (Q[I, sp] - old) * vol
                         end
                     end
                     mass += (rho_floor - ρ) * vol
@@ -1274,6 +1325,8 @@ function record_floor!(solver::Solver, tally)
     ft.mass += tally.mass
     ft.energy += tally.energy
     ft.momentum += tally.momentum
+    isempty(ft.species) && append!(ft.species, zeros(length(tally.species)))
+    ft.species .+= tally.species
     return ft
 end
 
@@ -1292,7 +1345,10 @@ function filter_state!(solver::Solver, states::Vector{<:ConservedState})
         subcycle && lev.index > 0 && continue
         _level_filter!(solver, lev, states)
     end
-    return sync_patches!(solver, states)
+    _ledger!(solver, states, :filter)
+    sync_patches!(solver, states)
+    _ledger!(solver, states, :same_level)
+    return states
 end
 
 _zero_state!(Q) = fill!(Q, 0)
@@ -1393,6 +1449,7 @@ function _rollback!(solver, Q, workspace, callback, control, save, failure,
                     attempts, rank)
     (save === nothing || attempts >= control.retries) && throw(failure)
     _restore_state!(Q, save.Q)
+    _ledger_rebase!(solver, Q, :rollback)
     _restore_art!(solver, save.art)
     solver.t = save.t
     solver.step = save.step
@@ -1445,9 +1502,17 @@ end
 # repeated restriction would write every node's own value.
 _presync!(solver, Q, restrict::Bool=true) = Q
 function _presync!(solver, states::Vector{<:ConservedState}, restrict::Bool=true)
+    _ledger_open!(solver, states)
     sync_patches!(solver, states)
-    return restrict ? sync_levels!(solver, states) :
-                      prolong_level_ghosts!(solver, states)
+    _ledger!(solver, states, :same_level)
+    # `sync_levels!` is the restriction followed by the prolongation.
+    if restrict
+        restrict_level!(solver, states)
+        _ledger!(solver, states, :restrict)
+    end
+    prolong_level_ghosts!(solver, states)
+    _ledger!(solver, states, :shell)
+    return states
 end
 
 # Test toggle: `run!` restricts before every step, as it did before the
@@ -1459,8 +1524,14 @@ const FORCE_PRESYNC_RESTRICT = Ref(false)
 # onto the covered coarse region, then re-impose the fine shell from the
 # restricted coarse state. No-ops without refinement.
 _post_step!(solver, Q) = Q
-_post_step!(solver, states::Vector{<:ConservedState}) =
-    sync_levels!(solver, states)
+function _post_step!(solver, states::Vector{<:ConservedState})
+    _ledger_open!(solver, states)
+    restrict_level!(solver, states)
+    _ledger!(solver, states, :restrict)
+    prolong_level_ghosts!(solver, states)
+    _ledger!(solver, states, :shell)
+    return states
+end
 
 """
     run!(solver, Q; tfinal, nmax=typemax(Int), callback=nothing, control=solver.control)
@@ -1648,9 +1719,11 @@ function run!(solver::Solver, Q, workspace::Workspace;
             # than after the loop keeps it on the retry path: a rejection rolls
             # back to the savepoint and lowers the CFL like any other failure,
             # so the endpoint cannot deliver a state that bypassed recovery.
+            _ledger_open!(solver, Q)
             _, failure = _apply_validity!(solver, Q; control=control,
                                           stage="the state run! returns",
                                           floors=(rho_floor, e_floor))
+            _ledger!(solver, Q, :repair)
             failure === nothing && break
             attempts = _rollback!(_cold(solver), Q, workspace, callback, control,
                                   save, failure, attempts, rank)::Int
@@ -1666,6 +1739,9 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # itself and report that as solver cost.
         wall_0 = time_ns()
         solver.wall_wait = 0.0
+        # The regrid is attributed by the first hook after it, which sees
+        # the regrid check counter move and rebases every patch.
+        _ledger_open!(solver, Q)
         _maybe_regrid!(solver, Q, workspace, save, control,
                        (rho_floor, e_floor)) && (levels_synced = false)
         _presync!(solver, Q, !levels_synced || FORCE_PRESYNC_RESTRICT[])
@@ -1677,7 +1753,9 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # and primitives pass also serve stage 1, as `prepared` below
         # asserts; that removes one sixth of both from the per-step cost.
         solver.tstage = solver.t
+        _ledger_open!(solver, Q)
         apply_bcs!(solver, Q)
+        _ledger!(solver, Q, :wall_enforce)
         rate, rho_min, filter_rate = max_rate(solver, Q)
         dt = predicted_dt(solver, control, rate)
         failure = check_step(control, dt, rho_min, dt_seen, solver.step,
@@ -1688,16 +1766,20 @@ function run!(solver::Solver, Q, workspace::Workspace;
         if failure === nothing && control.validity_interval > 0 &&
            solver.step % control.validity_interval == 0
             repaired_0 = solver.floor_tally.cells
+            _ledger_open!(solver, Q)
             _, failure = _apply_validity!(solver, Q; control=control,
                                           stage="the state entering the step",
                                           floors=(rho_floor, e_floor))
+            _ledger!(solver, Q, :repair)
             # A `:repair` policy rewrites interior points after `max_rate` has
             # read them, which leaves the halos, the boundary values and the
             # primitives that `prepared` asserts behind the state. The tally is
             # reduced, so every rank takes this branch together.
             if failure === nothing && solver.floor_tally.cells != repaired_0
                 _presync!(solver, Q)
+                _ledger_open!(solver, Q)
                 apply_bcs!(solver, Q)
+                _ledger!(solver, Q, :wall_enforce)
                 rate, rho_min, filter_rate = max_rate(solver, Q)
                 dt = predicted_dt(solver, control, rate)
                 failure = check_step(control, dt, rho_min, dt_seen, solver.step,
@@ -1796,27 +1878,37 @@ function run!(solver::Solver, Q, workspace::Workspace;
         solver.filter_rate_prev = filter_rate
         _apply_switches!(solver)
         if solver.filter_interval > 0 && solver.step % solver.filter_interval == 0
+            _ledger_open!(solver, Q)
             filter_state!(solver, Q)
+            _ledger!(solver, Q, :filter)
         end
         # Once per step, after the filter and before the failsafe; see
         # `truncate_modes!` for why the halos may stay stale here.
-        _truncating(solver.truncation) && truncate_modes!(solver, Q)
+        if _truncating(solver.truncation)
+            _ledger_open!(solver, Q)
+            truncate_modes!(solver, Q)
+            _ledger!(solver, Q, :truncation)
+        end
         _post_step!(solver, Q)
         levels_synced = restrict_repeats
         # After the filter, not immediately after step!, ensuring the state
         # entering the next iteration's checks is the repaired one whichever of
         # the two damaged it. The compact filter is not monotone, so it can
         # produce sub-floor values itself. The repaired count is reduced.
+        _ledger_open!(solver, Q)
         rho_floor > 0 && _positivity_failsafe!(_cold(solver), Q, rho_floor,
                                                 e_floor, control, floor_0,
                                                 rank)::Bool && (levels_synced = false)
+        _ledger!(solver, Q, :repair)
         # A rollback `continue`s above this, so an abandoned iteration never
         # records a step time; wall_total counts work that stood.
         _validate_transport_state!(solver, Q)
         solver.wall_step = (time_ns() - wall_0) / 1e9
         solver.wall_total += solver.wall_step
         solver.wait_total += solver.wall_wait
+        _ledger_open!(solver, Q)
         stop, ran = run_callbacks!(callback, solver, Q)
+        _ledger!(solver, Q, :callback)
         stop && (stopped = true)
         ran && (levels_synced = false)
     end

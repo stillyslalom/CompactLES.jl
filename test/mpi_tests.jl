@@ -1953,6 +1953,11 @@ function test_positivity_floor()
         t = CL.apply_positivity_floor!(solver, Q, rho_floor, e_floor,
                                        :internal_energy)
         push!(counts, t.cells); push!(masses, t.mass); push!(energies, t.energy)
+        # The clip moves half a unit of density per cell from species 2 to
+        # species 1 and leaves the mixture mass alone.
+        vol = prod(2π ./ n_global)
+        check("split axis $ax: species mass the clip moves",
+              abs(t.species[1] - vol) + abs(t.species[2] + vol), 1e-12 * vol)
         check("split axis $ax: repaired cells (expect 6)", abs(t.cells - 6), 0.5)
         check("split axis $ax: low-energy cells (expect 4)",
               abs(t.low_energy - 4), 0.5)

@@ -38,6 +38,13 @@
 # `mu` puts molecular transport (`ConstantTransport(mu0 = mu)`) on every layout, the
 # uniform one included, which carries the molecular flux through the ghost
 # fluxes under `iflux=ghost`.
+# `ledger=true` attributes each run's drift to the mechanism that made it
+# (the private budget ledger of src/ledger.jl): one row per mechanism,
+# summed over levels, on the drift's scales, at the sample of largest drift
+# and at the end, the telescoping residual, the unattributed
+# writes, the right-hand side against its stage-integrated form, and the
+# coarse-fine flux mismatch, the sum of the fine side's flux through its
+# parent-fed faces and the parent's through the covered region's boundary.
 #
 # The predeclared application budgets are deliberately coarse enough to be
 # useful on a long, interface-crossing calculation: 0.1% of initial mass,
@@ -67,7 +74,7 @@ const args = CompactLES.script_args(ARGS, (N=192, ny=32, tfinal=8.0, nmax=typema
                                            maxlevels=3, interpolation_order=0, mu=0.0,
                                            layouts="uniform,samelevel,depth2,depth3",
                                            stepping="both", idiv="default",
-                                           iflux="closure");
+                                           iflux="closure", ledger=false);
                                     positional=(:N, :tfinal))
 
 # Application comparison budgets, fixed independently of the results.
@@ -206,6 +213,9 @@ function evolve(mode, N, ny, tfinal, nmax, subcycle)
     initial = snapshot(solver, Q)
     ws = Workspace(Q)
     history = Any[initial]
+    args.ledger && CL._ledger_begin!(solver, Q)
+    # The ledger at the sample of largest drift, beside the final one.
+    worst = (drift=-1.0, ledger=nothing, time=0.0)
     # Separate run! calls land exactly on each requested physical observation
     # time, retaining max excursion rather than allowing final cancellation to
     # hide an earlier interface defect.
@@ -213,6 +223,11 @@ function evolve(mode, N, ny, tfinal, nmax, subcycle)
         run!(solver, Q, ws; tfinal=target, nmax=nmax)
         sample = snapshot(solver, Q)
         push!(history, sample)
+        if args.ledger
+            r = CL._ledger_end!(solver, Q; close=false)
+            d = maxconserved(drift(sample, initial; c0=sqrt(1.4)))
+            d > worst.drift && (worst = (drift=d, ledger=r, time=sample.time))
+        end
         if MPI.Comm_rank(solver.comm) == 0
             printfmt("sample %-9s subcycle=%-5s t=%.15g W=%.8e theta=%.8e " *
                     "excursion %.2e\n", mode, subcycle, sample.time,
@@ -222,6 +237,12 @@ function evolve(mode, N, ny, tfinal, nmax, subcycle)
         solver.step >= nmax && break
     end
     final = snapshot(solver, Q)
+    if args.ledger
+        show_ledger("$(mode), subcycle=$(subcycle), largest drift at " *
+                    "t=$(round(worst.time; digits=4))", worst.ledger, initial)
+        show_ledger("$(mode), subcycle=$(subcycle), final",
+                    CL._ledger_end!(solver, Q), initial)
+    end
     # c0 = sqrt(gamma*p/rho) at the uniform initial state.
     ds = [drift(s, initial; c0=sqrt(1.4)) for s in history]
     return (; initial, final, history, drift=drift(final, initial; c0=sqrt(1.4)),
@@ -238,6 +259,7 @@ function regrid_history!(N, ny, tfinal, nmax, subcycle)
     initialize!(solver, Q, layer_ic(true))
     ws = Workspace(Q)
     initial = snapshot(solver, Q)
+    args.ledger && CL._ledger_begin!(solver, Q)
     events = Any[]
     history = Any[initial]
     cumulative_jump = 0.0
@@ -272,6 +294,8 @@ function regrid_history!(N, ny, tfinal, nmax, subcycle)
         solver.step >= nmax && break
     end
     final = history[end]
+    args.ledger && show_ledger("regrid, subcycle=$(subcycle)",
+                               CL._ledger_end!(solver, Q), initial)
     ds = [drift(s, initial; c0=sqrt(1.4)) for s in history]
     total = drift(final, initial; c0=sqrt(1.4))
     return (; initial, final, history, events, drift=total,
@@ -288,6 +312,51 @@ function show_drift(label, d; budget=EVOLUTION_BUDGET)
             d.species..., d.momentum...)
     @printf("dwidth %+.3e dtheta %+.3e\n", d.width, d.molecular)
     flush(stdout) # MPI.Abort does not flush redirected stdout after a failed gate.
+end
+
+# The ledger's pieces on the drift's scales: species and mass by their
+# initial values, momentum by M0*c0, energy by its initial value. Collective
+# `_ledger_end!` has already reduced them; rank 0 prints.
+function show_ledger(label, r, initial; c0=sqrt(1.4))
+    MPI.Comm_rank(MPI.COMM_WORLD) == 0 || return nothing
+    b = initial.conserved
+    nsp = length(b.species_masses)
+    scale = vcat(abs.(b.species_masses), fill(abs(b.total_mass) * c0, 3),
+                 abs(b.total_energy))
+    rel(v) = v ./ max.(scale, eps())
+    massrel(v) = sum(v[1:nsp]) / abs(b.total_mass)
+    row(name, v) = printfmt("    %-24s mass %+.3e species (%s) momentum (%s) " *
+                            "energy %+.3e\n", name, massrel(v),
+                            join([@sprintf("%+.3e", x) for x in rel(v)[1:nsp]], ", "),
+                            join([@sprintf("%+.3e", x) for x in rel(v)[nsp+1:nsp+3]],
+                                 ", "), rel(v)[end])
+    zero_v = zeros(length(scale))
+    get0(k) = get(r.pieces, k, zero_v)
+    levels = 0:r.levels-1
+    composite(phase) = sum(get0((phase, l)) for l in levels)
+    # A mechanism's composite row sums its levels: a piece on one level can
+    # be a transfer to another (the flux through a coarse-fine face, the
+    # volume a regrid moves between levels), which the sum cancels.
+    println("  ledger $(label), composite:")
+    for phase in CL.LEDGER_PHASES
+        any(l -> haskey(r.pieces, (phase, l)), levels) || continue
+        row(string(phase), composite(phase))
+    end
+    row("total drift", r.final .- r.initial)
+    row("telescoping residual", r.residual)
+    row("rhs less its integral", composite(:rhs) .- composite(:rhs_integral))
+    row("rhs less wall flux", composite(:rhs) .- composite(:wall_flux))
+    row("coarse-fine mismatch",
+        composite(:coarse_fine_flux) .+ composite(:covered_face_flux))
+    # Per level, the right-hand side less every flux through the level's
+    # faces: the part of the drift the operator makes inside the level.
+    for l in levels
+        haskey(r.pieces, (:rhs, l)) || continue
+        faces = sum(get0((name, l)) for name in CL.LEDGER_DERIVED[2:end])
+        row("rhs less face fluxes L$(l)", get0((:rhs, l)) .- faces)
+    end
+    flush(stdout)
+    return nothing
 end
 
 function show_scale(label, s)

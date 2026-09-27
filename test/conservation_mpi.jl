@@ -50,4 +50,20 @@ function test_composite_budgets()
     held_max = MPI.Allreduce(held, max, comm)
     check("root-only ranks enter refined collective",
           np > 2 && held_min < held_max ? 0.0 : np <= 2 ? 0.0 : 1.0, 0.5)
+
+    # The budget ledger over the same three-level subcycled run: its hooks
+    # sit inside the recursion that only each level's owners enter and do
+    # not reduce, so the pieces must match the undecomposed run.
+    ledger(s, Q) = (CL._ledger_begin!(s, Q); run!(s, Q; tfinal=1.0, nmax=4);
+                    CL._ledger_end!(s, Q))
+    rref = ledger(deepref, Qdeepref)
+    r = ledger(deep, Qdeep)
+    z = zeros(length(r.initial))
+    piece(x, k) = get(x.pieces, k, z)
+    check("ledger: pieces vs COMM_SELF",
+          maximum(maximum(abs.(piece(r, k) .- piece(rref, k)))
+                  for k in union(keys(r.pieces), keys(rref.pieces))), 1e-11)
+    check("ledger: nothing unattributed",
+          any(k -> k[1] === :unattributed, keys(r.pieces)) ? 1.0 : 0.0, 0.5)
+    check("ledger: telescoping residual", maximum(abs, r.residual), 1e-12)
 end

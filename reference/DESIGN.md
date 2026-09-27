@@ -118,6 +118,7 @@ validation cases are discussed, and never a viscosity.
 | `src/timestep.jl`         | RK45, CFL timestep, the `run!` loop, per-step filtering |
 | `src/regrid.jl`           | Tagging and regridding |
 | `src/diagnostics.jl`      | Volume and plane reductions, and the variable-density mixing diagnostics built on them |
+| `src/ledger.jl`           | The budget ledger: composite conserved integrals attributed to the mechanism that changed them |
 | `src/viz.jl`              | Geometry-aware extraction of report fields (`line_profile`, `field_slice`) and the Makie plotting interface |
 | `src/problem.jl`          | Frontend: `Prim`, `Problem`, `Numerics`, `setup`, initialization |
 | `src/scriptargs.jl`       | `script_args`: `ARGS` parsing for the scripts in `bench/` and at the repo root |
@@ -1383,7 +1384,7 @@ is counted only through a partner below the band.
 The failsafe renormalizes. A negative partial density is clipped to zero and
 the positive ones are rescaled onto the mixture density the point carried
 (`apply_positivity_floor!`). That conserves the mixture mass and not the
-species masses, the species change does not enter `FloorTally`, and at fixed E
+species masses, whose change `FloorTally.species` records, and at fixed E
 and momentum the new composition moves T and p, so a clipped point is also a
 pressure perturbation. The clip has no band: with `floor_ratio > 0` every
 undershoot of a captured interface is clipped on every step that leaves one
@@ -1457,6 +1458,43 @@ average to limit about, and the compact filter is linear and not monotone. A
 correction of the second kind would need the compact divergence written as a
 difference of face fluxes and a first-order flux beside it; neither exists in
 the code, and whether one is needed has not been measured.
+
+### Attributing the conserved budgets
+
+The composite budget is the node quadrature of each species mass, the three
+momenta and the energy: trapezoid weights, one half at a node-centered
+physical edge and at each patch's interface end (so a shared plane counts
+once between its two patches), one at a folded half-offset edge and on
+periodic and collapsed dimensions, the physical cell volume
+Πh_d / inv_J, and on a parent patch the fraction of each node's cell no
+child covers (`uncovered_fraction` of `Patch.covered`). This is
+`_conserved_budget`, the instrument of `bench/interfaceconservation.jl`.
+
+`src/ledger.jl` attributes the change of that budget to the mechanism that
+made it. Every state write in `run!`, the global-step driver and the
+subcycled recursion is bracketed by two hooks; the second recomputes the
+budget of the patches written and books the change to one of `:rhs` (the
+Runge–Kutta stage updates), `:wall_enforce` (`apply_bcs!` on physical
+faces), `:filter`, `:same_level` (shared-plane averaging and ghost records),
+`:shell` (the imposed coarse–fine shell), `:restrict`, `:regrid`,
+`:repair`, `:truncation`, `:callback` or `:rollback`, per level. The first
+hook books anything since the previous one as `:unattributed`, so a write
+no bracket covers is visible, and the pieces telescope to the total drift.
+Beside the snapshots the ledger integrates, with the low-storage weights,
+each stage's right-hand-side integral and the flux entering each patch
+through its physical, same-level and coarse–fine faces, taken from the flux
+`compute_rhs!` differenced after `correct_flux!`, and on a parent the flux
+across the parent-fed faces of each covered region with that face's own
+trapezoid weights. The first reproduces the `:rhs` piece to round-off; the
+physical faces give the boundary-flux closure, the right-hand side less the
+flux delivered through the walls, which is the defect of a compact
+derivative that is not summation-by-parts against this quadrature; and the
+fine and parent sides of the coarse–fine faces sum to the flux mismatch a
+refluxing correction would redistribute. Every hook is rank-local and the
+reduction is taken once at the end, so a hook inside a level only its owners
+enter strands no rank. Off, a hook is a field load and a branch. The
+measurements are in
+[CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#benchinterfaceconservationjl-composite-conservation-budgets).
 
 ## Characteristic boundary conditions
 

@@ -107,3 +107,69 @@ const CL = CompactLES
     @test CL._conserved_budget(single, Q).total_mass ≈ mass atol=1e-13
     @test_throws ArgumentError CL._conserved_budget(single, ConservedState[])
 end
+
+@testset "budget ledger: attribution, closure, and an unchanged run" begin
+    wall = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    pulse(x, y, z) = Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                          p=1 + 0.1exp(-100(x - 0.3)^2))
+    function closed_box()
+        s = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(wall, per, per), cfl=0.5)
+        Q = allocate_state(s)
+        initialize!(s, Q, pulse)
+        return s, Q
+    end
+    s, Q = closed_box()
+    CL._ledger_begin!(s, Q)
+    run!(s, Q; tfinal=0.6)
+    r = CL._ledger_end!(s, Q)
+    @test !CL.BUDGET_LEDGER.on
+    # The ledger reads the state and writes none of it.
+    ref, Qref = closed_box()
+    run!(ref, Qref; tfinal=0.6)
+    @test parent(Q) == parent(Qref)
+    # Every write is bracketed, so nothing lands between the brackets, and
+    # the pieces telescope to the drift.
+    @test !any(k -> k[1] === :unattributed, keys(r.pieces))
+    @test maximum(abs, r.residual) < 1e-13
+    rhs = r.pieces[(:rhs, 0)]
+    @test maximum(abs, rhs .- r.pieces[(:rhs_integral, 0)]) < 1e-13
+    # Budget channels: species 1, the three momenta, the energy. The walls'
+    # pressure is the whole x-momentum source; what the enforcement of
+    # u = 0 on the wall planes removes and the non-summation-by-parts
+    # closure add are below a percent of it at this resolution.
+    delivered = r.pieces[(:wall_flux, 0)][2]
+    enforced = get(r.pieces, (:wall_enforce, 0), zeros(5))[2]
+    @test abs(delivered) > 1e-3
+    @test abs(rhs[2] + enforced - delivered) < 1e-2 * abs(delivered)
+    @test r.pieces[(:wall_flux, 0)][1] == 0      # no mass crosses a slip wall
+
+    # Two levels in a periodic box, global and subcycled, with a regrid that
+    # moves the level: every mechanism's piece telescopes, the regrid lands
+    # in its own row, and the right-hand side matches its stage integral on
+    # each level.
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 1.0, 1.4)])
+    wave(x, y, z) = Prim(Y=(0.5 + 0.4sin(2π * x), 0.5 - 0.4sin(2π * x)),
+                         u=(1.0, 0.0, 0.0), p=1.0, rho=1.0 + 0.2sin(2π * x))
+    for subcycle in (false, true)
+        s = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(per, per, per), eos=eos, subcycle=subcycle,
+                   refine=BlockRegion((36, 0, 0), (24, 1, 1)), regrid_interval=6,
+                   tag_buffer=0,
+                   tag_predicate=(p, I) -> 0.6 < xcoord(p, 1, interior_index(p, I)[1]) < 0.8)
+        Q = allocate_state(s)
+        initialize!(s, Q, wave)
+        CL._ledger_begin!(s, Q)
+        run!(s, Q; tfinal=0.2)
+        r = CL._ledger_end!(s, Q)
+        @test !any(k -> k[1] === :unattributed, keys(r.pieces))
+        @test maximum(abs, r.residual) < 1e-12
+        @test haskey(r.pieces, (:regrid, 1)) && haskey(r.pieces, (:shell, 1))
+        for level in 0:1
+            @test maximum(abs, r.pieces[(:rhs, level)] .-
+                               r.pieces[(:rhs_integral, level)]) < 1e-12
+        end
+    end
+end
