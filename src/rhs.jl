@@ -497,11 +497,12 @@ end
 # field that is zero but for those ghosts, added to the first. What neither
 # covers (the artificial fluxes and the wall corrections) keeps the one-sided
 # rows of `div_plans`. Without molecular transport the split is the inviscid
-# one alone. The split costs one pointwise pass and, where a remainder
-# exists, a second pass and a second line solve per component and interface
-# dimension; the molecular part adds one pass, one halo exchange and one
-# line solve per component. It allocates nothing beyond `tmp_b` and, on a
-# device plan, `tmp_a`, and the `ghost_flux` arrays sized at construction.
+# one alone. The split costs one pointwise pass per component and interface
+# dimension and, where a remainder exists, a second line solve (and on a
+# device plan a second pass); the molecular part adds one pass over all
+# interface dimensions, one halo exchange per dimension, and one line solve
+# per component and dimension. It allocates nothing beyond the `ghost_flux`
+# arrays sized at construction; `tmp_b` and `tmp_a` are its scratch.
 
 "Whether dimension `d` of this patch has an interface end the divergence closes."
 @inline _interface_dim(solver::SolverLike, d::Int) =
@@ -531,9 +532,34 @@ end
 @inline function _inviscid_flux_point!(out, F, Q, rho, u, v, w, p, Y, G, c, d,
                                        n_species, m1, m2, m3, i_energy,
                                        remainder, viscous, i, j, k)
-    T = eltype(rho)
     @inbounds begin
         I = CartesianIndex(i, j, k)
+        f = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
+                                    m1, m2, m3, i_energy, viscous, I)
+        out[I] = remainder ? F[I] - f : f
+    end
+    return nothing
+end
+
+# Both fields of `_inviscid_flux_point!` in one pass: the remainder into
+# `rem` and the ghost-differenced flux into `out`.
+@inline function _split_flux_point!(rem, out, F, Q, rho, u, v, w, p, Y, G, c, d,
+                                    n_species, m1, m2, m3, i_energy, viscous,
+                                    i, j, k)
+    @inbounds begin
+        I = CartesianIndex(i, j, k)
+        f = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
+                                    m1, m2, m3, i_energy, viscous, I)
+        rem[I] = F[I] - f
+        out[I] = f
+    end
+    return nothing
+end
+
+@inline function _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
+                                         m1, m2, m3, i_energy, viscous, I)
+    T = eltype(rho)
+    @inbounds begin
         ρ = rho[I]
         uv = (u[I], v[I], w[I])
         ud = uv[d]
@@ -551,9 +577,8 @@ end
             f = (Q[I, i_energy] + pI) * ud
         end
         viscous && (f += G[I, c])
-        out[I] = remainder ? F[I] - f : f
+        return f
     end
-    return nothing
 end
 
 # The molecular flux along `d` of every conserved component into `G[I, :]`:
@@ -599,16 +624,18 @@ end
     return nothing
 end
 
-# The molecular flux along `d` over the padded block from the interior
-# gradients: evaluated where the point is interior along every active
-# dimension, zero elsewhere, so an interface end's ghost layers start from
-# zero and the rank halos along `d` take the neighbour's values in the
-# exchange that follows. `stride` is the padded extent along the third
-# dimension, which a stacked launch adds to `k` once per tile.
-@inline function _molecular_flux_point!(G, eos, rho, u, v, w, T_ion, cp_mix, Y,
-                                        grad_u, gT, gY, transport, n_species,
-                                        m1, m2, m3, i_energy, d, n_cons, nl, pad,
-                                        stride, i, j, k)
+# The molecular flux along each dimension flagged in `dims` into `G1`, `G2`,
+# `G3` over the padded block from the interior gradients: evaluated where the
+# point is interior along every active dimension, zero elsewhere, so an
+# interface end's ghost layers start from zero and the rank halos along `d`
+# take the neighbour's values in the exchange that follows. One pass serves
+# every interface dimension, which reads the transport coefficients and the
+# gradients once. `stride` is the padded extent along the third dimension,
+# which a stacked launch adds to `k` once per tile.
+@inline function _molecular_flux_point!(G1, G2, G3, dims, eos, rho, u, v, w, T_ion,
+                                        cp_mix, Y, grad_u, gT, gY, transport,
+                                        n_species, m1, m2, m3, i_energy, n_cons,
+                                        nl, pad, stride, i, j, k)
     T = eltype(rho)
     @inbounds begin
         I = CartesianIndex(i, j, k)
@@ -617,7 +644,9 @@ end
                  pad[3] < kl <= pad[3] + nl[3]
         if !inside
             for c in 1:n_cons
-                G[I, c] = zero(T)
+                dims[1] && (G1[I, c] = zero(T))
+                dims[2] && (G2[I, c] = zero(T))
+                dims[3] && (G3[I, c] = zero(T))
             end
             return nothing
         end
@@ -625,30 +654,49 @@ end
         gu = ((grad_u[1, 1][I], grad_u[1, 2][I], grad_u[1, 3][I]),
               (grad_u[2, 1][I], grad_u[2, 2][I], grad_u[2, 3][I]),
               (grad_u[3, 1][I], grad_u[3, 2][I], grad_u[3, 3][I]))
-        _molecular_flux!(G, I, eos, rho[I], (u[I], v[I], w[I]), T_ion[I], Y,
-                         molecular, gu, gT[d][I], sp -> gY[d, sp][I], n_species,
-                         m1, m2, m3, i_energy, d)
+        ρ = rho[I]
+        uv = (u[I], v[I], w[I])
+        Tp = T_ion[I]
+        dims[1] && _molecular_flux!(G1, I, eos, ρ, uv, Tp, Y, molecular, gu, gT[1][I],
+                                    sp -> gY[1, sp][I], n_species, m1, m2, m3,
+                                    i_energy, 1)
+        dims[2] && _molecular_flux!(G2, I, eos, ρ, uv, Tp, Y, molecular, gu, gT[2][I],
+                                    sp -> gY[2, sp][I], n_species, m1, m2, m3,
+                                    i_energy, 2)
+        dims[3] && _molecular_flux!(G3, I, eos, ρ, uv, Tp, Y, molecular, gu, gT[3][I],
+                                    sp -> gY[3, sp][I], n_species, m1, m2, m3,
+                                    i_energy, 3)
     end
     return nothing
 end
 
-# Phase one of the molecular ghost flux along an interface dimension `d`: the
-# interior molecular flux into the patch's `ghost_flux[d]`, with its rank
-# halos along `d` exchanged, from the gradients this evaluation computed.
-# Collective over the patch's communicator.
-function _molecular_ghost_flux!(solver::SolverLike, d::Int)
+# The dimensions `_ghost_flux_divergence!` serves: active, with an interface
+# end the divergence closes. Setup constants of the patch.
+_ghost_flux_dims(solver::SolverLike) =
+    ntuple(d -> solver.decomp.active[d] && _interface_dim(solver, d), 3)
+
+# Phase one of the molecular ghost flux: the interior molecular flux along
+# every interface dimension `d` into the patch's `ghost_flux[d]`, with its
+# rank halos along `d` exchanged, from the gradients this evaluation
+# computed. Collective over the patch's communicator.
+function _molecular_ghost_flux!(solver::SolverLike)
     decomp = solver.decomp
     eq = solver.equations
     m1, m2, m3 = eq.i_mom
     n1f, n2f, n3f = padded_extent(decomp)
     ft = solver.field_tuples
-    G = solver.ghost_flux[d]
-    pointwise!(_molecular_flux_point!, G, n1f, n2f, n3f,
-               G, solver.eos, solver.rho, solver.u, solver.v, solver.w,
-               solver.T_ion, solver.cp_mix, ft.Y, ft.grad_u, solver.grad_T_ion,
-               ft.grad_Y, solver.transport, eq.n_species, m1, m2, m3,
-               eq.i_energy, d, eq.n_cons, decomp.n_local, decomp.n_halo_d, n3f)
-    exchange_dim_batch!(ComponentViews(G), decomp, d)
+    dims = _ghost_flux_dims(solver)
+    G1, G2, G3 = solver.ghost_flux
+    route = dims[1] ? G1 : dims[2] ? G2 : G3
+    pointwise!(_molecular_flux_point!, route, n1f, n2f, n3f,
+               G1, G2, G3, dims, solver.eos, solver.rho, solver.u, solver.v,
+               solver.w, solver.T_ion, solver.cp_mix, ft.Y, ft.grad_u,
+               solver.grad_T_ion, ft.grad_Y, solver.transport, eq.n_species,
+               m1, m2, m3, eq.i_energy, eq.n_cons, decomp.n_local,
+               decomp.n_halo_d, n3f)
+    for d in 1:3
+        dims[d] && exchange_dim_batch!(ComponentViews(solver.ghost_flux[d]), decomp, d)
+    end
     return solver
 end
 
@@ -657,31 +705,56 @@ end
 # is identically zero, the second through the gradient plans, reading the
 # ghost fluxes. Both are collective line solves along `d`, and the branch
 # before the first is a setup constant of the patch. `F` itself is left as
-# assembled. The first component's call fills the molecular flux of every
-# component (`_molecular_ghost_flux!`), which the conserved-component loop of
-# `compute_rhs!` reaches before any other along `d`.
+# assembled. The first component's call along the first interface dimension
+# fills the molecular flux of every component along every interface dimension
+# (`_molecular_ghost_flux!`), which the conserved-component loop of
+# `compute_rhs!` reaches before any other.
 function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
     decomp = solver.decomp
     eq = solver.equations
     m1, m2, m3 = eq.i_mom
     n1f, n2f, n3f = padded_extent(decomp)
     viscous = _ghost_viscous(solver)
-    viscous && c == 1 && _molecular_ghost_flux!(solver, d)
+    viscous && c == 1 && d == findfirst(_ghost_flux_dims(solver)) &&
+        _molecular_ghost_flux!(solver)
     G = solver.ghost_flux[d]
-    if _flux_remainder(solver, d)
+    Y = solver.field_tuples.Y
+    if !_flux_remainder(solver, d)
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
-                   solver.p, solver.field_tuples.Y, G, c, d, eq.n_species, m1, m2, m3,
+                   solver.p, Y, G, c, d, eq.n_species, m1, m2, m3,
+                   eq.i_energy, false, viscous)
+        _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d)
+    elseif _host_line_solves(solver, d)
+        # Both fields in one pass: the host line solves take no scratch, so
+        # `tmp_a` holds the second until its solve.
+        pointwise!(_split_flux_point!, solver.tmp_b, n1f, n2f, n3f,
+                   solver.tmp_b, solver.tmp_a, Fdc, Q, solver.rho, solver.u,
+                   solver.v, solver.w, solver.p, Y, G, c, d, eq.n_species,
+                   m1, m2, m3, eq.i_energy, viscous)
+        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, nothing)
+        _ext_subtract_along!(dQ, c, solver.tmp_a, solver, d)
+    else
+        pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
+                   solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
+                   solver.p, Y, G, c, d, eq.n_species, m1, m2, m3,
                    eq.i_energy, true, viscous)
         div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, nothing)
+        pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
+                   solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
+                   solver.p, Y, G, c, d, eq.n_species, m1, m2, m3,
+                   eq.i_energy, false, viscous)
+        _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d)
     end
-    pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
-               solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
-               solver.p, solver.field_tuples.Y, G, c, d, eq.n_species, m1, m2, m3,
-               eq.i_energy, false, viscous)
-    _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d)
     return dQ
 end
+
+# Whether both divergences along `d` run the fused host solves, which use no
+# scratch field: `div_subtract_along!` and `_ext_subtract_along!` otherwise
+# route through `tmp_a`.
+_host_line_solves(solver::SolverLike, d::Int) =
+    solver.folds[d] === nothing && !(_plan_at(solver.div_plans, d) isa DevicePlan) &&
+    !(_plan_at(solver.deriv_plans, d) isa DevicePlan)
 
 # dQ[:, c] -= D_ext(f) along `d` through the gradient plans, whose interface
 # rows read `f`'s ghost layers; a device plan takes the two-pass route
@@ -740,6 +813,20 @@ end
             v = G[I, c]
         end
         out[I] = v
+    end
+    return nothing
+end
+
+# `out` ← component `c` of `G` on the ghost layers of one interface end along
+# `d`. The launch box is (ghost layers along `d`) × (interior transverse),
+# `base` the padded index before the first layer, as for
+# `_coarse_fine_flux_point!`.
+@inline function _ghost_layer_point!(out, G, c, d, base, pad, a, b, c3)
+    @inbounds begin
+        o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
+        idx = ntuple(e -> e == d ? base + a : e == o1 ? pad[e] + b : pad[e] + c3, 3)
+        I = CartesianIndex(idx)
+        out[I] = G[I, c]
     end
     return nothing
 end
@@ -871,9 +958,22 @@ function _patch_ghost_fluxes!(solver::SolverLike, lt, scratch, Q, dQ, n_cons::In
             end
         end
         ends = (_ghost_face(solver, d, 1), _ghost_face(solver, d, 2))
+        o1, o2 = d == 1 ? (2, 3) : d == 2 ? (1, 3) : (1, 2)
         for c in 1:n_cons
-            pointwise!(_ghost_only_point!, solver.tmp_b, n1f, n2f, n3f,
-                       solver.tmp_b, G, c, d, ends, nl, pad)
+            # The first component's pass zeroes `tmp_b` off the ghost layers,
+            # which the line solves leave as they are, so each later component
+            # rewrites the layers alone.
+            if c == 1
+                pointwise!(_ghost_only_point!, solver.tmp_b, n1f, n2f, n3f,
+                           solver.tmp_b, G, c, d, ends, nl, pad)
+            else
+                for side in 1:2
+                    ends[side] || continue
+                    pointwise!(_ghost_layer_point!, solver.tmp_b, pad[d], nl[o1],
+                               nl[o2], solver.tmp_b, G, c, d,
+                               side == 1 ? 0 : pad[d] + nl[d], pad)
+                end
+            end
             _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d)
         end
     end

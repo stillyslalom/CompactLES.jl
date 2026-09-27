@@ -5212,21 +5212,22 @@ and every nest and regrid history agrees with the default to the third digit. Wi
 2.2e-10 under the closure rows, the nests drift 6.75e-5 to 6.92e-5 against 6.76e-5 to 6.93e-5,
 the regrid histories sum to 2.24e-4 in both, and no layout leaves [0, 1].
 
-**Cost.** Serial, one thread, median step over interleaved runs in one process, ghost over
-default: (64, 48, 48) in two patches 1.18 inviscid and 1.38 with the artificial properties and
-`mu = 1e-3`; a 2-D subcycled level of sixteen 37-node tiles 1.24 inviscid. With `mu = 1e-3`,
-the artificial properties and the filter on, periodic, at the default level interpolation order of
-each path, Float32 / Float64 (Core i9-12900K, Julia 1.11.4, nine interleaved chunks of ten steps
-per configuration): a 2-D static 17² box on N = 96, global step, 1.28 / 1.30; the sixteen-tile
-subcycled level on N = 96 1.85 / 1.85; a 3-D static 13³ box on N = 40, global step, 1.73 / 1.78.
-The overhead is the same fraction of the step in both precisions, and Float32 gains no accuracy
-from it (the floor above). The
-inviscid overhead is one padded pass per component and interface dimension. The molecular
-part adds a pass, a halo exchange and a line solve per component and interface dimension,
-and at a coarse-fine face the compact derivatives of every component along every dimension
-on the interpolated box at each shell imposition, which a profile of the tiled level puts at
-about a fifth of the step; a tile with no parent-fed face skips them. The `ghost_flux`
-arrays add one state-sized array per interface dimension of a patch.
+**Cost.** Serial, one thread, median step over nine interleaved chunks of ten steps per
+configuration in one process, ghost over default, periodic, with the artificial properties and
+the filter on, at the default level interpolation order of each path (Core i9-12900K, Julia
+1.11.4). Float64: (64, 48, 48) in two patches 1.13 inviscid and 1.29 with `mu = 1e-3`; a 2-D
+subcycled level of sixteen 37-node tiles on N = 96 1.15 inviscid. With `mu = 1e-3`, Float32 /
+Float64: a 2-D static 17² box on N = 96, global step, 1.18 / 1.19; the sixteen-tile level
+1.54 / 1.57; a 3-D static 13³ box on N = 40, global step, 1.47 / 1.51. The overhead is the same
+fraction of the step in both precisions, and Float32 gains no accuracy from it (the floor
+above). The interpolation order is not part of it: the default path at order 8 costs what it
+does at 6. On the 3-D box (300 ms against 198 per step) a profile places the overhead in the
+gradient ring of each shell imposition (45 ms, 37 of them the compact derivatives of every
+component along every dimension over the lines of the interpolated box that cross the ring),
+the pointwise passes (25 ms), the two line solves per component and interface dimension beyond
+the default's one (23 ms) and the coarse-fine ghost fluxes (10 ms). A tile with no parent-fed
+face takes no gradient ring. The `ghost_flux` arrays add one state-sized array per interface
+dimension of a patch.
 
 **Decision.** Same-level interfaces: the ghost fluxes remove the interface from the error
 budget, inviscid and viscous (the interface window equals the interior at every
