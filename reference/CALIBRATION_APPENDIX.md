@@ -55,6 +55,8 @@ section that moved it says so in one sentence and the older figure is gone.
     `test/hdf5_tests.jl`)
 26. [Azimuthal mode truncation](#azimuthal-mode-truncation) (`polar_truncation`)
 27. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`, `bench/staggeredconduction.jl`)
+28. [False activation on smooth fields](#false-activation-on-smooth-fields)
+    (`bench/falseactivation.jl`)
 
 ## The shock battery
 
@@ -6781,3 +6783,139 @@ wall      staggered    128    316   7.483e-14   6.00    2.22e-16   5.040e-14
 On this single-mode solution the two forms agree to within 4% at sixth order, and both
 conserve Σ W T to round-off. The wide form carries the Nyquist perturbation unchanged; the
 staggered form removes it. Behind the adiabatic wall mirror the staggered run keeps sixth order.
+
+## False activation on smooth fields
+
+```text
+julia --project=. -t 1 bench/falseactivation.jl                  # every part
+julia --project=. -t 1 bench/falseactivation.jl composition thermal acoustic probe   # no battery
+```
+
+Three periodic one-dimensional cases at the production constants, C6 `:neutral3`,
+`compact_filter(0.45)` every step, `filter_cfl = 0.35` and `cfl = 0.5`, inviscid. Every
+slab edge has physical width W = 1/16 (near an edge the profile is (1 + tanh(x/W))/2), so
+N·W is the number of cells per W. **composition**: a two-gas slab (γ = 1.4, gas constants 1
+and 0.2, so density ratio 5) at uniform p = T = 1, advected at u = 1 for one period and
+judged on Y_heavy against the exact translation. **thermal**: a one-gas slab of temperature
+ratio 1.5 at uniform p, advected the same way and judged on T. **acoustic**: a right-running
+Gaussian pulse, p′ = 0.01 exp(−(x/0.05)²), crossing the resting composition slab to t =
+0.45, when its reflected and transmitted parts are separate; judged on p′/0.01 against the
+art-off run at N = 1024. The coefficient columns are the maxima over space and time of D\*/(c
+h), β\*/(ρ c h) and κ\*/(ρ c_p c h), each against the grid diffusivity c h. The errors are
+L1; `on − off` is the L1 difference from the same run with `enabled = false` and the same
+filter, which is the error the channels deposit, and `E off` is the error of that art-off run
+against the reference.
+
+```
+case         N  N·W | D*/ch    β*/ρch   κ*/ρcpch |  E off     on − off | rates: coefficient  on − off
+composition  64   4 | 6.73e-4  8.7e-14  7.94e-5  | 7.21e-5   3.24e-4  |
+composition 128   8 | 5.01e-5  1.3e-13  6.57e-6  | 7.13e-7   1.21e-5  |   D* 3.75, κ* 3.60    4.74
+composition 256  16 | 3.44e-6  1.5e-13  4.52e-7  | 9.97e-9   5.11e-7  |   D* 3.87, κ* 3.86    4.57
+thermal      64   4 | 0        1.23e-6  1.80e-5  | 4.35e-5   5.23e-6  |
+thermal     128   8 | 0        5.03e-8  1.52e-6  | 4.96e-7   2.82e-7  |   κ* 3.56, β* 4.61    4.22
+thermal     256  16 | 0        7.54e-10 1.06e-7  | 6.18e-9   1.23e-8  |   κ* 3.84, β* 6.06    4.51
+acoustic     64   4 | 6.83e-4  2.08e-2  8.37e-5  | 6.01e-3   2.03e-3  |
+acoustic    128   8 | 5.41e-5  6.51e-3  7.34e-6  | 2.47e-4   1.89e-4  |   β* 1.68             3.42
+acoustic    256  16 | 3.74e-6  1.42e-3  5.20e-7  | 4.08e-6   1.04e-5  |   β* 2.20             4.19
+```
+
+**On a resolved composition gradient D\* is the leading error at every resolution.** The
+coefficient falls at the δ⁴ sensor's fourth order and the error it deposits at about 4.6,
+while the scheme without the channels converges at 6.2 to 6.7, so the ratio grows with
+resolution: 4.5 at N·W = 4, 17 at 8 and 51 at 16. `C_D = 0` alone returns the art-off run to
+round-off (below). κ\* is active on the same slab at an eighth of D\*, since the internal
+energy c_v T jumps with the gas constant at uniform T, and deposits nothing measurable,
+since its flux reads ∇T, which is zero. **On a thermal gradient κ\* is the error**, falling
+at 3.6 to 3.8 in coefficient and 4.2 to 4.5 in error, and overtakes the scheme's own error
+between N·W = 8 and 16. **On the acoustic pulse β\* is the error** and falls slowest: it is
+read from |S|, whose cusps at the zeros of the strain are grid-scale at any resolution, so
+the coefficient falls at 1.7 to 2.2 and at a hundredth of c h at N·W = 8; it is linear in
+the amplitude (β\*/ρch 6.3e-4 and on − off 2.1e-5 at p′ = 0.001). `C_beta = 0` removes 98%
+of the deposit. D\* and κ\* sit on the resting interface at the composition case's values
+throughout. In every case the deposit exceeds the art-off error at N·W = 16.
+
+Each factor varied alone at N = 128 (N·W = 8), with the state filter's transfer function at
+kh = π/4, π/2 and 3π/4, its cadence in steps and the mean relaxation weight of a pass:
+
+```
+row                  | T(π/4) T(π/2) T(3π/4) every  w   | comp: D*/ch  on−off  | therm: κ*/ρcpch on−off | acou: β*/ρch on−off
+default              | 1.0000 0.9938 0.8540    1  1.00  | 5.01e-5  1.21e-5     | 1.52e-6  2.82e-7       | 6.51e-3  1.89e-4
+C_D = 0              | 1.0000 0.9938 0.8540    1  1.00  | 0        1.8e-15     | 1.52e-6  2.82e-7       | 6.51e-3  1.88e-4
+C_beta = 0           | 1.0000 0.9938 0.8540    1  1.00  | 5.01e-5  1.21e-5     | 1.52e-6  2.82e-7       | 0        4.11e-6
+C_kappa = 0          | 1.0000 0.9938 0.8540    1  1.00  | 5.01e-5  1.21e-5     | 0        4.9e-15       | 6.51e-3  1.89e-4
+C_mu = 0             | 1.0000 0.9938 0.8540    1  1.00  | 5.01e-5  1.21e-5     | 1.52e-6  2.82e-7       | 6.51e-3  1.89e-4
+beta :gated_strain   | 1.0000 0.9938 0.8540    1  1.00  | 5.01e-5  1.21e-5     | 1.52e-6  2.82e-7       | 6.57e-3  1.22e-4
+beta :dilatation     | 1.0000 0.9938 0.8540    1  1.00  | 5.01e-5  1.21e-5     | 1.52e-6  2.82e-7       | 1.04e-3  4.26e-5
+beta :ungated_dil    | 1.0000 0.9938 0.8540    1  1.00  | 5.01e-5  1.21e-5     | 1.52e-6  2.82e-7       | 1.04e-3  5.45e-5
+detector :d8         | 1.0000 0.9938 0.8540    1  1.00  | 1.76e-8  4.06e-9     | 4.70e-10 7.32e-11      | 3.51e-3  1.01e-4
+smoother :compact    | 1.0000 0.9938 0.8540    1  1.00  | 5.67e-5  1.56e-5     | 1.70e-6  3.91e-7       | 1.04e-2  1.93e-4
+species_flux :bulk   | 1.0000 0.9938 0.8540    1  1.00  | 5.01e-5  1.21e-5     | –                      | 6.50e-3  1.93e-4
+species_flux :fickian| 1.0000 0.9938 0.8540    1  1.00  | 4.90e-5  1.37e-5     | –                      | 6.51e-3  2.72e-4
+filter α = 0.49      | 1.0000 0.9988 0.9654    1  1.00  | 5.01e-5  1.22e-5     | 1.52e-6  2.90e-7       | 6.79e-3  2.03e-4
+filter off           | 1      1      1         0  –     | 5.01e-5  1.24e-5     | 1.52e-6  2.94e-7       | 6.81e-3  2.52e-4
+cfl 0.25             | 1.0000 0.9938 0.8540    1  0.71  | 5.01e-5  1.21e-5     | 1.52e-6  2.78e-7       | 6.44e-3  1.85e-4
+cfl 0.25, filter_cfl 0 | 1.0000 0.9938 0.8540  1  1.00  | 5.01e-5  1.21e-5     | 1.52e-6  2.75e-7       | 6.33e-3  1.81e-4
+```
+
+The deposit is linear in the constant of the channel that carries it, and the μ\* channel
+carries none of it in one dimension. Of the sensor fields only the β\* settings move
+anything, and only on the acoustic case: the dilatation sensor lowers the coefficient
+sixfold and the deposit 4.4-fold, since ∇·u carries no absolute value; the compression
+switch alone takes a third off. The detector is the largest lever on D\* and κ\*: `:d8`
+lowers both coefficients by three to four orders and the deposits by the same, to below
+the art-off error, and halves β\* on the pulse. The `:compact` smoother raises every row by
+10 to 60%. The species channel changes nothing on a slab at uniform pressure except under
+`:fickian`, whose volume flux between unequal gas constants drives a velocity, gives the
+composition case a β\* of 5.6e-6, and adds 13% to its deposit and 44% to the pulse's. The
+filter moves no coefficient by more than 5% and no deposit by more than 5% on the advected
+slabs; on the pulse the deposit rises 7% at α = 0.49 and 33% with the filter off, because
+the unfiltered state carries more grid-scale strain for |S| to read. At `cfl = 0.5` the
+relaxed pass is at full strength (w = 1); at 0.25 it relaxes to w = 0.71 and the deposit is
+unchanged while the art-off error grows by 17 to 26%; `filter_cfl = 0` at the same step
+raises that error a further 31% on both advected slabs, the per-step dissipation the
+relaxation removes.
+
+**A contact localization separable from the compression sensing.** Two candidates, each
+acting on the κ\* and D\* sensors and leaving β\* as it is. The first, evaluated on stored
+states and not run, gates the fourth difference by its ratio to the total variation over the
+same five points, R = |δ⁴f| / Σ|Δf|, which is (kh)³/4 on a resolved sine, 2 on a grid
+oscillation and 3 beside a one-cell step: |δ⁴f| · min(1, R/R₀). At R₀ = 1 it keeps 2.1%,
+0.26% and 0.034% of the peak on the composition slab at N = 64, 128 and 256 (the same on
+the internal energy and on the thermal slab), and 54% on the shocked air/SF6 interface and
+52% on the Lax internal energy. It would halve the sensor where the channels are wanted, so
+it cannot leave the battery rows unmoved at the present constants.
+
+The second is the detector split: `:d8` on the internal energy and the mass and mole
+fractions, δ⁴ on |S|. The solver has one detector for every field, so the script redefines
+the detector dispatch for a `:d8` run (bench only). On the smooth cases it reproduces the
+`:d8` row for D\* and κ\* and the δ⁴ row for β\*. On the battery (the columns of [the ringing
+detector](#the-ringing-detector), with Noh at `cfl = 0.15` and the spherical origin again at
+0.3):
+
+```
+config  C_D  | Noh1 plat def | Noh2 plat def | Noh3 plat def | Noh3 @0.3 | Lax L1  contact | Shu tr | WC peak | SI TV−1  min Y  | mix wid | comp. D*/ch  on−off
+δ4 *    0.1  | 0.9997  +24%  | 0.9380  +55%  | 0.9774  +29%  |  0.9773   | 5.0e-3  0.0053  | 1.6183 | 6.6068  | 0.0066  −0.0098 | 0.02024 | 5.01e-5  1.21e-5
+d8      0.1  | 0.9997  +22%  | 0.9500  +43%  | 0.9983  +37%  |  NaN      | 4.7e-3  0.0044  | 1.6369 | 6.4182  | 0.0707  −0.0129 | 0.01789 | 1.76e-8  4.06e-9
+split   0.1  | 0.9997  +26%  | 0.9378  +59%  | 0.9772  +29%  |  0.9771   | 4.9e-3  0.0053  | 1.6204 | 6.5914  | 0.0719  −0.0104 | 0.01789 | 1.76e-8  4.06e-9
+split   0.3  |                                                                                           | 0.0278  −0.0092 | 0.01796 | 5.27e-8  1.22e-8
+split   1    |                                                                                           | 0.0046  −0.0047 | 0.01817 | 1.76e-7  4.07e-8
+split   3    |                                                                                           | 0.0047  −0.0032 | 0.01868 | 5.32e-7  1.22e-7
+```
+
+The split keeps what the full `:d8` loses at the origin: the spherical plateau and the
+`cfl = 0.3` completion are those of δ⁴ to the fourth digit, so the origin ceiling belongs to
+β\*'s detector. The κ\* half of the split moves the single-species rows, two to four points
+of wall heating on the planar wall and the axis, 0.2% on the Woodward–Colella peak and
+0.1% on the Shu–Osher train; the
+D\* half cannot, since it is not computed without species. At `C_D = 0.1` the split
+detector passes the period-four trail behind the shocked interface that δ⁴ damps, and TV −
+1 returns to the 0.076 of C_D = 0.01 under δ⁴ ([the partial-density species
+channel](#the-partial-density-species-channel)); the passive width is the D\*-off width of
+[C_D](#c_d-the-species-diffusivity). At `C_D = 1` the split holds the shocked interface
+tighter than the default (TV − 1 0.0046 against 0.0066, worst Y −0.0047 against −0.0098),
+narrows the passive width by 10%, and deposits 300 times less on the smooth composition
+slab than the default does. A D\*-only split, δ⁴ on every field but the mass and mole
+fractions, would leave every single-species row bit-identical by construction and carry the
+whole composition-slab result, since κ\* deposits nothing there; the thermal slab's κ\*
+error would remain. Neither the density-ratio-100 rows, the He/CO2 tube nor a
+two-dimensional case has been run under the split.
