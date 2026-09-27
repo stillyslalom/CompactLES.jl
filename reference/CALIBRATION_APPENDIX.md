@@ -49,7 +49,7 @@ section that moved it says so in one sentence and the older figure is gone.
 22. [The bulk species channel in three dimensions](#the-bulk-species-channel-in-three-dimensions)
     (`bench/bulkchannel.jl`, `bench/bulkentropy.jl`)
 23. [The contact with a temperature jump](#the-contact-with-a-temperature-jump)
-    (`bench/thermalcontact.jl`)
+    (`bench/thermalcontact.jl`, `bench/tubebudget.jl`)
 24. [The species validity band](#the-species-validity-band) (`bench/speciesband.jl`)
 25. [The shared-file write](#the-shared-file-write) (`bench/hdf5xfer.jl`,
     `test/hdf5_tests.jl`)
@@ -6514,6 +6514,117 @@ channel's pressure and velocity drift is its own continuous model's volume sourc
 reproduced to 0.2% at N = 256, of the same order as the bulk channel's and a third of the
 Fickian one, and it adds to a convective pressure-equilibrium error of similar size that
 no channel removes. The product form of the consistency fluxes is kept.
+
+### The energy budget and the layer widths of the shocked tube
+
+`bench/tubebudget.jl`, serial at `-t 16`, nine minutes per channel at 768 × 48 and under
+three at 384 × 24. The tube is the He/CO2 deck of [the partial-density
+channel's](#the-partial-density-species-channel) two-dimensional comparison under NASA-9
+thermodynamics, Euler fluxes, C_D = 0.1, to 2.5 ms. The incident shock reaches the contact
+before 1.0 ms and the transmitted shock reaches the end wall between 2.0 and 2.5 ms. A
+callback replays every accepted step with each stage's right-hand side split by term; the
+replayed state agreed bitwise with the one `run!` held after every step of every run, so
+the `repairs` row is zero throughout. Changes are in J per metre of depth, KE0 = 0 and
+IE0 = −4.387e5 J/m on the NASA-9 energy scale. The default channel at 768 × 48:
+
+```
+term             | to 2.0 ms: ΔKE / ΔIE  | to 2.5 ms: ΔKE / ΔIE / ΔE
+pressure         | +92534 / −92534       | +107120 / −107176 / −56.0
+convection       | −57.4 / +57.4         | −169.3 / +126.0 / −43.3
+mu*              | −24.3 / +24.3         | −36.7 / +36.9 / +0.22
+beta*            | −8882 / +8882         | −13247 / +13329 / +82.2
+kappa*           | 0 / −9e-8             | 0 / +39.4 / +39.4
+species channel  | −0.78 / +0.78         | −1.14 / +1.14 / −5e-9
+molecular        | 5e-13 / −6e-13        | 7e-13 / −7e-13 / −2e-14
+wall flux        | 0 / +6e-8             | −0.0023 / −48.3 / −48.3
+wall state       | 0 / −1e-7             | 0 / −1.01 / −1.01
+filter           | +2.13 / −2.13         | +20.8 / −14.0 / +6.87
+repairs          | 0 / 0                 | 0 / 0 / 0
+measured         | +83571.4 / −83571.4   | +93686.3 / −93706.1 / −19.9
+closure          | −4e-8 / −4e-7         | −7e-8 / −4e-7
+```
+
+`molecular` is the remainder of the assembled flux after every named part, zero under the
+Euler deck, so its row is the check that the split is complete. The pressure work supplies
+the kinetic energy and β\* returns 12.4% of it to internal energy at the shocks; μ\*
+returns 0.03% and the convective term's discrete kinetic-energy loss is 0.16%. The filter
+removes 18.2 J/m up to 1.0 ms and adds 39 J/m after it, a net of about half the μ\* row.
+Until the transmitted shock reaches the end wall every wall row and the total-energy
+change stay below 1e-3 J/m. Its reflection brings the slip wall's flux correction (48 J/m
+of internal energy), the wall-node enforcement (1.0 J/m) and a total-energy change of
+−19.9 J/m, 5e-5 of IE0, spread over the pressure, convection, β\*, κ\* and filter rows by
+the closure rows; at 384 × 24 the same change is +687 J/m. The rows that differ between
+the channels, to 2.5 ms at 768 × 48:
+
+```
+ΔKE, J/m         | species channel | mu*   | beta*  | filter | convection | measured
+fickian          | 0               | −37.0 | −13330 | +19.8  | −170.3     | +93636.8
+bulk             | −134.1          | −35.1 | −13103 | +21.5  | −171.7     | +93742.8
+partial_density  | −1.14           | −36.7 | −13247 | +20.8  | −169.3     | +93686.3
+```
+
+The Fickian channel carries no net mass flux, so it changes neither the kinetic energy nor
+∫E. The bulk channel's kinetic-energy sink is 3.7 times the μ\* row, which is its added
+viscosity ρD_b∇u; the partial-density channel's is its mass-flux exchange, 1e-5 of the
+pressure work. Molecular transport, `CeaTransport` at unity Lewis number on the default
+channel, removes 0.33 J/m of kinetic energy and moves every other row by less than 0.1%.
+
+A conservative term without net mass flux shows in the integrals only at the walls, so
+where each term puts heat is measured separately: its sensible heating
+δ(ρe) − Σ_k e_k δρ_k = ρc_v δT split between the gases by their shares of the local heat
+capacity. Equal and opposite entries are a transfer from the He to the CO2, entries of one
+sign a source or a sink. To 2.5 ms, He / CO2 in J/m:
+
+```
+                 | 768 × 48, partial_density | 384 × 24: fickian / bulk / partial_density
+kappa*           | −26 / +65                 | −58 / +104    −12 / +52     −32 / +76
+species channel  | −394 / −427               | −2742 / +3868 −848 / +500   −481 / −479
+molecular (CEA)  | −2.4 / +3.4               | –
+filter           | +129 / +58                | +117 / +6     +126 / +21    +131 / +7
+```
+
+The 768 × 48 column is the `CeaTransport` run, whose κ\* and channel entries match the Euler
+run's to 1%. The Fickian channel moves heat from the He into the CO2 and, at 384 × 24, adds
+1100 J/m, its enthalpy flux's volume source. The partial-density channel moves none: it
+removes sensible heat from both gases in about equal parts. Its heating is
+−Σ_k c_v,k J_k·∇T, and the CO2 flux into the hotter He outweighs the He flux into the
+CO2. The bulk channel lies between the two. κ\* moves 26–58 J/m, and the physical
+conduction 3 J/m.
+
+The widths, on the band within 0.04 m of the layer (8 cells at 768 × 48, 4 at 384 × 24),
+in cells: Y, u and T are the thicknesses of the species, velocity and temperature layers
+as the script header defines them, ΔU and ΔT the velocity jump and the temperature
+variation across the layer. A band of 0.08 m moves every thickness by at most 11% from
+1.5 ms on, the velocity layer's the most; at 1.0 ms the reflected shock is inside it.
+
+```
+768 × 48          | 1.5 ms: Y / u / T  ΔU  ΔT | 2.0 ms                    | 2.5 ms
+fickian           | 4.46 / 3.64 / 4.80  210 203 | 4.69 / 3.62 / 4.86  225 216 | 4.98 / 3.65 / 4.96  237 219
+bulk              | 4.60 / 4.21 / 4.85  165 145 | 4.90 / 3.93 / 4.90  139 143 | 4.95 / 3.76 / 4.70  130 133
+partial_density   | 4.52 / 3.75 / 4.47  215 170 | 4.73 / 3.72 / 4.41  227 172 | 5.00 / 3.79 / 4.48  238 168
+384 × 24          |                             |                             |
+fickian           | 3.95 / 2.90 / 3.96  200 182 | 4.19 / 3.17 / 4.17  199 209 | 4.34 / 3.29 / 4.32  213 217
+bulk              | 4.12 / 3.39 / 4.03  165 133 | 4.41 / 3.37 / 4.07  133 131 | 4.59 / 3.33 / 4.14  122 127
+partial_density   | 4.01 / 2.92 / 3.84  202 157 | 4.23 / 3.31 / 3.91  201 170 | 4.43 / 3.52 / 4.02  211 170
+```
+
+All three layers are set by the grid: halving the spacing multiplies each thickness in
+cells by 1.08 to 1.15, so each thins by a factor 1.7 to 1.85 in metres, and none is a
+physical width. From 2.0 ms the velocity layer is the thinnest under every channel, 0.7 to
+0.8 of the species layer; the temperature layer is as wide as the species layer under the
+Fickian channel, 0.9 to 0.95 of it under the bulk channel and 0.9 under the default. The
+channels differ in the jumps rather than the widths. At 2.5 ms on both grids the bulk
+channel carries 42–45% less velocity jump than the other two, the weakening of the vortex
+sheet by its viscosity, and 21–25% less temperature variation than the default, which
+carries 22–23% less than the Fickian channel. The two consistent channels' species layers
+are within 4% of each other at 768 × 48.
+
+**Decision:** the default is retained. On the tube the partial-density channel converts
+1e-5 of the pressure work to internal energy and leaves the species and velocity layers
+as wide as the Fickian channel leaves them; the bulk channel
+removes a hundred times more kinetic energy and nearly half of the vortex sheet's velocity
+jump, and the Fickian channel moves heat across the contact through its enthalpy flux. No
+measurement here decides which roll-up is right; that waits for a converged reference.
 
 ## The species validity band
 
