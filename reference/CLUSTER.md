@@ -236,10 +236,11 @@ julia --project=. probes/clusterlaunch.jl 256 nodes=36 cores_per_node=112
 ## Launch rules
 
 **Threaded BLAS costs a factor of ninety and buys nothing.** The only BLAS this
-solver calls is the reduced interface stage of the compact solve
-(`_reduced_solve!` in `src/tridiag.jl`): a 2P x 2P system, 2x2 on a single rank,
-with one right-hand side per line, solved once per dimension per field per
-Runge-Kutta stage. OpenBLAS forks its thread pool for each of those and waits on
+solver calls is the reduced interface stage of the compact solve along a
+periodic direction held by one rank (`_reduced_solve!` in `src/tridiag.jl`): a
+2q x 2q system with one right-hand side per line, solved once per dimension per
+field per Runge-Kutta stage. A direction split over ranks takes a band solve
+that calls no BLAS. OpenBLAS forks its thread pool for each of those and waits on
 the join, so the cost is paid per call and grows with the node's core count while
 the arithmetic it parallelizes stays trivial. On rzhound (112 logical CPUs,
 Sapphire Rapids) a 32³ step measured 7.0 s at the default thread count and

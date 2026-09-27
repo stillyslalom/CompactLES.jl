@@ -1,10 +1,10 @@
 # Cost of the three stages of a distributed compact line solve, timed
 # separately: the local banded sweep, the Allgather of the interface values,
-# and the dense solve of the replicated reduced system (`_reduced_solve!` in
-# src/tridiag.jl and src/banded.jl). It is the instrument of ROADMAP item S12,
-# which predicts from an operation count that the reduced stage, about
-# 8 q^2 P^2 operations per line against 9 q n for the local work, overtakes
-# the local work at a few hundred to a thousand ranks.
+# and the solve of the replicated reduced system (`_reduced_solve!` in
+# src/tridiag.jl and src/banded.jl). It is the instrument of ROADMAP item S12.
+# The reduced matrix, of order 2qP, is block-tridiagonal in P and is solved
+# by a pivoted band LU whose cost per line grows as q^2 P, against 9 q n for
+# the local work; a dense LU, 8 q^2 P^2, is kept for P = 1 only.
 #
 # For each derivative operator (C6 and C8 run the tridiagonal `LineSolver`,
 # q = 1; C10 the pentadiagonal `BandLineSolver`, q = 2) and each direction,
@@ -16,9 +16,9 @@
 #   total     the whole line solve: sweep, reduced stage, spike correction
 #   allgather `MPI.Allgather!` of the 2q interface values per line over the
 #             P ranks of the direction, with the buffers `_reduced_solve!` uses
-#   ldiv      the triangular solves of the factorized reduced matrix, of order
-#             2qP, for every line at once (the replicated O(P^2) term)
-#   reduced   `_reduced_solve!` whole: allgather, pack, ldiv, unpack
+#   solve     `_solve_reduced!`: everything of the reduced stage after the
+#             Allgather (pack, factorized solve, unpack) for every line
+#   reduced   `_reduced_solve!` whole: allgather and solve
 #   local     total - reduced: the sweep and the correction, the work the
 #             9qn count describes (derived, not timed)
 #   apply     `apply_along!` whole: fill, line solve, scatter, for scale
@@ -36,21 +36,21 @@
 # solves neither grow nor decay into denormals.
 #
 # Columns of the table, per direction: P ranks along it, n local points per
-# line, L lines per rank, q, and the per-line counts 9qn and 8q^2P^2 of the
-# S12 model with their ratio; then the measured times in microseconds, the
-# measured ratio ldiv / local, and two crossover estimates. On a uniform grid
+# line, L lines per rank, q, the per-line counts 9qn of the local work,
+# 8q^2P^2 of a dense reduced solve, and `red` of the solve this rank runs (the
+# band solve's multiply-adds, twice, maximum over ranks; the dense count at
+# P = 1), and red / 9qn; then the measured times in microseconds, the
+# measured ratio solve / local, and two crossover estimates. On a uniform grid
 # with P ranks per direction the per-rank local work is 9qN^3/P^3 and the
-# reduced work 8q^2 N^2, which cross at
+# band solve's (N/P)^2 * red, with red proportional to P, which cross at
 #
-#   P_count = (9 N / (8 q))^(1/3)                    (operation count)
-#   P_wall  = P_count * (rate_local / rate_ldiv)^(1/3)   (measured rates)
+#   P_count = (9 q N P / red)^(1/2)                    (operation count)
+#   P_wall  = P_count * (rate_local / rate_solve)^(1/2)   (measured rates)
 #
 # where N is the global extent of the direction and each rate is time per
-# counted operation in this run. P_wall assumes the per-operation rate of the
-# dense solve stays what it is at this P. It does not: the reduced matrix
-# (2qP)^2 doubles in size per doubling of P and leaves L1 then L2, so a
-# P_wall taken far from the measured P is indicative only. Measure at the
-# target P.
+# counted operation in this run; both are left blank at P = 1. P_wall assumes
+# the per-operation rates stay what they are at this P, so a P_wall taken far
+# from the measured P is indicative only. Measure at the target P.
 #
 # Usage: positional global edge, then `key=value` options:
 #
@@ -195,7 +195,7 @@ function time_plan(plan, out, f, decomp, reps, warmup)
         ls.hasred = hasred
     end
     hasred || return (; total, sweep, reduced = 0.0, allgather = 0.0,
-                      ldiv = 0.0, apply = 0.0, q, L)
+                      solve = 0.0, apply = 0.0, q, L)
 
     # A full solve leaves the interface ends of the fill in `ls.ends`;
     # `_reduced_solve!` reads them and does not write them, so it repeats on
@@ -210,16 +210,28 @@ function time_plan(plan, out, f, decomp, reps, warmup)
     else
         0.0
     end
-    # `ldiv!` overwrites its right-hand side, so the reduced solution of the
-    # last call is restored before each one: realistic magnitudes, no drift.
-    z0 = copy(ls.z)
-    red = ls.red
-    ldiv = stage_time(() -> CL._reduced_ldiv!(red, ls.z, L, L),
-                      () -> copyto!(ls.z, z0), comm, reps, warmup)
+    # `_solve_reduced!` packs its right-hand sides from `gath`, which it does
+    # not modify, so it repeats on the same data without a reset.
+    solve = stage_time(() -> CL._solve_reduced!(ls, L, L), nothing_to_reset,
+                       comm, reps, warmup)
     CL._reduced_solve!(ls, L)
     apply = stage_time(() -> CL.apply_along!(out, plan, f, decomp),
                        nothing_to_reset, comm, reps, warmup)
-    return (; total, sweep, reduced, allgather, ldiv, apply, q, L)
+    return (; total, sweep, reduced, allgather, solve, apply, q, L)
+end
+
+"""
+Operations per line of the reduced solve this rank runs, counting a
+multiply-add as two: the band solve's forward sweep and its back substitution
+down to the first needed unknown, or the dense triangular solves at `P == 1`.
+"""
+function reduced_count(ls)
+    band = ls.band
+    band === nothing && return ls.hasred ? 2 * size(ls.z, 1)^2 : 0
+    n, kl, ku, s = band.n, band.kl, band.ku_used, band.stop
+    forward = sum(min(kl, n - j) for j in 1:(n-1); init = 0)
+    backward = sum(1 + j - max(s, j - ku) for j in s:n; init = 0)
+    return 2 * (forward + backward)
 end
 
 function environment(comm, opt)
@@ -271,27 +283,29 @@ function main(opt)
         CL.primitives!(solver, Q)
         f = solver.u
         say("\n  %s, %d^3, process grid %s\n", deriv, N, string(decomp.dims))
-        say("  dir  P    n      L  q    9qn  8q2P2  count   sweep   total" *
-            "  allgath    ldiv reduced   local   apply  ldiv/loc P_count P_wall\n")
+        say("  dir  P    n      L  q    9qn  8q2P2    red  count   sweep   total" *
+            "  allgath   solve reduced   local   apply solve/loc P_count P_wall\n")
         for d in 1:3
             plan = solver.deriv_plans[d]
             r = time_plan(plan, solver.tmp_a, f, decomp, opt.reps, opt.warmup)
             v = MPI.Allreduce([r.total, r.sweep, r.reduced, r.allgather,
-                               r.ldiv, r.apply], MPI.MAX, comm)
-            total, sweep, reduced, allgather, ldiv, apply = 1e6 .* v
+                               r.solve, r.apply], MPI.MAX, comm)
+            total, sweep, reduced, allgather, solve, apply = 1e6 .* v
+            c_red = MPI.Allreduce(reduced_count(plan.line_solver), MPI.MAX, comm)
             P, n, q, L = decomp.dims[d], plan.n, r.q, r.L
-            c_local, c_red = 9q * n, 8q^2 * P^2
+            c_local, c_dense = 9q * n, 8q^2 * P^2
             loc = total - reduced
-            p_count = cbrt(9N / (8q))
-            # Measured time per counted operation, local over dense solve.
-            p_wall = ldiv > 0 ? p_count * cbrt((loc / c_local) / (ldiv / c_red)) : NaN
-            say("  %3d %2d %4d %6d %2d %6d %6d %6.3f %7.1f %7.1f %8.1f %7.1f " *
+            # The band count grows as P, the local count falls as 1/P.
+            p_count = P > 1 ? sqrt(9q * N * P / c_red) : NaN
+            # Measured time per counted operation, local over reduced solve.
+            p_wall = P > 1 ? p_count * sqrt((loc / c_local) / (solve / c_red)) : NaN
+            say("  %3d %2d %4d %6d %2d %6d %6d %6d %6.3f %7.1f %7.1f %8.1f %7.1f " *
                 "%7.1f %7.1f %7.1f %8.3f %7.2f %6.2f\n",
-                d, P, n, L, q, c_local, c_red, c_red / c_local, sweep, total,
-                allgather, ldiv, reduced, loc, apply, ldiv / loc, p_count, p_wall)
+                d, P, n, L, q, c_local, c_dense, c_red, c_red / c_local, sweep, total,
+                allgather, solve, reduced, loc, apply, solve / loc, p_count, p_wall)
             say("row,%s,%d,%d,%d,%d,%d,%d,%d,%d,%.4e,%.4e,%.4e,%.4e,%.4e,%.4e\n",
                 deriv, N, MPI.Comm_size(comm), Threads.nthreads(), d, P, n, L, q,
-                sweep, total, allgather, ldiv, reduced, apply)
+                sweep, total, allgather, solve, reduced, apply)
             root && flush(stdout)
         end
         CL.free_communicators!(decomp)
@@ -394,7 +408,8 @@ function decomposed_solve(scheme, N, Nt, P, B, comm)
         CL.solve_lines!(Bl, ls)
         X[o+1:o+n, :] .= Bl
         if rank == 0
-            cond_reduced = ls.red === nothing ? NaN : cond(Matrix(ls.red))
+            R = CL._reduced_matrix(ls)
+            cond_reduced = R === nothing ? NaN : cond(R)
             cond_local = cond(local_block(ls.F))
         end
         CL.free_communicators!(decomp)

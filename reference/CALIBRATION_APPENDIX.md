@@ -4605,6 +4605,8 @@ MPIEXEC=$(julia --project=. -e 'using MPI; MPI.mpiexec(c -> print(c))')
 julia --project=. -t 1 bench/phases.jl
 julia --project=. -t 1 bench/reducedsolve.jl 48 derivs=c6,c10
 "$MPIEXEC" -n 2 julia --project=. -t 1 bench/reducedsolve.jl 96 derivs=c6,c10
+"$MPIEXEC" -n 8 julia --project=. -t 1 bench/reducedsolve.jl 96 dims=8,1,1   # also 2, 4
+"$MPIEXEC" -n 16 julia --project=. -t 1 bench/reducedsolve.jl 192 dims=16,1,1
 "$MPIEXEC" -n 8 julia --project=. -t 1 bench/reducedsolve.jl 96 mode=accuracy
 "$MPIEXEC" -n 8 julia --project=. -t 1 bench/reducedsolve.jl 96,192 mode=accuracy operators=filter,pyranda rhs=random
 ```
@@ -4739,6 +4741,45 @@ runs' departures from serial in the MPI suite's two-level wave rows under the tw
 steps, not a defect of the distributed solve. A decomposed solve of a system of condition
 number κ reproduces serial to between a twentieth and a half of κ·eps, and 3e-15 is that bar
 only for the operators with cond(A) near 20.
+
+The table above is the band solve of the reduced matrix. Against the dense LU it replaced,
+measured the same way, every departure is within the same range; the largest change is
+`pyranda_filter()` at P = 6, 7.1e-14 to 9.5e-14 (0.153 to 0.206 cond(A)·eps), and the
+maximum over P is 9.5e-14 either way. On the real reduced matrices of the four
+well-conditioned operators the pivoted band LU interchanges no rows; on `pyranda_filter()`'s
+it interchanges 8–46 of 2qP rows at P = 4–16.
+
+The same instrument in `mode=timing`, x direction of a fully periodic solver split P ways
+(`dims=P,1,1`), `-t 1`, µs, the maximum over ranks of each rank's median; "reduced" is
+`_reduced_solve!` whole (Allgather and solve), "solve" everything after the Allgather, the
+dense column the `ldiv!` alone. Dense and band are two processes, before and after:
+
+```
+                 lines    dense     band             reduced          local sweep
+                          ldiv      solve       dense    band      before / after
+C6,  P = 2,  96³  9216    102.8      18.2       141.4     36.0          646 / 936
+C10, P = 2,  96³  9216    220.8      63.1       316.0    100.1         1116 / 922
+C6,  P = 4,  96³  9216    231.8      50.3       511.2    116.1          296 / 357
+C10, P = 4,  96³  9216    517.2     299.2       766.4    427.4          637 / 823
+C6,  P = 8,  96³  9216    925.6     207.6      1589.9    379.7          263 / 287
+C10, P = 8,  96³  9216   2789.6     919.9      2989.4   1349.4         1072 / 650
+C6,  P = 16, 192³ 36864  19868    6149        45356    10131           4915 / 4257
+C10, P = 16, 192³ 36864  41601   12093        73127    21146           6708 / 5650
+```
+
+The band solve is 2.3–5.6x faster than the dense triangular solves at every P measured,
+including P = 2, where the band covers nearly the whole matrix and the gain is the loop
+structure (each band entry one contiguous pass over a block of 128 lines) rather than the
+operation count. Operations per line of the band solve, counted as the table's `red`
+column (twice the multiply-adds of the forward sweep and the back substitution down to the
+first unknown the rank reads, maximum over ranks), are 104 / 248 / 536 for C6 at P = 4 / 8 /
+16 against the dense 128 / 512 / 2048, and 428 / 1036 / 2252 for C10 against 512 / 2048 /
+8192: linear in P, the ratio to P rising toward 34 (q = 1) and 141 (q = 2) on a periodic
+line as the fixed end terms dilute. At
+P = 16 sixteen ranks fill the workstation's sixteen cores, eight of them efficiency cores,
+and the Allgather rises to 4.5–9.1 ms, so that row measures the machine as much as the solve.
+The serial rows (P = 1) keep the dense 2q × 2q solve and are unchanged. The crossover
+against the local work is a cluster measurement and remains open.
 
 ### The sensor phase
 

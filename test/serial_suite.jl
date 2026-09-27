@@ -382,6 +382,44 @@ include("float32_validation.jl")
     end
 end
 
+@testset "reduced interface band LU vs dense" begin
+    # The reduced stage of P ranks from random spike corner blocks: every
+    # rank's band solve against a dense solve of the same matrix, closed and
+    # periodic, the second with spikes large enough that the band LU pivots.
+    rng = MersenneTwister(12)
+    for q in (1, 2), periodic in (false, true), P in (2, 3, 4, 7), scale in (0.4, 1.5)
+        m2, L = 2q, CL.REDUCED_BLOCK + 22   # two blocks of lines
+        allb = zeros(4q * q * P)
+        for rk in 0:(P-1), block in 0:3, t in 1:q, r in 1:q
+            # V toward the previous rank is absent at a closed line's low end,
+            # W toward the next at its high end.
+            absent = !periodic && ((rk == 0 && block <= 1) || (rk == P - 1 && block >= 2))
+            allb[4q*q*rk + block*q*q + (t-1)*q + r] =
+                absent ? 0.0 : scale * (2rand(rng) - 1)
+        end
+        R = zeros(m2 * P, m2 * P)
+        CL._reduced_entries!((i, j, v) -> (R[i, j] += v), allb, q, P)
+        gath = randn(rng, m2, L, P)
+        z = reduce(vcat, [gath[:, :, rk+1] for rk in 0:(P-1)])
+        exact = R \ z
+        for p in 0:(P-1)
+            red, band = CL._reduced_factor(allb, q, P, p, periodic, L)
+            @test red === nothing
+            @test CL._band_matrix(band) ≈ R rtol = 1e-14
+            zbp, zbn = zeros(L, q), zeros(L, q)
+            CL._band_reduced!(band, gath, zbp, zbn, q, L)
+            cprev, cnext = m2 * mod(p - 1, P) + q, m2 * mod(p + 1, P)
+            tol = 1e-13 * cond(R)
+            @test maximum(abs, zbp' .- exact[cprev+1:cprev+q, :]) < tol
+            @test maximum(abs, zbn' .- exact[cnext+1:cnext+q, :]) < tol
+            # Bitwise independent of the number of lines per call.
+            zbp2, zbn2 = zeros(L, q), zeros(L, q)
+            CL._band_reduced!(band, gath, zbp2, zbn2, q, 5)
+            @test zbp2[1:5, :] == zbp[1:5, :] && zbn2[1:5, :] == zbn[1:5, :]
+        end
+    end
+end
+
 @testset "periodic C6 derivative: spectral accuracy" begin
     solver = mkslv(n_global=(32, 32, 32))
     f = CL.field(solver.decomp); df = CL.field(solver.decomp)

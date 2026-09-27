@@ -39,9 +39,13 @@ The latter two vectors are the left and right spikes. They depend on the
 operator and local extent, not on the differentiated field, and are therefore
 computed during planning.
 
-Evaluating this expression at the first and last local points yields a dense
-system in only two interface unknowns per rank. Its matrix is assembled and
-factorized once. Each operator application then performs:
+Evaluating this expression at the first and last local points yields a system
+in only two interface unknowns per rank. A rank's interface unknowns couple
+only to those of its two neighbors, so the matrix is block-tridiagonal across
+the ranks, with a block in each corner on a periodic line. Every rank assembles
+the whole matrix and factorizes it once as a band matrix with partial pivoting,
+the periodic ranks taken in the order 0, P−1, 1, P−2, … so that the corner
+blocks fall inside the band. Each operator application then performs:
 
 1. batched local banded solves for all grid lines;
 2. one collective exchange of interface values;
@@ -142,33 +146,36 @@ interface values spans only the ranks along one direction, whose count grows
 as the cube root of the total, and on four 112-core nodes the measured
 scaling was 93% per node doubling. What grows is the reduced interface solve
 itself. With ``P`` ranks along a direction and half-bandwidth ``q``, the
-reduced matrix is dense of order ``2qP`` and every rank applies its
-factorization to each of its own lines, at about ``8q^2P^2`` operations per
-line, against roughly ``9qn`` for the local sweep and spike correction on
-``n = N/P`` points. Counted per rank on a uniform three-dimensional process
-grid, the local work shrinks as ``N^3/P^3`` while the reduced stage costs
-about ``8q^2N^2`` per solve whatever ``P`` is, since the growth in the matrix
-cancels the shrinking number of local lines. It is a fixed per-rank cost and
-so an Amdahl term. The two are equal in operation count at
+reduced matrix has order ``2qP``, and every rank applies its band
+factorization to each of its own lines. Without row interchanges, which the
+well-conditioned operators do not need, that costs about ``2n_r(k_l+k_u+1)``
+operations per line for ``n_r = 2qP`` unknowns and half-bandwidths ``k_l``,
+``k_u``: ``20P`` and ``36P`` for ``q = 1`` on a closed and a periodic line,
+``88P`` and ``152P`` for ``q = 2``. The local sweep and spike correction cost
+roughly ``9qn`` on ``n = N/P`` points. Counted per rank on a uniform
+three-dimensional process grid, the local work shrinks as ``N^3/P^3`` and the
+reduced stage as ``N^2/P``, so the ratio of the two grows as ``P^2/N`` and
+they are equal in operation count at
 
-| ``N`` | ``q = 1`` (C6) | ``q = 2`` (C10) |
-|---|---|---|
-| 256 | ``P \approx 6.6`` | ``P \approx 5.2`` |
-| 512 | 8.3 | 6.6 |
-| 1024 | 10.4 | 8.3 |
+| ``N`` | ``q = 1`` closed | ``q = 1`` periodic | ``q = 2`` closed | ``q = 2`` periodic |
+|---|---|---|---|---|
+| 256 | ``P \approx 10.7`` | ``8.0`` | ``7.2`` | ``5.5`` |
+| 512 | 15.2 | 11.3 | 10.2 | 7.8 |
+| 1024 | 21.5 | 16.0 | 14.5 | 11.0 |
 
-which correspond to a few hundred to a thousand ranks in total. The reduced solve runs cache-resident at dense-linear-algebra rates
-while the local sweep streams memory, so the wall-clock crossover is later,
-by perhaps a factor of two to three in ``P``; it is nonetheless inside the
-range of a production run. The reduced matrix is block-tridiagonal in ``P``,
-since a rank's interface unknowns couple only to its two neighbors, and a
-banded factorization brings the per-line cost to order ``q^2P`` and the
-per-rank cost back to a shrinking ``N^2/P``. That change, and the
-distributed reduced solve that removes the Allgather volume after it, are
-planned work rather than current behavior.
+which correspond to a few hundred to ten thousand ranks in total. A dense factorization,
+``8q^2P^2`` operations per line, would give a fixed per-rank cost
+``8q^2N^2`` and crossovers of ``P \approx 6.6``, 8.3 and 10.4 for ``q = 1``
+and 5.2, 6.6 and 8.3 for ``q = 2`` at the same extents. At the rank counts a
+workstation reaches the band solve runs several times faster than the dense
+one did, well ahead of the operation count, since it streams every line
+through one short loop per band entry. The solve is still replicated: every
+rank solves the whole reduced system for its own lines. Removing that
+replication, by a distributed reduced solve or by dividing the lines among
+the ranks of a direction, is planned work rather than current behavior.
 
 The same count sets the process-grid rule. For a fixed total rank count the
-per-rank reduced cost summed over the three directions is proportional to
-the sum of the cubes of the per-direction rank counts, which is smallest for
-a grid as close to uniform as the extents allow and largest for a slab
-decomposition. Halo traffic prefers the same shape.
+per-rank reduced cost summed over the three directions is proportional to the
+sum of the squares of the per-direction rank counts, which is smallest for a grid as close to
+uniform as the extents allow and largest for a slab decomposition. Halo
+traffic prefers the same shape.

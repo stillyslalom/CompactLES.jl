@@ -102,9 +102,10 @@ The preference is stored per project in `LocalPreferences.toml`, so the
 The measured launch rules are:
 
 - Set `OPENBLAS_NUM_THREADS=1` in the launch environment. The only BLAS call
-  is the small reduced interface stage of each compact solve, and a threaded
-  OpenBLAS forks and joins its pool on every one: a 32³ step measured 7.0 s at
-  the default thread count of a 112-core node and 0.079 s at one thread. The
+  is the small reduced interface stage of a compact solve along a periodic
+  direction that one rank holds whole, and a threaded OpenBLAS forks and joins
+  its pool on every one: a 32³ step measured 7.0 s at the default thread count
+  of a 112-core node and 0.079 s at one thread. The
   package sets one thread itself when the variable is unset.
 - Run one thread per rank (`-t 1`). The solver is memory-bandwidth-bound, and
   at a fixed core count ranks beat threads: 256³ Taylor--Green on two full

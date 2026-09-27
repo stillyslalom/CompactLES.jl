@@ -358,15 +358,28 @@ of length `n`. `aL` couples local row 1 to the previous rank's last unknown and
 
 The vectors `v` and `w`, the **spikes**, depend only on the scheme, so they
 are computed once at plan time. Evaluating `x` at the first and last row of
-every rank yields a dense **2P × 2P reduced system** in the interface unknowns
+every rank yields a **2P × 2P reduced system** in the interface unknowns
 `(x₁⁽⁰⁾, xₙ⁽⁰⁾, x₁⁽¹⁾, xₙ⁽¹⁾, …)`. That reduced matrix also depends only on the
 scheme; it is assembled from a single `Allgather` of the spike corners
-`(v₁, vₙ, w₁, wₙ)` and LU-factorized **once at plan time**.
+`(v₁, vₙ, w₁, wₙ)` and factorized **once at plan time**. A rank's interface
+unknowns couple only to its two neighbours, so the matrix is block-tridiagonal
+in P, and block-cyclic-tridiagonal on a periodic line. It is factorized as a
+band LU with partial pivoting (`ReducedBand`), with the periodic blocks
+ordered 0, P−1, 1, P−2, … so that every pair of ring neighbours lies within
+two blocks and the corner blocks fall inside the band; the half-bandwidth is
+2 closed and 4 periodic for the tridiagonal operators, 5 and 9 for the
+pentadiagonal ones. The ordering keeps one pivoted factorization for both
+topologies; bordering or a Sherman–Morrison–Woodbury correction would treat
+the corner blocks in a second solve path. One rank on a periodic line keeps a
+dense LU of its 2 × 2 (2q × 2q) block, which leaves every serial solve
+bitwise unchanged.
 
 **Per application**, then, costs: batched local Thomas solves (threaded over
-lines), one `Allgather` of the two interface values per line, one dense
-triangular solve for *all lines simultaneously* (`ldiv!` on the pre-factorized
-reduced LU), and a threaded rank-local correction `x ← x − v·xl − w·xr`. This
+lines), one `Allgather` of the two interface values per line, one band solve
+of the replicated reduced system for *all lines simultaneously*, with the back
+substitution stopped at the first unknown the rank reads, and a threaded
+rank-local correction `x ← x − v·xl − w·xr`. The band solve costs O(q²P)
+operations per line where a dense one costs 8q²P². This
 reproduces the *exact* single-domain solution regardless of rank count, so an
 interface bug appears as an O(1) error, not a small one, and the MPI test
 suite catches it by that signature.
@@ -378,8 +391,8 @@ entirely (`v = w = 0`).
 `banded.jl` extends all of this to half-bandwidth `q`: the cross-rank coupling
 runs through triangular `q×q` blocks, the spikes become `n×q` blocks, the
 interface unknowns per rank become its first and last `q` values, and the
-reduced system grows to `(2qP)²`; it is still one `Allgather` of four `q×q`
-corner blocks per rank, still factorized once. The banded LU is unpivoted, which is
+reduced system grows to order `2qP` with `2q × 2q` blocks; it is still one
+`Allgather` of four `q×q` corner blocks per rank, still factorized once. The local banded LU is unpivoted, which is
 standard practice for the well-conditioned (if not strictly diagonally dominant)
 compact LHS matrices.
 

@@ -75,19 +75,14 @@ const THREAD_MIN_WORK_PER_THREAD = 1024
 Turn threaded BLAS off unless the caller has chosen a value, and say so once.
 
 The only BLAS this solver calls is the reduced interface stage of the compact
-solve (`_reduced_solve!` in tridiag.jl): a `2P x 2P` system, 2x2 on one rank,
-with one right-hand side per line, solved once per dimension per field per
-Runge-Kutta stage. OpenBLAS forks its thread pool for each of those and waits
-on the join, so the cost is paid per call and grows with the core count of the
-node. Measured: a 32^3 step cost 7.0 s on a 112-core node at the default thread
-count and 0.079 s at one thread, and the reduced solve alone is 3x slower
-threaded at `P == 1`.
-
-Threading does pay on the solve itself once the system is large (measured 1.6x
-at `2P == 16`, 3.3x at `2P == 112`), but it cannot be taken: the solve is
-replicated on every rank behind a collective gather, so all ranks run it at the
-same instant, and a rank at that `P` owns one core under the launch rule of
-one thread per rank. Those threads would come out of its neighbours.
+solve along a periodic direction that one rank holds whole (`_reduced_solve!`
+in tridiag.jl): a `2q x 2q` system with one right-hand side per line, solved
+once per dimension per field per Runge-Kutta stage. OpenBLAS forks its thread
+pool for each of those and waits on the join, so the cost is paid per call and
+grows with the core count of the node. Measured: a 32^3 step cost 7.0 s on a
+112-core node at the default thread count and 0.079 s at one thread, and the
+reduced solve alone is 3x slower threaded at `P == 1`. A direction split over
+several ranks takes the band solve of tridiag.jl, which calls no BLAS.
 
 Setting `OPENBLAS_NUM_THREADS`, to one or to anything else, is respected and
 silences this.

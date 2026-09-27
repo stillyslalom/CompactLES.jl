@@ -13,14 +13,16 @@
 #   x = y − V·x_prev_tail − W·x_next_head,
 #
 # and evaluating at each rank's head (1..q) and tail (n−q+1..n) rows yields a
-# dense (2q·P) × (2q·P) reduced system per line in the interface unknowns
-# z = (head₀, tail₀, head₁, tail₁, …). As in the tridiagonal case the reduced
-# matrix depends only on the scheme: it is assembled from one Allgather of the
-# four q×q spike corner blocks per rank and LU-factorized at plan time. Per
-# application: batched banded local solves threaded over lines, one Allgather
-# of 2q interface values per line, one dense solve for all lines, threaded
-# correction. Periodic single-rank lines self-couple with no communication;
-# non-periodic single-rank lines skip the reduced stage (V = W = 0).
+# (2q·P) × (2q·P) reduced system per line in the interface unknowns
+# z = (head₀, tail₀, head₁, tail₁, …), block-tridiagonal in P with 2q × 2q
+# blocks. As in the tridiagonal case the reduced matrix depends only on the
+# scheme: it is assembled from one Allgather of the four q×q spike corner
+# blocks per rank and factorized at plan time, by the band LU of tridiag.jl.
+# Per application: batched banded local solves threaded over lines, one
+# Allgather of 2q interface values per line, one band solve for all lines,
+# threaded correction. Periodic single-rank lines self-couple with no
+# communication; non-periodic single-rank lines skip the reduced stage
+# (V = W = 0).
 #
 # The banded LU is unpivoted. Compact-scheme LHS matrices (e.g. Lele C10:
 # α = 1/2, β = 1/20) are not strictly diagonally dominant but are
@@ -212,14 +214,15 @@ mutable struct BandLineSolver{T}
     V::Matrix{T}          # n × q spikes from the left coupling block AL
     W::Matrix{T}          # n × q spikes from the right coupling block CR
     hasred::Bool
-    red::Union{RedLU{T}, Nothing}   # LU of the (2qP)² reduced matrix, or nothing
+    red::Union{RedLU{T}, Nothing}        # dense LU of the reduced matrix (P == 1)
+    band::Union{ReducedBand{T}, Nothing} # its band LU (P > 1); see tridiag.jl
     comm::MPI.Comm
     P::Int
     p::Int                # 0-based rank within the sub-communicator
     lines::Int
     ends::Matrix{T}       # 2q × lines: local (y_head; y_tail) per line
     gath::Array{T,3}      # 2q × lines × P
-    z::Matrix{T}          # 2qP × lines
+    z::Matrix{T}          # 2q × lines: reduced RHS / solution of the dense path
     zbp::Matrix{T}        # lines × q contiguous interface copies for the
     zbn::Matrix{T}        # transposed (vectorized) correction sweep
 end
@@ -265,7 +268,7 @@ function BandLineSolver(Ab::Matrix{T}, AL::Matrix{T}, CR::Matrix{T},
         end
     end
     hasred = (P > 1) || periodic
-    red = nothing
+    red = band = nothing
     if hasred
         # Pack the four q×q spike corner blocks (V_head, V_tail, W_head,
         # W_tail), column-major each.
@@ -284,68 +287,21 @@ function BandLineSolver(Ab::Matrix{T}, AL::Matrix{T}, CR::Matrix{T},
         else
             allb .= blk
         end
-        m2 = 2q
-        R = zeros(T, m2 * P, m2 * P)
-        for rk in 0:(P-1)
-            base = 4q * q * rk
-            getb(offset, r, t) = allb[base + offset * q * q + (t - 1) * q + r]
-            rh = m2 * rk           # head rows offset of rank rk
-            rt = m2 * rk + q       # tail rows offset
-            for r in 1:q
-                R[rh+r, rh+r] += 1
-                R[rt+r, rt+r] += 1
-            end
-            cprev = m2 * mod(rk - 1, P) + q   # prev tail columns offset
-            cnext = m2 * mod(rk + 1, P)       # next head columns offset
-            for t in 1:q, r in 1:q
-                R[rh+r, cprev+t] += getb(0, r, t)   # V_head
-                R[rt+r, cprev+t] += getb(1, r, t)   # V_tail
-                R[rh+r, cnext+t] += getb(2, r, t)   # W_head
-                R[rt+r, cnext+t] += getb(3, r, t)   # W_tail
-            end
-        end
-        red = lu!(R)
+        red, band = _reduced_factor(allb, q, P, p, periodic, lines)
     end
-    BandLineSolver{T}(n, q, F, V, W, hasred, red, comm, P, p, lines,
+    BandLineSolver{T}(n, q, F, V, W, hasred, red, band, comm, P, p, lines,
                       zeros(T, 2q, lines), zeros(T, 2q, lines, max(P, 1)),
-                      zeros(T, 2q * P, lines),
+                      zeros(T, red === nothing ? 0 : 2q, lines),
                       zeros(T, lines, q), zeros(T, lines, q))
 end
 
-"""
-Reduced interface stage shared by every layout of the banded solve: from
-`line_solver.ends` holding the local head and tail values (2q per line),
-gather the interface values, solve the dense reduced system, and leave the `q`
-correction values each line needs from the previous rank's tail and the next
-rank's head in `line_solver.zbp` and `line_solver.zbn` (lines × q). The gather
-is collective when `P > 1`, so every rank of the sub-communicator must call
-this.
-"""
-function _reduced_solve!(line_solver::BandLineSolver{T}, L::Int, Lb::Int=L) where {T}
-    q = line_solver.q
-    if line_solver.P > 1
-        MPI.Allgather!(line_solver.ends,
-                       MPI.UBuffer(vec(line_solver.gath), 2q * L), line_solver.comm)
-    else
-        copyto!(view(line_solver.gath, :, :, 1), line_solver.ends)
-    end
-    m2 = 2q
-    @inbounds for rk in 0:(line_solver.P-1), l in 1:L, r in 1:m2
-        line_solver.z[m2*rk+r, l] = line_solver.gath[r, l, rk+1]
-    end
-    # `red` is a small union (see RedLU in tridiag.jl); every caller sits
-    # behind `hasred`, which the constructor pairs with the factorization,
-    # so the narrowing check is dead at runtime. It closes the union at the
-    # `ldiv!` call, which JET otherwise reports at every solver entry point.
-    red = line_solver.red
-    red === nothing && error("reduced solve without a reduced factorization")
-    _reduced_ldiv!(red, line_solver.z, L, Lb)   # per tile block; see tridiag.jl
-    cprev = m2 * mod(line_solver.p - 1, line_solver.P) + q
-    cnext = m2 * mod(line_solver.p + 1, line_solver.P)
-    @inbounds for l in 1:L, t in 1:q
-        line_solver.zbp[l, t] = line_solver.z[cprev+t, l]
-        line_solver.zbn[l, t] = line_solver.z[cnext+t, l]
-    end
+_interface_width(line_solver::BandLineSolver) = line_solver.q
+
+# The reduced interface stage, with the head and tail values of `q` points per
+# line and `zbp`, `zbn` lines × q; see the `LineSolver` method in tridiag.jl.
+function _reduced_solve!(line_solver::BandLineSolver, L::Int, Lb::Int=L)
+    _gather_ends!(line_solver, L)
+    _solve_reduced!(line_solver, L, Lb)
     return nothing
 end
 
