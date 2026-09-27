@@ -162,7 +162,17 @@ function art_block(solver::SolverLike)
     arrays = art_arrays(solver)
     block = Array{eltype(solver.rho)}(undef, nx, ny, nz, length(arrays))
     for (c, a) in enumerate(arrays)
-        block[:, :, :, c] .= view(a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
+        interior = view(a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
+        if _cpu_storage(a)
+            block[:, :, :, c] .= interior
+        else
+            # A broadcast from device storage into a host array indexes the
+            # device array element by element; gather the interior into a
+            # contiguous device array by a kernel and download that instead.
+            staged = similar(a, nx, ny, nz)
+            staged .= interior
+            copyto!(view(block, :, :, :, c), Array(staged))
+        end
     end
     return block
 end
@@ -177,7 +187,12 @@ function set_art_block!(solver::SolverLike, block)
     o1, o2, o3 = decomp.n_halo_d
     nx, ny, nz = decomp.n_local
     for (c, a) in enumerate(art_arrays(solver))
-        view(a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz) .= view(block, :, :, :, c)
+        interior = view(a, o1+1:o1+nx, o2+1:o2+ny, o3+1:o3+nz)
+        if _cpu_storage(a)
+            interior .= view(block, :, :, :, c)
+        else
+            _upload!(interior, block[:, :, :, c])
+        end
     end
     return solver
 end
