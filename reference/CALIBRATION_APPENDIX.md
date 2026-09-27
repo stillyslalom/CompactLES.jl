@@ -5112,6 +5112,7 @@ excursion thirteenfold. The option stays experimental, a Float64 smooth-flow set
 ```text
 julia --project=. -t 1 bench/boundaryorder.jl study=gflux
 julia --project=. -t 1 bench/interfacesensor.jl crossing "crossing_variants=base,gflux,two patches,three patches"
+julia --project=. -t 1 bench/interfacesensor.jl startup
 julia --project=. -t 4 bench/interfaceconservation.jl N=96 ny=24 tfinal=8.0 moving_tfinal=8.0 iflux=ghost [mu=1e-3]
 ```
 
@@ -5204,6 +5205,40 @@ three-level global-step shell (7.0e-3) and the two-species excursions (3.1e-8, 4
 
 The reversed tube reproduces every printed digit of the forward ghost row. On the shared plane the
 one-sided gradient workaround reads p_min 0.097, shell 4.6e-2 and root 2.4e-1 in the same run.
+
+The positivity failsafe's case in `test/level_tests.jl` (root N = 81, level-1 tiles of 8 over
+root nodes 24–56, `cfl = 0.2`, 20 steps, `floor_ratio = 0.999`) places the Sod diaphragm on the
+plane between two tiles. There the failsafe saw 102 cells below the internal-energy floor on 20
+steps and repaired 123 under the ghost fluxes, against 39 on 17 steps and 49 repaired under the
+closure rows. The repaired cells lie 1–11 fine nodes into the low-density tile, and density
+triggers four in five of them. Interpolation order 6 or 8 leaves the tallies unchanged on both
+paths. The `startup` part counts the same criterion without repairing (cells below 0.999 of the
+initial minimum density or total energy over density, summed over steps) and gives the level-1
+density error against the uniform run at the fine spacing:
+
+| diaphragm | path | 20 steps: flagged, min ρ/ρ0, L1(ρ) | t = 0.12: flagged, min ρ/ρ0, L1(ρ) |
+|---|---|---|---|
+| none (uniform, fine spacing) | — | 169, 0.640, — | 921, 0.640, — |
+| on the tile plane | ghost | 165, 0.782, 2.03e-3 | 2669, 0.770, 2.89e-3 |
+| | closure | 112, 0.904, 4.49e-4 | 2321, 0.772, 2.86e-3 |
+| | ghost, BL remainder rows | 148, 0.664, 2.91e-3 | 4037, 0.664, 7.39e-3 |
+| mid-tile | ghost | 183, 0.640, 1.85e-5 | 3034, 0.640, 1.11e-3 |
+| | closure | 184, 0.640, 2.53e-5 | 2958, 0.640, 1.58e-3 |
+| on a coarse-fine face | ghost | 129, 0.389, 8.85e-3 | 2521, 0.389, 1.28e-2 |
+| | closure | 85, 0.389, 7.80e-3 | 2474, 0.389, 1.28e-2 |
+
+The count measures the start-up undershoot of an ideal jump, which the scheme produces without
+an interface (0.640 on the uniform grid, at step 7). A jump on a tile plane under the closure rows
+starts through the one-sided inviscid and remainder rows, whose dissipation damps that transient
+to 0.904; the ghost fluxes difference the inviscid flux there with interior accuracy and read
+0.782, and with the Brady–Livescu rows also on the remainder 0.664, the uniform grid's value.
+The difference is confined to the first steps: at t = 0.12 the two paths agree in minimum
+density and error, and a diaphragm placed inside a tile or on a coarse-fine face gives identical
+minima under both. At root N = 161 and t = 0.0045 the flagged counts rise 1.8-fold (ghost) and
+1.4-fold (closure) over N = 81 and the minima are unchanged. On
+the three regridded levels of `test/level_tests.jl` (shock and contact, subcycled, t = 0.25)
+the same count is 8706 under the ghost fluxes against 9908 under the closure rows, min ρ/ρ0
+0.637 against 0.633.
 
 **Conservation.** The layer on (96, 24, 1) to t = 8, inviscid: the same-level layout's drift
 is 6.2e-13 and its mass-fraction excursion zero (5.2e-10 and 3.1e-5 under the closure rows),

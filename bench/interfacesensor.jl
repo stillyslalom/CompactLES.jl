@@ -8,7 +8,8 @@
 #   mpiexec -n 4 julia --project=. -t 1 bench/interfacesensor.jl crossing
 #
 # `parts` is the first positional argument and takes `all` or a
-# comma-separated subset of `probe`, `crossing`, `filter`, `undershoot`.
+# comma-separated subset of `probe`, `crossing`, `filter`, `undershoot`,
+# `startup`.
 # `smoke=true` shrinks every grid, end time and step cap so the whole script
 # runs in about a minute. Scratch tooling like the rest of bench/: it prints
 # tables and asserts nothing, and the conclusions are written up in
@@ -58,6 +59,15 @@
 #               the sensor toggle. The matched-step filter and projection
 #               cadence rows separate the global-step undershoot mechanisms.
 #               Minutes per row.
+#   startup     a Sod diaphragm placed on a tile plane, inside a tile and on a
+#               coarse-fine face, under the ghost fluxes, the closure rows and
+#               the ghost fluxes with Brady-Livescu remainder rows, after
+#               `startup_steps` steps and at `startup_tfinal`. Per row: the
+#               cells the positivity failsafe would flag at `floor_ratio =
+#               0.999`, counted without repairing, the minimum density and
+#               internal energy over their initial minima, and the level-1
+#               density error against the uniform run at the fine spacing,
+#               which prints its own row. One rank, about a minute.
 #
 # What the mechanism is, as found in the tree:
 #
@@ -108,7 +118,8 @@ const args = CL.script_args(ARGS,
      N=201, nmax=40000, waveN=96, wave_tfinal=0.5,
      layerN=96, layerny=24, layer_tfinal=50.26548245743669, samples=8,
      undershoot_depths="2,3", undershoot_variants="all",
-     undershoot_ghosts="both", crossing_variants="all");
+     undershoot_ghosts="both", crossing_variants="all",
+     startup_N=81, startup_steps=20, startup_tfinal=0.12);
     positional=(:parts,))
 
 const RANK = MPI.Comm_rank(MPI.COMM_WORLD)
@@ -1148,14 +1159,139 @@ function undershoot_part(N, ny, tfinal, samples, nmax)
     end
 end
 
+# --- part: startup ------------------------------------------------------------
+
+# The failsafe's criterion at `floor_ratio = 0.999` of the initial minima, read
+# after every step without repairing, so the count is the undershoot of the
+# unrepaired trajectory: cells whose density or total energy lies more than
+# 0.1% below the initial minimum, summed over steps.
+mutable struct StartupMonitor
+    rho0::Float64
+    e0::Float64
+    cells::Int
+    steps::Int
+    near::Int              # flagged fine cells within four nodes of a tile end
+    rho_min::Float64
+    e_min::Float64
+    at::String
+end
+
+startup_patches(s, q) = q isa CL.ConservedState ?
+                        [(CL.PatchSolver(s, CL._patch_of(s)), q)] : CL.eachpatch(s, q)
+
+function startup_monitor(solver, states)
+    r, e = Inf, Inf
+    for (ps, Q) in startup_patches(solver, states)
+        a, b = CL._local_positivity_mins(ps, Q)
+        r, e = min(r, a), min(e, b)
+    end
+    return StartupMonitor(r, e, 0, 0, 0, Inf, Inf, "")
+end
+
+function startup_sample!(m, solver, states)
+    flagged = false
+    for (ps, Q) in startup_patches(solver, states)
+        eq = ps.equations
+        m1, ie = eq.i_mom[1], eq.i_energy
+        n = ps.decomp.n_local[1]
+        level = ps.patch.level
+        for i in 1:n
+            I = padded_index(ps, i, 1, 1)
+            ρ = node_density(ps, Q, i)
+            e = (Q[I, ie] - Q[I, m1]^2 / (2ρ)) / ρ
+            if ρ / m.rho0 < m.rho_min
+                m.rho_min = ρ / m.rho0
+                m.at = level == 0 ? @sprintf("root, step %d", solver.step) :
+                       @sprintf("level %d, %d from a tile end, step %d", level,
+                                min(i - 1, n - i), solver.step)
+            end
+            m.e_min = min(m.e_min, e / m.e0)
+            if ρ < 0.999 * m.rho0 || Q[I, ie] < ρ * 0.999 * m.e0
+                m.cells += 1
+                flagged = true
+                level > 0 && min(i - 1, n - i) <= 4 && (m.near += 1)
+            end
+        end
+    end
+    flagged && (m.steps += 1)
+    return false
+end
+
+# Density by node index on `level`; the uniform run's level 0 has the fine
+# spacing.
+function level_density(solver, states, level)
+    out = Dict{Int,Float64}()
+    for (ps, Q) in startup_patches(solver, states)
+        ps.patch.level == level || continue
+        for i in 1:ps.decomp.n_local[1]
+            out[ps.patch.region.offset[1] + i - 1] = node_density(ps, Q, i)
+        end
+    end
+    return out
+end
+
+function startup_run(N, x0, tfinal, nmax; kw...)
+    ic(x, y, z) = x < x0 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                           Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+    s = Solver(; n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+               bcs=(WALL2, PER, PER), cfl=0.2, kw...)
+    states = allocate_state(s)
+    initialize!(s, states, ic)
+    m = startup_monitor(s, states)
+    run!(s, states; tfinal=tfinal, nmax=nmax,
+         callback=Callback(EveryStep(), (s, q) -> startup_sample!(m, s, q)))
+    return s, states, m
+end
+
+function print_startup(name, s, m, l1)
+    printfmt("  %-26s steps %4d  flagged %5d on %4d steps (near %4d)  min rho/rho0 " *
+             "%.3f (%s)  min e/e0 %.3f  L1(rho) %s\n", name, s.step, m.cells, m.steps,
+             m.near, m.rho_min, m.at, m.e_min, l1 === nothing ? "-" : @sprintf("%.2e", l1))
+end
+
+function startup_part(N, steps, tfinal)
+    say("\n=== part startup: a Sod diaphragm on an interface, the failsafe's 0.999 ",
+        "count ===")
+    NP == 1 || (say("startup runs on one rank; skipped at np = $NP"); return)
+    say("root N = $N, cfl 0.2, inviscid, level-1 tiles of 8 over root nodes 24..56 ",
+        "(the box 30..50 on the lattice), uniform reference at the fine spacing to ",
+        "the same t; flagged: cells below 0.999 of the initial minimum density or ",
+        "total energy over density, summed over steps, near: fine cells within four ",
+        "nodes of a tile end; L1: level-1 density against the uniform run")
+    R = BlockRegion((30 * (N - 1) ÷ 80, 0, 0), (20 * (N - 1) ÷ 80 + 1, 1, 1))
+    RC = BlockRegion((40 * (N - 1) ÷ 80, 0, 0), (10 * (N - 1) ÷ 80 + 1, 1, 1))
+    tile = 8 * (N - 1) ÷ 80
+    BL = lele_d1_6(closures=:brady_livescu)
+    layouts = (("diaphragm on the tile plane", 0.5, (refine=R, tile=tile), true),
+               ("diaphragm mid-tile", 0.55, (refine=R, tile=tile), false),
+               ("diaphragm on a coarse-fine face", 0.5, (refine=RC, tile=0), false))
+    Nf = 3 * (N - 1) + 1
+    for (lname, x0, lkw, with_bl) in layouts, (tf, nm) in ((1.0, steps), (tfinal, 100000))
+        say("--- $lname, ", nm == steps ? "$steps steps" : "t = $tf", " ---")
+        paths = Any[("ghost", (;)), ("closure", (interface_flux=:closure,))]
+        with_bl && push!(paths, ("ghost, BL remainder rows", (interface_divergence=BL,)))
+        for (pname, pkw) in paths
+            r = attempt(() -> startup_run(N, x0, tf, nm; lkw..., pkw...))
+            failed(r) && (say(@sprintf("  %-26s %s", pname, r)); continue)
+            s, states, m = r
+            u, ustates, um = startup_run(Nf, x0, s.t, 100000)
+            ref = level_density(u, ustates, 0)
+            fine = level_density(s, states, 1)
+            print_startup(pname, s, m, sum(abs(v - ref[k]) for (k, v) in fine) / length(fine))
+            pname == "ghost" && print_startup("uniform, fine spacing", u, um, nothing)
+        end
+    end
+    flush(stdout)
+end
+
 # --- driver -------------------------------------------------------------------
 
 function main()
     parts = Set(Symbol.(split(args.parts, ',')))
-    known = (:all, :probe, :crossing, :filter, :undershoot)
+    known = (:all, :probe, :crossing, :filter, :undershoot, :startup)
     all(p -> p in known, parts) ||
         error("parts must be all or a subset of probe, crossing, filter, " *
-              "undershoot")
+              "undershoot, startup")
     allparts = :all in parts
     ns = parse.(Int, split(args.ns, ','))
     N, nmax = args.N, args.nmax
@@ -1164,6 +1300,7 @@ function main()
     layer_tfinal, samples = args.layer_tfinal, args.samples
     ts = (0.03, 0.1, 0.2)
     sod_tfinal = 0.2
+    startup_tfinal = args.startup_tfinal
     ny = 24
     if args.smoke
         ns = [24, 48]
@@ -1171,6 +1308,7 @@ function main()
         ts = (0.005, 0.01, 0.02)
         nmax = min(nmax, 200)
         sod_tfinal = 0.02
+        startup_tfinal = min(startup_tfinal, 0.02)
         waveN, wave_tfinal = 48, 0.05
         layerN, layerny, layer_tfinal, samples = 48, 24, 0.4, 2
         ny = 18
@@ -1191,6 +1329,9 @@ function main()
     end
     if allparts || :undershoot in parts
         undershoot_part(layerN, layerny, layer_tfinal, samples, nmax)
+    end
+    if allparts || :startup in parts
+        startup_part(args.startup_N, args.startup_steps, startup_tfinal)
     end
 end
 
