@@ -7116,6 +7116,8 @@ julia --project=. -t 1 bench/falseactivation.jl composition thermal acoustic pro
 julia --project=. -t 1 bench/falseactivation.jl species            # the species-only split
 julia --project=. -t 16 bench/falseactivation.jl speciescost       # its cost
 julia --project=. -t 16 bench/he_co2_shock_tube.jl 384 24 2.5e-3 detector=species C_D=1 every=5
+julia --project=. -t 1 bench/interfacewidth.jl                 # width on several definitions
+julia --project=. -t 1 bench/interfacewidth.jl configs ratios=100 only=5,9 N=800
 ```
 
 Three periodic one-dimensional cases at the production constants, C6 `:neutral3`,
@@ -7314,6 +7316,127 @@ box 64³, 2 species     δ4  |  7.710         25.639 |  1.000  1.000
 ```
 
 The right-hand side costs 4 to 8% more, about half of what `:d8` on every field adds.
+
+### Interface width against Brill, Olson and Bokman
+
+[Brill, Olson & Bokman (J. Comput. Phys. 542, 114366,
+2025)](https://doi.org/10.1016/j.jcp.2025.114366) report no interface thickness in cells;
+section, equation and figure numbers here are those of arXiv:2503.12680v2. Their tests are
+the three-material bubble advected for ten periods (Secs. 3.1 and 5.1, Figs. 2 and 6), which
+records completion and the final pressure error against the initial width N_p (99% of a tanh
+inside N_p cells) for R = 10 to 1e6; the shock–helium bubble at R = 7.25 with N_p = 14 and
+at R ≈ 7.25e5 (Sec. 5.2, Figs. 7 and 8); a Rayleigh–Taylor layer at R = 5000 (Sec. 5.3,
+Fig. 9); two drops in a reversing shear (Sec. 5.4, Figs. 10 and 11); and a nitrogen bubble
+in water (Sec. 5.5). None is a planar shocked interface, and the thin interfaces of the
+figures are held by the conservative diffuse-interface flux of their eq. 68, whose
+one-dimensional equilibrium is V = 1/(1 + exp(−x/ε)), with ε = Δ by default, 1.2Δ in the
+R ≈ 7.25e5 shock–bubble and 1.5Δ in the water case. Their species diffusivity (eqs. 33–37)
+is c_s Δ times the eighth-derivative ringing of Y_i and V_i, maximized over the two, which
+is the `:partial_density` form here. If Miranda's F (eq. 22) is Pyranda's `c10d8`
+operator, whose response to a grid-to-grid oscillation is 3840 against the 16 of
+`compact_d8`, their C_D,V = 2e-4 is C_D = 0.048 under `:d8` here, and the shocked
+high-ratio runs used 2.4 (R ≈ 7.25e5), 4.8 (Rayleigh–Taylor) and 288 (water).
+
+On a logistic V profile the mass fraction is a logistic of the same ε displaced by ε ln R
+(their appendix A), so the 5–95% widths of Y and V are both 2ε ln 19 = 5.9ε, the 10–90%
+width is 2ε ln 9 = 4.4ε and the maximum-gradient thickness 1/max|∂V/∂x| is 4ε. The
+`width_cells` of `shock_interface` counts the points with 0.05 < Y_air < 0.95, which at
+R = 100 is 0.84 < V_air < 0.9995, the light side of the interface only.
+`bench/interfacewidth.jl` reads the final profile of `shock_interface` on each definition:
+`count` is `width_cells`, `core` the same count on the contiguous run through Y_air = 1/2,
+and the interpolated widths are in cells. Reference profiles, evaluated in closed form:
+
+```
+profile                              | Y 5–95  V 5–95  V 10–90  V grad
+equilibrium of eq. 68, ε = Δ         |  5.9     5.9     4.4      4.0
+                       ε = 1.2Δ      |  7.1     7.1     5.3      4.8
+                       ε = 1.5Δ      |  8.8     8.8     6.6      6.0
+their eq. 30 tanh, N_p = 7           |  3.9     3.9     2.9      2.6
+                   N_p = 14          |  7.7     7.7     5.8      5.3
+their eqs. 82, 85 erf(x/2Δ)          |  –       4.7     3.6      3.5
+```
+
+The initial interface of `shock_interface`, a tanh of Y over 2h, is the ε = Δ equilibrium
+(measured row `initial` below, which carries the bias of linear interpolation). At
+t = 0.25 on N = 400 (`configs`; `species` is the species-only split of bench/detector_split.jl
+at the C_D given, `d8` the detector on every field, `c_air` and `c_hvy` a uniform sound
+speed in D_b alone, √1.4 and √(1.09/100), the pre-shock values of the two gases at R = 100;
+`*` marks the default):
+
+```
+config           R     | count core | Y 5–95 V 5–95 V10–90 V grad |  TV−1    min Y  steps
+initial          100   |   6    6   |  6.09   6.06   4.51   4.14  | 0        0          0
+δ4 0.1  *        5.04  |   4    4   |  4.79   4.78   3.88   3.80  | 0.0066  −0.0098   644
+δ4 1             5.04  |   8    8   |  8.22   7.47   5.84   5.30  | 0.0043  −0.0028   638
+species 0.05     5.04  |   4    4   |  3.98   4.27   3.33   3.42  | 0.0750  −0.0108   646
+species 0.3      5.04  |   4    4   |  4.55   4.56   3.62   3.63  | 0.0300  −0.0097   643
+species 1        5.04  |   5    5   |  5.82   5.25   4.19   3.81  | 0.0045  −0.0046   640
+species 3        5.04  |   8    8   |  7.31   6.42   4.89   4.30  | 0.0046  −0.0032   640
+d8 1             5.04  |   6    6   |  5.93   5.40   4.30   3.85  | 0.0044  −0.0054   621
+bulk δ4 0.1      5.04  |   4    4   |  4.90   4.78   3.87   3.89  | 0.0060  −0.0088   641
+δ4 0.1  *        100   |   7    7   |  7.78   5.24   2.69   2.08  | 0.3243  −0.0189   704
+δ4 1             100   |  10   10   | 10.47   5.57   4.04   3.75  | 0.0038  −0.0066   694
+species 0.05     100   |   6    4   |  4.65   3.49   2.43   1.82  | 0.5235  −0.0197   716
+species 0.3      100   |   8    8   |  8.31   5.10   2.75   2.26  | 0.1466  −0.0168   695
+species 1        100   |  10   10   | 10.32   5.27   3.63   3.05  | 0.0020  −0.0092   696
+species 3        100   |  11   11   | 11.61   5.81   4.16   4.07  | 0.0021  −0.0041   704
+d8 1             100   |  10   10   | 10.33   5.22   3.68   2.94  | 0.0014  −0.0090   670
+bulk δ4 0.1      100   |   8    8   |  8.14   4.22   2.84   2.59  | 0.0861  −0.0171   677
+species 1 c_air  100   |   9    9   |  9.14   6.48   4.53   4.42  | 0.0150  −0.0097   688
+species 1 c_hvy  100   |   8    8   |  8.49   5.15   3.49   2.72  | 0.1347  −0.0594   680
+species 10 c_hvy 100   |   9    9   |  9.04   6.22   4.45   4.34  | 0.0301  −0.0305   684
+δ4 0.1  *        1000  | lost positivity
+δ4 1             1000  |  10   10   | 10.84   4.77   4.45   1.95  | 0.0520  −0.0141   702
+species 1        1000  |  11   11   | 10.22   4.71   4.42   1.51  | 0.2046  −0.0183   709
+species 3        1000  |  13   13   | 12.27   7.70   7.05   2.05  | 0.0662  −0.0146   720
+d8 1             1000  |  10   10   | 10.20   4.73   4.43   1.67  | 0.2299  −0.0181   683
+bulk δ4 0.1      1000  | lost positivity
+N = 800:
+δ4 0.1  *        100   |   8    8   |  8.71   3.77   2.52   2.20  | 0.1755  −0.0195  1408
+species 1        100   |  11   11   | 11.41   6.97   4.64   3.65  | 0.0010  −0.0083  1398
+species 1 c_air  100   |  10   10   | 10.02   8.47   5.91   5.51  | 0.0250  −0.0086  1386
+```
+
+And against time at R = 100 (`history`; the shock reaches the interface near t = 0.113):
+
+```
+config     t    | count | Y 5–95 V 5–95 V10–90 V grad |  TV−1
+δ4 0.1  *  0.10 |   7   |  5.31   5.67   4.64   3.89  | 0.2731
+           0.15 |   5   |  3.99   4.54   3.72   1.30  | 0.4195
+           0.20 |   6   |  4.59   2.75   1.85   1.49  | 0.4869
+           0.25 |   7   |  7.78   5.24   2.69   2.08  | 0.3243
+           0.35 |   9   |  8.50   5.86   2.05   1.74  | 0.1564
+species 1  0.10 |   7   |  5.53   5.71   4.67   4.42  | 0.1736
+           0.15 |   7   |  7.26   4.58   3.76   2.22  | 0.0161
+           0.20 |   9   |  9.16   5.26   3.89   2.41  | 0.0053
+           0.25 |  10   | 10.32   5.27   3.63   3.05  | 0.0020
+           0.35 |  11   | 11.13   6.65   4.53   2.86  | 0.0034
+```
+
+**In volume fraction the interfaces at R = 100 are as thin as Brill's sharpened one.** The
+rows that do not ring (C_D = 1 under either detector or both, and the split at 3) are 5.2
+to 5.8 cells wide at 5–95% and 3.6 to 4.2 at 10–90%, against 5.9 and 4.4 for the ε = Δ
+equilibrium, and the δ4 default has the same 5–95% width, 5.24, around a steeper core.
+Every row with TV − 1 above 0.08 has a maximum-gradient thickness below 2.8 cells and every
+row with TV − 1 below 0.03 has one above 2.9, so the ringing accompanies a core compressed
+below about three cells; the eq. 68 equilibrium holds it at 4ε, four cells at ε = Δ. The 10
+cells of `width_cells` under the split are a tail of heavy gas on the air side: in the
+split's profile V_air rises from 0.83 to 0.9995 over ten cells towards the air and falls
+from 0.83 to 0.08 over three towards the heavy gas, and `width_cells` measures only the
+first. A logistic of the same 5–95% volume-fraction width would count five. Part of the asymmetry is the sound
+speed in D_b = c·G[·], √R larger in the light gas: with a uniform c the count falls by one
+or two, but the ringing returns, to 0.015 at the air value and to 0.13 at the heavy value,
+or 0.03 at ten times the constant. Brill's D\* carries the local c_s as well, so the same
+tail is expected under their method without eq. 68.
+
+The widths are set in cells: at N = 800 the counts are 8 and 11 and the physical width
+halves. Before the shock (t = 0.10) both rows hold the initial width within half a cell;
+the shock compresses the interface, and under the split the count then grows from 7 at
+t = 0.15 to 11 at 0.35 while the volume-fraction width stays between 4.6 and 5.3 until
+t = 0.25. At R = 1000 the δ4 default and the bulk channel lose positivity, and the rows at
+C_D = 1 and 3 complete with the ringing back at 0.05 to 0.23 and a core of 1.5 to 2.1
+cells. A mass-fraction count of six at R = 100 needs the tail removed, which the
+equilibrium of an eq. 68 flux does and no constant of the present channel does.
 
 ## The gas-gas acoustic interface
 
