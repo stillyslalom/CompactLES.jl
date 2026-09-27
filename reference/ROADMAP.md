@@ -215,13 +215,9 @@ filter time-scaling with N1.
   **Depends on:** V1.
 
 - [ ] **V3 — Close gaps in automated verification.**
-  The temporal-order studies landed in commit `d8ea472`
-  ([temporal order](CALIBRATION_APPENDIX.md#temporal-order)): the level
-  interface is first order in `dt` from the once-per-step injection into the
-  covered parent nodes, and injecting before every stage restores fourth order
-  at one restriction per stage; deciding that is open. Under the ghost-flux
-  default that time error leads a smooth subcycled level at the default CFL,
-  whose spatial order the level tests read only at `cfl = 0.125`. The R1–R4 regressions,
+  The temporal-order studies landed in commit `d8ea472`, and the
+  once-per-step level restriction is retained
+  ([temporal order](CALIBRATION_APPENDIX.md#temporal-order)). The R1–R4 regressions,
   the Makie checks in CI's documentation job, the scheduled validation
   battery (`.github/workflows/validation.yml`) and the skip accounting in the
   serial suite are in place. Remaining: parallel-HDF5 execution where the

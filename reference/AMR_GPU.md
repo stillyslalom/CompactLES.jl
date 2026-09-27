@@ -398,7 +398,10 @@ step the fine state writes back onto the covered coarse region, holding
 optional: restricting all the way to the boundary closes an amplifying loop
 through the fine solution's least-accurate nodes (its imposed shell) into
 the closure rows that feed the next shell; the measured growth is flat with
-the margin in place ([measurements](CALIBRATION_APPENDIX.md#amr)).
+the margin in place ([measurements](CALIBRATION_APPENDIX.md#amr)). Restricting before
+every stage of the global step removes a coupling term first order in the step but not a
+measurable error, so the write-back stays once per step
+([measurements](CALIBRATION_APPENDIX.md#benchrestrictcostjl-restriction-before-every-stage)).
 
 **Distribution of the coupling.** The coupling runs on a replicated-data,
 distributed-work split. Data replicates: `gather_region!` assembles a node

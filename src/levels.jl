@@ -32,6 +32,18 @@
 #     fine field's coincident-node values onto the covered coarse region,
 #     holding `RESTRICT_MARGIN` coarse nodes back from the boundary (see that
 #     constant for the measured amplifying loop the margin breaks).
+#     Between restrictions the coarse operator advances the covered nodes,
+#     so on a fixed grid the coupling carries a term first order in the step
+#     and proportional to the difference between the coarse and fine
+#     right-hand sides there, O(dt H^p), which a fixed cfl places above the
+#     spatial order. Restricting before every stage of the global step
+#     removes the term but moves the error against the exact solution at
+#     the default cfl, and on a Sod crossing, by under 2%, at seven
+#     restrictions per step instead of one, so the schedule stays per step
+#     (bench/restrictcost.jl). Under subcycling the parent's step precedes
+#     its children's, so there is no stage to restrict at; there most of a
+#     refined level's time error is fourth order at the root step, the
+#     integrator's and the Hermite shell's reconstruction of the parent.
 #
 # The invertible filter pair itself (`prolong!`/`restrict!`, deconvolution
 # against Gaussian filtering) is not the default coupling, on a

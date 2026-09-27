@@ -33,6 +33,12 @@
 #             subcycled, under the closure rows, the ghost fluxes (the
 #             default) and the Brady–Livescu interface rows; the composite
 #             error and the fine patch's
+#   total     the same nest under the default ghost fluxes against the
+#             exact solution, not against a finer step: N = 48, 96 and 192
+#             at the default cfl 0.5 and at 0.125, the unrefined root, the
+#             global step and subcycled, the fine patch's error and the
+#             composite's. Where the two cfl columns agree, no time error
+#             of any source is visible in the solution the run delivers.
 #
 # `restrict` changes the coupling schedule of the `levels` rows, as a
 # diagnosis: `step` is the package's (the fine solution is injected into the
@@ -197,12 +203,41 @@ function levels_study()
     end
 end
 
+function total_study()
+    println("\ntotal: entropy wave, two levels, ghost fluxes, t = 0.5, restrict = " *
+            "$(OPTS.restrict); error in rho against the exact solution")
+    @printf("%-10s %5s %4s %6s %11s %11s\n", "stepping", "cfl", "N", "steps",
+            "fine patch", "composite")
+    # The unrefined root is the control: its two cfl columns differ by the
+    # integrator's own error at the root step.
+    for mode in (:uniform, :global, :subcycled), cfl in (0.5, 0.125), N in (48, 96, 192)
+        s, q = mode === :uniform ? entropy_case(N; cfl=cfl) :
+               entropy_case(N; levels=2, subcycle=mode === :subcycled, cfl=cfl)
+        run!(s, q; tfinal=0.5)
+        exact = analytic_reference(s.equations, entropy_profile(3, 0.37; t=s.t))
+        e = regional_errors(s, q, exact)
+        if mode === :uniform
+            @printf("%-10s %5.3f %4d %6d %11s %11.3e\n", mode, cfl, N, s.step, "-",
+                    e.interior)
+            continue
+        end
+        ps = CL.PatchSolver(s, getfield(s, :patches)[2])
+        fine = maximum(1:ps.decomp.n_local[1]) do i
+            abs(q[2][padded_index(ps, i, 1, 1), 1] - exact(xcoord(ps, 1, i))[1])
+        end
+        @printf("%-10s %5.3f %4d %6d %11.3e %11.3e\n", mode, cfl, N, s.step, fine,
+                max(e.interface, e.interior))
+        flush(stdout)
+    end
+end
+
 function main()
     t0 = time()
     selected("rk") && rk_study()
     selected("filter") && filter_study()
     selected("cfl") && cfl_study()
     selected("levels") && levels_study()
+    selected("total") && total_study()
     @printf("\ndone in %.1f s\n", time() - t0)
 end
 

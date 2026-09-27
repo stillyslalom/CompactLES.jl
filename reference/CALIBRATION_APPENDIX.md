@@ -2333,7 +2333,7 @@ tested, and the subcycled run's Hermite shell adds 25% at `cfl = 0.5` and 1.5% a
 ### Temporal order
 
 ```text
-julia --project=. -t 1 bench/temporalorder.jl [restrict=step|stage|none]
+julia --project=. -t 1 bench/temporalorder.jl [study=all] [restrict=step|stage|none]
 ```
 
 Each row integrates one case on one grid in equal steps through `run!` and reads the
@@ -2365,17 +2365,36 @@ NSCBC constant target, pulse         4.108e-7   2.296e-8   1.444e-9   9.074e-11 
 
 entropy wave, two levels, N = 96, t = 0.5, composite
 global step, steps                   40         80         160        320
-  default                            3.016e-8   1.535e-8   7.651e-9   3.726e-9    0.97 / 1.00 / 1.04
-  ghost fluxes                       9.659e-11  2.236e-11  9.823e-12  4.836e-12   2.11 / 1.19 / 1.02
+  closure rows                       3.016e-8   1.535e-8   7.651e-9   3.726e-9    0.97 / 1.00 / 1.04
+  ghost fluxes (default)             9.659e-11  2.236e-11  9.823e-12  4.836e-12   2.11 / 1.19 / 1.02
   C6 BL                              8.269e-11  2.805e-11  1.323e-11  6.320e-12   1.56 / 1.08 / 1.07
-  default, restrict=stage            1.455e-10  9.680e-12  6.020e-13  9.326e-14   3.91 / 4.01 / 2.69
-  default, restrict=none             1.455e-10  9.683e-12  6.133e-13  1.499e-13   3.91 / 3.98 / 2.03
-subcycled, steps                     14         20         28         40         56         80
-  default                            8.139e-8   5.789e-8   4.223e-8   3.014e-8   2.176e-8   1.532e-8    0.96 / 0.94 / 0.95 / 0.97 / 0.98
-  ghost fluxes                       5.730e-9   1.405e-9   3.973e-10  1.202e-10  4.887e-11  2.455e-11   3.94 / 3.75 / 3.35 / 2.68 / 1.93
-  C6 BL                              4.596e-9   1.144e-9   3.282e-10  1.016e-10  4.633e-11  2.692e-11   3.90 / 3.71 / 3.29 / 2.33 / 1.52
-  default, restrict=none             4.115e-9   9.882e-10  2.573e-10  6.178e-11  1.608e-11  3.863e-12   4.00 / 4.00 / 4.00 / 4.00 / 4.00
-  ghost fluxes, restrict=none        6.007e-9   1.427e-9   3.689e-10  8.807e-11  2.282e-11  5.436e-12   4.03 / 4.02 / 4.02 / 4.01 / 4.02
+  closure rows, restrict=stage       1.455e-10  9.680e-12  6.020e-13  9.326e-14   3.91 / 4.01 / 2.69
+  ghost fluxes, restrict=stage       6.181e-11  3.873e-12  2.520e-13  4.574e-14   4.00 / 3.94 / 2.46
+  ghost fluxes, restrict=none        6.180e-11  3.876e-12  2.545e-13  4.086e-14   3.99 / 3.93 / 2.64
+subcycled, steps                     14         20         28         40         56         80         160
+  closure rows                       8.139e-8   5.789e-8   4.223e-8   3.014e-8   2.176e-8   1.532e-8   7.616e-9    0.96 / 0.94 / 0.95 / 0.97 / 0.98 / 1.01
+  ghost fluxes (default)             5.730e-9   1.405e-9   3.973e-10  1.202e-10  4.887e-11  2.455e-11  1.002e-11   3.94 / 3.75 / 3.35 / 2.68 / 1.93 / 1.29
+  C6 BL                              4.596e-9   1.144e-9   3.282e-10  1.016e-10  4.633e-11  2.692e-11  1.305e-11   3.90 / 3.71 / 3.29 / 2.33 / 1.52 / 1.04
+  closure rows, restrict=none        4.115e-9   9.882e-10  2.573e-10  6.178e-11  1.608e-11  3.863e-12  2.426e-13   4.00 / 4.00 / 4.00 / 4.00 / 4.00 / 3.99
+  ghost fluxes, restrict=none        6.007e-9   1.427e-9   3.689e-10  8.807e-11  2.282e-11  5.436e-12  3.015e-13   4.03 / 4.02 / 4.02 / 4.01 / 4.02 / 4.17
+```
+
+The `total` rows measure the same nest under the default ghost fluxes against the exact
+solution, so the spatial and temporal errors add, and set the unrefined root beside it. The
+maximum density error, the fine patch's and the composite's:
+
+```
+                 cfl 0.5                                cfl 0.125
+                 N = 48      96         192             N = 48      96         192
+uniform root     2.708e-7    4.370e-9   8.030e-11       2.667e-7    4.112e-9   6.409e-11
+global, fine     1.359e-7    1.721e-9   2.419e-11       1.376e-7    1.733e-9   2.419e-11
+global           2.703e-7    4.414e-9   6.624e-11       2.716e-7    4.424e-9   6.616e-11
+subcycled, fine  1.342e-7    1.812e-9   9.613e-11       1.365e-7    1.725e-9   2.419e-11
+subcycled        2.716e-7    4.652e-9   9.613e-11       2.707e-7    4.416e-9   6.616e-11
+
+restrict=stage, global, fine          1.382e-7   1.738e-9   2.430e-11
+restrict=none, global, fine           9.896e-8   1.526e-9   2.382e-11
+restrict=none, subcycled, fine        1.003e-7   1.617e-9   8.751e-11   (all at cfl 0.5)
 ```
 
 On a fixed grid the update is fourth order with the boundary data evaluated at the
@@ -2394,13 +2413,28 @@ periodic wave the change is below the integrator's error. At full strength the f
 error grows with the number of passes.
 
 The level interface is first order in the step under the package's schedule, global step
-and subcycled alike, about 1/45 of the spatial interface error (1.342e-6) at 40 steps.
-Injecting the fine solution into the covered parent nodes before every stage of the global
-step (`restrict=stage`), or never (`restrict=none`), gives fourth order, so the term is the
-once-per-step injection, after which the coarse operator advances the covered nodes for a
-whole step. It scales with the interface's spatial defect: the ghost-flux and
-Brady–Livescu rows are 770 and 590 times smaller than the default's at 320 steps. The
-subcycled Hermite shell's fourth order shows above it at the largest steps.
+and subcycled alike. Injecting the fine solution into the covered parent nodes before every
+stage of the global step (`restrict=stage`), or never (`restrict=none`), gives fourth order,
+so the term is the once-per-step injection, after which the coarse operator advances the
+covered nodes for a whole step. It scales with the difference between the coarse and fine
+right-hand sides: the ghost-flux and Brady–Livescu rows are 770 and 590 times smaller than
+the closure rows' at 320 steps. The subcycled Hermite shell's fourth order shows above it
+at the largest steps.
+
+Against the exact solution the term does not show. Under the global step every composite
+error at cfl 0.5 equals its cfl 0.125 value to 0.5%, and the fine patch's to 1.2% at N = 48
+and to the printed digits at N = 192; `restrict=stage` raises no entry by more than 2%. The
+subcycled level at cfl 0.5 and N = 192 carries four times its spatial error. The unrefined
+root at the same step also exceeds its cfl 0.125 error (8.0e-11 against 6.4e-11), and
+removing the injection altogether lowers the fine patch's error by 9%, so most of that
+excess is the fourth-order integration at the root step and the Hermite shell's
+reconstruction of it, not the injection. Under subcycling the parent's step is complete
+before its children start, so there is no stage to restrict at. `restrict=none` lowers
+the fine patch's error by 27% at N = 48 and 1.5% at N = 192, a spatial effect on a wave
+the root resolves; without restriction the coarse state under the patch, which the shell is
+interpolated from, never receives what the fine level resolves and the root does not. The
+injection is kept once per step in both modes
+([bench/restrictcost.jl](#benchrestrictcostjl-restriction-before-every-stage)).
 
 ### What the matrix settles
 
@@ -5485,6 +5519,43 @@ advantage over rate normalization and needs elapsed-time and phase handling
 before it could become a production policy. This qualification is bounded
 to the tested Float64 CPU cases; it does not identify an operator mode or
 promote a general filter-interval multiplier.
+
+### bench/restrictcost.jl: restriction before every stage
+
+`julia --project=. -t 8 bench/restrictcost.jl study=time case=2d` (and `case=3d`),
+`julia --project=. -t 1 bench/restrictcost.jl study=shock`.
+
+The per-stage schedule injects the fine level into the covered parent nodes before the
+shell imposition that follows every stage of the global step, as `restrict=stage` of
+`bench/temporalorder.jl` does. The cost rows alternate the two schedules in one process,
+five repetitions of ten steps each, one rank at eight threads, the default numerics on a
+smooth advected field; the ratio is the median of the paired per-repetition ratios.
+
+| case | restrictions per step | restriction, ms per step | share of the step | stage/step |
+|---|---|---|---|---|
+| 256² root, 97² box in 36 tiles, per step | 1.10 | 0.36 | 0.24% | |
+| same, per stage | 7.00 | 2.39 | 1.53% | 1.021 |
+| 64³ root, 31³ box in 8 tiles, per step | 1.10 | 1.57 | 0.20% | |
+| same, per stage | 7.00 | 10.1 | 1.26% | 1.007 |
+
+The Sod crossing of `bench/interfacesensor.jl` (root N = 201, box over [0.6, 0.8] and at
+three levels a level-2 box over its middle half, cfl 0.4, the default numerics, global
+step), with the minimum density and pressure over every step and the density error at
+t = 0.2 against the uniform run at the level-1 spacing:
+
+| levels, schedule | steps | ρ_min | p_min | density error |
+|---|---|---|---|---|
+| 2, per step | 707 | 0.06239 | 0.03822 | 8.145e-2 |
+| 2, per stage | 707 | 0.06239 | 0.03822 | 8.201e-2 |
+| 3, per step | 1761 | 0.05121 | 0.02508 | 8.298e-2 |
+| 3, per stage | 1761 | 0.05121 | 0.02252 | 8.360e-2 |
+
+**Decision.** The per-stage schedule costs six restrictions per step more, each a gather
+over the parent level's communicator, and a measured 0.7–2.1% of the serial step. It changes
+the smooth error against the exact solution by under 2%
+([temporal order](#temporal-order)), raises the shock's density error by under 1%, and
+deepens the three-level pressure minimum by 10%. The once-per-step injection is retained
+under both stepping modes.
 
 ### bench/substeprates.jl: refreshed refined-level rates
 

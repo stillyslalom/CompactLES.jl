@@ -7,6 +7,7 @@
 #   mpiexec -n 4 julia --project=. -t 1 bench/restrictcost.jl case=2d
 #   julia --project=. -t 1 bench/restrictcost.jl study=error
 #   julia --project=. -t 1 bench/restrictcost.jl study=cfl
+#   julia --project=. -t 1 bench/restrictcost.jl study=shock
 #
 # `time` builds one solver and alternates the two schedules within the
 # process, `reps` times, `steps` steps each, and reports medians of the step
@@ -14,7 +15,9 @@
 # per-stage schedule is the `restrict=stage` override of
 # bench/temporalorder.jl, restricted to the stage loop: `restrict_level!` runs
 # before each stage's `prolong_level_ghosts!` but not inside `sync_levels!`,
-# so a step carries 5 stage restrictions and the post-step one. The overrides
+# so a step carries 5 stage restrictions, the post-step one, and one before
+# the pre-step shell imposition, which the package's schedule skips when it
+# would repeat the post-step restriction. The overrides
 # are process-wide methods on package functions. Under `sub=true` only the
 # package's schedule runs: the subcycled driver imposes the shell from the
 # Hermite box, not through `prolong_level_ghosts!`, so the override is inert.
@@ -23,6 +26,10 @@
 # the smooth cases' default cfl and at the evolution studies' 0.25, both
 # schedules, and prints the errors against the exact solution by region.
 # `cfl` raises the cfl on the same case until the run fails, both schedules.
+# `shock` runs the Sod crossing of bench/interfacesensor.jl under global
+# steps at two and three levels, both schedules, and prints the minimum
+# density and pressure over the run and the density error at t = 0.2
+# against the uniform run at the level-1 spacing.
 
 using MPI
 MPI.Init(threadlevel=:funneled)
@@ -174,12 +181,73 @@ function cfl_study()
     end
 end
 
+sod_ic(x, y, z) = x < 0.5 ? Prim(u=(0, 0, 0), p=1.0, rho=1.0) :
+                            Prim(u=(0, 0, 0), p=0.1, rho=0.125)
+
+# The Sod crossing of bench/interfacesensor.jl, global step: root N = 201
+# between slip walls, cfl 0.4, the default numerics, a level-1 box over
+# [0.6, 0.8] and, at depth 3, a level-2 box over the middle half of it.
+function sod_solver(N, depth)
+    off1, ext1 = round(Int, 0.6 * (N - 1)), round(Int, 0.2 * (N - 1)) + 1
+    r1 = BlockRegion((off1, 0, 0), (ext1, 1, 1))
+    fext = 3ext1 - 2
+    regions = depth == 2 ? r1 :
+              [r1, BlockRegion((3off1 + (fext - fext ÷ 2) ÷ 2, 0, 0), (fext ÷ 2, 1, 1))]
+    walls = ((SlipWallBC(), SlipWallBC()), PER3[2], PER3[3])
+    s = Solver(; n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=walls, cfl=0.4,
+               control=StepControl(validity=:permissive),
+               (depth > 1 ? (refine=regions,) : (;))...)
+    q = allocate_state(s)
+    initialize!(s, q, sod_ic)
+    return s, q
+end
+
+# Minimum density and pressure on any step, then the density error at t = 0.2
+# against the uniform run at the level-1 spacing, over every uncovered node
+# that coincides with a node of it.
+function shock_study()
+    N, tf = 201, 0.2
+    ref, rq = sod_solver(3N - 2, 1)
+    run!(ref, rq; tfinal=tf)
+    rho_ref = [rq[padded_index(ref, i, 1, 1), 1] for i in 1:3N-2]
+    println("Sod crossing, global step, t = $tf: extrema over the run, density ",
+            "error against the uniform run at h/3")
+    @printf("%-7s %-6s %6s %9s %9s %11s\n", "levels", "sched", "steps", "rho_min",
+            "p_min", "rho error")
+    for depth in (2, 3), m in (false, true)
+        STAGE[] = m
+        s, q = sod_solver(N, depth)
+        lo = [Inf, Inf]
+        watch = Callback(EveryStep(), (sv, st) -> begin
+            refresh_primitives!(sv, st)
+            for (ps, Q) in CL.eachpatch(sv, st), i in 1:ps.decomp.n_local[1]
+                I = padded_index(ps, i, 1, 1)
+                lo .= min.(lo, (Q[I, 1], ps.p[I]))
+            end
+            false
+        end)
+        run!(s, q; tfinal=tf, callback=watch)
+        err = 0.0
+        for (ps, Q) in CL.eachpatch(s, q), i in 1:ps.decomp.n_local[1]
+            I = padded_index(ps, i, 1, 1)
+            ps.covered[I] == 0 || continue
+            g = ps.patch.region.offset[1] + i - 1
+            lev = ps.patch.level
+            j = lev == 0 ? 3g + 1 : lev == 1 ? g + 1 : rem(g, 3) == 0 ? g ÷ 3 + 1 : 0
+            j == 0 || (err = max(err, abs(Q[I, 1] - rho_ref[j])))
+        end
+        @printf("%-7d %-6s %6d %9.5f %9.5f %11.4e\n", depth, m ? "stage" : "step",
+                s.step, lo[1], lo[2], err)
+    end
+end
+
 function main()
     OPTS.study == "time" && return time_study()
     MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("run $(OPTS.study) on one rank")
     OPTS.study == "error" && return error_study()
     OPTS.study == "cfl" && return cfl_study()
-    error("study must be time, error or cfl")
+    OPTS.study == "shock" && return shock_study()
+    error("study must be time, error, cfl or shock")
 end
 
 main()
