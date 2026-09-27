@@ -5215,19 +5215,19 @@ the regrid histories sum to 2.24e-4 in both, and no layout leaves [0, 1].
 **Cost.** Serial, one thread, median step over nine interleaved chunks of ten steps per
 configuration in one process, ghost over default, periodic, with the artificial properties and
 the filter on, at the default level interpolation order of each path (Core i9-12900K, Julia
-1.11.4). Float64: (64, 48, 48) in two patches 1.13 inviscid and 1.29 with `mu = 1e-3`; a 2-D
-subcycled level of sixteen 37-node tiles on N = 96 1.15 inviscid. With `mu = 1e-3`, Float32 /
-Float64: a 2-D static 17² box on N = 96, global step, 1.18 / 1.19; the sixteen-tile level
-1.54 / 1.57; a 3-D static 13³ box on N = 40, global step, 1.47 / 1.51. The overhead is the same
+1.11.4). Float64: (64, 48, 48) in two patches 1.11 inviscid and 1.24 with `mu = 1e-3`; a 2-D
+subcycled level of sixteen 37-node tiles on N = 96 1.16 inviscid. With `mu = 1e-3`, Float32 /
+Float64: a 2-D static 17² box on N = 96, global step, 1.21 / 1.17; the sixteen-tile level
+1.50 / 1.50; a 3-D static 13³ box on N = 40, global step, 1.46 / 1.44. The overhead is the same
 fraction of the step in both precisions, and Float32 gains no accuracy from it (the floor
 above). The interpolation order is not part of it: the default path at order 8 costs what it
-does at 6. On the 3-D box (300 ms against 198 per step) a profile places the overhead in the
-gradient ring of each shell imposition (45 ms, 37 of them the compact derivatives of every
-component along every dimension over the lines of the interpolated box that cross the ring),
-the pointwise passes (25 ms), the two line solves per component and interface dimension beyond
-the default's one (23 ms) and the coarse-fine ghost fluxes (10 ms). A tile with no parent-fed
-face takes no gradient ring. The `ghost_flux` arrays add one state-sized array per interface
-dimension of a patch.
+does at 6. On the 3-D box (288 ms against 199 per step) a profile places the overhead in the
+gradient ring of each shell imposition (38 ms, the compact derivatives of every component
+along every dimension over the lines of the interpolated box that cross the ring), the
+molecular, remainder and ghost-differenced flux passes (32 ms), the one line solve per
+component and interface dimension beyond the default's one (11 ms) and the coarse-fine ghost
+fluxes (11 ms). A tile with no parent-fed face takes no gradient ring. The `ghost_flux` arrays
+add one state-sized array per interface dimension of a patch.
 
 **Decision.** Same-level interfaces: the ghost fluxes remove the interface from the error
 budget, inviscid and viscous (the interface window equals the interior at every

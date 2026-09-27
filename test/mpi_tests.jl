@@ -2068,7 +2068,7 @@ function test_two_patch_layout()
     # The same pair with the whole flux but the wall corrections differenced
     # through the interface from ghost fluxes, the viscous part's ghosts from
     # the neighbouring patch's flux records after both patches evaluate, and
-    # the wall corrections on the one-sided rows: three line solves per
+    # the wall corrections on the one-sided rows: two line solves per
     # component along the split dimension, every rank of each patch entering
     # each. Serial value of this run.
     solvergf = Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),

@@ -2000,6 +2000,12 @@ function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
         return states
     end
     bf = lt.pstage[K+1]
+    ring = shell.ring
+    gring = g.gring
+    # On one rank every component is this rank's, in order, and each ring is
+    # packed straight into its column of `ring` or `gring`; a decomposed patch
+    # packs into the send buffer for the gather.
+    direct = np == 1
     pos = 0
     for c in owned
         _fill_stage0!(fill, lt.pstage[1], lt, c)
@@ -2007,32 +2013,31 @@ function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
             interpolate!(lt.pstage[k+1], lt.pplans[k], lt.pstage[k])
         end
         for j in 0:3
+            dst, at = direct ? (j == 0 ? ring : gring,
+                                (j == 0 ? c - 1 : 3 * (c - 1) + j - 1) * ringlen) :
+                               (sendbuf, pos)
             src = bf
             if j > 0
                 plan = g.plans[j]
                 if plan === nothing
-                    fill!(view(sendbuf, pos+1:pos+ringlen), 0)
+                    fill!(view(dst, at+1:at+ringlen), 0)
                     pos += ringlen
                     continue
                 end
                 apply_along!(g.tmp, plan, bf, g.decomps[j])
                 src = g.tmp
             end
-            @inbounds for s in slabs, g3 in s[3], g2 in s[2], g1 in s[1]
-                pos += 1
-                sendbuf[pos] = src[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
-                                   g3 + shift[3] + padb[3]]
-            end
+            _pack_ring!(dst, at, src, slabs, shift, padb)
+            pos += ringlen
         end
     end
-    recv = sendbuf
-    if np > 1
-        counts = 4 .* shell.counts
-        recv = _fit!(shell.buffers.recv, sum(counts))
-        MPI.Allgatherv!(sendbuf, MPI.VBuffer(recv, counts), comm)
+    if direct
+        _write_shell_from_ring!(Qf, ring, shell.table, lt, fdcp, n_cons)
+        return states
     end
-    ring = shell.ring
-    gring = g.gring
+    counts = 4 .* shell.counts
+    recv = _fit!(shell.buffers.recv, sum(counts))
+    MPI.Allgatherv!(sendbuf, MPI.VBuffer(recv, counts), comm)
     at = 0
     for r in 0:np-1, c in (r+1):np:n_cons
         copyto!(view(ring, :, c), view(recv, at+1:at+ringlen))
@@ -2044,6 +2049,17 @@ function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
     end
     _write_shell_from_ring!(Qf, ring, shell.table, lt, fdcp, n_cons)
     return states
+end
+
+# One ring of `src` over the chain's final box into `dst` after linear index
+# `at`, in slab order.
+function _pack_ring!(dst, at::Int, src, slabs, shift, padb)
+    @inbounds for s in slabs, g3 in s[3], g2 in s[2], g1 in s[1]
+        at += 1
+        dst[at] = src[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
+                      g3 + shift[3] + padb[3]]
+    end
+    return dst
 end
 
 # The device form over the fine patch's scratch: the chain, the derivatives
