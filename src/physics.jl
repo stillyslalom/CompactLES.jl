@@ -1503,7 +1503,8 @@ the rest are independent bits, so one point can carry several.
 - `STATE_NEGATIVE_DENSITY`: the partial densities do not sum to a positive
   mixture density, which is the state `primitives!` replaces with placeholders.
 - `STATE_NEGATIVE_SPECIES`: a mass fraction is below `-StepControl.species_band`
-  while the mixture density is positive. A species interface held at a few
+  or above `1 + species_band`, which implies a negative partner, while the
+  mixture density is positive. A species interface held at a few
   cells carries mass fractions about 1% outside [0, 1] at any resolution,
   which the band exists to accept.
 - `STATE_INADMISSIBLE`: the EOS places the point outside its thermodynamic

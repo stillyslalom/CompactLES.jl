@@ -153,11 +153,14 @@ of four hundred cells at negative internal energy, and the validation suite
 bounds such runs at twelve.
 [`setup`](@ref) applies the same policy to the initial state.
 
-A mass fraction is rejected only below `-species_band`, 0.05 by default. A
-captured species interface is a few cells wide at any resolution and lies about
-1% outside [0, 1] under the artificial mass-fraction bound, and 5 to 7% at its
-worst with the bound off; the band accepts the first, so a multicomponent run
-needs no opt-out for its interfaces.
+A mass fraction is rejected only below `-species_band` or above
+`1 + species_band`, with 0.05 as the default band. A captured species
+interface is a few cells wide at any resolution and lies about 1% outside
+[0, 1] under the artificial mass-fraction bound, and 5 to 7% at its worst with
+the bound off; the band accepts the first, so a multicomponent run needs no
+opt-out for its interfaces. The positivity failsafe clips a composition on the
+same band, so a point the validation accepts is also left unchanged by the
+repair. A zero band clips every negative partial density.
 
 ## Read the completed state
 

@@ -263,8 +263,9 @@ end
 Inspect the interior of the conserved state and return the reduced
 [`StateReport`](@ref) of what it contains. `Q` may be a single conserved array or
 the vector of patch states of a multi-patch solver, in which case every patch
-this rank holds is inspected. A mass fraction below `-species_band` is counted
-as a negative species; the policy functions pass the band of the
+this rank holds is inspected. A point with a mass fraction below
+`-species_band` or above `1 + species_band` is counted as a negative species
+(the second implies a negative partner); the policy functions pass the band of the
 [`StepControl`](@ref) whose verdict they take.
 
 Every rank in `solver.comm` must call this, since it ends in two `Allreduce`s;
@@ -316,6 +317,18 @@ function _reduce_state_report(solver::Solver, local_report, comm=solver.comm)
                        extrema_reduced[2])
 end
 
+# Whether a composition lies outside the species band: a partial density below
+# `-band * ρ` or above `(1 + band) * ρ`, given the smallest and largest partial
+# densities and their sum `ρ > 0`. With two species the two sides are the same
+# point up to rounding. With more, an excess of one species can be shared among
+# partners that each stay inside the band, and only the upper side sees it.
+# The failsafe clips on this test with the same arithmetic, so every point the
+# report counts is a point `:repair` acts on, and no other.
+@inline function _outside_species_band(q_min, q_max, ρ, band)
+    ρ_band = band * ρ
+    return q_min < -ρ_band || q_max - ρ > ρ_band
+end
+
 function _local_state_report(solver::SolverLike, Q, species_band)
     decomp = solver.decomp
     o1, o2, o3 = decomp.n_halo_d
@@ -346,10 +359,12 @@ function _local_state_report(solver::SolverLike, Q, species_band)
         end
         ρ = zero(T)
         q_min = T(Inf)
+        q_max = T(-Inf)
         for sp in 1:n_species
             q = Q[I, sp]
             ρ += q
             q_min = min(q_min, q)
+            q_max = max(q_max, q)
         end
         ρ_min = min(ρ_min, ρ)
         # The internal energy is not recoverable where the density is not
@@ -358,7 +373,8 @@ function _local_state_report(solver::SolverLike, Q, species_band)
             negative_density += 1
             continue
         end
-        q_min < -T(species_band) * ρ && (negative_species += 1)
+        _outside_species_band(q_min, q_max, ρ, T(species_band)) &&
+            (negative_species += 1)
         ri = one(T) / ρ
         ke = (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / (2ρ)
         e = (Q[I, i_energy] - ke) / ρ
@@ -410,7 +426,8 @@ end
 # roll back to goes through `validate_state!` and raises.
 function _validity_repair!(solver, Q, floors, control, stage, warn, rank)
     tally = apply_positivity_floor!(solver, Q, floors[1], floors[2],
-                                    control.floor_scope)
+                                    control.floor_scope;
+                                    species_band=control.species_band)
     if tally.cells > 0 || tally.low_energy > 0
         record_floor!(solver, tally)
         warn && rank == 0 &&
@@ -492,7 +509,8 @@ function (guard::StateGuard)(solver::Solver, Q)
     if guard.control.validity === :repair && !state_valid(report) &&
        guard.rho_floor > 0
         tally = apply_positivity_floor!(solver, Q, guard.rho_floor,
-                                        guard.e_floor, guard.control.floor_scope)
+                                        guard.e_floor, guard.control.floor_scope;
+                                        species_band=band)
         (tally.cells > 0 || tally.low_energy > 0) && record_floor!(solver, tally)
         report = state_report(solver, Q; species_band=band)
     end

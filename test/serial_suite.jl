@@ -2957,6 +2957,46 @@ end
     @test Q2[I, 1] == 0.0
     @test mixture_density(solver, Q2, I) ≈ ρ_before rtol = 1e-15
 
+    #    An undershoot inside the species band is one the validation accepts,
+    #    so the clip leaves it and counts nothing; a zero band clips it.
+    Qb = copy(Q)
+    Qb[I, 1] = -0.02 * ρ_before
+    Qb[I, 2] = 1.02 * ρ_before
+    Qb0 = copy(Qb)
+    t = floor!(Qb, :representable)
+    @test t.cells == 0 && all(iszero, t.species)
+    @test Qb == Qb0
+    t = CL.apply_positivity_floor!(solver, Qb, rho_floor, e_floor, :representable;
+                                   species_band=0.0)
+    @test t.cells == 1
+    @test Qb[I, 1] == 0.0
+
+    #    With three species an excess of one can be shared between partners
+    #    that each stay inside the band. The validation counts it on the upper
+    #    side, and the clip returns the point to [0, 1].
+    eos3 = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                         IdealSpecies{Float64}("b", 2.0, 1.6),
+                         IdealSpecies{Float64}("c", 3.0, 1.3)])
+    s3 = mkslv(n_global=(12, 12, 12), eos=eos3)
+    Q3s = allocate_state(s3)
+    initialize!(s3, Q3s, (x, y, z) -> Prim(rho=2.0, p=1.0, Y=(0.5, 0.25, 0.25)))
+    floors3 = CL.positivity_floors(s3, Q3s, StepControl(floor_ratio=1e-6))
+    J = padded_index(s3, 3, 3, 3)
+    for (Y, counted) in (((1.08, -0.04, -0.04), true), ((1.03, -0.015, -0.015), false))
+        Qx = copy(Q3s)
+        foreach(sp -> Qx[J, sp] = 2.0 * Y[sp], 1:3)
+        @test state_report(s3, Qx).negative_species == counted
+        t = CL.apply_positivity_floor!(s3, Qx, floors3..., :representable)
+        @test t.cells == counted
+        if counted
+            @test (Qx[J, 2], Qx[J, 3]) == (0.0, 0.0)
+            @test Qx[J, 1] ≈ 2.0 rtol = 1e-15
+            @test state_valid(state_report(s3, Qx))
+        else
+            @test Qx[J, 2] == 2.0 * Y[2]
+        end
+    end
+
     # 2. A mixture density below the floor cannot be repaired conservatively, so
     #    the added mass is reported.
     Q3 = copy(Q)

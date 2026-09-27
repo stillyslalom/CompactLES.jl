@@ -216,8 +216,8 @@ repair changes states produced by the scheme but does not change the scheme.
 
   - `:strict` raises [`SolverFailure`](@ref)`(:invalid_state)` for any point the
     sweep rejects: a non-finite conserved value, a nonpositive mixture density,
-    a mass fraction below `-species_band`, or a point the EOS places outside
-    its thermodynamic domain.
+    a mass fraction below `-species_band` or above `1 + species_band`, or a
+    point the EOS places outside its thermodynamic domain.
   - `:permissive` accepts the state and reports what it contains. A shock
     converging into a cold or near-vacuum ambient integrates through cells of
     negative internal energy for the length of a run that reaches the correct
@@ -230,16 +230,20 @@ repair changes states produced by the scheme but does not change the scheme.
   The verdict rests on reduced counts, so it is identical on every rank and a
   rejection is raised everywhere at once rather than on the rank that saw it.
 
-- `species_band = 0.05`: how far below zero a mass fraction may fall before the
-  validation counts the point. A captured species interface is a few cells
-  wide at any resolution, and after the filter and the Runge–Kutta stages its
-  mass fractions lie outside [0, 1] by an amount that does not decrease under
-  refinement: about 1% at a shocked or grid-scale interface with the default
-  artificial mass-fraction bound, and 5–7% at its worst with the bound
-  disabled. The band lies above every bounded excursion measured, so a bounded
-  interface passes, and below the unbounded peak. It is a validity threshold,
-  separate from the bound's own dead band `ArtificialProperties.Y_tolerance`, which is 500
-  times smaller. `0` rejects any negative mass fraction.
+- `species_band = 0.05`: how far outside [0, 1] a mass fraction may fall before
+  the validation counts the point and the positivity failsafe clips its
+  composition; a point inside the band is accepted and left unchanged by
+  both. The upper side matters from three species on, where the excess of one
+  species can be shared among partners that each stay above `-species_band`.
+  A captured species interface is a few cells wide at any resolution, and
+  after the filter and the Runge–Kutta stages its mass fractions lie outside
+  [0, 1] by an amount that does not decrease under refinement: about 1% at a
+  shocked or grid-scale interface with the default artificial mass-fraction
+  bound, and 5–7% at its worst with the bound disabled. The band lies above
+  every bounded excursion measured, so a bounded interface passes, and below
+  the unbounded peak. It is separate from the bound's own dead band
+  `ArtificialProperties.Y_tolerance`, which is 500 times smaller. `0` rejects,
+  and the failsafe clips, any negative mass fraction.
 
 - `validity_interval = 0`: how often [`run!`](@ref) validates the state entering
   a step, in steps, with 0 checking none of them. The state entering `run!` and
@@ -419,9 +423,9 @@ rank holds the same report and a verdict taken from it is collective.
 - `points`: interior points inspected.
 - `nonfinite`, `negative_density`, `negative_species`: points carrying
   `STATE_NONFINITE`, `STATE_NEGATIVE_DENSITY`, and `STATE_NEGATIVE_SPECIES`.
-  The last counts a mass fraction below `-species_band` (a
-  [`StepControl`](@ref) field), not every excursion a filtered interface
-  leaves.
+  The last counts a mass fraction below `-species_band` or above
+  `1 + species_band` (a [`StepControl`](@ref) field), not every excursion a
+  filtered interface leaves.
 - `inadmissible`, `unrecoverable`, `extrapolated`: points the EOS flagged
   through `state_admissibility`. A point with a nonpositive mixture density is
   not put to the EOS, since its internal energy cannot be formed. Extrapolated

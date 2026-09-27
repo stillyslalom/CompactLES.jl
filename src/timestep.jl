@@ -1129,7 +1129,8 @@ function _local_positivity_mins(solver::SolverLike, Q)
 end
 
 """
-    apply_positivity_floor!(solver, Q, rho_floor, e_floor, scope) -> tally
+    apply_positivity_floor!(solver, Q, rho_floor, e_floor, scope;
+                            species_band = solver.control.species_band) -> tally
 
 Inspect the interior of `Q` for points outside the physical state space, repair
 them in place as far as `scope` allows, and report the global
@@ -1142,10 +1143,14 @@ floors come from `positivity_floors`, `scope` is `StepControl.floor_scope`, and
 Three repairs, in the order they have to run, since each depends on the state
 the previous one leaves:
 
-1. **Negative partial densities** are clipped to zero and the remaining positive
-   ones rescaled onto the mixture density the point carried, which
-   leaves that density and therefore the mixture mass exactly unchanged.
-   The species masses are not conserved, and their change is tallied.
+1. **A composition outside the species band**, a mass fraction below
+   `-species_band` or above `1 + species_band`, has its negative partial
+   densities clipped to zero and the positive ones rescaled onto the mixture
+   density the point carried, which leaves that density and therefore the
+   mixture mass exactly unchanged. The species masses are not conserved, and
+   their change is tallied. The band is the one the validation sweep reads
+   ([`state_report`](@ref)), so a point inside it, which a verdict accepts, is
+   left as it is; `species_band = 0` clips every negative partial density.
 2. **A mixture density below `rho_floor`** is raised to it, distributed over the
    positive partial densities, or onto the first species where there are none,
    which is the composition `primitives!` substitutes at a point it
@@ -1175,19 +1180,22 @@ nothing downstream depends on that: [`max_rate`](@ref) exchanges before reading
 anything at the top of the next iteration.
 """
 function apply_positivity_floor!(solver::Solver, Q, rho_floor, e_floor,
-                                 scope::Symbol)
+                                 scope::Symbol;
+                                 species_band::Real=solver.control.species_band)
     species = zeros(solver.equations.n_species)
-    tally = _local_positivity_repair!(solver, Q, rho_floor, e_floor, scope, species)
+    tally = _local_positivity_repair!(solver, Q, rho_floor, e_floor, scope,
+                                      species_band, species)
     return _reduce_floor_tally(solver, tally, species)
 end
 
 function apply_positivity_floor!(solver::Solver, states::Vector{<:ConservedState},
-                                 rho_floor, e_floor, scope::Symbol)
+                                 rho_floor, e_floor, scope::Symbol;
+                                 species_band::Real=solver.control.species_band)
     acc = (0.0, 0.0, 0.0, 0.0, 0.0)
     species = zeros(solver.equations.n_species)
     for (ps, Q) in eachpatch(solver, states)
         acc = acc .+ _local_positivity_repair!(ps, Q, rho_floor, e_floor, scope,
-                                               species)
+                                               species_band, species)
     end
     return _reduce_floor_tally(solver, acc, species)
 end
@@ -1202,7 +1210,7 @@ function _reduce_floor_tally(solver, tally, species)
 end
 
 function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
-                                   scope::Symbol,
+                                   scope::Symbol, species_band::Real,
                                    species::Vector{Float64}=zeros(
                                        solver.equations.n_species))
     decomp = solver.decomp
@@ -1218,6 +1226,7 @@ function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
     # `run!` guarantees that by construction and this makes it local.
     rho_floor > 0 || error("apply_positivity_floor!: rho_floor must be positive")
     T = eltype(Q)
+    band = T(species_band)
     cells = 0.0; low_energy = 0.0; mass = 0.0; energy = 0.0; momentum = 0.0
     # Serial, as `max_rate` is: one pass per step over the same interior, and
     # only when a run enables the failsafe.
@@ -1228,13 +1237,18 @@ function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
             for i in 1:nx
                 I = CartesianIndex(i + o1, j + o2, k + o3)
                 ρ = zero(T)
-                any_negative = false
+                q_min = T(Inf)
+                q_max = T(-Inf)
                 for sp in 1:n_species
                     q = Q[I, sp]
                     ρ += q
-                    any_negative |= q < 0
+                    q_min = min(q_min, q)
+                    q_max = max(q_max, q)
                 end
-                if !any_negative && ρ >= rho_floor
+                # The same test and arithmetic as the validation sweep, so the
+                # clip acts on exactly the points a verdict would reject.
+                clip = _outside_species_band(q_min, q_max, ρ, band)
+                if !clip && ρ >= rho_floor
                     ke = (Q[I, m1]^2 + Q[I, m2]^2 + Q[I, m3]^2) / (2ρ)
                     Q[I, i_energy] - ke >= ρ * e_floor && continue
                 end
@@ -1243,7 +1257,7 @@ function _local_positivity_repair!(solver::SolverLike, Q, rho_floor, e_floor,
                 # tally is comparable with an integral of the field it perturbs.
                 vol = wj * quad_weight(solver, 1, i) * dV / solver.inv_J[I]
                 repaired = false
-                if any_negative && ρ >= rho_floor
+                if clip && ρ >= rho_floor
                     repaired = true
                     pos = zero(T)
                     for sp in 1:n_species
@@ -1994,7 +2008,8 @@ end
 function _positivity_failsafe!(solver, Q, rho_floor, e_floor, control, floor_0,
                                rank)
     tally = apply_positivity_floor!(solver, Q, rho_floor, e_floor,
-                                    control.floor_scope)
+                                    control.floor_scope;
+                                    species_band=control.species_band)
     if tally.cells > 0 || tally.low_energy > 0
         ft = record_floor!(solver, tally)
         ft.steps == floor_0.steps + 1 && rank == 0 &&

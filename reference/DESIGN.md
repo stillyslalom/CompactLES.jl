@@ -1295,7 +1295,8 @@ report rejects:
 | `:permissive` | accept the state and report what it contains |
 | `:repair` | apply the positivity failsafe, report the substitutions, then reject what remains |
 
-A mass fraction counts as negative only below `-StepControl.species_band`. A
+A composition counts as outside [0, 1] only beyond `StepControl.species_band`
+on either side, and the failsafe clips on the same band. A
 captured species interface is a few cells wide at any resolution and lies about
 1% outside [0, 1] under the artificial mass-fraction bound, against 5–7%
 without it, so the band separates a bounded interface from an unbounded one. It
@@ -1321,7 +1322,7 @@ The positivity failsafe and the validation are separate mechanisms, and the
 failsafe is not a substitute for the check:
 
 - `:representable` repair does not guarantee strict admissibility. It restores a
-  state the solver can represent: nonnegative partial densities, a mixture
+  state the solver can represent: a composition inside the species band, a mixture
   density at or above `rho_floor`, and a total energy at or above `ρ·e_floor`.
   Where it acts on the energy the internal energy lands exactly on `e_floor`
   with the momentum untouched. It does not act on a point whose total energy
@@ -1355,14 +1356,14 @@ is the mode that makes such a run observable without changing it.
 ### Boundedness of the composition
 
 Three mechanisms act on a mass fraction outside [0, 1]. Only the failsafe,
-which is off by default, enforces 0 ≤ Y_k ≤ 1, and it does so by clipping
-after the step:
+which is off by default, writes the composition, and it does so by clipping
+after the step a point that lies outside the species band:
 
 | mechanism | kind | when | threshold | writes the state |
 |---|---|---|---|---|
 | `ArtificialProperties.C_Y` term | regularization | every right-hand side | excursion beyond `Y_tolerance` = 1e-4 | no; adds a diffusivity |
-| `StepControl.species_band` | validity check | the sweeps [below](#where-the-sweeps-read-the-state) | Y_k < −0.05 | no; `:strict` rejects, `:permissive` reports |
-| positivity failsafe | repair | after a step (`floor_ratio > 0`), before a verdict (`:repair`) | any ρ_k < 0; ρ < `rho_floor`; E < ρ·`e_floor` | yes |
+| `StepControl.species_band` | validity check | the sweeps [below](#where-the-sweeps-read-the-state) | Y_k < −0.05 or Y_k > 1.05 | no; `:strict` rejects, `:permissive` reports |
+| positivity failsafe | repair | after a step (`floor_ratio > 0`), before a verdict (`:repair`) | the species band; ρ < `rho_floor`; E < ρ·`e_floor` | yes |
 
 The bound adds C_Y Δ_g max(0, −f − `Y_tolerance`, f − 1 − `Y_tolerance`) to
 the species sensor before it is smoothed, with f each mass fraction and,
@@ -1376,21 +1377,32 @@ The dead band exists because the Runge–Kutta stages overshoot a smooth profile
 that touches a bound by O(h²) where the completed step does not; a bound acting
 on that transient costs 1.5 orders of accuracy on such a profile.
 
-The validity check reads the lower side only: a point counts when
-min_k ρ_k < −`species_band`·ρ. With two species Y_1 > 1 + `species_band` is
-the same point as Y_2 < −`species_band`; with more, an excess of one species
-is counted only through a partner below the band.
+The validity check reads both sides: a point counts when
+min_k ρ_k < −`species_band`·ρ or max_k ρ_k − ρ > `species_band`·ρ. With two
+species the sides coincide, Y_1 > 1 + `species_band` being the point where
+Y_2 < −`species_band`. From three species on, an excess of one can be shared
+among partners that each stay inside the band, and only the upper side
+counts it. A sum of the negative parts would also catch that point, but it
+grows with the number of trace species each carrying a round-off undershoot,
+where the extremes do not.
 
-The failsafe renormalizes. A negative partial density is clipped to zero and
-the positive ones are rescaled onto the mixture density the point carried
-(`apply_positivity_floor!`). That conserves the mixture mass and not the
-species masses, whose change `FloorTally.species` records, and at fixed E
-and momentum the new composition moves T and p, so a clipped point is also a
-pressure perturbation. The clip has no band: with `floor_ratio > 0` every
-undershoot of a captured interface is clipped on every step that leaves one
-and counted as a repaired cell, and under `:repair` the first rejected point clips every
-negative partial density in the domain. The density and energy repairs are
-described [above](#what-a-repair-promises).
+The failsafe renormalizes on the same test (`_outside_species_band`, shared
+with the sweep, so the two cannot disagree at the edge). At a point outside
+the band every negative partial density is clipped to zero and the positive
+ones are rescaled onto the mixture density the point carried
+(`apply_positivity_floor!`), which returns that point to 0 ≤ Y_k ≤ 1. That
+conserves the mixture mass and not the species masses, whose change
+`FloorTally.species` records, and at fixed E and momentum the new composition
+moves T and p, so a clipped point is also a pressure perturbation. A point
+inside the band is left as it is, since the validation accepts it: neither its
+mixture density nor its other species change, and it is not counted as a
+repaired cell. The band is `species_band` itself rather than a fraction of it.
+A smaller clip threshold would act on accepted states, which is what the band
+exists to prevent, and a larger one would leave `:repair` rejecting points the
+repair had declined to fix. The interface undershoots of about 1% therefore
+pass through the failsafe untouched; `species_band = 0` restores a clip of
+every negative partial density. The density and energy repairs are described
+[above](#what-a-repair-promises).
 
 ### Tolerances of the thermodynamic evaluation
 
@@ -1433,7 +1445,8 @@ never on a substep or a stage.
 ### What is proved
 
 Nothing in the discretization guarantees 0 ≤ Y_k ≤ 1, ρ > 0 or an admissible
-energy; the failsafe restores the first two after a step by substitution. With a nonnegative diffusivity the continuous `:bulk` model satisfies every
+energy; the failsafe restores the first to within the species band and the
+second exactly, after a step and by substitution. With a nonnegative diffusivity the continuous `:bulk` model satisfies every
 entropy inequality and the continuous `:partial_density` model the
 thermodynamic one, σ = Σ_k R_k D_b |∇ρ_k|²/ρ_k ≥ 0
 ([the species channel](#the-species-channel)). The latter holds only where

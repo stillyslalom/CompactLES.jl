@@ -231,7 +231,7 @@ StepControl(; predict=0.0, max_growth=0.0, landing_steps=2,
 | `floor_ratio` | Positivity failsafe strength; `0` disables |
 | `floor_scope` | `:representable` or `:internal_energy` repair policy |
 | `validity` | `:strict`, `:permissive`, or `:repair` state-validation policy |
-| `species_band` | Mass fraction below `-species_band` is rejected; default `0.05` |
+| `species_band` | Mass fraction outside `[-species_band, 1 + species_band]` is rejected, and clipped by the failsafe; default `0.05` |
 | `validity_interval` | Validate every `k` entering states; `0` checks only run endpoints |
 | `substep_cfl` | Absolute refined-substep tripwire after refreshed coefficients; `0` disables it |
 
