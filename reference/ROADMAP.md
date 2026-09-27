@@ -498,20 +498,15 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   per point and per Runge–Kutta stage, and that solve is the ~6× step cost of
   the NASA-9 model over `IdealMixture`. The interval table is isbits and the
   inversion and every per-point species loop share the powers of T (commits
-  `9e0f126`, `405037f`, measured with `bench/nasa9_inversion.jl`). What
-  remains, in order of payoff per risk:
-  1. Relax the convergence criterion from 32 eps toward 1e-10 relative,
-     which saves about one of the four or five iterations. Newton's last
-     iteration exists to certify the previous one. A numerics decision: it
-     moves recovered temperatures at the 1e-10 level and so the serial and
-     MPI baselines.
-  2. Warm-start from the stored `T_ion` field, one or two iterations instead
-     of four or five. It trades away the state-only seed that
-     `mixture_temperature_status` documents for bit-for-bit agreement between
-     serial and decomposed runs and for restart independence; only worth it
-     if 1 leaves the model still far from the ideal-gas step cost.
-  Keep the polynomial powers literal (`T^4`): a repeated product is not
-  bit-identical to the library power and moves every baseline for nothing.
+  `9e0f126`, `405037f`, measured with `bench/nasa9_inversion.jl`). The
+  convergence criterion is eps^(2/3), floored at 1e-10 (commit TBD), which
+  saves most of one iteration. What remains is a warm start from the stored
+  `T_ion` field, one or two iterations instead of about four. It trades away
+  the state-only seed that `mixture_temperature_status` documents for
+  bit-for-bit agreement between serial and decomposed runs and for restart
+  independence; only worth it if the model is still far from the ideal-gas
+  step cost. Keep the polynomial powers literal (`T^4`): a repeated product is
+  not bit-identical to the library power and moves every baseline for nothing.
   **Depends on:** a baseline decision.
   **Gate:** the core gate with explained baseline updates; time the inversion
   before and after at four species in the same session.

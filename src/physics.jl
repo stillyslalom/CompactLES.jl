@@ -983,8 +983,12 @@ end
 # reads its result. A state initialized at exactly the lowest fitted temperature
 # recovers an ulp or two below it, and calling that extrapolated would report
 # every point of such a state.
+# `mixture_temperature_status` gives the reasoning for eps^(2/3). A criterion
+# of 32 eps sits below the residual's round-off floor, where the fits' large
+# terms cancel: `bench/nasa9_inversion.jl part=sweep` finds it unmet on up to a
+# sixth of the states at 6-13 kK whose recovered T is correct to that floor.
 @inline _nasa9_rtol(::Type{T}) where {T<:AbstractFloat} =
-    max(T(1e-14), T(32) * eps(T))
+    max(T(1e-10), cbrt(eps(T))^2)
 
 "Whether `T_ion` lies outside the union of species k's fitted intervals."
 @inline function _nasa9_out_of_range(table::AbstractMatrix{<:Nasa9Interval}, k::Int,
@@ -1106,8 +1110,13 @@ Success is the residual criterion |f| ≤ rtol·T·cv, equivalently a Newton ste
 of at most rtol·T. Writing it through the derivative the iteration already has
 avoids inventing an energy scale, which a formation-enthalpy gauge would make
 meaningless: there e is dominated by a constant of formation and its magnitude
-says nothing about the accuracy of T. `rtol` is 32 eps of the coefficient type,
-floored at 1e-14, so the criterion carries to Float32 unchanged in form.
+says nothing about the accuracy of T. `rtol` is eps^(2/3) of the coefficient
+type, floored at 1e-10, so the criterion carries to Float32 unchanged in form.
+Since Newton converges quadratically, the iterate after a step of that size is
+accurate to about rtol², below one ulp: the accepted step is the certificate,
+and no further iteration is spent confirming it. A criterion of a few tens of
+eps would sit below the round-off floor of the residual, which reaches hundreds
+of eps at high temperature, and would report correct results as not converged.
 
 The iteration stops immediately when the mixture cv is not positive. There is
 then no bracket and no unique root, so continuing would report convergence to a
@@ -1193,9 +1202,10 @@ end
         T_prev = T_ion
         T_ion = T_ion - δ
         # Tested before the safeguard below, so a converging iteration takes the
-        # plain Newton sequence and the bracket costs it nothing. A step of at
-        # most rtol·T can be smaller than one ulp, which the strict containment
-        # test would otherwise reject and replace with a bisection.
+        # plain Newton sequence and the bracket costs it nothing. When the root
+        # lies within round-off of a bracket end, the final step can land just
+        # outside, which the strict containment test would otherwise reject
+        # and replace with a bisection.
         if abs(δ) <= rtol * T_ion
             converged = true
             break

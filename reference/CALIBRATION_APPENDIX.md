@@ -41,7 +41,7 @@ section that moved it says so in one sentence and the older figure is gone.
 17. [The inflow transverse terms](#the-inflow-transverse-terms) (`bench/nscbcinflow.jl`)
 18. [Fold order and geometry limits](#fold-order-and-geometry-limits) (`bench/foldorder.jl`)
 19. [Operator and step cost](#operator-and-step-cost) (`bench/derivcost.jl`,
-    `bench/phases.jl`, `bench/reducedsolve.jl`)
+    `bench/phases.jl`, `bench/reducedsolve.jl`, `bench/nasa9_inversion.jl`)
 20. [AMR](#amr) (`bench/amr_transfer.jl`, `bench/leveltransfer.jl`,
     `test/level_tests.jl`)
 21. [Temperature-dependent transport](#temperature-dependent-transport)
@@ -4649,6 +4649,40 @@ the default smoother, most of it in the smoothing of the sensors, one sweep per 
 `n_species == 2` that per-species machinery is a measurable no-op, and it earns its cost
 only at three or more species; cutting it is a numerics decision, a shared against a
 per-species sensor, and not a code tweak.
+
+### bench/nasa9_inversion.jl: the NASA-9 temperature inversion
+
+`julia --project=. -t 1 bench/nasa9_inversion.jl` for the cost (N2/O2/CO2/H2O, 300–3000 K,
+three processes per checkout, alternating) and `... 200000 part=sweep` for the failures:
+200,000 states per case over 200–20,000 K, for N2, CO2, He and N2/O2/CO2/H2O, in Float64 and
+Float32, under `:polynomial` and `:linear`. "Wrong" is a recovery more than 1e-3 from the
+temperature the energy was formed at; "silent" is a wrong one whose status carries no flag.
+
+| inversion | not converged | no bracket | wrong | silent |
+|---|---|---|---|---|
+| iterates free to leave the fitted range, 32 eps | 387,465 | 335,896 | 362,331 | — |
+| iterates held on the fitted range's edge, 32 eps | 117,757 | 61,215 | 150,998 | 20,536 |
+| the same, criterion eps^(2/3) floored at 1e-10 | 61,460 | 61,211 | 150,999 | 20,537 |
+
+| measurement, four species at 300–3000 K | 32 eps | eps^(2/3) |
+|---|---|---|
+| Newton iterations per point | 4.744 | 3.934 |
+| `mixture_temperature`, ns per point | 187.4–189.8 | 157.4–160.1 |
+| `recover_primitives!`, ns per point, 32³ | 235.4–237.6 | 197.4–198.4 |
+
+Pure CO2 at 13–20 kK under `:polynomial` was unbracketed and wrong on 68,231 of 70,708
+states in either precision: the seed, linearized about 300 K, lands past 20,000 K, where the
+fit's cv is negative. Holding the iterate on the edge of the fitted range recovers all of
+them, to 5.2e-14 in Float64. The 32 eps criterion was unmet on 5,967 (Float64) and 12,172
+(Float32) of the 70,706 pure N2 states at 6–13 kK, although their largest error was 1.6e-13
+and 7.7e-5, set by the residual's round-off and by the fits' continuity at the 6000 K join;
+eps^(2/3) is met on all of them. At 100,000 states, Float32 criteria of 32 eps, eps^(2/3)
+and 1e-4 left 6,021, 0 and 0 of those misses.
+
+Settled: under `:linear` the sweep finds no failure in either precision. Every remaining
+failure is the four-species mixture above 6000 K under `:polynomial`, where the H2O fit ends
+and its extrapolated energy is not monotone: states with no bracket, and silent ones whose
+energy has a second root inside the fitted range, which the inversion returns.
 
 ## AMR
 
