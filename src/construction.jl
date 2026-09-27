@@ -583,12 +583,14 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         metric isa CartesianMetric && all(isnothing, stretch) ||
             error("interface_flux = :ghost requires an unstretched CartesianMetric")
         # A coarse-fine face's molecular ghost flux recovers the temperature
-        # gradient from the conserved ones through the internal energy.
+        # gradient from the conserved ones through the internal energy, which
+        # `_temperature_gradient` inverts for the built-in models only.
         nlev == 1 || !_ghost_viscous(interface_flux, transport) ||
             _ghost_gradient_eos(eos) ||
-            error("interface_flux = :ghost with molecular transport at a refined " *
-                  "level supports IdealMixture, Nasa9Mixture and StiffenedGas; " *
-                  "got $(typeof(eos))")
+            throw(ArgumentError(
+                "interface_flux = :ghost with molecular transport at a refined " *
+                "level supports IdealMixture, Nasa9Mixture and StiffenedGas; got " *
+                "$(typeof(eos)); use interface_flux = :closure for this EOS"))
     end
     # --- Device residency -------------------------------------------------
     # A DeviceBackend supports a decomposed patch, patched, refined or

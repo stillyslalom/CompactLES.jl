@@ -82,7 +82,8 @@ such as `(0, π)` places it on the pole.
 run only; the default `:inject` has no restriction. `interface_flux = :ghost`
 requires a patch or level interface, `interface_rhs = :extended` and a
 uniform Cartesian grid; with molecular transport at a refined level it also
-requires one of the three built-in equations of state. `rebalance` requires a
+requires one of the three built-in equations of state, and a user EOS takes
+`interface_flux = :closure`. `rebalance` requires a
 tiled level with regridding and at most two levels.
 
 ## Checkpoints

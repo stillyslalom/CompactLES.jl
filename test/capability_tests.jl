@@ -141,8 +141,9 @@ include("capability_cases.jl")
                 C.problem(bcs=(wall, per, per), metric=CylindricalMetric(),
                           domain=((0.5, 1.5), (0.0, 1.0), (0.0, 1.0)), ic=C.ic_shell),
                 Numerics(n_global=n1, patch_grid=(2, 1, 1), interface_flux=:ghost))
-        rejects("interface_flux = :ghost with molecular transport at a refined level " *
-                "supports IdealMixture, Nasa9Mixture and StiffenedGas",
+        rejects(["interface_flux = :ghost with molecular transport at a refined level " *
+                 "supports IdealMixture, Nasa9Mixture and StiffenedGas",
+                 "use interface_flux = :closure for this EOS"],
                 C.problem(eos=C.EOSES[5][2], transport=ConstantTransport(mu0=1e-3)),
                 Numerics(n_global=n1, interface_flux=:ghost, amr=box))
         rejects("polar_truncation applies to CylindricalMetric", sph,
