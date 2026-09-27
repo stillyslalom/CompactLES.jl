@@ -22,6 +22,9 @@
 #              compression are all fixed numbers, so wall heating at the
 #              symmetry point shows up as a density deficit with nowhere to
 #              hide. This is the case that constrains C_beta and the CFL.
+#     Interface pulse — an acoustic pulse reflected and transmitted at an
+#              air/SF6 interface in both directions, against the
+#              coefficients of the acoustic impedances.
 #
 #   Stored — this code at 4x resolution. A regression guard, not validation.
 #     Shu–Osher        — shock/entropy-wave interaction, the problem the
@@ -59,6 +62,8 @@
 #   Noh nu=2   plateau 15.009/16   shock 0.2091/0.2   wall deficit 55%
 #   Noh nu=3   plateau 62.555/64   shock 0.2089/0.2   wall deficit 29%
 #   Shock/SF6  worst Y -0.0098 / 1.0098, width 4 cells, 644 steps, TV - 1 0.0066
+#   Pulse lh   N=1600  R 0.3182/0.3290  T 1.3297/1.3290  energy 0.9938  err 7.9e-2
+#   Pulse hl   N=1600  R -0.3256/-0.3290  T 0.6711/0.6710  energy 0.9981  err 3.1e-2
 #   Slab 100   max|p - 1| 5.2e-11, max|u - u0|/u0 1.1e-12, worst Y -0.0620, 4049 steps
 #   Noh aligned N=100 AR=4    plateau 4.0035/4   deficit 33%   shock 0.2084   4966 steps
 #   Noh plane   N=24  AR=2    plateau 11.858/16  front 0.236/0.2  L1 rho 0.893  745 steps
@@ -565,6 +570,25 @@ let r = brill_slab()
     @test r.p_error < 1e-9
     @test r.u_error < 1e-9
     @test r.worst_min_Y > -0.1
+end
+
+# ===========================================================================
+say("\n=== Acoustic pulse at an air/SF6 interface (analytic: impedance) ===")
+
+# The captured interface is two cells wide, so the reflection coefficient
+# converges to the sharp-interface value with the grid (second order in the
+# width, measured 400 to 3200 by bench/interfaceacoustics.jl); the guards are
+# on the N = 1600 row.
+for case in (:lh, :hl)
+    r = interface_pulse(case, IA_N)
+    @test r.completed
+    sayf("  %s N=%d  R %.5f (exact %.5f)  T %.5f (exact %.5f)  energy %.5f  " *
+         "err %.3e  steps %d\n", case, IA_N, r.R, r.Rex, r.T, r.Tex, r.energy,
+         r.err, r.steps)
+    @test abs(r.R - r.Rex) < 0.02
+    @test abs(r.T - r.Tex) < 2e-3
+    @test abs(r.energy - 1) < 0.012
+    @test r.err < 0.15
 end
 
 # ===========================================================================

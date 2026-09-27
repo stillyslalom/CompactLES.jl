@@ -839,6 +839,104 @@ function mirror_line_errors(a, b; W=4)
     return wall, interior, l2
 end
 
+# --- an acoustic pulse at a gas-gas interface --------------------------------
+#
+# A periodic line x in [0, 2] holds a light gas (R = 1, γ = 1.4) on [0, 1] and
+# a heavy one of SF6's density ratio and γ (R = 1/5.04, γ = 1.09) on [1, 2],
+# at uniform p = T = 1, joined by tanh interfaces `delta` cells wide at x = 1
+# and x = 2 = 0. A right-running Gaussian pulse of pressure amplitude `amp`
+# and width `sigma` starts four widths upstream of an interface, from the
+# light side (`:lh`, at x = 1/2) or the heavy side (`:hl`, at x = 3/2), and
+# runs until the reflected pulse is six widths clear of it. The exact linear
+# solution of the sharp interface is a reflected pulse R·amp·g and a
+# transmitted one T·amp·g stretched by c_t/c_i, R = (Z_t − Z_i)/(Z_t + Z_i),
+# T = 2Z_t/(Z_t + Z_i), Z = ρc. A captured interface is `delta` cells wide, so
+# the measured coefficients converge to these as the grid is refined.
+
+const IA_R = (1.0, 1 / 5.04)
+const IA_G = (1.4, 1.09)
+const IA_SIGMA = 0.04
+const IA_N = 1600
+
+_ia_blend(x, x0, w) = (1 + tanh((x - x0) / w)) / 2
+# Heavy-gas mass fraction: 1 on (1, 2), 0 on (0, 1), periodic.
+_ia_heavy(x, w) = _ia_blend(x, 1.0, w) - _ia_blend(x, 2.0, w) + _ia_blend(x, 0.0, -w)
+
+function _ia_gather(solver, v)
+    comm = solver.decomp.sub[1]
+    MPI.Comm_size(comm) == 1 && return v
+    counts = MPI.Allgather(Int32(length(v)), comm)
+    out = Vector{Float64}(undef, sum(counts))
+    MPI.Allgatherv!(v, MPI.VBuffer(out, counts), comm)
+    return out
+end
+
+"""
+    interface_pulse(case, N; art=true, amp=1e-4, sigma=IA_SIGMA, delta=2.0,
+                    nmax=NMAX) -> NamedTuple
+
+The pulse of `case` (`:lh` or `:hl`) on N nodes under the default numerics,
+inviscid. Returns the exact `Rex`, `Tex`, the measured `R`, `T` (projections
+of the left-running characteristic (p' − Zu')/2 on the incident side and the
+right-running (p' + Zu')/2 on the other onto the exact pulse shapes at their
+exact positions), the flux balance `energy` = R² + (Z_i/Z_t)T², exactly 1 for
+the linear solution, `err` = max|p' − p'_exact|/amp, the step count, the
+transmitted width in cells and whether the run completed.
+"""
+function interface_pulse(case::Symbol, N::Int; art=true, amp=1e-4, sigma=IA_SIGMA,
+                         delta=2.0, nmax=NMAX)
+    h = 2.0 / N
+    w = delta * h
+    (R1, R2), (g1, g2) = IA_R, IA_G
+    c1, c2 = sqrt(g1 * R1), sqrt(g2 * R2)
+    Z1, Z2 = c1 / R1, c2 / R2                 # ρ = p/(RT) = 1/R
+    x0, xI, ci, ct, Zi, Zt = case === :lh ? (0.5, 1.0, c1, c2, Z1, Z2) :
+                                            (1.5, 2.0, c2, c1, Z2, Z1)
+    tI = (xI - x0) / ci
+    tfin = tI + 6sigma / ci
+    ic = (x, y, z) -> begin
+        θ = _ia_heavy(x, w)
+        Rm = (1 - θ) * R1 + θ * R2
+        cvm = (1 - θ) * R1 / (g1 - 1) + θ * R2 / (g2 - 1)
+        cm = sqrt((1 + Rm / cvm) * Rm)
+        dp = amp * exp(-((x - x0) / sigma)^2)
+        Prim(Y=(1 - θ, θ), u=(dp * Rm / cm, 0.0, 0.0), p=1 + dp,
+             rho=1 / Rm + dp / cm^2)
+    end
+    eos = IdealMixture([IdealSpecies{Float64}("light", R1, g1),
+                        IdealSpecies{Float64}("heavy", R2, g2)])
+    prob = Problem(eos=eos, transport=ConstantTransport(mu0=0.0),
+                   domain=((0.0, 2.0), (0.0, h), (0.0, h)), bcs=per3, ic=ic)
+    solver, Q = setup(prob, Numerics(n_global=(N, 1, 1),
+                                     art=ArtificialProperties(enabled=art)))
+    run!(solver, Q; tfinal=tfin, nmax=nmax)
+    refresh_primitives!(solver, Q)
+    nx = solver.decomp.n_local[1]
+    I = [padded_index(solver, i, 1, 1) for i in 1:nx]
+    xs = _ia_gather(solver, Float64[xcoord(solver, 1, i) for i in 1:nx])
+    ρ, u, p, c = (_ia_gather(solver, Float64.(f[I]))
+                  for f in (solver.rho, solver.u, solver.p, solver.c))
+    dp = p .- 1
+    Rex = (Zt - Zi) / (Zt + Zi)
+    Tex = 2Zt / (Zt + Zi)
+    wrap(x) = mod(x + 1.0, 2.0) - 1.0          # signed distance on the circle
+    xr = xI - ci * (tfin - tI)
+    xt = xI + ct * (tfin - tI)
+    st = sigma * ct / ci
+    shape_r = [exp(-(wrap(x - xr) / sigma)^2) for x in xs]
+    shape_t = [exp(-(wrap(x - xt) / st)^2) for x in xs]
+    left = (dp .- ρ .* c .* u) ./ 2
+    right = (dp .+ ρ .* c .* u) ./ 2
+    win_r = abs.(wrap.(xs .- xr)) .< 6sigma
+    win_t = abs.(wrap.(xs .- xt)) .< 6st
+    proj(f, s, m) = sum(f[m] .* s[m]) / sum(s[m] .^ 2)
+    R = proj(left, shape_r, win_r) / amp
+    T = proj(right, shape_t, win_t) / amp
+    err = maximum(abs.(dp .- amp .* (Rex .* shape_r .+ Tex .* shape_t))) / amp
+    return (; Rex, Tex, R, T, energy=R^2 + (Zi / Zt) * T^2, err,
+            steps=solver.step, cells_t=st / h, completed=completed(solver, tfin))
+end
+
 # --- shared measurements ----------------------------------------------------
 #
 # validation.jl guards these and artcal.jl sweeps them, so both report the

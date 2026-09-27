@@ -57,6 +57,8 @@ section that moved it says so in one sentence and the older figure is gone.
 27. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`, `bench/staggeredconduction.jl`)
 28. [False activation on smooth fields](#false-activation-on-smooth-fields)
     (`bench/falseactivation.jl`)
+29. [The gas-gas acoustic interface](#the-gas-gas-acoustic-interface)
+    (`bench/interfaceacoustics.jl`, `test/validation.jl`)
 
 ## The shock battery
 
@@ -6919,3 +6921,45 @@ fractions, would leave every single-species row bit-identical by construction an
 whole composition-slab result, since κ\* deposits nothing there; the thermal slab's κ\*
 error would remain. Neither the density-ratio-100 rows, the He/CO2 tube nor a
 two-dimensional case has been run under the split.
+
+## The gas-gas acoustic interface
+
+```text
+julia --project=. bench/interfaceacoustics.jl art=on,off
+julia --project=. bench/interfaceacoustics.jl n=1600,3200 delta=4 cases=lh art=on,off
+```
+
+`interface_pulse` of `test/cases.jl`: a periodic line [0, 2] of air (R = 1, γ = 1.4) on
+[0, 1] and a gas of SF6's density ratio and γ (R = 1/5.04, γ = 1.09) on [1, 2] at uniform
+p = T = 1, joined by tanh interfaces `delta` cells wide. A right-running Gaussian pulse of
+amplitude 1e-4 and width σ = 0.04 crosses one interface, from air into the heavy gas (`lh`)
+or back (`hl`), under the default numerics, inviscid. The sharp-interface impedance solution
+is R = ±0.32906, T = 1.32906 (`lh`) and 0.67094 (`hl`). R and T are projections of the
+outgoing characteristics onto the exact pulse shapes at their exact positions, energy is
+R² + (Z_i/Z_t)T², and err is max |p' − p'_exact| / amp. `cells_t` is the transmitted width
+σ c_t/c_i in cells. Two-cell interfaces:
+
+| case | art | N | cells_t | R err | T err | energy | err |
+|---|---|---|---|---|---|---|---|
+| lh | on | 400 | 3.1 | −8.52e-2 | −1.73e-2 | 0.9281 | 0.284 |
+| lh | on | 800 | 6.3 | −3.39e-2 | −1.02e-3 | 0.9775 | 0.152 |
+| lh | on | 1600 | 12.6 | −1.08e-2 | 5.89e-4 | 0.9938 | 0.079 |
+| lh | on | 3200 | 25.2 | −3.18e-3 | 3.74e-4 | 0.9984 | 0.040 |
+| lh | off | 1600 | 12.6 | −8.28e-3 | −5.37e-4 | 0.9939 | 0.081 |
+| lh | off | 3200 | 25.2 | −2.16e-3 | −9.38e-5 | 0.9985 | 0.042 |
+| hl | on | 400 | 20.4 | 4.07e-2 | 5.54e-5 | 0.9750 | 0.106 |
+| hl | on | 800 | 40.7 | 1.25e-2 | 2.71e-4 | 0.9927 | 0.059 |
+| hl | on | 1600 | 81.4 | 3.52e-3 | 1.44e-4 | 0.9981 | 0.031 |
+| hl | on | 3200 | 162.8 | 9.78e-4 | 6.91e-5 | 0.9995 | 0.016 |
+| hl | off | 1600 | 81.4 | 2.79e-3 | −2.42e-5 | 0.9981 | 0.030 |
+| hl | off | 3200 | 162.8 | 7.05e-4 | 5.91e-6 | 0.9996 | 0.015 |
+
+The reflection deficit falls by 3.1–3.6 per doubling at the finer steps, approaching the
+second order in the interface width that a smooth transition gives, and T is within 6e-4 of
+the impedance value at N ≥ 1600 in both directions. The deficit is the width of the interface, not the
+discretization: at a fixed physical width, four cells at N = 1600 against two at N = 800,
+R err reads −2.85e-2 against −2.86e-2 with the artificial properties off, and −2.89e-2 with
+them on. The artificial properties move R by 8e-3 at N = 400, under 3e-3 from N = 1600 on
+with two-cell interfaces, and by 4e-4 with four, a smaller effect than the width itself. The max-norm error falls at first order, consistent with a phase lag of the
+pulses proportional to the interface width. `test/validation.jl` guards the N = 1600 rows: |R err| < 0.02,
+|T err| < 2e-3, |energy − 1| < 0.012 and err < 0.15.
