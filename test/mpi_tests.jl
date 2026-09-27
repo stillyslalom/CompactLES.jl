@@ -3383,27 +3383,37 @@ end
 
 # ---------------------------------------------------------------------------
 # Staggered operators of the implicit diffusion operator (src/staggered.jl),
-# split along each dimension in turn, periodic and closed under both wall
-# parities: the midpoint flux κ D_s T and L = G K D_s T against the same
-# operators on an undivided copy of the grid on each rank. The derivatives'
-# reduced-interface solve, the midpoint halo exchange and the wall mirror on
-# the edge ranks are all on the path, and the undivided solve reproduces the
-# distributed one to round-off, so an interface bug is an O(1) difference.
+# split along each dimension in turn, periodic, closed under both wall
+# parities and folded at both ends under both plane parities: the midpoint
+# flux κ D_s T and L = G K D_s T against the same operators on an undivided
+# copy of the grid on each rank. The derivatives' reduced-interface solve,
+# the midpoint halo exchange and the mirror on the edge ranks are all on the
+# path, and the undivided solve reproduces the distributed one to round-off,
+# so an interface bug is an O(1) difference. The metric cases then build the
+# operator from a solver, decomposed and on COMM_SELF: a stretched line, and
+# the paired folds of the resolved axis and the spherical origin and poles
+# with the pairing or the reversed dimension split, where the butterfly runs
+# off-rank and carries the plane midpoint; a uniform temperature must give
+# zero on every one of them.
 # ---------------------------------------------------------------------------
 function test_staggered()
     section("staggered operators: decomposed against undivided")
-    for ax in 1:3, (periodic, parity) in ((true, 1), (false, 1), (false, -1))
+    for ax in 1:3, (periodic, parity, folded) in ((true, 1, false), (false, 1, false),
+                                                  (false, -1, false), (false, 1, true),
+                                                  (false, -1, true))
         ng = ntuple(d -> d == ax ? SPLITN : 6, 3)
         pers = ntuple(d -> d == ax ? periodic : true, 3)
-        h = periodic ? 1 / SPLITN : 1 / (SPLITN - 1)
+        h = periodic || folded ? 1 / SPLITN : 1 / (SPLITN - 1)
+        σ = folded ? parity : nothing
         results = map((Decomp(ng, pers; dims=splitdims(ax)),
                        Decomp(ng, pers; comm=MPI.COMM_SELF))) do decomp
-            op = CL.StaggeredDiffusion(decomp, ax, h; parity=parity)
+            op = CL.StaggeredDiffusion(decomp, ax, h; parity=parity, lo_fold=σ,
+                                       hi_fold=σ)
             T = CL.field(decomp); κ = CL.field(decomp); out = CL.field(decomp)
             pad = decomp.n_halo_d; off = decomp.offset
             for I in CartesianIndices(decomp.n_local)
                 g = Tuple(I) .+ off
-                x = (g[ax] - 1) * h
+                x = (g[ax] - (folded ? 0.5 : 1.0)) * h
                 other = 1 + 0.1cos(0.9g[mod1(ax + 1, 3)]) * sin(0.4g[mod1(ax + 2, 3)])
                 J = I + CartesianIndex(pad)
                 T[J] = (cos(2π * x) + 0.4sin(5x)) * other
@@ -3421,9 +3431,61 @@ function test_staggered()
             diff = max.(diff, (abs(flux[J] - flux_ref[K]), abs(out[J] - out_ref[K])))
             scale = max.(scale, (abs(flux_ref[K]), abs(out_ref[K])))
         end
-        label = "dim $ax $(periodic ? "periodic" : "closed, parity $parity")"
+        label = "dim $ax " * (periodic ? "periodic" :
+                              folded ? "folded, parity $parity" : "closed, parity $parity")
         check("κ D_s T, $label", gmax(diff[1]) / gmax(scale[1]), 1e-12)
         check("G K D_s T, $label", gmax(diff[2]) / gmax(scale[2]), 1e-12)
+    end
+
+    noart = ArtificialProperties(enabled=false)
+    stretched(c, dims) =
+        Solver(n_global=(SPLITN, 12, 1), L_domain=(1.0, 1.0, 1.0),
+               bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+               stretch=(sine_cluster(0.0, 1.0, 0.3, 0.4), nothing, nothing),
+               art=noart, comm=c, dims=dims)
+    cyl(c, dims) =
+        Solver(n_global=(40, SPLITN, 1), L_domain=(1.0, 2π, 1.0),
+               metric=CylindricalMetric(),
+               bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), art=noart,
+               comm=c, dims=dims)
+    sph(ng) = (c, dims) ->
+        Solver(n_global=ng, L_domain=(1.0, π, 2π), metric=SphericalMetric(),
+               bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
+               art=noart, comm=c, dims=dims)
+    rdims = (2, np ÷ 2, 1)
+    cases = (("stretched line, x split", stretched, splitdims(1), 1),
+             ("cyl axis, θ split", cyl, splitdims(2), 1),
+             ("cyl axis, r and θ split", cyl, rdims, 1),
+             ("sph origin, θ split", sph((40, SPLITN, 12)), splitdims(2), 1),
+             ("sph poles, θ split", sph((40, SPLITN, 12)), splitdims(2), 2),
+             ("sph origin, φ split", sph((40, 16, SPLITN)), splitdims(3), 1),
+             ("sph poles, φ split", sph((40, 16, SPLITN)), splitdims(3), 2))
+    Tfn(x, y, z) = exp(-4x^2) * (1 + 0.5x * cos(y) + 0.3x * sin(y) * cos(z))
+    κfn(x, y, z) = 1 + 0.5x^2 + 0.2x * sin(y) * cos(z)
+    for (label, mk, dims, d) in cases
+        s = mk(comm, dims)
+        ref = mk(MPI.COMM_SELF, (1, 1, 1))
+        out = map((s, ref)) do sv
+            op = CL.StaggeredDiffusion(sv, d)
+            T = CL.field(sv.decomp); κ = CL.field(sv.decomp)
+            L = CL.field(sv.decomp); L1 = CL.field(sv.decomp)
+            fillf!(sv, T, Tfn); fillf!(sv, κ, κfn)
+            CL.staggered_diffusion!(L, op, T, κ, sv.decomp)
+            fillf!(sv, T, (x, y, z) -> 1.0)
+            CL.staggered_diffusion!(L1, op, T, κ, sv.decomp)
+            (L, L1)
+        end
+        (L, L1), (L_ref, _) = out
+        e = 0.0; scale = 0.0; e1 = 0.0
+        for I in CL.interior(s.decomp)
+            loc = Tuple(I) .- s.decomp.n_halo_d
+            J = padded_index(ref, (loc .+ s.decomp.offset)...)
+            e = max(e, abs(L[I] - L_ref[J]))
+            scale = max(scale, abs(L_ref[J]))
+            e1 = max(e1, abs(L1[I]))
+        end
+        check("J⁻¹ G C K D_s T, $label, dim $d", gmax(e) / gmax(scale), 1e-11)
+        check("uniform T gives zero, $label, dim $d", gmax(e1) / gmax(scale), 1e-12)
     end
 end
 

@@ -216,7 +216,10 @@ cylindrical axis odd 3.76 / even 2.99, resolved-θ 3.76, spherical origin
 3.00 (C6 `:neutral3`, `:cascade3`, `:cascade4`, `:brady_livescu`, then C8
 `:neutral3` and `:brady_livescu`, then C10 `:neutral3`), staggered
 operators 6.04 / 6.07 / 5.97 / 6.06 periodic (D_s, G, interpolation, L) and
-6.00 / 6.02 / 5.99 / 6.02 under the wall mirror, wall
+6.00 / 6.02 / 5.99 / 6.02 under the wall mirror and 6.01 / 5.98 / 6.00 /
+5.98 between symmetry planes (L on an odd field 6.01), L on the metric 6.06
+(stretched), 5.96 (cylindrical axis), 5.07 (resolved-θ axis), 4.03
+(spherical origin), 5.33 (spherical poles) and 1.00 (curved wall), wall
 evolution 4.01 (`:cascade3` 3.93, cascade filter 1.94, one-sided filter
 3.90, `:brady_livescu` 5.73, viscous no-slip 4.00, viscous slip 4.00,
 shear mode 4.67),

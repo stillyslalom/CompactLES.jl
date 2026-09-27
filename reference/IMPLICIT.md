@@ -101,6 +101,28 @@ interior order on data of its parity and first order at the wall node on
 data that are not. The measurements are in the appendix under
 [stiff diffusion](CALIBRATION_APPENDIX.md#wall-treatment-of-the-staggered-operator).
 
+A symmetry plane or a coordinate singularity lies half a cell beyond the end
+node, so a midpoint lies on the plane. The mirror is taken about that
+midpoint; an even plane value is an unknown of the line, eliminated from the
+row of the next midpoint at a low end and recovered into the halo slot
+beneath it. The folded line is half of a longer unfolded one, so the
+identities and the interior order carry over, and a paired fold runs the
+even and odd combinations through the two parity plans as the explicit
+operators do. On a curvilinear or stretched line the flux is `C K D_s T`
+with `C = J/h_d²` evaluated at the midpoints and the divergence takes
+`J⁻¹`, so `J W L` is symmetric in the node volumes. A curved wall's `C` is
+not even about the wall, which makes its node first order as a
+nonconstant κ does. Where the area vanishes oddly, at the cylindrical axis
+and the spherical poles, the flux `C K D_s T` continues evenly through the
+plane while `D_s T` is odd, so the smooth continuation, which the explicit
+divergence also takes, is not the mirror adjoint to `D_s`: `J W L` is
+symmetric there only up to a defect confined to the rows near the fold and
+falling with h, and conserves to second order
+([appendix](CALIBRATION_APPENDIX.md#the-staggered-operator-at-an-odd-area-fold)).
+The adjoint mirror would
+continue the flux as `|r| K T'`, which is inconsistent at the first node.
+The spherical origin's area is even and keeps both.
+
 The staggered form enters only the implicit part. The explicit molecular
 fluxes keep `D κ D`, so no current baseline moves. A conduction channel moved
 into the implicit part changes discretization with it, which is a numerics
@@ -183,16 +205,14 @@ one residual and are not updated in sequence, as H2 requires.
 
 1. **Staggered operator.** `src/staggered.jl`: the plans from nodes to
    midpoints and back and the midpoint interpolation of the coefficient,
-   periodic and with the wall mirror, on the distributed tridiagonal solve
-   of `plan_direction`; not reached from the right-hand side. Delivered on
-   uniform Cartesian lines, with sixth-order convergence rows, the adjoint
-   and symmetry identities in the serial suite, the decomposed solve against
-   the undivided one in the MPI suite, and an explicit conduction run
-   against the wide form (`bench/staggeredconduction.jl`). Remaining: the
-   half-offset folds of the symmetry plane and the coordinate
-   singularities, where a midpoint lies on the plane, and the curvilinear
-   metric, which puts the face area over the spacing into `K` at the
-   midpoints and `inv_J` on the divergence.
+   periodic, with the wall mirror and across the half-offset folds, on the
+   distributed tridiagonal solve of `plan_direction`, and on the metrics and
+   stretched grids the solver supports; not reached from the right-hand
+   side. Delivered with convergence rows (sixth order, fifth and fourth at
+   the first node of the singular folds, first at a curved wall node), the
+   adjoint and symmetry identities in the serial suite, the decomposed solve against the undivided one in the MPI suite,
+   off-rank folds included, and an explicit conduction run against the
+   wide form (`bench/staggeredconduction.jl`).
 2. **Implicit solve on one patch.** Matrix-free stage operator, `L₂`
    assembly on the patch metric, preconditioned conjugate gradients, and a
    multigrid preconditioner. Gate: manufactured constant- and
@@ -216,9 +236,14 @@ Spitzer–Härm coefficient with its flux limiter, and H6 the radiation energy.
 
 - Walls whose data are not of the mirror's parity: an isothermal wall with
   κ(T), where the odd mirror is inexact in `T''`, and a prescribed nonzero
-  wall flux. A summation-by-parts closure with diagonal norms and one
+  wall flux, and every curved wall, whose face factor is not even about the
+  wall. A summation-by-parts closure with diagonal norms and one
   modified row did not reach first-degree accuracy in a brief numerical
   search; wider closures and a non-diagonal node norm remain untried.
+- A symmetric operator at the cylindrical axis and the spherical poles,
+  which conjugate gradients need there: a closure of the first few rows,
+  or node weights near the fold, under which the smoothly continued
+  operator is self-adjoint. Until then those geometries take GMRES.
 - A flux limiter makes the coefficient depend on the gradient, so the
   Picard iteration may stall; JFNK with the limited flux is the fallback.
 - The iteration counts are measured in 1-D with an exact preconditioner

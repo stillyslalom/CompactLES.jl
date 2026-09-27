@@ -30,8 +30,12 @@
 #      the favorable phase of exp(sin(3x)).
 #   4b. Staggered operators — the implicit diffusion operator's derivatives
 #      between nodes and midpoints, the midpoint interpolation and their
-#      composition, periodic and under the wall mirror on fields of its
-#      parity: all six, since the mirror plans no closure row.
+#      composition, periodic, under the wall mirror and between two
+#      symmetry planes on fields of its parity: all six, since neither plans
+#      a closure row. The composition on the solver's metrics reads six on
+#      a stretched line, five and four through the folds of the axis, the
+#      poles and the origin, where J⁻¹ is singular, and one at the node of a
+#      curved wall.
 #   5. Smooth evolution — the final-time solution error of the wall window,
 #      or of the patch/level interface window, on cases with a reference
 #      free of closure error (test/smooth_cases.jl). These are the orders a
@@ -66,7 +70,10 @@
 #   C6 :brady_livescu 5.00 | C8 :neutral3 3.00 | C8 :brady_livescu 7.00 |
 #   C10 :neutral3 3.00
 #   staggered operators: periodic D_s 6.04 | G 6.07 | interpolation 5.97 |
-#   L 6.06 | wall mirror D_s 6.00 | G 6.02 | interpolation 5.99 | L 6.02
+#   L 6.06 | wall mirror D_s 6.00 | G 6.02 | interpolation 5.99 | L 6.02 |
+#   symmetry planes D_s 6.01 | G 5.98 | interpolation 6.00 | L 5.98 | L on an
+#   odd T 6.01 | L stretched 6.06 | cylindrical axis 5.96 | resolved-θ axis
+#   5.07 | spherical origin 4.03 | spherical poles 5.33 | curved wall 1.00
 #   wall evolution (window max norm, t = 0.4): inviscid C6 4.01 | inviscid C6
 #   :cascade3 3.93 | cascade filter 1.94 | onesided filter 3.90 |
 #   C6 :brady_livescu 5.73 | viscous no-slip C6 4.00 | viscous slip C6 4.00 |
@@ -93,7 +100,7 @@
 # the flux divergence at an interface end selects the cascade rows
 # (`interface_divergence_closures`) or the source scheme's.
 #
-# Those sixty-three numbers are also passed to each study as `recorded` and
+# Those seventy-four numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -626,6 +633,192 @@ staggered_study("staggered interpolation, wall mirror", (17, 33, 65), false, :in
                 expect=6.0, tol=0.5, recorded=5.99)
 staggered_study("staggered L = G K D_s, wall mirror", (17, 33, 65), false, :diffusion;
                 expect=6.0, tol=0.5, recorded=6.02)
+
+# The same operators between two symmetry planes half a cell beyond the end
+# nodes, where a midpoint lies on each plane: T and κ even through both, and
+# once an odd T, whose even flux is an unknown on the planes (slot N, and at
+# the low plane slot 0, eliminated from the row of midpoint 1). The folded
+# line is half of a periodic line, so the order is the interior's.
+function staggered_fold_errors(N, which; odd=false)
+    decomp = CL.Decomp((N, 1, 1), (false, false, false))
+    h = 1 / N
+    σ = odd ? -1 : 1
+    op = CL.StaggeredDiffusion(decomp, 1, h; parity=1, lo_fold=σ, hi_fold=σ)
+    T(x) = odd ? sinpi(x) * (1 + 0.3cospi(2x)) : cospi(2x) + 0.2cospi(3x)
+    dT(x) = odd ? pi * cospi(x) * (1 + 0.3cospi(2x)) - 0.6pi * sinpi(x) * sinpi(2x) :
+                  -2pi * sinpi(2x) - 0.6pi * sinpi(3x)
+    d2T(x) = odd ? -pi^2 * sinpi(x) * (1 + 0.3cospi(2x)) -
+                   1.2pi^2 * cospi(x) * sinpi(2x) - 1.2pi^2 * sinpi(x) * cospi(2x) :
+                   -4pi^2 * cospi(2x) - 1.8pi^2 * cospi(3x)
+    κ(x) = 1 + 0.5cospi(x)
+    dκ(x) = -0.5pi * sinpi(x)
+    pad = decomp.n_halo_d[1]
+    load!(f, fn, shift, r) = (for i in r; f[i+pad, 1, 1] = fn((i - 0.5) * h + shift); end; f)
+    Tf = load!(CL.field(decomp), T, 0.0, 1:N)
+    κf = load!(CL.field(decomp), κ, 0.0, 1:N)
+    out = CL.field(decomp)
+    if which === :to_mid
+        CL.apply_along!(out, op.to_mid, Tf, decomp)
+        fn, r, shift = dT, 0:N, h / 2
+    elseif which === :interpolate
+        CL.apply_along!(out, op.interpolate, κf, decomp)
+        fn, r, shift = κ, 0:N, h / 2
+    elseif which === :to_node
+        g = load!(CL.field(decomp), x -> κ(x) * dT(x), h / 2, 0:N)
+        CL.apply_along!(out, op.to_node, g, decomp)
+        fn, r, shift = x -> dκ(x) * dT(x) + κ(x) * d2T(x), 1:N, 0.0
+    else
+        CL.staggered_diffusion!(out, op, Tf, κf, decomp)
+        fn, r, shift = x -> dκ(x) * dT(x) + κ(x) * d2T(x), 1:N, 0.0
+    end
+    e = [out[i+pad, 1, 1] - fn((i - 0.5) * h + shift) for i in r]
+    return h, maximum(abs, e), sqrt(sum(abs2, e) / length(r))
+end
+
+# L along one dimension of a solver's metric, J⁻¹ ∂(C κ ∂T) with C = J/h_d²,
+# against the analytic operator, over the nodes `window` admits. The
+# coordinate-singularity rows keep to r < 1/2: the outer wall is curved, so
+# its node is first order (the last row measures it), and the compact solve
+# carries that error inward only over a few nodes.
+function staggered_metric_errors(N, case)
+    solver = case.build(N)
+    op = CL.StaggeredDiffusion(solver, case.dim)
+    decomp = solver.decomp
+    Tf = CL.field(decomp); κf = CL.field(decomp); out = CL.field(decomp)
+    fillf!(solver, Tf, case.T)
+    fillf!(solver, κf, case.κ)
+    CL.staggered_diffusion!(out, op, Tf, κf, decomp)
+    e = Float64[]
+    for k in 1:decomp.n_local[3], j in 1:decomp.n_local[2], i in 1:decomp.n_local[1]
+        x = (xcoord(solver, 1, i), xcoord(solver, 2, j), xcoord(solver, 3, k))
+        case.window(x...) || continue
+        push!(e, out[padded_index(solver, i, j, k)] - case.L(x...))
+    end
+    return solver.h[case.dim], maximum(abs, e), sqrt(sum(abs2, e) / length(e))
+end
+
+function staggered_study(name, Ns, errors::Function; expect, tol, recorded)
+    t0 = time(); c0 = compile_ns()
+    hs = Float64[]; errs = Float64[]; errs2 = Float64[]
+    for N in Ns
+        h, e, e2 = errors(N)
+        push!(hs, h); push!(errs, e); push!(errs2, e2)
+    end
+    p = observed_order(hs, errs)
+    @printf("%-38s  ", name)
+    for (N, e) in zip(Ns, errs)
+        @printf("N=%-4d %.3e  ", N, e)
+    end
+    @printf("order ≈ %.2f  (L2 %.2f)\n", p, observed_order(hs, errs2))
+    push!(PHASE_LOG, (name, time() - t0, (compile_ns() - c0) / 1e9))
+    _guard(name, p, expect, tol, recorded)
+    p
+end
+
+for (label, which, rec) in (("D_s", :to_mid, 6.01), ("G", :to_node, 5.98),
+                            ("interpolation", :interpolate, 6.00),
+                            ("L = G K D_s", :diffusion, 5.98))
+    staggered_study("staggered $label, symmetry planes", (16, 32, 64),
+                    N -> staggered_fold_errors(N, which);
+                    expect=6.0, tol=0.5, recorded=rec)
+end
+staggered_study("staggered L, symmetry planes, odd T", (16, 32, 64),
+                N -> staggered_fold_errors(N, :diffusion; odd=true);
+                expect=6.0, tol=0.5, recorded=6.01)
+
+# The metric rows. Radial fields are smooth through the singular point: the
+# Gaussian and its product with the Cartesian coordinate along the pairing,
+# which gives both the even and the odd combination of a paired fold. On the
+# sphere the polar field is z plus a multiple of x. The stretched line
+# clusters symmetrically (ξc = 1/2), so its map and the fields are even about
+# both walls and the mirror is exact there. At the first node of a fold J⁻¹
+# grows as 1/r (axis, poles) or 1/r² (origin) and multiplies the sixth-order
+# error of G, so those rows read five and four; the axisymmetric Gaussian
+# keeps six, since its flux r κ T' is even and the odd derivative that sets
+# the error vanishes at the axis.
+cluster = sine_cluster(0.0, 1.0, 0.5, 0.4)
+gauss(r) = exp(-4r^2)
+dgauss(r) = -8r * exp(-4r^2)
+d2gauss(r) = (64r^2 - 8) * exp(-4r^2)
+# 1/r^m ∂_r(r^m κ ∂_r T) for T = g(r) (1 + a r c) and κ = 1 + 0.5 r² + b r s,
+# with c and s angular factors held fixed along the line.
+function radial_L(r, m, a, c, b, s)
+    T1 = dgauss(r) * (1 + a * r * c) + gauss(r) * a * c
+    T2 = d2gauss(r) * (1 + a * r * c) + 2dgauss(r) * a * c
+    κ = 1 + 0.5r^2 + b * r * s
+    dκ = r + b * s
+    return dκ * T1 + κ * (T2 + m * T1 / r)
+end
+const STAGGERED_METRIC_CASES = (
+    (name="staggered L, stretched line", Ns=(17, 33, 65), expect=6.0, tol=0.5,
+     recorded=6.06, dim=1,
+     build=N -> Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       stretch=(cluster, nothing, nothing),
+                       art=ArtificialProperties(enabled=false)),
+     T=(x, y, z) -> cospi(2x) + 0.2cospi(3x), κ=(x, y, z) -> 1 + 0.5cospi(x),
+     L=(x, y, z) -> -0.5pi * sinpi(x) * (-2pi * sinpi(2x) - 0.6pi * sinpi(3x)) +
+                    (1 + 0.5cospi(x)) * (-4pi^2 * cospi(2x) - 1.8pi^2 * cospi(3x)),
+     window=(x, y, z) -> true),
+    (name="staggered L, cylindrical axis", Ns=(32, 64, 128), expect=6.0, tol=0.5,
+     recorded=5.96, dim=1,
+     build=N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
+                       metric=CylindricalMetric(),
+                       bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                       art=ArtificialProperties(enabled=false)),
+     T=(r, θ, z) -> gauss(r), κ=(r, θ, z) -> 1 + 0.5r^2,
+     L=(r, θ, z) -> radial_L(r, 1, 0.0, 0.0, 0.0, 0.0),
+     window=(r, θ, z) -> r < 0.5),
+    (name="staggered L, resolved-θ axis", Ns=(32, 64, 128), expect=5.0, tol=0.5,
+     recorded=5.07, dim=1,
+     build=N -> Solver(n_global=(N, 16, 1), L_domain=(1.0, 2π, 1.0),
+                       metric=CylindricalMetric(),
+                       bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+                       art=ArtificialProperties(enabled=false)),
+     T=(r, θ, z) -> gauss(r) * (1 + r * cos(θ)),
+     κ=(r, θ, z) -> 1 + 0.5r^2 + 0.2r * sin(θ),
+     L=(r, θ, z) -> radial_L(r, 1, 1.0, cos(θ), 0.2, sin(θ)),
+     window=(r, θ, z) -> r < 0.5),
+    (name="staggered L, spherical origin", Ns=(24, 48, 96), expect=4.0, tol=0.5,
+     recorded=4.03, dim=1,
+     build=N -> Solver(n_global=(N, 12, 12), L_domain=(1.0, π, 2π),
+                       metric=SphericalMetric(),
+                       bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
+                       art=ArtificialProperties(enabled=false)),
+     T=(r, θ, φ) -> gauss(r) * (1 + 0.5r * cos(θ)),
+     κ=(r, θ, φ) -> 1 + 0.5r^2 + 0.2r * sin(θ) * cos(φ),
+     L=(r, θ, φ) -> radial_L(r, 2, 0.5, cos(θ), 0.2, sin(θ) * cos(φ)),
+     window=(r, θ, φ) -> r < 0.5),
+    (name="staggered L, spherical poles", Ns=(16, 32, 64), expect=5.0, tol=0.5,
+     recorded=5.33, dim=2,
+     build=N -> Solver(n_global=(12, N, 12), L_domain=(1.0, π, 2π),
+                       metric=SphericalMetric(), origin=(0.5, 0.0, 0.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), (PoleBC(), PoleBC()),
+                            per3[3]),
+                       art=ArtificialProperties(enabled=false)),
+     T=(r, θ, φ) -> cos(θ) + 0.3sin(θ) * cos(φ),
+     κ=(r, θ, φ) -> 1 + 0.3cos(θ)^2,
+     # (1/(r² sinθ)) ∂_θ(sinθ κ ∂_θ T)
+     L=(r, θ, φ) -> begin
+         κ = 1 + 0.3cos(θ)^2; dκ = -0.6cos(θ) * sin(θ)
+         T1 = -sin(θ) + 0.3cos(θ) * cos(φ); T2 = -cos(θ) - 0.3sin(θ) * cos(φ)
+         (cos(θ) * κ * T1 + sin(θ) * (dκ * T1 + κ * T2)) / (r^2 * sin(θ))
+     end,
+     window=(r, θ, φ) -> true),
+    (name="staggered L, curved wall", Ns=(17, 33, 65), expect=1.0, tol=0.5,
+     recorded=1.00, dim=1,
+     build=N -> Solver(n_global=(N, 1, 12), L_domain=(1.0, 1.0, 0.5),
+                       metric=CylindricalMetric(), origin=(0.5, 0.0, 0.0),
+                       bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                       art=ArtificialProperties(enabled=false)),
+     T=(r, θ, z) -> cospi(r - 0.5), κ=(r, θ, z) -> 1.0,
+     L=(r, θ, z) -> -pi^2 * cospi(r - 0.5) - pi * sinpi(r - 0.5) / r,
+     window=(r, θ, z) -> true),
+)
+for case in STAGGERED_METRIC_CASES
+    staggered_study(case.name, case.Ns, N -> staggered_metric_errors(N, case);
+                    expect=case.expect, tol=case.tol, recorded=case.recorded)
+end
 
 println("\n=== smooth evolution: wall window, t = 0.4 ===")
 evolution_study("inviscid wall, C6, unfiltered", WALL_NS,

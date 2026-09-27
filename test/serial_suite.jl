@@ -643,6 +643,154 @@ end
     end
 end
 
+@testset "staggered operators: half-offset folds and curvilinear metric" begin
+    # A line of N nodes folded half a cell beyond an end is half of a longer
+    # line carrying the mirrored data: between two planes, a periodic line of
+    # 2N nodes; with a plane at one end and a wall at the other, a closed
+    # line of 2N nodes with walls of the same parity at both ends. Every
+    # operator on the folded line, the plane midpoints included (slot 0 at a
+    # low plane, slot N at a high one), must equal the doubled line's.
+    N = 12; h = 1 / N
+    smooth(x) = exp(sin(3x) + 0.3cos(7x)) + 0.2x
+    for (lo, hi) in ((true, true), (true, false), (false, true)), σ in (1, -1),
+        p in (1, -1), op in (:to_mid, :to_node, :interpolate)
+        (lo && hi) && p == -1 && continue          # no wall to take p
+        periodic = lo && hi
+        df = Decomp((N, 1, 1), (false, false, false))
+        dd = Decomp((2N, 1, 1), (periodic, false, false))
+        mid_in = op === :to_node
+        # Node j of the doubled line sits at (j - N - 1/2) h and its midpoint
+        # j at (j - N) h, with a plane at x = 0 (and between two planes a
+        # second one at x = N h, the periodic wrap). The folded line is its
+        # upper half below a low plane (index i + N) and its lower half above
+        # a high one (index i).
+        shift = lo ? N : 0
+        onplane(x) = abs(x) < h / 4 || (periodic && abs(abs(x) - N * h) < h / 4)
+        value(x) = onplane(x) && mid_in && σ < 0 ? 0.0 :
+                   x >= 0 ? smooth(x) : σ * smooth(-x)
+        pf = CL.plan_staggered(df, op, 1, h; parity=p, lo_fold=lo ? σ : nothing,
+                               hi_fold=hi ? σ : nothing)
+        pd = CL.plan_staggered(dd, op, 1, h; parity=p)
+        pad = df.n_halo
+        ff = field(df); fd = field(dd)
+        for j in 1:2N
+            fd[j+pad, 1, 1] = value((j - N - (mid_in ? 0.0 : 0.5)) * h)
+        end
+        for i in (mid_in && lo ? 0 : 1):N
+            ff[i+pad, 1, 1] = fd[i+shift+pad, 1, 1]
+        end
+        CL.exchange_dim!(fd, dd, 1)
+        outf = fill!(field(df), NaN); outd = field(dd)
+        apply_along!(outf, pf, ff, df)
+        apply_along!(outd, pd, fd, dd)
+        rows = mid_in ? (1:N) : ((lo ? 0 : 1):N)
+        e = maximum(abs(outf[i+pad, 1, 1] - outd[i+shift+pad, 1, 1]) for i in rows)
+        @test e < 1e-12 * maximum(abs, outd[pad+1:pad+2N, 1, 1])
+    end
+
+    # The adjoint identity between two planes, with weight h on every node
+    # and h/2 on the plane midpoints (slots 0 and N), holds for both parities,
+    # and W_n L is symmetric, negative semidefinite and, for the even
+    # temperature, conservative.
+    for σ in (1, -1)
+        df = Decomp((N, 1, 1), (false, false, false))
+        plans = (CL.plan_staggered(df, :to_mid, 1, h; lo_fold=σ, hi_fold=σ),
+                 CL.plan_staggered(df, :to_node, 1, h; lo_fold=-σ, hi_fold=-σ),
+                 CL.plan_staggered(df, :interpolate, 1, h; lo_fold=1, hi_fold=1))
+        pad = df.n_halo
+        mids = 0:N
+        dense(plan, rows, cols) = begin
+            M = zeros(length(rows), length(cols)); f = field(df); out = field(df)
+            for (c, j) in enumerate(cols)
+                f .= 0; f[j+pad, 1, 1] = 1
+                out .= NaN
+                apply_along!(out, plan, f, df)
+                M[:, c] = [out[i+pad, 1, 1] for i in rows]
+            end
+            M
+        end
+        D = dense(plans[1], mids, 1:N)
+        G = dense(plans[2], 1:N, mids)
+        Ip = dense(plans[3], mids, 1:N)
+        Wm = fill(h, N + 1); Wm[1] = Wm[end] = h / 2
+        @test norm(h .* G .+ D' * Diagonal(Wm)) < 1e-12 * norm(D) * h
+        κ = 1 .+ 0.5 .* cospi.(((1:N) .- 0.5) ./ N)
+        WL = h .* G * Diagonal(Ip * κ) * D
+        @test norm(WL - WL') < 1e-12 * norm(WL)
+        @test maximum(eigvals(Symmetric((WL + WL') / 2))) < 1e-10 * norm(WL)
+        σ == 1 && @test abs(sum(WL * sin.(1:N))) < 1e-11 * norm(WL)
+    end
+
+    # The metric: J W_n L with J W_n the node volumes is symmetric, negative
+    # semidefinite and conservative, tested on random vectors over the block,
+    # on every geometry the solver builds but the folds whose area vanishes
+    # oddly (the axis, the poles). There the flux continues smoothly through
+    # the singular set, which is not the mirror adjoint to D_s, and the
+    # defect is bounded instead. A constant carries no flux anywhere. W_n is
+    # h, and h/2 on a wall node.
+    noart = ArtificialProperties(enabled=false)
+    walls = (SlipWallBC(), SlipWallBC())
+    geometries = (
+        ("stretched line", 1, true, Solver(n_global=(17, 1, 1), L_domain=(1.0, 1.0, 1.0),
+            bcs=(walls, per3[2], per3[3]), art=noart,
+            stretch=(sine_cluster(0.0, 1.0, 0.3, 0.4), nothing, nothing))),
+        ("cylindrical shell", 1, true, Solver(n_global=(17, 1, 1), L_domain=(1.0, 1.0, 1.0),
+            metric=CylindricalMetric(), origin=(0.5, 0.0, 0.0),
+            bcs=(walls, per3[2], per3[3]), art=noart)),
+        ("cylindrical axis", 1, false, Solver(n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
+            metric=CylindricalMetric(), bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+            art=noart)),
+        ("resolved-θ axis", 1, false, Solver(n_global=(12, 12, 1), L_domain=(1.0, 2π, 1.0),
+            metric=CylindricalMetric(), bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]),
+            art=noart)),
+        ("cylindrical θ", 2, true, Solver(n_global=(12, 12, 1), L_domain=(1.0, 2π, 1.0),
+            metric=CylindricalMetric(), origin=(0.5, 0.0, 0.0),
+            bcs=(walls, per3[2], per3[3]), art=noart)),
+        ("spherical origin", 1, true, Solver(n_global=(12, 12, 12), L_domain=(1.0, π, 2π),
+            metric=SphericalMetric(), bcs=((OriginBC(), SlipWallBC()),
+            (PoleBC(), PoleBC()), per3[3]), art=noart)),
+        ("spherical poles", 2, false, Solver(n_global=(12, 12, 12), L_domain=(1.0, π, 2π),
+            metric=SphericalMetric(), bcs=((OriginBC(), SlipWallBC()),
+            (PoleBC(), PoleBC()), per3[3]), art=noart)),
+    )
+    for (label, d, symmetric, solver) in geometries
+        decomp = solver.decomp
+        op = CL.StaggeredDiffusion(solver, d)
+        pad = decomp.n_halo_d
+        inner = CartesianIndices(ntuple(k -> pad[k]+1:pad[k]+decomp.n_local[k], 3))
+        n = decomp.n_local[d]
+        closed = !decomp.periodic[d]
+        wall_lo = closed && (solver.folds[d] === nothing || !solver.folds[d].lo)
+        wall_hi = closed && (solver.folds[d] === nothing || !solver.folds[d].hi)
+        vol = zeros(size(solver.inv_J))
+        for I in inner
+            i = I[d] - pad[d]
+            w = solver.h[d] * ((i == 1 && wall_lo) || (i == n && wall_hi) ? 0.5 : 1.0)
+            vol[I] = w / solver.inv_J[I]
+        end
+        κ = field(decomp)
+        for I in inner
+            x = Tuple(I) .* 0.37
+            κ[I] = 1 + 0.3sin(x[1] + 2x[2]) * cos(x[3])
+        end
+        apply(u) = (out = field(decomp); t = copy(u);
+                    CL.staggered_diffusion!(out, op, t, copy(κ), decomp); out)
+        inprod(u, v) = sum(vol[I] * u[I] * v[I] for I in inner)
+        one_f = field(decomp); one_f[inner] .= 1
+        L1 = apply(one_f)
+        @test maximum(abs, L1[inner]) < 1e-9
+        for trial in 1:4
+            u = field(decomp); v = field(decomp)
+            u[inner] .= randn(size(inner)); v[inner] .= randn(size(inner))
+            Lu, Lv = apply(u), apply(v)
+            tol = symmetric ? 1e-11 : 1e-2
+            @test abs(inprod(u, Lv) - inprod(v, Lu)) < tol * abs(inprod(u, Lu))
+            @test inprod(u, Lu) < 0
+            @test abs(inprod(one_f, Lu)) < tol * abs(inprod(u, Lu))
+        end
+    end
+end
+
 @testset "closed-domain closures: polynomial exactness (deg ≤ 3)" begin
     solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),

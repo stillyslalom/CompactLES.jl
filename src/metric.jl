@@ -133,11 +133,13 @@ volume_parity(::SphericalMetric,   d::Int) = d == 2 ? -1 : 1
 # Computational coordinate of full-array index `if_` along d, and the
 # corresponding physical coordinate plus mapping Jacobian. ξ is clamped into
 # the map's domain for halo layers beyond a closed physical edge, whose geometry
-# values do not reach the answer (see the header).
-@inline function _phys_and_jac(solver, d::Int, if_::Int)
+# values do not reach the answer (see the header). `mid` moves the coordinate
+# half a spacing up, to the midpoint the staggered operators store at `if_`.
+@inline function _phys_and_jac(solver, d::Int, if_::Int, mid::Bool=false)
     ξ = solver.origin[d] + solver.coord_shift[d] +
         (solver.region.offset[d] + solver.decomp.offset[d] +
          (if_ - solver.decomp.n_halo_d[d]) - 1) * solver.h[d]
+    mid && (ξ += solver.h[d] / 2)
     st = solver.stretch[d]
     st === nothing && return ξ, one(ξ)
     ξc = clamp(ξ, zero(ξ), one(ξ))

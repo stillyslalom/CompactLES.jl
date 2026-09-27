@@ -54,7 +54,7 @@ section that moved it says so in one sentence and the older figure is gone.
 25. [The shared-file write](#the-shared-file-write) (`bench/hdf5xfer.jl`,
     `test/hdf5_tests.jl`)
 26. [Azimuthal mode truncation](#azimuthal-mode-truncation) (`polar_truncation`)
-27. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`, `bench/staggeredconduction.jl`)
+27. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`, `bench/staggeredconduction.jl`, `bench/staggeredfolds.jl`)
 28. [False activation on smooth fields](#false-activation-on-smooth-fields)
     (`bench/falseactivation.jl`)
 29. [The gas-gas acoustic interface](#the-gas-gas-acoustic-interface)
@@ -6868,6 +6868,42 @@ parity. On data that are not, the jump of an odd derivative in the mirrored exte
 first-order truncation at the wall node, from T''' and from κ' alike. For conduction behind an
 adiabatic wall with κ = κ(T) the solution has that parity (T', κ' = κ'(T) T' and T''' vanish
 at the wall), so the loss is confined to incompatible initial data.
+
+### The staggered operator at an odd-area fold
+
+```text
+julia --project=. -t 1 bench/staggeredfolds.jl
+```
+
+`L = J⁻¹ G C K D_s` along one line through a fold whose area vanishes oddly, the flux
+continued smoothly through the singular set as the explicit divergence continues it, with
+κ = 1. `asym` is ‖V L − (V L)ᵀ‖/‖V L‖ in the node volumes V = J W, `rows` the rows of the
+antisymmetric part above 1e-3 of the largest, `cons` the defect |Σ V L T|/Σ V|L T| on a
+smooth zero-flux T, then the largest real part of an eigenvalue of L and the largest
+eigenvalue of the symmetric part of V L over its norm. The symmetry plane is the control:
+
+```
+geometry             N       asym  rows       cons       Re λ      sym λ
+symmetry plane      16   9.92e-17     0   2.06e-15   1.46e-13   1.66e-18
+cylindrical axis    16   2.70e-03     6   9.40e-04   7.72e-14   2.42e-06
+spherical poles     16   9.21e-03    12   4.17e-03  -1.71e-15   1.18e-05
+symmetry plane      32   7.86e-17     0   5.22e-15   2.96e-14   9.67e-18
+cylindrical axis    32   9.30e-04     6   2.28e-04  -2.40e-13   4.17e-07
+spherical poles     32   3.28e-03    12   1.04e-03   3.19e-15   2.08e-06
+symmetry plane      64   6.45e-17     0   2.70e-14   9.93e-13  -4.05e-18
+cylindrical axis    64   3.25e-04     6   5.60e-05   1.00e-13   7.28e-08
+spherical poles     64   1.16e-03    12   2.61e-04  -2.57e-13   3.68e-07
+symmetry plane     128   9.44e-17     0   7.69e-14   6.85e-12  -2.97e-18
+cylindrical axis   128   1.14e-04     6   1.39e-05  -6.51e-12   1.28e-08
+spherical poles    128   4.11e-04    12   6.52e-05  -1.08e-13   6.52e-08
+```
+
+The asymmetry sits in the six rows nearest each fold and falls as h^1.5, the conservation
+defect falls at second order, and the spectrum of L stays real and nonpositive, but the
+symmetric part of V L carries a small positive eigenvalue, so V is not an energy norm there.
+The mirror adjoint to D_s, which continues the flux as |r| K T', is symmetric to round-off
+but inconsistent: its error at the first node does not fall with h. The spherical origin's area r² sinθ is even, and there the smooth continuation is the
+adjoint one.
 
 ### Staggered conduction against the wide form
 
