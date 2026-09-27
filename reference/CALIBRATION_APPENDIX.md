@@ -1148,6 +1148,31 @@ upper bound still comes from the one-dimensional battery. The lowest misfits of 
 those of the weakest filter at `C_mu = 0`, so the α = 0.49 fit, made at `C_mu = 0.002`, is
 conditional on that value.
 
+**Where 0.002 comes from.** Cook never published a calibration of it. [Cook and Cabot
+(2005)](https://www.osti.gov/servlets/purl/15011510) ran the r = 2 form at C_μ = 0.025 and
+C_β = 5 and gave C_μ = 0.002, C_β = 1 as the "recommended values for the empirical
+coefficients with r = 4"; [Cook (2007)](https://www.osti.gov/servlets/purl/902334) states
+that the five r = 4 constants "have been found to work well for a wide variety of test
+problems". Neither paper fits `C_mu` on Taylor–Green. Both run it at 64³ and compare
+enstrophy, the 2005 note against the semi-analytic solution to t ≈ 3.5, finding the model
+inert until vorticity reaches the grid scale, and the 2007 paper against two implicit-LES
+schemes as a test of resolving power. The evidence that μ\* supplies subgrid transfer is
+the 2005 note's second case, the Kang, Chester and Meneveau active-grid experiment at
+Re_λ ≈ 720 on a 192³ grid, where the model gives a k^(−5/3) spectrum and the measured decay
+and its absence corrupts the spectral flux. That case is far more under-resolved than
+Taylor–Green at Re = 1600 and 128³.
+
+The filter differs as well. The 2005 runs dealias by the 2/3 rule and filter nothing, so μ\*
+is the only grid-scale sink. The 2007 method adds a pentadiagonal eighth-order filter,
+α = 0.66624, β = 0.16688, after every RK4 substep, designed to remove the top tenth of the
+wavenumbers as sharply as possible; it is `pyranda_filter()`. Its transfer function is 0.966
+at 0.8 k_max and 0.579 at 0.9 k_max, against 0.754 and 0.371 for the production
+`compact_filter(0.45)` and 0.993 and 0.964 for α = 0.499. Under Cook's filter μ\* carries
+the transfer below about 0.85 k_max; under the production filter the filter carries 37% of
+the sink at 128³ and does that job itself, consistent with the zero fit above. The α = 0.499
+arm is the nearest to Cook's setting below 0.85 k_max but leaves the band above it almost
+unfiltered, so neither arm reproduces the configuration 0.002 was chosen in.
+
 ### The filter is the stabilizer
 
 At 32³, `filter_interval = 4` diverges and `filter_interval = 0` fails with

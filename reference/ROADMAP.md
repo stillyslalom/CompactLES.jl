@@ -56,10 +56,16 @@ details are in [DESIGN.md](DESIGN.md).
   the physical dissipation lies off the grid
   ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)). One-dimensional shocks
   cannot determine the shear channel, so no case in the repository supports a
-  positive value. Either set the default to zero once the one-dimensional
-  battery and a shocked three-dimensional case clear it, or find a case whose
-  history improves with μ\*, such as a shear layer or a higher Reynolds
-  number. The α = 0.49 filter fit was made at `C_mu = 0.002`, so a change to
+  positive value. Cook's 0.002 was never fitted: its evidence is decaying
+  turbulence at Re_λ ≈ 720 on 192³ (Kang et al.), under a 2/3-rule dealiasing
+  or the sharp `pyranda_filter()`, not the production filter
+  ([where 0.002 comes from](CALIBRATION_APPENDIX.md#c_mu-the-shear-viscosity)).
+  Either set the default to zero once the one-dimensional battery and a
+  shocked three-dimensional case clear it, or rerun that decaying-turbulence
+  case under `compact_filter(0.45)` and `pyranda_filter()`, which tells whether
+  a positive `C_mu` belongs to the method or to Cook's filter; a low-pressure
+  vortex core is a separate, stability case. The α = 0.49 filter fit was made
+  at `C_mu = 0.002`, so a change to
   `C_mu` reopens it. Retain `C_beta=1` unless new evidence overturns its
   completed refit; record error and dissipation attribution.
 
