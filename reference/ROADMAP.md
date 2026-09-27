@@ -219,7 +219,9 @@ filter time-scaling with N1.
   ([temporal order](CALIBRATION_APPENDIX.md#temporal-order)): the level
   interface is first order in `dt` from the once-per-step injection into the
   covered parent nodes, and injecting before every stage restores fourth order
-  at one restriction per stage; deciding that is open. The R1–R4 regressions,
+  at one restriction per stage; deciding that is open. Under the ghost-flux
+  default that time error leads a smooth subcycled level at the default CFL,
+  whose spatial order the level tests read only at `cfl = 0.125`. The R1–R4 regressions,
   the Makie checks in CI's documentation job, the scheduled validation
   battery (`.github/workflows/validation.yml`) and the skip accounting in the
   serial suite are in place. Remaining: parallel-HDF5 execution where the
@@ -355,7 +357,11 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   performance changes. Record hardware, MPI stack, precision, synchronization
   policy, repeat variability, and correctness with every result. Profile a
   `Nasa9Mixture` step there too with `bench/device_nasa9.jl`, which has run only
-  on the workstation GPU.
+  on the workstation GPU. The LLVM 22.1.8 `llc` in `AMDGPU_LLVM_Backend_jll`
+  miscompiles a short-circuit choice between two kernel arguments on gfx942 as
+  on gfx1030 ([amdgpu_shortcircuit_bug_report.md](bugreports/amdgpu_shortcircuit_bug_report.md));
+  a target run uses an AMDGPU.jl release on the version-23 backend, or relies on
+  the `ifelse` rule holding in every kernel.
   **Gate:** full single/refined/tiled runs on target hardware, including real device
   communication paths; report measured reproducibility rather than universal
   bitwise claims. Validate other advertised backends on their own hardware.
@@ -414,7 +420,9 @@ opt-in Float32 already exist; the tasks below extend or validate them.
 - [ ] **S9 — Implement azimuthal mode truncation in staged form.**
   Follow [MODE_TRUNCATION.md](MODE_TRUNCATION.md). Stages 1 and 2, cylindrical
   (`polar_truncation`, off by default) with θ serial or decomposed, are
-  delivered; calibration/defaults and the spherical azimuth remain.
+  delivered; calibration/defaults and the spherical azimuth remain. The rate
+  cap also caps the θ rate that `filter_weight` reads, so the θ filter pass
+  weakens wherever the inner rings set that rate; the calibration measures it.
   **Gate:** conservation and mode errors, pole/axis behavior, and achieved CFL/cost
   benefit. Keep this acoustic/geometric restriction distinct from the diffusive
   restriction addressed by H1.
@@ -479,7 +487,8 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   Process-grid guidance follows from the same count: for a fixed rank count
   the per-rank reduced cost is proportional to the sum of the cubes of the
   per-direction rank counts, so near-uniform grids minimize it and slabs
-  maximize it. **Depends on:** system-MPI cluster time for stage 1. **Gate:**
+  maximize it. **Depends on:** system-MPI cluster time for stage 1, and S14
+  before stage 2. **Gate:**
   the MPI suite at 2, 4 and 8 ranks, `bench/tgv_energy.jl` reproducing serial
   energy histories to round-off, and the node-scaling table re-measured at
   the largest rank count available with the probe's breakdown beside it.
@@ -501,6 +510,20 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   **Depends on:** a baseline decision.
   **Gate:** the core gate with explained baseline updates; time the inversion
   before and after at four species in the same session.
+
+- [ ] **S14 — Account for the decomposed pentadiagonal solve's departure from serial.**
+  A run with the pentadiagonal filter departs from its serial counterpart by
+  1e-13 to 1.4e-12 under either interface flux, on coarse nodes far from any
+  refinement, against about 7e-15 for the default tridiagonal filter and the
+  3e-15 that S12 sets as the bar for a decomposed solve. Whether the reduced
+  pentadiagonal system's conditioning, the order of the Allgathered sums or a
+  defect sets it is unknown. Measure the departure of one `BandLineSolver`
+  application against the serial solve at P = 2 to 8 with
+  `bench/reducedsolve.jl`, beside the reduced matrix's condition number, and
+  fix it or record it as the method's floor.
+  **Gate:** the MPI suite at 2, 4 and 8 ranks; if the solve changes, the core
+  gate and the serial-equivalence tolerances of the MPI suite's pentadiagonal
+  rows re-derived from the measurement.
 
 ## P2/P3: high-energy-density physics
 
