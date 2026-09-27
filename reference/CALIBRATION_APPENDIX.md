@@ -5179,7 +5179,13 @@ the regrid histories sum to 2.24e-4 in both, and no layout leaves [0, 1].
 
 **Cost.** Serial, one thread, median step over interleaved runs in one process, ghost over
 default: (64, 48, 48) in two patches 1.18 inviscid and 1.38 with the artificial properties and
-`mu = 1e-3`; a 2-D subcycled level of sixteen 37-node tiles 1.24 inviscid and 1.90 viscous. The
+`mu = 1e-3`; a 2-D subcycled level of sixteen 37-node tiles 1.24 inviscid. With `mu = 1e-3`,
+the artificial properties and the filter on, periodic, at the default level interpolation order of
+each path, Float32 / Float64 (Core i9-12900K, Julia 1.11.4, nine interleaved chunks of ten steps
+per configuration): a 2-D static 17² box on N = 96, global step, 1.28 / 1.30; the sixteen-tile
+subcycled level on N = 96 1.85 / 1.85; a 3-D static 13³ box on N = 40, global step, 1.73 / 1.78.
+The overhead is the same fraction of the step in both precisions, and Float32 gains no accuracy
+from it (the floor above). The
 inviscid overhead is one padded pass per component and interface dimension. The molecular
 part adds a pass, a halo exchange and a line solve per component and interface dimension,
 and at a coarse-fine face the compact derivatives of every component along every dimension
