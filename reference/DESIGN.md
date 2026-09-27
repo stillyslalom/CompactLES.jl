@@ -98,6 +98,7 @@ validation cases are discussed, and never a viscosity.
 | `src/operators.jl`        | `DirPlan`: bind a scheme to a dimension; line fill, distributed solve, scatter |
 | `src/operators_banded.jl` | `BandPlan`: the banded counterpart |
 | `src/staggered.jl`        | `StaggeredPlan`: the staggered compact derivatives between nodes and midpoints and the midpoint interpolation, with the wall mirror and the half-offset folds; `StaggeredPair`, their paired-fold form; `StaggeredDiffusion`, the implicit diffusion operator of [IMPLICIT.md](IMPLICIT.md) on the solver's metric |
+| `src/implicit.jl`         | `DiffusionStage`: the implicit stage `(I − γΔt L) T = r` on one patch, solved by conjugate gradients (GMRES at the axis and poles) preconditioned by a multigrid V-cycle on the second-order operator; `VariableLines`, its distributed tridiagonal lines with per-line coefficients |
 | `src/lines_device.jl`     | `DevicePlan`: the device mirror of a plan, one thread per line, reduced interface stage on the host |
 | `src/transfer.jl`         | AMR level-transfer operators: the invertible 3:1 compact filter pair and its conditioning |
 | `src/metric.jl`           | Cartesian/cylindrical/spherical metrics, stretch mappings, curvature corrections, momentum sources, the discrete geometric conservation law (GCL) |

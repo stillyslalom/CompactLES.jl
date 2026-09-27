@@ -829,6 +829,171 @@ end
     end
 end
 
+@testset "implicit diffusion stage" begin
+    # Tridiagonal lines with their own coefficients against a dense solve,
+    # closed and periodic, on one rank (the MPI suite splits them).
+    for periodic in (false, true)
+        n, L = 7, 3
+        vl = CL.VariableLines{Float64}(n, L, MPI.COMM_SELF, 1, 0, periodic)
+        vl.lower .= -rand(n, L); vl.upper .= -rand(n, L)
+        periodic || (vl.lower[1, :] .= 0; vl.upper[n, :] .= 0)
+        vl.diag .= 0.1 .+ rand(n, L) .- vl.lower .- vl.upper
+        CL.factor_lines!(vl)
+        B = randn(n, L); X = CL.solve_variable_lines!(copy(B), vl)
+        for l in 1:L
+            A = diagm(vl.diag[:, l])
+            for i in 1:n
+                A[i, mod1(i - 1, n)] += vl.lower[i, l]
+                A[i, mod1(i + 1, n)] += vl.upper[i, l]
+            end
+            @test norm(A * X[:, l] - B[:, l]) < 1e-12 * norm(B[:, l])
+        end
+    end
+
+    # ∇·(κ∇T) in the metric's coordinates, the inner derivative by a complex
+    # step and the outer by a sixth-order central difference.
+    function divergence(metric, active, Tfn, κfn, x)
+        J(y) = prod(CL.scalefactors(metric, y...))
+        total = 0.0
+        for d in 1:3
+            active[d] || continue
+            e = ntuple(k -> k == d ? 1.0 : 0.0, 3)
+            flux(s) = (y = x .+ s .* e;
+                       J(y) / CL.scalefactors(metric, y...)[d]^2 * κfn(y...) *
+                       imag(Tfn((y .+ 1e-30im .* e)...)) / 1e-30)
+            δ = 1e-4
+            total += sum(c * (flux(m * δ) - flux(-m * δ))
+                         for (m, c) in enumerate((3 / 4, -3 / 20, 1 / 60))) / δ
+        end
+        return total / J(x)
+    end
+    noart = ArtificialProperties(enabled=false)
+    walls = (SlipWallBC(), SlipWallBC())
+    axis = ((AxisBC(), SlipWallBC()), per3[2], per3[3])
+    gauss(r) = exp(-16r^2)
+    # name, solver of scale N, wall parity, whether V L is symmetric, the
+    # manufactured order and its tolerance, T and κ. The shell's curved walls
+    # are first order at the wall node, which the solve carries into a
+    # second-order solution; on the resolved axis T is negligible at the wall.
+    cases = (
+        ("walls", N -> Solver(n_global=(N + 1, N + 1, 1), L_domain=(1.0, 1.0, 1.0),
+                              bcs=(walls, walls, per3[3]), art=noart), 1, true, 6.0,
+         (x, y, z) -> cospi(x) * cospi(y) + 0.3cospi(2x),
+         (x, y, z) -> 1 + 0.5cospi(x) * cospi(2y)),
+        ("isothermal walls", N -> Solver(n_global=(N + 1, N + 1, 1),
+                                         L_domain=(1.0, 1.0, 1.0),
+                                         bcs=(walls, walls, per3[3]), art=noart),
+         -1, true, 6.0, (x, y, z) -> sinpi(x) * sinpi(y) * (1 + 0.3cospi(x)),
+         (x, y, z) -> 1 + 0.5cospi(x) * cospi(2y)),
+        ("symmetry planes", N -> Solver(n_global=(N, N + 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                        bcs=((SymmetryPlaneBC(), SymmetryPlaneBC()), walls,
+                                             per3[3]), art=noart), 1, true, 6.0,
+         (x, y, z) -> cospi(x) * cospi(y) + 0.3cospi(2x),
+         (x, y, z) -> 1 + 0.5cospi(x) * cospi(2y)),
+        ("stretched walls", N -> Solver(n_global=(N + 1, N + 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                        bcs=(walls, walls, per3[3]), art=noart,
+                                        stretch=(sine_cluster(0.0, 1.0, 0.5, 0.4), nothing,
+                                                 nothing)), 1, true, 6.0,
+         (x, y, z) -> cospi(x) * cospi(y) + 0.3cospi(2x),
+         (x, y, z) -> 1 + 0.5cospi(x) * cospi(2y)),
+        ("cylindrical shell", N -> Solver(n_global=(N + 1, N, 1), L_domain=(1.0, 2π, 1.0),
+                                          metric=CylindricalMetric(),
+                                          origin=(0.5, 0.0, 0.0),
+                                          bcs=(walls, per3[2], per3[3]), art=noart),
+         1, true, 2.0, (r, θ, z) -> cospi(r - 0.5) * (1 + 0.3cos(θ)),
+         (r, θ, z) -> 1 + 0.3r * sin(θ)),
+        ("resolved axis", N -> Solver(n_global=(N, N, 1), L_domain=(1.5, 2π, 1.0),
+                                      metric=CylindricalMetric(), bcs=axis, art=noart),
+         1, false, 6.0, (r, θ, z) -> gauss(r) * (1 + r * cos(θ)),
+         (r, θ, z) -> 1 + 0.5r^2 + 0.2r * sin(θ)),
+    )
+    γΔt = 0.01
+    for (label, build, parity, symmetric, order, Tfn, κfn) in cases
+        errs = Float64[]; hs = Float64[]
+        for N in (16, 32)
+            solver = build(N)
+            decomp = solver.decomp
+            stage = CL.DiffusionStage(solver; parity=parity)
+            @test stage.symmetric == symmetric
+            κ = field(decomp); exact = field(decomp); rhs = field(decomp)
+            fillf!(solver, κ, κfn); fillf!(solver, exact, Tfn)
+            fillf!(solver, rhs, (x...) -> Tfn(x...) - γΔt * divergence(
+                solver.metric, decomp.active, Tfn, κfn, Float64.(x)))
+            pad = CartesianIndex(decomp.n_halo_d)
+            for I in CartesianIndices(decomp.n_local)
+                stage.dirichlet[I] && (rhs[I+pad] = exact[I+pad] = 0)
+            end
+            T = copy(rhs)
+            result = CL.solve_stage!(T, stage, rhs, κ, γΔt)
+            @test result.converged
+            inner = interior(decomp)
+            push!(errs, maximum(abs, T[inner] .- exact[inner]))
+            push!(hs, solver.h[1])
+            # An odd temperature stays zero on the wall nodes.
+            parity < 0 && @test all(T[I+pad] == 0 for I in CartesianIndices(decomp.n_local)
+                                    if stage.dirichlet[I])
+            N == 16 || continue
+            # The multigrid cycle is a symmetric positive definite operator.
+            u = field(decomp); v = field(decomp); Bu = field(decomp); Bv = field(decomp)
+            u[inner] .= randn(size(inner)); v[inner] .= randn(size(inner))
+            CL._precondition!(Bu, stage, u); CL._precondition!(Bv, stage, v)
+            @test abs(dot(u[inner], Bv[inner]) - dot(v[inner], Bu[inner])) <
+                  1e-12 * abs(dot(u[inner], Bu[inner]))
+            @test dot(u[inner], Bu[inner]) > 0
+            # A uniform right-hand side returns unchanged without iterating.
+            parity < 0 && continue
+            rhs .= 1.3; T .= 1.3
+            uniform = CL.solve_stage!(T, stage, rhs, κ, 10.0)
+            @test uniform.iterations == 0
+            @test maximum(abs, T[inner] .- 1.3) < 1e-13
+        end
+        @test log(errs[1] / errs[2]) / log(hs[1] / hs[2]) > order - 0.3
+    end
+
+    # Iteration counts flat in the grid and in the step, from the explicit
+    # limit to four orders beyond it, for conjugate gradients on the walls and
+    # GMRES on the resolved axis.
+    for (build, parity) in ((cases[1][2], 1), (cases[6][2], 1))
+        counts = Int[]
+        for N in (16, 32), γ in (1e-3, 1e-1, 1e1)
+            solver = build(N)
+            stage = CL.DiffusionStage(solver; parity=parity)
+            κ = fillf!(solver, field(solver.decomp), (x, y, z) -> 1 + 0.5x * sin(3y))
+            rhs = fillf!(solver, field(solver.decomp),
+                         (x, y, z) -> exp(-3(x - 0.3)^2) * cos(y))
+            result = CL.solve_stage!(copy(rhs), stage, rhs, κ, γ)
+            @test result.converged
+            push!(counts, result.iterations)
+        end
+        @test maximum(counts) <= 20
+        @test all(abs.(counts[4:6] .- counts[1:3]) .<= 3)
+    end
+
+    # A spherical ball with its origin and poles, on the GMRES path: the
+    # residual of the solve and a uniform right-hand side.
+    solver = Solver(n_global=(12, 12, 12), L_domain=(1.5, π, 2π),
+                    metric=SphericalMetric(),
+                    bcs=((OriginBC(), SlipWallBC()), (PoleBC(), PoleBC()), per3[3]),
+                    art=noart)
+    decomp = solver.decomp
+    stage = CL.DiffusionStage(solver)
+    κ = fillf!(solver, field(decomp), (r, θ, φ) -> 1 + 0.5r^2 + 0.2r * sin(θ) * cos(φ))
+    rhs = fillf!(solver, field(decomp), (r, θ, φ) -> gauss(r) * (1 + 0.5r * cos(θ)))
+    T = copy(rhs)
+    result = CL.solve_stage!(T, stage, rhs, κ, 0.1)
+    out = CL.stage_operator!(field(decomp), stage, T, κ, 0.1)
+    inner = interior(decomp)
+    V = stage.volume[inner]
+    @test result.converged
+    @test sqrt(sum(V .* (out[inner] .- rhs[inner]) .^ 2) / sum(V .* rhs[inner] .^ 2)) < 1e-9
+    rhs .= 2.0; T .= 2.0
+    @test CL.solve_stage!(T, stage, rhs, κ, 10.0).iterations == 0
+    @test maximum(abs, T[inner] .- 2) < 1e-13
+
+    @test_throws ArgumentError CL.DiffusionStage(Solver(n_global=(16, 16, 1),
+        L_domain=(1.0, 1.0, 1.0), bcs=per3, art=noart, patch_grid=(2, 1, 1)))
+end
+
 @testset "closed-domain closures: polynomial exactness (deg ≤ 3)" begin
     solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),

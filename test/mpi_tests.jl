@@ -3492,6 +3492,78 @@ function test_staggered()
         check("J⁻¹ G C K D_s T, $label, dim $d", gmax(e) / gmax(scale), 1e-11)
         check("uniform T gives zero, $label, dim $d", gmax(e1) / gmax(scale), 1e-12)
     end
+    test_implicit_stage()
+end
+
+# The implicit diffusion stage (src/implicit.jl) on a decomposed solver
+# against the same stage on COMM_SELF: the solution of (I − γΔt L) T = r at
+# a stiffness far beyond the explicit limit, its residual evaluated by the
+# decomposed operator, and a uniform right-hand side, which must return at
+# once and unchanged. The preconditioner's aggregates and line systems
+# follow the blocks, so the two solves take different paths to the same
+# solution; the conjugate-gradient cases split the walls' dimension (both
+# parities) and the periodic one, and the GMRES cases the resolved axis
+# along the pairing dimension (the butterfly off-rank) and along both.
+function test_implicit_stage()
+    section("implicit stage: decomposed against undivided")
+    noart = ArtificialProperties(enabled=false)
+    walls(c, dims) =
+        Solver(n_global=(SPLITN, 16, 1), L_domain=(1.0, 1.0, 1.0),
+               bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]), art=noart,
+               comm=c, dims=dims)
+    periodic(c, dims) =
+        Solver(n_global=(16, SPLITN, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, art=noart,
+               comm=c, dims=dims)
+    cyl(c, dims) =
+        Solver(n_global=(24, SPLITN, 1), L_domain=(1.0, 2π, 1.0),
+               metric=CylindricalMetric(),
+               bcs=((AxisBC(), SlipWallBC()), per3[2], per3[3]), art=noart,
+               comm=c, dims=dims)
+    cases = (("walls, x split", walls, splitdims(1), 1),
+             ("isothermal walls, x split", walls, splitdims(1), -1),
+             ("periodic, y split", periodic, splitdims(2), 1),
+             ("resolved axis, θ split", cyl, splitdims(2), 1),
+             ("resolved axis, r and θ split", cyl, (2, np ÷ 2, 1), 1))
+    rfn(x, y, z) = exp(-3(x - 0.3)^2) * (1 + 0.3cos(2y)) * sinpi(x)
+    κfn(x, y, z) = 1 + 0.5x^2 + 0.2x * sin(y)
+    γΔt = 0.1
+    for (label, mk, dims, parity) in cases
+        s = mk(comm, dims)
+        ref = mk(MPI.COMM_SELF, (1, 1, 1))
+        solved = map((s, ref)) do sv
+            stage = CL.DiffusionStage(sv; parity=parity)
+            r = CL.field(sv.decomp); κ = CL.field(sv.decomp)
+            fillf!(sv, r, rfn); fillf!(sv, κ, κfn)
+            T = copy(r)
+            result = CL.solve_stage!(T, stage, r, κ, γΔt)
+            (stage, r, κ, T, result)
+        end
+        (stage, r, κ, T, result), (_, _, _, T_ref, _) = solved
+        # The residual through the decomposed operator, in the L2 norm the
+        # solve stops in.
+        out = CL.field(s.decomp)
+        CL.stage_operator!(out, stage, T, κ, γΔt)
+        num = 0.0; den = 0.0; e = 0.0; scale = 0.0
+        for I in CL.interior(s.decomp)
+            V = stage.volume[I]
+            num += V * (out[I] - r[I])^2; den += V * r[I]^2
+            loc = Tuple(I) .- s.decomp.n_halo_d
+            J = padded_index(ref, (loc .+ s.decomp.offset)...)
+            e = max(e, abs(T[I] - T_ref[J])); scale = max(scale, abs(T_ref[J]))
+        end
+        method = stage.symmetric ? "CG" : "GMRES"
+        check("$method converged, $label ($(result.iterations) it)",
+              gmax(result.converged ? 0.0 : 1.0) +
+              gmax(result.iterations) - MPI.Allreduce(result.iterations, min, comm), 0.5)
+        check("distributed residual, $label", sqrt(gsum(num) / gsum(den)), 1e-9)
+        check("against undivided, $label", gmax(e) / gmax(scale), 1e-8)
+        parity < 0 && continue       # the odd wall takes T − T_wall, not a constant
+        fill!(r, 1.5); T = copy(r)
+        uniform = CL.solve_stage!(T, stage, r, κ, γΔt)
+        e1 = maximum(abs(T[I] - r[I]) for I in CL.interior(s.decomp))
+        check("uniform r returns unchanged, $label",
+              gmax(e1) + gmax(uniform.iterations), 1e-12)
+    end
 end
 
 include("wall_flux_mpi.jl")

@@ -146,8 +146,9 @@ Each implicit stage solves `(I − γΔt L) Y = r`, nonlinear in `Y` through
 - **Krylov method.** Conjugate gradients while the system is symmetric
   (conduction alone); GMRES once exchange or anisotropy breaks the symmetry,
   and at the cylindrical axis and the spherical poles, where the staggered
-  operator is not symmetric in the rows next to the fold.
-  Krylov.jl provides both, matrix-free and allocation-free.
+  operator is not symmetric in the rows next to the fold. Both are written
+  in the package on the volume-weighted system over the padded fields, so
+  that each reduction is one collective and no dependency is added.
 - **Preconditioner.** `I − γΔt L₂`, assembled pointwise from the lagged
   coefficient over the patch's metric, inverted approximately by one
   multigrid V-cycle. On the structured patch grid this is the case HYPRE's
@@ -156,7 +157,10 @@ Each implicit stage solves `(I − γΔt L) Y = r`, nonlinear in `Y` through
   assembled `L₂`, a binding of HYPRE's Struct interface, or an in-house
   geometric cycle. The in-house cycle's line-relaxation smoother would
   reuse the distributed tridiagonal solver, since `L₂` along one grid line
-  is tridiagonal. Exchange
+  is tridiagonal. Stage 2 takes the in-house cycle: pairwise aggregation
+  with halved coarse conductances, zebra line relaxation on per-line
+  tridiagonal solves, and a dense coarsest solve replicated on every rank.
+  Exchange
   terms are local, so they join the preconditioner as a pointwise block
   (physics-based preconditioning in the sense of Knoll and Keyes, JCP 193,
   2004) without changing its sparsity.
@@ -219,12 +223,22 @@ one residual and are not updated in sequence, as H2 requires.
    adjoint and symmetry identities in the serial suite, the decomposed solve against the undivided one in the MPI suite,
    off-rank folds included, and an explicit conduction run against the
    wide form (`bench/staggeredconduction.jl`).
-2. **Implicit solve on one patch.** Matrix-free stage operator, `L₂`
-   assembly on the patch metric, preconditioned conjugate gradients, and a
-   multigrid preconditioner. Gate: manufactured constant- and
-   variable-coefficient heat conduction in every supported metric, iteration
-   counts flat in grid and step, freestream preservation, and the
-   distributed residual at 2, 4 and 8 ranks.
+2. **Implicit solve on one patch.** `src/implicit.jl`: the matrix-free
+   stage operator on the volume-weighted system, `L₂` assembled on the patch
+   metric, conjugate gradients (GMRES at the axis and poles) preconditioned
+   by one multigrid V-cycle on `L₂`; host storage only, not reached from the
+   right-hand side. Delivered with manufactured solutions at sixth order on
+   every geometry but the curved walls (second, from the first-order wall
+   node), iteration counts flat in grid and step on every two-dimensional
+   geometry and on three-dimensional Cartesian and cylindrical grids, a
+   uniform right-hand side returned without iterating, and the decomposed
+   solve against the undivided one in the MPI suite
+   ([the implicit stage](CALIBRATION_APPENDIX.md#the-implicit-stage)).
+   Remaining: the smoother on a spherical grid with its origin, where the
+   two angular directions dominate the radial one and the count grows with
+   the grid (plane relaxation is the candidate), and agglomeration of the
+   coarsest level, which holds one node per rank and is factorized densely
+   on every rank.
 3. **ARK integration of the existing conduction.** The 1T molecular
    conduction of the present solver as the first implicit component, so H1
    and H2 are verified before H3 exists. Gate: temporal order on the
@@ -251,12 +265,17 @@ Spitzer–Härm coefficient with its flux limiter, and H6 the radiation energy.
   applies conjugate gradients to the symmetric adjoint mirror, under which
   the correction contracts at every step size
   ([appendix](CALIBRATION_APPENDIX.md#symmetric-closures-at-an-odd-area-fold)).
-  The choice rests on the measured cost of each.
+  The choice rests on the measured cost of each. Stage 2 delivers GMRES,
+  which reaches 1e-10 in as many preconditioned iterations as conjugate
+  gradients on the symmetric geometries
+  ([appendix](CALIBRATION_APPENDIX.md#the-implicit-stage)); a correction
+  contracting by 0.14 per outer step needs about twelve outer steps to the
+  same tolerance, each an inner solve, and competes only if loose inner
+  solves keep that contraction.
 - A flux limiter makes the coefficient depend on the gradient, so the
   Picard iteration may stall; JFNK with the limited flux is the fallback.
-- The iteration counts are measured in 1-D with an exact preconditioner
-  inverse. A V-cycle in 3-D and a coefficient contrast beyond the measured
-  1e3 remain to be measured.
+- The V-cycle's counts are measured on smooth coefficients; a coefficient
+  contrast beyond the 1e3 of the 1-D study remains to be measured with it.
 - Whether the explicit molecular fluxes should also move to the staggered
   form, which would remove the filter's role at the Nyquist mode for the
   viscous terms, is a separate numerics question outside H1.

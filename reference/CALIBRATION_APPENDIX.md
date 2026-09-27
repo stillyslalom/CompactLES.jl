@@ -54,7 +54,7 @@ section that moved it says so in one sentence and the older figure is gone.
 25. [The shared-file write](#the-shared-file-write) (`bench/hdf5xfer.jl`,
     `test/hdf5_tests.jl`)
 26. [Azimuthal mode truncation](#azimuthal-mode-truncation) (`polar_truncation`)
-27. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`, `bench/staggeredconduction.jl`, `bench/staggeredfolds.jl`)
+27. [Stiff diffusion](#stiff-diffusion) (`bench/stiffdiffusion.jl`, `bench/staggeredconduction.jl`, `bench/staggeredfolds.jl`, `bench/staggeredclosure.jl`, `bench/implicitstage.jl`)
 28. [False activation on smooth fields](#false-activation-on-smooth-fields)
     (`bench/falseactivation.jl`)
 29. [The gas-gas acoustic interface](#the-gas-gas-acoustic-interface)
@@ -7167,6 +7167,90 @@ wall      staggered    128    316   7.483e-14   6.00    2.22e-16   5.040e-14
 On this single-mode solution the two forms agree to within 4% at sixth order, and both
 conserve Σ W T to round-off. The wide form carries the Nyquist perturbation unchanged; the
 staggered form removes it. Behind the adiabatic wall mirror the staggered run keeps sixth order.
+
+### The implicit stage
+
+```text
+julia --project=. -t 16 bench/implicitstage.jl part=iterations
+julia --project=. -t 16 bench/implicitstage.jl part=manufactured
+julia --project=. -t 16 bench/implicitstage.jl part=preconditioner
+```
+
+`(I − γΔt L) T = r` by `solve_stage!` of `src/implicit.jl` to rtol = 1e-10 in the L2 norm of
+the residual, with a smooth variable κ (κ_max/κ_min ≈ 3) and the manufactured T as r. The
+curved outer wall of the axis and origin grids lies at r = 1.5, where T = e^(−16 r²) is
+negligible. Iterations of conjugate gradients (CG) or GMRES, each one V-cycle, at three
+steps; R = γΔt κ_max/h_min² runs from 0.2–10 at the smallest step to 2e3–6e4 at the largest:
+
+```
+geometry                 method   N          γΔt = 1e-3  1e-1       10
+periodic 2-D                 CG   16/32/64   8/9/9    12/13/13   14/15/15
+walls 2-D                    CG   16/32/64   7/9/11   14/15/15   16/17/18
+isothermal walls 2-D         CG   16/32/64   7/9/10   14/16/18   17/19/22
+symmetry planes 2-D          CG   16/32/64   7/9/11   14/14/15   16/17/18
+stretched walls 2-D          CG   16/32/64   8/9/11   14/15/15   16/17/18
+cylindrical shell r-θ        CG   16/32/64   7/7/8    11/12/14   13/14/15
+cylindrical axis r-z      GMRES   16/32/64   7/9/11   14/15/15   17/18/18
+resolved axis r-θ         GMRES   16/32/64   8/10/11  13/14/15   16/17/18
+walls 3-D                    CG   12/24/48   6/8/9    13/13/14   15/16/16
+cylindrical axis r-θ-z    GMRES   12/24/48   8/10/11  13/15/17   17/20/23
+spherical shell, poles    GMRES   12/24/48   7/8/9    12/14/18   15/17/25
+spherical origin, poles   GMRES   12/24/48   12/19/53 17/33/79   20/38/97
+```
+
+Every grid but the spherical ball stays within a few iterations while R grows by four orders.
+The GMRES cases converge in the counts of the CG ones, so the asymmetry beside the axis costs
+nothing measurable. Manufactured solutions at γΔt = 0.01, variable κ, maximum error and its
+observed order (the constant-κ rows agree to two digits):
+
+```
+geometry                  N          max errors                orders   iterations
+periodic 2-D              16/32/64   2.38e-05 3.56e-07 5.50e-09  6.06 6.02   12/12/12
+walls 2-D                 16/32/64   1.19e-06 1.88e-08 2.94e-10  5.98 6.00   12/13/13
+isothermal walls 2-D      16/32/64   7.00e-07 1.10e-08 1.73e-10  5.99 5.99   11/13/14
+symmetry planes 2-D       16/32/64   1.18e-06 1.88e-08 2.92e-10  5.97 6.00   11/12/13
+stretched walls 2-D       16/32/64   1.07e-05 1.60e-07 2.46e-09  6.07 6.02   12/13/14
+cylindrical shell r-θ     16/32/64   1.42e-03 3.81e-04 9.82e-05  1.90 1.95   10/11/12
+cylindrical axis r-z      16/32/64   6.16e-04 8.74e-06 1.29e-07  6.14 6.08   12/13/14
+resolved axis r-θ         16/32/64   5.19e-04 7.52e-06 1.09e-07  5.97 6.03   12/13/14
+walls 3-D                 12/24/48   6.17e-06 9.82e-08 1.54e-09  5.97 5.99   10/11/12
+cylindrical axis r-θ-z    12/24/48   3.58e-03 5.52e-05 7.97e-07  6.02 6.11   12/13/14
+spherical origin, poles   12/24/48   3.82e-03 1.82e-04 4.65e-06  4.26 5.21   15/28/76
+spherical shell, poles    12/24/48   4.80e-03 1.29e-03 3.35e-04  1.89 1.94   10/11/14
+```
+
+The stage solution keeps the operator's sixth order through the walls of either parity, the
+symmetry planes, the stretching and the axis. A curved wall's first-order node gives a
+second-order solution (L2 order 2.00), and the ball's maximum error sits at the origin node,
+whose operator row is of fourth and fifth order (L2 order 6.01 at 48).
+
+GMRES iterations on the same systems at γΔt = 10, preconditioned by the cycle and by the exact
+inverse of the second-order operator:
+
+```
+geometry                  cycle | exact S⁻¹          cycle | exact S⁻¹
+periodic 2-D              N=32    15 |   10   N=64    15 |    6
+walls 2-D                 N=32    17 |    8   N=64    17 |    5
+isothermal walls 2-D      N=32    19 |    8   N=64    21 |    5
+cylindrical shell r-θ     N=32    14 |   12   N=64    15 |   12
+resolved axis r-θ         N=32    17 |   13   N=64    17 |   12
+walls 3-D                 N=16    15 |   11   N=32    16 |    8
+cylindrical axis r-θ-z    N=16    18 |   14   N=32    21 |   13
+spherical shell, poles    N=16    16 |   12   N=32    19 |   13
+spherical origin, poles   N=16    23 |   14   N=32    41 |   14
+```
+
+The pairing of the staggered operator with `L₂` is flat everywhere, the ball included; the
+growth on the ball is the cycle's. Near the origin both angular couplings dominate the radial
+one, and line relaxation does not smooth an error that varies slowly in both angles and
+alternates in r; plane relaxation would. Three choices of the cycle were measured by editing
+`src/implicit.jl` (CG counts at γΔt = 10, N = 16/32/64): the Galerkin coarse operator with a
+W-cycle gave 22/27/32 on the walls against 18/20/21 for the halved one with a V-cycle, and a
+W-cycle on the halved operator no fewer; relaxing every line of a direction at once gave
+23/32/47 on the cylindrical shell against 15/16/17 for the zebra colouring; and coarsening the
+angular dimensions with the others gave 29/38/52 on the three-dimensional axis grid (12/24/48)
+and 18/25/36 on the spherical shell, against 17/20/23 and 15/17/25 with the angular dimensions
+coarsened last, and did not change the ball.
 
 ## False activation on smooth fields
 
