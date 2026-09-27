@@ -50,18 +50,18 @@ details are in [DESIGN.md](DESIGN.md).
 - [x] **N3** — `run!` primes the artificial coefficients, which removed the wall
   and axis CFL ceilings; the spherical origin keeps its own (commit `c407e0b`).
 
-- [ ] **N4 — Refit artificial shear viscosity after the filter policy is fixed.**
-  Fit `C_mu` under the adopted smoother/detector on a 3-D case with an
-  unresolved cascade, scored on the history misfit and not the peak, which is
-  void as an estimator at 128³. One-dimensional shocks cannot determine the
-  shear channel, and on Taylor–Green at 64³ the best-fitting `C_mu` is zero
-  under both the production and the near-off filter
-  ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)), so confirm that at
-  128³ and choose the case accordingly; that confirmation is the one item N1
-  left open, and it needs cluster time
-  ([n1_recal128.sbatch](../bench/slurm/n1_recal128.sbatch) holds the leg).
-  **Depends on:** N1 and the 3-D campaign. Retain `C_beta=1` unless new evidence
-  overturns its completed refit; record error and dissipation attribution.
+- [ ] **N4 — Decide the artificial shear viscosity.** Scored on the history
+  misfit, Taylor–Green at Re = 1600 fits best at `C_mu = 0` at 64³ and at 128³,
+  under both the production and the near-off filter, and at 128³ a fifth of
+  the physical dissipation lies off the grid
+  ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)). One-dimensional shocks
+  cannot determine the shear channel, so no case in the repository supports a
+  positive value. Either set the default to zero once the one-dimensional
+  battery and a shocked three-dimensional case clear it, or find a case whose
+  history improves with μ\*, such as a shear layer or a higher Reynolds
+  number. The α = 0.49 filter fit was made at `C_mu = 0.002`, so a change to
+  `C_mu` reopens it. Retain `C_beta=1` unless new evidence overturns its
+  completed refit; record error and dissipation attribution.
 
 - [x] **N5** — Directional bulk viscosity was measured on anisotropic Noh cases
   and rejected; the scalar form is retained (commit `7dd161f`).

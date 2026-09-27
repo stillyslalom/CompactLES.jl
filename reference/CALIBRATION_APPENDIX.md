@@ -1094,9 +1094,8 @@ and a peak 0.63% away, so the conclusions are unaffected.
 underpredicts the reference peak and raising the constant moves further away. The 16-fold
 range spans 1.7% in the peak while the 128³ residual is 6% and of one sign, three and a half
 times larger, and the 256³ row overshoots on the same estimator, so that residual belongs to
-the resolution and configuration. **Retain 0.002**, consistent with the case rather than
-determined by it. μ\* costs 43% of wall time at 128³, 21% per step from `compute_artificial!`
-plus 18% more steps.
+the resolution and configuration; the histories below decide what the peak cannot. μ\*
+costs 43% of wall time at 128³, 21% per step from `compute_artificial!` plus 18% more steps.
 
 **Removing μ\* improves the fit at 64³.** Three controls at 64³ with the Gaussian smoother,
 `cfl = 0.35` and `filter_interval = 1`:
@@ -1114,15 +1113,40 @@ art off                -0.40%        -0.02      3.446e-2       1.593e-1
 ```
 
 μ\* carries 17.6% of the sink at α = 0.499 and 4.7% at α = 0.45 and the histories are worse
-for it in both arms, so the best-fitting `C_mu` here is zero. The case is close to resolved
-at 64³ and closer above, so what is measured is excess dissipation added, not subgrid
-dissipation contributed; `C_mu` needs a case with an unresolved cascade, and the upper bound
-still comes from the one-dimensional battery. The budget closes to between −3.0% and +1.1%
-across the α = 0.45 arm and the deficit grows to −12.8% as the damping is removed, between
-grid-scale energy from a central compact scheme without dealiasing and a windowed −dKE/dt
-read against instantaneous channels on the curved flank of the peak, unseparated. A
-proportional bias in the filter probe is excluded, the deficit being largest where the
-filter's share is smallest.
+for it in both arms, so the best-fitting `C_mu` here is zero. The budget closes to between
+−3.0% and +1.1% across the α = 0.45 arm and the deficit grows to −12.8% as the damping is
+removed, between grid-scale energy from a central compact scheme without dealiasing and a
+windowed −dKE/dt read against instantaneous channels on the curved flank of the peak,
+unseparated. A proportional bias in the filter probe is excluded, the deficit being largest
+where the filter's share is smallest.
+
+**Removing μ\* improves the fit at 128³.** The same controls at 128³ under the production
+defaults (Gaussian smoother, `cfl = 0.5`, `filter_cfl = 0.35`, `filter_interval = 1`), each
+run on one RX 6800 XT in Float64 through `backend=amdgpu`, 32 to 51 minutes a run, with the
+shares at the peak:
+
+```
+alpha = 0.45        steps  peak vs window  peak time  KE misfit  -dKE/dt misfit  mu*   filter
+full (C_mu 0.002)    9009      -3.91%        -0.04    6.711e-3     4.686e-2     2.7%   36.6%
+C_mu = 0             9036      -3.49%        -0.03    5.551e-3     4.128e-2     0      38.5%
+art off              7848      -3.32%        -0.03    4.429e-3     3.652e-2     0      36.3%
+
+alpha = 0.499
+full (C_mu 0.002)   10847      +3.17%        -0.07    4.954e-3     2.876e-2     9.3%   15.3%
+C_mu = 0            11116      +3.79%        -0.04    1.964e-3     2.052e-2     0      20.0%
+```
+
+Setting `C_mu = 0` lowers the kinetic-energy and dissipation misfits by 17% and 12% at
+α = 0.45 and by 60% and 29% at α = 0.499, against a resolving power of 0.5% and 4%
+([cadence and α](#cadence-and-alpha-are-one-axis)), while the α = 0.499 peak moves from
+3.2% to 3.8% above the windowed reference. The best-fitting `C_mu` at 128³ is zero under
+both filters. The case is not resolved there: `k_max η` is 0.75 and a fifth of the physical
+dissipation lies off the grid ([spectra](#spectra)), so a subgrid viscosity has missing
+dissipation to supply, and removing μ\* raises the filter's share at α = 0.499 from 15.3% to
+20.0%. Taylor–Green at Re = 1600 selects no positive `C_mu` at either resolution, and the
+upper bound still comes from the one-dimensional battery. The lowest misfits of the five are
+those of the weakest filter at `C_mu = 0`, so the α = 0.49 fit, made at `C_mu = 0.002`, is
+conditional on that value.
 
 ### The filter is the stabilizer
 
