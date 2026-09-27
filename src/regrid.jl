@@ -1598,9 +1598,18 @@ end
 # first test. Returns whether `regrid!` ran, which is the same on every rank;
 # a check that changes no level can still write the state (the hierarchy
 # regrid's restriction, the coefficient priming's boundary conditions).
-_maybe_regrid!(solver::Solver, Q, workspace::Workspace, save) = false
+#
+# Under a positive `validity_interval` the state the check leaves is swept
+# before the savepoint is rebuilt from it. A new tile's state is interpolated
+# from its parent and no step has produced it, so it is a state entering a
+# step whatever the cadence says. A rejection raises rather than rolling
+# back: the savepoint predates the layout and cannot be restored onto it.
+_maybe_regrid!(solver::Solver, Q, workspace::Workspace, save,
+               control=solver.control, floors=(0.0, 0.0)) = false
 function _maybe_regrid!(solver::Solver, states::Vector{<:ConservedState},
-                        workspace::Workspace, save)
+                        workspace::Workspace, save,
+                        control::StepControl=solver.control,
+                        floors::Tuple{Float64,Float64}=(0.0, 0.0))
     spec = getfield(solver, :regrid)
     spec === nothing && return false
     solver.step - spec.last_step >= spec.interval || return false
@@ -1611,7 +1620,13 @@ function _maybe_regrid!(solver::Solver, states::Vector{<:ConservedState},
     # they run, and the rest is charged here.
     t0 = time_ns()
     wait0 = solver.wall_wait
-    regrid!(solver, states, workspace, save)
+    # `regrid!` with the savepoint refresh after the sweep.
+    changed = _regrid_impl!(solver, states, workspace, save)
+    _regrid_prime!(solver, states, workspace, nothing, changed)
+    control.validity_interval > 0 &&
+        validate_state!(solver, states; control=control,
+                        stage="the state after a regrid check", floors=floors)
+    changed && _rebank!(solver, states, save)
     spec.wall_regrid += (time_ns() - t0) / 1e9 - (solver.wall_wait - wait0)
     return true
 end

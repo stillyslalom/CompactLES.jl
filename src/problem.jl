@@ -303,11 +303,11 @@ _merge_local_report(a, b) =
 # Two reductions rather than one: the counts add and the extrema do not. Both
 # are small and this runs once per validation, not once per step of a run that
 # has not asked for one.
-function _reduce_state_report(solver::Solver, local_report)
+# `comm` is a level's communicator for the substep sweep of a refined level.
+function _reduce_state_report(solver::Solver, local_report, comm=solver.comm)
     t0 = time_ns()
-    counts = MPI.Allreduce(collect(Float64.(local_report[1:7])), +, solver.comm)
-    extrema_reduced = MPI.Allreduce([local_report[8], local_report[9]], min,
-                                    solver.comm)
+    counts = MPI.Allreduce(collect(Float64.(local_report[1:7])), +, comm)
+    extrema_reduced = MPI.Allreduce([local_report[8], local_report[9]], min, comm)
     _wait!(solver, t0)
     return StateReport(round(Int, counts[1]), round(Int, counts[2]),
                        round(Int, counts[3]), round(Int, counts[4]),

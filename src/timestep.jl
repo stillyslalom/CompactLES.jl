@@ -335,6 +335,7 @@ function subcycled_step!(solver::Solver, states::Vector{<:ConservedState},
                                              prepared, solver.control)
     status == SUBSTEP_CFL && throw(_substep_cfl_failure(solver, guard, dt,
                                                         solver.control))
+    status == SUBSTEP_INVALID && throw(_substep_invalid_failure(solver, guard, dt))
     _check_transport_status(solver, status)
     return states
 end
@@ -353,9 +354,65 @@ mutable struct SubstepCFLGuard{T}
     level::Int
     stage::Int
     count::Int
+    # The substep state sweep below: the level and step index of the rejected
+    # substep and the report, on the owners of that level; zeros elsewhere.
+    invalid_level::Int
+    invalid_count::Int
+    invalid_report::StateReport
 end
 
-SubstepCFLGuard(dt) = SubstepCFLGuard(zero(dt), zero(dt), 0, 0, 0)
+SubstepCFLGuard(dt) = SubstepCFLGuard(zero(dt), zero(dt), 0, 0, 0, 0, 0, StateReport())
+
+# A refined level's substep ends at a state that no root-step sweep reads:
+# the first two substeps of each parent step are overwritten by the third
+# before the composite is swept, and the positivity failsafe acts on the
+# composite only. On the validity cadence under `:strict`, each substep of
+# a level below the root is swept over that level's patches and reduced over
+# its communicator, after its filter and shell imposition; a rejection climbs
+# out of the recursion as a status, as `SUBSTEP_CFL` does, and reaches
+# `run!`'s rollback. `:repair` is left to the composite, since its floors and
+# its reduction span the whole run, and `:permissive` would only report.
+const SUBSTEP_INVALID = UInt8(0x40)
+
+_substep_validity(solver, control) =
+    control.validity === :strict && control.validity_interval > 0 &&
+    solver.step % control.validity_interval == 0
+
+function _substep_validity_status!(solver, lev, states, control, guard, count)
+    patches = getfield(solver, :patches)
+    # The sweep is a host loop and the storage choice is solver-wide, so
+    # every owner of the level skips it together (see `state_report`).
+    _cpu_storage(states[1]) || return UInt8(0)
+    acc = _empty_local_report()
+    for pi in lev.patches
+        acc = _merge_local_report(acc,
+                  _local_state_report(PatchSolver(solver, patches[pi]), states[pi],
+                                      control.species_band))
+    end
+    report = _reduce_state_report(solver, acc, lev.level_comm.comm)
+    state_valid(report) && return UInt8(0)
+    guard.invalid_level = lev.index
+    guard.invalid_count = count
+    guard.invalid_report = report
+    return SUBSTEP_INVALID
+end
+
+# Collective over the run: the status reaches every root rank together, and
+# the one extra reduction gives each of them the owners' report.
+function _substep_invalid_failure(solver, guard, root_dt)
+    r = guard.invalid_report
+    t0 = time_ns()
+    counts = MPI.Allreduce([guard.invalid_level, guard.invalid_count, r.points,
+                            r.nonfinite, r.negative_density, r.negative_species,
+                            r.inadmissible, r.unrecoverable, r.extrapolated],
+                           max, solver.comm)
+    mins = MPI.Allreduce([r.rho_min, r.e_min], min, solver.comm)
+    _wait!(solver, t0)
+    report = StateReport(counts[3:9]..., mins[1], mins[2])
+    return SolverFailure(:invalid_state, solver.step, solver.t, root_dt, solver.cfl,
+        "the state after substep $(counts[2]) of refined level $(counts[1]) " *
+        "rejected under validity = :strict: $report")
+end
 
 function _refreshed_substep_status!(solver, lev, states, dt, stage, count,
                                     control, guard)
@@ -423,6 +480,7 @@ function _subcycled_run_step!(solver, Q, workspace, dt, prepared, control)
                                              dt, prepared, control)
     status == 0 && return nothing
     status == SUBSTEP_CFL && return _substep_cfl_failure(solver, guard, dt, control)
+    status == SUBSTEP_INVALID && return _substep_invalid_failure(solver, guard, dt)
     _check_transport_status(solver, status)
     return nothing
 end
@@ -529,6 +587,10 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
         # next substep (or the restriction) reads a consistent boundary.
         shell!(θ_end)
     end
+    if ℓ > 1 && _substep_validity(solver, control)
+        status = _substep_validity_status!(solver, lev, states, control, guard, count)
+        status == 0 || return status
+    end
     child === nothing && return _prepare_level_transport!(
         solver, lev, states, false, false, lev.level_comm.comm)
     # The t^{n+1} Hermite endpoint: the conditions are already enforced on
@@ -548,7 +610,8 @@ function _advance_level!(solver::Solver, ℓ::Int, states, dQs, dus, t0, dt,
             status == 0 || break
         end
     end
-    if transport_has_domain(solver.transport) || control.substep_cfl > 0
+    if transport_has_domain(solver.transport) || control.substep_cfl > 0 ||
+       _substep_validity(solver, control)
         status = MPI.Allreduce(status, max, lev.level_comm.comm)
         status == 0 || return status
     end
@@ -1603,7 +1666,8 @@ function run!(solver::Solver, Q, workspace::Workspace;
         # itself and report that as solver cost.
         wall_0 = time_ns()
         solver.wall_wait = 0.0
-        _maybe_regrid!(solver, Q, workspace, save) && (levels_synced = false)
+        _maybe_regrid!(solver, Q, workspace, save, control,
+                       (rho_floor, e_floor)) && (levels_synced = false)
         _presync!(solver, Q, !levels_synced || FORCE_PRESYNC_RESTRICT[])
         levels_synced = false
         # Boundary conditions before the rate measurement, for two reasons. The

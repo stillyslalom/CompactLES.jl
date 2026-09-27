@@ -248,7 +248,14 @@ repair changes states produced by the scheme but does not change the scheme.
   rollback the step checks use, so `retries` recovers from it and the endpoint
   check cannot bypass that recovery. The sweep is serial over the interior and
   calls the EOS at every point, which is why the per-step check is off by
-  default rather than merely cheap.
+  default rather than merely cheap. A positive interval also validates the
+  state every regrid check leaves, whatever the step, since a new tile's
+  state is interpolated and no step has produced it; that rejection raises
+  without a rollback, the savepoint having the old layout. Under `:strict`
+  it also validates, on the same steps as the state entering them, the state
+  of every refined-level substep of a subcycled hierarchy, of which only the
+  last survives into the state the step returns; that rejection takes the
+  rollback. A [`StateGuard`](@ref) sees neither.
 
 ## Refreshed substeps
 

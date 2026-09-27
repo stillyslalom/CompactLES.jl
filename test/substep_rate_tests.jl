@@ -26,6 +26,19 @@ function CL.add_source!(::FinestKick, ps, dQ, Q, t)
     return dQ
 end
 
+# Drains the density of the deepest level only, so the first state to go
+# invalid is a level-2 substep, which no root-step sweep reads.
+struct FinestDrain end
+function CL.add_source!(::FinestDrain, ps, dQ, Q, t)
+    ps.patch.level == 2 || return dQ
+    d = ps.decomp
+    o1, o2, o3 = d.n_halo_d
+    @inbounds for k in 1:d.n_local[3], j in 1:d.n_local[2], i in 1:d.n_local[1]
+        dQ[i + o1, j + o2, k + o3, 1] -= 1e6
+    end
+    return dQ
+end
+
 function nested(; control=StepControl(), cfl=0.2, sources=())
     N = max(96, 24 * NP)
     r1 = BlockRegion((N ÷ 2 - 8, 0, 0), (16, 1, 1))
@@ -166,6 +179,75 @@ end
         CL.FORCE_KA[] = false
     end
     @test solver.step == 1
+end
+
+function collective_failure(f, reason)
+    err = try
+        f(); nothing
+    catch caught
+        caught
+    end
+    ok = err isa SolverFailure && err.reason === reason
+    @test MPI.Allreduce(Int(ok), +, COMM) == NP
+    @test ok
+    return err
+end
+
+@testset "state sweeps of refined substeps and regrid checks" begin
+    # Without a validity cadence the drained substep goes unread and the step
+    # completes; with one it is rejected at the first level-2 substep.
+    solver, Q = nested(sources=(FinestDrain(),))
+    step!(solver, Q, Workspace(Q), 1e-4)
+    @test solver.step == 0
+    strict = StepControl(validity_interval=1)
+    solver, Q = nested(control=strict, sources=(FinestDrain(),))
+    err = collective_failure(:invalid_state) do
+        step!(solver, Q, Workspace(Q), 1e-4)
+    end
+    @test occursin("substep 1 of refined level 2", err.detail)
+    solver, Q = nested(control=strict, sources=(FinestDrain(),))
+    err = collective_failure(:invalid_state) do
+        run!(solver, Q; tfinal=1.0, nmax=1)
+    end
+    @test occursin("substep", err.detail) && solver.step == 0
+    # `:repair` leaves the substeps to the composite.
+    @test !CL._substep_validity(solver, StepControl(validity=:repair,
+                                                    floor_ratio=1e-6,
+                                                    validity_interval=1))
+
+    # A state written after step 5 reaches the regrid check at the top of the
+    # next iteration before the step's own checks: with a validity cadence
+    # that never falls on step 5 the check's sweep rejects it, and without one
+    # `check_step` does.
+    wall = (SlipWallBC(), SlipWallBC())
+    function sod(control)
+        s = Solver(n_global=(201, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=(wall, PER[2], PER[3]), dims=(NP, 1, 1), cfl=0.2,
+                   subcycle=true, filter_cfl=0.0, regrid_interval=5,
+                   refine=BlockRegion((85, 0, 0), (31, 1, 1)), tile=8,
+                   control=control)
+        states = allocate_state(s)
+        initialize!(s, states, (x, y, z) -> x < 0.5 ?
+            Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
+        return s, states
+    end
+    corrupt = Callback(EveryStep(), function (s, states)
+        if s.step == 5 && MPI.Comm_rank(COMM) == 0
+            o = s.patches[1].decomp.n_halo_d
+            states[1][3 + o[1], 1 + o[2], 1 + o[3], 1] = -1.0
+        end
+        return false
+    end)
+    for (control, reason) in ((StepControl(validity_interval=1000), :invalid_state),
+                              (StepControl(), :negative_density))
+        s, states = sod(control)
+        err = collective_failure(reason) do
+            run!(s, states; tfinal=1.0, nmax=20, callback=corrupt)
+        end
+        @test s.step == 5
+        reason === :invalid_state &&
+            @test occursin("after a regrid check", err.detail)
+    end
 end
 
 end # module

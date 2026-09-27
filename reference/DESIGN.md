@@ -1283,9 +1283,10 @@ report rejects:
 
 A mass fraction counts as negative only below `-StepControl.species_band`. A
 captured species interface is a few cells wide at any resolution and lies about
-1% outside [0, 1] under the artificial mass-fraction bound, against 10–20%
+1% outside [0, 1] under the artificial mass-fraction bound, against 5–7%
 without it, so the band separates a bounded interface from an unbounded one. It
-is a separate threshold from the bound's own dead band `Y_tolerance`.
+is a separate threshold from the bound's own dead band `Y_tolerance`
+([below](#boundedness-of-the-composition)).
 
 `setup` validates the initial state. `run!` validates the state entering the
 call, the state it returns, and, on the cadence `StepControl.validity_interval`
@@ -1297,7 +1298,8 @@ invalid state by restoring the savepoint and lowering the CFL. The endpoint
 check is inside the step loop for that reason: a check placed after the loop
 would raise past the recovery rather than into it. `StateGuard` remains
 available as a callback for a caller that wants the sweep on its own schedule,
-and raises from inside the callback rather than through the rollback.
+and raises from inside the callback rather than through the rollback. The
+states each sweep reads are tabulated [below](#where-the-sweeps-read-the-state).
 
 ### What a repair promises
 
@@ -1335,6 +1337,113 @@ taste. Converging-shock runs carry cells of negative internal energy for their
 whole duration while reaching the correct plateau, and repairing those cells
 terminates the run. `reference/CALIBRATION_APPENDIX.md` records the budget; `:permissive`
 is the mode that makes such a run observable without changing it.
+
+### Boundedness of the composition
+
+Three mechanisms act on a mass fraction outside [0, 1]. Only the failsafe,
+which is off by default, enforces 0 ≤ Y_k ≤ 1, and it does so by clipping
+after the step:
+
+| mechanism | kind | when | threshold | writes the state |
+|---|---|---|---|---|
+| `ArtificialProperties.C_Y` term | regularization | every right-hand side | excursion beyond `Y_tolerance` = 1e-4 | no; adds a diffusivity |
+| `StepControl.species_band` | validity check | the sweeps [below](#where-the-sweeps-read-the-state) | Y_k < −0.05 | no; `:strict` rejects, `:permissive` reports |
+| positivity failsafe | repair | after a step (`floor_ratio > 0`), before a verdict (`:repair`) | any ρ_k < 0; ρ < `rho_floor`; E < ρ·`e_floor` | yes |
+
+The bound adds C_Y Δ_g max(0, −f − `Y_tolerance`, f − 1 − `Y_tolerance`) to
+the species sensor before it is smoothed, with f each mass fraction and,
+under the shared-D_b channels, each mole fraction ([the species
+channel](#the-species-channel)). The flux it drives is a divergence, so it
+moves composition without creating species mass. It is a restoring
+diffusivity proportional to the excursion, not a projection, and a shocked
+interface still ends about 1% outside [0, 1] at every resolution
+([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-species-validity-band)).
+The dead band exists because the Runge–Kutta stages overshoot a smooth profile
+that touches a bound by O(h²) where the completed step does not; a bound acting
+on that transient costs 1.5 orders of accuracy on such a profile.
+
+The validity check reads the lower side only: a point counts when
+min_k ρ_k < −`species_band`·ρ. With two species Y_1 > 1 + `species_band` is
+the same point as Y_2 < −`species_band`; with more, an excess of one species
+is counted only through a partner below the band.
+
+The failsafe renormalizes. A negative partial density is clipped to zero and
+the positive ones are rescaled onto the mixture density the point carried
+(`apply_positivity_floor!`). That conserves the mixture mass and not the
+species masses, the species change does not enter `FloorTally`, and at fixed E
+and momentum the new composition moves T and p, so a clipped point is also a
+pressure perturbation. The clip has no band: with `floor_ratio > 0` every
+undershoot of a captured interface is clipped on every step that leaves one
+and counted as a repaired cell, and under `:repair` the first rejected point clips every
+negative partial density in the domain. The density and energy repairs are
+described [above](#what-a-repair-promises).
+
+### Tolerances of the thermodynamic evaluation
+
+| where | tolerance | consequence |
+|---|---|---|
+| `primitives!` at ρ ≤ 0 | placeholders ρ = 1, u = 0, p = T = c = 1, all mass on species 1 | the right-hand side stays finite; `Q` is not changed |
+| ideal-gas primitives at e ≤ 0 | T = `positive_floor` (1e-300 in Float64, `floatmin` in narrower types) | p and c near zero; the κ\* scale divides by max(T, eps) |
+| `mole_fraction` | Σ_j Y_j R_j floored at `positive_floor`, X_k clamped to [−1, 2] | the mole-fraction excursion saturates at a light-gas undershoot of −1/R, R the density ratio |
+| NASA-9 inversion | relative step max(1e-10, eps^(2/3)), 40 iterations, bracket [1e-3, 1e9] K, the range margin at the same relative tolerance | not converged or unbracketed: unrecoverable; outside the fitted range: extrapolated, and inadmissible under `extrapolate = :missing` |
+| `state_admissibility` | `IdealMixture`: c_v,m > 0 and e > 0; `StiffenedGas`: e − p∞/ρ > 0; NASA-9: the inversion status | the sweep's inadmissible and unrecoverable counts |
+
+The mixture c_v is formed from the mass fractions as they are, negative ones
+included, so a point inside the band stays admissible while c_v,m is positive.
+
+### Where the sweeps read the state
+
+| state | read by |
+|---|---|
+| the initial state, the AMR bootstrap included | `setup` |
+| the state entering and returned by `run!` | `run!`, always |
+| the state entering a step: after the previous step's filter, mode truncation, restriction and shell imposition, failsafe and callbacks, and after this step's regrid check and pre-step synchronization | `run!`, on `validity_interval` |
+| the state after a step, with the same filter, transfers and failsafe applied | a `StateGuard`, on its trigger |
+| the state a regrid check leaves, before the savepoint is rebuilt from it | `run!`, whenever `validity_interval > 0` |
+| a refined level's substep of a subcycled step, after its filter and shell imposition | `run!` under `:strict`, on the `validity_interval` steps |
+| a Runge–Kutta stage | nothing |
+
+The regrid sweep runs at every check rather than on the cadence, because a new
+tile's state is interpolated from its parent and no step has produced it. Its
+rejection raises without a rollback, since the savepoint has the old layout.
+The first two substeps of a subcycled level are superseded by the third before
+any composite sweep, so they are swept inside the recursion, reduced over the
+level's communicator, and a rejection returns through the recursion as a
+status to the rollback, as the substep CFL check does. `:repair` leaves the
+substeps to the composite, since its floors and its reduction span the whole
+run. A `StateGuard` is a callback and sees neither. Under global stepping every
+level advances with the root and the composite rows cover it. The failsafe
+acts on the composite after the root filter and the post-step synchronization,
+never on a substep or a stage.
+
+### What is proved
+
+Nothing in the discretization guarantees 0 ≤ Y_k ≤ 1, ρ > 0 or an admissible
+energy; the failsafe restores the first two after a step by substitution. With a nonnegative diffusivity the continuous `:bulk` model satisfies every
+entropy inequality and the continuous `:partial_density` model the
+thermodynamic one, σ = Σ_k R_k D_b |∇ρ_k|²/ρ_k ≥ 0
+([the species channel](#the-species-channel)). The latter holds only where
+every partial density is positive: at an undershoot that species' term is
+negative and the entropy, which carries ln ρ_k, is undefined, so the default
+channel's argument fails at the points the bound exists to act on. The
+discrete update inherits neither inequality: the compact derivative is not
+summation-by-parts against the trapezoid quadrature, and the filter pass and
+the Runge–Kutta step on an interface outside [0, 1] both lower ∫ρs
+([CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md#the-bulk-species-channel-in-three-dimensions)).
+
+The positivity-preserving results for ENO, WENO and WCNS schemes and for
+finite-volume and discontinuous Galerkin schemes do not transfer. They write
+the high-order update as a convex combination of first-order updates that are
+each admissible under a CFL condition, with a limiter that scales the
+reconstruction toward the cell average (Zhang & Shu, J. Comput. Phys. 229,
+2010), or they blend the high-order flux toward a first-order
+positivity-preserving flux (Hu, Adams & Shu, J. Comput. Phys. 242, 2013). This
+scheme has neither ingredient: its derivative is a line solve coupling every
+node of the line, it carries no first-order flux to blend toward and no cell
+average to limit about, and the compact filter is linear and not monotone. A
+correction of the second kind would need the compact divergence written as a
+difference of face fluxes and a first-order flux beside it; neither exists in
+the code, and whether one is needed has not been measured.
 
 ## Characteristic boundary conditions
 
