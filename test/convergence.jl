@@ -33,8 +33,11 @@
 #      free of closure error (test/smooth_cases.jl). These are the orders a
 #      run sees: the closure's, plus what the solution norm gains over the
 #      pointwise truncation; the cascade filter caps every wall row near 1.8
-#      and the one-sided rows lift the cap; a level interface reads the C6
-#      closure cascade at the fine spacing, 3.6, and :brady_livescu 6.0.
+#      and the one-sided rows lift the cap. An interface under the default
+#      ghost fluxes reads the interior order, 6.0 through a level and 6.8
+#      through two patches; under the closure rows a level interface reads
+#      the C6 closure cascade at the fine spacing, 3.6, and :brady_livescu
+#      6.0.
 #   6. Temporal order — one case on one grid in a sequence of equal steps
 #      against the same case in many more steps, so the spatial error cancels
 #      and the slope is the time integration's: time-dependent boundary data
@@ -65,10 +68,11 @@
 #   symmetry-plane evolution (window max norm, t = 0.4, against the fine
 #   folded mirror): inviscid C6 4.46 | C6 onesided filter 4.69 | C8 4.00 |
 #   C10 4.00 | viscous slip with shear C6 6.04
-#   interface evolution (entropy wave, t = 0.5): two patches C6 (k = 1) 3.31 |
-#   two levels C6 (k = 3) 3.62 | two levels :brady_livescu 6.01 | three levels
-#   subcycled 3.72 | two levels, cascade filter 4.12 | two levels
-#   :brady_livescu, d8 detector 5.93 | two levels, pentadiagonal filter 4.05
+#   interface evolution (entropy wave, t = 0.5): two patches C6 (k = 1) 6.79 |
+#   two levels C6 (k = 3) 6.01 | two levels, closure rows 3.62 | two levels
+#   :brady_livescu 6.01 | three levels subcycled 6.00 | two levels, cascade
+#   filter 6.87 | two levels :brady_livescu, d8 detector 5.93 | two levels,
+#   pentadiagonal filter 6.01
 #   temporal order (fixed grid, equal steps): Dirichlet inflow g(t) 3.99 |
 #   NSCBC inflow target(t) 4.09 | two levels, global step 1.00 | two levels
 #   subcycled, ghost fluxes 3.85
@@ -76,11 +80,14 @@
 # The default of all three derivative presets is `:neutral3`; the `:cascade3`
 # rows are measured beside it wherever the two closures differ. The
 # coordinate-singularity studies close their outer end with a wall and take
-# the default rows; a symmetry plane plans no closure row at all; the
-# interface studies keep the cascade rows, because the flux divergence at an
-# interface end selects them (`interface_divergence_closures`).
+# the default rows; a symmetry plane plans no closure row at all. The
+# interface studies take the default ghost fluxes, which difference the flux
+# through an interface end with the interior rows; the closure-rows row and
+# the two :brady_livescu rows take `interface_flux = :closure`, under which
+# the flux divergence at an interface end selects the cascade rows
+# (`interface_divergence_closures`) or the source scheme's.
 #
-# Those fifty-four numbers are also passed to each study as `recorded` and
+# Those fifty-five numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -619,33 +626,39 @@ evolution_study("viscous slip planes, C6, unfiltered", PLANE_NS,
 println("\n=== smooth evolution: interface window, entropy wave, t = 0.5 ===")
 entropy_ref(s) = analytic_reference(s.equations, entropy_profile(3, 0.37; t=s.t))
 # The same-level interface is measured on the k = 1 wave: at the root
-# spacing the k = 3 wave is pre-asymptotic below N = 192 (bench/boundaryorder.jl
-# reads 5.1 / 4.7 there against 3.1 / 3.5 at k = 1), while a level interface
-# sits at the fine spacing and reads its asymptotic order on either wave.
+# spacing the k = 3 wave is pre-asymptotic below N = 192 under the closure
+# rows (bench/boundaryorder.jl reads 5.1 / 4.7 there against 3.1 / 3.5 at
+# k = 1), while a level interface sits at the fine spacing and reads its
+# asymptotic order on either wave.
 evolution_study("two patches, C6, k = 1", PERIODIC_NS,
                 N -> entropy_case(N; cfl=EVOLUTION_CFL, patch_grid=(2, 1, 1), k=1, phase=0.0),
                 s -> analytic_reference(s.equations, entropy_profile(1, 0.0; t=s.t));
-                primary=:interface, tfinal=0.5, expect=3.3, tol=0.8, recorded=3.31)
+                primary=:interface, tfinal=0.5, expect=6.8, tol=1.0, recorded=6.79)
 evolution_study("two levels, C6", PERIODIC_NS,
                 N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2), entropy_ref;
+                primary=:interface, tfinal=0.5, expect=6.0, tol=0.8, recorded=6.01)
+# The closure rows, which the rows below them compare with their alternatives.
+evolution_study("two levels, C6, closure rows", PERIODIC_NS,
+                N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2, interface_flux=:closure),
+                entropy_ref;
                 primary=:interface, tfinal=0.5, expect=3.6, tol=0.8, recorded=3.62)
 evolution_study("two levels, C6 :brady_livescu", PERIODIC_NS,
-                N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2,
+                N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2, interface_flux=:closure,
                                   deriv=lele_d1_6(closures=:brady_livescu)), entropy_ref;
                 primary=:interface, tfinal=0.5, expect=6.0, tol=0.8, recorded=6.01)
 evolution_study("three levels, C6, subcycled", PERIODIC_NS,
                 N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=3, subcycle=true), entropy_ref;
-                primary=:interface, tfinal=0.5, expect=3.7, tol=0.8, recorded=3.72)
+                primary=:interface, tfinal=0.5, expect=6.0, tol=0.8, recorded=6.00)
 evolution_study("two levels, C6, cascade filter", PERIODIC_NS,
                 N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2, filter_interval=1),
                 entropy_ref;
-                primary=:interface, tfinal=0.5, expect=4.1, tol=0.8, recorded=4.12)
+                primary=:interface, tfinal=0.5, expect=6.9, tol=1.0, recorded=6.87)
 # The artificial properties on under the :d8 detector, whose interface rows
 # read the imposed ghosts. The :brady_livescu row is the one whose error
 # level exposes the sensor: closing the detector on its own rows at the
 # coarse-fine faces instead reads order 2.
 evolution_study("two levels, C6 :brady_livescu, d8 detector", PERIODIC_NS,
-                N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2,
+                N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2, interface_flux=:closure,
                                   deriv=lele_d1_6(closures=:brady_livescu),
                                   art=ArtificialProperties(enabled=true, detector=:d8)),
                 entropy_ref;
@@ -653,7 +666,7 @@ evolution_study("two levels, C6 :brady_livescu, d8 detector", PERIODIC_NS,
 evolution_study("two levels, C6, pentadiagonal filter", PERIODIC_NS,
                 N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2, filter_interval=1,
                                   filt=pyranda_filter()), entropy_ref;
-                primary=:interface, tfinal=0.5, expect=4.0, tol=0.8, recorded=4.05)
+                primary=:interface, tfinal=0.5, expect=6.0, tol=0.8, recorded=6.01)
 
 # ---------------------------------------------------------------------------
 # Temporal order. Each row integrates one case on one grid in a sequence of

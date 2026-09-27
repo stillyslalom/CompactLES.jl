@@ -135,17 +135,21 @@ include("capability_cases.jl")
         rejects("rebalance repartitions a tiled level at the regrid cadence", gas,
                 Numerics(n_global=n1, amr=AMR(initial=feature, regrid_interval=1,
                                               rebalance=1.5)))
-        rejects("interface_flux = :ghost differences through a patch or level interface",
-                gas, Numerics(n_global=n1, interface_flux=:ghost))
-        rejects("interface_flux = :ghost requires an unstretched CartesianMetric",
+        rejects("interface_flux = :ghost (the default) requires an unstretched " *
+                "CartesianMetric at a patch or level interface; pass " *
+                "interface_flux = :closure",
                 C.problem(bcs=(wall, per, per), metric=CylindricalMetric(),
                           domain=((0.5, 1.5), (0.0, 1.0), (0.0, 1.0)), ic=C.ic_shell),
-                Numerics(n_global=n1, patch_grid=(2, 1, 1), interface_flux=:ghost))
-        rejects(["interface_flux = :ghost with molecular transport at a refined level " *
-                 "supports IdealMixture, Nasa9Mixture and StiffenedGas",
+                Numerics(n_global=n1, patch_grid=(2, 1, 1)))
+        rejects("interface_flux = :ghost (the default) reads the gradient plans' " *
+                "interface rows, which exist under interface_rhs = :extended only; " *
+                "pass interface_flux = :closure",
+                gas, Numerics(n_global=n1, patch_grid=(2, 1, 1), interface_rhs=:onesided))
+        rejects(["interface_flux = :ghost (the default) with molecular transport at a " *
+                 "refined level supports IdealMixture, Nasa9Mixture and StiffenedGas",
                  "use interface_flux = :closure for this EOS"],
                 C.problem(eos=C.EOSES[5][2], transport=ConstantTransport(mu0=1e-3)),
-                Numerics(n_global=n1, interface_flux=:ghost, amr=box))
+                Numerics(n_global=n1, amr=box))
         rejects("polar_truncation applies to CylindricalMetric", sph,
                 Numerics(n_global=(16, 16, 1), polar_truncation=2.0))
         rejects("polar_truncation requires θ resolved and periodic over 2π",

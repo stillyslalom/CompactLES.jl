@@ -2012,9 +2012,8 @@ function test_two_patch_layout()
     # order, and the reproduction is bitwise. At np ≥ 4 the patch itself is
     # decomposed and its closed lines take the spike/reduced path where the
     # serial patch ran a plain Thomas sweep, so the answer agrees to round-off
-    # accumulation instead (measured 1.1e-15 at np = 4 and 0 at np = 8,
-    # against a 9.5e-8 signal).
-    ref = 9.544222012713988e-8
+    # accumulation instead, against an 8.2e-12 signal.
+    ref = 8.2289730585216603e-12
     tol = np <= 2 ? 1e-20 : 1e-13
     check("two-patch entropy wave: max error matches serial", abs(gerr - ref), tol)
     check("two-patch run: step count matches serial", abs(solver.step - 28), 0.5)
@@ -2038,7 +2037,7 @@ function test_two_patch_layout()
         end
     end
     check("two-patch C10 viscous wave: max rho matches serial",
-          abs(gmax(m) - 1.3014436321154803), tol)
+          abs(gmax(m) - 1.3014438000381001), tol)
     check("two-patch C10 run: step count matches serial", abs(solver10.step - 78), 0.5)
     # Slip walls at the outer ends and one-sided gradients, the flux
     # divergence taking the Brady–Livescu rows at the interface ends only
@@ -2049,7 +2048,8 @@ function test_two_patch_layout()
                       bcs=(wall2, per3[2], per3[3]), art=ArtificialProperties(enabled=false),
                       filter_interval=0, transport=ConstantTransport(mu0=5e-3),
                       patch_grid=(2, 1, 1), interface_rhs=:onesided,
-                      interface_divergence=lele_d1_6(closures=:brady_livescu))
+                      interface_divergence=lele_d1_6(closures=:brady_livescu),
+                      interface_flux=:closure)
     statesbl = allocate_state(solverbl)
     initialize!(solverbl, statesbl, (x, y, z) ->
         Prim(u=(0.05 * sin(π * x), 0, 0), p=(1 + 0.05 * cos(π * x))^1.4,
@@ -2149,7 +2149,7 @@ function test_bulk_patched()
     tol = np <= 2 ? 1e-14 : 1e-12
     check("bulk two-patch slab: max rho matches serial", abs(gmax(m) - ref), tol)
 end
-const BULK_PATCHED_MAX_RHO = 19.99999735804433
+const BULK_PATCHED_MAX_RHO = 19.999997534938814
 
 # ---------------------------------------------------------------------------
 # Device line solves (reference/AMR_GPU.md). A DevicePlan runs the fill,
@@ -2379,12 +2379,18 @@ function test_refined_decomposed()
         end
         return gmax(e), solver.step
     end
-    e_static, n_static = wave_error(subcycle=false)
+    # Under the default ghost fluxes the static rows' error falls to
+    # round-off, where agreement with serial tests nothing, and the d8 and
+    # pentadiagonal rows' to where the decomposition's round-off moves it by
+    # several percent, so these rows take the closure rows; the subcycled
+    # three-level row and the ghost-flux row below carry the default's.
+    closure = (interface_flux=:closure,)
+    e_static, n_static = wave_error(; subcycle=false, closure...)
     check("static two-level wave error matches serial",
           abs(e_static - 3.237645707088177e-10), 1e-12)
     check("static two-level step count matches serial",
           abs(n_static - 20), 0.5)
-    e_sub, n_sub = wave_error(subcycle=true)
+    e_sub, n_sub = wave_error(; subcycle=true, closure...)
     check("subcycled two-level wave error matches serial",
           abs(e_sub - 3.523323854892624e-10), 1e-12)
     check("subcycled two-level step count matches serial",
@@ -2392,18 +2398,18 @@ function test_refined_decomposed()
     # Three levels: the level-2 patch's coupling gathers over the level-1
     # patch's own decomposition, and the recursive driver's substep sequence
     # is collective at every depth.
-    e3, n3 = wave_error(subcycle=false, levels=3)
+    e3, n3 = wave_error(; subcycle=false, levels=3, closure...)
     check("static three-level wave error matches serial",
           abs(e3 - 1.0962919461121601e-10), 1e-12)
     check("static three-level step count matches serial", abs(n3 - 20), 0.5)
     e3s, n3s = wave_error(subcycle=true, levels=3)
     check("subcycled three-level wave error matches serial",
-          abs(e3s - 3.545892468537204e-10), 1e-12)
+          abs(e3s - 3.4862113196254541e-12), 5e-15)
     check("subcycled three-level step count matches serial",
           abs(n3s - 20), 0.5)
     # The fine level's divergence under the Brady–Livescu interface rows,
     # planned on every rank of the level's decomposition.
-    e_src, _ = wave_error(subcycle=false,
+    e_src, _ = wave_error(; subcycle=false, closure...,
                           interface_divergence=lele_d1_6(closures=:brady_livescu))
     check("static two-level wave error, source divergence rows, matches serial",
           abs(e_src - 3.26405569239796e-14), 5e-15)
@@ -2418,10 +2424,10 @@ function test_refined_decomposed()
     # ghosts, and both banded plans solve over the level's decomposition.
     d8pyr = (art=ArtificialProperties(enabled=true, detector=:d8), filt=pyranda_filter(),
              filter_interval=1)
-    e_d8, _ = wave_error(; subcycle=false, d8pyr...)
+    e_d8, _ = wave_error(; subcycle=false, closure..., d8pyr...)
     check("static two-level wave error, d8 detector and pentadiagonal filter, " *
           "matches serial", abs(e_d8 - 3.0154478913857474e-10), 1e-12)
-    e_d8t, _ = wave_error(; subcycle=true, tile=8, d8pyr...)
+    e_d8t, _ = wave_error(; subcycle=true, tile=8, closure..., d8pyr...)
     check("subcycled tiled wave error, d8 detector and pentadiagonal filter, " *
           "matches serial", abs(e_d8t - 3.079330124222679e-10), 1e-12)
 
@@ -2524,9 +2530,9 @@ function test_tiled_level()
     check("tiled 2-D level: a rank holds its group's tiles only",
           all(lev.owners[t] == lev.group.ranks for t in lev.tiles) ? 0.0 : 1.0, 0.5)
     check("tiled 2-D wave error matches serial",
-          abs(et - 3.2172027042420837e-8), 1e-12)
+          abs(et - 1.1764478280440471e-11), 1e-14)
     check("tiled 2-D step count matches serial", abs(nt - 10), 0.5)
-    ets, nts, _ = tiled_error(subcycle=true)
+    ets, nts, _ = tiled_error(subcycle=true, interface_flux=:closure)
     check("subcycled tiled 2-D wave error matches serial",
           abs(ets - 7.64822569720991e-8), 1e-12)
     check("subcycled tiled 2-D step count matches serial", abs(nts - 10), 0.5)
@@ -2637,7 +2643,7 @@ function test_tiled_level()
         check("twelve tiles: tiles per rank balanced",
               abs(most - cld(12, np)) + abs(fewest - fld(12, np)), 0.5)
         check("twelve tiles: wave error matches serial",
-              abs(gmax(e) - 6.0773008847547771e-10), 1e-13)
+              abs(gmax(e) - 8.3025808450543082e-12), 5e-15)
         check("twelve tiles: step count matches serial", abs(solver.step - 20), 0.5)
     end
 
@@ -2676,7 +2682,7 @@ function test_tiled_level()
         check("tiled regrid under ownership: last tile tracks as serial (184)",
               abs(gmax(last(offs)) - 184), 0.5)
         check("tiled regrid under ownership: time reached matches serial",
-              abs(gmax(solver.t) - 0.003194481761204692), 1e-13)
+              abs(gmax(solver.t) - 0.0031972283704293633), 1e-13)
         spec = getfield(solver, :regrid)
         record = sort([(r.offset[1], c) for (r, c) in spec.created])
         flat = Int[spec.checks; length(record);
@@ -2777,7 +2783,7 @@ function test_tiled_level()
         check("rebalance on: last tile tracks as serial (184)",
               abs(gmax(last(offs)) - 184), 0.5)
         check("rebalance on: time reached matches serial",
-              abs(gmax(solver.t) - 0.003194481019080914), 1e-13)
+              abs(gmax(solver.t) - 0.0031972276136530485), 1e-13)
         check("rebalance on: max/mean busy time measured",
               isfinite(spec.imbalance) && spec.imbalance >= 1 ? 0.0 : 1.0, 0.5)
         # Hysteresis, on synthetic per-rank busy times: rank r reports
@@ -2830,11 +2836,11 @@ function test_level_subset()
     # level's subset holds no state from which that shortening follows, so
     # its agreement rests on the global dt reduction alone. `fires` counts
     # the firings this rank saw.
-    function wave(ext; subcycle=false, landing=false)
+    function wave(ext; subcycle=false, landing=false, kw...)
         solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
                         art=ArtificialProperties(enabled=false), filter_interval=0,
                         subcycle=subcycle,
-                        refine=BlockRegion((N ÷ 2, 0, 0), (ext, 1, 1)))
+                        refine=BlockRegion((N ÷ 2, 0, 0), (ext, 1, 1)); kw...)
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) ->
             Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
@@ -2857,21 +2863,22 @@ function test_level_subset()
                 MPI.Allreduce(Float64(x), min, comm)
 
     # Twenty-two fine nodes: two ranks, so np = 2 owns the level whole and
-    # np = 4 and 8 own it on a prefix.
-    s8, e8, own8, _ = wave(8)
+    # np = 4 and 8 own it on a prefix. The static rows take the closure rows,
+    # whose error the ghost fluxes would take to round-off.
+    s8, e8, own8, _ = wave(8; interface_flux=:closure)
     check("22-node level takes two ranks", abs(own8 - min(np, 2)), 0.5)
     check("subset-owned level: wave error matches serial",
           abs(e8 - 1.3106626894909823e-11), 1e-13)
     check("subset-owned level: step count matches serial", abs(s8.step - 20), 0.5)
     s8s, e8s, _, _ = wave(8; subcycle=true)
     check("subcycled subset-owned level: wave error matches serial",
-          abs(e8s - 9.6783026037883246e-11), 1e-13)
+          abs(e8s - 1.2722045639179669e-12), 5e-15)
     check("subcycled subset-owned level: step count matches serial",
           abs(s8s.step - 20), 0.5)
 
     # Ten fine nodes cannot be split at all: without a one-rank subset this
     # configuration admits no process grid at any np > 1.
-    s4, e4, own4, _ = wave(4)
+    s4, e4, own4, _ = wave(4; interface_flux=:closure)
     check("10-node level takes one rank", abs(own4 - 1), 0.5)
     check("one-rank level: wave error matches serial",
           abs(e4 - 2.0219825813683201e-11), 1e-13)
@@ -2881,7 +2888,7 @@ function test_level_subset()
     # over the whole run, and `t` and `step` advance from it. The
     # scheduled trigger also shortens dt on its approach, so a rank that
     # disagreed anywhere would land on a different instant.
-    sL, eL, _, firesL = wave(4; landing=true)
+    sL, eL, _, firesL = wave(4; landing=true, interface_flux=:closure)
     check("landed one-rank level: wave error matches serial",
           abs(eL - 1.6264545266153618e-11), 1e-13)
     check("one-rank level: time agrees on every rank",
@@ -2926,7 +2933,7 @@ function test_level_subset()
     check("regrid under subsets: region extent tracks as serial (25)",
           abs(gmax(region.extent[1]) - 25), 0.5)
     check("regrid under subsets: time reached matches serial",
-          abs(gmax(solver.t) - 0.0055135979946853665), 1e-13)
+          abs(gmax(solver.t) - 0.0055075390598579594), 1e-13)
 end
 
 # ---------------------------------------------------------------------------

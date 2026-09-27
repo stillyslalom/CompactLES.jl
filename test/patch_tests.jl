@@ -62,28 +62,30 @@ end
     errs = [_entropy_wave_error(N, (2, 1, 1)) for N in (48, 96, 192)]
     orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
     @info "two-patch entropy wave" errs orders
-    # The interface treatment must not stall convergence: the expectation
-    # is at least the closure-cascade order ≈ 3.
-    @test all(>(2.5), orders)
+    # The interface treatment must not stall convergence. Measured 8.7e-10 /
+    # 8.2e-12 / 1.4e-13, orders 6.72 / 5.89, under the default ghost fluxes;
+    # the closure rows read the cascade's order, about 3.
+    @test all(>(5.0), orders)
     # And it must stay a small perturbation on the single-patch answer.
     ref = _entropy_wave_error(192, (1, 1, 1))
     @test errs[3] < max(10 * ref, 1e-8)
-    # The pentadiagonal C10 closes its interfaces with two compact rows per
-    # end. Measured 8.2e-7 / 9.8e-8 / 8.5e-9, orders
-    # 3.06 / 3.52: the same one-sided divergence rows bind.
+    # C10: measured 1.7e-11 / 1.1e-12 / 6.8e-14, orders 4.00 / 3.97, the
+    # order of the time integrator at this CFL. Under the closure rows, two
+    # compact rows per end, 8.2e-7 / 9.8e-8 / 8.5e-9, orders 3.06 / 3.52.
     errs10 = [_entropy_wave_error(N, (2, 1, 1); deriv=lele_d1_10())
               for N in (48, 96, 192)]
     orders10 = [log2(errs10[i] / errs10[i+1]) for i in 1:2]
     @info "two-patch entropy wave, C10" errs10 orders10
-    @test all(>(2.5), orders10)
-    @test errs10[3] < 2e-8
+    @test all(>(3.5), orders10)
+    @test errs10[3] < 1e-12
 end
 
 # The inviscid gates above run the flux divergence alone, whose plans keep
 # the one-sided rows at an interface, so they cannot tell `:extended` from
 # `:onesided`. The interface rows serve the gradients, so a viscous wave
-# exercises them: against the single-patch answer at the same N, the
-# extended-data rows converge at order ≈ 4 and the one-sided ones at ≈ 2.
+# under the closure rows exercises them: against the single-patch answer at
+# the same N, the extended-data rows converge at order ≈ 4 and the one-sided
+# ones at ≈ 2.
 function _viscous_wave(N::Int, patch_grid; deriv, n_halo, interface_rhs=:extended)
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     ic(x, y, z) = Prim(u=(0.5 + 0.1 * sin(2x), 0, 0), p=1.0 + 0.05 * cos(x),
@@ -91,7 +93,8 @@ function _viscous_wave(N::Int, patch_grid; deriv, n_halo, interface_rhs=:extende
     solver = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
                     art=ArtificialProperties(enabled=false), filter_interval=0,
                     transport=ConstantTransport(mu0=2e-2), patch_grid=patch_grid,
-                    deriv=deriv, n_halo=n_halo, interface_rhs=interface_rhs)
+                    deriv=deriv, n_halo=n_halo, interface_rhs=interface_rhs,
+                    interface_flux=:closure)
     Q = allocate_state(solver)
     initialize!(solver, Q, ic)
     run!(solver, Q; tfinal=0.5)
@@ -155,11 +158,13 @@ end
         reflected = max(reflected, abs(ps.p[I] - 1.0))
     end
     @info "two-patch pulse reflection" reflected reflected / amp
-    # Measured 2.34e-3 at N = 192, converging at ≈ 5th order (6.5e-2 at 96,
-    # 4.9e-5 at 384); the single-patch wake in the same window is 2.4e-10.
-    @test reflected / amp < 5e-3
-    # C10: 4.1e-3 at 192 (7.5e-2 at 96, 7.7e-5 at 384), the larger mismatch
-    # between the interior rows and the divergence's C6 closure cascade.
+    # Measured 8.2e-6 at N = 192 under the default ghost fluxes. The closure
+    # rows read 2.34e-3, converging at ≈ 5th order (6.5e-2 at 96, 4.9e-5 at
+    # 384); the single-patch wake in the same window is 2.4e-10.
+    @test reflected / amp < 5e-5
+    # C10: 3.8e-7 at 192. The closure rows read 4.1e-3 (7.5e-2 at 96, 7.7e-5
+    # at 384), the larger mismatch between the interior rows and the
+    # divergence's C6 closure cascade.
     solver10 = Solver(n_global=(192, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
                       art=ArtificialProperties(enabled=false), filter_interval=0,
                       patch_grid=(2, 1, 1), deriv=lele_d1_10())
@@ -174,7 +179,7 @@ end
         reflected10 = max(reflected10, abs(ps10.p[padded_index(ps10, i, 1, 1)] - 1.0))
     end
     @info "two-patch pulse reflection, C10" reflected10 reflected10 / amp
-    @test reflected10 / amp < 1e-2
+    @test reflected10 / amp < 5e-6
 end
 
 @testset "two patches: conservation drift vs single patch" begin
@@ -209,7 +214,7 @@ end
                           patch_grid=(2, 1, 1), deriv=lele_d1_10())) == 2
     @test npatches(Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3,
                           patch_grid=(2, 1, 1), deriv=lele_d1_10(),
-                          interface_rhs=:onesided)) == 2
+                          interface_rhs=:onesided, interface_flux=:closure)) == 2
     @test_throws ErrorException Solver(n_global=(96, 1, 1), L_domain=(1.0, 1.0, 1.0),
                                        bcs=per3, patch_grid=(2, 1, 1),
                                        art=ArtificialProperties(detector=:d8))
@@ -252,19 +257,26 @@ end
     # gradient treatment.
     for rhs in (:extended, :onesided)
         s = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=walls,
-                   patch_grid=(2, 1, 1), interface_rhs=rhs, interface_divergence=bl)
+                   patch_grid=(2, 1, 1), interface_rhs=rhs, interface_divergence=bl,
+                   interface_flux=:closure)
         p1 = getfield(s, :patches)[1]
         @test _div_rows_match(p1.div_plans[1], p1.decomp, c6, p1.h[1],
                               nothing, bl.closures)
     end
-    # The default, spelled out: an interface takes the cascade3 rows in place
-    # of the neutral set, so naming them changes no bit of the right-hand side.
-    @test _patched_rhs() == _patched_rhs(interface_divergence=lele_d1_6(closures=:cascade3))
+    # Under the closure rows an interface takes the cascade3 rows in place of
+    # the neutral set, so naming them changes no bit of the right-hand side.
+    closure = (interface_flux=:closure,)
+    @test _patched_rhs(; closure...) ==
+          _patched_rhs(; closure..., interface_divergence=lele_d1_6(closures=:cascade3))
     # With extended gradients a periodic pair reads the derivative's closure
     # rows only in the divergence, so a source scheme is the whole of the
     # difference between the two derivative operators there.
-    @test _patched_rhs(interface_divergence=bl) == _patched_rhs(deriv=bl)
-    @test _patched_rhs(interface_divergence=bl) != _patched_rhs()
+    @test _patched_rhs(; closure..., interface_divergence=bl) ==
+          _patched_rhs(; closure..., deriv=bl)
+    @test _patched_rhs(; closure..., interface_divergence=bl) != _patched_rhs(; closure...)
+    # Under the default the ghost fluxes carry this pair's whole flux, so no
+    # divergence row is read and the source scheme changes nothing.
+    @test _patched_rhs(interface_divergence=bl) == _patched_rhs()
     # Refused at setup: another interior, another element type, a filter, a
     # run without an interface, and more rows than a regridded patch holds.
     mk(; kw...) = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3; kw...)
@@ -292,7 +304,7 @@ end
 # are of degree 5, the interior rows, the gradient plans' interface rows and
 # the order-6 level interpolation are all exact, so the right-hand side is
 # exact to round-off at a same-level interface and at both ends of a refined
-# patch; the one-sided rows of the default are not.
+# patch; the one-sided rows of `:closure` are not.
 function _polynomial_rhs_error(; kw...)
     γ = 1.4
     ρ(x) = 1 + 0.2x - 0.1x^2;  dρ(x) = 0.2 - 0.2x
@@ -335,21 +347,25 @@ end
 
 @testset "interface flux: ghost fluxes through interface ends" begin
     for layout in ((patch_grid=(2, 1, 1),), (refine=BlockRegion((40, 0, 0), (17, 1, 1)),))
-        @test _polynomial_rhs_error(; layout..., interface_flux=:ghost) < 1e-11
-        @test _polynomial_rhs_error(; layout...) > 1e-10
+        @test _polynomial_rhs_error(; layout...) < 1e-11
+        @test _polynomial_rhs_error(; layout..., interface_flux=:closure) > 1e-10
     end
-    # The default spelled out changes no bit; on a viscous pair the ghost
-    # path splits the flux and changes the interface rows only.
-    @test _patched_rhs() == _patched_rhs(interface_flux=:closure)
-    @test _patched_rhs(interface_flux=:ghost) != _patched_rhs()
+    # The default spelled out changes no bit; on a viscous pair the closure
+    # rows change the interface rows only.
+    @test _patched_rhs() == _patched_rhs(interface_flux=:ghost)
+    @test _patched_rhs(interface_flux=:closure) != _patched_rhs()
     per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     mk(; kw...) = Solver(n_global=(48, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3; kw...)
     @test_throws "must be :closure or :ghost" mk(patch_grid=(2, 1, 1),
                                                  interface_flux=:extended)
-    @test_throws "has neither" mk(interface_flux=:ghost)
-    @test_throws "interface_rhs = :extended" mk(patch_grid=(2, 1, 1),
-                                                interface_rhs=:onesided,
-                                                interface_flux=:ghost)
+    # Without an interface the setting selects nothing, and the solver
+    # records the closure rows.
+    @test getfield(mk(interface_flux=:ghost), :interface_flux) === :closure
+    @test_throws ArgumentError mk(patch_grid=(2, 1, 1), interface_rhs=:onesided)
+    @test_throws "pass interface_flux = :closure" mk(patch_grid=(2, 1, 1),
+                                                     interface_rhs=:onesided)
+    @test npatches(mk(patch_grid=(2, 1, 1), interface_rhs=:onesided,
+                      interface_flux=:closure)) == 2
     @test npatches(mk(patch_grid=(2, 1, 1), interface_flux=:ghost,
                       interface_divergence=lele_d1_6(closures=:brady_livescu))) == 2
 end
@@ -409,7 +425,7 @@ end
         kw(N) = map(v -> v isa Function ? v(N) : v, layout)
         e48 = _viscous_interface_error(48; kw(48)..., interface_flux=:ghost)
         e96 = _viscous_interface_error(96; kw(96)..., interface_flux=:ghost)
-        closure96 = _viscous_interface_error(96; kw(96)...)
+        closure96 = _viscous_interface_error(96; kw(96)..., interface_flux=:closure)
         @test e96 < ghost_max
         @test log2(e48 / e96) > order_min
         @test closure96 > 100 * e96
@@ -421,7 +437,8 @@ end
                          patch_grid=(2, 1, 1); kw...)
     extents(s) = [size(p.ghost_flux[d], 4) for p in getfield(s, :patches), d in 1:3]
     @test all(==(0), extents(mk(interface_flux=:ghost)))
-    @test all(==(0), extents(mk(transport=ConstantTransport(mu0=1e-2))))
+    @test all(==(0), extents(mk(interface_flux=:closure,
+                                transport=ConstantTransport(mu0=1e-2))))
     viscous = extents(mk(interface_flux=:ghost, transport=ConstantTransport(mu0=1e-2)))
     @test all(==(5), viscous[:, 1]) && all(==(0), viscous[:, 2:3])
 end

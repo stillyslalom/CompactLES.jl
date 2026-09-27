@@ -247,7 +247,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 backend::AbstractBackend=CPUBackend(),
                 interface_rhs::Symbol=:extended,
                 interface_divergence::Union{Nothing,AbstractCompactScheme},
-                interface_flux::Symbol=:closure,
+                interface_flux::Symbol=:ghost,
                 refine::Union{Nothing,BlockRegion,Vector{BlockRegion}}=nothing,
                 level_restriction::Symbol=:inject,
                 level_interpolation_order::Union{Nothing,Int}=nothing,
@@ -266,11 +266,6 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 rebalance_persist::Int=2,
                 max_levels::Union{Nothing,Int}=nothing) where {T}
     bcs = _face_conditions(bcs)
-    level_interpolation_order =
-        something(level_interpolation_order,
-                  default_interpolation_order(deriv, interface_flux))
-    schemes = SchemeSettings(deriv, filt, interface_divergence, interface_rhs,
-                             level_interpolation_order, level_restriction)
     _validate_configuration(transport, eos, art, bcs, metric, n_global, L_domain,
                             origin, cfl, filter_interval, filter_cfl)
     # ---- Coordinate-singularity folds -----------------------------------
@@ -416,6 +411,21 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             error("regrid_interval requires a refined region (the refine " *
                   "keyword supplies the initial one)")
     end
+    # --- Interface flux ---------------------------------------------------
+    # Without a patch or level interface `interface_flux` selects nothing, and
+    # the solver records `:closure`, so a single-patch run is the same whichever
+    # is passed. The configurations the ghost fluxes do not support are
+    # checked below, once the refinement checks have run.
+    interface_flux in (:closure, :ghost) ||
+        throw(ArgumentError("interface_flux must be :closure or :ghost, got " *
+                            ":$interface_flux"))
+    npatch > 1 || nlev > 1 || (interface_flux = :closure)
+    # The level interpolation order follows the interface flux actually taken.
+    level_interpolation_order =
+        something(level_interpolation_order,
+                  default_interpolation_order(deriv, interface_flux))
+    schemes = SchemeSettings(deriv, filt, interface_divergence, interface_rhs,
+                             level_interpolation_order, level_restriction)
     # --- Azimuthal mode truncation (modes.jl) ----------------------------
     # The ring projection is a Fourier series in θ over the whole circle on
     # host storage, and the limit table assumes a uniform Δr.
@@ -570,27 +580,29 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     # `:ghost` differences the inviscid flux through an interface end with
     # the gradient plans, whose interface rows exist only under `:extended`;
     # the ghost fluxes carry no area or Jacobian factors, so the geometry
-    # must be unit.
-    interface_flux in (:closure, :ghost) ||
-        error("interface_flux must be :closure or :ghost, got :$interface_flux")
+    # must be unit. A configuration they do not support raises rather than
+    # falling back, since `:ghost` is the default.
     if interface_flux === :ghost
-        npatch > 1 || nlev > 1 ||
-            error("interface_flux = :ghost differences through a patch or level " *
-                  "interface; this run has neither (patch_grid, refine)")
         interface_rhs === :extended ||
-            error("interface_flux = :ghost reads the gradient plans' interface " *
-                  "rows, which exist under interface_rhs = :extended only")
+            throw(ArgumentError(
+                "interface_flux = :ghost (the default) reads the gradient plans' " *
+                "interface rows, which exist under interface_rhs = :extended only; " *
+                "pass interface_flux = :closure with interface_rhs = :$interface_rhs"))
         metric isa CartesianMetric && all(isnothing, stretch) ||
-            error("interface_flux = :ghost requires an unstretched CartesianMetric")
+            throw(ArgumentError(
+                "interface_flux = :ghost (the default) requires an unstretched " *
+                "CartesianMetric at a patch or level interface; pass " *
+                "interface_flux = :closure on this grid"))
         # A coarse-fine face's molecular ghost flux recovers the temperature
         # gradient from the conserved ones through the internal energy, which
         # `_temperature_gradient` inverts for the built-in models only.
         nlev == 1 || !_ghost_viscous(interface_flux, transport) ||
             _ghost_gradient_eos(eos) ||
             throw(ArgumentError(
-                "interface_flux = :ghost with molecular transport at a refined " *
-                "level supports IdealMixture, Nasa9Mixture and StiffenedGas; got " *
-                "$(typeof(eos)); use interface_flux = :closure for this EOS"))
+                "interface_flux = :ghost (the default) with molecular transport at " *
+                "a refined level supports IdealMixture, Nasa9Mixture and " *
+                "StiffenedGas; got $(typeof(eos)); use interface_flux = :closure " *
+                "for this EOS"))
     end
     # --- Device residency -------------------------------------------------
     # A DeviceBackend supports a decomposed patch, patched, refined or

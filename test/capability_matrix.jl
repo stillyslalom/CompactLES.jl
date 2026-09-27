@@ -110,21 +110,21 @@ include("capability_cases.jl")
             @test C.advances(C.problem(; eos, ic), Numerics(; n_global=(48, 1, 1), kw...))
         end
         # Slabs on a cylindrical annulus and along a uniform dimension of a
-        # stretched grid; the ghost-flux interface on slabs and on a level.
+        # stretched grid, which take the closure rows; the ghost-flux
+        # interface, the default, on slabs and on a viscous level.
         annulus = C.problem(bcs=(wall, per, per), metric=CylindricalMetric(),
                             domain=((0.5, 1.5), (0.0, 1.0), (0.0, 1.0)),
                             ic=(r, θ, z) -> Prim(p=1.0 + 0.1exp(-20(r - 1)^2), rho=1.0))
         for backend in (CompactLES.CPUBackend(), C.device())
             @test C.advances(annulus, Numerics(n_global=(48, 1, 1), patch_grid=(2, 1, 1),
-                                               backend=backend))
+                                               backend=backend, interface_flux=:closure))
         end
         @test C.advances(C.problem(bcs=(wall, per, per)),
                          Numerics(n_global=(16, 48, 1), patch_grid=(1, 2, 1),
-                                  stretch=stretched))
-        @test C.advances(C.problem(), Numerics(n_global=(48, 1, 1), patch_grid=(2, 1, 1),
-                                               interface_flux=:ghost))
+                                  stretch=stretched, interface_flux=:closure))
+        @test C.advances(C.problem(), Numerics(n_global=(48, 1, 1), patch_grid=(2, 1, 1)))
         @test C.advances(C.problem(transport=ConstantTransport(mu0=1e-3)),
-                         Numerics(n_global=(48, 1, 1), interface_flux=:ghost,
+                         Numerics(n_global=(48, 1, 1),
                                   amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)))))
     end
 

@@ -31,7 +31,7 @@
 #                mixed wall and interface ends, Float32, acoustic reflection
 #   gflux        the same rows under `interface_flux = :ghost` (the inviscid
 #                and molecular fluxes differenced through interface ends from
-#                ghost fluxes) beside the default and the Brady–Livescu rows,
+#                ghost fluxes) beside the closure and the Brady–Livescu rows,
 #                with the polynomial right-hand side at both kinds of
 #                interface end
 #   transfer     the level rows at each `level_interpolation_order` in
@@ -45,10 +45,12 @@
 #
 # The last two run only when named; `all` leaves them out.
 #
+# `iflux` (`closure` by default, or `ghost`) is the `interface_flux` of every
+# row that does not name its own; the `gflux` rows name theirs.
+#
 # `coupling` is a Julia expression for a NamedTuple of further `Solver`
 # keywords applied to every row of the two transfer studies, e.g. an
-# interface divergence choice: `coupling="(key=value,)"`. Empty by default,
-# which measures the default interface coupling.
+# interface divergence choice: `coupling="(key=value,)"`. Empty by default.
 #
 # Every evolution row is run at `cfl` and at `cfl/2`, and the `dt` column
 # is the relative change of the primary error between the two; a row whose
@@ -68,8 +70,17 @@ include(joinpath(@__DIR__, "..", "test", "smooth_cases.jl"))
 
 const OPTS = CL.script_args(ARGS, (study="all", ns="49,97,193", cfl=0.25, tfinal=0.4,
                                    orders="4,6,8", derivs="c6,c6bl,c8bl",
-                                   coupling=""))
+                                   coupling="", iflux="closure"))
 const TRANSFER_ORDERS = parse.(Int, split(OPTS.orders, ','))
+# Every row takes the interface flux `iflux` unless it names its own: the
+# closure rows by default, which the tables of the appendix were measured under.
+const IFLUX = (interface_flux=Symbol(OPTS.iflux),)
+_with_iflux(build) = (args...; kw...) -> build(args...; merge(IFLUX, values(kw))...)
+const entropy_row = _with_iflux(entropy_case)
+const entropy2d_row = _with_iflux(entropy2d_case)
+const viscous_periodic_row = _with_iflux(viscous_periodic_case)
+const wall_row = _with_iflux(wall_case)
+const polynomial_row = _with_iflux(polynomial_case)
 const COUPLING = isempty(OPTS.coupling) ? (;) : Core.eval(Main, Meta.parse(OPTS.coupling))
 const NS = parse.(Int, split(OPTS.ns, ','))
 const NS_PERIODIC = NS .- 1          # 48, 96, 192: multiples of 24 for the nest
@@ -184,7 +195,7 @@ end
 "The fine periodic reference of the viscous standing wave on [0, 2)."
 function fine_periodic(; opts...)
     get!(REF, (:periodic, values(opts))) do
-        solver, states = viscous_periodic_case(9 * maximum(NS_PERIODIC);
+        solver, states = viscous_periodic_row(9 * maximum(NS_PERIODIC);
                                                cfl=REFERENCE_CFL, opts...)
         run!(solver, states; tfinal=TFINAL)
         NodeReference(solver, states)
@@ -266,7 +277,7 @@ function rhs_study()
     for viscous in (false, true), (label, deriv) in DERIVS
         mu = viscous ? MU : 0.0
         rhs_row("RHS $(viscous ? "viscous" : "inviscid") wall, $label",
-                N -> wall_case(N; viscous=viscous, deriv=deriv),
+                N -> wall_row(N; viscous=viscous, deriv=deriv),
                 s -> exact_rhs(s.equations, prof; mu=mu), NS; primary=:wall)
     end
     for (label, deriv) in DERIVS
@@ -279,7 +290,7 @@ function rhs_study()
     for (label, deriv) in INTERIOR_DERIVS, levels in (1, 2, 3)
         what = levels == 1 ? "two patches" : "$levels levels"
         rhs_row("RHS entropy wave k=3, $what, $label",
-                N -> entropy_case(N; deriv=deriv, levels=levels,
+                N -> entropy_row(N; deriv=deriv, levels=levels,
                                   patch_grid=levels == 1 ? (2, 1, 1) : (1, 1, 1)),
                 s -> exact_rhs(s.equations, entropy_profile(3, 0.37)), NS_PERIODIC;
                 primary=:interface)
@@ -293,11 +304,11 @@ function walls_study()
         for (label, deriv) in DERIVS, (flabel, fopts) in FILTERS
             what = "$(viscous ? "viscous" : "inviscid") wall, $label,$flabel"
             evolution_study("$what, against the fine reference",
-                            (N; cfl) -> wall_case(N; viscous=viscous, deriv=deriv,
+                            (N; cfl) -> wall_row(N; viscous=viscous, deriv=deriv,
                                                   cfl=cfl, fopts...),
                             (s, cfl) -> fine, NS)
             evolution_study("$what, against the mirror (closure defect)",
-                            (N; cfl) -> wall_case(N; viscous=viscous, deriv=deriv,
+                            (N; cfl) -> wall_row(N; viscous=viscous, deriv=deriv,
                                                   cfl=cfl, fopts...),
                             (s, cfl) -> same_mirror(s, cfl; viscous=viscous,
                                                     deriv=deriv, fopts...), NS)
@@ -323,7 +334,7 @@ function interfaces_study()
     for (k, phase) in ((3, 0.37), (1, 0.0)), (label, deriv) in INTERIOR_DERIVS,
         (flabel, fopts) in FILTERS[1:2]
         evolution_study("entropy wave k=$k phase=$phase, two patches, $label,$flabel",
-                        (N; cfl) -> entropy_case(N; k=k, phase=phase, deriv=deriv,
+                        (N; cfl) -> entropy_row(N; k=k, phase=phase, deriv=deriv,
                                                  patch_grid=(2, 1, 1), cfl=cfl, fopts...),
                         entropy_reference(k, phase), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY)
@@ -331,12 +342,12 @@ function interfaces_study()
     fine = fine_periodic()
     for (label, deriv) in INTERIOR_DERIVS
         evolution_study("viscous standing wave, two patches, $label, unfiltered",
-                        (N; cfl) -> viscous_periodic_case(N; deriv=deriv,
+                        (N; cfl) -> viscous_periodic_row(N; deriv=deriv,
                                                           patch_grid=(2, 1, 1), cfl=cfl),
                         (s, cfl) -> fine, NS_PERIODIC; primary=:interface)
     end
     evolution_study("viscous standing wave, one patch, C6, unfiltered (interior only)",
-                    (N; cfl) -> viscous_periodic_case(N; cfl=cfl),
+                    (N; cfl) -> viscous_periodic_row(N; cfl=cfl),
                     (s, cfl) -> fine, NS_PERIODIC; primary=:interior)
 end
 
@@ -346,7 +357,7 @@ function levels_study()
         (flabel, fopts) in FILTERS[1:2]
         evolution_study("entropy wave k=3, $levels levels, subcycle=$subcycle, " *
                         "$label,$flabel",
-                        (N; cfl) -> entropy_case(N; deriv=deriv, levels=levels,
+                        (N; cfl) -> entropy_row(N; deriv=deriv, levels=levels,
                                                  subcycle=subcycle, cfl=cfl, fopts...),
                         entropy_reference(3, 0.37), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY)
@@ -354,7 +365,7 @@ function levels_study()
     fine = fine_periodic()
     for levels in (2, 3), (label, deriv) in INTERIOR_DERIVS
         evolution_study("viscous standing wave, $levels levels, $label, unfiltered",
-                        (N; cfl) -> viscous_periodic_case(N; deriv=deriv, levels=levels,
+                        (N; cfl) -> viscous_periodic_row(N; deriv=deriv, levels=levels,
                                                           cfl=cfl),
                         (s, cfl) -> fine, NS_PERIODIC; primary=:interface)
     end
@@ -365,10 +376,10 @@ function fields_study()
     fine = fine_mirror(false)
     for (label, deriv) in (DERIVS[1], DERIVS[4]), (cname, comp) in (("rho u", 2), ("E", 5))
         evolution_study("inviscid wall, $label, unfiltered, $cname",
-                        (N; cfl) -> wall_case(N; deriv=deriv, cfl=cfl),
+                        (N; cfl) -> wall_row(N; deriv=deriv, cfl=cfl),
                         (s, cfl) -> fine, NS; comp=comp)
         evolution_study("entropy wave k=3, 2 levels, $label, unfiltered, $cname",
-                        (N; cfl) -> entropy_case(N; deriv=deriv, levels=2, cfl=cfl),
+                        (N; cfl) -> entropy_row(N; deriv=deriv, levels=2, cfl=cfl),
                         entropy_reference(3, 0.37), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY, comp=comp)
     end
@@ -396,7 +407,7 @@ function filter_study()
         println("  configuration                          passes  vs mirror: wall      " *
                 "interior   | vs fine: wall      interior   l2")
         for (label, fopts) in rows
-            run1 = evolve!((N; cfl) -> wall_case(N; cfl=cfl, fopts...), N, CFL, TFINAL)
+            run1 = evolve!((N; cfl) -> wall_row(N; cfl=cfl, fopts...), N, CFL, TFINAL)
             run1 === nothing && continue
             solver, states = run1
             em = regional_errors(solver, states,
@@ -427,7 +438,7 @@ function dt_study()
     println("\ninviscid wall N=$N, C6 BL, unfiltered, against the fine reference")
     println("   cfl     steps  wall       interior   l2")
     for cfl in (0.5, 0.25, 0.125, 0.0625)
-        run1 = evolve!((N; cfl) -> wall_case(N; deriv=DERIVS[4][2], cfl=cfl), N, cfl, TFINAL)
+        run1 = evolve!((N; cfl) -> wall_row(N; deriv=DERIVS[4][2], cfl=cfl), N, cfl, TFINAL)
         run1 === nothing && continue
         solver, states = run1
         e = regional_errors(solver, states, fine)
@@ -446,7 +457,7 @@ function dt_study()
         println("\nentropy wave k=3 N=$Np, 3 levels, subcycle=$subcycle, C6 BL, unfiltered")
         println("   cfl     steps  interface  covered    interior   l2")
         for cfl in (0.5, 0.25, 0.125, 0.0625)
-            run1 = evolve!((N; cfl) -> entropy_case(N; deriv=DERIVS[4][2], levels=3,
+            run1 = evolve!((N; cfl) -> entropy_row(N; deriv=DERIVS[4][2], levels=3,
                                                     subcycle=subcycle, cfl=cfl),
                            Np, cfl, TFINAL_ENTROPY)
             run1 === nothing && continue
@@ -485,7 +496,7 @@ function pulse_leftgoing(N; source=nothing, patch_grid=(1, 1, 1), refine=nothing
     s = Solver(n_global=(N, 1, 1), L_domain=(2pi, 1.0, 1.0), bcs=per3,
                art=ArtificialProperties(enabled=false), filter_interval=0,
                patch_grid=patch_grid, refine=refine, subcycle=subcycle;
-               merge((interface_divergence=source,), opts)...)
+               merge((interface_divergence=source, IFLUX...), opts)...)
     Q = allocate_state(s)
     initialize!(s, Q, (x, y, z) -> Prim(rho=(1 + pulse(x))^(1 / GAMMA),
                                         p=1 + pulse(x), u=(pulse(x) / c0, 0, 0)))
@@ -504,7 +515,7 @@ function idiv_study()
     for (clabel, src) in IDIV, levels in (1, 2)
         what = levels == 1 ? "two patches" : "2 levels"
         rhs_row("RHS entropy wave k=3, $what, source $clabel",
-                N -> entropy_case(N; levels=levels, interface_divergence=src,
+                N -> entropy_row(N; levels=levels, interface_divergence=src,
                                   patch_grid=levels == 1 ? (2, 1, 1) : (1, 1, 1)),
                 s -> exact_rhs(s.equations, entropy_profile(3, 0.37)), NS_PERIODIC;
                 primary=:interface)
@@ -514,14 +525,14 @@ function idiv_study()
     for (clabel, src) in IDIV, (flabel, fopts) in IDIV_FILTERS
         for (k, phase) in ((3, 0.37), (1, 0.0))
             evolution_study("entropy wave k=$k, two patches, source $clabel,$flabel",
-                            (N; cfl) -> entropy_case(N; k=k, phase=phase,
+                            (N; cfl) -> entropy_row(N; k=k, phase=phase,
                                                      patch_grid=(2, 1, 1), cfl=cfl,
                                                      interface_divergence=src, fopts...),
                             entropy_reference(k, phase), NS_PERIODIC;
                             primary=:interface, tfinal=TFINAL_ENTROPY)
         end
         evolution_study("inviscid standing wave, two patches, source $clabel,$flabel",
-                        (N; cfl) -> viscous_periodic_case(N; mu=0.0, patch_grid=(2, 1, 1),
+                        (N; cfl) -> viscous_periodic_row(N; mu=0.0, patch_grid=(2, 1, 1),
                                                           cfl=cfl, interface_divergence=src,
                                                           fopts...),
                         (s, cfl) -> fine_inviscid, NS_PERIODIC; primary=:interface)
@@ -531,29 +542,29 @@ function idiv_study()
         for levels in (2, 3), subcycle in (false, true)
             evolution_study("entropy wave k=3, $levels levels, subcycle=$subcycle, " *
                             "source $clabel, unfiltered",
-                            (N; cfl) -> entropy_case(N; levels=levels, subcycle=subcycle,
+                            (N; cfl) -> entropy_row(N; levels=levels, subcycle=subcycle,
                                                      cfl=cfl, interface_divergence=src,
                                                      filter_interval=0),
                             entropy_reference(3, 0.37), NS_PERIODIC;
                             primary=:interface, tfinal=TFINAL_ENTROPY)
         end
         evolution_study("entropy wave k=3, 2 levels, source $clabel, default filter",
-                        (N; cfl) -> entropy_case(N; levels=2, cfl=cfl, filter_interval=1,
+                        (N; cfl) -> entropy_row(N; levels=2, cfl=cfl, filter_interval=1,
                                                  interface_divergence=src),
                         entropy_reference(3, 0.37), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY)
         evolution_study("entropy wave k=1, 2 levels, source $clabel, unfiltered",
-                        (N; cfl) -> entropy_case(N; k=1, phase=0.0, levels=2, cfl=cfl,
+                        (N; cfl) -> entropy_row(N; k=1, phase=0.0, levels=2, cfl=cfl,
                                                  interface_divergence=src),
                         entropy_reference(1, 0.0), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY)
         evolution_study("inviscid standing wave, 2 levels, source $clabel, unfiltered",
-                        (N; cfl) -> viscous_periodic_case(N; mu=0.0, levels=2, cfl=cfl,
+                        (N; cfl) -> viscous_periodic_row(N; mu=0.0, levels=2, cfl=cfl,
                                                           interface_divergence=src),
                         (s, cfl) -> fine_inviscid, NS_PERIODIC; primary=:interface)
         evolution_study("entropy wave k=3, 2 levels tiled (tile 4), subcycled, " *
                         "source $clabel, unfiltered",
-                        (N; cfl) -> entropy_case(N; levels=2, subcycle=true, tile=4,
+                        (N; cfl) -> entropy_row(N; levels=2, subcycle=true, tile=4,
                                                  cfl=cfl, interface_divergence=src),
                         entropy_reference(3, 0.37), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY)
@@ -563,7 +574,7 @@ function idiv_study()
     fine = fine_mirror(false)
     for (clabel, src) in IDIV, (flabel, fopts) in IDIV_FILTERS
         evolution_study("inviscid wall + interface, two patches, source $clabel,$flabel",
-                        (N; cfl) -> wall_case(N; patch_grid=(2, 1, 1), cfl=cfl,
+                        (N; cfl) -> wall_row(N; patch_grid=(2, 1, 1), cfl=cfl,
                                               interface_divergence=src, fopts...),
                         (s, cfl) -> fine, NS; primary=:interface)
     end
@@ -573,7 +584,7 @@ function idiv_study()
         what = levels == 1 ? "two patches" : "2 levels"
         evolution_study("viscous standing wave, $what, interface_rhs $rlabel, " *
                         "source $clabel, unfiltered",
-                        (N; cfl) -> viscous_periodic_case(N; levels=levels, cfl=cfl,
+                        (N; cfl) -> viscous_periodic_row(N; levels=levels, cfl=cfl,
                                                           patch_grid=levels == 1 ?
                                                               (2, 1, 1) : (1, 1, 1),
                                                           interface_rhs=rhs,
@@ -585,7 +596,7 @@ function idiv_study()
     for ((clabel, _), (_, src32)) in zip(IDIV, idiv_sources(Float32)),
         (what, kw) in (("two patches", (patch_grid=(2, 1, 1),)), ("2 levels", (levels=2,)))
         evolution_study("Float32 entropy wave k=1, $what, source $clabel, unfiltered",
-                        (N; cfl) -> entropy_case(N; k=1, phase=0.0, cfl=cfl,
+                        (N; cfl) -> entropy_row(N; k=1, phase=0.0, cfl=cfl,
                                                  precision=Float32,
                                                  deriv=lele_d1_6(Float32),
                                                  filt=compact_filter(0.45, Float32),
@@ -626,24 +637,24 @@ function transfer_study()
     for (label, deriv) in derivs, p in TRANSFER_ORDERS
         o = (deriv=deriv, level_interpolation_order=p, COUPLING...)
         evolution_study("entropy wave k=3, 2 levels, $label, order $p, unfiltered",
-                        (N; cfl) -> entropy_case(N; levels=2, cfl=cfl, o...),
+                        (N; cfl) -> entropy_row(N; levels=2, cfl=cfl, o...),
                         entropy_reference(3, 0.37), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY)
         evolution_study("entropy wave k=3, 2 levels, $label, order $p, filtered",
-                        (N; cfl) -> entropy_case(N; levels=2, cfl=cfl, filter_interval=1,
+                        (N; cfl) -> entropy_row(N; levels=2, cfl=cfl, filter_interval=1,
                                                  o...),
                         entropy_reference(3, 0.37), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY)
         evolution_study("entropy wave k=3, 2 levels subcycled, $label, order $p, unfiltered",
-                        (N; cfl) -> entropy_case(N; levels=2, subcycle=true, cfl=cfl, o...),
+                        (N; cfl) -> entropy_row(N; levels=2, subcycle=true, cfl=cfl, o...),
                         entropy_reference(3, 0.37), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY)
         evolution_study("entropy wave k=3, 3 levels subcycled, $label, order $p, unfiltered",
-                        (N; cfl) -> entropy_case(N; levels=3, subcycle=true, cfl=cfl, o...),
+                        (N; cfl) -> entropy_row(N; levels=3, subcycle=true, cfl=cfl, o...),
                         entropy_reference(3, 0.37), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY)
         evolution_study("viscous standing wave, 2 levels, $label, order $p, unfiltered",
-                        (N; cfl) -> viscous_periodic_case(N; levels=2, cfl=cfl, o...),
+                        (N; cfl) -> viscous_periodic_row(N; levels=2, cfl=cfl, o...),
                         (s, cfl) -> fine, NS_PERIODIC; primary=:interface)
     end
     # Two dimensions: the imposed planes carry interpolated values along the
@@ -653,7 +664,7 @@ function transfer_study()
     for (label, deriv) in derivs2, p in TRANSFER_ORDERS, filtered in (false, true)
         evolution_study("2-D entropy wave (2, 1), 2 levels, $label, order $p, " *
                         (filtered ? "filtered" : "unfiltered"),
-                        (N; cfl) -> entropy2d_case(N; cfl=cfl, deriv=deriv,
+                        (N; cfl) -> entropy2d_row(N; cfl=cfl, deriv=deriv,
                                                    filter_interval=filtered ? 1 : 0,
                                                    level_interpolation_order=p,
                                                    COUPLING...),
@@ -663,7 +674,7 @@ function transfer_study()
     # The C10 interior carries the C8 filter in any claim made for it.
     for p in TRANSFER_ORDERS
         evolution_study("entropy wave k=3, 2 levels, C10, order $p, filtered",
-                        (N; cfl) -> entropy_case(N; levels=2, cfl=cfl, filter_interval=1,
+                        (N; cfl) -> entropy_row(N; levels=2, cfl=cfl, filter_interval=1,
                                                  deriv=lele_d1_10(),
                                                  level_interpolation_order=p,
                                                  COUPLING...),
@@ -686,7 +697,7 @@ function transfer_time_study()
         subcycle in (false, true)
         println("
 entropy wave k=3, 2 levels, subcycle=$subcycle, $label, unfiltered")
-        build = (N; cfl) -> entropy_case(N; deriv=deriv, levels=2, subcycle=subcycle,
+        build = (N; cfl) -> entropy_row(N; deriv=deriv, levels=2, subcycle=subcycle,
                                          cfl=cfl, level_interpolation_order=p,
                                          COUPLING...)
         ref = evolve!(build, Np, cfls[end] / 2, TFINAL_ENTROPY)
@@ -714,7 +725,8 @@ end
 # --- the divergence through interface ends from ghost fluxes -------------------------
 
 const GF_BL = lele_d1_6(closures=:brady_livescu)
-const GFLUX = (("default", (;)), ("BL", (interface_divergence=GF_BL,)),
+const GFLUX = (("closure", (interface_flux=:closure,)),
+               ("BL", (interface_flux=:closure, interface_divergence=GF_BL)),
                ("ghost", (interface_flux=:ghost,)))
 # The viscous rows add the ghost path with the Brady–Livescu rows on its remainder.
 const GFLUX_VISCOUS = (GFLUX..., ("ghost+BL", (interface_flux=:ghost,
@@ -726,7 +738,7 @@ function gflux_study()
     # which the interior rows and the level interpolation reproduce.
     println("\npolynomial RHS on exact data, N = 96, interface window (rho, rho u, E)")
     for levels in (1, 2), (label, kw) in GFLUX
-        s, st = polynomial_case(96; levels=levels,
+        s, st = polynomial_row(96; levels=levels,
                                 patch_grid=levels == 1 ? (2, 1, 1) : (1, 1, 1), kw...)
         ex = exact_rhs(s.equations, polynomial_profile())
         es = [rhs_errors(s, st, ex; comp=c) for c in (1, s.equations.i_mom[1],
@@ -739,7 +751,7 @@ function gflux_study()
     for (label, kw) in GFLUX, levels in (1, 2)
         what = levels == 1 ? "two patches" : "2 levels"
         rhs_row("RHS entropy wave k=3, $what, $label",
-                N -> entropy_case(N; levels=levels,
+                N -> entropy_row(N; levels=levels,
                                   patch_grid=levels == 1 ? (2, 1, 1) : (1, 1, 1), kw...),
                 s -> exact_rhs(s.equations, entropy_profile(3, 0.37)), NS_PERIODIC;
                 primary=:interface)
@@ -748,14 +760,14 @@ function gflux_study()
     for (label, kw) in GFLUX, (flabel, fopts) in IDIV_FILTERS
         for (k, phase) in ((3, 0.37), (1, 0.0))
             evolution_study("entropy wave k=$k, two patches, $label,$flabel",
-                            (N; cfl) -> entropy_case(N; k=k, phase=phase,
+                            (N; cfl) -> entropy_row(N; k=k, phase=phase,
                                                      patch_grid=(2, 1, 1), cfl=cfl,
                                                      kw..., fopts...),
                             entropy_reference(k, phase), NS_PERIODIC;
                             primary=:interface, tfinal=TFINAL_ENTROPY)
         end
         evolution_study("inviscid standing wave, two patches, $label,$flabel",
-                        (N; cfl) -> viscous_periodic_case(N; mu=0.0, patch_grid=(2, 1, 1),
+                        (N; cfl) -> viscous_periodic_row(N; mu=0.0, patch_grid=(2, 1, 1),
                                                           cfl=cfl, kw..., fopts...),
                         (s, cfl) -> fine_inviscid, NS_PERIODIC; primary=:interface)
     end
@@ -763,32 +775,32 @@ function gflux_study()
         for levels in (2, 3), subcycle in (false, true)
             evolution_study("entropy wave k=3, $levels levels, subcycle=$subcycle, " *
                             "$label, unfiltered",
-                            (N; cfl) -> entropy_case(N; levels=levels, subcycle=subcycle,
+                            (N; cfl) -> entropy_row(N; levels=levels, subcycle=subcycle,
                                                      cfl=cfl, filter_interval=0, kw...),
                             entropy_reference(3, 0.37), NS_PERIODIC;
                             primary=:interface, tfinal=TFINAL_ENTROPY)
         end
         evolution_study("entropy wave k=3, 2 levels, $label, default filter",
-                        (N; cfl) -> entropy_case(N; levels=2, cfl=cfl, filter_interval=1,
+                        (N; cfl) -> entropy_row(N; levels=2, cfl=cfl, filter_interval=1,
                                                  kw...),
                         entropy_reference(3, 0.37), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY)
         evolution_study("entropy wave k=1, 2 levels, $label, unfiltered",
-                        (N; cfl) -> entropy_case(N; k=1, phase=0.0, levels=2, cfl=cfl,
+                        (N; cfl) -> entropy_row(N; k=1, phase=0.0, levels=2, cfl=cfl,
                                                  kw...),
                         entropy_reference(1, 0.0), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY)
         for subcycle in (false, true)
             evolution_study("inviscid standing wave, 2 levels, subcycle=$subcycle, " *
                             "$label, unfiltered",
-                            (N; cfl) -> viscous_periodic_case(N; mu=0.0, levels=2,
+                            (N; cfl) -> viscous_periodic_row(N; mu=0.0, levels=2,
                                                               subcycle=subcycle, cfl=cfl,
                                                               kw...),
                             (s, cfl) -> fine_inviscid, NS_PERIODIC; primary=:interface)
         end
         evolution_study("entropy wave k=3, 2 levels tiled (tile 4), subcycled, " *
                         "$label, unfiltered",
-                        (N; cfl) -> entropy_case(N; levels=2, subcycle=true, tile=4,
+                        (N; cfl) -> entropy_row(N; levels=2, subcycle=true, tile=4,
                                                  cfl=cfl, kw...),
                         entropy_reference(3, 0.37), NS_PERIODIC;
                         primary=:interface, tfinal=TFINAL_ENTROPY)
@@ -796,7 +808,7 @@ function gflux_study()
     fine = fine_mirror(false)
     for (label, kw) in GFLUX, (flabel, fopts) in IDIV_FILTERS
         evolution_study("inviscid wall + interface, two patches, $label,$flabel",
-                        (N; cfl) -> wall_case(N; patch_grid=(2, 1, 1), cfl=cfl,
+                        (N; cfl) -> wall_row(N; patch_grid=(2, 1, 1), cfl=cfl,
                                               kw..., fopts...),
                         (s, cfl) -> fine, NS; primary=:interface)
     end
@@ -805,13 +817,14 @@ function gflux_study()
         (what, lkw) in (("two patches", (patch_grid=(2, 1, 1),)), ("2 levels", (levels=2,)),
                         ("2 levels subcycled", (levels=2, subcycle=true)))
         evolution_study("viscous standing wave, $what, $label, unfiltered",
-                        (N; cfl) -> viscous_periodic_case(N; cfl=cfl, lkw..., kw...),
+                        (N; cfl) -> viscous_periodic_row(N; cfl=cfl, lkw..., kw...),
                         (s, cfl) -> fine_viscous, NS_PERIODIC; primary=:interface)
     end
-    for (label, kw) in (("default", (;)), ("ghost", (interface_flux=:ghost,))),
+    for (label, kw) in (("closure", (interface_flux=:closure,)),
+                        ("ghost", (interface_flux=:ghost,))),
         (what, lkw) in (("two patches", (patch_grid=(2, 1, 1),)), ("2 levels", (levels=2,)))
         evolution_study("Float32 entropy wave k=1, $what, $label, unfiltered",
-                        (N; cfl) -> entropy_case(N; k=1, phase=0.0, cfl=cfl,
+                        (N; cfl) -> entropy_row(N; k=1, phase=0.0, cfl=cfl,
                                                  precision=Float32,
                                                  deriv=lele_d1_6(Float32),
                                                  filt=compact_filter(0.45, Float32),

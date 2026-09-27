@@ -98,10 +98,10 @@ create or destroy the summed conserved quantity.
 
 This is the scope verified by the serial and distributed periodic conservation
 tests. Patch and level interfaces lie outside it: their coupling is
-interpolation and injection through compact interface closures, and its
-conservation is measured as a drift of the composite integrals rather than
-proved, inside the budgets set for it on long periodic mixing and
-moving-refinement runs. It is not a blanket statement that every one-sided
+interpolation and injection through ghost fluxes or compact interface
+closures, and its conservation is measured as a drift of the composite
+integrals rather than proved, inside the budgets set for it on long periodic
+mixing and moving-refinement runs. It is not a blanket statement that every one-sided
 closure or every operation in a timestep preserves an arbitrary discrete
 integral. Physical boundary fluxes, characteristic corrections, and explicit
 sources change the balance as specified by the problem. The compact state

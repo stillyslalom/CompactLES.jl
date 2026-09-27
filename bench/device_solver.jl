@@ -252,8 +252,8 @@ function main(opt)
     for (label, build) in (("two viscous slabs", two_slabs),
                            ("tiled subcycled regridding Sod", tiled_sod),
                            ("tiled 3-D box, 12 tiles", tiled_box),
-                           ("tiled 3-D box, ghost flux",
-                            b -> tiled_box(b; interface_flux=:ghost)))
+                           ("tiled 3-D box, closure rows",
+                            b -> tiled_box(b; interface_flux=:closure)))
         s1, q1 = build(CPUBackend())
         s2, q2 = build(DeviceBackend(ka_backend))
         dmax = states_diff(q1, q2)

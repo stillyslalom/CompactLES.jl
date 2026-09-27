@@ -219,15 +219,17 @@ evolution 4.01 (`:cascade3` 3.93, cascade filter 1.94, one-sided filter
 shear mode 4.67),
 symmetry-plane evolution 4.46 (one-sided filter 4.69, C8 4.00, C10 4.00,
 viscous slip with a tangential shear 6.04),
-interface evolution 3.31 (two patches), 3.62 / 6.01 (two levels, C6 /
-`:brady_livescu`), 3.72 (three levels subcycled), 4.12 (two levels
-filtered), 5.93 (two levels, `:brady_livescu` with the `:d8` detector),
-4.05 (two levels, pentadiagonal filter), temporal order 3.99 / 4.09
+interface evolution 6.79 (two patches), 6.01 (two levels), 3.62 / 6.01
+(two levels under the closure rows, C6 / `:brady_livescu`), 6.00 (three
+levels subcycled), 6.87 (two levels filtered), 5.93 (two levels,
+`:brady_livescu` with the `:d8` detector, closure rows), 6.01 (two levels,
+pentadiagonal filter), temporal order 3.99 / 4.09
 (Dirichlet / NSCBC inflow data),
 1.00 / 3.85 (two levels, global step / subcycled). The default closure of all three derivative presets is
 `:neutral3`; the coordinate-singularity studies close
-their outer end with a wall and use the default rows, while the interface
-studies keep the cascade rows, since an interface divergence selects them.
+their outer end with a wall and use the default rows, and the interface
+studies take the default ghost fluxes but for the three closure-row studies,
+where an interface divergence selects the cascade rows or the source's.
 A symmetry plane plans no closure row; its evolution rows are measured
 against a five-times-finer folded mirror, since the mirror at the same
 spacing reproduces the run to round-off.

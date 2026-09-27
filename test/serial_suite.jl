@@ -2089,9 +2089,11 @@ end
         # the interface plans `grad_Y` takes. The patched root differs from the
         # single patch by the interface rows' own error (measured 2e-5 with the
         # extended rows and 5e-4 with the one-sided ones on a wider slab), not
-        # by the channel.
+        # by the channel. The one-sided form takes the closure rows.
         for irhs in (:extended, :onesided)
-            r = slab(channel; patch_grid=(2, 1, 1), interface_rhs=irhs)
+            iflux = irhs === :onesided ? :closure : :ghost
+            r = slab(channel; patch_grid=(2, 1, 1), interface_rhs=irhs,
+                     interface_flux=iflux)
             @test npatches(r.s) == 2
             @test r.s.step == 40
             @test r.drift < 1e-12

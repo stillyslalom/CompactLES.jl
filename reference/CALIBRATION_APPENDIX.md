@@ -5121,15 +5121,15 @@ joins it: its ghost values at a same-level face are the neighbouring patch's own
 flux, exchanged after every patch of the level has evaluated, and at a coarse-fine face they
 are evaluated from the conserved gradients of the interpolated fine box, taken with explicit
 seventh-order rows at the box ends. The artificial fluxes and the wall corrections take the
-one-sided rows of `div_plans`, the default's or an `interface_divergence` source's. The
+one-sided rows of `div_plans`, the cascade rows or an `interface_divergence` source's. The
 ghost column runs at the ghost path's default level interpolation order, 8. Serial Float64,
 `cfl = 0.25`, the matrix's interface window, root N = 48, 96, 192 (49, 97, 193 for the wall
-rows), beside the default and Brady–Livescu (BL) columns of the section above, which this
+rows), beside the closure-row and Brady–Livescu (BL) columns of the section above, which this
 study reproduces to every digit. The polynomial row is `polynomial_case(96)`, every inviscid
 flux component of degree at most five, at the interface window:
 
 ```
-                                            default                BL                     ghost
+                                            closure                BL                     ghost
                                             N=192     orders       N=192     orders       N=192     orders
 polynomial RHS, two patches (ρu, E)         2.09e-8, 1.06e-8       4.58e-12, 9.25e-13     2.99e-14, 2.18e-14
 polynomial RHS, 2 levels (ρu, E)            7.73e-10, 4.20e-10     5.68e-12, 1.01e-11     1.58e-13, 1.81e-13
@@ -5179,7 +5179,7 @@ The acoustic pulse of the reflection tests, left-running characteristic over the
 
 ```
                       N = 96                           N = 192                          N = 384
-                      default   BL        ghost        default   BL        ghost        default   BL        ghost
+                      closure   BL        ghost        closure   BL        ghost        closure   BL        ghost
 two patches           9.740e-6  1.543e-5  1.540e-6     2.049e-6  1.139e-6  2.049e-8     2.685e-7  2.477e-8  5.775e-10
 2 levels              1.182e-6  1.189e-6  9.773e-7     1.188e-8  1.240e-9  9.675e-10    8.427e-10 6.066e-11 2.031e-11
 2 levels subcycled    8.314e-7  8.933e-7  4.824e-7     1.051e-8  1.099e-9  1.417e-9     7.058e-10 5.242e-11 5.227e-11
@@ -5190,7 +5190,7 @@ filter live (their fluxes on the one-sided remainder), inviscid, at the ghost pa
 order 8; every ghost figure repeats the order-6 measurement to the printed digit but the
 three-level global-step shell (7.0e-3) and the two-species excursions (3.1e-8, 4.1e-4):
 
-| row | default | ghost |
+| row | closure | ghost |
 |---|---|---|
 | two levels subcycled: steps, p_min, shell, root | 373, 0.0405, 7.7e-3, 2.4e-2 | 373, 0.0405, 7.3e-3, 2.4e-2 |
 | global dt: steps, p_min, shell | — | 708, 0.0382, 8.4e-3 |
@@ -5206,39 +5206,38 @@ The reversed tube reproduces every printed digit of the forward ghost row. On th
 one-sided gradient workaround reads p_min 0.097, shell 4.6e-2 and root 2.4e-1 in the same run.
 
 **Conservation.** The layer on (96, 24, 1) to t = 8, inviscid: the same-level layout's drift
-is 6.2e-13 and its mass-fraction excursion zero (5.2e-10 and 3.1e-5 under the default rows),
-and every nest and regrid history agrees with the default to the third digit. With
+is 6.2e-13 and its mass-fraction excursion zero (5.2e-10 and 3.1e-5 under the closure rows),
+and every nest and regrid history agrees with the closure rows to the third digit. With
 `mu=1e-3` on every layout, the uniform run included: the same-level drift is 5.3e-13 against
 2.2e-10 under the closure rows, the nests drift 6.75e-5 to 6.92e-5 against 6.76e-5 to 6.93e-5,
 the regrid histories sum to 2.24e-4 in both, and no layout leaves [0, 1].
 
 **Cost.** Serial, one thread, median step over nine interleaved chunks of ten steps per
-configuration in one process, ghost over default, periodic, with the artificial properties and
+configuration in one process, ghost over closure, periodic, with the artificial properties and
 the filter on, at the default level interpolation order of each path (Core i9-12900K, Julia
 1.11.4). Float64: (64, 48, 48) in two patches 1.11 inviscid and 1.24 with `mu = 1e-3`; a 2-D
 subcycled level of sixteen 37-node tiles on N = 96 1.16 inviscid. With `mu = 1e-3`, Float32 /
 Float64: a 2-D static 17² box on N = 96, global step, 1.21 / 1.17; the sixteen-tile level
 1.50 / 1.50; a 3-D static 13³ box on N = 40, global step, 1.46 / 1.44. The overhead is the same
 fraction of the step in both precisions, and Float32 gains no accuracy from it (the floor
-above). The interpolation order is not part of it: the default path at order 8 costs what it
+above). The interpolation order is not part of it: the closure path at order 8 costs what it
 does at 6. On the 3-D box (288 ms against 199 per step) a profile places the overhead in the
 gradient ring of each shell imposition (38 ms, the compact derivatives of every component
 along every dimension over the lines of the interpolated box that cross the ring), the
 molecular, remainder and ghost-differenced flux passes (32 ms), the one line solve per
-component and interface dimension beyond the default's one (11 ms) and the coarse-fine ghost
+component and interface dimension beyond the closure path's one (11 ms) and the coarse-fine ghost
 fluxes (11 ms). A tile with no parent-fed face takes no gradient ring. The `ghost_flux` arrays
 add one state-sized array per interface dimension of a patch.
 
 **Decision.** Same-level interfaces: the ghost fluxes remove the interface from the error
 budget, inviscid and viscous (the interface window equals the interior at every
 order-measuring row), cut the acoustic reflection forty-fold below the BL rows at N = 384, keep
-the default's shock minimum pressure, conserve to round-off without a mass-fraction excursion,
+the closure rows' shock minimum pressure, conserve to round-off without a mass-fraction excursion,
 and are the first treatment under which the diaphragm on a shared plane runs with the extended
 gradients. Coarse–fine faces: at the ghost path's default order 8 it reads 5.8–7.0 on every
 smooth row the time integrator leaves, viscous included, and matches or leads the BL rows
 everywhere, so one treatment
-serves both interface kinds. It stays experimental: the promotion to the default is ROADMAP
-N15b, which names what remains.
+serves both interface kinds. It is the default (ROADMAP N15b).
 
 ### bench/levelfilter.jl: level-aware filtering under global stepping
 

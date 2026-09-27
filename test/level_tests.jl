@@ -53,7 +53,8 @@ released_communicators(decomp) =
 end
 
 function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false,
-                           levels=2, tile=0, deriv=lele_d1_6(), n_halo=4)
+                           levels=2, tile=0, deriv=lele_d1_6(), n_halo=4,
+                           interface_flux=:ghost)
     per3l = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     u0 = 0.5
     r1 = BlockRegion((N ÷ 2 - N ÷ 12, 0, 0), (N ÷ 6, 1, 1))
@@ -65,7 +66,7 @@ function _level_wave_error(N; mode=:inject, tfinal=0.5, subcycle=false,
                     art=ArtificialProperties(enabled=false), filter_interval=0,
                     level_restriction=mode, subcycle=subcycle, tile=tile,
                     refine=levels == 3 ? [r1, r2] : r1, deriv=deriv,
-                    n_halo=n_halo)
+                    n_halo=n_halo, interface_flux=interface_flux)
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) ->
         Prim(u=(u0, 0, 0), p=1.0, rho=1.0 + 0.2 * sin(x)))
@@ -85,23 +86,31 @@ end
     errs = [_level_wave_error(N) for N in (48, 96, 192)]
     orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
     @info "two-level entropy wave" errs orders
-    # Measured 8.5e-8 / 7.7e-9 / 6.2e-10, orders 3.46 / 3.64: the one-sided
-    # divergence closures bind, as at a same-level patch interface.
-    @test all(>(3.0), orders)
-    @test errs[2] < 3e-8
+    # Measured 1.5e-10 / 2.0e-12 / 3.3e-14, orders 6.25 / 5.90, under the
+    # default ghost fluxes. Under the closure rows 8.5e-8 / 7.7e-9 / 6.2e-10,
+    # orders 3.46 / 3.64: the one-sided divergence closures bind, as at a
+    # same-level patch interface.
+    @test all(>(5.0), orders)
+    @test errs[2] < 1e-11
+    errsc = [_level_wave_error(N; interface_flux=:closure) for N in (48, 96, 192)]
+    ordersc = [log2(errsc[i] / errsc[i+1]) for i in 1:2]
+    @info "two-level entropy wave, closure rows" errsc ordersc
+    @test all(>(3.0), ordersc)
+    @test errsc[2] < 3e-8
     # The deconvolution/filter coupling measures order 1.3-1.7 (see the
     # src/levels.jl header); pin that it stays selectable and stable.
     ef = _level_wave_error(96; mode=:filter)
     @test 1e-5 < ef < 1e-4
-    # C10 with its two-row interface closures: measured 8.2e-8 / 5.7e-9 /
-    # 4.9e-10, orders 3.84 / 3.54 (subcycled 3.88 / 3.53); the divergence's
-    # one-sided rows bind here as well.
+    # C10 at the ghost path's order-10 interpolation: measured 2.7e-13 /
+    # 1.9e-14 / 8.2e-15, at the round-off floor from N = 96. Under its
+    # two-row interface closures 8.2e-8 / 5.7e-9 / 4.9e-10, orders 3.84 /
+    # 3.54, the divergence's one-sided rows binding here as well.
     errs10 = [_level_wave_error(N; deriv=lele_d1_10())
               for N in (48, 96, 192)]
     orders10 = [log2(errs10[i] / errs10[i+1]) for i in 1:2]
     @info "two-level entropy wave, C10" errs10 orders10
-    @test all(>(3.0), orders10)
-    @test errs10[2] < 3e-8
+    @test errs10[1] < 1e-12
+    @test errs10[3] < 5e-14
 end
 
 # Trapezoid mass over the two-level composite: the coarse level outside the
@@ -152,7 +161,8 @@ end
     run!(solver, states; tfinal=0.1, nmax=20000)
     # Ahead of the shock (x > 0.85) the exact solution is still quiescent, so
     # any momentum there beyond round-off is interface-generated noise.
-    # Measured 3.5e-10 with the unrefined run at 1.9e-10.
+    # Measured 3.4e-10 (3.5e-10 under the closure rows) with the unrefined
+    # run at 1.9e-10.
     ps = PatchSolver(solver, solver.patches[1])
     pad = ps.decomp.n_halo_d[1]
     m1 = solver.equations.i_mom[1]
@@ -170,8 +180,9 @@ end
     run!(solver, states; tfinal=0.2, nmax=40000)
     drift = abs(_two_level_mass(solver, states, N) - m0) / m0
     @info "two-level Sod mass drift" drift
-    # Measured 1.28e-4 (:inject; :filter halves it at three decades of smooth
-    # accuracy — src/levels.jl header). The unrefined run drifts 5e-11.
+    # Measured 1.32e-4 (1.28e-4 under the closure rows; :filter halves it at
+    # three decades of smooth accuracy — src/levels.jl header). The
+    # unrefined run drifts 5e-11.
     @test drift < 5e-4
 
     # The :d8 detector and the pentadiagonal filter at the same faces. The
@@ -220,8 +231,8 @@ end
         end
     end
     @info "2-D refined advection" e
-    # Measured 4.3e-8.
-    @test e < 1e-6
+    # Measured 5.5e-11 (4.3e-8 under the closure rows).
+    @test e < 1e-9
 end
 
 # --- Subcycling, tagging, regridding -----------------------------------------
@@ -260,6 +271,9 @@ end
                                      refine=BlockRegion((40, 0, 0), (17, 1, 1)))) == p
         end
     end
+    # The default interface flux is the ghost path's, and so is its order.
+    @test chain_order(Solver(n_global=(96, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3l,
+                             refine=BlockRegion((40, 0, 0), (17, 1, 1)))) == 8
     @test CL.default_interpolation_order(compact_filter(0.45)) == 6
     # The shell reproduces a polynomial of degree p − 1 and not one of
     # degree p: the chain runs at the order requested.
@@ -497,12 +511,14 @@ end
     errs = [_level_wave_error(N; subcycle=true) for N in (48, 96, 192)]
     orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
     @info "subcycled two-level entropy wave" errs orders
-    # Measured 8.4e-8 / 7.5e-9 / 5.9e-10, orders 3.49 / 3.66 — within a few
-    # percent of the global-dt coupling's figures, so the cubic Hermite
-    # boundary data does not bind. The step count drops threefold: dt is now
-    # coarse-limited (the fine rate enters the reduction divided by 3).
-    @test all(>(3.0), orders)
-    @test errs[2] < 3e-8
+    # Measured 1.6e-10 / 2.5e-11 / 6.9e-12, orders 2.65 / 1.86. The global
+    # step reads 3.3e-14 at N = 192, so the subcycled coupling's own error,
+    # not the interface's, sets this slope at the default CFL. Under the
+    # closure rows 8.4e-8 / 7.5e-9 / 5.9e-10, orders 3.49 / 3.66, within a
+    # few percent of the global step's. The step count drops threefold: dt
+    # is coarse-limited (the fine rate enters the reduction divided by 3).
+    @test all(>(1.5), orders)
+    @test errs[3] < 1e-11
 end
 
 @testset "subcycled Sod through the refinement boundary" begin
@@ -529,9 +545,8 @@ end
         m1 = solver.equations.i_mom[1]
         noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
         @info "subcycled Sod through refinement boundary, $label" noise
-        # Measured 7.3e-11 against the global-dt gate's 3.5e-10 (5.7e-11
-        # under the former κ/(ρ cp) diffusive limit; the cv form takes
-        # different steps); C10 6.2e-10.
+        # Measured 6.3e-11 against the global-dt gate's 3.4e-10 (7.3e-11
+        # under the closure rows); C10 6.3e-10.
         @test noise < 1e-8
         for (psq, Q) in CL.eachpatch(solver, states)
             n = psq.decomp.n_local[1]
@@ -541,8 +556,8 @@ end
         run!(solver, states; tfinal=0.2, nmax=40000)
         drift = abs(_two_level_mass(solver, states, N) - m0) / m0
         @info "subcycled two-level Sod mass drift, $label" drift
-        # Measured 1.05e-4 (C6) and 1.03e-4 (C10) against the global-dt gate's
-        # 1.28e-4.
+        # Measured 1.17e-4 (C6) and 1.02e-4 (C10) against the global-dt gate's
+        # 1.32e-4.
         @test drift < 5e-4
     end
 end
@@ -607,10 +622,9 @@ end
     end
     @test nlevels(sa) == 2
     @info "moving-region Sod vs uniform fine" e_amr e_base
-    # Measured: composite 2.7e-3 against the uniform-coarse baseline's
-    # 7.3e-2 (3.9e-3 under the former κ/(ρ cp) diffusive limit, whose steps
-    # differ); the refinement recovers most of the uniform-fine answer at a
-    # third of the fine points.
+    # Measured: composite 8.6e-4 (9.5e-4 under the closure rows) against the
+    # uniform-coarse baseline's 7.8e-2; the refinement recovers most of the
+    # uniform-fine answer at a third of the fine points.
     @test e_amr < 1.5e-2
     @test e_base > 5e-2
     @test e_amr < e_base / 3
@@ -667,12 +681,12 @@ end
                 for N in (48, 96, 192)]
         orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
         @info "three-level entropy wave" subcycle errs orders
-        # Measured 9.0e-8 / 9.1e-9 / 6.8e-10, orders 3.31 / 3.74 at the
-        # global dt and 9.0e-8 / 8.8e-9 / 6.3e-10, orders 3.35 / 3.79
-        # subcycled: the two-level figures (3.46 / 3.64) with a second
-        # coarse-fine boundary pair inside the first.
-        @test all(>(3.0), orders)
-        @test errs[2] < 3e-8
+        # Measured orders 6.25 / 5.20 at the global dt and 2.62 / 1.85
+        # subcycled, the two-level figures with a second coarse-fine
+        # boundary pair inside the first; errors 1.4e-10 and 1.6e-10 at
+        # N = 48. Under the closure rows 3.31 / 3.74 and 3.35 / 3.79.
+        @test all(>(subcycle ? 1.5 : 5.0), orders)
+        @test errs[2] < 1e-10
     end
 end
 
@@ -761,13 +775,16 @@ end
     errs = [_level_wave_error(N; tile=8) for N in (48, 96, 192)]
     orders = [log2(errs[i] / errs[i+1]) for i in 1:2]
     @info "tiled entropy wave" errs orders
-    # Measured 1.39e-7 / 9.0e-9 / 6.0e-10, orders 3.95 / 3.91, beside the
-    # one-patch level's 8.5e-8 / 7.7e-9 / 6.2e-10: the tile interfaces
+    # Measured 1.2e-10 / 1.9e-12 / 3.5e-14, orders 5.99 / 5.77, beside the
+    # one-patch level's 1.5e-10 / 2.0e-12 / 3.3e-14: the tile interfaces
     # inside the level cost nothing visible at N = 192.
-    @test all(>(3.0), orders)
-    @test errs[3] < 2e-9
-    # Subcycled, one tiled level: measured 5.8e-10 against 5.9e-10.
-    @test _level_wave_error(192; tile=8, subcycle=true) < 2e-9
+    @test all(>(5.0), orders)
+    @test errs[3] < 1e-12
+    # Subcycled, one tiled level: measured 6.8e-12 against the one-patch
+    # level's 6.9e-12.
+    es = _level_wave_error(192; tile=8, subcycle=true)
+    @info "subcycled tiled entropy wave" es
+    @test es < 2e-11
 end
 
 @testset "tiled level: 2-D tile nest with corners" begin
@@ -795,13 +812,14 @@ end
         return e, npatches(solver)
     end
     # Four 7×7 tiles meeting at a corner, both stepping modes: measured
-    # 4.29e-8 against the one-patch level's 4.27e-8, so the corner ghosts
-    # and the two-way shared faces are consistent.
+    # 5.5e-11 at the global step and 6.2e-11 subcycled against the one-patch
+    # level's 5.5e-11, so the corner ghosts and the two-way shared faces are
+    # consistent.
     for subcycle in (false, true)
         e, np = vortex(tile=6, subcycle=subcycle)
         @info "2-D tile nest" subcycle e
         @test np == 5
-        @test e < 1e-7
+        @test e < 1e-9
     end
 end
 
@@ -1868,7 +1886,8 @@ end
     rho_fine = rho_fine[1:9:end]
     e_composite = sum(abs, rho .- rho_fine) / N
     e_root = sum(abs, rho_root .- rho_fine) / N
-    # Measured: 1.44e-3 against 2.37e-2 for the root alone.
+    # Measured: 9.1e-4 (1.44e-3 under the closure rows) against 2.37e-2 for
+    # the root alone.
     @info "three-level shock and interface" e_composite e_root
     @test e_composite < 3e-3
     @test e_root > 8 * e_composite

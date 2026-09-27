@@ -30,8 +30,8 @@
 #             and the same NSCBC faces with constant targets and an
 #             acoustic pulse in the interior
 #   levels    the entropy wave through a two-level nest, global step and
-#             subcycled, under the default interface coupling, the ghost
-#             fluxes and the Brady–Livescu interface rows; the composite
+#             subcycled, under the closure rows, the ghost fluxes (the
+#             default) and the Brady–Livescu interface rows; the composite
 #             error and the fine patch's
 #
 # `restrict` changes the coupling schedule of the `levels` rows, as a
@@ -173,8 +173,10 @@ end
 function levels_study()
     println("\nlevels: entropy wave, two levels, N = 96, t = 0.5, restrict = " *
             "$(OPTS.restrict); composite error, then the fine patch's")
-    couplings = (("default", (;)), ("ghost fluxes", (interface_flux=:ghost,)),
-                 ("C6 BL", (deriv=lele_d1_6(closures=:brady_livescu),)))
+    couplings = (("closure rows", (interface_flux=:closure,)),
+                 ("ghost fluxes", (interface_flux=:ghost,)),
+                 ("C6 BL", (deriv=lele_d1_6(closures=:brady_livescu),
+                            interface_flux=:closure)))
     for (sub, steps, ref_steps) in ((false, (40, 80, 160, 320), 5120),
                                     (true, (14, 20, 28, 40, 56, 80, 160), 4480))
         for (name, kw) in couplings

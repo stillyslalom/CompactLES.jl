@@ -170,19 +170,10 @@ the designs and the fallback analysis are in [AMR_GPU.md](AMR_GPU.md).
   gradient ring; viscous interface rows read 6.1–6.8, and promotion moves to
   N15b (commit `decf45a`).
 
-- [ ] **N15b — Promote `interface_flux = :ghost` to the default.** The ghost
-  path leads the closure rows on every smooth row, inviscid and viscous, keeps
-  the shock minima and conserves as they do (N15, N15a). Before it becomes the
-  default: re-record every guard and serial value a patched or refined default
-  run moves (`test/convergence.jl` interface rows, the MPI suite's patch and
-  level phases, the tutorials), and settle Float32, where the ghost path gains
-  nothing at the same fractional step cost as in Float64. A user EOS at a
-  refined viscous level is refused under `:ghost`; the temperature-gradient
-  hook it needs waits for A7 and H5. The artificial fluxes keep the one-sided
-  rows.
-  **Gate:** the full gate, the device suite and a GPU run of a refined viscous
-  case; curvilinear metrics need ghost `area_d` and a matching GCL operator and
-  are out of scope until a case needs them.
+- [x] **N15b** — `interface_flux = :ghost` is the default at patch and level
+  interfaces and inert without one; `:closure` remains for shock-dominated and
+  Float32 runs, and a configuration `:ghost` does not support raises an
+  `ArgumentError` naming it (commit TBD).
 
 - [x] **N16** — `level_interpolation_order` (2, 4, 6 or 8) sets the live
   transfer order; 6 stays the default, which the default interface rows

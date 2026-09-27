@@ -761,6 +761,16 @@ Grid, scheme, timestep, and decomposition choices used to realize a
   and computes in it. Left at `nothing`, those components must all carry one
   type, which the solver adopts; components of different types raise an
   `ArgumentError` at setup that names the type of each.
+- `interface_flux`: how the flux divergence closes at a patch or level
+  interface. `:ghost` (default) differentiates the inviscid and molecular
+  fluxes through the interface from ghost values with the interior stencil;
+  `:closure` takes one-sided closure rows there. Choose `:closure` for
+  shock-dominated runs and Float32 runs, where the ghost fluxes add 11 to 50%
+  to the step without lowering the error, and wherever `:ghost` is not
+  supported: a curvilinear or stretched grid, `interface_rhs = :onesided`, or
+  a user EOS at a refined level with molecular transport, each of which
+  setup rejects under `:ghost` with an `ArgumentError`. Without an interface
+  the setting has no effect. See [Choose numerics for accuracy per cost](@ref).
 
 Compact plans impose a scheme-dependent minimum rank-local extent. With the
 defaults, each resolved local extent needs at least nine points because the
@@ -790,15 +800,15 @@ combined with `amr`.
 - `level_restriction`: `:inject` (default) writes the fine coincident-node
   values onto the covered region of the parent; `:filter` applies the
   invertible transfer pair's anti-alias filter first.
-- `level_interpolation_order`: 2, 4, 6, 8 or 10; by default the interior
-  order of `deriv`, so 6 for [`lele_d1_6`](@ref), 8 for
-  [`lele_d1_8`](@ref), 10 for [`lele_d1_10`](@ref) and 6 for any other
-  scheme. The order of the Lagrange interpolation from the parent that
-  fills a refined level's ghost ring and boundary planes at every stage,
-  and a newly refined region at a regrid. Order 8 under C6 lowers the error
-  with viscosity, the filter, a multidimensional level,
-  `interface_divergence` or `interface_flux = :ghost`; 2 is the only
-  monotone choice. Checkpoints do not record it.
+- `level_interpolation_order`: 2, 4, 6, 8 or 10; by default two above the
+  interior order of `deriv`, at most 10, so 8 for [`lele_d1_6`](@ref) and
+  10 for [`lele_d1_8`](@ref) and [`lele_d1_10`](@ref), and the interior
+  order itself under `interface_flux = :closure`. The order of the Lagrange
+  interpolation from the parent that fills a refined level's ghost ring and
+  boundary planes at every stage, and a newly refined region at a regrid.
+  Under the closure rows, order 8 with C6 lowers the error with viscosity,
+  the filter, a multidimensional level or `interface_divergence`; 2 is the
+  only monotone choice. A checkpoint records it with the numerics.
 - `subcycle`: `false` (default) advances every level at the global dt;
   `true` selects the Berger–Oliger step, three steps of a third of the
   parent's step on each refined level, recursively, with Hermite boundary
@@ -883,7 +893,7 @@ Base.@kwdef struct Numerics
     backend::AbstractBackend = CPUBackend()
     interface_rhs::Symbol = :extended
     interface_divergence::Union{Nothing,AbstractCompactScheme} = nothing
-    interface_flux::Symbol = :closure
+    interface_flux::Symbol = :ghost
     amr::Union{Nothing,AMR} = nothing
     refine::Union{Nothing,BlockRegion,Vector{BlockRegion}} = nothing
     level_restriction::Symbol = :inject

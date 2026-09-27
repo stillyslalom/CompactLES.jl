@@ -27,9 +27,9 @@ measurements:
 | wall-bounded evolution at the wall, default rows | 4 | 4.01 |
 | wall-bounded evolution, C6 `:brady_livescu` | 6 | 5.73 |
 | cylindrical axis, spherical origin (folds) | 3 | 3.76 / 2.97 |
-| patch or level interface | 3 to 4 | 3.31 / 3.62 |
-| patch or level interface, C6 `interface_divergence` `:brady_livescu`, Float64 | 5 to 6 | 5.8 to 7.0 / 5.1 to 6.0 |
-| patch or level interface, C6 `interface_flux = :ghost` (level interpolation order 8), Float64 | 6 | 5.4 to 6.9 / 5.8 to 7.0 |
+| patch or level interface, C6, default ghost fluxes (level interpolation order 8), Float64 | 6 | 6.79 / 6.01 |
+| patch or level interface, `interface_flux = :closure` | 3 to 4 | 3.31 / 3.62 |
+| patch or level interface, `:closure` with C6 `interface_divergence` `:brady_livescu`, Float64 | 5 to 6 | 5.8 to 7.0 / 5.1 to 6.0 |
 
 With default wall closures, the closed-line C8 and C10 studies have the same
 wall and maximum-norm errors as C6, to the printed digits. Their benefit is
@@ -111,19 +111,59 @@ near 1e-3 at roughly fifty points and above, so use Float64 to benefit from
 these rows. C8 `:brady_livescu` fails the smooth-wall study from CFL 1.25
 and is not supported as a wall configuration.
 
-Patch and level interfaces keep the cascade rows regardless of the selected
-wall closures. An interface imposes no boundary condition, and the cascade
-rows have smaller truncation-error constants there.
+## Patch and level interfaces
+
+By default (`interface_flux = :ghost`) a patch or level interface uses no
+closure rows for the inviscid and molecular parts of the flux divergence. The
+inviscid flux is evaluated on the interface ghost layers and differentiated
+through the interface with the interior stencil. The viscous, conductive and
+diffusive flux on the ghost layers of a same-level interface is the
+neighbouring patch's own, exchanged once every patch has evaluated its
+right-hand side, so a same-level interface has the interior's error with or
+without viscosity. At a coarse-fine interface the ghost values are
+interpolated from the parent and the molecular flux there is evaluated from
+the gradients of the interpolated state, so the level interpolation order sets
+the error; its default is two above the derivative operator's order, which
+gives sixth order with C6. The artificial fluxes and the wall corrections keep
+the closure rows, which `interface_divergence` selects. A discontinuity placed
+on a shared patch plane runs under the ghost fluxes and fails under the
+closure rows. Without a patch or level interface the setting has no effect.
+
+Choose `interface_flux = :closure` for:
+
+- shock-dominated runs, where the interface order does not show in the
+  error: a shock crossing a patch or level interface reaches the same minimum
+  pressure under both, and the closure rows cost less per step;
+- Float32 runs, whose interface error reaches the precision floor under
+  either choice, so the ghost fluxes add cost without lowering the error;
+- configurations the ghost fluxes do not support, which setup rejects with
+  an `ArgumentError` naming `interface_flux = :closure`: a patch interface on a
+  cylindrical, spherical or stretched grid, `interface_rhs = :onesided`, and a
+  user equation of state at a refined level with molecular transport;
+- runs where the step cost matters more than the interface error. The ghost
+  fluxes add 11 to 16% to the step without molecular transport and 17 to 50%
+  with it, the most on a refined level of small tiles, where the gradients
+  taken on the interpolated parent state dominate.
+
+On a curvilinear grid the ghost fluxes would need ghost face areas and a
+matching discrete geometric conservation law at the interface; neither is
+implemented.
+
+Under `interface_flux = :closure`, patch and level interfaces take the
+cascade rows regardless of the selected wall closures. An interface imposes
+no boundary condition, and the cascade rows have smaller truncation-error
+constants there.
 
 The `interface_divergence` keyword replaces the flux divergence's rows at
-interface ends only, leaving walls and the gradient rows unchanged. Pass a
-scheme with the same interior coefficients and element type as `deriv`, such
-as `interface_divergence = lele_d1_6(closures = :brady_livescu)` beside the
-default `deriv`; any other scheme is rejected at setup. On smooth Float64
-flows, the Brady–Livescu rows lower the interface error by one to three
-orders of magnitude and raise the measured order to about 6, or 5 for an
-acoustic wave through a coarse–fine face. They cost nothing per step. They
-are experimental, and are not recommended for:
+interface ends only, leaving walls and the gradient rows unchanged; under the
+ghost fluxes it affects only the artificial fluxes and the wall corrections.
+Pass a scheme with the same interior coefficients and element type as
+`deriv`, such as `interface_divergence = lele_d1_6(closures = :brady_livescu)`
+beside the default `deriv`; any other scheme is rejected at setup. Under the
+closure rows, on smooth Float64 flows, the Brady–Livescu rows lower the
+interface error by one to three orders of magnitude and raise the measured
+order to about 6, or 5 for an acoustic wave through a coarse–fine face. They
+cost nothing per step. They are experimental, and are not recommended for:
 
 - Float32 runs, whose interface error floor they do not lower;
 - shocks crossing same-level patch planes, where they halve the minimum
@@ -133,28 +173,6 @@ are experimental, and are not recommended for:
 
 The `:cascade4` rows are unstable between a wall and an interface; do not
 use them here.
-
-The experimental `interface_flux = :ghost` removes the closure rows from the
-inviscid and molecular parts of the divergence. It evaluates the inviscid flux
-on the interface ghost layers and differentiates the flux through the
-interface with the interior stencil. The viscous, conductive and diffusive
-flux on the ghost layers of a same-level interface is the neighbouring
-patch's own, exchanged once every patch has evaluated its right-hand side,
-so a same-level interface has the interior's error with or without
-viscosity. At a coarse-fine interface the ghost values are interpolated from
-the parent and the molecular flux there is evaluated from the gradients of
-the interpolated state, so the level interpolation order sets the error: the
-default rises to 8 under this option, which gives sixth order with C6. The
-artificial fluxes and the wall corrections keep the closure rows, which
-`interface_divergence` selects. This option also runs a discontinuity
-placed on a shared patch plane, which fails under the closure rows. It
-requires `interface_rhs = :extended` and an unstretched Cartesian grid, and
-with molecular transport at a refined level one of the built-in equations
-of state. Without viscosity it adds about 20% to the step time. With
-viscosity it adds 40% on two three-dimensional slabs and nearly doubles the
-step on a two-dimensional level of four small tiles, most of it in the
-gradients taken on the interpolated parent state. Float32 runs do not
-benefit.
 
 ## Boundary conditions
 
