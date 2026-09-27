@@ -492,24 +492,80 @@ coarse-fine faces under `interface_flux = :ghost` with molecular transport:
 the compact derivative plans along each active dimension over the fine box
 the interpolation chain produces (`nothing` elsewhere), a box-sized scratch
 field, and the gradient ring, one column per conserved component and
-dimension (`3(c − 1) + j` holds ∂Q_c/∂x_j), laid out as the shell ring is.
+dimension (`3(c − 1) + j` holds ∂Q_c/∂x_j), laid out as the shell ring is
+and holding data where the ghost fluxes read it, on the ghost layers of the
+parent-fed faces.
 `_impose_shell!` refreshes the ring with the shell itself, so the two
 describe the same interpolated state. A device patch holds the backend's
 form of the plans, the scratch field and the ring in its `LevelScratch`
-instead, and the host fields here go unused on it.
+instead, and the host fields here go unused on it. `decomps[d]` is the
+decomposition the plan along `d` applies over (`_box_gradient_plans`).
 """
 struct ShellGradients{T}
     plans::Vector{Any}
+    decomps::Vector{Any}
     tmp::Array{T,3}
     gring::Matrix{T}
 end
 
 # The host plans of the gradient ring over the fine box `boxf`: `deriv`'s
 # box-gradient form along each active dimension at the fine spacing `hf`,
-# `nothing` along a collapsed one.
-_box_gradient_plans(boxf::Decomp{T}, deriv, active::NTuple{3,Bool}, hf) where {T} =
-    Any[active[d] ? plan_direction(boxf, _box_gradient_scheme(deriv), d, T(hf[d])) :
-        nothing for d in 1:3]
+# `nothing` along a collapsed one, and the decompositions they apply over.
+#
+# The ghost fluxes read the gradient ring only on the ghost layers of the
+# faces flagged in `faces` (the parent-fed ones; every face by default),
+# over the interior transverse range, which lie within `pad` fine nodes of
+# the patch, while the box extends 3·LEVEL_BUFFER beyond it. The plan along
+# `d` therefore solves only the lines through the bounding box of those
+# nodes: full length along `d`, trimmed transversally. Each line is filled
+# and solved on its own, so the values read are the full box's bit for bit;
+# the rest of the ring's gradient columns carry no data. On a 37-node patch
+# with every face read, the full box holds a third more lines in 2-D and
+# nearly twice as many in 3-D; on a tile with one parent-fed face, the lines
+# parallel to that face reduce to its ghost layers. A plan's decomposition is
+# the trimmed box with its transverse halo pads widened by the trim, which
+# places line (j, k) of the plan on the box's line through the same nodes.
+# The device scratch keeps every face, since a tile kept at a regrid keeps
+# its scratch while its faces change.
+function _box_gradient_plans(boxf::Decomp{T}, deriv, active::NTuple{3,Bool}, hf,
+                             pad::NTuple{3,Int},
+                             faces::NTuple{3,NTuple{2,Bool}}=ntuple(d -> (true, true), 3)
+                             ) where {T}
+    shift = ntuple(e -> active[e] ? 3 * LEVEL_BUFFER : 0, 3)
+    all(e -> shift[e] >= pad[e], 1:3) || error("a ring wider than the box buffer: pad $pad")
+    Nf = ntuple(e -> boxf.n_global[e] - 2 * shift[e], 3)
+    read_faces = [(d, side) for d in 1:3 if active[d] for side in 1:2 if faces[d][side]]
+    isempty(read_faces) && (read_faces = [(d, side) for d in 1:3 if active[d] for side in 1:2])
+    plans = Any[]
+    decomps = Any[]
+    for d in 1:3
+        if !active[d]
+            push!(plans, nothing)
+            push!(decomps, nothing)
+            continue
+        end
+        # The patch-index range of the lines along `d` in each transverse
+        # dimension: a face's ghost layers along its own dimension, the
+        # interior along the others.
+        lo = ntuple(e -> e == d || !active[e] ? 1 :
+                    minimum(f -> f[1] != e ? 1 : f[2] == 1 ? 1 - pad[e] : Nf[e] + 1,
+                            read_faces), 3)
+        hi = ntuple(e -> e == d || !active[e] ? Nf[e] :
+                    maximum(f -> f[1] != e ? Nf[e] : f[2] == 1 ? 0 : Nf[e] + pad[e],
+                            read_faces), 3)
+        ext = ntuple(e -> e == d ? boxf.n_global[e] : hi[e] - lo[e] + 1, 3)
+        dc = Decomp{T}(ext, boxf.periodic; dims=(1, 1, 1), n_halo=boxf.n_halo,
+                       comm=MPI.COMM_SELF)
+        dc.active == boxf.active || error("a trimmed gradient box lost a dimension")
+        push!(plans, plan_direction(dc, _box_gradient_scheme(deriv), d, T(hf[d])))
+        halo = ntuple(e -> dc.n_halo_d[e] + (e == d ? 0 : lo[e] + shift[e] - 1), 3)
+        push!(decomps, Decomp{T}(dc.comm, dc.dims, dc.coords, dc.periodic, dc.n_global,
+                                 dc.n_local, dc.offset, dc.n_halo, dc.active, halo,
+                                 dc.neighbors, dc.sub, dc.sub_rank, dc.sub_size,
+                                 dc.owns_communicators, dc.send_buf, dc.recv_buf))
+    end
+    return plans, decomps
+end
 
 # The derivative operator the gradient ring is taken with: `deriv`'s interior
 # with explicit one-sided rows of seventh order on eight points at the box
@@ -1063,8 +1119,8 @@ boxes (all components, uploaded by `save_level_box!`), the interpolation
 chain's stages 0 .. K over this rank's own components (the
 component-distributed chain of `_impose_shell!`) and, under
 `interface_flux = :ghost` with molecular transport, the backend's form of
-the `ShellGradients` plans, its box-sized scratch field and its gradient
-ring. Empty on the host backend and on a patch without a parent.
+the `ShellGradients` plans with their decompositions, its box-sized scratch
+field and its gradient ring. Empty on the host backend and on a patch without a parent.
 """
 struct LevelScratch{A4<:AbstractArray,A3<:AbstractArray,A2<:AbstractArray}
     Q0::A4
@@ -1073,6 +1129,7 @@ struct LevelScratch{A4<:AbstractArray,A3<:AbstractArray,A2<:AbstractArray}
     dQ1::A4
     stages::Vector{A4}
     gplans::Vector{Any}
+    gdecomps::Vector{Any}
     gtmp::A3
     gring::A2
 end
@@ -1081,7 +1138,7 @@ end
 # array type through a field of it.
 function _empty_level_scratch(f::AbstractArray{T,3}) where {T}
     e() = similar(f, T, 0, 0, 0, 0)
-    return LevelScratch(e(), e(), e(), e(), typeof(e())[], Any[],
+    return LevelScratch(e(), e(), e(), e(), typeof(e())[], Any[], Any[],
                         similar(f, T, 0, 0, 0), similar(f, T, 0, 0))
 end
 
@@ -1109,14 +1166,16 @@ function _level_scratch(f::AbstractArray{T,3}, region::BlockRegion,
     stages = [similar(f, T, _padded_extent(e, active, n_halo)..., n_owned)
               for e in exts]
     gplans = Any[]
+    gdecomps = Any[]
     gtmp = similar(f, T, 0, 0, 0)
     gring = similar(f, T, 0, 0)
     if gradient_deriv !== nothing
         # The chain's final box, as `_refine_chain` builds it.
         boxf = Decomp{T}(exts[end], ntuple(d -> !active[d], 3); dims=(1, 1, 1),
                          n_halo=n_halo, comm=MPI.COMM_SELF)
-        gplans = Any[p === nothing ? nothing : backend_plan(backend, p)
-                     for p in _box_gradient_plans(boxf, gradient_deriv, active, hf)]
+        hplans, gdecomps = _box_gradient_plans(boxf, gradient_deriv, active, hf,
+                                               fine_decomp.n_halo_d)
+        gplans = Any[p === nothing ? nothing : backend_plan(backend, p) for p in hplans]
         gtmp = fill!(similar(f, T, _padded_extent(exts[end], active, n_halo)), 0)
         _, ringlen = _slab_table(_ring_slabs(region,
                                              ntuple(d -> fine_decomp.active[d], 3),
@@ -1125,7 +1184,7 @@ function _level_scratch(f::AbstractArray{T,3}, region::BlockRegion,
     end
     return LevelScratch(similar(f, T, box..., n_cons), similar(f, T, box..., n_cons),
                         similar(f, T, box..., n_cons), similar(f, T, box..., n_cons),
-                        stages, gplans, gtmp, gring)
+                        stages, gplans, gdecomps, gtmp, gring)
 end
 
 # Stage-0 sources of an imposition: the gathered box as it is, or the cubic
@@ -1389,9 +1448,10 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
     # run the chain.
     gradients = nothing
     if gradient_deriv !== nothing && fine_decomp !== nothing
-        plans = _box_gradient_plans(pdecomps[end], gradient_deriv, active,
-                                    ntuple(d -> T(parent_h[d]) / 3, 3))
-        gradients = ShellGradients{T}(plans, zeros(T, size(pstage[end])),
+        plans, gdecomps = _box_gradient_plans(pdecomps[end], gradient_deriv, active,
+                                              ntuple(d -> T(parent_h[d]) / 3, 3),
+                                              fine_decomp.n_halo_d, imposed)
+        gradients = ShellGradients{T}(plans, gdecomps, zeros(T, size(pstage[end])),
                                       zeros(T, shell.len, 3 * n_cons))
     end
     return LevelTransfer{T}(region, active, coarse_regions, coarse_local,
@@ -1955,7 +2015,7 @@ function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
                     pos += ringlen
                     continue
                 end
-                apply_along!(g.tmp, plan, bf, boxf)
+                apply_along!(g.tmp, plan, bf, g.decomps[j])
                 src = g.tmp
             end
             @inbounds for s in slabs, g3 in s[3], g2 in s[2], g1 in s[1]
@@ -2026,7 +2086,7 @@ function _impose_shell_gradients_dev!(fine, Qf, lt::LevelTransfer, fill, owned,
                 fill!(view(dsend, (base + 1):(base + ringlen)), 0)
                 continue
             end
-            apply_along!(scratch.gtmp, plan, bf, boxf)
+            apply_along!(scratch.gtmp, plan, bf, scratch.gdecomps[j])
             pointwise!(_ring_pack_field_point!, route, ringlen, 1, 1,
                        dsend, scratch.gtmp, table, shift, padb, base)
         end
