@@ -121,7 +121,11 @@ falling with h, and conserves to second order
 ([appendix](CALIBRATION_APPENDIX.md#the-staggered-operator-at-an-odd-area-fold)).
 The adjoint mirror would
 continue the flux as `|r| K T'`, which is inconsistent at the first node.
-The spherical origin's area is even and keeps both.
+The spherical origin's area is even and keeps both. At the axis and the
+poles no closure symmetric in a diagonal node norm keeps the order: the
+first node reaches order four on data even across the fold and three on
+odd data, at errors far above the smooth continuation's
+([appendix](CALIBRATION_APPENDIX.md#symmetric-closures-at-an-odd-area-fold)).
 
 The staggered form enters only the implicit part. The explicit molecular
 fluxes keep `D κ D`, so no current baseline moves. A conduction channel moved
@@ -140,7 +144,9 @@ Each implicit stage solves `(I − γΔt L) Y = r`, nonlinear in `Y` through
   operator, so the converged stage carries the operator's accuracy whatever
   preconditioner is used.
 - **Krylov method.** Conjugate gradients while the system is symmetric
-  (conduction alone); GMRES once exchange or anisotropy breaks the symmetry.
+  (conduction alone); GMRES once exchange or anisotropy breaks the symmetry,
+  and at the cylindrical axis and the spherical poles, where the staggered
+  operator is not symmetric in the rows next to the fold.
   Krylov.jl provides both, matrix-free and allocation-free.
 - **Preconditioner.** `I − γΔt L₂`, assembled pointwise from the lagged
   coefficient over the patch's metric, inverted approximately by one
@@ -240,10 +246,12 @@ Spitzer–Härm coefficient with its flux limiter, and H6 the radiation energy.
   wall. A summation-by-parts closure with diagonal norms and one
   modified row did not reach first-degree accuracy in a brief numerical
   search; wider closures and a non-diagonal node norm remain untried.
-- A symmetric operator at the cylindrical axis and the spherical poles,
-  which conjugate gradients need there: a closure of the first few rows,
-  or node weights near the fold, under which the smoothly continued
-  operator is self-adjoint. Until then those geometries take GMRES.
+- The solve at the cylindrical axis and the spherical poles: GMRES on the
+  smoothly continued operator, or a defect correction whose inner solve
+  applies conjugate gradients to the symmetric adjoint mirror, under which
+  the correction contracts at every step size
+  ([appendix](CALIBRATION_APPENDIX.md#symmetric-closures-at-an-odd-area-fold)).
+  The choice rests on the measured cost of each.
 - A flux limiter makes the coefficient depend on the gradient, so the
   Picard iteration may stall; JFNK with the limited flux is the fallback.
 - The iteration counts are measured in 1-D with an exact preconditioner

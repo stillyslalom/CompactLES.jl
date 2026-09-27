@@ -7002,6 +7002,84 @@ The mirror adjoint to D_s, which continues the flux as |r| K T', is symmetric to
 but inconsistent: its error at the first node does not fall with h. The spherical origin's area r² sinθ is even, and there the smooth continuation is the
 adjoint one.
 
+### Symmetric closures at an odd-area fold
+
+```text
+julia --project=. -t 1 bench/staggeredclosure.jl
+```
+
+The operators searched are symmetric in a diagonal node norm by construction:
+L = -H⁻¹ Dᵀ M D, with H = V (1 + δw) and M = W_m r (1 + δμ) modified on the first k nodes and
+midpoints, and D the mirror derivative of the data's parity plus a correction Z P⁻ᵀ W_n with Z a
+k × (k + 1) block and P the left-hand side of the adjoint G, which keeps G in the form of
+explicit edge rows ahead of its node solve. Such an L is negative semidefinite and conservative
+in H. Exactness of D on the data's monomials to degree d_D and of G on the flux monomials to
+degree d_G is linear in (Z, δμ, δw), and the first node is then of order min(d_D, d_G). A
+diagonal node norm is the only one compatible with the 1/r² azimuthal and 1/sin²θ polar
+operators, and a diagonal face norm the only one exact for a variable κ; at a paired fold δw may
+still differ between the even and odd combinations. The dense matrices of the script reproduce
+`StaggeredDiffusion` on a cylindrical-axis line to 2.2e-16, and the best diagonal norm for the
+present operator leaves an asymmetry of 8.2e-5, against 6.5e-4 in V. The least-squares residual
+of the design conditions against the closure width, zero to round-off where a closure exists:
+
+```
+parity             d_D d_G      residual at k = 6, 10, 14
+even                4   4       7.6e-16  2.8e-15  1.1e-15
+even                6   4       7.6e-16  2.8e-15  1.1e-15
+even                4   6       5.7e-07  2.3e-08  2.8e-09
+even                6   6       5.8e-07  2.4e-08  2.9e-09
+odd                 5   3       1.7e-15  7.3e-16  1.8e-15
+odd                 3   5       2.0e-15  2.4e-15  2.7e-15
+odd                 7   3       1.7e-15  7.3e-16  1.8e-15
+odd                 5   5       1.4e-07  6.1e-09  7.5e-10
+pair, shared δw     4/4 and 3/3 2.0e-07  8.9e-09  1.1e-09
+pair, separate δw   4/4 and 3/3 2.6e-15  3.5e-15  3.8e-15
+```
+
+No width makes D exact to degree 4 and G exact to degree 5 together: the residual falls with k
+but does not vanish, and a nonlinear search that also modifies the tridiagonal left-hand side of
+G on the first rows does not lower it. The first node is therefore of order 4 on data even across
+the fold and 3 on odd data. The unresolved axis carries even data only and takes an exact order-4
+closure at k = 4; a paired fold carries both and reaches orders 4 and 3 only with a separate δw
+per parity. The closures, with the asymmetry in H, the largest real eigenvalue of L, the smallest
+weight 1 + δw, and the max-norm error of L over r < 1/2 on exp(-4r²) (even) and r exp(-4r²)
+(odd) at h = 1/16 ... 1/256 with its observed orders:
+
+```
+closure                   par   asym  max Re λ  min w  error                                        orders
+smooth continuation       even 5.8e-05  2.4e-16 1.000  4.4e-05 6.8e-07 1.1e-08 1.7e-10 7.4e-11  6.00 6.00 5.95 1.23
+smooth continuation       odd  5.8e-05 -5.3e-16 1.000  1.3e-04 4.3e-06 1.4e-07 4.3e-09 1.3e-10  4.96 4.99 5.00 5.00
+exact order 4, k = 4      even 3.9e-17 -3.1e-16 0.902  2.4e-03 1.7e-04 1.1e-05 7.0e-07 4.4e-08  3.80 3.95 3.99 4.00
+pair exact 4/3, k = 6     even 3.9e-17 -3.5e-16 0.975  7.0e-02 5.4e-03 3.6e-04 2.2e-05 1.4e-06  3.71 3.92 3.98 4.00
+                          odd  3.9e-17  1.5e-16 0.996  6.1e-01 1.0e-01 1.3e-02 1.7e-03 2.1e-04  2.61 2.90 2.97 2.99
+axis constrained, k = 6   even 3.9e-17 -1.1e-16 0.889  1.1e-03 2.3e-05 5.1e-07 1.7e-08 7.6e-10  5.53 5.49 4.96 4.44
+axis constrained, k = 10  even 3.9e-17 -3.5e-16 0.980  7.3e-02 2.0e-03 3.6e-05 5.7e-07 8.8e-09  5.20 5.79 5.96 6.03
+axis constrained, k = 14  even 3.9e-17  4.1e-17 0.991  3.0e-01 1.3e-02 2.7e-04 4.5e-06 7.2e-08  4.53 5.59 5.90 5.98
+pair constrained, k = 6   even 3.9e-17 -3.7e-16 0.890  1.1e-03 2.3e-05 5.5e-07 1.9e-08 9.3e-10  5.51 5.42 4.87 4.33
+                          odd  3.9e-17 -1.9e-16 0.988  4.6e-02 1.8e-03 6.2e-05 2.0e-06 6.1e-08  4.63 4.91 4.98 5.00
+pair constrained, k = 10  even 3.9e-17 -1.1e-15 0.981  7.3e-02 2.0e-03 3.6e-05 5.7e-07 8.8e-09  5.20 5.79 5.96 6.02
+                          odd  3.9e-17  1.9e-16 0.997  6.6e-01 4.1e-02 1.5e-03 5.0e-05 1.6e-06  4.02 4.74 4.94 4.98
+```
+
+The exact order-4 closure has weights 1 + δw = 0.902, 1.003, 1.001, 1.000 and 1 + δμ = 1.028,
+0.992, 1.001, 1.000, conserves to 1.8e-14 in H, and its symmetric part has no positive
+eigenvalue above round-off, but its first-node error is 55 times the smooth continuation's at
+h = 1/16 and 1000 times at 1/64. The constrained closures are exact on the reachable set and
+least squares on the next degree; their residual decays with k and their observed orders reach 5
+to 6 over this range, but their error stays 30 to 500 times the smooth continuation's and grows
+with k at coarse h. The last order of the smooth continuation's even row is round-off.
+
+Defect correction x ← x + A_s⁻¹(b - A x), with A = I - τL the smooth continuation and A_s =
+I - τL_s a symmetric operator solved by conjugate gradients, contracts at every step size:
+
+```
+A_s                     par   τ|λ_min| = 1e-02    1e+00    1e+02    1e+04    1e+06
+adjoint mirror          even             6.1e-04  3.9e-02  1.3e-01  1.4e-01  1.4e-01
+exact closure order 4   even             1.0e-04  5.0e-03  6.6e-03  6.9e-03  6.9e-03
+adjoint mirror          odd              7.0e-04  4.1e-02  1.2e-01  1.2e-01  1.2e-01
+exact closure order 3   odd              5.5e-04  3.2e-02  8.4e-02  1.0e-01  1.5e-01
+```
+
 ### Staggered conduction against the wide form
 
 ```text
