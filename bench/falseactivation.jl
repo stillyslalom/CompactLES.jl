@@ -16,7 +16,12 @@
 # and `split` (the `:d8` detector on the fields of κ* and D* only, run on the
 # three cases and on the one-dimensional battery of bench/artcal.jl, which
 # takes most of the time), and `splitcd` (C_D re-swept under that split on the
-# species rows of the battery and on the composition slab).
+# species rows of the battery and on the composition slab). `species` is the
+# species-only split, `:d8` on the mass and mole fractions and δ⁴ on every
+# other field, with C_D swept over `cds` on the species rows of the battery,
+# the two density-ratio-100 rows and the composition slab at N = 64 and 128;
+# `speciescost` times `compute_artificial!` and `compute_rhs!` under it
+# against δ⁴ within one process, and is the one part to run at `-t 16`.
 # Every slab edge is a tanh of width `W` in physical units, so the ladder `Ns`
 # resolves it over N·W cells and the activation falls at the rate the sensor's
 # truncation sets.
@@ -38,7 +43,8 @@
 # relaxation weight a pass took over the run (`filter_weight`), since a
 # changed filter or CFL changes the state the sensors read.
 #
-# Settings (`key=value`): Ns (comma list), Nvar, Nref, W, amp, cfl, nmax.
+# Settings (`key=value`): Ns (comma list), Nvar, Nref, W, amp, cfl, nmax, cds
+# (comma list of the C_D values `species` sweeps), reps (timing repetitions).
 #
 # Scratch tooling, like everything else in bench/: it prints tables, asserts
 # nothing, and is not part of the gate. The results are written up in
@@ -56,10 +62,10 @@ include(joinpath(@__DIR__, "..", "test", "cases.jl"))
 const OPTS = CompactLES.script_args(filter(a -> occursin('=', a), ARGS),
                                     (Ns = "64,128,256", Nvar = 128, Nref = 1024,
                                      W = 1 / 16, amp = 1e-2, cfl = 0.5,
-                                     nmax = 20_000))
+                                     nmax = 20_000, cds = "0.1,0.3,1,3", reps = 30))
 const NAMES = filter(a -> !occursin('=', a), ARGS)
-const PARTS = isempty(NAMES) ? ["composition", "thermal", "acoustic", "probe", "split", "splitcd"] :
-              NAMES
+const PARTS = isempty(NAMES) ? ["composition", "thermal", "acoustic", "probe", "split",
+                                "splitcd", "species", "speciescost"] : NAMES
 const NS = parse.(Int, split(OPTS.Ns, ','))
 want(name) = name in PARTS
 
@@ -321,19 +327,10 @@ end
 # internal energy, the mass and the mole fractions) and `:delta4` on |S|, the
 # field of μ* and β*. β* is then unchanged, so whatever the spherical-origin
 # ceiling owes to β* under `:delta4` is kept. The solver has one detector for
-# every field, so this part redefines the dispatch of `detect_sum!` for a run
-# built under `:d8`: while `SPLIT[]` holds, a weight power of 2, which only the
-# |S| and ∇·u sensors pass, goes to `delta4_sum!`. Bench-only; nothing in src
-# offers this split.
-const SPLIT = Ref(false)
-function CL._detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, wpar, gh::Bool,
-                         ::Tuple)
-    SPLIT[] && wpow == 2 &&
-        return CL.delta4_sum!(out, f, solver, wpow; accumulate=acc, parity=par,
-                              wall_parity=wpar, ghosts=gh)
-    return CL.ring_sum!(out, f, solver, wpow; accumulate=acc, parity=par,
-                        wall_parity=wpar, ghosts=gh)
-end
+# every field, so bench/detector_split.jl redefines the dispatch of
+# `detect_sum!` for a run built under `:d8`; `SPLIT[]` selects this split and
+# `SPECIES_ONLY[]` the species-only one of the `species` part.
+include(joinpath(@__DIR__, "detector_split.jl"))
 
 function attempt(f, blank)
     try
@@ -439,6 +436,118 @@ function split_cd()
     end
 end
 
+# --- the species-only split ----------------------------------------------------
+#
+# `:d8` on the mass and mole fractions and δ⁴ everywhere else, so the D* sensor
+# alone changes detector. C_D is swept on the species rows: the shocked air/SF6
+# interface, the same at density ratio 100 (the case the default channel exists
+# to carry), the Brill slab at ratio 100, the passive advected interface, and
+# the smooth composition slab at N·W = 4 and 8. The Lax row checks that a
+# single-species run is the δ⁴ run bit for bit.
+const SPECIES_ROW = Printf.Format("%-8s %-4.2g | %7.4f %+8.4f %3d | %7.4f %+8.4f %3d %5d |" *
+                                  " %+8.4f %7.1e | %7.5f | %9.2e %9.2e | %9.2e %9.2e\n")
+
+function species_split()
+    cds = parse.(Float64, split(OPTS.cds, ','))
+    cap = 30_000
+    println("\n=== the species-only split ===")
+    SPECIES_ONLY[] = true
+    _, ρs, _, _, _ = lax(; art=ArtificialProperties(detector=:d8), nmax=cap)
+    SPECIES_ONLY[] = false
+    _, ρd, _, _, _ = lax(; art=ArtificialProperties(), nmax=cap)
+    @printf("Lax (one species): split identical to δ4: %s, max |Δρ| %.1e\n",
+            ρs == ρd, maximum(abs, ρs .- ρd))
+    Ncomp = (64, 128)
+    offs = Dict(N => run_case(:composition, N; art=ArtificialProperties(enabled=false))
+                for N in Ncomp)
+    println("config   C_D  | SF6: TV-1   min Y  wid | R100: TV-1   min Y  wid steps |" *
+            " slab100: min Y   |p-1| | mix wid | comp N=64 D*/ch on-off | N=128 D*/ch on-off")
+    configs = Any[("delta4", false, :delta4, 0.1)]
+    append!(configs, [("species", true, :d8, cd) for cd in cds])
+    for (label, species, det, cd) in configs
+        SPECIES_ONLY[] = species
+        a = ArtificialProperties(detector=det, C_D=cd)
+        si(ρh) = attempt((NaN, NaN, -1, -1)) do
+            r = shock_interface(; art=a, rho_heavy=ρh, nmax=cap)
+            r.completed || return (Inf, Inf, -1, r.steps)
+            (sum(abs, diff(r.Y_air)) - 1, r.worst_min_Y, r.width_cells, r.steps)
+        end
+        s5 = si(SI_RHO_HEAVY)
+        s100 = si(100.0)
+        br = attempt((NaN, NaN)) do
+            r = brill_slab(; art=a, nmax=cap)
+            r.completed ? (r.worst_min_Y, r.p_error) : (Inf, Inf)
+        end
+        mx = attempt(NaN) do
+            xs, Y, _, _, ok = species_advection(; art=a, nmax=cap)
+            ok ? contact_width(xs, Y, 0.0, 1.0) : Inf
+        end
+        comp = map(Ncomp) do N
+            on = run_case(:composition, N; art=a)
+            _, _, d = errors(:composition, on, offs[N], nothing)
+            (on.peak[1], d)
+        end
+        SPECIES_ONLY[] = false
+        Printf.format(stdout, SPECIES_ROW, label, cd, s5[1], s5[2], s5[3], s100..., br...,
+                      mx, comp[1]..., comp[2]...)
+    end
+    println("  (NaN = lost positivity; Inf = incomplete at the step cap)")
+end
+
+# The cost of the species-only split: `compute_artificial!` and `compute_rhs!`
+# under δ⁴, under the split and under `:d8` on every field, interleaved
+# repetition by repetition in one process and reported as the minimum over
+# `reps`, on the two-species tube of bench/phases.jl and on a 64³ periodic box.
+function species_cost()
+    eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
+                        IdealSpecies{Float64}("heavy", 0.2, 1.09)])
+    tube(det) = begin
+        s = Solver(n_global=(512, 32, 1), L_domain=(1.0, 0.06, 1.0), eos=eos,
+                   bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
+                   art=ArtificialProperties(detector=det))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> begin
+            θ = tanh_blend(x, 0.5, 0.02)
+            Prim(Y=(1 - θ, θ), rho=(1 - θ) + 0.625θ, p=(1 - θ) + 0.1θ)
+        end)
+        (s, Q)
+    end
+    box(det) = begin
+        s = Solver(n_global=(64, 64, 64), L_domain=(1.0, 1.0, 1.0), eos=eos, bcs=per3,
+                   art=ArtificialProperties(detector=det))
+        Q = allocate_state(s)
+        initialize!(s, Q, (x, y, z) -> begin
+            θ = 0.5 + 0.45 * sin(2π * x) * sin(2π * y) * cos(2π * z)
+            Prim(Y=(1 - θ, θ), u=(0.1 * sin(2π * y), 0.0, 0.0), p=1.0, T_ion=1.0)
+        end)
+        (s, Q)
+    end
+    println("\n=== cost of the species-only split, $(Threads.nthreads()) threads, " *
+            "min over $(OPTS.reps) interleaved repetitions ===")
+    println("case            config   | artificial ms  rhs ms | ratio to delta4: art  rhs")
+    for (name, build) in (("tube 512x32", tube), ("box 64^3", box))
+        (sd, Qd), (s8, Q8) = build(:delta4), build(:d8)
+        dQd, dQ8 = zero(Qd), zero(Q8)
+        runs = (("delta4", sd, Qd, dQd, false), ("species", s8, Q8, dQ8, true),
+                ("d8", s8, Q8, dQ8, false))
+        best = Dict(l => [Inf, Inf] for (l, _...) in runs)
+        for rep in 0:OPTS.reps, (l, s, Q, dQ, sp) in runs
+            SPECIES_ONLY[] = sp
+            ta = @elapsed CL.compute_rhs!(s, Q, dQ)
+            tb = @elapsed CL.compute_artificial!(s, Q)
+            SPECIES_ONLY[] = false
+            rep == 0 && continue   # compilation
+            best[l][1] = min(best[l][1], tb)
+            best[l][2] = min(best[l][2], ta)
+        end
+        for (l, _...) in runs
+            b = best[l]; r = best["delta4"]
+            @printf("%-15s %-8s | %10.3f %9.3f | %22.3f %5.3f\n", name, l, 1e3b[1],
+                    1e3b[2], b[1] / r[1], b[2] / r[2])
+        end
+    end
+end
+
 function main()
     finals = Dict{Symbol,Any}()
     for case in (:composition, :thermal, :acoustic)
@@ -450,6 +559,8 @@ function main()
     want("probe") && probe(finals)
     want("split") && split_detector()
     want("splitcd") && split_cd()
+    want("species") && species_split()
+    want("speciescost") && species_cost()
     println("\nfalseactivation complete")
 end
 

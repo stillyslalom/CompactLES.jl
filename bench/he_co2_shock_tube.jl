@@ -11,7 +11,9 @@
 #
 # Positional: nx ny tfinal. Keys: cfl; alphaf (compact-filter alpha); deriv
 # (c6 or c10); filter (gv, the Gaitonde–Visbal filter at alphaf, or pyranda,
-# Pyranda's c8ff8 through `pyranda_filter`); detector (delta4 or d8);
+# Pyranda's c8ff8 through `pyranda_filter`); detector (delta4, d8, or species:
+# `:d8` on the mass and mole fractions and δ⁴ on every other field, the
+# bench-only split of bench/detector_split.jl);
 # mu_sensor (strain or velocity); beta_sensor (strain, gated_strain,
 # dilatation or ungated_dilatation); reduction (sum or max); the five
 # constants C_mu C_beta C_kappa C_D C_Y; every (diagnostic cadence in steps);
@@ -56,6 +58,7 @@ MPI.Init(threadlevel=:funneled)
 using CompactLES
 using CompactLES: padded_index
 using Printf
+include(joinpath(@__DIR__, "detector_split.jl"))
 
 const DEFAULTS = (nx = 768, ny = 48, tfinal = 2.5e-3, cfl = 0.5, alphaf = 0.45,
                   deriv = "c6", filter = "gv", detector = "delta4", mu_sensor = "strain",
@@ -107,7 +110,9 @@ function main()
                                mu_sensor=Symbol(opt.mu_sensor),
                                beta_sensor=Symbol(opt.beta_sensor),
                                reduction=Symbol(opt.reduction),
-                               detector=Symbol(opt.detector))
+                               detector=opt.detector == "species" ? :d8 :
+                                        Symbol(opt.detector))
+    SPECIES_ONLY[] = opt.detector == "species"
     deriv = opt.deriv == "c10" ? lele_d1_10() :
             opt.deriv == "c6" ? lele_d1_6() :
             error("deriv must be c6 or c10, got $(opt.deriv)")
@@ -126,6 +131,7 @@ function main()
 
     steady_wall = 0.0
     steady_steps = 0
+    worst_Y = Inf   # the most negative mass fraction at a diagnostic step
     function diag(solver, Q)
         if solver.step > 20
             steady_wall += solver.wall_step
@@ -150,6 +156,7 @@ function main()
         umax = MPI.Allreduce(umax, max, comm)
         y1min = MPI.Allreduce(y1min, min, comm); y1max = MPI.Allreduce(y1max, max, comm)
         y2min = MPI.Allreduce(y2min, min, comm); y2max = MPI.Allreduce(y2max, max, comm)
+        worst_Y = min(worst_Y, y1min, y2min)
         if rank == 0
             @printf("step %5d  t = %6.3f ms  rho [%.4f, %.4f]  |u|max %6.1f  ",
                     solver.step, 1e3 * solver.t, ρmin, ρmax, umax)
@@ -175,6 +182,14 @@ function main()
             push!(cols, v)
         end
         rank == 0 || return
+        # The contact on the two sampled lines: Y_CO2 is monotone across a
+        # clean contact, so its total variation beyond 1 is the ringing, and
+        # the points with 0.05 < Y_CO2 < 0.95 are its width in cells.
+        for (label, Y) in (("y = 0", cols[9]), ("y = Lyz/2", cols[13]))
+            @printf("  contact at %.2f ms on %-9s  TV - 1 %.4f  width %d cells\n",
+                    1e3 * solver.t, label, sum(abs, diff(Y)) - 1,
+                    count(v -> 0.05 < v < 0.95, Y))
+        end
         fname = @sprintf("%s_t%.2fms.dat", opt.prefix, 1e3 * solver.t)
         open(fname, "w") do io
             @printf(io, "# t = %.9e s, step %d\n", solver.t, solver.step)
@@ -202,6 +217,7 @@ function main()
         @printf("done: %d steps to t = %.3f ms in %.1f s; steady %.2f ms/step over the last %d\n",
                 solver.step, 1e3 * solver.t, time() - t0,
                 1e3 * steady_wall / max(steady_steps, 1), steady_steps)
+        @printf("worst mass fraction over the diagnostic steps: %+.4e\n", worst_Y)
     end
 end
 

@@ -6791,6 +6791,9 @@ staggered form removes it. Behind the adiabatic wall mirror the staggered run ke
 ```text
 julia --project=. -t 1 bench/falseactivation.jl                  # every part
 julia --project=. -t 1 bench/falseactivation.jl composition thermal acoustic probe   # no battery
+julia --project=. -t 1 bench/falseactivation.jl species            # the species-only split
+julia --project=. -t 16 bench/falseactivation.jl speciescost       # its cost
+julia --project=. -t 16 bench/he_co2_shock_tube.jl 384 24 2.5e-3 detector=species C_D=1 every=5
 ```
 
 Three periodic one-dimensional cases at the production constants, C6 `:neutral3`,
@@ -6919,8 +6922,76 @@ narrows the passive width by 10%, and deposits 300 times less on the smooth comp
 slab than the default does. A D\*-only split, δ⁴ on every field but the mass and mole
 fractions, would leave every single-species row bit-identical by construction and carry the
 whole composition-slab result, since κ\* deposits nothing there; the thermal slab's κ\*
-error would remain. Neither the density-ratio-100 rows, the He/CO2 tube nor a
-two-dimensional case has been run under the split.
+error would remain. It is measured below.
+
+### The species-only split
+
+`:d8` on the mass and mole fractions, δ⁴ on every other field (bench/detector_split.jl,
+selected by `SPECIES_ONLY[]`). Under the default `:partial_density` channel those two
+fields are sensed only inside `bulk_diffusivity!`, so the redefinition brackets that call;
+the Lax tube under the split is the δ⁴ run bit for bit (max |Δρ| = 0), as every
+single-species row is by construction. C_D swept on the species rows: the shocked air/SF6
+interface (TV − 1, worst Y over the run, final width in cells), the same interface at
+density ratio 100, the Brill slab at ratio 100 (worst Y, max |p − 1|), the passive advected
+width, and the composition slab at N·W = 4 and 8:
+
+```
+config   C_D | SF6: TV−1  min Y  wid | R100: TV−1  min Y  wid steps | slab100: min Y  |p−1| | mix wid | comp N·W=4 D*/ch on−off | N·W=8 D*/ch on−off
+δ4 *     0.1 | 0.0066  −0.0098   4   | 0.3243  −0.0189   7   704    | −0.0620  5.2e-11      | 0.02024 | 6.73e-4  3.24e-4        | 5.01e-5  1.21e-5
+species  0.1 | 0.0720  −0.0109   4   | 0.5094  −0.0186   7   709    | −0.0628  4.4e-11      | 0.01789 | 7.74e-6  2.44e-6        | 1.76e-8  4.06e-9
+species  0.3 | 0.0300  −0.0097   4   | 0.1466  −0.0168   8   695    | −0.0599  4.9e-11      | 0.01796 | 2.31e-5  7.29e-6        | 5.27e-8  1.22e-8
+species  1   | 0.0045  −0.0046   5   | 0.0020  −0.0092  10   696    | −0.0472  6.1e-11      | 0.01817 | 7.58e-5  2.40e-5        | 1.76e-7  4.07e-8
+species  3   | 0.0046  −0.0032   8   | 0.0021  −0.0041  11   704    | −0.0325  5.5e-11      | 0.01868 | 2.16e-4  6.99e-5        | 5.32e-7  1.22e-7
+```
+
+The SF6 row and the passive width at `C_D = 1` repeat the energy-and-species split's to
+the second digit, so κ\*'s detector plays no part in them. At density ratio 100 the δ⁴
+default leaves a ringing of TV − 1 = 0.32 behind the shocked interface; the split at
+`C_D = 1` takes it to 0.002 and halves the worst mass fraction, at the cost of a wider
+interface, 10 cells against 7 (the Brill slab's worst Y improves from −0.062 to −0.047, and
+its pressure stays at round-off). TV − 1 is flat from `C_D = 1` to 3 on both shocked rows
+while the width and the smooth deposit keep growing, so 1 is the refit: it deposits 13
+times less than the default on the slab at N·W = 4 and 300 times less at N·W = 8.
+
+The wider interface would fail the `width_cells <= 9` guard that the serial suite holds
+the ratio-100 interface to under `:bulk`.
+
+The He/CO2 tube of bench/he_co2_shock_tube.jl (two dimensions, 10:1 driver, the perturbed
+contact struck between 0.5 and 1.0 ms), δ⁴ at `C_D = 0.1`
+against the split at `C_D = 1`, on a coarse and a fine grid. Worst Y is the most negative
+mass fraction over every fifth step; the integral width is ∫ Ȳ(1 − Ȳ) dx of the
+plane-averaged CO2 fraction; TV − 1 and the width in cells are read on the line y = 0
+through the contact's leading point:
+
+```
+grid     config        | worst Y   | ∫Ȳ(1−Ȳ)dx mm at 1.0 1.5 2.0 2.5 ms | TV−1 (y=0) at 1.0 1.5 2.0 2.5 ms | wid 2.5 ms | steps
+384x24   δ4 C_D=0.1    | −3.29e-3  | 18.51 32.60 46.17 56.73            | 0.0178 0.0224 0.0208 0.0606      |  6         | 1684
+384x24   species C_D=1 | −2.28e-3  | 18.66 33.00 46.90 57.66            | 0.0048 0.0137 0.0241 0.0604      |  6         | 1645
+768x48   δ4 C_D=0.1    | −3.04e-3  | 17.80 31.35 43.33 53.66            | 0.0181 0.0184 0.0165 0.0175      |  7         | 3499
+768x48   species C_D=1 | −2.34e-3  | 17.88 31.75 43.99 54.35            | 0.0175 0.0196 0.0168 0.0230      |  7         | 3434
+```
+
+The split lowers the worst undershoot by 23 to 31% and widens the integral mixing width by
+0.8 to 1.3%, a fifth of what halving the spacing moves it by. The ringing on the sampled
+line is the same within the spread between the two grids. On the line through the trailing
+point TV − 1 reaches 0.11 to 0.31 at 2.5 ms under both detectors, where the rolled-up
+contact crosses the line more than once, so it measures the roll-up and is left out.
+
+The cost, `compute_artificial!` and `compute_rhs!` as the minimum over 30 repetitions
+interleaved in one process at `-t 16`: the split adds the two pentadiagonal solves per
+direction of the Y₁ and X₁ detectors.
+
+```
+case                       | artificial ms  rhs ms | ratio to δ4: art  rhs
+tube 512x32, 2 species δ4  |  0.586          2.344 |  1.000  1.000
+               species     |  0.812          2.531 |  1.386  1.080
+               :d8         |  1.047          2.684 |  1.788  1.145
+box 64³, 2 species     δ4  |  7.710         25.639 |  1.000  1.000
+               species     |  8.411         26.773 |  1.091  1.044
+               :d8         |  9.165         27.260 |  1.189  1.063
+```
+
+The right-hand side costs 4 to 8% more, about half of what `:d8` on every field adds.
 
 ## The gas-gas acoustic interface
 
