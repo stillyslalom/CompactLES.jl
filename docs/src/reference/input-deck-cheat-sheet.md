@@ -170,11 +170,11 @@ and `Execution` take the same copy form: `StepControl(control; retries=4)`.
 
 ### State filter: `StateFilter`
 
-`StateFilter(scheme=compact_filter(0.45); interval=1, cfl=0.35, weighting=:none)`
+`StateFilter(scheme=compact_filter(0.47); interval=1, cfl=0.35, weighting=:none)`
 
 | Field | Meaning | Default |
 |---|---|---|
-| `scheme` | Conserved-state compact filter | `compact_filter(0.45)` |
+| `scheme` | Conserved-state compact filter | `compact_filter(0.47)` |
 | `interval` | Apply the filter every `k` completed steps | `1`; `0` disables |
 | `cfl` | Reference CFL of a full-strength filter pass; `0` unrelaxed | `0.35` |
 | `weighting` | `:none` or volume-weighted state filtering | `:none` |
@@ -221,7 +221,7 @@ still accepted, with a deprecation warning naming the grouped form.
 | Choice | Constructors/values |
 |---|---|
 | Derivative | `pade_d1_4()`, `lele_d1_6()`, `lele_d1_8()`, `lele_d1_10()` |
-| State filter | `compact_filter(0.45)` (`closures=:onesided` or `:cascade`), `pyranda_filter()`, `gaussian_filter()`, `compact_d8()` |
+| State filter | `compact_filter(0.47)` (`closures=:onesided` or `:cascade`), `pyranda_filter()`, `gaussian_filter()`, `compact_d8()` |
 | Artificial sensors | `mu_sensor`: `:strain` or `:velocity`; `beta_sensor`: `:strain`, `:gated_strain`, `:ungated_dilatation`, or `:dilatation` |
 | Sensor combination | `reduction=:sum` or `:max`; `smoother=:gaussian` or `:compact` |
 | Detector | `detector=:species_d8` (default: `:d8` on the mass and mole fractions, `:delta4` elsewhere), `:delta4` or `:d8` |

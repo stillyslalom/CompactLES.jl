@@ -128,7 +128,7 @@ function Solver(; n_global::NTuple{3,Int}, L_domain, bcs,
                    transport=cv(transport, ConstantTransport{T}()),
                    art=cv(art, ArtificialProperties{T}()),
                    deriv=cv(deriv, lele_d1_6(T)),
-                   filt=cv(filt, compact_filter(0.45, T)),
+                   filt=cv(filt, compact_filter(0.47, T)),
                    interface_divergence=cv(interface_divergence, nothing),
                    kwargs...)
 end

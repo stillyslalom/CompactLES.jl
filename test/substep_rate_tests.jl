@@ -140,7 +140,7 @@ end
     Qs = allocate_state(sod)
     initialize!(sod, Qs, (x, y, z) -> x < 0.5 ?
         Prim(u=(0, 0, 0), p=1.0, rho=1.0) : Prim(u=(0, 0, 0), p=0.1, rho=0.125))
-    run!(sod, Qs; tfinal=1.0, nmax=30)
+    run!(sod, Qs; tfinal=1.0, nmax=10)
     work = Workspace(Qs)
     @test CL.regrid!(sod, Qs, work, nothing)
     r0 = max_rate(sod, Qs)[1]

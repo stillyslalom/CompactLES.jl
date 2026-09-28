@@ -359,7 +359,7 @@ const SYM = (SymmetryPlaneBC(), SymmetryPlaneBC())
 sym_solver(N, deriv) =
     Solver(n_global=(N, 12, 12), L_domain=(1.0, 1.0, 1.0),
            bcs=(SYM, per3[2], per3[3]), deriv=deriv,
-           art=ArtificialProperties(enabled=false))
+           filt=compact_filter(0.45), art=ArtificialProperties(enabled=false))
 sym_even(x, y, z) = exp(cospi(x))
 sym_deven(x, y, z) = -pi * sinpi(x) * exp(cospi(x))
 sym_odd(x, y, z) = sinpi(x) * exp(cospi(x))

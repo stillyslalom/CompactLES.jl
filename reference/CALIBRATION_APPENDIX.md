@@ -729,7 +729,7 @@ identical with the 64-fold sweep moving the width by 18 to 21%, and `C_Y = 100` 
 the excursion at 1.1 to 1.4% and 0.9 to 1.0%. The one visible change is the `C_Y = 1000`
 row, a filter interaction at a value no default is near.
 
-**The default: `filter_cfl = 0.35` at α = 0.45.** At `cfl = 0.35` the weight is one and
+**The default `filter_cfl = 0.35`, measured at α = 0.45.** At `cfl = 0.35` the weight is one and
 every result above that CFL, the Taylor–Green fits included, is unchanged bit for bit. Below
 it the strength falls with the CFL, the α = 0.479 equivalent at the Noh CFL, with a margin
 of seventeen times the edge and eight times after one retry. A run at a low CFL then takes
@@ -741,6 +741,25 @@ of a margin of three times the edge at the Noh CFL, which the second retry spend
 supporting measurements are in [the filter's dissipation](#the-filters-dissipation) and
 [Taylor-Green](#taylor-green), where α = 0.45 at full strength is too strong on every
 estimator at 128³ and 256³ and the interior optimum at 128³ is a subgrid tuning.
+
+**The default α = 0.47.** The strength that suits smooth flow and the one that suits a shock
+through a refinement boundary differ. A weaker filter lets a precursor of the shock survive
+ahead of it, and a coarse–fine interface amplifies it. On the Sod case of
+`test/level_tests.jl` (N = 201, one refined region, t = 0.1), the largest momentum ahead of
+the shock reads:
+
+```
+alphaf   unrefined   refined
+0.45     3.8e-10     3.4e-10
+0.47     1.4e-9      1.35e-8
+0.49     4.3e-8      9.0e-7
+```
+
+The default sits between the two regimes; 0.45 and 0.49 remain per-run selections for
+shocks through refined levels and for resolved turbulence. At the Noh CFL its per-pass
+strength is 0.026, ten times the edge and five after one retry. The battery under it reads
+Lax 4.93e-3, Shu–Osher 6.74e-3, Woodward 3.153e-2 at peak 6.638, Sedov +1.04%, and Noh
+3.9988 / 24%, 15.010 / 57%, 62.565 / 29%; `test/validation.jl` carries the full set.
 
 The pins in `test/cases.jl` moved with the default. A default move has to move them with
 `Numerics`, or the battery measures a configuration the solver no longer runs, as happened

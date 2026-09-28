@@ -173,14 +173,15 @@ end
     run!(solver, states; tfinal=0.1, nmax=20000)
     # Ahead of the shock (x > 0.85) the exact solution is still quiescent, so
     # any momentum there beyond round-off is interface-generated noise.
-    # Measured 3.4e-10 (3.5e-10 under the closure rows) with the unrefined
-    # run at 1.9e-10.
+    # Measured 1.4e-8 under the default filter, with the unrefined run at
+    # 1.4e-9. The state filter's strength sets both: at αf = 0.45 they read
+    # 3.4e-10 and 3.8e-10, and at 0.49 9.0e-7 and 4.3e-8.
     ps = PatchSolver(solver, solver.patches[1])
     pad = ps.decomp.n_halo_d[1]
     m1 = solver.equations.i_mom[1]
     noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
     @info "Sod through refinement boundary" noise
-    @test noise < 1e-8
+    @test noise < 1e-7
     # Positivity holds through both crossings (interior only; physical-edge
     # halos are never written and stay zero).
     for (psq, Q) in CL.eachpatch(solver, states)
@@ -558,9 +559,8 @@ end
         m1 = solver.equations.i_mom[1]
         noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
         @info "subcycled Sod through refinement boundary, $label" noise
-        # Measured 6.3e-11 against the global-dt gate's 3.4e-10 (7.3e-11
-        # under the closure rows); C10 6.3e-10.
-        @test noise < 1e-8
+        # Measured 1.5e-8 against the global-dt gate's 1.4e-8; C10 9.7e-9.
+        @test noise < 1e-7
         for (psq, Q) in CL.eachpatch(solver, states)
             n = psq.decomp.n_local[1]
             padq = psq.decomp.n_halo_d[1]
@@ -728,12 +728,11 @@ end
     pad = ps.decomp.n_halo_d[1]
     m1 = solver.equations.i_mom[1]
     # Momentum ahead of the shock on the two-level gate's schedule (t = 0.1,
-    # x > 0.85) is refinement-boundary noise; measured 2.9e-10 against the
-    # two-level figure's 3.5e-10, so the inner boundary pair adds nothing
-    # visible.
+    # x > 0.85) is refinement-boundary noise; measured 3.1e-8 against the
+    # two-level figure's 1.4e-8, so the inner boundary pair about doubles it.
     noise = maximum(abs(states[1][i + pad, 1, 1, m1]) for i in 172:N)
     @info "three-level Sod noise ahead of the shock" noise
-    @test noise < 1e-8
+    @test noise < 1e-7
     run!(solver, states; tfinal=0.2, nmax=40000)
     @test all(all(isfinite, parent(Q)) for Q in states)
     for (psq, Q) in CL.eachpatch(solver, states)
@@ -1037,16 +1036,16 @@ end
     N = 201
     # The unrelaxed filter (filter_cfl = 0): the regrid below has to create a
     # fresh tile beside a survivor at exactly this step, which the tag state
-    # at step 30 does under it (steps 10 to 25 and 35 to 50 leave the three
-    # tiles as they are). The step moved from 20 when run! began sizing the
-    # first step from the initial data's artificial coefficients.
+    # at step 10 does under it (steps 15 to 50 leave the four tiles as they
+    # are, and step 55 adds a fifth). The step depends on the default filter
+    # strength: it was 30 at αf = 0.45.
     sa = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0),
                 bcs=(wall2, per, per), cfl=0.2, subcycle=true, filter_cfl=0.0,
                 regrid_interval=5, refine=BlockRegion((85, 0, 0), (31, 1, 1)),
                 tile=8)
     states = allocate_state(sa)
     initialize!(sa, states, ic)
-    run!(sa, states; tfinal=1.0, nmax=30)
+    run!(sa, states; tfinal=1.0, nmax=10)
     before = level_regions(sa, 1)
     # Perturb a survivor's interior so the seeding is visible: the plane a
     # fresh tile shares with it must carry the survivor's value exactly.

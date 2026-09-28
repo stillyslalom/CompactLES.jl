@@ -332,7 +332,7 @@ function onesided_filter_row(af::T, i::Int, M::Int) where {T}
 end
 
 """
-    compact_filter(alphaf=0.45; closures=:onesided)
+    compact_filter(alphaf=0.47; closures=:onesided)
 
 Eighth-order Gaitonde–Visbal compact filter. `alphaf ∈ (−0.5, 0.5)` sets the
 strength (larger → weaker filtering). At a closed edge the first row is always
@@ -363,7 +363,7 @@ left unfiltered; `closures` selects rows 2–4:
   :cascade4)` needs this row set: without the F2 row its inviscid wall mode
   is undamped and it fails even a smooth pulse.
 """
-function compact_filter(alphaf::Real=0.45, ::Type{T}=Float64;
+function compact_filter(alphaf::Real=0.47, ::Type{T}=Float64;
                         closures::Symbol=:onesided) where {T}
     # The weights are evaluated in at least Float64 and rounded once to T, so
     # a Float32 filter carries the rounded Float64 weights. Solving the

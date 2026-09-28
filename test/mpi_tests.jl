@@ -1601,7 +1601,8 @@ function test_deep_regrid_subsets()
                    bcs=(wall2, per3[2], per3[3]), ic=sod)
     amr = AMR(initial=:sensor, tile=4, tag_buffer=1, regrid_interval=3,
               subcycle=true, max_levels=3)
-    num(c) = Numerics(n_global=(121, 1, 1), cfl=0.1, execution=Execution(comm=c), amr=amr)
+    num(c) = Numerics(n_global=(121, 1, 1), cfl=0.1, filter=compact_filter(0.45),
+                      execution=Execution(comm=c), amr=amr)
     solver, states = setup(prob, num(comm))
     ref, rstates = setup(prob, num(MPI.COMM_SELF))
     differ = 0
@@ -2123,7 +2124,7 @@ function test_bulk_patched()
     solver = Solver(n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, eos=eos,
                     art=ArtificialProperties(enabled=true, species_flux=:bulk),
                     transport=ConstantTransport(mu0=0.0), filter_interval=1,
-                    patch_grid=(2, 1, 1))
+                    filt=compact_filter(0.45), patch_grid=(2, 1, 1))
     states = allocate_state(solver)
     initialize!(solver, states, (x, y, z) -> begin
         V = (1 - tanh((abs(x - 0.5) - 0.25) / 3h)) / 2
@@ -2465,14 +2466,16 @@ function test_refined_decomposed()
 
     # Tagging-driven regridding tracks a Sod shock to the same region. The
     # four Sod regrid cases in this file run the unrelaxed filter
-    # (filter_cfl = 0): their tile histories, regions and times reached were
-    # measured serially under it. Every regrid check now refreshes artificial
+    # (filter_cfl = 0) at αf = 0.45: their tile histories, regions and times
+    # reached were measured serially under it, and the tags follow the filter
+    # strength. Every regrid check now refreshes artificial
     # coefficients before the next root CFL estimate, so the recorded times
     # below are the replacement trajectory; the relaxed default, a weaker
     # filter at cfl = 0.2, walks the tags differently.
     wall2 = (SlipWallBC(), SlipWallBC())
     solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
                     bcs=(wall2, per3[2], per3[3]), cfl=0.2, filter_cfl=0.0,
+                    filt=compact_filter(0.45),
                     refine=BlockRegion((160, 0, 0), (60, 1, 1)),
                     subcycle=true, regrid_interval=20, tag_buffer=16)
     states = allocate_state(solver)
@@ -2692,7 +2695,8 @@ function test_tiled_level()
         solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
                         bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
                         regrid_interval=5, tag_buffer=2, tile=8,
-                        filter_cfl=0.0,   # see the regridded Sod case
+                        # see the regridded Sod case
+                        filter_cfl=0.0, filt=compact_filter(0.45),
                         refine=BlockRegion((176, 0, 0), (16, 1, 1)))
         states = allocate_state(solver)
         initialize!(solver, states, (x, y, z) -> x < 0.45 ?
@@ -2767,7 +2771,8 @@ function test_tiled_level()
         solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
                         bcs=(wall2, per3[2], per3[3]), cfl=0.2, subcycle=true,
                         regrid_interval=5, tag_buffer=2, tile=8,
-                        filter_cfl=0.0,   # see the regridded Sod case
+                        # see the regridded Sod case
+                        filter_cfl=0.0, filt=compact_filter(0.45),
                         refine=BlockRegion((176, 0, 0), (16, 1, 1)),
                         untag_ratio=1,
                         rebalance=rebalance, rebalance_persist=persist)
@@ -2942,6 +2947,7 @@ function test_level_subset()
     wall2 = (SlipWallBC(), SlipWallBC())
     solver = Solver(n_global=(400, 1, 1), L_domain=(1.0, 1.0, 1.0),
                     bcs=(wall2, per3[2], per3[3]), cfl=0.2, filter_cfl=0.0,
+                    filt=compact_filter(0.45),   # see the regridded Sod case
                     refine=BlockRegion((180, 0, 0), (8, 1, 1)),
                     subcycle=true, regrid_interval=20, tag_buffer=2)
     lc0 = solver.levels[2].level_comm

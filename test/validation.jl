@@ -51,22 +51,22 @@
 # after a change not intended to touch numerics indicates a numerical effect.
 #
 # Measured on this code (serial, C6, ArtificialProperties defaults, filter_cfl = 0.35,
-# compact_filter(0.45) with its one-sided wall rows; each case's CFL is in
+# compact_filter(0.47) with its one-sided wall rows; each case's CFL is in
 # test/cases.jl):
 #
-#   Lax        L1 rho 4.99e-3, u 7.47e-3, p 7.56e-3
-#   Shu-Osher  L1 rho 6.80e-3, wave train 2.09e-2, train peak 4.680
-#   Woodward   L1 rho 3.215e-2, peak rho 6.616 at x = 0.7785
-#   Sedov      R_s 0.8085 vs 0.8000 analytic (+1.06%), peak rho 5.13 (jump 6)
+#   Lax        L1 rho 4.93e-3, u 7.46e-3, p 7.55e-3
+#   Shu-Osher  L1 rho 6.74e-3, wave train 2.09e-2, train peak 4.680
+#   Woodward   L1 rho 3.153e-2, peak rho 6.638 at x = 0.7772
+#   Sedov      R_s 0.8083 vs 0.8000 analytic (+1.04%), peak rho 5.14 (jump 6)
 #   Noh nu=1   plateau 3.9988/4    shock 0.2021/0.2   wall deficit 24%
-#   Noh nu=2   plateau 15.009/16   shock 0.2091/0.2   wall deficit 55%
-#   Noh nu=3   plateau 62.555/64   shock 0.2089/0.2   wall deficit 29%
-#   Shock/SF6  worst Y -0.0046 / 1.0046, width 5 cells, 640 steps, TV - 1 0.0045
+#   Noh nu=2   plateau 15.010/16   shock 0.2091/0.2   wall deficit 57%
+#   Noh nu=3   plateau 62.565/64   shock 0.2089/0.2   wall deficit 29%
+#   Shock/SF6  worst Y -0.0050 / 1.0050, width 5 cells, 642 steps, TV - 1 0.0045
 #   Pulse lh   N=1600  R 0.3189/0.3290  T 1.3293/1.3290  energy 0.9937  err 7.9e-2
 #   Pulse hl   N=1600  R -0.3258/-0.3290  T 0.6710/0.6710  energy 0.9981  err 3.0e-2
-#   Slab 100   max|p - 1| 6.1e-11, max|u - u0|/u0 1.1e-12, worst Y -0.0472, 4013 steps
-#   Noh aligned N=100 AR=4    plateau 4.0035/4   deficit 33%   shock 0.2084   4966 steps
-#   Noh plane   N=24  AR=2    plateau 11.858/16  front 0.236/0.2  L1 rho 0.893  745 steps
+#   Slab 100   max|p - 1| 5.2e-11, max|u - u0|/u0 7.4e-13, worst Y -0.0547, 4016 steps
+#   Noh aligned N=100 AR=4    plateau 4.0030/4   deficit 33%   shock 0.2084   4925 steps
+#   Noh plane   N=24  AR=2    plateau 11.862/16  front 0.236/0.2  L1 rho 0.895  745 steps
 #
 # Three cases run twice, once with the wall on a node and once on a
 # face-centred symmetry plane half a cell outside it. The folded grid has no
@@ -74,11 +74,19 @@
 # even continuation of the first two nodes; the guarded deficit stays the first
 # node's, which both grids have, and the plane's prints beside it.
 #
-#   Woodward folded   L1 rho 3.033e-2, peak rho 6.6140 at x = 0.7781
-#   Noh nu=1 folded   plateau 3.9990/4  shock 0.2024  wall deficit 25%
-#                     (on the plane 26%)
-#   Noh aligned folded N=100 AR=4  plateau 3.9974/4  wall deficit 28%
-#                     (on the plane 29%)  shock 0.2093  4938 steps
+#   Woodward folded   L1 rho 2.982e-2, peak rho 6.6283 at x = 0.7781
+#   Noh nu=1 folded   plateau 3.9990/4  shock 0.2024  wall deficit 26%
+#                     (on the plane 27%)
+#   Noh aligned folded N=100 AR=4  plateau 3.9994/4  wall deficit 29%
+#                     (on the plane 30%)  shock 0.2093  4887 steps
+#
+# Every row was re-measured when the default filter strength went from
+# αf = 0.45 to 0.47, and both STORED references were regenerated with it.
+# The weaker filter raised the Woodward peak (6.616 to 6.638) and lowered its
+# L1, held Lax, Shu-Osher, Sedov and the pulses to the third digit, and moved
+# the Noh plateaus in the fifth; the nu = 2 wall deficit rose from 55% to 57%
+# and the slab's worst Y from -0.0472 to -0.0547. The aligned case's
+# transverse round-off fell from 2.1e-7 to 1.8e-9. No guard moved.
 #
 # Against the node-centred rows: the folded Woodward L1 is 6% lower at the same
 # contact node, the planar Noh wall deficit is 1 point higher and the aligned
@@ -93,9 +101,9 @@
 # 3.9952 / 52% / 0.2109 / 4926 steps and Noh plane 11.862 / 0.907 / 759 steps,
 # the other cases unchanged. Those four were taken before the detector's wall
 # mirror, below.
-#   Woodward, C6 :brady_livescu   L1 rho 3.216e-2, peak rho 6.617 at x = 0.7785
-#   Noh nu=1 warm t0=0.3, C6 :brady_livescu   rho[1:4] 3.989 3.993 3.995 4.000
-#   Noh nu=1 cold, C6 :brady_livescu   plateau 4.0013/4  shock 0.2019  wall deficit 22%
+#   Woodward, C6 :brady_livescu   L1 rho 3.153e-2, peak rho 6.638 at x = 0.7772
+#   Noh nu=1 warm t0=0.3, C6 :brady_livescu   rho[1:4] 3.991 3.992 3.995 4.001
+#   Noh nu=1 cold, C6 :brady_livescu   plateau 4.0021/4  shock 0.2020  wall deficit 22%
 #
 # The three Brady–Livescu rows guard the supported high-order wall
 # configuration: the rows under the default filter reproduce the default

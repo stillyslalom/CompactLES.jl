@@ -702,7 +702,7 @@ function _with(x::S, kw) where {S}
 end
 
 """
-    StateFilter(scheme = compact_filter(0.45); interval = 1, cfl = 0.35,
+    StateFilter(scheme = compact_filter(0.47); interval = 1, cfl = 0.35,
                 weighting = :none)
     StateFilter(base::StateFilter; keywords...)
 
@@ -712,7 +712,7 @@ copies `base` with the given fields replaced. `Numerics(filter = scheme)` is
 shorthand for `StateFilter(scheme)`, and `Numerics(filter = nothing)` for
 `StateFilter(interval = 0)`.
 
-- `scheme`: the compact filter. Default: [`compact_filter(0.45)`](@ref),
+- `scheme`: the compact filter. Default: [`compact_filter(0.47)`](@ref),
   where values nearer `0.5` filter more weakly. It doubles as the
   artificial-property sensor smoother only under
   `ArtificialProperties(smoother = :compact)`; the default `:gaussian`
@@ -758,7 +758,7 @@ struct StateFilter
     weighting::Symbol
 end
 
-StateFilter(scheme::AbstractCompactScheme=compact_filter(0.45); interval::Integer=1,
+StateFilter(scheme::AbstractCompactScheme=compact_filter(); interval::Integer=1,
             cfl::Real=0.35, weighting::Symbol=:none) =
     StateFilter(scheme, interval, cfl, weighting)
 StateFilter(base::StateFilter; kw...) = _with(base, kw)
@@ -887,7 +887,7 @@ replaced.
 - `filter`: the state filter, a [`StateFilter`](@ref). A compact scheme `s`
   is shorthand for `StateFilter(s)`, and `nothing` for
   `StateFilter(interval = 0)`, which filters nothing. Default: `StateFilter()`,
-  [`compact_filter(0.45)`](@ref) every step, relaxed below a
+  [`compact_filter(0.47)`](@ref) every step, relaxed below a
   CFL of 0.35.
 - `art`: artificial-property coefficients. Default: [`ArtificialProperties()`](@ref).
 - `cfl`: multiplier used by [`compute_dt`](@ref). Default: `0.5`. Strong shocks

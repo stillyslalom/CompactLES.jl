@@ -17,7 +17,7 @@ ArtificialProperties(enabled = true,
           reduction = :sum, smoother = :gaussian, detector = :species_d8,
           species_flux = :partial_density)
 Numerics(deriv = lele_d1_6(closures = :neutral3),
-         filter = StateFilter(compact_filter(0.45, closures = :onesided);
+         filter = StateFilter(compact_filter(0.47, closures = :onesided);
                               interval = 1, cfl = 0.35, weighting = :none),
          cfl = 0.5, control = StepControl())
 ```
@@ -41,7 +41,7 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 | `interface_flux` | `:ghost` | keep | Leads the closure rows on every smooth interface row, inviscid and viscous, keeps the shock minima and conserves as they do, at 11 to 50% on the step. `:closure` remains for shock-dominated and Float32 runs, where the interface order does not show, and is required on a curvilinear or stretched grid, under `interface_rhs = :onesided` and for a user EOS at a viscous refined level ([ghost fluxes](CALIBRATION_APPENDIX.md#benchboundaryorderjl-gflux-the-divergence-through-interface-ends-from-ghost-fluxes)). |
 | `level_interpolation_order` | `deriv`'s interior order + 2, at most 10; the interior order under `:closure` | keep | Under the closure rows the interface divergence binds before the shell, so C6 runs are unchanged and C8 and C10 read the same at 6, 8 and 10; the ghost path reads the shell at p − 1 and p − 2 and wants the two orders more ([interpolation order](CALIBRATION_APPENDIX.md#benchleveltransferjl-the-live-interpolation-order), [transfer order](CALIBRATION_APPENDIX.md#level-transfer-order)). |
 | `deriv` closure rows | `:neutral3` | keep | Neutral at an inviscid slip wall, where the cascade rows grow a wall-normal velocity; the C6 rows carry a measured pseudospectral certificate ([certificates](CALIBRATION_APPENDIX.md#closure-certificates)). |
-| `compact_filter` α | 0.45 | too strong | 0.49 fits at 128³ and at 256³ and clears the battery; the stability edge is α = 0.49875 at full strength ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)). |
+| `compact_filter` α | 0.47 | keep | Between 0.49, which fits Taylor-Green at 128³ and 256³, and 0.45, under which a shock through a refinement boundary carries 40 times less precursor noise; the stability edge is α = 0.49875 at full strength ([filter strength](CALIBRATION_APPENDIX.md#the-filter-strength-on-the-battery), [Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)). |
 | `compact_filter` closures | `:onesided` | keep | The cascade's F2 row caps every filtered wall at second order; the one-sided rows return the wall to the derivative closure's order and take 10 to 18 points off the planar Noh wall deficit, at two to three times the error on a reflection resolved over fewer than ten cells ([filter wall rows](CALIBRATION_APPENDIX.md#the-filters-wall-rows)). |
 | `filter_interval` | 1 | keep | Redundant with α: the dissipation per unit time depends on the two only through (1 − 2α) / `filter_interval` ([filter dissipation](CALIBRATION_APPENDIX.md#the-filters-dissipation)). |
 | `filter_cfl` | 0.35 | keep | Makes the filter's dissipation a rate, invariant to the CFL, to landing steps, to retries and to subcycling; clears the battery at its production CFL numbers ([filter dissipation](CALIBRATION_APPENDIX.md#the-filters-dissipation)). |
@@ -51,7 +51,8 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 
 Every constant above was fitted under `compact_filter(0.45)` applied at full
 strength every step, and the four that could depend on it have been re-swept at
-α = 0.49 and under `filter_cfl = 0.35` without moving. For a strong shock the CFL
+α = 0.49 and under `filter_cfl = 0.35` without moving, so they hold at the
+default 0.47. For a strong shock the CFL
 number sets stability more than any constant in the list.
 
 ## Which setting to change
@@ -72,6 +73,10 @@ cost. The link is to the section holding the evidence.
   `compact_filter(0.49)`, which fits at 128³ and at 256³. The filter is the
   sink, 37% of the Taylor-Green dissipation at 128³, and raising `C_mu` does not
   help ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)).
+- **Noise runs ahead of a shock through a refinement boundary.** Strengthen the
+  filter with `compact_filter(0.45)`, which carries 40 times less precursor
+  noise than the default there
+  ([filter strength](CALIBRATION_APPENDIX.md#the-filter-strength-on-the-battery)).
 - **A smooth wave train or a contact is over-damped.** `C_beta = 0.5` keeps
   0.7% more Shu-Osher amplitude and an 18% narrower contact than 1.0, at the
   cost of half the spherical origin's timestep; `detector = :d8` keeps 1.1% more

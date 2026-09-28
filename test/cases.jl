@@ -87,7 +87,7 @@ therefore generated at the test resolution's delta, not their own.
 """
 function tube(left, right; N, L=1.0, x0=0.5, tfin, γ=1.4,
               art=ArtificialProperties(enabled=true), cfl=0.4, xlo=0.0, rhofun=nothing,
-              nmax=NMAX, delta=nothing, filt=compact_filter(0.45),
+              nmax=NMAX, delta=nothing, filt=compact_filter(),
               filter_cfl=0.35)
     h = L / (N - 1)
     δ = delta === nothing ? 2h : delta
@@ -140,7 +140,7 @@ const WC_T = 0.038
 const WC_N = 800
 
 function woodward(; N=WC_N, art=ArtificialProperties(enabled=true), cfl=0.3, nmax=NMAX,
-                  delta=nothing, deriv=lele_d1_6(), filt=compact_filter(0.45),
+                  delta=nothing, deriv=lele_d1_6(), filt=compact_filter(),
                   filter_cfl=0.35, folded=false)
     # Both walls move half a cell outside the line when they are folded, so the
     # unit interval carries N cells rather than N − 1 and the blend width and
@@ -198,7 +198,7 @@ function sedov_problem(; R=1.2, σ=SEDOV_S)
 end
 
 function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtificialProperties(enabled=true), cfl=0.3,
-               nmax=NMAX, filt=compact_filter(0.45), filter_cfl=0.35,
+               nmax=NMAX, filt=compact_filter(), filter_cfl=0.35,
                filter_weighting=:none)
     prob = sedov_problem(; R, σ)
     # The blast leaves a near-vacuum behind the shock, and six of 256 cells
@@ -303,7 +303,7 @@ on rather than accepting whatever it produces.
 """
 function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
                   art=ArtificialProperties(enabled=true), cfl=NOH_CFL, R=1.0, nmax=NMAX,
-                  deriv=lele_d1_6(), filt=compact_filter(0.45), filter_cfl=0.35,
+                  deriv=lele_d1_6(), filt=compact_filter(), filter_cfl=0.35,
                   filter_weighting=:none, folded=false)
     prob = noh_problem(ν; N, t0, R, folded)
     # The wall region of a Noh implosion runs as a pressureless layer: six to
@@ -352,7 +352,7 @@ x = 0.75, which is the one `contact_width` reads. `delta` is the interface
 width in cells, as in `shock_interface`; `callback` is passed to `run!`.
 """
 function species_advection(; N=MIX_N, tfin=MIX_T, art=ArtificialProperties(enabled=true),
-                           cfl=0.4, nmax=NMAX, filt=compact_filter(0.45),
+                           cfl=0.4, nmax=NMAX, filt=compact_filter(),
                            filter_cfl=0.35, delta=2.0, callback=nothing,
                            control=StepControl())
     eos = IdealMixture([IdealSpecies{Float64}("light", 1.0, 1.4),
@@ -425,7 +425,7 @@ the interior points with 0.05 < Y_air < 0.95 at the end.
 """
 function shock_interface(; N=SI_N, tfin=SI_T, art=ArtificialProperties(enabled=true),
                          cfl=0.4, delta=2.0, nmax=NMAX, stretch1=nothing,
-                         rho_heavy=SI_RHO_HEAVY, filt=compact_filter(0.45),
+                         rho_heavy=SI_RHO_HEAVY, filt=compact_filter(),
                          filter_cfl=0.35, filter_weighting=:none)
     γa = 1.4
     eos = IdealMixture([IdealSpecies{Float64}("air", 1.0, γa),
@@ -551,7 +551,7 @@ of the paper. On a rank-split dimension 1 the extremes are reduced over the
 directional communicator.
 """
 function brill_slab(; R=BR_R, Np=BR_NP, art=ArtificialProperties(enabled=true), cfl=0.4,
-                    periods=BR_PERIODS, nmax=NMAX, filt=compact_filter(0.45),
+                    periods=BR_PERIODS, nmax=NMAX, filt=compact_filter(),
                     filter_cfl=0.35)
     N = 20 * Np
     h = 1.0 / N
@@ -654,7 +654,7 @@ cuts are read from one rank.
 """
 function noh_cartesian(; N=NC_N, AR=4, L=NC_L, t0=0.0, tfinal=NOH_T, p0=NOH_P0,
                        art=ArtificialProperties(enabled=true), cfl=NC_CFL, nmax=NMAX,
-                       deriv=lele_d1_6(), filt=compact_filter(0.45), filter_cfl=0.35)
+                       deriv=lele_d1_6(), filt=compact_filter(), filter_cfl=0.35)
     MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("noh_cartesian runs serially")
     n2 = 2N - 1
     n1 = 2AR * (N - 1) + 1
@@ -745,7 +745,7 @@ first node, which makes the dimension-2 spacing 1/(N − ½); dimension 1 keeps
 1/AR of it, so the aspect ratio is the same on either grid.
 """
 function noh_aligned(; N=Dict(NOH_N)[1], AR=4, nx=12, art=ArtificialProperties(enabled=true),
-                     cfl=NC_CFL, nmax=NMAX, filt=compact_filter(0.45),
+                     cfl=NC_CFL, nmax=NMAX, filt=compact_filter(),
                      filter_cfl=0.35, folded=false)
     MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("noh_aligned runs serially")
     h2 = folded ? 1.0 / (N - 0.5) : 1.0 / (N - 1)
@@ -815,7 +815,7 @@ periodic mirror on 2(N − 1) nodes over [0, 2) when `mirror`, in precision
 and `filt` default to the solver's defaults in `T`.
 """
 function pulse_case(::Type{T}, N; amp, art, mirror=false, deriv=lele_d1_6(T),
-                    filt=compact_filter(T(0.45), T), cfl=0.4, filter_cfl=0.35,
+                    filt=compact_filter(T(0.47), T), cfl=0.4, filter_cfl=0.35,
                     filter_interval=1, control=StepControl()) where {T}
     per = (PeriodicBC(), PeriodicBC())
     h = one(T) / T(N - 1)

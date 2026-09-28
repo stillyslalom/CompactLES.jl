@@ -168,7 +168,7 @@ relation. Its parameter `alphaf` lies between `-0.5` and `0.5`; values closer to
 `0.5` are weaker. The default is
 
 ```julia
-compact_filter(0.45)
+compact_filter(0.47)
 ```
 
 Near a closed edge, the first point is unchanged and rows two to four use

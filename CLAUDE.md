@@ -724,7 +724,8 @@ them.
   together, and it has never been calibrated.** At 128³ TGV the filter
   supplies 37% of the energy sink yet removing it kills the run, while removing
   the artificial properties entirely does not. So every `C_mu` number is
-  conditional on `compact_filter(0.45)` applied every step, and `C_mu` itself is
+  conditional on the compact filter applied every step (fitted at αf = 0.45,
+  re-swept at 0.49; the default is 0.47), and `C_mu` itself is
   active but not yet fitted. → `reference/CALIBRATION_APPENDIX.md`
 - **`compute_artificial!` is 24.8–26.0% of the multicomponent RHS** under the
   default `:gaussian` smoother (the 31.8% figure is the `:compact` one),
