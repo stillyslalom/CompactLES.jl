@@ -145,7 +145,7 @@ or a fixed physical width for a resolved material layer.
 
 ```julia
 Numerics(; n_global, deriv=lele_d1_6(), filter=StateFilter(),
-    art=ArtificialProperties(), cfl=0.5, control=StepControl(),
+    art=ArtificialProperties(), cfl=0.5, control=nothing,
     patch_interfaces=PatchInterfaces(), execution=Execution(), amr=nothing,
     polar_truncation=0.0, stretch=(nothing,nothing,nothing))
 Numerics(base; cfl=0.3)                     # a copy of `base` with cfl replaced
@@ -158,7 +158,7 @@ Numerics(base; cfl=0.3)                     # a copy of `base` with cfl replaced
 | `filter` | Conserved-state filter: a `StateFilter`, a bare scheme, or `nothing` for none | `StateFilter()` |
 | `art` | Artificial properties | `ArtificialProperties()` |
 | `cfl` | CFL multiplier | `0.5` |
-| `control` | Timestep landing, recovery, and floors | `StepControl()` |
+| `control` | Timestep landing, recovery, and floors | `nothing`: `StepControl()`, or `StepControl(retries=4)` with an `OriginBC` |
 | `patch_interfaces` | Flux divergence at patch and level interfaces: a `PatchInterfaces`, or a `Symbol` for its `flux` | `PatchInterfaces()` |
 | `execution` | Process grid, communicator, backend, precision, same-level patches | `Execution()` |
 | `amr` | Refinement, tagging, subcycling, and balancing configuration | `nothing` |

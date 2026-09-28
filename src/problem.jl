@@ -867,7 +867,7 @@ Execution(base::Execution; kw...) = _with(base, kw)
 
 """
     Numerics(; n_global, deriv=lele_d1_6(), filter=StateFilter(),
-             art=ArtificialProperties(), cfl=0.5, control=StepControl(),
+             art=ArtificialProperties(), cfl=0.5, control=nothing,
              patch_interfaces=PatchInterfaces(), execution=Execution(), amr=nothing,
              polar_truncation=0.0, stretch=(nothing, nothing, nothing))
     Numerics(base::Numerics; keywords...)
@@ -892,8 +892,13 @@ replaced.
 - `art`: artificial-property coefficients. Default: [`ArtificialProperties()`](@ref).
 - `cfl`: multiplier used by [`compute_dt`](@ref). Default: `0.5`. Strong shocks
   can require a lower startup value.
-- `control`: timestep prediction, failure floors, and retry policy. Default:
-  [`StepControl()`](@ref).
+- `control`: timestep prediction, failure floors, and retry policy, a
+  [`StepControl`](@ref). Left at `nothing`, the default, [`setup`](@ref)
+  takes `StepControl()`, or `StepControl(retries = 4)` when the problem has
+  an [`OriginBC`](@ref): a converging shock at the spherical origin loses
+  positivity above a CFL of about 0.3 early in the run, and the retries
+  recover it at the default CFL in about half the steps a fixed CFL of 0.15
+  takes. A `StepControl` given here is used as it is.
 - `patch_interfaces`: how the flux divergence closes at a patch or level
   interface, a [`PatchInterfaces`](@ref); a `Symbol` is shorthand for
   `PatchInterfaces(flux = symbol)`. Without such an interface it has no
@@ -955,7 +960,7 @@ struct Numerics
     filter::StateFilter
     art::ArtificialProperties
     cfl::Float64
-    control::StepControl
+    control::Union{Nothing,StepControl}
     patch_interfaces::PatchInterfaces
     execution::Execution
     amr::Union{Nothing,AMR}
@@ -1001,7 +1006,7 @@ end
 
 function _numerics(legacy_amr::NamedTuple; n_global, deriv=lele_d1_6(),
                    filter=StateFilter(), art=ArtificialProperties(), cfl=0.5,
-                   control=StepControl(), patch_interfaces=PatchInterfaces(),
+                   control=nothing, patch_interfaces=PatchInterfaces(),
                    execution=Execution(), amr=nothing, polar_truncation=0.0,
                    stretch=(nothing, nothing, nothing), n_halo=4, flat...)
     execution isa Execution ||
@@ -1039,6 +1044,14 @@ end
 
 _legacy_amr_keywords(num::Numerics) = num.legacy_amr
 
+# The step policy of a problem whose deck gives none. A converging shock at
+# a spherical origin is limited by an excursion of the origin cell early in
+# the run, at every resolution, and rollback with a lowered CFL recovers it;
+# no other geometry needs the retries or the savepoint they keep.
+_default_control(prob::Problem) =
+    any(pair -> any(bc -> bc isa OriginBC, pair), prob.bcs) ? StepControl(retries=4) :
+                                                               StepControl()
+
 """
     setup(prob, num) -> (solver, Q)
 
@@ -1068,6 +1081,7 @@ that communicator must call `setup` with the same `prob` and `num`. A split
 communicator lets two independent solvers share one job.
 """
 function setup(prob::Problem, num::Numerics)
+    num.control === nothing && (num = Numerics(num; control=_default_control(prob)))
     legacy = _legacy_amr_keywords(num)
     if num.amr !== nothing
         legacy == _AMR_LEGACY_DEFAULTS ||

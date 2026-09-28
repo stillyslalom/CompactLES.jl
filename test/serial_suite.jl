@@ -99,6 +99,17 @@ end
                                      filter=StateFilter(compact_filter(0.49);
                                                         interval=2, cfl=0.0)))
     @test solver.filter_interval == 2 && solver.filter_cfl == 0
+    @test solver.control.retries == 0
+
+    # A spherical origin takes retries unless the deck gives its own control.
+    sphere = Problem(metric=SphericalMetric(),
+                     domain=((0.0, 1.0), (π / 2, π / 2 + 1), (0.0, 1.0)),
+                     bcs=((OriginBC(), SlipWallBC()), per3[2], per3[3]),
+                     ic=(r, θ, φ) -> Prim(p=1.0 + 0.1exp(-(r / 0.3)^2), rho=1.0))
+    origin, _ = setup(sphere, Numerics(n_global=(32, 1, 1)))
+    @test origin.control.retries == 4
+    explicit, _ = setup(sphere, Numerics(n_global=(32, 1, 1), control=StepControl()))
+    @test explicit.control.retries == 0
     @test occursin("filter: off",
                    sprint(show, MIME("text/plain"), Numerics(num; filter=nothing)))
 end

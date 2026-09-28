@@ -61,8 +61,10 @@ Each entry gives the symptom, the setting to move and in which direction, and th
 cost. The link is to the section holding the evidence.
 
 - **A converging shock loses positivity at the spherical origin early in the
-  run.** Lower `cfl` to 0.3, or keep 0.5 and set `StepControl(retries = 4)`,
-  which recovers the case in about half the steps of a fixed `cfl = 0.15`. Do
+  run.** Lower `cfl` to 0.3, or keep 0.5 with `StepControl(retries = 4)`,
+  which recovers the case in about half the steps of a fixed `cfl = 0.15` and
+  is what `setup` takes for a problem with an `OriginBC` when the deck gives
+  no `control`. Do
   not lower `C_beta` below 0.5 for the origin
   ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)).
 - **A spherical-origin run fails within tens of steps of a sharp start.** Warm
