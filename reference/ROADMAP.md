@@ -4,6 +4,9 @@ Prioritized open work for compressible, variable-density mixing and implosion.
 The September 2026 source review adds runtime and API corrections to the existing
 numerics, validation, AMR/GPU, and high-energy-density (HED) backlog.
 The wall/interface follow-up adds R5, expands N6, and sequences N14–N17 and N15b.
+The transport-consistency review
+([issue #1](https://github.com/stillyslalom/CompactLES.jl/issues/1)) adds
+N18–N20 and the multimaterial items M1–M3.
 Completed work is recorded by the commit that delivered it, and the measurements
 behind it are in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md); method
 details are in [DESIGN.md](DESIGN.md).
@@ -124,8 +127,78 @@ details are in [DESIGN.md](DESIGN.md).
 
 - [x] **N9** — The bulk species channel was measured in three dimensions
   against the Fickian one, its constants confirmed, and its entropy inequality
-  restated as a continuous-model property; `:fickian` stays the default
+  restated as a continuous-model property; `:fickian` stayed the default
   (commit `7a86a2c`).
+
+- [x] **N9a** — `:partial_density`, the partial-density channel of Brill, Olson
+  and Bokman with its consistency fluxes on momentum and energy, is the
+  default; `:bulk` remains for density ratios of 100 or more and `:fickian`
+  reproduces Cook's form (commit `a2afda2`).
+
+- [ ] **N18 — Finish qualifying the species channel's transport consistency.**
+  The three channels are compared on the one-dimensional battery and the
+  shocked He/CO2 tube under one sensor, one operator set and one step
+  ([the channel](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)),
+  and the default's uniform (u, p, T) invariance and entropy inequality are
+  derived and measured ([DESIGN.md](DESIGN.md#the-species-channel)). The
+  invariance argument is for a uniform temperature. At a temperature jump
+  each channel's drift is its own continuous model's volume source, the
+  discrete flux identities hold as products, and no split form is needed
+  ([the thermal contact](CALIBRATION_APPENDIX.md#the-contact-with-a-temperature-jump),
+  commit `5281eac`). On the shocked tube the energy change is attributed per
+  term with a closed budget, and the three layer widths are grid-set while the
+  channels differ in the jumps across them (commit `5d529cb`). Remaining: a
+  grid-converged reference, or the V1 Pyranda run, for the He/CO2 roll-up,
+  which no measurement yet decides between the bulk and the partial-density
+  form.
+  **Depends on:** nothing; coordinate the reference with V1.
+  **Gate:** the appendix tables, the default retained or moved with its
+  [CALIBRATION.md](CALIBRATION.md) line, and `test/validation.jl` baselines
+  explained.
+
+- [x] **N19** — False activation on smooth fields was measured, and the
+  species fields are sensed with `:d8` at `C_D = 1` by default, every other
+  sensor keeping δ⁴ (commits `ee1087b`, `0a64d6f`, `7a45c8c`, `072d184`).
+  Reduced filtering waits until the discretization is shown stable without it.
+
+- [x] **N20** — The boundedness mechanisms are written down, the sweep sees
+  regridded and subcycled states, an acoustic pulse meets the interface
+  impedances, and the composite budgets are attributed per mechanism with the
+  boundary-flux closure verified; the coarse–fine drift converges and needs
+  no conservative correction (commits `5dbb5ff`, `2a5ece9`, `a889b61`).
+
+- [x] **N21** — The composition clip of the repair acts only outside
+  `StepControl.species_band`, which now bounds both sides through a test shared
+  with the validation sweep (commit `0293798`).
+
+- [ ] **N22 — Add an interface sharpening flux to the species channel.**
+  The artificial species diffusivity holds a shocked interface free of ringing
+  only with a core of about three cells, and it leaves a tail of the heavy gas
+  on the light side that the mass-fraction width reads as 10 cells at density
+  ratio 100
+  ([interface width](CALIBRATION_APPENDIX.md#interface-width-against-brill-olson-and-bokman)).
+  Brill, Olson and Bokman (J. Comput. Phys. 542, 114366, 2025; eq. 68 of
+  arXiv:2503.12680v2) pair the same partial-density channel with a
+  sharpening flux whose equilibrium profile is V = 1/(1 + e^(−x/ε)), ε = Δ by
+  default, which removes that tail. Add it to the species channel on the
+  collocated compact operators, in divergence form, with its consistency
+  terms on momentum and energy derived as the channel's are, and localized so
+  that it acts only at a material interface and not on a smooth composition
+  gradient. Define ε, the strength Γ and the step restriction; state which
+  fraction it sharpens (volume or mass) and why; and keep single-species runs
+  bit-identical. Pyranda has no implementation (upstream `b4e0afc`, every
+  branch), so the form comes from eqs. 68–71: J_i = −ρ_i Γ(ε∇V_i −
+  Σ_j V_i V_j n̂_ij), added to the channel flux before its consistency terms,
+  with V the mole fraction for ideal gases; its discretization, the
+  regularization of n̂ away from interfaces and the step limit are questions
+  for the authors.
+  M2 is the phase-field counterpart for immiscible materials on the staggered
+  operators; share the analysis but not the requirement that M1 come first.
+  **Depends on:** nothing. **Gate:** the shocked interface at
+  density ratios 100 and 1000 against the unsharpened channel (width in
+  volume and mass fraction, TV−1, worst Y), the smooth-slab deposit of
+  `bench/falseactivation.jl`, the He/CO2 tube, the N20 budgets, and
+  `test/validation.jl` baselines explained.
 
 ### AMR numerics
 
@@ -475,16 +548,12 @@ opt-in Float32 already exist; the tasks below extend or validate them.
   P ranks and the measured node scaling was 93% per doubling at four nodes.
   Stages, in order:
   1. Instrument first: `bench/reducedsolve.jl` times the local sweep, the
-     Allgather and `_reduced_solve!` separately for both solvers, and its
+     Allgather and the reduced solve separately for both solvers, and its
      run on rzhound (`bench/slurm/s12_reducedsolve.sbatch`) remains.
-  2. Banded factorization of the reduced matrix, which is block-tridiagonal in
-     P because a rank's interface unknowns couple only to its neighbors:
-     per-line cost O(q²P), per-rank cost back to N²/P. Covers the
-     tridiagonal and pentadiagonal paths alike; the Allgather is unchanged.
-     Round-off, not bitwise, agreement with the dense solve. The bar is the
-     dense solve's own departure from serial per operator, a fraction of
-     cond(A)·eps that `bench/reducedsolve.jl mode=accuracy` measures; 3e-15
-     holds only for the operators with cond(A) near 20.
+  2. Done in commit `6bfeb55`: a pivoted band LU of the block-tridiagonal
+     reduced matrix, periodic lines by an interleaved ordering, the dense LU
+     kept only at P = 1; the reduced stage is 2.3–5.6× faster at P = 2–16 on
+     the workstation and departs from serial within the dense solve's range.
   3. Only if the Allgather volume (2qP lines' worth per rank) then shows in
      the probe: a distributed reduced solve in which only neighbors exchange,
      the SPIKE recursion, which also removes the replicated factorization.
@@ -534,8 +603,15 @@ H5b. Every integration preserves A7's ideal analytic execution contract.
   staggered compact form, solved matrix-free by a Krylov method preconditioned
   with a multigrid cycle on the second-order operator, whose line smoother can
   reuse the distributed tridiagonal kernels. The staggered operator of stage 1
-  is in `src/staggered.jl`, periodic and with the wall mirror on Cartesian
-  lines; its folds and the curvilinear metric remain. Keep operators and
+  is in `src/staggered.jl`, periodic, walled, folded and on every supported
+  metric (commit `32842fc`); at the cylindrical axis and the spherical poles
+  it is accurate but not exactly symmetric, and no symmetric closure there
+  keeps fourth order (commit `b80d0fb`). Stage 2, the one-patch implicit
+  stage solved by conjugate gradients, or GMRES at the axis and poles, under
+  a line-relaxation V-cycle, holds 13–23 iterations flat in grid and stiffness
+  except on a spherical grid with an origin (commit `8819db1`). Remaining: a
+  smoother for that grid, coarsest-level agglomeration at large rank counts,
+  and stage 3, the ARK integration of the existing conduction. Keep operators and
   communication in core numerics with optional workspace allocated only when used.
   **Gate:** manufactured constant/variable-coefficient heat conduction in every
   supported metric, distributed residual/convergence studies, and freestream
@@ -642,6 +718,85 @@ H5b. Every integration preserves A7's ideal analytic execution contract.
   for the finite-difference scheme.
   **Gate:** standard wave/shock problems, divergence-error control, and energy
   budgets. Plan magnetized transport separately if the target requires it.
+
+## P2/P3: multimaterial interfaces
+
+Every species today is a miscible gas: the channel diffuses partial densities,
+the sensor reads mass and mole fractions, and the mole fraction is the volume
+fraction only for ideal gases at one pressure and temperature. `StiffenedGas`
+is a single material. An interface between immiscible materials, a gas over a
+liquid or fuel against an ablator, needs a phase that may hold several miscible
+species, a volume-fraction closure recovering one pressure, and one temperature
+if that closure is chosen, from the mixture energy, and a species flux that
+sharpens the interface instead of diffusing it. No current target requires
+this; the items wait for a case and follow
+[the material interface design](DESIGN.md#material-and-physics-interfaces).
+H5's tables are related infrastructure, not this closure.
+
+- [ ] **M1 — Add a mixture thermodynamics that distinguishes phases from species.**
+  Define a phase as a set of miscible species; allow molecular mixing within a
+  phase and none between phases unless a physical model supplies it. Recover
+  the common pressure and temperature from the volume closure Σ α_k = 1 and
+  the mixture energy, and expose per material the density, internal energy,
+  enthalpy, volume fraction, sound speed and the EOS derivatives the fluxes and
+  the artificial conductivity scale read. Start with an ideal-gas and a
+  stiffened-gas mixture; tables follow once the pure and trace limits and the
+  inverse recovery are verified. The transport model then takes zero
+  intermaterial diffusion with nonzero viscosity and conductivity, which the
+  dispatchable transport of N8 admits as a rule and not a coefficient.
+  Admissibility is the EOS's, through `state_admissibility`: no universal
+  positive-pressure or positive-internal-energy rule, and an absent phase
+  handled apart from a trace-material floor.
+  **Depends on:** A7's queries and status types; H5 for tables.
+  **Gate:** pure and trace limits, recovery residuals, hyperbolicity,
+  insensitivity to an initialized trace fraction, and A7's ideal-fluid
+  performance gate.
+
+- [ ] **M2 — Add a conservative sharpening flux on the staggered operators.**
+  The conservative diffuse-interface flux of Jain, Mani and Moin (2020) and
+  its accurate variant (Jain 2022) balance a diffusion against the nonlinear
+  sharpening term Γ(ε∇φ − φ(1 − φ)n̂); each is a divergence and needs its
+  fields at the half nodes. Build it on the staggered compact operators of H1
+  ([IMPLICIT.md](IMPLICIT.md)), not on a separate finite-volume path, which
+  the design commitments exclude. Verify the discrete diffusion–sharpening
+  balance at low order before raising it; derive the momentum and energy
+  consistency terms from the complete species flux, sharpening included, for
+  the equilibrium model M1 selects, rather than importing the incompressible
+  phase-field equation; define the regularization parameters, the interface
+  normal, the step restriction and the supported thickness in cells. Verify
+  pairwise symmetry, Σ α_k = 1, permutation invariance of the phase labels,
+  and that an absent phase creates no material and leaves the fewer-phase
+  solution unchanged. Compare the two forms on shape error, grid alignment,
+  robustness and cost.
+  **Depends on:** M1 and H1 stage 1.
+  **Gate:** stationary and obliquely advected interfaces, a three-material
+  junction and an equal-density interface, under the interface accuracy rows
+  of `test/convergence.jl` and the N10 budgets.
+
+- [ ] **M3 — Qualify the interfaces under-resolved and shocked, then add physics by target.**
+  Deliberately under-resolved droplets and thinning ligaments, measuring mass,
+  shape, breakup time, satellite sizes and mixing rather than snapshots, with
+  the mean and maximum interface thickness reported and saddle points at
+  breakup handled explicitly; a resolution and regularization-timescale sweep
+  through a strong shock–interface interaction, confirming the sharpening
+  still acts at the stable settings; acoustic reflection and transmission at a
+  material interface against an independent reference; and, under refinement,
+  how the grid-dependent thickness changes at a coarse–fine face and the mass
+  and energy transient it leaves. Physics beyond the isobaric-isothermal
+  closure is conditional on a target: assess whether instantaneous thermal
+  equilibrium between materials serves the collapse, rebound or heat-transfer
+  problem at hand, and compare against a five-equation reference where
+  compression or thermal nonequilibrium matters, keeping that nonequilibrium
+  distinct from H3's temperature split; capillarity, if required, as a
+  pressure-balanced surface tension with its energy accounting, checked on
+  Laplace pressure, spurious currents and capillary waves; phase change and
+  interphase mass transfer as separately scoped models. Sharpening is not
+  surface tension, and no discretization corrects an unsuitable closure.
+  **Depends on:** M1, M2; H3 for a two-temperature comparison.
+  **Gate:** the cases above with reproducible inputs, source revision,
+  reference provenance and the supported parameter envelope, and negative
+  results recorded with the simpler method retained where an extension does
+  not improve the target metric.
 
 ## Deferred scope and non-goals
 
