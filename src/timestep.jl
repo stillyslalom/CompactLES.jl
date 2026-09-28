@@ -1979,8 +1979,10 @@ _apply_switches!(solver::Solver) =
     foreach(p -> apply_scheduled_switches!(p.bcs, solver.t, _land_tol(solver.t)),
             getfield(solver, :patches))
 
+# The clock is held in Float64 whatever the element type: a Float32 time
+# widens exactly and narrows back to itself on a rollback.
 _savepoint(solver, Q) =
-    Savepoint(_snapshot(Q), _art_snapshot(solver), solver.t, solver.step, -1,
+    Savepoint(_snapshot(Q), _art_snapshot(solver), Float64(solver.t), solver.step, -1,
               _switch_snapshot(solver))
 
 # The hand-switched faces and their flags. A scheduled face is a function of

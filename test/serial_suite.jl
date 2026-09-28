@@ -195,6 +195,10 @@ end
     @test solver.step == 1
     @test solver.t isa T
     @test all(isfinite, parent(Q))
+
+    # Retries keep a savepoint, whose clock is Float64 in either precision.
+    run!(solver, Q; tfinal=T(1e-3), nmax=3, control=StepControl(retries=2))
+    @test solver.step > 1 && solver.t isa T && all(isfinite, parent(Q))
 end
 
 @testset "Float32 operator accuracy to the roundoff floor" begin
