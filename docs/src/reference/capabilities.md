@@ -71,7 +71,7 @@ such as `(0, π)` places it on the pole.
 | Layout | selected by | device | restrictions |
 |:--|:--|:--|:--|
 | one patch | default | yes | none |
-| same-level slabs | `patch_grid` | yes | uniform Cartesian, or a cylindrical annulus or stretched grid under `interface_flux = :closure`, without folds or symmetry planes; tridiagonal filter; `:delta4` detector; no explicit `dims`; no refinement; no checkpoint |
+| same-level slabs | `patch_grid` | yes | uniform Cartesian, or a cylindrical annulus or stretched grid under `interface_flux = :closure`, without folds or symmetry planes; tridiagonal filter; `:delta4` or `:species_d8` detector; no explicit `dims`; no refinement; no checkpoint |
 | static nested levels | `AMR(initial = [shape, ...])` or a `BlockRegion` vector, `regrid_interval = 0` | yes | Cartesian, uniform, no folds or symmetry planes |
 | one regridded box | `AMR(initial = ...)` with `regrid_interval > 0`, `tile = 0` | yes | as for static levels |
 | regridded tiles, two levels | as above with `tile ≥ 3` | yes | as for static levels |
@@ -121,7 +121,7 @@ text below.
 | `patch_grid` with a fold | `patch decomposition across a coordinate fold is not supported` |
 | `patch_grid` with a symmetry plane | `patch decomposition across a SymmetryPlaneBC is not supported` |
 | `patch_grid` with a pentadiagonal filter | `patch interfaces carry closure variants for a tridiagonal filter only` |
-| `patch_grid` with the `:d8` detector | `patch interfaces support the :delta4 detector only` |
+| `patch_grid` with the `:d8` detector | `patch interfaces support the :delta4 and :species_d8 detectors only` |
 | `patch_grid` with explicit `dims` | `an explicit process grid cannot combine with patch_grid` |
 | `patch_grid` along a stretched dimension | `the patched dimension cannot be stretched` |
 | `AMR` with `patch_grid` | `AMR: cannot be combined with a patch_grid` |

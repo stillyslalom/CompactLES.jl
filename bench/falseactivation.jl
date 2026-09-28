@@ -118,13 +118,20 @@ function transfer(filt, kh)
     return num / (1 + 2 * filt.alpha * cos(kh))
 end
 
+# The tables of the appendix section were measured at the defaults of the
+# time, δ⁴ on every sensor and `C_D = 0.1`; `art_at` pins them, so that the
+# rows labelled `default` rerun unchanged under the later `:species_d8`
+# default. Keywords override either.
+const MEASURED_DEFAULTS = (detector=:delta4, C_D=0.1)
+art_at(; kw...) = ArtificialProperties(; merge(MEASURED_DEFAULTS, values(kw))...)
+
 """
     run_case(case, N; art, filt, filter_interval, filter_cfl, cfl, amp)
 
 One run, returning the time maxima of the three normalized coefficients, the
 final line of (x, Y_heavy, T, p), the mean filter weight and the step count.
 """
-function run_case(case::Symbol, N; art=ArtificialProperties(),
+function run_case(case::Symbol, N; art=art_at(),
                   filt=compact_filter(0.45), filter_interval=1, filter_cfl=0.35,
                   cfl=OPTS.cfl, amp=OPTS.amp)
     eos, ic, tfin = problem(case, amp)
@@ -216,7 +223,7 @@ end
 
 function variations(case, ref)
     N = OPTS.Nvar
-    a = ArtificialProperties
+    a = art_at
     rows = Any[("default", a(), (;)),
                ("C_D = 0", a(C_D=0.0), (;)),
                ("C_beta = 0", a(C_beta=0.0), (;)),
@@ -389,7 +396,7 @@ function split_detector()
         for (label, det, split) in (("delta4", :delta4, false), ("d8", :d8, false),
                                     ("split", :d8, true))
             SPLIT[] = split
-            on = run_case(case, N; art=ArtificialProperties(detector=det))
+            on = run_case(case, N; art=art_at(detector=det))
             SPLIT[] = false
             _, _, d = errors(case, on, off, ref)
             @printf("%-8s %-12s | %9.2e %9.2e %9.2e | %8.2e\n", label, case, on.peak..., d)
@@ -401,7 +408,7 @@ function split_detector()
     for (label, det, split) in (("delta4", :delta4, false), ("d8", :d8, false),
                                 ("split", :d8, true))
         SPLIT[] = split
-        battery_row(label, ArtificialProperties(detector=det))
+        battery_row(label, art_at(detector=det))
         SPLIT[] = false
     end
     println("  (NaN = lost positivity; Inf = still healthy at the step cap)")
@@ -454,7 +461,7 @@ function species_split()
     SPECIES_ONLY[] = true
     _, ρs, _, _, _ = lax(; art=ArtificialProperties(detector=:d8), nmax=cap)
     SPECIES_ONLY[] = false
-    _, ρd, _, _, _ = lax(; art=ArtificialProperties(), nmax=cap)
+    _, ρd, _, _, _ = lax(; art=art_at(), nmax=cap)
     @printf("Lax (one species): split identical to δ4: %s, max |Δρ| %.1e\n",
             ρs == ρd, maximum(abs, ρs .- ρd))
     Ncomp = (64, 128)

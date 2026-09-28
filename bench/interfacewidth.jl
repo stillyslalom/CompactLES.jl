@@ -79,14 +79,14 @@ want(name) = name in PARTS
 
 # (label, species-only split, ArtificialProperties keywords, uniform sound
 # speed in D_b; 0 keeps the local one)
-const CONFIGS = [("δ4 0.1", false, (;), 0.0),
-                 ("δ4 1", false, (C_D=1.0,), 0.0),
+const CONFIGS = [("δ4 0.1", false, (detector=:delta4, C_D=0.1), 0.0),
+                 ("δ4 1", false, (detector=:delta4, C_D=1.0), 0.0),
                  ("species 0.05", true, (detector=:d8, C_D=0.05), 0.0),
                  ("species 0.3", true, (detector=:d8, C_D=0.3), 0.0),
                  ("species 1", true, (detector=:d8, C_D=1.0), 0.0),
                  ("species 3", true, (detector=:d8, C_D=3.0), 0.0),
                  ("d8 1", false, (detector=:d8, C_D=1.0), 0.0),
-                 ("bulk δ4 0.1", false, (species_flux=:bulk,), 0.0),
+                 ("bulk δ4 0.1", false, (species_flux=:bulk, detector=:delta4, C_D=0.1), 0.0),
                  ("species 1 c_air", true, (detector=:d8, C_D=1.0), C_AIR),
                  ("species 1 c_hvy", true, (detector=:d8, C_D=1.0), C_HEAVY),
                  ("species 10 c_hvy", true, (detector=:d8, C_D=10.0), C_HEAVY)]

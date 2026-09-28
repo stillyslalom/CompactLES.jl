@@ -1,7 +1,9 @@
 # Bench-only detector splits for a run built under `detector = :d8`, included
-# by bench/falseactivation.jl and bench/he_co2_shock_tube.jl. The solver has
-# one detector for every sensed field; these redefine its dispatch so that
-# some fields take `:d8` and the rest δ⁴. Nothing in src offers either split.
+# by bench/falseactivation.jl and bench/interfacewidth.jl. These redefine the
+# solver's detector dispatch so that some fields take `:d8` and the rest δ⁴.
+# The species-only split is the solver's default, `detector = :species_d8`,
+# which reproduces `SPECIES_ONLY[]` under either species channel; the flag is
+# kept so that the tables it produced rerun unchanged.
 #
 #   SPLIT[]         `:d8` on the fields of the κ* and D* channels (the internal
 #                   energy, the mass and the mole fractions), δ⁴ on |S| and
@@ -13,8 +15,8 @@
 #                   channel, which the redefined `_bulk_diffusivity!` below
 #                   brackets with `IN_SPECIES[]`; a run without species never
 #                   reaches it and is the δ⁴ run bit for bit. The `:fickian`
-#                   channel senses its mass fractions elsewhere and is not
-#                   split.
+#                   channel takes the species detector too, through
+#                   `species_detect_sum!`, which dispatches on the plans.
 #
 # Include after `using CompactLES`; neither flag calls MPI.
 

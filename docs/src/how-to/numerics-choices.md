@@ -210,7 +210,7 @@ filtering even when artificial properties are enabled. Use
 | `filter_cfl` | 0.35, the reference CFL at which a pass is full strength | 0 applies every pass at full strength; dissipation per unit time then depends on the timestep |
 | `smoother` | `:gaussian`, explicit | `:compact`, one pass of the state filter per sensor: a quarter of the right-hand side in the multicomponent case, and one sweep per species |
 | `beta_sensor` | `:strain` | `:dilatation` on an inviscid wall or wherever the strain cusp costs order |
-| `detector` | `:delta4` | `:d8` separates shocks from smooth flow only with a cusp-free sensor field, and lowers the spherical-origin CFL ceiling to 0.25 |
+| `detector` | `:species_d8`: `:d8` on the mass and mole fractions, `:delta4` elsewhere | `:d8` on every field separates shocks from smooth flow only with a cusp-free sensor field, and lowers the spherical-origin CFL ceiling to 0.25; `:delta4` with `C_D = 0.1` is the earlier default and Cook's form of the Fickian channel |
 | `species_flux` | `:partial_density`, one diffusivity on the partial densities with the mass flux carried into momentum and energy | `:bulk` for a shocked interface at a density ratio of 100 or more, at about a tenth more per step again; `:fickian`, Cook's per-species flux, is cheaper and moves the pressure at an interface of unequal molecular weight (see [Filtering and artificial properties](@ref)) |
 
 Sensor smoothing is the largest single cost in the artificial-property

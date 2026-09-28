@@ -61,10 +61,10 @@
 #   Noh nu=1   plateau 3.9988/4    shock 0.2021/0.2   wall deficit 24%
 #   Noh nu=2   plateau 15.009/16   shock 0.2091/0.2   wall deficit 55%
 #   Noh nu=3   plateau 62.555/64   shock 0.2089/0.2   wall deficit 29%
-#   Shock/SF6  worst Y -0.0098 / 1.0098, width 4 cells, 644 steps, TV - 1 0.0066
-#   Pulse lh   N=1600  R 0.3182/0.3290  T 1.3297/1.3290  energy 0.9938  err 7.9e-2
-#   Pulse hl   N=1600  R -0.3256/-0.3290  T 0.6711/0.6710  energy 0.9981  err 3.1e-2
-#   Slab 100   max|p - 1| 5.2e-11, max|u - u0|/u0 1.1e-12, worst Y -0.0620, 4049 steps
+#   Shock/SF6  worst Y -0.0046 / 1.0046, width 5 cells, 640 steps, TV - 1 0.0045
+#   Pulse lh   N=1600  R 0.3189/0.3290  T 1.3293/1.3290  energy 0.9937  err 7.9e-2
+#   Pulse hl   N=1600  R -0.3258/-0.3290  T 0.6710/0.6710  energy 0.9981  err 3.0e-2
+#   Slab 100   max|p - 1| 6.1e-11, max|u - u0|/u0 1.1e-12, worst Y -0.0472, 4013 steps
 #   Noh aligned N=100 AR=4    plateau 4.0035/4   deficit 33%   shock 0.2084   4966 steps
 #   Noh plane   N=24  AR=2    plateau 11.858/16  front 0.236/0.2  L1 rho 0.893  745 steps
 #
@@ -540,8 +540,8 @@ say("\n=== Mach 1.5 shock into an air/SF6 interface (measured, no reference) ===
 # `C_Y = 0`. The ringing inside [0, 1], where the bound is zero, is guarded
 # through the total variation of the final profile beyond the 1 a monotone
 # profile carries: 0.0788 under the Fickian channel at `C_D = 0.01`, where a
-# two-cell lump of SF6 separates from the light side of the interface, and
-# 0.0066 at the defaults.
+# two-cell lump of SF6 separates from the light side of the interface, 0.0066
+# under `detector = :delta4, C_D = 0.1`, and 0.0045 at the defaults.
 let r = shock_interface()
     @test r.completed
     tv_excess = sum(abs, diff(r.Y_air)) - 1

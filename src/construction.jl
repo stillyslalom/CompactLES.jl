@@ -168,8 +168,9 @@ function _validate_configuration(transport, eos, art, bcs, metric, n_global,
         error("art.reduction must be :sum or :max, got :$(art.reduction)")
     art.smoother in (:compact, :gaussian) ||
         error("art.smoother must be :compact or :gaussian, got :$(art.smoother)")
-    art.detector in (:delta4, :d8) ||
-        error("art.detector must be :delta4 or :d8, got :$(art.detector)")
+    art.detector in (:delta4, :d8, :species_d8) ||
+        error("art.detector must be :delta4, :d8 or :species_d8, " *
+              "got :$(art.detector)")
     art.species_flux in (:fickian, :bulk, :partial_density) ||
         error("art.species_flux must be :fickian, :bulk or :partial_density, " *
               "got :$(art.species_flux)")
@@ -370,9 +371,10 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         filt isa CompactScheme ||
             error("patch interfaces carry closure variants for a tridiagonal " *
                   "filter only")
-        art.detector === :delta4 ||
-            error("patch interfaces support the :delta4 detector only; the " *
-                  ":d8 detector's banded scheme takes a single patch")
+        art.detector !== :d8 ||
+            error("patch interfaces support the :delta4 and :species_d8 " *
+                  "detectors only; the :d8 detector on every sensor takes a " *
+                  "single patch")
         dims === nothing ||
             error("an explicit process grid cannot combine with patch_grid; " *
                   "each patch derives its own")
@@ -631,8 +633,11 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     # The sensor detector. `:delta4` is the explicit undivided fourth
     # difference applied inside `delta4_sum!`, which needs no plan at all;
     # `:d8` is the pentadiagonal compact eighth derivative and needs one per
-    # dimension and one pair per fold, matching the smoother.
+    # dimension and one pair per fold, matching the smoother. `:species_d8`
+    # builds the same plans wherever a species sensor exists, and none
+    # otherwise (`_ring_detector`).
     ring = compact_d8(T)
+    ring_det = _ring_detector(art, nspecies(eos))
     # Reflecting-wall closure rows for the two sensor operators. Both schemes
     # fold their overhanging weights onto the half-offset mirror, which is half
     # a cell out at a wall node; at such a face they take the node-centred rows
@@ -644,7 +649,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     swrow(d, side) = _sensor_wall_rows(smoo, wall_face[d][side], 1,
                                        art.smoother === :gaussian)
     rwrow(d, side, σw) = _sensor_wall_rows(ring, wall_face[d][side], σw,
-                                           art.detector !== :delta4)
+                                           ring_det)
     equations = equations === nothing ? NavierStokes1T(eos) : equations
     equations isa EquationSet || error("equations must be an EquationSet")
     equations.n_species == nspecies(eos) ||
@@ -674,8 +679,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                         d -> (
         (deriv, nothing, nothing), (filt, nothing, nothing),
         (art.smoother === :gaussian ? ((smoo, swrow(d, 1), swrow(d, 2)),) : ())...,
-        (art.detector === :delta4 ? () :
-         ((ring, rwrow(d, 1, 1), rwrow(d, 2, 1)),))...))
+        (ring_det ? ((ring, rwrow(d, 1, 1), rwrow(d, 2, 1)),) : ())...))
     mkd(sch, d; kw...) =
         backend_plan(backend, plan_direction(decomp, sch, d, h[d]; kw...))
     f() = field(backend, decomp)
@@ -749,8 +753,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             even = ringfold(σg, 1)
             farwall ? (even, ringfold(σg, -1)) : (even, even)
         end
-        rp = art.detector === :delta4 ? ((nothing, nothing), (nothing, nothing)) :
-             (rpair(1), rpair(-1))
+        rp = ring_det ? (rpair(1), rpair(-1)) :
+             ((nothing, nothing), (nothing, nothing))
         FoldSpec(d, lo, hi, pairspec(pdim, revdim), sigvel, sigflux, dp, fp, sp, rp)
     end
     folds = (nothing, nothing, nothing)
@@ -791,10 +795,10 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                           mkd(smoo, d; lo_closures=swrow(d, 1),
                               hi_closures=swrow(d, 2)) : nothing, 3)
     # `nothing`, not a tuple of nothings: `detect_sum!` dispatches on this
-    # field's type to decide which detector runs, so under `:delta4` the whole
-    # d8 path (`ring_sum!`, `ring_along!`, and the `apply_along!` call taking a
-    # possibly-absent plan) is not reachable from inference and costs the
-    # default configuration nothing.
+    # field's type to decide which detector runs, so where no sensor takes
+    # `:d8` (`_ring_detector`) the whole d8 path (`ring_sum!`, `ring_along!`,
+    # and the `apply_along!` call taking a possibly-absent plan) is not
+    # reachable from inference and costs such a configuration nothing.
     # A tuple would not serve: a fully folded run carries no plans here even
     # under `:d8`, since those live on the FoldSpec.
     #
@@ -808,7 +812,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         (even, mkd(ring, d; lo_closures=rwrow(d, 1, -1),
                    hi_closures=rwrow(d, 2, -1)))
     end
-    ring_plans = art.detector === :delta4 ? nothing : ntuple(ringpair, 3)
+    ring_plans = ring_det ? ntuple(ringpair, 3) : nothing
     paired_fold = any(fold -> fold !== nothing && fold.pair !== nothing, folds)
     orig = ntuple(d -> stretch[d] === nothing ? T(origin[d]) : zero(T), 3)
     bcs_t = ntuple(d -> (bcs[d][1], bcs[d][2]), 3)
@@ -816,7 +820,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     # handed to every refined patch below (patches.jl).
     ws_pool = rhs_workspace_pool(backend, T)
     ws_root = rhs_workspace!(ws_pool, backend, decomp, n_species, n_cons,
-                             art.detector !== :delta4,
+                             ring_det,
                              _shared_species_diffusivity(art, n_species))
     patch = Patch(1, 0, regions[1], comm, decomp, h,
                   ntuple(d -> (0, 0), 3), bcs_t, folds,
@@ -923,7 +927,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                                  ghost_viscous=
                                                      _ghost_viscous(interface_flux,
                                                                     transport),
-                                                 detector=art.detector)
+                                                 ring=_ring_detector(art, n_species))
             append!(fines, built)
             indices = [id0 + k for k in eachindex(held)]
             for (k, ti) in enumerate(held)
@@ -1053,17 +1057,17 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3);
                            interface_divergence=nothing,
                            ghost_viscous::Bool=false,
-                           detector::Symbol=:delta4) where {T}
+                           ring::Bool=false) where {T}
     region_f, decomp_f, hf = _fine_decomp(T, refine, active_g, h, n_halo, comm)
     plans = _fine_plans(decomp_f, hf, deriv, filt, smoo, interface_rhs, backend;
-                        interface_divergence, detector)
+                        interface_divergence, ring)
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
-    # `detector = :d8` adds the ringing buffer; `bulk` selects the conserved
+    # `ring` adds the `:d8` ringing buffer; `bulk` selects the conserved
     # gradients of the shared-D_b species channels, which a refined patch
     # differences as the root does.
     ws = rhs_workspace!(ws_pool, backend, decomp_f, n_species, n_cons,
-                        detector === :d8, bulk)
+                        ring, bulk)
     scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
                              MPI.Comm_size(comm), MPI.Comm_rank(comm);
                              gradient_deriv=ghost_viscous ? deriv : nothing,
@@ -1103,13 +1107,13 @@ function _fine_decomp(::Type{T}, refine::BlockRegion, active_g::NTuple{3,Bool},
 end
 
 # A refined patch's plans on `backend`: gradient, divergence, filter,
-# smoother and, under `detector = :d8`, the detector. `ntiles` and `stride`
+# smoother and, where `ring` (`_ring_detector`), the detector. `ntiles` and `stride`
 # plan the batched device solve of a stacked level's spanning patch
 # (lines_device.jl); the default is one patch's plans.
 function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
                      interface_rhs::Symbol, backend::AbstractBackend;
                      ntiles::Int=1, stride::Int=0, interface_divergence=nothing,
-                     detector::Symbol=:delta4) where {T}
+                     ring::Bool=false) where {T}
     mkf(sch, d; kw...) =
         backend_plan(backend, plan_direction(decomp_f, sch, d, hf[d]; kw...,
                                              lines_factor=ntiles); ntiles, stride)
@@ -1144,14 +1148,15 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
     # The d8 detector reads the interface ghosts of a field recovered over the
     # padded extent through rows of its own (`_ring_interface_rows`), and
     # closes on the scheme's own rows for a field without them. `nothing`
-    # under `:delta4`, as on the root, so `detect_sum!` dispatches alike.
+    # where no sensor takes `:d8`, as on the root, so `detect_sum!`
+    # dispatches alike.
     rplans_f = nothing
-    if detector === :d8
-        ring = compact_d8(T)
+    if ring
+        d8 = compact_d8(T)
         rrows = _ring_interface_rows(T)
         rplans_f = ntuple(d -> !decomp_f.active[d] ? nothing :
-            InterfaceRingPlans(mkf(ring, d; lo_closures=rrows, hi_closures=rrows),
-                               mkf(ring, d)), 3)
+            InterfaceRingPlans(mkf(d8, d; lo_closures=rrows, hi_closures=rrows),
+                               mkf(d8, d)), 3)
     end
     return (deriv=dplans_f, div=vplans_f, filter=fplans_f, smooth=splans_f,
             ring=rplans_f)
@@ -1211,7 +1216,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               bulk::Bool, id0::Int, level::Int, tile::Int;
                               interface_divergence=nothing,
                               ghost_viscous::Bool=false,
-                              detector::Symbol=:delta4) where {T}
+                              ring::Bool=false) where {T}
     patches = Patch[]
     stacks = TileStack[]
     if !_stacked_level(backend, tile)
@@ -1221,7 +1226,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                              interface_rhs, backend, ws_pool,
                                              n_species, n_cons, bulk, id0 + k,
                                              level, faces[ti]; interface_divergence,
-                                             ghost_viscous, detector))
+                                             ghost_viscous, ring))
         end
         return patches, stacks
     end
@@ -1236,7 +1241,7 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                         active_g, h, n_halo, comm, deriv, filt, smoo,
                                         interface_rhs, backend, n_species, n_cons,
                                         bulk, level; interface_divergence,
-                                        ghost_viscous, detector)
+                                        ghost_viscous, ring)
         for (slot, k) in enumerate(ks)
             patches[k] = tiles[slot]
         end
@@ -1253,13 +1258,13 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            backend::DeviceBackend, n_species::Int, n_cons::Int,
                            bulk::Bool, level::Int; interface_divergence=nothing,
                            ghost_viscous::Bool=false,
-                           detector::Symbol=:delta4) where {T}
+                           ring::Bool=false) where {T}
     ntiles = length(tregions)
     region1, decomp1, hf = _fine_decomp(T, tregions[1], active_g, h, n_halo, comm)
     npad = padded_extent(decomp1)
     stride = npad[3]
     span_plans = _fine_plans(decomp1, hf, deriv, filt, smoo, interface_rhs, backend;
-                             ntiles, stride, interface_divergence, detector)
+                             ntiles, stride, interface_divergence, ring)
     empty_raw = empty_field(backend, T)
     stacked() = StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
                                                       ntiles * stride),
@@ -1267,7 +1272,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
     empty_s = StackedArray(empty_raw, ntiles, stride)
     arrays = _patch_arrays(stacked, n_species)
     ws_span = _rhs_workspace(stacked, empty_s, n_species, n_cons,
-                             detector === :d8, bulk)
+                             ring, bulk)
     empty4 = similar(empty_raw, T, 0, 0, 0, 0)
     gflux_span = _ghost_flux_arrays(
         () -> StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
@@ -1305,7 +1310,7 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                        cot_over_r=v(arrays.cot_over_r),
                        cot_over_r_gcl=v(arrays.cot_over_r_gcl))
         plans_t = _fine_plans(decomp_t, hf, deriv, filt, smoo, interface_rhs, backend;
-                              interface_divergence, detector)
+                              interface_divergence, ring)
         scratch = _level_scratch(empty_raw, refine, active_g, n_halo, n_cons,
                                  MPI.Comm_size(comm), MPI.Comm_rank(comm);
                                  gradient_deriv=ghost_viscous ? deriv : nothing,
@@ -1341,8 +1346,8 @@ end
 # Multi-patch construction: the rank set is partitioned over the patch slabs,
 # each patch builds its own decomposition, plans and arrays over its own
 # communicator, and the interface exchange records are derived from one
-# world Allgather. Folds, a banded filter, the :d8 detector, and an explicit
-# process grid are rejected by the caller before this runs.
+# world Allgather. Folds, a banded filter, the :d8 detector on every sensor,
+# and an explicit process grid are rejected by the caller before this runs.
 function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all,
                                patch_grid, bcs, eos, equations, transport, art,
                                metric, stretch, sources, origin, Lt, coord_shift,
@@ -1373,6 +1378,8 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
     ivd = ext || interface_divergence !== nothing ?
           interface_divergence_rows(deriv, interface_divergence) : nothing
     nofold = (nothing, nothing, nothing)
+    ring = compact_d8(T)
+    ring_det = _ring_detector(art, n_species)
     # One RHS scratch pool for the rank's patches. A partitioned run gives each
     # rank one patch; a serial one holds every slab, and equal-extent slabs
     # then share a single set (patches.jl).
@@ -1407,23 +1414,36 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
         # The sensor smoother's input is built per patch, so its interface
         # ghosts carry no data and its plans keep the standard closures even
         # under `smoother = :compact`. A face carrying a physical wall takes
-        # the node-centred rows, as the single-patch path does; a patched run
-        # is rejected under `detector = :d8`, so no ring plans arise here.
+        # the node-centred rows, as the single-patch path does.
         wface = _sensor_wall_faces(pbcs)
         swp(d, side) = _sensor_wall_rows(smoo, wface[d][side], 1,
                                          art.smoother === :gaussian)
         splans = ntuple(d -> dcp.active[d] ?
             mk(smoo, d; lo_closures=swp(d, 1), hi_closures=swp(d, 2)) : nothing, 3)
+        # Under `:species_d8` the species sensors take the `:d8` detector (a
+        # patched run is rejected under `:d8` on every sensor). It reads the
+        # interface ghosts of the mass and mole fractions through rows of its
+        # own (`_ring_interface_rows`), as a refined patch does, and closes a
+        # wall face on the even node-centred rows. No other field reaches
+        # these plans (`detect_sum!`), and those fractions carry valid ghosts
+        # and are even at a wall, so one plan serves both wall signs.
+        rwp(d, side) = faces[d][side] != 0 ? _ring_interface_rows(T) :
+                       _sensor_wall_rows(ring, wface[d][side], 1, true)
+        function rpair(d)
+            dcp.active[d] || return nothing
+            plan = mk(ring, d; lo_closures=rwp(d, 1), hi_closures=rwp(d, 2))
+            return (plan, plan)
+        end
+        rplans = ring_det ? ntuple(rpair, 3) : nothing
         g() = field(backend, dcp)
         empty3 = empty_field(backend, T)
-        # A patched run takes the `:delta4` detector, rejected otherwise at
-        # setup, so no patch carries the `:d8` ringing buffer; the bulk
-        # channel's conserved gradients go through the same interface plans
-        # as `grad_Y`.
-        ws = rhs_workspace!(ws_pool, backend, dcp, n_species, n_cons, false,
+        # The `:d8` ringing buffer exists where the species plans above do;
+        # the bulk channel's conserved gradients go through the same
+        # interface plans as `grad_Y`.
+        ws = rhs_workspace!(ws_pool, backend, dcp, n_species, n_cons, ring_det,
                             _shared_species_diffusivity(art, n_species))
         Patch(pid, 0, region, pcomm, dcp, h, faces, pbcs, nofold,
-              dplans, vplans, fplans, splans, nothing,
+              dplans, vplans, fplans, splans, rplans,
               empty3, empty3,
               g(), g(), g(), g(), g(), g(), g(), g(),
               [g() for _ in 1:n_species],

@@ -2154,7 +2154,9 @@ function test_bulk_patched()
     tol = np <= 2 ? 1e-14 : 1e-12
     check("bulk two-patch slab: max rho matches serial", abs(gmax(m) - ref), tol)
 end
-const BULK_PATCHED_MAX_RHO = 19.999997534938814
+# Under the default `:species_d8` detector at `C_D = 1`; 19.999997534938814
+# under `detector = :delta4, C_D = 0.1`.
+const BULK_PATCHED_MAX_RHO = 19.999997551261714
 
 # ---------------------------------------------------------------------------
 # Device line solves (reference/AMR_GPU.md). A DevicePlan runs the fill,

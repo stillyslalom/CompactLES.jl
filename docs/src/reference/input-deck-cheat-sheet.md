@@ -189,15 +189,15 @@ the same `Problem` and `Numerics`.
 | State filter | `compact_filter(0.45)` (`closures=:onesided` or `:cascade`), `pyranda_filter()`, `gaussian_filter()`, `compact_d8()` |
 | Artificial sensors | `mu_sensor`: `:strain` or `:velocity`; `beta_sensor`: `:strain`, `:gated_strain`, `:ungated_dilatation`, or `:dilatation` |
 | Sensor combination | `reduction=:sum` or `:max`; `smoother=:gaussian` or `:compact` |
-| Detector | `detector=:delta4` (default) or `:d8` |
+| Detector | `detector=:species_d8` (default: `:d8` on the mass and mole fractions, `:delta4` elsewhere), `:delta4` or `:d8` |
 
 ## Artificial properties: `ArtificialProperties`
 
 ```julia
-ArtificialProperties(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01, C_D=0.1,
+ArtificialProperties(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01, C_D=1.0,
           C_Y=100.0, Y_tolerance=1e-4,
           mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
-          smoother=:gaussian, detector=:delta4, species_flux=:partial_density)
+          smoother=:gaussian, detector=:species_d8, species_flux=:partial_density)
 ```
 
 Set `enabled=false` for an inviscid/unregularized experiment. `C_mu`, `C_beta`,

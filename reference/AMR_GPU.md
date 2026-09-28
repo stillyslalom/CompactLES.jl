@@ -1380,7 +1380,7 @@ guarded somewhere; none should be re-derived.
 Configurations rejected at setup, and the reason:
 
 - **Patched runs** (same-level `patch_grid`) reject folds (constraint 4),
-  the `:d8` detector, stretching along the patched dimension, and an
+  the `:d8` detector on every sensor, stretching along the patched dimension, and an
   explicit `dims`. The layout tiles slabs along
   one dimension, so corner-coupled adjacency does not arise. Field output
   takes the multiblock form; a slab layout has no checkpoint.
@@ -1404,7 +1404,9 @@ Configurations rejected at setup, and the reason:
 - The artificial-property sensors are built per patch. The δ⁴ detector
   reads the exchanged or imposed ghost layers at an interface face for the
   fields recovered over the padded extent and clamps the strain and
-  dilatation there; the smoother keeps closed-edge rows at every interface
+  dilatation there; the `:d8` detector of the species fields reads four
+  ghost layers through `_ring_interface_rows` at a same-level face as at a
+  coarse-fine one. The smoother keeps closed-edge rows at every interface
   face, since its input has no ghosts. The measured cost of each, and of
   the filter's interface rows, is in the appendix
   ([interface sensors](CALIBRATION_APPENDIX.md#benchinterfacesensorjl-the-sensors-and-the-filter-at-an-interface)).

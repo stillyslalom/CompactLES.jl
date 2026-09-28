@@ -12,9 +12,9 @@ Taylor-Green results.
 
 ```
 ArtificialProperties(enabled = true,
-          C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 0.1, C_Y = 100,
+          C_mu = 0.002, C_beta = 1.0, C_kappa = 0.01, C_D = 1.0, C_Y = 100,
           Y_tolerance = 1e-4, mu_sensor = :strain, beta_sensor = :strain,
-          reduction = :sum, smoother = :gaussian, detector = :delta4,
+          reduction = :sum, smoother = :gaussian, detector = :species_d8,
           species_flux = :partial_density)
 Numerics(deriv = lele_d1_6(closures = :neutral3),
          filt = compact_filter(0.45, closures = :onesided), filter_interval = 1,
@@ -27,12 +27,12 @@ Numerics(deriv = lele_d1_6(closures = :neutral3),
 | `C_beta` | 1.0 | keep | Accuracy optimum near 0.4; 1.0 maximizes the spherical-origin CFL ceiling and is the one value viable under both detectors ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `C_kappa` | 0.01 | keep | The wall-heating trough under the default smoother sits at 0.01; zero loses spherical Noh under `:compact` ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `C_mu` | 0.002 | keep | Inert in one dimension; above 0.008 spherical Noh fails. Taylor-Green is consistent with the value and cannot select it ([Taylor-Green](CALIBRATION_APPENDIX.md#taylor-green)). |
-| `C_D` | 0.1 | keep | A shocked interface rings inside [0, 1] at 0.01, where the bound is zero; 0.1 cuts the excess variation 12-fold on the air/SF6 case and tenfold on the He/CO2 tube under the default channel, at 11% on the passive width and no steps. Under `:fickian` the interface pressure error grows in proportion ([battery](CALIBRATION_APPENDIX.md#the-shock-battery), [channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)). |
+| `C_D` | 1.0 | keep | The value for the `:d8` species detector: the ringing behind a shocked interface is flat from 1 to 3 on the air/SF6 case and at density ratio 100 while the width and the smooth deposit keep growing. Under `detector = :delta4` the value is 0.1, where the excess variation falls 12-fold from 0.01. Under `:fickian` the interface pressure error grows in proportion ([species-only split](CALIBRATION_APPENDIX.md#the-species-only-split), [battery](CALIBRATION_APPENDIX.md#the-shock-battery), [channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)). |
 | `C_Y` | 100 | keep | A shocked 2h interface rings to ±0.2 without the bound and ±0.012 with it ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `Y_tolerance` | 1e-4 | keep | A dead band that restores the unbounded order on a smooth profile touching 0 or 1 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `mu_sensor`, `beta_sensor`, `reduction` | `:strain`, `:strain`, `:sum` | keep | The alternatives move no battery column past the fourth digit, or lose a converging geometry ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `smoother` | `:gaussian` | keep | Raises the spherical-origin ceiling from 0.15 to 0.4 in its sweep, runs 29% cheaper, and costs seven points of planar wall heating ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
-| `detector` | `:delta4` | provisional | `:d8` improves six of seven battery columns and halves the wall deficit at high CFL, and lowers the origin ceiling from 0.3 to 0.25 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
+| `detector` | `:species_d8` | keep for the species fields, provisional elsewhere | `:d8` on the mass and mole fractions, δ⁴ on the other sensors. At `C_D = 1` it cuts the ringing at density ratio 100 from TV − 1 = 0.32 to 0.002 and the smooth-slab deposit 13 to 300-fold, with a volume-fraction width equal to δ⁴'s, for 4 to 8% of the right-hand side; single-species runs are unchanged ([species-only split](CALIBRATION_APPENDIX.md#the-species-only-split), [interface width](CALIBRATION_APPENDIX.md#interface-width-against-brill-olson-and-bokman)). `:d8` on every field improves six of seven battery columns and lowers the origin ceiling from 0.3 to 0.25 ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)). |
 | `species_flux` | `:partial_density` | keep | Holds a uniform (u, p, T) state to round-off like `:bulk`, reproduces the Fickian roll-up of a shocked He/CO2 interface where `:bulk` damps it, and costs about 10% more per step than `:fickian` against `:bulk`'s 20 to 25% ([channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel)). At a contact with a temperature jump its drift of p and u is what its continuous model's volume flux calls for, as under `:bulk`, and a third of the Fickian drift ([contact](CALIBRATION_APPENDIX.md#the-contact-with-a-temperature-jump)). |
 | `cfl` | 0.5 | keep | Use 0.3 or `StepControl(retries = 4)` for a converging shock at a spherical origin, whose ceiling is 0.3; walls and axes carry none ([CFL](CALIBRATION_APPENDIX.md#the-cfl-restriction-and-the-symmetry-cell)). |
 | `StepControl.substep_cfl` | 0 (disabled) | opt-in | An absolute ceiling on refreshed refined-stage CFL, with collective rollback. Qualify a positive ceiling for the case; accepted startup transients can exceed the root target ([substep rates](CALIBRATION_APPENDIX.md#benchsubstepratesjl-refreshed-refined-level-rates)). |
@@ -94,20 +94,22 @@ cost. The link is to the section holding the evidence.
   each move the excursion by nothing
   ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
 - **Mass fractions ring inside [0, 1] behind a shocked interface.** The
-  bound is zero there, so `C_D` is the damping. Below about 0.03 on the
-  He/CO2 tube and 0.1 on the air/SF6 case a two-cell lump of the heavy gas
-  separates from the light side of the interface; raise `C_D` before
-  widening the initial interface. A trail of period four cells and
-  amplitude a few 1e-3 remains up to `C_D = 0.3`. Raise it under the
-  default channel or `:bulk`, not under `:fickian`, whose pressure error
-  grows with it
-  ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
+  bound is zero there, so `C_D` is the damping. Under the default species
+  detector the ringing is flat above `C_D = 1` and at 0.3 grows sevenfold
+  on the air/SF6 case and seventyfold at density ratio 100;
+  under `detector = :delta4` a two-cell lump of the heavy gas separates from
+  the light side of the interface below about 0.1, and a trail of period
+  four cells remains up to 0.3. Raise `C_D` before widening the initial
+  interface, under the default channel or `:bulk`, not under `:fickian`,
+  whose pressure error grows with it
+  ([species-only split](CALIBRATION_APPENDIX.md#the-species-only-split),
+  [battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
 - **A shocked species interface at a large density ratio rings, or an advected
   one drifts in pressure.** The pressure drift is the `:fickian` channel;
   the default and `:bulk` hold it to round-off. At a density ratio of 100 in
-  one dimension the Fickian channel fails, the default completes, and
-  `:bulk` rings a quarter as much through its added viscosity; select
-  `:bulk` there, or raise `C_D` to 0.3
+  one dimension the Fickian channel fails, and the default completes with a
+  tenth of the ringing of `:bulk`; under `detector = :delta4` the default
+  rings and `:bulk` rings a quarter as much through its added viscosity
   ([channels](CALIBRATION_APPENDIX.md#the-partial-density-species-channel),
   [battery](CALIBRATION_APPENDIX.md#the-bulk-species-channel),
   [three dimensions](CALIBRATION_APPENDIX.md#the-bulk-species-channel-in-three-dimensions)).
@@ -184,8 +186,8 @@ cost. The link is to the section holding the evidence.
   ([filter dissipation](CALIBRATION_APPENDIX.md#the-filters-dissipation)).
 - **The geometry ahead is unknown and a converging shock is possible.**
   `detector = :d8` improves most of the battery and both Cartesian ceilings;
-  `:delta4` is the default only because the guidance for converging shocks
-  rests on the spherical case
+  δ⁴ stays on the non-species sensors of the default only because the
+  guidance for converging shocks rests on the spherical case
   ([battery](CALIBRATION_APPENDIX.md#the-shock-battery)).
 - **The sensor phase is a large share of the step.** `compute_artificial!` is a
   quarter of the multicomponent right-hand side under the default `:gaussian`

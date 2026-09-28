@@ -47,9 +47,9 @@
 
 """
     ArtificialProperties(; enabled=true, C_mu=0.002, C_beta=1.0, C_kappa=0.01,
-                         C_D=0.1, C_Y=100.0, Y_tolerance=1e-4,
+                         C_D=1.0, C_Y=100.0, Y_tolerance=1e-4,
                          mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
-                         smoother=:gaussian, detector=:delta4,
+                         smoother=:gaussian, detector=:species_d8,
                          species_flux=:partial_density)
 
 Cook-style artificial-property controls.
@@ -68,14 +68,19 @@ Cook-style artificial-property controls.
 - `C_D`: coefficient of the artificial species diffusivity generated from
   the mass-fraction sensors. It damps oscillation of `Y_k` inside [0, 1],
   which the bound below leaves untouched, such as the ringing behind an
-  interface a shock has compressed to a few cells. The default is ten times
-  the value Shankar, Kawai & Lele (below) use in the same `cΔ` scaling. Under
+  interface a shock has compressed to a few cells. The default of 1 is the
+  value for the compact eighth-derivative detector that the default
+  `detector = :species_d8` applies to the mass and mole fractions. The
+  explicit fourth difference of `detector = :delta4` responds more strongly
+  to a resolved profile and takes 0.1, ten times the value Shankar, Kawai &
+  Lele (below) use in the same `cΔ` scaling. Under
   `species_flux = :fickian` the pressure error at an interface grows in
   proportion to it.
 - `C_Y`: coefficient of the mass-fraction bound, a second contribution to the
   species diffusivity that is zero wherever `0 ≤ Y_k ≤ 1` and grows with the
-  excursion outside: `D*_k = c · G[max(C_D Δ_d |δ⁴Y_k|, C_Y Δ_g max(0, −Y_k,
-  Y_k − 1))]`, with `G` the smoother, `Δ_d` the local physical spacing along
+  excursion outside: `D*_k = c · G[max(C_D Δ_d |D_d Y_k|, C_Y Δ_g max(0, −Y_k,
+  Y_k − 1))]`, with `G` the smoother, `D_d` the species detector along
+  direction `d`, `Δ_d` the local physical spacing along
   each direction and `Δ_g` the geometric mean of the active ones at that point.
   Cook introduced this term with `C_Y = 100`
   [(2007, eq. 18)](https://doi.org/10.1063/1.2728937). His later, algebraically
@@ -155,15 +160,23 @@ Cook-style artificial-property controls.
   Fickian channel.
   D_b is stored in every `D_art[k]` and enters the diffusive timestep. Patched
   and refined runs take the channel as the root does.
-- `detector`: the high-pass that builds every sensor, in
-  `detect_sum!`. `:delta4` (default) is Cook's undivided fourth
-  difference, computed explicitly. `:d8` is Pyranda's
-  compact eighth derivative ([`compact_d8`](@ref)), which is two to three
-  orders of magnitude more selective below the Nyquist and costs a
-  pentadiagonal line solve per direction per sensor, where `:delta4` costs
-  none. Both carry the same per-direction physical-spacing weights and are
-  normalized to the same grid-oscillation response, so the four constants
-  transfer between them as starting points.
+- `detector`: the high-pass that builds the sensors, in
+  `detect_sum!`. `:delta4` is Cook's undivided fourth difference, computed
+  explicitly. `:d8` is Pyranda's compact eighth derivative
+  ([`compact_d8`](@ref)), which is two to three orders of magnitude more
+  selective below the Nyquist and costs a pentadiagonal line solve per
+  direction per sensor, where `:delta4` costs none. Both carry the same
+  per-direction physical-spacing weights and are normalized to the same
+  grid-oscillation response. `:species_d8` (default) applies `:d8` to the
+  mass and mole fractions that build the species diffusivity and `:delta4`
+  to every other sensor. On a smooth composition profile the species
+  diffusivity it deposits is one to two orders of magnitude below
+  `:delta4`'s, and at `C_D = 1` it holds a shocked interface of density
+  ratio 100 without the ringing `:delta4` leaves there, for 4 to 8% more
+  right-hand-side time. With one species there is no species sensor and it
+  is `:delta4` exactly, building no `:d8` plans. `:delta4` with
+  `C_D = 0.1` is the earlier default, and the Cook form of the Fickian
+  channel. A patched run takes `:delta4` or `:species_d8`, not `:d8`.
 
 The coefficients are dimensionless numerical regularization parameters, not
 material properties. Their useful values depend on resolution, flow regime,
@@ -178,14 +191,14 @@ Base.@kwdef struct ArtificialProperties{T}
     C_mu::T    = 0.002
     C_beta::T  = 1.0
     C_kappa::T = 0.01
-    C_D::T     = 0.1
+    C_D::T     = 1.0
     C_Y::T     = 100.0
     Y_tolerance::T = 1e-4
     mu_sensor::Symbol = :strain
     beta_sensor::Symbol = :strain
     reduction::Symbol = :sum
     smoother::Symbol = :gaussian
-    detector::Symbol = :delta4
+    detector::Symbol = :species_d8
     species_flux::Symbol = :partial_density
 end
 
@@ -211,6 +224,16 @@ _shared_species_diffusivity(art::ArtificialProperties, n_species::Integer) =
     art.enabled && n_species > 1 && art.species_flux !== :fickian
 _shared_species_diffusivity(solver) =
     _shared_species_diffusivity(solver.art, solver.equations.n_species)
+
+# Whether the run builds the `:d8` detector's plans and ringing buffer: under
+# `detector = :d8`, and under `:species_d8` wherever a species sensor exists,
+# which takes the artificial properties on and more than one species. A
+# single-species run under `:species_d8` therefore builds exactly what
+# `:delta4` builds and runs the same arithmetic.
+_ring_detector(art::ArtificialProperties, n_species::Integer) =
+    art.detector === :d8 ||
+    (art.detector === :species_d8 && art.enabled && n_species > 1)
+_ring_detector(solver) = _ring_detector(solver.art, solver.equations.n_species)
 
 # Integer coefficients keep the exact stencil while adopting the field's
 # arithmetic type under multiplication, without forcing Float64 on FP32.
@@ -567,12 +590,16 @@ full array passes, and a per-point test would cost more than the difference
 between the detectors themselves.
 
 It is also made on a type, not on the `Symbol`. `solver.ring_plans` is
-`nothing` exactly when the detector is `:delta4`, and this case never reaches
+`nothing` exactly when no sensor takes `:d8` (under `:delta4`, and under
+`:species_d8` without a species sensor), and this case never reaches
 `ring_sum!`; reaching it in dead code would leave `bench/jetcheck.jl`
 reporting the runtime dispatch of an `apply_along!` on an absent plan, charged
-to every run whether or not it uses the detector. Both settings are setup-time
-constants identical on every rank, so either form of the branch is safe to sit
-above `ring_sum!`'s collectives.
+to every run whether or not it uses the detector. Where the plans exist, the
+`Symbol` then separates `:d8` from `:species_d8`, under which this function
+applies `delta4_sum!`: the species fields take their detector through
+`species_detect_sum!` instead. Both settings are setup-time constants
+identical on every rank, so either form of the branch is safe to sit above
+`ring_sum!`'s collectives.
 """
 detect_sum!(out, f, solver, wpow::Int; accumulate::Bool=false,
             parity::NTuple{3,Int}=(1, 1, 1),
@@ -584,10 +611,26 @@ _detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, wpar, gh::Bool,
              ::Nothing) =
     delta4_sum!(out, f, solver, wpow; accumulate=acc, parity=par,
                 wall_parity=wpar, ghosts=gh)
-_detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, wpar, gh::Bool,
-             ::Tuple) =
-    ring_sum!(out, f, solver, wpow; accumulate=acc, parity=par,
-              wall_parity=wpar, ghosts=gh)
+function _detect_sum!(out, f, solver, wpow::Int, acc::Bool, par, wpar, gh::Bool,
+                      ::Tuple)
+    solver.art.detector === :d8 ||
+        return delta4_sum!(out, f, solver, wpow; accumulate=acc, parity=par,
+                           wall_parity=wpar, ghosts=gh)
+    return ring_sum!(out, f, solver, wpow; accumulate=acc, parity=par,
+                     wall_parity=wpar, ghosts=gh)
+end
+
+# The detector of the species channel on one mass or mole fraction `f`, which
+# carries valid interface ghosts and is even at a wall: `ring_sum!` wherever
+# the run holds the `:d8` plans, which is under `detector = :d8` and under
+# `:species_d8` with a species sensor, and `delta4_sum!` under `:delta4`. The
+# same dispatch on the plans' type as `detect_sum!`, without its `Symbol` test.
+species_detect_sum!(out, f, solver) =
+    _species_detect_sum!(out, f, solver, solver.ring_plans)
+_species_detect_sum!(out, f, solver, ::Nothing) =
+    delta4_sum!(out, f, solver, 1; ghosts=true)
+_species_detect_sum!(out, f, solver, ::Tuple) =
+    ring_sum!(out, f, solver, 1; ghosts=true)
 
 """
     smooth!(f, solver)
@@ -1065,7 +1108,7 @@ function _compute_artificial!(f, eos, art, eqi, Q, @nospecialize(ops))
         a1, a2, a3 = decomp.active
         ih1, ih2, ih3 = f.inv_h
         for sp in 1:n_species
-            _detect!(f.sensor_sp, f.Y[sp], ops, 1, true)
+            species_detect_sum!(f.sensor_sp, f.Y[sp], ops)
             pointwise!(_species_bound_point!, f.sensor_sp, nx, ny, nz,
                        f.sensor_sp, f.Y[sp], C_D, C_Y, h_bound, inv_n,
                        ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)
@@ -1124,7 +1167,7 @@ function bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
     # and clamp break the symmetry only at a state whose mixture gas constant
     # has reached zero.
     for sp in 1:(n_species == 2 ? 1 : n_species)
-        detect_sum!(solver.tmp_b, solver.Y[sp], solver, 1; ghosts=true)
+        species_detect_sum!(solver.tmp_b, solver.Y[sp], solver)
         pointwise!(_species_bound_point!, solver.tmp_b, nx, ny, nz,
                    solver.tmp_b, solver.Y[sp], C_D, C_Y, h_bound, inv_n,
                    ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)
@@ -1133,7 +1176,7 @@ function bulk_diffusivity!(solver, C_D, C_Y, h_bound, inv_n, ih1, ih2, ih3,
         pointwise!(_mole_fraction_point!, solver.tmp_a, nxf, nyf, nzf,
                    solver.tmp_a, solver.eos, solver.field_tuples.Y, sp,
                    n_species)
-        detect_sum!(solver.tmp_b, solver.tmp_a, solver, 1; ghosts=true)
+        species_detect_sum!(solver.tmp_b, solver.tmp_a, solver)
         pointwise!(_species_bound_point!, solver.tmp_b, nx, ny, nz,
                    solver.tmp_b, solver.tmp_a, C_D, C_Y, h_bound, inv_n,
                    ih1, ih2, ih3, a1, a2, a3, Y_tolerance, o1, o2, o3)

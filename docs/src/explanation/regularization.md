@@ -43,7 +43,7 @@ the dilatation sensor also appears in
 |---|---|---|
 | `mu_sensor` | `:strain`, the strain-rate magnitude | `:velocity`, the three velocity components |
 | `beta_sensor` | `:strain` | `:ungated_dilatation`, the dilatation ``\nabla\cdot u`` |
-| `detector` | `:delta4`, the undivided fourth difference above | `:d8`, a compact eighth derivative |
+| `detector` | `:species_d8`: `:d8` on the mass and mole fractions, `:delta4` on every other field | `:delta4`, the undivided fourth difference above, on every field; `:d8`, a compact eighth derivative, on every field |
 | `reduction` | `:sum`, summation over directions | `:max`, the directional maximum |
 | `smoother` | `:gaussian`, an explicit nine-point stencil | `:compact`, one pass of the state filter |
 
@@ -63,6 +63,17 @@ unavailable: the two detectors differ by at most a factor of 1.8 at any
 wavelength, against a designed factor of 569 at eight points per wavelength.
 The velocity components and the dilatation carry no cusp, and through those
 fields the two detectors separate as designed.
+
+The mass and mole fractions carry no cusp either, and the default applies
+`:d8` to them and to no other field. On a smooth composition profile resolved
+over four to eight cells, the species diffusivity it deposits is 13 to 300
+times smaller than under `:delta4`, and at `C_D = 1` it removes the ringing
+that `:delta4` leaves behind a shocked interface at a density ratio of 100,
+with an interface as thin in volume fraction. It costs a pentadiagonal solve
+per direction for each sensed fraction, 4 to 8% of the right-hand side. The
+other sensors keep `:delta4`, on which `C_mu`, `C_beta` and `C_kappa` were
+calibrated, so a single-species run does not depend on the choice.
+`detector = :delta4` with `C_D = 0.1` restores the earlier default.
 
 One property is common to every field obtained by differentiation. A centered
 scheme has zero modified wavenumber at the two-point wave, so both the

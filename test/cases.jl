@@ -494,6 +494,34 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtificialProperties(enabled=t
             completed=completed(solver, tfin), report=state_report(solver, Q))
 end
 
+"""
+    volume_width(x, Y_air, rho_heavy) -> Float64
+
+The 5–95% width in cells of the air volume fraction V = Y/(Y + (1 − Y)/R) of a
+`shock_interface` profile on one rank, R = `rho_heavy`: the distance between
+the linearly interpolated crossings of 0.05 and 0.95 nearest the node where V
+is closest to 1/2. At a density ratio R the 0.05 < Y_air < 0.95 count of
+`width_cells` reads 0.84 < V < 0.9995 at R = 100, the heavy-gas tail on the
+air side, while this width reads the interface itself.
+"""
+function volume_width(x, Y_air, rho_heavy)
+    V = @. Y_air / (Y_air + (1 - Y_air) / rho_heavy)
+    c = argmin(abs.(V .- 0.5))
+    # V runs from 1 (air, low x) to 0 (heavy gas): the 0.95 crossing lies
+    # towards low x and the 0.05 crossing towards high x.
+    function crossing(level, step)
+        i = c
+        while 1 <= i + step <= length(V)
+            a, b = V[i], V[i+step]
+            (a - level) * (b - level) <= 0 && a != b &&
+                return x[i] + (level - a) / (b - a) * (x[i+step] - x[i])
+            i += step
+        end
+        return NaN
+    end
+    return abs(crossing(0.05, 1) - crossing(0.95, -1)) / (x[2] - x[1])
+end
+
 # --- advected slab at a large density ratio ---------------------------------
 #
 # The one-dimensional analogue of the bubble advection test of Brill, Olson &

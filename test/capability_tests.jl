@@ -101,7 +101,7 @@ include("capability_cases.jl")
                 Numerics(n_global=(48, 1, 16), patch_grid=(2, 1, 1)))
         rejects("patch interfaces carry closure variants for a tridiagonal filter only",
                 gas, Numerics(n_global=n1, patch_grid=(2, 1, 1), filt=pyranda_filter()))
-        rejects("patch interfaces support the :delta4 detector only",
+        rejects("patch interfaces support the :delta4 and :species_d8 detectors only",
                 gas, Numerics(n_global=n1, patch_grid=(2, 1, 1),
                               art=ArtificialProperties(detector=:d8)))
         rejects("an explicit process grid cannot combine with patch_grid",

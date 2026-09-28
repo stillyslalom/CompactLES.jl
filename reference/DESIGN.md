@@ -325,8 +325,9 @@ admits schemes to tenth order). `lele_d1_10()` is the classical tenth-order
 pentadiagonal derivative (β = 1/20, α = 1/2) with a C6-cascade closure on the
 first three rows; its RHS reaches ±3, so the default `n_halo = 4` suffices.
 `compact_d8()` is the second preset and the one symmetric banded scheme: an
-undivided compact eighth derivative used as the sensor high-pass under
-`ArtificialProperties.detector = :d8`. Being an even derivative it preserves parity, so it
+undivided compact eighth derivative used as the sensor high-pass of the
+species fields under the default `ArtificialProperties.detector = :species_d8`
+and of every field under `:d8`. Being an even derivative it preserves parity, so it
 is planned with the filter conventions, not the derivative ones, and its
 four mirror-folded closure rows put the same nine-point minimum extent on a
 rank as the C8 filter.
@@ -589,12 +590,21 @@ call sits in a serial section between threaded regions.
 
 `artificial.jl` implements the
 [Cook (2007) model](https://doi.org/10.1063/1.2728937). The sensors are built from an
-**undivided** high-pass in the computational indices: by default the explicit
-fourth difference δ⁴ = (1, −4, 6, −4, 1), or the compact eighth derivative of
-`compact_d8()` under `ArtificialProperties.detector = :d8`, which reproduces the operator in
+**undivided** high-pass in the computational indices: the explicit fourth
+difference δ⁴ = (1, −4, 6, −4, 1), or the compact eighth derivative of
+`compact_d8()`, which reproduces the operator in
 [Pyranda's public kernels](https://github.com/LLNL/pyranda/tree/master/pyranda/parcop)
-and is normalized to the same response at two points per wavelength, allowing
-the four constants to carry over. Being undivided,
+and is normalized to the same response at two points per wavelength.
+`ArtificialProperties.detector` assigns them to fields. The default
+`:species_d8` applies the compact eighth derivative to the mass and mole
+fractions of the species channel and δ⁴ to the strain magnitude, the
+dilatation, the velocity components and the internal energy; `:delta4` and
+`:d8` apply one detector to every field. The species fields carry no cusp,
+so the eighth derivative's selectivity below the Nyquist is available there,
+and `species_detect_sum!` chooses it on the type of the ring plans, which
+exist only where some field takes it (`_ring_detector`), so a single-species
+run builds and runs what `:delta4` does. The other fields keep δ⁴, on which
+`C_mu`, `C_beta` and `C_kappa` were calibrated. Being undivided,
 the formal grid-spacing powers reduce to per-dimension weights: Δ_d² for the
 shear/bulk viscosities (from Cook's |∇⁴S|·Δ⁶) and Δ_d for conductivity and
 species diffusivity (from |∇⁴e|·Δ⁵ and |∇⁴Y|·Δ⁵), where Δ is the local grid
@@ -631,7 +641,7 @@ Concretely, `compute_artificial!`:
   the two are the same operation in one dimension.
 - Computes the internal energy directly from `Q` (EOS-agnostic), takes its δ⁴
   sensor, smooths, and sets κ\* = C_κ·(ρc/T_ion)·sensor.
-- For each species, takes the δ⁴ sensor of Y_k, smooths, and sets
+- For each species, takes the species detector's sensor of Y_k, smooths, and sets
   D\*_k = C_D·c·sensor_k under `ArtificialProperties.species_flux = :fickian`; under the
   default `:partial_density` and under `:bulk`, one diffusivity D_b for the
   whole system (the species channel, below).
@@ -662,7 +672,8 @@ evaluation. The settings behave very differently at a coordinate fold; measured
 effects are in [CALIBRATION_APPENDIX.md](CALIBRATION_APPENDIX.md).
 
 Constants live in `ArtificialProperties` (defaults C_μ = 0.002, C_β = 1.0, C_κ = 0.01,
-C_D = 0.1) and should be revisited per configuration. `enabled=false` skips the
+C_D = 1, the last for the compact eighth-derivative species detector; 0.1 is
+its value under `:delta4`) and should be revisited per configuration. `enabled=false` skips the
 whole computation and leaves the coefficient arrays zero. The high-pass itself
 acts in computational index space on every grid, a grid-based regularization
 consistent with resolving power following the mesh; only the length weighting

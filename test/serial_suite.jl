@@ -2396,7 +2396,8 @@ end
             end
             run!(solver, Q; tfinal=0.25, nmax=1000, callback=drift)
             # Measured 1.2e-14, 3.8e-14, 4.0e-14 and 2.0e-2 over 298 steps; the
-            # Fickian channel measures 2.2e-4, 1.3e-4, 2.5e-5 and 1.8e-2 here.
+            # Fickian channel measured 2.2e-4, 1.3e-4, 2.5e-5 and 1.8e-2 here
+            # under `detector = :delta4, C_D = 0.1`.
             @test completed(solver, 0.25)
             @test umax[] < 1e-13
             @test dpmax[] < 1e-13
@@ -2405,8 +2406,9 @@ end
         end
 
         # (b) The Mach 1.5 shocked interface at density ratio 100 and 2h: the
-        # consistent channels carry it (measured worst Y −0.0171 in 677 steps
-        # under `:bulk`, −0.0189 in 704 under `:partial_density`);
+        # consistent channels carry it (measured worst Y −0.0091 in 673 steps,
+        # volume-fraction width 4.8 cells and TV − 1 0.020 under `:bulk`;
+        # −0.0092 in 696, 5.3 cells and 0.0020 under `:partial_density`);
         # the Fickian channel loses positivity at step 427 with a DomainError out
         # of the sound speed, so a bounded attempt must either raise or stop
         # short of completion.
@@ -2415,13 +2417,20 @@ end
             @test all(isfinite, r.rho) && minimum(r.rho) > 0
             @test r.worst_min_Y > -0.03
             @test r.worst_max_Y < 1.03
-            @test r.width_cells <= 9
+            # The width is read in volume fraction: at this density ratio the
+            # mass-fraction count of `width_cells` reads the heavy-gas tail
+            # on the air side, 0.84 < V < 0.9995, not the interface. The
+            # total variation is the ringing the species detector removes.
+            tv_excess = sum(abs, diff(r.Y_air)) - 1
+            @test volume_width(r.x, r.Y_air, 100.0) <= 7
+            @test tv_excess < 0.04
         end
 
         # (c) The Brill slab at density ratio 100 and 7 cells per interface, ten
         # periods: the pressure error at the end is round-off under both channels
-        # (measured about 5e-11 in 4049 steps) and 4.0e-2 under the
-        # Fickian one, whose enthalpy flux is the one operator that moves ρE
+        # (measured about 5e-11 in 4049 steps) and 5.5e-2 under the
+        # Fickian one (4.0e-2 under `detector = :delta4, C_D = 0.1`), whose
+        # enthalpy flux is the one operator that moves ρE
         # across a uniform-pressure interface of unequal gas constants.
         let r = brill_slab(art=bulk, nmax=6000)
             @test r.completed

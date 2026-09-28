@@ -7264,7 +7264,9 @@ julia --project=. -t 1 bench/interfacewidth.jl                 # width on severa
 julia --project=. -t 1 bench/interfacewidth.jl configs ratios=100 only=5,9 N=800
 ```
 
-Three periodic one-dimensional cases at the production constants, C6 `:neutral3`,
+The rows labelled `default` in this section and its `δ4` rows are δ⁴ on every sensor at
+`C_D = 0.1`, the default before the species-only split replaced it; bench/falseactivation.jl
+pins them. Three periodic one-dimensional cases at the production constants, C6 `:neutral3`,
 `compact_filter(0.45)` every step, `filter_cfl = 0.35` and `cfl = 0.5`, inviscid. Every
 slab edge has physical width W = 1/16 (near an edge the profile is (1 + tanh(x/W))/2), so
 N·W is the number of cells per W. **composition**: a two-gas slab (γ = 1.4, gas constants 1
@@ -7421,8 +7423,27 @@ its pressure stays at round-off). TV − 1 is flat from `C_D = 1` to 3 on both s
 while the width and the smooth deposit keep growing, so 1 is the refit: it deposits 13
 times less than the default on the slab at N·W = 4 and 300 times less at N·W = 8.
 
-The wider interface would fail the `width_cells <= 9` guard that the serial suite holds
-the ratio-100 interface to under `:bulk`.
+The split at `C_D = 1` is the default, `detector = :species_d8`, and applies to all three
+species channels. The other two channels on the `shock_interface` and `brill_slab` cases of
+test/cases.jl, the default against `detector = :delta4, C_D = 0.1` (V 5–95 is the
+volume-fraction width of `volume_width`, in cells):
+
+```
+channel     R    config   | TV−1    min Y   count V 5–95 steps | Brill slab p error
+:bulk       5.04 δ4 0.1   | 0.0060  −0.0088   4   4.78   641   |
+                 split 1  | 0.0053  −0.0042   5   4.85   637   |
+:bulk       100  δ4 0.1   | 0.0861  −0.0171   8   4.22   677   |
+                 split 1  | 0.0195  −0.0091   8   4.81   673   |
+:fickian    5.04 δ4 0.1   | 0.0215  −0.0115   4   4.53   646   | 3.98e-2
+                 split 1  | 0.0073  −0.0080   5   5.03   644   | 5.54e-2
+                 δ4 1     | 0.0060  −0.0054   8   6.28   643   |
+```
+
+Under `:fickian` the split cuts the ringing threefold at a width between the two δ⁴ rows
+and raises the enthalpy-flux pressure error on the slab by 39%, the same proportionality to
+the diffusivity as a larger `C_D`. The serial suite guards the ratio-100 interface under
+both consistent channels on the volume-fraction width (at most 7 cells) and on TV − 1
+(below 0.04), since `width_cells` counts the heavy-gas tail there.
 
 The He/CO2 tube of bench/he_co2_shock_tube.jl (two dimensions, 10:1 driver, the perturbed
 contact struck between 0.5 and 1.0 ms), δ⁴ at `C_D = 0.1`

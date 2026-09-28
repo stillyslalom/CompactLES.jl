@@ -574,7 +574,7 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                           _shared_species_diffusivity(solver), fi, 1;
                           interface_divergence=spec.interface_divergence,
                           ghost_viscous=_ghost_viscous(solver),
-                          detector=solver.art.detector) : nothing
+                          ring=_ring_detector(solver)) : nothing
     newlt = build_level_transfer(T, newregion, active_g, spec.n_halo,
                                  [patches[1].region], [1],
                                  Union{Nothing,Decomp{T}}[patches[1].decomp],
@@ -1042,7 +1042,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                              interface_divergence=
                                                  spec.interface_divergence,
                                              ghost_viscous=_ghost_viscous(solver),
-                                             detector=solver.art.detector)
+                                             ring=_ring_detector(solver))
         append!(new_patches, built)
         resize!(new_states, length(held))
         resize!(new_dQ, length(held))
@@ -1083,7 +1083,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                       idx, 1, faces[ti];
                                       interface_divergence=spec.interface_divergence,
                                       ghost_viscous=_ghost_viscous(solver),
-                                      detector=solver.art.detector)
+                                      ring=_ring_detector(solver))
                 Q = _state_like(p.rho, n_cons)
                 push!(new_states, Q)
                 push!(new_dQ, zero(Q))
@@ -1469,7 +1469,7 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                   faces[ti];
                                   interface_divergence=spec.interface_divergence,
                                   ghost_viscous=_ghost_viscous(solver),
-                                  detector=solver.art.detector)
+                                  ring=_ring_detector(solver))
             Q = _state_like(p.rho, n_cons)
             push!(new_patches, p)
             push!(new_states, Q)

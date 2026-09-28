@@ -224,6 +224,67 @@ end
                                        patch_grid=(2, 1, 1))
 end
 
+@testset "two patches: the species :d8 detector reads the interface ghosts" begin
+    # Under the default `:species_d8` a patched run with two species builds
+    # the `:d8` plans, whose rows at an interface end read the ghosts of the
+    # mass and mole fractions; with one species, or under `:delta4`, it
+    # builds none. The species diffusivity after one right-hand side is
+    # compared with a single patch at the nodes beside each interface, on
+    # two composition fronts three cells wide, one at each interface.
+    per3 = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
+    N = 96
+    eos = IdealMixture([IdealSpecies{Float64}("a", 1.0, 1.4),
+                        IdealSpecies{Float64}("b", 0.2, 1.4)])
+    front(x) = (tanh((x - π) / 0.2) - tanh((x - 2π) / 0.2) -
+                tanh(x / 0.2) + 1) / 2
+    ic(x, y, z) = (θ = clamp(front(x), 0.0, 1.0);
+                   Prim(rho=1.0, u=(0.3, 0, 0), p=1.0, Y=(1 - θ, θ)))
+    mk(pg, det) = Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                         eos=eos, art=ArtificialProperties(detector=det),
+                         filter_interval=0, patch_grid=pg)
+    @test mk((2, 1, 1), :species_d8).patches[1].ring_plans !== nothing
+    @test mk((2, 1, 1), :delta4).patches[1].ring_plans === nothing
+    @test Solver(n_global=(N, 1, 1), L_domain=(2π, 1.0, 1.0), bcs=per3,
+                 patch_grid=(2, 1, 1)).patches[1].ring_plans === nothing
+    function face_error(det)
+        single = mk((1, 1, 1), det)
+        Q = allocate_state(single)
+        initialize!(single, Q, ic)
+        compute_rhs!(single, Q, zero(Q))
+        patched = mk((2, 1, 1), det)
+        Qp = allocate_state(patched)
+        initialize!(patched, Qp, ic)
+        dQ = [zero(q) for q in Qp]
+        CL._presync!(patched, Qp)
+        for lev in getfield(patched, :levels)
+            CL._level_rhs!(patched, lev, Qp, dQ, false)
+        end
+        Du = single.D_art[1]
+        h = 2π / N
+        err = 0.0
+        for p in patched.patches
+            ps = CL.PatchSolver(patched, p)
+            n = ps.decomp.n_local[1]
+            for i in 1:n
+                (i <= 4 || i > n - 4) || continue
+                iu = mod(round(Int, xcoord(ps, 1, i) / h), N) + 1
+                err = max(err, abs(p.D_art[1][padded_index(ps, i, 1, 1)] -
+                                   Du[padded_index(single, iu, 1, 1)]))
+            end
+        end
+        return err / maximum(Du)
+    end
+    e_d8, e_d4 = face_error(:species_d8), face_error(:delta4)
+    @info "species diffusivity beside the interfaces, relative to its peak" e_d8 e_d4
+    # Measured 0.69 and 0.11. Under δ⁴ the detector reads the ghosts exactly
+    # and the difference is the smoother's closed rows. Under `:d8` the
+    # interface rows add their own: row 1 is the explicit δ⁸, which a
+    # front three cells wide straddling the face excites more than the
+    # compact interior does. A coarse-fine face takes the same rows.
+    @test e_d8 < 1.0
+    @test e_d4 < 0.2
+end
+
 # The flux divergence's rows at an interface end come from the
 # `interface_divergence` scheme when one is given, independently of the
 # gradient rows (`interface_rhs`) and of a physical end's rows.
