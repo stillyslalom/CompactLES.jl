@@ -899,7 +899,8 @@ solver's, so the solver may be built with any initial `refine` region, and
 `states` is resized in place to match `solver.patches` (build a
 [`Workspace`](@ref) after this call, not before). The `RegridSpec` takes the
 recorded regrid state. Every tile block is then read into the patch that
-holds it, and the primitives of every patch are refreshed. Collective.
+holds it, the refined tiles' ghost rings are rebuilt from the loaded
+interiors, and the primitives of every patch are refreshed. Collective.
 
 The tile edge must be the recorded one. A regridded hierarchy of more than
 two levels rebuilds every level from the record; a static one must have been
@@ -943,6 +944,11 @@ function load_checkpoint!(solver::Solver, states::Vector{<:ConservedState},
             _read_ckpt_block!(io, ps, states[li], path)
         end
     end
+    # A block is a patch's interior. The ghost rings of the refined tiles are
+    # rebuilt here as the post-step synchronization left them, since the
+    # first regrid check after the load tags on those rings, before the step
+    # refreshes them; left unfilled they move the tagged tiles.
+    _presync!(solver, states, false)
     refresh_primitives!(solver, states)
     return states
 end

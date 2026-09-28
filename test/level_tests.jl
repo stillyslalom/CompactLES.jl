@@ -1888,6 +1888,13 @@ end
         @test shock_in_finest(s, states)
     end
     save_checkpoint(s, states, joinpath(dir, "deep"))
+    # The load rebuilds the refined tiles' ghost rings as the post-step
+    # synchronization left them, so the whole padded array matches: the
+    # first regrid check after a restart tags on those rings.
+    loaded_solver, loaded = setup(prob, num(N; amr))
+    load_checkpoint!(loaded_solver, loaded, joinpath(dir, "deep"))
+    @test length(loaded) == length(states) &&
+          all(parent(loaded[i]) == parent(states[i]) for i in eachindex(states))
     run!(s, states; tfinal=0.25, nmax=10000)
     @test shock_in_finest(s, states)
     regs2 = level_regions(s, 2)

@@ -478,6 +478,8 @@ function CompactLES.load_checkpoint_hdf5!(solver::Solver,
                          states[li], n_art)
         end
     end
+    # The ghost rings, as `load_checkpoint!` rebuilds them.
+    CompactLES._presync!(solver, states, false)
     refresh_primitives!(solver, states)
     return states
 end
