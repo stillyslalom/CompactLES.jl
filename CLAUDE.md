@@ -312,9 +312,11 @@ Names are spelled out in full. Current vocabulary:
   `C_Y`/`Y_tolerance` (the mass-fraction bound and its dead band),
   `mu_sensor` (`:strain` or `:velocity`), `beta_sensor` (`:strain`,
   `:gated_strain`, `:dilatation` or `:ungated_dilatation`), `reduction` (`:sum`
-  or `:max`), `smoother` (`:gaussian` or `:compact`), `detector` (`:delta4` or
-  `:d8`), `species_flux` (`:partial_density`, the default, one `D_b` on the
-  partial densities with the mass flux carried into momentum and energy;
+  or `:max`), `smoother` (`:gaussian` or `:compact`), `detector`
+  (`:species_d8`, the default, `:d8` on the mass and mole fractions and δ⁴ on
+  every other sensed field; `:delta4`; or `:d8`), `species_flux`
+  (`:partial_density`, the default, one `D_b` on the partial densities with
+  the mass flux carried into momentum and energy;
   `:bulk`, the same `D_b` on every conserved variable; `:fickian`, the
   per-species flux with the correction velocity), `D_b` (built by
   `bulk_diffusivity!` from `mole_fraction` and the mass fractions and stored in

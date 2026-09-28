@@ -772,8 +772,8 @@ under `beta_sensor = :ungated_dilatation`, theirs; the last row holds C_beta at 
 
 ```
 config               | Noh1 plat   def | Noh2 plat   def | Noh3 plat   def | Lax L1  | Shu tr | WC peak | mix wid | SI minY  wid
-default              |    0.9997   +24% |    0.9380   +55% |    0.9774   +29% | 5.0e-03 | 1.6183 |  6.6068 | 0.02024 | -0.0098    4
-sensors only         |    0.9998   +27% |    0.9483   +60% |    0.9940   +40% | 4.7e-03 | 1.6287 |  6.4178 | 0.01789 | -0.0146    4
+default              |    0.9997   +24% |    0.9380   +55% |    0.9774   +29% | 5.0e-03 | 1.6183 |  6.6068 | 0.01817 | -0.0046    5
+sensors only         |    0.9998   +27% |    0.9483   +60% |    0.9940   +40% | 4.7e-03 | 1.6287 |  6.4178 | 0.01817 | -0.0058    6
 sensors, Brill       |    0.9997   +26% |    0.9093   +65% |    0.9216   +42% | 5.6e-03 | 1.5823 |  6.8131 | 0.01788 | -0.0072    3
 ungated, Brill       |    0.9996   +27% |    0.9095   +64% |    0.9205   +38% | 5.7e-03 | 1.5768 |  6.6891 | 0.01788 | -0.0074    3
 sensors, Brill, Cb=1 |    0.9997   +11% |    0.9561   +41% |    1.0058   +39% | 5.0e-03 | 1.5714 |  6.1650 | 0.01788 | -0.0141    4
@@ -785,8 +785,11 @@ run. The converted set over-damps: C_beta = 16.8 puts the ν = 2 and ν = 3 plat
 three constants converted restores them, so the loss is the bulk constant, gated or not.
 The Shu–Osher train loses 2.2 to 2.9% against the default under every converted row, where
 the sensors alone gain 0.6%; C_mu and C_kappa in that set are 12 and 24 times the defaults. The
-shocked interface's excursion halves under the converted set and returns with C_beta = 1,
-so it follows the bulk viscosity and not the species constant. None of it is the default.
+default row senses the species fields with `:d8` and the sensors-only row every field,
+both at C_D = 1; they hold the shocked interface's excursion below every converted row,
+whose C_D is 0.048. Within the
+converted rows the excursion doubles when C_beta returns to 1, so there it follows the bulk
+viscosity. None of the converted rows is the default.
 
 ### The bulk species channel
 
