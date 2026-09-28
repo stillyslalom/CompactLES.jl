@@ -871,10 +871,12 @@ Execution(base::Execution; kw...) = _with(base, kw)
              patch_interfaces=PatchInterfaces(), execution=Execution(), amr=nothing,
              polar_truncation=0.0, stretch=(nothing, nothing, nothing))
     Numerics(base::Numerics; keywords...)
+    Numerics(preset::NamedTuple; keywords...)
 
 Grid, scheme, timestep, and decomposition choices used to realize a
 [`Problem`](@ref). The second form copies `base` with the given keywords
-replaced.
+replaced. The third starts from a preset of [`Presets`](@ref), whose
+keywords the ones given after it override.
 
 # Keywords
 
@@ -996,6 +998,10 @@ const _NUMERICS_GROUP_TYPES = (filter=:StateFilter, patch_interfaces=:PatchInter
                                execution=:Execution)
 
 Numerics(; kw...) = _numerics(_AMR_LEGACY_DEFAULTS; kw...)
+
+# A preset from `Presets` is a NamedTuple of keywords, overridden by those
+# given after it.
+Numerics(preset::NamedTuple; kw...) = Numerics(; merge(preset, values(kw))...)
 
 function Numerics(base::Numerics; kw...)
     fields = (:n_global, :deriv, :filter, :art, :cfl, :control, :patch_interfaces,

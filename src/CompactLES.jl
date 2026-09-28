@@ -74,6 +74,7 @@ include("diagnostics.jl")
 include("ledger.jl")
 include("viz.jl")
 include("problem.jl")
+include("presets.jl")
 include("thermo_states.jl")
 include("regions.jl")
 include("scriptargs.jl")
@@ -103,7 +104,7 @@ export FieldWriter
 export BlockRegion
 export save_checkpoint_hdf5, load_checkpoint_hdf5!, save_hdf5
 export SwitchableBC, switch!, switched, CompositeBC
-export StateFilter, PatchInterfaces, Execution
+export StateFilter, PatchInterfaces, Execution, Presets
 export Prim, Problem, Numerics, AMR, setup, initialize!, conserved_from_prim, tanh_blend
 export EOS, IdealSpecies, IdealMixture, nspecies, ConstantTransport
 export AbstractTransport, BinaryDiffusion, BinaryDiffusionPolynomial, binary_diffusivity

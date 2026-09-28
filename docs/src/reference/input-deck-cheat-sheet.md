@@ -168,6 +168,24 @@ Numerics(base; cfl=0.3)                     # a copy of `base` with cfl replaced
 `ArtificialProperties`, `StepControl`, `AMR`, `StateFilter`, `PatchInterfaces`
 and `Execution` take the same copy form: `StepControl(control; retries=4)`.
 
+### Presets
+
+The defaults are the general shock-capturing configuration. A preset is a
+keyword set for a regime that calls for others; keywords after it override it,
+and `merge` combines two:
+
+```julia
+Numerics(Presets.resolved(); n_global=(128,128,128), cfl=0.4)
+Numerics(merge(Presets.converging(), Presets.refined_shock()); n_global=(256,1,1))
+```
+
+| Preset | Regime | Sets |
+|---|---|---|
+| `Presets.resolved()` | Resolved or smooth flow, turbulence, acoustics | `filter=compact_filter(0.49)` |
+| `Presets.refined_shock()` | Shock through patch or refinement interfaces | `filter=compact_filter(0.45)`, `patch_interfaces=:closure` |
+| `Presets.converging(; cold_ambient=false)` | Shock converging on an axis or origin | `StepControl(retries=4)`, `validity=:permissive` for a cold ambient |
+| `Presets.smooth_walls()` | Smooth flow limited by wall accuracy | `deriv=lele_d1_6(closures=:brady_livescu)` |
+
 ### State filter: `StateFilter`
 
 `StateFilter(scheme=compact_filter(0.47); interval=1, cfl=0.35, weighting=:none)`

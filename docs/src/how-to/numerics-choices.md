@@ -247,6 +247,11 @@ reported in the literature. See
 
 ## Recipes
 
+[`Presets`](@ref) packages the settings of four regimes as keyword sets for
+[`Numerics`](@ref): [`Presets.resolved`](@ref), [`Presets.refined_shock`](@ref),
+[`Presets.converging`](@ref) and [`Presets.smooth_walls`](@ref). The table
+below covers those regimes and others, with the reasoning for each choice.
+
 | Problem | Derivative | Closures | Filter | Sensors | Precision | Reason |
 |:--|:--|:--|:--|:--|:--|:--|
 | periodic turbulence box | C8 or C10 | not used | default | default | Float64, or Float32 on a device | every dimension retains the formal order; choose based on resolving power per point and step cost |

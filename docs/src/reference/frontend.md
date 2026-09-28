@@ -13,6 +13,11 @@ Numerics
 StateFilter
 PatchInterfaces
 Execution
+Presets
+Presets.resolved
+Presets.refined_shock
+Presets.converging
+Presets.smooth_walls
 setup
 initialize!
 conserved_from_prim

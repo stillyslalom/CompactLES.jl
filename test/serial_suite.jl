@@ -110,6 +110,21 @@ end
     @test origin.control.retries == 4
     explicit, _ = setup(sphere, Numerics(n_global=(32, 1, 1), control=StepControl()))
     @test explicit.control.retries == 0
+
+    # A preset is a keyword set; keywords after it override it, and merge
+    # combines two, the later winning.
+    @test num.filter.scheme.alpha == 0.47
+    resolved = Numerics(Presets.resolved(); n_global=(16, 1, 1), cfl=0.4)
+    @test resolved.filter.scheme.alpha == 0.49 && resolved.cfl == 0.4
+    shocked = Numerics(Presets.refined_shock(); n_global=(16, 1, 1))
+    @test shocked.filter.scheme.alpha == 0.45 && shocked.patch_interfaces.flux === :closure
+    cold = Numerics(merge(Presets.resolved(), Presets.converging(cold_ambient=true));
+                    n_global=(16, 1, 1), filter=nothing)
+    @test cold.control.retries == 4 && cold.control.validity === :permissive
+    @test cold.filter.interval == 0
+    walls = Numerics(Presets.smooth_walls(); n_global=(16, 1, 1)).deriv
+    @test repr(walls.closures) == repr(lele_d1_6(closures=:brady_livescu).closures)
+    @test repr(walls.closures) != repr(lele_d1_6().closures)
     @test occursin("filter: off",
                    sprint(show, MIME("text/plain"), Numerics(num; filter=nothing)))
 end
