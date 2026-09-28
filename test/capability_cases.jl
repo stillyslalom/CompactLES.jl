@@ -75,7 +75,7 @@ problem(; domain=unit, bcs=(per, per, per), ic=ic_gas,
 # Build and advance three steps. A device backend runs its pointwise bodies
 # and staged exchanges through the KernelAbstractions kernels.
 function advances(prob, num)
-    on_device = num.backend isa DeviceBackend
+    on_device = num.execution.backend isa DeviceBackend
     CompactLES.FORCE_KA[] = on_device
     CompactLES.FORCE_DEVICE_EXCHANGE[] = on_device
     try

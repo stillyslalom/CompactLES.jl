@@ -740,7 +740,7 @@ function test_sync()
                            ic=(x, y, z) -> Prim(u=(0, 0, 0),
                                                 p=1 + 4exp(-200(x - 0.3)^2),
                                                 rho=1 + exp(-200(x - 0.3)^2))),
-                   Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+                   Numerics(n_global=(SPLITN, 16, 16), execution=Execution(dims=splitdims(1))))
     run!(s2, Q2; tfinal=1e9, nmax=10)
     nbad = 0.0
     for c in 1:s2.equations.n_cons, k in 1:s2.decomp.n_local[3], j in 1:s2.decomp.n_local[2],
@@ -775,7 +775,8 @@ function test_callback_consistency()
                              ic=(x, y, z) -> Prim(u=(0, 0, 0),
                                                   p=1 + 4exp(-200(x - 0.3)^2),
                                                   rho=1 + exp(-200(x - 0.3)^2))),
-                     Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+                     Numerics(n_global=(SPLITN, 16, 16),
+                              execution=Execution(dims=splitdims(1))))
         s, Q, xbc[2]
     end
 
@@ -962,7 +963,7 @@ function test_state_queries()
                          ic=(x, y, z) -> Prim(u=(0.2, 0, 0),
                                               p=1 + 0.5exp(-200(x - 0.3)^2),
                                               rho=1 + exp(-200(x - 0.3)^2))),
-                 Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+                 Numerics(n_global=(SPLITN, 16, 16), execution=Execution(dims=splitdims(1))))
 
     # Split along x, so exactly one rank holds the low-x face and exactly one
     # holds the high-x face, for any number of ranks.
@@ -1013,7 +1014,8 @@ function test_field_writer()
                               ic=(x, y, z) -> Prim(u=(0.2, 0, 0),
                                                    p=1 + 0.1exp(-40(x - 0.5)^2),
                                                    rho=1.0)),
-                      Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+                      Numerics(n_global=(SPLITN, 16, 16),
+                               execution=Execution(dims=splitdims(1))))
     writer = FieldWriter(joinpath("mpi_frames", "field"))
     # The piece and container counts below assume four frames, the initial
     # state and three instants; the run is only
@@ -1064,7 +1066,8 @@ function test_field_writer()
                                 bcs=(per3[1], per3[2], per3[3]),
                                 ic=(x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0,
                                                      rho=1 + x)),
-                        Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+                        Numerics(n_global=(SPLITN, 16, 16),
+                                 execution=Execution(dims=splitdims(1))))
     for sd in (2, 3)
         save_vtk(strided, Qs, "mpi_stride"; fields=(:rho,), stride=sd)
         MPI.Barrier(comm)
@@ -1119,7 +1122,8 @@ function test_field_writer()
                             metric=CylindricalMetric(),
                             bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),
                             ic=(r, θ, z) -> Prim(u=(0.0, 0.5, 0.0), p=1.0, rho=1.0)),
-                    Numerics(n_global=(12, SPLITN, 12), dims=splitdims(2)))
+                    Numerics(n_global=(12, SPLITN, 12),
+                             execution=Execution(dims=splitdims(2))))
     check("resolved angle selects the structured container",
           container_extension(cyl) == ".pvts" ? 0.0 : 1.0, 0.5)
     save_vtk(cyl, Qc, "mpi_annulus")
@@ -1149,7 +1153,8 @@ function test_slicing()
                               bcs=(per3[1], per3[2], per3[3]),
                               ic=(x, y, z) -> Prim(u=(0.1, 0, 0), p=1.0,
                                                    rho=1 + x)),
-                      Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+                      Numerics(n_global=(SPLITN, 16, 16),
+                               execution=Execution(dims=splitdims(1))))
 
     # (a) Slice across the split dimension: exactly one rank spans the plane.
     save_vtk(solver, Q, "mpi_slice_x"; fields=(:rho,), slice=(1, SPLITN ÷ 2 + 1))
@@ -1235,7 +1240,8 @@ function test_line_sample()
     solver, Q = setup(Problem(domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
                               bcs=(per3[1], per3[2], per3[3]),
                               ic=(x, y, z) -> Prim(p=1.0, rho=rho_fn(x, y, z))),
-                      Numerics(n_global=(SPLITN, 16, 16), dims=splitdims(1)))
+                      Numerics(n_global=(SPLITN, 16, 16),
+                               execution=Execution(dims=splitdims(1))))
     gx(d, g) = global_xcoord(solver, d, g)
     same_everywhere(v) = gmax(maximum(abs, v .- MPI.bcast(v, comm; root=0)))
 
@@ -1528,7 +1534,7 @@ function test_deep_regrid()
                    bcs=(wall2, per3[2], per3[3]), ic=ic)
     amr = AMR(initial=:sensor, tile=8, regrid_interval=4, subcycle=true,
               max_levels=3)
-    num(c) = Numerics(n_global=(81, 1, 1), cfl=0.2, comm=c, amr=amr)
+    num(c) = Numerics(n_global=(81, 1, 1), cfl=0.2, execution=Execution(comm=c), amr=amr)
     solver, states = setup(prob, num(comm))
     ref, rstates = setup(prob, num(MPI.COMM_SELF))
     # A rank outside a level's parent holds none of its layout; rank 0
@@ -1595,7 +1601,7 @@ function test_deep_regrid_subsets()
                    bcs=(wall2, per3[2], per3[3]), ic=sod)
     amr = AMR(initial=:sensor, tile=4, tag_buffer=1, regrid_interval=3,
               subcycle=true, max_levels=3)
-    num(c) = Numerics(n_global=(121, 1, 1), cfl=0.1, comm=c, amr=amr)
+    num(c) = Numerics(n_global=(121, 1, 1), cfl=0.1, execution=Execution(comm=c), amr=amr)
     solver, states = setup(prob, num(comm))
     ref, rstates = setup(prob, num(MPI.COMM_SELF))
     differ = 0
@@ -3232,7 +3238,8 @@ function test_hydrostatic()
         prob = Problem(eos=eos, domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=bcs,
                        ic=ic, sources=(ConstantBodyForce(g),))
         ng = ntuple(d -> d == ax ? SPLITN : d == 3 ? 1 : 12, 3)
-        num(c, dims) = Numerics(n_global=ng, comm=c, dims=dims, filter_interval=0,
+        num(c, dims) = Numerics(n_global=ng, filter=nothing,
+                                execution=Execution(comm=c, dims=dims),
                                 art=ArtificialProperties(enabled=false))
         s, Q = setup(prob, num(comm, splitdims(ax)))
         ref, Qref = setup(prob, num(MPI.COMM_SELF, (1, 1, 1)))

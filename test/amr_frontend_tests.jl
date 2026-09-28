@@ -20,7 +20,7 @@ end
     for n in (48, 96)
         selector = MovingAMRWindow(0.65)
         solver, states = setup(amr_test_problem(),
-            Numerics(n_global=(n, 1, 1), filter_interval=0,
+            Numerics(n_global=(n, 1, 1), filter=nothing,
                      art=ArtificialProperties(enabled=false),
                      amr=AMR(initial=selector, tag_buffer=2, regrid_interval=0)))
         region = refined_region(solver)
@@ -35,7 +35,7 @@ end
 @testset "AMR frontend evaluates IC with actual fine spacing" begin
     ic = (x, y, z, h) -> Prim(p=1.0, rho=1.0 + h, u=(0.0, 0.0, 0.0))
     solver, states = setup(amr_test_problem(ic),
-        Numerics(n_global=(96, 1, 1), filter_interval=0,
+        Numerics(n_global=(96, 1, 1), filter=nothing,
                  art=ArtificialProperties(enabled=false),
                  amr=AMR(initial=(x, y, z, t) -> abs(x - 0.7) < 0.04)))
     root = CompactLES.PatchSolver(solver, getfield(solver, :patches)[1])
@@ -54,7 +54,7 @@ end
         Prim(p=1.0, rho=1.0 + h, u=(0.0, 0.0, 0.0))
     end
     selected, _ = setup(amr_test_problem(guarded),
-        Numerics(n_global=(96, 1, 1), filter_interval=0,
+        Numerics(n_global=(96, 1, 1), filter=nothing,
                  amr=AMR(initial=MovingAMRWindow(0.72),
                          tag_threshold=Inf)))
     @test refined_region(selected).offset[1] > 48
@@ -63,30 +63,30 @@ end
 @testset "AMR frontend sensor and empty-selection behavior" begin
     uniform = amr_test_problem()
     @test_throws ArgumentError setup(uniform,
-        Numerics(n_global=(64, 1, 1), filter_interval=0,
+        Numerics(n_global=(64, 1, 1), filter=nothing,
                  amr=AMR(initial=:sensor)))
     @test_throws ArgumentError setup(uniform,
-        Numerics(n_global=(64, 1, 1), filter_interval=0,
+        Numerics(n_global=(64, 1, 1), filter=nothing,
                  amr=AMR(initial=(x, y, z, t) -> false)))
     # A tiled, regridded run has an empty form and starts in it.
     unrefined, Qu = setup(uniform,
-        Numerics(n_global=(64, 1, 1), filter_interval=0,
+        Numerics(n_global=(64, 1, 1), filter=nothing,
                  amr=AMR(initial=:sensor, tile=8)))
     @test nlevels(unrefined) == 2 && isempty(level_regions(unrefined, 1))
     @test length(Qu) == 1
     @test_throws ArgumentError setup(uniform,
-        Numerics(n_global=(64, 1, 1), filter_interval=0,
+        Numerics(n_global=(64, 1, 1), filter=nothing,
                  amr=AMR(initial=:sensor, tile=8, regrid_interval=0)))
     invalid = amr_test_problem((x, y, z, h) ->
         Prim(p=-1.0, rho=1.0, u=(0.0, 0.0, 0.0)))
     @test_throws SolverFailure setup(invalid,
-        Numerics(n_global=(64, 1, 1), filter_interval=0,
+        Numerics(n_global=(64, 1, 1), filter=nothing,
                  amr=AMR(initial=:sensor)))
 
     jump = amr_test_problem((x, y, z, h) ->
         Prim(p=1.0, rho=x < 0.7 ? 1.0 : 1.3, u=(0.0, 0.0, 0.0)))
     solver, _ = setup(jump,
-        Numerics(n_global=(96, 1, 1), filter_interval=0,
+        Numerics(n_global=(96, 1, 1), filter=nothing,
                  amr=AMR(initial=:sensor, tag_buffer=2)))
     region = refined_region(solver)
     @test region.offset[1] < 70 < region.offset[1] + region.extent[1]
@@ -94,7 +94,7 @@ end
     shear = amr_test_problem((x, y, z, h) ->
         Prim(p=1.0, rho=1.0, u=(x < 0.7 ? 0.0 : 1.0, 0.0, 0.0)))
     sensed, _ = setup(shear,
-        Numerics(n_global=(96, 1, 1), filter_interval=0,
+        Numerics(n_global=(96, 1, 1), filter=nothing,
                  amr=AMR(initial=:sensor, tag_threshold=Inf,
                          tag_sensor_threshold=1e-8, tag_buffer=2)))
     @test nlevels(sensed) == 2
@@ -104,9 +104,11 @@ end
     region = BlockRegion((40, 0, 0), (16, 1, 1))
     prob = amr_test_problem((x, y, z, h) ->
         Prim(p=1.0, rho=1.0 + 0.1sin(2pi * x), u=(0.0, 0.0, 0.0)))
-    common = (n_global=(96, 1, 1), filter_interval=0,
+    common = (n_global=(96, 1, 1), filter=nothing,
               art=ArtificialProperties(enabled=false))
-    legacy, Qlegacy = setup(prob, Numerics(; common..., refine=region))
+    flat = @test_logs (:warn, r"refinement keywords `refine` are deprecated") Numerics(;
+        common..., refine=region)
+    legacy, Qlegacy = setup(prob, flat)
     grouped, Qgrouped = setup(prob, Numerics(; common..., amr=AMR(initial=region)))
     @test refined_region(grouped) == refined_region(legacy)
     @test all(parent(Qgrouped[i]) == parent(Qlegacy[i]) for i in eachindex(Qlegacy))
@@ -124,7 +126,7 @@ end
 
 @testset "AMR frontend tiled bootstrap drops seed layout" begin
     solver, states = setup(amr_test_problem(),
-        Numerics(n_global=(96, 1, 1), filter_interval=0,
+        Numerics(n_global=(96, 1, 1), filter=nothing,
                  art=ArtificialProperties(enabled=false),
                  amr=AMR(initial=MovingAMRWindow(0.72),
                          tag_threshold=Inf, tag_buffer=1, tile=8,
@@ -138,7 +140,7 @@ end
         Prim(p=1.0, rho=1.0 + 0.3exp(-((x - 0.72) / 0.025)^2),
              u=(0.0, 0.0, 0.0)))
     sensed, _ = setup(bump,
-        Numerics(n_global=(96, 1, 1), filter_interval=0,
+        Numerics(n_global=(96, 1, 1), filter=nothing,
                  amr=AMR(initial=:sensor, tag_buffer=1, tile=8)))
     @test all(r -> r.offset[1] > 48, level_regions(sensed, 1))
 end
@@ -146,11 +148,12 @@ end
 @testset "AMR frontend rejects ambiguous or invalid configuration" begin
     prob = amr_test_problem()
     region = BlockRegion((40, 0, 0), (16, 1, 1))
-    base = (n_global=(64, 1, 1), filter_interval=0)
-    @test_throws ArgumentError setup(prob,
-        Numerics(; base..., amr=AMR(initial=region), refine=region))
-    @test_throws ArgumentError setup(prob,
-        Numerics(; base..., amr=AMR(initial=region), tag_buffer=5))
+    base = (n_global=(64, 1, 1), filter=nothing)
+    for flat in ((; refine=region), (; tag_buffer=5))
+        num = @test_logs (:warn, r"refinement keywords") Numerics(; base...,
+            amr=AMR(initial=region), flat...)
+        @test_throws ArgumentError setup(prob, num)
+    end
     @test_throws ArgumentError setup(prob,
         Numerics(; base..., amr=AMR(initial=:unknown)))
     @test_throws ArgumentError setup(prob,

@@ -404,7 +404,6 @@ end
 function noh_row(deriv; t0, cfl=NOH_CFL, retries=0, N=400)
     attempt() do
         num = Numerics(n_global=(N, 1, 1), art=ART_ON, cfl=cfl, deriv=deriv,
-                       filt=compact_filter(0.45), filter_interval=1, filter_cfl=0.35,
                        control=StepControl(validity=:permissive, retries=retries))
         solver, Q = setup(noh_problem(1; N=N, t0=t0), num)
         run!(solver, Q; tfinal=NOH_T - t0, nmax=CAP)

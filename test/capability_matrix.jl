@@ -24,7 +24,8 @@ include("capability_cases.jl")
         for (name, eos, ic) in C.EOSES, backend in (CompactLES.CPUBackend(), C.device()),
             precision in (Float64, Float32)
             ok = C.advances(C.problem(; eos, ic),
-                            Numerics(; n_global=(32, 1, 1), backend, precision))
+                            Numerics(; n_global=(32, 1, 1),
+                                     execution=Execution(; backend, precision)))
             ok || @warn "capability matrix: $name on $backend at $precision did not advance"
             @test ok
         end
@@ -61,7 +62,8 @@ include("capability_cases.jl")
              (; n_global=(16, 1, 16))),
         ]
         for (name, prob, kw) in geometries, (backend, precision) in C.PAIRS
-            ok = C.advances(prob, Numerics(; backend, precision, kw...))
+            ok = C.advances(prob, Numerics(; execution=Execution(; backend, precision),
+                                           kw...))
             ok || @warn "capability matrix: $name on $backend at $precision did not advance"
             @test ok
         end
@@ -88,8 +90,10 @@ include("capability_cases.jl")
              (; amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)), subcycle=true))),
         ]
         for (name, kw) in layouts, (backend, precision) in C.PAIRS
-            ok = C.advances(C.problem(), Numerics(; n_global=(48, 1, 1), backend,
-                                                  precision, kw...))
+            execution = Execution(; backend, precision,
+                                  patch_grid=get(kw, :patch_grid, (1, 1, 1)))
+            ok = C.advances(C.problem(), Numerics(; n_global=(48, 1, 1), execution,
+                                                  amr=get(kw, :amr, nothing)))
             ok || @warn "capability matrix: $name on $backend at $precision did not advance"
             @test ok
         end
@@ -106,7 +110,8 @@ include("capability_cases.jl")
                                           regrid_interval=1, tile=4)))
         # Every EOS on a patched and on a refined layout.
         for (name, eos, ic) in C.EOSES[2:end],
-            kw in ((; patch_grid=(2, 1, 1)), (; amr=AMR(initial=feature, regrid_interval=1)))
+            kw in ((; execution=Execution(patch_grid=(2, 1, 1))),
+                   (; amr=AMR(initial=feature, regrid_interval=1)))
             @test C.advances(C.problem(; eos, ic), Numerics(; n_global=(48, 1, 1), kw...))
         end
         # Slabs on a cylindrical annulus and along a uniform dimension of a
@@ -116,13 +121,17 @@ include("capability_cases.jl")
                             domain=((0.5, 1.5), (0.0, 1.0), (0.0, 1.0)),
                             ic=(r, θ, z) -> Prim(p=1.0 + 0.1exp(-20(r - 1)^2), rho=1.0))
         for backend in (CompactLES.CPUBackend(), C.device())
-            @test C.advances(annulus, Numerics(n_global=(48, 1, 1), patch_grid=(2, 1, 1),
-                                               backend=backend, interface_flux=:closure))
+            @test C.advances(annulus, Numerics(n_global=(48, 1, 1),
+                                               patch_interfaces=:closure,
+                                               execution=Execution(patch_grid=(2, 1, 1),
+                                                                   backend=backend)))
         end
         @test C.advances(C.problem(bcs=(wall, per, per)),
-                         Numerics(n_global=(16, 48, 1), patch_grid=(1, 2, 1),
-                                  stretch=stretched, interface_flux=:closure))
-        @test C.advances(C.problem(), Numerics(n_global=(48, 1, 1), patch_grid=(2, 1, 1)))
+                         Numerics(n_global=(16, 48, 1), patch_interfaces=:closure,
+                                  execution=Execution(patch_grid=(1, 2, 1)),
+                                  stretch=stretched))
+        @test C.advances(C.problem(), Numerics(n_global=(48, 1, 1),
+                                               execution=Execution(patch_grid=(2, 1, 1))))
         @test C.advances(C.problem(transport=ConstantTransport(mu0=1e-3)),
                          Numerics(n_global=(48, 1, 1),
                                   amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)))))
@@ -140,12 +149,14 @@ include("capability_cases.jl")
             solver2.step == 4
         end
         n = (48, 1, 1)
-        @test restarts(C.problem(), Numerics(n_global=n, backend=C.device()))
+        @test restarts(C.problem(), Numerics(n_global=n,
+                                             execution=Execution(backend=C.device())))
         @test restarts(C.problem(eos=C.EOSES[4][2], ic=C.ic_air), Numerics(n_global=n))
         @test restarts(C.problem(), Numerics(n_global=n,
             amr=AMR(initial=(x, y, z, t) -> abs(x - 0.5) < 0.1, regrid_interval=1,
                     tile=4)))
-        @test restarts(C.problem(), Numerics(n_global=n, backend=C.device(),
+        @test restarts(C.problem(), Numerics(n_global=n,
+                                             execution=Execution(backend=C.device()),
                                              amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)))))
     end
     println("capability matrix, accepted rows: $(round(time() - t0; digits=1)) s")

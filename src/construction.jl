@@ -68,10 +68,14 @@ test and benchmark suites do. It allocates no conserved state, so pair it with
 # Optional keywords
 
 `eos`, `transport`, `metric`, and `sources` take their defaults and meaning from
-[`Problem`](@ref); `art`, `deriv`, `filt`, `cfl`, `control`, `filter_interval`,
-`filter_cfl`, `filter_weighting`, `polar_truncation`, `dims`, `n_halo`, `stretch`,
-and `precision` from [`Numerics`](@ref). Without `precision`, the element type is the one
-shared by the components passed explicitly (`eos`, `transport`, `art`,
+[`Problem`](@ref); `art`, `deriv`, `cfl`, `control`, `polar_truncation`,
+`n_halo` and `stretch` from [`Numerics`](@ref); `filt`, `filter_interval`,
+`filter_cfl` and `filter_weighting` from [`StateFilter`](@ref) (its `scheme`,
+`interval`, `cfl` and `weighting`); `interface_flux`, `interface_rhs` and
+`interface_divergence` from [`PatchInterfaces`](@ref); and `dims`, `comm`,
+`backend`, `precision` and `patch_grid` from [`Execution`](@ref). Without
+`precision`, the element type is the one shared by the components passed
+explicitly (`eos`, `transport`, `art`,
 `deriv`, `filt`, `interface_divergence`), or `Float64` when none is passed.
 Components left out are built at that type, and components of different
 types raise an `ArgumentError`. The two keywords with no

@@ -59,7 +59,6 @@ numerics = Numerics(
                                C_kappa = 0.01, C_D = 1.0),
     cfl = 0.15,
     control = StepControl(retries = 2),
-    filter_interval = 1,
 )
 
 solver, Q = setup(problem, numerics)
@@ -87,8 +86,8 @@ rho_xt = reduce(hcat, snapshots)
 # rarefaction occupies a widening fan, the contact remains sharp but moves more
 # slowly than the shock, and the shock forms the steep rightmost trajectory.
 # Artificial properties act locally near the two sharp features. Filtering
-# acts globally after each completed step because `filter_interval=1`, whether
-# or not a sensor is active at a particular point.
+# acts globally after each completed step, the default state filter's
+# `interval`, whether or not a sensor is active at a particular point.
 
 fig = Figure(size = (760, 680))
 ax1 = Axis(fig[1, 1], xlabel = "x", ylabel = "time",

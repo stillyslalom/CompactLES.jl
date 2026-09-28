@@ -22,8 +22,8 @@ mpi_main() do
         end,
     )
     numerics = Numerics(n_global=(opt.nx, 1, 1), art=ArtificialProperties(enabled=true),
-                        cfl=0.4, filter_interval=1,
-                        dims=(MPI.Comm_size(MPI.COMM_WORLD), 1, 1))
+                        cfl=0.4,
+                        execution=Execution(dims=(MPI.Comm_size(MPI.COMM_WORLD), 1, 1)))
     solver, Q = setup(problem, numerics)
     run!(solver, Q; tfinal=opt.tfinal, nmax=opt.nmax,
          callback=ProgressLog(every=opt.every, tfinal=opt.tfinal))

@@ -182,8 +182,8 @@ function noh_part(opt)
         for wt in WEIGHTINGS
             num = Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=true),
                            cfl=NOH_CFL, deriv=lele_d1_6(),
-                           filt=compact_filter(opt.alphaf), filter_interval=0,
-                           filter_cfl=0.35, filter_weighting=wt,
+                           filter=StateFilter(compact_filter(opt.alphaf); interval=0,
+                                              weighting=wt),
                            control=StepControl(validity=:permissive))
             solver, Q, defect = run_tallied(noh_problem(ν; N, t0), num, NOH_T - t0)
             xs, ρ, u, p = case_line_profile(solver, Q)
@@ -200,8 +200,9 @@ function sedov_part(opt)
     println("\n=== Sedov through the spherical origin, both weightings ===")
     for wt in WEIGHTINGS
         num = Numerics(n_global=(SEDOV_N, 1, 1), art=ArtificialProperties(enabled=true),
-                       cfl=0.3, filt=compact_filter(opt.alphaf), filter_interval=0,
-                       filter_cfl=0.35, filter_weighting=wt,
+                       cfl=0.3,
+                       filter=StateFilter(compact_filter(opt.alphaf); interval=0,
+                                          weighting=wt),
                        control=StepControl(validity=:permissive))
         solver, Q, defect = run_tallied(sedov_problem(), num, SEDOV_T)
         rs, ρ, u, p = case_line_profile(solver, Q)

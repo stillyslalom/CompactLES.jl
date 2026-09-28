@@ -43,7 +43,7 @@ end
                        Prim(p=p, rho=p^(1 / gamma))
                    end)
     num = Numerics(n_global=(96, 1, 1), art=ArtificialProperties(enabled=false),
-                   filter_interval=0, dims=(np, 1, 1))
+                   filter=nothing, execution=Execution(dims=(np, 1, 1)))
     solver, Q = setup(prob, num)
 
     # line_profile gathers globally. Its value equals the concatenation of the
@@ -82,7 +82,7 @@ end
                    ic=(x, y, z) -> Prim(p=1.0,
                                         rho=1.0 + 0.5sin(2pi * x) * cos(2pi * y)))
     num = Numerics(n_global=(48, 16, 1), art=ArtificialProperties(enabled=false),
-                   filter_interval=0, dims=dims)
+                   filter=nothing, execution=Execution(dims=dims))
     solver, Q = setup(prob, num)
 
     slice = field_slice(solver, Q, :rho; normal=3, index=1)
@@ -117,7 +117,7 @@ end
                    bcs=ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3),
                    ic=(x, y, z) -> Prim(p=1.0, rho=1.0 + 0.5sin(2pi * x) * cos(2pi * y)))
     num = Numerics(n_global=(36, 24, 1), art=ArtificialProperties(enabled=false),
-                   filter_interval=0, refine=BlockRegion((10, 6, 0), (10, 8, 1)))
+                   filter=nothing, amr=AMR(initial=BlockRegion((10, 6, 0), (10, 8, 1))))
     solver, states = setup(prob, num)
     @test states isa Vector
     fig, ax, plt = profileplot(solver, states, :rho)
@@ -149,7 +149,7 @@ if MPI.Comm_size(MPI.COMM_WORLD) == 1
                             (PeriodicBC(), PeriodicBC())),
                        ic=(r, th, z) -> Prim(p=1.0, rho=1.0 + 0.2cos(th) * r))
         num = Numerics(n_global=(24, 16, 1), art=ArtificialProperties(enabled=false),
-                       filter_interval=0)
+                       filter=nothing)
         solver, Q = setup(prob, num)
 
         fig, ax, plt = profileplot(solver, Q, :rho)
@@ -172,7 +172,7 @@ if MPI.Comm_size(MPI.COMM_WORLD) == 1
                            (PeriodicBC(), PeriodicBC())),
                       ic=(r, th, ph) -> Prim(p=1.0, rho=1.0 + exp(-(r / 0.25)^2)))
         snum = Numerics(n_global=(24, 16, 12), art=ArtificialProperties(enabled=false),
-                        filter_interval=0)
+                        filter=nothing)
         ssolver, sQ = setup(sph, snum)
         x1, x2, vals = field_slice(ssolver, sQ, :rho; normal=3, index=1)
         X, Y, grid = cartesian_slice(ssolver, (1, 2), x1, x2, vals; n=100)

@@ -217,7 +217,7 @@ so a constant passes exactly. Pyranda applies these rows where a boundary is
 neither periodic nor symmetric; at a symmetric boundary it folds the interior
 stencil across the mirror instead, which is not transcribed.
 
-Pass it as `Numerics.filt` for a like-for-like comparison with Pyranda,
+Pass it as `Numerics(filter = pyranda_filter())` for a like-for-like comparison with Pyranda,
 beside [`lele_d1_10`](@ref) for the derivative and `detector = :d8` for the
 sensor.
 """

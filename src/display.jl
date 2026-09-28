@@ -81,7 +81,7 @@ end
 function Base.show(io::IO, num::Numerics)
     print(io, "Numerics(grid=")
     _show_dimensions(io, num.n_global)
-    print(io, ", deriv=", _type_name(num.deriv), ", filter=", _type_name(num.filt),
+    print(io, ", deriv=", _type_name(num.deriv), ", filter=", _type_name(num.filter.scheme),
           ", cfl=", num.cfl, ", halo=", num.n_halo, ')')
 end
 
@@ -91,14 +91,20 @@ function Base.show(io::IO, ::MIME"text/plain", num::Numerics)
     _show_dimensions(io, num.n_global)
     println(io)
     println(io, "  derivative: ", _type_name(num.deriv))
-    println(io, "  filter: ", _type_name(num.filt), " (every ",
-            num.filter_interval, num.filter_interval == 1 ? " step" : " steps",
-            num.filter_cfl > 0 ? ", relaxed to cfl $(num.filter_cfl)" : "",
-            num.filter_weighting === :volume ? ", volume-weighted)" : ")")
+    filter = num.filter
+    if filter.interval == 0
+        println(io, "  filter: off")
+    else
+        println(io, "  filter: ", _type_name(filter.scheme), " (every ",
+                filter.interval, filter.interval == 1 ? " step" : " steps",
+                filter.cfl > 0 ? ", relaxed to cfl $(filter.cfl)" : "",
+                filter.weighting === :volume ? ", volume-weighted)" : ")")
+    end
     println(io, "  artificial properties: ", num.art.enabled ? "enabled" : "disabled")
     println(io, "  CFL: ", num.cfl)
     print(io, "  process grid: ")
-    num.dims === nothing ? print(io, "automatic") : _show_dimensions(io, num.dims)
+    dims = num.execution.dims
+    dims === nothing ? print(io, "automatic") : _show_dimensions(io, dims)
     print(io, "\n  halo width: ", num.n_halo)
 end
 

@@ -55,7 +55,7 @@ numerics = Numerics(
     deriv = lele_d1_6(),
     art = ArtificialProperties(enabled = false),
     cfl = 0.6,
-    filter_interval = 0,
+    filter = nothing,
 )
 
 solver, Q = setup(problem, numerics)

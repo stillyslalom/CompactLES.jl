@@ -160,11 +160,10 @@ orthonormal components.
 numerics = Numerics(
     n_global = (256, 1, 1),
     deriv = lele_d1_6(),
-    filt = compact_filter(0.45),
+    filter = StateFilter(compact_filter(0.45); interval = 1),
     art = ArtificialProperties(enabled = true),
     cfl = 0.5,
     control = StepControl(retries = 4),
-    filter_interval = 1,
 )
 
 solver, Q = setup(problem, numerics)

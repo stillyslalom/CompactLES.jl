@@ -56,7 +56,7 @@ fixed = AMR(initial = Slab(1, lo = 0.2, hi = 0.4), subcycle = true)
 root_nodes = 64
 common = (
     art = ArtificialProperties(enabled = false),
-    filter_interval = 0,
+    filter = nothing,
     cfl = 0.35,
 )
 numerics = Numerics(; n_global = (root_nodes, 1, 1), amr, common...)

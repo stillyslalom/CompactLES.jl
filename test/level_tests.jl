@@ -330,11 +330,12 @@ end
     # initial layout (built by the regrid machinery) keeps it.
     prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3l,
                    ic=(x, y, z) -> Prim(p=1.0, rho=1.0, u=(0.0, 0.0, 0.0)))
-    s4, _ = setup(prob, Numerics(n_global=(96, 1, 1), filter_interval=0,
-                                 refine=BlockRegion((40, 0, 0), (17, 1, 1)),
-                                 level_interpolation_order=4))
+    flat = @test_logs (:warn, r"refinement keywords") Numerics(n_global=(96, 1, 1),
+        filter=nothing, refine=BlockRegion((40, 0, 0), (17, 1, 1)),
+        level_interpolation_order=4)
+    s4, _ = setup(prob, flat)
     @test chain_order(s4) == 4
-    s8, _ = setup(prob, Numerics(n_global=(96, 1, 1), filter_interval=0,
+    s8, _ = setup(prob, Numerics(n_global=(96, 1, 1), filter=nothing,
                                  art=ArtificialProperties(enabled=false),
                                  amr=AMR(initial=(x, y, z, t) -> abs(x - 0.7) < 0.04,
                                          level_interpolation_order=8)))
@@ -1084,9 +1085,9 @@ end
     @test_throws ErrorException mk(regrid_interval=5, tag_predicate=1)
     # Numerics carries the four settings to the solver.
     pred0 = (p, I) -> false
-    num = Numerics(n_global=(N, 1, 1), refine=r0, regrid_interval=5,
-                   tag_gradient_threshold=0.05, tag_sensor_threshold=0.1,
-                   tag_vorticity_threshold=2.0, tag_predicate=pred0)
+    num = @test_logs (:warn, r"refinement keywords") Numerics(n_global=(N, 1, 1),
+        refine=r0, regrid_interval=5, tag_gradient_threshold=0.05,
+        tag_sensor_threshold=0.1, tag_vorticity_threshold=2.0, tag_predicate=pred0)
     prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                    bcs=(wall2, per, per), eos=two,
                    ic=(x, y, z) -> Prim(Y=(1.0, 0.0), rho=1.0, p=1.0, u=(0, 0, 0)))

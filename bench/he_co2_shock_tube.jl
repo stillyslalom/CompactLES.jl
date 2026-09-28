@@ -121,9 +121,8 @@ function main()
            opt.filter == "gv" ? compact_filter(opt.alphaf) :
            error("filter must be gv or pyranda, got $(opt.filter)")
     num = Numerics(n_global=(nx, ny, nz), art=art, deriv=deriv,
-                   cfl=opt.cfl, filt=filt,
-                   control=StepControl(retries=4, validity=:permissive),
-                   filter_interval=1, dims=(np, 1, 1))
+                   cfl=opt.cfl, filter=filt, execution=Execution(dims=(np, 1, 1)),
+                   control=StepControl(retries=4, validity=:permissive))
     solver, Q = setup(prob, num)
 
     history = rank == 0 ? open(opt.prefix * "_history.dat", "w") : nothing

@@ -59,8 +59,7 @@ function taylor_green_data(; n=64, tfinal=12.0)
         n_global=(n, n, n),
         art=ArtificialProperties(enabled=false),
         cfl=0.6,
-        filter_interval=1,
-        dims=(1, 1, 1),
+        execution=Execution(dims=(1, 1, 1)),
     )
     solver, Q = setup(problem, numerics)
 
@@ -161,8 +160,7 @@ function shock_tube_data(; nx=384, ny=48, tfinal=2.0e-3)
         n_global=(nx, ny, 1),
         art=ArtificialProperties(enabled=true),
         cfl=0.5,
-        filter_interval=1,
-        dims=(1, 1, 1),
+        execution=Execution(dims=(1, 1, 1)),
     )
     solver, Q = setup(problem, numerics)
     run!(solver, Q; tfinal, nmax=5000)
@@ -198,8 +196,7 @@ function converging_shock_data(; nr=640, tfinal=0.30)
         n_global=(nr, 1, 1),
         art=ArtificialProperties(enabled=true),
         cfl=0.4,
-        filter_interval=1,
-        dims=(1, 1, 1),
+        execution=Execution(dims=(1, 1, 1)),
     )
     solver, Q = setup(problem, numerics)
     run!(solver, Q; tfinal, nmax=5000)

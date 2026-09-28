@@ -181,7 +181,7 @@ function stress(opts)
         start in (0.0,0.1)
         prob = CQ.noh_problem(1; N=200,t0=start)
         solver,state = setup(prob,Numerics(n_global=(200,1,1),deriv=scheme(name),
-            art=art_params(properties_on,opts),cfl=0.3,filter_interval=1,filter_cfl=0.35,
+            art=art_params(properties_on,opts), cfl=0.3,
             control=StepControl(validity=:permissive)))
         target = CQ.NOH_T-start
         try

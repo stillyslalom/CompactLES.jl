@@ -27,7 +27,8 @@ include("capability_cases.jl")
         name, eos, ic = C.EOSES[1]
         for (backend, precision) in C.PAIRS
             ok = C.advances(C.problem(; eos, ic),
-                            Numerics(; n_global=(32, 1, 1), backend, precision))
+                            Numerics(; n_global=(32, 1, 1),
+                                     execution=Execution(; backend, precision)))
             ok || @warn "capability matrix: $name on $backend at $precision did not advance"
             @test ok
         end
@@ -71,7 +72,7 @@ include("capability_cases.jl")
         rejects("SphericalMetric: θ node 16 lies on a pole",
                 C.problem(bcs=(wall, wall, per), domain=((0.5, 1.0), (0.1, π), (0.0, 1.0)),
                           metric=SphericalMetric(), ic=C.ic_shell),
-                Numerics(n_global=(16, 16, 1), precision=Float32))
+                Numerics(n_global=(16, 16, 1), execution=Execution(precision=Float32)))
         rejects("SphericalMetric: the collapsed θ node lies on a pole",
                 C.problem(bcs=((OriginBC(), SlipWallBC()), per, per),
                           domain=((0.0, 1.0), (0.0, π), (0.0, 1.0)),
@@ -95,22 +96,25 @@ include("capability_cases.jl")
         rejects("stretched dimensions must be non-periodic",
                 gas, Numerics(n_global=(32, 1, 1), stretch=stretched))
         rejects("patch decomposition across a coordinate fold is not supported",
-                cyl, Numerics(n_global=(16, 48, 1), patch_grid=(1, 2, 1)))
+                cyl, Numerics(n_global=(16, 48, 1), execution=Execution(patch_grid=(1, 2, 1))))
         rejects("patch decomposition across a SymmetryPlaneBC is not supported",
                 C.problem(bcs=(per, per, (SymmetryPlaneBC(), SlipWallBC()))),
-                Numerics(n_global=(48, 1, 16), patch_grid=(2, 1, 1)))
+                Numerics(n_global=(48, 1, 16), execution=Execution(patch_grid=(2, 1, 1))))
         rejects("patch interfaces carry closure variants for a tridiagonal filter only",
-                gas, Numerics(n_global=n1, patch_grid=(2, 1, 1), filt=pyranda_filter()))
+                gas, Numerics(n_global=n1, filter=pyranda_filter(),
+                              execution=Execution(patch_grid=(2, 1, 1))))
         rejects("patch interfaces support the :delta4 and :species_d8 detectors only",
-                gas, Numerics(n_global=n1, patch_grid=(2, 1, 1),
+                gas, Numerics(n_global=n1, execution=Execution(patch_grid=(2, 1, 1)),
                               art=ArtificialProperties(detector=:d8)))
         rejects("an explicit process grid cannot combine with patch_grid",
-                gas, Numerics(n_global=n1, patch_grid=(2, 1, 1), dims=(1, 1, 1)))
+                gas, Numerics(n_global=n1,
+                              execution=Execution(patch_grid=(2, 1, 1), dims=(1, 1, 1))))
         rejects("the patched dimension cannot be stretched",
                 C.problem(bcs=(wall, per, per)),
-                Numerics(n_global=n1, patch_grid=(2, 1, 1), stretch=stretched))
+                Numerics(n_global=n1, execution=Execution(patch_grid=(2, 1, 1)),
+                         stretch=stretched))
         rejects("AMR: cannot be combined with a patch_grid",
-                gas, Numerics(n_global=n1, patch_grid=(2, 1, 1), amr=box))
+                gas, Numerics(n_global=n1, execution=Execution(patch_grid=(2, 1, 1)), amr=box))
         rejects("AMR: requires CartesianMetric", cyl, Numerics(n_global=(48, 16, 1), amr=box))
         rejects("AMR: requires a uniform grid",
                 C.problem(bcs=(wall, per, per)), Numerics(n_global=n1, stretch=stretched,
@@ -125,11 +129,11 @@ include("capability_cases.jl")
         rejects("requires tile > 0 and regridding", gas,
                 Numerics(n_global=n1, amr=AMR(initial=feature, max_levels=3)))
         rejects("regridding more than one refined level runs on the host backend only",
-                gas, Numerics(n_global=n1, backend=C.device(),
+                gas, Numerics(n_global=n1, execution=Execution(backend=C.device()),
                               amr=AMR(initial=feature, regrid_interval=1, tile=4,
                                       max_levels=3)))
         rejects("level_restriction = :filter is host-only", gas,
-                Numerics(n_global=n1, backend=C.device(),
+                Numerics(n_global=n1, execution=Execution(backend=C.device()),
                          amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)),
                                  level_restriction=:filter)))
         rejects("rebalance repartitions a tiled level at the regrid cadence", gas,
@@ -140,11 +144,12 @@ include("capability_cases.jl")
                 "interface_flux = :closure",
                 C.problem(bcs=(wall, per, per), metric=CylindricalMetric(),
                           domain=((0.5, 1.5), (0.0, 1.0), (0.0, 1.0)), ic=C.ic_shell),
-                Numerics(n_global=n1, patch_grid=(2, 1, 1)))
+                Numerics(n_global=n1, execution=Execution(patch_grid=(2, 1, 1))))
         rejects("interface_flux = :ghost (the default) reads the gradient plans' " *
                 "interface rows, which exist under interface_rhs = :extended only; " *
                 "pass interface_flux = :closure",
-                gas, Numerics(n_global=n1, patch_grid=(2, 1, 1), interface_rhs=:onesided))
+                gas, Numerics(n_global=n1, patch_interfaces=PatchInterfaces(rhs=:onesided),
+                              execution=Execution(patch_grid=(2, 1, 1))))
         rejects(["interface_flux = :ghost (the default) with molecular transport at a " *
                  "refined level supports IdealMixture, Nasa9Mixture and StiffenedGas",
                  "use interface_flux = :closure for this EOS"],
@@ -163,19 +168,23 @@ include("capability_cases.jl")
         rejects("polar_truncation takes a single patch without refinement",
                 C.problem(bcs=(wall, per, per), domain=((0.5, 1.5), (0.0, 2π), (0.0, 1.0)),
                           metric=CylindricalMetric(), ic=C.ic_shell),
-                Numerics(n_global=(48, 32, 1), patch_grid=(2, 1, 1), polar_truncation=2.0))
+                Numerics(n_global=(48, 32, 1), execution=Execution(patch_grid=(2, 1, 1)),
+                         polar_truncation=2.0))
         rejects("polar_truncation runs on the host backend only", cyl,
-                Numerics(n_global=(16, 32, 1), polar_truncation=2.0, backend=C.device()))
+                Numerics(n_global=(16, 32, 1), polar_truncation=2.0,
+                         execution=Execution(backend=C.device())))
         rejects("the solver components carry different floating-point types", gas,
                 Numerics(n_global=(32, 1, 1), deriv=lele_d1_6(Float32)))
 
         # Checkpoints: a slab layout has none, and the element type and the
         # thermodynamics must match.
         dir = mktempdir()
-        slabs, states = setup(gas, Numerics(n_global=n1, patch_grid=(2, 1, 1)))
+        slabs, states = setup(gas, Numerics(n_global=n1,
+                                            execution=Execution(patch_grid=(2, 1, 1))))
         @test_throws "a same-level patch layout (patch_grid) has no checkpoint" save_checkpoint(
             slabs, states, joinpath(dir, "slabs"))
-        solver, Q = setup(gas, Numerics(n_global=(32, 1, 1), precision=Float32))
+        solver, Q = setup(gas, Numerics(n_global=(32, 1, 1),
+                                        execution=Execution(precision=Float32)))
         save_checkpoint(solver, Q, joinpath(dir, "single"))
         solver64, Q64 = setup(gas, Numerics(n_global=(32, 1, 1)))
         @test_throws "element type mismatch" load_checkpoint!(solver64, Q64,

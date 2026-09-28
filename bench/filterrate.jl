@@ -160,7 +160,7 @@ function build(cfl, filter_cfl)
                        ic = ic)
         return setup(prob, Numerics(n_global = n_global, cfl = cfl,
                                     art = ArtificialProperties(enabled = false),
-                                    filter_interval = 1, filter_cfl = filter_cfl,
+                                    filter = StateFilter(; cfl = filter_cfl),
                                     control = control))
     end
     lo = (N - opt.refine) ÷ 2

@@ -62,6 +62,47 @@ include("cases.jl")
     @test prob.ic(0.0, 0.0, 0.0).p == 1.0
 end
 
+@testset "Numerics groups, shorthands and copies" begin
+    num = Numerics(n_global=(16, 1, 1))
+    @test num.filter.interval == 1 && num.filter.cfl == 0.35
+    @test num.patch_interfaces.flux === :ghost && num.execution.dims === nothing
+    @test Numerics(n_global=(16, 1, 1), filter=nothing).filter.interval == 0
+    shorthand = Numerics(n_global=(16, 1, 1), filter=pyranda_filter(),
+                         patch_interfaces=:closure)
+    @test shorthand.filter.scheme isa typeof(pyranda_filter())
+    @test shorthand.filter.interval == 1
+    @test shorthand.patch_interfaces.flux === :closure
+    copied = Numerics(num; cfl=0.3, filter=StateFilter(num.filter; cfl=0.0))
+    @test copied.cfl == 0.3 && copied.filter.cfl == 0.0 && copied.n_global == num.n_global
+    @test num.cfl == 0.5
+    @test_throws ArgumentError Numerics(n_global=(16, 1, 1), nonexistent=1)
+    @test_throws ArgumentError Numerics(n_global=(16, 1, 1), filter=1.0)
+    @test_throws ArgumentError StateFilter(StateFilter(); nonexistent=1)
+
+    # The flat keywords of earlier versions fold into their groups.
+    flat = @test_logs (:warn, r"flat keywords are deprecated") Numerics(
+        n_global=(16, 1, 1), filter_interval=0, dims=(1, 1, 1), interface_flux=:closure)
+    @test flat.filter.interval == 0 && flat.execution.dims == (1, 1, 1)
+    @test flat.patch_interfaces.flux === :closure
+
+    # A copy keeps the element type of a parametric group and still validates.
+    art = ArtificialProperties(ArtificialProperties{Float32}(); C_D=3.0)
+    @test art.C_D === 3.0f0
+    @test StepControl(StepControl(retries=4); validity=:permissive).retries == 4
+    @test_throws ArgumentError StepControl(StepControl(); retries=-1)
+    @test AMR(AMR(tile=12); subcycle=true).tile == 12
+
+    # The groups reach the solver under its flat names.
+    prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
+                   ic=(x, y, z) -> Prim(p=1.0, rho=1.0 + 0.1sin(2π * x)))
+    solver, _ = setup(prob, Numerics(n_global=(32, 1, 1),
+                                     filter=StateFilter(compact_filter(0.49);
+                                                        interval=2, cfl=0.0)))
+    @test solver.filter_interval == 2 && solver.filter_cfl == 0
+    @test occursin("filter: off",
+                   sprint(show, MIME("text/plain"), Numerics(num; filter=nothing)))
+end
+
 @testset "concise frontend displays" begin
     prob = Problem(name="display test",
                    domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=per3,
@@ -121,7 +162,7 @@ end
                    ic=(x, y, z) -> Prim(rho=1 + 0.01sin(2π * x), T_ion=1,
                                         u=(0.1, 0.0, 0.0)))
     num = Numerics(n_global=(12, 12, 12), deriv=lele_d1_6(T),
-                   filt=compact_filter(T(0.45), T), art=ArtificialProperties{T}(),
+                   filter=compact_filter(T(0.45), T), art=ArtificialProperties{T}(),
                    cfl=0.2)
     solver, Q = setup(prob, num)
 
@@ -1139,7 +1180,7 @@ end
                               domain=((0.0, 2π), (0.0, 2π), (0.0, 2π)),
                               bcs=per3, ic=ic),
                       Numerics(n_global=(16, 16, 16), art=ArtificialProperties(enabled=false),
-                               cfl=0.4, filter_cfl=fc))
+                               cfl=0.4, filter=StateFilter(; cfl=fc)))
 
     solver0, Q0 = build(0.0)
     @test CL.filter_weight(solver0, 1) == 1.0       # disabled: full strength
@@ -2373,7 +2414,6 @@ end
                                     u=(0.0, 0.0, 0.0), p=1.0)
                            end)
             solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=bulk, cfl=0.4,
-                                             filter_interval=1,
                                              control=StepControl(validity=:permissive)))
             nx = solver.decomp.n_local[1]
             eqs = solver.equations
@@ -3546,8 +3586,7 @@ end
                        metric=metric, domain=((0.0, 1.0), dom2, dom3),
                        bcs=((lobc, inflow), per3[2], per3[3]), ic=ic)
         setup(prob, Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=true),
-                             cfl=cfl, control=control, filter_interval=1,
-                             filter_cfl=0.0))
+                             cfl=cfl, control=control, filter=StateFilter(; cfl=0.0)))
     end
     # Post-shock plateau, sampled between the wall-heating layer and the shock
     # at x = (γ−1)t/2 = 0.2 — a window that straddles the shock would average
@@ -4854,7 +4893,7 @@ end
                                T_ion=(1 - s) * T2 + s * T1)
                       end),
               Numerics(n_global=(n, 1, 1), art=ArtificialProperties(enabled=true),
-                       cfl=0.4, filter_interval=1,
+                       cfl=0.4,
                        # A shocked binary interface ends beyond the
                        # mass-fraction band, five of 160 points here, as the
                        # shock/SF6 validation case does. The boundary condition
@@ -5119,7 +5158,7 @@ end
                    end)
     solver, Q = setup(prob,
                       Numerics(n_global=(Nx, 1, 1), art=ArtificialProperties(enabled=true),
-                                cfl=0.4, filter_interval=1))
+                                cfl=0.4))
     run!(solver, Q; tfinal=tfin, nmax=100_000)
     CL.exchange_state!(Q, solver.decomp)
     CL.primitives!(solver, Q)

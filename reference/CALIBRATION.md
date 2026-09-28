@@ -17,9 +17,9 @@ ArtificialProperties(enabled = true,
           reduction = :sum, smoother = :gaussian, detector = :species_d8,
           species_flux = :partial_density)
 Numerics(deriv = lele_d1_6(closures = :neutral3),
-         filt = compact_filter(0.45, closures = :onesided), filter_interval = 1,
-         filter_cfl = 0.35, filter_weighting = :none, cfl = 0.5,
-         control = StepControl())
+         filter = StateFilter(compact_filter(0.45, closures = :onesided);
+                              interval = 1, cfl = 0.35, weighting = :none),
+         cfl = 0.5, control = StepControl())
 ```
 
 | Setting | Default | Status | Basis |

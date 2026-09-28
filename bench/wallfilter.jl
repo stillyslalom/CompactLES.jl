@@ -372,8 +372,9 @@ function wc_build(cl; N=WC_N, control=StepControl(validity=:permissive), filter_
                             0.01 * (tanh_blend(x, 0.1, δ) - tanh_blend(x, 0.9, δ)) +
                             100 * tanh_blend(x, 0.9, δ)))
     () -> setup(prob, Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=true),
-                               cfl=0.3, filt=filt_of(cl), filter_interval=0,
-                               filter_cfl=filter_cfl, control=control))
+                               cfl=0.3,
+                               filter=StateFilter(filt_of(cl); interval=0, cfl=filter_cfl),
+                               control=control))
 end
 
 # Two gases of equal γ and gas constant, so the mixture is thermodynamically
@@ -422,7 +423,7 @@ function budget_part()
     for (flab, cl) in FILTERS
         num = Numerics(n_global=(400, 1, 1), art=ArtificialProperties(enabled=true),
                        cfl=NOH_CFL,
-                       filt=filt_of(cl), filter_interval=0, filter_cfl=OPTS.filter_cfl,
+                       filter=StateFilter(filt_of(cl); interval=0, cfl=OPTS.filter_cfl),
                        control=StepControl(validity=:permissive))
         r = budget_run(() -> setup(noh_problem(1; N=400, t0=0.0), num), NOH_T)
         print_budget("$flab, permissive", r)
@@ -435,7 +436,7 @@ function budget_part()
     for (flab, cl) in FILTERS
         num = Numerics(n_global=(400, 1, 1), art=ArtificialProperties(enabled=true),
                        cfl=NOH_CFL,
-                       filt=filt_of(cl), filter_interval=0, filter_cfl=OPTS.filter_cfl,
+                       filter=StateFilter(filt_of(cl); interval=0, cfl=OPTS.filter_cfl),
                        control=StepControl(validity=:permissive, floor_ratio=1e-6))
         r = budget_run(() -> setup(noh_problem(1; N=400, t0=0.0), num), NOH_T)
         print_budget("$flab, floor 1e-6", r)

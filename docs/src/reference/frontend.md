@@ -10,6 +10,9 @@ CurrentModule = CompactLES
 Prim
 Problem
 Numerics
+StateFilter
+PatchInterfaces
+Execution
 setup
 initialize!
 conserved_from_prim

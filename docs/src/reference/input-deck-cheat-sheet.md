@@ -144,42 +144,77 @@ or a fixed physical width for a resolved material layer.
 ## Discretization: `Numerics`
 
 ```julia
-Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
-    art=ArtificialProperties(), cfl=0.5, control=StepControl(), filter_interval=1,
-    filter_cfl=0.35, filter_weighting=:none, polar_truncation=0.0,
-    dims=nothing, n_halo=4, comm=MPI.COMM_WORLD,
-    stretch=(nothing,nothing,nothing), patch_grid=(1,1,1),
-    backend=CompactLES.CPUBackend(), interface_rhs=:extended,
-    interface_divergence=nothing, interface_flux=:ghost,
-    amr=nothing)                             # AMR(...) groups refinement options
+Numerics(; n_global, deriv=lele_d1_6(), filter=StateFilter(),
+    art=ArtificialProperties(), cfl=0.5, control=StepControl(),
+    patch_interfaces=PatchInterfaces(), execution=Execution(), amr=nothing,
+    polar_truncation=0.0, stretch=(nothing,nothing,nothing))
+Numerics(base; cfl=0.3)                     # a copy of `base` with cfl replaced
 ```
 
 | Keyword | Meaning | Default |
 |---|---|---|
 | `n_global` | Global points in `(x,y,z)` | Required; `1` collapses a direction |
 | `deriv` | First-derivative compact scheme | `lele_d1_6()` |
-| `filt` | Conserved-state compact filter | `compact_filter(0.45)` |
+| `filter` | Conserved-state filter: a `StateFilter`, a bare scheme, or `nothing` for none | `StateFilter()` |
 | `art` | Artificial properties | `ArtificialProperties()` |
 | `cfl` | CFL multiplier | `0.5` |
 | `control` | Timestep landing, recovery, and floors | `StepControl()` |
-| `filter_interval` | Apply filter every `k` completed steps | `1`; `0` disables |
-| `filter_cfl` | Reference CFL of a full-strength filter pass; `0` unrelaxed | `0.35` |
-| `filter_weighting` | `:none` or volume-weighted state filtering | `:none` |
-| `polar_truncation` | Azimuthal mode truncation margin κ near a cylindrical axis with resolved θ | `0.0` (off) |
-| `dims` | MPI process grid | `nothing` (automatic) |
-| `n_halo` | Halo layers per side | `4` |
-| `comm` | MPI communicator | `MPI.COMM_WORLD` |
-| `stretch` | Per-direction `Stretch` mappings | all `nothing` |
-| `patch_grid` | Slab patches along one dimension; excludes explicit `dims` and AMR | `(1,1,1)` |
-| `backend` | Storage/execution backend | `CompactLES.CPUBackend()` |
-| `interface_rhs` | Patch-interface closure policy | `:extended` |
-| `interface_divergence` | Scheme supplying the flux divergence's closure rows at interface ends; experimental, Float64 only | `nothing` |
-| `interface_flux` | `:ghost` differentiates the inviscid and molecular fluxes through interfaces from ghost values; `:closure` takes the one-sided closure rows, required on a curvilinear or stretched grid, with `interface_rhs = :onesided` and for a user EOS at a viscous refined level | `:ghost` |
+| `patch_interfaces` | Flux divergence at patch and level interfaces: a `PatchInterfaces`, or a `Symbol` for its `flux` | `PatchInterfaces()` |
+| `execution` | Process grid, communicator, backend, precision, same-level patches | `Execution()` |
 | `amr` | Refinement, tagging, subcycling, and balancing configuration | `nothing` |
+| `polar_truncation` | Azimuthal mode truncation margin κ near a cylindrical axis with resolved θ | `0.0` (off) |
+| `stretch` | Per-direction `Stretch` mappings | all `nothing` |
+
+`ArtificialProperties`, `StepControl`, `AMR`, `StateFilter`, `PatchInterfaces`
+and `Execution` take the same copy form: `StepControl(control; retries=4)`.
+
+### State filter: `StateFilter`
+
+`StateFilter(scheme=compact_filter(0.45); interval=1, cfl=0.35, weighting=:none)`
+
+| Field | Meaning | Default |
+|---|---|---|
+| `scheme` | Conserved-state compact filter | `compact_filter(0.45)` |
+| `interval` | Apply the filter every `k` completed steps | `1`; `0` disables |
+| `cfl` | Reference CFL of a full-strength filter pass; `0` unrelaxed | `0.35` |
+| `weighting` | `:none` or volume-weighted state filtering | `:none` |
+
+`filter = compact_filter(0.49)` is `StateFilter(compact_filter(0.49))`, and
+`filter = nothing` is `StateFilter(interval=0)`.
+
+### Patch and level interfaces: `PatchInterfaces`
+
+`PatchInterfaces(; flux=:ghost, rhs=:extended, divergence=nothing)` applies
+only where two patches or two refinement levels meet, not at a material
+interface.
+
+| Field | Meaning | Default |
+|---|---|---|
+| `flux` | `:ghost` differentiates the inviscid and molecular fluxes through interfaces from ghost values; `:closure` takes the one-sided closure rows, required on a curvilinear or stretched grid, with `rhs = :onesided` and for a user EOS at a viscous refined level | `:ghost` |
+| `rhs` | Interface closure policy of the gradient and divergence rows | `:extended` |
+| `divergence` | Scheme supplying the flux divergence's closure rows at interface ends; experimental, Float64 only | `nothing` |
+
+`patch_interfaces = :closure` is `PatchInterfaces(flux=:closure)`. Error
+messages and checkpoint records name the fields `interface_flux`,
+`interface_rhs` and `interface_divergence`.
+
+### Where it runs: `Execution`
+
+`Execution(; dims=nothing, comm=MPI.COMM_WORLD, backend=CPUBackend(), precision=nothing, patch_grid=(1,1,1))`
+
+| Field | Meaning | Default |
+|---|---|---|
+| `dims` | MPI process grid | `nothing` (automatic) |
+| `comm` | MPI communicator | `MPI.COMM_WORLD` |
+| `backend` | Storage/execution backend | `CompactLES.CPUBackend()` |
+| `precision` | `Float32` or `Float64`; converts every component | `nothing` (the components' own type) |
+| `patch_grid` | Slab patches along one dimension; excludes explicit `dims` and AMR | `(1,1,1)` |
 
 Each resolved rank-local dimension needs enough points for the selected
 stencils (nine with the defaults). Every rank in `comm` must call `setup` with
-the same `Problem` and `Numerics`.
+the same `Problem` and `Numerics`. The flat keywords of earlier versions
+(`filt`, `filter_interval`, `dims`, `backend`, `interface_flux`, ...) are
+still accepted, with a deprecation warning naming the grouped form.
 
 ### Schemes, filters, and sensors
 
@@ -289,8 +324,8 @@ callback reads cached primitive arrays; `Q` itself is current between steps.
 ## MPI, threads, and GPU
 
 ```julia
-Numerics(n_global=(256,64,64), dims=(4,2,1), comm=MPI.COMM_WORLD)
-Numerics(n_global=(256,64,64), backend=DeviceBackend(CUDABackend()))
+Numerics(n_global=(256,64,64), execution=Execution(dims=(4,2,1)))
+Numerics(n_global=(256,64,64), execution=Execution(backend=DeviceBackend(CUDABackend())))
 ```
 
 Initialize MPI once (`MPI.Init(threadlevel=:funneled)`), and launch with
@@ -326,8 +361,8 @@ at setup, `setup` raises an error instead of creating an arbitrary fine patch.
 refined level. `tile` optionally partitions that level into a global lattice,
 and `subcycle=true` advances a child three times per parent step. Inspect the
 layout with `level_regions(solver, level)`; `refined_region(solver, level)`
-requires exactly one patch on that level. Legacy flat refinement keywords on
-`Numerics` remain available for existing decks, but cannot be combined with
+requires exactly one patch on that level. The flat refinement keywords that
+`Numerics` accepted before `AMR` are deprecated and cannot be combined with
 `amr=AMR(...)`. The [AMR reference](@ref "Adaptive mesh refinement") gives the
 full keyword table, support limits, and conservation and restart guidance.
 

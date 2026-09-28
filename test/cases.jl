@@ -107,8 +107,7 @@ function tube(left, right; N, L=1.0, x0=0.5, tfin, γ=1.4,
                             p=(1 - θ) * pL + θ * pR)
                    end)
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filt=filt, filter_interval=1,
-                                     filter_cfl=filter_cfl))
+                                     filter=StateFilter(filt; cfl=filter_cfl)))
     run!(solver, Q; tfinal=tfin, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, tfin)
 end
@@ -158,8 +157,7 @@ function woodward(; N=WC_N, art=ArtificialProperties(enabled=true), cfl=0.3, nma
                             0.01 * (tanh_blend(x, 0.1, δ) - tanh_blend(x, 0.9, δ)) +
                             100 * tanh_blend(x, 0.9, δ)))
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     deriv=deriv, filt=filt, filter_interval=1,
-                                     filter_cfl=filter_cfl))
+                                     deriv=deriv, filter=StateFilter(filt; cfl=filter_cfl)))
     run!(solver, Q; tfinal=WC_T, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, WC_T)
 end
@@ -208,9 +206,8 @@ function sedov(; N=SEDOV_N, R=1.2, σ=SEDOV_S, art=ArtificialProperties(enabled=
     # ideal-gas EOS reports as outside its domain. The case states that rather
     # than rejecting on it, and its caller bounds the count and the defect.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filt=filt, filter_interval=1,
-                                     filter_cfl=filter_cfl,
-                                     filter_weighting=filter_weighting,
+                                     filter=StateFilter(filt; cfl=filter_cfl,
+                                                        weighting=filter_weighting),
                                      control=StepControl(validity=:permissive)))
     run!(solver, Q; tfinal=SEDOV_T, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, SEDOV_T),
@@ -317,9 +314,9 @@ function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
     # the count and the worst defect. reference/CALIBRATION_APPENDIX.md carries the
     # measured budget.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     deriv=deriv, filt=filt, filter_interval=1,
-                                     filter_cfl=filter_cfl,
-                                     filter_weighting=filter_weighting,
+                                     deriv=deriv,
+                                     filter=StateFilter(filt; cfl=filter_cfl,
+                                                        weighting=filter_weighting),
                                      control=StepControl(validity=:permissive)))
     run!(solver, Q; tfinal=NOH_T - t0, nmax=nmax)
     return case_line_profile(solver, Q)..., completed(solver, NOH_T - t0),
@@ -369,8 +366,7 @@ function species_advection(; N=MIX_N, tfin=MIX_T, art=ArtificialProperties(enabl
                        Prim(Y=(1 - θ, θ), u=(MIX_U, 0.0, 0.0), p=1.0, rho=1.0)
                    end)
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filt=filt, filter_interval=1,
-                                     filter_cfl=filter_cfl,
+                                     filter=StateFilter(filt; cfl=filter_cfl),
                                      control=control))
     run!(solver, Q; tfinal=tfin, nmax=nmax, callback=callback)
     CL.exchange_state!(Q, solver.decomp)
@@ -459,9 +455,8 @@ function shock_interface(; N=SI_N, tfin=SI_T, art=ArtificialProperties(enabled=t
     # at every resolution, inside the default `species_band`, so the case runs
     # strict; the caller guards the excursion itself, much closer than that.
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filt=filt, filter_interval=1,
-                                     filter_cfl=filter_cfl,
-                                     filter_weighting=filter_weighting,
+                                     filter=StateFilter(filt; cfl=filter_cfl,
+                                                        weighting=filter_weighting),
                                      stretch=(stretch1, nothing, nothing),
                                      control=StepControl(retries=4)))
     nx = solver.decomp.n_local[1]
@@ -572,8 +567,7 @@ function brill_slab(; R=BR_R, Np=BR_NP, art=ArtificialProperties(enabled=true), 
                        Prim(Y=(1 - Yh, Yh), rho=ρ, u=(BR_U, 0.0, 0.0), p=1.0)
                    end)
     solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
-                                     filt=filt, filter_interval=1,
-                                     filter_cfl=filter_cfl,
+                                     filter=StateFilter(filt; cfl=filter_cfl),
                                      control=StepControl(retries=4)))
     nx = solver.decomp.n_local[1]
     worst_min = Ref(Inf)
@@ -690,8 +684,8 @@ function noh_cartesian(; N=NC_N, AR=4, L=NC_L, t0=0.0, tfinal=NOH_T, p0=NOH_P0,
                    bcs=((inflow, inflow), (inflow, inflow), per3[3]), ic=ic)
     # Permissive for the reason `noh_case` is: the cold precursor carries
     # negative internal energy, and the caller bounds the closing report.
-    num = Numerics(n_global=(n1, n2, 1), art=art, cfl=cfl, deriv=deriv, filt=filt,
-                   filter_interval=1, filter_cfl=filter_cfl,
+    num = Numerics(n_global=(n1, n2, 1), art=art, cfl=cfl, deriv=deriv,
+                   filter=StateFilter(filt; cfl=filter_cfl),
                    control=StepControl(validity=:permissive))
     solver, Q = setup(prob, num)
     wall = @elapsed run!(solver, Q; tfinal=tfinal - t0, nmax=nmax)
@@ -767,8 +761,7 @@ function noh_aligned(; N=Dict(NOH_N)[1], AR=4, nx=12, art=ArtificialProperties(e
     # Permissive for the reason `noh_case` is: the cold precursor carries
     # negative internal energy, and the caller bounds the closing report.
     solver, Q = setup(prob, Numerics(n_global=(nx, N, 1), art=art, cfl=cfl,
-                                     filt=filt, filter_interval=1,
-                                     filter_cfl=filter_cfl,
+                                     filter=StateFilter(filt; cfl=filter_cfl),
                                      control=StepControl(validity=:permissive)))
     wall = @elapsed run!(solver, Q; tfinal=NOH_T, nmax=nmax)
     ok = completed(solver, NOH_T)

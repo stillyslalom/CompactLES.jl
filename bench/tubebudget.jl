@@ -146,7 +146,6 @@ function tube(channel)
                    end)
     art = ArtificialProperties(enabled = true, species_flux = Symbol(channel))
     num = Numerics(n_global = (nx, ny, 1), art = art, cfl = opt.cfl,
-                   filt = compact_filter(0.45), filter_interval = 1,
                    control = StepControl(retries = 4, validity = :permissive))
     return setup(prob, num)
 end

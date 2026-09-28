@@ -50,7 +50,7 @@ problem = Problem(
 solver, Q = setup(problem, Numerics(
     n_global = (32, 1, 1),
     art = ArtificialProperties(enabled = false),
-    filter_interval = 0,
+    filter = nothing,
     cfl = 0.4,
 ))
 x, initial_y = line_profile(solver, Q, :Y; species = 1)

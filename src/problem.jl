@@ -689,15 +689,192 @@ function Problem(; name="problem", eos=_default_ideal_mixture(),
                    domain, _face_conditions(bcs), ic)
 end
 
+# A copy of `x` with the fields named in `kw` replaced, built through the type's
+# positional constructor, so a parametric type converts the new values to its
+# own parameter and a validating inner constructor still validates.
+function _with(x::S, kw) where {S}
+    names = fieldnames(S)
+    for k in keys(kw)
+        k in names || throw(ArgumentError("$(nameof(S)) has no field `$k`; its fields " *
+                                          "are $(join(names, ", "))"))
+    end
+    return S(map(f -> haskey(kw, f) ? kw[f] : getfield(x, f), names)...)
+end
+
 """
-    Numerics(; n_global, deriv=lele_d1_6(), filt=compact_filter(0.45),
+    StateFilter(scheme = compact_filter(0.45); interval = 1, cfl = 0.35,
+                weighting = :none)
+    StateFilter(base::StateFilter; keywords...)
+
+The state filter of [`Numerics`](@ref): the compact filter applied to the
+conserved state between steps, and its cadence and strength. The second form
+copies `base` with the given fields replaced. `Numerics(filter = scheme)` is
+shorthand for `StateFilter(scheme)`, and `Numerics(filter = nothing)` for
+`StateFilter(interval = 0)`.
+
+- `scheme`: the compact filter. Default: [`compact_filter(0.45)`](@ref),
+  where values nearer `0.5` filter more weakly. It doubles as the
+  artificial-property sensor smoother only under
+  `ArtificialProperties(smoother = :compact)`; the default `:gaussian`
+  smoother is an explicit stencil that ignores it.
+- `interval`: cadence in completed steps. A positive value `k` applies the
+  filter every `k` steps, counted from the completed step number. The default
+  `1` filters every step; `0` disables state filtering, which leaves `scheme`
+  unused unless `ArtificialProperties(smoother = :compact)` selects it as the
+  sensor smoother.
+- `cfl`: reference CFL of a full-strength filter pass, making the filter's
+  dissipation a rate, not a per-application amount. A pass along a direction
+  relaxes toward the filtered state by `interval · dt · r_d · √n / cfl`,
+  capped at one, with `r_d` that direction's one-dimensional hyperbolic rate
+  `(|u_d| + c) / h_d` and `n` the number of active dimensions, which holds the
+  dissipation per unit time fixed below that CFL and independent of the
+  diffusive rates, physical or artificial, and of the spacing of the other
+  directions. The default `0.35` is the reference CFL of the Taylor–Green
+  fits: at or above it, on an isotropic grid under an acoustic-limited step,
+  every pass is at full strength, and below it the run receives the
+  dissipation per unit time of one at the reference. `0.0` disables the
+  relaxation: each pass then replaces the state with its filtered image, so
+  halving the CFL doubles the number of passes over an interval and doubles
+  the dissipation. See [`filter_weight`](@ref).
+- `weighting`: how the filter treats a non-uniform cell volume. `:none`, the
+  default, filters each conserved component unweighted. `:volume` filters the
+  component weighted by the cell volume and divides by the volume passed
+  through the same filter, the form of the public Pyranda implementation. Both
+  preserve a uniform state exactly on every metric. The conservation defect of
+  a pass sits in the wall closure rows under either form and is the same on
+  uniform and clustered grids; at a cylindrical axis or a spherical pole the
+  weighted form is the less conservative of the two, and on the Noh
+  implosions it moves the wall deficit in opposite directions at the axis and
+  at the origin, which is why it is not the default. On a uniform Cartesian
+  grid the two are one operator bit for bit. See [`filter_state!`](@ref).
+
+`interval` must be nonnegative and `cfl` finite and nonnegative; both are
+checked when the solver is built.
+"""
+struct StateFilter
+    scheme::AbstractCompactScheme
+    interval::Int
+    cfl::Float64
+    weighting::Symbol
+end
+
+StateFilter(scheme::AbstractCompactScheme=compact_filter(0.45); interval::Integer=1,
+            cfl::Real=0.35, weighting::Symbol=:none) =
+    StateFilter(scheme, interval, cfl, weighting)
+StateFilter(base::StateFilter; kw...) = _with(base, kw)
+
+_state_filter(filter::StateFilter) = filter
+_state_filter(scheme::AbstractCompactScheme) = StateFilter(scheme)
+_state_filter(::Nothing) = StateFilter(interval=0)
+_state_filter(x) =
+    throw(ArgumentError("Numerics: filter must be a StateFilter, a compact filter " *
+                        "scheme or nothing, got $(typeof(x))"))
+
+"""
+    PatchInterfaces(; flux = :ghost, rhs = :extended, divergence = nothing)
+    PatchInterfaces(base::PatchInterfaces; keywords...)
+
+How the flux divergence closes at a patch or level interface: a plane shared
+by two same-level patches (`Execution(patch_grid = ...)`, tiles) or the face of
+a refined level. It has nothing to do with a material interface between two
+fluids. Without a patch or level interface these settings have no effect. The
+second form copies `base` with the given fields replaced;
+`Numerics(patch_interfaces = :closure)` is shorthand for
+`PatchInterfaces(flux = :closure)`. The solver keywords, checkpoint records
+and error messages name the three fields `interface_flux`, `interface_rhs`
+and `interface_divergence`.
+
+- `flux`: `:ghost` (default) differentiates the inviscid and molecular fluxes
+  through the interface from ghost values with the interior stencil;
+  `:closure` takes one-sided closure rows there. Choose `:closure` for
+  shock-dominated runs and Float32 runs, where the ghost fluxes add 11 to 50%
+  to the step without lowering the error, and wherever `:ghost` is not
+  supported: a curvilinear or stretched grid, `rhs = :onesided`, or a user EOS
+  at a refined level with molecular transport, each of which setup rejects
+  under `:ghost` with an `ArgumentError`. See
+  [Choose numerics for accuracy per cost](@ref).
+- `rhs`: `:extended` (default) evaluates the gradient and divergence rows at
+  an interface end from exchanged ghost data; `:onesided` closes them with
+  one-sided rows, as at a boundary. `:onesided` requires `flux = :closure`, and
+  is a workaround for initial data with a discontinuity within one node of a
+  shared patch plane.
+- `divergence`: `nothing` (default), or a scheme with the interior
+  coefficients and element type of `deriv` whose closure rows replace the
+  flux divergence's rows at interface ends only, such as
+  `lele_d1_6(closures = :brady_livescu)`. Under `flux = :ghost` it affects
+  only the artificial fluxes and the wall corrections. Experimental and
+  Float64 only.
+"""
+struct PatchInterfaces
+    flux::Symbol
+    rhs::Symbol
+    divergence::Union{Nothing,AbstractCompactScheme}
+end
+
+PatchInterfaces(; flux::Symbol=:ghost, rhs::Symbol=:extended,
+                divergence::Union{Nothing,AbstractCompactScheme}=nothing) =
+    PatchInterfaces(flux, rhs, divergence)
+PatchInterfaces(base::PatchInterfaces; kw...) = _with(base, kw)
+
+_patch_interfaces(interfaces::PatchInterfaces) = interfaces
+_patch_interfaces(flux::Symbol) = PatchInterfaces(flux=flux)
+_patch_interfaces(x) =
+    throw(ArgumentError("Numerics: patch_interfaces must be a PatchInterfaces or a " *
+                        "Symbol, got $(typeof(x))"))
+
+"""
+    Execution(; dims = nothing, comm = MPI.COMM_WORLD, backend = CPUBackend(),
+              precision = nothing, patch_grid = (1, 1, 1))
+    Execution(base::Execution; keywords...)
+
+Where and in what arithmetic a [`Numerics`](@ref) discretization runs: the
+process grid, the communicator, the storage backend, the floating-point type
+and the same-level patch layout. The second form copies `base` with the given
+fields replaced.
+
+- `dims`: MPI process-grid dimensions. `nothing` lets MPI distribute ranks
+  over resolved directions. An explicit tuple must have product equal to the
+  communicator size and must contain `1` in every collapsed direction.
+- `comm`: the communicator the solver spans. Every rank of it must call
+  [`setup`](@ref) with the same `Problem` and `Numerics`; a split
+  communicator lets two independent solvers share one job.
+- `backend`: storage and execution backend. `CompactLES.CPUBackend()` is the
+  default; wrap a `CUDABackend()` or `ROCBackend()` in `DeviceBackend` after
+  loading the matching GPU package.
+- `precision`: `Float32` or `Float64`, or `nothing` (the default). When set,
+  the EOS, the transport model, `art`, `deriv`, the filter scheme and the
+  interface divergence scheme are converted to this type, and the solver
+  stores and computes in it. Left at `nothing`, those components must all
+  carry one type, which the solver adopts; components of different types
+  raise an `ArgumentError` at setup that names the type of each.
+- `patch_grid`: same-level slab patches per direction, at most one
+  direction above one. It excludes an explicit `dims` and refinement; see
+  [Supported combinations](@ref) for the rest of its scope.
+"""
+struct Execution
+    dims::Union{Nothing,NTuple{3,Int}}
+    comm::MPI.Comm
+    backend::AbstractBackend
+    precision::Union{Nothing,Type{<:AbstractFloat}}
+    patch_grid::NTuple{3,Int}
+end
+
+Execution(; dims=nothing, comm::MPI.Comm=MPI.COMM_WORLD,
+          backend::AbstractBackend=CPUBackend(), precision=nothing,
+          patch_grid=(1, 1, 1)) =
+    Execution(dims, comm, backend, precision, patch_grid)
+Execution(base::Execution; kw...) = _with(base, kw)
+
+"""
+    Numerics(; n_global, deriv=lele_d1_6(), filter=StateFilter(),
              art=ArtificialProperties(), cfl=0.5, control=StepControl(),
-             filter_interval=1, filter_cfl=0.35, filter_weighting=:none,
-             polar_truncation=0.0, dims=nothing, n_halo=4,
-             stretch=(nothing, nothing, nothing), precision=nothing)
+             patch_interfaces=PatchInterfaces(), execution=Execution(), amr=nothing,
+             polar_truncation=0.0, stretch=(nothing, nothing, nothing))
+    Numerics(base::Numerics; keywords...)
 
 Grid, scheme, timestep, and decomposition choices used to realize a
-[`Problem`](@ref).
+[`Problem`](@ref). The second form copies `base` with the given keywords
+replaced.
 
 # Keywords
 
@@ -705,49 +882,25 @@ Grid, scheme, timestep, and decomposition choices used to realize a
   coordinate direction. A count of one collapses that direction: it has no
   derivative, halo, or decomposition.
 - `deriv`: compact first-derivative scheme. Default: [`lele_d1_6()`](@ref);
-  [`lele_d1_8()`](@ref) and [`lele_d1_10()`](@ref) are the higher-order presets.
-- `filt`: compact filter applied to the conserved state. Default:
-  [`compact_filter(0.45)`](@ref), where values nearer `0.5` filter more weakly.
-  It doubles as the artificial-property sensor smoother only under
-  `ArtificialProperties(smoother = :compact)`; the default `:gaussian` smoother is an
-  explicit stencil that ignores this keyword.
+  [`lele_d1_8()`](@ref) and [`lele_d1_10()`](@ref) are the higher-order
+  operators.
+- `filter`: the state filter, a [`StateFilter`](@ref). A compact scheme `s`
+  is shorthand for `StateFilter(s)`, and `nothing` for
+  `StateFilter(interval = 0)`, which filters nothing. Default: `StateFilter()`,
+  [`compact_filter(0.45)`](@ref) every step, relaxed below a
+  CFL of 0.35.
 - `art`: artificial-property coefficients. Default: [`ArtificialProperties()`](@ref).
 - `cfl`: multiplier used by [`compute_dt`](@ref). Default: `0.5`. Strong shocks
   can require a lower startup value.
 - `control`: timestep prediction, failure floors, and retry policy. Default:
   [`StepControl()`](@ref).
-- `filter_interval`: state-filter cadence in completed steps. A positive value
-  `k` applies `filt` every `k` steps, counted from the completed step number.
-  The default `1` filters every step; `0` disables state filtering, which leaves
-  `filt` unused altogether unless `ArtificialProperties(smoother = :compact)` also selects
-  it as the sensor smoother.
-- `filter_cfl`: reference CFL of a full-strength filter pass, making the
-  filter's dissipation a rate, not a per-application amount. A pass along a
-  direction relaxes toward the filtered state by `filter_interval · dt ·
-  r_d · √n / filter_cfl`, capped at one, with `r_d` that direction's
-  one-dimensional hyperbolic rate `(|u_d| + c) / h_d` and `n` the number of
-  active dimensions, which holds the dissipation per unit time fixed below
-  that CFL and independent of the diffusive rates, physical or artificial,
-  and of the spacing of the other directions. The default `0.35` is the
-  reference CFL of the Taylor–Green fits: at or above it, on an isotropic
-  grid under an acoustic-limited step, every pass is at full strength, and
-  below it the run receives the dissipation per unit time of one at the
-  reference. `0.0` disables the relaxation: each pass then replaces the
-  state with its filtered image, so halving the CFL doubles the number of
-  passes over an interval and doubles the dissipation. See
-  [`filter_weight`](@ref).
-- `filter_weighting`: how the state filter treats a non-uniform cell volume.
-  `:none`, the default, filters each conserved component unweighted.
-  `:volume` filters the component weighted by the cell volume and divides by
-  the volume passed through the same filter, the form of the public Pyranda
-  implementation. Both preserve a uniform state exactly on every metric. The
-  conservation defect of a pass sits in the wall closure rows under either
-  form and is the same on uniform and clustered grids; at a cylindrical axis
-  or a spherical pole the weighted form is the less conservative of the two,
-  and on the Noh implosions it moves the wall deficit in opposite directions
-  at the axis and at the origin, which is why it is not the default. On a
-  uniform Cartesian grid the two are one operator bit for bit. See
-  [`filter_state!`](@ref).
+- `patch_interfaces`: how the flux divergence closes at a patch or level
+  interface, a [`PatchInterfaces`](@ref); a `Symbol` is shorthand for
+  `PatchInterfaces(flux = symbol)`. Without such an interface it has no
+  effect.
+- `execution`: the process grid, communicator, backend, precision and
+  same-level patch layout, an [`Execution`](@ref).
+- `amr`: `nothing`, or an [`AMR`](@ref) selecting adaptive refinement.
 - `polar_truncation`: azimuthal mode truncation near a cylindrical axis with
   resolved θ. `0.0`, the default, disables it. A value κ ≥ 1 projects each
   ring of fixed r and z, once per step, onto its azimuthal Fourier modes
@@ -764,31 +917,13 @@ Grid, scheme, timestep, and decomposition choices used to realize a
   gather it once per step. Requires `CylindricalMetric`, θ periodic over 2π,
   an unstretched radial dimension, a single patch without refinement, and the
   host backend.
-- `dims`: MPI process-grid dimensions. `nothing` lets MPI distribute ranks over
-  resolved directions. An explicit tuple must have product equal to the
-  communicator size and must contain `1` in every collapsed direction.
-- `n_halo`: halo layers on each side of a resolved local block. Default: `4`;
-  it must be at least the largest explicit stencil half-width used by the
-  selected schemes.
 - `stretch`: one entry per direction, each either `nothing` for a uniform grid
   or a [`Stretch`](@ref). A mapping must span the corresponding `Problem.domain`
   interval and can be used only in a nonperiodic, non-folded direction.
-- `precision`: `Float32` or `Float64`, or `nothing` (the default). When set,
-  the EOS, the transport model, `art`, `deriv`, `filt` and
-  `interface_divergence` are converted to this type, and the solver stores
-  and computes in it. Left at `nothing`, those components must all carry one
-  type, which the solver adopts; components of different types raise an
-  `ArgumentError` at setup that names the type of each.
-- `interface_flux`: how the flux divergence closes at a patch or level
-  interface. `:ghost` (default) differentiates the inviscid and molecular
-  fluxes through the interface from ghost values with the interior stencil;
-  `:closure` takes one-sided closure rows there. Choose `:closure` for
-  shock-dominated runs and Float32 runs, where the ghost fluxes add 11 to 50%
-  to the step without lowering the error, and wherever `:ghost` is not
-  supported: a curvilinear or stretched grid, `interface_rhs = :onesided`, or
-  a user EOS at a refined level with molecular transport, each of which
-  setup rejects under `:ghost` with an `ArgumentError`. Without an interface
-  the setting has no effect. See [Choose numerics for accuracy per cost](@ref).
+
+`n_halo`, the halo layers on each side of a resolved local block, is also
+accepted. It is 4, which covers every stencil the package builds, and is not a
+tuning parameter.
 
 Compact plans impose a scheme-dependent minimum rank-local extent. With the
 defaults, each resolved local extent needs at least nine points because the
@@ -797,152 +932,112 @@ against this minimum before building a plan and raises an `ArgumentError`
 naming the dimension, the scheme and the extent required; reduce the
 decomposition in that direction or increase `n_global`.
 
-`cfl` must be finite and positive, `filter_interval` nonnegative, and
-`filter_cfl` finite and nonnegative. These and the parameter ranges of
-`art`, the transport model and the EOS are checked when the solver is built.
+`cfl` must be finite and positive, the filter's `interval` nonnegative, and
+its `cfl` finite and nonnegative. These and the parameter ranges of `art`, the
+transport model and the EOS are checked when the solver is built.
 
-# Refinement keywords (reference/AMR_GPU.md)
+# Deprecated keywords
 
-Prefer `amr = AMR(...)` to group refinement, tagging, and regridding choices.
-Its initial cover can be selected from sensors or a physical-coordinate
-predicate, without embedding grid indices in the problem. The flat keywords
-below remain supported for existing decks; nondefault flat settings cannot be
-combined with `amr`.
-
-- `refine`: a `BlockRegion` in root node space selecting static refinement
-  at ratio 3 over that region, or a vector of them selecting a nested
-  hierarchy, region ℓ given in level ℓ−1's node space (level-(ℓ−1) node
-  `g` is level-ℓ node `3(g − 1) + 1`). Default `nothing`. The
-  [`Solver`](@ref) constructor enforces the scope (Cartesian, unstretched,
-  unfolded, nesting).
-- `level_restriction`: `:inject` (default) writes the fine coincident-node
-  values onto the covered region of the parent; `:filter` applies the
-  invertible transfer pair's anti-alias filter first.
-- `level_interpolation_order`: 2, 4, 6, 8 or 10; by default two above the
-  interior order of `deriv`, at most 10, so 8 for [`lele_d1_6`](@ref) and
-  10 for [`lele_d1_8`](@ref) and [`lele_d1_10`](@ref), and the interior
-  order itself under `interface_flux = :closure`. The order of the Lagrange
-  interpolation from the parent that fills a refined level's ghost ring and
-  boundary planes at every stage, and a newly refined region at a regrid.
-  Under the closure rows, order 8 with C6 lowers the error with viscosity,
-  the filter, a multidimensional level or `interface_divergence`; 2 is the
-  only monotone choice. A checkpoint records it with the numerics.
-- `subcycle`: `false` (default) advances every level at the global dt;
-  `true` selects the Berger–Oliger step, three steps of a third of the
-  parent's step on each refined level, recursively, with Hermite boundary
-  forcing. Requires `refine`.
-- `regrid_interval`: `0` (default) keeps the region static; a positive `K`
-  retags the coarse level every `K` steps and moves the region to the
-  buffered bounding box of the tagged cells. Requires `refine` with a single
-  region, or `tile` for more than one refined level.
-- `max_levels` (default: one more than the regions `refine` gives): the
-  number of levels, the root included. With `regrid_interval` and `tile`,
-  every refined level regrids, each tagged on the level above it and nested
-  in its tiles, and a level that `refine` does not give starts with no tiles.
-  A regridded level with children buffers its tags by enough parent nodes
-  for its children to nest. Rebalancing is not available with more than one
-  regridded level.
-- `tag_threshold` (default `0.02`) and `tag_buffer` (default `4`): the
-  tagging threshold on the relative undivided fourth difference of the
-  mixture density, and the coarse-cell buffer added around tagged cells.
-  The tag is the union of this criterion with the three below and the
-  predicate, each evaluated per point over the parent level's state; every
-  one of those is off by default.
-- `tag_sensor_threshold` (default `0`, off): a threshold on the artificial
-  diffusivity number ((μ\\* + β\\*)/ρ + κ\\*/(ρ c_p) + max_k D\\*_k) / (c h),
-  the artificial diffusivity of the last right-hand-side evaluation in units
-  of the acoustic cell diffusivity, read from the coefficient arrays the
-  scheme itself wrote. It is the scheme's own statement that a feature is
-  under-resolved; a captured Sod shock reads about 2 under the default
-  `C_beta`. Zero wherever `art.enabled` is false.
-- `tag_gradient_threshold` (default `0`, off): a threshold on the
-  mass-fraction change per cell, max_k |δY_k| over the centered difference
-  of one cell, for mixing layers. Dimensionless; 0.05 tags an interface
-  resolved over about ten cells.
-- `tag_vorticity_threshold` (default `0`, off): a threshold on the vorticity
-  magnitude |∇ × u| from centered differences, in the run's units of
-  inverse time.
-- `tag_predicate` (default `nothing`): a function `(patch, I) -> Bool` over
-  the parent patch (a [`PatchSolver`](@ref)) and the padded
-  `CartesianIndex` of one interior node; `true` tags the node. It runs on
-  the host, serially, at the regrid cadence, on every rank that holds a
-  piece of the parent, and its coordinates come from
-  [`xcoord`](@ref) through `interior_index`.
-- `untag_ratio` (default `2`) and `tile_lifetime` (default `1`): the
-  derefinement hysteresis. A node above a criterion's threshold divided by
-  `untag_ratio` holds an existing tile (the current box, with `tile = 0`)
-  without calling for a new one, so a tile at the edge of a feature does
-  not flicker as the feature crosses the threshold; `1` disables the hold
-  band. A tile is not dropped before `tile_lifetime` regrid checks have
-  passed since its creation. The solver stores the tag history required by
-  both forms of hysteresis, with identical values on every rank.
-- `tile`: `0` (default) covers each refined region with one patch; a
-  positive edge (in parent nodes, at least 3) covers it with the tiles of a
-  global lattice of that edge instead, abutting tiles sharing their
-  interface plane and coupled as root slabs are. Regridding then moves
-  tiles in and out of the set, a surviving tile never changing its region,
-  and the set may become empty: a check at which no cell tags or holds
-  removes every tile past `tile_lifetime`, and the next tag creates tiles
-  again.
-- `rebalance` (default `0`, off) and `rebalance_persist` (default `2`): a
-  threshold on the ratio of the largest to the mean per-rank busy time over
-  a regrid interval, measured by the run, above which a tiled level is
-  repartitioned on those measurements once the ratio has exceeded it at
-  that many consecutive regrid checks. Requires `tile` and
-  `regrid_interval`. Off, a surviving tile keeps its owner ranks across
-  every regrid.
+The flat keywords of earlier versions are accepted with a deprecation warning
+and folded into their groups: `filt`, `filter_interval`, `filter_cfl` and
+`filter_weighting` into `filter` (as `scheme`, `interval`, `cfl` and
+`weighting`); `interface_flux`, `interface_rhs` and `interface_divergence`
+into `patch_interfaces` (as `flux`, `rhs` and `divergence`); and `dims`,
+`comm`, `backend`, `precision` and `patch_grid` into `execution`. The flat
+refinement keywords (`refine`, `subcycle`, `tile`, `regrid_interval`, the tag
+thresholds and the rest) still select refinement, cannot be combined with
+`amr`, and are written in `AMR(...)` instead; the
+[AMR reference](@ref "Adaptive mesh refinement") lists them.
 """
-Base.@kwdef struct Numerics
+struct Numerics
     n_global::NTuple{3,Int}
-    deriv::AbstractCompactScheme = lele_d1_6()
-    filt::AbstractCompactScheme = compact_filter(0.45)
-    art::ArtificialProperties = ArtificialProperties()
-    cfl::Float64 = 0.5
-    control::StepControl = StepControl()
-    filter_interval::Int = 1
-    filter_cfl::Float64 = 0.35
-    filter_weighting::Symbol = :none
-    polar_truncation::Float64 = 0.0
-    dims::Union{Nothing,NTuple{3,Int}} = nothing
-    n_halo::Int = 4
-    comm::MPI.Comm = MPI.COMM_WORLD
-    stretch::NTuple{3,Union{Nothing,Stretch}} = (nothing, nothing, nothing)
-    patch_grid::NTuple{3,Int} = (1, 1, 1)
-    backend::AbstractBackend = CPUBackend()
-    interface_rhs::Symbol = :extended
-    interface_divergence::Union{Nothing,AbstractCompactScheme} = nothing
-    interface_flux::Symbol = :ghost
-    amr::Union{Nothing,AMR} = nothing
-    refine::Union{Nothing,BlockRegion,Vector{BlockRegion}} = nothing
-    level_restriction::Symbol = :inject
-    level_interpolation_order::Union{Nothing,Int} = nothing
-    subcycle::Bool = false
-    regrid_interval::Int = 0
-    tag_threshold::Float64 = 0.02
-    tag_buffer::Int = 4
-    tag_sensor_threshold::Float64 = 0.0
-    tag_gradient_threshold::Float64 = 0.0
-    tag_vorticity_threshold::Float64 = 0.0
-    tag_predicate::Union{Nothing,Function} = nothing
-    untag_ratio::Float64 = 2.0
-    tile_lifetime::Int = 1
-    tile::Int = 0
-    rebalance::Float64 = 0.0
-    rebalance_persist::Int = 2
-    max_levels::Union{Nothing,Int} = nothing
-    precision::Union{Nothing,Type{<:AbstractFloat}} = nothing
+    deriv::AbstractCompactScheme
+    filter::StateFilter
+    art::ArtificialProperties
+    cfl::Float64
+    control::StepControl
+    patch_interfaces::PatchInterfaces
+    execution::Execution
+    amr::Union{Nothing,AMR}
+    polar_truncation::Float64
+    stretch::NTuple{3,Union{Nothing,Stretch}}
+    n_halo::Int
+    legacy_amr::NamedTuple
 end
 
-const _AMR_LEGACY_FIELDS = (
-    :refine, :level_restriction, :level_interpolation_order, :subcycle,
-    :regrid_interval,
-    :tag_threshold, :tag_buffer, :tag_sensor_threshold, :tag_gradient_threshold,
-    :tag_vorticity_threshold, :tag_predicate, :untag_ratio, :tile_lifetime,
-    :tile, :rebalance, :rebalance_persist, :max_levels,
+# The flat refinement keywords `Numerics` accepted before `AMR`, with their
+# defaults. They still reach the solver unchanged when `amr` is not given.
+const _AMR_LEGACY_DEFAULTS = (
+    refine=nothing, level_restriction=:inject, level_interpolation_order=nothing,
+    subcycle=false, regrid_interval=0, tag_threshold=0.02, tag_buffer=4,
+    tag_sensor_threshold=0.0, tag_gradient_threshold=0.0,
+    tag_vorticity_threshold=0.0, tag_predicate=nothing, untag_ratio=2.0,
+    tile_lifetime=1, tile=0, rebalance=0.0, rebalance_persist=2, max_levels=nothing,
 )
 
-_legacy_amr_keywords(num::Numerics) =
-    NamedTuple{_AMR_LEGACY_FIELDS}(map(k -> getfield(num, k), _AMR_LEGACY_FIELDS))
+# The flat keywords folded into a group: keyword => (group, field).
+const _NUMERICS_FLAT = (
+    filt=(:filter, :scheme), filter_interval=(:filter, :interval),
+    filter_cfl=(:filter, :cfl), filter_weighting=(:filter, :weighting),
+    interface_flux=(:patch_interfaces, :flux),
+    interface_rhs=(:patch_interfaces, :rhs),
+    interface_divergence=(:patch_interfaces, :divergence),
+    dims=(:execution, :dims), comm=(:execution, :comm),
+    backend=(:execution, :backend), precision=(:execution, :precision),
+    patch_grid=(:execution, :patch_grid),
+)
+
+const _NUMERICS_GROUP_TYPES = (filter=:StateFilter, patch_interfaces=:PatchInterfaces,
+                               execution=:Execution)
+
+Numerics(; kw...) = _numerics(_AMR_LEGACY_DEFAULTS; kw...)
+
+function Numerics(base::Numerics; kw...)
+    fields = (:n_global, :deriv, :filter, :art, :cfl, :control, :patch_interfaces,
+              :execution, :amr, :polar_truncation, :stretch, :n_halo)
+    inherited = NamedTuple{fields}(map(f -> getfield(base, f), fields))
+    return _numerics(base.legacy_amr; merge(inherited, values(kw))...)
+end
+
+function _numerics(legacy_amr::NamedTuple; n_global, deriv=lele_d1_6(),
+                   filter=StateFilter(), art=ArtificialProperties(), cfl=0.5,
+                   control=StepControl(), patch_interfaces=PatchInterfaces(),
+                   execution=Execution(), amr=nothing, polar_truncation=0.0,
+                   stretch=(nothing, nothing, nothing), n_halo=4, flat...)
+    execution isa Execution ||
+        throw(ArgumentError("Numerics: execution must be an Execution, got " *
+                            "$(typeof(execution))"))
+    groups = Dict{Symbol,Any}(:filter => _state_filter(filter),
+                              :patch_interfaces => _patch_interfaces(patch_interfaces),
+                              :execution => execution)
+    folded = String[]
+    refinement = Symbol[]
+    for (k, v) in pairs(flat)
+        if haskey(_NUMERICS_FLAT, k)
+            group, field = _NUMERICS_FLAT[k]
+            groups[group] = _with(groups[group], NamedTuple{(field,)}((v,)))
+            type = _NUMERICS_GROUP_TYPES[group]
+            push!(folded, "`$k` is the `$field` of `$group = $type(...)`")
+        elseif haskey(_AMR_LEGACY_DEFAULTS, k)
+            legacy_amr = merge(legacy_amr, NamedTuple{(k,)}((v,)))
+            push!(refinement, k)
+        else
+            throw(ArgumentError("Numerics has no keyword `$k`"))
+        end
+    end
+    isempty(folded) ||
+        Base.depwarn("Numerics: flat keywords are deprecated; " * join(folded, ", ") *
+                     ".", :Numerics; force=true)
+    isempty(refinement) ||
+        Base.depwarn("Numerics: the flat refinement keywords " *
+                     join(("`$k`" for k in refinement), ", ") * " are deprecated; " *
+                     "write them in `amr = AMR(...)`.", :Numerics; force=true)
+    return Numerics(n_global, deriv, groups[:filter], art, cfl, control,
+                    groups[:patch_interfaces], groups[:execution], amr,
+                    polar_truncation, stretch, n_halo, legacy_amr)
+end
+
+_legacy_amr_keywords(num::Numerics) = num.legacy_amr
 
 """
     setup(prob, num) -> (solver, Q)
@@ -966,16 +1061,16 @@ the floors a repair needs would have to come from the state being validated.
 [`initialize!`](@ref) applies no validation of its own: it is rank-local and
 non-collective, and this check is neither.
 
-Collective over `num.comm` (`MPI.COMM_WORLD` by default): the decomposition
+Collective over `num.execution.comm` (`MPI.COMM_WORLD` by default): the decomposition
 is built with `MPI.Cart_create` and its sub-communicators (on more than one
-rank; a single rank borrows `num.comm` itself), so every rank of
+rank; a single rank borrows that communicator itself), so every rank of
 that communicator must call `setup` with the same `prob` and `num`. A split
 communicator lets two independent solvers share one job.
 """
 function setup(prob::Problem, num::Numerics)
     legacy = _legacy_amr_keywords(num)
     if num.amr !== nothing
-        legacy == _legacy_amr_keywords(Numerics(n_global=num.n_global)) ||
+        legacy == _AMR_LEGACY_DEFAULTS ||
             throw(ArgumentError("use amr=AMR(...) or the legacy refinement keywords, " *
                                 "not both"))
         return _setup_amr(prob, num, num.amr)
@@ -1006,18 +1101,18 @@ function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
                eos=prob.eos, transport=prob.transport, art=num.art,
                metric=prob.metric, stretch=num.stretch, sources=prob.sources,
                origin=origin,
-               deriv=num.deriv, filt=num.filt,
+               deriv=num.deriv, filt=num.filter.scheme,
                cfl=num.cfl, control=num.control,
-               filter_interval=num.filter_interval,
-               filter_cfl=num.filter_cfl,
-               filter_weighting=num.filter_weighting,
+               filter_interval=num.filter.interval,
+               filter_cfl=num.filter.cfl,
+               filter_weighting=num.filter.weighting,
                polar_truncation=num.polar_truncation,
-               dims=num.dims, n_halo=num.n_halo, comm=num.comm,
-               patch_grid=num.patch_grid, backend=num.backend,
-               interface_rhs=num.interface_rhs,
-               interface_divergence=num.interface_divergence,
-               interface_flux=num.interface_flux,
-               precision=num.precision, kw...)
+               dims=num.execution.dims, n_halo=num.n_halo, comm=num.execution.comm,
+               patch_grid=num.execution.patch_grid, backend=num.execution.backend,
+               interface_rhs=num.patch_interfaces.rhs,
+               interface_divergence=num.patch_interfaces.divergence,
+               interface_flux=num.patch_interfaces.flux,
+               precision=num.execution.precision, kw...)
     Q = allocate_state(solver)
     if seed_only
         # The temporary fine cover exists only to plan the initial tagging.

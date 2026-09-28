@@ -194,8 +194,6 @@ function slab_setup(eos, N, T_heavy, art)
                             u = (opt.U, 0.0, 0.0), p = opt.p0)
                    end)
     return setup(prob, Numerics(n_global = (N, 1, 1), art = art, cfl = opt.cfl,
-                                filt = compact_filter(0.45), filter_interval = 1,
-                                filter_cfl = 0.35,
                                 control = StepControl(retries = 4)))
 end
 
@@ -462,8 +460,6 @@ function shocked_setup(eos, N, Th)
                    end)
     return setup(prob, Numerics(n_global = (N, 1, 1),
                                 art = ArtificialProperties(), cfl = opt.cfl,
-                                filt = compact_filter(0.45), filter_interval = 1,
-                                filter_cfl = 0.35,
                                 control = StepControl(retries = 4)))
 end
 

@@ -194,8 +194,7 @@ function run_case(label; N=OPTS.N, AR=OPTS.AR, nx=OPTS.nx, tfinal=OPTS.tfinal,
     problem = uniform ? uniform_postshock_problem(; N, AR, nx, seed, seed_mode) :
                         aligned_problem(; N, AR, nx, seed, seed_mode, t0)
     numerics = Numerics(n_global=(nx, N, 1), art=art_channels(channels), cfl=NC_CFL,
-                        deriv=deriv, filt=compact_filter(0.45),
-                        filter_interval=filter_on ? 1 : 0, filter_cfl=0.35,
+                        deriv=deriv, filter=StateFilter(; interval=filter_on ? 1 : 0),
                         control=StepControl(validity=:permissive))
     solver, Q = setup(problem, numerics)
     trace = ModeTrace(ModeSample[mode_sample(solver, Q)], OPTS.sample)

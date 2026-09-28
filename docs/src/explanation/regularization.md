@@ -177,19 +177,19 @@ the default), which keep one pass eighth order along the whole line;
 `closures=:cascade` substitutes the reduced-order cascade of centered
 second-, fourth- and sixth-order filters, which caps a filtered wall at
 second order and is the row set the `:cascade4` derivative closure needs.
-`filter_interval=1` filters every conserved component after every
-completed step. Zero disables state filtering.
+[`StateFilter`](@ref) holds the filter's scheme and its application:
+`interval = 1`, the default, filters every conserved component after every
+completed step, and `Numerics(filter = nothing)` disables state filtering.
 
-`filter_cfl=0.35`, the default, makes the filter's dissipation a rate rather
+`StateFilter(cfl = 0.35)`, the default, makes the filter's dissipation a rate rather
 than a per-application amount. Each directional pass relaxes the state
-toward its filtered image with weight `filter_interval · dt · r_d · √n /
-filter_cfl`, where `r_d` is the largest one-dimensional hyperbolic rate
+toward its filtered image with weight `interval · dt · r_d · √n / cfl`, where `r_d` is the largest one-dimensional hyperbolic rate
 `(|u_d| + c) / h_d` of the direction swept and `n` the number of active
 dimensions, so a run at a lower CFL, a shortened step, a retry, a subcycled
 level or a diffusion-limited step receives the same dissipation per unit
 time, and a fine spacing in one direction leaves the passes along the others
 unchanged. On an isotropic grid at or above the reference CFL a pass is
-applied at full strength. `filter_cfl=0` restores the unrelaxed pass, whose
+applied at full strength. `cfl = 0` restores the unrelaxed pass, whose
 dissipation grows with the number of steps taken over an interval.
 
 Filtering and artificial transport are not interchangeable. The filter acts on

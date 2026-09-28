@@ -265,7 +265,7 @@ end
                       bcs=PER, ic=ic)
     solver, Q = setup(problem, Numerics(n_global=(16, 1, 1),
                                         art=ArtificialProperties(enabled=false),
-                                        filter_interval=0))
+                                        filter=nothing))
     @test solver.transport isa CeaTransport
     @test isfinite(compute_dt(solver, Q))
     compute_rhs!(solver, Q, zero(Q))

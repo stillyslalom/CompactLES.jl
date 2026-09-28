@@ -134,7 +134,7 @@ problem(xlo_bc) = Problem(
 )
 
 numerics = Numerics(n_global = (nx, ny, 1), art = ArtificialProperties(enabled = true),
-                    cfl = 0.4, filter_interval = 1)
+                    cfl = 0.4)
 
 solver, Q = setup(problem(upstream), numerics)
 

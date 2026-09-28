@@ -66,7 +66,7 @@ a positive `tile`. A vector of shapes stays fixed.
 | `rebalance` | `0` | Off at zero; otherwise minimum measured maximum/mean rank-busy-time ratio for tile repartitioning |
 | `rebalance_persist` | `2` | Consecutive imbalanced checks required before repartitioning |
 | `level_restriction` | `:inject` | Coincident fine-node injection; `:filter` anti-aliases before restriction and is serial-only |
-| `level_interpolation_order` | `nothing` | Lagrange order, 2, 4, 6, 8 or 10, of the interpolation that fills fine ghost data and newly refined regions from the parent; `nothing` takes the derivative operator's interior order plus two, at most 10, under the default `interface_flux = :ghost`, and the interior order under `:closure` |
+| `level_interpolation_order` | `nothing` | Lagrange order, 2, 4, 6, 8 or 10, of the interpolation that fills fine ghost data and newly refined regions from the parent; `nothing` takes the derivative operator's interior order plus two, at most 10, under the default `PatchInterfaces(flux = :ghost)`, and the interior order under `:closure` |
 | `subcycle` | `false` | At `true`, each fine level takes three steps per parent step with time-interpolated boundary data |
 
 The density criterion is enabled by default except under a predicate. The
@@ -76,10 +76,9 @@ vorticity threshold uses the run's units of inverse time. The fourth
 difference detects unresolved density changes, while the gradient criterion
 can target a mixing layer with little density contrast. Thresholds determine
 *where* to spend grid points, not a new physical transport model.
-The predicate must return `Bool` at every sampled node. Keep all refinement
-controls inside `AMR(...)` when using `Numerics(amr=...)`; the legacy flat
-`Numerics` refinement keywords remain available for existing decks but cannot
-be combined with it.
+The predicate must return `Bool` at every sampled node. The flat refinement
+keywords that `Numerics` accepted before `AMR` are deprecated and cannot be
+combined with `amr`.
 
 After selecting the layout, setup evaluates the initial-condition function
 directly at each fine node. During a run, a newly refined region is filled
@@ -89,15 +88,15 @@ overlap.
 The same interpolation fills each fine level's ghost data at every stage,
 and `level_interpolation_order` sets its order. An interpolated value of
 order p gives a first derivative of order p − 1 and a second derivative of
-order p − 2. Under the default `interface_flux = :ghost` the interface
+order p − 2. Under the default `PatchInterfaces(flux = :ghost)` the interface
 divergence reads the interpolated values themselves, so the default order is
 two above the derivative operator's, at most 10: 8 for [`lele_d1_6`](@ref)
 and any scheme other than the built-in three, and 10 for [`lele_d1_8`](@ref)
-and [`lele_d1_10`](@ref). Under `interface_flux = :closure` the interface
+and [`lele_d1_10`](@ref). Under `flux = :closure` the interface
 divergence limits accuracy first, and the default matches the operator: 6, 8
 and 10, and 6 for any other scheme. With C6 and the closure rows, an explicit
 order 8 reduces the error in viscous, filtered or multidimensional runs and
-with `interface_divergence`, at no measurable cost in conservation or regrid
+with an interface `divergence` scheme, at no measurable cost in conservation or regrid
 drift. For when to choose the closure rows, see
 [Choose numerics for accuracy per cost](@ref). Orders above 2 are not
 monotone: refilling a step narrower than one parent cell undershoots by 2.3%,

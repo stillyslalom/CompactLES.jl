@@ -27,7 +27,7 @@ mpi_main() do
     )
     numerics = Numerics(n_global=(opt.N, opt.N, opt.N),
                         art=ArtificialProperties(enabled=false),
-                        cfl=0.6, filter_interval=1)
+                        cfl=0.6)
     solver, Q = setup(problem, numerics)
     ke_field = CompactLES.field(solver.decomp)
     function total_kinetic_energy(solver, Q)

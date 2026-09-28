@@ -138,8 +138,8 @@ function build(case, deriv, N, cfl, dims)
                        rho=1.0))
     return setup(prob, Numerics(n_global=(N, N, N), cfl=cfl,
                                 deriv=deriv_scheme(deriv),
-                                filt=compact_filter(0.45),
-                                art=ArtificialProperties(), dims=dims))
+                                execution=Execution(dims=dims),
+                                art=ArtificialProperties()))
 end
 
 # Minimum over repeated calls: the phase timings below compare stencils on a

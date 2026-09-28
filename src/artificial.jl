@@ -51,8 +51,10 @@
                          mu_sensor=:strain, beta_sensor=:strain, reduction=:sum,
                          smoother=:gaussian, detector=:species_d8,
                          species_flux=:partial_density)
+    ArtificialProperties(base::ArtificialProperties; keywords...)
 
-Cook-style artificial-property controls.
+Cook-style artificial-property controls. The second form copies `base` with the
+given keywords replaced, keeping its element type.
 
 # Keywords
 
@@ -124,7 +126,7 @@ Cook-style artificial-property controls.
 - `smoother`: which operator stands in for Cook's Gaussian test filter in
   `smooth!`. `:gaussian` (default) is [`gaussian_filter`](@ref), the
   explicit nine-point stencil, which carries no line solve and no interface
-  collective. `:compact` reuses `Numerics.filt` and was the smoother before this
+  collective. `:compact` reuses the state filter's scheme and was the smoother before this
   option existed; it retains 99% of the amplitude at four points per wavelength
   where the Gaussian retains 19%, which leaves the β\\* field rough enough to
   drop out intermittently at a symmetry cell. The default was changed on that
@@ -180,7 +182,7 @@ Cook-style artificial-property controls.
 
 The coefficients are dimensionless numerical regularization parameters, not
 material properties. Their useful values depend on resolution, flow regime,
-the scheme supplied as `Numerics.filt`, and filter cadence. The displayed
+the state filter's scheme and cadence ([`StateFilter`](@ref)). The displayed
 defaults are documented starting points, not universal values; larger
 values can reduce the explicit diffusive timestep. Each of `C_mu`, `C_beta`,
 `C_kappa`, `C_D`, `C_Y` and `Y_tolerance` must be finite and nonnegative;
@@ -201,6 +203,8 @@ Base.@kwdef struct ArtificialProperties{T}
     detector::Symbol = :species_d8
     species_flux::Symbol = :partial_density
 end
+
+ArtificialProperties(base::ArtificialProperties; kw...) = _with(base, kw)
 
 # The numeric fields of an `ArtificialProperties`, checked at `Solver` construction. A
 # negative coefficient makes an artificial diffusivity negative, which is

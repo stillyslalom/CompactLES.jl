@@ -94,7 +94,8 @@ function _resolve_precision(precision, components::NamedTuple)
     listing = join(("$name is $S" for (name, S) in given), ", ")
     throw(ArgumentError(
         "the solver components carry different floating-point types " *
-        "($listing). Pass precision = Float32 or precision = Float64 to " *
-        "convert every component to one type, or construct each at the same " *
+        "($listing). Pass precision = Float32 or precision = Float64 (in " *
+        "Execution, under Numerics) to convert every component to one type, " *
+        "or construct each at the same " *
         "type"))
 end

@@ -159,7 +159,7 @@ end
     prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)),
                    bcs=(PeriodicBC(), PeriodicBC(), PeriodicBC()),
                    ic=(x, y, z) -> Prim(p=1.0, rho=1.0 + 0.1sin(2π * x)))
-    num = Numerics(n_global=(96, 1, 1), filter_interval=0,
+    num = Numerics(n_global=(96, 1, 1), filter=nothing,
                    art=ArtificialProperties(enabled=false),
                    amr=AMR(initial=(x, y, z) -> abs(x - 0.5) < 0.05))
     solver, states = setup(prob, num)
@@ -249,7 +249,7 @@ end
     per = PeriodicBC()
     prob = Problem(domain=((0.0, 1.0), (0.0, 1.0), (0.0, 1.0)), bcs=(per, per, per),
                    ic=(x, y, z) -> Prim(p=1.0, rho=1.0 + 0.1sin(2π * x)))
-    base = (n_global=(96, 1, 1), filter_interval=0, art=ArtificialProperties(enabled=false))
+    base = (n_global=(96, 1, 1), filter=nothing, art=ArtificialProperties(enabled=false))
     nested = AMR(initial=[Box((0.3, 0, 0), (0.7, 1, 1)), Box((0.45, 0, 0), (0.55, 1, 1))])
     solver, states = setup(prob, Numerics(; base..., amr=nested))
     @test nlevels(solver) == 3
@@ -304,7 +304,8 @@ end
     function column(ic; filter_interval=0, nmax=2000)
         prob = Problem(eos=eos, domain=domain, bcs=(walls, PeriodicBC(), PeriodicBC()),
                        ic=ic, sources=(force,))
-        s, q = setup(prob, Numerics(n_global=(n, 1, 1), filter_interval=filter_interval,
+        s, q = setup(prob, Numerics(n_global=(n, 1, 1),
+                                    filter=StateFilter(; interval=filter_interval),
                                     art=ArtificialProperties(enabled=false)))
         run!(s, q; tfinal=1e9, nmax=nmax)
         _, u = line_profile(s, q, :u)
@@ -332,7 +333,7 @@ end
                    ic=Hydrostatic(Layers(light, Slab(2, lo=0.5) => heavy);
                                   p_ref=10.0, at=0.0),
                    sources=(ConstantBodyForce((0.0, -1.0, 0.0)),))
-    plane, Qp = setup(prob, Numerics(n_global=(12, 48, 1), filter_interval=0,
+    plane, Qp = setup(prob, Numerics(n_global=(12, 48, 1), filter=nothing,
                                      art=ArtificialProperties(enabled=false)))
     run!(plane, Qp; tfinal=1e9, nmax=200)
     m = maximum(I -> max(abs(Qp[I, 3]), abs(Qp[I, 4])),

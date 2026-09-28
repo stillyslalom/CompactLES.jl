@@ -138,9 +138,9 @@ function run_case(case::Symbol, N; art=art_at(),
     h = 1.0 / N
     prob = Problem(eos=eos, transport=ConstantTransport(mu0=0.0),
                    domain=((0.0, 1.0), (0.0, h), (0.0, h)), bcs=per3, ic=ic)
-    solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl, filt=filt,
-                                     filter_interval=filter_interval,
-                                     filter_cfl=filter_cfl))
+    solver, Q = setup(prob, Numerics(n_global=(N, 1, 1), art=art, cfl=cfl,
+                                     filter=StateFilter(filt; interval=filter_interval,
+                                                        cfl=filter_cfl)))
     peak = zeros(3)
     wsum = Ref(0.0); nw = Ref(0)
     nx = solver.decomp.n_local[1]

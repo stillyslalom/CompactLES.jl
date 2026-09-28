@@ -42,12 +42,76 @@ refined region; give it explicitly to combine the two.
 `ArtificialProperties(enabled = true)`.
 
 Regions use root node indices; the ratio between successive levels is three.
-The other keywords match the established refinement controls of [`Numerics`](@ref).
-`max_levels` sets the depth of a regridded, tiled hierarchy, the root
-included: each refined level is tagged on the level above it, and the
-levels start from the tags of the initial state. Without `tile`, one refined
-level regrids. An explicit vector of nested regions is static unless
-`regrid_interval` and `tile` are given, when it is the initial layout.
+An explicit vector of nested regions is static unless `regrid_interval` and
+`tile` are given, when it is the initial layout. `AMR(base; keywords...)`
+copies `base` with the given keywords replaced.
+
+# Keywords
+
+- `level_restriction`: `:inject` (default) writes the fine coincident-node
+  values onto the covered region of the parent; `:filter` applies the
+  invertible transfer pair's anti-alias filter first.
+- `level_interpolation_order`: 2, 4, 6, 8 or 10; by default two above the
+  interior order of `deriv`, at most 10, so 8 for [`lele_d1_6`](@ref) and
+  10 for [`lele_d1_8`](@ref) and [`lele_d1_10`](@ref), and the interior
+  order itself under `PatchInterfaces(flux = :closure)`. The order of the
+  Lagrange interpolation from the parent that fills a refined level's ghost
+  ring and boundary planes at every stage, and a newly refined region at a
+  regrid. Under the closure rows, order 8 with C6 lowers the error with
+  viscosity, the filter, a multidimensional level or an interface divergence
+  scheme; 2 is the only monotone choice. A checkpoint records it with the
+  numerics.
+- `subcycle`: `false` (default) advances every level at the global dt;
+  `true` selects the Berger–Oliger step, three steps of a third of the
+  parent's step on each refined level, recursively, with Hermite boundary
+  forcing.
+- `regrid_interval`: `0` keeps the layout static; a positive `K` retags the
+  parent level every `K` steps. The default is described above.
+- `max_levels` (default: one more than the regions `initial` gives): the
+  number of levels, the root included. With `regrid_interval` and `tile`,
+  every refined level regrids, each tagged on the level above it and nested
+  in its tiles, and a level that `initial` does not give starts with no
+  tiles. A regridded level with children buffers its tags by enough parent
+  nodes for its children to nest. Rebalancing is not available with more
+  than one regridded level.
+- `tag_threshold` and `tag_buffer` (default `4`): the tagging threshold on
+  the relative undivided fourth difference of the mixture density, and the
+  coarse-cell buffer added around tagged cells. The tag is the union of this
+  criterion with the three below and the predicate, each evaluated per point
+  over the parent level's state; every one of those is off by default.
+- `tag_sensor_threshold` (default `0`, off): a threshold on the artificial
+  diffusivity number ((μ\\* + β\\*)/ρ + κ\\*/(ρ c_p) + max_k D\\*_k) / (c h),
+  the artificial diffusivity of the last right-hand-side evaluation in units
+  of the acoustic cell diffusivity, read from the coefficient arrays the
+  scheme itself wrote. It measures where the scheme is regularizing an
+  under-resolved feature; a captured Sod shock reads about 2 under the
+  default `C_beta`.
+- `tag_gradient_threshold` (default `0`, off): a threshold on the
+  mass-fraction change per cell, max_k |δY_k| over the centered difference
+  of one cell, for mixing layers. Dimensionless; 0.05 tags an interface
+  resolved over about ten cells.
+- `tag_vorticity_threshold` (default `0`, off): a threshold on the vorticity
+  magnitude |∇ × u| from centered differences, in the run's units of
+  inverse time.
+- `untag_ratio` (default `2`) and `tile_lifetime` (default `1`): the
+  derefinement hysteresis. A node above a criterion's threshold divided by
+  `untag_ratio` holds an existing tile (the current box, with `tile = 0`)
+  without calling for a new one, so a tile at the edge of a feature does
+  not flicker as the feature crosses the threshold; `1` disables the hold
+  band. A tile is not dropped before `tile_lifetime` regrid checks have
+  passed since its creation.
+- `tile`: `0` (default) covers each refined region with one patch; a
+  positive edge (in parent nodes, at least 3) covers it with the tiles of a
+  global lattice of that edge instead, abutting tiles sharing their
+  interface plane and coupled as root slabs are. Regridding then moves
+  tiles in and out of the set, a surviving tile never changing its region,
+  and the set may become empty.
+- `rebalance` (default `0`, off) and `rebalance_persist` (default `2`): a
+  threshold on the ratio of the largest to the mean per-rank busy time over
+  a regrid interval, above which a tiled level is repartitioned on those
+  measurements once the ratio has exceeded it at that many consecutive
+  regrid checks. Requires `tile` and regridding. Off, a surviving tile keeps
+  its owner ranks across every regrid.
 """
 Base.@kwdef struct AMR
     initial::Any = :sensor
@@ -67,6 +131,8 @@ Base.@kwdef struct AMR
     rebalance_persist::Int = 2
     max_levels::Union{Nothing,Int} = nothing
 end
+
+AMR(base::AMR; kw...) = _with(base, kw)
 
 # A predicate of position alone describes a fixed region; it is called with the
 # time dropped.
@@ -124,15 +190,15 @@ function _resolve_amr(amr::AMR, num)
     interval = amr.regrid_interval !== nothing ? amr.regrid_interval :
                _amr_moving(amr.initial) ?
                max(1, floor(Int, amr.tag_buffer / (2 * num.cfl))) : 0
-    fields = (f => getfield(amr, f) for f in fieldnames(AMR))
-    return AMR(; fields..., regrid_interval=interval)
+    return AMR(amr; regrid_interval=interval)
 end
 
 # The scope of refinement, checked before anything is built, in the terms of
 # the `AMR` a user wrote rather than of the solver keywords it becomes.
 function _check_amr_scope(prob, num)
     fail(msg) = throw(ArgumentError("AMR: " * msg))
-    num.patch_grid == (1, 1, 1) || fail("cannot be combined with a patch_grid")
+    num.execution.patch_grid == (1, 1, 1) ||
+        fail("cannot be combined with a patch_grid")
     prob.metric isa CartesianMetric ||
         fail("requires CartesianMetric; cylindrical and spherical runs cannot " *
              "refine yet")
@@ -199,7 +265,7 @@ function _shape_regions(shapes, prob, num)
             end
             offset[d], extent[d] = l, u - l + 1
         end
-        clipped && MPI.Comm_rank(num.comm) == 0 &&
+        clipped && MPI.Comm_rank(num.execution.comm) == 0 &&
             @warn "AMR: the level-$ℓ shape reaches within $margin level-$(ℓ - 1) " *
                   "nodes of " * (ℓ == 1 ? "the domain boundary" : "its parent's edge") *
                   ", which a refined level cannot; it is refined only up to that margin."
@@ -248,11 +314,9 @@ function _setup_amr(prob, num, amr::AMR)
             active = ntuple(d -> num.n_global[d] > 1, 3)
             shape = only(shapes)
             inside = (x, y, z) -> signed_distance(shape, (x, y, z), active) <= 0
-            fields = (f => getfield(amr, f) for f in fieldnames(AMR))
-            amr = AMR(; fields..., initial=inside)
+            amr = AMR(amr; initial=inside)
         else
-            fields = (f => getfield(amr, f) for f in fieldnames(AMR))
-            amr = AMR(; fields..., initial=_shape_regions(shapes, prob, num))
+            amr = AMR(amr; initial=_shape_regions(shapes, prob, num))
         end
     end
     amr.initial === :sensor ||

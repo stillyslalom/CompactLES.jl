@@ -36,11 +36,11 @@ ranks return a nonzero status without printing one full stacktrace per rank.
 
 ## Choose a process grid
 
-With `Numerics(dims = nothing)`, MPI distributes ranks across resolved
-dimensions. Supply `(p1, p2, p3)` to control it:
+With `Execution(dims = nothing)`, the default, MPI distributes ranks across
+resolved dimensions. Supply `(p1, p2, p3)` to control it:
 
 ```julia
-Numerics(n_global = (512, 128, 1), dims = (4, 2, 1))
+Numerics(n_global = (512, 128, 1), execution = Execution(dims = (4, 2, 1)))
 ```
 
 The following constraints are enforced:
@@ -152,8 +152,7 @@ explicit `BlockRegion` gives a fixed node-space location. A child has three
 times the parent resolution, and `subcycle=true` gives it three steps per root
 step. Add `regrid_interval` for a moving feature and a positive `tile` edge
 when several fine patches are useful. The [AMR reference](@ref "Adaptive mesh refinement")
-explains tags, tiling, restrictions, and restarts. Legacy flat refinement
-keywords remain usable in `Numerics`, but cannot be combined with `amr`.
+explains tags, tiling, restrictions, and restarts.
 
 AMR currently requires Cartesian, unstretched, unfolded coordinates. It does
 not reflux coarse--fine fluxes, so treat composite mass, momentum, or energy
@@ -164,7 +163,7 @@ Load the GPU package first and wrap its backend:
 ```julia
 using CUDA
 numerics = Numerics(n_global = (64, 64, 64),
-                    backend = DeviceBackend(CUDABackend()))
+                    execution = Execution(backend = DeviceBackend(CUDABackend())))
 ```
 
 Keep the first device run small, use Float32 only after comparing a CPU result,

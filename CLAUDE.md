@@ -329,6 +329,10 @@ Names are spelled out in full. Current vocabulary:
 - `inv_J`, `area_d`, `inv_h`, `inv_r`, `cot_over_r`, `coord_shift`, `flux`
 - `filter_interval` (cadence in steps) vs `filter_cfl` (the reference CFL at
   which a filter pass is full strength; 0 disables the relaxation), `filter_weight`
+- `StateFilter`, `PatchInterfaces`, `Execution` (the `Numerics` groups; the
+  solver keeps the flat names, so `StateFilter.interval` is `filter_interval`
+  and `PatchInterfaces.flux` is `interface_flux`), `_with` (the copy-with-changes
+  constructor behind `Numerics(base; ...)` and its siblings)
 - `deriv_plans`, `filter_plans`, `line_solver`, `plan` (a DirPlan) vs `plane`
   (a wall plane), `fold`, `pair`, `symplane` (the per-dimension pair of
   `SymmetryPlaneBC` flags the constructor folds on; a self-paired fold with

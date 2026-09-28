@@ -103,6 +103,7 @@ export FieldWriter
 export BlockRegion
 export save_checkpoint_hdf5, load_checkpoint_hdf5!, save_hdf5
 export SwitchableBC, switch!, switched, CompositeBC
+export StateFilter, PatchInterfaces, Execution
 export Prim, Problem, Numerics, AMR, setup, initialize!, conserved_from_prim, tanh_blend
 export EOS, IdealSpecies, IdealMixture, nspecies, ConstantTransport
 export AbstractTransport, BinaryDiffusion, BinaryDiffusionPolynomial, binary_diffusivity

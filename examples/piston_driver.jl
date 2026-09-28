@@ -26,7 +26,8 @@ mpi_main() do
         ic=(x, y, z) -> Prim(u=(0.0, 0.0, 0.0), p=p0, rho=rho0),
     )
     numerics = Numerics(n_global=(opt.nx, 1, 1), art=ArtificialProperties(enabled=true),
-                        cfl=0.5, dims=(MPI.Comm_size(MPI.COMM_WORLD), 1, 1))
+                        cfl=0.5,
+                        execution=Execution(dims=(MPI.Comm_size(MPI.COMM_WORLD), 1, 1)))
     solver, Q = setup(problem, numerics)
     run!(solver, Q; tfinal=opt.tfinal, nmax=opt.nmax,
          callback=ProgressLog(every=opt.every, tfinal=opt.tfinal))

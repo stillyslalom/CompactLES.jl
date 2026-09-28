@@ -101,8 +101,10 @@ const PLANCK_TIME = 5.391247e-44
 
 """
     StepControl(; kwargs...)
+    StepControl(base::StepControl; kwargs...)
 
-Policy for how [`run!`](@ref) chooses, floors, and recovers a timestep.
+Policy for how [`run!`](@ref) chooses, floors, and recovers a timestep. The
+second form copies `base` with the given keywords replaced.
 
 ## Prediction
 
@@ -376,6 +378,8 @@ Base.@kwdef struct StepControl
             validity, species_band, validity_interval, substep_cfl)
     end
 end
+
+StepControl(base::StepControl; kw...) = _with(base, kw)
 
 """
 Running count of what the positivity failsafe has seen and repaired, carried on

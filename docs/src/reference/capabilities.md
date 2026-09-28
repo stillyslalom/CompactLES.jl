@@ -24,9 +24,9 @@ caveats.
 | [`IdealMixture`](@ref), any species count | yes | yes | yes | yes |
 | [`StiffenedGas`](@ref), one species | yes | yes | yes | yes |
 | [`Nasa9Mixture`](@ref), any species count | yes | yes | yes | yes |
-| a user subtype of [`EOS`](@ref) | yes | see below | constructed at the run's type | yes; a refined level with molecular transport takes `interface_flux = :closure` |
+| a user subtype of [`EOS`](@ref) | yes | see below | constructed at the run's type | yes; a refined level with molecular transport takes `patch_interfaces = :closure` |
 
-`precision = Float32` in [`Numerics`](@ref) converts the built-in equations of
+`Execution(precision = Float32)` in [`Numerics`](@ref) converts the built-in equations of
 state, [`ConstantTransport`](@ref), [`CeaTransport`](@ref), the artificial
 properties and the compact schemes. Any other component that carries a
 floating-point type must be constructed at the run's type; one that is not
@@ -44,9 +44,9 @@ first kernel launch.
 | Geometry | device, Float32 | `patch_grid` | refinement | `polar_truncation` |
 |:--|:--|:--|:--|:--|
 | Cartesian, uniform | yes | yes | yes | no |
-| Cartesian, stretched ([`Stretch`](@ref)) | yes | if the patched dimension is uniform, with `interface_flux = :closure` | no | no |
+| Cartesian, stretched ([`Stretch`](@ref)) | yes | if the patched dimension is uniform, with `patch_interfaces = :closure` | no | no |
 | Cylindrical, [`AxisBC`](@ref) at r = 0 | yes | no | no | θ resolved over 2π, uniform r, host only |
-| Cylindrical, annulus (no axis) | yes | with `interface_flux = :closure` | no | θ resolved over 2π, uniform r, host only |
+| Cylindrical, annulus (no axis) | yes | with `patch_interfaces = :closure` | no | θ resolved over 2π, uniform r, host only |
 | Spherical, [`OriginBC`](@ref) and/or [`PoleBC`](@ref) | yes | no | no | no |
 | [`SymmetryPlaneBC`](@ref) on a Cartesian face or a cylindrical z face | yes | no | no | as for the metric |
 
@@ -71,7 +71,7 @@ such as `(0, π)` places it on the pole.
 | Layout | selected by | device | restrictions |
 |:--|:--|:--|:--|
 | one patch | default | yes | none |
-| same-level slabs | `patch_grid` | yes | uniform Cartesian, or a cylindrical annulus or stretched grid under `interface_flux = :closure`, without folds or symmetry planes; tridiagonal filter; `:delta4` or `:species_d8` detector; no explicit `dims`; no refinement; no checkpoint |
+| same-level slabs | `patch_grid` | yes | uniform Cartesian, or a cylindrical annulus or stretched grid under `patch_interfaces = :closure`, without folds or symmetry planes; tridiagonal filter; `:delta4` or `:species_d8` detector; no explicit `dims`; no refinement; no checkpoint |
 | static nested levels | `AMR(initial = [shape, ...])` or a `BlockRegion` vector, `regrid_interval = 0` | yes | Cartesian, uniform, no folds or symmetry planes |
 | one regridded box | `AMR(initial = ...)` with `regrid_interval > 0`, `tile = 0` | yes | as for static levels |
 | regridded tiles, two levels | as above with `tile ≥ 3` | yes | as for static levels |
@@ -80,10 +80,10 @@ such as `(0, π)` places it on the pole.
 
 `level_restriction = :filter` is accepted on the host backend of a serial
 run only; the default `:inject` has no restriction. At a patch or level
-interface the default `interface_flux = :ghost` requires
-`interface_rhs = :extended` and a uniform Cartesian grid, and with molecular
+interface the default `PatchInterfaces(flux = :ghost)` requires
+`rhs = :extended` and a uniform Cartesian grid, and with molecular
 transport at a refined level one of the three built-in equations of state;
-every other interface configuration requires `interface_flux = :closure`,
+every other interface configuration requires `patch_interfaces = :closure`,
 passed explicitly, and setup raises an `ArgumentError` rather than switching
 to it. Without an interface the setting has no effect. `rebalance` requires a
 tiled level with regridding and at most two levels.

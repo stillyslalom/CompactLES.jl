@@ -49,7 +49,7 @@ problem = Problem(
 numerics = Numerics(
     n_global = (nx, 1, 1),
     art = ArtificialProperties(enabled = false),
-    filter_interval = 0,
+    filter = nothing,
 )
 
 solver, Q = setup(problem, numerics)

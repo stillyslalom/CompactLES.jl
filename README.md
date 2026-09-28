@@ -108,7 +108,7 @@ If `mpiexec` is not on `PATH`, get the launcher `MPI.jl` is configured against
 with `julia --project=. -e 'using MPI; print(MPI.mpiexec(f -> f))'`.
 
 Each rank's local extent in a decomposed dimension must be at least 9 (the filter
-closure plus stencil width), so choose `dims=` in `Numerics` to keep thin
+closure plus stencil width), so choose `Execution(dims=...)` in `Numerics` to keep thin
 dimensions from splitting too finely.
 
 ## Specifying a problem
@@ -139,7 +139,7 @@ num = Numerics(
     deriv    = lele_d1_6(),                  # or lele_d1_8(), lele_d1_10(), or a custom scheme
     cfl      = 0.5,
     control  = StepControl(retries=4),       # roll back and lower cfl on failure
-    dims     = nothing)                      # process grid; nothing → auto
+    execution = Execution(dims = nothing))   # process grid; nothing → auto
 ```
 
 The thermodynamic constructors accept either an explicit `R` and `gamma` or
@@ -205,12 +205,13 @@ vector `setup` returns: `line_profile(solver, states, :rho)`,
 See the [AMR reference](docs/src/reference/amr.md) for tags, tiling, and
 transfer choices.
 
-`backend = DeviceBackend(ka)` moves the whole solver onto a GPU,
+`Execution(backend = DeviceBackend(ka))` moves the whole solver onto a GPU,
 where `ka` is `CUDABackend()` for Nvidia or `ROCBackend()` for AMD.
 
 ```julia
 using AMDGPU  # or CUDA
-num = Numerics(n_global = (64, 64, 64), backend = DeviceBackend(ROCBackend()))
+num = Numerics(n_global = (64, 64, 64),
+               execution = Execution(backend = DeviceBackend(ROCBackend())))
 ```
 
 Refinement requires unstretched Cartesian coordinates without folds. A
@@ -285,7 +286,7 @@ and validated against analytic references. The
 of equation of state, backend, precision, geometry, refinement layout and
 checkpoint are listed with the setup error each rejected one raises.
 
-- Float64 by default; a uniform Float32 mode (`Numerics(precision = Float32)`,
+- Float64 by default; a uniform Float32 mode (`Execution(precision = Float32)`,
   CPU and GPU) reduces state-array storage, with precision-dependent
   conservation error. See
   [Precision and step size](docs/src/how-to/numerics-choices.md#precision-and-step-size).

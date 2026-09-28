@@ -277,7 +277,7 @@ One accepted outer-loop iteration occurs in this order:
    time;
 3. perform all five Runge--Kutta stages;
 4. advance the simulation clock and step counter;
-5. filter every conserved component when `filter_interval` is due; and
+5. filter every conserved component when the state filter's `interval` is due; and
 6. invoke callbacks on the completed, optionally filtered state.
 
 Artificial coefficients in the timestep estimate lag by one completed RHS

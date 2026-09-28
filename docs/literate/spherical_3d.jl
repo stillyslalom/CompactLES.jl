@@ -61,7 +61,6 @@ numerics = Numerics(
     n_global = (nr, ntheta, nphi),
     art = ArtificialProperties(enabled = true),
     cfl = 0.3,
-    filter_interval = 1,
 )
 
 solver, Q = setup(problem, numerics)

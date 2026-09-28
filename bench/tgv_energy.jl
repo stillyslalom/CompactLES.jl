@@ -591,15 +591,17 @@ function taylor_green(N, art_on; tfinal=10.0, Re=1600.0, C_mu=0.002,
         solver, Q = setup(
             prob,
             Numerics(n_global=(N, N, N), cfl=cfl,
-                     filter_interval=filter_interval, filter_cfl=filter_cfl,
-                     deriv=lele_d1_6(T), filt=compact_filter(T(alphaf), T),
+                     filter=StateFilter(compact_filter(T(alphaf), T);
+                                        interval=filter_interval, cfl=filter_cfl),
+                     deriv=lele_d1_6(T),
                      art=ArtificialProperties{T}(enabled=art_on, C_mu=T(C_mu),
                                                  smoother=smoother,
                                                  mu_sensor=mu_sensor,
                                                  beta_sensor=beta_sensor,
                                                  reduction=reduction),
-                     backend=backend, refine=region, tile=tile,
-                     subcycle=subcycle))
+                     execution=Execution(backend=backend),
+                     amr=region === nothing ? nothing :
+                         AMR(initial=region, tile=tile, subcycle=subcycle)))
     end
     workspace = Workspace(Q)
     footprint = (solver=Base.summarysize(solver), state=Base.summarysize(Q),

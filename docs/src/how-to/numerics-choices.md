@@ -28,8 +28,8 @@ measurements:
 | wall-bounded evolution, C6 `:brady_livescu` | 6 | 5.73 |
 | cylindrical axis, spherical origin (folds) | 3 | 3.76 / 2.97 |
 | patch or level interface, C6, default ghost fluxes (level interpolation order 8), Float64 | 6 | 6.79 / 6.01 |
-| patch or level interface, `interface_flux = :closure` | 3 to 4 | 3.31 / 3.62 |
-| patch or level interface, `:closure` with C6 `interface_divergence` `:brady_livescu`, Float64 | 5 to 6 | 5.8 to 7.0 / 5.1 to 6.0 |
+| patch or level interface, `patch_interfaces = :closure` | 3 to 4 | 3.31 / 3.62 |
+| patch or level interface, `:closure` with a C6 `:brady_livescu` interface `divergence`, Float64 | 5 to 6 | 5.8 to 7.0 / 5.1 to 6.0 |
 
 With default wall closures, the closed-line C8 and C10 studies have the same
 wall and maximum-norm errors as C6, to the printed digits. Their benefit is
@@ -113,7 +113,12 @@ and is not supported as a wall configuration.
 
 ## Patch and level interfaces
 
-By default (`interface_flux = :ghost`) a patch or level interface uses no
+[`PatchInterfaces`](@ref), passed as `Numerics(patch_interfaces = ...)`,
+holds the settings of this section: `flux`, `rhs` and `divergence`. They
+apply where two patches or two refinement levels meet, not at a material
+interface between two fluids.
+
+By default (`flux = :ghost`) a patch or level interface uses no
 closure rows for the inviscid and molecular parts of the flux divergence. The
 inviscid flux is evaluated on the interface ghost layers and differentiated
 through the interface with the interior stencil. The viscous, conductive and
@@ -125,11 +130,11 @@ interpolated from the parent and the molecular flux there is evaluated from
 the gradients of the interpolated state, so the level interpolation order sets
 the error; its default is two above the derivative operator's order, which
 gives sixth order with C6. The artificial fluxes and the wall corrections keep
-the closure rows, which `interface_divergence` selects. A discontinuity placed
+the closure rows, which `divergence` selects. A discontinuity placed
 on a shared patch plane runs under the ghost fluxes and fails under the
 closure rows. Without a patch or level interface the setting has no effect.
 
-Choose `interface_flux = :closure` for:
+Choose `flux = :closure`, written `patch_interfaces = :closure`, for:
 
 - shock-dominated runs, where the interface order does not show in the
   error: a shock crossing a patch or level interface reaches the same minimum
@@ -138,7 +143,7 @@ Choose `interface_flux = :closure` for:
   either choice, so the ghost fluxes add cost without lowering the error;
 - configurations the ghost fluxes do not support, which setup rejects with
   an `ArgumentError` naming `interface_flux = :closure`: a patch interface on a
-  cylindrical, spherical or stretched grid, `interface_rhs = :onesided`, and a
+  cylindrical, spherical or stretched grid, `rhs = :onesided`, and a
   user equation of state at a refined level with molecular transport;
 - runs where the step cost matters more than the interface error. The ghost
   fluxes add 11 to 16% to the step without molecular transport and 17 to 50%
@@ -149,16 +154,17 @@ On a curvilinear grid the ghost fluxes would need ghost face areas and a
 matching discrete geometric conservation law at the interface; neither is
 implemented.
 
-Under `interface_flux = :closure`, patch and level interfaces take the
+Under `flux = :closure`, patch and level interfaces take the
 cascade rows regardless of the selected wall closures. An interface imposes
 no boundary condition, and the cascade rows have smaller truncation-error
 constants there.
 
-The `interface_divergence` keyword replaces the flux divergence's rows at
+The `divergence` field replaces the flux divergence's rows at
 interface ends only, leaving walls and the gradient rows unchanged; under the
 ghost fluxes it affects only the artificial fluxes and the wall corrections.
 Pass a scheme with the same interior coefficients and element type as
-`deriv`, such as `interface_divergence = lele_d1_6(closures = :brady_livescu)`
+`deriv`, such as
+`PatchInterfaces(divergence = lele_d1_6(closures = :brady_livescu))`
 beside the default `deriv`; any other scheme is rejected at setup. Under the
 closure rows, on smooth Float64 flows, the Brady–Livescu rows lower the
 interface error by one to three orders of magnitude and raise the measured
@@ -168,7 +174,7 @@ cost nothing per step. They are experimental, and are not recommended for:
 - Float32 runs, whose interface error floor they do not lower;
 - shocks crossing same-level patch planes, where they halve the minimum
   pressure behind the shock;
-- runs that use `interface_rhs = :onesided` to survive a discontinuity on a
+- runs that use `rhs = :onesided` to survive a discontinuity on a
   shared plane, which then fail within two steps.
 
 The `:cascade4` rows are unstable between a wall and an interface; do not
@@ -202,12 +208,12 @@ By default, the compact filter removes grid-scale content from the conserved
 state after every step. Artificial properties regularize shocks and
 interfaces. They do not replace the filter: turbulent runs fail without
 filtering even when artificial properties are enabled. Use
-`filter_interval = 0` for diagnostics rather than to reduce production cost.
+`filter = nothing` for diagnostics rather than to reduce production cost.
 
 | Setting | Default | Alternative and when to use it |
 |:--|:--|:--|
 | filter closure rows | `:onesided`, eighth order along the whole closed line | `:cascade` (second order along the line): only with `:cascade4`, or to damp the cascade rows' wall mode |
-| `filter_cfl` | 0.35, the reference CFL at which a pass is full strength | 0 applies every pass at full strength; dissipation per unit time then depends on the timestep |
+| `StateFilter` `cfl` | 0.35, the reference CFL at which a pass is full strength | 0 applies every pass at full strength; dissipation per unit time then depends on the timestep |
 | `smoother` | `:gaussian`, explicit | `:compact`, one pass of the state filter per sensor: a quarter of the right-hand side in the multicomponent case, and one sweep per species |
 | `beta_sensor` | `:strain` | `:dilatation` on an inviscid wall or wherever the strain cusp costs order |
 | `detector` | `:species_d8`: `:d8` on the mass and mole fractions, `:delta4` elsewhere | `:d8` on every field separates shocks from smooth flow only with a cusp-free sensor field, and lowers the spherical-origin CFL ceiling to 0.25; `:delta4` with `C_D = 0.1` is the earlier default and Cook's form of the Fickian channel |

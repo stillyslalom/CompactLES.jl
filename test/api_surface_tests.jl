@@ -20,11 +20,11 @@ const EXPECTED_EXPORTS = Set(Symbol.(split("""
 AMR AbstractTransport ArtificialProperties AtTime AxisBC BinaryDiffusion
 BinaryDiffusionPolynomial BlockRegion BoundaryCondition Callback CartesianMetric
 CeaTransport Cells CompositeBC ConstantBodyForce ConstantTransport CylindricalMetric
-DeviceBackend DirichletBC EOS EveryStep EveryTime ExtrapolationBC FieldWriter
+DeviceBackend DirichletBC EOS EveryStep EveryTime Execution ExtrapolationBC FieldWriter
 Hydrostatic IdealMixture IdealSpecies MPI Multimode NSCBCInflowBC NSCBCOutflowBC
-Nasa9Interval Nasa9Mixture Nasa9Species NoSlipWallBC Numerics OriginBC PeriodicBC
-PoleBC Prim Problem ProgressLog Ramp SlipWallBC Solver SolverFailure SphericalMetric
-StateGuard StepControl StiffenedGas Stretch SwitchableBC SymmetryPlaneBC Trigger
+Nasa9Interval Nasa9Mixture Nasa9Species NoSlipWallBC Numerics OriginBC PatchInterfaces
+PeriodicBC PoleBC Prim Problem ProgressLog Ramp SlipWallBC Solver SolverFailure
+SphericalMetric StateFilter StateGuard StepControl StiffenedGas Stretch SwitchableBC SymmetryPlaneBC Trigger
 TurbulentInflow WhenState Workspace
 allocate_state binary_diffusivity boundary_plane cartesian_coordinates cartesian_slice
 compact_filter compute_dt conserved_from_prim dissipation_rate domain_volume

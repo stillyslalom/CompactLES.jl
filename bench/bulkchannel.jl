@@ -319,9 +319,7 @@ function slab_case(channel, ratio)
                        Prim(Y = (1 - Yh, Yh), rho = ρ, u = u0, p = 1.0)
                    end)
     num = Numerics(n_global = (N, N, N), art = art_for(channel, 0.01, 100.0),
-                   cfl = opt.cfl, filt = compact_filter(0.45),
-                   filter_interval = 1, filter_cfl = 0.35,
-                   control = StepControl(retries = 4, validity = :permissive))
+                   cfl = opt.cfl, control = StepControl(retries = 4, validity = :permissive))
     solver, Q = setup(prob, num)
     lo, hi = Ref(Inf), Ref(-Inf)
     steady_wall, steady_steps = 0.0, 0
@@ -402,8 +400,7 @@ function bubble_case(channel, ratio; nx = opt.nx, ny = opt.ny, C_D = 0.01,
     prob = bubble_problem(ratio, nx, opt.Ly)
     control = StepControl(retries = 4, validity = :permissive)
     num = Numerics(n_global = (nx, ny, nz), art = art_for(channel, C_D, C_Y),
-                   cfl = opt.cfl, filt = compact_filter(0.45),
-                   filter_interval = 1, filter_cfl = 0.35, control = control)
+                   cfl = opt.cfl, control = control)
     solver, Q = setup(prob, num)
     # The two comparison solvers carry the same problem, grid and process grid,
     # so their decompositions and boundary conditions match the live one point
@@ -415,9 +412,7 @@ function bubble_case(channel, ratio; nx = opt.nx, ny = opt.ny, C_D = 0.01,
     off = Qoff = alloff = Qalloff = dQ = dQoff = dQalloff = nothing
     if budget
         numerics(art) = Numerics(n_global = (nx, ny, nz), art = art,
-                                 cfl = opt.cfl, filt = compact_filter(0.45),
-                                 filter_interval = 1, filter_cfl = 0.35,
-                                 control = control)
+                                 cfl = opt.cfl, control = control)
         off, Qoff = setup(prob, numerics(art_for(channel, 0.0, 0.0)))
         alloff, Qalloff = setup(prob, numerics(
             ArtificialProperties(enabled = true, C_mu = 0.0, C_beta = 0.0, C_kappa = 0.0,

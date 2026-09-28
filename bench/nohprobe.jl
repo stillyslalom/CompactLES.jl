@@ -213,8 +213,7 @@ function main()
                    bcs = ((lobc, inflow), per3[2], per3[3]), ic = ic)
     control = StepControl(floor_ratio = opt.floor, floor_scope = Symbol(opt.scope))
     solver, Q = setup(prob, Numerics(n_global = (N, 1, 1), art = art,
-                                     cfl = opt.cfl, control = control,
-                                     filter_interval = 1))
+                                     cfl = opt.cfl, control = control))
 
     xs = Float64[xcoord(solver, 1, i) for i in 1:N]
     h = xs[2] - xs[1]

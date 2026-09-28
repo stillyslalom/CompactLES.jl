@@ -68,7 +68,7 @@ approximately:
 | wall evolution, C6 unfiltered / `:cascade3` unfiltered / cascade filter / one-sided filter / `:brady_livescu` | 4.01 / 3.93 / 1.94 / 3.90 / 5.73 |
 | viscous no-slip wall evolution / shear mode | 4.00 / 4.67 |
 | same-level patch interface / two levels / three levels subcycled / two levels filtered | 6.79 / 6.01 / 6.00 / 6.87 |
-| two levels, `interface_flux = :closure` / closure rows with `:brady_livescu` | 3.62 / 6.01 |
+| two levels, `patch_interfaces = :closure` / closure rows with `:brady_livescu` | 3.62 / 6.01 |
 
 The closed-domain rows above the polynomial rows are the slope of one
 derivative of a smooth field over the whole line, which sits above the
@@ -80,7 +80,7 @@ solution, or the periodic image of a wall problem whose data are symmetric
 about both walls, run at the same spacing and step. They are the orders a
 run sees. The filter's wall rows, not the derivative closure, set the
 accuracy of a filtered wall. An interface under the default ghost fluxes
-reads the interior order; under `interface_flux = :closure` a level interface
+reads the interior order; under `patch_interfaces = :closure` a level interface
 reads the C6 closure cascade at the fine spacing. `bench/boundaryorder.jl` runs the full matrix, with
 every closure and filter option, the instantaneous right-hand-side error, the
 momentum and energy components, the filter cadence and the timestep floor.
