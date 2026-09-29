@@ -2217,11 +2217,11 @@ const PLANE_LEVEL_TOL = 1e-10
         @info "plane level against the uniform run" side e
         @test e < PLANE_LEVEL_TOL
     end
-    # The configurations the fold does not carry are refused by name.
-    @test_throws "regrid" plane_level(N; regrid_interval=5)
+    # The configurations the fold does not carry are refused by name, and a
+    # second level stopping short of the plane is told the offset reaching it.
     @test_throws ":inject" plane_level(N; level_restriction=:filter)
-    @test_throws "first refined level" plane_level(N;
-                                                   nest=BlockRegion((0, 0, 0), (10, 1, 1)))
+    @test_throws "offset -1 reaches the SymmetryPlaneBC" plane_level(N;
+        nest=BlockRegion((0, 0, 0), (10, 1, 1)))
 end
 
 # The r-z level's fine patch against the uniform run at its spacing, a
@@ -2543,11 +2543,11 @@ const CORNER_LEVEL_TOL = 5e-5
                 for i in 1:fine.decomp.n_local[1], c in 1:5)
     @info "axis level against the uniform run" e
     @test e < AXIS_LEVEL_TOL
-    # The configurations the fold does not carry are refused by name.
-    @test_throws "regrid" axis_level(N; regrid_interval=5)
+    # The configurations the fold does not carry are refused by name, and a
+    # second level stopping short of the axis is told the offset reaching it.
     @test_throws ":inject" axis_level(N; level_restriction=:filter)
-    @test_throws "first refined level" axis_level(N;
-                                                  nest=BlockRegion((0, 0, 0), (10, 1, 1)))
+    @test_throws "offset -1 reaches the AxisBC" axis_level(N;
+        nest=BlockRegion((0, 0, 0), (10, 1, 1)))
 
     # The corner of the axis and a symmetry plane at z = 0: the tile folds on
     # both dimensions, with each root fold's parities.
@@ -2872,15 +2872,275 @@ const PLACED_NSCBC_TOL = 5e-6
         (walls, per, per), toward_wall; level_boundaries=true)
     @test reaches(refined_region(s))
     # A static shape's first level reaches a symmetry plane or the r-z axis,
-    # which it folds; a regridded one keeps the margin there and says so.
+    # which it folds; without the keyword it keeps the margin and says so.
     toward_fold = CL.Regions.Box((0.0, 0.0, 0.0), (0.2, 1.0, 1.0))
     for (bcs, metric) in ((((SymmetryPlaneBC(), SlipWallBC()), per, per), CartesianMetric()),
                           (((AxisBC(), SlipWallBC()), per, per), CylindricalMetric()))
         s, _ = shape_run(bcs, toward_fold; metric, level_boundaries=true)
         @test refined_region(s).offset[1] == 0 &&
               getfield(s, :levels)[2].transfers[1].folded[1] == (true, false)
-        s, _ = @test_logs (:warn, r"does not reach") match_mode=:any shape_run(
-            bcs, toward_fold; metric, level_boundaries=true, regrid_interval=5)
+        s, _ = @test_logs (:warn, r"domain boundary") match_mode=:any shape_run(
+            bcs, toward_fold; metric)
         @test refined_region(s).offset[1] == margin
     end
+end
+
+# A level regridded onto the fold of the 1-D standing wave at step 0, against
+# the uniform run at its spacing in equal steps at N = 49, t = 0.2, over the
+# conserved components: at a symmetry plane, measured 2.9e-8 for one box and
+# 1.8e-7 for two tiles (the tile face between them adds its error); at the
+# r-z axis, filtered at every step, 3.6e-11 and 5.7e-11. A second level at
+# either plane of the standing wave, N = 48, t = 0.1, against the uniform run
+# at its spacing: 4.5e-13 and 2.3e-13.
+const FOLD_REGRID_TOL = 5e-7
+const FOLD_NEST_TOL = 5e-12
+
+@testset "levels regridded onto a fold and nested at one" begin
+    per = (PeriodicBC(), PeriodicBC())
+    plane = (SymmetryPlaneBC(), SlipWallBC())
+    axis = (AxisBC(), SlipWallBC())
+    wave(x, y, z) = (rho = 1 + 0.05 * cos(pi * x);
+                     Prim(rho=rho, u=(0.05 * sin(pi * x), 0.0, 0.0), p=rho^1.4))
+    N = 49
+    # The window the predicate tags, moved between regrid checks.
+    cut = Ref(0.15)
+    near(p, I) = xcoord(p, 1, interior_index(p, I)[1]) < cut[]
+    # `refined = false` gives the uniform run at the level's spacing: a fold at
+    # the low face and a wall at the high one put the root's node 1 at h/2
+    # with h = 1/(N − ½), so the level's spacing is that of 3N − 1 nodes.
+    function placed(fold; refined=true, tile=0, lb=true, region=BlockRegion((16, 0, 0),
+                                                                          (9, 1, 1)), kw...)
+        cyl = fold === axis
+        local s = Solver(; n_global=(refined ? N : 3N - 1, 1, 1),
+                         L_domain=(1.0, 1.0, 1.0), bcs=(fold, per, per),
+                         metric=cyl ? CylindricalMetric() : CartesianMetric(),
+                         filter_interval=cyl ? 1 : 0, cfl=0.9,
+                         art=ArtificialProperties(enabled=false),
+                         refine=refined ? region : nothing,
+                         regrid_interval=refined ? 10^6 : 0, tag_threshold=Inf,
+                         tag_predicate=refined ? near : nothing, tag_buffer=2, tile=tile,
+                         level_boundaries=refined && lb, kw...)
+        local q = allocate_state(s)
+        initialize!(s, q, wave)
+        return s, q
+    end
+    function regrid_now!(s, q)
+        getfield(s, :regrid).checks += 1
+        return CL.regrid!(s, q, CL.Workspace(q), nothing)
+    end
+    # The largest difference of the patches of level ℓ from the uniform run
+    # at their spacing: level-ℓ patch node i is the uniform run's node
+    # i + offset + (3^ℓ − 1)/2, the uniform run starting half its spacing
+    # from the fold.
+    function against_uniform(s, q, f, fq, ℓ=1)
+        local pf = PatchSolver(f, f.patches[1])
+        local e = 0.0
+        for k in getfield(s, :levels)[ℓ + 1].patches
+            local ps = PatchSolver(s, s.patches[k])
+            local off = ps.patch.region.offset[1] + (3^ℓ - 1) ÷ 2
+            e = max(e, maximum(abs(q[k][padded_index(ps, i, 1, 1), c] -
+                                   fq[padded_index(pf, off + i, 1, 1), c])
+                               for i in 1:ps.decomp.n_local[1], c in axes(q[k], 4)))
+        end
+        return e
+    end
+    steps!(s, q, k0, k1) = for k in k0:k1
+        run!(s, q; tfinal=0.2k / 96)
+    end
+    interior_equal(r, rq, s, q) =
+        r.t == s.t && length(rq) == length(q) &&
+        all(parent(rq[k])[CL.interior(s.patches[k].decomp), :] ==
+            parent(q[k])[CL.interior(s.patches[k].decomp), :] for k in eachindex(q))
+    margin = CL.LEVEL_BUFFER
+
+    for fold in (plane, axis)
+        name = fold === axis ? "axis" : "plane"
+        # --- A box follows the tags onto the fold, off and on ------------------
+        cut[] = 0.15
+        s, q = placed(fold; lb=false)
+        r = @test_logs (:warn, r"does not reach") CL.tagged_region(s, q[1])
+        @test r.offset[1] == margin
+        s, q = placed(fold)
+        @test CL.tagged_region(s, q[1]).offset[1] == 0
+        @test regrid_now!(s, q)
+        lt = getfield(s, :levels)[2].transfers[1]
+        @test lt.region.offset[1] == 0 && lt.folded[1] == (true, false)
+        fine = PatchSolver(s, s.patches[2])
+        @test fine.bcs[1][1] === s.patches[1].bcs[1][1] && fine.folds[1] isa CL.FoldSpec
+        @test fine.decomp.n_global[1] == 3 * lt.region.extent[1] - 1
+        @test xcoord(fine, 1, 1) ≈ s.patches[1].h[1] / 6
+        f, fq = placed(fold; refined=false)
+        steps!(s, q, 1, 96)
+        steps!(f, fq, 1, 96)
+        @test s.step == f.step == 96
+        e = against_uniform(s, q, f, fq)
+        @info "box regridded onto the $name against the uniform run" e
+        @test e < FOLD_REGRID_TOL
+        # The box grows away from the fold: the carry keeps the node beyond
+        # the coincident lattice and the fold's plane, bit for bit with the
+        # rest of the overlap.
+        old = copy(parent(q[2]))
+        pold = PatchSolver(s, s.patches[2])
+        nold = pold.decomp.n_local[1]
+        cut[] = 0.3
+        @test regrid_now!(s, q)
+        pnew = PatchSolver(s, s.patches[2])
+        @test pnew.decomp.n_local[1] > nold && level_regions(s, 1)[1].offset[1] == 0
+        @test all(q[2][padded_index(pnew, i, 1, 1), c] == old[padded_index(pold, i, 1, 1), c]
+                  for i in 1:nold-1, c in axes(old, 4))
+
+        # --- Tiles on the fold, and a restart ------------------------------------
+        cut[] = 0.3
+        s, q = placed(fold; tile=8)
+        @test regrid_now!(s, q)
+        regs = level_regions(s, 1)
+        @test length(regs) == 2 && regs[1].offset[1] == 0
+        @test [lt.folded[1] for lt in getfield(s, :levels)[2].transfers] ==
+              [(r.offset[1] == 0, false) for r in regs]
+        f, fq = placed(fold; refined=false)
+        steps!(s, q, 1, 48)
+        dir = mktempdir()
+        save_checkpoint(s, q, joinpath(dir, "foldtiles"))
+        steps!(s, q, 49, 96)
+        steps!(f, fq, 1, 96)
+        e = against_uniform(s, q, f, fq)
+        @info "tiles regridded onto the $name against the uniform run" e
+        @test e < FOLD_REGRID_TOL
+        r, rq = placed(fold; tile=8)
+        load_checkpoint!(r, rq, joinpath(dir, "foldtiles"))
+        @test level_regions(r, 1) == regs
+        steps!(r, rq, 49, 96)
+        @test interior_equal(r, rq, s, q)
+        rm(dir; recursive=true)
+
+        # --- Three regridded levels, the second reaching the fold at offset −1,
+        # and a restart ---------------------------------------------------------
+        cut[] = 0.3
+        s, q = placed(fold; tile=8, max_levels=3, region=nothing)
+        regrid_now!(s, q)
+        r2 = level_regions(s, 2)
+        @test any(r -> r.offset[1] == -1, r2)
+        lts = getfield(s, :levels)[3].transfers
+        @test all(lt.folded[1] == (lt.region.offset[1] == -1, false) for lt in lts)
+        @test all(p -> p.level != 2 || (p.folds[1] !== nothing) == (p.region.offset[1] == -4),
+                  s.patches)
+        steps!(s, q, 1, 4)
+        dir = mktempdir()
+        save_checkpoint(s, q, joinpath(dir, "foldnest"))
+        steps!(s, q, 5, 8)
+        @test all(all(isfinite, parent(Q)) for Q in q)
+        r, rq = placed(fold; tile=8, max_levels=3, region=nothing)
+        load_checkpoint!(r, rq, joinpath(dir, "foldnest"))
+        @test level_regions(r, 2) == r2
+        steps!(r, rq, 5, 8)
+        @test interior_equal(r, rq, s, q)
+        rm(dir; recursive=true)
+    end
+
+    # --- The frontend's shapes: a regridded shape's level reaches the fold,
+    # and nested static shapes reach it on both levels ------------------------
+    domain = ((0.0, 1.0), (0.0, 1.0), (0.0, 1.0))
+    shape_run(bcs, shape; metric=CartesianMetric(), kw...) =
+        setup(Problem(domain=domain, bcs=bcs, metric=metric,
+                      ic=(x, y, z) -> wave(x, y, z)),
+              Numerics(n_global=(N, 1, 1), art=ArtificialProperties(enabled=false),
+                       amr=AMR(; initial=shape, kw...)))
+    toward_fold = CL.Regions.Box((0.0, 0.0, 0.0), (0.2, 1.0, 1.0))
+    inner = CL.Regions.Box((0.0, 0.0, 0.0), (0.08, 1.0, 1.0))
+    for (fold, metric) in ((plane, CartesianMetric()), (axis, CylindricalMetric()))
+        s, _ = shape_run((fold, per, per), toward_fold; metric, level_boundaries=true,
+                         regrid_interval=5)
+        @test refined_region(s).offset[1] == 0 &&
+              getfield(s, :levels)[2].transfers[1].folded[1] == (true, false)
+        s, _ = shape_run((fold, per, per), [toward_fold, inner]; metric,
+                         level_boundaries=true)
+        lt = getfield(s, :levels)[3].transfers[1]
+        @test lt.region.offset[1] == -1 && lt.folded[1] == (true, false)
+        @test xcoord(PatchSolver(s, s.patches[3]), 1, 1) ≈ s.patches[1].h[1] / 18
+    end
+end
+
+@testset "a second level nested at a fold" begin
+    per = (PeriodicBC(), PeriodicBC())
+    plane = SymmetryPlaneBC()
+    wave(x, y, z) = (rho = 1 + 0.05 * cos(pi * x);
+                     Prim(rho=rho, u=(0.05 * sin(pi * x), 0.0, 0.0), p=rho^1.4))
+    # A plane at both ends of the standing wave, N = 48: h = 1/N, root node i
+    # at (i − ½)h, and the uniform run at the second level's spacing has 9N
+    # nodes, the first at h/18. Level-1 node n lies at h/2 + (n − 1)h/3, so
+    # its node 0 lies at h/6, and a second level reaching the low plane starts
+    # there, at offset −1 of level 1's node space, and at the high plane ends
+    # one node past the last node coincident with the root's, 3(N − 1) + 1.
+    N = 48
+    function nested(side; refined=true, kw...)
+        E1 = 3 * (N - 1) + 1
+        r1 = side == :lo ? BlockRegion((0, 0, 0), (9, 1, 1)) :
+                           BlockRegion((N - 9, 0, 0), (9, 1, 1))
+        r2 = side == :lo ? BlockRegion((-1, 0, 0), (12, 1, 1)) :
+                           BlockRegion((E1 + 1 - 12, 0, 0), (12, 1, 1))
+        local s = Solver(; n_global=(refined ? N : 9N, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=((plane, plane), per, per), filter_interval=0, cfl=0.9,
+                         art=ArtificialProperties(enabled=false),
+                         refine=refined ? [r1, r2] : nothing, kw...)
+        local q = allocate_state(s)
+        initialize!(s, q, wave)
+        return s, q
+    end
+    f, fq = nested(:lo; refined=false)
+    pf = PatchSolver(f, f.patches[1])
+    for n in 1:96
+        run!(f, fq; tfinal=0.1n / 96)
+    end
+    for side in (:lo, :hi)
+        k = side == :lo ? 1 : 2
+        s, q = nested(side)
+        lt = getfield(s, :levels)[3].transfers[1]
+        p2 = PatchSolver(s, s.patches[3])
+        @test lt.folded[1] == (k == 1, k == 2) && lt.boundary[1][k] && !lt.imposed[1][k]
+        @test p2.folds[1] isa CL.FoldSpec && p2.bcs[1][k] === s.patches[1].bcs[1][k]
+        # The second level's region starts at −4 of its own node space, its
+        # first node half its spacing from the plane.
+        @test p2.decomp.n_global[1] == 3 * 12 - 1
+        k == 1 && @test p2.patch.region.offset[1] == -4
+        edge = k == 1 ? xcoord(p2, 1, 1) : 1 - xcoord(p2, 1, p2.decomp.n_global[1])
+        @test edge ≈ s.patches[1].h[1] / 18
+        # The box of the second level mirrors level 1's nodes across the plane.
+        @test CL._box_buffer(lt)[1] == (CL.LEVEL_BUFFER, CL.LEVEL_BUFFER)
+        @test domain_volume(s) ≈ 1.0 atol = 1e-14
+        for n in 1:96
+            run!(s, q; tfinal=0.1n / 96)
+        end
+        @test s.step == f.step
+        box = lt.box_gather
+        pad = lt.pdecomps[1].n_halo_d[1]
+        nb = lt.pdecomps[1].n_global[1]
+        B = CL.LEVEL_BUFFER
+        for j in 1:B
+            out, in_ = k == 1 ? (B + 1 - j, B + j) : (nb - B + j, nb - B + 1 - j)
+            @test box[out + pad, 1, 1, 1] == box[in_ + pad, 1, 1, 1]
+            @test box[out + pad, 1, 1, 2] == -box[in_ + pad, 1, 1, 2]
+        end
+        # Against the uniform run at the second level's spacing, level by
+        # level: level-ℓ node i is the uniform run's node i + offset + (3^ℓ − 1)/2
+        # at 3^ℓ its spacing, the second level's node for node.
+        e = 0.0
+        for kk in 2:3
+            ps = PatchSolver(s, s.patches[kk])
+            ℓ = ps.patch.level
+            ℓ == 2 || continue
+            off = ps.patch.region.offset[1] + (3^ℓ - 1) ÷ 2
+            @test maximum(abs(xcoord(ps, 1, i) - xcoord(pf, 1, off + i))
+                          for i in 1:ps.decomp.n_local[1]) < 1e-14
+            e = max(e, maximum(abs(q[kk][padded_index(ps, i, 1, 1), c] -
+                                   fq[padded_index(pf, off + i, 1, 1), c])
+                               for i in 1:ps.decomp.n_local[1], c in 1:3))
+        end
+        @info "second level at a plane against the uniform run" side e
+        @test e < FOLD_NEST_TOL
+    end
+    # A second level stopping short of the plane inside the margin is
+    # refused, with the offset that reaches the plane named.
+    @test_throws "offset -1 reaches the SymmetryPlaneBC" Solver(
+        n_global=(N, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=((plane, plane), per, per),
+        refine=[BlockRegion((0, 0, 0), (9, 1, 1)), BlockRegion((0, 0, 0), (12, 1, 1))])
 end

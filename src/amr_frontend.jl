@@ -111,12 +111,11 @@ copies `base` with the given keywords replaced.
   and the set may become empty.
 - `level_boundaries` (default `false`): at `true`, shapes and tags may place
   a level on a domain face carrying `SlipWallBC`, `NoSlipWallBC`,
-  `NSCBCOutflowBC` or `NSCBCInflowBC`, and a static shape's first level on
-  a `SymmetryPlaneBC` or the `AxisBC` of an r-z run, on the host backend
-  under `:inject` restriction. The level carries the face's condition at its
-  own spacing, so a feature at a wall or an open face is refined up to the
-  face. Periodic seams and other faces keep the margin, and so do a symmetry
-  plane and the axis under regridding. With `tile`, a face keeps it also
+  `NSCBCOutflowBC` or `NSCBCInflowBC`, and on a `SymmetryPlaneBC` or the
+  `AxisBC` of an r-z run on the host backend under `:inject` restriction.
+  The level carries the face's condition at its own spacing, so a feature at
+  a wall, an open face or a fold is refined up to the face. Periodic seams
+  and other faces keep the margin. With `tile`, a face keeps it also
   when the tile next to the face's tile would come within the margin of
   the domain: an edge below `max(n_halo, 4)`, or a partial last lattice
   cell at the high face spanning fewer parent cells than that. At `false`
@@ -268,17 +267,19 @@ function _shape_regions(shapes, prob, num, amr::AMR)
     # The last node of the parent level's node space along each dimension.
     top = phi
     reach = _shape_faces(prob, num, amr)
+    # Per face, whether it carries a fold (a symmetry plane, the axis): a
+    # level on it takes the node half its spacing from the fold, one node
+    # beyond the lattice of its parent's nodes, and keeps its box buffer,
+    # the parity mirror of the parent.
+    fold = ntuple(d -> ntuple(side -> _level_fold_condition(prob.bcs[d][side]), 2), 3)
     regions = BlockRegion[]
     for (ℓ, shape) in enumerate(shapes)
         shape isa Shape ||
             throw(ArgumentError("AMR: nested initial regions are all shapes or all " *
                                 "BlockRegions"))
-        # A fold (a symmetry plane, the axis) is reached by the first
-        # refined level only.
-        ℓ == 1 || (reach = ntuple(d -> ntuple(side ->
-            reach[d][side] && !_level_fold_condition(prob.bcs[d][side]), 2), 3))
+        bare = ntuple(d -> ntuple(side -> reach[d][side] && !fold[d][side], 2), 3)
         amr.tile > 0 && (reach = _lattice_reach(reach, top .+ 1, active, amr.tile,
-                                                margin, order))
+                                                margin, order, bare))
         reach_lo = ntuple(d -> active[d] && reach[d][1], 3)
         reach_hi = ntuple(d -> active[d] && reach[d][2], 3)
         span = sqrt(sum(h[d]^2 for d in 1:3 if active[d]))
@@ -317,11 +318,8 @@ function _shape_regions(shapes, prob, num, amr::AMR)
             while true
                 reach_lo[d] && l < plo[d] + margin && (l = plo[d])
                 reach_hi[d] && u > phi[d] - margin && (u = phi[d])
-                need = _placement_extent(order,
-                                         l == 0 && reach_lo[d] &&
-                                         !_level_fold_condition(prob.bcs[d][1]),
-                                         u == top[d] && reach_hi[d] &&
-                                         !_level_fold_condition(prob.bcs[d][2]))
+                need = _placement_extent(order, l == plo[d] && bare[d][1],
+                                         u == top[d] && bare[d][2])
                 (u - l + 1 >= need || u - l + 1 >= b - a + 1) && break
                 u < b ? (u += 1) : (l -= 1)
             end
@@ -336,13 +334,16 @@ function _shape_regions(shapes, prob, num, amr::AMR)
         # The next level nests inside this one's own nodes: the refined
         # lattice triples the spacing count and its boundary planes are
         # imposed from the parent, except on a domain face, where the plane
-        # is the level's own and the next level may reach it too.
-        at_lo = ntuple(d -> reach_lo[d] && offset[d] == 0, 3)
+        # is the level's own and the next level may reach it too; on a fold
+        # the level's own nodes extend one node beyond its parent's lattice.
+        at_lo = ntuple(d -> reach_lo[d] && offset[d] == plo[d], 3)
         at_hi = ntuple(d -> reach_hi[d] && offset[d] + extent[d] - 1 == top[d], 3)
-        plo = ntuple(d -> active[d] ? 3 * offset[d] + (at_lo[d] ? 0 : 1) : 0, 3)
-        phi = ntuple(d -> active[d] ?
-                          3 * (offset[d] + extent[d] - 1) - (at_hi[d] ? 0 : 1) : 0, 3)
-        top = ntuple(d -> 3 * top[d], 3)
+        plo = ntuple(d -> !active[d] ? 0 :
+                          3 * offset[d] + (at_lo[d] ? (fold[d][1] ? -1 : 0) : 1), 3)
+        phi = ntuple(d -> !active[d] ? 0 :
+                          3 * (offset[d] + extent[d] - 1) +
+                          (at_hi[d] ? (fold[d][2] ? 1 : 0) : -1), 3)
+        top = ntuple(d -> 3 * top[d] + (active[d] && fold[d][2] ? 1 : 0), 3)
         reach = ntuple(d -> (at_lo[d], at_hi[d]), 3)
         h = ntuple(d -> active[d] ? h[d] / 3 : h[d], 3)
     end

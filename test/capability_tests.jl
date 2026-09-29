@@ -138,10 +138,9 @@ include("capability_cases.jl")
         rejects("a refined level reaching a SymmetryPlaneBC or an AxisBC takes " *
                 "level_restriction = :inject", axis_rz,
                 Numerics(n_global=n1, amr=AMR(initial=at_plane, level_restriction=:filter)))
-        rejects("a refined level reaching a SymmetryPlaneBC or an AxisBC is placed at " *
-                "setup and is not regridded", plane,
-                Numerics(n_global=n1, amr=AMR(initial=at_plane, regrid_interval=1)))
-        rejects("only the first refined level reaches a symmetry plane or the axis",
+        # A second level reaching the axis starts on its parent's first node,
+        # offset -1; one at offset 0 stops short of it inside the margin.
+        rejects("offset -1 reaches the AxisBC of dimension 1",
                 axis_rz, Numerics(n_global=n1, amr=AMR(initial=[at_plane,
                                                                 BlockRegion((0, 0, 0),
                                                                             (12, 1, 1))])))

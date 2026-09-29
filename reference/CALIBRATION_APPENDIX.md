@@ -6199,6 +6199,29 @@ coarse one. On a uniform state the tag sweep of a wall tile marks no node
 with its taps clamped at the wall and two with the face read as open, whose
 ghost layers hold zeros.
 
+**Levels regridded onto a fold and nested at one.** The instrument is the
+fold testsets of `test/level_tests.jl`, in equal steps against the uniform run
+at the level's spacing. The standing wave at N = 49, a level placed on the low
+symmetry plane by a regrid at step 0, differs by 2.9e-8 as one box and 1.8e-7
+as two tiles at t = 0.2; on the r-z axis, filtered at every step, by 3.6e-11
+and 5.7e-11. A second level at either plane of the standing wave between two
+planes, N = 48, t = 0.1, differs by 4.5e-13 and 2.3e-13. The convergence row
+`plane_nest_case` (first level over N/3 + 1 root nodes at the plane, second
+over its parent's first N/3 nodes from offset −1, t = 0.4) reads the second
+level against the uniform run on 9N nodes:
+
+| N | 36 | 48 | 72 |
+|---|---|---|---|
+| plane window | 3.64e-11 | 1.06e-11 | 1.97e-12 |
+| coarse-fine face window | 9.51e-11 | 3.10e-11 | 7.60e-12 |
+| interior | 6.76e-11 | 2.23e-11 | 5.46e-12 |
+| face window, second level held inside the first (offset N/6) | 1.68e-10 | 5.78e-11 | 1.97e-11 |
+
+The second level's face window converges at 3.6 reaching the plane and 3.1
+held inside, so the order below the six of the two-level plane row is the
+nest's, at its coarse-fine face; the plane window reads 4.21. Not diagnosed
+further.
+
 **A converging shock on the axis level.** The instrument is
 `noh_axis_level` (`test/cases.jl`): cylindrical Noh from the cold start at
 N = 256, CFL 0.15 and the default filter, a static tile over the first m root

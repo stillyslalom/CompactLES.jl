@@ -3958,6 +3958,104 @@ function test_axis_level()
     end
 end
 
+# ---------------------------------------------------------------------------
+# Levels regridded onto a fold (`level_boundaries`), decomposed: a tagged
+# window moving onto the symmetry plane of a 1-D tube, and onto the axis of
+# an r-z radial line, followed by one box, by lattice tiles and by three
+# regridded levels whose second level reaches the fold at offset −1, against
+# the serial rebuild on COMM_SELF every three steps through the regrids: the
+# same regions on every level, the fold on the tiles that reach it, and every
+# block this rank holds equal to the serial patch's. A rebalanced tiled run
+# with the migration audit on moves folded tiles block to block and compares
+# them with the replicated carry.
+# ---------------------------------------------------------------------------
+function test_fold_regrid()
+    section("folded regrid: tags place levels on a symmetry plane and the axis")
+    per = (PeriodicBC(), PeriodicBC())
+    function blockdiff(p, Q, rp, Qref)
+        e = 0.0
+        for I in CL.interior(p.decomp), c in 1:size(Q, 4)
+            loc = Tuple(I) .- p.decomp.n_halo_d
+            J = CartesianIndex(loc .+ p.decomp.offset .+ rp.decomp.n_halo_d)
+            e = max(e, abs(Float64(Q[I, c] - Qref[J, c])))
+        end
+        e
+    end
+    function leveldiff(s, qs, ref, qref)
+        e = blockdiff(s.patches[1], qs[1], ref.patches[1], qref[1])
+        for ℓ in 2:length(s.levels)
+            lev, rlev = s.levels[ℓ], ref.levels[ℓ]
+            for (k, ti) in zip(lev.patches, lev.tiles)
+                region = lev.transfers[ti].region
+                rt = findfirst(lt -> lt.region == region, rlev.transfers)
+                rk = rlev.patches[findfirst(==(rt), rlev.tiles)]
+                e = max(e, blockdiff(s.patches[k], qs[k], ref.patches[rk], qref[rk]))
+            end
+        end
+        e
+    end
+    regions(s) = [level_regions(s, ℓ) for ℓ in 1:length(s.levels)-1]
+    # A window of half-width 0.08 moving left at 4 onto the fold at x = 0.
+    window(p, I) = abs(CL.xcoord(p, 1, CL.interior_index(p, I)[1]) - (0.2 - 4 * p.t)) <
+                   0.08
+    wave = (x, y, z) -> (rho = 1 + 0.05 * cos(pi * x);
+                         Prim(rho=rho, u=(0.05 * sin(pi * x), 0.0, 0.0), p=rho^1.4))
+    function build(comm_here, fold, tile; levels=2, kw...)
+        cyl = fold[1] isa AxisBC
+        local s = Solver(; n_global=(97, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                         bcs=(fold, per3[2], per3[3]), comm=comm_here,
+                         metric=cyl ? CylindricalMetric() : CartesianMetric(),
+                         art=ArtificialProperties(enabled=false), filter_interval=1,
+                         cfl=0.5, refine=levels > 2 ? nothing :
+                                         BlockRegion((24, 0, 0), (17, 1, 1)),
+                         regrid_interval=3, tag_threshold=Inf, tag_predicate=window,
+                         tag_buffer=2, tile=tile, level_boundaries=true,
+                         max_levels=levels, kw...)
+        local q = allocate_state(s)
+        initialize!(s, q, wave)
+        return s, q
+    end
+    for (name, fold) in (("plane", (SymmetryPlaneBC(), SlipWallBC())),
+                         ("axis", (AxisBC(), SlipWallBC()))),
+        (label, tile, levels) in (("box", 0, 2), ("tiles", 8, 2), ("three levels", 8, 3))
+        s, q = build(comm, fold, tile; levels)
+        ref, qref = build(MPI.COMM_SELF, fold, tile; levels)
+        differ = 0
+        folded = falses(levels - 1)
+        e = 0.0
+        # A rank outside a level's parent holds none of its layout; rank 0
+        # holds every level's, so its reading is the run's.
+        for n in 3:3:30
+            run!(s, q; tfinal=1e9, nmax=n)
+            run!(ref, qref; tfinal=1e9, nmax=n)
+            differ += MPI.bcast(regions(s) != regions(ref), comm; root=0)
+            for ℓ in 1:levels-1, lt in s.levels[ℓ + 1].transfers
+                lt.folded[1][1] && lt.region.offset[1] == (1 - 3^(ℓ - 1)) ÷ 2 &&
+                    (folded[ℓ] = true)
+            end
+            differ == 0 && (e = max(e, leveldiff(s, q, ref, qref)))
+        end
+        check("folded regrid, $name $label: the regions regrid as serial",
+              differ, 0.5)
+        check("folded regrid, $name $label: every level reaches the fold",
+              MPI.bcast(count(!, folded), comm; root=0), 0.5)
+        check("folded regrid, $name $label: every block matches serial", gmax(e), 1e-10)
+    end
+    # Folded tiles moved by a rebalance migrate block to block; the audit
+    # carries each through the replicated gather as well.
+    CL.MIGRATION_AUDIT[] = true
+    CL.MIGRATION_AUDIT_RESULT[] = (tiles=0, mismatches=0)
+    s, q = build(comm, (SymmetryPlaneBC(), SlipWallBC()), 4; rebalance=1.0,
+                 rebalance_persist=1)
+    run!(s, q; tfinal=1e9, nmax=30)
+    CL.MIGRATION_AUDIT[] = false
+    audit = CL.MIGRATION_AUDIT_RESULT[]
+    audited = gsum(audit.tiles)
+    rank == 0 && println("  folded regrid: $audited migrated tile(s) audited")
+    check("folded regrid: migrated state equals the gathered carry bitwise",
+          gsum(audit.mismatches), 0.5)
+end
+
 include("wall_flux_mpi.jl")
 include("conservation_mpi.jl")
 
@@ -3982,6 +4080,7 @@ const SUITE = (
     ("symmetry plane", test_symmetry_plane),
     ("level at a symmetry plane", test_plane_level),
     ("level on the axis", test_axis_level),
+    ("folded regrid", test_fold_regrid),
     ("NSCBC inflow", test_nscbc_inflow),
     ("NSCBC level face", test_nscbc_level),
     ("turbulent inflow", test_turbulent_inflow),

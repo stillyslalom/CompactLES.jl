@@ -297,6 +297,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         error("restart: the checkpoint records $(length(regions)) tiles on level " *
               "1 and this solver refines one box (tile = 0)")
     boundaries = _region_boundaries(solver, regions, 1)
+    folds = _region_folds(solver, boundaries)
     for (r, bnd) in zip(regions, boundaries)
         _covered_by(_buffered(r, active, spec.margin, bnd), [root.region]) ||
             error("restart: the recorded region $r is not nested $(spec.margin) " *
@@ -345,7 +346,8 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                    spec.interface_divergence,
                                                ghost_viscous=_ghost_viscous(solver),
                                                ring=_ring_detector(solver),
-                                               boundaries, bcs=root.bcs)
+                                               boundaries, bcs=root.bcs,
+                                               root_folds=root.folds)
     restriction = spec.restriction
     fine_decomp(ti) = local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp
     transfers = LevelTransfer{T}[build_level_transfer(
@@ -354,7 +356,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         root_lc.comm, length(owners[ti]), faces[ti];
         interpolation_order=spec.interpolation_order,
         gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
-        parent_h=root.h, boundary=boundaries[ti])
+        parent_h=root.h, boundary=boundaries[ti], folded=folds[ti])
         for (ti, tr) in enumerate(regions)]
     coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],
                                     [root.decomp], map(fine_decomp, eachindex(regions)))
@@ -369,8 +371,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         _stacked_states!(states, st, n_cons)
     end
     if new_lc.owned
-        fine_regions = [BlockRegion(ntuple(d -> active[d] ? 3 * tr.offset[d] : 0, 3),
-                                    fine_extent(tr, active)) for tr in regions]
+        fine_regions = [_fine_region(tr, active, fo) for (tr, fo) in zip(regions, folds)]
         records = _level_records(T, new_lc.comm, fine_regions, held, indices,
                                  [p.decomp for p in new_patches], n_cons)
         levels[2] = Level{T}(1, new_lc, owners, group, held, indices, transfers,

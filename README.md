@@ -215,8 +215,8 @@ num = Numerics(n_global = (64, 64, 64),
 ```
 
 Refinement requires unstretched Cartesian coordinates, or axisymmetric
-cylindrical ones with θ collapsed, and no fold on a refined level (an r-z
-root keeps its axis, which the levels do not reach). A
+cylindrical ones with θ collapsed; a level may reach a symmetry plane or the
+axis of an r-z run on the host backend. A
 static hierarchy can contain several nested levels; dynamic regridding of
 more than one refined level requires tiles and the host backend. Device runs
 support the other layouts with host-staged MPI exchanges.
@@ -305,8 +305,8 @@ checkpoint are listed with the setup error each rejected one raises.
   Stanton–Murillo ion interdiffusivity evaluator is not a plasma EOS or a
   coupled ion-transport model. See the
   [transport model](docs/src/explanation/thermodynamics.md).
-- Refinement is Cartesian or axisymmetric r-z only, keeps its levels off the
-  axis, and does not provide conservative refluxing
+- Refinement is Cartesian or axisymmetric r-z only and does not provide
+  conservative refluxing
   (a coarse–fine flux correction that enforces a shared conservation budget).
   Patch and level interfaces, restriction, and filtering can affect composite
   conservation; assess those errors for the chosen calculation.

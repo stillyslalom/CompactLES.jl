@@ -189,7 +189,7 @@ Choose each face's condition from its physics, as described in
 |:--|:--|:--|:--|:--|
 | [`PeriodicBC`](@ref) | the interior operator's | unconditional | cheapest; cyclic solve | the only face that keeps the formal order |
 | [`SlipWallBC`](@ref) | closure rows: 3, evolution 4 | neutral under `:neutral3` | none beyond the rows | an inviscid slip wall with the artificial properties on is limited by the strain sensor's cusp; `beta_sensor = :dilatation` removes that cap |
-| [`SymmetryPlaneBC`](@ref) | the interior operator's | unconditional: the folded step is the periodic step restricted by parity | none; an unstretched run without `patch_grid`, refined at the plane on the first level only | the slip wall half a cell outside the end node; nothing is injected and no closure row exists |
+| [`SymmetryPlaneBC`](@ref) | the interior operator's | unconditional: the folded step is the periodic step restricted by parity | none; an unstretched run without `patch_grid`, refined at the plane on the host backend | the slip wall half a cell outside the end node; nothing is injected and no closure row exists |
 | [`NoSlipWallBC`](@ref) | closure rows: 3, evolution 4 | neutral, viscosity damps every closure's wall mode | the wall flux contract | adiabatic by default; a wall temperature makes it isothermal |
 | [`DirichletBC`](@ref) | closure rows | neutral under every closure option | none | shock tubes and supersonic inflow |
 | [`NSCBCInflowBC`](@ref), [`NSCBCOutflowBC`](@ref) | closure rows | depends on the relaxation scale | one to three compact solves per face per stage, six for an inflow carrying its transverse terms | faces with a unit scale factor only; both carry the transverse coupling of Yoo and Im, weighted by `beta_t` |

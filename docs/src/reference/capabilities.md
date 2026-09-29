@@ -45,7 +45,7 @@ first kernel launch.
 |:--|:--|:--|:--|:--|
 | Cartesian, uniform | yes | yes | yes | no |
 | Cartesian, stretched ([`Stretch`](@ref)) | yes | if the patched dimension is uniform, with `patch_interfaces = :closure` | no | no |
-| Cylindrical, [`AxisBC`](@ref) at r = 0 | yes | no | θ collapsed; the first level may reach the axis | θ resolved over 2π, uniform r, host only |
+| Cylindrical, [`AxisBC`](@ref) at r = 0 | yes | no | θ collapsed; a level may reach the axis | θ resolved over 2π, uniform r, host only |
 | Cylindrical, annulus (no axis) | yes | θ collapsed, or with `patch_interfaces = :closure` | θ collapsed | θ resolved over 2π, uniform r, host only |
 | Spherical, [`OriginBC`](@ref) and/or [`PoleBC`](@ref) | yes | no | no | no |
 | [`SymmetryPlaneBC`](@ref) on a Cartesian face or a cylindrical z face | yes | no | no | as for the metric |
@@ -72,12 +72,12 @@ such as `(0, π)` places it on the pole.
 |:--|:--|:--|:--|
 | one patch | default | yes | none |
 | same-level slabs | `patch_grid` | yes | uniform Cartesian or a θ-collapsed cylindrical annulus, or a resolved-θ annulus or stretched grid under `patch_interfaces = :closure`, without folds or symmetry planes; tridiagonal filter; `:delta4` or `:species_d8` detector; no explicit `dims`; no refinement; no checkpoint |
-| static nested levels | `AMR(initial = [shape, ...])` or a `BlockRegion` vector, `regrid_interval = 0` | yes | uniform Cartesian, or cylindrical with θ collapsed; a `BlockRegion` of the first level may reach a symmetry plane or the axis on the host backend, deeper levels staying inside it |
-| one regridded box | `AMR(initial = ...)` with `regrid_interval > 0`, `tile = 0` | yes | as for static levels, with every level off the symmetry planes and the axis |
+| static nested levels | `AMR(initial = [shape, ...])` or a `BlockRegion` vector, `regrid_interval = 0` | yes | uniform Cartesian, or cylindrical with θ collapsed; a level may reach a symmetry plane or the axis on the host backend under `:inject`, a level below the first from a region starting on its parent's first node there |
+| one regridded box | `AMR(initial = ...)` with `regrid_interval > 0`, `tile = 0` | yes | as for static levels |
 | regridded tiles, two levels | as above with `tile ≥ 3` | yes | as for static levels |
 | regridded tiles, more than two levels | `tile ≥ 3` with `max_levels > 2` or a nested `BlockRegion` vector | no | host backend only; no `rebalance` |
 | subcycled levels | `AMR(subcycle = true)` | yes | any refined layout |
-| levels placed on a domain face | `AMR(level_boundaries = true)` with a shape, a predicate or `:sensor` | yes | a wall or NSCBC face; a static shape's first level also a symmetry plane or the r-z axis, on the host backend under `:inject`; a tiled level only where the lattice keeps its tiles the margin inside the domain |
+| levels placed on a domain face | `AMR(level_boundaries = true)` with a shape, a predicate or `:sensor` | yes | a wall or NSCBC face, or a symmetry plane or the r-z axis on the host backend under `:inject`; a tiled level only where the lattice keeps its tiles the margin inside the domain |
 
 `level_restriction = :filter` is accepted on the host backend of a serial
 run only, and not with a level reaching a symmetry plane or the axis; the default
@@ -133,8 +133,7 @@ text below.
 | `AMR` on a stretched grid | `AMR: requires a uniform grid` |
 | a level reaching a symmetry plane or the axis on a device | `a refined level reaching a SymmetryPlaneBC or an AxisBC runs on the host backend only` |
 | a level reaching a symmetry plane or the axis with `level_restriction = :filter` | `a refined level reaching a SymmetryPlaneBC or an AxisBC takes level_restriction = :inject` |
-| a level reaching a symmetry plane or the axis with regridding | `a refined level reaching a SymmetryPlaneBC or an AxisBC is placed at setup and is not regridded` |
-| a nested level within the margin of a symmetry plane or the axis | `only the first refined level reaches a symmetry plane or the axis` |
+| a region below the first level within the margin of a symmetry plane or the axis that does not start on its parent's first node there | `must be nested at least` |
 | `AMR` regridding a vector of shapes | `AMR: regridding moves one refined level` |
 | `max_levels > 2` without tiles and regridding | `requires tile > 0 and regridding` |
 | more than one regridded level on a device | `regridding more than one refined level runs on the host backend only` |

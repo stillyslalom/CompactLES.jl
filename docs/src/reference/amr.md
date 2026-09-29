@@ -6,9 +6,9 @@ CurrentModule = CompactLES
 
 [`AMR`](@ref) groups the refinement choices in `Numerics(amr=...)`. Refinement
 uses a fixed ratio of three between levels on an unstretched Cartesian grid
-or an axisymmetric (θ-collapsed) cylindrical one. A `BlockRegion` of the
-first refined level may reach a symmetry plane or the axis; the level's patch
-then starts half a fine cell from it and folds there as the root does.
+or an axisymmetric (θ-collapsed) cylindrical one. A refined level may reach a
+symmetry plane or the axis; its patch then starts half its own spacing from
+it and folds there as the root does.
 The coarse grid spans the full domain; fine patches replace its resolution
 inside nested regions. Initial refinement and later movement are separate
 decisions: `initial` chooses the first region, while `regrid_interval` controls
@@ -43,10 +43,10 @@ reaching into that band is refined only up to it, with a warning.
 `level_boundaries = true` lets shapes and tags place a level on a face
 carrying `SlipWallBC`, `NoSlipWallBC`, `NSCBCOutflowBC` or `NSCBCInflowBC`,
 which the level then carries at its own spacing, so a feature at a wall or an
-open face is refined up to it. A static shape's first level may also reach a
-`SymmetryPlaneBC` or the `AxisBC` of an r-z run, on the host backend under
-`:inject` restriction. Periodic seams and any other face keep the band, as do
-symmetry planes and the axis under regridding. A tiled level reaches a face only when the
+open face is refined up to it. Shapes and tags may also place a level, at any
+depth, on a `SymmetryPlaneBC` or the `AxisBC` of an r-z run, on the host
+backend under `:inject` restriction. Periodic seams and any other face keep
+the band. A tiled level reaches a face only when the
 tile next to the face's tile stays the margin inside the domain: the edge is
 at least `max(n_halo, 4)`, and a partial last lattice cell at the high face
 spans at least that many parent cells. Otherwise that face keeps the band.
@@ -79,7 +79,7 @@ a positive `tile`. A vector of shapes stays fixed.
 | `untag_ratio` | `2` | Hold threshold denominator for an existing tile; one removes hysteresis |
 | `tile_lifetime` | `1` | Minimum number of regrid checks before a tile may be removed |
 | `tile` | `0` | Zero makes one refined box; positive values at least three give a lattice tile edge in parent nodes |
-| `level_boundaries` | `false` | At `true`, shapes and tags place a level on a wall or NSCBC face, and a static shape's first level on a symmetry plane or the r-z axis; at `false` every level keeps the margin at every face |
+| `level_boundaries` | `false` | At `true`, shapes and tags place a level on a wall or NSCBC face, or on a symmetry plane or the r-z axis on the host backend under `:inject`; at `false` every level keeps the margin at every face |
 | `rebalance` | `0` | Off at zero; otherwise minimum measured maximum/mean rank-busy-time ratio for tile repartitioning |
 | `rebalance_persist` | `2` | Consecutive imbalanced checks required before repartitioning |
 | `level_restriction` | `:inject` | Coincident fine-node injection; `:filter` anti-aliases before restriction and is serial-only |
@@ -131,10 +131,16 @@ parent level's lattice over the whole domain, not relative to the parent
 patch; a nesting error prints the admissible offsets. A level's fine index corresponding to parent index `g` is
 `3(g-1)+1`. The solver enforces a coarse-node nesting margin around each
 fine region and a minimum fine patch extent. An explicit region may instead
-reach a domain face carrying `SlipWallBC`, `NoSlipWallBC`, `NSCBCOutflowBC`
-or `NSCBCInflowBC`, or, on the first refined level, `SymmetryPlaneBC` and
-the `AxisBC` of an r-z run; its face there then carries that condition at
-the fine spacing, and the margin applies to its other faces. Explicit regions provide
+reach a domain face carrying `SlipWallBC`, `NoSlipWallBC`, `NSCBCOutflowBC`,
+`NSCBCInflowBC`, `SymmetryPlaneBC` or the `AxisBC` of an r-z run; its face
+there then carries that condition at the fine spacing, and the margin applies
+to its other faces. A level's node nearest a symmetry plane or the axis lies
+half its spacing from it, outside the lattice of nodes coincident with the
+root's, so a region below the first level reaching the low face starts at a
+negative offset: its parent's first node, offset `-1` for the second level
+and `-4` for the third (in general `(1 - 3^(ℓ-1))/2` for level ℓ), and a
+region reaching the high face ends that many nodes past the parent's last
+coincident node. Explicit regions provide
 exact placement; sensor and predicate placement is clamped to that legal
 interior, and reaches those faces under `level_boundaries = true`.
 Tiling uses a global lattice, so surviving tiles keep their locations as tags

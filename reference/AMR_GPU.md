@@ -483,23 +483,21 @@ the deep regrid carry the faces of whatever regions they are given
 `RegridSpec.boundaries` flag, and `AMR`'s keyword for the shapes) the tag
 clamp of the box regrid, the lattice clip of the tiled and the deep regrid
 and the frontend's shapes stop at a face `_placement_faces` names (the
-eligible faces of `_region_boundaries`, folds excepted) instead of
-the margin. A box on such a face widens until its box, which takes no
-buffer there, spans the interpolation order (`_placement_extent`). A lattice
+eligible faces of `_region_boundaries`, a symmetry plane or the r-z axis on
+the host backend under `:inject`) instead of the margin. A box on a face
+that takes no box buffer widens until its box spans the interpolation order
+(`_placement_extent`); a fold keeps its buffer (`_unbuffered_faces`). A lattice
 reaches a face only where the tile next to the face's tile stays the margin
 inside the domain: an edge of at least the margin, and at the high face a
 last cell that ends on it or holds at least the margin's nodes
 (`_lattice_reach`); elsewhere the face keeps the margin. A region on the
 same face before and after a regrid carries its plane there, the level's
-own solution, through `_carry_over!` and `_migrate_tile!`. A tile's tag
+own solution, through `_carry_over!` and `_migrate_tile!`, and at a fold the
+node beyond the plane with it. A tile's tag
 sweep clamps its taps at its faces on the domain boundary, where its ghost
 layers hold nothing of its own. A tag in the margin band of a face no level
 reaches is reported by one warning, on the box, the tiled and the deep path
 alike.
-The frontend places a static shape's first level on a symmetry plane or the
-r-z axis where setup admits one; a regridded level stays the margin off a
-fold, since the regrid, the migration and the restart do not carry the
-fold's extra node.
 
 **A level at a symmetry plane.** The root's node nearest a plane lies half
 a root cell h from it, so the coincident lattice (parent node g at fine node
@@ -534,13 +532,41 @@ shell and ring leave out the face and the slots beyond the plane, which hold
 the fold's mirror. The covered mask treats the face as closed, so the root's
 node at h/2, whose cell spans [0, h], is covered on both halves, and the
 tile's node at h/6 carries the full weight of a folded edge in `quad_weight`.
-Setup accepts an explicit region, box or tiled `refine` reaching a plane on
-the first refined level, of a Cartesian run or at z of an r-z run, on the
-host backend, under `level_restriction = :inject` and without regridding. A
-nested level at the plane, whose node space would start at offset −1, a
-regridded tile there, stacked device tiles and the `:filter` restriction are
-refused by name; a run whose levels stay the margin off its planes is
-unrestricted.
+Setup accepts an explicit region, box or tiled `refine` reaching a plane, of
+a Cartesian run or at z of an r-z run, on the host backend under
+`level_restriction = :inject`, and the regrid places one there under
+`level_boundaries`. A tile built by a regrid or a restart takes its folded
+faces from its region (`_region_folds`), and the carries count the extra
+node: `_carry_over!` maps parent node g to fine node 3(g − offset) − 2 +
+lead on either tile and copies the node beyond a kept plane, and the
+migration, the replicated gather (`_gather_replicated`) and the HDF5
+checkpoint's tile datasets (`_tile_fine_extent`) take the folded extent.
+Stacked device tiles and the `:filter` restriction are refused by name; a run
+whose levels stay the margin off its planes is unrestricted.
+
+**A nested level at a fold.** Level ℓ's node n lies n − 1 level spacings
+h/3^ℓ from the root's first node, so the nodes coincident with the root's
+run from 1 to E_ℓ = 3^ℓ(N − 1) + 1, and parent node g is child node
+3(g − 1) + 1 at every depth. The node of level ℓ nearest a fold lies half a
+level spacing from it, (3^ℓ − 1)/2 nodes outside that lattice, and
+`_level_span` extends the node space there: (3 − 3^ℓ)/2 .. E_ℓ at a low
+fold, so 0 at the first level and −3 at the second, and E_ℓ + (3^ℓ − 1)/2 at
+a high one. A region reaching a fold starts on its parent's first node,
+offset (1 − 3^(ℓ−1))/2 in the parent's node space (0, −1, −4 for ℓ = 1, 2, 3),
+and its tile takes one node beyond the parent's lattice as the first level's
+does (`_fold_lead` is one at every depth), so `_fine_region`'s 3·offset − 1,
+the box shift, the ring, the coincident samples and the per-tile geometry
+serve every level unchanged; the second level's first node lies at h/18 and
+the level-1 node at h/6 is its coincident node −2. `_boundary_faces` reads
+a face from the span's ends, `_mirror_folded_box!` mirrors about the
+parent's span, and the lattice of a level below the first extends its first
+and last cells to the span's ends rather than adding a cell of the
+extension nodes alone (`_lattice_tile`, `_cell_of` clamping a negative
+offset). The alternative convention, a node space shifted per level so a
+fold always starts at node 1, was rejected: the coincident map 3(g − 1) + 1
+would carry a per-level shift into every transfer, the tile lattice, the
+record and the outputs, while negative offsets are what the first level's
+fine region already holds. The frontend's shapes follow the same spans.
 
 **A level at an NSCBC face.** An `NSCBCOutflowBC` or `NSCBCInflowBC`
 face is carried as a wall face is, and its characteristic correction runs
@@ -607,8 +633,9 @@ halves of its cell [0, h], and the tile's node at h/6 carries the weight
 (h/6)(h/3), the exact r-weighted measure of [0, h/3]. A corner tile at the
 axis and a symmetry plane at z = 0, the capsule's layout, folds on both
 dimensions; the box mirror takes them in turn. The restrictions are the
-plane's: the first refined level only, the host backend, `:inject` and no
-regridding. The resolved-θ axis, an antipodal butterfly, stays forbidden.
+plane's: the host backend and `:inject`; a regridded level and a nested one
+reach the axis as they reach a plane. The resolved-θ axis, an antipodal
+butterfly, stays forbidden.
 Unfiltered, the grid-scale waves a coarse-fine face emits reach the axis,
 where the cylindrical divergence does not hold the π mode of the radial
 momentum in its null space and the tile departs from the uniform run; the
@@ -773,7 +800,7 @@ the parent level's state run through `pointwise!` on the host
 Every criterion but the first is off by default. The tagged set is buffered
 by `tag_buffer` (default 4, the pollution-decay figure of constraint 7) and
 clamped to the nesting margin ([placement on a face](#levels-on-the-domain-boundary)
-lifts the clamp at a wall or NSCBC face), and its bounds (or its lattice flags) are
+lifts the clamp at a wall, an NSCBC face or a fold), and its bounds (or its lattice flags) are
 reduced globally so every rank derives the same region; a rank-local
 decision here would be a deadlock, since the ranks would then split
 different communicators.
@@ -1602,14 +1629,13 @@ Configurations rejected at setup, and the reason:
   takes the multiblock form; a slab layout has no checkpoint.
 - **Refined runs** require the Cartesian or the θ-collapsed cylindrical
   metric, no stretching, no fold on a refined level but a symmetry plane or
-  the r-z axis on the first, one region per level, and no same-level
+  the r-z axis, one region per level, and no same-level
   `patch_grid` alongside. `level_restriction = :filter` is serial-only.
   Each region must nest by `max(n_halo, LEVEL_BUFFER)` parent nodes inside
   the patches of the level above at every parent-fed face and span ≥ 4
   parent nodes per active dimension; it may reach a slip, no-slip or NSCBC
-  face of the domain instead, the first refined level a symmetry plane or
-  the r-z axis (host backend, `:inject`, no regrid), and no other domain
-  face. A tiled
+  face of the domain instead, or a symmetry plane or the r-z axis (host
+  backend, `:inject`), and no other domain face. A tiled
   level's tiles are clipped to the margin at the domain edge unless `refine`
   reaches that wall or `level_boundaries` places them there, and must still
   lie inside the parent tiles. Regridding more

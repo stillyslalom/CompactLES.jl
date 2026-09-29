@@ -268,8 +268,7 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver,
     comm = solver.comm
     rank = MPI.Comm_rank(comm)
     rec = hierarchy_record(solver)
-    active = ntuple(d -> solver.n_global[d] > 1, 3)
-    held = Dict((ℓ, ti) => li for (ℓ, ti, li) in CompactLES._held_tiles(solver))
+    held =Dict((ℓ, ti) => li for (ℓ, ti, li) in CompactLES._held_tiles(solver))
     n_cons = solver.equations.n_cons
     n_art = n_art_fields(root)
     T = eltype(states[1])
@@ -287,7 +286,7 @@ function CompactLES.save_checkpoint_hdf5(solver::Solver,
             _write_state!(file, "levels/$ℓ/tiles/$ti",
                           li == 0 ? nothing : PatchSolver(solver, patches[li]),
                           li == 0 ? nothing : states[li],
-                          CompactLES.fine_extent(region, active), comm,
+                          CompactLES._tile_fine_extent(solver, region, ℓ), comm,
                           n_cons, n_art, T)
         end
     end

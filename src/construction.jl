@@ -571,28 +571,15 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         # above it, in that level's node space (the root's is the grid), at
         # every face but one on the domain boundary, which a region may reach
         # where the root's condition there qualifies
-        # (`_level_boundary_condition`); a symmetry plane or the r-z axis
-        # only on the first refined level.
+        # (`_level_boundary_condition`). Below the first refined level a
+        # region reaching a symmetry plane or the r-z axis starts, or ends, at
+        # its parent's node half a parent spacing from the fold, outside the
+        # lattice coincident with the root's (`_level_span`).
         margin = max(n_halo, LEVEL_BUFFER)
-        parent_folded = _NO_BOUNDARY
         parent_regions = [BlockRegion((0, 0, 0), n_global)]
         for (ℓ, rg) in enumerate(refines)
-            extent = _level_extent(n_global, active_g, ℓ - 1)
-            eligible = _level_boundary_eligible(bcs, active_g, periodic, ℓ == 1)
-            # A nested level stays the margin inside a parent on a fold; the
-            # refinement ends at the first level there.
-            for d in 1:3, side in 1:2
-                parent_folded[d][side] || continue
-                p = only(parent_regions)
-                inside = side == 1 ? rg.offset[d] - margin >= p.offset[d] :
-                         rg.offset[d] + rg.extent[d] + margin <= p.offset[d] + p.extent[d]
-                inside ||
-                    error("level $ℓ region $rg comes within $margin level-$(ℓ - 1) " *
-                          "nodes of the $(nameof(typeof(bcs[d][side]))) on the " *
-                          "$(side == 1 ? "low" : "high") face of dimension $d; " *
-                          "only the first refined level reaches a symmetry plane " *
-                          "or the axis")
-            end
+            span = _level_span(n_global, active_g, ℓ - 1, bcs)
+            eligible = _level_boundary_eligible(bcs, active_g, periodic, true)
             for d in 1:3
                 if active_g[d]
                     rg.extent[d] >= 4 ||
@@ -600,16 +587,16 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                               "along dimension $d (9 fine points for the C8 " *
                               "filter)")
                     for side in 1:2
-                        at_face = side == 1 ? rg.offset[d] == 0 :
-                                  rg.offset[d] + rg.extent[d] == extent[d]
+                        at_face = side == 1 ? rg.offset[d] + 1 == first(span[d]) :
+                                  rg.offset[d] + rg.extent[d] == last(span[d])
                         at_face && !periodic[d] && !eligible[d][side] &&
                             error("level $ℓ region $rg reaches the " *
                                   "$(side == 1 ? "low" : "high") domain face of " *
                                   "dimension $d, whose $(nameof(typeof(bcs[d][side]))) " *
                                   "a refined level cannot carry; a level reaches " *
-                                  "SlipWallBC, NoSlipWallBC, NSCBCOutflowBC and " *
-                                  "NSCBCInflowBC faces, and the first refined " *
-                                  "level SymmetryPlaneBC and AxisBC faces, only")
+                                  "SlipWallBC, NoSlipWallBC, NSCBCOutflowBC, " *
+                                  "NSCBCInflowBC, SymmetryPlaneBC and AxisBC " *
+                                  "faces only")
                     end
                 else
                     rg.offset[d] == 0 && rg.extent[d] == 1 ||
@@ -617,23 +604,18 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                               "$d with offset 0 and extent 1")
                 end
             end
-            bnd = _boundary_faces(rg, extent, eligible)
+            bnd = _boundary_faces(rg, span, eligible)
             folded = _level_fold_faces(bnd, bcs)
             if any(any, folded)
                 # The fold of a tile at a symmetry plane or the r-z axis rests
                 # on the host line solves of its own plans and on coincident
-                # injection, and the regrid places no level on it.
+                # injection.
                 backend isa DeviceBackend &&
                     error("a refined level reaching a SymmetryPlaneBC or an AxisBC " *
                           "runs on the host backend only")
                 level_restriction === :inject ||
                     error("a refined level reaching a SymmetryPlaneBC or an AxisBC " *
                           "takes level_restriction = :inject")
-                regrid_interval == 0 ||
-                    error("a refined level reaching a SymmetryPlaneBC or an AxisBC " *
-                          "is placed at setup and is not regridded; pass " *
-                          "regrid_interval = 0 or keep the region $margin root " *
-                          "nodes off the fold")
             end
             # The box stops at a wall face, where the interpolation takes
             # one-sided stencils of the order's width over the box.
@@ -651,10 +633,18 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 ranges = join(("offset $(p.offset[d] + margin):" *
                                "$(p.offset[d] + p.extent[d] - margin - rg.extent[d]) " *
                                "along dimension $d" for d in 1:3 if active_g[d]), ", ")
+                # A region meant to reach a fold below the first level starts
+                # outside the coincident lattice; name the offset that does.
+                folds = join(("offset $(first(span[d]) - 1) reaches the " *
+                              "$(nameof(typeof(bcs[d][1]))) of dimension $d"
+                              for d in 1:3
+                              if active_g[d] && ℓ > 1 && _level_fold_condition(bcs[d][1])),
+                             ", ")
                 error("level $ℓ region $rg must be nested at least $margin " *
                       "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches' " *
                       "own (not imposed) nodes: with its extent that is $ranges, " *
-                      "counted on the level-$(ℓ - 1) lattice over the whole domain. " *
+                      "counted on the level-$(ℓ - 1) lattice over the whole domain" *
+                      (isempty(folds) ? "" : "; $folds") * ". " *
                       "AMR(initial = [shape, ...]) takes the levels as shapes in " *
                       "physical coordinates instead")
             end
@@ -663,7 +653,6 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
             # tiled cover is checked face by face at construction).
             parent_regions = [_erode(_fine_region(rg, active_g, folded),
                                      ntuple(d -> (!bnd[d][1], !bnd[d][2]), 3), active_g)]
-            parent_folded = folded
         end
     end
     # --- Interface divergence rows ------------------------------------------
@@ -983,26 +972,27 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     level_tiles = Vector{BlockRegion}[]     # every level's tiles, on every rank
     for (ℓ, rg) in enumerate(refines)
         extent = _level_extent(n_global, active_g, ℓ - 1)
-        eligible = _level_boundary_eligible(bcs, active_g, periodic, ℓ == 1)
+        span = _level_span(n_global, active_g, ℓ - 1, bcs)
+        eligible = _level_boundary_eligible(bcs, active_g, periodic, true)
         if tile == 0
             tregions = [rg]
         else
             # Clip the lattice to the parent patches' bounding box less the
             # margin, or to the box itself at a domain face `rg` reaches; a
             # tile that then still leaves the union is refused.
-            rb = _boundary_faces(rg, extent, eligible)
+            rb = _boundary_faces(rg, span, eligible)
             lo = ntuple(d -> minimum(r.offset[d] for r in parent_regions) +
                              1 + (rb[d][1] ? 0 : margin), 3)
             hi = ntuple(d -> maximum(r.offset[d] + r.extent[d]
                                      for r in parent_regions) - (rb[d][2] ? 0 : margin), 3)
-            tregions = _level_tiles(rg, active_g, tile, lo, hi)
+            tregions = _level_tiles(rg, active_g, tile, lo, hi, extent)
             isempty(tregions) &&
                 error("level $ℓ region admits no tile of edge $tile inside " *
                       "the nesting margin")
         end
         push!(level_tiles, tregions)
         faces = _tile_faces(tregions)
-        boundaries = [_boundary_faces(tr, extent, eligible) for tr in tregions]
+        boundaries = [_boundary_faces(tr, span, eligible) for tr in tregions]
         folded_all = [_level_fold_faces(b, bcs) for b in boundaries]
         for (tr, bnd) in zip(tregions, boundaries)
             _covered_by(_buffered(tr, active_g, margin, bnd), parent_valid) ||

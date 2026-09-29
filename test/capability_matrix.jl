@@ -109,7 +109,7 @@ include("capability_cases.jl")
                                                    BlockRegion((60, 0, 0), (20, 1, 1))],
                                           regrid_interval=1, tile=4)))
         # A level reaching a symmetry plane, on the host backend at either
-        # precision, and a regridded level kept off one.
+        # precision, and a regridded level kept off one by default.
         plane = C.problem(bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per))
         for precision in (Float64, Float32)
             @test C.advances(plane, Numerics(n_global=(48, 1, 1),
@@ -138,6 +138,27 @@ include("capability_cases.jl")
         @test C.advances(C.problem(bcs=axis, metric=CylindricalMetric(), ic=C.ic_radial),
                          Numerics(n_global=(48, 1, 1),
                                   amr=AMR(initial=Box((0.0, 0, 0), (0.2, 1, 1)),
+                                          level_boundaries=true)))
+        # Tags place a regridded box and tiles on a symmetry plane, nested
+        # shapes reach it, and three regridded levels reach the corner of the
+        # axis and a symmetry plane at z = 0.
+        at_plane = (x, y, z, t) -> x < 0.15
+        for tile in (0, 8)
+            @test C.advances(plane, Numerics(n_global=(49, 1, 1),
+                                             amr=AMR(initial=at_plane, regrid_interval=1,
+                                                     tile=tile, level_boundaries=true)))
+        end
+        @test C.advances(plane, Numerics(n_global=(48, 1, 1),
+                                         amr=AMR(initial=[Box((0.0, 0, 0), (0.3, 1, 1)),
+                                                          Box((0.0, 0, 0), (0.1, 1, 1))],
+                                                 level_boundaries=true)))
+        @test C.advances(C.problem(bcs=(axis[1], per, (SymmetryPlaneBC(), SlipWallBC())),
+                                   metric=CylindricalMetric(),
+                                   ic=(r, θ, z) -> Prim(p=1.0 + 0.1exp(-20(r^2 + z^2)),
+                                                        rho=1.0)),
+                         Numerics(n_global=(32, 1, 32),
+                                  amr=AMR(initial=(r, θ, z, t) -> r^2 + z^2 < 0.04,
+                                          regrid_interval=1, tile=4, max_levels=3,
                                           level_boundaries=true)))
         # Every EOS on a patched and on a refined layout.
         for (name, eos, ic) in C.EOSES[2:end],

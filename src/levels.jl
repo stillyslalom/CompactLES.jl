@@ -1350,13 +1350,19 @@ function _tile_span(lo::Int, hi::Int, tile::Int)
 end
 
 # The tile of lattice cell `k` clipped to the feasible node interval
-# `[lo, hi]`, or `nothing` when clipping leaves fewer than four nodes.
+# `[lo, hi]`, or `nothing` when clipping leaves fewer than four nodes. `last`
+# is the last node of the lattice, the parent's node coincident with the
+# root's last; a feasible interval reaching past either end of the lattice,
+# as it does at a fold below the first refined level (`_level_span`),
+# extends the first and the last cell to its ends instead of adding a cell.
 function _lattice_tile(k::NTuple{3,Int}, active::NTuple{3,Bool}, tile::Int,
-                       lo::NTuple{3,Int}, hi::NTuple{3,Int})
+                       lo::NTuple{3,Int}, hi::NTuple{3,Int}, last::NTuple{3,Int}=hi)
+    any(d -> active[d] && k[d] * tile + 1 >= last[d], 1:3) && return nothing
     offext = ntuple(3) do d
         active[d] || return (0, 1)
-        a = max(k[d] * tile + 1, lo[d])
-        b = min(k[d] * tile + tile + 1, hi[d])
+        a = k[d] == 0 ? lo[d] : max(k[d] * tile + 1, lo[d])
+        top = k[d] * tile + tile + 1
+        b = top >= last[d] ? hi[d] : min(top, hi[d])
         (a - 1, b - a + 1)
     end
     any(d -> active[d] && offext[d][2] < 4, 1:3) && return nothing
@@ -1365,13 +1371,13 @@ end
 
 # Tiles covering `box` (parent-level node space), in lattice order.
 function _level_tiles(box::BlockRegion, active::NTuple{3,Bool}, tile::Int,
-                      lo::NTuple{3,Int}, hi::NTuple{3,Int})
+                      lo::NTuple{3,Int}, hi::NTuple{3,Int}, last::NTuple{3,Int}=hi)
     spans = ntuple(d -> active[d] ?
                    _tile_span(box.offset[d] + 1, box.offset[d] + box.extent[d], tile) :
                    (0:0), 3)
     tiles = BlockRegion[]
     for k3 in spans[3], k2 in spans[2], k1 in spans[1]
-        t = _lattice_tile((k1, k2, k3), active, tile, lo, hi)
+        t = _lattice_tile((k1, k2, k3), active, tile, lo, hi, last)
         t === nothing || push!(tiles, t)
     end
     return tiles
@@ -2140,8 +2146,14 @@ _buffered(region::BlockRegion, active::NTuple{3,Bool}, margin::Int,
 # face-centred fold at the fine spacing (`_fine_plans`). The box keeps its
 # buffer across the plane, filled with the parity mirror of the parent's
 # nodes (`_mirror_folded_box!`), so the Lagrange chain stays centred there
-# and interpolates the extra node. Only the first refined level reaches a
-# symmetry plane; the setup, not the regrid, places such a level.
+# and interpolates the extra node. The setup places a level on the plane, and
+# so does the regrid under `level_boundaries`, carrying the extra node through
+# the box carry, the tile migration and the restart. A level below the first
+# does the same one level down: its parent's node nearest the plane lies half
+# a parent spacing from it, outside the lattice coincident with the root's,
+# so the parent's node space extends beyond that lattice (`_level_span`) and
+# a region reaching the plane starts at a negative offset in it, −1 for the
+# second level; the tile again takes one node beyond its parent's lattice.
 #
 # The axis of a θ-collapsed r-z run is the same fold with other parities.
 # Each radial line continues into itself through r = 0, so the fold is
@@ -2167,7 +2179,7 @@ _level_fold_condition(bc) = bc isa Union{SymmetryPlaneBC,AxisBC}
 
 # Per dimension and side, whether a level may reach that domain face: a
 # non-periodic active dimension whose root condition there qualifies, a
-# fold only where `folds` admits one (the first refined level at setup).
+# fold only where `folds` admits one.
 _level_boundary_eligible(bcs, active::NTuple{3,Bool}, periodic::NTuple{3,Bool},
                          folds::Bool=false) =
     ntuple(d -> ntuple(s -> active[d] && !periodic[d] &&
@@ -2185,15 +2197,18 @@ _level_fold_faces(boundary::NTuple{3,NTuple{2,Bool}}, bcs) =
 
 # Fill the part of a delivered box beyond a folded face with the parity mirror
 # of the parent's nodes inside it, for every transfer of `lev` whose tile this
-# rank holds: parent node 1 − n reads node n at a low fold, N + n reads
-# N + 1 − n at a high one, each component signed by its parity across the
-# fold, a plane's or the axis's. `A` is `select(transfer)`, padded like the
-# chain's stage 0; `N` is the parent's node count along the dimension, the
-# root's, since only the first refined level reaches a fold. A tile at a
-# corner of two folds takes the dimensions in turn, the second mirroring
-# what the first filled.
+# rank holds: with the parent's node space spanning `lo:hi` along the
+# dimension (`_level_span`), parent node lo − n reads node lo + n − 1 at a low
+# fold and hi + n reads hi + 1 − n at a high one, each component signed by
+# its parity across the fold, a plane's or the axis's, which are the root
+# fold's at every level. `A` is `select(transfer)`, padded like the chain's
+# stage 0. A tile at a corner of two folds takes the dimensions in turn, the
+# second mirroring what the first filled.
 function _mirror_folded_box!(solver, lev::Level, select::F) where {F}
     root = getfield(solver, :patches)[1]
+    any(lt -> lt.fine_index != 0 && any(any, lt.folded), lev.transfers) || return lev
+    span = _level_span(solver.n_global, ntuple(d -> solver.n_global[d] > 1, 3),
+                       lev.index - 1, root.bcs)
     for lt in lev.transfers
         lt.fine_index == 0 && continue
         any(any, lt.folded) || continue
@@ -2204,12 +2219,13 @@ function _mirror_folded_box!(solver, lev::Level, select::F) where {F}
         for d in 1:3, side in 1:2
             lt.folded[d][side] || continue
             fold = root.folds[d]
-            N = solver.n_global[d]
+            lo, hi = first(span[d]), last(span[d])
             at(n) = n - first(box[d]) + 1 + pad[d]
             for c in axes(A, 4)
                 σ = conserved_parity(solver.equations, fold.sigvel, c)
                 for m in 1:LEVEL_BUFFER
-                    dst, src = side == 1 ? (at(1 - m), at(m)) : (at(N + m), at(N + 1 - m))
+                    dst, src = side == 1 ? (at(lo - m), at(lo + m - 1)) :
+                                           (at(hi + m), at(hi + 1 - m))
                     sl(i) = ntuple(e -> e == d ? (i:i) : axes(A, e), 3)
                     view(A, sl(dst)..., c) .= σ .* view(A, sl(src)..., c)
                 end
@@ -2225,11 +2241,33 @@ end
 _level_extent(n_global::NTuple{3,Int}, active::NTuple{3,Bool}, ℓ::Int) =
     ntuple(d -> active[d] ? 3^ℓ * (n_global[d] - 1) + 1 : 1, 3)
 
-# The faces of `region` (in a level's node space of `extent` nodes) that lie
-# on a domain face a level may reach (`eligible`).
+# The nodes of level ℓ's node space along each dimension, the root's being
+# 1:n_global. Level-ℓ node n lies n − 1 level spacings from the root's first
+# node, so the nodes coincident with the root's run from 1 to 3^ℓ(N − 1) + 1
+# (`_level_extent`). At a face carrying a fold (`_level_fold_condition`) the
+# root's first node lies half a root spacing from the fold, and the space
+# extends by (3^ℓ − 1)/2 nodes to the node half a level spacing from it: a
+# region reaching the fold starts, or ends, there. At the first refined level
+# that is the one node `_fold_lead` counts, node 0 at a low fold; at the
+# second, level-1 node 0 is level-2 node −2 and the space starts at −3.
+function _level_span(n_global::NTuple{3,Int}, active::NTuple{3,Bool}, ℓ::Int, bcs)
+    ext = (3^ℓ - 1) ÷ 2
+    return ntuple(3) do d
+        active[d] || return 1:1
+        lo = _level_fold_condition(bcs[d][1]) ? 1 - ext : 1
+        hi = 3^ℓ * (n_global[d] - 1) + 1 + (_level_fold_condition(bcs[d][2]) ? ext : 0)
+        lo:hi
+    end
+end
+
+# The faces of `region` (in a level's node space of `extent` nodes, or over
+# the node ranges `span`) that lie on a domain face a level may reach
+# (`eligible`).
 _boundary_faces(region::BlockRegion, extent::NTuple{3,Int}, eligible) =
-    ntuple(d -> (eligible[d][1] && region.offset[d] == 0,
-                 eligible[d][2] && region.offset[d] + region.extent[d] == extent[d]), 3)
+    _boundary_faces(region, ntuple(d -> 1:extent[d], 3), eligible)
+_boundary_faces(region::BlockRegion, span::NTuple{3,UnitRange{Int}}, eligible) =
+    ntuple(d -> (eligible[d][1] && region.offset[d] + 1 == first(span[d]),
+                 eligible[d][2] && region.offset[d] + region.extent[d] == last(span[d])), 3)
 
 # The boundary faces of each of `regions`, level-ℓ tiles given in level
 # ℓ − 1's node space, from the root patch's conditions: the form the regrid
@@ -2238,13 +2276,22 @@ function _region_boundaries(solver, regions::AbstractVector{BlockRegion}, ℓ::I
     root = getfield(solver, :patches)[1]
     n_global = solver.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
-    # Neither a symmetry plane nor the axis is eligible: a regrid never
-    # places a level on either, and a region the setup placed there is not
-    # regridded.
-    eligible = _level_boundary_eligible(root.bcs, active, root.decomp.periodic)
-    extent = _level_extent(n_global, active, ℓ - 1)
-    return [_boundary_faces(r, extent, eligible) for r in regions]
+    eligible = _level_boundary_eligible(root.bcs, active, root.decomp.periodic, true)
+    span = _level_span(n_global, active, ℓ - 1, root.bcs)
+    return [_boundary_faces(r, span, eligible) for r in regions]
 end
+
+# The folded faces among each of `boundaries`, from the root patch's
+# conditions: what a tile built by a regrid or a restart takes beyond its
+# coincident lattice (`_fold_lead`).
+_region_folds(solver, boundaries::AbstractVector) =
+    [_level_fold_faces(b, getfield(solver, :patches)[1].bcs) for b in boundaries]
+
+# The node count of a level-ℓ tile over `region` (level ℓ − 1's node space),
+# with the node each of its folded faces adds.
+_tile_fine_extent(solver, region::BlockRegion, ℓ::Int) =
+    fine_extent(region, ntuple(d -> solver.n_global[d] > 1, 3),
+                only(_region_folds(solver, _region_boundaries(solver, [region], ℓ))))
 
 # Whether every node of `region` lies in some member of `regions` (a union
 # of boxes, not one box: the test is by node, and regions are small).

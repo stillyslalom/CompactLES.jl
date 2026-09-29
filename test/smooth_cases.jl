@@ -345,6 +345,27 @@ function plane_level_case(N; refined=true, opts...)
 end
 
 """
+    plane_nest_case(N; refined=true, opts...)
+
+`wall_case(N; folded = true)` with a first level over the first N ÷ 3 + 1
+root nodes and a second level nested in it against the same plane, over its
+parent's first N ÷ 3 nodes, [0, 1/9 − 1/(6N)]; under `refined = false` the
+uniform run at the second level's spacing, 9N nodes, which is its reference.
+The first level's node nearest the plane lies at 1/(6N), level-1 node 0, one
+node outside the lattice coincident with the root's, so the second level's
+region starts there, at offset −1 of its parent's node space, and its own
+first node lies at 1/(18N), half its spacing from the plane. N must be a
+multiple of 3.
+"""
+function plane_nest_case(N; refined=true, opts...)
+    N % 3 == 0 || error("N = $N: the nested plane level needs N divisible by 3")
+    level = refined ? (refine=[BlockRegion((0, 0, 0), (N ÷ 3 + 1, 1, 1)),
+                               BlockRegion((-1, 0, 0), (N ÷ 3, 1, 1))],) : (;)
+    wall_case(refined ? N : 9N; folded=true, slip=true,
+              merge((cfl=0.9,), level, values(opts))...)
+end
+
+"""
     axis_level_case(N; refined=true, viscous=false, mu=0.002, opts...)
 
 A converging cylindrical pulse on the axisymmetric line r ∈ (0, 2] (θ and z
