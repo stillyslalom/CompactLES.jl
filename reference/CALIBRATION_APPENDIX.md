@@ -6199,6 +6199,34 @@ coarse one. On a uniform state the tag sweep of a wall tile marks no node
 with its taps clamped at the wall and two with the face read as open, whose
 ghost layers hold zeros.
 
+**A converging shock on the axis level.** The instrument is
+`noh_axis_level` (`test/cases.jl`): cylindrical Noh from the cold start at
+N = 256, CFL 0.15 and the default filter, a static tile over the first m root
+nodes against the uniform run on 767 nodes; the global-step rows at m = 85 and
+43 are guarded in `test/validation.jl`, whose header carries them. Scratch
+variants of the same case, and a planar control (folded Noh, N = 400, a tile
+at the symmetry plane over the same fractions of the line, against the
+uniform run on 1199 nodes):
+
+| run | plateau | deficit | shock | mass drift | max \|ρ − uniform\| on the tile | steps |
+|---|---|---|---|---|---|---|
+| axis, m = 86, subcycled | 15.6524 | 48.3% | 0.2033 | −6.0e-7 | 0.27 | 3506 |
+| axis, m = 43, subcycled | 15.099 | 56.8% | 0.2079 | −3.2e-3 | 9.9 | 3320 |
+| plane, uniform on 1199 nodes | 3.9989 | 22.7% | 0.2008 | +1e-13 | | 10487 |
+| plane, m = 134 | 3.9989 | 22.7% | 0.2008 | −2e-12 | 1.5e-4 | 10487 |
+| plane, m = 67 | 3.9507 | 22.3% | 0.2036 | −1.14e-3 | 2.0 | 9739 |
+
+A tile holding the shock reproduces the uniform fine run on the axis as at
+the plane; the subcycled tile's axis node reads a deficit 1.7 points above
+the global step's. Once the shock leaves the tile, near t = 0.5, the
+composite loses mass at the crossing and the post-shock plateau inside the
+tile falls: on the axis to within 1.5% of the battery's uniform ν = 2 row on
+256 nodes, at the plane by 1.2%. The loss is the coupling's at a shock, not
+the axis's; the smooth composite budgets
+([bench/interfaceconservation.jl](#benchinterfaceconservationjl-composite-conservation-budgets))
+do not cover it. No axis runaway appears under αf = 0.47 at the level's
+spacing, 767 radial nodes.
+
 **Reproducibility tier.** A tile owned by a proper subset reproduces the
 every-rank answer to round-off, not bitwise: 0 to 6e-15 on the tiled wave
 cases at np = 2, 4 and 8, and the tiled Sod regrid with rebalancing on reaches

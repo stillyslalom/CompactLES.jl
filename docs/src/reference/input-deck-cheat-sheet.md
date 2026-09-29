@@ -123,7 +123,7 @@ faces or a `(low, high)` pair. For example, a triply periodic domain uses
 |---|---|---|
 | Periodic | `PeriodicBC()` | Both ends of a direction; required for collapsed dimensions |
 | Slip wall | `SlipWallBC()` | Impermeable adiabatic symmetry plane on the end node |
-| Symmetry plane | `SymmetryPlaneBC()` | The same plane half a cell outside the end node, folded by parity at the interior order; Cartesian or cylindrical `z`, single unrefined patch |
+| Symmetry plane | `SymmetryPlaneBC()` | The same plane half a cell outside the end node, folded by parity at the interior order; Cartesian or cylindrical `z`, no `patch_grid`; a refined level reaches it on the first level only |
 | No-slip wall | `NoSlipWallBC()` / `NoSlipWallBC(Twall=...)` | Adiabatic / isothermal viscous wall |
 | Extrapolation | `ExtrapolationBC()` | Zeroth-order boundary extrapolation |
 | Full prescribed state | `DirichletBC((x,y,z,t) -> Prim(u=(1.0,0,0), p=1.0, rho=1.0))` | Forced or supersonic inflow |

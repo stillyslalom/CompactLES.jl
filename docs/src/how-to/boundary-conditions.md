@@ -26,7 +26,7 @@ Construct two wrappers when the two faces must switch independently.
 |:--|:--|:--|
 | Periodic continuation | [`PeriodicBC`](@ref) | matching opposite face |
 | Inviscid or symmetry wall on a node | [`SlipWallBC`](@ref) | wall normal |
-| Symmetry plane half a cell outside the end node | [`SymmetryPlaneBC`](@ref) | wall normal; Cartesian or cylindrical z; a single unrefined patch |
+| Symmetry plane half a cell outside the end node | [`SymmetryPlaneBC`](@ref) | wall normal; Cartesian or cylindrical z; no `patch_grid` |
 | Viscous solid wall | [`NoSlipWallBC`](@ref) | optional wall temperature |
 | Supersonic or fully prescribed state | [`DirichletBC`](@ref) | full state as a function of position and time |
 | Subsonic inflow | [`NSCBCInflowBC`](@ref) | velocity, temperature, composition |
@@ -79,7 +79,9 @@ or last node instead of on it and continues the solution across it by parity,
 so every operator applies its interior stencil and no closure row exists. The
 slip wall's flux contract follows from the parities, with physical viscosity
 as without it. Use it in place of `SlipWallBC()` wherever the face is a true
-symmetry plane and the run is a single unrefined, unstretched patch. The grid
+symmetry plane, the plane's dimension is unstretched and the run has no
+`patch_grid`. A refined level may reach the plane on the first level only,
+placed at setup and not regridded. The grid
 moves with it: the end node sits at `h/2` from the plane, with `h = L/(N − ½)`
 for one plane and `L/N` for two, and a wall-normal profile station shifts by
 half a cell. The condition cannot be switched during a run and is available

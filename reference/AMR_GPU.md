@@ -253,8 +253,13 @@ each transfer separately from the evolution between transfers. Mixing width
 and molecular mixing are physical diagnostics, not conserved variables.
 
 Every measured configuration is inside its budget, the fixed layouts by an
-order of magnitude, so no surface-flux correction is enabled. If one is ever needed, it would
-retain the outward metric-weighted flux on each interface while the patch's
+order of magnitude, so no surface-flux correction is enabled. A strong shock
+crossing a static coarse-fine face is outside these smooth budgets: Noh's
+shock leaving a tile loses mass at the crossing, planar or on the axis, far
+above the drift of the uniform runs at either spacing
+([measurements](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)).
+A surface-flux correction, if one is added, would retain the outward
+metric-weighted flux on each interface while the patch's
 RHS workspace is live, accumulate it with the low-storage RK weights, and
 reconcile coincident faces after every participating patch has evaluated its
 stages; a subcycled parent needs the sum over its children's substeps,
@@ -609,6 +614,13 @@ where the cylindrical divergence does not hold the π mode of the radial
 momentum in its null space and the tile departs from the uniform run; the
 axis rows are filtered, as a production run is
 ([measurements](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)).
+Cylindrical Noh with a static tile on the axis is a `test/validation.jl`
+row: while the tile holds the shock, the axis layer, plateau, front and mass
+are the uniform run's at the level's spacing, in the same number of steps. A
+shock that leaves the tile through its coarse-fine face loses mass there,
+and the post-shock state inside the tile falls towards the uniform coarse
+run's; a planar Noh leaving a tile at a symmetry plane does the same, so the
+loss belongs to the coupling at a shock, not to the axis.
 
 ### Subcycling
 

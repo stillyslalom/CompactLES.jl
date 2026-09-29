@@ -323,6 +323,64 @@ function noh_case(ν::Int; N=Dict(NOH_N)[ν], t0=Dict(NOH_T0)[ν],
            state_report(solver, Q)
 end
 
+# --- Noh on a level at the axis ---------------------------------------------
+#
+# The cylindrical implosion of `noh_case(2)` with a static first refined level
+# over the axis. The shock forms on the tile's fold, so the wall-heating layer
+# the axis deposits lies inside the tile, and a tile shorter than the final
+# front radius passes the shock out through its coarse-fine face. The uniform
+# run at the level's spacing is the reference for everything the tile holds.
+
+"""
+    noh_axis_level(; N, m, refined, subcycle, cfl, nmax) -> NamedTuple
+
+Cylindrical Noh from the cold start, as `noh_case(2)`, with a static first
+refined level over root nodes 1:m, [0, (m − ½)h] with h = R/(N − ½), whose
+tile folds on the axis at the level's spacing. Under `refined = false` it is
+the uniform run at that spacing, 3N − 1 nodes, whose node j is the tile's
+node j. `subcycle` selects the Berger–Oliger step.
+
+Returns the composite density profile (`x`, `rho`: the tile's nodes, then the
+root's beyond the tile), whether the run reached `NOH_T`, the closing
+[`StateReport`](@ref), the step count and the composite mass ∫ρ dV per radian
+and unit length. Serial only: the profile is read from one rank.
+"""
+function noh_axis_level(; N=Dict(NOH_N)[2], m=N ÷ 3, refined=true, subcycle=false,
+                        cfl=NOH_CFL, nmax=NMAX)
+    MPI.Comm_size(MPI.COMM_WORLD) == 1 || error("noh_axis_level runs serially")
+    prob = noh_problem(2; N, t0=0.0)
+    amr = refined ? AMR(initial=BlockRegion((0, 0, 0), (m, 1, 1)), subcycle=subcycle) :
+          nothing
+    # Permissive for the reason `noh_case` is: the axis layer carries a few
+    # cells of negative internal energy that the guards bound.
+    solver, states = setup(prob, Numerics(n_global=(refined ? N : 3N - 1, 1, 1),
+                                          art=ArtificialProperties(enabled=true),
+                                          cfl=cfl, amr=amr,
+                                          control=StepControl(validity=:permissive)))
+    run!(solver, states; tfinal=NOH_T, nmax=nmax)
+    xs, ρ = Float64[], Float64[]
+    for (k, patch) in enumerate(Iterators.reverse(getfield(solver, :patches)))
+        ps = CL.PatchSolver(solver, patch)
+        Q = states isa Vector ? states[end - k + 1] : states
+        CL.exchange_state!(Q, ps.decomp)
+        CL.primitives!(ps, Q)
+        edge = isempty(xs) ? -Inf : xs[end]
+        for i in 1:ps.decomp.n_local[1]
+            x = xcoord(ps, 1, i)
+            x > edge + 1e-12 || continue
+            push!(xs, x)
+            push!(ρ, ps.rho[padded_index(ps, i, 1, 1)])
+        end
+    end
+    return (x=xs, rho=ρ, completed=completed(solver, NOH_T),
+            report=state_report(solver, states), steps=solver.step,
+            mass=volume_integral(solver, states, :rho))
+end
+
+"The exact Noh mass ∫ρ r dr over [0, R] at time t, cylindrical, per radian."
+noh_cylinder_mass(t; R=1.0) =
+    (Rs = (NOH_G - 1) / 2 * t; 8Rs^2 + (R^2 - Rs^2) / 2 + t * (R - Rs))
+
 # --- species interface ------------------------------------------------------
 #
 # A sharp binary interface carried through a periodic domain at uniform ρ, p and
