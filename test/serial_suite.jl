@@ -1104,6 +1104,7 @@ end
     # (bench/imexconduction.jl, which also measures the step rules).
     α, σ, A = 1.0, 0.2, 0.5
     t0 = σ^2 / (2α)
+    noart = ArtificialProperties(enabled=false)
     pulse(x, t) = 1 + A * sqrt(t0 / (t + t0)) *
                   sum(exp(-(x + 2m)^2 / (4α * (t + t0))) for m in -4:4)
     function line(n; implicit=ImplicitConduction(step_rule=:none), gas=1e-10,
