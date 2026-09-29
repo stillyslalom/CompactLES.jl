@@ -41,7 +41,9 @@ One solver runs on four axes of configuration, combinable except where
   parent at ratio 3 with one patch or with the tiles of a global lattice,
   at a global timestep or Berger–Oliger subcycled recursively; a two-level
   hierarchy can move under sensor-driven tagging and regridding, tiles
-  entering and leaving the set (`src/levels.jl`, `src/regrid.jl`).
+  entering and leaving the set, on the Cartesian metric and on the
+  axisymmetric (θ-collapsed) cylindrical one (`src/levels.jl`,
+  `src/regrid.jl`).
 - **Distribution**: each level decomposes over its own rank subset, a prefix
   of its parent's, and within it each tile over its own rank range, the
   ranges dealt out along a Morton curve by tile volume; a rank holds the
@@ -471,6 +473,26 @@ and the AMR frontend's shapes still stop at the margin. A symmetry plane
 needs a tile whose first node lies half a fine cell from the plane, one
 fine node outside the coincident lattice, and an NSCBC face its
 characteristic correction at the fine spacing; neither is accepted yet.
+
+### Levels on the axisymmetric metric
+
+An r-z run (`CylindricalMetric`, θ collapsed) refines as a Cartesian one
+does. Each tile evaluates its geometry at its own nodes (`init_geometry!`
+reads the patch's region offset and spacing), so its `inv_J`, face areas and
+`inv_r` are the uniform run's at the level spacing node for node, halo
+layers included, and the composite quadrature, which weights every node by
+1/`inv_J`, weights it by r. The transfers move the conserved variables:
+interpolating r·Q and dividing by r at the fine nodes moved neither the
+coarse-fine error nor the composite mass drift
+([measurements](CALIBRATION_APPENDIX.md#testlevel_testsjl-the-level-hierarchy)),
+and the plain form stays valid where r vanishes. The ghost fluxes carry the
+area factor and the Jacobian (`_ghost_geometry`), and the molecular flux
+evaluated from the gradient ring adds the curvature terms of the velocity
+gradient that the interior takes from `metric_correct_gradients!`; without
+those terms the viscous coupling does not converge. A root on the axis keeps
+its fold, and the nesting margin holds every level off it; a region reaching
+the axis is refused by the face's condition. The spherical metric and a
+resolved θ carry angular scale factors into the transfers and stay rejected.
 
 ### Subcycling
 
@@ -1447,8 +1469,9 @@ Configurations rejected at setup, and the reason:
   explicit `dims`. The layout tiles slabs along
   one dimension, so corner-coupled adjacency does not arise. Field output
   takes the multiblock form; a slab layout has no checkpoint.
-- **Refined runs** require Cartesian metric, no stretching, no folds, one
-  region per level, and no same-level
+- **Refined runs** require the Cartesian or the θ-collapsed cylindrical
+  metric, no stretching, no fold on a refined level (an r-z root keeps its
+  axis, which no level reaches), one region per level, and no same-level
   `patch_grid` alongside. `level_restriction = :filter` is serial-only.
   Each region must nest by `max(n_halo, LEVEL_BUFFER)` parent nodes inside
   the patches of the level above at every parent-fed face and span ≥ 4

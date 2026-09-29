@@ -531,11 +531,19 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                   "under MPI")
         npatch == 1 ||
             error("refine cannot combine with a same-level patch_grid yet")
-        metric isa CartesianMetric ||
-            error("refinement requires CartesianMetric in this stage")
+        # Each tile evaluates its geometry at its own nodes, which serves the
+        # axisymmetric cylindrical metric as it does the Cartesian one. A
+        # resolved θ or the spherical metric would carry angular scale factors
+        # into the level transfers and the ghost fluxes, which are not built.
+        metric isa CartesianMetric || (metric isa CylindricalMetric && !active_g[2]) ||
+            error("refinement requires CartesianMetric or CylindricalMetric with " *
+                  "θ collapsed (n_global[2] = 1)")
         all(isnothing, stretch) ||
             error("refinement requires an unstretched grid")
-        (axis || orig1 || poles) &&
+        # The axis of an r-z run stays on the root, whose fold is untouched by
+        # a level held off it by the nesting margin; a region reaching it is
+        # refused below, where the face's condition is named.
+        (orig1 || poles) &&
             error("refinement across a coordinate fold is forbidden")
         any(any, symplane) &&
             error("refinement across a SymmetryPlaneBC is forbidden; a " *
@@ -643,8 +651,10 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     # --- Ghost-flux divergence -----------------------------------------------
     # `:ghost` differences the inviscid flux through an interface end with
     # the gradient plans, whose interface rows exist only under `:extended`;
-    # the ghost fluxes carry no area or Jacobian factors, so the geometry
-    # must be unit. A configuration they do not support raises rather than
+    # the ghost fluxes carry the area factors and the Jacobian of an
+    # unstretched Cartesian or axisymmetric cylindrical grid, and the
+    # curvature terms of the latter's velocity gradient, and no other
+    # metric's. A configuration they do not support raises rather than
     # falling back, since `:ghost` is the default.
     if interface_flux === :ghost
         interface_rhs === :extended ||
@@ -652,11 +662,12 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 "interface_flux = :ghost (the default) reads the gradient plans' " *
                 "interface rows, which exist under interface_rhs = :extended only; " *
                 "pass interface_flux = :closure with interface_rhs = :$interface_rhs"))
-        metric isa CartesianMetric && all(isnothing, stretch) ||
+        (metric isa CartesianMetric || (metric isa CylindricalMetric && !active_g[2])) &&
+            all(isnothing, stretch) ||
             throw(ArgumentError(
                 "interface_flux = :ghost (the default) requires an unstretched " *
-                "CartesianMetric at a patch or level interface; pass " *
-                "interface_flux = :closure on this grid"))
+                "CartesianMetric, or CylindricalMetric with θ collapsed, at a patch " *
+                "or level interface; pass interface_flux = :closure on this grid"))
         # A coarse-fine face's molecular ghost flux recovers the temperature
         # gradient from the conserved ones through the internal energy, which
         # `_temperature_gradient` inverts for the built-in models only.

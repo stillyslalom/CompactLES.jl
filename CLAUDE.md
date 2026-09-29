@@ -230,7 +230,9 @@ interface evolution 6.79 (two patches), 6.01 (two levels), 3.62 / 6.01
 levels subcycled), 6.87 (two levels filtered), 5.93 (two levels,
 `:brady_livescu` with the `:d8` detector, closure rows), 6.01 (two levels,
 pentadiagonal filter), a level at a slip wall 4.68 (the fine wall window
-against the uniform run at the fine spacing), temporal order 3.99 / 4.09
+against the uniform run at the fine spacing), a level on an r-z annulus
+5.83 / 5.40 (inviscid / viscous, the fine interface window against the
+uniform run at the fine spacing), temporal order 3.99 / 4.09
 (Dirichlet / NSCBC inflow data),
 1.00 / 3.85 (two levels, global step / subcycled), 4.02 / 3.63 (the
 additive pair, periodic / no-slip walls at Pr = 0.007). The default closure of all three derivative presets is

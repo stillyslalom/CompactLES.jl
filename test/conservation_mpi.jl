@@ -66,4 +66,28 @@ function test_composite_budgets()
     check("ledger: nothing unattributed",
           any(k -> k[1] === :unattributed, keys(r.pieces)) ? 1.0 : 0.0, 0.5)
     check("ledger: telescoping residual", maximum(abs, r.residual), 1e-12)
+
+    # An r-z level with molecular transport: the r-weighted budget after four
+    # steps, through the ghost fluxes' area factors and the gradient ring's
+    # curvature terms, matches the undecomposed run.
+    function rz(comm_here, dims_here)
+        kw = dims_here === nothing ? (;) : (; dims=dims_here)
+        s = Solver(; n_global=(48, 1, 48), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((SlipWallBC(), SlipWallBC()), (PeriodicBC(), PeriodicBC()),
+                        (PeriodicBC(), PeriodicBC())),
+                   metric=CylindricalMetric(), origin=(0.5, 0.0, 0.0),
+                   refine=BlockRegion((16, 0, 16), (16, 1, 16)),
+                   transport=ConstantTransport(mu0=1e-3), comm=comm_here, kw...)
+        Q = allocate_state(s)
+        initialize!(s, Q, (r, θ, z) -> begin
+            g = exp(-40((r - 0.9)^2 + (z - 0.45)^2))
+            Prim(rho=1.0 + 0.1g, u=(0.1g, 0.0, 0.2), p=1.0 + 0.1g)
+        end)
+        run!(s, Q; tfinal=1.0, nmax=4)
+        return CL._conserved_budget(s, Q)
+    end
+    brz = rz(comm, nothing)
+    brzref = rz(MPI.COMM_SELF, (1, 1, 1))
+    check("r-z level conserved vector vs COMM_SELF",
+          maximum(abs.(packed(brz) .- packed(brzref))), 1e-12)
 end

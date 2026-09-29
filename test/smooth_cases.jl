@@ -260,6 +260,34 @@ function wall_level_case(N; refined=true, viscous=false, slip=!viscous, opts...)
 end
 
 """
+    annulus_level_case(N; refined=true, viscous=false, mu=0.005, opts...)
+
+A cylindrical acoustic pulse on the axisymmetric annulus r ∈ [1/2, 3/2]
+(θ and z collapsed) between slip walls, at rest with ρ = 1 + 0.05
+exp(−((r − 1)/0.1)²) and isentropic p, and a refined level over [11/12,
+13/12] around it; under `refined = false` the uniform run at the level's
+spacing, 3(N − 1) + 1 nodes, which is its reference in equal steps
+(`fixed_step_run!`). By t = 0.2 the outgoing and ingoing waves have left the
+level through its two faces and have not reached a wall, so the difference
+between the two runs is the coarse-fine coupling's error under the metric's
+area factor and p/r source. N − 1 must be a multiple of 12.
+"""
+function annulus_level_case(N; refined=true, viscous=false, mu=0.002, Pr=0.7, opts...)
+    (N - 1) % 12 == 0 || error("N = $N: the annulus level needs N − 1 divisible by 12")
+    level = refined ? (refine=BlockRegion((5 * (N - 1) ÷ 12, 0, 0),
+                                          ((N - 1) ÷ 6 + 1, 1, 1)),) : (;)
+    prof = r -> begin
+        rho = 1 + 0.05 * exp(-((r - 1) / 0.1)^2)
+        (rho, zero(r), zero(r), rho^1.4)
+    end
+    wall = SlipWallBC()
+    _smooth_solver((refined ? N : 3 * (N - 1) + 1, 1, 1), 1.0,
+                   ((wall, wall), per3[2], per3[3]), prof; mu=viscous ? mu : 0.0,
+                   Pr=Pr, metric=CylindricalMetric(), origin=(0.5, 0.0, 0.0),
+                   merge(SMOOTH_DEFAULTS, (cfl=0.9,), level, values(opts))...)
+end
+
+"""
     mirror_case(N; viscous=false, folded=false, a=0.05, b=0.05, c=0.0,
                 mu=0.005, opts...)
 

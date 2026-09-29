@@ -45,8 +45,8 @@ first kernel launch.
 |:--|:--|:--|:--|:--|
 | Cartesian, uniform | yes | yes | yes | no |
 | Cartesian, stretched ([`Stretch`](@ref)) | yes | if the patched dimension is uniform, with `patch_interfaces = :closure` | no | no |
-| Cylindrical, [`AxisBC`](@ref) at r = 0 | yes | no | no | θ resolved over 2π, uniform r, host only |
-| Cylindrical, annulus (no axis) | yes | with `patch_interfaces = :closure` | no | θ resolved over 2π, uniform r, host only |
+| Cylindrical, [`AxisBC`](@ref) at r = 0 | yes | no | θ collapsed, the levels off the axis | θ resolved over 2π, uniform r, host only |
+| Cylindrical, annulus (no axis) | yes | θ collapsed, or with `patch_interfaces = :closure` | θ collapsed | θ resolved over 2π, uniform r, host only |
 | Spherical, [`OriginBC`](@ref) and/or [`PoleBC`](@ref) | yes | no | no | no |
 | [`SymmetryPlaneBC`](@ref) on a Cartesian face or a cylindrical z face | yes | no | no | as for the metric |
 
@@ -71,8 +71,8 @@ such as `(0, π)` places it on the pole.
 | Layout | selected by | device | restrictions |
 |:--|:--|:--|:--|
 | one patch | default | yes | none |
-| same-level slabs | `patch_grid` | yes | uniform Cartesian, or a cylindrical annulus or stretched grid under `patch_interfaces = :closure`, without folds or symmetry planes; tridiagonal filter; `:delta4` or `:species_d8` detector; no explicit `dims`; no refinement; no checkpoint |
-| static nested levels | `AMR(initial = [shape, ...])` or a `BlockRegion` vector, `regrid_interval = 0` | yes | Cartesian, uniform, no folds or symmetry planes |
+| same-level slabs | `patch_grid` | yes | uniform Cartesian or a θ-collapsed cylindrical annulus, or a resolved-θ annulus or stretched grid under `patch_interfaces = :closure`, without folds or symmetry planes; tridiagonal filter; `:delta4` or `:species_d8` detector; no explicit `dims`; no refinement; no checkpoint |
+| static nested levels | `AMR(initial = [shape, ...])` or a `BlockRegion` vector, `regrid_interval = 0` | yes | uniform Cartesian, or cylindrical with θ collapsed; no symmetry planes; an axis stays on the root, which the levels do not reach |
 | one regridded box | `AMR(initial = ...)` with `regrid_interval > 0`, `tile = 0` | yes | as for static levels |
 | regridded tiles, two levels | as above with `tile ≥ 3` | yes | as for static levels |
 | regridded tiles, more than two levels | `tile ≥ 3` with `max_levels > 2` or a nested `BlockRegion` vector | no | host backend only; no `rebalance` |
@@ -81,7 +81,8 @@ such as `(0, π)` places it on the pole.
 `level_restriction = :filter` is accepted on the host backend of a serial
 run only; the default `:inject` has no restriction. At a patch or level
 interface the default `PatchInterfaces(flux = :ghost)` requires
-`rhs = :extended` and a uniform Cartesian grid, and with molecular
+`rhs = :extended` and a uniform Cartesian grid or a uniform cylindrical grid
+with θ collapsed, and with molecular
 transport at a refined level one of the three built-in equations of state;
 every other interface configuration requires `patch_interfaces = :closure`,
 passed explicitly, and setup raises an `ArgumentError` rather than switching
@@ -125,7 +126,8 @@ text below.
 | `patch_grid` with explicit `dims` | `an explicit process grid cannot combine with patch_grid` |
 | `patch_grid` along a stretched dimension | `the patched dimension cannot be stretched` |
 | `AMR` with `patch_grid` | `AMR: cannot be combined with a patch_grid` |
-| `AMR` on a cylindrical or spherical metric | `AMR: requires CartesianMetric` |
+| `AMR` on a spherical metric or a resolved-θ cylindrical one | `AMR: requires CartesianMetric or CylindricalMetric with θ collapsed` |
+| a refined region reaching the axis | `whose AxisBC a refined level cannot carry` |
 | `AMR` on a stretched grid | `AMR: requires a uniform grid` |
 | `AMR` with a symmetry plane | `AMR: cannot refine a run with a SymmetryPlaneBC` |
 | `AMR` regridding a vector of shapes | `AMR: regridding moves one refined level` |
@@ -133,7 +135,7 @@ text below.
 | more than one regridded level on a device | `regridding more than one refined level runs on the host backend only` |
 | `level_restriction = :filter` on a device | `level_restriction = :filter is host-only` |
 | `rebalance` without a tiled, regridded level | `rebalance repartitions a tiled level at the regrid cadence` |
-| `interface_flux = :ghost`, the default, at an interface of a non-Cartesian or stretched grid | `interface_flux = :ghost (the default) requires an unstretched CartesianMetric at a patch or level interface` |
+| `interface_flux = :ghost`, the default, at an interface of a spherical, resolved-θ cylindrical or stretched grid | `interface_flux = :ghost (the default) requires an unstretched CartesianMetric, or CylindricalMetric with θ collapsed, at a patch or level interface` |
 | `interface_flux = :ghost`, the default, with `interface_rhs = :onesided` | `interface_flux = :ghost (the default) reads the gradient plans' interface rows, which exist under interface_rhs = :extended only` |
 | `interface_flux = :ghost`, the default, with molecular transport at a refined level and a user EOS | `interface_flux = :ghost (the default) with molecular transport at a refined level supports IdealMixture, Nasa9Mixture and StiffenedGas` |
 | `polar_truncation` on a spherical or Cartesian metric | `polar_truncation applies to CylindricalMetric` |

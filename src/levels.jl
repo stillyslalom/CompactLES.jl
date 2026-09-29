@@ -65,8 +65,11 @@
 # dimensions) `TransferPlan`s connects the coarse box to the fully fine box
 # through K − 1 intermediate grids, each stage carrying its own scratch array.
 #
-# Scope, enforced by `Solver`: Cartesian metric, no stretching, no folds, and
-# no same-level patch decomposition alongside refinement. The fine patch's
+# Scope, enforced by `Solver`: the Cartesian or axisymmetric (θ-collapsed)
+# cylindrical metric, no stretching, no fold on a refined level (an r-z root
+# keeps its axis), and no same-level patch decomposition alongside
+# refinement. The transfers move the conserved variables themselves on either
+# metric; each tile evaluates its own geometry at its nodes. The fine patch's
 # line solves close at the coarse–fine boundary with the same-level interface
 # rows (extended-data gradients and filters, one-sided divergence); a
 # pentadiagonal scheme, the C10 derivative or a banded filter, takes two such

@@ -6111,6 +6111,38 @@ np = 2, 4 and 8. A twelve-tile wave written on half the ranks and restored on
 all of them, rebuilt from a six-tile initial region, continues to 1e-12 in the
 wave error.
 
+**Axisymmetric levels.** The instrument is the convergence rows' case (a
+cylindrical pulse at r = 1 on the annulus [1/2, 3/2], a level over [11/12,
+13/12], the fine window against the uniform run at its spacing in equal
+steps, t = 0.2) and a 2-D r-z drift case (the annulus periodic in z, a pulse
+crossing a 12×12 level, t = 0.4, filter and artificial properties off), with
+the variants built in a scratch copy of the tree. Interpolating r·Q and
+dividing by r at the fine nodes against interpolating Q:
+
+| window error at N | 49 | 97 | 193 |
+|---|---|---|---|
+| Q, inviscid | 2.56e-7 | 2.86e-9 | 7.95e-11 |
+| r·Q, inviscid | 2.59e-7 | 2.90e-9 | 7.92e-11 |
+| Q, μ = 0.002 | 4.55e-7 | 9.26e-9 | 2.56e-10 |
+| r·Q, μ = 0.002 | 4.56e-7 | 9.28e-9 | 2.56e-10 |
+| Q, μ = 0.002, no curvature terms in the ring flux | 3.03e-6 | 2.86e-6 | 1.92e-6 |
+| Cartesian, μ = 0.002 | 3.65e-7 | 7.43e-9 | 2.11e-10 |
+| Q, closure rows, inviscid | 1.09e-6 | 5.89e-8 | 5.67e-9 |
+
+The relative mass drift of the 2-D case is −1.193e-5 at 37 root nodes and
+−3.137e-6 at 73 under either interpolation, against −1.197e-5 and −3.092e-6
+on the Cartesian metric and 4.9e-7 and −7.2e-8 for the root alone; the
+ledger closes to 1.2e-16, and the level's coarse-fine flux and the parent's
+flux into the covered region cancel to 3e-6 of the mass. Settled: the
+conserved variables are interpolated. A standing wave touching the annulus
+walls was not used for the rows: a single level converges there at about
+second order in the interior (2.0e-5, 7.6e-6, 2.3e-6, 6.8e-7 at N = 25 to
+193 against the uniform run at a third of the spacing, where the Cartesian
+line gives 1.8e-6 to 2.0e-10). The pulse, which reaches no wall by t = 0.2,
+converges on a single level as on the Cartesian line (1.5e-8 against 9.3e-9
+in the interior at 193), so the loss is set at the curved slip walls, not
+by the level; it is not diagnosed further.
+
 **Reproducibility tier.** A tile owned by a proper subset reproduces the
 every-rank answer to round-off, not bitwise: 0 to 6e-15 on the tiled wave
 cases at np = 2, 4 and 8, and the tiled Sod regrid with rebalancing on reaches

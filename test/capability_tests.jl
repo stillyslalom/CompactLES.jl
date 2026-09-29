@@ -115,7 +115,13 @@ include("capability_cases.jl")
                          stretch=stretched))
         rejects("AMR: cannot be combined with a patch_grid",
                 gas, Numerics(n_global=n1, execution=Execution(patch_grid=(2, 1, 1)), amr=box))
-        rejects("AMR: requires CartesianMetric", cyl, Numerics(n_global=(48, 16, 1), amr=box))
+        rejects("AMR: requires CartesianMetric or CylindricalMetric with θ collapsed",
+                cyl, Numerics(n_global=(48, 16, 1), amr=box))
+        rejects("AMR: requires CartesianMetric or CylindricalMetric with θ collapsed",
+                sph, Numerics(n_global=(16, 16, 1), amr=box))
+        rejects("whose AxisBC a refined level cannot carry",
+                C.problem(bcs=axis, metric=CylindricalMetric(), ic=C.ic_radial),
+                Numerics(n_global=n1, amr=AMR(initial=BlockRegion((0, 0, 0), (10, 1, 1)))))
         rejects("AMR: requires a uniform grid",
                 C.problem(bcs=(wall, per, per)), Numerics(n_global=n1, stretch=stretched,
                                                           amr=box))
@@ -140,11 +146,11 @@ include("capability_cases.jl")
                 Numerics(n_global=n1, amr=AMR(initial=feature, regrid_interval=1,
                                               rebalance=1.5)))
         rejects("interface_flux = :ghost (the default) requires an unstretched " *
-                "CartesianMetric at a patch or level interface; pass " *
-                "interface_flux = :closure",
+                "CartesianMetric, or CylindricalMetric with θ collapsed, at a patch " *
+                "or level interface; pass interface_flux = :closure",
                 C.problem(bcs=(wall, per, per), metric=CylindricalMetric(),
-                          domain=((0.5, 1.5), (0.0, 1.0), (0.0, 1.0)), ic=C.ic_shell),
-                Numerics(n_global=n1, execution=Execution(patch_grid=(2, 1, 1))))
+                          domain=((0.5, 1.5), (0.0, 2π), (0.0, 1.0)), ic=C.ic_shell),
+                Numerics(n_global=(48, 16, 1), execution=Execution(patch_grid=(2, 1, 1))))
         rejects("interface_flux = :ghost (the default) reads the gradient plans' " *
                 "interface rows, which exist under interface_rhs = :extended only; " *
                 "pass interface_flux = :closure",

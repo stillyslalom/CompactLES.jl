@@ -2181,8 +2181,9 @@ function filter_state!(solver::SolverLike, Q)
 end
 
 # Whether this solver's state filter weights by the cell volume: the option is
-# on and the volume is not uniform. A refined level is Cartesian and
-# unstretched by construction, so it never takes the weighted path.
+# on and the volume is not uniform. A refined level is unstretched, so it takes
+# the weighted path on the axisymmetric cylindrical metric only, with its own
+# J = r, which is analytic on the ghost layers its interface rows read.
 _weighted_filter(solver::SolverLike) =
     solver.filter_weighting === :volume &&
     !(solver.metric isa CartesianMetric && all(isnothing, solver.stretch))

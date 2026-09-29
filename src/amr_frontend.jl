@@ -200,8 +200,9 @@ function _check_amr_scope(prob, num)
     num.execution.patch_grid == (1, 1, 1) ||
         fail("cannot be combined with a patch_grid")
     prob.metric isa CartesianMetric ||
-        fail("requires CartesianMetric; cylindrical and spherical runs cannot " *
-             "refine yet")
+        (prob.metric isa CylindricalMetric && num.n_global[2] == 1) ||
+        fail("requires CartesianMetric or CylindricalMetric with θ collapsed " *
+             "(n_global[2] = 1); spherical and resolved-θ runs cannot refine yet")
     all(isnothing, num.stretch) ||
         fail("requires a uniform grid; set stretch = nothing in every direction")
     any(pair -> any(bc -> bc isa SymmetryPlaneBC, pair), prob.bcs) &&
@@ -209,12 +210,19 @@ function _check_amr_scope(prob, num)
     return nothing
 end
 
-# The node spacing of the root along each dimension, as the solver sets it.
+# The node spacing of the root along each dimension, as the solver sets it:
+# an axis moves the first radial node half a cell off r = 0, so the line
+# carries half a cell less.
 _root_spacing(prob, num) = ntuple(3) do d
     L = prob.domain[d][2] - prob.domain[d][1]
     n = num.n_global[d]
-    n == 1 ? L : isperiodic(prob.bcs[d][1]) ? L / n : L / (n - 1)
+    n == 1 ? L : isperiodic(prob.bcs[d][1]) ? L / n :
+    _root_axis(prob, d) ? L / (n - 0.5) : L / (n - 1)
 end
+
+# Whether dimension `d` of the root is the radius of an axis, whose first
+# node lies half a spacing from the domain's low end.
+_root_axis(prob, d::Int) = d == 1 && prob.bcs[1][1] isa AxisBC
 
 # Nested regions covering nested shapes. Each shape is sampled on its parent's
 # lattice, over the parent's own nodes; a node within one cell diagonal of the
@@ -224,8 +232,8 @@ function _shape_regions(shapes, prob, num)
     n_global = num.n_global
     active = ntuple(d -> n_global[d] > 1, 3)
     margin = max(num.n_halo, LEVEL_BUFFER)
-    origin = ntuple(d -> prob.domain[d][1], 3)
     h = _root_spacing(prob, num)
+    origin = ntuple(d -> prob.domain[d][1] + (_root_axis(prob, d) ? h[d] / 2 : 0.0), 3)
     plo = (0, 0, 0)
     phi = ntuple(d -> n_global[d] - 1, 3)
     regions = BlockRegion[]

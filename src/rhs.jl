@@ -511,6 +511,14 @@ end
 # one pass over all interface dimensions and one halo exchange per dimension.
 # It allocates nothing beyond the `ghost_flux` arrays sized at construction;
 # `tmp_b` and `tmp_a` are its scratch.
+#
+# On the axisymmetric cylindrical metric the divergence along `d` is
+# inv_J·D(A_d F_d), and both parts carry the product: A_d(F − P) through the
+# divergence plans and A_d P through the gradient plans, each scaled by inv_J
+# at the interior points. The geometry arrays are analytic over the padded
+# extent, so A_d is exact on the ghost layers of an interface end, and a
+# uniform pressure still cancels the r-momentum source p/r to round-off, since
+# every closure row differentiates the linear A_1 = r exactly.
 
 "Whether dimension `d` of this patch has an interface end the divergence closes."
 @inline _interface_dim(solver::SolverLike, d::Int) =
@@ -530,36 +538,52 @@ function _flux_remainder(solver::SolverLike, d::Int)
     return !(per || bc_lo isa InterfaceBC) || !(per || bc_hi isa InterfaceBC)
 end
 
+# The area factor and the Jacobian the ghost-differenced divergence along `d`
+# takes: `nothing` for both on an unstretched Cartesian grid, where they are
+# one and the products are skipped, as in `compute_rhs!`. Dispatched on the
+# metric and stretch types, so the result is inferred.
+@inline _ghost_geometry(solver::SolverLike, d::Int) =
+    _ghost_geometry(solver.metric, solver.stretch, solver, d)
+@inline _ghost_geometry(::CartesianMetric, ::NTuple{3,Nothing}, solver, d::Int) =
+    (nothing, nothing)
+@inline _ghost_geometry(::Metric, stretch, solver, d::Int) =
+    (solver.area_d[d], solver.inv_J)
+
+# `f` times the area factor at `I`, or `f` itself on unit geometry.
+@inline _area_scaled(::Nothing, I, f) = f
+@inline _area_scaled(Ad, I, f) = @inbounds Ad[I] * f
+
 # The ghost-differenced flux of component `c` along `d` at every padded point
 # into `out`: the inviscid flux, plus the molecular flux `G` under `viscous`,
-# or, under `remainder`, the assembled flux `F` less it. The inviscid
-# expressions are those of `_fluxes_point!`, so on an inviscid run the
-# remainder is exactly zero. At an interface end `F`'s ghosts hold no data
-# and neither does the remainder there; the divergence rows that take it
-# read none, and `G` is zero there (`_molecular_flux_point!`).
-@inline function _inviscid_flux_point!(out, F, Q, rho, u, v, w, p, Y, G, c, d,
+# or, under `remainder`, the assembled flux `F` less it, either one times the
+# area factor `Ad` where it is not `nothing`. The inviscid expressions are
+# those of `_fluxes_point!`, so on an inviscid run the remainder is exactly
+# zero. At an interface end `F`'s ghosts hold no data and neither does the
+# remainder there; the divergence rows that take it read none, and `G` is
+# zero there (`_molecular_flux_point!`).
+@inline function _inviscid_flux_point!(out, F, Q, rho, u, v, w, p, Y, G, Ad, c, d,
                                        n_species, m1, m2, m3, i_energy,
                                        remainder, viscous, i, j, k)
     @inbounds begin
         I = CartesianIndex(i, j, k)
         f = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
                                     m1, m2, m3, i_energy, viscous, I)
-        out[I] = remainder ? F[I] - f : f
+        out[I] = _area_scaled(Ad, I, remainder ? F[I] - f : f)
     end
     return nothing
 end
 
 # Both fields of `_inviscid_flux_point!` in one pass: the remainder into
 # `rem` and the ghost-differenced flux into `out`.
-@inline function _split_flux_point!(rem, out, F, Q, rho, u, v, w, p, Y, G, c, d,
+@inline function _split_flux_point!(rem, out, F, Q, rho, u, v, w, p, Y, G, Ad, c, d,
                                     n_species, m1, m2, m3, i_energy, viscous,
                                     i, j, k)
     @inbounds begin
         I = CartesianIndex(i, j, k)
         f = _ghost_differenced_flux(Q, rho, u, v, w, p, Y, G, c, d, n_species,
                                     m1, m2, m3, i_energy, viscous, I)
-        rem[I] = F[I] - f
-        out[I] = f
+        rem[I] = _area_scaled(Ad, I, F[I] - f)
+        out[I] = _area_scaled(Ad, I, f)
     end
     return nothing
 end
@@ -728,39 +752,40 @@ function _ghost_flux_divergence!(dQ, c::Int, Fdc, solver::SolverLike, Q, d::Int)
         _molecular_ghost_flux!(solver)
     G = solver.ghost_flux[d]
     Y = solver.field_tuples.Y
+    Ad, iJ = _ghost_geometry(solver, d)
     if viscous
         _flux_remainder(solver, d) || return dQ
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
-                   solver.p, Y, G, c, d, eq.n_species, m1, m2, m3,
+                   solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
                    eq.i_energy, true, true)
-        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, nothing)
+        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, iJ)
     elseif !_flux_remainder(solver, d)
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
-                   solver.p, Y, G, c, d, eq.n_species, m1, m2, m3,
+                   solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
                    eq.i_energy, false, viscous)
-        _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d)
+        _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ)
     elseif _host_line_solves(solver, d)
         # Both fields in one pass: the host line solves take no scratch, so
         # `tmp_a` holds the second until its solve.
         pointwise!(_split_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, solver.tmp_a, Fdc, Q, solver.rho, solver.u,
-                   solver.v, solver.w, solver.p, Y, G, c, d, eq.n_species,
+                   solver.v, solver.w, solver.p, Y, G, Ad, c, d, eq.n_species,
                    m1, m2, m3, eq.i_energy, viscous)
-        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, nothing)
-        _ext_subtract_along!(dQ, c, solver.tmp_a, solver, d)
+        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, iJ)
+        _ext_subtract_along!(dQ, c, solver.tmp_a, solver, d, iJ)
     else
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
-                   solver.p, Y, G, c, d, eq.n_species, m1, m2, m3,
+                   solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
                    eq.i_energy, true, viscous)
-        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, nothing)
+        div_subtract_along!(dQ, c, solver.tmp_b, solver, d, 1, iJ)
         pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                    solver.tmp_b, Fdc, Q, solver.rho, solver.u, solver.v, solver.w,
-                   solver.p, Y, G, c, d, eq.n_species, m1, m2, m3,
+                   solver.p, Y, G, Ad, c, d, eq.n_species, m1, m2, m3,
                    eq.i_energy, false, viscous)
-        _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d)
+        _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ)
     end
     return dQ
 end
@@ -772,20 +797,25 @@ _host_line_solves(solver::SolverLike, d::Int) =
     solver.folds[d] === nothing && !(_plan_at(solver.div_plans, d) isa DevicePlan) &&
     !(_plan_at(solver.deriv_plans, d) isa DevicePlan)
 
-# dQ[:, c] -= D_ext(f) along `d` through the gradient plans, whose interface
-# rows read `f`'s ghost layers; a device plan takes the two-pass route
-# through `tmp_a`.
-function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int)
+# dQ[:, c] -= inv_J·D_ext(f) along `d` through the gradient plans, whose
+# interface rows read `f`'s ghost layers, with `inv_J === nothing` on unit
+# geometry; a device plan takes the two-pass route through `tmp_a`.
+function _ext_subtract_along!(dQ, c::Int, f, solver::SolverLike, d::Int, inv_J)
     decomp = solver.decomp
     plan = _plan_at(solver.deriv_plans, d)
     if plan isa DevicePlan
         apply_along!(solver.tmp_a, plan, f, decomp)
         nx, ny, nz = decomp.n_local
         o1, o2, o3 = decomp.n_halo_d
-        pointwise!(_subtract_div_point!, dQ, nx, ny, nz,
-                   dQ, solver.tmp_a, c, o1, o2, o3)
+        if inv_J === nothing
+            pointwise!(_subtract_div_point!, dQ, nx, ny, nz,
+                       dQ, solver.tmp_a, c, o1, o2, o3)
+        else
+            pointwise!(_subtract_jac_div_point!, dQ, nx, ny, nz,
+                       dQ, solver.tmp_a, inv_J, c, o1, o2, o3)
+        end
     else
-        apply_along_subtract!(dQ, c, plan, f, decomp, nothing)
+        apply_along_subtract!(dQ, c, plan, f, decomp, inv_J)
     end
     return dQ
 end
@@ -819,11 +849,15 @@ end
 # the patch's state and primitives there (the imposed shell) and the gradient
 # ring: the primitive gradients follow from the conserved ones by the chain
 # rule, ∂u = (∂(ρu) − u ∂ρ)/ρ, ∂Y_k = (∂(ρY_k) − Y_k ∂ρ)/ρ, and ∂e from ∂E,
-# with ∂T from ∂e and the ∂Y_k through `_temperature_gradient`. The launch
-# box is (ghost layers along `d`) × (interior transverse), `base` the padded
-# index before the first layer.
+# with ∂T from ∂e and the ∂Y_k through `_temperature_gradient`. On the
+# axisymmetric cylindrical metric `inv_r` adds the curvature terms of the
+# velocity gradient that `metric_correct_gradients!` adds in the interior
+# (the ring holds the r and z derivatives, which are physical there, and
+# nothing along the collapsed θ); it is `nothing` on a Cartesian grid. The
+# launch box is (ghost layers along `d`) × (interior transverse), `base` the
+# padded index before the first layer.
 @inline function _coarse_fine_flux_point!(G, Q, eos, rho, u, v, w, p, T_ion, cp_mix,
-                                          Y, gring, table, off, pad, transport,
+                                          Y, gring, table, off, pad, transport, inv_r,
                                           n_species, m1, m2, m3, i_energy, d, base,
                                           a, b, c3)
     T = eltype(rho)
@@ -846,8 +880,9 @@ end
             s
         end
         mom = (m1, m2, m3)
-        gu = ntuple(j -> ntuple(m -> (gring[at, 3 * (mom[m] - 1) + j] -
-                                      uv[m] * drho[j]) / ρ, 3), 3)
+        gu = _curvature_corrected(
+            ntuple(j -> ntuple(m -> (gring[at, 3 * (mom[m] - 1) + j] -
+                                     uv[m] * drho[j]) / ρ, 3), 3), inv_r, uv, I)
         dYd(sp) = (gring[at, 3 * (sp - 1) + d] - Y[sp][I] * drho[d]) / ρ
         de = (gring[at, 3 * (i_energy - 1) + d] - (E / ρ) * drho[d]) / ρ -
              (uv[1] * gu[d][1] + uv[2] * gu[d][2] + uv[3] * gu[d][3])
@@ -864,6 +899,21 @@ end
     end
     return nothing
 end
+
+# The velocity gradient `gu` (`gu[j][m]` is ∂_j u_m) with the cylindrical
+# curvature terms of `_grad_corr_cyl_point!`, or unchanged under `nothing`.
+@inline _curvature_corrected(gu, ::Nothing, uv, I) = gu
+@inline function _curvature_corrected(gu, inv_r, uv, I)
+    @inbounds ir = inv_r[I]
+    return (gu[1], (gu[2][1] - uv[2] * ir, gu[2][2] + uv[1] * ir, gu[2][3]), gu[3])
+end
+
+# The inverse radius the coarse-fine molecular flux takes: the cylindrical
+# metric's, `nothing` on a Cartesian grid. A refined level carries no other
+# metric (`Solver`).
+_ghost_inv_r(solver::SolverLike) = _ghost_inv_r(solver.metric, solver)
+_ghost_inv_r(::CartesianMetric, solver) = nothing
+_ghost_inv_r(::CylindricalMetric, solver) = solver.inv_r
 
 # ∂T along a line from ∂ρ, ∂e and Σ_k e_k ∂Y_k: for a mixture whose internal
 # energy is Σ_k Y_k e_k(T), ∂e = c_v ∂T + Σ_k e_k ∂Y_k; the stiffened gas
@@ -948,8 +998,8 @@ function _coarse_fine_ghost_fluxes!(solver::SolverLike, lt, scratch, Q)
                        G, Q, solver.eos, solver.rho,
                        solver.u, solver.v, solver.w, solver.p, solver.T_ion,
                        solver.cp_mix, ft.Y, gring, (lt.shell.table...,),
-                       decomp.offset, pad, solver.transport, eq.n_species,
-                       m1, m2, m3, eq.i_energy, d, base)
+                       decomp.offset, pad, solver.transport, _ghost_inv_r(solver),
+                       eq.n_species, m1, m2, m3, eq.i_energy, d, base)
         end
     end
     return solver
@@ -968,12 +1018,13 @@ function _ghost_flux_solves!(solver::SolverLike, Q, dQ, n_cons::Int)
     for d in 1:3
         G = solver.ghost_flux[d]
         dims[d] && size(G, 4) > 0 || continue
+        Ad, iJ = _ghost_geometry(solver, d)
         for c in 1:n_cons
             pointwise!(_inviscid_flux_point!, solver.tmp_b, n1f, n2f, n3f,
                        solver.tmp_b, solver.flux[d, c], Q, solver.rho, solver.u,
-                       solver.v, solver.w, solver.p, ft.Y, G, c, d, eq.n_species,
+                       solver.v, solver.w, solver.p, ft.Y, G, Ad, c, d, eq.n_species,
                        m1, m2, m3, eq.i_energy, false, true)
-            _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d)
+            _ext_subtract_along!(dQ, c, solver.tmp_b, solver, d, iJ)
         end
     end
     return dQ

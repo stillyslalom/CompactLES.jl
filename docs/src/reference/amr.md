@@ -5,7 +5,9 @@ CurrentModule = CompactLES
 ```
 
 [`AMR`](@ref) groups the refinement choices in `Numerics(amr=...)`. Refinement
-uses a fixed ratio of three between levels on a Cartesian, unstretched grid.
+uses a fixed ratio of three between levels on an unstretched Cartesian grid
+or an axisymmetric (θ-collapsed) cylindrical one, where the levels stay off
+an axis the root carries.
 The coarse grid spans the full domain; fine patches replace its resolution
 inside nested regions. Initial refinement and later movement are separate
 decisions: `initial` chooses the first region, while `regrid_interval` controls

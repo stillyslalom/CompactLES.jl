@@ -132,6 +132,31 @@ include("capability_cases.jl")
                                   stretch=stretched))
         @test C.advances(C.problem(), Numerics(n_global=(48, 1, 1),
                                                execution=Execution(patch_grid=(2, 1, 1))))
+        # Axisymmetric (θ-collapsed) layouts: slabs on the annulus under the
+        # default ghost fluxes; a level on the annulus and on an axis root,
+        # held off the axis, at both pairs; a viscous tiled regrid in r-z.
+        @test C.advances(annulus, Numerics(n_global=(48, 1, 1),
+                                           execution=Execution(patch_grid=(2, 1, 1))))
+        axis_rz = C.problem(bcs=axis, metric=CylindricalMetric(), ic=C.ic_radial)
+        for (backend, precision) in C.PAIRS
+            execution = Execution(; backend, precision)
+            @test C.advances(annulus, Numerics(; n_global=(48, 1, 1), execution,
+                                               amr=AMR(initial=Box((0.9, 0, 0),
+                                                                   (1.1, 1, 1)))))
+            @test C.advances(axis_rz, Numerics(; n_global=(48, 1, 1), execution,
+                                               amr=AMR(initial=Box((0.4, 0, 0),
+                                                                   (0.6, 1, 1)),
+                                                       subcycle=true)))
+        end
+        @test C.advances(C.problem(bcs=(axis[1], per, wall), metric=CylindricalMetric(),
+                                   transport=ConstantTransport(mu0=1e-3),
+                                   ic=(r, θ, z) -> Prim(p=1.0 + 0.1exp(-20((r - 0.5)^2 +
+                                                                          (z - 0.5)^2)),
+                                                        rho=1.0)),
+                         Numerics(n_global=(32, 1, 32),
+                                  amr=AMR(initial=(r, θ, z, t) -> abs(r - 0.5) < 0.1 &&
+                                                                  abs(z - 0.5) < 0.1,
+                                          regrid_interval=1, tile=4)))
         @test C.advances(C.problem(transport=ConstantTransport(mu0=1e-3)),
                          Numerics(n_global=(48, 1, 1),
                                   amr=AMR(initial=Box((0.3, 0, 0), (0.7, 1, 1)))))

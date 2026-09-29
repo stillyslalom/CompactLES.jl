@@ -1829,8 +1829,8 @@ end
 # half covered, stays visible, and the face is drawn once. `stride` acts in
 # each patch's own node space; `slice` names a root node plane, mapped to the
 # coincident node of each patch, and a patch the plane misses writes no
-# piece. Refinement takes the Cartesian metric, so every piece is
-# rectilinear.
+# piece. Refinement takes the Cartesian metric or the cylindrical one with θ
+# collapsed, so every piece is rectilinear.
 
 const VTK_HIDDENPOINT = UInt8(2)
 

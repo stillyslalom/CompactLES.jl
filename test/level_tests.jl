@@ -32,8 +32,8 @@ released_communicators(decomp) =
     # boundary with banded interface rows of their own.
     @test npatches(mk(art=ArtificialProperties(detector=:d8))) == 2
     @test npatches(mk(filt=pyranda_filter())) == 2
-    @test_throws "refinement requires CartesianMetric" mk(metric=CylindricalMetric(),
-                                                          origin=(0.5, 0.0, 0.0))
+    @test_throws "refinement requires CartesianMetric" mk(metric=SphericalMetric(),
+                                                          origin=(0.5, 1.0, 0.0))
     @test_throws ErrorException mk(patch_grid=(2, 1, 1))
     # Nesting margin: a region reaching the boundary is refused.
     @test_throws ErrorException Solver(n_global=(96, 1, 1), L_domain=(2π, 1, 1),
@@ -2115,4 +2115,132 @@ const WALL_LEVEL_TOL = 1e-7
     # symmetry plane keeps its rejection.
     @test_throws "ExtrapolationBC" wall_level(49; bc=ExtrapolationBC())
     @test_throws "SymmetryPlaneBC" wall_level(49; bc=SymmetryPlaneBC())
+end
+
+# The r-z level's fine patch against the uniform run at its spacing, a
+# cylindrical pulse leaving it through both faces, viscous, N = 49: measured
+# 5.3e-7 over the four components; the Cartesian case of the same shape
+# measures 4.0e-7.
+const RZ_LEVEL_TOL = 1e-6
+
+@testset "an axisymmetric level: per-tile metric, freestream and r-weighted budgets" begin
+    wall = (SlipWallBC(), SlipWallBC())
+    per = (PeriodicBC(), PeriodicBC())
+    axis = ((AxisBC(), SlipWallBC()), per, per)
+    rz(n; origin=0.5, bcs=(wall, per, per), L_domain=(1.0, 1.0, 1.0), kw...) =
+        Solver(; n_global=n, L_domain=L_domain, bcs=bcs,
+               metric=CylindricalMetric(), origin=(origin, 0.0, 0.0), kw...)
+    # Each tile evaluates its geometry at its own nodes: the refined patch's
+    # arrays equal the uniform run's at the level's spacing node for node,
+    # halo layers included.
+    solver = rz((25, 1, 24); refine=BlockRegion((8, 0, 6), (9, 1, 10)))
+    uniform = rz((73, 1, 72))
+    ps = PatchSolver(solver, solver.patches[2])
+    pu = PatchSolver(uniform, uniform.patches[1])
+    shift = CartesianIndex(ps.patch.region.offset[1], 0, ps.patch.region.offset[3])
+    geometry(p) = (p.inv_J, p.area_d[1], p.area_d[3], p.inv_h[1], p.inv_h[3], p.inv_r)
+    e = 0.0
+    for (a, b) in zip(geometry(ps), geometry(pu)), I in CartesianIndices(a)
+        J = I + shift
+        checkbounds(Bool, b, J) && (e = max(e, abs(a[I] - b[J]) / abs(b[J])))
+    end
+    @test e < 1e-14
+    # The composite quadrature weighs each node by its own r: exact for the
+    # linear J = r, the annulus holding (3/2)²/2 − (1/2)²/2 = 1 per radian
+    # per unit length, and for a density linear in z between z walls.
+    @test domain_volume(solver) ≈ 1.0 atol = 1e-14
+    closed = rz((25, 1, 25); bcs=(wall, per, wall),
+                refine=BlockRegion((8, 0, 6), (9, 1, 10)))
+    states = allocate_state(closed)
+    initialize!(closed, states,
+                (r, θ, z) -> Prim(rho=1 + 0.5z, u=(0.0, 0.0, 0.0), p=1.0))
+    budget = CL._conserved_budget(closed, states)
+    @test budget.total_mass ≈ 1.25 atol = 1e-13
+    @test budget.total_energy ≈ 2.5 atol = 1e-13
+    # A root on the axis keeps its fold, and a level held off it by the
+    # nesting margin changes nothing of the root's quadrature.
+    onaxis = rz((37, 1, 24); origin=0.0, bcs=axis,
+                refine=BlockRegion((12, 0, 6), (10, 1, 8)))
+    @test domain_volume(onaxis) ≈
+          domain_volume(rz((37, 1, 24); origin=0.0, bcs=axis)) atol = 1e-14
+    @test_throws "AxisBC" rz((37, 1, 24); origin=0.0, bcs=axis,
+                             refine=BlockRegion((0, 0, 6), (10, 1, 8)))
+    @test_throws "CylindricalMetric with θ collapsed" rz((24, 16, 1);
+        L_domain=(1.0, 2π, 1.0), refine=BlockRegion((8, 0, 0), (6, 16, 1)))
+    # Freestream: a uniform state translating along z stays uniform to
+    # round-off on either root, through the viscous ghost fluxes and their
+    # curvature terms.
+    for (origin, bcs) in ((0.5, (wall, per, per)), (0.0, axis))
+        s = rz((37, 1, 24); origin=origin, bcs=bcs,
+               refine=BlockRegion((12, 0, 6), (10, 1, 8)),
+               transport=ConstantTransport(mu0=1e-3))
+        q = allocate_state(s)
+        initialize!(s, q, (r, θ, z) -> Prim(rho=1.3, u=(0.0, 0.0, 0.3), p=0.9))
+        q0 = [copy(parent(x)) for x in q]
+        run!(s, q; tfinal=1.0, nmax=10)
+        drift = 0.0
+        for (i, p) in enumerate(getfield(s, :patches))
+            pp = PatchSolver(s, p)
+            nl = pp.decomp.n_local
+            for c in 1:5, k in 1:nl[3], j in 1:nl[2], ii in 1:nl[1]
+                I = padded_index(pp, ii, j, k)
+                drift = max(drift, abs(q[i][I, c] - q0[i][I, c]))
+            end
+        end
+        @test s.step == 10
+        @test drift < 1e-12
+    end
+    # Against the uniform run at the level's spacing in the same equal steps,
+    # the refined patch differs by the coupling's error alone.
+    pulse(n; refine=nothing) = begin
+        local sv = rz((n, 1, 1); bcs=(wall, per, per), refine=refine, cfl=0.9,
+                      filter_interval=0, art=ArtificialProperties(enabled=false),
+                      transport=ConstantTransport(mu0=0.002))
+        local sq = allocate_state(sv)
+        initialize!(sv, sq, (r, θ, z) -> begin
+            rho = 1 + 0.05 * exp(-((r - 1) / 0.1)^2)
+            Prim(rho=rho, u=(0.0, 0.0, 0.0), p=rho^1.4)
+        end)
+        sv, sq
+    end
+    s, q = pulse(49; refine=BlockRegion((20, 0, 0), (9, 1, 1)))
+    f, fq = pulse(145)
+    for k in 1:576
+        run!(s, q; tfinal=0.2k / 576)
+        run!(f, fq; tfinal=0.2k / 576)
+    end
+    @test s.step == f.step == 576
+    ps = PatchSolver(s, s.patches[2])
+    pf = PatchSolver(f, f.patches[1])
+    off = ps.patch.region.offset[1]
+    e = maximum(abs(q[2][padded_index(ps, i, 1, 1), c] -
+                    fq[padded_index(pf, off + i, 1, 1), c])
+                for i in 1:ps.decomp.n_local[1], c in 1:4)
+    @info "r-z level against the uniform run" e
+    @test e < RZ_LEVEL_TOL
+    # Composite conservation on an annulus periodic in z, a pulse crossing
+    # the level: the budget ledger's pieces telescope to the r-weighted
+    # drift, the level's coarse-fine flux and the parent's flux into the
+    # covered region cancel to the drift's order, and the drift is the
+    # Cartesian coupling's (1.20e-5 for this case on the Cartesian metric,
+    # 1.19e-5 here).
+    s = rz((37, 1, 36); bcs=(wall, per, per),
+           refine=BlockRegion((12, 0, 12), (12, 1, 12)),
+           art=ArtificialProperties(enabled=false), cfl=0.5, filter_interval=0)
+    q = allocate_state(s)
+    initialize!(s, q, (r, θ, z) -> begin
+        g = exp(-40((r - 0.9)^2 + (z - 0.45)^2))
+        Prim(rho=1.0 + 0.1g, u=(0.0, 0.0, 0.2), p=1.0 + 0.1g)
+    end)
+    b0 = CL._conserved_budget(s, q)
+    CL._ledger_begin!(s, q)
+    run!(s, q; tfinal=0.4)
+    r = CL._ledger_end!(s, q)
+    b1 = CL._conserved_budget(s, q)
+    drift = (b1.total_mass - b0.total_mass) / b0.total_mass
+    @info "r-z composite mass drift" drift
+    @test maximum(abs, r.residual) < 1e-13
+    @test abs(r.pieces[(:coarse_fine_flux, 1)][1] +
+              r.pieces[(:covered_face_flux, 0)][1]) < 1e-5 * b0.total_mass
+    @test abs(drift) < 2e-5
 end

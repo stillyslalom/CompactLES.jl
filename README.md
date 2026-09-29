@@ -66,8 +66,8 @@ run!(solver, Q; tfinal=1.0)
 - **Parallelism.** MPI 3-D decomposition with a distributed tridiagonal /
   pentadiagonal solve for the globally coupled compact schemes, over threads.
 - **Adaptive refinement.** `AMR(initial=:sensor)` or a physical-coordinate
-  predicate chooses the first refined region; nested Cartesian levels use
-  refinement ratio 3. Optional lattice tiling, regridding and load balancing, and
+  predicate chooses the first refined region; nested Cartesian or
+  axisymmetric r-z levels use refinement ratio 3. Optional lattice tiling, regridding and load balancing, and
   global or Berger–Oliger subcycled timesteps. Tiled regridding follows
   features to a requested depth (`max_levels`).
 - **GPU execution.** A `KernelAbstractions.jl` device backend supports Float64
@@ -158,7 +158,7 @@ Nasa9Mixture(["He", "CO2"])                 # temperature-dependent mixture
 | `Nasa9Mixture` | Temperature-dependent heat capacities matter; the gas remains thermally ideal. |
 | `ConstantTransport` | You prescribe constant viscosity and Prandtl/Schmidt numbers, often in a nondimensional study. |
 | `CeaTransport` | You need dimensional, temperature-dependent gas transport; specify binary diffusion data when unity Lewis is inadequate. |
-| Static refinement / regridding | A known region / a moving feature needs higher resolution than the rest of a Cartesian domain. |
+| Static refinement / regridding | A known region / a moving feature needs higher resolution than the rest of a Cartesian or axisymmetric r-z domain. |
 
 The Prandtl, Schmidt, and Lewis numbers compare momentum, species, and thermal
 diffusion: `Pr = mu*cp/kappa`, `Sc = mu/(rho*D)`, and
@@ -214,7 +214,9 @@ num = Numerics(n_global = (64, 64, 64),
                execution = Execution(backend = DeviceBackend(ROCBackend())))
 ```
 
-Refinement requires unstretched Cartesian coordinates without folds. A
+Refinement requires unstretched Cartesian coordinates, or axisymmetric
+cylindrical ones with θ collapsed, and no fold on a refined level (an r-z
+root keeps its axis, which the levels do not reach). A
 static hierarchy can contain several nested levels; dynamic regridding of
 more than one refined level requires tiles and the host backend. Device runs
 support the other layouts with host-staged MPI exchanges.
@@ -303,7 +305,8 @@ checkpoint are listed with the setup error each rejected one raises.
   Stanton–Murillo ion interdiffusivity evaluator is not a plasma EOS or a
   coupled ion-transport model. See the
   [transport model](docs/src/explanation/thermodynamics.md).
-- Refinement is Cartesian-only and does not provide conservative refluxing
+- Refinement is Cartesian or axisymmetric r-z only, keeps its levels off the
+  axis, and does not provide conservative refluxing
   (a coarse–fine flux correction that enforces a shared conservation budget).
   Patch and level interfaces, restriction, and filtering can affect composite
   conservation; assess those errors for the chosen calculation.
