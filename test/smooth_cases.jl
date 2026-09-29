@@ -243,6 +243,23 @@ function wall_case(N; viscous=false, slip=!viscous, folded=false, a=0.05, b=0.05
 end
 
 """
+    wall_level_case(N; refined=true, viscous=false, slip=!viscous, opts...)
+
+`wall_case(N)` with a refined level over [0, 1/6] against its low wall, the
+tile's face there carrying the wall; under `refined = false` the uniform run
+at the level's spacing, 3(N − 1) + 1 nodes, which is its reference. Both are
+built to take equal steps (`fixed_step_run!`), so that the difference
+between them is the refinement's spatial error alone. N − 1 must be a
+multiple of 6.
+"""
+function wall_level_case(N; refined=true, viscous=false, slip=!viscous, opts...)
+    (N - 1) % 6 == 0 || error("N = $N: the wall level needs N − 1 divisible by 6")
+    level = refined ? (refine=BlockRegion((0, 0, 0), ((N - 1) ÷ 6 + 1, 1, 1)),) : (;)
+    wall_case(refined ? N : 3 * (N - 1) + 1; viscous=viscous, slip=slip,
+              merge((cfl=0.9,), level, values(opts))...)
+end
+
+"""
     mirror_case(N; viscous=false, folded=false, a=0.05, b=0.05, c=0.0,
                 mu=0.005, opts...)
 
@@ -544,17 +561,21 @@ analytic_reference(equations, prof; gamma=1.4) =
 _is_wall(bc) = !(bc isa CompactLES.InterfaceBC) && !CompactLES.isperiodic(bc)
 
 """
-    regional_errors(solver, states, reference; comp=1, W=SMOOTH_W) -> NamedTuple
+    regional_errors(solver, states, reference; comp=1, W=SMOOTH_W,
+                    patches=nothing) -> NamedTuple
 
 Errors of component `comp` of `states` against `reference(x)`, split by
-region: `wall` (within W nodes of a physical boundary), `interface` (within
+region, over the patches whose indices `patches` lists (every patch for
+`nothing`): `wall` (within W nodes of a physical boundary), `interface` (within
 W nodes of a patch or level end), `covered` (parent nodes under a child
 level), `interior` (the rest), each a maximum norm, plus `l2`, the composite
 volume-weighted root-mean-square through the package's masked quadrature,
 and `at`, the (patch, node) of the global maximum. A region with no nodes
 reads 0.
 """
-function regional_errors(solver, states, reference; comp=1, W=SMOOTH_W)
+function regional_errors(solver, states, reference; comp=1, W=SMOOTH_W,
+                         patches=nothing)
+    selected = patches
     patches = getfield(solver, :patches)
     multi = states isa Vector
     per_patch = multi ? states : [states]
@@ -577,6 +598,7 @@ function regional_errors(solver, states, reference; comp=1, W=SMOOTH_W)
             I = padded_index(ps, i, 1, 1)
             e = abs(Q[I, comp] - reference(xcoord(ps, 1, i))[comp])
             e2[I] = e * e
+            selected === nothing || pi in selected || continue
             if e > max(wall, interface, covered, interior)
                 at = (pi, i)
             end

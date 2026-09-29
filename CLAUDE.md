@@ -229,7 +229,8 @@ interface evolution 6.79 (two patches), 6.01 (two levels), 3.62 / 6.01
 (two levels under the closure rows, C6 / `:brady_livescu`), 6.00 (three
 levels subcycled), 6.87 (two levels filtered), 5.93 (two levels,
 `:brady_livescu` with the `:d8` detector, closure rows), 6.01 (two levels,
-pentadiagonal filter), temporal order 3.99 / 4.09
+pentadiagonal filter), a level at a slip wall 4.68 (the fine wall window
+against the uniform run at the fine spacing), temporal order 3.99 / 4.09
 (Dirichlet / NSCBC inflow data),
 1.00 / 3.85 (two levels, global step / subcycled). The default closure of all three derivative presets is
 `:neutral3`; the coordinate-singularity studies close
@@ -553,6 +554,11 @@ Names are spelled out in full. Current vocabulary:
   bilinear interpolant in `(ln T, ln ρ)` and its own derivatives),
   `table_temperature_status` and the `TABLE_` flags, `monotone` (per density
   node, whether the energies increase with temperature)
+- `boundary` (a `LevelTransfer` field: per face, on a domain face whose root
+  condition the tile carries), `_level_boundary_condition` (which conditions
+  qualify), `_boundary_faces` / `_region_boundaries` / `_level_extent`,
+  `_box_buffer` / `_box_shift` / `_box_extent` (the box's per-face buffer,
+  none at a boundary face), `_interface_dims`
 
 **Temperature is `T_ion`.** There is one temperature today; the name keeps
 `T_ele` / `T_rad` free for a 2T or 3T model without a second API break. Bare

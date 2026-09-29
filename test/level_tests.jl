@@ -2044,3 +2044,75 @@ end
         same || @info "pre-step restriction schedules differ" name
     end
 end
+
+# Measured 4.1e-8 at the low wall and 9.0e-9 at the high one, on the three
+# conserved components of the 1-D standing wave at N = 49, t = 0.2.
+const WALL_LEVEL_TOL = 1e-7
+
+@testset "a level reaching a wall carries the wall on that face" begin
+    per = (PeriodicBC(), PeriodicBC())
+    function wall_level(N; refined=true, side=:lo, bc=SlipWallBC())
+        m = (N - 1) ÷ 6 + 1
+        region = BlockRegion((side == :lo ? 0 : N - m, 0, 0), (m, 1, 1))
+        n = refined ? N : 3 * (N - 1) + 1
+        solver = Solver(n_global=(n, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                        bcs=((bc, bc), per, per), filter_interval=0, cfl=0.9,
+                        art=ArtificialProperties(enabled=false),
+                        refine=refined ? region : nothing)
+        states = allocate_state(solver)
+        initialize!(solver, states, (x, y, z) -> begin
+            rho = 1 + 0.05 * cos(pi * x)
+            Prim(rho=rho, u=(0.05 * sin(pi * x), 0.0, 0.0), p=rho^1.4)
+        end)
+        return solver, states
+    end
+    solver, states = wall_level(49)
+    fine = solver.patches[2]
+    lt = getfield(solver, :levels)[2].transfers[1]
+    # The wall face carries the root's own condition object; the other face
+    # stays parent-fed, and only it takes a shell, a box buffer and the
+    # restriction margin.
+    @test fine.bcs[1][1] === solver.patches[1].bcs[1][1]
+    @test CL.parent_fed(fine.bcs[1][2])
+    @test lt.boundary[1] == (true, false) && lt.imposed[1] == (false, true)
+    @test CL._box_buffer(lt)[1] == (0, CL.LEVEL_BUFFER)
+    @test first(CL._restrict_window(lt)[1]) == 1
+    # The composite quadrature counts the covered wall node once: exact for
+    # a linear field, the wall node's outer half-cell covered with its inner.
+    @test domain_volume(solver) ≈ 1.0 atol = 1e-14
+    lin = map(getfield(solver, :patches)) do p
+        ps = PatchSolver(solver, p)
+        a = zeros(size(p.rho))
+        for i in 1:ps.decomp.n_local[1]
+            a[padded_index(ps, i, 1, 1)] = 1 + 2 * xcoord(ps, 1, i)
+        end
+        a
+    end
+    @test volume_integral(solver, lin) ≈ 2.0 atol = 1e-13
+    root = PatchSolver(solver, solver.patches[1])
+    @test root.covered[padded_index(root, 1, 1, 1)] == 0xff
+    # Against the uniform run at the level's spacing in the same equal steps,
+    # the refined patch differs by the refinement's error alone, at the low
+    # wall and, mirrored, at the high one.
+    for side in (:lo, :hi)
+        s, q = wall_level(49; side=side)
+        f, fq = wall_level(49; refined=false)
+        for k in 1:96
+            run!(s, q; tfinal=0.2k / 96)
+            run!(f, fq; tfinal=0.2k / 96)
+        end
+        @test s.step == f.step == 96
+        pf = PatchSolver(f, f.patches[1])
+        ps = PatchSolver(s, s.patches[2])
+        off = ps.patch.region.offset[1]
+        e = maximum(abs(q[2][padded_index(ps, i, 1, 1), c] -
+                        fq[padded_index(pf, off + i, 1, 1), c])
+                    for i in 1:ps.decomp.n_local[1], c in 1:3)
+        @info "wall level against the uniform run" side e
+        @test e < WALL_LEVEL_TOL
+    end
+    # A face whose condition a level cannot carry is refused by name; the
+    # symmetry plane keeps its rejection.
+    @test_throws "ExtrapolationBC" wall_level(49; bc=ExtrapolationBC())
+    @test_throws "SymmetryPlaneBC" wall_level(49; bc=SymmetryPlaneBC())
+end

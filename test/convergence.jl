@@ -86,6 +86,8 @@
 #   :brady_livescu 6.01 | three levels subcycled 6.00 | two levels, cascade
 #   filter 6.87 | two levels :brady_livescu, d8 detector 5.93 | two levels,
 #   pentadiagonal filter 6.01
+#   a level at a wall (fine wall window against the uniform run at the fine
+#   spacing, equal steps, t = 0.4): two levels at a slip wall C6 4.68
 #   temporal order (fixed grid, equal steps): Dirichlet inflow g(t) 3.99 |
 #   NSCBC inflow target(t) 4.09 | two levels, global step 1.00 | two levels
 #   subcycled, ghost fluxes 3.85
@@ -100,7 +102,7 @@
 # the flux divergence at an interface end selects the cascade rows
 # (`interface_divergence_closures`) or the source scheme's.
 #
-# Those seventy-four numbers are also passed to each study as `recorded` and
+# Those seventy-five numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -483,13 +485,17 @@ function _guard(name, p, expect, tol, recorded)
 end
 
 function evolution_study(name, Ns, build, reference; primary, comp=1, tfinal,
-                         expect, tol, recorded)
+                         expect, tol, recorded, steps=nothing, patches=nothing)
     t0 = time(); c0 = compile_ns()
     hs = Float64[]; errs = Float64[]; errs2 = Float64[]
     for N in Ns
         solver, states = build(N)
-        run!(solver, states; tfinal=tfinal)
-        e = regional_errors(solver, states, reference(solver); comp=comp)
+        # `steps(N)` equal steps where given, so that a reference taking the
+        # same steps shares the time error; the CFL-limited step otherwise.
+        steps === nothing ? run!(solver, states; tfinal=tfinal) :
+                            fixed_step_run!(solver, states, tfinal, steps(N))
+        e = regional_errors(solver, states, reference(solver); comp=comp,
+                            patches=patches)
         push!(hs, root_spacing(solver))
         push!(errs, getfield(e, primary)); push!(errs2, e.l2)
     end
@@ -950,6 +956,23 @@ evolution_study("two levels, C6, pentadiagonal filter", PERIODIC_NS,
                 N -> entropy_case(N; cfl=EVOLUTION_CFL, levels=2, filter_interval=1,
                                   filt=pyranda_filter()), entropy_ref;
                 primary=:interface, tfinal=0.5, expect=6.0, tol=0.8, recorded=6.01)
+
+# A level against a slip wall, its tile's face there carrying the wall: the
+# refined patch's wall window against the uniform run at its spacing, both in
+# the same equal steps (cfl ≈ 0.25 at the fine spacing), so the fine
+# closure's own defect and the time error cancel and the row reads what the
+# coarse region and the coarse-fine face bring to the wall.
+println("\n=== smooth evolution: a level at a wall, fine wall window, t = 0.4 ===")
+const LEVEL_WALL_NS = (25, 49, 97)
+wall_level_reference(s) = begin
+    fine, states = wall_level_case(s.n_global[1]; refined=false)
+    fixed_step_run!(fine, states, 0.4, 6 * (s.n_global[1] - 1))
+    NodeReference(fine, states)
+end
+evolution_study("two levels at a slip wall, C6", LEVEL_WALL_NS,
+                N -> wall_level_case(N), wall_level_reference;
+                primary=:wall, tfinal=0.4, steps=N -> 6 * (N - 1), patches=(2,),
+                expect=4.6, tol=0.8, recorded=4.68)
 
 # ---------------------------------------------------------------------------
 # Temporal order. Each row integrates one case on one grid in a sequence of

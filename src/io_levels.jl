@@ -296,8 +296,9 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     spec.tile == 0 && length(regions) != 1 &&
         error("restart: the checkpoint records $(length(regions)) tiles on level " *
               "1 and this solver refines one box (tile = 0)")
-    for r in regions
-        _covered_by(_buffered(r, active, spec.margin), [root.region]) ||
+    boundaries = _region_boundaries(solver, regions, 1)
+    for (r, bnd) in zip(regions, boundaries)
+        _covered_by(_buffered(r, active, spec.margin, bnd), [root.region]) ||
             error("restart: the recorded region $r is not nested $(spec.margin) " *
                   "root nodes inside the domain")
     end
@@ -343,7 +344,8 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                                interface_divergence=
                                                    spec.interface_divergence,
                                                ghost_viscous=_ghost_viscous(solver),
-                                               ring=_ring_detector(solver))
+                                               ring=_ring_detector(solver),
+                                               boundaries, bcs=root.bcs)
     restriction = spec.restriction
     fine_decomp(ti) = local_of[ti] == 0 ? nothing : new_patches[local_of[ti] - 1].decomp
     transfers = LevelTransfer{T}[build_level_transfer(
@@ -352,7 +354,7 @@ function _replace_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         root_lc.comm, length(owners[ti]), faces[ti];
         interpolation_order=spec.interpolation_order,
         gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
-        parent_h=root.h)
+        parent_h=root.h, boundary=boundaries[ti])
         for (ti, tr) in enumerate(regions)]
     coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],
                                     [root.decomp], map(fine_decomp, eachindex(regions)))

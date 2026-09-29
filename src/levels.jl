@@ -547,11 +547,13 @@ end
 # its scratch while its faces change.
 function _box_gradient_plans(boxf::Decomp{T}, deriv, active::NTuple{3,Bool}, hf,
                              pad::NTuple{3,Int},
-                             faces::NTuple{3,NTuple{2,Bool}}=ntuple(d -> (true, true), 3)
-                             ) where {T}
-    shift = ntuple(e -> active[e] ? 3 * LEVEL_BUFFER : 0, 3)
-    all(e -> shift[e] >= pad[e], 1:3) || error("a ring wider than the box buffer: pad $pad")
-    Nf = ntuple(e -> boxf.n_global[e] - 2 * shift[e], 3)
+                             faces::NTuple{3,NTuple{2,Bool}}=ntuple(d -> (true, true), 3),
+                             buffer=_box_buffer(active, _NO_BOUNDARY)) where {T}
+    shift = _box_shift(buffer)
+    all(e -> !faces[e][1] || shift[e] >= pad[e], 1:3) &&
+        all(e -> !faces[e][2] || 3 * buffer[e][2] >= pad[e], 1:3) ||
+        error("a ring wider than the box buffer: pad $pad")
+    Nf = ntuple(e -> boxf.n_global[e] - shift[e] - 3 * buffer[e][2], 3)
     read_faces = [(d, side) for d in 1:3 if active[d] for side in 1:2 if faces[d][side]]
     isempty(read_faces) && (read_faces = [(d, side) for d in 1:3 if active[d] for side in 1:2])
     plans = Any[]
@@ -662,8 +664,13 @@ struct LevelTransfer{T}
                                      # which the box and restriction gathers run
     imposed::NTuple{3,NTuple{2,Bool}} # per face: shell imposed from the parent
                                      # (false where a same-level neighbor
-                                     # supplies the face through the records)
-    restriction::Symbol              # :inject (coincident-node copy, default)
+                                     # supplies the face through the records,
+                                     # or where the face lies on the domain
+                                     # boundary)
+    boundary::NTuple{3,NTuple{2,Bool}} # per face: on a non-periodic domain
+                                     # boundary, carrying the root's condition
+                                     # there; the box takes no buffer beyond it
+    restriction::Symbol             # :inject (coincident-node copy, default)
                                      # or :filter (the invertible transfer pair)
     active_dims::Vector{Int}
     pdecomps::Vector{Decomp{T}}      # prolongation chain, stage 0 (coarse box) .. K
@@ -815,11 +822,30 @@ end
 _block_nodes(b::BlockRegion, off::NTuple{3,Int}=(0, 0, 0)) =
     ntuple(d -> (off[d] + b.offset[d] + 1):(off[d] + b.offset[d] + b.extent[d]), 3)
 
+const _NO_BOUNDARY = ((false, false), (false, false), (false, false))
+
+# The buffer of a transfer's box per face, in parent nodes: `LEVEL_BUFFER`
+# along an active dimension, none at a face on the domain boundary, where
+# the parent holds no node beyond the region and the interpolation takes
+# its one-sided stencils instead.
+_box_buffer(active::NTuple{3,Bool}, boundary::NTuple{3,NTuple{2,Bool}}) =
+    ntuple(d -> active[d] ? (boundary[d][1] ? 0 : LEVEL_BUFFER,
+                             boundary[d][2] ? 0 : LEVEL_BUFFER) : (0, 0), 3)
+_box_buffer(lt::LevelTransfer) = _box_buffer(lt.active, lt.boundary)
+
+# The fine box node of fine patch node g is g + shift: three fine nodes per
+# parent node of the low buffer.
+_box_shift(buffer) = ntuple(d -> 3 * buffer[d][1], 3)
+
+# The box's extent in parent nodes.
+_box_extent(region::BlockRegion, buffer) =
+    ntuple(d -> region.extent[d] + buffer[d][1] + buffer[d][2], 3)
+
 # The buffered box of a transfer as parent-level node ranges.
 function _box_nodes(lt::LevelTransfer)
-    b = ntuple(d -> lt.active[d] ? LEVEL_BUFFER : 0, 3)
-    lo = ntuple(d -> lt.region.offset[d] + 1 - b[d], 3)
-    hi = ntuple(d -> lt.region.offset[d] + lt.region.extent[d] + b[d], 3)
+    b = _box_buffer(lt)
+    lo = ntuple(d -> lt.region.offset[d] + 1 - b[d][1], 3)
+    hi = ntuple(d -> lt.region.offset[d] + lt.region.extent[d] + b[d][2], 3)
     return ntuple(d -> lo[d]:hi[d], 3)
 end
 
@@ -1419,13 +1445,18 @@ _erode(region::BlockRegion, imposed::NTuple{3,NTuple{2,Bool}},
 
 # Whether the fine shell slot at patch-global node `g` (padded slots included)
 # is imposed from the parent: outside the strict interior along some active
-# dimension whose face on that side is parent-fed. With every face imposed
-# this is the complement of the strict interior [2, N − 1]^3.
-@inline function _in_shell(g1, g2, g3, Nf, active, imposed)
+# dimension whose face on that side is parent-fed, and not beyond a face on
+# the domain boundary (`boundary`), where the box holds no data and the slot
+# is the patch's own ghost, as at the root. With every face imposed this is
+# the complement of the strict interior [2, N − 1]^3.
+@inline function _in_shell(g1, g2, g3, Nf, active, imposed, boundary)
     @inbounds begin
-        (active[1] && ((g1 <= 1 && imposed[1][1]) || (g1 >= Nf[1] && imposed[1][2]))) ||
-        (active[2] && ((g2 <= 1 && imposed[2][1]) || (g2 >= Nf[2] && imposed[2][2]))) ||
-        (active[3] && ((g3 <= 1 && imposed[3][1]) || (g3 >= Nf[3] && imposed[3][2])))
+        ((g1 >= 1 || !boundary[1][1]) && (g1 <= Nf[1] || !boundary[1][2]) &&
+         (g2 >= 1 || !boundary[2][1]) && (g2 <= Nf[2] || !boundary[2][2]) &&
+         (g3 >= 1 || !boundary[3][1]) && (g3 <= Nf[3] || !boundary[3][2])) &&
+        ((active[1] && ((g1 <= 1 && imposed[1][1]) || (g1 >= Nf[1] && imposed[1][2]))) ||
+         (active[2] && ((g2 <= 1 && imposed[2][1]) || (g2 >= Nf[2] && imposed[2][2]))) ||
+         (active[3] && ((g3 <= 1 && imposed[3][1]) || (g3 >= Nf[3] && imposed[3][2]))))
     end
 end
 
@@ -1593,11 +1624,12 @@ function _level_scratch(f::AbstractArray{T,3}, region::BlockRegion,
                         np::Int, me::Int; gradient_deriv=nothing,
                         backend::AbstractBackend=CPUBackend(),
                         fine_decomp::Union{Nothing,Decomp}=nothing,
-                        hf=nothing) where {T}
+                        hf=nothing,
+                        boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
     _device_path(f) || return _empty_level_scratch(f)
     dims = [d for d in 1:3 if active[d]]
-    boxext = ntuple(d -> active[d] ? region.extent[d] + 2 * LEVEL_BUFFER :
-                                     region.extent[d], 3)
+    buffer = _box_buffer(active, boundary)
+    boxext = _box_extent(region, buffer)
     exts = _chain_extents(boxext, dims)
     n_owned = length((me+1):np:n_cons)
     box = _padded_extent(exts[1], active, n_halo)
@@ -1611,13 +1643,17 @@ function _level_scratch(f::AbstractArray{T,3}, region::BlockRegion,
         # The chain's final box, as `_refine_chain` builds it.
         boxf = Decomp{T}(exts[end], ntuple(d -> !active[d], 3); dims=(1, 1, 1),
                          n_halo=n_halo, comm=MPI.COMM_SELF)
+        # Every face but a boundary one, whose ghost layers lie outside the box.
         hplans, gdecomps = _box_gradient_plans(boxf, gradient_deriv, active, hf,
-                                               fine_decomp.n_halo_d)
+                                               fine_decomp.n_halo_d,
+                                               ntuple(d -> (!boundary[d][1],
+                                                            !boundary[d][2]), 3),
+                                               buffer)
         gplans = Any[p === nothing ? nothing : backend_plan(backend, p) for p in hplans]
         gtmp = fill!(similar(f, T, _padded_extent(exts[end], active, n_halo)), 0)
         _, ringlen = _slab_table(_ring_slabs(region,
                                              ntuple(d -> fine_decomp.active[d], 3),
-                                             fine_decomp.n_halo_d))
+                                             fine_decomp.n_halo_d, boundary))
         gring = fill!(similar(f, T, ringlen, 3 * n_cons), 0)
     end
     return LevelScratch(similar(f, T, box..., n_cons), similar(f, T, box..., n_cons),
@@ -1831,7 +1867,8 @@ only the patch's owners read (the chains, the box and Hermite storage, the
 shell ring's staging) comes out empty. `parent_comm` is the parent level's
 communicator, and `np_tile` the size of the refined patch's own
 communicator, over which the shell ring distributes its components.
-Rank-local: the traffic is planned level by level by
+`boundary` flags the faces on the domain boundary, which take neither a box
+buffer nor a shell. Rank-local: the traffic is planned level by level by
 `build_level_coupling`.
 """
 function build_level_transfer(::Type{T}, region::BlockRegion,
@@ -1845,11 +1882,13 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
                               faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3);
                               interpolation_order::Int=6,
                               gradient_deriv=nothing,
-                              parent_h=nothing) where {T}
-    imposed = ntuple(d -> (faces[d][1] == 0, faces[d][2] == 0), 3)
+                              parent_h=nothing,
+                              boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) where {T}
+    imposed = ntuple(d -> (faces[d][1] == 0 && !boundary[d][1],
+                           faces[d][2] == 0 && !boundary[d][2]), 3)
     dims_to_refine = [d for d in 1:3 if active[d]]
-    boxext = ntuple(d -> active[d] ? region.extent[d] + 2 * LEVEL_BUFFER :
-                                     region.extent[d], 3)
+    buffer = _box_buffer(active, boundary)
+    boxext = _box_extent(region, buffer)
     held = fine_decomp !== nothing
     pdecomps, pplans, pstage = held ?
         _refine_chain(T, boxext, active, dims_to_refine, n_halo, interpolation_order) :
@@ -1872,7 +1911,7 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
                              Int[], GatherBuffers{T}())
     else
         slabs = _ring_slabs(region, ntuple(d -> fine_decomp.active[d], 3),
-                            fine_decomp.n_halo_d)
+                            fine_decomp.n_halo_d, boundary)
         table, ringlen = _slab_table(slabs)
         # Component-distributed chains: rank r owns components r+1, r+1+npf, ...
         ring_counts = [ringlen * length((r+1):np_tile:n_cons)
@@ -1889,12 +1928,12 @@ function build_level_transfer(::Type{T}, region::BlockRegion,
     if gradient_deriv !== nothing && fine_decomp !== nothing
         plans, gdecomps = _box_gradient_plans(pdecomps[end], gradient_deriv, active,
                                               ntuple(d -> T(parent_h[d]) / 3, 3),
-                                              fine_decomp.n_halo_d, imposed)
+                                              fine_decomp.n_halo_d, imposed, buffer)
         gradients = ShellGradients{T}(plans, gdecomps, zeros(T, size(pstage[end])),
                                       zeros(T, shell.len, 3 * n_cons))
     end
     return LevelTransfer{T}(region, active, coarse_regions, coarse_local,
-                            fine_index, parent_comm, imposed,
+                            fine_index, parent_comm, imposed, boundary,
                             restriction, dims_to_refine,
                             pdecomps, pplans, pstage,
                             rdecomps, rplans, rstage,
@@ -2026,10 +2065,63 @@ end
 fine_extent(region::BlockRegion, active::NTuple{3,Bool}) =
     ntuple(d -> active[d] ? 3 * region.extent[d] - 2 : region.extent[d], 3)
 
-# `region` grown by `margin` nodes per side along active dimensions.
-_buffered(region::BlockRegion, active::NTuple{3,Bool}, margin::Int) =
-    BlockRegion(ntuple(d -> region.offset[d] - (active[d] ? margin : 0), 3),
-                ntuple(d -> region.extent[d] + (active[d] ? 2 * margin : 0), 3))
+# `region` grown by `margin` nodes per side along active dimensions, except
+# at a face on the domain boundary (`boundary`), which a level reaches
+# without a margin.
+_buffered(region::BlockRegion, active::NTuple{3,Bool}, margin::Int,
+          boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY) =
+    BlockRegion(ntuple(d -> region.offset[d] -
+                            (active[d] && !boundary[d][1] ? margin : 0), 3),
+                ntuple(d -> region.extent[d] +
+                            (active[d] && !boundary[d][1] ? margin : 0) +
+                            (active[d] && !boundary[d][2] ? margin : 0), 3))
+
+# --- Levels on the domain boundary ---------------------------------------------
+#
+# A refined region may reach a non-periodic face of the domain. The tile's
+# face there is not fed from the parent: it carries the root's own condition
+# at the fine spacing (`_fine_bcs`), closes its line solves with that
+# condition's rows as the root does (`_fine_plans`), and is left out of the
+# shell (`_in_shell`), the ring (`_ring_slabs`) and the restriction margin
+# (`_restrict_window`), since its boundary plane is the tile's own solution.
+# The buffered box stops at the face (`_box_buffer`), where the Lagrange
+# interpolation takes its one-sided stencils. The nesting margin applies to
+# the parent-fed faces only (`_buffered`). The faces a level may reach carry
+# a condition in `_level_boundary_condition`; a periodic seam, a fold and any
+# other condition keep the margin.
+
+"Whether a refined level may reach a domain face carrying `bc`."
+_level_boundary_condition(bc) = bc isa Union{SlipWallBC,NoSlipWallBC}
+
+# Per dimension and side, whether a level may reach that domain face: a
+# non-periodic active dimension whose root condition there qualifies.
+_level_boundary_eligible(bcs, active::NTuple{3,Bool}, periodic::NTuple{3,Bool}) =
+    ntuple(d -> ntuple(s -> active[d] && !periodic[d] &&
+                            _level_boundary_condition(bcs[d][s]), 2), 3)
+
+# The node count of level ℓ's node space along each dimension, the root's
+# being `n_global`; along a periodic dimension no face lies on the boundary
+# and the count is not used.
+_level_extent(n_global::NTuple{3,Int}, active::NTuple{3,Bool}, ℓ::Int) =
+    ntuple(d -> active[d] ? 3^ℓ * (n_global[d] - 1) + 1 : 1, 3)
+
+# The faces of `region` (in a level's node space of `extent` nodes) that lie
+# on a domain face a level may reach (`eligible`).
+_boundary_faces(region::BlockRegion, extent::NTuple{3,Int}, eligible) =
+    ntuple(d -> (eligible[d][1] && region.offset[d] == 0,
+                 eligible[d][2] && region.offset[d] + region.extent[d] == extent[d]), 3)
+
+# The boundary faces of each of `regions`, level-ℓ tiles given in level
+# ℓ − 1's node space, from the root patch's conditions: the form the regrid
+# and the restart take, which hold the solver rather than its keywords.
+function _region_boundaries(solver, regions::AbstractVector{BlockRegion}, ℓ::Int)
+    root = getfield(solver, :patches)[1]
+    n_global = solver.n_global
+    active = ntuple(d -> n_global[d] > 1, 3)
+    eligible = _level_boundary_eligible(root.bcs, active, root.decomp.periodic)
+    extent = _level_extent(n_global, active, ℓ - 1)
+    return [_boundary_faces(r, extent, eligible) for r in regions]
+end
 
 # Whether every node of `region` lies in some member of `regions` (a union
 # of boxes, not one box: the test is by node, and regions are small).
@@ -2163,14 +2255,16 @@ function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
     nf = df.n_local
     off = df.offset
     Nf = fine_extent(lt.region, ntuple(d -> df.active[d], 3))
-    shift = ntuple(d -> df.active[d] ? 3 * LEVEL_BUFFER : 0, 3)
+    shift = _box_shift(_box_buffer(lt))
     active = (df.active[1], df.active[2], df.active[3])
     imposed = lt.imposed
+    boundary = lt.boundary
     if !_device_path(fine_Q)
         r = ntuple(d -> (1 - padf[d]):(nf[d] + padf[d]), 3)
         @inbounds for k in r[3], j in r[2], i in r[1]
             g1, g2, g3 = i + off[1], j + off[2], k + off[3]
-            shell_only && !_in_shell(g1, g2, g3, Nf, active, imposed) && continue
+            shell_only && !_in_shell(g1, g2, g3, Nf, active, imposed, boundary) &&
+                continue
             fine_Q[i + padf[1], j + padf[2], k + padf[3], c] =
                 box_field[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
                           g3 + shift[3] + padb[3]]
@@ -2189,18 +2283,18 @@ function _write_fine_shell!(fine_Q, c::Int, box_field, lt::LevelTransfer,
     pointwise!(_fine_shell_point!, fine_Q,
                nf[1] + 2 * padf[1], nf[2] + 2 * padf[2], nf[3] + 2 * padf[3],
                fine_Q, dev_box, c, off, padf, padb, shift, Nf,
-               active, imposed, shell_only)
+               active, imposed, boundary, shell_only)
     return fine_Q
 end
 
 @inline function _fine_shell_point!(fine_Q, box_field, c, off, padf, padb,
-                                    shift, Nf, active, imposed, shell_only,
-                                    i, j, k)
+                                    shift, Nf, active, imposed, boundary,
+                                    shell_only, i, j, k)
     @inbounds begin
         g1 = i - padf[1] + off[1]
         g2 = j - padf[2] + off[2]
         g3 = k - padf[3] + off[3]
-        if !shell_only || _in_shell(g1, g2, g3, Nf, active, imposed)
+        if !shell_only || _in_shell(g1, g2, g3, Nf, active, imposed, boundary)
             fine_Q[i, j, k, c] =
                 box_field[g1 + shift[1] + padb[1], g2 + shift[2] + padb[2],
                           g3 + shift[3] + padb[3]]
@@ -2228,16 +2322,22 @@ end
 
 # Ring slabs in patch-padded node space, ascending dimension order, low side
 # then high per active dimension. Slabs overlap at corners; both copies of a
-# corner value come from the same chain output, so the first match wins.
+# corner value come from the same chain output, so the first match wins. A
+# face on the domain boundary (`boundary`) has no slab, and the other slabs
+# stop at its plane, since the box holds nothing beyond it.
 function _ring_slabs(region::BlockRegion, active::NTuple{3,Bool},
-                     pad::NTuple{3,Int})
+                     pad::NTuple{3,Int},
+                     boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY)
     Nf = fine_extent(region, active)
-    full = ntuple(d -> (1 - pad[d]):(Nf[d] + pad[d]), 3)
+    full = ntuple(d -> (boundary[d][1] ? 1 : 1 - pad[d]):
+                       (boundary[d][2] ? Nf[d] : Nf[d] + pad[d]), 3)
     slabs = NTuple{3,UnitRange{Int}}[]
     for d in 1:3
         active[d] || continue
-        push!(slabs, ntuple(q -> q == d ? ((1 - pad[d]):1) : full[q], 3))
-        push!(slabs, ntuple(q -> q == d ? (Nf[d]:(Nf[d] + pad[d])) : full[q], 3))
+        boundary[d][1] ||
+            push!(slabs, ntuple(q -> q == d ? ((1 - pad[d]):1) : full[q], 3))
+        boundary[d][2] ||
+            push!(slabs, ntuple(q -> q == d ? (Nf[d]:(Nf[d] + pad[d])) : full[q], 3))
     end
     return slabs
 end
@@ -2311,7 +2411,7 @@ function _impose_shell!(solver, states, lt::LevelTransfer, fill)
     ringlen = shell.len
     ring = shell.ring
     padb = lt.pdecomps[K+1].n_halo_d
-    shift = ntuple(d -> fdcp.active[d] ? 3 * LEVEL_BUFFER : 0, 3)
+    shift = _box_shift(_box_buffer(lt))
     # This rank's components, as a range, not a filtered vector: the
     # ascending order is the one the ring unpack below assumes.
     owned = (me+1):np:n_cons
@@ -2389,7 +2489,7 @@ function _impose_shell_gradients!(solver, states, lt::LevelTransfer, fill)
     g = lt.gradients
     boxf = lt.pdecomps[K+1]
     padb = boxf.n_halo_d
-    shift = ntuple(d -> fdcp.active[d] ? 3 * LEVEL_BUFFER : 0, 3)
+    shift = _box_shift(_box_buffer(lt))
     owned = (me+1):np:n_cons
     n_owned = length(owned)
     sendbuf = _fit!(shell.buffers.send, 4 * ringlen * n_owned)
@@ -2579,11 +2679,12 @@ function _write_shell_from_ring!(Qf, ring, table, lt::LevelTransfer,
     Nf = fine_extent(lt.region, ntuple(d -> df.active[d], 3))
     active = (df.active[1], df.active[2], df.active[3])
     imposed = lt.imposed
+    boundary = lt.boundary
     if !_device_path(Qf)
         r = ntuple(d -> (1 - padf[d]):(nf[d] + padf[d]), 3)
         @inbounds for k in r[3], j in r[2], i in r[1]
             g1, g2, g3 = i + off[1], j + off[2], k + off[3]
-            _in_shell(g1, g2, g3, Nf, active, imposed) || continue
+            _in_shell(g1, g2, g3, Nf, active, imposed, boundary) || continue
             at = _ring_offset(table, g1, g2, g3)
             at == 0 && _ring_miss(g1, g2, g3)
             for c in 1:n_cons
@@ -2604,17 +2705,18 @@ function _write_shell_from_ring!(Qf, ring, table, lt::LevelTransfer,
     end
     pointwise!(_shell_ring_point!, Qf,
                nf[1] + 2 * padf[1], nf[2] + 2 * padf[2], nf[3] + 2 * padf[3],
-               Qf, dev_ring, (table...,), off, padf, Nf, active, imposed, n_cons)
+               Qf, dev_ring, (table...,), off, padf, Nf, active, imposed, boundary,
+               n_cons)
     return Qf
 end
 
 @inline function _shell_ring_point!(Qf, ring, table, off, padf, Nf, active,
-                                    imposed, n_cons, i, j, k)
+                                    imposed, boundary, n_cons, i, j, k)
     @inbounds begin
         g1 = i - padf[1] + off[1]
         g2 = j - padf[2] + off[2]
         g3 = k - padf[3] + off[3]
-        if _in_shell(g1, g2, g3, Nf, active, imposed)
+        if _in_shell(g1, g2, g3, Nf, active, imposed, boundary)
             at = _ring_offset(table, g1, g2, g3)
             for c in 1:n_cons
                 Qf[i, j, k, c] = ring[at, c]

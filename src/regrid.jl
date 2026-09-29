@@ -542,7 +542,8 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
     # The setup-time nesting rule, re-asserted here: a box reaching into
     # the margin band would read parent samples the gather never fills and
     # interpolate zeros into the fine state without any other symptom.
-    _covered_by(_buffered(newregion, active_g, spec.margin), [patches[1].region]) ||
+    bnd = only(_region_boundaries(solver, [newregion], 1))
+    _covered_by(_buffered(newregion, active_g, spec.margin, bnd), [patches[1].region]) ||
         error("regrid: the tagged region $newregion is not nested $(spec.margin) " *
               "root nodes inside the domain")
     # getfield: `h` is also a patch property name, and the property forwarding
@@ -581,7 +582,8 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                           _shared_species_diffusivity(solver), fi, 1;
                           interface_divergence=spec.interface_divergence,
                           ghost_viscous=_ghost_viscous(solver),
-                          ring=_ring_detector(solver)) : nothing
+                          ring=_ring_detector(solver),
+                          boundary=bnd, bcs=patches[1].bcs) : nothing
     newlt = build_level_transfer(T, newregion, active_g, spec.n_halo,
                                  [patches[1].region], [1],
                                  fi, lt.restriction, n_cons,
@@ -591,7 +593,7 @@ function _regrid_impl!(solver::Solver{T}, states::Vector{<:ConservedState},
                                  interpolation_order=spec.interpolation_order,
                                  gradient_deriv=_ghost_viscous(solver) ?
                                                 spec.deriv : nothing,
-                                 parent_h=getfield(solver, :h))
+                                 parent_h=getfield(solver, :h), boundary=bnd)
     coupling = build_level_coupling(T, root_lc.comm, [newlt], [patches[1].region],
                                     [patches[1].decomp],
                                     [newfine === nothing ? nothing : newfine.decomp])
@@ -1019,6 +1021,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
     held = [ti for ti in eachindex(wanted) if owners[ti] == group.ranks]
     root = patches[1]
     faces = _tile_faces(wanted)
+    boundaries = _region_boundaries(solver, wanted, 1)
     # The rank's scratch sets before the swap, departing tiles included: a
     # fresh tile of the lattice edge reuses one rather than allocating, and the
     # pool grows only for an extent nothing on the rank already carries (an
@@ -1048,7 +1051,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                              interface_divergence=
                                                  spec.interface_divergence,
                                              ghost_viscous=_ghost_viscous(solver),
-                                             ring=_ring_detector(solver))
+                                             ring=_ring_detector(solver),
+                                             boundaries, bcs=root.bcs)
         append!(new_patches, built)
         resize!(new_states, length(held))
         resize!(new_dQ, length(held))
@@ -1072,7 +1076,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         for (k, ti) in enumerate(held)
             tr = wanted[ti]
             idx = k + 1
-            bcs = _fine_bcs(active, faces[ti])
+            bcs = _fine_bcs(active, faces[ti], boundaries[ti], root.bcs)
             if kept[ti]
                 oi = old_local[old_of[tr]]
                 p = _repatch(patches[oi], idx, faces[ti], bcs)
@@ -1089,7 +1093,8 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
                                       idx, 1, faces[ti];
                                       interface_divergence=spec.interface_divergence,
                                       ghost_viscous=_ghost_viscous(solver),
-                                      ring=_ring_detector(solver))
+                                      ring=_ring_detector(solver),
+                                      boundary=boundaries[ti], bcs=root.bcs)
                 Q = _state_like(p.rho, n_cons)
                 push!(new_states, Q)
                 push!(new_dQ, zero(Q))
@@ -1105,7 +1110,7 @@ function _regrid_tiles!(solver::Solver{T}, states::Vector{<:ConservedState},
         root_lc.comm, length(owners[ti]), faces[ti];
         interpolation_order=spec.interpolation_order,
         gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
-        parent_h=root.h)
+        parent_h=root.h, boundary=boundaries[ti])
         for (ti, tr) in enumerate(wanted)]
     coupling = build_level_coupling(T, root_lc.comm, transfers, [root.region],
                                     [root.decomp], map(fine_decomp, eachindex(wanted)))
@@ -1445,6 +1450,8 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
     group = new_lc.owned ? split_tile_comm(new_lc, owners) : absent_tile_group()
     held = [ti for ti in eachindex(wanted) if owners[ti] == group.ranks]
     faces = _tile_faces(wanted)
+    boundaries = _region_boundaries(solver, wanted, ℓ)
+    rbcs = patches[1].bcs
     ws_pool = [p.rhs_workspace for p in patches]
     ph = patches[1].h
     for _ in 2:ℓ
@@ -1461,7 +1468,8 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
         if kept[ti]
             oi = old_local[old_index[ti]]
             push!(new_patches, _repatch(patches[oi], idx, faces[ti],
-                                        _fine_bcs(active, faces[ti])))
+                                        _fine_bcs(active, faces[ti], boundaries[ti],
+                                                  rbcs)))
             push!(new_states, states[oi])
             if workspace !== nothing
                 push!(new_dQ, workspace.dQ[oi])
@@ -1476,7 +1484,8 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                                   faces[ti];
                                   interface_divergence=spec.interface_divergence,
                                   ghost_viscous=_ghost_viscous(solver),
-                                  ring=_ring_detector(solver))
+                                  ring=_ring_detector(solver),
+                                  boundary=boundaries[ti], bcs=rbcs)
             Q = _state_like(p.rho, n_cons)
             push!(new_patches, p)
             push!(new_states, Q)
@@ -1505,7 +1514,7 @@ function _swap_level!(solver::Solver{T}, states::Vector{<:ConservedState},
                 parent_lc.comm, length(owners[ti]), faces[ti];
                 interpolation_order=spec.interpolation_order,
                 gradient_deriv=_ghost_viscous(solver) ? spec.deriv : nothing,
-                parent_h=ph))
+                parent_h=ph, boundary=boundaries[ti]))
         end
         coupling = build_level_coupling(T, parent_lc.comm, transfers, pregions,
                                         map(pdecomp, plocal),

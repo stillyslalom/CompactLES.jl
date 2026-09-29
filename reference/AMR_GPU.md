@@ -368,7 +368,9 @@ and the shared `max_rate` reduction supplies the timestep. A refined region
 is specified in its parent's node space (`refine` as one `BlockRegion` or a
 vector of them for a nested chain), so a level-ℓ patch's region offset is
 `3 · (parent offset + region offset)`, and nesting requires
-`max(n_halo, LEVEL_BUFFER)` parent nodes of margin at every depth. A level
+`max(n_halo, LEVEL_BUFFER)` parent nodes of margin at every depth on every
+parent-fed face ([Levels on the domain boundary](#levels-on-the-domain-boundary)
+covers the faces that need none). A level
 is one patch over its region or, with `tile > 0`, the tiles of a global
 lattice ([Tiles and adjacency](#tiles-and-adjacency)); every mechanism
 below applies between a patch and its parents, and the measurements quoted
@@ -438,6 +440,37 @@ level holds more than one; its pieces are then per parent patch, and a
 receive applies them in parent order. `gather_region!`, the replicated
 gather, remains for the regrid carries: the box regrid's surviving state,
 the deep regrid's moved tile and the migration audit's reference.
+
+### Levels on the domain boundary
+
+A region may reach a non-periodic domain face whose root condition a tile
+can carry (`_level_boundary_condition`: `SlipWallBC` and `NoSlipWallBC`).
+The tile's face there is not parent-fed: it carries the root's condition
+object itself (`_fine_bcs`), so the wall's `enforce!` and `correct_flux!`
+act on the fine wall plane and a switch of the root's face switches the
+tile's, and its line solves close with the rows the root takes there (the
+scheme's own derivative, divergence and filter rows, the node-centred wall
+rows of the `:gaussian` smoother and of the `:d8` detector, the latter a
+pair per wall sign in `InterfaceRingPlans`); a dimension closed at both
+faces has no interface end and aliases its divergence plans to its
+gradient plans. `LevelTransfer.boundary` marks the face: the buffered box
+takes no buffer beyond it (`_box_buffer`), so the Lagrange chain uses its
+one-sided stencils there and the box extent must reach the interpolation
+order; the shell (`_in_shell`) and the ring (`_ring_slabs`) leave out the
+face and every slot beyond its plane, which are the tile's own ghosts as at
+the root; the face is not `imposed`, so the restriction writes up to the
+wall node and the next level reads the wall plane as the tile's own
+solution; the nesting margin applies to the other faces only (`_buffered`).
+The covered mask sets the outer orthants of a covered node on a closed
+face of its patch, which has no cell beyond the face, so the composite
+quadrature counts the wall node once. Setup accepts an explicit region, box
+or tiled `refine`, that reaches such a face; the regrid, the restart and
+the deep regrid carry the faces of whatever regions they are given
+(`_region_boundaries`), while the tag clamp, the lattice clip of a regrid
+and the AMR frontend's shapes still stop at the margin. A symmetry plane
+needs a tile whose first node lies half a fine cell from the plane, one
+fine node outside the coincident lattice, and an NSCBC face its
+characteristic correction at the fine spacing; neither is accepted yet.
 
 ### Subcycling
 
@@ -1418,9 +1451,11 @@ Configurations rejected at setup, and the reason:
   region per level, and no same-level
   `patch_grid` alongside. `level_restriction = :filter` is serial-only.
   Each region must nest by `max(n_halo, LEVEL_BUFFER)` parent nodes inside
-  the patches of the level above and span ≥ 4 parent nodes per active
-  dimension; a tiled level's tiles are clipped to that margin at the
-  domain edge and must still lie inside the parent tiles. Regridding more
+  the patches of the level above at every parent-fed face and span ≥ 4
+  parent nodes per active dimension; it may reach a slip or no-slip wall
+  face of the domain instead, and no other domain face. A tiled level's
+  tiles are clipped to the margin at the domain edge unless `refine`
+  reaches that wall, and must still lie inside the parent tiles. Regridding more
   than one refined level requires tiles and the host backend and excludes
   rebalancing. Rebalancing requires a tiled, regridding level. Converging-shock
   problems on folded grids use a globally fine level 0 in r near the fold;

@@ -528,23 +528,50 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         n_halo <= 3 * LEVEL_BUFFER ||
             error("refinement supports n_halo ≤ $(3 * LEVEL_BUFFER), got $n_halo")
         # Each region is nested by the margin inside the patches of the level
-        # above it, in that level's node space (the root's is the grid).
+        # above it, in that level's node space (the root's is the grid), at
+        # every face but one on the domain boundary, which a region may reach
+        # where the root's condition there qualifies
+        # (`_level_boundary_condition`).
         margin = max(n_halo, LEVEL_BUFFER)
+        eligible = _level_boundary_eligible(bcs, active_g, periodic)
         parent_regions = [BlockRegion((0, 0, 0), n_global)]
         for (ℓ, rg) in enumerate(refines)
+            extent = _level_extent(n_global, active_g, ℓ - 1)
             for d in 1:3
                 if active_g[d]
                     rg.extent[d] >= 4 ||
                         error("level $ℓ region needs at least 4 parent nodes " *
                               "along dimension $d (9 fine points for the C8 " *
                               "filter)")
+                    for side in 1:2
+                        at_face = side == 1 ? rg.offset[d] == 0 :
+                                  rg.offset[d] + rg.extent[d] == extent[d]
+                        at_face && !periodic[d] && !eligible[d][side] &&
+                            error("level $ℓ region $rg reaches the " *
+                                  "$(side == 1 ? "low" : "high") domain face of " *
+                                  "dimension $d, whose $(nameof(typeof(bcs[d][side]))) " *
+                                  "a refined level cannot carry; a level reaches " *
+                                  "SlipWallBC and NoSlipWallBC faces only")
+                    end
                 else
                     rg.offset[d] == 0 && rg.extent[d] == 1 ||
                         error("level $ℓ region must span collapsed dimension " *
                               "$d with offset 0 and extent 1")
                 end
             end
-            if !_covered_by(_buffered(rg, active_g, margin), parent_regions)
+            bnd = _boundary_faces(rg, extent, eligible)
+            # The box stops at a boundary face, where the interpolation takes
+            # one-sided stencils of the order's width over the box.
+            for d in 1:3
+                active_g[d] || continue
+                n = _box_extent(rg, _box_buffer(active_g, bnd))[d]
+                n >= level_interpolation_order ||
+                    error("level $ℓ region $rg spans $n level-$(ℓ - 1) nodes " *
+                          "along dimension $d with its buffer, fewer than the " *
+                          "level interpolation order $level_interpolation_order; " *
+                          "widen the region")
+            end
+            if !_covered_by(_buffered(rg, active_g, margin, bnd), parent_regions)
                 p = only(parent_regions)
                 ranges = join(("offset $(p.offset[d] + margin):" *
                                "$(p.offset[d] + p.extent[d] - margin - rg.extent[d]) " *
@@ -557,11 +584,12 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                       "physical coordinates instead")
             end
             # The next level reads this one's own nodes: a one-patch level's
-            # boundary planes are imposed data and are eroded (the tiled
-            # cover is checked face by face at construction).
+            # parent-fed boundary planes are imposed data and are eroded (the
+            # tiled cover is checked face by face at construction).
             parent_regions = [_erode(BlockRegion(
                 ntuple(d -> active_g[d] ? 3 * rg.offset[d] : 0, 3),
-                fine_extent(rg, active_g)), ntuple(d -> (true, true), 3), active_g)]
+                fine_extent(rg, active_g)),
+                ntuple(d -> (!bnd[d][1], !bnd[d][2]), 3), active_g)]
         end
     end
     # --- Interface divergence rows ------------------------------------------
@@ -872,18 +900,22 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
     parent_valid = parent_regions
     parent_h = h
     margin = max(n_halo, LEVEL_BUFFER)
+    eligible = _level_boundary_eligible(bcs, active_g, periodic)
     parent_lc = root_lc
     level_tiles = Vector{BlockRegion}[]     # every level's tiles, on every rank
     for (ℓ, rg) in enumerate(refines)
+        extent = _level_extent(n_global, active_g, ℓ - 1)
         if tile == 0
             tregions = [rg]
         else
             # Clip the lattice to the parent patches' bounding box less the
-            # margin; a tile that then still leaves the union is refused.
+            # margin, or to the box itself at a domain face `rg` reaches; a
+            # tile that then still leaves the union is refused.
+            rb = _boundary_faces(rg, extent, eligible)
             lo = ntuple(d -> minimum(r.offset[d] for r in parent_regions) +
-                             1 + margin, 3)
+                             1 + (rb[d][1] ? 0 : margin), 3)
             hi = ntuple(d -> maximum(r.offset[d] + r.extent[d]
-                                     for r in parent_regions) - margin, 3)
+                                     for r in parent_regions) - (rb[d][2] ? 0 : margin), 3)
             tregions = _level_tiles(rg, active_g, tile, lo, hi)
             isempty(tregions) &&
                 error("level $ℓ region admits no tile of edge $tile inside " *
@@ -891,8 +923,9 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         end
         push!(level_tiles, tregions)
         faces = _tile_faces(tregions)
-        for tr in tregions
-            _covered_by(_buffered(tr, active_g, margin), parent_valid) ||
+        boundaries = [_boundary_faces(tr, extent, eligible) for tr in tregions]
+        for (tr, bnd) in zip(tregions, boundaries)
+            _covered_by(_buffered(tr, active_g, margin, bnd), parent_valid) ||
                 error("level $ℓ tile $tr must be nested at least $margin " *
                       "level-$(ℓ - 1) nodes inside the level-$(ℓ - 1) patches' " *
                       "own (not imposed) nodes")
@@ -903,8 +936,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
         fine_regions = [BlockRegion(
             ntuple(d -> active_g[d] ? 3 * tr.offset[d] : 0, 3),
             fine_extent(tr, active_g)) for tr in tregions]
-        imposed_all = [ntuple(d -> (f[d][1] == 0, f[d][2] == 0), 3)
-                       for f in faces]
+        imposed_all = [ntuple(d -> (f[d][1] == 0 && !b[d][1], f[d][2] == 0 && !b[d][2]), 3)
+                       for (f, b) in zip(faces, boundaries)]
         next_h = ntuple(d -> active_g[d] ? parent_h[d] / 3 : parent_h[d], 3)
         local_of = zeros(Int, length(tregions))   # solver index of each tile
         if parent_lc.owned
@@ -931,7 +964,8 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                                  ghost_viscous=
                                                      _ghost_viscous(interface_flux,
                                                                     transport),
-                                                 ring=_ring_detector(art, n_species))
+                                                 ring=_ring_detector(art, n_species),
+                                                 boundaries, bcs)
             append!(fines, built)
             indices = [id0 + k for k in eachindex(held)]
             for (k, ti) in enumerate(held)
@@ -951,7 +985,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                     interpolation_order=level_interpolation_order,
                     gradient_deriv=_ghost_viscous(interface_flux, transport) ?
                                    deriv : nothing,
-                    parent_h=parent_h))
+                    parent_h=parent_h, boundary=boundaries[ti]))
             end
             coupling = build_level_coupling(T, parent_lc.comm, transfers,
                                             parent_regions,
@@ -1063,10 +1097,15 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
                            faces::NTuple{3,NTuple{2,Int}}=ntuple(d -> (0, 0), 3);
                            interface_divergence=nothing,
                            ghost_viscous::Bool=false,
-                           ring::Bool=false) where {T}
+                           ring::Bool=false,
+                           boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
+                           bcs=nothing) where {T}
     region_f, decomp_f, hf = _fine_decomp(T, refine, active_g, h, n_halo, comm)
+    fbcs = _fine_bcs(active_g, faces, boundary, bcs)
     plans = _fine_plans(decomp_f, hf, deriv, filt, smoo, interface_rhs, backend;
-                        interface_divergence, ring)
+                        interface_divergence, ring, boundary,
+                        wall_faces=_sensor_wall_faces(fbcs),
+                        gaussian=smoother === :gaussian)
     g() = field(backend, decomp_f)
     empty3 = empty_field(backend, T)
     # `ring` adds the `:d8` ringing buffer; `bulk` selects the conserved
@@ -1077,17 +1116,24 @@ function _build_fine_patch(::Type{T}, refine::BlockRegion,
     scratch = _level_scratch(empty3, refine, active_g, n_halo, n_cons,
                              MPI.Comm_size(comm), MPI.Comm_rank(comm);
                              gradient_deriv=ghost_viscous ? deriv : nothing,
-                             backend, fine_decomp=decomp_f, hf)
-    # Every face of a refined patch is an interface end, a coarse-fine or a
-    # same-level one, so each active dimension takes a ghost-flux array.
+                             backend, fine_decomp=decomp_f, hf, boundary)
+    # Every face of a refined patch but one on the domain boundary is an
+    # interface end, a coarse-fine or a same-level one, so each dimension
+    # with such an end takes a ghost-flux array.
     gflux = _ghost_flux_arrays(() -> parent(allocate_state(backend, decomp_f, n_cons)),
                                similar(empty3, T, 0, 0, 0, 0),
-                               ghost_viscous ? active_g : (false, false, false))
+                               ghost_viscous ? _interface_dims(active_g, boundary) :
+                                               (false, false, false))
     return _assemble_patch(id, level, region_f, comm, decomp_f, hf, faces,
-                           _fine_bcs(active_g, faces), plans, empty3,
+                           fbcs, plans, empty3,
                            _patch_arrays(g, n_species), ws, _covered_mask(decomp_f),
                            scratch, gflux)
 end
+
+# The dimensions of a refined patch with an interface end: active, and not
+# closed by the domain boundary at both faces.
+_interface_dims(active_g::NTuple{3,Bool}, boundary::NTuple{3,NTuple{2,Bool}}) =
+    ntuple(d -> active_g[d] && !(boundary[d][1] && boundary[d][2]), 3)
 
 # A patch's `ghost_flux` arrays: `g4()` in each dimension of `dims`, the
 # zero-extent `empty4` in the others.
@@ -1119,7 +1165,10 @@ end
 function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
                      interface_rhs::Symbol, backend::AbstractBackend;
                      ntiles::Int=1, stride::Int=0, interface_divergence=nothing,
-                     ring::Bool=false) where {T}
+                     ring::Bool=false,
+                     boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
+                     wall_faces::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
+                     gaussian::Bool=true) where {T}
     mkf(sch, d; kw...) =
         backend_plan(backend, plan_direction(decomp_f, sch, d, hf[d]; kw...,
                                              lines_factor=ntiles); ntiles, stride)
@@ -1128,19 +1177,29 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
     icf = ext_f ? interface_closures(filt) : nothing
     ivd = ext_f || interface_divergence !== nothing ?
           interface_divergence_rows(deriv, interface_divergence) : nothing
-    # Every face of a refined patch closes with the interface rows and reads
-    # ghosts; the boundary condition (`_fine_bcs`) only records where they
-    # come from. The divergence takes the one-sided interface rows instead
-    # (`interface_divergence_rows`), since a flux array has no ghosts. A
-    # source scheme selects those rows under either `interface_rhs`; without
-    # one, `:onesided` keeps the gradient plans' own rows for the divergence.
+    # Every face of a refined patch but one on the domain boundary closes
+    # with the interface rows and reads ghosts; the boundary condition
+    # (`_fine_bcs`) only records where they come from. A face on the domain
+    # boundary keeps the scheme's own rows (`nothing` here), as the root's
+    # face there does. The divergence takes the one-sided interface rows
+    # instead (`interface_divergence_rows`), since a flux array has no
+    # ghosts. A source scheme selects those rows under either
+    # `interface_rhs`; without one, `:onesided` keeps the gradient plans' own
+    # rows for the divergence. A dimension closed by the boundary at both
+    # faces has no interface end, and its divergence plans are its gradient
+    # plans, as the root's are.
+    at(d, side, rows) = boundary[d][side] ? nothing : rows
+    iface = _interface_dims(ntuple(d -> decomp_f.active[d], 3), boundary)
     dplans_f = ntuple(d -> decomp_f.active[d] ?
-        mkf(deriv, d; lo_closures=icd, hi_closures=icd) : nothing, 3)
+        mkf(deriv, d; lo_closures=at(d, 1, icd), hi_closures=at(d, 2, icd)) :
+        nothing, 3)
     vplans_f = ntuple(d -> !decomp_f.active[d] ? nothing :
-        (ivd !== nothing ? mkf(deriv, d; lo_closures=ivd, hi_closures=ivd) :
+        (ivd !== nothing && iface[d] ?
+         mkf(deriv, d; lo_closures=at(d, 1, ivd), hi_closures=at(d, 2, ivd)) :
          dplans_f[d]), 3)
     fplans_f = ntuple(d -> decomp_f.active[d] ?
-        mkf(filt, d; lo_closures=icf, hi_closures=icf) : nothing, 3)
+        mkf(filt, d; lo_closures=at(d, 1, icf), hi_closures=at(d, 2, icf)) :
+        nothing, 3)
     # The sensor smoother's input is built per patch and its coarse-fine
     # ghosts are never filled, so its plans keep the standard closures even
     # under `smoother = :compact`, as the same-level patch path does below.
@@ -1148,21 +1207,37 @@ function _fine_plans(decomp_f::Decomp{T}, hf, deriv, filt, smoo,
     # zeros at every coarse-fine face through the C8 interior rows the
     # interface closures leave in place.
     #
-    # No wall rows either: every face of a refined patch is a coarse-fine or
-    # interface end (`_fine_bcs`), so none of them reflects.
-    splans_f = ntuple(d -> decomp_f.active[d] ? mkf(smoo, d) : nothing, 3)
+    # A face on the domain boundary that reflects (`wall_faces`) takes the
+    # node-centred wall rows of the `:gaussian` smoother, as the root's does
+    # (`_sensor_wall_rows`); every other face keeps the scheme's rows.
+    sw(d, side) = _sensor_wall_rows(smoo, wall_faces[d][side], 1, gaussian)
+    splans_f = ntuple(d -> decomp_f.active[d] ?
+        mkf(smoo, d; lo_closures=sw(d, 1), hi_closures=sw(d, 2)) : nothing, 3)
     # The d8 detector reads the interface ghosts of a field recovered over the
     # padded extent through rows of its own (`_ring_interface_rows`), and
     # closes on the scheme's own rows for a field without them. `nothing`
     # where no sensor takes `:d8`, as on the root, so `detect_sum!`
-    # dispatches alike.
+    # dispatches alike. A reflecting face on the domain boundary takes the
+    # wall rows of the field's sign there in both plans, one pair per sign
+    # where the dimension has such a face.
     rplans_f = nothing
     if ring
         d8 = compact_d8(T)
         rrows = _ring_interface_rows(T)
-        rplans_f = ntuple(d -> !decomp_f.active[d] ? nothing :
-            InterfaceRingPlans(mkf(d8, d; lo_closures=rrows, hi_closures=rrows),
-                               mkf(d8, d)), 3)
+        wr(d, side, σw, rows) = boundary[d][side] ?
+            _sensor_wall_rows(d8, wall_faces[d][side], σw, true) : rows
+        function rplans(d)
+            decomp_f.active[d] || return nothing
+            plan(σw, rows) = mkf(d8, d; lo_closures=wr(d, 1, σw, rows),
+                                 hi_closures=wr(d, 2, σw, rows))
+            ghost = plan(1, rrows)
+            closed = plan(1, nothing)
+            any(wall_faces[d]) || return InterfaceRingPlans((ghost, ghost),
+                                                            (closed, closed))
+            return InterfaceRingPlans((ghost, plan(-1, rrows)),
+                                      (closed, plan(-1, nothing)))
+        end
+        rplans_f = ntuple(rplans, 3)
     end
     return (deriv=dplans_f, div=vplans_f, filter=fplans_f, smooth=splans_f,
             ring=rplans_f)
@@ -1222,7 +1297,9 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                               bulk::Bool, id0::Int, level::Int, tile::Int;
                               interface_divergence=nothing,
                               ghost_viscous::Bool=false,
-                              ring::Bool=false) where {T}
+                              ring::Bool=false,
+                              boundaries=fill(_NO_BOUNDARY, length(tregions)),
+                              bcs=nothing) where {T}
     patches = Patch[]
     stacks = TileStack[]
     if !_stacked_level(backend, tile)
@@ -1232,22 +1309,25 @@ function _build_level_patches(::Type{T}, tregions::Vector{BlockRegion},
                                              interface_rhs, backend, ws_pool,
                                              n_species, n_cons, bulk, id0 + k,
                                              level, faces[ti]; interface_divergence,
-                                             ghost_viscous, ring))
+                                             ghost_viscous, ring,
+                                             boundary=boundaries[ti], bcs))
         end
         return patches, stacks
     end
     resize!(patches, length(held))
-    # One stack per padded extent, the tiles of each in `held` order.
-    extents = [fine_extent(tregions[ti], active_g) for ti in held]
-    for ext in unique(extents)
-        ks = [k for k in eachindex(held) if extents[k] == ext]
+    # One stack per padded extent and set of boundary faces, the tiles of each
+    # in `held` order: the batched plans close every member's lines alike.
+    groups = [(fine_extent(tregions[ti], active_g), boundaries[ti]) for ti in held]
+    for key in unique(groups)
+        ks = [k for k in eachindex(held) if groups[k] == key]
         members = [id0 + k for k in ks]
         span, tiles = _build_tile_stack(T, [tregions[held[k]] for k in ks],
                                         [faces[held[k]] for k in ks], members,
                                         active_g, h, n_halo, comm, deriv, filt, smoo,
                                         interface_rhs, backend, n_species, n_cons,
                                         bulk, level; interface_divergence,
-                                        ghost_viscous, ring)
+                                        ghost_viscous, ring, boundary=key[2], bcs,
+                                        smoother)
         for (slot, k) in enumerate(ks)
             patches[k] = tiles[slot]
         end
@@ -1264,13 +1344,17 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                            backend::DeviceBackend, n_species::Int, n_cons::Int,
                            bulk::Bool, level::Int; interface_divergence=nothing,
                            ghost_viscous::Bool=false,
-                           ring::Bool=false) where {T}
+                           ring::Bool=false,
+                           boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY,
+                           bcs=nothing, smoother::Symbol=:gaussian) where {T}
     ntiles = length(tregions)
     region1, decomp1, hf = _fine_decomp(T, tregions[1], active_g, h, n_halo, comm)
     npad = padded_extent(decomp1)
     stride = npad[3]
+    wall_faces = _sensor_wall_faces(_fine_bcs(active_g, faces[1], boundary, bcs))
     span_plans = _fine_plans(decomp1, hf, deriv, filt, smoo, interface_rhs, backend;
-                             ntiles, stride, interface_divergence, ring)
+                             ntiles, stride, interface_divergence, ring, boundary,
+                             wall_faces, gaussian=smoother === :gaussian)
     empty_raw = empty_field(backend, T)
     stacked() = StackedArray(KernelAbstractions.zeros(backend.ka, T, npad[1], npad[2],
                                                       ntiles * stride),
@@ -1285,13 +1369,15 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                                                     ntiles * stride, n_cons),
                            ntiles, stride),
         StackedArray(empty4, ntiles, stride),
-        ghost_viscous ? active_g : (false, false, false))
+        ghost_viscous ? _interface_dims(active_g, boundary) : (false, false, false))
     # The spanning patch: id 0 (it is not in `solver.patches`), the first
-    # tile's region, faces and boundary conditions (nothing in the batched
-    # phases reads them: every refined face closes with the interface rows,
-    # and the conditions enforce nothing), no covered mask, no scratch.
+    # tile's region, faces and boundary conditions (the batched phases read
+    # only their kind: the members share the boundary faces, every other
+    # face closes with the interface rows, and the markers enforce nothing),
+    # no covered mask, no scratch.
     span = _assemble_patch(0, level, region1, comm, decomp1, hf, faces[1],
-                           _fine_bcs(active_g, faces[1]), span_plans, empty_s,
+                           _fine_bcs(active_g, faces[1], boundary, bcs),
+                           span_plans, empty_s,
                            arrays, ws_span, zeros(UInt8, 0, 0, 0),
                            _empty_level_scratch(empty_raw), gflux_span)
     tiles = Patch[]
@@ -1316,13 +1402,15 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
                        cot_over_r=v(arrays.cot_over_r),
                        cot_over_r_gcl=v(arrays.cot_over_r_gcl))
         plans_t = _fine_plans(decomp_t, hf, deriv, filt, smoo, interface_rhs, backend;
-                              interface_divergence, ring)
+                              interface_divergence, ring, boundary, wall_faces,
+                              gaussian=smoother === :gaussian)
         scratch = _level_scratch(empty_raw, refine, active_g, n_halo, n_cons,
                                  MPI.Comm_size(comm), MPI.Comm_rank(comm);
                                  gradient_deriv=ghost_viscous ? deriv : nothing,
-                                 backend, fine_decomp=decomp_t, hf)
+                                 backend, fine_decomp=decomp_t, hf, boundary)
         push!(tiles, _assemble_patch(ids[slot], level, region_t, comm, decomp_t, hf,
-                                     faces[slot], _fine_bcs(active_g, faces[slot]),
+                                     faces[slot],
+                                     _fine_bcs(active_g, faces[slot], boundary, bcs),
                                      plans_t, view(empty_raw, :, :, 1:0),
                                      tile_arrays, _view_workspace(ws_span, kr),
                                      _covered_mask(decomp_t), scratch,
@@ -1334,10 +1422,17 @@ function _build_tile_stack(::Type{T}, tregions::Vector{BlockRegion}, faces,
     return span, tiles
 end
 
-_fine_bcs(active_g::NTuple{3,Bool}, faces::NTuple{3,NTuple{2,Int}}) =
+# A refined patch's face conditions: the root's condition `bcs[d][side]` at a
+# face on the domain boundary, the same object, so that a switch of the
+# root's face switches the tile's too; an interface marker elsewhere.
+_fine_bcs(active_g::NTuple{3,Bool}, faces::NTuple{3,NTuple{2,Int}},
+          boundary::NTuple{3,NTuple{2,Bool}}=_NO_BOUNDARY, bcs=nothing) =
     ntuple(d -> !active_g[d] ? (PeriodicBC(), PeriodicBC()) :
-                (faces[d][1] == 0 ? CoarseFineBC() : InterfaceBC(faces[d][1]),
-                 faces[d][2] == 0 ? CoarseFineBC() : InterfaceBC(faces[d][2])), 3)
+                ntuple(side -> _fine_bc(faces[d][side], boundary[d][side],
+                                        bcs === nothing ? nothing : bcs[d][side]), 2), 3)
+
+_fine_bc(face::Int, on_boundary::Bool, bc) =
+    on_boundary ? bc : face == 0 ? CoarseFineBC() : InterfaceBC(face)
 
 # A patch with new id, faces and boundary conditions sharing every array and
 # plan of `p`: what a regrid hands a surviving tile whose neighbors changed.

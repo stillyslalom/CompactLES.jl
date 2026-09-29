@@ -212,10 +212,11 @@ the plan whose closure rows fold onto the node-centred mirror with that sign
 the choice is a tuple index rather than a branch. Where neither face is such a
 wall the pair holds one plan twice and the index is immaterial.
 
-A refined patch has no wall face and holds an `InterfaceRingPlans` per
-dimension instead. `ghosts` selects between its two plans: rows reading the
-interface ghost layers of `f`, or the scheme's own closure rows, which read
-none.
+A refined patch holds an `InterfaceRingPlans` per dimension instead.
+`ghosts` selects between its two plan pairs: rows reading the interface ghost
+layers of `f`, or the scheme's own closure rows, which read none; `σw` then
+picks the wall sign within the pair, as for the root, where the patch reaches
+a reflecting face of the domain.
 
 Every rank in the directional sub-communicator must call this function. Its
 halo and fold contract matches `deriv_along!`.
@@ -241,21 +242,24 @@ end
 """
     InterfaceRingPlans(ghost, closed)
 
-The `detector = :d8` plans of a refined patch along one dimension. Every face
-of a refined patch is a coarse-fine or same-level interface end. `ghost`
-closes such an end with rows that read the ghost layers, for a field
-recovered over the padded extent; `closed` keeps the scheme's own closure
-rows, for a field whose interface ghosts carry no data (the strain magnitude,
-the dilatation). `ring_along!` selects between them.
+The `detector = :d8` plans of a refined patch along one dimension. A face of
+a refined patch is a coarse-fine or same-level interface end, or a face on
+the domain boundary carrying the root's condition. `ghost` closes an
+interface end with rows that read the ghost layers, for a field recovered
+over the padded extent; `closed` keeps the scheme's own closure rows, for a
+field whose interface ghosts carry no data (the strain magnitude, the
+dilatation). Each is a pair indexed by the field's sign across a reflecting
+face on the domain boundary, whose wall rows both take, aliased to one plan
+where the dimension has no such face. `ring_along!` selects between them.
 """
 struct InterfaceRingPlans{P}
-    ghost::P
-    closed::P
+    ghost::Tuple{P,P}
+    closed::Tuple{P,P}
 end
 
 @inline _ring_plan(pair::Tuple, σw::Int, ghosts::Bool) = _wall_at(pair, σw)
 @inline _ring_plan(plans::InterfaceRingPlans, σw::Int, ghosts::Bool) =
-    ghosts ? plans.ghost : plans.closed
+    _wall_at(ghosts ? plans.ghost : plans.closed, σw)
 
 # Scale a raw coordinate-derivative field by 1/h_d pointwise (full array).
 @inline function _scale_grad_point!(g, ih, i, j, k)

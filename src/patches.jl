@@ -402,6 +402,14 @@ function _fill_covered!(patch::Patch, regions::Vector{BlockRegion})
     o = decomp.n_halo_d
     n = decomp.n_local
     base = ntuple(d -> patch.region.offset[d] + decomp.offset[d], 3)
+    # The patch's own edge nodes along each dimension, and whether the face
+    # there closes the domain. A node on such a face has no cell beyond it,
+    # so a child reaching the face covers the outer half as well, and the
+    # node, covered on the inner side, keeps nothing.
+    edge_lo = ntuple(d -> patch.region.offset[d] + 1, 3)
+    edge_hi = ntuple(d -> patch.region.offset[d] + decomp.n_global[d], 3)
+    closed = ntuple(d -> ntuple(s -> decomp.active[d] && !decomp.periodic[d] &&
+                                     !(patch.bcs[d][s] isa InterfaceBC), 2), 3)
     for r in regions
         lo = ntuple(d -> r.offset[d] + 1, 3)
         hi = ntuple(d -> r.offset[d] + r.extent[d], 3)
@@ -414,8 +422,10 @@ function _fill_covered!(patch::Patch, regions::Vector{BlockRegion})
             g = (base[1] + i, base[2] + j, base[3] + k)
             # Per dimension, whether the − and + half-cells are covered; a
             # collapsed dimension is spanned by every region.
-            minus = ntuple(d -> !decomp.active[d] || lo[d] + 1 <= g[d] <= hi[d], 3)
-            plus = ntuple(d -> !decomp.active[d] || lo[d] <= g[d] <= hi[d] - 1, 3)
+            minus = ntuple(d -> !decomp.active[d] || lo[d] + 1 <= g[d] <= hi[d] ||
+                                (g[d] == lo[d] == edge_lo[d] && closed[d][1]), 3)
+            plus = ntuple(d -> !decomp.active[d] || lo[d] <= g[d] <= hi[d] - 1 ||
+                               (g[d] == hi[d] == edge_hi[d] && closed[d][2]), 3)
             bits = zero(UInt8)
             for b in 0:7
                 s1, s2, s3 = b & 1, (b >> 1) & 1, (b >> 2) & 1
