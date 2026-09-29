@@ -619,6 +619,8 @@ struct DiffusionStage{T}
     levels::Vector{StageLevel{T}}
     coarse::CoarseSolve{T}
     gamma_dt::Base.RefValue{T}
+    capacity::Array{T,3}                # m at the nodes when `weighted[]`
+    weighted::Base.RefValue{Bool}       # whether the stage carries a capacity
 end
 
 function DiffusionStage(solver; parity::Int=1)
@@ -673,7 +675,18 @@ function DiffusionStage(solver; parity::Int=1)
                    [field(decomp) for _ in 1:(symmetric ? 0 : restart + 1)],
                    zeros(T, restart + 1, restart), zeros(T, 2, restart),
                    zeros(T, restart + 1), zeros(T, max(restart + 1, 2)),
-                   levels, coarse, Ref(zero(T)))
+                   levels, coarse, Ref(zero(T)), field(decomp), Ref(false))
+end
+
+# The capacity of the next assembly and operator application: `nothing` for
+# the unit capacity of `(I − γΔt L)`, or a node field `m` for `(m − γΔt L)`.
+function _set_capacity!(stage::DiffusionStage, capacity)
+    stage.weighted[] = capacity !== nothing
+    capacity === nothing && return stage
+    for I in interior(stage.decomp)
+        stage.capacity[I] = capacity[I]
+    end
+    return stage
 end
 
 # Whether V L is symmetric along every active dimension: everywhere but at a
@@ -702,8 +715,14 @@ function _assemble_stage!(stage::DiffusionStage{T}, kappa, gamma_dt) where {T}
     for (op, d) in zip(stage.ops, stage.dims)
         _fine_conductance!(fine.cond[d], stage, op.face, kappa, d, T(gamma_dt))
     end
-    @inbounds for I in CartesianIndices(n)
-        fine.mass[I+pl] = stage.volume[I+pad]
+    if stage.weighted[]
+        @inbounds for I in CartesianIndices(n)
+            fine.mass[I+pl] = stage.volume[I+pad] * stage.capacity[I+pad]
+        end
+    else
+        @inbounds for I in CartesianIndices(n)
+            fine.mass[I+pl] = stage.volume[I+pad]
+        end
     end
     if stage.parity == -1
         # Drop the faces of a Dirichlet node; an interior neighbour keeps the
@@ -800,10 +819,15 @@ function _precondition!(z, stage::DiffusionStage{T}, v) where {T}
     return z
 end
 
-# out = V (x − γΔt Σ_d L_d x). Collective.
+# out = V (m x − γΔt Σ_d L_d x), with m = 1 unless the stage carries a
+# capacity. Collective.
 function _apply_weighted!(out, stage::DiffusionStage{T}, x, kappa) where {T}
     γ = stage.gamma_dt[]
-    out .= x
+    if stage.weighted[]
+        out .= stage.capacity .* x
+    else
+        out .= x
+    end
     for op in stage.ops
         staggered_diffusion!(stage.applied, op, x, kappa, stage.decomp)
         out .-= γ .* stage.applied
@@ -838,15 +862,38 @@ _global_dot(u, v, stage::DiffusionStage) =
     MPI.Allreduce(_local_dot(u, v, stage), +, stage.decomp.comm)
 
 """
-    stage_operator!(out, stage, T_ion, kappa, gamma_dt)
+    diffusion_operator!(out, stage, T_ion, kappa)
 
-Write `T_ion − γΔt L T_ion` into the interior of `out`, with `L` the
-staggered conduction operator of `stage` (a `DiffusionStage`) on the
-coefficient `kappa` and `gamma_dt` the implicit weight times the step.
-Exchanges the halos of `T_ion` and `kappa`, so every rank must call it.
+Write `L T_ion` into the interior of `out`, with `L` the staggered
+conduction operator of `stage` (a `DiffusionStage`) summed over the active
+dimensions on the coefficient `kappa`. Exchanges the halos of `T_ion` and
+`kappa`, so every rank must call it.
 """
-function stage_operator!(out, stage::DiffusionStage{T}, T_ion, kappa, gamma_dt) where {T}
+function diffusion_operator!(out, stage::DiffusionStage{T}, T_ion, kappa) where {T}
+    pad = CartesianIndex(stage.decomp.n_halo_d)
+    for (m, op) in enumerate(stage.ops)
+        staggered_diffusion!(stage.applied, op, T_ion, kappa, stage.decomp)
+        @inbounds for I in CartesianIndices(stage.decomp.n_local)
+            J = I + pad
+            out[J] = m == 1 ? stage.applied[J] : out[J] + stage.applied[J]
+        end
+    end
+    return out
+end
+
+"""
+    stage_operator!(out, stage, T_ion, kappa, gamma_dt; capacity=nothing)
+
+Write `m T_ion − γΔt L T_ion` into the interior of `out`, with `L` the
+staggered conduction operator of `stage` (a `DiffusionStage`) on the
+coefficient `kappa`, `gamma_dt` the implicit weight times the step, and `m`
+the node field `capacity`, or one when it is `nothing`. Exchanges the halos
+of `T_ion` and `kappa`, so every rank must call it.
+"""
+function stage_operator!(out, stage::DiffusionStage{T}, T_ion, kappa, gamma_dt;
+                         capacity=nothing) where {T}
     stage.gamma_dt[] = T(gamma_dt)
+    _set_capacity!(stage, capacity)
     _apply_weighted!(out, stage, T_ion, kappa)
     pad = CartesianIndex(stage.decomp.n_halo_d)
     @inbounds for I in CartesianIndices(stage.decomp.n_local)
@@ -856,20 +903,25 @@ function stage_operator!(out, stage::DiffusionStage{T}, T_ion, kappa, gamma_dt) 
 end
 
 """
-    solve_stage!(T_ion, stage, rhs, kappa, gamma_dt; rtol=1e-10, maxiter=200)
+    solve_stage!(T_ion, stage, rhs, kappa, gamma_dt; rtol=1e-10, maxiter=200,
+                 capacity=nothing)
 
-Solve `(I − γΔt L) T_ion = rhs` for the interior of `T_ion`, starting from
+Solve `(m − γΔt L) T_ion = rhs` for the interior of `T_ion`, starting from
 its current values, with `L` the staggered conduction operator of `stage` (a
-`DiffusionStage`) on the coefficient `kappa` and `gamma_dt` the implicit
-weight times the step. The iteration stops when the L2 norm of the residual
-over the domain (the volume integral of its square) falls below `rtol` times
-that of `rhs`. Returns `(converged, iterations, residual)`, the last relative
-to `rhs`; every rank returns the same values, and every rank must call it.
-Where the stage's walls carry an odd temperature, `rhs` is
-`T_ion − T_wall` and vanishes on the wall nodes.
+`DiffusionStage`) on the coefficient `kappa`, `gamma_dt` the implicit weight
+times the step, and `m` the positive node field `capacity`, or one when it
+is `nothing`. The volume weighting then carries `m`, so the system stays
+symmetric wherever the unit-capacity one is. The iteration stops when the L2
+norm of the residual over the domain (the volume integral of its square)
+falls below `rtol` times that of `rhs`. Returns
+`(converged, iterations, residual)`, the last relative to `rhs`; every rank
+returns the same values, and every rank must call it. Where the stage's walls
+carry an odd temperature, `rhs` is `m (T_ion − T_wall)` and vanishes on the
+wall nodes.
 """
 function solve_stage!(T_ion, stage::DiffusionStage{T}, rhs, kappa, gamma_dt;
-                      rtol::Real=1e-10, maxiter::Int=200) where {T}
+                      rtol::Real=1e-10, maxiter::Int=200, capacity=nothing) where {T}
+    _set_capacity!(stage, capacity)
     _assemble_stage!(stage, kappa, gamma_dt)
     decomp = stage.decomp
     b = stage.weighted_rhs
@@ -877,7 +929,9 @@ function solve_stage!(T_ion, stage::DiffusionStage{T}, rhs, kappa, gamma_dt;
     if stage.parity == -1
         pad = CartesianIndex(decomp.n_halo_d)
         @inbounds for I in CartesianIndices(decomp.n_local)
-            stage.dirichlet[I] && (T_ion[I+pad] = rhs[I+pad])
+            J = I + pad
+            stage.dirichlet[I] || continue
+            T_ion[J] = stage.weighted[] ? rhs[J] / stage.capacity[J] : rhs[J]
         end
     end
     bnorm = sqrt(_global_dot(b, b, stage))

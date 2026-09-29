@@ -32,7 +32,9 @@ Each is skipped when its control is zero, which is the default for both, and
 also while `solver.rate_prev` and `solver.dt_prev` are still zero, which holds
 on a freshly built solver and after a rollback but not on a second `run!` of the
 same solver. The extrapolation is one-sided and only ever raises the rate; see
-the comment in the body. Nothing on the solver is modified here.
+the comment in the body. A solver built with [`ImplicitConduction`](@ref)
+also caps the result at the accuracy limit its step rule set after the
+previous step. Nothing on the solver is modified here.
 """
 function predicted_dt(solver::Solver, control::StepControl, rate)
     r = rate
@@ -46,8 +48,11 @@ function predicted_dt(solver::Solver, control::StepControl, rate)
     if control.max_growth > 0 && solver.dt_prev > 0
         dt = min(dt, control.max_growth * solver.dt_prev)
     end
-    return dt
+    return _implicit_step_limit(solver, dt)
 end
+
+# The accuracy limit of the implicit half (imex_step.jl); none by default.
+@inline _implicit_step_limit(solver::Solver, dt) = dt
 
 # The clock advance `solver.t += dt` performs. The sum is formed in the wider
 # of the two types and stored in the clock's own, so a step below the spacing
@@ -116,6 +121,12 @@ later `run!`) reads the stale value.
 
 Every rank must call this function because each stage evaluates
 [`compute_rhs!`](@ref).
+
+A solver built with [`ImplicitConduction`](@ref) advances instead by one step
+of the additive Runge–Kutta pair, `dQ` and `du` unused, and throws
+[`SolverFailure`](@ref) when an implicit stage does not converge. Its step
+rule may subdivide the step; the state returned is the one at `solver.t + dt`
+either way.
 
 `prepared = true` asserts that boundary conditions are enforced on `Q` at
 `solver.t` and that the primitive fields are current for it, which lets the first

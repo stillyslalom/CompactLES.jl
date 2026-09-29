@@ -869,7 +869,8 @@ Execution(base::Execution; kw...) = _with(base, kw)
     Numerics(; n_global, deriv=lele_d1_6(), filter=StateFilter(),
              art=ArtificialProperties(), cfl=0.5, control=nothing,
              patch_interfaces=PatchInterfaces(), execution=Execution(), amr=nothing,
-             polar_truncation=0.0, stretch=(nothing, nothing, nothing))
+             polar_truncation=0.0, stretch=(nothing, nothing, nothing),
+             implicit=nothing)
     Numerics(base::Numerics; keywords...)
     Numerics(preset::NamedTuple; keywords...)
 
@@ -927,6 +928,10 @@ keywords the ones given after it override.
 - `stretch`: one entry per direction, each either `nothing` for a uniform grid
   or a [`Stretch`](@ref). A mapping must span the corresponding `Problem.domain`
   interval and can be used only in a nonperiodic, non-folded direction.
+- `implicit`: `nothing`, the default, for the low-storage explicit
+  integrator, or an [`ImplicitConduction`](@ref), which integrates the
+  molecular heat conduction implicitly and every other term explicitly, so
+  that the conductive rate no longer limits the step.
 
 `n_halo`, the halo layers on each side of a resolved local block, is also
 accepted. It is 4, which covers every stencil the package builds, and is not a
@@ -968,6 +973,7 @@ struct Numerics
     amr::Union{Nothing,AMR}
     polar_truncation::Float64
     stretch::NTuple{3,Union{Nothing,Stretch}}
+    implicit::Union{Nothing,ImplicitConduction}
     n_halo::Int
     legacy_amr::NamedTuple
 end
@@ -1005,7 +1011,7 @@ Numerics(preset::NamedTuple; kw...) = Numerics(; merge(preset, values(kw))...)
 
 function Numerics(base::Numerics; kw...)
     fields = (:n_global, :deriv, :filter, :art, :cfl, :control, :patch_interfaces,
-              :execution, :amr, :polar_truncation, :stretch, :n_halo)
+              :execution, :amr, :polar_truncation, :stretch, :implicit, :n_halo)
     inherited = NamedTuple{fields}(map(f -> getfield(base, f), fields))
     return _numerics(base.legacy_amr; merge(inherited, values(kw))...)
 end
@@ -1014,7 +1020,8 @@ function _numerics(legacy_amr::NamedTuple; n_global, deriv=lele_d1_6(),
                    filter=StateFilter(), art=ArtificialProperties(), cfl=0.5,
                    control=nothing, patch_interfaces=PatchInterfaces(),
                    execution=Execution(), amr=nothing, polar_truncation=0.0,
-                   stretch=(nothing, nothing, nothing), n_halo=4, flat...)
+                   stretch=(nothing, nothing, nothing), implicit=nothing, n_halo=4,
+                   flat...)
     execution isa Execution ||
         throw(ArgumentError("Numerics: execution must be an Execution, got " *
                             "$(typeof(execution))"))
@@ -1045,7 +1052,7 @@ function _numerics(legacy_amr::NamedTuple; n_global, deriv=lele_d1_6(),
                      "write them in `amr = AMR(...)`.", :Numerics; force=true)
     return Numerics(n_global, deriv, groups[:filter], art, cfl, control,
                     groups[:patch_interfaces], groups[:execution], amr,
-                    polar_truncation, stretch, n_halo, legacy_amr)
+                    polar_truncation, stretch, implicit, n_halo, legacy_amr)
 end
 
 _legacy_amr_keywords(num::Numerics) = num.legacy_amr
@@ -1090,6 +1097,9 @@ function setup(prob::Problem, num::Numerics)
     num.control === nothing && (num = Numerics(num; control=_default_control(prob)))
     legacy = _legacy_amr_keywords(num)
     if num.amr !== nothing
+        num.implicit === nothing ||
+            throw(ArgumentError("implicit conduction runs on a single patch without " *
+                                "refinement; remove amr or implicit"))
         legacy == _AMR_LEGACY_DEFAULTS ||
             throw(ArgumentError("use amr=AMR(...) or the legacy refinement keywords, " *
                                 "not both"))
@@ -1126,7 +1136,7 @@ function _setup_with_amr_keywords(prob::Problem, num::Numerics, kw::NamedTuple;
                filter_interval=num.filter.interval,
                filter_cfl=num.filter.cfl,
                filter_weighting=num.filter.weighting,
-               polar_truncation=num.polar_truncation,
+               polar_truncation=num.polar_truncation, implicit=num.implicit,
                dims=num.execution.dims, n_halo=num.n_halo, comm=num.execution.comm,
                patch_grid=num.execution.patch_grid, backend=num.execution.backend,
                interface_rhs=num.patch_interfaces.rhs,

@@ -105,6 +105,9 @@ mutable struct Solver{T,Eq<:EquationSet,E<:EOS,Tr<:AbstractTransport{T},M<:Metri
     # `dt_report` for the θ rate cap and by `truncate_modes!` once per step.
     # Empty unless `polar_truncation > 0`.
     truncation::ModeTruncation{T}
+    # The implicit half of the additive Runge–Kutta integrator (imex.jl), or
+    # `nothing` under the default low-storage integrator.
+    implicit::Union{Nothing,ImexIntegrator{T}}
 end
 
 # Patch-owned property names forward to the sole patch, which keeps every

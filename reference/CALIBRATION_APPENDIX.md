@@ -7309,6 +7309,83 @@ angular dimensions with the others gave 29/38/52 on the three-dimensional axis g
 and 18/25/36 on the spherical shell, against 17/20/23 and 15/17/25 with the angular dimensions
 coarsened last, and did not change the ball.
 
+### The additive pair on the conduction
+
+```text
+julia --project=. -t 1 bench/imexconduction.jl part=pulse explicit=true
+julia --project=. -t 1 bench/imexconduction.jl part=pulse rtol=1e-12
+julia --project=. -t 1 bench/imexconduction.jl part=rules
+julia --project=. -t 1 bench/imexconduction.jl part=stiff
+julia --project=. -t 1 bench/imexconduction.jl part=cfl
+```
+
+ARK4(3)6L[2]SA with the molecular conduction implicit (`ImplicitConduction`,
+`src/imex.jl`), one patch, one rank, workstation. Gaussian pulse
+T = 1 + 0.5 e^(−x²/2σ²), σ = 0.2, α = 1, on the periodic [−1, 1) with N = 1024, to
+t = 4σ²/2α = 0.08, in a gas of R = 1e-10 and γ = 1 + R, so that the flow the pulse drives is
+negligible; max error over the amplitude against the image sum of the heat kernel. R is the
+step over the forward-Euler limit h²/2α = 1.91e-6. Fixed steps, `step_rule = :none`:
+
+```
+                     rtol = 1e-8                      rtol = 1e-12
+R       steps   max err/A  Krylov/solve   wall s   max err/A  Krylov/solve
+10       4194   1.299e-10     1.00        24.2     1.299e-10     1.00
+100       419   1.302e-09     1.00         2.17    1.935e-10     1.56
+1000       42   1.244e-08     1.00         0.22    1.196e-09     2.00
+default  83887  1.642e-12       -        109.2     (five-stage integrator, cfl 0.5)
+```
+
+One linear solve per implicit stage at every R (five per step): the conduction is linear in
+T and the energy linear in T, so each stage's outer iteration stops after one Newton step. At
+rtol = 1e-8 the error grows in proportion to R: the stage residual left by a solve that meets
+its tolerance in one or two iterations enters every step, and 1e-8 of the thermal energy is
+the error level it sets. At rtol = 1e-12 the R = 10 error is the staggered operator's spatial
+error, which the wide operator of the default integrator does not carry, and R = 1000 reads
+the time error. In one dimension the line relaxation of the cycle is an exact solve of the
+second-order operator, so the counts are lower than the multidimensional ones of the
+implicit stage above.
+
+Step rules on the same pulse from t = 0, the step otherwise unlimited (the acoustic limit is
+far above the run), rtol = 1e-8. Accepted and rejected are the attempts the step rule
+counted; Krylov is the total over the run:
+
+```
+rule          target   accepted  rejected   max err/A   Krylov
+error          1e-2        1         0      1.646e-02      10
+error          1e-3        2         1      5.929e-04      30
+error          1e-4        5         2      7.643e-06      55
+temperature    0.2         1         0      1.646e-02      10
+temperature    0.05        7         1      4.667e-06      53
+temperature    0.01       64         3      8.435e-09     347
+```
+
+At equal work the two rules reach comparable errors: 55 Krylov iterations give 7.6e-6 under
+`:error` at 1e-4 and 53 give 4.7e-6 under `:temperature` at 0.05. Neither target is the
+final error: the embedded estimate bounds a local error per step, the fractional change a
+step size. The run is one call of `run!` whose step the endpoint clips, so every attempt
+after the first is the step rule's subdivision of that interval.
+
+Stiff stability: a smooth mode plus a grid-Nyquist mode of amplitude 1e-2, N = 256, five
+fixed steps at each R, rtol = 1e-8:
+
+```
+R       dt          Nyquist after 1 step   after 5   energy drift   Krylov/solve
+1e3     3.05e-2     2.73e-05               5.9e-15    6.7e-16        1.80
+1e4     3.05e-1     2.75e-06               1.3e-17    1.1e-16        1.60
+1e5     3.05e+0     2.75e-07               2.4e-17   -2.3e-14        1.60
+1e6     3.05e+1     2.75e-08               1.3e-17    3.1e-14        1.64
+```
+
+The Nyquist amplification of one step falls as 1/R, the L-stable limit of the stiffly
+accurate implicit half, and the total energy is conserved to round-off at every R.
+
+Acoustic limit of the explicit half: the imaginary-axis stability limit of its stability
+function is 4.001 against 3.341 for the default five-stage integrator (ratio 1.198). An
+inviscid acoustic wave on 64 periodic nodes, no filter and no artificial properties, stays
+bounded over 400 steps up to cfl 2.305 under the pair against 2.195 under the default
+integrator (ratio 1.05, bisected to 1%); a `cfl` chosen for the default integrator is
+therefore stable under the pair.
+
 ## False activation on smooth fields
 
 ```text

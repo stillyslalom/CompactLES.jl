@@ -69,7 +69,7 @@ test and benchmark suites do. It allocates no conserved state, so pair it with
 
 `eos`, `transport`, `metric`, and `sources` take their defaults and meaning from
 [`Problem`](@ref); `art`, `deriv`, `cfl`, `control`, `polar_truncation`,
-`n_halo` and `stretch` from [`Numerics`](@ref); `filt`, `filter_interval`,
+`implicit`, `n_halo` and `stretch` from [`Numerics`](@ref); `filt`, `filter_interval`,
 `filter_cfl` and `filter_weighting` from [`StateFilter`](@ref) (its `scheme`,
 `interval`, `cfl` and `weighting`); `interface_flux`, `interface_rhs` and
 `interface_divergence` from [`PatchInterfaces`](@ref); and `dims`, `comm`,
@@ -185,6 +185,28 @@ function _validate_configuration(transport, eos, art, bcs, metric, n_global,
     return nothing
 end
 
+# The configurations the implicit conduction covers: one patch on host
+# storage, and ends whose temperature is even through a mirror plane or a
+# fold, or periodic, which is what the staggered stage imposes. An isothermal
+# wall, an inflow or outflow, and an extrapolated end carry other conditions
+# on the temperature.
+function _validate_implicit(bcs, patch_grid, refine, max_levels, backend)
+    backend isa CPUBackend ||
+        throw(ArgumentError("implicit conduction runs on the host backend only"))
+    prod(patch_grid) == 1 && refine === nothing && something(max_levels, 1) == 1 ||
+        throw(ArgumentError("implicit conduction runs on a single patch without " *
+                            "refinement"))
+    for d in 1:3, side in 1:2
+        bc = bcs[d][side]
+        ok = bc isa Union{PeriodicBC,SlipWallBC,SymmetryPlaneBC,AxisBC,OriginBC,PoleBC} ||
+             (bc isa NoSlipWallBC && isnan(bc.Twall))
+        ok || throw(ArgumentError(
+            "implicit conduction supports periodic ends, adiabatic walls, symmetry " *
+            "planes and coordinate folds; face $d/$side carries $(typeof(bc).name.name)"))
+    end
+    return nothing
+end
+
 # Reject a grid node on a coordinate singularity: r = 0 under either curvilinear
 # metric, and sin θ = 0 under SphericalMetric. The volume Jacobian (r, or
 # r² sin θ) vanishes there, so the first step divides by zero. The folds place
@@ -269,10 +291,18 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                 tile::Int=0,
                 rebalance::Real=0,
                 rebalance_persist::Int=2,
-                max_levels::Union{Nothing,Int}=nothing) where {T}
+                max_levels::Union{Nothing,Int}=nothing,
+                implicit::Union{Nothing,ImplicitConduction}=nothing) where {T}
     bcs = _face_conditions(bcs)
     _validate_configuration(transport, eos, art, bcs, metric, n_global, L_domain,
                             origin, cfl, filter_interval, filter_cfl)
+    if implicit !== nothing
+        _validate_implicit(bcs, patch_grid, refine, max_levels, backend)
+        # The explicit half carries the molecular transport without its
+        # conductivity; the implicit half reads the conductivity from the
+        # wrapped model (imex.jl).
+        transport = WithoutConduction(transport)
+    end
     # ---- Coordinate-singularity folds -----------------------------------
     axis   = bcs[1][1] isa AxisBC
     orig1  = bcs[1][1] isa OriginBC
@@ -883,8 +913,10 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                                 LevelTransfer{T}[])], false, nothing,
                       zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux, schemes, truncation)
+                  interface_flux, schemes, truncation, nothing)
         init_geometry!(solver)
+        # The conduction stage reads the metric, so it is built last.
+        implicit === nothing || (solver.implicit = ImexIntegrator(solver, implicit))
         return solver
     end
     # --- Refined patches and their couplings (levels.jl) ------------------
@@ -1065,7 +1097,7 @@ function _Solver(::Type{T}; n_global::NTuple{3,Int}, L_domain, bcs,
                   levels, subcycle, regrid,
                   zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux, schemes, ModeTruncation{T}())
+                  interface_flux, schemes, ModeTruncation{T}(), nothing)
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end
@@ -1574,7 +1606,7 @@ function _build_patched_solver(::Type{T}, n_global, periodic, regions, faces_all
                   false, nothing,
                   zero(T), zero(T), 0, zero(T), zero(T),
                   ntuple(_ -> zero(T), 3), 0.0, 0.0, 0.0, 0.0, FloorTally(),
-                  interface_flux, schemes, ModeTruncation{T}())
+                  interface_flux, schemes, ModeTruncation{T}(), nothing)
     for p in getfield(solver, :patches)
         init_geometry!(PatchSolver(solver, p))
     end

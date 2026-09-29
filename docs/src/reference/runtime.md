@@ -28,6 +28,19 @@ CompactLES.filter_weight
 mpi_main
 ```
 
+## Implicit conduction
+
+`Numerics(implicit = ImplicitConduction())` advances the molecular heat
+conduction implicitly and every other term explicitly, by an additive
+Runge–Kutta pair, so that the conductive rate no longer limits the step.
+[`step!`](@ref) and [`run!`](@ref) take the pair in place of the default
+integrator, and a stage that does not converge is a [`SolverFailure`](@ref)
+that `StepControl(retries = ...)` recovers.
+
+```@docs
+ImplicitConduction
+```
+
 ## State validity
 
 `StepControl(validity = ...)` decides what happens to a state the validation

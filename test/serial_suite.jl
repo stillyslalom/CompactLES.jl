@@ -1065,6 +1065,153 @@ end
         L_domain=(1.0, 1.0, 1.0), bcs=per3, art=noart, patch_grid=(2, 1, 1)))
 end
 
+@testset "additive Runge–Kutta conduction" begin
+    # The tableau: row sums, and every order condition of a two-part
+    # additive pair to fourth order, the embedded weights to third. a^I is
+    # exact; a^E is published to thirteen digits.
+    big(A) = Rational{BigInt}.(A)
+    AE, AI = big(CL.ARK436_EXPLICIT), big(CL.ARK436_IMPLICIT)
+    b, bh, c = big(CL.ARK436_WEIGHTS), big(CL.ARK436_EMBEDDED), big(CL.ARK436_NODES)
+    defect(x) = abs(Float64(x))
+    @test all(i -> AE[i, i] == 0 && all(j -> AE[i, j] == 0 && AI[i, j] == 0, i+1:6), 1:6)
+    @test all(i -> AI[i, i] == (i == 1 ? 0 : 1 // 4), 1:6)
+    @test AI[6, :] == b                               # stiffly accurate
+    one6 = ones(Rational{BigInt}, 6)
+    @test maximum(defect, AE * one6 .- c) < 1e-24
+    @test AI * one6 == c
+    for (w, order) in ((b, 4), (bh, 3))
+        conditions = Any[sum(w) - 1, w' * c - 1 // 2, w' * c .^ 2 - 1 // 3]
+        for X in (AE, AI)
+            push!(conditions, w' * (X * c) - 1 // 6)
+        end
+        if order == 4
+            push!(conditions, w' * c .^ 3 - 1 // 4)
+            for X in (AE, AI)
+                push!(conditions, w' * (c .* (X * c)) - 1 // 8,
+                      w' * (X * c .^ 2) - 1 // 12)
+                for Y in (AE, AI)
+                    push!(conditions, w' * (X * (Y * c)) - 1 // 24)
+                end
+            end
+        end
+        @test maximum(defect, conditions) < 1e-24
+    end
+    @test all(==(0), (b' * (AI * c) - 1 // 6, b' * (AI * (AI * c)) - 1 // 24,
+                      bh' * (AI * c) - 1 // 6))
+
+    # The conduction pulse on [-1, 1): c_v = 1, κ = α, and a gas constant small
+    # enough that the flow the pulse drives stays below the time error
+    # (bench/imexconduction.jl, which also measures the step rules).
+    α, σ, A = 1.0, 0.2, 0.5
+    t0 = σ^2 / (2α)
+    pulse(x, t) = 1 + A * sqrt(t0 / (t + t0)) *
+                  sum(exp(-(x + 2m)^2 / (4α * (t + t0))) for m in -4:4)
+    function line(n; implicit=ImplicitConduction(step_rule=:none), gas=1e-10,
+                  control=StepControl())
+        h = 2 / n
+        mu = 1e-3 * α * h^2
+        Solver(n_global=(n, 1, 1), L_domain=(2.0, 1.0, 1.0), origin=(-1.0, 0.0, 0.0),
+               bcs=per3, eos=IdealSpecies("gas"; R=gas, gamma=1 + gas),
+               transport=ConstantTransport(mu0=mu, Pr=mu * (1 + gas) / α, Sc=1.0),
+               art=noart, filter_interval=0, cfl=1e6, implicit=implicit,
+               control=control)
+    end
+    function start(solver, T0)
+        Q = allocate_state(solver)
+        initialize!(solver, Q, (x, y, z) -> Prim(rho=1.0, u=(0.0, 0.0, 0.0),
+                                                 p=1e-10 * T0(x)))
+        Q
+    end
+    function steps!(solver, Q, tf, n)
+        for k in 1:n
+            run!(solver, Q; tfinal=k == n ? tf : k * tf / n)
+        end
+        Q
+    end
+    temperature(solver, Q, i) =
+        (refresh_primitives!(solver, Q); solver.T_ion[padded_index(solver, i, 1, 1)])
+
+    n = 256
+    limit = (2 / n)^2 / (2α)                          # forward-Euler diffusive limit
+    tf = 4t0
+    solver = line(n)
+    @test solver.transport isa CL.WithoutConduction
+    @test solver.implicit isa CL.ImexIntegrator
+    Q = start(solver, x -> pulse(x, 0.0))
+    nsteps = round(Int, tf / (100limit))             # R = 100
+    steps!(solver, Q, tf, nsteps)
+    refresh_primitives!(solver, Q)
+    err = maximum(abs(solver.T_ion[padded_index(solver, i, 1, 1)] -
+                      pulse(xcoord(solver, 1, i), tf)) for i in 1:n) / A
+    @test err < 2e-5
+    @test solver.implicit.accepted == nsteps && solver.implicit.rejected == 0
+    @test solver.implicit.solves == 5nsteps          # one per implicit stage
+
+    # Stiff stability: one step at R = 1e5 removes a grid-Nyquist mode.
+    solver = line(64)
+    h = 2 / 64
+    Q = start(solver, x -> 1 + 0.01 * (-1)^round(Int, (x + 1) / h))
+    nyquist(solver, Q) = abs(sum((-1)^(i - 1) * temperature(solver, Q, i)
+                                 for i in 1:64) / 64)
+    @test nyquist(solver, Q) ≈ 0.01
+    run!(solver, Q; tfinal=1e5 * h^2 / (2α))
+    @test nyquist(solver, Q) < 1e-6
+
+    # A stage that does not converge within its Krylov budget ends the step
+    # with SolverFailure, which takes StepControl's rollback: each retry
+    # lowers the CFL and caps the step below the one that failed, and the
+    # failure is raised once the retries are spent.
+    tight = ImplicitConduction(step_rule=:none, max_iterations=2, rtol=1e-10)
+    tf = 1e4 * h^2 / (2α)
+    solver = line(64; implicit=tight)
+    Q = start(solver, x -> pulse(x, 0.0))
+    failure = try
+        run!(solver, Q; tfinal=tf)
+        nothing
+    catch e
+        e
+    end
+    @test failure isa SolverFailure && failure.reason === :implicit_solve
+    @test failure.dt == tf
+    solver = line(64; implicit=tight, control=StepControl(retries=2))
+    Q = start(solver, x -> pulse(x, 0.0))
+    failure = try
+        run!(solver, Q; tfinal=tf)
+        nothing
+    catch e
+        e
+    end
+    @test failure isa SolverFailure && failure.reason === :implicit_solve
+    @test solver.cfl == 1e6 / 4 && failure.dt == tf / 4
+    @test solver.implicit.dt_cap == tf / 8
+
+    # The step rules: `:error` rejects and subdivides an attempt beyond its
+    # tolerance, and the state lands at the requested endpoint either way.
+    for rule in (ImplicitConduction(tolerance=1e-4),
+                 ImplicitConduction(step_rule=:temperature, target_change=0.02))
+        solver = line(128; implicit=rule)
+        Q = start(solver, x -> pulse(x, 0.0))
+        run!(solver, Q; tfinal=t0)
+        @test solver.t == t0
+        refresh_primitives!(solver, Q)
+        @test maximum(abs(solver.T_ion[padded_index(solver, i, 1, 1)] -
+                          pulse(xcoord(solver, 1, i), t0)) for i in 1:128) / A < 1e-2
+    end
+
+    # The default integrator is untouched, and the unsupported ends are
+    # refused.
+    plain = Solver(n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0), bcs=per3, art=noart)
+    @test plain.implicit === nothing && plain.transport isa ConstantTransport
+    iso = NoSlipWallBC(Twall=1.0)
+    @test_throws ArgumentError Solver(n_global=(16, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                      bcs=((iso, iso), per3[2], per3[3]), art=noart,
+                                      implicit=ImplicitConduction())
+    @test_throws ArgumentError Solver(n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                                      bcs=per3, art=noart, patch_grid=(2, 1, 1),
+                                      implicit=ImplicitConduction())
+    @test_throws ArgumentError ImplicitConduction(step_rule=:splitting)
+end
+
 @testset "closed-domain closures: polynomial exactness (deg ≤ 3)" begin
     solver = Solver(n_global=(32, 12, 12), L_domain=(1.0, 1.0, 1.0),
                bcs=((SlipWallBC(), SlipWallBC()), per3[2], per3[3]),

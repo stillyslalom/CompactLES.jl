@@ -232,7 +232,8 @@ levels subcycled), 6.87 (two levels filtered), 5.93 (two levels,
 pentadiagonal filter), a level at a slip wall 4.68 (the fine wall window
 against the uniform run at the fine spacing), temporal order 3.99 / 4.09
 (Dirichlet / NSCBC inflow data),
-1.00 / 3.85 (two levels, global step / subcycled). The default closure of all three derivative presets is
+1.00 / 3.85 (two levels, global step / subcycled), 4.02 / 3.63 (the
+additive pair, periodic / no-slip walls at Pr = 0.007). The default closure of all three derivative presets is
 `:neutral3`; the coordinate-singularity studies close
 their outer end with a wall and use the default rows, and the interface
 studies take the default ghost fluxes but for the three closure-row studies,
@@ -552,6 +553,14 @@ Names are spelled out in full. Current vocabulary:
 - `padded_index` (interior indices → padded) and `interior_index` (its inverse); a
   padded index goes through the latter before reaching `xcoord`
 - `validate_bc` (the setup-time boundary-condition hook), `unit_scalefactor`
+- `implicit` (the `Numerics`/`Solver` keyword; an `ImplicitConduction`, or
+  `nothing` for the low-storage integrator), `step_rule` (`:error`,
+  `:temperature` or `:none`), `WithoutConduction` (the explicit half's
+  transport), `ImexIntegrator` (`solver.implicit`: the tableau, the
+  `DiffusionStage`, the stage registers, `dt_limit` from the step rule and
+  `dt_cap` from failed stages), `_imex_advance!`/`_imex_attempt!`,
+  `diffusion_operator!`, `capacity` (the `m` of `(m − γΔt L)` in
+  `solve_stage!`)
 - `outer_indices` (the flattened outer iteration space of a pointwise nest; see
   Threading), `prepared`/`primitives_current` (the trailing flag by which `run!`
   tells `step!` that the state has been exchanged and its primitives are current)

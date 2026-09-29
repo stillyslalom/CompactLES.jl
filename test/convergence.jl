@@ -90,7 +90,8 @@
 #   spacing, equal steps, t = 0.4): two levels at a slip wall C6 4.68
 #   temporal order (fixed grid, equal steps): Dirichlet inflow g(t) 3.99 |
 #   NSCBC inflow target(t) 4.09 | two levels, global step 1.00 | two levels
-#   subcycled, ghost fluxes 3.85
+#   subcycled, ghost fluxes 3.85 | additive pair, viscous periodic 4.02 |
+#   additive pair, no-slip walls at Pr = 0.007 3.63
 #
 # The default of all three derivative presets is `:neutral3`; the `:cascade3`
 # rows are measured beside it wherever the two closures differ. The
@@ -102,7 +103,7 @@
 # the flux divergence at an interface end selects the cascade rows
 # (`interface_divergence_closures`) or the source scheme's.
 #
-# Those seventy-five numbers are also passed to each study as `recorded` and
+# Those seventy-seven numbers are also passed to each study as `recorded` and
 # guarded to ±0.02, separately from the wide `expect`/`tol` pair. See the
 # comment on `study` for which failure each guard reports. Each study also
 # prints the order of the L2 norm over the interior, unguarded: the max norm
@@ -1024,6 +1025,23 @@ temporal_study("two levels, subcycled, ghost fluxes", (14, 20, 28),
                () -> entropy_case(96; levels=2, subcycle=true, interface_flux=:ghost,
                                   cfl=TEMPORAL_CFL), 0.5, 2240;
                expect=3.8, tol=0.6, recorded=3.85)
+
+# The additive pair of src/imex.jl, the molecular conduction in its implicit
+# half and fixed steps under `step_rule = :none`: the viscous standing wave
+# on the periodic line at Pr = 0.7, where the conductive rate is below the
+# acoustic one and the pair reads four, and between adiabatic no-slip walls
+# at Pr = 0.007, where the step is 13 to 51 times the explicit diffusive
+# limit, the wall mirror of the staggered stage is in the implicit solve,
+# and the order falls toward the implicit half's stage order. Each stage is
+# solved to 1e-14 of the thermal energy, below the reference's time error.
+const IMEX_TEMPORAL = ImplicitConduction(step_rule=:none, rtol=1e-14)
+temporal_study("pair, viscous periodic wave, N = 32", (12, 24, 48),
+               () -> viscous_periodic_case(32; cfl=TEMPORAL_CFL, implicit=IMEX_TEMPORAL),
+               0.4, 384; expect=4.0, tol=0.5, recorded=4.02)
+temporal_study("pair, no-slip walls, Pr = 0.007, N = 33", (16, 32, 64),
+               () -> wall_case(33; viscous=true, Pr=0.007, cfl=TEMPORAL_CFL,
+                               implicit=IMEX_TEMPORAL),
+               0.4, 512; expect=3.6, tol=0.6, recorded=3.63)
 
 # ---------------------------------------------------------------------------
 # Taylor–Green vortex: dissipation-rate history at Re = 1600. Reference peak

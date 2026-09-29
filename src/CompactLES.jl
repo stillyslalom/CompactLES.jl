@@ -47,6 +47,7 @@ include("boundary.jl")
 include("operators.jl")
 include("staggered.jl")
 include("implicit.jl")
+include("imex.jl")
 include("operators_banded.jl")
 include("lines_device.jl")
 include("transfer.jl")
@@ -69,6 +70,7 @@ include("io.jl")
 include("hdf5.jl")
 include("callbacks.jl")
 include("timestep.jl")
+include("imex_step.jl")
 include("regrid.jl")
 include("amr_frontend.jl")
 include("io_levels.jl")
@@ -122,6 +124,7 @@ export DeviceBackend
 export nlevels, refined_region, level_regions
 export ConstantBodyForce
 export Workspace, compute_dt, dt_report, run!, mpi_main
+export ImplicitConduction
 export StepControl, SolverFailure
 export state_report, state_valid, validate_state!
 export StateGuard, state_guard
