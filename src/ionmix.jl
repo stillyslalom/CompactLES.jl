@@ -58,6 +58,12 @@ const _IONMIX_DENSITY_SCALE = 1e6            # cm⁻³ → m⁻³
 const _IONMIX_OPACITY_SCALE = 0.1            # cm²/g → m²/kg
 const _IONMIX_OPACITIES = (:rosseland, :planck_absorption, :planck_emission)
 
+# A table interpolated on a (ln T, ln ρ) grid: an `IonmixTable` or one component
+# of a `SesameTable`. A subtype carries the fields `temperature`,
+# `log_temperature`, `log_density` and `extrapolate`, which the location, the
+# bilinear interpolant and the inversion below read.
+abstract type _LogGridTable{T<:AbstractFloat} end
+
 """
     IonmixTable{T}
 
@@ -109,7 +115,7 @@ zeros or to no groups:
     IonmixTable(; temperature, ion_density, ion_mass, zbar, p_ion, p_ele,
                   e_ion, e_ele, extrapolate=:missing, ...)
 """
-struct IonmixTable{T<:AbstractFloat}
+struct IonmixTable{T<:AbstractFloat} <: _LogGridTable{T}
     format::Symbol
     atomic_numbers::Vector{Int}
     fractions::Vector{T}
@@ -469,7 +475,7 @@ const TABLE_DENSITY_AXIS = 0x08
 const TABLE_NOT_MONOTONE = 0x10
 const TABLE_UNSTABLE = 0x20
 
-@inline _table_policy(table::IonmixTable) =
+@inline _table_policy(table::_LogGridTable) =
     table.extrapolate === :missing ? TABLE_OUT_OF_DOMAIN : TABLE_EXTRAPOLATED
 
 # The cell of `q` on a strictly increasing axis and its fractional position in
@@ -501,7 +507,7 @@ struct TableLocation{T}
     status::UInt8
 end
 
-@inline function _table_location(table::IonmixTable{T}, T_ion, rho) where {T}
+@inline function _table_location(table::_LogGridTable{T}, T_ion, rho) where {T}
     Tq, ρq = T(T_ion), T(rho)
     status = TABLE_OK
     policy = _table_policy(table)
@@ -600,7 +606,7 @@ function table_value(table::IonmixTable{T}, field::Symbol, T_ion, rho) where {T}
     return table_value(table, getfield(table, field)::Matrix{T}, T_ion, rho)
 end
 
-@inline function _table_value(table::IonmixTable, F, T_ion, rho)
+@inline function _table_value(table::_LogGridTable, F, T_ion, rho)
     loc = _table_location(table, T_ion, rho)
     return (_table_bilinear(loc, F)..., loc.status)
 end
@@ -678,9 +684,12 @@ over the temperature nodes, or one pass over them.
 function table_temperature_status(table::IonmixTable, e, rho,
                                   component::Symbol=:total)
     component === :total &&
-        return _table_temperature(table, _SumField(table.e_ion, table.e_ele), 1, e, rho)
-    component === :ion && return _table_temperature(table, table.e_ion, 2, e, rho)
-    component === :electron && return _table_temperature(table, table.e_ele, 3, e, rho)
+        return _table_temperature(table, _SumField(table.e_ion, table.e_ele),
+                                  view(table.monotone, :, 1), e, rho)
+    component === :ion &&
+        return _table_temperature(table, table.e_ion, view(table.monotone, :, 2), e, rho)
+    component === :electron &&
+        return _table_temperature(table, table.e_ele, view(table.monotone, :, 3), e, rho)
     throw(ArgumentError("table_temperature_status: component must be :total, :ion " *
                         "or :electron, got :$component"))
 end
@@ -693,7 +702,10 @@ The value-only form of [`table_temperature_status`](@ref).
 table_temperature(table::IonmixTable, e, rho, component::Symbol=:total) =
     table_temperature_status(table, e, rho, component)[1]
 
-@inline function _table_temperature(table::IonmixTable{T}, E, k::Int, e, rho) where {T}
+# `monotone[j]` records whether E increases strictly with temperature along
+# density node j.
+@inline function _table_temperature(table::_LogGridTable{T}, E,
+                                    monotone::AbstractVector{Bool}, e, rho) where {T}
     eq, ρq = T(e), T(rho)
     nan = T(NaN)
     isfinite(ρq) && ρq > 0 || return (nan, TABLE_OUT_OF_DOMAIN | TABLE_DENSITY_AXIS)
@@ -706,7 +718,7 @@ table_temperature(table::IonmixTable, e, rho, component::Symbol=:total) =
     column(i) = @inbounds (1 - r) * E[i, j] + r * E[i, j+1]
     e_first, e_last = column(1), column(nt)
     root = 0
-    if 0 <= r <= 1 && table.monotone[j, k] && table.monotone[j+1, k]
+    if 0 <= r <= 1 && monotone[j] && monotone[j+1]
         # Both density nodes increase, so their convex combination does too.
         if e_first <= eq <= e_last
             lo, hi = 1, nt      # column(lo) <= e <= column(hi)

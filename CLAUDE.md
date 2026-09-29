@@ -559,6 +559,14 @@ Names are spelled out in full. Current vocabulary:
   qualify), `_boundary_faces` / `_region_boundaries` / `_level_extent`,
   `_box_buffer` / `_box_shift` / `_box_extent` (the box's per-face buffer,
   none at a boundary face), `_interface_dims`
+- `SesameTable` (one material of a SESAME ASCII 2 library in SI, not an
+  `EOS`), its `SesameComponent`s `total` / `ion` / `electron` / `nuclear`
+  (the 301 / 303 / 304 / 305 records, each on its own grid) and
+  `SesameColdCurve` `cold` (306), `read_sesame` / `write_sesame`,
+  `interpolation` (`:bilinear`, or `:free_energy`: e and p from one bicubic
+  Hermite interpolant of A), `free_energy_xy` (the node cross derivative),
+  `dropped` (nodes at zero removed on reading), `_LogGridTable` (the
+  supertype the shared location, bilinear interpolant and inversion take)
 
 **Temperature is `T_ion`.** There is one temperature today; the name keeps
 `T_ele` / `T_rad` free for a 2T or 3T model without a second API break. Bare

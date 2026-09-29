@@ -113,10 +113,24 @@ evaluators interpolate it bilinearly in the logarithms of temperature and mass
 density and invert it for temperature along a density column. The table is
 not an [`EOS`](@ref), so a solver does not evaluate it.
 
+A SESAME library in the LANL ASCII 2 format tabulates, per material, the
+pressure, specific energy and Helmholtz free energy on a grid of density and
+temperature, in total and split into a cold curve, an ion part and an electron
+part. The reader converts a material to SI and evaluates it with the same
+interpolant, domain policy and inversion, or, where the free energy is
+tabulated, derives energy and pressure from one interpolant of the free energy
+so that they satisfy the thermodynamic consistency relation between nodes. No
+SESAME table is distributed with the package.
+
 ```@docs
 CompactLES.IonmixTable
 CompactLES.read_ionmix
 CompactLES.write_ionmix
+CompactLES.SesameTable
+CompactLES.SesameComponent
+CompactLES.SesameColdCurve
+CompactLES.read_sesame
+CompactLES.write_sesame
 CompactLES.table_value
 CompactLES.table_opacity
 CompactLES.table_state
