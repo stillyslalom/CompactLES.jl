@@ -761,5 +761,6 @@ them.
   aspect-ratio-16 Noh run with a wrong solution. A directional β\* was
   measured and rejected for making vorticity in cold gas on a curved front.
   → `reference/CALIBRATION_APPENDIX.md`
-- Wanted: a `bench/` runner taking medians over repeated *processes*, to get
-  under the 10–20% run-to-run spread.
+- A timing difference under the 10–20% run-to-run spread is resolved with
+  `bench/repeat.jl`, which takes medians over repeated *processes* and, given
+  two commands, alternates them and reports the paired ratio.
