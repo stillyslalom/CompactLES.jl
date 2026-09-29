@@ -1076,6 +1076,11 @@ function _sharpening_fluxes!(solver::SolverLike)
         for d in 1:3
             decomp.active[d] || continue
             deriv_scaled_along!(solver.grad_Q[d, N + sp], solver.tmp_a, solver, d, 1)
+        end
+        # After every direction's derivative: `smooth!` takes `tmp_a` as its
+        # scratch, and `tmp_a` holds the fraction being differenced.
+        for d in 1:3
+            decomp.active[d] || continue
             filtered = solver.grad_Q[d, 2N - 1 + sp]
             copy_interior!(filtered, solver.grad_Q[d, N + sp], decomp)
             smooth!(filtered, solver)

@@ -125,6 +125,39 @@ end
         @test parent(Q1) == parent(Q2)
     end
 
+    # (g) Two dimensions: an interface normal to x with a small cosine
+    # perturbation in y. The transverse flux follows the transverse gradient,
+    # a fraction of the normal one, and the normal flux matches the flux of
+    # the unperturbed interface on the same grid.
+    let
+        function tilted(pert)
+            eos = sh_eos(20.0)
+            per = (PeriodicBC(), PeriodicBC())
+            prob = Problem(eos=eos, transport=ConstantTransport(mu0=0.0),
+                           domain=((0.0, 1.0), (0.0, 0.25), (0.0, 0.25)),
+                           bcs=(per, per, per),
+                           ic=(x, y, z) -> begin
+                               xi = 0.5 + pert * cos(2π * y / 0.25)
+                               θ = CL.tanh_blend(x, xi, 2 / 64) -
+                                   CL.tanh_blend(x, 0.9, 2 / 64)
+                               ρ = (1 - θ) + 20θ
+                               Prim(Y=((1 - θ) / ρ, 20θ / ρ), rho=ρ, p=1.0)
+                           end)
+            s, Q = setup(prob, Numerics(n_global=(64, 16, 1), art=sharp))
+            dQ = zero(Q)
+            CL.compute_rhs!(s, Q, dQ)
+            o, n = s.decomp.n_halo_d, s.decomp.n_local
+            r = (o[1]+1:o[1]+n[1], o[2]+1:o[2]+n[2], 1:1)
+            return maximum(abs, view(s.grad_Q[1, 3], r...)),
+                   maximum(abs, view(s.grad_Q[2, 3], r...))
+        end
+        Sx0, Sy0 = tilted(0.0)
+        Sx, Sy = tilted(0.25 / 64)
+        @test Sy0 < 1e-12 * Sx0
+        @test 0 < Sy < 0.5 * Sx
+        @test isapprox(Sx, Sx0; rtol=0.2)
+    end
+
     # (f) Setup rejections.
     per = ntuple(_ -> (PeriodicBC(), PeriodicBC()), 3)
     build(art; eos=sh_eos(5.0)) = Solver(n_global=(32, 1, 1), L_domain=(1.0, 1.0, 1.0),
