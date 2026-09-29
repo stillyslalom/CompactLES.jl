@@ -584,6 +584,55 @@ end
     MPI.Barrier(comm)
 end
 
+# Tiles regridded onto a symmetry plane carry the node beyond their coincident
+# lattice there, so a tile's dataset spans 3m − 1 nodes, not 3m − 2. The
+# checkpoint written with the tiles on the plane restores their layout and
+# continues bit for bit on the same rank count.
+@testset "HDF5 extension: hierarchy checkpoint of tiles on a symmetry plane" begin
+    comm = MPI.COMM_WORLD
+    rank = MPI.Comm_rank(comm)
+    per = (PeriodicBC(), PeriodicBC())
+    near(p, I) = xcoord(p, 1, CL.interior_index(p, I)[1]) < 0.3
+    function build()
+        s = Solver(n_global=(97, 1, 1), L_domain=(1.0, 1.0, 1.0),
+                   bcs=((SymmetryPlaneBC(), SlipWallBC()), per, per), comm=comm,
+                   art=ArtificialProperties(enabled=false), filter_interval=0,
+                   cfl=0.5, refine=BlockRegion((40, 0, 0), (9, 1, 1)),
+                   regrid_interval=3, tag_threshold=Inf, tag_predicate=near,
+                   tag_buffer=2, tile=8, level_boundaries=true)
+        q = allocate_state(s)
+        initialize!(s, q, (x, y, z) -> (rho = 1 + 0.05 * cos(pi * x);
+                                         Prim(rho=rho, u=(0.05 * sin(pi * x), 0.0, 0.0),
+                                              p=rho^1.4)))
+        return s, q
+    end
+    dir = rank == 0 ? mktempdir() : ""
+    dir = MPI.bcast(dir, comm; root=0)
+    stem = joinpath(dir, "foldtiles")
+    s, q = build()
+    run!(s, q; tfinal=1.0, nmax=6)
+    regs = level_regions(s, 1)
+    @test regs[1].offset[1] == 0
+    save_checkpoint_hdf5(s, q, stem)
+    run!(s, q; tfinal=1.0, nmax=12)
+    if rank == 0
+        h5open(stem * ".h5", "r") do file
+            @test size(file["levels/1/tiles/1/Q"])[1] == 3 * regs[1].extent[1] - 1
+            @test size(file["levels/1/tiles/2/Q"])[1] == 3 * regs[2].extent[1] - 2
+        end
+    end
+    r, rq = build()
+    load_checkpoint_hdf5!(r, rq, stem)
+    @test level_regions(r, 1) == regs
+    run!(r, rq; tfinal=1.0, nmax=12)
+    @test r.t == s.t && length(rq) == length(q) &&
+          all(parent(rq[k])[CL.interior(s.patches[k].decomp), :] ==
+              parent(q[k])[CL.interior(s.patches[k].decomp), :] for k in eachindex(q))
+    MPI.Barrier(comm)
+    rank == 0 && rm(dir; recursive=true)
+    MPI.Barrier(comm)
+end
+
 @testset "HDF5 extension: field dump and XDMF3 sidecar" begin
     comm = MPI.COMM_WORLD
     np = MPI.Comm_size(comm)
