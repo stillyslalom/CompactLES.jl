@@ -7,10 +7,10 @@
 # decomposition as in serial. A rank-local sampler wired to one variable and
 # one geometry is correct only where the sampled line lives on one rank.
 #
-# Nothing here depends on a plotting package. `profileplot`, `fieldheatmap`, and
-# their mutating forms are declared as stubs that error until a Makie backend is
-# loaded; `ext/CompactLESMakieExt.jl` supplies the methods. This mirrors the
-# HDF5 split in src/hdf5.jl exactly.
+# Nothing here depends on a plotting package. `profileplot`, `fieldheatmap`,
+# `meshplot`, and their mutating forms are declared as stubs that error until a
+# Makie backend is loaded; `ext/CompactLESMakieExt.jl` supplies the methods.
+# This mirrors the HDF5 split in src/hdf5.jl exactly.
 
 # --- Named scalar → padded array -------------------------------------------
 
@@ -524,10 +524,10 @@ function cartesian_coordinates(snap::FieldSnapshot{T}) where {T}
 end
 
 """
-    field_snapshot(solver, Q; fields = DEFAULT_VTK_FIELDS)
-        -> FieldSnapshot or nothing
-    field_snapshot(solver, states::Vector; fields = DEFAULT_VTK_FIELDS)
-        -> Vector{FieldSnapshot} or nothing
+    field_snapshot(solver, Q; fields = DEFAULT_VTK_FIELDS, normal = nothing,
+                   index = 1) -> FieldSnapshot or nothing
+    field_snapshot(solver, states::Vector; fields = DEFAULT_VTK_FIELDS,
+                   normal = nothing, index = 1) -> Vector{FieldSnapshot} or nothing
 
 Every interior node of the named fields, without halo padding, gathered with the
 grid coordinates into a [`FieldSnapshot`](@ref) on rank 0, in the solver's
@@ -556,27 +556,56 @@ Where the partial densities of the state do not sum to a positive density,
 primitives hold placeholders there (ρ = 1, unit pressure, zero velocity), which
 would show a failed state as a quiet one.
 
+`normal` restricts the gather to one plane: the nodes at root global index
+`index` along dimension `normal`, as in [`field_slice`](@ref). Each snapshot
+then has one node along `normal`, and none is returned for a patch that does
+not reach the plane. On a refined level the plane is the level's node
+coinciding with the root node, so the snapshots of a refined run hold each
+patch's plane at its own spacing, where the composite `field_slice` keeps only
+the root's nodes.
+
 Every rank of `solver.comm` must call this function with the same `fields`,
-since the derived fields run distributed solves in the order given.
+`normal` and `index`, since the derived fields run distributed solves in the
+order given.
 """
-function field_snapshot(solver::Solver, Q; fields=DEFAULT_VTK_FIELDS)
+function field_snapshot(solver::Solver, Q; fields=DEFAULT_VTK_FIELDS,
+                        normal::Union{Nothing,Int}=nothing, index::Int=1)
     patches = getfield(solver, :patches)
     length(patches) == 1 && nlevels(solver) == 1 &&
         only(patches).region.extent == solver.n_global ||
         throw(ArgumentError("field_snapshot: this solver holds several patches; " *
                             "pass the state vector allocate_state returns"))
-    snaps = _snapshot(solver, [Q], fields)
+    snaps = _snapshot(solver, [Q], fields, _snapshot_plane(solver, normal, index))
     return snaps === nothing ? nothing : only(snaps)
 end
 
 function field_snapshot(solver::Solver, states::Vector{<:ConservedState};
-                        fields=DEFAULT_VTK_FIELDS)
-    return _snapshot(solver, states, fields)
+                        fields=DEFAULT_VTK_FIELDS,
+                        normal::Union{Nothing,Int}=nothing, index::Int=1)
+    return _snapshot(solver, states, fields, _snapshot_plane(solver, normal, index))
 end
 
 const _SNAPSHOT_STACKED = (:velocity, :vorticity, :Y, :X, :D_art)
 
-function _snapshot(solver::Solver, states, fields)
+# The validated `(normal, index)` of a plane-restricted snapshot, or nothing.
+function _snapshot_plane(solver::Solver, normal, index::Int)
+    normal === nothing && return nothing
+    1 <= normal <= 3 ||
+        throw(ArgumentError("field_snapshot: normal must be 1, 2, or 3"))
+    ng = solver.n_global[normal]
+    1 <= index <= ng ||
+        throw(ArgumentError("field_snapshot: index $index out of range 1:$ng " *
+                            "along dimension $normal"))
+    return (normal, index)
+end
+
+# The node of a level's own node space coinciding with root node `g` along
+# `d`: a resolved dimension is refined threefold per level, a collapsed one
+# keeps its single node.
+_level_node(n_global::NTuple{3,Int}, level::Int, d::Int, g::Int) =
+    n_global[d] > 1 ? (g - 1) * 3^level + 1 : g
+
+function _snapshot(solver::Solver, states, fields, plane=nothing)
     names = Tuple(fields)
     for name in names
         name in SCALAR_FIELD_NAMES || name in _SNAPSHOT_STACKED ||
@@ -593,19 +622,37 @@ function _snapshot(solver::Solver, states, fields)
         map(eachindex(patches)) do li
             ps = PatchSolver(solver, patches[li])
             _prepare_fields!(ps, states[li], names)
-            _snapshot_block(ps, states[li], names)
+            # The plane as the node of this patch's level coinciding with it.
+            at = plane === nothing ? nothing :
+                 (plane[1], _level_node(solver.n_global, patches[li].level, plane...))
+            _snapshot_block(ps, states[li], names, at)
         end
     end
-    gathered = MPI.gather(blocks, solver.comm; root=0)
+    # A rank whose blocks miss the plane contributes none.
+    gathered = MPI.gather(filter(!isnothing, blocks), solver.comm; root=0)
     MPI.Comm_rank(solver.comm) == 0 || return nothing
     return _assemble_snapshots(solver, reduce(vcat, gathered), names)
 end
 
-# This rank's interior block of one patch, with its placement in the patch.
-function _snapshot_block(ps::PatchSolver, Q, names)
+# This rank's interior block of one patch, with its placement in the patch;
+# with a `plane`, a `(normal, node)` pair in the patch level's node space, the
+# block's nodes on that plane, or nothing where the block misses it.
+function _snapshot_block(ps::PatchSolver, Q, names, plane=nothing)
     decomp = ps.decomp
+    region = ps.patch.region
     n = decomp.n_local
-    interior = ntuple(d -> decomp.n_halo_d[d] .+ (1:n[d]), 3)
+    ranges = ntuple(d -> 1:n[d], 3)
+    offset, extent, lo = region.offset, region.extent, decomp.offset
+    if plane !== nothing
+        normal, node = plane
+        il = node - region.offset[normal] - decomp.offset[normal]
+        1 <= il <= n[normal] || return nothing
+        ranges = Base.setindex(ranges, il:il, normal)
+        offset = Base.setindex(offset, node - 1, normal)
+        extent = Base.setindex(extent, 1, normal)
+        lo = Base.setindex(lo, 0, normal)
+    end
+    interior = ntuple(d -> decomp.n_halo_d[d] .+ ranges[d], 3)
     # Device storage is copied to the host whole before the interior is cut.
     grab(a) = (a isa Array ? a : Array(a))[interior...]
     stacked(arrays) = cat(map(grab, arrays)...; dims=4)
@@ -637,10 +684,9 @@ function _snapshot_block(ps::PatchSolver, Q, names)
         end
     end
     T = eltype(ps.rho)
-    coords = ntuple(d -> T[xcoord(ps, d, i) for i in 1:n[d]], 3)
-    region = ps.patch.region
-    return (level=ps.patch.level, offset=region.offset, extent=region.extent,
-            lo=decomp.offset, coords=coords, data=collect(data),
+    coords = ntuple(d -> T[xcoord(ps, d, i) for i in ranges[d]], 3)
+    return (level=ps.patch.level, offset=offset, extent=extent,
+            lo=lo, coords=coords, data=collect(data),
             covered=BitArray(ps.covered[interior...] .== 0xff))
 end
 
@@ -711,11 +757,21 @@ given (its full period, e.g. `2π` for an azimuth): a wrapped node is appended s
 the raster has no unfilled wedge across the `x2[end] → x2[1]` seam. The
 `solver`-taking method fills `period` from the grid when the second in-plane
 dimension is active and periodic, and passes `nothing` otherwise.
+
+`axis = true` declares a cylindrical `(r, θ)` plane whose radial grid passes
+through the origin, as an [`AxisBC`](@ref) grid does with its first node half a
+spacing off the axis. A raster point inside `x1[1]` then lies on the diameter
+joining the first node at its angle to the first node at the opposite angle,
+and takes the linear interpolant between the two, so the disk is filled
+through its center. It requires `period`. The `solver`-taking method sets it
+for a cylindrical plane on an axis grid.
 """
 function cartesian_slice(metric::Metric, dims::Tuple{Int,Int},
                          x1::AbstractVector, x2::AbstractVector,
                          values::AbstractMatrix; n::Int=400, fill=NaN,
-                         period::Union{Nothing,Real}=nothing)
+                         period::Union{Nothing,Real}=nothing, axis::Bool=false)
+    axis && period === nothing &&
+        throw(ArgumentError("cartesian_slice: axis = true requires period"))
     a, b = dims
     # Close a periodic second coordinate by appending the first node shifted by
     # one period, so the seam between the last stored angle and the first is
@@ -745,13 +801,22 @@ function cartesian_slice(metric::Metric, dims::Tuple{Int,Int},
     c2lo, c2hi = first(x2), last(x2)
     for jj in 1:n, ii in 1:n
         c1, c2 = _slice_coordinate(metric, a, b, X[ii], Y[jj])
-        (c1lo <= c1 <= c1hi && c2lo <= c2 <= c2hi) || continue
-        grid[ii, jj] = _bilinear(x1, x2, values, c1, c2)
+        (c1 <= c1hi && c2lo <= c2 <= c2hi) || continue
+        if c1 >= c1lo
+            grid[ii, jj] = _bilinear(x1, x2, values, c1, c2)
+        elseif axis
+            # The opposite angle, wrapped into the stored range.
+            c2o = c2lo + mod(c2 + π - c2lo, period)
+            vp = _bilinear(x1, x2, values, c1lo, c2)
+            vo = _bilinear(x1, x2, values, c1lo, c2o)
+            grid[ii, jj] = ((c1lo + c1) * vp + (c1lo - c1) * vo) / (2 * c1lo)
+        end
     end
     return X, Y, grid
 end
 
-function cartesian_slice(solver::Solver, dims, x1, x2, values; period=:auto, kwargs...)
+function cartesian_slice(solver::Solver, dims, x1, x2, values; period=:auto,
+                         axis=:auto, kwargs...)
     a, b = dims
     if period === :auto
         # The azimuth of a polar (r, θ) or (θ, φ) plane closes the raster when
@@ -759,8 +824,18 @@ function cartesian_slice(solver::Solver, dims, x1, x2, values; period=:auto, kwa
         period = (_root_periodic(solver, b) && solver.n_global[b] > 1) ?
                  solver.n_global[b] * getfield(solver, :h)[b] : nothing
     end
-    return cartesian_slice(solver.metric, dims, x1, x2, values; period=period, kwargs...)
+    if axis === :auto
+        axis = Tuple(dims) == (1, 2) && period !== nothing && _through_axis(solver)
+    end
+    return cartesian_slice(solver.metric, dims, x1, x2, values; period=period,
+                           axis=axis, kwargs...)
 end
+
+# Whether the radial grid of a cylindrical solver passes through the axis. Only
+# an axis fold shifts a cylindrical radius half a spacing off its origin, since
+# a symmetry plane is rejected on r.
+_through_axis(solver::Solver) =
+    solver.metric isa CylindricalMetric && getfield(solver, :coord_shift)[1] > 0
 
 # Whether the root grid is periodic along `d`. A slab layout (`patch_grid`)
 # splits one periodic dimension into patches that are not periodic on their
@@ -870,6 +945,173 @@ function _bilinear(x1::AbstractVector, x2::AbstractVector, values::AbstractMatri
            (1 - t) * u * v01 + t * u * v11
 end
 
+# --- Mesh geometry -------------------------------------------------------------
+#
+# The node lines of every patch in one plane, from the patch layout alone: the
+# root patches' regions and the refined levels' regions, which rank 0 holds in
+# full, so no field is read and nothing is communicated.
+
+# Per patch meeting the root plane at `index` transverse to `normal`, in level
+# then patch order: its level and the metric coordinates of its nodes along
+# the two in-plane dimensions. `closed` marks a plane whose second in-plane
+# dimension wraps around a resolved angle, where the last node joins the
+# first across the seam, and `axis` a closed (r, θ) plane whose radial lines
+# pass through the origin to the opposite angle.
+function _mesh_blocks(solver::Solver, normal::Int, index::Int)
+    1 <= normal <= 3 || throw(ArgumentError("meshplot: normal must be 1, 2, or 3"))
+    n_global = solver.n_global
+    1 <= index <= n_global[normal] ||
+        throw(ArgumentError("meshplot: index $index out of range " *
+                            "1:$(n_global[normal]) along dimension $normal"))
+    a, b = _plane_dims(normal)
+    n_global[a] > 1 && n_global[b] > 1 ||
+        throw(ArgumentError("meshplot: the plane transverse to dimension $normal " *
+                            "has a collapsed dimension; the mesh is drawn in a " *
+                            "plane of two resolved dimensions"))
+    blocks = NamedTuple{(:level, :x1, :x2, :closed, :axis),
+                        Tuple{Int,Vector{Float64},Vector{Float64},Bool,Bool}}[]
+    for level in 0:(nlevels(solver) - 1)
+        h = _level_spacing(solver, level)
+        for r in _level_plane_regions(solver, level, normal, index)
+            x1, x2 = (Float64[_level_xcoord(solver, h, d, r.offset[d] + i)
+                              for i in 1:r.extent[d]] for d in (a, b))
+            closed = level == 0 && _curvilinear(solver) && _root_periodic(solver, b) &&
+                     r.extent[b] == n_global[b]
+            closed && push!(x2, x2[1] + n_global[b] * h[b])
+            axis = closed && (a, b) == (1, 2) && r.offset[a] == 0 && _through_axis(solver)
+            push!(blocks, (; level, x1, x2, closed, axis))
+        end
+    end
+    return blocks
+end
+
+# Per level meeting the plane, in level order, the level's lattice over the
+# box enclosing its patches in the plane: node coordinates `x1`, `x2` and cell
+# edges `e1`, `e2` along the two in-plane dimensions, and `shown`, the nodes
+# of that box a composite view draws at this level: inside one of its patches
+# and with a cell no finer level covers entirely, the rule `field_snapshot`
+# applies to its `covered` mask. `closed` and `axis` are as in `_mesh_blocks`;
+# a closed lattice repeats its first column at the wrapped node.
+function _mesh_levels(solver::Solver, normal::Int, index::Int)
+    blocks = _mesh_blocks(solver, normal, index)
+    n_global = solver.n_global
+    active = ntuple(d -> n_global[d] > 1, 3)
+    a, b = _plane_dims(normal)
+    out = []
+    for level in unique(blk.level for blk in blocks)
+        regions = _level_plane_regions(solver, level, normal, index)
+        lo = (minimum(r.offset[a] for r in regions), minimum(r.offset[b] for r in regions))
+        hi = (maximum(r.offset[a] + r.extent[a] for r in regions),
+              maximum(r.offset[b] + r.extent[b] for r in regions))
+        m = (hi[1] - lo[1], hi[2] - lo[2])
+        shown = falses(m)
+        for r in regions
+            shown[r.offset[a] - lo[1] .+ (1:r.extent[a]),
+                  r.offset[b] - lo[2] .+ (1:r.extent[b])] .= true
+        end
+        # A node is covered when every orthant of its cell lies in a child
+        # region, per orthant the union over the children, as `_fill_covered!`
+        # builds the mask; a collapsed normal is spanned by every region.
+        node_n = _level_node(n_global, level, normal, index)
+        children = level + 1 < nlevels(solver) ? level_regions(solver, level + 1) :
+                   BlockRegion[]
+        orthants = zeros(UInt8, m)
+        for r in children
+            rlo = ntuple(d -> r.offset[d] + 1, 3)
+            rhi = ntuple(d -> r.offset[d] + r.extent[d], 3)
+            plus_n = !active[normal] || rlo[normal] <= node_n < rhi[normal]
+            minus_n = !active[normal] || rlo[normal] < node_n <= rhi[normal]
+            plus_n || minus_n || continue
+            for j in max(rlo[b], lo[2] + 1):min(rhi[b], hi[2]),
+                i in max(rlo[a], lo[1] + 1):min(rhi[a], hi[1])
+                bits = UInt8(0)
+                for o in 0:7
+                    sa, sb, sn = isodd(o), isodd(o >> 1), isodd(o >> 2)
+                    (sa ? i < rhi[a] : i > rlo[a]) && (sb ? j < rhi[b] : j > rlo[b]) &&
+                        (sn ? plus_n : minus_n) && (bits |= UInt8(1) << o)
+                end
+                orthants[i - lo[1], j - lo[2]] |= bits
+            end
+        end
+        shown .&= orthants .!= 0xff
+        h = _level_spacing(solver, level)
+        x1 = [_level_xcoord(solver, h, a, g) for g in (lo[1] + 1):hi[1]]
+        x2 = [_level_xcoord(solver, h, b, g) for g in (lo[2] + 1):hi[2]]
+        blk = first(blk for blk in blocks if blk.level == level)
+        if blk.closed
+            push!(x2, x2[1] + n_global[b] * h[b])
+            shown = hcat(shown, shown[:, 1])
+        end
+        push!(out, (; level, x1, x2, e1=_cell_edges(solver, a, x1),
+                    e2=_cell_edges(solver, b, x2; closed=blk.closed), shown,
+                    blk.closed, blk.axis))
+    end
+    return out
+end
+
+# The regions of a level's patches meeting the plane, in the level's own node
+# space, as `_mesh_blocks` selects them.
+function _level_plane_regions(solver::Solver, level::Int, normal::Int, index::Int)
+    n_global = solver.n_global
+    active = ntuple(d -> n_global[d] > 1, 3)
+    regions = level == 0 ? getfield(solver, :patch_regions) :
+        [BlockRegion(ntuple(d -> active[d] ? 3 * r.offset[d] : 0, 3),
+                     fine_extent(r, active)) for r in level_regions(solver, level)]
+    node = _level_node(n_global, level, normal, index)
+    return [r for r in regions
+            if r.offset[normal] < node <= r.offset[normal] + r.extent[normal]]
+end
+
+# The edges of the cells centered on the nodes `x` along dimension `d`: the
+# midpoints between nodes, and half a spacing past each end node as a heatmap
+# places its cells, but never past the domain's boundary on a non-periodic
+# dimension, where a node on a wall owns the half cell inside it. A folded end
+# (an axis, a pole, a symmetry plane) lies half a spacing past its first node,
+# so there the half-spacing edge is the fold itself. With `closed`, `x` ends
+# with the wrapped first node, and the first edge is the last less a period.
+function _cell_edges(solver::Solver, d::Int, x::AbstractVector; closed::Bool=false)
+    mids = [(x[i] + x[i + 1]) / 2 for i in 1:(length(x) - 1)]
+    closed && return vcat(x[1] - (x[end] - x[end - 1]) / 2, mids)
+    lo = x[1] - (x[2] - x[1]) / 2
+    hi = x[end] + (x[end] - x[end - 1]) / 2
+    if !_root_periodic(solver, d)
+        # Within round-off of the boundary, or beyond it, the edge is the
+        # boundary: the fold case lands on it up to round-off.
+        blo, bhi = _domain_bounds(solver, d)
+        tol = 1e-9 * abs(x[end] - x[1])
+        lo = lo < blo + tol ? oftype(lo, blo) : lo
+        hi = hi > bhi - tol ? oftype(hi, bhi) : hi
+    end
+    return vcat(lo, mids, hi)
+end
+
+# The physical extent of the domain along `d`. A stretched dimension stores its
+# computational coordinate on [0, 1].
+function _domain_bounds(solver::Solver, d::Int)
+    stretch = getfield(solver, :stretch)[d]
+    stretch === nothing || return stretch.x(0.0), stretch.x(1.0)
+    lo = getfield(solver, :origin)[d]
+    return lo, lo + getfield(solver, :L_domain)[d]
+end
+
+# The node spacing of a level, divided by three per level as the constructor
+# divides it, so coordinates computed from it repeat the patches' own.
+function _level_spacing(solver::Solver, level::Int)
+    h = getfield(solver, :h)
+    for _ in 1:level
+        h = ntuple(d -> solver.n_global[d] > 1 ? h[d] / 3 : h[d], 3)
+    end
+    return h
+end
+
+# The coordinate of node `m` of a level's own node space along `d`, given that
+# level's spacing; `global_xcoord` with the spacing passed in.
+function _level_xcoord(solver::Solver, h, d::Int, m::Int)
+    ξ = getfield(solver, :origin)[d] + getfield(solver, :coord_shift)[d] + (m - 1) * h[d]
+    stretch = getfield(solver, :stretch)[d]
+    return stretch === nothing ? ξ : stretch.x(ξ)
+end
+
 # --- Makie plotting interface (implemented in ext/CompactLESMakieExt.jl) ---------
 
 _makie_extension() = Base.get_extension(@__MODULE__, :CompactLESMakieExt)
@@ -921,12 +1163,23 @@ profileplot!(args...; kwargs...) = _makie_required("profileplot!")
 Plot the [`field_slice`](@ref) of the named scalar as a heatmap. On a grid with
 a resolved angular dimension the plane is resampled onto a Cartesian raster with
 [`cartesian_slice`](@ref) and drawn with an equal data aspect, so a cylindrical
-`(r, θ)` plane renders as its physical disk; on every other grid the coordinate
-axes are used directly. On `fieldheatmap`, `figure` and `axis` are keyword
+`(r, θ)` plane renders as its physical disk, filled through the origin on an
+[`AxisBC`](@ref) grid. On every other grid the coordinate axes are used
+directly, and each node is drawn as the cell [`meshplot`](@ref) draws around
+it, which ends on a wall rather than half a spacing past it. On
+`fieldheatmap`, `figure` and `axis` are keyword
 collections forwarded to Makie's `Figure` and `Axis`, and `colorbar = false`
 omits the colorbar. Extra keyword arguments pass through to Makie's `heatmap!`.
-For a refined or patched run, pass the state vector as `Q`; the plane is then
-the composite `field_slice` on the root grid's nodes.
+
+For a patched run, pass the state vector as `Q`; the plane is then the
+composite `field_slice` on the root grid's nodes. For a refined run, each
+level is drawn at its own spacing, from the plane-restricted
+[`field_snapshot`](@ref), as one heatmap over the box enclosing the level's
+patches: coarse levels first, with the nodes a finer level covers and the nodes
+outside every patch left transparent. The plot is then a vector of heatmaps,
+one per level, sharing one `colorrange` (the extrema of the drawn values unless
+given) and colormap, so its first element serves a `Colorbar`. Overlay
+[`meshplot!`](@ref) to show the patches and their cells.
 
 Requires a Makie backend (see [`makie_available`](@ref)). Every rank must call
 this function. The plot is produced on rank 0, and both forms return `nothing`
@@ -935,6 +1188,57 @@ on other ranks.
 fieldheatmap(args...; kwargs...) = _makie_required("fieldheatmap")
 fieldheatmap!(args...; kwargs...) = _makie_required("fieldheatmap!")
 @doc (@doc fieldheatmap) fieldheatmap!
+
+"""
+    meshplot(solver; normal = 3, index = 1, cells = true, grid = true,
+             outlines = true, color = nothing, linewidth = 0.5,
+             outline_linewidth = 1.5, figure = (;), axis = (;), kwargs...)
+        -> (figure, axis, plots)
+    meshplot!(axis, solver; normal = 3, index = 1, cells = true, grid = true,
+              outlines = true, color = nothing, linewidth = 0.5,
+              outline_linewidth = 1.5, kwargs...) -> plots
+
+Draw the grid in the plane at root global index `index` transverse to
+dimension `normal`: the cells centered on the nodes of every patch that
+reaches the plane, and the outline of each patch through its outermost nodes.
+A cell is bounded by the midpoints between nodes and extends half a spacing
+past a patch's outermost nodes, except at a wall, where it ends on the wall,
+and at a coordinate fold such as [`AxisBC`](@ref), where it ends on the fold,
+so the radial lines of an axis grid pass through the origin. A resolved angle
+is mapped to Cartesian axes along curved lines.
+
+On a refined run each level is drawn at its own spacing, and only where no
+finer level is drawn: the composite mesh of the nodes the solution is read
+from, with the tile outlines marking where the resolution changes. The cells,
+the coordinates and the composite are those [`fieldheatmap`](@ref) draws on
+the same plane, so `meshplot!` composes with a heatmap in the same axis:
+
+```julia
+fig, ax, hm = fieldheatmap(solver, states, :rho; colormap = :inferno)
+meshplot!(ax, solver; grid = false)        # tile outlines over the density
+```
+
+`cells = false` draws the lines through the nodes instead of the cell
+boundaries. `grid` and `outlines` are `true`, `false`, or a collection of
+levels to draw (0 is the root), so `outlines = 1:2` outlines the refined tiles
+without the domain boundary. `color` is one color for every level or a vector
+indexed by level + 1; the default is gray for the root and Makie's Wong palette
+for the refined levels. `linewidth` applies to the grid and
+`outline_linewidth` to the outlines. Extra keyword arguments pass through to
+Makie's `lines!`. `meshplot` builds a figure with an equal data aspect,
+forwarding `figure` and `axis` to Makie's `Figure` and `Axis`. The plot is a
+vector of `Lines`, the grid of every drawn level first and then the outlines,
+root first.
+
+The mesh comes from the patch layout, which rank 0 holds in full, and reads no
+field, so this function communicates nothing and need not be called on every
+rank. Both forms return `nothing` on ranks other than rank 0 of `solver.comm`.
+A plane with a collapsed in-plane dimension throws `ArgumentError`.
+Requires a Makie backend (see [`makie_available`](@ref)).
+"""
+meshplot(args...; kwargs...) = _makie_required("meshplot")
+meshplot!(args...; kwargs...) = _makie_required("meshplot!")
+@doc (@doc meshplot) meshplot!
 
 # Axis labels for a coordinate direction, by metric. Used by the extension.
 coordinate_label(::CartesianMetric, d::Int) = ("x", "y", "z")[d]

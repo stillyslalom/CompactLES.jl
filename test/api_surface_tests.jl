@@ -32,7 +32,7 @@ compact_filter compute_dt conserved_from_prim dissipation_rate domain_volume
 driver_pressure dt_report field_array field_slice field_snapshot fieldheatmap
 fieldheatmap! gaussian_filter initialize! lele_d1_10 lele_d1_6 lele_d1_8
 level_regions line_profile line_sample load_checkpoint! load_checkpoint_hdf5!
-mass_fraction mass_fractions mix_width mixture_density mole_fractions
+mass_fraction mass_fractions meshplot meshplot! mix_width mixture_density mole_fractions
 molecular_mixing mpi_main nasa9_constant_cp neutral_binary_diffusion nlevels
 nspecies plane_profile profile_coordinate profile_spacing profileplot profileplot!
 pyranda_filter read_cea_transport read_nasa9 reflected_shock refined_region
@@ -219,4 +219,5 @@ end
 @testset "mutating plotting bindings carry documentation" begin
     @test has_docstring(:profileplot!)
     @test has_docstring(:fieldheatmap!)
+    @test has_docstring(:meshplot!)
 end

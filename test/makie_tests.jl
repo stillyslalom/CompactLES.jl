@@ -124,14 +124,82 @@ end
     @test plt isa Makie.Lines
     slice = field_slice(solver, states, :rho)
     heat = fieldheatmap(solver, states, :rho)
+    # The plane y = x2[10] crosses the refined region (root nodes 7..14 in y);
+    # y = x2[3] misses it. Each patch's plane is at its own spacing.
+    exact(x, y) = 1.0 + 0.5sin(2pi * x) * cos(2pi * y)
+    crossing = field_snapshot(solver, states; fields=(:rho,), normal=2, index=10)
+    missing_plane = field_snapshot(solver, states; fields=(:rho,), normal=2, index=3)
+    @test_throws ArgumentError field_snapshot(solver, states; normal=2, index=25)
     if MPI.Comm_rank(MPI.COMM_WORLD) == 0
         x1, x2, vals = slice
         @test size(vals) == (36, 24)
-        @test maximum(abs(vals[i, j] - (1.0 + 0.5sin(2pi * x1[i]) * cos(2pi * x2[j])))
+        @test maximum(abs(vals[i, j] - exact(x1[i], x2[j]))
                       for i in 1:36, j in 1:24) < 1e-12
-        @test heat[3] isa Makie.Heatmap
+        # One heatmap per level, root first, sharing one color range; the root
+        # leaves the nodes the refined patch covers transparent.
+        @test heat[3] isa Vector && length(heat[3]) == 2
+        @test all(p -> p isa Makie.Heatmap, heat[3])
+        @test heat[3][1].colorrange[] == heat[3][2].colorrange[]
+        @test count(isnan, heat[3][1][3][]) > 0
+        @test !any(isnan, heat[3][2][3][])
+
+        @test length(missing_plane) == 1 && size(only(missing_plane)) == (36, 1, 1)
+        root, fine = crossing
+        @test size(root) == (36, 1, 1) && root.offset == (0, 9, 0)
+        @test size(fine) == (28, 1, 1) && fine.offset == (30, 27, 0)
+        @test fine.coords[2][1] ≈ x2[10]
+        @test maximum(abs(fine[:rho][i] - exact(fine.coords[1][i], fine.coords[2][1]))
+                      for i in 1:28) < 1e-12
+
+        # The mesh lines are the snapshots' own coordinates, bit for bit.
+        whole = field_snapshot(solver, states; fields=(:rho,))
+        blocks = CL._mesh_blocks(solver, 3, 1)
+        @test [b.level for b in blocks] == [s.level for s in whole] == [0, 1]
+        @test all(b.x1 == s.coords[1] && b.x2 == s.coords[2]
+                  for (b, s) in zip(blocks, whole))
     else
         @test slice === nothing && heat === nothing
+        @test crossing === nothing && missing_plane === nothing
+        field_snapshot(solver, states; fields=(:rho,))
+    end
+
+    # A mesh plot reads the layout rank 0 holds and communicates nothing.
+    if MPI.Comm_rank(MPI.COMM_WORLD) == 0
+        fig, ax, plots = meshplot(solver)
+        @test fig isa Makie.Figure
+        @test length(plots) == 4 && all(p -> p isa Makie.Lines, plots)
+        @test length(meshplot!(ax, solver; grid=false, outlines=1:1)) == 1
+        @test_throws ArgumentError meshplot!(ax, solver; normal=1)
+        # Composes with the refined heatmap in one axis.
+        @test meshplot!(heat[2], solver; color=[:white, :cyan]) isa Vector
+    else
+        @test meshplot(solver) === nothing
+    end
+
+    # A level of several tiles is one heatmap over the box enclosing them,
+    # transparent between tiles, with each tile node at its own value.
+    tiled = Numerics(num; amr=AMR(initial=BlockRegion((4, 4, 0), (26, 14, 1)), tile=6))
+    tsolver, tstates = setup(prob, tiled)
+    theat = fieldheatmap(tsolver, tstates, :rho)
+    # Makie converts a heatmap's coordinates, so the drawn blocks are read
+    # from the extension before they reach it.
+    ext = Base.get_extension(CompactLES, :CompactLESMakieExt)
+    tdata = ext._heatmap_blocks(tsolver, tstates, :rho, 3, 1, 1)
+    if MPI.Comm_rank(MPI.COMM_WORLD) == 0
+        @test length(level_regions(tsolver, 1)) > 1
+        @test length(theat[3]) == length(tdata.blocks) == 2
+        x1f, x2f, gridf = tdata.blocks[2].x1, tdata.blocks[2].x2, tdata.blocks[2].values
+        # The mesh shows the nodes the heatmap draws, level by level.
+        @test [count(!, lev.shown) for lev in CL._mesh_levels(tsolver, 3, 1)] ==
+              [count(isnan, blk.values) for blk in tdata.blocks]
+        @test maximum(abs(gridf[i, j] - exact(x1f[i], x2f[j]))
+                      for i in axes(gridf, 1), j in axes(gridf, 2)
+                      if !isnan(gridf[i, j])) < 1e-12
+        tile_nodes = Set((x, y) for b in CL._mesh_blocks(tsolver, 3, 1) if b.level == 1
+                         for x in b.x1, y in b.x2)
+        @test count(!isnan, gridf) == length(tile_nodes)
+    else
+        @test theat === nothing
     end
 end
 
@@ -159,6 +227,34 @@ if MPI.Comm_size(MPI.COMM_WORLD) == 1
         fig2, ax2, plt2 = fieldheatmap(solver, Q, :rho; normal=3, index=1)
         @test fig2 isa Makie.Figure
         @test plt2 isa Makie.Heatmap
+
+        # The disk is filled through the axis: the raster point nearest the
+        # center takes the mean of the first nodes on either side of it.
+        X, Y, disk = cartesian_slice(solver, (1, 2),
+                                     field_slice(solver, Q, :rho; normal=3, index=1)...)
+        r1 = CL.global_xcoord(solver, 1, 1)
+        inner = [disk[i, j] for i in eachindex(X), j in eachindex(Y) if hypot(X[i], Y[j]) < r1]
+        @test !isempty(inner) && all(isfinite, inner)
+        @test isapprox(disk[argmin(abs.(X)), argmin(abs.(Y))], 1.0; atol=0.01)
+
+        # The polar mesh closes around the angle and passes through the axis:
+        # every radius is a full circle through the wrapped node, and the
+        # outline is the outer circle alone.
+        blk = only(CL._mesh_blocks(solver, 3, 1))
+        @test blk.closed && blk.axis && length(blk.x2) == 17
+        @test blk.x2[end] ≈ blk.x2[1] + 2pi
+        plots = meshplot!(ax2, solver)
+        @test length(plots) == 2
+        outline = plots[2][1][]
+        radii = [hypot(p...) for p in outline if !isnan(p[1])]
+        @test all(r -> isapprox(r, blk.x1[end]; rtol=1e-5), radii)
+        # The cells around the first nodes are wedges meeting at the origin, and
+        # the cells of the wall nodes end on the wall.
+        cells = plots[1][1][]
+        @test minimum(hypot(p...) for p in cells if !isnan(p[1])) < 1e-12
+        lev = only(CL._mesh_levels(solver, 3, 1))
+        @test lev.e1[1] == 0 && lev.e1[end] == 1.0
+        @test lev.e2[end] ≈ lev.e2[1] + 2pi && all(lev.shown)
 
         # A spherical meridian (normal = 3 → (r, θ) plane) resamples onto x–z with
         # the pole vertical, not x–y. Slicing the 3-D position by (a, b) collapsed

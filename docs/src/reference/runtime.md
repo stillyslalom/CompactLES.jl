@@ -154,14 +154,18 @@ without halo padding, to rank 0 as a [`FieldSnapshot`](@ref): the coordinate
 vectors of the grid and one array per field, for postprocessing or plotting a
 desktop-scale run in memory. A refined or patch-partitioned solver gives one
 snapshot per patch, each with its level, offset and the nodes a finer level
-covers. [`cartesian_coordinates`](@ref) maps a curvilinear snapshot's nodes to
-Cartesian positions.
+covers; `normal` and `index` restrict the gather to one plane, returned for
+each patch at its own spacing. [`cartesian_coordinates`](@ref) maps a
+curvilinear snapshot's nodes to Cartesian positions.
 
 The plotting functions live in a package extension and require a Makie backend
 (`using CairoMakie` or `using GLMakie`); [`makie_available`](@ref) reports
 whether it is loaded. [`profileplot`](@ref) draws a `line_profile`, and
 [`fieldheatmap`](@ref) draws a `field_slice`, resampling and using an equal
-aspect for a curvilinear plane.
+aspect for a curvilinear plane; on a refined run it draws each level at its own
+spacing. [`meshplot`](@ref) draws the node-centered cells and patch outlines of
+every level in the same plane and coordinates, so `meshplot!` overlays the mesh
+on a heatmap.
 
 ```@docs
 field_array
@@ -179,6 +183,8 @@ profileplot
 profileplot!
 fieldheatmap
 fieldheatmap!
+meshplot
+meshplot!
 ```
 
 ## Developer internals: script argument helpers
